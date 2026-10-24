@@ -44,7 +44,8 @@ AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计�
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
 cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
 definitionHash。调度 workflow 通过调度租约和正式运行租约防重；单机工具可显式执行。
-统一登录 Web 不再启动单机调度器，原业务的按用户自动调度尚待接入独立 worker。
+单机形态不再有领域内常驻调度器：Strategy 的自动运行由 DSH 定时任务触发批处理工具驱动
+（见「单机形态与托管退役」）。
 非交易日与暂停策略不运行。存量无 `schemaVersion` 的
 RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
 V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
@@ -324,33 +325,41 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 与旧表 DDL/schema 全部下线，存量库的旧物理表不再维护（不 DROP、不读取）。
 不得作为新 surface、Agent 或写入口的领域模型。
 
-## 个人订阅托管模式
+## 单机形态与托管退役
 
-2026-10-12 确认的托管产品契约是：保留现有 Web 及其自选、Strategy、通知、持仓、建议、报告、复盘、
-研究和 AI 业务，在其上增加登录、用户隔离与支付订阅。旧 `hosted-facts-v1` 和无账户精简应用不再作为目标范围；
-旧 fixture 证据不代表本版页面与完整业务已验收，当前接线/验收状态见[开发计划](docs/hosted-personal-subscription-development-plan.md)。
+当前形态是**单机版**：DSH 是唯一入口，luoome 以 DSH 插件/MCP 实例形式接入；没有多租户、
+没有登录与订阅、没有托管站点。托管层代码与旧租户库已于 2026-10-23 按授权删除，不恢复。
 
-- `HostedUser` 是已验证邮箱的服务身份；`Tenant` 是私人数据与订阅隔离边界，一用户一个 Tenant。
-  `Account` 仍是投资账户，不承担登录语义；每个托管 Tenant 自动拥有且仅拥有一个默认 Account。
-- 空库默认账户为 `default-account`、“默认投资账户”、real/CNY、本金0/现金0；不代表真实券商开户或资产核实，
-  不产生入金、持仓或 Trade。已有唯一账户原样复用；多账户异常不能自动合并或删除。
-- 托管界面和普通API不提供新增/切换账户；请求和后台由服务端绑定默认账户。
-  `update_account` 只修改名称，不改变本金、现金、币种或创建时间；资金与持仓变动仍遵守已有 ledger 契约。
-  local 多账户保持不变，不将托管限制扩展到本地使用。
-- 默认账户的 Trigger/Advice/TradingPlan 复盘使用既有 `DecisionReview`，保留来源快照、不可变修订及显式成交关联。
-  旧 `PersonalWatchFeedback` 仅作为此前无账户方案历史资料，不自动迁入采纳率或账户收益统计。
-- 原 Strategy/AlertPlan 规则及显式订阅语义保留，托管身份与权益不能代替领域数据门禁。
-  `watchlist-facts` 可作为确定性补充报告，不能替代 opening/closing/weekly 或限制原 AI/Advice 功能。
-- `PlanVersion` 冻结服务器价格、资源与任务额度；`SubscriptionPeriod` 是实付或一次试用授予的服务期。
-  续期由用户主动购买，不自动扣款。任务预占/结算引用原服务期，不随完成时的新套餐漂移。
-- `HostedJob`、用户用量流水和 provider cost attempt 分别表达执行、额度与供应商成本。
-  私有输入、业务 receipt/outbox 与 control inbox 形成恢复协议；unknown 成本不能解释为0，旧执行者未停止时不能释放原预占。
-- `DeliveryIntent` 的 accepted 只表示渠道受理，delivered 需要可信回执；触发与投递分别保存。
-  暂停、成员退出、偏好撤销、到期和删除都阻止尚未发送的失效提醒。
-- 原设置页增加个人通知、账户名称、订阅与退出登录；平台模型/数据源密钥、Vault路径及整库恢复不作为普通租户全局写权限。
-  AI与其它provider未装配时明确不可用，不能返回mock结果，也不能以此永久移除业务入口。
-- 导出、删除、备份恢复继续遵守租户身份、generation、执行排空与独立tombstone契约。
-  最小订单/退款账目与私人业务资料分开保留。
+- 领域层不再有租户隔离概念：`hosted` 命名已下线为 `personal`；`Tenant`、`HostedUser`、
+  `HostedJob`、订阅期与用量流水等托管实体全部移除。`Account` 只表示投资账户，不承担登录语义；
+  本地多账户语义与 ledger 契约不变，`update_account` 不改变本金、现金、币种或创建时间。
+- 默认账户的 Trigger/Advice/TradingPlan 复盘继续使用 `DecisionReview`，保留来源快照、不可变修订及
+  显式成交关联。Strategy/AlertPlan 规则与数据门禁不因形态变化而放宽；通知投递仍区分受理与送达，
+  触发与投递分别保存。
+- 调度不再由领域内调度器承担：批处理入口是 MCP 面的 `run_*` 工具，由 DSH 定时任务触发，
+  门槛（交易日、盘中、收盘时点、周日）由工具内部判定（cron 表见 `.dsh/skills/luoome-batch/SKILL.md`）。
+- 模型能力整体退役：core 不再持有模型调用端口，领域包禁止依赖模型运行时或 AI SDK。
+  推理与模型配置由 DSH 承担；luoome 侧没有模型运行时、模型目录与模型设置页，
+  Web 也不再有模型对话页面，只保留「起草 → 明确确认 → 原子执行」的待确认草案链路。
 
-已有试用/到期保留工程参数为7天试用、30天历史读取窗口，导出不要求有效订阅；正式条款仍待确认。
-托管基础设施已有隔离fixture证据；本版原Web融合、默认账户、自动调度、真实模型及生产恢复必须分别验收，不能互相替代。
+历史托管契约与验收记录见[开发计划](docs/archive/hosted-personal-subscription-development-plan.md)，
+只作历史资料，不代表当前产品范围。
+
+## 分析任务与来源
+
+`AnalysisJob`（存储 `analysis_job`）是待执行分析的租约任务，不是策略信号、建议或成交。
+`AnalysisContext` 是带 `dataAsOf`、事实哈希和证据编号的冻结事实包；`writeUntil` 限制写回，
+`expiresAt` 仅控制审计保留。事实过时不能继续写回；同一有效租约可重新获取并绑定一次新事实包。
+刷新不延长租约，不增加尝试次数；租约丢失后旧消费者不得完成任务。
+
+完成任务与持久化 Advice、研究工作区、待审批策略版本或叙事结果必须原子提交。
+重试不得重复发布结果；死信保留错误供检查，不生成伪建议。
+`AnalysisProvenance` 记录生成器、模型、技能版本、事实包与任务来源。
+`legacy-ai` 专指迁移前缺少完整来源的历史建议，不代表已知模型。
+建议始终不等于交易；策略提案仍需原有审批流程。
+
+### PluginOperation 与 PluginAutomationGrant
+
+PluginOperation 是插件执行边界的待确认输入与操作回执，绑定用户、账户、参数摘要和授权版本；它不替代 DecisionReview/Analysis 等领域事务回执。executing/unknown 表示结果仍需核对，不能直接重试或解释为业务失败。
+
+PluginAutomationGrant 是人工确认的特定 DSH profile/session/task 授权，绑定任务定义指纹、账户、工具、精确参数、组合能力与有效期；它不等同 StrategySchedule，也不赋予交易权限。定时提醒的实际投递来自 DSH 宿主事实，prompt、callId 和模型提交的 taskId 不是授权。纯插件自动执行默认停用，完整阶段验收前不启用生产任务。

@@ -48,14 +48,7 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   mkdirSync(home, { recursive: true });
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
   const logger = createSilentLogger();
-  const unavailableLLM = {
-    name: 'local-ai-removed',
-    generate: async (): Promise<never> => {
-      throw new Error(
-        '单机不再内置模型推理（DSH 改造）：请通过 DSH 会话/待分析队列执行分析，本 tool 仅提供事实与写回',
-      );
-    },
-  };
+
   const accounts = await handle.repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const ctx = buildContext({
@@ -67,7 +60,6 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
       stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         logger,
       }),
-      llm: unavailableLLM,
     },
     portfolioBenchmark: {
       stockId:
@@ -90,10 +82,7 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
  * @param ctx 可选；缺省时按上注构造默认 ctx，退出时自动关闭数据库。
  */
 export const startTuiApp = async (ctx?: ToolContext): Promise<void> => {
-  if (
-    (process.env.LUOOME_MODE !== undefined && process.env.LUOOME_MODE !== 'local') ||
-    ctx?.identity?.mode === 'hosted'
-  ) {
+  if (process.env.LUOOME_MODE !== undefined && process.env.LUOOME_MODE !== 'local') {
     throw new Error('TUI is local-only');
   }
   if (ctx !== undefined) {

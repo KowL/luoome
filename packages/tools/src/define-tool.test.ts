@@ -104,52 +104,6 @@ describe('defineTool execute 错误模型', () => {
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
   });
 
-  it('hosted 直接执行必须具有当前 operation 授权，不能绕过 invoker', async () => {
-    const hosted = {
-      ...ctx,
-      identity: Object.freeze({
-        mode: 'hosted' as const,
-        userId: ctx.user.id,
-        tenantId: 't1',
-        tenantGeneration: 1,
-        actor: 'user' as const,
-        requestId: 'r1',
-      }),
-    };
-    expect(await doubleTool.execute({ n: 21 }, hosted)).toEqual({
-      ok: false,
-      error: { kind: 'permission_denied', required: 'hosted-operation' },
-    });
-    const calls: unknown[] = [];
-    const guarded = {
-      ...hosted,
-      hostedAuthorization: (name: string, input: unknown, capabilities: readonly string[]) => {
-        calls.push({ name, input, capabilities });
-        return null;
-      },
-    };
-    expect(await doubleTool.execute({ n: 21 }, guarded)).toEqual({
-      ok: true,
-      data: { doubled: 42 },
-    });
-    expect(calls).toEqual([{ name: 'test_double', input: { n: 21 }, capabilities: ['read'] }]);
-    expect(
-      await doubleTool.execute(
-        { n: 1 },
-        {
-          ...guarded,
-          hostedAuthorization: () => ({
-            ok: false as const,
-            error: { kind: 'permission_denied' as const, required: 'hosted-operation:blocked' },
-          }),
-        },
-      ),
-    ).toEqual({
-      ok: false,
-      error: { kind: 'permission_denied', required: 'hosted-operation:blocked' },
-    });
-  });
-
   it('handler 返回 errNotFound → 原样透传 not_found', async () => {
     const tool = defineTool({
       name: 'test_not_found',

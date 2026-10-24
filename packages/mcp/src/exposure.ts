@@ -1,23 +1,30 @@
 import type { SideEffect } from '@luoome/core';
+import { privateResearchTools, selectExposedTools } from '@luoome/tools';
 
-// 内部 tool（record_watch_run / save_report / sync_watchlist_source / migration_* 等）
-// 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 只需按 sideEffect 过滤，
-// 不再有按名字的排除清单。
-export const selectMcpTools = <
-  T extends {
-    readonly name: string;
-    readonly sideEffect: SideEffect;
-    readonly requiredCapabilities?: readonly SideEffect[];
-  },
->(
-  tools: readonly T[],
-  allowedSideEffects: ReadonlySet<SideEffect>,
-): readonly T[] =>
-  tools.filter((tool) =>
-    (tool.requiredCapabilities ?? [tool.sideEffect]).every((capability) =>
-      allowedSideEffects.has(capability),
-    ),
+export const selectMcpTools = selectExposedTools;
+
+export interface McpToolNames {
+  readonly allowlist?: ReadonlySet<string> | undefined;
+  readonly denylist?: ReadonlySet<string>;
+}
+
+const parseNames = (value: string): ReadonlySet<string> =>
+  new Set(
+    value
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean),
   );
+
+export const resolveMcpToolNames = (env: NodeJS.ProcessEnv = process.env): McpToolNames => ({
+  // An explicitly empty allowlist fails closed; only an absent variable means all names.
+  allowlist:
+    env.LUOOME_EXPOSE_TOOLS === undefined ? undefined : parseNames(env.LUOOME_EXPOSE_TOOLS),
+  denylist: new Set([
+    ...(env.LUOOME_EXPOSE_RESEARCH === 'true' ? [] : privateResearchTools),
+    ...parseNames(env.LUOOME_EXPOSE_DENY ?? ''),
+  ]),
+});
 
 /**
  * 从 env 解析暴露面。LUOOME_EXPOSE_TRADE==='true' 直接抛错：
@@ -35,5 +42,6 @@ export const resolveAllowedSideEffects = (
   const allowed = new Set<SideEffect>(['read']);
   if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
   if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
+  if (env.LUOOME_EXPOSE_QUEUE === 'true') allowed.add('queue');
   return allowed;
 };

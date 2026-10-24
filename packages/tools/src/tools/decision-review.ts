@@ -291,6 +291,24 @@ export const getDecisionReviewContextTool = defineTool({
   },
 });
 
+export const decisionReviewWriteHash = (input: {
+  accountId: string;
+  subject: DecisionReviewSubject;
+  contextHash: string;
+  expectedRevision: number;
+  content: z.infer<typeof DecisionReviewContentSchema>;
+  changeNote?: string | null | undefined;
+}) =>
+  digest({
+    command: 'save_decision_review',
+    accountId: input.accountId,
+    subject: input.subject,
+    contextHash: input.contextHash,
+    expectedRevision: input.expectedRevision,
+    content: { ...input.content, tradeIds: [...new Set(input.content.tradeIds)].sort() },
+    changeNote: input.changeNote ?? null,
+  });
+
 export const saveDecisionReviewTool = defineTool({
   name: 'save_decision_review',
   description: '在当前账户保存不可变的决策复盘修订和显式成交关联',
@@ -308,15 +326,7 @@ export const saveDecisionReviewTool = defineTool({
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
     const content = { ...input.content, tradeIds: [...new Set(input.content.tradeIds)].sort() };
-    const requestHash = digest({
-      command: 'save_decision_review',
-      accountId,
-      subject: input.subject,
-      contextHash: input.contextHash,
-      expectedRevision: input.expectedRevision,
-      content,
-      changeNote: input.changeNote ?? null,
-    });
+    const requestHash = decisionReviewWriteHash({ ...input, accountId });
     const receipt = await ctx.repos.decisionReview.findWriteReceipt({
       accountId,
       requestId: input.requestId,

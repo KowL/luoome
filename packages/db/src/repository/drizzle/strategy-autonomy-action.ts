@@ -1,4 +1,5 @@
 import {
+  AnalysisProvenanceSchema,
   assertStrategyAutonomyActionInvariants,
   assertStrategyAutonomyActionTransition,
   InvariantError,
@@ -13,6 +14,9 @@ import { type Schema, strategyAutonomyActions } from '../../schema/index.js';
 type Row = typeof strategyAutonomyActions.$inferSelect;
 
 const toAction = (row: Row): StrategyAutonomyAction => ({
+  ...(row.provenance === null
+    ? {}
+    : { provenance: AnalysisProvenanceSchema.parse(row.provenance) }),
   id: row.id,
   kind: row.kind,
   status: row.status,
@@ -31,6 +35,7 @@ const toAction = (row: Row): StrategyAutonomyAction => ({
 });
 
 const values = (action: StrategyAutonomyAction) => ({
+  provenance: action.provenance ?? null,
   id: action.id,
   kind: action.kind,
   status: action.status,
@@ -57,6 +62,10 @@ export class DrizzleStrategyAutonomyActionRepository implements StrategyAutonomy
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
   async save(action: StrategyAutonomyAction): Promise<void> {
+    return this.saveSync(action);
+  }
+
+  saveSync(action: StrategyAutonomyAction): void {
     assertStrategyAutonomyActionInvariants(action);
     const existing = this.db
       .select()
@@ -79,6 +88,10 @@ export class DrizzleStrategyAutonomyActionRepository implements StrategyAutonomy
   }
 
   async findById(id: string): Promise<StrategyAutonomyAction | null> {
+    return this.findByIdSync(id);
+  }
+
+  findByIdSync(id: string): StrategyAutonomyAction | null {
     const row = this.db
       .select()
       .from(strategyAutonomyActions)

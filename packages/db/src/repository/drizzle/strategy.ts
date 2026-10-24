@@ -180,6 +180,10 @@ export class DrizzleStrategyRepository implements StrategyRepository {
   }
 
   async findById(id: string): Promise<Strategy | null> {
+    return this.findByIdSync(id);
+  }
+
+  findByIdSync(id: string): Strategy | null {
     const row = this.db.select().from(strategies).where(eq(strategies.id, id)).get();
     return row === undefined ? null : toStrategy(row);
   }
@@ -200,18 +204,22 @@ export class DrizzleStrategyRepository implements StrategyRepository {
   }
 
   async createVersion(version: StrategyVersion): Promise<void> {
-    const strategy = await this.findById(version.strategyId);
+    return this.createVersionSync(version);
+  }
+
+  createVersionSync(version: StrategyVersion): void {
+    const strategy = this.findByIdSync(version.strategyId);
     if (strategy === null) throw new InvariantError(`Strategy 不存在: ${version.strategyId}`);
     assertStrategyVersionInvariants(version, strategy.owner);
     if (version.parentVersionId !== undefined) {
-      const parent = await this.findVersionById(version.parentVersionId);
+      const parent = this.findVersionByIdSync(version.parentVersionId);
       if (parent === null || parent.strategyId !== version.strategyId) {
         throw new InvariantError('parentVersionId 必须指向同一 Strategy');
       }
     }
-    const existing = await this.findVersionById(version.id);
+    const existing = this.findVersionByIdSync(version.id);
     if (existing !== null) throw new InvariantError(`StrategyVersion 已存在: ${version.id}`);
-    const versions = await this.listVersions(version.strategyId);
+    const versions = this.listVersionsSync(version.strategyId);
     // 预检唯一索引 strategy_versions_strategy_version_unique，避免泄漏 SQLite 错误（与 memory 对齐）。
     const sameNumber = versions.find(
       (candidate) => candidate.version === version.version && candidate.id !== version.id,
@@ -272,11 +280,19 @@ export class DrizzleStrategyRepository implements StrategyRepository {
   }
 
   async findVersionById(id: string): Promise<StrategyVersion | null> {
+    return this.findVersionByIdSync(id);
+  }
+
+  findVersionByIdSync(id: string): StrategyVersion | null {
     const row = this.db.select().from(strategyVersions).where(eq(strategyVersions.id, id)).get();
     return row === undefined ? null : toVersion(row);
   }
 
   async listVersions(strategyId: string): Promise<readonly StrategyVersion[]> {
+    return this.listVersionsSync(strategyId);
+  }
+
+  listVersionsSync(strategyId: string): readonly StrategyVersion[] {
     return this.db
       .select()
       .from(strategyVersions)

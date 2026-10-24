@@ -737,12 +737,6 @@ describe('weekly-report workflow', () => {
       ...baseCtx,
       adapters: {
         ...baseCtx.adapters,
-        llm: {
-          name: 'failing-llm',
-          generate: async () => {
-            throw new Error('provider unavailable');
-          },
-        },
       },
     };
 

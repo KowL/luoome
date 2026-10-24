@@ -135,16 +135,15 @@ web ──┤        │
 
 **禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
 
-### 托管 Chat 的 AI 运行时例外
+### 模型运行时边界
 
-`apps/web` 的托管 Chat 可以直接构造 `packages/ai-runtime` 的模型运行时，不经过 `ToolContext`。
-这是**显式例外**，不是新的通用规则：
+模型推理与模型配置都由 DSH 承担，luoome 侧没有模型运行时包，也没有模型设置页：
 
-- `ai-runtime` 只允许 `apps/*` 导入；`core` / `db` / `tools` / `workflows` / `mcp` / `adapters` 不得依赖它。
-- 领域能力仍统一经 tools 使用；Chat 只是模型执行宿主，不复制领域逻辑。
-- `scripts/check-layers.ts` 的白名单必须逐条列出 `apps/web` 与 `apps/worker`，其余包命中即失败。
+- 领域包（`core` / `db` / `tools` / `workflows` / `mcp` / `adapters`）不得导入 AI SDK。
+- 领域能力仍统一经 tools 使用；领域层不推理、不计费。
+- `infra/check-layers.ts` 守住 AI SDK 依赖边界。
 
-设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14。
+设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14、D9。
 
 ### packages/core 内部依赖
 
@@ -412,8 +411,8 @@ binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类�
 HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
 方法委托。CLI/MCP/Web 三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
 分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
-market 的 sentiment manager。托管部署的全站数据源配置由管理员写入持久卷
-`operator/market.env`：Web 保存后立即重建共享行情栈，worker 按文件 mtime 在任务批次前同步。
+market 的 sentiment manager。单机部署的数据源配置写入持久卷
+`operator/market.env`：Web 保存后立即重建共享行情栈，消费者按文件 mtime 在任务批次前同步。
 
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
@@ -455,53 +454,36 @@ Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优�
 使路由在当前 Web 进程立即生效。只改来源顺序时复用进程级共享 SourceSet，不产生第二个
 EastmoneySource 实例，无关 manager 的缓存不清空。
 
-LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/TUI/Web/MCP 四个
-composition root 均调用 `createAIStackFromEnv`，一次加载
-`$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），并把同一模型目录解析出的
-`generation`、`agent` profile 分别注入 `LLMAdapterLike` 与
-`AgentRuntimeLike`。provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；
-core 只保留 SDK 无关的端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
+模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时包，没有模型设置页，也没有
+`/api/settings/ai` 与运行时热替换。CLI/TUI/MCP 不装配模型，需要模型判断的能力由
+DSH agent 经 MCP 调用工具完成。core 不持有模型调用端口，领域层不推理、不计费。
 
-Web 额外提供受同源 Origin 保护的 `/api/settings/ai`：
-GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥；POST 原子写入
-模型目录与权限为 `0600` 的 `$LUOOME_HOME/.env`，随后替换
-`ctxRef.current.adapters.llm` / `agent`，使新配置在当前进程立即生效。模型未配置或
-配置损坏时 Web 使用 `ai-unconfigured` 占位端口启动，允许用户从设置页修复；其它
-surface 仍保持启动期快速失败。
-
-Web 对话默认复用同一个 `AISDKAgentRuntime`，由 adapters 内部
-`ToolLoopAgent.stream()` + `createAgentUIStreamResponse()` 生成 AI SDK UI Message
-SSE；Web 只提供从 registry 派生的显式工具白名单并消费标准 Web `Response`，core
-不依赖 AI SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
+Web 的模型对话已退役：没有 AI 流端点，也没有对话页面。保留下来的是不依赖模型的
+「起草 → 明确确认 → 原子执行」链路，写工具在 Web 上只生成待确认描述，只有用户在
 Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage` 及
 `ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
-tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 user message，
-服务端加载最近 20 条消息并在 AI SDK `onFinish` 后保存 assistant UI message parts。
-已完成的工具结果和 step 边界保留到下一轮。草案确认使用
+tools 读写当前账户的持久化历史。草案确认使用
 `POST /api/chat/sessions/:id/drafts/:messageId/:toolCallId` → `settle_chat_draft`，仅执行
 服务端存储的输入；repository 通过原子认领和 parts 比较更新保存每项执行状态，重复请求不重复写入。
-执行结果随原消息传回模型，用户文本中的“已执行”不作为凭据。对话和确认都要求 write + external
-显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
+用户文本中的“已执行”不作为凭据。确认要求 write + external
+显式开启，请求沿用所选账户 header。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
-托管开发环境另有显式启用的 DSH Chat 路径：Bun Web → 独立 Node Host → DSH/Cordis。
-`packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
-业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
-官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。此接入不使用 MCP，也不加载 DSH Web UI。
-DSH 模型请求通过独立鉴权的 Bun 代理复用 hosted ledger；共享模型传输逐块转发 SSE 并读取尾部 usage，
-未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
+DSH 接入有两条路径，生产只保留第一条：
 
-DSH 当前每轮从 Luoome 的可信历史重建临时 Session，历史超过既有窗口时明确拒绝，尚无持久 Session 恢复。
-实时事件和持久消息按 Agent/message/attempt 身份合并为现有 UI Message Stream；同会话在执行及回答保存期间保持占用。
-停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与费用；失败不自动切换运行时重跑。
-开发开关、固定产物与启动命令见 [DSH 运行底座](../infra/dsh/README.md)，任务与验收边界见
-[开发任务](./dsh-plugin-platform-development-plan.md)。生产配置拒绝启用此路径，不能把受控集成通过当作生产隔离或真实供应商验收。
+1. **独立 DSH 部署**（当前形态）：luoome 以插件形式接入 DSH——三个 MCP 实例（只读面 / 设置面 / 批处理面）、
+   三个 DSH 插件（面板、纪律提示词、批处理技能）与 DSH 定时任务。业务工具经 MCP 调用，
+   事实库是 `$LUOOME_HOME/luoome.db`。部署入口见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
+2. ~~内嵌 DSH Host~~（已随托管形态下线）：原 `apps/agent-runtime` 的内嵌 Host 路径与 hosted ledger 计量一并删除。
+
+批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用批处理面工具，门槛判定随工具走
+（非交易日/非盘中时段返回 `skipped`）。不再有 luoome 侧的常驻调度进程。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
 每轮独立装载当前结构化共识，不能靠最近 20 条聊天推断同意。首页的三项方向操作经
 `POST /api/workspace/drafts` 生成服务器草案，再复用原确认协议；不接受客户端执行结果。
-托管确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
+确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
 原始触发与当前资格分开，始终不把历史触发当作当前行动许可。手机讨论与恢复契约见
 [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
 
@@ -1181,38 +1163,34 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 ## 16. 个人订阅服务装配
 
-Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant 存储、任务、支付、通知及恢复基础设施。
-认证外壳复用原 `createWebApp` 和 `apps/web/public/index.html`；普通 CLI/TUI/MCP 保留单机能力。
-内置生产装配接入 SMTP 和真实行情，支付与研究邮件未配置时返回不可用；部署约束见
-[服务运行手册](./runbooks/hosted-personal-subscription.md)。
+Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts`），
+没有登录、没有租户隔离、没有支付计量。CLI/TUI/MCP 共用同一份单机事实库。
+部署约束见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
 
 认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
 浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
 CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
 登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
 
-HostedAISettingsStore 在托管持久卷保存全站 AI 配置，不复用读取个人 home 的单机 AISettingsStore。
-认证入口提供管理员专用配置路由，普通用户不能访问。配置保存不调用供应商。
-每次 Web 请求和 worker 任务在 createTenantContext 中固定配置快照，再创建 AI SDK stack 与计量器。
-管理员设置 OpenAI 兼容端点、模型和费率；计量层检查确切端点和模型并禁止重定向，按真实 usage 结算，保留额度和租户隔离。
+模型配置只有一份：`$LUOOME_HOME/ai-models.json`，由本地 CLI/TUI/MCP 读取，密钥从环境取；
+模型推理由 DSH 承担，luoome 侧没有模型设置页，也不做用量计量。
 
-身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。
-core的`hosted/`只定义实体与不变量；db的memory/Drizzle实现共享contract tests。每个hosted Tenant
-自动一个默认投资Account；空库原子初始化，已有唯一账户原样复用，多账户异常保留数据并停止自动迁移。
-`update_account`仅更新名称，资金/持仓依旧通过ledger；local多账户不变。
+没有 control.sqlite、没有租户：全部事实落在单机 `luoome.db`。
+core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现共享 contract tests。
+空库原子初始化一个默认投资 Account；已有唯一账户原样复用，多账户异常保留数据并停止自动迁移。
+`update_account` 仅更新名称，资金/持仓依旧通过 ledger。
 
-平台Tools位于`packages/tools/src/platform`的私有registry，只接受可信anonymous/user/worker/webhook主体，
-不加入generic registry、MCP、OpenAI或聊天discovery。普通业务保留原Tool和路由契约，在请求级context中
-核对Tenant generation、默认Account、sideEffect、订阅与预算。旧事实白名单不能成为屏蔽原Strategy、
-Advice、研究、AI/SSE或复盘的产品依据；尚未接通的调用必须列为本次实现/验收缺口。
+托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
+`packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
+公开 registry；DSH 侧的暴露面由 MCP 实例控制（只读面 `luoome`、设置面 `luoome-settings`、
+批处理面 `luoome-batch`），调度由 DSH 定时任务驱动。
 
-`TenantRuntimeManager`提供有界LRU和引用生命周期；请求、SSE、onFinish、后台任务完成前均持有lease。
-原`ctxRef.current`不能被不同用户请求共同改写；账户头不能改变服务端绑定的默认账户。
-托管界面移除新增/切换账户，服务端同时拒绝对应绕行；前端登出/换用户清理私人DOM、状态和延迟回调。
+单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
+界面不提供新增/切换账户，服务端同时拒绝对应绕行。
 
-原Strategy schedule、账户计划、报告、观察、绩效及历史评估按租户接入独立worker，保留原领域lease/fencing/checkpoint。
-不能让每个Web实例再启动全部租户的scheduler，也不能只完成旧`personal-alerts`就认定原自动业务已迁移。
-workflow继续只通过`ctx.tools.*`编排。平台Job与租户执行通过receipt/outbox/inbox恢复，跨库没有共同事务；
+原 Strategy schedule、账户计划、报告、观察、绩效及历史评估的编排保留在领域 workflow 里，
+由 DSH 定时任务调用的批处理工具触发（保留原领域 lease/fencing/checkpoint）。
+workflow 继续只通过 `ctx.tools.*` 编排。
 业务成功、用户额度、provider成本和通知状态分别表达，unknown不按超时猜测为零。
 
 默认账户复用原DecisionReview与开盘/收盘/周报。旧`watchlist-facts`属于补充报告，旧PersonalWatchFeedback
@@ -1222,6 +1200,42 @@ workflow继续只通过`ctx.tools.*`编排。平台Job与租户执行通过recei
 共享写屏障覆盖Web、worker、provider活动、会话及迁移；新接入的业务/SSE也必须进入删除排空与恢复验证。
 恢复保持冻结，撤销旧凭证/fence，应用最新独立删除ledger，按业务回执对账且不重发旧通知，完成核对后才恢复外部副作用。
 
-路径与运行操作见[运行手册](./runbooks/hosted-personal-subscription.md)，细节见[详细设计](./ddd/hosted-personal-subscription-detailed-design.md)。
-旧fixture证明其记录的基础设施行为，不能替代原Web融合、真实AI、原自动调度及生产恢复验收。
-自动证券交易仍禁止；人工已完成成交保持原专用记账契约；远程MCP不在本次增量范围。
+单机形态的运行与部署见 [DSH 部署配置](../deploy/dsh/compose.yaml)，
+形态决策见[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) D9–D12。
+自动证券交易仍禁止；人工已完成成交保持原专用记账契约。
+
+## DSH 分析队列与应用层 AI 运行时
+
+领域层保留 `AnalysisJob`、`AnalysisContext`、来源不变量和 repository 接口；
+Drizzle 与 memory 实现共享合约测试。`analysis_job` 的 claim token 对写回构成租约栅栏。
+`complete_analysis_job` 在同一数据库事务中校验事实/来源、发布结果并完成任务，
+包括 Advice 与非 Advice 结果。直接 `record_advice` / `record_analysis_result` 用于交互上下文，
+批量上下文必须经持有 token 的完成路径。终态上下文仅供审计，不得再次写回。
+
+`claim_analysis_jobs.refresh` 在有效租约内将重新装配的交互事实包绑定为新批量事实包，
+每个 token 最多一次，关闭旧事实包写回窗口，不延长租约。`context_expired` / `stale_context`
+触发一次重新取事实与推理；失去租约立即停止。失败按任务策略退避并最终进入死信。
+`get_analysis_metrics` 区分全部 pending、已到期可执行 pending 与未回收的过期 claim。
+
+模型适配器与计量随模型运行时整体退役，推理只在 DSH 侧发生。
+core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边界由 `infra/check-layers.ts`
+检查。领域工具只装配事实、校验和持久化，不自行推理。`write` / `external` opt-in 仍有效。
+
+独立 DSH 的读面与消费者 profile 分离。`queue` 默认拒绝，消费者须显式白名单；
+普通 Web 与内嵌 DSH 不提供 queue。部署环境传入的 `LUOOME_EXPOSE_*` 不得扩大读面。
+三个客户端面板通过 `ctx.slots` 注册，服务端通过 `ctx.connection.fetch.register` 注册固定 GET
+路由，继承 DSH 认证与 Host/Origin 校验。路由仅调用固定只读工具，直接返回 ToolResult，
+不建立裸监听器，不接受任意工具名或命令。浏览器只投影结果，不重算业务数字。
+
+单机事实库是唯一事实源；历史托管租户库已下线。
+存量 Advice 的来源幂等回填为 `legacy-ai`，不伪造历史模型信息。
+
+## 纯插件执行与授权内核
+
+`packages/dsh-luoome` 的 DSH/HTTP 包装统一调用 tools 操作服务；`PluginAuthorityRepository` 在 core 定义，db 提供 memory/drizzle、同步 schema/DDL 与合约。操作冻结账户/输入并 CAS 认领，通用操作回执与业务事务分离，结果不明时通过既有业务 receipt 核对，不能自动重执行业务。
+
+宿主审批使用真实 ApprovalService，执行 token 的私有凭据经单调 guard 和 handler 核验。调度身份来自当前 turn 消息与 ScheduleService 持久投递历史的关联，并绑定任务定义指纹、授权版本、账户及精确参数。
+
+新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。确认页只把操作编号存入 sessionStorage，确认凭据仅在组件内存；模型调用使用官方审批组件。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
+
+无模型预检及完整官方 Web profile 已有隔离验收，生产 Node DB、业务入口承接及目标环境仍未通过。自动执行默认关闭，不切换生产。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

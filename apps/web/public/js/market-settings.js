@@ -31,7 +31,7 @@ const fmtTime = (value) => {
 const setPanelState = (message, kind = '') => {
   const state = $('#market-settings-state');
   if (state === null) return;
-  state.className = `ai-settings-state${kind === '' ? '' : ` ${kind}`}`;
+  state.className = `settings-state${kind === '' ? '' : ` ${kind}`}`;
   state.querySelector('span:last-child').textContent = message;
 };
 

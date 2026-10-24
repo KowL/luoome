@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 import { addTradingDays, dateInShanghai, isHoliday, isWeekend } from '../trading-calendar.js';
 import { STANDARD_DISCLAIMERS } from './advice.js';
+import { AnalysisProvenanceSchema } from './analysis-provenance.js';
 import { AShareSentimentSnapshotSchema } from './ashare-sentiment.js';
 import { DataProvenanceSchema } from './provenance.js';
 
@@ -126,6 +127,7 @@ export const InvestmentDiscussionSourceSchema = z.object({
 });
 
 export const InvestmentResearchSchema = z.object({
+  provenance: AnalysisProvenanceSchema.optional(),
   id: Id,
   ownerUserId: Id,
   accountId: Id,

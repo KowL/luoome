@@ -2,6 +2,11 @@
 
 本文是 `docs/` 的统一入口。长期有效的说明放在根层，产品需求放在 `prd/`，技术设计放在 `ddd/`，运维操作放在 `runbooks/`，已完成的计划与验收记录放在 `archive/`。
 
+当前形态是**单机版**：DSH 是唯一入口，luoome 以插件接入 DSH，`$LUOOME_HOME/luoome.db` 是唯一事实库。
+多租户托管形态（登录、订阅计费、托管站点、内嵌 DSH Host、用量计量）已经下线，相关文档归入
+[历史归档](#历史归档)，只作阶段留存，不是当前行为说明。当前形态的设计与边界见
+[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+
 ## 快速入口
 
 | 读者 | 从这里开始 |
@@ -43,9 +48,9 @@
 
 | 文档 | 范围 |
 |---|---|
-| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与托管边界；首批已通过受控开发验收，后续能力按设计验证 |
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH、领域层去 AI（事实包 + 待分析队列）、托管消费与内嵌 DSH 演进；含契约、DDL、阶段与验收（草案） |
-| [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
+| [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | 完整输入 schema、持久确认与 DSH 原生/PTC 调度审批链路；Node DB、完整 profile/UI 与预检待验收，自动执行默认关闭 |
+| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与 Run/Tool Manifest 契约；对应研发计划已归档，能力契约仍按此设计演进 |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH（三实例 MCP、面板、技能、定时任务）、领域层去 AI（事实包 + 待分析队列）与队列消费；含契约、DDL、阶段与验收（草案） |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
@@ -58,7 +63,7 @@
 | [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 get_market_data_status 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
 | [Vibe A 股报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md) | Report、A 股情绪证据、三类简报 workflow 与策略研究映射 |
-| [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
+| [Web 对话助手设计](./ddd/web-chat-design.md) | 已随 DSH 改造退役：模型对话与 `/api/chat` 端点下线，draft-and-confirm 链路保留 |
 | [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
 | [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
 | [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md) | Strategy、Watchlist、AlertPlan 的领域模型、存储、迁移与跨端契约 |
@@ -77,10 +82,7 @@
 
 | 文档 | 范围 |
 |---|---|
-| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围；开发使用 GPT-6.1 Sol / max |
-| [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
-| [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
-| [个人订阅托管版开发改造计划](./hosted-personal-subscription-development-plan.md) | 原页面复用改造切片、旧工程证据与新业务验收、外部前置条件 |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 当前主线：单机接入 DSH 的契约、阶段与验收口径（D9–D12 对应三实例 MCP、面板、技能、定时任务与队列消费） |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |
@@ -97,13 +99,29 @@
 |---|---|
 | [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+1/T+3/T+5 日检、P50/P95/max 周报与真实 provider smoke |
 | [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
-| [个人订阅托管版运行与恢复](./runbooks/hosted-personal-subscription.md) | 显式启动、私有存储、provider 装配、写屏障、备份恢复、外部对账与生产门禁 |
 
 ## 历史归档
 
 `archive/` 保存已完成阶段的计划、任务规格和验收快照，仅用于追溯，不作为当前实现契约。当前行为以代码、长期维护文档及对应 PRD/DDD 为准。
 
+**多租户托管形态（已下线）**——登录、订阅计费、支付渠道、管理后台、托管站点、内嵌 DSH Host 与用量计量：
+
+- [个人订阅托管版开发改造计划](./archive/hosted-personal-subscription-development-plan.md) — 原页面复用改造切片、旧工程证据与新业务验收
+- [个人订阅托管版详细设计](./archive/hosted-personal-subscription-detailed-design.md) — 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约
+- [个人订阅托管版运行与恢复](./archive/hosted-personal-subscription-runbook.md) — 显式启动、私有存储、provider 装配、写屏障、备份恢复与生产门禁
 - [个人订阅托管版隔离验收](./archive/hosted-personal-subscription-fixture-acceptance.md) — 工程测试、浏览器、100 Tenant fixture 压测与尚未通过的真实渠道门禁
+- [运营管理页面 v1](./archive/admin-console-v1.md) — 用户列表、额度、标记收款与服务期管理
+- [订阅定价与套餐设计 v1](./archive/subscription-pricing-v1.md) — 首期单档套餐、试用与续费、AI 额度口径
+- [支付渠道接入调研](./archive/payment-channel-research.md) — 微信/支付宝直连路径、合规前置与成本
+- [托管版每日自动服务 v1](./archive/hosted-daily-auto-service-v1.md) — 按租户的预警、报告、Strategy 日循环与成本闭环
+
+**DSH 插件平台与首页开发阶段（已归档）**：
+
+- [DSH 插件平台开发任务](./archive/dsh-plugin-platform-development-plan.md) — 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围
+- [DSH 插件平台详细研究与验证计划](./archive/dsh-plugin-platform-research-plan.md) — 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验与逐项验收证据
+- [AI 投资协作首页开发任务](./archive/ai-investment-workspace-development-plan.md) — PRD 任务拆分、依赖、并行线程文件边界与验收交接
+
+**早期 MVP 阶段**：
 
 - [v0.1 实施计划](./archive/plan.md)
 - [v0.1 Agent 任务规格](./archive/MVP-TASK.md)

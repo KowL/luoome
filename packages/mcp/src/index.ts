@@ -5,6 +5,7 @@
 
 import { startMcpServer } from './server.js';
 
+export * from './batch-tools.js';
 export * from './context.js';
 export * from './server.js';
 

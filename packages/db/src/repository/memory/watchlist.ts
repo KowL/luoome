@@ -65,7 +65,7 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     });
   }
 
-  applyHostedMutation(
+  applyMutation(
     members: readonly WatchlistMember[],
     sources: readonly WatchlistMemberSource[],
   ): void {

@@ -1,7 +1,7 @@
 /**
  * 确定性伪随机工具（仅测试使用）。
  * 同一输入永远得到同一输出：不依赖 Date.now / Math.random，
- * 保证 FakeMarketAdapter / FakeLLMAdapter 的可重复性。
+ * 保证 FakeMarketAdapter 的可重复性。
  */
 
 /** FNV-1a 32-bit 字符串哈希。 */

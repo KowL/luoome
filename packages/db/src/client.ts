@@ -9,14 +9,13 @@ import {
 } from '@luoome/core';
 import { eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
-import { createDrizzleReportAutomationRepository } from './hosted/report-automation-client.js';
-import { ensureReportAutomationSchema } from './hosted/report-automation-schema.js';
-import { DrizzleTenantRepository } from './hosted/tenant-client.js';
-import { DrizzleTenantExportRepository } from './hosted/tenant-export-client.js';
-import { ensureTenantExportSchema } from './hosted/tenant-export-schema.js';
-import { ensureTenantSchema } from './hosted/tenant-schema.js';
-import { createDrizzleWatchDeliveryRepository } from './hosted/watch-delivery-client.js';
-import { ensureWatchDeliverySchema } from './hosted/watch-delivery-schema.js';
+import { DrizzlePersonalRepository } from './personal/client.js';
+import { createDrizzleReportAutomationRepository } from './personal/report-automation-client.js';
+import { ensureReportAutomationSchema } from './personal/report-automation-schema.js';
+import { ensurePersonalSchema } from './personal/schema.js';
+import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-client.js';
+import { ensureWatchDeliverySchema } from './personal/watch-delivery-schema.js';
+import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -64,6 +63,7 @@ import {
   DrizzleWatchTriggerRepository,
   DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
+import { DrizzlePluginAuthorityRepository } from './repository/drizzle/plugin-authority.js';
 import { type Schema, schema } from './schema/index.js';
 
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
@@ -86,6 +86,53 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`CREATE TABLE IF NOT EXISTS plugin_operations (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, account_id TEXT NOT NULL,
+    state TEXT NOT NULL, claim_token TEXT, updated_at INTEGER NOT NULL, record_json TEXT NOT NULL
+  )`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS plugin_operations_state_idx ON plugin_operations(state, updated_at)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS plugin_automation_grants (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, profile TEXT NOT NULL,
+    session_id TEXT NOT NULL, task_id TEXT NOT NULL, version INTEGER NOT NULL, record_json TEXT NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS plugin_grants_task_idx ON plugin_automation_grants(user_id, profile, session_id, task_id)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
+    subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,
+    dedupe_key TEXT NOT NULL, payload_json TEXT NOT NULL, data_as_of INTEGER NOT NULL,
+    not_before INTEGER NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3, claim_token TEXT, claimed_by TEXT, lease_until INTEGER,
+    context_id TEXT, result_json TEXT, error_json TEXT, created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL, finished_at INTEGER
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_active_dedupe_unique ON analysis_jobs(dedupe_key) WHERE status IN ('pending','claimed')`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS analysis_jobs_claim_idx ON analysis_jobs(status, priority, data_as_of)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS analysis_jobs_lease_idx ON analysis_jobs(status, lease_until)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS analysis_jobs_account_kind_idx ON analysis_jobs(account_id, kind, created_at)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS analysis_contexts (
+    recorded_result_json TEXT, id TEXT PRIMARY KEY, job_id TEXT, kind TEXT NOT NULL, account_id TEXT NOT NULL,
+    subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, data_as_of INTEGER NOT NULL,
+    facts_json TEXT NOT NULL, fact_ids_json TEXT NOT NULL, limitations_json TEXT NOT NULL,
+    context_hash TEXT NOT NULL, write_until INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS analysis_contexts_job_idx ON analysis_contexts(job_id)`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS analysis_contexts_expiry_idx ON analysis_contexts(expires_at)`,
+  );
+
   db.run(sql`CREATE TABLE IF NOT EXISTS investment_research (
     id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL,
     request_id TEXT NOT NULL, request_hash TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -118,8 +165,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   ensureWatchDeliverySchema(db);
   ensureReportAutomationSchema(db);
-  ensureTenantSchema(db);
-  ensureTenantExportSchema(db);
+  ensurePersonalSchema(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
     id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
     subject_id TEXT NOT NULL, stock_id TEXT, source_occurred_at INTEGER NOT NULL,
@@ -532,6 +578,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
       reasoning TEXT NOT NULL,
       risks TEXT NOT NULL,
       disclaimers TEXT NOT NULL,
+      provenance_json TEXT,
+      generator_kind TEXT,
       source_tool TEXT,
       source_workflow TEXT,
       based_on TEXT NOT NULL,
@@ -541,6 +589,20 @@ export const ensureSchema = (db: DrizzleDb): void => {
     )
   `);
   migrateAdviceColumns(db);
+  ensureColumn(db, 'advices', 'provenance_json', 'TEXT');
+  ensureColumn(db, 'advices', 'generator_kind', 'TEXT');
+  db.run(sql`
+    UPDATE advices SET provenance_json = json_object(
+      'generatorKind', 'legacy-ai',
+      'evidenceFactIds', json('[]'),
+      'generatedAt', strftime('%Y-%m-%dT%H:%M:%fZ', created_at / 1000.0, 'unixepoch')
+    ) WHERE provenance_json IS NULL
+  `);
+  db.run(sql`
+    UPDATE advices SET generator_kind = json_extract(provenance_json, '$.generatorKind')
+    WHERE generator_kind IS NULL
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices(generator_kind)`);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS advices_subject_idx ON advices (subject_kind, subject_id)
   `);
@@ -1059,12 +1121,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE TABLE IF NOT EXISTS strategy_autonomy_actions (
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
       strategy_id TEXT NOT NULL, strategy_version_id TEXT, evaluation_session_id TEXT,
-      trigger TEXT NOT NULL, rule_snapshot_json TEXT, ai_narrative TEXT,
+      trigger TEXT NOT NULL, rule_snapshot_json TEXT, ai_narrative TEXT, provenance_json TEXT,
       fact_references_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       completed_at INTEGER
     )
   `);
+  ensureColumn(db, 'strategy_autonomy_actions', 'provenance_json', 'TEXT');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS strategy_autonomy_actions_strategy_created_idx
     ON strategy_autonomy_actions (strategy_id, created_at)
@@ -2124,9 +2187,10 @@ export const createDrizzleRepos = (
   }
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
+    pluginAuthority: new DrizzlePluginAuthorityRepository(db),
+    analysis: new DrizzleAnalysisRepository(db),
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
-    hostedTenant: new DrizzleTenantRepository(db),
-    hostedExports: new DrizzleTenantExportRepository(db),
+    personal: new DrizzlePersonalRepository(db),
     watchDelivery: createDrizzleWatchDeliveryRepository(db),
     reportAutomation: createDrizzleReportAutomationRepository(db),
     account: new DrizzleAccountRepository(db),

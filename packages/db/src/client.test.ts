@@ -21,6 +21,42 @@ import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
+  it('backfills legacy Advice provenance once without replacing known provenance', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const legacy = makeAdvice('legacy-provenance');
+      const known = makeAdvice('known-provenance', {
+        provenance: {
+          generatorKind: 'dsh-chat',
+          model: 'fixture:model',
+          evidenceFactIds: [],
+          generatedAt: legacy.createdAt,
+        },
+      });
+      await handle.repos.advice.save(legacy);
+      await handle.repos.advice.save(known);
+      ensureSchema(handle.db);
+      const first = handle.db.all<{ provenance_json: string }>(sql`
+        SELECT provenance_json FROM advices WHERE id = 'legacy-provenance'
+      `)[0];
+      if (!first) throw new Error('missing migrated Advice');
+      expect(JSON.parse(first.provenance_json)).toEqual({
+        generatorKind: 'legacy-ai',
+        evidenceFactIds: [],
+        generatedAt: legacy.createdAt.toISOString(),
+      });
+      ensureSchema(handle.db);
+      expect(
+        handle.db.all(sql`
+        SELECT provenance_json FROM advices WHERE id = 'legacy-provenance'
+      `)[0],
+      ).toEqual(first);
+      expect((await handle.repos.advice.findById(known.id))?.provenance).toEqual(known.provenance);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('不同数据库连接也不能同时取得预警租约', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'luoome-watch-lease-'));
     const first = createDrizzleRepos(join(directory, 'test.sqlite'));

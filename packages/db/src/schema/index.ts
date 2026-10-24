@@ -6,6 +6,8 @@ import type {
   AdviceReasoning,
   AdviceSubjectKind,
   AlertPlan,
+  AnalysisContext,
+  AnalysisJob,
   ChatMessagePart,
   DecisionReviewContent,
   DecisionReviewContext,
@@ -69,6 +71,10 @@ import type {
   WorkflowRun,
 } from '@luoome/core';
 import { sql } from 'drizzle-orm';
+import { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
+
+export { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
+
 import {
   index,
   integer,
@@ -453,6 +459,10 @@ export const advices = sqliteTable(
     reasoning: text('reasoning', { mode: 'json' }).$type<AdviceReasoning>().notNull(),
     risks: text('risks', { mode: 'json' }).$type<readonly string[]>().notNull(),
     disclaimers: text('disclaimers', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    provenance: text('provenance_json', { mode: 'json' }).$type<
+      import('@luoome/core').AnalysisProvenance
+    >(),
+    generatorKind: text('generator_kind'),
     sourceTool: text('source_tool'),
     sourceWorkflow: text('source_workflow'),
     basedOn: text('based_on', { mode: 'json' }).$type<AdviceDataSnapshot>().notNull(),
@@ -461,6 +471,7 @@ export const advices = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
+    generatorKindIdx: index('advices_generator_kind_idx').on(t.generatorKind),
     subjectIdx: index('advices_subject_idx').on(t.subjectKind, t.subjectId),
     createdAtIdx: index('advices_created_at_idx').on(t.createdAt),
   }),
@@ -1110,6 +1121,9 @@ export const strategyAutonomyActions = sqliteTable(
       StrategyAutonomyAction['ruleSnapshot'] | null
     >(),
     aiNarrative: text('ai_narrative'),
+    provenance: text('provenance_json', { mode: 'json' }).$type<
+      StrategyAutonomyAction['provenance'] | null
+    >(),
     factReferences: text('fact_references_json', { mode: 'json' })
       .$type<readonly string[]>()
       .notNull(),
@@ -1929,7 +1943,75 @@ export const investmentTracking = sqliteTable(
   ],
 );
 
+export const analysisJobs = sqliteTable(
+  'analysis_jobs',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<AnalysisJob['kind']>().notNull(),
+    source: text('source').$type<AnalysisJob['source']>().notNull(),
+    accountId: text('account_id').notNull(),
+    subjectKind: text('subject_kind').$type<AnalysisJob['subject']['kind']>().notNull(),
+    subjectId: text('subject_id').notNull(),
+    priority: integer('priority').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    payload: text('payload_json', { mode: 'json' }).$type<AnalysisJob['payload']>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    notBefore: integer('not_before', { mode: 'timestamp_ms' }).notNull(),
+    status: text('status').$type<AnalysisJob['status']>().notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(3),
+    claimToken: text('claim_token'),
+    claimedBy: text('claimed_by'),
+    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
+    contextId: text('context_id'),
+    result: text('result_json', { mode: 'json' }).$type<AnalysisJob['result']>(),
+    error: text('error_json', { mode: 'json' }).$type<AnalysisJob['error']>(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('analysis_jobs_active_dedupe_unique')
+      .on(table.dedupeKey)
+      .where(sql`${table.status} IN ('pending', 'claimed')`),
+    index('analysis_jobs_claim_idx').on(table.status, table.priority, table.dataAsOf),
+    index('analysis_jobs_lease_idx').on(table.status, table.leaseUntil),
+    index('analysis_jobs_account_kind_idx').on(table.accountId, table.kind, table.createdAt),
+  ],
+);
+
+export const analysisContexts = sqliteTable(
+  'analysis_contexts',
+  {
+    recordedResult: text('recorded_result_json', { mode: 'json' }).$type<
+      AnalysisContext['recordedResult']
+    >(),
+    id: text('id').primaryKey(),
+    jobId: text('job_id'),
+    kind: text('kind').$type<AnalysisContext['kind']>().notNull(),
+    accountId: text('account_id').notNull(),
+    subjectKind: text('subject_kind').$type<AnalysisContext['subject']['kind']>().notNull(),
+    subjectId: text('subject_id').notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    facts: text('facts_json', { mode: 'json' }).$type<AnalysisContext['facts']>().notNull(),
+    factIds: text('fact_ids_json', { mode: 'json' }).$type<string[]>().notNull(),
+    limitations: text('limitations_json', { mode: 'json' }).$type<string[]>().notNull(),
+    contextHash: text('context_hash').notNull(),
+    writeUntil: integer('write_until', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('analysis_contexts_job_idx').on(table.jobId),
+    index('analysis_contexts_expiry_idx').on(table.expiresAt),
+  ],
+);
+
 export const schema = {
+  pluginOperations,
+  pluginAutomationGrants,
+  analysisJobs,
+  analysisContexts,
   investmentResearch,
   investmentConsensus,
   investmentTracking,

@@ -1,4 +1,4 @@
-import { callApi, getAccountId, getSessionEpoch } from './api.js';
+import { callApi, getAccountId, getIdentityEpoch } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -7,7 +7,6 @@ import {
   planVersionId,
 } from './trading-plan-panel.js';
 import { $, el, fmtDateTime, mount, resultErrorText } from './ui.js';
-import { openWorkspaceDiscussion } from './workspace.js';
 
 let requestVersion = 0;
 const button = (label, onClick) => {
@@ -31,10 +30,10 @@ export const renderNotificationTarget = async () => {
   host.hidden = !triggerId;
   if (!triggerId) return;
   const accountId = getAccountId();
-  const epoch = getSessionEpoch();
+  const epoch = getIdentityEpoch();
   mount(host, el('p', null, '正在核对这条提醒的原始快照与最新状态…'));
   const result = await callApi(`/api/watch/notifications/${encodeURIComponent(triggerId)}`);
-  if (version !== requestVersion || accountId !== getAccountId() || epoch !== getSessionEpoch())
+  if (version !== requestVersion || accountId !== getAccountId() || epoch !== getIdentityEpoch())
     return;
   if (!result.ok) {
     mount(host, [
@@ -107,14 +106,6 @@ export const renderNotificationTarget = async () => {
   const subject = { kind: 'watch-trigger', id: trigger.id };
   host.append(
     el('div', 'row-actions', [
-      button(
-        '围绕这条提醒讨论',
-        () =>
-          void openWorkspaceDiscussion(
-            [{ ref: subject, label: `${trigger.stockId} · 此次提醒` }],
-            '请比较触发当时与当前计划的区别，保留风险、反证、有效期和未知项。',
-          ),
-      ),
       button('登记 / 关联实际成交', () => void openDecisionReview(subject)),
     ]),
     el(

@@ -37,6 +37,10 @@ export class DrizzleInvestmentWorkspaceRepository implements InvestmentWorkspace
   constructor(private readonly db: DrizzleDb) {}
 
   async createResearch(value: InvestmentResearch): Promise<InvestmentResearch> {
+    return this.createResearchSync(value);
+  }
+
+  createResearchSync(value: InvestmentResearch): InvestmentResearch {
     assertInvestmentResearchInvariants(value);
     return this.db.transaction(
       (tx) => {

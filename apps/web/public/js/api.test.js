@@ -4,11 +4,8 @@ import {
   ACCOUNT_KEY,
   apiHeaders,
   callApi,
-  clearHostedSession,
-  configureHostedSession,
   getAccountId,
-  getHostedSession,
-  onHostedSessionExpired,
+  getIdentityEpoch,
   randomRequestId,
   setAccountId,
 } from './api.js';
@@ -18,12 +15,20 @@ const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorag
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
 
+const installStorage = (values) =>
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: (key) => values.delete(key),
+    },
+  });
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalStorage === undefined) delete globalThis.localStorage;
   else Object.defineProperty(globalThis, 'localStorage', originalStorage);
-  clearHostedSession();
-  onHostedSessionExpired(() => {});
   if (originalDocument === undefined) delete globalThis.document;
   else Object.defineProperty(globalThis, 'document', originalDocument);
   Object.defineProperty(globalThis, 'crypto', originalCrypto);
@@ -41,65 +46,22 @@ describe('Web API request context', () => {
     expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(first).not.toBe(second);
   });
-  const hosted = () =>
-    Object.defineProperty(globalThis, 'document', {
-      configurable: true,
-      value: { body: { dataset: { runtime: 'hosted' } } },
-    });
 
-  it('hosted bootstrap sends no stale identity, then binds CSRF and the single account in memory', async () => {
-    hosted();
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: () => 'previous-user-account',
-        setItem: () => {
-          throw new Error('must not persist');
-        },
-      },
-    });
-    expect(getAccountId()).toBe('');
-    expect(apiHeaders().has('x-luoome-user-id')).toBe(false);
-    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
-    setAccountId('default-account');
-    const headers = apiHeaders({
-      'x-luoome-user-id': 'user-b',
-      'x-csrf-token': 'csrf-b',
-      'x-luoome-account-id': 'forged',
-    });
-    expect(headers.get('x-luoome-user-id')).toBe('user-a');
-    expect(headers.get('x-csrf-token')).toBe('csrf-a');
-    expect(headers.get('x-luoome-account-id')).toBe('default-account');
-    clearHostedSession();
-    expect(getAccountId()).toBe('');
+  it('账户选择写入 localStorage，切换账户后身份版本递增', () => {
+    installStorage(new Map());
+    const epoch = getIdentityEpoch();
+    setAccountId('account-a');
+    expect(getAccountId()).toBe('account-a');
+    expect(getIdentityEpoch()).toBe(epoch + 1);
+    setAccountId('account-a');
+    expect(getIdentityEpoch()).toBe(epoch + 1);
+    setAccountId('account-b');
+    expect(getAccountId()).toBe('account-b');
+    expect(getIdentityEpoch()).toBe(epoch + 2);
   });
 
-  it('hosted discards an old response after switching identity and clears rejected sessions', async () => {
-    hosted();
-    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
-    let finish;
-    globalThis.fetch = () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      });
-    const pending = callApi('/api/watchlists');
-    configureHostedSession({ user: { id: 'user-b' }, csrfToken: 'csrf-b' });
-    finish(Response.json({ ok: true, data: { private: 'A' } }));
-    expect((await pending).ok).toBe(false);
-    let expired = false;
-    onHostedSessionExpired(() => {
-      expired = true;
-    });
-    globalThis.fetch = async () => Response.json({ ok: false }, { status: 401 });
-    expect((await callApi('/api/review')).ok).toBe(false);
-    expect(expired).toBe(true);
-    expect(getHostedSession()).toBeNull();
-  });
   it('流式请求复用账户 header，草案确认锁定原账户而非切换后的账户', async () => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: { getItem: () => 'account-new' },
-    });
+    installStorage(new Map([[ACCOUNT_KEY, 'account-new']]));
     const headers = apiHeaders({ 'content-type': 'application/json' }, 'account-original');
     expect(headers.get('x-luoome-account-id')).toBe('account-original');
     let received;
@@ -141,14 +103,7 @@ describe('Web API request context', () => {
   });
 
   it('把当前 localStorage 账户作为 request-scoped header 发送', async () => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: (key) => (key === ACCOUNT_KEY ? 'account-tab-a' : null),
-        setItem: () => {},
-        removeItem: () => {},
-      },
-    });
+    installStorage(new Map([[ACCOUNT_KEY, 'account-tab-a']]));
     let received;
     globalThis.fetch = async (_path, init) => {
       received = init;

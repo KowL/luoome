@@ -8,10 +8,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./protocol": "./src/protocol.ts",
-    "./runtime-config": "./src/runtime-config.ts",
-    "./plugin": {
-      "types": "./src/plugin.ts",
-      "default": "./dist/plugin.js"
+    "./standalone-profile": "./src/standalone-profile.ts",
+    "./standalone-prompt": {
+      "types": "./src/standalone-prompt.ts",
+      "default": "./dist/standalone-prompt.js"
     }
   },
   "scripts": {

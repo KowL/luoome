@@ -1,11 +1,19 @@
 # Luoome × DSH 插件能力平台设计
 
-> 状态：设计基线；D01–D07 已通过受控开发环境验收，生产、持久恢复与多 Agent 等后续能力仍待验证，详见开发任务。
+> 状态：设计基线；D01–D07 已通过受控开发环境验收，生产、持久恢复与多 Agent 等后续能力仍待验证。
 > 创建：2026-10-20；实施状态更新：2026-10-21。
 > 目标：将投资业务能力按域组织为插件，并复用成熟通用插件，通过组合形成不同 Agent 能力。
-> 配套：[详细研究与验证计划](../dsh-plugin-platform-research-plan.md)。
-> 实施：[开发任务与线程边界](../dsh-plugin-platform-development-plan.md)。
-> 约束依据：[领域语言](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)、[Web Chat](./web-chat-design.md)、[托管设计](./hosted-personal-subscription-detailed-design.md)。
+> 配套：[详细研究与验证计划](../archive/dsh-plugin-platform-research-plan.md)（已归档）。
+> 实施：[开发任务与线程边界](../archive/dsh-plugin-platform-development-plan.md)（已归档）。
+> 约束依据：[领域语言](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)、[Web Chat](./web-chat-design.md)。
+>
+> **适用范围（2026-10-23）**：本文设计的是**内嵌 DSH Host + 原生 Cordis 插件**这条路，
+> 它的前提包含多租户托管层（租户生命周期、托管模型计量、托管站点）。
+> 托管形态下线后这些前提不再成立，内嵌 Host 与业务 Cordis 插件的代码也已从仓库删除：
+> 本文保留 Run/Tool Manifest、生命周期与事件契约部分作为插件化能力契约，
+> 托管相关的前提（Tenant、租约、计量账本、托管入口）不再是当前行为。
+> 当前单机形态（三实例 MCP、只读面板、技能目录、DSH 定时任务与队列消费）以
+> [luoome 的 DSH 改造详细设计](./luoome-dsh-transformation-detailed-design.md) 为准。
 
 ## 1. 目标、范围与决策状态
 
@@ -35,21 +43,22 @@ Agent 管理和多 Agent 可视化在基础运行契约验证后增加。
 
 ### 2.1 Luoome 当前工作树
 
-以下为设计阶段的代码审查基线；相关 hosted 文件含其它任务的未提交改动，部分实现已在首批开发中更新。现行行为见[架构文档](../ARCHITECTURE.md)与[验收记录](../dsh-plugin-platform-development-plan.md#8-首批统一验收)，不能把下表的历史快照当成永久接口。
+以下为设计阶段的代码审查基线；部分实现在首批开发中更新，托管形态下线后相关文件已删除。
+现行行为见[架构文档](../ARCHITECTURE.md)与[单机形态改造设计](./luoome-dsh-transformation-detailed-design.md)，不能把下表的历史快照当成永久接口。
 
 | 能力 | 当前事实与来源 | 设计影响 |
 |---|---|---|
-| Agent 端口 | [core context](../../packages/core/src/context.ts) 已有 AgentCallableTool、AgentRuntimeLike 与结果类型 | 优先复用，DSH 类型不进入业务层 |
-| Web Chat | [chat.ts](../../apps/web/src/chat.ts) 已有 ChatStreamRuntime、场景路由、主体核验、onFinish | 先适配现有端口，增加可信执行元数据 |
+| Agent 端口 | [core context](../../packages/core/src/context.ts) 只保留 AgentCallableTool；AgentRuntimeLike 与结果类型随模型层退役 | DSH 类型不进入业务层 |
+| Web Chat | 已退役：`apps/web/src/chat.ts` 的 ChatStreamRuntime、场景路由与主体核验随模型层删除 | DSH 侧不再有 Web 模型对话端口 |
 | 工具权限 | [agent-whitelist](../../packages/tools/src/agent-whitelist.ts)、[scenarios](../../packages/tools/src/agent/scenarios.ts) 构造明确的可调用能力 | 不全量导出 registry；逻辑插件与场景名单取交集 |
-| 草案 | buildChatTools 把 write/Advice 包装成虚拟工具；[settle_chat_draft](../../packages/tools/src/tools/settle-chat-draft.ts) 执行已保存输入 | Gateway 必须保持包装语义，确认工具不暴露给模型 |
-| 历史 | modelHistory 将真实确认结果投影回历史；默认加载最近 20 条消息 | DSH 增量会话不能遗漏回执，也不能每轮重复追加全部历史 |
-| 前端 | [chat.js](../../apps/web/public/js/chat.js) 消费现有 UI Message Stream、工具卡和确认卡 | 第一阶段不重做 Chat 协议和页面 |
-| 托管入口 | [server.ts](../../apps/web/src/server.ts) 从请求 context 取得 hosted agent；[hosted-providers](../../apps/web/src/hosted-providers.ts) 装配模型执行 | 只替换普通 chatStreamRuntime 注入不足以接通托管路径 |
-| 成本 | [hosted-meter](../../packages/adapters/src/llm/hosted-meter.ts) 拦截 AI SDK fetch，逐请求预占与结算 | DSH 独立请求不会自动计入；必须显式接回 |
-| 流式 | hosted-providers 和 hosted-meter 当前都有 response.text() 全量读取 | 返回 SSE 格式不能证明实时增量；必须测浏览器到达时序 |
-| 生命周期 | [hosted-server](../../apps/web/src/hosted-server.ts) retain 连接 Tenant lease 和维护写屏障 | DSH 活动必须参与排空、取消、删除和恢复 |
-| 运营策略 | [hosted/web](../../packages/tools/src/hosted/web.ts)、[hosted-config](../../apps/web/src/hosted-config.ts) 控制权益策略；行情配置由现有 provider 装配管理 | 复用当前策略，不在插件中固化“始终必须付费订阅”或永久行情实例 |
+| 草案 | [settle_chat_draft](../../packages/tools/src/tools/settle-chat-draft.ts) 执行已保存输入；Web 侧生成虚拟草案的包装随 chat 端点删除 | 确认工具不暴露给模型 |
+| 历史 | modelHistory 随 chat 端点删除 | DSH 增量会话不能遗漏回执，也不能每轮重复追加全部历史 |
+| 前端 | `apps/web/public/js/chat.js` 已删除；Web 只保留待确认草案面板 | 不再有 Chat 协议与页面 |
+| 托管入口 | `apps/web/src/server.ts` 曾从请求 context 取得托管 agent，`apps/web/src/hosted-providers.ts` 曾装配托管模型执行——两者随托管形态下线 | 这条前提已失效；单机形态改由 MCP 实例与面板接入，不走请求级托管 agent |
+| 成本 | `packages/adapters/src/llm/hosted-meter.ts` 曾拦截 AI SDK fetch 做预占与结算——随托管计量下线 | 托管计量账本不存在；模型调用成本由单机侧自行承担，无逐请求预占 |
+| 流式 | 上述托管装配当时有 response.text() 全量读取 | 返回 SSE 格式不能证明实时增量；必须测浏览器到达时序 |
+| 生命周期 | `apps/web/src/hosted-server.ts` 曾 retain 连接并维护写屏障——随托管形态下线 | 租约与写屏障不再存在；单机形态的排空与恢复按 DSH 会话与队列租约重新定义 |
+| 运营策略 | `packages/tools/src/hosted/web.ts`、`apps/web/src/hosted-config.ts` 曾控制权益策略——随托管形态下线 | 「始终必须付费订阅」等策略不再适用；行情配置由单机 provider 装配管理 |
 
 ### 2.2 DSH 上游审查基线
 
@@ -166,7 +175,7 @@ Tool Gateway 位于持有请求上下文和 callable closures 的 Bun 服务中�
 | packages/dsh-bridge/ | transport-neutral JSON 契约、Node Cordis 插件、结果与事件转换；禁止 import tools/db/workflows/web |
 | apps/agent-runtime/ | Node SDK Host 的可部署入口、健康与有界实例管理；不加载业务包 |
 | apps/web/src 的 DSH 接入模块 | Bun runtime client、Tool Gateway、请求身份和原 Chat callable 接线 |
-| apps/web/src/hosted-providers.ts | 请求级模型快照与 Chat runtime 选择，保留现有 generation 适配器 |
+| apps/web/src/hosted-providers.ts（已删除） | 曾承载请求级模型快照与 Chat runtime 选择；托管形态下线后该职责不存在 |
 | packages/adapters/src/llm/ | 复用/提取现有计量传输契约；不反向引用 tools 或 Web |
 | infra/dsh/ | 固定 Profile、Bundle 与部署配置；无凭证和私人数据 |
 
@@ -320,7 +329,9 @@ SDK 的 durable assistant/message 不能伪装成实时 token 流。拟由原生
 事件通道需要认证、大小上限、背压、断开处理和去重；正文不可写到 SDK stdout，stdout 仅用于 JSON-RPC。
 实时通道中断后可退回进度/完成消息，但要准确展示降级状态，不能宣称持续流式。
 
-当前 hosted 链路的两处全量缓冲必须在流式阶段解决，同时保留计量回执、响应消费与 Tenant lease 生命周期。
+当时的托管链路有两处全量缓冲，必须在流式阶段解决，同时保留计量回执、响应消费与 Tenant lease 生命周期。
+（该托管链路已随托管形态下线；单机形态的流式与租约语义按
+[改造详细设计](./luoome-dsh-transformation-detailed-design.md) 的队列与 DSH 会话契约重新定义。）
 onFinish 执行与有限收尾期间持有相关租约；持久化失败将 run 标记为 failed 并暴露 persistence_failed 诊断，禁止确认未保存草案或直接继续原 Session。
 执行者已停止后按恢复协议释放 lease，不无限等待数据库恢复；连失败状态也无法落库时，由先前持久运行记录与启动恢复识别未完成执行。
 上述 persistence_failed 是拟定运行诊断，不新增或替换业务 ToolError.kind。临时文本可丢失与已持久化事实可恢复的边界要明确，不能承诺进程硬退出前的每个 token 都可重放。
@@ -380,7 +391,7 @@ DSH_HOME、Session、附件、日志均新增私人数据副本，使用当前 T
 - 同名冲突、与平台 guards 的组合、卸载清理、升级和回退兼容。
 
 “官方”“有文档”“stars 多”都不等于通过 Luoome 的准入。成熟度证据不足时标为候选，缺点写入实验结论。
-候选矩阵和优先试验项由[研究计划](../dsh-plugin-platform-research-plan.md)维护，避免在本设计复制版本库存。
+候选矩阵和优先试验项由[研究计划](../archive/dsh-plugin-platform-research-plan.md)维护，避免在本设计复制版本库存。
 
 通用工具产生普通文本/JSON 时优先复用 Chat 展示；专用卡片使用稳定 Luoome artifact 协议和鉴权下载。
 DSH Web 客户端插件不自动成为 Luoome UI；需要单独产品适配，不能为追求“零改动装插件”重新引入 DSH 官方前端。
@@ -417,7 +428,7 @@ DSH Web 客户端插件不自动成为 Luoome UI；需要单独产品适配，�
 | AC12 | 多 Agent 完成判定包含所需后代任务，父子共享预算且审计关联完整；单纯 root idle 不算全部完成 |
 
 AC01–AC11 是托管灰度门槛；AC12 在多 Agent 开放前通过。AC02 的外部能力来源与“原生插件/薄适配”形态必须披露。
-详细任务、依赖、实验步骤和交付物见[研究计划](../dsh-plugin-platform-research-plan.md)。
+详细任务、依赖、实验步骤和交付物见[研究计划](../archive/dsh-plugin-platform-research-plan.md)。
 
 ## 14. 尚需定案的问题
 

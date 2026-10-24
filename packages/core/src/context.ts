@@ -21,7 +21,7 @@ import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
-import type { ExecutionIdentity } from './hosted/auth.js';
+import type { ExecutionIdentity } from './personal/execution-identity.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
   ResearchEmbeddingAdapterLike,
@@ -30,7 +30,6 @@ import type {
   ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
 import type { SourceErrorKind, SourceStatus } from './source.js';
-import type { ToolResult } from './types/result.js';
 import type { SideEffect } from './types/side-effect.js';
 
 /**
@@ -160,21 +159,11 @@ export interface StockSearchCandidate {
   readonly name: string;
 }
 
-/** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */
-export interface LLMGenerateRequest {
-  readonly system: string;
-  /** Zod schema（schema-constrained decoding）。 */
-  readonly schema?: unknown;
-  readonly data: unknown;
-}
-
-/** LLM 适配器的 core 侧投影。 */
-export interface LLMAdapterLike {
-  readonly name: string;
-  generate<T = unknown>(request: LLMGenerateRequest): Promise<T>;
-}
-
-/** Agent 可调用工具的 SDK 无关投影；具体 ToolLoopAgent 类型只存在于 adapters。 */
+/**
+ * Agent 可调用工具的 SDK 无关投影。
+ * 模型运行时（request/result/trace/token usage）已随 DSH 改造下沉到
+ * packages/ai-runtime，core 不再持有模型调用端口（§5.7.4）。
+ */
 export interface AgentCallableTool {
   readonly name: string;
   readonly description: string;
@@ -183,40 +172,6 @@ export interface AgentCallableTool {
     readonly ok: boolean;
     readonly output: unknown;
   }>;
-}
-
-export interface AgentToolTrace {
-  readonly toolName: string;
-  readonly input: unknown;
-  readonly output: unknown;
-  readonly ok: boolean;
-  readonly durationMs: number;
-}
-
-export interface AgentTokenUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly totalTokens: number;
-}
-
-export interface AgentRuntimeRequest {
-  readonly instructions: string;
-  readonly prompt: string;
-  readonly outputSchema: unknown;
-  readonly tools: readonly AgentCallableTool[];
-}
-
-export interface AgentRuntimeResult {
-  readonly output: unknown;
-  readonly trace: readonly AgentToolTrace[];
-  readonly usedTools: readonly string[];
-  readonly totalUsage: AgentTokenUsage;
-}
-
-/** 多步 agent runtime 的 core 侧投影；禁止出现 AI SDK 类型。 */
-export interface AgentRuntimeLike {
-  readonly name: string;
-  run(request: AgentRuntimeRequest): Promise<AgentRuntimeResult>;
 }
 
 export interface Logger {
@@ -261,30 +216,13 @@ export interface NotificationManagerLike {
 }
 
 export interface ToolContext {
-  readonly llmOperationScope?: string;
-  readonly llmExecution?: {
-    run<T>(
-      name: string,
-      input: unknown,
-      ctx: ToolContext,
-      work: (ctx: ToolContext) => Promise<T>,
-    ): Promise<T>;
-  };
   readonly reportExecutionOwner?: string;
   readonly identity?: Readonly<ExecutionIdentity>;
-  readonly hostedAuthorization?: (
-    toolName: string,
-    input: unknown,
-    requiredCapabilities: readonly SideEffect[],
-  ) => Promise<ToolResult<never> | null> | ToolResult<never> | null;
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;
     readonly stockUniverse?: StockUniverseManagerLike;
-    readonly llm: LLMAdapterLike;
   };
-  /** Phase 2：可选多步 agent runtime；测试或未配置 surface 可不注入。 */
-  readonly agent?: AgentRuntimeLike;
   /** v0.3 起；send_notification tool 用。装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
   /**

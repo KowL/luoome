@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { notificationText } from './notification.js';
+import { HostedQuietHoursSchema, notificationText, quietHoursUntil } from './notification.js';
 
 const FIRST = '若价格无法收复MA5(约36)并跌破MA10(约35.24)，多头结构可能被破坏需放弃入场';
 const SECOND = '相对MA60距离已达10.77%，大盘转弱时回撤幅度可能较大';
@@ -26,5 +26,42 @@ describe('notificationText', () => {
       200,
     );
     expect(out).toBe(FIRST);
+  });
+});
+
+const NIGHT_QUIET = {
+  enabled: true,
+  startMinutes: 1320,
+  endMinutes: 480,
+  timeZone: 'Asia/Shanghai' as const,
+};
+
+describe('quietHoursUntil', () => {
+  it('跨零点的免打扰时段统一顺延到次日 08:00', () => {
+    expect(quietHoursUntil(NIGHT_QUIET, new Date('2026-10-10T14:00:00.000Z'))).toEqual(
+      new Date('2026-10-11T00:00:00.000Z'),
+    );
+    expect(quietHoursUntil(NIGHT_QUIET, new Date('2026-10-10T23:59:59.000Z'))).toEqual(
+      new Date('2026-10-11T00:00:00.000Z'),
+    );
+    expect(quietHoursUntil(NIGHT_QUIET, new Date('2026-10-11T00:00:00.000Z'))).toBeNull();
+  });
+
+  it('支持白天时段与关闭免打扰，且起止相同不等于 24 小时', () => {
+    const quiet = {
+      enabled: true,
+      startMinutes: 600,
+      endMinutes: 720,
+      timeZone: 'Asia/Shanghai' as const,
+    };
+    expect(quietHoursUntil(quiet, new Date('2026-10-10T02:15:00.000Z'))).toEqual(
+      new Date('2026-10-10T04:00:00.000Z'),
+    );
+    expect(
+      quietHoursUntil({ ...quiet, enabled: false }, new Date('2026-10-10T02:15:00.000Z')),
+    ).toBeNull();
+    expect(
+      HostedQuietHoursSchema.safeParse({ ...quiet, endMinutes: quiet.startMinutes }).success,
+    ).toBe(false);
   });
 });

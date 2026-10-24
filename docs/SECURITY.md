@@ -154,21 +154,29 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 | `LUOOME_EXPOSE_READ` | `true` | `true` / `false` | read 类 |
 | `LUOOME_EXPOSE_WRITE` | `false` | `true` / `false` | write 类 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
+| `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由消费者实例显式开启 |
+| `LUOOME_EXPOSE_TOOLS` | 未设置 | 逗号分隔 allowlist | 按工具名精确放行；空串表示不放行任何工具 |
+| `LUOOME_EXPOSE_DENY` | 未设置 | 逗号分隔 denylist | deny 优先于 allowlist |
+| `LUOOME_EXPOSE_RESEARCH` | `false` | `true` / `false` | 放行私人研究正文与检索工具 |
 | `LUOOME_EXPOSE_TRADE` | `false` | 必须 `false` | trade 类，恒为 false |
 
 （`LUOOME_EXPOSE_ADVICE` 已随 advice 副作用等级一并删除。）
 
-启动时校验：trade 必须 false，否则启动失败。
+启动时校验：trade 必须 false，否则启动失败。allowlist / denylist 的判定顺序是
+「能力满足 ∧ 名字在 allowlist 内（allowlist 为空则不限）∧ 名字不在 denylist 内」。
+
+单机 DSH 部署的暴露面由 profile 补丁固定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
+避免一次配置失误把只读实例变成写面实例。实例划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
 
 Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
 策略盘后、盘中账户计划、账户绩效与策略自治 scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照或 WorkflowRun，因此只有
 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时才允许启动；缺任一项时
-保持停用并记录原因。`luoome start` 的长驻账户计划与 AlertPlan 盯盘循环也受此双闸口约束。
+保持停用并记录原因。单机形态的批处理由 DSH 定时任务唤起会话后调用批处理工具触发，同样受这组双闸口约束。
 不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
 
 ## 内置 agent loop
 
-> DSH 瘦身后 `agent_run` 工具已删除；Web 对话助手（/api/chat，托管运行时）沿用下述约束。
+> DSH 瘦身后 `agent_run` 工具已删除；单机 Web 对话助手（/api/chat）沿用下述约束。
 
 对话运行时能力由 tools 包的显式白名单构造：
 
@@ -181,16 +189,17 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 
 ## 传输安全
 
-### v0.1 — stdio（本地进程）
+### stdio（本地进程）
 
-stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。
+stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。三个 MCP 实例（`luoome` / `luoome-settings` /
+`luoome-batch`）与消费者实例都以 stdio 方式连接同一份单机事实库。
 
-### v0.3+ — HTTP/SSE
+### DSH 入口（HTTP）
 
-- 必须 token 鉴权
-- TLS 强制
-- rate limit
-- audit log
+- 公网入口由 Caddy basic auth 挡住，DSH 自身再校验启动 token；两层都在业务进程之外。
+- DSH 不直接发布端口，只在反代后可达；单机 Web 默认只监听 `127.0.0.1`。
+- 远程访问优先走 SSH 隧道或受控反代；公网部署以 HTTPS 为首选，明文 HTTP 只是已授权回退。
+- 审计走本地 audit log（见下），不依赖远端集中收集。
 
 ## 密钥处理
 
@@ -273,7 +282,7 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 
 ## Audit Log
 
-所有 write / external / trade 工具调用记录到 `~/.luoome/logs/audit.log`：
+所有非 read 类（write / external / queue / trade）工具调用记录到 `~/.luoome/logs/audit.log`：
 
 ```json
 {
@@ -285,13 +294,13 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 }
 ```
 
-advice 类也记录：
+队列工具也记录：
 
 ```json
 {
   "ts": "...",
-  "tool": "analyze_stock",
-  "sideEffect": "advice",
+  "tool": "complete_analysis_job",
+  "sideEffect": "queue",
   "result": "ok",
   "caller": "mcp"
 }
@@ -299,7 +308,7 @@ advice 类也记录：
 
 Tool 的业务输入、业务输出和错误详情不写入 audit log；失败事件只保留 `errorKind`。
 
-当前实现（2026-08-14）：`defineTool` 对所有 `write` / `external` / `trade` / `advice` 调用记录
+当前实现（2026-08-14）：`defineTool` 对所有非 read 调用记录
 成功、业务失败、输入校验失败和异常结果；CLI、MCP、TUI、Web 生产入口分别把日志写入
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
@@ -335,75 +344,91 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 - [x] 日志脱敏测试覆盖
 - [x] Audit log 写入正常
 - [x] trade 类工具无 MCP 暴露路径（grep 验证）
-- [x] advice tool 不能调 trade tool（grep + 测试验证）
+- [x] Advice 与 trade 边界仍在（`trade` 不进入 MCP / 模型可调用工具表）
 - [x] advice 必含 disclaimers（不变量测试覆盖）
 - [x] advice 有效期限逻辑正确
 - [x] LLM 输出 sanitized 审计生效
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
+- [x] 三个 MCP 实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃
 
-## 个人订阅托管边界
+## 单机形态的入口与暴露面
 
-hosted已有身份/隔离/支付/恢复基础设施；本次在其上复用原Web业务，默认一个投资账户。
-安全边界用于保护用户和平台权限，不以旧facts-only范围替代现有产品。新融合路径尚需本版独立验收，
-真实运营与供应商门禁见[运行手册](./runbooks/hosted-personal-subscription.md#7-生产放行门禁)。
+luoome 现在是**单机版**：没有多租户、没有订阅计费、没有托管站点，也没有内嵌 DSH Host。
+DSH 是唯一入口，luoome 以插件形态接入；`$LUOOME_HOME/luoome.db` 是唯一事实库，
+DSH 的交互面与消费者实例共享同一份事实库。多租户托管形态（登录、订阅、支付、托管站点、
+用量计量）已随 D9–D12 下线，历史设计见 [DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
 
-- 显式hosted不读取个人`.env`、共享本地DB或用户home模型配置；Bun启动要求`--no-env-file`。
-  通知链接使用 `PUBLIC_ORIGIN`，传输策略默认要求HTTPS；临时HTTP验证仅在部署显式设置 `HOSTED_ALLOW_INSECURE_HTTP=true`
-  时允许，不能作为生产放行依据。生产拒绝fixture provider，注册默认关闭直到实际放行条件完成。
-- 邮箱OTP为6位/5分钟/5次尝试，平台存HMAC；邮箱/IP/全站有预算。session token仅存hash，cookie
-  使用Secure/HttpOnly/SameSite=Lax/Path=/；已有idle7天/absolute30天参数、会话轮换和敏感操作再认证保持。
-  临时HTTP入口使用独立的 `luoome_http_session`，保留HttpOnly/SameSite/Path及Origin/CSRF保护；
-  验证码与会话在HTTP中不加密。HTTPS入口不接受该Cookie，切换HTTPS后须重新登录。
-- 浏览器mutation按请求实际Host（含端口）和配置的HTTP/HTTPS传输策略校验同源Origin及会话CSRF，不绑定固定域名或端口；登录挑战只豁免已有会话/CSRF，仍查Origin及限流。
-  代理须保留原始Host及端口；不信任客户端提供的X-Forwarded-Host/Proto来放行请求。
-  支付raw-body webhook独立验签；可信代理头不能替代身份。客户端Tenant、账户、owner、价格和预算不能覆写服务端事实。
-- 平台registry不进入模型/MCP/generic HTTP。原业务Tool、专用API、SSE、确认草案和worker统一按当前Tenant授权。
-  本人的Advice、账户金额和研究资料按原业务契约可见；跨租户读取/写入/聚合必须拒绝，不能只通过前端删除字段保护。
-- hosted服务端只绑定唯一默认Account；新增/切换在HTTP、generic Tool和AI草案路径都拒绝。
-  `update_account`只收名称，不能覆盖本金/现金/币种；内部初始化不对普通用户/模型开放。local多账户行为不变。
-- 保留原AI/研究入口，但模型只能使用当前Tenant/Account与已授权工具，消耗受订阅及预算约束。
-  provider未装配明确不可用，不伪造模型输出。平台LLM/数据源密钥、任意Vault路径/Git凭据/整库恢复不是租户设置权限。
+### 两层鉴权
 
-### 管理员 AI 配置
+| 层 | 位置 | 作用 |
+|---|---|---|
+| 公网入口 basic auth | Caddy（`deploy/dsh/Caddyfile`） | DSH 不直接发布端口，只经反代对外；未配置 `DSH_AUTH_USER` / `DSH_AUTH_HASH` 时校验失败（fail closed），不会放开 `/dsh/` |
+| DSH 启动 token | DSH Web 自身 | 入口 URL 带 token 才能建立会话，token 不进入业务进程；DSH 自带 Host/Origin 栅栏 |
 
-`/api/admin/ai-settings` 仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问；POST 还要求同源、CSRF 和 write opt-in。普通租户的 `/api/settings/*` 封锁不变。
-配置适用于全站，以单文件原子替换写入持久卷的 `operator/ai-settings.json`（0600），不读取个人 home 配置。
-“设置 → AI 模型”使用同一管理员边界。`/api/admin/ai-settings/catalog` 管理供应商、模型和默认选择；修订号拒绝过期草稿覆盖新配置。
-接口仅返回密钥是否配置，不返回密钥、路径或供应商原始错误。留空保留同一供应商地址的密钥；更换地址必须重新填写；清除正在使用的密钥前须切换模型或关闭 AI。
-`/api/admin/ai-settings/models` 还要求 external opt-in，只向管理员指定的 HTTPS 基础地址追加 `/models`，禁止重定向，限时 15 秒、响应上限 1 MiB。
-只有地址与已保存供应商完全匹配才复用密钥；未保存地址必须显式填写密钥。目录仅返回验证后的模型 ID 和名称，不写入配置。
-旧版 v1 文件只读转换，首次保存升级为 v2 多供应商格式。回滚到仅支持 v1 的旧版时，须按恢复集流程恢复兼容配置；不能直接让旧程序读取 v2 文件。
-每次请求固定模型目录、凭据与费率快照，执行仍经过租户授权、额度预占、单次/周期预算和用量结算。计量层只允许该快照的确切 Chat Completions 地址和模型，禁止跟随重定向。
-费率由管理员配置，缓存优惠所需用量缺失时保持 unknown；输入同价时无需缓存细分即可结算。
-浏览器不将密钥写入 localStorage，保存后或身份切换时清空输入。恢复集包含该私密配置，不得公开分享。
+- 两层都在 luoome 业务进程之外：luoome 不实现账号、密码或会话。
+- 单机 Web（`luoome web serve`）默认只监听 `127.0.0.1`，不对局域网暴露；远程访问走 SSH 隧道或反向代理。
+- 反向代理必须保留原始 Host 与端口；不信任客户端自带的 `X-Forwarded-Host` / `X-Forwarded-Proto` 放行请求。
+- 部署以 HTTPS 为首选；当前公网入口若只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍会校验，
+  但没有传输加密，不在不可信网络上传输凭据。
 
-### 管理员行情数据源配置
+### MCP 暴露面：三个实例
 
-托管模式下 `/api/settings/market*`（行情源开关、排序与连通性测试）仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问，POST 同样要求同源、CSRF 和 write opt-in；普通租户的其余 `/api/settings/*` 封锁不变。
-配置适用于全站，原子写入持久卷的 `operator/market.env`（0600），保存后立即重建共享行情栈；worker 按文件 mtime 在任务批次前同步，无需重启。恢复集包含该文件，须按密钥文件保护。
+| 实例 | 挂载位置 | 暴露内容 | 能力 |
+|---|---|---|---|
+| `luoome` | DSH 交互面 profile | 事实、建议、策略、盯盘等只读工具 | read |
+| `luoome-settings` | DSH 交互面 profile | 配置类写工具白名单（含研究结构工具） | write（精确白名单） |
+| `luoome-batch` | DSH 交互面 profile | 五个批处理入口，供 DSH 定时任务调用 | write（精确白名单） |
+| `luoome-worker` | DSH 消费者实例（headless） | 队列工具白名单（claim / complete / fail 等） | queue（精确白名单） |
 
-### DSH 开发运行时
+- 白名单按工具名精确匹配：读面严格只读，设置面只放配置类写工具，批处理面只放五个批处理入口。
+  设置面放行研究结构工具不会连带放行研究正文读取。
+- 暴露面开关由 profile 补丁决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
+  一次配置失误不能把读面变成写面，也不能放出 trade。
+- `queue` 是独立能力，不因开启 `write` 或 `external` 自动开放；消费者实例只开放明确的队列工具白名单。
+- 私有研究能力（Vault 正文、frontmatter、附件名、搜索片段）视为不可信数据，不进入 system prompt，
+  不输出绝对 Vault 路径或凭证。
 
-DSH Chat 只接受 development 环境下的显式启用，production 配置拒绝启动该路径。
-Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装、MCP、子 Agent 或额外日志上传。
-业务调用绑定服务端 run/tenant/generation/account/manifest，经过本轮 callable 和最新授权；草案不能通过直接 registry 执行变成写入。
-工具、模型、原生网页的内部接口各用独立凭证；模型输入不能指定执行身份，供应商密钥不交给 DSH。
-当前 Web 原生网页能力仅允许显式授权的 fixture；受信插件与 Cordis scope 不构成恶意代码沙箱。
-断流、取消或缺少真实 usage 保留未知费用，执行停止事实与费用状态分开。无法证明排空或保存失败时阻断继续执行，不自动重放。
-真实供应商、生产网络/进程隔离、删除恢复与持久 Session 尚需后续验收，详见 [DSH 研究计划](./dsh-plugin-platform-research-plan.md)。
+### trade 永不暴露
 
-### 订阅门禁运营开关
+- `LUOOME_EXPOSE_TRADE=true` 时 MCP server 启动即抛错退出（代码层硬卡，无配置绕过路径）。
+- Web 通用工具路由拒绝所有 trade 工具；人工成交录入只经专用路由，条件见上文「trade 永不通过 MCP 暴露」。
+- 建议与交易继续分离：Advice、盯盘结果与报告都不会自动下单。
 
-`HOSTED_ENTITLEMENT_REQUIRED=false` 时，试用窗口与付费权益缺失/过期不再阻断租户业务写和 worker 后台任务（策略运行、报告生成、盯盘）；身份、租户隔离、配额与预算约束不变。默认 `true`，仅在没有启用订阅收费的部署中显式关闭。
-- 建议与交易继续分离；自动证券交易禁止，trade不进入MCP/模型/通用Web路由；人工登记已完成成交仍走既有专用契约。
-- Tenant目录使用opaque ID、owner/generation/schema manifest与私有权限，拒绝符号链接越界。
-  应用进程可访问挂载的多个租户，因此不将此当作用户代码OS沙箱。
-- 发送前检查权益、当前规则/成员、目的地及偏好；unknown邮件按provider契约查询，不盲目重发。
-  个人/全局实际尝试预算与站内展示分离；平台日志不记录投资、模型或邮件正文。
-- 到期历史读取不隐式刷新行情或调用模型；导出允许本人私人资料，不含平台鉴权/密钥/成本或受限市场缓存，下载再次鉴权并no-store。
-- 删除先撤销访问/递增generation，再排空各进程请求、SSE和执行者；独立tombstone先于清目录持久化。
-  恢复应用最新删除ledger，必要财务记录与私人资料分离；旧会话、导出和邮件不得被备份复活。
-- 硬退出残留写活动不自动过期；恢复须停写、撤销旧fence并核对回执/支付/费用，不通过手改DB或伪造零成本解锁。
+### 单机事实库
 
-旧fixture验收不覆盖尚未接通的原业务/SSE/自动调度。正式条款同意、真实模型/数据/支付/邮件以及生产演练均需相应独立证据。
+- `$LUOOME_HOME/luoome.db` 是唯一事实源，DSH 交互面与消费者实例指向同一份文件。
+- 历史托管租户库已下线，不会再同步；不要把旧租户库挂回单机部署。
+- 面板与聊天读同一份数据：面板只做投影，不自己算数，数值必须与工具输出逐位一致。
+- 面板走 harness 的 `/api` 路由，继承浏览器认证与 Origin 栅栏，不自建裸端口。
+- 技能（`.dsh/skills`）本身不授予权限：它只决定 agent 怎么做事，能调哪些工具仍由实例白名单决定。
+
+### 调度与批处理
+
+- 单机形态没有常驻调度进程：批处理由 **DSH 定时任务**唤起会话，agent 再调用 `luoome-batch` 实例的批处理工具。
+- 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库；
+  调度时间点错了也不会写坏事实。
+- 队列消费由 DSH 消费者实例承担：租约先到先得，与交互面共享同一份事实库；
+  队列为空时不唤醒模型，避免空转的真实模型成本。
+
+### DSH 集成面的安全边界
+
+单机形态的 DSH 集成只有三块：独立 profile 装配、只读面板插件、系统提示词纪律插件。
+原先的内嵌 DSH Chat（Node Host + Cordis 业务代理 + 托管计量）已随托管形态一起删除，仓库里不再有这条路径。
+
+- profile 装配层决定实例与白名单：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
+  避免一次配置失误把只读实例变成写面实例。
+- 面板插件只做只读投影：它调用固定白名单的只读工具，经 harness 的 `/api` 路由取数，
+  继承浏览器认证与 Origin 栅栏，不自建裸端口，也不自己算数。
+- 纪律插件只向 system prompt 追加约束（先取事实再下结论、advice ≠ trade、保留反证与有效期等），
+  不授予任何工具权限。
+- 真实供应商、生产网络/进程隔离与持久 Session 仍待后续验收；对应研发计划已归档，
+  见 [文档归档清单](./README.md#历史归档)。
+
+## 纯插件迁移中的执行边界
+
+插件的模型人工操作须经持久 prepare 与真实 DSH 审批；allowed-once 只对应当前冻结参数及 execution token，凭据不返回模型，后续权限 listener 的 allow 不能替代它。缺审批渠道、never 策略、取消、账户变化和子 Agent 均不能触发写入。浏览器人工表单使用独立 prepare/confirm 凭据，绑定相同账户与冻结输入。
+
+新 Web 路由每次经真实 Connection.admit 和 owner 检查，POST 仍要求真实监听器同源 Origin；不用内部 Fetch URL 或 X-Forwarded 头替代它。输入上限 64 KiB，超限先回 413 再关闭未读流。确认凭据仅保存在页面内存，刷新后只可查询操作，不从存储或服务端重建确认凭据。临时 profile 的官方审批 UI、登录、Host/Origin、取消和冷恢复已有本地验收；验收使用合成事实及脚本模型。
+
+定时授权同时核对真实投递历史、当前 turn、任务定义指纹、授权版本/有效期、账户、精确输入及组合能力；拒绝 force 和客户端自报任务身份。自动执行默认关闭，隔离 Web/SQLite 两组证据不等同 Node 生产持久库和完整目标部署验收。unknown 结果先核对既有业务回执，禁止自动重复外部副作用。详细契约见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

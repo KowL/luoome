@@ -1843,7 +1843,14 @@ export const registerRepositoryContractTests = (
         });
         await repos.advice.save(advice);
         const got = await repos.advice.findById('adv-1');
-        expect(got).toEqual(advice);
+        expect(got).toEqual({
+          ...advice,
+          provenance: {
+            generatorKind: 'legacy-ai',
+            evidenceFactIds: [],
+            generatedAt: advice.createdAt,
+          },
+        });
         expect(got?.basedOn.dataAsOf).toBeInstanceOf(Date);
         expect(got?.basedOn.quotes?.['stk-1']?.ts).toBeInstanceOf(Date);
       });
@@ -1853,7 +1860,14 @@ export const registerRepositoryContractTests = (
         const { sourceTool: _drop, ...withoutSourceTool } = minimal;
         await repos.advice.save(withoutSourceTool);
         const got = await repos.advice.findById('adv-min');
-        expect(got).toEqual(withoutSourceTool);
+        expect(got).toEqual({
+          ...withoutSourceTool,
+          provenance: {
+            generatorKind: 'legacy-ai',
+            evidenceFactIds: [],
+            generatedAt: withoutSourceTool.createdAt,
+          },
+        });
         expect(got?.sourceTool).toBeUndefined();
 
         const withWorkflow = makeAdvice('adv-wf', { sourceWorkflow: 'daily-advice' });
@@ -5221,7 +5235,7 @@ export const registerRepositoryContractTests = (
           const now = new Date(start.getTime() + seconds * 1000);
           return repos.workflowRun.execution({
             id: 'strategy-execution',
-            workflowName: 'hosted-strategy-execution',
+            workflowName: 'strategy-execution',
             action,
             owner,
             now,

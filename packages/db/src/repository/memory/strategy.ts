@@ -53,6 +53,10 @@ export class InMemoryStrategyRepository implements StrategyRepository {
   }
 
   async createVersion(version: StrategyVersion): Promise<void> {
+    return this.createVersionSync(version);
+  }
+
+  createVersionSync(version: StrategyVersion): void {
     const strategy = this.strategies.get(version.strategyId);
     if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${version.strategyId}`);
     assertStrategyVersionInvariants(version, strategy.owner);

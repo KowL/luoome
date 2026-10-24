@@ -3,18 +3,12 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { initAISettings, renderAISettings } from './ai-settings.js';
-import { callApi, getAccountId, getHostedSession, isHostedMode, setAccountId } from './api.js';
-import { initChat, refreshChat } from './chat.js';
+import { callApi, getAccountId, setAccountId } from './api.js';
 import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
-import { renderHostedAdmin } from './hosted-admin.js';
-import { renderHostedAISettings } from './hosted-admin-ai.js';
-import { initializeHostedSession } from './hosted-session.js';
-import { renderHostedNotifications, renderHostedSubscription } from './hosted-settings.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { navigateToStock, renderMarket, teardownMarket } from './market.js';
@@ -52,7 +46,7 @@ import {
 } from './target-pages.js';
 import { bindTopbarTheme, initTheme } from './theme.js';
 import { $ } from './ui.js';
-import { mountWorkspaceChatRoute, renderInvestmentWorkspace } from './workspace.js';
+import { renderInvestmentWorkspace } from './workspace.js';
 
 /* ============ 状态行 ============ */
 
@@ -211,16 +205,13 @@ const ROUTES = [
   'limit-up',
   'dragon-tiger',
   'sectors',
-  'chat',
   'settings',
-  'admin',
 ];
 
 /** 上一帧显示的路由：只在换页时回到顶部，同页重绘（自动刷新、账户切换）不动滚动位置。 */
 let shownRoute = null;
 
 const showRoute = async (name) => {
-  if (isHostedMode() && document.body.classList.contains('auth-pending')) return;
   const safe = ROUTES.includes(name) ? name : 'dashboard';
   // 换页回到页面顶部：各页高度不同，沿用上一页的滚动位置会停在半截卡片或 K 线图上
   if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });
@@ -274,15 +265,9 @@ const showRoute = async (name) => {
       await renderDragonTiger(setStatus);
     } else if (safe === 'sectors') {
       await renderSectors(setStatus);
-    } else if (safe === 'chat') {
-      initChat();
-      mountWorkspaceChatRoute();
-      await refreshChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
       await renderSettingsTab(setStatus, settingsTab());
-    } else if (safe === 'admin') {
-      await renderHostedAdmin(setStatus);
     }
   } catch (error) {
     setStatus(`路由错误：${error instanceof Error ? error.message : String(error)}`, true);
@@ -301,21 +286,13 @@ const currentHash = () => {
   return ROUTES.includes(path) ? path : 'dashboard';
 };
 
-/* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */
+/* ============ 设置页二级菜单（#settings?tab=market|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system', 'subscription'];
+const SETTINGS_TABS = ['market', 'notify', 'data', 'system'];
 
 const settingsTab = (hash = window.location.hash) => {
-  const tab =
-    new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ??
-    (isHostedMode() ? 'subscription' : 'ai');
-  // 全站模型和数据源配置仅向管理员开放。
-  const hostedTabs =
-    getHostedSession()?.admin === true
-      ? ['subscription', 'notify', 'system', 'market', 'ai']
-      : ['subscription', 'notify', 'system'];
-  if (isHostedMode() && !hostedTabs.includes(tab)) return 'subscription';
-  return SETTINGS_TABS.includes(tab) ? tab : 'ai';
+  const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'market';
+  return SETTINGS_TABS.includes(tab) ? tab : 'market';
 };
 
 /** 只渲染当前 tab 的分区内容；pane 显隐与 subnav 高亮同步。 */
@@ -329,16 +306,7 @@ const renderSettingsTab = async (setStatus, tab) => {
     if (active) node.setAttribute('aria-current', 'true');
     else node.removeAttribute('aria-current');
   });
-  if (isHostedMode() && tab === 'subscription') {
-    await renderHostedSubscription(setStatus);
-  } else if (isHostedMode() && tab === 'notify') {
-    await renderHostedNotifications(setStatus);
-  } else if (isHostedMode() && tab === 'ai') {
-    await renderHostedAISettings(document.getElementById('hosted-ai-models'));
-  } else if (tab === 'ai') {
-    initAISettings(setStatus);
-    await renderAISettings(setStatus);
-  } else if (tab === 'market') {
+  if (tab === 'market') {
     initMarketSettings(setStatus);
     await renderMarketSettings(setStatus);
     initMarketSync();
@@ -555,15 +523,12 @@ window.__luoome = {
 };
 
 initTheme();
-const sessionReady = await initializeHostedSession();
-if (sessionReady !== false) {
-  bindTopbarTheme();
-  bindTopbarStockSearch();
-  bindGlobalActions();
-  startClock();
-  startMarketSession();
-  observeTopbarHeight();
-  startDashboardAutoRefresh();
-  startQuoteAutoRefresh();
-  void initAccountSelect().then(() => showRoute(currentHash()));
-}
+bindTopbarTheme();
+bindTopbarStockSearch();
+bindGlobalActions();
+startClock();
+startMarketSession();
+observeTopbarHeight();
+startDashboardAutoRefresh();
+startQuoteAutoRefresh();
+void initAccountSelect().then(() => showRoute(currentHash()));

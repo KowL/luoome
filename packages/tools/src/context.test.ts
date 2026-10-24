@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BuildContextInput, buildContext } from './context.js';
+import { buildContext } from './context.js';
 import { buildTestContext } from './testing/context.js';
 
 describe('context execution identity', () => {
@@ -11,39 +11,26 @@ describe('context execution identity', () => {
     expect(ctx.user).toEqual({ id: 'local-user', defaultAccountId: '' });
   });
 
-  it('requires a hosted identity and never supplies local-user', async () => {
+  it('freezes the local identity and keeps the user selection', async () => {
+    const dependencies = await buildTestContext();
+    const ctx = buildContext({
+      ...dependencies,
+      identity: { mode: 'local', userId: 'local-user' },
+      user: { id: 'local-user', defaultAccountId: 'a1' },
+    });
+    expect(ctx.identity).toEqual({ mode: 'local', userId: 'local-user' });
+    expect(Object.isFrozen(ctx.identity)).toBe(true);
+    expect(ctx.user).toEqual({ id: 'local-user', defaultAccountId: 'a1' });
+  });
+
+  it('rejects a user that does not match the execution identity', async () => {
     const dependencies = await buildTestContext();
     expect(() =>
       buildContext({
         ...dependencies,
-        mode: 'hosted',
-        identity: undefined,
-      } as unknown as BuildContextInput),
-    ).toThrow();
-  });
-
-  it('freezes the trusted hosted identity and per-request user selection', async () => {
-    const dependencies = await buildTestContext();
-    const identity = {
-      mode: 'hosted' as const,
-      userId: 'hosted-user',
-      tenantId: 'tenant-1',
-      tenantGeneration: 1,
-      actor: 'user' as const,
-      requestId: 'req-1',
-    };
-    const ctx = buildContext({
-      ...dependencies,
-      mode: 'hosted',
-      identity,
-      user: { id: identity.userId, defaultAccountId: 'a1' },
-    });
-    identity.tenantId = 'other-tenant';
-    expect(ctx.identity?.mode === 'hosted' && ctx.identity.tenantId).toBe('tenant-1');
-    expect(Object.isFrozen(ctx.identity)).toBe(true);
-    expect(Object.isFrozen(ctx.user)).toBe(true);
-    expect(() => buildContext({ ...dependencies, mode: 'hosted', identity })).toThrow(
-      'does not match',
-    );
+        identity: { mode: 'local', userId: 'local-user' },
+        user: { id: 'other-user', defaultAccountId: 'a1' },
+      }),
+    ).toThrow('does not match');
   });
 });

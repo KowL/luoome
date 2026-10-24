@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { HostedQuietHoursSchema } from '../hosted/notification.js';
-import { DeliveryIntentSchema } from '../hosted/platform.js';
 import type { AlertPlan } from './alert-plan.js';
 import type { WatchTrigger } from './watch-trigger.js';
 import type { Watchlist, WatchlistMember } from './watchlist.js';
@@ -15,6 +13,44 @@ import type { Watchlist, WatchlistMember } from './watchlist.js';
  *
  * 副作用等级：external（HTTP 调用第三方）。MCP 默认 opt-in 暴露。
  */
+
+/** 个人通知的免打扰时段（固定 Asia/Shanghai 口径）。 */
+export const HostedQuietHoursSchema = z
+  .object({
+    enabled: z.boolean(),
+    startMinutes: z.number().int().min(0).max(1439),
+    endMinutes: z.number().int().min(0).max(1439),
+    timeZone: z.literal('Asia/Shanghai'),
+  })
+  .refine(
+    (value) => !value.enabled || value.startMinutes !== value.endMinutes,
+    'Enabled quiet hours must have distinct start and end times',
+  );
+export type HostedQuietHours = z.infer<typeof HostedQuietHoursSchema>;
+
+/** 免打扰时段内的下一次恢复时刻；不在时段内返回 null。 */
+export const quietHoursUntil = (quietHours: HostedQuietHours, now: Date): Date | null => {
+  if (!quietHours.enabled) return null;
+  const shanghai = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const minutes = shanghai.getUTCHours() * 60 + shanghai.getUTCMinutes();
+  const { startMinutes, endMinutes } = quietHours;
+  const quiet =
+    startMinutes < endMinutes
+      ? minutes >= startMinutes && minutes < endMinutes
+      : minutes >= startMinutes || minutes < endMinutes;
+  if (!quiet) return null;
+  const dayOffset = startMinutes > endMinutes && minutes >= startMinutes ? 1 : 0;
+  return new Date(
+    Date.UTC(
+      shanghai.getUTCFullYear(),
+      shanghai.getUTCMonth(),
+      shanghai.getUTCDate() + dayOffset,
+      0,
+      endMinutes,
+    ) -
+      8 * 60 * 60 * 1000,
+  );
+};
 
 export type NotificationChannel = 'feishu' | 'log';
 
@@ -113,8 +149,25 @@ export const defaultWatchNotificationSettings = (): WatchNotificationSettings =>
   quietHours: { enabled: false, startMinutes: 1320, endMinutes: 480, timeZone: 'Asia/Shanghai' },
 });
 
-export const WatchDeliveryIntentSchema = DeliveryIntentSchema.omit({ channel: true }).extend({
+/** 盯盘投递意图（本地投递队列；字段沿用既有持久化结构）。 */
+export const WatchDeliveryIntentSchema = z.object({
+  id: z.string().min(1).max(160),
+  tenantId: z.string().min(1).max(160),
+  generation: z.number().int().positive().safe(),
+  businessKey: z.string().min(1).max(160),
+  resultRef: z.string().min(1).max(160),
   channel: z.literal('feishu'),
+  bindingVersion: z.number().int().positive().safe(),
+  state: z.enum(['pending', 'sending', 'accepted', 'failed', 'unknown', 'suppressed']),
+  attempt: z.number().int().nonnegative().safe(),
+  attemptId: z.string().min(1).max(160).nullable(),
+  providerMessageId: z.string().max(256).nullable(),
+  availableAt: z.coerce.date(),
+  expiresAt: z.coerce.date(),
+  deliveredAt: z.coerce.date().nullable(),
+  errorKind: z.string().max(100).nullable(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
   executionOwner: z.string().min(1),
   notificationId: z.string().nullable(),
 });

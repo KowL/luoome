@@ -5,6 +5,7 @@ import {
   type AdviceOutcomeQuery,
   type AdviceQuery,
   type AdviceRepository,
+  AnalysisProvenanceSchema,
   assertAdviceInvariants,
   InvariantError,
   type Quote,
@@ -44,6 +45,14 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
 
 const toAdvice = (row: AdviceRow, outcome: AdviceOutcome | null): Advice => {
   const advice: Advice = {
+    provenance:
+      row.provenance === null
+        ? {
+            generatorKind: 'legacy-ai',
+            evidenceFactIds: [],
+            generatedAt: row.createdAt,
+          }
+        : AnalysisProvenanceSchema.parse(row.provenance),
     id: row.id,
     subjectKind: row.subjectKind,
     subjectId: row.subjectId,
@@ -86,8 +95,14 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
   async save(advice: Advice): Promise<void> {
+    this.saveSync(advice);
+  }
+
+  saveSync(advice: Advice): void {
     assertAdviceInvariants(advice);
     const row = {
+      provenance: advice.provenance ?? null,
+      generatorKind: advice.provenance?.generatorKind ?? 'legacy-ai',
       id: advice.id,
       subjectKind: advice.subjectKind,
       subjectId: advice.subjectId,
@@ -115,6 +130,10 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   }
 
   async findById(id: string): Promise<Advice | null> {
+    return this.findByIdSync(id);
+  }
+
+  findByIdSync(id: string): Advice | null {
     const row = this.db.select().from(advices).where(eq(advices.id, id)).get();
     if (row === undefined) return null;
     return toAdvice(row, null);

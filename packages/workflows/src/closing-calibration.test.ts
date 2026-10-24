@@ -16,8 +16,9 @@ import {
 import { buildTestContext } from '@luoome/tools/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { currentStrategyFingerprint } from './account-plan-batch.js';
+import { closingReportWorkflow } from './closing-report.js';
 import { buildWorkflowTools } from './define-workflow.js';
-import { hostedReportsWorkflow } from './hosted-reports.js';
+import { openingReportWorkflow } from './opening-report.js';
 
 const NOW = new Date('2026-10-15T10:00:00Z');
 const SINCE = new Date('2026-09-16T00:00:00+08:00');
@@ -57,18 +58,7 @@ const advice = (id: string, accountId: string | null, createdAt = NOW): Advice =
 const setup = async () => {
   let now = NOW;
   const base = await buildTestContext({ clock: () => now, advices: [] });
-  const ctx: ToolContext = {
-    ...base,
-    identity: {
-      mode: 'hosted',
-      actor: 'worker',
-      tenantId: 'ds6-tenant',
-      tenantGeneration: 1,
-      userId: base.user.id,
-      requestId: 'ds6-fixture',
-    },
-    hostedAuthorization: async () => null,
-  };
+  const ctx: ToolContext = { ...base };
   const account = await ctx.repos.account.findById(ctx.user.defaultAccountId);
   if (!account) throw new Error('fixture account missing');
   await ctx.repos.account.save({ ...account, id: OTHER_ACCOUNT, name: 'other account' });
@@ -95,7 +85,21 @@ const setup = async () => {
     providerStatuses: [],
   });
   const run = async (): Promise<Report> => {
-    const result = await hostedReportsWorkflow.run({}, ctx);
+    const scope = { kind: 'account' as const, accountId: ctx.user.defaultAccountId };
+    const opening = await openingReportWorkflow.run(
+      { date: '2026-10-15', scope, mode: 'scheduled', notify: false },
+      ctx,
+    );
+    if (!opening.ok) throw new Error(JSON.stringify(opening.error));
+    const result = await closingReportWorkflow.run(
+      {
+        date: '2026-10-15',
+        scope,
+        mode: 'scheduled',
+        notify: false,
+      },
+      ctx,
+    );
     if (!result.ok) throw new Error(JSON.stringify(result.error));
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     const report = reports[0];
@@ -136,7 +140,7 @@ const feedback = async (
 afterEach(() => vi.restoreAllMocks());
 
 describe('DS-6 closing report calibration', () => {
-  it('托管 worker 固定嵌入摘要，与原 DecisionReview 统计完全一致并披露账户/窗口/覆盖率/样本量', async () => {
+  it('收盘复盘固定嵌入摘要，与原 DecisionReview 统计完全一致并披露账户/窗口/覆盖率/样本量', async () => {
     const h = await setup();
     for (const id of [
       'profit',

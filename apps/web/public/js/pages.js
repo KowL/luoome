@@ -3,7 +3,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi, getAccountId, isHostedMode, randomRequestId } from './api.js';
+import { callApi, getAccountId, randomRequestId } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import {
   openCloseConfirm,
@@ -11,8 +11,6 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
-import { restartHostedSession } from './hosted-session.js';
-import { createHostedPasswordForm } from './hosted-settings.js';
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
@@ -2851,27 +2849,52 @@ const renderReview = async (setStatus) => {
   if (calR.ok) {
     const cal = calR.data;
     $('#review-calibration-meta').textContent =
-      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 明确跟随且已填盈亏 ${cal.followedWithPnl} 条 · 填报盈利占比 ${calibrationRateText(cal.overallHitRate, cal.followedWithPnl)}`;
+      `${cal.totalAdvices} 条 · 按生成方式、模型、技能版本分组，来源未知不与新来源合并`;
     const tbody = $('#review-calibration-table tbody');
-    tbody.innerHTML = cal.buckets
-      .map((b) => {
-        const hitColor =
-          b.hitRate === null ? '' : b.hitRate >= 0.7 ? 'pos' : b.hitRate <= 0.3 ? 'neg' : 'warn';
-        const pnlClass =
-          b.withOutcome === 0 ? '' : b.avgPnl > 0 ? 'pos' : b.avgPnl < 0 ? 'neg' : '';
-        return (
-          `<tr>` +
-          `<td>${b.range.min}-${b.range.max}</td>` +
-          `<td>${b.total}</td>` +
-          `<td>${b.withOutcome}</td>` +
-          `<td>${b.hits}</td>` +
-          `<td class="${hitColor}">${calibrationRateText(b.hitRate, b.withOutcome)}</td>` +
-          `<td class="${pnlClass}">${calibrationPnlText(b.avgPnl, b.withOutcome)}</td>` +
-          `<td>${b.avgConfidence.toFixed(1)}</td>` +
-          `</tr>`
+    mount(
+      tbody,
+      cal.groups.flatMap((group) => {
+        const source = `${group.generatorKind} / ${group.model ?? '来源未知'} / ${group.skillVersion ?? '来源未知'}`;
+        const heading = el(
+          'th',
+          null,
+          `${source} · 数据时点 ${group.dataAsOf ?? '未知'} · ${group.totalAdvices} 条`,
         );
-      })
-      .join('');
+        heading.colSpan = 7;
+        const rows = [el('tr', null, [heading])];
+        if (group.followedWithPnl < group.minimumOutcomes) {
+          const message = el(
+            'td',
+            null,
+            `已填盈亏样本 ${group.followedWithPnl} / ${group.minimumOutcomes}，样本不足，不提供校准结论`,
+          );
+          message.colSpan = 7;
+          rows.push(el('tr', null, [message]));
+        } else {
+          for (const bucket of group.buckets)
+            rows.push(
+              el(
+                'tr',
+                null,
+                [
+                  `${bucket.range.min}-${bucket.range.max}`,
+                  bucket.total,
+                  bucket.withOutcome,
+                  bucket.hits,
+                  bucket.hitRate === null
+                    ? '样本不足'
+                    : calibrationRateText(bucket.hitRate, bucket.followedWithPnl),
+                  '不提供',
+                  bucket.followedWithPnl < group.minimumOutcomes
+                    ? '—'
+                    : bucket.avgConfidence.toFixed(1),
+                ].map((value) => el('td', null, String(value))),
+              ),
+            );
+        }
+        return rows;
+      }),
+    );
   } else {
     $('#review-calibration-meta').textContent = `加载校准失败：${calR.error.kind ?? ''}`;
   }
@@ -3043,56 +3066,6 @@ const renderSettingsAccount = async () => {
       el('p', null, `总盈亏：${fmtSigned(r.data.totalPnL)}（${fmtPct(r.data.totalPnLPct)}）`),
     ]),
   );
-  if (isHostedMode()) {
-    const result = await callApi('/api/accounts');
-    if (!result.ok) return;
-    const account = result.data.accounts[0];
-    const form = el('form', 'hosted-account-form');
-    const label = el('label', 'field', '账户名称');
-    const input = el('input');
-    input.id = 'hosted-account-name';
-    input.value = account.name;
-    input.required = true;
-    input.maxLength = 120;
-    label.htmlFor = input.id;
-    label.append(input);
-    const submit = el('button', 'btn btn-primary btn-sm', '保存账户信息');
-    submit.type = 'submit';
-    const status = el('p', 'muted');
-    status.setAttribute('role', 'status');
-    form.append(
-      label,
-      el(
-        'p',
-        'muted',
-        `币种：${account.currency} · 开户本金：${fmtNum(account.initialCapital)}。资金变动请使用入金 / 出金记录。`,
-      ),
-      submit,
-      status,
-    );
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      submit.disabled = true;
-      const saved = await callApi('/api/tools/update_account/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { name: input.value.trim() } }),
-      });
-      submit.disabled = false;
-      status.textContent = saved.ok
-        ? '账户信息已保存。'
-        : saved.error?.required?.startsWith('entitlement:')
-          ? '请续费后再修改账户信息。'
-          : '保存失败，请稍后重试。';
-    });
-    box.prepend(form);
-    box.append(
-      createHostedPasswordForm({
-        onChanged: async () => {
-          setTimeout(restartHostedSession, 1000);
-        },
-      }),
-    );
-  }
 };
 
 /* ============================================================

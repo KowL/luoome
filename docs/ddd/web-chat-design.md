@@ -1,6 +1,10 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
-> 状态：**已实现**（AI SDK `ToolLoopAgent` + UI Message Stream、账户会话、服务端草案确认与投资管理闭环）。本文档描述当前对话契约。
+> 状态：**已退役**。模型推理与模型对话随 DSH 改造下线：`/api/chat` 端点、对话页面与 AI SDK
+> 流式协议已删除，luoome 侧不再有模型运行时。保留下来的是本设计里的 draft-and-confirm 链路
+> （`settle_chat_draft` 与待确认草案卡片），当前契约见
+> [ARCHITECTURE.md](../ARCHITECTURE.md) 与 [luoome 的 DSH 改造详细设计](./luoome-dsh-transformation-detailed-design.md)。
+> 本文只作历史资料，不代表当前产品范围。
 > 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)（聊天只生成目标模型 draft）。
 
 ## 目标

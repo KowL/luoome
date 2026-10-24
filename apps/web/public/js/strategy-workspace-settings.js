@@ -1,4 +1,3 @@
-import { isHostedMode } from './api.js';
 import { makeCheckbox, makeInput, makeNumberInput, makeSelect } from './form-kit.js';
 import { createStrategyDefinitionEditor } from './strategy-workspace-experiment.js';
 import {
@@ -575,13 +574,7 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
     el('div', 'strategy-tab-heading', [
       el('div', null, [
         el('h3', null, '自动调度'),
-        el(
-          'p',
-          'muted',
-          isHostedMode()
-            ? '标准 5 段 cron；当前可保存配置，托管自动执行尚未开通，请手动运行策略。'
-            : '标准 5 段 cron；luoome 运行时每分钟自动检查到期策略。',
-        ),
+        el('p', 'muted', '标准 5 段 cron；luoome 运行时每分钟自动检查到期策略。'),
       ]),
       save,
     ]),

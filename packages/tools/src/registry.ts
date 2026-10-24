@@ -1,6 +1,18 @@
 import { z } from 'zod';
-
 import type { Tool } from './define-tool.js';
+import {
+  cancelAnalysisJobTool,
+  claimAnalysisJobsTool,
+  completeAnalysisJobTool,
+  failAnalysisJobTool,
+  getAnalysisContextTool,
+  getAnalysisJobTool,
+  getAnalysisMetricsTool,
+  listAnalysisJobsTool,
+  recordAdviceTool,
+  recordAnalysisResultTool,
+  requeueAnalysisJobTool,
+} from './queue/index.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
@@ -75,6 +87,7 @@ import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
+import { personalTools } from './tools/personal.js';
 import {
   auditPortfolioPerformanceSnapshotsTool,
   createPortfolioCashFlowTool,
@@ -323,6 +336,17 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 
 /** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
+  getAnalysisContextTool,
+  listAnalysisJobsTool,
+  getAnalysisJobTool,
+  getAnalysisMetricsTool,
+  claimAnalysisJobsTool,
+  failAnalysisJobTool,
+  cancelAnalysisJobTool,
+  requeueAnalysisJobTool,
+  recordAdviceTool,
+  recordAnalysisResultTool,
+  completeAnalysisJobTool,
   listChatSessionsTool,
   getChatSessionTool,
   createChatSessionTool,
@@ -513,4 +537,6 @@ export const toolRegistry: Registry = createRegistry([
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
   getStockUniverseStatusTool,
+  // 个人域（单机版）：自选导入、事实摘要与用户价格条件预警
+  ...personalTools,
 ]);

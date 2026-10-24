@@ -90,13 +90,6 @@ const resolvePreviousCloses = async (
   const uniqueIds = [...new Set(stockIds)];
   const entries = await Promise.all(
     uniqueIds.map(async (stockId): Promise<readonly [string, Money | null]> => {
-      if (ctx.identity?.mode === 'hosted') {
-        const cached = await ctx.repos.dailyBar.findInRange(stockId, start, todayStart);
-        return [
-          stockId,
-          derivePreviousClose(normalizeDailyBars(cached, start, todayStart).bars, todayStart),
-        ];
-      }
       try {
         const bars = await ctx.adapters.market.fetchDailyBars(stockId, {
           start,

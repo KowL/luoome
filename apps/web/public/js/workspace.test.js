@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, expect, it } from 'bun:test';
-import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
+import { setAccountId } from './api.js';
 
-const keys = ['Node', 'document', 'window', 'location', 'history', 'sessionStorage', 'fetch'];
+const keys = [
+  'Node',
+  'document',
+  'window',
+  'location',
+  'history',
+  'sessionStorage',
+  'localStorage',
+  'fetch',
+];
 let originals;
 let values;
 let input;
@@ -10,8 +19,7 @@ let events;
 const install = (key, value) =>
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 const login = (id) => {
-  configureHostedSession({ user: { id }, csrfToken: id });
-  setAccountId('account');
+  setAccountId(`account-${id}`);
 };
 
 beforeEach(() => {
@@ -21,7 +29,7 @@ beforeEach(() => {
   input = { value: '', addEventListener() {}, focus() {} };
   host = { hidden: true, scrollIntoView() {} };
   install('document', {
-    body: { dataset: { runtime: 'hosted' } },
+    body: { dataset: {} },
     documentElement: { style: { setProperty() {} } },
     querySelector: (selector) =>
       selector === '#chat-input' ? input : selector === '#workspace-discussion' ? host : null,
@@ -36,73 +44,128 @@ beforeEach(() => {
     setItem: (key, value) => values.set(key, value),
     removeItem: (key) => values.delete(key),
   });
+  install('localStorage', {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  });
   login('user-a');
 });
 
 afterEach(() => {
-  clearHostedSession();
   for (const [key, descriptor] of originals) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else delete globalThis[key];
   }
 });
 
-const subjects = [{ ref: { kind: 'stock', id: '002594.SZ' }, label: 'A 的持仓' }];
+class TestNode {
+  constructor() {
+    this.children = [];
+    this.textContent = '';
+    this.className = '';
+    this.type = '';
+    this.disabled = false;
+  }
+  append(...nodes) {
+    this.children.push(...nodes);
+  }
+  replaceChildren(...nodes) {
+    this.children = nodes;
+  }
+  addEventListener() {}
+  setAttribute() {}
+}
 
-it('跳转首页期间切换身份，不在新身份读取或恢复旧讨论', async () => {
+const textOf = (node) => [node.textContent, ...node.children.map(textOf)].join(' ');
+
+const installDom = () => {
+  const nodes = new Map();
+  install('Node', TestNode);
+  document.createElement = () => new TestNode();
+  document.createTextNode = (text) => Object.assign(new TestNode(), { textContent: text });
+  document.querySelectorAll = () => [];
+  document.querySelector = (selector) => {
+    if (selector === '#workspace-discussion') return host;
+    if (!nodes.has(selector)) nodes.set(selector, new TestNode());
+    return nodes.get(selector);
+  };
+  window.addEventListener = () => {};
+  window.scrollTo = () => {};
+  return nodes;
+};
+
+const draftSessionKey = 'luoome.workspace.draft-session';
+
+it('切换身份后不读取其它身份的草案会话', async () => {
   const requests = [];
   install('fetch', async (path) => {
     requests.push(path);
-    return Response.json({ ok: true, data: { sessions: [] } });
+    return Response.json({ ok: true, data: { session: { id: 'session-b' }, messages: [] } });
   });
-  location.hash = '#holdings';
-  window.requestAnimationFrame = (fn) => {
-    login('user-b');
-    fn();
-  };
+  sessionStorage.setItem(
+    draftSessionKey,
+    JSON.stringify({ identity: 'local:account-user-a', sessionId: 'session-a' }),
+  );
+  login('user-b');
+  const nodes = installDom();
   const { openWorkspaceDiscussion } = await import('./workspace.js');
-  await openWorkspaceDiscussion(subjects, 'A 的私人问题');
+  await openWorkspaceDiscussion();
   expect(requests).toEqual([]);
-  expect(input.value).toBe('');
-  expect(host.hidden).toBe(true);
+  expect(textOf(nodes.get('#workspace-discussion-body'))).toContain('当前没有待确认草案');
 });
 
-it('读取讨论期间切换身份，不把旧卡片和问题写入新身份草稿', async () => {
-  let complete;
-  let requested;
-  const started = new Promise((resolve) => {
-    requested = resolve;
+it('打开卡片讨论时读取本身份草案会话并渲染待确认草案', async () => {
+  const nodes = installDom();
+  const requests = [];
+  install('fetch', async (path) => {
+    requests.push(path);
+    return Response.json({
+      ok: true,
+      data: {
+        session: { id: 'session-a' },
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: '我想登记一笔资金流水' }],
+          },
+          {
+            id: 'assistant-1',
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool-create_portfolio_cash_flow',
+                toolCallId: 'call-1',
+                state: 'output-available',
+                output: {
+                  __luoomeDraft: true,
+                  draft: {
+                    tool: 'create_portfolio_cash_flow',
+                    kind: 'portfolio',
+                    input: { amount: 1000 },
+                    display: { targetObject: '资金流水', fields: [{ name: '金额', value: 1000 }] },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
   });
-  install(
-    'fetch',
-    () =>
-      new Promise((resolve) => {
-        complete = resolve;
-        requested();
-      }),
+  sessionStorage.setItem(
+    draftSessionKey,
+    JSON.stringify({ identity: 'local:account-user-a', sessionId: 'session-a' }),
   );
   const { openWorkspaceDiscussion } = await import('./workspace.js');
-  const opening = openWorkspaceDiscussion(subjects, 'A 的私人问题');
-  await started;
-  login('user-b');
-  complete(Response.json({ ok: true, data: { sessions: [] } }));
-  await opening;
-  expect(input.value).toBe('');
-  expect(host.hidden).toBe(true);
-  expect(sessionStorage.getItem('luoome.workspace.chat')).toBeNull();
-});
-
-it('身份未变化时正常打开卡片讨论并保存主体和问题', async () => {
-  install('fetch', async () => Response.json({ ok: true, data: { sessions: [] } }));
-  const { openWorkspaceDiscussion } = await import('./workspace.js');
-  await openWorkspaceDiscussion(subjects, '请核对风险');
+  await openWorkspaceDiscussion();
+  expect(requests).toEqual(['/api/chat/sessions/session-a']);
   expect(host.hidden).toBe(false);
-  expect(input.value).toBe('请核对风险');
-  expect(JSON.parse(sessionStorage.getItem('luoome.workspace.chat'))).toMatchObject({
-    identity: 'user-a:account',
-    subjects,
-    draft: '请核对风险',
-  });
+  const body = textOf(nodes.get('#workspace-discussion-body'));
+  expect(body).toContain('待确认');
+  expect(body).toContain('资金流水');
+  expect(body).toContain('我想登记一笔资金流水');
 });
 
 it('市场方向展示真实覆盖与来源，保存共识后不提供无映射的跟踪入口', async () => {

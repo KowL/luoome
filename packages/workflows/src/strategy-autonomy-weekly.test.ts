@@ -35,7 +35,7 @@ interface SeedOptions {
   readonly withoutBenchmark?: number;
   /** 每个样本的超额收益（returnPct - benchmarkReturnPct）。 */
   readonly excess?: number;
-  /** 覆盖策略描述（FakeLLMAdapter 的 proposal-fixture 标记注入点）。 */
+  /** 覆盖策略描述（候选版本 fixture 的标记注入点）。 */
   readonly description?: string;
 }
 
@@ -213,7 +213,7 @@ const validatingActionFixture = (
   ...overrides,
 });
 
-/** 与 FakeLLMAdapter strategy_version_proposal 默认输出一致：基线规则 when 追加收敛条件。 */
+/** 候选版本 fixture：基线规则 when 追加收敛条件。 */
 const fakeProposedDefinition: StrategyDslV1 = {
   ...definition,
   selection: {
@@ -392,10 +392,6 @@ describe('strategy-autonomy-weekly', () => {
       ...base,
       adapters: {
         ...base.adapters,
-        llm: {
-          name: 'offline-llm',
-          generate: async <T>() => Promise.reject<T>(new Error('provider unavailable')),
-        },
       },
     };
 
@@ -452,7 +448,7 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     return days;
   };
 
-  /** 候选版本：与 FakeLLMAdapter 默认提议同 hash，保证提议步骤走 definitionHash 去重跳过。 */
+  /** 候选版本：与候选 fixture 同 hash，保证提议步骤走 definitionHash 去重跳过。 */
   const seedCandidateVersion = async (
     ctx: ToolContext,
     strategyId: string,

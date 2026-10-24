@@ -750,32 +750,27 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   const calibrationLines = (data: CalibrationView): string[] => {
     const pct = (value: number | null) => (value === null ? '未知' : formatPct(value));
     const lines: string[] = [
-      `总条数：${data.totalAdvices}    已回填：${data.totalWithOutcome}    ` +
-        `填报盈利占比：${pct(data.overallHitRate)}`,
+      `总条数：${data.totalAdvices}；按来源分组`,
       `生成时间：${formatDateTime(data.calibratedAt)}`,
       '',
-      `${padEnd('信心桶', 9)}${padStart('条', 4)}  ${padStart('回填', 4)}  ` +
-        `${padStart('盈利', 4)}  ${padStart('比例', 7)}  ${padStart('盈亏合计', 10)}  ${padStart('avgConf', 7)}`,
-      ''.padEnd(60, '-'),
     ];
-    for (const b of data.buckets) {
-      const range = `${b.range.min}-${b.range.max}`;
+    for (const group of data.groups) {
       lines.push(
-        `${padEnd(range, 9)}${padStart(String(b.total), 4)}  ` +
-          `${padStart(String(b.withOutcome), 4)}  ${padStart(String(b.hits), 4)}  ` +
-          `${padStart(pct(b.hitRate), 7)}  ${padStart('不提供', 10)}  ` +
-          `${padStart(b.avgConfidence.toFixed(1), 7)}`,
+        `${group.generatorKind} / ${group.model ?? '来源未知'} / ${group.skillVersion ?? '来源未知'}`,
+        `数据时点：${group.dataAsOf ? formatDateTime(group.dataAsOf) : '未知'}`,
+        `条数：${group.totalAdvices}，已填盈亏样本：${group.followedWithPnl}`,
       );
+      if (group.followedWithPnl < group.minimumOutcomes) {
+        lines.push(`样本不足 ${group.minimumOutcomes}，不提供校准结论`, '');
+        continue;
+      }
+      for (const bucket of group.buckets)
+        lines.push(
+          `${bucket.range.min}-${bucket.range.max}：${bucket.total} 条，填报盈利占比 ${pct(bucket.hitRate)}`,
+        );
+      lines.push('');
     }
-    lines.push(
-      '',
-      '读法：横看每个信心桶的 hitRate。',
-      '  • 高信心桶 hitRate 高 → confidence 校准有效；',
-      '  • 高信心桶 hitRate 低 → 系统 confidence 可能高估；',
-      '  • 低信心桶 hitRate 高 → 系统 confidence 偏保守。',
-      '',
-      '[esc] 关闭',
-    );
+    lines.push('信心度不是概率；不同来源不混桶。', '[esc] 关闭');
     return lines;
   };
 

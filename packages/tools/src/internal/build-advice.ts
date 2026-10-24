@@ -83,7 +83,7 @@ export const computeValidUntil = (horizon: AdviceHorizon, now: Date): Date => {
 };
 
 /**
- * core 的 LLMAdapterLike 投影不含 raw 字段（adapters 的 LLMGenerateResult 才有）；
+ * 模型返回值的 raw 字段只在 ai-runtime 的 LLMGenerateResult 里（core 不再持有模型端口）；
  * 这里运行时提取：有则进 basedOn.llmReasoning 供审计，无则缺省。
  */
 export const extractLlmRaw = (value: unknown): string | undefined => {

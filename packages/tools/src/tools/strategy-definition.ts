@@ -10,6 +10,7 @@ import {
   type StrategyVersion,
   StrategyVersionSchema,
   strategyDefinitionHash,
+  type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -105,71 +106,76 @@ export const ProposeStrategyVersionDraftOutput = z.object({
  * 将已受控的 AI 输出封装为普通 StrategyVersion 草案；该 tool 不落库。
  * 用户确认后仍须调用 create_strategy_version → validate → publish。
  */
+export const prepareStrategyVersionDraft = async (
+  input: z.infer<typeof ProposeStrategyVersionDraftInput>,
+  ctx: ToolContext,
+) => {
+  const strategy = await ctx.repos.strategy.findById(input.strategyId);
+  if (strategy === null) return errNotFound('Strategy', input.strategyId);
+  if (strategy.owner === 'builtin') return errInvalidInput('builtin Strategy 不可生成修改草案');
+  const versions = await ctx.repos.strategy.listVersions(strategy.id);
+  const base =
+    (input.baseVersionId === undefined
+      ? (strategy.currentVersionId ?? versions.at(-1)?.id)
+      : input.baseVersionId) ?? undefined;
+  if (base === undefined) return errInvalidInput('Strategy 没有可供分析的基线版本');
+  const baseVersion = await ctx.repos.strategy.findVersionById(base);
+  if (baseVersion === null) return errNotFound('StrategyVersion', base);
+  if (baseVersion.strategyId !== strategy.id) return errInvalidInput('基线版本不属于该 Strategy');
+  const facts = await collectStrategyInsightFacts(strategy.id, input.windowDays, ctx);
+  if (facts === null) return errNotFound('Strategy', strategy.id);
+  const allowed = new Set([
+    ...facts.facts.map((fact) => fact.id),
+    ...facts.facts.flatMap((fact) => fact.evidenceIds),
+  ]);
+  const unknownRefs = input.factReferences.filter((ref) => !allowed.has(ref));
+  if (unknownRefs.length > 0) {
+    return errInvalidInput(`事实引用不存在或不在允许输入范围: ${unknownRefs.join(', ')}`);
+  }
+  const latestVersion = versions.at(-1);
+  const versionNumber = (latestVersion?.version ?? 0) + 1;
+  const now = ctx.clock();
+  const draft: StrategyVersion = StrategyVersionSchema.parse({
+    id: `${strategy.id}-draft-${globalThis.crypto.randomUUID().slice(0, 8)}`,
+    strategyId: strategy.id,
+    version: versionNumber,
+    definition: input.definition,
+    definitionHash: strategyDefinitionHash(input.definition),
+    parentVersionId: baseVersion.id,
+    changeSummary: input.changeSummary,
+    factReferences: input.factReferences,
+    agentTrace: input.agentTrace,
+    validationStatus: 'pending',
+    validationErrors: [],
+    createdAt: now,
+  });
+  assertStrategyVersionInvariants(draft, 'user');
+  return {
+    strategy,
+    baseVersion,
+    draft,
+    diff: diffStrategyDefinitions(
+      baseVersion.definition,
+      draft.definition,
+      baseVersion.definitionHash,
+      draft.definitionHash,
+    ),
+    facts,
+    audit: {
+      factReferences: [...input.factReferences],
+      agentTrace: [...input.agentTrace],
+      persisted: false as const,
+    },
+  };
+};
+
 export const proposeStrategyVersionDraftTool = defineTool({
   name: 'propose_strategy_version_draft',
   description: '基于可审计事实校验并生成未持久化的 StrategyVersion 草案，不会发布或正式运行',
   sideEffect: 'external',
   input: ProposeStrategyVersionDraftInput,
   output: ProposeStrategyVersionDraftOutput,
-  handler: async (input, ctx) => {
-    const strategy = await ctx.repos.strategy.findById(input.strategyId);
-    if (strategy === null) return errNotFound('Strategy', input.strategyId);
-    if (strategy.owner === 'builtin') return errInvalidInput('builtin Strategy 不可生成修改草案');
-    const versions = await ctx.repos.strategy.listVersions(strategy.id);
-    const base =
-      (input.baseVersionId === undefined
-        ? (strategy.currentVersionId ?? versions.at(-1)?.id)
-        : input.baseVersionId) ?? undefined;
-    if (base === undefined) return errInvalidInput('Strategy 没有可供分析的基线版本');
-    const baseVersion = await ctx.repos.strategy.findVersionById(base);
-    if (baseVersion === null) return errNotFound('StrategyVersion', base);
-    if (baseVersion.strategyId !== strategy.id) return errInvalidInput('基线版本不属于该 Strategy');
-    const facts = await collectStrategyInsightFacts(strategy.id, input.windowDays, ctx);
-    if (facts === null) return errNotFound('Strategy', strategy.id);
-    const allowed = new Set([
-      ...facts.facts.map((fact) => fact.id),
-      ...facts.facts.flatMap((fact) => fact.evidenceIds),
-    ]);
-    const unknownRefs = input.factReferences.filter((ref) => !allowed.has(ref));
-    if (unknownRefs.length > 0) {
-      return errInvalidInput(`事实引用不存在或不在允许输入范围: ${unknownRefs.join(', ')}`);
-    }
-    const latestVersion = versions.at(-1);
-    const versionNumber = (latestVersion?.version ?? 0) + 1;
-    const now = ctx.clock();
-    const draft: StrategyVersion = StrategyVersionSchema.parse({
-      id: `${strategy.id}-draft-${globalThis.crypto.randomUUID().slice(0, 8)}`,
-      strategyId: strategy.id,
-      version: versionNumber,
-      definition: input.definition,
-      definitionHash: strategyDefinitionHash(input.definition),
-      parentVersionId: baseVersion.id,
-      changeSummary: input.changeSummary,
-      factReferences: input.factReferences,
-      agentTrace: input.agentTrace,
-      validationStatus: 'pending',
-      validationErrors: [],
-      createdAt: now,
-    });
-    assertStrategyVersionInvariants(draft, 'user');
-    return {
-      strategy,
-      baseVersion,
-      draft,
-      diff: diffStrategyDefinitions(
-        baseVersion.definition,
-        draft.definition,
-        baseVersion.definitionHash,
-        draft.definitionHash,
-      ),
-      facts,
-      audit: {
-        factReferences: [...input.factReferences],
-        agentTrace: [...input.agentTrace],
-        persisted: false,
-      },
-    };
-  },
+  handler: prepareStrategyVersionDraft,
 });
 
 export const TrialStrategyVersionInput = z.object({
@@ -240,7 +246,7 @@ export const trialStrategyVersionTool = defineTool({
       draft: draft.data,
       diff,
       stockIds: [...input.stockIds],
-      persisted: false,
+      persisted: false as const,
     };
   },
 });

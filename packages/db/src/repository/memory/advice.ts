@@ -15,7 +15,14 @@ export class InMemoryAdviceRepository implements AdviceRepository {
 
   put(advice: Advice): void {
     assertAdviceInvariants(advice);
-    this.items.set(advice.id, advice);
+    this.items.set(advice.id, {
+      ...advice,
+      provenance: advice.provenance ?? {
+        generatorKind: 'legacy-ai',
+        evidenceFactIds: [],
+        generatedAt: advice.createdAt,
+      },
+    });
   }
 
   async save(advice: Advice): Promise<void> {
@@ -23,6 +30,10 @@ export class InMemoryAdviceRepository implements AdviceRepository {
   }
 
   async findById(id: string): Promise<Advice | null> {
+    return this.findByIdSync(id);
+  }
+
+  findByIdSync(id: string): Advice | null {
     const advice = this.items.get(id);
     if (advice === undefined) return null;
     const { outcome: _outcome, ...base } = advice;

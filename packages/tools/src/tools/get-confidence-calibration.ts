@@ -1,4 +1,9 @@
-import { type Advice, type AdviceOutcome, AdviceSubjectKindSchema } from '@luoome/core';
+import {
+  type Advice,
+  type AdviceOutcome,
+  AdviceSubjectKindSchema,
+  AnalysisProvenanceSchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
@@ -45,6 +50,20 @@ export const GetConfidenceCalibrationOutput = z.object({
   overallHitRate: z.number().min(0).max(1).nullable(),
   followedWithPnl: z.number().int().nonnegative(),
   calibratedAt: z.coerce.date(),
+  groups: z.array(
+    z.object({
+      generatorKind: AnalysisProvenanceSchema.shape.generatorKind,
+      model: z.string().nullable(),
+      skillVersion: z.string().nullable(),
+      dataAsOf: z.coerce.date().nullable(),
+      totalAdvices: z.number().int().nonnegative(),
+      totalWithOutcome: z.number().int().nonnegative(),
+      followedWithPnl: z.number().int().nonnegative(),
+      minimumOutcomes: z.literal(20),
+      overallHitRate: z.number().min(0).max(1).nullable(),
+      buckets: z.array(CalibrationBucketSchema),
+    }),
+  ),
 });
 
 type CalibrationBucket = z.infer<typeof CalibrationBucketSchema>;
@@ -143,8 +162,8 @@ const computeBuckets = (
 export const getConfidenceCalibrationTool = defineTool({
   name: 'get_confidence_calibration',
   description:
-    '把历史 advice 按 confidence 桶（0-9 / 10-19 / ... / 90-100，每 10 一档）聚合 hitRate / avgPnl / avgConfidence；' +
-    '为 agent 提供「该系统当前 confidence 校准度」的客观画像，便于 advice 输出增补 calibratedConfidence 字段。',
+    '按生成方式、模型与技能版本分别校准历史建议；legacy-ai 不与新来源混桶。' +
+    'groups 提供数据时点与信心桶；少于 20 条已跟随且填报盈亏的样本不提供分组比例结论。',
   sideEffect: 'read',
   input: GetConfidenceCalibrationInput,
   output: GetConfidenceCalibrationOutput,
@@ -171,12 +190,50 @@ export const getConfidenceCalibrationTool = defineTool({
     const followedWithPnl = buckets.reduce((sum, bucket) => sum + bucket.followedWithPnl, 0);
     let overallHits = 0;
     for (const b of buckets) overallHits += b.hits;
+    const sourceGroups = new Map<string, Advice[]>();
+    for (const advice of advices) {
+      const key = JSON.stringify([
+        advice.provenance?.generatorKind ?? 'legacy-ai',
+        advice.provenance?.model ?? null,
+        advice.provenance?.skillVersion ?? null,
+      ]);
+      const group = sourceGroups.get(key) ?? [];
+      group.push(advice);
+      sourceGroups.set(key, group);
+    }
+    const groups = [...sourceGroups.values()].map((items) => {
+      const first = items[0];
+      const source = first?.provenance;
+      const groupedBuckets = computeBuckets(items, outcomes);
+      const samples = groupedBuckets.reduce((sum, bucket) => sum + bucket.followedWithPnl, 0);
+      const hits = groupedBuckets.reduce((sum, bucket) => sum + bucket.hits, 0);
+      const times = items.flatMap((advice) =>
+        advice.basedOn.dataAsOf ? [advice.basedOn.dataAsOf.getTime()] : [],
+      );
+      return {
+        generatorKind: source?.generatorKind ?? ('legacy-ai' as const),
+        model: source?.model ?? null,
+        skillVersion: source?.skillVersion ?? null,
+        dataAsOf: times.length ? new Date(Math.max(...times)) : null,
+        totalAdvices: items.length,
+        totalWithOutcome: items.filter((advice) => outcomes.has(advice.id)).length,
+        followedWithPnl: samples,
+        minimumOutcomes: 20 as const,
+        overallHitRate: samples >= 20 ? hits / samples : null,
+        buckets: groupedBuckets.map((bucket) => ({
+          ...bucket,
+          hitRate: bucket.followedWithPnl >= 20 ? bucket.hitRate : null,
+        })),
+      };
+    });
     return {
+      groups,
       schemaVersion: 2 as const,
-      buckets,
+      buckets: groups.length > 1 ? [] : buckets,
       totalAdvices,
       totalWithOutcome,
-      overallHitRate: followedWithPnl === 0 ? null : overallHits / followedWithPnl,
+      overallHitRate:
+        groups.length > 1 || followedWithPnl === 0 ? null : overallHits / followedWithPnl,
       followedWithPnl,
       calibratedAt: ctx.clock(),
     };

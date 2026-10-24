@@ -14,7 +14,8 @@
       "**/*.json",
       "**/*.jsonc",
       "!**/dist",
-      "!**/coverage"
+      "!**/coverage",
+      "!.tmp"
     ]
   },
   "formatter": {

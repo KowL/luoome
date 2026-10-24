@@ -1,6 +1,6 @@
 import { z } from 'zod';
-
 import { InvariantError } from '../error/index.js';
+import { AnalysisProvenanceSchema } from './analysis-provenance.js';
 
 export const StrategyAutonomyActionKindSchema = z.enum([
   'propose-version',
@@ -94,6 +94,7 @@ export const STRATEGY_AUTONOMY_ARCHIVE_SNAPSHOT_REQUIRED_KEYS = [
  * 因此 status 恒为 published；pause 与 archive 创建即终态（executed）。
  */
 export const StrategyAutonomyActionSchema = z.object({
+  provenance: AnalysisProvenanceSchema.optional(),
   id: z.string().min(1),
   kind: StrategyAutonomyActionKindSchema,
   status: StrategyAutonomyActionStatusSchema,

@@ -1,6 +1,6 @@
 # AI 投资协作首页详细设计
 
-> 2026-10-16。依据：[PRD](../prd/ai-investment-workspace.md)、[任务与文件归属](../ai-investment-workspace-development-plan.md)。本文描述实现契约；真实供应商与真机验收单独记录，不由 fixture 代替。
+> 2026-10-16。依据：[PRD](../prd/ai-investment-workspace.md)、[任务与文件归属](../archive/ai-investment-workspace-development-plan.md)（已归档）。本文描述实现契约；真实供应商与真机验收单独记录，不由 fixture 代替。
 
 ## 首页信息流
 
@@ -24,11 +24,11 @@
 
 ## 恢复与身份
 
-会话与消息由服务端 tools 持久化。当前 session、主体引用、未发送文本仅保存在当前浏览器 sessionStorage，并按登录 user + account 分区；退出、认证失效、用户变化立即清理、终止旧请求、清空挂载内容。读取响应附 view/identity epoch，旧用户迟到响应不可覆盖新界面。刷新后先读会话和真实草案结算；断线不自动重发 mutation。服务端对相同本轮消息 id 做幂等检查，不重复启动同一次模型请求；中断后由用户显式继续。
+会话与消息由服务端 tools 持久化。当前 session、主体引用、未发送文本仅保存在当前浏览器 sessionStorage，并按 account 分区；退出、认证失效、账户变化立即清理、终止旧请求、清空挂载内容。读取响应附 view/identity epoch，旧账户迟到响应不可覆盖新界面。刷新后先读会话和真实草案结算；断线不自动重发 mutation。服务端对相同本轮消息 id 做幂等检查，不重复启动同一次模型请求；中断后由用户显式继续。
 
-首页进入讨论和准备草案在每次异步等待后重新核对身份；关闭讨论或打开另一主体使旧打开请求失效。成交/复盘的迟到响应在写入浏览器未决请求状态前再次核对账户和登录 epoch，退出再登录同一账户也不接收旧响应。首页完成实际成交登记后重新读取账户事实和计划进展。
+首页进入讨论和准备草案在每次异步等待后重新核对身份；关闭讨论或打开另一主体使旧打开请求失效。成交/复盘的迟到响应在写入浏览器未决请求状态前再次核对账户 epoch，切走再切回同一账户也不接收旧响应。首页完成实际成交登记后重新读取账户事实和计划进展。
 
-hosted 继续执行 cookie、Origin、CSRF、Tenant generation 与默认账户绑定。local 继续执行 write/external opt-in 和已有账户 header。trade 不进入模型/MCP/generic API；记录实际成交复用 DecisionReview 专用入口，数量、价格、时间与尚未入账确认由用户提供。删除聊天不撤销已确认共识或跟踪。
+单机形态没有租户与登录态：服务端按当前账户绑定上下文，浏览器侧执行 write/external opt-in 和已有账户 header，并保留同源 Origin 校验。trade 不进入模型/MCP/generic API；记录实际成交复用 DecisionReview 专用入口，数量、价格、时间与尚未入账确认由用户提供。删除聊天不撤销已确认共识或跟踪。
 
 ## 方向、共识与通知集成
 
@@ -38,12 +38,12 @@ hosted 继续执行 cookie、Origin、CSRF、Tenant generation 与默认账户�
 
 `trackingEligibility` 决定是否提供连接入口，页面展示不能跟踪的具体原因。市场方向尚无真实股票候选映射时仍可保存共识，但不能创建个股跟踪；混合共识只连接真实策略方向并显示未映射原因。市场事实到期时当前共识投影为待复核；历史版本保留。盘中事实有效期为对应时间后 20 分钟与当日收盘的较早值，收盘事实有效至下一交易日开盘，不能以抓取时间延长。
 
-`GET /api/watch/notifications/:triggerId` 调用私有 resolver，仅作为专用鉴权入口，不进入模型/MCP/generic registry。`#alerts?triggerId=…` 保留登录后的目标，打开时同时显示触发快照和最新资格；`#reports?reportId=…` 读取确切报告，无权或删除时不以其它报告替代。复盘复用专用成交登记与显式来源链；托管未决成交回执在浏览器按 user + account 分区。
+`GET /api/watch/notifications/:triggerId` 调用私有 resolver，仅作为专用鉴权入口，不进入模型/MCP/generic registry。`#alerts?triggerId=…` 保留进入时的目标，打开时同时显示触发快照和最新资格；`#reports?reportId=…` 读取确切报告，无权或删除时不以其它报告替代。复盘复用专用成交登记与显式来源链；未决成交回执在浏览器按 account 分区。
 
-方向研究已加入托管模型计量白名单。SMTP 默认关闭，仅显式 `HOSTED_NOTIFICATION_PROVIDER=smtp` 装配，复用现有安全 SMTP 参数和用户邮件绑定；unknown 不盲重发，accepted 不生成设备回执。当前逐股计划、关注和事件预警仍走用户独立的飞书 watchDelivery，不能根据 SMTP configured 宣称这些提醒已可在手机到达。后台 worker 已执行逐股计划监控并保存独立审计；候选同步未开启 StrategySchedule 时明确 partial。
+方向研究由 DSH 侧的只读/写面白名单承载，不再有托管计量账本。通知走本机配置的飞书链路：unknown 不盲重发，accepted 不生成设备回执。当前逐股计划、关注和事件预警都走同一条飞书 watchDelivery，不能据此宣称这些提醒已可在手机到达。盘中计划的批处理由 DSH 定时任务调用批处理工具执行；候选同步未开启 StrategySchedule 时明确 partial。
 
 ## 验证边界
 
-自动测试覆盖主体归属、伪造版本、时效、会话隔离、幂等、局部失败、上下文恢复及草案信任。隔离服务只使用 fixture providers 和临时库；实际浏览器验证桌面与 360/390/430px、返回、滚动与刷新。网络中断和登录切换单独验证。iOS Safari / Android Chrome 键盘与后台、真实行情覆盖、模型质量和真实手机通知必须另验。
+自动测试覆盖主体归属、伪造版本、时效、会话隔离、幂等、局部失败、上下文恢复及草案信任。隔离服务只使用 fixture providers 和临时库；实际浏览器验证桌面与 360/390/430px、返回、滚动与刷新。网络中断和账户切换单独验证。iOS Safari / Android Chrome 键盘与后台、真实行情覆盖、模型质量和真实手机通知必须另验。
 
 性能记录区分冷启动与缓存，不在未测量时声称 P95 达标。验收结果按 AC01–AC17 写入 A 交接并同步维护文档。

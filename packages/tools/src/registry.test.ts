@@ -4,6 +4,18 @@ import { createRegistry, toolRegistry } from './registry.js';
 
 // 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
+  'get_analysis_context',
+  'list_analysis_jobs',
+  'get_analysis_job',
+  'get_analysis_metrics',
+  'claim_analysis_jobs',
+  'fail_analysis_job',
+  'cancel_analysis_job',
+  'requeue_analysis_job',
+  'record_advice',
+  'record_analysis_result',
+  'complete_analysis_job',
+
   'get_investment_workspace',
   'save_investment_consensus',
   'set_investment_tracking',
@@ -204,6 +216,22 @@ const EXPECTED_TOOL_NAMES = [
   'save_decision_review',
   'refresh_decision_review_report',
   'record_decision_trade',
+  // 个人域（单机版）：自选导入、事实摘要与用户价格条件预警
+  'preview_watchlist_import',
+  'commit_watchlist_import',
+  'remove_personal_watchlist_members',
+  'record_personal_watch_feedback',
+  'list_personal_watch_feedback',
+  'prepare_watchlist_facts_request',
+  'get_watchlist_facts_report',
+  'list_watchlist_facts_reports',
+  'save_personal_alert_plan',
+  'remove_personal_alert_plan',
+  'pause_personal_alert_plan',
+  'list_personal_alert_plans',
+  'preview_personal_alert_plan',
+  'prepare_personal_alert_request',
+  'get_personal_alert_evaluation',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -298,7 +326,7 @@ describe('toolRegistry', () => {
   it('AUDIT：成交登记明确声明 trade 副作用', () => {
     const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
     // DSH 瘦身后：内置 AI advice 类工具全部下线，注册表只剩 read / write / external / trade
-    expect([...sideEffects].sort()).toEqual(['external', 'read', 'trade', 'write']);
+    expect([...sideEffects].sort()).toEqual(['external', 'queue', 'read', 'trade', 'write']);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')
@@ -317,6 +345,7 @@ describe('toolRegistry', () => {
       'import_remote_research_document',
       'list_strategy_result_views',
       'prepare_strategy_data',
+      'preview_personal_alert_plan',
       'propose_strategy_version_draft',
       'rebuild_research_embeddings',
       'run_strategy',
@@ -346,8 +375,10 @@ describe('toolRegistry', () => {
       'archive_strategy',
       'archive_watchlist',
       'archive_watchlist_member',
+      'cancel_analysis_job',
       'cancel_strategy_evaluation_session',
       'close_holding',
+      'commit_watchlist_import',
       'complete_strategy_observations',
       'confirm_strategy_autonomy_action',
       'create_account',
@@ -372,19 +403,26 @@ describe('toolRegistry', () => {
       'finish_strategy_evaluation_session',
       'import_local_research_document',
       'link_research_document',
+      'pause_personal_alert_plan',
       'pause_strategy',
+      'preview_watchlist_import',
       'publish_strategy_version',
       'record_advice_outcome',
+      'record_personal_watch_feedback',
       'record_strategy_evaluation_day',
       'refresh_decision_review_report',
       'reject_strategy_autonomy_action',
+      'remove_personal_alert_plan',
+      'remove_personal_watchlist_members',
       'rename_chat_session',
       'renew_strategy_schedule_claim',
+      'requeue_analysis_job',
       'resume_strategy',
       'resume_strategy_evaluation_session',
       'run_fundamental_score',
       'save_decision_review',
       'save_investment_consensus',
+      'save_personal_alert_plan',
       'save_trading_plan',
       'set_investment_tracking',
       'set_strategy_schedule',

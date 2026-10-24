@@ -1,3 +1,6 @@
+export * from './analysis.js';
+export * from './plugin-authority.js';
+
 import type { Account } from '../entity/account.js';
 import type { AccountFacts } from '../entity/account-facts.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
@@ -103,13 +106,13 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
-import type { ReportAutomationRepository } from '../hosted/report-automation.js';
 import type { DecisionLedgerState } from '../portfolio/decision-ledger-state.js';
 import type { HoldingCashAdjustment } from '../portfolio/ledger.js';
 import type {
   TradingPlanBudgetLimits,
   TradingPlanBudgetResult,
 } from '../portfolio/trading-plan-budget.js';
+import type { ReportAutomationRepository } from '../report-automation.js';
 import type { ResearchSearchHit } from '../research-vault.js';
 import type { StrategyDailyCycleAuditQuery } from '../strategy/daily-cycle-audit.js';
 import type {
@@ -542,9 +545,10 @@ export interface ReportRepository {
 }
 
 export interface RepositoryRegistry {
+  readonly pluginAuthority: import('./plugin-authority.js').PluginAuthorityRepository;
+  readonly analysis: import('./analysis.js').AnalysisRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
-  readonly hostedTenant?: import('../hosted/tenant.js').TenantRepository;
-  readonly hostedExports?: import('../hosted/privacy.js').TenantExportRepository;
+  readonly personal?: import('../personal/repository.js').PersonalRepository;
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;

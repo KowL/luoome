@@ -889,7 +889,7 @@ Surfaces:
 
 环境变量:
   LUOOME_HOME   单机 CLI/TUI/MCP 数据目录（默认 ~/.luoome）
-  Web          使用显式服务配置；见 docs/runbooks/hosted-personal-subscription.md
+  Web          使用显式服务配置；见 docs/archive/hosted-personal-subscription-runbook.md
 
 --since/--until 支持相对时长（30m / 24h / 7d / 4w）或 ISO 日期。`);
 };

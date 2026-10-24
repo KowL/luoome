@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
+import { setAccountId } from './api.js';
 
 const originals = new Map(
   ['Node', 'document', 'localStorage', 'sessionStorage', 'fetch'].map((key) => [
@@ -119,7 +119,6 @@ beforeEach(async () => {
   ({ openDecisionReview } = await import(`./decision-review-ui.js?case=${caseId++}`));
 });
 afterEach(() => {
-  clearHostedSession();
   for (const [key, descriptor] of originals) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else delete globalThis[key];
@@ -127,14 +126,7 @@ afterEach(() => {
 });
 
 describe('决策复盘未决请求恢复', () => {
-  const login = (userId) => {
-    document.body = { dataset: { runtime: 'hosted' } };
-    configureHostedSession({ user: { id: userId }, csrfToken: `csrf-${userId}` });
-    setAccountId('account-a');
-  };
-
-  it('切换登录用户后旧写入响应不能把私人未决请求写进新用户存储', async () => {
-    login('user-a');
+  it('切换账户后旧写入响应不能把私人未决请求改写为已拒绝', async () => {
     let complete;
     respond = () =>
       new Promise((resolve) => {
@@ -142,18 +134,15 @@ describe('决策复盘未决请求恢复', () => {
       });
     await openDecisionReview(subject);
     await click('保存复盘');
-    const keyA = `${pendingKey}:user-a:account-a`;
-    const requestA = JSON.parse(sessionStorage.getItem(keyA));
+    const requestA = pending();
     expect(requestA.outcome).toBe('unknown');
-    login('user-b');
+    localStorage.setItem('luoome.accountId', 'account-b');
     complete(refusal());
     await settle();
-    expect(sessionStorage.getItem(`${pendingKey}:user-b:account-a`)).toBeNull();
-    expect(JSON.parse(sessionStorage.getItem(keyA))).toEqual(requestA);
+    expect(pending()).toEqual(requestA);
   });
 
-  it('退出重登同一账户后旧回执不能修改新会话或执行保存回调', async () => {
-    login('user-a');
+  it('账户切走再切回后旧回执不能修改未决请求或执行保存回调', async () => {
     let saved = 0;
     let complete;
     respond = () =>
@@ -166,13 +155,12 @@ describe('决策复盘未决请求恢复', () => {
       },
     });
     await click('保存复盘');
-    const key = `${pendingKey}:user-a:account-a`;
-    const original = sessionStorage.getItem(key);
-    clearHostedSession();
-    login('user-a');
+    const original = sessionStorage.getItem(pendingKey);
+    setAccountId('account-b');
+    setAccountId('account-a');
     complete({ ok: true, data: {} });
     await settle();
-    expect(sessionStorage.getItem(key)).toBe(original);
+    expect(sessionStorage.getItem(pendingKey)).toBe(original);
     expect(saved).toBe(0);
   });
 

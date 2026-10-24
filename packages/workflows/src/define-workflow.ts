@@ -224,23 +224,12 @@ import type {
   WatchExecutionOutput,
 } from '@luoome/tools';
 import {
-  type BuildPersonalAlertEvaluationInput,
-  type BuildPersonalAlertEvaluationOutput,
-  type BuildWatchlistFactsInput,
-  type BuildWatchlistFactsOutput,
   beginAccountPlanBatchTool,
   beginWatchDeliveryTool,
-  buildPersonalAlertEvaluationTool,
-  buildWatchlistFactsTool,
-  type CommitPersonalAlertEvaluationInput,
-  type CommitPersonalAlertEvaluationOutput,
-  type CommitWatchlistFactsInput,
-  type CommitWatchlistFactsOutput,
   claimDueStrategySchedulesTool,
-  commitPersonalAlertEvaluationTool,
   commitWatchEvaluationTool,
-  commitWatchlistFactsTool,
   createStrategyAutonomyActionTool,
+  enqueueAnalysisJobTool,
   finishAccountPlanBatchTool,
   finishStrategyScheduleClaimTool,
   getAccountPlanBatchTool,
@@ -263,13 +252,6 @@ import {
   transitionStrategyAutonomyActionTool,
   watchExecutionTool,
 } from '@luoome/tools';
-import {
-  deliverHostedReportTool,
-  type HostedStrategyExecutionInput,
-  type HostedStrategyExecutionOutput,
-  hostedReportExecutionTool,
-  hostedStrategyExecutionTool,
-} from '@luoome/tools/hosted';
 import type { z } from 'zod';
 
 /**
@@ -287,6 +269,11 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly enqueue_analysis_job: {
+    readonly execute: (
+      input: import('zod').z.input<typeof enqueueAnalysisJobTool.inputSchema>,
+    ) => ReturnType<typeof enqueueAnalysisJobTool.execute>;
+  };
   readonly get_investment_workspace: ToolAccessor<
     typeof GetInvestmentWorkspaceInput,
     typeof GetInvestmentWorkspaceOutput
@@ -302,34 +289,6 @@ export interface WorkflowToolMap {
   readonly get_investment_candidates: ToolAccessor<
     typeof GetInvestmentCandidatesInput,
     typeof GetInvestmentCandidatesOutput
-  >;
-  readonly hosted_strategy_execution: ToolAccessor<
-    typeof HostedStrategyExecutionInput,
-    typeof HostedStrategyExecutionOutput
-  >;
-  readonly hosted_report_execution: ToolAccessor<
-    typeof hostedReportExecutionTool.inputSchema,
-    typeof hostedReportExecutionTool.outputSchema
-  >;
-  readonly deliver_hosted_report: ToolAccessor<
-    typeof deliverHostedReportTool.inputSchema,
-    typeof deliverHostedReportTool.outputSchema
-  >;
-  readonly build_watchlist_facts: ToolAccessor<
-    typeof BuildWatchlistFactsInput,
-    typeof BuildWatchlistFactsOutput
-  >;
-  readonly commit_watchlist_facts: ToolAccessor<
-    typeof CommitWatchlistFactsInput,
-    typeof CommitWatchlistFactsOutput
-  >;
-  readonly build_personal_alert_evaluation: ToolAccessor<
-    typeof BuildPersonalAlertEvaluationInput,
-    typeof BuildPersonalAlertEvaluationOutput
-  >;
-  readonly commit_personal_alert_evaluation: ToolAccessor<
-    typeof CommitPersonalAlertEvaluationInput,
-    typeof CommitPersonalAlertEvaluationOutput
   >;
   readonly list_research_topics: ToolAccessor<
     typeof ListResearchTopicsInput,
@@ -722,13 +681,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
   };
   for (const internalTool of [
-    hostedReportExecutionTool,
-    hostedStrategyExecutionTool,
-    deliverHostedReportTool,
-    buildWatchlistFactsTool,
-    commitWatchlistFactsTool,
-    buildPersonalAlertEvaluationTool,
-    commitPersonalAlertEvaluationTool,
+    enqueueAnalysisJobTool,
     commitWatchEvaluationTool,
     watchExecutionTool,
     beginWatchDeliveryTool,

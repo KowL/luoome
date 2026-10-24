@@ -4,12 +4,17 @@
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
+- 作为 **DSH 插件**接入 DSH：只读面、设置面、批处理面三个 MCP 实例，加上三个面板与一组技能
 - 在**终端（TUI）**盯盘、看今日建议
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
-- 作为 **MCP server** 把全部能力暴露给 Claude Desktop / OpenClaw 等 AI agent
+- 作为 **MCP server** 按显式授权向 Claude Desktop / OpenClaw 等 AI agent 暴露能力
 - 通过**工作流**运行 Strategy、同步 Watchlist、盯盘与生成报告
 
 但 luoome **不会**替你下单。所有建议都带 `decision / confidence / horizon / reasoning / risks / disclaimers / validUntil`，人最终拍板。
+
+当前形态是**单机版**：没有多租户、没有订阅计费、没有托管站点，也没有邮箱登录——
+DSH 是唯一入口，`$LUOOME_HOME/luoome.db` 是唯一事实库。批处理由 DSH 的定时任务负责，
+没有常驻调度进程。
 
 ## 目录
 
@@ -19,11 +24,13 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 4. [TUI 用法](#4-tui-用法)
 5. [Web 用法](#5-web-用法)
 6. [MCP 接入](#6-mcp-接入)
-7. [多账户切换](#7-多账户切换)
-8. [复盘与 confidence 校准](#8-复盘与-confidence-校准)
-9. [数据存储位置](#9-数据存储位置)
-10. [环境变量](#10-环境变量)
-11. [FAQ / 故障排查](#11-faq--故障排查)
+7. [DSH 单机用法](#7-dsh-单机用法)
+8. [多账户切换](#8-多账户切换)
+9. [复盘与 confidence 校准](#9-复盘与-confidence-校准)
+10. [数据存储位置](#10-数据存储位置)
+11. [环境变量](#11-环境变量)
+12. [FAQ / 故障排查](#12-faq--故障排查)
+13. [更多阅读](#13-更多阅读)
 
 ---
 
@@ -91,20 +98,19 @@ luoome tools list | head
 luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建表；内置策略作为模板目录
 展示，不会写成 Strategy，也不会灌入账户、持仓、交易或建议。从模板创建的是独立用户策略，
 可以继续修改或删除。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
-Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
+Web（严格默认，见 §11 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
 
-### 2.1 一键启动完整 MVP
+### 2.1 一键启动单机 Web
 
 ```bash
 luoome start
 ```
 
-这会在 `127.0.0.1:5173` 启动 Web，并进入盘中盯盘长驻循环。首次启动还会：
+这会在 `127.0.0.1:5173` 启动 Web。单机形态没有常驻盯盘进程：批量调度由 **DSH 定时任务**负责（见 [§7](#7-dsh-单机用法)）。首次启动还会：
 
 - 创建 `~/.luoome/luoome.db`
-- 创建默认「全部持仓」分组和「持仓监控」盯盘池
 
-打开 `http://127.0.0.1:5173/`，即可在「设置」页执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome start --no-watch` 或 `luoome web serve`。
+打开 `http://127.0.0.1:5173/`，即可在「设置」页执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome web serve`。
 
 「预警」页的交易计划卡片直接展示生成时参考价及来源时间、入场区间、止损/止盈、当前与目标仓位、持有周期和复核时间。参考价是计划生成时的事实，不代表实时行情；缺失或过时数据会明确标注。详情展示数值触发条件、前置约束、反证和风险；内部计划版本标识、账户事实指纹及来源标识收在默认折叠的「查看追溯信息」中。计划不会自动下单。
 
@@ -140,7 +146,7 @@ luoome web serve
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
-页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、研究、建议、报告、复盘、对话和设置。
+页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、研究、建议、报告、复盘和设置。
 
 看盘页优先展示个人看板与今日预警，板块热力和要闻位于其后。个人看板可按全部、我的持仓、我的关注、今日触发切换，并可叠加关注列表筛选。普通关注只需启用 Watchlist，不要求配置 AlertPlan；其它账户独有的 portfolio 来源不会混入当前账户的关注。服务器先筛选再分页，每页 10/20/40 只，超过 40 只仍可翻页查看。价格排序与涨跌统计仅针对本页；缺行情或昨收基准单列为“未知”。今日触发范围基于今日全部记录，包含已移出持仓或关注的股票，覆盖不完整时明确标注。
 
@@ -252,7 +258,7 @@ luoome mcp serve    # stdio JSON-RPC
 
 | 子命令 | 用途 |
 |---|---|
-| `luoome start [--port 5173] [--interval 60]` | 启动完整 MVP（Web + 长驻盯盘） |
+| `luoome start [--port 5173] [--host 127.0.0.1]` | 启动单机 Web（批量调度由 DSH 定时任务负责） |
 | `luoome tui` | 终端全屏应用（依赖 opentui） |
 | `luoome web serve [--port 5173]` | 仅启动 Web |
 | `luoome watch [--interval 60] [--alert-plan ID] [--once]` | 启动 AlertPlan 盯盘或执行单轮 |
@@ -326,17 +332,16 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 当前账户的明确反馈、成交归因、事后观察与 confidence 校准表；从建议进入「决策与复盘」。 |
 | **报告** | 查看与导出报告；收盘复盘统一生成一份，周报支持根据后补记录生成不可通知的复盘补充版。 |
-| **对话** | AI SDK 投资助手；查询账户、现金、持仓、计划与研究资料，确认后登记持仓/资金流水、管理关注列表与提醒，并继续解释执行结果。会话、动作和用量可回看。 |
-| **设置** | 数据源 / AI / 账户，以及可按分类选择的本地 JSON 数据导出与合并导入。托管部署中数据源与 AI 配置仅管理员可改，全站生效。 |
+| **设置** | 数据源 / 账户，以及可按分类选择的本地 JSON 数据导出与合并导入。单机部署没有管理员角色：数据源由这台机器上的操作者自己改。 |
 
 个股详情不是侧栏 tab，从看盘、持仓、Watchlist、预警或顶栏搜索点击股票进入（深链接形如 `#market?stockId=002594.SZ&range=3m`）。打开后固定在顶部展示报价卡（名称与代码、价格与涨跌、今开 / 最高 / 最低 / 昨收、成交量额、换手与振幅、估值与股本），下方才是 K 线 / 分时图与关联事实。**打开详情或换股都会回到顶部报价卡**；只有切换区间（1M / 3M …）或粒度（日 K / 周 K / 分时）时保留当前滚动位置。切换左侧导航同样回到页面顶部，但页内自动刷新不会改变滚动位置。
 
-对话使用「设置 → AI」配置的模型，并要求启动时显式开启
-`LUOOME_EXPOSE_WRITE=true` 和 `LUOOME_EXPOSE_EXTERNAL=true`。先选择顶栏账户，再提出需求，
-例如“检查我的持仓和可用资金”或“为这个账户登记今天入金 1000 元”。助手会展示待确认卡片，
-包括实际账户、数量、金额和现金影响；核对后点击确认，或取消、修改要求。
-一条回复有多项草案时逐项处理，全部处理完成后助手继续解释已执行结果。刷新页面会保留各项状态，
-重复确认不会重复执行。若显示执行中且进程曾中断，请先核对实际账本；确认未执行后可点「取消该草案」
+模型对话已随 DSH 改造退役：luoome 侧不再有 AI 助手页面，模型推理在 DSH 侧完成。保留下来的是
+不依赖模型的待确认草案链路，要求启动时显式开启 `LUOOME_EXPOSE_WRITE=true` 和
+`LUOOME_EXPOSE_EXTERNAL=true`。在首页工作台发起「生成待确认草案」，页面会展示待确认卡片，
+包括实际账户、数量、金额和现金影响；核对后点击「确认执行」或「取消」。
+多项草案逐项处理，刷新页面会保留各项状态，重复确认不会重复执行。若显示执行中且进程曾中断，
+请先核对实际账本；确认未执行后可点「取消该草案」
 （终态，不会补执行），再让助手重新生成。
 账户和持仓操作只维护本地账本，不自动交易；正式建议仍需保留反证、风险和有效期。
 
@@ -360,9 +365,9 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 收到确切提醒链接后，先查看原触发快照与最新资格；历史触发不代表当前行动条件仍成立。
 「登记 / 关联实际成交」复用原有专用登记入口，数量、价格、时间和尚未入账确认仍由你核对。
 
-托管通知的工程入口现支持显式配置 SMTP（`HOSTED_NOTIFICATION_PROVIDER=smtp`，复用 `SMTP_*`），
-用户还需独立开启邮箱偏好。当前逐股计划/自选/事件预警继续使用按用户绑定的飞书链路；SMTP 配置不会自动替换它。
-渠道受理和设备到达分别表达，未获回执时保持未知。真实模型、行情与手机通知、iOS/Android 真机仍需单独验收。
+单机形态的通知走本机配置的飞书链路：Webhook 在「设置 → 飞书通知」里填写，只展示是否已配置，
+读取和回显都不会带出密钥。渠道受理和设备到达分别表达，未获回执时保持未知。
+真实模型、行情与手机通知、iOS/Android 真机仍需单独验收。
 详细契约见 [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
 
 ### 5.3 顶栏与侧栏
@@ -378,18 +383,108 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 `luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认暴露：
 
 - **read** tools（list / search / get / compute）
-- **advice** tools（个股、持仓和市场观点分析）
 
 opt-in 追加：
 
 - `LUOOME_EXPOSE_WRITE=true` → 追加账户、持仓、交易、研究、事件和反馈等 write tools
 - `LUOOME_EXPOSE_EXTERNAL=true` → 追加行情、同步、刷新和通知等 external tools
+- `LUOOME_EXPOSE_QUEUE=true` → 追加队列工具（消费者实例专用）
+- `LUOOME_EXPOSE_TOOLS` / `LUOOME_EXPOSE_DENY` → 按工具名精确放行 / 拒绝
 
 `LUOOME_EXPOSE_TRADE=true` **永远硬卡**：MCP server 启动即抛错退出；advice × trade 隔离硬约束绝不通过 MCP 暴露。
 
 ---
 
-## 7. 多账户切换
+## 7. DSH 单机用法
+
+DSH 是当前唯一入口。luoome 以插件形态接入 DSH，自己不提供站点入口，也不需要账号登录：
+公网入口由反向代理的 basic auth 挡住，DSH 自己再校验启动 token，两层都在 luoome 之外。
+
+### 7.1 三个 MCP 实例
+
+| 实例 | 用途 | 你会拿到什么 |
+|---|---|---|
+| `luoome`（只读面） | DSH 交互面默认实例 | 持仓、行情、建议、策略、盯盘、报告等只读事实与工具 |
+| `luoome-settings`（设置面） | 配置类写工具白名单 | 研究主题/文档/假设版本等配置写入 |
+| `luoome-batch`（批处理面） | 五个批处理入口 | 供 DSH 定时任务调用的策略日循环、收盘报告、绩效快照、盘中计划、策略自治周报 |
+
+写面按工具名精确放行，读面不会因为设置面的存在而多出写能力。
+`trade` 永不通过任何 MCP 实例暴露。
+
+DSH 侧还挂了一个消费者实例 `luoome-worker`（headless），它只开放队列工具白名单，
+负责领取 `analysis_jobs`、取事实包、推理后写回；队列为空时不会唤醒模型。
+
+### 7.2 面板
+
+DSH 侧栏有三个 luoome 面板：
+
+| 面板 | 内容 |
+|---|---|
+| 投资看板 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议、关注列表 |
+| 策略 | 策略清单、状态、当前版本、更新时间、盯盘健康度 |
+| 复盘 | 建议命中率、T+n 观察、待补齐观察 |
+
+面板只做投影，不自己算数：数字必须与工具输出逐位一致。点击「刷新事实」读取当前工具结果，
+工具失败显示错误，不以零值代替缺失数据。
+
+### 7.3 技能
+
+工作区 `.dsh/skills/` 下是 DSH 侧的技能目录：
+
+| 技能 | 触发 | 行为 |
+|---|---|---|
+| `morning-brief` | 交易日早盘前 | 读事实 → 生成本日简报 |
+| `post-close-review` | 收盘后 | 复盘、建议兑现、登记决策结果 |
+| `stock-deep-dive` | 你提问某只股票 | 事实 + 研究检索 + 可选写回建议 |
+| `decision-journal` | 你记录一次决策 | 落 DecisionReview，保留当时依据与失效条件 |
+| `analysis-worker` | 消费者实例唤醒 | 领取待分析任务 → 推理 → 校验写回 |
+| `luoome-batch` | 建立/检查/补跑批处理 | 五个批处理入口的调度表、门槛口径与调用方式 |
+
+技能本身不授予权限：它只决定 agent 怎么做事，能调哪些工具仍由 MCP 实例白名单决定。
+
+### 7.4 DSH 定时任务与批处理
+
+单机形态没有常驻调度进程。批处理由 **DSH 定时任务**唤起会话，agent 再调用
+`luoome-batch` 实例上的批处理工具。每个批处理工具自带门槛判定，不满足时返回 `skipped`
+且不写库——调度时间点错了也不会写坏事实。
+
+| 批处理 | 工具（`luoome-batch` 实例） | 建议 cron（Asia/Shanghai） | 门槛 |
+|---|---|---|---|
+| 策略日循环 | `run_strategy_daily_cycle` | `30 9 * * 1-5` | 交易日 |
+| 收盘报告截止 | `run_closing_report_cutoff` | `50 15 * * 1-5` | 交易日 |
+| 账户绩效快照 | `run_portfolio_performance_snapshot` | `30 16 * * 1-5` | 交易日且已过 16:00 |
+| 盘中计划批处理 | `run_intraday_plan_batch` | `5 9 * * 1-5` | 盘中时段 |
+| 策略自治周报 | `run_strategy_autonomy_weekly` | `30 9 * * 0` | 周日 |
+
+建立方式：用 DSH 的 `schedule_list` 查现有提醒避免重复，再用 `schedule_create` 建，
+一次只传一个时间选择器（cron + time_zone）；title 用 `luoome 批处理：<批处理名>`，
+prompt 直接写清调哪个工具、失败怎么汇报。细节见技能 `luoome-batch`。
+
+手动补跑时给对应工具传 `force: true` 跳过门槛判定；补跑前先 `schedule_list` 看当天是否已经跑过。
+工具返回 `outcome=failed` 时如实汇报，不要重试超过一次。
+
+### 7.5 批量分析与队列
+
+批量任务状态为 `pending → claimed → completed`，失败按退避重试，达到上限进入 `dead_letter`。
+
+- `get_analysis_metrics` 查看积压、可执行任务与过期租约；`list_analysis_jobs`、`get_analysis_job` 查看任务状态。
+- 单机形态没有生产者进程，空队列是正常状态。
+- 过期租约可以重新领取，旧 token 不能写回。
+- `queue` 是独立能力，不因开启 `write` 或 `external` 自动开放。
+
+建议展示保留反证、风险、免责声明和有效期；`legacy-ai` 表示迁移前的建议，
+不能据此推断当时模型或技能版本。校准页面按生成方式、模型和技能版本分别统计，
+每组以及每个信心桶至少需要 20 条明确跟随且填报盈亏的样本才展示比例。
+
+### 7.6 单机 Web
+
+需要图形界面做精细管理时仍可起单机 Web（`luoome web serve`，默认 `127.0.0.1:5173`）。
+它与 DSH 读同一份单机事实库；写操作同样受 `LUOOME_EXPOSE_WRITE` 与同源校验保护。
+远程访问请走 SSH 隧道或受控反代，不要直接把端口暴露到公网。
+
+---
+
+## 8. 多账户切换
 
 账户不再内置。首次启动在 Web「设置」页创建；也可调用
 `create_account({ name, currency, initialCapital })`。所有账户均为 `kind: real`。
@@ -400,7 +495,7 @@ opt-in 追加：
 - **Web**：账户下拉切换会触发 `/api/account/select`，然后 reload 当前路由。
 - **CLI / MCP**：账户相关 tool 可通过 `accountId` 显式选账户，缺省使用当前上下文账户；MCP 不暴露 `add_trade` 或 `record_decision_trade`。
 
-### 7.1 给新账户加仓（演示）
+### 8.1 给新账户加仓（演示）
 
 ```bash
 # 添加到「短线交易」账户
@@ -418,12 +513,12 @@ luoome tools call add_trade --input '{
 
 ---
 
-## 8. 复盘与 confidence 校准
+## 9. 复盘与 confidence 校准
 
 复盘将当时依据、用户明确记录的行动和后来观察放在当前账户下回看。切换账户后，反馈和统计随账户切换。
 建议采纳、实际成交和事后涨跌各自记录；系统不会从其中一项推断另外两项。
 
-### 8.1 记录与修改复盘
+### 9.1 记录与修改复盘
 
 先确认顶栏账户，再从建议、交易计划版本或提醒详情打开「决策与复盘」。弹窗展示当时依据、
 反证、风险、有效期与明确关联的事后观察；没有显式观察链时会说明缺失，不按同股拼接。
@@ -452,7 +547,7 @@ MCP 在开启 write 能力后可用 `record_advice_outcome` 或 `save_decision_r
 旧版本没有账户归属的反馈仍留在历史数据中，不会自动分摊到当前账户。迁移只恢复可验证的旧成交与
 Advice 显式关联，不据此生成采纳反馈；需要时由用户重新核对并记录。
 
-### 8.2 看 confidence 校准
+### 9.2 看 confidence 校准
 
 `get_confidence_calibration` 将当前账户的历史 Advice（包含已过期建议）按 confidence 分桶。
 通用股票建议在本账户明确记录后才纳入账户样本。CLI 可显式指定账户：
@@ -469,7 +564,7 @@ luoome tools call get_confidence_calibration --input '{"accountId":"你的账户
 它不等于账户收益率，也不能把某个 confidence 桶理解为未来成功概率。
 TUI 按 `[c]`，Web「复盘」页都可查看。
 
-### 8.3 报告中的复盘与后补
+### 9.3 报告中的复盘与后补
 
 账户收盘报告和周报会保存生成时使用的复盘修订与成交事实。收盘复盘生成后保持原始快照，
 后补记录可在「决策与复盘」中查看，不再追加补充报告。报告列表每个日期和范围只显示最新的一份，
@@ -487,7 +582,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 9. 数据存储位置
+## 10. 数据存储位置
 
 | 路径 | 内容 |
 |---|---|
@@ -499,7 +594,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 10. 环境变量
+## 11. 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -508,8 +603,6 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
-| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
-| provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |
@@ -527,56 +620,47 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 11. FAQ / 故障排查
+## 12. FAQ / 故障排查
 
-### 11.1 `bun: command not found`
+### 12.1 `bun: command not found`
 
 按官网安装 Bun 或用 `npx bun`。
 
-### 11.2 Web 端打开是空白，console 报 `await is only valid in async functions`
+### 12.2 Web 端打开是空白，console 报 `await is only valid in async functions`
 
 检查 `apps/web/public/js/app.js` 与 `pages.js` 是否被浏览器当 ES module 解析——确认 `<script type="module">` 或 http 头 `content-type: text/javascript`。
 
-### 11.3 TUI 报「需要交互式终端」
+### 12.3 TUI 报「需要交互式终端」
 
 TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会触发。请改用 `luoome web serve` 或 tool/workflow CLI 走文件输出。
 
-### 11.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
+### 12.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
 
 `LUOOME_MARKET_PROVIDER=real` 按 `LUOOME_MARKET_SOURCES` 从左到右尝试已注册能力；默认顺序是
 Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，不生成价格。Sina 当前只提供
 沪深目录和 qfq 日线，不会伪装成实时快照或搜索来源；未覆盖的市场返回 not_supported。
 
-### 11.5 启动时报 AI 模型目录或 provider 密钥缺失
+### 12.5 luoome 侧找不到模型或 provider 密钥
 
-首次启动会自动生成 `$LUOOME_HOME/ai-models.json`，内置默认值与格式可参考仓库根目录的
-`ai-models.example.json`；也可以设置 `LUOOME_AI_CONFIG` 指向自定义配置文件。再设置当前
-profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
-或缺密钥都会在需要 AI 的调用处明确报错；CLI/TUI/MCP 可先以配置模式启动并使用不依赖 AI 的
-行情、账户和审计能力，不会用 mock LLM 冒充真实推理。
+模型推理与模型配置都由 DSH 承担，luoome 侧没有模型运行时、模型目录与模型设置页。
+需要模型判断的任务由 DSH agent 通过 MCP 调用工具完成，密钥由 DSH 侧配置。
 
-Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
-（`deepseek-v4-pro` / `DEEPSEEK_API_KEY`）推荐值；切换 provider 后点击保存即可写入同一份
-模型目录和本地密钥文件。
+看板、持仓、策略、提醒、待确认草案与数据导入导出都不依赖模型，可直接使用。
 
-也可以启动 Web 后进入「设置 → LLM 设置」完成可视化配置。Web 在模型尚未配置或
-配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入
-本地 `0600` 密钥文件，页面只显示“已配置”状态，不会读取或回显原值。
-
-### 11.6 `get_confidence_calibration` 没有盈利占比
+### 12.6 `get_confidence_calibration` 没有盈利占比
 
 先确认当前账户。只有该账户明确标记 followed 且填写盈亏的记录参与填报盈利占比；
 没有这类样本时返回 null、页面显示未知。按实际情况补充反馈，尚未确认的盈亏保持留空。
 
-### 11.7 切账户后持仓没变？
+### 12.7 切账户后持仓没变？
 
 Web 端确认当前路由已 reload（页面状态行的「账户已切换」提示）。TUI 按 `[r]` 也可强制刷新。如果仍然没变，说明该账户本来就没持仓——用 `add_trade` 灌一笔。
 
-### 11.8 Advice 看不到 / 全部过期
+### 12.8 Advice 看不到 / 全部过期
 
 `validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。`analyze_stock` 会自动重新生成。
 
-### 11.9 如何卸载？
+### 12.9 如何卸载？
 
 ```bash
 rm -rf ~/.luoome          # 删数据
@@ -585,42 +669,33 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ---
 
-## 12. 更多阅读
+## 13. 更多阅读
 
-显式托管版使用原 Web 页面，登录后管理自选、策略、预警、持仓和复盘。首次登录自动建立
-零本金、零现金的 CNY 默认投资账户；系统不制造持仓或成交，也不提供新增/切换账户入口。
-“设置 → 账户与记录”可修改账户名称；本金和现金属于账本，资金变化使用原入金/出金功能。
-“设置 → 订阅”查看服务期、创建续费订单并查询支付结果，不自动扣款。
-“设置 → 通知”管理验证邮箱的通知偏好和安静时段；条件仍在原预警页面管理。
-到期保留历史只读，停止新增业务写入和实时刷新；订阅与平台隐私 API 仍可访问。
-模拟模式不扣款。真实邮件/支付、完整业务调度和生产运行仍待验收，配置见[托管手册](./runbooks/hosted-personal-subscription.md)。
-默认 local 界面及本地 MCP 继续使用原能力；平台管理不能由本地 MCP 调用。
+### 13.1 配置模型
 
-管理员登录后统一在“设置 → AI 模型”配置全站模型；管理页保留跳转入口。
-按“模型提供商列表 → 编辑 → 自定义设置 → 模型选项”管理供应商，支持 DeepSeek、MiniMax、Kimi 预设和自定义 API。
-每个供应商可保存多个模型；可手动添加，也可使用当前地址与密钥“获取可用模型”，搜索勾选后添加。
-获取列表不会保存草稿，也不代表对话连接已经验证；供应商不提供模型目录时可继续手动填写。
+模型推理在 DSH 侧完成：先在 DSH Settings → Models 配置模型与密钥，DSH agent 再通过 MCP
+调用 luoome 工具产出建议、简报与复盘。未配置模型时，历史事实、建议与只读面板仍可读取，
+分析不会成功；不要把本机 API key 复制进部署配置。
 
-保存供应商不会切换默认模型。配置好模型的参数、人民币 / 百万 Token 费率后，在“默认模型”选择具体供应商与模型，设置预算并应用。
-当前支持 OpenAI Chat Completions 协议；MiniMax 预设地址为 `https://api.minimax.cn/v1`，不要填写 `/anthropic`。
-地址与模型支持以 [MiniMax 官方文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)为准。
-保存后后续对话与研究使用新配置，无需重启；已有执行继续使用开始时的配置快照。
+luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只负责看板、持仓、策略、提醒、
+待确认草案与数据导入导出。
 
-密钥不回显，编辑时留空保留该供应商的密钥；更换 API 地址需重新填写密钥。
-移除正在使用的模型、供应商或密钥前，先选择其他模型或停用 AI。
-保存失败保留草稿与原配置，但本次填写的新密钥会清空；多页面同时编辑时，旧版本会被拒绝，需重新载入配置后再修改。
-旧版单模型配置会自动显示为一个供应商，首次保存才升级文件格式。费用记录按手动费率计算，订阅会员配额不能视作按 Token 计价。
+### 13.2 部署注意事项
 
-DSH 插件版 AI 对话目前仅供开发环境显式验证，默认对话仍使用原 AI SDK。
-实验页面会提示每轮按已保存历史重建上下文；尚不支持执行中断恢复，历史超过实验窗口时需新建会话。
-草案仍需确认，停止后应使用“核对会话状态”查看实际保存结果。受控试用方法与验收范围见
-[DSH 开发任务](./dsh-plugin-platform-development-plan.md)，不能把模拟回答作为真实投资研究结论。
+- 部署应以 HTTPS 为首选。若公网入口只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍然校验，
+  但没有传输加密；不要在不可信网络上传输凭据。
+- DSH 侧栏的三个面板与聊天读同一份数据：面板只做投影，不在浏览器重算数值。
+- 嵌入式 DSH Chat（Node Host + 业务 Cordis 插件）已随托管形态下线，仓库里不再有这条路径；
+  当前的 DSH 集成只有独立 profile 装配、只读面板插件与系统提示词纪律插件。
+
+### 13.3 延伸阅读
 
 - [文档导航](./README.md) — 产品需求、技术设计、运维手册与历史归档
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型
+- [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) — 当前形态的契约、阶段与验收口径
 - [luoome Skill](../skills/luoome/SKILL.md) — 外部 Agent 接入、工具编排与安全规则
 - [AGENTS.md](../AGENTS.md) — 编码 Agent 仓库开发规范
 - [ROADMAP.md](./ROADMAP.md) — 版本演进
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献者指南
-- [SECURITY.md](./SECURITY.md) — 副作用分级 + advice 安全
+- [SECURITY.md](./SECURITY.md) — 副作用分级 + 单机入口鉴权与暴露面
 - [BACKLOG.md](./BACKLOG.md) — 一致性 / 工程债清单

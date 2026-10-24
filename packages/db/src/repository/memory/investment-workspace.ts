@@ -27,6 +27,10 @@ export class InMemoryInvestmentWorkspaceRepository implements InvestmentWorkspac
   private readonly tracking = new Map<string, InvestmentTracking>();
 
   async createResearch(value: InvestmentResearch): Promise<InvestmentResearch> {
+    return this.createResearchSync(value);
+  }
+
+  createResearchSync(value: InvestmentResearch): InvestmentResearch {
     assertInvestmentResearchInvariants(value);
     const existing = [...this.research.values()].find(
       (item) => owns(item, value) && item.requestId === value.requestId,

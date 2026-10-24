@@ -1,11 +1,8 @@
 import type {
-  AgentRuntimeLike,
   AShareSentimentManagerLike,
   DragonTigerManagerLike,
   FundamentalDataAdapterLike,
-  HostedExecutionIdentity,
   LimitUpLadderManagerLike,
-  LLMAdapterLike,
   LocalExecutionIdentity,
   Logger,
   MarketDataAdapterLike,
@@ -21,21 +18,18 @@ import type {
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
-import { HostedExecutionIdentitySchema } from '@luoome/core';
+import { ExecutionIdentitySchema } from '@luoome/core';
 
 export interface BuildContextDependencies {
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;
     readonly stockUniverse?: StockUniverseManagerLike;
-    readonly llm: LLMAdapterLike;
   };
-  readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly logger?: Logger;
   readonly auditLog?: ToolContext['auditLog'];
   readonly auditCaller?: string;
-  readonly hostedAuthorization?: ToolContext['hostedAuthorization'];
   readonly user?: {
     readonly id: string;
     readonly defaultAccountId: string;
@@ -61,20 +55,18 @@ export interface BuildContextDependencies {
   readonly fundamentalData?: FundamentalDataAdapterLike;
 }
 
-export type BuildContextInput = BuildContextDependencies &
-  (
-    | { readonly mode?: 'local'; readonly identity?: Readonly<LocalExecutionIdentity> }
-    | { readonly mode: 'hosted'; readonly identity: Readonly<HostedExecutionIdentity> }
-  );
+export type BuildContextInput = BuildContextDependencies & {
+  readonly mode?: 'local';
+  readonly identity?: Readonly<LocalExecutionIdentity>;
+};
 
 /** Production composition root used by CLI, TUI, Web, and MCP surfaces. */
 export const buildContext = (input: BuildContextInput): ToolContext => {
-  const identity =
-    input.mode === 'hosted'
-      ? Object.freeze(HostedExecutionIdentitySchema.parse(input.identity))
-      : Object.freeze(
-          input.identity ?? { mode: 'local' as const, userId: input.user?.id ?? 'local-user' },
-        );
+  const identity = Object.freeze(
+    ExecutionIdentitySchema.parse(
+      input.identity ?? { mode: 'local' as const, userId: input.user?.id ?? 'local-user' },
+    ),
+  );
   const user = input.user ?? { id: identity.userId, defaultAccountId: '' };
   if (user.id !== identity.userId) {
     throw new Error('Tool context user does not match execution identity');
@@ -83,15 +75,11 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     identity,
     repos: input.repos,
     adapters: input.adapters,
-    user: input.mode === 'hosted' ? Object.freeze({ ...user }) : user,
+    user,
     clock: input.clock ?? (() => new Date()),
     logger: input.logger ?? console,
     ...(input.auditLog === undefined ? {} : { auditLog: input.auditLog }),
     ...(input.auditCaller === undefined ? {} : { auditCaller: input.auditCaller }),
-    ...(input.hostedAuthorization === undefined
-      ? {}
-      : { hostedAuthorization: input.hostedAuthorization }),
-    ...(input.agent !== undefined ? { agent: input.agent } : {}),
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
     ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
     ...(input.researchRemote === undefined ? {} : { researchRemote: input.researchRemote }),

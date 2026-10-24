@@ -67,7 +67,6 @@
         <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
         <li><a class="nav-item" href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span></a></li>
         <li><a class="nav-item" href="#sectors" data-route="sectors"><span>板块热力</span></a></li>
-        <li><a class="nav-item" href="#chat" data-route="chat"><span>AI 助手</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
       <div class="sidebar-foot">
@@ -86,11 +85,10 @@
             <div class="workspace-eyebrow"><span class="workspace-ai-mark" aria-hidden="true">✳</span> LUOOME / 共同决策</div>
             <div class="workspace-hero-heading"><div><p class="workspace-date" id="workspace-date"></p><h1>一起看清，<br>再做决定。</h1></div><span class="workspace-orbit" aria-hidden="true">✳</span></div>
             <p class="workspace-intro">从已有持仓开始，也可以先聊值得研究的方向。把判断、等待和实际行动，留在同一条线上。</p>
-            <button id="workspace-ask" class="workspace-ask" type="button"><span>现在，想一起研究什么？</span><span aria-hidden="true">↗</span></button>
-            <div class="workspace-quick-actions"><button type="button" data-workspace-prompt="先核对我的持仓变化与风险，说明还缺哪些事实">先看持仓变化</button><button type="button" data-workspace-prompt="研究短线波段参与方向，先说明可用证据与覆盖范围；证据不足时请明确告诉我">寻找参与方向</button><button type="button" data-workspace-prompt="核对当前计划的有效版本、等待条件和跟踪状态">接着看计划</button></div>
+            <button id="workspace-ask" class="workspace-ask" type="button"><span>待确认草案在这里确认</span><span aria-hidden="true">↗</span></button>
           </header>
           <section id="workspace-discussion" class="workspace-discussion" aria-label="当前内容讨论" hidden>
-            <div class="workspace-discussion-head"><strong>一起讨论</strong><div class="row-actions"><button id="workspace-expand" class="btn btn-outline btn-sm" type="button">深入展开 ↗</button><button id="workspace-close" class="btn btn-outline btn-sm" type="button">回到卡片</button></div></div>
+            <div class="workspace-discussion-head"><strong>待确认草案</strong><div class="row-actions"><button id="workspace-close" class="btn btn-outline btn-sm" type="button">回到卡片</button></div></div>
             <div id="workspace-discussion-body"></div>
           </section>
           <div id="workspace-facts" class="workspace-facts" role="status">正在读取已有事实，研究不会自动启动…</div>
@@ -771,52 +769,6 @@
         </div>
       </section>
 
-      <!-- route: chat（对话助手，docs/ddd/web-chat-design.md §5） -->
-      <section id="route-chat" class="route" data-route="chat" hidden>
-        <div class="route-header">
-          <h1>AI 投资助手</h1><div class="row-actions"><button id="chat-check-state" class="btn btn-outline btn-sm" type="button">核对会话状态</button><button id="chat-return" class="btn btn-outline" type="button" hidden>← 返回原讨论</button></div>
-          <div class="route-meta">查事实 → 确认操作 → 跟进结果 · 会话保存在本地</div>
-        </div>
-        <div id="chat-workspace" class="chat-workspace">
-          <aside class="chat-session-rail" aria-label="会话列表">
-            <div class="chat-session-head">
-              <div>
-                <span class="section-kicker">CONVERSATIONS</span>
-                <h2>会话</h2>
-              </div>
-              <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话">＋</button>
-            </div>
-            <div id="chat-session-list" class="chat-session-list">
-              <p class="chat-session-empty">正在读取会话…</p>
-            </div>
-            <div class="chat-session-foot">
-              <span class="health-dot"></span>
-              <span>项目本地持久化</span>
-            </div>
-          </aside>
-          <div class="card chat-card">
-            <div class="chat-context"><div id="chat-subjects" aria-label="正在讨论的主体">全局讨论</div><button id="chat-clear-subjects" class="btn btn-ghost btn-sm" type="button" hidden>切回全局</button></div>
-            <div id="chat-log" class="chat-log" role="log" aria-label="投资助手对话" aria-live="polite">
-              <p class="placeholder">正在加载会话…</p>
-            </div>
-            <button id="chat-new-content" class="chat-new-content" type="button" hidden>查看新内容 ↓</button>
-            <form id="chat-form" class="chat-form">
-              <span class="chat-prompt-mark" aria-hidden="true">›</span>
-              <textarea
-                id="chat-input"
-                rows="1"
-                maxlength="8000"
-                aria-label="向投资助手提问"
-                placeholder="查持仓、记资金、做研究，或配置盯盘提醒…"
-                autocomplete="off"
-              ></textarea>
-              <button id="chat-send" class="btn btn-primary chat-send" type="submit">发送</button>
-            </form>
-            <p class="chat-boundary">你确认后才修改投资记录。助手不会自动下单；AI 分析不构成投资建议。</p>
-          </div>
-        </div>
-      </section>
-
       <!-- route: limit-up -->
       <section id="route-limit-up" class="route" data-route="limit-up" hidden></section>
 
@@ -830,122 +782,14 @@
       <section id="route-settings" class="route" data-route="settings" hidden>
         <div class="route-header">
           <h1>设置</h1>
-          <div class="route-meta">AI 模型 / 账户 / 鉴权 / 数据源</div>
+          <div class="route-meta">账户 / 鉴权 / 数据源</div>
         </div>
         <nav class="settings-subnav" aria-label="设置分区">
-          <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
           <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
           <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
           <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
           <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
         </nav>
-        <form id="ai-settings-form" class="ai-settings" autocomplete="off" data-settings-pane="ai">
-          <div class="ai-settings-heading">
-            <div>
-              <span class="section-kicker">MODEL CONTROL</span>
-              <h2>LLM 设置</h2>
-              <p>选择 Agent 和建议生成使用的模型。保存后立即应用到当前 Web 进程。</p>
-            </div>
-            <div id="ai-settings-state" class="ai-settings-state" aria-live="polite">
-              <span class="health-dot"></span>
-              <span>正在读取配置</span>
-            </div>
-          </div>
-          <div class="ai-settings-grid">
-            <section class="ai-settings-panel ai-connection-panel" aria-labelledby="ai-connection-title">
-              <div class="ai-panel-title">
-                <span class="ai-panel-icon" aria-hidden="true">⌘</span>
-                <div><h3 id="ai-connection-title">连接</h3><small>Provider endpoint & credentials</small></div>
-              </div>
-              <div class="field ai-field-featured">
-                <label for="ai-provider">提供商</label>
-                <select id="ai-provider" required></select>
-                <span class="hint">切换提供商会填入推荐模型、端点与密钥变量。</span>
-              </div>
-              <div class="ai-model-row">
-                <div class="field">
-                  <label for="ai-model">模型 ID</label>
-                  <input id="ai-model" type="text" required maxlength="200" spellcheck="false" />
-                  <span class="hint">填写 provider 要求的精确模型 ID。</span>
-                </div>
-                <button id="btn-ai-provider-defaults" class="btn btn-outline ai-default-btn" type="button">
-                  ↻ 使用推荐值
-                </button>
-              </div>
-              <div class="field">
-                <label for="ai-base-url">基础 URL</label>
-                <input id="ai-base-url" type="url" required spellcheck="false" />
-              </div>
-              <div class="field">
-                <label for="ai-api-key">API Key</label>
-                <div class="secret-input-wrap">
-                  <span class="secret-key-icon" aria-hidden="true">⌁</span>
-                  <input
-                    id="ai-api-key"
-                    type="password"
-                    placeholder="保留已保存的 API Key"
-                    autocomplete="new-password"
-                  />
-                </div>
-                <div class="secret-status-row">
-                  <span id="ai-key-status" class="hint">未配置</span>
-                  <label class="check-label" for="ai-clear-key">
-                    <input id="ai-clear-key" type="checkbox" />
-                    清除已保存的 API Key
-                  </label>
-                </div>
-              </div>
-              <div class="ai-security-note">
-                <span aria-hidden="true">◈</span>
-                <span>密钥只写入权限为 0600 的本地环境文件；浏览器和读取 API 永不回显。</span>
-              </div>
-            </section>
-
-            <section class="ai-settings-panel ai-generation-panel" aria-labelledby="ai-generation-title">
-              <div class="ai-panel-title">
-                <span class="ai-panel-icon" aria-hidden="true">≡</span>
-                <div><h3 id="ai-generation-title">生成</h3><small>Runtime behavior</small></div>
-              </div>
-              <div class="ai-generation-fields">
-                <div class="field">
-                  <label for="ai-temperature">温度</label>
-                  <input id="ai-temperature" type="number" min="0" max="2" step="0.1" required />
-                  <span id="ai-temperature-hint" class="hint">越低越稳定，越高越发散。</span>
-                </div>
-                <div class="field">
-                  <label for="ai-timeout">超时（秒）</label>
-                  <input id="ai-timeout" type="number" min="1" max="600" step="1" required />
-                </div>
-                <div class="field">
-                  <label for="ai-max-retries">最大重试</label>
-                  <input id="ai-max-retries" type="number" min="0" max="5" step="1" required />
-                  <span class="hint">单轮 AI SDK 调用的网络重试次数。</span>
-                </div>
-                <div class="field">
-                  <label for="ai-reasoning-effort">推理强度</label>
-                  <select id="ai-reasoning-effort">
-                    <option value="off">默认（不传）</option>
-                    <option value="low">低</option>
-                    <option value="medium">中</option>
-                    <option value="high">高</option>
-                    <option value="max">最高</option>
-                  </select>
-                  <span id="ai-reasoning-hint" class="hint">兼容模型会在回答前投入更多推理。</span>
-                </div>
-              </div>
-              <div class="ai-save-location">
-                <span>配置文件</span>
-                <code id="ai-config-path">--</code>
-                <span>密钥文件</span>
-                <code id="ai-secret-path">--</code>
-              </div>
-              <button id="btn-ai-save" class="btn btn-primary ai-save-btn" type="submit">
-                <span aria-hidden="true">▣</span>
-                保存并应用
-              </button>
-            </section>
-          </div>
-        </form>
         <form id="market-settings-form" class="market-settings" autocomplete="off" data-settings-pane="market">
           <div class="market-settings-heading">
             <div>
@@ -953,7 +797,7 @@
               <h2>行情数据源</h2>
               <p>启用需要的数据源，并按顺序定义故障降级链。保存后立即应用。</p>
             </div>
-            <div id="market-settings-state" class="ai-settings-state" aria-live="polite">
+            <div id="market-settings-state" class="settings-state" aria-live="polite">
               <span class="health-dot"></span>
               <span>正在读取路由</span>
             </div>
@@ -962,8 +806,8 @@
             <div class="market-routing-rail" aria-hidden="true">
               <span>PRIMARY</span><i></i><span>FALLBACK</span><i></i><span>FINAL</span>
             </div>
-            <div class="ai-panel-title">
-              <span class="ai-panel-icon" aria-hidden="true">⇄</span>
+            <div class="settings-panel-title">
+              <span class="settings-panel-icon" aria-hidden="true">⇄</span>
               <div>
                 <h3 id="market-routing-title">路由优先级</h3>
                 <small>Enabled sources are tried from top to bottom</small>
@@ -985,8 +829,8 @@
             </div>
           </section>
           <section class="market-routing-panel" id="market-sync-panel" aria-labelledby="market-sync-title">
-            <div class="ai-panel-title">
-              <span class="ai-panel-icon" aria-hidden="true">↻</span>
+            <div class="settings-panel-title">
+              <span class="settings-panel-icon" aria-hidden="true">↻</span>
               <div>
                 <h3 id="market-sync-title">数据同步</h3>
                 <small>Stock universe &amp; daily bars local cache</small>
@@ -1009,7 +853,7 @@
               <h2>飞书通知</h2>
               <p>连接群自定义机器人，用于投递策略 Advice、预警和定时报告。</p>
             </div>
-            <div id="feishu-settings-state" class="ai-settings-state" aria-live="polite">
+            <div id="feishu-settings-state" class="settings-state" aria-live="polite">
               <span class="health-dot"></span>
               <span>正在读取配置</span>
             </div>
@@ -1021,8 +865,8 @@
               <span>WEBHOOK</span>
             </div>
             <div class="feishu-channel-content">
-              <div class="ai-panel-title">
-                <span class="ai-panel-icon" aria-hidden="true">↗</span>
+              <div class="settings-panel-title">
+                <span class="settings-panel-icon" aria-hidden="true">↗</span>
                 <div>
                   <h3 id="feishu-channel-title">群机器人 Webhook</h3>
                   <small>Encrypted local delivery credential</small>
@@ -1067,21 +911,6 @@
               <button id="btn-feishu-save" class="btn btn-primary" type="submit">保存并应用</button>
             </div>
           </section>
-        </form>
-        <form id="hosted-watch-feishu" class="card" data-settings-pane="notify" hidden autocomplete="off">
-          <div class="card-header"><h2>预警与报告飞书通知</h2><span id="hosted-watch-feishu-configured" class="muted">正在读取</span></div>
-          <p class="muted">仅发送到你自己的飞书机器人。未配置时留日志；渠道受理不等于设备送达。</p>
-          <label class="field" for="hosted-watch-feishu-url">飞书自定义机器人 Webhook
-            <input id="hosted-watch-feishu-url" type="password" placeholder="留空保留已保存的绑定" maxlength="2048" autocomplete="off" />
-          </label>
-          <label class="hosted-check"><input id="hosted-watch-feishu-enabled" type="checkbox" />启用飞书通知</label>
-          <label class="hosted-check"><input id="hosted-watch-feishu-clear" type="checkbox" />清除绑定并停止待发提醒</label>
-          <div class="feishu-channel-actions">
-            <button class="btn btn-primary" type="submit">保存飞书设置</button>
-            <button id="hosted-watch-feishu-test" class="btn btn-outline" type="button">发送测试消息</button>
-          </div>
-          <p id="hosted-watch-feishu-status" role="status" aria-live="polite" class="muted"></p>
-          <div id="hosted-watch-deliveries" class="muted"></div>
         </form>
         <div class="card data-transfer-card" data-settings-pane="data">
           <div class="card-header">
@@ -1200,6 +1029,5 @@
   </div>
 
   <script type="module" src="/js/app.js" defer></script>
-  <script type="module" src="/js/hosted-watch-settings.js" defer></script>
 </body>
 </html>

@@ -819,13 +819,6 @@ describe('intraday trading plan watch', () => {
       ...base,
       adapters: {
         ...base.adapters,
-        llm: {
-          name: 'review-fixture',
-          generate: async <T = unknown>(): Promise<T> => {
-            generate();
-            throw new Error('盘中通知不得等待 AI');
-          },
-        },
       },
       notification: {
         send: async (input: Parameters<typeof notification.send>[0]) => {

@@ -1,0 +1,94 @@
+x-service: &service
+  image: luoome-dsh:${LUOOME_RELEASE:?set an immutable release tag}
+  build:
+    context: ../..
+    dockerfile: deploy/dsh/Dockerfile
+    args:
+      BUN_IMAGE: ${BUN_IMAGE:?set a pinned Bun image}
+      NODE_IMAGE: ${NODE_IMAGE:-node:22.22.3-bookworm-slim}
+      DSH_VERSION: ${DSH_VERSION:-0.2.1-rc.2}
+  restart: unless-stopped
+  # 容器日志默认无上限，worker 每分钟写一轮，长期会把磁盘吃满。
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 120s
+  environment: &environment
+    DSH_HOME: /var/lib/dsh
+    DSH_WORKSPACE: /workspace
+    LUOOME_HOME: /var/lib/luoome
+    LUOOME_MCP_COMMAND: bun
+    LUOOME_MCP_ARGS: --no-env-file,packages/cli/src/index.ts,mcp,serve
+    LUOOME_MCP_CWD: /app
+    LUOOME_MCP_ENV: ${LUOOME_MCP_ENV:-LUOOME_MARKET_PROVIDER=real}
+  volumes:
+    - dsh_home:/var/lib/dsh
+    - dsh_workspace:/workspace
+    - luoome_home:/var/lib/luoome
+  # DSH 会把 cordis 插件加载器的 napi 原生绑定物化到 tmp 再 dlopen，
+  # Docker 默认的 tmpfs 带 noexec，会报 "failed to map segment from shared object"。
+  tmpfs: [/tmp:exec]
+  networks: [backend]
+
+services:
+  # 人看的面：只读 MCP 实例 + 面板 + 技能 + 定时。
+  dsh-web:
+    <<: *service
+    command: ["deploy/dsh/entrypoint.sh", "web"]
+    environment:
+      <<: *environment
+      DSH_BIND_HOST: ${DSH_BIND_HOST:-172.28.0.5}
+      DSH_PORT: ${DSH_PORT:-3080}
+      DSH_PUBLIC_URL: ${DSH_PUBLIC_URL:?set the advertised public root}
+      DSH_TRUSTED_HOST: ${DSH_TRUSTED_HOST:?set the browser-visible authority}
+    networks:
+      backend:
+        ipv4_address: 172.28.0.5
+  # 消费者面：独立进程，独立 MCP 实例，靠队列租约与其它消费者先到先得。
+  dsh-worker:
+    <<: *service
+    command: ["deploy/dsh/entrypoint.sh", "worker"]
+    environment:
+      <<: *environment
+      DSH_WORKER_INTERVAL: ${DSH_WORKER_INTERVAL:-60}
+      DSH_WORKER_PROMPT: ${DSH_WORKER_PROMPT:-使用 analysis-worker 技能领取并处理待办分析任务：先 claim，取事实包，推理后写回并完成任务；没有待办任务就直接结束。}
+    networks:
+      backend:
+        ipv4_address: 172.28.0.6
+  # 公网入口：basic auth + 反代。DSH 自己不发布端口，只在这里对外。
+  caddy:
+    image: ${CADDY_IMAGE:?set a reviewed Caddy image tag or digest}
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DSH_PUBLIC_IP: ${DSH_PUBLIC_IP:-134.175.83.56}
+      # Caddyfile 用 {$DSH_AUTH_HASH:unset} 兜底，而 unset 不是合法 base64，
+      # 缺变量会让 Caddy 启动失败并进入崩溃循环。
+      # 这里显式要求这两个变量，缺一个就直接拒绝启动，而不是等到线上才发现。
+      DSH_AUTH_USER: ${DSH_AUTH_USER:?set the DSH basic auth user}
+      DSH_AUTH_HASH: ${DSH_AUTH_HASH:?set the DSH basic auth hash}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      backend:
+        ipv4_address: 172.28.0.2
+
+networks:
+  # 栈内网络：Caddy 才能反代到 DSH，且不额外发布端口。
+  backend:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.128/25
+volumes:
+  dsh_home:
+  dsh_workspace:
+  luoome_home:
+  caddy_data:
+  caddy_config:

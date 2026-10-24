@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { toolRegistry } from '@luoome/tools';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
+import { resolveAllowedSideEffects, resolveMcpToolNames, selectMcpTools } from './exposure.js';
 
 const indexPath = fileURLToPath(new URL('./index.ts', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -89,9 +89,15 @@ class McpStdioClient {
     home?: string,
   ): { client: McpStdioClient; home: string } {
     const effectiveHome = home ?? mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
-    const proc = Bun.spawn([process.execPath, indexPath], {
+    const proc = Bun.spawn([process.execPath, '--no-env-file', indexPath], {
       cwd: repoRoot,
-      env: { ...process.env, LUOOME_HOME: effectiveHome, ...extraEnv },
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => !key.startsWith('LUOOME_EXPOSE_')),
+        ),
+        LUOOME_HOME: effectiveHome,
+        ...extraEnv,
+      },
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -235,9 +241,11 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
   const tools = listResult.tools;
   // 以运行时 registry + exposure policy 计算期望集合，避免新增 read/advice tool 后
   // smoke 因历史固定数量失效；research tool 仍由 LUOOME_EXPOSE_RESEARCH 显式开启。
-  const expectedNames = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}))
-    .filter((tool) => !tool.name.includes('research'))
-    .map((tool) => tool.name);
+  const expectedNames = selectMcpTools(
+    toolRegistry.all(),
+    resolveAllowedSideEffects({}),
+    resolveMcpToolNames({}),
+  ).map((tool) => tool.name);
   const actualNames = Array.isArray(tools) ? tools.map((tool) => asRecord(tool).name) : [];
   check(
     actualNames.length === expectedNames.length &&
@@ -298,7 +306,7 @@ const main = async (): Promise<void> => {
 
   // 场景 5：LUOOME_EXPOSE_TRADE=true → 启动失败，退出码非零。
   const tradeHome = mkdtempSync(join(tmpdir(), 'luoome-mcp-trade-'));
-  const tradeProc = Bun.spawn([process.execPath, indexPath], {
+  const tradeProc = Bun.spawn([process.execPath, '--no-env-file', indexPath], {
     cwd: repoRoot,
     env: { ...process.env, LUOOME_HOME: tradeHome, LUOOME_EXPOSE_TRADE: 'true' },
     stdin: 'ignore',

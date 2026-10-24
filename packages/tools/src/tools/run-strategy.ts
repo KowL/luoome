@@ -758,11 +758,6 @@ export const runStrategyTool = defineTool({
       });
       if (input.persist) {
         if (leaseLost || leaseToken === null) return errLeaseLostBeforeCommit();
-        const denied = await ctx.hostedAuthorization?.('run_strategy', input, [
-          'external',
-          'write',
-        ]);
-        if (denied) return denied;
         const committed = await ctx.repos.strategyRun.commitRunWithFence({
           token: leaseToken,
           now: ctx.clock(),
@@ -813,11 +808,6 @@ export const runStrategyTool = defineTool({
             publication,
             error: runError instanceof Error ? runError.message : String(runError),
           });
-          const denied = await ctx.hostedAuthorization?.('run_strategy', input, [
-            'external',
-            'write',
-          ]);
-          if (denied) return denied;
           const committed = await ctx.repos.strategyRun.commitRunWithFence({
             token: leaseToken,
             now: ctx.clock(),

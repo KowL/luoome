@@ -216,7 +216,7 @@ const ADVICE_DECISIONS: readonly AdviceDecision[] = ['buy', 'sell', 'hold', 'wat
 const ADVICE_HORIZONS: readonly AdviceHorizon[] = ['short', 'medium', 'long'];
 
 /**
- * 生成指定标的的完整 Advice fixture（docs/archive/MVP-TASK.md §2.5 fake-llm）。
+ * 生成指定标的的完整 Advice fixture（docs/archive/MVP-TASK.md §2.5）。
  * deterministic：同一 stockId + 同一 clock 永远得到同一结果；
  * 必含 3 条 STANDARD_DISCLAIMERS、validUntil > validFrom，可过 assertAdviceInvariants。
  */

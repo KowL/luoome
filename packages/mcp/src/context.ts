@@ -68,14 +68,7 @@ export const createServerContext = async (
   ensureSchema(handle.db);
   const logger = createStderrLogger();
   // DSH 改造线 B：单机不再内置模型推理；MCP 只读面不依赖 AI 配置即可启动。
-  const unavailableLLM = {
-    name: 'local-ai-removed',
-    generate: async (): Promise<never> => {
-      throw new Error(
-        '单机不再内置模型推理（DSH 改造）：请通过 DSH 会话/待分析队列执行分析，本 tool 仅提供事实与写回',
-      );
-    },
-  };
+
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
@@ -109,7 +102,6 @@ export const createServerContext = async (
         clock: now,
         logger,
       }),
-      llm: unavailableLLM,
     },
     portfolioBenchmark: {
       stockId:

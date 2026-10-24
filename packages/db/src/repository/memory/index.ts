@@ -1,3 +1,7 @@
+import { InMemoryAnalysisRepository } from './analysis.js';
+
+export * from './analysis.js';
+
 import type {
   Account,
   Advice,
@@ -31,10 +35,9 @@ import type {
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
-import { createMemoryReportAutomationRepository } from '../../hosted/report-automation-memory.js';
-import { InMemoryTenantExportRepository } from '../../hosted/tenant-export-memory.js';
-import { InMemoryTenantRepository } from '../../hosted/tenant-memory.js';
-import { createMemoryWatchDeliveryRepository } from '../../hosted/watch-delivery-memory.js';
+import { InMemoryPersonalRepository } from '../../personal/memory.js';
+import { createMemoryReportAutomationRepository } from '../../personal/report-automation-memory.js';
+import { createMemoryWatchDeliveryRepository } from '../../personal/watch-delivery-memory.js';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
@@ -170,6 +173,10 @@ export interface InMemorySeed {
 }
 
 /** 构造全部 in-memory repository，可选灌入种子。 */
+export { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
+
+import { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
+
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
   const stock = new InMemoryStockRepository();
@@ -183,6 +190,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const decisionWriteLock = new MemoryWriteLock();
   const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();
   const advice = new InMemoryAdviceRepository();
+  const investmentWorkspace = new InMemoryInvestmentWorkspaceRepository();
   const report = new InMemoryReportRepository();
   const chat = new InMemoryChatRepository();
   const quote = new InMemoryQuoteRepository();
@@ -285,7 +293,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   );
   watchTrigger.setDecisionReviewRepository(decisionReview);
   report.setDecisionReviewRepository(decisionReview, trade, decisionWriteLock);
-  const hostedTenant = new InMemoryTenantRepository({
+  const personal = new InMemoryPersonalRepository({
     stock,
     report,
     watchlist,
@@ -294,18 +302,16 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     alertPlan,
     watchRuleState,
   });
-  const hostedExports = new InMemoryTenantExportRepository(() => ({
-    watchlists: watchlist.snapshotForExport(),
-    ...watchlistMember.snapshotForExport(),
-    alertPlans: alertPlan.snapshotForExport(),
-    triggers: watchTrigger.snapshotForExport(),
-    reports: report.snapshotForExport(),
-    feedback: hostedTenant.snapshotPersonalFeedbackForExport(),
-  }));
   return {
-    investmentWorkspace: new InMemoryInvestmentWorkspaceRepository(),
-    hostedTenant,
-    hostedExports,
+    pluginAuthority: new InMemoryPluginAuthorityRepository(),
+    analysis: new InMemoryAnalysisRepository(
+      advice,
+      investmentWorkspace,
+      strategy,
+      strategyAutonomyAction,
+    ),
+    investmentWorkspace,
+    personal,
     watchDelivery,
     reportAutomation,
     account,

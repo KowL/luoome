@@ -1,10 +1,4 @@
-import {
-  callApi,
-  getAccountId,
-  getHostedSession,
-  getSessionEpoch,
-  randomRequestId,
-} from './api.js';
+import { callApi, getAccountId, getIdentityEpoch, randomRequestId } from './api.js';
 import {
   actionsRow,
   fieldWrap,
@@ -17,10 +11,7 @@ import { closeModal, openModal } from './modal.js';
 import { el, fmtDateTime, toolErrorText } from './ui.js';
 
 const PENDING_KEY = 'luoome.decisionPending';
-const pendingKey = () =>
-  getHostedSession() === null
-    ? PENDING_KEY
-    : `${PENDING_KEY}:${getHostedSession().user.id}:${getAccountId()}`;
+const pendingKey = () => PENDING_KEY;
 let volatilePending = null;
 let pendingBusy = false;
 let redrawPending = () => {};
@@ -117,8 +108,8 @@ const labelCheckbox = (text, checked) => {
 
 export const openDecisionReview = async (subject, { onSaved = async () => {}, revision } = {}) => {
   const accountAtOpen = getAccountId();
-  const epochAtOpen = getSessionEpoch();
-  const isCurrent = () => getAccountId() === accountAtOpen && getSessionEpoch() === epochAtOpen;
+  const epochAtOpen = getIdentityEpoch();
+  const isCurrent = () => getAccountId() === accountAtOpen && getIdentityEpoch() === epochAtOpen;
   const query = new URLSearchParams({ subjectKind: subject.kind, subjectId: subject.id });
   if (revision !== undefined) query.set('revision', String(revision));
   const response = await callApi(`/api/decision-reviews/context?${query}`, {

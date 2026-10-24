@@ -1,6 +1,5 @@
 import {
   DEFAULT_TEST_NOW,
-  FakeLLMAdapter,
   FakeMarketAdapter,
   fixedTestClock,
   TEST_ACCOUNT,
@@ -12,7 +11,6 @@ import {
 } from '@luoome/adapters/testing';
 import type {
   Advice,
-  AgentRuntimeLike,
   AShareSentimentManagerLike,
   DragonTigerManagerLike,
   LimitUpLadderManagerLike,
@@ -27,7 +25,6 @@ import type {
 import { createInMemoryRepos, seedData } from '@luoome/db/memory';
 
 export interface BuildTestContextOptions {
-  readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
@@ -84,13 +81,11 @@ export const buildTestContext = async (
           : { timestampSource: opts.marketTimestampSource }),
       }),
       ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
-      llm: new FakeLLMAdapter(),
     },
     notification: createTestNotificationManager(repos),
     user: { id: 'test-user', defaultAccountId: TEST_ACCOUNT.id },
     clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
-    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
     ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),

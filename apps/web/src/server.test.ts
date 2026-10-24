@@ -4,14 +4,13 @@
 
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeAll, describe, expect, it, mock } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EastmoneySource, MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
 import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
-  AgentCallableTool,
   Money,
   ResearchEmbeddingAdapterLike,
   ResearchVaultAdapterLike,
@@ -26,17 +25,10 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
 
-import { AISettingsStore } from './ai-settings.js';
-import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
-import {
-  buildWebContext,
-  createWebApp,
-  startWeb,
-  WEB_SERVER_IDLE_TIMEOUT_SECONDS,
-} from './server.js';
+import { buildWebContext, createWebApp, startWeb } from './server.js';
 
 let app: Hono;
 let appCtx: ToolContext;
@@ -1056,18 +1048,11 @@ describe('Web runtime bootstrap', () => {
 
   it('统一入口拒绝共享数据库，不再根据旧模式和能力开关启动单机 Web', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-entry-'));
-    const previousMode = process.env.LUOOME_MODE;
     const dbPath = join(dir, 'shared.db');
     try {
-      for (const mode of [undefined, 'local', 'hosted']) {
-        if (mode === undefined) delete process.env.LUOOME_MODE;
-        else process.env.LUOOME_MODE = mode;
-        await expect(startWeb({ port: 0, dbPath })).rejects.toThrow('shared local database');
-        expect(existsSync(dbPath)).toBe(false);
-      }
+      await expect(startWeb({ port: 0, dbPath })).rejects.toThrow('shared local database');
+      expect(existsSync(dbPath)).toBe(false);
     } finally {
-      if (previousMode === undefined) delete process.env.LUOOME_MODE;
-      else process.env.LUOOME_MODE = previousMode;
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1075,28 +1060,9 @@ describe('Web runtime bootstrap', () => {
   it('starts with an empty database and never inserts sample records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
     try {
-      const aiConfig = join(dir, 'ai-models.json');
-      writeFileSync(
-        aiConfig,
-        JSON.stringify({
-          version: 1,
-          providers: {
-            test: {
-              type: 'openai-compatible',
-              baseURL: 'https://example.test/v1',
-              apiKeyEnv: 'TEST_AI_KEY',
-            },
-          },
-          profiles: {
-            generation: { model: 'test:model' },
-            agent: { model: 'test:model' },
-          },
-        }),
-      );
       const ctx = await buildWebContext(join(dir, 'luoome.db'), {
         LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_AI_CONFIG: aiConfig,
-        TEST_AI_KEY: 'test-key-not-used',
+        LUOOME_HOME: dir,
       });
       expect(await ctx.repos.account.list()).toEqual([]);
       expect(await ctx.repos.stock.search('')).toEqual([]);
@@ -1120,87 +1086,6 @@ describe('Web runtime bootstrap', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-
-  it('idleTimeout 覆盖流式对话等待模型响应的空窗（回归：默认 10s 掐断报 network error）', async () => {
-    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
-    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
-    process.env.LUOOME_MARKET_PROVIDER = 'real';
-    process.env.LUOOME_MARKET_SOURCES = 'sina';
-    const dir = mkdtempSync(join(tmpdir(), 'luoome-idle-timeout-'));
-    let handle: Bun.Server<undefined> | undefined;
-    try {
-      const dbPath = join(dir, 'luoome.db');
-      const seedCtx = await buildWebContext(dbPath, {
-        LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'sina',
-      });
-      const now = new Date();
-      await seedCtx.repos.chat.saveSession({
-        id: 'idle-session',
-        accountId: seedCtx.user.defaultAccountId,
-        title: '新会话',
-        createdAt: now,
-        updatedAt: now,
-      });
-      // 流已开始（start chunk 已发）后静默 6s，模拟工具执行完等待下一次模型响应的空窗。
-      // Bun 的空闲检查有数秒粒度，idleTimeout: 1 实测约 4s 才掐线，6s 留出余量。
-      const slowRuntime: ChatStreamRuntime = {
-        createUIMessageStreamResponse: async () =>
-          new Response(
-            new ReadableStream({
-              async start(controller) {
-                controller.enqueue('data: {"type":"start","messageId":"m1"}\n\n');
-                await new Promise((resolve) => setTimeout(resolve, 6000));
-                controller.enqueue('data: [DONE]\n\n');
-                controller.close();
-              },
-            }),
-            { headers: { 'content-type': 'text/event-stream' } },
-          ),
-      };
-      const startTestListener = (idleTimeout: number) =>
-        Bun.serve({
-          port: 0,
-          hostname: '127.0.0.1',
-          fetch: createWebApp(seedCtx, {
-            exposeWrite: true,
-            exposeExternal: true,
-            chatStreamRuntime: slowRuntime,
-          }).fetch,
-          idleTimeout,
-        });
-      const postChat = (messageId: string) =>
-        fetch(`http://127.0.0.1:${handle?.port}/api/chat`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'idle-session',
-            messages: [{ id: messageId, role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-          }),
-        });
-
-      handle = startTestListener(1);
-      // idleTimeout 1s < 空窗 6s：headers 先到，服务端在读 body 期间掐断空闲连接
-      // （浏览器侧表现为 reader.read() 抛 TypeError: network error）。
-      const cut = await postChat('idle-cut');
-      expect(cut.status).toBe(200);
-      await expect(cut.text()).rejects.toThrow();
-      await handle.stop(true);
-      handle = undefined;
-
-      handle = startTestListener(WEB_SERVER_IDLE_TIMEOUT_SECONDS);
-      const response = await postChat('idle-complete');
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain('[DONE]');
-    } finally {
-      await handle?.stop(true);
-      rmSync(dir, { recursive: true, force: true });
-      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
-      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
-      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
-      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
-    }
-  }, 30_000);
 });
 
 describe('数据导出导入 API', () => {
@@ -1236,68 +1121,6 @@ describe('数据导出导入 API', () => {
       expect((await json(imported)).ok).toBe(true);
     } finally {
       handle.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('LLM 设置 API', () => {
-  it('读取不返回密钥；保存后立即替换运行时 AI stack', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'luoome-ai-settings-api-'));
-    try {
-      const store = new AISettingsStore(
-        { LUOOME_HOME: dir },
-        {
-          configPath: join(dir, 'ai-models.json'),
-          secretPath: join(dir, '.env'),
-        },
-      );
-      const settingsApp = createWebApp(await buildTestContext(), {
-        aiSettingsStore: store,
-        exposeWrite: true,
-      });
-      const initial = await settingsApp.fetch(new Request('http://test/api/settings/ai'));
-      expect(initial.status).toBe(200);
-      const initialBody = (await initial.json()) as {
-        readonly data: { readonly providers: unknown };
-      };
-      expect(initialBody).toMatchObject({
-        ok: true,
-        data: { provider: 'minimax', apiKeyConfigured: false },
-      });
-      expect(initialBody.data.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: 'kimi', defaultModel: 'kimi-k3' }),
-          expect.objectContaining({ id: 'deepseek', defaultModel: 'deepseek-v4-pro' }),
-        ]),
-      );
-
-      const input = {
-        provider: 'minimax',
-        model: 'MiniMax-M3',
-        baseURL: 'https://api.minimaxi.com/v1',
-        apiKey: 'api-test-secret',
-        clearApiKey: false,
-        temperature: 0.1,
-        timeoutSeconds: 120,
-        maxRetries: 2,
-        reasoningEffort: 'off',
-      };
-      const saved = await settingsApp.fetch(
-        new Request('http://test/api/settings/ai', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(input),
-        }),
-      );
-      expect(saved.status).toBe(200);
-      const payload = await saved.json();
-      expect(payload).toMatchObject({
-        ok: true,
-        data: { apiKeyConfigured: true, applied: true },
-      });
-      expect(JSON.stringify(payload)).not.toContain('api-test-secret');
-    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -3148,10 +2971,15 @@ describe('mutation 鉴权', () => {
       exposeExternal: false,
     });
     const settings = await guarded.fetch(
-      new Request('http://test/api/settings/ai', {
+      new Request('http://test/api/watchlists', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          id: 'guarded-list',
+          name: 'guarded',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        }),
       }),
     );
     expect(settings.status).toBe(403);
@@ -4024,394 +3852,17 @@ describe('MVP dashboard / watch API', () => {
   });
 });
 
-/* ============ /api/chat：AI SDK UI Message Stream ============ */
-
-const chat = async (target: Hono, body: unknown): Promise<Response> =>
-  await target.fetch(
-    new Request('http://test/api/chat', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-  );
-
-describe('/api/chat：对话助手', () => {
-  let chatApp: Hono;
-  let chatCtx: Awaited<ReturnType<typeof buildTestContext>>;
-  let captured:
-    | {
-        instructions: string;
-        uiMessages: readonly unknown[];
-        tools: readonly AgentCallableTool[];
-      }
-    | undefined;
-  const runtime: ChatStreamRuntime = {
-    createUIMessageStreamResponse: async (request) => {
-      captured = request;
-      await request.onFinish?.({
-        id: '',
-        parts: [{ type: 'text', text: '你好' }],
-        cancelled: false,
-      });
-      return new Response(
-        [
-          'data: {"type":"start","messageId":"assistant-1"}',
-          'data: {"type":"text-start","id":"text-1"}',
-          'data: {"type":"text-delta","id":"text-1","delta":"你好"}',
-          'data: {"type":"text-end","id":"text-1"}',
-          'data: {"type":"finish"}',
-          'data: [DONE]',
-          '',
-        ].join('\n\n'),
-        {
-          headers: {
-            'content-type': 'text/event-stream',
-            'x-vercel-ai-ui-message-stream': 'v1',
-          },
-        },
-      );
-    },
-  };
+describe('/api/chat/sessions：草案会话', () => {
+  let app: Hono;
+  let ctx: Awaited<ReturnType<typeof buildTestContext>>;
 
   beforeAll(async () => {
-    chatCtx = await buildTestContext();
-    chatApp = createWebApp(chatCtx, {
-      chatStreamRuntime: runtime,
-      exposeWrite: true,
-      exposeExternal: true,
-    });
+    ctx = await buildTestContext();
+    app = createWebApp(ctx, { exposeWrite: true });
   });
 
-  const createSession = async (id: string): Promise<void> => {
-    const now = new Date('2026-07-26T00:00:00.000Z');
-    await chatCtx.repos.chat.saveSession({
-      id,
-      accountId: chatCtx.user.defaultAccountId,
-      title: '新会话',
-      createdAt: now,
-      updatedAt: now,
-    });
-  };
-
-  it('返回标准 AI SDK UI Message SSE，并传入 canonical tools', async () => {
-    await createSession('stream-contract');
-    const response = await chat(chatApp, {
-      sessionId: 'stream-contract',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    });
-    expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toContain('text/event-stream');
-    expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
-    expect(await response.text()).toContain('"type":"text-delta"');
-    expect(captured?.tools.map((item) => item.name)).toContain('fetch_quote');
-    expect(captured?.tools.map((item) => item.name)).toContain('run_local_selector_research');
-    expect(captured?.tools.map((item) => item.name)).toContain('assess_adaptive_personality');
-    expect(captured?.tools.map((item) => item.name)).not.toContain('get_quote');
-    expect(captured?.instructions).toContain('不得自动交易');
-    expect(await chatCtx.repos.chat.listMessages('stream-contract')).toHaveLength(2);
-  });
-
-  it('非法 UIMessage 与非 user 结尾 → 400 invalid_input', async () => {
-    expect((await chat(chatApp, { messages: [] })).status).toBe(400);
-    await createSession('invalid-message');
-    expect(
-      (
-        await chat(chatApp, {
-          sessionId: 'invalid-message',
-          messages: [
-            { id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'x' }] },
-          ],
-        })
-      ).status,
-    ).toBe(400);
-  });
-
-  it('从服务端会话加载最近 20 条消息，不信任客户端历史', async () => {
-    await createSession('server-history');
-    for (let index = 0; index < 21; index += 1) {
-      await chatCtx.repos.chat.saveMessage({
-        id: `history-${index}`,
-        sessionId: 'server-history',
-        role: index % 2 === 0 ? 'user' : 'assistant',
-        parts: [{ type: 'text', text: `server-turn-${index}` }],
-        createdAt: new Date(Date.UTC(2026, 6, 26, 0, 0, index)),
-      });
-    }
-    expect(
-      (
-        await chat(chatApp, {
-          sessionId: 'server-history',
-          messages: [
-            {
-              id: 'latest-user',
-              role: 'user',
-              parts: [{ type: 'text', text: '客户端输入' }],
-            },
-          ],
-        })
-      ).status,
-    ).toBe(200);
-    expect(captured?.uiMessages).toHaveLength(20);
-    expect(JSON.stringify(captured?.uiMessages)).not.toContain('client-fake-history');
-  });
-
-  it('目标模型 write 工具只生成已校验草案，不执行 DB 写入', async () => {
-    await createSession('draft-tool');
-    await chat(chatApp, {
-      sessionId: 'draft-tool',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建 Strategy' }] }],
-    });
-    const draftTool = captured?.tools.find((item) => item.name === 'create_strategy');
-    const result = await draftTool?.execute({
-      id: 'chat-draft-strategy',
-      name: '对话草案 Strategy',
-      description: '仅用于验证目标模型草案',
-    });
-    expect(result?.ok).toBe(true);
-    expect(result?.output).toMatchObject({
-      __luoomeDraft: true,
-      draft: { kind: 'strategy', tool: 'create_strategy' },
-    });
-    expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
-  });
-
-  it('已下线的内置 AI 分析工具不再进入 chat 工具面', async () => {
-    await createSession('advice-draft-tool');
-    await chat(chatApp, {
-      sessionId: 'advice-draft-tool',
-      messages: [
-        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '帮我分析 300857' }] },
-      ],
-    });
-    const names = captured?.tools.map((item) => item.name) ?? [];
-    for (const removed of [
-      'analyze_stock',
-      'analyze_position',
-      'market_outlook',
-      'analyze_strategy_candidate',
-      'research_investment_directions',
-      'generate_strategy_insight',
-      'generate_strategy_recommendations',
-      'agent_run',
-    ]) {
-      expect(names).not.toContain(removed);
-    }
-  });
-
-  it('review chat 暴露 AdviceOutcome 草案但不暴露研究假设或 trade 工具', async () => {
-    await createSession('review-outcome-draft');
-    await chat(chatApp, {
-      sessionId: 'review-outcome-draft',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘最近的建议' }] }],
-    });
-    const names = captured?.tools.map((item) => item.name) ?? [];
-    expect(names).toContain('record_advice_outcome');
-    expect(names).not.toContain('create_research_hypothesis_version');
-    expect(names).not.toContain('add_trade');
-    const draftTool = captured?.tools.find((item) => item.name === 'record_advice_outcome');
-    const result = await draftTool?.execute({
-      adviceId: 'advice-review-1',
-      outcome: 'partially_followed',
-      tradeIds: ['trade-review-1'],
-    });
-    expect(result?.ok).toBe(true);
-    expect(result?.output).toMatchObject({
-      __luoomeDraft: true,
-      draft: { kind: 'review', tool: 'record_advice_outcome' },
-    });
-    const output = result?.output as {
-      draft: {
-        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
-      };
-    };
-    expect(output.draft.display?.fields).toEqual(
-      expect.arrayContaining([
-        { name: '结果', value: 'partially_followed', source: 'user' },
-        { name: '交易 IDs', value: ['trade-review-1'], source: 'user' },
-        { name: '盈亏已知性', value: '未知', source: 'default' },
-      ]),
-    );
-    expect(await chatCtx.repos.advice.listOutcomes()).toEqual([]);
-  });
-
-  it('research chat 暴露研究假设版本草案但不暴露 AdviceOutcome 或 trade 工具', async () => {
-    await createSession('research-hypothesis-draft');
-    await chat(chatApp, {
-      sessionId: 'research-hypothesis-draft',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '更新研究假设' }] }],
-    });
-    const names = captured?.tools.map((item) => item.name) ?? [];
-    expect(names).toContain('create_research_hypothesis_version');
-    expect(names).not.toContain('record_advice_outcome');
-    expect(names).not.toContain('add_trade');
-    const draftTool = captured?.tools.find(
-      (item) => item.name === 'create_research_hypothesis_version',
-    );
-    const result = await draftTool?.execute({
-      topicId: 'topic_growth',
-      documentId: 'doc_thesis',
-      documentContentHash: 'a'.repeat(64),
-      summary: '利润率改善将延续',
-    });
-    expect(result?.ok).toBe(true);
-    expect(result?.output).toMatchObject({
-      __luoomeDraft: true,
-      draft: { kind: 'research', tool: 'create_research_hypothesis_version' },
-    });
-    const output = result?.output as {
-      draft: {
-        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
-      };
-    };
-    expect(output.draft.display?.fields).toEqual([
-      { name: 'Topic', value: 'topic_growth', source: 'user' },
-      { name: 'Document', value: 'doc_thesis', source: 'user' },
-      { name: '内容 Hash', value: 'a'.repeat(64), source: 'user' },
-      { name: '摘要', value: '利润率改善将延续', source: 'user' },
-    ]);
-    expect(await chatCtx.repos.researchHypothesisVersion.list({})).toEqual([]);
-  });
-
-  it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
-    await createSession('read-tools');
-    await chat(chatApp, {
-      sessionId: 'read-tools',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '查持仓' }] }],
-    });
-    const names = captured?.tools.map((item) => item.name) ?? [];
-    expect(names).toContain('list_holdings');
-    expect(names).toContain('list_strategies');
-    expect(names).toContain('list_watchlists');
-    expect(names).toContain('list_alert_plans');
-    expect(names).not.toContain('list_tactics');
-    expect(names).not.toContain('list_stock_groups');
-    expect(names).not.toContain('list_stock_pools');
-    expect(names).not.toContain('sync_quotes');
-    expect(names).not.toContain('send_notification');
-    expect(names).not.toContain('place_order');
-    expect(names).not.toContain('record_advice_outcome');
-    expect(names).not.toContain('create_research_hypothesis_version');
-  });
-
-  it('响应投影 x-luoome-chat-route header（URL 编码的路由 JSON）', async () => {
-    await createSession('route-header');
-    const response = await chat(chatApp, {
-      sessionId: 'route-header',
-      messages: [
-        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘一下最近的建议' }] },
-      ],
-    });
-    expect(response.status).toBe(200);
-    const header = response.headers.get('x-luoome-chat-route');
-    expect(header).not.toBeNull();
-    const route = JSON.parse(decodeURIComponent(header ?? '')) as {
-      scenario: string;
-      subjects: string[];
-      needsAdvice: boolean;
-      involvesWrite: boolean;
-      plannedDimensions: string[];
-    };
-    expect(route.scenario).toBe('review');
-    expect(route.plannedDimensions.length).toBeGreaterThan(0);
-    expect(captured?.instructions).toContain('描述性统计');
-  });
-
-  it('路由场景切换 chat 白名单与指令覆写', async () => {
-    await createSession('scenario-portfolio');
-    await chat(chatApp, {
-      sessionId: 'scenario-portfolio',
-      messages: [
-        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '我的持仓成本和盈亏' }] },
-      ],
-    });
-    const names = captured?.tools.map((item) => item.name) ?? [];
-    expect(names).toContain('get_account_performance');
-    expect(names).toContain('list_trades');
-    expect(names).toContain('get_market_data_status');
-    expect(names).not.toContain('run_local_selector_research');
-    expect(names).not.toContain('get_confidence_calibration');
-    expect(captured?.instructions).toContain('持仓与风险');
-
-    await createSession('scenario-general');
-    await chat(chatApp, {
-      sessionId: 'scenario-general',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    });
-    const generalNames = captured?.tools.map((item) => item.name) ?? [];
-    expect(generalNames).toContain('run_local_selector_research');
-    expect(generalNames).toContain('get_market_data_status');
-    expect(generalNames).toContain('record_advice_outcome');
-    expect(generalNames).toContain('create_research_hypothesis_version');
-    expect(generalNames).not.toContain('get_account_performance');
-  });
-
-  it('数据健康正常时不注入 dataHealth，降级时注入问题项摘要', async () => {
-    await createSession('data-health-ok');
-    await chat(chatApp, {
-      sessionId: 'data-health-ok',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    });
-    expect(captured?.instructions).not.toContain('dataHealth');
-
-    await chatCtx.repos.watchRun.save({
-      id: 'wr-failed-1',
-      mode: 'once',
-      status: 'failed',
-      startedAt: new Date('2026-08-21T00:00:00.000Z'),
-      finishedAt: new Date('2026-08-21T00:01:00.000Z'),
-      evaluatedPools: 0,
-      evaluatedStocks: 0,
-      triggered: 0,
-      notified: 0,
-      suppressedByCooldown: 0,
-      suppressedByDailyLimit: 0,
-      notifyFailed: 0,
-      error: 'mock 失败',
-    });
-    await createSession('data-health-degraded');
-    await chat(chatApp, {
-      sessionId: 'data-health-degraded',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    });
-    expect(captured?.instructions).toContain('dataHealth');
-    expect(captured?.instructions).toContain('watch 最近一次运行失败');
-  });
-
-  it('取消时按实际 parts 落库并附加 cancelled 标记 part', async () => {
-    const cancelledRuntime: ChatStreamRuntime = {
-      createUIMessageStreamResponse: async (request) => {
-        await request.onFinish?.({
-          id: '',
-          parts: [{ type: 'text', text: '半截回答' }],
-          cancelled: true,
-        });
-        return new Response('data: [DONE]\n\n', {
-          headers: { 'content-type': 'text/event-stream' },
-        });
-      },
-    };
-    const cancelApp = createWebApp(chatCtx, {
-      chatStreamRuntime: cancelledRuntime,
-      exposeWrite: true,
-      exposeExternal: true,
-    });
-    await createSession('cancelled-persist');
-    const response = await chat(cancelApp, {
-      sessionId: 'cancelled-persist',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    });
-    expect(response.status).toBe(200);
-    const messages = await chatCtx.repos.chat.listMessages('cancelled-persist');
-    const assistant = messages.find((message) => message.role === 'assistant');
-    expect(assistant?.parts).toContainEqual({ type: 'text', text: '半截回答' });
-    expect(assistant?.parts).toContainEqual({
-      type: 'data-luoome-cancelled',
-      data: { cancelled: true },
-    });
-  });
-
-  it('会话 API 支持创建、重命名、读取与删除且无需 token', async () => {
-    const created = await chatApp.fetch(
+  it('支持创建与读取会话，且读写分别受能力开关约束', async () => {
+    const created = await app.fetch(
       new Request('http://test/api/chat/sessions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -4422,29 +3873,22 @@ describe('/api/chat：对话助手', () => {
     const createdBody = (await created.json()) as { data: { session: { id: string } } };
     const sessionId = createdBody.data.session.id;
 
-    const renamed = await chatApp.fetch(
-      new Request(`http://test/api/chat/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: '长期价值研究' }),
-      }),
-    );
-    expect(renamed.status).toBe(200);
-
-    const detail = await chatApp.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`));
+    const detail = await app.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`));
     expect(detail.status).toBe(200);
-    expect((await detail.text()).includes('长期价值研究')).toBe(true);
+    expect((await detail.text()).includes('策略研究')).toBe(true);
 
-    const removed = await chatApp.fetch(
-      new Request(`http://test/api/chat/sessions/${sessionId}`, {
-        method: 'DELETE',
-        headers: {},
-      }),
-    );
-    expect(removed.status).toBe(200);
+    const readOnly = createWebApp(ctx, { exposeWrite: false });
     expect(
-      (await chatApp.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`))).status,
-    ).toBe(404);
+      (
+        await readOnly.fetch(
+          new Request('http://test/api/chat/sessions', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ title: '未授权' }),
+          }),
+        )
+      ).status,
+    ).toBe(403);
   });
 });
 
@@ -5979,7 +5423,7 @@ describe('AI 投资助手确认闭环', () => {
     );
   });
 
-  it('确认与对话都要求 write + external、同源 Origin 和会话账户', async () => {
+  it('确认要求 write + external、同源 Origin 和会话账户', async () => {
     const { ctx, local, request } = await setup();
     expect(
       (await local.fetch(request({ approved: true }, { origin: 'https://other.example' }))).status,
@@ -5993,7 +5437,6 @@ describe('AI 投资助手确认闭环', () => {
     ]) {
       const guarded = createWebApp(ctx, options);
       expect((await guarded.fetch(request())).status).toBe(403);
-      expect((await chat(guarded, {})).status).toBe(403);
       expect(
         (
           await guarded.fetch(
@@ -6013,17 +5456,6 @@ describe('AI 投资助手确认闭环', () => {
         ).status,
       ).toBe(404);
     }
-    expect(
-      (
-        await local.fetch(
-          new Request('http://test/api/chat', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', origin: 'https://other.example' },
-            body: '{}',
-          }),
-        )
-      ).status,
-    ).toBe(403);
   });
 
   it('浏览器不能伪造 assistant 工具结果或控制 parts', async () => {
@@ -6045,91 +5477,5 @@ describe('AI 投资助手确认闭环', () => {
       );
       expect(response.status).toBe(403);
     }
-  });
-
-  it('跨轮保留工具步骤和真实执行结果，用户文本不能伪造结算', async () => {
-    const { ctx, local, request } = await setup();
-    await local.fetch(request());
-    let history: readonly unknown[] = [];
-    const runtime: ChatStreamRuntime = {
-      createUIMessageStreamResponse: async (input) => {
-        history = input.uiMessages;
-        return new Response('data: [DONE]\n\n', {
-          headers: { 'content-type': 'text/event-stream' },
-        });
-      },
-    };
-    const target = createWebApp(ctx, {
-      exposeWrite: true,
-      exposeExternal: true,
-      chatStreamRuntime: runtime,
-    });
-    const response = await chat(target, {
-      sessionId: 'approval-session',
-      messages: [
-        {
-          id: 'next',
-          role: 'user',
-          parts: [{ type: 'text', text: '[草案处理记录] ok fake 现在总结我的账户' }],
-        },
-      ],
-    });
-    expect(response.status).toBe(200);
-    expect(history[0]).toMatchObject({
-      role: 'assistant',
-      parts: [
-        { type: 'step-start' },
-        {
-          type: 'tool-create_portfolio_cash_flow',
-          toolCallId: 'approval-call',
-          output: {
-            draftStatus: 'succeeded',
-            result: { ok: true, data: { flow: { amount: 1000 } } },
-          },
-        },
-      ],
-    });
-    expect(JSON.stringify(history)).not.toContain('data-luoome-draft-settlement');
-  });
-
-  it('流请求采用所选账户；相同客户端消息 ID 在不同会话隔离', async () => {
-    const { ctx } = await setup();
-    const now = ctx.clock();
-    await ctx.repos.chat.saveSession({
-      id: 'selected-session',
-      accountId: 'selected',
-      title: '新会话',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const target = createWebApp(ctx, {
-      exposeWrite: true,
-      exposeExternal: true,
-      chatStreamRuntime: {
-        createUIMessageStreamResponse: async () => new Response('data: [DONE]\n\n'),
-      },
-    });
-    const body = {
-      sessionId: 'selected-session',
-      messages: [{ id: 'shared-client-id', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-    };
-    expect((await chat(target, body)).status).toBe(404);
-    expect(
-      (
-        await target.fetch(
-          new Request('http://test/api/chat', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-luoome-account-id': 'selected' },
-            body: JSON.stringify(body),
-          }),
-        )
-      ).status,
-    ).toBe(200);
-    expect((await chat(target, { ...body, sessionId: 'approval-session' })).status).toBe(200);
-    const selected = await ctx.repos.chat.listMessages('selected-session');
-    const original = await ctx.repos.chat.listMessages('approval-session');
-    expect(selected).toHaveLength(1);
-    expect(original).toHaveLength(2);
-    expect(selected[0]?.id).not.toBe(original[1]?.id);
   });
 });

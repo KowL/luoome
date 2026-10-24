@@ -12,23 +12,20 @@ export default defineConfig({
       '**/dist/**',
       // 嵌套 git worktree（.claude/worktrees/*）是其它分支的工作副本，不参与本树测试。
       '.claude/**',
+      // 本地临时目录（构建/发布中间产物），不是仓库内容。
+      '.tmp/**',
+      'packages/dsh-luoome/src/host/dsh-authority.e2e.test.ts',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',
       'packages/db/src/repository/decision-review.contract.test.ts',
-      'packages/db/src/hosted/**',
+      'packages/db/src/personal/**',
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
       'apps/web/src/workspace.test.ts',
-      'apps/web/src/hosted-*.test.ts',
+      'apps/web/src/local-start.test.ts',
       'apps/web/src/data-transfer.test.ts',
-      // DSH Web includes Bun listeners and SQLite fixtures; test:web owns this slice.
-      'apps/web/src/dsh/**/*.test.ts',
-      'apps/web/src/strategy-scheduler.test.ts',
-      'apps/web/src/intraday-plan-scheduler.test.ts',
-      'apps/web/src/strategy-autonomy-scheduler.test.ts',
-      'apps/web/src/portfolio-performance-scheduler.test.ts',
       'apps/web/public/js/**/*.test.js',
     ],
   },

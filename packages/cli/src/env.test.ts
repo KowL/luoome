@@ -19,12 +19,12 @@ describe('cli/env loadProjectEnv', () => {
 
   it('文件存在时注入未设置的 key；真实 env 优先', () => {
     const file = join(dir, '.env');
-    writeFileSync(file, 'LUOOME_AI_CONFIG=/tmp/models.json\nMINIMAX_API_KEY=sk-test\n');
+    writeFileSync(file, 'LUOOME_HOME=/tmp/from-file\nMINIMAX_API_KEY=sk-test\n');
     const target: Record<string, string | undefined> = {
-      LUOOME_AI_CONFIG: '/configured/models.json', // 已设置 → 不被文件覆盖
+      LUOOME_HOME: '/configured/home', // 已设置 → 不被文件覆盖
     };
     const applied = loadProjectEnv([file], target);
-    expect(target.LUOOME_AI_CONFIG).toBe('/configured/models.json');
+    expect(target.LUOOME_HOME).toBe('/configured/home');
     expect(target.MINIMAX_API_KEY).toBe('sk-test');
     expect(applied).toEqual(['MINIMAX_API_KEY']);
   });

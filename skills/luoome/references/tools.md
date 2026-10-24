@@ -2,16 +2,17 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
-Hosted capabilities are private: platform auth/subscription/usage/payment/notification/privacy/recovery tools,
-Tenant durable execution and personal import/facts/conditions/feedback tools require trusted hosted identity.
-They are not part of this MCP inventory. Local read/write/advice/external classifications below remain unchanged;
-do not infer a new MCP permission from an exported TypeScript tool or a hosted HTTP route.
+luoome runs on a single machine, so there is no hosting platform: platform
+auth/subscription/usage/payment/notification/privacy/recovery tools no longer exist. Personal
+import/facts/conditions/feedback tools are part of this MCP inventory. Local read/write/external/queue
+capabilities are separately authorized; do not infer a new MCP permission from an exported TypeScript tool
+or an HTTP route.
 
 ## Read
 
 `get_investment_workspace` reads account-owned direction research, immutable confirmed consensus,
 effective recent intent and independent tracking attempts across days. `get_investment_candidates`
-merges stocks across confirmed directions and provides verified `analyze_strategy_candidate` inputs.
+merges stocks across confirmed directions and provides verified strategy-candidate facts.
 Read these before direction discussions; missing, expired or changed evidence limits conclusions.
 
 Use read tools to identify subjects and inspect current state before deeper analysis or mutation:
@@ -31,11 +32,15 @@ Use read tools to identify subjects and inspect current state before deeper anal
   immutable parameter version has separate training/validation evidence; `unavailable` means no
   adaptive conclusion may be shown. `list_strategy_runs` supports `since` / `until` on run start
   time; use both for a historical report window so later runs cannot displace its results.
-  `get_strategy_insight_facts` and `generate_strategy_insight` accept the same historical window;
+  `get_strategy_insight_facts` accepts the same historical window;
   their industry directory and AlertPlan configuration still reflect current state.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`, `get_intraday_delivery_audit`.
+- Personal domain: `list_personal_watch_feedback`, `prepare_watchlist_facts_request`,
+  `get_watchlist_facts_report`, `list_watchlist_facts_reports`, `list_personal_alert_plans`,
+  `prepare_personal_alert_request`, `get_personal_alert_evaluation`. A watchlist facts report is
+  deterministic from its frozen input; missing quotes stay recorded as gaps instead of being filled in.
 - Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `get_research_embedding_status`, `list_stock_events`.
   The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
   model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
@@ -72,21 +77,19 @@ Account-scoped decision review reads: `get_decision_review_context`, `list_decis
 for the half-open `since`/`until` window.
 A missing feedback or PnL remains unknown rather than zero.
 
-## Advice
+## Analysis and queue
 
-Use advice tools only for an explicit analysis request:
+Read `get_analysis_context` and generate conditional analysis in the authorized agent runtime.
+Read existing results with `get_advice`; preserve counter-evidence, risks, disclaimers and validity.
+`get_confidence_calibration` groups by generator, model and skill version; `legacy-ai` and unknown
+sources must not be represented as results from a known current model. Small samples give no conclusion.
 
-- `analyze_stock` for a stock-level recommendation.
-- `analyze_position` for a recommendation grounded in an existing holding.
-- `market_outlook` for a market or sector view.
-- `research_investment_directions` compares up to three directions from actual market breadth,
-  qualified A-share index or sentiment facts when no preset Strategy is available; explicit
-  Strategy selections continue to use published runs. Keep source, scope, observation time,
-  objections, waiting/abandon conditions and validity. Market directions may be confirmed but
-  cannot start stock tracking without a real Strategy/candidate mapping. Check
-  `trackingEligibility` and `unmappedDirections`; never invent IDs or auto-create a Strategy.
-  The tool additionally requires write and external opt-in. Confirm research cost first;
-  unavailable/failed research has no conclusion. Missing news cannot support catalyst claims.
+A dedicated consumer instance requires explicit queue opt-in and an allowlist. Its tools are
+`claim_analysis_jobs`, `get_analysis_context`, `complete_analysis_job`, `fail_analysis_job`,
+`record_advice`, `record_analysis_result`, `get_analysis_metrics`, `list_analysis_jobs`, `get_analysis_job`.
+Batch completion atomically records the result using the claim token; record tools are for interactive
+contexts. `requeue_analysis_job` and `cancel_analysis_job` are separate administrative write operations.
+`enqueue_analysis_job` is internal and never part of MCP discovery. Do not attempt generic-call fallbacks.
 
 ## Write
 
@@ -102,9 +105,12 @@ with a new request ID; an interrupted starting attempt requires checking actual 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
 Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.
 `update_account` only changes an account name; opening capital, currency and cash balance are not editable profile fields.
-Use the existing cash-flow tools for actual funding records. Hosted users have one automatically initialized,
-empty CNY account; `create_account` remains available for local multi-account use but is rejected in hosted mode.
-`ensure_default_account` is an internal hosted worker operation and is excluded from MCP discovery.
+Use the existing cash-flow tools for actual funding records. `create_account` adds local accounts;
+`ensure_default_account` initializes the single default empty CNY account and is excluded from MCP discovery.
+Personal-domain writes are `preview_watchlist_import`, `commit_watchlist_import`,
+`remove_personal_watchlist_members`, `record_personal_watch_feedback`, `save_personal_alert_plan`,
+`remove_personal_alert_plan` and `pause_personal_alert_plan`; each write keeps its own request identity,
+so retry the same request ID instead of replaying a different one.
 `confirm_strategy_autonomy_action` and `reject_strategy_autonomy_action` are the human-review
 queue for AI-managed Strategy lifecycle: they only act on `blocked` actions, and confirm
 publishes the candidate version. `archive_strategy` finalizes a paused user Strategy as a
@@ -129,8 +135,9 @@ classified `trade`; MCP does not expose it. Never use it to place an order. Use 
 Holding writes can reject a concurrent change. Refresh the holding before retrying; never replay
 stale quantities or costs. Cash changes and their ledger records commit together.
 
-The built-in investment assistant can draft `create_account`, `add_holding`, `update_holding`,
-`close_holding`, and `create_portfolio_cash_flow` in portfolio/general conversations. These change
+The built-in model conversation is retired: model reasoning happens in DSH, and luoome only keeps
+the draft-and-confirm path. The Web workspace can draft `create_account`, `add_holding`,
+`update_holding`, `close_holding`, and `create_portfolio_cash_flow` as pending drafts. These change
 local ledger records, never broker orders. Do not guess amounts, quantities, costs, or dates.
 The Web-only `settle_chat_draft` capability requires both write and external opt-in and an
 explicitly approved persisted session/message/toolCallId. It is not exposed through MCP or the
@@ -164,7 +171,8 @@ notifications. A bounded single-version sample uses the external-only `trial_str
 it forces `persist=false` and does not accept `mode=scheduled`. Full-market or persisted Strategy
 runs require confirmation and both capabilities; use `run_strategy` with `persist=true`.
 
-Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
+`preview_personal_alert_plan` is external-only: it reads live quotes and writes no trigger, state or
+plan record. Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
 
 Research Vault 的 `pull_research_vault_git` 是 workflow-only，故意不在 registry/MCP discovery 中。
 远端同步只能由用户通过 CLI 的 `sync-research-vault-remote` workflow 或本地 Web 研究页显式确认；

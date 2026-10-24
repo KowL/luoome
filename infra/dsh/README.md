@@ -24,37 +24,18 @@ bun --no-env-file run test:dsh
 
 ## Web 受控验证
 
-完成构建后，从仓库根目录启动独立验证服务：
+托管形态的独立验证服务（`apps/web/src/dsh/integration-fixture.ts`）随托管层一起下线：
+它依赖真实托管认证与费用账本，单机形态没有对应设施。
 
-```sh
-bun --no-env-file apps/web/src/dsh/integration-fixture.ts
-```
+Web 侧的 DSH Chat 运行时（`apps/web/src/dsh/`）随模型对话一起下线：单机形态不再有请求级
+Chat 入口，DSH 侧能力经 MCP 实例与只读面板接入。
 
-打开 `http://127.0.0.1:5187/fixture-login`。服务使用临时 SQLite、真实托管认证与费用账本、
-真实 Node/DSH/Cordis，以及受控模型流、行情和网页响应；不会调用真实供应商。退出进程会清理临时数据。
-可依次输入“查 002594 行情并读取网页来源”“创建一个观察清单草案”，检查工具结果与确认卡；
-“慢速查 002594 行情”用于停止测试，“失败查 002594 行情”用于供应商失败测试。
-
-托管开发入口的装配开关由 [config.ts](../../apps/web/src/dsh/config.ts) 校验：
-
-| 配置 | 要求 |
-|---|---|
-| `LUOOME_CHAT_RUNTIME=dsh` | 显式启用；默认仍为 `ai-sdk` |
-| `HOSTED_ENVIRONMENT=development`、`LUOOME_DSH_DEVELOPMENT=true` | 两项同时满足；生产环境拒绝启动 DSH Chat |
-| `LUOOME_DSH_NODE_PATH` | Node 可执行文件的绝对路径，不能使用 Bun |
-| `LUOOME_DSH_HOST_ENTRY` | 可选，Host 构建产物的绝对路径；默认使用仓库内产物 |
-| `LUOOME_DSH_ALLOW_WEB_FIXTURES=true`、`LUOOME_DSH_WEB_FIXTURES_FILE` | 可选且必须成对配置；文件为绝对路径、URL 到 HTML 字符串的 JSON 映射 |
-
-当前 Web 原生网页能力仅开放显式 fixture。每轮使用已保存的完整可信历史重建临时 DSH Session，
-超过历史上限会明确拒绝，不静默截断。停止后可以用“核对会话状态”读取已保存结果；
-断线不会自动重跑，也未实现跨进程重启后的执行恢复。详细状态见[开发任务](../../docs/dsh-plugin-platform-development-plan.md)。
+当前 Web 原生网页能力仅开放显式 fixture。详细状态见[开发任务](../../docs/archive/dsh-plugin-platform-development-plan.md)。
 
 ## Host 控制
 
-用明确的 Node 绝对路径启动 `apps/agent-runtime/dist/index.js`，通过进程环境
-`LUOOME_DSH_HOST_CONFIG` 注入 JSON 配置。配置含 configRef、认证工具 Gateway、认证模型代理、
-可选原生网页授权/出口以及资源上限；完整 schema 位于
-[runtime-config.ts](../../packages/dsh-bridge/src/runtime-config.ts)。不要把真实供应商 key 交给 Host。
+请求级 Host 运行时（`apps/agent-runtime/`）随托管形态下线，当前只保留 DSH 侧 MCP 实例与只读面板接入。
+不要把真实供应商 key 交给 DSH 侧插件。
 
 Host 的 stdin 接收版本化 NDJSON `run/cancel/shutdown` 命令，stdout 只输出
 `ready/binding/event/error/closed` 协议帧。一次只接受一个活动 run；busy、过期、配置错误、重复 run ID

@@ -2,7 +2,7 @@
 //
 // 暴露策略（AGENTS.md「副作用与权限」，硬约束）：
 //   - LUOOME_EXPOSE_TRADE==='true' → 启动立即抛错（trade 永不暴露，硬卡）
-//   - 默认暴露 read + advice
+//   - 默认暴露 read
 //   - LUOOME_EXPOSE_WRITE==='true' 追加 write；LUOOME_EXPOSE_EXTERNAL==='true' 追加 external
 //
 // 实现说明（为何不用 SDK 的 McpServer 高级封装）：
@@ -25,11 +25,12 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { batchTools } from './batch-tools.js';
 
 import { createServerContext, type ServerContextHandle } from './context.js';
-import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
+import { resolveAllowedSideEffects, resolveMcpToolNames, selectMcpTools } from './exposure.js';
 
-export { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
+export { resolveAllowedSideEffects, resolveMcpToolNames, selectMcpTools } from './exposure.js';
 
 export interface StartMcpServerOptions {
   /** 默认 process.env；测试可注入。 */
@@ -56,25 +57,33 @@ export const startMcpServer = async (
   opts: StartMcpServerOptions = {},
 ): Promise<McpServerHandle> => {
   const env = opts.env ?? process.env;
-  if (
-    (env.LUOOME_MODE !== undefined && env.LUOOME_MODE !== 'local') ||
-    opts.context?.ctx.identity?.mode === 'hosted'
-  ) {
-    throw new Error('hosted mode does not expose MCP');
+  if (env.LUOOME_MODE !== undefined && env.LUOOME_MODE !== 'local') {
+    throw new Error('MCP 只在单机形态暴露');
   }
   const allowedSideEffects = resolveAllowedSideEffects(env);
 
   const { ctx, close: closeCtx } = opts.context ?? (await createServerContext(env));
 
-  const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects).filter(
-    (tool) => env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research'),
+  // 批处理工具不在领域工具注册表里（它们编排工作流，属于 MCP 面的入口），
+  // 但同样受暴露面过滤约束：写能力 + 白名单都打开才会出现。
+  const allowedTools = selectMcpTools(
+    [...toolRegistry.all(), ...batchTools],
+    allowedSideEffects,
+    resolveMcpToolNames(env),
   );
   // createRegistry(...).toMCP() 复用 tools 包的 JSON Schema 转换
   //（z.toJSONSchema(io:'input', unrepresentable:'any')），并顺带做重名检查。
   const descriptors = createRegistry(allowedTools).toMCP();
   const byName = new Map(allowedTools.map((tool) => [tool.name, tool]));
 
-  const serverInfo = opts.serverInfo ?? { name: 'luoome', version: '0.9.0' };
+  const serverInfo = opts.serverInfo ?? {
+    // 同一 profile 里可能并存多个实例（读面 / 设置面 / 消费者），身份名要能区分开，
+    // 否则 MCP 客户端侧无法判断工具来自哪个实例。
+    name:
+      env.LUOOME_MCP_SERVER_NAME ??
+      (env.LUOOME_EXPOSE_QUEUE === 'true' ? 'luoome-worker' : 'luoome'),
+    version: '0.9.0',
+  };
   const server = new Server(serverInfo, { capabilities: { tools: { listChanged: false } } });
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: descriptors }));

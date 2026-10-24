@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dateInShanghai, isHoliday, isWeekend, previousTradingDate } from '../trading-calendar.js';
 import { type Money, MoneySchema, money } from '../types/branded.js';
+import { type AnalysisProvenance, AnalysisProvenanceSchema } from './analysis-provenance.js';
 import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
 import { notificationText, notificationTime } from './notification.js';
 import { type Quote, QuoteSchema } from './quote.js';
@@ -109,6 +110,7 @@ export const AdviceLadderSnapshotSchema = z.object({
 });
 
 export interface Advice {
+  readonly provenance?: AnalysisProvenance;
   readonly id: string;
   readonly subjectKind: AdviceSubjectKind;
   readonly subjectId: string; // stockId / accountId / sectorName ...
@@ -332,6 +334,7 @@ export const AdviceOutcomeSchema = z.object({
 });
 
 export const AdviceSchema = z.object({
+  provenance: AnalysisProvenanceSchema.optional(),
   id: z.string().min(1),
   subjectKind: AdviceSubjectKindSchema,
   subjectId: z.string().min(1),

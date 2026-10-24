@@ -151,7 +151,8 @@ export const WatchlistFactsSnapshotSchema = z.object({
   watchlistRevision: z.string().regex(/^[a-f0-9]{64}$/),
   ruleFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  rendererVersion: z.literal('hosted-facts-v1'),
+  // 历史托管期写入的渲染版本号；保留以解析旧报告行。
+  rendererVersion: z.literal('facts-v1'),
   frozenInput: z.record(z.string(), z.unknown()),
 });
 export type WatchlistFactsSnapshot = z.infer<typeof WatchlistFactsSnapshotSchema>;

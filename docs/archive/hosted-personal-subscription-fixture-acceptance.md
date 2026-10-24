@@ -1,9 +1,11 @@
 # 个人订阅托管版隔离验收记录
 
+> **已归档（2026-10-23）**：本文描述的是已下线的多租户托管形态，当前形态是单机版（见 docs/ddd/luoome-dsh-transformation-detailed-design.md 的 D9–D12）。仅作历史留存，不是当前行为说明。
+
 日期：2026-10-11。范围为 H0～H5 的工程实现与 fixture 验证，H6 未实现。
 没有连接真实用户、行情/邮件/支付账户，没有购买服务、提交、推送、创建 PR 或部署。
-当前运行契约见[运维手册](../runbooks/hosted-personal-subscription.md)，阶段门禁见
-[开发计划](../hosted-personal-subscription-development-plan.md)。
+当前运行契约见[运维手册](./hosted-personal-subscription-runbook.md)，阶段门禁见
+[开发计划](./hosted-personal-subscription-development-plan.md)。
 
 ## 自动验证
 

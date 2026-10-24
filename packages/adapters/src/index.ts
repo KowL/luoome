@@ -27,16 +27,7 @@ export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';
 // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）
 export * from './limit-up-ladder/types.js';
-export * from './llm/agent-runtime.js';
-export * from './llm/ai-sdk-adapter.js';
-export * from './llm/hosted-meter.js';
-export * from './llm/hosted-model-transport.js';
-export * from './llm/manager.js';
-export * from './llm/model-catalog.js';
-export * from './llm/provider-quirks.js';
-export * from './llm/schema.js';
-export * from './llm/stack.js';
-export * from './llm/types.js';
+export * from './local-adapters.js';
 // 行情
 export * from './market/cache.js';
 export * from './market/eastmoney.js';

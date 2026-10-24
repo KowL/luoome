@@ -18,7 +18,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
@@ -67,19 +66,14 @@ import {
   listPortfolioPerformanceSnapshotsTool,
   listStrategyEvaluationDaysTool,
   listStrictStrategyBacktestsTool,
+  // tools 包保留了该常量原有的导出名；Web 侧按单机语义取别名，调用点不再出现托管措辞。
+  resolveHostedWatchNotificationTool as resolveWatchNotificationTool,
   resumeStrategyEvaluationSessionTool,
   settleChatDraftTool,
   startStrategyEvaluationSessionTool,
   syncStrategyWatchlistSubscriptionsTool,
   toolRegistry,
 } from '@luoome/tools';
-import {
-  getHostedWatchSettingsTool,
-  listHostedWatchDeliveriesTool,
-  resolveHostedWatchNotificationTool,
-  saveHostedWatchSettingsTool,
-  testHostedWatchSettingsTool,
-} from '@luoome/tools/hosted';
 import {
   closingReportWorkflow,
   intradayTradingPlanWatchWorkflow,
@@ -93,11 +87,8 @@ import {
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
 import { ZodError, z } from 'zod';
-import { type AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
-import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { type FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
-import { resolveRuntimeMode } from './hosted-config.js';
 import {
   type MarketDatasetStatusRow,
   type MarketSettingsStore,
@@ -278,27 +269,11 @@ export const buildWebContext = async (
   env: Readonly<Record<string, string | undefined>> = process.env,
   deps: { readonly sources?: WebSourceSet } = {},
 ): Promise<ToolContext> => {
-  if (resolveRuntimeMode({ ...env }) !== 'local')
-    throw new Error('shared Web context is local-only');
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
-  let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
-  try {
-    ai = createAIStackFromEnv(env, { logger: console });
-  } catch (error) {
-    console.warn('AI 模型尚未配置；Web 将以配置模式启动', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  const unavailableLLM = {
-    name: 'ai-unconfigured',
-    generate: async (): Promise<never> => {
-      throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
-    },
-  };
   let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
   try {
     researchVault = createResearchVaultAdapterFromEnv(env);
@@ -342,9 +317,7 @@ export const buildWebContext = async (
         clock: now,
         logger: console,
       }),
-      llm: ai?.llm ?? unavailableLLM,
     },
-    ...(ai === undefined ? {} : { agent: ai.agent }),
     clock: now,
     auditLog: createFileAuditLogger(join(dirname(dbPath), 'logs', 'audit.log')),
     auditCaller: 'web',
@@ -383,23 +356,12 @@ export const buildWebContext = async (
 };
 
 export interface CreateWebAppOptions {
-  /** Hosted 外壳完成认证后注入不可变请求上下文；后台执行另持 runtime 租约。 */
-  readonly hosted?: {
-    readonly request: (c: Context) => {
-      readonly context: ToolContext;
-      readonly retain: () => () => void;
-    };
-  };
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
   /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
   readonly exposeExternal?: boolean;
-  /** LLM 设置持久化；仅生产启动注入，测试可按需提供临时 store。 */
-  readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
-  /** Hosted 模式保存行情源设置后重建共享行情栈（替代本地进程的 ctxRef 替换）。 */
-  readonly marketSettingsReload?: () => void;
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
    * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
@@ -413,22 +375,9 @@ export interface CreateWebAppOptions {
   /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
   readonly feishuSettingsStore?: FeishuSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
-  readonly chatStreamRuntime?: ChatStreamRuntime;
   /** 数据导出/导入所用 SQLite 文件；生产启动注入，未注入时端点返回 not_found。 */
   readonly dataTransferDbPath?: string;
 }
-
-const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
-  if (
-    value !== null &&
-    typeof value === 'object' &&
-    'createUIMessageStreamResponse' in value &&
-    typeof value.createUIMessageStreamResponse === 'function'
-  ) {
-    return value as ChatStreamRuntime;
-  }
-  return undefined;
-};
 
 /** 构造 Hono app（注入 ctx，便于测试与复用）。 */
 /**
@@ -440,13 +389,8 @@ export const createWebApp = (
   initialCtx: ToolContext | undefined,
   options: CreateWebAppOptions = {},
 ): Hono => {
-  if (initialCtx?.identity?.mode === 'hosted' && options.hosted === undefined)
-    throw new Error('hosted identity requires the hosted Web entry');
-  if (initialCtx === undefined && options.hosted === undefined)
-    throw new Error('local Web requires a context');
+  if (initialCtx === undefined) throw new Error('local Web requires a context');
   const mutationPermission = (request: Request): ToolResult<never> | null => {
-    // 托管入口已按外部传输策略校验 Origin 和 CSRF，不能再按代理内部 HTTP URL 拒绝。
-    if (options.hosted !== undefined) return null;
     const origin = request.headers.get('origin');
     if (origin !== null && origin !== new URL(request.url).origin) {
       return permissionDenied('跨站 Origin 不允许执行本地 mutation');
@@ -458,27 +402,18 @@ export const createWebApp = (
   let localContext = initialCtx;
   const requestStorage = new AsyncLocalStorage<{
     request: Request;
-    context?: ToolContext;
-    retain?: () => () => void;
   }>();
   const ctxRef = {
     get current(): ToolContext {
-      const context =
-        options.hosted === undefined ? localContext : requestStorage.getStore()?.context;
-      if (context === undefined) throw new Error('Web request context unavailable');
-      return context;
+      if (localContext === undefined) throw new Error('Web request context unavailable');
+      return localContext;
     },
     set current(context: ToolContext) {
-      if (options.hosted !== undefined) throw new Error('Hosted request context is immutable');
       localContext = context;
     },
   };
-  const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
-    current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx?.agent),
-  };
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
-  const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const sharedSources = options.sources;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
@@ -489,11 +424,6 @@ export const createWebApp = (
   /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
   const contextForRequest = (): ToolContext => {
     const request = requestStorage.getStore()?.request;
-    if (options.hosted !== undefined)
-      return {
-        ...ctxRef.current,
-        ...(request === undefined ? {} : { abortSignal: request.signal }),
-      };
     const accountId = request?.headers.get('x-luoome-account-id')?.trim();
     return {
       ...ctxRef.current,
@@ -504,15 +434,7 @@ export const createWebApp = (
     };
   };
 
-  app.use('*', async (c, next) =>
-    requestStorage.run(
-      {
-        request: c.req.raw,
-        ...(c.req.path.startsWith('/api/') ? options.hosted?.request(c) : {}),
-      },
-      next,
-    ),
-  );
+  app.use('*', async (c, next) => requestStorage.run({ request: c.req.raw }, next));
 
   const requireMutationCapabilities = (
     request: Request,
@@ -546,17 +468,6 @@ export const createWebApp = (
     if (request.headers.get('if-none-match') === etag) {
       return new Response(null, { status: 304, headers });
     }
-    if (options.hosted !== undefined && file === 'index.html') {
-      return new Response(
-        (await bunFile.text()).replace(
-          '<body>',
-          '<body data-runtime="hosted" class="auth-pending">',
-        ),
-        {
-          headers: { ...headers, 'cache-control': 'no-store' },
-        },
-      );
-    }
     return new Response(bunFile, { headers });
   };
 
@@ -578,7 +489,6 @@ export const createWebApp = (
   app.get('/reports', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
-  app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/research', serveFile('index.html', 'text/html; charset=utf-8'));
   // 行情页 SPA shell（设计 §11.1：#market 深链接；/market 供直接访问）。
   app.get('/market', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -673,16 +583,12 @@ export const createWebApp = (
     readonly to: string;
     readonly stockIds: string[] | undefined;
   };
-  const jobKey = (id: string): string =>
-    ctxRef.current.identity?.mode === 'hosted'
-      ? `${ctxRef.current.identity.tenantId}:${ctxRef.current.identity.tenantGeneration}:${id}`
-      : id;
+  const jobKey = (id: string): string => id;
   const evaluationJobs = new Map<string, Promise<void>>();
 
   const startEvaluationJob = (sessionId: string, input: EvaluationJobInput): void => {
     const key = jobKey(sessionId);
     if (evaluationJobs.has(key)) return;
-    const release = requestStorage.getStore()?.retain?.();
     const job = (async (): Promise<void> => {
       const result = await replayStrategyRangeWorkflow.run(
         {
@@ -731,7 +637,6 @@ export const createWebApp = (
       })
       .finally(() => {
         evaluationJobs.delete(key);
-        release?.();
       });
     evaluationJobs.set(key, job);
   };
@@ -770,7 +675,6 @@ export const createWebApp = (
   const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
     const key = jobKey(backtestRunId);
     if (strictBacktestJobs.has(key)) return;
-    const release = requestStorage.getStore()?.retain?.();
     const job = executeStrictStrategyBacktestTool
       .execute({ backtestRunId }, ctxRef.current)
       .then((result) => {
@@ -791,7 +695,6 @@ export const createWebApp = (
       })
       .finally(() => {
         strictBacktestJobs.delete(key);
-        release?.();
       });
     strictBacktestJobs.set(key, job);
   };
@@ -1041,21 +944,6 @@ export const createWebApp = (
     }
   });
 
-  app.get('/api/settings/ai', () => {
-    if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
-    try {
-      return jsonResult({ ok: true, data: aiSettingsStore.read() });
-    } catch (error) {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'internal',
-          cause: `AI 设置读取失败：${error instanceof Error ? error.message : String(error)}`,
-        },
-      });
-    }
-  });
-
   // ===== 行情数据源设置 =====
   app.get('/api/settings/market', async () => {
     if (marketSettingsStore === undefined) {
@@ -1088,26 +976,6 @@ export const createWebApp = (
     }
     try {
       const input = SaveMarketSettingsSchema.parse(await c.req.json());
-      if (options.hosted !== undefined) {
-        // 托管模式行情栈由 providers 共享持有；保存委托给 reload 回调重建。
-        const saved = marketSettingsStore.save(input);
-        try {
-          options.marketSettingsReload?.();
-        } catch (error) {
-          return jsonResult({
-            ok: false,
-            error: {
-              kind: 'invalid_input',
-              message: `设置已保存但行情栈重建失败：${error instanceof Error ? error.message : String(error)}`,
-              issues: [],
-            },
-          });
-        }
-        return jsonResult({
-          ok: true,
-          data: { ...saved, applied: options.marketSettingsReload !== undefined },
-        });
-      }
       const candidateEnv = {
         ...marketSettingsStore.runtimeEnv(),
         LUOOME_MARKET_SOURCES: input.sources.join(','),
@@ -1210,37 +1078,6 @@ export const createWebApp = (
   });
 
   // ===== 飞书通知设置 =====
-  app.get('/api/notifications/feishu', async () => {
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await getHostedWatchSettingsTool.execute({}, ctx));
-  });
-  app.get('/api/notifications/watch-deliveries', async () => {
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await listHostedWatchDeliveriesTool.execute({}, ctx));
-  });
-  app.post('/api/notifications/feishu', async (c) => {
-    const permission = requireMutationCapabilities(c.req.raw, ['write']);
-    if (permission !== null) return jsonResult(permission);
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    try {
-      return jsonResult(await saveHostedWatchSettingsTool.execute(await c.req.json(), ctx));
-    } catch {
-      return jsonResult({
-        ok: false,
-        error: { kind: 'invalid_input', message: '飞书配置必须是 JSON 对象', issues: [] },
-      });
-    }
-  });
-  app.post('/api/notifications/feishu/test', async (c) => {
-    const permission = requireMutationCapabilities(c.req.raw, ['write', 'external']);
-    if (permission !== null) return jsonResult(permission);
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await testHostedWatchSettingsTool.execute({}, ctx));
-  });
   app.get('/api/settings/feishu', () => {
     if (feishuSettingsStore === undefined) {
       return jsonResult(notFound('FeishuSettingsStore', 'default'));
@@ -1441,7 +1278,6 @@ export const createWebApp = (
     );
   });
 
-  app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
   app.get('/api/workspace', async () => jsonResult(await workspaceSnapshot(contextForRequest())));
   app.post('/api/workspace/drafts', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
@@ -1452,7 +1288,7 @@ export const createWebApp = (
   });
   app.get('/api/watch/notifications/:triggerId', async (c) =>
     jsonResult(
-      await resolveHostedWatchNotificationTool.execute(
+      await resolveWatchNotificationTool.execute(
         { triggerId: c.req.param('triggerId') },
         contextForRequest(),
       ),
@@ -1472,25 +1308,6 @@ export const createWebApp = (
   app.get('/api/chat/sessions/:id', (c) =>
     callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
   );
-  app.patch('/api/chat/sessions/:id', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    let body: { title?: unknown };
-    try {
-      body = (await c.req.json()) as { title?: unknown };
-    } catch {
-      body = {};
-    }
-    return callTool('rename_chat_session', {
-      sessionId: c.req.param('id'),
-      title: body.title,
-    });
-  });
-  app.delete('/api/chat/sessions/:id', (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    return callTool('delete_chat_session', { sessionId: c.req.param('id') });
-  });
   app.post('/api/chat/sessions/:id/drafts/:messageId/:toolCallId', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
@@ -1521,44 +1338,6 @@ export const createWebApp = (
         contextForRequest(),
       ),
     );
-  });
-
-  app.post('/api/settings/ai', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
-    try {
-      const input = SaveAISettingsSchema.parse(await c.req.json());
-      const saved = aiSettingsStore.save(input);
-      const ai = createAIStackFromEnv(aiSettingsStore.runtimeEnv(), {
-        logger: ctxRef.current.logger,
-      });
-      ctxRef.current = {
-        ...ctxRef.current,
-        adapters: { ...ctxRef.current.adapters, llm: ai.llm },
-        agent: ai.agent,
-      };
-      chatRuntimeRef.current = asChatStreamRuntime(ai.agent);
-      return jsonResult({ ok: true, data: { ...saved, applied: true } });
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return jsonResult({
-          ok: false,
-          error: {
-            kind: 'invalid_input',
-            message: 'AI 设置校验失败',
-            issues: error.issues,
-          },
-        });
-      }
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'internal',
-          cause: `AI 设置保存失败：${error instanceof Error ? error.message : String(error)}`,
-        },
-      });
-    }
   });
 
   // ===== 多账户切换（v0.5 W3）端点 =====
@@ -3153,56 +2932,6 @@ export const createWebApp = (
     });
   });
 
-  // 对话助手：AI SDK UI Message Stream（SSE），web 内部端点，不进 toolRegistry。
-  app.post('/api/chat', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
-    if (denied !== null) return jsonResult(denied);
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'invalid_input',
-          message: '请求体必须是 JSON：{ "messages": [...] }',
-          issues: [],
-        },
-      });
-    }
-    const runtime =
-      options.hosted === undefined
-        ? chatRuntimeRef.current
-        : asChatStreamRuntime(contextForRequest().agent);
-    if (runtime === undefined) {
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error: {
-            kind: 'llm_error',
-            provider: contextForRequest().adapters.llm.name,
-            cause:
-              options.hosted === undefined
-                ? 'AI 模型尚未配置，请前往设置页完成 LLM 设置'
-                : 'AI 模型尚未配置，请联系服务管理员',
-            retryable: false,
-          },
-        }),
-        {
-          status: 503,
-          headers: { 'content-type': 'application/json; charset=utf-8' },
-        },
-      );
-    }
-    return createChatStreamResponse(
-      body,
-      contextForRequest(),
-      runtime,
-      c.req.raw.signal,
-      requestStorage.getStore()?.retain,
-    );
-  });
-
   app.get('/api/stocks/search', async (c) => {
     const q = c.req.query('q');
     const limitRaw = c.req.query('limit');
@@ -3620,18 +3349,22 @@ export interface WebServerHandle {
 }
 
 /**
- * Bun.serve 默认 idleTimeout 只有 10s；流式对话在工具执行后等待下一段模型输出时
- * 可能更久无字节流动，连接会被服务端掐断（浏览器表现为 network error）。
- * 取 Bun 上限 255s，覆盖 agent 全程超时（120s）。
+ * Bun.serve 默认 idleTimeout 只有 10s；本地长请求与批处理在处理期间可能更久无字节流动，
+ * 连接会被服务端掐断。取 Bun 上限 255s。
  */
 export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
-/** Web 始终经认证外壳启动；业务调度由按租户绑定的 worker 执行。 */
+/**
+ * Web 启动入口。
+ *
+ * 单机形态是产品形态：本地 ctx + 四个设置 store，不经过租户/平台设施。
+ * 认证由前置反向代理承担（DSH 部署里是 Caddy 的 basic auth + 启动 token）。
+ */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
   if (options.dbPath !== undefined)
     throw new Error('Web service does not accept a shared local database path');
-  const { startHostedWeb } = await import('./hosted-start.js');
-  return startHostedWeb({
+  const { startLocalWeb } = await import('./local-start.js');
+  return startLocalWeb({
     port: options.port,
     ...(options.host === undefined ? {} : { host: options.host }),
   });

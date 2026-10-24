@@ -1,7 +1,6 @@
 import {
   type DeliveryStatus,
   DeliveryStatusSchema,
-  hostedQuietUntil,
   WatchRuleStateSchema,
   WatchTriggerSchema,
 } from '@luoome/core';
@@ -92,7 +91,7 @@ export const watchExecutionTool = defineTool({
     const acquired = await (action === 'acquire'
       ? ctx.repos.watchTrigger.acquireExecution(owner, now, until)
       : ctx.repos.watchTrigger.renewExecution(owner, now, until));
-    if (acquired && action === 'acquire' && ctx.identity?.mode === 'hosted') {
+    if (acquired && action === 'acquire') {
       for (const intent of await ctx.repos.watchDelivery.recover(owner, now)) {
         const status =
           intent.state === 'accepted'
@@ -130,25 +129,6 @@ export const beginWatchDeliveryTool = defineTool({
   input: BeginWatchDeliveryInput,
   output: BeginWatchDeliveryOutput,
   handler: async ({ triggerIds, owner }, ctx) => {
-    if (ctx.identity?.mode === 'hosted') {
-      if (owner === undefined) return errLeaseLostBeforeCommit('预警投递缺少执行令牌');
-      if (
-        !(await ctx.repos.watchDelivery.prepare({
-          owner,
-          triggerIds,
-          tenantId: ctx.identity.tenantId,
-          generation: ctx.identity.tenantGeneration,
-          now: ctx.clock(),
-        }))
-      )
-        return errLeaseLostBeforeCommit();
-      const settings = await ctx.repos.watchDelivery.settings();
-      if (hostedQuietUntil(settings.quietHours, ctx.clock()) !== null)
-        return {
-          ok: false as const,
-          error: { kind: 'permission_denied' as const, required: 'notification:quiet-hours' },
-        };
-    }
     if (!(await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), owner)))
       return errLeaseLostBeforeCommit();
     return { started: triggerIds.length };
@@ -239,8 +219,6 @@ export const setWatchTriggerDeliveryStatusTool = defineTool({
   output: SetWatchTriggerDeliveryStatusOutput,
   handler: async (input, ctx) => {
     const completedAt = ctx.clock();
-    if (ctx.identity?.mode === 'hosted' && input.owner === undefined)
-      return errLeaseLostBeforeCommit();
     const saved = await ctx.repos.watchTrigger.setDeliveryStatus(
       input.triggerIds,
       input.status as DeliveryStatus,

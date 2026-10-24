@@ -3,24 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "真实行情与 LLM 适配器",
+  "description": "行情与外部数据适配器",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./hosted": "./src/hosted/index.ts",
     "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "3.0.x",
-    "@ai-sdk/openai-compatible": "2.0.x",
-    "@ai-sdk/provider": "3.0.x",
     "@luoome/core": "workspace:*",
-    "ai": "6.0.x",
-    "nodemailer": "10.1.0",
     "zod": "^4.0.0"
   }
 }

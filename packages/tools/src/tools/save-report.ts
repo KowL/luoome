@@ -42,9 +42,6 @@ export const saveReportTool = defineTool({
     if (report === null) return errLeaseLostBeforeCommit('报告生成租约已失效');
     const created = existing === null && report.id === input.report.id;
     if (input.deliveryAttemptId === undefined) return { report, created };
-    // 托管开收盘报告只能由 worker 的 DeliveryIntent 领取，避免手工入口并行走旧投递锁。
-    if (ctx.identity?.mode === 'hosted' && ['opening', 'closing'].includes(report.kind))
-      return { report, created, deliveryClaimed: false };
     const now = ctx.clock();
     const deliveryClaimed = await ctx.repos.report.claimDelivery({
       id: report.id,

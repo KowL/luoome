@@ -10,6 +10,10 @@ export class InMemoryStrategyAutonomyActionRepository implements StrategyAutonom
   private readonly items = new Map<string, StrategyAutonomyAction>();
 
   async save(action: StrategyAutonomyAction): Promise<void> {
+    return this.saveSync(action);
+  }
+
+  saveSync(action: StrategyAutonomyAction): void {
     assertStrategyAutonomyActionInvariants(action);
     const existing = this.items.get(action.id);
     if (
@@ -24,6 +28,10 @@ export class InMemoryStrategyAutonomyActionRepository implements StrategyAutonom
   }
 
   async findById(id: string): Promise<StrategyAutonomyAction | null> {
+    return this.findByIdSync(id);
+  }
+
+  findByIdSync(id: string): StrategyAutonomyAction | null {
     return this.items.get(id) ?? null;
   }
 

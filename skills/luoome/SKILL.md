@@ -7,12 +7,10 @@ description: Use when the user asks about their luoome portfolio, holdings, trad
 
 Use the connected luoome MCP server to query and maintain the user's local investment workspace. The Skill defines when and how to use luoome; MCP provides the typed tools and permission boundary.
 
-This Skill targets local mode. Hosted platform identity, subscriptions, jobs, payments, notifications, privacy
-and recovery tools use a private server/worker registry and are not exposed through MCP or model discovery.
-Email verification, password login and password changes are private Web identity operations; never request
-the user's login password or email verification code through MCP, or invoke these via generic tools.
-Do not attempt to reach them through generic calls or shell fallback. Hosted personal facts and feedback use
-the authenticated Web product; its production providers and release gates are separate from local MCP setup.
+This Skill targets the single-machine workspace. luoome has no hosting platform: identity, subscriptions,
+jobs, payments, notifications, privacy and recovery tools no longer exist, and there is no worker registry.
+Personal-domain tools (watchlist import, watchlist facts, price conditions and feedback) are part of this
+local MCP inventory and follow the same read/write/external permission boundary as the other local tools.
 
 ## Before calling tools
 
@@ -24,7 +22,8 @@ the authenticated Web product; its production providers and release gates are se
 ## Operating procedure
 
 - Use **read** tools freely for scoped queries; prefer filters, limits and batch operations over full-table reads or loops.
-- Use **advice** tools only when the user asks for analysis or recommendations. Preserve uncertainty and all safety fields in the response.
+- Generate analysis only when requested, using read tools for facts. Historical Advice remains readable; domain tools no longer call models. Preserve uncertainty and all safety fields.
+- **queue** is a separate explicit opt-in for a dedicated consumer MCP instance. Never infer queue permission from write/external permission, or use it to bypass ordinary Web/read-only restrictions. Batch results must use token-fenced `complete_analysis_job`; `record_advice` and `record_analysis_result` accept interactive contexts.
 - Before a **write** or **external** call, restate the exact action and obtain explicit user confirmation unless the current message already unambiguously authorizes that exact action.
 - Never claim that a mutation succeeded until the tool returns `ok: true`; re-read important state after a successful write.
 - Never place, cancel or simulate a real order. luoome's MCP surface intentionally excludes trade execution.
@@ -33,7 +32,7 @@ See [tool selection](./references/tools.md), [example workflows](./references/ex
 
 ## Response rules
 
-- Account profile editing uses the write tool `update_account` for the name only; it does not change opening capital, currency or cash. Hosted mode supplies one default account and disallows creating additional accounts.
+- Account profile editing uses the write tool `update_account` for the name only; it does not change opening capital, currency or cash. The local workspace supports multiple accounts; `create_account` stays available.
 - Separate observed data, system-calculated values and generated advice.
 - For Advice, report `decision`, `confidence`, `horizon`, premise, supporting evidence, counter-evidence, risks, disclaimers and `validUntil` when present.
 - Do not convert confidence into certainty or present luoome as a licensed investment adviser.

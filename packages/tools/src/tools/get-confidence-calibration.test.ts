@@ -1,3 +1,4 @@
+import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -258,5 +259,91 @@ describe('get_confidence_calibration', () => {
     expect(result.data.totalAdvices).toBe(1);
     const b5 = result.data.buckets[5];
     expect(b5?.total).toBe(1);
+  });
+});
+
+describe('calibration provenance groups', () => {
+  it('keeps legacy and model/skill cohorts separate and suppresses small-sample conclusions', async () => {
+    const ctx = await buildTestContext({ advices: [] });
+    const now = ctx.clock();
+    for (const [id, model, skill] of [
+      ['legacy', null, null],
+      ['new-a', 'model-a', 'v1'],
+      ['new-b', 'model-b', 'v1'],
+      ['new-v2', 'model-a', 'v2'],
+    ] as const) {
+      await ctx.repos.advice.save({
+        id,
+        subjectKind: 'stock',
+        subjectId: '600519.SH',
+        decision: 'watch',
+        confidence: 80,
+        horizon: 'short',
+        reasoning: { premise: 'fixture', evidence: [], counterEvidence: [] },
+        risks: [],
+        disclaimers: [...STANDARD_DISCLAIMERS],
+        basedOn: {
+          dataAsOf: now,
+          strategy: accountEvidence('600519.SH', ctx.user.defaultAccountId),
+        },
+        validFrom: now,
+        validUntil: new Date(now.getTime() + 86400000),
+        createdAt: now,
+        ...(model
+          ? {
+              provenance: {
+                generatorKind: 'dsh-headless' as const,
+                model,
+                skillVersion: skill,
+                evidenceFactIds: [],
+                generatedAt: now,
+              },
+            }
+          : {}),
+      });
+      const outcome = await recordAdviceOutcomeTool.execute(
+        { adviceId: id, outcome: 'followed', pnl: 10 },
+        ctx,
+      );
+      expect(outcome.ok).toBe(true);
+    }
+    const result = await getConfidenceCalibrationTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.kind);
+    expect(result.data.groups).toHaveLength(4);
+    expect(result.data.buckets).toEqual([]);
+    expect(result.data.overallHitRate).toBeNull();
+    expect(result.data.groups.find((group) => group.generatorKind === 'legacy-ai')).toMatchObject({
+      model: null,
+      skillVersion: null,
+      totalAdvices: 1,
+    });
+    for (const group of result.data.groups) {
+      expect(group.totalAdvices).toBe(1);
+      expect(group.followedWithPnl).toBe(1);
+      expect(group.overallHitRate).toBeNull();
+      expect(group.buckets.every((bucket) => bucket.hitRate === null)).toBe(true);
+      expect(group.dataAsOf).toEqual(now);
+    }
+    const seed = await ctx.repos.advice.findById('new-a');
+    if (!seed) throw new Error('Missing fixture advice');
+    for (let i = 1; i < 20; i++) {
+      const id = `new-a-${i}`;
+      await ctx.repos.advice.save({ ...seed, id });
+      expect(
+        (await recordAdviceOutcomeTool.execute({ adviceId: id, outcome: 'followed', pnl: 10 }, ctx))
+          .ok,
+      ).toBe(true);
+    }
+    const expanded = await getConfidenceCalibrationTool.execute({}, ctx);
+    if (!expanded.ok) throw new Error(expanded.error.kind);
+    const cohort = expanded.data.groups.find(
+      (group) => group.model === 'model-a' && group.skillVersion === 'v1',
+    );
+    expect(cohort).toMatchObject({ totalAdvices: 20, followedWithPnl: 20, overallHitRate: 1 });
+    expect(cohort?.buckets.find((bucket) => bucket.range.min === 80)?.hitRate).toBe(1);
+    expect(
+      expanded.data.groups.find((group) => group.generatorKind === 'legacy-ai')?.overallHitRate,
+    ).toBeNull();
   });
 });

@@ -1,13 +1,6 @@
-import { callApi, getAccountId, getSessionEpoch, randomRequestId } from './api.js';
-import {
-  ensureChatSession,
-  initChat,
-  mountChatView,
-  refreshChat,
-  saveChatView,
-  setDiscussionSubjects,
-} from './chat.js';
+import { callApi, getAccountId, getIdentityEpoch, randomRequestId } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
+import { renderDraftPanel } from './drafts.js';
 import { alertDialog, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -28,12 +21,50 @@ let preparingDraft = null;
 let identityVersion = 0;
 let discussionVersion = 0;
 const selected = new Map();
+const DRAFT_SESSION_KEY = 'luoome.workspace.draft-session';
+
+/** 草案会话：模型对话已退役，但「起草 → 确认 → 原子执行」仍需要一个会话承载服务端保存的草案。 */
+const currentDraftSession = () => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(DRAFT_SESSION_KEY) ?? 'null');
+    if (stored?.identity === `local:${getAccountId()}`) return stored.sessionId;
+  } catch {
+    /* 无可用会话记录。 */
+  }
+  return null;
+};
+const ensureDraftSession = async () => {
+  const current = currentDraftSession();
+  if (current !== null) return current;
+  const result = await callApi('/api/chat/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ title: '工作台草案' }),
+  });
+  if (!result.ok) return null;
+  const sessionId = result.data?.session?.id ?? null;
+  if (sessionId === null) return null;
+  try {
+    sessionStorage.setItem(
+      DRAFT_SESSION_KEY,
+      JSON.stringify({ identity: `local:${getAccountId()}`, sessionId }),
+    );
+  } catch {
+    /* 浏览器不支持持久化时只用本次会话。 */
+  }
+  return sessionId;
+};
 const captureIdentity = () => {
   const accountId = getAccountId();
-  const epoch = getSessionEpoch();
+  const epoch = getIdentityEpoch();
   const revision = identityVersion;
   return () =>
-    accountId === getAccountId() && epoch === getSessionEpoch() && revision === identityVersion;
+    accountId === getAccountId() && epoch === getIdentityEpoch() && revision === identityVersion;
+};
+/** 把待确认草案渲染到「一起讨论」面板。 */
+const refreshDraftPanel = async (sessionId = currentDraftSession()) => {
+  const host = $('#workspace-discussion-body');
+  if (host === null) return;
+  await renderDraftPanel(host, sessionId);
 };
 const action = (text, onClick, className = 'workspace-action') => {
   const button = el('button', className, text);
@@ -49,14 +80,14 @@ const failed = (label, result) =>
     `${resultErrorText(result, '读取失败')}。其它已有事实仍可查看，刷新后再核对。`,
   );
 
-const prepareDraft = async (tool, input, userText, subjects = []) => {
+const prepareDraft = async (tool, input, userText) => {
   if (preparingDraft) return;
   const draft = {};
   preparingDraft = draft;
   const isCurrent = captureIdentity();
   try {
-    if (!(await openWorkspaceDiscussion(subjects)) || !isCurrent()) return;
-    const sessionId = await ensureChatSession();
+    if (!(await openWorkspaceDiscussion()) || !isCurrent()) return;
+    const sessionId = await ensureDraftSession();
     if (!isCurrent() || sessionId === null) return;
     const result = await callApi('/api/workspace/drafts', {
       method: 'POST',
@@ -70,9 +101,8 @@ const prepareDraft = async (tool, input, userText, subjects = []) => {
       );
       return;
     }
-    await refreshChat();
+    await refreshDraftPanel(sessionId);
     if (!isCurrent()) return;
-    setDiscussionSubjects(subjects);
   } finally {
     if (preparingDraft === draft) preparingDraft = null;
   }
@@ -80,10 +110,6 @@ const prepareDraft = async (tool, input, userText, subjects = []) => {
 const directionSubject = (research, direction) => ({
   ref: { kind: 'investment-direction', id: direction.id, researchId: research.id },
   label: direction.name,
-});
-const consensusSubject = (consensus) => ({
-  ref: { kind: 'investment-consensus', id: consensus.id, version: consensus.version },
-  label: `参与共识 v${consensus.version}`,
 });
 const ROLE_LABELS = { primary: '主要方向', observe: '继续观察', avoid: '暂不参与' };
 const INTENT_LABELS = {
@@ -214,7 +240,6 @@ const proposeIntent = async (investment) => {
       validUntil: values.validUntil,
     },
     `${INTENT_LABELS[values.mode]}：${values.note}`,
-    consensus ? [consensusSubject(consensus)] : [],
   );
 };
 
@@ -246,11 +271,6 @@ const renderInvestment = (data) => {
             : '本次未完成方向判断。保留已有事实，不把失败写成没有机会。',
         ),
         ...(research?.limitations ?? []).map((text) => el('p', 'workspace-caption', text)),
-        action(
-          '先聊一聊',
-          () => void openWorkspaceDiscussion([], '先说明当前可用的方向研究事实与覆盖范围。'),
-          'workspace-action secondary',
-        ),
       ]),
     );
   } else {
@@ -371,7 +391,6 @@ const renderInvestment = (data) => {
         'workspace-caption',
         `有效至 ${fmtDateTime(consensus.validUntil)}。只影响未来研究；已有持仓与逐股计划单独复核。`,
       ),
-      action('围绕共识继续讨论', () => void openWorkspaceDiscussion([consensusSubject(consensus)])),
     );
   content.append(
     action('调整近期意愿', () => void proposeIntent(investment), 'workspace-action secondary'),
@@ -396,7 +415,6 @@ const renderInvestment = (data) => {
               'set_investment_tracking',
               { requestId: randomRequestId(), expectedVersion: consensus.version, action: 'start' },
               '我希望连接这些已确认方向的候选同步；不开启新的付费研究或通知渠道。',
-              [consensusSubject(consensus)],
             ),
         ),
       );
@@ -413,7 +431,6 @@ const renderInvestment = (data) => {
               ...(tracking?.status === 'starting' ? { recoverAttemptId: tracking.id } : {}),
             },
             '我希望暂停方向新候选同步，保留持仓风险跟踪。',
-            [consensusSubject(consensus)],
           ),
         'workspace-action secondary',
       ),
@@ -427,11 +444,6 @@ const renderInvestment = (data) => {
       ...investment.history.map((item) =>
         el('div', null, [
           el('p', null, `v${item.version} / ${fmtDateTime(item.createdAt)}：${item.changeNote}`),
-          action(
-            '讨论该版本',
-            () => void openWorkspaceDiscussion([consensusSubject(item)]),
-            'workspace-action secondary',
-          ),
         ]),
       ),
     );
@@ -442,18 +454,7 @@ const renderInvestment = (data) => {
     content.append(el('h4', null, '已关联研究候选（排序不等于买入资格）'));
     for (const candidate of data.candidates.data.candidates)
       content.append(
-        el('div', 'workspace-candidate', [
-          stockIdentityLink({ stockId: candidate.stockId }),
-          action(
-            '讨论候选与来源',
-            () =>
-              void openWorkspaceDiscussion(
-                [{ ref: { kind: 'stock', id: candidate.stockId }, label: candidate.stockId }],
-                `请核对候选 ${candidate.stockId} 的方向来源和证据，正式个股建议仍须独立确认。`,
-              ),
-            'workspace-action secondary',
-          ),
-        ]),
+        el('div', 'workspace-candidate', [stockIdentityLink({ stockId: candidate.stockId })]),
       );
     for (const text of data.candidates.data.limitations)
       content.append(el('p', 'workspace-caption', text));
@@ -471,7 +472,7 @@ export const workspaceFactSummary = (data) => {
   return `事实摘要 · ${holdings} / ${plans}。研究结论请查看方向与共识，未研究不代表没有机会。`;
 };
 
-export const openWorkspaceDiscussion = async (subjects = [], question = '', sourceId = '') => {
+export const openWorkspaceDiscussion = async (sourceId = '') => {
   const isCurrent = captureIdentity();
   const requestVersion = ++discussionVersion;
   if (!location.hash.startsWith('#dashboard')) {
@@ -479,13 +480,11 @@ export const openWorkspaceDiscussion = async (subjects = [], question = '', sour
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
   }
   if (!isCurrent() || requestVersion !== discussionVersion) return false;
-  initChat();
-  await refreshChat();
-  if (!isCurrent() || requestVersion !== discussionVersion) return false;
-  if (!setDiscussionSubjects(subjects)) return false;
   discussionOrigin = { top: window.scrollY, sourceId };
   const host = $('#workspace-discussion');
   if (host === null) return false;
+  await refreshDraftPanel();
+  if (!isCurrent() || requestVersion !== discussionVersion) return false;
   if (host.hidden)
     history.pushState(
       { ...history.state, workspaceDiscussion: discussionOrigin },
@@ -493,11 +492,7 @@ export const openWorkspaceDiscussion = async (subjects = [], question = '', sour
       '#dashboard?discussion=open',
     );
   host.hidden = false;
-  mountChatView('inline');
-  if (question.length > 0) $('#chat-input').value = question;
-  saveChatView();
   host.scrollIntoView({ block: 'start', behavior: 'instant' });
-  $('#chat-input')?.focus({ preventScroll: true });
   return true;
 };
 
@@ -528,7 +523,7 @@ const subjectControls = (subject, sourceId) => {
   );
   compare.setAttribute('aria-pressed', String(selected.has(key)));
   return el('div', 'workspace-card-actions', [
-    action('一起讨论 ↗', () => void openWorkspaceDiscussion([subject], '', sourceId)),
+    action('待确认草案 ↗', () => void openWorkspaceDiscussion(sourceId)),
     compare,
   ]);
 };
@@ -545,14 +540,6 @@ const renderComparison = () => {
       'span',
       null,
       `比较 ${selected.size}/4：${[...selected.values()].map((item) => item.label).join(' / ')}`,
-    ),
-    action(
-      '一起比较',
-      () =>
-        void openWorkspaceDiscussion(
-          [...selected.values()],
-          '请比较这些对象，逐项说明证据、差异、风险和未知项，不串用证据。',
-        ),
     ),
     action(
       '清空',
@@ -787,13 +774,6 @@ const renderWorkspaceData = (data) => {
       ? el('div', 'workspace-report', [
           el('span', 'workspace-caption', `已有报告 / 事实截至 ${fmtDateTime(report.dataAsOf)}`),
           el('strong', null, report.title),
-          action(
-            '围绕报告继续讨论 ↗',
-            () =>
-              void openWorkspaceDiscussion([
-                { ref: { kind: 'report', id: report.id }, label: report.title },
-              ]),
-          ),
         ])
       : [],
   );
@@ -803,9 +783,9 @@ export const renderInvestmentWorkspace = async () => {
   initInvestmentWorkspace();
   const requestVersion = ++version;
   const accountId = getAccountId();
-  const epoch = getSessionEpoch();
+  const epoch = getIdentityEpoch();
   const result = await callApi('/api/workspace');
-  if (requestVersion !== version || accountId !== getAccountId() || epoch !== getSessionEpoch())
+  if (requestVersion !== version || accountId !== getAccountId() || epoch !== getIdentityEpoch())
     return;
   if (!result.ok) {
     $('#workspace-facts').textContent = '首页事实暂未取得。可以查看已有历史；本次没有完成研究。';
@@ -813,11 +793,6 @@ export const renderInvestmentWorkspace = async () => {
     return;
   }
   renderWorkspaceData(result.data);
-};
-
-export const mountWorkspaceChatRoute = () => {
-  mountChatView('full');
-  $('#chat-return').hidden = !location.hash.includes('from=workspace');
 };
 
 export const initInvestmentWorkspace = () => {
@@ -839,37 +814,19 @@ export const initInvestmentWorkspace = () => {
         null,
         '还没有可展示的参与方向研究。先确定覆盖范围，再比较证据、风险、等待和放弃条件。',
       ),
-      action(
-        '开始方向讨论 ↗',
-        () =>
-          void openWorkspaceDiscussion(
-            [],
-            '请研究短线波段参与方向，说明真实证据、覆盖范围、反对意见、等待和放弃条件。',
-          ),
-      ),
     ]),
   );
   $('#workspace-ask')?.addEventListener('click', () => void openWorkspaceDiscussion());
-  document.querySelectorAll('[data-workspace-prompt]').forEach((button) => {
-    button.addEventListener(
-      'click',
-      () => void openWorkspaceDiscussion([], button.dataset.workspacePrompt),
-    );
-  });
-  $('#workspace-expand')?.addEventListener('click', () => {
-    location.hash = 'chat?from=workspace';
-  });
   $('#workspace-close')?.addEventListener('click', () => {
     if (history.state?.workspaceDiscussion) history.back();
     else closeDiscussion();
   });
-  $('#chat-return')?.addEventListener('click', () => history.back());
   window.addEventListener('popstate', () => {
     if (!location.hash.startsWith('#dashboard')) return;
     if (history.state?.workspaceDiscussion) {
       discussionOrigin = history.state.workspaceDiscussion;
       $('#workspace-discussion').hidden = false;
-      mountChatView('inline');
+      void refreshDraftPanel();
     } else closeDiscussion();
   });
   document.addEventListener('luoome:identity-cleared', () => {
@@ -895,8 +852,6 @@ export const initInvestmentWorkspace = () => {
   if (location.hash.includes('discussion=open')) {
     discussionOrigin = history.state?.workspaceDiscussion ?? null;
     $('#workspace-discussion').hidden = false;
-    initChat();
-    mountChatView('inline');
-    void refreshChat();
+    void refreshDraftPanel();
   }
 };

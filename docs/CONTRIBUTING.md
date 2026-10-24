@@ -65,11 +65,15 @@ luoome/
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
 │   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
 │   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
-│   ├── mcp/           MCP stdio server（env 控制暴露面）
+│   ├── mcp/           MCP stdio server（env 控制暴露面）+ 批处理入口
+│   ├── dsh-bridge/    DSH 插件：面板、纪律提示词与独立 profile 装配
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
 ├── apps/
-│   └── web/           Hono + 原生 HTML/JS 仪表盘（6 路由 + 设计系统）
+│   └── web/           Hono + 原生 HTML/JS 仪表盘（本地单机装配）
+├── deploy/dsh/        独立 DSH 部署（compose、Caddy、profile 装配、批处理与设置面探针）
+├── infra/dsh/         DSH 构建与受控验证底座
+├── .dsh/skills/       DSH 侧技能目录（晨报、复盘、深挖、决策记录、队列消费、批处理调度）
 ├── docs/              项目文档（入口见 docs/README.md）
 │   ├── README.md          分类导航与维护约定
 │   ├── ARCHITECTURE.md    架构核心
@@ -115,6 +119,9 @@ workflows ──► tools ──► core
 | `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
+| `bun run test:dsh` | DSH 插件与 Node Host 侧测试（Vitest） |
+| `bun run build:dsh` | 构建 DSH Node Host 与插件产物 |
+| `bun run check:layers` | 依赖方向静态检查 |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
 | `bun packages/tui/src/smoke.ts` | TUI headless smoke |
@@ -166,19 +173,20 @@ Web 页面展示股票身份时统一复用首页看板的两行样式，不允�
 - 存在展开、Watchlist、Advice 等行内操作时，只让股票标识区域跳转，避免把整行设为链接造成嵌套交互或误触。
 - 新增或修改股票列表时，应测试名称/代码层级、行情深链接和名称缺失降级，并在浏览器中检查桌面与移动端表现。
 
-### 副作用五级
+### 副作用分级
 
-每个 tool / workflow 都要标 `sideEffect`（v0.1 已建，v0.4 没改）：
+每个 tool / workflow 都要标 `sideEffect`：
 
 | level | 含义 | MCP 默认暴露 |
 |---|---|---|
 | `read` | 只读 | ✓ |
-| `advice` | 调 LLM + 写库 | ✓ |
 | `write` | 改本地状态 | opt-in |
 | `external` | 触发外部副作用 | opt-in |
+| `queue` | 分析队列领取与写回 | opt-in（仅消费者实例） |
 | `trade` | 成交记账或真实资金动作 | **永不**（启动硬卡） |
 
-新加 tool 时选错等级会被 MCP / Web 拒绝；不确定就选最严的，写 issue 讨论。
+原 `advice` 等级已随 DSH 瘦身后内置 AI 下线一并删除；模型推理改由队列消费者承担，
+建议数据实体本身保留。新加 tool 时选错等级会被 MCP / Web 拒绝；不确定就选最严的，写 issue 讨论。
 本地 Web 人工成交录入的专用路由例外与审查条件见 [Security](./SECURITY.md)，通用工具路由仍拒绝所有 trade。
 
 ### 不变量
@@ -456,25 +464,27 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 关键约束（PR review 时要重点确认）：
 
 - 不引入 `place_order` / `cancel_order` 这类 trade 类 tool（MCP / Web 永不应暴露）
-- advice 类 tool 不允许直接触发 trade
+- 建议能力（analysis 队列、面板展示）不允许直接触发 trade
 - 加新写副作用的 tool 时同步写：[SECURITY.md](./SECURITY.md) 的副作用分级
 - LLM 调用必须 fallback（不可让一次失败导致整个 workflow 死）
 
 ---
 
-## 托管开发与验证
+## DSH 单机形态的开发与验证
 
-托管改动遵循同一依赖方向，额外检查入口身份、私有 registry 和持久恢复协议。
-`bun --no-env-file run web`、`worker`、`ops` 分别启动 Web、独立 worker 与固定运维命令；
-环境与停止写者要求见[托管运行手册](./runbooks/hosted-personal-subscription.md)。
-platform Tools 与 Tenant 执行 Tools 不加入 generic/MCP/model discovery。
-新增能力需同时验证用户 HTTP、worker、间接 workflow 和拒绝路径，不能只测试业务 handler。
+luoome 以插件形态接入 DSH，开发与验证都围绕单机装配：
 
-`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 和托管 Web 文件。
+- `deploy/dsh/bootstrap.ts` 装配两个独立 profile：`luoome-web`（交互面，挂三个 MCP 实例 + 面板 + 纪律插件 + 定时任务）和 `luoome-worker`（headless 消费者，只挂队列白名单）。
+- 三个 MCP 实例的白名单互不重叠：读面只读、`luoome-settings` 只放配置类写工具、`luoome-batch` 只放五个批处理入口。改白名单时同步 `packages/dsh-bridge/src/standalone-profile.ts` 与 `deploy/dsh/batch-tools.test.ts`、`deploy/dsh/settings-tools.test.ts` 的契约测试。
+- 暴露面开关由 profile 补丁决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，不要绕过这层保护。
+- `bun run build:dsh` 构建 DSH 侧插件产物（只读面板 + 纪律提示词），`bun run test:dsh` 跑 `packages/dsh-bridge` 侧测试；两者都要在已安装依赖的仓库根目录执行。
+- `bun --no-env-file apps/web/src/index.ts` 起单机 Web（默认 `127.0.0.1:5173`）；它读同一份 `$LUOOME_HOME/luoome.db`。
+- 单机没有常驻调度进程：批处理由 DSH 定时任务唤起会话后调用 `luoome-batch` 实例的工具触发；门槛判定随工具走，不满足时返回 `skipped`，不要用「昨天是交易日吧」这类推断代替。
+
+`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 与 Web server 文件。
 真实进程 crash 用隔离临时目录和 fixture 验证，不使用个人数据。
-100 Tenant 压测入口为 `bun --no-env-file apps/worker/src/fixture-load.ts --fixture /absolute/output.json`，
-只构造模拟 provider 并清理临时库；指标不代表供应商额度或生产容量。
-UI 修改除自动测试外，实际启动并检查手机、双用户/双标签、到期与断线恢复，记录 fixture 边界。
+UI 修改除自动测试外，实际启动并检查手机、单账户/多标签与断线恢复，记录 fixture 边界。
+DSH 侧（面板、纪律提示词、profile 装配）的改动还要跑一次受控验证底座，说明见 [infra/dsh/README.md](../infra/dsh/README.md)。
 
 ## 致谢
 

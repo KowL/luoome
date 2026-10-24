@@ -1,6 +1,7 @@
 export { DrizzleAccountRepository } from './account.js';
 export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
+export * from './analysis.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleDecisionReviewRepository } from './decision-review.js';
@@ -16,6 +17,7 @@ export { DrizzleLedgerRepository } from './ledger.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
+export * from './plugin-authority.js';
 export {
   DrizzlePortfolioCashFlowRepository,
   DrizzlePortfolioCorporateActionRepository,

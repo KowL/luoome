@@ -2,18 +2,9 @@
 
 // 连接与建表：createDrizzleRepos / ensureSchema / DrizzleDb / DrizzleReposHandle
 export * from './client.js';
-export * from './hosted/maintenance.js';
-export * from './hosted/platform-client.js';
-export * from './hosted/platform-memory.js';
-export * from './hosted/platform-schema.js';
-export * from './hosted/public-market-client.js';
-export * from './hosted/public-market-memory.js';
-export * from './hosted/tenant-client.js';
-export * from './hosted/tenant-export-client.js';
-export * from './hosted/tenant-export-memory.js';
-export * from './hosted/tenant-export-schema.js';
-export * from './hosted/tenant-memory.js';
-export * from './hosted/tenant-schema.js';
+export * from './personal/client.js';
+export * from './personal/memory.js';
+export * from './personal/schema.js';
 // Drizzle repository 实现
 export * from './repository/drizzle/index.js';
 // in-memory repository 实现 + createInMemoryRepos

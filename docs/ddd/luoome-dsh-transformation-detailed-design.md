@@ -7,7 +7,7 @@
 > 本文定位：把「单机接入 DSH」「领域层去 AI」「托管消费」三件事整合成一份可评审、可排期的改造总设计。
 > 取代关系：本文整合并取代此前的「DSH 集成设计」草稿与「内置 AI 外置与待分析队列详细设计」；实施完成后，[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md) 中「领域内 LLM 调用点不变」的部分退役。
 > 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）；二轮复核见 §15，新发现问题已由 Kimi 按 owner 授权拍板为 Q17 并落实。
-> 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](./hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
+> 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](../archive/hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
 > 影响范围：`core` / `db` / `tools` / `adapters` / `workflows` / `mcp` / `cli` / `tui` / `apps/web` / `apps/worker` / `apps/agent-runtime` / 测试与文档。
 
 ## 1. 背景与决策
@@ -57,7 +57,7 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | 编号 | 决策 | 状态 |
 |---|---|---|
 | D1 | DSH 是投资入口，聊天是主要交互面 | 用户已确认 |
-| D2 | 保留 luoome 业务与 Web（托管产品），不重写核心 | 用户已确认 |
+| D2 | ~~保留 luoome 业务与 Web（托管产品），不重写核心~~ → **作废**：见 D9 | 作废（2026-10-23） |
 | D3 | 领域层（core/db/tools/workflows/mcp/adapters）零 AI 依赖 | 用户已确认（本文方案 C） |
 | Q1 | 托管消费者先用 `ai-runtime`，接口不变，后续再切内嵌 DSH Runtime | **已确认** |
 | Q4 | 任务完成后的通知由消费者显式调用，领域不触达外部 | **已确认** |
@@ -76,6 +76,10 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | Q15 | `enqueue_analysis_job` 复用 internal tool 机制（只导出、不进 registry） | **已确认（A，机制已验证）** |
 | Q16 | 线 A 验收写明宿主常驻、DSH 版本下限、节假日静默口径 | **已确认（A）** |
 | Q17 | context 的写回窗口（`write_until`）与审计保留期（`expires_at`）拆分为两个字段 | **已确认（§15.2，Kimi 代为拍板）** |
+| D9 | **产品形态改为单机版**：不再需要多租户托管形态。luoome 以插件形式接入 DSH，DSH 是唯一入口；`luoome.db` 是唯一事实库，DSH 实例与消费者实例共享它 | **用户已确认（2026-10-23）** |
+| D10 | **DSH 交互面新增「设置面」MCP 实例**（`luoome-settings`）：只放配置类写工具（账户/持仓/自选/告警计划/策略配置/研究结构/决策跟踪），不放分析队列写回、不放 `delete_*` 破坏性删除、不放 chat 内部工具；读面实例（`luoome`）保持严格只读 | **用户已确认（2026-10-23）** |
+| D11 | 托管层按「先收敛运行形态、再逐块删除」推进：`startWeb` 切到单机装配（`apps/web/src/local-start.ts`），领域代码与 `core/src/hosted/tenant.ts` 里的个人提醒/自选导入算法原样保留，后续单独拆迁移与删除 | **用户已确认（2026-10-23）** |
+| D12 | **调度改由 DSH 定时任务实现**：删除 `apps/web` 里的四个常驻定时调度器，批处理改为「DSH 定时提醒 → 唤起会话 → agent 调用批处理工具」；批处理工具集中在 `luoome-batch` 实例上（write 能力，白名单只放五个批处理入口），门槛判定（交易日/盘中时段/盘后小时/周几）从调度器搬进工具 | **用户已确认（2026-10-23）** |
 
 ### 1.5 目标
 
@@ -90,10 +94,49 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 
 - 不改行情抓取、技术指标、Strategy 规则引擎、回测、Watch/Alert 的确定性逻辑。
 - 不改 `Advice` 的业务语义（决策、信心度、反例、风险、免责声明、有效期）。
-- 不引入第二套调度器；托管 worker 的持久任务系统继续是唯一后台调度。
+- 不引入第二套调度器；DSH 消费者实例（`luoome-worker`）是唯一后台调度。
 - 不做自动交易；`trade` 永不进入 MCP，也不进入队列结果类型。
 - 不在本期重写 Web 前端；托管 Chat 与看板保持现有交互。
 - 不把 DSH 的插件 API 当作领域契约；领域只认 MCP/网关工具名。
+
+### 1.6.1 调度归属（D12 起）
+
+| 触发方式 | 归属 | 说明 |
+| --- | --- | --- |
+| 每日/每周批处理 | **DSH 定时任务** | 提醒到点唤起会话，agent 调用 `luoome-batch` 实例的批处理工具 |
+| 队列消费 | **DSH 消费者实例**（`luoome-worker`） | 常驻轮询 `analysis_jobs`，租约先到先得 |
+| 模型推理 | **技能驱动** | 晨报、盯盘复核、持仓复盘、研究、写回由 agent 按技能执行 |
+
+批处理工具（`packages/mcp/src/batch-tools.ts`）把领域工作流包成 MCP 入口：
+`run_strategy_daily_cycle`、`run_closing_report_cutoff`、`run_portfolio_performance_snapshot`、
+`run_intraday_plan_batch`、`run_strategy_autonomy_weekly`。
+门槛判定随工具走（非交易日、非盘中时段自动 `skipped`），因此调度时间点错了也不会写坏事实。
+
+### 1.7 单机形态的运行构成（D9 起）
+
+```text
+DSH 进程（dsh-web profile）
+├── MCP 实例 luoome            只读面：事实、建议、策略、盯盘（read capability）
+├── MCP 实例 luoome-settings   设置面：配置类写工具（write capability，白名单）
+├── MCP 实例 luoome-batch      批处理面：五个批处理入口（write capability，D12）
+├── 插件 luoome-panels         三个只读面板（overview / strategies / review）
+├── 插件 luoome-discipline     系统提示词六条约束
+├── 插件 dsh-schedule          DSH 定时任务服务（持久化提醒、到点投递）
+├── 插件 dsh-tool-schedule     agent 建/查/改提醒的工具
+└── 技能目录 .dsh/skills       晨报、盯盘复核、持仓复盘、研究、写回、批处理调度
+
+DSH 进程（dsh-worker profile，headless）
+└── MCP 实例 luoome-worker     队列面：claim → 事实包 → 推理 → 校验写回
+
+单机事实库 $LUOOME_HOME/luoome.db（唯一事实源，DSH 两个实例共享）
+```
+
+- 读面与设置面是两个独立 MCP 实例，白名单互不重叠：读面严格只读，设置面只放配置类写工具（D10）。
+- 批处理面是第三个 MCP 实例，只放五个批处理入口工具，供 DSH 定时任务调用（D12）。
+- 消费者实例与交互面通过 `analysis_jobs` 的租约先到先得，不依赖会话状态。
+- 托管形态（每租户一个库文件、控制面 `control.sqlite`、支付计量、导出删除台账）随 D9 逐步下线；
+  其中 `core/src/hosted/tenant.ts` 的个人提醒与自选导入算法、`tools/src/tools/hosted-tenant.ts`
+  的 20 个 tool 是领域功能，先搬后删（D11）。
 
 ## 2. 事实基线
 
@@ -370,6 +413,11 @@ DSH 侧至少注入以下约束（保留原文，便于评审）：
 ## 5. 改造线 B：领域层去 AI
 
 ### 5.1 边界与包职责
+
+> 实施修正（2026-10-24）：单机形态下表中的 `packages/ai-runtime` **未落地**——模型目录、AI SDK
+> adapter 与 agent runtime 随模型层整体退役（推理只在 DSH 侧发生），`apps/web` 也不再承载模型
+> 对话与 AI 设置：Web 侧 `/api/chat` 端点、对话页面与 AI 设置页已删除，保留不依赖模型的
+> 待确认草案链路。下表按“最终形态”理解。
 
 | 包 | 是否允许 AI | 说明 |
 |---|---|---|
@@ -1008,7 +1056,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 队列式 claim 范例 | `packages/core/src/repository/index.ts:1257`（WorkflowRunRepository） |
 | 内嵌 DSH 路径 | `packages/dsh-bridge/`、`apps/agent-runtime/`、`infra/dsh/README.md` |
 | 托管计量 | `packages/adapters/src/llm/hosted-meter.ts:33`、`hosted-model-transport.ts` |
-| 订阅中 AI 的价值 | `docs/prd/subscription-pricing-v1.md` §3.1 |
+| 订阅中 AI 的价值 | `docs/archive/subscription-pricing-v1.md` §3.1 |
 | 平台基线 | `docs/ddd/dsh-plugin-platform-design.md` |
 
 ## 13. 评审意见（2026-10-22）

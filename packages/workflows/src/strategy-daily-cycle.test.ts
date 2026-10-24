@@ -461,12 +461,6 @@ describe('strategy-daily-cycle reliability matrix', () => {
       ...base,
       adapters: {
         ...base.adapters,
-        llm: {
-          name: 'failing-llm',
-          generate: async () => {
-            throw new Error('provider unavailable');
-          },
-        },
       },
     };
     const result = await strategyDailyCycleWorkflow.run(
