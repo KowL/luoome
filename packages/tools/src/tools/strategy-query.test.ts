@@ -311,6 +311,7 @@ describe('complete|partial 可用运行基准', () => {
     expect(workspace.data.currentRun?.id).toBe(partial.id);
     expect(workspace.data.latestAttempt?.id).toBe(failed.id);
     expect(workspace.data.overview).toMatchObject({ health: 'failed', selectedCount: 1 });
+    expect(workspace.data.matches?.rows.map((row) => row.result.runId)).toEqual([partial.id]);
     expect(workspace.data.warnings[0]).toContain('当前结果仍来自');
     expect(workspace.data.warnings[0]).not.toContain('完整运行');
 
@@ -365,6 +366,71 @@ describe('complete|partial 可用运行基准', () => {
 });
 
 describe('strategy-query', () => {
+  it('workspace bounds named matches and binds their explanations to the published run version', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 2 });
+    await seedStrategy(ctx);
+    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    if (!run.ok) throw new Error('run_strategy 前置失败');
+    const firstVersion = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (!firstVersion) throw new Error('Missing version');
+    await ctx.repos.strategy.createVersion({ ...firstVersion, id: 'scan-strategy-v2', version: 2 });
+    await ctx.repos.strategy.publishVersion('scan-strategy', 'scan-strategy-v2', ctx.clock());
+
+    const result = await getStrategyWorkspaceTool.execute(
+      { strategyId: 'scan-strategy', selectedLimit: 1 },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.currentVersion?.version).toBe(2);
+    expect(result.data.currentRunVersion?.version).toBe(1);
+    expect(result.data.currentRun?.id).toBe(run.data.run.id);
+    expect(result.data.matches).toMatchObject({ total: 2, limit: 1 });
+    expect(result.data.matches?.rows).toHaveLength(1);
+    const match = result.data.matches?.rows[0];
+    expect(match?.stock).toMatchObject({ stockId: '300750.SZ', stockName: '宁德时代' });
+    expect(match?.result).toEqual(run.data.results.find((row) => row.stockId === '300750.SZ'));
+    expect(match?.result.ruleEvaluations.length).toBeGreaterThan(0);
+  });
+
+  it('workspace distinguishes no published run from an empty published selection', async () => {
+    const ctx = await buildTestContext();
+    await seedStrategy(ctx);
+    const result = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.currentVersion?.definition.selection.rules[0]?.name).toBe('价格有效');
+    expect(result.data.currentRun).toBeUndefined();
+    expect(result.data.matches).toBeUndefined();
+    expect(result.data.overview.selectedCount).toBeUndefined();
+    const at = ctx.clock();
+    await ctx.repos.strategyRun.commitRun({
+      run: {
+        id: 'scan-strategy-empty',
+        strategyId: 'scan-strategy',
+        strategyVersionId: 'scan-strategy-v1',
+        mode: 'scan',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf: at,
+        startedAt: at,
+        finishedAt: at,
+        status: 'complete',
+        scope: 'operational',
+        inputSnapshot: {},
+        providerStatuses: [],
+        publication: { status: 'published', reasons: [], decidedAt: at },
+      },
+      results: [],
+      signals: [],
+    });
+    const empty = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(empty.ok).toBe(true);
+    if (!empty.ok) return;
+    expect(empty.data.matches).toEqual({ total: 0, limit: 50, rows: [] });
+    expect(empty.data.overview.selectedCount).toBe(0);
+  });
+
   it('lists the current complete selected view with stock name/code identities', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });

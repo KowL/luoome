@@ -1,0 +1,42 @@
+# dsh-luoome
+
+luoome 的 DeepSeek DSH 插件，提供本地投资事实、策略研究、决策复盘、五页面板与四条随包技能。运行期使用 Node SQLite，不需要 Bun、MCP server 或常驻分析 worker。
+
+## 安装
+
+要求 Node 22.22.3 或更新版本；已在 Node 24 验收。DSH SDK 固定为 `0.2.1-rc.2`。
+
+在目标 DSH profile 目录安装：
+
+```sh
+npm install --save-exact dsh-luoome@0.2.3
+```
+
+在该 profile 的 `cordis.patch.yml` 中加入插件，保留已有条目：
+
+```yaml
+- insert:
+    - id: luoome-plugin
+      name: dsh-luoome
+```
+
+启动 DSH 前设置：
+
+```sh
+export LUOOME_HOME=/absolute/path/to/luoome-home
+export LUOOME_OWNER_USER_ID=local-owner
+export LUOOME_OWNER_ACCOUNT_ID=existing-account-id
+```
+
+`LUOOME_HOME/luoome.db` 必须已有对应投资账户；插件不会创建示例账户。密钥使用 DSH 的现有模型配置，不填入插件参数。升级前请对业务库做 SQLite 一致性备份。
+
+## 使用
+
+- 面板：看盘、持仓、策略、复盘、投资设置。策略页可切换查看具体条件、评分与入场／退出／风险规则，以及已发布匹配标的和逐条依据；显示名称、版本号与事实时间。点击匹配股票可查看行情快照与策略依据，并直接开启个股分析对话。投资设置支持预览、取消和确认账户改名。
+- 技能：`strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis`。
+- 写入通过 DSH 原生审批。复盘更新省略字段保留原值，显式 `null` 清除可空字段。
+- 批处理和自动执行默认关闭。`LUOOME_BATCH_ENABLED=true` 允许逐次确认五个批处理入口；`LUOOME_AUTOMATIONS_ENABLED=true` 还需精确任务授权。
+
+策略试跑不等于回测，建议不等于交易。插件不提供自动下单；`LUOOME_EXPOSE_TRADE=true` 会拒绝启动。完整账户维护、凭据配置、导入恢复和 external 市场事实持久化尚未全部迁入插件。
+
+源码、部署及备份说明见 [luoome](https://github.com/KowL/luoome)。

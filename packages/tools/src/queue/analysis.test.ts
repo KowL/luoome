@@ -640,4 +640,62 @@ describe('advice_market timing after the close', () => {
       ),
     ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'stale_context' } });
   });
+
+  it('does not include another account holdings or unrelated event stocks in personal market facts', async () => {
+    const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
+    const other = (await ctx.repos.account.list()).find(
+      (item) => item.id !== ctx.user.defaultAccountId,
+    );
+    if (!other) throw new Error('Missing account fixture');
+    const holding = (await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId))[0];
+    if (!holding) throw new Error('Missing holding fixture');
+    await ctx.repos.holding.save({
+      ...holding,
+      id: 'other-holding',
+      accountId: other.id,
+      stockId: '600000.SH',
+    });
+    for (const stockId of [holding.stockId, '600000.SH', '601001.SH']) {
+      await ctx.repos.quote.save({
+        stockId,
+        ts: close,
+        observedAt: close,
+        fetchedAt: close,
+        timestampSource: 'upstream',
+        open: money(10),
+        high: money(11),
+        low: money(9),
+        close: money(10),
+        volume: 1000,
+        source: 'scope-fixture',
+      });
+    }
+    await ctx.repos.stockEvent.save({
+      id: 'unrelated-event',
+      stockId: '601001.SH',
+      kind: 'announcement',
+      title: '未关注事件',
+      occursAt: new Date(postClose.getTime() + DAY_MS),
+      allDay: true,
+      importance: 'important',
+      status: 'scheduled',
+      source: 'manual',
+      stale: false,
+      remindBeforeDays: [],
+      createdAt: close,
+      updatedAt: close,
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error(JSON.stringify(snapshot.error));
+    const fact = snapshot.data.facts.find((item) => item.id === 'market:local-quotes');
+    expect(fact?.value).toMatchObject({
+      accountId: ctx.user.defaultAccountId,
+      quotes: [{ stockId: holding.stockId }],
+    });
+    expect(JSON.stringify(snapshot.data.facts)).not.toContain('600000.SH');
+    expect(JSON.stringify(snapshot.data.facts)).not.toContain('601001.SH');
+  });
 });

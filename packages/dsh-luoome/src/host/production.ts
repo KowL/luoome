@@ -31,10 +31,12 @@ import {
   decisionReviewOperation,
   toolRegistry,
 } from '@luoome/tools';
+import { updateAccountOperation } from './account-operations.js';
 import {
   createAnalysisOperationPolicies,
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
+import { createBatchOperationPolicies } from './batch-operations.js';
 import {
   assertExternalMarketAllowlist,
   createMarketSurface,
@@ -129,10 +131,13 @@ export const TRUSTED_ANALYSIS_PROVENANCE: TrustedAnalysisProvenance = Object.fre
  */
 export const createProductionOperationPolicies = (
   trusted: TrustedAnalysisProvenance = TRUSTED_ANALYSIS_PROVENANCE,
+  options: { readonly batchEnabled?: boolean } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
   ...createAnalysisOperationPolicies(trusted),
   ...createStrategyOperationPolicies(),
+  updateAccountOperation,
+  ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
 ];
 
 /**
@@ -317,7 +322,10 @@ export const assertProductionHostDependencies = (ctx: Context): void => {
  */
 export const apply = async (ctx: Context, config?: unknown): Promise<ProductionHost> => {
   assertProductionHostDependencies(ctx);
-  const host = await createProductionHost(config ?? resolveProductionConfigFromEnv());
+  const resolved = resolveProductionConfig(config ?? resolveProductionConfigFromEnv());
+  if (resolved.batchEnabled && ctx.get('schedule') === undefined)
+    throw new Error('dsh-luoome batches require the host schedule service');
+  const host = await createProductionHost(resolved);
   const owner = Object.freeze({
     userId: host.config.owner.userId,
     accountId: host.config.owner.accountId,
@@ -328,7 +336,7 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
   try {
     web = mountDshWebProfile(ctx, {
       repository: host.context.repos.pluginAuthority,
-      policies: createProductionOperationPolicies(),
+      policies: createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, host.config),
       // queue 只由这里的精确 analysis policy 使用；generic `/api/luoome/call` 仍是只读 read surface。
       capabilities: ['read', 'write', 'external', 'queue'],
       policyVersion: 1,
@@ -337,7 +345,7 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       profile: 'dsh-luoome-plugin',
       principalForOwner: () => owner,
       principalForSession: () => owner,
-      automationsEnabled: false,
+      automationsEnabled: host.config.automationsEnabled,
       read: host.read,
       market: host.market,
     });

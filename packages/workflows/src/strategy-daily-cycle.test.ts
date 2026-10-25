@@ -814,64 +814,77 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toHaveLength(1);
   });
 
-  it('生产日多个策略共用发现批次，截止后每个账户各发布一份主报告', async () => {
-    const base = await buildTestContext({ clock: () => NOW });
-    const stockUniverse: StockUniverseManagerLike = {
-      name: 'stock-universe',
-      sources: ['test-source'],
-      fetchStockUniverse: async () => ({
-        source: 'test-source',
-        coverage: 'CN_A_SHARES_SH_SZ' as const,
-        observedAt: NOW,
-        complete: true,
-        reportedTotal: 1,
-        entries: [
-          {
-            stockId: '600519.SH',
-            code: '600519' as StockCode,
-            exchange: 'SH' as const,
-            name: '贵州茅台',
-            listingStatus: 'listed' as const,
-          },
-        ],
-      }),
-    };
-    const ctx: ToolContext = { ...base, adapters: { ...base.adapters, stockUniverse } };
-    await seedSchedule(ctx, { key: 'cycle-a' });
-    await seedSchedule(ctx, { key: 'cycle-b' });
+  it.each([false, true])(
+    '生产日多个策略共用发现批次，报告遵循账户范围 (scoped=%s)',
+    async (scoped) => {
+      const base = await buildTestContext({ clock: () => NOW });
+      const stockUniverse: StockUniverseManagerLike = {
+        name: 'stock-universe',
+        sources: ['test-source'],
+        fetchStockUniverse: async () => ({
+          source: 'test-source',
+          coverage: 'CN_A_SHARES_SH_SZ' as const,
+          observedAt: NOW,
+          complete: true,
+          reportedTotal: 1,
+          entries: [
+            {
+              stockId: '600519.SH',
+              code: '600519' as StockCode,
+              exchange: 'SH' as const,
+              name: '贵州茅台',
+              listingStatus: 'listed' as const,
+            },
+          ],
+        }),
+      };
+      const ctx: ToolContext = { ...base, adapters: { ...base.adapters, stockUniverse } };
+      await seedSchedule(ctx, { key: 'cycle-a' });
+      await seedSchedule(ctx, { key: 'cycle-b' });
 
-    const result = await strategyDailyCycleWorkflow.run(
-      { owner: 'cycle-reports', limit: 1, leaseMinutes: 5 },
-      ctx,
-    );
+      const result = await strategyDailyCycleWorkflow.run(
+        {
+          owner: 'cycle-reports',
+          limit: 1,
+          leaseMinutes: 5,
+          ...(scoped ? { accountId: ctx.user.defaultAccountId } : {}),
+        },
+        ctx,
+      );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.items).toHaveLength(2);
-    for (const item of result.data.items) {
-      expect(item.runId).toBeDefined();
-      expect(item.status).not.toBe('failed');
-    }
-    const accountIds = (await ctx.repos.account.list()).map((account) => account.id).sort();
-    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
-      accountIds.length,
-    );
-    const reports = await ctx.repos.report.list({ kind: 'closing' });
-    expect(reports).toHaveLength(accountIds.length);
-    expect(
-      reports.map((report) => report.scope.kind === 'account' && report.scope.accountId).sort(),
-    ).toEqual(accountIds);
-    for (const report of reports) {
-      expect(report).toMatchObject({
-        kind: 'closing',
-        periodStart: '2026-08-10',
-        periodEnd: '2026-08-10',
-      });
-      const strategySection = report.sections.find((section) => section.key === 'strategy-actions');
-      const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
-      expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
-    }
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.items).toHaveLength(2);
+      for (const item of result.data.items) {
+        expect(item.runId).toBeDefined();
+        expect(item.status).not.toBe('failed');
+      }
+      const accountIds = (await ctx.repos.account.list())
+        .filter((account) => !scoped || account.id === ctx.user.defaultAccountId)
+        .map((account) => account.id)
+        .sort();
+      expect(
+        await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' }),
+      ).toHaveLength(accountIds.length);
+      const reports = await ctx.repos.report.list({ kind: 'closing' });
+      expect(reports).toHaveLength(accountIds.length);
+      expect(
+        reports.map((report) => report.scope.kind === 'account' && report.scope.accountId).sort(),
+      ).toEqual(accountIds);
+      for (const report of reports) {
+        expect(report).toMatchObject({
+          kind: 'closing',
+          periodStart: '2026-08-10',
+          periodEnd: '2026-08-10',
+        });
+        const strategySection = report.sections.find(
+          (section) => section.key === 'strategy-actions',
+        );
+        const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
+        expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
+      }
+    },
+  );
 
   it('收盘报告生成失败时本轮记 partial，不回滚已提交的 run', async () => {
     const base = await buildTestContext({ clock: () => NOW });

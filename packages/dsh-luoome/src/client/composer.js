@@ -55,3 +55,20 @@ export const writeComposer = (text, doc = globalThis.document) => {
     return false;
   }
 };
+
+export const sendStockAnalysis = async (ctx, request) => {
+  const sessionId = await ctx.sessions.create();
+  await ctx.sessions.using(sessionId, { source: 'workspaceOperation' }, async (reference) => {
+    const result = await reference.binding.session.prompt(
+      [{ type: 'text', text: request.prompt }],
+      'queue',
+    );
+    if (!result.ok) {
+      const error = new Error('DSH 未能接受本次分析请求');
+      error.code = result.error.code;
+      throw error;
+    }
+    ctx.uiWorkspace.openSession(sessionId);
+  });
+  return sessionId;
+};

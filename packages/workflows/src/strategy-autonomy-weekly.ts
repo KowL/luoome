@@ -49,6 +49,7 @@ export const STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT = 1;
 const DAY_MS = 86_400_000;
 
 export const StrategyAutonomyWeeklyInput = z.object({
+  accountId: z.string().min(1).optional(),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
 });
 export type StrategyAutonomyWeeklyInputT = z.infer<typeof StrategyAutonomyWeeklyInput>;
@@ -79,6 +80,7 @@ const ProposalItemSchema = z.object({
 });
 
 const AutonomyPauseOutput = z.object({
+  accountId: z.string().min(1).optional(),
   evaluated: z.number().int().nonnegative(),
   paused: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
@@ -248,7 +250,8 @@ const readPauseThresholdStats = async (
  * per-strategy 事实走 get_strategy_insight_facts（确定性 read，不经 AI）；
  * 内置 AI 已下线：动作不再附 AI 叙述（aiNarrative/narrativeProvider 恒缺省）。
  */
-const runAutonomy: WorkflowStep = async (_prev, ctx) => {
+const runAutonomy: WorkflowStep = async (prev, ctx) => {
+  const input = StrategyAutonomyWeeklyInput.parse(prev);
   const thresholds = STRATEGY_AUTONOMY_PAUSE_THRESHOLDS;
   const now = ctx.clock();
   const listed = await ctx.tools.list_strategies.execute({
@@ -379,6 +382,7 @@ const runAutonomy: WorkflowStep = async (_prev, ctx) => {
     }
   }
   return AutonomyPauseOutput.parse({
+    ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
     evaluated: items.length,
     paused: items.filter((item) => item.decision === 'paused').length,
     failed: items.filter((item) => item.decision === 'error').length,
@@ -1200,7 +1204,14 @@ const runWeeklyReportTrigger: WorkflowStep = async (prev, ctx) => {
   while (isWeekend(cursor) || isHoliday(cursor)) cursor = new Date(cursor.getTime() - DAY_MS);
   const periodEnd = dateInShanghai(cursor);
   const report = await weeklyReportWorkflow.run(
-    { periodEnd, scope: { kind: 'all-accounts' }, mode: 'scheduled' },
+    {
+      periodEnd,
+      scope:
+        carried.accountId === undefined
+          ? { kind: 'all-accounts' }
+          : { kind: 'account', accountId: carried.accountId },
+      mode: 'scheduled',
+    },
     ctx,
   );
   if (!report.ok) {

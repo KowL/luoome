@@ -30,6 +30,8 @@ x-service: &service
     # owner 与事实库账户由部署显式绑定；缺失即 fail closed，不从请求/模型推断。
     LUOOME_OWNER_USER_ID: ${LUOOME_OWNER_USER_ID:?set the trusted owner user id}
     LUOOME_OWNER_ACCOUNT_ID: ${LUOOME_OWNER_ACCOUNT_ID:?set the existing owner account id}
+    LUOOME_BATCH_ENABLED: ${LUOOME_BATCH_ENABLED:-false}
+    LUOOME_AUTOMATIONS_ENABLED: ${LUOOME_AUTOMATIONS_ENABLED:-false}
     LUOOME_MARKET_PROVIDER: ${LUOOME_MARKET_PROVIDER:-real}
     LUOOME_STOCK_UNIVERSE_SOURCES: ${LUOOME_STOCK_UNIVERSE_SOURCES:-eastmoney,sina}
   volumes:
@@ -42,7 +44,7 @@ x-service: &service
   networks: [backend]
 
 services:
-  # 纯插件 Web：Node 运行 DSH + dsh-luoome（三面板 client + 四技能 + 原生工具/审批）。
+  # 纯插件 Web：Node 运行 DSH + dsh-luoome（五页 client + 四技能 + 原生工具/审批）。
   dsh-web:
     <<: *service
     command: ["deploy/dsh/entrypoint.sh", "web"]

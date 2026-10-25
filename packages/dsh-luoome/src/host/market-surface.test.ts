@@ -338,6 +338,21 @@ describe('market surface execution semantics', () => {
     surface.dispose();
   });
 
+  it('reports the caller deadline as a provider timeout, not an authorization failure', async () => {
+    const surface = await surfaceFor({ allowlist: ['fixture_external_hanging'] });
+    const result = await surface.invoke('fixture_external_hanging', {}, AbortSignal.timeout(20));
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'adapter_error',
+        adapter: 'market-surface',
+        cause: 'Market request deadline exceeded',
+        recoverable: true,
+      },
+    });
+    surface.dispose();
+  });
+
   it('uses the default timeout bound and lets later calls proceed after a timeout', async () => {
     expect(DEFAULT_MARKET_TIMEOUT_MS).toBe(30_000);
     const surface = await surfaceFor({

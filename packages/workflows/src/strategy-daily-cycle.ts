@@ -22,6 +22,7 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
   deferReports: z.boolean().default(false),
   limit: z.number().int().min(1).max(100).default(1),
   leaseMinutes: z.number().int().min(5).max(240).default(30),
@@ -830,7 +831,9 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     if (!accounts.ok) {
       ctx.logger.warn('strategy-daily-cycle: account listing failed', { error: accounts.error });
     } else {
-      for (const account of accounts.data.accounts) {
+      for (const account of accounts.data.accounts.filter(
+        (account) => input.accountId === undefined || account.id === input.accountId,
+      )) {
         const facts = await ctx.tools.get_account_facts.execute({ accountId: account.id });
         if (fingerprint !== null && facts.ok)
           await runAccountPlanBatch(
@@ -842,7 +845,10 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           );
       }
       if (!input.deferReports)
-        cutoff = await closingReportCutoffWorkflow.run({ date: reportDate }, ctx);
+        cutoff = await closingReportCutoffWorkflow.run(
+          { date: reportDate, accountId: input.accountId },
+          ctx,
+        );
     }
   }
   if (cutoff !== undefined && (!cutoff.ok || cutoff.data.failed.length > 0)) {

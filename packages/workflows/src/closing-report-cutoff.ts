@@ -7,7 +7,10 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
 import { unavailableSection } from './opening-report.js';
 
-export const ClosingReportCutoffInput = z.object({ date: z.string().date().optional() });
+export const ClosingReportCutoffInput = z.object({
+  date: z.string().date().optional(),
+  accountId: z.string().min(1).optional(),
+});
 export const ClosingReportCutoffOutput = z.object({
   date: z.string().date(),
   created: z.array(z.string()),
@@ -35,6 +38,9 @@ const run: WorkflowStep = async (previous, ctx) => {
   if (now < planStart || isWeekend(cutoff) || isHoliday(cutoff)) return { date, created, failed };
   const accounts = await ctx.tools.list_accounts.execute({});
   if (!accounts.ok) return accounts;
+  const selectedAccounts = accounts.data.accounts.filter(
+    (account) => input.accountId === undefined || account.id === input.accountId,
+  );
   const fingerprint =
     date === dateInShanghai(now) ? await currentStrategyFingerprint(date, ctx) : null;
   const strategiesReady =
@@ -42,9 +48,9 @@ const run: WorkflowStep = async (previous, ctx) => {
   const outcomes: Array<'created' | 'failed' | 'existing'> = [];
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < accounts.data.accounts.length) {
+    while (next < selectedAccounts.length) {
       const index = next++;
-      const account = accounts.data.accounts[index];
+      const account = selectedAccounts[index];
       if (account === undefined) break;
       const scope = { kind: 'account' as const, accountId: account.id };
       const existing = await ctx.tools.get_report.execute({
@@ -161,10 +167,8 @@ const run: WorkflowStep = async (previous, ctx) => {
       outcomes[index] = report.ok ? (report.data.created ? 'created' : 'existing') : 'failed';
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(4, accounts.data.accounts.length) }, () => worker()),
-  );
-  for (const [index, account] of accounts.data.accounts.entries()) {
+  await Promise.all(Array.from({ length: Math.min(4, selectedAccounts.length) }, () => worker()));
+  for (const [index, account] of selectedAccounts.entries()) {
     if (outcomes[index] === 'created') created.push(account.id);
     if (outcomes[index] === 'failed') failed.push(account.id);
   }

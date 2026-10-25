@@ -39,7 +39,7 @@ const owner = Object.freeze({
   userId: 'switch-drill-owner',
   accountId: 'switch-drill-account',
 });
-const READ_TOOL_COUNT = 45;
+const READ_TOOL_COUNT = 46;
 const MARKET_TOOL_COUNT = 6;
 const SKILL_NAMES = [
   'daily-market-analysis',
@@ -1022,7 +1022,9 @@ process.stdout.write('seeded');
     ),
   );
   for (const [index, fixture] of launched.entries())
-    console.error(`--- DSH launch ${String(index + 1)} output ---\n${fixture.output()}`);
+    console.error(
+      `--- DSH launch ${String(index + 1)} output ---\n${fixture.output().replace(/([?&]token=)[A-Za-z0-9_-]+/g, '$1<redacted>')}`,
+    );
   console.error(`acceptance root kept for inspection: ${root}`);
   process.exitCode = 1;
 } finally {

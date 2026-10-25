@@ -19,6 +19,8 @@ export const FetchQuoteInput = z.object({
 
 export const FetchQuoteOutput = z.object({
   quote: QuoteSchema,
+  retrieval: z.enum(['live', 'local-fallback']),
+  freshness: z.enum(['fresh', 'stale']),
 });
 
 export const fetchQuoteTool = defineTool({
@@ -41,7 +43,12 @@ export const fetchQuoteTool = defineTool({
     }
     if (stock === null) return errNotFound('Stock', input.stockId);
     const item = await resolveQuote(ctx, stock.id, { context: 'display' });
-    if (item !== undefined && item.status === 'ok') return { quote: item.quote };
+    if (item !== undefined && item.status === 'ok')
+      return {
+        quote: item.quote,
+        retrieval: item.retrieval,
+        freshness: item.freshness,
+      };
     if (item !== undefined && item.status === 'unavailable') {
       return errAdapterError(ctx.adapters.market.name, item.reason, true);
     }

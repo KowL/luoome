@@ -24,6 +24,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'list_accounts',
   'get_account',
   'get_account_facts',
+  'list_account_performance_snapshots',
   'list_holdings',
   'get_holding',
   'list_trades',
@@ -122,7 +123,7 @@ const MarketSchema = z
 
 /**
  * 受信任部署配置。`strict()` 拒绝未声明的字段，避免把任意环境变量/HTTP 参数
- * 顺带带进生产装配；`automationsEnabled` 与 `exposeResearch` 在 M1 只接受 false。
+ * 顺带带进生产装配。batch/automations 默认关闭；自动化须先显式打开 batch。
  * `read` 与 `market` 是两份独立 allowlist，不能互相借用。
  */
 export const productionConfigSchema = z
@@ -133,11 +134,16 @@ export const productionConfigSchema = z
     owner: OwnerSchema,
     read: ReadSchema.optional(),
     market: MarketSchema.optional(),
-    automationsEnabled: z.literal(false).optional(),
+    batchEnabled: z.boolean().optional(),
+    automationsEnabled: z.boolean().optional(),
     /** 透传给 adapters *FromEnv 工厂（行情/研究/通知等），不在此复制领域规则。 */
     env: z.record(z.string(), z.string().optional()).optional(),
   })
-  .strict();
+  .strict()
+  .refine((config) => !config.automationsEnabled || config.batchEnabled === true, {
+    path: ['automationsEnabled'],
+    message: 'Automations require explicit batchEnabled opt-in',
+  });
 
 export type ProductionConfigInput = z.input<typeof productionConfigSchema>;
 
@@ -164,7 +170,8 @@ export interface ProductionConfig {
   readonly owner: ProductionOwner;
   readonly read: ProductionReadConfig;
   readonly market: ProductionMarketConfig;
-  readonly automationsEnabled: false;
+  readonly batchEnabled: boolean;
+  readonly automationsEnabled: boolean;
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
@@ -208,7 +215,8 @@ export const resolveProductionConfig = (
       timeoutMs: parsed.market?.timeoutMs ?? DEFAULT_MARKET_TIMEOUT_MS,
       exposeResearch: false as const,
     }),
-    automationsEnabled: false as const,
+    batchEnabled: parsed.batchEnabled === true,
+    automationsEnabled: parsed.automationsEnabled === true,
     env,
   };
   return Object.freeze(config);
@@ -238,6 +246,8 @@ export const resolveProductionConfigFromEnv = (
   return resolveProductionConfig({
     ...(home === undefined || home.length === 0 ? {} : { home }),
     owner: { userId: ownerUserId, accountId: ownerAccountId },
+    batchEnabled: env.LUOOME_BATCH_ENABLED === 'true',
+    automationsEnabled: env.LUOOME_AUTOMATIONS_ENABLED === 'true',
     env,
   });
 };

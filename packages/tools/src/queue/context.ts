@@ -109,7 +109,11 @@ interface MarketFactPack {
  * 已保存行情、相关公司事件），不调用 adapter、不刷新外部数据、也不用 `now` 伪造 `dataAsOf`。
  * 新闻/宽度/指数/财报不在本地事实内，保留 limitations，不从模型记忆补齐。
  */
-const collectMarketFacts = async (ctx: ToolContext, now: Date): Promise<MarketFactPack> => {
+const collectMarketFacts = async (
+  ctx: ToolContext,
+  now: Date,
+  accountId: string,
+): Promise<MarketFactPack> => {
   const facts: AnalysisContext['facts'] = [];
   const limitations: string[] = [];
   const verifiedAt: Date[] = [];
@@ -147,7 +151,7 @@ const collectMarketFacts = async (ctx: ToolContext, now: Date): Promise<MarketFa
     verifiedAt.push(cutoff);
   }
 
-  const stockIds = await computeRelevantStockIds(ctx);
+  const stockIds = await computeRelevantStockIds(ctx, { accountId, includeEventStocks: false });
   if (stockIds.length === 0) {
     limitations.push('当前账户没有持仓或启用的关注列表，个人上下文为空。');
   }
@@ -163,6 +167,7 @@ const collectMarketFacts = async (ctx: ToolContext, now: Date): Promise<MarketFa
       id: 'market:local-quotes',
       label: '持仓与关注股票的本地已保存行情',
       value: {
+        accountId,
         count: currentQuotes.length,
         latestObservedAt: latestQuote.observedAt.toISOString(),
         quotes: currentQuotes.slice(0, 20).map(quoteFactValue),
@@ -236,7 +241,8 @@ export const assembleAnalysisContext = async (
   const facts: AnalysisContext['facts'] = [];
   const limitations: string[] = [];
   const times: number[] = [];
-  const market = input.subject.kind === 'market' ? await collectMarketFacts(ctx, now) : null;
+  const market =
+    input.subject.kind === 'market' ? await collectMarketFacts(ctx, now, accountId) : null;
   if (market !== null) {
     facts.push(...market.facts);
     limitations.push(...market.limitations);

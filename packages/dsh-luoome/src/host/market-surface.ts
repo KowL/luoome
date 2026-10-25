@@ -48,6 +48,19 @@ const denied = (required: string): ToolResult<never> => ({
   error: { kind: 'permission_denied', required },
 });
 
+const inactiveRequest = (signal: AbortSignal): ToolResult<never> =>
+  signal.reason instanceof Error && signal.reason.name === 'TimeoutError'
+    ? {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'market-surface',
+          cause: 'Market request deadline exceeded',
+          recoverable: true,
+        },
+      }
+    : denied('active request');
+
 /** 装配期 fail-closed：未知名字、非 external 或带写能力的工具直接拒绝，而不是静默过滤。 */
 export const assertExternalMarketAllowlist = (
   allowlist: readonly string[],
@@ -101,7 +114,7 @@ export const createMarketSurface = (options: {
     async invoke(name, input, signal) {
       const tool = selected.get(name);
       if (disposed || tool === undefined) return denied('market tool allowlist');
-      if (signal.aborted) return denied('active request');
+      if (signal.aborted) return inactiveRequest(signal);
       let context: ToolContext;
       try {
         context = await options.context();
@@ -109,7 +122,7 @@ export const createMarketSurface = (options: {
         return { ok: false, error: { kind: 'internal', cause: 'Market execution unavailable' } };
       }
       if (disposed) return denied('market tool allowlist');
-      if (signal.aborted) return denied('active request');
+      if (signal.aborted) return inactiveRequest(signal);
 
       // The domain tool API has no signal parameter; AbortSignal bounds this surface's
       // wait, while the shared controller marks the call as abandoned for bookkeeping.
@@ -134,7 +147,7 @@ export const createMarketSurface = (options: {
         return JSON.parse(JSON.stringify(result)) as ToolResult<unknown>;
       } catch {
         // An external failure stays a domain failure; never fabricate an empty success.
-        if (signal.aborted) return denied('active request');
+        if (signal.aborted) return inactiveRequest(signal);
         if (controller.signal.aborted)
           return {
             ok: false,

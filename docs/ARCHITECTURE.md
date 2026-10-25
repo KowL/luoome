@@ -1286,8 +1286,8 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 
 托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
 `packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
-公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（只读面 45 工具、market external
-精确 6 工具、8 条确认写 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
+公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（精确只读白名单、market external
+白名单与原生确认 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
 （`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）仅保留给手动/隔离验收。
 
 单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
@@ -1295,7 +1295,9 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 
 原 Strategy schedule、账户计划、报告、观察、绩效及历史评估的编排保留在领域 workflow 里，
 由 DSH 定时任务调用的批处理工具触发（保留原领域 lease/fencing/checkpoint）。
-workflow 继续只通过 `ctx.tools.*` 编排。
+workflow 继续只通过 `ctx.tools.*` 编排。`@luoome/batch` 是位于 surface 层的共享入口，依赖
+workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK；MCP 兼容转发同一实现，
+插件只在显式 batch opt-in 后挂载五条账户绑定 policy，完整要求 write + external。
 业务成功、用户额度、provider成本和通知状态分别表达，unknown不按超时猜测为零。
 
 默认账户复用原DecisionReview与开盘/收盘/周报。旧`watchlist-facts`属于补充报告，旧PersonalWatchFeedback
@@ -1328,14 +1330,32 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 检查。领域工具只装配事实、校验和持久化，不自行推理。`write` / `external` opt-in 仍有效。
 
 默认纯插件部署的 read / market / 写操作面互相隔离：read 只接受纯 read 工具，market 只接受
-`sideEffect==='external'` 的精确 6 工具，写操作只经 8 条确认 policy；queue 管理工具、settings、
-batch 与 trade 不在默认暴露面。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
+`sideEffect==='external'` 的精确工具，写操作只经确认 policy（含账户改名）；queue 管理工具、
+任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后仍只经确认或精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
 手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
 精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
 `LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
-三个客户端面板通过 `ctx.slots` 注册，服务端通过 `ctx.connection.fetch.register` 注册固定 GET
-路由，继承 DSH 认证与 Host/Origin 校验。路由仅调用固定只读工具，直接返回 ToolResult，
-不建立裸监听器，不接受任意工具名或命令。浏览器只投影结果，不重算业务数字。
+看盘、持仓、策略、复盘、投资设置通过 `ctx.slots` 注册。宿主 prefix 路由复用 DSH Connection.admit
+与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走既有 prepare/confirm
+协议，预览与取消不写入，未知结果只核对 operation ID。浏览器只保存恢复用的 UUID，不保存授权 token，
+不重算业务数字。非交易日的情绪查询取最近交易日，仍展示供应商原始日期，不伪装今日实时行情。
+
+客户端 API URL 相对 DSH 的 document base 解析，保留 `/dsh/` 等反向代理前缀。核心指数直接投影
+`fetch_index_quotes`，不依赖情绪聚合是否成功；情绪冷启动使用正常外部请求时限，截止超时返回可恢复 adapter_error。
+
+策略页按名称切换详情，展示当前已发布定义的筛选、评分与信号规则。`get_strategy_workspace`
+同时返回已发布正式运行的实际版本 `currentRunVersion` 与有名称、原始规则事实的 `matches`；
+明细默认最多 50 条，`selectedLimit` 最大 200，`matches.total` 保留完整入选数。无发布结果时不返回
+`matches`，已发布但无人入选时返回空明细与零总数。浏览器不重新选股或评分；当前版本与结果版本
+不同时明确提示。页面与研究草稿使用名称、版本号和事实时间，内部标识仅保留在数据与调用参数中。
+
+策略匹配标的的个股详情按点击时的股票、结果及版本保留来源。点击股票后才经固定
+`GET /api/luoome/stock?stockId=...` 调用精确 opt-in 的 `fetch_quote`；只接受一个规范股票代码，
+仍经宿主 owner、Host/Origin 校验与有界取消。`fetch_quote` 保留 `retrieval` / `freshness`，
+缓存回退及过期状态、行情时间与匹配时间分别呈现。关闭详情取消客户端等待，错误不清空匹配依据。
+分析按钮在用户点击后通过官方 Session Controller 创建并保留会话，使用其公开 SessionFace
+提交股票分析问题，收到宿主接受后再打开对话；保留期间使用真实作用域，不借用未注入服务，
+也不操作或清空已有会话草稿。失败不自动重试，任何业务写入仍走原生审批。
 
 单机事实库是唯一事实源；历史托管租户库已下线。
 存量 Advice 的来源幂等回填为 `legacy-ai`，不伪造历史模型信息。
@@ -1353,3 +1373,5 @@ batch 与 trade 不在默认暴露面。旧 MCP 过渡形态的读面、设置�
 新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。确认页只把操作编号存入 sessionStorage，确认凭据仅在组件内存；模型调用使用官方审批组件。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
 
 无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**生产服务器已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
+
+原生操作参数中的账户与 requestId 由 policy 绑定；模型参数 schema 将这些字段标为可省略，完整领域校验仍在绑定后执行。冲突错误只返回安全字段路径。用户拒绝后，宿主基于真实会话事件阻断同一请求的后续写计划，改工具名或 operation ID 不能绕过；新的用户请求可以重新独立审批。

@@ -15,7 +15,7 @@ whenToUse: 用户要求新建策略、修改已有策略规则、解释策略定
 1. **先读事实，再动手写**（只读工具）：
    - 已有策略：`list_strategies`、`get_strategy`；
    - DSL 字段、指标与数据需求：`get_strategy_dsl_catalog`；
-   - 当前版本、最近 published operational run 与数据健康：`get_strategy_workspace`；
+   - 当前定义、最近 published operational run、结果实际版本、入选明细与数据健康：`get_strategy_workspace`（入选明细默认最多 50 条，可用 `selectedLimit` 调整到 200 条；完整数量见 `matches.total`）；
    - 数据健康与必要证据：`get_market_data_status`、`get_strategy_experiment_context`、`get_strategy_insight_facts`。
    取不到就明说取不到，不凭记忆补 DSL 字段、行情或历史运行。
 2. **生成草案，不落库、不发布**：
@@ -32,7 +32,7 @@ whenToUse: 用户要求新建策略、修改已有策略规则、解释策略定
    - 所有写入都经 DSH 原生确认操作 `luoome_confirmed_operation`（id、tool 加 inputJson 或 input）；DSH 冻结解析后的参数并弹出审批卡，只有用户实际点「允许一次」才执行；
    - 新建策略：tool 取 `create_strategy`，必要时用 copyFromStrategyId 复制内置策略作基线；
    - 新版本：tool 取 `create_strategy_version`，把未持久化草案变成 draft 版本，validationStatus 为 pending；
-   - 静态校验：tool 取 `validate_strategy_version`，展示 referencedFields、requiredLookback 与 validationErrors；
+   - 静态校验：tool 取 `validate_strategy_version`，展示 referencedFields、requiredLookback 与 validationErrors；试跑使用的基线和草案都必须 valid，尚为 pending 的基线也需独立审批校验；
    - 有限样本试跑：调用 `trial_strategy_version`（同一策略的基线版本与草案版本、显式股票样本）；试跑强制非持久化，不写 current operational run，也不产生正式 StrategyRun；
    - 发布：tool 取 `publish_strategy_version`，必须单独审批。
 5. **展示试跑与发布结果**：样本范围、覆盖与缺口、失败原因、是否已发布；发布后说明策略面板可以回读同一 Strategy 与版本。

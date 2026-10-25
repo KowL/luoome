@@ -408,10 +408,10 @@ queue probe。
 
 | 插件面 | 内容 |
 |---|---|
-| read（45 工具） | 账户/持仓/交易、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
+| read（精确白名单） | 账户/持仓/交易/绩效、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
 | market external（6 工具，精确白名单） | 指数、情绪、行情、新闻与有限样本试跑；失败原样返回，不伪造空成功 |
-| 确认写操作（8 条 policy） | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`；每次都要 DSH 原生审批 |
-| client | 看盘 / 策略看板 / 复盘三块面板，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
+| 确认写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名；batch 另需显式开启，每次写入均经确认或精确任务授权 |
+| client | 看盘 / 持仓 / 策略 / 复盘 / 投资设置五页，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
 | skills | `strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis` |
 
 事实库是 `LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开。通用
@@ -422,16 +422,22 @@ queue probe。
 
 ### 7.2 面板
 
-DSH 侧栏有三个 luoome 面板：
+DSH 侧栏有五个 luoome 面板：
 
 | 面板 | 内容 |
 |---|---|
 | 看盘 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议、关注列表、市场数据健康 |
-| 策略看板 | 策略清单与状态、当前版本、最近 published operational run、数据健康、结果信号摘要、待补观察；可「在对话中研究此策略」（携带 strategyId/runId） |
+| 持仓 | 当前账户持仓、最近成交和绩效快照；不在浏览器重新计算业务数字 |
+| 策略 | 可切换的策略详情：具体筛选条件、范围与周期、评分方式、入场／退出／风险规则，以及最近已发布结果的匹配标的、排名、规则评分和逐条匹配依据；版本与事实时间明确标注，内部标识不作为页面信息展示。可「在对话中研究此策略」；点击匹配股票可查看个股行情和匹配依据，再用「在对话中分析这只股票」开启并提交新的分析对话。 |
 | 复盘 | 建议命中率、真实 confidence calibration 分桶、DecisionReview 最近记录与来源、逐条 Advice 用户反馈（未回填不推断）、待补齐观察与样本数/未知/时间范围 |
+| 投资设置 | 当前账户、行情数据健康、插件能力配置；账户改名需预览并明确确认 |
 
 面板只做投影，不自己算数：数字必须与工具输出逐位一致。点击「刷新事实」读取当前工具结果，
 工具失败显示错误，不以零值代替缺失数据。
+
+公网部署在 `/dsh/` 等子路径时，面板和确认操作的请求都跟随 DSH 的 document base。
+0.2.1 修复了此前漏掉前缀、收到空响应而显示“读取失败”的问题。核心指数独立读取指数接口，
+情绪维度超时不隐藏已取得的指数；行情时点保留供应商日期。情绪首次聚合可能需要十余秒，期间显示读取状态。
 
 ### 7.3 技能
 
@@ -445,7 +451,7 @@ DSH 侧栏有三个 luoome 面板：
 | `daily-market-analysis` | 每日市场分析 | 经精确 market external 白名单刷新指数/情绪/要闻/行情，保留 source/dataAsOf/partial/unavailable；形成 Advice 时另取有效 context 并经原生审批写回 |
 
 技能本身不授予权限：能调哪些工具仍由插件的 read/market/policy 面决定；写操作一律要 DSH 原生审批。
-原生确认入口按每项操作的领域 Zod schema 提供参数契约。invalid_input 会返回字段路径与类型要求，
+原生确认入口按每项操作的领域 Zod schema 提供参数契约。账户和 requestId 由宿主绑定，业务参数应省略 requestId；冲突时错误会明确指向字段，不应删改笔记或盈亏试探。invalid_input 会返回字段路径与类型要求，
 表示参数未通过校验，不代表缺少人工授权；纠正参数后仍需独立审批，不用写调用探测工具或权限。
 当前固定 SDK 下，MiniMax M3/M3.1 Flash 的原生调用**不会稳定写出 JSON null**——它在填对象参数时
 用"省略该属性"表达"无值"。luoome 的写契约已按此调整：可空业务字段（如复盘的 `triggerFeedback`、
@@ -457,29 +463,31 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 旧 `.dsh/skills/`（`morning-brief`、`stock-deep-dive`、`decision-journal`、`luoome-batch`、
 `analysis-worker`）属于旧 MCP 过渡形态，默认部署不安装；`analysis-worker` 仅用于手动 worker 验收。
 
+插件提供看盘、持仓、策略、复盘和投资设置五页。持仓页回读当前账户持仓、最近成交和绩效快照；投资设置可预览、取消和确认账户改名，名称以外的账本字段不变。刷新后可按操作 UUID 核对结果，浏览器不保存确认 token。新增/切换账户、完整持仓维护、凭据配置和数据导入恢复仍使用现有受控管理入口，尚未由插件五页全部承接。
+
 ### 7.4 DSH 定时任务与批处理
 
-单机形态没有常驻调度进程，**默认部署不启用自动任务**：纯插件 MVP 尚未把五个批处理入口
-迁入插件（属后续阶段，见需求文档 §11 非目标），因此默认部署不创建任何生产定时任务。
-需要检查/补跑批处理时，仍用旧 MCP 手动 profile 的 `luoome-batch` 实例做隔离验收。
+默认关闭批处理与自动执行。插件已具备五个原生入口，无需旧 MCP 实例：
 
-旧 `luoome-batch` 实例上的每个批处理工具自带门槛判定，不满足时返回 `skipped` 且不写库——
-调度时间点错了也不会写坏事实。
+- 部署设置 `LUOOME_BATCH_ENABLED=true` 后，可经 `luoome_confirmed_operation` 单次确认补跑；`luoome_automation_catalog` 只读返回现有任务、任务指纹和账户绑定调用模板。
+- `LUOOME_AUTOMATIONS_ENABLED=true` 还要求 batch 开关已开启。它允许核验持久授权，不能代替逐任务的原生审批。
+- 每个入口完整要求 `write + external`。账户快照、计划与报告只作用于绑定账户；策略日循环与自治处理本地全局策略，自治可能按既有门禁暂停、归档或发布版本，审批说明会展示这些影响。
 
-| 批处理 | 工具（`luoome-batch` 实例） | 建议 cron（Asia/Shanghai） | 门槛 |
+下表是**新建任务的示例**，旧日程的 ID、时间与会话不能默默改写；旧时间不满足门槛时会跳过，应先展示变更再确认。
+
+| 批处理 | 原生操作名 | 示例 cron（Asia/Shanghai） | 门槛 |
 |---|---|---|---|
-| 策略日循环 | `run_strategy_daily_cycle` | `30 9 * * 1-5` | 交易日 |
-| 收盘报告截止 | `run_closing_report_cutoff` | `50 15 * * 1-5` | 交易日 |
+| 策略日循环 | `run_strategy_daily_cycle` | `30 16 * * 1-5` | 交易日，内部策略调度仍独立认领 |
+| 收盘报告截止 | `run_closing_report_cutoff` | `5 18 * * 1-5` | 交易日；18:00 截止后允许明确记录缺口 |
 | 账户绩效快照 | `run_portfolio_performance_snapshot` | `30 16 * * 1-5` | 交易日且已过 16:00 |
-| 盘中计划批处理 | `run_intraday_plan_batch` | `5 9 * * 1-5` | 盘中时段 |
+| 盘中计划批处理 | `run_intraday_plan_batch` | `35 9 * * 1-5` | 实际盘中时段，09:05 会跳过 |
 | 策略自治周报 | `run_strategy_autonomy_weekly` | `30 9 * * 0` | 周日 |
 
-建立方式：用 DSH 的 `schedule_list` 查现有提醒避免重复，再用 `schedule_create` 建，
-一次只传一个时间选择器（cron + time_zone）；title 用 `luoome 批处理：<批处理名>`，
-prompt 直接写清调哪个工具、失败怎么汇报。细节见技能 `luoome-batch`。
+迁移顺序：先保持自动执行关闭，只开 batch；在 DSH「自动化任务」核对原任务，在同一 ID 和原时间上改用原生调用提示。再读 `luoome_automation_catalog`，逐项选择对应调用模板，冻结宿主给出的 identity、scheduleHash、accountId、inputJson/inputHash、组合能力与有效期，使用 `configure_plugin_automation` 的原生审批创建授权。最后才开启自动执行。目录按建议的 grant ID 查询既有授权；自定义 grant ID 要结合原操作回执核对。
 
-手动补跑时给对应工具传 `force: true` 跳过门槛判定；补跑前先 `schedule_list` 看当天是否已经跑过。
-工具返回 `outcome=failed` 时如实汇报，不要重试超过一次。
+提醒真正投递后，模型调用 `luoome_scheduled_operation`，提交 grantId、grantVersion、tool、accountId 和模板中的完整 input。任务身份与 occurrence 由宿主投递历史核验，prompt 或模型自报 taskId 无效；修改任务定义后，旧指纹不再匹配，必须重新核对授权。重复投递不会重复执行同一 occurrence。
+
+手动 `force: true` 只经单次明确确认；定时授权拒绝 force。`partial` 表示部分失败，不能报告全部完成。操作状态 `unknown` 时只查询/核对业务回执，不自动补跑，也不能通过更换 operation ID 假定前次没有写入。用户拒绝后，同一请求中的后续写入会被宿主阻断；需要新的用户请求才能重新审批。
 
 ### 7.5 批量分析与队列
 

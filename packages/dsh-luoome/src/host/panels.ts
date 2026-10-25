@@ -1,26 +1,33 @@
-// dsh-luoome 三面板宿主只读数据路由（M4；plugin 详细设计 §4.2 HTTP、§8 UI）。
+// dsh-luoome 面板宿主只读数据路由（plugin 详细设计 §4.2 HTTP、§8 UI）。
 //
 // 数据路径：浏览器同源 GET /api/luoome/state?panel=... → 宿主认证（prefix 层 Connection.admit）
 // → 本模块固定 panel→工具映射 → 进程内 ReadSurface / MarketSurface 调真实领域工具。
 //
 // 安全边界：
-// - URL 只接受 `panel` 参数且必须是三个固定名字；不接受工具名、命令、账户或任意查询参数。
+// - URL 只接受 `panel` 参数且必须是固定面板名字；不接受工具名、命令、账户或任意查询参数。
 // - 映射在服务端冻结，调用方无法通过请求扩大工具集合；响应只投影 ToolResult（ok/data 或
 //   error），不在服务端重算 PnL、统计或发布资格。
 // - 所有响应 cache-control: no-store；未知 panel 404、方法错误 405（Allow: GET）。
-import { dateInShanghai, type ToolResult } from '@luoome/core';
-import type { MarketSurface } from './market-surface.js';
+import {
+  dateInShanghai,
+  isHoliday,
+  isWeekend,
+  previousTradingDate,
+  type ToolResult,
+} from '@luoome/core';
+import { z } from 'zod';
+import { DEFAULT_MARKET_TIMEOUT_MS, type MarketSurface } from './market-surface.js';
 import { denied, invalidInput, type ReadSurface } from './read-surface.js';
 import type { RequestAdmission } from './routes.js';
 
-export const PANEL_NAMES = ['overview', 'strategies', 'review'] as const;
+export const PANEL_NAMES = ['overview', 'positions', 'strategies', 'review', 'settings'] as const;
 export type PanelName = (typeof PANEL_NAMES)[number];
 
 /**
  * 单条固定工具调用：input 由服务端写死，不能来自 HTTP。
  * `input` 可以是函数，仅用于需要服务端派生（如当日日期）的固定工具；HTTP 仍不能传输入。
  */
-type PanelToolInput = Readonly<Record<string, unknown>> | (() => Record<string, unknown>);
+type PanelToolInput = Readonly<Record<string, unknown>> | ((now: Date) => Record<string, unknown>);
 interface PanelToolCall {
   readonly name: string;
   readonly input: PanelToolInput;
@@ -38,14 +45,16 @@ const fixed = (name: string, input: Readonly<Record<string, unknown>> = {}): Pan
 const sentimentCall = (): PanelToolCall =>
   Object.freeze({
     name: 'get_ashare_sentiment',
-    input: () => ({ date: dateInShanghai(new Date()) }),
+    input: (now: Date) => ({
+      date: isWeekend(now) || isHoliday(now) ? previousTradingDate(now) : dateInShanghai(now),
+    }),
   });
 
 /**
- * 三面板固定映射（需求 §7）：
+ * 面板固定映射（需求 §7）：
  * - overview：市场（情绪/指数 external + 本地行情状态）、持仓、触发、关注、建议卡；
  * - strategies：目录、当前版本/最近 published operational run（派生 get_strategy_workspace）、
- *   数据健康、结果信号摘要、待补观察；
+ *   数据健康、实际结果版本与有界匹配明细、待补观察；
  * - review：Advice 统计/信心校准分桶/逐条反馈、DecisionReview 记录、决策闭环与待补观察。
  *
  * 所有名字必须是 read/market surface 默认 allowlist 内的真实工具；装配期由 surface 自身
@@ -62,6 +71,23 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('get_market_data_status'),
     ]),
     market: Object.freeze([sentimentCall(), fixed('fetch_index_quotes')]),
+  }),
+  positions: Object.freeze({
+    read: Object.freeze([
+      fixed('get_account'),
+      fixed('list_holdings'),
+      fixed('list_trades', { limit: 50 }),
+      fixed('list_account_performance_snapshots', { limit: 30 }),
+    ]),
+    market: Object.freeze([]),
+  }),
+  settings: Object.freeze({
+    read: Object.freeze([
+      fixed('get_account'),
+      fixed('get_market_data_status'),
+      fixed('get_stock_universe_status'),
+    ]),
+    market: Object.freeze([]),
   }),
   strategies: Object.freeze({
     read: Object.freeze([
@@ -89,8 +115,8 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
 /** 策略面板的「当前版本/运行/数据健康」派生：对目录里每条策略读一次 workspace。 */
 export const STRATEGY_WORKSPACE_TOOL = 'get_strategy_workspace';
 export const MAX_STRATEGY_WORKSPACES = 20;
-/** 面板数据路由的 market external 调用上限：面板必须快速返回，不能等满 30s。 */
-export const DEFAULT_PANEL_MARKET_TIMEOUT_MS = 4_000;
+// 情绪首查会聚合多个上游，不能在 market surface 的时限前截断正常结果。
+export const DEFAULT_PANEL_MARKET_TIMEOUT_MS = DEFAULT_MARKET_TIMEOUT_MS;
 
 type ToolError = Extract<ToolResult<unknown>, { readonly ok: false }>['error'];
 
@@ -111,6 +137,7 @@ export interface PanelStateResponse {
   readonly asOf: string;
   readonly tools: readonly PanelStateTool[];
   readonly strategies?: readonly PanelStrategyWorkspace[];
+  readonly configuration?: Readonly<Record<string, unknown>>;
 }
 
 const jsonNoStore = (body: unknown, status = 200): Response =>
@@ -135,16 +162,20 @@ export const projectPanelTool = (name: string, result: ToolResult<unknown>): Pan
     ? { name, ok: true, data: jsonSafe(result.data) }
     : { name, ok: false, error: jsonSafe(result.error) as ToolError };
 
-const resolveInput = (call: PanelToolCall): Record<string, unknown> =>
-  typeof call.input === 'function' ? call.input() : call.input;
+const resolveInput = (call: PanelToolCall, now: Date): Record<string, unknown> =>
+  typeof call.input === 'function' ? call.input(now) : call.input;
 
 const invoke = async (
   surface: ReadSurface | MarketSurface,
   call: PanelToolCall,
   signal: AbortSignal,
+  now: Date,
 ): Promise<PanelStateTool> => {
   try {
-    return projectPanelTool(call.name, await surface.invoke(call.name, resolveInput(call), signal));
+    return projectPanelTool(
+      call.name,
+      await surface.invoke(call.name, resolveInput(call, now), signal),
+    );
   } catch {
     return {
       name: call.name,
@@ -176,7 +207,42 @@ export interface CreatePanelStateHandlerOptions {
   readonly now?: () => Date;
   readonly marketTimeoutMs?: number;
   readonly maxStrategyWorkspaces?: number;
+  readonly configuration?: () => Readonly<Record<string, unknown>>;
 }
+
+const StockDetailQuery = z.object({ stockId: z.string().regex(/^\d{6}\.(SH|SZ|BJ)$/) }).strict();
+
+export const createStockDetailHandler =
+  (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
+  async (request: Request): Promise<Response> => {
+    if (request.method !== 'GET') {
+      const response = jsonNoStore(invalidInput('GET required'), 405);
+      response.headers.set('allow', 'GET');
+      return response;
+    }
+    try {
+      const rejection = await options.admit(request);
+      if (rejection) return rejection;
+    } catch {
+      return jsonNoStore(denied('host authentication'), 403);
+    }
+    const query = new URL(request.url).searchParams;
+    const parsed = StockDetailQuery.safeParse(Object.fromEntries(query));
+    if (!parsed.success || [...query.keys()].length !== 1)
+      return jsonNoStore(invalidInput('A single supported stockId is required'), 400);
+    const now = (options.now ?? (() => new Date()))();
+    const signal = AbortSignal.any([
+      request.signal,
+      AbortSignal.timeout(options.marketTimeoutMs ?? DEFAULT_PANEL_MARKET_TIMEOUT_MS),
+    ]);
+    const quote = await invoke(
+      options.market,
+      fixed('fetch_quote', { stockId: parsed.data.stockId }),
+      signal,
+      now,
+    );
+    return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), quote });
+  };
 
 /**
  * 创建 `GET /api/luoome/state` handler。
@@ -211,7 +277,7 @@ export const createPanelStateHandler =
     }
     const name = panel as PanelName;
     const plan = PANEL_PLANS[name];
-    const now = options.now ?? (() => new Date());
+    const now = (options.now ?? (() => new Date()))();
     const signal = request.signal;
     const marketSignal = AbortSignal.any([
       signal,
@@ -219,8 +285,8 @@ export const createPanelStateHandler =
     ]);
 
     const [readTools, marketTools] = await Promise.all([
-      Promise.all(plan.read.map((call) => invoke(options.read, call, signal))),
-      Promise.all(plan.market.map((call) => invoke(options.market, call, marketSignal))),
+      Promise.all(plan.read.map((call) => invoke(options.read, call, signal, now))),
+      Promise.all(plan.market.map((call) => invoke(options.market, call, marketSignal, now))),
     ]);
     const tools: PanelStateTool[] = [...readTools, ...marketTools];
 
@@ -236,6 +302,7 @@ export const createPanelStateHandler =
             options.read,
             fixed(STRATEGY_WORKSPACE_TOOL, { strategyId }),
             signal,
+            now,
           ),
         })),
       );
@@ -243,9 +310,12 @@ export const createPanelStateHandler =
 
     const body: PanelStateResponse = {
       panel: name,
-      asOf: now().toISOString(),
+      asOf: now.toISOString(),
       tools,
       ...(strategies === undefined ? {} : { strategies }),
+      ...(name === 'settings' && options.configuration !== undefined
+        ? { configuration: options.configuration() }
+        : {}),
     };
     return jsonNoStore(body);
   };

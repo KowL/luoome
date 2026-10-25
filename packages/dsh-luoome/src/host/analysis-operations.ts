@@ -8,6 +8,7 @@ import type { AnalysisProvenance, ToolContext } from '@luoome/core';
 import {
   analysisHash,
   type ConfirmablePluginTool,
+  PluginOperationScopeError,
   RecordAdviceInput,
   RecordAnalysisResultInput,
   recordAdviceTool,
@@ -62,9 +63,9 @@ const assertFrozenEnvelope = (
   operationId: string,
 ): void => {
   if (input.accountId !== undefined && input.accountId !== principal.accountId)
-    throw new Error('Operation scope mismatch');
+    throw new PluginOperationScopeError('accountId');
   if (input.requestId !== undefined && input.requestId !== operationId)
-    throw new Error('Operation scope mismatch');
+    throw new PluginOperationScopeError('requestId');
 };
 
 const receiptContext = async (
@@ -81,6 +82,7 @@ export const createRecordAdviceOperation = (
 ): ConfirmablePluginTool => ({
   tool: recordAdviceTool,
   scheduled: false,
+  hostBoundFields: ['accountId', 'requestId'],
   bind(raw, principal, operationId) {
     const parsed = z.record(z.string(), z.unknown()).parse(raw);
     assertFrozenEnvelope(parsed, principal, operationId);
@@ -117,6 +119,7 @@ export const createRecordAnalysisResultOperation = (
 ): ConfirmablePluginTool => ({
   tool: recordAnalysisResultTool,
   scheduled: false,
+  hostBoundFields: ['accountId', 'requestId'],
   bind(raw, principal, operationId) {
     const parsed = z.record(z.string(), z.unknown()).parse(raw);
     assertFrozenEnvelope(parsed, principal, operationId);

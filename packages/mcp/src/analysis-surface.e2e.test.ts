@@ -235,6 +235,7 @@ const batchEnv = (): Record<string, string> => ({
   ...isolatedEnv(),
   LUOOME_MCP_SERVER_NAME: 'luoome-batch',
   LUOOME_EXPOSE_WRITE: 'true',
+  LUOOME_EXPOSE_EXTERNAL: 'true',
   LUOOME_EXPOSE_TOOLS: BATCH_TOOL_NAMES.join(','),
 });
 
@@ -419,6 +420,9 @@ describe('DSH 交互分析面隔离验收（§7.1 协议 + §7.2 领域链路）
   }, 90_000);
 
   it('A3 · settings/batch 实例 discovery 收窄到各自白名单，不含分析写回与队列管理（§7.1）', async () => {
+    await withClient({ ...batchEnv(), LUOOME_EXPOSE_EXTERNAL: '' }, async (client) => {
+      assertNamesEqual('§7.1 batch 只有 write 时不暴露组合能力工具', await client.listTools(), []);
+    });
     await withClient(settingsEnv(), async (client, init) => {
       const serverInfo = asRecord(init.serverInfo);
       assertItem(

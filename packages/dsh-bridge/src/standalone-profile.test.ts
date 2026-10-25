@@ -338,7 +338,9 @@ describe('交互式分析面（luoome-analysis）', () => {
     for (const row of mcpRows) {
       const env = row.config?.env;
       expect(env?.LUOOME_EXPOSE_TRADE, `${row.id} 不应带 trade`).toBeUndefined();
-      expect(env?.LUOOME_EXPOSE_EXTERNAL, `${row.id} 不应带 external`).toBeUndefined();
+      expect(env?.LUOOME_EXPOSE_EXTERNAL, `${row.id} 的 external 由精确 profile 决定`).toBe(
+        row.id === `mcp-${BATCH_SERVER_NAME}` ? 'true' : undefined,
+      );
       if (row.id !== `mcp-${ANALYSIS_SERVER_NAME}`) {
         expect(env?.LUOOME_EXPOSE_QUEUE, `${row.id} 不应带队列开关`).toBeUndefined();
       }

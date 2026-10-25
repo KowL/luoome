@@ -34,6 +34,16 @@
         "zod": "^4.0.0",
       },
     },
+    "packages/batch": {
+      "name": "@luoome/batch",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/tools": "workspace:*",
+        "@luoome/workflows": "workspace:*",
+        "zod": "4.4.3",
+      },
+    },
     "packages/cli": {
       "name": "@luoome/cli",
       "version": "0.1.0",
@@ -80,7 +90,7 @@
     },
     "packages/dsh-luoome": {
       "name": "dsh-luoome",
-      "version": "0.1.0",
+      "version": "0.2.3",
       "dependencies": {
         "@deepseek-ai/cordis": "4.0.5",
         "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
@@ -112,6 +122,7 @@
         "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
         "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
         "@luoome/adapters": "workspace:*",
+        "@luoome/batch": "workspace:*",
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
@@ -124,6 +135,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@luoome/adapters": "workspace:*",
+        "@luoome/batch": "workspace:*",
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
@@ -966,6 +978,8 @@
     "@koromix/koffi-win32-x64": ["@koromix/koffi-win32-x64@3.1.1", "", { "os": "win32", "cpu": "x64" }, "sha512-KqHPmvj6QILhNyI/To8QSihHsijeVGIYYPBOUnXEpcnH2LuLbargY4Hd6dDeTN3Z90uUUxN+1FWz1UnhVzFOiA=="],
 
     "@luoome/adapters": ["@luoome/adapters@workspace:packages/adapters"],
+
+    "@luoome/batch": ["@luoome/batch@workspace:packages/batch"],
 
     "@luoome/cli": ["@luoome/cli@workspace:packages/cli"],
 

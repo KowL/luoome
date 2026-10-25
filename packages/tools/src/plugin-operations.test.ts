@@ -69,6 +69,69 @@ const setup = async () => {
 };
 
 describe('persistent operation execution', () => {
+  it('advertises host-bound IDs as optional and diagnoses a mismatch without echoing values', async () => {
+    const { service, principal } = await setup();
+    const schema = service
+      .descriptors()
+      .find((policy) => policy.name === 'save_decision_review')?.inputSchema;
+    expect(schema?.required).not.toContain('requestId');
+    expect(schema?.properties?.requestId).toMatchObject({
+      description: expect.stringContaining('omit requestId'),
+    });
+    const requestId = randomUUID();
+    const result = await service.prepare(principal, {
+      id: randomUUID(),
+      tool: 'save_decision_review',
+      input: { requestId },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'invalid_input',
+        issues: [
+          {
+            path: ['requestId'],
+            message: 'Omit requestId; the host supplies the top-level operation id',
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(requestId);
+    service.dispose();
+  });
+  it('passes cancellation through to the business tool without replaying the operation', async () => {
+    const { ctx, principal, options } = await setup();
+    const controller = new AbortController();
+    const observed: AbortSignal[] = [];
+    const tool = defineTool({
+      name: 'cancel_batch',
+      description: 'cancellable fixture',
+      sideEffect: 'write',
+      input: z.object({}).strict(),
+      output: z.object({ done: z.boolean() }),
+      handler: async (_input, context) => {
+        if (!context.abortSignal) throw new Error('Missing operation signal');
+        observed.push(context.abortSignal);
+        controller.abort();
+        return { done: context.abortSignal.aborted };
+      },
+    });
+    const service = createPluginOperationService({
+      ...options,
+      policies: [{ tool, scheduled: false, bind: () => ({}), receipt: async () => null }],
+    });
+    const id = randomUUID();
+    const prepared = data(await service.prepare(principal, { id, tool: tool.name, input: {} }));
+    await service.confirm(principal, { id, token: prepared.confirmationToken }, controller.signal);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.aborted).toBe(true);
+    expect(await ctx.repos.pluginAuthority.findOperation({ ...principal, id })).toMatchObject({
+      state: 'succeeded',
+    });
+    await service.confirm(principal, { id, token: prepared.confirmationToken }, signal());
+    expect(observed).toHaveLength(1);
+    service.dispose();
+  });
   it('freezes a review patch against its base revision and retains CAS when approval is late', async () => {
     const { service, ctx, principal } = await setup();
     const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];

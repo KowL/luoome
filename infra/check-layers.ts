@@ -1,6 +1,16 @@
 import { readFile } from 'node:fs/promises';
 
-const domain = new Set(['core', 'db', 'tools', 'workflows', 'mcp', 'adapters', 'cli', 'tui']);
+const domain = new Set([
+  'core',
+  'db',
+  'tools',
+  'workflows',
+  'batch',
+  'mcp',
+  'adapters',
+  'cli',
+  'tui',
+]);
 const failures: string[] = [];
 for await (const path of new Bun.Glob('{packages,apps}/**/*.{ts,tsx,js,mjs}').scan('.')) {
   if (path.split('/').some((part) => part === 'node_modules' || part === 'dist')) continue;

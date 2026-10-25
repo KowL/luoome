@@ -17,6 +17,7 @@ import {
   CreateStrategyVersionInput,
   createStrategyTool,
   createStrategyVersionTool,
+  PluginOperationScopeError,
   type PluginPrincipal,
   PublishStrategyVersionInput,
   pluginInputJson,
@@ -35,7 +36,7 @@ import { z } from 'zod';
 const clientScope = (raw: unknown, principal: PluginPrincipal): Record<string, unknown> => {
   const parsed = z.record(z.string(), z.unknown()).parse(raw);
   if (parsed.accountId !== undefined && parsed.accountId !== principal.accountId)
-    throw new Error('Operation scope mismatch');
+    throw new PluginOperationScopeError('accountId');
   return parsed;
 };
 
@@ -167,13 +168,14 @@ const adviceOutcomeContent = (input: z.output<typeof RecordAdviceOutcomeInput>) 
 
 const recordAdviceOutcomeOperation: ConfirmablePluginTool = {
   tool: recordAdviceOutcomeTool,
+  hostBoundFields: ['accountId', 'requestId'],
   // 用户反馈只经一次性人工审批写入；定时授权/自动执行永不包含本 policy。
   scheduled: false,
   bind(raw, principal, operationId) {
     const parsed = clientScope(raw, principal);
     // requestId 与账户一样由 operationId/principal 决定，客户端不能替换。
     if (parsed.requestId !== undefined && parsed.requestId !== operationId)
-      throw new Error('Operation scope mismatch');
+      throw new PluginOperationScopeError('requestId');
     const input = RecordAdviceOutcomeInput.parse({
       ...parsed,
       accountId: principal.accountId,

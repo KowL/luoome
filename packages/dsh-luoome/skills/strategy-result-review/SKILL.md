@@ -12,9 +12,9 @@ whenToUse: 用户问某个策略最近跑得怎样、为什么选出这些股票
 
 ## 流程
 
-1. **锁定身份**：先确认 strategyId；用户没给时用 `list_strategies` 让用户选择，并用 `list_strategy_runs` 展示最近运行让用户选定 runId。
+1. **锁定身份**：用 `list_strategies` 按用户所选名称查找，核对版本号和事实时间后，在工具参数中绑定确切 strategyId/runId。名称唯一且事实对应时直接继续；存在同名或事实不符时，用名称、版本和时间让用户核对，不展示内部标识。
 2. **只读确切事实**：
-   - 策略与版本：`get_strategy`、`get_strategy_workspace`；
+   - 策略与版本：`get_strategy`、`get_strategy_workspace`（含 `currentRunVersion` 和最多 `selectedLimit` 条有名称的 `matches.rows`；`matches.total` 是完整入选数量）；
    - 运行：`list_strategy_runs`、`get_strategy_run`、`compare_strategy_runs`；
    - 结果、信号与观察：`strategy_signals_by_stock`、`get_strategy_insight_facts`、`list_pending_strategy_observations`、`get_signal_observation_stats`；
    - 可靠性：`get_strategy_reliability_summary`、`get_strategy_decision_cycles`。
@@ -24,7 +24,7 @@ whenToUse: 用户问某个策略最近跑得怎样、为什么选出这些股票
    - 数据缺口：dataHealth、limitations、pending 或 unavailable 观察、样本数；
    - 事后观察：T+1/T+3/T+5 的 SignalObservation，注明 sampleUnit、样本量、missingRate 与 benchmarkStatus；
    - 推断：模型对「为什么」的解释必须标为推断，不能伪装成事实。
-4. **引用与措辞**：每个结论引用真实 run/version/fact id；不把观察称为严格回测，不承诺未来收益，不把 confidence 当概率。
+4. **引用与措辞**：结论内部绑定真实 run/version/fact id，对用户使用策略名称、版本号、事实时间和股票名称说明来源，不直接展示内部标识。当前版本与结果版本不同时明确区分。不把观察称为严格回测，不承诺未来收益，不把 confidence 当概率。
 5. **只解释就结束**：用户只问「怎么样、为什么」时，在对话里回答即可，不强制落库，不自动生成报告，不触发写入。
 6. **要改策略**：转入本插件 strategy-lab 的草案、校验、试跑、逐项审批与发布路径。研究结论不能直接修改定义，也不能直接发布。
 7. **可选保存 proposal**：用户明确要求留档时，先调用 `get_analysis_context`，kind 取 strategy_version_proposal、subject 为 strategy（以工具 input schema 为准），取得带 factIds 的 context；展示将保存的 proposal 内容与来源引用；再经 DSH 原生确认操作 `luoome_confirmed_operation` 的 `record_analysis_result` policy 保存。保存的 proposal 只是研究产物，不是发布。

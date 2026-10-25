@@ -14,6 +14,7 @@ export {
   createRecordAnalysisResultOperation,
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
+export { createBatchOperationPolicies } from './batch-operations.js';
 export {
   assertExternalMarketAllowlist,
   createMarketSurface,

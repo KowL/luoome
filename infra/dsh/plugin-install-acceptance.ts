@@ -18,7 +18,7 @@ const owner = Object.freeze({
   accountId: 'plugin-acceptance-account',
 });
 const profileName = 'luoome-plugin';
-const READ_TOOL_COUNT = 45;
+const READ_TOOL_COUNT = 46;
 const MARKET_TOOL_COUNT = 6;
 const EXPECTED_MARKET_TOOLS = [
   'fetch_index_quotes',
@@ -336,7 +336,7 @@ try {
   )
     throw new Error('client bundle must not inline React internals');
 
-  // 2) bun pm pack：验收包只包含 host/client、manifest 与四条技能。
+  // 2) bun pm pack：精确检查发布文件，避免将源码或本地配置带入安装包。
   await rm(join(root, 'pack'), { recursive: true, force: true });
   await mkdir(join(root, 'pack'), { recursive: true });
   run('bun', ['pm', 'pack', '--destination', join(root, 'pack')], { cwd: packageDir });
@@ -350,6 +350,8 @@ try {
     'package/dist/host.js',
     'package/dist/client.js',
     'package/package.json',
+    'package/README.md',
+    'package/LICENSE',
     ...expectedSkillEntries,
   ];
   // tar 可能带目录条目；只把文件条目计入精确清单。
@@ -395,11 +397,21 @@ try {
   const installedManifest = JSON.parse(
     await readFile(join(installedDir, 'package.json'), 'utf8'),
   ) as {
+    private?: boolean;
+    license?: string;
+    publishConfig?: { access?: string; registry?: string };
     exports?: Record<string, unknown>;
     files?: string[];
     dsh?: { client?: { platform?: string; inject?: string[] } };
     dependencies: Record<string, string>;
   };
+  if (
+    installedManifest.private === true ||
+    installedManifest.license !== 'MIT' ||
+    installedManifest.publishConfig?.access !== 'public' ||
+    installedManifest.publishConfig.registry !== 'https://registry.npmjs.org'
+  )
+    throw new Error('installed package must declare its public npm destination and MIT license');
   for (const [name, version] of Object.entries(installedManifest.dependencies)) {
     if (!name.startsWith('@deepseek-ai/') || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
       throw new Error(`runtime dependency must be a pinned DSH package: ${name}@${version}`);
@@ -646,6 +658,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   // 4c) M2b：安装产物必须携带精确写回 policies，且来源固定为受信任装配。
   const PRODUCTION_QUEUE_POLICIES = ['record_advice', 'record_analysis_result'] as const;
   const PRODUCTION_WRITE_POLICIES = [
+    'update_account',
     'save_decision_review',
     'create_strategy',
     'create_strategy_version',
@@ -783,6 +796,13 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   const deniedState = await fetch(`${firstOrigin}/api/luoome/state?panel=overview`, {
     redirect: 'manual',
   });
+  const invalidStock = await profile(firstOrigin, firstCookie, '/api/luoome/stock?stockId=NOPE');
+  if (invalidStock.status !== 400 || invalidStock.headers.get('cache-control') !== 'no-store')
+    throw new Error('stock detail route must validate the stock ID and disable caching');
+  const deniedStock = await fetch(`${firstOrigin}/api/luoome/stock?stockId=600519.SH`, {
+    redirect: 'manual',
+  });
+  if (deniedStock.status !== 401) throw new Error('stock detail must require real host admission');
   if (deniedState.status !== 401)
     throw new Error(
       `unauthenticated state route must be 401, received ${String(deniedState.status)}`,

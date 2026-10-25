@@ -308,13 +308,24 @@ export const listStrategyResultViewsTool = defineTool({
   },
 });
 
-export const GetStrategyWorkspaceInput = z.object({ strategyId: z.string().min(1) });
+export const GetStrategyWorkspaceInput = z.object({
+  strategyId: z.string().min(1),
+  selectedLimit: z.number().int().positive().max(200).default(50),
+});
 export const GetStrategyWorkspaceOutput = z.object({
   strategy: StrategySchema,
   currentVersion: StrategyVersionSchema.optional(),
+  currentRunVersion: StrategyVersionSchema.optional(),
   latestAttempt: StrategyRunSchema.optional(),
   currentRun: StrategyRunSchema.optional(),
   previousRun: StrategyRunSchema.optional(),
+  matches: z
+    .object({
+      total: z.number().int().nonnegative(),
+      limit: z.number().int().positive(),
+      rows: z.array(z.object({ stock: StockIdentityViewSchema, result: StrategyResultSchema })),
+    })
+    .optional(),
   overview: z.object({
     selectedCount: z.number().int().nonnegative().optional(),
     ruleNearMissCount: z.number().int().nonnegative().optional(),
@@ -331,7 +342,7 @@ export const GetStrategyWorkspaceOutput = z.object({
 export const getStrategyWorkspaceTool = defineTool({
   name: 'get_strategy_workspace',
   description:
-    '查询 Strategy 工作台摘要；仅 published operational run 进入 current，未发布运行保留诊断状态',
+    '查询 Strategy 定义、工作台摘要与有界入选股票明细（含名称、规则事实）；仅 published operational run 进入 current，明细绑定其实际版本，未发布运行保留诊断状态',
   sideEffect: 'read',
   input: GetStrategyWorkspaceInput,
   output: GetStrategyWorkspaceOutput,
@@ -379,6 +390,7 @@ export const getStrategyWorkspaceTool = defineTool({
     }
 
     const overview: z.infer<typeof GetStrategyWorkspaceOutput>['overview'] = { health };
+    let matches: z.infer<typeof GetStrategyWorkspaceOutput>['matches'];
     if (currentEntry !== undefined) {
       const version = currentEntry.version;
       if (version === null)
@@ -392,6 +404,30 @@ export const getStrategyWorkspaceTool = defineTool({
         (view) => view.kind === 'ranking-near-miss',
       ).length;
       overview.incompleteCount = views.filter((view) => view.kind === 'incomplete').length;
+      const selected = views
+        .filter((view) => view.kind === 'selected')
+        .map((view) => view.result)
+        .sort(
+          (left, right) =>
+            (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) ||
+            (right.score ?? -1) - (left.score ?? -1) ||
+            left.stockId.localeCompare(right.stockId),
+        )
+        .slice(0, input.selectedLimit);
+      const identities = await stockIdentities(
+        selected.map((result) => result.stockId),
+        ctx,
+      );
+      const byStock = new Map(identities.stocks.map((stock) => [stock.stockId, stock]));
+      warnings.push(...identities.warnings);
+      matches = {
+        total: overview.selectedCount,
+        limit: input.selectedLimit,
+        rows: selected.map((result) => ({
+          stock: byStock.get(result.stockId) as z.infer<typeof StockIdentityViewSchema>,
+          result,
+        })),
+      };
       if (previousEntry !== undefined) {
         const previousVersion = previousEntry.version;
         const previousResults = previousEntry.results;
@@ -419,6 +455,8 @@ export const getStrategyWorkspaceTool = defineTool({
       ...(currentVersion === undefined || currentVersion === null ? {} : { currentVersion }),
       ...(latest === undefined ? {} : { latestAttempt: latest }),
       ...(currentRun === undefined ? {} : { currentRun }),
+      ...(currentEntry?.version == null ? {} : { currentRunVersion: currentEntry.version }),
+      ...(matches === undefined ? {} : { matches }),
       ...(previousRun === undefined ? {} : { previousRun }),
       overview,
       warnings,

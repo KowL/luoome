@@ -12,6 +12,7 @@
 | 读者 | 从这里开始 |
 |---|---|
 | 产品用户 | [用户手册](./USER_GUIDE.md) |
+| DSH 插件安装 | [dsh-luoome 安装说明](../packages/dsh-luoome/README.md) |
 | 外部 Agent / MCP 使用者 | [luoome Skill](../skills/luoome/SKILL.md) |
 | 编码 Agent | [仓库开发规范](../AGENTS.md) |
 | 贡献者 | [贡献者指南](./CONTRIBUTING.md) |
@@ -48,7 +49,7 @@
 
 | 文档 | 范围 |
 |---|---|
-| [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | 完整输入 schema、持久确认与 DSH 原生/PTC 调度审批链路；Node DB、完整 profile/UI 与预检待验收，自动执行默认关闭 |
+| [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | Node 插件、五页读面/账户改名、原生批处理与逐任务授权；真实模型、浏览器及发布状态见 §9 最新记录，自动执行默认关闭 |
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与 Run/Tool Manifest 契约；对应研发计划已归档，能力契约仍按此设计演进 |
 | [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH（Web 四实例 MCP：read/settings/analysis/batch，其中 analysis 只服务交互分析写回）、领域层去 AI（事实包 + 待分析队列）与队列能力保留；含契约、DDL、阶段与验收（草案） |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |

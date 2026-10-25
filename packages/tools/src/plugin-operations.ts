@@ -19,9 +19,40 @@ export interface PluginPrincipal {
 export interface ConfirmablePluginTool {
   readonly tool: Tool;
   readonly scheduled: boolean;
+  readonly hostBoundFields?: readonly ('accountId' | 'requestId')[];
   bind(input: unknown, principal: PluginPrincipal, operationId: string, ctx: ToolContext): unknown;
   receipt(input: unknown, ctx: ToolContext): Promise<ToolResult<unknown> | null>;
 }
+
+export class PluginOperationScopeError extends Error {
+  constructor(readonly field: 'accountId' | 'requestId') {
+    super(
+      field === 'requestId'
+        ? 'Omit requestId; the host supplies the top-level operation id'
+        : 'Operation account must match the current owner account',
+    );
+  }
+}
+
+const operationInputSchema = ({ tool, hostBoundFields = [] }: ConfirmablePluginTool) => {
+  const schema = z.toJSONSchema(tool.inputSchema, { io: 'input', unrepresentable: 'any' });
+  if (schema.required)
+    schema.required = schema.required.filter(
+      (field) => !hostBoundFields.includes(field as 'accountId' | 'requestId'),
+    );
+  for (const field of hostBoundFields) {
+    const property = schema.properties?.[field];
+    if (schema.properties && property && typeof property === 'object')
+      schema.properties[field] = {
+        ...property,
+        description:
+          field === 'requestId'
+            ? 'Host-bound: omit requestId. The host supplies the top-level operation id; if supplied it must equal that id.'
+            : 'Host-bound: omit accountId to use the current owner account. A different account is rejected.',
+      };
+  }
+  return schema;
+};
 
 export const pluginInputJson = (input: unknown): string => {
   const sort = (value: unknown): unknown => {
@@ -57,6 +88,7 @@ const publicOperation = (op: PluginOperation) => ({
   operationId: op.id,
   accountId: op.accountId,
   tool: op.tool,
+  requiredCapabilities: op.requiredCapabilities,
   state: op.state,
   input: JSON.parse(op.inputJson) as unknown,
   expiresAt: op.expiresAt,
@@ -246,7 +278,11 @@ export const createPluginOperationService = (options: {
     let result: ToolResult<unknown> | null = null;
     try {
       if (!signal.aborted && !disposed)
-        result = await policy.tool.execute(JSON.parse(claimed.inputJson), ctx);
+        result = await policy.tool.execute(JSON.parse(claimed.inputJson), {
+          ...ctx,
+          abortSignal:
+            ctx.abortSignal === undefined ? signal : AbortSignal.any([signal, ctx.abortSignal]),
+        });
     } catch {
       // A thrown/failed business call may already have committed; never blindly replay it.
     }
@@ -277,10 +313,10 @@ export const createPluginOperationService = (options: {
   };
   return {
     descriptors() {
-      return [...policies.values()].filter(allowed).map(({ tool }) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: z.toJSONSchema(tool.inputSchema, { io: 'input', unrepresentable: 'any' }),
+      return [...policies.values()].filter(allowed).map((policy) => ({
+        name: policy.tool.name,
+        description: policy.tool.description,
+        inputSchema: operationInputSchema(policy),
       }));
     },
     prepare(principal: PluginPrincipal, request: { id: string; tool: string; input: unknown }) {
@@ -297,16 +333,18 @@ export const createPluginOperationService = (options: {
           });
         } catch (error) {
           return invalid(
-            error instanceof z.ZodError
-              ? error.issues.map((issue) => ({
-                  code: 'custom',
-                  path: issue.path,
-                  message:
-                    issue.code === 'invalid_type'
-                      ? `Expected ${issue.expected}`
-                      : `Invalid value (${issue.code})`,
-                }))
-              : [],
+            error instanceof PluginOperationScopeError
+              ? [{ code: 'custom', path: [error.field], message: error.message }]
+              : error instanceof z.ZodError
+                ? error.issues.map((issue) => ({
+                    code: 'custom',
+                    path: issue.path,
+                    message:
+                      issue.code === 'invalid_type'
+                        ? `Expected ${issue.expected}`
+                        : `Invalid value (${issue.code})`,
+                  }))
+                : [],
           );
         }
         if (!(await repo.insertOperation(op))) {

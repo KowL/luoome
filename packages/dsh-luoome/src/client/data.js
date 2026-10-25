@@ -16,12 +16,16 @@ export {
   researchRequestFor,
   resultOf,
   stateUrl,
+  stockDetailUrl,
+  stockResearchRequestFor,
+  strategyExpression,
+  strategyText,
   workspaceDataOf,
   workspaceErrorOf,
   workspaceOf,
 } from './projection.js';
 
-import { mapStateBody, stateUrl } from './projection.js';
+import { mapStateBody, stateUrl, stockDetailUrl } from './projection.js';
 
 const fetchPanelState = async (panel, signal) => {
   const response = await fetch(stateUrl(panel), {
@@ -41,6 +45,7 @@ export function usePanelState(panel) {
     loading: true,
     results: {},
     strategies: [],
+    configuration: null,
     asOf: null,
     panelError: null,
     loadedAt: null,
@@ -57,6 +62,7 @@ export function usePanelState(panel) {
           loading: false,
           results: next.results,
           strategies: next.strategies,
+          configuration: next.configuration,
           asOf: next.asOf,
           panelError: null,
           loadedAt: new Date(),
@@ -78,4 +84,40 @@ export function usePanelState(panel) {
 
   const refresh = useCallback(() => setTick((value) => value + 1), []);
   return { ...state, refresh };
+}
+
+export function useStockDetail(stockId) {
+  const [tick, setTick] = useState(0);
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setState({ loading: true, data: null, error: null });
+    fetch(stockDetailUrl(stockId), {
+      signal: controller.signal,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (active) setState({ loading: false, data, error: null });
+      })
+      .catch(() => {
+        if (active && !controller.signal.aborted)
+          setState({
+            loading: false,
+            data: null,
+            error: { message: '行情暂时无法读取，请稍后重试。' },
+          });
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [stockId, tick]);
+  return { ...state, refresh: useCallback(() => setTick((value) => value + 1), []) };
 }

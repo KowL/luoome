@@ -12,6 +12,10 @@ import {
   publishedRunsByStrategy,
   researchRequestFor,
   stateUrl,
+  stockDetailUrl,
+  stockResearchRequestFor,
+  strategyExpression,
+  strategyText,
 } from './projection.js';
 
 describe('client panel state projection', () => {
@@ -53,7 +57,7 @@ describe('client panel state projection', () => {
     expect(state.strategies).toHaveLength(2);
     expect(state.strategies[0]?.workspace?.ok).toBe(true);
     expect(state.strategies[1]?.workspace?.error).toEqual({ kind: 'permission_denied' });
-    expect(stateUrl('strategies')).toBe('/api/luoome/state?panel=strategies');
+    expect(stateUrl('strategies')).toBe('api/luoome/state?panel=strategies');
   });
 
   it('rejects invalid state bodies and ignores malformed tool entries', () => {
@@ -61,6 +65,43 @@ describe('client panel state projection', () => {
     const state = mapStateBody({ tools: [null, { name: 'x' }, { name: 'y', ok: true, data: 1 }] });
     expect(Object.keys(state.results)).toEqual(['x', 'y']);
     expect(state.results.x).toEqual({ ok: false, error: { kind: 'unavailable' } });
+  });
+
+  it.each(['http://localhost:3080/', 'https://example.test/dsh/'])(
+    'keeps panel requests under the DSH document base %s',
+    (base) => {
+      expect(new URL(stateUrl('overview'), base).href).toBe(
+        `${base}api/luoome/state?panel=overview`,
+      );
+      expect(new URL(stockDetailUrl('600519.SH'), base).href).toBe(
+        `${base}api/luoome/stock?stockId=600519.SH`,
+      );
+    },
+  );
+
+  it('builds a stock analysis request with the selected stock and exact readable strategy provenance', () => {
+    const request = stockResearchRequestFor({
+      stockId: '600519.SH',
+      stockName: '贵州茅台',
+      strategyId: 'strategy-early-breakout-20260809',
+      runId: 'strategy-run-old',
+      strategyName: '早期突破',
+      version: 6,
+      dataAsOf: '2026-10-23T07:00:00Z',
+    });
+    expect(request).toMatchObject({
+      stockId: '600519.SH',
+      strategyId: 'strategy-early-breakout-20260809',
+      runId: 'strategy-run-old',
+    });
+    expect(request.prompt).toContain('贵州茅台（600519.SH）');
+    expect(request.prompt).toContain('早期突破');
+    expect(request.prompt).toContain('第 6 版');
+    expect(request.prompt).toContain('2026-10-23T07:00:00Z');
+    expect(request.prompt).not.toContain(request.strategyId);
+    expect(request.prompt).not.toContain(request.runId);
+    expect(request.prompt).toContain('缺失或过期数据');
+    expect(request.prompt).toContain('先让我确认');
   });
 
   it('does not infer user follow-up: outcome only comes from explicit advice.outcome', () => {
@@ -195,15 +236,48 @@ describe('client panel state projection', () => {
     });
   });
 
-  it('builds conversation research requests carrying strategyId and runId', () => {
-    const withRun = researchRequestFor('strategy-a', 'run-a');
+  it('keeps exact research references outside the visible draft and uses readable facts for lookup', () => {
+    const withRun = researchRequestFor('strategy-a', 'run-a', {
+      strategyName: '早期突破',
+      version: 7,
+      dataAsOf: '2026-10-23T07:00:00Z',
+    });
     expect(withRun.strategyId).toBe('strategy-a');
     expect(withRun.runId).toBe('run-a');
-    expect(withRun.prompt).toContain('strategy-a');
-    expect(withRun.prompt).toContain('run-a');
+    expect(withRun.prompt).not.toContain('strategy-a');
+    expect(withRun.prompt).not.toContain('run-a');
+    expect(withRun.prompt).toContain('早期突破');
+    expect(withRun.prompt).toContain('第 7 版');
+    expect(withRun.prompt).toContain('2026-10-23T07:00:00Z');
+    expect(withRun.prompt).toContain('存在同名或版本不符时先核对');
     expect(withRun.prompt).not.toContain('自动发布策略');
     const withoutRun = researchRequestFor('strategy-a');
     expect(withoutRun.runId).toBeNull();
-    expect(withoutRun.prompt).toContain('strategy-a');
+    expect(withoutRun.prompt).not.toContain('strategy-a');
+    expect(withoutRun.prompt).not.toContain('已发布匹配结果');
+  });
+
+  it('replaces internal strategy, run, version and rule references without hiding stock codes', () => {
+    const text = strategyText(
+      'strategy-early-breakout-20260809-v7 / strategy-early-breakout-20260809 / run-20261023-001 / positive-price / 600519.SH',
+      [
+        { id: 'strategy-early-breakout-20260809', label: '早期突破' },
+        { id: 'strategy-early-breakout-20260809-v7', label: '第 7 版' },
+        { id: 'positive-price', label: '价格有效' },
+      ],
+    );
+    expect(text).toBe('第 7 版 / 早期突破 / 相关记录 / 价格有效 / 600519.SH');
+    expect(strategyText('版本 527bb68d-814e-4477-9959-54b3094d984e')).toBe('版本 相关记录');
+  });
+
+  it('translates expression fields while retaining thresholds and operator grouping', () => {
+    expect(
+      strategyExpression(
+        `\${indicators.ma5} > \${indicators.ma20} && (quote.close >= 20 || meta.limitUpToday)`,
+      ),
+    ).toBe('5 日均线 > 20 日均线  且  (收盘价 ≥ 20  或  今日涨停)');
+    expect(strategyExpression(`Math.min(100, \${indicators.volRatio5_20} * 30)`)).toBe(
+      'Math.min(100, 5 / 20 日量比 * 30)',
+    );
   });
 });

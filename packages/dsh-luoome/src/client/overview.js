@@ -79,12 +79,12 @@ const IndexCard = ({ quote }) => {
       h('span', { className: `luo-${tone}` }, signedMoney(quote.change)),
       h('span', { className: `luo-${tone}` }, points(quote.changePct)),
     ),
-    h('div', { className: 'luo-index-src' }, `${quote.source} · ${clock(quote.ts)}`),
+    h('div', { className: 'luo-index-src' }, `${quote.source} · ${when(quote.ts)}`),
   );
 };
 
-const IndexStrip = ({ snapshot, loading, error }) => {
-  const values = snapshot?.indexes?.values ?? [];
+const IndexStrip = ({ quotes, loading, error }) => {
+  const values = quotes?.indices ?? [];
   if (values.length > 0) {
     return h(
       'div',
@@ -109,8 +109,12 @@ const IndexStrip = ({ snapshot, loading, error }) => {
   return h(
     Card,
     { title: '核心指数' },
-    h(ErrorNote, { label: '指数', error }),
-    h(DimensionHint, { dimension: snapshot?.indexes }),
+    error
+      ? h(ErrorNote, { label: '指数', error })
+      : h(Empty, {
+          title: quotes?.unsupported ? '当前行情源不支持指数' : '暂未返回指数行情',
+          hint: '可稍后刷新，数据缺失不会按零展示。',
+        }),
   );
 };
 
@@ -208,7 +212,7 @@ const BreadthCard = ({ snapshot, loading, error }) => {
   );
 };
 
-const HoldingsTable = ({ holdings, loading, error }) => {
+export const HoldingsTable = ({ holdings, loading, error }) => {
   if (!holdings) {
     return h(
       Card,
@@ -600,6 +604,7 @@ export function OverviewPanel() {
   const advice = dataOf(results, 'get_advice');
   const watchlists = dataOf(results, 'list_watchlists');
   const sentiment = dataOf(results, 'get_ashare_sentiment')?.snapshot;
+  const indexQuotes = dataOf(results, 'fetch_index_quotes');
   const marketStatus = dataOf(results, 'get_market_data_status');
   const session = marketStatus?.marketSession;
 
@@ -635,13 +640,13 @@ export function OverviewPanel() {
       Section,
       {
         title: '核心指数',
-        meta: sentiment?.indexes?.provenance?.[0]?.provider ?? '实时行情',
+        meta: indexQuotes?.indices?.[0]?.source ?? '行情快照',
         delay: 40,
       },
       h(IndexStrip, {
-        snapshot: sentiment,
+        quotes: indexQuotes,
         loading,
-        error: errorOf(results, 'get_ashare_sentiment'),
+        error: errorOf(results, 'fetch_index_quotes'),
       }),
     ),
     h(

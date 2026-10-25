@@ -19,7 +19,7 @@
     "test:analysis-surface": "bun --no-env-file test packages/mcp/src/analysis-surface.e2e.test.ts",
     "test:plugin-install": "bun --no-env-file infra/dsh/plugin-install-acceptance.ts",
     "test:mvp-journeys": "bun --no-env-file infra/dsh/mvp-journeys-acceptance.ts",
-    "test:panels-browser": "bun --no-env-file infra/dsh/panels-browser-acceptance.ts",
+    "test:panels-browser": "env npx --yes node@24 infra/dsh/panels-browser-acceptance.ts",
     "test:all": "bun run test && bun run test:db && bun run test:db:node && bun run test:web && bun run test:dsh-luoome:e2e && bun run test:analysis-surface",
     "mcp:smoke": "bun packages/mcp/src/smoke.ts",
     "web": "bun --no-env-file apps/web/src/index.ts",

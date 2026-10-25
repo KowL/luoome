@@ -1316,6 +1316,15 @@ describe('strategy-autonomy-weekly · 全新策略首发门禁（§9.2）', () =
 });
 
 describe('strategy-autonomy-weekly · 周报嵌套触发', () => {
+  it('keeps an explicit account scope through every autonomy step into the weekly report', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const accountId = ctx.user.defaultAccountId;
+    const result = await strategyAutonomyWeeklyWorkflow.run({ mode: 'scheduled', accountId }, ctx);
+    expect(result.ok).toBe(true);
+    const reports = await ctx.repos.report.list({ kind: 'weekly' });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.scope).toEqual({ kind: 'account', accountId });
+  });
   it('自治周循环完成后触发 weekly-report，periodEnd 回溯到最近 A 股交易日', async () => {
     const ctx = await buildTestContext({ clock: () => now });
 

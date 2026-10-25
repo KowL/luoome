@@ -6,7 +6,7 @@ import type { PluginPrincipal } from '@luoome/tools';
 import { createDshOperationHost } from './dsh-authority.js';
 import type { MarketSurface } from './market-surface.js';
 import { createOperationHandler } from './operations.js';
-import { createPanelStateHandler } from './panels.js';
+import { createPanelStateHandler, createStockDetailHandler } from './panels.js';
 import type { ReadSurface } from './read-surface.js';
 import { createReadCallHandler } from './routes.js';
 import { registerReadTools } from './tools.js';
@@ -33,6 +33,17 @@ export const mountDshWebProfile = (
   const readNames = new Set(options.read.descriptors().map((tool) => tool.name));
   const removers: (() => void)[] = [];
   const operations = createOperationHandler(host.service, () => options.principalForOwner());
+  const configuration = () => ({
+    profile: options.profile,
+    accountId: options.principalForOwner()?.accountId,
+    automationsEnabled: options.automationsEnabled === true,
+    readTools: [...readNames],
+    policies: options.policies.map(({ tool, scheduled }) => ({
+      name: tool.name,
+      description: tool.description,
+      scheduled,
+    })),
+  });
   const routes = new Map<
     string,
     { methods: ('GET' | 'POST')[]; fetch: (r: Request) => Promise<Response> }
@@ -75,26 +86,23 @@ export const mountDshWebProfile = (
         market: options.market,
         admit: () => null,
         now: () => new Date(options.now()),
+        configuration,
       }),
     );
     register('/api/luoome/operations/prepare', ['POST'], operations);
+    register(
+      '/api/luoome/stock',
+      ['GET'],
+      createStockDetailHandler({
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
+    );
     register('/api/luoome/profile', ['GET'], async () => {
       const principal = options.principalForOwner();
       if (!principal) return new Response(null, { status: 403 });
-      return Response.json(
-        {
-          profile: options.profile,
-          accountId: principal.accountId,
-          automationsEnabled: options.automationsEnabled === true,
-          readTools: [...readNames],
-          policies: options.policies.map(({ tool, scheduled }) => ({
-            name: tool.name,
-            description: tool.description,
-            scheduled,
-          })),
-        },
-        { headers: { 'cache-control': 'no-store' } },
-      );
+      return Response.json(configuration(), { headers: { 'cache-control': 'no-store' } });
     });
   } catch (error) {
     for (const remove of removers.reverse()) remove();

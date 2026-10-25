@@ -100,6 +100,8 @@ export const createDshTestHost = async (
     bypassPre?: boolean;
     noAnswerer?: boolean;
     ptc?: boolean;
+    policies?: readonly ConfirmablePluginTool[];
+    clock?: () => Date;
   } = {},
 ) => {
   const ctx = new Context();
@@ -172,13 +174,17 @@ export const createDshTestHost = async (
       accounts: await fixture.repos.account.list(),
       advices: await fixture.repos.advice.query({ includeExpired: true }),
     });
-  const domain: ToolContext = { ...fixture, repos: db.repos };
+  const domain: ToolContext = {
+    ...fixture,
+    repos: db.repos,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+  };
   const principal = { userId: 'local-fixture', accountId: domain.user.defaultAccountId };
   const { batch, policy } = scheduledOperationFixture();
   if (options.bypassPre) ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }));
   const host = createDshOperationHost(ctx, {
     repository: db.repos.pluginAuthority,
-    policies: [decisionReviewOperation, policy],
+    policies: options.policies ?? [decisionReviewOperation, policy],
     capabilities: ['write', 'external'],
     policyVersion: 1,
     now: () => Date.now(),

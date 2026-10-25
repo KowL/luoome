@@ -17,9 +17,13 @@ const toShanghaiMidnight = (date: Date): Date => {
  * 同步范围 = 持仓 ∪ enabled Watchlist 当前成员 ∪ 存在手工事件的股票（去重）。
  * 无关注股票时返回空数组（workflow 记 succeeded、syncedStocks=0）。
  */
-export const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[]> => {
+export const computeRelevantStockIds = async (
+  ctx: ToolContext,
+  options: { readonly accountId?: string; readonly includeEventStocks?: boolean } = {},
+): Promise<string[]> => {
   const set = new Set<string>();
-  const accounts = await ctx.repos.account.list();
+  const accounts =
+    options.accountId === undefined ? await ctx.repos.account.list() : [{ id: options.accountId }];
   for (const acc of accounts) {
     const holdings = await ctx.repos.holding.listByAccount(acc.id);
     for (const h of holdings) {
@@ -31,8 +35,10 @@ export const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[
     const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
     for (const m of members) set.add(m.stockId);
   }
-  for (const stockId of await ctx.repos.stockEvent.listStockIdsWithEvents()) {
-    set.add(stockId);
+  if (options.includeEventStocks !== false) {
+    for (const stockId of await ctx.repos.stockEvent.listStockIdsWithEvents()) {
+      set.add(stockId);
+    }
   }
   return [...set];
 };

@@ -35,9 +35,11 @@ const STOCK: Stock = Object.freeze({
   exchange: 'SH',
   name: '隔离验收贵州茅台',
 });
-const STRATEGY_ID = 'browser-strategy';
-const STRATEGY_VERSION_ID = 'browser-strategy-v1';
-const RUN_ID = 'browser-strategy-run';
+const STRATEGY_ID = 'strategy-early-breakout-20260809';
+const STRATEGY_VERSION_ID = 'strategy-early-breakout-20260809-definition-current';
+const RUN_VERSION_ID = 'strategy-early-breakout-20260809-definition-previous';
+const RUN_ID = 'strategy-run-browser-published';
+const SECOND_STRATEGY_ID = 'strategy-pullback-browser';
 const ADVICE_ID = 'browser-advice-watch';
 const DECISION_NOTE = '浏览器验收：用户明确回填跟随';
 const ADVICE_PREMISE = '浏览器验收：等待量能确认后再判断方向';
@@ -52,6 +54,8 @@ export const PANELS_FIXTURE = Object.freeze({
   decisionNote: DECISION_NOTE,
   advicePremise: ADVICE_PREMISE,
   strategyName: STRATEGY_NAME,
+  secondStrategyId: SECOND_STRATEGY_ID,
+  secondStrategyName: '尚未运行的策略',
 });
 
 const definition: StrategyDslV1 = {
@@ -64,7 +68,43 @@ const definition: StrategyDslV1 = {
       { id: 'positive-close', name: '正价格', when: 'quote.close > 0', evidence: ['收盘价'] },
     ],
   },
-  signals: { entry: [], exit: [], risk: [] },
+  scoring: {
+    method: 'weighted-sum',
+    components: [{ ruleId: 'positive-close', score: '72', weight: 1 }],
+    top: 15,
+  },
+  signals: {
+    entry: [
+      {
+        id: 'entry-price',
+        name: '价格确认',
+        when: 'quote.close > 1000',
+        score: '72',
+        direction: 'bullish',
+        evidence: ['价格达到门槛'],
+      },
+    ],
+    exit: [
+      {
+        id: 'exit-price',
+        name: '跌破价格门槛',
+        when: 'quote.close < 900',
+        score: '80',
+        direction: 'bearish',
+        evidence: ['价格低于门槛'],
+      },
+    ],
+    risk: [
+      {
+        id: 'risk-volume',
+        name: '量能不足',
+        when: 'quote.volume < 100000',
+        score: '90',
+        direction: 'neutral',
+        evidence: ['成交量不足'],
+      },
+    ],
+  },
 };
 
 /** 写入合成账户、持仓、建议（含用户 outcome）、策略/版本/已发布运行、决策复盘。 */
@@ -115,7 +155,7 @@ export const seedPanelsFixture = async (
     await repos.strategy.create({
       id: STRATEGY_ID,
       name: STRATEGY_NAME,
-      description: '合成策略：验证策略面板的版本/运行/健康投影',
+      description: `合成策略：验证具体条件、匹配标的与解释。内部引用 ${STRATEGY_ID}`,
       owner: 'user',
       status: 'active',
       currentVersionId: STRATEGY_VERSION_ID,
@@ -123,8 +163,40 @@ export const seedPanelsFixture = async (
       updatedAt: now,
     });
     await repos.strategy.createVersion({
+      id: RUN_VERSION_ID,
+      strategyId: STRATEGY_ID,
+      version: 6,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    });
+    await repos.strategy.createVersion({
       id: STRATEGY_VERSION_ID,
       strategyId: STRATEGY_ID,
+      version: 7,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    });
+    await repos.strategy.create({
+      id: SECOND_STRATEGY_ID,
+      name: PANELS_FIXTURE.secondStrategyName,
+      description: '验证切换策略与尚未运行的空态。',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: `${SECOND_STRATEGY_ID}-v1`,
+      createdAt: new Date(now.getTime() - 1000),
+      updatedAt: new Date(now.getTime() - 1000),
+    });
+    await repos.strategy.createVersion({
+      id: `${SECOND_STRATEGY_ID}-v1`,
+      strategyId: SECOND_STRATEGY_ID,
       version: 1,
       definition,
       definitionHash: strategyDefinitionHash(definition),
@@ -136,7 +208,7 @@ export const seedPanelsFixture = async (
     const strategyRun: StrategyRun = {
       id: RUN_ID,
       strategyId: STRATEGY_ID,
-      strategyVersionId: STRATEGY_VERSION_ID,
+      strategyVersionId: RUN_VERSION_ID,
       mode: 'scan',
       coverage: 'CN_A_SHARES_SH_SZ',
       dataAsOf: now,
@@ -157,8 +229,20 @@ export const seedPanelsFixture = async (
           stockId: STOCK.id,
           selected: true,
           score: 72,
-          evidence: [`quote:${STOCK.id}`],
-          ruleEvaluations: [],
+          rank: 1,
+          evidence: [`quote:${STOCK.id}`, `匹配来源 ${RUN_ID}`],
+          ruleEvaluations: [
+            {
+              schemaVersion: 2,
+              scope: 'selection',
+              ruleId: 'positive-close',
+              status: 'matched',
+              expression: 'quote.close > 0',
+              inputs: [{ path: 'quote.close', status: 'available', value: 1520 }],
+              explanation: { code: 'matched', message: '收盘价 1520 满足价格条件' },
+              evidence: ['收盘价已核验'],
+            },
+          ],
           dataAsOf: now,
         },
       ],
@@ -185,7 +269,7 @@ export const seedPanelsFixture = async (
         dataAsOf: now,
         strategy: {
           strategyId: STRATEGY_ID,
-          strategyVersionId: STRATEGY_VERSION_ID,
+          strategyVersionId: RUN_VERSION_ID,
           runId: RUN_ID,
           stockId: STOCK.id,
           accountId: owner.accountId,
@@ -263,7 +347,15 @@ export const dumpPanelsFixture = async (
     const runs = await repos.strategyRun.listRuns({ strategyId: STRATEGY_ID, limit: 10 });
     const reviews = await repos.decisionReview.list({ accountId: owner.accountId, limit: 10 });
     return {
-      account: account === null ? null : { id: account.id, name: account.name },
+      account:
+        account === null
+          ? null
+          : {
+              id: account.id,
+              name: account.name,
+              cashBalance: account.cashBalance,
+              initialCapital: account.initialCapital,
+            },
       holdings: holdings.map((item) => ({
         id: item.id,
         stockId: item.stockId,

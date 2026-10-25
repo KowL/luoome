@@ -337,8 +337,8 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署由 DSH 用 Node 加载 dsh-luoome 插件
 （host + client + skills），事实库是 Node SQLite 的 `luoome.db`。旧「当前 MCP 过渡形态」
 （四个 MCP 实例与手动 worker）源码保留，仅用于手动/隔离验收，默认部署不再启动，P5 再统一删除；
-两种形态共用同一份领域层、事实库与 ToolResult 契约，不是两个产品方向。仓库只完成隔离
-切换/回退演练，**尚未在真实生产服务器执行切换**。
+两种形态共用同一份领域层、事实库与 ToolResult 契约，不是两个产品方向。真实生产切换已于
+2026-10-25 执行，首次切换见 [插件详细设计 §9.16](docs/ddd/dsh-luoome-plugin-detailed-design.md#916-生产切换与真实部署记录2026-10-25)；MVP 补齐及同日升级见 [§9.18](docs/ddd/dsh-luoome-plugin-detailed-design.md#918-mvp-后续补齐minimax-四旅程与升级2026-10-25)。生产批处理和自动执行仍默认关闭。
 
 - 领域层不再有租户隔离概念：`hosted` 命名已下线为 `personal`；`Tenant`、`HostedUser`、
   `HostedJob`、订阅期与用量流水等托管实体全部移除。`Account` 只表示投资账户，不承担登录语义；
@@ -346,8 +346,9 @@ DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署�
 - 默认账户的 Trigger/Advice/TradingPlan 复盘继续使用 `DecisionReview`，保留来源快照、不可变修订及
   显式成交关联。Strategy/AlertPlan 规则与数据门禁不因形态变化而放宽；通知投递仍区分受理与送达，
   触发与投递分别保存。
-- 调度不再由领域内调度器承担：批处理入口是 MCP 面的 `run_*` 工具，由 DSH 定时任务触发，
-  门槛（交易日、盘中、收盘时点、周日）由工具内部判定（cron 表见 `.dsh/skills/luoome-batch/SKILL.md`）。
+- 调度由 DSH 承担：共享 `@luoome/batch` 提供确定性 `run_*` 编排，MCP 仅兼容转发；原生插件经
+  单次确认或 PluginAutomationGrant 执行。账户报告、计划与快照限绑定账户；策略定义、调度与自治
+  仍是本地用户的全局资源，授权说明必须披露暂停、归档和门禁发布。交易日、盘中、收盘和周日门槛不变。
 - 交互式分析的写回由纯插件默认部署承担：读面注册 `get_analysis_context`，写回只经 DSH 原生
   确认操作（`record_advice` / `record_analysis_result` 的精确 policy），交互分析不创建
   `analysis_job`。旧 MCP 过渡形态的 `luoome-analysis` 实例仅保留给手动/隔离验收。批量队列能力
@@ -395,4 +396,6 @@ DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署�
 
 PluginOperation 是插件执行边界的待确认输入与操作回执，绑定用户、账户、参数摘要和授权版本；它不替代 DecisionReview/Analysis 等领域事务回执。executing/unknown 表示结果仍需核对，不能直接重试或解释为业务失败。
 
-PluginAutomationGrant 是人工确认的特定 DSH profile/session/task 授权，绑定任务定义指纹、账户、工具、精确参数、组合能力与有效期；它不等同 StrategySchedule，也不赋予交易权限。定时提醒的实际投递来自 DSH 宿主事实，prompt、callId 和模型提交的 taskId 不是授权。纯插件自动执行默认停用，完整阶段验收前不启用生产任务。
+PluginAutomationGrant 是人工确认的特定 DSH profile/session/task 授权，绑定任务定义指纹、账户、工具、精确参数、组合能力与有效期；它不等同 StrategySchedule，也不赋予交易权限。定时提醒的实际投递来自 DSH 宿主事实，prompt、callId 和模型提交的 taskId 不是授权。批处理和自动执行分别由受信任部署配置显式开启，默认均关闭；启用开关不替代逐任务授权。授权目录只读返回宿主任务指纹与规范化调用，不创建任务或授权。旧日程须在同一 ID/cron 上改用原生调用、核对指纹并逐项审批后才能启用。
+
+市场分析的个人上下文只包含指定账户的有效持仓与全局启用 Watchlist；其它账户持仓和未关注事件股票不能扩大个人范围。外部即时指数、情绪与新闻尚未持久化进入 AnalysisContext，不能把聊天中刷新的事实宣称为 Advice 的已冻结依据。

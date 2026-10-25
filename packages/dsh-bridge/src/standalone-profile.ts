@@ -116,6 +116,7 @@ export function standaloneProfileEntries(options: StandaloneProfileOptions): Jso
     ...env,
     LUOOME_MCP_SERVER_NAME: BATCH_SERVER_NAME,
     LUOOME_EXPOSE_WRITE: 'true',
+    LUOOME_EXPOSE_EXTERNAL: 'true',
     LUOOME_EXPOSE_TOOLS: batchAllowlist.join(','),
   };
   return [

@@ -1,7 +1,20 @@
 {
   "name": "dsh-luoome",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.3",
+  "description": "Local-first investment research tools, panels and skills for DeepSeek DSH",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KowL/luoome.git",
+    "directory": "packages/dsh-luoome"
+  },
+  "engines": {
+    "node": ">=22.22.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "type": "module",
   "main": "./dist/host.js",
   "exports": {
@@ -13,7 +26,10 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-sidebar"
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
   },
@@ -61,6 +77,7 @@
     "@luoome/core": "workspace:*",
     "@luoome/db": "workspace:*",
     "@luoome/tools": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@luoome/batch": "workspace:*"
   }
 }

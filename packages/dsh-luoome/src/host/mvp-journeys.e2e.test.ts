@@ -263,6 +263,7 @@ const createJourneyFixture = async (
     ) => RepositoryRegistry['pluginAuthority'];
     readonly approvals?: readonly ApprovalOutcome[];
     readonly accountId?: string;
+    readonly batchEnabled?: boolean;
   } = {},
 ): Promise<JourneyFixture> => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-mvp-journeys-'));
@@ -327,7 +328,10 @@ const createJourneyFixture = async (
   const baseRepository = options.repository ?? db.repos.pluginAuthority;
   const host = createDshOperationHost(ctx, {
     repository: options.wrapRepository?.(baseRepository) ?? baseRepository,
-    policies: createProductionOperationPolicies(),
+    policies: createProductionOperationPolicies(
+      undefined,
+      options.batchEnabled === undefined ? {} : { batchEnabled: options.batchEnabled },
+    ),
     capabilities: ['read', 'write', 'external', 'queue'],
     policyVersion: 1,
     now: () => NOW.getTime(),
@@ -427,6 +431,40 @@ const confirmed = async (
 };
 
 describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite）', () => {
+  it('executes the real batch in Node through one native approval and keeps its report account scoped', async () => {
+    const fixture = await createJourneyFixture({ batchEnabled: true });
+    try {
+      expect(fixture.ctx.tools.get('run_strategy_autonomy_weekly')).toBeUndefined();
+      const result = await confirmed(fixture, 'run_strategy_autonomy_weekly', { force: true });
+      if (!result) throw new Error('Missing native batch result');
+      expect(result.value).toMatchObject({
+        ok: true,
+        data: {
+          state: 'succeeded',
+          input: { accountId: fixture.principal.accountId, force: true },
+          requiredCapabilities: ['write', 'external'],
+        },
+      });
+      const reports = await fixture.repos.report.list({ kind: 'weekly' });
+      expect(reports).toHaveLength(1);
+      expect(reports[0]?.scope).toEqual({
+        kind: 'account',
+        accountId: fixture.principal.accountId,
+      });
+      const operationId = (result.value as { data: { operationId: string } }).data.operationId;
+      await fixture.run({
+        name: MANUAL_OPERATION_TOOL,
+        input: { id: operationId, tool: 'run_strategy_autonomy_weekly', input: { force: true } },
+      });
+      expect(
+        await fixture.repos.workflowRun.listRecent({ workflowName: 'weekly-report' }),
+      ).toHaveLength(1);
+      expect(fixture.approvalReasons).toHaveLength(1);
+      expect(fixture.approvalReasons[0]).toContain('write + external');
+    } finally {
+      await fixture.close();
+    }
+  });
   it('native confirmation exposes typed operation inputs and distinguishes invalid input from denial', async () => {
     const fixture = await createJourneyFixture();
     try {

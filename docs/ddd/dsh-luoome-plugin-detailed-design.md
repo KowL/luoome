@@ -1,11 +1,9 @@
 # dsh-luoome 纯插件详细设计
 
-> 2026-10-24；基线：`dsh@24e7ee1` 与当前工作树。状态：设计完成，P1a 开发中，尚不可切换生产。
-> 产品范围来自本地评审计划 `.tmp/dsh-luoome-audit/plan.md`。该文件被 Git 忽略，本文完整保存实施契约，不要求读者访问临时目录。
-> 本文描述独立 DSH 插件的下一阶段；现有 MCP、Bun Web 与消费者仍保留。旧托管系统、内嵌 Host、本地模型栈不恢复。
-> 2026-10-24 增补：当前运行形态是「当前 MCP 过渡形态」——Web profile 四个 MCP 实例
-> （read / settings / analysis / batch）+ 手动/隔离验收才拉起的 worker；默认部署已退役常驻 worker。
-> 本次只补通交互分析写回并退役默认 worker，**不完成纯插件迁移**；下表与各节的「现状」按此口径理解。
+> 2026-10-25 更新：纯插件 MVP 已落地并完成生产首次切换；首次生产快照见 §9.16，部分更新修复见 §9.17，MVP 后续补齐、真实模型验收与升级见 §9.18。
+> 公网看盘空白修复与 0.2.1 升级见 §9.19。
+> §1–§8 保留最初完整 P 阶段设计契约；其中“现状”属于设计时基线。当前 MVP 范围以 [纯插件 MVP 实施设计](./dsh-interactive-analysis-surface-and-worker-retirement.md) 和 §9 最新记录为准。
+> MCP、Bun Web 与 CLI 的兼容源码保留；旧托管系统、内嵌 Host、本地模型栈不恢复。
 
 ## 1. 目标与当前边界
 
@@ -553,3 +551,109 @@ check:layers、Node24 mvp-journeys（16 项）及真实 npm plugin-install 已�
 三个字段，后者字符串内确实为 JSON null。此为针对回归的引导式辅助 smoke，不替代四旅程产品
 质量验收或用户亲自验收；未修改现有用户 profile、真实个人事实库或服务器。本地去敏证据保存在
 `.tmp/dsh-minimax-patch-audit/`，不提交凭据或模型会话。测试宿主在验收后关闭；本轮不提交或部署。
+
+### 9.18 MVP 后续补齐、MiniMax 四旅程与升级（2026-10-25）
+
+本轮范围经用户确认是 **MVP 和本轮补齐的功能**；完整旧 Web 替代和 P2–P5 不在本轮完成口径内。
+
+**已实现**：
+
+- 五个确定性 batch 迁入共享 `@luoome/batch`，MCP 仅兼容转发；插件通过原生确认或精确任务授权执行，
+  不引入 MCP/AI SDK 到领域层。每个 batch 完整要求 write + external；账户计划、快照和报告限绑定账户，
+  策略日循环与自治仍处理本地全局策略，描述和审批明确披露暂停、归档及门禁发布。
+- `LUOOME_BATCH_ENABLED` 与 `LUOOME_AUTOMATIONS_ENABLED` 默认均关闭；自动执行必须先开启 batch，
+  再核验真实投递、任务定义指纹及有效 grant。只读 `luoome_automation_catalog` 给出既有任务指纹、
+  账户绑定的规范化调用及建议 grant ID 的已有授权，不创建或改写任务。
+- `partial` 与失败分别呈现；无法证明整个批次完成时保留 unknown，不通过换 operation ID 盲目重跑。
+  补齐真实宿主与 Node 24 的原生 batch 审批、单次执行和重放去重验收。
+- 持仓页回读持仓、最近成交、绩效快照；投资设置回读账户、数据健康和受信任能力配置。
+  账户改名复用 prepare/confirm/cancel，预览和取消不写入；浏览器只保存恢复用 UUID，确认 token 只在内存。
+  桌面与手机浏览器验证五页渲染、字段一致、改名后资金字段不变及刷新恢复。
+- 非交易日情绪查询取最近交易日；个人市场 context 限当前账户持仓与全局启用 Watchlist，
+  其它账户和未关注事件不扩大个人范围。外部即时指数、情绪、新闻仍未持久化进入 AnalysisContext。
+- 原生写参数的账户和 requestId 由宿主绑定，并在模型 schema 中标为应省略；绑定冲突返回安全字段路径，
+  避免无信息错误使模型误删笔记。用户拒绝后，同一真实请求的后续写计划被宿主阻断，改工具名或 ID 不能绕过；
+  新用户请求可重新独立审批。取消信号传入领域工具执行上下文。
+- 复盘技能明确 outcome.notes 和 review.content.note 是同一笔记字段，避免重复写入覆盖原文；
+  内容相同可返回既有 revision，不能仅为改更正原因而制造重复修订。
+
+**自动验收**：全量 `test:all`（2717 Vitest、601 Bun DB、235 Node DB、549 Web、宿主 e2e 与分析面 e2e）通过；
+补充后的宿主 e2e 15 项、真实 Node 24 journeys 17 项通过。全仓 typecheck、lint（0 error、24 条既有 warning）、
+build、check:layers、独立 npm 安装、五页 Chrome 浏览器与更新/回退演练均通过。公开安装包验收精确核对九个文件，
+包含 README/MIT LICENSE、host/client、manifest 和四技能；无本地源码、配置或凭据，运行依赖只有固定版本 DSH 包。
+
+**最终真实模型复验**：Node 24、DSH `0.2.1-rc.2`、标准 preset、`DSH_TOOLS_MODE=native`、
+MiniMax M3.1 Flash、临时 DSH_HOME 与合成库。按精确版本选择 0.2.0 tarball，核对安装版本及
+host/client/四技能的文件哈希后开始。Codex 逐卡核对官方审批并点击允许一次；没有审批应答器、PTC 或自动交易。
+
+| 旅程 | 最终结果 |
+|---|---|
+| 策略制定 | 既有 v2 阈值 100 改为 v3 阈值 110；创建、校验、发布各一次独立审批；单股试跑 persisted=false，正式运行仍为 0；回读 valid/current=v3 |
+| 策略结果研究 | 引用确切 fixture run/version/fact id；如实区分规则归因推断、缺失评分轨迹、无事后观察；无写入或收益承诺 |
+| 复盘与反馈 | inputJson 记录部分跟随/pnl=0，revision 2→3；再次原生审批用 input 对象仅提交 content.note，revision 3→4，原部分跟随/零盈亏保留；冻结内容、工具投影、SQLite 一致 |
+| 每日市场分析 | 原生刷新真实市场源，情绪日期为最近交易日 2026-10-23；披露来源、非交易日、partial/unknown 与有效期；只保留会话分析，无新 Advice/报告 |
+
+这仍是**辅助 smoke**，不是无人干预模型质量保证。前轮发现的 UUID 冲突、拒绝后改工具续写、重复笔记覆盖等问题
+已据此加回归和约束后复验。最终五次审批操作均 succeeded；合成库只保留一条既有正式 run、一条既有 Advice，
+无 Trade 或报告新增。证据在本地 `.tmp/dsh-minimax-four-native/summary.json` 及审批快照，测试宿主已关闭。
+
+**发布与线上**：
+
+- 已发布公开 npm 包 [`dsh-luoome@0.2.0`](https://www.npmjs.com/package/dsh-luoome)，MIT，registry 为
+  `https://registry.npmjs.org`，latest=0.2.0。完成 npm 官方浏览器 2FA 后发布，registry 后台处理完成后回读确认可见。
+  本地包 `dist/releases/dsh-luoome-0.2.0.tgz` 已通过 publish dry-run 和独立 npm 安装，
+  SHA-1 为 `6bb4a5d1d4fbb33b8132ab3feb4cf11df9169298`。另以空 npm 用户/全局配置完成匿名公开安装和 host import；
+  registry 的 SHA-512、公开下载字节及安装后的 host/client 与验收产物一致，证据在 `.tmp/npm-public-release.json`。
+- 用户提供 `ubuntu@134.175.83.56` 后，已构建并升级至 `dsh-20261025T121711Z`。
+  host/client SHA-256 与本地真实模型验收产物完全相同；保持既有模型配置。
+- 升级前停止旧写者，用 SQLite backup API 保存一致性快照并验证 integrity_check=ok；备份环境和 DSH 状态到
+  服务器 `/opt/luoome/backups/before-dsh-20261025T121711Z/`，私人备份不传回本地或写入日志。
+  升级前后业务表指纹及原任务定义相同，旧镜像和卷保留。
+- 线上宿主进程重启计数为 0；官方 token 登录、五页 state 200/no-store、账户改名 policy、
+  通用 call 拒写及错误 Origin 拒绝均已复验。批处理和自动执行保持默认关闭，原五条日程没有改期、改 ID 或自动授权。
+- 回滚应用可把 production.env 的 release 改回 `dsh-20261025T025419Z`，再用对应 compose 启动，
+  保留当前事实卷；不能直接用旧备份覆盖升级后新增事实。
+
+**本轮未做**：完整账户/持仓维护、凭据配置与导入恢复迁移、external 事实入 AnalysisContext、SSE 重连补取、
+多实例/负载验收、旧入口源码删除，以及旧日程的逐任务授权与启用。不将这些完整 P 阶段目标标为完成。
+
+### 9.19 公网看盘空白修复（2026-10-25，0.2.1）
+
+用户报告“看盘看不到数据”后，在真实 Chrome 公网页面复现：所有板块显示读取失败，根错误为
+`Unexpected end of JSON input`。供应商指数接口连续三次返回六个指数，因此不是行情源整体未连接。
+
+**根因与修复**：
+
+- 客户端用 `/api/luoome/...` 绝对路径越过了部署的 `/dsh/` 挂载。公网裸请求实际返回 200 空响应，
+  正确的 `/dsh/api/luoome/state` 返回 JSON。state、设置确认和操作页统一改为相对 document base 的 URL，
+  同时兼容根目录与子路径部署。
+- 核心指数卡片只读取 `get_ashare_sentiment.snapshot.indexes`，没有使用已经成功返回的
+  `fetch_index_quotes`。现在独立投影指数工具结果及原始时间，情绪缺失不再隐藏指数。
+- 情绪首查实测需约 11.6 秒，面板固定 4 秒提前放弃且误报权限拒绝。面板与正常 market surface
+  共用 30 秒时限；调用方截止超时转为可恢复 adapter_error，主动取消仍维持既有拒绝语义。
+
+**回归与验收**：路径与截止错误测试先失败、修复后通过；相关插件 161 项单测和 15 项宿主 e2e、
+全仓 typecheck/lint、独立 npm 安装通过。Chrome 验收新增 `/dsh/` 反向代理，保留完整会话、
+五页、设置预览/取消/确认、刷新及手机端检查，并注入“情绪失败、指数成功”验证卡片独立展示。
+代理及 DSH 使用真实 Node 24 执行，避免以 Bun 的网络兼容层替代部署运行时。
+
+**线上复验**：已升级至 `dsh-20261025T131444Z`，插件版本 0.2.1；一致性备份在服务器
+`/opt/luoome/backups/before-dsh-20261025T131444Z/`，业务表指纹与原日程定义未变。
+真实用户 Chrome 公网页面已回读确认：请求走 `/dsh/api/luoome/state`，6 张指数卡片、市场宽度可见，
+无读取错误且 DSH 连接正常。情绪数据日期为 2026-10-23，热点概念维度仍如实标 partial。
+账户没有持仓、关注和建议记录时显示各自空状态，不以写入示例数据填补。
+
+公开 npm 已发布 `dsh-luoome@0.2.1`，latest=0.2.1。匿名安装、公开下载字节与 SHA-512 核对通过，
+安装产物和线上 host/client 哈希一致；SHA-1 为 `32ca14b26ce580c6ec99a873479f13943d47d5fc`。
+证据在本地 `.tmp/npm-public-release-0.2.1.json`；没有覆盖 0.2.0。
+
+
+### 9.20 策略详情与匹配标的（0.2.2）
+
+侧栏及页面统一称「策略」。以可切换的策略目录连接详情，具体展示已发布定义的覆盖范围、研究周期、全部／任一条件语义、规则表达式、加权评分与排名上限、入场／退出／风险规则。字段名转换仅属显示，不执行表达式或重新计算筛选结果。
+
+`get_strategy_workspace` 复用已装载的正式运行基准，返回 `currentRunVersion` 及 `matches`：每行包含本地股票名称、代码和原始 StrategyResult（排名、评分、规则判定、输入值、解释与证据）。默认 50 条，`selectedLimit` 最大 200，完整数量保留在 `matches.total`。未运行与已运行零匹配分别呈现；失败或未发布的最新尝试不能替代之前已发布的匹配事实，当前版本与结果版本不一致时显示版本差异及历史条件。
+
+策略、版本、运行和规则的内部标识不直接出现在页面或研究草稿中；结构化请求和工具调用仍保留准确引用。研究草稿按名称、版本号及事实时间查询，存在同名或事实不符时先核对。运行健康与待补观察移到可展开的辅助区。窄屏匹配结果逐股排列，匹配依据可在可见宽度内展开。
+
+回归由 `strategy-query.test.ts`、插件投影／宿主测试和 `infra/dsh/panels-browser-acceptance.ts` 覆盖：名称解析、有界结果、无结果与零匹配、失败回退、版本差异、可见标识清理、策略切换、逐条依据、官方会话草稿，以及桌面／窄屏布局。

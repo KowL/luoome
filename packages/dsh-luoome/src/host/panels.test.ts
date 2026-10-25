@@ -12,7 +12,13 @@ import { toolRegistry } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { createMarketSurface } from './market-surface.js';
-import { createPanelStateHandler, PANEL_NAMES, PANEL_PLANS, projectPanelTool } from './panels.js';
+import {
+  createPanelStateHandler,
+  createStockDetailHandler,
+  PANEL_NAMES,
+  PANEL_PLANS,
+  projectPanelTool,
+} from './panels.js';
 import { createReadSurface } from './read-surface.js';
 
 const now = new Date('2026-10-22T02:00:00Z');
@@ -132,7 +138,8 @@ const setup = async (
     now: () => FIXED_AS_OF,
     marketTimeoutMs: 50,
   });
-  return { ctx, read, market, admit, contextCalls, handle };
+  const stockHandle = createStockDetailHandler({ market, admit, now: () => FIXED_AS_OF });
+  return { ctx, read, market, admit, contextCalls, handle, stockHandle };
 };
 
 const stateRequest = (panel?: string, extra = ''): Request =>
@@ -175,8 +182,18 @@ describe('panel state route', () => {
       (call) => call.name === 'get_ashare_sentiment',
     );
     const sentimentInput =
-      typeof sentiment?.input === 'function' ? sentiment.input() : sentiment?.input;
+      typeof sentiment?.input === 'function' ? sentiment.input(FIXED_AS_OF) : sentiment?.input;
     expect(sentimentInput?.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it.each([
+    ['2026-10-25T04:00:00Z', '2026-10-23'],
+    ['2026-10-01T04:00:00Z', '2026-09-30'],
+    ['2026-10-23T04:00:00Z', '2026-10-23'],
+  ])('requests sentiment for the latest trading day at %s', (at, expected) => {
+    const call = PANEL_PLANS.overview.market.find((entry) => entry.name === 'get_ashare_sentiment');
+    if (!call || typeof call.input !== 'function') throw new Error('Missing sentiment call');
+    expect(call.input(new Date(at))).toEqual({ date: expected });
   });
 
   it('returns only panel names and rejects unknown or extra query input', async () => {
@@ -235,10 +252,24 @@ describe('panel state route', () => {
     const workspace = strategies?.[0]?.workspace.data as {
       currentVersion?: { id?: string };
       currentRun?: { id?: string };
+      currentRunVersion?: { id?: string };
+      matches?: {
+        total: number;
+        rows: {
+          stock: { stockId: string; stockName: string };
+          result: { selected: boolean; score: number };
+        }[];
+      };
       overview?: { health?: string };
     };
     expect(workspace.currentVersion?.id).toBe('direction-a-v1');
     expect(workspace.currentRun?.id).toBe('direction-a-run');
+    expect(workspace.currentRunVersion?.id).toBe('direction-a-v1');
+    expect(workspace.matches?.total).toBe(1);
+    expect(workspace.matches?.rows[0]).toMatchObject({
+      stock: { stockId: '600519.SH', stockName: '贵州茅台' },
+      result: { selected: true, score: 60 },
+    });
     expect(workspace.overview?.health).toBe('ready');
   });
 
@@ -310,5 +341,77 @@ describe('panel state route', () => {
     const tools = body.tools as { ok: boolean; error?: { kind?: string } }[];
     expect(tools.every((tool) => tool.ok === false)).toBe(true);
     expect(tools.every((tool) => tool.error?.kind === 'permission_denied')).toBe(true);
+  });
+});
+
+describe('stock detail route', () => {
+  const request = (query = 'stockId=600519.SH') =>
+    new Request(`https://dsh.example/api/luoome/stock?${query}`);
+
+  it('projects one stock through the opted-in market tool and preserves quote provenance', async () => {
+    const { stockHandle } = await setup({ marketAllowlist: ['fetch_quote'] });
+    const response = await stockHandle(request());
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = (await response.json()) as {
+      quote: { data: { quote: { stockId: string }; retrieval: string } };
+    };
+    expect(body).toMatchObject({
+      stockId: '600519.SH',
+      asOf: FIXED_AS_OF.toISOString(),
+      quote: { name: 'fetch_quote', ok: true },
+    });
+    expect(body.quote.data).toMatchObject({ retrieval: 'live', quote: { stockId: '600519.SH' } });
+  });
+
+  it('does not enable external access implicitly or turn denied quotes into empty success', async () => {
+    const { stockHandle } = await setup();
+    const body = (await (await stockHandle(request())).json()) as {
+      quote: { ok: boolean; data?: unknown; error?: { kind: string } };
+    };
+    expect(body.quote).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+    expect(body.quote.data).toBeUndefined();
+  });
+
+  it('can load a complete stock code before it has a local stock row', async () => {
+    const { ctx, stockHandle } = await setup({ marketAllowlist: ['fetch_quote'] });
+    expect(await ctx.repos.stock.findById('601398.SH')).toBeNull();
+    const body = (await (await stockHandle(request('stockId=601398.SH'))).json()) as {
+      quote: { ok: boolean; data: { quote: { stockId: string } } };
+    };
+    expect(body.quote.ok).toBe(true);
+    expect(body.quote.data.quote.stockId).toBe('601398.SH');
+  });
+
+  it('rejects invalid or extra input before any tool runs', async () => {
+    const { stockHandle, contextCalls } = await setup({ marketAllowlist: ['fetch_quote'] });
+    for (const query of [
+      '',
+      'stockId=NOPE',
+      'stockId=600519.SH&stockId=000001.SZ',
+      'stockId=600519.SH&tool=add_trade',
+      'stockId=600519.SH&stockName=override',
+    ]) {
+      expect((await stockHandle(request(query))).status).toBe(400);
+    }
+    expect(contextCalls).not.toHaveBeenCalled();
+  });
+
+  it('keeps host admission and method restrictions', async () => {
+    const rejection = new Response(null, { status: 401 });
+    const { stockHandle, contextCalls } = await setup({ admit: () => rejection });
+    expect(await stockHandle(request())).toBe(rejection);
+    expect(contextCalls).not.toHaveBeenCalled();
+    const method = await stockHandle(
+      new Request('https://dsh.example/api/luoome/stock', { method: 'POST' }),
+    );
+    expect(method.status).toBe(405);
+    expect(method.headers.get('allow')).toBe('GET');
+    const throwing = await setup({
+      admit: () => {
+        throw new Error('secret');
+      },
+    });
+    expect((await throwing.stockHandle(request())).status).toBe(403);
   });
 });

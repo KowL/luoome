@@ -3,13 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ToolCallId } from '@deepseek-ai/dsh-llm';
+import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval';
 import { money, type PluginAutomationGrant } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { enqueueAnalysisJobTool, getDecisionReviewContextTool } from '@luoome/tools';
 import { type Call, createDshTestHost } from '../testing/dsh-host.js';
+import { AUTOMATION_CATALOG_TOOL } from './automation-catalog.js';
+import { createBatchOperationPolicies } from './batch-operations.js';
 import { MANUAL_OPERATION_TOOL, SCHEDULED_OPERATION_TOOL } from './dsh-authority.js';
 import { dshScheduleHash } from './dsh-identity.js';
 import { runQueuePreflight } from './preflight.js';
@@ -83,6 +85,133 @@ const scheduledCall = (grant: PluginAutomationGrant, input: unknown): Call => {
 };
 
 describe('DSH approval and schedule integration with durable facts', () => {
+  it.each([false, true])(
+    'stops later writes in a rejected request across steps=%s and accepts a new explicit request',
+    async (acrossSteps) => {
+      const fixture = await start(await rootDir());
+      try {
+        const call = (label: string): Call => ({
+          name: MANUAL_OPERATION_TOOL,
+          input: {
+            id: randomUUID(),
+            tool: 'fixture_scheduled_write',
+            input: { accountId: fixture.principal.accountId, label },
+          },
+        });
+        const removeRejection = fixture.answer('rejected');
+        const before = fixture.results.length;
+        const advice = (
+          await fixture.domain.repos.advice.query({ includeExpired: true, limit: 1 })
+        )[0];
+        if (!advice) throw new Error('Missing advice fixture');
+        const subject = { kind: 'advice' as const, id: advice.id };
+        const preview = await getDecisionReviewContextTool.execute({ subject }, fixture.domain);
+        if (!preview.ok || !preview.data.context) throw new Error('Missing context');
+        const plan: Call[] = [
+          call('rejected'),
+          call('alternate-id'),
+          {
+            name: MANUAL_OPERATION_TOOL,
+            input: {
+              id: randomUUID(),
+              tool: 'save_decision_review',
+              input: {
+                subject,
+                contextHash: preview.data.context.contextHash,
+                expectedRevision: 0,
+                content: { note: '换工具继续同一写计划' },
+              },
+            },
+          },
+        ];
+        fixture.model.calls.push(...(acrossSteps ? plan.map((item) => [item]) : [plan]), []);
+        fixture.handle.agent.followup(
+          createUserMessage({
+            content: [{ type: 'text', text: 'one write plan' }],
+            source: { kind: 'user' },
+          }),
+        );
+        await fixture.handle.agent.whenIdle();
+        expect(fixture.approvals).toEqual(['rejected']);
+        expect(fixture.results.slice(before).every((result) => result.isError)).toBe(true);
+        expect(fixture.results.at(-1)?.diagnostic).toContain('write plan was rejected');
+        const account = await fixture.domain.repos.account.findById(fixture.principal.accountId);
+        expect(account?.name).not.toContain('|');
+        expect(
+          await fixture.domain.repos.decisionReview.findBySubject({
+            accountId: fixture.principal.accountId,
+            subject,
+          }),
+        ).toBeNull();
+        removeRejection();
+        fixture.answer('allowed-once');
+        expect((await fixture.run(call('fresh-request')))?.value).toMatchObject({
+          ok: true,
+          data: { state: 'succeeded' },
+        });
+        expect(
+          (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name,
+        ).toBe(`${account?.name}|fresh-request`);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+  it('runs the real weekly batch only for its approved account and delivered occurrence', async () => {
+    const clock = fixtureClock();
+    const fixture = await start(await rootDir(), {
+      automationsEnabled: true,
+      policies: createBatchOperationPolicies(),
+      clock: () => new Date('2026-10-25T02:00:00Z'),
+    });
+    try {
+      const { ctx, handle, principal, model, results, domain } = fixture;
+      const task = await ctx.schedule.create(handle.agent.id, {
+        prompt: '执行已授权的策略周报',
+        title: '原生批处理验收',
+        every_seconds: 60,
+      });
+      const catalog = await fixture.run({ name: AUTOMATION_CATALOG_TOOL, input: {} });
+      const value = catalog?.value as {
+        ok: boolean;
+        data: { allowedCalls: PluginAutomationGrant['allowedCalls'] };
+      };
+      expect(value.ok).toBe(true);
+      const callTemplate = value.data.allowedCalls.find(
+        (call) => call.tool === 'run_strategy_autonomy_weekly',
+      );
+      if (!callTemplate) throw new Error('Missing weekly call template');
+      const input = JSON.parse(callTemplate.inputJson);
+      const grant = { ...fixture.grant(task, input), allowedCalls: [callTemplate] };
+      fixture.answer('allowed-once');
+      await authorize(fixture, grant);
+      const before = results.length;
+      const call = scheduledCall(grant, input);
+      model.calls.push([call, call], []);
+      clock.advance(65_000);
+      await drive(fixture);
+      await eventually(() => results.length >= before + 2);
+      await handle.agent.whenIdle();
+      expect(results.slice(before).map((result) => result.value)).toMatchObject([
+        { ok: true, data: { state: 'succeeded' } },
+        { ok: true, data: { state: 'succeeded' } },
+      ]);
+      const reports = await domain.repos.report.list({ kind: 'weekly' });
+      expect(reports).toHaveLength(1);
+      expect(reports[0]?.scope).toEqual({ kind: 'account', accountId: principal.accountId });
+      expect(
+        await domain.repos.workflowRun.findById(
+          `strategy-autonomy-weekly:2026-10-25:${principal.accountId}`,
+        ),
+      ).not.toBeNull();
+      expect(fixture.approvals).toEqual(['allowed-once']);
+      expect((await fixture.run(call))?.isError).toBe(true);
+      expect(await domain.repos.report.list({ kind: 'weekly' })).toHaveLength(1);
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  });
   it('preflights persisted SQLite queue facts without a model request or claim', async () => {
     const fixture = await start(await rootDir());
     try {

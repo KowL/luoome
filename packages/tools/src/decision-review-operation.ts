@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ConfirmablePluginTool } from './plugin-operations.js';
+import { type ConfirmablePluginTool, PluginOperationScopeError } from './plugin-operations.js';
 import {
   decisionReviewWriteHash,
   resolveDecisionReviewWriteContent,
@@ -9,13 +9,13 @@ import {
 export const decisionReviewOperation: ConfirmablePluginTool = {
   tool: saveDecisionReviewTool,
   scheduled: false,
+  hostBoundFields: ['accountId', 'requestId'],
   async bind(raw, principal, operationId, ctx) {
     const input = z.record(z.string(), z.unknown()).parse(raw);
-    if (
-      (input.accountId !== undefined && input.accountId !== principal.accountId) ||
-      (input.requestId !== undefined && input.requestId !== operationId)
-    )
-      throw new Error('Operation scope mismatch');
+    if (input.accountId !== undefined && input.accountId !== principal.accountId)
+      throw new PluginOperationScopeError('accountId');
+    if (input.requestId !== undefined && input.requestId !== operationId)
+      throw new PluginOperationScopeError('requestId');
     const parsed = saveDecisionReviewTool.inputSchema.parse({
       ...input,
       accountId: principal.accountId,

@@ -55,7 +55,7 @@ function OperationsPanel() {
   }, [operation]);
   useEffect(() => {
     let active = true;
-    request('/api/luoome/profile')
+    request('api/luoome/profile')
       .then((value) => {
         if (active) setProfile(value);
       })
@@ -96,7 +96,7 @@ function OperationsPanel() {
       setOperation(null);
       setId(nextId);
       sessionStorage.setItem(storageKey, nextId);
-      const value = await request('/api/luoome/operations/prepare', {
+      const value = await request('api/luoome/operations/prepare', {
         id: nextId,
         tool,
         input: parsed,
@@ -108,19 +108,19 @@ function OperationsPanel() {
   const settle = (action) =>
     perform(async () => {
       const value = await request(
-        `/api/luoome/operations/${encodeURIComponent(operation.operationId)}/${action}`,
+        `api/luoome/operations/${encodeURIComponent(operation.operationId)}/${action}`,
         action === 'reconcile' ? {} : { token },
       );
       accept(
         action === 'cancel'
-          ? await request(`/api/luoome/operations/${encodeURIComponent(operation.operationId)}`)
+          ? await request(`api/luoome/operations/${encodeURIComponent(operation.operationId)}`)
           : value,
       );
       if (value.state !== 'pending') setToken(null);
     });
   const query = () =>
     perform(async () => {
-      const value = await request(`/api/luoome/operations/${encodeURIComponent(id.trim())}`);
+      const value = await request(`api/luoome/operations/${encodeURIComponent(id.trim())}`);
       if (operation?.operationId !== value.operationId) setToken(null);
       accept(value);
     });

@@ -468,6 +468,7 @@ describe('dsh-luoome production write policies', () => {
       'validate_strategy_version',
       'publish_strategy_version',
       'record_advice_outcome',
+      'update_account',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
     const byName = new Map(policies.map((policy) => [policy.tool.name, policy]));
@@ -511,6 +512,19 @@ describe('dsh-luoome production write policies', () => {
 });
 
 describe('dsh-luoome production apply entry', () => {
+  it('requires the schedule service for automation opt-in before opening a database', async () => {
+    const parent = tempRoot();
+    const home = join(parent, 'no-schedule');
+    const fake = createFakeHostContext({ omit: ['schedule'] });
+    await expect(
+      apply(fake.ctx, {
+        ...(productionInput(home) as object),
+        batchEnabled: true,
+        automationsEnabled: true,
+      }),
+    ).rejects.toThrow('require the host schedule service');
+    expect(existsSync(home)).toBe(false);
+  });
   it.each(['approval', 'agents'])(
     'refuses to assemble when %s is missing, before any IO',
     async (service) => {
