@@ -14,12 +14,12 @@ import {
   tradingPlanVersionId,
 } from '@luoome/core';
 import { and, asc, desc, eq, type SQL } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { accounts, holdings, type Schema, tradingPlans } from '../../schema/index.js';
 
 type TradingPlanRow = typeof tradingPlans.$inferSelect;
-type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
 const toPlan = (row: TradingPlanRow): TradingPlan => {
   const plan = TradingPlanSchema.parse(row.plan);
@@ -41,7 +41,7 @@ const toRow = (plan: TradingPlan) => ({
 });
 
 export class DrizzleTradingPlanRepository implements TradingPlanRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(plan: TradingPlan): Promise<void> {
     const parsed = TradingPlanSchema.parse(plan);

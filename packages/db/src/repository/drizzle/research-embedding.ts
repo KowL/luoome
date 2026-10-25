@@ -13,7 +13,8 @@ import {
 } from '@luoome/core';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import {
   researchChunkEmbeddings,
   researchDocumentChunks,
@@ -37,7 +38,7 @@ const cosine = (left: readonly number[], right: readonly number[]): number => {
 
 export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepository {
   constructor(
-    private readonly db: DrizzleDb,
+    private readonly db: DrizzleDatabase<Schema>,
     private readonly researchIndex: ResearchIndexRepository = new DrizzleResearchIndexRepository(
       db,
     ),

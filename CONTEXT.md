@@ -327,8 +327,14 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 
 ## 单机形态与托管退役
 
-当前形态是**单机版**：DSH 是唯一入口，luoome 以 DSH 插件/MCP 实例形式接入；没有多租户、
-没有登录与订阅、没有托管站点。托管层代码与旧租户库已于 2026-10-23 按授权删除，不恢复。
+当前形态是**单机版**：DSH 是唯一入口；没有多租户、没有登录与订阅、没有托管站点。
+托管层代码与旧租户库已于 2026-10-23 按授权删除，不恢复。
+
+DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署由 DSH 用 Node 加载 dsh-luoome 插件
+（host + client + skills），事实库是 Node SQLite 的 `luoome.db`。旧「当前 MCP 过渡形态」
+（四个 MCP 实例与手动 worker）源码保留，仅用于手动/隔离验收，默认部署不再启动，P5 再统一删除；
+两种形态共用同一份领域层、事实库与 ToolResult 契约，不是两个产品方向。仓库只完成隔离
+切换/回退演练，**尚未在真实生产服务器执行切换**。
 
 - 领域层不再有租户隔离概念：`hosted` 命名已下线为 `personal`；`Tenant`、`HostedUser`、
   `HostedJob`、订阅期与用量流水等托管实体全部移除。`Account` 只表示投资账户，不承担登录语义；
@@ -338,6 +344,11 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
   触发与投递分别保存。
 - 调度不再由领域内调度器承担：批处理入口是 MCP 面的 `run_*` 工具，由 DSH 定时任务触发，
   门槛（交易日、盘中、收盘时点、周日）由工具内部判定（cron 表见 `.dsh/skills/luoome-batch/SKILL.md`）。
+- 交互式分析的写回由纯插件默认部署承担：读面注册 `get_analysis_context`，写回只经 DSH 原生
+  确认操作（`record_advice` / `record_analysis_result` 的精确 policy），交互分析不创建
+  `analysis_job`。旧 MCP 过渡形态的 `luoome-analysis` 实例仅保留给手动/隔离验收。批量队列能力
+  （`AnalysisJob`、repository、claim/complete/fail、手动 queue-e2e 验收）保留，但默认部署没有
+  生产者、没有常驻消费者；worker profile 仅在手动或隔离环境显式拉起验收。
 - 模型能力整体退役：core 不再持有模型调用端口，领域包禁止依赖模型运行时或 AI SDK。
   推理与模型配置由 DSH 承担；luoome 侧没有模型运行时、模型目录与模型设置页，
   Web 也不再有模型对话页面，只保留「起草 → 明确确认 → 原子执行」的待确认草案链路。
@@ -352,11 +363,29 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 `expiresAt` 仅控制审计保留。事实过时不能继续写回；同一有效租约可重新获取并绑定一次新事实包。
 刷新不延长租约，不增加尝试次数；租约丢失后旧消费者不得完成任务。
 
+写回时效按 `AnalysisKind` 分档，唯一事实来源是 `packages/core/src/entity/analysis-context.ts`
+的 `analysisTimingRules`（context 装配、enqueue、record、refresh 共用）：
+
+| kind | `writeUntil` | `dataAsOf` 过期 |
+|---|---|---|
+| `advice_stock` / `advice_position` / `advice_strategy_candidate` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
+| `advice_market` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
+| `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
+
+15:00 截断只属于盘中行动类；盘后市场分析与策略研究允许盘后与隔日写回，直到数据超过各自有效期
+（分别返回 `stale_context`，写回窗口关闭返回 `context_expired`）。超过 `expiresAt` 的 context
+仍可审计读取，但不能写回。
+
 完成任务与持久化 Advice、研究工作区、待审批策略版本或叙事结果必须原子提交。
 重试不得重复发布结果；死信保留错误供检查，不生成伪建议。
 `AnalysisProvenance` 记录生成器、模型、技能版本、事实包与任务来源。
 `legacy-ai` 专指迁移前缺少完整来源的历史建议，不代表已知模型。
 建议始终不等于交易；策略提案仍需原有审批流程。
+
+交互式分析沿用「不创建 `analysis_job`」的既有决定：DSH 插件读面取得持久化 context，
+推理后经原生确认操作 `record_*` 校验写回；不得为了利用 worker 而新增生产 workflow 入队。
+默认部署不运行 MCP 实例、Bun CLI 或常驻 worker，队列能力与手动 worker 验收保留，空队列不再
+驱动常驻进程或模型唤醒。
 
 ### PluginOperation 与 PluginAutomationGrant
 

@@ -89,7 +89,14 @@ describe('DSH approval and schedule integration with durable facts', () => {
       const context = () => fixture.domain;
       const signal = new AbortController().signal;
       expect(await runQueuePreflight({ context, signal })).toEqual({ state: 'empty', exitCode: 1 });
-      const now = fixture.domain.clock();
+      // advice_stock 的写回窗口是 min(now+30min, 当日 15:00)。用固定交易日 10:00 种队列，
+      // 否则本测试在收盘后/周末运行会因 context_expired 失败；preflight 只读指标，
+      // 仍用真实时钟的 fixture.domain。
+      const seedDomain = {
+        ...fixture.domain,
+        clock: () => new Date('2026-10-22T02:00:00.000Z'),
+      };
+      const now = seedDomain.clock();
       await fixture.db.repos.quote.save({
         stockId: '600519.SH',
         ts: now,
@@ -105,7 +112,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
       });
       const queued = await enqueueAnalysisJobTool.execute(
         { kind: 'advice_stock', subject: { kind: 'stock', id: '600519.SH' }, source: 'schedule' },
-        fixture.domain,
+        seedDomain,
       );
       expect(queued.ok).toBe(true);
       const before = await fixture.db.repos.analysis.listJobs({

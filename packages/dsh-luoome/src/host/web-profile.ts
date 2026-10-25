@@ -4,7 +4,9 @@ import type {} from '@deepseek-ai/dsh-client-connection';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type { PluginPrincipal } from '@luoome/tools';
 import { createDshOperationHost } from './dsh-authority.js';
+import type { MarketSurface } from './market-surface.js';
 import { createOperationHandler } from './operations.js';
+import { createPanelStateHandler } from './panels.js';
 import type { ReadSurface } from './read-surface.js';
 import { createReadCallHandler } from './routes.js';
 import { registerReadTools } from './tools.js';
@@ -13,6 +15,8 @@ export const mountDshWebProfile = (
   ctx: Context,
   options: Parameters<typeof createDshOperationHost>[1] & {
     readonly read: ReadSurface;
+    /** 面板数据路由的市场 external 面；与 read 分开，按名调用未暴露工具仍被拒绝。 */
+    readonly market: MarketSurface;
     readonly principalForOwner: () => PluginPrincipal | null;
   },
 ) => {
@@ -60,6 +64,18 @@ export const mountDshWebProfile = (
       '/api/luoome/call',
       ['POST'],
       createReadCallHandler(options.read, () => null),
+    );
+    // M4：三面板宿主只读数据路由。panel→工具映射固定在服务端，URL 只接受 panel 名；
+    // prefix 层已做 Connection.admit + owner 校验，这里与 /call 一样传空 admission。
+    register(
+      '/api/luoome/state',
+      ['GET'],
+      createPanelStateHandler({
+        read: options.read,
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
     );
     register('/api/luoome/operations/prepare', ['POST'], operations);
     register('/api/luoome/profile', ['GET'], async () => {

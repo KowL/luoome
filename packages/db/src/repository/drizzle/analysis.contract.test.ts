@@ -315,6 +315,130 @@ for (const mode of ['memory', 'drizzle'] as const) {
         handle?.close();
       }
     });
+    it('applies per-kind data freshness rules when claiming work', async () => {
+      const { repo, close } = setup();
+      try {
+        const minute = 60_000;
+        const day = 86_400_000;
+        const leaseMs = 5 * minute;
+        const agedJob = (
+          id: string,
+          kind: AnalysisJob['kind'],
+          subject: AnalysisJob['subject'],
+          ageMs: number,
+        ): AnalysisJob => ({
+          ...pending(id),
+          kind,
+          subject,
+          dataAsOf: new Date(now.getTime() - ageMs),
+          dedupeKey: `dedupe:${id}`,
+          createdAt: now,
+          updatedAt: now,
+          notBefore: now,
+        });
+        const agedClaim = (job: AnalysisJob) => ({
+          accountId: 'account',
+          jobId: job.id,
+          owner: 'worker:test',
+          token: `${job.id}-token`,
+          now,
+          leaseUntil: new Date(now.getTime() + leaseMs),
+          context: {
+            ...context(`${job.id}-context`),
+            jobId: job.id,
+            kind: job.kind,
+            subject: job.subject,
+            dataAsOf: job.dataAsOf,
+            createdAt: now,
+            writeUntil: new Date(now.getTime() + leaseMs),
+            expiresAt: new Date(now.getTime() + 31 * day),
+          } satisfies AnalysisContext,
+        });
+        const claimAged = async (
+          id: string,
+          kind: AnalysisJob['kind'],
+          subject: AnalysisJob['subject'],
+          ageMs: number,
+        ) => {
+          const job = agedJob(id, kind, subject, ageMs);
+          await repo.enqueue(job);
+          return repo.claim(agedClaim(job));
+        };
+        const expectStale = async (
+          id: string,
+          kind: AnalysisJob['kind'],
+          subject: AnalysisJob['subject'],
+          ageMs: number,
+        ): Promise<void> => {
+          expect(await claimAged(id, kind, subject, ageMs)).toBeNull();
+          const failed = await repo.findJob('account', id);
+          expect(failed?.status).toBe('failed');
+          expect(failed?.error).toEqual({
+            code: 'stale_context',
+            message: 'Analysis facts are stale',
+            retryable: false,
+          });
+        };
+        const expectClaimed = async (
+          id: string,
+          kind: AnalysisJob['kind'],
+          subject: AnalysisJob['subject'],
+          ageMs: number,
+        ): Promise<void> => {
+          const claimed = await claimAged(id, kind, subject, ageMs);
+          expect(claimed?.id).toBe(id);
+          expect(claimed?.status).toBe('claimed');
+          expect(claimed?.attempts).toBe(1);
+          expect(claimed?.dataAsOf.getTime()).toBe(now.getTime() - ageMs);
+        };
+        await expectStale(
+          'stock-31m',
+          'advice_stock',
+          { kind: 'stock', id: '600519.SH' },
+          31 * minute,
+        );
+        await expectClaimed(
+          'stock-30m',
+          'advice_stock',
+          { kind: 'stock', id: '600519.SH' },
+          30 * minute,
+        );
+        await expectStale(
+          'research-31d',
+          'research_directions',
+          { kind: 'research', id: 'directions' },
+          31 * day,
+        );
+        await expectClaimed(
+          'research-1d',
+          'research_directions',
+          { kind: 'research', id: 'directions' },
+          day,
+        );
+        await expectClaimed(
+          'research-30d',
+          'research_directions',
+          { kind: 'research', id: 'directions' },
+          30 * day,
+        );
+        await expectStale(
+          'proposal-31d',
+          'strategy_version_proposal',
+          { kind: 'strategy', id: 'strategy' },
+          31 * day,
+        );
+        await expectClaimed(
+          'proposal-1d',
+          'strategy_version_proposal',
+          { kind: 'strategy', id: 'strategy' },
+          day,
+        );
+        await expectStale('market-8d', 'advice_market', { kind: 'market', id: 'market' }, 8 * day);
+        await expectClaimed('market-1d', 'advice_market', { kind: 'market', id: 'market' }, day);
+      } finally {
+        close();
+      }
+    });
     it('refreshes a leased context once, closes its old write window and rejects stale tokens', async () => {
       const { repo, close } = setup();
       try {

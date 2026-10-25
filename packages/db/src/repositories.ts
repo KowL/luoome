@@ -1,0 +1,117 @@
+// Bun/Node 两个入口共用的 Drizzle repository 装配（单一来源，避免两处漂移）。
+import type { RepositoryRegistry } from '@luoome/core';
+import type { DrizzleDatabase } from './database.js';
+import { DrizzlePersonalRepository } from './personal/client.js';
+import { createDrizzleReportAutomationRepository } from './personal/report-automation-client.js';
+import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-client.js';
+import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
+import {
+  DrizzleAccountRepository,
+  DrizzleAdviceRepository,
+  DrizzleAlertPlanRepository,
+  DrizzleChatRepository,
+  DrizzleDailyBarRepository,
+  DrizzleDecisionReviewRepository,
+  DrizzleDecisionTradeRepository,
+  DrizzleFinancialFactRepository,
+  DrizzleFundamentalScoreRunRepository,
+  DrizzleFundamentalScoreVersionRepository,
+  DrizzleHoldingRepository,
+  DrizzleInvestmentWorkspaceRepository,
+  DrizzleLedgerRepository,
+  DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMinuteBarRepository,
+  DrizzleNotificationRepository,
+  DrizzlePortfolioCashFlowRepository,
+  DrizzlePortfolioCorporateActionRepository,
+  DrizzlePortfolioPerformanceSnapshotRepository,
+  DrizzleQuoteRepository,
+  DrizzleReportRepository,
+  DrizzleResearchEmbeddingRepository,
+  DrizzleResearchHypothesisVersionRepository,
+  DrizzleResearchIndexRepository,
+  DrizzleResearchVaultSyncRunRepository,
+  DrizzleSignalObservationRepository,
+  DrizzleStockEventRepository,
+  DrizzleStockRepository,
+  DrizzleStockUniverseRepository,
+  DrizzleStrategyAutonomyActionRepository,
+  DrizzleStrategyBacktestRepository,
+  DrizzleStrategyDataCheckpointRepository,
+  DrizzleStrategyEvaluationRepository,
+  DrizzleStrategyRepository,
+  DrizzleStrategyRunRepository,
+  DrizzleStrategyScheduleRepository,
+  DrizzleStrategyWatchlistSubscriptionRepository,
+  DrizzleTradeRepository,
+  DrizzleTradingPlanRepository,
+  DrizzleWatchlistMemberRepository,
+  DrizzleWatchlistRepository,
+  DrizzleWatchRuleStateRepository,
+  DrizzleWatchRunRepository,
+  DrizzleWatchTriggerRepository,
+  DrizzleWorkflowRunRepository,
+} from './repository/drizzle/index.js';
+import { DrizzlePluginAuthorityRepository } from './repository/drizzle/plugin-authority.js';
+import type { Schema } from './schema/index.js';
+
+/** 在给定 drizzle 句柄上装配全部 repository（不负责连接、pragma 与迁移）。 */
+export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): RepositoryRegistry => {
+  const researchIndex = new DrizzleResearchIndexRepository(db);
+  const repos: RepositoryRegistry = {
+    pluginAuthority: new DrizzlePluginAuthorityRepository(db),
+    analysis: new DrizzleAnalysisRepository(db),
+    investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
+    personal: new DrizzlePersonalRepository(db),
+    watchDelivery: createDrizzleWatchDeliveryRepository(db),
+    reportAutomation: createDrizzleReportAutomationRepository(db),
+    account: new DrizzleAccountRepository(db),
+    ledger: new DrizzleLedgerRepository(db),
+    decisionReview: new DrizzleDecisionReviewRepository(db),
+    decisionTrade: new DrizzleDecisionTradeRepository(db),
+    stock: new DrizzleStockRepository(db),
+    stockUniverse: new DrizzleStockUniverseRepository(db),
+    limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
+    holding: new DrizzleHoldingRepository(db),
+    trade: new DrizzleTradeRepository(db),
+    portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),
+    portfolioCorporateAction: new DrizzlePortfolioCorporateActionRepository(db),
+    portfolioPerformanceSnapshot: new DrizzlePortfolioPerformanceSnapshotRepository(db),
+    advice: new DrizzleAdviceRepository(db),
+    tradingPlan: new DrizzleTradingPlanRepository(db),
+    report: new DrizzleReportRepository(db),
+    quote: new DrizzleQuoteRepository(db),
+    dailyBar: new DrizzleDailyBarRepository(db),
+    financialFact: new DrizzleFinancialFactRepository(db),
+    fundamentalScoreVersion: new DrizzleFundamentalScoreVersionRepository(db),
+    fundamentalScoreRun: new DrizzleFundamentalScoreRunRepository(db),
+    minuteBar: new DrizzleMinuteBarRepository(db),
+    signalObservation: new DrizzleSignalObservationRepository(db),
+    strategy: new DrizzleStrategyRepository(db),
+    strategyRun: new DrizzleStrategyRunRepository(db),
+    strategySchedule: new DrizzleStrategyScheduleRepository(db),
+    strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
+    strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
+    strategyBacktest: new DrizzleStrategyBacktestRepository(db),
+    strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
+    strategyAutonomyAction: new DrizzleStrategyAutonomyActionRepository(db),
+    watchlist: new DrizzleWatchlistRepository(db),
+    watchlistMember: new DrizzleWatchlistMemberRepository(db),
+    notification: new DrizzleNotificationRepository(db),
+    // v0.6 起
+    alertPlan: new DrizzleAlertPlanRepository(db),
+    watchTrigger: new DrizzleWatchTriggerRepository(db),
+    // v0.7 起：边沿状态机
+    watchRuleState: new DrizzleWatchRuleStateRepository(db),
+    watchRun: new DrizzleWatchRunRepository(db),
+    // ruo 迁移起
+    researchIndex,
+    researchEmbedding: new DrizzleResearchEmbeddingRepository(db, researchIndex),
+    researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
+    researchHypothesisVersion: new DrizzleResearchHypothesisVersionRepository(db),
+    stockEvent: new DrizzleStockEventRepository(db),
+    workflowRun: new DrizzleWorkflowRunRepository(db),
+    chat: new DrizzleChatRepository(db),
+  };
+  return repos;
+};

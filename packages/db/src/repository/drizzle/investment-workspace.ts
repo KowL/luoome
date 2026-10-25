@@ -14,7 +14,8 @@ import {
   type InvestmentWorkspaceRepository,
 } from '@luoome/core';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import { investmentConsensus, investmentResearch, investmentTracking } from '../../schema/index.js';
 
 const researchOwner = (owner: InvestmentWorkspaceOwner) =>
@@ -34,7 +35,7 @@ const trackingOwner = (owner: InvestmentWorkspaceOwner) =>
   );
 
 export class DrizzleInvestmentWorkspaceRepository implements InvestmentWorkspaceRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async createResearch(value: InvestmentResearch): Promise<InvestmentResearch> {
     return this.createResearchSync(value);

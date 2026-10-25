@@ -37,6 +37,11 @@ export const RecordAdviceOutcomeOutput = z.object({
  * - 跟单：可填 tradeIds + pnl + holdingHours
  * - 盈亏未知：省略 pnl；0 只表示用户明确记录的零盈亏
  *
+ * 持久化口径（2026-10 评审）：AdviceOutcome 的读面已完全由 DecisionReview 派生
+ * （`packages/tools/src/internal/account-advice-outcomes.ts` 读 revision.content.adviceFeedback），
+ * 旧 `advice_outcomes` 表只保留历史/审计数据。本 tool 只写 DecisionReview，不再双写旧表；
+ * 返回的 AdviceOutcome 是本次写入的投影，不是第二份持久事实。
+ *
  * 注意：本 tool 是 write 副作用；MCP 默认不暴露（opt-in）。
  */
 export const recordAdviceOutcomeTool = defineTool({

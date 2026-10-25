@@ -12,7 +12,7 @@ import {
   QuoteSchema,
 } from '@luoome/core';
 import { and, desc, eq, gt, gte, lte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { adviceOutcomes, advices, type Schema } from '../../schema/index.js';
 
@@ -92,7 +92,7 @@ const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
 });
 
 export class DrizzleAdviceRepository implements AdviceRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(advice: Advice): Promise<void> {
     this.saveSync(advice);

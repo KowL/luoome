@@ -1,6 +1,6 @@
 import { type Quote, type QuoteRepository, QuoteSchema } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lte, max } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { priceSnapshots, type Schema } from '../../schema/index.js';
 
@@ -38,7 +38,7 @@ const toQuote = (row: QuoteRow): Quote => ({
  * price_snapshots 的复合主键 (stockId, ts) → 同 ts 重复写入视为覆盖。
  */
 export class DrizzleQuoteRepository implements QuoteRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(quote: Quote): Promise<void> {
     const parsed = QuoteSchema.parse(quote);

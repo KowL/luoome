@@ -1,6 +1,6 @@
 import { assertWatchRunInvariants, type WatchRun, type WatchRunRepository } from '@luoome/core';
 import { desc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, watchRuns } from '../../schema/index.js';
 
@@ -25,7 +25,7 @@ const toWatchRun = (row: WatchRunRow): WatchRun => ({
 });
 
 export class DrizzleWatchRunRepository implements WatchRunRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(run: WatchRun): Promise<void> {
     assertWatchRunInvariants(run);

@@ -7,7 +7,7 @@ import {
   type StrategyAutonomyActionRepository,
 } from '@luoome/core';
 import { and, desc, eq, gte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, strategyAutonomyActions } from '../../schema/index.js';
 
@@ -59,7 +59,7 @@ const changedRows = (result: unknown): number =>
     : 0;
 
 export class DrizzleStrategyAutonomyActionRepository implements StrategyAutonomyActionRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(action: StrategyAutonomyAction): Promise<void> {
     return this.saveSync(action);

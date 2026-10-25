@@ -1,6 +1,7 @@
 import {
   AnalysisProvenanceSchema,
   type AnalysisPublication,
+  analysisContextTimingError,
   InvestmentDirectionSchema,
   InvestmentEvidenceSchema,
   InvestmentResearchSchema,
@@ -75,10 +76,8 @@ export const recordAnalysisPublication = async (
     } else if (claim) return errInvalidInput('context_mismatch');
     return { resultRef: context.recordedResult.ref, replayed: true };
   }
-  if (now >= context.writeUntil || now >= context.expiresAt)
-    return errInvalidInput('context_expired');
-  if (now.getTime() - context.dataAsOf.getTime() > 30 * 60000)
-    return errInvalidInput('stale_context');
+  const timingError = analysisContextTimingError(context, now);
+  if (timingError) return errInvalidInput(timingError);
   const provenance = {
     ...input.provenance,
     contextId: context.id,

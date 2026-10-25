@@ -66,7 +66,7 @@ const publicOperation = (op: PluginOperation) => ({
 export const createPluginOperationService = (options: {
   readonly repository: PluginAuthorityRepository;
   readonly policies: readonly ConfirmablePluginTool[];
-  readonly capabilities: readonly ('read' | 'write' | 'external')[];
+  readonly capabilities: readonly ('read' | 'write' | 'external' | 'queue')[];
   readonly policyVersion: number;
   readonly now: () => number;
   readonly context: () => ToolContext | Promise<ToolContext>;
@@ -81,9 +81,11 @@ export const createPluginOperationService = (options: {
   const policies = new Map<string, ConfirmablePluginTool>();
   for (const policy of options.policies) {
     if (policies.has(policy.tool.name)) throw new Error('Duplicate operation policy');
+    // queue 只在受信任装配显式开启时用于精确 policy；trade 永不接受。
     if (
-      policy.tool.requiredCapabilities.some((c) => c === 'trade' || c === 'queue') ||
-      policy.tool.sideEffect === 'trade'
+      policy.tool.requiredCapabilities.some((c) => c === 'trade') ||
+      policy.tool.sideEffect === 'trade' ||
+      (policy.tool.requiredCapabilities.some((c) => c === 'queue') && !capabilities.has('queue'))
     )
       throw new Error('Unsupported operation capability');
     policies.set(policy.tool.name, policy);
@@ -93,7 +95,7 @@ export const createPluginOperationService = (options: {
   const allowed = (policy: ConfirmablePluginTool) =>
     !disposed &&
     policy.tool.requiredCapabilities.every((c) =>
-      capabilities.has(c as 'read' | 'write' | 'external'),
+      capabilities.has(c as 'read' | 'write' | 'external' | 'queue'),
     );
 
   const grantInput = z
@@ -137,7 +139,7 @@ export const createPluginOperationService = (options: {
             !policy?.scheduled ||
             !allowed(policy) ||
             policy.tool.requiredCapabilities.some(
-              (c) => !call.capabilities.includes(c as 'read' | 'write' | 'external'),
+              (c) => !call.capabilities.includes(c as 'read' | 'write' | 'external' | 'queue'),
             )
           )
             return true;

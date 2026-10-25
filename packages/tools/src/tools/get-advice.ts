@@ -42,6 +42,10 @@ export const getAdviceTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
+    const now = ctx.clock();
+    // 过期判断必须用注入时钟：repository 的 includeExpired=false 分支按真实时钟过滤，
+    // 会与 ctx.clock 不一致。这里取全量后按 ctx.clock 过滤再截断，保持
+    // 「先过滤过期、后 limit」的既有语义。
     const filter: AdviceQuery = {
       ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
       ...(input.subjectId !== undefined ? { subjectId: input.subjectId } : {}),
@@ -49,12 +53,13 @@ export const getAdviceTool = defineTool({
       ...(input.sourceTool !== undefined ? { sourceTool: input.sourceTool } : {}),
       ...(input.since !== undefined ? { since: input.since } : {}),
       ...(input.until !== undefined ? { until: input.until } : {}),
-      includeExpired: input.includeExpired,
-      limit: input.limit,
+      includeExpired: true,
     };
     const raw = await ctx.repos.advice.query(filter);
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
-    const advices = attachAccountAdviceOutcomes(raw, outcomes);
+    const advices = attachAccountAdviceOutcomes(raw, outcomes)
+      .filter((advice) => input.includeExpired || advice.validUntil.getTime() > now.getTime())
+      .slice(0, input.limit);
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
     return { advices: z.array(AdviceSchema).parse(advices), total: advices.length };
   },

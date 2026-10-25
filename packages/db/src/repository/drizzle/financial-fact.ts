@@ -8,7 +8,8 @@ import {
 } from '@luoome/core';
 import { and, eq, gte, inArray, lte, type SQL } from 'drizzle-orm';
 
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import { financialFactRevisions } from '../../schema/index.js';
 
 type FactRow = typeof financialFactRevisions.$inferSelect;
@@ -100,7 +101,7 @@ const assertSupersedes = (fact: FinancialFact, superseded: FinancialFact | undef
 
 /** FinancialFact 的 Drizzle/SQLite append-only 实现。 */
 export class DrizzleFinancialFactRepository implements FinancialFactRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async appendMany(facts: readonly FinancialFact[]): Promise<void> {
     const parsed = facts.map((fact) => {

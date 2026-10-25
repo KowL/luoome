@@ -4,6 +4,7 @@ import {
   AnalysisProvenanceSchema,
   addTradingDays,
   adviceExpiryDays,
+  analysisContextTimingError,
   dateInShanghai,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
@@ -43,10 +44,8 @@ const recordAdvice = async (
     return errInvalidInput('unknown_fact_reference');
   const now = ctx.clock();
   if (!context.recordedResult) {
-    if (now >= context.writeUntil || now >= context.expiresAt)
-      return errInvalidInput('context_expired');
-    if (now.getTime() - context.dataAsOf.getTime() > 30 * 60000)
-      return errInvalidInput('stale_context');
+    const timingError = analysisContextTimingError(context, now);
+    if (timingError) return errInvalidInput(timingError);
   }
   const advice = AdviceSchema.parse({
     ...input.result,

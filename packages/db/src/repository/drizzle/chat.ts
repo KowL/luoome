@@ -7,11 +7,11 @@ import {
   InvariantError,
 } from '@luoome/core';
 import { and, desc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import { chatMessages, chatSessions, type Schema } from '../../schema/index.js';
 
 export class DrizzleChatRepository implements ChatRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveSession(session: ChatSession): Promise<void> {
     assertChatSessionInvariants(session);

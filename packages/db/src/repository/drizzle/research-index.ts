@@ -13,7 +13,8 @@ import type {
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, like, lte, or, sql } from 'drizzle-orm';
 
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import {
   researchDocumentChunks,
   researchDocumentFts,
@@ -73,7 +74,7 @@ const documentRow = (
 export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
   private ftsAvailable: boolean;
 
-  constructor(private readonly db: DrizzleDb) {
+  constructor(private readonly db: DrizzleDatabase<Schema>) {
     this.ftsAvailable = this.detectFts();
     if (this.ftsAvailable) this.rebuildFts();
   }

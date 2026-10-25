@@ -1,14 +1,19 @@
+# 默认部署 = 纯插件 Web + Caddy：DSH 用 Node 加载 dsh-luoome 插件（host/client/skills），
+# Caddy 提供公网入口。运行期没有 MCP 实例、Bun CLI、旧 Bun Web、analysis worker 或
+# queue probe；旧 MCP/Bun 入口只保留源码（P5 再删除），不在本文件启动。
+# 插件经 deploy/dsh/profile-seed.mjs 装配进 DSH profile，事实库为 Node SQLite。
 x-service: &service
   image: luoome-dsh:${LUOOME_RELEASE:?set an immutable release tag}
   build:
     context: ../..
     dockerfile: deploy/dsh/Dockerfile
     args:
+      # BUN_IMAGE 只用于构建阶段打包插件；运行阶段是 Node 镜像。
       BUN_IMAGE: ${BUN_IMAGE:?set a pinned Bun image}
       NODE_IMAGE: ${NODE_IMAGE:-node:22.22.3-bookworm-slim}
       DSH_VERSION: ${DSH_VERSION:-0.2.1-rc.2}
   restart: unless-stopped
-  # 容器日志默认无上限，worker 每分钟写一轮，长期会把磁盘吃满。
+  # 容器日志默认无上限，DSH 会话与工具输出长期累积会把磁盘吃满。
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
@@ -20,11 +25,13 @@ x-service: &service
   environment: &environment
     DSH_HOME: /var/lib/dsh
     DSH_WORKSPACE: /workspace
+    DSH_PROFILE: ${DSH_PROFILE:-luoome-web}
     LUOOME_HOME: /var/lib/luoome
-    LUOOME_MCP_COMMAND: bun
-    LUOOME_MCP_ARGS: --no-env-file,packages/cli/src/index.ts,mcp,serve
-    LUOOME_MCP_CWD: /app
-    LUOOME_MCP_ENV: ${LUOOME_MCP_ENV:-LUOOME_MARKET_PROVIDER=real}
+    # owner 与事实库账户由部署显式绑定；缺失即 fail closed，不从请求/模型推断。
+    LUOOME_OWNER_USER_ID: ${LUOOME_OWNER_USER_ID:?set the trusted owner user id}
+    LUOOME_OWNER_ACCOUNT_ID: ${LUOOME_OWNER_ACCOUNT_ID:?set the existing owner account id}
+    LUOOME_MARKET_PROVIDER: ${LUOOME_MARKET_PROVIDER:-real}
+    LUOOME_STOCK_UNIVERSE_SOURCES: ${LUOOME_STOCK_UNIVERSE_SOURCES:-eastmoney,sina}
   volumes:
     - dsh_home:/var/lib/dsh
     - dsh_workspace:/workspace
@@ -35,7 +42,7 @@ x-service: &service
   networks: [backend]
 
 services:
-  # 人看的面：只读 MCP 实例 + 面板 + 技能 + 定时。
+  # 纯插件 Web：Node 运行 DSH + dsh-luoome（三面板 client + 四技能 + 原生工具/审批）。
   dsh-web:
     <<: *service
     command: ["deploy/dsh/entrypoint.sh", "web"]
@@ -48,17 +55,6 @@ services:
     networks:
       backend:
         ipv4_address: 172.28.0.5
-  # 消费者面：独立进程，独立 MCP 实例，靠队列租约与其它消费者先到先得。
-  dsh-worker:
-    <<: *service
-    command: ["deploy/dsh/entrypoint.sh", "worker"]
-    environment:
-      <<: *environment
-      DSH_WORKER_INTERVAL: ${DSH_WORKER_INTERVAL:-60}
-      DSH_WORKER_PROMPT: ${DSH_WORKER_PROMPT:-使用 analysis-worker 技能领取并处理待办分析任务：先 claim，取事实包，推理后写回并完成任务；没有待办任务就直接结束。}
-    networks:
-      backend:
-        ipv4_address: 172.28.0.6
   # 公网入口：basic auth + 反代。DSH 自己不发布端口，只在这里对外。
   caddy:
     image: ${CADDY_IMAGE:?set a reviewed Caddy image tag or digest}

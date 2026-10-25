@@ -1,6 +1,6 @@
 import { type AlertPlan, type AlertPlanRepository, assertAlertPlanInvariants } from '@luoome/core';
 import { and, asc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { alertPlans, type Schema } from '../../schema/index.js';
 
@@ -24,7 +24,7 @@ const toAlertPlan = (row: AlertPlanRow): AlertPlan => ({
 });
 
 export class DrizzleAlertPlanRepository implements AlertPlanRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(plan: AlertPlan): Promise<void> {
     this.put(plan);

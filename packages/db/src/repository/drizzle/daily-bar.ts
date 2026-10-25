@@ -6,7 +6,7 @@ import {
   DailyBarSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { dailyBarRevisions, dailyBars, type Schema } from '../../schema/index.js';
 
@@ -30,7 +30,7 @@ const toBar = (row: BarRow): DailyBar => ({
  * daily_bars 的复合主键 (stockId, date) → 同日重复写入视为覆盖。
  */
 export class DrizzleDailyBarRepository implements DailyBarRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveMany(bars: readonly DailyBar[]): Promise<void> {
     if (bars.length === 0) return;

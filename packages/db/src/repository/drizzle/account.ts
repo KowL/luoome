@@ -6,13 +6,13 @@ import {
   InvariantError,
 } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { accounts, type Schema } from '../../schema/index.js';
 
 /** Account 的 Drizzle 实现（ARCHITECTURE §4.3）。行结构与实体一致，无需 mapper。 */
 export class DrizzleAccountRepository implements AccountRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async ensureSingleDefault(account: Account): Promise<Account> {
     assertAccountInvariants(account);

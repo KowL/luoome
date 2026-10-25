@@ -18,10 +18,11 @@ import {
   assertAnalysisPublication,
   hasAnalysisLease,
   InvariantError,
+  isAnalysisContextStale,
   releaseAnalysisJob,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import { analysisContexts, analysisJobs, type Schema } from '../../schema/index.js';
 import { DrizzleAdviceRepository } from './advice.js';
 import { DrizzleInvestmentWorkspaceRepository } from './investment-workspace.js';
@@ -40,7 +41,7 @@ const contextRow = (context: AnalysisContext): typeof analysisContexts.$inferIns
 };
 
 export class DrizzleAnalysisRepository implements AnalysisRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async recordAdvice(input: AnalysisRecordAdvice): Promise<AnalysisRecordResult> {
     return this.db.transaction(
@@ -306,7 +307,7 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
           job.attempts >= job.maxAttempts
         )
           return null;
-        if (input.now.getTime() - job.dataAsOf.getTime() > 30 * 60000) {
+        if (isAnalysisContextStale(job.kind, job.dataAsOf, input.now)) {
           const expired: AnalysisJob = {
             ...job,
             status: 'failed',

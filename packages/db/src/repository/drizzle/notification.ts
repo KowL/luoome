@@ -5,7 +5,7 @@ import {
   type NotificationResult,
 } from '@luoome/core';
 import { and, desc, eq, gte, type SQL } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { notifications, type Schema } from '../../schema/index.js';
 
@@ -28,7 +28,7 @@ const toNotification = (row: NotifRow): Notification => {
 };
 
 export class DrizzleNotificationRepository implements NotificationRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(notification: Notification): Promise<void> {
     assertNotificationInvariants(notification);

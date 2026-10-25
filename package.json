@@ -11,11 +11,16 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "test:db": "bun test packages/db",
+    "test:db:node": "vitest run packages/db/src/node.contract.node.ts",
     "test:web": "bun test apps/web",
     "test:dsh": "vitest run packages/dsh-bridge",
     "test:dsh-luoome": "vitest run packages/dsh-luoome && bun run test:dsh-luoome:e2e",
     "test:dsh-luoome:e2e": "bun --no-env-file test packages/dsh-luoome/src/host/dsh-authority.e2e.test.ts",
-    "test:all": "bun run test && bun run test:db && bun run test:web && bun run test:dsh-luoome:e2e",
+    "test:analysis-surface": "bun --no-env-file test packages/mcp/src/analysis-surface.e2e.test.ts",
+    "test:plugin-install": "bun --no-env-file infra/dsh/plugin-install-acceptance.ts",
+    "test:mvp-journeys": "bun --no-env-file infra/dsh/mvp-journeys-acceptance.ts",
+    "test:panels-browser": "bun --no-env-file infra/dsh/panels-browser-acceptance.ts",
+    "test:all": "bun run test && bun run test:db && bun run test:db:node && bun run test:web && bun run test:dsh-luoome:e2e && bun run test:analysis-surface",
     "mcp:smoke": "bun packages/mcp/src/smoke.ts",
     "web": "bun --no-env-file apps/web/src/index.ts",
     "typecheck": "for d in packages/* apps/*; do if find \"$d\" -maxdepth 4 -name '*.ts' -not -path '*/node_modules/*' | grep -q .; then echo \"== typecheck $d\"; (cd \"$d\" && tsc --noEmit) || exit 1; fi; done",
@@ -23,7 +28,7 @@
     "format": "biome format --write .",
     "build": "for d in packages/* apps/*; do if [ -f \"$d/src/index.ts\" ]; then echo \"== build $d\"; bun --no-env-file build \"$d/src/index.ts\" --outdir \"$d/dist\" --target bun --packages external || exit 1; fi; done && bun --no-env-file infra/dsh/build.ts",
     "build:dsh": "bun --no-env-file infra/dsh/build.ts",
-    "build:dsh-luoome": "bun --no-env-file build packages/dsh-luoome/src/index.ts --target node --format esm --outdir packages/dsh-luoome/dist --external '@deepseek-ai/*'",
+    "build:dsh-luoome": "bun --no-env-file run --cwd packages/dsh-luoome build",
     "check:layers": "bun --no-env-file infra/check-layers.ts"
   },
   "devDependencies": {

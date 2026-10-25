@@ -1,6 +1,7 @@
-# 单机形态的公网入口：整个站点只有 DSH。
+# 单机形态的公网入口：整个站点只有 DSH（默认部署为纯插件形态）。
 #
-# 托管站点已下线，站点根路径直接指向 DSH 面板。
+# 托管站点已下线，站点根路径直接指向 DSH 面板；三面板/对话/审批都由
+# dsh-luoome 插件在 DSH Web 内提供，不经过旧 Bun Web 或 MCP 进程。
 # 域名的 ACME 校验会被运营商 DNS 劫持（DNSPod webblock）打断，
 # 443 上的 TLS 握手同样被中间设备重置，因此公网 IP 入口只能明文 HTTP。
 # DSH_AUTH_* 未配置时 basic auth 校验失败（fail closed），不会放开 /dsh/。

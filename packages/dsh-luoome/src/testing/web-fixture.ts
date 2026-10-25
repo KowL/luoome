@@ -20,6 +20,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { z } from 'zod';
 import { MANUAL_OPERATION_TOOL } from '../host/dsh-authority.js';
 import { dshScheduleHash } from '../host/dsh-identity.js';
+import { createMarketSurface } from '../host/market-surface.js';
 import { installQueueProbe, installWorkerPreflight } from '../host/preflight.js';
 import { createReadSurface } from '../host/read-surface.js';
 import { mountDshWebProfile } from '../host/web-profile.js';
@@ -139,6 +140,12 @@ export async function apply(ctx: Context) {
       tools: toolRegistry.all(),
       context: () => domain,
     }),
+    // 该 fixture 只验证审批/操作协议，不提供 market external 面。
+    market: createMarketSurface({
+      config: { allowlist: [] },
+      tools: toolRegistry.all(),
+      context: () => domain,
+    }),
   });
   let readCalls = 0;
   ctx.on('tools/result', (execution, result) => {
@@ -206,9 +213,15 @@ export async function apply(ctx: Context) {
   });
 }
 
+// 隔离验收的队列 fixture 必须用固定交易日时钟：盘中行动类 context 的写回窗口是
+// min(now+30min, 当日 15:00 Asia/Shanghai)，真实墙钟在收盘后/周末会让 enqueue 直接
+// context_expired。固定 2026-10-22 10:00（周四）后，任何运行时刻都能稳定种出 ready 队列。
+const FIXTURE_NOW = new Date('2026-10-22T02:00:00.000Z');
+const fixtureClock = (): Date => new Date(FIXTURE_NOW.getTime());
+
 // These entry points are bundled only into temporary acceptance profiles.
 export async function applyProbe(ctx: Context, options: { state: 'ready' | 'empty' | 'error' }) {
-  const domain = await buildTestContext({ clock: () => new Date() });
+  const domain = await buildTestContext({ clock: fixtureClock });
   if (options.state === 'ready') {
     await domain.repos.quote.save({
       stockId: '600519.SH',
@@ -240,7 +253,7 @@ export async function applyProbe(ctx: Context, options: { state: 'ready' | 'empt
 }
 
 export async function applyWorker(ctx: Context, options: { state: 'ready' | 'empty' | 'error' }) {
-  const domain = await buildTestContext({ clock: () => new Date() });
+  const domain = await buildTestContext({ clock: fixtureClock });
   if (options.state === 'ready') {
     await domain.repos.quote.save({
       stockId: '600519.SH',

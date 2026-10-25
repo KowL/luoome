@@ -1,9 +1,11 @@
 ---
 name: analysis-worker
-description: 消费 luoome 待分析队列，使用租约与事实快照原子写回结果。队列唤醒或用户要求处理待办分析时使用；只在 luoome-worker 消费者实例运行。
+description: 消费 luoome 待分析队列，使用租约与事实快照原子写回结果。仅在手动/隔离验收的 worker 实例使用；默认 DSH Web profile 不安装本技能。
 ---
 
 # analysis-worker
+
+默认 DSH Web profile 不安装本技能：日常会话的交互分析由 `luoome-analysis` 实例直接写回，不走本技能。本文件保留供手动/隔离 worker 验收，只在显式拉起的 worker 实例中使用，不要把它当作默认入口。
 
 本技能版本：analysis-worker-v2。只调用 `mcp__luoome-worker__` 命名空间，禁止 shell、文件、网络或其它 MCP 绕过工具。工具缺失时报告部署配置不完整并停止。
 

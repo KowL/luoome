@@ -17,7 +17,7 @@ import {
   type StrategyVersion,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import {
   type Schema,
@@ -34,7 +34,7 @@ type VersionRow = typeof strategyVersions.$inferSelect;
 type RunRow = typeof strategyRuns.$inferSelect;
 type ResultRow = typeof strategyResults.$inferSelect;
 type SignalRow = typeof strategySignals.$inferSelect;
-type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
 /**
  * 可运行版本判定（M2 自治验证，docs/ddd/strategy-ai-lifecycle-detailed-design.md §8/§9.2）：
@@ -150,7 +150,7 @@ const toSignal = (row: SignalRow): StrategySignal => ({
 });
 
 export class DrizzleStrategyRepository implements StrategyRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async create(strategy: Strategy): Promise<void> {
     assertStrategyInvariants(strategy);
@@ -411,7 +411,7 @@ export class DrizzleStrategyRepository implements StrategyRepository {
 }
 
 export class DrizzleStrategyRunRepository implements StrategyRunRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async acquireRunLeaseToken(input: {
     readonly strategyId: string;

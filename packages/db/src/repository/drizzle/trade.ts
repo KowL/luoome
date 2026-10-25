@@ -1,6 +1,6 @@
 import { assertTradeInvariants, type Trade, type TradeRepository } from '@luoome/core';
 import { and, asc, desc, eq, gte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, trades } from '../../schema/index.js';
 
@@ -26,7 +26,7 @@ const fromRow = (row: TradeRow): Trade => ({
 
 /** Trade 的 Drizzle 实现。关联字段是可空 provenance，不影响持仓事实。 */
 export class DrizzleTradeRepository implements TradeRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(trade: Trade): Promise<void> {
     assertTradeInvariants(trade);

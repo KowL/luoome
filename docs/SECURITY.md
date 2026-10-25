@@ -185,7 +185,7 @@ system prompt）。
 |---|---|---|---|
 | `LUOOME_EXPOSE_WRITE` | `false` | `true` / `false` | write 类 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
-| `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由消费者实例显式开启 |
+| `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由旧 MCP 分析面/手动 worker 或插件精确 policy 显式开启，分析面另用精确三工具白名单收窄 |
 | `LUOOME_EXPOSE_TOOLS` | 未设置 | 逗号分隔 allowlist | 按工具名精确放行；空串表示不放行任何工具 |
 | `LUOOME_EXPOSE_DENY` | 未设置 | 逗号分隔 denylist | deny 优先于 allowlist |
 | `LUOOME_EXPOSE_RESEARCH` | `false` | `true` / `false` | 放行私人研究正文与检索工具 |
@@ -197,8 +197,10 @@ read 类恒定暴露，没有对应的 env var（`LUOOME_EXPOSE_READ` 不存在�
 启动时校验：trade 必须 false，否则启动失败。allowlist / denylist 的判定顺序是
 「能力满足 ∧ 名字在 allowlist 内（allowlist 为空则不限）∧ 名字不在 denylist 内」。
 
-单机 DSH 部署的暴露面由 profile 补丁固定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
-避免一次配置失误把只读实例变成写面实例。实例划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
+默认纯插件部署不读取 `LUOOME_EXPOSE_*`：暴露面由受信任部署配置（read allowlist、market
+allowlist、确认写 policy）固定，HTTP/模型参数不能提升。旧 MCP 过渡形态的暴露面由 profile 补丁
+固定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，避免一次配置失误把只读实例变成
+写面实例。暴露面划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
 
 Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
 策略盘后、盘中账户计划、账户绩效与策略自治 scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照或 WorkflowRun，因此只有
@@ -223,8 +225,10 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 
 ### stdio（本地进程）
 
-stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。三个 MCP 实例（`luoome` / `luoome-settings` /
-`luoome-batch`）与消费者实例都以 stdio 方式连接同一份单机事实库。
+stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。**默认纯插件部署不使用 stdio MCP**：
+插件在 DSH Node 进程内直接打开 Node SQLite。旧 MCP 过渡形态（`luoome` / `luoome-settings` /
+`luoome-analysis` / `luoome-batch` 四个实例与手动 worker）仅在手动/隔离验收时以 stdio 连接同一份
+单机事实库。
 
 ### DSH 入口（HTTP）
 
@@ -381,14 +385,15 @@ Advice 的 `reasoning` / `risks` 在写回前过 prompt-injection 文本清理�
 - [x] Advice 写回路径对 reasoning / risks 做 prompt-injection 文本清理
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
-- [x] 三个 MCP 实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃
+- [x] 默认纯插件部署的 read / market / 确认写面互不重叠；旧 MCP 四个实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃
 
 ## 单机形态的入口与暴露面
 
 luoome 现在是**单机版**：没有多租户、没有订阅计费、没有托管站点，也没有内嵌 DSH Host。
-DSH 是唯一入口，luoome 以插件形态接入；`$LUOOME_HOME/luoome.db` 是唯一事实库，
-DSH 的交互面与消费者实例共享同一份事实库。多租户托管形态（登录、订阅、支付、托管站点、
-用量计量）已随 D9–D12 下线，历史设计见 [DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）加载 `dsh-luoome` 插件，
+`$LUOOME_HOME/luoome.db` 是唯一事实库（Node SQLite），插件与旧 MCP 手动验收面共享同一份事实库。
+多租户托管形态（登录、订阅、支付、托管站点、用量计量）已随 D9–D12 下线，历史设计见
+[DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
 
 ### 两层鉴权
 
@@ -403,20 +408,37 @@ DSH 的交互面与消费者实例共享同一份事实库。多租户托管形�
 - 部署以 HTTPS 为首选；当前公网入口若只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍会校验，
   但没有传输加密，不在不可信网络上传输凭据。
 
-### MCP 暴露面：三个实例
+### 默认部署暴露面：纯插件（Node）
+
+| 面 | 位置 | 暴露内容 | 能力 |
+|---|---|---|---|
+| read surface | `dsh-luoome` 插件（DSH Node 进程内） | 45 个纯 read 工具：账户/持仓/交易、Advice/复盘、Strategy、关注/触发、本地市场事实 | read |
+| market external surface | 同上 | 精确 6 个 `sideEffect==='external'` 工具（指数/情绪/行情/新闻/试跑） | external（精确白名单） |
+| 确认写操作 | 同上 | 8 条 policy：DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome` | write/queue（逐次 allowed-once） |
+
+- 插件的 read / market / 写操作面互相隔离；通用 `/api/luoome/call` 只读，写工具按名返回 403。
+- 部署配置只由进程环境或受信任代码解析；HTTP 请求、模型参数与 skill 内容不能扩大 allowlist、
+  提升账户或打开 automations/trade。
+- 默认不启用自动任务；`trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 在打开数据库前即失败。
+
+### 旧 MCP 过渡形态的暴露面（手动/隔离验收，默认部署不启动）
 
 | 实例 | 挂载位置 | 暴露内容 | 能力 |
 |---|---|---|---|
-| `luoome` | DSH 交互面 profile | 事实、建议、策略、盯盘等只读工具 | read |
-| `luoome-settings` | DSH 交互面 profile | 配置类写工具白名单（含研究结构工具） | write（精确白名单） |
-| `luoome-batch` | DSH 交互面 profile | 五个批处理入口，供 DSH 定时任务调用 | write（精确白名单） |
-| `luoome-worker` | DSH 消费者实例（headless） | 队列工具白名单（claim / complete / fail 等） | queue（精确白名单） |
+| `luoome` | DSH 交互面 profile（Web） | 事实、建议、策略、盯盘等只读工具 | read |
+| `luoome-settings` | DSH 交互面 profile（Web） | 配置类写工具白名单（含研究结构工具） | write（精确白名单） |
+| `luoome-analysis` | DSH 交互面 profile（Web） | 精确三个工具：`get_analysis_context`、`record_advice`、`record_analysis_result`；交互分析直接写回，不创建 `analysis_job` | read + queue（精确三工具白名单） |
+| `luoome-batch` | DSH 交互面 profile（Web） | 五个批处理入口，供 DSH 定时任务调用 | write（精确白名单） |
+| `luoome-worker` | 手动/隔离验收 profile（headless；默认部署不运行） | 队列消费白名单（claim / complete / fail 等） | queue（精确白名单） |
 
-- 白名单按工具名精确匹配：读面严格只读，设置面只放配置类写工具，批处理面只放五个批处理入口。
-  设置面放行研究结构工具不会连带放行研究正文读取。
+- 白名单按工具名精确匹配：读面严格只读，设置面只放配置类写工具，分析面只放三个交互分析工具，
+  批处理面只放五个批处理入口。设置面放行研究结构工具不会连带放行研究正文读取。
 - 暴露面开关由 profile 补丁决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
   一次配置失误不能把读面变成写面，也不能放出 trade。
-- `queue` 是独立能力，不因开启 `write` 或 `external` 自动开放；消费者实例只开放明确的队列工具白名单。
+- `queue` 是独立能力，不因开启 `write` 或 `external` 自动开放；分析面固定暴露三个交互工具，
+  不含 claim / complete / fail / metrics / job 查询，手动 worker 实例才开放明确的队列消费白名单。
+- 分析面由 profile 显式设置 `LUOOME_MCP_SERVER_NAME=luoome-analysis`；缺少分析面白名单时默认
+  不挂载该实例，显式空数组表示零工具，不得退化成全量暴露。
 - 私有研究能力（Vault 正文、frontmatter、附件名、搜索片段）视为不可信数据，不进入 system prompt，
   不输出绝对 Vault 路径或凭证。
 
@@ -428,7 +450,8 @@ DSH 的交互面与消费者实例共享同一份事实库。多租户托管形�
 
 ### 单机事实库
 
-- `$LUOOME_HOME/luoome.db` 是唯一事实源，DSH 交互面与消费者实例指向同一份文件。
+- `$LUOOME_HOME/luoome.db` 是唯一事实源；默认部署由插件在 DSH Node 进程内直接打开，
+  旧 MCP 交互面、分析面与手动 worker 实例在做手动验收时指向同一份文件。
 - 历史托管租户库已下线，不会再同步；不要把旧租户库挂回单机部署。
 - 面板与聊天读同一份数据：面板只做投影，不自己算数，数值必须与工具输出逐位一致。
 - 面板走 harness 的 `/api` 路由，继承浏览器认证与 Origin 栅栏，不自建裸端口。
@@ -436,25 +459,30 @@ DSH 的交互面与消费者实例共享同一份事实库。多租户托管形�
 
 ### 调度与批处理
 
-- 单机形态没有常驻调度进程：批处理由 **DSH 定时任务**唤起会话，agent 再调用 `luoome-batch` 实例的批处理工具。
+- 单机形态没有常驻调度进程：批处理由 **DSH 定时任务**唤起会话，agent 再调用插件或旧
+  `luoome-batch` 实例的批处理工具（默认部署不使用 MCP 实例）。
 - 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库；
   调度时间点错了也不会写坏事实。
-- 队列消费由 DSH 消费者实例承担：租约先到先得，与交互面共享同一份事实库；
-  队列为空时不唤醒模型，避免空转的真实模型成本。
+- 交互式分析不经过队列：插件 read surface 取得持久化 context 后由 DSH 推理，再经原生确认操作
+  `record_*` 校验写回，不创建 `analysis_job`；`record_*` 不能伪造已 claim 的 job 结果。
+- 队列能力保留，但默认部署不运行 MCP/worker：没有生产者、没有常驻消费者，空队列不产生任何
+  模型请求，避免空转的真实模型成本。需要验证消费链路时，用旧入口脚本在手动/隔离环境显式拉起
+  legacy worker；租约先到先得，与插件共享同一份事实库。
 
 ### DSH 集成面的安全边界
 
-单机形态的 DSH 集成只有三块：独立 profile 装配、只读面板插件、系统提示词纪律插件。
-原先的内嵌 DSH Chat（Node Host + Cordis 业务代理 + 托管计量）已随托管形态一起删除，仓库里不再有这条路径。
+默认纯插件部署的 DSH 集成面是 `dsh-luoome` 插件：host（Node SQLite + 真实 adapters + read/market
+surface + 确认写 policy）、client（三面板 slots）、随包 skills（四技能）。旧 MCP 过渡形态的
+profile 装配、只读面板插件与纪律提示词插件源码保留，仅用于手动验收。
 
-- profile 装配层决定实例与白名单：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，
-  避免一次配置失误把只读实例变成写面实例。
-- 面板插件只做只读投影：它调用固定白名单的只读工具，经 harness 的 `/api` 路由取数，
-  继承浏览器认证与 Origin 栅栏，不自建裸端口，也不自己算数。
-- 纪律插件只向 system prompt 追加约束（先取事实再下结论、advice ≠ trade、保留反证与有效期等），
-  不授予任何工具权限。
-- 真实供应商、生产网络/进程隔离与持久 Session 仍待后续验收；对应研发计划已归档，
-  见 [文档归档清单](./README.md#历史归档)。
+- 插件 profile 由镜像管理：`deploy/dsh/profile-seed.mjs` 每次启动把构建产物安装进 DSH profile，
+  只重写插件文件与补丁层，不改会话目录与业务事实库。
+- 面板只做只读投影：client 经宿主认证的 `/api/luoome/state` 取固定 panel→工具映射的 ToolResult，
+  继承 DSH 认证与 Host/Origin 校验，不自己算数、不把授权写进 localStorage。
+- 随包技能只向 system prompt 追加约束（先取事实再下结论、advice ≠ trade、保留反证与有效期等），
+  不授予任何工具权限；用户自改的同名技能优先于插件默认技能。
+- 真实供应商成功路径、生产网络/进程隔离与真实生产切换仍待后续验收（本仓库只做隔离切换/回退演练）；
+  对应研发计划已归档，见 [文档归档清单](./README.md#历史归档)。
 
 ## 纯插件迁移中的执行边界
 
@@ -462,4 +490,4 @@ DSH 的交互面与消费者实例共享同一份事实库。多租户托管形�
 
 新 Web 路由每次经真实 Connection.admit 和 owner 检查，POST 仍要求真实监听器同源 Origin；不用内部 Fetch URL 或 X-Forwarded 头替代它。输入上限 64 KiB，超限先回 413 再关闭未读流。确认凭据仅保存在页面内存，刷新后只可查询操作，不从存储或服务端重建确认凭据。临时 profile 的官方审批 UI、登录、Host/Origin、取消和冷恢复已有本地验收；验收使用合成事实及脚本模型。
 
-定时授权同时核对真实投递历史、当前 turn、任务定义指纹、授权版本/有效期、账户、精确输入及组合能力；拒绝 force 和客户端自报任务身份。自动执行默认关闭，隔离 Web/SQLite 两组证据不等同 Node 生产持久库和完整目标部署验收。unknown 结果先核对既有业务回执，禁止自动重复外部副作用。详细契约见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
+定时授权同时核对真实投递历史、当前 turn、任务定义指纹、授权版本/有效期、账户、精确输入及组合能力；拒绝 force 和客户端自报任务身份。自动执行默认关闭。Node SQLite 只读/写回与默认部署切换已在隔离环境验收（含一致性备份与回退合并演练），但**不代表真实生产服务器已完成切换**，也不等同真实供应商/真实模型质量验收。unknown 结果先核对既有业务回执，禁止自动重复外部副作用。详细契约与隔离证据见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

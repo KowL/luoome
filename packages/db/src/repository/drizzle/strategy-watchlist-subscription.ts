@@ -6,7 +6,7 @@ import {
   StrategyWatchlistSubscriptionSchema,
 } from '@luoome/core';
 import { and, desc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, strategyWatchlistSubscriptions } from '../../schema/index.js';
 
@@ -49,7 +49,7 @@ const values = (subscription: StrategyWatchlistSubscription) => ({
 export class DrizzleStrategyWatchlistSubscriptionRepository
   implements StrategyWatchlistSubscriptionRepository
 {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(subscription: StrategyWatchlistSubscription): Promise<void> {
     assertStrategyWatchlistSubscriptionInvariants(subscription);

@@ -291,6 +291,11 @@ export const getDecisionReviewContextTool = defineTool({
   },
 });
 
+/**
+ * `content.adviceFeedback` 是 AdviceOutcome 的权威持久事实：工具层读面
+ * （get_advice / get_advice_stats / get_confidence_calibration / weekly report）都从
+ * DecisionReview 修订派生。旧 `advice_outcomes` 表只保留历史/审计数据，写入路径不回填。
+ */
 export const decisionReviewWriteHash = (input: {
   accountId: string;
   subject: DecisionReviewSubject;

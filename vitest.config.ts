@@ -7,6 +7,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // @luoome/db/node 的合约文件不以 .test.ts 结尾（避免 bun test 在 Bun 运行时
+    // 加载 node:sqlite），默认 include 匹配不到，这里显式补入。
+    include: ['**/*.{test,spec}.?(c|m)[jt]s?(x)', 'packages/db/src/node.contract.node.ts'],
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
@@ -15,6 +18,9 @@ export default defineConfig({
       // 本地临时目录（构建/发布中间产物），不是仓库内容。
       '.tmp/**',
       'packages/dsh-luoome/src/host/dsh-authority.e2e.test.ts',
+      // MCP 分析面 e2e spawn bun 子进程并直接加载 bun:sqlite，由 bun 运行：
+      //   bun run test:analysis-surface
+      'packages/mcp/src/analysis-surface.e2e.test.ts',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',

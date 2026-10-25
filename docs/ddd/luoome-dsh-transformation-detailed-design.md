@@ -104,8 +104,15 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | 触发方式 | 归属 | 说明 |
 | --- | --- | --- |
 | 每日/每周批处理 | **DSH 定时任务** | 提醒到点唤起会话，agent 调用 `luoome-batch` 实例的批处理工具 |
-| 队列消费 | **DSH 消费者实例**（`luoome-worker`） | 常驻轮询 `analysis_jobs`，租约先到先得 |
-| 模型推理 | **技能驱动** | 晨报、盯盘复核、持仓复盘、研究、写回由 agent 按技能执行 |
+| 队列消费 | **手动/隔离 worker profile** | 仅在显式拉起时轮询 `analysis_jobs`；默认部署不运行 |
+| 模型推理 | **技能驱动 / 交互分析面** | 晨报、盯盘复核、持仓复盘、研究、写回由 agent 按技能执行；交互分析经 `luoome-analysis` 实例写回 |
+
+> 2026-10-24 增补：默认部署已退役常驻 worker。日常 DSH Web profile 新增独立 `luoome-analysis`
+> MCP 实例，只暴露 `get_analysis_context`、`record_advice`、`record_analysis_result`
+> （read + queue 精确白名单），交互分析直接写回且不创建 `analysis_job`。队列能力
+> （`AnalysisJob`、repository、queue tools、claim/complete/fail、手动 queue-e2e）全部保留，
+> 但默认部署没有生产者、没有常驻消费者；`luoome-worker` profile 仅作手动/隔离验收。
+> 本次仍是「当前 MCP 过渡形态」，最终纯插件形态不在本次范围。
 
 批处理工具（`packages/mcp/src/batch-tools.ts`）把领域工作流包成 MCP 入口：
 `run_strategy_daily_cycle`、`run_closing_report_cutoff`、`run_portfolio_performance_snapshot`、
@@ -118,6 +125,7 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 DSH 进程（dsh-web profile）
 ├── MCP 实例 luoome            只读面：事实、建议、策略、盯盘（read capability）
 ├── MCP 实例 luoome-settings   设置面：配置类写工具（write capability，白名单）
+├── MCP 实例 luoome-analysis   分析面：交互分析三个工具（read + queue 精确白名单，2026-10-24 增补）
 ├── MCP 实例 luoome-batch      批处理面：五个批处理入口（write capability，D12）
 ├── 插件 luoome-panels         三个只读面板（overview / strategies / review）
 ├── 插件 luoome-discipline     系统提示词六条约束
@@ -125,15 +133,17 @@ DSH 进程（dsh-web profile）
 ├── 插件 dsh-tool-schedule     agent 建/查/改提醒的工具
 └── 技能目录 .dsh/skills       晨报、盯盘复核、持仓复盘、研究、写回、批处理调度
 
-DSH 进程（dsh-worker profile，headless）
+DSH 进程（dsh-worker profile，headless；仅手动/隔离验收，默认部署不运行）
 └── MCP 实例 luoome-worker     队列面：claim → 事实包 → 推理 → 校验写回
 
-单机事实库 $LUOOME_HOME/luoome.db（唯一事实源，DSH 两个实例共享）
+单机事实库 $LUOOME_HOME/luoome.db（唯一事实源，上述实例共享）
 ```
 
 - 读面与设置面是两个独立 MCP 实例，白名单互不重叠：读面严格只读，设置面只放配置类写工具（D10）。
-- 批处理面是第三个 MCP 实例，只放五个批处理入口工具，供 DSH 定时任务调用（D12）。
-- 消费者实例与交互面通过 `analysis_jobs` 的租约先到先得，不依赖会话状态。
+- 批处理面是独立 MCP 实例，只放五个批处理入口工具，供 DSH 定时任务调用（D12）。
+- 2026-10-24 增补：分析面是第四个 Web 实例，固定只放 `get_analysis_context`、`record_advice`、
+  `record_analysis_result`；交互分析直接写回，不创建 `analysis_job`。消费者实例与交互面通过
+  `analysis_jobs` 的租约先到先得，但默认部署已退役常驻 worker，队列只在手动/隔离验收时使用。
 - 托管形态（每租户一个库文件、控制面 `control.sqlite`、支付计量、导出删除台账）随 D9 逐步下线；
   其中 `core/src/hosted/tenant.ts` 的个人提醒与自选导入算法、`tools/src/tools/hosted-tenant.ts`
   的 20 个 tool 是领域功能，先搬后删（D11）。
@@ -310,10 +320,16 @@ P0 决策冻结
 | 层 | 暴露内容 | 说明 |
 |---|---|---|
 | L0 只读 | read 面 | 聊天、看板、研究 |
-| L1 消费者 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`record_advice`、`record_analysis_result`、`get_analysis_context`、`get_analysis_metrics` | 单独 MCP 实例；`LUOOME_EXPOSE_QUEUE=true`（Q11） |
+| L1 交互分析 | `get_analysis_context`、`record_advice`、`record_analysis_result` | 独立 Web 实例 `luoome-analysis`；read + queue，精确三工具白名单（2026-10-24 增补） |
+| L1 队列消费 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`record_advice`、`record_analysis_result`、`get_analysis_context`、`get_analysis_metrics` | 手动 `luoome-worker` 实例；`LUOOME_EXPOSE_QUEUE=true`（Q11）；默认部署不运行 |
 | L2 写面 | 64 个 write | 默认关；按需开，依赖 DSH approval |
 | L3 external | 26 个 | 拆组：行情/同步可开；`send_notification`、外部导入不开 |
 | L4 trade | 0 | luoome 服务端硬卡，DSH 无绕过 |
+
+> 2026-10-24 增补：日常 Web profile 的实际交付面是 read / settings / analysis / batch 四实例；
+> `luoome-analysis` 只认三个交互分析工具，不能 claim / complete / fail、不能查 metrics 或 job、
+> 也不能调用 settings / batch / trade。上表 L1 队列消费行作为手动/隔离 worker 验收能力保留，
+> 默认部署没有生产者与常驻消费者。
 
 新增通用开关：
 
@@ -629,9 +645,17 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 | 实例 | serverName | env | 用途 |
 |---|---|---|---|
 | 只读面 | `luoome` | `LUOOME_EXPOSE_WRITE=false` | 聊天、看板、研究 |
-| 消费者面 | `luoome-worker` | `LUOOME_EXPOSE_QUEUE=true`（可选 `LUOOME_EXPOSE_TOOLS=claim_analysis_jobs,complete_analysis_job,fail_analysis_job,record_advice,record_analysis_result,get_analysis_context,get_analysis_metrics,list_analysis_jobs,get_analysis_job` 二次收窄） | 队列消费 |
+| 设置面 | `luoome-settings` | 无 queue | 配置类 write 精确白名单（D10） |
+| 分析面 | `luoome-analysis` | `LUOOME_EXPOSE_QUEUE=true` + `LUOOME_EXPOSE_TOOLS` 取共享 `INTERACTIVE_ANALYSIS_TOOL_NAMES`（`get_analysis_context`、`record_advice`、`record_analysis_result`）；显式 `LUOOME_MCP_SERVER_NAME=luoome-analysis` | 交互分析写回，不创建 `analysis_job`（2026-10-24 增补） |
+| 批处理面 | `luoome-batch` | 精确白名单 | 五个 `run_*`（D12） |
+| 消费者面 | `luoome-worker` | `LUOOME_EXPOSE_QUEUE=true`（可选 `LUOOME_EXPOSE_TOOLS=claim_analysis_jobs,complete_analysis_job,fail_analysis_job,record_advice,record_analysis_result,get_analysis_context,get_analysis_metrics,list_analysis_jobs,get_analysis_job` 二次收窄） | 队列消费；默认部署不运行，仅手动/隔离验收 |
 
 消费者面默认 deny：未设置 `LUOOME_EXPOSE_QUEUE` 时队列工具一律不可见；`LUOOME_EXPOSE_TOOLS` 漏配或拼写错误只会让工具更少，不会把写面打开（Q11）。
+
+> 2026-10-24 增补：日常 DSH Web profile 交付 read / settings / analysis / batch 四个实例；
+> 分析面把 read + queue 收窄到上面三个名字，缺少白名单时默认不挂载，显式空数组表示零工具。
+> 消费者面保留为手动/隔离验收能力，不再是默认部署角色；队列实体、repository、claim/complete/fail
+> 与手动 queue-e2e 验收全部保留。
 
 #### 5.4.5 错误映射
 

@@ -4,7 +4,7 @@ import {
   PortfolioPerformanceSnapshotSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { portfolioPerformanceSnapshots, type Schema } from '../../schema/index.js';
 
@@ -26,7 +26,7 @@ const parse = (row: SnapshotRow): PortfolioPerformanceSnapshot =>
 export class DrizzlePortfolioPerformanceSnapshotRepository
   implements PortfolioPerformanceSnapshotRepository
 {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(snapshot: PortfolioPerformanceSnapshot): Promise<void> {
     const parsed = PortfolioPerformanceSnapshotSchema.parse(snapshot);

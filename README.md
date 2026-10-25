@@ -5,7 +5,7 @@
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
 Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，并把多源数据织成可追溯事实。
 
-- 作为 **DSH 插件** 接入 DSH：只读面、设置面、批处理面三个 MCP 实例，事实库由 DSH 侧的 luoome 面板与技能共用
+- 作为 **DSH 插件** 接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供三面板、四技能与原生工具/审批，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）；旧 MCP 四实例仅保留给手动/隔离验收
 - 作为 **MCP server** 被 DSH / Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 - 作为 **Web** 看板：账户、持仓、Strategy、Watchlist 与 AlertPlan（本地单机装配，随 DSH 面板使用）
 
@@ -81,9 +81,9 @@ packages/
   tui/         opentui 应用
 apps/
   web/         Hono + 同源静态仪表盘（本地单机装配）
-deploy/dsh/    独立 DSH 部署（compose、Caddy、profile 装配）
+deploy/dsh/    独立 DSH 纯插件部署（compose、Caddy、插件 profile 装配）
 infra/dsh/     DSH 构建与受控验证底座
-.dsh/skills/   DSH 侧技能目录（晨报、复盘、深挖、决策记录、队列消费、批处理调度）
+.dsh/skills/   旧 MCP 过渡形态技能目录（P5 前保留给手动验收；默认部署使用插件随包的四条投研技能）
 docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
@@ -92,8 +92,8 @@ homebrew/
 ## 环境变量
 
 单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 CLI/TUI/MCP/DSH 共用的配置；
-部署侧的 DSH 变量（`DSH_*`、`LUOOME_MCP_*`、`CADDY_IMAGE`）见
-[DSH 部署配置](deploy/dsh/production.env.example)。
+部署侧的 DSH/插件变量（`DSH_*`、`LUOOME_OWNER_*`、`LUOOME_HOME`、`CADDY_IMAGE`）见
+[DSH 部署配置](deploy/dsh/production.env.example)。默认部署不再需要 `LUOOME_MCP_*`。
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -124,7 +124,7 @@ homebrew/
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 
-生产拒绝 fixture provider。CLI/TUI/MCP/Web/DSH 三个 MCP 实例共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库。
+生产拒绝 fixture provider。CLI/TUI/MCP/Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite，旧 MCP 实例仅在手动/隔离验收时使用。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
@@ -182,8 +182,10 @@ DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH �
 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库。
 调度表与提醒文案见技能 `luoome-batch`。
 
-队列消费仍由 DSH 消费者实例（`luoome-worker` profile）常驻轮询 `analysis_jobs`，
-租约先到先得，与交互面共享同一份事实库。
+队列消费能力保留，但默认部署已切纯插件、不运行常驻 worker：交互式分析经插件的原生
+`record_advice` / `record_analysis_result` 确认操作直接写回，不创建 `analysis_job`；默认部署
+没有生产者，也没有常驻消费者。旧 MCP worker 链路只作为手动/隔离验收入口保留在源码中
+（见[用户手册](docs/USER_GUIDE.md#75-批量分析与队列)）。
 
 单机 CLI 的 `watch` 与 `workflow run` 能力继续保留，仅访问自己的单机库。下列 cron 是单机使用示例；
 每次 workflow 运行落一条 `WorkflowRun` 审计：
@@ -236,15 +238,25 @@ DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH �
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
 
-### 独立 DSH 与分析队列
+### 独立 DSH 部署（默认纯插件形态）
 
-独立 DSH 通过 MCP 读取单机事实库，投资看板、策略、复盘面板复用同一套只读工具，
-数据经 DSH 认证 API 返回。部署入口与配置见 [DSH 部署配置](deploy/dsh/compose.yaml)。
-读面与消费者分进程运行；`queue` 能力默认关闭，消费者必须显式指定工具白名单。
-单机事实库是唯一事实源；历史托管租户库已下线，不会再同步。
+默认部署由 DSH 用 Node 加载 **dsh-luoome 插件**：插件提供三块核心面板（看板 / 策略 / 复盘）、
+四条投研技能与原生只读/审批工具，安装/升级/备份/回退步骤见
+[用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。部署入口与配置见
+[DSH 部署配置](deploy/dsh/compose.yaml)。
 
-批量分析使用 `analysis_job` 租约队列。消费者取得冻结事实包后生成结果，
-由 `complete_analysis_job` 在同一事务中校验来源、写回并完成任务。
-存量建议标为 `legacy-ai`；新建议保留生成器、模型、技能版本和事实时点。
-模型调用只在 DSH 侧发生；luoome 领域工具与工作流不直接调用模型。
-详情见[用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。
+- 事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开；没有第二份服务用户库。
+- 默认部署没有 MCP client/server、Bun CLI、旧 Bun Web、analysis worker 或 queue probe 进程；
+  `docker compose config` 只有 `dsh-web`（Node）与 `caddy`。
+- 写操作（交互分析 record、复盘、策略创建/校验/发布、用户反馈）只经 DSH 原生确认操作执行；
+  `trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 启动即失败；自动任务默认关闭。
+- 旧 MCP 过渡形态（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch` 四实例与
+  手动 worker）源码保留，仅用于手动/隔离验收，**默认部署不再启动**；P5 再统一删除。
+- 批量分析仍使用 `analysis_job` 租约队列；队列实体、repository、claim/complete/fail 与手动验收链路
+  全部保留，默认部署没有生产者 workflow，也不再运行常驻消费者。消费者取得冻结事实包后生成结果，
+  由 `complete_analysis_job` 在同一事务中校验来源、写回并完成任务。
+- 存量建议标为 `legacy-ai`；新建议保留生成器、模型、技能版本和事实时点。
+- 模型调用只在 DSH 侧发生；luoome 领域工具与工作流不直接调用模型。
+
+> 当前仓库只完成隔离切换/回退演练（`infra/dsh/plugin-switch-acceptance.ts`），**尚未在真实生产
+> 服务器执行切换**；旧 MCP/Bun 源码尚未删除。

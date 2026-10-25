@@ -9,7 +9,8 @@ import {
   samePluginTask,
 } from '@luoome/core';
 import { and, eq, inArray } from 'drizzle-orm';
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import {
   pluginAutomationGrants as grants,
   pluginOperations as operations,
@@ -38,7 +39,7 @@ const grantRow = (grant: PluginAutomationGrant) => ({
 });
 
 export class DrizzlePluginAuthorityRepository implements PluginAuthorityRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async insertOperation(value: PluginOperation) {
     const operation = PluginOperationSchema.parse(value);

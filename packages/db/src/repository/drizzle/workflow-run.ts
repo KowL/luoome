@@ -6,7 +6,7 @@ import {
   type WorkflowRunRepository,
 } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lt, lte, or, type SQL, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, workflowRuns } from '../../schema/index.js';
 
@@ -44,7 +44,7 @@ const toRow = (run: WorkflowRun): typeof workflowRuns.$inferInsert => ({
 
 /** WorkflowRun Drizzle 实现（ruo 迁移 §3.4）。save 同 id 为 upsert（running → terminal）。 */
 export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async execution(input: Parameters<WorkflowRunRepository['execution']>[0]): Promise<boolean> {
     const now = input.now.getTime();

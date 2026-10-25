@@ -11,7 +11,7 @@ import {
   TradeSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, lt, lte, or, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import {
   decisionReviewRevisions,
   decisionReviews,
@@ -50,7 +50,7 @@ const toRevision = (row: RevisionRow) =>
   });
 
 export class DrizzleDecisionReviewRepository implements DecisionReviewRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async findBySubject(input: Parameters<DecisionReviewRepository['findBySubject']>[0]) {
     const row = this.db

@@ -12,7 +12,7 @@ import {
   StrategyEvaluationSessionSchema,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import {
   type Schema,
   strategyDataCheckpointMembers,
@@ -85,7 +85,7 @@ const toDay = (row: DayRow): StrategyEvaluationDay => ({
 });
 
 export class DrizzleStrategyDataCheckpointRepository implements StrategyDataCheckpointRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveStarted(checkpoint: StrategyDataCheckpoint): Promise<void> {
     const parsed = StrategyDataCheckpointSchema.parse(checkpoint);
@@ -202,7 +202,7 @@ export class DrizzleStrategyDataCheckpointRepository implements StrategyDataChec
 }
 
 export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveSession(session: StrategyEvaluationSession): Promise<void> {
     const parsed = StrategyEvaluationSessionSchema.parse(session);

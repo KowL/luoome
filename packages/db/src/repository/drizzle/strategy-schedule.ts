@@ -8,7 +8,7 @@ import {
   type StrategyScheduleRepository,
 } from '@luoome/core';
 import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, strategySchedules } from '../../schema/index.js';
 
@@ -38,7 +38,7 @@ const changedRows = (result: unknown): number =>
     : 0;
 
 export class DrizzleStrategyScheduleRepository implements StrategyScheduleRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(schedule: StrategySchedule): Promise<void> {
     assertStrategyScheduleInvariants(schedule);

@@ -1,5 +1,10 @@
 /**
- * 独立 DSH 的 profile 装配。
+ * 【LEGACY / P5 保留】旧 MCP 过渡形态的 profile 装配，默认部署不再调用。
+ *
+ * 默认部署已切纯插件：profile 由 `deploy/dsh/profile-seed.mjs` 装配 dsh-luoome 插件，
+ * entrypoint 只用 Node 启动 DSH。本文件保留给手动/隔离验收旧 MCP 实例
+ * （luoome / luoome-settings / luoome-analysis / luoome-batch）与 worker 链路，
+ * 镜像不再包含它；P5 删除旧 MCP/Bun 面时一并移除。
  *
  * 每个 DSH profile = 一层 bundle 补丁 + 我们自己的用户补丁层：
  * bundle 决定「跑哪个前端/运行器」，用户补丁层只挂 MCP 实例与纪律插件。
@@ -12,9 +17,13 @@ import {
   type StandaloneRole,
   standaloneProfilePatch,
 } from '../../packages/dsh-bridge/src/standalone-profile.js';
-import { QUEUE_TOOL_NAMES } from '../../packages/tools/src/queue/names.js';
+import {
+  INTERACTIVE_ANALYSIS_TOOL_NAMES,
+  QUEUE_TOOL_NAMES,
+} from '../../packages/tools/src/queue/names.js';
 import { BATCH_TOOL_NAMES } from './batch-tools.js';
 import { SETTINGS_TOOL_NAMES } from './settings-tools.js';
+import { installSkills } from './skills.js';
 
 const DSH_VERSION = '0.2.1-rc.2';
 
@@ -68,6 +77,7 @@ type WriteProfileOptions = {
   | {
       readonly role: 'read';
       readonly settingsToolAllowlist: readonly string[];
+      readonly analysisToolAllowlist: readonly string[];
       readonly batchToolAllowlist: readonly string[];
     }
   | { readonly role: 'worker'; readonly workerToolAllowlist: readonly string[] }
@@ -94,6 +104,7 @@ const writeProfile = async (options: WriteProfileOptions): Promise<string> => {
       ? {
           panelsPluginPath: join(repoRoot, 'packages/dsh-bridge/dist/panels/standalone-panels.js'),
           settingsToolAllowlist: options.settingsToolAllowlist,
+          analysisToolAllowlist: options.analysisToolAllowlist,
           batchToolAllowlist: options.batchToolAllowlist,
         }
       : {
@@ -130,14 +141,6 @@ const writeProfile = async (options: WriteProfileOptions): Promise<string> => {
   return profile;
 };
 
-const installSkills = async (): Promise<number> => {
-  const target = join(workspace, '.dsh', 'skills');
-  await mkdir(target, { recursive: true, mode: 0o700 });
-  await cp(join(repoRoot, '.dsh', 'skills'), target, { recursive: true });
-  const { readdir } = await import('node:fs/promises');
-  return (await readdir(target, { withFileTypes: true })).filter((e) => e.isDirectory()).length;
-};
-
 const role = (process.argv[2] ?? 'web') === 'worker' ? 'worker' : 'read';
 const luoomeCommand = process.env.LUOOME_MCP_COMMAND ?? 'bun';
 const luoomeArgs = (
@@ -165,15 +168,20 @@ const profile = await writeProfile(
         luoomeHome,
         luoomeEnv: parseEnv(process.env.LUOOME_MCP_ENV),
         settingsToolAllowlist: [...SETTINGS_TOOL_NAMES],
+        analysisToolAllowlist: [...INTERACTIVE_ANALYSIS_TOOL_NAMES],
         batchToolAllowlist: [...BATCH_TOOL_NAMES],
       },
 );
-const skillCount = await installSkills();
+const skills = await installSkills({
+  sourceDir: join(repoRoot, '.dsh', 'skills'),
+  targetDir: join(workspace, '.dsh', 'skills'),
+  role,
+});
 console.log(
   JSON.stringify({
     profile,
     role,
-    skills: skillCount,
+    skills: skills.install.length,
     dshVersion: DSH_VERSION,
     dshHome,
     workspace,

@@ -5,7 +5,7 @@ import {
   type LimitUpLadderSource,
 } from '@luoome/core';
 import { and, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { limitUpLadderSnapshots, type Schema } from '../../schema/index.js';
 
@@ -23,7 +23,7 @@ const toSnapshot = (row: SnapshotRow): LimitUpLadder =>
   });
 
 export class DrizzleLimitUpLadderSnapshotRepository implements LimitUpLadderSnapshotRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(snapshot: LimitUpLadder): Promise<void> {
     const parsed = LimitUpLadderSchema.parse(snapshot);

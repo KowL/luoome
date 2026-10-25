@@ -6,7 +6,7 @@ import {
   MinuteBarSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { minuteBars, type Schema } from '../../schema/index.js';
 
@@ -35,7 +35,7 @@ const shanghaiDayRange = (date: Date): { readonly from: Date; readonly to: Date 
 };
 
 export class DrizzleMinuteBarRepository implements MinuteBarRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveMany(bars: readonly MinuteBar[]): Promise<void> {
     if (bars.length === 0) return;

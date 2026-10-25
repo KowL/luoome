@@ -15,7 +15,7 @@ import {
   type WatchlistSyncRun,
 } from '@luoome/core';
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import {
   membershipSnapshots,
@@ -166,7 +166,7 @@ const snapshotValues = (snapshot: MembershipSnapshot) => ({
 });
 
 export class DrizzleWatchlistRepository implements WatchlistRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(watchlist: Watchlist): Promise<void> {
     assertWatchlistInvariants(watchlist);
@@ -229,7 +229,7 @@ export class DrizzleWatchlistRepository implements WatchlistRepository {
 }
 
 export class DrizzleWatchlistMemberRepository implements WatchlistMemberRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveMember(member: WatchlistMember): Promise<void> {
     assertWatchlistMemberInvariants(member);

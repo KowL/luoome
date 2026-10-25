@@ -4,7 +4,7 @@
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
-- 作为 **DSH 插件**接入 DSH：只读面、设置面、批处理面三个 MCP 实例，加上三个面板与一组技能
+- 作为 **DSH 插件**接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供三面板、四条投研技能与原生工具/审批（旧 MCP 四实例仅保留给手动验收）
 - 在**终端（TUI）**盯盘、看今日建议
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
 - 作为 **MCP server** 按显式授权向 Claude Desktop / OpenClaw 等 AI agent 暴露能力
@@ -14,7 +14,7 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
 当前形态是**单机版**：没有多租户、没有订阅计费、没有托管站点，也没有邮箱登录——
 DSH 是唯一入口，`$LUOOME_HOME/luoome.db` 是唯一事实库。批处理由 DSH 的定时任务负责，
-没有常驻调度进程。
+没有常驻调度进程，也没有常驻队列消费者。
 
 ## 目录
 
@@ -388,7 +388,7 @@ opt-in 追加：
 
 - `LUOOME_EXPOSE_WRITE=true` → 追加账户、持仓、交易、研究、事件和反馈等 write tools
 - `LUOOME_EXPOSE_EXTERNAL=true` → 追加行情、同步、刷新和通知等 external tools
-- `LUOOME_EXPOSE_QUEUE=true` → 追加队列工具（消费者实例专用）
+- `LUOOME_EXPOSE_QUEUE=true` → 追加队列工具（分析面与手动 worker 实例专用）
 - `LUOOME_EXPOSE_TOOLS` / `LUOOME_EXPOSE_DENY` → 按工具名精确放行 / 拒绝
 
 `LUOOME_EXPOSE_TRADE=true` **永远硬卡**：MCP server 启动即抛错退出；advice × trade 隔离硬约束绝不通过 MCP 暴露。
@@ -400,19 +400,25 @@ opt-in 追加：
 DSH 是当前唯一入口。luoome 以插件形态接入 DSH，自己不提供站点入口，也不需要账号登录：
 公网入口由反向代理的 basic auth 挡住，DSH 自己再校验启动 token，两层都在 luoome 之外。
 
-### 7.1 三个 MCP 实例
+### 7.1 默认部署：纯插件（DSH Node 进程内）
 
-| 实例 | 用途 | 你会拿到什么 |
-|---|---|---|
-| `luoome`（只读面） | DSH 交互面默认实例 | 持仓、行情、建议、策略、盯盘、报告等只读事实与工具 |
-| `luoome-settings`（设置面） | 配置类写工具白名单 | 研究主题/文档/假设版本等配置写入 |
-| `luoome-batch`（批处理面） | 五个批处理入口 | 供 DSH 定时任务调用的策略日循环、收盘报告、绩效快照、盘中计划、策略自治周报 |
+默认部署（`deploy/dsh/compose.yaml`）只有两个服务：`dsh-web`（Node + DSH + `dsh-luoome` 插件）
+与公网入口 `caddy`。运行期**没有** MCP client/server、Bun CLI、旧 Bun Web、analysis worker 或
+queue probe。
 
-写面按工具名精确放行，读面不会因为设置面的存在而多出写能力。
-`trade` 永不通过任何 MCP 实例暴露。
+| 插件面 | 内容 |
+|---|---|
+| read（45 工具） | 账户/持仓/交易、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
+| market external（6 工具，精确白名单） | 指数、情绪、行情、新闻与有限样本试跑；失败原样返回，不伪造空成功 |
+| 确认写操作（8 条 policy） | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`；每次都要 DSH 原生审批 |
+| client | 看盘 / 策略看板 / 复盘三块面板，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
+| skills | `strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis` |
 
-DSH 侧还挂了一个消费者实例 `luoome-worker`（headless），它只开放队列工具白名单，
-负责领取 `analysis_jobs`、取事实包、推理后写回；队列为空时不会唤醒模型。
+事实库是 `LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开。通用
+`/api/luoome/call` 仍只读；`trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 启动即失败；自动任务默认关闭。
+
+旧「当前 MCP 过渡形态」的四个实例（`luoome` / `luoome-settings` / `luoome-analysis` /
+`luoome-batch`）与手动 worker 仍保留源码，但**只用于手动/隔离验收**，默认部署不启动；P5 再统一删除。
 
 ### 7.2 面板
 
@@ -420,33 +426,36 @@ DSH 侧栏有三个 luoome 面板：
 
 | 面板 | 内容 |
 |---|---|
-| 投资看板 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议、关注列表 |
-| 策略 | 策略清单、状态、当前版本、更新时间、盯盘健康度 |
-| 复盘 | 建议命中率、T+n 观察、待补齐观察 |
+| 看盘 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议、关注列表、市场数据健康 |
+| 策略看板 | 策略清单与状态、当前版本、最近 published operational run、数据健康、结果信号摘要、待补观察；可「在对话中研究此策略」（携带 strategyId/runId） |
+| 复盘 | 建议命中率、真实 confidence calibration 分桶、DecisionReview 最近记录与来源、逐条 Advice 用户反馈（未回填不推断）、待补齐观察与样本数/未知/时间范围 |
 
 面板只做投影，不自己算数：数字必须与工具输出逐位一致。点击「刷新事实」读取当前工具结果，
 工具失败显示错误，不以零值代替缺失数据。
 
 ### 7.3 技能
 
-工作区 `.dsh/skills/` 下是 DSH 侧的技能目录：
+默认部署安装 `dsh-luoome` 随包的四条投研技能（`packages/dsh-luoome/skills/`）：
 
 | 技能 | 触发 | 行为 |
 |---|---|---|
-| `morning-brief` | 交易日早盘前 | 读事实 → 生成本日简报 |
-| `post-close-review` | 收盘后 | 复盘、建议兑现、登记决策结果 |
-| `stock-deep-dive` | 你提问某只股票 | 事实 + 研究检索 + 可选写回建议 |
-| `decision-journal` | 你记录一次决策 | 落 DecisionReview，保留当时依据与失效条件 |
-| `analysis-worker` | 消费者实例唤醒 | 领取待分析任务 → 推理 → 校验写回 |
-| `luoome-batch` | 建立/检查/补跑批处理 | 五个批处理入口的调度表、门槛口径与调用方式 |
+| `strategy-lab` | 对话制定/修改策略 | 读策略与数据健康 → 草案 → 校验 → 有限样本试跑 → 展示 diff → 逐项原生审批 create/version/validate/publish（发布不被创建/校验隐含批准） |
+| `strategy-result-review` | 研究某次策略运行结果 | 读 published operational run/结果/信号/观察，区分执行事实、数据缺口、事后观察与推断；结论引用真实 run/version/fact id；改版走 strategy-lab |
+| `post-close-review` | 收盘后复盘 | Advice 快照、DecisionReview、显式 Trade、观察、绩效与 calibration 分写；不推断用户跟随、不代填 outcome；复盘笔记经原生审批保存 |
+| `daily-market-analysis` | 每日市场分析 | 经精确 market external 白名单刷新指数/情绪/要闻/行情，保留 source/dataAsOf/partial/unavailable；形成 Advice 时另取有效 context 并经原生审批写回 |
 
-技能本身不授予权限：它只决定 agent 怎么做事，能调哪些工具仍由 MCP 实例白名单决定。
+技能本身不授予权限：能调哪些工具仍由插件的 read/market/policy 面决定；写操作一律要 DSH 原生审批。
+旧 `.dsh/skills/`（`morning-brief`、`stock-deep-dive`、`decision-journal`、`luoome-batch`、
+`analysis-worker`）属于旧 MCP 过渡形态，默认部署不安装；`analysis-worker` 仅用于手动 worker 验收。
 
 ### 7.4 DSH 定时任务与批处理
 
-单机形态没有常驻调度进程。批处理由 **DSH 定时任务**唤起会话，agent 再调用
-`luoome-batch` 实例上的批处理工具。每个批处理工具自带门槛判定，不满足时返回 `skipped`
-且不写库——调度时间点错了也不会写坏事实。
+单机形态没有常驻调度进程，**默认部署不启用自动任务**：纯插件 MVP 尚未把五个批处理入口
+迁入插件（属后续阶段，见需求文档 §11 非目标），因此默认部署不创建任何生产定时任务。
+需要检查/补跑批处理时，仍用旧 MCP 手动 profile 的 `luoome-batch` 实例做隔离验收。
+
+旧 `luoome-batch` 实例上的每个批处理工具自带门槛判定，不满足时返回 `skipped` 且不写库——
+调度时间点错了也不会写坏事实。
 
 | 批处理 | 工具（`luoome-batch` 实例） | 建议 cron（Asia/Shanghai） | 门槛 |
 |---|---|---|---|
@@ -468,9 +477,12 @@ prompt 直接写清调哪个工具、失败怎么汇报。细节见技能 `luoom
 批量任务状态为 `pending → claimed → completed`，失败按退避重试，达到上限进入 `dead_letter`。
 
 - `get_analysis_metrics` 查看积压、可执行任务与过期租约；`list_analysis_jobs`、`get_analysis_job` 查看任务状态。
-- 单机形态没有生产者进程，空队列是正常状态。
+- 交互式分析不建 job：插件 read 面取持久化 context 后，向你展示结论、反证、风险、有效期与
+  将写回内容并得到明确确认，再经原生审批调用 `record_advice` / `record_analysis_result` 写回。
+- 单机形态没有生产者进程，默认部署也没有常驻消费者，空队列是正常状态。
 - 过期租约可以重新领取，旧 token 不能写回。
-- `queue` 是独立能力，不因开启 `write` 或 `external` 自动开放。
+- `queue` 是独立能力；默认部署只由两条 analysis record policy 使用，claim/complete/fail 与
+  job 查询不在插件暴露面。手动 worker 验收才用完整队列消费白名单（旧 MCP profile）。
 
 建议展示保留反证、风险、免责声明和有效期；`legacy-ai` 表示迁移前的建议，
 不能据此推断当时模型或技能版本。校准页面按生成方式、模型和技能版本分别统计，
@@ -481,6 +493,49 @@ prompt 直接写清调哪个工具、失败怎么汇报。细节见技能 `luoom
 需要图形界面做精细管理时仍可起单机 Web（`luoome web serve`，默认 `127.0.0.1:5173`）。
 它与 DSH 读同一份单机事实库；写操作同样受 `LUOOME_EXPOSE_WRITE` 与同源校验保护。
 远程访问请走 SSH 隧道或受控反代，不要直接把端口暴露到公网。
+
+### 7.7 安装、升级、备份与回退（默认纯插件部署）
+
+前置：目标机器有 Docker/Compose；Node ≥22.22（默认部署由 DSH 用 Node 运行插件，运行期不需要 Bun）；
+从 `deploy/dsh/production.env.example` 复制私有 env 文件并填写（不要提交）。
+
+**首次部署/切换**
+
+1. 确认既有事实库可用：`LUOOME_HOME/luoome.db` 挂在 `luoome_home` 卷上；`LUOOME_OWNER_USER_ID` /
+   `LUOOME_OWNER_ACCOUNT_ID` 必须对应库中既有账户。插件装配失败会拒绝启动，不会回退默认账户。
+2. `docker compose -f deploy/dsh/compose.yaml build`；构建阶段用 Bun 打包插件，运行阶段只用 Node。
+3. `docker compose -f deploy/dsh/compose.yaml up -d`。entrypoint 先用 `deploy/dsh/profile-seed.mjs`
+   把插件（host + client + skills）装配进 DSH profile，再启动 DSH Web；可用
+   `docker compose ... run --rm dsh-web deploy/dsh/entrypoint.sh seed` 只装配不启动。
+4. 验证：`docker compose ... config --services` 应只有 `dsh-web` 与 `caddy`；登录 DSH 后能看到三个面板与
+   四条技能，且运行进程里没有 MCP/Bun/worker/queue probe。
+
+**升级**：先按下面步骤做一致性备份 → 固定新的 `LUOOME_RELEASE`/镜像 digest → `build` 后
+`up -d`。entrypoint 每次启动重写插件文件与 profile 补丁，会话目录与事实库保留；代码升级失败时
+用上一个 release 镜像 tag 回滚。
+
+**一致性备份**（不要只复制活跃的 `luoome.db` 主文件；WAL 里可能还有未合并数据）：
+
+```bash
+# 用 SQLite backup API 生成在线一致性快照（Node 22+；临时脚本，不提交）
+node --input-type=module -e "
+import { DatabaseSync, backup } from 'node:sqlite';
+const db = new DatabaseSync('<挂载路径>/luoome.db');
+await backup(db, '<备份目录>/luoome-$(date +%Y%m%dT%H%M%S).db');
+db.close();
+"
+# 校验快照可独立打开
+node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('<快照路径>');console.log(d.prepare('pragma integrity_check').get());d.close()"
+```
+
+**回退演练/步骤**（先停新写入，不覆盖备份后新增事实）：
+
+1. 停纯插件 Web，确认旧 origin 不可达、没有在途写入。
+2. 恢复切换前的镜像/profile 与事实库一致性副本（不要用活跃 WAL 主文件当备份）。
+3. 备份后新增的事实（Advice/DecisionReview/策略等）必须从切换后快照按业务键合并回恢复库，
+   不能简单覆盖，也不能靠代码回退撤销已产生的业务事实。
+4. `infra/dsh/plugin-switch-acceptance.ts` 在隔离环境演练了完整切换、一致性备份、回退合并与
+   Node SQLite 重开持久化；它不代表真实生产已完成切换。
 
 ---
 
@@ -658,7 +713,7 @@ Web 端确认当前路由已 reload（页面状态行的「账户已切换」提
 
 ### 12.8 Advice 看不到 / 全部过期
 
-`validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。内置 `analyze_stock` 工具已随 DSH 瘦身上下线，新建议由分析队列消费者写入，不会自动重新生成。
+`validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。内置 `analyze_stock` 工具已随 DSH 瘦身上下线，新建议由 DSH 交互分析（`luoome-analysis` 实例）经 `record_advice` 写入，不会自动重新生成。
 
 ### 12.9 如何卸载？
 
@@ -685,8 +740,12 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 - 部署应以 HTTPS 为首选。若公网入口只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍然校验，
   但没有传输加密；不要在不可信网络上传输凭据。
 - DSH 侧栏的三个面板与聊天读同一份数据：面板只做投影，不在浏览器重算数值。
-- 嵌入式 DSH Chat（Node Host + 业务 Cordis 插件）已随托管形态下线，仓库里不再有这条路径；
-  当前的 DSH 集成只有独立 profile 装配、只读面板插件与系统提示词纪律插件。
+- 嵌入式 DSH Chat（Node Host + 业务 Cordis 插件）已随托管形态下线，仓库里不再有这条路径。
+- 默认部署已切纯插件：`dsh-web`（Node + DSH + dsh-luoome）与 `caddy` 两个服务，没有 MCP/Bun/
+  worker/queue probe 进程；插件 profile 由 `deploy/dsh/profile-seed.mjs` 装配。安装、升级、
+  一致性备份与回退步骤见 [7.7](#77-安装升级备份与回退默认纯插件部署)。
+- 旧 MCP 过渡形态源码保留但默认不启动；仓库只完成隔离切换/回退演练，**尚未在真实生产服务器
+  执行切换**，旧 MCP/Bun 源码尚未删除。
 
 ### 13.3 延伸阅读
 

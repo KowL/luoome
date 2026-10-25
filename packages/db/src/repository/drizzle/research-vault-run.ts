@@ -1,6 +1,7 @@
 import type { ResearchVaultSyncRun, ResearchVaultSyncRunRepository } from '@luoome/core';
 import { desc, eq } from 'drizzle-orm';
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import { researchVaultSyncRuns } from '../../schema/index.js';
 
 const fromRow = (r: typeof researchVaultSyncRuns.$inferSelect): ResearchVaultSyncRun => ({
@@ -11,7 +12,7 @@ const fromRow = (r: typeof researchVaultSyncRuns.$inferSelect): ResearchVaultSyn
   error: r.error ?? undefined,
 });
 export class DrizzleResearchVaultSyncRunRepository implements ResearchVaultSyncRunRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
   async save(run: ResearchVaultSyncRun) {
     this.db
       .insert(researchVaultSyncRuns)

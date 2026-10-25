@@ -22,7 +22,7 @@ import {
   type SQL,
   sql,
 } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import {
   decisionReviewRevisions,
@@ -96,7 +96,7 @@ const ATTEMPTED: readonly DeliveryStatus[] = [...ATTEMPTED_DELIVERY_STATUSES];
  * - save 写新字段（含 deliveryStatus / priority / evalSnapshot 等）
  */
 export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async commitEvaluation(
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
@@ -433,7 +433,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   private projectAccountFeedback(
-    tx: Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0],
+    tx: Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0],
     row: typeof watchTriggers.$inferSelect,
     accountId?: string,
   ): WatchTrigger {

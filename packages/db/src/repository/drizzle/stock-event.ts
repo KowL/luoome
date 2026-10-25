@@ -7,7 +7,7 @@ import {
   type StockEventStatus,
 } from '@luoome/core';
 import { and, asc, eq, gte, inArray, lte, or, type SQL } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, stockEvents } from '../../schema/index.js';
 
@@ -79,7 +79,7 @@ const toRow = (event: StockEvent): typeof stockEvents.$inferInsert => ({
 
 /** StockEvent Drizzle 实现（ruo 迁移 §3.2）。upsertByExternal 按 (provider, externalId) 幂等。 */
 export class DrizzleStockEventRepository implements StockEventRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(event: StockEvent): Promise<void> {
     assertStockEventInvariants(event);

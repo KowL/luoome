@@ -7,9 +7,7 @@ import {
   InvariantError,
 } from '@luoome/core';
 import { and, asc, desc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
 import {
   fundamentalScoreResults,
   fundamentalScoreRuns,
@@ -32,7 +30,7 @@ import {
 type VersionRow = typeof fundamentalScoreVersions.$inferSelect;
 type RunRow = typeof fundamentalScoreRuns.$inferSelect;
 type ResultRow = typeof fundamentalScoreResults.$inferSelect;
-type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
 const versionFromRow = (row: VersionRow): FundamentalScoreVersion =>
   parseVersion({
@@ -146,7 +144,10 @@ const sameResults = (
   );
 };
 
-const listResultRows = (db: DrizzleDb | DrizzleTransaction, runId: string): ResultRow[] =>
+const listResultRows = (
+  db: DrizzleDatabase<Schema> | DrizzleTransaction,
+  runId: string,
+): ResultRow[] =>
   db
     .select()
     .from(fundamentalScoreResults)
@@ -155,7 +156,7 @@ const listResultRows = (db: DrizzleDb | DrizzleTransaction, runId: string): Resu
 
 /** Immutable definition repository backed by SQLite. */
 export class DrizzleFundamentalScoreVersionRepository implements FundamentalScoreVersionRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(version: FundamentalScoreVersion): Promise<void> {
     const parsed = parseVersion(version);
@@ -215,7 +216,7 @@ export class DrizzleFundamentalScoreVersionRepository implements FundamentalScor
 
 /** Score run + result repository. Results are inserted only in the commit transaction. */
 export class DrizzleFundamentalScoreRunRepository implements FundamentalScoreRunRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveStarted(run: FundamentalScoreRun): Promise<void> {
     const parsed = parseRun(run);

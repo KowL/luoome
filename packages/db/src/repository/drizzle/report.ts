@@ -11,7 +11,7 @@ import {
   TradeSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { reports, type Schema, trades } from '../../schema/index.js';
 
@@ -76,7 +76,7 @@ export const toRow = (report: Report): typeof reports.$inferInsert => ({
 });
 
 export class DrizzleReportRepository implements ReportRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async upsertForPeriod(report: Report): Promise<Report> {
     const parsed = ReportSchema.parse(report);

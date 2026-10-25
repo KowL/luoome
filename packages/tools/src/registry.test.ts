@@ -244,6 +244,9 @@ describe('toolRegistry', () => {
 
   it('get(name) 命中 / 未命中', () => {
     expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
+    // fetch_news 调用第三方新闻源，按「是否访问第三方」归为 external（需求 §4.2/§5-3）。
+    expect(toolRegistry.get('fetch_news')?.sideEffect).toBe('external');
+    expect(toolRegistry.get('fetch_news')?.requiredCapabilities).toEqual(['external']);
     expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
     expect(toolRegistry.get('get_intraday_delivery_audit')?.sideEffect).toBe('read');
     expect(toolRegistry.get('get_closing_batch_audit')?.sideEffect).toBe('read');
@@ -338,6 +341,7 @@ describe('toolRegistry', () => {
       'evaluate_research_embeddings',
       'fetch_index_quotes',
       'fetch_intraday_minutes',
+      'fetch_news',
       'fetch_quote',
       'get_account_performance',
       'get_ashare_sentiment',

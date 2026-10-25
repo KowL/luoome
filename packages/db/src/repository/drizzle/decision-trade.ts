@@ -19,7 +19,7 @@ import {
   TradeSchema,
 } from '@luoome/core';
 import { and, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import {
   accounts,
   decisionReviewRevisions,
@@ -34,10 +34,10 @@ import {
   trades,
 } from '../../schema/index.js';
 
-type Transaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+type Transaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
 export class DrizzleDecisionTradeRepository implements DecisionTradeRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async getLedgerState(accountId: string) {
     return this.state(this.db, accountId);
@@ -270,7 +270,7 @@ export class DrizzleDecisionTradeRepository implements DecisionTradeRepository {
     );
   }
 
-  private state(source: BunSQLiteDatabase<Schema> | Transaction, accountId: string) {
+  private state(source: DrizzleDatabase<Schema> | Transaction, accountId: string) {
     const account = source.select().from(accounts).where(eq(accounts.id, accountId)).get();
     if (account === undefined) return null;
     const holdingRows = source

@@ -5,7 +5,7 @@ import {
   type StockRepository,
 } from '@luoome/core';
 import { asc, eq, like, or } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, stocks } from '../../schema/index.js';
 
@@ -24,7 +24,7 @@ const toStock = (row: StockRow): Stock => ({
 const sanitizeLikeQuery = (q: string): string => q.replace(/[%_]/g, '');
 
 export class DrizzleStockRepository implements StockRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(stock: Stock): Promise<void> {
     assertStockInvariants(stock);

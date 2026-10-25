@@ -6,7 +6,8 @@ import {
 } from '@luoome/core';
 import { and, desc, eq, type SQL } from 'drizzle-orm';
 
-import type { DrizzleDb } from '../../client.js';
+import type { DrizzleDatabase } from '../../database.js';
+import type { Schema } from '../../schema/index.js';
 import { researchHypothesisVersions } from '../../schema/index.js';
 
 type HypothesisRow = typeof researchHypothesisVersions.$inferSelect;
@@ -40,7 +41,7 @@ const toRow = (
 export class DrizzleResearchHypothesisVersionRepository
   implements ResearchHypothesisVersionRepository
 {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async create(version: ResearchHypothesisVersion): Promise<void> {
     assertResearchHypothesisVersionInvariants(version);

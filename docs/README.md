@@ -50,7 +50,7 @@
 |---|---|
 | [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | 完整输入 schema、持久确认与 DSH 原生/PTC 调度审批链路；Node DB、完整 profile/UI 与预检待验收，自动执行默认关闭 |
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与 Run/Tool Manifest 契约；对应研发计划已归档，能力契约仍按此设计演进 |
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH（三实例 MCP、面板、技能、定时任务）、领域层去 AI（事实包 + 待分析队列）与队列消费；含契约、DDL、阶段与验收（草案） |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH（Web 四实例 MCP：read/settings/analysis/batch，其中 analysis 只服务交互分析写回）、领域层去 AI（事实包 + 待分析队列）与队列能力保留；含契约、DDL、阶段与验收（草案） |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
@@ -82,7 +82,7 @@
 
 | 文档 | 范围 |
 |---|---|
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 当前主线：单机接入 DSH 的契约、阶段与验收口径（D9–D12 对应三实例 MCP、面板、技能、定时任务与队列消费） |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 当前主线：单机接入 DSH 的契约、阶段与验收口径（D9–D12 对应 Web 四实例 MCP：read/settings/analysis/batch，含交互分析面、面板、技能与定时任务；队列能力保留但默认部署不运行 worker，worker 仅手动/隔离验收） |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |

@@ -9,7 +9,7 @@ import type {
 } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import type { DrizzleDb } from '../client.js';
+import type { DdlExecutor } from '../database.js';
 
 export const watchlistImportPreviews = sqliteTable('watchlist_import_previews', {
   id: text('id').primaryKey(),
@@ -59,7 +59,7 @@ export const personalAlertEvaluations = sqliteTable(
   (t) => [uniqueIndex('personal_alert_evaluations_operation_unique').on(t.operationId)],
 );
 
-export const ensurePersonalSchema = (db: DrizzleDb): void => {
+export const ensurePersonalSchema = (db: DdlExecutor): void => {
   db.run(
     sql`CREATE TABLE IF NOT EXISTS personal_alert_plan_mutations (operation_id TEXT PRIMARY KEY, result_json TEXT NOT NULL)`,
   );

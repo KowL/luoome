@@ -17,7 +17,7 @@ import {
   PortfolioCashFlowSchema,
 } from '@luoome/core';
 import { and, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import {
   accounts,
   holdingCashAdjustments,
@@ -27,10 +27,10 @@ import {
   trades,
 } from '../../schema/index.js';
 
-type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
 export class DrizzleLedgerRepository implements LedgerRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async applyTrade(input: Parameters<LedgerRepository['applyTrade']>[0]): Promise<void> {
     assertTradeInvariants(input.trade);

@@ -3,6 +3,7 @@ import type { JsonValue } from './protocol.js';
 export const READ_SERVER_NAME = 'luoome';
 export const WORKER_SERVER_NAME = 'luoome-worker';
 export const SETTINGS_SERVER_NAME = 'luoome-settings';
+export const ANALYSIS_SERVER_NAME = 'luoome-analysis';
 export const BATCH_SERVER_NAME = 'luoome-batch';
 
 /**
@@ -37,6 +38,12 @@ export interface StandaloneProfileOptions {
   readonly workerToolAllowlist?: readonly string[];
   /** 交互面设置实例暴露的配置类写工具白名单；为空则不挂设置实例。 */
   readonly settingsToolAllowlist?: readonly string[];
+  /**
+   * 交互面分析实例暴露的分析工具白名单。
+   * 未提供（undefined）时不挂分析实例；显式空数组挂零工具实例（fails closed），
+   * 不能退化成全量暴露。
+   */
+  readonly analysisToolAllowlist?: readonly string[];
   /** 交互面批处理实例暴露的定时任务入口白名单；为空则不挂批处理实例。 */
   readonly batchToolAllowlist?: readonly string[];
   /** 消费者实例一次性会话的落盘根目录；与 GUI 侧栏隔离。 */
@@ -90,6 +97,19 @@ export function standaloneProfileEntries(options: StandaloneProfileOptions): Jso
     // 读面之外——白名单是精确匹配，研究类读取工具不会因此进面。
     LUOOME_EXPOSE_RESEARCH: 'true',
   };
+  // 分析面：只开 queue 能力（record_* 的 sideEffect 是 queue）加精确工具白名单；
+  // server name 必须显式写死，不能依赖「开 queue 就默认叫 worker」的 fallback。
+  // 显式空数组是零工具实例（fails closed），区别于 undefined 的不挂载。
+  const analysisAllowlist = options.role === 'read' ? options.analysisToolAllowlist : undefined;
+  const analysisEnv: Record<string, string> | undefined =
+    analysisAllowlist === undefined
+      ? undefined
+      : {
+          ...env,
+          LUOOME_MCP_SERVER_NAME: ANALYSIS_SERVER_NAME,
+          LUOOME_EXPOSE_QUEUE: 'true',
+          LUOOME_EXPOSE_TOOLS: analysisAllowlist.join(','),
+        };
   // 批处理面：只暴露 DSH 定时任务要调的五个批处理入口。
   const batchAllowlist = options.role === 'read' ? (options.batchToolAllowlist ?? []) : [];
   const batchEnv: Record<string, string> = {
@@ -124,6 +144,24 @@ export function standaloneProfileEntries(options: StandaloneProfileOptions): Jso
               command: options.luoomeCommand,
               args: [...options.luoomeArgs],
               env: settingsEnv,
+              cwd: options.luoomeCwd,
+              toolCallTimeoutMs: options.toolCallTimeoutMs ?? 60_000,
+              failOnStartupError: options.failOnStartupError ?? true,
+            },
+          },
+        ]
+      : []),
+    ...(analysisEnv !== undefined
+      ? [
+          {
+            id: `mcp-${ANALYSIS_SERVER_NAME}`,
+            name: '@deepseek-ai/dsh-mcp-client',
+            config: {
+              transport: 'stdio',
+              serverName: ANALYSIS_SERVER_NAME,
+              command: options.luoomeCommand,
+              args: [...options.luoomeArgs],
+              env: analysisEnv,
               cwd: options.luoomeCwd,
               toolCallTimeoutMs: options.toolCallTimeoutMs ?? 60_000,
               failOnStartupError: options.failOnStartupError ?? true,

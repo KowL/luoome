@@ -7,7 +7,7 @@ import {
   PortfolioCorporateActionSchema,
 } from '@luoome/core';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { portfolioCashFlows, portfolioCorporateActions, type Schema } from '../../schema/index.js';
 
@@ -35,7 +35,7 @@ const parseCorporateAction = (
   })();
 
 export class DrizzlePortfolioCashFlowRepository implements PortfolioCashFlowRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(flow: PortfolioCashFlow): Promise<void> {
     const parsed = PortfolioCashFlowSchema.parse(flow);
@@ -82,7 +82,7 @@ export class DrizzlePortfolioCashFlowRepository implements PortfolioCashFlowRepo
 export class DrizzlePortfolioCorporateActionRepository
   implements PortfolioCorporateActionRepository
 {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(action: PortfolioCorporateAction): Promise<void> {
     const parsed = PortfolioCorporateActionSchema.parse(action);

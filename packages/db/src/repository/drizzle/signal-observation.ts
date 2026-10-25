@@ -4,7 +4,7 @@ import {
   type SignalObservationRepository,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 import { type Schema, signalObservations } from '../../schema/index.js';
 
 type Row = typeof signalObservations.$inferSelect;
@@ -37,7 +37,7 @@ const toObservation = (row: Row): SignalObservation => ({
   ...(row.lastErrorKind === null ? {} : { lastErrorKind: row.lastErrorKind }),
 });
 export class DrizzleSignalObservationRepository implements SignalObservationRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
   async save(observation: SignalObservation): Promise<void> {
     assertSignalObservationInvariants(observation);
     const values = {

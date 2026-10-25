@@ -1,0 +1,320 @@
+// M4 浏览器/安装验收共用的合成事实 fixture。
+//
+// 该脚本由 Bun 运行、用 `@luoome/db`（bun:sqlite）写临时 SQLite；随后 DSH Node 进程用
+// `@luoome/db/node`（node:sqlite）打开同一个事实库，验证浏览器面板展示与真实 ToolResult/DB
+// 一致。数据全部为合成：账户/持仓/建议/策略/运行/决策复盘，不含真实个人数据，不联网。
+//
+// 用法（仅供 infra/dsh/panels-browser-acceptance.ts 调用）：
+//   bun --no-env-file packages/dsh-luoome/src/testing/panels-fixture.ts seed <home> '<ownerJson>'
+//   bun --no-env-file packages/dsh-luoome/src/testing/panels-fixture.ts dump <home> '<ownerJson>'
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { FakeMarketAdapter } from '@luoome/adapters/testing';
+import {
+  type Account,
+  type Advice,
+  type Holding,
+  STANDARD_DISCLAIMERS,
+  type Stock,
+  type StrategyDslV1,
+  type StrategyRun,
+  strategyDefinitionHash,
+  type ToolContext,
+} from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
+import { buildContext, getDecisionReviewContextTool, saveDecisionReviewTool } from '@luoome/tools';
+
+export interface PanelsFixtureOwner {
+  readonly userId: string;
+  readonly accountId: string;
+}
+
+const STOCK: Stock = Object.freeze({
+  id: '600519.SH',
+  code: '600519' as Stock['code'],
+  exchange: 'SH',
+  name: '隔离验收贵州茅台',
+});
+const STRATEGY_ID = 'browser-strategy';
+const STRATEGY_VERSION_ID = 'browser-strategy-v1';
+const RUN_ID = 'browser-strategy-run';
+const ADVICE_ID = 'browser-advice-watch';
+const DECISION_NOTE = '浏览器验收：用户明确回填跟随';
+const ADVICE_PREMISE = '浏览器验收：等待量能确认后再判断方向';
+const STRATEGY_NAME = '浏览器验收策略';
+
+export const PANELS_FIXTURE = Object.freeze({
+  stock: STOCK,
+  strategyId: STRATEGY_ID,
+  versionId: STRATEGY_VERSION_ID,
+  runId: RUN_ID,
+  adviceId: ADVICE_ID,
+  decisionNote: DECISION_NOTE,
+  advicePremise: ADVICE_PREMISE,
+  strategyName: STRATEGY_NAME,
+});
+
+const definition: StrategyDslV1 = {
+  schemaVersion: 1,
+  metadata: { horizon: 'short' },
+  universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+  selection: {
+    logic: 'all',
+    rules: [
+      { id: 'positive-close', name: '正价格', when: 'quote.close > 0', evidence: ['收盘价'] },
+    ],
+  },
+  signals: { entry: [], exit: [], risk: [] },
+};
+
+/** 写入合成账户、持仓、建议（含用户 outcome）、策略/版本/已发布运行、决策复盘。 */
+export const seedPanelsFixture = async (
+  home: string,
+  owner: PanelsFixtureOwner,
+  now = new Date(),
+): Promise<Record<string, unknown>> => {
+  const { repos, close } = createDrizzleRepos(join(home, 'luoome.db'));
+  try {
+    const account: Account = {
+      id: owner.accountId,
+      name: '隔离验收账户（合成数据）',
+      kind: 'real',
+      currency: 'CNY',
+      initialCapital: 1_000_000 as Account['initialCapital'],
+      cashBalance: 520_000 as Account['cashBalance'],
+      createdAt: now,
+    };
+    await repos.account.save(account);
+    await repos.stock.save(STOCK);
+    await repos.quote.save({
+      stockId: STOCK.id,
+      ts: now,
+      observedAt: now,
+      fetchedAt: now,
+      timestampSource: 'upstream',
+      open: 1500 as never,
+      high: 1560 as never,
+      low: 1490 as never,
+      close: 1520 as never,
+      prevClose: 1500 as never,
+      volume: 1_800_000,
+      source: 'browser-acceptance-fixture',
+    });
+    const holding: Holding = {
+      id: 'browser-holding',
+      accountId: owner.accountId,
+      stockId: STOCK.id,
+      quantity: 100,
+      availableQuantity: 100,
+      avgCost: 1500 as Holding['avgCost'],
+      openedAt: new Date(now.getTime() - 30 * 86_400_000),
+      closedAt: null,
+    };
+    await repos.holding.save(holding);
+
+    await repos.strategy.create({
+      id: STRATEGY_ID,
+      name: STRATEGY_NAME,
+      description: '合成策略：验证策略面板的版本/运行/健康投影',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: STRATEGY_VERSION_ID,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repos.strategy.createVersion({
+      id: STRATEGY_VERSION_ID,
+      strategyId: STRATEGY_ID,
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    });
+    const strategyRun: StrategyRun = {
+      id: RUN_ID,
+      strategyId: STRATEGY_ID,
+      strategyVersionId: STRATEGY_VERSION_ID,
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: now,
+      startedAt: now,
+      finishedAt: now,
+      status: 'complete',
+      scope: 'operational',
+      inputSnapshot: { stockIds: [STOCK.id], universeKind: 'explicit' },
+      providerStatuses: [],
+      summary: { selected: 1, ruleNearMiss: 0, rankingNearMiss: 0 },
+      publication: { status: 'published', reasons: [], decidedAt: now },
+    };
+    await repos.strategyRun.commitRun({
+      run: strategyRun,
+      results: [
+        {
+          runId: strategyRun.id,
+          stockId: STOCK.id,
+          selected: true,
+          score: 72,
+          evidence: [`quote:${STOCK.id}`],
+          ruleEvaluations: [],
+          dataAsOf: now,
+        },
+      ],
+      signals: [],
+    });
+
+    const advice: Advice = {
+      id: ADVICE_ID,
+      subjectKind: 'stock',
+      subjectId: STOCK.id,
+      stockName: STOCK.name,
+      decision: 'watch',
+      confidence: 68,
+      horizon: 'short',
+      reasoning: {
+        premise: ADVICE_PREMISE,
+        evidence: ['已保存行情：收盘价 1520'],
+        counterEvidence: ['缺少成交量扩张证据'],
+      },
+      risks: ['合成数据不反映真实基本面'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'record_advice',
+      basedOn: {
+        dataAsOf: now,
+        strategy: {
+          strategyId: STRATEGY_ID,
+          strategyVersionId: STRATEGY_VERSION_ID,
+          runId: RUN_ID,
+          stockId: STOCK.id,
+          accountId: owner.accountId,
+          score: 72,
+          resultEvidence: [`quote:${STOCK.id}`],
+          signalIds: [],
+          observationIds: [],
+          recommendationTrigger: 'run',
+        },
+      },
+      validFrom: now,
+      validUntil: new Date(now.getTime() + 5 * 86_400_000),
+      createdAt: now,
+      provenance: { generatorKind: 'dsh-chat', evidenceFactIds: [], generatedAt: now },
+    };
+    await repos.advice.save(advice);
+    await repos.advice.recordOutcome(ADVICE_ID, {
+      adviceId: ADVICE_ID,
+      tradeIds: [],
+      outcome: 'followed',
+      pnl: 12.5 as never,
+      recordedAt: now,
+    });
+
+    const ctx: ToolContext = buildContext({
+      repos,
+      adapters: { market: new FakeMarketAdapter({ clock: () => now }) },
+      user: { id: owner.userId, defaultAccountId: owner.accountId },
+      identity: { mode: 'local', userId: owner.userId },
+      clock: () => now,
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    });
+    const preview = await getDecisionReviewContextTool.execute(
+      { subject: { kind: 'advice', id: ADVICE_ID } },
+      ctx,
+    );
+    if (!preview.ok) throw new Error(`决策复盘预览失败: ${JSON.stringify(preview.error)}`);
+    const contextHash = preview.data.context?.contextHash;
+    if (typeof contextHash !== 'string') throw new Error('决策复盘预览缺少 contextHash');
+    const saved = await saveDecisionReviewTool.execute(
+      {
+        subject: { kind: 'advice', id: ADVICE_ID },
+        requestId: randomUUID(),
+        contextHash,
+        expectedRevision: 0,
+        content: {
+          tradeIds: [],
+          adviceFeedback: { outcome: 'followed', pnl: 12.5 },
+          triggerFeedback: null,
+          note: DECISION_NOTE,
+        },
+        changeNote: DECISION_NOTE,
+      },
+      ctx,
+    );
+    if (!saved.ok) throw new Error(`决策复盘写入失败: ${JSON.stringify(saved.error)}`);
+    return { ...PANELS_FIXTURE, owner, database: join(home, 'luoome.db') };
+  } finally {
+    close();
+  }
+};
+
+/** 直接读 SQLite 事实库，作为浏览器 DOM / state API 之外的一致性基准。 */
+export const dumpPanelsFixture = async (
+  home: string,
+  owner: PanelsFixtureOwner,
+): Promise<Record<string, unknown>> => {
+  const { repos, close } = createDrizzleRepos(join(home, 'luoome.db'));
+  try {
+    const account = await repos.account.findById(owner.accountId);
+    const holdings = await repos.holding.listByAccount(owner.accountId);
+    const advices = await repos.advice.query({ includeExpired: true });
+    const outcomes = await repos.advice.listOutcomes();
+    const strategies = await repos.strategy.list();
+    const runs = await repos.strategyRun.listRuns({ strategyId: STRATEGY_ID, limit: 10 });
+    const reviews = await repos.decisionReview.list({ accountId: owner.accountId, limit: 10 });
+    return {
+      account: account === null ? null : { id: account.id, name: account.name },
+      holdings: holdings.map((item) => ({
+        id: item.id,
+        stockId: item.stockId,
+        quantity: item.quantity,
+      })),
+      advices: advices.map((item) => ({
+        id: item.id,
+        decision: item.decision,
+        confidence: item.confidence,
+        premise: item.reasoning.premise,
+        validUntil: item.validUntil.toISOString(),
+      })),
+      outcomes: outcomes.map((item) => ({
+        adviceId: item.adviceId,
+        outcome: item.outcome,
+        pnl: item.pnl ?? null,
+      })),
+      strategies: strategies.map((item) => ({
+        id: item.id,
+        name: item.name,
+        currentVersionId: item.currentVersionId ?? null,
+      })),
+      runs: runs.map((item) => ({
+        id: item.id,
+        strategyId: item.strategyId,
+        status: item.status,
+        publication: item.publication?.status ?? null,
+      })),
+      reviews: reviews.map((item) => ({
+        id: item.review.id,
+        subject: item.review.subject,
+        revision: item.revision.revision,
+        changeNote: item.revision.changeNote,
+      })),
+    };
+  } finally {
+    close();
+  }
+};
+
+if (import.meta.main) {
+  const [mode, home, ownerJson] = process.argv.slice(2);
+  if (mode === undefined || home === undefined || ownerJson === undefined)
+    throw new Error('Usage: panels-fixture.ts <seed|dump> <home> <ownerJson>');
+  const owner = JSON.parse(ownerJson) as PanelsFixtureOwner;
+  const result =
+    mode === 'seed'
+      ? await seedPanelsFixture(home, owner)
+      : mode === 'dump'
+        ? await dumpPanelsFixture(home, owner)
+        : undefined;
+  if (result === undefined) throw new Error(`Unknown mode: ${mode}`);
+  process.stdout.write(JSON.stringify(result));
+}

@@ -47,7 +47,7 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 - ✅ 查询持仓 → tool
 - ✅ 添加持仓 → tool
 - ✅ 校验、发布和试跑 Strategy → tool
-- ✅ 生成建议 → 分析队列消费者（经 `record_advice` 写入）
+- ✅ 生成建议 → DSH 交互分析经 `record_advice` 写回（分析队列写回能力保留）
 - ✅ 查看历史建议 → tool
 - ❌ 隐藏在 UI 菜单里、没有 tool 对应的功能 → 不允许
 
@@ -94,8 +94,9 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 
 > DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
 > （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 为上表 5 级；
-> Advice 实体与存量数据保留，新建议由外部分析写入。`queue` 级随分析队列引入，
-> 默认关闭，须由消费者实例显式 opt-in（`LUOOME_EXPOSE_QUEUE=true`）。
+> Advice 实体与存量数据保留，新建议由 DSH 交互分析或手动 worker 写回。`queue` 级随分析队列引入，
+> 默认关闭，须由 `luoome-analysis` 实例（read + queue 精确三工具白名单）或手动 worker 实例
+> 显式 opt-in（`LUOOME_EXPOSE_QUEUE=true`）。
 
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
@@ -314,7 +315,7 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
   运行提交后只产出 facts-only 的 `preflight` 摘要与 `adviceCount`，仓内不再生成 Advice；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
   SignalObservation。样本未到期保持 pending，不阻塞其他样本。
-- 候选建议由外部消费者经 `record_advice` 写入（见 §6.3 分析队列）；仓内已无
+- 候选建议由 DSH 交互分析实例经 `record_advice` 写入（见 §6.3）；仓内已无
   `strategy-recommendations` workflow 与 `analyze_strategy_candidate` tool。
 
 `luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
@@ -475,15 +476,21 @@ tools 读写当前账户的持久化历史。草案确认使用
 显式开启，请求沿用所选账户 header。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
-DSH 接入有两条路径，生产只保留第一条：
+DSH 接入有两条路径，默认部署只保留第一条：
 
-1. **独立 DSH 部署**（当前形态）：luoome 以插件形式接入 DSH——三个 MCP 实例（只读面 / 设置面 / 批处理面）、
-   三个 DSH 插件（面板、纪律提示词、批处理技能）与 DSH 定时任务。业务工具经 MCP 调用，
-   事实库是 `$LUOOME_HOME/luoome.db`。部署入口见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
-2. ~~内嵌 DSH Host~~（已随托管形态下线）：原 `apps/agent-runtime` 的内嵌 Host 路径与 hosted ledger 计量一并删除。
+1. **独立 DSH 部署（默认，纯插件形态）**：DSH 用 Node 加载 `dsh-luoome` 插件——host 提供原生只读 /
+   market external / 确认写面，client 提供三块核心面板，随包 skills 提供四条投研技能；事实库是
+   Node SQLite 的 `$LUOOME_HOME/luoome.db`。DSH 镜像运行期不需要 Bun、MCP server、旧 Bun Web、
+   analysis worker 或 queue probe。部署入口见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
+2. **旧「当前 MCP 过渡形态」（仅手动/隔离验收）**：Web profile 的四个 MCP 实例（只读面 `luoome` /
+   设置面 `luoome-settings` / 分析面 `luoome-analysis` / 批处理面 `luoome-batch`）、三个旧 DSH
+   插件与手动 worker。源码保留但默认部署不再启动，P5 统一删除。
+3. ~~内嵌 DSH Host~~（已随托管形态下线）：原 `apps/agent-runtime` 的内嵌 Host 路径与 hosted ledger 计量一并删除。
 
-批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用批处理面工具，门槛判定随工具走
+批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用插件注册的工具，门槛判定随工具走
 （非交易日/非盘中时段返回 `skipped`）。不再有 luoome 侧的常驻调度进程。
+交互式分析经插件的原生确认操作直接写回，不创建 `analysis_job`；队列能力保留，但默认部署
+没有生产者、也没有常驻消费者。仓库只完成隔离切换/回退演练，生产服务器尚未切换。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
@@ -751,7 +758,8 @@ export interface AdviceOutcome {
 luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步走。每一步都有 tool / workflow / 数据对应。
 
 **当前形态**：仓内不跑模型推理。core / tools / workflows / db / adapters 不依赖任何模型 SDK；
-推理由 DSH 宿主的消费者实例承担，经分析队列把结论写回本仓（见 §6.3）。仓内保留的
+推理由 DSH 宿主承担：交互式分析经独立 `luoome-analysis` 实例的 `record_*` 直接写回本仓，
+批量队列写回能力保留但默认部署不再运行常驻消费者（见 §6.3）。仓内保留的
 全是确定性事实计算与状态读写。
 
 ### 6.1 数据层
@@ -783,8 +791,12 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 
 ### 6.3 建议层
 
-仓内不再有 `analyze_stock` 这类内置推理 tool。建议由**分析队列**产生：外部消费者
-（DSH headless 实例）认领 job、读取冻结事实包、用宿主模型推理，再经队列工具把结论写回。
+仓内不再有 `analyze_stock` 这类内置推理 tool。交互式建议由 DSH 宿主推理后经
+**独立分析面 `luoome-analysis`** 直接写回：该实例以 read + queue capability 但用精确工具
+白名单收窄到 `get_analysis_context`、`record_advice`、`record_analysis_result`，交互分析
+不创建 `analysis_job`。批量分析仍保留**分析队列**能力：消费者认领 job、读取冻结事实包、
+用宿主模型推理，再经队列工具把结论写回；默认部署没有生产者，也不再运行常驻消费者，
+worker profile 仅作手动/隔离验收。
 
 队列工具（写工具需 `LUOOME_EXPOSE_QUEUE=true`；读工具随 read 默认暴露。部署侧按
 `QUEUE_TOOL_NAMES` 名单二次收窄，漏配只会让工具更少）：
@@ -828,7 +840,18 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 - 事实包必须存在且 `kind` 以 `advice_` 开头，否则 `context_mismatch`
 - `contextHash` 必须等于 `analysisHash({ facts, dataAsOf })`，否则 `context_mismatch`
 - `provenance.evidenceFactIds` 必须全部落在事实包的 `factIds` 内，否则 `unknown_fact_reference`
-- 超过 `writeUntil` / `expiresAt` → `context_expired`；事实包 `dataAsOf` 距今超过 30 分钟 → `stale_context`
+- 写回时效按 `kind` 取 `packages/core/src/entity/analysis-context.ts` 的 `analysisTimingRules`
+  （`analysisContextTiming` / `analysisContextTimingError` 是唯一事实来源，context 装配、
+  enqueue、record、refresh 共用，不复制规则）：
+
+  | kind | `writeUntil` | `dataAsOf` 过期 |
+  |---|---|---|
+  | `advice_stock` / `advice_position` / `advice_strategy_candidate` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
+  | `advice_market` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
+  | `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
+
+  超过 `writeUntil` / `expiresAt` → `context_expired`；超过该 kind 的数据有效期 → `stale_context`。
+  15:00 截断只适用于盘中行动类，盘后市场分析与策略研究不被当日收盘截断。
 - `AdviceSchema.parse` 校验结构，`disclaimers` 由工具直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略
 - `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条过 prompt-injection 文本清理，
   命中模式的片段替换为 `[redacted]`（`packages/tools/src/internal/sanitize-advice.ts`）
@@ -966,7 +989,7 @@ type ToolError =
   先用 `sync_quotes` 把当日行情落库，再读取当日已持久化的 Advice（`sourceTool='analyze_position'`
   的持仓建议与 `sourceTool='analyze_strategy_candidate'` 的候选）派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
   候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划。
-  **仓内不产生新建议**：无对应 Advice 时只留复核痕迹，未来由外部消费者经 `record_advice` 写入。
+  **仓内不产生新建议**：无对应 Advice 时只留复核痕迹，由 DSH 交互分析实例经 `record_advice` 写入。
   盘中持仓估值与行动候选复用 core 的行情资格判断：须有上游事件时间，事件与当前时点均在交易时段，
   抓取完成不晚于判断时点且事件距判断不超过 120 秒。盘外实时报价仍须有上游时间；规范日线的收盘价
   按既有交易日口径使用。缺合格行情时，最近报价只保留参考估值和限制说明，账户事实为 `unavailable`，
@@ -1041,8 +1064,9 @@ type ToolError =
 
 DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后，仓内 workflow **不含模型推理步骤**：
 core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContext` 也没有 LLM 槽位。
-需要模型结论的流程走**分析队列**：外部消费者推理后经 `record_advice` / `record_analysis_result`
-写回本仓（§6.3），workflow 只消费已落库的事实与 Advice。
+需要模型结论的流程由 DSH 交互分析实例经 `record_advice` / `record_analysis_result`
+写回本仓（§6.3）；批量队列写回能力保留，默认部署无生产者、无常驻消费者，workflow 只消费
+已落库的事实与 Advice。
 
 因此 workflow 步骤的约束是：
 - 输入是结构化数据（不是字符串拼接）
@@ -1122,7 +1146,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ```
 
 默认暴露面只有 read；要取实时行情需另开 `LUOOME_EXPOSE_EXTERNAL=true` 才能用 `batch_quote`。
-**客户端拿不到本仓现场生成的建议** —— 建议只能来自已落库的 Advice（由分析队列消费者写入）。
+**客户端拿不到本仓现场生成的建议** —— 建议只能来自已落库的 Advice（由 DSH 交互分析实例或手动 worker 写入）。
 
 ### 场景 B：TUI 看持仓与已有建议
 
@@ -1140,13 +1164,13 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
               [无对应建议时显示「（暂无建议）」—— 内置 AI 已下线，不再本地生成]
 ```
 
-### 场景 C：DSH 消费者处理待分析队列
+### 场景 C：DSH 消费者处理待分析队列（手动/隔离验收链路）
 
 ```txt
-[DSH 定时任务 / 队列唤醒]
+[手动/隔离环境显式拉起的 worker 轮询]
       │
       ▼
-[luoome-worker 消费者实例] ───► claim_analysis_jobs (queue)
+[luoome-worker 手动/隔离验收实例] ───► claim_analysis_jobs (queue)
       │                                   │
       │                                   ▼
       │                         { job, claimToken, context }
@@ -1166,6 +1190,10 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 事实包过期时消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
 租约超时未完成的 job 回收后可被重新认领。
+
+> 2026-10-24 增补：默认部署（Web + Caddy）不再运行该消费者，队列只是保留的领域能力。
+> 日常交互分析经 `luoome-analysis` 实例的 `record_*` 直接写回，不创建 `analysis_job`；
+> 本场景仅在手动/隔离 worker 验收时使用，空队列不会产生任何模型请求。
 
 ## 12. 安全模型
 
@@ -1232,8 +1260,9 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ## 16. 个人订阅服务装配
 
 Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts`），
-没有登录、没有租户隔离、没有支付计量。CLI/TUI/MCP 共用同一份单机事实库。
-部署约束见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
+没有登录、没有租户隔离、没有支付计量。CLI/TUI/MCP/DSH 插件共用同一份单机事实库。
+默认部署是纯插件形态：DSH（Node）加载 `dsh-luoome`，安装/升级/备份/回退步骤见
+[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
 
 认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
 浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
@@ -1251,8 +1280,9 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 
 托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
 `packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
-公开 registry；DSH 侧的暴露面由 MCP 实例控制（只读面 `luoome`、设置面 `luoome-settings`、
-批处理面 `luoome-batch`），调度由 DSH 定时任务驱动。
+公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（只读面 45 工具、market external
+精确 6 工具、8 条确认写 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
+（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）仅保留给手动/隔离验收。
 
 单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
 界面不提供新增/切换账户，服务端同时拒绝对应绕行。
@@ -1270,6 +1300,7 @@ workflow 继续只通过 `ctx.tools.*` 编排。
 恢复保持冻结，撤销旧凭证/fence，应用最新独立删除ledger，按业务回执对账且不重发旧通知，完成核对后才恢复外部副作用。
 
 单机形态的运行与部署见 [DSH 部署配置](../deploy/dsh/compose.yaml)，
+安装/升级/备份/回退步骤见[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，
 形态决策见[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) D9–D12。
 自动证券交易仍禁止；人工已完成成交保持原专用记账契约。
 
@@ -1290,8 +1321,12 @@ Drizzle 与 memory 实现共享合约测试。`analysis_job` 的 claim token 对
 core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边界由 `infra/check-layers.ts`
 检查。领域工具只装配事实、校验和持久化，不自行推理。`write` / `external` opt-in 仍有效。
 
-独立 DSH 的读面与消费者 profile 分离。`queue` 默认拒绝，消费者须显式白名单；
-普通 Web 与内嵌 DSH 不提供 queue。部署环境传入的 `LUOOME_EXPOSE_*` 不得扩大读面。
+默认纯插件部署的 read / market / 写操作面互相隔离：read 只接受纯 read 工具，market 只接受
+`sideEffect==='external'` 的精确 6 工具，写操作只经 8 条确认 policy；queue 管理工具、settings、
+batch 与 trade 不在默认暴露面。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
+手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
+精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
+`LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
 三个客户端面板通过 `ctx.slots` 注册，服务端通过 `ctx.connection.fetch.register` 注册固定 GET
 路由，继承 DSH 认证与 Host/Origin 校验。路由仅调用固定只读工具，直接返回 ToolResult，
 不建立裸监听器，不接受任意工具名或命令。浏览器只投影结果，不重算业务数字。
@@ -1307,4 +1342,4 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 
 新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。确认页只把操作编号存入 sessionStorage，确认凭据仅在组件内存；模型调用使用官方审批组件。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
 
-无模型预检及完整官方 Web profile 已有隔离验收，生产 Node DB、业务入口承接及目标环境仍未通过。自动执行默认关闭，不切换生产。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
+无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**尚未在真实生产服务器执行切换，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

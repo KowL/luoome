@@ -7,7 +7,7 @@ import {
   type StockUniverseSyncRun,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import {
   type Schema,
@@ -46,7 +46,7 @@ const summaryFromRun = (run: SyncRunRow): StockUniverseApplySummary => ({
 });
 
 export class DrizzleStockUniverseRepository implements StockUniverseRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async applySnapshot(input: {
     readonly syncId: string;

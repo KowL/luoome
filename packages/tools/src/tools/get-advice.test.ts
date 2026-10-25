@@ -55,6 +55,69 @@ describe('get_advice', () => {
     expect(withExpired.data.total).toBe(2);
   });
 
+  it('过期过滤使用注入 clock，而不是真实时钟', async () => {
+    // clock 在 validUntil 之前、真实时钟在之后：默认仍应返回（旧实现会被仓库真实时钟过滤）。
+    const beforeExpiry = await buildTestContext({
+      clock: () => new Date('2020-06-01T12:00:00.000Z'),
+      advices: [
+        {
+          ...futureAdvice,
+          id: 'test-advice-clock-before',
+          validUntil: new Date('2020-06-02T00:00:00.000Z'),
+        },
+      ],
+    });
+    const included = await getAdviceTool.execute({}, beforeExpiry);
+    expect(included.ok).toBe(true);
+    if (!included.ok) return;
+    expect(included.data.advices.map((advice) => advice.id)).toEqual(['test-advice-clock-before']);
+
+    // clock 在 validUntil 之后、真实时钟在之前（2099）：默认应排除，includeExpired 才返回。
+    const afterExpiry = await buildTestContext({
+      clock: () => new Date('2100-01-01T00:00:00.000Z'),
+      advices: [
+        {
+          ...futureAdvice,
+          id: 'test-advice-clock-after',
+          validUntil: new Date('2099-01-01T00:00:00.000Z'),
+        },
+      ],
+    });
+    const excluded = await getAdviceTool.execute({}, afterExpiry);
+    expect(excluded.ok).toBe(true);
+    if (!excluded.ok) return;
+    expect(excluded.data.total).toBe(0);
+    const withExpired = await getAdviceTool.execute({ includeExpired: true }, afterExpiry);
+    expect(withExpired.ok).toBe(true);
+    if (!withExpired.ok) return;
+    expect(withExpired.data.advices.map((advice) => advice.id)).toEqual([
+      'test-advice-clock-after',
+    ]);
+  });
+
+  it('过期过滤发生在 limit 截断之前', async () => {
+    const ctx = await buildTestContext({
+      clock: () => new Date('2020-06-01T12:00:00.000Z'),
+      advices: [
+        {
+          ...futureAdvice,
+          id: 'test-expired-newest',
+          validUntil: new Date('2020-06-01T02:00:00.000Z'),
+        },
+        {
+          ...futureAdvice,
+          id: 'test-active-oldest',
+          validUntil: new Date('2020-06-03T00:00:00.000Z'),
+          createdAt: new Date('2020-05-01T00:00:00.000Z'),
+        },
+      ],
+    });
+    const result = await getAdviceTool.execute({ limit: 1 }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advices.map((advice) => advice.id)).toEqual(['test-active-oldest']);
+  });
+
   it('filter：subjectId / decision / since', async () => {
     const ctx = await buildTestContext({ advices: [futureAdvice, expiredAdvice] });
 

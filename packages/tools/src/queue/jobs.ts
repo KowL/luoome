@@ -6,6 +6,7 @@ import {
   AnalysisJobSchema,
   AnalysisJobStatusSchema,
   AnalysisKindSchema,
+  analysisContextTimingError,
   dateInShanghai,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -33,8 +34,8 @@ export const enqueueAnalysisJobTool = defineTool({
     const snapshot = await assembleAnalysisContext(input, ctx);
     if (!snapshot) return errNotFound('AnalysisSubject', input.subject.id);
     const now = ctx.clock();
-    if (now.getTime() - snapshot.dataAsOf.getTime() > 30 * 60000)
-      return errInvalidInput('stale_context');
+    const timingError = analysisContextTimingError(snapshot, now);
+    if (timingError) return errInvalidInput(timingError);
     const job: AnalysisJob = {
       id: randomUUID(),
       kind: input.kind,
@@ -140,14 +141,13 @@ export const claimAnalysisJobsTool = defineTool({
         !fresh ||
         fresh.jobId ||
         fresh.recordedResult ||
-        fresh.writeUntil <= now ||
         fresh.kind !== current.kind ||
         fresh.subject.kind !== current.subject.kind ||
         fresh.subject.id !== current.subject.id
       )
         return errInvalidInput('context_mismatch');
-      if (now.getTime() - fresh.dataAsOf.getTime() > 30 * 60000)
-        return errInvalidInput('stale_context');
+      const timingError = analysisContextTimingError(fresh, now);
+      if (timingError) return errInvalidInput(timingError);
       const context = {
         ...fresh,
         id: randomUUID(),

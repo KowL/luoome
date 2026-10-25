@@ -3,7 +3,11 @@ import { z } from 'zod';
 const id = z.string().min(1).max(200);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const time = z.number().int().nonnegative();
-export const PluginCapabilitySchema = z.enum(['read', 'write', 'external']);
+/**
+ * 持久操作/授权可声明的能力。`queue` 只用于精确的交互分析 policy（record_*），
+ * 由受信任装配显式开启；它不是通用写能力，也不会被授权给任意工具或定时 grant。
+ */
+export const PluginCapabilitySchema = z.enum(['read', 'write', 'external', 'queue']);
 export const PluginTaskIdentitySchema = z
   .object({
     userId: id,

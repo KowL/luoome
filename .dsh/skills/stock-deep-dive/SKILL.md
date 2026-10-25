@@ -11,7 +11,7 @@ whenToUse: 用户点名某个标的问「这只票怎么样」「深度分析一
 ## 流程
 
 1. 先取事实，再下结论：
-   - `mcp__luoome-worker__get_analysis_context` 取该标的的事实包（有 analysis context 时）；
+   - `mcp__luoome-analysis__get_analysis_context` 取该标的的事实包（有 analysis context 时）；
    - 无 context 时用只读工具补齐：行情、指标、基本面评分、持仓与成本、该标的的既有建议与研究文档。
 2. 研究检索：读研究库与已归档的研究文档，标明来源与时间；没有就明说没有，不要补记忆里的财报数字。
 3. 输出结构固定五段：
@@ -22,15 +22,28 @@ whenToUse: 用户点名某个标的问「这只票怎么样」「深度分析一
    - **风险与有效期**：风险点、来源、有效期。
 4. 需要落库时：
    - 只给观察计划、不构成建议 → 不写 Advice；
-   - 明确形成建议 → 先 `mcp__luoome-worker__get_analysis_context` 取有效 context，再 `mcp__luoome-worker__record_advice`。
+   - 明确形成建议 → 先向用户展示结论、反面证据、风险、有效期和准备写回的内容，得到用户明确确认；
+     再用 `mcp__luoome-analysis__get_analysis_context` 取有效 context，并调用
+     `mcp__luoome-analysis__record_advice` 写回。
+
+## 写回确认
+
+- 一次分析请求不是持久化授权：不得因为用户说了「分析一下」就自行落库。
+- 用户确认前不调用任何 `mcp__luoome-analysis__record_*`；只确认研究结论、没有确认写回时同样不写。
+- 展示待写回内容至少包含：decision、confidence、horizon、有效期、核心论点、支持证据、
+  反面证据、风险点与免责声明。
+- 用户拒绝或只要看结论时不写库，也不保留待写草案。
 
 ## 写回约定
 
-- `record_advice` 返回 `context_expired` 或 `stale_context` 时，必须先用 `mcp__luoome-worker__get_analysis_context` 重取事实包并重试一次；重试仍失败才向用户报告。
+- `record_advice` 返回 `context_expired` 或 `stale_context` 时，必须先用
+  `mcp__luoome-analysis__get_analysis_context` 重取事实包并重试一次；重试仍失败才向用户报告。
 - 重取后要按新事实包重新核对数字，不要沿用旧事实包。
+- 交互分析经 `luoome-analysis` 直接写回，不创建 `analysis_job`，也不要改用手动 worker 命名空间。
 
 ## 边界
 
+- 事实包之外的信息不得作为证据；研究检索结果只作背景，不能替代事实包里的数字与 `factIds`。
 - 建议不等于成交，不得出现「已买入/已卖出」。
 - 不要凭记忆报价格、涨跌幅、财报数字；取不到就直说取不到。
 - 先给反面证据，再给结论，最后给可证伪的观察条件。

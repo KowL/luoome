@@ -1,6 +1,6 @@
 import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { type Schema, watchRuleStates } from '../../schema/index.js';
 
@@ -32,7 +32,7 @@ const fromDomain = (s: WatchRuleState): Row => ({
 
 /** WatchRuleState Drizzle 实现（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §9.3）。 */
 export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async listByPool(poolId: string): Promise<readonly WatchRuleState[]> {
     return this.db

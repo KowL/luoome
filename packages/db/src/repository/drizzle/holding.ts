@@ -5,13 +5,13 @@ import {
   InvariantError,
 } from '@luoome/core';
 import { and, asc, eq } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import { holdings, type Schema } from '../../schema/index.js';
 
 /** Holding 的 Drizzle 实现。行结构与实体一致（closedAt: Date | null），无需 mapper。 */
 export class DrizzleHoldingRepository implements HoldingRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(holding: Holding): Promise<void> {
     assertHoldingInvariants(holding);

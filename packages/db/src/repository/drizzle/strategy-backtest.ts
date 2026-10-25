@@ -7,7 +7,7 @@ import {
   StrictBacktestRunSchema,
 } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
-import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import type { DrizzleDatabase } from '../../database.js';
 
 import {
   type Schema,
@@ -51,7 +51,7 @@ const allowedTransition = (
   (from === 'running' && (to === 'complete' || to === 'failed'));
 
 export class DrizzleStrategyBacktestRepository implements StrategyBacktestRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async saveRun(run: StrictBacktestRun): Promise<void> {
     const parsed = StrictBacktestRunSchema.parse(run);
