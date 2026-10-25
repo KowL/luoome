@@ -172,15 +172,25 @@ const main = () => {
     )}\n`,
   );
   writeFileSync(join(profileDir, 'cordis.yml'), '[]\n');
-  // profile 由镜像管理：每次启动重写补丁层，插件随镜像版本更新；会话与事实库不在此文件。
-  writeFileSync(
-    join(profileDir, 'cordis.patch.yml'),
-    `${JSON.stringify(
-      [{ insert: [{ id: 'luoome-plugin', name: PLUGIN_NAME }] }],
-      null,
-      2,
-    )}\n`,
-  );
+  // profile 由镜像管理：插件层随镜像版本更新；会话与事实库不在此文件。
+  // 但补丁层文件里还有 DSH 自己写入的 UI 设置（例如已读的欢迎提示版本），
+  // 整份重写会把这些用户态设置抹掉，用户每次升级都要重新点一次「继续」。
+  // 插件挂载已经正确时保留原文件，只在缺失或与镜像不符时重写。
+  const patchPath = join(profileDir, 'cordis.patch.yml');
+  const existingPatch = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : '';
+  const compactPatch = existingPatch.replace(/\s+/g, ' ');
+  const pluginMounted =
+    compactPatch.includes('"id": "luoome-plugin"') &&
+    compactPatch.includes(`"name": "${PLUGIN_NAME}"`);
+  if (!pluginMounted)
+    writeFileSync(
+      patchPath,
+      `${JSON.stringify(
+        [{ insert: [{ id: 'luoome-plugin', name: PLUGIN_NAME }] }],
+        null,
+        2,
+      )}\n`,
+    );
 
   const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
   console.log(
