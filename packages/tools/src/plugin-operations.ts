@@ -19,7 +19,7 @@ export interface PluginPrincipal {
 export interface ConfirmablePluginTool {
   readonly tool: Tool;
   readonly scheduled: boolean;
-  bind(input: unknown, principal: PluginPrincipal, operationId: string): unknown;
+  bind(input: unknown, principal: PluginPrincipal, operationId: string, ctx: ToolContext): unknown;
   receipt(input: unknown, ctx: ToolContext): Promise<ToolResult<unknown> | null>;
 }
 
@@ -102,7 +102,6 @@ export const createPluginOperationService = (options: {
     .object({
       grant: PluginAutomationGrantSchema,
       // 缺省即 null：null 表示“只允许创建 version 1，已存在则失败”，不会覆盖既有授权。
-      // 见 DecisionReviewContentSchema 的同类说明——原生模型调用省略可空属性而非写 null。
       expectedVersion: z.number().int().positive().nullable().default(null),
     })
     .strict();
@@ -128,33 +127,42 @@ export const createPluginOperationService = (options: {
   policies.set(grantTool.name, {
     tool: grantTool,
     scheduled: false,
-    bind(raw, principal) {
+    async bind(raw, principal, _operationId, ctx) {
       const input = grantInput.parse(raw);
       if (
         input.grant.identity.userId !== principal.userId ||
-        input.grant.policyVersion !== options.policyVersion ||
-        input.grant.allowedCalls.some((call) => {
-          if (!input.grant.enabled) return call.accountId !== principal.accountId;
-          const policy = policies.get(call.tool);
-          if (
-            call.accountId !== principal.accountId ||
-            !policy?.scheduled ||
-            !allowed(policy) ||
-            policy.tool.requiredCapabilities.some(
-              (c) => !call.capabilities.includes(c as 'read' | 'write' | 'external' | 'queue'),
-            )
-          )
-            return true;
-          const bound = policy.bind(JSON.parse(call.inputJson), principal, 'grant-preview');
-          return (
-            hasForce(bound) ||
-            !policy.tool.inputSchema.safeParse(bound).success ||
-            pluginInputJson(bound) !== call.inputJson ||
-            pluginInputHash(bound) !== call.inputHash
-          );
-        })
+        input.grant.policyVersion !== options.policyVersion
       )
         throw new Error('Grant scope mismatch');
+      for (const call of input.grant.allowedCalls) {
+        if (!input.grant.enabled) {
+          if (call.accountId !== principal.accountId) throw new Error('Grant scope mismatch');
+          continue;
+        }
+        const policy = policies.get(call.tool);
+        if (
+          call.accountId !== principal.accountId ||
+          !policy?.scheduled ||
+          !allowed(policy) ||
+          policy.tool.requiredCapabilities.some(
+            (c) => !call.capabilities.includes(c as 'read' | 'write' | 'external' | 'queue'),
+          )
+        )
+          throw new Error('Grant scope mismatch');
+        const bound = await policy.bind(
+          JSON.parse(call.inputJson),
+          principal,
+          'grant-preview',
+          ctx,
+        );
+        if (
+          hasForce(bound) ||
+          !policy.tool.inputSchema.safeParse(bound).success ||
+          pluginInputJson(bound) !== call.inputJson ||
+          pluginInputHash(bound) !== call.inputHash
+        )
+          throw new Error('Grant scope mismatch');
+      }
       return input;
     },
     async receipt(raw) {
@@ -166,17 +174,16 @@ export const createPluginOperationService = (options: {
     },
   });
 
-  const makeOperation = (
+  const makeOperation = async (
     principal: PluginPrincipal,
     id: string,
     policy: ConfirmablePluginTool,
     raw: unknown,
     authorization: PluginOperation['authorization'],
-  ): PluginOperation => {
-    const input = policy.bind(raw, principal, id);
+  ): Promise<PluginOperation> => {
+    const input = await policy.bind(raw, principal, id, await options.context());
     // Freeze wire input; preserve the original tool's validation/default/transform pipeline.
-    // 冻结的是“解析后”的输入：工具 schema 的默认值（缺省即 null）因此进入冻结内容，
-    // 于是“省略可空字段”与“显式写 null”是同一次操作，审批卡展示的也是真正会落库的内容。
+    // Freeze bound content after patch resolution, before requesting approval.
     const parsed = policy.tool.inputSchema.parse(JSON.parse(pluginInputJson(input)));
     const inputJson = pluginInputJson(parsed);
     const now = options.now();
@@ -284,7 +291,7 @@ export const createPluginOperationService = (options: {
         const token = randomBytes(32).toString('base64url');
         let op: PluginOperation;
         try {
-          op = makeOperation(principal, request.id, policy, request.input, {
+          op = await makeOperation(principal, request.id, policy, request.input, {
             kind: 'human',
             tokenHash: tokenHash(token),
           });
@@ -400,7 +407,7 @@ export const createPluginOperationService = (options: {
         const id = `schedule:${pluginInputHash({ identity, occurrenceId: request.occurrenceId, tool: request.tool, accountId: request.accountId })}`;
         let op: PluginOperation;
         try {
-          op = makeOperation(principal, id, policy, request.input, {
+          op = await makeOperation(principal, id, policy, request.input, {
             kind: 'schedule',
             grantId: request.grantId,
             grantVersion: request.grantVersion,

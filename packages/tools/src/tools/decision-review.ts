@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  type DecisionReviewContent,
+  type DecisionReviewContentPatch,
+  DecisionReviewContentPatchSchema,
   DecisionReviewContentSchema,
   DecisionReviewContextSchema,
   DecisionReviewRevisionSchema,
@@ -8,6 +11,8 @@ import {
   type DecisionReviewSubject,
   DecisionReviewSubjectSchema,
   DecisionTradeCommitResultSchema,
+  InvariantError,
+  mergeDecisionReviewContent,
   SignalObservationSchema,
   type ToolContext,
   type ToolResult,
@@ -314,6 +319,31 @@ export const decisionReviewWriteHash = (input: {
     changeNote: input.changeNote ?? null,
   });
 
+export const resolveDecisionReviewWriteContent = async (
+  input: {
+    accountId: string;
+    subject: DecisionReviewSubject;
+    expectedRevision: number;
+    content: DecisionReviewContentPatch;
+  },
+  ctx: ToolContext,
+): Promise<DecisionReviewContent> => {
+  const complete = DecisionReviewContentSchema.safeParse(input.content);
+  if (complete.success) return complete.data;
+  if (input.expectedRevision === 0) return mergeDecisionReviewContent(input.content);
+  const current = await ctx.repos.decisionReview.findBySubject(input);
+  const base =
+    current &&
+    (await ctx.repos.decisionReview.findById({
+      accountId: input.accountId,
+      id: current.review.id,
+      revision: input.expectedRevision,
+    }));
+  if (!base) throw new InvariantError('复盘基准修订不可用，请刷新后重新确认');
+  // Resolve against the requested immutable revision, including on receipt replay.
+  return mergeDecisionReviewContent(input.content, base.revision.content);
+};
+
 export const saveDecisionReviewTool = defineTool({
   name: 'save_decision_review',
   description: '在当前账户保存不可变的决策复盘修订和显式成交关联',
@@ -322,7 +352,7 @@ export const saveDecisionReviewTool = defineTool({
     requestId: z.uuid(),
     contextHash: z.string().min(1),
     expectedRevision: z.number().int().nonnegative(),
-    content: DecisionReviewContentSchema,
+    content: DecisionReviewContentPatchSchema,
     changeNote: z.string().max(2000).nullable().optional(),
   }).strict(),
   output: z.object({ result: ReviewViewSchema, replayed: z.boolean() }),
@@ -330,8 +360,9 @@ export const saveDecisionReviewTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
-    const content = { ...input.content, tradeIds: [...new Set(input.content.tradeIds)].sort() };
-    const requestHash = decisionReviewWriteHash({ ...input, accountId });
+    const resolved = await resolveDecisionReviewWriteContent({ ...input, accountId }, ctx);
+    const content = { ...resolved, tradeIds: [...new Set(resolved.tradeIds)].sort() };
+    const requestHash = decisionReviewWriteHash({ ...input, accountId, content });
     const receipt = await ctx.repos.decisionReview.findWriteReceipt({
       accountId,
       requestId: input.requestId,

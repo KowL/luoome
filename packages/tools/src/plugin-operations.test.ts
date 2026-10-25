@@ -11,7 +11,7 @@ import {
   pluginInputJson,
 } from './plugin-operations.js';
 import { buildTestContext } from './testing/context.js';
-import { getDecisionReviewContextTool } from './tools/decision-review.js';
+import { getDecisionReviewContextTool, saveDecisionReviewTool } from './tools/decision-review.js';
 
 const data = (result: ToolResult<unknown>) => {
   if (!result.ok) throw new Error(JSON.stringify(result.error));
@@ -69,6 +69,71 @@ const setup = async () => {
 };
 
 describe('persistent operation execution', () => {
+  it('freezes a review patch against its base revision and retains CAS when approval is late', async () => {
+    const { service, ctx, principal } = await setup();
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || !preview.data.context) throw new Error('Missing review context');
+    const base = { subject, contextHash: preview.data.context.contextHash };
+    const original = {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'ignored' },
+      triggerFeedback: null,
+      note: 'original',
+    };
+    expect(
+      (
+        await saveDecisionReviewTool.execute(
+          { ...base, requestId: randomUUID(), expectedRevision: 0, content: original },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    const request = {
+      id: randomUUID(),
+      tool: 'save_decision_review',
+      input: { ...base, expectedRevision: 1, content: { note: 'approved note' } },
+    };
+    const prepared = data(await service.prepare(principal, request));
+    const frozen = await ctx.repos.pluginAuthority.findOperation({ ...principal, id: request.id });
+    if (!frozen) throw new Error('Missing frozen operation');
+    expect(JSON.parse(frozen.inputJson).content).toEqual({ ...original, note: 'approved note' });
+    expect(
+      (
+        await saveDecisionReviewTool.execute(
+          {
+            ...base,
+            requestId: randomUUID(),
+            expectedRevision: 1,
+            content: { note: 'concurrent note' },
+          },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    const replay = await service.prepare(principal, request);
+    expect(replay.ok, JSON.stringify(replay)).toBe(true);
+    expect(
+      (await ctx.repos.pluginAuthority.findOperation({ ...principal, id: request.id }))?.inputHash,
+    ).toBe(frozen.inputHash);
+    const late = data(
+      await service.confirm(
+        principal,
+        { id: request.id, token: prepared.confirmationToken },
+        signal(),
+      ),
+    );
+    expect(late.state).toBe('unknown');
+    expect(late.result).toMatchObject({ ok: false, error: { kind: 'invariant_violation' } });
+    const current = await ctx.repos.decisionReview.findBySubject({
+      accountId: principal.accountId,
+      subject,
+    });
+    expect(current?.review.currentRevision).toBe(2);
+    expect(current?.revision.content).toEqual({ ...original, note: 'concurrent note' });
+  });
   it('reports input issue paths without echoing submitted values or preparing a write', async () => {
     const { service, principal, handler, ctx } = await setup();
     const id = randomUUID();

@@ -448,6 +448,8 @@ DSH_HOME / Node SQLite 上做真实模型与官方 Web 审批的辅助 smoke。�
 
 **修复**：
 
+> 下列“省略即 null”是初版兼容行为；更新时会清空已有反馈的回归及修正见 §9.17。
+
 - 可空业务字段在 wire 上改为**可选**（Zod `.default(null)`）：领域语义仍是"只接受显式 null"，
   但"省略"等价于 null，模型不必再做一件它做不可靠的事。落库/审批卡展示的仍是显式 null。
 - 操作冻结的是**解析后**的输入：工具 schema 的默认值进入冻结内容，于是"省略可空字段"与
@@ -506,7 +508,7 @@ state 路由返回对应工具投影、控制台无错误、桌面无横向溢�
 - profile seed 每次重写 `cordis.patch.yml`，把 DSH 自己写入的 `ui-settings-general`（已读提示版本）抹掉，
   用户每次升级都重弹「预览版说明」。现在插件挂载已正确时保留原文件，回归为 `deploy/dsh/profile-seed.test.ts`（3 项）。
 
-**没有关闭的缺口**：
+**没有关闭的缺口**（生产切换时的快照）：
 
 - 五个 batch 没有迁移。既有 5 条日程（`schedule-700c645c…` / `0fc9b7f8…` / `48ab151e…` / `aba73d1c…` /
   `8b97bef8…`，均绑定 `session-75edb123-…`，状态 active，ID 与 cron 未动）原先依赖的 `luoome-batch`
@@ -516,3 +518,38 @@ state 路由返回对应工具投影、控制台无错误、桌面无横向溢�
 - MiniMax 原生参数兼容性问题仍未解决；生产实际模型是 `deepseek-flash`（`deepseek-official`），
   默认仍是 native 模式，异常时可用 `DSH_TOOLS_MODE=ptc` 临时切换。
 - 真实供应商与无人干预的模型质量验收未做；旧 MCP/Bun 源码按 P5 再删。
+
+### 9.17 DecisionReview 部分更新回归修复（2026-10-25）
+
+`270d8ed` 把可空内容字段设为 `.default(null)` 后，保存一条新笔记会把省略的已有用户反馈
+当成清除：盈亏未知时可直接丢失 outcome，已有盈亏时会错误触发“需要更正原因”。本轮以这两种
+已有记录为回归输入，修复前测试失败。
+
+- **输入与存储分开**：完整 `DecisionReviewContentSchema` 不再自动补 null；新增部分更新 schema
+  及无 IO 合并函数。content 顶层字段省略保留原值，显式 null 清除可空字段；tradeIds 省略保留，
+  显式空数组解除关联。显式提供的 adviceFeedback 对象整体替换该字段。新建从空数组/null 开始，
+  首次内容全空仍被拒绝，持久修订始终是完整内容。
+- **审批前冻结**：工具执行与确认 policy 复用按 `expectedRevision` 历史修订补齐内容的逻辑。
+  policy 的 bind 可异步读取工具上下文，先补齐再冻结和计算 inputHash；审批卡呈现的完整内容与
+  最终写入相同。重放按原历史修订计算，不因当前版本变化而改变请求哈希。
+- **并发与清除约束保留**：最终仓储事务仍检查 expectedRevision / contextHash；晚到审批不会覆盖
+  新修订。显式清除已填盈亏或解除成交关联仍需更正原因；占位字符串、跨账户、拒绝与取消的约束不变。
+
+自动回归覆盖已有未知盈亏 outcome、零盈亏、笔记和成交关联保留、显式清除、旧请求重放与冲突、
+晚到审批、对象和 inputJson 两通道的冻结参数。`test:all`（2699 Vitest、601 Bun DB、235 Node DB、
+549 Web、12 宿主 e2e、7 分析面 e2e）、全仓 typecheck、lint（0 error、24 条既有 warning）、build、
+check:layers、Node24 mvp-journeys（16 项）及真实 npm plugin-install 已通过。
+
+**真实 MiniMax 原生回归**：Node 24、固定 DSH `0.2.1-rc.2`、标准 preset、
+`DSH_TOOLS_MODE=native`，M3.1 Flash 与 M3 各使用独立临时 DSH_HOME / 合成 Node SQLite。
+未挂审批应答器：Codex 逐卡核对官方 Web 审批卡并点击“允许一次”，随后通过工具及 SQLite 回读。
+
+| 场景 | M3.1 Flash | M3 |
+|---|---|---|
+| 对象 input 的 content 只含 note，省略反馈及成交关联 | revision 1 → 2，原 followed / pnl=12.5 保留 | revision 1 → 2，同样保留 |
+| inputJson 显式提交 adviceFeedback=null、note=null，附更正原因 | revision 2 → 3，仅指定字段清除 | revision 2 → 3，同样清除 |
+
+四次操作均一次成功，审批冻结内容与落库内容一致。浏览器展开的原始调用确认：前者确实省略了
+三个字段，后者字符串内确实为 JSON null。此为针对回归的引导式辅助 smoke，不替代四旅程产品
+质量验收或用户亲自验收；未修改现有用户 profile、真实个人事实库或服务器。本地去敏证据保存在
+`.tmp/dsh-minimax-patch-audit/`，不提交凭据或模型会话。测试宿主在验收后关闭；本轮不提交或部署。

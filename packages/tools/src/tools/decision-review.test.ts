@@ -8,6 +8,102 @@ import {
 } from './decision-review.js';
 
 describe('decision review tools', () => {
+  it('preserves omitted content on updates and clears only explicitly supplied nulls', async () => {
+    const ctx = await buildTestContext();
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || preview.data.context === null) throw new Error('missing review context');
+    const contextHash = preview.data.context.contextHash;
+    const content = {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'ignored', pnl: 0 },
+      triggerFeedback: null,
+      note: 'original note',
+    };
+    const save = (
+      expectedRevision: number,
+      patch: unknown,
+      changeNote?: string,
+      requestId = crypto.randomUUID(),
+    ) =>
+      saveDecisionReviewTool.execute(
+        {
+          requestId,
+          subject,
+          contextHash,
+          expectedRevision,
+          content: patch,
+          changeNote,
+        },
+        ctx,
+      );
+    const first = await save(0, content);
+    expect(first.ok).toBe(true);
+    const editId = crypto.randomUUID();
+    const edited = await save(1, { tradeIds: [], note: 'updated note' }, undefined, editId);
+    expect(edited.ok, JSON.stringify(edited)).toBe(true);
+    if (!edited.ok) return;
+    expect(edited.data.result.revision.content).toEqual({ ...content, note: 'updated note' });
+    const clearedNote = await save(2, { note: null });
+    expect(clearedNote.ok, JSON.stringify(clearedNote)).toBe(true);
+    if (!clearedNote.ok) return;
+    expect(clearedNote.data.result.revision.content).toEqual({ ...content, note: null });
+    const noReason = await save(3, { adviceFeedback: null });
+    expect(noReason.ok).toBe(false);
+    const clearedFeedback = await save(3, { adviceFeedback: null }, '用户明确要求清除反馈');
+    expect(clearedFeedback.ok, JSON.stringify(clearedFeedback)).toBe(true);
+    if (!clearedFeedback.ok) return;
+    expect(clearedFeedback.data.result.revision.content).toEqual({
+      ...content,
+      adviceFeedback: null,
+      note: null,
+    });
+    const replay = await save(1, { tradeIds: [], note: 'updated note' }, undefined, editId);
+    expect(replay.ok, JSON.stringify(replay)).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.data.replayed).toBe(true);
+    expect(replay.data.result.revision.revision).toBe(2);
+    const conflicting = await save(1, { adviceFeedback: null }, undefined, editId);
+    expect(conflicting.ok).toBe(false);
+    const current = await ctx.repos.decisionReview.findBySubject({
+      accountId: ctx.user.defaultAccountId,
+      subject,
+    });
+    expect(current?.review.currentRevision).toBe(4);
+  });
+  it('does not silently erase an outcome with unknown PnL when only the note is supplied', async () => {
+    const ctx = await buildTestContext();
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || !preview.data.context) throw new Error('Missing review context');
+    const base = { subject, contextHash: preview.data.context.contextHash };
+    const first = await saveDecisionReviewTool.execute(
+      {
+        ...base,
+        requestId: crypto.randomUUID(),
+        expectedRevision: 0,
+        content: { adviceFeedback: { outcome: 'ignored' }, note: 'original' },
+      },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    const edited = await saveDecisionReviewTool.execute(
+      {
+        ...base,
+        requestId: crypto.randomUUID(),
+        expectedRevision: 1,
+        content: { note: 'only the note' },
+      },
+      ctx,
+    );
+    expect(edited.ok, JSON.stringify(edited)).toBe(true);
+    if (!edited.ok) return;
+    expect(edited.data.result.revision.content.adviceFeedback).toEqual({ outcome: 'ignored' });
+  });
   it('在仓储筛选最新候选成交，并保留窗口外已关联成交', async () => {
     const ctx = await buildTestContext();
     const advice = (
@@ -63,6 +159,22 @@ describe('decision review tools', () => {
       ctx,
     );
     expect(saved.ok).toBe(true);
+    const edited = await saveDecisionReviewTool.execute(
+      {
+        requestId: crypto.randomUUID(),
+        subject,
+        contextHash: preview.data.context.contextHash,
+        expectedRevision: 1,
+        content: { note: 'preserve linked trades' },
+      },
+      ctx,
+    );
+    expect(edited.ok, JSON.stringify(edited)).toBe(true);
+    if (edited.ok)
+      expect(edited.data.result.revision.content.tradeIds).toEqual([
+        'candidate-00',
+        'candidate-24',
+      ]);
     const linked = await getDecisionReviewContextTool.execute({ subject }, ctx);
     expect(linked.ok).toBe(true);
     if (!linked.ok) return;

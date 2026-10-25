@@ -449,10 +449,11 @@ DSH 侧栏有三个 luoome 面板：
 表示参数未通过校验，不代表缺少人工授权；纠正参数后仍需独立审批，不用写调用探测工具或权限。
 当前固定 SDK 下，MiniMax M3/M3.1 Flash 的原生调用**不会稳定写出 JSON null**——它在填对象参数时
 用"省略该属性"表达"无值"。luoome 的写契约已按此调整：可空业务字段（如复盘的 `triggerFeedback`、
-`adviceFeedback`、`note`）在参数契约上是可选的，**省略即 null**，领域只接受显式 null
-（字符串 `"null"` 这类占位值仍被拒）。因此复盘保存与反馈写回在默认 native 配置下已实测通过，
+`adviceFeedback`、`note`）在参数契约上是可选的。**更新时省略保留原值，显式 null 才清除**；
+tradeIds 省略保留关联，显式空数组解除关联。新建时省略字段初始为空数组/null。审批卡展示的是
+按 expectedRevision 补齐后的完整内容；字符串 `"null"` 这类占位值仍被拒。因此复盘保存与反馈写回在默认 native 配置下已实测通过，
 不再需要 `DSH_TOOLS_MODE=ptc`。PTC 仍是官方备选通道，需要时在启动 DSH 进程时显式设置即可，
-默认配置不会自动切换。完整边界见[真实模型验收记录](./ddd/dsh-luoome-plugin-detailed-design.md#915-真实模型-smoke-与分发收尾2026-10-25)。
+默认配置不会自动切换。完整边界见[部分更新与真实模型验收记录](./ddd/dsh-luoome-plugin-detailed-design.md#917-decisionreview-部分更新回归修复2026-10-25)。
 旧 `.dsh/skills/`（`morning-brief`、`stock-deep-dive`、`decision-journal`、`luoome-batch`、
 `analysis-worker`）属于旧 MCP 过渡形态，默认部署不安装；`analysis-worker` 仅用于手动 worker 验收。
 

@@ -2,16 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertDecisionReviewContent,
+  DecisionReviewContentPatchSchema,
   DecisionReviewContentSchema,
   type DecisionReviewSubject,
+  mergeDecisionReviewContent,
 } from './decision-review.js';
 
 const adviceSubject: DecisionReviewSubject = { kind: 'advice', id: 'advice-1' };
 const watchSubject: DecisionReviewSubject = { kind: 'watch-trigger', id: 'trigger-1' };
 
-describe('DecisionReviewContentSchema 可空字段', () => {
-  it('省略可空字段 → 解析为显式 null', () => {
-    const parsed = DecisionReviewContentSchema.parse({ tradeIds: [] });
+describe('DecisionReview content patches', () => {
+  it('keeps stored content complete and materializes an initial patch', () => {
+    expect(DecisionReviewContentSchema.safeParse({ tradeIds: [] }).success).toBe(false);
+    const parsed = mergeDecisionReviewContent(
+      DecisionReviewContentPatchSchema.parse({ tradeIds: [] }),
+    );
     expect(parsed).toEqual({
       tradeIds: [],
       adviceFeedback: null,
@@ -21,7 +26,7 @@ describe('DecisionReviewContentSchema 可空字段', () => {
   });
 
   it('占位字符串 "null" 仍然被拒绝', () => {
-    const parsed = DecisionReviewContentSchema.safeParse({
+    const parsed = DecisionReviewContentPatchSchema.safeParse({
       tradeIds: [],
       triggerFeedback: 'null',
     });
@@ -29,36 +34,64 @@ describe('DecisionReviewContentSchema 可空字段', () => {
   });
 
   it('非法的枚举取值仍然被拒绝', () => {
-    const parsed = DecisionReviewContentSchema.safeParse({
+    const parsed = DecisionReviewContentPatchSchema.safeParse({
       tradeIds: [],
       triggerFeedback: 'none',
     });
     expect(parsed.success).toBe(false);
   });
 
-  it('省略与显式 null 得到同一个内容（重放与哈希口径一致）', () => {
-    const omitted = DecisionReviewContentSchema.parse({ tradeIds: [], note: 'x' });
-    const explicit = DecisionReviewContentSchema.parse({
+  it('uses null for omitted initial fields without equating omission with removal on updates', () => {
+    const omitted = mergeDecisionReviewContent({ tradeIds: [], note: 'x' });
+    const explicit = mergeDecisionReviewContent({
       tradeIds: [],
       adviceFeedback: null,
       triggerFeedback: null,
       note: 'x',
     });
     expect(omitted).toEqual(explicit);
+    const previous = { ...omitted, adviceFeedback: { outcome: 'ignored' as const, pnl: 0 } };
+    expect(mergeDecisionReviewContent({ note: 'updated' }, previous)).toEqual({
+      ...previous,
+      note: 'updated',
+    });
+    expect(
+      mergeDecisionReviewContent({ adviceFeedback: null }, previous).adviceFeedback,
+    ).toBeNull();
+  });
+
+  it('preserves omitted links and trigger feedback and clears a note only with explicit null', () => {
+    const previous = {
+      tradeIds: ['trade-1'],
+      adviceFeedback: null,
+      triggerFeedback: 'useful' as const,
+      note: 'original',
+    };
+    expect(mergeDecisionReviewContent({ note: undefined }, previous)).toEqual(previous);
+    expect(mergeDecisionReviewContent({ note: null }, previous)).toEqual({
+      ...previous,
+      note: null,
+    });
+    expect(mergeDecisionReviewContent({ triggerFeedback: null, tradeIds: [] }, previous)).toEqual({
+      ...previous,
+      triggerFeedback: null,
+      tradeIds: [],
+    });
+    expect(DecisionReviewContentPatchSchema.safeParse({ tradeIds: null }).success).toBe(false);
   });
 
   it('省略可空字段后不变量仍然按显式 null 判定', () => {
     expect(() =>
       assertDecisionReviewContent(
         adviceSubject,
-        DecisionReviewContentSchema.parse({ tradeIds: [], note: 'x' }),
+        mergeDecisionReviewContent({ tradeIds: [], note: 'x' }),
         true,
       ),
     ).not.toThrow();
     expect(() =>
       assertDecisionReviewContent(
         adviceSubject,
-        DecisionReviewContentSchema.parse({
+        mergeDecisionReviewContent({
           tradeIds: [],
           adviceFeedback: { outcome: 'ignored' },
           note: 'x',
@@ -69,7 +102,7 @@ describe('DecisionReviewContentSchema 可空字段', () => {
     expect(() =>
       assertDecisionReviewContent(
         adviceSubject,
-        DecisionReviewContentSchema.parse({
+        mergeDecisionReviewContent({
           tradeIds: [],
           triggerFeedback: 'handled',
           note: 'x',
@@ -83,16 +116,12 @@ describe('DecisionReviewContentSchema 可空字段', () => {
     expect(() =>
       assertDecisionReviewContent(
         adviceSubject,
-        DecisionReviewContentSchema.parse({ tradeIds: [] }),
+        mergeDecisionReviewContent({ tradeIds: [] }),
         true,
       ),
     ).toThrow();
     expect(() =>
-      assertDecisionReviewContent(
-        watchSubject,
-        DecisionReviewContentSchema.parse({ tradeIds: [] }),
-        true,
-      ),
+      assertDecisionReviewContent(watchSubject, mergeDecisionReviewContent({ tradeIds: [] }), true),
     ).toThrow();
   });
 });

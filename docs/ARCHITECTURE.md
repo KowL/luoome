@@ -869,7 +869,12 @@ TradingPlanVersion 或 WatchTrigger。`context` 在首次保存时冻结，来�
 
 `get_decision_review_context` 返回冻结依据、当前及历史修订、显式后续观察、关联成交状态与账本资格。
 只有沿来源身份校验过的 SignalObservation 能作为后续事实，不按同股或相近日期推断证据链。
-`save_decision_review` 校验 contextHash 和 expectedRevision 后追加修订；
+`save_decision_review` 接受 content 顶层部分更新：省略保留 expectedRevision 对应历史修订的值，
+显式 null 清除可空字段，tradeIds 的显式空数组解除关联；新建从空数组/null 开始。
+工具与确认 policy 复用同一解析逻辑，policy 在审批前读取基准修订并冻结完整内容，最终写入仍用
+contextHash / expectedRevision 做校验；重放也按原基准补齐，不随当前修订变化。Core 的部分更新
+schema 与完整存储 schema 分开，合并函数无 IO；policy 的异步 bind 仍在 tools 层读取仓储。
+`save_decision_review` 校验成功后追加修订；
 `record_decision_trade` 登记系统外已完成但尚未入账的成交，事务内同时保存 Trade、Holding、
 Account.cashBalance、所选来源修订和请求回执。该路径只允许对账可用账本的顺序追加，
 不调用券商，sideEffect 为 trade，MCP 永不暴露。

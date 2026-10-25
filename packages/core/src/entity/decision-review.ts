@@ -15,11 +15,6 @@ export type DecisionReviewSubject = z.infer<typeof DecisionReviewSubjectSchema>;
 export const DecisionReviewContentSchema = z
   .object({
     tradeIds: z.array(z.string().min(1)).max(100),
-    // 可空字段用 `.default(null)`：缺省即 null。
-    // 原因：MiniMax 原生工具调用无法稳定表达 JSON null——它在填对象参数时会直接省略
-    // 可空属性，而不是写出 null。若这些属性在 wire 上仍是 required，模型就会省略它们，
-    // 领域随后按“缺必填字段”拒绝整次写回。缺省等价于 null 让模型用“省略”表达“无值”，
-    // 领域仍然只接受显式 null（字符串 "null" 这类占位值依然被拒）。
     adviceFeedback: z
       .object({
         outcome: z.enum(['followed', 'partially_followed', 'ignored']),
@@ -28,13 +23,31 @@ export const DecisionReviewContentSchema = z
         holdingHours: z.number().finite().nonnegative().optional(),
       })
       .strict()
-      .nullable()
-      .default(null),
-    triggerFeedback: z.enum(['handled', 'useful', 'useless', 'ignored']).nullable().default(null),
-    note: z.string().max(2000).nullable().default(null),
+      .nullable(),
+    triggerFeedback: z.enum(['handled', 'useful', 'useless', 'ignored']).nullable(),
+    note: z.string().max(2000).nullable(),
   })
   .strict();
 export type DecisionReviewContent = z.infer<typeof DecisionReviewContentSchema>;
+
+export const DecisionReviewContentPatchSchema = DecisionReviewContentSchema.partial().describe(
+  'Top-level content patch: omitted fields keep their value from expectedRevision; on creation they start empty/null. Explicit null clears nullable fields; tradeIds: [] clears links. A supplied adviceFeedback object replaces that whole field.',
+);
+export type DecisionReviewContentPatch = z.infer<typeof DecisionReviewContentPatchSchema>;
+
+export const mergeDecisionReviewContent = (
+  patch: DecisionReviewContentPatch,
+  previous?: DecisionReviewContent,
+): DecisionReviewContent => ({
+  tradeIds: patch.tradeIds ?? previous?.tradeIds ?? [],
+  adviceFeedback:
+    patch.adviceFeedback === undefined ? (previous?.adviceFeedback ?? null) : patch.adviceFeedback,
+  triggerFeedback:
+    patch.triggerFeedback === undefined
+      ? (previous?.triggerFeedback ?? null)
+      : patch.triggerFeedback,
+  note: patch.note === undefined ? (previous?.note ?? null) : patch.note,
+});
 
 export const DecisionReviewContextSchema = z
   .object({

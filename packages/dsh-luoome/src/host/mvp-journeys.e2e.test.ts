@@ -586,7 +586,80 @@ describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLi
       await fixture.close();
     }
   });
-  it('native JSON input omits nullable business fields: wire 不再要求 null，冻结与落库仍是显式 null', async () => {
+  it.each(['input', 'inputJson'] as const)(
+    'native %s patch preserves omitted feedback in approval and storage',
+    async (channel) => {
+      const fixture = await createJourneyFixture();
+      try {
+        const advice = testAdviceFor(TEST_STOCKS[0]?.id ?? '600519.SH', () => new Date(NOW));
+        await fixture.repos.advice.save(advice);
+        const subject = { kind: 'advice' as const, id: advice.id };
+        const context = dataOf<{ context: { contextHash: string } }>(
+          (await fixture.execute('get_decision_review_context', { subject })).value,
+        );
+        const original = {
+          tradeIds: [],
+          adviceFeedback: { outcome: 'ignored', pnl: 0 },
+          triggerFeedback: null,
+          note: 'original note',
+        };
+        const base = { subject, contextHash: context.context.contextHash };
+        await confirmed(fixture, 'save_decision_review', {
+          ...base,
+          expectedRevision: 0,
+          content: original,
+        });
+        const id = randomUUID();
+        const patch = { ...base, expectedRevision: 1, content: { note: 'only update the note' } };
+        fixture.approvals.push('allowed-once');
+        const saved = await fixture.run({
+          name: MANUAL_OPERATION_TOOL,
+          input: {
+            id,
+            tool: 'save_decision_review',
+            ...(channel === 'input' ? { input: patch } : { inputJson: JSON.stringify(patch) }),
+          },
+        });
+        expect(saved?.value, JSON.stringify(saved)).toMatchObject({
+          ok: true,
+          data: { state: 'succeeded' },
+        });
+        const frozen = fixture.approvalReasons[1];
+        expect(frozen).toContain('"adviceFeedback":{"outcome":"ignored","pnl":0}');
+        expect(frozen).toContain('"triggerFeedback":null');
+        const current = () =>
+          fixture.repos.decisionReview.findBySubject({
+            accountId: fixture.principal.accountId,
+            subject,
+          });
+        expect((await current())?.revision.content).toEqual({
+          ...original,
+          note: 'only update the note',
+        });
+        const replay = await fixture.execute(MANUAL_OPERATION_TOOL, {
+          id,
+          tool: 'save_decision_review',
+          inputJson: JSON.stringify(patch),
+        });
+        expect(replay.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+        expect(fixture.approvalReasons).toHaveLength(2);
+        fixture.approvals.push('allowed-once');
+        const cleared = await fixture.run({
+          name: MANUAL_OPERATION_TOOL,
+          input: {
+            id: randomUUID(),
+            tool: 'save_decision_review',
+            inputJson: JSON.stringify({ ...base, expectedRevision: 2, content: { note: null } }),
+          },
+        });
+        expect(cleared?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+        expect((await current())?.revision.content).toEqual({ ...original, note: null });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+  it('native JSON input omits initial nullable fields: wire 不再要求 null，冻结与落库仍是显式 null', async () => {
     const fixture = await createJourneyFixture();
     try {
       // 回归根因：MiniMax 原生工具调用填对象参数时会省略可空属性而不是写 null。
@@ -604,7 +677,7 @@ describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLi
       const reviewBranch = branches.find(
         (branch) => branch.properties?.tool?.const === 'save_decision_review',
       );
-      expect(reviewBranch?.properties?.input?.properties?.content?.required).toEqual(['tradeIds']);
+      expect(reviewBranch?.properties?.input?.properties?.content?.required ?? []).toEqual([]);
       const automationBranch = branches.find(
         (branch) => branch.properties?.tool?.const === 'configure_plugin_automation',
       );
