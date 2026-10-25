@@ -31,6 +31,8 @@ whenToUse: 用户问「当时的判断如何、我实际怎么做了、错在哪
 
 ## 审批与授权纪律
 
+- 原生调用优先用 inputJson 字符串：按对应 tool 的 input/contentSchema 将业务参数序列化为 JSON，保留 null、数字和数组。与 input 对象二选一；不得把 null 改成占位字符串或省略必填字段。可空字段（`triggerFeedback`、`adviceFeedback`、`note`）省略即 null，不要为填满契约编造值。
+- 保存参数以 `luoome_confirmed_operation` 中对应 tool 的 input schema 为准；不要用写调用探测工具名或参数，尤其不能用 `record_advice_outcome` 探测权限。invalid_input 按字段路径纠正，不能将其解释成缺少用户授权。
 - 复盘笔记与用户 outcome 都经 DSH 原生审批；模型不得自报 approved、callId、taskId 或 prompt 文本作为授权。
 - 用户拒绝、取消、超时或切换账户时视为未执行，不重试写入。
 - 审批后响应丢失：查询操作状态与业务回执核对，不重复保存或重复记录 outcome。

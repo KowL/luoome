@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import { runStrategyTool } from './run-strategy.js';
 import {
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,
@@ -32,6 +33,51 @@ const definition = (style: string) => ({
 });
 
 describe('strategy definition Phase C tools', () => {
+  it('trials validated draft versions before first publication while keeping operational runs blocked', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    const strategyId = 'unpublished-trial';
+    await createStrategyTool.execute(
+      { id: strategyId, name: '草案试跑', description: '测试' },
+      ctx,
+    );
+    const base = await createStrategyVersionTool.execute(
+      { strategyId, definition: definition('trend') },
+      ctx,
+    );
+    const draft = await createStrategyVersionTool.execute(
+      { strategyId, definition: definition('value') },
+      ctx,
+    );
+    if (!base.ok || !draft.ok) throw new Error('Could not create trial versions');
+    for (const version of [base.data.version, draft.data.version])
+      await validateStrategyVersionTool.execute({ versionId: version.id }, ctx);
+    const input = {
+      strategyId,
+      baseVersionId: base.data.version.id,
+      draftVersionId: draft.data.version.id,
+      stockIds: ['600519.SH'],
+    };
+    const trial = await trialStrategyVersionTool.execute(input, ctx);
+    expect(trial.ok, JSON.stringify(trial)).toBe(true);
+    expect(await ctx.repos.strategy.findById(strategyId)).toMatchObject({ status: 'draft' });
+    for (const version of await ctx.repos.strategy.listVersions(strategyId))
+      expect(version.publishedAt).toBeUndefined();
+    const operational = await runStrategyTool.execute(
+      { strategyId, versionId: draft.data.version.id, stockIds: input.stockIds },
+      ctx,
+    );
+    expect(operational).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    await publishStrategyVersionTool.execute({ versionId: draft.data.version.id }, ctx);
+    for (const transition of ['pause', 'archive'] as const) {
+      await ctx.repos.strategy[transition](strategyId, ctx.clock());
+      expect(await trialStrategyVersionTool.execute(input, ctx)).toMatchObject({
+        ok: false,
+        error: { kind: 'invalid_input' },
+      });
+    }
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId })).toHaveLength(0);
+  });
   it('compares the latest baseline and draft without writing', async () => {
     const ctx = await buildTestContext();
     await createStrategyTool.execute(

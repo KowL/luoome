@@ -69,6 +69,22 @@ const setup = async () => {
 };
 
 describe('persistent operation execution', () => {
+  it('reports input issue paths without echoing submitted values or preparing a write', async () => {
+    const { service, principal, handler, ctx } = await setup();
+    const id = randomUUID();
+    const result = await service.prepare(principal, {
+      id,
+      tool: 'fixture_batch',
+      input: { accountId: principal.accountId, count: 'private-invalid-value' },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', issues: [{ path: ['count'], message: 'Expected number' }] },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-invalid-value');
+    expect(await ctx.repos.pluginAuthority.findOperation({ ...principal, id })).toBeNull();
+    expect(handler).not.toHaveBeenCalled();
+  });
   it('uses locale-independent key ordering while retaining array order in durable input hashes', () => {
     const left = { 中: 3, a: { Z: 2, A: 1 }, list: [2, 1] };
     const right = { list: [2, 1], a: { A: 1, Z: 2 }, 中: 3 };

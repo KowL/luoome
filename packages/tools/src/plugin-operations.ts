@@ -43,9 +43,9 @@ const denied = (): ToolResult<never> => ({
   ok: false,
   error: { kind: 'permission_denied', required: 'current operation authority' },
 });
-const invalid = (): ToolResult<never> => ({
+const invalid = (issues: readonly z.ZodIssue[] = []): ToolResult<never> => ({
   ok: false,
-  error: { kind: 'invalid_input', message: 'Invalid or conflicting operation', issues: [] },
+  error: { kind: 'invalid_input', message: 'Invalid or conflicting operation', issues },
 });
 const hasForce = (input: unknown): boolean =>
   input !== null &&
@@ -101,7 +101,9 @@ export const createPluginOperationService = (options: {
   const grantInput = z
     .object({
       grant: PluginAutomationGrantSchema,
-      expectedVersion: z.number().int().positive().nullable(),
+      // 缺省即 null：null 表示“只允许创建 version 1，已存在则失败”，不会覆盖既有授权。
+      // 见 DecisionReviewContentSchema 的同类说明——原生模型调用省略可空属性而非写 null。
+      expectedVersion: z.number().int().positive().nullable().default(null),
     })
     .strict();
   const grantTool = defineTool({
@@ -173,8 +175,10 @@ export const createPluginOperationService = (options: {
   ): PluginOperation => {
     const input = policy.bind(raw, principal, id);
     // Freeze wire input; preserve the original tool's validation/default/transform pipeline.
-    const inputJson = pluginInputJson(input);
-    policy.tool.inputSchema.parse(JSON.parse(inputJson));
+    // 冻结的是“解析后”的输入：工具 schema 的默认值（缺省即 null）因此进入冻结内容，
+    // 于是“省略可空字段”与“显式写 null”是同一次操作，审批卡展示的也是真正会落库的内容。
+    const parsed = policy.tool.inputSchema.parse(JSON.parse(pluginInputJson(input)));
+    const inputJson = pluginInputJson(parsed);
     const now = options.now();
     return {
       id,
@@ -265,6 +269,13 @@ export const createPluginOperationService = (options: {
     }
   };
   return {
+    descriptors() {
+      return [...policies.values()].filter(allowed).map(({ tool }) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: z.toJSONSchema(tool.inputSchema, { io: 'input', unrepresentable: 'any' }),
+      }));
+    },
     prepare(principal: PluginPrincipal, request: { id: string; tool: string; input: unknown }) {
       return safe(async () => {
         const policy = policies.get(request.tool);
@@ -277,8 +288,19 @@ export const createPluginOperationService = (options: {
             kind: 'human',
             tokenHash: tokenHash(token),
           });
-        } catch {
-          return invalid();
+        } catch (error) {
+          return invalid(
+            error instanceof z.ZodError
+              ? error.issues.map((issue) => ({
+                  code: 'custom',
+                  path: issue.path,
+                  message:
+                    issue.code === 'invalid_type'
+                      ? `Expected ${issue.expected}`
+                      : `Invalid value (${issue.code})`,
+                }))
+              : [],
+          );
         }
         if (!(await repo.insertOperation(op))) {
           const existing = await repo.findOperation({ ...principal, id: request.id });

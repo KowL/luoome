@@ -12,8 +12,25 @@ import { toolResultJsonSchema } from './tools.js';
 export const MANUAL_OPERATION_TOOL = 'luoome_confirmed_operation';
 export const SCHEDULED_OPERATION_TOOL = 'luoome_scheduled_operation';
 const manualInput = z
-  .object({ id: z.uuid(), tool: z.string().min(1).max(120), input: z.unknown() })
-  .strict();
+  .object({
+    id: z
+      .uuid()
+      .describe('Required top-level UUID for this operation; use a new UUID for a new operation'),
+    tool: z.string().min(1).max(120),
+    input: z.unknown().optional(),
+    inputJson: z
+      .string()
+      .min(2)
+      .describe(
+        'Preferred for native calls: JSON.stringify of the business input object. Preserve JSON null, numbers and arrays; never use placeholder strings. Supply exactly one of inputJson or input.',
+      )
+      .optional(),
+  })
+  .strict()
+  .refine((value) => Object.hasOwn(value, 'input') !== Object.hasOwn(value, 'inputJson'), {
+    path: ['inputJson'],
+    message: 'Supply exactly one of input or inputJson',
+  });
 const scheduledInput = z
   .object({
     grantId: z.string().min(1).max(200),
@@ -82,10 +99,38 @@ export const createDshOperationHost = (
           return previous;
         }
         const parsed = manualInput.safeParse(execution.arguments);
-        if (!parsed.success) return { kind: 'deny', reason: 'Invalid operation envelope' };
-        const prepared = await service.prepare(principal, parsed.data);
+        if (!parsed.success)
+          return {
+            kind: 'deny',
+            reason: `Invalid operation envelope: ${JSON.stringify(
+              parsed.error.issues.map((issue) => ({
+                path: issue.path,
+                code: issue.code,
+                // 只回显越界的键名，不回显提交值。
+                ...(issue.code === 'unrecognized_keys' ? { keys: issue.keys } : {}),
+              })),
+            )}. The envelope accepts only id, tool and exactly one of input or inputJson; business parameters belong inside input or inputJson.`,
+          };
+        let input = parsed.data.input;
+        if (Object.hasOwn(parsed.data, 'inputJson')) {
+          try {
+            input = JSON.parse(parsed.data.inputJson as string);
+          } catch {
+            return { kind: 'deny', reason: 'Invalid operation inputJson: expected a JSON object' };
+          }
+          if (input === null || typeof input !== 'object' || Array.isArray(input))
+            return { kind: 'deny', reason: 'Invalid operation inputJson: expected a JSON object' };
+        }
+        const prepared = await service.prepare(principal, {
+          id: parsed.data.id,
+          tool: parsed.data.tool,
+          input,
+        });
         if (!prepared.ok)
-          return { kind: 'deny', reason: 'Operation cannot be prepared under current authority' };
+          return {
+            kind: 'deny',
+            reason: `Operation cannot be prepared: ${JSON.stringify(prepared.error)}`,
+          };
         const value = preparedInput.parse(prepared.data);
         if (!value.confirmationToken) {
           if (value.state === 'pending')
@@ -195,12 +240,60 @@ export const createDshOperationHost = (
         { type: 'text' as const, text: JSON.stringify(value) },
       ],
     };
+    const operations = service.descriptors();
+    const parameters = JSON.parse(JSON.stringify(z.toJSONSchema(manualInput, { io: 'input' })));
+    // MiniMax can omit nested nulls before returning native tool arguments.
+    // A JSON string preserves them; decode before the same domain validation and approval.
+    parameters.properties.inputJson.contentMediaType = 'application/json';
+    if (operations.length > 0) {
+      // Keep field types directly under input for providers that only inspect properties.
+      // The outer oneOf still binds each tool to its exact input and required fields.
+      const fields = new Map<string, Map<string, unknown>>();
+      for (const { inputSchema } of operations) {
+        for (const [name, schema] of Object.entries(inputSchema.properties ?? {})) {
+          const variants = fields.get(name) ?? new Map<string, unknown>();
+          variants.set(JSON.stringify(schema), schema);
+          fields.set(name, variants);
+        }
+      }
+      parameters.properties.input = {
+        type: 'object',
+        properties: Object.fromEntries(
+          [...fields].map(([name, variants]) => {
+            const schemas = [...variants.values()];
+            return [name, schemas.length === 1 ? schemas[0] : { anyOf: schemas }];
+          }),
+        ),
+        additionalProperties: true,
+      };
+      parameters.properties.tool.enum = operations.map(({ name }) => name);
+      parameters.properties.inputJson.contentSchema = {
+        anyOf: operations.map(({ inputSchema }) => inputSchema),
+      };
+      parameters.oneOf = operations.flatMap(({ name, description, inputSchema }) =>
+        [
+          { input: inputSchema },
+          { inputJson: { ...parameters.properties.inputJson, contentSchema: inputSchema } },
+        ].map((payload) => ({
+          type: 'object',
+          description,
+          properties: {
+            id: parameters.properties.id,
+            tool: { type: 'string', const: name },
+            ...payload,
+          },
+          required: ['id', 'tool', ...Object.keys(payload)],
+          additionalProperties: false,
+        })),
+      );
+    }
     removers.push(
       ctx.tools.register({
         name: MANUAL_OPERATION_TOOL,
         description:
-          '准备并逐次确认投资操作或定时授权；必须经当前会话的宿主审批。原始领域参数校验和业务回执继续生效。',
-        parameters: JSON.parse(JSON.stringify(z.toJSONSchema(manualInput, { io: 'input' }))),
+          '准备并逐次确认投资操作或定时授权。id 必须为 UUID，tool 为操作名。原生调用优先提供 inputJson（业务参数对象 JSON.stringify 后的字符串，schema 见 contentSchema），以保留 null/数字/数组；也可用 input 对象，二者必须且只能提供一个。必须经当前会话宿主审批；解析后的原始领域参数校验和业务回执继续生效。',
+        // Nested Zod schemas carry non-wire annotations too; detach the whole envelope.
+        parameters: JSON.parse(JSON.stringify(parameters)),
         output,
         execute: async (_input, execution) => {
           const ticket = tickets.get(execution.token);

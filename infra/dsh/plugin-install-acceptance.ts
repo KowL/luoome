@@ -1,30 +1,18 @@
-// M1c 隔离安装/加载验收：把 dsh-luoome 打成 tarball，解包到临时 DSH profile 的
-// node_modules，用真实 DSH CLI 加载生产 host，并验证 Node SQLite、只读/市场工具、原生确认
+// 隔离安装/加载验收：把 dsh-luoome 打成 tarball，在临时 DSH profile 中用 npm 安装插件与
+// 固定版本的 DSH，用该独立安装的 CLI 加载生产 host，并验证 Node SQLite、只读/市场工具、原生确认
 // policies、宿主认证路由与随包技能 catalog。
 //
 // 本节是「协议/装配验收」，不是真实模型质量验收：只调用宿主认证的只读 HTTP 路由、
-// 一个只读 catalog probe 插件和一个临时 profile，不启动模型、不触碰真实个人库或真实供应商。
+// 一个 catalog/native-call probe 插件和一个临时 profile，不启动模型、不触碰真实个人库或真实供应商。
 // 临时 DSH_HOME/profile 全部在 /tmp 下，结束（或 KEEP=1 时保留）清理。
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const repo = resolve(import.meta.dir, '../..');
 const packageDir = join(repo, 'packages/dsh-luoome');
-const cli = resolve(repo, 'node_modules/.bun/node_modules/@deepseek-ai/dsh/lib/bin.js');
-const dshModules = resolve(repo, 'node_modules/.bun/node_modules');
 const owner = Object.freeze({
   userId: 'plugin-acceptance-owner',
   accountId: 'plugin-acceptance-account',
@@ -100,6 +88,7 @@ interface Descendant {
 const root = await mkdtemp(join(tmpdir(), 'luoome-plugin-install-'));
 const workspace = join(root, 'workspace');
 const profileDir = join(root, 'profiles', profileName);
+const cli = join(profileDir, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 const luoomeHome = join(root, 'luoome-home');
 const children: ReturnType<typeof spawn>[] = [];
 const launched: { output: () => string }[] = [];
@@ -316,6 +305,8 @@ const readFrontmatterFields = (text: string): Map<string, string> => {
 };
 
 const summary: Record<string, unknown> = {};
+const redactDiagnostic = (text: string): string =>
+  text.replace(/([?&]token=)[A-Za-z0-9_-]+/g, '$1<redacted>');
 try {
   await mkdir(workspace, { recursive: true });
   await mkdir(profileDir, { recursive: true });
@@ -345,7 +336,7 @@ try {
   )
     throw new Error('client bundle must not inline React internals');
 
-  // 2) bun pm pack：验收包内容只含 dist/host.js + package.json。
+  // 2) bun pm pack：验收包只包含 host/client、manifest 与四条技能。
   await rm(join(root, 'pack'), { recursive: true, force: true });
   await mkdir(join(root, 'pack'), { recursive: true });
   run('bun', ['pm', 'pack', '--destination', join(root, 'pack')], { cwd: packageDir });
@@ -369,18 +360,37 @@ try {
   )
     throw new Error(`unexpected tarball entries: ${JSON.stringify(entries)}`);
 
-  // 3) 模拟安装：临时 profile 的 node_modules 挂载 DSH 安装依赖，解包 tarball 到
-  //    node_modules/dsh-luoome（manifest 用 file: 指向同一 tarball，证明可离线安装）。
-  const profileModules = join(profileDir, 'node_modules');
-  await mkdir(profileModules, { recursive: true });
-  for (const entry of await readdir(dshModules)) {
-    if (entry.startsWith('.')) continue;
-    await symlink(join(dshModules, entry), join(profileModules, entry), 'dir');
-  }
-  const installedDir = join(profileModules, 'dsh-luoome');
-  await mkdir(installedDir, { recursive: true });
-  run('tar', ['-xzf', packedTarball, '-C', installedDir, '--strip-components=1']);
+  // 3) 正常 npm 安装，不能靠解包或链接仓库依赖掩盖 tarball 的缺失/非法依赖。
+  const sourceManifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8')) as {
+    devDependencies: Record<string, string>;
+  };
+  const dshVersion = sourceManifest.devDependencies['@deepseek-ai/dsh'];
+  if (dshVersion === undefined) throw new Error('DSH install version is missing');
   await copyFile(packedTarball, join(profileDir, tarballName));
+  await writeFile(
+    join(profileDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: `dsh-profile-${profileName}`,
+        private: true,
+        type: 'module',
+        dependencies: {
+          '@deepseek-ai/dsh': dshVersion,
+          'dsh-luoome': `file:./${tarballName}`,
+        },
+        dsh: {
+          profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    cwd: profileDir,
+  });
+  const profileModules = join(profileDir, 'node_modules');
+  const installedDir = join(profileModules, 'dsh-luoome');
   // M4：安装产物必须随包分发 client bundle，package.json 声明 dsh.client 与 ./client 导出。
   const installedManifest = JSON.parse(
     await readFile(join(installedDir, 'package.json'), 'utf8'),
@@ -388,7 +398,12 @@ try {
     exports?: Record<string, unknown>;
     files?: string[];
     dsh?: { client?: { platform?: string; inject?: string[] } };
+    dependencies: Record<string, string>;
   };
+  for (const [name, version] of Object.entries(installedManifest.dependencies)) {
+    if (!name.startsWith('@deepseek-ai/') || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
+      throw new Error(`runtime dependency must be a pinned DSH package: ${name}@${version}`);
+  }
   if (installedManifest.exports?.['./client'] !== './dist/client.js')
     throw new Error('installed package must export ./client -> ./dist/client.js');
   if (installedManifest.dsh?.client?.platform !== 'web')
@@ -404,25 +419,9 @@ try {
   const installedClientText = await readFile(join(installedDir, 'dist', 'client.js'), 'utf8');
   if (installedClientText !== clientBundleText)
     throw new Error('installed client bundle must match the built dist/client.js');
-  await writeFile(
-    join(profileDir, 'package.json'),
-    `${JSON.stringify(
-      {
-        name: `dsh-profile-${profileName}`,
-        private: true,
-        type: 'module',
-        dependencies: { 'dsh-luoome': `file:./${tarballName}` },
-        dsh: {
-          profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
   await writeFile(join(profileDir, 'cordis.yml'), '[]\n');
-  // 只读 catalog probe：以真实 DSH 插件身份在宿主进程内调用 ctx.skills.list()/get()，
-  // 把已安装插件的技能目录写到文件。它不注册工具、不调模型、不写业务库。
+  // 经过真实 Loader 创建活 Agent 并执行 native 工具，覆盖生产插件作用域的身份 guard；
+  // HTTP /call 与根 Context 测试不会触发 Cordis 的 inject 检查。没有 Agent turn 或模型请求。
   const probePluginDir = join(profileModules, 'luoome-skills-probe');
   await mkdir(probePluginDir, { recursive: true });
   await writeFile(
@@ -443,7 +442,7 @@ try {
     join(probePluginDir, 'index.js'),
     `import { writeFileSync } from 'node:fs';
 export const name = 'luoome-skills-probe';
-export const inject = ['skills'];
+export const inject = ['skills', 'agents', 'tools'];
 const EXPECTED = ${JSON.stringify(SKILL_NAMES)};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const apply = async (ctx) => {
@@ -474,7 +473,35 @@ export const apply = async (ctx) => {
     report.skills = skills;
     report.ok = missing.length === 0;
     report.error = missing.length === 0 ? null : 'missing: ' + missing.join(', ');
+    const handle = await ctx.agents.create({
+      sessionId: 'plugin-native-probe',
+      agentOptions: { provider: 'no-model', model: 'no-model' },
+      meta: { cwd: process.env.LUOOME_SKILLS_CWD },
+    });
+    try {
+      const execute = (name, input) => ctx.tools.execute({
+        name,
+        arguments: input,
+        callId: crypto.randomUUID(),
+        agent: handle.agent,
+        signal: new AbortController().signal,
+      });
+      report.nativeRead = await execute('list_accounts', {});
+      if (report.nativeRead.isError || report.nativeRead.value?.ok !== true)
+        throw new Error('native read failed: ' + JSON.stringify(report.nativeRead));
+      report.nativeMarket = await execute('trial_strategy_version', {
+        strategyId: 'missing-probe-strategy',
+        baseVersionId: 'missing-base',
+        draftVersionId: 'missing-draft',
+        stockIds: ['600519.SH'],
+      });
+      if (report.nativeMarket.value?.error?.kind !== 'not_found')
+        throw new Error('native market guard failed: ' + JSON.stringify(report.nativeMarket));
+    } finally {
+      await handle.dispose();
+    }
   } catch (error) {
+    report.ok = false;
     report.error = error instanceof Error ? error.message : String(error);
   }
   writeFileSync(process.env.LUOOME_SKILLS_OUT, JSON.stringify(report));
@@ -990,6 +1017,9 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       name: tarballName,
       bytes: (await stat(packedTarball)).size,
       entries,
+      runtimeDependencies: installedManifest.dependencies,
+      installedWith: 'npm install --omit=dev --ignore-scripts --no-audit --no-fund',
+      dshVersion,
     },
     profile: {
       bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
@@ -1014,6 +1044,11 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       catalog: catalogSkills,
       legacyAbsent: [...LEGACY_SKILL_NAMES],
       tarballSkillEntries: expectedSkillEntries,
+    },
+    nativeCalls: {
+      via: 'installed plugin Loader scope + live Agent + ToolRuntime.execute (no model turn)',
+      read: skillsReport.nativeRead,
+      market: skillsReport.nativeMarket,
     },
     toolCall: {
       tool: 'list_accounts',
@@ -1056,18 +1091,22 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   console.log(JSON.stringify(summary, null, 2));
 } catch (error) {
   console.error(
-    JSON.stringify(
-      {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : null,
-        root,
-      },
-      null,
-      2,
+    redactDiagnostic(
+      JSON.stringify(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : null,
+          root,
+        },
+        null,
+        2,
+      ),
     ),
   );
   for (const [index, fixture] of launched.entries())
-    console.error(`--- DSH launch ${String(index + 1)} output ---\n${fixture.output()}`);
+    console.error(
+      `--- DSH launch ${String(index + 1)} output ---\n${redactDiagnostic(fixture.output())}`,
+    );
   console.error(`acceptance root kept for inspection: ${root}`);
   process.exitCode = 1;
 } finally {

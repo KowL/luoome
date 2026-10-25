@@ -511,12 +511,15 @@ describe('dsh-luoome production write policies', () => {
 });
 
 describe('dsh-luoome production apply entry', () => {
-  it('refuses to assemble when a required host service is missing, before any IO', async () => {
-    const home = join(tempRoot(), 'apply-missing');
-    const fake = createFakeHostContext({ omit: ['approval'] });
-    await expect(apply(fake.ctx, productionInput(home))).rejects.toThrow(/approval/);
-    expect(existsSync(home)).toBe(false);
-  });
+  it.each(['approval', 'agents'])(
+    'refuses to assemble when %s is missing, before any IO',
+    async (service) => {
+      const home = join(tempRoot(), 'apply-missing');
+      const fake = createFakeHostContext({ omit: [service] });
+      await expect(apply(fake.ctx, productionInput(home))).rejects.toThrow(service);
+      expect(existsSync(home)).toBe(false);
+    },
+  );
 
   it('registers read tools, market external tools and the read-only call route', async () => {
     const home = tempRoot();
@@ -673,6 +676,7 @@ const createFakeHostContext = (
     };
   if (!omit.includes('sessionController')) services.sessionController = {};
   if (!omit.includes('approval')) services.approval = {};
+  if (!omit.includes('agents')) services.agents = { get: () => undefined };
   services.tools = tools;
   const ctx = {
     get: (name: string) => services[name],
@@ -683,7 +687,7 @@ const createFakeHostContext = (
       return () => {};
     },
     tools,
-    agents: { get: () => undefined },
+    agents: services.agents,
     schedule: { catalog: async () => [] },
     webServer: services.webServer,
     connection: services.connection,

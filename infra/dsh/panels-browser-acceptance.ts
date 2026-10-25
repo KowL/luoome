@@ -619,6 +619,15 @@ try {
     !researchRequest.prompt.includes(fixtureInfo.strategyId)
   )
     throw new Error(`下钻请求内容不正确: ${JSON.stringify(researchRequest)}`);
+  // 官方 composer 是 contenteditable（不是 textarea）：草稿必须真的落到输入框里，
+  // 否则用户仍要手工复制标识，「在对话中研究此策略」就只是名义上的入口。
+  await page.waitFor(
+    `(() => {
+      const editor = document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]');
+      return editor !== null && editor.innerText.includes(${JSON.stringify(fixtureInfo.strategyId)});
+    })()`,
+    '研究提示草稿写入官方 composer',
+  );
   // 5) 刷新后仍正确（cookie 持久、state 与 DOM 重新对齐）。
   await page.navigate(`${origin}/`);
   await page.waitFor(`document.body.innerText.includes('看盘')`, '刷新后的工作台');

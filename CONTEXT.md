@@ -17,6 +17,8 @@
 回答“如何发现、评分并解释研究机会”。Strategy 是稳定身份，StrategyVersion 是不可变定义；
 版本必须先校验再发布。StrategyRun 记录一次执行，StrategyResult 是逐股规则事实，
 StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不等于交易。
+首次发布前，draft Strategy 的 valid 版本可以做非持久化研究试跑，不需要先激活或发布；
+它不写正式运行或改变发布状态。正式运行仍要求 active，paused / archived 不接受试跑。
 
 StrategyRun 的 `status` 只表达执行生命周期：`running / complete / failed`。`complete` 表示执行已结束且
 结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的

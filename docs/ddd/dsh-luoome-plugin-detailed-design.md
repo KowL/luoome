@@ -387,3 +387,132 @@ client 接 no-store API 与 SSE，账户切换后的旧表单必须拒绝；输�
 - **`record_advice_outcome` 历史表评审**：AdviceOutcome 读面已完全由 DecisionReview 派生（`get_advice`/stats/calibration/weekly report），`advice_outcomes` 表仅历史/审计用途，生产读路径不依赖；结论为**不双写、不改 DDL**，仅在工具/决策复盘代码注释中标注持久化口径。若未来删除该表需单独立项迁移。
 - **测试/验收**：新增 4 项（有事实时装配/写回、无事实不可写、固定 clock 早于/晚于 validUntil 的默认与 includeExpired、过期过滤先于 limit）；`test` 283 文件/2673 项、`test:db` 601 项、typecheck/lint/check:layers/git diff 全通过。
 - **残余缺口**：对话中刷新的 external 市场事实（指数/新闻等）仍未进入 context（market snapshot/news 无 repo 持久化，装配禁止外部 IO）——若要 Advice 引用刚刷新证据，需后续决定持久化 market snapshot/news 或给 context 增加受控 facts 输入；`computeRelevantStockIds` 当前为市场级（所有账户持仓 ∪ 全局 Watchlist），若要求严格 account-scoped 个人上下文需另改。
+
+### 9.15 真实模型 smoke 与分发收尾（2026-10-25）
+
+本轮使用本机既有 `minimax-cn` 配置、Node 24 与固定的 DSH `0.2.1-rc.2`，在临时
+DSH_HOME / Node SQLite 上做真实模型与官方 Web 审批的辅助 smoke。数据均为合成，市场适配器
+访问真实公共数据源；凭据只经子进程环境传递。不读取真实个人事实库，不修改生产服务器或原模型配置。
+
+**真实模型发现并修正的阻塞**：
+
+- 生产插件遗漏 `agents` inject，HTTP 读面正常但模型原生调用失败。生产依赖检查与插件声明现在共用清单；安装验收通过真实 Loader 创建活 Agent，执行 native read/market，能在修复前复现同一错误。
+- 原生确认入口只暴露任意 JSON，模型无法取得业务参数类型；prepare 的参数错误又被统一显示为权限拒绝。操作服务现在从当前 policy 的 Zod schema 派生契约，入口同时展示字段类型与 tool/input 精确约束；错误只保留字段路径、类型要求或错误代码，不回显提交值。顶层 UUID 与三字段包络也明确说明。审批、scope、CAS 与回执校验不变，PTC 仍经过相同 guard。
+- 新建 draft Strategy 无法在首次发布前试跑。现在 valid 版本允许非持久化研究试跑；不改变 Strategy/版本发布状态、不保存正式 run。正式运行仍要求 active，paused/archived 继续拒绝；原有 evaluation 契约不变。
+
+**分发修正**：已编入 host bundle 的 `@luoome/*` 与 Zod 移至构建依赖；tarball 的运行依赖只有固定版本的 DSH SDK。
+`test:plugin-install` 改为实际 npm 安装插件与 DSH，使用独立安装的 CLI 启动，取消链接仓库模块的模拟安装；
+失败诊断隐藏临时登录 token。尚未向 registry 发布，也未删除旧 MCP/Bun 源码。
+
+**真实四旅程结果与边界**：
+
+| 旅程 | 已核对结果 |
+|---|---|
+| 策略制定 | 原生审批创建策略/v2 并独立校验；补齐合成 StockUniverse 后，在 draft 状态完成单股 v1/v2 试跑，`persisted=false`、正式 run 为 0；PTC 经独立官方审批发布 v2，策略面板回读同一版本 |
+| 策略结果研究 | MiniMax M3.1 Flash 读取确切 run/version/insight fact，引用真实标识，披露无观察与评分轨迹缺口；仅解释，不写库 |
+| 复盘与明确反馈 | MiniMax M3 经官方 Node PTC 保存笔记为 revision 2；收到明确更正及 changeNote 后，经另一审批保存 ignored 为 revision 3，盈亏缺省、原笔记保留；浏览器 DOM、`/api/luoome/state`、工具读面与 SQLite 一致 |
+| 每日市场分析 | MiniMax M3.1 Flash 刷新真实指数、情绪、新闻与行情状态，分别披露 source/dataAsOf、partial/unavailable 和个人样本限制；只保留会话结论 |
+
+这是**由 Codex 引导并逐卡操作浏览器的辅助 smoke**，不替代用户亲自验收，也不是无人干预质量验收。过程中模型发生猜参、越过
+“不读源码”提示读取仓库源码等行为，不能据此宣称模型总能遵守技能。未因此放宽文件策略或领域校验。
+复盘反馈更改已填盈亏时仍要求更正原因；缺少原因的已审批请求被领域拒绝，没有部分写入。
+
+**复盘写回已补跑 native 验收**（无人干预、无浏览器）：修复后可空字段的复盘写回在
+`DSH_TOOLS_MODE=native` 下由真实 MiniMax 完成"模型调用 → 原生审批 → 领域写回 → SQLite"全链路，
+两种模型、两种参数通道的结果见下节。上一轮该旅程用 PTC 绕行，是因为原生参数兼容性未解决；
+本轮已在默认 native 配置下复现并验证该旅程的核心写回。策略/研究/市场分析三个旅程仍是上一轮的
+辅助 smoke，本轮未重跑，不宣称无人干预通过。
+
+**MiniMax 原生参数兼容性已定位并修复**：根因不是模型"把 null 写成占位字符串"，而是
+**模型在填对象参数时用"省略属性"表达"无值"，而 luoome 的写契约把"无值"定义成 `null` 并把这些
+属性标成 required**。两者叠加，领域按"缺必填字段"拒绝整次写回，表现为复盘保存永远失败。
+
+**根因测量**（真实 MiniMax + 真实 luoome wire schema，自然提示词，不提示 null 怎么写）：
+
+| 通道 | schema | 省略 `triggerFeedback` | 写出真 null | 领域可接受 |
+|---|---|---|---|---|
+| `input`（对象） | 可空且 required（修复前） | 2/6 | 4/6 | **2/6（失败）** |
+| `input`（对象） | 可空且 optional（修复后） | 3/6 | 3/6 | **6/6** |
+| `inputJson`（JSON 字符串） | 可空且 required（修复前） | 0/6 | 6/6 | 6/6 |
+| `inputJson`（JSON 字符串） | 可空且 optional（修复后） | 0/6 | 6/6 | 6/6 |
+
+- 对象通道里模型**确实不写 JSON null**，而是直接省掉该属性；`inputJson` 字符串通道里模型逐字生成
+  JSON 文本，null 原样保留（25/25）。两条通道的差别是模型"填对象"与"生成 JSON 文本"的差别，
+  与供应商转换或 SDK 无关。
+- 57 次脚本化探测调用（其中 38 次使用 luoome 真实 wire schema）里**没有出现**把 null 写成占位字符串
+  `"null"` 的情况；上一轮"占位字符串"的观察在本轮未能复现，真实失败模式是**省略**。
+  领域仍拒收 `"null"` 这类占位值（不变量不放宽）。
+- 修复前的真实失败签名（真实 DSH + 真实模型 + 原生审批）：
+  `Operation cannot be prepared: {"kind":"invalid_input","issues":[{"path":["content","triggerFeedback"],"message":"Invalid value (invalid_value)"}]}`，
+  审批卡不打开、写回不发生。
+
+**修复**：
+
+- 可空业务字段在 wire 上改为**可选**（Zod `.default(null)`）：领域语义仍是"只接受显式 null"，
+  但"省略"等价于 null，模型不必再做一件它做不可靠的事。落库/审批卡展示的仍是显式 null。
+- 操作冻结的是**解析后**的输入：工具 schema 的默认值进入冻结内容，于是"省略可空字段"与
+  "显式写 null"是同一次操作（同一 `inputHash`，重放不判冲突），审批卡展示的正是会落库的内容。
+- 保留 JSON 字符串 `inputJson` 通道：它是 null 的逐字运输通道，模型逐字生成时 null 不丢。
+
+**真实模型验收**（真实 DSH CLI + 真实 AgentLoop + 真实原生审批 + Node SQLite，`DSH_TOOLS_MODE=native`，
+合成数据，MiniMax M3.1-Flash 与 M3；每轮独立临时 DSH_HOME）：
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 强制对象通道 + 自然提示词（复盘笔记写回） | **2/5 通过**（3 次模型省略字段 → 领域拒绝 → 无审批、无写回） | **5/5 通过**（5 次模型全部省略字段，领域按 null 接受，落库为显式 null） |
+| 模型自选通道（复盘笔记写回，M3.1-Flash / M3） | 通过（模型自选 `inputJson`，null 逐字保留） | 通过（M3.1-Flash 与 M3 各 2 次均通过） |
+
+修复后的 5 次对象通道验收里，模型 **5/5 省略** `triggerFeedback`——因为 schema 不再要求它——
+而 5/5 落库为显式 null。这正是修复意图：不再要求模型做它做不到的事，让领域接受它稳定会做的表达。
+
+**自动回归**：`test:all`（2690 Node/Vitest、601 Bun DB、235 Node DB、549 Web、12 宿主 e2e、7 分析面 e2e）、
+typecheck、lint（0 error、24 条既有 warning）、build、check:layers、plugin-install、Node24 mvp-journeys、
+panels-browser、plugin-switch 全部通过。新增回归覆盖真实插件作用域、模型参数 schema、错误去敏、
+首次发布前试跑，以及**可空字段省略≡null**（core 领域单测 6 项 + 宿主 e2e 1 项：省略可空字段的原生调用
+必须能落库为显式 null、省略与显式 null 是同一次操作、wire schema 不得要求任何可空业务字段）。
+去敏浏览器/DB/API 证据保存在本地 `.tmp/dsh-minimax-audit/`，不提交会话或凭据。
+
+external 市场事实进入 AnalysisContext、账户范围收紧、P2/P3/P4、registry 发布与旧入口删除仍为后续工作；
+本轮不将它们或真实生产切换标为完成。
+
+### 9.16 生产切换与真实部署记录（2026-10-25）
+
+本节记录由用户明确要求后在真实生产服务器执行的切换。DDD 主文档 §11 原先把「真实生产服务器已经切换」
+列为非目标，本次是超出原口径的追加动作，因此把范围、证据与遗留问题写在这里，而不是改写原口径。
+
+**发布与运行形态**：
+
+- 四个连续 release：`dsh-20261025T014547Z`（首个纯插件版本）→ `dsh-20261025T023035Z`（composer 缺陷修复）
+  → `dsh-20261025T024614Z`（profile seed 修复）→ `dsh-20261025T025419Z`（当前线上：合并并行开发者在工作树里的
+  在途改动，含 §9.15 记录的 MiniMax 可空字段缺省修正）；镜像 `luoome-dsh:dsh-20261025T025419Z`（1.19 GB）。
+  更早的 `dsh-20261024T122611Z` 与四个本次 release 全部保留，可直接回滚。
+- compose 只剩 `dsh-web`（Node + DSH 0.2.1-rc.2 + `dsh-luoome` 插件）与 `caddy` 两个服务；
+  `dsh-worker` 容器与 `LUOOME_MCP_*` / `DSH_WORKER_INTERVAL` 随旧 MCP/Bun 栈退役。
+- 容器内只有一个 DSH 进程，没有 MCP server、Bun CLI、analysis worker、queue probe。
+- 事实库沿用原卷：accounts=1 / strategies=3 / strategy_versions=21，写面 8 条确认 policy、只读面 45 个工具，
+  `trade` 与队列管理不暴露，`automationsEnabled=false` 硬编码，owner 绑定缺一即拒绝启动。
+
+**验收证据**：宿主侧脚本 0 failures；容器内 HTTP 20 项全 PASS（未认证 401、登录 303、profile 200、
+三面板 state 200 + no-store、写工具被通用 call 拒绝）；真实 Chrome 浏览器核对三个面板渲染真实事实、
+state 路由返回对应工具投影、控制台无错误、桌面无横向溢出；公网 `/` → 302、无/错 basic auth → 401。
+详见服务器 `/opt/luoome/DEPLOYMENT.md` 的同名记录。
+
+**切换中发现并修复的两个缺陷**（都有回归）：
+
+- 官方 composer 是 Lexical 的 `contenteditable` 而不是 textarea，旧实现只找 textarea，
+  「在对话中研究此策略」只记录请求、输入框始终为空，用户仍要手工复制标识。
+  新增 `packages/dsh-luoome/src/client/composer.js`（contenteditable 走浏览器原生插入命令 + 面板切换后重试），
+  回归为 `composer.test.js`（5 项）与 `infra/dsh/panels-browser-acceptance.ts` 的新断言。
+- profile seed 每次重写 `cordis.patch.yml`，把 DSH 自己写入的 `ui-settings-general`（已读提示版本）抹掉，
+  用户每次升级都重弹「预览版说明」。现在插件挂载已正确时保留原文件，回归为 `deploy/dsh/profile-seed.test.ts`（3 项）。
+
+**没有关闭的缺口**：
+
+- 五个 batch 没有迁移。既有 5 条日程（`schedule-700c645c…` / `0fc9b7f8…` / `48ab151e…` / `aba73d1c…` /
+  `8b97bef8…`，均绑定 `session-75edb123-…`，状态 active，ID 与 cron 未动）原先依赖的 `luoome-batch`
+  MCP 实例已退役，到点会唤起会话但批处理工具不可用；是否改期到 09:35、改绑新会话或暂停待产品决定。
+- 「核心指数 / 市场温度」在非交易日显示「不是可确认的 A 股交易日」——与 2026-10-24 记录的
+  `get_ashare_sentiment` 校验缺陷同源，根因未修，只是暴露为可读说明。
+- MiniMax 原生参数兼容性问题仍未解决；生产实际模型是 `deepseek-flash`（`deepseek-official`），
+  默认仍是 native 模式，异常时可用 `DSH_TOOLS_MODE=ptc` 临时切换。
+- 真实供应商与无人干预的模型质量验收未做；旧 MCP/Bun 源码按 P5 再删。

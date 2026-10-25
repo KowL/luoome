@@ -29,7 +29,7 @@ whenToUse: 用户要求新建策略、修改已有策略规则、解释策略定
    - 变更摘要与 factReferences；
    - 下一步将执行的写入动作和会产生的实体。
 4. **逐项写入，每次独立原生审批**：
-   - 所有写入都经 DSH 原生确认操作 `luoome_confirmed_operation`（参数为 id、tool、input 三个字段）；DSH 冻结参数并弹出审批卡，只有用户实际点「允许一次」才执行；
+   - 所有写入都经 DSH 原生确认操作 `luoome_confirmed_operation`（id、tool 加 inputJson 或 input）；DSH 冻结解析后的参数并弹出审批卡，只有用户实际点「允许一次」才执行；
    - 新建策略：tool 取 `create_strategy`，必要时用 copyFromStrategyId 复制内置策略作基线；
    - 新版本：tool 取 `create_strategy_version`，把未持久化草案变成 draft 版本，validationStatus 为 pending；
    - 静态校验：tool 取 `validate_strategy_version`，展示 referencedFields、requiredLookback 与 validationErrors；
@@ -39,6 +39,8 @@ whenToUse: 用户要求新建策略、修改已有策略规则、解释策略定
 
 ## 审批与授权纪律
 
+- 原生调用优先用 inputJson 字符串：按对应 tool 的 input/contentSchema 将业务参数序列化为 JSON，保留 null、数字和数组。与 input 对象二选一；不得把 null 改成占位字符串或省略必填字段。
+- 写入参数以 `luoome_confirmed_operation` 中对应 tool 的 input schema 为准；不要用空载荷或猜测工具名探测写接口。invalid_input 先按字段路径纠正参数，不能将其解释成缺少用户授权。
 - 审批结果只来自 DSH 原生审批卡；模型不得自报 approved、callId、taskId 或 prompt 文本作为授权。
 - 用户未批准、拒绝、取消、超时、切换账户或从子 Agent 发起时，一律视为未执行，不重试写入。
 - 用户说「先做出来看看」「你看着办」不等于发布授权；创建与校验通过也不隐含发布，发布必须是一次明确的独立批准。

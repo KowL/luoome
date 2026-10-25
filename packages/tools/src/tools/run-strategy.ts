@@ -100,9 +100,8 @@ const resolveVersion = async (
   const strategy = await ctx.repos.strategy.findById(strategyId);
   if (strategy === null) return errNotFound('Strategy', strategyId);
   if (strategy.status !== 'active') {
-    // evaluation scope（绑定 evaluation session 的持久化验证 run）允许 draft Strategy：
-    // AI 新策略首发前的独立验证（M2 §9.2），不产生生产信号；operational 仍要求 active。
-    if (!(allowUnpublishedForEvaluation && strategy.status === 'draft')) {
+    // 首次发布前允许非持久化试跑和绑定 session 的 evaluation；正式运行仍要求 active。
+    if (!(strategy.status === 'draft' && (allowDraft || allowUnpublishedForEvaluation))) {
       return errInvalidInput(`Strategy 不是 active: ${strategyId}`);
     }
   }

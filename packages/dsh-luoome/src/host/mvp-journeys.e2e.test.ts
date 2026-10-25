@@ -60,6 +60,7 @@ import { seedData } from '@luoome/db/memory';
 import { createNodeDrizzleRepos, type NodeDrizzleReposHandle } from '@luoome/db/node';
 import { analysisHash, buildContext, toolRegistry } from '@luoome/tools';
 import { seedTestStockUniverse } from '@luoome/tools/testing';
+import Ajv2020 from 'ajv/dist/2020.js';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { createDshOperationHost } from './dsh-authority.js';
 import {
@@ -236,6 +237,7 @@ interface JourneyFixture {
   readonly market: ControlledMarketAdapter;
   readonly model: ScriptedModel;
   readonly approvals: ApprovalOutcome[];
+  readonly approvalReasons: string[];
   readonly results: { name: string; value: unknown; isError: boolean }[];
   readonly read: ReturnType<typeof createReadSurface>;
   readonly marketSurface: ReturnType<typeof createMarketSurface>;
@@ -336,7 +338,11 @@ const createJourneyFixture = async (
   });
 
   const approvals = [...(options.approvals ?? [])];
-  ctx.on('approval/request', async () => approvals.shift() ?? 'rejected');
+  const approvalReasons: string[] = [];
+  ctx.on('approval/request', async (request) => {
+    approvalReasons.push(request.reason ?? '');
+    return approvals.shift() ?? 'rejected';
+  });
   const results: { name: string; value: unknown; isError: boolean }[] = [];
   ctx.on('tools/result', (execution, result) => {
     results.push({
@@ -383,6 +389,7 @@ const createJourneyFixture = async (
     market,
     model,
     approvals,
+    approvalReasons,
     results,
     read,
     marketSurface,
@@ -420,6 +427,247 @@ const confirmed = async (
 };
 
 describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite）', () => {
+  it('native confirmation exposes typed operation inputs and distinguishes invalid input from denial', async () => {
+    const fixture = await createJourneyFixture();
+    try {
+      const definition = fixture.ctx.tools.get(MANUAL_OPERATION_TOOL);
+      if (definition === undefined) throw new Error('Missing native confirmation tool');
+      expect(definition.parameters).toMatchObject({
+        properties: {
+          inputJson: { type: 'string', contentMediaType: 'application/json' },
+          input: {
+            type: 'object',
+            properties: {
+              definition: {
+                type: 'object',
+                properties: {
+                  signals: { properties: { entry: { type: 'array' } } },
+                },
+              },
+            },
+          },
+        },
+      });
+      const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(
+        definition.parameters,
+      );
+      const operationId = randomUUID();
+      const input = {
+        id: operationId,
+        tool: 'create_strategy_version',
+        input: { strategyId: 'smoke-strategy', definition: STRATEGY_DEFINITION },
+      };
+      expect(validate(input), JSON.stringify(validate.errors)).toBe(true);
+      const jsonInput = {
+        id: operationId,
+        tool: input.tool,
+        inputJson: JSON.stringify(input.input),
+      };
+      expect(validate(jsonInput), JSON.stringify(validate.errors)).toBe(true);
+      expect(validate({ ...input, inputJson: jsonInput.inputJson })).toBe(false);
+      expect(validate({ id: operationId, tool: input.tool })).toBe(false);
+      const invalidEnvelope = await fixture.ctx.tools.execute({
+        name: MANUAL_OPERATION_TOOL,
+        arguments: { ...input, id: 'private-invalid-id' },
+        agent: fixture.agent,
+        callId: ToolCallId(randomUUID()),
+        signal: new AbortController().signal,
+      });
+      expect(invalidEnvelope.isError).toBe(true);
+      expect(JSON.stringify(invalidEnvelope)).toContain('id');
+      expect(JSON.stringify(invalidEnvelope)).toContain('invalid_format');
+      expect(JSON.stringify(invalidEnvelope)).not.toContain('private-invalid-id');
+      const malformed = {
+        ...input,
+        input: {
+          ...input.input,
+          definition: { ...STRATEGY_DEFINITION, signals: { entry: '', exit: '', risk: '' } },
+        },
+      };
+      expect(validate(malformed)).toBe(false);
+      expect(validate({ ...input, tool: 'add_trade' })).toBe(false);
+      const result = await fixture.ctx.tools.execute({
+        name: MANUAL_OPERATION_TOOL,
+        arguments: malformed,
+        agent: fixture.agent,
+        callId: ToolCallId(randomUUID()),
+        signal: new AbortController().signal,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('invalid_input');
+      expect(JSON.stringify(result)).toContain('signals');
+      expect(fixture.approvals).toHaveLength(0);
+      expect(
+        await fixture.repos.pluginAuthority.findOperation({
+          ...fixture.principal,
+          id: operationId,
+        }),
+      ).toBeNull();
+    } finally {
+      await fixture.close();
+    }
+  });
+  it('native JSON input preserves null before approval and rejects malformed or ambiguous inputs', async () => {
+    const fixture = await createJourneyFixture();
+    try {
+      const advice = testAdviceFor(TEST_STOCKS[0]?.id ?? '600519.SH', () => new Date(NOW));
+      await fixture.repos.advice.save(advice);
+      const context = dataOf<{ context: { contextHash: string } }>(
+        (
+          await fixture.execute('get_decision_review_context', {
+            subject: { kind: 'advice', id: advice.id },
+          })
+        ).value,
+      );
+      const input = {
+        subject: { kind: 'advice', id: advice.id },
+        contextHash: context.context.contextHash,
+        expectedRevision: 0,
+        content: {
+          tradeIds: [],
+          adviceFeedback: null,
+          triggerFeedback: null,
+          note: '原生 JSON：保留 null、空数组、0 与 "引号"\\路径',
+        },
+      };
+      const id = randomUUID();
+      const envelope = { id, tool: 'save_decision_review' };
+      for (const wire of [
+        { inputJson: '{private-invalid-json' },
+        { inputJson: 'null' },
+        { inputJson: '[]' },
+        { inputJson: '"private scalar"' },
+        { inputJson: JSON.stringify(input), input },
+        {},
+        {
+          inputJson: JSON.stringify({
+            ...input,
+            content: { ...input.content, triggerFeedback: 'null' },
+          }),
+        },
+      ]) {
+        const result = await fixture.execute(MANUAL_OPERATION_TOOL, { ...envelope, ...wire });
+        expect(result.isError, JSON.stringify(result)).toBe(true);
+        expect(JSON.stringify(result)).not.toContain('private-invalid-json');
+        expect(JSON.stringify(result)).not.toContain('private scalar');
+      }
+      expect(fixture.approvals).toHaveLength(0);
+      expect(
+        await fixture.repos.pluginAuthority.findOperation({ ...fixture.principal, id }),
+      ).toBeNull();
+      fixture.approvals.push('allowed-once');
+      const saved = await fixture.run({
+        name: MANUAL_OPERATION_TOOL,
+        input: { ...envelope, inputJson: JSON.stringify(input) },
+      });
+      expect(saved?.isError, JSON.stringify(saved)).toBe(false);
+      expect(saved?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+      expect(fixture.approvalReasons).toHaveLength(1);
+      expect(fixture.approvalReasons[0]).toContain('"triggerFeedback":null');
+      expect(fixture.approvalReasons[0]).toContain('"expectedRevision":0');
+      const review = await fixture.repos.decisionReview.findBySubject({
+        accountId: fixture.principal.accountId,
+        subject: { kind: 'advice', id: advice.id },
+      });
+      expect(review?.revision.content).toEqual(input.content);
+      const replay = await fixture.execute(MANUAL_OPERATION_TOOL, { ...envelope, input });
+      expect(replay.isError).toBe(false);
+      expect(replay.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+      expect(fixture.approvalReasons).toHaveLength(1);
+      expect(
+        (
+          await fixture.repos.decisionReview.findBySubject({
+            accountId: fixture.principal.accountId,
+            subject: { kind: 'advice', id: advice.id },
+          })
+        )?.review.currentRevision,
+      ).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+  it('native JSON input omits nullable business fields: wire 不再要求 null，冻结与落库仍是显式 null', async () => {
+    const fixture = await createJourneyFixture();
+    try {
+      // 回归根因：MiniMax 原生工具调用填对象参数时会省略可空属性而不是写 null。
+      // wire schema 不得再要求模型写 null，否则整次写回会被领域按“缺必填字段”拒绝。
+      const definition = fixture.ctx.tools.get(MANUAL_OPERATION_TOOL);
+      const parameters = definition?.parameters as {
+        oneOf?: {
+          properties?: {
+            tool?: { const?: string };
+            input?: { required?: string[]; properties?: { content?: { required?: string[] } } };
+          };
+        }[];
+      };
+      const branches = parameters.oneOf ?? [];
+      const reviewBranch = branches.find(
+        (branch) => branch.properties?.tool?.const === 'save_decision_review',
+      );
+      expect(reviewBranch?.properties?.input?.properties?.content?.required).toEqual(['tradeIds']);
+      const automationBranch = branches.find(
+        (branch) => branch.properties?.tool?.const === 'configure_plugin_automation',
+      );
+      expect(automationBranch).toBeDefined();
+      expect(automationBranch?.properties?.input?.required).not.toContain('expectedVersion');
+
+      const advice = testAdviceFor(TEST_STOCKS[0]?.id ?? '600519.SH', () => new Date(NOW));
+      await fixture.repos.advice.save(advice);
+      const context = dataOf<{ context: { contextHash: string } }>(
+        (
+          await fixture.execute('get_decision_review_context', {
+            subject: { kind: 'advice', id: advice.id },
+          })
+        ).value,
+      );
+      // 模型省略了 adviceFeedback / triggerFeedback（MiniMax 的原生行为）。
+      const content = { tradeIds: [], note: '原生 JSON：省略可空字段' };
+      const envelope = { id: randomUUID(), tool: 'save_decision_review' };
+      const input = {
+        subject: { kind: 'advice', id: advice.id },
+        contextHash: context.context.contextHash,
+        expectedRevision: 0,
+        content,
+      };
+      fixture.approvals.push('allowed-once');
+      const saved = await fixture.run({
+        name: MANUAL_OPERATION_TOOL,
+        input: { ...envelope, input },
+      });
+      expect(saved?.isError, JSON.stringify(saved)).toBe(false);
+      expect(saved?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+      // 冻结内容与审批卡展示的是真正会落库的显式 null。
+      expect(fixture.approvalReasons[0]).toContain('"triggerFeedback":null');
+      expect(fixture.approvalReasons[0]).toContain('"adviceFeedback":null');
+      const review = await fixture.repos.decisionReview.findBySubject({
+        accountId: fixture.principal.accountId,
+        subject: { kind: 'advice', id: advice.id },
+      });
+      expect(review?.revision.content).toEqual({
+        tradeIds: [],
+        adviceFeedback: null,
+        triggerFeedback: null,
+        note: '原生 JSON：省略可空字段',
+      });
+      // 省略与显式 null 是同一次操作：同一 id 的重放不能被判为冲突。
+      const replay = await fixture.execute(MANUAL_OPERATION_TOOL, {
+        ...envelope,
+        input: { ...input, content: { ...content, adviceFeedback: null, triggerFeedback: null } },
+      });
+      expect(replay.isError, JSON.stringify(replay)).toBe(false);
+      expect(replay.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+      expect(
+        (
+          await fixture.repos.decisionReview.findBySubject({
+            accountId: fixture.principal.accountId,
+            subject: { kind: 'advice', id: advice.id },
+          })
+        )?.review.currentRevision,
+      ).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  });
   it('旅程 1：策略制定 create/version/validate 分别审批，trial 不落库，publish 独立审批后回读', async () => {
     const fixture = await createJourneyFixture();
     try {

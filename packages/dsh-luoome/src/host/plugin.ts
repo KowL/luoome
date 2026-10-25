@@ -5,7 +5,7 @@
 // 来自受信任部署环境，不接受 HTTP/模型参数提升。M3b 起随包注册四个投研技能；M4 起
 // 提供宿主认证的 GET /api/luoome/state?panel=overview|strategies|review 与随包 client bundle。
 import type { Context } from '@deepseek-ai/cordis';
-import { apply as applyProductionHost } from './production.js';
+import { apply as applyProductionHost, REQUIRED_HOST_SERVICES } from './production.js';
 import { registerBundledSkills } from './skills.js';
 
 export {
@@ -57,14 +57,10 @@ export {
 
 /**
  * DSH/Cordis 插件依赖声明：缺少任一宿主服务时插件不激活，而不是降级成无认证/半成品入口。
- * `tools` 由 DSH base 提供；其余四项是 mountDshWebProfile 的真实依赖。
+ * 身份 guard 在工具执行时读取活 Agent；必须在插件作用域声明该依赖。
  */
 export const inject = [
-  'connection',
-  'webServer',
-  'sessionController',
-  'approval',
-  'tools',
+  ...REQUIRED_HOST_SERVICES,
   // 随包技能注册需要 DSH skill registry；缺失时插件不激活（fail-loud），不降级成无技能启动。
   'skills',
 ] as const;

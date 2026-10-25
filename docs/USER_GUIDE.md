@@ -445,6 +445,14 @@ DSH 侧栏有三个 luoome 面板：
 | `daily-market-analysis` | 每日市场分析 | 经精确 market external 白名单刷新指数/情绪/要闻/行情，保留 source/dataAsOf/partial/unavailable；形成 Advice 时另取有效 context 并经原生审批写回 |
 
 技能本身不授予权限：能调哪些工具仍由插件的 read/market/policy 面决定；写操作一律要 DSH 原生审批。
+原生确认入口按每项操作的领域 Zod schema 提供参数契约。invalid_input 会返回字段路径与类型要求，
+表示参数未通过校验，不代表缺少人工授权；纠正参数后仍需独立审批，不用写调用探测工具或权限。
+当前固定 SDK 下，MiniMax M3/M3.1 Flash 的原生调用**不会稳定写出 JSON null**——它在填对象参数时
+用"省略该属性"表达"无值"。luoome 的写契约已按此调整：可空业务字段（如复盘的 `triggerFeedback`、
+`adviceFeedback`、`note`）在参数契约上是可选的，**省略即 null**，领域只接受显式 null
+（字符串 `"null"` 这类占位值仍被拒）。因此复盘保存与反馈写回在默认 native 配置下已实测通过，
+不再需要 `DSH_TOOLS_MODE=ptc`。PTC 仍是官方备选通道，需要时在启动 DSH 进程时显式设置即可，
+默认配置不会自动切换。完整边界见[真实模型验收记录](./ddd/dsh-luoome-plugin-detailed-design.md#915-真实模型-smoke-与分发收尾2026-10-25)。
 旧 `.dsh/skills/`（`morning-brief`、`stock-deep-dive`、`decision-journal`、`luoome-batch`、
 `analysis-worker`）属于旧 MCP 过渡形态，默认部署不安装；`analysis-worker` 仅用于手动 worker 验收。
 
@@ -498,6 +506,11 @@ prompt 直接写清调哪个工具、失败怎么汇报。细节见技能 `luoom
 
 前置：目标机器有 Docker/Compose；Node ≥22.22（默认部署由 DSH 用 Node 运行插件，运行期不需要 Bun）；
 从 `deploy/dsh/production.env.example` 复制私有 env 文件并填写（不要提交）。
+
+插件 tarball 的运行依赖只包含固定版本的 DSH SDK；`@luoome/*` 与 Zod 是构建依赖，已编入 host bundle。
+目标机器可以用 `npm install --omit=dev <插件 tarball 路径>` 正常安装，无需解析 workspace 或链接仓库模块。
+`bun --no-env-file run test:plugin-install` 会在临时 profile 中实际执行 npm 安装并启动独立 DSH CLI，
+还会用活 Agent 执行原生工具，验证 HTTP 之外的插件作用域与权限检查；此验收不调用模型。
 
 **首次部署/切换**
 
@@ -744,8 +757,9 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 - 默认部署已切纯插件：`dsh-web`（Node + DSH + dsh-luoome）与 `caddy` 两个服务，没有 MCP/Bun/
   worker/queue probe 进程；插件 profile 由 `deploy/dsh/profile-seed.mjs` 装配。安装、升级、
   一致性备份与回退步骤见 [7.7](#77-安装升级备份与回退默认纯插件部署)。
-- 旧 MCP 过渡形态源码保留但默认不启动；仓库只完成隔离切换/回退演练，**尚未在真实生产服务器
-  执行切换**，旧 MCP/Bun 源码尚未删除。
+- 旧 MCP 过渡形态源码保留但默认不启动；仓库完成隔离切换/回退演练后，生产服务器已于
+  2026-10-25 切到纯插件形态（切换记录见服务器 `/opt/luoome/DEPLOYMENT.md`），旧 MCP/Bun
+  源码尚未删除（P5）。
 
 ### 13.3 延伸阅读
 

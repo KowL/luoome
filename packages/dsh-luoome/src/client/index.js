@@ -9,6 +9,7 @@
 // React 与 react/jsx-runtime 由 loader 平台种子提供（构建时 external）。
 import { createElement as h } from 'react';
 
+import { writeComposer } from './composer.js';
 import { researchRequestFor } from './data.js';
 import { OverviewPanel } from './overview.js';
 import { ReviewPanel } from './review.js';
@@ -53,29 +54,6 @@ const panels = [
   ['review', '复盘', '建议表现 · 校准 · 待补观察', RewindIcon, ReviewPanel],
 ];
 
-/** 把研究请求写进当前会话输入框；找不到输入框时只保留诊断句柄，不伪造授权。 */
-const writeComposer = (text) => {
-  try {
-    const areas = typeof document === 'undefined' ? [] : [...document.querySelectorAll('textarea')];
-    const area = areas.find((candidate) => {
-      const rect = candidate.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && !candidate.disabled && !candidate.readOnly;
-    });
-    if (area === undefined) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      typeof HTMLTextAreaElement === 'undefined' ? Object : HTMLTextAreaElement.prototype,
-      'value',
-    )?.set;
-    if (setter === undefined) return false;
-    setter.call(area, text);
-    area.dispatchEvent(new Event('input', { bubbles: true }));
-    area.focus();
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 /**
  * 「在对话中研究此策略」：记录携带 strategyId/runId 的请求，经官方 layout 服务
  * 导航到会话面板，并把研究提示写入输入框（不自动提交，写操作仍需用户确认）。
@@ -89,7 +67,14 @@ export const openResearchInConversation = (ctx, strategyId, runId = null) => {
   } catch {
     // 会话面板不可用时不阻塞，用户仍可在策略面板看到请求内容。
   }
-  if (typeof window !== 'undefined') setTimeout(() => writeComposer(request.prompt), 80);
+  if (typeof window !== 'undefined') {
+    // 面板切换后 composer 才挂载，给它几次机会而不是只赌一次。
+    let written = false;
+    for (const delay of [80, 240, 600, 1200, 2400])
+      setTimeout(() => {
+        if (!written) written = writeComposer(request.prompt);
+      }, delay);
+  }
   return request;
 };
 

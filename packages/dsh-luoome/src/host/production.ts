@@ -290,12 +290,13 @@ export const createProductionHost = async (
 };
 
 /** mountDshWebProfile 实际依赖的宿主服务；缺失时拒绝装配，不降级成半成品入口。 */
-const REQUIRED_HOST_SERVICES = [
+export const REQUIRED_HOST_SERVICES = [
   'connection',
   'webServer',
   'sessionController',
   'approval',
   'tools',
+  'agents',
 ] as const satisfies readonly (keyof Context)[];
 
 export const assertProductionHostDependencies = (ctx: Context): void => {

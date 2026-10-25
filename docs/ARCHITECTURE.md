@@ -490,7 +490,8 @@ DSH 接入有两条路径，默认部署只保留第一条：
 批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用插件注册的工具，门槛判定随工具走
 （非交易日/非盘中时段返回 `skipped`）。不再有 luoome 侧的常驻调度进程。
 交互式分析经插件的原生确认操作直接写回，不创建 `analysis_job`；队列能力保留，但默认部署
-没有生产者、也没有常驻消费者。仓库只完成隔离切换/回退演练，生产服务器尚未切换。
+没有生产者、也没有常驻消费者。仓库完成隔离切换/回退演练后，生产服务器已于 2026-10-25 切到
+纯插件形态（`dsh-web` + `caddy`），旧 MCP/Bun 源码仍保留但不再启动。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
@@ -1340,6 +1341,10 @@ batch 与 trade 不在默认暴露面。旧 MCP 过渡形态的读面、设置�
 
 宿主审批使用真实 ApprovalService，执行 token 的私有凭据经单调 guard 和 handler 核验。调度身份来自当前 turn 消息与 ScheduleService 持久投递历史的关联，并绑定任务定义指纹、授权版本、账户及精确参数。
 
+生产插件声明 `agents` 依赖，原生调用在插件作用域核对活 Agent；HTTP 读接口不能替代这条验收。
+确认入口由操作服务的当前 policy Zod schema 派生 tool/input 契约，直接提供嵌套字段类型并保留每项操作的精确约束。
+参数校验失败返回不含提交值的字段路径与类型要求，保留 invalid_input 与 permission_denied 的区分；不会因纠正参数而跳过审批。
+
 新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。确认页只把操作编号存入 sessionStorage，确认凭据仅在组件内存；模型调用使用官方审批组件。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
 
-无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**尚未在真实生产服务器执行切换，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
+无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**生产服务器已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

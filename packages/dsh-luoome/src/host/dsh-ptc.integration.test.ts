@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { PluginAutomationGrant } from '@luoome/core';
 import { createInMemoryRepos } from '@luoome/db/memory';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,7 +83,13 @@ describe('Node PTC approval and scheduled delivery integration', () => {
           input: { grant, expectedVersion: null },
         },
       });
-      expect(result?.isError, result?.diagnostic).toBe(false);
+      expect(
+        result?.isError,
+        result?.diagnostic ??
+          JSON.stringify(
+            fixture.handle.agent.session.eventAt(SessionSeq(fixture.handle.agent.session.seq - 1)),
+          ),
+      ).toBe(false);
       expect(result?.value).toMatchObject({ result: { ok: true, data: { state: 'succeeded' } } });
       const before = fixture.results.length;
       const args = JSON.stringify(scheduledCall(grant, input).input);
