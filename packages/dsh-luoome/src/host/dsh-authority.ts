@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { AUTOMATION_CATALOG_TOOL, createAutomationCatalog } from './automation-catalog.js';
 import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
 import { createScheduledOperationInvoker } from './operations.js';
+import { createScheduleDispatcher } from './schedule-dispatcher.js';
 import { toolResultJsonSchema } from './tools.js';
 
 export const MANUAL_OPERATION_TOOL = 'luoome_confirmed_operation';
@@ -437,6 +438,18 @@ export const createDshOperationHost = (
         },
       }),
     );
+    if (automationsEnabled && options.policies.some((policy) => policy.scheduled)) {
+      const dispatcher = createScheduleDispatcher(ctx, {
+        service,
+        repository: options.repository,
+        identity,
+        policies: options.policies,
+        principalForSession: options.principalForSession,
+        automationsEnabled: true,
+        now: options.now,
+      });
+      removers.push(dispatcher.dispose);
+    }
   } catch (error) {
     for (const remove of removers.reverse()) remove();
     service.dispose();

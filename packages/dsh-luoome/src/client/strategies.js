@@ -1,4 +1,5 @@
-import { createElement as h, useState } from 'react';
+import { createElement as h, useEffect, useState } from 'react';
+import { dailyCycleAvailable, dailyCycleResult } from './daily-cycle.js';
 import {
   dataOf,
   errorOf,
@@ -42,6 +43,8 @@ import {
   Stat,
 } from './primitives.js';
 import { ResearchOnboarding, ResearchWorkbench } from './research.js';
+import { useResearchOperation } from './research-data.js';
+import { OperationReceipt } from './research-results.js';
 import { StockDetail } from './stock.js';
 
 const safeError = (error) =>
@@ -870,6 +873,67 @@ const StrategyDetails = ({ strategy, state, onResearch, onManage, onAnalyzeStock
   );
 };
 
+const DailyCycleCard = ({ refresh }) => {
+  const [profile, setProfile] = useState(null);
+  const [profileError, setProfileError] = useState(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('api/luoome/profile', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!controller.signal.aborted) setProfile(data);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setProfileError(String(error));
+      });
+    return () => controller.abort();
+  }, []);
+  const accountId = profile?.accountId;
+  const available = dailyCycleAvailable(profile);
+  const control = useResearchOperation({
+    accountId,
+    strategyId: 'daily-cycle',
+    onCompleted: refresh,
+  });
+  const result = dailyCycleResult(control.operation);
+  return h(
+    Card,
+    { title: '策略日循环', meta: '全市场 · 手动执行' },
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '按当前已发布策略执行完整日循环。不使用 force；未满足交易日等门槛时会明确跳过。',
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'luo-btn is-primary',
+        disabled: !available || control.locked,
+        onClick: () => control.prepare('run_strategy_daily_cycle', {}),
+      },
+      control.operation?.state === 'executing' ? '正在执行日循环' : '立即执行日循环',
+    ),
+    !available && profile !== null
+      ? h('p', { className: 'luo-fine' }, '批处理入口未启用，当前只能查看既有结果。')
+      : null,
+    profileError
+      ? h('p', { className: 'luo-fine' }, '批处理配置读取失败，请刷新页面后重试。')
+      : null,
+    result
+      ? h('p', { className: `luo-fine is-${result.tone}`, 'aria-live': 'polite' }, result.text)
+      : null,
+    h(OperationReceipt, { control }),
+  );
+};
+
 export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
   const state = usePanelState('strategies');
   const { results, loading, refresh } = state;
@@ -939,6 +1003,7 @@ export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
       h(
         Section,
         null,
+        h(DailyCycleCard, { refresh }),
         h(
           'div',
           { className: 'luo-grid is-two' },

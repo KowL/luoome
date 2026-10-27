@@ -309,6 +309,8 @@ const launchDsh = (
         LUOOME_OWNER_USER_ID: OWNER.userId,
         LUOOME_OWNER_ACCOUNT_ID: OWNER.accountId,
         LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_BATCH_ENABLED: 'true',
+        LUOOME_AUTOMATIONS_ENABLED: 'false',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -1367,6 +1369,37 @@ try {
   );
   // 在无模型调用的可编辑会话中验收管理草稿，避免前置模型失败使会话进入只读。
   await clickPanel('策略');
+  const hasDailyRecovery = await page.evaluate<boolean>(
+    `Object.keys(localStorage).some((key) => key.endsWith(':daily-cycle'))`,
+  );
+  if (hasDailyRecovery) {
+    await page.evaluate(
+      `Object.keys(localStorage).filter((key) => key.endsWith(':daily-cycle')).forEach((key) => localStorage.removeItem(key))`,
+    );
+    await page.reload();
+    await clickPanel('策略');
+  }
+  await page.evaluate(`document.querySelector('.luo-strategy-operations').open = true`);
+  await page.waitFor(
+    `[...document.querySelectorAll('button')].some((button) => button.innerText.includes('立即执行日循环') && !button.disabled)`,
+    '手动日循环入口',
+  );
+  await page.evaluate(
+    `[...document.querySelectorAll('button')].find((button) => button.innerText.includes('立即执行日循环')).click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('.luo-research-operation') !== null`,
+    '日循环操作回执出现',
+  );
+  await page.waitFor(
+    `document.body.innerText.includes('参数已冻结，等待你确认')`,
+    '日循环冻结参数',
+  );
+  await page.evaluate(
+    `[...document.querySelectorAll('button')].find((button) => button.innerText.includes('确认本次操作')).click()`,
+  );
+  await page.waitFor(`document.body.innerText.includes('操作回执已确认')`, '日循环人工确认回执');
+  await page.screenshot(join(evidenceDir, 'daily-cycle-manual-operation.png'));
   await page.waitFor(
     `document.querySelector('[data-strategy-operation]') !== null`,
     '运行管理入口',

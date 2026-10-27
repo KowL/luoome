@@ -49,6 +49,42 @@ describe('native batch policies', () => {
     }
   });
 
+  it('allows a scheduled batch through human confirmation without a grant', async () => {
+    const ctx = await buildTestContext();
+    const principal = { userId: ctx.user.id, accountId: ctx.user.defaultAccountId };
+    const service = createPluginOperationService({
+      repository: ctx.repos.pluginAuthority,
+      policies: createBatchOperationPolicies(),
+      capabilities: ['write', 'external'],
+      policyVersion: 1,
+      now: Date.now,
+      context: () => ctx,
+    });
+    const id = randomUUID();
+    const prepared = await service.prepare(principal, {
+      id,
+      tool: 'run_intraday_plan_batch',
+      input: {},
+    });
+    expect(prepared).toMatchObject({
+      ok: true,
+      data: { state: 'pending', operationId: id },
+    });
+    if (!prepared.ok) return;
+    const pending = prepared.data as { confirmationToken?: string };
+    const confirmed = await service.confirm(
+      principal,
+      { id, token: pending.confirmationToken ?? '' },
+      new AbortController().signal,
+    );
+    expect(confirmed).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+    expect(await ctx.repos.pluginAuthority.findOperation({ ...principal, id })).toMatchObject({
+      tool: 'run_intraday_plan_batch',
+      state: 'succeeded',
+    });
+    service.dispose();
+  });
+
   it('cannot prepare a batch with write authority alone', async () => {
     const ctx = await buildTestContext();
     const service = createPluginOperationService({

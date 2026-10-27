@@ -767,3 +767,25 @@ dataAsOf=2026-10-27T00:00:00.000Z（上海 08:00），selectedCount 分别为 15
 其中一条 WorkflowRun 因到期观察尚未完成而为 partial，不能与策略运行失败混同。三条 cron 已恢复为
 `0 18 * * 1-5`，nextRunAt=2026-10-28 18:00 Asia/Shanghai。真实策略页面已显示 10/27 08:00 与对应匹配数，
 证明 checkpoint 修复及本次正式结果发布链路均已端到端生效。
+
+### 9.26 宿主批处理回调与策略页手动执行（2026-10-28）
+
+`createScheduleDispatcher` 在启动及 `schedule/changed` 后读取真实 `lastDelivery`，沿用 10 分钟投递窗口，
+按 `batch:<taskId>:<accountId>` 找 grant 并复用 identity/scheduleHash 校验，仅通过 `executeScheduled`
+执行业务。按 task 串行、dispose 解绑；不写模型工具、不直接调 batch handler，occurrence 仍由同一
+operation ID、grant capabilities 和 CAS 去重。真实 DSH e2e 证明提醒只有文本回复、没有工具调用，
+宿主仍写一次业务结果；重复扫描与重启不重复写。
+
+DSH 0.2.1-rc.2 没有无 Agent 的原生回调 API，仍由 schedule 唤醒原会话。五条提示已改为“宿主处理、
+无需工具”，所以本方案去除的是模型对业务执行的参与和依赖，不是上游的提醒机制。ID/cron/时区/会话
+保持不变，五条授权已升级 version=2 以绑定新 prompt 的 scheduleHash。
+
+策略页「运行与观察」新增全局日循环卡片，直接读取普通 profile JSON（不是 ToolResult），使用既有
+prepare → 冻结参数 → 一次性 confirm，默认 `{}` 不使用 force。业务 outcome 与 operation.state 分开显示，
+unknown/executing 不提供盲目重试；终态刷新策略事实。人工 prepare/confirm 不需要 scheduled grant。
+
+验收包括 2,839 项 Vitest、611 项 Bun DB、240 项 Node DB、17 项 DSH authority e2e、独立插件安装、
+typecheck、lint、build 与完整 Chrome 桌面/390px 窄屏。线上 release `dsh-20261027T163031Z` 已部署，
+插件包 SHA-256 `2fd31c3c903f…`、镜像 `0aa4a1ba0132…`；备份在
+`/opt/luoome/backups/before-dsh-20261027T163031Z`，integrity=ok 且业务表指纹未变。只读核验确认
+automations=true、5/5 v2 grant 与 hash 匹配、日循环 policy 存在；未为验收额外触发历史批次。

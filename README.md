@@ -176,10 +176,12 @@ DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH �
 
 ## 自动任务
 
-批处理调度由 **DSH 定时任务**负责：提醒到点唤起会话，agent 通过 `luoome_scheduled_operation`
+批处理调度由 **DSH 定时任务**负责：提醒写入真实投递回执后，宿主直接通过 `executeScheduled`
 执行五个原生批处理入口（`run_strategy_daily_cycle`、`run_closing_report_cutoff`、
-`run_portfolio_performance_snapshot`、`run_intraday_plan_batch`、`run_strategy_autonomy_weekly`）。
+`run_portfolio_performance_snapshot`、`run_intraday_plan_batch`、`run_strategy_autonomy_weekly`），
+业务执行不依赖模型工具调用；当前 DSH 版本仍会唤醒会话，但提示只要求保持静默。
 每个任务必须有匹配当前任务指纹的持久授权，批处理与自动执行开关均需显式开启。
+策略页也可直接准备并一次性确认正常日循环，无需进入 AI 对话，默认不使用 `force`。
 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库。
 迁移与授权步骤见[用户手册](docs/USER_GUIDE.md#74-dsh-定时任务与批处理)。
 

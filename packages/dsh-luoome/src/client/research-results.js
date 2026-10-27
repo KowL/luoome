@@ -593,6 +593,7 @@ const operationLabels = {
   start_strategy_evaluation_session: '建立历史评估任务',
   cancel_strategy_evaluation_session: '取消历史评估',
   resume_strategy_evaluation_session: '续跑历史评估',
+  run_strategy_daily_cycle: '立即执行策略日循环',
 };
 
 export const OperationReceipt = ({ control }) => {

@@ -249,6 +249,43 @@ describe('DSH approval and schedule integration with durable facts', () => {
       clock.restore();
     }
   });
+  it('executes a delivered occurrence in the host without any model tool call', async () => {
+    const clock = fixtureClock();
+    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    try {
+      const { handle, model, results, domain, principal } = fixture;
+      const task = await fixture.ctx.schedule.create(handle.agent.id, {
+        prompt: '宿主已处理，无需调用工具',
+        title: '宿主回调验收',
+        every_seconds: 60,
+      });
+      const input = { accountId: principal.accountId, label: 'host-only' };
+      const grant = {
+        ...fixture.grant(task, input, `batch:${task.id}:${principal.accountId}`),
+      };
+      fixture.answer('allowed-once');
+      await authorize(fixture, grant);
+      const beforeResults = results.length;
+      const beforeRequests = model.requests;
+      model.calls.push([]);
+      clock.advance(65_000);
+      await drive(fixture);
+      await eventually(async () =>
+        Boolean(
+          (await domain.repos.account.findById(principal.accountId))?.name.endsWith('|host-only'),
+        ),
+      );
+      await handle.agent.whenIdle();
+      expect(model.requests).toBe(beforeRequests + 1);
+      expect(results).toHaveLength(beforeResults);
+      expect((await domain.repos.account.findById(principal.accountId))?.name).toEndWith(
+        '|host-only',
+      );
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  });
   it('preflights persisted SQLite queue facts without a model request or claim', async () => {
     const fixture = await start(await rootDir());
     try {
