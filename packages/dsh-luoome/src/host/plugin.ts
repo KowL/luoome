@@ -69,6 +69,8 @@ export {
  */
 export const inject = [
   ...REQUIRED_HOST_SERVICES,
+  // 生产 profile 中 schedule 可能后挂载；声明依赖才能保证 batch 装配时服务已就绪。
+  'schedule',
   // 随包技能注册需要 DSH skill registry；缺失时插件不激活（fail-loud），不降级成无技能启动。
   'skills',
 ] as const;

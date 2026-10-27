@@ -176,11 +176,12 @@ DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH �
 
 ## 自动任务
 
-批处理调度由 **DSH 定时任务**负责：提醒到点唤起会话，agent 调用 `luoome-batch` 实例上的批处理工具
-（`run_strategy_daily_cycle`、`run_closing_report_cutoff`、`run_portfolio_performance_snapshot`、
-`run_intraday_plan_batch`、`run_strategy_autonomy_weekly`）。
+批处理调度由 **DSH 定时任务**负责：提醒到点唤起会话，agent 通过 `luoome_scheduled_operation`
+执行五个原生批处理入口（`run_strategy_daily_cycle`、`run_closing_report_cutoff`、
+`run_portfolio_performance_snapshot`、`run_intraday_plan_batch`、`run_strategy_autonomy_weekly`）。
+每个任务必须有匹配当前任务指纹的持久授权，批处理与自动执行开关均需显式开启。
 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库。
-调度表与提醒文案见技能 `luoome-batch`。
+迁移与授权步骤见[用户手册](docs/USER_GUIDE.md#74-dsh-定时任务与批处理)。
 
 队列消费能力保留，但默认部署已切纯插件、不运行常驻 worker：交互式分析经插件的原生
 `record_advice` / `record_analysis_result` 确认操作直接写回，不创建 `analysis_job`；默认部署

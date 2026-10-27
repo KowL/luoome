@@ -2261,6 +2261,25 @@ export const registerRepositoryContractTests = (
         });
       });
 
+      it('saveMany 支持超过 SQLite 单语句参数上限的批量日线', async () => {
+        const bars = Array.from({ length: 120 }, (_, index) =>
+          makeDailyBar('stk-1', new Date(T1.getTime() + index * 86_400_000)),
+        );
+        await repos.dailyBar.saveMany(bars);
+        expect(await repos.dailyBar.findInRange('stk-1', T1, bars.at(-1)?.date ?? T1)).toHaveLength(
+          120,
+        );
+      });
+
+      it('saveRevisions 支持超过 SQLite 单语句参数上限的批量日线版本', async () => {
+        const revisions = Array.from({ length: 120 }, (_, index) => {
+          const bar = makeDailyBar('stk-1', new Date(T1.getTime() + index * 86_400_000));
+          return { ...bar, contentHash: `hash-${index}`, recordedAt: T2 };
+        });
+        await repos.dailyBar.saveRevisions(revisions);
+        expect(await repos.dailyBar.listRevisions({ stockId: 'stk-1' })).toHaveLength(120);
+      });
+
       it('removeInRange 返回删除条数', async () => {
         await repos.dailyBar.saveMany([
           makeDailyBar('stk-1', T1),
@@ -5872,6 +5891,45 @@ export const registerRepositoryContractTests = (
             universeSyncId: checkpoint.universeSyncId,
           }),
         ).toMatchObject({ id: checkpoint.id, status: 'partial' });
+      });
+
+      it('checkpoint 在全市场成员规模下分批原子提交', async () => {
+        const checkpoint: StrategyDataCheckpoint = {
+          id: 'checkpoint-large',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          dataAsOf: T2,
+          status: 'running',
+          vintageStatus: 'not-applicable',
+          universeSyncId: 'sync-large',
+          requestedCount: 5000,
+          availableCount: 5000,
+          failedCount: 0,
+          memberChecksum: 'members-large',
+          dataChecksum: 'data-large',
+          providerStatuses: [],
+          startedAt: T2,
+        };
+        const members: StrategyDataCheckpointMember[] = Array.from(
+          { length: 5000 },
+          (_, index) => ({
+            checkpointId: checkpoint.id,
+            stockId: `${String(index).padStart(6, '0')}.SZ`,
+            status: 'available',
+            barCount: 250,
+            provider: 'fixture',
+          }),
+        );
+        await repos.strategyDataCheckpoint.saveStarted(checkpoint);
+        await repos.strategyDataCheckpoint.commit({
+          checkpoint: { ...checkpoint, status: 'complete', finishedAt: T3 },
+          members,
+        });
+        expect(await repos.strategyDataCheckpoint.listMembers(checkpoint.id)).toHaveLength(5000);
+        expect(await repos.strategyDataCheckpoint.findById(checkpoint.id)).toMatchObject({
+          status: 'complete',
+          requestedCount: 5000,
+          availableCount: 5000,
+        });
       });
 
       it('evaluation session/day 支持失败日重试并按日期查询', async () => {

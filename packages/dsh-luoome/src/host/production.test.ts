@@ -612,6 +612,10 @@ describe('dsh-luoome production write policies', () => {
 });
 
 describe('dsh-luoome production apply entry', () => {
+  it('declares the schedule dependency required by batch assembly', async () => {
+    const { inject } = await import('./plugin.js');
+    expect(inject).toContain('schedule');
+  });
   it('requires the schedule service for automation opt-in before opening a database', async () => {
     const parent = tempRoot();
     const home = join(parent, 'no-schedule');

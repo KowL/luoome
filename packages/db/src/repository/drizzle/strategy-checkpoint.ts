@@ -141,19 +141,18 @@ export class DrizzleStrategyDataCheckpointRepository implements StrategyDataChec
       tx.delete(strategyDataCheckpointMembers)
         .where(eq(strategyDataCheckpointMembers.checkpointId, checkpoint.id))
         .run();
-      if (members.length > 0) {
+      const rows = members.map((member) => ({
+        checkpointId: member.checkpointId,
+        stockId: member.stockId,
+        status: member.status,
+        latestBarDate: member.latestBarDate ?? null,
+        barCount: member.barCount,
+        provider: member.provider ?? null,
+        errorKind: member.errorKind ?? null,
+      }));
+      for (let index = 0; index < rows.length; index += 100) {
         tx.insert(strategyDataCheckpointMembers)
-          .values(
-            members.map((member) => ({
-              checkpointId: member.checkpointId,
-              stockId: member.stockId,
-              status: member.status,
-              latestBarDate: member.latestBarDate ?? null,
-              barCount: member.barCount,
-              provider: member.provider ?? null,
-              errorKind: member.errorKind ?? null,
-            })),
-          )
+          .values(rows.slice(index, index + 100))
           .run();
       }
     });

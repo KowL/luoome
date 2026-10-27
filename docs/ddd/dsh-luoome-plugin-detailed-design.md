@@ -720,3 +720,50 @@ host/client/四技能的文件哈希后开始。Codex 逐卡核对官方审批�
 契约测试覆盖 schedule 启用/修改/停用、暂停/恢复、订阅/取消、拒绝、独立审批与回执恢复；真实 DSH journey 验证 publish 不隐含配置及四项上线操作的独立审批。浏览器验收覆盖启用/未启用、订阅、版本漂移、管理草稿和窄屏。AI 自动提议、自动发布、自动暂停不在本轮范围。
 
 管理/研究草稿的写入以编辑器实际采用文本为准，不再只信 `insertText` 的布尔返回值。只读 Lexical 可能返回 true 但不更新内容；连续写入失败后通过官方 `uiWorkspace.startSession()` 继承当前或最近工作区并创建新会话，仍不发送 prompt。此入口不带初始草稿，避免复用含未发送文字的空白会话；确认新的主会话已打开后才写入。当前会话可写时不新建，创建失败或新编辑器仍未采用时保留 `client/composer-unavailable`，不伪报成功。浏览器保留模型失败后的原始只读场景，验证兜底真实生效。
+
+### 9.24 既有批处理日程原生迁移与启动依赖修复（2026-10-27）
+
+连续 8 次 `unknown tool "mcp__luoome-batch__run_*"` 的根因不是 MCP 进程崩溃，而是旧 MCP 已退役后，
+五条既有日程仍使用旧名称，且生产 batch/automations 与逐任务 grant 均未启用。隔离宿主复现同一错误时，
+五个原生批处理模板可同时正常发现。
+
+首次开启 batch 还暴露了生产装配缺口：`plugin.ts` 的 Cordis `inject` 未声明 `schedule`，导致宿主
+schedule 尚未就绪时 `apply` 按硬卡拒绝装配。已补充该依赖及回归测试；测试先失败后通过，完整插件安装验收、
+真实 DSH 以 batch=true 启动、Node 22 产物导入均通过。线上以 artifact-only release
+`dsh-20261027T132406Z` 部署，镜像 `aa179e4a7239…`，插件包 SHA-256
+`0d93f529bcfd…`；上一 release 与配置/日程备份保留。
+
+五条日程保持原 ID、cron、Asia/Shanghai 时区与原会话，只把提示改为先读
+`luoome_automation_catalog`、再经 `luoome_scheduled_operation` 调用唯一匹配模板；禁止旧 MCP 名称、
+直接 run_*、force 和跨日补跑。逐项原生审批创建五条 enabled/version=1 授权，绑定当前 scheduleHash、
+账户和单一 allowedCall，有效期至 2026-11-26T13:29:46.215Z。最后才开启 automations。
+
+重启后目录确认 automations=true、5/5 grant 与任务指纹匹配；profile 为 63 个只读工具、27 条 policy，
+其中恰好五条 scheduled。数据库只有五次成功的 configure_plugin_automation 操作，run_* 操作数为 0，
+所有任务 deliveryHistory/lastDelivery 与迁移前一致。本轮没有补跑或手动触发任何批次；下一次真实
+occurrence 的业务结果仍需按回执核验，不能把配置验收表述为批处理已经成功运行。
+
+### 9.25 全市场 checkpoint 提交 SQL 参数上限修复（2026-10-27）
+
+首次手动日循环的操作回执为 succeeded，但业务 outcome=failed，三个策略全部失败。三份 WorkflowRun
+均在 data-prep 后报 `prepare_strategy_data: too many SQL variables`，checkpoint 停留 running 且成员数为 0。
+根因是 `DrizzleStrategyDataCheckpointRepository.commit` 把 5,563 个成员一次 VALUES 插入，每行 7 个参数，
+合计 38,941，超过线上 SQLite 单语句上限；并非策略规则、provider 或日线批量写入失败。
+
+成员插入改为每 100 行一批，仍与 checkpoint 状态更新处于同一事务。合约新增 5,000 成员的全市场规模回归，
+完整 Bun DB 611 项与 Node DB 240 项通过。线上镜像在修复前用同一 5,563 成员输入稳定复现错误，修复后
+全部提交成功。artifact-only release `dsh-20261027T141856Z` 已部署，插件包 SHA-256 `dac31e604d5d…`，
+镜像 `5f2bf79dcac6…`；部署前 SQLite 一致性备份在 `/opt/luoome/backups/before-dsh-20261027T141856Z`，
+integrity=ok 且业务表指纹未变。
+
+随后正常日循环回执为 outcome=due、四项计数全 0，因为首轮已推进策略 nextRunAt，当前没有到期策略；
+它不能作为三条策略已成功的证据。force 只跳过非交易日门槛，不会重置 nextRunAt，也不会使这些计划
+重新到期，且手动 force 仍需逐次原生审批，定时授权始终拒绝 force。下一到期 occurrence 仍需核对实际
+complete/partial/failed 计数，不能把本次全 0 或 checkpoint 重放成功表述为完整日循环已成功。
+
+同日 22:57 经用户明确批准后，将三条 StrategySchedule 临时改为每分钟到期并执行正常日循环，最终
+outcome=partial，complete=2、partial=1、failed=0。三条新 StrategyRun 均为 complete+published，
+dataAsOf=2026-10-27T00:00:00.000Z（上海 08:00），selectedCount 分别为 15、12、15；数据健康为 partial，
+其中一条 WorkflowRun 因到期观察尚未完成而为 partial，不能与策略运行失败混同。三条 cron 已恢复为
+`0 18 * * 1-5`，nextRunAt=2026-10-28 18:00 Asia/Shanghai。真实策略页面已显示 10/27 08:00 与对应匹配数，
+证明 checkpoint 修复及本次正式结果发布链路均已端到端生效。
