@@ -7,6 +7,41 @@ import { createReadSurface } from './read-surface.js';
 const signal = () => new AbortController().signal;
 
 describe('plugin read execution boundary', () => {
+  it('binds account-scoped reads to the configured owner and forwards cancellation to tools', async () => {
+    const ctx = await buildTestContext();
+    const controller = new AbortController();
+    const observed = defineTool({
+      name: 'read_cancellation',
+      description: 'fixture',
+      sideEffect: 'read',
+      input: z.object({}),
+      output: z.object({ bound: z.boolean() }),
+      handler: (_input, context) => ({ bound: context.abortSignal === controller.signal }),
+    });
+    const surface = createReadSurface({
+      accountId: ctx.user.defaultAccountId,
+      config: { allowlist: ['get_account', 'read_cancellation'] },
+      tools: [...toolRegistry.all(), observed],
+      context: () => ctx,
+    });
+    expect(await surface.invoke('get_account', {}, controller.signal)).toMatchObject({
+      ok: true,
+      data: { account: { id: ctx.user.defaultAccountId } },
+    });
+    expect(
+      await surface.invoke('get_account', { accountId: 'foreign-account' }, controller.signal),
+    ).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+    expect(await surface.invoke('read_cancellation', {}, controller.signal)).toEqual({
+      ok: true,
+      data: { bound: true },
+    });
+    controller.abort();
+    expect(await surface.invoke('get_account', {}, controller.signal)).toMatchObject({
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+  });
+
   it('matches domain JSON output, including Dates, without changing the domain context', async () => {
     const ctx = await buildTestContext();
     const surface = createReadSurface({

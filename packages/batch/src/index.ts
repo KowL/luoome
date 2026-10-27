@@ -13,10 +13,19 @@ import {
   type ToolContext,
   type WorkflowRun,
 } from '@luoome/core';
-import { defineTool } from '@luoome/tools';
+import {
+  defineTool,
+  errInvalidInput,
+  errNotFound,
+  GetStrategyEvaluationProgressOutput,
+  getStrategyEvaluationProgressTool,
+  getStrategyEvaluationSessionTool,
+} from '@luoome/tools';
 import {
   closingReportCutoffWorkflow,
   intradayTradingPlanWatchWorkflow,
+  ReplayStrategyRangeOutput,
+  replayStrategyRangeWorkflow,
   snapshotAccountPerformanceWorkflow,
   strategyAutonomyWeeklyWorkflow,
   strategyDailyCycleWorkflow,
@@ -299,6 +308,63 @@ export const runStrategyAutonomyWeeklyTool = defineTool({
         failed: failedCount,
       },
     };
+  },
+});
+
+export const RunStrategyEvaluationInput = z
+  .object({
+    strategyId: z.string().min(1),
+    sessionId: z.string().min(1),
+    maxDays: z.number().int().min(1).max(20).default(5),
+  })
+  .strict();
+export const RunStrategyEvaluationOutput = z.object({
+  progress: GetStrategyEvaluationProgressOutput,
+  advanced: ReplayStrategyRangeOutput.optional(),
+});
+export const runStrategyEvaluationTool = defineTool({
+  name: 'run_strategy_evaluation',
+  description:
+    '推进已确认的历史研究 session，单次最多 20 个交易日；复用 PIT replay 工作流并保留 checkpoint，可取消/断点恢复，不发布当前股票池',
+  sideEffect: 'write',
+  requiredCapabilities: ['write', 'external'],
+  input: RunStrategyEvaluationInput,
+  output: RunStrategyEvaluationOutput,
+  handler: async (input, ctx) => {
+    const found = await getStrategyEvaluationSessionTool.execute(
+      { sessionId: input.sessionId },
+      ctx,
+    );
+    if (!found.ok) return found;
+    const session = found.data.session;
+    if (session === null) return errNotFound('StrategyEvaluationSession', input.sessionId);
+    if (session.strategyId !== input.strategyId)
+      return errInvalidInput('session 不属于该 Strategy');
+    if (session.status !== 'running' && session.status !== 'complete')
+      return errInvalidInput('请先显式 resume_strategy_evaluation_session，再推进未完成日期');
+    const result =
+      session.status === 'complete'
+        ? null
+        : await replayStrategyRangeWorkflow.run(
+            {
+              strategyId: session.strategyId,
+              versionId: session.strategyVersionId,
+              from: session.from,
+              to: session.to,
+              ...(session.stockIds === undefined ? {} : { stockIds: session.stockIds }),
+              persist: true,
+              resumeSessionId: session.id,
+              maxDays: input.maxDays,
+            },
+            ctx,
+          );
+    if (result !== null && !result.ok) return result;
+    const progress = await getStrategyEvaluationProgressTool.execute(
+      { strategyId: session.strategyId, sessionId: session.id },
+      ctx,
+    );
+    if (!progress.ok) return progress;
+    return { progress: progress.data, ...(result?.ok ? { advanced: result.data } : {}) };
   },
 });
 

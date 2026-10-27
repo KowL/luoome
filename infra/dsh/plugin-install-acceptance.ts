@@ -18,14 +18,17 @@ const owner = Object.freeze({
   accountId: 'plugin-acceptance-account',
 });
 const profileName = 'luoome-plugin';
-const READ_TOOL_COUNT = 46;
-const MARKET_TOOL_COUNT = 6;
+const nodeCommand = process.env.NODE24_PATH ?? 'node';
+const READ_TOOL_COUNT = 63;
+const MARKET_TOOL_COUNT = 8;
 const EXPECTED_MARKET_TOOLS = [
   'fetch_index_quotes',
   'get_ashare_sentiment',
   'fetch_quote',
   'batch_quote',
   'trial_strategy_version',
+  'run_strategy_research_comparison',
+  'get_stock_market_view',
   'fetch_news',
 ] as const;
 const SKILL_NAMES = [
@@ -156,7 +159,7 @@ const waitForSkillsReport = async (path: string): Promise<Record<string, unknown
 };
 
 const launch = (env: NodeJS.ProcessEnv) => {
-  const child = spawn('node', [cli, '--profile', profileName, '--no-open', '--port', '0'], {
+  const child = spawn(nodeCommand, [cli, '--profile', profileName, '--no-open', '--port', '0'], {
     cwd: workspace,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -577,7 +580,7 @@ db.prepare('INSERT INTO accounts (id, name, kind, currency, initial_capital, cas
 db.close();
 process.stdout.write('seeded');
 `;
-  const seed = spawnSync('node', ['--input-type=module', '-e', seedCode], {
+  const seed = spawnSync(nodeCommand, ['--input-type=module', '-e', seedCode], {
     env: {
       ...baseEnv,
       PLUGIN_HOST: join(installedDir, 'dist', 'host.js'),
@@ -612,7 +615,7 @@ const policies = createProductionOperationPolicies().map((policy) => ({
 host.dispose();
 process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, policies, trustedProvenance: TRUSTED_ANALYSIS_PROVENANCE }));
 `;
-  const probe = spawnSync('node', ['--input-type=module', '-e', probeCode], {
+  const probe = spawnSync(nodeCommand, ['--input-type=module', '-e', probeCode], {
     env: {
       ...baseEnv,
       PLUGIN_HOST: join(installedDir, 'dist', 'host.js'),
@@ -664,11 +667,30 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'create_strategy_version',
     'validate_strategy_version',
     'publish_strategy_version',
+    'set_strategy_schedule',
+    'pause_strategy',
+    'resume_strategy',
+    'subscribe_strategy_to_watchlist',
+    'unsubscribe_strategy_from_watchlist',
     'record_advice_outcome',
+    'save_strategy_research_state',
+    'cancel_strategy_evaluation_session',
+  ] as const;
+  const PRODUCTION_COMBINED_POLICIES = [
+    'start_strategy_evaluation_session',
+    'resume_strategy_evaluation_session',
+    'create_strict_strategy_backtest',
+    'execute_strict_strategy_backtest',
+  ] as const;
+  const PRODUCTION_EXTERNAL_POLICIES = [
+    'trial_strategy_version',
+    'run_strategy_research_comparison',
   ] as const;
   const PRODUCTION_POLICY_NAMES = [
     ...PRODUCTION_QUEUE_POLICIES,
     ...PRODUCTION_WRITE_POLICIES,
+    ...PRODUCTION_COMBINED_POLICIES,
+    ...PRODUCTION_EXTERNAL_POLICIES,
   ].sort();
   const installedPolicyNames = installed.policies.map((policy) => policy.name).sort();
   if (
@@ -693,6 +715,18 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     if (JSON.stringify(policy.requiredCapabilities) !== JSON.stringify(['write']))
       throw new Error(`installed ${name} policy capabilities mismatch`);
   }
+  for (const [names, sideEffect, capabilities] of [
+    [PRODUCTION_COMBINED_POLICIES, 'write', ['write', 'external']],
+    [PRODUCTION_EXTERNAL_POLICIES, 'external', ['external']],
+  ] as const) {
+    for (const name of names) {
+      const policy = installedPolicies.get(name);
+      if (policy?.sideEffect !== sideEffect || policy.scheduled !== false)
+        throw new Error(`installed ${name} must require a separate manual approval`);
+      if (JSON.stringify(policy.requiredCapabilities) !== JSON.stringify(capabilities))
+        throw new Error(`installed ${name} policy capabilities mismatch`);
+    }
+  }
   for (const forbidden of [
     'claim_analysis_jobs',
     'complete_analysis_job',
@@ -706,10 +740,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'add_trade',
     'send_notification',
     'delete_strategy',
-    'pause_strategy',
-    'resume_strategy',
     'archive_strategy',
-    'set_strategy_schedule',
   ])
     if (installedPolicies.has(forbidden))
       throw new Error(`installed policies must not contain: ${forbidden}`);
@@ -807,6 +838,21 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     throw new Error(
       `unauthenticated state route must be 401, received ${String(deniedState.status)}`,
     );
+  const researchPath = '/api/luoome/research?view=context&strategyId=installation-scope-probe';
+  const deniedResearch = await fetch(`${firstOrigin}${researchPath}`, { redirect: 'manual' });
+  if (deniedResearch.status !== 401)
+    throw new Error('research route must require real host admission');
+  const researchQueryChecks: { query: string; status: number }[] = [];
+  for (const [query, expectedStatus] of [
+    ['view=context&strategyId=installation-scope-probe&strategyId=other', 400],
+    ['view=context&strategyId=installation-scope-probe&accountId=other-account', 403],
+    ['view=arbitrary-tool&strategyId=installation-scope-probe', 400],
+  ] as const) {
+    const response = await profile(firstOrigin, firstCookie, `/api/luoome/research?${query}`);
+    if (response.status !== expectedStatus || response.headers.get('cache-control') !== 'no-store')
+      throw new Error(`research query must be strictly validated: ${query} (${response.status})`);
+    researchQueryChecks.push({ query, status: response.status });
+  }
   const unknownPanel = await stateResponse('admin');
   if (unknownPanel.status !== 404)
     throw new Error(`unknown panel must be 404, received ${String(unknownPanel.status)}`);
@@ -861,6 +907,11 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'validate_strategy_version',
     'publish_strategy_version',
     'record_advice_outcome',
+    'save_strategy_research_state',
+    'start_strategy_evaluation_session',
+    'resume_strategy_evaluation_session',
+    'cancel_strategy_evaluation_session',
+    'run_strategy_research_comparison',
     'claim_analysis_jobs',
   ]) {
     const denied = await callHttp(firstOrigin, firstCookie, '/api/luoome/call', {
@@ -1009,7 +1060,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
 
   Object.assign(summary, {
     mode: '协议/装配验收，非真实模型质量',
-    dshLaunchedWithNode: run('node', ['--version']).stdout.trim(),
+    dshLaunchedWithNode: run(nodeCommand, ['--version']).stdout.trim(),
     bundleBuiltWithBun: run('bun', ['--version']).stdout.trim(),
     dshExit: firstExit,
     hostBundle: { path: 'packages/dsh-luoome/dist/host.js', bytes: hostBundleSize },
@@ -1032,6 +1083,11 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       unknownPanelStatus: unknownPanel.status,
       methodSemantics: '405 + Allow: GET asserted in panels.test.ts (handler level)',
       ownerAccountMatched: true,
+    },
+    researchRoute: {
+      unauthenticatedStatus: deniedResearch.status,
+      strictQueries: researchQueryChecks,
+      arbitraryWritesViaCall: 'denied',
     },
     tarball: {
       name: tarballName,

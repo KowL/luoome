@@ -1,7 +1,12 @@
 // 会话输入框写入单测：DSH 官方 composer 是 Lexical contenteditable（不是 textarea），
 // 只覆盖 textarea 会让「在对话中研究此策略」永远写不进草稿。这里锁住两条路径与失败语义。
 import { describe, expect, it, vi } from 'vitest';
-import { findComposer, sendStockAnalysis, writeComposer } from './composer.js';
+import {
+  findComposer,
+  sendStockAnalysis,
+  writeComposer,
+  writeComposerWithSessionFallback,
+} from './composer.js';
 
 class FakeEditable {
   constructor({ tagName = 'DIV', width = 320, height = 40, slot = null } = {}) {
@@ -86,6 +91,128 @@ describe('client composer writer', () => {
     const editor = new FakeEditable({ slot: 'conversation.composer' });
     const { doc } = fakeDocument({ candidates: [editor], execResult: false });
     expect(writeComposer('草稿', doc)).toBe(false);
+  });
+
+  it('preserves an existing conversation draft and allows the session fallback to take over', () => {
+    const area = new FakeTextarea({ slot: 'conversation.composer' });
+    area.value = '我尚未发送的问题';
+    const { doc } = fakeDocument({ candidates: [area] });
+    expect(writeComposer('新的策略研究', doc)).toBe(false);
+    expect(area.value).toBe('我尚未发送的问题');
+    expect(writeComposer('我尚未发送的问题', doc)).toBe(true);
+  });
+});
+
+describe('composer session fallback', () => {
+  it('uses workspace navigation to create a fresh editable session after a read-only session', async () => {
+    let selected = 'read-only-session';
+    const ctx = {
+      layout: { selectPanel: vi.fn() },
+      sessions: {
+        create: vi.fn(async () => 'unbound-session'),
+        list: {
+          getSnapshot: () => ({
+            byId: { [selected]: { id: selected, retainedBy: { mainView: 1 } } },
+          }),
+        },
+      },
+      uiWorkspace: {
+        openSession: vi.fn((id) => {
+          selected = id;
+        }),
+        startSession: vi.fn(() => {
+          selected = 'workspace-draft-session';
+        }),
+      },
+    };
+    const result = await writeComposerWithSessionFallback(ctx, '请管理策略', {
+      write: () => selected === 'workspace-draft-session',
+      delays: [0],
+    });
+    expect(result).toEqual({ createdSession: true, sessionId: 'workspace-draft-session' });
+    expect(ctx.uiWorkspace.startSession).toHaveBeenCalledExactlyOnceWith();
+    expect(ctx.sessions.create).not.toHaveBeenCalled();
+  });
+
+  const setup = (write) => {
+    let selected = 'current-session';
+    return {
+      ctx: {
+        layout: { selectPanel: vi.fn() },
+        sessions: {
+          create: vi.fn(async () => 'unbound-session'),
+          list: {
+            getSnapshot: () => ({
+              byId: { [selected]: { id: selected, retainedBy: { mainView: 1 } } },
+            }),
+          },
+        },
+        uiWorkspace: {
+          startSession: vi.fn(() => {
+            selected = 'draft-session';
+          }),
+        },
+      },
+      write,
+    };
+  };
+
+  it('creates an editable draft session without sending a prompt when the current one is read-only', async () => {
+    let editable = false;
+    const { ctx, write } = setup(vi.fn(() => editable));
+    const startSession = ctx.uiWorkspace.startSession.getMockImplementation();
+    ctx.uiWorkspace.startSession.mockImplementation(() => {
+      startSession();
+      editable = true;
+    });
+    const result = await writeComposerWithSessionFallback(ctx, '请管理策略', {
+      write,
+      delays: [0],
+    });
+    expect(result).toEqual({ createdSession: true, sessionId: 'draft-session' });
+    expect(ctx.sessions.create).not.toHaveBeenCalled();
+    expect(ctx.uiWorkspace.startSession).toHaveBeenCalledExactlyOnceWith();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(ctx.sessions.prompt).toBeUndefined();
+  });
+
+  it('keeps the current session when the composer write succeeds', async () => {
+    const { ctx, write } = setup(vi.fn(() => true));
+    const result = await writeComposerWithSessionFallback(ctx, '研究策略', {
+      write,
+      delays: [0],
+    });
+    expect(result).toEqual({ createdSession: false, sessionId: null });
+    expect(ctx.sessions.create).not.toHaveBeenCalled();
+    expect(ctx.uiWorkspace.startSession).not.toHaveBeenCalled();
+  });
+
+  it('does not claim success when the new composer is also unavailable', async () => {
+    const { ctx, write } = setup(vi.fn(() => false));
+    await expect(
+      writeComposerWithSessionFallback(ctx, '研究策略', { write, delays: [0] }),
+    ).rejects.toThrow('DSH composer unavailable');
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates refused workspace navigation without claiming a draft', async () => {
+    const { ctx, write } = setup(vi.fn(() => false));
+    ctx.uiWorkspace.startSession.mockImplementation(() => {
+      throw new Error('offline');
+    });
+    await expect(
+      writeComposerWithSessionFallback(ctx, '研究策略', { write, delays: [0] }),
+    ).rejects.toThrow('offline');
+    expect(ctx.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it('does not write into the old session while workspace navigation is pending', async () => {
+    const { ctx, write } = setup(vi.fn(() => false));
+    ctx.uiWorkspace.startSession.mockImplementation(() => {});
+    await expect(
+      writeComposerWithSessionFallback(ctx, '研究策略', { write, delays: [0] }),
+    ).rejects.toThrow('DSH composer unavailable');
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

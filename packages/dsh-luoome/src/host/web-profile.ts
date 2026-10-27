@@ -3,13 +3,24 @@ import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-connection';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type { PluginPrincipal } from '@luoome/tools';
+import { z } from 'zod';
 import { createDshOperationHost } from './dsh-authority.js';
+import { createMarketSettingsHandler, type MarketSettings } from './market-settings.js';
 import type { MarketSurface } from './market-surface.js';
 import { createOperationHandler } from './operations.js';
-import { createPanelStateHandler, createStockDetailHandler } from './panels.js';
+import {
+  createPanelStateHandler,
+  createStockDetailHandler,
+  createStockHistoryHandler,
+} from './panels.js';
 import type { ReadSurface } from './read-surface.js';
+import { createResearchReadHandler } from './research.js';
+import type { ResearchJobs } from './research-jobs.js';
+import { createResearchContinuityReader } from './research-status.js';
 import { createReadCallHandler } from './routes.js';
-import { registerReadTools } from './tools.js';
+import { registerReadTools, toolResultJsonSchema } from './tools.js';
+
+export const RESEARCH_STATUS_TOOL = 'luoome_research_status';
 
 export const mountDshWebProfile = (
   ctx: Context,
@@ -17,6 +28,8 @@ export const mountDshWebProfile = (
     readonly read: ReadSurface;
     /** 面板数据路由的市场 external 面；与 read 分开，按名调用未暴露工具仍被拒绝。 */
     readonly market: MarketSurface;
+    readonly marketSettings?: MarketSettings;
+    readonly researchJobs?: ResearchJobs;
     readonly principalForOwner: () => PluginPrincipal | null;
   },
 ) => {
@@ -33,6 +46,19 @@ export const mountDshWebProfile = (
   const readNames = new Set(options.read.descriptors().map((tool) => tool.name));
   const removers: (() => void)[] = [];
   const operations = createOperationHandler(host.service, () => options.principalForOwner());
+  const continuity = createResearchContinuityReader({
+    read: options.read,
+    repository: options.repository,
+    profile: options.profile,
+    policyVersion: options.policyVersion,
+    automationsEnabled: options.automationsEnabled === true,
+    dailyCycleEnabled: options.policies.some(
+      (policy) => policy.scheduled && policy.tool.name === 'run_strategy_daily_cycle',
+    ),
+    ...(ctx.get('schedule') === undefined ? {} : { tasks: () => ctx.schedule.catalog() }),
+    principalForSession: options.principalForSession,
+    now: options.now,
+  });
   const configuration = () => ({
     profile: options.profile,
     accountId: options.principalForOwner()?.accountId,
@@ -56,6 +82,48 @@ export const mountDshWebProfile = (
     routes.set(path, { methods, fetch });
   };
   try {
+    removers.push(
+      ctx.tools.register({
+        name: RESEARCH_STATUS_TOOL,
+        description:
+          '只读核对策略持续研究状态：策略日程、DSH 任务、有效授权、真实业务回执、同次日循环审计和事实截止；不创建任务或通知。',
+        parameters: {
+          type: 'object',
+          properties: { strategyId: { type: 'string', minLength: 1, maxLength: 200 } },
+          required: ['strategyId'],
+          additionalProperties: false,
+        },
+        output: {
+          schema: toolResultJsonSchema,
+          render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+        },
+        execute: async (input, execution) => {
+          const parsed = z
+            .object({ strategyId: z.string().min(1).max(200) })
+            .strict()
+            .safeParse(input);
+          const principal = host.identity.principal(execution.agent);
+          const owner = options.principalForOwner();
+          if (
+            disposed ||
+            !parsed.success ||
+            execution.signal.aborted ||
+            !principal ||
+            !owner ||
+            principal.userId !== owner.userId ||
+            principal.accountId !== owner.accountId
+          )
+            return {
+              ok: false,
+              error: { kind: 'permission_denied', required: 'live owner research scope' },
+            };
+          return {
+            ok: true,
+            data: await continuity(principal, parsed.data.strategyId, execution.signal),
+          };
+        },
+      }),
+    );
     removers.push(
       ctx.tools.guard((execution) => {
         if (!readNames.has(execution.name)) return;
@@ -87,13 +155,44 @@ export const mountDshWebProfile = (
         admit: () => null,
         now: () => new Date(options.now()),
         configuration,
+        continuity: async (strategyId, signal) => {
+          const principal = options.principalForOwner();
+          return principal === null ? undefined : continuity(principal, strategyId, signal);
+        },
+      }),
+    );
+    register(
+      '/api/luoome/research',
+      ['GET'],
+      createResearchReadHandler({
+        read: options.read,
+        principal: options.principalForOwner,
+        admit: () => null,
+        now: options.now,
+        continuity,
+        ...(options.researchJobs === undefined ? {} : { jobStatus: options.researchJobs.status }),
       }),
     );
     register('/api/luoome/operations/prepare', ['POST'], operations);
+    if (options.marketSettings !== undefined)
+      register(
+        '/api/luoome/settings/market',
+        ['GET', 'POST'],
+        createMarketSettingsHandler(options.marketSettings),
+      );
     register(
       '/api/luoome/stock',
       ['GET'],
       createStockDetailHandler({
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
+    );
+    register(
+      '/api/luoome/stock/history',
+      ['GET'],
+      createStockHistoryHandler({
         market: options.market,
         admit: () => null,
         now: () => new Date(options.now()),

@@ -2,7 +2,7 @@
 //
 // 覆盖（需求 §7、§9 M4、§10.4；plugin 详细设计 §4.2/§8）：
 //   1. 真实 DSH Web 登录（官方 token → signed cookie），加载随包 client slots；
-//   2. 五个侧栏条目（看盘 / 持仓 / 策略 / 复盘 / 投资设置）可点击并渲染主面板；
+//   2. 四个侧栏条目 + DSH 设置内的投资设置；FUYAO 保存后下一次请求立即使用新配置；
 //   3. 每块面板 DOM 展示值与宿主 /api/luoome/state 的 ToolResult、以及 SQLite 事实库
 //      逐项一致（账户/持仓/建议/策略版本/运行/信心校准/决策复盘/用户反馈）；
 //   4. 策略面板「在对话中研究此策略」携带 strategyId/runId，点击后导航到会话并记录请求；
@@ -12,6 +12,7 @@
 // 这是「真实浏览器验收」，不是真实模型质量验收：数据来自合成 fixture，不联网供应商、
 // 不调用模型、不触碰真实个人库。Chrome 不可用时显式失败并报告具体阻塞。
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
@@ -161,10 +162,11 @@ class Cdp {
 
 interface PageSession {
   readonly evaluate: <T = unknown>(expression: string) => Promise<T>;
-  readonly waitFor: (expression: string, label: string, timeoutMs?: number) => Promise<void>;
+  readonly waitFor: (expression: string, label?: string, timeoutMs?: number) => Promise<void>;
   readonly navigate: (url: string) => Promise<void>;
   readonly screenshot: (path: string, fullPage?: boolean) => Promise<void>;
   readonly setViewport: (width: number, height: number, mobile: boolean) => Promise<void>;
+  readonly insertText: (text: string) => Promise<void>;
 }
 
 const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> => {
@@ -177,6 +179,17 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
   if (typeof sessionId !== 'string') throw new Error('CDP 无法附加 target session');
   await cdp.send('Page.enable', {}, sessionId);
   await cdp.send('Runtime.enable', {}, sessionId);
+  await cdp.send(
+    'Page.addScriptToEvaluateOnNewDocument',
+    {
+      source: `window.__luoomeErrors = [];
+      const reportConsoleError = console.error;
+      console.error = (...args) => { window.__luoomeErrors.push(args.map(String).join(' ')); reportConsoleError(...args); };
+      window.addEventListener('error', (event) => window.__luoomeErrors.push('window.error: ' + String(event.message)));
+      window.addEventListener('unhandledrejection', (event) => window.__luoomeErrors.push('unhandledrejection: ' + String(event.reason)));`,
+    },
+    sessionId,
+  );
 
   const evaluate = async <T>(expression: string): Promise<T> => {
     const result = await cdp.send(
@@ -195,7 +208,7 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
     }
     return (result.result as { value?: T } | undefined)?.value as T;
   };
-  const waitFor = async (expression: string, label: string, timeoutMs = 25_000) => {
+  const waitFor = async (expression: string, label = '页面状态', timeoutMs = 25_000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if ((await evaluate<boolean>(`Boolean(${expression})`)) === true) return;
@@ -236,7 +249,10 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
       sessionId,
     );
   };
-  return { evaluate, waitFor, navigate, screenshot, setViewport };
+  const insertText = async (text: string) => {
+    await cdp.send('Input.insertText', { text }, sessionId);
+  };
+  return { evaluate, waitFor, navigate, screenshot, setViewport, insertText };
 };
 
 const waitForChrome = async (userDataDir: string): Promise<string> => {
@@ -267,7 +283,7 @@ const launchDsh = (
   publicBase: string,
 ) => {
   const child = spawn(
-    'node',
+    process.execPath,
     [
       cli,
       '--profile',
@@ -362,6 +378,20 @@ interface FixtureInfo {
   readonly strategyName: string;
   readonly secondStrategyId: string;
   readonly secondStrategyName: string;
+  readonly research: {
+    readonly strategyId: string;
+    readonly strategyName: string;
+    readonly baseVersionId: string;
+    readonly candidateVersionId: string;
+    readonly secondCandidateVersionId: string;
+    readonly runId: string;
+    readonly sessionId: string;
+    readonly stockIds: readonly string[];
+    readonly from: string;
+    readonly to: string;
+    readonly benchmarkStockId: string;
+    readonly trialAsOf: string;
+  };
 }
 
 const summary: Record<string, unknown> = {};
@@ -373,11 +403,40 @@ const profileDir = join(root, 'profiles', PROFILE);
 const launched: ReturnType<typeof launchDsh>[] = [];
 const chromeProcesses: ReturnType<typeof spawn>[] = [];
 let browser: Cdp | undefined;
-let page: PageSession | undefined;
+let failurePage: PageSession | undefined;
 let sentimentUnavailable = false;
 let stockQuoteFailure = false;
 let stockQuotePending = false;
 let stockDetailReads = 0;
+let useConfiguredMarket = false;
+let loseResearchConfirmation = false;
+const fuyaoKey = 'synthetic-browser-fuyao-key';
+const fuyaoCalls: { path: string; authenticated: boolean }[] = [];
+const fuyaoGateway = createServer((incoming, outgoing) => {
+  const url = new URL(incoming.url ?? '/', 'http://fixture.invalid');
+  fuyaoCalls.push({
+    path: url.pathname,
+    authenticated: incoming.headers['x-api-key'] === fuyaoKey,
+  });
+  outgoing.setHeader('content-type', 'application/json');
+  outgoing.end(
+    JSON.stringify({
+      code: 0,
+      data: {
+        timestamp: Date.now(),
+        item: (url.searchParams.get('thscodes') ?? '600519.SH').split(',').map((thscode) => ({
+          thscode,
+          last_price: 1632.5,
+          open_price: 1600,
+          high_price: 1640,
+          low_price: 1590,
+          prev_price: 1600,
+          volume: 1800000,
+        })),
+      },
+    }),
+  );
+});
 const proxy = createServer();
 
 try {
@@ -385,6 +444,11 @@ try {
   await mkdir(workspace, { recursive: true });
   await mkdir(luoomeHome, { recursive: true });
   await mkdir(profileDir, { recursive: true });
+  await new Promise<void>((done) => fuyaoGateway.listen(0, '127.0.0.1', done));
+  const fuyaoAddress = fuyaoGateway.address();
+  if (fuyaoAddress === null || typeof fuyaoAddress === 'string')
+    throw new Error('Missing FUYAO fixture port');
+  const fuyaoBaseUrl = `http://127.0.0.1:${fuyaoAddress.port}`;
 
   // 1) 构建并“安装”插件到临时 profile（本地目录拷贝，等价本地安装；tarball 打包验收在
   //    infra/dsh/plugin-install-acceptance.ts，避免与其并发 pack/临时目录冲突）。
@@ -465,7 +529,7 @@ try {
       outgoing.end();
       return;
     }
-    if (incoming.url.startsWith('/dsh/api/luoome/stock?')) {
+    if (incoming.url.startsWith('/dsh/api/luoome/stock?') && !useConfiguredMarket) {
       stockDetailReads++;
       const stockId = new URL(incoming.url, 'http://fixture.invalid').searchParams.get('stockId');
       const quote = {
@@ -506,6 +570,22 @@ try {
       return;
     }
     const forwarded = httpRequest(upstreamOptions(incoming), (response) => {
+      if (
+        loseResearchConfirmation &&
+        /\/api\/luoome\/operations\/[^/]+\/confirm$/.test(incoming.url ?? '') &&
+        response.statusCode === 200
+      ) {
+        loseResearchConfirmation = false;
+        response.resume();
+        response.on('end', () => {
+          outgoing.writeHead(200, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+          });
+          outgoing.end('{');
+        });
+        return;
+      }
       if (
         !sentimentUnavailable ||
         !incoming.url?.includes('/api/luoome/state?panel=overview') ||
@@ -621,7 +701,12 @@ try {
   chromeProcesses.push(chrome);
   const websocketUrl = await waitForChrome(chromeUserData);
   browser = await Cdp.connect(websocketUrl);
-  page = await connectPage(websocketUrl);
+  await browser.send('Browser.setDownloadBehavior', {
+    behavior: 'allow',
+    downloadPath: evidenceDir,
+  });
+  const page = await connectPage(websocketUrl);
+  failurePage = page;
   await page.setViewport(1320, 900, false);
   await page.navigate(startup);
   await page.evaluate<boolean>(`(() => {
@@ -659,20 +744,57 @@ try {
   const sidebarLabels = await page.evaluate<string[]>(
     `[...document.querySelectorAll('button')].map((button) => button.textContent.trim()).filter((label) => ['看盘','持仓','策略','复盘','投资设置'].includes(label))`,
   );
-  if (sidebarLabels.length !== 5)
-    throw new Error(`侧栏条目应为 5 个，实际 ${JSON.stringify(sidebarLabels)}`);
+  if (sidebarLabels.length !== 4 || sidebarLabels.includes('投资设置'))
+    throw new Error(
+      `侧栏条目应为 4 个，投资设置应位于 DSH 设置内，实际 ${JSON.stringify(sidebarLabels)}`,
+    );
 
-  const clickPanel = async (label: string) => {
+  const clickButton = async (label: string) => {
     const clicked = await page.evaluate<boolean>(
       `(() => {
-        const buttons = [...document.querySelectorAll('button,[role="button"]')];
-        const target = buttons.find((element) => element.textContent.trim() === ${JSON.stringify(label)}) ?? buttons.find((element) => element.getAttribute('aria-label') === ${JSON.stringify(label)});
+        const buttons = [...document.querySelectorAll('button,[role="button"],[role="menuitem"]')];
+        const target = buttons.find((element) => element.textContent.trim() === ${JSON.stringify(label)}) ?? buttons.find((element) => element.getAttribute('aria-label') === ${JSON.stringify(label)}) ?? buttons.find((element) => element.getAttribute('role') === 'menuitem' && element.textContent.trim().startsWith(${JSON.stringify(label)}));
         if (!target) return false;
         target.click();
         return true;
       })()`,
     );
     if (!clicked) throw new Error(`无法点击侧栏条目 ${label}`);
+  };
+  const closeSettings = async () => {
+    await page.evaluate(`(() => {
+      const dialog = document.querySelector('[data-shortcut-modal="settings"]');
+      if (!dialog) return;
+      const button = [...dialog.querySelectorAll('button')].find((item) => ['关闭', '关闭设置', 'Close', 'Close settings'].includes(item.textContent.trim()));
+      if (!button) throw new Error('无法关闭 DSH 设置');
+      button.click();
+    })()`);
+    await page.waitFor(
+      `document.querySelector('[data-shortcut-modal="settings"]') === null`,
+      '关闭 DSH 设置',
+    );
+  };
+  const clickPanel = async (label: string) => {
+    if (label === '投资设置') {
+      if (
+        !(await page.evaluate(
+          `document.querySelector('[data-shortcut-modal="settings"]') !== null`,
+        ))
+      ) {
+        await clickButton('账号菜单');
+        await page.waitFor(`document.querySelector('[role="menu"]') !== null`, 'DSH 更多菜单');
+        await clickButton('设置');
+      }
+      await page.waitFor(
+        `document.querySelector('[data-shortcut-modal="settings"]') !== null`,
+        'DSH 原生设置',
+      );
+      await clickButton('投资设置');
+      await page.waitFor(`document.querySelector('.luo-settings') !== null`, '投资设置分区');
+    } else {
+      await closeSettings();
+      await clickButton(label);
+    }
   };
 
   const overviewState = await fetchState(origin, cookie, 'overview');
@@ -755,11 +877,14 @@ try {
   await page.screenshot(join(evidenceDir, 'positions-desktop.png'));
 
   await clickPanel('投资设置');
-  await page.waitFor(`document.querySelector('.luo-field input') !== null`, '账户设置表单');
+  await page.waitFor(
+    `document.querySelector('input[name="account-name"]') !== null`,
+    '账户设置表单',
+  );
   const newAccountName = '浏览器验收：已确认改名';
   const setAccountName = () =>
     page.evaluate(`(() => {
-    const input = document.querySelector('.luo-field input');
+    const input = document.querySelector('input[name="account-name"]');
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     setter.call(input, ${JSON.stringify(newAccountName)});
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -807,6 +932,78 @@ try {
   if (!/^[a-f0-9-]{36}$/.test(storedReference)) throw new Error('浏览器恢复只应保留操作 UUID');
   if (await page.evaluate<number>("document.querySelectorAll('.luo-root .luo-err').length"))
     throw new Error('设置页不应误报读取失败');
+
+  await page.waitFor(
+    `document.querySelector('input[aria-label="FUYAO API Key"]') !== null`,
+    'FUYAO 设置表单',
+  );
+  await page.evaluate(`(() => {
+    const setInput = (label, value) => {
+      const input = document.querySelector('input[aria-label="' + label + '"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    setInput('FUYAO 服务地址', ${JSON.stringify(fuyaoBaseUrl)});
+    setInput('FUYAO API Key', ${JSON.stringify(fuyaoKey)});
+    for (const [index, value] of ['fuyao', '', ''].entries()) {
+      const select = document.querySelector('select[aria-label="行情源优先级 ' + (index + 1) + '"]');
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, value);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  })()`);
+  await clickAction('保存行情设置');
+  await page.waitFor(
+    `document.body.innerText.includes('行情设置已保存，立即生效')`,
+    'FUYAO 保存成功',
+  );
+  await page.waitFor(
+    `document.querySelector('input[aria-label="FUYAO API Key"]')?.value === ''`,
+    'FUYAO 密钥已清空',
+  );
+  const marketSettingsResponse = await fetch(`${origin}/api/luoome/settings/market`, {
+    headers: { cookie },
+  });
+  const marketSettingsText = await marketSettingsResponse.text();
+  const marketSettings = JSON.parse(marketSettingsText);
+  if (
+    !marketSettings.ok ||
+    marketSettings.data.activeOrder.join(',') !== 'fuyao' ||
+    !marketSettings.data.fuyao.configured ||
+    marketSettingsText.includes(fuyaoKey)
+  )
+    throw new Error('FUYAO 配置应保存且不回显密钥');
+  useConfiguredMarket = true;
+  const liveFuyaoQuote = await page.evaluate<{
+    quote?: { ok?: boolean; data?: { quote?: { source?: string; close?: number } } };
+  }>(
+    `fetch('api/luoome/stock?stockId=600519.SH', { credentials: 'same-origin', cache: 'no-store' }).then((response) => response.json())`,
+  );
+  useConfiguredMarket = false;
+  if (
+    !liveFuyaoQuote.quote?.ok ||
+    liveFuyaoQuote.quote.data?.quote?.source !== 'fuyao' ||
+    liveFuyaoQuote.quote.data.quote.close !== 1632.5 ||
+    !fuyaoCalls.some((call) => call.path === '/api/a-share/prices/snapshot' && call.authenticated)
+  )
+    throw new Error('保存后当前 DSH 进程的真实行情请求未立即使用 FUYAO 地址和密钥');
+  if ((await fetch(`${origin}/api/luoome/settings/market`)).status !== 401)
+    throw new Error('行情设置必须要求 DSH 登录');
+  if (
+    (
+      await fetch(`${origin}/api/luoome/settings/market`, {
+        method: 'POST',
+        headers: { cookie, origin: 'https://other.test', 'content-type': 'application/json' },
+        body: JSON.stringify({ sources: ['sina'], fuyao: { baseUrl: fuyaoBaseUrl } }),
+      })
+    ).status !== 403
+  )
+    throw new Error('行情设置必须拒绝跨源写入');
+  await closeSettings();
+  await clickPanel('投资设置');
+  await page.waitFor(
+    `document.querySelector('input[aria-label="FUYAO 服务地址"]')?.value === ${JSON.stringify(fuyaoBaseUrl)}`,
+    '重新打开后保留 FUYAO 配置',
+  );
   await page.screenshot(join(evidenceDir, 'settings-desktop.png'));
 
   await clickPanel('复盘');
@@ -849,6 +1046,13 @@ try {
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.strategyName)})`,
     '策略面板',
   );
+  await page.evaluate(
+    `document.querySelector('[data-strategy-choice="${fixtureInfo.strategyId}"]').click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.strategyName)}`,
+    '选择正式运行 fixture',
+  );
   const strategiesText = await page.evaluate<string>('document.body.innerText');
   for (const expected of [
     fixtureInfo.strategyName,
@@ -861,6 +1065,10 @@ try {
     '退出条件',
     '风险条件',
     '在对话中研究此策略',
+    '策略日程已开启 · 执行待核对',
+    '30 16 * * 1-5',
+    '已订阅 1 个 Watchlist',
+    '在对话中管理运行',
   ])
     if (!strategiesText.includes(expected)) throw new Error(`策略面板 DOM 缺少「${expected}」`);
   for (const internal of [
@@ -895,7 +1103,7 @@ try {
     `document.querySelector('[data-strategy-choice="${fixtureInfo.secondStrategyId}"]').click()`,
   );
   await page.waitFor(
-    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.secondStrategyName)} && document.body.innerText.includes('尚无已发布的匹配结果')`,
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.secondStrategyName)} && document.body.innerText.includes('尚无已发布的匹配结果') && document.body.innerText.includes('已发布，尚未启用持续运行') && document.querySelector('.luo-strategy-content').innerText.includes('暂停')`,
     '切换至尚未运行的策略',
   );
   if (
@@ -914,20 +1122,34 @@ try {
     ? (strategiesState.strategies as {
         strategyId: string;
         workspace: { ok: boolean; data?: unknown };
+        schedule: {
+          ok: boolean;
+          data?: { schedule?: { cron: string; enabled: boolean } | null };
+        };
+        subscriptions: {
+          ok: boolean;
+          data?: { subscriptions?: { status: string }[] };
+        };
       }[])
     : [];
-  const strategyWorkspace = strategiesExtra.find(
-    (item) => item.strategyId === fixtureInfo.strategyId,
-  )?.workspace;
+  const strategyState = strategiesExtra.find((item) => item.strategyId === fixtureInfo.strategyId);
+  const strategyWorkspace = strategyState?.workspace;
   const dbStrategies = database.strategies as { id: string; currentVersionId: string | null }[];
   const dbRuns = database.runs as { id: string; publication: string | null }[];
+  const dbSchedule = database.schedule as { cron: string; enabled: boolean } | null;
+  const dbSubscriptions = database.subscriptions as { status: string }[];
   if (
     strategyList?.strategies?.find((item) => item.id === fixtureInfo.strategyId)
       ?.currentVersionId !== fixtureInfo.versionId ||
     strategyWorkspace?.ok !== true ||
     dbStrategies.find((item) => item.id === fixtureInfo.strategyId)?.currentVersionId !==
       fixtureInfo.versionId ||
-    dbRuns[0]?.publication !== 'published'
+    dbRuns[0]?.publication !== 'published' ||
+    strategyState?.schedule.ok !== true ||
+    strategyState.schedule.data?.schedule?.cron !== dbSchedule?.cron ||
+    strategyState.schedule.data?.schedule?.enabled !== dbSchedule?.enabled ||
+    strategyState.subscriptions.ok !== true ||
+    strategyState.subscriptions.data?.subscriptions?.[0]?.status !== dbSubscriptions[0]?.status
   )
     throw new Error('策略 state 与 DB 不一致');
   const drilldown = await page.evaluate<{ strategyId: string | null; runId: string | null }>(
@@ -1015,6 +1237,43 @@ try {
     `document.querySelector('dialog[open]')?.innerText.includes('1,520.00')`,
     '关闭重开后的正确个股',
   );
+  // 在无模型调用的可编辑会话中验收管理草稿，避免前置模型失败使会话进入只读。
+  await clickPanel('策略');
+  await page.waitFor(
+    `document.querySelector('[data-strategy-operation]') !== null`,
+    '运行管理入口',
+  );
+  await page.evaluate(`document.querySelector('[data-strategy-operation]').click()`);
+  await page.waitFor(
+    `window.__luoomeLastStrategyOperationRequest?.strategyId === ${JSON.stringify(fixtureInfo.strategyId)}`,
+    '运行管理请求记录',
+  );
+  const operationRequest = await page.evaluate<{ strategyId: string; prompt: string }>(
+    'window.__luoomeLastStrategyOperationRequest',
+  );
+  if (
+    !operationRequest.prompt.includes('StrategySchedule') ||
+    !operationRequest.prompt.includes('run_strategy_daily_cycle') ||
+    !operationRequest.prompt.includes('不要直接调用 run_strategy') ||
+    operationRequest.prompt.includes(fixtureInfo.strategyId)
+  )
+    throw new Error('运行管理草稿没有正确说明两层调度或泄露内部标识');
+  await page.waitFor(
+    `(() => {
+      const editor = document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]');
+      return editor !== null && editor.innerText.includes('请管理') && !editor.innerText.includes(${JSON.stringify(fixtureInfo.strategyId)});
+    })()`,
+    '运行管理只写入 composer，不自动提交',
+  );
+  await clickPanel('策略');
+  await page.waitFor(
+    `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]') !== null`,
+    '返回策略匹配标的',
+  );
+  await page.evaluate(
+    `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]').click()`,
+  );
+  await page.waitFor(`document.querySelector('dialog[open] [data-analyze-stock]') !== null`);
   await page.evaluate(`document.querySelector('dialog[open] [data-analyze-stock]').click()`);
   await page.waitFor(
     `['submitted','failed'].includes(window.__luoomeLastStockAnalysisRequest?.state)`,
@@ -1075,6 +1334,17 @@ try {
     })()`,
     '研究提示草稿写入官方 composer',
   );
+  // 原始缺陷场景：前置模型调用失败后，当前会话只读；管理入口仍须给出可编辑草稿。
+  await clickPanel('策略');
+  await page.waitFor(`document.querySelector('[data-strategy-operation]') !== null`);
+  await page.evaluate(`document.querySelector('[data-strategy-operation]').click()`);
+  await page.waitFor(
+    `(() => {
+      const editor = document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]');
+      return editor !== null && editor.innerText.includes('请管理') && !editor.innerText.includes(${JSON.stringify(fixtureInfo.strategyId)});
+    })()`,
+    '模型失败后的只读会话也能新建管理草稿',
+  );
   // 5) 刷新后仍正确（cookie 持久、state 与 DOM 重新对齐）。
   await page.navigate(`${origin}/`);
   await page.waitFor(`document.body.innerText.includes('看盘')`, '刷新后的工作台');
@@ -1095,7 +1365,7 @@ try {
 
   // 6) 移动端基本可读：窄屏侧栏自动折叠为图标 rail（aria-label 仍可定位），
   //    通过 rail 按钮切换面板，主面板仍可见且无横向溢出。
-  await page.setViewport(640, 844, true);
+  await page.setViewport(390, 844, true);
   await page.navigate(`${origin}/`);
   await page.waitFor(
     `document.querySelector('button[aria-label="看盘"]') !== null`,
@@ -1115,13 +1385,18 @@ try {
   await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
   for (const [label, title, file] of [
     ['持仓', '持仓与账本', 'positions-mobile.png'],
-    ['投资设置', '账户与设置', 'settings-mobile.png'],
+    ['投资设置', 'FUYAO（同花顺）', 'settings-mobile.png'],
   ]) {
     await clickPanel(label as string);
     await page.waitFor(
       `document.body.innerText.includes(${JSON.stringify(title)})`,
       `${label}窄屏`,
     );
+    if (label === '投资设置')
+      await page.waitFor(
+        `document.querySelector('input[aria-label="FUYAO 服务地址"]')?.value === ${JSON.stringify(fuyaoBaseUrl)} && document.querySelector('select[aria-label="行情源优先级 1"]')?.value === 'fuyao' && document.querySelector('input[aria-label="FUYAO API Key"]')?.value === ''`,
+        '刷新后保留 FUYAO 配置且不回显密钥',
+      );
     const width = await page.evaluate<number>(
       'document.documentElement.scrollWidth - window.innerWidth',
     );
@@ -1170,8 +1445,440 @@ try {
     `document.querySelector('dialog[open] button[aria-label="关闭个股详情"]').click()`,
   );
 
+  // 7) 研究闭环：真实路由、Operation 和 SQLite，不注入研究 HTTP 成功响应。
+  const research = fixtureInfo.research;
+  if (!research) throw new Error('研究 fixture 未安装，不能跳过研究闭环');
+  type ResearchOperation = {
+    operationId: string;
+    state: string;
+    tool: string;
+    result: { ok: boolean; data?: Record<string, unknown>; error?: unknown } | null;
+  };
+  const researchApi = async <T>(path: string): Promise<T> => {
+    const response = await fetch(`${origin}/api/luoome/${path}`, {
+      headers: { cookie, origin: new URL(origin).origin },
+    });
+    const result = (await response.json()) as { ok: boolean; data?: T; error?: unknown };
+    if (response.status !== 200 || !result.ok || result.data === undefined)
+      throw new Error(`真实研究读取失败 ${path}: ${JSON.stringify(result)}`);
+    return result.data;
+  };
+  const currentResearchOperation = async () => {
+    const operationId = await page.evaluate<string>(
+      `localStorage.getItem(${JSON.stringify(`luoome:research-operation:${OWNER.accountId}:${research.strategyId}`)})`,
+    );
+    if (!operationId) throw new Error('研究操作没有恢复身份');
+    return researchApi<ResearchOperation>(`operations/${encodeURIComponent(operationId)}`);
+  };
+  const researchButton = async (label: string) => {
+    await page.waitFor(
+      `[...document.querySelectorAll('.luo-research-workbench button')].some((item) => item.textContent.trim() === ${JSON.stringify(label)} && !item.disabled)`,
+      `研究控件可操作: ${label}`,
+    );
+    const clicked = await page.evaluate<boolean>(`(() => {
+      const button = [...document.querySelectorAll('.luo-research-workbench button')].find((item) => item.textContent.trim() === ${JSON.stringify(label)});
+      if (!button || button.disabled) return false;
+      button.scrollIntoView({block:'center'});
+      button.click(); return true;
+    })()`);
+    if (!clicked) throw new Error(`研究控件不可操作: ${label}`);
+  };
+  const researchTab = async (title: string) => {
+    await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.luo-research-tabs button')].find((item) => item.textContent.endsWith(${JSON.stringify(title)}));
+      if (!button) throw new Error('研究步骤不存在');
+      button.click();
+      document.querySelector('.luo-research-workbench').scrollIntoView({block:'start'});
+    })()`);
+    await page.waitFor(
+      `[...document.querySelectorAll('.luo-research-tabs button')].some((item) => item.getAttribute('aria-current') === 'step' && item.textContent.endsWith(${JSON.stringify(title)}))`,
+      `研究步骤 ${title}`,
+    );
+  };
+  const researchFill = async (label: string, value: string) => {
+    const nativeInput = await page.evaluate<boolean>(`(() => {
+      const label = [...document.querySelectorAll('.luo-research-workbench label')].find((item) => item.firstElementChild?.textContent === ${JSON.stringify(label)});
+      const input = label?.querySelector('input,textarea,select');
+      if (!input || input.disabled) throw new Error('研究字段不可编辑: ' + ${JSON.stringify(label)});
+      input.focus();
+      if (input.tagName !== 'SELECT' && input.type !== 'date') { input.select(); return true; }
+      const prototype = input.tagName === 'SELECT' ? HTMLSelectElement.prototype : input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype, 'value').set.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      input.dispatchEvent(new Event('change', {bubbles:true}));
+      return false;
+    })()`);
+    if (nativeInput) await page.insertText(value);
+  };
+  const confirmResearch = async (prepareLabel: string, loseResponse = false) => {
+    await researchButton(prepareLabel);
+    await page.waitFor(
+      `document.querySelector('.luo-research-operation')?.innerText.includes('等待你确认')`,
+      `冻结研究参数: ${prepareLabel}`,
+    );
+    if (loseResponse) loseResearchConfirmation = true;
+    await researchButton('确认本次操作');
+    if (loseResponse) {
+      await page.waitFor(
+        `document.querySelector('.luo-research-operation')?.innerText.includes('结果待核对，请勿重复执行')`,
+        '确认响应丢失保留 unknown',
+      );
+      await researchButton('查询原操作状态');
+    }
+    await page.waitFor(
+      `(() => { const text = document.querySelector('.luo-research-operation')?.innerText ?? ''; return text.includes('操作回执已确认') || text.includes('操作失败'); })()`,
+      `研究真实回执: ${prepareLabel}`,
+      30_000,
+    );
+    const operation = await currentResearchOperation();
+    if (operation.state !== 'succeeded' || operation.result?.ok !== true)
+      throw new Error(`研究操作未成功 ${prepareLabel}: ${JSON.stringify(operation)}`);
+    return operation;
+  };
+  await page.setViewport(1320, 900, false);
+  await clickPanel('策略');
+  await page.evaluate(
+    `document.querySelector('[data-strategy-choice="${research.strategyId}"]').click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea') !== null`,
+    '恢复合成研究空间',
+  );
+  const beforeResearch = await researchApi<{
+    state: {
+      ok: boolean;
+      data: { state: { revision: number; updatedAt: string; state: { question: string } } };
+    };
+  }>(`research?view=state&strategyId=${research.strategyId}`);
+  if (!beforeResearch.state.ok || !beforeResearch.state.data.state.state.question)
+    throw new Error('真实宿主没有恢复已保存研究');
+  const researchDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' });
+  if (
+    researchDay.format(new Date(beforeResearch.state.data.state.updatedAt)) ===
+    researchDay.format(new Date())
+  )
+    throw new Error('研究 fixture 必须来自前一日，以验证真实宿主跨日恢复');
+  const question = '隔离浏览器验收：只提高价格门槛，保留全部缺失样本并核对后续观察。';
+  const conclusion = '合成事实仅支持规则差异核对；历史样本不完整，暂不能判断收益或策略有效性。';
+  await researchFill('这次只想验证什么', question);
+  await page.evaluate(`(() => {
+    const input = document.querySelector('.luo-condition-editor input[type="number"]');
+    if (!input) throw new Error('catalog 结构化门槛编辑器不存在');
+    input.focus(); input.select();
+  })()`);
+  await page.insertText('11.5');
+  await researchFill('这次改动的理由', '隔离验收：只将候选价格门槛调整到 11.5');
+  const candidateOperation = await confirmResearch('保存为新候选版本');
+  const newCandidate = candidateOperation.result?.data?.version as { id: string; version: number };
+  if (!newCandidate?.id) throw new Error('候选没有真实持久化版本');
+  await page.waitFor(
+    `[...document.querySelectorAll('.luo-research-workbench select')].some((select) => select.value === ${JSON.stringify(newCandidate.id)})`,
+    '新候选版本回读',
+  );
+  await confirmResearch('校验已保存候选');
+  await researchButton('检查数据资格');
+  await page.waitFor(`document.body.innerText.includes('按规则字段检查覆盖')`, '字段覆盖预检');
+  const preflight = await researchApi<{
+    preflight: {
+      ok: boolean;
+      data: {
+        fields: { availableSamples: number; totalSamples: number }[];
+        layers: { strictBacktest: { status: string } };
+      };
+    };
+  }>(
+    `research?${new URLSearchParams({ view: 'preflight', strategyId: research.strategyId, versionId: newCandidate.id, from: research.from, to: research.to, stockIds: research.stockIds.join(','), benchmarkStockId: research.benchmarkStockId })}`,
+  );
+  if (
+    !preflight.preflight.ok ||
+    !preflight.preflight.data.fields.some((field) => field.availableSamples < field.totalSamples) ||
+    preflight.preflight.data.layers.strictBacktest.status !== 'blocked'
+  )
+    throw new Error('预检未保留真实历史缺口与严格回测门禁');
+  await page.screenshot(join(evidenceDir, 'research-question-desktop.png'));
+  await researchTab('试跑与诊断');
+  await researchFill('事实来源', 'replay');
+  await researchFill('试跑交易日', research.to);
+  const trialOperation = await confirmResearch('准备同快照试跑');
+  const trial = trialOperation.result?.data as {
+    inputIdentity: { snapshotHash: string };
+    base: { run: { inputSnapshot: { dataCheckpoint: { checksum: string } } } };
+    draft: { run: { inputSnapshot: { dataCheckpoint: { checksum: string } } } };
+  };
+  if (
+    !trial?.inputIdentity?.snapshotHash ||
+    trial.base.run.inputSnapshot.dataCheckpoint.checksum !== trial.inputIdentity.snapshotHash ||
+    trial.draft.run.inputSnapshot.dataCheckpoint.checksum !== trial.inputIdentity.snapshotHash
+  )
+    throw new Error('基线/候选未使用同一实际输入快照');
+  await page.evaluate(`(() => {
+    const candidates = [...document.querySelectorAll('.luo-research-candidates input[type="checkbox"]')];
+    if (candidates.length < 2) throw new Error('可比较候选不足');
+    candidates[0].click(); candidates[1].click();
+  })()`);
+  const boundedOperation = await confirmResearch('准备有界候选对照');
+  const bounded = boundedOperation.result?.data as {
+    inputIdentity: { snapshotHash: string };
+    candidates: { status: string; comparison?: { inputIdentity: { snapshotHash: string } } }[];
+  };
+  if (
+    bounded.candidates.length !== 2 ||
+    bounded.candidates.some(
+      (candidate) =>
+        candidate.comparison &&
+        candidate.comparison.inputIdentity.snapshotHash !== bounded.inputIdentity.snapshotHash,
+    )
+  )
+    throw new Error('有界比较丢失候选或未共享实际输入');
+  await researchButton('把对照结果与失败带入结论草稿');
+  await researchTab('试跑与诊断');
+  const diagnosisChecks: { kind: string; total: number }[] = [];
+  for (const kind of [
+    'selected',
+    'rule-near-miss',
+    'ranking-near-miss',
+    'excluded',
+    'incomplete',
+  ]) {
+    const result = await researchApi<{
+      diagnostics: { ok: boolean; data: { total: number } };
+    }>(
+      `research?${new URLSearchParams({ view: 'diagnostics', strategyId: research.strategyId, versionId: research.baseVersionId, runId: research.runId, kind, limit: '1' })}`,
+    );
+    if (!result.diagnostics.ok || result.diagnostics.data.total < 1)
+      throw new Error(`缺少真实诊断分类: ${kind}`);
+    diagnosisChecks.push({ kind, total: result.diagnostics.data.total });
+  }
+  await researchFill('诊断来源', 'current');
+  await researchFill('分类', 'incomplete');
+  await page.waitFor(
+    `document.querySelector('.luo-research-workbench')?.innerText.includes('合成数据缺失样本')`,
+    '缺失样本的规则解释',
+  );
+  await page.screenshot(join(evidenceDir, 'research-diagnostics-desktop.png'));
+  await researchFill('分类', 'selected');
+  await page.waitFor(
+    `document.querySelector('.luo-diagnosis-list .luo-stock-link') !== null`,
+    '诊断个股详情入口',
+  );
+  await page.evaluate(`document.querySelector('.luo-diagnosis-list .luo-stock-link').click()`);
+  await page.waitFor(`document.querySelector('dialog[open]') !== null`, '研究个股详情');
+  await page.evaluate(
+    `(() => { const button = [...document.querySelectorAll('dialog[open] button')].find((item) => item.textContent.trim() === '读取历史日 K'); if (!button) throw new Error('历史读取入口未接线'); button.click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('dialog[open] [data-stock-history]') !== null`,
+    '真实历史 K 线',
+  );
+  const historyFacts = await page.evaluate<{ points: number; label: string }>(
+    `(() => { const chart = document.querySelector('dialog[open] [data-stock-history]'); return {points:chart.querySelectorAll('g').length, label:chart.getAttribute('aria-label')}; })()`,
+  );
+  if (historyFacts.points < 2) throw new Error('历史图表没有实际日线事实');
+  await page.evaluate(
+    `document.querySelector('dialog[open] [data-stock-history]').scrollIntoView({block:'center'})`,
+  );
+  await page.screenshot(join(evidenceDir, 'research-stock-history-desktop.png'));
+  await page.setViewport(390, 844, true);
+  if (
+    !(await page.evaluate<boolean>(
+      `(() => { const dialog=document.querySelector('dialog[open]'); return dialog.scrollWidth <= dialog.clientWidth + 1; })()`,
+    ))
+  )
+    throw new Error('390px 历史 K 线详情横向溢出');
+  await page.evaluate(
+    `document.querySelector('dialog[open] [data-stock-history]').scrollIntoView({block:'center'})`,
+  );
+  await page.screenshot(join(evidenceDir, 'research-stock-history-mobile.png'));
+  await page.evaluate(
+    `document.querySelector('dialog[open] button[aria-label="关闭个股详情"]').click()`,
+  );
+  await page.setViewport(1320, 900, false);
+  await researchTab('分层验证');
+  const evaluationOperation = await confirmResearch('准备历史选股评估');
+  const newSession = evaluationOperation.result?.data?.session as { id: string };
+  if (!newSession?.id) throw new Error('历史验证没有稳定任务身份');
+  await page.waitFor(
+    `document.querySelector('.luo-research-workbench')?.innerText.includes('历史选股评估')`,
+    '历史评估状态可读',
+  );
+  let validationFacts: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 120; attempt++) {
+    validationFacts = await researchApi<Record<string, unknown>>(
+      `research?view=validation&strategyId=${research.strategyId}&sessionId=${newSession.id}`,
+    );
+    if (validationFacts.worker === 'idle') break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  if (validationFacts.worker !== 'idle') throw new Error('有界历史任务未结束或无法查询进度');
+  await page.waitFor(
+    `document.querySelector('.luo-validation-progress')?.innerText.includes('执行结束') && document.querySelector('.luo-validation-progress')?.innerText.includes('当前无执行进程') && [...document.querySelectorAll('.luo-research-workbench select')].some((select) => select.value === ${JSON.stringify(newSession.id)} && select.selectedOptions[0]?.textContent.includes('已结束'))`,
+    '页面同步历史评估终态',
+  );
+  const layerStatuses = await page.evaluate<string[]>(
+    `[...document.querySelectorAll('.luo-evidence-layers > li')].map((item) => item.innerText)`,
+  );
+  if (!layerStatuses[0]?.includes('仅本次试跑') || !layerStatuses[1]?.includes('执行结束'))
+    throw new Error('证据分层没有区分内存试跑与实际历史任务终态');
+  await page.evaluate(
+    `document.querySelector('.luo-validation-progress').scrollIntoView({block:'center'})`,
+  );
+  await page.screenshot(join(evidenceDir, 'research-validation-desktop.png'));
+  await researchTab('结论与更新');
+  await researchFill('当前结论', conclusion);
+  await researchFill('判断', 'inconclusive');
+  await researchFill(
+    '限制与反证（每行一条）',
+    '仅合成数据；保留历史缺失、PIT 与执行模型限制。\nT+1/T+3/T+5 是信号观察，不能称为组合回测。',
+  );
+  await researchFill('下一步', '补齐可审计历史后，在独立区间验证；不自动发布或交易。');
+  await researchButton('保存研究空间');
+  await page.waitFor(
+    `document.querySelector('.luo-research-operation')?.innerText.includes('等待你确认')`,
+    '结论取消预览',
+  );
+  await researchButton('取消本次操作');
+  await page.waitFor(
+    `document.querySelector('.luo-research-operation')?.innerText.includes('你已取消此操作')`,
+    '取消研究写入',
+  );
+  const cancelledState = await researchApi<typeof beforeResearch>(
+    `research?view=state&strategyId=${research.strategyId}`,
+  );
+  if (cancelledState.state.data.state.revision !== beforeResearch.state.data.state.revision)
+    throw new Error('取消预览仍写入了研究状态');
+  const saveOperation = await confirmResearch('保存研究空间', true);
+  const savedState = await researchApi<{
+    state: {
+      ok: boolean;
+      data: {
+        state: {
+          revision: number;
+          state: {
+            question: string;
+            candidateVersionId: string;
+            validationSessionId: string;
+            conclusion: { summary: string };
+          };
+          conclusions: unknown[];
+          comparisons?: { candidates: unknown[] }[];
+        };
+      };
+    };
+  }>(`research?view=state&strategyId=${research.strategyId}`);
+  if (
+    savedState.state.data.state.revision !== beforeResearch.state.data.state.revision + 1 ||
+    savedState.state.data.state.state.question !== question ||
+    savedState.state.data.state.state.conclusion.summary !== conclusion ||
+    savedState.state.data.state.state.validationSessionId !== newSession.id ||
+    savedState.state.data.state.comparisons?.at(-1)?.candidates.length !== 2
+  )
+    throw new Error('响应丢失后持久研究结论或幂等修订不一致');
+  await page.navigate(`${origin}/`);
+  await clickPanel('策略');
+  await page.waitFor(
+    `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea')?.value === ${JSON.stringify(question)}`,
+    '刷新后恢复研究问题和固定版本',
+  );
+  await researchTab('结论与更新');
+  await page.waitFor(
+    `document.querySelector('.luo-research-workbench')?.innerText.includes('持续观察')`,
+    '持续观察真实状态',
+  );
+  const updatesFacts = await researchApi<{
+    continuity: { status: string; notificationStatus: string };
+  }>(`research?view=updates&strategyId=${research.strategyId}&versionId=${research.baseVersionId}`);
+  if (
+    updatesFacts.continuity.status === 'healthy' ||
+    updatesFacts.continuity.notificationStatus !== 'not-verified'
+  )
+    throw new Error('未配置真实自动任务却声称持续观察正常或通知送达');
+  await researchButton('导出 manifest 文件');
+  let exportedName: string | undefined;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    exportedName = (await readdir(evidenceDir)).find(
+      (name) => name.startsWith('strategy-research-v') && name.endsWith('.json'),
+    );
+    if (exportedName) break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  if (!exportedName) throw new Error('浏览器未实际下载研究 manifest');
+  const exported = JSON.parse(await readFile(join(evidenceDir, exportedName), 'utf8')) as {
+    canonicalJson?: string;
+    manifestHash?: string;
+    evidenceReferences?: string[];
+    researchState?: unknown;
+    reproducibility?: { marketDataIncluded: boolean };
+  };
+  if (
+    !exported.canonicalJson ||
+    createHash('sha256').update(exported.canonicalJson).digest('hex') !== exported.manifestHash ||
+    !exported.evidenceReferences?.length ||
+    !exported.researchState ||
+    exported.reproducibility?.marketDataIncluded !== false
+  )
+    throw new Error('下载文件缺少研究证据、结论、定义 hash 或数据复现边界');
+  await page.screenshot(join(evidenceDir, 'research-conclusion-desktop.png'));
+  await page.setViewport(390, 844, true);
+  for (const title of ['问题与规则', '试跑与诊断', '分层验证', '结论与更新']) {
+    await researchTab(title);
+    const excess = await page.evaluate<number>(
+      'Math.max(document.documentElement.scrollWidth - innerWidth, ...[...document.querySelectorAll(".luo-research-workbench, .luo-research-stage, .luo-research-operation")].map((element) => element.scrollWidth - element.clientWidth))',
+    );
+    if (excess > 1) throw new Error(`390px 研究步骤 ${title} 横向溢出 ${excess}px`);
+    await page.screenshot(
+      join(
+        evidenceDir,
+        `research-${{ 问题与规则: 'question', 试跑与诊断: 'diagnostics', 分层验证: 'validation', 结论与更新: 'conclusion' }[title]}-mobile.png`,
+      ),
+    );
+  }
+  await researchButton('在对话中继续研究');
+  await page.waitFor(
+    `document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes(${JSON.stringify(question)})`,
+    '研究上下文实际写入官方会话草稿',
+  );
+  const continuedResearch = await page.evaluate<{
+    researchContext: {
+      accountId: string;
+      baseVersionId: string;
+      candidateVersionId: string;
+      researchRevision: number;
+      validationSessionId: string;
+    };
+  }>('window.__luoomeLastResearchRequest');
+  if (
+    continuedResearch.researchContext.accountId !== OWNER.accountId ||
+    continuedResearch.researchContext.baseVersionId !== research.baseVersionId ||
+    continuedResearch.researchContext.candidateVersionId !== newCandidate.id ||
+    continuedResearch.researchContext.researchRevision !== savedState.state.data.state.revision ||
+    continuedResearch.researchContext.validationSessionId !== newSession.id
+  )
+    throw new Error('继续研究的会话草稿未绑定原账户、固定版本、修订与验证任务');
+  const researchEvidence = {
+    strategy: research.strategyName,
+    candidateVersion: newCandidate.version,
+    inputSnapshot: trial.inputIdentity.snapshotHash,
+    boundedCandidatesPreserved: bounded.candidates.length,
+    diagnosisChecks,
+    history: historyFacts,
+    evaluationSession: newSession.id,
+    validation: validationFacts,
+    evidenceLayerStatuses: layerStatuses,
+    cancelledWithoutWrite: true,
+    confirmationResponseLost: true,
+    reconciledOperationId: saveOperation.operationId,
+    savedRevision: savedState.state.data.state.revision,
+    restoredAfterRefresh: true,
+    restoredPriorDayState: true,
+    continuedConversationBinding: continuedResearch.researchContext,
+    continuity: updatesFacts.continuity,
+    downloadedManifest: exportedName,
+    phoneWidth: 390,
+  };
+
   const evidence = {
     mode: '真实浏览器验收（Chrome headless CDP）；合成 fixture，非真实模型质量',
+    research: researchEvidence,
     chrome: chromePath,
     chromeVersion: run(chromePath, ['--version']).trim(),
     dshOrigin: origin,
@@ -1193,6 +1900,16 @@ try {
         cancelledHasNoWrite: true,
         confirmedName: renamedAccount?.account?.name,
         restoredByOperationId: true,
+        nativeDshSettingsSection: true,
+        fuyao: {
+          savedInBrowser: true,
+          appliedWithoutRestart: true,
+          quoteSource: liveFuyaoQuote.quote?.data?.quote?.source,
+          gatewayAuthenticated: fuyaoCalls.some((call) => call.authenticated),
+          restoredAfterReopenAndReload: true,
+          secretNotReturned: true,
+          rejectsUnauthenticatedAndCrossOrigin: true,
+        },
       },
       strategies: {
         domChecks: [
@@ -1244,23 +1961,8 @@ try {
       },
     },
     refresh: { ok: true },
-    mobile: { viewport: '640x844', horizontalOverflowPx: overflow, ok: true },
-    screenshots: [
-      'overview-desktop.png',
-      'strategies-desktop.png',
-      'strategies-matches-desktop.png',
-      'review-desktop.png',
-      'overview-mobile.png',
-      'positions-desktop.png',
-      'settings-desktop.png',
-      'positions-mobile.png',
-      'settings-mobile.png',
-      'strategies-mobile.png',
-      'strategies-matches-mobile.png',
-      'stock-detail-desktop.png',
-      'stock-detail-mobile.png',
-      'stock-analysis-conversation.png',
-    ],
+    mobile: { viewport: '390x844', horizontalOverflowPx: overflow, ok: true },
+    screenshots: (await readdir(evidenceDir)).filter((name) => name.endsWith('.png')).sort(),
     database: {
       account: dbAccount,
       holdings: dbHoldings,
@@ -1276,7 +1978,10 @@ try {
 } catch (error) {
   let pageErrors: unknown = null;
   try {
-    pageErrors = await page?.evaluate('window.__luoomeErrors ?? null');
+    pageErrors = await failurePage?.evaluate(
+      `({ errors: window.__luoomeErrors ?? null, researchFields: [...document.querySelectorAll('.luo-research-workbench label')].map((element) => ({label:element.firstElementChild?.textContent, value:element.querySelector('input,textarea,select')?.value})), buttons: [...document.querySelectorAll('button,[role="menuitem"]')].map((element) => ({ text: element.textContent.trim().slice(0, 100), aria: element.getAttribute('aria-label') })) })`,
+    );
+    await failurePage?.screenshot(join(evidenceDir, 'failure.png'));
   } catch {
     pageErrors = null;
   }
@@ -1300,6 +2005,8 @@ try {
   }
   proxy.closeAllConnections();
   proxy.close();
+  fuyaoGateway.closeAllConnections();
+  fuyaoGateway.close();
   if (process.exitCode !== 1 && process.env.KEEP !== '1')
     await rm(root, { recursive: true, force: true });
 }

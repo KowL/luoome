@@ -17,13 +17,23 @@ import {
   CreateStrategyVersionInput,
   createStrategyTool,
   createStrategyVersionTool,
+  PauseStrategyInput,
   PluginOperationScopeError,
   type PluginPrincipal,
   PublishStrategyVersionInput,
+  pauseStrategyTool,
   pluginInputJson,
   publishStrategyVersionTool,
   RecordAdviceOutcomeInput,
+  ResumeStrategyInput,
   recordAdviceOutcomeTool,
+  resumeStrategyTool,
+  SetStrategyScheduleInput,
+  SubscribeStrategyToWatchlistInput,
+  setStrategyScheduleTool,
+  subscribeStrategyToWatchlistTool,
+  UnsubscribeStrategyFromWatchlistInput,
+  unsubscribeStrategyFromWatchlistTool,
   ValidateStrategyVersionInput,
   validateStrategyVersionTool,
 } from '@luoome/tools';
@@ -214,6 +224,100 @@ const recordAdviceOutcomeOperation: ConfirmablePluginTool = {
   },
 };
 
+const StrategyScheduleOperationInput = SetStrategyScheduleInput.omit({
+  recommendationPolicy: true,
+}).strict();
+
+const setStrategyScheduleOperation: ConfirmablePluginTool = {
+  tool: setStrategyScheduleTool,
+  scheduled: false,
+  bind(raw, principal) {
+    return StrategyScheduleOperationInput.parse(clientScope(raw, principal));
+  },
+  async receipt(raw, ctx) {
+    const input = StrategyScheduleOperationInput.parse(raw);
+    const schedule = await ctx.repos.strategySchedule.findByStrategyId(input.strategyId);
+    if (
+      schedule === null ||
+      schedule.cron !== input.cron ||
+      schedule.timezone !== input.timezone ||
+      schedule.enabled !== input.enabled ||
+      (input.acceptancePolicy !== undefined &&
+        !jsonEqual(schedule.acceptancePolicy, input.acceptancePolicy))
+    )
+      return null;
+    return { ok: true, data: { schedule, replayed: true } };
+  },
+};
+
+const pauseStrategyOperation: ConfirmablePluginTool = {
+  tool: pauseStrategyTool,
+  scheduled: false,
+  bind(raw, principal) {
+    return PauseStrategyInput.parse(clientScope(raw, principal));
+  },
+  async receipt(raw, ctx) {
+    const input = PauseStrategyInput.parse(raw);
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy?.status !== 'paused') return null;
+    return { ok: true, data: { strategy, replayed: true } };
+  },
+};
+
+const resumeStrategyOperation: ConfirmablePluginTool = {
+  tool: resumeStrategyTool,
+  scheduled: false,
+  bind(raw, principal) {
+    return ResumeStrategyInput.parse(clientScope(raw, principal));
+  },
+  async receipt(raw, ctx) {
+    const input = ResumeStrategyInput.parse(raw);
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy?.status !== 'active' || strategy.currentVersionId === undefined) return null;
+    return { ok: true, data: { strategy, replayed: true } };
+  },
+};
+
+const subscribeStrategyOperation: ConfirmablePluginTool = {
+  tool: subscribeStrategyToWatchlistTool,
+  scheduled: false,
+  bind(raw, principal) {
+    return SubscribeStrategyToWatchlistInput.parse(clientScope(raw, principal));
+  },
+  async receipt(raw, ctx) {
+    const input = SubscribeStrategyToWatchlistInput.parse(raw);
+    const subscription = await ctx.repos.strategyWatchlistSubscription.findActive(input);
+    if (subscription === null) return null;
+    return { ok: true, data: { subscription, idempotent: true, replayed: true } };
+  },
+};
+
+const unsubscribeStrategyOperation: ConfirmablePluginTool = {
+  tool: unsubscribeStrategyFromWatchlistTool,
+  scheduled: false,
+  bind(raw, principal) {
+    return UnsubscribeStrategyFromWatchlistInput.parse(clientScope(raw, principal));
+  },
+  async receipt(raw, ctx) {
+    const input = UnsubscribeStrategyFromWatchlistInput.parse(raw);
+    const candidates =
+      input.subscriptionId === undefined
+        ? await ctx.repos.strategyWatchlistSubscription.list({
+            ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
+            ...(input.watchlistId === undefined ? {} : { watchlistId: input.watchlistId }),
+          })
+        : [await ctx.repos.strategyWatchlistSubscription.findById(input.subscriptionId)];
+    const subscription = candidates.find(
+      (candidate) =>
+        candidate?.status === 'cancelled' &&
+        (input.strategyId === undefined || candidate.strategyId === input.strategyId) &&
+        (input.watchlistId === undefined || candidate.watchlistId === input.watchlistId),
+    );
+    if (subscription === undefined || subscription === null) return null;
+    return { ok: true, data: { subscription, idempotent: true, replayed: true } };
+  },
+};
+
 /** 四个策略生命周期 policy：create / create-version / validate / publish，各自独立审批。 */
 export const createStrategyLifecycleOperationPolicies = (): readonly ConfirmablePluginTool[] => [
   createStrategyOperation,
@@ -231,9 +335,18 @@ export const createAdviceOutcomeOperationPolicies = (): readonly ConfirmablePlug
   recordAdviceOutcomeOperation,
 ];
 
-/** 生产装配使用的 M2b-2 精确写回 policy：不含删除/归档/调度、settings、batch 或 trade。 */
+export const createStrategyRunOperationPolicies = (): readonly ConfirmablePluginTool[] => [
+  setStrategyScheduleOperation,
+  pauseStrategyOperation,
+  resumeStrategyOperation,
+  subscribeStrategyOperation,
+  unsubscribeStrategyOperation,
+];
+
+/** 生产装配的精确策略与用户反馈 policies：不含删除/归档、通用 settings 或 trade。 */
 export const createStrategyOperationPolicies = (): readonly ConfirmablePluginTool[] => [
   ...createStrategyLifecycleOperationPolicies(),
+  ...createStrategyRunOperationPolicies(),
   ...createAdviceOutcomeOperationPolicies(),
 ];
 
@@ -246,3 +359,11 @@ export const createPublishStrategyVersionOperation = (): ConfirmablePluginTool =
   publishStrategyVersionOperation;
 export const createRecordAdviceOutcomeOperation = (): ConfirmablePluginTool =>
   recordAdviceOutcomeOperation;
+export const createSetStrategyScheduleOperation = (): ConfirmablePluginTool =>
+  setStrategyScheduleOperation;
+export const createPauseStrategyOperation = (): ConfirmablePluginTool => pauseStrategyOperation;
+export const createResumeStrategyOperation = (): ConfirmablePluginTool => resumeStrategyOperation;
+export const createSubscribeStrategyOperation = (): ConfirmablePluginTool =>
+  subscribeStrategyOperation;
+export const createUnsubscribeStrategyOperation = (): ConfirmablePluginTool =>
+  unsubscribeStrategyOperation;

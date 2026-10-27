@@ -88,6 +88,13 @@ export const STYLE = `
 .luo-root *, .luo-root *::before, .luo-root *::after { box-sizing: border-box; }
 
 .luo-shell { max-width: 1240px; margin: 0 auto; padding: 26px clamp(18px, 3vw, 44px) 56px; }
+.luo-root.luo-settings { height: auto; overflow: visible; background: transparent; }
+.luo-settings .luo-shell { padding: 0 0 24px; }
+.luo-settings .luo-title { font-size: 26px; }
+.luo-settings .luo-field { width: 100%; }
+.luo-settings .luo-source-order { display: grid; gap: 12px; max-width: 420px; }
+.luo-field select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-sm); color: var(--lu-ink); background: var(--lu-bg); font: 14px/1.4 var(--lu-sans); }
+.luo-field select:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
 
 .luo-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--lu-line); }
 .luo-eyebrow { display: flex; align-items: center; gap: 8px; color: var(--lu-accent); font: 600 10.5px/1 var(--lu-sans); letter-spacing: 0.18em; text-transform: uppercase; }
@@ -204,6 +211,15 @@ export const STYLE = `
 .luo-stock-quote-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 23px 16px; margin-bottom: 20px; }
 .luo-stock-quote-grid .luo-stat-v { font-size: 13px; }
 .luo-stock-strategy-name { margin: 0; color: var(--lu-ink); font-size: 14px; }
+.luo-stock-history { margin: 0; min-width: 0; }
+.luo-stock-history-caption { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+.luo-stock-history svg { display: block; width: 100%; height: auto; margin: 16px 0 8px; }
+.luo-stock-history-grid { stroke: var(--lu-line); stroke-width: 1; }
+.luo-stock-history-wick { stroke: currentColor; stroke-width: 1; }
+.luo-stock-history-candle { fill: currentColor; }
+.luo-stock-history .is-up { color: var(--lu-up); }
+.luo-stock-history .is-down { color: var(--lu-down); }
+.luo-stock-history text { fill: var(--lu-ink-3); font: 10px var(--lu-mono); }
 .luo-stock-match-stats { margin: 18px 0 24px; }
 .luo-stock-detail .luo-match-evidence { font-family: var(--lu-sans); }
 .luo-stock-detail .luo-match-evidence summary { white-space: normal; }
@@ -314,6 +330,100 @@ export const STYLE = `
 .luo-strategy-operations > summary { font-weight: 500; }
 .luo-strategy-operations > summary span { margin-left: 14px; color: var(--lu-ink-3); font-size: 11px; font-weight: 400; }
 
+.luo-research-workbench { min-width: 0; border-top: 3px double var(--lu-line-strong); padding-top: 24px; }
+.luo-research-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
+.luo-research-head h3 { margin: 10px 0 8px; font: 400 25px/1.3 var(--lu-serif); }
+.luo-research-head .luo-fine { margin: 0; }
+.luo-research-binding { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; margin: 18px 0; color: var(--lu-ink-2); font-size: 11.5px; }
+.luo-research-binding > span { padding-left: 9px; border-left: 2px solid var(--lu-line-strong); }
+.luo-research-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--lu-line); border-bottom: 1px solid var(--lu-line); margin: 18px 0; }
+.luo-research-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 7px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--lu-ink-2); font: 12px/1.4 var(--lu-sans); cursor: pointer; }
+.luo-research-tabs button > span { color: var(--lu-ink-3); font: 10px/1.4 var(--lu-mono); }
+.luo-research-tabs button[aria-current] { border-bottom-color: var(--lu-accent); color: var(--lu-accent); background: var(--lu-accent-soft); }
+.luo-research-tabs button:hover { background: var(--lu-hover); }
+.luo-research-tabs button:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: -3px; }
+.luo-research-stage { display: grid; gap: 16px; min-width: 0; }
+.luo-research-stage .luo-card { min-width: 0; padding: 19px 20px; }
+.luo-research-stage .luo-card-t { letter-spacing: .07em; font-size: 12px; line-height: 1.6; }
+.luo-research-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+.luo-research-field { max-width: none; margin: 12px 0; min-width: 0; }
+.luo-research-fields > .luo-research-field { margin: 0; }
+.luo-research-field.is-wide { grid-column: 1 / -1; }
+.luo-research-field textarea { width: 100%; min-width: 0; resize: vertical; padding: 11px 12px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-sm); color: var(--lu-ink); background: var(--lu-bg); font: 13px/1.7 var(--lu-sans); }
+.luo-research-field :is(input, select) { font-size: 13px; }
+.luo-research-field textarea:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
+.luo-research-workbench :is(input, textarea, select, button):disabled { opacity: .55; cursor: not-allowed; }
+.luo-research-workbench .luo-btn { min-height: 34px; height: auto; padding-block: 8px; white-space: normal; text-align: left; line-height: 1.5; }
+.luo-research-workbench .luo-btn.is-primary { background: var(--lu-accent); color: var(--lu-bg); border-color: var(--lu-accent); }
+.luo-research-scope { margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--lu-line); }
+.luo-research-scope > summary { display: list-item; color: var(--lu-ink); font-size: 12px; cursor: pointer; }
+.luo-research-scope > summary .luo-pill { margin-left: 12px; }
+.luo-research-workbench summary:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; }
+.luo-definition-editor { min-width: 0; }
+.luo-rule-editor { min-inline-size: 0; border: 1px solid var(--lu-line); border-left: 2px solid var(--lu-accent); padding: 8px 14px 16px; margin: 20px 0 14px; border-radius: 0 var(--lu-r-sm) var(--lu-r-sm) 0; }
+.luo-rule-editor legend { padding: 0 6px; color: var(--lu-ink-2); font: 500 12px/1.5 var(--lu-sans); max-width: 100%; overflow-wrap: anywhere; }
+.luo-rule-editor > details { margin: 12px 0; font-size: 12px; }
+.luo-condition-editor { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(65px, .6fr) minmax(0, 1fr); gap: 10px; }
+.luo-score-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; }
+.luo-catalog-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 15px 0 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; }
+.luo-catalog-fields li { display: grid; gap: 5px; padding: 9px 0; border-bottom: 1px solid var(--lu-line); overflow-wrap: anywhere; }
+.luo-catalog-fields strong { color: var(--lu-ink-2); font-size: 11.5px; font-weight: 500; }
+.luo-catalog-fields span { color: var(--lu-ink-3); font-size: 10.5px; }
+.luo-research-operation { margin: 14px 0 20px; padding: 18px; border: 1px solid var(--lu-accent); border-radius: var(--lu-r-sm); background: var(--lu-accent-soft); }
+.luo-research-operation > strong { font-size: 13px; }
+.luo-research-operation details { margin: 14px 0; font-size: 12px; }
+.luo-research-operation pre { max-height: 220px; padding: 12px; overflow: auto; color: var(--lu-ink-2); background: var(--lu-bg); border: 1px solid var(--lu-line); border-radius: var(--lu-r-sm); font: 11px/1.6 var(--lu-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.luo-research-limitations { margin-top: 16px; padding: 12px 14px; border-left: 2px solid var(--lu-warn); background: var(--lu-warn-soft); color: var(--lu-ink-2); font-size: 11.5px; overflow-wrap: anywhere; }
+.luo-research-limitations > strong { font-size: 11px; color: var(--lu-warn); font-weight: 500; }
+.luo-research-limitations ul { padding-left: 16px; margin: 8px 0 0; line-height: 1.8; }
+.luo-research-search { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.luo-research-search .luo-field { flex: 1 1 160px; margin: 0; }
+.luo-diagnosis-list { list-style: none; padding: 0; margin: 16px 0; }
+.luo-diagnosis-list > li { padding: 15px 0; border-top: 1px solid var(--lu-line); }
+.luo-diagnosis-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.luo-diagnosis-head > .luo-fine { margin-left: auto; }
+.luo-diagnosis-head .luo-stock-link { display: inline-flex; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; text-align: left; color: var(--lu-ink); cursor: pointer; }
+.luo-diagnosis-head .luo-stock-link strong { font: 500 13px/1.5 var(--lu-sans); }
+.luo-diagnosis-head .luo-stock-link > span { font: 10.5px/1.5 var(--lu-mono); color: var(--lu-ink-3); }
+.luo-research-evidence-detail { margin-top: 12px; }
+.luo-research-evidence-detail > summary { color: var(--lu-accent); font-size: 11.5px; cursor: pointer; }
+.luo-research-evidence > ul { padding: 0; margin: 14px 0 0; list-style: none; }
+.luo-research-evidence > ul > li { padding: 12px 0; border-top: 1px dashed var(--lu-line); }
+.luo-rule-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 12px 0; font-size: 11.5px; }
+.luo-rule-inputs dt { color: var(--lu-ink-3); }
+.luo-rule-inputs dd { margin: 3px 0 0; color: var(--lu-ink-2); font-family: var(--lu-mono); overflow-wrap: anywhere; }
+.luo-score-breakdown h4 { margin: 12px 0; font-size: 12px; }
+.luo-score-contribution { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--lu-line); color: var(--lu-ink-2); font-size: 11px; }
+.luo-score-contribution p { flex-basis: 100%; }
+.luo-research-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.luo-research-pagination > span { margin-right: auto; }
+.luo-research-snapshot { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--lu-line); }
+.luo-comparison-list { padding: 0; list-style: none; margin: 12px 0 0; max-height: 300px; overflow: auto; }
+.luo-comparison-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--lu-line); font-size: 11.5px; }
+.luo-comparison-list li span { color: var(--lu-ink-3); font-size: 10.5px; }
+.luo-research-candidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-inline-size: 0; padding: 12px 0; border: 0; margin: 14px 0; }
+.luo-research-candidates legend { color: var(--lu-ink-2); font-size: 12px; }
+.luo-research-candidates label { display: flex; align-items: center; gap: 8px; color: var(--lu-ink-2); font-size: 12px; }
+.luo-research-candidates input { accent-color: var(--lu-accent); }
+.luo-evidence-layers { padding: 0; margin: 16px 0; list-style: none; counter-reset: evidence; }
+.luo-evidence-layers li { position: relative; padding: 13px 0 13px 28px; border-bottom: 1px solid var(--lu-line); counter-increment: evidence; }
+.luo-evidence-layers li::before { content: counter(evidence, decimal-leading-zero); position: absolute; left: 0; top: 16px; color: var(--lu-accent); font: 10px/1.5 var(--lu-mono); }
+.luo-evidence-layers li > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+.luo-evidence-layers .luo-fine { margin-bottom: 0; }
+.luo-observation-horizons { display: grid; gap: 14px; margin-top: 18px; }
+.luo-observation-horizons > div { padding-top: 14px; border-top: 1px solid var(--lu-line); }
+.luo-observation-horizons > div > strong { color: var(--lu-accent); font: 600 11px/1.5 var(--lu-mono); }
+.luo-observation-horizons .luo-strategy-facts { margin: 12px 0 0; }
+.luo-strict-result { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--lu-line); }
+.luo-research-save { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 18px 0 0; margin-top: 18px; border-top: 1px solid var(--lu-line-strong); }
+.luo-research-save > p { flex: 1 1 250px; margin: 0; }
+.luo-preflight-grid { display: grid; gap: 10px; margin-top: 18px; }
+.luo-preflight-grid > div { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--lu-line); }
+.luo-preflight-grid strong { flex: 1; color: var(--lu-ink-2); font-size: 12px; }
+.luo-validation-progress { margin: 18px 0; }
+.luo-validation-progress progress { width: 100%; height: 7px; accent-color: var(--lu-accent); }
+.luo-validation-progress .luo-stats { margin-top: 14px; }
+
 .luo-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 12px; }
 .luo-stat-k { font: 600 9px/1.2 var(--lu-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--lu-ink-3); }
 .luo-stat-v { margin-top: 5px; font: 500 15px/1 var(--lu-mono); font-variant-numeric: tabular-nums; }
@@ -355,11 +465,20 @@ export const STYLE = `
   .luo-strategy-nav-title { grid-column: 1 / -1; margin: 0; }
   .luo-strategy-choice { margin: 0; }
   .luo-strategy-operations > summary span { display: block; margin: 6px 0 0 14px; }
+  .luo-research-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-condition-editor { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .luo-condition-editor > .luo-field:first-child { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .luo-root *, .luo-root *::before, .luo-root *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
 @media (max-width: 600px) {
+  .luo-research-stage .luo-card { padding: 16px 14px; }
+  .luo-research-fields, .luo-score-editor, .luo-catalog-fields, .luo-rule-inputs, .luo-research-candidates { grid-template-columns: minmax(0, 1fr); }
+  .luo-research-head .luo-pill { max-width: 100%; }
+  .luo-diagnosis-head > .luo-fine { flex-basis: 100%; margin-left: 0; }
+  .luo-comparison-list li { flex-direction: column; gap: 4px; }
+  .luo-research-binding .luo-btn { width: 100%; justify-content: center; }
   .luo-stock-detail { border-left: 0; }
   .luo-stock-detail-head { padding: 22px 18px 18px; }
   .luo-stock-detail-body { padding: 20px 18px; gap: 18px; }

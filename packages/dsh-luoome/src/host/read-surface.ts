@@ -31,6 +31,7 @@ export const createReadSurface = (options: {
   readonly config: unknown;
   readonly tools: readonly Tool[];
   readonly context: () => ToolContext | Promise<ToolContext>;
+  readonly accountId?: string;
 }): ReadSurface => {
   if (process.env.LUOOME_EXPOSE_TRADE === 'true')
     throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed in the DSH plugin');
@@ -48,6 +49,15 @@ export const createReadSurface = (options: {
       ]),
     }),
   );
+  const accountBound = new Set(
+    selected
+      .toMCP()
+      .flatMap((descriptor) =>
+        Object.hasOwn(descriptor.inputSchema.properties ?? {}, 'accountId')
+          ? [descriptor.name]
+          : [],
+      ),
+  );
   let disposed = false;
   return {
     descriptors: () => (disposed ? [] : selected.toMCP()),
@@ -58,7 +68,23 @@ export const createReadSurface = (options: {
       try {
         const ctx = await options.context();
         if (disposed || signal.aborted) return denied('active request');
-        const result = await tool.execute(input, ctx);
+        let boundInput = input;
+        if (
+          options.accountId !== undefined &&
+          input !== null &&
+          typeof input === 'object' &&
+          !Array.isArray(input)
+        ) {
+          const raw = input as Record<string, unknown>;
+          if (raw.accountId !== undefined && raw.accountId !== options.accountId)
+            return denied('current owner account');
+          if (accountBound.has(name)) boundInput = { ...raw, accountId: options.accountId };
+        }
+        const result = await tool.execute(boundInput, {
+          ...ctx,
+          abortSignal:
+            ctx.abortSignal === undefined ? signal : AbortSignal.any([signal, ctx.abortSignal]),
+        });
         // DSH canonical values must be JSON; the domain still returns Date instances.
         return JSON.parse(JSON.stringify(result)) as ToolResult<unknown>;
       } catch {

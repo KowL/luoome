@@ -16,7 +16,17 @@ const SKILLS_ROOT = fileURLToPath(new URL('../../skills', import.meta.url));
 const NATIVE_OPERATION_TOOL = 'luoome_confirmed_operation';
 
 /** 内容里允许出现、但不属于领域工具名的反引号标识（analysis 写回错误值）。 */
-const NON_TOOL_BACKTICKS = new Set(['context_expired', 'stale_context']);
+const NON_TOOL_BACKTICKS = new Set([
+  'context_expired',
+  'stale_context',
+  'configure_plugin_automation',
+  'luoome_automation_catalog',
+  'luoome_operation_status',
+  'luoome_research_status',
+  'run_strategy_daily_cycle',
+  'schedule_create',
+  'schedule_list',
+]);
 
 const EXPECTED_SKILLS = [
   'daily-market-analysis',
@@ -59,6 +69,17 @@ const EXPECTED_TOOLS: Readonly<Record<string, Readonly<Record<string, SideEffect
     get_strategy_workspace: 'read',
     get_market_data_status: 'read',
     get_strategy_experiment_context: 'read',
+    get_strategy_research_state: 'read',
+    get_strategy_data_preflight: 'read',
+    get_strategy_evaluation_progress: 'read',
+    list_strategy_evaluation_sessions: 'read',
+    assess_adaptive_personality: 'read',
+    export_strategy_manifest: 'read',
+    save_strategy_research_state: 'write',
+    start_strategy_evaluation_session: 'write',
+    resume_strategy_evaluation_session: 'write',
+    cancel_strategy_evaluation_session: 'write',
+    run_strategy_research_comparison: 'external',
     get_strategy_insight_facts: 'read',
     compare_strategy_definitions: 'read',
     propose_strategy_version_draft: 'external',
@@ -67,11 +88,32 @@ const EXPECTED_TOOLS: Readonly<Record<string, Readonly<Record<string, SideEffect
     create_strategy_version: 'write',
     validate_strategy_version: 'write',
     publish_strategy_version: 'write',
+    get_strategy_schedule: 'read',
+    set_strategy_schedule: 'write',
+    list_watchlists: 'read',
+    list_strategy_watchlist_subscriptions: 'read',
+    subscribe_strategy_to_watchlist: 'write',
+    unsubscribe_strategy_from_watchlist: 'write',
+    pause_strategy: 'write',
+    resume_strategy: 'write',
+    run_strategy: 'external',
   },
   'strategy-result-review': {
     list_strategies: 'read',
     get_strategy: 'read',
     get_strategy_workspace: 'read',
+    get_strategy_research_state: 'read',
+    get_strategy_experiment_context: 'read',
+    get_strategy_data_preflight: 'read',
+    get_strategy_selection_diagnostics: 'read',
+    get_strategy_evaluation_progress: 'read',
+    list_strategy_evaluation_sessions: 'read',
+    get_strict_strategy_backtest: 'read',
+    list_strict_strategy_backtests: 'read',
+    export_strategy_manifest: 'read',
+    trial_strategy_version: 'external',
+    run_strategy_research_comparison: 'external',
+    save_strategy_research_state: 'write',
     list_strategy_runs: 'read',
     get_strategy_run: 'read',
     compare_strategy_runs: 'read',
@@ -81,6 +123,9 @@ const EXPECTED_TOOLS: Readonly<Record<string, Readonly<Record<string, SideEffect
     get_signal_observation_stats: 'read',
     get_strategy_reliability_summary: 'read',
     get_strategy_decision_cycles: 'read',
+    get_strategy_schedule: 'read',
+    list_strategy_watchlist_subscriptions: 'read',
+    run_strategy: 'external',
     get_analysis_context: 'read',
     record_analysis_result: 'queue',
   },
@@ -137,7 +182,9 @@ describe('dsh-luoome 打包技能内容', () => {
       names.add(name as string);
       expect(skill.frontmatter.get('description')?.length ?? 0).toBeGreaterThan(10);
       expect(skill.frontmatter.get('whenToUse')?.length ?? 0).toBeGreaterThan(5);
-      expect(skill.body).toContain(`本技能版本：${skill.dir}-v1`);
+      const version =
+        skill.dir === 'strategy-lab' || skill.dir === 'strategy-result-review' ? 3 : 1;
+      expect(skill.body).toContain(`本技能版本：${skill.dir}-v${version}`);
       expect(skill.body.length).toBeGreaterThan(800);
     }
   });
@@ -199,6 +246,14 @@ describe('dsh-luoome 打包技能内容', () => {
     expect(lab).toContain('trial_strategy_version');
     expect(lab).toMatch(/独立审批|单独审批/);
     expect(lab).toContain('不隐含发布');
+    expect(lab).toContain('set_strategy_schedule');
+    expect(lab).toContain('run_strategy_daily_cycle');
+    expect(lab).toContain('configure_plugin_automation');
+    expect(lab).toContain('两层都成功');
+    expect(lab).toContain('不直接调用 `run_strategy`');
+    expect(lab).toContain('subscribe_strategy_to_watchlist');
+    expect(lab).toContain('pause_strategy');
+    expect(lab).toContain('resume_strategy');
 
     const result = byDir.get('strategy-result-review') as string;
     expect(result).toContain('get_strategy_run');

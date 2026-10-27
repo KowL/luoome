@@ -16,6 +16,8 @@ export const ReplayStrategyRangeInput = z.object({
   persist: z.boolean().default(true),
   resumeSessionId: z.string().min(1).optional(),
   owner: z.string().min(1).optional(),
+  maxDays: z.number().int().min(1).max(20).optional(),
+  requestId: z.string().min(1).max(100).optional(),
 });
 export type ReplayStrategyRangeInputT = z.infer<typeof ReplayStrategyRangeInput>;
 
@@ -165,7 +167,19 @@ const replay: WorkflowStep = async (previous, ctx) => {
   let cursor = new Date(input.from);
   let failed = false;
   let cancelled = false;
+  let yielded = false;
+  let processed = 0;
   while (cursor <= input.to) {
+    // 同步 SQLite 的已 resolve Promise 不会给 HTTP 取消/查询让出事件循环。
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (ctx.abortSignal?.aborted) {
+      const cancelledSession = await ctx.tools.cancel_strategy_evaluation_session.execute({
+        sessionId: evaluationSession.id,
+      });
+      if (!cancelledSession.ok) return cancelledSession;
+      cancelled = true;
+      break;
+    }
     const dataAsOf = new Date(cursor);
     if (isWeekend(dataAsOf) || isHoliday(dataAsOf)) {
       cursor = new Date(cursor.getTime() + 86_400_000);
@@ -202,6 +216,11 @@ const replay: WorkflowStep = async (previous, ctx) => {
       cursor = new Date(cursor.getTime() + 86_400_000);
       continue;
     }
+    if (input.maxDays !== undefined && processed >= input.maxDays) {
+      yielded = true;
+      break;
+    }
+    processed++;
     const currentSession = await ctx.tools.get_strategy_evaluation_session.execute({
       sessionId: evaluationSession.id,
     });
@@ -271,6 +290,18 @@ const replay: WorkflowStep = async (previous, ctx) => {
       prepared.data.checkpoint.vintageStatus === 'available'
         ? dataAsOf
         : (prepared.data.checkpoint.finishedAt ?? ctx.clock());
+    const beforeRun = await ctx.tools.get_strategy_evaluation_session.execute({
+      sessionId: evaluationSession.id,
+    });
+    if (!beforeRun.ok) return beforeRun;
+    if (ctx.abortSignal?.aborted || beforeRun.data.session?.status !== 'running') {
+      if (ctx.abortSignal?.aborted)
+        await ctx.tools.cancel_strategy_evaluation_session.execute({
+          sessionId: evaluationSession.id,
+        });
+      cancelled = true;
+      break;
+    }
     const run = await ctx.tools.run_strategy.execute({
       strategyId: effectiveStrategyId,
       versionId: effectiveVersionId,
@@ -329,16 +360,17 @@ const replay: WorkflowStep = async (previous, ctx) => {
     }
     cursor = new Date(cursor.getTime() + 86_400_000);
   }
-  const finished = cancelled
-    ? await ctx.tools.get_strategy_evaluation_session.execute({ sessionId: evaluationSession.id })
-    : await ctx.tools.finish_strategy_evaluation_session.execute({
-        sessionId: evaluationSession.id,
-        status: failed
-          ? days.some((day) => day.status === 'complete')
-            ? 'partial'
-            : 'failed'
-          : 'complete',
-      });
+  const finished =
+    cancelled || yielded
+      ? await ctx.tools.get_strategy_evaluation_session.execute({ sessionId: evaluationSession.id })
+      : await ctx.tools.finish_strategy_evaluation_session.execute({
+          sessionId: evaluationSession.id,
+          status: failed
+            ? days.some((day) => day.status === 'complete')
+              ? 'partial'
+              : 'failed'
+            : 'complete',
+        });
   if (!finished.ok) return finished;
   if (finished.data.session === null) {
     return {

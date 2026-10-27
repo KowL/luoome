@@ -37,6 +37,14 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`, `get_intraday_delivery_audit`.
+- Strategy research: `get_strategy_dsl_catalog`, `get_strategy_experiment_context`,
+  `get_strategy_data_preflight`, `get_strategy_research_state`,
+  `list_strategy_evaluation_sessions`, `get_strategy_evaluation_progress`,
+  `get_strategy_selection_diagnostics`, `compare_strategy_definitions`, `compare_strategy_runs`,
+  and `export_strategy_manifest`. Keep the immutable version, stock sample, dates, benchmark
+  and input identity attached to every comparison. Data preflight inspects retained local facts;
+  it does not prove an online provider is available. A manifest exports definitions and evidence
+  references, not a complete vendor data archive.
 - Personal domain: `list_personal_watch_feedback`, `prepare_watchlist_facts_request`,
   `get_watchlist_facts_report`, `list_watchlist_facts_reports`, `list_personal_alert_plans`,
   `prepare_personal_alert_request`, `get_personal_alert_evaluation`. A watchlist facts report is
@@ -151,6 +159,13 @@ require an explicit `evaluationSessionId` matching a completed run in that sessi
 facts and never create Watchlist membership or Advice. `complete_strategy_observations` can restrict
 completion to `runIds` and uses local qfq bars only.
 
+`save_strategy_research_state` saves an account-bound research question, exact versions,
+sample/range/benchmark, conclusion, limitations and next step under the existing Strategy.
+Use `expectedRevision` and the same `requestId` to preserve concurrent edits and reconcile a
+lost response. A saved conclusion is a user research record; it does not establish validation,
+publish a Strategy or grant trading permission. Evaluation start/resume/cancel are separate
+confirmed writes and retain their stable session identity and failed/unknown day records.
+
 Internal persistence tools such as watch-run or trigger recording are intended for workflows; do not invoke them for normal user requests unless their MCP description explicitly supports the requested operation.
 
 `watch_execution`, `commit_watch_evaluation`, `begin_watch_delivery` are workflow-only write
@@ -170,6 +185,17 @@ External tools fetch market/event data, validate or run Strategies, synchronize 
 notifications. A bounded single-version sample uses the external-only `trial_strategy` tool;
 it forces `persist=false` and does not accept `mode=scheduled`. Full-market or persisted Strategy
 runs require confirmation and both capabilities; use `run_strategy` with `persist=true`.
+
+`trial_strategy_version` compares a baseline and candidate on frozen actual input facts.
+`run_strategy_research_comparison` evaluates a bounded set of candidates against one baseline
+and preserves every candidate, failure and limitation. Neither publishes operational results,
+selects an automatic optimum, or changes a Watchlist. Check the returned input identity rather
+than assuming that identical stock IDs imply identical facts. Training and validation evidence
+must remain separate; missing observations are unknown, never zero return.
+
+`list_strategy_result_views` is external because its display projection can refresh quotes.
+Use the read-only `get_strategy_selection_diagnostics` for immutable run explanations; a newer
+display quote never replaces the historical rule inputs or upgrades missing evidence.
 
 `preview_personal_alert_plan` is external-only: it reads live quotes and writes no trigger, state or
 plan record. Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.

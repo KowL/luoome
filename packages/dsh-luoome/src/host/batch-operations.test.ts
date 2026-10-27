@@ -23,9 +23,9 @@ describe('native batch policies', () => {
         LUOOME_AUTOMATIONS_ENABLED: 'true',
       }),
     ).toMatchObject({ batchEnabled: true, automationsEnabled: true });
-    expect(createProductionOperationPolicies()).toHaveLength(9);
+    expect(createProductionOperationPolicies()).toHaveLength(22);
     const policies = createProductionOperationPolicies(undefined, { batchEnabled: true });
-    expect(policies).toHaveLength(14);
+    expect(policies).toHaveLength(27);
     expect(policies.filter((policy) => policy.scheduled)).toHaveLength(5);
   });
 

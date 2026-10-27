@@ -174,6 +174,22 @@ describe('dsh-luoome production composition root', () => {
       const strategies = await host.invoke('list_strategies', {}, signal());
       if (!strategies.ok) throw new Error(`list_strategies failed: ${JSON.stringify(strategies)}`);
       expect(strategies.data).toMatchObject({ total: 1, strategies: [{ id: strategy.id }] });
+
+      // 调度与订阅契约读面在默认 read allowlist 内，可作为真实只读工具调用。
+      const schedule = await host.invoke(
+        'get_strategy_schedule',
+        { strategyId: strategy.id },
+        signal(),
+      );
+      if (!schedule.ok) throw new Error(`get_strategy_schedule failed`);
+      expect(schedule.data).toEqual({ schedule: null });
+      const subscriptions = await host.invoke(
+        'list_strategy_watchlist_subscriptions',
+        { strategyId: strategy.id },
+        signal(),
+      );
+      if (!subscriptions.ok) throw new Error(`list_strategy_watchlist_subscriptions failed`);
+      expect(subscriptions.data).toMatchObject({ total: 0, subscriptions: [] });
     } finally {
       host.dispose();
     }
@@ -202,6 +218,63 @@ describe('dsh-luoome production composition root', () => {
       expect(existsSync(join(home, 'luoome.db'))).toBe(true);
     } finally {
       second.dispose();
+    }
+  });
+
+  it('applies FUYAO settings to live tools immediately and restores them after restart', async () => {
+    const home = tempRoot();
+    await seedOwnerAccount(home);
+    let host = await createProductionHost(productionInput(home));
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      Response.json({
+        code: 0,
+        data: {
+          timestamp: Date.now(),
+          item: [
+            {
+              thscode: '600519.SH',
+              last_price: 1277.8,
+              open_price: 1252.08,
+              high_price: 1282,
+              low_price: 1250.21,
+              prev_price: 1256,
+              volume: 3098875,
+            },
+          ],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const previous = host.context;
+      host.marketSettings.save({
+        sources: ['fuyao'],
+        fuyao: { baseUrl: 'https://fuyao.example.test', apiKey: 'synthetic-live-key' },
+      });
+      expect(host.context.adapters.market).not.toBe(previous.adapters.market);
+      expect(host.context.ashareSentiment).not.toBe(previous.ashareSentiment);
+      expect(host.context.news).toBe(previous.news);
+      const quote = await host.invokeMarket('fetch_quote', { stockId: '600519.SH' }, signal());
+      expect(quote).toMatchObject({
+        ok: true,
+        data: { quote: { source: 'fuyao', close: 1277.8 } },
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://fuyao.example.test/api/a-share/prices/snapshot?thscodes=600519.SH',
+        expect.objectContaining({ headers: { 'X-api-key': 'synthetic-live-key' } }),
+      );
+      host.dispose();
+      host = await createProductionHost(productionInput(home));
+      expect(host.marketSettings.read().activeOrder).toEqual(['fuyao']);
+      expect(
+        await host.invokeMarket('fetch_quote', { stockId: '600519.SH' }, signal()),
+      ).toMatchObject({
+        ok: true,
+        data: { quote: { source: 'fuyao', close: 1277.8 } },
+      });
+    } finally {
+      host.dispose();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -413,6 +486,11 @@ describe('dsh-luoome production composition root', () => {
       'create_strategy_version',
       'validate_strategy_version',
       'publish_strategy_version',
+      'set_strategy_schedule',
+      'pause_strategy',
+      'resume_strategy',
+      'subscribe_strategy_to_watchlist',
+      'unsubscribe_strategy_from_watchlist',
       'record_advice_outcome',
     ])
       expect(await host.invoke(writeTool, {}, signal())).toMatchObject({
@@ -444,6 +522,9 @@ describe('dsh-luoome production composition root', () => {
       'dragon_tiger_list',
       'northbound_flow',
       'get_market_data_status',
+      // 策略调度与订阅契约读面
+      'get_strategy_schedule',
+      'list_strategy_watchlist_subscriptions',
       // 三面板
       'list_holdings',
       'list_watch_triggers',
@@ -467,7 +548,20 @@ describe('dsh-luoome production write policies', () => {
       'create_strategy_version',
       'validate_strategy_version',
       'publish_strategy_version',
+      'set_strategy_schedule',
+      'pause_strategy',
+      'resume_strategy',
+      'subscribe_strategy_to_watchlist',
+      'unsubscribe_strategy_from_watchlist',
       'record_advice_outcome',
+      'start_strategy_evaluation_session',
+      'resume_strategy_evaluation_session',
+      'cancel_strategy_evaluation_session',
+      'trial_strategy_version',
+      'run_strategy_research_comparison',
+      'save_strategy_research_state',
+      'create_strict_strategy_backtest',
+      'execute_strict_strategy_backtest',
       'update_account',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
@@ -481,6 +575,11 @@ describe('dsh-luoome production write policies', () => {
       'create_strategy_version',
       'validate_strategy_version',
       'publish_strategy_version',
+      'set_strategy_schedule',
+      'pause_strategy',
+      'resume_strategy',
+      'subscribe_strategy_to_watchlist',
+      'unsubscribe_strategy_from_watchlist',
       'record_advice_outcome',
     ]) {
       expect(byName.get(strategyTool)?.tool.sideEffect, strategyTool).toBe('write');
@@ -499,12 +598,13 @@ describe('dsh-luoome production write policies', () => {
       'record_decision_trade',
       'add_trade',
       'send_notification',
-      // 策略生命周期里的删除/暂停/归档/调度不是本轮的确认操作
+      // 策略生命周期里的删除/归档与调度 lease 内部桥不是确认操作
       'delete_strategy',
-      'pause_strategy',
-      'resume_strategy',
       'archive_strategy',
-      'set_strategy_schedule',
+      'claim_due_strategy_schedules',
+      'finish_strategy_schedule_claim',
+      'renew_strategy_schedule_claim',
+      'sync_strategy_watchlist_subscriptions',
       'create_strategy_observation_candidates',
     ])
       expect(byName.has(forbidden), `${forbidden} must not be a policy`).toBe(false);
@@ -547,7 +647,14 @@ describe('dsh-luoome production apply entry', () => {
       expect(fake.registered).toEqual(expect.arrayContaining([...readNames, ...marketNames]));
       expect(fake.routes).toEqual(['/api/luoome']);
       for (const name of fake.registered) {
-        if (name === 'luoome_confirmed_operation' || name === 'luoome_scheduled_operation')
+        if (
+          [
+            'luoome_confirmed_operation',
+            'luoome_scheduled_operation',
+            'luoome_operation_status',
+            'luoome_research_status',
+          ].includes(name)
+        )
           continue;
         const tool = toolRegistry.get(name);
         if (marketNames.has(name)) {
@@ -560,6 +667,8 @@ describe('dsh-luoome production apply entry', () => {
       }
       expect(fake.registered).toContain('luoome_confirmed_operation');
       expect(fake.registered).toContain('luoome_scheduled_operation');
+      expect(fake.registered).toContain('luoome_operation_status');
+      expect(fake.registered).toContain('luoome_research_status');
       for (const writeTool of [
         'record_advice',
         'record_analysis_result',
@@ -568,6 +677,11 @@ describe('dsh-luoome production apply entry', () => {
         'create_strategy_version',
         'validate_strategy_version',
         'publish_strategy_version',
+        'set_strategy_schedule',
+        'pause_strategy',
+        'resume_strategy',
+        'subscribe_strategy_to_watchlist',
+        'unsubscribe_strategy_from_watchlist',
         'record_advice_outcome',
         'claim_analysis_jobs',
         'complete_analysis_job',
@@ -598,6 +712,11 @@ describe('dsh-luoome production apply entry', () => {
       'create_strategy_version',
       'validate_strategy_version',
       'publish_strategy_version',
+      'set_strategy_schedule',
+      'pause_strategy',
+      'resume_strategy',
+      'subscribe_strategy_to_watchlist',
+      'unsubscribe_strategy_from_watchlist',
       'record_advice_outcome',
     ])
       expect(await host.invoke(writeTool, {}, signal())).toMatchObject({

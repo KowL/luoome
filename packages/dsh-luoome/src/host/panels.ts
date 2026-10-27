@@ -9,15 +9,19 @@
 //   error），不在服务端重算 PnL、统计或发布资格。
 // - 所有响应 cache-control: no-store；未知 panel 404、方法错误 405（Allow: GET）。
 import {
+  computeMarketSession,
   dateInShanghai,
   isHoliday,
   isWeekend,
+  type MarketSession,
+  nextTradingSessionStart,
   previousTradingDate,
   type ToolResult,
 } from '@luoome/core';
 import { z } from 'zod';
 import { DEFAULT_MARKET_TIMEOUT_MS, type MarketSurface } from './market-surface.js';
 import { denied, invalidInput, type ReadSurface } from './read-surface.js';
+import type { ResearchContinuity } from './research-status.js';
 import type { RequestAdmission } from './routes.js';
 
 export const PANEL_NAMES = ['overview', 'positions', 'strategies', 'review', 'settings'] as const;
@@ -130,11 +134,22 @@ export interface PanelStateTool {
 export interface PanelStrategyWorkspace {
   readonly strategyId: string;
   readonly workspace: PanelStateTool;
+  readonly schedule: PanelStateTool;
+  readonly subscriptions: PanelStateTool;
+  readonly continuity?: ResearchContinuity;
+}
+
+/** 面板调度用的交易时段事实：服务端按 core 交易日历算出，客户端不自己判时段。 */
+export interface PanelSession {
+  readonly marketSession: MarketSession;
+  /** 下一次连续竞价开始的时刻（ISO）；客户端据此决定何时醒来轮询。 */
+  readonly nextSessionStart: string;
 }
 
 export interface PanelStateResponse {
   readonly panel: PanelName;
   readonly asOf: string;
+  readonly session: PanelSession;
   readonly tools: readonly PanelStateTool[];
   readonly strategies?: readonly PanelStrategyWorkspace[];
   readonly configuration?: Readonly<Record<string, unknown>>;
@@ -205,6 +220,10 @@ export interface CreatePanelStateHandlerOptions {
   /** 与 /api/luoome/call 一致：prefix 已做 Connection.admit 时传 () => null；测试可注入拒绝。 */
   readonly admit: RequestAdmission;
   readonly now?: () => Date;
+  readonly continuity?: (
+    strategyId: string,
+    signal: AbortSignal,
+  ) => Promise<ResearchContinuity | undefined>;
   readonly marketTimeoutMs?: number;
   readonly maxStrategyWorkspaces?: number;
   readonly configuration?: () => Readonly<Record<string, unknown>>;
@@ -242,6 +261,46 @@ export const createStockDetailHandler =
       now,
     );
     return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), quote });
+  };
+
+export const createStockHistoryHandler =
+  (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
+  async (request: Request): Promise<Response> => {
+    if (request.method !== 'GET') {
+      const response = jsonNoStore(invalidInput('GET required'), 405);
+      response.headers.set('allow', 'GET');
+      return response;
+    }
+    try {
+      const rejection = await options.admit(request);
+      if (rejection) return rejection;
+    } catch {
+      return jsonNoStore(denied('host authentication'), 403);
+    }
+    const query = new URL(request.url).searchParams;
+    const parsed = z
+      .object({ stockId: z.string().regex(/^\d{6}\.(SH|SZ)$/) })
+      .strict()
+      .safeParse(Object.fromEntries(query));
+    if (!parsed.success || [...query.keys()].length !== 1)
+      return jsonNoStore(invalidInput('A single supported stockId is required'), 400);
+    const now = (options.now ?? (() => new Date()))();
+    const signal = AbortSignal.any([
+      request.signal,
+      AbortSignal.timeout(options.marketTimeoutMs ?? DEFAULT_PANEL_MARKET_TIMEOUT_MS),
+    ]);
+    const marketView = await invoke(
+      options.market,
+      fixed('get_stock_market_view', {
+        stockId: parsed.data.stockId,
+        range: '3m',
+        granularity: 'day',
+        strategySignalScope: 'operational',
+      }),
+      signal,
+      now,
+    );
+    return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), marketView });
   };
 
 /**
@@ -296,21 +355,36 @@ export const createPanelStateHandler =
       const ids = listed === undefined ? [] : strategyIdsOf(listed);
       const limit = options.maxStrategyWorkspaces ?? MAX_STRATEGY_WORKSPACES;
       strategies = await Promise.all(
-        ids.slice(0, limit).map(async (strategyId) => ({
-          strategyId,
-          workspace: await invoke(
-            options.read,
-            fixed(STRATEGY_WORKSPACE_TOOL, { strategyId }),
-            signal,
-            now,
-          ),
-        })),
+        ids.slice(0, limit).map(async (strategyId) => {
+          const [workspace, schedule, subscriptions, continuity] = await Promise.all([
+            invoke(options.read, fixed(STRATEGY_WORKSPACE_TOOL, { strategyId }), signal, now),
+            invoke(options.read, fixed('get_strategy_schedule', { strategyId }), signal, now),
+            invoke(
+              options.read,
+              fixed('list_strategy_watchlist_subscriptions', { strategyId }),
+              signal,
+              now,
+            ),
+            options.continuity?.(strategyId, signal),
+          ]);
+          return {
+            strategyId,
+            workspace,
+            schedule,
+            subscriptions,
+            ...(continuity === undefined ? {} : { continuity }),
+          };
+        }),
       );
     }
 
     const body: PanelStateResponse = {
       panel: name,
       asOf: now.toISOString(),
+      session: {
+        marketSession: computeMarketSession(now),
+        nextSessionStart: nextTradingSessionStart(now).toISOString(),
+      },
       tools,
       ...(strategies === undefined ? {} : { strategies }),
       ...(name === 'settings' && options.configuration !== undefined

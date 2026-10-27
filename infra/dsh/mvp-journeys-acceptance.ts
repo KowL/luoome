@@ -23,7 +23,8 @@ const repo = resolve(import.meta.dir, '../..');
 const packageDir = join(repo, 'packages/dsh-luoome');
 const dshModules = resolve(repo, 'node_modules/.bun/node_modules');
 const cli = resolve(dshModules, '@deepseek-ai/dsh/lib/bin.js');
-const node24 = ['--yes', 'node@24'];
+const node24Command = process.env.NODE24_PATH ?? 'npx';
+const node24 = process.env.NODE24_PATH ? [] : ['--yes', 'node@24'];
 const owner = Object.freeze({
   userId: 'mvp-node24-owner',
   accountId: 'mvp-node24-account',
@@ -100,9 +101,11 @@ try {
   await mkdir(luoomeHome, { recursive: true });
 
   // A. Node 24 完整旅程（真实 AgentLoop/ApprovalService + Node SQLite，脚本模型）。
-  const nodeVersion = run('npx', [...node24, '--version']);
+  const nodeVersion = run(node24Command, [...node24, '--version']);
+  if (!nodeVersion.trim().startsWith('v24.'))
+    throw new Error('Node 24 is required for this acceptance');
   const journeys = spawnSync(
-    'npx',
+    node24Command,
     [
       ...node24,
       'node_modules/vitest/vitest.mjs',
@@ -230,7 +233,7 @@ await host.context.repos.analysis.saveContext(context);
 host.dispose();
 process.stdout.write('seeded');
 `;
-  const seed = spawnSync('npx', [...node24, '--input-type=module', '-e', seedCode], {
+  const seed = spawnSync(node24Command, [...node24, '--input-type=module', '-e', seedCode], {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH,
@@ -272,7 +275,7 @@ process.stdout.write('seeded');
     LUOOME_MARKET_PROVIDER: 'real',
   };
   const child = spawn(
-    'npx',
+    node24Command,
     [...node24, cli, '--profile', profileName, '--no-open', '--port', '0'],
     { cwd: workspace, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] },
   );

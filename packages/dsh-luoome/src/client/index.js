@@ -2,15 +2,20 @@
 //
 // 由 DSH client-modules 通过 window.__ModuleLoader__.load 加载：factory 返回
 // { name, inject, apply }，apply(ctx) 在官方 slot 上注册：
-//   - main（keyed，key=`luoome-<panel>`）：看盘 / 持仓 / 策略 / 复盘 / 投资设置；
-//   - sidebar.panellist：五个侧栏条目（id 保持 `luoome-*`）。
+//   - main（keyed，key=`luoome-<panel>`）：看盘 / 持仓 / 策略 / 复盘；
+//   - sidebar.panellist：四个侧栏条目（id 保持 `luoome-*`）；
+//   - settings.section：投资设置。
 //
 // 数据只走宿主认证的同源 GET /api/luoome/state?panel=...；不在 localStorage 存授权。
 // React 与 react/jsx-runtime 由 loader 平台种子提供（构建时 external）。
 import { createElement as h } from 'react';
 
-import { sendStockAnalysis, writeComposer } from './composer.js';
-import { researchRequestFor, stockResearchRequestFor } from './data.js';
+import { sendStockAnalysis, writeComposerWithSessionFallback } from './composer.js';
+import {
+  researchRequestFor,
+  stockResearchRequestFor,
+  strategyOperationRequestFor,
+} from './data.js';
 import { OverviewPanel } from './overview.js';
 import { PositionsPanel } from './positions.js';
 import { ReviewPanel } from './review.js';
@@ -50,40 +55,47 @@ const LayersIcon = () =>
 const RewindIcon = () =>
   icon(['M2.2 8a5.8 5.8 0 1 0 1.7-4.1', 'M2 2.4v3.2h3.2', 'M8 5.4 5.6 8 8 10.6']);
 const PortfolioIcon = () => icon(['M2 5h12v8H2z', 'M5.5 5V2.5h5V5', 'M2 8.5h12', 'M7 8.5v2h2v-2']);
-const SettingsIcon = () =>
-  icon(['M3 4h10', 'M3 8h10', 'M3 12h10', 'M6 2.5v3', 'M10 6.5v3', 'M6 10.5v3']);
-
 const panels = [
   ['overview', '看盘', '市场温度 · 持仓 · 今日触发', PulseIcon, OverviewPanel],
   ['positions', '持仓', '账本 · 成交 · 绩效快照', PortfolioIcon, PositionsPanel],
-  ['strategies', '策略', '筛选条件 · 匹配标的 · 运行结果', LayersIcon, StrategiesPanel],
+  ['strategies', '策略', '研究问题 · 规则对照 · 持续优化', LayersIcon, StrategiesPanel],
   ['review', '复盘', '建议表现 · 校准 · 待补观察', RewindIcon, ReviewPanel],
-  ['settings', '投资设置', '账户 · 数据健康 · 自动任务', SettingsIcon, SettingsPanel],
 ];
 
 /**
  * 「在对话中研究此策略」：记录携带 strategyId/runId 的请求，经官方 layout 服务
  * 导航到会话面板，并把研究提示写入输入框（不自动提交，写操作仍需用户确认）。
  */
-export const openResearchInConversation = (ctx, strategyId, runId = null, context = {}) => {
-  const request = researchRequestFor(strategyId, runId, context);
-  if (typeof window !== 'undefined')
-    window.__luoomeLastResearchRequest = { ...request, at: new Date().toISOString() };
-  try {
-    ctx?.layout?.selectPanel?.('conversation');
-  } catch {
-    // 会话面板不可用时不阻塞，用户仍可在策略面板看到请求内容。
-  }
+const openPromptInConversation = (ctx, request, stateKey) => {
   if (typeof window !== 'undefined') {
-    // 面板切换后 composer 才挂载，给它几次机会而不是只赌一次。
-    let written = false;
-    for (const delay of [80, 240, 600, 1200, 2400])
-      setTimeout(() => {
-        if (!written) written = writeComposer(request.prompt);
-      }, delay);
+    window[stateKey] = { ...request, at: new Date().toISOString() };
+    const completion = writeComposerWithSessionFallback(ctx, request.prompt)
+      .then((result) => {
+        window[stateKey] = { ...window[stateKey], ...result };
+        return { ok: true };
+      })
+      .catch(() => {
+        window[stateKey] = { ...window[stateKey], errorCode: 'client/composer-unavailable' };
+        return { ok: false };
+      });
+    return { ...request, completion };
   }
   return request;
 };
+
+export const openResearchInConversation = (ctx, strategyId, runId = null, context = {}) =>
+  openPromptInConversation(
+    ctx,
+    researchRequestFor(strategyId, runId, context),
+    '__luoomeLastResearchRequest',
+  );
+
+export const openStrategyOperationInConversation = (ctx, strategyId, context = {}) =>
+  openPromptInConversation(
+    ctx,
+    strategyOperationRequestFor(strategyId, context),
+    '__luoomeLastStrategyOperationRequest',
+  );
 
 export const openStockAnalysisInConversation = async (ctx, context) => {
   const request = stockResearchRequestFor(context);
@@ -105,6 +117,12 @@ export const openStockAnalysisInConversation = async (ctx, context) => {
 };
 
 export function apply(ctx) {
+  ctx.slots.inject('settings.section', () =>
+    ctx.slots.register(
+      { name: 'settings.section', id: 'luoome-settings', order: 40, label: () => '投资设置' },
+      SettingsPanel,
+    ),
+  );
   for (const [panel, title, subtitle, Icon, View] of panels) {
     const id = `luoome-${panel}`;
     ctx.slots.inject('main', () =>
@@ -118,6 +136,8 @@ export function apply(ctx) {
             subtitle,
             onResearch: (strategyId, runId, context) =>
               openResearchInConversation(ctx, strategyId, runId, context),
+            onManage: (strategyId, context) =>
+              openStrategyOperationInConversation(ctx, strategyId, context),
             onAnalyzeStock: (context) => openStockAnalysisInConversation(ctx, context),
           }),
         },

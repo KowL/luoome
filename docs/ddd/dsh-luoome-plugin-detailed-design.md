@@ -1,7 +1,7 @@
 # dsh-luoome 纯插件详细设计
 
 > 2026-10-25 更新：纯插件 MVP 已落地并完成生产首次切换；首次生产快照见 §9.16，部分更新修复见 §9.17，MVP 后续补齐、真实模型验收与升级见 §9.18。
-> 公网看盘空白修复与 0.2.1 升级见 §9.19。
+> 公网看盘空白修复与 0.2.1 升级见 §9.19；看盘页盘中自动刷新见 §9.21。
 > §1–§8 保留最初完整 P 阶段设计契约；其中“现状”属于设计时基线。当前 MVP 范围以 [纯插件 MVP 实施设计](./dsh-interactive-analysis-surface-and-worker-retirement.md) 和 §9 最新记录为准。
 > MCP、Bun Web 与 CLI 的兼容源码保留；旧托管系统、内嵌 Host、本地模型栈不恢复。
 
@@ -195,6 +195,44 @@ client 接 no-store API 与 SSE，账户切换后的旧表单必须拒绝；输�
 最终包包含 host、client、worker 入口、bundle patch、skills；既有 MCP 前缀（Web 四实例 + 手动 worker）迁移覆盖技能、保存的提醒与可执行脚本。保留用户自改技能。安装升级使用临时 DSH_HOME 验证，无仓库/Bun/CLI 的目标环境能完成完整旅程才进入 P5。
 
 切换先备份配置和事实库、停旧任务/消费者、核对在途写入，再启新入口。回退先停新写入，按数据兼容路线恢复；已送通知和备份后新增事实不能靠代码回退撤销。
+
+### 8.1 客户端自动刷新策略（看盘页）
+
+本小节在原设计契约之上补充 MVP 已落地的看盘页刷新策略。看盘页在交易时段自动轮询，其余时段停止轮询；客户端自己不判断交易时段。
+
+- **时段来源**：`GET /api/luoome/state` 响应新增顶层 `session` 字段（`marketSession` 与 `nextSessionStart`），由服务端用 core 交易日历（`computeMarketSession` / `nextTradingSessionStart`）计算。客户端只读该字段，不在浏览器重算节假日与时段。
+- **触发条件与间隔**：`session.marketSession === 'trading'` 时每 60 秒请求一次状态；盘前、午休、收盘后与非交易日停止轮询，按 `session.nextSessionStart` 恢复（盘前等当日 09:30，午休等当日 13:00，收盘后与非交易日等下一个交易日 09:30）。
+- **可见性**：标签页隐藏（页面不可见）时不发请求；回到前台立即刷新一次。
+- **失败处理**：刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新事实」手动刷新始终可用。
+- **边界**：轮询只发生在浏览器内的看盘页，不改变服务端盯盘任务、批处理调度与写面契约。
+
+### 8.2 个人策略研究工作台
+
+产品定位是选股、验证、比较和持续优化。研究空间依附已有 Strategy 与不可变 StrategyVersion，
+问题、基线/候选、股票样本、区间、基准、结论和下一步共同构成可恢复上下文；不引入第二套
+Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，持久研究内容由事实库负责。
+
+- 同快照版本对照必须先冻结实际 quote、日线/PIT revision、股票目录、天梯事实与 clock，
+  再求值基线和候选；相同 stockIds 不是同一事实快照的证明。返回输入 hash、时间与可复现限制，
+  非持久化试跑不会替换 published operational current 或同步 Watchlist。
+- 数据预检按定义字段、前序窗口、股票和日期读取真实保留覆盖，分开说明即时试跑、历史逐日评估
+  与严格回测资格。未知、部分覆盖和无历史不能转成零值或空成功；在线源仍需实际请求验证。
+- 逐股解释复用领域结果分类和 scoring breakdown，保留入选、规则/排名临界、未入选、数据缺失，
+  规则值/门槛和贡献来自工具；客户端不重新选股或计算收益。
+- 历史任务复用 evaluation session、逐日 checkpoint 与 replay workflow，进度和取消独立查询。
+  PluginOperation 的 pending/executing/unknown 是授权与回执状态，不能冒充业务进度；响应丢失
+  先查询同一 operation/session，禁止换身份盲重跑。
+- 稳健性只做有界候选对照，保留失败和全部限制；训练/验证必须隔离，不自动挑选收益最优版本。
+  trial、历史选股评估、严格组合回测与真实 T+1/T+3/T+5 信号观察分别呈现。
+- 持续观察综合策略日程、DSH task、有效 grant、实际业务回执和事实截止。配置启用不是实际运行
+  正常的证据；自动任务和通知继续单独 opt-in。
+- manifest 导出定义、证据引用和可复现边界，不打包完整供应商历史；保存结论不代表通过晋级门禁，
+  不隐含发布、自动 Advice 或交易。
+
+固定研究 GET 接口沿用 DSH admission、owner、Host/Origin、no-store 与严格参数校验；读面仅精确
+白名单，持久操作仍逐项经过原生 Operation。自然语言入口复用官方 Session Controller，携带当前
+策略/版本/研究问题；讨论文本不是写授权。安装、原生审批、旅程和桌面/390px 浏览器验收均使用
+临时 DSH_HOME、合成事实库与脚本模型；不能由此宣称真实供应商历史或模型质量已通过验收。
 
 ## 9. 实施切片与验收
 
@@ -657,3 +695,28 @@ host/client/四技能的文件哈希后开始。Codex 逐卡核对官方审批�
 策略、版本、运行和规则的内部标识不直接出现在页面或研究草稿中；结构化请求和工具调用仍保留准确引用。研究草稿按名称、版本号及事实时间查询，存在同名或事实不符时先核对。运行健康与待补观察移到可展开的辅助区。窄屏匹配结果逐股排列，匹配依据可在可见宽度内展开。
 
 回归由 `strategy-query.test.ts`、插件投影／宿主测试和 `infra/dsh/panels-browser-acceptance.ts` 覆盖：名称解析、有界结果、无结果与零匹配、失败回退、版本差异、可见标识清理、策略切换、逐条依据、官方会话草稿，以及桌面／窄屏布局。
+
+### 9.21 盘中自动刷新（2026-10-26，0.2.3）
+
+看盘页此前只有手动刷新（面板右上角「刷新事实」），本轮起在交易时段自动刷新，客户端策略见 §8.1。
+
+**口径**：
+
+- 服务端：`GET /api/luoome/state` 响应新增顶层 `session` 字段，含 `marketSession`（`pre-open` / `trading` / `midday-break` / `closed` / `non-trading-day`）与 `nextSessionStart`。两者由 core 交易日历（`computeMarketSession` / `nextTradingSessionStart`）计算，客户端不再自己判断时段。
+- 客户端：`session.marketSession === 'trading'` 时每 60 秒自动刷新一次；非交易时段停止轮询，按 `session.nextSessionStart` 恢复（盘前等当日 09:30，午休等当日 13:00，收盘后与非交易日等下一个交易日 09:30）。
+- 标签页隐藏时不发请求，回到前台立即刷新一次。
+- 刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新事实」手动刷新始终可用。
+
+本条只改看盘页的刷新节奏：不新增暂停开关、间隔配置等用户可调项，也不改变读面字段、鉴权与写面契约；服务端盯盘任务与批处理调度不受影响。
+
+### 9.22 策略上线与持续运行（2026-10-26）
+
+在已有策略制定、试跑、发布和结果研究之后，补齐发布后的持续运行控制。`set_strategy_schedule`、`pause_strategy`、`resume_strategy`、`subscribe_strategy_to_watchlist`、`unsubscribe_strategy_from_watchlist` 作为五个独立原生 Operation policy 接入，全部 `scheduled=false`，继续使用冻结输入、一次性审批和业务事实 receipt；发布策略不隐含调度或订阅授权。调度写面不接受 `recommendationPolicy`，不恢复自动 Advice；省略 `acceptancePolicy` 时保留既有配置，response loss 也能按该语义恢复回执。
+
+只读面增加 `get_strategy_schedule` 与 `list_strategy_watchlist_subscriptions`。策略面板按策略并行读取 workspace、schedule 和 subscriptions，展示已发布未上线、启用/停用、cron/timezone、下次到期、最近结果版本和 Watchlist 订阅；读取失败显示未知，不伪装成未配置。「在对话中管理运行」只向官方 composer 写入带 strategyId 的管理草稿，不自动提交。
+
+技能明确两层调度：StrategySchedule 只决定到期，DSH 定时任务调用 `run_strategy_daily_cycle` 才执行完整 daily cycle。技能先核对既有日程与 `luoome_automation_catalog`，再分别确认 StrategySchedule 和 `configure_plugin_automation`，不创建重复日程，不直接调用 `run_strategy`，不新增单策略立即运行长任务。发布新版时提示下一次日循环使用 currentVersion。Watchlist 同步仍只消费 published operational run，不产生自动 Advice 或 Trade。
+
+契约测试覆盖 schedule 启用/修改/停用、暂停/恢复、订阅/取消、拒绝、独立审批与回执恢复；真实 DSH journey 验证 publish 不隐含配置及四项上线操作的独立审批。浏览器验收覆盖启用/未启用、订阅、版本漂移、管理草稿和窄屏。AI 自动提议、自动发布、自动暂停不在本轮范围。
+
+管理/研究草稿的写入以编辑器实际采用文本为准，不再只信 `insertText` 的布尔返回值。只读 Lexical 可能返回 true 但不更新内容；连续写入失败后通过官方 `uiWorkspace.startSession()` 继承当前或最近工作区并创建新会话，仍不发送 prompt。此入口不带初始草稿，避免复用含未发送文字的空白会话；确认新的主会话已打开后才写入。当前会话可写时不新建，创建失败或新编辑器仍未采用时保留 `client/composer-unavailable`，不伪报成功。浏览器保留模型失败后的原始只读场景，验证兜底真实生效。

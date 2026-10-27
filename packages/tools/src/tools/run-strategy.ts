@@ -435,7 +435,7 @@ export const runStrategyTool = defineTool({
                 .map((entry) => [entry.code, { ladderLevel: entry.ladderLevel }] as const),
             );
             try {
-              await ctx.repos.limitUpLadderSnapshot.save(ladder.data);
+              if (input.persist) await ctx.repos.limitUpLadderSnapshot.save(ladder.data);
             } catch (error) {
               // 当前扫描仍可使用真实返回，但不把未落库的结果冒充为可 replay 的 PIT 事实。
               limitUpLadderErrorKind = 'historical_snapshot_persist_failed';

@@ -13,8 +13,10 @@ import type {} from '@deepseek-ai/dsh-host-webserver';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type {} from '@deepseek-ai/dsh-user-approval';
 import {
+  createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
   createLocalAdapters,
+  createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
 } from '@luoome/adapters';
 import {
@@ -37,6 +39,7 @@ import {
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
+import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
   createMarketSurface,
@@ -49,6 +52,8 @@ import {
   resolveProductionConfigFromEnv,
 } from './production-config.js';
 import { createReadSurface, denied, type ReadSurface } from './read-surface.js';
+import { createResearchJobs, type ResearchJobs } from './research-jobs.js';
+import { createResearchOperationPolicies } from './research-operations.js';
 import { createStrategyOperationPolicies } from './strategy-operations.js';
 import { registerReadTools } from './tools.js';
 import { mountDshWebProfile } from './web-profile.js';
@@ -97,6 +102,8 @@ export interface ProductionHost {
   readonly read: ReadSurface;
   /** 独立的 native market external surface；与 read 分开注册/撤销。 */
   readonly market: MarketSurface;
+  readonly marketSettings: MarketSettings;
+  readonly researchJobs: ResearchJobs;
   /** 把真实只读工具注册进 DSH ToolRuntime；返回撤销函数。 */
   register(runtime: Pick<ToolRuntime, 'register'>): () => void;
   invoke(name: string, input: unknown, signal: AbortSignal): Promise<ToolResult<unknown>>;
@@ -124,18 +131,20 @@ export const TRUSTED_ANALYSIS_PROVENANCE: TrustedAnalysisProvenance = Object.fre
 /**
  * M2b 精确写回策略清单：
  * - M2b-1：DecisionReview 保存 + 交互分析 record_advice / record_analysis_result；
- * - M2b-2：策略 create / create-version / validate / publish + 用户反馈 record_advice_outcome。
+ * - M2b-2：策略 create / create-version / validate / publish + 用户反馈 record_advice_outcome；
+ * - 策略上线：schedule / pause / resume / Watchlist subscribe / unsubscribe。
  *
- * 不包含 claim/complete/fail/metrics/job、settings、batch 或 trade；每个写工具各自独立
- * 审批，publish 不会因 create/validate 的审批而获得授权。
+ * 不包含 claim/complete/fail/metrics/job、通用 settings 或 trade；batch 仅由部署显式开启。
+ * 每个写工具各自独立审批，publish 不会因 create/validate 的审批而获得授权。
  */
 export const createProductionOperationPolicies = (
   trusted: TrustedAnalysisProvenance = TRUSTED_ANALYSIS_PROVENANCE,
-  options: { readonly batchEnabled?: boolean } = {},
+  options: { readonly batchEnabled?: boolean; readonly researchJobs?: ResearchJobs } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
   ...createAnalysisOperationPolicies(trusted),
   ...createStrategyOperationPolicies(),
+  ...createResearchOperationPolicies(options.researchJobs ?? createResearchJobs()),
   updateAccountOperation,
   ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
 ];
@@ -159,11 +168,13 @@ export const createProductionHost = async (
   const logger = options.logger ?? createPluginLogger();
   const clock = (): Date => new Date();
 
+  const settingsStore = new MarketSettingsStore(config.env, join(config.home, '.env'));
   mkdirSync(config.home, { recursive: true });
   const handle: NodeDrizzleReposHandle = createNodeDrizzleRepos(join(config.home, 'luoome.db'));
   let read: ReadSurface | undefined;
   let market: MarketSurface | undefined;
-  let context: ToolContext | undefined;
+  let context: ToolContext;
+  let saveMarketSettings: MarketSettings['save'];
   try {
     const ownerAccount = await handle.repos.account.findById(config.owner.accountId);
     if (ownerAccount === null)
@@ -172,7 +183,7 @@ export const createProductionHost = async (
       );
 
     const adapters = createLocalAdapters({
-      env: config.env,
+      env: settingsStore.runtimeEnv(),
       clock,
       logger,
       researchVaultBackupRoot: join(config.home, 'backups', 'research-vault'),
@@ -216,7 +227,25 @@ export const createProductionHost = async (
         : { fundamentalData: adapters.fundamentalData }),
     });
     context = built;
+    saveMarketSettings = (input) =>
+      settingsStore.save(input, (env) => {
+        const market = createMarketAdapterFromEnv(env, {
+          clock,
+          logger,
+          sources: adapters.sources,
+        });
+        const ashareSentiment = createAShareSentimentManagerFromEnv(env, {
+          clock,
+          logger,
+          market,
+          sources: adapters.sources,
+        });
+        return () => {
+          context = { ...context, adapters: { ...context.adapters, market }, ashareSentiment };
+        };
+      });
     read = createReadSurface({
+      accountId: config.owner.accountId,
       // 同一冻结快照同时用于注册与执行；createReadSurface 再 parse 一次只读校验。
       config: {
         allowlist: [...config.read.allowlist],
@@ -230,6 +259,7 @@ export const createProductionHost = async (
       },
     });
     market = createMarketSurface({
+      accountId: config.owner.accountId,
       // 与 read 完全独立的冻结快照；只允许 external 能力。
       config: {
         allowlist: [...config.market.allowlist],
@@ -250,15 +280,16 @@ export const createProductionHost = async (
     throw error;
   }
 
-  const resolvedContext = context;
   const resolvedRead = read;
   const resolvedMarket = market;
+  const researchJobs = createResearchJobs();
   const removers: (() => void)[] = [];
   let disposed = false;
 
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    researchJobs.dispose();
     for (const remove of removers.splice(0).reverse()) remove();
     resolvedRead.dispose();
     resolvedMarket.dispose();
@@ -267,9 +298,22 @@ export const createProductionHost = async (
 
   return {
     config,
-    context: resolvedContext,
+    get context() {
+      return context;
+    },
     read: resolvedRead,
     market: resolvedMarket,
+    researchJobs,
+    marketSettings: {
+      read() {
+        if (disposed) throw new Error(DISPOSED_MESSAGE);
+        return settingsStore.read();
+      },
+      save(input) {
+        if (disposed) throw new Error(DISPOSED_MESSAGE);
+        return saveMarketSettings(input);
+      },
+    },
     register(runtime) {
       if (disposed) throw new Error(DISPOSED_MESSAGE);
       const remove = registerReadTools(runtime, resolvedRead);
@@ -336,7 +380,10 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
   try {
     web = mountDshWebProfile(ctx, {
       repository: host.context.repos.pluginAuthority,
-      policies: createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, host.config),
+      policies: createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, {
+        ...host.config,
+        researchJobs: host.researchJobs,
+      }),
       // queue 只由这里的精确 analysis policy 使用；generic `/api/luoome/call` 仍是只读 read surface。
       capabilities: ['read', 'write', 'external', 'queue'],
       policyVersion: 1,
@@ -348,6 +395,8 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       automationsEnabled: host.config.automationsEnabled,
       read: host.read,
       market: host.market,
+      marketSettings: host.marketSettings,
+      researchJobs: host.researchJobs,
     });
     // market external 面与 read 分开注册，但使用同一 owner/top-level guard 语义：
     // 子 Agent、跨账户会话和 HTTP bridge 都不能只靠工具名获得外部调用权限。

@@ -13,6 +13,13 @@ import { toolResultJsonSchema } from './tools.js';
 
 export const MANUAL_OPERATION_TOOL = 'luoome_confirmed_operation';
 export const SCHEDULED_OPERATION_TOOL = 'luoome_scheduled_operation';
+export const OPERATION_STATUS_TOOL = 'luoome_operation_status';
+const operationStatusInput = z
+  .object({
+    operationId: z.string().regex(/^[a-zA-Z0-9:-]{1,200}$/),
+    reconcile: z.boolean().default(false),
+  })
+  .strict();
 const manualInput = z
   .object({
     id: z
@@ -277,6 +284,29 @@ export const createDshOperationHost = (
       ],
     };
     const operations = service.descriptors();
+    removers.push(
+      ctx.tools.register({
+        name: OPERATION_STATUS_TOOL,
+        description:
+          '读取当前账户原操作回执；reconcile=true 时只核对既有业务事实，不重新执行或启动任务，不恢复确认凭据。executing/unknown 不能盲重试。',
+        parameters: JSON.parse(
+          JSON.stringify(z.toJSONSchema(operationStatusInput, { io: 'input' })),
+        ),
+        output,
+        execute: async (input, execution) => {
+          const parsed = operationStatusInput.safeParse(input);
+          const principal = identity.principal(execution.agent);
+          if (disposed || execution.signal.aborted || !principal || !parsed.success)
+            return {
+              ok: false,
+              error: { kind: 'permission_denied', required: 'live owner operation scope' },
+            };
+          return parsed.data.reconcile
+            ? service.reconcile(principal, parsed.data.operationId)
+            : service.get(principal, parsed.data.operationId);
+        },
+      }),
+    );
     if (options.policies.some((policy) => policy.scheduled)) {
       removers.push(
         ctx.tools.register({

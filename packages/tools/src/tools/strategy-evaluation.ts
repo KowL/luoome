@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
+  isHoliday,
+  isWeekend,
   StrategyEvaluationDaySchema,
   StrategyEvaluationSessionSchema,
   type ToolContext,
@@ -47,6 +49,7 @@ export const StartStrategyEvaluationSessionInput = z.object({
   from: z.coerce.date(),
   to: z.coerce.date(),
   stockIds: z.array(z.string().min(1)).min(1).max(500).optional(),
+  requestId: z.string().min(1).max(100).optional(),
 });
 export const StartStrategyEvaluationSessionOutput = z.object({
   session: StrategyEvaluationSessionSchema,
@@ -86,7 +89,10 @@ export const startStrategyEvaluationSessionTool = defineTool({
     }
     const stockIds = input.stockIds === undefined ? undefined : [...new Set(input.stockIds)].sort();
     const session = StrategyEvaluationSessionSchema.parse({
-      id: `strategy-evaluation-${globalThis.crypto.randomUUID()}`,
+      id:
+        input.requestId === undefined
+          ? `strategy-evaluation-${globalThis.crypto.randomUUID()}`
+          : `strategy-evaluation-request:${createHash('sha256').update(`${input.strategyId}\0${input.requestId}`).digest('hex')}`,
       strategyId: input.strategyId,
       strategyVersionId: version.id,
       from: input.from,
@@ -101,6 +107,17 @@ export const startStrategyEvaluationSessionTool = defineTool({
             stockIdChecksum: createHash('sha256').update(JSON.stringify(stockIds)).digest('hex'),
           }),
     });
+    const existing = await ctx.repos.strategyEvaluation.findSessionById(session.id);
+    if (existing !== null) {
+      if (
+        existing.strategyVersionId !== session.strategyVersionId ||
+        existing.from.getTime() !== session.from.getTime() ||
+        existing.to.getTime() !== session.to.getTime() ||
+        existing.stockIdChecksum !== session.stockIdChecksum
+      )
+        return errInvalidInput('requestId 已用于不同的 evaluation 输入');
+      return { session: existing };
+    }
     await ctx.repos.strategyEvaluation.saveSession(session);
     return { session };
   },
@@ -152,6 +169,7 @@ export const finishStrategyEvaluationSessionTool = defineTool({
   handler: async (input, ctx: ToolContext) => {
     const existing = await ctx.repos.strategyEvaluation.findSessionById(input.sessionId);
     if (existing === null) return errNotFound('StrategyEvaluationSession', input.sessionId);
+    if (existing.error === 'evaluation_cancelled') return { session: existing };
     const session = StrategyEvaluationSessionSchema.parse({
       ...existing,
       status: input.status,
@@ -216,5 +234,109 @@ export const cancelStrategyEvaluationSessionTool = defineTool({
     });
     await ctx.repos.strategyEvaluation.saveSession(session);
     return { session };
+  },
+});
+
+export const ListStrategyEvaluationSessionsInput = z.object({
+  strategyId: z.string().min(1),
+  limit: z.number().int().min(1).max(100).default(20),
+});
+export const ListStrategyEvaluationSessionsOutput = z.object({
+  sessions: z.array(StrategyEvaluationSessionSchema),
+});
+export const listStrategyEvaluationSessionsTool = defineTool({
+  name: 'list_strategy_evaluation_sessions',
+  description: '发现同一 Strategy 已保存的历史评估，供跨日恢复，不改变会话状态',
+  sideEffect: 'read',
+  input: ListStrategyEvaluationSessionsInput,
+  output: ListStrategyEvaluationSessionsOutput,
+  handler: async (input, ctx) => ({
+    sessions: [...(await ctx.repos.strategyEvaluation.listSessions(input))],
+  }),
+});
+
+export const GetStrategyEvaluationProgressInput = z.object({
+  strategyId: z.string().min(1),
+  sessionId: z.string().min(1),
+});
+export const GetStrategyEvaluationProgressOutput = z.object({
+  session: StrategyEvaluationSessionSchema,
+  days: z.array(StrategyEvaluationDaySchema),
+  cancelled: z.boolean(),
+  resumable: z.boolean(),
+  progress: z.object({
+    total: z.number().int().nonnegative(),
+    complete: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    vintageAvailable: z.number().int().nonnegative(),
+  }),
+  summary: z.object({
+    evaluatedCount: z.number().int().nonnegative().nullable(),
+    selectedCount: z.number().int().nonnegative().nullable(),
+    signalCount: z.number().int().nonnegative().nullable(),
+    failedCount: z.number().int().nonnegative().nullable(),
+  }),
+  limitations: z.array(z.string()),
+});
+export const getStrategyEvaluationProgressTool = defineTool({
+  name: 'get_strategy_evaluation_progress',
+  description: '读取历史逐日规则评估的真实进度、缺失计数与取消/续跑资格；不是组合收益回测',
+  sideEffect: 'read',
+  input: GetStrategyEvaluationProgressInput,
+  output: GetStrategyEvaluationProgressOutput,
+  handler: async (input, ctx) => {
+    const session = await ctx.repos.strategyEvaluation.findSessionById(input.sessionId);
+    if (session === null) return errNotFound('StrategyEvaluationSession', input.sessionId);
+    if (session.strategyId !== input.strategyId)
+      return errInvalidInput('evaluation session 不属于该 Strategy');
+    const days = [...(await ctx.repos.strategyEvaluation.listDays(session.id))];
+    let total = 0;
+    for (
+      let date = new Date(session.from);
+      date <= session.to;
+      date = new Date(date.getTime() + 86_400_000)
+    )
+      if (!isHoliday(date) && !isWeekend(date)) total++;
+    const complete = days.filter((day) => day.status === 'complete').length;
+    const failed = days.filter((day) => day.status === 'failed').length;
+    const running =
+      session.status === 'running' ? days.filter((day) => day.status === 'running').length : 0;
+    const sum = (key: 'evaluatedCount' | 'selectedCount' | 'signalCount' | 'failedCount') =>
+      days.length === 0 || days.some((day) => day[key] === undefined)
+        ? null
+        : days.reduce((value, day) => value + (day[key] as number), 0);
+    return {
+      session,
+      days,
+      cancelled: session.error === 'evaluation_cancelled',
+      resumable: session.status !== 'complete',
+      progress: {
+        total,
+        complete,
+        failed,
+        running,
+        pending: Math.max(0, total - complete - failed - running),
+        vintageAvailable: days.filter(
+          (day) => day.status === 'complete' && day.vintageStatus === 'available',
+        ).length,
+      },
+      summary: {
+        evaluatedCount: sum('evaluatedCount'),
+        selectedCount: sum('selectedCount'),
+        signalCount: sum('signalCount'),
+        failedCount: sum('failedCount'),
+      },
+      limitations: [
+        '逐日评估统计选股与规则事实；不含组合执行、交易成本或收益承诺。',
+        ...(days.some((day) => day.vintageStatus !== 'available')
+          ? ['部分日期缺少当时已知 PIT vintage，后补历史不等于无前视偏差。']
+          : []),
+        ...(days.some((day) => day.status === 'complete' && day.runId === undefined)
+          ? ['存在未持久化运行的日期，不能作为严格回测证据。']
+          : []),
+      ],
+    };
   },
 });

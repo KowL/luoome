@@ -148,6 +148,7 @@ import {
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
 } from './tools/strategy-backtest.js';
+import { getStrategyDataPreflightTool } from './tools/strategy-data-preflight.js';
 import {
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,
@@ -156,9 +157,11 @@ import {
 import {
   cancelStrategyEvaluationSessionTool,
   finishStrategyEvaluationSessionTool,
+  getStrategyEvaluationProgressTool,
   getStrategyEvaluationSessionTool,
   getStrategyPitUniverseTool,
   listStrategyEvaluationDaysTool,
+  listStrategyEvaluationSessionsTool,
   recordStrategyEvaluationDayTool,
   resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
@@ -195,7 +198,11 @@ import {
 } from './tools/strategy-query.js';
 import {
   assessAdaptivePersonalityTool,
+  getStrategyResearchStateTool,
+  getStrategySelectionDiagnosticsTool,
   runLocalSelectorResearchTool,
+  runStrategyResearchComparisonTool,
+  saveStrategyResearchStateTool,
 } from './tools/strategy-research.js';
 import {
   getStrategyScheduleTool,
@@ -425,6 +432,13 @@ export const toolRegistry: Registry = createRegistry([
   getStrategyPitUniverseTool,
   getStrategyEvaluationSessionTool,
   listStrategyEvaluationDaysTool,
+  getStrategyEvaluationProgressTool,
+  listStrategyEvaluationSessionsTool,
+  getStrategyDataPreflightTool,
+  getStrategyResearchStateTool,
+  saveStrategyResearchStateTool,
+  runStrategyResearchComparisonTool,
+  getStrategySelectionDiagnosticsTool,
   startStrategyEvaluationSessionTool,
   recordStrategyEvaluationDayTool,
   finishStrategyEvaluationSessionTool,

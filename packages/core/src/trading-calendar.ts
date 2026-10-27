@@ -152,6 +152,65 @@ export const isWeekend = (date: Date): boolean => {
   return wd === 0 || wd === 6;
 };
 
+/** A 股当前时段；与 get_market_data_status / 顶栏时段徽标共用同一口径。 */
+export type MarketSession = 'pre-open' | 'trading' | 'midday-break' | 'closed' | 'non-trading-day';
+
+/** Shanghai 当日分钟数（0-1439）；时段判定与下次开盘时间共用。 */
+const shanghaiMinutesOfDay = (date: Date): number => {
+  const shanghaiMs = date.getTime() + SHANGHAI_OFFSET_MS;
+  const d = new Date(shanghaiMs);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+};
+
+/** Shanghai 当日某时刻 → Date。 */
+const shanghaiMoment = (day: Holiday, hour: number, minute: number): Date =>
+  new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`);
+
+/**
+ * A 股当前交易时段：复用 core 交易日历（与 cli watch、行情时段徽标同一套 BUILTIN_HOLIDAYS）。
+ * - 周末 / 节假日 → non-trading-day
+ * - < 9:30 → pre-open；[9:30,11:30) → trading；[11:30,13:00) → midday-break；
+ *   [13:00,15:00) → trading；15:00 起 → closed
+ * 边界与盘中计划监控一致。
+ */
+export const computeMarketSession = (
+  now: Date,
+  holidays: ReadonlyMap<number, ReadonlySet<Holiday>> = BUILTIN_HOLIDAYS,
+): MarketSession => {
+  if (isWeekend(now) || isHoliday(now, holidays)) return 'non-trading-day';
+  const t = shanghaiMinutesOfDay(now);
+  if (t < 9 * 60 + 30) return 'pre-open';
+  if (t < 11 * 60 + 30) return 'trading';
+  if (t < 13 * 60) return 'midday-break';
+  if (t < 15 * 60) return 'trading';
+  return 'closed';
+};
+
+/**
+ * 下一次连续竞价开始的时刻（上海 09:30 或 13:00）。
+ *
+ * 供「盘中才轮询」的调度方决定何时醒来：盘前与上午盘中返回当日 09:30 / 13:00，
+ * 午休返回当日 13:00，下午盘中与收盘后返回下一个交易日的 09:30；节假日顺延到
+ * 节后首个交易日。
+ */
+export const nextTradingSessionStart = (
+  now: Date,
+  holidays: ReadonlyMap<number, ReadonlySet<Holiday>> = BUILTIN_HOLIDAYS,
+): Date => {
+  const day = dateInShanghai(now);
+  const tradingDay = !isWeekend(now) && !isHoliday(now, holidays);
+  if (tradingDay) {
+    const t = shanghaiMinutesOfDay(now);
+    if (t < 9 * 60 + 30) return shanghaiMoment(day, 9, 30);
+    if (t < 13 * 60) return shanghaiMoment(day, 13, 0);
+  }
+  let cursor = shanghaiMoment(day, 0, 0);
+  do {
+    cursor = new Date(cursor.getTime() + 86_400_000);
+  } while (isWeekend(cursor) || isHoliday(cursor, holidays));
+  return shanghaiMoment(dateInShanghai(cursor), 9, 30);
+};
+
 /** A 股连续竞价时段；午休和 15:00 起不再发布盘中行动信号。 */
 export const isAshareTradingSession = (
   date: Date,

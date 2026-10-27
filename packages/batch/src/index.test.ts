@@ -7,13 +7,16 @@ const runs = vi.hoisted(() => ({
   snapshot: vi.fn(),
   intraday: vi.fn(),
   weekly: vi.fn(),
+  replay: vi.fn(),
 }));
-vi.mock('@luoome/workflows', () => ({
+vi.mock('@luoome/workflows', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@luoome/workflows')>()),
   strategyDailyCycleWorkflow: { run: runs.daily },
   closingReportCutoffWorkflow: { run: runs.closing },
   snapshotAccountPerformanceWorkflow: { run: runs.snapshot },
   intradayTradingPlanWatchWorkflow: { run: runs.intraday },
   strategyAutonomyWeeklyWorkflow: { run: runs.weekly },
+  replayStrategyRangeWorkflow: { run: runs.replay },
 }));
 
 import {
@@ -23,6 +26,7 @@ import {
   runPortfolioPerformanceSnapshotTool,
   runStrategyAutonomyWeeklyTool,
   runStrategyDailyCycleTool,
+  runStrategyEvaluationTool,
 } from './index.js';
 
 const context = (time: string) => buildTestContext({ clock: () => new Date(time) });
@@ -61,6 +65,75 @@ beforeEach(() => {
 });
 
 describe('DSH batch workflow entrypoints', () => {
+  it('advances only the bound evaluation identity and rejects cancelled/foreign sessions', async () => {
+    const ctx = await context('2026-08-12T16:30:00+08:00');
+    const session = {
+      id: 'research-evaluation',
+      strategyId: 'research-strategy',
+      strategyVersionId: 'research-v1',
+      from: new Date('2026-08-10Z'),
+      to: new Date('2026-08-11Z'),
+      createdAt: ctx.clock(),
+      status: 'running' as const,
+      definitionHash: 'a'.repeat(64),
+      stockIds: ['600519.SH'],
+      stockIdChecksum: 'a'.repeat(64),
+    };
+    await ctx.repos.strategyEvaluation.saveSession(session);
+    const args = { strategyId: session.strategyId, sessionId: session.id, maxDays: 2 };
+    expect(
+      await runStrategyEvaluationTool.execute({ ...args, strategyId: 'foreign-strategy' }, ctx),
+    ).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    runs.replay.mockResolvedValue({
+      ok: true,
+      data: {
+        sessionId: session.id,
+        status: 'partial',
+        summary: {
+          tradingDays: 0,
+          completedDays: 0,
+          failedDays: 0,
+          vintageAvailableDays: 0,
+          vintageUnavailableDays: 0,
+          evaluatedCount: 0,
+          selectedCount: 0,
+          signalCount: 0,
+          failedCount: 0,
+        },
+        days: [],
+      },
+    });
+    const advanced = await runStrategyEvaluationTool.execute(args, ctx);
+    expect(advanced).toMatchObject({
+      ok: true,
+      data: {
+        progress: { session: { id: session.id, status: 'running' }, progress: { pending: 2 } },
+      },
+    });
+    expect(runs.replay).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        strategyId: session.strategyId,
+        versionId: session.strategyVersionId,
+        from: session.from,
+        to: session.to,
+        stockIds: session.stockIds,
+        resumeSessionId: session.id,
+        maxDays: 2,
+      }),
+      ctx,
+    );
+    await ctx.repos.strategyEvaluation.saveSession({
+      ...session,
+      status: 'failed',
+      error: 'evaluation_cancelled',
+    });
+    expect(await runStrategyEvaluationTool.execute(args, ctx)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+    expect(runs.replay).toHaveBeenCalledTimes(1);
+    expect(batchTools).not.toContain(runStrategyEvaluationTool);
+  });
   it('scopes account workflows while retaining shared strategy execution', async () => {
     const ctx = await context('2026-07-15T16:30:00+08:00');
     const accountId = ctx.user.defaultAccountId;

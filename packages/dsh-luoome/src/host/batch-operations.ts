@@ -1,9 +1,24 @@
-import { BatchInput, batchTools } from '@luoome/batch';
+import {
+  BatchInput,
+  runClosingReportCutoffTool,
+  runIntradayPlanBatchTool,
+  runPortfolioPerformanceSnapshotTool,
+  runStrategyAutonomyWeeklyTool,
+  runStrategyDailyCycleTool,
+} from '@luoome/batch';
 import type { ConfirmablePluginTool } from '@luoome/tools';
+
+const scheduledBatchTools = [
+  runStrategyDailyCycleTool,
+  runClosingReportCutoffTool,
+  runPortfolioPerformanceSnapshotTool,
+  runIntradayPlanBatchTool,
+  runStrategyAutonomyWeeklyTool,
+] as const;
 
 /** 定时调用仍需宿主 delivery 身份及逐任务 grant；这里只冻结账户，不接受全账户提权。 */
 export const createBatchOperationPolicies = (): readonly ConfirmablePluginTool[] =>
-  batchTools.map((tool) => ({
+  scheduledBatchTools.map((tool) => ({
     tool,
     scheduled: true,
     hostBoundFields: ['accountId'],

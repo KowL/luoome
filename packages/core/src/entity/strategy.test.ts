@@ -13,6 +13,10 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
 } from './strategy.js';
+import {
+  StrategyResearchComparisonRecordSchema,
+  StrategyResearchSettingsSchema,
+} from './strategy-checkpoint.js';
 
 const definition = (): StrategyDslV1 => ({
   schemaVersion: 1,
@@ -26,6 +30,47 @@ const definition = (): StrategyDslV1 => ({
 });
 
 describe('Strategy entity', () => {
+  it('研究设置保持成对有序区间，不接受脱离固定基线的比较记录', () => {
+    const state = { question: '规则是否稳健？', baseVersionId: 'base-v1' };
+    expect(StrategyResearchSettingsSchema.safeParse({ ...state, from: '2026-08-10' }).success).toBe(
+      false,
+    );
+    expect(
+      StrategyResearchSettingsSchema.safeParse({ ...state, from: '2026-08-11', to: '2026-08-10' })
+        .success,
+    ).toBe(false);
+    const comparison = {
+      origin: 'user-recorded',
+      snapshotHash: 'a'.repeat(64),
+      stockIdChecksum: 'b'.repeat(64),
+      dataAsOf: '2026-08-10',
+      mode: 'scan',
+      baseVersionId: 'base-v2',
+      candidates: [{ candidateVersionId: 'candidate-v1', status: 'failed', error: '历史缺失' }],
+      limitations: ['不包含原始行情'],
+    };
+    expect(StrategyResearchSettingsSchema.safeParse({ ...state, comparison }).success).toBe(false);
+    expect(
+      StrategyResearchSettingsSchema.safeParse({
+        ...state,
+        comparison: { ...comparison, baseVersionId: state.baseVersionId },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('保存的比较摘要不允许把用户记录升级为已验证证据', () => {
+    const comparison = {
+      origin: 'verified-backtest',
+      snapshotHash: 'a'.repeat(64),
+      stockIdChecksum: 'b'.repeat(64),
+      dataAsOf: '2026-08-10',
+      mode: 'scan',
+      baseVersionId: 'base-v1',
+      candidates: [{ candidateVersionId: 'candidate-v1', status: 'complete' }],
+      limitations: ['不包含原始行情'],
+    };
+    expect(StrategyResearchComparisonRecordSchema.safeParse(comparison).success).toBe(false);
+  });
   it('canonical JSON 不受对象 key 顺序影响，hash 稳定', () => {
     const left = definition();
     const right = {

@@ -31,6 +31,9 @@ export const findComposer = (doc) => {
 export const writeComposer = (text, doc = globalThis.document) => {
   const target = findComposer(doc);
   if (target === undefined) return false;
+  const existing =
+    target.tagName === 'TEXTAREA' ? target.value : (target.innerText ?? target.textContent);
+  if (typeof existing === 'string' && existing.trim()) return existing === text;
   try {
     if (target.tagName === 'TEXTAREA') {
       const prototype =
@@ -54,6 +57,43 @@ export const writeComposer = (text, doc = globalThis.document) => {
   } catch {
     return false;
   }
+};
+
+const writeComposerAndVerify = (text, doc = globalThis.document) => {
+  if (!writeComposer(text, doc)) return false;
+  const target = findComposer(doc);
+  if (target === undefined) return false;
+  const value =
+    target.tagName === 'TEXTAREA' ? target.value : (target.innerText ?? target.textContent);
+  return typeof value === 'string' && value.includes(text);
+};
+
+export const writeComposerWithSessionFallback = async (ctx, text, options = {}) => {
+  const write = options.write ?? writeComposerAndVerify;
+  const delays = options.delays ?? [80, 240, 600, 1200];
+  try {
+    ctx?.layout?.selectPanel?.('conversation');
+  } catch {
+    // 保留当前会话内容；后续失败时再创建新会话。
+  }
+  for (const delay of delays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (write(text)) return { createdSession: false, sessionId: null };
+  }
+  const selectedSession = () =>
+    Object.values(ctx.sessions.list.getSnapshot().byId).find(
+      (session) => (session.retainedBy.mainView ?? 0) > 0,
+    )?.id ?? null;
+  const previousSessionId = selectedSession();
+  // 不带初始草稿的官方入口创建新会话并继承工作区，避免复用含有未发送草稿的空白会话。
+  ctx.uiWorkspace.startSession();
+  for (const delay of delays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    const sessionId = selectedSession();
+    if (sessionId !== null && sessionId !== previousSessionId && write(text))
+      return { createdSession: true, sessionId };
+  }
+  throw new Error('DSH composer unavailable');
 };
 
 export const sendStockAnalysis = async (ctx, request) => {

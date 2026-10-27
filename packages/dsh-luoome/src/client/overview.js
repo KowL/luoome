@@ -1,6 +1,7 @@
 import { createElement as h } from 'react';
 
-import { dataOf, errorOf, usePanelState } from './data.js';
+import { IDLE_REFRESH_INTERVAL_MS, TRADING_REFRESH_INTERVAL_MS } from './auto-refresh.js';
+import { dataOf, errorOf, useAutoRefresh, usePanelState } from './data.js';
 import {
   bigMoney,
   clock,
@@ -48,6 +49,28 @@ const SESSION_TONE = {
   'midday-break': 'quiet',
   closed: 'quiet',
   'non-trading-day': 'quiet',
+};
+
+const AUTO_REFRESH_PREFIX = {
+  'pre-open': '盘前',
+  'midday-break': '午间休市',
+  closed: '交易时段外',
+  'non-trading-day': '非交易日',
+};
+
+/** 头部刷新节奏提示：一眼能看出当前是否在自动刷新、下一次什么时候刷新。 */
+const autoRefreshHint = (marketSession, nextSessionStart) => {
+  const tradingText = `盘中自动刷新 · 每 ${TRADING_REFRESH_INTERVAL_MS / 1000} 秒`;
+  const idleText = `每 ${IDLE_REFRESH_INTERVAL_MS / 60_000} 分钟检查`;
+  if (marketSession === 'trading') return { tone: 'accent', text: tradingText };
+  if (marketSession === undefined || marketSession === null) {
+    return { tone: 'quiet', text: `时段未知 · ${idleText}` };
+  }
+  const prefix = AUTO_REFRESH_PREFIX[marketSession] ?? '交易时段外';
+  if (nextSessionStart) {
+    return { tone: 'quiet', text: `${prefix} · ${when(nextSessionStart)} 后自动刷新` };
+  }
+  return { tone: 'quiet', text: `${prefix} · ${idleText}` };
 };
 
 const DimensionHint = ({ dimension }) => {
@@ -598,7 +621,7 @@ const DataHealthLine = ({ status, loading }) => {
 };
 
 export function OverviewPanel() {
-  const { results, loading, panelError, loadedAt, refresh } = usePanelState('overview');
+  const { results, loading, panelError, loadedAt, refresh, session } = usePanelState('overview');
   const holdings = dataOf(results, 'list_holdings');
   const triggers = dataOf(results, 'list_watch_triggers');
   const advice = dataOf(results, 'get_advice');
@@ -606,16 +629,21 @@ export function OverviewPanel() {
   const sentiment = dataOf(results, 'get_ashare_sentiment')?.snapshot;
   const indexQuotes = dataOf(results, 'fetch_index_quotes');
   const marketStatus = dataOf(results, 'get_market_data_status');
-  const session = marketStatus?.marketSession;
+  const marketSession = session?.marketSession ?? marketStatus?.marketSession;
+  const nextSessionStart = session?.nextSessionStart ?? null;
 
+  useAutoRefresh({ marketSession, nextSessionStart, refresh });
+
+  const refreshHint = autoRefreshHint(marketSession, nextSessionStart);
   const side = [
-    session
+    marketSession
       ? h(
           Pill,
-          { key: 'session', tone: SESSION_TONE[session] ?? 'quiet', dot: true },
-          MARKET_SESSION[session] ?? session,
+          { key: 'session', tone: SESSION_TONE[marketSession] ?? 'quiet', dot: true },
+          MARKET_SESSION[marketSession] ?? marketSession,
         )
       : null,
+    h(Pill, { key: 'auto-refresh', tone: refreshHint.tone }, refreshHint.text),
     h(Stamp, { key: 'stamp', label: '更新', value: clock(loadedAt) }),
     h(Refresh, { key: 'refresh', loading, onClick: refresh }),
   ];

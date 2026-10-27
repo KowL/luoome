@@ -88,6 +88,7 @@ export const createMarketSurface = (options: {
   readonly config: unknown;
   readonly tools: readonly Tool[];
   readonly context: () => ToolContext | Promise<ToolContext>;
+  readonly accountId?: string;
 }): MarketSurface => {
   if (process.env.LUOOME_EXPOSE_TRADE === 'true')
     throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed in the DSH plugin');
@@ -123,12 +124,28 @@ export const createMarketSurface = (options: {
       }
       if (disposed) return denied('market tool allowlist');
       if (signal.aborted) return inactiveRequest(signal);
+      if (
+        options.accountId !== undefined &&
+        input !== null &&
+        typeof input === 'object' &&
+        !Array.isArray(input)
+      ) {
+        const raw = input as Record<string, unknown>;
+        if (raw.accountId !== undefined && raw.accountId !== options.accountId)
+          return denied('current owner account');
+      }
 
       // The domain tool API has no signal parameter; AbortSignal bounds this surface's
       // wait, while the shared controller marks the call as abandoned for bookkeeping.
       const controller = new AbortController();
       const lifetime = AbortSignal.any([signal, controller.signal]);
-      const execution = tool.execute(input, context);
+      const execution = tool.execute(input, {
+        ...context,
+        abortSignal:
+          context.abortSignal === undefined
+            ? lifetime
+            : AbortSignal.any([lifetime, context.abortSignal]),
+      });
       const aborted = new Promise<never>((_resolve, reject) => {
         const abort = (): void => reject(new Error('aborted'));
         if (lifetime.aborted) abort();

@@ -1,11 +1,8 @@
 import {
-  BUILTIN_HOLIDAYS,
   type DailyBar,
   type DataFreshness,
   dateInShanghai,
-  type Holiday,
-  isHoliday,
-  isWeekend,
+  type MarketSession,
   type Money,
   money,
   type Quote,
@@ -39,8 +36,6 @@ export const MONTH_GRANULARITY_LOOKBACK_DAYS = 5 * 370;
 export const MONTH_GRANULARITY_MAX_BARS = 1300;
 /** 低于该根数视为历史不足（§8.3：追加 bars-insufficient）。 */
 export const MIN_SUFFICIENT_BARS = 20;
-
-export type MarketSession = 'pre-open' | 'trading' | 'midday-break' | 'closed' | 'non-trading-day';
 
 export type MarketViewWarning =
   | 'quote-local-fallback'
@@ -280,26 +275,11 @@ export const candlesToBars = (stockId: string, candles: readonly MarketCandle[])
   }));
 
 /**
- * A 股盘中时段纯计算（§8.7）：复用 core 交易日历（与 cli watch 同一套 BUILTIN_HOLIDAYS）。
- * - 周末 / 节假日 → non-trading-day
- * - < 9:30 → pre-open；[9:30,11:30) → trading；[11:30,13:00) → midday-break；
- *   [13:00,15:00) → trading；15:00 起 → closed
- * 边界与盘中计划监控一致。
+ * A 股盘中时段纯计算（§8.7）下沉到 core 交易日历（与 cli watch 同一套 BUILTIN_HOLIDAYS）。
+ * 这里保留再导出，tools 内部调用点不用改 import 路径。
  */
-export const computeMarketSession = (
-  now: Date,
-  holidays: ReadonlyMap<number, ReadonlySet<Holiday>> = BUILTIN_HOLIDAYS,
-): MarketSession => {
-  if (isWeekend(now) || isHoliday(now, holidays)) return 'non-trading-day';
-  const shanghaiMs = now.getTime() + 8 * 60 * 60 * 1000;
-  const d = new Date(shanghaiMs);
-  const t = d.getUTCHours() * 60 + d.getUTCMinutes();
-  if (t < 9 * 60 + 30) return 'pre-open';
-  if (t < 11 * 60 + 30) return 'trading';
-  if (t < 13 * 60) return 'midday-break';
-  if (t < 15 * 60) return 'trading';
-  return 'closed';
-};
+export { computeMarketSession } from '@luoome/core';
+export type { MarketSession };
 
 export interface MarketDataStatus {
   readonly freshness: DataFreshness;

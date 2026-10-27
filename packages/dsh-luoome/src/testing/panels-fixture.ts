@@ -22,7 +22,15 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, getDecisionReviewContextTool, saveDecisionReviewTool } from '@luoome/tools';
+import {
+  buildContext,
+  createWatchlistTool,
+  getDecisionReviewContextTool,
+  saveDecisionReviewTool,
+  setStrategyScheduleTool,
+  subscribeStrategyToWatchlistTool,
+} from '@luoome/tools';
+import { RESEARCH_FIXTURE, seedResearchFixture } from './research-fixture.js';
 
 export interface PanelsFixtureOwner {
   readonly userId: string;
@@ -44,6 +52,7 @@ const ADVICE_ID = 'browser-advice-watch';
 const DECISION_NOTE = '浏览器验收：用户明确回填跟随';
 const ADVICE_PREMISE = '浏览器验收：等待量能确认后再判断方向';
 const STRATEGY_NAME = '浏览器验收策略';
+const WATCHLIST_ID = 'watchlist-browser-strategy';
 
 export const PANELS_FIXTURE = Object.freeze({
   stock: STOCK,
@@ -56,6 +65,8 @@ export const PANELS_FIXTURE = Object.freeze({
   strategyName: STRATEGY_NAME,
   secondStrategyId: SECOND_STRATEGY_ID,
   secondStrategyName: '尚未运行的策略',
+  watchlistId: WATCHLIST_ID,
+  research: RESEARCH_FIXTURE,
 });
 
 const definition: StrategyDslV1 = {
@@ -189,7 +200,7 @@ export const seedPanelsFixture = async (
       name: PANELS_FIXTURE.secondStrategyName,
       description: '验证切换策略与尚未运行的空态。',
       owner: 'user',
-      status: 'active',
+      status: 'paused',
       currentVersionId: `${SECOND_STRATEGY_ID}-v1`,
       createdAt: new Date(now.getTime() - 1000),
       updatedAt: new Date(now.getTime() - 1000),
@@ -326,6 +337,29 @@ export const seedPanelsFixture = async (
       ctx,
     );
     if (!saved.ok) throw new Error(`决策复盘写入失败: ${JSON.stringify(saved.error)}`);
+    const watchlist = await createWatchlistTool.execute(
+      {
+        id: WATCHLIST_ID,
+        name: '浏览器策略关注',
+        kind: 'strategy',
+        membershipPolicy: 'mixed',
+      },
+      ctx,
+    );
+    if (!watchlist.ok) throw new Error(`Watchlist 写入失败: ${JSON.stringify(watchlist.error)}`);
+    const schedule = await setStrategyScheduleTool.execute(
+      { strategyId: STRATEGY_ID, cron: '30 16 * * 1-5', enabled: true },
+      ctx,
+    );
+    if (!schedule.ok)
+      throw new Error(`StrategySchedule 写入失败: ${JSON.stringify(schedule.error)}`);
+    const subscription = await subscribeStrategyToWatchlistTool.execute(
+      { strategyId: STRATEGY_ID, watchlistId: WATCHLIST_ID },
+      ctx,
+    );
+    if (!subscription.ok)
+      throw new Error(`策略订阅写入失败: ${JSON.stringify(subscription.error)}`);
+    await seedResearchFixture(ctx, [STOCK]);
     return { ...PANELS_FIXTURE, owner, database: join(home, 'luoome.db') };
   } finally {
     close();
@@ -345,6 +379,10 @@ export const dumpPanelsFixture = async (
     const outcomes = await repos.advice.listOutcomes();
     const strategies = await repos.strategy.list();
     const runs = await repos.strategyRun.listRuns({ strategyId: STRATEGY_ID, limit: 10 });
+    const schedule = await repos.strategySchedule.findByStrategyId(STRATEGY_ID);
+    const subscriptions = await repos.strategyWatchlistSubscription.list({
+      strategyId: STRATEGY_ID,
+    });
     const reviews = await repos.decisionReview.list({ accountId: owner.accountId, limit: 10 });
     return {
       account:
@@ -383,6 +421,15 @@ export const dumpPanelsFixture = async (
         strategyId: item.strategyId,
         status: item.status,
         publication: item.publication?.status ?? null,
+      })),
+      schedule:
+        schedule === null
+          ? null
+          : { cron: schedule.cron, timezone: schedule.timezone, enabled: schedule.enabled },
+      subscriptions: subscriptions.map((item) => ({
+        strategyId: item.strategyId,
+        watchlistId: item.watchlistId,
+        status: item.status,
       })),
       reviews: reviews.map((item) => ({
         id: item.review.id,

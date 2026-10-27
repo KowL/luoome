@@ -23,10 +23,10 @@ const RefreshIcon = () =>
     }),
   );
 
-export const Panel = ({ children }) =>
+export const Panel = ({ children, className }) =>
   h(
     'div',
-    { className: 'luo-root' },
+    { className: cx('luo-root', className) },
     h('style', null, STYLE),
     h('div', { className: 'luo-shell' }, children),
   );

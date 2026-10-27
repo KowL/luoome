@@ -81,6 +81,7 @@ import type {
   StrategyDataCheckpointMember,
   StrategyEvaluationDay,
   StrategyEvaluationSession,
+  StrategyResearchState,
 } from '../entity/strategy-checkpoint.js';
 import type { StrategySchedule } from '../entity/strategy-schedule.js';
 import type {
@@ -948,6 +949,19 @@ export interface StrategyDataCheckpointRepository {
 export interface StrategyEvaluationRepository {
   saveSession(session: StrategyEvaluationSession): Promise<void>;
   findSessionById(id: string): Promise<StrategyEvaluationSession | null>;
+  listSessions(input: {
+    readonly strategyId: string;
+    readonly limit: number;
+  }): Promise<readonly StrategyEvaluationSession[]>;
+  findResearchState(input: {
+    readonly strategyId: string;
+    readonly accountId: string;
+  }): Promise<StrategyResearchState | null>;
+  saveResearchState(input: {
+    readonly state: StrategyResearchState;
+    readonly expectedRevision: number;
+  }): Promise<boolean>;
+  removeResearchStates(strategyId: string): Promise<void>;
   saveDay(day: StrategyEvaluationDay): Promise<void>;
   findDay(input: {
     readonly sessionId: string;

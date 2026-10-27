@@ -8,7 +8,7 @@ import {
   strategyDefinitionHash,
 } from '@luoome/core';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { replayStrategyRangeWorkflow } from './replay-strategy-range.js';
 
@@ -140,6 +140,88 @@ const revisionFor = (
 };
 
 describe('replay-strategy-range resume identity', () => {
+  it('advances a bounded number of days and resumes without rerunning completed dates', async () => {
+    const now = new Date('2026-08-12T09:00:00Z');
+    const from = new Date('2026-08-10T00:00:00Z');
+    const to = new Date('2026-08-11T00:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: from });
+    await seedReplayStrategy(ctx, now);
+    const fetch = vi
+      .spyOn(ctx.adapters.market, 'fetchDailyBars')
+      .mockImplementation(async (_id, range) =>
+        [revisionFor(10, range.end, now)].map((bar) => ({
+          ...bar,
+          open: money(bar.open),
+          high: money(bar.high),
+          low: money(bar.low),
+          close: money(bar.close),
+          adjustment: 'qfq' as const,
+        })),
+      );
+    const first = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'replay-strategy',
+        versionId: 'replay-strategy-v1',
+        from,
+        to,
+        stockIds: ['600519.SH'],
+        maxDays: 1,
+      },
+      ctx,
+    );
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.summary.completedDays).toBe(1);
+    expect((await ctx.repos.strategyEvaluation.findSessionById(first.data.sessionId))?.status).toBe(
+      'running',
+    );
+    const second = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'replay-strategy',
+        versionId: 'replay-strategy-v1',
+        from,
+        to,
+        stockIds: ['600519.SH'],
+        resumeSessionId: first.data.sessionId,
+        maxDays: 1,
+      },
+      ctx,
+    );
+    expect(second.ok, JSON.stringify(second)).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.status).toBe('complete');
+    expect(second.data.summary.completedDays).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(await ctx.repos.strategyRun.findLatestPublishedRun('replay-strategy')).toBeNull();
+  });
+
+  it('yields to the event loop and honours cancellation before starting provider work', async () => {
+    const now = new Date('2026-08-12T09:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: FROM });
+    await seedReplayStrategy(ctx, now);
+    const controller = new AbortController();
+    const fetch = vi.spyOn(ctx.adapters.market, 'fetchDailyBars');
+    const promise = replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'replay-strategy',
+        versionId: 'replay-strategy-v1',
+        from: FROM,
+        to: TO,
+        stockIds: ['600519.SH'],
+      },
+      { ...ctx, abortSignal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 0);
+    const result = await promise;
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect((await ctx.repos.strategyEvaluation.findSessionById(result.data.sessionId))?.error).toBe(
+      'evaluation_cancelled',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it.each([
     ['strategy', { strategyId: 'strategy-b' }],
     ['version', { versionId: 'strategy-b-v1' }],

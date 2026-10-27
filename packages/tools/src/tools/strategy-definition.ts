@@ -3,9 +3,12 @@ import {
   classifyStrategyResult,
   diffStrategyDefinitions,
   diffStrategyRunViews,
+  readStrategyRunSnapshot,
   StrategyDefinitionDiffSchema,
   StrategyDslV1Schema,
+  StrategyResultViewSchema,
   StrategyRunDiffSchema,
+  StrategyRunInputSnapshotV3Schema,
   StrategySchema,
   type StrategyVersion,
   StrategyVersionSchema,
@@ -15,8 +18,14 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import {
+  captureStrategyComparisonSnapshot,
+  StrategyComparisonInputIdentitySchema,
+} from '../internal/strategy-comparison-snapshot.js';
 import { type RunStrategyInput, RunStrategyOutput, runStrategyTool } from './run-strategy.js';
 import { collectStrategyInsightFacts, StrategyInsightFactsSchema } from './strategy-insight.js';
+
+export { StrategyComparisonInputIdentitySchema };
 
 export const CompareStrategyDefinitionsInput = z.object({
   strategyId: z.string().min(1),
@@ -183,8 +192,9 @@ export const TrialStrategyVersionInput = z.object({
   baseVersionId: z.string().min(1),
   draftVersionId: z.string().min(1),
   stockIds: z.array(z.string().min(1)).min(1).max(500),
-  mode: z.enum(['scan', 'scheduled', 'replay']).default('scan'),
+  mode: z.enum(['scan', 'replay']).default('scan'),
   asOf: z.coerce.date().optional(),
+  revisionCutoff: z.coerce.date().optional(),
 });
 
 export const TrialStrategyVersionOutput = z.object({
@@ -193,9 +203,17 @@ export const TrialStrategyVersionOutput = z.object({
   diff: StrategyRunDiffSchema,
   stockIds: z.array(z.string()),
   persisted: z.literal(false),
+  inputIdentity: StrategyComparisonInputIdentitySchema,
+  diagnostics: z.object({
+    base: z.array(StrategyResultViewSchema),
+    draft: z.array(StrategyResultViewSchema),
+    missingBaseStockIds: z.array(z.string()),
+    missingDraftStockIds: z.array(z.string()),
+    excludedByUniverseStockIds: z.array(z.string()),
+  }),
 });
 
-/** 对同一显式股票样本分别试算基线/草案；两次结果均为内存 run。 */
+/** 两个不可变定义共享一次冻结采集，不写 operational current。 */
 export const trialStrategyVersionTool = defineTool({
   name: 'trial_strategy_version',
   description: '用同一股票样本对比 Strategy 基线与草案；persist=false，不产生正式 StrategyRun',
@@ -218,19 +236,57 @@ export const trialStrategyVersionTool = defineTool({
     ) {
       return errInvalidInput('基线和草案必须是同一 Strategy 下的两个不同版本');
     }
+    if (baseVersion.validationStatus !== 'valid' || draftVersion.validationStatus !== 'valid')
+      return errInvalidInput('对照必须使用 valid version');
+    if (strategy.status !== 'active' && strategy.status !== 'draft')
+      return errInvalidInput('暂停或归档的 Strategy 不接受试跑');
+    if (
+      JSON.stringify(baseVersion.definition.universe) !==
+      JSON.stringify(draftVersion.definition.universe)
+    )
+      return errInvalidInput('受控对照必须使用相同 universe 定义');
+    if (input.mode === 'replay' && input.asOf === undefined)
+      return errInvalidInput('mode=replay 时 asOf 必填');
+    if (input.mode === 'scan' && (input.asOf !== undefined || input.revisionCutoff !== undefined))
+      return errInvalidInput('scan 不接受历史 asOf/revisionCutoff；请使用 replay');
+    if (input.revisionCutoff !== undefined && input.revisionCutoff > ctx.clock())
+      return errInvalidInput('revisionCutoff 不能在未来');
+    const snapshot = await captureStrategyComparisonSnapshot({
+      ctx,
+      versions: [baseVersion, draftVersion],
+      stockIds: input.stockIds,
+      mode: input.mode,
+      ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+      ...(input.revisionCutoff === undefined ? {} : { revisionCutoff: input.revisionCutoff }),
+    });
+    if (input.mode === 'replay' && !snapshot.universeAvailable)
+      return errInvalidInput('历史对照缺少指定时点的 PIT 股票池');
     const common = {
       strategyId: input.strategyId,
-      stockIds: input.stockIds,
+      stockIds: snapshot.stockIds,
       mode: input.mode,
       persist: false as const,
       ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+      ...(snapshot.identity.revisionCutoff === undefined
+        ? {}
+        : { revisionCutoff: snapshot.identity.revisionCutoff }),
     } satisfies z.input<typeof RunStrategyInput>;
     const [base, draft] = await Promise.all([
-      runStrategyTool.execute({ ...common, versionId: baseVersion.id }, ctx),
-      runStrategyTool.execute({ ...common, versionId: draftVersion.id }, ctx),
+      runStrategyTool.execute({ ...common, versionId: baseVersion.id }, snapshot.ctx),
+      runStrategyTool.execute({ ...common, versionId: draftVersion.id }, snapshot.ctx),
     ]);
     if (!base.ok) return base;
     if (!draft.ok) return draft;
+    for (const result of [base.data, draft.data]) {
+      result.run.inputSnapshot = StrategyRunInputSnapshotV3Schema.parse({
+        ...StrategyRunInputSnapshotV3Schema.parse(result.run.inputSnapshot),
+        dataCheckpoint: {
+          id: `memory:${snapshot.identity.snapshotHash}`,
+          dataAsOf: snapshot.identity.dataAsOf,
+          checksum: snapshot.identity.snapshotHash,
+        },
+      });
+    }
     const diff = diffStrategyRunViews({
       fromRun: base.data.run,
       toRun: draft.data.run,
@@ -245,8 +301,26 @@ export const trialStrategyVersionTool = defineTool({
       base: base.data,
       draft: draft.data,
       diff,
-      stockIds: [...input.stockIds],
+      stockIds: snapshot.stockIds,
       persisted: false as const,
+      inputIdentity: snapshot.identity,
+      diagnostics: {
+        base: base.data.results.map((result) =>
+          classifyStrategyResult(baseVersion.definition, result),
+        ),
+        draft: draft.data.results.map((result) =>
+          classifyStrategyResult(draftVersion.definition, result),
+        ),
+        missingBaseStockIds: readStrategyRunSnapshot(base.data.run.inputSnapshot).stockIds.filter(
+          (id) => !base.data.results.some((result) => result.stockId === id),
+        ),
+        missingDraftStockIds: readStrategyRunSnapshot(draft.data.run.inputSnapshot).stockIds.filter(
+          (id) => !draft.data.results.some((result) => result.stockId === id),
+        ),
+        excludedByUniverseStockIds: snapshot.stockIds.filter(
+          (id) => !readStrategyRunSnapshot(base.data.run.inputSnapshot).stockIds.includes(id),
+        ),
+      },
     };
   },
 });

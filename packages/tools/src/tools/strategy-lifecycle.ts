@@ -110,6 +110,7 @@ export const deleteStrategyTool = defineTool({
     }
     await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
     await ctx.repos.strategyRun.removeByStrategyId(strategy.id);
+    await ctx.repos.strategyEvaluation.removeResearchStates(strategy.id);
     await ctx.repos.strategy.remove(strategy.id);
     return { deleted: true };
   },

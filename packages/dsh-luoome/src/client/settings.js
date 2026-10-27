@@ -1,4 +1,4 @@
-import { createElement as h, useState } from 'react';
+import { createElement as h, useEffect, useState } from 'react';
 import { dataOf, errorOf, usePanelState } from './data.js';
 import { clock, money, when } from './format.js';
 import {
@@ -28,6 +28,186 @@ const operationRequest = async (path, body) => {
     throw new Error(result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`);
   return result.data;
 };
+
+const marketRequest = async (body, signal) => {
+  const response = await fetch('api/luoome/settings/market', {
+    method: body === undefined ? 'GET' : 'POST',
+    signal,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    ...(body === undefined
+      ? {}
+      : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok)
+    throw new Error(result.error?.message ?? result.error?.cause ?? '行情设置暂时无法保存');
+  return result.data;
+};
+
+function MarketSettingsForm({ refreshKey, onSaved }) {
+  const [data, setData] = useState(null);
+  const [sources, setSources] = useState(['', '', '']);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    setData(null);
+    marketRequest(undefined, controller.signal)
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        setData(next);
+        setSources(Array.from({ length: 3 }, (_, index) => next.activeOrder[index] ?? ''));
+        setBaseUrl(next.fuyao.baseUrl);
+        setError('');
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err.message);
+      });
+    return () => controller.abort();
+  }, [refreshKey]);
+
+  const selected = sources.filter(Boolean);
+  const duplicate = new Set(selected).size !== selected.length;
+  const needsKey = selected.includes('fuyao') && !data?.fuyao.configured;
+  const save = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage('');
+    setError('');
+    try {
+      const next = await marketRequest({
+        sources: selected,
+        fuyao: { baseUrl: baseUrl.trim(), ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) },
+      });
+      setData(next);
+      setBaseUrl(next.fuyao.baseUrl);
+      setApiKey('');
+      setMessage('行情设置已保存，立即生效');
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return h(
+    Section,
+    { title: '行情数据源' },
+    h(
+      Card,
+      {
+        title: 'FUYAO（同花顺）',
+        meta: data
+          ? h(
+              Pill,
+              { tone: data.activeOrder.includes('fuyao') ? 'ok' : 'quiet' },
+              data.activeOrder.includes('fuyao') ? '已启用' : '未启用',
+            )
+          : null,
+      },
+      h(
+        'p',
+        { className: 'luo-fine' },
+        '提供行情快照、前复权日线、股票检索与指数。将 FUYAO 加入下方优先级后启用。',
+      ),
+      error ? h(ErrorNote, { error }) : null,
+      data
+        ? h(
+            'form',
+            { className: 'luo-form', onSubmit: save },
+            h(
+              'label',
+              { className: 'luo-field' },
+              'FUYAO 服务地址',
+              h('input', {
+                type: 'url',
+                'aria-label': 'FUYAO 服务地址',
+                value: baseUrl,
+                required: true,
+                maxLength: 2048,
+                disabled: busy,
+                onChange: (event) => setBaseUrl(event.target.value),
+              }),
+            ),
+            h(
+              'label',
+              { className: 'luo-field' },
+              `FUYAO API Key · ${data.fuyao.configured ? '已配置' : '未配置'}`,
+              h('input', {
+                type: 'password',
+                'aria-label': 'FUYAO API Key',
+                autoComplete: 'new-password',
+                value: apiKey,
+                maxLength: 4096,
+                required: needsKey,
+                placeholder: data.fuyao.configured ? '留空保留现有密钥' : '输入 API Key',
+                disabled: busy,
+                onChange: (event) => setApiKey(event.target.value),
+              }),
+            ),
+            h('p', { className: 'luo-fine' }, '密钥仅保存在本机，保存后不回显。'),
+            h(
+              'div',
+              { className: 'luo-source-order' },
+              sources.map((source, index) =>
+                h(
+                  'label',
+                  { key: index, className: 'luo-field' },
+                  index === 0 ? '首选行情源' : `备用行情源 ${index}`,
+                  h(
+                    'select',
+                    {
+                      'aria-label': `行情源优先级 ${index + 1}`,
+                      value: source,
+                      disabled: busy,
+                      onChange: (event) =>
+                        setSources((current) =>
+                          current.map((value, position) =>
+                            position === index ? event.target.value : value,
+                          ),
+                        ),
+                    },
+                    h('option', { value: '' }, '不启用'),
+                    data.sources.map((item) =>
+                      h('option', { key: item.id, value: item.id }, item.label),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            h(
+              'p',
+              { className: 'luo-fine' },
+              duplicate
+                ? '行情源不能重复，请调整优先级。'
+                : '最多启用三个行情源，按优先级依次尝试。',
+            ),
+            h(
+              'div',
+              { className: 'luo-actions' },
+              h(
+                'button',
+                {
+                  type: 'submit',
+                  className: 'luo-btn',
+                  disabled: busy || duplicate || selected.length === 0,
+                },
+                busy ? '保存中' : '保存行情设置',
+              ),
+              message ? h('span', { role: 'status', className: 'luo-fine' }, message) : null,
+            ),
+          )
+        : !error
+          ? h('p', { role: 'status', className: 'luo-fine' }, '读取行情设置…')
+          : null,
+    ),
+  );
+}
 
 function AccountNameForm({ account, enabled, onSaved }) {
   const [name, setName] = useState(account.name);
@@ -88,6 +268,7 @@ function AccountNameForm({ account, enabled, onSaved }) {
       { className: 'luo-field' },
       '账户名称',
       h('input', {
+        name: 'account-name',
         value: name,
         maxLength: 120,
         required: true,
@@ -181,14 +362,15 @@ export function SettingsPanel() {
   const policies = config?.policies ?? [];
   return h(
     Panel,
-    null,
+    { className: 'luo-settings' },
     h(Head, {
       eyebrow: 'Workspace settings',
-      title: '账户与设置',
-      subtitle: '当前账户、数据健康与已启用的操作范围',
+      title: '投资设置',
+      subtitle: '管理账户、行情数据源与自动任务',
       side: h(Refresh, { loading: state.loading, onClick: state.refresh }),
     }),
     state.panelError ? h(ErrorNote, { label: '设置', error: state.panelError }) : null,
+    h(MarketSettingsForm, { refreshKey: state.asOf, onSaved: state.refresh }),
     h(
       Section,
       { title: '当前账户' },
@@ -304,11 +486,7 @@ export function SettingsPanel() {
             ),
           ),
         ),
-        h(
-          'p',
-          { className: 'luo-fine' },
-          '模型与供应商配置沿用 DSH 设置。此页不保存或回显模型密钥。',
-        ),
+        h('p', { className: 'luo-fine' }, '模型配置由 DSH 的模型设置管理。'),
       ),
     ),
     h(Footer, { left: h(Stamp, { label: '读取于', value: clock(state.asOf) }) }),

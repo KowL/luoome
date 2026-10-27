@@ -3,6 +3,7 @@ import {
   canonicalStrategyResearchManifestJson,
   StrategyResearchManifestSchema,
   type StrategyResearchManifestValidation,
+  StrategyResearchStateSchema,
   strategyResearchManifestHash,
   validateStrategyResearchManifest,
 } from '@luoome/core';
@@ -30,12 +31,21 @@ export const StrategyManifestValidationOutput = z.object({
 
 export const ExportStrategyManifestInput = z.object({
   versionId: z.string().min(1),
+  accountId: z.string().min(1).optional(),
 });
 
 export const ExportStrategyManifestOutput = z.object({
   manifest: StrategyResearchManifestSchema,
   canonicalJson: z.string().min(1),
   manifestHash: ManifestHashSchema,
+  evidenceReferences: z.array(z.string()),
+  researchState: StrategyResearchStateSchema.optional(),
+  reproducibility: z.object({
+    definitionPortable: z.literal(true),
+    marketDataIncluded: z.literal(false),
+    trialSnapshotsIncluded: z.literal(false),
+    limitations: z.array(z.string()),
+  }),
 });
 
 export const ImportStrategyManifestInput = z.object({
@@ -85,10 +95,51 @@ export const exportStrategyManifestTool = defineTool({
     if (version === null) return errNotFound('StrategyVersion', input.versionId);
     try {
       const manifest = buildStrategyResearchManifest(version);
+      const [sessions, backtests, researchState] = await Promise.all([
+        ctx.repos.strategyEvaluation.listSessions({ strategyId: version.strategyId, limit: 100 }),
+        ctx.repos.strategyBacktest.listRuns({ strategyId: version.strategyId, limit: 100 }),
+        ctx.repos.strategyEvaluation.findResearchState({
+          strategyId: version.strategyId,
+          accountId: input.accountId ?? ctx.user.defaultAccountId,
+        }),
+      ]);
+      const matchingResearch =
+        researchState !== null &&
+        (researchState.state.baseVersionId === version.id ||
+          researchState.state.candidateVersionId === version.id)
+          ? researchState
+          : undefined;
       return {
         manifest,
         canonicalJson: canonicalStrategyResearchManifestJson(manifest),
         manifestHash: strategyResearchManifestHash(manifest),
+        evidenceReferences: [
+          ...new Set([
+            `strategy-version:${version.id}`,
+            `definition-hash:${version.definitionHash}`,
+            ...sessions
+              .filter((session) => session.strategyVersionId === version.id)
+              .map((session) => `strategy-evaluation:${session.id}`),
+            ...backtests
+              .filter((run) => run.spec.strategyVersionId === version.id)
+              .map((run) => `strict-backtest:${run.id}`),
+            ...(matchingResearch?.state.conclusion?.evidenceReferences ?? []),
+          ]),
+        ],
+        ...(matchingResearch === undefined ? {} : { researchState: matchingResearch }),
+        reproducibility: {
+          definitionPortable: true as const,
+          marketDataIncluded: false as const,
+          trialSnapshotsIncluded: false as const,
+          limitations: [
+            'manifest 固定定义与求值器/数据集声明；证据引用依赖原本地库，不包含完整日线、行情或供应商历史修订包。',
+            '内存 trial 快照只保留身份，不保证重新下载相同事实；evaluation 的 PIT universe/checkpoint/revision 与严格回测市场事实必须另行保留。',
+            '此导出不表示证据通过门禁，不改变发布状态；T+1/T+3/T+5 观察不是组合回测。',
+            ...(sessions.length === 100 || backtests.length === 100
+              ? ['证据发现最多扫描最近 100 个会话与 100 个严格回测；可能存在更多旧证据。']
+              : []),
+          ],
+        },
       };
     } catch (error) {
       return errInvalidInput(

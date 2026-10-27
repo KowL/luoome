@@ -3,6 +3,8 @@ import {
   dataOf,
   errorOf,
   strategyExpression,
+  strategyPartDataOf,
+  strategyPartErrorOf,
   strategyText,
   usePanelState,
   workspaceDataOf,
@@ -39,6 +41,7 @@ import {
   Stamp,
   Stat,
 } from './primitives.js';
+import { ResearchOnboarding, ResearchWorkbench } from './research.js';
 import { StockDetail } from './stock.js';
 
 const safeError = (error) =>
@@ -663,7 +666,76 @@ const MatchesCard = ({ workspace, text, onSelectStock }) => {
   );
 };
 
-const StrategyDetails = ({ strategy, state, onResearch, onAnalyzeStock }) => {
+const StrategyRunCard = ({ strategy, state, workspace, onManage }) => {
+  const schedule = strategyPartDataOf(state, strategy.id, 'schedule')?.schedule ?? null;
+  const scheduleError = strategyPartErrorOf(state, strategy.id, 'schedule');
+  const subscriptions =
+    strategyPartDataOf(state, strategy.id, 'subscriptions')?.subscriptions ?? [];
+  const subscriptionsError = strategyPartErrorOf(state, strategy.id, 'subscriptions');
+  const activeSubscriptions = subscriptions.filter((item) => item.status === 'active');
+  const run = workspace?.currentRun;
+  return h(
+    Card,
+    { title: '持续运行', className: 'luo-strategy-runtime' },
+    scheduleError
+      ? h(ErrorNote, { label: '运行配置', error: safeError(scheduleError) })
+      : h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'luo-strategy-tags' },
+            h(
+              Pill,
+              { tone: schedule?.enabled ? 'accent' : 'quiet', dot: true },
+              schedule?.enabled ? '策略日程已开启 · 执行待核对' : '策略日程未开启',
+            ),
+            run ? h(Pill, null, `最近结果 ${when(run.dataAsOf)}`) : null,
+          ),
+          schedule
+            ? h(
+                'dl',
+                { className: 'luo-strategy-facts' },
+                h('div', null, h('dt', null, '运行规则'), h('dd', null, schedule.cron)),
+                h('div', null, h('dt', null, '时区'), h('dd', null, schedule.timezone)),
+                h(
+                  'div',
+                  null,
+                  h('dt', null, '下次到期'),
+                  h('dd', null, schedule.nextRunAt ? when(schedule.nextRunAt) : '未安排'),
+                ),
+              )
+            : h(
+                'p',
+                { className: 'luo-fine' },
+                workspace?.currentVersion
+                  ? '已发布，尚未启用持续运行。'
+                  : '尚未配置持续运行；发布有效版本后可启用。',
+              ),
+        ),
+    subscriptionsError
+      ? h(ErrorNote, { label: 'Watchlist 订阅', error: safeError(subscriptionsError) })
+      : h(
+          'p',
+          { className: 'luo-fine' },
+          activeSubscriptions.length
+            ? `已订阅 ${activeSubscriptions.length} 个 Watchlist；只有已发布正式运行才同步。`
+            : '未配置 Watchlist 订阅，匹配结果不会自动加入关注。',
+        ),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'luo-btn',
+        'data-strategy-operation': strategy.id,
+        onClick: () => onManage?.(strategy.id, { strategyName: strategy.name }),
+      },
+      '在对话中管理运行',
+    ),
+  );
+};
+
+const StrategyDetails = ({ strategy, state, onResearch, onManage, onAnalyzeStock }) => {
   const [selectedStock, setSelectedStock] = useState(null);
   const workspace = workspaceDataOf(state, strategy.id);
   const error = workspaceErrorOf(state, strategy.id);
@@ -751,6 +823,8 @@ const StrategyDetails = ({ strategy, state, onResearch, onAnalyzeStock }) => {
           )
         : null,
     ),
+    h(ResearchWorkbench, { strategy, workspace, onResearch, onManage, onAnalyzeStock }),
+    h(StrategyRunCard, { strategy, state, workspace, onManage }),
     workspace ? h(DefinitionCard, { version, text }) : null,
     workspace
       ? h(MatchesCard, {
@@ -796,20 +870,26 @@ const StrategyDetails = ({ strategy, state, onResearch, onAnalyzeStock }) => {
   );
 };
 
-export function StrategiesPanel({ onResearch, onAnalyzeStock }) {
+export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
   const state = usePanelState('strategies');
   const { results, loading, refresh } = state;
   const listed = dataOf(results, 'list_strategies');
   const rows = listed?.strategies ?? [];
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(() => {
+    try {
+      return globalThis.localStorage?.getItem('luoome:research-strategy') ?? null;
+    } catch {
+      return null;
+    }
+  });
   const strategy = rows.find((row) => row.id === selected) ?? rows[0];
   return h(
     Panel,
     null,
     h(Head, {
-      eyebrow: 'Strategy library',
+      eyebrow: 'Personal strategy research',
       title: '策略',
-      subtitle: '了解筛选条件，查看匹配标的与研究依据',
+      subtitle: '提出问题，验证规则，保存每一次研究的发现',
       side: h(Refresh, { loading, onClick: refresh }),
     }),
     state.panelError ? h(ErrorNote, { label: '策略页', error: safeError(state.panelError) }) : null,
@@ -817,26 +897,32 @@ export function StrategiesPanel({ onResearch, onAnalyzeStock }) {
       ? h(ErrorNote, { label: '策略列表', error: safeError(errorOf(results, 'list_strategies')) })
       : null,
     loading && !listed ? h(Section, null, h(SkeletonLines, { lines: 6 })) : null,
-    listed && !rows.length
-      ? h(
-          Section,
-          null,
-          h(
-            Card,
-            null,
-            h(Empty, {
-              title: '还没有策略',
-              hint: '在对话中描述筛选条件，创建并校验你的研究策略。',
-            }),
-          ),
-        )
-      : null,
+    listed && !rows.length ? h(Section, null, h(ResearchOnboarding, { onResearch })) : null,
     strategy
       ? h(
           'div',
           { className: 'luo-strategy-layout' },
-          h(StrategyCatalog, { rows, state, selectedId: strategy.id, onSelect: setSelected }),
-          h(StrategyDetails, { key: strategy.id, strategy, state, onResearch, onAnalyzeStock }),
+          h(StrategyCatalog, {
+            rows,
+            state,
+            selectedId: strategy.id,
+            onSelect: (id) => {
+              setSelected(id);
+              try {
+                globalThis.localStorage?.setItem('luoome:research-strategy', id);
+              } catch {
+                /* 页面仍可继续研究。 */
+              }
+            },
+          }),
+          h(StrategyDetails, {
+            key: strategy.id,
+            strategy,
+            state,
+            onResearch,
+            onManage,
+            onAnalyzeStock,
+          }),
         )
       : null,
     listed?.total > rows.length

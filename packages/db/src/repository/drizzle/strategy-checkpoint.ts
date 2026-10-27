@@ -10,6 +10,8 @@ import {
   type StrategyEvaluationRepository,
   type StrategyEvaluationSession,
   StrategyEvaluationSessionSchema,
+  type StrategyResearchState,
+  StrategyResearchStateSchema,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../database.js';
@@ -19,6 +21,7 @@ import {
   strategyDataCheckpoints,
   strategyEvaluationDays,
   strategyEvaluationSessions,
+  strategyResearchStates,
 } from '../../schema/index.js';
 
 type CheckpointRow = typeof strategyDataCheckpoints.$inferSelect;
@@ -203,6 +206,76 @@ export class DrizzleStrategyDataCheckpointRepository implements StrategyDataChec
 
 export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRepository {
   constructor(private readonly db: DrizzleDatabase<Schema>) {}
+
+  async removeResearchStates(strategyId: string): Promise<void> {
+    this.db
+      .delete(strategyResearchStates)
+      .where(eq(strategyResearchStates.strategyId, strategyId))
+      .run();
+  }
+
+  async listSessions(input: {
+    readonly strategyId: string;
+    readonly limit: number;
+  }): Promise<readonly StrategyEvaluationSession[]> {
+    return this.db
+      .select()
+      .from(strategyEvaluationSessions)
+      .where(eq(strategyEvaluationSessions.strategyId, input.strategyId))
+      .orderBy(desc(strategyEvaluationSessions.createdAt), desc(strategyEvaluationSessions.id))
+      .limit(input.limit)
+      .all()
+      .map(toSession);
+  }
+
+  async findResearchState(input: {
+    readonly strategyId: string;
+    readonly accountId: string;
+  }): Promise<StrategyResearchState | null> {
+    const row = this.db
+      .select()
+      .from(strategyResearchStates)
+      .where(
+        and(
+          eq(strategyResearchStates.strategyId, input.strategyId),
+          eq(strategyResearchStates.accountId, input.accountId),
+        ),
+      )
+      .get();
+    return row === undefined ? null : StrategyResearchStateSchema.parse(row.state);
+  }
+
+  async saveResearchState(input: {
+    readonly state: StrategyResearchState;
+    readonly expectedRevision: number;
+  }): Promise<boolean> {
+    const state = StrategyResearchStateSchema.parse(input.state);
+    if (state.revision !== input.expectedRevision + 1)
+      throw new InvariantError('研究 revision 必须递增 1');
+    return this.db.transaction((tx) => {
+      const where = and(
+        eq(strategyResearchStates.strategyId, state.strategyId),
+        eq(strategyResearchStates.accountId, state.accountId),
+      );
+      const current = tx.select().from(strategyResearchStates).where(where).get();
+      if ((current?.revision ?? 0) !== input.expectedRevision) return false;
+      if (current === undefined)
+        tx.insert(strategyResearchStates)
+          .values({
+            strategyId: state.strategyId,
+            accountId: state.accountId,
+            revision: state.revision,
+            state,
+          })
+          .run();
+      else
+        tx.update(strategyResearchStates)
+          .set({ revision: state.revision, state })
+          .where(where)
+          .run();
+      return true;
+    });
+  }
 
   async saveSession(session: StrategyEvaluationSession): Promise<void> {
     const parsed = StrategyEvaluationSessionSchema.parse(session);

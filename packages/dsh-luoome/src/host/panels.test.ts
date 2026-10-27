@@ -3,6 +3,7 @@
 // 只覆盖宿主侧契约：认证拒绝透传、panel 白名单、固定映射、ToolResult 原样投影、
 // 404/405、无写能力。真实 UI/浏览器一致性由 infra/dsh/panels-browser-acceptance.ts 验证。
 import {
+  buildStrategySchedule,
   type StrategyDslV1,
   type StrategyRun,
   strategyDefinitionHash,
@@ -15,6 +16,7 @@ import { createMarketSurface } from './market-surface.js';
 import {
   createPanelStateHandler,
   createStockDetailHandler,
+  createStockHistoryHandler,
   PANEL_NAMES,
   PANEL_PLANS,
   projectPanelTool,
@@ -92,12 +94,38 @@ const seedStrategy = async (ctx: ToolContext) => {
   });
 };
 
+const seedScheduleAndSubscription = async (ctx: ToolContext) => {
+  await ctx.repos.strategySchedule.save(
+    buildStrategySchedule({
+      strategyId: 'direction-a',
+      cron: '30 16 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      now,
+    }),
+  );
+  await ctx.repos.strategyWatchlistSubscription.save({
+    id: 'direction-a-subscription',
+    strategyId: 'direction-a',
+    watchlistId: 'watchlist-a',
+    sourceKey: 'strategy:direction-a',
+    status: 'active',
+    createdBy: ctx.user.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+};
+
 const readNames = (): string[] => {
   const names = new Set<string>();
   for (const panel of PANEL_NAMES) {
     for (const call of PANEL_PLANS[panel].read) names.add(call.name);
   }
+  // strategies 面板对目录里每条策略派生 workspace/schedule/subscriptions 三次读取，
+  // 它们不在 PANEL_PLANS.read 里，但同样必须在 read surface allowlist 内。
   names.add('get_strategy_workspace');
+  names.add('get_strategy_schedule');
+  names.add('list_strategy_watchlist_subscriptions');
   return [...names];
 };
 
@@ -139,7 +167,8 @@ const setup = async (
     marketTimeoutMs: 50,
   });
   const stockHandle = createStockDetailHandler({ market, admit, now: () => FIXED_AS_OF });
-  return { ctx, read, market, admit, contextCalls, handle, stockHandle };
+  const historyHandle = createStockHistoryHandler({ market, admit, now: () => FIXED_AS_OF });
+  return { ctx, read, market, admit, contextCalls, handle, stockHandle, historyHandle };
 };
 
 const stateRequest = (panel?: string, extra = ''): Request =>
@@ -184,6 +213,16 @@ describe('panel state route', () => {
     const sentimentInput =
       typeof sentiment?.input === 'function' ? sentiment.input(FIXED_AS_OF) : sentiment?.input;
     expect(sentimentInput?.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('publishes the trading session and the next session start for client scheduling', async () => {
+    const { handle } = await setup();
+    const body = await bodyOf(await handle(stateRequest('overview')));
+    // FIXED_AS_OF = 2026-10-25T04:00:00Z = 上海周日 12:00
+    expect(body.session).toEqual({
+      marketSession: 'non-trading-day',
+      nextSessionStart: new Date('2026-10-26T09:30:00+08:00').toISOString(),
+    });
   });
 
   it.each([
@@ -271,6 +310,118 @@ describe('panel state route', () => {
       result: { selected: true, score: 60 },
     });
     expect(workspace.overview?.health).toBe('ready');
+  });
+
+  it('passes the strategy id to per-strategy schedule/subscription reads and keeps absent vs active state', async () => {
+    const { handle, ctx, read } = await setup();
+    expect(readNames()).toContain('get_strategy_schedule');
+    expect(readNames()).toContain('list_strategy_watchlist_subscriptions');
+    await seedStrategy(ctx);
+    await seedScheduleAndSubscription(ctx);
+    // 第二条策略没有 schedule 也没有订阅：合法的空配置必须原样保留为 null/空。
+    await ctx.repos.strategy.create({
+      id: 'direction-b',
+      name: '未配置调度策略',
+      description: '没有 schedule 与订阅的面板验收策略',
+      owner: 'user',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const invoke = vi.spyOn(read, 'invoke');
+    const response = await handle(stateRequest('strategies'));
+    expect(response.status).toBe(200);
+    const inputsOf = (tool: string) =>
+      invoke.mock.calls
+        .filter(([name]) => name === tool)
+        .map(([, input]) => input as Record<string, unknown>);
+    for (const tool of [
+      'get_strategy_workspace',
+      'get_strategy_schedule',
+      'list_strategy_watchlist_subscriptions',
+    ]) {
+      const inputs = inputsOf(tool);
+      expect(inputs.map((input) => input.strategyId).sort()).toEqual([
+        'direction-a',
+        'direction-b',
+      ]);
+      // 派生调用的输入只有服务端写死的 strategyId，不接受 HTTP 侧任何额外字段。
+      for (const input of inputs) expect(Object.keys(input)).toEqual(['strategyId']);
+    }
+    const body = await bodyOf(response);
+    const strategies = body.strategies as {
+      strategyId: string;
+      schedule: { name: string; ok: boolean; data?: { schedule: unknown } };
+      subscriptions: {
+        name: string;
+        ok: boolean;
+        data?: { total: number; subscriptions: Record<string, unknown>[] };
+      };
+    }[];
+    const byId = new Map(strategies.map((entry) => [entry.strategyId, entry]));
+    const configured = byId.get('direction-a');
+    expect(configured?.schedule).toMatchObject({ name: 'get_strategy_schedule', ok: true });
+    expect(configured?.schedule.data?.schedule).toMatchObject({
+      strategyId: 'direction-a',
+      cron: '30 16 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+    });
+    expect(configured?.subscriptions).toMatchObject({
+      name: 'list_strategy_watchlist_subscriptions',
+      ok: true,
+    });
+    expect(configured?.subscriptions.data?.total).toBe(1);
+    expect(configured?.subscriptions.data?.subscriptions[0]).toMatchObject({
+      strategyId: 'direction-a',
+      watchlistId: 'watchlist-a',
+      sourceKey: 'strategy:direction-a',
+      status: 'active',
+    });
+    const unconfigured = byId.get('direction-b');
+    expect(unconfigured?.schedule).toMatchObject({ name: 'get_strategy_schedule', ok: true });
+    expect(unconfigured?.schedule.data?.schedule).toBeNull();
+    expect(unconfigured?.subscriptions).toMatchObject({
+      name: 'list_strategy_watchlist_subscriptions',
+      ok: true,
+    });
+    expect(unconfigured?.subscriptions.data).toEqual({ subscriptions: [], total: 0 });
+  });
+
+  it('projects per-strategy read failures as errors instead of empty configuration', async () => {
+    // 调度/订阅工具不在 allowlist 时必须原样投影 permission_denied，
+    // 不能把失败伪装成 schedule=null 或空订阅列表（库里其实有配置）。
+    const { handle, ctx } = await setup({
+      allowlist: readNames().filter(
+        (name) =>
+          name !== 'get_strategy_schedule' && name !== 'list_strategy_watchlist_subscriptions',
+      ),
+    });
+    await seedStrategy(ctx);
+    await seedScheduleAndSubscription(ctx);
+    const response = await handle(stateRequest('strategies'));
+    expect(response.status).toBe(200);
+    const body = await bodyOf(response);
+    const strategies = body.strategies as {
+      strategyId: string;
+      workspace: { ok: boolean };
+      schedule: { name: string; ok: boolean; data?: unknown; error?: { kind: string } };
+      subscriptions: { name: string; ok: boolean; data?: unknown; error?: { kind: string } };
+    }[];
+    const entry = strategies.find((item) => item.strategyId === 'direction-a');
+    expect(entry?.workspace.ok).toBe(true);
+    expect(entry?.schedule).toMatchObject({
+      name: 'get_strategy_schedule',
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+    expect(entry?.schedule.data).toBeUndefined();
+    expect(entry?.subscriptions).toMatchObject({
+      name: 'list_strategy_watchlist_subscriptions',
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+    expect(entry?.subscriptions.data).toBeUndefined();
   });
 
   it('serves review facts without recomputing stats or calibration', async () => {
@@ -413,5 +564,45 @@ describe('stock detail route', () => {
       },
     });
     expect((await throwing.stockHandle(request())).status).toBe(403);
+  });
+});
+
+describe('fixed stock history route', () => {
+  const request = (query = 'stockId=600519.SH') =>
+    new Request(`https://dsh.example/api/luoome/stock/history?${query}`);
+
+  it('returns actual market-view candles with a fixed bounded history input', async () => {
+    const { historyHandle, market } = await setup({ marketAllowlist: ['get_stock_market_view'] });
+    const invoke = vi.spyOn(market, 'invoke');
+    const response = await historyHandle(request());
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(invoke.mock.calls[0]?.slice(0, 2)).toEqual([
+      'get_stock_market_view',
+      { stockId: '600519.SH', range: '3m', granularity: 'day', strategySignalScope: 'operational' },
+    ]);
+    const body = (await response.json()) as {
+      marketView: { ok: boolean; data: { candles: unknown[]; dataStatus: unknown } };
+    };
+    expect(body.marketView.ok).toBe(true);
+    expect(body.marketView.data.candles.length).toBeGreaterThan(0);
+    expect(body.marketView.data.dataStatus).toBeDefined();
+  });
+
+  it('keeps unavailable history unavailable and denies arbitrary dates, ranges and accounts', async () => {
+    const { historyHandle, market } = await setup();
+    expect(await (await historyHandle(request())).json()).toMatchObject({
+      marketView: { ok: false, error: { kind: 'permission_denied' } },
+    });
+    const invoke = vi.spyOn(market, 'invoke');
+    for (const query of [
+      'stockId=600519.SH&date=2026-01-01',
+      'stockId=600519.SH&range=1y',
+      'stockId=600519.SH&accountId=foreign',
+      'stockId=600519.SH&stockId=000001.SZ',
+    ])
+      expect((await historyHandle(request(query))).status).toBe(400);
+    expect(invoke).not.toHaveBeenCalled();
+    const rejected = new Response(null, { status: 401 });
+    expect(await (await setup({ admit: () => rejected })).historyHandle(request())).toBe(rejected);
   });
 });

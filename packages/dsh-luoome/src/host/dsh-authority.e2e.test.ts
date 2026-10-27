@@ -12,7 +12,11 @@ import { enqueueAnalysisJobTool, getDecisionReviewContextTool } from '@luoome/to
 import { type Call, createDshTestHost } from '../testing/dsh-host.js';
 import { AUTOMATION_CATALOG_TOOL } from './automation-catalog.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
-import { MANUAL_OPERATION_TOOL, SCHEDULED_OPERATION_TOOL } from './dsh-authority.js';
+import {
+  MANUAL_OPERATION_TOOL,
+  OPERATION_STATUS_TOOL,
+  SCHEDULED_OPERATION_TOOL,
+} from './dsh-authority.js';
 import { dshScheduleHash } from './dsh-identity.js';
 import { runQueuePreflight } from './preflight.js';
 
@@ -85,6 +89,39 @@ const scheduledCall = (grant: PluginAutomationGrant, input: unknown): Call => {
 };
 
 describe('DSH approval and schedule integration with durable facts', () => {
+  it('reads original operation status without replaying writes or reconstructing approval credentials', async () => {
+    const fixture = await start(await rootDir());
+    try {
+      const operationId = randomUUID();
+      const prepared = await fixture.host.service.prepare(fixture.principal, {
+        id: operationId,
+        tool: 'fixture_scheduled_write',
+        input: { accountId: fixture.principal.accountId, label: 'status-only' },
+      });
+      expect(prepared.ok).toBe(true);
+      const result = await fixture.run({
+        name: OPERATION_STATUS_TOOL,
+        input: { operationId, reconcile: true },
+      });
+      expect(result?.value).toMatchObject({ ok: true, data: { operationId, state: 'pending' } });
+      expect(JSON.stringify(result?.value)).not.toContain('confirmationToken');
+      expect(fixture.approvals).toHaveLength(0);
+      expect(
+        (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name,
+      ).not.toContain('status-only');
+      const unscoped = await fixture.ctx.tools.execute({
+        name: OPERATION_STATUS_TOOL,
+        callId: ToolCallId(randomUUID()),
+        arguments: { operationId },
+        signal: new AbortController().signal,
+      });
+      expect(unscoped).toMatchObject({
+        value: { ok: false, error: { kind: 'permission_denied' } },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
   it.each([false, true])(
     'stops later writes in a rejected request across steps=%s and accepts a new explicit request',
     async (acrossSteps) => {

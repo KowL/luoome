@@ -47,6 +47,7 @@ import type {
   StrategyEvaluationDay,
   StrategyEvaluationSession,
   StrategyEvaluatorIdentity,
+  StrategyResearchState,
   StrategyResult,
   StrategyRun,
   StrategyRunPublication,
@@ -1025,6 +1026,17 @@ export const strategyEvaluationSessions = sqliteTable(
       t.createdAt,
     ),
   }),
+);
+
+export const strategyResearchStates = sqliteTable(
+  'strategy_research_states',
+  {
+    strategyId: text('strategy_id').notNull(),
+    accountId: text('account_id').notNull(),
+    revision: integer('revision').notNull(),
+    state: text('state_json', { mode: 'json' }).$type<StrategyResearchState>().notNull(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.strategyId, table.accountId] }) }),
 );
 
 export const strategyEvaluationDays = sqliteTable(
@@ -2052,6 +2064,7 @@ export const schema = {
   strategyDataCheckpoints,
   strategyDataCheckpointMembers,
   strategyEvaluationSessions,
+  strategyResearchStates,
   strategyEvaluationDays,
   strategyBacktestRuns,
   strategyBacktestMarketFacts,

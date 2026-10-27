@@ -126,6 +126,7 @@
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
+        "@luoome/workflows": "workspace:*",
         "ajv": "8.20.0",
         "zod": "4.4.3",
       },

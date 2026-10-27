@@ -1335,10 +1335,17 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
 精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
 `LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
-看盘、持仓、策略、复盘、投资设置通过 `ctx.slots` 注册。宿主 prefix 路由复用 DSH Connection.admit
+看盘、持仓、策略、复盘通过 `ctx.slots` 注册主面板与侧栏入口；投资设置注册到 DSH 原生
+`settings.section`，不占业务侧栏。宿主 prefix 路由复用 DSH Connection.admit
 与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走既有 prepare/confirm
 协议，预览与取消不写入，未知结果只核对 operation ID。浏览器只保存恢复用的 UUID，不保存授权 token，
 不重算业务数字。非交易日的情绪查询取最近交易日，仍展示供应商原始日期，不伪装今日实时行情。
+
+投资设置的 `/api/luoome/settings/market` 只向已认证的 owner 提供行情源顺序与 FUYAO 配置，
+POST 复用同源 JSON 与 64 KiB 上限。Zod 校验后先构造候选 market/sentiment，再将三个允许的
+环境键原子写入 `0600` 的 `$LUOOME_HOME/.env`，成功后替换当前 ToolContext；共享 EastmoneySource
+与无关 manager 保持复用，后续工具调用立即读取新配置。启动时也只从文件加载这三个行情键，
+不能覆盖 owner、工具授权或交易开关。GET/POST 只返回密钥配置状态，不回显 API Key。
 
 客户端 API URL 相对 DSH 的 document base 解析，保留 `/dsh/` 等反向代理前缀。核心指数直接投影
 `fetch_index_quotes`，不依赖情绪聚合是否成功；情绪冷启动使用正常外部请求时限，截止超时返回可恢复 adapter_error。
@@ -1349,6 +1356,16 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 `matches`，已发布但无人入选时返回空明细与零总数。浏览器不重新选股或评分；当前版本与结果版本
 不同时明确提示。页面与研究草稿使用名称、版本号和事实时间，内部标识仅保留在数据与调用参数中。
 
+个人策略研究空间沿用 Strategy/StrategyVersion、evaluation session、真实信号观察和 manifest。
+同快照试跑先固定实际输入事实和 clock，再求值各版本并返回输入身份；它不发布 operational
+current。数据资格预检只审计本地保留字段、前序窗口和历史覆盖，不能替代在线源验收或严格
+回测门禁。宿主只启动既有 replay 编排、投影进度和维护 Operation 回执，不复制逐日领域逻辑。
+研究结论按账户和不可变版本恢复，保存不等于证据通过；有界候选比较保留失败和训练/验证隔离。
+存储扩展现有 StrategyEvaluationRepository：`strategy_research_states` 以策略/账户绑定 CAS 修订，
+同请求与相同内容可重放，结论和比较历史各有显式容量门槛，满时拒绝追加，不静默删除旧研究。
+持续观察分别核对日程、DSH task、grant 与真实业务事实，T+1/T+3/T+5 不被当作组合回测。
+客户端与固定研究路由、确认操作及可复现边界见[插件研究工作台契约](./ddd/dsh-luoome-plugin-detailed-design.md#82-个人策略研究工作台)。
+
 策略匹配标的的个股详情按点击时的股票、结果及版本保留来源。点击股票后才经固定
 `GET /api/luoome/stock?stockId=...` 调用精确 opt-in 的 `fetch_quote`；只接受一个规范股票代码，
 仍经宿主 owner、Host/Origin 校验与有界取消。`fetch_quote` 保留 `retrieval` / `freshness`，
@@ -1356,6 +1373,11 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 分析按钮在用户点击后通过官方 Session Controller 创建并保留会话，使用其公开 SessionFace
 提交股票分析问题，收到宿主接受后再打开对话；保留期间使用真实作用域，不借用未注入服务，
 也不操作或清空已有会话草稿。失败不自动重试，任何业务写入仍走原生审批。
+
+历史图表由独立 `/api/luoome/stock/history?stockId=...` 提供固定三个月日 K，复用
+`get_stock_market_view` 的真实 candles/dataStatus。入口只接受单个沪深股票码，沿用 owner
+admission、Host/Origin、no-store 和有界取消。历史读取由用户主动触发，报价保持独立；缺日线时
+显示不可用，不从单次报价合成历史，图表不提供组合回测结论。
 
 单机事实库是唯一事实源；历史托管租户库已下线。
 存量 Advice 的来源幂等回填为 `legacy-ai`，不伪造历史模型信息。

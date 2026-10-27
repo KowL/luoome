@@ -109,6 +109,8 @@ describe('market external allowlist reconciliation', () => {
       'fetch_quote',
       'batch_quote',
       'trial_strategy_version',
+      'run_strategy_research_comparison',
+      'get_stock_market_view',
       'fetch_news',
     ]);
     // fetch_news 访问第三方新闻源，归为 external 后才能进入 external surface（需求 §4.2/§5-3）。

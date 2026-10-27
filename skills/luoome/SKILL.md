@@ -37,5 +37,9 @@ See [tool selection](./references/tools.md), [example workflows](./references/ex
 - For Advice, report `decision`, `confidence`, `horizon`, premise, supporting evidence, counter-evidence, risks, disclaimers and `validUntil` when present.
 - Do not convert confidence into certainty or present luoome as a licensed investment adviser.
 - Keep tool errors visible and actionable; do not fabricate fallback values.
+- Strategy research keeps the question, immutable versions, sample, dates, benchmark and evidence
+  identity together. Separate frozen-input trials, historical daily selection, strict portfolio
+  backtests and T+1/T+3/T+5 signal observations; preserve every missing-data limitation and failed
+  candidate. A saved conclusion or eligible promotion gate is not proof of future profit.
 
 For user-facing luoome operation details, see the [user guide](../../docs/USER_GUIDE.md). For domain terminology, see [CONTEXT.md](../../CONTEXT.md).

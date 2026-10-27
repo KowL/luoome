@@ -15,6 +15,10 @@ import {
   stockDetailUrl,
   stockResearchRequestFor,
   strategyExpression,
+  strategyOperationRequestFor,
+  strategyPartDataOf,
+  strategyPartErrorOf,
+  strategyPartOf,
   strategyText,
 } from './projection.js';
 
@@ -279,5 +283,94 @@ describe('client panel state projection', () => {
     expect(strategyExpression(`Math.min(100, \${indicators.volRatio5_20} * 30)`)).toBe(
       'Math.min(100, 5 / 20 日量比 * 30)',
     );
+  });
+
+  it('keeps the server market session and tolerates older servers without it', () => {
+    expect(
+      mapStateBody({
+        panel: 'overview',
+        session: { marketSession: 'trading', nextSessionStart: '2026-10-26T05:30:00.000Z' },
+      }).session,
+    ).toEqual({ marketSession: 'trading', nextSessionStart: '2026-10-26T05:30:00.000Z' });
+    expect(mapStateBody({ panel: 'overview' }).session).toBeNull();
+    expect(
+      mapStateBody({ panel: 'overview', session: { nextSessionStart: null } }).session,
+    ).toBeNull();
+    expect(
+      mapStateBody({ panel: 'overview', session: { marketSession: 'closed' } }).session,
+    ).toEqual({ marketSession: 'closed', nextSessionStart: null });
+  });
+
+  it('maps per-strategy schedule/subscriptions parts and exposes them through part helpers', () => {
+    const scheduleData = { schedule: { cron: '30 16 * * 1-5', enabled: true } };
+    const subscriptionsData = { total: 1, subscriptions: [{ status: 'active' }] };
+    const state = mapStateBody({
+      panel: 'strategies',
+      tools: [],
+      strategies: [
+        {
+          strategyId: 's1',
+          workspace: { name: 'get_strategy_workspace', ok: true, data: {} },
+          schedule: { name: 'get_strategy_schedule', ok: true, data: scheduleData },
+          subscriptions: {
+            name: 'list_strategy_watchlist_subscriptions',
+            ok: true,
+            data: subscriptionsData,
+          },
+        },
+        {
+          strategyId: 's2',
+          workspace: { name: 'get_strategy_workspace', ok: true, data: {} },
+          // 无 schedule 是合法空配置：ok=true 且 schedule 为 null，不是读取失败。
+          schedule: { name: 'get_strategy_schedule', ok: true, data: { schedule: null } },
+          subscriptions: {
+            name: 'list_strategy_watchlist_subscriptions',
+            ok: false,
+            error: { kind: 'permission_denied' },
+          },
+        },
+        // 老服务端没有派生字段：part 一律为 null，不能伪造成空配置或错误。
+        { strategyId: 's3' },
+      ],
+    });
+    expect(state.strategies).toHaveLength(3);
+    expect(state.strategies[0]?.schedule).toEqual({ ok: true, data: scheduleData });
+    expect(state.strategies[0]?.subscriptions).toEqual({ ok: true, data: subscriptionsData });
+    expect(strategyPartOf(state, 's1', 'schedule')).toEqual(state.strategies[0]?.schedule);
+    expect(strategyPartDataOf(state, 's1', 'schedule')).toEqual(scheduleData);
+    expect(strategyPartErrorOf(state, 's1', 'schedule')).toBeNull();
+    expect(strategyPartDataOf(state, 's1', 'subscriptions')).toEqual(subscriptionsData);
+    expect(strategyPartDataOf(state, 's2', 'schedule')).toEqual({ schedule: null });
+    expect(strategyPartErrorOf(state, 's2', 'schedule')).toBeNull();
+    expect(strategyPartDataOf(state, 's2', 'subscriptions')).toBeNull();
+    expect(strategyPartErrorOf(state, 's2', 'subscriptions')).toEqual({
+      kind: 'permission_denied',
+    });
+    expect(strategyPartOf(state, 's3', 'workspace')).toBeNull();
+    expect(strategyPartOf(state, 's3', 'schedule')).toBeNull();
+    expect(strategyPartDataOf(state, 's3', 'schedule')).toBeNull();
+    expect(strategyPartErrorOf(state, 's3', 'schedule')).toBeNull();
+    expect(strategyPartOf(state, 'unknown', 'schedule')).toBeNull();
+  });
+
+  it('builds a strategy operations request with structured id and two-layer scheduling rules', () => {
+    const request = strategyOperationRequestFor('strategy-early-breakout-20260809', {
+      strategyName: '早期突破',
+    });
+    // strategyId 留在结构化字段里供调用使用；可见草稿只用可读名称定位策略。
+    expect(request.strategyId).toBe('strategy-early-breakout-20260809');
+    expect(request.prompt).toContain('早期突破');
+    expect(request.prompt).not.toContain('strategy-early-breakout-20260809');
+    // 两层调度：StrategySchedule 只决定到期，必须由 DSH 定时任务执行日周期才真正运行。
+    expect(request.prompt).toContain('StrategySchedule');
+    expect(request.prompt).toContain('run_strategy_daily_cycle');
+    // 禁止绕过编排与未确认写入。
+    expect(request.prompt).toContain('不要直接调用 run_strategy');
+    expect(request.prompt).toContain('不要自动创建重复日程或自动发布');
+    expect(request.prompt).toContain('先让我逐项确认');
+    const fallback = strategyOperationRequestFor('strategy-x');
+    expect(fallback.strategyId).toBe('strategy-x');
+    expect(fallback.prompt).toContain('所选策略');
+    expect(fallback.prompt).not.toContain('strategy-x');
   });
 });

@@ -1,4 +1,4 @@
-// MVP 最终验收：四条真实旅程 + 负例/恢复矩阵（需求 §10.2/§10.3/§10.5，task-20）。
+// MVP 最终验收：真实旅程 + 负例/恢复矩阵（需求 §10.2/§10.3/§10.5，task-20）。
 //
 // 运行环境：Node/vitest（`@luoome/db/node` 的 node:sqlite），进程内真实 DSH
 // AgentLoop/SessionStore/ApprovalService 与官方审批组件；业务数据在临时 Node SQLite。
@@ -430,7 +430,7 @@ const confirmed = async (
   return fixture.run({ name: MANUAL_OPERATION_TOOL, input: { id: randomUUID(), tool, input } });
 };
 
-describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite）', () => {
+describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite）', () => {
   it('executes the real batch in Node through one native approval and keeps its report account scoped', async () => {
     const fixture = await createJourneyFixture({ batchEnabled: true });
     try {
@@ -1156,6 +1156,132 @@ describe('MVP 四旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLi
       // 领域 query 的过期过滤用墙钟；fixture 时钟在 2026-07，显式 includeExpired 避免把有效 Advice 过滤掉。
       const readBack = await fixture.execute('get_advice', { includeExpired: true });
       expect(JSON.stringify(readBack.value)).toContain(`analysis:${context.id}`);
+      expect(fixture.approvals).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('旅程 5：策略上线——publish 不隐含 schedule/订阅；set/subscribe/pause/resume 各自独立审批且 read 回读一致', async () => {
+    const fixture = await createJourneyFixture();
+    try {
+      const strategyId = `strategy-${randomUUID()}`;
+      const watchlistId = `wl-live-${randomUUID().slice(0, 8)}`;
+      const readSchedule = async () => {
+        const result = await fixture.execute('get_strategy_schedule', { strategyId });
+        expect(result.isError).toBe(false);
+        return dataOf<{
+          schedule: { strategyId: string; cron: string; timezone: string; enabled: boolean } | null;
+        }>(result.value).schedule;
+      };
+      const listSubscriptions = async () => {
+        const result = await fixture.execute('list_strategy_watchlist_subscriptions', {
+          strategyId,
+        });
+        expect(result.isError).toBe(false);
+        return dataOf<{
+          subscriptions: { id: string; strategyId: string; watchlistId: string; status: string }[];
+        }>(result.value).subscriptions;
+      };
+
+      // 策略制定最小链路：create → version → validate → publish，各自独立审批。
+      const create = await confirmed(fixture, 'create_strategy', {
+        id: strategyId,
+        name: '上线旅程策略',
+        description: '验证上线配置不随 publish 隐含',
+      });
+      expect(create?.isError).toBe(false);
+      const versioned = await confirmed(fixture, 'create_strategy_version', {
+        strategyId,
+        definition: STRATEGY_DEFINITION,
+        changeSummary: 'v1',
+        factReferences: [],
+      });
+      expect(versioned?.isError).toBe(false);
+      const [version] = await fixture.repos.strategy.listVersions(strategyId);
+      if (version === undefined) throw new Error('missing v1');
+      const validated = await confirmed(fixture, 'validate_strategy_version', {
+        versionId: version.id,
+      });
+      expect(validated?.isError).toBe(false);
+      const published = await confirmed(fixture, 'publish_strategy_version', {
+        strategyId,
+        versionId: version.id,
+      });
+      expect(published?.isError).toBe(false);
+
+      // publish 不隐含上线配置：schedule 与订阅在 read 面与事实库都不存在。
+      expect(await readSchedule()).toBeNull();
+      expect(await listSubscriptions()).toEqual([]);
+      expect(await fixture.repos.strategySchedule.findByStrategyId(strategyId)).toBeNull();
+      expect(await fixture.repos.strategyWatchlistSubscription.list({ strategyId })).toEqual([]);
+
+      // 审批被拒绝时不写入：schedule/订阅/策略状态都保持原样。
+      const deniedSchedule = await confirmed(
+        fixture,
+        'set_strategy_schedule',
+        { strategyId, cron: '0 18 * * 1-5' },
+        'rejected',
+      );
+      expect(deniedSchedule?.isError).toBe(true);
+      const deniedSubscribe = await confirmed(
+        fixture,
+        'subscribe_strategy_to_watchlist',
+        { strategyId, watchlistId },
+        'rejected',
+      );
+      expect(deniedSubscribe?.isError).toBe(true);
+      const deniedPause = await confirmed(fixture, 'pause_strategy', { strategyId }, 'rejected');
+      expect(deniedPause?.isError).toBe(true);
+      expect(await readSchedule()).toBeNull();
+      expect(await listSubscriptions()).toEqual([]);
+      expect((await fixture.repos.strategy.findById(strategyId))?.status).toBe('active');
+
+      // create_watchlist 不在生产 policies：用测试上下文的领域 tool 直接建 fixture，不消耗宿主审批。
+      const createWatchlist = toolRegistry.get('create_watchlist');
+      if (createWatchlist === undefined) throw new Error('missing create_watchlist tool');
+      const watchlist = dataOf<{ watchlist: { id: string; enabled: boolean } }>(
+        await createWatchlist.execute(
+          { id: watchlistId, name: '上线目标自选', kind: 'personal', membershipPolicy: 'manual' },
+          fixture.domain,
+        ),
+      );
+      expect(watchlist.watchlist.id).toBe(watchlistId);
+      expect(fixture.approvalReasons).toHaveLength(7);
+
+      // 上线配置逐项独立审批：schedule 与订阅经 read 面回读与写入一致。
+      const scheduled = await confirmed(fixture, 'set_strategy_schedule', {
+        strategyId,
+        cron: '0 18 * * 1-5',
+      });
+      expect(scheduled?.isError).toBe(false);
+      expect(await readSchedule()).toMatchObject({
+        strategyId,
+        cron: '0 18 * * 1-5',
+        timezone: 'Asia/Shanghai',
+        enabled: true,
+      });
+      const subscribed = await confirmed(fixture, 'subscribe_strategy_to_watchlist', {
+        strategyId,
+        watchlistId,
+      });
+      expect(subscribed?.isError).toBe(false);
+      const subscriptions = await listSubscriptions();
+      expect(subscriptions).toHaveLength(1);
+      expect(subscriptions[0]).toMatchObject({ strategyId, watchlistId, status: 'active' });
+
+      // pause / resume 各自独立审批，状态经 read 面回读一致。
+      const paused = await confirmed(fixture, 'pause_strategy', { strategyId });
+      expect(paused?.isError).toBe(false);
+      const pausedRead = await fixture.execute('get_strategy', { strategyId });
+      expect(dataOf<{ strategy: Strategy }>(pausedRead.value).strategy.status).toBe('paused');
+      const resumed = await confirmed(fixture, 'resume_strategy', { strategyId });
+      expect(resumed?.isError).toBe(false);
+      const resumedRead = await fixture.execute('get_strategy', { strategyId });
+      expect(dataOf<{ strategy: Strategy }>(resumedRead.value).strategy.status).toBe('active');
+
+      // 每次写都是独立一次性审批（4 制定 + 3 拒绝 + 4 上线），队列恰好耗尽。
+      expect(fixture.approvalReasons).toHaveLength(11);
       expect(fixture.approvals).toHaveLength(0);
     } finally {
       await fixture.close();

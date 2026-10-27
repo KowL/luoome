@@ -10,6 +10,8 @@ import {
   type StrategyEvaluationRepository,
   type StrategyEvaluationSession,
   StrategyEvaluationSessionSchema,
+  type StrategyResearchState,
+  StrategyResearchStateSchema,
 } from '@luoome/core';
 
 export class InMemoryStrategyDataCheckpointRepository implements StrategyDataCheckpointRepository {
@@ -86,6 +88,45 @@ export class InMemoryStrategyDataCheckpointRepository implements StrategyDataChe
 export class InMemoryStrategyEvaluationRepository implements StrategyEvaluationRepository {
   private readonly sessions = new Map<string, StrategyEvaluationSession>();
   private readonly days = new Map<string, StrategyEvaluationDay>();
+  private readonly researchStates = new Map<string, StrategyResearchState>();
+
+  async removeResearchStates(strategyId: string): Promise<void> {
+    for (const [key, state] of this.researchStates)
+      if (state.strategyId === strategyId) this.researchStates.delete(key);
+  }
+
+  async listSessions(input: {
+    readonly strategyId: string;
+    readonly limit: number;
+  }): Promise<readonly StrategyEvaluationSession[]> {
+    return [...this.sessions.values()]
+      .filter((session) => session.strategyId === input.strategyId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+      .slice(0, input.limit)
+      .map((session) => structuredClone(session));
+  }
+
+  async findResearchState(input: {
+    readonly strategyId: string;
+    readonly accountId: string;
+  }): Promise<StrategyResearchState | null> {
+    const state = this.researchStates.get(`${input.strategyId}\0${input.accountId}`);
+    return state === undefined ? null : structuredClone(state);
+  }
+
+  async saveResearchState(input: {
+    readonly state: StrategyResearchState;
+    readonly expectedRevision: number;
+  }): Promise<boolean> {
+    const state = StrategyResearchStateSchema.parse(input.state);
+    const key = `${state.strategyId}\0${state.accountId}`;
+    const current = this.researchStates.get(key);
+    if ((current?.revision ?? 0) !== input.expectedRevision) return false;
+    if (state.revision !== input.expectedRevision + 1)
+      throw new InvariantError('研究 revision 必须递增 1');
+    this.researchStates.set(key, structuredClone(state));
+    return true;
+  }
 
   async saveSession(session: StrategyEvaluationSession): Promise<void> {
     const parsed = StrategyEvaluationSessionSchema.parse(session);

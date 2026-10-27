@@ -27,9 +27,14 @@ import { z } from 'zod';
 import {
   createCreateStrategyOperation,
   createCreateStrategyVersionOperation,
+  createPauseStrategyOperation,
   createPublishStrategyVersionOperation,
   createRecordAdviceOutcomeOperation,
+  createResumeStrategyOperation,
+  createSetStrategyScheduleOperation,
   createStrategyOperationPolicies,
+  createSubscribeStrategyOperation,
+  createUnsubscribeStrategyOperation,
   createValidateStrategyVersionOperation,
 } from './strategy-operations.js';
 
@@ -583,6 +588,11 @@ describe('strategy lifecycle operation policies', () => {
       'create_strategy_version',
       'validate_strategy_version',
       'publish_strategy_version',
+      'set_strategy_schedule',
+      'pause_strategy',
+      'resume_strategy',
+      'subscribe_strategy_to_watchlist',
+      'unsubscribe_strategy_from_watchlist',
       'record_advice_outcome',
     ]);
     for (const policy of policies) {
@@ -595,6 +605,13 @@ describe('strategy lifecycle operation policies', () => {
     expect(createValidateStrategyVersionOperation().tool.name).toBe('validate_strategy_version');
     expect(createPublishStrategyVersionOperation().tool.name).toBe('publish_strategy_version');
     expect(createRecordAdviceOutcomeOperation().tool.name).toBe('record_advice_outcome');
+    expect(createSetStrategyScheduleOperation().tool.name).toBe('set_strategy_schedule');
+    expect(createPauseStrategyOperation().tool.name).toBe('pause_strategy');
+    expect(createResumeStrategyOperation().tool.name).toBe('resume_strategy');
+    expect(createSubscribeStrategyOperation().tool.name).toBe('subscribe_strategy_to_watchlist');
+    expect(createUnsubscribeStrategyOperation().tool.name).toBe(
+      'unsubscribe_strategy_from_watchlist',
+    );
     const names = new Set(policies.map((policy) => policy.tool.name));
     for (const forbidden of [
       'record_decision_trade',
@@ -604,12 +621,462 @@ describe('strategy lifecycle operation policies', () => {
       'complete_analysis_job',
       'fail_analysis_job',
       'delete_strategy',
-      'pause_strategy',
-      'resume_strategy',
       'archive_strategy',
-      'set_strategy_schedule',
+      'claim_due_strategy_schedules',
+      'finish_strategy_schedule_claim',
+      'renew_strategy_schedule_claim',
+      'sync_strategy_watchlist_subscriptions',
     ])
       expect(names.has(forbidden), `${forbidden} must not be a policy`).toBe(false);
+  });
+});
+
+/** 经四次独立审批把策略推到 active + 已发布版本，作为调度/暂停/订阅用例的前置。 */
+const publishStrategy = async (
+  service: ReturnType<typeof createPluginOperationService>,
+  principal: PluginPrincipal,
+  strategyId: string,
+): Promise<void> => {
+  const created = await runOperation(service, principal, 'create_strategy', {
+    id: strategyId,
+    name: `策略-${strategyId}`,
+    description: '运行操作用例前置策略',
+  });
+  expect(created.confirmed.state).toBe('succeeded');
+  const versioned = await runOperation(service, principal, 'create_strategy_version', {
+    strategyId,
+    definition: validDefinition(),
+  });
+  const version = operationResult<{ version: { id: string } }>(versioned.confirmed).version;
+  await runOperation(service, principal, 'validate_strategy_version', { versionId: version.id });
+  const published = await runOperation(service, principal, 'publish_strategy_version', {
+    versionId: version.id,
+  });
+  expect(published.confirmed.state).toBe('succeeded');
+};
+
+describe('strategy run operation policies', () => {
+  it('enables, modifies and disables a schedule through independent approvals', async () => {
+    const { ctx, service, principal } = await setup();
+    await publishStrategy(service, principal, 'scheduled-strategy');
+
+    // 启用：缺省 timezone/enabled 在 prepare 时被冻结成显式值。
+    const enabled = await runOperation(service, principal, 'set_strategy_schedule', {
+      strategyId: 'scheduled-strategy',
+      cron: '0 18 * * 1-5',
+    });
+    expect(enabled.confirmed.state).toBe('succeeded');
+    expect(enabled.view.input).toMatchObject({
+      strategyId: 'scheduled-strategy',
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+    });
+    const enabledSchedule = operationResult<{
+      schedule: {
+        id: string;
+        cron: string;
+        timezone: string;
+        enabled: boolean;
+        nextRunAt?: string;
+      };
+    }>(enabled.confirmed).schedule;
+    expect(enabledSchedule).toMatchObject({
+      id: 'strategy-schedule:scheduled-strategy',
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+    });
+    // operation 结果已序列化成 JSON：下一次运行是当天上海 18:00。
+    expect(enabledSchedule.nextRunAt).toBe('2026-07-02T10:00:00.000Z');
+    const enabledReceipt = await createSetStrategyScheduleOperation().receipt(
+      enabled.view.input,
+      ctx,
+    );
+    expect(enabledReceipt?.ok).toBe(true);
+    if (enabledReceipt?.ok !== true) return;
+    expect(enabledReceipt.data).toMatchObject({
+      schedule: { strategyId: 'scheduled-strategy', enabled: true },
+      replayed: true,
+    });
+
+    // 修改 cron 与验收政策：同一 schedule id，createdAt 保留。
+    const acceptancePolicy = {
+      policyVersion: 'strategy-run-acceptance-v1',
+      minEvaluatedRatio: 0.9,
+      maxFailedRatio: 0.05,
+      maxIncompleteRatio: 0.05,
+    };
+    const modified = await runOperation(service, principal, 'set_strategy_schedule', {
+      strategyId: 'scheduled-strategy',
+      cron: '30 9 * * 1-5',
+      acceptancePolicy,
+    });
+    const modifiedSchedule = operationResult<{
+      schedule: { id: string; cron: string; acceptancePolicy?: unknown; enabled: boolean };
+    }>(modified.confirmed).schedule;
+    expect(modifiedSchedule).toMatchObject({
+      id: enabledSchedule.id,
+      cron: '30 9 * * 1-5',
+      enabled: true,
+      acceptancePolicy,
+    });
+    const modifiedReceipt = await createSetStrategyScheduleOperation().receipt(
+      modified.view.input,
+      ctx,
+    );
+    expect(modifiedReceipt?.ok).toBe(true);
+
+    // 停用：enabled=false 清除 nextRunAt；省略 acceptancePolicy 保留原值且不影响回执恢复。
+    const disabled = await runOperation(service, principal, 'set_strategy_schedule', {
+      strategyId: 'scheduled-strategy',
+      cron: '30 9 * * 1-5',
+      enabled: false,
+    });
+    const disabledSchedule = operationResult<{
+      schedule: { enabled: boolean; nextRunAt?: Date };
+    }>(disabled.confirmed).schedule;
+    expect(disabledSchedule.enabled).toBe(false);
+    expect(disabledSchedule.nextRunAt).toBeUndefined();
+    const persisted = await ctx.repos.strategySchedule.findByStrategyId('scheduled-strategy');
+    expect(persisted?.enabled).toBe(false);
+    expect(persisted?.nextRunAt).toBeUndefined();
+    const disabledReceipt = await createSetStrategyScheduleOperation().receipt(
+      disabled.view.input,
+      ctx,
+    );
+    expect(disabledReceipt?.ok).toBe(true);
+
+    // 只读面能回读到同一配置（M4 面板读路径）。
+    const read = await readTool<{ schedule: { enabled: boolean; cron: string } | null }>(
+      'get_strategy_schedule',
+      { strategyId: 'scheduled-strategy' },
+      ctx,
+    );
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.data.schedule).toMatchObject({ enabled: false, cron: '30 9 * * 1-5' });
+  });
+
+  it('rejects recommendationPolicy, invalid cron and enabling a schedule for an unpublished strategy', async () => {
+    const { ctx, service, principal } = await setup();
+    await publishStrategy(service, principal, 'schedule-guard-strategy');
+
+    // 自动推荐政策不允许由本 operation 写入：strict 输入在 prepare 阶段直接拒绝。
+    const withRecommendation = await prepare(service, principal, 'set_strategy_schedule', {
+      strategyId: 'schedule-guard-strategy',
+      cron: '0 18 * * 1-5',
+      recommendationPolicy: { enabled: true, notify: false },
+    });
+    expect(withRecommendation.result.ok).toBe(false);
+    expect(await ctx.repos.strategySchedule.findByStrategyId('schedule-guard-strategy')).toBeNull();
+
+    // 非法 cron 通过输入校验，但领域不变量拒绝；operation 不落成功回执。
+    const invalidCron = await runOperation(service, principal, 'set_strategy_schedule', {
+      strategyId: 'schedule-guard-strategy',
+      cron: '99 18 * * 1-5',
+    });
+    expect(invalidCron.confirmed.state).toBe('unknown');
+    expect(invalidCron.confirmed.result?.ok).toBe(false);
+    expect(await ctx.repos.strategySchedule.findByStrategyId('schedule-guard-strategy')).toBeNull();
+
+    // 未发布的 draft Strategy 不能启用调度。
+    await runOperation(service, principal, 'create_strategy', {
+      id: 'draft-strategy',
+      name: '草稿策略',
+      description: '不应启用调度',
+    });
+    const draft = await runOperation(service, principal, 'set_strategy_schedule', {
+      strategyId: 'draft-strategy',
+      cron: '0 18 * * 1-5',
+    });
+    expect(draft.confirmed.state).toBe('unknown');
+    expect(draft.confirmed.result?.ok).toBe(false);
+    expect(await ctx.repos.strategySchedule.findByStrategyId('draft-strategy')).toBeNull();
+    // 对 draft 停用（不启用）同样要求 Strategy 存在，但不会产生 nextRunAt。
+    expect(
+      await createSetStrategyScheduleOperation().receipt(
+        {
+          strategyId: 'draft-strategy',
+          cron: '0 18 * * 1-5',
+          timezone: 'Asia/Shanghai',
+          enabled: true,
+        },
+        ctx,
+      ),
+    ).toBeNull();
+  });
+
+  it('pauses and resumes with independent approvals and usable receipts', async () => {
+    const { ctx, service, principal } = await setup();
+    await publishStrategy(service, principal, 'run-strategy');
+
+    // active 策略不能 resume；领域拒绝且不写状态。
+    const prematureResume = await runOperation(service, principal, 'resume_strategy', {
+      strategyId: 'run-strategy',
+    });
+    expect(prematureResume.confirmed.state).toBe('unknown');
+    expect(prematureResume.confirmed.result?.ok).toBe(false);
+    expect((await ctx.repos.strategy.findById('run-strategy'))?.status).toBe('active');
+
+    const paused = await runOperation(service, principal, 'pause_strategy', {
+      strategyId: 'run-strategy',
+    });
+    expect(paused.confirmed.state).toBe('succeeded');
+    expect(
+      operationResult<{ strategy: { status: string } }>(paused.confirmed).strategy.status,
+    ).toBe('paused');
+    const pauseReceipt = await createPauseStrategyOperation().receipt(paused.view.input, ctx);
+    expect(pauseReceipt?.ok).toBe(true);
+    if (pauseReceipt?.ok !== true) return;
+    expect(pauseReceipt.data).toMatchObject({
+      strategy: { id: 'run-strategy', status: 'paused' },
+      replayed: true,
+    });
+
+    // 重复 pause 被领域拒绝；pause 的 token 也不能确认 resume。
+    const repause = await runOperation(service, principal, 'pause_strategy', {
+      strategyId: 'run-strategy',
+    });
+    expect(repause.confirmed.state).toBe('unknown');
+    expect(repause.confirmed.result?.ok).toBe(false);
+    const resumePrepared = prepared(
+      (await prepare(service, principal, 'resume_strategy', { strategyId: 'run-strategy' })).result,
+    );
+    const pauseToken = paused.view.confirmationToken;
+    if (pauseToken === undefined) throw new Error('missing pause token');
+    const mismatched = await service.confirm(
+      principal,
+      { id: resumePrepared.operationId, token: pauseToken },
+      signal(),
+    );
+    expect(mismatched.ok).toBe(false);
+    expect((await ctx.repos.strategy.findById('run-strategy'))?.status).toBe('paused');
+
+    if (resumePrepared.confirmationToken === undefined) throw new Error('missing resume token');
+    const resumed = prepared(
+      await service.confirm(
+        principal,
+        { id: resumePrepared.operationId, token: resumePrepared.confirmationToken },
+        signal(),
+      ),
+    );
+    expect(resumed.state).toBe('succeeded');
+    expect(operationResult<{ strategy: { status: string } }>(resumed).strategy.status).toBe(
+      'active',
+    );
+    const resumeReceipt = await createResumeStrategyOperation().receipt(resumePrepared.input, ctx);
+    expect(resumeReceipt?.ok).toBe(true);
+    if (resumeReceipt?.ok !== true) return;
+    expect(resumeReceipt.data).toMatchObject({
+      strategy: { id: 'run-strategy', status: 'active' },
+      replayed: true,
+    });
+
+    // scheduled:false 的 policy 永不由定时授权面执行。
+    const scheduled = await service.executeScheduled(
+      { userId: principal.userId, sessionId: 's', taskId: 't' } as never,
+      {
+        grantId: 'grant',
+        grantVersion: 1,
+        occurrenceId: 'occurrence',
+        tool: 'pause_strategy',
+        accountId: principal.accountId,
+        input: { strategyId: 'run-strategy' },
+      },
+      signal(),
+    );
+    expect(scheduled.ok).toBe(false);
+  });
+
+  it('subscribes idempotently, cancels with an audit receipt and resubscribes', async () => {
+    const { ctx, service, principal } = await setup();
+    await publishStrategy(service, principal, 'subscribed-strategy');
+    const now = new Date(NOW);
+    await ctx.repos.watchlist.save({
+      id: 'wl-target',
+      name: '订阅目标',
+      kind: 'personal',
+      membershipPolicy: 'manual',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const subscribed = await runOperation(service, principal, 'subscribe_strategy_to_watchlist', {
+      strategyId: 'subscribed-strategy',
+      watchlistId: 'wl-target',
+    });
+    expect(subscribed.confirmed.state).toBe('succeeded');
+    const first = operationResult<{
+      subscription: { id: string; status: string; strategyId: string; watchlistId: string };
+      idempotent: boolean;
+    }>(subscribed.confirmed);
+    expect(first.idempotent).toBe(false);
+    expect(first.subscription).toMatchObject({
+      strategyId: 'subscribed-strategy',
+      watchlistId: 'wl-target',
+      status: 'active',
+    });
+
+    // 重复订阅幂等返回同一契约，不产生第二条记录。
+    const duplicate = await runOperation(service, principal, 'subscribe_strategy_to_watchlist', {
+      strategyId: 'subscribed-strategy',
+      watchlistId: 'wl-target',
+    });
+    const second = operationResult<{
+      subscription: { id: string };
+      idempotent: boolean;
+    }>(duplicate.confirmed);
+    expect(second.idempotent).toBe(true);
+    expect(second.subscription.id).toBe(first.subscription.id);
+    expect(
+      await ctx.repos.strategyWatchlistSubscription.list({ strategyId: 'subscribed-strategy' }),
+    ).toHaveLength(1);
+    const subscribeReceipt = await createSubscribeStrategyOperation().receipt(
+      subscribed.view.input,
+      ctx,
+    );
+    expect(subscribeReceipt?.ok).toBe(true);
+    if (subscribeReceipt?.ok !== true) return;
+    expect(subscribeReceipt.data).toMatchObject({
+      subscription: { id: first.subscription.id, status: 'active' },
+      idempotent: true,
+      replayed: true,
+    });
+
+    // 取消保留审计记录；重复取消幂等。
+    const cancelled = await runOperation(
+      service,
+      principal,
+      'unsubscribe_strategy_from_watchlist',
+      { strategyId: 'subscribed-strategy', watchlistId: 'wl-target' },
+    );
+    const cancellation = operationResult<{
+      subscription: { id: string; status: string; cancelledAt?: string };
+      idempotent: boolean;
+    }>(cancelled.confirmed);
+    expect(cancellation.idempotent).toBe(false);
+    expect(cancellation.subscription.status).toBe('cancelled');
+    expect(cancellation.subscription.cancelledAt).toBe(new Date(NOW).toISOString());
+    const unsubscribeReceipt = await createUnsubscribeStrategyOperation().receipt(
+      cancelled.view.input,
+      ctx,
+    );
+    expect(unsubscribeReceipt?.ok).toBe(true);
+    if (unsubscribeReceipt?.ok !== true) return;
+    expect(unsubscribeReceipt.data).toMatchObject({
+      subscription: { id: first.subscription.id, status: 'cancelled' },
+      idempotent: true,
+      replayed: true,
+    });
+
+    // 按 strategyId+watchlistId 重复取消时活动订阅已不存在：领域返回 not_found。
+    const recancel = await runOperation(service, principal, 'unsubscribe_strategy_from_watchlist', {
+      strategyId: 'subscribed-strategy',
+      watchlistId: 'wl-target',
+    });
+    expect(recancel.confirmed.state).toBe('unknown');
+    expect(recancel.confirmed.result?.ok).toBe(false);
+    // 按 subscriptionId 重复取消才是幂等路径，返回同一取消记录。
+    const recancelById = await runOperation(
+      service,
+      principal,
+      'unsubscribe_strategy_from_watchlist',
+      { subscriptionId: first.subscription.id },
+    );
+    const recancelResult = operationResult<{
+      subscription: { id: string; status: string };
+      idempotent: boolean;
+    }>(recancelById.confirmed);
+    expect(recancelResult.idempotent).toBe(true);
+    expect(recancelResult.subscription).toMatchObject({
+      id: first.subscription.id,
+      status: 'cancelled',
+    });
+    expect(
+      await ctx.repos.strategyWatchlistSubscription.list({ strategyId: 'subscribed-strategy' }),
+    ).toHaveLength(1);
+
+    // 取消后可重新订阅新契约，并可按 subscriptionId 取消。
+    const resubscribed = await runOperation(service, principal, 'subscribe_strategy_to_watchlist', {
+      strategyId: 'subscribed-strategy',
+      watchlistId: 'wl-target',
+    });
+    const third = operationResult<{
+      subscription: { id: string; status: string };
+      idempotent: boolean;
+    }>(resubscribed.confirmed);
+    expect(third.idempotent).toBe(false);
+    expect(third.subscription.id).not.toBe(first.subscription.id);
+    const byId = await runOperation(service, principal, 'unsubscribe_strategy_from_watchlist', {
+      subscriptionId: third.subscription.id,
+    });
+    const byIdResult = operationResult<{
+      subscription: { id: string; status: string };
+    }>(byId.confirmed);
+    expect(byIdResult.subscription).toMatchObject({
+      id: third.subscription.id,
+      status: 'cancelled',
+    });
+    const byIdReceipt = await createUnsubscribeStrategyOperation().receipt(byId.view.input, ctx);
+    expect(byIdReceipt?.ok).toBe(true);
+  });
+
+  it('publish does not imply schedule, pause or subscription authorization', async () => {
+    const { ctx, service, principal } = await setup();
+    await publishStrategy(service, principal, 'plain-strategy');
+
+    // 发布只切换 currentVersion/状态：不创建调度、不创建订阅。
+    expect(await ctx.repos.strategySchedule.findByStrategyId('plain-strategy')).toBeNull();
+    expect(
+      await ctx.repos.strategyWatchlistSubscription.list({ strategyId: 'plain-strategy' }),
+    ).toEqual([]);
+
+    // publish 的审批 token 不能确认调度或暂停操作。
+    const publishedAgain = await runOperation(service, principal, 'create_strategy_version', {
+      strategyId: 'plain-strategy',
+      definition: validDefinition(),
+      changeSummary: 'v2',
+    });
+    const version = operationResult<{ version: { id: string } }>(publishedAgain.confirmed).version;
+    await runOperation(service, principal, 'validate_strategy_version', { versionId: version.id });
+    const publish = prepared(
+      (
+        await prepare(service, principal, 'publish_strategy_version', {
+          versionId: version.id,
+        })
+      ).result,
+    );
+    if (publish.confirmationToken === undefined) throw new Error('missing publish token');
+
+    const schedulePrepared = prepared(
+      (
+        await prepare(service, principal, 'set_strategy_schedule', {
+          strategyId: 'plain-strategy',
+          cron: '0 18 * * 1-5',
+        })
+      ).result,
+    );
+    const scheduleWithPublishToken = await service.confirm(
+      principal,
+      { id: schedulePrepared.operationId, token: publish.confirmationToken },
+      signal(),
+    );
+    expect(scheduleWithPublishToken.ok).toBe(false);
+    expect(await ctx.repos.strategySchedule.findByStrategyId('plain-strategy')).toBeNull();
+
+    const pausePrepared = prepared(
+      (await prepare(service, principal, 'pause_strategy', { strategyId: 'plain-strategy' }))
+        .result,
+    );
+    const pauseWithPublishToken = await service.confirm(
+      principal,
+      { id: pausePrepared.operationId, token: publish.confirmationToken },
+      signal(),
+    );
+    expect(pauseWithPublishToken.ok).toBe(false);
+    expect((await ctx.repos.strategy.findById('plain-strategy'))?.status).toBe('active');
   });
 });
 

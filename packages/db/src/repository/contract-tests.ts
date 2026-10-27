@@ -45,6 +45,7 @@ import {
   type StrategyDataCheckpointMember,
   type StrategyEvaluationDay,
   type StrategyEvaluationSession,
+  type StrategyResearchState,
   type StrategyResult,
   type StrategyRun,
   type StrategySchedule,
@@ -5729,6 +5730,95 @@ export const registerRepositoryContractTests = (
     });
 
     describe('StrategyDataCheckpointRepository / StrategyEvaluationRepository', () => {
+      it('研究恢复按账户隔离并以 revision 原子拒绝并发覆盖，读取返回副本', async () => {
+        const state: StrategyResearchState = {
+          strategyId: 'strategy-research',
+          accountId: 'account-a',
+          revision: 1,
+          requestId: 'research-request',
+          requestHash: 'a'.repeat(64),
+          state: { question: '缩小突破阈值是否改变选股？', baseVersionId: 'strategy-research-v1' },
+          conclusions: [],
+          createdAt: T1,
+          updatedAt: T1,
+        };
+        expect(
+          await repos.strategyEvaluation.saveResearchState({ state, expectedRevision: 0 }),
+        ).toBe(true);
+        expect(
+          await repos.strategyEvaluation.saveResearchState({ state, expectedRevision: 0 }),
+        ).toBe(false);
+        expect(
+          await repos.strategyEvaluation.findResearchState({
+            strategyId: state.strategyId,
+            accountId: 'account-b',
+          }),
+        ).toBeNull();
+        const read = await repos.strategyEvaluation.findResearchState(state);
+        expect(read).toEqual(state);
+        if (read !== null) read.state.question = '修改读出的副本';
+        expect((await repos.strategyEvaluation.findResearchState(state))?.state.question).toBe(
+          state.state.question,
+        );
+        const next = { ...state, revision: 2, requestId: 'research-request-2', updatedAt: T2 };
+        expect(
+          await repos.strategyEvaluation.saveResearchState({ state: next, expectedRevision: 1 }),
+        ).toBe(true);
+        await expect(
+          repos.strategyEvaluation.saveResearchState({
+            state: { ...next, revision: 4 },
+            expectedRevision: 2,
+          }),
+        ).rejects.toThrow(InvariantError);
+        await repos.strategyEvaluation.saveResearchState({
+          state: { ...state, accountId: 'account-b' },
+          expectedRevision: 0,
+        });
+        await repos.strategyEvaluation.saveResearchState({
+          state: { ...state, strategyId: 'other-strategy' },
+          expectedRevision: 0,
+        });
+        await repos.strategyEvaluation.removeResearchStates(state.strategyId);
+        expect(await repos.strategyEvaluation.findResearchState(state)).toBeNull();
+        expect(
+          await repos.strategyEvaluation.findResearchState({ ...state, accountId: 'account-b' }),
+        ).toBeNull();
+        expect(
+          await repos.strategyEvaluation.findResearchState({
+            ...state,
+            strategyId: 'other-strategy',
+          }),
+        ).not.toBeNull();
+      });
+
+      it('按策略发现历史评估，按创建时间和身份稳定倒序并限制数量', async () => {
+        for (const [id, strategyId, createdAt] of [
+          ['eval-a', 'strategy-a', T1],
+          ['eval-b', 'strategy-a', T2],
+          ['eval-c', 'strategy-b', T3],
+        ] as const) {
+          await repos.strategyEvaluation.saveSession({
+            id,
+            strategyId,
+            strategyVersionId: `${strategyId}-v1`,
+            from: T1,
+            to: T3,
+            status: 'running',
+            definitionHash: 'a'.repeat(64),
+            createdAt,
+          });
+        }
+        expect(
+          (await repos.strategyEvaluation.listSessions({ strategyId: 'strategy-a', limit: 1 })).map(
+            (session) => session.id,
+          ),
+        ).toEqual(['eval-b']);
+        expect(
+          (
+            await repos.strategyEvaluation.listSessions({ strategyId: 'strategy-a', limit: 10 })
+          ).map((session) => session.id),
+        ).toEqual(['eval-b', 'eval-a']);
+      });
       it('checkpoint 必须先 start 再 commit，并按 PIT 查找可复用输入', async () => {
         const checkpoint: StrategyDataCheckpoint = {
           id: 'checkpoint-1',
