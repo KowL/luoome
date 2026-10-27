@@ -22,7 +22,6 @@ import {
   subjectTitle,
   toneOf,
   WATCH_STATE,
-  WATCHLIST_KIND,
   when,
 } from './format.js';
 import {
@@ -390,58 +389,6 @@ const TriggersCard = ({ triggers, loading, error }) => {
   );
 };
 
-const WatchlistsCard = ({ watchlists, loading, error }) => {
-  if (!watchlists) {
-    return h(
-      Card,
-      { title: '关注列表', meta: loading ? '读取中' : null },
-      loading ? h(SkeletonLines, { lines: 3 }) : h(ErrorNote, { label: '关注列表', error }),
-    );
-  }
-  const rows = watchlists.items ?? [];
-  if (rows.length === 0) {
-    return h(
-      Card,
-      { title: '关注列表', meta: '0 个' },
-      h(Empty, { mark: '◇', title: '还没有关注列表' }),
-    );
-  }
-  return h(
-    Card,
-    { title: '关注列表', meta: `${watchlists.total} 个` },
-    h(
-      'div',
-      { className: 'luo-list' },
-      rows.map(({ watchlist, memberCount, sourceHealth }) =>
-        h(
-          'div',
-          { key: watchlist.id, className: 'luo-watch-row' },
-          h(
-            'div',
-            null,
-            h('div', { className: 'luo-watch-name' }, watchlist.name),
-            h(
-              'div',
-              { className: 'luo-watch-meta' },
-              `${WATCHLIST_KIND[watchlist.kind] ?? watchlist.kind} · ${watchlist.enabled ? '启用' : '停用'}`,
-            ),
-          ),
-          h(
-            'div',
-            { style: { textAlign: 'right' } },
-            h('div', { className: 'luo-mono', style: { fontSize: '12px' } }, `${memberCount} 只`),
-            h(
-              'div',
-              { className: 'luo-watch-meta' },
-              sourceHealth?.stale > 0 ? `${sourceHealth.stale} 待刷新` : '来源新鲜',
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-};
-
 const AdviceCard = ({ advice }) => {
   const decision = DECISION[advice.decision] ?? { label: advice.decision, tone: 'quiet' };
   const toneVar =
@@ -625,7 +572,6 @@ export function OverviewPanel() {
   const holdings = dataOf(results, 'list_holdings');
   const triggers = dataOf(results, 'list_watch_triggers');
   const advice = dataOf(results, 'get_advice');
-  const watchlists = dataOf(results, 'list_watchlists');
   const sentiment = dataOf(results, 'get_ashare_sentiment')?.snapshot;
   const indexQuotes = dataOf(results, 'fetch_index_quotes');
   const marketStatus = dataOf(results, 'get_market_data_status');
@@ -654,7 +600,7 @@ export function OverviewPanel() {
     h(Head, {
       eyebrow: 'LUOOME / 看盘',
       title: '看盘',
-      subtitle: `${day(loadedAt)} · 市场温度、持仓变化与今日触发，一屏对齐`,
+      subtitle: `${day(loadedAt)} · 市场温度、账户概览与今日触发，一屏对齐`,
       side,
     }),
     panelError
@@ -719,17 +665,7 @@ export function OverviewPanel() {
     h(
       Section,
       { delay: 190 },
-      h(
-        'div',
-        { className: 'luo-grid is-two' },
-        h(HoldingsTable, { holdings, loading, error: errorOf(results, 'list_holdings') }),
-        h(
-          'div',
-          { className: 'luo-grid', style: { gridTemplateColumns: 'minmax(0, 1fr)' } },
-          h(TriggersCard, { triggers, loading, error: errorOf(results, 'list_watch_triggers') }),
-          h(WatchlistsCard, { watchlists, loading, error: errorOf(results, 'list_watchlists') }),
-        ),
-      ),
+      h(TriggersCard, { triggers, loading, error: errorOf(results, 'list_watch_triggers') }),
     ),
     h(AdviceSection, { advice, loading, error: errorOf(results, 'get_advice') }),
     h(Footer, {

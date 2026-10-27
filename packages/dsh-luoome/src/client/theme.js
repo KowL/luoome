@@ -266,6 +266,34 @@ export const STYLE = `
 .luo-pri.is-important { background: var(--lu-warn); }
 .luo-pri.is-normal { background: var(--lu-ink-3); }
 
+/* 关注页延续列表/详情结构；窄屏自然叠放，操作保持触达。 */
+.luo-watch-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.luo-watch-picker { display: grid; gap: 8px; }
+.luo-watch-choice { display: grid; gap: 6px; width: 100%; padding: 16px; text-align: left; background: var(--lu-surface); color: var(--lu-ink); border: 1px solid var(--lu-line); border-radius: var(--lu-r-sm); font: inherit; cursor: pointer; }
+.luo-watch-choice:hover { background: var(--lu-hover); }
+.luo-watch-choice[aria-pressed="true"] { border-color: var(--lu-accent); background: color-mix(in srgb, var(--lu-accent) 7%, var(--lu-bg)); }
+.luo-watch-choice:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; }
+.luo-watch-choice:disabled { opacity: .65; cursor: default; }
+.luo-watch-choice-head, .luo-watch-member-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+.luo-watch-choice-head strong { overflow-wrap: anywhere; }
+.luo-watch-choice-head { font-size: 13px; }
+.luo-watch-content { min-width: 0; }
+.luo-watchlists .luo-btn { min-height: 36px; height: auto; padding-block: 8px; line-height: 1.4; white-space: normal; }
+.luo-watchlists .luo-btn.is-primary { background: var(--lu-accent); color: var(--lu-bg); border-color: var(--lu-accent); }
+.luo-watch-toolbar { margin: 18px 0; }
+.luo-watch-member { display: grid; gap: 14px; padding: 20px 0; border-top: 1px solid var(--lu-line); }
+.luo-watch-sources { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; color: var(--lu-ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.luo-watch-sources li { display: flex; gap: 10px; align-items: baseline; }
+.luo-watch-source-kind { flex: 0 0 auto; color: var(--lu-ink-3); }
+.luo-watch-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 420px; }
+.luo-watch-confirm { border-color: var(--lu-accent); }
+.luo-watch-confirm p { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .luo-watch-layout { grid-template-columns: minmax(0, 1fr); }
+  .luo-watch-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-watch-choice { padding: 12px; }
+  .luo-watchlists .luo-btn { min-height: 40px; }
+}
 .luo-watch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 6px; border-bottom: 1px solid color-mix(in srgb, var(--lu-line) 62%, transparent); }
 .luo-watch-row:last-child { border-bottom: 0; }
 .luo-watch-name { font-size: 12.5px; color: var(--lu-ink); }

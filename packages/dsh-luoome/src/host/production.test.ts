@@ -563,6 +563,13 @@ describe('dsh-luoome production write policies', () => {
       'create_strict_strategy_backtest',
       'execute_strict_strategy_backtest',
       'update_account',
+      'create_watchlist',
+      'update_watchlist',
+      'archive_watchlist',
+      'add_watchlist_member',
+      'add_watchlist_members',
+      'update_watchlist_member',
+      'archive_watchlist_member',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
     const byName = new Map(policies.map((policy) => [policy.tool.name, policy]));

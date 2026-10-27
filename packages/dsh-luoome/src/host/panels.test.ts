@@ -185,6 +185,20 @@ const toolNamesOf = (body: Record<string, unknown>): string[] =>
     : [];
 
 describe('panel state route', () => {
+  it('loads watchlists in their own panel without market calls or overview duplication', async () => {
+    const { handle, market } = await setup();
+    const invoke = vi.spyOn(market, 'invoke');
+    const response = await handle(stateRequest('watchlists'));
+    expect(response.status).toBe(200);
+    const body = await bodyOf(response);
+    expect(body.panel).toBe('watchlists');
+    expect(toolNamesOf(body)).toEqual(['list_watchlists']);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(toolNamesOf(await bodyOf(await handle(stateRequest('overview'))))).not.toContain(
+      'list_watchlists',
+    );
+  });
+
   it('serves the fixed overview mapping with no-store and projects ToolResult verbatim', async () => {
     const { handle } = await setup();
     const response = await handle(stateRequest('overview'));

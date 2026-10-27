@@ -241,7 +241,7 @@ DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH �
 
 ### 独立 DSH 部署（默认纯插件形态）
 
-默认部署由 DSH 用 Node 加载 **dsh-luoome 插件**：插件提供三块核心面板（看板 / 策略 / 复盘）、
+默认部署由 DSH 用 Node 加载 **dsh-luoome 插件**：插件提供五块业务面板（看盘 / 持仓 / 关注 / 策略 / 复盘）、
 四条投研技能与原生只读/审批工具，安装/升级/备份/回退步骤见
 [用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。部署入口与配置见
 [DSH 部署配置](deploy/dsh/compose.yaml)。

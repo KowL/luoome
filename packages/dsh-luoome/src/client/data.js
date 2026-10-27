@@ -27,6 +27,7 @@ export {
   strategyPartErrorOf,
   strategyPartOf,
   strategyText,
+  watchlistOperationRequestFor,
   workspaceDataOf,
   workspaceErrorOf,
   workspaceOf,

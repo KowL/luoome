@@ -15,6 +15,19 @@ export const stockDetailUrl = (stockId) =>
 export const stockHistoryUrl = (stockId) =>
   `api/luoome/stock/history?stockId=${encodeURIComponent(stockId)}`;
 
+export const watchlistOperationRequestFor = (watchlist) => ({
+  watchlistId: watchlist?.id ?? null,
+  prompt: [
+    watchlist
+      ? `请帮我管理关注列表「${watchlist.name}」（watchlistId=${watchlist.id}）。`
+      : '请帮我整理关注列表；如需新建，请先和我确认关注方向。',
+    '先用 list_watchlists / get_watchlist 读取现有列表、成员与来源，再提出增删、研究阶段和优先级的调整建议，并说明理由。',
+    '需要写入时，通过 luoome_confirmed_operation 调用 create_watchlist、update_watchlist、archive_watchlist、add_watchlist_members、update_watchlist_member 或 archive_watchlist_member，逐次由我确认。',
+    '移除手动关注只结束 manual 来源，保留策略、持仓和其他来源。同步列表不能直接手工添加成员；不要擅自修改其来源策略。',
+    '本次仅管理关注，不开启定时任务、提醒或交易。',
+  ].join('\n'),
+});
+
 /** 服务端给的交易时段；老服务端没有该字段时返回 null（客户端按未知处理）。 */
 const sessionOf = (body) => {
   const session = body?.session;
@@ -321,16 +334,22 @@ export const strategyOperationRequestFor = (strategyId, context = {}) => ({
 });
 
 export const stockResearchRequestFor = (context) =>
-  context.sourceKind
+  context.watchlistId
     ? {
         stockId: context.stockId,
-        strategyId: context.strategyId,
-        runId: context.runId,
-        prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，任何保存、策略修改或建议写回都经原生审批确认。`,
+        watchlistId: context.watchlistId,
+        prompt: `请分析${strategyText(context.stockName) || '这只股票'}（${context.stockId}）。该股来自关注列表「${strategyText(context.watchlistName)}」（watchlistId=${context.watchlistId}）。先通过 get_watchlist 核对当前成员、关注理由和来源，再读取最新可用行情与相关事实；区分关注理由与当前行情，明确数据缺口、证据、反证、风险与有效期。关注不代表买入建议。任何保存或调整均需原生审批确认。`,
       }
-    : {
-        stockId: context.stockId,
-        strategyId: context.strategyId,
-        runId: context.runId,
-        prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；如需保存建议、修改策略或其他写入，先让我确认。`,
-      };
+    : context.sourceKind
+      ? {
+          stockId: context.stockId,
+          strategyId: context.strategyId,
+          runId: context.runId,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，任何保存、策略修改或建议写回都经原生审批确认。`,
+        }
+      : {
+          stockId: context.stockId,
+          strategyId: context.strategyId,
+          runId: context.runId,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；如需保存建议、修改策略或其他写入，先让我确认。`,
+        };

@@ -109,7 +109,7 @@ export const GetWatchlistInput = z.object({
 });
 export const GetWatchlistOutput = z.object({
   watchlist: WatchlistSchema,
-  members: z.array(WatchlistMemberViewSchema),
+  members: z.array(WatchlistMemberViewSchema.extend({ stockName: z.string().optional() })),
   alertPlans: z.array(AlertPlanSchema),
 });
 
@@ -134,7 +134,12 @@ export const getWatchlistTool = defineTool({
             : sources.filter(
                 (source) => source.kind !== 'portfolio' || source.sourceId === input.accountId,
               );
-        return { member, sources: visibleSources };
+        const stock = await ctx.repos.stock.findById(member.stockId);
+        return {
+          member,
+          sources: [...visibleSources],
+          ...(stock ? { stockName: stock.name } : {}),
+        };
       }),
     );
     return {
@@ -145,7 +150,7 @@ export const getWatchlistTool = defineTool({
           : rows.filter(({ sources }) =>
               sources.some((source) => input.includeArchivedMembers || source.status !== 'ended'),
             ),
-      alertPlans: await ctx.repos.alertPlan.list({ watchlistId: watchlist.id }),
+      alertPlans: [...(await ctx.repos.alertPlan.list({ watchlistId: watchlist.id }))],
     };
   },
 });

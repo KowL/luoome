@@ -56,6 +56,7 @@ import { createResearchJobs, type ResearchJobs } from './research-jobs.js';
 import { createResearchOperationPolicies } from './research-operations.js';
 import { createStrategyOperationPolicies } from './strategy-operations.js';
 import { registerReadTools } from './tools.js';
+import { createWatchlistOperationPolicies } from './watchlist-operations.js';
 import { mountDshWebProfile } from './web-profile.js';
 
 /** stderr logger：DSH 宿主进程的 stdout 留给他用，插件告警只写 stderr。 */
@@ -146,6 +147,7 @@ export const createProductionOperationPolicies = (
   ...createStrategyOperationPolicies(),
   ...createResearchOperationPolicies(options.researchJobs ?? createResearchJobs()),
   updateAccountOperation,
+  ...createWatchlistOperationPolicies(),
   ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
 ];
 

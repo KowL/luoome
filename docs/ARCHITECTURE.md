@@ -1335,11 +1335,17 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
 精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
 `LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
-看盘、持仓、策略、复盘通过 `ctx.slots` 注册主面板与侧栏入口；投资设置注册到 DSH 原生
+看盘、持仓、关注、策略、复盘通过 `ctx.slots` 注册主面板与侧栏入口；投资设置注册到 DSH 原生
 `settings.section`，不占业务侧栏。宿主 prefix 路由复用 DSH Connection.admit
 与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走既有 prepare/confirm
 协议，预览与取消不写入，未知结果只核对 operation ID。浏览器只保存恢复用的 UUID，不保存授权 token，
 不重算业务数字。非交易日的情绪查询取最近交易日，仍展示供应商原始日期，不伪装今日实时行情。
+
+看盘保留账户概览，持仓明细在持仓页查看。关注页独立读取 `list_watchlists`，按选中列表
+调用只读 `get_watchlist`；股票名称由工具解析本地目录，缺失名称不猜测。新建/修改/归档列表、
+添加/调整/移除手动成员复用领域工具及独立确认 policy，不开放定时授权。AI 管理入口生成带
+列表身份的可编辑对话草稿，实际写入仍逐次审批。结束 manual 来源不会删除其他仍有效的来源；
+没有业务回执的未知写入只核对，不自动重试。
 
 投资设置的 `/api/luoome/settings/market` 只向已认证的 owner 提供行情源顺序与 FUYAO 配置，
 POST 复用同源 JSON 与 64 KiB 上限。Zod 校验后先构造候选 market/sentiment，再将三个允许的

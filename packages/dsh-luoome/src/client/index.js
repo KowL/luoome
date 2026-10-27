@@ -2,8 +2,8 @@
 //
 // 由 DSH client-modules 通过 window.__ModuleLoader__.load 加载：factory 返回
 // { name, inject, apply }，apply(ctx) 在官方 slot 上注册：
-//   - main（keyed，key=`luoome-<panel>`）：看盘 / 持仓 / 策略 / 复盘；
-//   - sidebar.panellist：四个侧栏条目（id 保持 `luoome-*`）；
+//   - main（keyed，key=`luoome-<panel>`）：看盘 / 持仓 / 关注 / 策略 / 复盘；
+//   - sidebar.panellist：业务侧栏条目（id 保持 `luoome-*`）；
 //   - settings.section：投资设置。
 //
 // 数据只走宿主认证的同源 GET /api/luoome/state?panel=...；不在 localStorage 存授权。
@@ -15,12 +15,14 @@ import {
   researchRequestFor,
   stockResearchRequestFor,
   strategyOperationRequestFor,
+  watchlistOperationRequestFor,
 } from './data.js';
 import { OverviewPanel } from './overview.js';
 import { PositionsPanel } from './positions.js';
 import { ReviewPanel } from './review.js';
 import { SettingsPanel } from './settings.js';
 import { StrategiesPanel } from './strategies.js';
+import { WatchlistsPanel } from './watchlists.js';
 
 export const name = 'dsh-luoome';
 /** 客户端运行时服务：slots 注册视图，layout 用于「在对话中研究此策略」的官方导航。 */
@@ -55,9 +57,11 @@ const LayersIcon = () =>
 const RewindIcon = () =>
   icon(['M2.2 8a5.8 5.8 0 1 0 1.7-4.1', 'M2 2.4v3.2h3.2', 'M8 5.4 5.6 8 8 10.6']);
 const PortfolioIcon = () => icon(['M2 5h12v8H2z', 'M5.5 5V2.5h5V5', 'M2 8.5h12', 'M7 8.5v2h2v-2']);
+const WatchlistIcon = () => icon(['M4 2h8v12l-4-2.5L4 14V2Z']);
 const panels = [
-  ['overview', '看盘', '市场温度 · 持仓 · 今日触发', PulseIcon, OverviewPanel],
+  ['overview', '看盘', '市场温度 · 账户概览 · 今日触发', PulseIcon, OverviewPanel],
   ['positions', '持仓', '账本 · 成交 · 绩效快照', PortfolioIcon, PositionsPanel],
+  ['watchlists', '关注', '关注列表 · 手动管理 · AI 协作', WatchlistIcon, WatchlistsPanel],
   ['strategies', '策略', '研究问题 · 规则对照 · 持续优化', LayersIcon, StrategiesPanel],
   ['review', '复盘', '建议表现 · 校准 · 待补观察', RewindIcon, ReviewPanel],
 ];
@@ -95,6 +99,13 @@ export const openStrategyOperationInConversation = (ctx, strategyId, context = {
     ctx,
     strategyOperationRequestFor(strategyId, context),
     '__luoomeLastStrategyOperationRequest',
+  );
+
+export const openWatchlistOperationInConversation = (ctx, watchlist) =>
+  openPromptInConversation(
+    ctx,
+    watchlistOperationRequestFor(watchlist),
+    '__luoomeLastWatchlistOperationRequest',
   );
 
 export const openStockAnalysisInConversation = async (ctx, context) => {
@@ -138,6 +149,7 @@ export function apply(ctx) {
               openResearchInConversation(ctx, strategyId, runId, context),
             onManage: (strategyId, context) =>
               openStrategyOperationInConversation(ctx, strategyId, context),
+            onManageWatchlist: (watchlist) => openWatchlistOperationInConversation(ctx, watchlist),
             onAnalyzeStock: (context) => openStockAnalysisInConversation(ctx, context),
           }),
         },

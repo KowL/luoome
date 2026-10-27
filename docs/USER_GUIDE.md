@@ -410,8 +410,8 @@ queue probe。
 |---|---|
 | read（精确白名单） | 账户/持仓/交易/绩效、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
 | market external（精确白名单） | 指数、情绪、行情、新闻与有界策略试跑/对照；失败原样返回，不伪造空成功 |
-| 确认写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名；batch 另需显式开启，每次写入均经确认或精确任务授权 |
-| client | 看盘 / 持仓 / 策略 / 复盘四个业务面板，投资设置位于 DSH 设置内，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
+| 确认写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名、关注列表与成员维护；batch 另需显式开启，每次写入均经确认或精确任务授权 |
+| client | 看盘 / 持仓 / 关注 / 策略 / 复盘五个业务面板，投资设置位于 DSH 设置内，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
 | skills | `strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis` |
 
 事实库是 `LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开。通用
@@ -422,18 +422,24 @@ queue probe。
 
 ### 7.2 面板
 
-DSH 侧栏有四个 luoome 业务面板，投资设置从 DSH「设置」进入：
+DSH 侧栏有五个 luoome 业务面板，投资设置从 DSH「设置」进入：
 
 | 面板 | 内容 |
 |---|---|
-| 看盘 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议、关注列表、市场数据健康 |
+| 看盘 | 核心指数、市场情绪、账户与资产概览、盯盘触发、既有建议、市场数据健康 |
 | 持仓 | 当前账户持仓、最近成交和绩效快照；不在浏览器重新计算业务数字 |
+| 关注 | 独立管理关注列表与成员，展示股票名称、代码、研究阶段、优先级与关注来源；支持手动管理和交给 AI 管理 |
 | 策略 | 四步骤实验工作台：问题与规则、试跑与诊断、分层验证、结论与更新；保存后恢复固定版本、范围、基准和未完成研究。保留正式策略定义、匹配结果与原始规则依据。点击股票可查看报价，主动读取真实历史日 K，再进入带策略来源的新分析对话。 |
 | 复盘 | 建议命中率、真实 confidence calibration 分桶、DecisionReview 最近记录与来源、逐条 Advice 用户反馈（未回填不推断）、待补齐观察与样本数/未知/时间范围 |
 | DSH 设置 → 投资设置 | FUYAO 服务地址与 API Key、行情源优先级、当前账户、数据健康与插件能力；账户改名需预览并明确确认 |
 
 面板只做投影，不自己算数：数字必须与工具输出逐位一致。点击「刷新事实」读取当前工具结果，
 工具失败显示错误，不以零值代替缺失数据。
+
+在「关注」页可新建、编辑、启停或归档列表，添加股票、调整研究阶段和优先级、移除手动关注。
+每次修改先预览，再确认或取消；移除手动关注只结束 manual 来源，有策略、持仓或其他来源时
+仍保留该股票。同步列表的成员由来源维护，不能手工添加。「交给 AI 管理」会把当前列表带入
+可编辑的对话草稿，发送后由 AI 读取现状并提出方案，写入仍需逐次确认，不自动启用定时任务。
 
 公网部署在 `/dsh/` 等子路径时，面板和确认操作的请求都跟随 DSH 的 document base。
 0.2.1 修复了此前漏掉前缀、收到空响应而显示“读取失败”的问题。核心指数独立读取指数接口，

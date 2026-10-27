@@ -2,7 +2,7 @@
 //
 // 覆盖（需求 §7、§9 M4、§10.4；plugin 详细设计 §4.2/§8）：
 //   1. 真实 DSH Web 登录（官方 token → signed cookie），加载随包 client slots；
-//   2. 四个侧栏条目 + DSH 设置内的投资设置；FUYAO 保存后下一次请求立即使用新配置；
+//   2. 五个侧栏条目 + DSH 设置内的投资设置；FUYAO 保存后下一次请求立即使用新配置；
 //   3. 每块面板 DOM 展示值与宿主 /api/luoome/state 的 ToolResult、以及 SQLite 事实库
 //      逐项一致（账户/持仓/建议/策略版本/运行/信心校准/决策复盘/用户反馈）；
 //   4. 策略面板「在对话中研究此策略」携带 strategyId/runId，点击后导航到会话并记录请求；
@@ -742,11 +742,11 @@ try {
 
   // 4) 侧栏三个条目 + 逐面板 DOM/API/DB 一致性。
   const sidebarLabels = await page.evaluate<string[]>(
-    `[...document.querySelectorAll('button')].map((button) => button.textContent.trim()).filter((label) => ['看盘','持仓','策略','复盘','投资设置'].includes(label))`,
+    `[...document.querySelectorAll('button')].map((button) => button.textContent.trim()).filter((label) => ['看盘','持仓','关注','策略','复盘','投资设置'].includes(label))`,
   );
-  if (sidebarLabels.length !== 4 || sidebarLabels.includes('投资设置'))
+  if (sidebarLabels.length !== 5 || sidebarLabels.includes('投资设置'))
     throw new Error(
-      `侧栏条目应为 4 个，投资设置应位于 DSH 设置内，实际 ${JSON.stringify(sidebarLabels)}`,
+      `侧栏条目应为 5 个，投资设置应位于 DSH 设置内，实际 ${JSON.stringify(sidebarLabels)}`,
     );
 
   const clickButton = async (label: string) => {
@@ -811,17 +811,20 @@ try {
   await clickPanel('看盘');
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '看盘面板');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
-    '持仓',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
+    '看盘建议',
   );
   const overviewText = await page.evaluate<string>('document.body.innerText');
-  for (const expected of [
-    fixtureInfo.stock.name,
-    fixtureInfo.advicePremise,
-    '持仓市值',
-    '建议不等于交易',
-  ])
+  for (const expected of [fixtureInfo.advicePremise, '持仓市值', '建议不等于交易'])
     if (!overviewText.includes(expected)) throw new Error(`看盘 DOM 缺少「${expected}」`);
+  if (
+    await page.evaluate(
+      `Array.from(document.querySelectorAll('.luo-card-t')).some((title) => ['持仓', '关注列表'].includes(title.textContent))`,
+    )
+  )
+    throw new Error('看盘页不应再包含持仓明细或关注列表卡片');
+  if ((overviewState.tools as { name: string }[]).some((tool) => tool.name === 'list_watchlists'))
+    throw new Error('看盘不应请求关注列表');
   const overviewAccounts = toolData(overviewState, 'list_accounts');
   const overviewHoldings = toolData(overviewState, 'list_holdings');
   const dbHoldings = database.holdings as { stockId: string; quantity: number }[];
@@ -1006,6 +1009,130 @@ try {
   );
   await page.screenshot(join(evidenceDir, 'settings-desktop.png'));
 
+  await clickPanel('关注');
+  await page.waitFor(`document.querySelector('.luo-watch-choice') !== null`, '关注独立菜单');
+  const fillWatchField = (label: string, value: string) =>
+    page.evaluate(`(() => {
+    const field = document.querySelector('.luo-watchlists [aria-label="' + ${JSON.stringify(label)} + '"]');
+    if (!field) throw new Error('关注表单字段不存在');
+    const prototype = field.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, 'value').set.call(field, ${JSON.stringify(value)});
+    field.dispatchEvent(new Event(field.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+  })()`);
+  const confirmWatchEdit = async () => {
+    await page.waitFor(
+      `Array.from(document.querySelectorAll('.luo-watch-confirm button')).some((item) => item.textContent === '确认修改' && !item.disabled)`,
+      '关注修改等待确认',
+    );
+    await clickAction('确认修改');
+    await page.waitFor(
+      `document.querySelector('.luo-watch-confirm .luo-card-meta')?.textContent === '已完成'`,
+      '关注修改完成',
+    );
+  };
+  await clickAction('新建列表');
+  await fillWatchField('列表名称', '浏览器手动关注');
+  await fillWatchField('关注说明', '用于验证手动与 AI 管理');
+  await clickAction('预览修改');
+  await page.waitFor(
+    `document.querySelector('.luo-watch-confirm')?.innerText.includes('等待确认')`,
+    '关注创建预览',
+  );
+  const beforeWatchCreate = toolData(
+    await fetchState(origin, cookie, 'watchlists'),
+    'list_watchlists',
+  ) as { items: { watchlist: { id: string; name: string } }[] };
+  if (beforeWatchCreate.items.some((item) => item.watchlist.name === '浏览器手动关注'))
+    throw new Error('关注预览不能写库');
+  await page.screenshot(join(evidenceDir, 'watchlists-confirm-desktop.png'));
+  await confirmWatchEdit();
+  await page.waitFor(
+    `document.querySelector('.luo-watch-content .luo-card-t')?.textContent === '浏览器手动关注'`,
+    '选中新建关注列表',
+  );
+  const watchCatalog = toolData(
+    await fetchState(origin, cookie, 'watchlists'),
+    'list_watchlists',
+  ) as { items: { watchlist: { id: string; name: string } }[] };
+  const createdWatchlist = watchCatalog.items.find(
+    (item) => item.watchlist.name === '浏览器手动关注',
+  )?.watchlist;
+  if (!createdWatchlist) throw new Error('关注创建后未持久化');
+  const readWatchMembers = () =>
+    page.evaluate<{
+      members: {
+        stockName?: string;
+        member: { stockId: string; stage: string; priority: string };
+        sources: { kind: string; reason: string }[];
+      }[];
+    }>(`(async () => {
+    const response = await fetch('api/luoome/call', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool: 'get_watchlist', input: { watchlistId: ${JSON.stringify(createdWatchlist.id)} } }) });
+    const result = await response.json(); if (!result.ok) throw new Error('无法读取关注成员'); return result.data;
+  })()`);
+  const prepareWatchMember = async () => {
+    await clickAction('添加股票');
+    await fillWatchField('股票代码', fixtureInfo.stock.id);
+    await fillWatchField('关注理由', '验证持续研究理由');
+    await clickAction('预览修改');
+    await page.waitFor(
+      `document.querySelector('.luo-watch-confirm')?.innerText.includes('等待确认')`,
+      '添加股票预览',
+    );
+  };
+  await prepareWatchMember();
+  await clickAction('取消操作');
+  await page.waitFor(
+    `document.querySelector('.luo-watch-confirm .luo-card-meta')?.textContent === '已取消'`,
+    '取消添加股票',
+  );
+  if ((await readWatchMembers()).members.length !== 0) throw new Error('取消操作不应添加成员');
+  await prepareWatchMember();
+  await confirmWatchEdit();
+  await page.waitFor(
+    `document.querySelector('.luo-watch-member')?.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
+    '成员股票名称和代码',
+  );
+  await clickAction('调整阶段与优先级');
+  await fillWatchField('研究阶段', 'researching');
+  await fillWatchField('优先级', 'important');
+  await clickAction('预览修改');
+  await confirmWatchEdit();
+  const watchMembers = await readWatchMembers();
+  if (
+    watchMembers.members.length !== 1 ||
+    watchMembers.members[0]?.member.priority !== 'important' ||
+    watchMembers.members[0]?.member.stage !== 'researching'
+  )
+    throw new Error('关注成员修改未生效');
+  await page.waitFor(
+    `document.querySelector('.luo-watch-member')?.innerText.includes('研究中')`,
+    '关注阶段刷新',
+  );
+  await clickAction('关闭回执');
+  await page.screenshot(join(evidenceDir, 'watchlists-desktop.png'));
+  if (stockDetailReads !== 0) throw new Error('关注列表不应预取个股行情');
+  await page.evaluate(`document.querySelector('.luo-watch-member .luo-stock-link').click()`);
+  await page.waitFor(
+    `document.querySelector('dialog[open]')?.innerText.includes('关注来源') && document.querySelector('dialog[open] .luo-stock-price') !== null`,
+    '关注股票行情详情',
+  );
+  if (stockDetailReads !== 1) throw new Error('关注详情应只读取当前股票行情');
+  await page.evaluate(`document.querySelector('dialog[open] [aria-label="关闭个股详情"]').click()`);
+  await clickAction('移除手动关注');
+  await confirmWatchEdit();
+  await page.waitFor(`document.querySelectorAll('.luo-watch-member').length === 0`, '移除手动成员');
+  if ((await readWatchMembers()).members.length !== 0) throw new Error('移除未持久化');
+  await prepareWatchMember();
+  await confirmWatchEdit();
+  await page.waitFor(`document.querySelector('.luo-watch-member') !== null`, '恢复关注成员');
+  await clickAction('交给 AI 管理');
+  await page.waitFor(
+    `window.__luoomeLastWatchlistOperationRequest?.watchlistId === ${JSON.stringify(createdWatchlist.id)} && document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes('浏览器手动关注')`,
+    'AI 管理携带列表写入可编辑草稿',
+  );
+  if ((await readWatchMembers()).members.length !== 1) throw new Error('打开 AI 管理不应自动写入');
+  await page.screenshot(join(evidenceDir, 'watchlists-ai-draft.png'));
+
   await clickPanel('复盘');
   await page.waitFor(`document.body.innerText.includes('信心校准')`, '复盘面板');
   await page.waitFor(
@@ -1041,6 +1168,7 @@ try {
   await new Promise((done) => setTimeout(done, 250));
   await page.screenshot(join(evidenceDir, 'review-desktop.png'));
 
+  const readsBeforeStrategies = stockDetailReads;
   await clickPanel('策略');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.strategyName)})`,
@@ -1173,7 +1301,7 @@ try {
   );
   await new Promise((done) => setTimeout(done, 150));
   await page.screenshot(join(evidenceDir, 'strategies-matches-desktop.png'));
-  if (stockDetailReads !== 0) throw new Error('策略列表不应预取所有个股行情');
+  if (stockDetailReads !== readsBeforeStrategies) throw new Error('策略列表不应预取所有个股行情');
   stockQuoteFailure = true;
   await page.evaluate(
     `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]').click()`,
@@ -1350,8 +1478,8 @@ try {
   await page.waitFor(`document.body.innerText.includes('看盘')`, '刷新后的工作台');
   await clickPanel('看盘');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
-    '刷新后持仓',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
+    '刷新后建议',
   );
   const refreshedOverview = await fetchState(origin, cookie, 'overview');
   const refreshedHoldings = toolData(refreshedOverview, 'list_holdings') as {
@@ -1360,7 +1488,7 @@ try {
   if (refreshedHoldings?.holdings?.[0]?.holding?.stockId !== fixtureInfo.stock.id)
     throw new Error('刷新后 state 事实不一致');
   const refreshedText = await page.evaluate<string>('document.body.innerText');
-  if (!refreshedText.includes(fixtureInfo.stock.name) || !refreshedText.includes('核心指数'))
+  if (!refreshedText.includes(fixtureInfo.advicePremise) || !refreshedText.includes('核心指数'))
     throw new Error('刷新后 DOM 与事实不一致');
 
   // 6) 移动端基本可读：窄屏侧栏自动折叠为图标 rail（aria-label 仍可定位），
@@ -1374,8 +1502,8 @@ try {
   await clickPanel('看盘');
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '移动端看盘');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
-    '移动端持仓数据',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
+    '移动端建议数据',
   );
   const overflow = await page.evaluate<number>(
     'document.documentElement.scrollWidth - window.innerWidth',
@@ -1385,6 +1513,7 @@ try {
   await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
   for (const [label, title, file] of [
     ['持仓', '持仓与账本', 'positions-mobile.png'],
+    ['关注', '关注列表', 'watchlists-mobile.png'],
     ['投资设置', 'FUYAO（同花顺）', 'settings-mobile.png'],
   ]) {
     await clickPanel(label as string);
@@ -1889,7 +2018,7 @@ try {
     sidebarLabels,
     panels: {
       overview: {
-        domChecks: [fixtureInfo.stock.name, fixtureInfo.advicePremise, '持仓市值'],
+        domChecks: [fixtureInfo.advicePremise, '持仓市值', '今日触发'],
         stateAccountTotal: overviewAccounts?.total,
         stateHoldings: dbHoldings,
         dbAccountId: dbAccount?.id,

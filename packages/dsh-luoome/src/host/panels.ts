@@ -24,7 +24,14 @@ import { denied, invalidInput, type ReadSurface } from './read-surface.js';
 import type { ResearchContinuity } from './research-status.js';
 import type { RequestAdmission } from './routes.js';
 
-export const PANEL_NAMES = ['overview', 'positions', 'strategies', 'review', 'settings'] as const;
+export const PANEL_NAMES = [
+  'overview',
+  'positions',
+  'watchlists',
+  'strategies',
+  'review',
+  'settings',
+] as const;
 export type PanelName = (typeof PANEL_NAMES)[number];
 
 /**
@@ -56,7 +63,8 @@ const sentimentCall = (): PanelToolCall =>
 
 /**
  * 面板固定映射（需求 §7）：
- * - overview：市场（情绪/指数 external + 本地行情状态）、持仓、触发、关注、建议卡；
+ * - overview：市场（情绪/指数 external + 本地行情状态）、账户概览、触发、建议卡；
+ * - watchlists：关注列表目录，成员详情按需经只读调用获取；
  * - strategies：目录、当前版本/最近 published operational run（派生 get_strategy_workspace）、
  *   数据健康、实际结果版本与有界匹配明细、待补观察；
  * - review：Advice 统计/信心校准分桶/逐条反馈、DecisionReview 记录、决策闭环与待补观察。
@@ -70,7 +78,6 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('list_accounts'),
       fixed('list_holdings'),
       fixed('list_watch_triggers'),
-      fixed('list_watchlists'),
       fixed('get_advice'),
       fixed('get_market_data_status'),
     ]),
@@ -83,6 +90,10 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('list_trades', { limit: 50 }),
       fixed('list_account_performance_snapshots', { limit: 30 }),
     ]),
+    market: Object.freeze([]),
+  }),
+  watchlists: Object.freeze({
+    read: Object.freeze([fixed('list_watchlists')]),
     market: Object.freeze([]),
   }),
   settings: Object.freeze({

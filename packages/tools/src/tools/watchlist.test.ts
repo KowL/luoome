@@ -53,6 +53,9 @@ describe('Watchlist tools', () => {
     const detail = await getWatchlistTool.execute({ watchlistId: 'quality-watch' }, ctx);
     expect(detail.ok).toBe(true);
     if (!detail.ok) return;
+    expect(detail.data.members[0]?.stockName).toBe(
+      (await ctx.repos.stock.findById('600519.SH'))?.name,
+    );
     expect(detail.data.members[0]?.member).toMatchObject({
       stockId: '600519.SH',
       stage: 'researching',
