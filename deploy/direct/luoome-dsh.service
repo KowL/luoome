@@ -1,0 +1,48 @@
+[Unit]
+Description=Luoome DSH Web（宿主机直部署）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=luoome
+Group=luoome
+WorkingDirectory=/opt/luoome/dsh/workspace
+# owner 与事实库账户由部署显式绑定；缺变量即 fail closed，不从请求/模型推断。
+EnvironmentFile=/opt/luoome/dsh/host.env
+Environment=HOME=/home/luoome
+# Pocket 代理的监听地址：宿主机直部署的安全基线是只绑 loopback，
+# 公网入口只有一个，且必须经 Caddy 转发。
+Environment=DSH_POCKET_BIND_HOST=127.0.0.1
+ExecStart=/usr/local/bin/dsh --profile ${DSH_PROFILE} --no-open --host 127.0.0.1 --port ${DSH_PORT} --public-url ${DSH_PUBLIC_URL} --trusted-host ${DSH_TRUSTED_HOST}
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+KillSignal=SIGTERM
+UMask=0077
+# 以下加固项把容器原本提供的隔离补回宿主机：只读系统目录、私有 /tmp、
+# 独立 PID 视图、最小设备集、无提权能力。
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectProc=invisible
+ProcSubset=pid
+ReadWritePaths=/opt/luoome/dsh/home /opt/luoome/dsh/luoome-home /opt/luoome/dsh/workspace /home/luoome
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

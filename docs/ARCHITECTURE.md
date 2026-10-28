@@ -480,8 +480,9 @@ DSH 接入有两条路径，默认部署只保留第一条：
 
 1. **独立 DSH 部署（默认，纯插件形态）**：DSH 用 Node 加载 `dsh-luoome` 插件——host 提供原生只读 /
    market external / 确认写面，client 提供三块核心面板，随包 skills 提供四条投研技能；事实库是
-   Node SQLite 的 `$LUOOME_HOME/luoome.db`。DSH 镜像运行期不需要 Bun、MCP server、旧 Bun Web、
-   analysis worker 或 queue probe。部署入口见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
+   Node SQLite 的 `$LUOOME_HOME/luoome.db`。运行期不需要 Bun、MCP server、旧 Bun Web、
+   analysis worker 或 queue probe。部署入口见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
+   容器栈保留为整栈回退方案。
 2. **旧「当前 MCP 过渡形态」（仅手动/隔离验收）**：Web profile 的四个 MCP 实例（只读面 `luoome` /
    设置面 `luoome-settings` / 分析面 `luoome-analysis` / 批处理面 `luoome-batch`）、三个旧 DSH
    插件与手动 worker。源码保留但默认部署不再启动，P5 统一删除。
@@ -1268,7 +1269,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts`），
 没有登录、没有租户隔离、没有支付计量。CLI/TUI/MCP/DSH 插件共用同一份单机事实库。
 默认部署是纯插件形态：DSH（Node）加载 `dsh-luoome`，安装/升级/备份/回退步骤见
-[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [DSH 部署配置](../deploy/dsh/compose.yaml)。
+[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [宿主机直部署](../deploy/direct/luoome-dsh.service)。
 
 认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
 浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
@@ -1307,7 +1308,7 @@ workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK�
 共享写屏障覆盖Web、worker、provider活动、会话及迁移；新接入的业务/SSE也必须进入删除排空与恢复验证。
 恢复保持冻结，撤销旧凭证/fence，应用最新独立删除ledger，按业务回执对账且不重发旧通知，完成核对后才恢复外部副作用。
 
-单机形态的运行与部署见 [DSH 部署配置](../deploy/dsh/compose.yaml)，
+单机形态的运行与部署见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
 安装/升级/备份/回退步骤见[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，
 形态决策见[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) D9–D12。
 自动证券交易仍禁止；人工已完成成交保持原专用记账契约。

@@ -1,0 +1,23 @@
+# DSH 只占用 /dsh/，其余路径留给同机其它服务。
+#
+# Pocket 负责公网密码、DSH token 握手与手机适配，Caddy 保留浏览器 Host。
+# 域名的 ACME 校验会被运营商 DNS 劫持（DNSPod webblock）打断，
+# 443 上的 TLS 握手同样被中间设备重置，因此公网 IP 入口只能明文 HTTP。
+#
+# 宿主机直部署：DSH 与 Pocket 都在本机，Pocket 只绑 loopback，
+# 所以上游是 127.0.0.1:3081，公网入口仍然只有 Caddy 一个。
+http://{$DSH_PUBLIC_IP:134.175.83.56} {
+  redir /dsh /dsh/ 308
+  handle_path /dsh/* {
+    # Pocket 会重写上游 Origin；先按浏览器的真实 Origin 拒绝跨站请求。
+    @crossOrigin {
+      header Origin *
+      not header Origin http://{$DSH_PUBLIC_IP:134.175.83.56}
+    }
+    respond @crossOrigin 403
+    reverse_proxy 127.0.0.1:3081
+  }
+  handle {
+    respond 404
+  }
+}

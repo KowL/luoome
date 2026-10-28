@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { prefixPocketHeaders } from './pocket-prefix.mjs';
+import { patchPocketBindHost, patchPocketProxy, prefixPocketHeaders } from './pocket-prefix.mjs';
 
 /**
  * 默认部署切纯插件的静态守卫（不依赖 docker，可在 node/vitest 下运行）。
@@ -84,6 +84,24 @@ describe('默认 compose 只部署纯插件 Web + Caddy', () => {
     expect(dockerRuntimeStage()).not.toMatch(/\bbun\b/);
     expect(dockerfile).toContain('bun pm pack');
     expect(dockerRuntimeStage()).toContain('npm install --omit=dev --global @deepseek-ai/dsh');
+  });
+});
+
+describe('只读容器里 HOME 必须可写', () => {
+  it('把 /home/node 挂成命名卷并显式声明 HOME', () => {
+    // DSH 应用内目录选择器默认浏览 HOME，创建工作区就是在当前目录下 mkdir；
+    // 容器只读且 HOME 不在卷上时，用户会看到 EROFS。
+    expect(compose).toContain('HOME: /home/node');
+    expect(compose).toMatch(/- dsh_home_node:\/home\/node/);
+    expect(sectionKeys(compose, 'volumes')).toContain('dsh_home_node');
+  });
+
+  it('不靠放开只读根文件系统来绕过 HOME 不可写', () => {
+    expect(compose).toContain('read_only: true');
+  });
+
+  it('镜像里的 home 目录归属运行用户，空卷继承该属主', () => {
+    expect(dockerfile).toMatch(/chown[^\n]*\/home\/node/);
   });
 });
 
@@ -210,6 +228,75 @@ describe('Caddy 仍是唯一公网入口且保持 fail closed', () => {
     expect(caddyfile).toContain('respond 404');
     expect(envExample).toContain('DSH_PUBLIC_URL=http://134.175.83.56/dsh/\n');
     expect(dockerfile).toContain('node /app/deploy/dsh/pocket-prefix.mjs');
+  });
+});
+
+describe('Pocket 代理的绑定地址必须可收口', () => {
+  const makePackage = (root: string): string => {
+    const lib = join(root, 'lib');
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(
+      join(lib, 'service.mjs'),
+      [
+        'export async function startProxy() {',
+        '  return {',
+        "    host: '0.0.0.0',",
+        '  };',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(lib, 'proxy.mjs'),
+      [
+        'const server = createServer((req, res) => {',
+        '  // upstream',
+        '});',
+        'const login = `action="/pocket-login"`;',
+        'const redirect = `content="0; url=/"`;',
+        `const retry = \`<a href="/?\${HANDSHAKE_RETRY_PARAM}=1"\`;`,
+        '',
+      ].join('\n'),
+    );
+    return root;
+  };
+
+  it('把硬编码的 0.0.0.0 换成可配地址，默认只绑 loopback', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pocket-bind-'));
+    try {
+      const service = join(makePackage(root), 'lib', 'service.mjs');
+      expect(patchPocketBindHost(service)).toBe(true);
+      const source = readFileSync(service, 'utf8');
+      expect(source).toContain("host: process.env.DSH_POCKET_BIND_HOST ?? '127.0.0.1',");
+      expect(source).not.toContain("host: '0.0.0.0',");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('重复打补丁不叠加（重复安装时 npm 不会重装同版本包）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pocket-idem-'));
+    try {
+      const pkg = makePackage(root);
+      const service = join(pkg, 'lib', 'service.mjs');
+      const proxy = join(pkg, 'lib', 'proxy.mjs');
+      expect(patchPocketBindHost(service)).toBe(true);
+      expect(patchPocketBindHost(service)).toBe(false);
+      expect(patchPocketProxy(proxy)).toBe(true);
+      expect(patchPocketProxy(proxy)).toBe(false);
+      const patched = readFileSync(proxy, 'utf8');
+      expect(patched.split('prefixPocketResponse(res);').length - 1).toBe(1);
+      expect(patched.split('import { prefixPocketResponse }').length - 1).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('容器里显式放开到 bridge 网络，宿主机直部署默认只绑 loopback', () => {
+    expect(compose).toContain('DSH_POCKET_BIND_HOST: "0.0.0.0"');
+    expect(dockerfile).toContain(
+      'node /app/deploy/dsh/pocket-prefix.mjs /usr/local/lib/node_modules/dsh-pocket',
+    );
   });
 });
 

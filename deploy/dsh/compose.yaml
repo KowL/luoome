@@ -28,6 +28,9 @@ x-service: &service
     DSH_WORKSPACE: /workspace
     DSH_PROFILE: ${DSH_PROFILE:-luoome-web}
     LUOOME_HOME: /var/lib/luoome
+    # DSH 的应用内目录选择器默认浏览 HOME，并在当前目录下新建目录（创建工作区）。
+    # 容器是只读的，HOME 必须落在可写卷上，否则新建目录报 EROFS。
+    HOME: /home/node
     # owner 与事实库账户由部署显式绑定；缺失即 fail closed，不从请求/模型推断。
     LUOOME_OWNER_USER_ID: ${LUOOME_OWNER_USER_ID:?set the trusted owner user id}
     LUOOME_OWNER_ACCOUNT_ID: ${LUOOME_OWNER_ACCOUNT_ID:?set the existing owner account id}
@@ -39,6 +42,9 @@ x-service: &service
     - dsh_home:/var/lib/dsh
     - dsh_workspace:/workspace
     - luoome_home:/var/lib/luoome
+    # HOME 是 DSH 目录选择器的默认浏览根，也是新建工作区目录的落点；
+    # 只读容器里没有这个卷，mkdir 会报 EROFS。
+    - dsh_home_node:/home/node
   # DSH 会把 cordis 插件加载器的 napi 原生绑定物化到 tmp 再 dlopen，
   # Docker 默认的 tmpfs 带 noexec，会报 "failed to map segment from shared object"。
   tmpfs: [/tmp:exec]
@@ -59,6 +65,9 @@ services:
       <<: *environment
       # Pocket 只连接 loopback；3080 不接受其它容器直连。
       DSH_BIND_HOST: 127.0.0.1
+      # 插件模式的代理默认只绑 loopback（宿主机直部署的安全基线）；
+      # 容器里必须显式放开到 bridge 网络，否则 Caddy 容器够不到 Pocket。
+      DSH_POCKET_BIND_HOST: "0.0.0.0"
       DSH_PORT: ${DSH_PORT:-3080}
       DSH_PUBLIC_URL: ${DSH_PUBLIC_URL:?set the advertised public root}
       DSH_TRUSTED_HOST: ${DSH_TRUSTED_HOST:?set the browser-visible authority}
@@ -91,5 +100,6 @@ volumes:
   dsh_home:
   dsh_workspace:
   luoome_home:
+  dsh_home_node:
   caddy_data:
   caddy_config:

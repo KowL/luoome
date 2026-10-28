@@ -1,0 +1,39 @@
+[Unit]
+Description=Caddy（Luoome 唯一公网入口，宿主机直部署）
+Documentation=file:///opt/luoome/dsh/deploy/README.md
+After=network-online.target luoome-dsh.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=caddy
+Group=caddy
+WorkingDirectory=/opt/luoome/caddy
+EnvironmentFile=/opt/luoome/dsh/caddy.env
+ExecStart=/usr/local/bin/caddy run --config /opt/luoome/dsh/Caddyfile --adapter caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /opt/luoome/dsh/Caddyfile --adapter caddyfile
+Restart=always
+RestartSec=5
+# 只需要绑定 80 的能力，其余能力全部丢弃。
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/luoome/caddy/data /opt/luoome/caddy/config
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
