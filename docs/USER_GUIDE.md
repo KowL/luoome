@@ -576,6 +576,10 @@ Caddy（可从既有镜像里取二进制）。运行期不需要 Bun，也不�
    容器期的工作区根是 `/workspace`，工作区记录与历史会话的 `cwd` 都写着这个路径，所以安装器会建
    `/workspace` → `/opt/luoome/dsh/workspace` 的软链接把旧路径接回去（`WORKSPACE_COMPAT_PATH` 可改）。
    少了它，历史会话执行时会报 `working-directory: directory does not exist: "/workspace"`。
+   注意 DSH 把会话挂到工作区的判定是 `realpath(会话 cwd)` 与工作区记录里的 `path` **字面相等**：
+   历史会话靠软链接解析到真实目录，工作区记录里的 `path` 则必须直接写真实目录
+   （`/opt/luoome/dsh/workspace`）。两者对不上时新建会话会报
+   `session/workspace-attach-failed: ... its cwd resolves to '...'`；安装器会检查并告警。
 4. `sudo systemctl enable --now luoome-dsh luoome-caddy`，然后用 Pocket 密码登录，确认
    `/dsh/api/luoome/profile` 可读取、五个面板与四条技能都在（只有密码页返回 200 不能证明 DSH 上游可用）。
 

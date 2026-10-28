@@ -93,6 +93,28 @@ link_workspace_path() {
 }
 link_workspace_path
 
+# --- 工作区路径一致性（只检查，不改数据）---
+# DSH 把会话挂到工作区的判定是 realpath(会话 cwd) 与工作区记录里的 path 字面相等。
+# 两者对不上时新建会话会报 session/workspace-attach-failed。
+# 历史会话的 cwd 仍写着容器期的 /workspace，靠上面的软链接解析到真实目录；
+# 工作区记录里的 path 则必须直接写真实目录。
+WORKSPACE_STORE="${DSH_HOME}/storages/workspace.json"
+if [ -f "${WORKSPACE_STORE}" ]; then
+  node --input-type=module -e '
+import { readFileSync, realpathSync } from "node:fs";
+const [store, workspace] = process.argv.slice(1);
+const data = JSON.parse(readFileSync(store, "utf8"));
+const target = realpathSync(workspace);
+for (const [id, record] of Object.entries(data?.tables?.workspaces ?? {})) {
+  let resolved = null;
+  try { resolved = realpathSync(record.path); } catch { resolved = null; }
+  if (resolved === target) continue;
+  console.error(`[install] 警告：工作区 ${id} 的 path 是 ${record.path}（解析为 ${resolved ?? "不存在"}），与数据目录 ${target} 不一致`);
+  console.error("[install] 新建会话会报 session/workspace-attach-failed；把该 path 改成数据目录的真实路径");
+}
+' "${WORKSPACE_STORE}" "${DSH_WORKSPACE}" || true
+fi
+
 # --- 部署脚本：仓库的 deploy/dsh 与本目录各拷一份到服务器 ---
 install -m 644 "${DSH_DEPLOY_SOURCE}/pocket-prefix.mjs" "${DEPLOY_ROOT}/deploy/pocket-prefix.mjs"
 install -m 644 "${DSH_DEPLOY_SOURCE}/profile-seed.mjs" "${DEPLOY_ROOT}/deploy/profile-seed.mjs"

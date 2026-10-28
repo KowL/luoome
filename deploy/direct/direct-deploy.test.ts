@@ -155,6 +155,14 @@ describe('安装脚本只做安装面', () => {
       `ln -sfn "${shellVar('DSH_WORKSPACE')}" "${shellVar('WORKSPACE_COMPAT_PATH')}"`,
     );
   });
+
+  it('安装时检查工作区记录路径与真实目录是否一致', () => {
+    // DSH 挂载会话的判定是 realpath(cwd) === 记录的 path；对不上就报
+    // session/workspace-attach-failed。安装器只检查并告警，不改运行中的数据。
+    expect(install).toContain('storages/workspace.json');
+    expect(install).toContain('session/workspace-attach-failed');
+    expect(install).toContain('realpathSync');
+  });
 });
 
 describe('升级脚本可回滚', () => {
