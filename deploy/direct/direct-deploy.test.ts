@@ -37,7 +37,7 @@ describe('DSH 单元以非特权账号跑在宿主机上', () => {
   it('补回容器原本提供的隔离', () => {
     for (const directive of [
       'ProtectSystem=strict',
-      'ProtectHome=true',
+      'ProtectHome=read-only',
       'PrivateTmp=true',
       'PrivateDevices=true',
       'ProtectProc=invisible',
@@ -46,6 +46,15 @@ describe('DSH 单元以非特权账号跑在宿主机上', () => {
       'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX',
     ])
       expect(dshUnit).toContain(directive);
+  });
+
+  it('HOME 要能列出也要能新建目录：ProtectHome 不能把整棵树遮掉', () => {
+    // ProtectHome=true 会把 /home 变不可访问，ReadWritePaths 覆盖不了，
+    // 目录选择器会报 cannot list /home/luoome: EACCES。
+    expect(dshUnit).toContain('Environment=HOME=/home/luoome');
+    expect(dshUnit).toMatch(/^ProtectHome=read-only$/m);
+    expect(dshUnit).not.toMatch(/^ProtectHome=true$/m);
+    expect(dshUnit).toContain('/home/luoome');
   });
 
   it('只允许写自己的数据面，不给整块 /opt 或 /home', () => {

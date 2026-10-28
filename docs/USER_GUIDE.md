@@ -580,7 +580,7 @@ Caddy（可从既有镜像里取二进制）。运行期不需要 Bun，也不�
 
 容器原本提供的隔离改由 systemd 加固项承担：DSH 以 `luoome`（无登录 shell、无 sudo）运行，
 `NoNewPrivileges`、`CapabilityBoundingSet=`（无任何 capability）、`ProtectSystem=strict`、
-`ProtectHome`、`PrivateTmp`、`PrivateDevices`、`ProtectProc=invisible`、`RestrictSUIDSGID`、
+`ProtectHome=read-only`、`PrivateTmp`、`PrivateDevices`、`ProtectProc=invisible`、`RestrictSUIDSGID`、
 `LockPersonality`、`RestrictAddressFamilies`、`SystemCallFilter=@system-service`；`ReadWritePaths`
 只放开自己的数据面与 HOME。改完单元用 `systemctl show -p CapEff,CapBnd,NoNewPrivs,Seccomp --value`
 复核实际生效值。
@@ -591,8 +591,12 @@ DSH 只绑 `127.0.0.1:3080`，Pocket 绑 `127.0.0.1:3081`，两者都不对外�
 少了这一步，宿主机上的 3081 会直接暴露到公网。
 
 DSH 的应用内目录选择器默认浏览 HOME 并在当前目录下新建目录（创建工作区），所以 HOME
-（`/home/luoome`）必须对服务账号可写。目录不可写时用户会看到
+（`/home/luoome`）必须**能列出**也要能写。目录不可写时用户会看到
 `cannot create /home/node/<名称>: EROFS: read-only file system` 之类的报错；不要靠放开系统目录写权限来绕过。
+HOME 列不出来则是另一种报错：`cannot list /home/luoome: EACCES: permission denied`——
+`ProtectHome=true` 会把整棵 `/home` 遮成不可访问，`ReadWritePaths` 覆盖不了它，
+所以单元用 `ProtectHome=read-only` 再用 `ReadWritePaths` 单独放开 `/home/luoome`。
+其它用户的家目录仍由文件属主权限挡住（`read-only` 只解除挂载点的只读，不改属主权限）。
 
 **升级**
 

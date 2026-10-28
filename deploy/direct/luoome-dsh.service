@@ -27,7 +27,9 @@ CapabilityBoundingSet=
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=true
+# HOME 只读放开：目录选择器要能列出并在其中新建工作区。
+# ProtectHome=true 会把整棵 /home 遮成不可访问，ReadWritePaths 覆盖不了。
+ProtectHome=read-only
 ProtectProc=invisible
 ProcSubset=pid
 ReadWritePaths=/opt/luoome/dsh/home /opt/luoome/dsh/luoome-home /opt/luoome/dsh/workspace /home/luoome
