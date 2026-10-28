@@ -8,6 +8,7 @@
 // 用法:
 //   node deploy/dsh/profile-seed.mjs --plugin /app/plugin/dsh-luoome.tgz [--profile luoome-web]
 //     [--home <DSH_HOME>] [--modules <DSH 模块目录>]
+//     [--pocket <已安装的 dsh-pocket 包目录>]
 // 退出码 0 = 装配成功；非 0 = fail-closed（缺产物/缺 DSH 模块/缺技能都直接失败）。
 import { execFileSync } from 'node:child_process';
 import {
@@ -15,8 +16,8 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -25,6 +26,7 @@ import {
 import { basename, join, resolve } from 'node:path';
 
 const PLUGIN_NAME = 'dsh-luoome';
+const POCKET_NAME = 'dsh-pocket';
 const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 const REQUIRED_SKILLS = [
   'daily-market-analysis',
@@ -128,7 +130,8 @@ const assertPluginLayout = (installed) => {
 const main = () => {
   const args = parseArgs(process.argv.slice(2));
   const pluginPath = args.plugin ?? process.env.DSH_PLUGIN_ARTIFACT;
-  if (!pluginPath) fail('usage: node profile-seed.mjs --plugin <tarball|directory> [--profile name]');
+  if (!pluginPath)
+    fail('usage: node profile-seed.mjs --plugin <tarball|directory> [--profile name]');
   if (!existsSync(pluginPath)) fail(`plugin artifact does not exist: ${pluginPath}`);
   const profile = args.profile ?? process.env.DSH_PROFILE ?? 'luoome-web';
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) fail(`invalid profile name: ${profile}`);
@@ -149,6 +152,19 @@ const main = () => {
   const installedAs = installPlugin(pluginPath, profileModules);
   const installed = join(profileModules, PLUGIN_NAME);
   const artifact = assertPluginLayout(installed);
+  const dependencies = {};
+  const bundles = [...PROFILE_BUNDLES];
+  if (args.pocket !== undefined) {
+    const pocket = resolve(args.pocket);
+    const manifest = JSON.parse(readFileSync(join(pocket, 'package.json'), 'utf8'));
+    if (manifest.name !== POCKET_NAME || !manifest.dsh?.bundle?.patch)
+      fail('pocket artifact must be the dsh-pocket bundle');
+    const target = join(profileModules, POCKET_NAME);
+    rmSync(target, { recursive: true, force: true });
+    symlinkSync(pocket, target, 'dir');
+    dependencies[POCKET_NAME] = `file:${pocket}`;
+    bundles.push(POCKET_NAME);
+  }
 
   const dependencyTarget =
     installedAs === 'tarball'
@@ -164,8 +180,8 @@ const main = () => {
         name: `dsh-profile-${profile}`,
         private: true,
         type: 'module',
-        dependencies: { [PLUGIN_NAME]: dependencyTarget },
-        dsh: { profile: { bundles: PROFILE_BUNDLES } },
+        dependencies: { [PLUGIN_NAME]: dependencyTarget, ...dependencies },
+        dsh: { profile: { bundles } },
       },
       null,
       2,
@@ -185,11 +201,7 @@ const main = () => {
   if (!pluginMounted)
     writeFileSync(
       patchPath,
-      `${JSON.stringify(
-        [{ insert: [{ id: 'luoome-plugin', name: PLUGIN_NAME }] }],
-        null,
-        2,
-      )}\n`,
+      `${JSON.stringify([{ insert: [{ id: 'luoome-plugin', name: PLUGIN_NAME }] }], null, 2)}\n`,
     );
 
   const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
@@ -209,7 +221,7 @@ const main = () => {
         },
         modulesRoot: modules.root,
         linkedDshPackages: modules.packages.size,
-        bundles: PROFILE_BUNDLES,
+        bundles,
       },
       null,
       2,

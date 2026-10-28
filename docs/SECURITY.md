@@ -232,8 +232,9 @@ stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。**默�
 
 ### DSH 入口（HTTP）
 
-- 公网入口由 Caddy basic auth 挡住，DSH 自身再校验启动 token；两层都在业务进程之外。
-- DSH 不直接发布端口，只在反代后可达；单机 Web 默认只监听 `127.0.0.1`。
+- 公网 `/dsh/` 入口为 Caddy → dsh-pocket → DSH；Pocket 强制公网密码并自动完成 DSH 启动 token 握手。
+- Caddy 在 Pocket 改写上游 Origin 前，拒绝带有非本站 Origin 的请求。
+- DSH 在容器内只监听 `127.0.0.1:3080`；Pocket 的 3081 不发布到宿主机。单机 Web 默认只监听 `127.0.0.1`。
 - 远程访问优先走 SSH 隧道或受控反代；公网部署以 HTTPS 为首选，明文 HTTP 只是已授权回退。
 - 审计走本地 audit log（见下），不依赖远端集中收集。
 
@@ -399,13 +400,16 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
 
 | 层 | 位置 | 作用 |
 |---|---|---|
-| 公网入口 basic auth | Caddy（`deploy/dsh/Caddyfile`） | DSH 不直接发布端口，只经反代对外；未配置 `DSH_AUTH_USER` / `DSH_AUTH_HASH` 时校验失败（fail closed），不会放开 `/dsh/` |
-| DSH 启动 token | DSH Web 自身 | 入口 URL 带 token 才能建立会话，token 不进入业务进程；DSH 自带 Host/Origin 栅栏 |
+| 公网入口密码 | dsh-pocket，经 Caddy 反代 | 公网 IP 强制密码；未认证的 API/WebSocket 拒绝访问。密码保存在 `$DSH_HOME/dsh-pocket/token`（0600），自定义固定密码随卷持久化 |
+| DSH 启动 token | DSH Web 自身，Pocket 代为握手 | Pocket 通过宿主 connection 获取当次启动 token 并换取 DSH 会话；不向浏览器暴露该 token，不进入 luoome 业务接口 |
 
 - 两层都在 luoome 业务进程之外：luoome 不实现账号、密码或会话。
 - 单机 Web（`luoome web serve`）默认只监听 `127.0.0.1`，不对局域网暴露；远程访问走 SSH 隧道或反向代理。
-- 反向代理必须保留原始 Host 与端口；不信任客户端自带的 `X-Forwarded-Host` / `X-Forwarded-Proto` 放行请求。
-- 部署以 HTTPS 为首选；当前公网入口若只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍会校验，
+- Caddy 保留浏览器 Host，并在转发前拒绝外站 Origin。Pocket 通过密码认证后，将上游 Host/Origin/Referer 改写为容器内 loopback；DSH 继续验证会话。不能通过客户端 `X-Forwarded-*` 放行请求。
+- DSH/Pocket 均不直接发布端口；只有 Caddy 对外。Pocket 未启动时返回代理错误，不回退到裸 DSH。
+- 登录表单、跳转和会话 Cookie 都限定在 `/dsh/`；不会把服务器其它路径转入 DSH。
+- Pocket 的局域网密码保持开启；自定义公网密码不随重启轮换，登录 cookie 绑定当前进程，重启后需重新登录。错误密码受插件频率限制。
+- 部署以 HTTPS 为首选；当前公网入口若只能使用已授权的明文 HTTP 回退，Pocket 密码与 DSH 会话仍会校验，
   但没有传输加密，不在不可信网络上传输凭据。
 
 ### 默认部署暴露面：纯插件（Node）

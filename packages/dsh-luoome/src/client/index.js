@@ -128,6 +128,18 @@ export const openStockAnalysisInConversation = async (ctx, context) => {
 };
 
 export function apply(ctx) {
+  // Pocket 的抽屉导航尚未识别原生 panel slot；选中 luoome 面板后归还手机屏幕。
+  ctx.effect(() => {
+    const onNavigate = (event) => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest('button');
+      if (!button?.querySelector('[data-luoome-panel]')) return;
+      if (button.closest('[data-mobile-nav="frame"]:not([data-sidebar-collapsed])'))
+        ctx.layout.toggleSidebar();
+    };
+    document.addEventListener('click', onNavigate);
+    return () => document.removeEventListener('click', onNavigate);
+  }, 'luoome: close mobile drawer after panel navigation');
   ctx.slots.inject('settings.section', () =>
     ctx.slots.register(
       { name: 'settings.section', id: 'luoome-settings', order: 40, label: () => '投资设置' },
@@ -158,7 +170,7 @@ export function apply(ctx) {
     );
     ctx.slots.inject('sidebar.panellist', () =>
       ctx.slots.register({ name: 'sidebar.panellist', id, order: 20, label: () => title }, () =>
-        h(Icon, null),
+        h('span', { 'data-luoome-panel': panel }, h(Icon, null)),
       ),
     );
   }

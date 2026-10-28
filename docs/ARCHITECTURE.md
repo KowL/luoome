@@ -1356,6 +1356,14 @@ POST 复用同源 JSON 与 64 KiB 上限。Zod 校验后先构造候选 market/s
 客户端 API URL 相对 DSH 的 document base 解析，保留 `/dsh/` 等反向代理前缀。核心指数直接投影
 `fetch_index_quotes`，不依赖情绪聚合是否成功；情绪冷启动使用正常外部请求时限，截止超时返回可恢复 adapter_error。
 
+默认公网部署使用 `/dsh/`：Caddy → dsh-pocket → 容器内 `127.0.0.1:3080` 的 DSH。
+Pocket 提供密码登录、自动启动 token 握手与移动端抽屉；Caddy 在 Pocket 改写上游 Origin 前
+校验浏览器 Origin，3080/3081 均不发布。部署适配器将登录表单、跳转与 Cookie 限定在
+`/dsh/`，清除迁移前的同名根 Cookie；根路径不进入 DSH。面板导航通过官方
+layout 服务收起手机抽屉，不改变业务确认协议。
+应用升级通过 `deploy/dsh/upgrade.py` 将当前工作树的应用产物与部署文件绑定到同一发布清单；
+镜像入口固定 loopback，容器健康检查同时检查 DSH/Pocket 端口，公网探针验证密码后的 profile 与实时通道。
+
 策略页按名称切换详情，展示当前已发布定义的筛选、评分与信号规则。`get_strategy_workspace`
 同时返回已发布正式运行的实际版本 `currentRunVersion` 与有名称、原始规则事实的 `matches`；
 明细默认最多 50 条，`selectedLimit` 最大 200，`matches.total` 保留完整入选数。无发布结果时不返回

@@ -39,8 +39,8 @@ const owner = Object.freeze({
   userId: 'switch-drill-owner',
   accountId: 'switch-drill-account',
 });
-const READ_TOOL_COUNT = 46;
-const MARKET_TOOL_COUNT = 6;
+const READ_TOOL_COUNT = 63;
+const MARKET_TOOL_COUNT = 8;
 const SKILL_NAMES = [
   'daily-market-analysis',
   'post-close-review',
@@ -53,7 +53,6 @@ const PANEL_TOOL_NAMES = {
     'list_accounts',
     'list_holdings',
     'list_watch_triggers',
-    'list_watchlists',
     'get_advice',
     'get_market_data_status',
     'get_ashare_sentiment',
@@ -453,8 +452,6 @@ const composeCheck = (): Record<string, unknown> => {
     '${LUOOME_OWNER_ACCOUNT_ID:?',
     '${DSH_PUBLIC_URL:?',
     '${DSH_TRUSTED_HOST:?',
-    '${DSH_AUTH_USER:?',
-    '${DSH_AUTH_HASH:?',
   ])
     if (!composeText.includes(required)) throw new Error(`compose.yaml missing ${required}`);
   if (!entrypoint.includes('profile-seed.mjs'))
@@ -483,8 +480,6 @@ const composeCheck = (): Record<string, unknown> => {
     DSH_TRUSTED_HOST: 'acceptance.invalid',
     LUOOME_OWNER_USER_ID: owner.userId,
     LUOOME_OWNER_ACCOUNT_ID: owner.accountId,
-    DSH_AUTH_USER: 'acceptance',
-    DSH_AUTH_HASH: 'acceptance-hash',
   };
   const services = spawnSync(
     'docker',
@@ -525,6 +520,7 @@ const composeCheck = (): Record<string, unknown> => {
     ['LUOOME_HOME', '/var/lib/luoome'],
     ['LUOOME_MARKET_PROVIDER', 'real'],
     ['DSH_PROFILE', profileName],
+    ['DSH_BIND_HOST', '127.0.0.1'],
   ] as const)
     if (webEnvironment[key] !== value)
       throw new Error(`resolved dsh-web environment ${key} must be ${value}`);
@@ -532,9 +528,12 @@ const composeCheck = (): Record<string, unknown> => {
     throw new Error('resolved dsh-web runtime environment must not include BUN_IMAGE');
   if (web.build?.args?.BUN_IMAGE === undefined)
     throw new Error('build stage must pass BUN_IMAGE (build-only)');
-  const caddyEnvironment = resolved.services.caddy?.environment ?? {};
-  if (caddyEnvironment.DSH_AUTH_USER === undefined || caddyEnvironment.DSH_AUTH_HASH === undefined)
-    throw new Error('caddy basic auth variables must stay fail-closed in resolved config');
+  if (
+    !readFileSync(join(repo, 'deploy/dsh/Caddyfile'), 'utf8').includes('reverse_proxy dsh-web:3081')
+  )
+    throw new Error('Caddy must only proxy the Pocket listener');
+  if (!entrypoint.includes('--host 127.0.0.1'))
+    throw new Error('entrypoint must pin the Pocket upstream to loopback');
   return {
     services: serviceNames,
     dockerCompose: run('docker', ['compose', 'version']).stdout.trim(),
@@ -547,8 +546,6 @@ const composeCheck = (): Record<string, unknown> => {
       'LUOOME_OWNER_ACCOUNT_ID',
       'DSH_PUBLIC_URL',
       'DSH_TRUSTED_HOST',
-      'DSH_AUTH_USER',
-      'DSH_AUTH_HASH',
     ],
     caddyOnlyPublicEntry: true,
   };
@@ -584,6 +581,8 @@ try {
     'package/dist/host.js',
     'package/dist/client.js',
     'package/package.json',
+    'package/README.md',
+    'package/LICENSE',
     ...SKILL_NAMES.map((name) => `package/skills/${name}/SKILL.md`),
   ];
   const fileEntries = entries.filter((entry) => !entry.endsWith('/'));

@@ -1,7 +1,7 @@
 // profile-seed 的补丁层行为：插件层由镜像管理，但同一个文件里还有 DSH 自己写入的 UI 设置
 // （例如已读的欢迎提示版本）。整份重写会把这些用户态设置抹掉，用户每次升级都要重新点一次「继续」。
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -41,7 +41,10 @@ const makeFixture = () => {
   return { root, home, modules, plugin };
 };
 
-const seed = (fixture: { home: string; modules: string; plugin: string }, profile = 'luoome-web') =>
+const seed = (
+  fixture: { home: string; modules: string; plugin: string; pocket?: string },
+  profile = 'luoome-web',
+) =>
   execFileSync(
     'node',
     [
@@ -54,6 +57,7 @@ const seed = (fixture: { home: string; modules: string; plugin: string }, profil
       fixture.home,
       '--modules',
       fixture.modules,
+      ...(fixture.pocket === undefined ? [] : ['--pocket', fixture.pocket]),
     ],
     { encoding: 'utf8' },
   );
@@ -62,6 +66,29 @@ const patchPath = (fixture: { home: string }, profile = 'luoome-web') =>
   join(fixture.home, 'profiles', profile, 'cordis.patch.yml');
 
 describe('profile-seed 补丁层', () => {
+  it('将 Pocket 装入实际 profile，并在重复装配时保留 UI 设置', () => {
+    const fixture = makeFixture();
+    const pocket = join(fixture.root, 'pocket');
+    mkdirSync(pocket);
+    writeFileSync(
+      join(pocket, 'package.json'),
+      JSON.stringify({ name: 'dsh-pocket', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    );
+    seed(fixture);
+    const originalPatch = readFileSync(patchPath(fixture), 'utf8');
+    for (let attempt = 0; attempt < 2; attempt += 1) seed({ ...fixture, pocket });
+    const profileDir = join(fixture.home, 'profiles', 'luoome-web');
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
+    expect(manifest.dependencies['dsh-pocket']).toBe(`file:${pocket}`);
+    expect(manifest.dsh.profile.bundles).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      'dsh-pocket',
+    ]);
+    expect(realpathSync(join(profileDir, 'node_modules', 'dsh-pocket'))).toBe(realpathSync(pocket));
+    expect(readFileSync(patchPath(fixture), 'utf8')).toBe(originalPatch);
+  });
+
   it('首次装配写入插件层', () => {
     const fixture = makeFixture();
     seed(fixture);

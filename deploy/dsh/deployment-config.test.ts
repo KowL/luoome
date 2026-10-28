@@ -1,5 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { prefixPocketHeaders } from './pocket-prefix.mjs';
 
 /**
  * 默认部署切纯插件的静态守卫（不依赖 docker，可在 node/vitest 下运行）。
@@ -65,8 +69,6 @@ describe('默认 compose 只部署纯插件 Web + Caddy', () => {
       '${LUOOME_OWNER_ACCOUNT_ID:?',
       '${DSH_PUBLIC_URL:?',
       '${DSH_TRUSTED_HOST:?',
-      '${DSH_AUTH_USER:?',
-      '${DSH_AUTH_HASH:?',
     ])
       expect(compose).toContain(required);
     expect(compose).toContain('LUOOME_HOME: /var/lib/luoome');
@@ -97,21 +99,57 @@ describe('production.env.example 只列纯插件默认部署变量', () => {
       'BUN_IMAGE=',
       'NODE_IMAGE=',
       'CADDY_IMAGE=',
+      'DSH_POCKET_VERSION=',
       'DSH_PUBLIC_URL=',
       'DSH_TRUSTED_HOST=',
       'LUOOME_OWNER_USER_ID=',
       'LUOOME_OWNER_ACCOUNT_ID=',
       'LUOOME_MARKET_PROVIDER=',
-      'DSH_AUTH_USER=',
-      'DSH_AUTH_HASH=',
     ])
       expect(envExample).toContain(required);
   });
 });
 
 describe('entrypoint.sh 只装配并启动纯插件 profile', () => {
+  it('发布包绑定当前部署文件并拒绝旧监听配置', () => {
+    execFileSync('python3', ['-B', new URL('./upgrade.test.py', deployDir).pathname], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+  });
+  it('旧部署传入容器 IP 时仍监听 Pocket 所需的 loopback', () => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-entrypoint-'));
+    try {
+      const bin = join(root, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$@"\n', {
+        mode: 0o755,
+      });
+      const args = execFileSync('sh', [new URL('./entrypoint.sh', deployDir).pathname, 'web'], {
+        encoding: 'utf8',
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          DSH_WORKSPACE: root,
+          LUOOME_OWNER_USER_ID: 'fixture-owner',
+          LUOOME_OWNER_ACCOUNT_ID: 'fixture-account',
+          DSH_BIND_HOST: '172.28.0.5',
+          DSH_PORT: '3080',
+          DSH_PUBLIC_URL: 'http://fixture.invalid/dsh/',
+          DSH_TRUSTED_HOST: 'fixture.invalid',
+        },
+      })
+        .trim()
+        .split('\n');
+      expect(args[args.indexOf('--host') + 1]).toBe('127.0.0.1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('先跑 profile-seed，再启动 DSH profile', () => {
     expect(entrypoint).toContain('node /app/deploy/dsh/profile-seed.mjs');
+    expect(entrypoint).toContain('--pocket /usr/local/lib/node_modules/dsh-pocket');
     expect(entrypoint).toContain('exec dsh --profile "$DSH_PROFILE"');
     expect(entrypoint).not.toMatch(/\bbun\b/);
   });
@@ -145,11 +183,57 @@ describe('profile-seed.mjs 是纯插件安装步骤', () => {
 });
 
 describe('Caddy 仍是唯一公网入口且保持 fail closed', () => {
-  it('basic auth + 反代 dsh-web，不暴露旧入口', () => {
-    expect(caddyfile).toContain('basic_auth');
-    expect(caddyfile).toContain('reverse_proxy dsh-web:3080');
+  it('只反代 Pocket，由 Pocket 完成公网密码与 DSH token 握手', () => {
+    expect(caddyfile).toContain('reverse_proxy dsh-web:3081');
+    expect(caddyfile).not.toContain('basic_auth');
+    expect(caddyfile).not.toContain('dsh-web:3080');
+    expect(compose).toContain('DSH_BIND_HOST: 127.0.0.1');
+    expect(compose).not.toMatch(/308[01]:308[01]/);
+    expect(compose).toContain('dsh-web-probe.mjs');
+    expect(dockerfile).toContain('HEALTHCHECK');
+    expect(dockerfile).toMatch(/dsh-pocket@\$\{DSH_POCKET_VERSION\}/);
+    expect(envExample).toContain('DSH_POCKET_VERSION=2.12.0');
+    expect(envExample).not.toContain('DSH_AUTH_HASH=');
     expect(caddyfile).not.toContain('worker');
     expect(caddyfile).not.toContain('mcp');
+  });
+
+  it('在 Pocket 重写 Origin 前拒绝浏览器跨站请求', () => {
+    expect(caddyfile).toContain('header Origin *');
+    expect(caddyfile).toContain('not header Origin http://{$DSH_PUBLIC_IP:134.175.83.56}');
+    expect(caddyfile).toContain('respond @crossOrigin 403');
+  });
+
+  it('只将 /dsh/ 转给 Pocket，根路径与其它路径不进入 DSH', () => {
+    expect(caddyfile).toContain('handle_path /dsh/*');
+    expect(caddyfile).toContain('redir /dsh /dsh/ 308');
+    expect(caddyfile).toContain('respond 404');
+    expect(envExample).toContain('DSH_PUBLIC_URL=http://134.175.83.56/dsh/\n');
+    expect(dockerfile).toContain('node /app/deploy/dsh/pocket-prefix.mjs');
+  });
+});
+
+describe('Pocket 子路径的登录和会话', () => {
+  it('把登录跳转与 cookie 限定在 /dsh/，清除迁移前的根 cookie', () => {
+    const headers = prefixPocketHeaders({
+      location: '/?dsh-pocket-auth=1',
+      'set-cookie': [
+        'dsh-pocket-token=pin; HttpOnly; Path=/; SameSite=Lax',
+        'dsh-auth-test=session; Path=/',
+      ],
+    });
+    expect(headers.location).toBe('/dsh/?dsh-pocket-auth=1');
+    expect(headers['set-cookie']).toEqual([
+      'dsh-pocket-token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+      'dsh-pocket-token=pin; HttpOnly; Path=/dsh/; SameSite=Lax',
+      'dsh-auth-test=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+      'dsh-auth-test=session; Path=/dsh/',
+    ]);
+  });
+
+  it('保留已带前缀的跳转和站外跳转', () => {
+    for (const location of ['/dsh/', '/dsh/?ready=1', 'https://provider.example/login'])
+      expect(prefixPocketHeaders({ Location: location }).Location).toBe(location);
   });
 });
 

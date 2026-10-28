@@ -12,6 +12,7 @@ x-service: &service
       BUN_IMAGE: ${BUN_IMAGE:?set a pinned Bun image}
       NODE_IMAGE: ${NODE_IMAGE:-node:22.22.3-bookworm-slim}
       DSH_VERSION: ${DSH_VERSION:-0.2.1-rc.2}
+      DSH_POCKET_VERSION: ${DSH_POCKET_VERSION:-2.12.0}
   restart: unless-stopped
   # 容器日志默认无上限，DSH 会话与工具输出长期累积会把磁盘吃满。
   logging:
@@ -48,27 +49,29 @@ services:
   dsh-web:
     <<: *service
     command: ["deploy/dsh/entrypoint.sh", "web"]
+    healthcheck:
+      test: ["CMD", "node", "/app/deploy/dsh/dsh-web-probe.mjs", "--health"]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     environment:
       <<: *environment
-      DSH_BIND_HOST: ${DSH_BIND_HOST:-172.28.0.5}
+      # Pocket 只连接 loopback；3080 不接受其它容器直连。
+      DSH_BIND_HOST: 127.0.0.1
       DSH_PORT: ${DSH_PORT:-3080}
       DSH_PUBLIC_URL: ${DSH_PUBLIC_URL:?set the advertised public root}
       DSH_TRUSTED_HOST: ${DSH_TRUSTED_HOST:?set the browser-visible authority}
     networks:
       backend:
         ipv4_address: 172.28.0.5
-  # 公网入口：basic auth + 反代。DSH 自己不发布端口，只在这里对外。
+  # 公网入口只反代 Pocket；3080/3081 均不发布到宿主机。
   caddy:
     image: ${CADDY_IMAGE:?set a reviewed Caddy image tag or digest}
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
       DSH_PUBLIC_IP: ${DSH_PUBLIC_IP:-134.175.83.56}
-      # Caddyfile 用 {$DSH_AUTH_HASH:unset} 兜底，而 unset 不是合法 base64，
-      # 缺变量会让 Caddy 启动失败并进入崩溃循环。
-      # 这里显式要求这两个变量，缺一个就直接拒绝启动，而不是等到线上才发现。
-      DSH_AUTH_USER: ${DSH_AUTH_USER:?set the DSH basic auth user}
-      DSH_AUTH_HASH: ${DSH_AUTH_HASH:?set the DSH basic auth hash}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

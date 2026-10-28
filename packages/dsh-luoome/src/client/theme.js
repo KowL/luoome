@@ -93,6 +93,10 @@ export const STYLE = `
 .luo-settings .luo-title { font-size: 26px; }
 .luo-settings .luo-field { width: 100%; }
 .luo-settings .luo-source-order { display: grid; gap: 12px; max-width: 420px; }
+@media (max-width: 1023px) {
+  [data-mobile-nav="frame"] .luo-root:not(.luo-settings) > .luo-shell { padding-top: 64px; }
+  [data-mobile-nav="frame"]:has(.luo-root:not(.luo-settings)) [data-mobile-nav="fab"] { top: calc(env(safe-area-inset-top, 0px) + 12px); }
+}
 .luo-field select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-sm); color: var(--lu-ink); background: var(--lu-bg); font: 14px/1.4 var(--lu-sans); }
 .luo-field select:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
 

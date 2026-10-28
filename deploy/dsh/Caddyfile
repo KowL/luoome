@@ -1,20 +1,20 @@
-# 单机形态的公网入口：整个站点只有 DSH（默认部署为纯插件形态）。
+# DSH 只占用 /dsh/，其余路径留给同机其它服务。
 #
-# 托管站点已下线，站点根路径直接指向 DSH 面板；三面板/对话/审批都由
-# dsh-luoome 插件在 DSH Web 内提供，不经过旧 Bun Web 或 MCP 进程。
+# Pocket 负责公网密码、DSH token 握手与手机适配，Caddy 保留浏览器 Host。
 # 域名的 ACME 校验会被运营商 DNS 劫持（DNSPod webblock）打断，
 # 443 上的 TLS 握手同样被中间设备重置，因此公网 IP 入口只能明文 HTTP。
-# DSH_AUTH_* 未配置时 basic auth 校验失败（fail closed），不会放开 /dsh/。
 http://{$DSH_PUBLIC_IP:134.175.83.56} {
-  redir / /dsh/ 302
-  redir /dsh /dsh/ 302
+  redir /dsh /dsh/ 308
   handle_path /dsh/* {
-    basic_auth * {
-      {$DSH_AUTH_USER:dsh} {$DSH_AUTH_HASH:unset}
+    # Pocket 会重写上游 Origin；先按浏览器的真实 Origin 拒绝跨站请求。
+    @crossOrigin {
+      header Origin *
+      not header Origin http://{$DSH_PUBLIC_IP:134.175.83.56}
     }
-    reverse_proxy dsh-web:3080
+    respond @crossOrigin 403
+    reverse_proxy dsh-web:3081
   }
   handle {
-    redir /dsh/ 302
+    respond 404
   }
 }

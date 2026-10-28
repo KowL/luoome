@@ -167,8 +167,9 @@ bun install
 bun --no-env-file run web
 ```
 
-单机形态没有邮箱登录，也没有订阅：DSH 是唯一入口，公网入口由反向代理 basic auth 挡住，
-DSH 自己再校验启动 token。Web 只在本机可达，远程访问走 SSH 隧道或受控反代。
+单机形态没有邮箱登录，也没有订阅：DSH 是唯一入口，公网经 Caddy 转发到 dsh-pocket，
+输入 Pocket 密码后自动完成 DSH 启动 token 握手，手机使用同一个入口。独立 Web 只在本机可达，
+远程访问走 SSH 隧道或受控反代。
 
 `./bin/luoome start`、`restart` 和 `web serve` 启动同一个单机 Web，默认后台运行，日志追加到
 `$LUOOME_HOME/logs/luoome.log`；需要前台调试时加 `--foreground`。这些入口不加载个人或项目 `.env`。

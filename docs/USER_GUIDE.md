@@ -398,13 +398,24 @@ opt-in 追加：
 ## 7. DSH 单机用法
 
 DSH 是当前唯一入口。luoome 以插件形态接入 DSH，自己不提供站点入口，也不需要账号登录：
-公网入口由反向代理的 basic auth 挡住，DSH 自己再校验启动 token，两层都在 luoome 之外。
+公网经 Caddy 转发到 dsh-pocket，输入 Pocket 密码后自动完成 DSH 启动 token 握手，
+认证由宿主与入口插件承担。
 
 ### 7.1 默认部署：纯插件（DSH Node 进程内）
 
 默认部署（`deploy/dsh/compose.yaml`）只有两个服务：`dsh-web`（Node + DSH + `dsh-luoome` 插件）
 与公网入口 `caddy`。运行期**没有** MCP client/server、Bun CLI、旧 Bun Web、analysis worker 或
 queue probe。
+
+浏览器和手机直接打开 `http://<服务器公网 IP>/dsh/`，输入运维交付的 Pocket 公网密码即可，
+不需要复制 DSH 的临时 token。只有 `/dsh/` 进入 DSH，根路径及其它路径保留给同机其它服务。
+窄屏使用抽屉导航，点击看盘、
+持仓、策略或复盘后会自动收起抽屉；导航按钮为面板标题留出空间，写操作仍须预览和确认。
+
+公网密码保存在 `$DSH_HOME/dsh-pocket/token`（权限 `0600`），在 DSH「设置 → 手机访问」中
+可修改为 8–64 位字母或数字的固定密码。升级须保留 `dsh_home` 卷；DSH 重启后登录状态失效，
+重新输入同一密码即可。公网 IP 直连不需要开启 Cloudflare 隧道，也不需要发布 3080/3081 端口。
+当前 HTTP 入口没有传输加密。
 
 | 插件面 | 内容 |
 |---|---|
@@ -556,14 +567,35 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
    `LUOOME_OWNER_ACCOUNT_ID` 必须对应库中既有账户。插件装配失败会拒绝启动，不会回退默认账户。
 2. `docker compose -f deploy/dsh/compose.yaml build`；构建阶段用 Bun 打包插件，运行阶段只用 Node。
 3. `docker compose -f deploy/dsh/compose.yaml up -d`。entrypoint 先用 `deploy/dsh/profile-seed.mjs`
-   把插件（host + client + skills）装配进 DSH profile，再启动 DSH Web；可用
+   把 luoome 插件（host + client + skills）与固定版本的 dsh-pocket 装配进 DSH profile，再启动 DSH Web；可用
    `docker compose ... run --rm dsh-web deploy/dsh/entrypoint.sh seed` 只装配不启动。
-4. 验证：`docker compose ... config --services` 应只有 `dsh-web` 与 `caddy`；登录 DSH 后能看到三个面板与
+4. 验证：`docker compose ... config --services` 应只有 `dsh-web` 与 `caddy`；登录 DSH 后能看到五个面板与
    四条技能，且运行进程里没有 MCP/Bun/worker/queue probe。
 
-**升级**：先按下面步骤做一致性备份 → 固定新的 `LUOOME_RELEASE`/镜像 digest → `build` 后
-`up -d`。entrypoint 每次启动重写插件文件与 profile 补丁，会话目录与事实库保留；代码升级失败时
-用上一个 release 镜像 tag 回滚。
+**升级**：使用仓库内的发布流程，从当前工作树同时构建应用产物和部署文件。entrypoint 每次
+启动更新插件文件与 profile 补丁，会话目录与事实库保留；代码升级失败时自动回滚旧镜像与配置。
+
+```bash
+# 从仓库根目录执行；发布名不可复用。
+release="dsh-$(date -u +%Y%m%dT%H%M%SZ)"
+python3 deploy/dsh/upgrade.py bundle --output ".tmp/$release"
+scp -r ".tmp/$release" ubuntu@134.175.83.56:/opt/luoome/releases/
+ssh ubuntu@134.175.83.56 "sudo python3 /opt/luoome/releases/$release/deploy/dsh/upgrade.py apply"
+```
+
+本地需要 Bun 和 Python 3，服务器需要 Docker Compose 与 Python 3。发布包只包含应用 tarball、
+明确列出的部署文件和 SHA-256 清单；服务器 `apply` 先验证文件完整性、Pocket 监听契约、SDK 兼容
+与磁盘空间，再构建继承当前运行时的新镜像。部署文件始终来自本次发布包，禁止复制旧 release 的
+compose 或 entrypoint。SDK/Pocket 版本变化时须先按 `Dockerfile` 构建完整运行时。
+
+脚本自动停止写者、做 SQLite 一致性备份并保存 DSH 状态，启动后等待双端口健康检查，再使用
+服务器已有的 Pocket 密码验证业务 profile、Origin 栅栏与 WebSocket；只有全部通过才记录发布成功。
+失败会恢复旧镜像与配置；事实库恢复仍按下文人工流程执行。现有模型配置、密码、任务定义和授权随卷保留。
+DSH 重启可投递已到期的提醒；投递进度和周期任务的下次运行时间允许正常推进，不属于任务定义变更。
+
+Pocket 固定连接容器内 `127.0.0.1:3080`，entrypoint 将 DSH 监听地址固定为 loopback，
+不接受旧 `DSH_BIND_HOST` 值覆盖。升级时沿用当前部署配置；验收须用 Pocket 密码登录并确认
+`/dsh/api/luoome/profile` 可读取，只有密码页返回 200 不能证明 DSH 上游可用。
 
 **一致性备份**（不要只复制活跃的 `luoome.db` 主文件；WAL 里可能还有未合并数据）：
 
@@ -788,9 +820,9 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 
 ### 13.2 部署注意事项
 
-- 部署应以 HTTPS 为首选。若公网入口只能使用已授权的明文 HTTP 回退，basic auth 与 DSH token 仍然校验，
+- 部署应以 HTTPS 为首选。若公网入口只能使用已授权的明文 HTTP 回退，Pocket 密码与 DSH 会话仍然校验，
   但没有传输加密；不要在不可信网络上传输凭据。
-- DSH 侧栏的三个面板与聊天读同一份数据：面板只做投影，不在浏览器重算数值。
+- DSH 侧栏的五个面板与聊天读同一份数据：面板只做投影，不在浏览器重算数值。
 - 嵌入式 DSH Chat（Node Host + 业务 Cordis 插件）已随托管形态下线，仓库里不再有这条路径。
 - 默认部署已切纯插件：`dsh-web`（Node + DSH + dsh-luoome）与 `caddy` 两个服务，没有 MCP/Bun/
   worker/queue probe 进程；插件 profile 由 `deploy/dsh/profile-seed.mjs` 装配。安装、升级、
@@ -798,6 +830,8 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 - 旧 MCP 过渡形态源码保留但默认不启动；仓库完成隔离切换/回退演练后，生产服务器已于
   2026-10-25 切到纯插件形态（切换记录见服务器 `/opt/luoome/DEPLOYMENT.md`），旧 MCP/Bun
   源码尚未删除（P5）。
+- 线上版本与升级结果保存在对应 release 的 `release-manifest.json`、`deployment-result.json`，
+  升级与回退记录见服务器 `/opt/luoome/DEPLOYMENT.md`；升级保留既有自动任务开关与逐任务授权。
 
 ### 13.3 延伸阅读
 

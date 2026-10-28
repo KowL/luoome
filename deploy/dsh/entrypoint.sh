@@ -17,13 +17,15 @@ export DSH_HOME DSH_WORKSPACE
 
 node /app/deploy/dsh/profile-seed.mjs \
   --plugin "${DSH_PLUGIN_ARTIFACT:-/app/plugin/dsh-luoome.tgz}" \
+  --pocket /usr/local/lib/node_modules/dsh-pocket \
   --profile "$DSH_PROFILE"
 cd "$DSH_WORKSPACE"
 
 case "$ROLE" in
   web)
+    # Pocket 固定代理 loopback；旧 compose 的容器 IP 不能改变这个内部契约。
     exec dsh --profile "$DSH_PROFILE" --no-open \
-      --host "$DSH_BIND_HOST" \
+      --host 127.0.0.1 \
       --port "$DSH_PORT" \
       --public-url "$DSH_PUBLIC_URL" \
       --trusted-host "$DSH_TRUSTED_HOST"
