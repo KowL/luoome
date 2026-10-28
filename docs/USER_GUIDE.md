@@ -573,6 +573,9 @@ Caddy（可从既有镜像里取二进制）。运行期不需要 Bun，也不�
 3. 准备数据面：`/opt/luoome/dsh/{home,luoome-home,workspace}` 分别是 `DSH_HOME`、`LUOOME_HOME`、
    `DSH_WORKSPACE`，属主是系统账号 `luoome`、权限 700。`LUOOME_OWNER_USER_ID` /
    `LUOOME_OWNER_ACCOUNT_ID` 必须对应事实库里既有账户；插件装配失败会拒绝启动，不会回退默认账户。
+   容器期的工作区根是 `/workspace`，工作区记录与历史会话的 `cwd` 都写着这个路径，所以安装器会建
+   `/workspace` → `/opt/luoome/dsh/workspace` 的软链接把旧路径接回去（`WORKSPACE_COMPAT_PATH` 可改）。
+   少了它，历史会话执行时会报 `working-directory: directory does not exist: "/workspace"`。
 4. `sudo systemctl enable --now luoome-dsh luoome-caddy`，然后用 Pocket 密码登录，确认
    `/dsh/api/luoome/profile` 可读取、五个面板与四条技能都在（只有密码页返回 200 不能证明 DSH 上游可用）。
 

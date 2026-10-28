@@ -71,6 +71,28 @@ install -d -m 700 -o "${SERVICE_USER}" -g "${SERVICE_USER}" \
 install -d -m 755 "${DEPLOY_ROOT}" "${DEPLOY_ROOT}/releases" "${DEPLOY_ROOT}/backups"
 install -d -m 700 -o caddy -g caddy "${CADDY_ROOT}/data" "${CADDY_ROOT}/config"
 
+# --- 工作区旧路径兼容 ---
+# 容器期的工作区根是 /workspace：工作区记录与历史会话的 cwd 都写着这个路径，
+# 历史提示里也按这个路径引用文件。数据搬到宿主机后用软链接把旧路径接回去，
+# 不去改写会话日志里的历史路径。
+WORKSPACE_COMPAT_PATH="${WORKSPACE_COMPAT_PATH:-/workspace}"
+link_workspace_path() {
+  if [ -L "${WORKSPACE_COMPAT_PATH}" ]; then
+    if [ "$(readlink -f "${WORKSPACE_COMPAT_PATH}")" != "$(readlink -f "${DSH_WORKSPACE}")" ]; then
+      ln -sfn "${DSH_WORKSPACE}" "${WORKSPACE_COMPAT_PATH}"
+      log "已修正 ${WORKSPACE_COMPAT_PATH} -> ${DSH_WORKSPACE}"
+    fi
+    return
+  fi
+  if [ -e "${WORKSPACE_COMPAT_PATH}" ]; then
+    log "警告：${WORKSPACE_COMPAT_PATH} 已存在且不是软链接，保持原样"
+    return
+  fi
+  ln -sfn "${DSH_WORKSPACE}" "${WORKSPACE_COMPAT_PATH}"
+  log "已建立 ${WORKSPACE_COMPAT_PATH} -> ${DSH_WORKSPACE}"
+}
+link_workspace_path
+
 # --- 部署脚本：仓库的 deploy/dsh 与本目录各拷一份到服务器 ---
 install -m 644 "${DSH_DEPLOY_SOURCE}/pocket-prefix.mjs" "${DEPLOY_ROOT}/deploy/pocket-prefix.mjs"
 install -m 644 "${DSH_DEPLOY_SOURCE}/profile-seed.mjs" "${DEPLOY_ROOT}/deploy/profile-seed.mjs"

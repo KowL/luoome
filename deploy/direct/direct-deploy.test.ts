@@ -146,6 +146,15 @@ describe('安装脚本只做安装面', () => {
   it('插件产物缺失时明确失败，不造假', () => {
     expect(install).toContain(`[ -f "${shellVar('PLUGIN_ARTIFACT')}" ]`);
   });
+
+  it('工作区旧路径要能访问：/workspace 软链接回数据目录', () => {
+    // 历史会话的 cwd 与工作区记录都写着 /workspace；缺了它会话会报
+    // working-directory: directory does not exist: "/workspace"。
+    expect(install).toContain('WORKSPACE_COMPAT_PATH');
+    expect(install).toContain(
+      `ln -sfn "${shellVar('DSH_WORKSPACE')}" "${shellVar('WORKSPACE_COMPAT_PATH')}"`,
+    );
+  });
 });
 
 describe('升级脚本可回滚', () => {
