@@ -170,11 +170,11 @@ describe('research recovery and fact semantics', () => {
     });
     expect(request.prompt).toContain('量比门槛');
     expect(request.prompt).toContain('不自动替换为最新发布版本');
-    expect(request.prompt).toContain('不代表写授权');
+    expect(request.prompt).toContain('明确提出写入意图');
     expect(request.prompt).toContain('缺失数据不计为零');
   });
 
-  it('does not describe a trial diagnosis as a published match or imply write approval', () => {
+  it('does not describe a trial diagnosis as a published match or require write approval', () => {
     const request = stockResearchRequestFor({
       stockId: '600519.SH',
       stockName: '贵州茅台',
@@ -189,7 +189,7 @@ describe('research recovery and fact semantics', () => {
     });
     expect(request.prompt).toContain('本次内存试跑，运行未持久化');
     expect(request.prompt).toContain('未入选或数据不完整');
-    expect(request.prompt).toContain('原生审批确认');
+    expect(request.prompt).toContain('明确提出保存、策略修改或建议写回意图');
     expect(request.prompt).not.toContain('来自策略“量价研究”第 2 版的已发布匹配结果');
   });
 });

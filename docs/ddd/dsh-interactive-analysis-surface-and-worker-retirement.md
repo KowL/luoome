@@ -23,8 +23,8 @@ DSH Node 进程
 └─ dsh-luoome
    ├─ native read surface       只读事实
    ├─ native market surface     精确 external 白名单，刷新市场事实
-   ├─ native analysis surface   交互 context + 经原生审批的 record
-   ├─ native operation surface  策略、DecisionReview、用户反馈的确认写入
+   ├─ native analysis surface   交互 context + 按明确意图直接执行的 record
+   ├─ native operation surface  策略、DecisionReview、用户反馈的直接写入与回执
    ├─ React slots               看板 / 策略 / 复盘
    └─ packaged skills           四类投研对话流程
           ↓
@@ -41,7 +41,7 @@ DSH Node 进程
 - host 只调用 tools/既有操作服务，不直接访问 repository 或复制领域规则。
 - 面板只投影 ToolResult，不在浏览器重算 PnL、统计、发布资格或复盘口径。
 - `record_advice` / `record_analysis_result` 只能用于无 job 的交互 context；claim/complete/fail 等 queue 管理工具不注册到 MVP。
-- Advice、策略发布、DecisionReview 和用户反馈必须经 DSH 原生审批；模型自报的 approved、callId、taskId 或 prompt 都不是授权。
+- 个人版按用户明确意图直接执行 Advice、策略发布、DecisionReview 和用户反馈，不再要求人工审批；模型自报的 approved、callId、taskId 或 prompt 仍不是授权，权限由宿主校验。
 - trade 永不注册；`record_decision_trade` 也不因“人工记账”而进入 MVP。
 
 ## 3. MVP 用户旅程
@@ -55,7 +55,7 @@ DSH Node 进程
 3. 使用既有确定性 schema/validation 校验；
 4. 在显式、有限样本上执行 `trial_strategy_version` 或既有非持久化试跑，不污染 current operational run；
 5. 展示 definition diff、规则解释、样本范围、数据缺口和试跑结果；
-6. 用户通过原生审批确认后创建/发布；
+6. 用户明确提出创建/发布意图后直接执行并保留 Operation 回执；
 7. 策略面板可以回读同一 Strategy 和版本。
 
 MVP 允许的最小操作策略：
@@ -75,7 +75,7 @@ MVP 允许的最小操作策略：
 2. AI 区分执行事实、数据缺口、事后观察和推断，不把观察称为严格回测，不承诺收益；
 3. 结论引用真实 run/version/fact id；
 4. 如果只是解释，对话完成，不强制落库；
-5. 如果形成版本修改，复用 3.1 的草案、校验、试跑和确认路径；可选通过 `record_analysis_result` 保存带来源的 proposal，不得直接发布。
+5. 如果形成版本修改，复用 3.1 的草案、校验、试跑和按明确意图直接执行的路径；可选通过 `record_analysis_result` 保存带来源的 proposal，不得直接发布。
 
 ### 3.3 复盘
 
@@ -84,7 +84,7 @@ MVP 允许的最小操作策略：
 1. 分别读取 Advice 当时快照、DecisionReview 修订、显式关联 Trade、SignalObservation、账户绩效和 confidence calibration；
 2. AI 不根据同股、同日或后市涨跌推断用户跟随，不伪造盈亏；
 3. 用户可以保存复盘笔记，使用已有 `save_decision_review` Operation；
-4. 只有用户明确说明跟随/部分跟随/忽略及实际结果时，才允许通过原生审批调用 `record_advice_outcome`；
+4. 只有用户明确说明跟随/部分跟随/忽略及实际结果时，才允许直接调用 `record_advice_outcome`；
 5. AI 的事后判断质量分析与用户 outcome 是两类信息，不得混写；
 6. 复盘面板展示同一统计口径，并保留样本数、未知和数据缺口。
 
@@ -97,7 +97,7 @@ MVP 允许的最小操作策略：
 3. 读取本地持仓、关注、策略和既有建议作为个人上下文，但不把有限样本推断成全市场事实；
 4. DSH 生成市场分析，明确事实、反证、风险、未知和有效期；
 5. MVP 的日常市场分析可以先保存在 DSH 会话中，不强行为它新建领域实体或伪造 Report；
-6. 如果用户进一步要求形成 Advice，必须另取有效 AnalysisContext，经原生审批调用 `record_advice`，不能直接把聊天文本当 Advice。
+6. 如果用户进一步要求形成 Advice，必须另取有效 AnalysisContext，再直接调用 `record_advice`，不能直接把聊天文本当 Advice。
 
 晨报自动持久化、`save_report` 开放和定时推送不属于本次 MVP 门槛，另立后续任务。
 
@@ -151,7 +151,7 @@ Read 至少覆盖四场景和三面板需要的现有只读工具，包括：
 - `get_analysis_context` 可通过 read surface 调用；
 - record 由 DSH 原生 confirmed operation 包装；
 - prepare 冻结 account、contextId、result、provenance 和 requestId；
-- ApprovalService 展示将保存的结论、证据、反证、风险、有效期和策略影响；
+- 面板与操作回执展示将保存的结论、证据、反证、风险、有效期和策略影响；
 - 执行时再次读取 context，由领域工具校验 contextHash、factIds、写回窗口和不变量；
 - response loss 只核对 context.recordedResult/业务结果，不自动再次推理或写库；
 - 不开放 claim、complete、fail、requeue、cancel、metrics 或任意 job 查询。
@@ -256,7 +256,7 @@ Read 至少覆盖四场景和三面板需要的现有只读工具，包括：
 - 不引用 `luoome-worker`；
 - `record_advice_outcome` 只在用户明确反馈后使用；
 - `save_decision_review` 走原生 Operation；
-- 写 Advice/发布策略前展示冻结内容并等待原生审批；
+- 写 Advice/发布策略前展示冻结内容，按用户明确意图直接执行并保留回执；
 - context 失效时重取一次并重新核对，不重放旧结果。
 
 默认安装不包含 `analysis-worker`，默认 compose/profile 不包含 `dsh-worker`、queue probe、worker interval/prompt。已有队列代码和手动测试可保留，但不属于 MVP 产品路径。

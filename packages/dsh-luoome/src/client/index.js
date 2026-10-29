@@ -64,7 +64,7 @@ const panels = [
 
 /**
  * 「在对话中研究此策略」：记录携带 strategyId/runId 的请求，经官方 layout 服务
- * 导航到会话面板，并把研究提示写入输入框（不自动提交，写操作仍需用户确认）。
+ * 导航到会话面板，并把研究提示写入输入框（不自动提交，仍由用户明确表达操作意图）。
  */
 const openPromptInConversation = (ctx, request, stateKey) => {
   if (typeof window !== 'undefined') {

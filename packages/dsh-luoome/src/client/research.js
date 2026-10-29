@@ -816,7 +816,7 @@ function ResearchWorkbenchBody({
                 disabled: locked || !trialReady || definitionDirty,
                 onClick: () => operation.prepare('trial_strategy_version', trialInput),
               },
-              '准备同快照试跑',
+              '执行同快照试跑',
             ),
             !trialReady
               ? h(
@@ -939,7 +939,7 @@ function ResearchWorkbenchBody({
                       : {}),
                   }),
               },
-              '准备有界候选对照',
+              '执行有界候选对照',
             ),
             Boolean(form.trainingSessionId) !== Boolean(form.validationSessionId)
               ? h(
@@ -1130,7 +1130,7 @@ function ResearchWorkbenchBody({
                     form.from > form.to,
                   onClick: () =>
                     research(
-                      '请按当前已保存的版本、范围与区间建立或继续历史选股评估，先核对已有 session 防止重复；启动与推进都经原生审批。',
+                      '请按当前已保存的版本、范围与区间建立或继续历史选股评估，先核对已有 session 防止重复；启动与推进按我的明确意图直接执行。',
                     ),
                 },
                 '在对话中讨论验证方案',
@@ -1157,7 +1157,7 @@ function ResearchWorkbenchBody({
                       ...(stockIds.length ? { stockIds } : {}),
                     })),
                 },
-                '准备历史选股评估',
+                '执行历史选股评估',
               ),
               h(Refresh, {
                 loading: sessions.loading || validation.loading,
@@ -1182,7 +1182,7 @@ function ResearchWorkbenchBody({
                 })
               : h(Empty, {
                   title: '没有选定历史任务',
-                  hint: '已有任务可跨日恢复；新任务需要显式确认。',
+                  hint: '已有任务可跨日恢复；新任务会直接建立。',
                 }),
           ),
           h(StrictBacktests, { runs: context?.strictBacktests }),
@@ -1191,7 +1191,7 @@ function ResearchWorkbenchBody({
             {
               onClick: () =>
                 research(
-                  '请核对当前候选是否具备严格组合回测的数据门禁，逐项报告 PIT、历史修订、费用、滑点、可交易性、公司行动与基准缺口；完整数据可用时再准备需审批的回测操作。',
+                  '请核对当前候选是否具备严格组合回测的数据门禁，逐项报告 PIT、历史修订、费用、滑点、可交易性、公司行动与基准缺口；完整数据可用时再直接执行回测操作。',
                 ),
             },
             '在对话中核对严格回测门禁',
@@ -1543,7 +1543,7 @@ function ResearchWorkbenchBody({
         { className: 'luo-fine' },
         definitionDirty
           ? '规则修改还未形成候选版本；先保存候选，再保存研究上下文。'
-          : '保存问题、版本选择、常用范围与未完成研究。每次保存均需核对确认。',
+          : '保存问题、版本选择、常用范围与未完成研究。点击后直接保存并返回操作回执。',
       ),
       h(
         'div',
@@ -1642,16 +1642,7 @@ export function ResearchOnboarding({ onResearch }) {
           'ol',
           { className: 'luo-evidence-layers' },
           read.data.steps.map((step) =>
-            h(
-              'li',
-              { key: step.action },
-              h(
-                'div',
-                null,
-                h('strong', null, step.title),
-                step.requiresApproval ? h(Pill, null, '需确认') : null,
-              ),
-            ),
+            h('li', { key: step.action }, h('div', null, h('strong', null, step.title))),
           ),
         )
       : null,

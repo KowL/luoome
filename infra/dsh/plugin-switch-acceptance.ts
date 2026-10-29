@@ -751,9 +751,8 @@ process.stdout.write('seeded');
   )
     throw new Error(`list_accounts did not return the isolated fact: ${JSON.stringify(accounts)}`);
 
-  // 3d) 一条宿主确认写入（隔离库）：prepare 冻结输入 → 一次性 confirmation token → confirm。
-  // 这是 DSH 客户端操作表单的 production 路径；模型侧原生 AgentLoop allowed-once 审批由
-  // packages/dsh-luoome/src/host/dsh-authority.e2e.test.ts / MVP journeys 覆盖。
+  // 3d) 一条个人直接写入（隔离库）：prepare 冻结输入并立即执行。
+  // 模型侧零审批原生 AgentLoop 由 dsh-authority.e2e.test.ts / MVP journeys 覆盖。
   const operationId = randomUUID();
   const prepared = await postOperation(firstOrigin, firstCookie, '/api/luoome/operations/prepare', {
     id: operationId,
@@ -767,24 +766,10 @@ process.stdout.write('seeded');
     state?: string;
     confirmationToken?: string;
   };
-  const confirmationToken = preparedData.confirmationToken;
-  if (
-    prepared.status !== 200 ||
-    preparedData.state !== 'pending' ||
-    typeof confirmationToken !== 'string'
-  )
-    throw new Error(
-      `prepare did not freeze a pending operation: ${JSON.stringify(prepared.value)}`,
-    );
-  const confirmed = await postOperation(
-    firstOrigin,
-    firstCookie,
-    `/api/luoome/operations/${operationId}/confirm`,
-    { token: confirmationToken },
-  );
-  const confirmedState = (confirmed.value.data as { state?: string } | undefined)?.state;
-  if (confirmed.status !== 200 || confirmedState !== 'succeeded')
-    throw new Error(`confirm did not commit the operation: ${JSON.stringify(confirmed.value)}`);
+  if (prepared.status !== 200 || preparedData.state !== 'succeeded')
+    throw new Error(`direct operation did not commit: ${JSON.stringify(prepared.value)}`);
+  if (preparedData.confirmationToken !== undefined)
+    throw new Error('direct operation must not require a confirmation token');
   const strategies = await readApi(firstOrigin, firstCookie, 'list_strategies', {});
   const strategyRows = (strategies.data as { strategies?: { name?: string; id?: string }[] })
     ?.strategies;
@@ -933,13 +918,13 @@ process.stdout.write('seeded');
         via: 'host-authenticated /api/luoome/call',
         ...accountData,
       },
-      approvedWrite: {
+      directWrite: {
         tool: 'create_strategy',
-        path: 'prepare → one-time confirmation token → confirm（production 操作表单路径）',
-        nativeApproval:
-          '模型侧 allowed-once 审批由 dsh-authority.e2e.test.ts / MVP journeys 覆盖，本演练不驱动模型',
+        path: 'prepare → immediate execution（production 操作表单路径）',
+        personalExecution:
+          '模型侧零审批原生 AgentLoop 由 dsh-authority.e2e.test.ts / MVP journeys 覆盖，本演练不驱动模型',
         operationId,
-        state: confirmedState,
+        state: preparedData.state,
         strategyId: writtenStrategyId,
         readableViaReadTool: true,
         genericCallWriteDeniedStatus: deniedWrite.status,

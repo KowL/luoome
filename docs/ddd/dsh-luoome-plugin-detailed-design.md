@@ -80,7 +80,7 @@ DSH 传输错误/取消与领域业务错误分别呈现。原生模式与 PTC �
 
 ### 4.2 HTTP
 
-`mountDshWebProfile` 在现有 WebServer 上注册 `/api/luoome` 前缀，每次请求先调用真实 `Connection.admit` 校验浏览器 cookie、Host/Origin，并只允许 owner Peer；没有 Connection/WebServer/SessionController/ApprovalService 时拒绝装配。当前单机 owner 由受信任装配绑定业务账户，HTTP 不接受身份或账户提升。POST 还必须提供匹配监听器协议及已准入 Host 的 Origin，不信任 X-Forwarded-*。所有响应 no-store，错误不返回路径、凭据或原始异常。
+`mountDshWebProfile` 在现有 WebServer 上注册 `/api/luoome` 前缀，每次请求先调用真实 `Connection.admit` 校验浏览器 cookie、Host/Origin，并只允许 owner Peer；没有 Connection/WebServer/SessionController 时拒绝装配。当前单机 owner 由受信任装配绑定业务账户，HTTP 不接受身份或账户提升。POST 还必须提供匹配监听器协议及已准入 Host 的 Origin，不信任 X-Forwarded-*。所有响应 no-store，错误不返回路径、凭据或原始异常。
 
 固定 SDK 的 Fetch bridge 会把 URL 改成 `http://dsh.internal`，且 streaming GET 会构造非法请求。因此使用官方 WebServer 原生路由及 Connection 准入，不复制认证。POST 流式读取最多 64 KiB；超限或提前拒绝时先完成响应，再关闭未读入站流，避免取消请求流把 413 响应套接字一起销毁。GET 不构造请求体。当前验收覆盖 loopback HTTP 直连；TLS/跨协议反代仍需目标环境验收，不从转发头猜测 origin。
 
@@ -136,21 +136,21 @@ executing / unknown ─核对匹配的业务回执→ succeeded
 
 DSH 会先 followup 唤醒 Agent，再 flush 会话并持久化投递回执；适配器订阅真实 `schedule/changed`，最多等两秒完成关联。等待中没有副作用；取消、超时或卸载均拒绝。真正执行前再次核验宿主元数据，操作认领事务再检查最新 grant 版本、启停、账户、输入摘要与组合能力。
 
-### 5.4 真实 DSH 审批与执行
+### 5.4 个人版直接执行
 
 `createDshOperationHost` 注册 `luoome_confirmed_operation` 与 `luoome_scheduled_operation`，这两个是宿主包装入口，不是新增领域 registry 工具。前者接收 `{id,tool,input}`，后者只接 `{grantId,grantVersion,tool,accountId,input}`，拒绝客户端携带任务身份或发生标识。
 
-人工入口在 `tools/pre-execute` 中准备持久操作，直接调用真实 `ApprovalService.request`，保留 asked/decided 会话审计及精确 callId 关联。审批理由包含服务器冻结后的账户、完整参数、操作 ID 与到期时间。只有 allowed-once 才签发本次 execution token 对应的私有凭据；凭据不返回模型。采用显式请求而非仅返回 ask，是为了让单调 `tools.guard` 和最终 handler 都能校验自己的凭据，避免后续 waterfall listener 将 ask 改成 allow 后绕过确认。其他 deny/cancel 继续生效；已有 ask 的理由合并进当前确认。
+当前产品是单 owner 个人版，不再调用 `ApprovalService.request`。人工入口在 `tools/pre-execute` 中准备持久操作后直接签发本次 execution token 对应的私有凭据，由 handler 完成内部 confirm；凭据不返回模型。单调 `tools.guard`、冻结输入、账户绑定、CAS 和 Operation 回执继续生效。HTTP prepare 也在冻结后立即执行并返回最终回执，不要求浏览器二次确认。
 
-拒绝、无答复渠道、never 策略、取消和审批审计失败均无业务写入，结束的未过期准备记录尝试取消。官方 Web transport 在没有附着审批客户端时可继续等待答复，此时保持 pending；HTTP 测试经官方 SessionController.cancel 取消，不能把等待当成批准。批准绑定被冻结的入参与账户；切换账户、子 Agent、无 Agent、卸载后的旧入口和晚到答复不能执行。取消后不以 Promise.race 掩盖仍在运行的业务。
+插件 read/market/status/catalog/research 工具及 luoome 流程使用的 `schedule_create`、`schedule_list` 覆盖宿主 ask 为 allow；明确 deny/cancel 继续生效，日程工具要求 live top-level owner。取消、账户变化、子 Agent、无 Agent 和卸载后的旧入口仍不能执行，取消后不以 Promise.race 掩盖仍在运行的业务。
 
-自动入口还要求显式 `automationsEnabled=true`，默认 false，值在装配时冻结；开启标记不替代 grant 或投递证明。宿主生命周期结束会撤销凭据并取消未决审批。**本轮只在临时测试宿主开启验证，没有修改生产 profile、现有提醒或部署启用状态。**
+自动入口还要求显式 `automationsEnabled=true`，默认 false，值在装配时冻结；开启标记不替代 grant 或投递证明。宿主生命周期结束会撤销凭据并取消未决操作。
 
-原生模式与真实 Node PTC 内层调用共用这些入口和 guard。PTC 实际使用 SDK 的 Node 执行器及只读文件策略，未通过删除权限或切换宽松模式取得测试通过。另有完整官方 Web profile 验收，直接使用 SessionController、Connection、Remote Events 和官方审批组件，不注入审批 answerer 或会话解析替身。
+原生模式与真实 Node PTC 内层调用共用这些入口和 guard。PTC 实际使用 SDK 的 Node 执行器及只读文件策略，未通过删除权限或切换宽松模式取得测试通过。完整官方 Web profile 验收使用 SessionController、Connection 和 Remote Events，不再注入审批 answerer。
 
 ## 6. 调度与分析生产/消费
 
-DSH schedule 是会话提醒服务，不是业务回调。链路为：创建/核对宿主提醒 → 人工确认该任务的持久授权 → 恢复指定会话 → Agent 调受控包装入口 → 投递/授权校验 → batch/领域租约与周期键 → WorkflowRun。提醒成功不代表业务成功，补跑看业务回执，不能仅看 schedule_list。
+DSH schedule 是会话提醒服务，不是业务回调。链路为：创建/核对宿主提醒 → 按明确意图直接配置任务持久授权 → 恢复指定会话 → Agent 调受控包装入口 → 投递/授权校验 → batch/领域租约与周期键 → WorkflowRun。提醒成功不代表业务成功，补跑看业务回执，不能仅看 schedule_list。
 
 五个 batch 当前仅声明 write，迁移时 wrapper、profile、权限测试一起补 write + external。时间统一 Asia/Shanghai。盘中 batch 的既有 09:05 cron 在 09:30 开市前必跳过，需要改为合法盘中时间并明确与周期盯盘分工，禁止靠 force 绕过。
 
@@ -231,7 +231,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 
 固定研究 GET 接口沿用 DSH admission、owner、Host/Origin、no-store 与严格参数校验；读面仅精确
 白名单，持久操作仍逐项经过原生 Operation。自然语言入口复用官方 Session Controller，携带当前
-策略/版本/研究问题；讨论文本不是写授权。安装、原生审批、旅程和桌面/390px 浏览器验收均使用
+策略/版本/研究问题；讨论文本不是写授权。安装、原生操作、旅程和桌面/390px 浏览器验收均使用
 临时 DSH_HOME、合成事实库与脚本模型；不能由此宣称真实供应商历史或模型质量已通过验收。
 
 ## 9. 实施切片与验收
@@ -254,7 +254,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 - 共享 exposure 与只读内核保留；完整输入 schema 原样注册，原生执行校验及 PTC 类型投影验证通过。
 - `plugin-authority` core/repository、memory/drizzle、Drizzle schema 与启动 DDL 同步。合约覆盖并发认领、同键冲突、fencing、账户/用户/过期/能力/版本拒绝、撤销、两连接与重开后二次迁移。
 - `plugin-operations.ts` 实现 prepare/confirm/cancel/get/reconcile、精确 grant 与定时去重；`decision-review-operation.ts` 接原业务回执。HTTP handler 复用有界 JSON/Origin 校验，认证 principal 必须由宿主提供。
-- `dsh-identity.ts` 与 `dsh-authority.ts` 接真实 ScheduleService/ApprovalService/ToolRuntime；审批私有凭据、投递历史关联、任务定义指纹及默认关闭行为均有端到端负例。
+- `dsh-identity.ts` 与 `dsh-authority.ts` 接真实 ScheduleService/ToolRuntime；执行私有凭据、投递历史关联、任务定义指纹及默认关闭行为均有端到端负例。
 - `test:dsh-luoome` 运行 Node/Vitest 组及 Bun 端到端组；`test:all` 纳入端到端入口。Bun SQLite 测试由 Bun 执行；SDK Node PTC 依赖 `node:module.stripTypeScriptTypes`，因此 PTC 集成由真正的 Node/Vitest 执行，不对 Bun 打补丁。
 - `dsh-authority.e2e.test.ts` 使用真实 AgentLoop、SessionStore、ScheduleService、ApprovalService、JSON 调度存储、JSONL 会话持久化和临时 SQLite 业务库；覆盖投递、合并提醒、回执竞态、防重、拒绝/取消、定义变更/撤销、子 Agent、跨会话、重启和响应丢失恢复。
 - `dsh-ptc.integration.test.ts` 使用真实只读 Node PTC 执行器与同一宿主链路，覆盖批准、重复定时内调用、普通会话重放和拒绝。该组业务仓储使用 memory，不能替代 Node SQLite 合约；SQLite 及双实现语义由 Bun 合约和持久化端到端组验证。
@@ -343,7 +343,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 > 需求来源：需求文档 §3、§8。本切片只产出技能内容与内容校验；注册/打包接线在后续 M3/M4 切片完成。
 
 - `packages/dsh-luoome/skills/` 新增四个纯插件投研技能：`strategy-lab`（读策略/版本/DSL/数据健康 → 未持久化草案 → 确定性校验 → 有限样本试跑 → 展示 diff/规则/样本/缺口/试跑结果 → 逐项原生审批 create/version/validate/publish，创建与校验不隐含发布）、`strategy-result-review`（published operational run/结果/信号/观察/insight facts 分层解释，结论引用真实 run/version/fact id，不把观察称严格回测、不承诺收益；只解释不落库；改版走 strategy-lab；可选经审批保存 proposal）、`post-close-review`（Advice 快照、DecisionReview、显式 Trade、观察、绩效、校准分写；不按同股/同日/后市涨跌推断跟随、不伪造盈亏；复盘笔记经原生 Operation，仅用户明确反馈后经 record_advice_outcome 审批，AI 不代填 outcome）、`daily-market-analysis`（经精确 market external 刷新指数/情绪/要闻/行情 + 本地事实，保留 source/dataAsOf/unavailable/partial；个人上下文不推断全市场；日常留会话不伪造 Report；形成 Advice 需另取有效 AnalysisContext 并审批）。
-- **内容约束**：四技能不含 `mcp__`/`luoome-worker`/队列管理工具，工具名与 `packages/tools/src/registry.ts` 对账；所有写入统一经 `luoome_confirmed_operation` 原生审批；模型自报 approved/callId/taskId 不构成授权；context 失效重取一次并重新核对、不重放；trade 永不调用。
+- **内容约束**：四技能不含 `mcp__`/`luoome-worker`/队列管理工具，工具名与 `packages/tools/src/registry.ts` 对账；所有写入统一经 `luoome_confirmed_operation` 直接执行（个人版零人工审批）；模型自报 approved/callId/taskId 不构成授权；context 失效重取一次并重新核对、不重放；trade 永不调用。
 - **校验**：`packages/dsh-luoome/src/host/skills-content.test.ts`（7 项）验证四目录/frontmatter/工具名副作用对账/无 MCP 前缀/审批与 outcome 约束/四旅程覆盖点/context 与 trade 边界。`bun --no-env-file x vitest run packages/dsh-luoome` 10 文件 77 项通过；typecheck/lint/`git diff --check` 通过。
 - **未覆盖/遗留**：技能注册（`ctx.skills.register`）、`package.json files` 与安装路径纳入后续 M3 接线/M4 打包；`fetch_news` 分类修正后每日市场分析技能需确认其可达性；旧 `.dsh/skills` 保留至 P5 退役。
 
@@ -354,7 +354,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 - **能力门控**：`createPluginOperationService` 允许受信任装配显式开启 `queue`，仅用于精确 analysis policy；含 queue 的 policy 在装配未开启 queue 时直接拒绝，trade 永久拒绝；通用 `/api/luoome/call` 仍是 read surface，不因 policies 变成写入口。core `PluginCapabilitySchema` 增加 `queue`，使 record_* 的 `['queue']` 能力可持久化（不含 trade）。
 - **两条 policy**：`analysis-operations.ts` 新增 `recordAdviceOperation`（`record_advice`）与 `recordAnalysisResultOperation`（`record_analysis_result`）。prepare 用 principal.accountId 覆盖并冻结 accountId，requestId 强制等于 operationId，冻结 contextId/result/provenance；confirm 时领域 record 工具以账户重新读取 context，自行校验 contextHash、证据引用、时效与不变量；reconcile 只凭 `context.recordedResult.hash/ref` 核对业务回执（Advice 或 publication resultRef），不重放 handler/不重新推理；重放返回既有结果且不重复写库。
 - **Provenance**：generatorKind 由生产装配固定 `dsh-chat` 并强制覆盖；客户端自报的 model/skillVersion/promptHash/sessionRef 全部丢弃，宿主无可信元数据时保持未知。模型自报的 approved/callId/taskId 不作为授权或来源；生成时间与 jobId/contextId 由领域工具填写。审批 reason 展示冻结账户、operation id、有效期与完整冻结参数（结论/证据/反证/风险），无伪造 approved。
-- **生产接线**：`createProductionOperationPolicies()` = DecisionReview + 两条 record policy，与 `capabilities: ['read','write','external','queue']` 一起传入 `mountDshWebProfile`；写工具只经 `luoome_confirmed_operation` 原生审批执行，不注册 claim/complete/fail/queue 管理/settings/batch/trade。
+- **生产接线**：`createProductionOperationPolicies()` = DecisionReview + 两条 record policy，与 `capabilities: ['read','write','external','queue']` 一起传入 `mountDshWebProfile`；写工具只经 `luoome_confirmed_operation` 直接执行，不注册 claim/complete/fail/queue 管理/settings/batch/trade。
 - **测试/验收**：`analysis-operations.test.ts` 10 项（冻结/防旋转/同键异参、confirm 写一次、重放与 reconcile 幂等、过期 context 不写、取消/跨账户/过期 operation 不写、response-loss 恢复且 handler 只执行一次、publication 成功/失败/重放、queue 门控与 trade 拒绝）；`production.test.ts` 16 项；审批层拒绝/子 Agent/晚到审批仍由既有 `dsh-authority.e2e.test.ts` 覆盖。`test:dsh-luoome` 88 项 + 12 e2e、`test` 278 文件/2613 项、`test:db` 601 项、typecheck/lint/check:layers/test:plugin-install/git-diff 全通过。plugin-install 扩展为 policies 非空且与安装产物一致、`automationsEnabled:false`、`/call` 对 record/decision/market/queue 管理工具全部 403、未审批 prepare 保持 pending 且无 Advice 写入、取消后仍无写入。
 - **未覆盖/遗留**：M2b-2（`record_advice_outcome`、策略 create/validate/publish、`configure_plugin_automation` 可写策略与定时授权、真实 DSH 审批 UI 端到端）、market 工具模型侧真实调用验收、M3b 技能注册、M4 三面板、M5 默认部署切换。
 
@@ -362,7 +362,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 
 > 需求来源：需求文档 §3.1/§3.2/§3.3、§4.4、§9(M2)、§10.2/§10.3。补齐策略生命周期与用户反馈的原生确认写面；M2b-1 的 record policies 保持不变。
 
-- **新增 5 条独立 policy**（`packages/dsh-luoome/src/host/strategy-operations.ts`）：`create_strategy`（无显式 id 时冻结为 `strategy-<operationId>` 便于回执核对）、`create_strategy_version`、`validate_strategy_version`、`publish_strategy_version`、`record_advice_outcome`。全部 `scheduled:false`、`sideEffect:'write'`、`requiredCapabilities:['write']`，只经一次性人工原生审批执行；prepare 冻结 owner/account/输入/过期，剥离客户端 `approved/callId/taskId`，拒绝替换 accountId/requestId。
+- **新增 5 条独立 policy**（`packages/dsh-luoome/src/host/strategy-operations.ts`）：`create_strategy`（无显式 id 时冻结为 `strategy-<operationId>` 便于回执核对）、`create_strategy_version`、`validate_strategy_version`、`publish_strategy_version`、`record_advice_outcome`。全部 `scheduled:false`、`sideEffect:'write'`、`requiredCapabilities:['write']`，只经 `luoome_confirmed_operation` 直接执行；prepare 冻结 owner/account/输入/过期，剥离客户端 `approved/callId/taskId`，拒绝替换 accountId/requestId。
 - **审批语义**：create/version/validate/publish 各自独立审批，create 或 validate 通过不隐含 publish；publish 的 token 不能用于其他操作；对未 validate 版本 publish 被领域拒绝；`record_advice_outcome` 缺 outcome 无法 prepare（模型不能省略再让工具推断），用户反馈的「明确性」由宿主 allowed-once 审批保证，policy 只保证输入显式冻结 + 人工批准。
 - **回执/恢复**：publish response loss 按 `publishedAt + currentVersionId` 核对恢复 succeeded 且只执行一次；`record_advice_outcome` 按 decision review write receipt 恢复，commit 只一次；重复 confirm 不重复 revision。策略 create/version/validate/copy 回执亦纳入核对。
 - **接线与隔离**：`createProductionOperationPolicies()` = DecisionReview + 2 条 analysis record + 5 条策略/outcome = 8 条 policies，`capabilities:['read','write','external','queue']`；read/market 只读边界、generic `/api/luoome/call` 只读、queue 管理工具与 trade 不可达不变。策略回读用 `get_strategy` 等只读工具（M4 面板再补 diff/样本预览展示）。

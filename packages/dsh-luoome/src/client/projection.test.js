@@ -105,7 +105,7 @@ describe('client panel state projection', () => {
     expect(request.prompt).not.toContain(request.strategyId);
     expect(request.prompt).not.toContain(request.runId);
     expect(request.prompt).toContain('缺失或过期数据');
-    expect(request.prompt).toContain('先让我确认');
+    expect(request.prompt).toContain('明确提出保存建议');
   });
 
   it('does not infer user follow-up: outcome only comes from explicit advice.outcome', () => {
@@ -364,10 +364,10 @@ describe('client panel state projection', () => {
     // 两层调度：StrategySchedule 只决定到期，必须由 DSH 定时任务执行日周期才真正运行。
     expect(request.prompt).toContain('StrategySchedule');
     expect(request.prompt).toContain('run_strategy_daily_cycle');
-    // 禁止绕过编排与未确认写入。
+    // 禁止绕过编排或在用户未提出意图时写入。
     expect(request.prompt).toContain('不要直接调用 run_strategy');
     expect(request.prompt).toContain('不要自动创建重复日程或自动发布');
-    expect(request.prompt).toContain('先让我逐项确认');
+    expect(request.prompt).toContain('明确提出调度、暂停、恢复、订阅或任务授权意图');
     const fallback = strategyOperationRequestFor('strategy-x');
     expect(fallback.strategyId).toBe('strategy-x');
     expect(fallback.prompt).toContain('所选策略');

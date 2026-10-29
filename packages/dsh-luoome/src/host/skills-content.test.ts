@@ -183,7 +183,7 @@ describe('dsh-luoome 打包技能内容', () => {
       expect(skill.frontmatter.get('description')?.length ?? 0).toBeGreaterThan(10);
       expect(skill.frontmatter.get('whenToUse')?.length ?? 0).toBeGreaterThan(5);
       const version =
-        skill.dir === 'strategy-lab' || skill.dir === 'strategy-result-review' ? 3 : 1;
+        skill.dir === 'strategy-lab' ? 4 : skill.dir === 'strategy-result-review' ? 3 : 1;
       expect(skill.body).toContain(`本技能版本：${skill.dir}-v${version}`);
       expect(skill.body.length).toBeGreaterThan(800);
     }
@@ -211,7 +211,7 @@ describe('dsh-luoome 打包技能内容', () => {
     }
   });
 
-  it('反引号里的 snake_case 名字都真实存在于 registry（或为原生审批入口/时效错误值）', () => {
+  it('反引号里的 snake_case 名字都真实存在于 registry（或为个人操作入口/时效错误值）', () => {
     const backticked = /`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g;
     for (const skill of skills()) {
       for (const match of skill.content.matchAll(backticked)) {
@@ -225,10 +225,10 @@ describe('dsh-luoome 打包技能内容', () => {
     }
   });
 
-  it('写入一律经 DSH 原生审批，且禁止模型自报授权', () => {
+  it('写入按明确意图直接执行，且禁止模型自报授权', () => {
     for (const skill of skills()) {
-      expect(skill.content, `${skill.dir} 未说明原生审批`).toContain(NATIVE_OPERATION_TOOL);
-      expect(skill.content, `${skill.dir} 未说明审批`).toContain('原生审批');
+      expect(skill.content, `${skill.dir} 未说明个人操作入口`).toContain(NATIVE_OPERATION_TOOL);
+      expect(skill.content, `${skill.dir} 未说明零人工审批`).toContain('没有人工审批');
       expect(skill.content, `${skill.dir} 未禁止自报 approved`).toContain('approved');
       expect(skill.content, `${skill.dir} 未禁止自报 callId`).toContain('callId');
       expect(skill.content, `${skill.dir} 未禁止自报 taskId`).toContain('taskId');
@@ -244,7 +244,7 @@ describe('dsh-luoome 打包技能内容', () => {
     expect(lab).toContain('validate_strategy_version');
     expect(lab).toContain('publish_strategy_version');
     expect(lab).toContain('trial_strategy_version');
-    expect(lab).toMatch(/独立审批|单独审批/);
+    expect(lab).toMatch(/按明确意图直接执行|明确要求发布/);
     expect(lab).toContain('不隐含发布');
     expect(lab).toContain('set_strategy_schedule');
     expect(lab).toContain('run_strategy_daily_cycle');

@@ -130,13 +130,13 @@ function OperationsPanel() {
     h(
       'header',
       null,
-      h('p', { className: 'luoome-eyebrow' }, 'LUOOME / 操作确认'),
-      h('h1', { id: 'luoome-operations-title' }, '每次写入，先核对。'),
+      h('p', { className: 'luoome-eyebrow' }, 'LUOOME / 操作执行'),
+      h('h1', { id: 'luoome-operations-title' }, '个人操作，直接执行。'),
       h('p', null, profile ? `当前账户 ${profile.accountId}` : '正在读取账户…'),
       h(
         'span',
         { className: 'luoome-status' },
-        profile?.automationsEnabled ? '此验证环境允许调度' : '自动任务未启用',
+        profile?.automationsEnabled ? '此环境允许调度' : '自动任务未启用',
       ),
     ),
     h(
@@ -150,8 +150,8 @@ function OperationsPanel() {
             prepare();
           },
         },
-        h('h2', null, '准备操作'),
-        h('p', null, '提交后仅冻结参数。核对右侧内容，再逐次确认写入。'),
+        h('h2', null, '执行操作'),
+        h('p', null, '提交后直接执行，右侧展示冻结参数与完整回执。'),
         h(
           'label',
           null,
@@ -184,7 +184,7 @@ function OperationsPanel() {
             type: 'submit',
             disabled: busy || !profile || (operation?.state === 'pending' && !expired),
           },
-          busy ? '处理中…' : '准备并核对',
+          busy ? '处理中…' : '执行并核对',
         ),
       ),
       h(
@@ -198,7 +198,7 @@ function OperationsPanel() {
               h(
                 'p',
                 { className: 'luoome-state' },
-                expired ? '确认已过期' : (states[operation.state] ?? operation.state),
+                expired ? '操作已过期' : (states[operation.state] ?? operation.state),
               ),
               h(
                 'dl',
@@ -211,7 +211,7 @@ function OperationsPanel() {
                 h('dd', null, new Date(operation.expiresAt).toLocaleString()),
               ),
               h('pre', { tabIndex: 0 }, JSON.stringify(operation.input, null, 2)),
-              expired && h('p', null, '确认已过期，可重新准备。'),
+              expired && h('p', null, '操作已过期，可重新执行。'),
               operation.state === 'pending' &&
                 !expired &&
                 (token
@@ -221,7 +221,7 @@ function OperationsPanel() {
                       h(
                         'button',
                         { type: 'button', disabled: busy, onClick: () => settle('confirm') },
-                        '确认本次写入',
+                        '执行本次写入',
                       ),
                       h(
                         'button',
@@ -237,7 +237,7 @@ function OperationsPanel() {
                   : h(
                       'p',
                       null,
-                      '本页没有原确认凭据，无法继续确认。可回到原页面取消，或等此操作过期后重新准备。',
+                      '本页没有原执行凭据。可回到原页面处理，或等此操作过期后重新执行。',
                     )),
               ['executing', 'unknown'].includes(operation.state) &&
                 h(
@@ -253,7 +253,7 @@ function OperationsPanel() {
                   h('pre', { tabIndex: 0 }, JSON.stringify(operation.result, null, 2)),
                 ),
             )
-          : h('p', null, '尚未准备操作。这里将显示服务器冻结的参数。'),
+          : h('p', null, '尚未执行操作。这里将显示服务器冻结的参数。'),
       ),
     ),
     h(
@@ -286,7 +286,7 @@ function OperationsPanel() {
     h(
       'p',
       { className: 'luoome-footnote' },
-      '仅处理已开放的复盘和授权操作。投资建议不等于交易指令。模型发起的操作仍需在对话中的 DSH 审批卡逐次确认。',
+      '仅处理已开放的复盘和授权操作。个人版按明确意图直接执行并保留回执；投资建议不等于交易指令。',
     ),
   );
 }
@@ -302,7 +302,7 @@ export function apply(ctx) {
   );
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
-      { name: 'sidebar.panellist', id: 'luoome-operations', order: 21, label: () => '操作确认' },
+      { name: 'sidebar.panellist', id: 'luoome-operations', order: 21, label: () => '操作执行' },
       () => h('span', { 'aria-hidden': true }, '✓'),
     ),
   );

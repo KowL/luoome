@@ -1,7 +1,7 @@
 // dsh-luoome 可安装插件的 host 入口（M1c 空壳，需求 §6.3）。
 //
 // 生产 apply 直接复用 task-6 的 composition root：Node SQLite + 真实 adapters + 真实只读/市场
-// 工具 + 宿主认证路由 + M2b 的原生确认写回 policies。owner、LUOOME_HOME 与 adapters env 全部
+// 工具 + 宿主认证路由 + 个人版直接执行的写回 policies。owner、LUOOME_HOME 与 adapters env 全部
 // 来自受信任部署环境，不接受 HTTP/模型参数提升。M3b 起随包注册四个投研技能；M4 起
 // 提供宿主认证的 GET /api/luoome/state?panel=overview|strategies|review 与随包 client bundle。
 import type { Context } from '@deepseek-ai/cordis';

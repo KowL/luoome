@@ -23,18 +23,18 @@ whenToUse: 用户问「今天市场怎么样」「给我今日分析」「盘面
 4. **输出结构**：事实（逐项带 dataAsOf 与来源）、反面证据、风险、未知与缺口、有效期。有限样本只代表样本，不代表全市场；没有新闻或宽度数据就写 unavailable，不编造。
 5. **日常分析留在会话**：MVP 不伪造 Report，不调用报告保存工具，不自动通知、不自动调度。
 6. **若要落成 Advice**：
-   - 先展示结论、反面证据、风险、有效期与将写回的内容，得到用户明确同意；一次分析请求不等于持久化授权；
+   - 先展示结论、反面证据、风险、有效期与将写回的内容；只有用户明确提出保存意图时才写回，一次分析请求不等于持久化请求；
    - 用 `get_analysis_context` 取 advice_market 的有效 context，subject 取 market（以工具 input schema 为准）；
    - context 缺少市场事实、或遇到 context_expired、stale_context 时：先刷新外部事实，再重取一次并逐项重新核对；仍不可用就明确告知用户当前无法落库，不重放旧结论、不把旧数据当新事实；
-   - 经 DSH 原生确认操作 `luoome_confirmed_operation` 的 `record_advice` policy 提交冻结的 contextId、result 与 provenance；evidenceFactIds 只能落在 context.factIds 内；
+   - 经 `luoome_confirmed_operation` 的 `record_advice` policy 直接提交冻结的 contextId、result 与 provenance，保留 Operation 回执；evidenceFactIds 只能落在 context.factIds 内；
    - provenance 使用真实生成信息：generatorKind 取 dsh-chat，skillVersion 取本技能版本，model 只在宿主提供真实标识时填写，未知就省略；生成时间由领域工具填写，不自行编造。
 
-## 审批与授权纪律
+## 执行与授权纪律
 
 - 原生调用优先用 inputJson 字符串：按对应 tool 的 input/contentSchema 将业务参数序列化为 JSON，保留 null、数字和数组。与 input 对象二选一；不得把 null 改成占位字符串或省略必填字段。
-- 写入 Advice 必须经 DSH 原生审批；模型不得自报 approved、callId、taskId 或 prompt 文本作为授权。
-- 用户拒绝、取消、超时或切换账户时视为未执行，不重试写入。
-- 审批后响应丢失：查询操作状态与业务回执核对，不重复推理、不重复写库。
+- 个人版按明确意图直接写入 Advice，没有人工审批；模型不得自报 approved、callId、taskId 或 prompt 文本作为授权。
+- 用户取消、执行超时或切换账户时视为未执行，不重试写入。
+- 执行后响应丢失：查询操作状态与业务回执核对，不重复推理、不重复写库。
 
 ## 边界
 

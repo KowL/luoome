@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Context } from '@deepseek-ai/cordis';
 import { ToolCallId } from '@deepseek-ai/dsh-llm/brand';
 import { type ToolExecution, ToolRuntime } from '@deepseek-ai/dsh-tools';
-import { createPluginOperationService, decisionReviewOperation } from '@luoome/tools';
+import {
+  createPluginOperationService,
+  decisionReviewOperation,
+  getDecisionReviewContextTool,
+} from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { createOperationHandler, createScheduledOperationInvoker } from './operations.js';
@@ -47,6 +51,45 @@ describe('operation transport boundaries', () => {
       403,
     );
     expect(context).not.toHaveBeenCalled();
+  });
+  it('executes HTTP prepare immediately and replays without another business write', async () => {
+    const { service, principal, ctx } = await setup();
+    const [advice] = await ctx.repos.advice.query({ includeExpired: true, limit: 1 });
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || !preview.data.context) throw new Error('Missing review context');
+    const id = randomUUID();
+    const handle = createOperationHandler(service, () => principal);
+    const call = () =>
+      handle(
+        post('prepare', {
+          id,
+          tool: 'save_decision_review',
+          input: {
+            subject,
+            contextHash: preview.data.context?.contextHash,
+            expectedRevision: 0,
+            content: { note: 'direct HTTP execution' },
+          },
+        }),
+      );
+    const first = await call();
+    expect(first.status).toBe(200);
+    const result = (await first.json()) as {
+      ok: boolean;
+      data: { state: string; input: { requestId: string }; confirmationToken?: string };
+    };
+    expect(result).toMatchObject({
+      ok: true,
+      data: { state: 'succeeded', input: { requestId: id } },
+    });
+    expect(result.data.confirmationToken).toBeUndefined();
+    const replay = await call();
+    expect(replay.status).toBe(200);
+    expect(
+      await ctx.repos.decisionReview.findBySubject({ accountId: principal.accountId, subject }),
+    ).toMatchObject({ review: { currentRevision: 1 } });
   });
   it('keeps operation lookup account-scoped and never returns stored credential hashes', async () => {
     const { service, principal, ctx } = await setup();

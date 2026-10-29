@@ -722,7 +722,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     for (const name of names) {
       const policy = installedPolicies.get(name);
       if (policy?.sideEffect !== sideEffect || policy.scheduled !== false)
-        throw new Error(`installed ${name} must require a separate manual approval`);
+        throw new Error(`installed ${name} must be a direct personal operation policy`);
       if (JSON.stringify(policy.requiredCapabilities) !== JSON.stringify(capabilities))
         throw new Error(`installed ${name} policy capabilities mismatch`);
     }
@@ -925,11 +925,12 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     });
   }
 
-  // 未审批的 prepare 只能得到 pending operation，不产生任何业务写入；取消后仍无写入。
+  // 个人版 prepare 立即执行；无效业务 context 只留下 unknown 回执，不产生业务写入。
   const adviceCount = async (): Promise<number> => {
     const value = await readApi(firstOrigin, firstCookie, 'get_advice', {});
     return (value as { data?: { total?: number } }).data?.total ?? -1;
   };
+  const adviceCountBefore = await adviceCount();
   const prepared = await callHttp(firstOrigin, firstCookie, '/api/luoome/operations/prepare', {
     id: randomUUID(),
     tool: 'record_advice',
@@ -950,39 +951,24 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     },
   });
   const preparedData = (prepared.value as { data?: Record<string, unknown> }).data ?? {};
-  const preparedToken = preparedData.confirmationToken;
-  if (
-    prepared.status !== 200 ||
-    preparedData.state !== 'pending' ||
-    typeof preparedToken !== 'string'
-  )
+  if (prepared.status !== 200 || preparedData.state !== 'unknown')
     throw new Error(
-      `unapproved prepare must stay pending: ${String(prepared.status)} ${JSON.stringify(prepared.value)}`,
+      `direct operation must reach domain validation: ${String(prepared.status)} ${JSON.stringify(prepared.value)}`,
     );
-  const pendingOperation = await callHttp(
+  if (preparedData.confirmationToken !== undefined)
+    throw new Error('direct operation must not require a confirmation token');
+  const receipt = await callHttp(
     firstOrigin,
     firstCookie,
     `/api/luoome/operations/${String(preparedData.operationId ?? '')}`,
   );
-  const pendingState = (pendingOperation.value as { data?: { state?: string; result?: unknown } })
-    .data;
-  if (pendingState?.state !== 'pending' || pendingState.result !== null)
-    throw new Error(
-      `prepared operation must have no business result: ${JSON.stringify(pendingState)}`,
-    );
-  const adviceCountBefore = await adviceCount();
-  const cancelled = await callHttp(
-    firstOrigin,
-    firstCookie,
-    `/api/luoome/operations/${String(preparedData.operationId ?? '')}/cancel`,
-    { token: preparedToken },
-  );
-  if ((cancelled.value as { data?: { state?: string } }).data?.state !== 'cancelled')
-    throw new Error(`unapproved operation cancel failed: ${JSON.stringify(cancelled.value)}`);
+  const receiptData = (receipt.value as { data?: { state?: string; result?: unknown } }).data;
+  if (receiptData?.state !== 'unknown' || receiptData.result === null)
+    throw new Error(`direct operation must preserve its receipt: ${JSON.stringify(receiptData)}`);
   const adviceCountAfter = await adviceCount();
   if (adviceCountBefore !== 0 || adviceCountAfter !== 0)
     throw new Error(
-      `unapproved prepare must not write Advice: before=${String(adviceCountBefore)} after=${String(adviceCountAfter)}`,
+      `invalid context must not write Advice: before=${String(adviceCountBefore)} after=${String(adviceCountAfter)}`,
     );
 
   const marketIsolation = callIsolation.find((entry) => entry.tool === 'fetch_quote');
@@ -1136,11 +1122,11 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       tools: callIsolation,
       marketIsolation,
     },
-    prepareWithoutApproval: {
+    invalidDirectPrepare: {
       tool: 'record_advice',
       state: preparedData.state,
-      result: null,
-      cancelled: true,
+      receiptState: receiptData?.state,
+      receiptResultRecorded: receiptData?.result !== null,
       adviceCountBefore,
       adviceCountAfter,
     },

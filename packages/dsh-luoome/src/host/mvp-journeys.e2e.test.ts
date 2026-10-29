@@ -1,10 +1,9 @@
 // MVP 最终验收：真实旅程 + 负例/恢复矩阵（需求 §10.2/§10.3/§10.5，task-20）。
 //
 // 运行环境：Node/vitest（`@luoome/db/node` 的 node:sqlite），进程内真实 DSH
-// AgentLoop/SessionStore/ApprovalService 与官方审批组件；业务数据在临时 Node SQLite。
-// 模型是**脚本模型**——这里只验证协议/装配/审批/事实链路，绝不宣称真实模型质量。
-// 审批：使用官方 ApprovalService，测试通过宿主 `approval/request` 监听给出 allowed-once/deny，
-// 不注入绕过 guard/pre-execute 的 answerer，也不修改生产审批路径。
+// AgentLoop/SessionStore/ApprovalService 与官方组件；业务数据在临时 Node SQLite。
+// 模型是**脚本模型**——这里只验证协议/装配/个人直接执行/事实链路，绝不宣称真实模型质量。
+// 任何 approval/request 都作为失败证据；不注入绕过 guard/pre-execute 的 answerer。
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +28,7 @@ import * as Domain from '@deepseek-ai/dsh-storage-domain';
 import * as JsonStorage from '@deepseek-ai/dsh-storage-json';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
-import { type ApprovalOutcome, ApprovalService } from '@deepseek-ai/dsh-user-approval';
+import { ApprovalService } from '@deepseek-ai/dsh-user-approval';
 import {
   FakeMarketAdapter,
   TEST_ACCOUNT,
@@ -236,7 +235,7 @@ interface JourneyFixture {
   readonly principal: { userId: string; accountId: string };
   readonly market: ControlledMarketAdapter;
   readonly model: ScriptedModel;
-  readonly approvals: ApprovalOutcome[];
+  readonly approvals: string[];
   readonly approvalReasons: string[];
   readonly results: { name: string; value: unknown; isError: boolean }[];
   readonly read: ReturnType<typeof createReadSurface>;
@@ -261,7 +260,6 @@ const createJourneyFixture = async (
     readonly wrapRepository?: (
       repository: RepositoryRegistry['pluginAuthority'],
     ) => RepositoryRegistry['pluginAuthority'];
-    readonly approvals?: readonly ApprovalOutcome[];
     readonly accountId?: string;
     readonly batchEnabled?: boolean;
   } = {},
@@ -341,11 +339,12 @@ const createJourneyFixture = async (
     automationsEnabled: false,
   });
 
-  const approvals = [...(options.approvals ?? [])];
+  const approvals: string[] = [];
   const approvalReasons: string[] = [];
   ctx.on('approval/request', async (request) => {
+    approvals.push('unexpected');
     approvalReasons.push(request.reason ?? '');
-    return approvals.shift() ?? 'rejected';
+    return 'rejected';
   });
   const results: { name: string; value: unknown; isError: boolean }[] = [];
   ctx.on('tools/result', (execution, result) => {
@@ -419,19 +418,12 @@ const dataOf = <T>(value: unknown): T => {
   return value.data as T;
 };
 
-/** 通过真实 AgentLoop 调一次原生确认操作；approvalOutcome 由测试队列决定。 */
-const confirmed = async (
-  fixture: JourneyFixture,
-  tool: string,
-  input: unknown,
-  outcome: ApprovalOutcome = 'allowed-once',
-) => {
-  fixture.approvals.push(outcome);
-  return fixture.run({ name: MANUAL_OPERATION_TOOL, input: { id: randomUUID(), tool, input } });
-};
+/** 通过真实 AgentLoop 调一次个人直接执行操作。 */
+const confirmed = async (fixture: JourneyFixture, tool: string, input: unknown) =>
+  fixture.run({ name: MANUAL_OPERATION_TOOL, input: { id: randomUUID(), tool, input } });
 
-describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite）', () => {
-  it('executes the real batch in Node through one native approval and keeps its report account scoped', async () => {
+describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + Node SQLite）', () => {
+  it('executes the real batch in Node without approval and keeps its report account scoped', async () => {
     const fixture = await createJourneyFixture({ batchEnabled: true });
     try {
       expect(fixture.ctx.tools.get('run_strategy_autonomy_weekly')).toBeUndefined();
@@ -459,8 +451,8 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       expect(
         await fixture.repos.workflowRun.listRecent({ workflowName: 'weekly-report' }),
       ).toHaveLength(1);
-      expect(fixture.approvalReasons).toHaveLength(1);
-      expect(fixture.approvalReasons[0]).toContain('write + external');
+      expect(fixture.approvalReasons).toHaveLength(0);
+      expect(fixture.approvals).toHaveLength(0);
     } finally {
       await fixture.close();
     }
@@ -593,16 +585,18 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       expect(
         await fixture.repos.pluginAuthority.findOperation({ ...fixture.principal, id }),
       ).toBeNull();
-      fixture.approvals.push('allowed-once');
       const saved = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: { ...envelope, inputJson: JSON.stringify(input) },
       });
       expect(saved?.isError, JSON.stringify(saved)).toBe(false);
       expect(saved?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
-      expect(fixture.approvalReasons).toHaveLength(1);
-      expect(fixture.approvalReasons[0]).toContain('"triggerFeedback":null');
-      expect(fixture.approvalReasons[0]).toContain('"expectedRevision":0');
+      const operation = await fixture.repos.pluginAuthority.findOperation({
+        ...fixture.principal,
+        id,
+      });
+      expect(operation?.inputJson).toContain('"triggerFeedback":null');
+      expect(operation?.inputJson).toContain('"expectedRevision":0');
       const review = await fixture.repos.decisionReview.findBySubject({
         accountId: fixture.principal.accountId,
         subject: { kind: 'advice', id: advice.id },
@@ -611,7 +605,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       const replay = await fixture.execute(MANUAL_OPERATION_TOOL, { ...envelope, input });
       expect(replay.isError).toBe(false);
       expect(replay.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
-      expect(fixture.approvalReasons).toHaveLength(1);
+      expect(fixture.approvalReasons).toHaveLength(0);
       expect(
         (
           await fixture.repos.decisionReview.findBySubject({
@@ -649,7 +643,6 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
         });
         const id = randomUUID();
         const patch = { ...base, expectedRevision: 1, content: { note: 'only update the note' } };
-        fixture.approvals.push('allowed-once');
         const saved = await fixture.run({
           name: MANUAL_OPERATION_TOOL,
           input: {
@@ -662,9 +655,12 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
           ok: true,
           data: { state: 'succeeded' },
         });
-        const frozen = fixture.approvalReasons[1];
-        expect(frozen).toContain('"adviceFeedback":{"outcome":"ignored","pnl":0}');
-        expect(frozen).toContain('"triggerFeedback":null');
+        const frozen = await fixture.repos.pluginAuthority.findOperation({
+          ...fixture.principal,
+          id,
+        });
+        expect(frozen?.inputJson).toContain('"adviceFeedback":{"outcome":"ignored","pnl":0}');
+        expect(frozen?.inputJson).toContain('"triggerFeedback":null');
         const current = () =>
           fixture.repos.decisionReview.findBySubject({
             accountId: fixture.principal.accountId,
@@ -680,8 +676,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
           inputJson: JSON.stringify(patch),
         });
         expect(replay.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
-        expect(fixture.approvalReasons).toHaveLength(2);
-        fixture.approvals.push('allowed-once');
+        expect(fixture.approvalReasons).toHaveLength(0);
         const cleared = await fixture.run({
           name: MANUAL_OPERATION_TOOL,
           input: {
@@ -740,16 +735,20 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
         expectedRevision: 0,
         content,
       };
-      fixture.approvals.push('allowed-once');
       const saved = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: { ...envelope, input },
       });
       expect(saved?.isError, JSON.stringify(saved)).toBe(false);
       expect(saved?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
-      // 冻结内容与审批卡展示的是真正会落库的显式 null。
-      expect(fixture.approvalReasons[0]).toContain('"triggerFeedback":null');
-      expect(fixture.approvalReasons[0]).toContain('"adviceFeedback":null');
+      // 冻结内容保留真正会落库的显式 null。
+      const operation = await fixture.repos.pluginAuthority.findOperation({
+        ...fixture.principal,
+        id: envelope.id,
+      });
+      expect(operation?.inputJson).toContain('"triggerFeedback":null');
+      expect(operation?.inputJson).toContain('"adviceFeedback":null');
+      expect(fixture.approvalReasons).toHaveLength(0);
       const review = await fixture.repos.decisionReview.findBySubject({
         accountId: fixture.principal.accountId,
         subject: { kind: 'advice', id: advice.id },
@@ -779,7 +778,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       await fixture.close();
     }
   });
-  it('旅程 1：策略制定 create/version/validate 分别审批，trial 不落库，publish 独立审批后回读', async () => {
+  it('旅程 1：策略 create/version/validate 直接执行，trial 不落库，publish 后回读', async () => {
     const fixture = await createJourneyFixture();
     try {
       const strategyId = `strategy-${randomUUID()}`;
@@ -952,7 +951,6 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       const analysisContext = dataOf<AnalysisContext>(contextRead.value);
       expect(analysisContext.factIds.length).toBeGreaterThan(0);
       const versionsBefore = (await fixture.repos.strategy.listVersions(strategyId)).length;
-      fixture.approvals.push('allowed-once');
       const proposal = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: {
@@ -988,7 +986,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
     }
   });
 
-  it('旅程 3：DecisionReview 经原生审批保存；用户明确反馈后才有 outcome，AI 不能代填', async () => {
+  it('旅程 3：DecisionReview 直接保存；用户明确反馈后直接记录 outcome', async () => {
     const fixture = await createJourneyFixture();
     try {
       const advice = testAdviceFor(TEST_STOCKS[0]?.id ?? '600519.SH', () => new Date(NOW));
@@ -1022,17 +1020,9 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       expect(savedReview?.revision.revision).toBe(1);
       expect(savedReview?.revision.content.adviceFeedback).toBeNull();
 
-      // AI 代填负例：审批被拒绝时不得写 outcome
-      const denied = await confirmed(
-        fixture,
-        'record_advice_outcome',
-        { adviceId: advice.id, outcome: 'ignored', tradeIds: [] },
-        'rejected',
-      );
-      expect(denied?.isError).toBe(true);
-      expect((await latestReview())?.review.currentRevision).toBe(1);
+      expect(fixture.approvalReasons).toHaveLength(0);
 
-      // 用户明确反馈后（allowed-once）才写 outcome
+      // 用户明确反馈后直接写 outcome
       const recorded = await confirmed(fixture, 'record_advice_outcome', {
         adviceId: advice.id,
         outcome: 'followed',
@@ -1216,28 +1206,9 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       expect(await fixture.repos.strategySchedule.findByStrategyId(strategyId)).toBeNull();
       expect(await fixture.repos.strategyWatchlistSubscription.list({ strategyId })).toEqual([]);
 
-      // 审批被拒绝时不写入：schedule/订阅/策略状态都保持原样。
-      const deniedSchedule = await confirmed(
-        fixture,
-        'set_strategy_schedule',
-        { strategyId, cron: '0 18 * * 1-5' },
-        'rejected',
-      );
-      expect(deniedSchedule?.isError).toBe(true);
-      const deniedSubscribe = await confirmed(
-        fixture,
-        'subscribe_strategy_to_watchlist',
-        { strategyId, watchlistId },
-        'rejected',
-      );
-      expect(deniedSubscribe?.isError).toBe(true);
-      const deniedPause = await confirmed(fixture, 'pause_strategy', { strategyId }, 'rejected');
-      expect(deniedPause?.isError).toBe(true);
-      expect(await readSchedule()).toBeNull();
-      expect(await listSubscriptions()).toEqual([]);
-      expect((await fixture.repos.strategy.findById(strategyId))?.status).toBe('active');
+      expect(fixture.approvalReasons).toHaveLength(0);
 
-      // create_watchlist 不在生产 policies：用测试上下文的领域 tool 直接建 fixture，不消耗宿主审批。
+      // create_watchlist 不在生产 policies：用测试上下文的领域 tool 直接建 fixture。
       const createWatchlist = toolRegistry.get('create_watchlist');
       if (createWatchlist === undefined) throw new Error('missing create_watchlist tool');
       const watchlist = dataOf<{ watchlist: { id: string; enabled: boolean } }>(
@@ -1247,7 +1218,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
         ),
       );
       expect(watchlist.watchlist.id).toBe(watchlistId);
-      expect(fixture.approvalReasons).toHaveLength(7);
+      expect(fixture.approvalReasons).toHaveLength(0);
 
       // 上线配置逐项独立审批：schedule 与订阅经 read 面回读与写入一致。
       const scheduled = await confirmed(fixture, 'set_strategy_schedule', {
@@ -1280,8 +1251,8 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
       const resumedRead = await fixture.execute('get_strategy', { strategyId });
       expect(dataOf<{ strategy: Strategy }>(resumedRead.value).strategy.status).toBe('active');
 
-      // 每次写都是独立一次性审批（4 制定 + 3 拒绝 + 4 上线），队列恰好耗尽。
-      expect(fixture.approvalReasons).toHaveLength(11);
+      // 所有直接执行都保留 Operation，且没有审批请求。
+      expect(fixture.approvalReasons).toHaveLength(0);
       expect(fixture.approvals).toHaveLength(0);
     } finally {
       await fixture.close();
@@ -1290,20 +1261,10 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/审批 + Node SQLite�
 });
 
 describe('MVP 负例/恢复矩阵', () => {
-  it('未审批/拒绝/取消/过期/子 Agent/跨账户均无业务写入', async () => {
+  it('取消、子 Agent 和跨账户均无业务写入', async () => {
     const fixture = await createJourneyFixture();
     try {
-      const strategyId = `strategy-${randomUUID()}`;
-      // 拒绝
-      const denied = await confirmed(
-        fixture,
-        'create_strategy',
-        { id: strategyId, name: 'denied', description: 'denied' },
-        'rejected',
-      );
-      expect(denied?.isError).toBe(true);
-      expect(await fixture.repos.strategy.findById(strategyId)).toBeNull();
-      // 未审批：prepare 只产生 pending 记录，不会执行业务写入
+      // 服务层 prepare 只产生 pending 记录，不会执行业务写入
       const unapproved = await fixture.hostService.prepare(fixture.principal, {
         id: randomUUID(),
         tool: 'create_strategy',
@@ -1416,7 +1377,6 @@ describe('MVP 负例/恢复矩阵', () => {
       );
       if (reviewContext.context === null) throw new Error('missing decision review context');
       const id = randomUUID();
-      fixture.approvals.push('allowed-once');
       const first = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: {
@@ -1440,7 +1400,6 @@ describe('MVP 负例/恢复矩阵', () => {
         )?.revision.revision ?? 0;
       expect(await revisionOf()).toBe(1);
       // 同一 operation 再走一次原生确认入口：返回既有回执，不重复写
-      fixture.approvals.push('allowed-once');
       const replay = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: {
@@ -1501,7 +1460,6 @@ describe('MVP 负例/恢复矩阵', () => {
       );
       if (reviewContext.context === null) throw new Error('missing context');
       const id = randomUUID();
-      fixture.approvals.push('allowed-once');
       const lost = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: {

@@ -538,7 +538,7 @@ describe('dsh-luoome production composition root', () => {
 });
 
 describe('dsh-luoome production write policies', () => {
-  it('wires only the exact native-confirmation policies with trusted provenance', () => {
+  it('wires only the exact personal operation policies with trusted provenance', () => {
     const policies = createProductionOperationPolicies();
     expect(policies.map((policy) => policy.tool.name)).toEqual([
       'save_decision_review',
@@ -629,15 +629,12 @@ describe('dsh-luoome production apply entry', () => {
     ).rejects.toThrow('require the host schedule service');
     expect(existsSync(home)).toBe(false);
   });
-  it.each(['approval', 'agents'])(
-    'refuses to assemble when %s is missing, before any IO',
-    async (service) => {
-      const home = join(tempRoot(), 'apply-missing');
-      const fake = createFakeHostContext({ omit: [service] });
-      await expect(apply(fake.ctx, productionInput(home))).rejects.toThrow(service);
-      expect(existsSync(home)).toBe(false);
-    },
-  );
+  it('refuses to assemble when agents is missing, before any IO', async () => {
+    const home = join(tempRoot(), 'apply-missing');
+    const fake = createFakeHostContext({ omit: ['agents'] });
+    await expect(apply(fake.ctx, productionInput(home))).rejects.toThrow('agents');
+    expect(existsSync(home)).toBe(false);
+  });
 
   it('registers read tools, market external tools and the read-only call route', async () => {
     const home = tempRoot();

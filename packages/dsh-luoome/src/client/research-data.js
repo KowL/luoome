@@ -164,7 +164,7 @@ export function useResearchOperation({ accountId, strategyId, onCompleted }) {
     } catch (failure) {
       if (action === 'check' && failure.kind === 'not_found') {
         setOperation({ ...pending, state: 'failed', confirmationToken: undefined });
-        setError('原操作尚未建立，可收起回执后重新准备。');
+        setError('原操作尚未建立，可收起回执后重新执行。');
         return;
       }
       if (action === 'confirm' || pending?.state === 'preparing')

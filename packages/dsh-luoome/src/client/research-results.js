@@ -213,7 +213,7 @@ export const ValidationFacts = ({ data, loading, error, operation, strategyId, s
       ? h(
           'p',
           { className: 'luo-err' },
-          '保存的任务仍在进行，但当前宿主没有推进进程。确认续跑后会从已有日期继续。',
+          '保存的任务仍在进行，但当前宿主没有推进进程。续跑后会从已有日期继续。',
         )
       : null,
     h(
@@ -234,7 +234,7 @@ export const ValidationFacts = ({ data, loading, error, operation, strategyId, s
                   sessionId,
                 }),
             },
-            '准备从断点续跑',
+            '从断点续跑',
           )
         : null,
       session.status === 'running'
@@ -252,7 +252,7 @@ export const ValidationFacts = ({ data, loading, error, operation, strategyId, s
                   sessionId,
                 }),
             },
-            '准备取消评估',
+            '取消评估',
           )
         : null,
     ),
@@ -604,7 +604,7 @@ export const OperationReceipt = ({ control }) => {
     'aside',
     {
       className: 'luo-research-operation',
-      'aria-label': '研究操作确认与回执',
+      'aria-label': '研究操作回执',
       'aria-live': 'polite',
     },
     h('strong', null, operationLabels[operation?.tool] ?? '研究操作'),
@@ -612,19 +612,19 @@ export const OperationReceipt = ({ control }) => {
       'p',
       { className: 'luo-fine' },
       expired
-        ? '确认已过期，请重新准备。'
+        ? '操作已过期，请重新执行。'
         : {
-            preparing: '准备结果待核对',
-            pending: '参数已冻结，等待你确认',
+            preparing: '正在提交操作',
+            pending: '操作待执行',
             executing: '已提交，正在执行',
             unknown: '结果待核对，请勿重复执行',
-            succeeded: '操作回执已确认',
+            succeeded: '操作已完成',
             cancelled: '你已取消此操作',
             failed: '操作失败，研究问题仍可保留',
           }[operation?.state],
     ),
     pending && operation.expiresAt
-      ? h('p', { className: 'luo-fine' }, `本次确认有效期至 ${when(operation.expiresAt)}`)
+      ? h('p', { className: 'luo-fine' }, `本次操作有效期至 ${when(operation.expiresAt)}`)
       : null,
     operation?.input
       ? h(
@@ -652,7 +652,7 @@ export const OperationReceipt = ({ control }) => {
                 disabled: busy,
                 onClick: control.confirm,
               },
-              '确认本次操作',
+              '执行本次操作',
             ),
             h(
               'button',
@@ -671,7 +671,7 @@ export const OperationReceipt = ({ control }) => {
         ? h(
             'p',
             { className: 'luo-fine' },
-            '此页已恢复操作身份，原确认凭据未保存在浏览器。请在原页面处理，或等确认过期后重新准备。',
+            '此页已恢复操作身份，原执行凭据未保存在浏览器。请在原页面处理，或等操作过期后重新执行。',
           )
         : null,
       uncertain || pending

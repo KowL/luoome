@@ -142,19 +142,11 @@ export const createResearchReadHandler = (options: ResearchReadOptions) => {
         market,
         universe,
         steps: [
-          {
-            action: 'choose-question',
-            title: '写下一条可被反证的研究问题',
-            requiresApproval: false,
-          },
-          {
-            action: 'choose-baseline',
-            title: '选择已有策略与不可变基线版本',
-            requiresApproval: false,
-          },
-          { action: 'check-data', title: '检查样本、区间及数据资格', requiresApproval: false },
-          { action: 'save-candidate', title: '保存候选并独立校验', requiresApproval: true },
-          { action: 'compare', title: '用同一事实快照对照并保存结论', requiresApproval: true },
+          { action: 'choose-question', title: '写下一条可被反证的研究问题' },
+          { action: 'choose-baseline', title: '选择已有策略与不可变基线版本' },
+          { action: 'check-data', title: '检查样本、区间及数据资格' },
+          { action: 'save-candidate', title: '保存候选并独立校验' },
+          { action: 'compare', title: '用同一事实快照对照并保存结论' },
         ],
         limitations: ['初始化不会创建账户、持仓、示例投资资产、日程、授权或通知。'],
       });

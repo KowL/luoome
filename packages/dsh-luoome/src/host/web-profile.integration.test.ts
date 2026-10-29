@@ -26,11 +26,6 @@ const operation = z.object({
     })
     .passthrough(),
 });
-const confirmation = z.object({
-  ok: z.boolean(),
-  data: z.object({ state: z.string() }).optional(),
-});
-
 const repo = resolve(import.meta.dirname, '../../../..');
 const roots: string[] = [];
 const children: ReturnType<typeof spawn>[] = [];
@@ -80,15 +75,24 @@ const launchProfile = async (root: string) => {
   return { root, launch, child, exited, output: () => output };
 };
 
-const loginProfile = async (fixture: Awaited<ReturnType<typeof profile>>) => {
-  let startup: string | undefined;
-  for (let i = 0; i < 300; i++) {
-    startup = /dsh web: (\S+)/.exec(fixture.output())?.[1];
-    if (startup) break;
+// DSH 冷启动在整仓并发测试里会被 CPU 争用拖慢（实测独跑约 4s，8 进程满载约 10s），且子进程
+// 在就绪前不输出任何内容；因此按真实截止时间等待，不用固定轮次把并发负载误报成启动失败。
+const readyTimeoutMs = Number(process.env.LUOOME_WEB_READY_TIMEOUT_MS ?? 120_000);
+const awaitStartup = async (fixture: Awaited<ReturnType<typeof profile>>) => {
+  const deadline = Date.now() + readyTimeoutMs;
+  while (Date.now() < deadline) {
+    const startup = /dsh web: (\S+)/.exec(fixture.output())?.[1];
+    if (startup) return startup;
     if (fixture.child.exitCode !== null) throw new Error('Web profile exited before ready');
     await new Promise((done) => setTimeout(done, 20));
   }
-  if (!startup) throw new Error('Web profile did not become ready');
+  throw new Error(
+    `Web profile did not become ready within ${readyTimeoutMs}ms: ${fixture.output()}`,
+  );
+};
+
+const loginProfile = async (fixture: Awaited<ReturnType<typeof profile>>) => {
+  const startup = await awaitStartup(fixture);
   const origin = new URL(startup).origin;
   const login = await fetch(startup, { redirect: 'manual' });
   expect(login.status).toBe(303);
@@ -148,14 +152,7 @@ describe('official DSH profile lifecycle and Web carrier', () => {
 
   it('enforces real browser login, Host/Origin, bounded input and durable operation protocol', async () => {
     const fixture = await profile('web');
-    let startup: string | undefined;
-    for (let i = 0; i < 300; i++) {
-      startup = /dsh web: (\S+)/.exec(fixture.output())?.[1];
-      if (startup) break;
-      if (fixture.child.exitCode !== null) throw new Error('Web profile exited before ready');
-      await new Promise((done) => setTimeout(done, 20));
-    }
-    if (!startup) throw new Error('Web profile did not become ready');
+    const startup = await awaitStartup(fixture);
     const origin = new URL(startup).origin;
     expect((await fetch(`${origin}/api/luoome/profile`)).status).toBe(401);
     const login = await fetch(startup, { redirect: 'manual' });
@@ -244,69 +241,25 @@ describe('official DSH profile lifecycle and Web carrier', () => {
       },
     };
     const id = randomUUID();
-    const prepared = operation.parse(
-      await (
-        await post('/api/luoome/operations/prepare', { id, tool: 'save_decision_review', input })
-      ).json(),
+    const request = () =>
+      post('/api/luoome/operations/prepare', { id, tool: 'save_decision_review', input });
+    const executed = operation.parse(await (await request()).json());
+    expect(executed).toMatchObject({ ok: true, data: { operationId: id, state: 'succeeded' } });
+    expect(executed.data).not.toHaveProperty('confirmationToken');
+    expect(executed.data.input.requestId).toBe(id);
+    const replayed = await Promise.all(
+      [request(), request()].map(async (call) => operation.parse(await (await call).json())),
     );
-    expect(prepared).toMatchObject({ ok: true, data: { operationId: id, state: 'pending' } });
-    const token = z.string().parse(prepared.data.confirmationToken);
-    expect(typeof token).toBe('string');
-    const pending = operation.parse(await (await get(`/api/luoome/operations/${id}`)).json());
-    expect(pending.data).not.toHaveProperty('confirmationToken');
-    expect(pending.data.input.requestId).toBe(id);
-    expect((await post(`/api/luoome/operations/${id}/confirm`, { token, input: {} })).status).toBe(
-      400,
-    );
+    expect(replayed.every((result) => result.ok && result.data.state === 'succeeded')).toBe(true);
     expect((await post(`/api/luoome/operations/${id}/confirm`, { token: 'forged' })).status).toBe(
       403,
     );
-    const confirmed = await Promise.all(
-      [1, 2].map(async () =>
-        confirmation.parse(
-          await (await post(`/api/luoome/operations/${id}/confirm`, { token })).json(),
-        ),
-      ),
-    );
-    expect(confirmed.some((r) => r.ok && r.data?.state === 'succeeded')).toBe(true);
-    const final = operation.parse(await (await get(`/api/luoome/operations/${id}`)).json());
-    expect(final.data.state).toBe('succeeded');
     const after = review.parse(
       await (
         await post('/api/luoome/call', { tool: 'get_decision_review_context', input: { subject } })
       ).json(),
     );
     expect(after.data.revisions).toHaveLength(1);
-    const cancelled = operation.parse(
-      await (
-        await post('/api/luoome/operations/prepare', {
-          id: randomUUID(),
-          tool: 'save_decision_review',
-          input,
-        })
-      ).json(),
-    );
-    expect(
-      (
-        await post(`/api/luoome/operations/${cancelled.data.operationId}/cancel`, {
-          token: cancelled.data.confirmationToken,
-        })
-      ).status,
-    ).toBe(200);
-    const replayCancelled = await post(
-      `/api/luoome/operations/${cancelled.data.operationId}/confirm`,
-      {
-        token: cancelled.data.confirmationToken,
-      },
-    );
-    expect(replayCancelled.status).toBe(200);
-    expect(operation.parse(await replayCancelled.json()).data.state).toBe('cancelled');
-    const unchanged = review.parse(
-      await (
-        await post('/api/luoome/call', { tool: 'get_decision_review_context', input: { subject } })
-      ).json(),
-    );
-    expect(unchanged.data.revisions).toHaveLength(1);
     const candidate = z
       .object({ grantCandidate: PluginAutomationGrantSchema })
       .parse(await (await get('/api/luoome-acceptance')).json()).grantCandidate;
@@ -316,7 +269,7 @@ describe('official DSH profile lifecycle and Web carrier', () => {
         ok: z.literal(true),
         data: z.object({
           operationId: z.string(),
-          confirmationToken: z.string(),
+          state: z.literal('succeeded'),
           input: z.object({ grant: PluginAutomationGrantSchema }),
         }),
       })
@@ -330,13 +283,6 @@ describe('official DSH profile lifecycle and Web carrier', () => {
         ).json(),
       );
     expect(grantPrepared.data.input.grant).toEqual(candidate);
-    expect(
-      await (
-        await post(`/api/luoome/operations/${grantId}/confirm`, {
-          token: grantPrepared.data.confirmationToken,
-        })
-      ).json(),
-    ).toMatchObject({ ok: true, data: { state: 'succeeded' } });
     expect(await (await get('/api/luoome-acceptance')).json()).toMatchObject({
       configuredGrantVersion: 1,
       requests: 0,
@@ -347,9 +293,9 @@ describe('official DSH profile lifecycle and Web carrier', () => {
     });
     expect(diagnostic.parse(await (await get('/api/luoome-acceptance')).json()).requests).toBe(0);
     expect(fixture.output()).not.toContain('did not activate');
-  }, 30_000);
+  }, 300_000);
 
-  it('uses the official SessionController for pending approval, cancellation and cold resume', async () => {
+  it('uses the official SessionController for direct execution and cold resume', async () => {
     const first = await profile('web');
     const browser = await loginProfile(first);
     const created = z
@@ -423,25 +369,10 @@ describe('official DSH profile lifecycle and Web carrier', () => {
         headers: browser.headers,
       });
       if (response.status === 200) state = operation.parse(await response.json()).data.state;
-      if (state === 'pending') break;
+      if (state === 'succeeded') break;
       await new Promise((done) => setTimeout(done, 20));
     }
-    expect(state).toBe('pending');
-    expect(await browser.remote('session/cancel', { sessionId: created.sessionId })).toMatchObject({
-      accepted: true,
-    });
-    for (let i = 0; i < 100; i++) {
-      state = operation.parse(
-        await (
-          await fetch(`${browser.origin}/api/luoome/operations/${id}`, {
-            headers: browser.headers,
-          })
-        ).json(),
-      ).data.state;
-      if (state === 'cancelled') break;
-      await new Promise((done) => setTimeout(done, 20));
-    }
-    expect(state).toBe('cancelled');
+    expect(state).toBe('succeeded');
     const beforeRestart = review.parse(
       await (
         await fetch(`${browser.origin}/api/luoome/call`, {
@@ -454,7 +385,7 @@ describe('official DSH profile lifecycle and Web carrier', () => {
         })
       ).json(),
     );
-    expect(beforeRestart.data.revisions).toHaveLength(0);
+    expect(beforeRestart.data.revisions).toHaveLength(1);
     first.child.kill('SIGTERM');
     await first.exited;
     const restarted = await launchProfile(first.root);
@@ -483,5 +414,5 @@ describe('official DSH profile lifecycle and Web carrier', () => {
     }
     expect(requests).toBe(1);
     expect(restarted.output()).not.toContain('did not activate');
-  }, 30_000);
+  }, 300_000);
 });
