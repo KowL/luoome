@@ -35,6 +35,7 @@ describe('tool/batch_quote', () => {
       high: money(101),
       low: money(99),
       close: money(100.5),
+      prevClose: money(100),
       volume: 1234,
       source: 'eastmoney',
     };
@@ -92,9 +93,15 @@ describe('tool/batch_quote', () => {
           status: 'ok',
           retrieval: 'local-fallback',
           freshness: 'stale',
+          change: 0.5,
+          changePct: 0.005,
         }),
       ]),
     );
+    expect(res.data.items.find((item) => item.stockId === '600519.SH')).toMatchObject({
+      change: null,
+      changePct: null,
+    });
   });
 
   it('intraday-rule 拒绝跨交易日的本地快照，不混入 quotes', async () => {

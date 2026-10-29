@@ -120,6 +120,7 @@ workflows ──► tools ──► core
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
 | `bun run test:dsh` | DSH 插件与 Node Host 侧测试（Vitest） |
+| `bun run test:panels-browser --overview-only` | 真实 DSH 看盘浏览器验收：分区慢响应、失败恢复、分页、排序、个股详情与窄屏；需 Chrome，可用 `CHROME_PATH` 指定 |
 | `bun run build:dsh` | 构建 DSH Node Host 与插件产物 |
 | `bun run check:layers` | 依赖方向静态检查 |
 | `bun run lint` | Biome lint + format 检查 |

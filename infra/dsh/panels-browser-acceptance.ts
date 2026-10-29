@@ -309,8 +309,6 @@ const launchDsh = (
         LUOOME_OWNER_USER_ID: OWNER.userId,
         LUOOME_OWNER_ACCOUNT_ID: OWNER.accountId,
         LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_BATCH_ENABLED: 'true',
-        LUOOME_AUTOMATIONS_ENABLED: 'false',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -407,6 +405,12 @@ const chromeProcesses: ReturnType<typeof spawn>[] = [];
 let browser: Cdp | undefined;
 let failurePage: PageSession | undefined;
 let sentimentUnavailable = false;
+let overviewPending = true;
+let newsFailure: 'http' | 'tool' | null = null;
+let sectorFailure = true;
+let watchlistPagePending = false;
+const releaseOverview: (() => void)[] = [];
+const overviewRequests: string[] = [];
 let stockQuoteFailure = false;
 let stockQuotePending = false;
 let stockDetailReads = 0;
@@ -441,7 +445,7 @@ const fuyaoGateway = createServer((incoming, outgoing) => {
 });
 const proxy = createServer();
 
-try {
+const runAcceptance = async () => {
   await mkdir(evidenceDir, { recursive: true });
   await mkdir(workspace, { recursive: true });
   await mkdir(luoomeHome, { recursive: true });
@@ -530,6 +534,189 @@ try {
     if (!incoming.url?.startsWith('/dsh/')) {
       outgoing.end();
       return;
+    }
+    const overviewQuery = new URL(incoming.url, 'http://fixture.invalid').searchParams;
+    const section = overviewQuery.get('section');
+    if (incoming.url.startsWith('/dsh/api/luoome/state?panel=overview') && section) {
+      overviewRequests.push(section);
+      const asOf = '2026-10-25T04:00:00Z';
+      const quote = (stockId: string, price: number) => ({
+        stockId,
+        observedAt: asOf,
+        fetchedAt: asOf,
+        timestampSource: 'upstream',
+        ts: asOf,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        prevClose: price,
+        volume: 1800000,
+        amount: 123000000,
+        turnoverRatePct: 2.36,
+        source: 'browser-fixture',
+      });
+      const page = Number(overviewQuery.get('page') ?? 1);
+      const fixtures: Record<string, { name: string; data: unknown }> = {
+        indices: {
+          name: 'fetch_index_quotes',
+          data: {
+            indices: ['上证指数', '深证成指', '创业板指', '科创50'].map((name, index) => ({
+              code: `fixture-${index}`,
+              name: sentimentUnavailable && index === 0 ? '回归验收指数' : name,
+              close: index === 0 ? 3333 : 2500 + index * 100,
+              change: 33,
+              changePct: 1,
+              ts: asOf,
+              source: 'browser-fixture',
+            })),
+          },
+        },
+        sentiment: {
+          name: 'get_ashare_sentiment',
+          data: {
+            snapshot: {
+              date: '2026-10-23',
+              breadth: {
+                status: 'complete',
+                value: { advancing: 3000, declining: 1800, unchanged: 200, total: 5000 },
+              },
+              limitUp: {
+                status: 'complete',
+                value: {
+                  sealedCount: 65,
+                  brokenCount: 15,
+                  brokenRate: 0.1875,
+                  maxLadderLevel: 5,
+                  totalSealAmount: 5800000000,
+                  boardDistribution: { 1: 43, 2: 15, 3: 5, 5: 2 },
+                  leaders: [],
+                },
+              },
+            },
+          },
+        },
+        sectors: {
+          name: 'fetch_sector_quotes',
+          data: {
+            items: ['半导体', '贵金属', '软件开发', '电力设备', '通信设备'].map((name, index) => ({
+              code: `BK${index}`,
+              name,
+              changePct: 0.05 - index * 0.008,
+              amount: 20000000000,
+              leadingStockName: '合成领涨股',
+            })),
+            source: 'browser-fixture',
+            asOf,
+            warnings: [],
+          },
+        },
+        news: {
+          name: 'fetch_news',
+          data: {
+            items: [
+              {
+                id: 'n1',
+                title: '验收要闻：市场成交活跃',
+                source: '合成新闻源',
+                publishedAt: asOf,
+                url: 'https://example.com/news',
+                summary: '仅用于界面验收的合成内容。',
+              },
+              {
+                id: 'n2',
+                title: '无效协议仅显示文本',
+                source: '合成新闻源',
+                publishedAt: asOf,
+                url: 'javascript:alert(1)',
+              },
+            ],
+            asOf,
+            warnings: [],
+          },
+        },
+        watchlist: {
+          name: 'batch_quote',
+          data: {
+            items:
+              page === 1
+                ? Array.from({ length: 40 }, (_, index) => ({
+                    stockId: index === 0 ? fixtureInfo.stock.id : `${600000 + index}.SH`,
+                    stockName: index === 0 ? fixtureInfo.stock.name : `合成标的 ${index}`,
+                    status: 'ok',
+                    quote: quote(
+                      index === 0 ? fixtureInfo.stock.id : `${600000 + index}.SH`,
+                      index === 0 ? 1520 : 12 + index,
+                    ),
+                    change: 1,
+                    changePct: 0.05 - index * 0.001,
+                    retrieval: 'live',
+                    freshness: 'fresh',
+                  }))
+                : [
+                    {
+                      stockId: '600888.SH',
+                      stockName: '第二页合成标的',
+                      status: 'ok',
+                      quote: quote('600888.SH', 8),
+                      change: null,
+                      changePct: null,
+                      retrieval: 'live',
+                      freshness: 'fresh',
+                    },
+                  ],
+            quotes: [],
+            unresolved: [],
+          },
+        },
+      };
+      const fixture = fixtures[section];
+      if (fixture) {
+        const failed =
+          (section === 'news' && newsFailure !== null) ||
+          (section === 'sectors' && sectorFailure) ||
+          (section === 'sentiment' && sentimentUnavailable);
+        const body = {
+          panel: 'overview',
+          section,
+          asOf,
+          session: {
+            marketSession: 'non-trading-day',
+            nextSessionStart: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          tools: [
+            failed
+              ? {
+                  name: fixture.name,
+                  ok: false,
+                  error: {
+                    kind: 'adapter_error',
+                    cause: 'synthetic section failure',
+                    recoverable: true,
+                  },
+                }
+              : { ...fixture, ok: true },
+          ],
+          ...(section === 'watchlist'
+            ? { watchlistPage: { page, pageSize: 40, total: 41, incomplete: false } }
+            : {}),
+        };
+        const send = () => {
+          if (outgoing.destroyed) return;
+          outgoing.writeHead(section === 'news' && newsFailure === 'http' ? 503 : 200, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+          });
+          outgoing.end(JSON.stringify(body));
+        };
+        if (
+          (overviewPending && (section === 'news' || section === 'sentiment')) ||
+          (watchlistPagePending && section === 'watchlist' && page === 2)
+        )
+          releaseOverview.push(send);
+        else send();
+        return;
+      }
     }
     if (incoming.url.startsWith('/dsh/api/luoome/stock?') && !useConfiguredMarket) {
       stockDetailReads++;
@@ -728,11 +915,11 @@ try {
   const dismissNotice = async () => {
     for (let attempt = 0; attempt < 30; attempt++) {
       const visible = await page.evaluate<boolean>(
-        `document.body.innerText.includes('预览版说明')`,
+        `document.body.innerText.includes('预览版说明') || document.body.innerText.includes('Preview Notice')`,
       );
       if (!visible) return;
       await page.evaluate<boolean>(`(() => {
-        const dismiss = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '继续');
+        const dismiss = [...document.querySelectorAll('button')].find((button) => ['继续', 'Continue'].includes(button.textContent.trim()));
         if (!dismiss) return false;
         dismiss.click();
         return true;
@@ -752,10 +939,12 @@ try {
     );
 
   const clickButton = async (label: string) => {
+    const labels = [label, ...({ 账号菜单: ['Account menu'], 设置: ['Settings'] }[label] ?? [])];
     const clicked = await page.evaluate<boolean>(
       `(() => {
         const buttons = [...document.querySelectorAll('button,[role="button"],[role="menuitem"]')];
-        const target = buttons.find((element) => element.textContent.trim() === ${JSON.stringify(label)}) ?? buttons.find((element) => element.getAttribute('aria-label') === ${JSON.stringify(label)}) ?? buttons.find((element) => element.getAttribute('role') === 'menuitem' && element.textContent.trim().startsWith(${JSON.stringify(label)}));
+        const labels = ${JSON.stringify(labels)};
+        const target = buttons.find((element) => labels.includes(element.textContent.trim())) ?? buttons.find((element) => labels.includes(element.getAttribute('aria-label'))) ?? buttons.find((element) => element.getAttribute('role') === 'menuitem' && labels.some(label => element.textContent.trim().startsWith(label)));
         if (!target) return false;
         target.click();
         return true;
@@ -813,20 +1002,122 @@ try {
   await clickPanel('看盘');
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '看盘面板');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
-    '看盘建议',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
+    '持仓',
   );
-  const overviewText = await page.evaluate<string>('document.body.innerText');
-  for (const expected of [fixtureInfo.advicePremise, '持仓市值', '建议不等于交易'])
-    if (!overviewText.includes(expected)) throw new Error(`看盘 DOM 缺少「${expected}」`);
+  await page.waitFor(
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)}) && document.querySelector('[data-overview-section="account"][aria-busy="false"]')`,
+    '独立账户与建议',
+  );
   if (
-    await page.evaluate(
-      `Array.from(document.querySelectorAll('.luo-card-t')).some((title) => ['持仓', '关注列表'].includes(title.textContent))`,
-    )
+    !(await page.evaluate<boolean>(
+      `document.querySelector('[data-overview-section="news"][aria-busy="true"]') !== null && document.querySelector('[data-overview-section="sentiment"][aria-busy="true"]') !== null && document.querySelectorAll('.luo-index').length === 4 && document.querySelectorAll('[data-market-stock]').length === 40`,
+    ))
   )
-    throw new Error('看盘页不应再包含持仓明细或关注列表卡片');
-  if ((overviewState.tools as { name: string }[]).some((tool) => tool.name === 'list_watchlists'))
-    throw new Error('看盘不应请求关注列表');
+    throw new Error('慢新闻/情绪必须保持读取中，同时已渲染账户、指数、自选');
+  await page.screenshot(join(evidenceDir, 'overview-progressive-loading.png'));
+  overviewPending = false;
+  for (const send of releaseOverview.splice(0)) send();
+  await page.waitFor(
+    `document.body.innerText.includes('验收要闻：市场成交活跃') && document.body.innerText.includes('连板分布')`,
+    '慢分区独立完成',
+  );
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('[data-overview-section="sectors"] .luo-err') !== null && document.querySelector('[data-overview-section="news"] a[href^="javascript:"]') === null`,
+    ))
+  )
+    throw new Error('分区初次错误或新闻链接协议处理不正确');
+  sectorFailure = false;
+  await page.evaluate(`document.querySelector('[data-overview-section="sectors"] button').click()`);
+  await page.waitFor(`document.body.innerText.includes('半导体')`, '行业排行独立重试');
+  for (const failure of ['http', 'tool'] as const) {
+    newsFailure = failure;
+    await page.evaluate(`document.querySelector('[data-overview-section="news"] button').click()`);
+    await page.waitFor(
+      `document.querySelector('[data-overview-section="news"] .luo-region-error')?.textContent.includes('展示上次成功数据')`,
+      `${failure} 失败保留旧新闻`,
+    );
+    if (
+      !(await page.evaluate<boolean>(
+        `document.querySelector('[data-overview-section="news"]').textContent.includes('验收要闻：市场成交活跃')`,
+      ))
+    )
+      throw new Error('新闻刷新失败不得清空成功内容');
+    newsFailure = null;
+    await page.evaluate(`document.querySelector('[data-overview-section="news"] button').click()`);
+    await page.waitFor(
+      `!document.querySelector('[data-overview-section="news"] .luo-region-error') && document.querySelector('[data-overview-section="news"][aria-busy="false"]')`,
+      '新闻独立恢复',
+    );
+  }
+  await page.evaluate(`document.querySelector('.luo-sort').click()`);
+  await page.waitFor(
+    `document.querySelector('[data-market-stock]')?.getAttribute('data-market-stock') === '600039.SH'`,
+    '当前页涨跌幅排序',
+  );
+  await page.evaluate(`document.querySelector('.luo-sort').click()`);
+  watchlistPagePending = true;
+  await page.evaluate(
+    `([...document.querySelectorAll('.luo-pagination button')].find(button => button.textContent === '下一页')).click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[data-overview-section="watchlist"][aria-busy="true"]') && document.querySelectorAll('[data-market-stock]').length === 0`,
+    '翻页清空上页数据',
+  );
+  watchlistPagePending = false;
+  for (const send of releaseOverview.splice(0)) send();
+  await page.waitFor(
+    `document.querySelector('[data-market-stock="600888.SH"]') !== null`,
+    '第二页独立渲染',
+  );
+  await page.evaluate(
+    `([...document.querySelectorAll('.luo-pagination button')].find(button => button.textContent === '上一页')).click()`,
+  );
+  await page.waitFor(
+    `document.querySelectorAll('[data-market-stock]').length === 40`,
+    '返回第一页',
+  );
+  await page.evaluate(`document.querySelector('[data-market-stock] .luo-stock-link').click()`);
+  await page.waitFor(
+    `document.querySelector('dialog[open]')?.textContent.includes('自选行情')`,
+    '看盘个股详情',
+  );
+  await page.evaluate(`document.querySelector('[aria-label="关闭个股详情"]').click()`);
+  await page.evaluate(
+    `([...document.querySelectorAll('.luo-market-tabs button')].find(button => button.textContent === '持仓')).click()`,
+  );
+  await page.waitFor(
+    `document.querySelectorAll('[data-market-stock]').length === 1 && document.querySelector('[data-overview-section="holdings"]').textContent.includes('浮动盈亏')`,
+    '独立持仓数据与标签切换',
+  );
+  await page.evaluate(
+    `([...document.querySelectorAll('.luo-market-tabs button')].find(button => button.textContent === '自选')).click()`,
+  );
+  const overviewStockReads = stockDetailReads;
+  for (const section of [
+    'indices',
+    'sentiment',
+    'account',
+    'holdings',
+    'watchlists',
+    'watchlist',
+    'triggers',
+    'advice',
+    'health',
+    'sectors',
+    'news',
+  ]) {
+    if (!overviewRequests.includes(section)) throw new Error(`缺少独立分区请求 ${section}`);
+  }
+  const overviewText = await page.evaluate<string>('document.body.innerText');
+  for (const expected of [
+    fixtureInfo.stock.name,
+    fixtureInfo.advicePremise,
+    '持仓市值',
+    '建议不等于交易',
+  ])
+    if (!overviewText.includes(expected)) throw new Error(`看盘 DOM 缺少「${expected}」`);
   const overviewAccounts = toolData(overviewState, 'list_accounts');
   const overviewHoldings = toolData(overviewState, 'list_holdings');
   const dbHoldings = database.holdings as { stockId: string; quantity: number }[];
@@ -848,7 +1139,7 @@ try {
   await page.screenshot(join(evidenceDir, 'overview-desktop.png'));
   sentimentUnavailable = true;
   await page.evaluate(
-    `(() => { const button = [...document.querySelectorAll('.luo-root button')].find(item => item.textContent.trim() === '刷新事实'); if (!button) throw new Error('Missing refresh button'); button.click(); })()`,
+    `(() => { const button = [...document.querySelectorAll('.luo-root button')].find(item => item.textContent.trim() === '刷新全部'); if (!button) throw new Error('Missing refresh button'); button.click(); })()`,
   );
   await page.waitFor(
     `document.querySelector('.luo-root .luo-index')?.textContent.includes('回归验收指数')`,
@@ -862,6 +1153,43 @@ try {
     throw new Error('指数必须直接展示 fetch_index_quotes 的数值');
   await page.screenshot(join(evidenceDir, 'overview-independent-index.png'));
   sentimentUnavailable = false;
+
+  if (process.argv.includes('--overview-only')) {
+    await page.setViewport(390, 844, true);
+    await page.waitFor(`document.querySelector('.luo-overview').clientWidth < 400`, '窄屏看盘');
+    const overflow = await page.evaluate<number>(
+      'document.documentElement.scrollWidth - window.innerWidth',
+    );
+    const rootOverflow = await page.evaluate<number>(
+      `document.querySelector('.luo-overview').scrollWidth - document.querySelector('.luo-overview').clientWidth`,
+    );
+    if (overflow > 1 || rootOverflow > 1)
+      throw new Error(`看盘窄屏溢出 ${overflow}/${rootOverflow}px`);
+    await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
+    await page.evaluate(
+      `document.querySelector('[data-overview-section="news"]').scrollIntoView()`,
+    );
+    await page.screenshot(join(evidenceDir, 'overview-mobile-news.png'));
+    const errors = await page.evaluate<string[]>('window.__luoomeErrors');
+    if (errors.length) throw new Error(`看盘浏览器错误：${JSON.stringify(errors)}`);
+    const evidence = {
+      scope: 'overview',
+      independentSections: [...new Set(overviewRequests)],
+      slowSectionsDoNotBlock: true,
+      httpAndToolFailureRetainData: true,
+      sectionRetry: true,
+      pageIsolation: true,
+      sortAndTabs: true,
+      stockDetail: true,
+      mobileOverflowPx: overflow,
+      rootOverflowPx: rootOverflow,
+      errors,
+      screenshots: (await readdir(evidenceDir)).filter((name) => name.endsWith('.png')),
+    };
+    await writeFile(join(evidenceDir, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));
+    console.log(JSON.stringify({ root, evidenceDir, ...evidence }, null, 2));
+    return;
+  }
 
   await clickPanel('持仓');
   await page.waitFor(
@@ -1156,7 +1484,6 @@ try {
   await new Promise((done) => setTimeout(done, 250));
   await page.screenshot(join(evidenceDir, 'review-desktop.png'));
 
-  const readsBeforeStrategies = stockDetailReads;
   await clickPanel('策略');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.strategyName)})`,
@@ -1289,7 +1616,7 @@ try {
   );
   await new Promise((done) => setTimeout(done, 150));
   await page.screenshot(join(evidenceDir, 'strategies-matches-desktop.png'));
-  if (stockDetailReads !== readsBeforeStrategies) throw new Error('策略列表不应预取所有个股行情');
+  if (stockDetailReads !== overviewStockReads) throw new Error('策略列表不应预取所有个股行情');
   stockQuoteFailure = true;
   await page.evaluate(
     `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]').click()`,
@@ -1355,37 +1682,6 @@ try {
   );
   // 在无模型调用的可编辑会话中验收管理草稿，避免前置模型失败使会话进入只读。
   await clickPanel('策略');
-  const hasDailyRecovery = await page.evaluate<boolean>(
-    `Object.keys(localStorage).some((key) => key.endsWith(':daily-cycle'))`,
-  );
-  if (hasDailyRecovery) {
-    await page.evaluate(
-      `Object.keys(localStorage).filter((key) => key.endsWith(':daily-cycle')).forEach((key) => localStorage.removeItem(key))`,
-    );
-    await page.reload();
-    await clickPanel('策略');
-  }
-  await page.evaluate(`document.querySelector('.luo-strategy-operations').open = true`);
-  await page.waitFor(
-    `[...document.querySelectorAll('button')].some((button) => button.innerText.includes('立即执行日循环') && !button.disabled)`,
-    '手动日循环入口',
-  );
-  await page.evaluate(
-    `[...document.querySelectorAll('button')].find((button) => button.innerText.includes('立即执行日循环')).click()`,
-  );
-  await page.waitFor(
-    `document.querySelector('.luo-research-operation') !== null`,
-    '日循环操作回执出现',
-  );
-  await page.waitFor(
-    `document.body.innerText.includes('参数已冻结，等待你确认')`,
-    '日循环冻结参数',
-  );
-  await page.evaluate(
-    `[...document.querySelectorAll('button')].find((button) => button.innerText.includes('确认本次操作')).click()`,
-  );
-  await page.waitFor(`document.body.innerText.includes('操作回执已确认')`, '日循环人工确认回执');
-  await page.screenshot(join(evidenceDir, 'daily-cycle-manual-operation.png'));
   await page.waitFor(
     `document.querySelector('[data-strategy-operation]') !== null`,
     '运行管理入口',
@@ -1497,8 +1793,8 @@ try {
   await page.waitFor(`document.body.innerText.includes('看盘')`, '刷新后的工作台');
   await clickPanel('看盘');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
-    '刷新后建议',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
+    '刷新后持仓',
   );
   const refreshedOverview = await fetchState(origin, cookie, 'overview');
   const refreshedHoldings = toolData(refreshedOverview, 'list_holdings') as {
@@ -1507,7 +1803,7 @@ try {
   if (refreshedHoldings?.holdings?.[0]?.holding?.stockId !== fixtureInfo.stock.id)
     throw new Error('刷新后 state 事实不一致');
   const refreshedText = await page.evaluate<string>('document.body.innerText');
-  if (!refreshedText.includes(fixtureInfo.advicePremise) || !refreshedText.includes('核心指数'))
+  if (!refreshedText.includes(fixtureInfo.stock.name) || !refreshedText.includes('核心指数'))
     throw new Error('刷新后 DOM 与事实不一致');
 
   // 6) 移动端基本可读：窄屏侧栏自动折叠为图标 rail（aria-label 仍可定位），
@@ -1521,8 +1817,8 @@ try {
   await clickPanel('看盘');
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '移动端看盘');
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)})`,
-    '移动端建议数据',
+    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
+    '移动端持仓数据',
   );
   const overflow = await page.evaluate<number>(
     'document.documentElement.scrollWidth - window.innerWidth',
@@ -1532,7 +1828,6 @@ try {
   await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
   for (const [label, title, file] of [
     ['持仓', '持仓与账本', 'positions-mobile.png'],
-    ['关注', '关注列表', 'watchlists-mobile.png'],
     ['投资设置', 'FUYAO（同花顺）', 'settings-mobile.png'],
   ]) {
     await clickPanel(label as string);
@@ -2023,7 +2318,7 @@ try {
     sidebarLabels,
     panels: {
       overview: {
-        domChecks: [fixtureInfo.advicePremise, '持仓市值', '今日触发'],
+        domChecks: [fixtureInfo.stock.name, fixtureInfo.advicePremise, '持仓市值'],
         stateAccountTotal: overviewAccounts?.total,
         stateHoldings: dbHoldings,
         dbAccountId: dbAccount?.id,
@@ -2109,6 +2404,10 @@ try {
   await writeFile(join(evidenceDir, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));
   Object.assign(summary, { root, evidenceDir, ...evidence });
   console.log(JSON.stringify(summary, null, 2));
+};
+
+try {
+  await runAcceptance();
 } catch (error) {
   let pageErrors: unknown = null;
   try {

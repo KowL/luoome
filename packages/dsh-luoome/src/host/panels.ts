@@ -4,7 +4,7 @@
 // → 本模块固定 panel→工具映射 → 进程内 ReadSurface / MarketSurface 调真实领域工具。
 //
 // 安全边界：
-// - URL 只接受 `panel` 参数且必须是固定面板名字；不接受工具名、命令、账户或任意查询参数。
+// - URL 只接受固定 panel/section，关注行情另接受页码；不接受工具名、命令或账户。
 // - 映射在服务端冻结，调用方无法通过请求扩大工具集合；响应只投影 ToolResult（ok/data 或
 //   error），不在服务端重算 PnL、统计或发布资格。
 // - 所有响应 cache-control: no-store；未知 panel 404、方法错误 405（Allow: GET）。
@@ -61,6 +61,42 @@ const sentimentCall = (): PanelToolCall =>
     }),
   });
 
+const todayTriggers = (): PanelToolCall => ({
+  name: 'list_watch_triggers',
+  input: (now) => {
+    const since = new Date(`${dateInShanghai(now)}T00:00:00+08:00`);
+    return {
+      since,
+      until: new Date(since.getTime() + 86_400_000 - 1),
+      limit: 8,
+      orderBy: 'priority',
+    };
+  },
+});
+
+export const OVERVIEW_PLANS = {
+  indices: { read: [], market: [fixed('fetch_index_quotes')] },
+  sentiment: { read: [], market: [sentimentCall()] },
+  account: { read: [fixed('get_account_facts')], market: [] },
+  holdings: { read: [fixed('list_holdings')], market: [] },
+  watchlists: { read: [fixed('list_watchlists', { enabledOnly: true })], market: [] },
+  watchlist: { read: [], market: [] },
+  triggers: { read: [todayTriggers()], market: [] },
+  advice: { read: [fixed('get_advice', { limit: 9 })], market: [] },
+  health: { read: [fixed('get_market_data_status')], market: [] },
+  sectors: { read: [], market: [fixed('fetch_sector_quotes', { sort: 'changePct', limit: 5 })] },
+  news: { read: [], market: [fixed('fetch_news', { limit: 8 })] },
+} as const satisfies Readonly<Record<string, PanelPlan>>;
+export type OverviewSection = keyof typeof OVERVIEW_PLANS;
+export const WATCHLIST_PAGE_SIZE = 40;
+
+interface WatchlistPage {
+  readonly page: number;
+  readonly pageSize: number;
+  readonly total: number;
+  readonly incomplete: boolean;
+}
+
 /**
  * 面板固定映射（需求 §7）：
  * - overview：市场（情绪/指数 external + 本地行情状态）、账户概览、触发、建议卡；
@@ -77,7 +113,8 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
     read: Object.freeze([
       fixed('list_accounts'),
       fixed('list_holdings'),
-      fixed('list_watch_triggers'),
+      todayTriggers(),
+      fixed('list_watchlists'),
       fixed('get_advice'),
       fixed('get_market_data_status'),
     ]),
@@ -164,6 +201,8 @@ export interface PanelStateResponse {
   readonly tools: readonly PanelStateTool[];
   readonly strategies?: readonly PanelStrategyWorkspace[];
   readonly configuration?: Readonly<Record<string, unknown>>;
+  readonly section?: OverviewSection;
+  readonly watchlistPage?: WatchlistPage;
 }
 
 const jsonNoStore = (body: unknown, status = 200): Response =>
@@ -209,6 +248,62 @@ const invoke = async (
       error: { kind: 'internal', cause: 'Panel tool execution unavailable' },
     };
   }
+};
+
+/** 成员由受账户约束的读工具决定；HTTP 不能提供任意股票集合。 */
+const readWatchlistPage = async (
+  options: CreatePanelStateHandlerOptions,
+  page: number,
+  signal: AbortSignal,
+  now: Date,
+): Promise<{ tools: PanelStateTool[]; watchlistPage?: WatchlistPage }> => {
+  const listed = await invoke(
+    options.read,
+    fixed('list_watchlists', { enabledOnly: true }),
+    signal,
+    now,
+  );
+  if (!listed.ok) return { tools: [listed] };
+  const lists = listed.data as { items: { watchlist: { id: string } }[] };
+  const members = await Promise.all(
+    lists.items.map(({ watchlist }) =>
+      invoke(options.read, fixed('get_watchlist', { watchlistId: watchlist.id }), signal, now),
+    ),
+  );
+  const successful = members.filter((result) => result.ok);
+  if (members.length > 0 && successful.length === 0)
+    return { tools: [members[0] as PanelStateTool] };
+  const ids = [
+    ...new Set(
+      successful.flatMap((result) =>
+        (result.data as { members: { member: { stockId: string } }[] }).members.map(
+          ({ member }) => member.stockId,
+        ),
+      ),
+    ),
+  ].sort();
+  const stockIds = ids.slice((page - 1) * WATCHLIST_PAGE_SIZE, page * WATCHLIST_PAGE_SIZE);
+  const quotes =
+    stockIds.length === 0
+      ? projectPanelTool('batch_quote', {
+          ok: true,
+          data: { items: [], quotes: [], unresolved: [] },
+        })
+      : await invoke(
+          options.market,
+          fixed('batch_quote', { stockIds, context: 'display' }),
+          signal,
+          now,
+        );
+  return {
+    tools: [quotes],
+    watchlistPage: {
+      page,
+      pageSize: WATCHLIST_PAGE_SIZE,
+      total: ids.length,
+      incomplete: successful.length !== members.length,
+    },
+  };
 };
 
 const strategyIdsOf = (result: PanelStateTool): readonly string[] => {
@@ -336,7 +431,8 @@ export const createPanelStateHandler =
     }
     const url = new URL(request.url);
     for (const key of url.searchParams.keys()) {
-      if (key !== 'panel') return jsonNoStore(invalidInput('Unsupported query parameter'), 400);
+      if (!['panel', 'section', 'page'].includes(key) || url.searchParams.getAll(key).length !== 1)
+        return jsonNoStore(invalidInput('Unsupported query parameter'), 400);
     }
     const panel = url.searchParams.get('panel');
     if (panel === null || !(PANEL_NAMES as readonly string[]).includes(panel)) {
@@ -346,7 +442,17 @@ export const createPanelStateHandler =
       );
     }
     const name = panel as PanelName;
-    const plan = PANEL_PLANS[name];
+    const sectionValue = url.searchParams.get('section');
+    if (
+      sectionValue !== null &&
+      (name !== 'overview' || !Object.hasOwn(OVERVIEW_PLANS, sectionValue))
+    )
+      return jsonNoStore(invalidInput('Unknown overview section'), 400);
+    const section = sectionValue as OverviewSection | null;
+    const pageValue = url.searchParams.get('page');
+    if (pageValue !== null && (section !== 'watchlist' || !/^[1-9]\d{0,4}$/.test(pageValue)))
+      return jsonNoStore(invalidInput('Invalid watchlist page'), 400);
+    const plan: PanelPlan = section === null ? PANEL_PLANS[name] : OVERVIEW_PLANS[section];
     const now = (options.now ?? (() => new Date()))();
     const signal = request.signal;
     const marketSignal = AbortSignal.any([
@@ -359,6 +465,11 @@ export const createPanelStateHandler =
       Promise.all(plan.market.map((call) => invoke(options.market, call, marketSignal, now))),
     ]);
     const tools: PanelStateTool[] = [...readTools, ...marketTools];
+    const watchlist =
+      section === 'watchlist'
+        ? await readWatchlistPage(options, Number(pageValue ?? 1), marketSignal, now)
+        : undefined;
+    if (watchlist !== undefined) tools.push(...watchlist.tools);
 
     let strategies: PanelStrategyWorkspace[] | undefined;
     if (name === 'strategies') {
@@ -397,6 +508,8 @@ export const createPanelStateHandler =
         nextSessionStart: nextTradingSessionStart(now).toISOString(),
       },
       tools,
+      ...(section === null ? {} : { section }),
+      ...(watchlist?.watchlistPage === undefined ? {} : { watchlistPage: watchlist.watchlistPage }),
       ...(strategies === undefined ? {} : { strategies }),
       ...(name === 'settings' && options.configuration !== undefined
         ? { configuration: options.configuration() }

@@ -97,9 +97,8 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
  *
  * `fetch_news` 访问第三方新闻源、不写库，已按外部访问语义修正为 external
  * (packages/tools/src/tools/news.ts)，因此是每日市场分析「要闻」事实的默认候选。
- * `fetch_sector_quotes` 仍声明 read：需求 §4.2 的精确名单只点名 fetch_news，
- * 市场宽度由 `get_ashare_sentiment` 覆盖，板块快照不在本轮默认名单内，
- * 其分类修正另立 follow-up。`sync_quotes`/`send_notification` 等 external 工具虽
+ * `fetch_sector_quotes` 与新闻一致归入 external，供看盘分区读取行业排行。
+ * `sync_quotes`/`send_notification` 等 external 工具虽
  * 满足能力规则，但不属于「对话主动刷新市场事实」的精确名单，默认不点名。
  */
 export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
@@ -111,6 +110,7 @@ export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'run_strategy_research_comparison',
   'get_stock_market_view',
   'fetch_news',
+  'fetch_sector_quotes',
 ]);
 
 const ToolNameSchema = z.string().trim().min(1).max(120);

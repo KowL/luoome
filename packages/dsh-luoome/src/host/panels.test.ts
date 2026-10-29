@@ -12,11 +12,13 @@ import {
 import { toolRegistry } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
+import { syncWatchlistSourceTool } from '../../../tools/src/tools/watchlist.js';
 import { createMarketSurface } from './market-surface.js';
 import {
   createPanelStateHandler,
   createStockDetailHandler,
   createStockHistoryHandler,
+  OVERVIEW_PLANS,
   PANEL_NAMES,
   PANEL_PLANS,
   projectPanelTool,
@@ -126,6 +128,10 @@ const readNames = (): string[] => {
   names.add('get_strategy_workspace');
   names.add('get_strategy_schedule');
   names.add('list_strategy_watchlist_subscriptions');
+  for (const plan of Object.values(OVERVIEW_PLANS)) {
+    for (const call of plan.read) names.add(call.name);
+  }
+  names.add('get_watchlist');
   return [...names];
 };
 
@@ -134,6 +140,10 @@ const marketNames = (): string[] => {
   for (const panel of PANEL_NAMES) {
     for (const call of PANEL_PLANS[panel].market) names.add(call.name);
   }
+  for (const plan of Object.values(OVERVIEW_PLANS)) {
+    for (const call of plan.market) names.add(call.name);
+  }
+  names.add('batch_quote');
   return [...names];
 };
 
@@ -150,6 +160,7 @@ const setup = async (
     config: { allowlist: [...(options.allowlist ?? readNames())] },
     tools: toolRegistry.all(),
     context: contextCalls,
+    accountId: ctx.user.defaultAccountId,
   });
   // 默认零 market 工具：overview 的 external 调用必须原样返回 permission_denied，
   // 而不是被面板路由吞掉或伪造为空成功。
@@ -185,7 +196,7 @@ const toolNamesOf = (body: Record<string, unknown>): string[] =>
     : [];
 
 describe('panel state route', () => {
-  it('loads watchlists in their own panel without market calls or overview duplication', async () => {
+  it('loads watchlists in their own panel without market calls', async () => {
     const { handle, market } = await setup();
     const invoke = vi.spyOn(market, 'invoke');
     const response = await handle(stateRequest('watchlists'));
@@ -194,9 +205,156 @@ describe('panel state route', () => {
     expect(body.panel).toBe('watchlists');
     expect(toolNamesOf(body)).toEqual(['list_watchlists']);
     expect(invoke).not.toHaveBeenCalled();
-    expect(toolNamesOf(await bodyOf(await handle(stateRequest('overview'))))).not.toContain(
-      'list_watchlists',
+  });
+
+  it('returns fast sections while sentiment is still pending and invokes only the requested section', async () => {
+    const { handle, market, read } = await setup();
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = vi.spyOn(market, 'invoke').mockImplementation(async (name) => {
+      if (name === 'get_ashare_sentiment') await pending;
+      return { ok: true, data: { name } };
+    });
+    const reads = vi.spyOn(read, 'invoke');
+    let settled = false;
+    const slow = handle(stateRequest('overview', '&section=sentiment')).then((response) => {
+      settled = true;
+      return response;
+    });
+    const fast = await handle(stateRequest('overview', '&section=indices'));
+    expect(toolNamesOf(await bodyOf(fast))).toEqual(['fetch_index_quotes']);
+    expect(settled).toBe(false);
+    expect(reads).not.toHaveBeenCalled();
+    expect(calls.mock.calls.map(([name]) => name)).toEqual([
+      'get_ashare_sentiment',
+      'fetch_index_quotes',
+    ]);
+    release?.();
+    expect(toolNamesOf(await bodyOf(await slow))).toEqual(['get_ashare_sentiment']);
+  });
+
+  it.each([
+    ['positions', '&section=indices'],
+    ['overview', '&section=__proto__'],
+    ['overview', '&section=news&section=indices'],
+    ['overview', '&section=indices&page=1'],
+    ['overview', '&section=watchlist&page=0'],
+    ['overview', '&section=watchlist&page=1.5'],
+    ['overview', '&section=watchlist&page=100000'],
+    ['overview', '&section=watchlist&stockIds=600519.SH'],
+    ['overview', '&section=account&accountId=foreign'],
+  ])('rejects unsupported section parameters %s %s before tool access', async (panel, extra) => {
+    const { handle, contextCalls } = await setup();
+    expect((await handle(stateRequest(panel, extra))).status).toBe(400);
+    expect(contextCalls).not.toHaveBeenCalled();
+  });
+
+  it('filters today triggers by the Shanghai natural day, including both boundaries', async () => {
+    const { handle, read } = await setup();
+    const calls = vi.spyOn(read, 'invoke');
+    await handle(stateRequest('overview', '&section=triggers'));
+    expect(calls).toHaveBeenCalledWith(
+      'list_watch_triggers',
+      {
+        since: new Date('2026-10-24T16:00:00.000Z'),
+        until: new Date('2026-10-25T15:59:59.999Z'),
+        limit: 8,
+        orderBy: 'priority',
+      },
+      expect.any(AbortSignal),
     );
+  });
+
+  it('deduplicates visible watchlist members and quotes only the requested page', async () => {
+    const { handle, read, market } = await setup();
+    const ids = Array.from({ length: 45 }, (_, index) => `${600000 + index}.SH`);
+    vi.spyOn(read, 'invoke').mockImplementation(async (name) => ({
+      ok: true,
+      data:
+        name === 'list_watchlists'
+          ? { items: [{ watchlist: { id: 'a' } }, { watchlist: { id: 'b' } }] }
+          : { members: ids.map((stockId) => ({ member: { stockId } })) },
+    }));
+    const quote = vi.spyOn(market, 'invoke').mockResolvedValue({ ok: true, data: { items: [] } });
+    const body = await bodyOf(await handle(stateRequest('overview', '&section=watchlist&page=2')));
+    expect(quote).toHaveBeenCalledExactlyOnceWith(
+      'batch_quote',
+      { stockIds: ids.slice(40), context: 'display' },
+      expect.any(AbortSignal),
+    );
+    expect(body.watchlistPage).toEqual({ page: 2, pageSize: 40, total: 45, incomplete: false });
+    expect(body.section).toBe('watchlist');
+  });
+
+  it('uses account-scoped members and excludes archived and disabled lists', async () => {
+    const { handle, ctx, market } = await setup({ marketAllowlist: ['batch_quote'] });
+    const run = async (name: string, input: unknown) => {
+      const tool =
+        name === 'sync_watchlist_source' ? syncWatchlistSourceTool : toolRegistry.get(name);
+      const result = await tool?.execute(input, ctx);
+      expect(result?.ok).toBe(true);
+    };
+    await run('create_watchlist', {
+      id: 'visible',
+      name: 'Visible',
+      kind: 'personal',
+      membershipPolicy: 'mixed',
+    });
+    await run('sync_watchlist_source', {
+      watchlistId: 'visible',
+      sourceKind: 'portfolio',
+      sourceKey: 'portfolio:foreign',
+      sourceId: 'foreign',
+      status: 'complete',
+      candidates: [{ stockId: '600519.SH', reason: 'foreign', evidence: [] }],
+    });
+    await run('add_watchlist_member', { watchlistId: 'visible', stockId: '002594.SZ' });
+    await run('create_watchlist', {
+      id: 'disabled',
+      name: 'Disabled',
+      kind: 'personal',
+      membershipPolicy: 'manual',
+      enabled: false,
+    });
+    await run('add_watchlist_member', { watchlistId: 'disabled', stockId: '600519.SH' });
+    const quote = vi.spyOn(market, 'invoke');
+    const body = await bodyOf(await handle(stateRequest('overview', '&section=watchlist')));
+    expect(body.watchlistPage).toMatchObject({ total: 1 });
+    expect(quote).toHaveBeenCalledWith(
+      'batch_quote',
+      { stockIds: ['002594.SZ'], context: 'display' },
+      expect.any(AbortSignal),
+    );
+    await run('archive_watchlist_member', { watchlistId: 'visible', stockId: '002594.SZ' });
+    quote.mockClear();
+    const empty = await bodyOf(await handle(stateRequest('overview', '&section=watchlist')));
+    expect(empty.watchlistPage).toMatchObject({ total: 0 });
+    expect(quote).not.toHaveBeenCalled();
+  });
+
+  it('keeps watchlist read failures as failures and marks partial coverage', async () => {
+    const { handle, read, market } = await setup();
+    const error = { kind: 'permission_denied' as const, required: 'current owner account' };
+    let failed = true;
+    vi.spyOn(read, 'invoke').mockImplementation(async (name, input) => {
+      if (name === 'list_watchlists')
+        return {
+          ok: true,
+          data: { items: [{ watchlist: { id: 'a' } }, { watchlist: { id: 'b' } }] },
+        };
+      return failed || (input as { watchlistId: string }).watchlistId === 'b'
+        ? { ok: false, error }
+        : { ok: true, data: { members: [{ member: { stockId: '600519.SH' } }] } };
+    });
+    const quote = vi.spyOn(market, 'invoke').mockResolvedValue({ ok: true, data: { items: [] } });
+    const unavailable = await bodyOf(await handle(stateRequest('overview', '&section=watchlist')));
+    expect(unavailable.tools).toEqual([{ name: 'get_watchlist', ok: false, error }]);
+    expect(quote).not.toHaveBeenCalled();
+    failed = false;
+    const partial = await bodyOf(await handle(stateRequest('overview', '&section=watchlist')));
+    expect(partial.watchlistPage).toMatchObject({ total: 1, incomplete: true });
   });
 
   it('serves the fixed overview mapping with no-store and projects ToolResult verbatim', async () => {

@@ -20,7 +20,7 @@ const owner = Object.freeze({
 const profileName = 'luoome-plugin';
 const nodeCommand = process.env.NODE24_PATH ?? 'node';
 const READ_TOOL_COUNT = 63;
-const MARKET_TOOL_COUNT = 8;
+const MARKET_TOOL_COUNT = 9;
 const EXPECTED_MARKET_TOOLS = [
   'fetch_index_quotes',
   'get_ashare_sentiment',
@@ -30,6 +30,7 @@ const EXPECTED_MARKET_TOOLS = [
   'run_strategy_research_comparison',
   'get_stock_market_view',
   'fetch_news',
+  'fetch_sector_quotes',
 ] as const;
 const SKILL_NAMES = [
   'daily-market-analysis',
@@ -80,7 +81,6 @@ const FORBIDDEN_MARKET_TOOLS = [
   'add_trade',
   'get_stock_minute_bars',
   'import_remote_research_document',
-  'fetch_sector_quotes',
 ] as const;
 
 interface Descendant {

@@ -124,7 +124,7 @@ export function StockDetail({
           message:
             response?.error?.kind === 'permission_denied'
               ? '当前配置未启用个股行情读取。'
-              : '行情暂时不可用，可稍后重试。策略匹配依据仍可查看。',
+              : '行情暂时不可用，可稍后重试。',
         }
       : null);
   const analyze = async () => {
@@ -270,27 +270,27 @@ export function StockDetail({
                   },
                 }),
       ),
-      h(
-        Card,
-        { title: sourceLabel, meta: version ? `第 ${version.version} 版` : null },
-        h('p', { className: 'luo-stock-strategy-name' }, strategyName),
-        result ? h('p', { className: 'luo-fine' }, `匹配事实时间 ${when(result.dataAsOf)}`) : null,
-        result
-          ? h(
+      result && version
+        ? h(
+            Card,
+            { title: sourceLabel, meta: `第 ${version.version} 版` },
+            h('p', { className: 'luo-stock-strategy-name' }, strategyName),
+            h('p', { className: 'luo-fine' }, `匹配事实时间 ${when(result.dataAsOf)}`),
+            h(
               'div',
               { className: 'luo-stats luo-stock-match-stats' },
               h(Stat, { k: '排名', v: int(result.rank) }),
               h(Stat, { k: '规则评分', v: result.score === undefined ? '—' : money(result.score) }),
-            )
-          : null,
-        evidence,
-      ),
+            ),
+            evidence,
+          )
+        : h(Card, { title: '关注来源' }, sourceLabel),
       h(
         'p',
         { className: 'luo-strategy-note' },
         result
           ? '行情快照与策略匹配可能来自不同时点。规则评分不代表成功概率，匹配标的仅供研究。'
-          : '关注理由与行情快照可能来自不同时点。关注仅供持续研究，不代表买入建议。',
+          : '行情与账户事实可能来自不同时点。关注或持仓不代表买入建议。',
       ),
     ),
     h(

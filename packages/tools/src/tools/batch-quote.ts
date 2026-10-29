@@ -2,6 +2,7 @@ import { QuoteSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { deriveQuoteChange } from '../internal/market-view.js';
 import { resolveQuotes } from '../internal/resolve-quotes.js';
 
 /**
@@ -24,6 +25,8 @@ const BatchQuoteItem = z.discriminatedUnion('status', [
     stockName: z.string(),
     status: z.literal('ok'),
     quote: QuoteSchema,
+    change: z.number().nullable(),
+    changePct: z.number().nullable(),
     retrieval: z.enum(['live', 'local-fallback']),
     freshness: z.enum(['fresh', 'stale']),
   }),
@@ -53,10 +56,15 @@ export const batchQuoteTool = defineTool({
   input: BatchQuoteInput,
   output: BatchQuoteOutput,
   handler: async (input, ctx) => {
-    const items = await resolveQuotes(ctx, input.stockIds, {
+    const resolved = await resolveQuotes(ctx, input.stockIds, {
       context: input.context,
       watchIntervalSeconds: input.watchIntervalSeconds,
     });
+    const items = resolved.map((item) =>
+      item.status === 'ok'
+        ? { ...item, ...deriveQuoteChange(item.quote, item.quote.prevClose ?? null) }
+        : item,
+    );
     const quotes = items.flatMap((item) => (item.status === 'ok' ? [item.quote] : []));
     const unresolved = items.flatMap((item) => (item.status === 'ok' ? [] : [item.stockId]));
     return { items, quotes, unresolved };
