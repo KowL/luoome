@@ -5,6 +5,7 @@ import {
   type LimitUpLadderManagerLike,
   type MarketDataAdapterLike,
   money,
+  readStrategyRunSnapshot,
   type Strategy,
   type StrategyDslV1,
   type StrategySignalEmission,
@@ -668,6 +669,68 @@ describe('run_strategy', () => {
     if (!result.ok) return;
     expect(result.data.run.dataAsOf).toEqual(freshDate);
     expect(result.data.run.providerCoverage?.[0]?.dataAsOf).toEqual(freshDate);
+  });
+
+  it('scheduled run 按成员覆盖率解析事实日期，落后成员不再拖回整天', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const freshDate = new Date('2026-08-12T00:00:00.000Z');
+    const staleDate = new Date('2026-08-05T00:00:00.000Z');
+    const laggingStockId = '002415.SZ';
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 10, observedAt: now });
+    await seedStrategy(base);
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: (stockId: string) =>
+            Promise.resolve([
+              {
+                stockId,
+                date: stockId === laggingStockId ? staleDate : freshDate,
+                open: money(10),
+                high: money(11),
+                low: money(9),
+                close: money(10),
+                volume: 1_000_000,
+                adjustment: 'qfq' as const,
+                source: 'checkpoint-fixture',
+              },
+            ]),
+        },
+      },
+    };
+    const prepared = await prepareStrategyDataTool.execute(
+      { strategyId: 'scan-strategy', asOf: now, maxStalenessTradingDays: 1 },
+      ctx,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+        acceptancePolicy: {
+          policyVersion: 'strategy-run-acceptance-v1',
+          minEvaluatedRatio: 0.5,
+          maxFailedRatio: 0.5,
+          maxIncompleteRatio: 0.5,
+        },
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.dataAsOf).toEqual(freshDate);
+    const snapshot = readStrategyRunSnapshot(result.data.run.inputSnapshot);
+    expect(snapshot.dataCheckpoint?.factDate).toEqual(freshDate);
+    expect(snapshot.dataCheckpoint?.laggingCount).toBe(1);
+    expect(snapshot.dataCheckpoint?.factCoverage).toBeCloseTo(9 / 10, 5);
   });
 
   it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {

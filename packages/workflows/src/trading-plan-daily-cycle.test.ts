@@ -713,4 +713,28 @@ describe('trading plan daily cycle', () => {
     expect(conflict.data.plans[0]?.position.constraintStatus).toBe('blocked');
     expect(conflict.data.plans[0]?.explanation.unknowns.join('；')).toContain('条件不一致');
   });
+  it('非 UUID 账户键（如 default-account）不会触发 sync_quotes 的 Invalid UUID', async () => {
+    const now = NOW;
+    const ctx = await buildTestContext({ clock: () => now });
+    await ctx.repos.account.save({
+      id: 'default-account',
+      name: '默认投资账户',
+      kind: 'real',
+      currency: 'CNY',
+      initialCapital: money(0),
+      cashBalance: money(0),
+      createdAt: new Date('2026-01-05T01:00:00.000Z'),
+    });
+    const res = await tradingPlanDailyCycleWorkflow.run(
+      { accountId: 'default-account', date: '2026-07-17', mode: 'scheduled' },
+      ctx,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.errors.filter((error) => error.reason.includes('Invalid UUID'))).toEqual([]);
+    const audits = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'trading-plan-daily-cycle',
+    });
+    expect(audits.filter((run) => (run.error ?? '').includes('Invalid UUID'))).toEqual([]);
+  });
 });

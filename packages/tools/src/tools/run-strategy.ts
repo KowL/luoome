@@ -15,6 +15,7 @@ import {
   isPublishableOperationalRun,
   isSTName,
   readStrategyRunSnapshot,
+  resolveFactDate,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
   type StrategyLeaseToken,
@@ -333,11 +334,23 @@ export const runStrategyTool = defineTool({
         // scheduled 的时点由 immutable checkpoint 决定；不能用运行开始时刻冒充输入新鲜度。
         dataAsOf = usableDataCheckpoint.dataAsOf;
       }
+      let factDateResolution: ReturnType<typeof resolveFactDate> | undefined;
+      if (
+        (input.mode === 'scheduled' || input.mode === 'replay') &&
+        usableDataCheckpoint !== undefined
+      ) {
+        // 事实日期按 checkpoint 成员的覆盖率聚合：少量落后成员不再拖回整天事实日。
+        const resolution = resolveFactDate(checkpointMembers);
+        if (resolution !== undefined) {
+          factDateResolution = resolution;
+          dataAsOf = resolution.factDate;
+        }
+      }
       if (
         usableDataCheckpoint !== undefined &&
-        usableDataCheckpoint.dataAsOf.getTime() > dataAsOf.getTime()
+        dataAsOf.getTime() > usableDataCheckpoint.dataAsOf.getTime()
       ) {
-        return errInvalidInput('dataCheckpoint.dataAsOf 不能晚于 StrategyRun.dataAsOf');
+        return errInvalidInput('StrategyRun.dataAsOf 不能晚于 dataCheckpoint.dataAsOf');
       }
       if (
         (input.mode === 'scheduled' || input.mode === 'replay') &&
@@ -356,20 +369,6 @@ export const runStrategyTool = defineTool({
           createHash('sha256').update(JSON.stringify(universeMemberIds)).digest('hex')
       ) {
         return errInvalidInput(`${input.mode} StrategyRun 的 data checkpoint 成员集合不匹配`);
-      }
-      if (
-        (input.mode === 'scheduled' || input.mode === 'replay') &&
-        usableDataCheckpoint !== undefined
-      ) {
-        const observedTimes = checkpointMembers.flatMap((member) =>
-          candidateIds.includes(member.stockId) &&
-          member.status === 'available' &&
-          member.latestBarDate !== undefined
-            ? [member.latestBarDate.getTime()]
-            : [],
-        );
-        const oldestObserved = Math.min(...observedTimes);
-        if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
       }
       const evaluationRevisionCutoff =
         input.mode === 'replay' ? input.revisionCutoff : usableDataCheckpoint?.startedAt;
@@ -534,6 +533,13 @@ export const runStrategyTool = defineTool({
                   id: usableDataCheckpoint.id,
                   dataAsOf: usableDataCheckpoint.dataAsOf,
                   checksum: usableDataCheckpoint.dataChecksum,
+                  ...(factDateResolution === undefined
+                    ? {}
+                    : {
+                        factDate: factDateResolution.factDate,
+                        factCoverage: factDateResolution.coverageRatio,
+                        laggingCount: factDateResolution.laggingCount,
+                      }),
                 },
               }),
           acceptancePolicyVersion:

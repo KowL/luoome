@@ -20,7 +20,7 @@ import { closingReportWorkflow } from './closing-report.js';
 import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
 import { buildWorkflowTools } from './define-workflow.js';
 import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
-import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
+import { isScheduleDayDuplicate, strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 
@@ -114,6 +114,53 @@ const prepareAccountPlans = async (ctx: ToolContext, date = '2026-08-10') => {
     expect(batch.status).not.toBe('blocked');
   }
 };
+
+describe('isScheduleDayDuplicate', () => {
+  const day = new Date('2026-08-10T10:00:00.000Z');
+  const snapshot = (factDate: string) => ({
+    schemaVersion: 3,
+    requestedBy: 'scheduled',
+    dataCheckpoint: { id: 'checkpoint-1', dataAsOf: day, checksum: 'x', factDate },
+  });
+  const run = (overrides: Record<string, unknown>) => ({
+    mode: 'scheduled',
+    dataAsOf: new Date('2026-08-10T00:00:00.000Z'),
+    inputSnapshot: snapshot('2026-08-10T00:00:00.000Z'),
+    publication: { status: 'published' },
+    ...overrides,
+  });
+
+  it('同日已发布运行判为重复', () => {
+    expect(isScheduleDayDuplicate(run({}), day)).toBe(true);
+  });
+
+  it('被 withhold 的同日运行不判重复，补跑不会被挡', () => {
+    expect(isScheduleDayDuplicate(run({ publication: { status: 'withheld' } }), day)).toBe(false);
+    expect(isScheduleDayDuplicate(run({ publication: undefined }), day)).toBe(false);
+  });
+
+  it('事实日不同不判重复（昨天迟跑不吞掉今天）', () => {
+    expect(
+      isScheduleDayDuplicate(
+        run({
+          dataAsOf: new Date('2026-08-07T00:00:00.000Z'),
+          inputSnapshot: snapshot('2026-08-07T00:00:00.000Z'),
+        }),
+        day,
+      ),
+    ).toBe(false);
+  });
+
+  it('非 scheduled 或非 scheduled 请求不判重复', () => {
+    expect(isScheduleDayDuplicate(run({ mode: 'replay' }), day)).toBe(false);
+    expect(
+      isScheduleDayDuplicate(
+        run({ inputSnapshot: { ...snapshot('2026-08-10T00:00:00.000Z'), requestedBy: 'manual' } }),
+        day,
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('strategy-daily-cycle reliability matrix', () => {
   it('手动生成同样等待账户计划完成，再生成一份并复用', async () => {
@@ -792,7 +839,9 @@ describe('strategy-daily-cycle reliability matrix', () => {
         ? checkpoint.dataAsOf
         : undefined;
     now = new Date(
-      typeof checkpointDataAsOf === 'string' || typeof checkpointDataAsOf === 'number'
+      typeof checkpointDataAsOf === 'string' ||
+        typeof checkpointDataAsOf === 'number' ||
+        checkpointDataAsOf instanceof Date
         ? checkpointDataAsOf
         : firstRun.dataAsOf,
     );
@@ -812,6 +861,133 @@ describe('strategy-daily-cycle reliability matrix', () => {
       reason: 'schedule-day-duplicate',
     });
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toHaveLength(1);
+  });
+
+  it('scheduled 周期默认要求事实日等于最近已收盘交易日', async () => {
+    const barEnd = new Date('2026-08-07T10:00:00.000Z');
+    const withBarsEndingAt = async (end: Date): Promise<ToolContext> => {
+      const stockUniverse: StockUniverseManagerLike = {
+        name: 'stock-universe',
+        sources: ['test-source'],
+        fetchStockUniverse: async () => ({
+          source: 'test-source',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          observedAt: NOW,
+          complete: true,
+          reportedTotal: 1,
+          entries: [
+            {
+              stockId: '600519.SH',
+              code: '600519' as StockCode,
+              exchange: 'SH',
+              name: '贵州茅台',
+              listingStatus: 'listed',
+            },
+          ],
+        }),
+      };
+      const base = await buildTestContext({ clock: () => NOW, stockUniverse });
+      await seedSchedule(base);
+      return {
+        ...base,
+        adapters: {
+          ...base.adapters,
+          market: {
+            ...base.adapters.market,
+            fetchDailyBars: (stockId, range) =>
+              base.adapters.market.fetchDailyBars(stockId, { ...range, end }),
+          },
+        },
+      };
+    };
+
+    // 数据停在上一交易日（08-07，周五）：默认 staleness=0 时 checkpoint 不可用。
+    const staleCtx = await withBarsEndingAt(barEnd);
+    const stale = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-stale', leaseMinutes: 5 },
+      staleCtx,
+    );
+    expect(stale.ok).toBe(true);
+    if (!stale.ok) return;
+    expect(stale.data.items[0]).toMatchObject({
+      status: 'failed',
+      reason: 'data-checkpoint-below-min',
+    });
+    expect(await staleCtx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toEqual([]);
+
+    // 显式放宽到 1 个交易日后同一份数据可用，证明拦截来自事实日口径而不是数据本身。
+    const relaxedCtx = await withBarsEndingAt(barEnd);
+    const relaxed = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-relaxed', leaseMinutes: 5, maxStalenessTradingDays: 1 },
+      relaxedCtx,
+    );
+    expect(relaxed.ok).toBe(true);
+    if (!relaxed.ok) return;
+    expect(relaxed.data.items[0]?.status).not.toBe('failed');
+  });
+
+  it('事实日推进后同一 cron tick 不再被判为重复', async () => {
+    let barEnd = new Date('2026-08-07T10:00:00.000Z');
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['test-source'],
+      fetchStockUniverse: async () => ({
+        source: 'test-source',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        observedAt: NOW,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as StockCode,
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+          },
+        ],
+      }),
+    };
+    const base = await buildTestContext({ clock: () => NOW, stockUniverse });
+    await seedSchedule(base);
+    const ctx: ToolContext = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: (stockId, range) =>
+            base.adapters.market.fetchDailyBars(stockId, { ...range, end: barEnd }),
+        },
+      },
+    };
+
+    // 09:30 的 tick 只能拿到上一交易日数据：事实日 = 08-07。
+    const early = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-early', leaseMinutes: 5, maxStalenessTradingDays: 1 },
+      ctx,
+    );
+    expect(early.ok).toBe(true);
+    if (!early.ok) return;
+    expect(early.data.items[0]?.status).not.toBe('failed');
+    const firstRun = (await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' }))[0];
+    expect(firstRun?.dataAsOf).toEqual(new Date('2026-08-07T00:00:00.000Z'));
+
+    // 收盘后数据推进到 08-10：事实日不同，不能被上一条 run 判成同日重复。
+    barEnd = new Date('2026-08-10T10:00:00.000Z');
+    const schedule = await ctx.repos.strategySchedule.findById('cycle-schedule');
+    expect(schedule).not.toBeNull();
+    if (schedule === null) return;
+    await ctx.repos.strategySchedule.save({ ...schedule, nextRunAt: NOW });
+    const evening = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-evening', leaseMinutes: 5 },
+      ctx,
+    );
+    expect(evening.ok).toBe(true);
+    if (!evening.ok) return;
+    expect(evening.data.items[0]?.reason).not.toBe('schedule-day-duplicate');
+    const runs = await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' });
+    expect(runs.map((run) => run.dataAsOf.toISOString())).toContain('2026-08-10T00:00:00.000Z');
   });
 
   it.each([false, true])(

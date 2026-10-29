@@ -32,9 +32,17 @@ describe('workflow/sync-quotes', () => {
     expect(res.data.syncedAt).toBe(clock().toISOString());
   });
 
-  it('错误路径：accountId 不是 uuid → invalid_input', async () => {
+  it('正常路径：非 UUID 账户键（如 default-account）不被 schema 拒绝', async () => {
     const ctx = await buildTestContext();
-    const res = await syncQuotesWorkflow.run({ accountId: 'not-uuid' }, ctx);
+    const res = await syncQuotesWorkflow.run({ accountId: 'default-account' }, ctx);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.totalRequested).toBe(0);
+  });
+
+  it('错误路径：accountId 为空串 → invalid_input', async () => {
+    const ctx = await buildTestContext();
+    const res = await syncQuotesWorkflow.run({ accountId: '' }, ctx);
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_input');

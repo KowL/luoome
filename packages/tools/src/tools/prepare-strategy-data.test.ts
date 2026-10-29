@@ -191,6 +191,79 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(await ctx.repos.dailyBar.listRevisions({ stockId: '600519.SH' })).toHaveLength(1);
   });
 
+  it('盘中拿到的当日未收盘 bar 不落库，成员最新 bar 停在上一交易日', async () => {
+    // 2026-08-12 09:30 上海：开盘后的当日 bar 仍是形成中快照。
+    const now = new Date('2026-08-12T01:30:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const forming = bar(new Date('2026-08-12T00:00:00.000Z'));
+    const closed = bar(new Date('2026-08-11T00:00:00.000Z'));
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([forming, closed]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      { strategyId: 'strategy-1', asOf: now, stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]).toMatchObject({
+      stockId: '600519.SH',
+      status: 'available',
+      latestBarDate: new Date('2026-08-11T00:00:00.000Z'),
+    });
+    expect(result.data.members[0]?.barCount).toBe(1);
+    const persisted = await base.repos.dailyBar.findInRange(
+      '600519.SH',
+      new Date('2026-08-01T00:00:00.000Z'),
+      now,
+    );
+    expect(persisted.map((item) => item.date.toISOString())).toEqual(['2026-08-11T00:00:00.000Z']);
+    const revisions = await base.repos.dailyBar.listRevisions({ stockId: '600519.SH' });
+    expect(revisions.map((item) => item.date.toISOString())).toEqual(['2026-08-11T00:00:00.000Z']);
+  });
+
+  it('收盘后拿到的当日 bar 才进入投影', async () => {
+    // 2026-08-12 16:00 上海：当日已收盘。
+    const now = new Date('2026-08-12T08:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const closedToday = bar(new Date('2026-08-12T00:00:00.000Z'));
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([closedToday]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      { strategyId: 'strategy-1', asOf: now, stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]).toMatchObject({
+      status: 'available',
+      latestBarDate: new Date('2026-08-12T00:00:00.000Z'),
+    });
+    const persisted = await base.repos.dailyBar.findInRange(
+      '600519.SH',
+      new Date('2026-08-01T00:00:00.000Z'),
+      now,
+    );
+    expect(persisted.map((item) => item.date.toISOString())).toEqual(['2026-08-12T00:00:00.000Z']);
+  });
+
   it('stale daily bar is missing rather than provider-ok and lowers checkpoint coverage', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });

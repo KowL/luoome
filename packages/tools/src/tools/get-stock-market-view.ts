@@ -11,6 +11,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
+import { dropUnclosedBars } from '../internal/daily-bar-ingestion.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
 import {
   currentLimitUpDate,
@@ -237,7 +238,8 @@ export const getStockMarketViewTool = defineTool({
       droppedInvalid = normalized.droppedInvalid;
       if (bars.length > 0) {
         barsLive = true;
-        await ctx.repos.dailyBar.saveMany(bars);
+        // 展示可以带盘中未收盘的当日 bar，投影只能落已收盘事实。
+        await ctx.repos.dailyBar.saveMany(dropUnclosedBars(bars, ctx.clock()));
       }
     }
 

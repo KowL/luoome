@@ -2,7 +2,12 @@ import { type StrategyDslV1, strategyDefinitionHash } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
-import { getStrategyScheduleTool, setStrategyScheduleTool } from './strategy-schedule.js';
+import {
+  claimDueStrategySchedulesTool,
+  finishStrategyScheduleClaimTool,
+  getStrategyScheduleTool,
+  setStrategyScheduleTool,
+} from './strategy-schedule.js';
 
 const NOW = new Date('2026-08-10T09:00:00.000Z');
 const definition: StrategyDslV1 = {
@@ -91,6 +96,43 @@ describe('strategy schedule tools', () => {
       channel: 'log',
       observationHorizons: ['t3', 't5'],
     });
+  });
+
+  it('完成时从被消耗的发生点推进 nextRunAt，长运行不吞掉中间发生点', async () => {
+    let now = new Date('2026-10-27T00:30:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedActiveStrategy(ctx);
+    await setStrategyScheduleTool.execute(
+      { strategyId: 'scheduled', cron: '0 9-15 * * 1-5', timezone: 'Asia/Shanghai' },
+      ctx,
+    );
+    now = new Date('2026-10-27T01:00:00.000Z');
+    const claimed = await claimDueStrategySchedulesTool.execute(
+      { owner: 'cycle-long', leaseMinutes: 240 },
+      ctx,
+    );
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const item = claimed.data.items[0];
+    expect(item?.schedule.nextRunAt).toEqual(new Date('2026-10-27T01:00:00.000Z'));
+
+    // 运行跨过 10:00、11:00、12:00 三个发生点，13:00 前才结束。
+    now = new Date('2026-10-27T04:30:00.000Z');
+    const finished = await finishStrategyScheduleClaimTool.execute(
+      {
+        scheduleId: item?.schedule.id ?? '',
+        owner: 'cycle-long',
+        fence: item?.lease.fence ?? 1,
+        ...(item?.schedule.nextRunAt === undefined
+          ? {}
+          : { claimedNextRunAt: item.schedule.nextRunAt }),
+      },
+      ctx,
+    );
+    expect(finished.ok).toBe(true);
+    if (!finished.ok) return;
+    // 从被消耗的 09:00 发生点推进到 10:00；按完成时刻推进会直接跳到 13:00，吞掉中间发生点。
+    expect(finished.data.schedule.nextRunAt).toEqual(new Date('2026-10-27T02:00:00.000Z'));
   });
 
   it('拒绝无效 cron 和 draft Strategy 的启用调度', async () => {

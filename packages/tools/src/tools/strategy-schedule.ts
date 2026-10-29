@@ -125,6 +125,8 @@ export const FinishStrategyScheduleClaimInput = z.object({
   owner: z.string().min(1),
   fence: z.number().int().nonnegative().optional(),
   lastRunId: z.string().min(1).optional(),
+  /** 本次 claim 消耗的到期发生点；缺省时按完成时刻推进（兼容旧调用方）。 */
+  claimedNextRunAt: z.coerce.date().optional(),
 });
 export const FinishStrategyScheduleClaimOutput = z.object({ schedule: StrategyScheduleSchema });
 
@@ -143,10 +145,11 @@ export const finishStrategyScheduleClaimTool = defineTool({
       owner: input.owner,
       ...(input.fence === undefined ? {} : { fence: input.fence }),
       // 停机中断不能消耗本次到期任务；后继 worker 仍需补跑。
+      // 正常完成时从**被消耗的发生点**推进：跨多个周期的长运行不会静默吞掉中间交易日。
       nextRunAt:
         ctx.abortSignal?.aborted && schedule.nextRunAt !== undefined
           ? schedule.nextRunAt
-          : nextCronOccurrence(schedule.cron, schedule.timezone, now),
+          : nextCronOccurrence(schedule.cron, schedule.timezone, input.claimedNextRunAt ?? now),
       updatedAt: now,
       ...(input.lastRunId === undefined ? {} : { lastRunId: input.lastRunId }),
     });

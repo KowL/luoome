@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { DailyBar, ToolContext } from '@luoome/core';
+import {
+  type DailyBar,
+  dateInShanghai,
+  latestClosedTradingDate,
+  type ToolContext,
+} from '@luoome/core';
 
 export const mapWithConcurrency = async <T, R>(
   items: readonly T[],
@@ -25,6 +30,15 @@ const isRetryableProviderError = (error: unknown): boolean =>
     error instanceof Error ? error.message : String(error),
   );
 
+/**
+ * 丢弃未收盘的当日 bar：盘中快照不是收盘事实，写进 daily_bars 投影会污染后续所有读取。
+ * 按交易日 key 比较，bar 的时间戳精度不参与判断。
+ */
+export const dropUnclosedBars = (bars: readonly DailyBar[], now: Date): DailyBar[] => {
+  const closedThrough = dateInShanghai(latestClosedTradingDate(now));
+  return bars.filter((bar) => dateInShanghai(bar.date) <= closedThrough);
+};
+
 export const fetchDailyBarsWithRetry = async (
   ctx: ToolContext,
   stockId: string,
@@ -37,7 +51,7 @@ export const fetchDailyBarsWithRetry = async (
     try {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        return await Promise.race([
+        const bars = await Promise.race([
           ctx.adapters.market.fetchDailyBars(stockId, range),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
@@ -46,6 +60,7 @@ export const fetchDailyBarsWithRetry = async (
             );
           }),
         ]);
+        return dropUnclosedBars(bars, ctx.clock());
       } finally {
         if (timeout !== undefined) clearTimeout(timeout);
       }

@@ -96,6 +96,62 @@ describe('tool/sync_daily_bars', () => {
     ).toHaveLength(1);
   });
 
+  it('盘中不写入当日未收盘 bar，收盘后才写入', async () => {
+    // 2026-07-28 09:30 上海：当日 bar 仍在形成中。
+    const intraday = await buildTestContext({
+      clock: () => new Date('2026-07-28T01:30:00.000Z'),
+    });
+    const intradayMarket: MarketDataAdapterLike = {
+      ...intraday.adapters.market,
+      fetchDailyBars: async (stockId) => [qfqBar(stockId, '2026-07-28')],
+    };
+    const intradayCtx = {
+      ...intraday,
+      adapters: { ...intraday.adapters, market: intradayMarket },
+    };
+    const intradayResult = await syncDailyBarsTool.execute(
+      { scope: 'explicit', stockIds: ['600519.SH'] },
+      intradayCtx,
+    );
+    expect(intradayResult.ok).toBe(true);
+    if (!intradayResult.ok) return;
+    expect(intradayResult.data.status).toBe('failed');
+    expect(
+      await intraday.repos.dailyBar.findInRange(
+        '600519.SH',
+        new Date('2026-07-01T00:00:00.000Z'),
+        new Date('2026-07-31T00:00:00.000Z'),
+      ),
+    ).toHaveLength(0);
+
+    // 2026-07-28 16:00 上海：当日已收盘，同一根 bar 允许写入。
+    const afterClose = await buildTestContext({
+      clock: () => new Date('2026-07-28T08:00:00.000Z'),
+    });
+    const closedMarket: MarketDataAdapterLike = {
+      ...afterClose.adapters.market,
+      fetchDailyBars: async (stockId) => [qfqBar(stockId, '2026-07-28')],
+    };
+    const closedCtx = {
+      ...afterClose,
+      adapters: { ...afterClose.adapters, market: closedMarket },
+    };
+    const closedResult = await syncDailyBarsTool.execute(
+      { scope: 'explicit', stockIds: ['600519.SH'] },
+      closedCtx,
+    );
+    expect(closedResult.ok).toBe(true);
+    if (!closedResult.ok) return;
+    expect(closedResult.data.status).toBe('succeeded');
+    expect(
+      await afterClose.repos.dailyBar.findInRange(
+        '600519.SH',
+        new Date('2026-07-01T00:00:00.000Z'),
+        new Date('2026-07-31T00:00:00.000Z'),
+      ),
+    ).toHaveLength(1);
+  });
+
   it('relevant 范围纳入启用 Watchlist 的当前成员（disabled 不纳入）', async () => {
     const calls: string[] = [];
     const now = new Date('2026-07-28T08:30:00.000Z');

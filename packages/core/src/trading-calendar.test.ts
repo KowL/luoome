@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeMarketSession, nextTradingSessionStart } from './trading-calendar.js';
+import {
+  computeMarketSession,
+  latestClosedTradingDate,
+  nextTradingSessionStart,
+} from './trading-calendar.js';
 
 const shanghai = (yyyyMmDd: string, hour: number, minute = 0): Date =>
   new Date(
@@ -53,6 +57,32 @@ describe('nextTradingSessionStart', () => {
   it('节假日 → 节后首个交易日 09:30', () => {
     expect(nextTradingSessionStart(shanghai('2026-10-01', 10)).toISOString()).toBe(
       new Date('2026-10-08T09:30:00+08:00').toISOString(),
+    );
+  });
+});
+
+describe('latestClosedTradingDate', () => {
+  it('收盘后是当日；盘中与盘前是上一个交易日', () => {
+    expect(latestClosedTradingDate(shanghai('2026-07-17', 15)).toISOString()).toBe(
+      '2026-07-17T00:00:00.000Z',
+    );
+    expect(latestClosedTradingDate(shanghai('2026-07-17', 22)).toISOString()).toBe(
+      '2026-07-17T00:00:00.000Z',
+    );
+    expect(latestClosedTradingDate(shanghai('2026-07-17', 9, 30)).toISOString()).toBe(
+      '2026-07-16T00:00:00.000Z',
+    );
+    expect(latestClosedTradingDate(shanghai('2026-07-17', 8)).toISOString()).toBe(
+      '2026-07-16T00:00:00.000Z',
+    );
+  });
+
+  it('周末与节假日回落到上一个交易日', () => {
+    expect(latestClosedTradingDate(shanghai('2026-07-18', 10)).toISOString()).toBe(
+      '2026-07-17T00:00:00.000Z',
+    );
+    expect(latestClosedTradingDate(shanghai('2026-10-01', 16)).toISOString()).toBe(
+      '2026-09-30T00:00:00.000Z',
     );
   });
 });

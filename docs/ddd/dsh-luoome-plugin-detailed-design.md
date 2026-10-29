@@ -729,6 +729,31 @@ host/client/四技能的文件哈希后开始。Codex 逐卡核对官方审批�
 
 管理/研究草稿的写入以编辑器实际采用文本为准，不再只信 `insertText` 的布尔返回值。只读 Lexical 可能返回 true 但不更新内容；连续写入失败后通过官方 `uiWorkspace.startSession()` 继承当前或最近工作区并创建新会话，仍不发送 prompt。此入口不带初始草稿，避免复用含未发送文字的空白会话；确认新的主会话已打开后才写入。当前会话可写时不新建，创建失败或新编辑器仍未采用时保留 `client/composer-unavailable`，不伪报成功。浏览器保留模型失败后的原始只读场景，验证兜底真实生效。
 
+### 9.23 个人策略研究工作台上线（2026-10-27，0.2.3）
+
+**形态**：仓库 commit `cc51430` 完成策略研究工作台与验证闭环，生产服务器于 2026-10-27 升级到
+`dsh-20261027T113327Z`（上一版 `dsh-20261025T233457Z`）。沿用纯插件部署：compose 只剩
+`dsh-web` + `caddy`，本轮 compose/entrypoint/profile-seed/Caddyfile 与上一版逐字节相同，
+只替换 `/app/plugin/dsh-luoome.tgz`；artifact-only 镜像 `luoome-dsh:dsh-20261027T113327Z`
+（sha256:c339b1107dfc…），插件产物 SHA-256 `27820aa366fd…`。
+
+**一致性**：升级前用 SQLite backup API 做一致性备份到 `/opt/luoome/backups/before-dsh-20261027T113327Z`
+（integrity=ok），业务表指纹与日程定义升级前后相同；新增的 `strategy_data_checkpoints`、
+`strategy_data_checkpoint_members` 由 `ensureSchema` 在启动时幂等建表，既有账户/策略/版本行未改。
+上一版镜像与本次备份都保留，可直接回退。
+
+**线上只读验收**：未认证 profile 401、官方 token 登录 303、profile 200 no-store（63 个只读工具、
+22 条手工 policy、0 条定时 policy、未注册批处理入口与 trade policy）、自动与批处理关闭、五个面板
+200 no-store、通用写 403、错误 Origin 403、个股详情 200（retrieval=live/freshness=stale，保留行情
+时间戳，缺参与多参 400）、个股历史 200（66 根日 K，任意区间 400）、研究 onboarding 200（5 个步骤）、
+未知策略 not_found、非法查询 400、POST 405。真实 Chrome 经隧道直连线上容器并复刻 `/dsh/` 挂载：
+五个面板均渲染，策略页列出 3 条线上策略并渲染出唯一的「实验工作台」（四步：问题与规则/试跑与诊断/
+分层验证/结论与更新），投资设置分区渲染，控制台无错误，1320×900 无横向溢出。390×844 窄屏复查
+被中断待补（同版本本地验收已覆盖 390×844）。按设计未对真实账户执行写入冒烟。
+
+**未发布 npm**：registry 仍是 latest=0.2.2，公开包与线上运行相差一个补丁版本；发布需要浏览器
+passkey/EOTP 步骤。服务器切换记录见服务器 `/opt/luoome/DEPLOYMENT.md`。
+
 ### 9.24 既有批处理日程原生迁移与启动依赖修复（2026-10-27）
 
 连续 8 次 `unknown tool "mcp__luoome-batch__run_*"` 的根因不是 MCP 进程崩溃，而是旧 MCP 已退役后，

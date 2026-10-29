@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { dropUnclosedBars } from '../internal/daily-bar-ingestion.js';
 
 const accountIdInput = z.object({ accountId: z.string().min(1).optional() });
 
@@ -344,7 +345,10 @@ const fetchBars = async (
   const cacheComplete = expectedTradingDays.every((day) => cachedDays.has(day));
   if (cacheComplete) return cached;
   try {
-    const bars = await ctx.adapters.market.fetchDailyBars(stockId, { start: from, end: to });
+    const bars = dropUnclosedBars(
+      await ctx.adapters.market.fetchDailyBars(stockId, { start: from, end: to }),
+      ctx.clock(),
+    );
     if (bars.length > 0) await ctx.repos.dailyBar.saveMany(bars);
     // Merge the provider response with known local facts. A provider can return a
     // partial range (for example, a suspended stock); never discard cached facts

@@ -422,6 +422,12 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
       id: z.string().min(1),
       dataAsOf: z.coerce.date(),
       checksum: z.string().min(1),
+      /** 事实日期：成员最新 bar 的覆盖率口径聚合结果。 */
+      factDate: z.coerce.date().optional(),
+      /** 事实日期上的成员覆盖率（0~1）。 */
+      factCoverage: z.number().min(0).max(1).optional(),
+      /** 最新 bar 早于事实日期的成员数。 */
+      laggingCount: z.number().int().nonnegative().optional(),
     })
     .optional(),
   acceptancePolicyVersion: z.string().min(1),

@@ -13,7 +13,7 @@ import { defineWorkflow } from './define-workflow.js';
  * input.accountId 缺省走 ctx.user.defaultAccountId；走 tool 层后转译。
  */
 export const SyncQuotesInput = z.object({
-  accountId: z.uuid().optional(),
+  accountId: z.string().min(1).optional(),
 });
 
 export type SyncQuotesInputT = z.infer<typeof SyncQuotesInput>;

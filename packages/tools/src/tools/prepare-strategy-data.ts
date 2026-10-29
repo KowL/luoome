@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput } from '../define-tool.js';
 import {
   dailyBarContentHash,
+  dropUnclosedBars,
   fetchDailyBarsWithRetry,
   mapWithConcurrency,
 } from '../internal/daily-bar-ingestion.js';
@@ -182,6 +183,7 @@ export const prepareStrategyDataTool = defineTool({
       sync?.id ?? `explicit:${createHash('sha256').update(stockIds.join(',')).digest('hex')}`;
     const checkpointId = `strategy-data-checkpoint-${globalThis.crypto.randomUUID()}`;
     const startedAt = ctx.clock();
+    const now = startedAt;
     const operationStartedAt = monotonicNow();
     await ctx.repos.strategyDataCheckpoint.saveStarted({
       id: checkpointId,
@@ -221,14 +223,17 @@ export const prepareStrategyDataTool = defineTool({
             cachedBars.length > 0 &&
             (tradingDayLag(cachedLatestBarDate, asOf) ?? Number.POSITIVE_INFINITY) <=
               input.maxStalenessTradingDays;
-          const bars = reuseCache
-            ? cachedBars
-            : (
-                await fetchDailyBarsWithRetry(ctx, stockId, range, {
-                  maxRetries: input.maxRetries,
-                  timeoutMs: input.requestTimeoutMs,
-                })
-              ).filter((bar): bar is DailyBar => bar.stockId === stockId);
+          const bars = dropUnclosedBars(
+            reuseCache
+              ? cachedBars
+              : (
+                  await fetchDailyBarsWithRetry(ctx, stockId, range, {
+                    maxRetries: input.maxRetries,
+                    timeoutMs: input.requestTimeoutMs,
+                  })
+                ).filter((bar): bar is DailyBar => bar.stockId === stockId),
+            now,
+          );
           const barProviders = [...new Set(bars.map((bar) => bar.source))].sort();
           const dataProvider = reuseCache
             ? 'local:daily-bars'

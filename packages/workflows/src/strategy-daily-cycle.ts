@@ -28,7 +28,7 @@ export const StrategyDailyCycleInput = z.object({
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
   concurrency: z.number().int().min(1).max(64).default(8),
-  maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
+  maxStalenessTradingDays: z.number().int().min(0).max(30).default(0),
   maxRetries: z.number().int().min(0).max(5).default(2),
   requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
 });
@@ -95,11 +95,30 @@ const scheduledRunDataAsOf = (run: {
   readonly dataAsOf: Date;
   readonly inputSnapshot: unknown;
 }): Date => {
-  // Scheduled StrategyRun.dataAsOf is conservatively allowed to be the oldest member bar.
-  // The checkpoint timestamp is the cycle's trading-day key and is therefore the correct
-  // identity for preventing a second cron tick on the same day.
-  return readStrategyRunSnapshot(run.inputSnapshot).dataCheckpoint?.dataAsOf ?? run.dataAsOf;
+  // 去重键是**事实日**：一次 scheduled run 认领的是它所依据数据的交易日。
+  // 用 checkpoint 准备时刻会让「昨天的事实日晚跑」吞掉今天这一轮；新 run 的
+  // dataCheckpoint.factDate 就是事实日，历史 run 没有该字段时退回旧口径。
+  const checkpoint = readStrategyRunSnapshot(run.inputSnapshot).dataCheckpoint;
+  return checkpoint?.factDate ?? checkpoint?.dataAsOf ?? run.dataAsOf;
 };
+
+/**
+ * 同一 schedule 交易日是否已被兑现：只有**已发布**的 scheduled 运行才算数。
+ * 失败、被 withhold 的运行不能挡掉补跑，否则一次失败就会静默丢掉整个交易日。
+ */
+export const isScheduleDayDuplicate = (
+  run: {
+    readonly mode: string;
+    readonly publication?: { readonly status: string } | undefined;
+    readonly dataAsOf: Date;
+    readonly inputSnapshot: unknown;
+  },
+  auditDataAsOf: Date,
+): boolean =>
+  run.mode === 'scheduled' &&
+  run.publication?.status === 'published' &&
+  readStrategyRunSnapshot(run.inputSnapshot).requestedBy === 'scheduled' &&
+  utcDayKey(scheduledRunDataAsOf(run)) === utcDayKey(auditDataAsOf);
 
 const runCycle: WorkflowStep = async (previous, ctx) => {
   const input = previous as StrategyDailyCycleInputT;
@@ -310,6 +329,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         scheduleId: schedule.id,
         owner,
         fence: lease.fence,
+        ...(schedule.nextRunAt === undefined ? {} : { claimedNextRunAt: schedule.nextRunAt }),
         ...(lastRunId === undefined ? {} : { lastRunId }),
       });
       claimFinished ||= result.ok;
@@ -419,11 +439,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           continue;
         }
       }
-      const duplicate = priorRuns.data.runs.find(
-        (run) =>
-          run.mode === 'scheduled' &&
-          readStrategyRunSnapshot(run.inputSnapshot).requestedBy === 'scheduled' &&
-          utcDayKey(scheduledRunDataAsOf(run)) === utcDayKey(auditDataAsOf),
+      const duplicate = priorRuns.data.runs.find((run) =>
+        isScheduleDayDuplicate(run, auditDataAsOf),
       );
       if (duplicate !== undefined) {
         status = 'skipped';

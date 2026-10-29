@@ -82,6 +82,7 @@ export * from './strategy/definition-diff.js';
 export * from './strategy/emission.js';
 export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
+export * from './strategy/fact-date.js';
 export * from './strategy/field-registry.js';
 export * from './strategy/fundamental-factor.js';
 export * from './strategy/local-selector.js';

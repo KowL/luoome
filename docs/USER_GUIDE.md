@@ -518,8 +518,8 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 
 | 批处理 | 原生操作名 | 示例 cron（Asia/Shanghai） | 门槛 |
 |---|---|---|---|
-| 策略日循环 | `run_strategy_daily_cycle` | `30 16 * * 1-5` | 交易日，内部策略调度仍独立认领 |
-| 收盘报告截止 | `run_closing_report_cutoff` | `5 18 * * 1-5` | 交易日；18:00 截止后允许明确记录缺口 |
+| 策略日循环 | `run_strategy_daily_cycle` | `30 18 * * 1-5` | 交易日，收盘后当日日线已落库；内部策略调度仍独立认领 |
+| 收盘报告截止 | `run_closing_report_cutoff` | `30 19 * * 1-5` | 交易日；18:00 截止且当日策略日循环结束后才记录缺口 |
 | 账户绩效快照 | `run_portfolio_performance_snapshot` | `30 16 * * 1-5` | 交易日且已过 16:00 |
 | 盘中计划批处理 | `run_intraday_plan_batch` | `35 9 * * 1-5` | 实际盘中时段，09:05 会跳过 |
 | 策略自治周报 | `run_strategy_autonomy_weekly` | `30 9 * * 0` | 周日 |

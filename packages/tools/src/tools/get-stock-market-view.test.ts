@@ -223,7 +223,7 @@ describe('tool/get_stock_market_view', () => {
     }
   });
 
-  it('5. Quote 和 bars 成功后写 repository', async () => {
+  it('5. Quote 和 bars 成功后写 repository，但盘中未收盘的当日 bar 不落投影', async () => {
     const ctx = await buildCtx(new StubMarketAdapter());
     const res = await callView(ctx, {});
     expect(res.ok).toBe(true);
@@ -234,7 +234,9 @@ describe('tool/get_stock_market_view', () => {
       new Date('2026-01-01T00:00:00.000Z'),
       new Date('2027-01-01T00:00:00.000Z'),
     );
-    expect(bars.length).toBe(60);
+    // 10:30 盘中：当日 bar 只是半成品，投影只保留到上一交易日。
+    expect(bars.length).toBe(59);
+    expect(bars.at(-1)?.date.toISOString().slice(0, 10)).toBe(YESTERDAY);
     expect(bars[0]?.source).toBe('eastmoney');
   });
 

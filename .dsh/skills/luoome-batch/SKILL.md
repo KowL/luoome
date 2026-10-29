@@ -14,8 +14,8 @@ whenToUse: 用户要求「把 luoome 的定时任务设好」「检查定时任�
 
 | 批处理 | 工具（`luoome-batch` 实例） | 建议 cron（Asia/Shanghai） | 门槛 |
 | --- | --- | --- | --- |
-| 策略日循环 | `run_strategy_daily_cycle` | `30 9 * * 1-5` | 交易日 |
-| 收盘报告截止 | `run_closing_report_cutoff` | `50 15 * * 1-5` | 交易日 |
+| 策略日循环 | `run_strategy_daily_cycle` | `30 18 * * 1-5` | 交易日，且已过收盘（当日日线已落库） |
+| 收盘报告截止 | `run_closing_report_cutoff` | `30 19 * * 1-5` | 交易日，且当日策略日循环已结束 |
 | 账户绩效快照 | `run_portfolio_performance_snapshot` | `30 16 * * 1-5` | 交易日且已过 16:00 |
 | 盘中计划批处理 | `run_intraday_plan_batch` | `5 9 * * 1-5` | 盘中时段 |
 | 策略自治周报 | `run_strategy_autonomy_weekly` | `30 9 * * 0` | 周日 |
@@ -34,7 +34,7 @@ cron 用 5 段 Vixie 表达式，时区必须显式给 `Asia/Shanghai`。
 示例（策略日循环）：
 
 - title：`luoome 批处理：策略日循环`
-- cron：`30 9 * * 1-5`，time_zone：`Asia/Shanghai`
+- cron：`30 18 * * 1-5`，time_zone：`Asia/Shanghai`
 - prompt：`执行 luoome 策略日循环：调用 luoome-batch 实例的 run_strategy_daily_cycle 工具，
   把 complete/partial/skipped/failed 的计数原样汇报。若返回 outcome=skipped 就说明今天不是交易日，不用重试。`
 

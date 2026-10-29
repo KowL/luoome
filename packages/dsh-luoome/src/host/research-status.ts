@@ -179,7 +179,8 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
   ): Promise<ToolResult<unknown>> => {
     const key = `${principal.userId}:${principal.accountId}`;
     const cached = workflowRunsMemo.get(key);
-    if (cached !== undefined && options.now() - cached.at < WORKFLOW_RUNS_TTL_MS) return cached.value;
+    if (cached !== undefined && options.now() - cached.at < WORKFLOW_RUNS_TTL_MS)
+      return cached.value;
     const value = await options.read.invoke(
       'list_workflow_runs',
       { workflowName: 'strategy-daily-cycle', includeWatch: false, limit: 200 },

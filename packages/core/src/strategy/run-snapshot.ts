@@ -4,6 +4,9 @@ export interface StrategyRunSnapshotDataCheckpoint {
   readonly id?: string;
   readonly dataAsOf?: Date;
   readonly checksum?: string;
+  readonly factDate?: Date;
+  readonly factCoverage?: number;
+  readonly laggingCount?: number;
 }
 
 export interface StrategyRunSnapshotView {
@@ -49,16 +52,36 @@ export const readStrategyRunSnapshot = (snapshot: unknown): StrategyRunSnapshotV
   const checkpointId = nonEmptyString(checkpoint?.id);
   const checkpointDataAsOf = validDate(checkpoint?.dataAsOf);
   const checkpointChecksum = nonEmptyString(checkpoint?.checksum);
+  const checkpointFactDate = validDate(checkpoint?.factDate);
+  const checkpointFactCoverage =
+    typeof checkpoint?.factCoverage === 'number' &&
+    Number.isFinite(checkpoint.factCoverage) &&
+    checkpoint.factCoverage >= 0 &&
+    checkpoint.factCoverage <= 1
+      ? checkpoint.factCoverage
+      : undefined;
+  const checkpointLaggingCount =
+    typeof checkpoint?.laggingCount === 'number' &&
+    Number.isInteger(checkpoint.laggingCount) &&
+    checkpoint.laggingCount >= 0
+      ? checkpoint.laggingCount
+      : undefined;
   const dataCheckpoint =
     checkpoint === undefined ||
     (checkpointId === undefined &&
       checkpointDataAsOf === undefined &&
-      checkpointChecksum === undefined)
+      checkpointChecksum === undefined &&
+      checkpointFactDate === undefined &&
+      checkpointFactCoverage === undefined &&
+      checkpointLaggingCount === undefined)
       ? undefined
       : {
           ...(checkpointId === undefined ? {} : { id: checkpointId }),
           ...(checkpointDataAsOf === undefined ? {} : { dataAsOf: checkpointDataAsOf }),
           ...(checkpointChecksum === undefined ? {} : { checksum: checkpointChecksum }),
+          ...(checkpointFactDate === undefined ? {} : { factDate: checkpointFactDate }),
+          ...(checkpointFactCoverage === undefined ? {} : { factCoverage: checkpointFactCoverage }),
+          ...(checkpointLaggingCount === undefined ? {} : { laggingCount: checkpointLaggingCount }),
         };
   const stockIds = Array.isArray(value.stockIds)
     ? value.stockIds.filter((stockId): stockId is string => typeof stockId === 'string')

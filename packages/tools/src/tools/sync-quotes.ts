@@ -11,7 +11,7 @@ import { resolveQuotes } from '../internal/resolve-quotes.js';
  * 缓存兜底）。返回实时成功条数；单条失败回落本地快照、不影响整体，synced 只计实时命中的。
  */
 export const SyncQuotesInput = z.object({
-  accountId: z.uuid().optional(),
+  accountId: z.string().min(1).optional(),
 });
 
 export const SyncQuotesOutput = z.object({

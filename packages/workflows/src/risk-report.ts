@@ -8,7 +8,7 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
  */
 
 export const RiskReportInput = z.object({
-  accountId: z.uuid().optional(),
+  accountId: z.string().min(1).optional(),
 });
 
 export type RiskReportInputT = z.infer<typeof RiskReportInput>;

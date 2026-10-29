@@ -236,6 +236,25 @@ export const previousTradingDate = (date: Date): Holiday => {
   return dateInShanghai(cursor);
 };
 
+/** 交易日 UTC 午夜；与 DailyBar.date 的日期约定一致。 */
+const tradingMidnight = (day: Holiday): Date => new Date(`${day}T00:00:00.000Z`);
+
+/**
+ * 最近一个已收盘交易日：收盘（15:00）之后是当日，盘中、盘前与休市日是上一个交易日。
+ * 日线 bar 的日期按该口径判定——未收盘的当日 bar 只是盘中快照，不构成事实。
+ */
+export const latestClosedTradingDate = (
+  now: Date,
+  holidays: ReadonlyMap<number, ReadonlySet<Holiday>> = BUILTIN_HOLIDAYS,
+): Date => {
+  if (isWeekend(now) || isHoliday(now, holidays)) return tradingMidnight(previousTradingDate(now));
+  return tradingMidnight(
+    computeMarketSession(now, holidays) === 'closed'
+      ? dateInShanghai(now)
+      : previousTradingDate(now),
+  );
+};
+
 /** 在 A 股交易日历上向前/向后移动指定交易日数量，不把自然日当作持有周期。 */
 export const addTradingDays = (date: Date, days: number): Date => {
   if (!Number.isInteger(days)) throw new Error('trading day offset must be an integer');
