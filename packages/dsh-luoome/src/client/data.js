@@ -41,6 +41,15 @@ import {
   stockHistoryUrl,
 } from './projection.js';
 
+// 面板内容按 panel/section 记忆：再次打开先显示上次成功画面，再后台刷新，
+// 避免每次切页都从骨架屏重新等一轮聚合读取。缓存只在内存，不写入存储。
+const panelCache = new Map();
+
+const cachedPanel = (key) => panelCache.get(key)?.state ?? null;
+const rememberPanel = (key, state) => {
+  panelCache.set(key, { state, at: Date.now() });
+};
+
 const emptySection = (identity) => ({
   identity,
   results: {},
@@ -53,15 +62,16 @@ const emptySection = (identity) => ({
 
 export function useOverviewSection(section, page = 1) {
   const identity = `${section}:${page}`;
+  const cacheKey = `overview:${identity}`;
   const [tick, setTick] = useState(0);
-  const [state, setState] = useState(() => emptySection(identity));
+  const [state, setState] = useState(() => cachedPanel(cacheKey) ?? emptySection(identity));
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
     setState((previous) =>
       previous.identity === identity
         ? { ...previous, loading: true, error: null }
-        : emptySection(identity),
+        : (cachedPanel(cacheKey) ?? emptySection(identity)),
     );
     fetch(stateUrl('overview', section, page), {
       signal: controller.signal,
@@ -82,7 +92,12 @@ export function useOverviewSection(section, page = 1) {
         return mapStateBody(body);
       })
       .then((next) => {
-        if (active) setState((previous) => mergeOverviewSection(previous, next));
+        if (!active) return;
+        setState((previous) => {
+          const merged = mergeOverviewSection(previous, next);
+          if (merged.loadedAt !== null) rememberPanel(cacheKey, merged);
+          return merged;
+        });
       })
       .catch((error) => {
         if (active && !controller.signal.aborted)
@@ -113,18 +128,21 @@ const fetchPanelState = async (panel, signal) => {
 };
 
 /** 一次拉取单个面板状态；loading/error/refresh 语义与旧面板一致。 */
+const emptyPanel = () => ({
+  loading: true,
+  results: {},
+  strategies: [],
+  configuration: null,
+  asOf: null,
+  session: null,
+  panelError: null,
+  loadedAt: null,
+});
+
 export function usePanelState(panel) {
+  const cacheKey = `panel:${panel}`;
   const [tick, setTick] = useState(0);
-  const [state, setState] = useState({
-    loading: true,
-    results: {},
-    strategies: [],
-    configuration: null,
-    asOf: null,
-    session: null,
-    panelError: null,
-    loadedAt: null,
-  });
+  const [state, setState] = useState(() => cachedPanel(cacheKey) ?? emptyPanel());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -133,7 +151,7 @@ export function usePanelState(panel) {
     fetchPanelState(panel, controller.signal)
       .then((next) => {
         if (!alive) return;
-        setState({
+        const loaded = {
           loading: false,
           results: next.results,
           strategies: next.strategies,
@@ -142,7 +160,9 @@ export function usePanelState(panel) {
           session: next.session,
           panelError: null,
           loadedAt: new Date(),
-        });
+        };
+        rememberPanel(cacheKey, loaded);
+        setState(loaded);
       })
       .catch((error) => {
         if (!alive || controller.signal.aborted) return;

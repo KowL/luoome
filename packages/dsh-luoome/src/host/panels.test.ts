@@ -484,6 +484,75 @@ describe('panel state route', () => {
     expect(workspace.overview?.health).toBe('ready');
   });
 
+  it('projects continuity as a summary so the panel never ships the full audit', async () => {
+    const { read, market, admit, ctx } = await setup();
+    await seedStrategy(ctx);
+    const summaryHandle = createPanelStateHandler({
+      read,
+      market,
+      admit,
+      now: () => FIXED_AS_OF,
+      marketTimeoutMs: 50,
+      // 续跑事实里的运行来自工具结果（JSON），日期是字符串而不是 Date；
+      // 摘要投影必须容忍这种真实形态，所以这里按运行时形状注入。
+      continuity: async () =>
+        ({
+          status: 'partial',
+          reasons: ['等待业务回执'],
+          limitations: ['观察不证明送达'],
+          automationsEnabled: true,
+          schedule: { ok: true, data: { huge: 'x'.repeat(4096) } },
+          tasks: [
+            {
+              taskId: 'task-1',
+              title: '日循环',
+              status: 'active',
+              nextScheduledAt: '2026-10-26T08:30:00.000Z',
+              grantStatus: 'valid',
+              lastDelivery: null,
+              operation: {
+                operationId: 'operation-1',
+                state: 'succeeded',
+                createdAt: 1,
+                updatedAt: 2,
+                result: { huge: 'y'.repeat(4096) },
+              },
+            },
+          ],
+          taskSource: 'available',
+          latestRun: {
+            id: 'run-1',
+            status: 'complete',
+            dataAsOf: '2026-10-23T00:00:00.000Z',
+            finishedAt: '2026-10-23T07:00:00.000Z',
+          },
+          audit: { huge: 'z'.repeat(4096) },
+          factCutoff: '2026-10-23T07:00:00.000Z',
+          notificationStatus: 'not-verified',
+        }) as never,
+    });
+    const response = await summaryHandle(stateRequest('strategies'));
+    expect(response.status).toBe(200);
+    const body = await bodyOf(response);
+    const entries = body.strategies as { continuity?: Record<string, unknown> }[];
+    const continuity = entries[0]?.continuity;
+    expect(continuity).toMatchObject({
+      status: 'partial',
+      taskCount: 1,
+      taskSource: 'available',
+      factCutoff: '2026-10-23T07:00:00.000Z',
+      latestRun: {
+        id: 'run-1',
+        status: 'complete',
+        dataAsOf: '2026-10-23T00:00:00.000Z',
+        finishedAt: '2026-10-23T07:00:00.000Z',
+      },
+    });
+    expect(continuity?.audit).toBeUndefined();
+    expect(continuity?.tasks).toBeUndefined();
+    expect(JSON.stringify(continuity).length).toBeLessThan(1000);
+  });
+
   it('passes the strategy id to per-strategy schedule/subscription reads and keeps absent vs active state', async () => {
     const { handle, ctx, read } = await setup();
     expect(readNames()).toContain('get_strategy_schedule');

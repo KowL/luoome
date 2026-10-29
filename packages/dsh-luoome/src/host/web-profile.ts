@@ -228,6 +228,20 @@ export const mountDshWebProfile = (
     host.dispose();
     throw error;
   }
+  // 首个面板请求原本要承担一次性的工具/查询初始化（线上实测冷启动约 3.6s）。
+  // 启动后预热一次只读调用，把这段成本移出用户首次打开面板的等待。
+  const warmup = new AbortController();
+  void (async () => {
+    const signal = AbortSignal.any([warmup.signal, AbortSignal.timeout(20_000)]);
+    for (const name of ['list_accounts', 'list_strategies']) {
+      try {
+        await options.read.invoke(name, {}, signal);
+      } catch {
+        // 预热失败不影响面板；首次请求仍会按正常路径返回错误。
+      }
+    }
+  })();
+  removers.push(() => warmup.abort());
   // The SDK Fetch bridge rewrites the origin and cannot stream GET. Keep the
   // listener URL and the 64 KiB streaming cap while reusing its real admission.
   const remove = ctx.webServer.register({

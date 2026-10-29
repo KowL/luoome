@@ -146,7 +146,6 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('list_strategies'),
       fixed('get_watch_status'),
       fixed('get_strategy_reliability_summary'),
-      fixed('list_strategy_runs', { scope: 'operational', publication: 'published', limit: 20 }),
       fixed('list_pending_strategy_observations', { limit: 100 }),
     ]),
     market: Object.freeze([]),
@@ -184,8 +183,55 @@ export interface PanelStrategyWorkspace {
   readonly workspace: PanelStateTool;
   readonly schedule: PanelStateTool;
   readonly subscriptions: PanelStateTool;
-  readonly continuity?: ResearchContinuity;
+  readonly continuity?: PanelContinuitySummary;
 }
+
+/**
+ * 面板首屏只需要续跑结论与事实截止；审计全文、任务回执和完整运行事实走
+ * `research?view=updates` 按需读取，避免把数 MB 的审计塞进面板响应。
+ */
+export interface PanelContinuitySummary {
+  readonly status: ResearchContinuity['status'];
+  readonly reasons: readonly string[];
+  readonly limitations: readonly string[];
+  readonly factCutoff: string | null;
+  readonly automationsEnabled: boolean;
+  readonly taskSource: 'available' | 'unavailable';
+  readonly taskCount: number;
+  readonly notificationStatus: 'not-verified';
+  readonly latestRun: {
+    readonly id: string;
+    readonly status: string;
+    readonly dataAsOf: string;
+    readonly finishedAt: string | null;
+  } | null;
+}
+
+const continuitySummary = (continuity: ResearchContinuity): PanelContinuitySummary => ({
+  status: continuity.status,
+  reasons: continuity.reasons,
+  limitations: continuity.limitations,
+  factCutoff: continuity.factCutoff,
+  automationsEnabled: continuity.automationsEnabled,
+  taskSource: continuity.taskSource,
+  taskCount: continuity.tasks.length,
+  notificationStatus: continuity.notificationStatus,
+  latestRun:
+    continuity.latestRun === null
+      ? null
+      : {
+          id: continuity.latestRun.id,
+          status: continuity.latestRun.status,
+          // 续跑事实来自工具结果，日期可能已是 ISO 字符串；两种形态都要能投影。
+          dataAsOf: isoOf(continuity.latestRun.dataAsOf) ?? '',
+          finishedAt: isoOf(continuity.latestRun.finishedAt),
+        },
+});
+
+const isoOf = (value: unknown): string | null => {
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === 'string' && value.length > 0 ? value : null;
+};
 
 /** 面板调度用的交易时段事实：服务端按 core 交易日历算出，客户端不自己判时段。 */
 export interface PanelSession {
@@ -494,7 +540,7 @@ export const createPanelStateHandler =
             workspace,
             schedule,
             subscriptions,
-            ...(continuity === undefined ? {} : { continuity }),
+            ...(continuity === undefined ? {} : { continuity: continuitySummary(continuity) }),
           };
         }),
       );

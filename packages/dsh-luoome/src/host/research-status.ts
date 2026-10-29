@@ -169,6 +169,26 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
     };
   };
 
+  // 面板会为每个策略各读一次日循环审计；同一次打开发生在毫秒级内，
+  // 共享这一份工作流运行列表，避免 N 个策略重复拉取与解码同一批审计。
+  const workflowRunsMemo = new Map<string, { at: number; value: ToolResult<unknown> }>();
+  const WORKFLOW_RUNS_TTL_MS = 30_000;
+  const readWorkflowRuns = async (
+    principal: PluginPrincipal,
+    signal: AbortSignal,
+  ): Promise<ToolResult<unknown>> => {
+    const key = `${principal.userId}:${principal.accountId}`;
+    const cached = workflowRunsMemo.get(key);
+    if (cached !== undefined && options.now() - cached.at < WORKFLOW_RUNS_TTL_MS) return cached.value;
+    const value = await options.read.invoke(
+      'list_workflow_runs',
+      { workflowName: 'strategy-daily-cycle', includeWatch: false, limit: 200 },
+      signal,
+    );
+    workflowRunsMemo.set(key, { at: options.now(), value });
+    return value;
+  };
+
   return async (
     principal: PluginPrincipal,
     strategyId: string,
@@ -182,11 +202,7 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
         { strategyId, scope: 'operational', limit: 1 },
         signal,
       ),
-      options.read.invoke(
-        'list_workflow_runs',
-        { workflowName: 'strategy-daily-cycle', includeWatch: false, limit: 200 },
-        signal,
-      ),
+      readWorkflowRuns(principal, signal),
     ]);
     const strategy = definition.ok ? (definition.data as { strategy: Strategy }).strategy : null;
     const schedule = scheduleResult.ok
