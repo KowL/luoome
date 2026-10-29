@@ -876,6 +876,8 @@ export interface StrategyRunRepository {
   commitRun(bundle: StrategyRunBundle): Promise<void>;
   /** 删除指定 Strategy 的运行、结果、信号与正式运行租约。 */
   removeByStrategyId(strategyId: string): Promise<void>;
+  /** 按运行删除运行、结果与信号；仅用于评估/回测类运行的保留期清理。 */
+  deleteRuns(runIds: readonly string[]): Promise<void>;
 }
 
 export interface StrategyScheduleRepository {

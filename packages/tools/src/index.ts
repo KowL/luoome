@@ -70,6 +70,7 @@ export * from './tools/northbound-flow.js';
 export * from './tools/personal.js';
 export * from './tools/portfolio-performance.js';
 export * from './tools/prepare-strategy-data.js';
+export * from './tools/prune-strategy-runs.js';
 export * from './tools/reconcile-stale-strategy-runs.js';
 export * from './tools/reconcile-stale-workflow-runs.js';
 export * from './tools/record-advice-outcome.js';

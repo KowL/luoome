@@ -332,6 +332,14 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     return 'committed';
   }
 
+  async deleteRuns(runIds: readonly string[]): Promise<void> {
+    if (runIds.length === 0) return;
+    const ids = new Set(runIds);
+    for (const [id, result] of this.results) if (ids.has(result.runId)) this.results.delete(id);
+    for (const [id, signal] of this.signals) if (ids.has(signal.runId)) this.signals.delete(id);
+    for (const id of ids) this.runs.delete(id);
+  }
+
   async removeByStrategyId(strategyId: string): Promise<void> {
     const runIds = new Set(
       [...this.runs.values()].filter((run) => run.strategyId === strategyId).map((run) => run.id),

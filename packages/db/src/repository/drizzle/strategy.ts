@@ -558,6 +558,21 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     });
   }
 
+  async deleteRuns(runIds: readonly string[]): Promise<void> {
+    if (runIds.length === 0) return;
+    this.db.transaction((tx) => {
+      tx.delete(strategyResults)
+        .where(inArray(strategyResults.runId, [...runIds]))
+        .run();
+      tx.delete(strategySignals)
+        .where(inArray(strategySignals.runId, [...runIds]))
+        .run();
+      tx.delete(strategyRuns)
+        .where(inArray(strategyRuns.id, [...runIds]))
+        .run();
+    });
+  }
+
   async removeByStrategyId(strategyId: string): Promise<void> {
     this.db.transaction((tx) => {
       const runIds = tx

@@ -3308,6 +3308,35 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.signalsByRuns([])).toEqual([]);
       });
 
+      it('deleteRuns 只删除指定运行及其结果与信号', async () => {
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-del-a', { startedAt: T1 }),
+          results: [makeStrategyResult('run-del-a', '600519.SH', { rank: 1 })],
+          signals: [
+            makeStrategySignal('signal-del-a', '600519.SH', { runId: 'run-del-a', ts: T1 }),
+          ],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-del-b', { startedAt: T2 }),
+          results: [makeStrategyResult('run-del-b', '300750.SZ', { rank: 1 })],
+          signals: [
+            makeStrategySignal('signal-del-b', '300750.SZ', { runId: 'run-del-b', ts: T3 }),
+          ],
+        });
+        await repos.strategyRun.deleteRuns(['run-del-a']);
+        expect(await repos.strategyRun.findRunById('run-del-a')).toBeNull();
+        expect(await repos.strategyRun.listResults('run-del-a')).toEqual([]);
+        expect(await repos.strategyRun.signalsByRun('run-del-a')).toEqual([]);
+        expect(await repos.strategyRun.findRunById('run-del-b')).not.toBeNull();
+        expect(
+          (await repos.strategyRun.listResults('run-del-b')).map((row) => row.stockId),
+        ).toEqual(['300750.SZ']);
+        expect((await repos.strategyRun.signalsByRun('run-del-b')).map((row) => row.id)).toEqual([
+          'signal-del-b',
+        ]);
+        await repos.strategyRun.deleteRuns([]);
+      });
+
       it('commitRun 原子提交；引用不匹配时不留下 run/result/signal', async () => {
         const run = makeStrategyRun('run-atomic');
         await repos.strategyRun.commitRun({
