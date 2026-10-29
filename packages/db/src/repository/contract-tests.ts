@@ -3260,6 +3260,7 @@ export const registerRepositoryContractTests = (
           results: [
             makeStrategyResult('run-bulk-a', '600519.SH', { rank: 2 }),
             makeStrategyResult('run-bulk-a', '002594.SZ', { rank: 1 }),
+            makeStrategyResult('run-bulk-a', '601318.SH', { rank: 3, selected: false }),
           ],
           signals: [
             makeStrategySignal('signal-bulk-a', '600519.SH', {
@@ -3283,7 +3284,19 @@ export const registerRepositoryContractTests = (
           (await repos.strategyRun.listResultsByRuns(['run-bulk-b', 'run-bulk-a'])).map(
             (result) => `${result.runId}:${result.stockId}`,
           ),
+        ).toEqual([
+          'run-bulk-a:002594.SZ',
+          'run-bulk-a:600519.SH',
+          'run-bulk-a:601318.SH',
+          'run-bulk-b:300750.SZ',
+        ]);
+        // 面板只读入选行：未入选的逐股事实不进入这条查询。
+        expect(
+          (await repos.strategyRun.listSelectedResultsByRuns(['run-bulk-b', 'run-bulk-a'])).map(
+            (result) => `${result.runId}:${result.stockId}`,
+          ),
         ).toEqual(['run-bulk-a:002594.SZ', 'run-bulk-a:600519.SH', 'run-bulk-b:300750.SZ']);
+        expect(await repos.strategyRun.listSelectedResultsByRuns([])).toEqual([]);
         expect(
           (await repos.strategyRun.signalsByRuns(['run-bulk-a', 'run-bulk-b'])).map(
             (signal) => signal.id,

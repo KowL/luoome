@@ -671,6 +671,22 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     );
   }
 
+  async listSelectedResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
+    if (runIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(strategyResults)
+      .where(and(inArray(strategyResults.runId, [...runIds]), eq(strategyResults.selected, true)))
+      .orderBy(
+        asc(strategyResults.runId),
+        sql`${strategyResults.rank} IS NULL`,
+        asc(strategyResults.rank),
+        asc(strategyResults.stockId),
+      )
+      .all()
+      .map(toResult);
+  }
+
   async listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
     if (runIds.length === 0) return [];
     return (

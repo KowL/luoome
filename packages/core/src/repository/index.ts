@@ -858,6 +858,11 @@ export interface StrategyRunRepository {
   listResults(runId: string): Promise<readonly StrategyResult[]>;
   /** 按运行批量读取结果；空 runIds 返回空数组。 */
   listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]>;
+  /**
+   * 只读入选结果；面板首屏与跨运行进出对比只需要入选事实，
+   * 未入选的逐股规则事实走诊断视图按需读取。
+   */
+  listSelectedResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]>;
   signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
   /** 按运行批量读取信号；空 runIds 返回空数组。 */
   signalsByRuns(runIds: readonly string[]): Promise<readonly StrategySignal[]>;

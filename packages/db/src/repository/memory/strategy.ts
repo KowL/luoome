@@ -424,6 +424,19 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       );
   }
 
+  async listSelectedResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
+    if (runIds.length === 0) return [];
+    const runIdSet = new Set(runIds);
+    return [...this.results.values()]
+      .filter((result) => runIdSet.has(result.runId) && result.selected)
+      .sort(
+        (left, right) =>
+          left.runId.localeCompare(right.runId) ||
+          (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) ||
+          left.stockId.localeCompare(right.stockId),
+      );
+  }
+
   async listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
     if (runIds.length === 0) return [];
     const runIdSet = new Set(runIds);

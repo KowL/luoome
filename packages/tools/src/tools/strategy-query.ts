@@ -349,7 +349,9 @@ export const getStrategyWorkspaceTool = defineTool({
   handler: async (input, ctx) => {
     const strategy = await ctx.repos.strategy.findById(input.strategyId);
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
-    const baseline = await readStrategyOperationalBaseline(ctx, strategy);
+    // 面板与跨运行对比只需要入选事实：未入选的逐股规则事实走诊断视图按需读取，
+    // 否则一次工作台读取会解析整轮全市场结果（数千行）。
+    const baseline = await readStrategyOperationalBaseline(ctx, strategy, { selectedOnly: true });
     const latest = baseline.latestAttempt?.run;
     const currentEntry = baseline.current;
     const previousEntry = baseline.previous;
@@ -395,18 +397,17 @@ export const getStrategyWorkspaceTool = defineTool({
       const version = currentEntry.version;
       if (version === null)
         return errNotFound('StrategyVersion', currentEntry.run.strategyVersionId);
-      const views = currentEntry.results.map((result) =>
-        classifyStrategyResult(version.definition, result),
-      );
-      overview.selectedCount = views.filter((view) => view.kind === 'selected').length;
-      overview.ruleNearMissCount = views.filter((view) => view.kind === 'rule-near-miss').length;
-      overview.rankingNearMissCount = views.filter(
-        (view) => view.kind === 'ranking-near-miss',
-      ).length;
-      overview.incompleteCount = views.filter((view) => view.kind === 'incomplete').length;
-      const selected = views
-        .filter((view) => view.kind === 'selected')
-        .map((view) => view.result)
+      // 入选事实本身来自运行结果；近似入选与不完整计数由运行摘要提供，
+      // 不再为了三个计数把整轮全市场结果读进内存重新分类。
+      const selectedResults = currentEntry.results.filter((result) => result.selected);
+      overview.selectedCount = selectedResults.length;
+      const summary = currentEntry.run.summary;
+      const incomplete =
+        summary !== undefined && (summary.schemaVersion === 3 || summary.schemaVersion === 4)
+          ? summary.incompleteCount
+          : undefined;
+      if (typeof incomplete === 'number') overview.incompleteCount = incomplete;
+      const selected = selectedResults
         .sort(
           (left, right) =>
             (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) ||
@@ -429,25 +430,29 @@ export const getStrategyWorkspaceTool = defineTool({
         })),
       };
       if (previousEntry !== undefined) {
-        const previousVersion = previousEntry.version;
-        const previousResults = previousEntry.results;
-        if (previousVersion === null) {
+        if (previousEntry.version === null) {
           return errNotFound('StrategyVersion', previousEntry.run.strategyVersionId);
         }
-        const diff = diffStrategyRunViews({
-          fromRun: previousEntry.run,
-          toRun: currentEntry.run,
-          fromViews: previousResults.map((result) =>
-            classifyStrategyResult(previousVersion.definition, result),
-          ),
-          toViews: views,
-        });
-        overview.enteredCount = diff.summary.entered;
-        overview.exitedCount = diff.summary.exited;
-        overview.maxAbsRankDelta = diff.rows.reduce(
-          (maximum, row) => Math.max(maximum, Math.abs(row.rankDelta ?? 0)),
-          0,
+        const previousSelected = new Map(
+          previousEntry.results
+            .filter((result) => result.selected)
+            .map((result) => [result.stockId, result] as const),
         );
+        const currentSelected = new Map(selectedResults.map((result) => [result.stockId, result]));
+        overview.enteredCount = [...currentSelected.keys()].filter(
+          (stockId) => !previousSelected.has(stockId),
+        ).length;
+        overview.exitedCount = [...previousSelected.keys()].filter(
+          (stockId) => !currentSelected.has(stockId),
+        ).length;
+        let maxDelta = 0;
+        for (const [stockId, result] of currentSelected) {
+          const before = previousSelected.get(stockId);
+          if (before === undefined || before.rank === undefined || result.rank === undefined)
+            continue;
+          maxDelta = Math.max(maxDelta, Math.abs(result.rank - before.rank));
+        }
+        overview.maxAbsRankDelta = maxDelta;
       }
     }
     return {

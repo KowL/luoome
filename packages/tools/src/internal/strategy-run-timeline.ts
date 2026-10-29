@@ -36,6 +36,7 @@ const uniqueRuns = (runs: readonly (StrategyRun | null | undefined)[]): Strategy
 export const hydrateStrategyRunTimeline = async (
   ctx: ToolContext,
   runs: readonly StrategyRun[],
+  options: { readonly selectedOnly?: boolean } = {},
 ): Promise<StrategyRunTimeline> => {
   if (runs.length === 0) return { entries: [], byRunId: new Map() };
   const versions = await Promise.all(
@@ -45,7 +46,11 @@ export const hydrateStrategyRunTimeline = async (
     ),
   );
   const versionById = new Map(versions);
-  const results = await ctx.repos.strategyRun.listResultsByRuns(runs.map((run) => run.id));
+  const runIds = runs.map((run) => run.id);
+  const results =
+    options.selectedOnly === true
+      ? await ctx.repos.strategyRun.listSelectedResultsByRuns(runIds)
+      : await ctx.repos.strategyRun.listResultsByRuns(runIds);
   const resultsByRun = new Map<string, StrategyResult[]>();
   for (const result of results) {
     const existing = resultsByRun.get(result.runId);
@@ -90,6 +95,7 @@ export const readStrategyRunTimeline = async (
 export const readStrategyOperationalBaseline = async (
   ctx: ToolContext,
   strategy: Strategy,
+  options: { readonly selectedOnly?: boolean } = {},
 ): Promise<StrategyOperationalBaseline> => {
   const [latestAttempts, current] = await Promise.all([
     ctx.repos.strategyRun.listRuns({
@@ -110,6 +116,7 @@ export const readStrategyOperationalBaseline = async (
   const timeline = await hydrateStrategyRunTimeline(
     ctx,
     uniqueRuns([latestAttempts[0], current, previous]),
+    options,
   );
   const latestAttempt = latestAttempts[0];
   const latestAttemptEntry =
