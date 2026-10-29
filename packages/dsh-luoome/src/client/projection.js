@@ -8,8 +8,9 @@ const isRecord = (value) => typeof value === 'object' && value !== null && !Arra
 // DSH 的 document base 包含反向代理挂载路径；前导 / 会越过 /dsh/ 等公网前缀。
 export const PANEL_STATE_PATH = 'api/luoome/state';
 
-/** 一次面板状态请求的 URL（只带 panel 名，不携带工具/账户参数）。 */
-export const stateUrl = (panel) => `${PANEL_STATE_PATH}?panel=${encodeURIComponent(panel)}`;
+/** 只携带固定面板/分区及页码，不携带工具或账户参数。 */
+export const stateUrl = (panel, section = null, page = 1) =>
+  `${PANEL_STATE_PATH}?panel=${encodeURIComponent(panel)}${section === null ? '' : `&section=${encodeURIComponent(section)}${section === 'watchlist' ? `&page=${page}` : ''}`}`;
 export const stockDetailUrl = (stockId) =>
   `api/luoome/stock?stockId=${encodeURIComponent(stockId)}`;
 export const stockHistoryUrl = (stockId) =>
@@ -68,6 +69,33 @@ export const mapStateBody = (body) => {
     strategies,
     configuration: isRecord(body.configuration) ? body.configuration : null,
     session: sessionOf(body),
+    section: typeof body.section === 'string' ? body.section : null,
+    watchlistPage: isRecord(body.watchlistPage) ? body.watchlistPage : null,
+  };
+};
+
+/** 分区刷新失败保留同一范围的成功事实，同时单独保留当前错误。 */
+export const mergeOverviewSection = (previous, next) => {
+  const results = { ...previous.results };
+  const errors = [];
+  let succeeded = false;
+  for (const [name, result] of Object.entries(next.results)) {
+    if (result.ok) {
+      results[name] = result;
+      succeeded = true;
+    } else {
+      errors.push(result.error);
+      if (!results[name]?.ok) results[name] = result;
+    }
+  }
+  return {
+    ...previous,
+    results,
+    session: next.session,
+    loading: false,
+    error: errors[0] ?? null,
+    loadedAt: succeeded ? next.asOf : previous.loadedAt,
+    watchlistPage: succeeded ? next.watchlistPage : previous.watchlistPage,
   };
 };
 
@@ -321,16 +349,21 @@ export const strategyOperationRequestFor = (strategyId, context = {}) => ({
 });
 
 export const stockResearchRequestFor = (context) =>
-  context.sourceKind
+  context.sourceKind === 'overview'
     ? {
         stockId: context.stockId,
-        strategyId: context.strategyId,
-        runId: context.runId,
-        prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，只有在我明确提出保存、策略修改或建议写回意图时才直接执行。`,
+        prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自看盘页的${strategyText(context.sourceLabel)}。先读取当前账户可见的相关事实与最新可用行情，核对数据来源和时点；缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期。关注和持仓不代表买入建议。如果我明确要求保存建议、修改关注或其他写入，直接执行并回显结果；缺少必要参数时才追问。`,
       }
-    : {
-        stockId: context.stockId,
-        strategyId: context.strategyId,
-        runId: context.runId,
-        prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；只有在我明确提出保存建议、修改策略或其他写入意图时才直接执行。`,
-      };
+    : context.sourceKind
+      ? {
+          stockId: context.stockId,
+          strategyId: context.strategyId,
+          runId: context.runId,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，只有在我明确提出保存、策略修改或建议写回意图时才直接执行。`,
+        }
+      : {
+          stockId: context.stockId,
+          strategyId: context.strategyId,
+          runId: context.runId,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；只有在我明确提出保存建议、修改策略或其他写入意图时才直接执行。`,
+        };

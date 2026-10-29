@@ -98,6 +98,14 @@ DSH 传输错误/取消与领域业务错误分别呈现。原生模式与 PTC �
 
 HTTP 始终保留 ToolResult；认证/能力拒绝 403、方法错误 405、媒体类型错误 415、超大输入 413、格式错误 400。操作服务不可用返回 503，未知路由 404；已持久化的操作状态及其业务结果返回 200，客户端须读取 state 和嵌套结果。默认 no-store。取消后不启动 handler；已启动请求不以 Promise.race 假装业务已经停止。
 
+### 4.3 看盘分区读取
+
+看盘客户端使用 `GET /api/luoome/state?panel=overview&section=<section>`，分别读取 `indices`、`sentiment`、`account`、`holdings`、`watchlists`、`watchlist`、`triggers`、`advice`、`health`、`sectors`、`news`。每次请求只执行该区固定工具；响应保留 `ToolResult`，新增 `section` 标识，认证、当前账户约束与 `no-store` 不变。原无 `section` 的面板映射仍可读取。
+
+`watchlist` 允许正整数 `page`（默认 1），按股票代码去重排序后每页最多读取 40 只行情；成员通过当前账户范围的 `get_watchlist` 获取，排除停用列表、归档成员和其他账户专有来源。响应包含 `watchlistPage` 的页码、每页数量、总数及部分失败标志。不接受浏览器传入工具名、账户或股票集合。行业榜固定读取涨幅前五，要闻最多八条；行业工具归入 external，MCP 需显式启用外部能力。
+
+各区独立加载和重试；HTTP 或工具失败时保留同一分区、同一页的成功数据并展示旧数据提示，切页取消旧请求并清空上页画面。数值沿用工具输出：`batch_quote.items` 提供基于昨收的 `change` / `changePct`（比率，缺昨收为 null），持仓项提供可空 `quote` 以展示真实行情时点和缺失状态；UI 不以成本价冒充最新价。
+
 ## 5. 确认、持久授权与原子回执
 
 ### 5.1 Operation（已实现内核与双仓储）
@@ -331,11 +339,11 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 > 需求来源：需求文档 §4.2、§9(M2)、§10.3。M2a 只加「对话主动刷新市场事实」的精确 external 面；写操作/审批策略仍属 M2b。
 
 - **独立 surface**：新增 `packages/dsh-luoome/src/host/market-surface.ts`：只允许 `sideEffect==='external'` 且 requiredCapabilities 仅含 external 的工具；未知名字、read/queue/write/trade 与 external+write 混合能力在装配期 fail-closed 拒绝；显式空数组=零工具；配置对象/数组解析后冻结，注册与执行共用同一快照；私人研究名仍由共享 denylist 拒绝，allowlist 不能覆盖研究 opt-in；按名调用未暴露工具返回 `permission_denied`。
-- **默认 market 白名单**（按真实 registry 对账，6 项）：`fetch_index_quotes`、`get_ashare_sentiment`、`fetch_quote`、`batch_quote`、`trial_strategy_version`、`fetch_news`。`sync_quotes`/`send_notification` 等虽满足能力规则，但不在精确名单内，默认不暴露；`fetch_sector_quotes` 仍为 read（§4.2 未点名、市场宽度由 `get_ashare_sentiment` 覆盖），若产品把它纳入每日分析再单独评审分类。
+- **默认 market 白名单**（按真实 registry 对账，6 项）：`fetch_index_quotes`、`get_ashare_sentiment`、`fetch_quote`、`batch_quote`、`trial_strategy_version`、`fetch_news`。`sync_quotes`/`send_notification` 等虽满足能力规则，但不在精确名单内，默认不暴露；`fetch_sector_quotes` 在该阶段仍为 read；现已随看盘行业排行改为 external，并加入 market 精确白名单。当前完整名单以 `production-config.ts` 为准。
 - **执行语义**：保留原 ToolResult（`adapter_error` 原样返回，不伪造空成功；合法空结果仍是成功）；结果 JSON 化（Date→ISO）；`timeoutMs` 默认 30s、上限 300s，超时返回 `adapter_error{adapter:'market-surface', cause:'timeout after <n>ms', recoverable:true}` 并立即停止等待；调用方 AbortSignal 取消返回 `permission_denied{required:'active request'}`；异常脱敏为 internal。
 - **配置与接线**：`production-config.ts` 新增独立 `market` 配置块（allowlist/denylist/timeoutMs，exposeResearch 固定 false），与 read allowlist 分离且冻结；`production.ts` 在任何 IO 前做 market 能力对账，`ProductionHost` 暴露 `market`/`registerMarket`/`invokeMarket`；`apply` 分开注册/撤销 read 与 market 并复用 owner/top-level guard，装配失败回滚已注册工具、路由与 DB 连接。`/api/luoome/call` 仍只读（对 `fetch_quote` 返回 403）。
 - **测试/验收**：新增 `market-surface.test.ts` 19 项；`production.test.ts` 扩到 15 项（read/market 独立配置、误配 IO 前拒绝、空名单、分开注册、注册失败回滚、dispose 拒绝、静态依赖图）。`test:dsh-luoome` → 10 文件 77 项 + Bun e2e 12 项通过；`test` 277 文件/2602 项通过；`test:plugin-install` 扩展断言 read 45 / market 5、market 配置冻结、HTTP `/call` 调 external 返回 403、无 MCP/Bun CLI/worker/queue probe、产物无 forbidden needle。
-- **M2a-followup（同日完成）**：`fetch_news` 的 handler 只调用第三方新闻源、不写库/不发通知，按既有副作用语义由 `read` 修正为 `external`；MCP 默认 read 面不再包含它（需 `LUOOME_EXPOSE_EXTERNAL=true` opt-in），dsh-luoome market 面默认名单补入（5→6 项）。`fetch_sector_quotes` 保持 read 并记录后续条件。同步更新 registry/MCP 默认暴露面测试、market-surface/skills-content 断言与 plugin-install 验收。
+- **M2a-followup（同日完成）**：`fetch_news` 的 handler 只调用第三方新闻源、不写库/不发通知，按既有副作用语义由 `read` 修正为 `external`；MCP 默认 read 面不再包含它（需 `LUOOME_EXPOSE_EXTERNAL=true` opt-in），dsh-luoome market 面默认名单补入（5→6 项）。`fetch_sector_quotes` 当时保持 read；现已随看盘行业排行调整为 external。同步更新 registry/MCP 默认暴露面测试、market-surface/skills-content 断言与 plugin-install 验收。
 - **未覆盖/遗留**：market 工具的模型侧真实调用需随 M2b/M3 的真实 Agent + 审批链路验收；`skills/luoome/references/tools.md` 中 fetch_news 的 “Pure read-only” 措辞可在文档清理轮改为 “read-only, external opt-in”。
 
 ### 9.7 M3 四旅程技能内容实施记录（2026-10-24）

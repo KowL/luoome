@@ -1,13 +1,12 @@
-import { createElement as h } from 'react';
+import { createElement as h, useCallback, useState } from 'react';
 
 import { IDLE_REFRESH_INTERVAL_MS, TRADING_REFRESH_INTERVAL_MS } from './auto-refresh.js';
-import { dataOf, errorOf, useAutoRefresh, usePanelState } from './data.js';
+import { dataOf, useAutoRefresh, useOverviewSection } from './data.js';
 import {
   bigMoney,
   clock,
   DECISION,
   DELIVERY,
-  day,
   HORIZON,
   int,
   MARKET_SESSION,
@@ -25,6 +24,7 @@ import {
   WATCHLIST_KIND,
   when,
 } from './format.js';
+import { AccountSummary, MarketTable, NewsFeed, SectorRanking } from './overview-market.js';
 import {
   Card,
   Empty,
@@ -35,13 +35,12 @@ import {
   Meter,
   Panel,
   Pill,
-  Refresh,
   Section,
   Skeleton,
   SkeletonLines,
-  Stamp,
   Stat,
 } from './primitives.js';
+import { StockDetail } from './stock.js';
 
 const SESSION_TONE = {
   'pre-open': 'warn',
@@ -194,6 +193,22 @@ const BreadthCard = ({ snapshot, loading, error }) => {
       h(Stat, { k: '最高连板', v: limitUp ? `${int(limitUp.maxLadderLevel)} 板` : '—' }),
       h(Stat, { k: '涨停封单', v: bigMoney(limitUp?.totalSealAmount) }),
     ),
+    limitUp?.boardDistribution && Object.keys(limitUp.boardDistribution).length > 0
+      ? h(
+          'div',
+          { className: 'luo-subblock' },
+          h('div', { className: 'luo-subblock-t' }, '连板分布'),
+          h(
+            'div',
+            { className: 'luo-ladder' },
+            Object.entries(limitUp.boardDistribution)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([level, count]) =>
+                h('span', { key: level }, `${level} 板`, h('b', null, `${count} 只`)),
+              ),
+          ),
+        )
+      : null,
     leaders.length > 0
       ? h(
           'div',
@@ -620,138 +635,303 @@ const DataHealthLine = ({ status, loading }) => {
   );
 };
 
-export function OverviewPanel() {
-  const { results, loading, panelError, loadedAt, refresh, session } = usePanelState('overview');
-  const holdings = dataOf(results, 'list_holdings');
-  const triggers = dataOf(results, 'list_watch_triggers');
-  const advice = dataOf(results, 'get_advice');
-  const watchlists = dataOf(results, 'list_watchlists');
-  const sentiment = dataOf(results, 'get_ashare_sentiment')?.snapshot;
-  const indexQuotes = dataOf(results, 'fetch_index_quotes');
-  const marketStatus = dataOf(results, 'get_market_data_status');
-  const marketSession = session?.marketSession ?? marketStatus?.marketSession;
-  const nextSessionStart = session?.nextSessionStart ?? null;
-
-  useAutoRefresh({ marketSession, nextSessionStart, refresh });
-
-  const refreshHint = autoRefreshHint(marketSession, nextSessionStart);
-  const side = [
-    marketSession
-      ? h(
-          Pill,
-          { key: 'session', tone: SESSION_TONE[marketSession] ?? 'quiet', dot: true },
-          MARKET_SESSION[marketSession] ?? marketSession,
-        )
-      : null,
-    h(Pill, { key: 'auto-refresh', tone: refreshHint.tone }, refreshHint.text),
-    h(Stamp, { key: 'stamp', label: '更新', value: clock(loadedAt) }),
-    h(Refresh, { key: 'refresh', loading, onClick: refresh }),
-  ];
-
-  return h(
-    Panel,
-    null,
-    h(Head, {
-      eyebrow: 'LUOOME / 看盘',
-      title: '看盘',
-      subtitle: `${day(loadedAt)} · 市场温度、持仓变化与今日触发，一屏对齐`,
-      side,
-    }),
-    panelError
-      ? h(
-          'div',
-          { style: { marginTop: '16px' } },
-          h(ErrorNote, { label: '事实读取', error: panelError }),
-        )
-      : null,
+const Region = ({ name, title, state, children, className = '' }) =>
+  h(
+    'section',
+    {
+      className: `luo-region ${className}`,
+      'data-overview-section': name,
+      'aria-busy': state.loading,
+      'aria-label': title,
+    },
     h(
-      Section,
-      {
-        title: '核心指数',
-        meta: indexQuotes?.indices?.[0]?.source ?? '行情快照',
-        delay: 40,
-      },
-      h(IndexStrip, {
-        quotes: indexQuotes,
-        loading,
-        error: errorOf(results, 'fetch_index_quotes'),
-      }),
-    ),
-    h(
-      Section,
-      { delay: 90 },
-      h(BreadthCard, {
-        snapshot: sentiment,
-        loading,
-        error: errorOf(results, 'get_ashare_sentiment'),
-      }),
-    ),
-    h(
-      Section,
-      { title: '账户', meta: holdings ? `市值 ${money(holdings.totalValue)}` : null, delay: 140 },
+      'header',
+      { className: 'luo-region-head' },
+      h('h2', null, title),
       h(
         'div',
-        { className: 'luo-grid is-kpi' },
-        h(Kpi, {
-          label: '持仓市值',
-          value: holdings ? money(holdings.totalValue) : '—',
-          sub: holdings ? `成本 ${money(holdings.totalCost)}` : '',
-        }),
-        h(Kpi, {
-          label: '浮动盈亏',
-          value: holdings ? signedMoney(holdings.totalPnL) : '—',
-          tone: holdings ? toneOf(holdings.totalPnL) : undefined,
-          sub: holdings ? ratio(holdings.totalPnLPct) : '',
-        }),
-        h(Kpi, {
-          label: '今日盈亏',
-          value: holdings ? signedMoney(holdings.totalTodayPnl) : '—',
-          tone: holdings ? toneOf(holdings.totalTodayPnl) : undefined,
-          sub: holdings ? ratio(holdings.totalTodayPnlPct) : '',
-        }),
-        h(Kpi, {
-          label: '持仓',
-          value: holdings ? `${int(holdings.holdings?.length ?? 0)} 只` : '—',
-          sub: holdings?.status === 'active' ? '未平仓' : '',
-        }),
-      ),
-    ),
-    h(
-      Section,
-      { delay: 190 },
-      h(
-        'div',
-        { className: 'luo-grid is-two' },
-        h(HoldingsTable, { holdings, loading, error: errorOf(results, 'list_holdings') }),
+        { className: 'luo-region-actions' },
         h(
-          'div',
-          { className: 'luo-grid', style: { gridTemplateColumns: 'minmax(0, 1fr)' } },
-          h(TriggersCard, { triggers, loading, error: errorOf(results, 'list_watch_triggers') }),
-          h(WatchlistsCard, { watchlists, loading, error: errorOf(results, 'list_watchlists') }),
+          'span',
+          { className: 'luo-region-time', role: 'status' },
+          state.loading ? '读取中…' : state.loadedAt ? `读取 ${clock(state.loadedAt)}` : '尚未读取',
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'luo-btn',
+            onClick: state.refresh,
+            'aria-label': `刷新${title}`,
+          },
+          state.error ? '重试' : '刷新',
         ),
       ),
     ),
-    h(AdviceSection, { advice, loading, error: errorOf(results, 'get_advice') }),
-    h(Footer, {
-      left: h(
-        'span',
-        null,
-        h('b', null, '只读事实投影'),
-        ' · 数值直接来自工具输出，不做二次计算；建议不等于交易，信心度不是概率。',
-        panelError
-          ? h('span', { style: { display: 'block', marginTop: '4px' } }, `行情面：${panelError}`)
+    state.error
+      ? h(
+          'div',
+          { className: 'luo-region-error' },
+          h(ErrorNote, {
+            error: {
+              message:
+                state.error.message ??
+                (state.error.kind === 'permission_denied'
+                  ? '当前分区未启用或无权读取，请核对数据配置。'
+                  : '数据暂时不可用，请稍后重试。'),
+            },
+          }),
+          state.loadedAt ? h('span', null, `展示上次成功数据 · ${clock(state.loadedAt)}`) : null,
+        )
+      : null,
+    state.loadedAt ? children : state.loading ? h(SkeletonLines, { lines: 3 }) : null,
+  );
+
+export function OverviewPanel({ onAnalyzeStock }) {
+  const [page, setPage] = useState(1);
+  const [tab, setTab] = useState('watchlist');
+  const [stock, setStock] = useState(null);
+  const indices = useOverviewSection('indices');
+  const sentiment = useOverviewSection('sentiment');
+  const account = useOverviewSection('account');
+  const holdings = useOverviewSection('holdings');
+  const watchlists = useOverviewSection('watchlists');
+  const watchlist = useOverviewSection('watchlist', page);
+  const triggers = useOverviewSection('triggers');
+  const advice = useOverviewSection('advice');
+  const health = useOverviewSection('health');
+  const sectors = useOverviewSection('sectors');
+  const news = useOverviewSection('news');
+  const refreshers = [
+    indices.refresh,
+    sentiment.refresh,
+    account.refresh,
+    holdings.refresh,
+    watchlists.refresh,
+    watchlist.refresh,
+    triggers.refresh,
+    advice.refresh,
+    health.refresh,
+    sectors.refresh,
+    news.refresh,
+  ];
+  const refresh = useCallback(() => {
+    for (const read of refreshers) read();
+  }, refreshers);
+  const session = indices.session ?? health.session ?? account.session;
+  const marketStatus = dataOf(health.results, 'get_market_data_status');
+  const marketSession = session?.marketSession ?? marketStatus?.marketSession;
+  const nextSessionStart = session?.nextSessionStart ?? null;
+  useAutoRefresh({ marketSession, nextSessionStart, refresh });
+  const refreshHint = autoRefreshHint(marketSession, nextSessionStart);
+  const held = dataOf(holdings.results, 'list_holdings');
+  const facts = dataOf(account.results, 'get_account_facts')?.facts;
+  const triggerData = dataOf(triggers.results, 'list_watch_triggers');
+  const pagination = watchlist.watchlistPage;
+  const pageCount = pagination ? Math.max(1, Math.ceil(pagination.total / pagination.pageSize)) : 1;
+  const selectedState = tab === 'holdings' ? holdings : watchlist;
+  const selectedTitle = tab === 'holdings' ? '持仓行情' : '自选行情';
+  const region = (name, title, state, content, className) =>
+    h(Region, { name, title, state, className }, content);
+  return h(
+    Panel,
+    { className: 'luo-overview' },
+    h(Head, {
+      eyebrow: 'LUOOME / MARKET',
+      title: '看盘',
+      subtitle: '行情 · 账户 · 关注动态',
+      side: [
+        marketSession
+          ? h(
+              Pill,
+              { key: 'session', tone: SESSION_TONE[marketSession] ?? 'quiet', dot: true },
+              MARKET_SESSION[marketSession] ?? marketSession,
+            )
           : null,
-      ),
-      right: h(
-        'span',
-        null,
-        h(DataHealthLine, {
-          status: marketStatus,
-          loading,
-          error: errorOf(results, 'get_market_data_status'),
-        }),
-        h('span', { style: { display: 'block' } }, relative(loadedAt)),
-      ),
+        h(Pill, { key: 'auto', tone: refreshHint.tone }, refreshHint.text),
+        h(
+          'button',
+          { key: 'refresh', type: 'button', className: 'luo-btn', onClick: refresh },
+          '刷新全部',
+        ),
+      ],
     }),
+    region(
+      'indices',
+      '核心指数',
+      indices,
+      h(IndexStrip, { quotes: dataOf(indices.results, 'fetch_index_quotes') }),
+      'luo-region-strip',
+    ),
+    region(
+      'account',
+      '账户概览',
+      account,
+      facts ? h(AccountSummary, { facts }) : null,
+      'luo-region-strip',
+    ),
+    h(
+      'div',
+      { className: 'luo-terminal-grid' },
+      h(
+        'main',
+        { className: 'luo-terminal-main' },
+        h(
+          'div',
+          { className: 'luo-market-tabs', role: 'tablist', 'aria-label': '行情范围' },
+          ['watchlist', 'holdings'].map((name) =>
+            h(
+              'button',
+              {
+                key: name,
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === name,
+                'aria-controls': 'luo-market-content',
+                className: tab === name ? 'is-active' : '',
+                onClick: () => setTab(name),
+              },
+              name === 'watchlist' ? '自选' : '持仓',
+            ),
+          ),
+          h('span', null, tab === 'watchlist' ? '已启用关注列表 · 合并去重' : '当前账户 · 未平仓'),
+        ),
+        h(
+          'div',
+          { id: 'luo-market-content', role: 'tabpanel', 'aria-label': selectedTitle },
+          region(
+            tab,
+            selectedTitle,
+            selectedState,
+            h(
+              'div',
+              null,
+              tab === 'holdings' && held
+                ? h(
+                    'div',
+                    { className: 'luo-grid is-kpi luo-holding-stats' },
+                    h(Kpi, {
+                      label: '浮动盈亏',
+                      value: signedMoney(held.totalPnL),
+                      tone: toneOf(held.totalPnL),
+                      sub: ratio(held.totalPnLPct),
+                    }),
+                    h(Kpi, {
+                      label: '今日盈亏',
+                      value: signedMoney(held.totalTodayPnl),
+                      tone: toneOf(held.totalTodayPnl),
+                      sub: ratio(held.totalTodayPnlPct),
+                    }),
+                  )
+                : null,
+              h(MarketTable, {
+                key: tab,
+                quotes: dataOf(watchlist.results, 'batch_quote'),
+                holdings: tab === 'holdings' ? held : undefined,
+                triggers: triggerData,
+                triggerState: triggers,
+                onStock: (selected) => setStock({ ...selected, sourceLabel: selectedTitle }),
+              }),
+              tab === 'watchlist' && pagination
+                ? h(
+                    'div',
+                    null,
+                    pagination.incomplete
+                      ? h(
+                          'p',
+                          { className: 'luo-fine luo-warn-text' },
+                          '部分关注列表读取失败，仅展示已成功读取的成员。',
+                        )
+                      : null,
+                    h(
+                      'div',
+                      { className: 'luo-pagination' },
+                      h('span', null, `共 ${pagination.total} 只 · 第 ${page} / ${pageCount} 页`),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'luo-btn',
+                          disabled: page === 1,
+                          onClick: () => setPage((current) => Math.max(1, current - 1)),
+                        },
+                        '上一页',
+                      ),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'luo-btn',
+                          disabled: page >= pageCount,
+                          onClick: () => setPage((current) => current + 1),
+                        },
+                        '下一页',
+                      ),
+                    ),
+                  )
+                : null,
+            ),
+          ),
+        ),
+        region(
+          'watchlists',
+          '关注列表',
+          watchlists,
+          h(WatchlistsCard, { watchlists: dataOf(watchlists.results, 'list_watchlists') }),
+        ),
+        region(
+          'advice',
+          '在期建议',
+          advice,
+          h(
+            'details',
+            { className: 'luo-advice-fold', open: true },
+            h('summary', null, '研究摘要 · 展开查看证据与反证'),
+            h(AdviceSection, { advice: dataOf(advice.results, 'get_advice') }),
+          ),
+        ),
+      ),
+      h(
+        'aside',
+        { className: 'luo-terminal-side', 'aria-label': '市场动态' },
+        region(
+          'sentiment',
+          '市场温度',
+          sentiment,
+          h(BreadthCard, { snapshot: dataOf(sentiment.results, 'get_ashare_sentiment')?.snapshot }),
+        ),
+        region(
+          'sectors',
+          '行业涨幅榜 · 前五',
+          sectors,
+          dataOf(sectors.results, 'fetch_sector_quotes')
+            ? h(SectorRanking, { data: dataOf(sectors.results, 'fetch_sector_quotes') })
+            : null,
+        ),
+        region('triggers', '今日触发', triggers, h(TriggersCard, { triggers: triggerData })),
+        region(
+          'news',
+          '市场要闻',
+          news,
+          dataOf(news.results, 'fetch_news')
+            ? h(NewsFeed, { data: dataOf(news.results, 'fetch_news') })
+            : null,
+        ),
+      ),
+    ),
+    region('health', '数据状态', health, h(DataHealthLine, { status: marketStatus })),
+    h(Footer, {
+      left: '建议不等于交易，信心度不是概率。',
+      right: '时间均为北京时间 · 各分区独立更新',
+    }),
+    stock
+      ? h(StockDetail, {
+          key: stock.stockId,
+          stock,
+          sourceLabel: stock.sourceLabel,
+          onClose: () => setStock(null),
+          onAnalyze: () => onAnalyzeStock({ ...stock, sourceKind: 'overview' }),
+        })
+      : null,
   );
 }

@@ -9,6 +9,7 @@ import {
   decisionReviewRows,
   errorOf,
   mapStateBody,
+  mergeOverviewSection,
   publishedRunsByStrategy,
   researchRequestFor,
   stateUrl,
@@ -23,6 +24,66 @@ import {
 } from './projection.js';
 
 describe('client panel state projection', () => {
+  it('preserves successful section data and its timestamp on tool failure, then recovers', () => {
+    const previous = {
+      identity: 'news:1',
+      loading: true,
+      loadedAt: '2026-10-25T04:00:00Z',
+      results: { fetch_news: { ok: true, data: { items: [{ title: '旧要闻' }] } } },
+    };
+    const error = { kind: 'adapter_error', cause: 'timeout', recoverable: true };
+    const failed = mergeOverviewSection(
+      previous,
+      mapStateBody({
+        tools: [{ name: 'fetch_news', ok: false, error }],
+        asOf: '2026-10-25T04:01:00Z',
+      }),
+    );
+    expect(failed.results).toEqual(previous.results);
+    expect(failed.loadedAt).toBe(previous.loadedAt);
+    expect(failed.error).toEqual(error);
+    expect(failed.loading).toBe(false);
+    const recovered = mergeOverviewSection(
+      failed,
+      mapStateBody({
+        tools: [{ name: 'fetch_news', ok: true, data: { items: [] } }],
+        asOf: '2026-10-25T04:02:00Z',
+      }),
+    );
+    expect(recovered.results.fetch_news.data.items).toEqual([]);
+    expect(recovered.loadedAt).toBe('2026-10-25T04:02:00Z');
+    expect(recovered.error).toBeNull();
+  });
+
+  it('does not fabricate data or a successful timestamp on initial section failure', () => {
+    const state = mergeOverviewSection(
+      { results: {}, loadedAt: null },
+      mapStateBody({
+        tools: [{ name: 'batch_quote', ok: false, error: { kind: 'permission_denied' } }],
+      }),
+    );
+    expect(dataOf(state.results, 'batch_quote')).toBeNull();
+    expect(state.loadedAt).toBeNull();
+    expect(state.error.kind).toBe('permission_denied');
+  });
+
+  it('builds prefixed section URLs and overview analysis without invented strategy provenance', () => {
+    expect(new URL(stateUrl('overview', 'watchlist', 2), 'https://example.test/dsh/').href).toBe(
+      'https://example.test/dsh/api/luoome/state?panel=overview&section=watchlist&page=2',
+    );
+    const request = stockResearchRequestFor({
+      stockId: '600519.SH',
+      stockName: '贵州茅台',
+      sourceKind: 'overview',
+      sourceLabel: '自选行情',
+    });
+    expect(request.prompt).toContain('自选行情');
+    expect(request.prompt).toContain('直接执行并回显结果');
+    expect(request.prompt).not.toContain('已发布匹配');
+    expect(request.prompt).not.toContain('undefined');
+    expect(request.strategyId).toBeUndefined();
+  });
+
   it('maps tools into the legacy results shape and keeps ToolResult errors verbatim', () => {
     const state = mapStateBody({
       panel: 'review',

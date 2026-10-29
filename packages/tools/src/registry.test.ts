@@ -352,6 +352,7 @@ describe('toolRegistry', () => {
       'fetch_intraday_minutes',
       'fetch_news',
       'fetch_quote',
+      'fetch_sector_quotes',
       'get_account_performance',
       'get_ashare_sentiment',
       'get_stock_market_view',

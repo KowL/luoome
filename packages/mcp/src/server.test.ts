@@ -76,6 +76,7 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(defaultNames).not.toContain('run_strategy');
     // fetch_news 访问第三方新闻源，归为 external：默认 read 面不含，opt-in 后可见。
     expect(defaultNames).not.toContain('fetch_news');
+    expect(defaultNames).not.toContain('fetch_sector_quotes');
 
     const optedIn = selectMcpTools(
       toolRegistry.all(),
@@ -88,6 +89,7 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(optedInNames).toContain('create_strategy');
     expect(optedInNames).toContain('run_strategy');
     expect(optedInNames).toContain('fetch_news');
+    expect(optedInNames).toContain('fetch_sector_quotes');
     for (const internalName of [
       'sync_watchlist_source',
       'sync_strategy_watchlist_subscriptions',

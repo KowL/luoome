@@ -493,4 +493,105 @@ export const STYLE = `
   .luo-matches-table td:first-child, .luo-matches-table td:last-child { grid-column: 1 / -1; }
   .luo-matches-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; font: 10px/1.4 var(--lu-sans); color: var(--lu-ink-3); }
 }
+.luo-root.luo-overview { background-image: none; container: luo-terminal / inline-size; }
+.luo-overview .luo-shell { max-width: none; padding: 14px 16px 28px; }
+.luo-overview .luo-head { gap: 12px; align-items: center; padding-bottom: 12px; }
+.luo-overview .luo-eyebrow { font-size: 10px; letter-spacing: .08em; }
+.luo-overview .luo-title { margin: 6px 0 3px; font: 600 20px/1.2 var(--lu-sans); }
+.luo-overview .luo-sub { font-size: 12px; }
+.luo-overview .luo-head-side { gap: 6px; }
+.luo-overview .luo-btn { height: 28px; padding: 0 10px; border-radius: 5px; }
+.luo-overview .luo-region { min-width: 0; margin-top: 10px; padding: 12px; border: 1px solid var(--lu-line); border-radius: 6px; background: var(--lu-surface); }
+.luo-region-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.luo-region-head h2 { margin: 0; font: 600 13px/1.4 var(--lu-sans); }
+.luo-region-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.luo-region-time { color: var(--lu-ink-3); font: 10px/1.3 var(--lu-mono); }
+.luo-region-actions .luo-btn { font-size: 11px; height: 24px; padding: 0 7px; }
+.luo-region-error { margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; background: var(--lu-warn-soft); font-size: 11px; color: var(--lu-warn); overflow-wrap: anywhere; }
+.luo-region-error .luo-err { margin: 0; }
+.luo-overview .luo-region > .luo-card { border: 0; padding: 0; box-shadow: none; background: transparent; }
+.luo-overview .luo-region > .luo-card > .luo-card-h { display: none; }
+.luo-overview .luo-card, .luo-overview .luo-index, .luo-overview .luo-kpi { box-shadow: none; border-radius: 4px; }
+.luo-overview .luo-grid { gap: 8px; }
+.luo-overview .luo-grid.is-index { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.luo-overview .luo-index { padding: 10px 12px; background: var(--lu-bg); }
+.luo-overview .luo-index::before { display: none; }
+.luo-overview .luo-index-price { font-size: 22px; margin-top: 8px; }
+.luo-overview .luo-index-src { line-height: 1.4; margin-top: 6px; }
+.luo-overview .luo-grid.is-kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.luo-overview .luo-kpi { padding: 8px 12px; border: 0; border-left: 2px solid var(--lu-line); }
+.luo-overview .luo-kpi-label { font-size: 12px; letter-spacing: 0; }
+.luo-overview .luo-kpi-value { font-size: 22px; margin-top: 8px; }
+.luo-overview .luo-kpi-sub { margin-top: 4px; }
+.luo-terminal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 10px; align-items: start; }
+.luo-terminal-main, .luo-terminal-side { min-width: 0; }
+.luo-market-tabs { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 6px; border: 1px solid var(--lu-line); border-radius: 6px; background: var(--lu-surface); }
+.luo-market-tabs button { padding: 6px 18px; background: transparent; border: 0; border-radius: 4px; font: 600 13px var(--lu-sans); color: var(--lu-ink-2); cursor: pointer; }
+.luo-market-tabs button.is-active { color: var(--lu-accent); background: var(--lu-accent-soft); }
+.luo-market-tabs > span { margin-left: auto; padding-right: 6px; font-size: 11px; color: var(--lu-ink-3); }
+.luo-market-tabs button:focus-visible, .luo-sort:focus-visible, .luo-market-scroll:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
+.luo-market-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding-bottom: 10px; color: var(--lu-ink-3); font-size: 11px; }
+.luo-market-scroll { max-height: 520px; margin: 0; }
+.luo-market-table { min-width: 550px; }
+.luo-overview .luo-table th { font-size: 11px; letter-spacing: 0; padding: 9px 6px; }
+.luo-overview .luo-table td { font-size: 13px; padding: 7px 6px; }
+.luo-market-table td:first-child { min-width: 144px; }
+.luo-market-table td small { display: block; font-size: 11px; margin-top: 3px; }
+.luo-overview .luo-stock-code { font-size: 11px; }
+.luo-quote-stamp { display: block; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 10px/1.5 var(--lu-mono); color: var(--lu-ink-3); }
+.luo-sort { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; font: inherit; }
+.luo-pagination { display: flex; gap: 8px; align-items: center; padding-top: 12px; font-size: 11px; color: var(--lu-ink-3); }
+.luo-pagination > span { margin-right: auto; }
+.luo-overview .luo-holding-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 12px; }
+.luo-overview .luo-breadth-legend { gap: 6px 12px; margin-top: 8px; }
+.luo-overview .luo-substats { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 10px; padding-top: 10px; gap: 12px 6px; }
+.luo-overview .luo-stat-k, .luo-overview .luo-subblock-t { font-size: 11px; letter-spacing: 0; }
+.luo-overview .luo-stat-v { font-size: 16px; }
+.luo-overview .luo-subblock { margin-top: 12px; padding-top: 10px; }
+.luo-ladder { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.luo-ladder > span { display: flex; gap: 12px; padding: 4px 8px; border: 1px solid var(--lu-line); border-radius: 4px; font-size: 11px; color: var(--lu-ink-2); }
+.luo-ladder b { color: var(--lu-up); font-family: var(--lu-mono); }
+.luo-sector-list, .luo-news-list { list-style: none; padding: 0; margin: 0; }
+.luo-sector-list li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--lu-line); font-size: 13px; }
+.luo-sector-list li:last-child, .luo-news-list li:last-child { border-bottom: 0; }
+.luo-sector-rank { color: var(--lu-ink-3); font: 12px var(--lu-mono); }
+.luo-sector-main { flex: 1; min-width: 0; }
+.luo-sector-main b { font-weight: 500; }
+.luo-sector-main small { display: block; margin-top: 3px; color: var(--lu-ink-3); font-size: 10px; }
+.luo-news-list { max-height: 450px; overflow: auto; }
+.luo-news-list li { padding: 10px 0; border-bottom: 1px solid var(--lu-line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.luo-news-meta { display: flex; gap: 10px; margin-bottom: 4px; color: var(--lu-ink-3); font-size: 10px; }
+.luo-news-list a { color: var(--lu-ink); text-decoration: none; }
+.luo-news-list a:hover { color: var(--lu-accent); text-decoration: underline; }
+.luo-news-summary { margin: 4px 0 0; color: var(--lu-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.luo-overview .luo-row { gap: 8px; padding: 10px 0; }
+.luo-overview .luo-row-title { font-size: 12px; }
+.luo-overview .luo-row-sub { font-size: 11px; }
+.luo-overview .luo-empty { padding: 18px 8px; min-height: 0; }
+.luo-overview .luo-advice-fold > summary { color: var(--lu-ink-2); font-size: 12px; cursor: pointer; }
+.luo-overview .luo-advice-fold > .luo-section { animation: none; margin-top: 10px; }
+.luo-overview .luo-advice-fold .luo-section-h { display: none; }
+.luo-overview .luo-advice-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+.luo-overview .luo-foot { margin-top: 12px; padding-top: 12px; }
+.luo-warn-text { color: var(--lu-warn); }
+@container luo-terminal (max-width: 900px) {
+  .luo-terminal-grid { grid-template-columns: minmax(0, 1fr); }
+  .luo-terminal-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; align-items: start; }
+}
+@container luo-terminal (max-width: 580px) {
+  .luo-overview .luo-shell { padding: 12px 10px 24px; }
+  .luo-overview .luo-head { align-items: start; flex-direction: column; }
+  .luo-overview .luo-head-side { justify-content: start; }
+  .luo-overview .luo-grid.is-index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-overview .luo-index { padding: 10px; }
+  .luo-overview .luo-index-top { flex-wrap: wrap; gap: 4px; }
+  .luo-overview .luo-index-price { font-size: 20px; }
+  .luo-overview .luo-kpi { padding: 6px; }
+  .luo-overview .luo-kpi-value { font-size: 16px; overflow-wrap: anywhere; }
+  .luo-overview [data-overview-section="account"] .is-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-overview [data-overview-section="account"] .luo-kpi:first-child { grid-column: 1 / -1; }
+  .luo-overview .luo-kpi-label, .luo-overview .luo-kpi-sub { font-size: 10px; }
+  .luo-terminal-side { grid-template-columns: minmax(0, 1fr); }
+  .luo-market-tabs > span { font-size: 10px; }
+}
 `;

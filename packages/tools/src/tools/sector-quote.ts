@@ -3,10 +3,10 @@ import { FetchSectorQuotesQuerySchema, SectorQuoteListSchema } from '@luoome/cor
 import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js';
 
 /**
- * 行业板块行情工具（只读）。
+ * 行业板块行情工具（外部网络读取）。
  *
- * - sideEffect: 'read' —— 只读快照，不写库、不触发通知
- * - MCP 默认 read 类暴露（与 ARCHITECTURE §9.2 默认策略一致）
+ * - sideEffect: 'external' —— 访问行情供应商，不写库、不触发通知
+ * - 与新闻、指数一致，须显式开启 external 能力
  * - 错误模型：input 解析失败 → invalid_input；manager.adapter_error → adapter_error；
  *   空列表 → 正常返回（warnings=["empty-list"]）
  */
@@ -20,7 +20,7 @@ export const fetchSectorQuotesTool = defineTool({
     '拉取东方财富行业板块实时行情：板块代码/名称/最新点位/涨跌幅/成交额/上涨下跌家数/领涨股。' +
     'sort 支持 changePct（涨跌幅，默认）与 amount（成交额），均为降序；limit 默认 50 上限 200，all=true 返回完整集合。' +
     '空 items + warnings=["empty-list"] 表示无数据。',
-  sideEffect: 'read',
+  sideEffect: 'external',
   input: FetchSectorQuotesInput,
   output: FetchSectorQuotesOutput,
   handler: async (input, ctx) => {

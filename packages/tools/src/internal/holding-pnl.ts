@@ -9,6 +9,7 @@ import {
   PercentageSchema,
   percentage,
   type Quote,
+  QuoteSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -17,6 +18,7 @@ export const HoldingPnlSchema = z.object({
   holding: HoldingSchema,
   stockName: z.string().min(1),
   currentPrice: MoneySchema,
+  quote: QuoteSchema.nullable().optional(),
   /** 昨收（今日盈亏基准）；取不到为 null，今日盈亏同步为 null。 */
   previousClose: MoneySchema.nullable(),
   marketValue: MoneySchema,
@@ -60,6 +62,7 @@ export const enrichHolding = (
     holding,
     stockName,
     currentPrice,
+    quote: quote ?? null,
     previousClose,
     marketValue,
     cost,

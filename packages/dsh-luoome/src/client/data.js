@@ -32,7 +32,73 @@ export {
   workspaceOf,
 } from './projection.js';
 
-import { mapStateBody, stateUrl, stockDetailUrl, stockHistoryUrl } from './projection.js';
+import {
+  mapStateBody,
+  mergeOverviewSection,
+  stateUrl,
+  stockDetailUrl,
+  stockHistoryUrl,
+} from './projection.js';
+
+const emptySection = (identity) => ({
+  identity,
+  results: {},
+  loading: true,
+  error: null,
+  loadedAt: null,
+  session: null,
+  watchlistPage: null,
+});
+
+export function useOverviewSection(section, page = 1) {
+  const identity = `${section}:${page}`;
+  const [tick, setTick] = useState(0);
+  const [state, setState] = useState(() => emptySection(identity));
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    setState((previous) =>
+      previous.identity === identity
+        ? { ...previous, loading: true, error: null }
+        : emptySection(identity),
+    );
+    fetch(stateUrl('overview', section, page), {
+      signal: controller.signal,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const body = await response.json();
+        if (
+          body.panel !== 'overview' ||
+          body.section !== section ||
+          !Array.isArray(body.tools) ||
+          !body.tools.length
+        )
+          throw new Error('分区响应无效');
+        return mapStateBody(body);
+      })
+      .then((next) => {
+        if (active) setState((previous) => mergeOverviewSection(previous, next));
+      })
+      .catch((error) => {
+        if (active && !controller.signal.aborted)
+          setState((previous) => ({
+            ...previous,
+            loading: false,
+            error: { message: error.message ?? '读取失败' },
+          }));
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [section, page, identity, tick]);
+  const refresh = useCallback(() => setTick((value) => value + 1), []);
+  return { ...(state.identity === identity ? state : emptySection(identity)), refresh };
+}
 
 const fetchPanelState = async (panel, signal) => {
   const response = await fetch(stateUrl(panel), {
