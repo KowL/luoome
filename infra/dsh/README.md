@@ -12,7 +12,7 @@ bun --no-env-file run test:mvp-journeys
 bun --no-env-file infra/dsh/plugin-switch-acceptance.ts
 ```
 
-安装验收在临时目录用 npm 安装 tarball 并启动独立 DSH；旅程脚本在真实 Node 24/SDK 中验证原生审批，使用脚本模型，不等同真实模型质量。浏览器验收使用本机 Chrome，`KEEP=1` 可保留截图和证据。切换验收使用合成数据库做备份、更新、旧实例关闭和回退，不操作生产服务器。
+安装验收在临时目录用 npm 安装 tarball 并启动独立 DSH；旅程脚本在真实 Node 24/SDK 中验证个人版零审批直接执行，使用脚本模型，不等同真实模型质量。浏览器验收使用本机 Chrome，`KEEP=1` 可保留截图和证据。切换验收使用合成数据库做备份、更新、旧实例关闭和回退，不操作生产服务器。
 
 本机已有 Node 24 时，可设置 `NODE24_PATH` 为其可执行文件，安装与旅程验收会直接使用该运行时，避免重复解析 npm 的 Node 包。浏览器脚本可由这个 Node 24 直接运行，DSH 子进程复用相同运行时。
 

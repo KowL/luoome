@@ -1,8 +1,8 @@
-// 策略生命周期与 Advice 结果回填的原生确认操作策略（M2b-2，需求 §3.1/§3.2/§3.3/§4.4/§5-5）。
+// 策略生命周期与 Advice 结果回填的个人直接执行策略（M2b-2，需求 §3.1/§3.2/§3.3/§4.4/§5-5）。
 //
-// 这五个写工具不直接注册成 agent 工具；它们只作为 luoome_confirmed_operation 的 policy 执行。
-// prepare 冻结输入（策略定义/CAS/账户/过期），confirm 前必须获得宿主原生审批；publish 是
-// 独立 policy，create/validate 的审批不会隐含发布授权。reconcile 只按业务回执核对既有结果，
+// 这些写工具不直接注册成 agent 工具；它们只作为 luoome_confirmed_operation 的 policy 执行。
+// prepare 冻结输入（策略定义/CAS/账户/过期），个人版随后直接 confirm；publish 是
+// 独立 policy，create/validate 不会自动触发发布。reconcile 只按业务回执核对既有结果，
 // 不重新执行 handler，也不把失败包装成成功。
 import {
   type AdviceOutcome,
@@ -62,7 +62,7 @@ export const operationStrategyId = (operationId: string): string => `strategy-${
 
 const createStrategyOperation: ConfirmablePluginTool = {
   tool: createStrategyTool,
-  // 只能由单次人工审批执行；不进入定时授权面。
+  // 只按明确意图直接执行；不进入定时授权面。
   scheduled: false,
   bind(raw, principal, operationId) {
     const parsed = clientScope(raw, principal);
@@ -318,7 +318,7 @@ const unsubscribeStrategyOperation: ConfirmablePluginTool = {
   },
 };
 
-/** 四个策略生命周期 policy：create / create-version / validate / publish，各自独立审批。 */
+/** 四个策略生命周期 policy：create / create-version / validate / publish，各自保留独立 Operation。 */
 export const createStrategyLifecycleOperationPolicies = (): readonly ConfirmablePluginTool[] => [
   createStrategyOperation,
   createStrategyVersionOperation,
@@ -327,9 +327,9 @@ export const createStrategyLifecycleOperationPolicies = (): readonly Confirmable
 ];
 
 /**
- * Advice 结果回填 policy：outcome/pnl/notes 等字段必须由调用方显式给出并经宿主原生审批。
- * 这里不提供任何「模型推断值」入口，也不接受客户端自报 approved/callId/taskId；没有用户
- * 批准的一次性授权，prepare 出的操作不会被执行。
+ * Advice 结果回填 policy：outcome/pnl/notes 等字段必须由调用方显式给出。
+ * 这里不提供任何「模型推断值」入口，也不接受客户端自报 approved/callId/taskId；
+ * 个人版 prepare 后直接执行，账户、输入与 Operation 回执仍由宿主绑定。
  */
 export const createAdviceOutcomeOperationPolicies = (): readonly ConfirmablePluginTool[] => [
   recordAdviceOutcomeOperation,

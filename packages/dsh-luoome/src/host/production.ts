@@ -11,7 +11,6 @@ import type {} from '@deepseek-ai/dsh-api-session-controller';
 import type {} from '@deepseek-ai/dsh-client-connection';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
-import type {} from '@deepseek-ai/dsh-user-approval';
 import {
   createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
@@ -136,7 +135,7 @@ export const TRUSTED_ANALYSIS_PROVENANCE: TrustedAnalysisProvenance = Object.fre
  * - 策略上线：schedule / pause / resume / Watchlist subscribe / unsubscribe。
  *
  * 不包含 claim/complete/fail/metrics/job、通用 settings 或 trade；batch 仅由部署显式开启。
- * 每个写工具各自独立审批，publish 不会因 create/validate 的审批而获得授权。
+ * 个人版按明确意图直接执行，每个写工具仍保留独立 Operation 与业务回执。
  */
 export const createProductionOperationPolicies = (
   trusted: TrustedAnalysisProvenance = TRUSTED_ANALYSIS_PROVENANCE,
@@ -345,7 +344,6 @@ export const REQUIRED_HOST_SERVICES = [
   'connection',
   'webServer',
   'sessionController',
-  'approval',
   'tools',
   'agents',
 ] as const satisfies readonly (keyof Context)[];
@@ -362,9 +360,9 @@ export const assertProductionHostDependencies = (ctx: Context): void => {
  * DSH 生产插件入口：注册只读/市场工具、宿主认证的只读 `/api/luoome/call` 路由，以及
  * M2b 的精确写回 policies（DecisionReview + 交互分析 record + 策略生命周期 + 用户反馈）。
  *
- * 写操作只经 `luoome_confirmed_operation` 的原生审批执行：prepare 冻结输入，confirm 前
- * 必须获得 allowed-once 审批；`/api/luoome/call` 仍只读，queue/write 能力不会被它借用。
- * 连接、WebServer、SessionController、ApprovalService 任一缺失时在打开数据库之前抛错。
+ * 写操作只经 `luoome_confirmed_operation` 直接执行：prepare 冻结输入，confirm 保留幂等与回执；
+ * `/api/luoome/call` 仍只读，queue/write 能力不会被它借用。
+ * 连接、WebServer、SessionController 任一缺失时在打开数据库之前抛错。
  */
 export const apply = async (ctx: Context, config?: unknown): Promise<ProductionHost> => {
   assertProductionHostDependencies(ctx);

@@ -479,7 +479,7 @@ tools 读写当前账户的持久化历史。草案确认使用
 DSH 接入有两条路径，默认部署只保留第一条：
 
 1. **独立 DSH 部署（默认，纯插件形态）**：DSH 用 Node 加载 `dsh-luoome` 插件——host 提供原生只读 /
-   market external / 确认写面，client 提供三块核心面板，随包 skills 提供四条投研技能；事实库是
+   market external / 个人直接执行写面，client 提供三块核心面板，随包 skills 提供四条投研技能；事实库是
    Node SQLite 的 `$LUOOME_HOME/luoome.db`。运行期不需要 Bun、MCP server、旧 Bun Web、
    analysis worker 或 queue probe。部署入口见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
    容器栈保留为整栈回退方案。
@@ -872,7 +872,7 @@ TradingPlanVersion 或 WatchTrigger。`context` 在首次保存时冻结，来�
 只有沿来源身份校验过的 SignalObservation 能作为后续事实，不按同股或相近日期推断证据链。
 `save_decision_review` 接受 content 顶层部分更新：省略保留 expectedRevision 对应历史修订的值，
 显式 null 清除可空字段，tradeIds 的显式空数组解除关联；新建从空数组/null 开始。
-工具与确认 policy 复用同一解析逻辑，policy 在审批前读取基准修订并冻结完整内容，最终写入仍用
+工具与操作 policy 复用同一解析逻辑，policy 在执行前读取基准修订并冻结完整内容，最终写入仍用
 contextHash / expectedRevision 做校验；重放也按原基准补齐，不随当前修订变化。Core 的部分更新
 schema 与完整存储 schema 分开，合并函数无 IO；policy 的异步 bind 仍在 tools 层读取仓储。
 `save_decision_review` 校验成功后追加修订；
@@ -1288,7 +1288,7 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
 `packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
 公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（精确只读白名单、market external
-白名单与原生确认 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
+白名单与个人直接执行 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
 （`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）仅保留给手动/隔离验收。
 
 单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
@@ -1331,21 +1331,22 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 检查。领域工具只装配事实、校验和持久化，不自行推理。`write` / `external` opt-in 仍有效。
 
 默认纯插件部署的 read / market / 写操作面互相隔离：read 只接受纯 read 工具，market 只接受
-`sideEffect==='external'` 的精确工具，写操作只经确认 policy（含账户改名）；queue 管理工具、
-任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后仍只经确认或精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
+`sideEffect==='external'` 的精确工具，写操作只经个人直接执行 policy（含账户改名）；queue 管理工具、
+任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后按明确意图直接执行或通过精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
 手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
 精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
 `LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
 看盘、持仓、关注、策略、复盘通过 `ctx.slots` 注册主面板与侧栏入口；投资设置注册到 DSH 原生
 `settings.section`，不占业务侧栏。宿主 prefix 路由复用 DSH Connection.admit
-与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走既有 prepare/confirm
-协议，预览与取消不写入，未知结果只核对 operation ID。浏览器只保存恢复用的 UUID，不保存授权 token，
+与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走 prepare 后直接执行的
+协议，取消与未知结果只核对 operation ID。浏览器只保存恢复用的 UUID，不保存执行 token，
 不重算业务数字。非交易日的情绪查询取最近交易日，仍展示供应商原始日期，不伪装今日实时行情。
 
 看盘保留账户概览，持仓明细在持仓页查看。关注页独立读取 `list_watchlists`，按选中列表
 调用只读 `get_watchlist`；股票名称由工具解析本地目录，缺失名称不猜测。新建/修改/归档列表、
-添加/调整/移除手动成员复用领域工具及独立确认 policy，不开放定时授权。AI 管理入口生成带
-列表身份的可编辑对话草稿，实际写入仍逐次审批。结束 manual 来源不会删除其他仍有效的来源；
+添加/调整/移除手动成员复用领域工具，面板提交即按冻结输入直接执行并返回 Operation 回执，
+不开放定时授权。AI 管理入口生成带列表身份的可编辑对话草稿，对话中的写入按明确意图直接执行。
+结束 manual 来源不会删除其他仍有效的来源；
 没有业务回执的未知写入只核对，不自动重试。
 
 投资设置的 `/api/luoome/settings/market` 只向已认证的 owner 提供行情源顺序与 FUYAO 配置，
@@ -1379,7 +1380,7 @@ current。数据资格预检只审计本地保留字段、前序窗口和历史�
 存储扩展现有 StrategyEvaluationRepository：`strategy_research_states` 以策略/账户绑定 CAS 修订，
 同请求与相同内容可重放，结论和比较历史各有显式容量门槛，满时拒绝追加，不静默删除旧研究。
 持续观察分别核对日程、DSH task、grant 与真实业务事实，T+1/T+3/T+5 不被当作组合回测。
-客户端与固定研究路由、确认操作及可复现边界见[插件研究工作台契约](./ddd/dsh-luoome-plugin-detailed-design.md#82-个人策略研究工作台)。
+客户端与固定研究路由、直接执行操作及可复现边界见[插件研究工作台契约](./ddd/dsh-luoome-plugin-detailed-design.md#82-个人策略研究工作台)。
 
 策略匹配标的的个股详情按点击时的股票、结果及版本保留来源。点击股票后才经固定
 `GET /api/luoome/stock?stockId=...` 调用精确 opt-in 的 `fetch_quote`；只接受一个规范股票代码，
@@ -1387,7 +1388,7 @@ current。数据资格预检只审计本地保留字段、前序窗口和历史�
 缓存回退及过期状态、行情时间与匹配时间分别呈现。关闭详情取消客户端等待，错误不清空匹配依据。
 分析按钮在用户点击后通过官方 Session Controller 创建并保留会话，使用其公开 SessionFace
 提交股票分析问题，收到宿主接受后再打开对话；保留期间使用真实作用域，不借用未注入服务，
-也不操作或清空已有会话草稿。失败不自动重试，任何业务写入仍走原生审批。
+也不操作或清空已有会话草稿。失败不自动重试，任何业务写入仍按明确意图直接执行并保留回执。
 
 历史图表由独立 `/api/luoome/stock/history?stockId=...` 提供固定三个月日 K，复用
 `get_stock_market_view` 的真实 candles/dataStatus。入口只接受单个沪深股票码，沿用 owner
@@ -1401,14 +1402,14 @@ admission、Host/Origin、no-store 和有界取消。历史读取由用户主动
 
 `packages/dsh-luoome` 的 DSH/HTTP 包装统一调用 tools 操作服务；`PluginAuthorityRepository` 在 core 定义，db 提供 memory/drizzle、同步 schema/DDL 与合约。操作冻结账户/输入并 CAS 认领，通用操作回执与业务事务分离，结果不明时通过既有业务 receipt 核对，不能自动重执行业务。
 
-宿主审批使用真实 ApprovalService，执行 token 的私有凭据经单调 guard 和 handler 核验。调度身份来自当前 turn 消息与 ScheduleService 持久投递历史的关联，并绑定任务定义指纹、授权版本、账户及精确参数。
+个人版不再调用 ApprovalService，也不要求面板二次确认。原生与 HTTP 操作在 prepare 后直接 confirm，执行 token 的私有凭据仍经单调 guard 和 handler 核验；宿主对插件工具及 luoome 日程工具返回 ask 时由插件覆盖为 allow，明确 deny/cancel 与 owner guard 继续生效。调度身份来自当前 turn 消息与 ScheduleService 持久投递历史的关联，并绑定任务定义指纹、授权版本、账户及精确参数。
 
 生产插件声明 `agents` 依赖，原生调用在插件作用域核对活 Agent；HTTP 读接口不能替代这条验收。
-确认入口由操作服务的当前 policy Zod schema 派生 tool/input 契约，直接提供嵌套字段类型并保留每项操作的精确约束。
-参数校验失败返回不含提交值的字段路径与类型要求，保留 invalid_input 与 permission_denied 的区分；不会因纠正参数而跳过审批。
+操作入口由操作服务的当前 policy Zod schema 派生 tool/input 契约，直接提供嵌套字段类型并保留每项操作的精确约束。
+参数校验失败返回不含提交值的字段路径与类型要求，保留 invalid_input 与 permission_denied 的区分。
 
-新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。确认页只把操作编号存入 sessionStorage，确认凭据仅在组件内存；模型调用使用官方审批组件。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
+新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。操作页只把操作编号存入 sessionStorage，执行凭据仅在组件内存；HTTP prepare 直接返回最终回执。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
 
 无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**生产服务器已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
 
-原生操作参数中的账户与 requestId 由 policy 绑定；模型参数 schema 将这些字段标为可省略，完整领域校验仍在绑定后执行。冲突错误只返回安全字段路径。用户拒绝后，宿主基于真实会话事件阻断同一请求的后续写计划，改工具名或 operation ID 不能绕过；新的用户请求可以重新独立审批。
+原生操作参数中的账户与 requestId 由 policy 绑定；模型参数 schema 将这些字段标为可省略，完整领域校验仍在绑定后执行。冲突错误只返回安全字段路径。个人版按用户明确意图直接执行，不再把审批拒绝作为会话状态保存。

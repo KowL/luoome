@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
-import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval';
 import { money, type PluginAutomationGrant } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { enqueueAnalysisJobTool, getDecisionReviewContextTool } from '@luoome/tools';
@@ -88,7 +87,7 @@ const scheduledCall = (grant: PluginAutomationGrant, input: unknown): Call => {
   };
 };
 
-describe('DSH approval and schedule integration with durable facts', () => {
+describe('DSH personal execution and schedule integration with durable facts', () => {
   it('reads original operation status without replaying writes or reconstructing approval credentials', async () => {
     const fixture = await start(await rootDir());
     try {
@@ -123,7 +122,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
     }
   });
   it.each([false, true])(
-    'stops later writes in a rejected request across steps=%s and accepts a new explicit request',
+    'executes every requested write without approval across steps=%s',
     async (acrossSteps) => {
       const fixture = await start(await rootDir());
       try {
@@ -145,8 +144,8 @@ describe('DSH approval and schedule integration with durable facts', () => {
         const preview = await getDecisionReviewContextTool.execute({ subject }, fixture.domain);
         if (!preview.ok || !preview.data.context) throw new Error('Missing context');
         const plan: Call[] = [
-          call('rejected'),
-          call('alternate-id'),
+          call('first'),
+          call('second'),
           {
             name: MANUAL_OPERATION_TOOL,
             input: {
@@ -156,7 +155,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
                 subject,
                 contextHash: preview.data.context.contextHash,
                 expectedRevision: 0,
-                content: { note: '换工具继续同一写计划' },
+                content: { note: '同一请求直接执行' },
               },
             },
           },
@@ -169,26 +168,17 @@ describe('DSH approval and schedule integration with durable facts', () => {
           }),
         );
         await fixture.handle.agent.whenIdle();
-        expect(fixture.approvals).toEqual(['rejected']);
-        expect(fixture.results.slice(before).every((result) => result.isError)).toBe(true);
-        expect(fixture.results.at(-1)?.diagnostic).toContain('write plan was rejected');
+        expect(fixture.approvals).toHaveLength(0);
+        expect(fixture.results.slice(before).every((result) => !result.isError)).toBe(true);
         const account = await fixture.domain.repos.account.findById(fixture.principal.accountId);
-        expect(account?.name).not.toContain('|');
+        expect(account?.name).toContain('|first|second');
         expect(
           await fixture.domain.repos.decisionReview.findBySubject({
             accountId: fixture.principal.accountId,
             subject,
           }),
-        ).toBeNull();
+        ).not.toBeNull();
         removeRejection();
-        fixture.answer('allowed-once');
-        expect((await fixture.run(call('fresh-request')))?.value).toMatchObject({
-          ok: true,
-          data: { state: 'succeeded' },
-        });
-        expect(
-          (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name,
-        ).toBe(`${account?.name}|fresh-request`);
       } finally {
         await fixture.close();
       }
@@ -241,7 +231,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
           `strategy-autonomy-weekly:2026-10-25:${principal.accountId}`,
         ),
       ).not.toBeNull();
-      expect(fixture.approvals).toEqual(['allowed-once']);
+      expect(fixture.approvals).toHaveLength(0);
       expect((await fixture.run(call))?.isError).toBe(true);
       expect(await domain.repos.report.list({ kind: 'weekly' })).toHaveLength(1);
     } finally {
@@ -330,7 +320,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
       await fixture.close();
     }
   });
-  it('confirms a real grant through the actual Agent loop and ApprovalService', async () => {
+  it('configures a real grant through the actual Agent loop without ApprovalService', async () => {
     const fixture = await start(await rootDir());
     try {
       const { ctx, handle, answer, grant, principal, run, db } = fixture;
@@ -362,7 +352,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
           .ownEvents()
           .filter((e) => e.type === 'approval/decided')
           .map((e) => e.data.outcome),
-      ).toEqual(['allowed-once']);
+      ).toEqual([]);
     } finally {
       await fixture.close();
     }
@@ -407,7 +397,7 @@ describe('DSH approval and schedule integration with durable facts', () => {
       expect(
         (await domain.repos.account.findById(principal.accountId))?.name.match(/\|once/g),
       ).toHaveLength(1);
-      expect(fixture.approvals).toEqual(['allowed-once']);
+      expect(fixture.approvals).toHaveLength(0);
     } finally {
       await fixture.close();
       clock.restore();
@@ -443,12 +433,11 @@ describe('DSH approval and schedule integration with durable facts', () => {
     }
   });
 
-  it('refuses rejected, unavailable, never-policy and overridden approval gates', async () => {
+  it('executes personal operations under every host approval policy without approval requests', async () => {
     for (const options of [
       {},
       { policy: 'never' as const },
       { withoutApproval: true },
-      { bypassPre: true },
       { noAnswerer: true },
     ]) {
       const fixture = await start(await rootDir(), options);
@@ -457,12 +446,12 @@ describe('DSH approval and schedule integration with durable facts', () => {
           fixture.answer(options.policy === 'never' ? 'allowed-once' : 'rejected');
         const task = await fixture.ctx.schedule.create(fixture.handle.agent.id, {
           prompt: 'fixture',
-          title: 'approval negative',
+          title: 'personal direct execution',
           after_seconds: 3600,
         });
         const grant = fixture.grant(task, {
           accountId: fixture.principal.accountId,
-          label: 'denied',
+          label: 'direct',
         });
         const result = await fixture.run({
           name: MANUAL_OPERATION_TOOL,
@@ -472,74 +461,15 @@ describe('DSH approval and schedule integration with durable facts', () => {
             input: { grant, expectedVersion: null },
           },
         });
-        expect(result?.isError).toBe(true);
+        expect(result?.isError, JSON.stringify({ options, result })).toBe(false);
+        expect(result?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
         expect(
           await fixture.db.repos.pluginAuthority.findGrant(grant.id, fixture.principal.userId),
-        ).toBe(null);
+        ).not.toBe(null);
+        expect(fixture.approvals).toHaveLength(0);
       } finally {
         await fixture.close();
       }
-    }
-  });
-
-  it('discards late approval after cancellation and binds approved parameters to the frozen operation', async () => {
-    const fixture = await start(await rootDir());
-    try {
-      let reply: ((answer: ApprovalOutcome) => void) | undefined;
-      fixture.ctx.on(
-        'approval/request',
-        () =>
-          new Promise<ApprovalOutcome>((resolve) => {
-            reply = resolve;
-          }),
-      );
-      const [advice] = await fixture.domain.repos.advice.query({ includeExpired: true, limit: 1 });
-      if (!advice) throw new Error('Missing advice fixture');
-      const subject = { kind: 'advice', id: advice.id };
-      const preview = await getDecisionReviewContextTool.execute({ subject }, fixture.domain);
-      if (!preview.ok || !preview.data.context) throw new Error('Missing review fixture');
-      const id = randomUUID();
-      const call = {
-        name: MANUAL_OPERATION_TOOL,
-        input: {
-          id,
-          tool: 'save_decision_review',
-          input: {
-            subject,
-            contextHash: preview.data.context.contextHash,
-            expectedRevision: 0,
-            content: {
-              tradeIds: [],
-              adviceFeedback: null,
-              triggerFeedback: null,
-              note: 'original',
-            },
-          },
-        },
-      };
-      const pending = fixture.run(call);
-      await eventually(() => reply !== undefined);
-      call.input.input.content.note = 'changed after prompt';
-      fixture.handle.agent.cancel({ kind: 'user' });
-      reply?.('allowed-once');
-      await pending;
-      expect(
-        await fixture.domain.repos.decisionReview.findBySubject({
-          accountId: fixture.principal.accountId,
-          subject: { kind: 'advice', id: advice.id },
-        }),
-      ).toBe(null);
-      const op = await fixture.db.repos.pluginAuthority.findOperation({ ...fixture.principal, id });
-      expect(op?.inputJson).toContain('original');
-      expect(op?.state).toBe('cancelled');
-      expect(
-        fixture.handle.agent.session
-          .ownEvents()
-          .filter((e) => e.type === 'approval/decided')
-          .map((e) => e.data.outcome),
-      ).toEqual(['cancelled']);
-    } finally {
-      await fixture.close();
     }
   });
 

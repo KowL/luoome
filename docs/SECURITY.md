@@ -81,7 +81,7 @@ tool.sideEffect !== 'trade' && !tool.requiredCapabilities?.includes('trade')
 
 - `packages/mcp/src/exposure.ts`：`LUOOME_EXPOSE_TRADE=true` 在解析暴露面时直接抛错，MCP 启动失败
 - `packages/dsh-luoome/src/host/read-surface.ts`：DSH 插件装配时同样抛错
-- `packages/tools/src/plugin-operations.ts`：确认门策略不接受 `trade` / `queue` 能力，人工确认通道也到不了 trade
+- `packages/tools/src/plugin-operations.ts`：操作策略不接受 `trade` 能力，个人直接执行通道也到不了 trade
 
 因此 trade 只能由人经专用人工入口触发。`record_decision_trade` 另走 Web 的
 `POST /api/decision-trades`（write opt-in + 同源校验 + 账户绑定 + 明确的未入账确认）。
@@ -198,7 +198,7 @@ read 类恒定暴露，没有对应的 env var（`LUOOME_EXPOSE_READ` 不存在�
 「能力满足 ∧ 名字在 allowlist 内（allowlist 为空则不限）∧ 名字不在 denylist 内」。
 
 默认纯插件部署不读取 `LUOOME_EXPOSE_*`：暴露面由受信任部署配置（read allowlist、market
-allowlist、确认写 policy）固定，HTTP/模型参数不能提升。旧 MCP 过渡形态的暴露面由 profile 补丁
+allowlist、个人写 policy）固定，HTTP/模型参数不能提升。旧 MCP 过渡形态的暴露面由 profile 补丁
 固定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，避免一次配置失误把只读实例变成
 写面实例。暴露面划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
 
@@ -386,7 +386,7 @@ Advice 的 `reasoning` / `risks` 在写回前过 prompt-injection 文本清理�
 - [x] Advice 写回路径对 reasoning / risks 做 prompt-injection 文本清理
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
-- [x] 默认纯插件部署的 read / market / 确认写面互不重叠；旧 MCP 四个实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃
+- [x] 默认纯插件部署的 read / market / 个人写面互不重叠；旧 MCP 四个实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃
 
 ## 单机形态的入口与暴露面
 
@@ -418,7 +418,7 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
 |---|---|---|---|
 | read surface | `dsh-luoome` 插件（DSH Node 进程内） | 45 个纯 read 工具：账户/持仓/交易、Advice/复盘、Strategy、关注/触发、本地市场事实 | read |
 | market external surface | 同上 | 精确 6 个 `sideEffect==='external'` 工具（指数/情绪/行情/新闻/试跑） | external（精确白名单） |
-| 确认写操作 | 同上 | 8 条 policy：DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome` | write/queue（逐次 allowed-once） |
+| 个人写操作 | 同上 | 精确 policy：DecisionReview、`record_advice`、`record_analysis_result`、策略生命周期与研究操作等 | write/queue（个人版直接执行） |
 
 - 插件的 read / market / 写操作面互相隔离；通用 `/api/luoome/call` 只读，写工具按名返回 403。
 - 部署配置只由进程环境或受信任代码解析；HTTP 请求、模型参数与 skill 内容不能扩大 allowlist、
@@ -467,8 +467,8 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
   `luoome-batch` 实例的批处理工具（默认部署不使用 MCP 实例）。
 - 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库；
   调度时间点错了也不会写坏事实。
-- 交互式分析不经过队列：插件 read surface 取得持久化 context 后由 DSH 推理，再经原生确认操作
-  `record_*` 校验写回，不创建 `analysis_job`；`record_*` 不能伪造已 claim 的 job 结果。
+- 交互式分析不经过队列：插件 read surface 取得持久化 context 后由 DSH 推理，再经个人操作
+  `record_*` 校验并直接写回，不创建 `analysis_job`；`record_*` 不能伪造已 claim 的 job 结果。
 - 队列能力保留，但默认部署不运行 MCP/worker：没有生产者、没有常驻消费者，空队列不产生任何
   模型请求，避免空转的真实模型成本。需要验证消费链路时，用旧入口脚本在手动/隔离环境显式拉起
   legacy worker；租约先到先得，与插件共享同一份事实库。
@@ -476,7 +476,7 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
 ### DSH 集成面的安全边界
 
 默认纯插件部署的 DSH 集成面是 `dsh-luoome` 插件：host（Node SQLite + 真实 adapters + read/market
-surface + 确认写 policy）、client（三面板 slots）、随包 skills（四技能）。旧 MCP 过渡形态的
+surface + 个人写 policy）、client（三面板 slots）、随包 skills（四技能）。旧 MCP 过渡形态的
 profile 装配、只读面板插件与纪律提示词插件源码保留，仅用于手动验收。
 
 - 插件 profile 由镜像管理：`deploy/dsh/profile-seed.mjs` 每次启动把构建产物安装进 DSH profile，
@@ -490,8 +490,8 @@ profile 装配、只读面板插件与纪律提示词插件源码保留，仅用
 
 ## 纯插件迁移中的执行边界
 
-插件的模型人工操作须经持久 prepare 与真实 DSH 审批；allowed-once 只对应当前冻结参数及 execution token，凭据不返回模型，后续权限 listener 的 allow 不能替代它。缺审批渠道、never 策略、取消、账户变化和子 Agent 均不能触发写入。浏览器人工表单使用独立 prepare/confirm 凭据，绑定相同账户与冻结输入。
+当前产品是单 owner 个人版，模型和面板操作不再要求人工审批。原生操作仍经持久 prepare、账户/能力校验与内部 confirm；HTTP prepare 同样冻结输入后立即执行。私有 execution token 不返回模型，guard、输入冻结、幂等和 Operation 回执继续生效。宿主 ask 会被个人版策略覆盖，但明确 deny/cancel、账户变化和子 Agent 限制不会被放宽。个人版因此把“用户明确表达操作意图”作为产品边界，不再把审批卡当作防 prompt-injection 机制。
 
-新 Web 路由每次经真实 Connection.admit 和 owner 检查，POST 仍要求真实监听器同源 Origin；不用内部 Fetch URL 或 X-Forwarded 头替代它。输入上限 64 KiB，超限先回 413 再关闭未读流。确认凭据仅保存在页面内存，刷新后只可查询操作，不从存储或服务端重建确认凭据。临时 profile 的官方审批 UI、登录、Host/Origin、取消和冷恢复已有本地验收；验收使用合成事实及脚本模型。
+新 Web 路由每次经真实 Connection.admit 和 owner 检查，POST 仍要求真实监听器同源 Origin；不用内部 Fetch URL 或 X-Forwarded 头替代它。输入上限 64 KiB，超限先回 413 再关闭未读流。执行凭据仅保存在页面内存，刷新后可查询操作，不从存储或服务端重建凭据。登录、Host/Origin、取消和冷恢复验收使用合成事实及脚本模型。
 
 定时授权同时核对真实投递历史、当前 turn、任务定义指纹、授权版本/有效期、账户、精确输入及组合能力；拒绝 force 和客户端自报任务身份。自动执行默认关闭。Node SQLite 只读/写回与默认部署切换已在隔离环境验收（含一致性备份与回退合并演练），生产服务器也已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，但**这仍不等同真实供应商/真实模型的无人干预质量验收**。unknown 结果先核对既有业务回执，禁止自动重复外部副作用。详细契约与隔离证据见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。

@@ -4,7 +4,13 @@ import type {} from '@deepseek-ai/dsh-client-connection';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type { PluginPrincipal } from '@luoome/tools';
 import { z } from 'zod';
-import { createDshOperationHost } from './dsh-authority.js';
+import { AUTOMATION_CATALOG_TOOL } from './automation-catalog.js';
+import {
+  createDshOperationHost,
+  MANUAL_OPERATION_TOOL,
+  OPERATION_STATUS_TOOL,
+  SCHEDULED_OPERATION_TOOL,
+} from './dsh-authority.js';
 import { createMarketSettingsHandler, type MarketSettings } from './market-settings.js';
 import type { MarketSurface } from './market-surface.js';
 import { createOperationHandler } from './operations.js';
@@ -33,17 +39,21 @@ export const mountDshWebProfile = (
     readonly principalForOwner: () => PluginPrincipal | null;
   },
 ) => {
-  if (
-    !ctx.get('connection') ||
-    !ctx.get('webServer') ||
-    !ctx.get('sessionController') ||
-    !ctx.get('approval')
-  )
-    throw new Error(
-      'Luoome Web requires Connection, WebServer, SessionController and ApprovalService',
-    );
+  if (!ctx.get('connection') || !ctx.get('webServer') || !ctx.get('sessionController'))
+    throw new Error('Luoome Web requires Connection, WebServer and SessionController');
   const host = createDshOperationHost(ctx, options);
   const readNames = new Set(options.read.descriptors().map((tool) => tool.name));
+  const scheduleNames = new Set(['schedule_create', 'schedule_list']);
+  const personalToolNames = new Set([
+    ...readNames,
+    ...options.market.descriptors().map((tool) => tool.name),
+    ...scheduleNames,
+    MANUAL_OPERATION_TOOL,
+    SCHEDULED_OPERATION_TOOL,
+    OPERATION_STATUS_TOOL,
+    AUTOMATION_CATALOG_TOOL,
+    RESEARCH_STATUS_TOOL,
+  ]);
   const removers: (() => void)[] = [];
   const operations = createOperationHandler(host.service, () => options.principalForOwner());
   const continuity = createResearchContinuityReader({
@@ -139,6 +149,16 @@ export const mountDshWebProfile = (
       }),
     );
     removers.push(registerReadTools(ctx.tools, options.read));
+    removers.push(
+      ctx.on('tools/pre-execute', async (execution, next) => {
+        if (!personalToolNames.has(execution.name)) return next();
+        const previous = await next();
+        if (previous.kind === 'deny' || previous.kind === 'cancel') return previous;
+        if (scheduleNames.has(execution.name) && !host.identity.principal(execution.agent))
+          return { kind: 'deny', reason: 'A live, top-level owner session is required' };
+        return { kind: 'allow' };
+      }),
+    );
     register(
       '/api/luoome/call',
       ['POST'],

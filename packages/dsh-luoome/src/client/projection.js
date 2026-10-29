@@ -302,9 +302,9 @@ export const researchRequestFor = (strategyId, runId = null, context = {}) => {
       strategyId: null,
       runId: null,
       prompt:
-        '我想开始一项个人策略研究。先读取现有账户、策略目录、字段目录和数据状态，帮助我提出一个可被反证的小问题，并选择已有策略或起草个人策略。不要创建示例投资资产、启用自动任务或通知。创建版本、保存研究、试跑和历史验证分别经原生审批确认；数据缺失如实说明，不把观察收益当回测。',
+        '我想开始一项个人策略研究。先读取现有账户、策略目录、字段目录和数据状态，帮助我提出一个可被反证的小问题，并选择已有策略或起草个人策略。不要创建示例投资资产、启用自动任务或通知。创建版本、保存研究、试跑和历史验证按我的明确意图直接执行；数据缺失如实说明，不把观察收益当回测。',
     };
-  const prompt = `请研究${context.strategyName ? `策略“${strategyText(context.strategyName)}”` : '所选策略'}${context.version ? `（第 ${context.version} 版）` : ''}${runId ? `的已发布匹配结果${context.dataAsOf ? `，事实时间 ${context.dataAsOf}` : ''}` : ''}。先按名称查询策略并核对版本和运行事实；存在同名或版本不符时先核对，不要猜测。给出结论、证据、反证、风险与有效期，用可读名称说明来源。不要自动发布或修改策略，任何写入都要先让我确认。`;
+  const prompt = `请研究${context.strategyName ? `策略“${strategyText(context.strategyName)}”` : '所选策略'}${context.version ? `（第 ${context.version} 版）` : ''}${runId ? `的已发布匹配结果${context.dataAsOf ? `，事实时间 ${context.dataAsOf}` : ''}` : ''}。先按名称查询策略并核对版本和运行事实；存在同名或版本不符时先核对，不要猜测。给出结论、证据、反证、风险与有效期，用可读名称说明来源。不要自动发布或修改策略，只有在我明确提出写入意图时才执行。`;
   if (!context.baseVersionId) return { strategyId, runId: runId ?? null, prompt };
   const researchContext = {
     accountId: context.accountId,
@@ -324,13 +324,13 @@ export const researchRequestFor = (strategyId, runId = null, context = {}) => {
     strategyId,
     runId: runId ?? null,
     researchContext,
-    prompt: `请继续策略“${strategyText(context.strategyName) || '所选策略'}”的研究工作台。给出结论、证据、反证、风险与有效期。任何写入都要先让我确认。\n\n当前研究问题：${context.question || '尚未填写，先帮助我缩小到一个可反证的问题。'}\n本次意图：${context.intent || '继续当前研究'}\n基线：第 ${context.baseVersion} 版；候选：${context.candidateVersion ? `第 ${context.candidateVersion} 版` : '尚未保存'}。${runId ? `当前正式匹配来自第 ${context.runVersion ?? '待核对'} 版，事实时间 ${context.dataAsOf ?? '待核对'}，与候选试跑分开。` : ''}\n下一步：${context.nextStep || '待确定'}。\n请读取当前账户的已保存研究并核对修订；页面上下文若尚未保存，只作为我的研究草稿。刷新或跨日继续时保留上述版本，不自动替换为最新发布版本。分别说明同快照试跑、历史选股评估、严格组合回测与真实信号观察，缺失数据不计为零。\n研究绑定（仅用于精确读取与审批参数，不代表写授权）：${JSON.stringify(researchContext)}${context.definition ? `\n尚未保存的候选规则：${JSON.stringify(context.definition)}` : ''}`,
+    prompt: `请继续策略“${strategyText(context.strategyName) || '所选策略'}”的研究工作台。给出结论、证据、反证、风险与有效期。只有在我明确提出写入意图时才直接执行。\n\n当前研究问题：${context.question || '尚未填写，先帮助我缩小到一个可反证的问题。'}\n本次意图：${context.intent || '继续当前研究'}\n基线：第 ${context.baseVersion} 版；候选：${context.candidateVersion ? `第 ${context.candidateVersion} 版` : '尚未保存'}。${runId ? `当前正式匹配来自第 ${context.runVersion ?? '待核对'} 版，事实时间 ${context.dataAsOf ?? '待核对'}，与候选试跑分开。` : ''}\n下一步：${context.nextStep || '待确定'}。\n请读取当前账户的已保存研究并核对修订；页面上下文若尚未保存，只作为我的研究草稿。刷新或跨日继续时保留上述版本，不自动替换为最新发布版本。分别说明同快照试跑、历史选股评估、严格组合回测与真实信号观察，缺失数据不计为零。\n研究绑定（仅用于精确读取与操作参数）：${JSON.stringify(researchContext)}${context.definition ? `\n尚未保存的候选规则：${JSON.stringify(context.definition)}` : ''}`,
   };
 };
 
 export const strategyOperationRequestFor = (strategyId, context = {}) => ({
   strategyId,
-  prompt: `请管理${context.strategyName ? `策略“${strategyText(context.strategyName)}”` : '所选策略'}的持续运行。先按名称核对策略，读取 StrategySchedule、最近运行和 Watchlist 订阅，告诉我当前是已发布未上线、已启用还是已暂停。说明 StrategySchedule 只决定到期，必须由 DSH 定时任务执行 run_strategy_daily_cycle 才会真正运行。不要直接调用 run_strategy，不要自动创建重复日程或自动发布；任何调度、暂停、恢复、订阅或任务授权都先让我逐项确认。`,
+  prompt: `请管理${context.strategyName ? `策略“${strategyText(context.strategyName)}”` : '所选策略'}的持续运行。先按名称核对策略，读取 StrategySchedule、最近运行和 Watchlist 订阅，告诉我当前是已发布未上线、已启用还是已暂停。说明 StrategySchedule 只决定到期，必须由 DSH 定时任务执行 run_strategy_daily_cycle 才会真正运行。不要直接调用 run_strategy，不要自动创建重复日程或自动发布；只有在我明确提出调度、暂停、恢复、订阅或任务授权意图时才直接执行。`,
 });
 
 export const stockResearchRequestFor = (context) =>
@@ -338,18 +338,18 @@ export const stockResearchRequestFor = (context) =>
     ? {
         stockId: context.stockId,
         watchlistId: context.watchlistId,
-        prompt: `请分析${strategyText(context.stockName) || '这只股票'}（${context.stockId}）。该股来自关注列表「${strategyText(context.watchlistName)}」（watchlistId=${context.watchlistId}）。先通过 get_watchlist 核对当前成员、关注理由和来源，再读取最新可用行情与相关事实；区分关注理由与当前行情，明确数据缺口、证据、反证、风险与有效期。关注不代表买入建议。任何保存或调整均需原生审批确认。`,
+        prompt: `请分析${strategyText(context.stockName) || '这只股票'}（${context.stockId}）。该股来自关注列表「${strategyText(context.watchlistName)}」（watchlistId=${context.watchlistId}）。先通过 get_watchlist 核对当前成员、关注理由和来源，再读取最新可用行情与相关事实；区分关注理由与当前行情，明确数据缺口、证据、反证、风险与有效期。关注不代表买入建议。只有在我明确提出保存或调整意图时才直接执行。`,
       }
     : context.sourceKind
       ? {
           stockId: context.stockId,
           strategyId: context.strategyId,
           runId: context.runId,
-          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，任何保存、策略修改或建议写回都经原生审批确认。`,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）的选股诊断。来源是策略“${strategyText(context.strategyName)}”第 ${context.version} 版的${context.sourceKind === 'trial' ? '本次内存试跑，运行未持久化' : '正式运行'}，事实时间 ${context.dataAsOf}，结果为${context.selected ? '入选' : '未入选或数据不完整，逐条核对事实'}。以下原始规则求值属于该次固定事实，不是当前行情；核对输入、阈值与评分贡献后再读取最新可用行情。内存试跑不能当已发布结果或历史收益。\n诊断事实：${JSON.stringify({ ruleEvaluations: context.ruleEvaluations, scoringBreakdown: context.scoringBreakdown })}\n请给出证据、反证、数据缺口、风险与有效期，不把规则评分当成功概率。只在对话中研究，只有在我明确提出保存、策略修改或建议写回意图时才直接执行。`,
         }
       : {
           stockId: context.stockId,
           strategyId: context.strategyId,
           runId: context.runId,
-          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；如需保存建议、修改策略或其他写入，先让我确认。`,
+          prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；只有在我明确提出保存建议、修改策略或其他写入意图时才直接执行。`,
         };

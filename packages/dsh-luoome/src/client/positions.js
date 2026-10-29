@@ -177,7 +177,7 @@ export function PositionsPanel() {
           : !loading && !errorOf(results, 'list_account_performance_snapshots')
             ? h(Empty, {
                 title: '尚无绩效快照',
-                hint: '快照由显式确认的绩效批处理生成；本页刷新只读取事实。',
+                hint: '快照由绩效批处理生成；本页刷新只读取事实。',
               })
             : null,
         latest?.warnings?.length

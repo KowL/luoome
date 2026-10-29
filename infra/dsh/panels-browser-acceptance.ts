@@ -574,7 +574,7 @@ try {
     const forwarded = httpRequest(upstreamOptions(incoming), (response) => {
       if (
         loseResearchConfirmation &&
-        /\/api\/luoome\/operations\/[^/]+\/confirm$/.test(incoming.url ?? '') &&
+        /\/api\/luoome\/operations\/prepare$/.test(incoming.url ?? '') &&
         response.statusCode === 200
       ) {
         loseResearchConfirmation = false;
@@ -902,25 +902,11 @@ try {
   })()`);
   await setAccountName();
   await page.waitFor(
-    `(() => { const button = [...document.querySelectorAll('.luo-root button')].find((item) => item.textContent.trim() === '预览修改'); return button && !button.disabled; })()`,
-    '账户名称修改可预览',
+    `(() => { const button = [...document.querySelectorAll('.luo-root button')].find((item) => item.textContent.trim() === '保存修改'); return button && !button.disabled; })()`,
+    '账户名称修改可保存',
   );
-  await clickAction('预览修改');
-  await page.waitFor(
-    `document.querySelector('[aria-label="确认账户名称"]') !== null`,
-    '冻结名称预览',
-  );
-  const beforeConfirmation = toolData(
-    await fetchState(origin, cookie, 'settings'),
-    'get_account',
-  ) as { account?: { name?: string } } | null;
-  if (beforeConfirmation?.account?.name === newAccountName) throw new Error('预览不应修改账户');
-  await clickAction('取消');
-  await page.waitFor(`document.body.innerText.includes('已取消，账户未修改')`, '取消名称修改');
-  await clickAction('预览修改');
-  await page.waitFor(`document.querySelector('[aria-label="确认账户名称"]') !== null`, '再次预览');
-  await clickAction('确认保存');
-  await page.waitFor(`document.body.innerText.includes('账户名称已保存')`, '明确确认后的保存结果');
+  await clickAction('保存修改');
+  await page.waitFor(`document.body.innerText.includes('账户名称已保存')`, '直接执行的保存结果');
   const settingsState = await fetchState(origin, cookie, 'settings');
   const renamedAccount = toolData(settingsState, 'get_account') as {
     account?: { name?: string; cashBalance?: number; initialCapital?: number };
@@ -1673,25 +1659,26 @@ try {
     if (nativeInput) await page.insertText(value);
   };
   const confirmResearch = async (prepareLabel: string, loseResponse = false) => {
-    await researchButton(prepareLabel);
-    await page.waitFor(
-      `document.querySelector('.luo-research-operation')?.innerText.includes('等待你确认')`,
-      `冻结研究参数: ${prepareLabel}`,
-    );
     if (loseResponse) loseResearchConfirmation = true;
-    await researchButton('确认本次操作');
+    await researchButton(prepareLabel);
     if (loseResponse) {
       await page.waitFor(
         `document.querySelector('.luo-research-operation')?.innerText.includes('结果待核对，请勿重复执行')`,
-        '确认响应丢失保留 unknown',
+        '执行响应丢失保留 unknown',
       );
       await researchButton('查询原操作状态');
     }
     await page.waitFor(
-      `(() => { const text = document.querySelector('.luo-research-operation')?.innerText ?? ''; return text.includes('操作回执已确认') || text.includes('操作失败'); })()`,
+      `(() => { const text = document.querySelector('.luo-research-operation')?.innerText ?? ''; return text.includes('操作已完成') || text.includes('操作失败'); })()`,
       `研究真实回执: ${prepareLabel}`,
       30_000,
     );
+    if (
+      await page.evaluate<boolean>(
+        `[...document.querySelectorAll('.luo-research-operation button')].some((button) => /确认本次操作|执行本次操作/.test(button.textContent))`,
+      )
+    )
+      throw new Error(`个人版不应再要求二次确认: ${prepareLabel}`);
     const operation = await currentResearchOperation();
     if (operation.state !== 'succeeded' || operation.result?.ok !== true)
       throw new Error(`研究操作未成功 ${prepareLabel}: ${JSON.stringify(operation)}`);
@@ -1761,7 +1748,7 @@ try {
   await researchTab('试跑与诊断');
   await researchFill('事实来源', 'replay');
   await researchFill('试跑交易日', research.to);
-  const trialOperation = await confirmResearch('准备同快照试跑');
+  const trialOperation = await confirmResearch('执行同快照试跑');
   const trial = trialOperation.result?.data as {
     inputIdentity: { snapshotHash: string };
     base: { run: { inputSnapshot: { dataCheckpoint: { checksum: string } } } };
@@ -1778,7 +1765,7 @@ try {
     if (candidates.length < 2) throw new Error('可比较候选不足');
     candidates[0].click(); candidates[1].click();
   })()`);
-  const boundedOperation = await confirmResearch('准备有界候选对照');
+  const boundedOperation = await confirmResearch('执行有界候选对照');
   const bounded = boundedOperation.result?.data as {
     inputIdentity: { snapshotHash: string };
     candidates: { status: string; comparison?: { inputIdentity: { snapshotHash: string } } }[];
@@ -1856,7 +1843,7 @@ try {
   );
   await page.setViewport(1320, 900, false);
   await researchTab('分层验证');
-  const evaluationOperation = await confirmResearch('准备历史选股评估');
+  const evaluationOperation = await confirmResearch('执行历史选股评估');
   const newSession = evaluationOperation.result?.data?.session as { id: string };
   if (!newSession?.id) throw new Error('历史验证没有稳定任务身份');
   await page.waitFor(
@@ -1893,21 +1880,6 @@ try {
     '仅合成数据；保留历史缺失、PIT 与执行模型限制。\nT+1/T+3/T+5 是信号观察，不能称为组合回测。',
   );
   await researchFill('下一步', '补齐可审计历史后，在独立区间验证；不自动发布或交易。');
-  await researchButton('保存研究空间');
-  await page.waitFor(
-    `document.querySelector('.luo-research-operation')?.innerText.includes('等待你确认')`,
-    '结论取消预览',
-  );
-  await researchButton('取消本次操作');
-  await page.waitFor(
-    `document.querySelector('.luo-research-operation')?.innerText.includes('你已取消此操作')`,
-    '取消研究写入',
-  );
-  const cancelledState = await researchApi<typeof beforeResearch>(
-    `research?view=state&strategyId=${research.strategyId}`,
-  );
-  if (cancelledState.state.data.state.revision !== beforeResearch.state.data.state.revision)
-    throw new Error('取消预览仍写入了研究状态');
   const saveOperation = await confirmResearch('保存研究空间', true);
   const savedState = await researchApi<{
     state: {

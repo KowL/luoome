@@ -1,7 +1,7 @@
 // MVP 最终验收编排（task-20）：先跑 Node 24 完整旅程，再在 Node 24 + 真实 DSH CLI 中
 // 加载构建后的插件，执行一次真实只读工具和一次原生确认写入。
 //
-// 说明：模型仍是**脚本模型**，这里验证的是协议/装配/审批/Node SQLite 链路，不是真实模型质量。
+// 说明：模型仍是**脚本模型**，这里验证的是协议/装配/个人直接执行/Node SQLite 链路，不是真实模型质量。
 // 全部临时 DSH_HOME/profile/任务库都在 /tmp；不触碰用户 profile、真实个人库或生产服务器。
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -314,7 +314,7 @@ process.stdout.write('seeded');
   )
     throw new Error(`read tool failed: ${JSON.stringify(read)}`);
 
-  // 一次原生确认写入：prepare 冻结 → confirm（一次性 token）→ 读回同一 Advice
+  // 一次个人直接写入：prepare 冻结并立即执行 → 读回同一 Advice
   const prepare = await api(origin, cookie, '/api/luoome/operations/prepare', 'POST', {
     id: crypto.randomUUID(),
     tool: 'record_advice',
@@ -338,20 +338,10 @@ process.stdout.write('seeded');
     ok?: boolean;
     data?: { operationId?: string; state?: string; confirmationToken?: string };
   };
-  if (prepare.status !== 200 || prepared.ok !== true || prepared.data?.state !== 'pending')
-    throw new Error(`prepare failed: ${JSON.stringify(prepare)}`);
-  const operationId = prepared.data.operationId ?? '';
-  const token = prepared.data.confirmationToken ?? '';
-  const confirm = await api(
-    origin,
-    cookie,
-    `/api/luoome/operations/${encodeURIComponent(operationId)}/confirm`,
-    'POST',
-    { token },
-  );
-  const confirmed = confirm.value as { ok?: boolean; data?: { state?: string } };
-  if (confirm.status !== 200 || confirmed.ok !== true || confirmed.data?.state !== 'succeeded')
-    throw new Error(`confirm failed: ${JSON.stringify(confirm)}`);
+  if (prepare.status !== 200 || prepared.ok !== true || prepared.data?.state !== 'succeeded')
+    throw new Error(`direct operation failed: ${JSON.stringify(prepare)}`);
+  if (prepared.data.confirmationToken !== undefined)
+    throw new Error('direct operation must not require a confirmation token');
   const advice = await api(origin, cookie, '/api/luoome/call', 'POST', {
     tool: 'get_advice',
     input: { includeExpired: true },
@@ -364,7 +354,7 @@ process.stdout.write('seeded');
   const exitCode = await exited;
   const bundled = await stat(join(packageDir, 'dist', 'host.js'));
   Object.assign(summary, {
-    mode: '协议/装配/审批链路验收，非真实模型质量',
+    mode: '协议/装配/个人直接执行链路验收，非真实模型质量',
     node24RealVersion: nodeVersion,
     node24Journeys: { files: journeysFiles, tests: journeysTests, exit: journeys.status },
     plugin: {
@@ -375,10 +365,10 @@ process.stdout.write('seeded');
     dshWeb: {
       readTool: { tool: 'list_accounts', accountId: readData.data?.accounts?.[0]?.id },
       readToolCount: profileData.readTools?.length ?? 0,
-      confirmedWrite: {
+      directWrite: {
         tool: 'record_advice',
-        prepare: 'pending + one-time token',
-        confirm: confirmed.data?.state,
+        prepare: 'frozen + immediate execution',
+        state: prepared.data?.state,
         readBack: `analysis:${contextId}`,
       },
     },

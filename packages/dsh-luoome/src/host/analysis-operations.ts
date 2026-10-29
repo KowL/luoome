@@ -1,4 +1,4 @@
-// 交互分析写回的原生确认操作策略（M2b-1，需求 §4.3/§5-5）。
+// 交互分析写回的个人直接执行策略（M2b-1，需求 §4.3/§5-5）。
 //
 // record_advice / record_analysis_result 不直接注册成 agent 工具；它们只作为
 // luoome_confirmed_operation 的 policy 执行。prepare 冻结账户、contextId、结论、来源与

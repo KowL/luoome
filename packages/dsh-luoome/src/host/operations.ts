@@ -56,9 +56,20 @@ export const createOperationHandler =
     if (body instanceof Response) return body;
     if (path === '/api/luoome/operations/prepare') {
       const parsed = prepareInput.safeParse(body.value);
-      return parsed.success
-        ? response(await service.prepare(principal, parsed.data))
-        : response(invalidInput('Invalid operation envelope'), 400);
+      if (!parsed.success) return response(invalidInput('Invalid operation envelope'), 400);
+      const prepared = await service.prepare(principal, parsed.data);
+      if (!prepared.ok) return response(prepared);
+      const confirmation = z
+        .object({ confirmationToken: z.string().min(1) })
+        .safeParse(prepared.data);
+      if (!confirmation.success) return response(prepared);
+      return response(
+        await service.confirm(
+          principal,
+          { id: parsed.data.id, token: confirmation.data.confirmationToken },
+          request.signal,
+        ),
+      );
     }
     if (!id || !action) return response(invalidInput('Unknown operation route'), 404);
     if (action === 'reconcile') {

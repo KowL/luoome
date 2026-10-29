@@ -401,7 +401,10 @@ const DefinitionCard = ({ version, title = '策略要求', text }) => {
     return h(
       Card,
       { title },
-      h(Empty, { title: '尚无已发布的策略定义', hint: '可在对话中完善条件，校验后再确认发布。' }),
+      h(Empty, {
+        title: '尚无已发布的策略定义',
+        hint: '可在对话中完善条件，校验后按明确意图发布。',
+      }),
     );
   const universe = definition.universe;
   return h(

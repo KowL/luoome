@@ -421,7 +421,7 @@ analysis worker 或 queue probe。部署细节见 [7.7](#77-安装升级备份�
 |---|---|
 | read（精确白名单） | 账户/持仓/交易/绩效、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
 | market external（精确白名单） | 指数、情绪、行情、新闻与有界策略试跑/对照；失败原样返回，不伪造空成功 |
-| 确认写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名、关注列表与成员维护；batch 另需显式开启，每次写入均经确认或精确任务授权 |
+| 个人写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名、关注列表与成员维护；batch 另需显式开启，按明确意图直接执行或通过精确任务授权 |
 | client | 看盘 / 持仓 / 关注 / 策略 / 复盘五个业务面板，投资设置位于 DSH 设置内，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
 | skills | `strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis` |
 
@@ -462,18 +462,18 @@ DSH 侧栏有五个 luoome 业务面板，投资设置从 DSH「设置」进入�
 
 | 技能 | 触发 | 行为 |
 |---|---|---|
-| `strategy-lab` | 对话制定/修改策略 | 恢复研究问题和固定版本 → catalog 草案 → 独立校验 → 字段预检 → 同快照试跑/有界比较 → 历史验证与结论；每项持久操作独立审批，发布不被创建或校验隐含批准 |
+| `strategy-lab` | 对话制定/修改策略 | 恢复研究问题和固定版本 → catalog 草案 → 独立校验 → 字段预检 → 同快照试跑/有界比较 → 历史验证与结论；个人版按明确意图直接执行，发布不被创建或校验自动触发 |
 | `strategy-result-review` | 研究某次策略运行结果 | 按版本解释入选/临界/未入选/缺失，核对验证进度、真实 T+1/T+3/T+5 和持续观察回执；保留反证与限制，结论绑定可审计证据，改版走 strategy-lab |
-| `post-close-review` | 收盘后复盘 | Advice 快照、DecisionReview、显式 Trade、观察、绩效与 calibration 分写；不推断用户跟随、不代填 outcome；复盘笔记经原生审批保存 |
-| `daily-market-analysis` | 每日市场分析 | 经精确 market external 白名单刷新指数/情绪/要闻/行情，保留 source/dataAsOf/partial/unavailable；形成 Advice 时另取有效 context 并经原生审批写回 |
+| `post-close-review` | 收盘后复盘 | Advice 快照、DecisionReview、显式 Trade、观察、绩效与 calibration 分写；不推断用户跟随、不代填 outcome；复盘笔记按明确意图直接保存 |
+| `daily-market-analysis` | 每日市场分析 | 经精确 market external 白名单刷新指数/情绪/要闻/行情，保留 source/dataAsOf/partial/unavailable；形成 Advice 时另取有效 context 并按明确意图直接写回 |
 
-技能本身不授予权限：能调哪些工具仍由插件的 read/market/policy 面决定；写操作一律要 DSH 原生审批。
-原生确认入口按每项操作的领域 Zod schema 提供参数契约。账户和 requestId 由宿主绑定，业务参数应省略 requestId；冲突时错误会明确指向字段，不应删改笔记或盈亏试探。invalid_input 会返回字段路径与类型要求，
-表示参数未通过校验，不代表缺少人工授权；纠正参数后仍需独立审批，不用写调用探测工具或权限。
+技能本身不授予权限：能调哪些工具仍由插件的 read/market/policy 面决定。个人版写操作不再要求人工审批，但只在用户明确提出保存、发布、调度等意图时执行，并保留 Operation 回执。
+操作入口按每项操作的领域 Zod schema 提供参数契约。账户和 requestId 由宿主绑定，业务参数应省略 requestId；冲突时错误会明确指向字段，不应删改笔记或盈亏试探。invalid_input 会返回字段路径与类型要求，
+表示参数未通过校验，不代表缺少权限；纠正参数后直接重新执行，不用写调用探测工具或权限。
 当前固定 SDK 下，MiniMax M3/M3.1 Flash 的原生调用**不会稳定写出 JSON null**——它在填对象参数时
 用"省略该属性"表达"无值"。luoome 的写契约已按此调整：可空业务字段（如复盘的 `triggerFeedback`、
 `adviceFeedback`、`note`）在参数契约上是可选的。**更新时省略保留原值，显式 null 才清除**；
-tradeIds 省略保留关联，显式空数组解除关联。新建时省略字段初始为空数组/null。审批卡展示的是
+tradeIds 省略保留关联，显式空数组解除关联。新建时省略字段初始为空数组/null。冻结参数展示的是
 按 expectedRevision 补齐后的完整内容；字符串 `"null"` 这类占位值仍被拒。因此复盘保存与反馈写回在默认 native 配置下已实测通过，
 不再需要 `DSH_TOOLS_MODE=ptc`。PTC 仍是官方备选通道，需要时在启动 DSH 进程时显式设置即可，
 默认配置不会自动切换。完整边界见[部分更新与真实模型验收记录](./ddd/dsh-luoome-plugin-detailed-design.md#917-decisionreview-部分更新回归修复2026-10-25)。
@@ -509,11 +509,11 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 
 默认关闭批处理与自动执行。插件已具备五个原生入口，无需旧 MCP 实例：
 
-- 部署设置 `LUOOME_BATCH_ENABLED=true` 后，可经 `luoome_confirmed_operation` 单次确认补跑；`luoome_automation_catalog` 只读返回现有任务、任务指纹和账户绑定调用模板。
-- `LUOOME_AUTOMATIONS_ENABLED=true` 还要求 batch 开关已开启。它允许核验持久授权，不能代替逐任务的原生审批。
-- 每个入口完整要求 `write + external`。账户快照、计划与报告只作用于绑定账户；策略日循环与自治处理本地全局策略，自治可能按既有门禁暂停、归档或发布版本，审批说明会展示这些影响。
+- 部署设置 `LUOOME_BATCH_ENABLED=true` 后，可经 `luoome_confirmed_operation` 按明确意图直接补跑；`luoome_automation_catalog` 只读返回现有任务、任务指纹和账户绑定调用模板。
+- `LUOOME_AUTOMATIONS_ENABLED=true` 还要求 batch 开关已开启。它允许核验持久授权，定时执行仍须精确任务授权。
+- 每个入口完整要求 `write + external`。账户快照、计划与报告只作用于绑定账户；策略日循环与自治处理本地全局策略，自治可能按既有门禁暂停、归档或发布版本，执行前应展示这些影响。
 
-下表是**新建任务的示例**，旧日程的 ID、时间与会话不能默默改写；旧时间不满足门槛时会跳过，应先展示变更再确认。
+下表是**新建任务的示例**，旧日程的 ID、时间与会话不能默默改写；旧时间不满足门槛时会跳过，应先展示变更再按明确意图执行。
 
 | 批处理 | 原生操作名 | 示例 cron（Asia/Shanghai） | 门槛 |
 |---|---|---|---|
@@ -523,11 +523,11 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 | 盘中计划批处理 | `run_intraday_plan_batch` | `35 9 * * 1-5` | 实际盘中时段，09:05 会跳过 |
 | 策略自治周报 | `run_strategy_autonomy_weekly` | `30 9 * * 0` | 周日 |
 
-迁移顺序：先保持自动执行关闭，只开 batch；在 DSH「自动化任务」核对原任务，在同一 ID 和原时间上改用原生调用提示。再读 `luoome_automation_catalog`，逐项选择对应调用模板，冻结宿主给出的 identity、scheduleHash、accountId、inputJson/inputHash、组合能力与有效期，使用 `configure_plugin_automation` 的原生审批创建授权。最后才开启自动执行。目录按建议的 grant ID 查询既有授权；自定义 grant ID 要结合原操作回执核对。
+迁移顺序：先保持自动执行关闭，只开 batch；在 DSH「自动化任务」核对原任务，在同一 ID 和原时间上改用原生调用提示。再读 `luoome_automation_catalog`，逐项选择对应调用模板，冻结宿主给出的 identity、scheduleHash、accountId、inputJson/inputHash、组合能力与有效期，使用 `configure_plugin_automation` 直接创建授权。最后才开启自动执行。目录按建议的 grant ID 查询既有授权；自定义 grant ID 要结合原操作回执核对。
 
 提醒真正投递后，模型调用 `luoome_scheduled_operation`，提交 grantId、grantVersion、tool、accountId 和模板中的完整 input。任务身份与 occurrence 由宿主投递历史核验，prompt 或模型自报 taskId 无效；修改任务定义后，旧指纹不再匹配，必须重新核对授权。重复投递不会重复执行同一 occurrence。
 
-手动 `force: true` 只经单次明确确认；定时授权拒绝 force。`partial` 表示部分失败，不能报告全部完成。操作状态 `unknown` 时只查询/核对业务回执，不自动补跑，也不能通过更换 operation ID 假定前次没有写入。用户拒绝后，同一请求中的后续写入会被宿主阻断；需要新的用户请求才能重新审批。
+手动 `force: true` 只在用户明确提出补跑意图时使用；定时授权拒绝 force。`partial` 表示部分失败，不能报告全部完成。操作状态 `unknown` 时只查询/核对业务回执，不自动补跑，也不能通过更换 operation ID 假定前次没有写入。
 
 ### 7.5 批量分析与队列
 
@@ -535,7 +535,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 
 - `get_analysis_metrics` 查看积压、可执行任务与过期租约；`list_analysis_jobs`、`get_analysis_job` 查看任务状态。
 - 交互式分析不建 job：插件 read 面取持久化 context 后，向你展示结论、反证、风险、有效期与
-  将写回内容并得到明确确认，再经原生审批调用 `record_advice` / `record_analysis_result` 写回。
+  将写回内容；只有你明确提出保存意图时，才直接调用 `record_advice` / `record_analysis_result` 写回。
 - 单机形态没有生产者进程，默认部署也没有常驻消费者，空队列是正常状态。
 - 过期租约可以重新领取，旧 token 不能写回。
 - `queue` 是独立能力；默认部署只由两条 analysis record policy 使用，claim/complete/fail 与

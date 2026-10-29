@@ -15,7 +15,7 @@
 | 副作用、鉴权与投资建议边界 | [docs/SECURITY.md](./docs/SECURITY.md) |
 | 命令和测试入口 | [package.json](./package.json) |
 
-不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、MCP discovery 和 `luoome tools list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，MCP 面兼容转发，DSH 插件通过原生确认或精确任务授权调用。
+不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、MCP discovery 和 `luoome tools list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，MCP 面兼容转发，个人版 DSH 插件按明确意图直接执行或通过精确任务授权调用，保留 Operation 回执。
 
 ## 开始修改前
 

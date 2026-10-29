@@ -250,7 +250,7 @@ function AccountNameForm({ account, enabled, onSaved }) {
         onSaved();
       } else if (operation.state === 'cancelled') setMessage('已取消，账户未修改');
       else if (operation.state === 'unknown' || operation.state === 'executing')
-        setMessage('结果尚未确认，请核对结果后再操作。');
+        setMessage('结果尚未明确，请核对结果后再操作。');
     } catch (error) {
       if (action === 'confirm')
         setPending({ ...operation, state: 'unknown', confirmationToken: null });
@@ -320,7 +320,7 @@ function AccountNameForm({ account, enabled, onSaved }) {
               ['unknown', 'executing', 'preparing'].includes(pending?.state),
             onClick: () => act('prepare'),
           },
-          busy ? '处理中' : '预览修改',
+          busy ? '处理中' : '保存修改',
         ),
     pending?.operationId
       ? h(
@@ -453,20 +453,20 @@ export function SettingsPanel() {
         h(
           'p',
           null,
-          '自动任务由 DSH 的「自动化任务」管理时间和会话。每项批处理还需确认对应账户、工具、参数和有效期。',
+          '自动任务由 DSH 的「自动化任务」管理时间和会话。每项批处理仍绑定对应账户、工具、参数和有效期。',
         ),
         h(
           'p',
           { className: 'luo-fine' },
           config?.automationsEnabled
             ? '可在对话中读取任务授权目录并逐项授权；修改任务定义后需重新核对授权。'
-            : '当前可以对话和逐次确认写入；定时提醒不会自动获得业务写入权限。',
+            : '当前对话和面板操作会直接执行；定时提醒不会自动获得业务写入权限。',
         ),
       ),
     ),
     h(
       Section,
-      { title: '已启用的确认操作', meta: `${policies.length} 项` },
+      { title: '已启用的操作', meta: `${policies.length} 项` },
       h(
         Card,
         null,
@@ -481,7 +481,7 @@ export function SettingsPanel() {
               h(
                 Pill,
                 { tone: item.scheduled ? 'warn' : 'quiet' },
-                item.scheduled ? '可逐任务授权' : '每次确认',
+                item.scheduled ? '可逐任务授权' : '直接执行',
               ),
             ),
           ),

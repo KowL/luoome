@@ -62,8 +62,8 @@ const scheduledCall = (grant: PluginAutomationGrant, input: unknown): Call => {
   };
 };
 
-describe('Node PTC approval and scheduled delivery integration', () => {
-  it('runs approved and scheduled inner calls through the actual Node PTC runtime', async () => {
+describe('Node PTC personal execution and scheduled delivery integration', () => {
+  it('runs direct and scheduled inner calls through the actual Node PTC runtime', async () => {
     const clock = fixtureClock();
     const fixture = await start(await rootDir(), { automationsEnabled: true, ptc: true });
     try {
@@ -120,12 +120,12 @@ describe('Node PTC approval and scheduled delivery integration', () => {
           /\|PTC/g,
         ),
       ).toHaveLength(1);
-      expect(fixture.approvals).toEqual(['allowed-once']);
+      expect(fixture.approvals).toHaveLength(0);
       const replay = await fixture.run(scheduledCall(grant, input));
       expect(replay?.isError).toBe(true);
       removeAnswer();
       fixture.answer('rejected');
-      const rejected = await fixture.run({
+      const updated = await fixture.run({
         name: MANUAL_OPERATION_TOOL,
         input: {
           id: randomUUID(),
@@ -133,11 +133,11 @@ describe('Node PTC approval and scheduled delivery integration', () => {
           input: { grant: { ...grant, version: 2 }, expectedVersion: 1 },
         },
       });
-      expect(rejected?.isError).toBe(true);
+      expect(updated?.isError).toBe(false);
       expect(
         (await fixture.db.repos.pluginAuthority.findGrant(grant.id, fixture.principal.userId))
           ?.version,
-      ).toBe(1);
+      ).toBe(2);
       expect(
         (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name.match(
           /\|PTC/g,
