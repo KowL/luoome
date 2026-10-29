@@ -100,6 +100,13 @@ describe('client panel state projection', () => {
         {
           strategyId: 's1',
           workspace: { name: 'get_strategy_workspace', ok: true, data: { health: 'ready' } },
+          continuity: {
+            status: 'waiting',
+            factCutoff: '2026-10-24T07:00:00.000Z',
+            reasons: ['等待真实回执'],
+            limitations: [],
+            tasks: [],
+          },
         },
         {
           strategyId: 's2',
@@ -121,6 +128,14 @@ describe('client panel state projection', () => {
     });
     expect(state.strategies).toHaveLength(2);
     expect(state.strategies[0]?.workspace?.ok).toBe(true);
+    expect(state.strategies[0]?.continuity).toEqual({
+      status: 'waiting',
+      factCutoff: '2026-10-24T07:00:00.000Z',
+      reasons: ['等待真实回执'],
+      limitations: [],
+      tasks: [],
+    });
+    expect(state.strategies[1]?.continuity).toBeUndefined();
     expect(state.strategies[1]?.workspace?.error).toEqual({ kind: 'permission_denied' });
     expect(stateUrl('strategies')).toBe('api/luoome/state?panel=strategies');
   });

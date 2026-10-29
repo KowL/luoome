@@ -487,6 +487,64 @@ export const STYLE = `
 
 @keyframes luo-shimmer { 100% { transform: translateX(100%); } }
 @keyframes luo-spin { to { transform: rotate(360deg); } }
+.luo-strategies .luo-shell { max-width: 1320px; padding: 22px clamp(16px, 2.5vw, 36px) 36px; }
+.luo-strategies .luo-head { padding-bottom: 16px; flex-direction: row; align-items: center; gap: 12px; }
+.luo-strategies .luo-head-side { flex-shrink: 0; }
+.luo-strategies .luo-title { margin: 6px 0; font: 600 24px/1.3 var(--lu-sans); }
+.luo-strategies .luo-sub { font-size: 12px; }
+.luo-strategies .luo-strategy-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 24px; margin-top: 20px; }
+.luo-strategy-directory { position: sticky; top: 16px; min-width: 0; }
+.luo-strategies .luo-strategy-nav { position: static; }
+.luo-strategy-switcher { display: none; }
+.luo-strategies .luo-strategy-content { gap: 16px; }
+.luo-strategy-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.luo-strategies .luo-strategy-hero h2 { margin: 10px 0 6px; font: 600 23px/1.35 var(--lu-serif); }
+.luo-strategies .luo-strategy-intro { font-size: 12px; line-height: 1.6; }
+.luo-strategy-modes { display: flex; gap: 24px; margin-top: 18px; border-bottom: 1px solid var(--lu-line-strong); }
+.luo-strategy-modes button { display: flex; align-items: center; gap: 8px; padding: 11px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--lu-ink-2); font: 500 13px/1.5 var(--lu-sans); cursor: pointer; }
+.luo-strategy-modes button[aria-selected="true"] { color: var(--lu-accent); border-bottom-color: var(--lu-accent); }
+.luo-strategy-modes button:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; }
+.luo-strategy-view { display: grid; gap: 14px; min-width: 0; }
+.luo-strategy-view[hidden] { display: none; }
+.luo-strategy-identity { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--lu-line); }
+.luo-strategy-identity > div { display: grid; align-content: start; gap: 5px; min-width: 0; }
+.luo-strategy-identity span, .luo-strategy-identity small { color: var(--lu-ink-3); font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.luo-strategy-identity strong { font-size: 12px; font-weight: 500; }
+.luo-strategies .luo-strategy-summary { margin: 0; padding: 2px 0; border: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.luo-strategy-baseline { margin: -5px 0 0; color: var(--lu-ink-3); font-size: 10.5px; }
+.luo-strategy-alert { margin: 0; padding: 10px 12px; border-left: 2px solid var(--lu-warn); background: var(--lu-warn-soft); color: var(--lu-ink-2); font-size: 12px; line-height: 1.6; }
+.luo-strategies .luo-strategy-detail { margin: 0; padding: 12px 0; }
+.luo-strategies .luo-strategy-detail > .luo-card { margin-top: 12px; }
+.luo-strategies .luo-strategy-detail > summary { font-weight: 500; }
+.luo-strategies .luo-strategy-note { margin-top: 12px; padding-top: 10px; font-size: 10.5px; }
+.luo-strategies .luo-research-workbench { border: 0; padding-top: 0; }
+.luo-strategies .luo-research-head h3 { font-size: 21px; }
+.luo-strategy-leave { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-lg); background: var(--lu-surface); color: var(--lu-ink); box-shadow: var(--lu-shadow-2); }
+.luo-strategy-leave::backdrop { background: #0007; }
+.luo-strategy-leave h3 { margin: 0 0 10px; font: 600 19px/1.4 var(--lu-sans); }
+.luo-strategy-leave > p { color: var(--lu-ink-2); font-size: 13px; }
+.luo-strategy-leave .luo-actions { margin-top: 18px; }
+@media (max-width: 900px) {
+  .luo-strategies .luo-strategy-layout { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .luo-strategy-directory { position: static; }
+  .luo-strategies .luo-strategy-nav { display: none; }
+  .luo-strategy-switcher { display: flex; align-items: center; gap: 12px; color: var(--lu-ink-3); font-size: 11px; }
+  .luo-strategy-switcher select { flex: 1; min-width: 0; max-width: 100%; padding: 10px 30px 10px 12px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-sm); background: var(--lu-surface); color: var(--lu-ink); font: 13px/1.5 var(--lu-sans); }
+  .luo-strategy-heading { align-items: flex-start; }
+  .luo-strategy-identity { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-strategy-modes { gap: 22px; }
+}
+@media (max-width: 600px) {
+  .luo-strategies .luo-shell { padding-inline: 16px; }
+  .luo-strategies .luo-head .luo-eyebrow, .luo-strategies .luo-head .luo-sub { display: none; }
+  .luo-strategies .luo-strategy-hero h2 { font-size: 21px; }
+  .luo-strategy-heading > .luo-btn { flex-shrink: 0; }
+  .luo-strategies .luo-strategy-summary { gap: 8px; }
+  .luo-strategies .luo-stat-v { font-size: 18px; }
+  .luo-strategy-modes button { font-size: 12px; }
+  .luo-strategy-leave .luo-actions { flex-wrap: wrap; }
+}
+
 @keyframes luo-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 900px) {

@@ -48,7 +48,7 @@ export const Head = ({ eyebrow, title, subtitle, side }) =>
 export const Stamp = ({ label, value }) =>
   h('span', { className: 'luo-stamp' }, label ? `${label} ` : null, h('b', null, value));
 
-export const Refresh = ({ loading, onClick }) =>
+export const Refresh = ({ loading, onClick, label = '刷新事实' }) =>
   h(
     'button',
     {
@@ -58,7 +58,7 @@ export const Refresh = ({ loading, onClick }) =>
       disabled: loading,
     },
     h(RefreshIcon),
-    loading ? '读取中' : '刷新事实',
+    loading ? '读取中' : label,
   );
 
 export const Pill = ({ tone = 'quiet', dot = false, children }) =>

@@ -1,12 +1,16 @@
 // 会话输入框写入单测：DSH 官方 composer 是 Lexical contenteditable（不是 textarea），
 // 只覆盖 textarea 会让「在对话中研究此策略」永远写不进草稿。这里锁住两条路径与失败语义。
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   findComposer,
   sendStockAnalysis,
   writeComposer,
   writeComposerWithSessionFallback,
 } from './composer.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 class FakeEditable {
   constructor({ tagName = 'DIV', width = 320, height = 40, slot = null } = {}) {
@@ -41,7 +45,7 @@ class FakeTextarea extends FakeEditable {
   }
 }
 
-const fakeDocument = ({ candidates = [], execResult = true } = {}) => {
+const fakeDocument = ({ candidates = [], execResult = true, onInsert = () => {} } = {}) => {
   const inserted = [];
   const selection = { removeAllRanges: () => {}, addRange: () => {} };
   return {
@@ -51,11 +55,28 @@ const fakeDocument = ({ candidates = [], execResult = true } = {}) => {
       createRange: () => ({ selectNodeContents: () => {} }),
       execCommand: (command, _ui, text) => {
         inserted.push({ command, text });
+        onInsert(text, command);
         return execResult;
       },
       defaultView: { getSelection: () => selection },
     },
   };
+};
+
+const fakeLexicalDocument = ({ editor, deferred = false } = {}) => {
+  let pending = '';
+  return fakeDocument({
+    candidates: [editor],
+    onInsert: (text, command) => {
+      if (command === 'insertText') pending += text.replaceAll('\n', '');
+      if (command === 'insertLineBreak') pending += '\n';
+      const commit = () => {
+        editor.innerText = `${pending}\n`;
+      };
+      if (deferred) queueMicrotask(commit);
+      else commit();
+    },
+  });
 };
 
 describe('client composer writer', () => {
@@ -71,6 +92,18 @@ describe('client composer writer', () => {
     const { doc, inserted } = fakeDocument({ candidates: [editor] });
     expect(writeComposer('研究策略 strategy-1', doc)).toBe(true);
     expect(inserted).toEqual([{ command: 'insertText', text: '研究策略 strategy-1' }]);
+  });
+
+  it('preserves internal and blank lines with native line-break commands', () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '管理关注列表\n\n保留策略来源\n不启动交易';
+    const { doc, inserted } = fakeLexicalDocument({ editor });
+    expect(writeComposer(prompt, doc)).toBe(true);
+    expect(editor.innerText).toBe(`${prompt}\n`);
+    expect(
+      inserted.filter((item) => item.command === 'insertText').map((item) => item.text),
+    ).toEqual(['管理关注列表', '保留策略来源', '不启动交易']);
+    expect(inserted.filter((item) => item.command === 'insertLineBreak')).toHaveLength(3);
   });
 
   it('falls back to the textarea path when the composer is a textarea', () => {
@@ -91,6 +124,29 @@ describe('client composer writer', () => {
     const editor = new FakeEditable({ slot: 'conversation.composer' });
     const { doc } = fakeDocument({ candidates: [editor], execResult: false });
     expect(writeComposer('草稿', doc)).toBe(false);
+  });
+
+  it('accepts only browser trailing newlines when the multiline contenteditable already matches', () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '第一段管理意图\n第二段操作边界\n第三段保留来源';
+    editor.innerText = `${prompt}\n`;
+    const { doc, inserted } = fakeDocument({ candidates: [editor] });
+    expect(writeComposer(prompt, doc)).toBe(true);
+    expect(inserted).toEqual([]);
+    editor.innerText = '第一段管理意图 第二段操作边界\n第三段保留来源';
+    expect(writeComposer(prompt, doc)).toBe(false);
+    expect(inserted).toEqual([]);
+    editor.innerText = ` ${prompt}`;
+    expect(writeComposer(prompt, doc)).toBe(false);
+    expect(inserted).toEqual([]);
+  });
+
+  it('preserves exact trailing newlines in textarea drafts', () => {
+    const area = new FakeTextarea({ slot: 'conversation.composer' });
+    area.value = '原草稿\n';
+    const { doc } = fakeDocument({ candidates: [area] });
+    expect(writeComposer('原草稿', doc)).toBe(false);
+    expect(area.value).toBe('原草稿\n');
   });
 
   it('preserves an existing conversation draft and allows the session fallback to take over', () => {
@@ -185,6 +241,118 @@ describe('composer session fallback', () => {
     expect(result).toEqual({ createdSession: false, sessionId: null });
     expect(ctx.sessions.create).not.toHaveBeenCalled();
     expect(ctx.uiWorkspace.startSession).not.toHaveBeenCalled();
+  });
+
+  it('verifies inserted text even when the native command reports false', async () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '管理关注列表并保留策略与手动来源';
+    const { doc } = fakeDocument({
+      candidates: [editor],
+      execResult: false,
+      onInsert: (text) => {
+        editor.innerText = `${text}\n`;
+      },
+    });
+    vi.stubGlobal('document', doc);
+    const { ctx } = setup();
+    await expect(writeComposerWithSessionFallback(ctx, prompt, { delays: [0] })).resolves.toEqual({
+      createdSession: false,
+      sessionId: null,
+    });
+    expect(ctx.uiWorkspace.startSession).not.toHaveBeenCalled();
+  });
+
+  it('waits for the editor microtask commit before starting a fallback session', async () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '管理关注列表\n不覆盖已有草稿';
+    const { doc, inserted } = fakeLexicalDocument({ editor, deferred: true });
+    vi.stubGlobal('document', doc);
+    const { ctx } = setup();
+    await expect(writeComposerWithSessionFallback(ctx, prompt, { delays: [0] })).resolves.toEqual({
+      createdSession: false,
+      sessionId: null,
+    });
+    expect(inserted.map((item) => item.command)).toEqual([
+      'insertText',
+      'insertLineBreak',
+      'insertText',
+    ]);
+    expect(editor.innerText).toBe(`${prompt}\n`);
+    expect(ctx.uiWorkspace.startSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects lost internal newlines instead of accepting flattened multiline text', async () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '管理关注列表\n保留策略来源';
+    const flattened = prompt.replaceAll('\n', '');
+    const { doc, inserted } = fakeDocument({
+      candidates: [editor],
+      onInsert: () => {
+        editor.innerText = flattened;
+      },
+    });
+    vi.stubGlobal('document', doc);
+    const { ctx } = setup();
+    await expect(writeComposerWithSessionFallback(ctx, prompt, { delays: [0] })).rejects.toThrow(
+      'DSH composer unavailable',
+    );
+    expect(editor.innerText).toBe(flattened);
+    expect(inserted.filter((item) => item.command === 'insertText')).toHaveLength(2);
+    expect(inserted.filter((item) => item.command === 'insertLineBreak')).toHaveLength(1);
+  });
+
+  it('does not mistake a larger inserted draft containing the prompt for an exact match', async () => {
+    const editor = new FakeEditable({ slot: 'conversation.composer' });
+    const prompt = '管理关注列表\n保留策略来源';
+    const { doc } = fakeDocument({
+      candidates: [editor],
+      onInsert: (text) => {
+        editor.innerText = `其他内容${text}`;
+      },
+    });
+    vi.stubGlobal('document', doc);
+    const { ctx } = setup();
+    await expect(writeComposerWithSessionFallback(ctx, prompt, { delays: [0] })).rejects.toThrow(
+      'DSH composer unavailable',
+    );
+    expect(editor.innerText.startsWith('其他内容')).toBe(true);
+    expect(editor.innerText).not.toBe(prompt);
+  });
+
+  it('awaits asynchronous session navigation before reporting the fallback outcome', async () => {
+    let selected = 'current-session';
+    let finishNavigation;
+    const ctx = {
+      layout: { selectPanel: vi.fn() },
+      sessions: {
+        list: {
+          getSnapshot: () => ({
+            byId: { [selected]: { id: selected, retainedBy: { mainView: 1 } } },
+          }),
+        },
+      },
+      uiWorkspace: {
+        startSession: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              finishNavigation = () => {
+                selected = 'draft-session';
+                resolve();
+              };
+            }),
+        ),
+      },
+    };
+    const write = vi.fn(() => selected === 'draft-session');
+    const result = writeComposerWithSessionFallback(ctx, '管理关注列表', { write, delays: [0] });
+    const settled = vi.fn();
+    void result.then(settled, settled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctx.uiWorkspace.startSession).toHaveBeenCalledOnce();
+    expect(settled).not.toHaveBeenCalled();
+    finishNavigation();
+    await expect(result).resolves.toEqual({ createdSession: true, sessionId: 'draft-session' });
   });
 
   it('does not claim success when the new composer is also unavailable', async () => {

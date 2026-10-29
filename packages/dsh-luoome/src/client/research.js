@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useState } from 'react';
+import { createElement as h, useEffect, useRef, useState } from 'react';
 import { int, tradeDate, when } from './format.js';
 import { Card, Empty, ErrorNote, Pill, Refresh, SkeletonLines } from './primitives.js';
 import { strategyText } from './projection.js';
@@ -48,7 +48,14 @@ const tabs = [
   ['notes', '04', '结论与更新'],
 ];
 
-function ResearchDiagnosis({ strategy, workspace, trial, versions, onAnalyzeStock }) {
+export function ResearchDiagnosis({
+  strategy,
+  workspace,
+  trial,
+  versions = [],
+  onAnalyzeStock,
+  formalOnly = false,
+}) {
   const [source, setSource] = useState('current');
   const [kind, setKind] = useState('selected');
   const [query, setQuery] = useState('');
@@ -56,17 +63,17 @@ function ResearchDiagnosis({ strategy, workspace, trial, versions, onAnalyzeStoc
   const [offset, setOffset] = useState(0);
   const [stock, setStock] = useState(null);
   const limit = 20;
-  const isTrial = source !== 'current';
+  const isTrial = !formalOnly && source !== 'current';
   const version =
-    source === 'base'
+    isTrial && source === 'base'
       ? versions.find((item) => item.id === trial?.base.run.strategyVersionId)
-      : source === 'draft'
+      : isTrial && source === 'draft'
         ? versions.find((item) => item.id === trial?.draft.run.strategyVersionId)
         : workspace?.currentRunVersion;
   const run =
-    source === 'base'
+    isTrial && source === 'base'
       ? trial?.base.run
-      : source === 'draft'
+      : isTrial && source === 'draft'
         ? trial?.draft.run
         : workspace?.currentRun;
   const read = useResearchRead(
@@ -102,17 +109,19 @@ function ResearchDiagnosis({ strategy, workspace, trial, versions, onAnalyzeStoc
     h(
       'div',
       { className: 'luo-research-fields' },
-      h(
-        ResearchField,
-        { label: '诊断来源' },
-        h(
-          'select',
-          { value: source, onChange: (event) => reset(() => setSource(event.target.value)) },
-          h('option', { value: 'current' }, '正式运行结果'),
-          h('option', { value: 'base', disabled: !trial?.diagnostics }, '本次试跑 · 基线'),
-          h('option', { value: 'draft', disabled: !trial?.diagnostics }, '本次试跑 · 候选'),
-        ),
-      ),
+      formalOnly
+        ? null
+        : h(
+            ResearchField,
+            { label: '诊断来源' },
+            h(
+              'select',
+              { value: source, onChange: (event) => reset(() => setSource(event.target.value)) },
+              h('option', { value: 'current' }, '正式运行结果'),
+              h('option', { value: 'base', disabled: !trial?.diagnostics }, '本次试跑 · 基线'),
+              h('option', { value: 'draft', disabled: !trial?.diagnostics }, '本次试跑 · 候选'),
+            ),
+          ),
       h(
         ResearchField,
         { label: '分类' },
@@ -213,6 +222,8 @@ function ResearchWorkbenchBody({
   definitions,
   catalog,
   saved,
+  active,
+  onGuardChange,
   onResearch,
   onManage,
   onAnalyzeStock,
@@ -273,6 +284,7 @@ function ResearchWorkbenchBody({
     {
       enabled: Boolean(form.validationSessionId),
       poll: (data) =>
+        active &&
         tab === 'validation' &&
         (data?.worker === 'running' || toolData(data?.session)?.session?.status === 'running'),
     },
@@ -308,7 +320,7 @@ function ResearchWorkbenchBody({
         setSavedForm(nextForm);
         setRevision(data.state.revision);
         saved.refresh();
-        setMessage('研究问题、范围与结论已保存，可刷新或跨日继续。');
+        setMessage('研究已保存。');
       }
       if (receipt.tool === 'trial_strategy_version') {
         setTrial(data);
@@ -335,16 +347,19 @@ function ResearchWorkbenchBody({
     setRevision(restored?.revision ?? 0);
     setDefinitionDirty(false);
     setError(null);
-    setMessage('已恢复最近保存的研究与常用设置。');
+    setMessage('已恢复保存的研究。');
   };
-  const save = () =>
-    operation.prepare('save_strategy_research_state', (requestId) => ({
+  const save = async () => {
+    if (!canSave) return false;
+    const receipt = await operation.prepare('save_strategy_research_state', (requestId) => ({
       accountId,
       strategyId: strategy.id,
       expectedRevision: revision,
       requestId,
       state: researchSettingsOf(form),
     }));
+    return Boolean(operationResult(receipt)?.state);
+  };
   const checkData = async () => {
     if (checking) return;
     setChecking(true);
@@ -367,32 +382,37 @@ function ResearchWorkbenchBody({
       setChecking(false);
     }
   };
+  const researchContext = useRef(null);
+  researchContext.current = (intent) => ({
+    strategyName: strategy.name,
+    version: (candidateVersion ?? baseVersion)?.version,
+    dataAsOf: workspace?.currentRun?.dataAsOf,
+    runVersion: workspace?.currentRunVersion?.version,
+    question: form.question,
+    intent,
+    accountId,
+    baseVersionId: form.baseVersionId,
+    candidateVersionId: form.candidateVersionId,
+    baseVersion: baseVersion?.version,
+    candidateVersion: candidateVersion?.version,
+    researchRevision: revision,
+    trainingSessionId: form.trainingSessionId,
+    validationSessionId: form.validationSessionId,
+    stockIds,
+    from: form.from,
+    to: form.to,
+    benchmarkStockId: form.benchmarkStockId,
+    nextStep: form.nextStep,
+    definition: definitionDirty ? definition : undefined,
+  });
   const research = async (intent) => {
     setError(null);
     try {
-      const request = onResearch(strategy.id, workspace?.currentRun?.id ?? null, {
-        strategyName: strategy.name,
-        version: (candidateVersion ?? baseVersion)?.version,
-        dataAsOf: workspace?.currentRun?.dataAsOf,
-        runVersion: workspace?.currentRunVersion?.version,
-        question: form.question,
-        intent,
-        accountId,
-        baseVersionId: form.baseVersionId,
-        candidateVersionId: form.candidateVersionId,
-        baseVersion: baseVersion?.version,
-        candidateVersion: candidateVersion?.version,
-        researchRevision: revision,
-        trainingSessionId: form.trainingSessionId,
-        validationSessionId: form.validationSessionId,
-        stockIds,
-        from: form.from,
-        to: form.to,
-        benchmarkStockId: form.benchmarkStockId,
-        nextStep: form.nextStep,
-        definition: definitionDirty ? definition : undefined,
-      });
+      const request = onResearch(strategy.id, workspace?.currentRun?.id ?? null, () =>
+        researchContext.current(intent),
+      );
       const result = await request?.completion;
+      if (result?.cancelled) return;
       if (result?.ok === false) setError('研究草稿未能放入对话，请保留当前工作台并重试。');
       else setMessage('已将当前问题与固定版本放入对话草稿，请过目后发送。');
     } catch {
@@ -448,6 +468,52 @@ function ResearchWorkbenchBody({
       .map((id) => ({ id, label: '前次研究的历史引用 · 换版后需重新核对' })),
   ];
 
+  const canSave = Boolean(
+    !locked &&
+      form.question.trim() &&
+      baseVersion &&
+      !definitionDirty &&
+      !newerRevision &&
+      Boolean(form.from) === Boolean(form.to) &&
+      !(form.from && form.to && form.from > form.to) &&
+      !(form.summary.trim() && !form.limitations.trim()) &&
+      !(form.summary.trim() && form.outcome === 'supported' && !form.evidenceReferences.length),
+  );
+  const discard = () => {
+    setForm(savedForm);
+    const savedVersion = versions.find(
+      (version) => version.id === (savedForm.candidateVersionId || savedForm.baseVersionId),
+    );
+    setDefinition(structuredClone(savedVersion?.definition ?? null));
+    setDefinitionDirty(false);
+    setChangeSummary('');
+    setMessage('');
+    setError(null);
+  };
+  const guardActions = useRef(null);
+  guardActions.current = { save, discard };
+  useEffect(() => {
+    onGuardChange?.({
+      dirty: dirty || definitionDirty,
+      canSave,
+      busy: locked,
+      operation: operation.operation,
+      control: operation,
+      save: () => guardActions.current.save(),
+      discard: () => guardActions.current.discard(),
+    });
+  }, [
+    dirty,
+    definitionDirty,
+    canSave,
+    locked,
+    operation.operation,
+    operation.busy,
+    operation.error,
+    operation.expired,
+    onGuardChange,
+  ]);
+
   return h(
     'section',
     {
@@ -462,8 +528,7 @@ function ResearchWorkbenchBody({
         'div',
         null,
         h('p', { className: 'luo-eyebrow' }, 'Strategy research'),
-        h('h3', { id: 'luo-research-title' }, '实验工作台'),
-        h('p', { className: 'luo-fine' }, '把一个问题变成可核对的规则、对照和研究记录。'),
+        h('h3', { id: 'luo-research-title' }, '研究工作台'),
       ),
       h(
         Pill,
@@ -483,9 +548,9 @@ function ResearchWorkbenchBody({
       h(
         Button,
         { onClick: () => research('继续当前研究，核对当前基线、候选与保存状态。') },
-        '在对话中继续研究',
+        '继续研究',
       ),
-      h(Button, { disabled: saved.loading, onClick: saved.refresh }, '读取已保存修订'),
+      h(Button, { disabled: saved.loading, onClick: saved.refresh }, '刷新修订'),
     ),
     saved.error ? h(ErrorNote, { error: saved.error }) : null,
     baseVersion && currentVersionId && baseVersion.id !== currentVersionId
@@ -659,7 +724,6 @@ function ResearchWorkbenchBody({
                 },
                 checking ? '检查本地数据…' : '检查数据资格',
               ),
-              h(Button, { disabled: locked, onClick: restore }, '恢复上次保存的设置'),
             ),
             preflight
               ? h(
@@ -729,7 +793,7 @@ function ResearchWorkbenchBody({
                       changeSummary: changeSummary.trim(),
                     }),
                 },
-                '保存为新候选版本',
+                '保存候选',
               ),
               h(
                 Button,
@@ -741,7 +805,7 @@ function ResearchWorkbenchBody({
                       versionId: candidateVersion.id,
                     }),
                 },
-                '校验已保存候选',
+                '校验候选',
               ),
               definitionDirty
                 ? h(
@@ -816,7 +880,7 @@ function ResearchWorkbenchBody({
                 disabled: locked || !trialReady || definitionDirty,
                 onClick: () => operation.prepare('trial_strategy_version', trialInput),
               },
-              '执行同快照试跑',
+              '同快照试跑',
             ),
             !trialReady
               ? h(
@@ -939,7 +1003,7 @@ function ResearchWorkbenchBody({
                       : {}),
                   }),
               },
-              '执行有界候选对照',
+              '候选对照',
             ),
             Boolean(form.trainingSessionId) !== Boolean(form.validationSessionId)
               ? h(
@@ -1133,7 +1197,7 @@ function ResearchWorkbenchBody({
                       '请按当前已保存的版本、范围与区间建立或继续历史选股评估，先核对已有 session 防止重复；启动与推进按我的明确意图直接执行。',
                     ),
                 },
-                '在对话中讨论验证方案',
+                '讨论验证',
               ),
               h(
                 Button,
@@ -1157,7 +1221,7 @@ function ResearchWorkbenchBody({
                       ...(stockIds.length ? { stockIds } : {}),
                     })),
                 },
-                '执行历史选股评估',
+                '历史选股评估',
               ),
               h(Refresh, {
                 loading: sessions.loading || validation.loading,
@@ -1194,7 +1258,7 @@ function ResearchWorkbenchBody({
                   '请核对当前候选是否具备严格组合回测的数据门禁，逐项报告 PIT、历史修订、费用、滑点、可交易性、公司行动与基准缺口；完整数据可用时再直接执行回测操作。',
                 ),
             },
-            '在对话中核对严格回测门禁',
+            '核对回测门禁',
           ),
           h(ObservationSummary, {
             observations: context?.realObservations,
@@ -1471,7 +1535,7 @@ function ResearchWorkbenchBody({
             h(
               Button,
               { onClick: () => onManage(strategy.id, { strategyName: strategy.name }) },
-              '在对话中管理持续观察',
+              '管理运行',
             ),
           ),
           comparison?.diff
@@ -1530,7 +1594,7 @@ function ResearchWorkbenchBody({
                   }
                 },
               },
-              '导出 manifest 文件',
+              '导出定义',
             ),
           ),
         )
@@ -1541,9 +1605,7 @@ function ResearchWorkbenchBody({
       h(
         'p',
         { className: 'luo-fine' },
-        definitionDirty
-          ? '规则修改还未形成候选版本；先保存候选，再保存研究上下文。'
-          : '保存问题、版本选择、常用范围与未完成研究。点击后直接保存并返回操作回执。',
+        definitionDirty ? '先保存候选，再保存研究。' : '保存问题、版本、范围与结论。',
       ),
       h(
         'div',
@@ -1551,29 +1613,26 @@ function ResearchWorkbenchBody({
         h(
           Button,
           {
-            disabled:
-              locked ||
-              !form.question.trim() ||
-              !baseVersion ||
-              definitionDirty ||
-              newerRevision ||
-              Boolean(form.from) !== Boolean(form.to) ||
-              (form.from && form.to && form.from > form.to) ||
-              (form.summary.trim() && !form.limitations.trim()) ||
-              (form.summary.trim() &&
-                form.outcome === 'supported' &&
-                !form.evidenceReferences.length),
+            disabled: !canSave,
             onClick: save,
           },
-          '保存研究空间',
+          '保存研究',
         ),
-        h(Button, { disabled: locked, onClick: restore }, '恢复已保存研究'),
+        h(Button, { disabled: locked, onClick: restore }, '恢复'),
       ),
     ),
   );
 }
 
-export function ResearchWorkbench({ strategy, workspace, onResearch, onManage, onAnalyzeStock }) {
+export function ResearchWorkbench({
+  strategy,
+  workspace,
+  onResearch,
+  onManage,
+  onAnalyzeStock,
+  active = true,
+  onGuardChange,
+}) {
   const saved = useResearchRead(researchUrl('state', strategy.id));
   const definitions = useResearchRead('api/luoome/call', {
     tool: 'get_strategy',
@@ -1617,6 +1676,8 @@ export function ResearchWorkbench({ strategy, workspace, onResearch, onManage, o
     definitions,
     catalog,
     saved,
+    active,
+    onGuardChange,
     onResearch,
     onManage,
     onAnalyzeStock,
@@ -1660,7 +1721,7 @@ export function ResearchOnboarding({ onResearch }) {
           }
         },
       },
-      '在对话中起草第一项研究',
+      '开始研究',
     ),
   );
 }

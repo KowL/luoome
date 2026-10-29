@@ -72,6 +72,7 @@ export const mapStateBody = (body) => {
         workspace: projectTool(item.workspace),
         schedule: projectTool(item.schedule),
         subscriptions: projectTool(item.subscriptions),
+        ...(isRecord(item.continuity) ? { continuity: item.continuity } : {}),
       });
     }
   }

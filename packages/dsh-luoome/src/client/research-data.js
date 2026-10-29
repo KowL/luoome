@@ -83,6 +83,7 @@ export function useResearchOperation({ accountId, strategyId, onCompleted }) {
       completed.current = next.operationId;
       completion.current?.(next, { recovered });
     }
+    return next;
   };
   useEffect(() => {
     if (!accountId) return;
@@ -133,7 +134,7 @@ export function useResearchOperation({ accountId, strategyId, onCompleted }) {
         } catch {
           /* 读取回执仍可在当前页面继续。 */
         }
-        accept(
+        return accept(
           await requestResearch('api/luoome/operations/prepare', {
             body: {
               id,

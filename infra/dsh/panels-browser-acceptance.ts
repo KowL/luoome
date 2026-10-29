@@ -5,7 +5,7 @@
 //   2. 五个侧栏条目 + DSH 设置内的投资设置；FUYAO 保存后下一次请求立即使用新配置；
 //   3. 每块面板 DOM 展示值与宿主 /api/luoome/state 的 ToolResult、以及 SQLite 事实库
 //      逐项一致（账户/持仓/建议/策略版本/运行/信心校准/决策复盘/用户反馈）；
-//   4. 策略面板「在对话中研究此策略」携带 strategyId/runId，点击后导航到会话并记录请求；
+//   4. 策略面板「AI 研究」携带 strategyId/runId，点击后导航到会话并记录请求；
 //   5. 刷新后仍正确；移动端无横向溢出；
 //   6. 桌面三个面板 + 移动端截图与 JSON 证据落盘到临时目录（不提交仓库）。
 //
@@ -167,6 +167,7 @@ interface PageSession {
   readonly screenshot: (path: string, fullPage?: boolean) => Promise<void>;
   readonly setViewport: (width: number, height: number, mobile: boolean) => Promise<void>;
   readonly insertText: (text: string) => Promise<void>;
+  readonly pressKey: (key: string) => Promise<void>;
 }
 
 const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> => {
@@ -183,6 +184,17 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
     'Page.addScriptToEvaluateOnNewDocument',
     {
       source: `window.__luoomeErrors = [];
+      window.__luoomeResearchReads = [];
+      const originalFetch = window.fetch;
+      window.fetch = function(input, init) {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        let tool = null;
+        try { tool = init?.body ? JSON.parse(init.body).tool : null; } catch {}
+        if (url.pathname.endsWith('/api/luoome/research') ||
+            (url.pathname.endsWith('/api/luoome/call') && ['get_strategy', 'get_strategy_dsl_catalog'].includes(tool)))
+          window.__luoomeResearchReads.push({ path: url.pathname, view: url.searchParams.get('view'), tool });
+        return originalFetch.apply(this, arguments);
+      };
       const reportConsoleError = console.error;
       console.error = (...args) => { window.__luoomeErrors.push(args.map(String).join(' ')); reportConsoleError(...args); };
       window.addEventListener('error', (event) => window.__luoomeErrors.push('window.error: ' + String(event.message)));
@@ -252,7 +264,11 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
   const insertText = async (text: string) => {
     await cdp.send('Input.insertText', { text }, sessionId);
   };
-  return { evaluate, waitFor, navigate, screenshot, setViewport, insertText };
+  const pressKey = async (key: string) => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key }, sessionId);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key }, sessionId);
+  };
+  return { evaluate, waitFor, navigate, screenshot, setViewport, insertText, pressKey };
 };
 
 const waitForChrome = async (userDataDir: string): Promise<string> => {
@@ -416,6 +432,7 @@ let stockQuotePending = false;
 let stockDetailReads = 0;
 let useConfiguredMarket = false;
 let loseResearchConfirmation = false;
+let strategyAttempt: 'failed' | 'withheld' | null = null;
 const fuyaoKey = 'synthetic-browser-fuyao-key';
 const fuyaoCalls: { path: string; authenticated: boolean }[] = [];
 const fuyaoGateway = createServer((incoming, outgoing) => {
@@ -775,11 +792,11 @@ const runAcceptance = async () => {
         });
         return;
       }
-      if (
-        !sentimentUnavailable ||
-        !incoming.url?.includes('/api/luoome/state?panel=overview') ||
-        response.statusCode !== 200
-      ) {
+      const alterOverview =
+        sentimentUnavailable && incoming.url?.includes('/api/luoome/state?panel=overview');
+      const alterStrategy =
+        strategyAttempt !== null && incoming.url?.includes('/api/luoome/state?panel=strategies');
+      if ((!alterOverview && !alterStrategy) || response.statusCode !== 200) {
         outgoing.writeHead(response.statusCode ?? 502, response.headers);
         response.pipe(outgoing);
         outgoing.on('close', () => response.destroy());
@@ -826,6 +843,31 @@ const runAcceptance = async () => {
                   }
                 : tool,
           );
+          body = Buffer.from(JSON.stringify(state));
+        }
+        if (alterStrategy) {
+          const state = JSON.parse(body.toString());
+          const entry = state.strategies.find(
+            (item: { strategyId: string }) => item.strategyId === fixtureInfo.strategyId,
+          );
+          if (!entry?.workspace?.data?.currentRun) throw new Error('合成故障缺少真实已发布结果');
+          const workspace = entry.workspace.data;
+          workspace.latestAttempt = {
+            ...workspace.currentRun,
+            id: `browser-latest-${strategyAttempt}`,
+            status: strategyAttempt === 'failed' ? 'failed' : 'complete',
+            startedAt: new Date(Date.parse(workspace.currentRun.startedAt) + 60_000).toISOString(),
+            finishedAt: new Date(
+              Date.parse(workspace.currentRun.startedAt) + 120_000,
+            ).toISOString(),
+            publication: {
+              ...workspace.currentRun.publication,
+              status: 'withheld',
+              reasons: ['隔离验收：最近尝试未发布'],
+            },
+          };
+          workspace.overview.health = strategyAttempt;
+          workspace.warnings = ['隔离验收：最近尝试未发布，继续展示原已发布结果'];
           body = Buffer.from(JSON.stringify(state));
         }
         const headers = { ...response.headers };
@@ -986,6 +1028,27 @@ const runAcceptance = async () => {
       await closeSettings();
       await clickButton(label);
     }
+  };
+
+  const strategyMode = async (mode: 'overview' | 'research') => {
+    await page.evaluate(`(() => {
+      const button = document.querySelector('[data-strategy-mode="${mode}"]');
+      if (!button) throw new Error('Missing strategy mode: ${mode}');
+      button.click();
+    })()`);
+    await page.waitFor(
+      `document.querySelector('[data-strategy-mode="${mode}"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('#strategy-view-${mode}')?.hidden === false`,
+      `策略模式 ${mode}`,
+    );
+  };
+  const expandStrategyDetails = async () => {
+    await page.evaluate(`(() => {
+      for (const selector of ['[data-strategy-rules]', '[data-strategy-runtime]']) {
+        const detail = document.querySelector(selector);
+        if (!detail) throw new Error('Missing strategy disclosure: ' + selector);
+        if (!detail.open) detail.querySelector('summary').click();
+      }
+    })()`);
   };
 
   const overviewState = await fetchState(origin, cookie, 'overview');
@@ -1421,6 +1484,14 @@ const runAcceptance = async () => {
     `window.__luoomeLastWatchlistOperationRequest?.watchlistId === ${JSON.stringify(createdWatchlist.id)} && document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes('浏览器手动关注')`,
     'AI 管理携带列表写入可编辑草稿',
   );
+  await page.waitFor(
+    `window.__luoomeLastWatchlistOperationRequest?.createdSession !== undefined || window.__luoomeLastWatchlistOperationRequest?.errorCode`,
+    '关注 AI 草稿写入终态',
+  );
+  if (
+    await page.evaluate<boolean>('Boolean(window.__luoomeLastWatchlistOperationRequest?.errorCode)')
+  )
+    throw new Error('关注 AI 草稿未能完成写入，后续导航不应继续');
   if ((await readWatchMembers()).members.length !== 1) throw new Error('打开 AI 管理不应自动写入');
   await page.screenshot(join(evidenceDir, 'watchlists-ai-draft.png'));
 
@@ -1461,6 +1532,9 @@ const runAcceptance = async () => {
 
   // 关注面板读过一只个股行情，策略面板的基准取打开策略面板那一刻的读取数。
   const strategyPanelStockReads = stockDetailReads;
+  const researchReadsBeforeStrategy = await page.evaluate<number>(
+    'window.__luoomeResearchReads.length',
+  );
   await clickPanel('策略');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.strategyName)})`,
@@ -1473,22 +1547,42 @@ const runAcceptance = async () => {
     `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.strategyName)}`,
     '选择正式运行 fixture',
   );
+  await page.waitFor(
+    `document.querySelector('#strategy-view-overview')?.hidden === false && document.querySelector('.luo-strategy-matches')?.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
+    '默认展示正式结果',
+  );
+  const lazyResearchReads = await page.evaluate<number>('window.__luoomeResearchReads.length');
+  if (
+    lazyResearchReads !== researchReadsBeforeStrategy ||
+    (await page.evaluate<boolean>('document.querySelector("[data-research-workbench]") !== null'))
+  )
+    throw new Error('进入研究前发送了研究专属请求或挂载了研究工作台');
+  await page.screenshot(join(evidenceDir, 'strategies-overview-first-screen.png'));
+  const globalCycleScope = await page.evaluate<boolean>(`(() => {
+    const detail = document.querySelector('.luo-strategy-operations');
+    detail.querySelector('summary').click();
+    const correct = detail.innerText.includes('全部已发布策略') && [...detail.querySelectorAll('button')].some((button) => button.textContent.trim() === '运行日循环') && ![...document.querySelectorAll('.luo-strategy-content button')].some((button) => button.textContent.trim() === '运行日循环');
+    detail.querySelector('summary').click();
+    return correct;
+  })()`);
+  if (!globalCycleScope) throw new Error('日循环没有明确区分全局作用范围');
+  await expandStrategyDetails();
   const strategiesText = await page.evaluate<string>('document.body.innerText');
   for (const expected of [
     fixtureInfo.strategyName,
-    '当前版本',
-    '策略要求',
+    '当前定义',
+    '结果使用的历史规则',
     '筛选条件',
     '匹配标的',
     fixtureInfo.stock.name,
     '入场信号',
     '退出条件',
     '风险条件',
-    '在对话中研究此策略',
+    'AI 研究',
     '策略日程已开启 · 执行待核对',
     '30 16 * * 1-5',
-    '已订阅 1 个 Watchlist',
-    '在对话中管理运行',
+    '已订阅 1 个关注列表',
+    '管理运行',
   ])
     if (!strategiesText.includes(expected)) throw new Error(`策略面板 DOM 缺少「${expected}」`);
   for (const internal of [
@@ -1501,9 +1595,13 @@ const runAcceptance = async () => {
     'risk-volume',
   ])
     if (strategiesText.includes(internal)) throw new Error('策略页泄露内部标识');
+  const identityVersions = await page.evaluate<string[]>(
+    `[...document.querySelectorAll('.luo-strategy-identity > div')].map((item) => item.textContent)`,
+  );
   if (
-    !strategiesText.includes('当前版本 第 7 版') ||
-    !strategiesText.includes('匹配结果仍使用第 6 版')
+    !identityVersions.some((text) => text.includes('当前定义') && text.includes('第 7 版')) ||
+    !identityVersions.some((text) => text.includes('结果版本') && text.includes('第 6 版')) ||
+    !strategiesText.includes('当前结果仍来自第 6 版')
   )
     throw new Error('当前条件与历史结果版本未明确区分');
   await page.evaluate(`(() => {
@@ -1523,6 +1621,11 @@ const runAcceptance = async () => {
     `document.querySelector('[data-strategy-choice="${fixtureInfo.secondStrategyId}"]').click()`,
   );
   await page.waitFor(
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.secondStrategyName)}`,
+    '切换所选策略',
+  );
+  await expandStrategyDetails();
+  await page.waitFor(
     `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.secondStrategyName)} && document.body.innerText.includes('尚无已发布的匹配结果') && document.body.innerText.includes('已发布，尚未启用持续运行') && document.querySelector('.luo-strategy-content').innerText.includes('暂停')`,
     '切换至尚未运行的策略',
   );
@@ -1534,6 +1637,47 @@ const runAcceptance = async () => {
     throw new Error('切换策略后残留另一策略的匹配标的');
   await page.evaluate(
     `document.querySelector('[data-strategy-choice="${fixtureInfo.strategyId}"]').click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.strategyName)}`,
+    '返回正式结果策略',
+  );
+  const originalMatchIdentity = await page.evaluate<string>(
+    'document.querySelector(".luo-match-asof").textContent',
+  );
+  for (const attempt of ['failed', 'withheld'] as const) {
+    strategyAttempt = attempt;
+    await page.evaluate(
+      `(() => { const button = [...document.querySelectorAll('.luo-head button')].find((item) => item.textContent.trim() === '刷新结果'); if (!button) throw new Error('Missing scoped refresh'); button.click(); })()`,
+    );
+    await page.waitFor(
+      `document.querySelector('.luo-strategy-identity')?.innerText.includes(${JSON.stringify(attempt === 'failed' ? '最近运行失败' : '最近结果未发布')}) && [...document.querySelectorAll('.luo-strategy-alert')].some((item) => item.textContent.includes('仍显示') && item.textContent.includes('已发布结果'))`,
+      `最近${attempt}与当前已发布结果并存`,
+    );
+    const preserved = await page.evaluate<{
+      runId: string;
+      identity: string;
+      hasStock: boolean;
+    }>(`({
+      runId: document.querySelector('[data-strategy-id]').getAttribute('data-run-id'),
+      identity: document.querySelector('.luo-match-asof').textContent,
+      hasStock: document.querySelector('.luo-strategy-matches').innerText.includes(${JSON.stringify(fixtureInfo.stock.name)}),
+    })`);
+    if (
+      preserved.runId !== fixtureInfo.runId ||
+      preserved.identity !== originalMatchIdentity ||
+      !preserved.hasStock
+    )
+      throw new Error(`最近 ${attempt} 错误替换了已发布结果身份`);
+    await page.screenshot(join(evidenceDir, `strategies-current-with-latest-${attempt}.png`));
+  }
+  strategyAttempt = null;
+  await page.evaluate(
+    `(() => { const button = [...document.querySelectorAll('.luo-head button')].find((item) => item.textContent.trim() === '刷新结果'); button.click(); })()`,
+  );
+  await page.waitFor(
+    `![...document.querySelectorAll('.luo-strategy-alert')].some((item) => item.textContent.includes('最近尝试'))`,
+    '恢复真实合成策略状态',
   );
   const strategyList = toolData(strategiesState, 'list_strategies') as {
     strategies?: { id: string; name: string; currentVersionId?: string }[];
@@ -1657,8 +1801,13 @@ const runAcceptance = async () => {
     `document.querySelector('dialog[open]')?.innerText.includes('1,520.00')`,
     '关闭重开后的正确个股',
   );
+  await page.evaluate(
+    `document.querySelector('dialog[open] button[aria-label="关闭个股详情"]').click()`,
+  );
+  await page.waitFor(`document.querySelector('dialog[open]') === null`, '管理前关闭个股详情');
   // 在无模型调用的可编辑会话中验收管理草稿，避免前置模型失败使会话进入只读。
   await clickPanel('策略');
+  await expandStrategyDetails();
   await page.waitFor(
     `document.querySelector('[data-strategy-operation]') !== null`,
     '运行管理入口',
@@ -1746,7 +1895,7 @@ const runAcceptance = async () => {
   )
     throw new Error(`下钻请求内容不正确: ${JSON.stringify(researchRequest)}`);
   // 官方 composer 是 contenteditable（不是 textarea）：草稿必须真的落到输入框里，
-  // 否则用户仍要手工复制标识，「在对话中研究此策略」就只是名义上的入口。
+  // 否则用户仍要手工复制标识，「AI 研究」就只是名义上的入口。
   await page.waitFor(
     `(() => {
       const editor = document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]');
@@ -1847,11 +1996,51 @@ const runAcceptance = async () => {
     `document.body.innerText.includes('匹配标的') && document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
     '移动端策略条件与标的',
   );
+  const compactStrategy = await page.evaluate<{
+    visible: boolean;
+    height: number;
+    listHidden: boolean;
+    matchesTop: number;
+    firstStockBottom: number;
+  }>(`(() => {
+    const select = document.querySelector('[data-strategy-switcher]');
+    const nav = document.querySelector('.luo-strategy-nav');
+    const root = document.querySelector('.luo-root');
+    root.scrollTop = 0;
+    const rect = select.getBoundingClientRect();
+    const firstStock = document.querySelector('.luo-strategy-matches [data-stock-id]');
+    if (!firstStock) throw new Error('合成fixture应有正式匹配标的');
+    return {visible: rect.width > 0 && rect.height > 0, height: rect.height, listHidden: nav.getBoundingClientRect().height === 0, matchesTop: document.querySelector('.luo-strategy-matches').getBoundingClientRect().top, firstStockBottom: firstStock.getBoundingClientRect().bottom};
+  })()`);
+  if (
+    !compactStrategy.visible ||
+    compactStrategy.height > 52 ||
+    !compactStrategy.listHidden ||
+    compactStrategy.matchesTop >= 844 ||
+    compactStrategy.firstStockBottom > 844
+  )
+    throw new Error(
+      `手机策略选择器不紧凑或匹配结果未在首屏到达: ${JSON.stringify(compactStrategy)}`,
+    );
   const strategyOverflow = await page.evaluate<number>(
     'Math.max(document.documentElement.scrollWidth - window.innerWidth, ...[...document.querySelectorAll(".luo-root, .luo-shell, .luo-strategy-content")].map((element) => element.scrollWidth - element.clientWidth))',
   );
   if (strategyOverflow > 1) throw new Error(`策略窄屏横向溢出 ${strategyOverflow}px`);
   await page.screenshot(join(evidenceDir, 'strategies-mobile.png'));
+  for (const [id, name] of [
+    [fixtureInfo.secondStrategyId, fixtureInfo.secondStrategyName],
+    [fixtureInfo.strategyId, fixtureInfo.strategyName],
+  ]) {
+    await page.evaluate(`(() => {
+      const select = document.querySelector('[data-strategy-switcher]');
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, ${JSON.stringify(id)});
+      select.dispatchEvent(new Event('change', {bubbles:true}));
+    })()`);
+    await page.waitFor(
+      `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(name)}`,
+      '手机选择器切换策略',
+    );
+  }
   await page.evaluate(
     `document.querySelector('.luo-strategy-matches').scrollIntoView({block: 'center'})`,
   );
@@ -1976,6 +2165,11 @@ const runAcceptance = async () => {
     `document.querySelector('[data-strategy-choice="${research.strategyId}"]').click()`,
   );
   await page.waitFor(
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(research.strategyName)}`,
+    '选择合成研究策略',
+  );
+  await strategyMode('research');
+  await page.waitFor(
     `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea') !== null`,
     '恢复合成研究空间',
   );
@@ -1996,6 +2190,94 @@ const runAcceptance = async () => {
   const question = '隔离浏览器验收：只提高价格门槛，保留全部缺失样本并核对后续观察。';
   const conclusion = '合成事实仅支持规则差异核对；历史样本不完整，暂不能判断收益或策略有效性。';
   await researchFill('这次只想验证什么', question);
+  await page.evaluate(`document.querySelector('[data-strategy-mode="research"]').focus()`);
+  for (const [key, mode] of [
+    ['ArrowLeft', 'overview'],
+    ['ArrowRight', 'research'],
+    ['Home', 'overview'],
+    ['End', 'research'],
+  ]) {
+    await page.pressKey(key);
+    await page.waitFor(
+      `document.querySelector('[data-strategy-mode="${mode}"]')?.getAttribute('aria-selected') === 'true' && document.activeElement?.getAttribute('data-strategy-mode') === '${mode}'`,
+      `策略视图键盘 ${key}`,
+    );
+  }
+  await strategyMode('overview');
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('#strategy-view-research')?.hidden === true && document.querySelector('[data-research-workbench="${research.strategyId}"] textarea')?.value === ${JSON.stringify(question)}`,
+    ))
+  )
+    throw new Error('切换到结果总览丢失未保存研究问题');
+  await strategyMode('research');
+  await page.evaluate(
+    `document.querySelector('[data-strategy-choice="${fixtureInfo.secondStrategyId}"]').click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') !== null`,
+    '未保存研究离开保护',
+  );
+  if (!(await page.evaluate<boolean>(`document.activeElement?.textContent.trim() === '继续编辑'`)))
+    throw new Error('未保存离开对话框未默认聚焦继续编辑');
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(research.strategyName)} && document.querySelector('[data-research-workbench="${research.strategyId}"] textarea')?.value === ${JSON.stringify(question)}`,
+    ))
+  )
+    throw new Error('用户选择前已切换策略或丢失草稿');
+  await page.screenshot(join(evidenceDir, 'research-unsaved-switch-protection.png'));
+  await page.evaluate(
+    `(() => { const dialog = document.querySelector('[aria-label="未保存研究"]'); [...dialog.querySelectorAll('button')].find((button) => button.textContent.trim() === '继续编辑').click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') === null`,
+    '继续编辑保留研究',
+  );
+  await clickPanel('看盘');
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') !== null`,
+    '离开面板前保护未保存研究',
+  );
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(research.strategyName)}`,
+    ))
+  )
+    throw new Error('未保存研究未阻止外部面板导航');
+  await page.evaluate(
+    `(() => { const dialog = document.querySelector('[aria-label="未保存研究"]'); [...dialog.querySelectorAll('button')].find((button) => button.textContent.trim() === '继续编辑').click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') === null`,
+    '取消外部导航继续编辑',
+  );
+  await page.evaluate(
+    `document.querySelector('[data-strategy-choice="${fixtureInfo.secondStrategyId}"]').click()`,
+  );
+  await page.waitFor(`document.querySelector('[aria-label="未保存研究"]') !== null`);
+  await page.evaluate(
+    `(() => { const dialog = document.querySelector('[aria-label="未保存研究"]'); [...dialog.querySelectorAll('button')].find((button) => button.textContent.trim() === '放弃修改').click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('.luo-strategy-content h2')?.textContent === ${JSON.stringify(fixtureInfo.secondStrategyName)}`,
+    '放弃后切换策略',
+  );
+  await page.evaluate(
+    `document.querySelector('[data-strategy-choice="${research.strategyId}"]').click()`,
+  );
+  await strategyMode('research');
+  await page.waitFor(
+    `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea') !== null`,
+    '重新恢复已保存研究',
+  );
+  if (
+    await page.evaluate<boolean>(
+      `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea')?.value === ${JSON.stringify(question)}`,
+    )
+  )
+    throw new Error('放弃修改后重新进入仍保留被放弃的草稿');
+  await researchFill('这次只想验证什么', question);
   await page.evaluate(`(() => {
     const input = document.querySelector('.luo-condition-editor input[type="number"]');
     if (!input) throw new Error('catalog 结构化门槛编辑器不存在');
@@ -2003,14 +2285,22 @@ const runAcceptance = async () => {
   })()`);
   await page.insertText('11.5');
   await researchFill('这次改动的理由', '隔离验收：只将候选价格门槛调整到 11.5');
-  const candidateOperation = await confirmResearch('保存为新候选版本');
+  await strategyMode('overview');
+  await strategyMode('research');
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('.luo-condition-editor input[type="number"]')?.value === '11.5' && document.querySelector('.luo-research-workbench')?.innerText.includes('页面修改未保存')`,
+    ))
+  )
+    throw new Error('模式切换丢失未保存候选规则');
+  const candidateOperation = await confirmResearch('保存候选');
   const newCandidate = candidateOperation.result?.data?.version as { id: string; version: number };
   if (!newCandidate?.id) throw new Error('候选没有真实持久化版本');
   await page.waitFor(
     `[...document.querySelectorAll('.luo-research-workbench select')].some((select) => select.value === ${JSON.stringify(newCandidate.id)})`,
     '新候选版本回读',
   );
-  await confirmResearch('校验已保存候选');
+  await confirmResearch('校验候选');
   await researchButton('检查数据资格');
   await page.waitFor(`document.body.innerText.includes('按规则字段检查覆盖')`, '字段覆盖预检');
   const preflight = await researchApi<{
@@ -2034,7 +2324,7 @@ const runAcceptance = async () => {
   await researchTab('试跑与诊断');
   await researchFill('事实来源', 'replay');
   await researchFill('试跑交易日', research.to);
-  const trialOperation = await confirmResearch('执行同快照试跑');
+  const trialOperation = await confirmResearch('同快照试跑');
   const trial = trialOperation.result?.data as {
     inputIdentity: { snapshotHash: string };
     base: { run: { inputSnapshot: { dataCheckpoint: { checksum: string } } } };
@@ -2046,12 +2336,26 @@ const runAcceptance = async () => {
     trial.draft.run.inputSnapshot.dataCheckpoint.checksum !== trial.inputIdentity.snapshotHash
   )
     throw new Error('基线/候选未使用同一实际输入快照');
+  const trialView = await page.evaluate<string>(
+    `document.querySelector('.luo-research-snapshot')?.textContent ?? ''`,
+  );
+  if (!trialView) throw new Error('同快照试跑没有可见结果');
+  await strategyMode('overview');
+  await strategyMode('research');
+  if (
+    (await page.evaluate<string>(
+      `document.querySelector('.luo-research-snapshot')?.textContent ?? ''`,
+    )) !== trialView ||
+    (await currentResearchOperation()).operationId !== trialOperation.operationId
+  )
+    throw new Error('模式切换丢失内存试跑或切换了原操作身份');
+  await page.screenshot(join(evidenceDir, 'research-trial-mode-preserved.png'));
   await page.evaluate(`(() => {
     const candidates = [...document.querySelectorAll('.luo-research-candidates input[type="checkbox"]')];
     if (candidates.length < 2) throw new Error('可比较候选不足');
     candidates[0].click(); candidates[1].click();
   })()`);
-  const boundedOperation = await confirmResearch('执行有界候选对照');
+  const boundedOperation = await confirmResearch('候选对照');
   const bounded = boundedOperation.result?.data as {
     inputIdentity: { snapshotHash: string };
     candidates: { status: string; comparison?: { inputIdentity: { snapshotHash: string } } }[];
@@ -2129,7 +2433,7 @@ const runAcceptance = async () => {
   );
   await page.setViewport(1320, 900, false);
   await researchTab('分层验证');
-  const evaluationOperation = await confirmResearch('执行历史选股评估');
+  const evaluationOperation = await confirmResearch('历史选股评估');
   const newSession = evaluationOperation.result?.data?.session as { id: string };
   if (!newSession?.id) throw new Error('历史验证没有稳定任务身份');
   await page.waitFor(
@@ -2166,7 +2470,7 @@ const runAcceptance = async () => {
     '仅合成数据；保留历史缺失、PIT 与执行模型限制。\nT+1/T+3/T+5 是信号观察，不能称为组合回测。',
   );
   await researchFill('下一步', '补齐可审计历史后，在独立区间验证；不自动发布或交易。');
-  const saveOperation = await confirmResearch('保存研究空间', true);
+  const saveOperation = await confirmResearch('保存研究', true);
   const savedState = await researchApi<{
     state: {
       ok: boolean;
@@ -2196,6 +2500,11 @@ const runAcceptance = async () => {
   await page.navigate(`${origin}/`);
   await clickPanel('策略');
   await page.waitFor(
+    `document.querySelector('[data-strategy-mode="research"]') !== null`,
+    '刷新后策略视图',
+  );
+  await strategyMode('research');
+  await page.waitFor(
     `document.querySelector('[data-research-workbench="${research.strategyId}"] textarea')?.value === ${JSON.stringify(question)}`,
     '刷新后恢复研究问题和固定版本',
   );
@@ -2212,7 +2521,7 @@ const runAcceptance = async () => {
     updatesFacts.continuity.notificationStatus !== 'not-verified'
   )
     throw new Error('未配置真实自动任务却声称持续观察正常或通知送达');
-  await researchButton('导出 manifest 文件');
+  await researchButton('导出定义');
   let exportedName: string | undefined;
   for (let attempt = 0; attempt < 100; attempt++) {
     exportedName = (await readdir(evidenceDir)).find(
@@ -2280,7 +2589,7 @@ const runAcceptance = async () => {
       ),
     );
   }
-  await researchButton('在对话中继续研究');
+  await researchButton('继续研究');
   await page.waitFor(
     `document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes(${JSON.stringify(question)})`,
     '研究上下文实际写入官方会话草稿',
@@ -2302,6 +2611,70 @@ const runAcceptance = async () => {
     continuedResearch.researchContext.validationSessionId !== newSession.id
   )
     throw new Error('继续研究的会话草稿未绑定原账户、固定版本、修订与验证任务');
+  const guardedQuestion = `${question} 保存并离开时使用新修订。`;
+  await clickPanel('策略');
+  await page.waitFor(`document.querySelector('[data-strategy-mode="research"]') !== null`);
+  await strategyMode('research');
+  await page.waitFor(
+    `document.querySelector('.luo-research-workbench textarea')?.value === ${JSON.stringify(question)}`,
+  );
+  await researchFill('这次只想验证什么', guardedQuestion);
+  await researchButton('继续研究');
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') !== null`,
+    '继续研究先处理未保存内容',
+  );
+  await page.evaluate(`(() => {
+    const button = [...document.querySelectorAll('[aria-label="未保存研究"] button')].find((item) => item.textContent.trim() === '保存并离开');
+    if (!button || button.disabled) throw new Error('保存并离开不可操作');
+    button.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') === null && document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes(${JSON.stringify(guardedQuestion)})`,
+    '保存完成后继续研究',
+  );
+  const savedNavigation = await page.evaluate<{
+    prompt: string;
+    researchContext: { researchRevision: number };
+  }>('window.__luoomeLastResearchRequest');
+  const navigationState = await researchApi<{
+    state: { data: { state: { revision: number; state: { question: string } } } };
+  }>(`research?view=state&strategyId=${research.strategyId}`);
+  if (
+    navigationState.state.data.state.revision !== savedState.state.data.state.revision + 1 ||
+    navigationState.state.data.state.state.question !== guardedQuestion ||
+    savedNavigation.researchContext.researchRevision !== navigationState.state.data.state.revision
+  )
+    throw new Error('保存并离开使用了旧研究问题或修订');
+  await page.screenshot(join(evidenceDir, 'research-save-and-continue-context.png'));
+  await clickPanel('策略');
+  await page.waitFor(`document.querySelector('[data-strategy-mode="research"]') !== null`);
+  await strategyMode('research');
+  await page.waitFor(
+    `document.querySelector('.luo-research-workbench textarea')?.value === ${JSON.stringify(guardedQuestion)}`,
+  );
+  const discardedQuestion = '此未保存问题应被放弃，不能进入继续研究上下文。';
+  await researchFill('这次只想验证什么', discardedQuestion);
+  await researchButton('继续研究');
+  await page.waitFor(`document.querySelector('[aria-label="未保存研究"]') !== null`);
+  await page.evaluate(
+    `(() => { const dialog = document.querySelector('[aria-label="未保存研究"]'); [...dialog.querySelectorAll('button')].find((button) => button.textContent.trim() === '放弃修改').click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('[aria-label="未保存研究"]') === null && document.querySelector('[data-slot="conversation.composer"] [contenteditable="true"]')?.innerText.includes(${JSON.stringify(guardedQuestion)})`,
+    '放弃修改后使用已保存研究继续',
+  );
+  const discardedNavigation = await page.evaluate<{
+    prompt: string;
+    researchContext: { researchRevision: number };
+  }>('window.__luoomeLastResearchRequest');
+  if (
+    !discardedNavigation.prompt.includes(guardedQuestion) ||
+    discardedNavigation.prompt.includes(discardedQuestion) ||
+    discardedNavigation.researchContext.researchRevision !==
+      navigationState.state.data.state.revision
+  )
+    throw new Error('放弃修改后仍传递了未保存问题或错误修订');
   const researchEvidence = {
     strategy: research.strategyName,
     candidateVersion: newCandidate.version,
@@ -2318,6 +2691,17 @@ const runAcceptance = async () => {
     savedRevision: savedState.state.data.state.revision,
     restoredAfterRefresh: true,
     restoredPriorDayState: true,
+    phaseOne: {
+      researchRequestsBeforeEntry: lazyResearchReads - researchReadsBeforeStrategy,
+      questionAndCandidatePreservedAcrossModes: true,
+      trialAndOperationPreservedAcrossModes: true,
+      unsavedStrategySwitch: { continueEditing: true, discard: true },
+      saveBeforeConversationRevision: savedNavigation.researchContext.researchRevision,
+      discardBeforeConversationUsesSavedContext: true,
+      latestAttemptPreservesPublishedIdentity: ['failed', 'withheld'],
+      mobileSelector: compactStrategy,
+      globalDailyCycleScope: globalCycleScope,
+    },
     continuedConversationBinding: continuedResearch.researchContext,
     continuity: updatesFacts.continuity,
     downloadedManifest: exportedName,
@@ -2362,15 +2746,15 @@ const runAcceptance = async () => {
       strategies: {
         domChecks: [
           fixtureInfo.strategyName,
-          '当前版本',
-          '策略要求',
+          '当前定义',
+          '结果使用的历史规则',
           '筛选条件',
           '匹配标的',
           fixtureInfo.stock.name,
           '入场信号',
           '退出条件',
           '风险条件',
-          '在对话中研究此策略',
+          'AI 研究',
         ],
         strategyId: fixtureInfo.strategyId,
         versionId: fixtureInfo.versionId,
@@ -2431,7 +2815,7 @@ try {
   let pageErrors: unknown = null;
   try {
     pageErrors = await failurePage?.evaluate(
-      `({ errors: window.__luoomeErrors ?? null, researchFields: [...document.querySelectorAll('.luo-research-workbench label')].map((element) => ({label:element.firstElementChild?.textContent, value:element.querySelector('input,textarea,select')?.value})), buttons: [...document.querySelectorAll('button,[role="menuitem"]')].map((element) => ({ text: element.textContent.trim().slice(0, 100), aria: element.getAttribute('aria-label') })) })`,
+      `({ errors: window.__luoomeErrors ?? null, watchlistComposer: window.__luoomeLastWatchlistOperationRequest ? {errorCode: window.__luoomeLastWatchlistOperationRequest.errorCode, createdSession: window.__luoomeLastWatchlistOperationRequest.createdSession} : null, strategyComposer: window.__luoomeLastStrategyOperationRequest ? {errorCode: window.__luoomeLastStrategyOperationRequest.errorCode, createdSession: window.__luoomeLastStrategyOperationRequest.createdSession, sessionId: window.__luoomeLastStrategyOperationRequest.sessionId} : null, researchFields: [...document.querySelectorAll('.luo-research-workbench label')].map((element) => ({label:element.firstElementChild?.textContent, value:element.querySelector('input,textarea,select')?.value})), buttons: [...document.querySelectorAll('button,[role="menuitem"]')].map((element) => ({ text: element.textContent.trim().slice(0, 100), aria: element.getAttribute('aria-label') })) })`,
     );
     await failurePage?.screenshot(join(evidenceDir, 'failure.png'));
   } catch {
