@@ -295,6 +295,17 @@ const strategyRunSummaryCounts = (
       message: 'evaluatedCount + failedCount 必须等于 universeCount',
     });
   }
+  if (
+    'persistedResultCount' in summary &&
+    typeof summary.persistedResultCount === 'number' &&
+    summary.persistedResultCount > summary.evaluatedCount
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['persistedResultCount'],
+      message: 'persistedResultCount 不能大于 evaluatedCount',
+    });
+  }
   if (summary.selectedCount > summary.evaluatedCount) {
     ctx.addIssue({
       code: 'custom',
@@ -321,6 +332,13 @@ export const StrategyRunSummaryV4Schema = z
     signalCount: z.number().int().nonnegative(),
     incompleteCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
+    /** 实际落库的逐股结果行数；未入选且不近似入选的行按保留策略裁剪，不落库。 */
+    persistedResultCount: z.number().int().nonnegative().optional(),
+    ruleNearMissCount: z.number().int().nonnegative().optional(),
+    rankingNearMissCount: z.number().int().nonnegative().optional(),
+    excludedCount: z.number().int().nonnegative().optional(),
+    /** 被保留策略裁剪、未落库逐股事实的股票身份；用于区分“裁剪”与“真正缺失”。 */
+    droppedStockIds: z.array(z.string().min(1)).optional(),
     failureSamples: z
       .array(z.object({ stockId: z.string().min(1), error: z.string().min(1) }))
       .max(20)
@@ -639,11 +657,15 @@ export const assertStrategyRunBundleInvariants = (bundle: StrategyRunBundle): vo
   }
   if (isStrategyRunSummaryV4(bundle.run.summary)) {
     const summary = bundle.run.summary;
-    if (
-      summary.evaluatedCount !== bundle.results.length ||
-      summary.selectedCount !== bundle.results.filter((result) => result.selected).length ||
-      summary.signalCount !== bundle.signals.length
-    ) {
+    // 保留策略裁剪后，evaluatedCount 仍是评估总数，persistedResultCount 才是落库行数；
+    // 未声明 persistedResultCount 的存量运行保持全量语义。
+    const persisted = summary.persistedResultCount ?? summary.evaluatedCount;
+    const countsMatch =
+      persisted === bundle.results.length &&
+      summary.selectedCount === bundle.results.filter((result) => result.selected).length &&
+      summary.signalCount === bundle.signals.length &&
+      summary.evaluatedCount >= persisted;
+    if (!countsMatch) {
       throw new InvariantError('StrategyRun Summary V4 计数必须与 bundle facts 一致');
     }
   }

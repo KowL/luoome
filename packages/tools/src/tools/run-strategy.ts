@@ -41,6 +41,7 @@ import {
   type StrategyEvaluationDataRequest,
 } from '../internal/strategy-evaluation-data.js';
 import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
+import { retainStrategyResults } from '../internal/strategy-result-retention.js';
 
 const EVALUATION_CONCURRENCY = 8;
 const RUN_LEASE_MS = 15 * 60 * 1000;
@@ -596,6 +597,11 @@ export const runStrategyTool = defineTool({
       const ranked = assignStableStrategyRanks(successful, definition);
       if (leaseLost) return errLeaseLostBeforeCommit();
       const results = ranked.map((item) => item.result);
+      const retention = retainStrategyResults(version.definition, results);
+      const retainedIds = new Set(retention.results.map((result) => result.stockId));
+      const droppedStockIds = results
+        .filter((result) => !retainedIds.has(result.stockId))
+        .map((result) => result.stockId);
       const rawSignals = ranked.flatMap((item) => item.signals);
       const priorRuns = (
         await ctx.repos.strategyRun.listRuns({
@@ -744,6 +750,11 @@ export const runStrategyTool = defineTool({
           universeCount: candidateIds.length,
           evaluatedCount: results.length,
           selectedCount: results.filter((result) => result.selected).length,
+          persistedResultCount: retention.results.length,
+          ruleNearMissCount: retention.counts.ruleNearMissCount,
+          rankingNearMissCount: retention.counts.rankingNearMissCount,
+          excludedCount: retention.counts.excludedCount,
+          droppedStockIds: droppedStockIds,
           signalCount: signals.length,
           incompleteCount,
           failedCount: failures.length,
@@ -760,7 +771,7 @@ export const runStrategyTool = defineTool({
         const committed = await ctx.repos.strategyRun.commitRunWithFence({
           token: leaseToken,
           now: ctx.clock(),
-          bundle: { run, results, signals },
+          bundle: { run, results: retention.results, signals },
         });
         if (committed === 'lease-lost') return errLeaseLostBeforeCommit();
       }

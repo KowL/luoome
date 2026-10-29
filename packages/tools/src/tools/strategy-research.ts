@@ -795,6 +795,9 @@ export const GetStrategySelectionDiagnosticsOutput = z.object({
   ),
   limitations: z.array(z.string()),
 });
+const summaryRecordOf = (run: { readonly summary?: unknown }): Record<string, unknown> =>
+  (run.summary ?? {}) as Record<string, unknown>;
+
 export const getStrategySelectionDiagnosticsTool = defineTool({
   name: 'get_strategy_selection_diagnostics',
   description:
@@ -812,17 +815,40 @@ export const getStrategySelectionDiagnosticsTool = defineTool({
     const views = results.map((result) => classifyStrategyResult(version.definition, result));
     const expectedIds = readStrategyRunSnapshot(run.inputSnapshot).stockIds;
     const seen = new Set(results.map((result) => result.stockId));
-    const missing = expectedIds.filter((id) => !seen.has(id));
+    const dropped = new Set(
+      Array.isArray(summaryRecordOf(run).droppedStockIds)
+        ? (summaryRecordOf(run).droppedStockIds as string[])
+        : [],
+    );
+    const missing = expectedIds.filter((id) => !seen.has(id) && !dropped.has(id));
     const universe = await ctx.repos.stockUniverse.listCurrent({ coverage: 'CN_A_SHARES_SH_SZ' });
     const names = new Map(universe.map((stock) => [stock.id, stock.name]));
-    const counts = {
-      selected: views.filter((view) => view.kind === 'selected').length,
-      ruleNearMiss: views.filter((view) => view.kind === 'rule-near-miss').length,
-      rankingNearMiss: views.filter((view) => view.kind === 'ranking-near-miss').length,
-      excluded: views.filter((view) => view.kind === 'excluded').length,
-      incomplete: views.filter((view) => view.kind === 'incomplete').length,
-      missingResults: missing.length,
+    // 按保留策略裁剪过的运行只落库可解释的行；分类计数以运行摘要为准，
+    // 缺失数只统计“应评估但没有任何结果”的股票，不把裁剪当成数据缺失。
+    const summaryRecord = summaryRecordOf(run);
+    const trimmed =
+      summaryRecord !== undefined && typeof summaryRecord.persistedResultCount === 'number';
+    const summaryCount = (field: string): number => {
+      const value = summaryRecord?.[field];
+      return typeof value === 'number' ? value : 0;
     };
+    const counts = trimmed
+      ? {
+          selected: summaryCount('selectedCount'),
+          ruleNearMiss: summaryCount('ruleNearMissCount'),
+          rankingNearMiss: summaryCount('rankingNearMissCount'),
+          excluded: summaryCount('excludedCount'),
+          incomplete: summaryCount('incompleteCount'),
+          missingResults: Math.max(0, expectedIds.length - summaryCount('evaluatedCount')),
+        }
+      : {
+          selected: views.filter((view) => view.kind === 'selected').length,
+          ruleNearMiss: views.filter((view) => view.kind === 'rule-near-miss').length,
+          rankingNearMiss: views.filter((view) => view.kind === 'ranking-near-miss').length,
+          excluded: views.filter((view) => view.kind === 'excluded').length,
+          incomplete: views.filter((view) => view.kind === 'incomplete').length,
+          missingResults: missing.length,
+        };
     let rows: z.infer<typeof GetStrategySelectionDiagnosticsOutput>['rows'] = [
       ...views
         .filter((view) => input.view === undefined || view.kind === input.view)
@@ -857,13 +883,18 @@ export const getStrategySelectionDiagnosticsTool = defineTool({
       version,
       dataAsOf: run.dataAsOf,
       counts,
-      total: rows.length,
+      // 裁剪运行没有逐股行可数，总数取各分类计数合计，避免把“未落库”当成不存在。
+      // 未筛选时把“按保留策略裁剪”的行计入总数；筛选某一分类时只数该分类可见行。
+      total: trimmed && input.view === undefined ? rows.length + dropped.size : rows.length,
       offset: input.offset,
       limit: input.limit,
       rows: rows.slice(input.offset, input.offset + input.limit),
       limitations: [
         '规则/评分值绑定指定版本与运行事实截止；名称仅来自当前本地目录，不参与历史求值。',
         ...(run.status === 'running' ? ['运行尚未完成；当前缺失不能作为最终分类。'] : []),
+        ...(trimmed
+          ? ['该运行按保留策略只落库入选与近似入选明细；未入选与不完整分类仅有计数。']
+          : []),
       ],
     };
   },

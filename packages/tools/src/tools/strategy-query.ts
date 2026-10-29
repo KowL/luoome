@@ -179,6 +179,27 @@ const quoteChangePct = (quote: Quote | undefined): number | undefined => {
   return Math.round(ratio * 100 * 100) / 100;
 };
 
+const retainedKindTotal = (
+  summary: unknown,
+  kind: 'selected' | 'rule-near-miss' | 'ranking-near-miss' | 'incomplete' | 'excluded',
+): number | undefined => {
+  if (summary === null || typeof summary !== 'object') return undefined;
+  const record = summary as Record<string, unknown>;
+  if (typeof record.persistedResultCount !== 'number') return undefined;
+  const field =
+    kind === 'selected'
+      ? 'selectedCount'
+      : kind === 'rule-near-miss'
+        ? 'ruleNearMissCount'
+        : kind === 'ranking-near-miss'
+          ? 'rankingNearMissCount'
+          : kind === 'incomplete'
+            ? 'incompleteCount'
+            : 'excludedCount';
+  const value = record[field];
+  return typeof value === 'number' ? value : undefined;
+};
+
 export const listStrategyResultViewsTool = defineTool({
   name: 'list_strategy_result_views',
   description:
@@ -258,7 +279,12 @@ export const listStrategyResultViewsTool = defineTool({
         left.result.stockId.localeCompare(right.result.stockId)
       );
     });
-    const total = views.length;
+    // 保留策略裁剪后的运行只落库可解释的行；未筛选时用摘要计数给出真实总数，
+    // 避免把“没有明细”误读成“没有这类股票”。
+    const summaryTotal = retainedKindTotal(run.summary, input.view);
+    const trimmed = run.summary !== undefined && 'persistedResultCount' in run.summary;
+    const total =
+      trimmed && input.query === undefined ? (summaryTotal ?? views.length) : views.length;
     const page = views.slice(input.offset, input.offset + input.limit);
     const resolvedQuotes = await resolveQuotes(
       ctx,
@@ -303,6 +329,9 @@ export const listStrategyResultViewsTool = defineTool({
         ...(isPublishableOperationalRun(run)
           ? []
           : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),
+        ...(trimmed && input.query === undefined && (summaryTotal ?? 0) > views.length
+          ? ['该运行按保留策略只落库入选与近似入选明细；其余分类仅有计数。']
+          : []),
       ],
     };
   },
