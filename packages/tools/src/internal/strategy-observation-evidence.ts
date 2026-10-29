@@ -211,6 +211,21 @@ export const collectStrategyObservationEvidence = async (
     signals.push(signal);
   }
   const sortedSignals = sortSignals(signals);
+  const signalCountByRun = new Map<string, number>();
+  for (const signal of sortedSignals) {
+    signalCountByRun.set(signal.runId, (signalCountByRun.get(signal.runId) ?? 0) + 1);
+  }
+  for (const run of runById.values()) {
+    const historicalCount = run.summary?.signalCount;
+    const currentCount = signalCountByRun.get(run.id) ?? 0;
+    if (typeof historicalCount === 'number' && historicalCount > currentCount) {
+      addLimitation(
+        limitations,
+        limitationSet,
+        `${sourceLabel} StrategyRun ${run.id} 历史摘要 signalCount=${historicalCount}，现存可关联信号 ${currentCount} 条，信号明细缺失 ${historicalCount - currentCount} 条；相关观察事实可能不完整，缺失部分不计作无信号或 0 收益。`,
+      );
+    }
+  }
   if (requestedIds !== undefined) {
     const matchedIds = new Set(signals.map((signal) => signal.id));
     const missingSignalIds = [...requestedIds].filter((id) => !matchedIds.has(id));

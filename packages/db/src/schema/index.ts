@@ -53,6 +53,7 @@ import type {
   StrategyRunPublication,
   StrategySchedule,
   StrategySignal,
+  StrategySignalState,
   StrategyVersion,
   StrategyWatchlistSubscription,
   StrictBacktestGateAudit,
@@ -897,6 +898,24 @@ export const strategyRunLeases = sqliteTable(
       name: 'strategy_run_leases_pk',
     }),
     untilIdx: index('strategy_run_leases_until_idx').on(table.leaseUntil),
+  }),
+);
+
+export const strategySignalStates = sqliteTable(
+  'strategy_signal_states',
+  {
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    contextKey: text('context_key').notNull(),
+    runId: text('run_id').notNull(),
+    evaluatedAt: integer('evaluated_at', { mode: 'timestamp_ms' }).notNull(),
+    state: text('state_json', { mode: 'json' }).$type<StrategySignalState>().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.strategyId, table.strategyVersionId, table.contextKey],
+      name: 'strategy_signal_states_pk',
+    }),
   }),
 );
 
@@ -2059,6 +2078,7 @@ export const schema = {
   strategyRuns,
   strategySchedules,
   strategyRunLeases,
+  strategySignalStates,
   strategyResults,
   strategySignals,
   strategyDataCheckpoints,

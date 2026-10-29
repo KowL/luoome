@@ -7,10 +7,12 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 import { runStrategyTool } from './run-strategy.js';
+import { getStrategyInsightFactsTool } from './strategy-insight.js';
 import {
   compareStrategyRunsTool,
   getStrategyRunTool,
@@ -649,6 +651,102 @@ describe('strategy-query', () => {
 
     const missing = await getStrategyRunTool.execute({ runId: 'strategy-run-missing' }, ctx);
     expect(missing.ok).toBe(false);
+  });
+
+  it.each([0, 1])('历史信号仅剩 %i 条时披露缺失并保留运行摘要', async (remainingCount) => {
+    const ctx = await buildTestContext();
+    await seedStrategy(ctx);
+    const run: StrategyRun = {
+      id: 'historical-run',
+      strategyId: 'scan-strategy',
+      strategyVersionId: 'scan-strategy-v1',
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: ctx.clock(),
+      startedAt: ctx.clock(),
+      finishedAt: ctx.clock(),
+      status: 'complete',
+      scope: 'operational',
+      inputSnapshot: {},
+      providerStatuses: [],
+      summary: { ...selectedZeroSummary, signalCount: 2 },
+      publication: { status: 'published', reasons: [], decidedAt: ctx.clock() },
+    };
+    const signals = Array.from({ length: remainingCount }, (_, index) => ({
+      id: `remaining-${index}`,
+      strategyId: run.strategyId,
+      strategyVersionId: run.strategyVersionId,
+      runId: run.id,
+      ruleId: 'entry',
+      stockId: '600519.SH',
+      ts: ctx.clock(),
+      score: 60,
+      direction: 'bullish' as const,
+      evidence: ['historical signal'],
+      evaluationSnapshot: {},
+    }));
+    vi.spyOn(ctx.repos.strategyRun, 'findRunById').mockResolvedValue(run);
+    vi.spyOn(ctx.repos.strategyRun, 'listRuns').mockResolvedValue([run]);
+    vi.spyOn(ctx.repos.strategyRun, 'signalsByRun').mockResolvedValue(signals);
+    vi.spyOn(ctx.repos.strategyRun, 'signalsByRuns').mockResolvedValue(signals);
+    vi.spyOn(ctx.repos.strategyRun, 'signalsByStrategy').mockResolvedValue(signals);
+
+    const evidence = await collectStrategyObservationEvidence({ ctx, runs: [run] });
+    expect(evidence.matchedSignalCount).toBe(remainingCount);
+    expect(evidence.limitations.join(' ')).toContain('信号明细缺失');
+    expect(evidence.limitations.join(' ')).toContain(`signalCount=${run.summary?.signalCount}`);
+    expect(evidence.expectedByHorizon).toEqual({
+      t1: remainingCount,
+      t3: remainingCount,
+      t5: remainingCount,
+    });
+
+    const detail = await getStrategyRunTool.execute({ runId: run.id }, ctx);
+    expect(detail.ok).toBe(true);
+    if (!detail.ok) return;
+    expect(detail.data.run.summary).toEqual(run.summary);
+    expect(detail.data.signals).toHaveLength(remainingCount);
+    expect(detail.data.warnings.join(' ')).toContain('信号明细缺失');
+
+    const insight = await getStrategyInsightFactsTool.execute({ strategyId: run.strategyId }, ctx);
+    expect(insight.ok).toBe(true);
+    if (!insight.ok) return;
+    expect(insight.data.limitations.join(' ')).toContain('信号明细缺失');
+    expect(insight.data.limitations.join(' ')).not.toContain('观察窗口内没有策略信号');
+  });
+
+  it('历史计数为零且无信号明细时仍按无信号展示', async () => {
+    const ctx = await buildTestContext();
+    await seedStrategy(ctx);
+    const run: StrategyRun = {
+      id: 'zero-signal-run',
+      strategyId: 'scan-strategy',
+      strategyVersionId: 'scan-strategy-v1',
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: ctx.clock(),
+      startedAt: ctx.clock(),
+      status: 'complete',
+      scope: 'operational',
+      inputSnapshot: {},
+      providerStatuses: [],
+      summary: selectedZeroSummary,
+      publication: { status: 'published', reasons: [], decidedAt: ctx.clock() },
+    };
+    vi.spyOn(ctx.repos.strategyRun, 'findRunById').mockResolvedValue(run);
+    vi.spyOn(ctx.repos.strategyRun, 'listRuns').mockResolvedValue([run]);
+
+    const evidence = await collectStrategyObservationEvidence({ ctx, runs: [run] });
+    expect(evidence.limitations.join(' ')).not.toContain('信号明细缺失');
+    const detail = await getStrategyRunTool.execute({ runId: run.id }, ctx);
+    expect(detail.ok).toBe(true);
+    if (!detail.ok) return;
+    expect(detail.data.warnings.join(' ')).not.toContain('信号明细缺失');
+    const insight = await getStrategyInsightFactsTool.execute({ strategyId: run.strategyId }, ctx);
+    expect(insight.ok).toBe(true);
+    if (!insight.ok) return;
+    expect(insight.data.limitations.join(' ')).toContain('观察窗口内没有策略信号');
+    expect(insight.data.limitations.join(' ')).not.toContain('信号明细缺失');
   });
 
   it('strategy_signals_by_stock 默认隔离非 published operational signal，并允许显式 evaluation session', async () => {

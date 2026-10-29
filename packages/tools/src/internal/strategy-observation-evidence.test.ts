@@ -1,5 +1,5 @@
-import type { SignalObservation, StrategySignal } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
+import type { SignalObservation, StrategyRun, StrategySignal } from '@luoome/core';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { collectStrategyObservationEvidence } from './strategy-observation-evidence.js';
@@ -50,6 +50,37 @@ const observation = (
 });
 
 describe('StrategyObservationEvidence', () => {
+  it('按每个 run 披露历史信号缺失，即使未请求观察周期也保留提示', async () => {
+    const ctx = await buildTestContext();
+    const run: StrategyRun = {
+      id: 'run-1',
+      strategyId: 'strategy-1',
+      strategyVersionId: 'strategy-1-v1',
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: SIGNAL_DAY,
+      startedAt: SIGNAL_DAY,
+      status: 'complete',
+      inputSnapshot: {},
+      providerStatuses: [],
+      summary: { signalCount: 2 },
+    };
+    vi.spyOn(ctx.repos.strategyRun, 'signalsByRuns').mockResolvedValue([signal('signal-1')]);
+    const evidence = await collectStrategyObservationEvidence({
+      ctx,
+      runs: [run, { ...run, id: 'run-2', summary: { signalCount: 1 } }],
+      horizons: [],
+    });
+
+    expect(evidence.limitations).toEqual([
+      expect.stringContaining('StrategyRun run-1 历史摘要 signalCount=2，现存可关联信号 1 条'),
+      expect.stringContaining('StrategyRun run-2 历史摘要 signalCount=1，现存可关联信号 0 条'),
+    ]);
+    expect(evidence.expectedByHorizon).toEqual({ t1: 0, t3: 0, t5: 0 });
+    expect(evidence.missing).toEqual([]);
+    expect(run.summary).toEqual({ signalCount: 2 });
+  });
+
   it('统一 active horizon、关联校验、stock-day-horizon 去重与 expected missing', async () => {
     const ctx = await buildTestContext();
     const signals = [signal('signal-1'), signal('signal-2', '002594.SZ')];

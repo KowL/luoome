@@ -21,6 +21,49 @@ import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
+  it('signal state 表从存量库幂等创建，重复迁移保留独立状态与复合主键', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`DROP TABLE strategy_signal_states`);
+      ensureSchema(handle.db);
+      const state = {
+        strategyId: 'state-strategy',
+        strategyVersionId: 'state-version',
+        contextKey: 'context',
+        runId: 'pruned-run',
+        evaluatedAt: new Date('2026-07-27T02:00:00Z'),
+        trackedStockIds: ['600519.SH'],
+        rules: [
+          {
+            stockId: '600519.SH',
+            ruleId: 'rule-1',
+            matched: true,
+            lastEmittedAt: new Date('2026-07-26T02:00:00Z'),
+          },
+        ],
+      };
+      handle.db.run(sql`
+        INSERT INTO strategy_signal_states
+          (strategy_id, strategy_version_id, context_key, run_id, evaluated_at, state_json)
+        VALUES (${state.strategyId}, ${state.strategyVersionId}, ${state.contextKey},
+          ${state.runId}, ${state.evaluatedAt.getTime()}, ${JSON.stringify(state)})
+      `);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      expect(await handle.repos.strategyRun.findSignalState(state)).toEqual(state);
+      const columns = handle.db.all<{ name: string; pk: number }>(
+        sql`PRAGMA table_info(strategy_signal_states)`,
+      );
+      expect(columns.filter((column) => column.pk > 0).map((column) => column.name)).toEqual([
+        'strategy_id',
+        'strategy_version_id',
+        'context_key',
+      ]);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('backfills legacy Advice provenance once without replacing known provenance', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {

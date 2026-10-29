@@ -14,6 +14,7 @@ import {
   type StrategyRunRepository,
   type StrategyRunScope,
   type StrategySignal,
+  type StrategySignalState,
   type StrategyVersion,
 } from '@luoome/core';
 
@@ -220,6 +221,7 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   private readonly runs = new Map<string, StrategyRun>();
   private readonly results = new Map<string, StrategyResult>();
   private readonly signals = new Map<string, StrategySignal>();
+  private readonly signalStates = new Map<string, StrategySignalState>();
   private readonly runLeases = new Map<
     string,
     {
@@ -353,9 +355,29 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     for (const [id, signal] of this.signals) {
       if (signal.strategyId === strategyId) this.signals.delete(id);
     }
+    for (const [key, state] of this.signalStates) {
+      if (state.strategyId === strategyId) this.signalStates.delete(key);
+    }
     for (const key of this.runLeases.keys()) {
       if (key.startsWith(`${strategyId}\0`)) this.runLeases.delete(key);
     }
+  }
+
+  private signalStateKey(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly contextKey: string;
+  }): string {
+    return JSON.stringify([input.strategyId, input.strategyVersionId, input.contextKey]);
+  }
+
+  async findSignalState(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly contextKey: string;
+  }): Promise<StrategySignalState | null> {
+    const state = this.signalStates.get(this.signalStateKey(input));
+    return state === undefined ? null : structuredClone(state);
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
@@ -501,7 +523,22 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
         throw new InvariantError(`StrategySignal identity 已存在: ${signal.id}`);
       }
     }
+    if (bundle.signalState !== undefined) {
+      const existingState = this.signalStates.get(this.signalStateKey(bundle.signalState));
+      if (
+        existingState !== undefined &&
+        existingState.evaluatedAt > bundle.signalState.evaluatedAt
+      ) {
+        throw new InvariantError('StrategySignalState.evaluatedAt 不得早于已保存状态');
+      }
+    }
     this.runs.set(bundle.run.id, bundle.run);
+    if (bundle.signalState !== undefined) {
+      this.signalStates.set(
+        this.signalStateKey(bundle.signalState),
+        structuredClone(bundle.signalState),
+      );
+    }
     for (const result of bundle.results) {
       this.results.set(`${result.runId}\0${result.stockId}`, result);
     }

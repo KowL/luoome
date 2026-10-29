@@ -67,6 +67,7 @@ import type {
   StrategyRunPublicationStatus,
   StrategyRunScope,
   StrategySignal,
+  StrategySignalState,
   StrategyVersion,
 } from '../entity/strategy.js';
 import type {
@@ -813,6 +814,11 @@ export interface StrategyRepository {
 }
 
 export interface StrategyRunRepository {
+  findSignalState(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly contextKey: string;
+  }): Promise<StrategySignalState | null>;
   /** 获取正式运行的 fencing token；租约不存在或仍有效时返回 null。 */
   acquireRunLeaseToken(input: {
     readonly strategyId: string;

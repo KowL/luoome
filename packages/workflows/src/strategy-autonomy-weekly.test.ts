@@ -723,7 +723,10 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
           score: 80,
           direction: 'bullish' as const,
           evidence: ['命中'],
-          evaluationSnapshot: { baseline: { price: 100, at: baselineAt, provider: 'fixture' } },
+          evaluationSnapshot: {
+            baseline: { price: 100, at: baselineAt, provider: 'fixture' },
+            tracking: { policyVersion: 1, kind: 'entry', eligible: true },
+          },
         })),
       });
       if (scenario !== '验证信号自动补齐 T+5')

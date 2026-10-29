@@ -1486,7 +1486,179 @@ describe('run_strategy', () => {
     ]);
   });
 
-  it('edge 前态读取上一运行的 matched evaluation，连续 Day1/Day2/Day3 不重复发 signal', async () => {
+  it('只为入选与已跟踪成员发事件，离池退出不依赖被裁剪的结果行', async () => {
+    let now = new Date('2026-07-28T09:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedStrategy(ctx);
+    const base = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (base === null) throw new Error('fixture version missing');
+    const definition: StrategyDslV1 = {
+      ...base.definition,
+      selection: {
+        logic: 'all',
+        rules: [
+          { id: 'positive-price', name: '入池门槛', when: 'quote.close > 50', evidence: ['门槛'] },
+        ],
+      },
+      signals: {
+        entry: [
+          {
+            id: 'entry',
+            name: '入选事件',
+            when: 'true',
+            score: '60',
+            direction: 'bullish',
+            evidence: ['入选'],
+          },
+        ],
+        exit: [
+          {
+            id: 'exit',
+            name: '退出事件',
+            when: 'quote.close < 50',
+            score: '60',
+            direction: 'bearish',
+            evidence: ['退出'],
+          },
+        ],
+        risk: [],
+      },
+    };
+    await ctx.repos.strategy.createVersion({
+      ...base,
+      id: 'scoped-v2',
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+    });
+    await ctx.repos.strategy.publishVersion('scan-strategy', 'scoped-v2', now);
+    const original = ctx.adapters.market.fetchQuote.bind(ctx.adapters.market);
+    let high = true;
+    ctx.adapters.market.fetchQuote = async (id) => ({
+      ...(await original(id)),
+      close: money(id === '600519.SH' && high ? 100 : 10),
+    });
+    ctx.adapters.market.batchQuote = async (ids) =>
+      new Map(
+        await Promise.all(
+          ids.map(async (id) => [id, await ctx.adapters.market.fetchQuote(id)] as const),
+        ),
+      );
+    const execute = () =>
+      runStrategyTool.execute(
+        {
+          strategyId: 'scan-strategy',
+          stockIds: ['600519.SH', '002594.SZ'],
+          evaluationSessionId: 'scope-session',
+        },
+        ctx,
+      );
+    const first = await execute();
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.signals.map((s) => [s.stockId, s.ruleId])).toEqual([['600519.SH', 'entry']]);
+    expect(first.data.signals[0]?.evaluationSnapshot.tracking).toEqual({
+      policyVersion: 1,
+      kind: 'entry',
+      eligible: true,
+    });
+    now = new Date('2026-07-29T09:00:00Z');
+    const repeated = await execute();
+    expect(repeated.ok, JSON.stringify(repeated)).toBe(true);
+    if (!repeated.ok) return;
+    expect(repeated.data.signals).toEqual([]);
+    high = false;
+    now = new Date('2026-07-30T09:00:00Z');
+    const exited = await execute();
+    expect(exited.ok, JSON.stringify(exited)).toBe(true);
+    if (!exited.ok) return;
+    expect(exited.data.signals.map((s) => [s.stockId, s.ruleId])).toEqual([['600519.SH', 'exit']]);
+    const state = await ctx.repos.strategyRun.findSignalState({
+      strategyId: 'scan-strategy',
+      strategyVersionId: 'scoped-v2',
+      contextKey: 'evaluation:scope-session',
+    });
+    expect(state?.trackedStockIds).toEqual([]);
+    expect(await ctx.repos.strategyRun.signalsByRun(exited.data.run.id)).toHaveLength(1);
+  });
+
+  it('观察只接收有效跟踪事件，旧信号不会重建历史观察', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-07-28T09:00:00Z') });
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const result = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const signal = result.data.signals[0];
+    if (signal === undefined) throw new Error('fixture signal missing');
+    const legacyRunId = 'legacy-observation-run';
+    await ctx.repos.strategyRun.commitRun({
+      run: { ...result.data.run, id: legacyRunId },
+      results: result.data.results.map((row) => ({ ...row, runId: legacyRunId })),
+      signals: [
+        {
+          ...signal,
+          id: 'legacy-observation-signal',
+          runId: legacyRunId,
+          evaluationSnapshot: { baseline: signal.evaluationSnapshot.baseline },
+        },
+      ],
+    });
+    const legacy = await createStrategyObservationCandidatesTool.execute(
+      { runId: legacyRunId },
+      ctx,
+    );
+    expect(legacy).toMatchObject({ ok: true, data: { created: 0 } });
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
+    const created = await createStrategyObservationCandidatesTool.execute(
+      { runId: result.data.run.id },
+      ctx,
+    );
+    expect(created).toMatchObject({ ok: true, data: { created: 3, skipped: 0 } });
+    const repeated = await createStrategyObservationCandidatesTool.execute(
+      { runId: result.data.run.id },
+      ctx,
+    );
+    expect(repeated).toMatchObject({ ok: true, data: { created: 0, skipped: 3 } });
+  });
+
+  it('完整股票池的 evaluation session 与正式发布和触发状态隔离', async () => {
+    let now = new Date('2026-07-28T09:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const operational = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(operational.ok, JSON.stringify(operational)).toBe(true);
+    if (!operational.ok) return;
+    const key = { strategyId: 'scan-strategy', strategyVersionId: 'scan-strategy-v1' };
+    const before = await ctx.repos.strategyRun.findSignalState({
+      ...key,
+      contextKey: 'operational',
+    });
+    now = new Date('2026-07-29T09:00:00Z');
+    const evaluation = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', evaluationSessionId: 'full-session' },
+      ctx,
+    );
+    expect(evaluation.ok, JSON.stringify(evaluation)).toBe(true);
+    if (!evaluation.ok) return;
+    expect(evaluation.data.run.scope).toBe('evaluation');
+    expect(evaluation.data.run.publication?.status).toBe('non-publishing');
+    expect(
+      await ctx.repos.strategyRun.findSignalState({ ...key, contextKey: 'operational' }),
+    ).toEqual(before);
+    expect(
+      (
+        await ctx.repos.strategyRun.findSignalState({
+          ...key,
+          contextKey: 'evaluation:full-session',
+        })
+      )?.runId,
+    ).toBe(evaluation.data.run.id);
+  });
+
+  it('edge 前态读取独立状态，连续 Day1/Day2/Day3 不重复发 signal', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx, { mode: 'edge', cooldownTradingDays: 0 });

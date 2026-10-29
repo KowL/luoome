@@ -158,7 +158,8 @@ describe('strategy workspace full flow', () => {
     const detail = await getStrategyRunTool.execute({ runId: second.data.run.id }, ctx);
     expect(detail.ok).toBe(true);
     if (!detail.ok) return;
-    expect(detail.data.signals).toHaveLength(2);
+    expect(first.data.signals).toHaveLength(2);
+    expect(detail.data.signals).toEqual([]);
     expect(detail.data.stocks).toHaveLength(2);
 
     const diff = await compareStrategyRunsTool.execute({ strategyId: 'full-flow-strategy' }, ctx);

@@ -29,6 +29,13 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5
 观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
 
+正式信号采用跟踪事件口径：entry 只面向最终入选股票；exit/risk 面向当前入选及该策略版本
+此前仍在跟踪的股票，退出条件成立后结束跟踪。持续命中只在首次命中或恢复后再次命中时生成
+事件，并遵守规则冷却期；原始规则求值仍属于诊断事实。触发前态与最近事件时间独立于可裁剪的
+StrategyResult 保存，与运行事实原子提交；operational 与各 evaluation session 隔离，试跑和
+未发布运行不改正式前态。只有带有效跟踪事件范围标记的信号创建 T+1/T+3/T+5 观察。
+历史明细清理不改写运行当时的计数、建议快照及引用；读取时区分当时产出与当前可用明细。
+
 SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，不再创建、补全、展示或作为
 验收等待条件。存量 `horizon=t20` 行只保留读取兼容，不进入当前统计、推荐和实验事实。
 

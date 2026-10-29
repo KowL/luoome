@@ -610,14 +610,51 @@ export const StrategySignalSchema = z.object({
 });
 export type StrategySignal = z.infer<typeof StrategySignalSchema>;
 
+export const StrategySignalStateSchema = z.object({
+  strategyId: z.string().min(1),
+  strategyVersionId: z.string().min(1),
+  contextKey: z.string().min(1),
+  runId: z.string().min(1),
+  evaluatedAt: z.coerce.date(),
+  trackedStockIds: z.array(z.string().min(1)),
+  rules: z.array(
+    z.object({
+      stockId: z.string().min(1),
+      ruleId: z.string().min(1),
+      matched: z.boolean(),
+      lastEmittedAt: z.coerce.date().optional(),
+    }),
+  ),
+});
+export type StrategySignalState = z.infer<typeof StrategySignalStateSchema>;
+
 export interface StrategyRunBundle {
   readonly run: StrategyRun;
   readonly results: readonly StrategyResult[];
   readonly signals: readonly StrategySignal[];
+  readonly signalState?: StrategySignalState;
 }
 
 export const assertStrategyRunBundleInvariants = (bundle: StrategyRunBundle): void => {
   assertStrategyRunInvariants(bundle.run);
+  if (bundle.signalState !== undefined) {
+    const state = StrategySignalStateSchema.parse(bundle.signalState);
+    if (
+      state.runId !== bundle.run.id ||
+      state.strategyId !== bundle.run.strategyId ||
+      state.strategyVersionId !== bundle.run.strategyVersionId ||
+      bundle.run.status !== 'complete'
+    ) {
+      throw new InvariantError('StrategySignalState 必须引用同一已完成运行');
+    }
+    const identities = state.rules.map((rule) => `${rule.stockId}\0${rule.ruleId}`);
+    if (
+      new Set(identities).size !== identities.length ||
+      new Set(state.trackedStockIds).size !== state.trackedStockIds.length
+    ) {
+      throw new InvariantError('StrategySignalState 股票与规则身份必须唯一');
+    }
+  }
   if (bundle.run.status === 'running') {
     throw new InvariantError('StrategyRun bundle 只接受终态 run');
   }

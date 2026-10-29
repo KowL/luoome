@@ -125,6 +125,11 @@ export const getStrategyRunTool = defineTool({
       ...identities,
       warnings: [
         ...identities.warnings,
+        ...(typeof run.summary?.signalCount === 'number' && run.summary.signalCount > signals.length
+          ? [
+              `历史摘要 signalCount=${run.summary.signalCount}，现存信号 ${signals.length} 条，信号明细缺失 ${run.summary.signalCount - signals.length} 条；关联观察可能不完整，历史摘要保持原值。`,
+            ]
+          : []),
         ...(isPublishableOperationalRun(run)
           ? []
           : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),

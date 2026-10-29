@@ -50,6 +50,7 @@ import {
   type StrategyRun,
   type StrategySchedule,
   type StrategySignal,
+  type StrategySignalState,
   type StrategyVersion,
   type StrategyWatchlistSubscription,
   type StrictBacktestGateAudit,
@@ -2795,6 +2796,203 @@ export const registerRepositoryContractTests = (
     });
 
     describe('StrategyRunRepository', () => {
+      const stateKey = {
+        strategyId: 'strategy-1',
+        strategyVersionId: 'strategy-1-v1',
+        contextKey: 'operational:all',
+      };
+      const makeSignalState = (
+        runId: string,
+        overrides: Partial<StrategySignalState> = {},
+      ): StrategySignalState => ({
+        ...stateKey,
+        runId,
+        evaluatedAt: T2,
+        trackedStockIds: ['600519.SH', '002594.SZ'],
+        rules: [
+          { stockId: '600519.SH', ruleId: 'rule-1', matched: true, lastEmittedAt: T1 },
+          { stockId: '002594.SZ', ruleId: 'rule-1', matched: false },
+        ],
+        ...overrides,
+      });
+
+      it('signal state 独立往返并恢复嵌套日期，按 strategy/version/context 隔离', async () => {
+        expect(await repos.strategyRun.findSignalState(stateKey)).toBeNull();
+        const signalState = makeSignalState('run-state');
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-state'),
+          results: [],
+          signals: [],
+          signalState,
+        });
+        const restored = await repos.strategyRun.findSignalState(stateKey);
+        expect(restored).toEqual(signalState);
+        expect(restored?.evaluatedAt).toBeInstanceOf(Date);
+        expect(restored?.rules[0]?.lastEmittedAt).toBeInstanceOf(Date);
+        expect(restored?.rules[1]).not.toHaveProperty('lastEmittedAt');
+        for (const key of [
+          { ...stateKey, strategyId: 'other' },
+          { ...stateKey, strategyVersionId: 'other' },
+          { ...stateKey, contextKey: 'other' },
+        ])
+          expect(await repos.strategyRun.findSignalState(key)).toBeNull();
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-state-other'),
+          results: [],
+          signals: [],
+          signalState: makeSignalState('run-state-other', { contextKey: 'other' }),
+        });
+        expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(signalState);
+      });
+
+      it('signal state 在 fenced commit 成功时保存，失效 fence 不改变状态或运行', async () => {
+        const initial = makeSignalState('run-state-initial');
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun(initial.runId),
+          results: [],
+          signals: [],
+          signalState: initial,
+        });
+        const running = makeStrategyRun('run-state-fenced', {
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+          publication: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(running);
+        const token = await repos.strategyRun.acquireRunLeaseToken({
+          ...stateKey,
+          owner: 'state-worker',
+          runId: running.id,
+          now: T1,
+          leaseUntil: T3,
+        });
+        expect(token).not.toBeNull();
+        if (token === null) return;
+        const updated = makeSignalState(running.id, { evaluatedAt: T3, trackedStockIds: [] });
+        const bundle = {
+          run: makeStrategyRun(running.id),
+          results: [],
+          signals: [],
+          signalState: updated,
+        };
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token: { ...token, fence: token.fence + 1 },
+            now: T2,
+            bundle,
+          }),
+        ).toBe('lease-lost');
+        expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(initial);
+        expect(await repos.strategyRun.findRunById(running.id)).toEqual(running);
+        expect(await repos.strategyRun.commitRunWithFence({ token, now: T2, bundle })).toBe(
+          'committed',
+        );
+        expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(updated);
+      });
+
+      it('旧 evaluatedAt 拒绝整个 bundle，相同时间与更晚状态可以更新', async () => {
+        const newest = makeSignalState('run-state-new', { evaluatedAt: T3 });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun(newest.runId),
+          results: [],
+          signals: [],
+          signalState: newest,
+        });
+        await expect(
+          repos.strategyRun.commitRun({
+            run: makeStrategyRun('run-state-old'),
+            results: [makeStrategyResult('run-state-old', '600519.SH')],
+            signals: [
+              makeStrategySignal('signal-state-old', '600519.SH', { runId: 'run-state-old' }),
+            ],
+            signalState: makeSignalState('run-state-old'),
+          }),
+        ).rejects.toThrow('StrategySignalState.evaluatedAt');
+        expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(newest);
+        expect(await repos.strategyRun.findRunById('run-state-old')).toBeNull();
+        expect(await repos.strategyRun.listResults('run-state-old')).toEqual([]);
+        expect(await repos.strategyRun.signalsByRun('run-state-old')).toEqual([]);
+        for (const [runId, evaluatedAt] of [
+          ['run-state-equal', T3],
+          ['run-state-later', FAR_FUTURE],
+        ] as const) {
+          const state = makeSignalState(runId, { evaluatedAt });
+          await repos.strategyRun.commitRun({
+            run: makeStrategyRun(runId),
+            results: [],
+            signals: [],
+            signalState: state,
+          });
+          expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(state);
+        }
+      });
+
+      it('bundle 后续写入失败时 signal state 与 run 一起回滚', async () => {
+        const initial = makeSignalState('run-state-atomic');
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun(initial.runId),
+          results: [],
+          signals: [
+            makeStrategySignal('signal-state-duplicate', '600519.SH', { runId: initial.runId }),
+          ],
+          signalState: initial,
+        });
+        await expect(
+          repos.strategyRun.commitRun({
+            run: makeStrategyRun('run-state-rollback'),
+            results: [],
+            signals: [
+              makeStrategySignal('signal-state-duplicate', '600519.SH', {
+                runId: 'run-state-rollback',
+              }),
+            ],
+            signalState: makeSignalState('run-state-rollback', { evaluatedAt: T3 }),
+          }),
+        ).rejects.toThrow();
+        expect(await repos.strategyRun.findSignalState(stateKey)).toEqual(initial);
+        expect(await repos.strategyRun.findRunById('run-state-rollback')).toBeNull();
+      });
+
+      it('deleteRuns 保留独立状态，removeByStrategyId 清理全部 context 且不影响其它策略', async () => {
+        for (const contextKey of [stateKey.contextKey, 'other']) {
+          const runId = `run-state-cleanup-${contextKey}`;
+          await repos.strategyRun.commitRun({
+            run: makeStrategyRun(runId),
+            results: [],
+            signals: [],
+            signalState: makeSignalState(runId, { contextKey }),
+          });
+          await repos.strategyRun.deleteRuns([runId]);
+          expect(await repos.strategyRun.findRunById(runId)).toBeNull();
+          expect(
+            await repos.strategyRun.findSignalState({ ...stateKey, contextKey }),
+          ).not.toBeNull();
+        }
+        await repos.strategy.create(makeStrategy('strategy-2'));
+        await repos.strategy.createVersion(makeStrategyVersion('strategy-2'));
+        await repos.strategy.activateVersion('strategy-2', 'strategy-2-v1', T1);
+        const otherState = makeSignalState('run-state-other-strategy', {
+          strategyId: 'strategy-2',
+          strategyVersionId: 'strategy-2-v1',
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun(otherState.runId, {
+            strategyId: otherState.strategyId,
+            strategyVersionId: otherState.strategyVersionId,
+          }),
+          results: [],
+          signals: [],
+          signalState: otherState,
+        });
+        await repos.strategyRun.removeByStrategyId('strategy-1');
+        expect(await repos.strategyRun.findSignalState(stateKey)).toBeNull();
+        expect(
+          await repos.strategyRun.findSignalState({ ...stateKey, contextKey: 'other' }),
+        ).toBeNull();
+        expect(await repos.strategyRun.findSignalState(otherState)).toEqual(otherState);
+      });
+
       beforeEach(async () => {
         await repos.strategy.create(makeStrategy('strategy-1'));
         await repos.strategy.createVersion(makeStrategyVersion('strategy-1'));

@@ -452,17 +452,14 @@ export const collectStrategyInsightFacts = async (
     .sort((left, right) => right.count - left.count || left.ruleId.localeCompare(right.ruleId))
     .slice(0, 10);
 
-  const publishedRunIds = new Set(usableRuns.map((run) => run.id));
-  const signals = (await ctx.repos.strategyRun.signalsByStrategy(strategyId, from)).filter(
-    (signal) => publishedRunIds.has(signal.runId),
-  );
   const observationEvidence = await collectStrategyObservationEvidence({
     ctx,
-    signals,
+    runs: usableRuns,
     horizons: HORIZONS,
     maxObservations: OBSERVATION_LIMIT,
     sourceLabel: 'strategy insight',
   });
+  const signals = observationEvidence.signals;
   const observations = observationEvidence.observations;
   const sampledObservationCount = observationEvidence.sampledObservationCount;
   const observationsTruncated = observationEvidence.truncated;
@@ -541,7 +538,14 @@ export const collectStrategyInsightFacts = async (
   const limitations: string[] = [];
   limitations.push(...observationEvidence.limitations);
   if (allRuns.length === 0) limitations.push('观察窗口内没有策略运行，无法判断股票池变化。');
-  if (signals.length === 0) limitations.push('观察窗口内没有策略信号，暂无事后表现样本。');
+  if (
+    signals.length === 0 &&
+    !usableRuns.some(
+      (run) => typeof run.summary?.signalCount === 'number' && run.summary.signalCount > 0,
+    )
+  ) {
+    limitations.push('观察窗口内没有策略信号，暂无事后表现样本。');
+  }
   if (signals.length > 0 && observations.length === 0) {
     limitations.push('窗口内信号尚无观察候选；Phase B 启用前的历史运行不会反向伪造观察基准。');
   }

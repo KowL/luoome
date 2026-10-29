@@ -930,6 +930,17 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
     sql`CREATE INDEX IF NOT EXISTS strategy_run_leases_until_idx ON strategy_run_leases (lease_until)`,
   );
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_signal_states (
+      strategy_id TEXT NOT NULL,
+      strategy_version_id TEXT NOT NULL,
+      context_key TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      evaluated_at INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      PRIMARY KEY (strategy_id, strategy_version_id, context_key)
+    )
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_results (
       run_id TEXT NOT NULL,
       stock_id TEXT NOT NULL,

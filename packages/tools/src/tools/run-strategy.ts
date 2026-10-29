@@ -6,15 +6,13 @@ import {
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   dateInShanghai,
   decideStrategyRunPublication,
-  decideStrategySignalEmission,
   deriveStrategyRunScope,
   deriveStrategyRunUniverseKind,
   evaluateStrategyStock,
-  getStrategySignalEmission,
   inspectStrategyDefinitionReferences,
   isPublishableOperationalRun,
   isSTName,
-  readStrategyRunSnapshot,
+  planStrategySignalEvents,
   resolveFactDate,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
@@ -165,10 +163,13 @@ export const runStrategyTool = defineTool({
     const version = resolved;
     const leaseOwner = `run-strategy:${globalThis.crypto.randomUUID()}`;
     const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
-    const scope = deriveStrategyRunScope({
-      mode: input.mode,
-      hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
-    });
+    const scope =
+      input.evaluationSessionId !== undefined
+        ? 'evaluation'
+        : deriveStrategyRunScope({
+            mode: input.mode,
+            hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
+          });
     const universeKind = deriveStrategyRunUniverseKind({
       hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
     });
@@ -609,68 +610,87 @@ export const runStrategyTool = defineTool({
         .filter((result) => !retainedIds.has(result.stockId))
         .map((result) => result.stockId);
       const rawSignals = ranked.flatMap((item) => item.signals);
-      const priorRuns = (
-        await ctx.repos.strategyRun.listRuns({
-          strategyId: input.strategyId,
-          scope,
-          limit: 500,
-        })
-      )
-        .filter((candidate) => {
-          if (candidate.strategyVersionId !== version.id) return false;
-          if (candidate.dataAsOf.getTime() >= dataAsOf.getTime()) return false;
-          if (scope === 'operational' && !isPublishableOperationalRun(candidate)) return false;
-          if (scope !== 'evaluation') return true;
-          if (input.evaluationSessionId === undefined) return false;
-          return (
-            readStrategyRunSnapshot(candidate.inputSnapshot).evaluationSessionId ===
-            input.evaluationSessionId
+      const contextKey =
+        scope === 'operational'
+          ? 'operational'
+          : `evaluation:${input.evaluationSessionId ?? runId}`;
+      let previousState = input.persist
+        ? ((await ctx.repos.strategyRun.findSignalState({
+            strategyId: input.strategyId,
+            strategyVersionId: version.id,
+            contextKey,
+          })) ?? undefined)
+        : undefined;
+      // 首次升级从上次正式入选成员衔接跟踪；不为全市场诊断结果建立事件状态。
+      if (previousState === undefined && scope === 'operational') {
+        const previous = await ctx.repos.strategyRun.findLatestPublishedRun(input.strategyId);
+        if (
+          previous !== null &&
+          previous.strategyVersionId === version.id &&
+          previous.dataAsOf.getTime() < dataAsOf.getTime()
+        ) {
+          const selected = await ctx.repos.strategyRun.listSelectedResultsByRuns([previous.id]);
+          const eligibleRuns = await ctx.repos.strategyRun.listRuns({
+            strategyId: input.strategyId,
+            scope: 'operational',
+            publication: 'published',
+            limit: 500,
+          });
+          const historicalSignals = await ctx.repos.strategyRun.signalsByRuns(
+            eligibleRuns
+              .filter(
+                (run) => run.strategyVersionId === version.id && run.dataAsOf <= previous.dataAsOf,
+              )
+              .map((run) => run.id),
           );
-        })
-        .sort((left, right) => right.dataAsOf.getTime() - left.dataAsOf.getTime());
-      const previousRun = priorRuns[0];
-      const previousResults =
-        previousRun === undefined ? [] : await ctx.repos.strategyRun.listResults(previousRun.id);
-      const signalRules = new Map(
-        [...definition.signals.entry, ...definition.signals.exit, ...definition.signals.risk].map(
-          (rule) => [rule.id, rule] as const,
-        ),
-      );
-      const previousMatchedByRuleStock = new Set(
-        previousResults.flatMap((result) =>
-          result.ruleEvaluations
-            .filter(
-              (evaluation) => evaluation.status === 'matched' && signalRules.has(evaluation.ruleId),
-            )
-            .map((evaluation) => `${evaluation.ruleId}\0${result.stockId}`),
-        ),
-      );
-      const priorSignals = await Promise.all(
-        priorRuns.map((run) => ctx.repos.strategyRun.signalsByRun(run.id)),
-      );
-      const previousByRuleStock = new Map<string, (typeof priorSignals)[number][number]>();
-      for (const signalsForRun of priorSignals) {
-        for (const signal of signalsForRun) {
-          const key = `${signal.ruleId}\0${signal.stockId}`;
-          const existing = previousByRuleStock.get(key);
-          if (existing === undefined || existing.ts.getTime() < signal.ts.getTime()) {
-            previousByRuleStock.set(key, signal);
+          const lastEmitted = new Map<string, Date>();
+          for (const signal of historicalSignals) {
+            const key = `${signal.stockId}\0${signal.ruleId}`;
+            const prior = lastEmitted.get(key);
+            if (prior === undefined || prior < signal.ts) lastEmitted.set(key, signal.ts);
           }
+          previousState = {
+            strategyId: input.strategyId,
+            strategyVersionId: version.id,
+            contextKey,
+            runId: previous.id,
+            evaluatedAt: previous.dataAsOf,
+            trackedStockIds: selected.map((result) => result.stockId),
+            rules: selected.flatMap((result) =>
+              result.ruleEvaluations.flatMap((evaluation) => {
+                if (
+                  !('schemaVersion' in evaluation) ||
+                  evaluation.schemaVersion !== 2 ||
+                  evaluation.scope === 'selection' ||
+                  (evaluation.status !== 'matched' && evaluation.status !== 'not-matched')
+                )
+                  return [];
+                const lastEmittedAt = lastEmitted.get(`${result.stockId}\0${evaluation.ruleId}`);
+                return [
+                  {
+                    stockId: result.stockId,
+                    ruleId: evaluation.ruleId,
+                    matched: evaluation.status === 'matched',
+                    ...(lastEmittedAt === undefined ? {} : { lastEmittedAt }),
+                  },
+                ];
+              }),
+            ),
+          };
         }
       }
-      const signals = rawSignals.filter((signal) => {
-        const rule = signalRules.get(signal.ruleId);
-        const key = `${signal.ruleId}\0${signal.stockId}`;
-        const previousSignal = previousByRuleStock.get(key);
-        const decision = decideStrategySignalEmission({
-          ...(rule === undefined ? {} : { emission: getStrategySignalEmission(rule) }),
-          matched: true,
-          previousMatched: previousMatchedByRuleStock.has(key),
-          ...(previousSignal === undefined ? {} : { previousSignal }),
-          now: dataAsOf,
-        });
-        return decision.emit;
+      const eventPlan = planStrategySignalEvents({
+        strategyId: input.strategyId,
+        strategyVersionId: version.id,
+        contextKey,
+        runId,
+        now: dataAsOf,
+        definition,
+        results,
+        rawSignals,
+        ...(previousState === undefined ? {} : { previousState }),
       });
+      const signals = eventPlan.signals;
       const evaluationAudit = evaluationData.audit(evaluationRequest, evaluationBatch);
       const incompleteCount = ranked.filter((item) => item.partial).length;
       const finishedAt = ctx.clock();
@@ -777,7 +797,18 @@ export const runStrategyTool = defineTool({
         const committed = await ctx.repos.strategyRun.commitRunWithFence({
           token: leaseToken,
           now: ctx.clock(),
-          bundle: { run, results: retention.results, signals },
+          bundle: {
+            run,
+            results: retention.results,
+            signals,
+            ...((isPublishableOperationalRun(run) ||
+              (scope === 'evaluation' &&
+                input.evaluationSessionId !== undefined &&
+                run.status === 'complete')) &&
+            eventPlan.state.runId === run.id
+              ? { signalState: eventPlan.state }
+              : {}),
+          },
         });
         if (committed === 'lease-lost') return errLeaseLostBeforeCommit();
       }

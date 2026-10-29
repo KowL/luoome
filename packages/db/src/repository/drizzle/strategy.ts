@@ -14,6 +14,7 @@ import {
   type StrategyRunRepository,
   StrategyRunSchema,
   type StrategySignal,
+  type StrategySignalState,
   type StrategyVersion,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
@@ -25,6 +26,7 @@ import {
   strategyResults,
   strategyRunLeases,
   strategyRuns,
+  strategySignalStates,
   strategySignals,
   strategyVersions,
 } from '../../schema/index.js';
@@ -585,9 +587,39 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         tx.delete(strategyResults).where(inArray(strategyResults.runId, runIds)).run();
       }
       tx.delete(strategySignals).where(eq(strategySignals.strategyId, strategyId)).run();
+      tx.delete(strategySignalStates).where(eq(strategySignalStates.strategyId, strategyId)).run();
       tx.delete(strategyRuns).where(eq(strategyRuns.strategyId, strategyId)).run();
       tx.delete(strategyRunLeases).where(eq(strategyRunLeases.strategyId, strategyId)).run();
     });
+  }
+
+  async findSignalState(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly contextKey: string;
+  }): Promise<StrategySignalState | null> {
+    const row = this.db
+      .select()
+      .from(strategySignalStates)
+      .where(
+        and(
+          eq(strategySignalStates.strategyId, input.strategyId),
+          eq(strategySignalStates.strategyVersionId, input.strategyVersionId),
+          eq(strategySignalStates.contextKey, input.contextKey),
+        ),
+      )
+      .get();
+    if (row === undefined) return null;
+    return {
+      ...row.state,
+      evaluatedAt: new Date(row.state.evaluatedAt),
+      rules: row.state.rules.map((rule) => ({
+        ...rule,
+        ...(rule.lastEmittedAt === undefined
+          ? {}
+          : { lastEmittedAt: new Date(rule.lastEmittedAt) }),
+      })),
+    };
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
@@ -827,6 +859,42 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   }
 
   private commitRunInTransaction(tx: DrizzleTransaction, bundle: StrategyRunBundle): void {
+    if (bundle.signalState !== undefined) {
+      const state = bundle.signalState;
+      const existingState = tx
+        .select()
+        .from(strategySignalStates)
+        .where(
+          and(
+            eq(strategySignalStates.strategyId, state.strategyId),
+            eq(strategySignalStates.strategyVersionId, state.strategyVersionId),
+            eq(strategySignalStates.contextKey, state.contextKey),
+          ),
+        )
+        .get();
+      if (existingState !== undefined && existingState.evaluatedAt > state.evaluatedAt) {
+        throw new InvariantError('StrategySignalState.evaluatedAt 不得早于已保存状态');
+      }
+      const values = {
+        strategyId: state.strategyId,
+        strategyVersionId: state.strategyVersionId,
+        contextKey: state.contextKey,
+        runId: state.runId,
+        evaluatedAt: state.evaluatedAt,
+        state,
+      };
+      tx.insert(strategySignalStates)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [
+            strategySignalStates.strategyId,
+            strategySignalStates.strategyVersionId,
+            strategySignalStates.contextKey,
+          ],
+          set: values,
+        })
+        .run();
+    }
     const runValues = {
       id: bundle.run.id,
       strategyId: bundle.run.strategyId,

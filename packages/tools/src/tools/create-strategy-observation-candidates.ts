@@ -1,6 +1,7 @@
 import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   ActiveSignalObservationHorizonSchema,
+  isObservableStrategySignal,
   isPublishableOperationalRun,
   type StrategySignal,
   type ToolContext,
@@ -87,7 +88,9 @@ export const createStrategyObservationCandidatesTool = defineTool({
         '只有 published operational StrategyRun 或显式验证 session 才能创建观察候选',
       );
     }
-    const signals = await ctx.repos.strategyRun.signalsByRun(input.runId);
+    const signals = (await ctx.repos.strategyRun.signalsByRun(input.runId)).filter(
+      isObservableStrategySignal,
+    );
     const baselineBySignal = new Map(
       signals.map((signal) => [signal.id, baselineFromSignal(signal)] as const),
     );
