@@ -1094,7 +1094,6 @@ const runAcceptance = async () => {
   await page.evaluate(
     `([...document.querySelectorAll('.luo-market-tabs button')].find(button => button.textContent === '自选')).click()`,
   );
-  const overviewStockReads = stockDetailReads;
   for (const section of [
     'indices',
     'sentiment',
@@ -1325,6 +1324,8 @@ const runAcceptance = async () => {
   );
   await page.screenshot(join(evidenceDir, 'settings-desktop.png'));
 
+  // 看盘页新布局会读取关注成员的行情，所以这里的基准是打开关注面板那一刻的读取数。
+  const watchPanelStockReads = stockDetailReads;
   await clickPanel('关注');
   await page.waitFor(`document.querySelector('.luo-watch-choice') !== null`, '关注独立菜单');
   const fillWatchField = (label: string, value: string) =>
@@ -1335,33 +1336,19 @@ const runAcceptance = async () => {
     Object.getOwnPropertyDescriptor(prototype, 'value').set.call(field, ${JSON.stringify(value)});
     field.dispatchEvent(new Event(field.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
   })()`);
-  const confirmWatchEdit = async () => {
-    await page.waitFor(
-      `Array.from(document.querySelectorAll('.luo-watch-confirm button')).some((item) => item.textContent === '确认修改' && !item.disabled)`,
-      '关注修改等待确认',
-    );
-    await clickAction('确认修改');
+  // 个人版按明确意图直接执行：面板提交后回执直接是「已完成」，不再有等待确认的状态。
+  const waitWatchDone = async () => {
     await page.waitFor(
       `document.querySelector('.luo-watch-confirm .luo-card-meta')?.textContent === '已完成'`,
-      '关注修改完成',
+      '关注操作回执完成',
     );
   };
   await clickAction('新建列表');
   await fillWatchField('列表名称', '浏览器手动关注');
   await fillWatchField('关注说明', '用于验证手动与 AI 管理');
-  await clickAction('预览修改');
-  await page.waitFor(
-    `document.querySelector('.luo-watch-confirm')?.innerText.includes('等待确认')`,
-    '关注创建预览',
-  );
-  const beforeWatchCreate = toolData(
-    await fetchState(origin, cookie, 'watchlists'),
-    'list_watchlists',
-  ) as { items: { watchlist: { id: string; name: string } }[] };
-  if (beforeWatchCreate.items.some((item) => item.watchlist.name === '浏览器手动关注'))
-    throw new Error('关注预览不能写库');
-  await page.screenshot(join(evidenceDir, 'watchlists-confirm-desktop.png'));
-  await confirmWatchEdit();
+  await clickAction('保存修改');
+  await waitWatchDone();
+  await page.screenshot(join(evidenceDir, 'watchlists-created-desktop.png'));
   await page.waitFor(
     `document.querySelector('.luo-watch-content .luo-card-t')?.textContent === '浏览器手动关注'`,
     '选中新建关注列表',
@@ -1389,21 +1376,10 @@ const runAcceptance = async () => {
     await clickAction('添加股票');
     await fillWatchField('股票代码', fixtureInfo.stock.id);
     await fillWatchField('关注理由', '验证持续研究理由');
-    await clickAction('预览修改');
-    await page.waitFor(
-      `document.querySelector('.luo-watch-confirm')?.innerText.includes('等待确认')`,
-      '添加股票预览',
-    );
+    await clickAction('保存修改');
+    await waitWatchDone();
   };
   await prepareWatchMember();
-  await clickAction('取消操作');
-  await page.waitFor(
-    `document.querySelector('.luo-watch-confirm .luo-card-meta')?.textContent === '已取消'`,
-    '取消添加股票',
-  );
-  if ((await readWatchMembers()).members.length !== 0) throw new Error('取消操作不应添加成员');
-  await prepareWatchMember();
-  await confirmWatchEdit();
   await page.waitFor(
     `document.querySelector('.luo-watch-member')?.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
     '成员股票名称和代码',
@@ -1411,8 +1387,8 @@ const runAcceptance = async () => {
   await clickAction('调整阶段与优先级');
   await fillWatchField('研究阶段', 'researching');
   await fillWatchField('优先级', 'important');
-  await clickAction('预览修改');
-  await confirmWatchEdit();
+  await clickAction('保存修改');
+  await waitWatchDone();
   const watchMembers = await readWatchMembers();
   if (
     watchMembers.members.length !== 1 ||
@@ -1426,20 +1402,20 @@ const runAcceptance = async () => {
   );
   await clickAction('关闭回执');
   await page.screenshot(join(evidenceDir, 'watchlists-desktop.png'));
-  if (stockDetailReads !== 0) throw new Error('关注列表不应预取个股行情');
+  if (stockDetailReads !== watchPanelStockReads) throw new Error('关注列表不应预取个股行情');
   await page.evaluate(`document.querySelector('.luo-watch-member .luo-stock-link').click()`);
   await page.waitFor(
     `document.querySelector('dialog[open]')?.innerText.includes('关注来源') && document.querySelector('dialog[open] .luo-stock-price') !== null`,
     '关注股票行情详情',
   );
-  if (stockDetailReads !== 1) throw new Error('关注详情应只读取当前股票行情');
+  if (stockDetailReads !== watchPanelStockReads + 1)
+    throw new Error('关注详情应只读取当前股票行情');
   await page.evaluate(`document.querySelector('dialog[open] [aria-label="关闭个股详情"]').click()`);
   await clickAction('移除手动关注');
-  await confirmWatchEdit();
+  await waitWatchDone();
   await page.waitFor(`document.querySelectorAll('.luo-watch-member').length === 0`, '移除手动成员');
   if ((await readWatchMembers()).members.length !== 0) throw new Error('移除未持久化');
   await prepareWatchMember();
-  await confirmWatchEdit();
   await page.waitFor(`document.querySelector('.luo-watch-member') !== null`, '恢复关注成员');
   await clickAction('交给 AI 管理');
   await page.waitFor(
@@ -1484,6 +1460,8 @@ const runAcceptance = async () => {
   await new Promise((done) => setTimeout(done, 250));
   await page.screenshot(join(evidenceDir, 'review-desktop.png'));
 
+  // 关注面板读过一只个股行情，策略面板的基准取打开策略面板那一刻的读取数。
+  const strategyPanelStockReads = stockDetailReads;
   await clickPanel('策略');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.strategyName)})`,
@@ -1616,7 +1594,7 @@ const runAcceptance = async () => {
   );
   await new Promise((done) => setTimeout(done, 150));
   await page.screenshot(join(evidenceDir, 'strategies-matches-desktop.png'));
-  if (stockDetailReads !== overviewStockReads) throw new Error('策略列表不应预取所有个股行情');
+  if (stockDetailReads !== strategyPanelStockReads) throw new Error('策略列表不应预取所有个股行情');
   stockQuoteFailure = true;
   await page.evaluate(
     `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]').click()`,
@@ -1826,11 +1804,25 @@ const runAcceptance = async () => {
   if (overflow > 1) throw new Error(`移动端出现横向溢出 ${String(overflow)}px`);
   await dismissNotice();
   await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
+  // 移动端侧栏在 DOM 里排在主内容之后，按文案匹配会先命中看盘页的「持仓」标签页，
+  // 所以移动端按 aria-label 点侧栏条目。
+  const clickMobilePanel = async (label: string) => {
+    const clicked = await page.evaluate<boolean>(
+      `(() => {
+        const target = [...document.querySelectorAll('button[aria-label]')].find((element) => element.getAttribute('aria-label') === ${JSON.stringify(label)});
+        if (!target) return false;
+        target.click();
+        return true;
+      })()`,
+    );
+    if (!clicked) throw new Error(`无法点击移动端侧栏条目 ${label}`);
+  };
   for (const [label, title, file] of [
     ['持仓', '持仓与账本', 'positions-mobile.png'],
     ['投资设置', 'FUYAO（同花顺）', 'settings-mobile.png'],
   ]) {
-    await clickPanel(label as string);
+    if (label === '投资设置') await clickPanel(label as string);
+    else await clickMobilePanel(label as string);
     await page.waitFor(
       `document.body.innerText.includes(${JSON.stringify(title)})`,
       `${label}窄屏`,
@@ -2250,10 +2242,38 @@ const runAcceptance = async () => {
   await page.setViewport(390, 844, true);
   for (const title of ['问题与规则', '试跑与诊断', '分层验证', '结论与更新']) {
     await researchTab(title);
-    const excess = await page.evaluate<number>(
-      'Math.max(document.documentElement.scrollWidth - innerWidth, ...[...document.querySelectorAll(".luo-research-workbench, .luo-research-stage, .luo-research-operation")].map((element) => element.scrollWidth - element.clientWidth))',
+    // 等两帧再量：切换步骤与 390px 视口都会触发重排，量到的是稳定后的布局。
+    await page.evaluate(
+      'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(null))))',
     );
-    if (excess > 1) throw new Error(`390px 研究步骤 ${title} 横向溢出 ${excess}px`);
+    const overflow = await page.evaluate<{ excess: number; source: string }>(
+      `(() => {
+        const candidates = [...document.querySelectorAll('.luo-research-workbench, .luo-research-stage, .luo-research-operation')].map((element) => ({
+          excess: element.scrollWidth - element.clientWidth,
+          source: element.tagName.toLowerCase() + '.' + element.className,
+        }));
+        candidates.push({
+          excess: document.documentElement.scrollWidth - innerWidth,
+          source: 'document',
+        });
+        const worst = candidates.reduce((left, right) => (right.excess > left.excess ? right : left));
+        const scrollers = [...document.querySelectorAll('.luo-root *')]
+          .map((element) => ({
+            excess: element.scrollWidth - element.clientWidth,
+            source: element.tagName.toLowerCase() + '.' + element.className,
+          }))
+          .filter((item) => item.excess > 1)
+          .sort((left, right) => right.excess - left.excess)
+          .slice(0, 6)
+          .map((item) => item.source + ' +' + item.excess);
+        const culprit = scrollers.length > 0 ? ' | 自身溢出的元素: ' + scrollers.join(', ') : '';
+        return { excess: worst.excess, source: worst.source + culprit };
+      })()`,
+    );
+    if (overflow.excess > 1)
+      throw new Error(
+        `390px 研究步骤 ${title} 横向溢出 ${overflow.excess}px（${overflow.source}）`,
+      );
     await page.screenshot(
       join(
         evidenceDir,

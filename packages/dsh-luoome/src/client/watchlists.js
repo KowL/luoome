@@ -135,7 +135,7 @@ function WatchlistEditor({ draft, busy, onSubmit, onClose }) {
               (draft.tool === 'add_watchlist_member' &&
                 (!input.stockId?.trim() || !input.reason?.trim())),
           },
-          busy ? '准备中…' : '预览修改',
+          busy ? '准备中…' : '保存修改',
         ),
         button('取消编辑', onClose, busy),
       ),

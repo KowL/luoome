@@ -396,6 +396,8 @@ export const STYLE = `
 .luo-rule-editor legend { padding: 0 6px; color: var(--lu-ink-2); font: 500 12px/1.5 var(--lu-sans); max-width: 100%; overflow-wrap: anywhere; }
 .luo-rule-editor > details { margin: 12px 0; font-size: 12px; }
 .luo-condition-editor { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(65px, .6fr) minmax(0, 1fr); gap: 10px; }
+.luo-condition-editor > * { min-width: 0; }
+.luo-field > span { overflow-wrap: anywhere; }
 .luo-score-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; }
 .luo-catalog-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin: 15px 0 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; }
 .luo-catalog-fields li { display: grid; gap: 5px; padding: 9px 0; border-bottom: 1px solid var(--lu-line); overflow-wrap: anywhere; }

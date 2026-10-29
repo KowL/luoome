@@ -1,5 +1,5 @@
 import { createElement as h, useEffect, useState } from 'react';
-import { int, when } from './format.js';
+import { int, tradeDate, when } from './format.js';
 import { Card, Empty, ErrorNote, Pill, Refresh, SkeletonLines } from './primitives.js';
 import { strategyText } from './projection.js';
 import { useResearchOperation, useResearchRead } from './research-data.js';
@@ -98,7 +98,7 @@ function ResearchDiagnosis({ strategy, workspace, trial, versions, onAnalyzeStoc
   }, [trial]);
   return h(
     Card,
-    { title: '选股诊断', meta: run ? `事实时间 ${when(run.dataAsOf)}` : '尚无运行事实' },
+    { title: '选股诊断', meta: run ? `事实时间 ${tradeDate(run.dataAsOf)}` : '尚无运行事实' },
     h(
       'div',
       { className: 'luo-research-fields' },
@@ -839,7 +839,7 @@ function ResearchWorkbenchBody({
                   h(
                     'p',
                     { className: 'luo-fine' },
-                    `事实时间 ${when(trial.inputIdentity?.dataAsOf)} · 采集时间 ${when(trial.inputIdentity?.capturedAt)} · 样本 ${int(trial.stockIds.length)} 只`,
+                    `事实时间 ${tradeDate(trial.inputIdentity?.dataAsOf)} · 采集时间 ${when(trial.inputIdentity?.capturedAt)} · 样本 ${int(trial.stockIds.length)} 只`,
                   ),
                   h(
                     'p',
@@ -1323,7 +1323,7 @@ function ResearchWorkbenchBody({
                 h(
                   'p',
                   { className: 'luo-fine' },
-                  `事实时间 ${when(form.comparison.dataAsOf)}。保存时保留完整候选、失败与限制；变更基线或样本后应重新比较。`,
+                  `事实时间 ${tradeDate(form.comparison.dataAsOf)}。保存时保留完整候选、失败与限制；变更基线或样本后应重新比较。`,
                 ),
                 h(
                   Button,
@@ -1389,7 +1389,7 @@ function ResearchWorkbenchBody({
                       h(
                         'summary',
                         null,
-                        `${when(record.dataAsOf)} · ${int(record.candidates.length)} 个候选`,
+                        `${tradeDate(record.dataAsOf)} · ${int(record.candidates.length)} 个候选`,
                       ),
                       record.candidates.map((candidate) =>
                         h(

@@ -24,6 +24,7 @@ import {
   ratio,
   relative,
   STRATEGY_STATUS,
+  tradeDate,
   WATCH_STATE,
   when,
 } from './format.js';
@@ -296,7 +297,7 @@ const referenceLabels = (strategy, workspace) => {
     ...versions.map((version) => ({ id: version.id, label: versionLabel(version) })),
     ...[workspace?.currentRun, workspace?.latestAttempt, workspace?.previousRun]
       .filter(Boolean)
-      .map((run) => ({ id: run.id, label: `事实时间 ${when(run.dataAsOf)} 的运行` })),
+      .map((run) => ({ id: run.id, label: `事实时间 ${tradeDate(run.dataAsOf)} 的运行` })),
     ...rules.map((rule, index) => ({
       id: rule.id,
       label: rule.name === rule.id ? `条件 ${index + 1}` : strategyText(rule.name),
@@ -584,7 +585,7 @@ const MatchesCard = ({ workspace, text, onSelectStock }) => {
           h(
             'span',
             null,
-            `${versionLabel(workspace.currentRunVersion)} · 事实时间 ${when(run.dataAsOf)}`,
+            `${versionLabel(workspace.currentRunVersion)} · 事实时间 ${tradeDate(run.dataAsOf)}`,
           ),
         )
       : null,
@@ -696,7 +697,7 @@ const StrategyRunCard = ({ strategy, state, workspace, onManage }) => {
               { tone: schedule?.enabled ? 'accent' : 'quiet', dot: true },
               schedule?.enabled ? '策略日程已开启 · 执行待核对' : '策略日程未开启',
             ),
-            run ? h(Pill, null, `最近结果 ${when(run.dataAsOf)}`) : null,
+            run ? h(Pill, null, `最近结果 ${tradeDate(run.dataAsOf)}`) : null,
           ),
           schedule
             ? h(

@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
 import { useStockDetail, useStockHistory } from './data.js';
-import { bigMoney, int, money, points, when } from './format.js';
+import { bigMoney, int, money, points, tradeDate, when } from './format.js';
 import { Card, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
 
 export function StockHistory({ marketView }) {
@@ -275,7 +275,7 @@ export function StockDetail({
             Card,
             { title: sourceLabel, meta: `第 ${version.version} 版` },
             h('p', { className: 'luo-stock-strategy-name' }, strategyName),
-            h('p', { className: 'luo-fine' }, `匹配事实时间 ${when(result.dataAsOf)}`),
+            h('p', { className: 'luo-fine' }, `匹配事实时间 ${tradeDate(result.dataAsOf)}`),
             h(
               'div',
               { className: 'luo-stats luo-stock-match-stats' },

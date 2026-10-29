@@ -29,6 +29,13 @@ const weekdayFmt = new Intl.DateTimeFormat('zh-CN', {
   day: 'numeric',
   weekday: 'long',
 });
+// 日线口径的事实时间：日线源只给到交易日，日期锚在 UTC 零点。
+// 按上海时区换算会多出 8 点，展示会变成「10/28 08:00」这种假时刻，只显示日期。
+const tradeDateFmt = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: SHANGHAI,
+  month: '2-digit',
+  day: '2-digit',
+});
 
 const isNum = (value) => typeof value === 'number' && Number.isFinite(value);
 const asDate = (value) => {
@@ -77,6 +84,11 @@ export const toneClass = (value) => `luo-${toneOf(value)}`;
 export const when = (value) => {
   const date = asDate(value);
   return date ? dateTimeFmt.format(date) : '—';
+};
+/** 交易日（YYYY/MM/DD）：日线口径的事实时间只显示日期，不暴露 UTC 零点换算出的假时刻。 */
+export const tradeDate = (value) => {
+  const date = asDate(value);
+  return date ? tradeDateFmt.format(date) : '—';
 };
 export const clock = (value) => {
   const date = asDate(value);

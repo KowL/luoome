@@ -1,5 +1,5 @@
 import { createElement as h } from 'react';
-import { int, money, ratio, when } from './format.js';
+import { int, money, ratio, tradeDate, when } from './format.js';
 import { Card, Empty, ErrorNote, Pill, Stat } from './primitives.js';
 import { strategyExpression, strategyText } from './projection.js';
 import { DIAGNOSIS_KIND, evidenceValue, RESEARCH_STATUS } from './research-model.js';
@@ -269,7 +269,7 @@ export const ValidationFacts = ({ data, loading, error, operation, strategyId, s
             h(
               'li',
               { key: item.dataAsOf },
-              h('strong', null, when(item.dataAsOf)),
+              h('strong', null, tradeDate(item.dataAsOf)),
               h(
                 'span',
                 null,
@@ -294,7 +294,7 @@ export const RobustnessFacts = ({ comparison, versions }) =>
     h(
       'p',
       { className: 'luo-fine' },
-      `共享事实时间 ${when(comparison.inputIdentity.dataAsOf)} · ${comparison.candidates.length} 个候选全部保留 · ${comparison.trainingValidation.status === 'isolated' ? '训练/验证已核对隔离，验证未用于选参' : '未配置独立训练/验证，不代表样本外验证'}`,
+      `共享事实时间 ${tradeDate(comparison.inputIdentity.dataAsOf)} · ${comparison.candidates.length} 个候选全部保留 · ${comparison.trainingValidation.status === 'isolated' ? '训练/验证已核对隔离，验证未用于选参' : '未配置独立训练/验证，不代表样本外验证'}`,
     ),
     comparison.candidates.map((candidate) =>
       h(
