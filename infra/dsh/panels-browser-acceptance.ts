@@ -2451,6 +2451,19 @@ try {
   for (const chrome of chromeProcesses) {
     if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
   }
+  // 等 Chrome 真正退出后再删 profile，否则残留写入会让删除报 ENOTEMPTY。
+  await Promise.all(
+    chromeProcesses.map(
+      (chrome) =>
+        new Promise<void>((done) => {
+          if (chrome.exitCode !== null || chrome.signalCode !== null) {
+            done();
+            return;
+          }
+          chrome.once('exit', () => done());
+        }),
+    ),
+  );
   for (const fixture of launched) {
     if (fixture.child.exitCode === null && fixture.child.signalCode === null)
       fixture.child.kill('SIGKILL');
@@ -2460,5 +2473,5 @@ try {
   fuyaoGateway.closeAllConnections();
   fuyaoGateway.close();
   if (process.exitCode !== 1 && process.env.KEEP !== '1')
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
