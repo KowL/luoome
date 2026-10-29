@@ -1,10 +1,8 @@
 import { createElement as h, useCallback, useState } from 'react';
 
-import { IDLE_REFRESH_INTERVAL_MS, TRADING_REFRESH_INTERVAL_MS } from './auto-refresh.js';
 import { dataOf, useAutoRefresh, useOverviewSection } from './data.js';
 import {
   bigMoney,
-  clock,
   DECISION,
   DELIVERY,
   HORIZON,
@@ -15,12 +13,10 @@ import {
   points,
   RULE_KIND,
   ratio,
-  relative,
   SUBJECT_KIND,
   signedMoney,
   subjectTitle,
   toneOf,
-  WATCH_STATE,
   WATCHLIST_KIND,
   when,
 } from './format.js';
@@ -50,39 +46,6 @@ const SESSION_TONE = {
   'non-trading-day': 'quiet',
 };
 
-const AUTO_REFRESH_PREFIX = {
-  'pre-open': '盘前',
-  'midday-break': '午间休市',
-  closed: '交易时段外',
-  'non-trading-day': '非交易日',
-};
-
-/** 头部刷新节奏提示：一眼能看出当前是否在自动刷新、下一次什么时候刷新。 */
-const autoRefreshHint = (marketSession, nextSessionStart) => {
-  const tradingText = `盘中自动刷新 · 每 ${TRADING_REFRESH_INTERVAL_MS / 1000} 秒`;
-  const idleText = `每 ${IDLE_REFRESH_INTERVAL_MS / 60_000} 分钟检查`;
-  if (marketSession === 'trading') return { tone: 'accent', text: tradingText };
-  if (marketSession === undefined || marketSession === null) {
-    return { tone: 'quiet', text: `时段未知 · ${idleText}` };
-  }
-  const prefix = AUTO_REFRESH_PREFIX[marketSession] ?? '交易时段外';
-  if (nextSessionStart) {
-    return { tone: 'quiet', text: `${prefix} · ${when(nextSessionStart)} 后自动刷新` };
-  }
-  return { tone: 'quiet', text: `${prefix} · ${idleText}` };
-};
-
-const DimensionHint = ({ dimension }) => {
-  if (!dimension || dimension.status === 'complete') return null;
-  const warnings = dimension.warnings ?? [];
-  return h(
-    'p',
-    { className: 'luo-fine', style: { marginTop: '10px' } },
-    dimension.status === 'partial' ? '数据不完整' : '数据不可用',
-    warnings.length > 0 ? ` · ${warnings.slice(0, 2).join('；')}` : '',
-  );
-};
-
 const IndexCard = ({ quote }) => {
   const tone = toneOf(quote.changePct);
   return h(
@@ -101,7 +64,6 @@ const IndexCard = ({ quote }) => {
       h('span', { className: `luo-${tone}` }, signedMoney(quote.change)),
       h('span', { className: `luo-${tone}` }, points(quote.changePct)),
     ),
-    h('div', { className: 'luo-index-src' }, `${quote.source} · ${when(quote.ts)}`),
   );
 };
 
@@ -135,7 +97,6 @@ const IndexStrip = ({ quotes, loading, error }) => {
       ? h(ErrorNote, { label: '指数', error })
       : h(Empty, {
           title: quotes?.unsupported ? '当前行情源不支持指数' : '暂未返回指数行情',
-          hint: '可稍后刷新，数据缺失不会按零展示。',
         }),
   );
 };
@@ -148,9 +109,8 @@ const BreadthCard = ({ snapshot, loading, error }) => {
   if (!breadth && !limitUp) {
     return h(
       Card,
-      { title: '市场温度', meta: snapshot?.date ?? null },
+      { title: '市场温度' },
       loading ? h(SkeletonLines, { lines: 4 }) : h(ErrorNote, { label: '市场温度', error }),
-      h(DimensionHint, { dimension: snapshot?.breadth }),
     );
   }
 
@@ -160,7 +120,7 @@ const BreadthCard = ({ snapshot, loading, error }) => {
 
   return h(
     Card,
-    { title: '市场温度', meta: snapshot?.date ?? null },
+    { title: '市场温度' },
     breadth
       ? h(
           'div',
@@ -246,7 +206,6 @@ const BreadthCard = ({ snapshot, loading, error }) => {
           ),
         )
       : null,
-    h(DimensionHint, { dimension: snapshot?.limitUp }),
   );
 };
 
@@ -361,7 +320,6 @@ const TriggersCard = ({ triggers, loading, error }) => {
       h(Empty, {
         mark: '○',
         title: '今天没有触发',
-        hint: 'AlertPlan 命中后会在这里留下证据与送达状态。',
       }),
     );
   }
@@ -396,7 +354,6 @@ const TriggersCard = ({ triggers, loading, error }) => {
           h(
             'div',
             { className: 'luo-row-side' },
-            h('div', null, relative(trigger.createdAt)),
             h('div', null, DELIVERY[trigger.deliveryStatus] ?? trigger.deliveryStatus),
           ),
         );
@@ -427,7 +384,7 @@ const WatchlistsCard = ({ watchlists, loading, error }) => {
     h(
       'div',
       { className: 'luo-list' },
-      rows.map(({ watchlist, memberCount, sourceHealth }) =>
+      rows.map(({ watchlist, memberCount }) =>
         h(
           'div',
           { key: watchlist.id, className: 'luo-watch-row' },
@@ -445,11 +402,6 @@ const WatchlistsCard = ({ watchlists, loading, error }) => {
             'div',
             { style: { textAlign: 'right' } },
             h('div', { className: 'luo-mono', style: { fontSize: '12px' } }, `${memberCount} 只`),
-            h(
-              'div',
-              { className: 'luo-watch-meta' },
-              sourceHealth?.stale > 0 ? `${sourceHealth.stale} 待刷新` : '来源新鲜',
-            ),
           ),
         ),
       ),
@@ -475,7 +427,7 @@ const AdviceCard = ({ advice }) => {
         h(
           'div',
           { className: 'luo-advice-sub' },
-          `${SUBJECT_KIND[advice.subjectKind] ?? advice.subjectKind} · ${HORIZON[advice.horizon] ?? advice.horizon} · ${when(advice.createdAt)}`,
+          `${SUBJECT_KIND[advice.subjectKind] ?? advice.subjectKind} · ${HORIZON[advice.horizon] ?? advice.horizon}`,
         ),
       ),
       h(Pill, { tone: decision.tone === 'quiet' ? 'quiet' : decision.tone }, decision.label),
@@ -547,19 +499,6 @@ const AdviceCard = ({ advice }) => {
         advice.validUntil
           ? h('div', null, h('dt', null, '有效期'), h('dd', null, when(advice.validUntil)))
           : null,
-        h('div', null, h('dt', null, '数据时点'), h('dd', null, when(advice.dataAsOf))),
-        h(
-          'div',
-          null,
-          h('dt', null, '来源'),
-          h(
-            'dd',
-            null,
-            advice.provenance
-              ? `${advice.provenance.generator ?? '—'}${advice.provenance.model ? ` · ${advice.provenance.model}` : ''}`
-              : (advice.sourceTool ?? '—'),
-          ),
-        ),
       ),
     ),
     h(
@@ -595,7 +534,6 @@ const AdviceSection = ({ advice, loading, error }) => {
         h(Empty, {
           mark: '✳',
           title: '还没有在期建议',
-          hint: '买入 / 卖出 / 观察建议会带着证据与反证出现在这里。',
         }),
       ),
     );
@@ -612,26 +550,6 @@ const AdviceSection = ({ advice, loading, error }) => {
       { className: 'luo-advice-grid' },
       rows.slice(0, 9).map((item) => h(AdviceCard, { key: item.id, advice: item })),
     ),
-  );
-};
-
-const DataHealthLine = ({ status, loading }) => {
-  if (!status) {
-    return h('span', null, loading ? '正在核对数据健康…' : '数据健康不可用');
-  }
-  const providers = status.providers ?? [];
-  const fresh = providers.filter((provider) => provider.freshness === 'fresh').length;
-  const stale = providers.filter((provider) => provider.freshness === 'stale').length;
-  const staleWatchlists = status.watchlistStale ?? [];
-  const watch = status.watchHealth;
-  return h(
-    'span',
-    null,
-    '行情源 ',
-    h('b', null, `${fresh} 新鲜`),
-    stale > 0 ? ` · ${stale} 过期` : '',
-    watch ? ` · 盯盘 ${WATCH_STATE[watch.state]?.label ?? watch.state}` : '',
-    staleWatchlists.length > 0 ? ` · ${staleWatchlists.length} 个关注列表待刷新` : '',
   );
 };
 
@@ -652,11 +570,6 @@ const Region = ({ name, title, state, children, className = '' }) =>
         'div',
         { className: 'luo-region-actions' },
         h(
-          'span',
-          { className: 'luo-region-time', role: 'status' },
-          state.loading ? '读取中…' : state.loadedAt ? `读取 ${clock(state.loadedAt)}` : '尚未读取',
-        ),
-        h(
           'button',
           {
             type: 'button',
@@ -664,7 +577,7 @@ const Region = ({ name, title, state, children, className = '' }) =>
             onClick: state.refresh,
             'aria-label': `刷新${title}`,
           },
-          state.error ? '重试' : '刷新',
+          state.loading ? '加载中' : state.error ? '重试' : '刷新',
         ),
       ),
     ),
@@ -672,16 +585,7 @@ const Region = ({ name, title, state, children, className = '' }) =>
       ? h(
           'div',
           { className: 'luo-region-error' },
-          h(ErrorNote, {
-            error: {
-              message:
-                state.error.message ??
-                (state.error.kind === 'permission_denied'
-                  ? '当前分区未启用或无权读取，请核对数据配置。'
-                  : '数据暂时不可用，请稍后重试。'),
-            },
-          }),
-          state.loadedAt ? h('span', null, `展示上次成功数据 · ${clock(state.loadedAt)}`) : null,
+          h(ErrorNote, { error: { message: state.loadedAt ? '刷新失败' : '加载失败' } }),
         )
       : null,
     state.loadedAt ? children : state.loading ? h(SkeletonLines, { lines: 3 }) : null,
@@ -699,7 +603,6 @@ export function OverviewPanel({ onAnalyzeStock }) {
   const watchlist = useOverviewSection('watchlist', page);
   const triggers = useOverviewSection('triggers');
   const advice = useOverviewSection('advice');
-  const health = useOverviewSection('health');
   const sectors = useOverviewSection('sectors');
   const news = useOverviewSection('news');
   const refreshers = [
@@ -711,19 +614,16 @@ export function OverviewPanel({ onAnalyzeStock }) {
     watchlist.refresh,
     triggers.refresh,
     advice.refresh,
-    health.refresh,
     sectors.refresh,
     news.refresh,
   ];
   const refresh = useCallback(() => {
     for (const read of refreshers) read();
   }, refreshers);
-  const session = indices.session ?? health.session ?? account.session;
-  const marketStatus = dataOf(health.results, 'get_market_data_status');
-  const marketSession = session?.marketSession ?? marketStatus?.marketSession;
+  const session = indices.session ?? account.session;
+  const marketSession = session?.marketSession;
   const nextSessionStart = session?.nextSessionStart ?? null;
   useAutoRefresh({ marketSession, nextSessionStart, refresh });
-  const refreshHint = autoRefreshHint(marketSession, nextSessionStart);
   const held = dataOf(holdings.results, 'list_holdings');
   const facts = dataOf(account.results, 'get_account_facts')?.facts;
   const triggerData = dataOf(triggers.results, 'list_watch_triggers');
@@ -748,7 +648,6 @@ export function OverviewPanel({ onAnalyzeStock }) {
               MARKET_SESSION[marketSession] ?? marketSession,
             )
           : null,
-        h(Pill, { key: 'auto', tone: refreshHint.tone }, refreshHint.text),
         h(
           'button',
           { key: 'refresh', type: 'button', className: 'luo-btn', onClick: refresh },
@@ -794,7 +693,6 @@ export function OverviewPanel({ onAnalyzeStock }) {
               name === 'watchlist' ? '自选' : '持仓',
             ),
           ),
-          h('span', null, tab === 'watchlist' ? '已启用关注列表 · 合并去重' : '当前账户 · 未平仓'),
         ),
         h(
           'div',
@@ -829,7 +727,6 @@ export function OverviewPanel({ onAnalyzeStock }) {
                 quotes: dataOf(watchlist.results, 'batch_quote'),
                 holdings: tab === 'holdings' ? held : undefined,
                 triggers: triggerData,
-                triggerState: triggers,
                 onStock: (selected) => setStock({ ...selected, sourceLabel: selectedTitle }),
               }),
               tab === 'watchlist' && pagination
@@ -837,11 +734,7 @@ export function OverviewPanel({ onAnalyzeStock }) {
                     'div',
                     null,
                     pagination.incomplete
-                      ? h(
-                          'p',
-                          { className: 'luo-fine luo-warn-text' },
-                          '部分关注列表读取失败，仅展示已成功读取的成员。',
-                        )
+                      ? h('p', { className: 'luo-fine luo-warn-text' }, '部分列表加载失败')
                       : null,
                     h(
                       'div',
@@ -886,7 +779,7 @@ export function OverviewPanel({ onAnalyzeStock }) {
           h(
             'details',
             { className: 'luo-advice-fold', open: true },
-            h('summary', null, '研究摘要 · 展开查看证据与反证'),
+            h('summary', null, '研究摘要'),
             h(AdviceSection, { advice: dataOf(advice.results, 'get_advice') }),
           ),
         ),
@@ -919,10 +812,8 @@ export function OverviewPanel({ onAnalyzeStock }) {
         ),
       ),
     ),
-    region('health', '数据状态', health, h(DataHealthLine, { status: marketStatus })),
     h(Footer, {
       left: '建议不等于交易，信心度不是概率。',
-      right: '时间均为北京时间 · 各分区独立更新',
     }),
     stock
       ? h(StockDetail, {

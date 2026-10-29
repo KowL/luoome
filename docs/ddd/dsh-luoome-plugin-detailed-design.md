@@ -100,11 +100,11 @@ HTTP 始终保留 ToolResult；认证/能力拒绝 403、方法错误 405、媒�
 
 ### 4.3 看盘分区读取
 
-看盘客户端使用 `GET /api/luoome/state?panel=overview&section=<section>`，分别读取 `indices`、`sentiment`、`account`、`holdings`、`watchlists`、`watchlist`、`triggers`、`advice`、`health`、`sectors`、`news`。每次请求只执行该区固定工具；响应保留 `ToolResult`，新增 `section` 标识，认证、当前账户约束与 `no-store` 不变。原无 `section` 的面板映射仍可读取。
+看盘客户端使用 `GET /api/luoome/state?panel=overview&section=<section>`，分别读取 `indices`、`sentiment`、`account`、`holdings`、`watchlists`、`watchlist`、`triggers`、`advice`、`sectors`、`news`。每次请求只执行该区固定工具；响应保留 `ToolResult`，新增 `section` 标识，认证、当前账户约束与 `no-store` 不变。原无 `section` 的面板映射仍可读取。
 
 `watchlist` 允许正整数 `page`（默认 1），按股票代码去重排序后每页最多读取 40 只行情；成员通过当前账户范围的 `get_watchlist` 获取，排除停用列表、归档成员和其他账户专有来源。响应包含 `watchlistPage` 的页码、每页数量、总数及部分失败标志。不接受浏览器传入工具名、账户或股票集合。行业榜固定读取涨幅前五，要闻最多八条；行业工具归入 external，MCP 需显式启用外部能力。
 
-各区独立加载和重试；HTTP 或工具失败时保留同一分区、同一页的成功数据并展示旧数据提示，切页取消旧请求并清空上页画面。数值沿用工具输出：`batch_quote.items` 提供基于昨收的 `change` / `changePct`（比率，缺昨收为 null），持仓项提供可空 `quote` 以展示真实行情时点和缺失状态；UI 不以成本价冒充最新价。
+各区独立加载和重试；HTTP 或工具失败时保留同一分区、同一页的成功数据并展示简短错误与重试入口，切页取消旧请求并清空上页画面。数值沿用工具输出：`batch_quote.items` 提供基于昨收的 `change` / `changePct`（比率，缺昨收为 null），持仓项提供可空 `quote` 以区分真实报价和缺失状态；UI 不以成本价冒充最新价。看盘卡片和行情表省略来源、时间和说明性元信息，内部刷新状态仍用于隔离请求与保留成功结果。
 
 ## 5. 确认、持久授权与原子回执
 
@@ -211,7 +211,7 @@ client 接 no-store API 与 SSE，账户切换后的旧表单必须拒绝；输�
 - **时段来源**：`GET /api/luoome/state` 响应新增顶层 `session` 字段（`marketSession` 与 `nextSessionStart`），由服务端用 core 交易日历（`computeMarketSession` / `nextTradingSessionStart`）计算。客户端只读该字段，不在浏览器重算节假日与时段。
 - **触发条件与间隔**：`session.marketSession === 'trading'` 时每 60 秒请求一次状态；盘前、午休、收盘后与非交易日停止轮询，按 `session.nextSessionStart` 恢复（盘前等当日 09:30，午休等当日 13:00，收盘后与非交易日等下一个交易日 09:30）。
 - **可见性**：标签页隐藏（页面不可见）时不发请求；回到前台立即刷新一次。
-- **失败处理**：刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新事实」手动刷新始终可用。
+- **失败处理**：刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新全部」和各分区「刷新 / 重试」始终可用。
 - **边界**：轮询只发生在浏览器内的看盘页，不改变服务端盯盘任务、批处理调度与写面契约。
 
 ### 8.2 个人策略研究工作台
@@ -713,7 +713,7 @@ host/client/四技能的文件哈希后开始。Codex 逐卡核对官方审批�
 - 服务端：`GET /api/luoome/state` 响应新增顶层 `session` 字段，含 `marketSession`（`pre-open` / `trading` / `midday-break` / `closed` / `non-trading-day`）与 `nextSessionStart`。两者由 core 交易日历（`computeMarketSession` / `nextTradingSessionStart`）计算，客户端不再自己判断时段。
 - 客户端：`session.marketSession === 'trading'` 时每 60 秒自动刷新一次；非交易时段停止轮询，按 `session.nextSessionStart` 恢复（盘前等当日 09:30，午休等当日 13:00，收盘后与非交易日等下一个交易日 09:30）。
 - 标签页隐藏时不发请求，回到前台立即刷新一次。
-- 刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新事实」手动刷新始终可用。
+- 刷新失败保留最后一次成功画面并提示，不清空已有读数；「刷新全部」和各分区「刷新 / 重试」始终可用。
 
 本条只改看盘页的刷新节奏：不新增暂停开关、间隔配置等用户可调项，也不改变读面字段、鉴权与写面契约；服务端盯盘任务与批处理调度不受影响。
 

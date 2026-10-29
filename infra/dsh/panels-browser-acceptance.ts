@@ -1035,7 +1035,7 @@ const runAcceptance = async () => {
     newsFailure = failure;
     await page.evaluate(`document.querySelector('[data-overview-section="news"] button').click()`);
     await page.waitFor(
-      `document.querySelector('[data-overview-section="news"] .luo-region-error')?.textContent.includes('展示上次成功数据')`,
+      `document.querySelector('[data-overview-section="news"] .luo-region-error')?.textContent.includes('刷新失败')`,
       `${failure} 失败保留旧新闻`,
     );
     if (
@@ -1103,7 +1103,6 @@ const runAcceptance = async () => {
     'watchlist',
     'triggers',
     'advice',
-    'health',
     'sectors',
     'news',
   ]) {
