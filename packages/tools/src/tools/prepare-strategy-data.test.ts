@@ -264,6 +264,71 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(persisted.map((item) => item.date.toISOString())).toEqual(['2026-08-12T00:00:00.000Z']);
   });
 
+  it('跨零点跑时上一交易日收盘 bar 不算落后（新鲜度按最近已收盘交易日算）', async () => {
+    // 2026-10-30 00:40 上海：10-30 是交易日但尚未收盘，最近已收盘交易日 = 10-29。
+    const now = new Date('2026-10-29T16:40:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const lastClosed = bar(new Date('2026-10-29T00:00:00.000Z'));
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([lastClosed]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxStalenessTradingDays: 0,
+        cachePolicy: 'refresh',
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]).toMatchObject({
+      status: 'available',
+      latestBarDate: new Date('2026-10-29T00:00:00.000Z'),
+    });
+  });
+
+  it('当日已收盘但数据仍停在上一交易日时判为落后', async () => {
+    // 2026-10-30 18:00 上海：最近已收盘交易日 = 10-30，bar 停在 10-29 就是落后 1 天。
+    const now = new Date('2026-10-30T10:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const lastClosed = bar(new Date('2026-10-29T00:00:00.000Z'));
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([lastClosed]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxStalenessTradingDays: 0,
+        cachePolicy: 'refresh',
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]?.status).not.toBe('available');
+  });
+
   it('stale daily bar is missing rather than provider-ok and lowers checkpoint coverage', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });

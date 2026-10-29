@@ -5,6 +5,7 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  latestClosedTradingDate,
   StrategyDataCheckpointSchema,
   type ToolContext,
 } from '@luoome/core';
@@ -137,10 +138,15 @@ const revisionMatchesBar = (bar: DailyBar, revision: DailyBarRevision): boolean 
   revision.volume === bar.volume &&
   revision.source === bar.source;
 
-const tradingDayLag = (latest: Date | undefined, asOf: Date): number | undefined => {
+/**
+ * 交易日滞后：以**最近已收盘交易日**为基准，而不是墙上时钟那天。
+ * 否则 10-30 00:40 跑一轮时，10-29 的收盘 bar 会被算成「落后 1 个交易日」，
+ * maxStalenessTradingDays=0 的 scheduled 周期就会把全部成员判成 stale。
+ */
+const tradingDayLag = (latest: Date | undefined, reference: Date): number | undefined => {
   if (latest === undefined) return undefined;
   const from = shanghaiDay(latest);
-  const to = shanghaiDay(asOf);
+  const to = shanghaiDay(reference);
   if (from.getTime() >= to.getTime()) return 0;
   const cursor = new Date(from.getTime() + DAY_MS);
   let days = 0;
@@ -184,6 +190,8 @@ export const prepareStrategyDataTool = defineTool({
     const checkpointId = `strategy-data-checkpoint-${globalThis.crypto.randomUUID()}`;
     const startedAt = ctx.clock();
     const now = startedAt;
+    // 新鲜度基准 = 最近已收盘交易日；盘中/凌晨跑也不能把上一交易日的收盘 bar 判成落后。
+    const referenceDay = latestClosedTradingDate(asOf);
     const operationStartedAt = monotonicNow();
     await ctx.repos.strategyDataCheckpoint.saveStarted({
       id: checkpointId,
@@ -221,7 +229,7 @@ export const prepareStrategyDataTool = defineTool({
           );
           const reuseCache =
             cachedBars.length > 0 &&
-            (tradingDayLag(cachedLatestBarDate, asOf) ?? Number.POSITIVE_INFINITY) <=
+            (tradingDayLag(cachedLatestBarDate, referenceDay) ?? Number.POSITIVE_INFINITY) <=
               input.maxStalenessTradingDays;
           const bars = dropUnclosedBars(
             reuseCache
@@ -248,7 +256,7 @@ export const prepareStrategyDataTool = defineTool({
           );
           const stale =
             bars.length === 0 ||
-            (tradingDayLag(latestBarDate, asOf) ?? Number.POSITIVE_INFINITY) >
+            (tradingDayLag(latestBarDate, referenceDay) ?? Number.POSITIVE_INFINITY) >
               input.maxStalenessTradingDays;
           const firstBarDate = bars.reduce<Date | undefined>(
             (first, bar) => (first === undefined || bar.date < first ? bar.date : first),
