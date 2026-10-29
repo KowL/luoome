@@ -194,10 +194,13 @@ const main = () => {
   // 插件挂载已经正确时保留原文件，只在缺失或与镜像不符时重写。
   const patchPath = join(profileDir, 'cordis.patch.yml');
   const existingPatch = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : '';
-  const compactPatch = existingPatch.replace(/\s+/g, ' ');
+  // DSH 自己写回的补丁层是 YAML（`- id: luoome-plugin` / `name: dsh-luoome`），
+  // 只认 JSON 形态会永远判定未挂载，于是每次装配都整份重写，连同用户配置的
+  // 模型 provider 与已读提示版本一起抹掉。这里两种形态都认。
+  const normalizedPatch = existingPatch.replace(/["']/g, '').replace(/\s+/g, ' ');
   const pluginMounted =
-    compactPatch.includes('"id": "luoome-plugin"') &&
-    compactPatch.includes(`"name": "${PLUGIN_NAME}"`);
+    /(?:^|[\s{,])id:\s*luoome-plugin\b/.test(normalizedPatch) &&
+    new RegExp(`(?:^|[\\s{,])name:\\s*${PLUGIN_NAME}\\b`).test(normalizedPatch);
   if (!pluginMounted)
     writeFileSync(
       patchPath,

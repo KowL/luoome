@@ -115,6 +115,30 @@ describe('profile-seed 补丁层', () => {
     expect(patch).toContain('luoome-plugin');
   });
 
+  it('保留 DSH 写回的 YAML 补丁层（含模型 provider 配置）', () => {
+    const fixture = makeFixture();
+    seed(fixture);
+    // DSH 写回整个补丁层时用的是 YAML，不是 seed 自己写的 JSON。
+    const dshPatch = [
+      '-- insert:',
+      '    - id: luoome-plugin',
+      '      name: dsh-luoome',
+      '- id: llm-pi-ai',
+      '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+      '  config:',
+      '    providers:',
+      '      minimax-cn:',
+      '        apiKeyEnv: MINIMAX_CN_API_KEY',
+      '',
+    ].join('\n');
+    writeFileSync(patchPath(fixture), dshPatch);
+    seed(fixture);
+    const patch = readFileSync(patchPath(fixture), 'utf8');
+    expect(patch).toContain('apiKeyEnv: MINIMAX_CN_API_KEY');
+    expect(patch).toContain('llm-pi-ai');
+    expect(patch).toContain('luoome-plugin');
+  });
+
   it('插件挂载缺失时仍然补写插件层', () => {
     const fixture = makeFixture();
     seed(fixture);
