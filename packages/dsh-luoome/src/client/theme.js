@@ -175,7 +175,6 @@ export const STYLE = `
 .luo-index-code { font: 10px/1 var(--lu-mono); color: var(--lu-ink-3); }
 .luo-index-price { margin-top: 10px; font: 500 24px/1 var(--lu-mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .luo-index-delta { display: flex; align-items: baseline; gap: 8px; margin-top: 7px; font: 12px/1 var(--lu-mono); font-variant-numeric: tabular-nums; }
-.luo-index-src { margin-top: 9px; font: 10px/1 var(--lu-mono); color: var(--lu-ink-3); }
 
 .luo-breadth { display: flex; height: 8px; overflow: hidden; border-radius: 999px; background: var(--lu-surface-2); }
 .luo-breadth > span { display: block; height: 100%; transition: width .5s cubic-bezier(.22,.68,.24,1); }
@@ -537,7 +536,6 @@ export const STYLE = `
 .luo-region-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .luo-region-head h2 { margin: 0; font: 600 13px/1.4 var(--lu-sans); }
 .luo-region-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-.luo-region-time { color: var(--lu-ink-3); font: 10px/1.3 var(--lu-mono); }
 .luo-region-actions .luo-btn { font-size: 11px; height: 24px; padding: 0 7px; }
 .luo-region-error { margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; background: var(--lu-warn-soft); font-size: 11px; color: var(--lu-warn); overflow-wrap: anywhere; }
 .luo-region-error .luo-err { margin: 0; }
@@ -549,7 +547,6 @@ export const STYLE = `
 .luo-overview .luo-index { padding: 10px 12px; background: var(--lu-bg); }
 .luo-overview .luo-index::before { display: none; }
 .luo-overview .luo-index-price { font-size: 22px; margin-top: 8px; }
-.luo-overview .luo-index-src { line-height: 1.4; margin-top: 6px; }
 .luo-overview .luo-grid.is-kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .luo-overview .luo-kpi { padding: 8px 12px; border: 0; border-left: 2px solid var(--lu-line); }
 .luo-overview .luo-kpi-label { font-size: 12px; letter-spacing: 0; }
@@ -560,9 +557,7 @@ export const STYLE = `
 .luo-market-tabs { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 6px; border: 1px solid var(--lu-line); border-radius: 6px; background: var(--lu-surface); }
 .luo-market-tabs button { padding: 6px 18px; background: transparent; border: 0; border-radius: 4px; font: 600 13px var(--lu-sans); color: var(--lu-ink-2); cursor: pointer; }
 .luo-market-tabs button.is-active { color: var(--lu-accent); background: var(--lu-accent-soft); }
-.luo-market-tabs > span { margin-left: auto; padding-right: 6px; font-size: 11px; color: var(--lu-ink-3); }
 .luo-market-tabs button:focus-visible, .luo-sort:focus-visible, .luo-market-scroll:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
-.luo-market-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding-bottom: 10px; color: var(--lu-ink-3); font-size: 11px; }
 .luo-market-scroll { max-height: 520px; margin: 0; }
 .luo-market-table { min-width: 550px; }
 .luo-overview .luo-table th { font-size: 11px; letter-spacing: 0; padding: 9px 6px; }
@@ -570,7 +565,6 @@ export const STYLE = `
 .luo-market-table td:first-child { min-width: 144px; }
 .luo-market-table td small { display: block; font-size: 11px; margin-top: 3px; }
 .luo-overview .luo-stock-code { font-size: 11px; }
-.luo-quote-stamp { display: block; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 10px/1.5 var(--lu-mono); color: var(--lu-ink-3); }
 .luo-sort { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; font: inherit; }
 .luo-pagination { display: flex; gap: 8px; align-items: center; padding-top: 12px; font-size: 11px; color: var(--lu-ink-3); }
 .luo-pagination > span { margin-right: auto; }
@@ -592,7 +586,6 @@ export const STYLE = `
 .luo-sector-main small { display: block; margin-top: 3px; color: var(--lu-ink-3); font-size: 10px; }
 .luo-news-list { max-height: 450px; overflow: auto; }
 .luo-news-list li { padding: 10px 0; border-bottom: 1px solid var(--lu-line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.luo-news-meta { display: flex; gap: 10px; margin-bottom: 4px; color: var(--lu-ink-3); font-size: 10px; }
 .luo-news-list a { color: var(--lu-ink); text-decoration: none; }
 .luo-news-list a:hover { color: var(--lu-accent); text-decoration: underline; }
 .luo-news-summary { margin: 4px 0 0; color: var(--lu-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -624,6 +617,5 @@ export const STYLE = `
   .luo-overview [data-overview-section="account"] .luo-kpi:first-child { grid-column: 1 / -1; }
   .luo-overview .luo-kpi-label, .luo-overview .luo-kpi-sub { font-size: 10px; }
   .luo-terminal-side { grid-template-columns: minmax(0, 1fr); }
-  .luo-market-tabs > span { font-size: 10px; }
 }
 `;
