@@ -18,8 +18,13 @@ export interface StrategyResultRetention {
 export const retainStrategyResults = (
   definition: StrategyDslV1,
   results: readonly StrategyResult[],
+  options: { readonly nearMissLimit?: number } = {},
 ): StrategyResultRetention => {
+  // 规则很少的策略里，“只差一条规则”会命中大半个市场；近似入选按分数截断，
+  // 其余只保留计数，避免把近似行变成新的全量写入。
+  const nearMissLimit = options.nearMissLimit ?? 200;
   const kept: StrategyResult[] = [];
+  const ruleNearMiss: StrategyResult[] = [];
   const counts = {
     ruleNearMissCount: 0,
     rankingNearMissCount: 0,
@@ -32,8 +37,15 @@ export const retainStrategyResults = (
     else if (kind === 'ranking-near-miss') counts.rankingNearMissCount += 1;
     else if (kind === 'excluded') counts.excludedCount += 1;
     else if (kind === 'incomplete') counts.incompleteCount += 1;
-    if (kind === 'selected' || kind === 'rule-near-miss' || kind === 'ranking-near-miss')
-      kept.push(result);
+    if (kind === 'selected' || kind === 'ranking-near-miss') kept.push(result);
+    else if (kind === 'rule-near-miss') ruleNearMiss.push(result);
   }
-  return { results: kept, counts };
+  const bounded = ruleNearMiss
+    .sort(
+      (left, right) =>
+        (right.score ?? Number.NEGATIVE_INFINITY) - (left.score ?? Number.NEGATIVE_INFINITY) ||
+        left.stockId.localeCompare(right.stockId),
+    )
+    .slice(0, nearMissLimit);
+  return { results: [...kept, ...bounded], counts };
 };

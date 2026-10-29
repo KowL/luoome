@@ -66,6 +66,15 @@ describe('strategy result retention', () => {
     });
   });
 
+  it('bounds rule near misses by score and keeps counting them', () => {
+    const many = Array.from({ length: 5 }, (_, index) =>
+      result(`00000${index}.SZ`, false, [matched('price'), unmatched('volume')]),
+    ).map((row, index) => ({ ...row, score: index }));
+    const kept = retainStrategyResults(definition, many, { nearMissLimit: 2 });
+    expect(kept.results.map((row) => row.stockId)).toEqual(['000004.SZ', '000003.SZ']);
+    expect(kept.counts.ruleNearMissCount).toBe(5);
+  });
+
   it('keeps nothing extra when every row is excluded', () => {
     const kept = retainStrategyResults(definition, [
       result('000002.SZ', false, [unmatched('price'), unmatched('volume')]),
