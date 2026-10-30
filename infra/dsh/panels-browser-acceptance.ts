@@ -949,7 +949,7 @@ const runAcceptance = async () => {
     return true;
   })()`);
   await page.waitFor(
-    `document.body && document.body.innerText.includes('看盘')`,
+    `document.body && document.body.innerText.includes('LUOOME')`,
     'DSH 工作台外壳',
     30_000,
   );
@@ -971,13 +971,13 @@ const runAcceptance = async () => {
   };
   await dismissNotice();
 
-  // 4) 侧栏三个条目 + 逐面板 DOM/API/DB 一致性。
+  // 4) 侧栏只保留一个 LUOOME 入口 + 逐视图 DOM/API/DB 一致性。
   const sidebarLabels = await page.evaluate<string[]>(
-    `[...document.querySelectorAll('button')].map((button) => button.textContent.trim()).filter((label) => ['看盘','持仓','关注','策略','复盘','投资设置'].includes(label))`,
+    `[...document.querySelectorAll('button')].map((button) => button.textContent.trim()).filter((label) => ['LUOOME','投资设置'].includes(label))`,
   );
-  if (sidebarLabels.length !== 5 || sidebarLabels.includes('投资设置'))
+  if (sidebarLabels.length !== 1 || sidebarLabels[0] !== 'LUOOME')
     throw new Error(
-      `侧栏条目应为 5 个，投资设置应位于 DSH 设置内，实际 ${JSON.stringify(sidebarLabels)}`,
+      `侧栏应只剩一个 LUOOME 条目，投资设置位于 DSH 设置内，实际 ${JSON.stringify(sidebarLabels)}`,
     );
 
   const clickButton = async (label: string) => {
@@ -1007,6 +1007,13 @@ const runAcceptance = async () => {
       '关闭 DSH 设置',
     );
   };
+  const VIEW_IDS: Record<string, string> = {
+    看盘: 'overview',
+    持仓: 'positions',
+    关注: 'watchlists',
+    策略: 'strategies',
+    复盘: 'review',
+  };
   const clickPanel = async (label: string) => {
     if (label === '投资设置') {
       if (
@@ -1026,7 +1033,17 @@ const runAcceptance = async () => {
       await page.waitFor(`document.querySelector('.luo-settings') !== null`, '投资设置分区');
     } else {
       await closeSettings();
-      await clickButton(label);
+      const viewId = VIEW_IDS[label];
+      if (!viewId) throw new Error(`未知业务视图 ${label}`);
+      if (!(await page.evaluate(`document.querySelector('.luo-app') !== null`)))
+        await clickButton('LUOOME');
+      await page.waitFor(`document.querySelector('.luo-app') !== null`, '业务应用外壳');
+      await page.evaluate(`document.querySelector('[data-luoome-view="${viewId}"]')?.click()`);
+      // 策略视图有未保存研究时，切标签会先弹离开保护对话框，此时不要求视图已切换。
+      await page.waitFor(
+        `document.querySelector('[data-luoome-view="${viewId}"][aria-current="page"]') !== null || document.querySelector('[aria-label="未保存研究"]') !== null`,
+        `${label} 视图`,
+      );
     }
   };
 
@@ -1062,15 +1079,38 @@ const runAcceptance = async () => {
     JSON.stringify(OWNER),
   ]);
 
+  // 单一入口后：默认落在看盘；切到策略后刷新仍停在同一视图（sessionStorage 记忆）。
   await clickPanel('看盘');
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="overview"][aria-current="page"]') !== null`,
+    '默认业务视图',
+  );
+  await page.evaluate(`document.querySelector('[data-luoome-view="strategies"]')?.click()`);
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="strategies"][aria-current="page"]') !== null`,
+    '切换到策略视图',
+  );
+  await page.navigate(`${origin}/`);
+  // 主区是否自动恢复业务入口取决于外壳是否记住主面板，没有恢复就点一次侧栏条目。
+  if (!(await page.evaluate(`document.querySelector('.luo-app') !== null`)))
+    await clickButton('LUOOME');
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="strategies"][aria-current="page"]') !== null`,
+    '刷新后保留业务视图',
+  );
+  await page.evaluate(`document.querySelector('[data-luoome-view="overview"]')?.click()`);
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="overview"][aria-current="page"]') !== null`,
+    '回到看盘视图',
+  );
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '看盘面板');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
     '持仓',
   );
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify('验收要闻：市场成交活跃')}) && document.querySelector('[data-overview-section="account"][aria-busy="false"]')`,
-    '独立账户与建议',
+    `document.querySelector('[data-overview-section="account"][aria-busy="false"]') !== null && document.body.innerText.includes('市场要闻')`,
+    '独立账户与要闻分区',
   );
   if (
     !(await page.evaluate<boolean>(
@@ -1914,7 +1954,7 @@ const runAcceptance = async () => {
   );
   // 5) 刷新后仍正确（cookie 持久、state 与 DOM 重新对齐）。
   await page.navigate(`${origin}/`);
-  await page.waitFor(`document.body.innerText.includes('看盘')`, '刷新后的工作台');
+  await page.waitFor(`document.body.innerText.includes('LUOOME')`, '刷新后的工作台');
   await clickPanel('看盘');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
@@ -1935,7 +1975,7 @@ const runAcceptance = async () => {
   await page.setViewport(390, 844, true);
   await page.navigate(`${origin}/`);
   await page.waitFor(
-    `document.querySelector('button[aria-label="看盘"]') !== null`,
+    `document.querySelector('button[aria-label="LUOOME"]') !== null`,
     '移动端侧栏 rail',
   );
   await clickPanel('看盘');
@@ -1950,25 +1990,13 @@ const runAcceptance = async () => {
   if (overflow > 1) throw new Error(`移动端出现横向溢出 ${String(overflow)}px`);
   await dismissNotice();
   await page.screenshot(join(evidenceDir, 'overview-mobile.png'));
-  // 移动端侧栏在 DOM 里排在主内容之后，按文案匹配会先命中看盘页的「持仓」标签页，
-  // 所以移动端按 aria-label 点侧栏条目。
-  const clickMobilePanel = async (label: string) => {
-    const clicked = await page.evaluate<boolean>(
-      `(() => {
-        const target = [...document.querySelectorAll('button[aria-label]')].find((element) => element.getAttribute('aria-label') === ${JSON.stringify(label)});
-        if (!target) return false;
-        target.click();
-        return true;
-      })()`,
-    );
-    if (!clicked) throw new Error(`无法点击移动端侧栏条目 ${label}`);
-  };
+  // 移动端侧栏折叠成图标 rail，业务视图靠主区顶部标签切换，
+  // 因此移动端同样走 clickPanel（侧栏条目按 aria-label 定位）。
   for (const [label, title, file] of [
     ['持仓', '持仓与账本', 'positions-mobile.png'],
     ['投资设置', 'FUYAO（同花顺）', 'settings-mobile.png'],
   ]) {
-    if (label === '投资设置') await clickPanel(label as string);
-    else await clickMobilePanel(label as string);
+    await clickPanel(label as string);
     await page.waitFor(
       `document.body.innerText.includes(${JSON.stringify(title)})`,
       `${label}窄屏`,

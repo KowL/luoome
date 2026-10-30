@@ -1,4 +1,4 @@
-import { createElement as h } from 'react';
+import { Fragment, createElement as h } from 'react';
 
 import {
   adviceFeedbackOf,
@@ -32,7 +32,6 @@ import {
   Head,
   Kpi,
   Meter,
-  Panel,
   Pill,
   Refresh,
   Section,
@@ -492,7 +491,7 @@ export function ReviewPanel() {
   const pending = dataOf(results, 'list_pending_strategy_observations');
 
   return h(
-    Panel,
+    Fragment,
     null,
     h(Head, {
       eyebrow: 'LUOOME / 复盘',

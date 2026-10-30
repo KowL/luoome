@@ -35,7 +35,6 @@ import {
   Footer,
   Head,
   Meter,
-  Panel,
   Pill,
   Refresh,
   Section,
@@ -1335,7 +1334,7 @@ export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
         event.target instanceof Element
           ? event.target.closest('button,a,[role="tab"],[role="treeitem"]')
           : null;
-      if (!target || target.closest('.luo-strategies')) return;
+      if (!target || target.closest('.luo-strategies-body')) return;
       const link = target.closest('a[href]');
       if (link?.target === '_blank' || link?.hasAttribute('download')) return;
       const label = target.getAttribute('aria-label') ?? target.textContent.trim();
@@ -1394,8 +1393,8 @@ export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
     });
   };
   return h(
-    Panel,
-    { className: 'luo-strategies' },
+    'div',
+    { className: 'luo-strategies-body' },
     h(Head, {
       eyebrow: 'Strategy workspace',
       title: '策略',

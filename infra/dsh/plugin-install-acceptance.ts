@@ -1059,7 +1059,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       installedInTarball: entries.includes('package/dist/client.js'),
       servedThroughBootGraph: true,
       servedBytes: Buffer.byteLength(servedClientText),
-      panelEntries: ['luoome-overview', 'luoome-strategies', 'luoome-review'],
+      panelEntries: ['luoome'],
     },
     stateRoute: {
       path: '/api/luoome/state?panel=overview|strategies|review',

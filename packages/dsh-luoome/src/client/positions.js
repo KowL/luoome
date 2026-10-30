@@ -1,4 +1,4 @@
-import { createElement as h } from 'react';
+import { Fragment, createElement as h } from 'react';
 import { dataOf, errorOf, usePanelState } from './data.js';
 import { clock, int, money, ratio, signedMoney, toneOf, when } from './format.js';
 import { HoldingsTable } from './overview.js';
@@ -9,7 +9,6 @@ import {
   Footer,
   Head,
   Kpi,
-  Panel,
   Pill,
   Refresh,
   Section,
@@ -45,7 +44,7 @@ export function PositionsPanel() {
   const performance = dataOf(results, 'list_account_performance_snapshots');
   const latest = performance?.snapshots?.[0];
   return h(
-    Panel,
+    Fragment,
     null,
     h(Head, {
       eyebrow: 'Portfolio ledger',

@@ -95,6 +95,7 @@ export const STYLE = `
 .luo-settings .luo-source-order { display: grid; gap: 12px; max-width: 420px; }
 @media (max-width: 1023px) {
   [data-mobile-nav="frame"] .luo-root:not(.luo-settings) > .luo-shell { padding-top: 64px; }
+  [data-mobile-nav="frame"] .luo-root:not(.luo-settings) .luo-app-tabs { top: 64px; }
   [data-mobile-nav="frame"]:has(.luo-root:not(.luo-settings)) [data-mobile-nav="fab"] { top: calc(env(safe-area-inset-top, 0px) + 12px); }
 }
 .luo-field select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--lu-line-strong); border-radius: var(--lu-r-sm); color: var(--lu-ink); background: var(--lu-bg); font: 14px/1.4 var(--lu-sans); }
@@ -618,6 +619,15 @@ export const STYLE = `
 .luo-market-tabs button { padding: 6px 18px; background: transparent; border: 0; border-radius: 4px; font: 600 13px var(--lu-sans); color: var(--lu-ink-2); cursor: pointer; }
 .luo-market-tabs button.is-active { color: var(--lu-accent); background: var(--lu-accent-soft); }
 .luo-market-tabs button:focus-visible, .luo-sort:focus-visible, .luo-market-scroll:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
+/* 业务应用外壳：侧栏单入口，主区顶部标签切换五个视图；窄屏横向滚动，不折行。 */
+.luo-app-tabs { display: flex; gap: 2px; align-items: stretch; overflow-x: auto; scrollbar-width: none; position: sticky; top: 0; z-index: 6; margin-bottom: 20px; border-bottom: 1px solid var(--lu-line); background: var(--lu-bg); }
+.luo-app-tabs::-webkit-scrollbar { display: none; }
+.luo-app-tab { display: flex; align-items: center; gap: 7px; padding: 11px 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--lu-ink-2); font: 500 13px var(--lu-sans); white-space: nowrap; cursor: pointer; }
+.luo-app-tab svg { color: var(--lu-ink-3); }
+.luo-app-tab.is-active { border-bottom-color: var(--lu-accent); color: var(--lu-accent); background: var(--lu-accent-soft); }
+.luo-app-tab.is-active svg { color: var(--lu-accent); }
+.luo-app-tab:hover { background: var(--lu-hover); }
+.luo-app-tab:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: -3px; }
 .luo-market-scroll { max-height: 520px; margin: 0; }
 .luo-market-table { min-width: 550px; }
 .luo-overview .luo-table th { font-size: 11px; letter-spacing: 0; padding: 9px 6px; }

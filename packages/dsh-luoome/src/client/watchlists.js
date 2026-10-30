@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useRef, useState } from 'react';
+import { Fragment, createElement as h, useEffect, useRef, useState } from 'react';
 import { dataOf, errorOf, usePanelState } from './data.js';
 import { clock, WATCHLIST_KIND, when } from './format.js';
 import {
@@ -7,7 +7,6 @@ import {
   ErrorNote,
   Footer,
   Head,
-  Panel,
   Pill,
   Refresh,
   Section,
@@ -358,8 +357,8 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
   const members = watchlist ? detail.data.members : [];
 
   return h(
-    Panel,
-    { className: 'luo-watchlists' },
+    Fragment,
+    null,
     h(Head, {
       eyebrow: 'LUOOME / 关注',
       title: '关注',

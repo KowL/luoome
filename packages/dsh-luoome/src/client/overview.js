@@ -1,4 +1,4 @@
-import { createElement as h, useCallback, useState } from 'react';
+import { Fragment, createElement as h, useCallback, useState } from 'react';
 
 import { dataOf, useAutoRefresh, useOverviewSection } from './data.js';
 import {
@@ -19,7 +19,6 @@ import {
   Footer,
   Head,
   Kpi,
-  Panel,
   Pill,
   Skeleton,
   SkeletonLines,
@@ -370,8 +369,8 @@ export function OverviewPanel({ onAnalyzeStock }) {
   const region = (name, title, state, content, className) =>
     h(Region, { name, title, state, className }, content);
   return h(
-    Panel,
-    { className: 'luo-overview' },
+    Fragment,
+    null,
     h(Head, {
       eyebrow: 'LUOOME / MARKET',
       title: '看盘',

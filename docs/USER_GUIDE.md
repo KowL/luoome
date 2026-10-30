@@ -409,8 +409,8 @@ analysis worker 或 queue probe。部署细节见 [7.7](#77-安装升级备份�
 
 浏览器和手机直接打开 `http://<服务器公网 IP>/dsh/`，输入运维交付的 Pocket 公网密码即可，
 不需要复制 DSH 的临时 token。只有 `/dsh/` 进入 DSH，根路径及其它路径保留给同机其它服务。
-窄屏使用抽屉导航，点击看盘、
-持仓、策略或复盘后会自动收起抽屉；导航按钮为面板标题留出空间，写操作仍须预览和确认。
+窄屏使用抽屉导航，点击 LUOOME
+入口后会自动收起抽屉；主区顶部标签在五个业务视图间切换，导航按钮为面板标题留出空间，写操作仍须预览和确认。
 
 公网密码保存在 `$DSH_HOME/dsh-pocket/token`（权限 `0600`），在 DSH「设置 → 手机访问」中
 可修改为 8–64 位字母或数字的固定密码。升级须保留 `$DSH_HOME`；DSH 重启后登录状态失效，
@@ -422,7 +422,7 @@ analysis worker 或 queue probe。部署细节见 [7.7](#77-安装升级备份�
 | read（精确白名单） | 账户/持仓/交易/绩效、Advice/复盘、Strategy、关注/触发、本地市场事实等只读工具 |
 | market external（精确白名单） | 指数、情绪、行情、新闻与有界策略试跑/对照；失败原样返回，不伪造空成功 |
 | 个人写操作 | DecisionReview、`record_advice`、`record_analysis_result`、策略 create/version/validate/publish、`record_advice_outcome`、账户改名、关注列表与成员维护；batch 另需显式开启，按明确意图直接执行或通过精确任务授权 |
-| client | 看盘 / 持仓 / 关注 / 策略 / 复盘五个业务面板，投资设置位于 DSH 设置内，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
+| client | 侧栏一个 LUOOME 入口，主区顶部标签切换看盘 / 持仓 / 关注 / 策略 / 复盘五个业务视图；投资设置位于 DSH 设置内，经宿主认证的 `/api/luoome/state` 读取固定 ToolResult |
 | skills | `strategy-lab`、`strategy-result-review`、`post-close-review`、`daily-market-analysis` |
 
 事实库是 `LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开。通用
