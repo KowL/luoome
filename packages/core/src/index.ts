@@ -86,6 +86,7 @@ export * from './strategy/daily-cycle-audit.js';
 export * from './strategy/definition-diff.js';
 export * from './strategy/emission.js';
 export * from './strategy/evaluator.js';
+export * from './strategy/evaluator-code-identity.js';
 export * from './strategy/expression.js';
 export * from './strategy/fact-date.js';
 export * from './strategy/field-registry.js';

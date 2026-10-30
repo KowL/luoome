@@ -16,6 +16,7 @@ export interface StrategyRunSnapshotView {
   readonly definitionHash?: string;
   readonly evaluatorVersion?: string;
   readonly evaluatorCodeIdentity?: string;
+  readonly codeIdentitySource?: 'src-files' | 'dist-artifact';
   readonly scope?: 'operational' | 'evaluation';
   readonly universeKind?: 'full' | 'explicit';
   readonly stockIds: readonly string[];
@@ -90,6 +91,10 @@ export const readStrategyRunSnapshot = (snapshot: unknown): StrategyRunSnapshotV
   const definitionHash = nonEmptyString(value.definitionHash);
   const evaluatorVersion = nonEmptyString(value.evaluatorVersion);
   const evaluatorCodeIdentity = nonEmptyString(value.evaluatorCodeIdentity);
+  const codeIdentitySource =
+    value.codeIdentitySource === 'src-files' || value.codeIdentitySource === 'dist-artifact'
+      ? value.codeIdentitySource
+      : undefined;
   const evaluationSessionId = nonEmptyString(value.evaluationSessionId);
 
   return {
@@ -99,6 +104,7 @@ export const readStrategyRunSnapshot = (snapshot: unknown): StrategyRunSnapshotV
     ...(definitionHash === undefined ? {} : { definitionHash }),
     ...(evaluatorVersion === undefined ? {} : { evaluatorVersion }),
     ...(evaluatorCodeIdentity === undefined ? {} : { evaluatorCodeIdentity }),
+    ...(codeIdentitySource === undefined ? {} : { codeIdentitySource }),
     ...(value.scope === 'operational' || value.scope === 'evaluation'
       ? { scope: value.scope }
       : {}),
@@ -116,14 +122,46 @@ export const readStrategyRunSnapshot = (snapshot: unknown): StrategyRunSnapshotV
   };
 };
 
+/**
+ * 把“代码身份不一致”拆成可解释的原因，避免把“加载方式不同”或“旧算法无法验证”误报成“代码变了”。
+ * - `legacy-manifest-hash`：旧 run 没有 `codeIdentitySource`，identity 来自旧 manifest 哈希，无法验证；
+ * - `identity-basis-mismatch`：src-files 与 dist-artifact 不可跨环境比较；
+ * - `code-identity-mismatch`：同一 basis 下代码内容真的不同。
+ */
+export type StrategyRunEvaluatorComparison =
+  | 'match'
+  | 'not-v3'
+  | 'version-mismatch'
+  | 'legacy-identity'
+  | 'identity-basis-mismatch'
+  | 'code-identity-mismatch';
+
+export const compareStrategyRunEvaluator = (
+  snapshot: unknown,
+  expected: {
+    readonly version: string;
+    readonly codeIdentity: string;
+    readonly codeIdentitySource?: 'src-files' | 'dist-artifact';
+  },
+): StrategyRunEvaluatorComparison => {
+  const view = readStrategyRunSnapshot(snapshot);
+  if (view.format !== 'v3') return 'not-v3';
+  if (view.evaluatorVersion !== expected.version) return 'version-mismatch';
+  if (view.codeIdentitySource === undefined) return 'legacy-identity';
+  if (
+    expected.codeIdentitySource !== undefined &&
+    view.codeIdentitySource !== expected.codeIdentitySource
+  )
+    return 'identity-basis-mismatch';
+  if (view.evaluatorCodeIdentity !== expected.codeIdentity) return 'code-identity-mismatch';
+  return 'match';
+};
+
 export const strategyRunUsesEvaluator = (
   snapshot: unknown,
-  expected: { readonly version: string; readonly codeIdentity: string },
-): boolean => {
-  const view = readStrategyRunSnapshot(snapshot);
-  return (
-    view.format === 'v3' &&
-    view.evaluatorVersion === expected.version &&
-    view.evaluatorCodeIdentity === expected.codeIdentity
-  );
-};
+  expected: {
+    readonly version: string;
+    readonly codeIdentity: string;
+    readonly codeIdentitySource?: 'src-files' | 'dist-artifact';
+  },
+): boolean => compareStrategyRunEvaluator(snapshot, expected) === 'match';

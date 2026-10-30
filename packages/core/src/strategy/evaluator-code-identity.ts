@@ -10,10 +10,11 @@ import { readFileSync } from 'node:fs';
  * - emission.ts        信号发射（level/edge/冷却）
  * - prefilter.ts       行情预筛（会剔除股票，直接影响结果集）
  * - field-registry.ts  表达式可用字段定义
+ * - ../trading-calendar.ts  交易日历（影响 emission 的冷却与交易日判断，会改变结果）
  *
- * 明确**不**参与：`trading-calendar.ts`（共享交易日历数据，不是 evaluator 实现）、
- * 任何依赖包与 node_modules、以及 DTO/schema 文件。改这份清单会让所有历史 run 失去可比性，
- * 必须同时提升 `STRATEGY_EVALUATOR_VERSION` 并在发布说明里标注。
+ * 明确**不**参与：任何依赖包与 node_modules、以及 DTO/schema 文件。
+ * 改这份清单会让所有历史 run 失去可比性，必须同时提升 `STRATEGY_EVALUATOR_VERSION`
+ * 并在发布说明里标注。
  */
 export const EVALUATOR_CODE_FILES = [
   'evaluator.ts',
@@ -21,7 +22,12 @@ export const EVALUATOR_CODE_FILES = [
   'emission.ts',
   'prefilter.ts',
   'field-registry.ts',
+  // 影响 emission 的冷却/交易日判断：改日历会改变结果，必须进 identity。
+  '../trading-calendar.ts',
 ] as const;
+
+/** identity 的计算依据：源码文件 or 构建产物；写进 run snapshot，避免把“环境不同”误报成“代码变了”。 */
+export type EvaluatorCodeIdentitySource = 'src-files' | 'dist-artifact';
 
 const sha256 = (parts: readonly (string | Buffer)[]): string => {
   const hash = createHash('sha256');
@@ -66,3 +72,14 @@ export const computeEvaluatorCodeHash = (baseUrl: URL = new URL(import.meta.url)
   if (artifact === null) throw new Error('evaluator code identity unavailable: 无法读取源码或产物');
   return sha256([artifact]);
 };
+
+/** 当前进程实际采用的 identity 依据（与 `computeEvaluatorCodeHash()` 的判定一致）。 */
+export const evaluatorCodeIdentitySource = (
+  baseUrl: URL = new URL(import.meta.url),
+): EvaluatorCodeIdentitySource =>
+  EVALUATOR_CODE_FILES.every((file) => readIfPresent(new URL(`./${file}`, baseUrl)) !== null)
+    ? 'src-files'
+    : 'dist-artifact';
+
+export const EVALUATOR_CODE_IDENTITY_SOURCE: EvaluatorCodeIdentitySource =
+  evaluatorCodeIdentitySource();

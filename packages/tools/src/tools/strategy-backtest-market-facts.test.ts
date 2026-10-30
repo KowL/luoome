@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   type DailyBarRevision,
+  EVALUATOR_CODE_IDENTITY_SOURCE,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
   type StrategyEvaluationSession,
@@ -89,6 +90,7 @@ const runFor = (id: string, day: Date, selected: readonly string[]): StrategyRun
     definitionHash: session.definitionHash,
     evaluatorVersion: STRATEGY_EVALUATOR_VERSION,
     evaluatorCodeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
+    codeIdentitySource: EVALUATOR_CODE_IDENTITY_SOURCE,
     scope: 'evaluation',
     universeKind: 'full',
     coverage: 'CN_A_SHARES_SH_SZ',

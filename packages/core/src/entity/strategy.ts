@@ -405,6 +405,8 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
+  /** identity 的计算依据；旧 run 没有该字段 = 旧算法（legacy-manifest-hash），需单独披露。 */
+  codeIdentitySource: z.enum(['src-files', 'dist-artifact']).optional(),
   scope: StrategyRunScopeSchema,
   universeKind: StrategyRunUniverseKindSchema,
   coverage: z.literal('CN_A_SHARES_SH_SZ'),

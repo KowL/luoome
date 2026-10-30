@@ -10,6 +10,7 @@ describe('StrategyRunSnapshot compatibility', () => {
       definitionHash: 'hash',
       evaluatorVersion: 'evaluator-v1',
       evaluatorCodeIdentity: 'code-hash',
+      codeIdentitySource: 'src-files',
       scope: 'evaluation',
       universeKind: 'explicit',
       stockIds: ['600519.SH'],
@@ -28,6 +29,7 @@ describe('StrategyRunSnapshot compatibility', () => {
       stockIds: ['600519.SH'],
       requestedBy: 'replay',
       evaluationSessionId: 'session-1',
+      codeIdentitySource: 'src-files',
       dataCheckpoint: { id: 'checkpoint-1', checksum: 'checksum' },
     });
     expect(snapshot.dataCheckpoint?.dataAsOf).toEqual(new Date('2026-08-10T00:00:00.000Z'));
@@ -35,6 +37,7 @@ describe('StrategyRunSnapshot compatibility', () => {
       strategyRunUsesEvaluator(snapshot, {
         version: 'evaluator-v1',
         codeIdentity: 'code-hash',
+        codeIdentitySource: 'src-files',
       }),
     ).toBe(true);
   });

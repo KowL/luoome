@@ -164,6 +164,21 @@ web ──┼──► tools ──► core
 
 设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14、D9。
 
+### 零 IO 的受控例外：evaluator code identity
+
+`packages/core` 是纯领域层，默认不发起文件/网络 IO。唯一例外是
+`packages/core/src/strategy/evaluator-code-identity.ts`：它在模块加载期读取
+`strategy/` 下 5 个 evaluator 实现文件与 `trading-calendar.ts`，计算真实文件内容的 SHA-256，
+作为回测可复现性的锚（REQ-M3-12）。
+
+- **为什么必须在这里**：identity 必须在任何进程、任何 surface 上都能从「实际被加载的代码」算出。
+  放到 db/tools 会让 core 的 run 快照反向依赖上层，且覆盖不了所有加载路径。
+- **边界**：只读本包内固定清单的文件；不读 `node_modules`、不读用户数据、不写文件、不联网；
+  dist 产物模式没有源码文件，退化为对产物文件本身取 hash，并把依据（`src-files` /
+  `dist-artifact`）写进 run snapshot，避免把「加载方式不同」误报成「代码变了」。
+- **如何收紧**：构建期把源码 hash 注入产物（`--define` 或生成常量）后删除运行时读取，
+  core 回到零 IO；`codeIdentitySource` 继续保留，用于区分历史 run。
+
 ### packages/core 内部依赖
 
 ```

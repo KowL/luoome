@@ -1,5 +1,7 @@
 import {
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
+  compareStrategyRunEvaluator,
+  EVALUATOR_CODE_IDENTITY_SOURCE,
   runStrictBacktest,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
@@ -11,7 +13,6 @@ import {
   type StrictBacktestMarketFact,
   StrictBacktestRunSchema,
   StrictBacktestSpecSchema,
-  strategyRunUsesEvaluator,
   strictBacktestHash,
   strictBacktestSpecHash,
   type ToolContext,
@@ -154,6 +155,15 @@ interface BacktestContext {
   readonly pitComplete: boolean;
   readonly revisionComplete: boolean;
   readonly evaluatorComplete: boolean;
+  readonly evaluatorComparisons: readonly (
+    | 'match'
+    | 'not-v3'
+    | 'version-mismatch'
+    | 'legacy-identity'
+    | 'identity-basis-mismatch'
+    | 'code-identity-mismatch'
+    | 'missing'
+  )[];
 }
 
 const collectBacktestContext = async (
@@ -195,19 +205,18 @@ const collectBacktestContext = async (
         day.dataCheckpointId !== undefined &&
         day.revisionCutoff !== undefined,
     );
-  const evaluatorComplete =
-    revisionComplete &&
-    days.every((day) => {
-      const run = day.runId === undefined ? null : runs.get(day.runId);
-      return (
-        run !== null &&
-        run !== undefined &&
-        strategyRunUsesEvaluator(run.inputSnapshot, {
+  const evaluatorComparisons = days.map((day) => {
+    const run = day.runId === undefined ? null : runs.get(day.runId);
+    return run === null || run === undefined
+      ? ('missing' as const)
+      : compareStrategyRunEvaluator(run.inputSnapshot, {
           version: STRATEGY_EVALUATOR_VERSION,
           codeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
-        })
-      );
-    });
+          codeIdentitySource: EVALUATOR_CODE_IDENTITY_SOURCE,
+        });
+  });
+  const evaluatorComplete =
+    revisionComplete && evaluatorComparisons.every((item) => item === 'match');
 
   const executionDays = days.slice(1);
   const targets = executionDays.map((day, index) => {
@@ -242,6 +251,7 @@ const collectBacktestContext = async (
     pitComplete,
     revisionComplete,
     evaluatorComplete,
+    evaluatorComparisons,
   };
 };
 
@@ -263,6 +273,7 @@ const assembleBacktest = async (
     pitComplete,
     revisionComplete,
     evaluatorComplete,
+    evaluatorComparisons,
   } = context;
   const maxCutoff = [...cutoffByDate.values()].sort((a, b) => b.getTime() - a.getTime())[0];
   const allMarketFacts = await ctx.repos.strategyBacktest.listMarketFacts({
@@ -380,8 +391,25 @@ const assembleBacktest = async (
       'evaluator-code',
       evaluatorComplete ? 'complete' : runs.size === 0 ? 'unavailable' : 'partial',
       evaluatorComplete
-        ? '所有逐日运行绑定相同 evaluator version 与 code hash'
-        : '历史运行缺少 evaluator code identity 或身份不一致',
+        ? '所有逐日运行绑定相同 evaluator version 与文件级 code identity'
+        : (() => {
+            const counts = new Map<string, number>();
+            for (const item of evaluatorComparisons) {
+              counts.set(item, (counts.get(item) ?? 0) + 1);
+            }
+            const labels: Record<string, string> = {
+              missing: '缺 evaluator 快照',
+              'not-v3': '旧版运行快照',
+              'version-mismatch': 'evaluator 版本不一致',
+              'legacy-identity': '旧 manifest 哈希无法验证，需重跑',
+              'identity-basis-mismatch':
+                '代码身份来源不同（src-files vs dist-artifact），不可跨环境比较',
+              'code-identity-mismatch': 'evaluator 代码内容已变化',
+            };
+            return `运行与当前 evaluator 不一致：${[...counts.entries()]
+              .map(([reason, count]) => `${labels[reason] ?? reason} ${count} 条`)
+              .join('、')}`;
+          })(),
       [...runs.values()].flatMap((run) => (run === null ? [] : [`strategy-run:${run.id}`])),
     ),
   ] satisfies StrictBacktestGateItem[];
