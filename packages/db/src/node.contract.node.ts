@@ -743,6 +743,57 @@ describe('T35 PIT universe 属性快照（Node 文件库）', () => {
       handle.close();
     }
   });
+
+  it('旧表缺属性列时启动迁移补列，旧行保持 unknown 且重复启动幂等', async () => {
+    const path = makeTempDbPath('t35-alter.db');
+    createNodeDrizzleRepos(path).close();
+    // 模拟 T35 之前的表结构：删掉四个属性列并写入一条只有身份的旧成员行。
+    const raw = new DatabaseSync(path);
+    for (const column of ['listing_status', 'industry', 'list_date', 'delist_date']) {
+      raw.exec(`ALTER TABLE stock_universe_snapshot_members DROP COLUMN ${column}`);
+    }
+    raw
+      .prepare('INSERT INTO stock_universe_snapshot_members (sync_id, stock_id) VALUES (?, ?)')
+      .run('sync-old', '600519.SH');
+    raw.close();
+
+    const columnsOf = (handle: NodeDrizzleReposHandle): string[] =>
+      clientOf(handle.db)
+        .prepare('PRAGMA table_info(stock_universe_snapshot_members)')
+        .all()
+        .map((row) => String((row as { name: string }).name));
+    const expectedColumns = [
+      'sync_id',
+      'stock_id',
+      'listing_status',
+      'industry',
+      'list_date',
+      'delist_date',
+    ];
+    const expectedFacts = [
+      { stockId: '600519.SH', code: '600519', exchange: 'SH', listingStatus: 'unknown' },
+    ];
+
+    const first = createNodeDrizzleRepos(path);
+    try {
+      expect(columnsOf(first)).toEqual(expectedColumns);
+      expect(await first.repos.stockUniverse.listSnapshotMemberFacts('sync-old')).toEqual(
+        expectedFacts,
+      );
+    } finally {
+      first.close();
+    }
+
+    const second = createNodeDrizzleRepos(path);
+    try {
+      expect(columnsOf(second)).toEqual(expectedColumns);
+      expect(await second.repos.stockUniverse.listSnapshotMemberFacts('sync-old')).toEqual(
+        expectedFacts,
+      );
+    } finally {
+      second.close();
+    }
+  });
 });
 
 describe('T48 B1a SQLite 只读输入预检', () => {
