@@ -154,10 +154,13 @@ export const evaluateTradingPlanBudget = (input: {
     const range = plan.position.targetPctRange;
     // 维持计划不随行情重写：计划自身记录的目标仍是"保持"，或区间整体不高于当前行情仓位时，
     // 都不把旧百分比解释成新的加仓额度。
+    // 陈旧记录不得豁免：计划记录的 currentPct 必须与当前行情仓位一致，否则按新增额度计，
+    // 避免"记录 10%、实际跌到 5%"的旧计划白拿预算。
     const recordedMaintain =
       range !== null &&
       range.min === range.max &&
       plan.position.currentPct !== null &&
+      Math.abs(current - plan.position.currentPct) <= 1e-9 &&
       range.min === plan.position.currentPct;
     const belowLive = range !== null && range.max <= current + 1e-9;
     const maintainsPosition =

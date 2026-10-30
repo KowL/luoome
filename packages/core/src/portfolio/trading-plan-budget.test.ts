@@ -179,9 +179,9 @@ describe('trading plan budget', () => {
   });
 
   it.each([
-    ['hold', 23],
+    ['hold', 25],
     ['hold', 27],
-    ['observe', 23],
+    ['observe', 25],
     ['observe', 27],
   ] as const)(
     '%s 维持计划在行情仓位变为 %s 后按当前仓位求值，不占用建仓预算',
@@ -226,6 +226,46 @@ describe('trading plan budget', () => {
         currentPct: 25,
         targetPctRange: { min: 25, max: 25 },
       });
+    },
+  );
+
+  it.each(['hold', 'observe'] as const)(
+    '%s 计划记录的 currentPct 与实际持仓不一致时不得享受 maintain 豁免',
+    (action) => {
+      const livePct = 23;
+      const currentFacts: AccountFacts = {
+        ...facts,
+        cashBalance: money(100),
+        stockMarketValue: money(900),
+        positions: facts.positions.map((position, index) => ({
+          ...position,
+          marketValue: money(index === 0 ? livePct * 10 : 900 - livePct * 10),
+        })),
+      };
+      // 计划记录 currentPct=25、区间 {25,25}，但实际只剩 23：旧豁免会白拿 2 个点。
+      const stale = plan({
+        id: 'stale-maintained',
+        stockId: '600519.SH',
+        currentPct: 25,
+        targetPct: 25,
+        action,
+      });
+      const result = evaluateTradingPlanBudget({
+        facts: currentFacts,
+        plans: [
+          stale,
+          plan({ id: 'new', stockId: '601398.SH', currentPct: 0, targetPct: 9, action: 'enter' }),
+        ],
+        stocks: new Map(),
+      });
+      expect(result.allocations[0]).toMatchObject({
+        targetPctMin: 25,
+        targetPctMax: 25,
+        incrementalPct: 2,
+      });
+      expect(result.maxTotalPct).toBe(101);
+      expect(result.totalStatus).toBe('blocked');
+      expect(result.proposedStockPct).toBe(90);
     },
   );
 

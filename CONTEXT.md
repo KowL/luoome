@@ -244,7 +244,9 @@ SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 too
 
 回答“对这个账户的这只股票，什么条件下做什么、目标仓位多少、持有到什么时候、何时失效”。
 `id` 由账户与股票稳定派生，版本不可变；`plan_json` 是唯一完整领域载荷，外层列（`version_id`、
-`status`、有效期等）只是存储元数据，必须与 `plan_json` 一致。计划把观察/建仓/加仓/持有/减仓/
+`status`、有效期等）只是存储元数据，必须与 `plan_json` 一致。该一致性由写路径与导入校验器强制；
+数据库层**有意不设 CHECK 约束**，以便旧单值计划（无结构化失效条件）仍可读——这是"历史可读"的
+取舍，不是疏漏。计划把观察/建仓/加仓/持有/减仓/
 退出/回避等动作与价格涨跌方向分开，入场用价格区间而非单个价格。目标仓位用**区间**表达：
 `targetPctRange{min,max}` 单位为百分点（0–100，与 `currentPct`/单票上限同量纲），并记录本次选点
 `rangePick`（`lower-bound`/`mid`/`volatility-scaled`，后者必须带可复算参数）、实际落点 `appliedPct`
@@ -256,7 +258,11 @@ SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 too
 预算只校验总仓位上限与单只股票上限（默认 100% / 30%）；行业合计上限已按用户决定移除，
 `stocks.industry` 不参与判定。总仓位上限取 100% 是为了挡住「多个计划的建议仓位合计超过账户
 总资产」这种不可执行状态，而不是限制用户实际愿意持有的比例；单票上限 30% 只挡住继续加仓，
-超限持仓仍可减仓。
+超限持仓仍可减仓。预算回执同时给出两个口径：`maxTotalPct/minTotalPct` 是**全部候选**（含被
+blocked 的）按 max/min 声明的组合暴露包络，`proposedStockPct` 只统计 included 的本次增量；
+两者口径不同，对不上是预期行为。维持计划（hold / 已持仓 observe）只有在其区间整体不高于实时
+仓位、或点区间等于**实时**仓位时才不占新增额度；计划记录的 `currentPct` 与实时持仓不一致时按
+新增额度计，避免陈旧计划白拿预算。
 计划锚定生成时的账户事实指纹（`accountFactsDigest` + `accountFactsAsOf`）：账本变化后旧计划判定失效，
 区间与结构化失效条件**同时**失效（不评估任何规则，必须重新生成）。生效计划必须至少一条结构化失效
 条件（复用 `TradingPlanCondition`，`phase∈{exit,risk}` 或 `kind=market-fact`）；`invalidationConditions`
