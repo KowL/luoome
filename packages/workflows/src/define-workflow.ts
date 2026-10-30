@@ -18,6 +18,8 @@ import type {
   CompleteStrategyObservationsOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
+  CreateRestatedStrategyObservationCandidatesInput,
+  CreateRestatedStrategyObservationCandidatesOutput,
   CreateStrategyAutonomyActionInput,
   CreateStrategyAutonomyActionOutput,
   CreateStrategyInput,
@@ -469,6 +471,10 @@ export interface WorkflowToolMap {
   readonly create_strategy_observation_candidates: ToolAccessor<
     typeof CreateStrategyObservationCandidatesInput,
     typeof CreateStrategyObservationCandidatesOutput
+  >;
+  readonly create_restated_strategy_observation_candidates: ToolAccessor<
+    typeof CreateRestatedStrategyObservationCandidatesInput,
+    typeof CreateRestatedStrategyObservationCandidatesOutput
   >;
   readonly prepare_strategy_data: ToolAccessor<
     typeof PrepareStrategyDataInput,

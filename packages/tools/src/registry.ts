@@ -24,6 +24,7 @@ import {
   listAlertPlansTool,
   updateAlertPlanTool,
 } from './tools/alert-plan.js';
+import { createRestatedStrategyObservationCandidatesTool } from './tools/backfill-strategy-observations.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import {
   appendChatMessageTool,
@@ -475,6 +476,7 @@ export const toolRegistry: Registry = createRegistry([
   completeStrategyObservationsTool,
   getSignalObservationStatsTool,
   createStrategyObservationCandidatesTool,
+  createRestatedStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
   // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列写入口；
   // 创建/转移为 workflow-only，不进公共 registry）

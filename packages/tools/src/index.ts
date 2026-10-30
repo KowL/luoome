@@ -43,6 +43,7 @@ export * from './tools/add-holding.js';
 export * from './tools/add-stock-event.js';
 export * from './tools/add-trade.js';
 export * from './tools/alert-plan.js';
+export * from './tools/backfill-strategy-observations.js';
 export * from './tools/batch-quote.js';
 export * from './tools/chat-session.js';
 export * from './tools/close-holding.js';

@@ -30,8 +30,8 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
 
 const STRATEGY_DSL_OPERATORS: Readonly<Record<StrategyFieldType, readonly string[]>> = {
@@ -666,6 +666,9 @@ export const getStrategyExperimentContextTool = defineTool({
       limitations.push('未指定 validation session；无法读取独立验证交易日、run 或观察事实。');
     }
 
+    // H8②：实验结论会进 Advice 证据链（factReferences.observationIds），只接受 pit 观察。
+    const vintageRejection = rejectNonPitObservations(evaluationObservations, 'Advice 证据链');
+    if (vintageRejection !== null) return vintageRejection;
     const summary = observationSummary(evaluationObservations, evaluationSignals);
     const selectedEvaluationObservations = evaluationObservations.filter(
       (observation) => observation.horizon === input.observationHorizon,

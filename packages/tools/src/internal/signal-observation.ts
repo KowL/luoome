@@ -2,6 +2,7 @@ import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   type DataProvenance,
   type SignalObservation,
+  type SignalObservationVintage,
   type StrategySignal,
   signalObservationDueAt,
   signalObservationId,
@@ -16,6 +17,7 @@ const pending = (
   baselinePrice: number,
   baselineAt: Date,
   provenance: DataProvenance,
+  vintage: SignalObservationVintage = 'pit',
 ): SignalObservation[] =>
   horizons.map((horizon) => ({
     id: signalObservationId(sourceKind, sourceId, horizon),
@@ -25,8 +27,8 @@ const pending = (
     baselinePrice,
     baselineAt,
     horizon,
-    // 前瞻写入：候选由当时的信号与价格快照构成，口径恒为 pit。
-    vintage: 'pit',
+    // 前瞻写入恒为 pit；回溯轨回填显式传 restated（只能进统计层，见 H8）。
+    vintage,
     status: 'pending',
     benchmarkStatus: 'unavailable',
     dueAt: signalObservationDueAt(baselineAt, horizon),
@@ -73,6 +75,7 @@ export const observationsForStrategySignal = (
   signal: StrategySignal,
   baseline: StrategySignalBaseline | undefined,
   fetchedAt: Date,
+  vintage: SignalObservationVintage = 'pit',
 ): SignalObservation[] =>
   baseline === undefined
     ? horizons.map((horizon) => ({
@@ -81,7 +84,7 @@ export const observationsForStrategySignal = (
         sourceId: signal.id,
         stockId: signal.stockId,
         horizon,
-        vintage: 'pit' as const,
+        vintage,
         status: 'unavailable' as const,
         benchmarkStatus: 'unavailable' as const,
         provenance: {
@@ -93,12 +96,20 @@ export const observationsForStrategySignal = (
         },
         unavailableReason: '策略信号发生时没有可审计的价格基准',
       }))
-    : pending('strategy-signal', signal.id, signal.stockId, baseline.price, baseline.at, {
-        provider: baseline.provider,
-        observedAt: baseline.at,
-        fetchedAt,
-        freshness: 'unknown',
-      });
+    : pending(
+        'strategy-signal',
+        signal.id,
+        signal.stockId,
+        baseline.price,
+        baseline.at,
+        {
+          provider: baseline.provider,
+          observedAt: baseline.at,
+          fetchedAt,
+          freshness: 'unknown',
+        },
+        vintage,
+      );
 
 export const saveObservationCandidates = async (
   items: readonly SignalObservation[],

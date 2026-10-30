@@ -21,6 +21,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 
 const digest = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -275,6 +276,12 @@ export const getDecisionReviewContextTool = defineTool({
       ).values(),
     ].sort((a, b) => b.executedAt.getTime() - a.executedAt.getTime() || b.id.localeCompare(a.id));
     const observations = await explicitObservations(ctx, input.subject, stockId);
+    // H8③：复盘「当时依据」只接受 pit 观察。
+    const vintageRejection = rejectNonPitObservations(
+      observations,
+      'DecisionReview 的「当时依据」',
+    );
+    if (vintageRejection !== null) return vintageRejection;
     return {
       accountId,
       observations,

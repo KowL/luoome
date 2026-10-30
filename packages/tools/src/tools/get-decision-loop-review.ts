@@ -11,9 +11,9 @@ import {
   type Trade,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool, errNotFound } from '../define-tool.js';
 import { accountAdviceOutcomes } from '../internal/account-advice-outcomes.js';
+import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 
 const REVIEW_LIMIT = 1000;
 
@@ -248,6 +248,9 @@ export const getDecisionLoopReviewTool = defineTool({
         limit: input.limit,
       }),
     ]);
+    // H8①：复盘里的「策略历史命中」陈述只接受 pit 观察；restated 只进统计层。
+    const vintageRejection = rejectNonPitObservations(allObservations, '策略历史命中陈述');
+    if (vintageRejection !== null) return vintageRejection;
     const allReviews = await ctx.repos.decisionReview.list({ accountId, limit: 10000 });
     const outcomeByAdvice = await accountAdviceOutcomes(ctx, accountId);
     const selectedSharedAdviceIds = new Set(
