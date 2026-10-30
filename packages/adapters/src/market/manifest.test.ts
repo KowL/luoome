@@ -1,7 +1,11 @@
 import type { Logger } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { createMarketAdapterFromEnv, type MarketSourceId } from './factory.js';
+import {
+  createMarketAdapterFromEnv,
+  type MarketSourceId,
+  MarketSourceIdSchema,
+} from './factory.js';
 import { MARKET_SOURCE_MANIFEST } from './manifest.js';
 
 const silentLogger = (): Logger => {
@@ -30,7 +34,11 @@ describe('MARKET_SOURCE_MANIFEST 与 factory binding 一致性', () => {
     });
   }
 
-  it('manifest 覆盖全部五个行情源', () => {
-    expect([...ids].sort()).toEqual(['eastmoney', 'fuyao', 'sina', 'tencent', 'tushare']);
+  it('manifest 覆盖全部可配置行情源', () => {
+    expect([...ids].sort()).toEqual([...MarketSourceIdSchema.options].sort());
+  });
+
+  it('xueqiu 仅声明报价与日线，无需额外凭证配置', () => {
+    expect(MARKET_SOURCE_MANIFEST.xueqiu).toEqual({ capabilities: ['quote', 'daily-bars'] });
   });
 });

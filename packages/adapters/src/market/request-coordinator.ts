@@ -74,6 +74,7 @@ const providerOf = (input: Parameters<typeof fetch>[0], fallback: string): strin
     ['sina', ['sina.com.cn', 'sinajs.cn', 'sina.cn']],
     ['tushare', ['tushare.pro']],
     ['fuyao', ['aicubes.cn']],
+    ['xueqiu', ['xueqiu.com']],
     ['10jqka', ['10jqka.com.cn']],
   ] as const) {
     if (domains.some((domain) => host === domain || host.endsWith(`.${domain}`))) return source;

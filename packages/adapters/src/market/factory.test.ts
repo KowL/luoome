@@ -1,8 +1,11 @@
-import type { Logger } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
+import { DailyBarSchema, type Logger, QuoteSchema } from '@luoome/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { EastmoneySource } from '../eastmoney/source.js';
-import { createMarketAdapterFromEnv } from './factory.js';
+import { createMarketAdapterFromEnv, marketSourceOrderFromEnv } from './factory.js';
+import { XueqiuAdapter } from './xueqiu.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 const silentLogger = (): Logger => {
   const noop = (): void => {};
@@ -76,6 +79,200 @@ describe('market/factory', () => {
         { logger: silentLogger() },
       ),
     ).toThrow(/非法/);
+  });
+
+  it('xueqiu 仅显式启用，环境顺序沿用规范化与去重校验', () => {
+    expect(marketSourceOrderFromEnv({})).toEqual(['eastmoney', 'tencent', 'sina']);
+    expect(marketSourceOrderFromEnv({ LUOOME_MARKET_SOURCES: ' XUEQIU , Tencent ' })).toEqual([
+      'xueqiu',
+      'tencent',
+    ]);
+    expect(() => marketSourceOrderFromEnv({ LUOOME_MARKET_SOURCES: 'xueqiu,XUEQIU' })).toThrow(
+      /不能重复/,
+    );
+    expect(() =>
+      marketSourceOrderFromEnv({ LUOOME_MARKET_SOURCES: 'xueqiu,eastmoney,tencent,sina' }),
+    ).toThrow(/最多启用 3 个/);
+  });
+
+  it('xueqiu 只绑定沪深报价与日线，不隐式提供搜索、指数或分钟能力', async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'xueqiu' },
+      { logger: silentLogger(), fetchImpl },
+    );
+    expect(adapter.marketSourceStatus()).toEqual(
+      ['quote', 'daily-bars'].map((dataset) => ({
+        dataset,
+        source: 'xueqiu',
+        coverage: ['CN_A_SHARES_SH_SZ'],
+        capabilityEnabled: true,
+        configurationReady: true,
+      })),
+    );
+    await expect(adapter.searchStocks('茅台')).rejects.toThrow(/unsupported_capability/);
+    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
+    await expect(adapter.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow(
+      /unsupported_capability/,
+    );
+    await expect(adapter.fetchIntradayMinutes('600519.SH')).rejects.toThrow(
+      /unsupported_capability/,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('显式 sourceOrder 将报价与 qfq 日线交给 XueqiuAdapter，并记录真实数据时间', async () => {
+    const now = new Date('2026-09-30T08:00:00.000Z');
+    const observedAt = new Date('2026-09-30T07:00:00.000Z');
+    const quote = QuoteSchema.parse({
+      stockId: '600519.SH',
+      observedAt,
+      fetchedAt: now,
+      timestampSource: 'upstream',
+      open: 1250,
+      high: 1260,
+      low: 1240,
+      close: 1258,
+      volume: 100_000,
+      source: 'xueqiu',
+    });
+    const retrievalQuote = QuoteSchema.parse({
+      ...quote,
+      stockId: '000001.SZ',
+      observedAt: now,
+      timestampSource: 'retrieval',
+    });
+    const quoteCall = vi
+      .spyOn(XueqiuAdapter.prototype, 'fetchQuote')
+      .mockResolvedValueOnce(quote)
+      .mockResolvedValueOnce(retrievalQuote);
+    const bars = ['2026-09-29', '2026-09-30'].map((date) =>
+      DailyBarSchema.parse({ ...quote, date, adjustment: 'qfq' }),
+    );
+    const barsCall = vi.spyOn(XueqiuAdapter.prototype, 'fetchDailyBars').mockResolvedValue(bars);
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tencent' },
+      { logger: silentLogger(), clock: () => now, sourceOrder: ['xueqiu'] },
+    );
+    const range = { start: new Date('2026-09-29'), end: new Date('2026-09-30') };
+    expect(await adapter.fetchQuote('600519.SH')).toEqual(quote);
+    expect(quoteCall).toHaveBeenNthCalledWith(1, '600519.SH');
+    expect(adapter.marketSourceStatus().find((status) => status.dataset === 'quote')).toMatchObject(
+      {
+        source: 'xueqiu',
+        lastAttemptAt: now,
+        lastSuccessAt: now,
+        dataAsOf: observedAt,
+      },
+    );
+    expect(await adapter.fetchDailyBars('600519.SH', range)).toEqual(bars);
+    expect(barsCall).toHaveBeenCalledExactlyOnceWith('600519.SH', range);
+    expect(
+      adapter.marketSourceStatus().find((status) => status.dataset === 'daily-bars'),
+    ).toMatchObject({ source: 'xueqiu', dataAsOf: bars.at(-1)?.date });
+    expect(await adapter.fetchQuote('000001.SZ')).toEqual(retrievalQuote);
+    expect(quoteCall).toHaveBeenNthCalledWith(2, '000001.SZ');
+    expect(
+      adapter.marketSourceStatus().find((status) => status.dataset === 'quote')?.dataAsOf,
+    ).toBeUndefined();
+  });
+
+  it('xueqiu 报价失败时按配置顺序降级到腾讯', async () => {
+    const quoteCall = vi
+      .spyOn(XueqiuAdapter.prototype, 'fetchQuote')
+      .mockRejectedValue(new Error('xueqiu unavailable'));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(tencentQuoteLine('sz000001')));
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'xueqiu,tencent' },
+      { logger: silentLogger(), fetchImpl },
+    );
+    expect((await adapter.fetchQuote('000001.SZ')).source).toBe('tencent');
+    expect(quoteCall).toHaveBeenCalledExactlyOnceWith('000001.SZ');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('qt.gtimg.cn');
+    expect(adapter.marketSourceStatus().find((status) => status.source === 'xueqiu')).toMatchObject(
+      {
+        dataset: 'quote',
+        lastErrorKind: 'upstream_error',
+      },
+    );
+  });
+
+  it('xueqiu 真实适配器收到工厂注入的 fetch 与时钟，分别请求报价和前复权日 K', async () => {
+    const now = new Date('2026-09-30T08:00:00.000Z');
+    const observedAt = new Date('2026-09-30T07:00:00.000Z');
+    const urls: URL[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      if (url.href === 'https://www.xueqiu.com/') {
+        return new Response('', {
+          headers: { 'set-cookie': 'xq_a_token=synthetic-session; Domain=.xueqiu.com; Path=/' },
+        });
+      }
+      expect(url.hostname).toBe('stock.xueqiu.com');
+      expect(url.searchParams.get('symbol')).toBe('SH600519');
+      expect(new Headers(init?.headers).get('cookie')).toContain('xq_a_token=synthetic-session');
+      if (url.pathname === '/v5/stock/quote.json') {
+        return Response.json({
+          error_code: 0,
+          data: {
+            quote: {
+              symbol: 'SH600519',
+              timestamp: observedAt.getTime(),
+              open: 1250,
+              high: 1260,
+              low: 1240,
+              current: 1258,
+              volume: 100_000,
+            },
+          },
+        });
+      }
+      expect(url.pathname).toBe('/v5/stock/chart/kline.json');
+      expect(url.searchParams.get('period')).toBe('day');
+      expect(url.searchParams.get('type')).toBe('before');
+      return Response.json({
+        error_code: 0,
+        data: {
+          symbol: 'SH600519',
+          column: ['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+          item: [[observedAt.getTime(), 1250, 1260, 1240, 1258, 100_000]],
+        },
+      });
+    });
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'xueqiu' },
+      { logger: silentLogger(), clock: () => now, fetchImpl },
+    );
+    expect(await adapter.fetchQuote('600519.SH')).toMatchObject({
+      source: 'xueqiu',
+      close: 1258,
+      observedAt,
+      fetchedAt: now,
+      volume: 100_000,
+    });
+    const date = new Date('2026-09-30');
+    expect(await adapter.fetchDailyBars('600519.SH', { start: date, end: date })).toEqual([
+      DailyBarSchema.parse({
+        stockId: '600519.SH',
+        date,
+        open: 1250,
+        high: 1260,
+        low: 1240,
+        close: 1258,
+        volume: 100_000,
+        adjustment: 'qfq',
+        source: 'xueqiu',
+      }),
+    ]);
+    expect(urls.map((url) => url.pathname)).toEqual([
+      '/',
+      '/v5/stock/quote.json',
+      '/v5/stock/chart/kline.json',
+    ]);
   });
 
   it('real：Eastmoney 形状响应 → quote.source=eastmoney', async () => {

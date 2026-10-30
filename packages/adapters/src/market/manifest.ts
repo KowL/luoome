@@ -42,6 +42,7 @@ export const MARKET_SOURCE_MANIFEST: Readonly<Record<MarketSourceId, MarketSourc
     ],
   },
   sina: { capabilities: ['quote', 'batch-quote', 'daily-bars'] },
+  xueqiu: { capabilities: ['quote', 'daily-bars'] },
   tushare: {
     capabilities: ['quote', 'daily-bars', 'search', 'minute-bars', 'delayed-index'],
     requiredEnv: { key: 'TUSHARE_TOKEN', label: 'Tushare' },

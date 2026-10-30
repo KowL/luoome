@@ -429,12 +429,13 @@ surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
-`eastmoney`、`sina`、`tencent`、`tushare`、`fuyao`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
+`eastmoney`、`sina`、`tencent`、`tushare`、`fuyao`、`xueqiu`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
 Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
 `http://api.tushare.pro`），显式启用 fuyao 时必须配置 `FUYAO_API_KEY`（`FUYAO_BASE_URL` 可选，
 缺省 `https://fuyao.aicubes.cn`），非法配置在启动期抛错。
 详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md) 与
 [fuyao-market-adapter-design](./ddd/fuyao-market-adapter-design.md)。
+雪球仅绑定沪深个股 `quote` 与 `daily-bars`，日 K 固定使用上游 `type=before` 前复权口径，按列名解析并向过去分页；成交量原本以股计，不再乘 100。访客 cookie 仅保存在适配器内存中，首次请求自动建立，会话失效最多重建一次；失败经既有 registry 降级并记录来源状态。报价保留上游交易时间，缺失时明确标记 retrieval。没有批量报价、全市场快照、指数、搜索或分时绑定。
 fuyao 快照信封时间在休市日仍随请求更新，逐股行无行情事件时间；其报价标为
 `timestampSource=retrieval`，全市场快照不填 `observedAt/dataAsOf`，不能作为盘中行动的可信时间证据。
 

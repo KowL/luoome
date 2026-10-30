@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createMarketAdapterFromEnv } from '@luoome/adapters';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createMarketSettingsHandler,
@@ -25,6 +26,72 @@ const input = () =>
   });
 
 describe('DSH market settings', () => {
+  it('offers Xueqiu without credentials while preserving the default source order', async () => {
+    const { settings } = store();
+    const handler = createMarketSettingsHandler({
+      read: () => settings.read(),
+      save: (value) => settings.save(value, () => () => {}),
+    });
+    const response = await handler(new Request('https://dsh.test/api/luoome/settings/market'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        activeOrder: ['eastmoney', 'tencent', 'sina'],
+        sources: expect.arrayContaining([
+          { id: 'xueqiu', label: '雪球（沪深报价 / 日线）', configured: true },
+        ]),
+      },
+    });
+  });
+
+  it('saves and restores Xueqiu through the settings API and builds the configured capabilities', async () => {
+    const baseEnv = { LUOOME_MARKET_PROVIDER: 'real' };
+    const { settings, path } = store(baseEnv);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    let market = createMarketAdapterFromEnv(settings.runtimeEnv(), { logger });
+    const handler = createMarketSettingsHandler({
+      read: () => settings.read(),
+      save: (value) =>
+        settings.save(value, (env) => {
+          const next = createMarketAdapterFromEnv(env, { logger });
+          return () => {
+            market = next;
+          };
+        }),
+    });
+    const response = await handler(
+      new Request('https://dsh.test/api/luoome/settings/market', {
+        method: 'POST',
+        headers: { origin: 'https://dsh.test', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sources: ['xueqiu', 'tencent'],
+          fuyao: { baseUrl: settings.read().fuyao.baseUrl },
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: { activeOrder: ['xueqiu', 'tencent'], fuyao: { configured: false } },
+    });
+    expect(market.marketSourceStatus().slice(0, 2)).toEqual(
+      ['quote', 'daily-bars'].map((dataset) => ({
+        dataset,
+        source: 'xueqiu',
+        coverage: ['CN_A_SHARES_SH_SZ'],
+        capabilityEnabled: true,
+        configurationReady: true,
+      })),
+    );
+    expect(readFileSync(path, 'utf8')).toContain('LUOOME_MARKET_SOURCES="xueqiu,tencent"');
+    const reopened = new MarketSettingsStore(baseEnv, path);
+    expect(reopened.read().activeOrder).toEqual(['xueqiu', 'tencent']);
+    expect(
+      createMarketAdapterFromEnv(reopened.runtimeEnv(), { logger }).marketSourceStatus(),
+    ).toEqual(market.marketSourceStatus());
+  });
+
   it('persists private credentials, keeps unrelated env entries and never returns a secret', () => {
     const { settings, path } = store();
     writeFileSync(path, '# existing settings\nUNRELATED=keep-me\n');

@@ -17,6 +17,7 @@ import {
 } from './source-registry.js';
 import { TencentAdapter } from './tencent.js';
 import { TushareMarketAdapter } from './tushare.js';
+import { XueqiuAdapter } from './xueqiu.js';
 
 /**
  * 行情适配器装配（v0.5 起，surface 组装根统一入口）。
@@ -44,7 +45,14 @@ export interface CreateMarketAdapterDeps {
   readonly requestCoordinator?: MarketRequestCoordinator;
 }
 
-export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare', 'fuyao']);
+export const MarketSourceIdSchema = z.enum([
+  'eastmoney',
+  'sina',
+  'tencent',
+  'tushare',
+  'fuyao',
+  'xueqiu',
+]);
 export type MarketSourceId = z.infer<typeof MarketSourceIdSchema>;
 
 export const MarketSourceOrderSchema = z
@@ -113,6 +121,10 @@ export const createMarketAdapterFromEnv = (
       case 'fuyao': {
         const adapter = deps.sources?.fuyao ?? buildFuyao(env, sourceOpts, deps.logger);
         return fuyaoBindings(adapter);
+      }
+      case 'xueqiu': {
+        const adapter = new XueqiuAdapter(sourceOpts);
+        return xueqiuBindings(adapter);
       }
       default:
         throw new Error(`不支持的行情数据源：${String(source satisfies never)}`);
@@ -331,6 +343,26 @@ const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
     configurationReady: true,
     execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
     observationOf: batchQuoteObservation,
+  },
+  {
+    capability: 'daily-bars',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
+    observationOf: (bars) => successObservation(bars.at(-1)?.date),
+  },
+];
+
+const xueqiuBindings = (adapter: XueqiuAdapter): AnyMarketCapabilityBinding[] => [
+  {
+    capability: 'quote',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId }) => adapter.fetchQuote(stockId),
+    observationOf: (quote) =>
+      successObservation(quote.timestampSource === 'upstream' ? quote.observedAt : undefined),
   },
   {
     capability: 'daily-bars',

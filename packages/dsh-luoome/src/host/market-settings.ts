@@ -52,6 +52,7 @@ const SOURCE_LABELS: Readonly<Record<MarketSourceId, string>> = {
   eastmoney: '东方财富',
   tencent: '腾讯行情',
   sina: '新浪行情',
+  xueqiu: '雪球（沪深报价 / 日线）',
   tushare: 'Tushare',
   fuyao: 'FUYAO（同花顺）',
 };

@@ -146,6 +146,10 @@ const SOURCE_META: Readonly<
   eastmoney: { label: '东方财富', description: '公开实时行情与日线，默认主源' },
   tencent: { label: '腾讯行情', description: '公开行情备源，覆盖沪深 A 股' },
   sina: { label: '新浪行情', description: '公开沪深目录与复权日线备源' },
+  xueqiu: {
+    label: '雪球',
+    description: '访客会话读取沪深个股报价与前复权日线，仅覆盖这两类能力',
+  },
   tushare: { label: 'Tushare', description: 'tushare.pro 数据服务，支持实时快照、日线与复权因子' },
   fuyao: {
     label: '同花顺 fuyao',

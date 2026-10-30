@@ -447,7 +447,7 @@ DSH 侧栏通过 LUOOME 入口进入，主区顶部标签切换五个业务视�
 面板只做投影，不自己算数：数字必须与工具输出逐位一致。看盘页点击「刷新全部」或各区「刷新」，其他面板点击「刷新事实」读取当前工具结果，
 工具失败显示错误，不以零值代替缺失数据。
 
-个股详情新增「筹码与板块」卡片，点击「读取股东户数与所属板块」后按需获取东方财富 F10 档案，展示最近一期统计截止日、股东户数、较上期变动、户均持股与户均市值，以及上游所属板块及入选理由。统计截止日与读取时间分开显示；合法空结果标注未披露，接口异常显示错误。本功能使用 `get_stock_profile` external 工具与 market 白名单，不经过通用 read 面；未启用时显示权限错误。这块档案取自东方财富；未接入雪球讨论。
+个股详情新增「筹码与板块」卡片，点击「读取股东户数与所属板块」后按需获取东方财富 F10 档案，展示最近一期统计截止日、股东户数、较上期变动、户均持股与户均市值，以及上游所属板块及入选理由。统计截止日与读取时间分开显示；合法空结果标注未披露，接口异常显示错误。本功能使用 `get_stock_profile` external 工具与 market 白名单，不经过通用 read 面；未启用时显示权限错误。这块档案仍取自东方财富；雪球报价与日 K 由独立行情源配置控制，未接入雪球讨论。
 
 在「关注」页可新建、编辑、启停或归档列表，添加股票、调整研究阶段和优先级、移除手动关注。
 每次修改在面板提交后按冻结输入直接执行并返回 Operation 回执；移除手动关注只结束 manual 来源，
@@ -777,7 +777,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 | `LUOOME_HOME` | `~/.luoome` | 数据根目录 |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序（最多三个）；可加入 `xueqiu`（访客会话）、`tushare`（需 `TUSHARE_TOKEN`）或 `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
@@ -815,6 +815,8 @@ TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会
 `LUOOME_MARKET_PROVIDER=real` 按 `LUOOME_MARKET_SOURCES` 从左到右尝试已注册能力；默认顺序是
 Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，不生成价格。Sina 当前只提供
 沪深目录和 qfq 日线，不会伪装成实时快照或搜索来源；未覆盖的市场返回 not_supported。
+
+雪球可在 DSH「设置 → 投资设置」的行情源列表启用并调整优先级，或配置 `LUOOME_MARKET_SOURCES=xueqiu,eastmoney,tencent`。它仅覆盖沪深个股报价与前复权日 K，个股详情沿用同一工具链读取，并显示实际数据来源；其他能力由已启用且支持该能力的源提供。访客会话自动建立和续期，不需要填写雪球账号 cookie；cookie 只存在进程内存。会话或接口异常时按现有优先级降级，不把不复权 K 线当作前复权数据。
 
 ### 12.5 luoome 侧找不到模型或 provider 密钥
 

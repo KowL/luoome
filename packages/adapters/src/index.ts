@@ -40,6 +40,7 @@ export * from './market/source-registry.js';
 export * from './market/tencent.js';
 export * from './market/tushare.js';
 export * from './market/types.js';
+export * from './market/xueqiu.js';
 export * from './news/10jqka.js';
 // 财经要闻（东方财富公开新闻 API）
 export * from './news/eastmoney.js';
