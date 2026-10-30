@@ -224,13 +224,15 @@ for (const mode of ['memory', 'drizzle'] as const) {
           limit: 1,
         });
         expect(activity.map((item) => item.revision.revision)).toEqual([2]);
+        const firstActivity = activity[0];
+        if (firstActivity === undefined) throw new Error('missing fixture activity');
         const olderActivity = await repos.decisionReview.listActivity({
           accountId: 'account-1',
           since: new Date('2026-09-02T00:00:00Z'),
           until: new Date('2026-09-03T00:00:00Z'),
           cursor: {
-            recordedAt: activity[0]!.revision.recordedAt,
-            sequence: activity[0]!.revision.sequence,
+            recordedAt: firstActivity.revision.recordedAt,
+            sequence: firstActivity.revision.sequence,
           },
           limit: 1,
         });
@@ -273,13 +275,12 @@ for (const mode of ['memory', 'drizzle'] as const) {
         });
         const firstPage = await repos.decisionReview.list({ accountId: 'account-1', limit: 1 });
         expect(firstPage.map((item) => item.review.id)).toEqual([review.id]);
+        const head = firstPage[0];
+        if (head === undefined) throw new Error('missing fixture first page');
         const nextPage = await repos.decisionReview.list({
           accountId: 'account-1',
           limit: 1,
-          cursor: {
-            occurredAt: firstPage[0]!.review.sourceOccurredAt,
-            id: firstPage[0]!.review.id,
-          },
+          cursor: { occurredAt: head.review.sourceOccurredAt, id: head.review.id },
         });
         expect(nextPage.map((item) => item.review.id)).toEqual([olderReview.id]);
         await repos.trade.save({

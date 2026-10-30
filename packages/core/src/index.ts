@@ -3,9 +3,6 @@
 // 依赖注入上下文
 export * from './context.js';
 export * from './data-import.js';
-export * from './schema-migrations.js';
-export * from './repository/data-import.js';
-export * from './repository/schema-migration.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/account-facts.js';
@@ -71,10 +68,13 @@ export * from './portfolio/performance.js';
 export * from './portfolio/trading-plan-budget.js';
 export * from './public-market-store.js';
 export * from './report-automation.js';
+export * from './repository/data-import.js';
 // 仓储接口
 export * from './repository/index.js';
 export * from './repository/investment-workspace.js';
+export * from './repository/schema-migration.js';
 export * from './research-vault.js';
+export * from './schema-migrations.js';
 // 数据源可插拔与统一观测端口（SourceId / SourceErrorKind / SourceStatus）
 export * from './source.js';
 export * from './strategy/adaptive-personality.js';

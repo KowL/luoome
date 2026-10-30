@@ -204,7 +204,9 @@ for (const mode of ['memory', 'drizzle'] as const) {
           }),
         ).toBe(true);
         const accountA = await repo.listNonTerminalOperationsByAccount('a');
-        expect(accountA.map((entry) => [entry.id, entry.userId, entry.state, entry.tool]).sort()).toEqual([
+        expect(
+          accountA.map((entry) => [entry.id, entry.userId, entry.state, entry.tool]).sort(),
+        ).toEqual([
           ['op-other-user', 'u2', 'executing', 'batch'],
           ['op-pending', 'u', 'pending', 'batch'],
         ]);

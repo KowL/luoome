@@ -286,8 +286,14 @@ export class DrizzleDecisionReviewRepository implements DecisionReviewRepository
                   ),
                 )
                 .get();
-        if (oldRevision !== undefined && oldRevision.contentHash === input.contentHash) {
-          const result = { review: toReview(current!), revision: toRevision(oldRevision) };
+        // oldRevision 只在 current 已存在时才会查到；显式带上 current 判空让类型自证。
+        if (
+          current !== undefined &&
+          oldRevision !== undefined &&
+          oldRevision.contentHash === input.contentHash
+        ) {
+          const review = toReview(current);
+          const result = { review, revision: toRevision(oldRevision) };
           tx.insert(decisionWriteReceipts)
             .values({
               accountId: input.accountId,

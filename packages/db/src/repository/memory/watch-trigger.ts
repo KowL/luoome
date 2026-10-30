@@ -166,20 +166,26 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
+    const accountId = input.accountId;
     const projected: WatchTrigger[] =
-      input.accountId === undefined
+      accountId === undefined
         ? [...this.items.values()]
         : await Promise.all(
             [...this.items.values()].map(async (trigger) => {
               const current = await this.decisionReview?.findBySubject({
-                accountId: input.accountId!,
+                accountId,
                 subject: { kind: 'watch-trigger', id: trigger.id },
               });
               const { feedback: _legacy, feedbackAt: _legacyAt, ...base } = trigger;
               const feedback = current?.revision.content.triggerFeedback;
-              return feedback === null || feedback === undefined
-                ? base
-                : { ...base, feedback, feedbackAt: current!.revision.recordedAt };
+              if (
+                feedback === null ||
+                feedback === undefined ||
+                current === null ||
+                current === undefined
+              )
+                return base;
+              return { ...base, feedback, feedbackAt: current.revision.recordedAt };
             }),
           );
     const filtered = projected.filter(

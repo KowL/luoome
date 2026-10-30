@@ -5,6 +5,7 @@ import {
   type DecisionReviewContentPatch,
   DecisionReviewContentPatchSchema,
   DecisionReviewContentSchema,
+  type DecisionReviewContext,
   DecisionReviewContextSchema,
   DecisionReviewRevisionSchema,
   DecisionReviewSchema,
@@ -379,18 +380,29 @@ export const saveDecisionReviewTool = defineTool({
     if (source === 'denied') return denied();
     if (current === null && source === null)
       return errNotFound('DecisionReviewSource', input.subject.id);
-    const context = current?.review.context ?? {
-      schemaVersion: 1 as const,
-      capturedAt: ctx.clock(),
-      sourceDataAsOf: source!.sourceDataAsOf,
-      captureOrigin: 'user' as const,
-      source: source!.source,
-      contextHash: digest({ subject: input.subject, source: source!.source }),
-    };
+    // current === null 时 source 必非空（上面的 notFound 已拦）；显式分叉让类型自证。
+    let context: DecisionReviewContext;
+    let occurredAt: Date;
+    let stockId: string | null;
+    if (current === null) {
+      if (source === null) return errNotFound('DecisionReviewSource', input.subject.id);
+      context = {
+        schemaVersion: 1 as const,
+        capturedAt: ctx.clock(),
+        sourceDataAsOf: source.sourceDataAsOf,
+        captureOrigin: 'user' as const,
+        source: source.source,
+        contextHash: digest({ subject: input.subject, source: source.source }),
+      };
+      occurredAt = source.occurredAt;
+      stockId = source.stockId;
+    } else {
+      context = current.review.context;
+      occurredAt = current.review.sourceOccurredAt;
+      stockId = current.review.stockId;
+    }
     if (context.contextHash !== input.contextHash)
       return errInvalidInput('来源已变化，请刷新预览后重新确认');
-    const occurredAt = current?.review.sourceOccurredAt ?? source!.occurredAt;
-    const stockId = current?.review.stockId ?? source!.stockId;
     const tradeFactHashes: Record<string, string> = {};
     for (const id of content.tradeIds) {
       const trade = await ctx.repos.trade.findById(id);

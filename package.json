@@ -20,6 +20,7 @@
     "test:panels-browser": "env npx --yes node@24 infra/dsh/panels-browser-acceptance.ts",
     "tools:list": "npm exec --yes --package=tsx@4 --package=node@24 -- tsx packages/tools/src/registry-list.ts",
     "test:all": "bun run test && bun run test:db && bun run test:db:node && bun run test:web && bun run test:dsh-luoome:e2e",
+    "test:baseline": "bun --no-env-file infra/test-baseline.ts",
     "web": "bun --no-env-file apps/web/src/index.ts",
     "typecheck": "for d in packages/* apps/*; do if find \"$d\" -maxdepth 4 -name '*.ts' -not -path '*/node_modules/*' | grep -q .; then echo \"== typecheck $d\"; (cd \"$d\" && tsc --noEmit) || exit 1; fi; done",
     "lint": "biome check .",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
     "@types/bun": "^1.3.14",
+    "@vitest/coverage-v8": "4.1.10",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },

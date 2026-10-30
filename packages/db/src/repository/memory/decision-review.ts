@@ -100,9 +100,10 @@ export class InMemoryDecisionReviewRepository
               review.id < input.cursor.id)),
       )
       .flatMap(({ review, revision }) => {
-        if (input.throughSequence === undefined) return [{ review, revision }];
+        const throughSequence = input.throughSequence;
+        if (throughSequence === undefined) return [{ review, revision }];
         const selected = [...(this.history.get(review.id) ?? [])]
-          .filter((item) => item.sequence <= input.throughSequence!)
+          .filter((item) => item.sequence <= throughSequence)
           .sort((a, b) => b.sequence - a.sequence)[0];
         return selected === undefined
           ? []

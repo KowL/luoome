@@ -749,7 +749,9 @@ describe('createDrizzleRepos / ensureSchema', () => {
           )[0]
           ?.sql.replace(/\s+/g, ' ')
           .trim(),
-      ).toBe("CREATE TABLE data_import_receipts ( user_id TEXT NOT NULL, account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, archive_digest TEXT NOT NULL, original_request_id TEXT NOT NULL, committed_at INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (user_id, account_id, request_id) )");
+      ).toBe(
+        'CREATE TABLE data_import_receipts ( user_id TEXT NOT NULL, account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, archive_digest TEXT NOT NULL, original_request_id TEXT NOT NULL, committed_at INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (user_id, account_id, request_id) )',
+      );
       handle.db.run(
         sql`INSERT INTO data_import_receipts (user_id,account_id,request_id,request_hash,archive_digest,original_request_id,committed_at,result_json)
           VALUES ('u','a','r','${'a'.repeat(64)}','${'b'.repeat(64)}','r',1000,'{}')`,

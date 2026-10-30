@@ -177,6 +177,21 @@ bun --no-env-file run web
 单机 Web 用 `bun --no-env-file run web` 启动（`bun run web` 已内建 `--no-env-file`），只监听
 `127.0.0.1`。批量调度由 DSH 定时任务负责，没有常驻调度进程，也没有独立 CLI 入口。
 
+## 测试基线
+
+测试数量不是手写常量，是跑出来的事实：
+
+```bash
+bun run test:baseline   # 逐段跑 test:all，写 infra/test-baseline.json（含各段文件数/用例数与覆盖率）
+```
+
+**什么时候必须重跑**：新增/删除测试文件、新增/删除测试用例、调整 vitest 收集口径（`vitest.config.ts` 的
+include/exclude）、或改动覆盖率配置。PR 里改测试数量却不重跑基线，会被评审直接打回——手改
+`infra/test-baseline.json` 等于让基线撒谎。覆盖率与基线相比差因不得超过 2pp（见 PR 模板）。
+
+M2 的验收口径是**两个可验证事实**，不是百分比：M2 期间删除的 17 个测试文件零残留
+（`infra/test-baseline.test.ts` 逐文件断言路径不存在、且不在 `test:all` 的收集结果里），以及本基线产物存在。
+
 ## 自动任务
 
 批处理调度由 **DSH 定时任务**负责：提醒写入真实投递回执后，宿主直接通过 `executeScheduled`

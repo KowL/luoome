@@ -116,6 +116,7 @@ workflows ──► tools ──► core
 | `bun run test:panels-browser --overview-only` | 真实 DSH 看盘浏览器验收：分区慢响应、失败恢复、分页、排序、个股详情与窄屏；需 Chrome，可用 `CHROME_PATH` 指定 |
 | `bun run build:dsh-luoome` | 构建 DSH 插件产物（`dist/host.js` + `dist/client.js`） |
 | `bun run check:layers` | 依赖方向静态检查 |
+| `bun run test:baseline` | 重跑 test:all 各段并刷新 `infra/test-baseline.json`（改了测试就必须重跑，不得手改数字） |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
 | `bun run tools:list` | 输出当前 registry tool 清单（未归类 = 0） |

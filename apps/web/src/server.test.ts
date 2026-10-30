@@ -2116,9 +2116,9 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/publish'))).status).toBe(
       403,
     );
-    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/evaluations'))).status).toBe(
-      403,
-    );
+    expect(
+      (await externalOnly.fetch(guardedRequest('/api/strategies/x3/evaluations'))).status,
+    ).toBe(403);
     expect((await writeOnly.fetch(guardedRequest('/api/strategies/x3/draft'))).status).toBe(403);
     expect((await writeOnly.fetch(guardedRequest('/api/strategies/x3/trial'))).status).toBe(403);
 
@@ -2340,7 +2340,9 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     };
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const status = await app.fetch(
-        new Request(`http://test/api/strategies/${strategyId}/evaluations/${queued.data.sessionId}`),
+        new Request(
+          `http://test/api/strategies/${strategyId}/evaluations/${queued.data.sessionId}`,
+        ),
       );
       snapshot = (await status.json()) as typeof snapshot;
       if (snapshot.data?.status !== 'running') break;

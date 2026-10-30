@@ -116,7 +116,9 @@ export const recordDecisionTradeTool = defineTool({
       executedAt,
       source: 'manual',
       createdAt: now,
-      ...(adviceSources.length === 1 ? { adviceId: adviceSources[0]!.subject.id } : {}),
+      ...(adviceSources.length === 1 && adviceSources[0] !== undefined
+        ? { adviceId: adviceSources[0].subject.id }
+        : {}),
     };
     const previousHolding = await ctx.repos.holding.findByAccountAndStock(accountId, input.stockId);
     let holding: Holding;

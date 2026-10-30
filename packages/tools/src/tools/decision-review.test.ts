@@ -186,7 +186,8 @@ describe('decision review tools', () => {
 
   it('saves an account revision, replays a request, and rejects stale edits', async () => {
     const ctx = await buildTestContext();
-    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0]!;
+    const [advice] = await ctx.repos.advice.query({ includeExpired: true, limit: 1 });
+    if (advice === undefined) throw new Error('missing fixture advice');
     const subject = { kind: 'advice', id: advice.id };
     const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
     expect(preview.ok).toBe(true);

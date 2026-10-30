@@ -29,7 +29,8 @@ describe('record_decision_trade', () => {
     const retry = await recordDecisionTradeTool.execute(input, ctx);
     expect(retry.ok && retry.data.replayed).toBe(true);
     const after = await ctx.repos.account.findById(accountId);
-    expect(after!.cashBalance).toBe(before!.cashBalance - 100);
+    if (before === null || after === null) throw new Error('missing fixture account');
+    expect(after.cashBalance).toBe(before.cashBalance - 100);
     const conflicting = await recordDecisionTradeTool.execute(
       { ...input, requestId: crypto.randomUUID() },
       ctx,
@@ -40,14 +41,13 @@ describe('record_decision_trade', () => {
   it('adds an explicitly chosen advice link without inventing feedback', async () => {
     const ctx = await buildTestContext();
     const accountId = ctx.user.defaultAccountId;
-    const advice = (
-      await ctx.repos.advice.query({
-        subjectKind: 'stock',
-        subjectId: '002594.SZ',
-        includeExpired: true,
-        limit: 1,
-      })
-    )[0]!;
+    const [advice] = await ctx.repos.advice.query({
+      subjectKind: 'stock',
+      subjectId: '002594.SZ',
+      includeExpired: true,
+      limit: 1,
+    });
+    if (advice === undefined) throw new Error('missing fixture advice');
     const subject = { kind: 'advice', id: advice.id };
     const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
     expect(preview.ok).toBe(true);
@@ -72,7 +72,9 @@ describe('record_decision_trade', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.result.reviews).toHaveLength(1);
-    expect(result.data.result.reviews[0]!.revision.content.adviceFeedback).toBeNull();
+    const [savedReview] = result.data.result.reviews;
+    if (savedReview === undefined) throw new Error('missing saved review');
+    expect(savedReview.revision.content.adviceFeedback).toBeNull();
     expect(result.data.result.trade.adviceId).toBe(advice.id);
   });
 });

@@ -44,7 +44,8 @@ export const getDecisionReviewSnapshotTool = defineTool({
         for (const id of revision.content.tradeIds) tradeIds.add(id);
       }
       if (page.length < 100) break;
-      const last = page.at(-1)!;
+      const last = page.at(-1);
+      if (last === undefined) break;
       cursor = { occurredAt: last.review.sourceOccurredAt, id: last.review.id };
     }
     revisionIds.sort((a, b) => a.reviewId.localeCompare(b.reviewId));

@@ -345,7 +345,8 @@ const assembleBacktest = async (
 
 export const createStrictStrategyBacktestTool = defineTool({
   name: 'create_strict_strategy_backtest',
-  description: '基于已完成 PIT 历史评估创建隔离的组合回测运行；门禁不全时只返回门禁审计，不输出任何收益指标',
+  description:
+    '基于已完成 PIT 历史评估创建隔离的组合回测运行；门禁不全时只返回门禁审计，不输出任何收益指标',
   sideEffect: 'write',
   input: CreateStrictStrategyBacktestInput,
   output: CreateStrictStrategyBacktestOutput,

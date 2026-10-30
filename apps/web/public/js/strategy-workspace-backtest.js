@@ -287,7 +287,10 @@ const buildBacktestProgressContent = (data, strategyId, sessionId, setStatus) =>
 
 export const runStrategyBacktest = async (strategy, input, setStatus) => {
   setStatus('正在逐交易日运行历史模拟…');
-  const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/evaluations`, input);
+  const result = await post(
+    `/api/strategies/${encodeURIComponent(strategy.id)}/evaluations`,
+    input,
+  );
   if (!result.ok) {
     setStatus(errorText(result), true);
     return result;

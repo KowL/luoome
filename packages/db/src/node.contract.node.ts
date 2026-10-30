@@ -617,7 +617,9 @@ describe('T48 DDL 对齐：data_import_receipts', () => {
           )[0]
           ?.sql.replace(/\s+/g, ' ')
           .trim(),
-      ).toBe("CREATE TABLE data_import_receipts ( user_id TEXT NOT NULL, account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, archive_digest TEXT NOT NULL, original_request_id TEXT NOT NULL, committed_at INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (user_id, account_id, request_id) )");
+      ).toBe(
+        'CREATE TABLE data_import_receipts ( user_id TEXT NOT NULL, account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, archive_digest TEXT NOT NULL, original_request_id TEXT NOT NULL, committed_at INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (user_id, account_id, request_id) )',
+      );
       clientOf(handle.db)
         .prepare(
           `INSERT INTO data_import_receipts (user_id,account_id,request_id,request_hash,archive_digest,original_request_id,committed_at,result_json)
@@ -677,7 +679,9 @@ describe('T48 B1a SQLite 只读输入预检', () => {
     change.exec('DROP TABLE unexpected_import_table');
     change.exec('ALTER TABLE accounts ADD COLUMN unsupported_import_field TEXT');
     change.close();
-    expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('表结构不是当前支持版本');
+    expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow(
+      '表结构不是当前支持版本',
+    );
   });
 
   it('其它账户和已知 JSON 内嵌账户归属均报错', async () => {
@@ -689,7 +693,9 @@ describe('T48 B1a SQLite 只读输入预检', () => {
     const mutate = createNodeDrizzleRepos(sourcePath);
     mutate.db.run(sql`DELETE FROM accounts WHERE id = 'other-account'`);
     await mutate.repos.advice.save(makeAdvice('nested-import-advice'));
-    clientOf(mutate.db).prepare('UPDATE advices SET based_on = ?').run(JSON.stringify({ accountId: 'other-account' }));
+    clientOf(mutate.db)
+      .prepare('UPDATE advices SET based_on = ?')
+      .run(JSON.stringify({ accountId: 'other-account' }));
     mutate.close();
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('其它账户');
   });
@@ -703,25 +709,34 @@ describe('T48 B1a SQLite 只读输入预检', () => {
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('未声明的表');
   });
 
-  it.each(['constructor', '__proto__', 'toString'])('继承属性表名 %s 也必须属于显式清单', async (name) => {
-    const { sourcePath, expected } = await fixture();
-    const source = new DatabaseSync(sourcePath);
-    source.exec(`CREATE TABLE "${name}" (account_id TEXT)`);
-    source.close();
-    expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('未声明的表');
-  });
+  it.each(['constructor', '__proto__', 'toString'])(
+    '继承属性表名 %s 也必须属于显式清单',
+    async (name) => {
+      const { sourcePath, expected } = await fixture();
+      const source = new DatabaseSync(sourcePath);
+      source.exec(`CREATE TABLE "${name}" (account_id TEXT)`);
+      source.close();
+      expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('未声明的表');
+    },
+  );
 
   it('隐藏生成列和丢失唯一索引不属于当前 schema', async () => {
     const generated = await fixture();
     const source = new DatabaseSync(generated.sourcePath);
-    source.exec("ALTER TABLE accounts ADD COLUMN hidden_version_field TEXT GENERATED ALWAYS AS ('unexpected') VIRTUAL");
+    source.exec(
+      "ALTER TABLE accounts ADD COLUMN hidden_version_field TEXT GENERATED ALWAYS AS ('unexpected') VIRTUAL",
+    );
     source.close();
-    expect(() => readSqliteImportSnapshot(generated.sourcePath, scope, generated.expected)).toThrow('表结构不是当前支持版本');
+    expect(() => readSqliteImportSnapshot(generated.sourcePath, scope, generated.expected)).toThrow(
+      '表结构不是当前支持版本',
+    );
     const missing = await fixture();
     const another = new DatabaseSync(missing.sourcePath);
     another.exec('DROP INDEX stocks_code_exchange_unique');
     another.close();
-    expect(() => readSqliteImportSnapshot(missing.sourcePath, scope, missing.expected)).toThrow('表结构不是当前支持版本');
+    expect(() => readSqliteImportSnapshot(missing.sourcePath, scope, missing.expected)).toThrow(
+      '表结构不是当前支持版本',
+    );
   });
 
   it('孤立普通表不能伪装成 FTS shadow', async () => {
@@ -738,7 +753,9 @@ describe('T48 B1a SQLite 只读输入预检', () => {
     const { sourcePath, expected } = await fixture();
     const source = createNodeDrizzleRepos(sourcePath);
     await source.repos.advice.save(makeAdvice('portfolio-scope-advice'));
-    clientOf(source.db).prepare('UPDATE advices SET subject_kind = ?, subject_id = ?').run('portfolio', 'other-account');
+    clientOf(source.db)
+      .prepare('UPDATE advices SET subject_kind = ?, subject_id = ?')
+      .run('portfolio', 'other-account');
     source.close();
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('其它账户');
   });
@@ -746,15 +763,29 @@ describe('T48 B1a SQLite 只读输入预检', () => {
   it('工作流所有声明 JSON 存储摘要都会递归核验账户', async () => {
     const { sourcePath, expected } = await fixture();
     const source = createNodeDrizzleRepos(sourcePath);
-    await source.repos.workflowRun.save(makeWorkflowRun('scope-workflow', { inputSummary: { accountId: scope.accountId }, outputSummary: { accountId: scope.accountId } }));
+    await source.repos.workflowRun.save(
+      makeWorkflowRun('scope-workflow', {
+        inputSummary: { accountId: scope.accountId },
+        outputSummary: { accountId: scope.accountId },
+      }),
+    );
     source.close();
-    expect(readSqliteImportSnapshot(sourcePath, scope, expected).tables.workflow_runs).toHaveLength(1);
+    expect(readSqliteImportSnapshot(sourcePath, scope, expected).tables.workflow_runs).toHaveLength(
+      1,
+    );
     const mutate = new DatabaseSync(sourcePath);
-    mutate.prepare('UPDATE workflow_runs SET input_summary = ?').run(JSON.stringify({ accountId: 'other-account' }));
+    mutate
+      .prepare('UPDATE workflow_runs SET input_summary = ?')
+      .run(JSON.stringify({ accountId: 'other-account' }));
     mutate.close();
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('其它账户');
     const output = new DatabaseSync(sourcePath);
-    output.prepare('UPDATE workflow_runs SET input_summary = ?, output_summary = ?').run(JSON.stringify({ accountId: scope.accountId }), JSON.stringify({ accountId: 'other-account' }));
+    output
+      .prepare('UPDATE workflow_runs SET input_summary = ?, output_summary = ?')
+      .run(
+        JSON.stringify({ accountId: scope.accountId }),
+        JSON.stringify({ accountId: 'other-account' }),
+      );
     output.close();
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('其它账户');
   });
@@ -764,13 +795,45 @@ describe('T48 B1a SQLite 只读输入预检', () => {
     const source = createNodeDrizzleRepos(sourcePath);
     const at = new Date('2026-10-01T00:00:00Z');
     await source.repos.stock.save(makeStock('portfolio-stock', '600519'));
-    await source.repos.watchlist.save({ id: 'portfolio-import', name: '持仓关注', kind: 'portfolio', membershipPolicy: 'synced', enabled: false, createdAt: at, updatedAt: at });
-    await source.repos.watchlistMember.saveMember({ id: 'portfolio-member', watchlistId: 'portfolio-import', stockId: 'portfolio-stock', stage: 'discovered', priority: 'normal', firstAddedAt: at, lastActivityAt: at });
-    await source.repos.watchlistMember.saveSource({ id: 'portfolio-source', memberId: 'portfolio-member', kind: 'portfolio', sourceKey: `portfolio:${scope.accountId}`, sourceId: scope.accountId, ownerUserId: scope.userId, reason: '持仓历史', status: 'ended', evidence: [], validFrom: at, validUntil: at });
+    await source.repos.watchlist.save({
+      id: 'portfolio-import',
+      name: '持仓关注',
+      kind: 'portfolio',
+      membershipPolicy: 'synced',
+      enabled: false,
+      createdAt: at,
+      updatedAt: at,
+    });
+    await source.repos.watchlistMember.saveMember({
+      id: 'portfolio-member',
+      watchlistId: 'portfolio-import',
+      stockId: 'portfolio-stock',
+      stage: 'discovered',
+      priority: 'normal',
+      firstAddedAt: at,
+      lastActivityAt: at,
+    });
+    await source.repos.watchlistMember.saveSource({
+      id: 'portfolio-source',
+      memberId: 'portfolio-member',
+      kind: 'portfolio',
+      sourceKey: `portfolio:${scope.accountId}`,
+      sourceId: scope.accountId,
+      ownerUserId: scope.userId,
+      reason: '持仓历史',
+      status: 'ended',
+      evidence: [],
+      validFrom: at,
+      validUntil: at,
+    });
     source.close();
-    expect(readSqliteImportSnapshot(sourcePath, scope, expected).tables.watchlist_member_sources).toHaveLength(1);
+    expect(
+      readSqliteImportSnapshot(sourcePath, scope, expected).tables.watchlist_member_sources,
+    ).toHaveLength(1);
     const mutate = new DatabaseSync(sourcePath);
-    mutate.prepare('UPDATE watchlist_member_sources SET source_key = ?, source_id = ?').run('portfolio:other-account', 'other-account');
+    mutate
+      .prepare('UPDATE watchlist_member_sources SET source_key = ?, source_id = ?')
+      .run('portfolio:other-account', 'other-account');
     mutate.close();
     expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('其它账户');
   });
@@ -778,7 +841,12 @@ describe('T48 B1a SQLite 只读输入预检', () => {
   it('报告存储scope_key须与合法scope_json一致', async () => {
     const { sourcePath, expected } = await fixture();
     const source = createNodeDrizzleRepos(sourcePath);
-    await source.repos.report.upsertForPeriod(makeReport('scope-report', { scope: { kind: 'account', accountId: scope.accountId }, notificationPolicy: 'never' }));
+    await source.repos.report.upsertForPeriod(
+      makeReport('scope-report', {
+        scope: { kind: 'account', accountId: scope.accountId },
+        notificationPolicy: 'never',
+      }),
+    );
     source.close();
     expect(readSqliteImportSnapshot(sourcePath, scope, expected).tables.reports).toHaveLength(1);
     const mutate = new DatabaseSync(sourcePath);
@@ -804,11 +872,15 @@ describe('T48 B1a SQLite 只读输入预检', () => {
       await backup(source, copyPath);
       expect(() => readSqliteImportSnapshot(sourcePath, scope, expected)).toThrow('WAL');
       const before = state(copyPath);
-      expect(readSqliteImportSnapshot(copyPath, scope, expected).tables.accounts?.[0]?.name).toBe('live-wal-owner');
+      expect(readSqliteImportSnapshot(copyPath, scope, expected).tables.accounts?.[0]?.name).toBe(
+        'live-wal-owner',
+      );
       expect(state(copyPath)).toEqual(before);
       writeFileSync(`${copyPath}-journal`, Buffer.alloc(512, 1));
       expect(() => readSqliteImportSnapshot(copyPath, scope, expected)).toThrow('journal');
-    } finally { source.close(); }
+    } finally {
+      source.close();
+    }
   });
 
   it('SQL 文本与损坏二进制不会作为脚本执行', async () => {
@@ -828,22 +900,42 @@ registerDataImportContractTests('node-sqlite-file', async () => {
   const sourcePath = makeTempDbPath('atomic-source.db');
   const targetPath = makeTempDbPath('atomic-target.db');
   const sourceHandle = createNodeDrizzleRepos(sourcePath);
-  await sourceHandle.repos.account.save(makeAccount(scope.accountId, { name: 'source-import-name' }));
+  await sourceHandle.repos.account.save(
+    makeAccount(scope.accountId, { name: 'source-import-name' }),
+  );
   sourceHandle.close();
   let handle = createNodeDrizzleRepos(targetPath);
   await handle.repos.account.save(makeAccount(scope.accountId, { name: 'target-before-import' }));
-  const source = readSqliteImportSnapshot(sourcePath, scope, readDataImportStorageSchema(clientOf(handle.db)));
+  const source = readSqliteImportSnapshot(
+    sourcePath,
+    scope,
+    readDataImportStorageSchema(clientOf(handle.db)),
+  );
   let repository = new DrizzleDataImportRepository(handle.db);
   return {
-    get repository() { return repository; }, scope, source,
-    async readName() { return (await handle.repos.account.findById(scope.accountId))?.name ?? null; },
-    async changeName(name) { handle.db.run(sql`UPDATE accounts SET name = ${name} WHERE id = ${scope.accountId}`); },
+    get repository() {
+      return repository;
+    },
+    scope,
+    source,
+    async readName() {
+      return (await handle.repos.account.findById(scope.accountId))?.name ?? null;
+    },
+    async changeName(name) {
+      handle.db.run(sql`UPDATE accounts SET name = ${name} WHERE id = ${scope.accountId}`);
+    },
     async setOperation(state, overrides = {}) {
       handle.db.run(sql`INSERT INTO plugin_operations (id,user_id,account_id,state,claim_token,updated_at,record_json)
         VALUES (${overrides.id ?? 'other-operation'},${overrides.userId ?? 'another-user'},${overrides.accountId ?? scope.accountId},${state},NULL,1,${JSON.stringify({ tool: overrides.tool ?? 'close_holding' })})`);
     },
-    async reopen() { handle.close(); handle = createNodeDrizzleRepos(targetPath); repository = new DrizzleDataImportRepository(handle.db); },
-    close() { handle.close(); },
+    async reopen() {
+      handle.close();
+      handle = createNodeDrizzleRepos(targetPath);
+      repository = new DrizzleDataImportRepository(handle.db);
+    },
+    close() {
+      handle.close();
+    },
   };
 });
 
@@ -858,12 +950,11 @@ const commitWithBackup = async (
 ) =>
   repository.commit({
     ...input,
-    backup:
-      input.backup ?? {
-        backupId: 'fixture-backup',
-        archiveDigest: input.snapshot.archiveDigest,
-        targetDigest: await repository.targetDigest(input.scope),
-      },
+    backup: input.backup ?? {
+      backupId: 'fixture-backup',
+      archiveDigest: input.snapshot.archiveDigest,
+      targetDigest: await repository.targetDigest(input.scope),
+    },
   });
 
 describe('T48 atomic receipt failure', () => {
@@ -872,21 +963,39 @@ describe('T48 atomic receipt failure', () => {
     const sourcePath = makeTempDbPath('receipt-source.db');
     const targetPath = makeTempDbPath('receipt-target.db');
     const sourceHandle = createNodeDrizzleRepos(sourcePath);
-    await sourceHandle.repos.account.save(makeAccount(scope.accountId, { name: 'source-after-import' }));
+    await sourceHandle.repos.account.save(
+      makeAccount(scope.accountId, { name: 'source-after-import' }),
+    );
     sourceHandle.close();
     const target = createNodeDrizzleRepos(targetPath);
     try {
       await target.repos.account.save(makeAccount(scope.accountId, { name: 'target-original' }));
-      const snapshot = readSqliteImportSnapshot(sourcePath, scope, readDataImportStorageSchema(clientOf(target.db)));
+      const snapshot = readSqliteImportSnapshot(
+        sourcePath,
+        scope,
+        readDataImportStorageSchema(clientOf(target.db)),
+      );
       const repository = new DrizzleDataImportRepository(target.db);
       const preview = await repository.preview({ scope, snapshot, now: 1000 });
-      target.db.run(sql`CREATE TRIGGER fail_import_receipt BEFORE INSERT ON data_import_receipts BEGIN SELECT RAISE(ABORT, 'receipt fault'); END`);
-      await expect(commitWithBackup(repository, { scope, snapshot, preview, requestId: 'late-receipt-fault', now: 1001 })).rejects.toThrow();
+      target.db.run(
+        sql`CREATE TRIGGER fail_import_receipt BEFORE INSERT ON data_import_receipts BEGIN SELECT RAISE(ABORT, 'receipt fault'); END`,
+      );
+      await expect(
+        commitWithBackup(repository, {
+          scope,
+          snapshot,
+          preview,
+          requestId: 'late-receipt-fault',
+          now: 1001,
+        }),
+      ).rejects.toThrow();
       expect((await target.repos.account.findById(scope.accountId))?.name).toBe('target-original');
       expect(await repository.findReceipt(scope, 'late-receipt-fault')).toBeNull();
       expect(clientOf(target.db).isTransaction).toBe(false);
       expect(executedSqlOf(target.db).slice(-2)).toEqual(['BEGIN IMMEDIATE', 'ROLLBACK']);
-    } finally { target.close(); }
+    } finally {
+      target.close();
+    }
   });
 });
 
@@ -1772,7 +1881,11 @@ const fullFixture = (): Record<string, DataImportRow> => {
       registry_hash: H('c'),
       normalization_version: 'fundamental-normalization-v1',
       components_json: JSON.stringify([
-        { factorId: 'fundamental.profitability.roe', weight: 1, normalizer: 'market-percentile-v1' },
+        {
+          factorId: 'fundamental.profitability.roe',
+          weight: 1,
+          normalizer: 'market-percentile-v1',
+        },
       ]),
       missing_policy: 'unknown',
       rounding: 'round-to-6-decimal',
@@ -2096,7 +2209,11 @@ const fullFixture = (): Record<string, DataImportRow> => {
       request_hash: 'report-request-hash-1',
       report_id: 'report-1',
     },
-    watchlist_import_batches: { operation_id: 'operation-1', preview_id: 'preview-1', result_json: '{}' },
+    watchlist_import_batches: {
+      operation_id: 'operation-1',
+      preview_id: 'preview-1',
+      result_json: '{}',
+    },
     watchlist_removal_receipts: { operation_id: 'operation-2', result_json: '{}' },
     personal_alert_plan_mutations: { operation_id: 'operation-3', result_json: '{}' },
     personal_alert_evaluations: {
@@ -2115,11 +2232,7 @@ const fullFixture = (): Record<string, DataImportRow> => {
   return row;
 };
 
-const insertFullRow = (
-  handle: NodeDrizzleReposHandle,
-  table: string,
-  row: DataImportRow,
-): void => {
+const insertFullRow = (handle: NodeDrizzleReposHandle, table: string, row: DataImportRow): void => {
   const columns = Object.keys(row);
   const client = clientOf(handle.db);
   client
@@ -2128,7 +2241,6 @@ const insertFullRow = (
     )
     .run(...columns.map((column) => row[column] ?? null));
 };
-
 
 describe('T48 全量事实 fixture 自校验', () => {
   it('每张业务表的 fixture 行都通过 scope 与领域/结构校验', () => {
@@ -2146,15 +2258,11 @@ describe('T48 全量事实 fixture 自校验', () => {
   });
 });
 
-
 const UNION_TABLES = new Set(
   DATA_IMPORT_BUSINESS_TABLES.filter((table) => DATA_IMPORT_MANIFEST[table] === 'union'),
 );
 
-const seedFullFixture = (
-  path: string,
-  options: { readonly skipUnion?: boolean } = {},
-): void => {
+const seedFullFixture = (path: string, options: { readonly skipUnion?: boolean } = {}): void => {
   const handle = createNodeDrizzleRepos(path);
   const fixture = fullFixture();
   for (const table of DATA_IMPORT_BUSINESS_TABLES) {
@@ -2362,7 +2470,10 @@ describe('T48 union 语义', () => {
         ...snapshot,
         tables: {
           ...snapshot.tables,
-          watchlist_import_batches: [...(snapshot.tables.watchlist_import_batches ?? []), incomingBatch],
+          watchlist_import_batches: [
+            ...(snapshot.tables.watchlist_import_batches ?? []),
+            incomingBatch,
+          ],
         },
       };
       const preview = await repository.preview({ scope: FULL_SCOPE, snapshot: merged, now: T0 });
@@ -2394,9 +2505,9 @@ describe('T48 union 语义', () => {
       expect(receipt.actual.report_refresh_receipts).toBe(1);
       expect(receipt.actual.decision_write_receipts).toBe(1);
       expect(receipt.actual.watchlist_import_batches).toBe(2);
-      expect(
-        target.db.all<DataImportRow>(sql`SELECT * FROM report_refresh_receipts`),
-      ).toEqual([fullFixture().report_refresh_receipts]);
+      expect(target.db.all<DataImportRow>(sql`SELECT * FROM report_refresh_receipts`)).toEqual([
+        fullFixture().report_refresh_receipts,
+      ]);
       expect(target.db.all<DataImportRow>(sql`SELECT * FROM reports`)).toEqual([
         fullFixture().reports,
       ]);
@@ -2438,9 +2549,9 @@ describe('T48 union 语义', () => {
         repository.preview({ scope: FULL_SCOPE, snapshot: tampered, now: T0 }),
       ).rejects.toThrow('业务回执身份冲突');
       expect(target.db.all<DataImportRow>(sql`SELECT * FROM reports`)).toEqual(before);
-      expect(
-        target.db.all<DataImportRow>(sql`SELECT * FROM report_refresh_receipts`),
-      ).toEqual([existing]);
+      expect(target.db.all<DataImportRow>(sql`SELECT * FROM report_refresh_receipts`)).toEqual([
+        existing,
+      ]);
       expect(await repository.findReceipt(FULL_SCOPE, 'union-conflict')).toBeNull();
     } finally {
       target.close();

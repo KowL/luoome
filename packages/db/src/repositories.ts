@@ -6,7 +6,6 @@ import { createDrizzleReportAutomationRepository } from './personal/report-autom
 import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-client.js';
 import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
 import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
-import { DrizzleSchemaMigrationRepository } from './repository/drizzle/schema-migration.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -55,6 +54,7 @@ import {
   DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
 import { DrizzlePluginAuthorityRepository } from './repository/drizzle/plugin-authority.js';
+import { DrizzleSchemaMigrationRepository } from './repository/drizzle/schema-migration.js';
 import type { Schema } from './schema/index.js';
 
 /** 在给定 drizzle 句柄上装配全部 repository（不负责连接、pragma 与迁移）。 */

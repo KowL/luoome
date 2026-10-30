@@ -462,9 +462,8 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       .get();
     const { feedback: _old, feedbackAt: _oldAt, ...base } = trigger;
     const feedback = found?.content.triggerFeedback;
-    return feedback === undefined || feedback === null
-      ? base
-      : { ...base, feedback, feedbackAt: found!.recordedAt };
+    if (feedback === undefined || feedback === null || found === undefined) return base;
+    return { ...base, feedback, feedbackAt: found.recordedAt };
   }
 
   async listRecent(
