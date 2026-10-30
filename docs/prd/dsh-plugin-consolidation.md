@@ -675,9 +675,15 @@ contract tests + DDL 幂等迁移）；Tool；Workflow（`WorkflowToolMap`）；
 **背景**：`stock_universe_snapshot_members` 只存 `sync_id + stock_id`，`listSnapshotMembers` 回 join 当前
 `stocks` 取 industry/name → 属性前视。它本身是 REQ-M3-04 的前置，留在 M4 会造成跨里程碑倒置。
 
-**需求**：snapshot members 扩列存 `listing_status` / `industry` / `list_date` / `delist_date` 快照值。
+**需求**：snapshot members 扩列存 `listing_status` / `st_status` / `industry` / `list_date` / `delist_date` 快照值。
 
-**验收标准**：与当前 `stocks.industry` 冲突时以快照为准；PIT 查询返回快照期属性。
+**验收标准**：与当前 `stocks.industry` 冲突时以快照为准；PIT 查询返回快照期属性；
+**PIT 查询不得因 `stocks` 缺少该股票而静默丢弃成员行**（幸存者偏差）。
+
+**v3.6 补 `st_status`**：原需求只列 4 列，漏了 ST 状态。REQ-M3-04 的涨跌停价口径明确要求
+「ST 状态取自 PIT universe 快照属性」——`listing_status`（上市/停牌/退市）与 ST（特别处理）
+是**不同属性**，A 股 ST 会摘帽戴帽且影响涨跌幅限制。规格漏了这一列，导致 T22 实施时
+必须回头补 schema 与生产者。教训同 REQ-M2-07/REQ-M3-03：**写规格时没有回查下游需求。**
 
 ---
 
@@ -711,7 +717,40 @@ contract tests + DDL 幂等迁移）；Tool；Workflow（`WorkflowToolMap`）；
 
 **需求**：可见集裁剪交给 DSH per-agent；插件只保留「能力 + 副作用」判定；私人研究拒绝清单保持在 `tools/src/exposure` 单点。
 
-**验收标准**：权限负例全绿（未授权调用返回 `permission_denied`）；agent-scoped 测试证明子 agent 看不到父写工具；`check:layers` 通过。
+**验收标准（v3.7 按 H5 spike 结论重写）**：权限负例全绿（未授权调用返回 `permission_denied`）；
+`check:layers` 通过；**新增与 DSH 的对账测试**（见下）。
+
+**v3.7 更正一处不成立的验收 + H5 结论 = B（走退化对账）**
+
+原验收写「agent-scoped 测试证明子 agent **看不到**父写工具」——**这条在今天代码上不成立**：
+写工具是全局注册的，子 agent 的可见集里**有**这些工具，只是调用时被执行期权威拒绝
+（`dsh-identity.ts:75` `delegationDepthOf(agent)!==0` → principal null → guard 拒绝，
+e2e 在 `dsh-authority.e2e.test.ts:744`）。把「用不了」写成「看不到」是名实不符。
+
+故拆成两条，各自独立可验：
+- **看不到（visibility）**：DSH per-agent 可见集收窄。**本期不做**（见 H5 理由）。
+- **用不了（authority）**：执行期权威拒绝。**今天已成立**，是本期的实际防线。
+
+H5 选 B 的三条理由：
+1. DSH `@deepseek-ai/dsh-tools` 确有 `restrict` / `get(name,scope)` / `schemas(scope)`
+   （`lib/types/index.d.ts:645/691/712`），但它解决的是**可见性**，不是权威——P8 要的是权威。
+2. **收窄时机有竞态**：rc.2 里收窄子 agent 工具的唯一官方路径是 Agent Preset（部署侧、spawn only），
+   模型面 `subagent` 工具已显式禁用 `toolFilter`（`dsh-tool-subagent/lib/index.js:355`）；
+   插件唯一钩子 `subagent/start` 是**发布后**事件（`lifecycle.js:52`）。
+   **权限边界上的竞态不是边界。**
+3. DSH 是 RC 且被 integrity 钉死（`artifacts.json:9-16`），rc 周期内已发生过破坏性变更（即第 2 条那次）。
+
+**对账测试（T24 实际交付）** `dsh-surface-reconciliation.test.ts`，三层断言：
+1. 插件暴露集 ⊆ `ctx.tools.schemas()`；
+2. 差额每条 `reason='host-tool'`——**不断言相等**（`run_code` 属传输层，不可 restrict）；
+3. 子 agent 可见集**仍含**写工具、但调用返回 `permission_denied`——钉住当前事实；
+   将来若 DSH 提供稳定的 spawn 期收窄，只需把该断言翻成 `not.toContain`。
+
+**不做**：不引入 `@deepseek-ai/dsh-scope` 依赖（`scopeOf` 未被再导出、scope key 是私有 symbol，
+依赖私有符号换来的收益不足以抵消脆弱性）。B 方案不需要它。
+
+**运维注意**：本地 DSH App 是 rc.3 且被 dsh-purge 改过（scope lock 已失效），
+**权限实验必须在仓库钉的 rc.2 上做**，否则结论不可复现。
 
 ---
 
