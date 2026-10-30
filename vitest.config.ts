@@ -27,6 +27,8 @@ export default defineConfig({
       'packages/db/src/repository/data-import.contract.test.ts',
       // T21 旧行迁移用例走 bun:sqlite（createDrizzleRepos），由 test:db 执行。
       'packages/db/src/repository/trading-plan-legacy.test.ts',
+      // T35 旧 snapshot 迁移用例走 bun:sqlite，由 test:db 执行。
+      'packages/db/src/repository/stock-universe-legacy.test.ts',
       // Bun 运行时的只读迁移契约（bun:test），Node/vitest 解析不到该内置模块。
       'packages/db/src/repository/schema-migration.contract.test.ts',
       'packages/db/src/personal/**',

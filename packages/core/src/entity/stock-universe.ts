@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { StockCodeSchema } from '../types/branded.js';
-import { ExchangeSchema } from './stock.js';
+import { type Exchange, ExchangeSchema } from './stock.js';
 
 export const MarketCoverageSchema = z.enum([
   'CN_A_SHARES_SH_SZ',
@@ -102,6 +102,34 @@ export interface StockUniverseSyncRun {
   readonly errorKind?: string;
   readonly errorMessage?: string;
 }
+
+/**
+ * 某个成功 universe sync 的 PIT 成员属性快照。
+ * 旧 snapshot（T35 之前的行）没有属性：`listingStatus` 为 'unknown'，industry/listDate/delistDate 缺省，
+ * 迁移时**不回填**当前值（回填等于把前视固化进历史）。
+ */
+export interface StockUniverseSnapshotMember {
+  readonly stockId: string;
+  readonly code: string;
+  readonly exchange: Exchange;
+  /** 当前目录里能解析到时的展示名；股票已从 `stocks` 删除时缺省（成员行仍返回）。 */
+  readonly name?: string;
+  readonly listingStatus: ListingStatus;
+  readonly industry?: string;
+  readonly listDate?: Date;
+  readonly delistDate?: Date;
+}
+
+/** 从 `CODE.EXCHANGE` 身份串解析 code/exchange；快照成员行即使缺少 stocks 行也能解析身份。 */
+export const stockUniverseMemberIdentity = (
+  stockId: string,
+): { readonly code: string; readonly exchange: Exchange } => {
+  const index = stockId.lastIndexOf('.');
+  return {
+    code: index > 0 ? stockId.slice(0, index) : stockId,
+    exchange: (index > 0 ? stockId.slice(index + 1) : '') as Exchange,
+  };
+};
 
 export interface StockUniverseApplySummary {
   readonly observedCount: number;

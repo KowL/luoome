@@ -296,6 +296,11 @@ export const stockUniverseSnapshotMembers = sqliteTable(
   {
     syncId: text('sync_id').notNull(),
     stockId: text('stock_id').notNull(),
+    // PIT 属性快照；旧行（T35 之前）为 NULL = unknown，迁移不回填当前值。
+    listingStatus: text('listing_status').$type<ListingStatus | null>(),
+    industry: text('industry'),
+    listDate: integer('list_date', { mode: 'timestamp_ms' }),
+    delistDate: integer('delist_date', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.syncId, t.stockId], name: 'stock_universe_snapshot_members_pk' }),

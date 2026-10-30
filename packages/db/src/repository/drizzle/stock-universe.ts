@@ -1,10 +1,13 @@
 import {
+  type ListingStatus,
   type MarketCoverage,
   type Stock,
   type StockUniverseApplySummary,
   type StockUniverseRepository,
+  type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
+  stockUniverseMemberIdentity,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../database.js';
@@ -161,7 +164,14 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
           })
           .run();
         tx.insert(stockUniverseSnapshotMembers)
-          .values({ syncId: input.syncId, stockId })
+          .values({
+            syncId: input.syncId,
+            stockId,
+            listingStatus: entry.listingStatus,
+            industry: entry.industry ?? null,
+            listDate: entry.listDate ?? null,
+            delistDate: entry.delistDate ?? null,
+          })
           .onConflictDoNothing()
           .run();
       }
@@ -310,20 +320,57 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
     return row === undefined ? null : toSyncRun(row);
   }
 
+  /**
+   * PIT 成员身份。LEFT JOIN：股票已从当前 `stocks` 删除时成员行仍返回（否则是幸存者偏差），
+   * code/exchange 从 `stockId` 解析，name 缺失时用 stockId 兜底（展示用）。
+   * `industry` 取**快照列**，旧行为 join 当前值（属性前视）。
+   */
   async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
-    return this.db
-      .select({ stock: stocks })
-      .from(stockUniverseSnapshotMembers)
-      .innerJoin(stocks, eq(stocks.id, stockUniverseSnapshotMembers.stockId))
-      .where(eq(stockUniverseSnapshotMembers.syncId, syncId))
-      .orderBy(asc(stocks.id))
-      .all()
-      .map(({ stock: row }) => ({
-        id: row.id,
-        code: row.code,
-        exchange: row.exchange,
-        name: row.name,
+    return this.snapshotRows(syncId).map((row) => {
+      const identity = stockUniverseMemberIdentity(row.stockId);
+      return {
+        id: row.stockId,
+        code: (row.code ?? identity.code) as Stock['code'],
+        exchange: (row.exchange ?? identity.exchange) as Stock['exchange'],
+        name: row.name ?? row.stockId,
         ...(row.industry === null ? {} : { industry: row.industry }),
-      }));
+      };
+    });
+  }
+
+  /** PIT 成员完整属性；旧 snapshot 行没有属性时 listingStatus='unknown'，其余缺省。 */
+  async listSnapshotMemberFacts(syncId: string): Promise<readonly StockUniverseSnapshotMember[]> {
+    return this.snapshotRows(syncId).map((row) => {
+      const identity = stockUniverseMemberIdentity(row.stockId);
+      return {
+        stockId: row.stockId,
+        code: row.code ?? identity.code,
+        exchange: row.exchange ?? identity.exchange,
+        ...(row.name === null ? {} : { name: row.name }),
+        listingStatus: (row.listingStatus ?? 'unknown') as ListingStatus,
+        ...(row.industry === null ? {} : { industry: row.industry }),
+        ...(row.listDate === null ? {} : { listDate: row.listDate }),
+        ...(row.delistDate === null ? {} : { delistDate: row.delistDate }),
+      };
+    });
+  }
+
+  private snapshotRows(syncId: string) {
+    return this.db
+      .select({
+        stockId: stockUniverseSnapshotMembers.stockId,
+        listingStatus: stockUniverseSnapshotMembers.listingStatus,
+        industry: stockUniverseSnapshotMembers.industry,
+        listDate: stockUniverseSnapshotMembers.listDate,
+        delistDate: stockUniverseSnapshotMembers.delistDate,
+        code: stocks.code,
+        exchange: stocks.exchange,
+        name: stocks.name,
+      })
+      .from(stockUniverseSnapshotMembers)
+      .leftJoin(stocks, eq(stocks.id, stockUniverseSnapshotMembers.stockId))
+      .where(eq(stockUniverseSnapshotMembers.syncId, syncId))
+      .orderBy(asc(stockUniverseSnapshotMembers.stockId))
+      .all();
   }
 }

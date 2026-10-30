@@ -720,6 +720,31 @@ describe('T21 旧单值计划读时归一化（Node 文件库）', () => {
   });
 });
 
+describe('T35 PIT universe 属性快照（Node 文件库）', () => {
+  it('旧行无属性时返回 unknown，成员行不因 stocks 缺失而丢弃', async () => {
+    const path = makeTempDbPath('t35-legacy.db');
+    const handle = createNodeDrizzleRepos(path);
+    try {
+      clientOf(handle.db)
+        .prepare('INSERT INTO stock_universe_snapshot_members (sync_id, stock_id) VALUES (?, ?)')
+        .run('sync-old', '600519.SH');
+      expect(await handle.repos.stockUniverse.listSnapshotMemberFacts('sync-old')).toEqual([
+        {
+          stockId: '600519.SH',
+          code: '600519',
+          exchange: 'SH',
+          listingStatus: 'unknown',
+        },
+      ]);
+      expect(
+        (await handle.repos.stockUniverse.listSnapshotMembers('sync-old')).map((stock) => stock.id),
+      ).toEqual(['600519.SH']);
+    } finally {
+      handle.close();
+    }
+  });
+});
+
 describe('T48 B1a SQLite 只读输入预检', () => {
   const scope = { userId: 'import-owner', accountId: 'import-account' };
   const state = (path: string) => ({
@@ -1872,7 +1897,14 @@ const fullFixture = (): Record<string, DataImportRow> => {
       error_kind: null,
       error_message: null,
     },
-    stock_universe_snapshot_members: { sync_id: 'universe-1', stock_id: 'stock-1' },
+    stock_universe_snapshot_members: {
+      sync_id: 'universe-1',
+      stock_id: 'stock-1',
+      listing_status: 'listed',
+      industry: '白酒',
+      list_date: T0,
+      delist_date: null,
+    },
     price_snapshots: {
       stock_id: 'stock-1',
       observed_at: T0,

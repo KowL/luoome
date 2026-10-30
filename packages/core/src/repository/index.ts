@@ -61,6 +61,7 @@ import type {
   MarketCoverage,
   StockUniverseApplySummary,
   StockUniverseSnapshot,
+  StockUniverseSnapshotMember,
   StockUniverseSyncRun,
 } from '../entity/stock-universe.js';
 import type {
@@ -202,7 +203,13 @@ export interface StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly asOf: Date;
   }): Promise<StockUniverseSyncRun | null>;
+  /**
+   * PIT 成员身份（`Stock` 形状）。`industry` 取**快照列**，旧行没有快照属性时为 `undefined`，
+   * 不回落到当前 `stocks.industry`（避免属性前视）。
+   */
   listSnapshotMembers(syncId: string): Promise<readonly Stock[]>;
+  /** PIT 成员完整属性：上市状态、行业、上市/退市日期；旧行属性缺省。 */
+  listSnapshotMemberFacts(syncId: string): Promise<readonly StockUniverseSnapshotMember[]>;
 }
 
 /** 已审计的按交易日涨停天梯 PIT 快照；replay 只允许读取此仓储。 */

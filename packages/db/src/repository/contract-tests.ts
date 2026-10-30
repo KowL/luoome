@@ -1292,6 +1292,98 @@ export const registerRepositoryContractTests = (
         ).toEqual(['600519.SH']);
       });
 
+      it('PIT 成员属性取快照值，与当前 stocks.industry 冲突时以快照为准', async () => {
+        const listDate = new Date('2001-08-27T00:00:00.000Z');
+        await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-pit-attrs',
+          appliedAt: T1,
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt: T1,
+            complete: true,
+            reportedTotal: 1,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH',
+                name: '贵州茅台',
+                listingStatus: 'listed',
+                industry: '白酒（快照）',
+                listDate,
+              },
+            ],
+          },
+        });
+        // 当前目录改成另一个行业：PIT 查询必须仍返回快照值，不能回落到当前属性。
+        const current = await repos.stock.findById('600519.SH');
+        if (current === null) throw new Error('stock missing');
+        await repos.stock.save({ ...current, industry: '今日行业' });
+        expect(await repos.stockUniverse.listSnapshotMemberFacts('sync-pit-attrs')).toEqual([
+          {
+            stockId: '600519.SH',
+            code: '600519',
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+            industry: '白酒（快照）',
+            listDate,
+          },
+        ]);
+        expect((await repos.stockUniverse.listSnapshotMembers('sync-pit-attrs'))[0]).toMatchObject({
+          id: '600519.SH',
+          industry: '白酒（快照）',
+        });
+      });
+
+      it('股票从当前 stocks 删除后，PIT 成员行仍返回（不得静默丢弃）', async () => {
+        await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-pit-survivor',
+          appliedAt: T1,
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt: T1,
+            complete: true,
+            reportedTotal: 2,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH',
+                name: '贵州茅台',
+                listingStatus: 'listed',
+                industry: '白酒',
+              },
+              {
+                stockId: '002594.SZ',
+                code: stockCode('002594'),
+                exchange: 'SZ',
+                name: '比亚迪',
+                listingStatus: 'listed',
+              },
+            ],
+          },
+        });
+        await repos.stock.remove('600519.SH');
+        const facts = await repos.stockUniverse.listSnapshotMemberFacts('sync-pit-survivor');
+        expect(facts.map((member) => member.stockId)).toEqual(['002594.SZ', '600519.SH']);
+        const missing = facts.find((member) => member.stockId === '600519.SH');
+        expect(missing).toMatchObject({
+          code: '600519',
+          exchange: 'SH',
+          listingStatus: 'listed',
+          industry: '白酒',
+        });
+        expect(missing?.name).toBeUndefined();
+        expect(
+          (await repos.stockUniverse.listSnapshotMembers('sync-pit-survivor')).map(
+            (stock) => stock.id,
+          ),
+        ).toEqual(['002594.SZ', '600519.SH']);
+      });
+
       it('完整快照缺失只标记 missing，再次出现时 reactivated', async () => {
         const entryA = {
           stockId: '600519.SH',

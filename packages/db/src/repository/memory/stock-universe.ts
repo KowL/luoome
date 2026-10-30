@@ -1,12 +1,23 @@
 import {
+  type ListingStatus,
   type MarketCoverage,
   type Stock,
   type StockRepository,
   type StockUniverseApplySummary,
   type StockUniverseRepository,
+  type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
+  stockUniverseMemberIdentity,
 } from '@luoome/core';
+
+interface SnapshotMember {
+  readonly stockId: string;
+  readonly listingStatus: ListingStatus;
+  readonly industry?: string;
+  readonly listDate?: Date;
+  readonly delistDate?: Date;
+}
 
 interface Membership {
   readonly source: string;
@@ -19,7 +30,7 @@ interface Membership {
 export class InMemoryStockUniverseRepository implements StockUniverseRepository {
   private readonly memberships = new Map<string, Membership>();
   private readonly runs = new Map<string, StockUniverseSyncRun>();
-  private readonly snapshotMembers = new Map<string, readonly string[]>();
+  private readonly snapshotMembers = new Map<string, readonly SnapshotMember[]>();
   private readonly universeManagedStockIds = new Set<string>();
 
   constructor(private readonly stocks: StockRepository) {}
@@ -44,6 +55,7 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
     let updatedStocks = 0;
     let reactivated = 0;
     const observedIds = new Set<string>();
+    const members: SnapshotMember[] = [];
 
     for (const entry of snapshot.entries) {
       const byId = await this.stocks.findById(entry.stockId);
@@ -81,6 +93,13 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
         updatedStocks += 1;
       }
       observedIds.add(stockId);
+      members.push({
+        stockId,
+        listingStatus: entry.listingStatus,
+        ...(entry.industry === undefined ? {} : { industry: entry.industry }),
+        ...(entry.listDate === undefined ? {} : { listDate: entry.listDate }),
+        ...(entry.delistDate === undefined ? {} : { delistDate: entry.delistDate }),
+      });
       const membershipKey = this.key(snapshot.source, snapshot.coverage, stockId);
       if (this.memberships.get(membershipKey)?.state === 'missing') {
         reactivated += 1;
@@ -129,7 +148,10 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
       reportedTotal: snapshot.reportedTotal ?? null,
       ...summary,
     });
-    this.snapshotMembers.set(input.syncId, [...observedIds].sort());
+    this.snapshotMembers.set(
+      input.syncId,
+      [...members].sort((left, right) => left.stockId.localeCompare(right.stockId)),
+    );
     return summary;
   }
 
@@ -217,11 +239,38 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
   }
 
   async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
-    const ids = this.snapshotMembers.get(syncId) ?? [];
-    const stocks = await Promise.all(ids.map((id) => this.stocks.findById(id)));
-    return stocks
-      .filter((stock): stock is Stock => stock !== null)
-      .sort((left, right) => left.id.localeCompare(right.id));
+    const members = this.snapshotMembers.get(syncId) ?? [];
+    const stocks = await Promise.all(members.map((member) => this.stocks.findById(member.stockId)));
+    return members.map((member, index) => {
+      const stock = stocks[index] ?? null;
+      const identity = stockUniverseMemberIdentity(member.stockId);
+      return {
+        id: member.stockId,
+        code: (stock?.code ?? identity.code) as Stock['code'],
+        exchange: (stock?.exchange ?? identity.exchange) as Stock['exchange'],
+        name: stock?.name ?? member.stockId,
+        ...(member.industry === undefined ? {} : { industry: member.industry }),
+      };
+    });
+  }
+
+  async listSnapshotMemberFacts(syncId: string): Promise<readonly StockUniverseSnapshotMember[]> {
+    const members = this.snapshotMembers.get(syncId) ?? [];
+    const stocks = await Promise.all(members.map((member) => this.stocks.findById(member.stockId)));
+    return members.map((member, index) => {
+      const stock = stocks[index] ?? null;
+      const identity = stockUniverseMemberIdentity(member.stockId);
+      return {
+        stockId: member.stockId,
+        code: stock?.code ?? identity.code,
+        exchange: stock?.exchange ?? identity.exchange,
+        ...(stock === null ? {} : { name: stock.name }),
+        listingStatus: member.listingStatus,
+        ...(member.industry === undefined ? {} : { industry: member.industry }),
+        ...(member.listDate === undefined ? {} : { listDate: member.listDate }),
+        ...(member.delistDate === undefined ? {} : { delistDate: member.delistDate }),
+      };
+    });
   }
 
   private key(source: string, coverage: MarketCoverage, stockId: string): string {

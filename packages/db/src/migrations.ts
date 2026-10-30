@@ -392,9 +392,16 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stock_universe_snapshot_members (
       sync_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      listing_status TEXT, industry TEXT, list_date INTEGER, delist_date INTEGER,
       PRIMARY KEY (sync_id, stock_id)
     )
   `);
+  // T35：PIT 属性快照列。旧行保持 NULL = unknown，迁移不回填当前 stocks 属性
+  // （回填会把前视固化进历史，并让 PIT 门禁恒 complete）。
+  ensureColumn(db, 'stock_universe_snapshot_members', 'listing_status', 'TEXT');
+  ensureColumn(db, 'stock_universe_snapshot_members', 'industry', 'TEXT');
+  ensureColumn(db, 'stock_universe_snapshot_members', 'list_date', 'INTEGER');
+  ensureColumn(db, 'stock_universe_snapshot_members', 'delist_date', 'INTEGER');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS stock_universe_snapshot_members_stock_idx
     ON stock_universe_snapshot_members (stock_id)

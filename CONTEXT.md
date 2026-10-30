@@ -7,6 +7,14 @@
 回答“市场里有哪些可被系统识别的股票”。目录按明确覆盖范围低频同步股票身份；失败、空结果
 或分页不完整时保留上一版。目录不是行情快照。
 
+每次成功同步会在 `stock_universe_snapshot_members` 写一份不可变的 PIT 成员投影，携带快照期的
+`listing_status / industry / list_date / delist_date`。PIT 查询（`listSnapshotMemberFacts`）返回
+**快照期**属性，不回落到当前目录；成员行不因股票从当前 `stocks` 删除而消失（LEFT JOIN，缺失属性
+标 unknown），避免幸存者偏差。T35 之前的旧 snapshot 行没有属性列：启动迁移只补列、**不回填当前
+值**，旧行 `listing_status='unknown'`、其余缺省——回填会把前视固化进历史并让 PIT 门禁恒 complete。
+`name/code/exchange` 仍依赖当前 `stocks`（展示用；code/exchange 缺失时从 stockId 解析），
+`name` 快照化是显式欠账。
+
 ### 个股档案（StockProfile）
 
 回答“这只股票最近披露了哪些股东户数与所属板块事实”。当前返回最新一期股东户数、较上期变化、户均持股与户均市值，以及来源提供的板块及入选理由。股东统计截止日与读取时间分开；缺数据保持未知，接口错误不当作未披露。它是当前详情页的外部只读快照，不是用于历史回测的 PIT 财务事实，也不推导筹码集中趋势或交易信号。
