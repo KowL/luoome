@@ -1,6 +1,6 @@
 // @luoome/cli —— luoome 命令行入口（bin/luoome 转发到此，Bun 直跑 TS，无构建步骤）。
 // 手写极简 argv 解析，不引第三方 CLI 框架。
-// 子命令清单见 printHelp()；mcp / tui / web 为懒加载（对应包由 W4a/W4c/W4d 并行实现，
+// 子命令清单见 printHelp()；tui / web 为懒加载（对应包由 W4c/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
@@ -522,7 +522,7 @@ const cmdAdviceOutcome = async (
   }
 };
 
-// ---------- 懒加载 surfaces（mcp / tui / web，由 W4a/W4c/W4d 并行实现） ----------
+// ---------- 懒加载 surfaces（tui / web，由 W4c/W4d 并行实现） ----------
 
 const LAZY_HINT = '该 surface 包由并行 agent 实现；若持续失败请检查其导出契约与实现状态';
 
@@ -553,7 +553,6 @@ const runLazyEntry = async (
   return 0;
 };
 
-/** mcp serve：契约 startMcpServer() 来自 docs/archive/plan.md（stdio，env 控制暴露面）。 */
 const cmdWatch = async (
   _rest: readonly string[],
   flags: ReadonlyMap<string, string | boolean>,
@@ -748,8 +747,6 @@ const cmdWorkflowRun = async (
   }
 };
 
-const cmdMcpServe = (): Promise<number> => runLazyEntry('@luoome/mcp', 'startMcpServer', []);
-
 /**
  * tui：W4c 实际导出 startTuiApp()（opentui app，布局 docs/archive/MVP-TASK.md §2.7，见 packages/tui/src/index.ts）。
  * W5 联调已核对导出名一致。
@@ -873,7 +870,6 @@ Advice:
                                回填建议结果（--followed true|false 仍兼容）
 
 Surfaces:
-  mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
   start [--port 5173] [--host 127.0.0.1] [--foreground]
                                启动需要登录的 Web；后台任务使用独立 worker。默认后台运行，日志
@@ -888,7 +884,7 @@ Surfaces:
                                 仅扫描启用的 AlertPlan 与其 Watchlist 成员
 
 环境变量:
-  LUOOME_HOME   单机 CLI/TUI/MCP 数据目录（默认 ~/.luoome）
+  LUOOME_HOME   单机 CLI/TUI/Web 数据目录（默认 ~/.luoome）
   Web          使用显式服务配置；见 docs/archive/hosted-personal-subscription-runbook.md
 
 --since/--until 支持相对时长（30m / 24h / 7d / 4w）或 ISO 日期。`);
@@ -939,11 +935,6 @@ const run = async (argv: readonly string[]): Promise<number> => {
     if (sub === 'stats') return cmdAdviceStats(flags, json);
     if (sub === 'outcome') return cmdAdviceOutcome(rest, flags);
     throw new CliUsageError(`未知 advice 子命令: "${sub ?? ''}"（支持 list / stats / outcome）`);
-  }
-
-  if (cmd === 'mcp') {
-    if (sub === 'serve') return cmdMcpServe();
-    throw new CliUsageError(`未知 mcp 子命令: "${sub ?? ''}"（支持 serve）`);
   }
 
   if (cmd === 'watch') {

@@ -17,14 +17,16 @@ export default defineConfig({
       '.claude/**',
       // 本地临时目录（构建/发布中间产物），不是仓库内容。
       '.tmp/**',
+      // dsh-authority e2e 需要 Node 24 的完整宿主装配，由 bun 运行：
+      //   bun run test:dsh-luoome:e2e
       'packages/dsh-luoome/src/host/dsh-authority.e2e.test.ts',
-      // MCP 分析面 e2e spawn bun 子进程并直接加载 bun:sqlite，由 bun 运行：
-      //   bun run test:analysis-surface
-      'packages/mcp/src/analysis-surface.e2e.test.ts',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',
       'packages/db/src/repository/decision-review.contract.test.ts',
+      'packages/db/src/repository/data-import.contract.test.ts',
+      // Bun 运行时的只读迁移契约（bun:test），Node/vitest 解析不到该内置模块。
+      'packages/db/src/repository/schema-migration.contract.test.ts',
       'packages/db/src/personal/**',
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。

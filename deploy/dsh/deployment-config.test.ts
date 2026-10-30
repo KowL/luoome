@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -324,16 +332,37 @@ describe('Pocket 子路径的登录和会话', () => {
   });
 });
 
-describe('旧 MCP/Bun 入口只保留源码，不进入默认部署', () => {
-  it.each(['bootstrap.ts', 'queue-e2e.ts', 'queue-probe.ts', 'settings-tools.ts'])(
-    '%s 仍然存在（P5 再删）',
-    (file) => {
-      expect(existsSync(new URL(file, deployDir))).toBe(true);
-    },
-  );
+describe('旧 MCP/Bun 入口源码已删除', () => {
+  it.each([
+    'bootstrap.ts',
+    'queue-e2e.ts',
+    'queue-probe.ts',
+    'settings-tools.ts',
+    // M2-03 / T13：stdio MCP 用户入口与只读它的部署探针一起删除。
+    'mcp-tool-probe.ts',
+    'settings-e2e.ts',
+    'batch-e2e.ts',
+    // 只剩转发（`packages/batch` 是真源）与旧 profile 技能安装器，无调用者。
+    'batch-tools.ts',
+    'skills.ts',
+  ])('%s 不存在', (file) => {
+    expect(existsSync(new URL(file, deployDir))).toBe(false);
+  });
 
-  it('legacy bootstrap 明确标注不再由默认部署调用', () => {
-    expect(read('./bootstrap.ts')).toContain('LEGACY');
-    expect(read('./bootstrap.ts')).toContain('profile-seed.mjs');
+  it('deploy 目录的非测试文件不再引用 legacy bootstrap、queue probe 或 MCP 探针', () => {
+    for (const entry of readdirSync(deployDir)) {
+      if (!/\.(ts|mjs|js|sh|py|yaml|yml)$/.test(entry) || /\.test\.(ts|py)$/.test(entry)) continue;
+      const source = read(`./${entry}`);
+      for (const forbidden of [
+        'bootstrap.ts',
+        'queue-probe',
+        'queue-e2e',
+        'settings-tools',
+        'mcp-tool-probe',
+        'settings-e2e',
+        'batch-e2e',
+      ])
+        expect(source, `${entry} 仍引用 ${forbidden}`).not.toContain(forbidden);
+    }
   });
 });
