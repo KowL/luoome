@@ -191,6 +191,7 @@ const EXPECTED_TOOL_NAMES = [
   'limit_up_ladder_compare',
   // 龙虎榜（只读）
   'dragon_tiger_list',
+  'get_stock_profile',
   // 北向资金历史流（只读）
   'northbound_flow',
   // 财经要闻（只读）
@@ -359,6 +360,7 @@ describe('toolRegistry', () => {
       'get_ashare_sentiment',
       'get_stock_market_view',
       'get_stock_minute_bars',
+      'get_stock_profile',
       'import_remote_research_document',
       'list_strategy_result_views',
       'prepare_strategy_data',

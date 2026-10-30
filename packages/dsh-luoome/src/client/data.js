@@ -20,6 +20,7 @@ export {
   stateUrl,
   stockDetailUrl,
   stockHistoryUrl,
+  stockProfileUrl,
   stockResearchRequestFor,
   strategyExpression,
   strategyOperationRequestFor,
@@ -39,6 +40,7 @@ import {
   stateUrl,
   stockDetailUrl,
   stockHistoryUrl,
+  stockProfileUrl,
 } from './projection.js';
 
 // 面板内容按 panel/section 记忆：再次打开先显示上次成功画面，再后台刷新，
@@ -232,6 +234,44 @@ export function useAutoRefresh({ marketSession, nextSessionStart, refresh } = {}
   }, [marketSession, nextSessionStart, refresh]);
 }
 
+/** 个股档案（股东户数 + 所属板块）：与行情分开按需读取，避免打开详情就打两个外部请求。 */
+function useStockProfileRead(stockId, enabled = true) {
+  const [tick, setTick] = useState(0);
+  const [state, setState] = useState({ loading: false, data: null, error: null });
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const controller = new AbortController();
+    let active = true;
+    setState({ loading: true, data: null, error: null });
+    fetch(stockProfileUrl(stockId), {
+      signal: controller.signal,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (active) setState({ loading: false, data, error: null });
+      })
+      .catch(() => {
+        if (active && !controller.signal.aborted)
+          setState({
+            loading: false,
+            data: null,
+            error: { message: '股东户数与板块档案暂时无法读取，请稍后重试。' },
+          });
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [stockId, enabled, tick]);
+  return { ...state, refresh: useCallback(() => setTick((value) => value + 1), []) };
+}
+
 function useStockRead(stockId, history, enabled = true) {
   const [tick, setTick] = useState(0);
   const [state, setState] = useState({ loading: enabled, data: null, error: null });
@@ -275,3 +315,4 @@ function useStockRead(stockId, history, enabled = true) {
 
 export const useStockDetail = (stockId) => useStockRead(stockId, false);
 export const useStockHistory = (stockId, enabled) => useStockRead(stockId, true, enabled);
+export const useStockProfile = (stockId, enabled) => useStockProfileRead(stockId, enabled);

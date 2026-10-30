@@ -206,6 +206,7 @@ export const createProductionHost = async (
       },
       limitUpLadder: adapters.limitUpLadder,
       dragonTiger: adapters.dragonTiger,
+      stockProfile: adapters.stockProfile,
       northboundFlow: adapters.northboundFlow,
       news: adapters.news,
       sectorQuote: adapters.sectorQuote,

@@ -18,6 +18,7 @@ import {
   createPanelStateHandler,
   createStockDetailHandler,
   createStockHistoryHandler,
+  createStockProfileHandler,
   OVERVIEW_PLANS,
   PANEL_NAMES,
   PANEL_PLANS,
@@ -845,5 +846,81 @@ describe('fixed stock history route', () => {
     expect(invoke).not.toHaveBeenCalled();
     const rejected = new Response(null, { status: 401 });
     expect(await (await setup({ admit: () => rejected })).historyHandle(request())).toBe(rejected);
+  });
+});
+
+describe('stock profile route', () => {
+  it('projects the tool result through the enabled external surface', async () => {
+    const fetchProfile = vi.fn(async () => ({
+      ok: true,
+      data: {
+        stockId: '300476.SZ',
+        source: 'eastmoney',
+        asOf: now.toISOString(),
+        holders: [],
+        concepts: [],
+      },
+    }));
+    const ctx = await buildTestContext({
+      stockProfile: {
+        name: 'stock-profile',
+        sources: ['eastmoney'],
+        status: () => [],
+        fetchProfile,
+      },
+    });
+    const market = createMarketSurface({
+      config: { allowlist: ['get_stock_profile'] },
+      tools: toolRegistry.all(),
+      context: () => ctx,
+    });
+    const handler = createStockProfileHandler({ market, admit: () => null, now: () => now });
+    const response = await handler(
+      new Request('https://dsh.example/api/luoome/stock/profile?stockId=300476.SZ'),
+    );
+    expect(await response.json()).toMatchObject({
+      profile: { ok: true, data: { stockId: '300476.SZ', source: 'eastmoney', holders: [] } },
+    });
+    expect(fetchProfile).toHaveBeenCalledWith({ stockId: '300476.SZ' });
+    market.dispose();
+  });
+
+  it('honors external opt-in and rejects extra query parameters', async () => {
+    const { market, admit } = await setup();
+    const handler = createStockProfileHandler({ market, admit, now: () => FIXED_AS_OF });
+    const response = await handler(
+      new Request('https://dsh.example/api/luoome/stock/profile?stockId=300476.SZ'),
+    );
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({
+      profile: { ok: false, error: { kind: 'permission_denied' } },
+    });
+    const invoke = vi.spyOn(market, 'invoke');
+    for (const query of [
+      'stockId=300476.SZ&tool=fetch_quote',
+      'stockId=300476.SZ&stockId=600519.SH',
+      'stockId=invalid',
+    ]) {
+      expect(
+        (await handler(new Request(`https://dsh.example/api/luoome/stock/profile?${query}`)))
+          .status,
+      ).toBe(400);
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('forwards host admission and rejects non-GET before invoking tools', async () => {
+    const { market } = await setup();
+    const invoke = vi.spyOn(market, 'invoke');
+    const handler = createStockProfileHandler({
+      market,
+      admit: () => new Response(null, { status: 403 }),
+    });
+    const url = 'https://dsh.example/api/luoome/stock/profile?stockId=300476.SZ';
+    expect((await handler(new Request(url))).status).toBe(403);
+    const post = await handler(new Request(url, { method: 'POST' }));
+    expect(post.status).toBe(405);
+    expect(post.headers.get('allow')).toBe('GET');
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

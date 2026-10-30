@@ -67,6 +67,7 @@ import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
+import { getStockProfileTool } from './tools/get-stock-profile.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
 import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
@@ -500,6 +501,8 @@ export const toolRegistry: Registry = createRegistry([
   limitUpLadderCompareTool,
   // 龙虎榜（只读；东方财富数据中心公开报表）
   dragonTigerListTool,
+  // 个股档案（只读；东方财富数据中心公开报表）
+  getStockProfileTool,
   // 北向资金历史流（只读；东方财富数据中心公开报表）
   northboundFlowTool,
   // 财经要闻（只读；东方财富公开新闻 API）

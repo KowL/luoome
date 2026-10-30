@@ -1,7 +1,63 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
-import { useStockDetail, useStockHistory } from './data.js';
+import { useStockDetail, useStockHistory, useStockProfile } from './data.js';
 import { bigMoney, int, money, points, tradeDate, when } from './format.js';
 import { Card, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
+
+/** 个股档案事实：股东户数（最近一期）+ 所属板块清单。 */
+function StockProfileFacts({ profile }) {
+  const holders = profile.holders ?? [];
+  const concepts = profile.concepts ?? [];
+  const latest = holders[0];
+  return h(
+    'div',
+    { className: 'luo-stock-profile' },
+    latest
+      ? h(
+          'div',
+          null,
+          h('p', { className: 'luo-fine' }, `股东户数 · 统计截止 ${latest.endDate}`),
+          h(
+            'div',
+            { className: 'luo-stats' },
+            h(Stat, { k: '股东户数', v: int(latest.holderNum) }),
+            h(Stat, {
+              k: '较上期',
+              v: latest.changePct === null ? '—' : points(latest.changePct * 100, 2, false),
+            }),
+            h(Stat, { k: '户均持股', v: int(latest.avgShares) }),
+            h(Stat, { k: '户均市值', v: bigMoney(latest.avgMarketValue) }),
+          ),
+        )
+      : h('p', { className: 'luo-fine' }, '上游未披露股东户数。'),
+    concepts.length
+      ? h(
+          'div',
+          { className: 'luo-stock-concepts' },
+          h('p', { className: 'luo-fine' }, `所属板块 ${concepts.length} 个`),
+          h(
+            'ul',
+            null,
+            concepts.map((concept) =>
+              h(
+                'li',
+                {
+                  key: concept.code,
+                  className: concept.precise ? 'is-precise' : 'is-broad',
+                  title: concept.reason ?? undefined,
+                },
+                h('span', null, concept.name),
+                concept.boardType
+                  ? h('span', { className: 'luo-fine' }, ` ${concept.boardType}`)
+                  : null,
+                concept.precise ? null : h('span', { className: 'luo-fine' }, ' 宽泛'),
+              ),
+            ),
+          ),
+        )
+      : h('p', { className: 'luo-fine' }, '上游未披露所属板块。'),
+    h('p', { className: 'luo-fine' }, `来源 ${profile.source} · 读取于 ${when(profile.asOf)}`),
+  );
+}
 
 export function StockHistory({ marketView }) {
   const candles = marketView.candles;
@@ -107,8 +163,22 @@ export function StockDetail({
   const [busy, setBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const state = useStockDetail(stock.stockId);
   const history = useStockHistory(stock.stockId, showHistory);
+  const profile = useStockProfile(stock.stockId, showProfile);
+  const profileResponse = profile.data?.profile;
+  const profileItem = profileResponse?.ok ? profileResponse.data : null;
+  const profileError =
+    profile.error ??
+    (!profile.loading && showProfile && !profileItem
+      ? {
+          message:
+            profileResponse?.error?.kind === 'permission_denied'
+              ? '当前配置未启用个股档案读取。'
+              : '个股档案不可用。',
+        }
+      : null);
   useEffect(() => {
     const element = dialog.current;
     element.showModal();
@@ -269,6 +339,32 @@ export function StockDetail({
                         : '历史日线不可用。不会从单次报价合成历史。',
                   },
                 }),
+      ),
+      h(
+        Card,
+        {
+          title: '筹码与板块',
+          meta: showProfile
+            ? h(Refresh, { loading: profile.loading, onClick: profile.refresh })
+            : '股东户数与所属板块',
+        },
+        !showProfile
+          ? h(
+              'button',
+              { type: 'button', className: 'luo-btn', onClick: () => setShowProfile(true) },
+              '读取股东户数与所属板块',
+            )
+          : profile.loading
+            ? h(
+                'div',
+                { role: 'status', 'aria-label': '正在读取个股档案' },
+                h(SkeletonLines, { lines: 3 }),
+              )
+            : profileError
+              ? h(ErrorNote, { error: profileError })
+              : profileItem
+                ? h(StockProfileFacts, { profile: profileItem })
+                : null,
       ),
       result && version
         ? h(

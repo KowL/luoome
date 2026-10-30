@@ -103,6 +103,7 @@ export const getMarketDataStatusTool = defineTool({
     const nonMarketInventory: readonly SourceStatus[] = [
       ctx.limitUpLadder?.status(),
       ctx.dragonTiger?.status(),
+      ctx.stockProfile?.status(),
       ctx.ashareSentiment?.status(),
       ctx.northboundFlow?.status(),
       ctx.news?.status(),

@@ -112,6 +112,7 @@ export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'get_stock_market_view',
   'fetch_news',
   'fetch_sector_quotes',
+  'get_stock_profile',
 ]);
 
 const ToolNameSchema = z.string().trim().min(1).max(120);

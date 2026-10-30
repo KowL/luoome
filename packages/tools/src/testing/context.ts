@@ -19,6 +19,7 @@ import type {
   NorthboundFlowManagerLike,
   RepositoryRegistry,
   SectorQuoteManagerLike,
+  StockProfileManagerLike,
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
@@ -33,6 +34,8 @@ export interface BuildTestContextOptions {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   /** 可选注入龙虎榜 manager。 */
   readonly dragonTiger?: DragonTigerManagerLike;
+  /** 可选注入个股档案 manager。 */
+  readonly stockProfile?: StockProfileManagerLike;
   /** 可选注入北向资金历史流 manager。 */
   readonly northboundFlow?: NorthboundFlowManagerLike;
   /** 可选注入财经要闻 manager。 */
@@ -88,6 +91,7 @@ export const buildTestContext = async (
     logger: opts.logger ?? createSilentLogger(),
     ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
     ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
+    ...(opts.stockProfile === undefined ? {} : { stockProfile: opts.stockProfile }),
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
     ...(opts.news === undefined ? {} : { news: opts.news }),
     ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),

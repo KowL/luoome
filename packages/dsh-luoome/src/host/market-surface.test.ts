@@ -113,11 +113,13 @@ describe('market external allowlist reconciliation', () => {
       'get_stock_market_view',
       'fetch_news',
       'fetch_sector_quotes',
+      'get_stock_profile',
     ]);
     // fetch_news 访问第三方新闻源，归为 external 后才能进入 external surface（需求 §4.2/§5-3）。
     expect(toolRegistry.get('fetch_news')?.sideEffect).toBe('external');
     expect(DEFAULT_MARKET_TOOL_ALLOWLIST).toContain('fetch_news');
     expect(DEFAULT_READ_TOOL_ALLOWLIST).not.toContain('fetch_news');
+    expect(DEFAULT_READ_TOOL_ALLOWLIST).not.toContain('get_stock_profile');
     expect(DEFAULT_MARKET_TOOL_ALLOWLIST).not.toContain('send_notification');
     expect(DEFAULT_MARKET_TOOL_ALLOWLIST).not.toContain('sync_quotes');
   });

@@ -226,6 +226,11 @@ export const STYLE = `
 .luo-stock-history .is-down { color: var(--lu-down); }
 .luo-stock-history text { fill: var(--lu-ink-3); font: 10px var(--lu-mono); }
 .luo-stock-match-stats { margin: 18px 0 24px; }
+.luo-stock-profile { display: grid; gap: 14px; }
+.luo-stock-concepts ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.luo-stock-concepts li { display: inline-flex; align-items: baseline; gap: 4px; padding: 4px 10px; border: 1px solid var(--lu-line); border-radius: 999px; font-size: 12px; }
+.luo-stock-concepts li.is-precise { border-color: var(--lu-accent); color: var(--lu-accent); }
+.luo-stock-concepts li.is-broad { color: var(--lu-ink-3); }
 .luo-stock-detail .luo-match-evidence { font-family: var(--lu-sans); }
 .luo-stock-detail .luo-match-evidence summary { white-space: normal; }
 .luo-stock-detail-foot { margin-top: auto; padding: 18px 28px 20px; border-top: 1px solid var(--lu-line); background: var(--lu-surface); }

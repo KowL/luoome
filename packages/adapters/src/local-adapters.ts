@@ -21,6 +21,7 @@ import {
   createResearchVaultGitSyncAdapterFromEnv,
 } from './research-vault/factory.js';
 import { createSectorQuoteManagerFromEnv } from './sector-quote/factory.js';
+import { createStockProfileManagerFromEnv } from './stock-profile/factory.js';
 import { createStockUniverseManagerFromEnv } from './stock-universe/factory.js';
 
 export interface LocalAdapterOptions {
@@ -37,6 +38,7 @@ export interface LocalAdapters {
   readonly stockUniverse: ReturnType<typeof createStockUniverseManagerFromEnv>;
   readonly limitUpLadder: ReturnType<typeof createLimitUpLadderManagerFromEnv>;
   readonly dragonTiger: ReturnType<typeof createDragonTigerManagerFromEnv>;
+  readonly stockProfile: ReturnType<typeof createStockProfileManagerFromEnv>;
   readonly northboundFlow: ReturnType<typeof createNorthboundFlowManagerFromEnv>;
   readonly news: ReturnType<typeof createNewsManagerFromEnv>;
   readonly sectorQuote: ReturnType<typeof createSectorQuoteManagerFromEnv>;
@@ -63,6 +65,7 @@ export const createLocalAdapters = (options: LocalAdapterOptions): LocalAdapters
 
   const limitUpLadder = createLimitUpLadderManagerFromEnv(env, { clock, logger, sources });
   const dragonTiger = createDragonTigerManagerFromEnv(env, { clock, logger, sources });
+  const stockProfile = createStockProfileManagerFromEnv(env, { clock, logger });
   const northboundFlow = createNorthboundFlowManagerFromEnv(env, { clock, logger, sources });
   const news = createNewsManagerFromEnv(env, { clock, logger, sources });
   const sectorQuote = createSectorQuoteManagerFromEnv(env, { clock, logger });
@@ -103,6 +106,7 @@ export const createLocalAdapters = (options: LocalAdapterOptions): LocalAdapters
     stockUniverse,
     limitUpLadder,
     dragonTiger,
+    stockProfile,
     northboundFlow,
     news,
     sectorQuote,

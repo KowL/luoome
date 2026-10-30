@@ -15,6 +15,7 @@ import type {
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
   SectorQuoteManagerLike,
+  StockProfileManagerLike,
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
@@ -38,6 +39,8 @@ export interface BuildContextDependencies {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   /** 龙虎榜 manager（只读；东方财富数据中心公开报表）。 */
   readonly dragonTiger?: DragonTigerManagerLike;
+  /** 个股档案 manager（只读；东方财富数据中心公开报表）。 */
+  readonly stockProfile?: StockProfileManagerLike;
   /** 北向资金历史流 manager（只读；东方财富数据中心公开报表）。 */
   readonly northboundFlow?: NorthboundFlowManagerLike;
   /** 财经要闻 manager（只读；东方财富公开新闻 API）。 */
@@ -95,6 +98,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
       : { portfolioBenchmark: input.portfolioBenchmark }),
     ...(input.fundamentalData === undefined ? {} : { fundamentalData: input.fundamentalData }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
+    ...(input.stockProfile === undefined ? {} : { stockProfile: input.stockProfile }),
     ...(input.northboundFlow === undefined ? {} : { northboundFlow: input.northboundFlow }),
     ...(input.news === undefined ? {} : { news: input.news }),
     ...(input.sectorQuote === undefined ? {} : { sectorQuote: input.sectorQuote }),

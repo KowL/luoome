@@ -430,6 +430,7 @@ const overviewRequests: string[] = [];
 let stockQuoteFailure = false;
 let stockQuotePending = false;
 let stockDetailReads = 0;
+let stockProfileReads = 0;
 let useConfiguredMarket = false;
 let loseResearchConfirmation = false;
 let strategyAttempt: 'failed' | 'withheld' | null = null;
@@ -734,6 +735,56 @@ const runAcceptance = async () => {
         else send();
         return;
       }
+    }
+    if (incoming.url.startsWith('/dsh/api/luoome/stock/profile?')) {
+      stockProfileReads++;
+      const stockId = new URL(incoming.url, 'http://fixture.invalid').searchParams.get('stockId');
+      const body = {
+        stockId,
+        asOf: '2026-10-25T04:00:00Z',
+        profile: {
+          name: 'get_stock_profile',
+          ok: true,
+          data: {
+            stockId,
+            source: 'browser-acceptance-fixture',
+            asOf: '2026-10-25T04:00:00Z',
+            holders: [
+              {
+                endDate: '2026-10-09',
+                holderNum: 274138,
+                changePct: -0.018429,
+                avgShares: 3182.91,
+                avgMarketValue: 645144.57,
+              },
+            ],
+            concepts: [
+              {
+                code: 'BK0877',
+                name: 'PCB',
+                boardType: null,
+                precise: true,
+                rank: 28,
+                reason: '公司具备高多层 PCB 产能。',
+              },
+              {
+                code: 'BK0867',
+                name: '富时罗素',
+                boardType: '行业',
+                precise: false,
+                rank: 14,
+                reason: null,
+              },
+            ],
+          },
+        },
+      };
+      outgoing.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      outgoing.end(JSON.stringify(body));
+      return;
     }
     if (incoming.url.startsWith('/dsh/api/luoome/stock?') && !useConfiguredMarket) {
       stockDetailReads++;
@@ -1842,7 +1893,26 @@ const runAcceptance = async () => {
     'positive-close',
   ])
     if (stockDetailText.includes(internal)) throw new Error('个股详情暴露内部标识');
+  // 个股档案（股东户数 + 所属板块）：按需读取，读取后展示上游事实。
+  await page.evaluate(
+    `(() => { const btn = [...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent.trim() === '读取股东户数与所属板块'); btn.click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('dialog[open]')?.innerText.includes('股东户数 · 统计截止 2026-10-09')`,
+    '个股档案股东户数',
+  );
+  const profileText = await page.evaluate<string>(
+    `document.querySelector('dialog[open]').innerText`,
+  );
+  for (const expected of ['274,138', '-1.84%', 'PCB', '富时罗素', '宽泛'])
+    if (!profileText.includes(expected)) throw new Error(`个股档案缺少 ${expected}`);
+  if (stockProfileReads !== 1)
+    throw new Error(`个股档案读取次数异常：${String(stockProfileReads)}`);
   await page.screenshot(join(evidenceDir, 'stock-detail-desktop.png'));
+  await page.evaluate(
+    `document.querySelector('dialog[open] .luo-stock-profile').scrollIntoView({ block: 'center' })`,
+  );
+  await page.screenshot(join(evidenceDir, 'stock-profile-desktop.png'));
   await page.evaluate(
     `document.querySelector('dialog[open]').dispatchEvent(new Event('cancel', {cancelable:true}))`,
   );
@@ -2145,6 +2215,22 @@ const runAcceptance = async () => {
   );
   if (!stockMobileFits) throw new Error('移动端个股详情溢出或分析入口不可用');
   await page.screenshot(join(evidenceDir, 'stock-detail-mobile.png'));
+  await page.evaluate(
+    `(() => { const button = [...document.querySelectorAll('dialog[open] button')].find((item) => item.textContent.trim() === '读取股东户数与所属板块'); button.click(); })()`,
+  );
+  await page.waitFor(
+    `document.querySelector('dialog[open] .luo-stock-profile')?.innerText.includes('274,138')`,
+    '移动端个股档案',
+  );
+  const profileFits = await page.evaluate<boolean>(
+    `(() => { const profile = document.querySelector('dialog[open] .luo-stock-profile'); return profile.scrollWidth <= profile.clientWidth + 1; })()`,
+  );
+  if (!profileFits) throw new Error('移动端个股档案横向溢出');
+  await page.evaluate(
+    `document.querySelector('dialog[open] .luo-stock-profile').scrollIntoView({ block: 'center' })`,
+  );
+  await page.screenshot(join(evidenceDir, 'stock-profile-mobile.png'));
+
   await page.evaluate(
     `document.querySelector('dialog[open] button[aria-label="关闭个股详情"]').click()`,
   );

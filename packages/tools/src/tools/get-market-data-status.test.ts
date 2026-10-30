@@ -66,6 +66,12 @@ describe('tool/get_market_data_status', () => {
         fetchList: () => Promise.reject(new Error('not used')),
         status: () => [marker('dragon-tiger')],
       },
+      stockProfile: {
+        name: 'stock-profile',
+        sources: ['stock-profile-src'],
+        fetchProfile: () => Promise.reject(new Error('not used')),
+        status: () => [marker('stock-profile')],
+      },
       news: {
         name: 'news',
         sources: ['news-src'],
@@ -84,6 +90,7 @@ describe('tool/get_market_data_status', () => {
       expect.arrayContaining([
         expect.objectContaining({ dataset: 'dragon-tiger', source: 'dragon-tiger-src' }),
         expect.objectContaining({ dataset: 'finance-news', source: 'finance-news-src' }),
+        expect.objectContaining({ dataset: 'stock-profile', source: 'stock-profile-src' }),
         expect.objectContaining({ dataset: 'sentiment-sealed-pool' }),
         expect.objectContaining({ dataset: 'sentiment-broken-pool' }),
       ]),

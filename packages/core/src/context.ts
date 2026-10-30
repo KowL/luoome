@@ -19,6 +19,7 @@ import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './e
 import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
+import type { StockProfile, StockProfileQuery } from './entity/stock-profile.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
 import type { ExecutionIdentity } from './personal/execution-identity.js';
@@ -243,6 +244,11 @@ export interface ToolContext {
    */
   readonly dragonTiger?: DragonTigerManagerLike;
   /**
+   * 个股档案 manager（股东户数 + 所属板块）；顶层字段（与 dragonTiger 同级），
+   * 单只股票的只读快照语义。tools 层通过 ctx.stockProfile.fetchProfile 访问。
+   */
+  readonly stockProfile?: StockProfileManagerLike;
+  /**
    * 北向资金日级历史流 manager；顶层字段（与 dragonTiger 同级），日级批量序列语义相同。
    * tools 层通过 ctx.northboundFlow.fetchSeries 访问。
    */
@@ -391,6 +397,30 @@ export interface DragonTigerResultLike {
     readonly message: string;
     readonly recoverable: boolean;
   };
+}
+
+/**
+ * 个股档案 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 StockProfile
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface StockProfileResultLike {
+  readonly ok: boolean;
+  readonly data?: StockProfile;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'stock-profile';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface StockProfileManagerLike {
+  readonly name: 'stock-profile';
+  readonly sources: readonly string[];
+  fetchProfile(query: StockProfileQuery): Promise<StockProfileResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
 }
 
 export interface DragonTigerManagerLike {

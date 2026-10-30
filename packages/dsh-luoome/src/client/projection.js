@@ -15,6 +15,8 @@ export const stockDetailUrl = (stockId) =>
   `api/luoome/stock?stockId=${encodeURIComponent(stockId)}`;
 export const stockHistoryUrl = (stockId) =>
   `api/luoome/stock/history?stockId=${encodeURIComponent(stockId)}`;
+export const stockProfileUrl = (stockId) =>
+  `api/luoome/stock/profile?stockId=${encodeURIComponent(stockId)}`;
 
 export const watchlistOperationRequestFor = (watchlist) => ({
   watchlistId: watchlist?.id ?? null,

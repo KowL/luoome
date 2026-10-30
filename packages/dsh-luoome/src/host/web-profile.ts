@@ -18,6 +18,7 @@ import {
   createPanelStateHandler,
   createStockDetailHandler,
   createStockHistoryHandler,
+  createStockProfileHandler,
 } from './panels.js';
 import type { ReadSurface } from './read-surface.js';
 import { createResearchReadHandler } from './research.js';
@@ -204,6 +205,15 @@ export const mountDshWebProfile = (
       '/api/luoome/stock',
       ['GET'],
       createStockDetailHandler({
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
+    );
+    register(
+      '/api/luoome/stock/profile',
+      ['GET'],
+      createStockProfileHandler({
         market: options.market,
         admit: () => null,
         now: () => new Date(options.now()),

@@ -412,6 +412,47 @@ export const createStockDetailHandler =
     return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), quote });
   };
 
+/**
+ * 个股档案（股东户数 + 所属板块）读取。
+ *
+ * 与 stock / stock/history 同构：URL 只接受一个受支持的 stockId，工具调用固定为
+ * get_stock_profile；档案为空表示上游未披露，不做估算。
+ */
+export const createStockProfileHandler =
+  (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
+  async (request: Request): Promise<Response> => {
+    if (request.method !== 'GET') {
+      const response = jsonNoStore(invalidInput('GET required'), 405);
+      response.headers.set('allow', 'GET');
+      return response;
+    }
+    try {
+      const rejection = await options.admit(request);
+      if (rejection) return rejection;
+    } catch {
+      return jsonNoStore(denied('host authentication'), 403);
+    }
+    const query = new URL(request.url).searchParams;
+    const parsed = z
+      .object({ stockId: z.string().regex(/^\d{6}\.(SH|SZ|BJ)$/) })
+      .strict()
+      .safeParse(Object.fromEntries(query));
+    if (!parsed.success || [...query.keys()].length !== 1)
+      return jsonNoStore(invalidInput('A single supported stockId is required'), 400);
+    const now = (options.now ?? (() => new Date()))();
+    const signal = AbortSignal.any([
+      request.signal,
+      AbortSignal.timeout(options.marketTimeoutMs ?? DEFAULT_PANEL_MARKET_TIMEOUT_MS),
+    ]);
+    const profile = await invoke(
+      options.market,
+      fixed('get_stock_profile', { stockId: parsed.data.stockId }),
+      signal,
+      now,
+    );
+    return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), profile });
+  };
+
 export const createStockHistoryHandler =
   (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
   async (request: Request): Promise<Response> => {

@@ -63,6 +63,10 @@ export * from './sector-quote/types.js';
 // 数据源可插拔与统一观测（泛型核心 + 结构化错误）
 export * from './source-error.js';
 export * from './source-registry.js';
+export * from './stock-profile/eastmoney.js';
+export * from './stock-profile/factory.js';
+export * from './stock-profile/manager.js';
+export * from './stock-profile/types.js';
 // 股票目录
 export * from './stock-universe/eastmoney.js';
 export * from './stock-universe/factory.js';
