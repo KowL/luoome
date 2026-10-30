@@ -2,6 +2,7 @@ import {
   AnalysisProvenanceSchema,
   type AnalysisPublication,
   analysisContextTimingError,
+  checkAnalysisReportReferences,
   InvestmentDirectionSchema,
   InvestmentEvidenceSchema,
   InvestmentResearchSchema,
@@ -58,8 +59,12 @@ export const recordAnalysisPublication = async (
     context.contextHash !== analysisHash({ facts: context.facts, dataAsOf: context.dataAsOf })
   )
     return errInvalidInput('context_mismatch');
-  if (input.provenance.evidenceFactIds.some((id) => !context.factIds.includes(id)))
-    return errInvalidInput('unknown_fact_reference');
+  const referenceIssues = checkAnalysisReportReferences({
+    context,
+    evidenceFactIds: input.provenance.evidenceFactIds,
+    missingFacts: [],
+  });
+  if (referenceIssues.length > 0) return errInvalidInput('unknown_fact_reference');
   const now = ctx.clock();
   const resultHash = analysisHash({ result: input.result, provenance: input.provenance });
   // Replays must not re-run proposal validation against a newer strategy version.

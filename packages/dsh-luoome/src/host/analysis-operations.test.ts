@@ -96,6 +96,7 @@ const baseContext = (
   ];
   const dataAsOf = overrides.dataAsOf ?? new Date(NOW);
   return {
+    missingFacts: [],
     id: `ctx-${randomUUID()}`,
     jobId: null,
     kind,

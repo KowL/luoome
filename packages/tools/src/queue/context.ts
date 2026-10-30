@@ -100,6 +100,7 @@ const quoteFactValue = (quote: Quote) => {
 interface MarketFactPack {
   readonly facts: AnalysisContext['facts'];
   readonly limitations: string[];
+  readonly missingFacts: AnalysisContext['missingFacts'];
   /** 每个事实自身的可验证时点；`dataAsOf` 取其中最新一个（最新可验证时点）。 */
   readonly verifiedAt: Date[];
 }
@@ -116,6 +117,7 @@ const collectMarketFacts = async (
 ): Promise<MarketFactPack> => {
   const facts: AnalysisContext['facts'] = [];
   const limitations: string[] = [];
+  const missingFacts: AnalysisContext['missingFacts'] = [];
   const verifiedAt: Date[] = [];
 
   const ladder = await loadLatestLimitUpLadder(ctx, now);
@@ -162,6 +164,12 @@ const collectMarketFacts = async (
   const [latestQuote] = currentQuotes;
   if (latestQuote === undefined) {
     limitations.push('持仓与关注股票没有可用的本地已保存行情；个股层面事实 unavailable。');
+    missingFacts.push({
+      kind: 'quote-unavailable',
+      subjectId: accountId,
+      reason: '持仓与关注股票没有可用的本地已保存行情',
+      asOf: now,
+    });
   } else {
     facts.push({
       id: 'market:local-quotes',
@@ -223,12 +231,27 @@ const collectMarketFacts = async (
     verifiedAt.push(latestVerifiedAt);
   }
 
+  missingFacts.push(
+    {
+      kind: 'market-breadth-unavailable',
+      subjectId: 'market',
+      reason: '未接入实时指数、市场宽度与情绪指标',
+      asOf: now,
+    },
+    { kind: 'news-unavailable', subjectId: 'market', reason: '未接入新闻数据', asOf: now },
+    {
+      kind: 'fundamental-unavailable',
+      subjectId: 'market',
+      reason: '未包含完整财报事实',
+      asOf: now,
+    },
+  );
   limitations.push(
     '市场事实只来自本地已持久化数据（涨停天梯快照、持仓/关注行情、相关公司事件）；' +
       '未包含实时指数、市场宽度、情绪指标、新闻与完整财报，这些维度 unavailable，不能从模型记忆补齐。' +
       '各事实自身时点见对应 fact，context.dataAsOf 是其中最新的可验证时点。',
   );
-  return { facts, limitations, verifiedAt };
+  return { facts, limitations, missingFacts, verifiedAt };
 };
 
 export const assembleAnalysisContext = async (
@@ -240,12 +263,14 @@ export const assembleAnalysisContext = async (
   const now = ctx.clock();
   const facts: AnalysisContext['facts'] = [];
   const limitations: string[] = [];
+  const missingFacts: AnalysisContext['missingFacts'] = [];
   const times: number[] = [];
   const market =
     input.subject.kind === 'market' ? await collectMarketFacts(ctx, now, accountId) : null;
   if (market !== null) {
     facts.push(...market.facts);
     limitations.push(...market.limitations);
+    missingFacts.push(...market.missingFacts);
   }
   let stockId: string | undefined;
   if (input.subject.kind === 'stock') stockId = input.subject.id;
@@ -276,7 +301,15 @@ export const assembleAnalysisContext = async (
         evidenceIds: [],
       });
       times.push(quote.ts.getTime());
-    } else limitations.push('缺少已保存行情；请先显式刷新行情，当前事实包不能写回建议。');
+    } else {
+      limitations.push('缺少已保存行情；请先显式刷新行情，当前事实包不能写回建议。');
+      missingFacts.push({
+        kind: 'quote-unavailable',
+        subjectId: stockId,
+        reason: '缺少已保存行情，当前事实包不能写回建议',
+        asOf: now,
+      });
+    }
   }
   // 盘后策略候选建议：把「哪次已发布运行、哪只股票、什么分数排名」冻进事实包，
   // 供 record_advice 还原 basedOn.strategy；下游逐股计划据此判断建议来源账户。
@@ -388,6 +421,7 @@ export const assembleAnalysisContext = async (
     facts,
     factIds: facts.map((fact) => fact.id),
     limitations,
+    missingFacts,
     contextHash: analysisHash({ facts, dataAsOf }),
     writeUntil,
     expiresAt: new Date(now.getTime() + 180 * 86400000),

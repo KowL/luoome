@@ -6,6 +6,7 @@ import {
   adviceDataSnapshotFromFacts,
   adviceExpiryDays,
   analysisContextTimingError,
+  checkAnalysisReportReferences,
   dateInShanghai,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
@@ -41,8 +42,12 @@ const recordAdvice = async (
   if (!context.kind.startsWith('advice_')) return errInvalidInput('context_mismatch');
   if (context.contextHash !== analysisHash({ facts: context.facts, dataAsOf: context.dataAsOf }))
     return errInvalidInput('context_mismatch');
-  if (input.provenance.evidenceFactIds.some((id) => !context.factIds.includes(id)))
-    return errInvalidInput('unknown_fact_reference');
+  const referenceIssues = checkAnalysisReportReferences({
+    context,
+    evidenceFactIds: input.provenance.evidenceFactIds,
+    missingFacts: [],
+  });
+  if (referenceIssues.length > 0) return errInvalidInput('unknown_fact_reference');
   const now = ctx.clock();
   if (!context.recordedResult) {
     const timingError = analysisContextTimingError(context, now);

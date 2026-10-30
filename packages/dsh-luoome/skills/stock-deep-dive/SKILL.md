@@ -48,6 +48,10 @@ whenToUse: 用户点名某个标的问「这只票怎么样」「深度分析一
 ## 边界
 
 - 事实包之外的信息不得作为证据；研究检索结果只作背景，不能替代事实包里的数字与 `factIds`。
+- 缺口逐条引用 `missingFacts`（`kind` / `subjectId` / `reason` / `asOf`），不要只写自由文本；
+  `kind` 是枚举值，`quote-unavailable` / `quote-stale` / `account-facts-unavailable` /
+  `strategy-run-unavailable` 属「缺事实导致不可判」，其余（如 `news-unavailable`）属「部分缺但仍可判」。
+  旧字段 `limitations` 仍原样展示，两者不要互相替代。
 - 建议不等于成交，不得出现「已买入/已卖出」。
 - 不要凭记忆报价格、涨跌幅、财报数字；取不到就直说取不到。
 - 先给反面证据，再给结论，最后给可证伪的观察条件。

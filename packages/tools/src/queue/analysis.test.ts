@@ -635,6 +635,14 @@ describe('advice_market timing after the close', () => {
       ctx,
     );
     if (!snapshot.ok) throw new Error('context failed');
+    expect(snapshot.data.limitations.length).toBeGreaterThan(0);
+    expect(snapshot.data.missingFacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'market-breadth-unavailable', subjectId: 'market' }),
+        expect.objectContaining({ kind: 'news-unavailable', subjectId: 'market' }),
+        expect.objectContaining({ kind: 'fundamental-unavailable', subjectId: 'market' }),
+      ]),
+    );
     expect(snapshot.data.factIds).toEqual(
       expect.arrayContaining([
         'market:limit-up:2026-10-22',

@@ -20,7 +20,7 @@ whenToUse: 用户问「今天市场怎么样」「给我今日分析」「盘面
    - 数据健康与本地市场事实：`get_market_data_status`、`get_previous_closes`、`limit_up_ladder`、`dragon_tiger_list`、`northbound_flow`。
 2. **每项保留来源与时间**：source、observedAt 或 dataAsOf、完整性、unavailable 或 partial 的原因。工具失败按 ToolResult 如实展示，不把 external 失败包装成空数据成功。
 3. **读个人上下文**（只读，不用它推断全市场）：`list_holdings`、`get_account_facts`、`list_watchlists`、`list_watch_triggers`、`list_strategies`、`get_advice`。
-4. **输出结构**：事实（逐项带 dataAsOf 与来源）、反面证据、风险、未知与缺口、有效期。有限样本只代表样本，不代表全市场；没有新闻或宽度数据就写 unavailable，不编造。
+4. **输出结构**：事实（逐项带 dataAsOf 与来源）、反面证据、风险、未知与缺口、有效期。缺口逐条引用事实包 `missingFacts` 的 `kind` / `subjectId` / `reason` / `asOf`，不要只写「数据不足」；`limitations` 仍作为旧展示字段保留。有限样本只代表样本，不代表全市场；没有新闻或宽度数据就写 unavailable，不编造。
 5. **日常分析留在会话**：MVP 不伪造 Report，不调用报告保存工具，不自动通知、不自动调度。
 6. **若要落成 Advice**：
    - 先展示结论、反面证据、风险、有效期与将写回的内容；只有用户明确提出保存意图时才写回，一次分析请求不等于持久化请求；

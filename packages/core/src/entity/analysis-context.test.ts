@@ -6,7 +6,9 @@ import {
   analysisContextTimingError,
   analysisContextWriteError,
   analysisTimingRules,
+  checkAnalysisReportReferences,
   isAnalysisContextStale,
+  missingFactsAvailability,
 } from './analysis-context.js';
 import { type AnalysisKind, analysisSubjectKinds } from './analysis-job.js';
 
@@ -262,5 +264,58 @@ describe('analysis context timing rules', () => {
     );
     expect(analysisContextWriteError(stale, shanghai.postClose, ['fact-1'])).toBe('stale_context');
     expect(analysisContextWriteError(stale, shanghai.postClose, [])).toBe('stale_context');
+  });
+});
+
+describe('T20 structured missingFacts', () => {
+  it('旧 limitations 原样保留；missingFacts 缺省为空数组（旧 context 兼容）', () => {
+    const context = contextFor('advice_stock', shanghai.open, shanghai.open);
+    expect(context.limitations).toEqual(['仅使用已持久化事实']);
+    expect(context.missingFacts).toEqual([]);
+  });
+
+  it('blocking 缺口 → unavailable；degraded 缺口 → partial；无缺口 → complete', () => {
+    expect(missingFactsAvailability([])).toBe('complete');
+    expect(
+      missingFactsAvailability([
+        {
+          kind: 'news-unavailable',
+          subjectId: 'market',
+          reason: '未接入新闻',
+          asOf: shanghai.open,
+        },
+      ]),
+    ).toBe('partial');
+    expect(
+      missingFactsAvailability([
+        {
+          kind: 'quote-unavailable',
+          subjectId: '600519.SH',
+          reason: '缺少行情',
+          asOf: shanghai.open,
+        },
+      ]),
+    ).toBe('unavailable');
+  });
+
+  it('checker 对构造报告输出具体不符项：引用不存在的 factId、重复引用、空缺口、未知 kind', () => {
+    const context = contextFor('advice_stock', shanghai.open, shanghai.open);
+    const issues = checkAnalysisReportReferences({
+      context,
+      evidenceFactIds: ['fact-1', 'fact-1', 'fact-missing'],
+      missingFacts: [
+        { kind: 'quote-unavailable', subjectId: '', reason: '缺少行情', asOf: shanghai.open },
+        { kind: 'not-a-kind', subjectId: 'subject-1', reason: '未知缺口', asOf: shanghai.open },
+      ],
+    });
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'unknown-fact-id', path: 'evidenceFactIds[2]' }),
+        expect.objectContaining({ code: 'duplicate-fact-id', path: 'evidenceFactIds[1]' }),
+        expect.objectContaining({ code: 'empty-missing-fact', path: 'missingFacts[0]' }),
+        expect.objectContaining({ code: 'unknown-missing-kind', path: 'missingFacts[1].kind' }),
+      ]),
+    );
+    expect(issues.length).toBeGreaterThanOrEqual(4);
   });
 });

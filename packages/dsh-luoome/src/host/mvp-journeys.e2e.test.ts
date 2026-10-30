@@ -1117,6 +1117,7 @@ describe('工具级旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执�
         accountId: fixture.principal.accountId,
         subject: { kind: 'market', id: 'CN_A_SHARES' },
         dataAsOf: new Date(NOW),
+        missingFacts: [],
         facts,
         factIds: facts.map((fact) => fact.id),
         limitations: ['测试用合成市场事实；未覆盖完整新闻与宽度'],

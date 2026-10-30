@@ -8,6 +8,54 @@ import {
   analysisSubjectKinds,
 } from './analysis-job.js';
 
+/**
+ * 结构化缺口（REQ-M3-02）。`kind` 可枚举，供多智能体 gate 区分：
+ * - blocking（缺事实导致不可判）→ `unavailable`
+ * - degraded（部分缺但仍可判）→ `partial`
+ * 旧字段 `limitations: string[]` 保留为展示/兼容，语义不变。
+ */
+export const ANALYSIS_MISSING_FACT_KINDS = [
+  'quote-unavailable',
+  'quote-stale',
+  'account-facts-unavailable',
+  'strategy-run-unavailable',
+  'fundamental-unavailable',
+  'research-unavailable',
+  'market-breadth-unavailable',
+  'news-unavailable',
+  'industry-unavailable',
+  'position-unavailable',
+  'watch-facts-unavailable',
+] as const;
+export const AnalysisMissingFactKindSchema = z.enum(ANALYSIS_MISSING_FACT_KINDS);
+export type AnalysisMissingFactKind = z.infer<typeof AnalysisMissingFactKindSchema>;
+export const AnalysisMissingFactSchema = z
+  .object({
+    kind: AnalysisMissingFactKindSchema,
+    subjectId: z.string().min(1),
+    reason: z.string().min(1).max(500),
+    asOf: z.coerce.date(),
+  })
+  .strict();
+export type AnalysisMissingFact = z.infer<typeof AnalysisMissingFactSchema>;
+
+/** 缺了就无法给出可判定结论的缺口；其余为“部分缺但仍可判”。 */
+export const BLOCKING_MISSING_FACT_KINDS: ReadonlySet<AnalysisMissingFactKind> = new Set([
+  'quote-unavailable',
+  'quote-stale',
+  'account-facts-unavailable',
+  'strategy-run-unavailable',
+]);
+
+export const missingFactsAvailability = (
+  facts: readonly AnalysisMissingFact[],
+): 'complete' | 'partial' | 'unavailable' =>
+  facts.some((fact) => BLOCKING_MISSING_FACT_KINDS.has(fact.kind))
+    ? 'unavailable'
+    : facts.length > 0
+      ? 'partial'
+      : 'complete';
+
 export const AnalysisContextSchema = z
   .object({
     recordedResult: z.object({ hash: z.string().min(1), ref: z.string().min(1) }).optional(),
@@ -27,6 +75,8 @@ export const AnalysisContextSchema = z
     ),
     factIds: z.array(z.string().min(1)),
     limitations: z.array(z.string().min(1)),
+    /** 结构化缺口；旧 context 没有该字段时按空数组读取（兼容）。 */
+    missingFacts: z.array(AnalysisMissingFactSchema).default([]),
     contextHash: z.string().regex(/^[a-f0-9]{64}$/),
     writeUntil: z.coerce.date(),
     expiresAt: z.coerce.date(),
@@ -190,4 +240,85 @@ export const analysisAdviceContextError = (
   )
     return 'context_mismatch';
   return undefined;
+};
+
+/**
+ * 引用一致性 checker（REQ-M3-02）。返回**逐条**不符项而不是布尔值：
+ * 调用方要能指出哪一条引用不存在、哪一条缺口为空，而不是只说“报告不通过”。
+ */
+export const AnalysisReportReferenceIssueSchema = z
+  .object({
+    code: z.enum([
+      'unknown-fact-id',
+      'duplicate-fact-id',
+      'unknown-missing-kind',
+      'empty-missing-fact',
+      'duplicate-missing-fact',
+    ]),
+    path: z.string().min(1),
+    message: z.string().min(1).max(500),
+  })
+  .strict();
+export type AnalysisReportReferenceIssue = z.infer<typeof AnalysisReportReferenceIssueSchema>;
+
+export const checkAnalysisReportReferences = (input: {
+  readonly context: Pick<AnalysisContext, 'factIds' | 'missingFacts'>;
+  readonly evidenceFactIds: readonly string[];
+  readonly missingFacts: readonly {
+    readonly kind: string;
+    readonly subjectId: string;
+    readonly reason: string;
+    readonly asOf: Date;
+  }[];
+}): readonly AnalysisReportReferenceIssue[] => {
+  const issues: AnalysisReportReferenceIssue[] = [];
+  const knownFacts = new Set(input.context.factIds);
+  const seenFacts = new Set<string>();
+  input.evidenceFactIds.forEach((factId, index) => {
+    if (!knownFacts.has(factId)) {
+      issues.push({
+        code: 'unknown-fact-id',
+        path: `evidenceFactIds[${index}]`,
+        message: `引用了事实包里不存在的 factId: ${factId}`,
+      });
+      return;
+    }
+    if (seenFacts.has(factId)) {
+      issues.push({
+        code: 'duplicate-fact-id',
+        path: `evidenceFactIds[${index}]`,
+        message: `重复引用 factId: ${factId}`,
+      });
+    }
+    seenFacts.add(factId);
+  });
+  const seenGaps = new Set<string>();
+  input.missingFacts.forEach((fact, index) => {
+    if (!(ANALYSIS_MISSING_FACT_KINDS as readonly string[]).includes(fact.kind)) {
+      issues.push({
+        code: 'unknown-missing-kind',
+        path: `missingFacts[${index}].kind`,
+        message: `缺口 kind 不在枚举内: ${fact.kind}`,
+      });
+      return;
+    }
+    if (fact.subjectId.trim().length === 0 || fact.reason.trim().length === 0) {
+      issues.push({
+        code: 'empty-missing-fact',
+        path: `missingFacts[${index}]`,
+        message: `缺口缺少 subjectId 或 reason: ${fact.kind}`,
+      });
+      return;
+    }
+    const key = `${fact.kind}\0${fact.subjectId}`;
+    if (seenGaps.has(key)) {
+      issues.push({
+        code: 'duplicate-missing-fact',
+        path: `missingFacts[${index}]`,
+        message: `重复缺口: ${fact.kind} / ${fact.subjectId}`,
+      });
+    }
+    seenGaps.add(key);
+  });
+  return issues;
 };

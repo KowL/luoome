@@ -263,6 +263,7 @@ describe('node:sqlite 入口：真实 repository 在 Node 下同语义', () => {
       facts: [{ id: 'quote', label: '行情', value: 100, evidenceIds: [] }],
       factIds: ['quote'],
       limitations: ['无实时盘口'],
+      missingFacts: [],
       contextHash: 'a'.repeat(64),
       writeUntil: new Date(now.getTime() + 86_400_000),
       expiresAt: new Date(now.getTime() + 31 * 86_400_000),

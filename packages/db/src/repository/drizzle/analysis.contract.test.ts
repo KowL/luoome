@@ -44,6 +44,7 @@ const context = (id = 'context'): AnalysisContext => ({
   facts: [{ id: 'quote', label: '行情', value: 100, evidenceIds: [] }],
   factIds: ['quote'],
   limitations: ['无实时盘口'],
+  missingFacts: [],
   contextHash: 'a'.repeat(64),
   writeUntil: new Date(now.getTime() + 86400000),
   expiresAt: new Date(now.getTime() + 31 * 86400000),
