@@ -7,7 +7,9 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 
 - 作为 **DSH 插件** 接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供五块业务面板、随包技能与原生工具/审批，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）
 - 作为 **Web** 看板：账户、持仓、Strategy、Watchlist 与 AlertPlan（本地单机装配，随 DSH 面板使用）
-- 作为 **CLI / TUI** 本地工具：`luoome tools`、`luoome watch`、`luoome workflow run` 直连同一份事实库
+- 独立的 `luoome` CLI / TUI 已随 T15 下线：两个包、仓库内命令入口、安装 shim 与 Homebrew
+  formula 一并删除；能力改由插件面板与工具提供，见
+  [packages/dsh-luoome/README.md](./packages/dsh-luoome/README.md)
 
 > stdio MCP 用户入口（`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例）已按 REQ-M2-03
 > 删除；暴露面判定归位到 `packages/tools/src/exposure/`，由插件面与 Web 面共同使用。
@@ -40,7 +42,7 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 
 ### 数据维度（读 + 写）
 
-- 账户（单机多账户；Web、CLI/TUI 与 DSH 插件共享同一份账户事实）
+- 账户（单机多账户；Web 与 DSH 插件共享同一份账户事实）
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
@@ -91,7 +93,7 @@ homebrew/
 
 ## 环境变量
 
-单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 CLI/TUI/Web 与 DSH 插件共用的配置；
+单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 Web 与 DSH 插件共用的配置；
 部署侧的 DSH/插件变量（`DSH_*`、`LUOOME_OWNER_*`、`LUOOME_HOME`、`CADDY_IMAGE`）见
 [DSH 部署配置](deploy/dsh/production.env.example)。默认部署不再需要 `LUOOME_MCP_*`。
 
@@ -124,7 +126,7 @@ homebrew/
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 
-生产拒绝 fixture provider。CLI/TUI/Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite。
+生产拒绝 fixture provider。Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
@@ -134,7 +136,7 @@ Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时、模型目录与模型设置页。
 需要模型判断的任务由 DSH agent 经插件原生工具调用完成，密钥由 DSH 侧配置。
 
-模型推理与模型配置由 DSH 承担，luoome 侧不再有模型设置页；本地 CLI/TUI 读取同一份
+模型推理与模型配置由 DSH 承担，luoome 侧不再有模型设置页；插件与 Web 读取同一份
 默认目录和环境变量。Web 只管数据源、通知、账户与数据导入导出，没有管理员与普通用户之分，
 也没有订阅与权益概念。
 
@@ -143,7 +145,7 @@ Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可
 | 文档 | 用途 |
 |---|---|
 | [docs/README.md](./docs/README.md) | **完整文档导航**：产品需求、技术设计、运维手册与历史归档 |
-| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / TUI / Web / 多账户 / 复盘 / 校准 / FAQ |
+| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / DSH 插件 / Web / 多账户 / 复盘 / 校准 / FAQ |
 | [packages/dsh-luoome/README.md](./packages/dsh-luoome/README.md) | 外部接入：DSH 插件安装、面板与随包技能 |
 | [AGENTS.md](./AGENTS.md) | 编码 Agent 开发规范：架构边界、实现约定、测试与安全规则 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
@@ -154,7 +156,8 @@ Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可
 ## 快速启动
 
 ```bash
-# 一键安装（macOS / Linux，无需 git clone，自动装 Bun + 源码 + luoome 命令）
+# 一键安装（macOS / Linux，无需 git clone，自动装 Bun + 源码 + 工作区依赖；
+# luoome 没有独立 CLI，装完按提示在 DSH 里安装插件）
 curl -fsSL https://raw.githubusercontent.com/KowL/luoome/main/install.sh | sh
 
 # Windows（PowerShell 5.1+）
@@ -171,9 +174,8 @@ bun --no-env-file run web
 输入 Pocket 密码后自动完成 DSH 启动 token 握手，手机使用同一个入口。独立 Web 只在本机可达，
 远程访问走 SSH 隧道或受控反代。
 
-`./bin/luoome start`、`restart` 和 `web serve` 启动同一个单机 Web，默认后台运行，日志追加到
-`$LUOOME_HOME/logs/luoome.log`；需要前台调试时加 `--foreground`。这些入口不加载个人或项目 `.env`。
-批量调度由 DSH 定时任务负责，没有常驻调度进程。直接用 Bun 调 CLI 时必须带 `--no-env-file`。
+单机 Web 用 `bun --no-env-file run web` 启动（`bun run web` 已内建 `--no-env-file`），只监听
+`127.0.0.1`。批量调度由 DSH 定时任务负责，没有常驻调度进程，也没有独立 CLI 入口。
 
 ## 自动任务
 
@@ -191,25 +193,25 @@ bun --no-env-file run web
 没有生产者，也没有常驻消费者。旧 MCP worker 链路（`packages/mcp`、`luoome mcp serve`）
 已随 REQ-M2-03 删除（见[用户手册](docs/USER_GUIDE.md#75-批量分析与队列)）。
 
-单机 CLI 的 `watch` 与 `workflow run` 能力继续保留，仅访问自己的单机库。下列 cron 是单机使用示例；
-每次 workflow 运行落一条 `WorkflowRun` 审计：
+批处理由 DSH 定时任务按工具名直接调用（不再有独立命令入口）。
+下列 cron 仅示意每个任务的时间点，实际执行走 DSH 定时任务 + 持久授权；每次运行落一条 `WorkflowRun` 审计：
 
 ```cron
 # 事件同步：每交易日 08:30（财报 / 解禁 / 分红…，按 (provider, externalId) 幂等 upsert）
-30 8 * * 1-5  luoome workflow run sync-stock-events
+30 8 * * 1-5  <DSH 任务> sync-stock-events
 # event-date 求值：每交易日 08:50（同步之后；命中提醒窗口的事件推送）
-50 8 * * 1-5  luoome workflow run evaluate-event-rules
+50 8 * * 1-5  <DSH 任务> evaluate-event-rules
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
-30 16 * * 1-5  luoome workflow run post-market-data
+30 16 * * 1-5  <DSH 任务> post-market-data
 # 盘后补齐信号 T+1/T+3/T+5 真实表现（未到期样本保持 pending）
-10 18 * * 1-5   luoome workflow run complete-strategy-observations
+10 18 * * 1-5   <DSH 任务> complete-strategy-observations
 # 收盘复盘与周报：报告先保存，通知失败只会把 WorkflowRun 降为 partial
-0 18 * * 1-5   luoome workflow run closing-report --mode scheduled
-0 19 * * 5     luoome workflow run weekly-report --mode scheduled
+0 18 * * 1-5   <DSH 任务> closing-report
+0 19 * * 5     <DSH 任务> weekly-report
 # 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
-0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
+0 9 * * 1-5    <DSH 任务> opening-report
 # 可选 Research Vault Git 拉取：仅干净工作树 + fast-forward，先备份再重建索引
-# 0 */2 * * *  luoome workflow run sync-research-vault-remote --mode scheduled
+# 0 */2 * * *  <DSH 任务> sync-research-vault-remote
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
@@ -238,7 +240,7 @@ bun --no-env-file run web
 - Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
-- `luoome start` 与 `web serve` 启动同一个单机 Web；批量调度由 DSH 定时任务承担
+- 单机 Web 只在本机可达；批量调度由 DSH 定时任务承担，无独立 CLI
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
 

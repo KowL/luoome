@@ -1,9 +1,8 @@
 /**
  * A 股节假日历（纯计算部分，v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md "已知边界"）。
  *
- * 原位于 packages/cli/src/holidays.ts；个股行情查看 Phase 1 起下沉到 core，
- * 供 tools（get_stock_market_view 的 marketSession）与 cli（watch 时段判断）复用，
- * 避免节假日数据多处拷贝漂移。文件 / env 加载等 IO 仍留在 cli。
+ * 个股行情查看 Phase 1 起收敛在 core（旧的 CLI 实现已随 T15 删除），
+ * 供 tools（get_stock_market_view 的 marketSession）复用，避免节假日数据多处拷贝漂移。
  *
  * 设计要点：
  * - 默认硬编码 2026 / 2027 全年节假日（YYYY-MM-DD 字符串，Asia/Shanghai 时区日期）

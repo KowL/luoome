@@ -588,7 +588,7 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 指数。`get_market_data_status` 从 Registry、股票目录 checkpoint 和连板天梯显式来源动态
 生成数据集状态，不维护固定 provider 常量。
 
-**v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
+**v0.7 起新增**：`luoomeHome()` 路径工具（当时从 CLI 的 context 抽出，被 watch / holidays / future paths 共享；该 CLI 包已随 T15 删除，实现归位到 core）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
 **迁移与兼容**：Strategy/Watchlist/AlertPlan 切换早已完成，只写目标表，不双写。
 一次性 migration decoder（`schema_migrations` runner 与 verify 命令）已随旧模型整体移除；
@@ -1146,10 +1146,11 @@ luoome 内部 snake_case，派生出的 MCP / OpenAI schema 同样 snake_case。
 
 | 消费者 | 入口 | 暴露范围 |
 |---|---|---|
-| CLI | `bin/luoome <cmd>` | 全量（`tools call` 不设副作用闸口） |
-| TUI | opentui app | 全量（含交互） |
 | Web | Hono HTTP API | read 默认；write 需 opt-in + 同源校验；trade 仅走专用人工路由 |
 | DSH 插件 | `dsh-luoome` 原生工具 + 精确写回 policy | read 默认；write/external/queue 走精确 policy；trade 永不 |
+
+独立 CLI 与 TUI 已随 T15 下线（`bin/luoome`、安装 shim、Homebrew formula 一并删除）；
+现在只有 Web 与 DSH 插件两个消费面。
 
 Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 

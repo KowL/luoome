@@ -176,7 +176,7 @@ const ensureRuleIds = (pool: AlertPlan): readonly AlertRule[] => {
   });
 };
 
-/** Asia/Shanghai 时区偏移（+8h，无夏令时）；与 packages/cli/src/holidays.ts 同口径。 */
+/** Asia/Shanghai 时区偏移（+8h，无夏令时）；与 core 的 trading-calendar 同一口径。 */
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 /** 把 Date 转成 Asia/Shanghai 当日的 YYYY-MM-DD 字符串（不依赖 process.env.TZ）。 */

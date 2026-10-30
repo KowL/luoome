@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-const domain = new Set(['core', 'db', 'tools', 'workflows', 'batch', 'adapters', 'cli', 'tui']);
+const domain = new Set(['core', 'db', 'tools', 'workflows', 'batch', 'adapters']);
 
 /**
  * 领域层不发起模型请求（REQ-M1-07）。import 检查只挡包依赖，挡不住行为：

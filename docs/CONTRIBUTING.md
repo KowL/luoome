@@ -63,10 +63,8 @@ luoome/
 │   │   ├── testing/   仅测试可导入的 deterministic fixtures / fakes
 │   │   └── notification/  飞书 Webhook 等
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
-│   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
-│   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
-│   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
-│   └── tui/           opentui 应用
+│   │                  运行时清单以 registry 与 `bun run tools:list` 为准。
+│   └── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
 ├── apps/
 │   └── web/           Hono + 原生 HTML/JS 仪表盘（本地单机装配）
 ├── deploy/dsh/        独立 DSH 部署（compose、Caddy、profile 装配与部署静态守卫）
@@ -83,7 +81,6 @@ luoome/
 │   ├── ddd/               技术详细设计
 │   ├── runbooks/          可重复执行的运维手册
 │   └── archive/           已完成计划与验收快照
-├── bin/luoome         bash 转发到 bun run packages/cli/src/index.ts
 ├── .github/workflows/ CI（typecheck + test:all + lint）
 ├── AGENTS.md          编码 Agent 开发规范
 ├── CLAUDE.md          Claude Code 导入 AGENTS.md 的项目入口
@@ -101,7 +98,7 @@ workflows ──► tools ──► core
 
 - `core` **绝对不能** import 任何其它包（保证纯领域类型）
 - `db` / `adapters` 可以依赖 `core`，不能依赖 `tools` / `workflows` / `cli` 等上层
-- `tools` 是所有 surface（CLI / TUI / Web / DSH 插件）的唯一上游依赖
+- `tools` 是所有 surface（Web / DSH 插件）的唯一上游依赖
 - 跨包合约变更先开 issue 讨论，不要悄悄改
 
 ## 日常命令
@@ -121,12 +118,11 @@ workflows ──► tools ──► core
 | `bun run check:layers` | 依赖方向静态检查 |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
-| `bun packages/tui/src/smoke.ts` | TUI headless smoke |
-| `bash bin/luoome --help` | CLI 帮助 |
-| `bash bin/luoome tools list --json` | 输出当前 registry tool 清单 |
-| `bash bin/luoome tui` | 跑终端仪表盘 |
-| `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
-| `bash bin/luoome workflow run run-strategies --input '{}'` | 跑已发布 Strategy |
+| `bun run tools:list` | 输出当前 registry tool 清单（未归类 = 0） |
+| `bun --no-env-file run web` | 起本机 Web 看板 |
+
+> 独立的 `luoome` CLI 与 TUI 已随 T15 下线：没有仓库内命令入口脚本，也没有 `luoome <command>`
+> 这层分发。所有能力经 DSH 插件面板、插件工具或 `bun run <script>` 使用。
 
 **CI 三关必须全绿**：`typecheck` + `test:all` + `lint`。本地跑通再 push。
 
@@ -215,24 +211,14 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 
 - `packages/core` — entity 不变量 + 工具函数 + branded types
 - `packages/tools` — 每个 tool 至少 1 个单测（input validation + happy path + 关键 error kind）
-- `packages/cli` — argv 解析 + help 输出 + 子命令分发
 - `packages/workflows` — 引擎 + 内置 workflow（v0.4 加 5 个）
 
 `bun run test:db` 跑 bun test，专覆盖：
 
 - `packages/db` 的 **合约测试**（contract-tests.ts）—— 同一套测试对 drizzle + in-memory 两个 repo 各跑一遍，确保行为一致
 
-TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
-
-1. 首屏布局（免责声明 / 持仓 / 建议 / 快捷键栏）
-2. `[d]` 详情弹层
-3. `[esc]` 关闭
-4. `[s]` 统计弹层
-5. `[t]` 战法扫描
-6. `[o]` outcome 复盘
-7. `[q]` 退出
-
-跑 smoke 需要 `bun`（依赖 `@opentui/core/testing`）。
+终端界面（TUI）与独立 CLI 已随 T15 删除，对应的 headless smoke 与 argv 分发测试一并移除；
+插件面板的浏览器验收见 `bun run test:panels-browser`。
 
 **写测试**
 
@@ -377,7 +363,7 @@ toolRegistry.register(myTool);
 - 表达式结果：true / false / number
 - score 表达式支持 `Math.min / max / abs / round`
 
-新加 Strategy 后跑 `bash bin/luoome strategy run <strategyId>` 验证。
+新加 Strategy 后，在插件策略面板跑一次（或用 `run_strategy` 工具）验证。
 
 ### 加一个新数据源
 
@@ -422,7 +408,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 });
 ```
 
-在 `packages/workflows/src/index.ts` 桶导出，CLI `luoome workflow run my-workflow --input '{}'` 自动可用。
+在 `packages/workflows/src/index.ts` 桶导出后，经 tools 或 DSH 定时任务调用即可用。
 
 ## 依赖方向（硬约束）
 

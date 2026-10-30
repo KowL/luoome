@@ -94,6 +94,9 @@
 
 **实际验收**：
 - ✅ 5 个内置战法 + DSL 表达式求值单测覆盖。
+> **T15 起**：下文历史验收记录里的 `bash bin/luoome …` 与 `homebrew/luoome.rb` 均已随独立 CLI 下线删除，
+> 保留原文仅为版本演进留痕；当前入口只有 DSH 插件与 Web。
+
 - ✅ `bash bin/luoome workflow run tactic-scan` 在 mock 数据上确定性产出 ≥ 1 个 signal（v0.2 验收时记录；该 workflow 已在 strategy-watchlist 迁移中被 `run-strategies` 取代）。
 - ✅ `bash bin/luoome workflow run risk-report` 输出 HHI / top1 / top3 / VaR + 大盘背景。
 - ✅ `bash bin/luoome workflow run daily-review` 产出当日 advice 汇总 + 7 日 stats。
@@ -205,7 +208,7 @@
 - 内置 2026 全年 A 股休市日（29 天）+ 2027 best-effort placeholder（22 天，按近 5 年规律推断，每年 12 月国办通知发布后手工同步）
 - 三层优先级 union 合并：`LUOOME_A_SHARE_HOLIDAYS` env > `$LUOOME_HOME/holidays.json` 文件（路径可用 `LUOOME_HOLIDAYS_FILE` 覆盖）> 内置；文件损坏静默 fallback 到内置，不监听 mtime
 - ✅ 连板天梯生产装配复用同一份 core 节假日历；休市日直接返回空事实，不访问真实上游
-- `packages/cli/src/paths.ts` 抽出 `luoomeHome()` 共享小工具
+- `luoomeHome()` 抽出为共享小工具（该实现所在的 CLI 包已随 T15 删除，现由 core 的路径工具承担）
 
 **验收**：
 - ✅ `luoome watch` 节假日 / 周末 / 盘外不空转（nextRunDelay 60s 重试，交易时段内按 interval 轮询）

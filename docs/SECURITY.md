@@ -20,7 +20,7 @@ luoome 是本地工具 + DSH 插件 + advisor agent。五类潜在威胁：
 
 | 等级 | 含义 | 默认暴露 |
 |---|---|---|
-| `read` | 只读本地 | ✅ Web / CLI / TUI / 插件 |
+| `read` | 只读本地 | ✅ Web / 插件 |
 | `write` | 写本地状态 | ⚠️ opt-in |
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
 | `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ 任何暴露面 / 通用 Web 工具路由永不暴露 |
@@ -137,7 +137,7 @@ interface GetConfidenceCalibrationOutput {
 ```
 
 **校准不改写已存储的 confidence**。`confidence` 由消费者写入时原样落库；校准只作为事后诊断视图呈现
-（TUI 的「confidence 校准」弹层、`closing-report` 的对应章节）。TUI 明示「信心度不是概率」，
+（插件「策略」面板的 confidence 校准视图、`closing-report` 的对应章节）。界面明示「信心度不是概率」，
 不同来源不混桶，样本不足 `minimumOutcomes` 时不输出校准结论。统计只覆盖本账户**明确记录过 outcome**
 的建议，通用股票建议须先被本账户记录才进入样本。
 
@@ -146,7 +146,7 @@ interface GetConfidenceCalibrationOutput {
 过期 advice 默认不再被主动返回。`validUntil` 到期后：
 
 - `get_advice` 不返回（除非 `includeExpired: true`）
-- TUI / Web 不显示
+- Web 与插件面板不显示
 - 复盘时仍保留
 
 ### 输出反 prompt injection
@@ -349,7 +349,7 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 Tool 的业务输入、业务输出和错误详情不写入 audit log；失败事件只保留 `errorKind`。
 
 当前实现（2026-08-14）：`defineTool` 对所有非 read 调用记录
-成功、业务失败、输入校验失败和异常结果；CLI、MCP、TUI、Web 生产入口分别把日志写入
+成功、业务失败、输入校验失败和异常结果；插件、Web 生产入口分别把日志写入
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
@@ -376,7 +376,7 @@ Advice 的 `reasoning` / `risks` 在写回前过 prompt-injection 文本清理�
 
 ## Checklist（每个 release 前）
 
-2026-08-14 已用 MCP smoke、registry/invariant/TUI/Web 结构测试、错误脱敏回归和仓库密钥扫描复核，
+2026-08-14 已用 registry/invariant/Web 结构测试、错误脱敏回归和仓库密钥扫描复核，
 以下清单全部通过；后续 release 若新增副作用或输出路径，必须重新执行同一组检查。
 
 - [x] `LUOOME_EXPOSE_TRADE` 强制 false 校验存在
@@ -408,7 +408,7 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
 | DSH 启动 token | DSH Web 自身，Pocket 代为握手 | Pocket 通过宿主 connection 获取当次启动 token 并换取 DSH 会话；不向浏览器暴露该 token，不进入 luoome 业务接口 |
 
 - 两层都在 luoome 业务进程之外：luoome 不实现账号、密码或会话。
-- 单机 Web（`luoome web serve`）默认只监听 `127.0.0.1`，不对局域网暴露；远程访问走 SSH 隧道或反向代理。
+- 单机 Web（`bun run web`）默认只监听 `127.0.0.1`，不对局域网暴露；远程访问走 SSH 隧道或反向代理。
 - Caddy 保留浏览器 Host，并在转发前拒绝外站 Origin。Pocket 通过密码认证后，将上游 Host/Origin/Referer 改写为容器内 loopback；DSH 继续验证会话。不能通过客户端 `X-Forwarded-*` 放行请求。
 - DSH/Pocket 均不直接发布端口；只有 Caddy 对外。Pocket 未启动时返回代理错误，不回退到裸 DSH。
 - 登录表单、跳转和会话 Cookie 都限定在 `/dsh/`；不会把服务器其它路径转入 DSH。

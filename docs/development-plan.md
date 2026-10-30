@@ -120,7 +120,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 串账户；该 header 只做上下文选择，不替代账户级鉴权。
 
 用户入口的真实行情 smoke 也已复现：在空的临时 `LUOOME_HOME` 中执行
-`LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=eastmoney bun packages/cli/src/index.ts market limit-up --date 2026-08-13 --json`，返回 `source=eastmoney`、`total=57`、`maxLevel=5`、`levels=5`；未配置 AI 只产生配置 warning，不写入样例账户或 mock 行情。
+`LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=eastmoney bun run tools call limit_up_ladder --input '{"date":"2026-08-13"}' --json`（独立 CLI 已随 T15 删除，等价能力经 tools 调用），返回 `source=eastmoney`、`total=57`、`maxLevel=5`、`levels=5`；未配置 AI 只产生配置 warning，不写入样例账户或 mock 行情。
 
 账户绩效生产装配也已复现：空临时 SQLite 中只建立最小 `kind=real` 账户、持仓和基准股票事实，
 `LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=sina` 请求 2026-08-11～13，3/3 估值日

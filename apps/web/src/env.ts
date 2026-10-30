@@ -1,6 +1,5 @@
 // 项目 .env 加载（web 直跑入口在 import.meta.main 分支调用一次）。
-// 与 packages/cli/src/env.ts 同构（web 经 `luoome web serve` 启动时 CLI 已加载，
-// 本文件覆盖 `bun apps/web/src/index.ts` 直跑场景）；两边需同步修改。
+// 唯一的 .env 加载入口（旧的 CLI 入口已随 T15 删除，不再有第二份实现需要同步）。
 //
 // 加载顺序：$LUOOME_HOME/.env → <项目根>/.env（项目级优先，只填未设置 key）。
 // 优先级：真实 env > 项目根 .env > LUOOME_HOME/.env。文件缺失/不可读静默跳过。

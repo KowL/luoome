@@ -24,7 +24,7 @@
 | 文档 | 用途 |
 |---|---|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 模块边界、领域模型、数据流和 workflow 约束 |
-| [USER_GUIDE.md](./USER_GUIDE.md) | 安装、CLI、TUI、Web 与日常使用（stdio MCP 入口已下线） |
+| [USER_GUIDE.md](./USER_GUIDE.md) | 安装、DSH 插件、Web 与日常使用（stdio MCP 与独立 CLI/TUI 均已下线） |
 | [ROADMAP.md](./ROADMAP.md) | 版本演进、已交付能力和后续方向 |
 | [SECURITY.md](./SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、测试、代码规范和贡献流程 |

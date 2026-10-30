@@ -1,12 +1,11 @@
 /**
  * 项目 .env 文件解析（纯函数，core 不触 fs）。
  *
- * 为支持「配置写在项目 .env 文件」，各 surface（CLI/Web）启动时读取
+ * 为支持「配置写在项目 .env 文件」，Web surface 启动时读取
  * .env 文件并调用 applyEnvEntries 注入 process.env（仅填未设置的 key，
  * 真实环境变量永远优先）。
  *
- * 文件读取在各 surface（packages/cli/src/env.ts、apps/web/src/env.ts），
- * core 只提供解析与应用两个纯函数。
+ * 文件读取在 surface 侧（apps/web/src/env.ts），core 只提供解析与应用两个纯函数。
  */
 
 /**

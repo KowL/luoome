@@ -15,7 +15,7 @@
 | 副作用、鉴权与投资建议边界 | [docs/SECURITY.md](./docs/SECURITY.md) |
 | 命令和测试入口 | [package.json](./package.json) |
 
-不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、插件注册的 descriptor 和 `luoome tools list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，个人版 DSH 插件按明确意图直接执行或通过精确任务授权调用，保留 Operation 回执。
+不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、插件注册的 descriptor 和 `bun run tools:list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，个人版 DSH 插件按明确意图直接执行或通过精确任务授权调用，保留 Operation 回执。
 
 ## 开始修改前
 
@@ -28,7 +28,7 @@
 ## 架构硬约束
 
 ```text
-cli / tui / web ──► tools ──► core
+web / dsh 插件 ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -36,7 +36,7 @@ workflows ──► tools ──► core
 
 - `packages/core` 是纯领域层，零 IO，不反向依赖其它包。
 - `db` 与 `adapters` 可依赖 `core`，不可依赖 `tools`、`workflows` 或 surface。
-- CLI、TUI、Web 与 DSH 插件统一通过 tools 使用业务能力，不复制领域逻辑。
+- Web 与 DSH 插件统一通过 tools 使用业务能力，不复制领域逻辑（独立 CLI / TUI 已随 T15 删除）。
 - Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
 - Workflow 只通过 `ctx.tools.*` 编排能力，不直接绕过 tool 调 repository 或 adapter。

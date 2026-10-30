@@ -7,9 +7,11 @@
 # 可覆盖项（环境变量）：
 #   LUOOME_REF      源码 ref（分支 / tag / commit），默认 main
 #   LUOOME_HOME     数据与源码根目录，默认 ~/.luoome（源码放在 $LUOOME_HOME/src）
-#   LUOOME_BIN_DIR  luoome 命令安装目录，默认 ~/.local/bin
 #
 # 重复执行即升级到最新 $LUOOME_REF。
+#
+# 注意：luoome 已无独立 CLI，只以 DSH 插件安装（见 packages/dsh-luoome/README.md）。
+# 本脚本只负责把源码与工作区依赖装好，不再生成任何命令入口。
 
 set -eu
 
@@ -17,7 +19,6 @@ REPO="KowL/luoome"
 REF="${LUOOME_REF:-main}"
 LUOOME_HOME="${LUOOME_HOME:-$HOME/.luoome}"
 SRC_DIR="$LUOOME_HOME/src"
-BIN_DIR="${LUOOME_BIN_DIR:-$HOME/.local/bin}"
 
 log() { printf '%s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -61,45 +62,11 @@ trap - EXIT
 log "==> 安装依赖（bun install --frozen-lockfile）"
 (cd "$SRC_DIR" && bun install --frozen-lockfile)
 
-# 4. luoome 命令 shim
-mkdir -p "$BIN_DIR"
-cat >"$BIN_DIR/luoome" <<EOF
-#!/bin/sh
-# luoome CLI 入口 —— Bun 直接跑 TS，无构建步骤
-if ! command -v bun >/dev/null 2>&1; then
-  if [ -x "\$HOME/.bun/bin/bun" ]; then
-    PATH="\$HOME/.bun/bin:\$PATH"
-    export PATH
-  else
-    echo "error: 未找到 bun（期望 ~/.bun/bin/bun）" >&2
-    exit 1
-  fi
-fi
-exec bun --no-env-file "$SRC_DIR/packages/cli/src/index.ts" "\$@"
-EOF
-chmod +x "$BIN_DIR/luoome"
-
-# 5. PATH 提示 + 验证
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *)
-    log ""
-    log "注意：$BIN_DIR 不在 PATH 中，请将下面这行加入 ~/.zshrc 或 ~/.bashrc："
-    log "  export PATH=\"$BIN_DIR:\$PATH\""
-    ;;
-esac
-
-log "==> 验证安装"
-"$BIN_DIR/luoome" --version >/dev/null 2>&1 ||
-  fail "luoome 安装后无法运行，请查看上方输出"
-
+# 4. 无独立 CLI：luoome 只以 DSH 插件安装
 log ""
-log "安装完成："
-log "  源码：$SRC_DIR"
-log "  命令：$BIN_DIR/luoome"
+log "==> 源码与依赖已就绪（luoome 不再提供独立 CLI）"
+log "    安装 DSH 插件：见 $SRC_DIR/packages/dsh-luoome/README.md"
+log "    （在 DSH 中以本地目录安装该包，随后在「投资设置」里配置）"
 log ""
-log "下一步："
-log "  luoome start        # 启动 Web + 长驻盯盘（浏览器打开 http://127.0.0.1:5173）"
-log "  luoome --help       # 查看全部命令"
-log ""
-log "升级：重新执行本脚本即可；卸载：删除 $SRC_DIR 与 $BIN_DIR/luoome"
+log "源码：$SRC_DIR"
+log "升级：重新执行本脚本即可；卸载：删除 $SRC_DIR"

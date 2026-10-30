@@ -5,10 +5,8 @@
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
 - 作为 **DSH 插件**接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供五个业务面板、随包技能与原生工具/审批
-- 在**终端（TUI）**盯盘、看今日建议
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
-- 作为 **CLI / TUI** 本地工具：`luoome tools`、`luoome watch`、`luoome workflow run` 直连同一份事实库
-- 通过**工作流**运行 Strategy、同步 Watchlist、盯盘与生成报告
+- 通过**插件工具与 DSH 定时任务**跑 Strategy、同步 Watchlist、盯盘与生成报告
 
 但 luoome **不会**替你下单。所有建议都带 `decision / confidence / horizon / reasoning / risks / disclaimers / validUntil`，人最终拍板。
 
@@ -20,8 +18,8 @@ DSH 是唯一入口，`$LUOOME_HOME/luoome.db` 是唯一事实库。批处理由
 
 1. [安装](#1-安装)
 2. [第一次启动](#2-第一次启动)
-3. [CLI 速查](#3-cli-速查)
-4. [TUI 用法](#4-tui-用法)
+3. [命令入口（已下线）](#3-命令入口已下线)
+4. [终端界面（已下线）](#4-终端界面已下线)
 5. [Web 用法](#5-web-用法)
 6. [MCP 接入（已下线）](#6-mcp-接入已下线)
 7. [DSH 单机用法](#7-dsh-单机用法)
@@ -58,9 +56,9 @@ irm https://raw.githubusercontent.com/KowL/luoome/main/install.ps1 | iex
 ```
 
 脚本自动完成：检测并安装 Bun → 下载源码到 `~/.luoome/src`（Windows 为 `~\.luoome\src`）→
-`bun install` → 生成 `luoome` 命令（macOS/Linux 在 `~/.local/bin`，Windows 在
-`~\.luoome\bin\luoome.cmd` 并写入用户 PATH）。可用环境变量覆盖：`LUOOME_REF`（分支 / tag /
-commit，默认 `main`）、`LUOOME_HOME`、`LUOOME_BIN_DIR`。重新执行即升级。
+`bun install --frozen-lockfile`。**不再生成任何命令**：独立 CLI 已下线，装完按
+[§7 DSH 单机用法](#7-dsh-单机用法) 把 `packages/dsh-luoome` 作为插件装进 DSH。
+可用环境变量覆盖：`LUOOME_REF`（分支 / tag / commit，默认 `main`）、`LUOOME_HOME`。重新执行即升级。
 
 ### 1.3 从源码运行（开发 / 验证）
 
@@ -73,25 +71,16 @@ bun test                 # Node 兼容的 Vitest 测试
 bun run test:all         # Vitest + Bun db/web 测试
 ```
 
-### 1.4 通过 Homebrew（macOS / Linux）
+### 1.4 通过 Homebrew（已下线）
 
-```bash
-# tap 后 install（formula 由仓库内 homebrew/luoome.rb 提供）
-brew tap KowL/luoome
-brew install luoome
-
-# 验证
-luoome --version
-luoome tools list | head
-```
-
-> Formula 走 git HEAD 构建（依赖 Bun 编译器）；首次安装会从 GitHub 拉源码 + 跑 `bun install`。tag 发布后会切到 tarball binary。
+> 仓库内的 `luoome` formula 已随独立 CLI 一并删除（T15）。现在没有 `brew install luoome`
+> 这条路径，也不再提供 `luoome` 命令；安装方式只有 §1.2 的源码脚本 + §7 的 DSH 插件安装。
 
 ### 1.5 不安装直接用
 
-> stdio MCP 入口已按 REQ-M2-03 下线（`luoome mcp serve` 与 `packages/mcp` 都已删除）。
-> 现在让外部 Agent 使用 luoome 的唯一路径是 DSH 插件：装好本机 luoome 与
-> [DSH 插件](#7-dsh-单机用法)，再由 DSH 会话调用插件注册的工具。
+> 仓库内没有可直接执行的入口脚本：stdio MCP 入口已按 REQ-M2-03 下线，
+> 独立 CLI / TUI 已按 T15 下线。让外部 Agent 使用 luoome 的唯一路径是 DSH 插件：
+> 装好本机 luoome 与 [DSH 插件](#7-dsh-单机用法)，再由 DSH 会话调用插件注册的工具。
 
 ---
 
@@ -102,17 +91,15 @@ luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建
 可以继续修改或删除。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
 Web（严格默认，见 §11 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
 
-### 2.1 一键启动单机 Web
+### 2.1 启动单机 Web
 
 ```bash
-luoome start
+bun --no-env-file run web      # 等价于 bun run web（脚本内已带 --no-env-file）
 ```
 
-这会在 `127.0.0.1:5173` 启动 Web。单机形态没有常驻盯盘进程：批量调度由 **DSH 定时任务**负责（见 [§7](#7-dsh-单机用法)）。首次启动还会：
+这会在 `127.0.0.1:5173` 启动 Web。单机形态没有常驻盯盘进程：批量调度由 **DSH 定时任务**负责（见 [§7](#7-dsh-单机用法)）。首次启动会创建 `~/.luoome/luoome.db`。
 
-- 创建 `~/.luoome/luoome.db`
-
-打开 `http://127.0.0.1:5173/`，即可在「设置」页执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome web serve`。
+打开 `http://127.0.0.1:5173/`，即可在「设置」页执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。日常使用请直接装 [DSH 插件](#7-dsh-单机用法)，插件面板覆盖同一批能力。
 
 「预警」页的交易计划卡片直接展示生成时参考价及来源时间、入场区间、止损/止盈、当前与目标仓位、持有周期和复核时间。参考价是计划生成时的事实，不代表实时行情；缺失或过时数据会明确标注。详情展示数值触发条件、前置约束、反证和风险；内部计划版本标识、账户事实指纹及来源标识收在默认折叠的「查看追溯信息」中。计划不会自动下单。
 
@@ -133,18 +120,15 @@ luoome start
 
 策略新建与新版本草案共用规则构建器，可从模板开始，再调整股票范围、筛选规则、评分权重和入场/退出/风险信号。常用指标条件通过下拉框与数值配置，复杂条件保留为可编辑表达式。需要完整配置时可主动切换「JSON 高级」；无效 JSON 会阻止保存，修正后可切回表单。底层保存格式与发布流程不变。
 
-### 2.2 终端全屏
+### 2.2 终端全屏（已下线）
 
-```bash
-luoome tui
-```
-
-你应该看到顶部两行：免责声明横幅 + 当前账户名（如你创建时填写的账户名）；左栏持仓、右栏今日建议；底部快捷键栏。
+> TUI 已随 T15 删除，没有 `luoome tui`。等价视图在 DSH 插件面板里：
+> 看盘 / 持仓 / 关注 / 策略 / 复盘五块面板。
 
 ### 2.3 浏览器
 
 ```bash
-luoome web serve
+bun run web
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
@@ -215,11 +199,7 @@ rebase 或选边。远端应使用私有仓库，HTTPS 凭证放系统 credentia
 
 恢复时先运行 `git bundle verify <bundle>`，再运行 `git clone <bundle> <新的恢复目录>` 检查备份；
 确认内容后人工复制所需文件或明确执行自己的 Git 恢复步骤。luoome 不会自动恢复或删除 bundle。
-CLI 可显式运行：
-
-```bash
-luoome workflow run sync-research-vault-remote --mode manual
-```
+需要手动触发时可经插件工具（`sync_research_vault`）或 DSH 定时任务执行。
 
 飞书报告采用手机摘要，只发送市场、策略研究、预警和事件信息；账户估值、持仓、仓位、逐账户交易计划、
 交易归因与个人行为复盘仅在应用内完整报告中查看，账户数据缺失也不会变成群通知中的告警。
@@ -248,71 +228,41 @@ luoome workflow run sync-research-vault-remote --mode manual
 
 `luoome mcp serve` 已删除（REQ-M2-03）。Agent 侧的能力发现改为 DSH 插件注册的 descriptor：
 装好插件后，DSH 会话直接看到插件的只读工具、market external 工具与精确写回 policy；
-完整库存以插件 descriptor 与 `luoome tools list --json` 为准。
+完整库存以插件 descriptor 与 `bun run tools:list --json` 为准。
 
 ---
 
-## 3. CLI 速查
+## 3. 命令入口（已下线）
 
-`luoome <子命令>` 全部子命令一览：
+独立 CLI 已随 **T15** 删除：仓库里没有 `bin/luoome`，也没有 `luoome <子命令>` 这一层分发，
+安装脚本不再生成任何命令。原来的每项能力现在有等价入口：
 
-| 子命令 | 用途 |
+| 原命令 | 现在的入口 |
 |---|---|
-| `luoome start [--port 5173] [--host 127.0.0.1]` | 启动单机 Web（批量调度由 DSH 定时任务负责） |
-| `luoome tui` | 终端全屏应用（依赖 opentui） |
-| `luoome web serve [--port 5173]` | 仅启动 Web |
-| `luoome watch [--interval 60] [--alert-plan ID] [--once]` | 启动 AlertPlan 盯盘或执行单轮 |
-| `luoome strategy list|get|validate|run` | 查询、校验或运行 Strategy |
-| `luoome watchlist list|get|sync` | 查询 Watchlist 或同步 portfolio 来源 |
-| `luoome tools call subscribe_strategy_to_watchlist --input '{...}'` | 明确订阅 Strategy 到目标 Watchlist |
-| `luoome tools call unsubscribe_strategy_from_watchlist --input '{...}'` | 取消订阅并保留审计历史 |
-| `luoome alert list` | 查询 AlertPlan |
-| `luoome tools list [--json]` | 列全部注册 tool（含 sideEffect） |
-| `luoome tools inspect <name>` | 看 tool 的 input/output schema |
-| `luoome tools call <name> --input '{...}'` | 直接调 tool（按解析后的 ctx） |
-| `luoome accounts list` | 列账户（含 kind / currency / initialCapital） |
-| `luoome holdings list [--accountId X]` | 列持仓（含现价、PnL、汇总） |
-| `luoome analyze <stockId> [--include-evidence]` | 单只股票深度分析 |
-| `luoome advice list [--since 7d] [--limit 50]` | 历史建议 |
-| `luoome advice stats [--since 30d]` | 准确率统计（命中率、跟单盈亏） |
-| `luoome advice outcome <id> --followed true --pnl 100` | 回填 advice 结果（write） |
-| `luoome sync-quotes` | 全量同步当前账户持仓行情（写库） |
-| `luoome daily-review [--since 7d]` | 触发 daily-review workflow，写入报告文件 |
+| `luoome start` / `luoome web serve` | `bun run web`（本机 `127.0.0.1:5173`） |
+| `luoome tui` | DSH 插件面板（看盘 / 持仓 / 关注 / 策略 / 复盘） |
+| `luoome tools list [--json]` | `bun run tools:list [--json]` |
+| `luoome tools inspect <name>` | 插件 descriptor 或 `packages/tools/src/registry.ts` |
+| `luoome tools call <name> --input '{...}'` | DSH 会话调用插件工具（写操作走精确 policy） |
+| `luoome strategy|watchlist|alert|advice ...` | 对应面板，或插件注册的只读工具 |
+| `luoome watch` | DSH 定时任务 + `run_intraday_plan_batch` |
+| `luoome workflow run <name>` | DSH 定时任务按工具名执行 |
 
-`--since / --until` 接 ISO 时间或 `7d / 30d / 24h / 1y` 等相对量。详见 `luoome --help`。
+`--since / --until` 之类的相对时间参数随对应工具 schema 走，见各工具描述。
 
 ---
 
-## 4. TUI 用法
+## 4. 终端界面（已下线）
 
-启动 `luoome tui` 后：
-
-### 4.1 顶部两行
-
-- 第 1 行：**STANDARD_DISCLAIMERS 前两条**——这是工具提示（不建议覆盖）。
-- 第 2 行：**当前账户名 + 币种 + 初始资金** + `[a] 切换` 提示。
-
-### 4.2 快捷键
-
-| 按键 | 行为 |
-|---|---|
-| `[q]` | 退出 |
-| `[r]` | 立即刷新（持仓 + 建议，绕过 5 s 自动刷新） |
-| `[d]` | 当前持仓详细建议（核心论点 / 支持 / 反证 / 风险 / 免责声明） |
-| `[s]` | **复盘统计**：命中率、跟单盈亏、按决策分解 |
-| `[c]` | **confidence 自校准**：每 10 一档，看到底 confidence 被高估还是低估 |
-| `[o]` | outcome 复盘：最近 20 条建议的状态（已回填 / 待回填） |
-| `[a]` | **账户切换**：j/k 上下移动 + Enter 选中 |
-| `[↑/↓]` 或 `[j/k]` | 滚动列表 / 弹层 / 账户光标（取决于当前激活视图） |
-| `[esc]` | 关闭弹层；二次按下等同 `[q]` |
-
-TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 repos。刷新周期 5 s 自动 + `[r]` 手动。
+TUI 已随 **T15** 删除（TUI 包、`@opentui/core` 依赖与 headless smoke 一并移除）。
+原来的顶部免责声明、快捷键栏与账户切换都在 DSH 插件的五块面板里：
+看盘 / 持仓 / 关注 / 策略 / 复盘。
 
 ---
 
 ## 5. Web 用法
 
-`luoome start` 或 `luoome web serve` 启动后，浏览器访问 `http://127.0.0.1:5173`。
+`bun run web` 启动后，浏览器访问 `http://127.0.0.1:5173`。
 
 ### 5.1 写操作开关
 
@@ -548,7 +498,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 
 ### 7.6 单机 Web
 
-需要图形界面做精细管理时仍可起单机 Web（`luoome web serve`，默认 `127.0.0.1:5173`）。
+需要图形界面做精细管理时仍可起单机 Web（`bun run web`，默认 `127.0.0.1:5173`）。
 它与 DSH 读同一份单机事实库；写操作同样受 `LUOOME_EXPOSE_WRITE` 与同源校验保护。
 远程访问请走 SSH 隧道或受控反代，不要直接把端口暴露到公网。
 
@@ -673,7 +623,8 @@ node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('<
 
 ```bash
 # 添加到「短线交易」账户
-luoome tools call add_trade --input '{
+# 经插件工具调用（示例：登记成交，写操作走精确 policy）
+add_trade --input '{
   "accountId": "a1b2c3d4-0001-4000-8000-000000000002",
   "stockId": "002594.SZ",
   "side": "buy",
@@ -714,8 +665,8 @@ luoome tools call add_trade --input '{
 若服务端明确拒绝提交，点击「确认未提交并重新加载」核对同键回执；确认没有成功提交后会重新读取
 最新上下文，允许修改内容后新建请求。网络结果未知时仍保留原请求，不能用此方式跳过核对。
 
-CLI 仍可用 `luoome advice outcome <adviceId> --followed true --pnl 80` 记录当前账户的明确反馈；
-DSH 插件用 `record_advice_outcome` 或 `save_decision_review` 精确 policy 做同一件事。
+明确反馈只能经 DSH 插件的 `record_advice_outcome` 或 `save_decision_review` 精确 policy 记录
+（独立 CLI 已下线）。
 这些反馈入口不会登记成交，成交类 tool 不在任何暴露面出现。
 
 旧版本没有账户归属的反馈仍留在历史数据中，不会自动分摊到当前账户。迁移只恢复可验证的旧成交与
@@ -724,10 +675,10 @@ Advice 显式关联，不据此生成采纳反馈；需要时由用户重新核�
 ### 9.2 看 confidence 校准
 
 `get_confidence_calibration` 将当前账户的历史 Advice（包含已过期建议）按 confidence 分桶。
-通用股票建议在本账户明确记录后才纳入账户样本。CLI 可显式指定账户：
+通用股票建议在本账户明确记录后才纳入账户样本。调用时可显式指定账户：
 
-```bash
-luoome tools call get_confidence_calibration --input '{"accountId":"你的账户 ID"}'
+```json
+{ "tool": "get_confidence_calibration", "input": { "accountId": "你的账户 ID" } }
 ```
 
 每桶的 `total` 是建议数，`withOutcome` 是明确反馈数，`followedWithPnl` 是明确跟随且已填盈亏的样本数。
@@ -751,7 +702,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 复盘补充版显示「按策略不通知」，不会额外发送通知，后续定时任务与投递重试也不能改变这一策略。
 正常主报告及原研究补充版仍遵循原有通知规则。生成复盘补充需要 write 能力，不要求开启外部调用。
 
-`luoome daily-review [--since 7d]` 仍运行独立的 daily-review workflow，写报告到 `~/.luoome/reports/`。
+`daily-review` workflow 仍可单独运行（经 DSH 定时任务或插件工具），报告写到 `~/.luoome/reports/`。
 执行步骤见 [workflows 包](../packages/workflows/src/daily-review.ts)。
 
 ---
@@ -804,9 +755,9 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 检查 `apps/web/public/js/app.js` 与 `pages.js` 是否被浏览器当 ES module 解析——确认 `<script type="module">` 或 http 头 `content-type: text/javascript`。
 
-### 12.3 TUI 报「需要交互式终端」
+### 12.3 终端界面（已下线）
 
-TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会触发。请改用 `luoome web serve` 或 tool/workflow CLI 走文件输出。
+TUI 已随 T15 删除，不再有「需要交互式终端」这类报错；请改用 `bun run web` 或 DSH 插件面板。
 
 ### 12.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
 
