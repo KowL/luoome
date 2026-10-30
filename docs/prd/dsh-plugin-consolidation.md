@@ -17,7 +17,7 @@
 
 **v3 相对 v2 的变更**（采纳产品评审 11 条阻塞项 + 6 条建议项）：
 1. **补 9 条被漏掉的需求**（M2-08、M2-10、M3-15、M3-16、M3-17、M3-18、M4-10、M4-11、M1-10）——v2 把产品报告里的 P0 项压进了「迁移 4 项」，压丢了。
-2. **修正 M2-07 算术错误**：「文件数降 ≥30%」改为「被删 42 个测试文件零残留 + 文件数降 10%–15%（基线由脚本产出）」。
+2. **修正 M2-07 算术错误**（v3 与 v3.4 两次）：「文件数降 ≥30%」→ v3 的「42 个 + 10%–15%」→ **v3.4 定为「17 个逐文件零残留 + `test:baseline` 脚本基线」**。前两版都错：42 把 `apps/web`（M4-01 才删）算进了 M2；百分比方向错（删 17 加 17 净值 ≈ 0，该指标会诱导少写新测试）。
 3. **补 M3-03 的失效条件结构化**：P3 承诺了「区间 + 失效条件」，v2 只做了区间。
 4. **重排三条顺序**：PIT 属性快照前移 M3a；`M3-05` 的名实不符整改前移 M1；outcome 回填前移 M3。
 5. **新增 §3.0 旅程唯一口径 + 需求×旅程矩阵**；「旅程」一词在文档内不再有两套含义。
@@ -1169,7 +1169,7 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 | 里程碑 | 验收门（全部满足才进入下一阶段） |
 |---|---|
 | **M1** | §3.0 的 J1/J3/J4/J5 技能级 e2e 绿（每条四判据）；技能零 `mcp__`；三集合相等（8 条）；`surface-consistency` 绿且未归类 = 0；mock 隔离生效；vintage 三值混算被拦；`check:layers` 行为守卫绿；**`execute_*` 已出暴露面且文案零「严格回测」** |
-| **M2** | 完整账户维护与导入恢复**先于** CLI 删除完成；每个删除 PR 内联重设基线；被删 42 个测试文件零残留；文件数降 10%–15%；CI 绿；`tools` 不含 `@deepseek-ai/` |
+| **M2** | 完整账户维护与导入恢复**先于** CLI 删除完成；每个删除 PR 内联重设基线；**M2 删除的 17 个测试文件逐文件零残留**（见 REQ-M2-07 v3.4：不以文件数下降百分比为指标）；CI 绿（含 `test:plugin-install`）；`tools` 不含 `@deepseek-ai/` |
 | **M3a** | 回溯轨 `restated` 观察 + IC 同批且分 vintage；restated 三条禁用路径断言绿；`missingFacts` 可被引用（checker 有断言）；`targetPctRange` 分层宽度 + 结构化失效条件全覆盖；PIT 属性快照到位；严格回测门禁逐项如实（`corporate-actions` 标 `unavailable`） |
 | **M3b** | 账户层与单条建议归因可读且缺价 `unavailable`；五类报告可打开且五段齐全；盘前四段结构固定；提醒要素完整；outcome 回填可用且分母同步；多供应商凭据可切；external 事实可落库可引用 |
 | **M4** | 仓库单一产品面；盘中闭环可用；多空三角在 `partial` 下产出分歧点与阻塞条件、`unavailable` 被拦、事前成本与降级生效；首个真实 PIT metric 可按 asOf 取版本；自动化三档与复盘草稿可用；文档守卫进 CI |
@@ -1243,21 +1243,25 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 > 正文只引用本附录，不重复维护。REQ-M4-07 的 `check-docs` 对本附录的 `asOf` 做过期检查。
 
+> **v3.8 已按 M2/M3a 完成后的实测重算**（此前全部数字停在 T03 时点）。
+> **已知缺口**：`check-docs` 由 REQ-M4-07 引入，**M1–M3 期间本附录没有自动过期检查**——
+> 本轮就是靠工程评审人工发现的。在此之前，改代码的人必须手动核对本附录。
+
 | 项 | 实测值（2026-10-30，T03 与 Lead 复核后） | 取证方式 |
 |---|---|---|
-| registry 工具数 | 214（read 104 / write 75 / external 29 / queue 5 / trade 1） | `toolRegistry.all()` |
+| registry 工具数 | **220**（M2/M3a 完成后实测） | `bun run tools:list --json` |
 | 工具源文件数 | 194（部分文件含多个 tool 定义） | `ls packages/tools/src/tools/*.ts \| wc -l` |
-| read allowlist | 64 | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
+| read allowlist | **67**（M3a 增 `get_strategy_ic` 等） | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
 | market allowlist | 10 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
-| 插件暴露面（可达） | **100**：read allowlist 64 + operation policy 28（26 write + 2 queue）+ market allowlist 独占 8 | T03 实测（`output/exposure-report.md` §1，可复算）；早期稿写「约 101」为取整 |
-| 不可达工具 | **114** | 同上 |
-| 五类归类 | 只读面 91 / 可写面 89 / queue-worker 11 / 私人研究 22 / 废弃 1 = 214 | T03 + REQ-M1-08 |
+| 插件暴露面（可达） | **106** | `bun run tools:list --json` 的 `exposed` 计数 |
+| 不可达工具 | **114** | 同上（`unreachable-by-design`） |
+| 五类归类 | 只读面 94 / 可写面 92 / queue-worker 12 / 私人研究 22 / 废弃 **0** = 220 | `tools:list`；废弃为 0 是 H1 口径（不摘除任何工具） |
 | 全仓测试文件 | 346 | `find packages apps -name '*.test.ts' -o -name '*.test.js'` |
-| 被删五面测试文件 | 42（web 29 / cli 6 / tui 1 / dsh-bridge 3 / mcp 3）= 12.1% | 同上按目录统计 |
+| M2 删除的测试文件 | **17**（cli 6 / tui 1 / dsh-bridge 3 / mcp 3 / deploy 4）；`apps/web` 的 29 个属 M4-01 | `git diff --name-status <M2起点>..HEAD \| grep '^D.*\.test\.'` |
 | 遗留五面 LOC | ~50,562（占 18%） | 工程审计实测 |
 | 面板数 | 6（`PANEL_NAMES`） | `panels.ts:27-34` |
-| 随包技能 | 4 条（迁入后 8 条） | `packages/dsh-luoome/skills/` |
-| 工作区技能 | 6 条（删除前） | `.dsh/skills/` |
+| 随包技能 | **8 条** | `packages/dsh-luoome/skills/` |
+| 工作区技能 | **已删除**（T13 移除 `.dsh/skills`） | — |
 
 ---
 
