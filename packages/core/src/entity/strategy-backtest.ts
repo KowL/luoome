@@ -3,20 +3,16 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
+import { computeEvaluatorCodeHash } from '../strategy/evaluator-code-identity.js';
 
 export const STRICT_BACKTEST_MODEL_VERSION = 'strict-backtest-v1';
 export const STRATEGY_EVALUATOR_VERSION = 'strategy-evaluator-v2';
 
-const evaluatorManifest = {
-  evaluatorVersion: STRATEGY_EVALUATOR_VERSION,
-  expression: 'compiled-ast-three-valued-v2',
-  ranking: 'score-desc-stock-id-asc-v1',
-  signalEmission: 'level-edge-cooldown-v2',
-} as const;
-
-export const STRATEGY_EVALUATOR_CODE_HASH = createHash('sha256')
-  .update(JSON.stringify(evaluatorManifest))
-  .digest('hex');
+/**
+ * REQ-M3-12：code identity 是 evaluator 真实文件内容的 SHA-256（不是手写版本号/路径）。
+ * 范围与 dist 回退语义见 `strategy/evaluator-code-identity.ts`。
+ */
+export const STRATEGY_EVALUATOR_CODE_HASH = computeEvaluatorCodeHash();
 
 export const StrategyEvaluatorIdentitySchema = z.object({
   version: z.literal(STRATEGY_EVALUATOR_VERSION),
