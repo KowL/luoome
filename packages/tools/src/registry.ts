@@ -98,7 +98,6 @@ import {
 } from './tools/portfolio-performance.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { pruneStrategyRunsTool } from './tools/prune-strategy-runs.js';
-import { evaluateStrategyCandidatePreflightTool } from './tools/strategy-candidate-preflight.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
 import { refreshDecisionReviewReportTool } from './tools/refresh-decision-review-report.js';
@@ -150,6 +149,7 @@ import {
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
 } from './tools/strategy-backtest.js';
+import { evaluateStrategyCandidatePreflightTool } from './tools/strategy-candidate-preflight.js';
 import { getStrategyDataPreflightTool } from './tools/strategy-data-preflight.js';
 import {
   compareStrategyDefinitionsTool,
