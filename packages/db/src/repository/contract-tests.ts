@@ -271,13 +271,15 @@ export const makeTradingPlan = (
   stockId: 'stk-1',
   industry: '制造业',
   status: 'active',
-  action: 'hold',
+  action: 'observe',
   entryConditions: [],
   invalidEntryConditions: [],
   position: {
     currentPct: 0,
-    targetPct: 0,
-    deltaPct: 0,
+    targetPctRange: { min: 0, max: 0 },
+    appliedPct: 0,
+    fallbackPct: 0,
+    rangePick: { ruleId: 'lower-bound' },
     constraintStatus: 'passed',
     constraintReasons: [],
     prerequisiteActions: [],
@@ -293,6 +295,17 @@ export const makeTradingPlan = (
   validFrom: T1,
   validUntil: T3,
   invalidationConditions: [],
+  invalidationRules: [
+    {
+      id: 'invalidate-stop',
+      kind: 'price-threshold',
+      phase: 'risk',
+      metric: 'price',
+      comparator: 'lte',
+      value: 95,
+      description: '跌破止损',
+    },
+  ],
   accountFactsAsOf: T0,
   accountFactsDigest: 'account-facts-contract-digest',
   marketFacts: [],
@@ -894,8 +907,10 @@ export const registerRepositoryContractTests = (
         const facts = buildAccountFacts({ account, holdings: [], asOf: T2 });
         const position = {
           currentPct: 0,
-          targetPct: 15,
-          deltaPct: 15,
+          targetPctRange: { min: 15, max: 15 },
+          appliedPct: 15,
+          fallbackPct: 15,
+          rangePick: { ruleId: 'lower-bound' as const },
           constraintStatus: 'passed' as const,
           constraintReasons: [],
           prerequisiteActions: [],
@@ -911,7 +926,12 @@ export const registerRepositoryContractTests = (
           accountId: account.id,
           accountFactsDigest: facts.digest,
           stockId: 'stk-2',
-          position: { ...position, targetPct: 10, deltaPct: 10 },
+          position: {
+            ...position,
+            targetPctRange: { min: 10, max: 10 },
+            appliedPct: 10,
+            fallbackPct: 10,
+          },
         });
         const saved = await repos.tradingPlan.saveIfBudgetAvailable({
           plan: next,

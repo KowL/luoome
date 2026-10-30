@@ -55,8 +55,12 @@ const makePlan = (overrides = {}) => ({
   invalidEntryConditions: ['账户事实待核对'],
   position: {
     currentPct: 0,
-    targetPct: 10,
-    deltaPct: 10,
+    targetPctRange: { min: 10, max: 10 },
+    appliedPct: 10,
+    fallbackPct: 10,
+    rangePick: { ruleId: 'lower-bound' },
+    deltaPctMin: 10,
+    deltaPctMax: 10,
     constraintStatus: 'passed',
     constraintReasons: [],
     prerequisiteActions: ['用户确认条件满足后手动执行；执行后更新持仓与资金记录'],
@@ -149,7 +153,19 @@ describe('计划文案', () => {
   it('目标仓位不可用时明确写不可用', () => {
     expect(planTargetText(makePlan())).toBe('10.00%');
     expect(
-      planTargetText(makePlan({ position: { ...makePlan().position, targetPct: null } })),
+      planTargetText(
+        makePlan({
+          position: {
+            ...makePlan().position,
+            targetPctRange: null,
+            appliedPct: null,
+            fallbackPct: null,
+            rangePick: null,
+            deltaPctMin: null,
+            deltaPctMax: null,
+          },
+        }),
+      ),
     ).toBe('目标仓位不可用');
   });
 
@@ -168,7 +184,15 @@ describe('计划文案', () => {
       entryPriceLow: undefined,
       entryPriceHigh: undefined,
       entryConditions: [],
-      position: { ...makePlan().position, currentPct: 0, targetPct: 0, deltaPct: 0 },
+      position: {
+        ...makePlan().position,
+        currentPct: 0,
+        targetPctRange: { min: 0, max: 0 },
+        appliedPct: 0,
+        fallbackPct: 0,
+        deltaPctMin: 0,
+        deltaPctMax: 0,
+      },
     });
     expect(planEntryText(observe)).toBe('待补全条件价位');
     expect(planTargetText(observe)).toBe('未设置条件仓位');
@@ -191,7 +215,15 @@ describe('计划文案', () => {
           description: '价格处于入场区间 100-105',
         },
       ],
-      position: { ...makePlan().position, currentPct: 0, targetPct: 6, deltaPct: 6 },
+      position: {
+        ...makePlan().position,
+        currentPct: 0,
+        targetPctRange: { min: 6, max: 6 },
+        appliedPct: 6,
+        fallbackPct: 6,
+        deltaPctMin: 6,
+        deltaPctMax: 6,
+      },
     });
     expect(planEntryText(observe)).toBe('100.00 - 105.00');
     expect(planTargetText(observe)).toBe('6.00%');
@@ -390,7 +422,14 @@ describe('版本差异', () => {
     supersedesVersionId: 'account:acc1:stock:600519.SH:v1',
     entryPriceLow: 98,
     entryPriceHigh: 103,
-    position: { ...makePlan().position, targetPct: 8, deltaPct: 8 },
+    position: {
+      ...makePlan().position,
+      targetPctRange: { min: 8, max: 8 },
+      appliedPct: 8,
+      fallbackPct: 8,
+      deltaPctMin: 8,
+      deltaPctMax: 8,
+    },
     exit: { ...makePlan().exit, stopLoss: 92 },
     explanation: {
       ...makePlan().explanation,
@@ -629,8 +668,19 @@ describe('计划关键数据', () => {
     const stale = { ...makePlan().marketFacts[0], status: 'stale' };
     expect(planKeyMetrics(makePlan({ marketFacts: [stale] }))[0].note).toContain('已过时');
     expect(
-      planKeyMetrics(makePlan({ position: { currentPct: 10, targetPct: 0, deltaPct: -10 } }))[3]
-        .value,
+      planKeyMetrics(
+        makePlan({
+          position: {
+            ...makePlan().position,
+            currentPct: 10,
+            targetPctRange: { min: 0, max: 0 },
+            appliedPct: 0,
+            fallbackPct: 0,
+            deltaPctMin: -10,
+            deltaPctMax: -10,
+          },
+        }),
+      )[3].value,
     ).toBe('10.00% → 0.00%');
   });
   it('文字描述没有数值时仍展示结构化阈值，保留人工确认状态', () => {

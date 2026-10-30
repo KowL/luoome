@@ -10,7 +10,7 @@ import {
   type TradingPlanBudgetLimits,
   type TradingPlanQuery,
   type TradingPlanRepository,
-  TradingPlanSchema,
+  TradingPlanV2Schema,
   tradingPlanVersionId,
 } from '@luoome/core';
 import type { InMemoryAccountRepository } from './account.js';
@@ -26,7 +26,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
   ) {}
 
   put(plan: TradingPlan): void {
-    const parsed = TradingPlanSchema.parse(plan);
+    const parsed = TradingPlanV2Schema.parse(plan);
     assertTradingPlanInvariants(parsed);
     const versionId = tradingPlanVersionId(parsed);
     const existing = this.items.get(versionId);
@@ -54,7 +54,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     });
     await previous;
     try {
-      const plan = TradingPlanSchema.parse(input.plan);
+      const plan = TradingPlanV2Schema.parse(input.plan);
       assertTradingPlanInvariants(plan);
       assertTradingPlanBudgetLimits(input.limits);
       const account = this.account.peek(plan.accountId);

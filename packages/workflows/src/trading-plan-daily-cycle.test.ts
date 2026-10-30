@@ -343,7 +343,7 @@ describe('trading plan daily cycle', () => {
     expect(plan.entryPriceLow).toBe(100);
     expect(plan.entryPriceHigh).toBe(105);
     expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105, phase: 'entry' });
-    expect(plan.position).toMatchObject({ currentPct: 0, targetPct: 6, deltaPct: 6 });
+    expect(plan.position).toMatchObject({ currentPct: 0, targetPctRange: { min: 6, max: 6 } });
     expect(plan.exit).toMatchObject({ stopLoss: 95, takeProfit: 120 });
     expect(plan.position.prerequisiteActions).toEqual(['等待条件满足后重新评估，再决定是否建仓']);
     const incompleteAdvice = { ...watchAdvice };
@@ -736,5 +736,85 @@ describe('trading plan daily cycle', () => {
       workflowName: 'trading-plan-daily-cycle',
     });
     expect(audits.filter((run) => (run.error ?? '').includes('Invalid UUID'))).toEqual([]);
+  });
+});
+
+describe('T21 生成器：v2 区间/选点/失效规则与指纹重算', () => {
+  const factsFor = (digest: string, currentPct: number) =>
+    AccountFactsSchema.parse({
+      accountId: ACCOUNT_ID,
+      asOf: NOW,
+      digest,
+      cashBalance: money(1000 - currentPct * 10),
+      stockMarketValue: money(currentPct * 10),
+      totalAssets: money(1000),
+      status: 'complete',
+      reasons: [],
+      notes: [],
+      positions:
+        currentPct === 0
+          ? []
+          : [
+              {
+                stockId: STOCK_ID,
+                quantity: 10,
+                availableQuantity: 10,
+                marketValue: money(currentPct * 10),
+              },
+            ],
+    });
+  const holding = {
+    holding: {
+      id: 'holding-1',
+      accountId: ACCOUNT_ID,
+      stockId: STOCK_ID,
+      quantity: 10,
+      availableQuantity: 10,
+      closedAt: null,
+    },
+    stockName: '贵州茅台',
+  };
+
+  it('落库为 v2 区间 + lower-bound 选点 + 结构化失效条件，不含 deltaPct', () => {
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 10),
+      advice: candidateAdvice(NOW, { decision: 'hold' }),
+      holding,
+      previous: [],
+      now: NOW,
+    });
+    expect(plan.position.targetPctRange).toEqual({ min: 10, max: 10 });
+    expect(plan.position.appliedPct).toBe(10);
+    expect(plan.position.fallbackPct).toBe(10);
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.invalidationRules.length).toBeGreaterThan(0);
+    expect(JSON.stringify(plan)).not.toContain('"deltaPct"');
+  });
+
+  it('账户事实指纹变化后重新计算区间，不复制上一版', () => {
+    const advice = candidateAdvice(NOW, { decision: 'hold' });
+    const first = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 10),
+      advice,
+      holding,
+      previous: [],
+      now: NOW,
+    });
+    const next = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-b', 20),
+      advice,
+      holding,
+      previous: [first],
+      now: new Date(NOW.getTime() + 86_400_000),
+    });
+    expect(first.accountFactsDigest).toBe('facts-digest-a');
+    expect(next.accountFactsDigest).toBe('facts-digest-b');
+    expect(first.position.targetPctRange).toEqual({ min: 10, max: 10 });
+    expect(next.position.targetPctRange).toEqual({ min: 20, max: 20 });
+    expect(next.position.appliedPct).toBe(20);
+    expect(next.version).toBe(2);
   });
 });

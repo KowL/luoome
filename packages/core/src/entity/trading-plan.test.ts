@@ -3,113 +3,154 @@ import { describe, expect, it } from 'vitest';
 import { InvariantError } from '../error/index.js';
 import {
   assertTradingPlanInvariants,
+  assertTradingPlanReadable,
   evaluateTradingPlanCondition,
   evaluateTradingPlanEntryConditions,
   isMaterialTradingPlanChange,
   selectTradingPlans,
+  type TradingPlan,
   TradingPlanSchema,
+  TradingPlanV2Schema,
+  toTradingPlanRead,
+  tradingPlanDeltaPcts,
   tradingPlanExpiresAt,
+  tradingPlanInvalidation,
   tradingPlanMonitoring,
+  tradingPlanRangeWidthCap,
   tradingPlanVersionId,
   tradingPlanView,
 } from './trading-plan.js';
 
-const plan = (overrides: Record<string, unknown> = {}) =>
-  TradingPlanSchema.parse({
-    id: 'account:a:stock:600519.SH',
-    version: 1,
-    accountId: 'a',
-    stockId: '600519.SH',
-    industry: '食品饮料',
-    status: 'draft',
-    action: 'enter',
-    entryPriceLow: 100,
-    entryPriceHigh: 105,
-    entryConditions: [
-      {
-        id: 'entry-price',
-        kind: 'price-range',
-        phase: 'entry',
-        metric: 'price',
-        comparator: 'between',
-        value: 100,
-        valueTo: 105,
-        description: '价格在入场区间内',
-      },
-    ],
-    invalidEntryConditions: [],
-    position: {
-      currentPct: 0,
-      targetPct: 10,
-      deltaPct: 10,
-      constraintStatus: 'passed',
-      constraintReasons: [],
-      prerequisiteActions: ['用户手动执行后更新账户快照'],
+const fixture = {
+  id: 'account:a:stock:600519.SH',
+  version: 1,
+  accountId: 'a',
+  stockId: '600519.SH',
+  industry: '食品饮料',
+  status: 'draft',
+  action: 'enter',
+  entryPriceLow: 100,
+  entryPriceHigh: 105,
+  entryConditions: [
+    {
+      id: 'entry-price',
+      kind: 'price-range',
+      phase: 'entry',
+      metric: 'price',
+      comparator: 'between',
+      value: 100,
+      valueTo: 105,
+      description: '价格在入场区间内',
     },
-    holding: {
-      minTradingDays: 3,
-      maxTradingDays: 10,
-      nextReviewAt: new Date('2026-09-14T00:00:00.000Z'),
-      earlyExitConditions: ['跌破止损'],
-      extensionBasis: ['市场前提仍成立'],
+  ],
+  invalidEntryConditions: [],
+  position: {
+    currentPct: 0,
+    targetPctRange: { min: 10, max: 10 },
+    appliedPct: 10,
+    fallbackPct: 10,
+    rangePick: { ruleId: 'lower-bound' },
+    constraintStatus: 'passed',
+    constraintReasons: [],
+    prerequisiteActions: ['用户手动执行后更新账户快照'],
+  },
+  holding: {
+    minTradingDays: 3,
+    maxTradingDays: 10,
+    nextReviewAt: new Date('2026-09-14T00:00:00.000Z'),
+    earlyExitConditions: ['跌破止损'],
+    extensionBasis: ['市场前提仍成立'],
+  },
+  exit: {
+    stopLoss: 95,
+    takeProfit: 120,
+    conditions: ['跌破止损或达到目标'],
+    canSellNow: false,
+  },
+  validFrom: new Date('2026-09-08T00:00:00.000Z'),
+  validUntil: new Date('2026-09-30T00:00:00.000Z'),
+  invalidationConditions: ['行情证据过期'],
+  invalidationRules: [
+    {
+      id: 'invalidate-stop',
+      kind: 'price-threshold',
+      phase: 'risk',
+      metric: 'price',
+      comparator: 'lte',
+      value: 95,
+      description: '跌破止损，原计划前提失效',
     },
-    exit: {
-      stopLoss: 95,
-      takeProfit: 120,
-      conditions: ['跌破止损或达到目标'],
-      canSellNow: false,
+  ],
+  accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
+  accountFactsDigest: 'account-facts-test-digest',
+  marketFacts: [
+    {
+      id: 'fact-price',
+      stockId: '600519.SH',
+      metric: 'price',
+      value: 102,
+      unit: 'CNY',
+      source: 'fixture',
+      observedAt: new Date('2026-09-08T02:00:00.000Z'),
+      fetchedAt: new Date('2026-09-08T02:00:01.000Z'),
+      timestampSource: 'upstream',
+      frequency: 'quote',
+      status: 'available',
     },
-    validFrom: new Date('2026-09-08T00:00:00.000Z'),
-    validUntil: new Date('2026-09-30T00:00:00.000Z'),
-    invalidationConditions: ['行情证据过期'],
-    accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
-    accountFactsDigest: 'account-facts-test-digest',
-    marketFacts: [
-      {
-        id: 'fact-price',
-        stockId: '600519.SH',
-        metric: 'price',
-        value: 102,
-        unit: 'CNY',
-        source: 'fixture',
-        observedAt: new Date('2026-09-08T02:00:00.000Z'),
-        fetchedAt: new Date('2026-09-08T02:00:01.000Z'),
-        timestampSource: 'upstream',
-        frequency: 'quote',
-        status: 'available',
-      },
-    ],
-    evidence: [
-      {
-        id: 'evidence-1',
-        kind: 'market',
-        source: 'fixture',
-        observedAt: new Date('2026-09-08T02:00:00.000Z'),
-        factIds: ['fact-price'],
-        summary: '行情事实',
-      },
-    ],
-    source: {
-      strategyIds: [],
-      strategyVersionIds: [],
-      runIds: [],
-      signalIds: [],
-      adviceIds: ['advice-1'],
+  ],
+  evidence: [
+    {
+      id: 'evidence-1',
+      kind: 'market',
+      source: 'fixture',
+      observedAt: new Date('2026-09-08T02:00:00.000Z'),
+      factIds: ['fact-price'],
+      summary: '行情事实',
     },
-    explanation: {
-      supportingEvidenceIds: ['evidence-1'],
-      counterEvidence: ['市场宽度未覆盖'],
-      risks: ['价格波动'],
-      unknowns: [],
-    },
-    confidence: 65,
-    createdAt: new Date('2026-09-08T02:01:00.000Z'),
-    ...overrides,
-  });
+  ],
+  source: {
+    strategyIds: [],
+    strategyVersionIds: [],
+    runIds: [],
+    signalIds: [],
+    adviceIds: ['advice-1'],
+  },
+  explanation: {
+    supportingEvidenceIds: ['evidence-1'],
+    counterEvidence: ['市场宽度未覆盖'],
+    risks: ['价格波动'],
+    unknowns: [],
+  },
+  confidence: 65,
+  createdAt: new Date('2026-09-08T02:01:00.000Z'),
+};
+
+const plan = (overrides: Record<string, unknown> = {}) => {
+  const base = fixture as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...base, ...overrides };
+  if (overrides.position !== undefined) {
+    const position = {
+      ...(base.position as Record<string, unknown>),
+      ...(overrides.position as Record<string, unknown>),
+    };
+    const range = position.targetPctRange as { min: number; max: number } | null;
+    if (range === null) {
+      position.appliedPct = null;
+      position.fallbackPct = null;
+      position.rangePick = null;
+    } else if ((position.rangePick as { ruleId?: string } | null | undefined)?.ruleId !== 'mid') {
+      position.appliedPct = range.min;
+      position.fallbackPct = range.min;
+      position.rangePick = position.rangePick ?? { ruleId: 'lower-bound' };
+    }
+    merged.position = position;
+  }
+  return TradingPlanSchema.parse(merged);
+};
 
 describe('TradingPlan invariants and condition evaluation', () => {
   it('requires an entry range and target for active enter/add plans', () => {
-    const invalid = plan({ status: 'active', entryPriceHigh: undefined });
+    const invalid = { ...plan({ entryPriceHigh: undefined }), status: 'active' as const };
     expect(() => assertTradingPlanInvariants(invalid)).toThrow(InvariantError);
   });
 
@@ -119,18 +160,24 @@ describe('TradingPlan invariants and condition evaluation', () => {
         plan({
           entryPriceLow: undefined,
           entryPriceHigh: undefined,
-          position: { ...plan().position, targetPct: null, deltaPct: null },
+          position: {
+            ...plan().position,
+            targetPctRange: null,
+            appliedPct: null,
+            fallbackPct: null,
+            rangePick: null,
+          },
         }),
       ),
     ).not.toThrow();
   });
 
   it('rejects active plans that contain unavailable market facts', () => {
-    const invalid = plan({
-      status: 'active',
-      marketFacts: [{ ...plan().marketFacts[0], status: 'unavailable' }],
-    });
-    expect(() => assertTradingPlanInvariants(invalid)).toThrow('unavailable market fact');
+    const invalid = {
+      ...plan({ marketFacts: [{ ...plan().marketFacts[0], status: 'unavailable' }] }),
+      status: 'active' as const,
+    };
+    expect(() => assertTradingPlanInvariants(invalid)).toThrow(/unavailable/);
   });
 
   it('rejects inverted between conditions', () => {
@@ -219,17 +266,17 @@ describe('TradingPlan invariants and condition evaluation', () => {
     const previous = plan({
       status: 'active',
       action: 'hold',
-      position: { ...plan().position, currentPct: 25, targetPct: 25, deltaPct: 0 },
+      position: { ...plan().position, currentPct: 25, targetPctRange: { min: 25, max: 25 } },
     });
     const next = plan({
       ...previous,
-      position: { ...previous.position, currentPct: 27, targetPct: 27 },
+      position: { ...previous.position, currentPct: 27, targetPctRange: { min: 27, max: 27 } },
     });
     expect(isMaterialTradingPlanChange(previous, next)).toBe(false);
     expect(
       isMaterialTradingPlanChange(
         previous,
-        plan({ ...next, position: { ...next.position, targetPct: 26, deltaPct: -1 } }),
+        plan({ ...next, position: { ...next.position, targetPctRange: { min: 26, max: 26 } } }),
       ),
     ).toBe(true);
     const marketPlan = plan({
@@ -405,5 +452,338 @@ describe('交易计划的监控资格与组合条件', () => {
     expect(evaluateTradingPlanEntryConditions({ ...active, entryConditions: [] }, facts)).toBe(
       false,
     );
+  });
+});
+
+// ---------- T21 / REQ-M3-03 验收：区间量纲、宽度、选点、deltaPct、指纹 ----------
+
+const v2 = (overrides: Record<string, unknown> = {}) =>
+  TradingPlanV2Schema.safeParse({ ...(fixture as Record<string, unknown>), ...overrides });
+
+const withPosition = (
+  range: { min: number; max: number } | null,
+  extra: Record<string, unknown> = {},
+  action: TradingPlan['action'] = 'add',
+) => ({
+  action,
+  position: {
+    currentPct: 0,
+    targetPctRange: range,
+    appliedPct: range === null ? null : range.min,
+    fallbackPct: range === null ? null : range.min,
+    rangePick: range === null ? null : { ruleId: 'lower-bound' },
+    constraintStatus: 'passed',
+    constraintReasons: [],
+    prerequisiteActions: [],
+    ...extra,
+  },
+});
+
+describe('T21 量纲与 action 分档', () => {
+  it('exit {0,0} 通过', () => {
+    const parsed = v2(withPosition({ min: 0, max: 0 }, {}, 'exit'));
+    expect(parsed.success).toBe(true);
+  });
+
+  it('add {0,5} 拒绝', () => {
+    expect(v2(withPosition({ min: 0, max: 5 })).success).toBe(false);
+  });
+
+  it('add {0,4} 仅因 min=0 被拒（宽度合法）', () => {
+    const parsed = v2(withPosition({ min: 0, max: 4 }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.message).toContain('min > 0');
+    }
+  });
+
+  it('hold {0,4} 拒绝 / hold {7,10} 通过', () => {
+    expect(v2(withPosition({ min: 0, max: 4 }, {}, 'hold')).success).toBe(false);
+    expect(v2(withPosition({ min: 7, max: 10 }, {}, 'hold')).success).toBe(true);
+  });
+
+  it('exit {0,4} 拒绝（exit 必须是 {0,0}）', () => {
+    expect(v2(withPosition({ min: 0, max: 4 }, {}, 'exit')).success).toBe(false);
+  });
+
+  it('拒绝比例单位 {0.1,0.3}', () => {
+    const parsed = v2(withPosition({ min: 0.1, max: 0.3 }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.message).toContain('百分点');
+    }
+  });
+
+  it('observe {0,0} 通过（未设置条件仓位）', () => {
+    expect(v2(withPosition({ min: 0, max: 0 }, {}, 'observe')).success).toBe(true);
+  });
+});
+
+describe('T21 H4 实际宽度上限 = min(分层, 0.30×max)', () => {
+  it('max=10 宽 3 过 / 3.01 拒；宽 4 被相对规则拒', () => {
+    expect(v2(withPosition({ min: 7, max: 10 })).success).toBe(true);
+    expect(v2(withPosition({ min: 6.99, max: 10 })).success).toBe(false);
+    expect(v2(withPosition({ min: 6, max: 10 })).success).toBe(false);
+  });
+
+  it('max=25 宽 7.5 过 / 7.51 拒', () => {
+    expect(v2(withPosition({ min: 17.5, max: 25 })).success).toBe(true);
+    const over = v2(withPosition({ min: 17.49, max: 25 }));
+    expect(over.success).toBe(false);
+    if (!over.success) expect(over.error.message).toContain('宽度');
+  });
+
+  it('max=20 宽 6 过 / 6.01 拒（两口径相等）', () => {
+    expect(v2(withPosition({ min: 14, max: 20 })).success).toBe(true);
+    expect(v2(withPosition({ min: 13.99, max: 20 })).success).toBe(false);
+  });
+
+  it('max=30 宽 8 过 / 8.01 拒（分层绑定）', () => {
+    expect(v2(withPosition({ min: 22, max: 30 })).success).toBe(true);
+    expect(v2(withPosition({ min: 21.99, max: 30 })).success).toBe(false);
+  });
+
+  it('实际宽度上限函数：cap(10)=3 / cap(20)=6 / cap(25)=7.5 / cap(30)=8', () => {
+    expect(tradingPlanRangeWidthCap(10)).toBe(3);
+    expect(tradingPlanRangeWidthCap(20)).toBe(6);
+    expect(tradingPlanRangeWidthCap(25)).toBe(7.5);
+    expect(tradingPlanRangeWidthCap(30)).toBe(8);
+  });
+});
+
+describe('T21 选点与落库取值', () => {
+  it('缺 rangePick 拒绝', () => {
+    const position = {
+      ...withPosition({ min: 7, max: 10 }).position,
+      rangePick: null,
+    };
+    const parsed = v2({ action: 'add', position });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(parsed.error.message).toContain('rangePick');
+  });
+
+  it('volatility-scaled 缺 tiers / 缺 volatilityPct 均拒绝', () => {
+    const base = withPosition({ min: 7, max: 10 });
+    const noTiers = {
+      action: 'add',
+      position: {
+        ...base.position,
+        rangePick: { ruleId: 'volatility-scaled', volatilityMetric: 'atr14', volatilityPct: 1.2 },
+        appliedPct: 7,
+      },
+    };
+    expect(v2(noTiers).success).toBe(false);
+    const noVol = {
+      action: 'add',
+      position: {
+        ...base.position,
+        rangePick: {
+          ruleId: 'volatility-scaled',
+          volatilityMetric: 'atr14',
+          tiers: [{ volatilityUpToPct: 2, bandFractionPct: 50 }],
+        },
+        appliedPct: 7,
+      },
+    };
+    expect(v2(noVol).success).toBe(false);
+  });
+
+  it('lower-bound 的 appliedPct 必须等于 min', () => {
+    const parsed = v2(withPosition({ min: 7, max: 10 }, { appliedPct: 8 }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(parsed.error.message).toContain('选点结果');
+  });
+
+  it('mid 的 appliedPct = (min+max)/2', () => {
+    const ok = v2(
+      withPosition({ min: 7, max: 10 }, { appliedPct: 8.5, rangePick: { ruleId: 'mid' } }),
+    );
+    expect(ok.success).toBe(true);
+    expect(
+      v2(withPosition({ min: 7, max: 10 }, { appliedPct: 8, rangePick: { ruleId: 'mid' } }))
+        .success,
+    ).toBe(false);
+  });
+
+  it('volatility-scaled 按 tier 复算 appliedPct，无匹配 tier 降级到 min', () => {
+    const pick = (volatilityPct: number, appliedPct: number) =>
+      v2(
+        withPosition(
+          { min: 7, max: 10 },
+          {
+            appliedPct,
+            rangePick: {
+              ruleId: 'volatility-scaled',
+              volatilityMetric: 'atr14',
+              volatilityPct,
+              tiers: [
+                { volatilityUpToPct: 2, bandFractionPct: 100 },
+                { volatilityUpToPct: 4, bandFractionPct: 50 },
+              ],
+            },
+          },
+        ),
+      );
+    expect(pick(1, 10).success).toBe(true);
+    expect(pick(3, 8.5).success).toBe(true);
+    expect(pick(3, 9).success).toBe(false);
+    expect(pick(9, 7).success).toBe(true);
+  });
+
+  it('区间为空时 appliedPct/fallbackPct/rangePick 必须为空', () => {
+    expect(v2(withPosition(null)).success).toBe(true);
+    expect(v2(withPosition(null, { appliedPct: 5 })).success).toBe(false);
+  });
+});
+
+describe('T21 deltaPct 读侧派生与旧行兼容', () => {
+  it('新计划不持久化 deltaPct，读模型派生 min/max', () => {
+    const parsed = v2(withPosition({ min: 7, max: 10 }));
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(JSON.stringify(parsed.data)).not.toContain('deltaPct');
+    const read = toTradingPlanRead(parsed.data);
+    expect(read.position).toMatchObject({ deltaPctMin: 7, deltaPctMax: 10 });
+    expect(tradingPlanDeltaPcts(parsed.data)).toEqual({ min: 7, max: 10 });
+  });
+
+  it('旧单值计划读为退化区间，deltaMin=deltaMax=旧 delta', () => {
+    const legacy = {
+      ...(fixture as Record<string, unknown>),
+      position: {
+        currentPct: 4,
+        targetPct: 30,
+        deltaPct: 26,
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+    };
+    const parsed = TradingPlanSchema.parse(legacy);
+    expect(parsed.position).toMatchObject({
+      targetPctRange: { min: 30, max: 30 },
+      appliedPct: 30,
+      fallbackPct: 30,
+      rangePick: { ruleId: 'lower-bound' },
+    });
+    expect(parsed.position).not.toHaveProperty('deltaPct');
+    expect(tradingPlanDeltaPcts(parsed)).toEqual({ min: 26, max: 26 });
+    expect(toTradingPlanRead(parsed).position).toMatchObject({
+      deltaPctMin: 26,
+      deltaPctMax: 26,
+    });
+  });
+
+  it('旧 active 行可读（无结构化失效条件不抛），写路径仍拒绝', () => {
+    const legacy = {
+      ...(fixture as Record<string, unknown>),
+      status: 'active',
+      position: {
+        currentPct: 0,
+        targetPct: 10,
+        deltaPct: 10,
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+      invalidationRules: undefined,
+    };
+    const readable = assertTradingPlanReadable(legacy);
+    expect(readable.status).toBe('active');
+    const write = TradingPlanV2Schema.safeParse(readable);
+    expect(write.success).toBe(false);
+    if (!write.success) expect(write.error.message).toContain('结构化失效条件');
+  });
+
+  it('区间计划不再触发旧的 deltaPct 不变量', () => {
+    const parsed = v2(withPosition({ min: 7, max: 10 }));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(() => assertTradingPlanInvariants(parsed.data)).not.toThrow();
+  });
+});
+
+describe('T21 指纹与结构化失效条件', () => {
+  const invalidationRule = {
+    id: 'invalidate-stop',
+    kind: 'price-threshold' as const,
+    phase: 'risk' as const,
+    metric: 'price' as const,
+    comparator: 'lte' as const,
+    value: 95,
+    description: '跌破止损',
+  };
+
+  it('仅区间变化即实质变更', () => {
+    const previous = plan({ status: 'active', action: 'add' });
+    const next = plan({
+      ...previous,
+      version: 2,
+      position: {
+        ...previous.position,
+        targetPctRange: { min: 8, max: 10 },
+        appliedPct: 8,
+        fallbackPct: 8,
+      },
+    });
+    expect(isMaterialTradingPlanChange(previous, next)).toBe(true);
+  });
+
+  it('仅失效规则变化即实质变更', () => {
+    const previous = plan({ status: 'active', action: 'add' });
+    const next = plan({
+      ...previous,
+      version: 2,
+      invalidationRules: [{ ...invalidationRule, value: 96 }],
+    });
+    expect(isMaterialTradingPlanChange(previous, next)).toBe(true);
+  });
+
+  it('完全相同不是实质变更', () => {
+    const previous = plan({ status: 'active', action: 'add' });
+    expect(isMaterialTradingPlanChange(previous, { ...previous, version: 2 })).toBe(false);
+  });
+
+  it('指纹变化使区间与失效条件同时失效，且不评估规则', () => {
+    const active = plan({ status: 'active', action: 'add' });
+    const state = tradingPlanInvalidation({
+      plan: active,
+      facts: { digest: 'changed-digest', status: 'complete' },
+      now: new Date('2026-09-09T00:00:00Z'),
+      factsByConditionId: new Map([['invalidate-stop', { metric: 'price' as const, value: 90 }]]),
+    });
+    expect(state).toEqual({ status: 'inactive', reasons: ['account-facts-changed'] });
+  });
+
+  it('同一指纹下止损条件命中才失效；行情事实过期也算失效', () => {
+    const active = plan({ status: 'active', action: 'add' });
+    const now = new Date('2026-09-09T00:00:00Z');
+    expect(
+      tradingPlanInvalidation({
+        plan: active,
+        facts: { digest: active.accountFactsDigest, status: 'complete' },
+        now,
+        factsByConditionId: new Map([['invalidate-stop', { metric: 'price' as const, value: 90 }]]),
+      }),
+    ).toEqual({ status: 'triggered', ruleIds: ['invalidate-stop'] });
+    expect(
+      tradingPlanInvalidation({
+        plan: active,
+        facts: { digest: active.accountFactsDigest, status: 'complete' },
+        now,
+        factsByConditionId: new Map([
+          ['invalidate-stop', { metric: 'price' as const, value: 120 }],
+        ]),
+      }),
+    ).toEqual({ status: 'not-triggered' });
+  });
+
+  it('active 缺结构化失效条件在写路径被拒', () => {
+    const parsed = v2({
+      ...withPosition({ min: 7, max: 10 }),
+      status: 'active',
+      invalidationRules: [],
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(parsed.error.message).toContain('结构化失效条件');
   });
 });

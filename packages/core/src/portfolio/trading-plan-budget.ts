@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AccountFacts } from '../entity/account-facts.js';
 import type { Stock } from '../entity/stock.js';
-import type { TradingPlan } from '../entity/trading-plan.js';
+import { type TradingPlan, tradingPlanVersionId } from '../entity/trading-plan.js';
 import { InvariantError } from '../error/index.js';
 
 export interface TradingPlanBudgetLimits {
@@ -31,8 +31,10 @@ export const DEFAULT_TRADING_PLAN_BUDGET_LIMITS: TradingPlanBudgetLimits = {
 export interface TradingPlanBudgetAllocation {
   readonly planId: string;
   readonly stockId: string;
-  readonly industry?: string;
-  readonly targetPct: number;
+  readonly industry?: string | undefined;
+  /** 计划声明的目标仓位区间（百分点）；预算按 max 占用，min 仅用于披露。 */
+  readonly targetPctMin: number;
+  readonly targetPctMax: number;
   readonly incrementalPct: number;
   readonly status: 'included' | 'blocked' | 'unavailable';
   readonly reasons: readonly string[];
@@ -42,7 +44,8 @@ export const TradingPlanBudgetAllocationSchema = z.object({
   planId: z.string().min(1),
   stockId: z.string().min(1),
   industry: z.string().min(1).optional(),
-  targetPct: z.number().finite().min(0).max(100),
+  targetPctMin: z.number().finite().min(0).max(100),
+  targetPctMax: z.number().finite().min(0).max(100),
   incrementalPct: z.number().finite().min(0).max(100),
   status: z.enum(['included', 'blocked', 'unavailable']),
   reasons: z.array(z.string()),
@@ -56,6 +59,10 @@ export interface TradingPlanBudgetResult {
   readonly currentStockPct: number | null;
   readonly proposedStockPct: number | null;
   readonly availableStockPct: number | null;
+  /** 全部计划按 min 声明的合计（读侧派生，不持久化）；不可用时为 null。 */
+  readonly minTotalPct: number | null;
+  /** 全部计划按 max 声明的合计（预算占用口径）；不可用时为 null。 */
+  readonly maxTotalPct: number | null;
   readonly totalStatus: 'passed' | 'blocked' | 'unavailable';
   readonly reasons: readonly string[];
   readonly allocations: readonly TradingPlanBudgetAllocation[];
@@ -69,6 +76,8 @@ export const TradingPlanBudgetResultSchema = z.object({
   currentStockPct: z.number().finite().min(0).max(100).nullable(),
   proposedStockPct: z.number().finite().min(0).max(100).nullable(),
   availableStockPct: z.number().finite().min(0).max(100).nullable(),
+  minTotalPct: z.number().finite().min(0).max(100).nullable(),
+  maxTotalPct: z.number().finite().min(0).max(100).nullable(),
   totalStatus: z.enum(['passed', 'blocked', 'unavailable']),
   reasons: z.array(z.string()),
   allocations: z.array(TradingPlanBudgetAllocationSchema),
@@ -101,13 +110,16 @@ export const evaluateTradingPlanBudget = (input: {
       currentStockPct: null,
       proposedStockPct: null,
       availableStockPct: null,
+      minTotalPct: null,
+      maxTotalPct: null,
       totalStatus: 'unavailable',
       reasons: ['账户事实不可用（现金待核对或持仓缺少合格行情），无法计算精确预算'],
       allocations: input.plans.map((plan) => ({
         planId: tradingPlanKey(plan),
         stockId: plan.stockId,
         ...(plan.industry === undefined ? {} : { industry: plan.industry }),
-        targetPct: plan.position.targetPct ?? 0,
+        targetPctMin: plan.position.targetPctRange?.min ?? 0,
+        targetPctMax: plan.position.targetPctRange?.max ?? 0,
         incrementalPct: 0,
         status: 'unavailable' as const,
         reasons: ['account-snapshot-unavailable'],
@@ -127,25 +139,37 @@ export const evaluateTradingPlanBudget = (input: {
     planId: string;
     stockId: string;
     industry?: string;
-    targetPct: number;
+    targetPctMin: number;
+    targetPctMax: number;
     incrementalPct: number;
     status: TradingPlanBudgetAllocation['status'];
     reasons: string[];
   }> = [];
   const plannedByStock = new Map<string, number>();
   const reasons: string[] = [];
+  let minClaim = 0;
+  let maxClaim = 0;
   for (const plan of input.plans) {
     const current = currentByStock.get(plan.stockId) ?? 0;
+    const range = plan.position.targetPctRange;
+    // 维持计划不随行情重写：计划自身记录的目标仍是"保持"，或区间整体不高于当前行情仓位时，
+    // 都不把旧百分比解释成新的加仓额度。
+    const recordedMaintain =
+      range !== null &&
+      range.min === range.max &&
+      plan.position.currentPct !== null &&
+      range.min === plan.position.currentPct;
+    const belowLive = range !== null && range.max <= current + 1e-9;
     const maintainsPosition =
       (plan.action === 'hold' ||
         (plan.action === 'observe' && (plan.position.currentPct ?? 0) > 0)) &&
-      plan.position.targetPct !== null &&
-      plan.position.targetPct === plan.position.currentPct;
-    // 原版维持计划不随行情重写，旧百分比不能被解释成新的加仓额度。
-    const target = maintainsPosition ? current : plan.position.targetPct;
+      (recordedMaintain || belowLive);
+    const target = maintainsPosition ? current : (range?.max ?? null);
     const sameStock = plannedByStock.get(plan.stockId) ?? 0;
-    // 多个计划的 targetPct 都表示执行后的同一只股票仓位，按最高目标预留一次。
+    // 多个计划的目标仓位都表示执行后的同一只股票仓位，按最高目标（max）预留一次。
     const incremental = target === null ? null : Math.max(0, target - current - sameStock);
+    const incrementalMin =
+      maintainsPosition || range === null ? 0 : Math.max(0, range.min - current - sameStock);
     const industry = plan.industry ?? input.stocks.get(plan.stockId)?.industry;
     const allocationReasons: string[] = [];
     let status: TradingPlanBudgetAllocation['status'] = 'included';
@@ -175,11 +199,14 @@ export const evaluateTradingPlanBudget = (input: {
       planId: tradingPlanKey(plan),
       stockId: plan.stockId,
       ...(industry === undefined ? {} : { industry }),
-      targetPct: target ?? 0,
+      targetPctMin: maintainsPosition ? current : (range?.min ?? 0),
+      targetPctMax: maintainsPosition ? current : (range?.max ?? 0),
       incrementalPct: round(increment),
       status,
       reasons: allocationReasons,
     });
+    minClaim += incrementalMin;
+    maxClaim += increment;
   }
 
   const proposedStockPct = round(
@@ -214,6 +241,10 @@ export const evaluateTradingPlanBudget = (input: {
     currentStockPct,
     proposedStockPct: round(includedProposed),
     availableStockPct: round(Math.max(0, limits.totalStockPct - includedProposed)),
+    // 合计口径：min/max 合计覆盖**全部**分配（含被 blocked 的候选），用于解释"这份提案整体
+    // 占多少"；`proposedStockPct` 仍只统计 included，保持原有"实际可执行"语义。
+    minTotalPct: round(currentStockPct + minClaim),
+    maxTotalPct: round(currentStockPct + maxClaim),
     totalStatus: hasBlockedAllocation
       ? 'blocked'
       : hasUnavailableAllocation
@@ -231,4 +262,60 @@ export const assertTradingPlanBudgetLimits = (limits: TradingPlanBudgetLimits): 
     throw new InvariantError('totalStockPct must be within [0,100]');
   if (limits.singleStockPct < 0 || limits.singleStockPct > 100)
     throw new InvariantError('singleStockPct must be within [0,100]');
+};
+
+/**
+ * draft 冲突处置：预算冲突只记录 constraintStatus/constraintReasons，不阻止保存。
+ * 供 save_trading_plan 与生成器共用，避免两处漂移。
+ */
+export const applyTradingPlanBudgetConstraint = (
+  plan: TradingPlan,
+  budget: TradingPlanBudgetResult,
+): TradingPlan => {
+  if (plan.status !== 'draft') return plan;
+  const allocation = budget.allocations.find((item) => item.planId === tradingPlanVersionId(plan));
+  const blocked = budget.totalStatus === 'blocked' || allocation?.status === 'blocked';
+  if (!blocked) return plan;
+  const reasons = [
+    ...new Set([
+      ...plan.position.constraintReasons,
+      ...(allocation?.reasons ?? []),
+      ...budget.reasons,
+    ]),
+  ];
+  return {
+    ...plan,
+    position: {
+      ...plan.position,
+      constraintStatus: 'blocked',
+      constraintReasons: reasons.length === 0 ? ['budget-blocked'] : reasons,
+    },
+  };
+};
+
+/**
+ * draft → active 闸门：预算超限或不可用时抛 InvariantError。
+ * 消息同时给出 min/max 合计，便于按保守口径复算。
+ */
+export const assertTradingPlanBudgetAllowsActivation = (
+  plan: TradingPlan,
+  budget: TradingPlanBudgetResult,
+): void => {
+  if (plan.status !== 'active') return;
+  const versionId = tradingPlanVersionId(plan);
+  const allocation = budget.allocations.find((item) => item.planId === versionId);
+  if (budget.totalStatus === 'unavailable' || allocation?.status === 'unavailable') {
+    throw new InvariantError(`计划 ${versionId} 的预算不可用，不能激活`);
+  }
+  const singleStockBlocked =
+    allocation !== undefined &&
+    allocation.status === 'blocked' &&
+    allocation.reasons.includes('single-stock-limit');
+  if (budget.totalStatus !== 'blocked' && allocation?.status !== 'blocked') return;
+  const detail = singleStockBlocked
+    ? `；单股上限：max ${allocation.targetPctMax} > ${budget.limits.singleStockPct}（min ${allocation.targetPctMin}）`
+    : '';
+  throw new InvariantError(
+    `计划 ${versionId} 超出组合预算：max 合计 ${budget.maxTotalPct} > ${budget.limits.totalStockPct}（min 合计 ${budget.minTotalPct}）${detail}`,
+  );
 };

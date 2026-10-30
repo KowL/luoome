@@ -245,13 +245,22 @@ SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 too
 回答“对这个账户的这只股票，什么条件下做什么、目标仓位多少、持有到什么时候、何时失效”。
 `id` 由账户与股票稳定派生，版本不可变；`plan_json` 是唯一完整领域载荷，外层列（`version_id`、
 `status`、有效期等）只是存储元数据，必须与 `plan_json` 一致。计划把观察/建仓/加仓/持有/减仓/
-退出/回避等动作与价格涨跌方向分开，入场用价格区间而非单个价格，`targetPct` 按账户总资产计算。
+退出/回避等动作与价格涨跌方向分开，入场用价格区间而非单个价格。目标仓位用**区间**表达：
+`targetPctRange{min,max}` 单位为百分点（0–100，与 `currentPct`/单票上限同量纲），并记录本次选点
+`rangePick`（`lower-bound`/`mid`/`volatility-scaled`，后者必须带可复算参数）、实际落点 `appliedPct`
+与降级值 `fallbackPct`（等于区间下限）。区间宽度取「分层上限（max≤10→4、≤20→6、其余 8）与
+`0.30×max`」中更严者；`add`/`hold` 要求 `min>0`，`exit`/`avoid` 只允许 `{0,0}`，`observe` 未设条件仓位
+时允许 `{0,0}`。`deltaPct` 不再持久化，读取时由 `min/max − currentPct` 派生 `deltaPctMin/Max`；
+旧单值计划（`targetPct`）读取时归一化为退化区间 `{t,t}`，`plan_json` 不被改写。
 生效计划占用建议预算，撤销、过期或被新版本替代时释放或重算；同一股票的多策略证据不得重复占用额度。
 预算只校验总仓位上限与单只股票上限（默认 100% / 30%）；行业合计上限已按用户决定移除，
 `stocks.industry` 不参与判定。总仓位上限取 100% 是为了挡住「多个计划的建议仓位合计超过账户
 总资产」这种不可执行状态，而不是限制用户实际愿意持有的比例；单票上限 30% 只挡住继续加仓，
 超限持仓仍可减仓。
-计划锚定生成时的账户事实指纹（`accountFactsDigest` + `accountFactsAsOf`）：账本变化后旧计划判定失效。
+计划锚定生成时的账户事实指纹（`accountFactsDigest` + `accountFactsAsOf`）：账本变化后旧计划判定失效，
+区间与结构化失效条件**同时**失效（不评估任何规则，必须重新生成）。生效计划必须至少一条结构化失效
+条件（复用 `TradingPlanCondition`，`phase∈{exit,risk}` 或 `kind=market-fact`）；`invalidationConditions`
+只是展示层文本，不作为唯一失效表达。
 旧快照计划在启动迁移后仍可读取；active/draft 标为 expired，保留旧快照身份，不能沿用为当前账户指纹。
 观察计划（`watch` → `observe`）同样携带条件性价格计划：入场区间、目标仓位、止损与目标价来自建议，
 入场条件写明“等待条件满足前不建仓”，未持仓时目标仓位取建议的目标仓位，已持仓时维持当前仓位。

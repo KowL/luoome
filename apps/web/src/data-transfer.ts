@@ -22,7 +22,7 @@ import {
   assertStrategyVersionInvariants,
   assertStrategyWatchlistSubscriptionInvariants,
   assertTradeInvariants,
-  assertTradingPlanInvariants,
+  assertTradingPlanReadable,
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
@@ -65,7 +65,6 @@ import {
   StrategyVersionSchema,
   StrategyWatchlistSubscriptionSchema,
   TradeSchema,
-  TradingPlanSchema,
   tradingPlanVersionId,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
@@ -234,8 +233,8 @@ const validateTradingPlanStorageRow = (row: Record<string, unknown>): void => {
       : rawPlan !== null && typeof rawPlan === 'object'
         ? rawPlan
         : undefined;
-  const plan = TradingPlanSchema.parse(planValue);
-  assertTradingPlanInvariants(plan);
+  // 旧归档里的 active 计划没有结构化失效条件：读路径归一化 + readable，不因历史行拒绝导入。
+  const plan = assertTradingPlanReadable(planValue);
   const metadata: Readonly<Record<string, unknown>> = {
     version_id: row.version_id,
     plan_id: row.plan_id,

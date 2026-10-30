@@ -119,11 +119,22 @@ export const planEntryText = (plan) => {
   return '未提供入场区间';
 };
 
+const deltaText = (position) => {
+  if (position?.deltaPctMin == null || position?.deltaPctMax == null) return '不可用';
+  if (position.deltaPctMin === position.deltaPctMax)
+    return `${fmtNum(position.deltaPctMin, 2)} 个百分点`;
+  return `${fmtNum(position.deltaPctMin, 2)}–${fmtNum(position.deltaPctMax, 2)} 个百分点`;
+};
+
 export const planTargetText = (plan) => {
-  const text = fmtPct(plan.position?.targetPct);
-  if (text === null) return '目标仓位不可用';
-  if (plan.position.targetPct === 0 && plan.action === 'observe') return '未设置条件仓位';
-  return text;
+  const range = plan.position?.targetPctRange;
+  if (range == null) return '目标仓位不可用';
+  if (range.min === 0 && range.max === 0 && plan.action === 'observe') return '未设置条件仓位';
+  if (range.min === range.max) return `${fmtNum(range.min, 2)}%`;
+  const applied = plan.position?.appliedPct;
+  return applied == null
+    ? `${fmtNum(range.min, 2)}–${fmtNum(range.max, 2)}%`
+    : `${fmtNum(range.min, 2)}–${fmtNum(range.max, 2)}%（实际 ${fmtNum(applied, 2)}%）`;
 };
 
 /** 缺少条件需要补全，已有观察条件才进入等待。 */
@@ -329,7 +340,7 @@ export const planKeyMetrics = (plan) => {
     {
       label: '当前 → 目标仓位',
       value: `${fmtPct(plan.position?.currentPct) ?? '不可用'} → ${planTargetText(plan)}`,
-      note: `调整 ${plan.position?.deltaPct == null ? '不可用' : `${fmtNum(plan.position.deltaPct, 2)} 个百分点`} · 占账户总资产`,
+      note: `调整 ${deltaText(plan.position)} · 占账户总资产`,
     },
   ];
 };
@@ -407,7 +418,7 @@ export const planDetailSections = (plan, monitoring) => {
     {
       title: '仓位',
       lines: [
-        `当前：${fmtPct(position.currentPct) ?? '不可用'} · 目标：${fmtPct(position.targetPct) ?? '不可用'} · 差额：${fmtPct(position.deltaPct) ?? '不可用'}`,
+        `当前：${fmtPct(position.currentPct) ?? '不可用'} · 目标：${planTargetText(plan)} · 差额：${deltaText(position)}`,
         `约束校验：${({ passed: '通过', blocked: '未通过', unavailable: '数据不可用' })[position.constraintStatus] ?? '--'}${
           (position.constraintReasons ?? []).length === 0
             ? ''
@@ -747,8 +758,9 @@ let planPanelState = {
 /** 仓位 chip：维持不变时不重复「当前 → 目标」两个相同数字；观察计划的目标仓位是「等待条件」，不算维持。 */
 const planPositionChipValue = (plan) => {
   const current = fmtPct(plan.position?.currentPct);
-  if (plan.position?.deltaPct === 0 && current !== null && plan.action !== 'observe')
-    return `${current}（维持）`;
+  const delta = plan.position;
+  const maintained = delta?.deltaPctMin === 0 && delta?.deltaPctMax === 0 && current !== null;
+  if (maintained && plan.action !== 'observe') return `${current}（维持）`;
   return `${current ?? '不可用'} → ${planTargetText(plan)}`;
 };
 

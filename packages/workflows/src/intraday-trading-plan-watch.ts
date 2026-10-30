@@ -317,9 +317,13 @@ const notificationContent = (candidate: Candidate): string => {
         ? []
         : [`${held ? '止损' : '失效价'} ${plan.exit.stopLoss.toFixed(2)}`]),
       ...(plan.exit.takeProfit === undefined ? [] : [`目标价 ${plan.exit.takeProfit.toFixed(2)}`]),
-      ...(plan.position.targetPct === null
+      ...(plan.position.targetPctRange === null
         ? []
-        : [`目标仓位 ${plan.position.targetPct.toFixed(1)}%`]),
+        : [
+            plan.position.targetPctRange.min === plan.position.targetPctRange.max
+              ? `目标仓位 ${plan.position.targetPctRange.min.toFixed(1)}%`
+              : `目标仓位 ${plan.position.targetPctRange.min.toFixed(1)}–${plan.position.targetPctRange.max.toFixed(1)}%（实际 ${plan.position.appliedPct?.toFixed(1)}%）`,
+          ]),
     ].join(' · '),
     `反证：${notificationText(plan.explanation.counterEvidence.join('；'), 120) || '未记录，请核对原计划'}`,
     `风险：${notificationText(plan.explanation.risks.join('；'), 120) || '未记录，请核对原计划'}`,

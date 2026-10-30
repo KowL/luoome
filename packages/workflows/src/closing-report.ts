@@ -1328,13 +1328,19 @@ const tradingPlansSection = async (
               plan.entryConditions.map((condition) => condition.description).join('；') || '无',
             exitConditions: plan.exit.conditions.join('；') || '未记录',
             currentPct: plan.position.currentPct,
-            targetPct: plan.position.targetPct,
+            targetPctMin: plan.position.targetPctRange?.min ?? null,
+            targetPctMax: plan.position.targetPctRange?.max ?? null,
+            appliedPct: plan.position.appliedPct,
             targetLabel:
-              plan.position.targetPct === null
+              plan.position.targetPctRange === null
                 ? '不可用'
-                : plan.action === 'observe' && plan.position.targetPct === 0
+                : plan.action === 'observe' &&
+                    plan.position.targetPctRange.min === 0 &&
+                    plan.position.targetPctRange.max === 0
                   ? '未设置条件仓位'
-                  : `${plan.position.targetPct}%`,
+                  : plan.position.targetPctRange.min === plan.position.targetPctRange.max
+                    ? `${plan.position.targetPctRange.min}%`
+                    : `${plan.position.targetPctRange.min}–${plan.position.targetPctRange.max}%（实际 ${plan.position.appliedPct}%）`,
             holdingDays: `${plan.holding.minTradingDays}-${plan.holding.maxTradingDays}`,
             risk: plan.explanation.risks.join('；') || '未记录',
             counterEvidence: plan.explanation.counterEvidence.join('；') || '未记录',

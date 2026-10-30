@@ -3,6 +3,7 @@ import {
   accountFactsDigest,
   assertTradingPlanBudgetLimits,
   assertTradingPlanInvariants,
+  assertTradingPlanReadable,
   evaluateTradingPlanBudget,
   type Stock,
   selectTradingPlans,
@@ -11,6 +12,7 @@ import {
   type TradingPlanQuery,
   type TradingPlanRepository,
   TradingPlanSchema,
+  TradingPlanV2Schema,
   tradingPlanVersionId,
 } from '@luoome/core';
 import { and, asc, desc, eq, type SQL } from 'drizzle-orm';
@@ -21,11 +23,7 @@ import { accounts, holdings, type Schema, tradingPlans } from '../../schema/inde
 type TradingPlanRow = typeof tradingPlans.$inferSelect;
 type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transaction']>[0]>[0];
 
-const toPlan = (row: TradingPlanRow): TradingPlan => {
-  const plan = TradingPlanSchema.parse(row.plan);
-  assertTradingPlanInvariants(plan);
-  return plan;
-};
+const toPlan = (row: TradingPlanRow): TradingPlan => assertTradingPlanReadable(row.plan);
 
 const toRow = (plan: TradingPlan) => ({
   versionId: tradingPlanVersionId(plan),
@@ -44,7 +42,7 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
   constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
   async save(plan: TradingPlan): Promise<void> {
-    const parsed = TradingPlanSchema.parse(plan);
+    const parsed = TradingPlanV2Schema.parse(plan);
     assertTradingPlanInvariants(parsed);
     const versionId = tradingPlanVersionId(parsed);
     const existing = this.db
@@ -69,7 +67,7 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
   }): ReturnType<TradingPlanRepository['saveIfBudgetAvailable']> {
-    const plan = TradingPlanSchema.parse(input.plan);
+    const plan = TradingPlanV2Schema.parse(input.plan);
     assertTradingPlanInvariants(plan);
     assertTradingPlanBudgetLimits(input.limits);
     return this.db.transaction(

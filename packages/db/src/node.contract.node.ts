@@ -637,6 +637,89 @@ describe('T48 DDL 对齐：data_import_receipts', () => {
   });
 });
 
+describe('T21 旧单值计划读时归一化（Node 文件库）', () => {
+  it('旧行归一化为退化区间，两次启动后 plan_json 字节与 status 不变', async () => {
+    const path = makeTempDbPath('t21-legacy-plan.db');
+    const planJson = JSON.stringify({
+      id: 'account:a:stock:600519.SH',
+      version: 1,
+      accountId: 'a',
+      stockId: '600519.SH',
+      status: 'active',
+      action: 'add',
+      entryPriceLow: 10,
+      entryPriceHigh: 11,
+      entryConditions: [],
+      invalidEntryConditions: [],
+      position: {
+        currentPct: 5,
+        targetPct: 30,
+        deltaPct: 25,
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+      holding: {
+        minTradingDays: 1,
+        maxTradingDays: 5,
+        nextReviewAt: T1,
+        earlyExitConditions: [],
+        extensionBasis: [],
+      },
+      exit: { conditions: [], triggerConditions: [], canSellNow: true },
+      validFrom: T0,
+      validUntil: T2,
+      invalidationConditions: ['账户事实变化'],
+      accountFactsAsOf: T0,
+      accountFactsDigest: 'legacy-node-digest',
+      marketFacts: [],
+      evidence: [],
+      source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
+      explanation: { supportingEvidenceIds: [], counterEvidence: [], risks: [], unknowns: [] },
+      confidence: 50,
+      createdAt: T0,
+    });
+    const first = createNodeDrizzleRepos(path);
+    try {
+      first.db.run(sql`
+        INSERT INTO trading_plans
+          (version_id, plan_id, version, account_id, stock_id, status, valid_from, valid_until, created_at, plan_json)
+        VALUES
+          ('account:a:stock:600519.SH:v1', 'account:a:stock:600519.SH', 1, 'a', '600519.SH', 'active',
+           ${T0}, ${T2}, ${T0}, ${planJson})
+      `);
+      const plan = await first.repos.tradingPlan.findByVersionId('account:a:stock:600519.SH:v1');
+      expect(plan).toMatchObject({
+        status: 'active',
+        position: {
+          targetPctRange: { min: 30, max: 30 },
+          appliedPct: 30,
+          fallbackPct: 30,
+          rangePick: { ruleId: 'lower-bound' },
+        },
+      });
+      expect(plan?.position).not.toHaveProperty('deltaPct');
+    } finally {
+      first.close();
+    }
+    const before = createHash('sha256').update(planJson).digest('hex');
+    const second = createNodeDrizzleRepos(path);
+    try {
+      const plan = await second.repos.tradingPlan.findByVersionId('account:a:stock:600519.SH:v1');
+      expect(plan).toMatchObject({ status: 'active' });
+      const row = clientOf(second.db)
+        .prepare(
+          "SELECT plan_json FROM trading_plans WHERE version_id = 'account:a:stock:600519.SH:v1'",
+        )
+        .get() as { plan_json: string };
+      expect(createHash('sha256').update(row.plan_json).digest('hex')).toBe(before);
+      expect(JSON.parse(row.plan_json)).toEqual(JSON.parse(planJson));
+    } finally {
+      second.close();
+    }
+  });
+});
+
 describe('T48 B1a SQLite 只读输入预检', () => {
   const scope = { userId: 'import-owner', accountId: 'import-account' };
   const state = (path: string) => ({
@@ -1081,14 +1164,16 @@ const fullFixture = (): Record<string, DataImportRow> => {
     accountId,
     stockId: 'stock-1',
     industry: '白酒',
-    status: 'active',
-    action: 'hold',
+    status: 'draft',
+    action: 'observe',
     entryConditions: [],
     invalidEntryConditions: [],
     position: {
       currentPct: 0,
-      targetPct: 0,
-      deltaPct: 0,
+      targetPctRange: null,
+      appliedPct: null,
+      fallbackPct: null,
+      rangePick: null,
       constraintStatus: 'passed',
       constraintReasons: [],
       prerequisiteActions: [],
@@ -1104,6 +1189,7 @@ const fullFixture = (): Record<string, DataImportRow> => {
     validFrom: new Date(T0),
     validUntil: new Date(T2),
     invalidationConditions: [],
+    invalidationRules: [],
     accountFactsAsOf: new Date(T0),
     accountFactsDigest: 'account-facts-digest',
     marketFacts: [],
@@ -1750,7 +1836,7 @@ const fullFixture = (): Record<string, DataImportRow> => {
       version: tradingPlan.version,
       account_id: accountId,
       stock_id: 'stock-1',
-      status: 'active',
+      status: tradingPlan.status,
       valid_from: T0,
       valid_until: T2,
       created_at: T0,

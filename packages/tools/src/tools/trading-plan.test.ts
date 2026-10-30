@@ -48,8 +48,10 @@ const makePlan = (input: {
     invalidEntryConditions: [],
     position: {
       currentPct: 0,
-      targetPct: input.targetPct ?? 10,
-      deltaPct: input.targetPct ?? 10,
+      targetPctRange: { min: input.targetPct ?? 10, max: input.targetPct ?? 10 },
+      appliedPct: input.targetPct ?? 10,
+      fallbackPct: input.targetPct ?? 10,
+      rangePick: { ruleId: 'lower-bound' },
       constraintStatus: 'passed',
       constraintReasons: [],
       prerequisiteActions: ['用户手动执行后更新账户快照'],
@@ -65,6 +67,17 @@ const makePlan = (input: {
     validFrom: input.validFrom ?? new Date('2026-09-08T00:00:00.000Z'),
     validUntil: input.validUntil ?? new Date('2026-09-30T00:00:00.000Z'),
     invalidationConditions: ['账户快照版本改变'],
+    invalidationRules: [
+      {
+        id: 'invalidate-stop',
+        kind: 'price-threshold',
+        phase: 'risk',
+        metric: 'price',
+        comparator: 'lte',
+        value: 60,
+        description: '跌破止损',
+      },
+    ],
     accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
     accountFactsDigest: input.accountFactsDigest,
     marketFacts: [],
@@ -364,4 +377,114 @@ it('监控投影披露账户变化且不改写原计划历史', async () => {
     expect(result.data.monitoring?.[0]?.status).toBe('account-changed');
     expect(result.data.plans[0]?.status).toBe('active');
   }
+});
+
+// ---------- T21 工具面：读模型、预算回执、draft 冲突、严格 v2 输入 ----------
+
+describe('T21 交易计划工具面', () => {
+  it('get/list 返回 deltaPctMin/Max 读模型（不落库 deltaPct）', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-09T02:00:00Z') });
+    const facts = await deriveFacts(ctx);
+    const plan = {
+      ...makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest }),
+      position: {
+        ...makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest }).position,
+        targetPctRange: { min: 9, max: 12 },
+        appliedPct: 9,
+        fallbackPct: 9,
+      },
+    };
+    await ctx.repos.tradingPlan.save(plan);
+    const read = await getTradingPlanTool.execute({ versionId: `${plan.id}:v1` }, ctx);
+    expect(read.ok && read.data.plan.position).toMatchObject({
+      targetPctRange: { min: 9, max: 12 },
+      deltaPctMin: 9,
+      deltaPctMax: 12,
+    });
+    expect(JSON.stringify(read.ok && read.data.plan)).not.toContain('deltaPct"');
+    const listed = await listTradingPlansTool.execute({ accountId: ACCOUNT_ID }, ctx);
+    expect(listed.ok && listed.data.plans[0]?.position).toMatchObject({
+      deltaPctMin: 9,
+      deltaPctMax: 12,
+    });
+  });
+
+  it('active 保存回执带预算 min/max 合计', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-09T02:00:00Z') });
+    const facts = await deriveFacts(ctx);
+    const result = await saveTradingPlanTool.execute(
+      { plan: makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest }) },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.budget).toMatchObject({
+      maxTotalPct: 10,
+      minTotalPct: 10,
+      totalStatus: 'passed',
+    });
+  });
+
+  it('draft 预算冲突可保存但记录 blocked；active 同样输入被拒', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-09T02:00:00Z') });
+    const facts = await deriveFacts(ctx);
+    const limits = { totalStockPct: 100, singleStockPct: 3 };
+    const draft = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'draft',
+      targetPct: 4,
+    });
+    const saved = await saveTradingPlanTool.execute({ plan: draft, limits }, ctx);
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.data.plan.position.constraintStatus).toBe('blocked');
+    expect(saved.data.plan.position.constraintReasons).toContain('single-stock-limit');
+
+    const active = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'active',
+      targetPct: 4,
+    });
+    const rejected = await saveTradingPlanTool.execute({ plan: active, limits }, ctx);
+    expect(rejected.ok).toBe(false);
+  });
+
+  it('严格 v2 输入：旧单值形状直接拒绝', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-09T02:00:00Z') });
+    const facts = await deriveFacts(ctx);
+    const legacy = {
+      ...makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest }),
+      position: {
+        currentPct: 0,
+        targetPct: 10,
+        deltaPct: 10,
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+    };
+    const result = await saveTradingPlanTool.execute({ plan: legacy as never }, ctx);
+    expect(result.ok).toBe(false);
+  });
+
+  it('预算工具可带 candidate 评估未落库草案', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-09T02:00:00Z') });
+    const facts = await deriveFacts(ctx);
+    const candidate = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'draft',
+      targetPct: 4,
+    });
+    const result = await evaluateTradingPlanBudgetTool.execute(
+      { accountId: ACCOUNT_ID, limits: { totalStockPct: 100, singleStockPct: 3 }, candidate },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.totalStatus).toBe('blocked');
+    expect(result.data.maxTotalPct).toBe(4);
+  });
 });

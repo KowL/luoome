@@ -4,6 +4,7 @@ import {
   type AccountFacts,
   type Advice,
   addTradingDays,
+  applyTradingPlanBudgetConstraint,
   dateInShanghai,
   isAdviceQuoteCurrent,
   isMaterialTradingPlanChange,
@@ -12,8 +13,10 @@ import {
   resolveTradingPlanVersions,
   TRADING_PLAN_DRAFT_TRADING_DAYS,
   type TradingPlan,
+  type TradingPlanCondition,
   TradingPlanReviewSchema,
   TradingPlanSchema,
+  TradingPlanV2Schema,
   tradingPlanExpiresAt,
   tradingPlanVersionId,
 } from '@luoome/core';
@@ -271,6 +274,46 @@ export const buildTradingPlanFromAdvice = (input: {
   const sourcesCurrent = sourceAdvices.every(
     (item) => item.validFrom <= now && item.validUntil > now,
   );
+  // 结构化失效条件：行情事实过期、止损触发、目标价达成；三者皆无则只能留草案。
+  const invalidationRules: TradingPlanCondition[] = [
+    ...(facts.length === 0
+      ? []
+      : [
+          {
+            id: `invalidate-market:${stockId}`,
+            kind: 'market-fact' as const,
+            phase: 'risk' as const,
+            factId: facts[0]?.id,
+            description: '关键行情事实过期',
+          },
+        ]),
+    ...(advice.stopLoss === undefined
+      ? []
+      : [
+          {
+            id: `invalidate-stop:${stockId}:${advice.id}`,
+            kind: 'price-threshold' as const,
+            phase: 'risk' as const,
+            metric: 'price' as const,
+            comparator: 'lte' as const,
+            value: advice.stopLoss,
+            description: `价格不高于止损 ${advice.stopLoss}，原计划前提失效`,
+          },
+        ]),
+    ...(advice.targetPrice === undefined
+      ? []
+      : [
+          {
+            id: `invalidate-target:${stockId}:${advice.id}`,
+            kind: 'price-threshold' as const,
+            phase: 'exit' as const,
+            metric: 'price' as const,
+            comparator: 'gte' as const,
+            value: advice.targetPrice,
+            description: `价格达到目标 ${advice.targetPrice}，原计划前提结束`,
+          },
+        ]),
+  ];
   const canActivate =
     sourcesCurrent &&
     accountFacts.status === 'complete' &&
@@ -284,6 +327,7 @@ export const buildTradingPlanFromAdvice = (input: {
     // 持有/减仓类计划不强制要求行情，但只要有事实就必须全部 available。
     (!carriesEntryPlan || facts.length > 0) &&
     facts.every((fact) => fact.status === 'available') &&
+    invalidationRules.length > 0 &&
     !ruleFallback &&
     conflictReason === undefined;
   const unknowns = [
@@ -303,10 +347,13 @@ export const buildTradingPlanFromAdvice = (input: {
     ...accountFacts.notes,
     ...(facts.some((fact) => fact.status !== 'available') ? ['行情时间未达到盘中实时资格'] : []),
   ];
+  const targetPctRange = targetPct === null ? null : { min: targetPct, max: targetPct };
   const position = {
     currentPct,
-    targetPct,
-    deltaPct: currentPct !== null && targetPct !== null ? roundPct(targetPct - currentPct) : null,
+    targetPctRange,
+    appliedPct: targetPct,
+    fallbackPct: targetPct,
+    rangePick: targetPctRange === null ? null : { ruleId: 'lower-bound' as const },
     constraintStatus: canActivate
       ? ('passed' as const)
       : conflictReason === undefined
@@ -379,7 +426,7 @@ export const buildTradingPlanFromAdvice = (input: {
     previousVersion.accountFactsDigest === accountFacts.digest
       ? tradingPlanExpiresAt(previousVersion)
       : undefined;
-  return TradingPlanSchema.parse({
+  return TradingPlanV2Schema.parse({
     id: `account:${input.accountId}:stock:${stockId}`,
     version,
     accountId: input.accountId,
@@ -414,6 +461,7 @@ export const buildTradingPlanFromAdvice = (input: {
       : previousDraftDeadline !== undefined && previousDraftDeadline > now
         ? new Date(Math.min(draftDeadline.getTime(), previousDraftDeadline.getTime()))
         : draftDeadline,
+    invalidationRules,
     invalidationConditions: [
       '关键行情事实过期',
       '账户事实变化（持仓或现金变动）',
@@ -622,6 +670,13 @@ const run = async (
         // retrieval 口径的抓取时间（必然晚于启动时钟）误判为未来时间，计划被压成草案。
         now: ctx.clock(),
       });
+      const budgetResult = await ctx.tools.evaluate_trading_plan_budget.execute({
+        accountId,
+        candidate: draft,
+      });
+      const candidate = budgetResult.ok
+        ? applyTradingPlanBudgetConstraint(draft, budgetResult.data)
+        : draft;
       const reuse = (candidate: TradingPlan): TradingPlan | undefined => {
         const latest = prior.latest;
         if (latest === undefined || latest.accountFactsDigest !== candidate.accountFactsDigest)
@@ -658,15 +713,15 @@ const run = async (
           reasons: plan.status === 'draft' ? reviewed.position.constraintReasons : [],
         });
       };
-      const maintained = reuse(draft);
+      const maintained = reuse(candidate);
       if (maintained !== undefined) {
         remember(maintained, maintained.status === 'active' ? 'maintained' : 'unchanged-draft');
         continue;
       }
-      let saved = await ctx.tools.save_trading_plan.execute({ plan: draft });
-      if (!saved.ok && draft.status === 'active') {
-        const blocked = TradingPlanSchema.parse({
-          ...draft,
+      let saved = await ctx.tools.save_trading_plan.execute({ plan: candidate });
+      if (!saved.ok && candidate.status === 'active') {
+        const blocked = TradingPlanV2Schema.parse({
+          ...candidate,
           status: 'draft',
           validUntil:
             prior.latest?.status === 'draft' &&
@@ -675,13 +730,13 @@ const run = async (
               ? tradingPlanExpiresAt(prior.latest)
               : addTradingDays(draft.createdAt, TRADING_PLAN_DRAFT_TRADING_DAYS),
           position: {
-            ...draft.position,
+            ...candidate.position,
             constraintStatus: 'blocked',
             constraintReasons: [errorText(saved.error)],
           },
           explanation: {
-            ...draft.explanation,
-            unknowns: [...draft.explanation.unknowns, errorText(saved.error)],
+            ...candidate.explanation,
+            unknowns: [...candidate.explanation.unknowns, errorText(saved.error)],
           },
         });
         const unchanged = reuse(blocked);

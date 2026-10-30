@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { AccountFacts } from '../entity/account-facts.js';
 import type { Stock } from '../entity/stock.js';
 import type { TradingPlan } from '../entity/trading-plan.js';
+import { InvariantError } from '../error/index.js';
 import { money } from '../types/branded.js';
 import {
+  applyTradingPlanBudgetConstraint,
+  assertTradingPlanBudgetAllowsActivation,
   DEFAULT_TRADING_PLAN_BUDGET_LIMITS,
   evaluateTradingPlanBudget,
 } from './trading-plan-budget.js';
@@ -66,8 +69,10 @@ const plan = (input: {
     invalidEntryConditions: [],
     position: {
       currentPct: input.currentPct,
-      targetPct: input.targetPct,
-      deltaPct: Math.round((input.targetPct - input.currentPct) * 100) / 100,
+      targetPctRange: { min: input.targetPct, max: input.targetPct },
+      appliedPct: input.targetPct,
+      fallbackPct: input.targetPct,
+      rangePick: { ruleId: 'lower-bound' as const },
       constraintStatus: 'passed',
       constraintReasons: [],
       prerequisiteActions: [],
@@ -83,6 +88,7 @@ const plan = (input: {
     validFrom: new Date('2026-09-08T00:00:00.000Z'),
     validUntil: new Date('2026-09-20T00:00:00.000Z'),
     invalidationConditions: [],
+    invalidationRules: [],
     accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
     accountFactsDigest: 'digest-budget-test',
     marketFacts: [],
@@ -208,10 +214,18 @@ describe('trading plan budget', () => {
       expect(result.proposedStockPct).toBe(99);
       expect(result.availableStockPct).toBe(1);
       expect(result.allocations).toMatchObject([
-        { targetPct: currentPct, incrementalPct: 0, status: 'included' },
-        { targetPct: 9, incrementalPct: 9, status: 'included' },
+        {
+          targetPctMin: currentPct,
+          targetPctMax: currentPct,
+          incrementalPct: 0,
+          status: 'included',
+        },
+        { targetPctMin: 9, targetPctMax: 9, incrementalPct: 9, status: 'included' },
       ]);
-      expect(maintained.position).toMatchObject({ currentPct: 25, targetPct: 25, deltaPct: 0 });
+      expect(maintained.position).toMatchObject({
+        currentPct: 25,
+        targetPctRange: { min: 25, max: 25 },
+      });
     },
   );
 
@@ -224,7 +238,8 @@ describe('trading plan budget', () => {
       stocks: new Map(),
     });
     expect(result.allocations[0]).toMatchObject({
-      targetPct: 15,
+      targetPctMin: 15,
+      targetPctMax: 15,
       incrementalPct: 5,
       status: 'included',
     });
@@ -242,7 +257,8 @@ describe('trading plan budget', () => {
         stocks: new Map(),
       });
       expect(result.allocations[0]).toMatchObject({
-        targetPct: 9,
+        targetPctMin: 9,
+        targetPctMax: 9,
         incrementalPct: 9,
         status: 'included',
       });
@@ -447,5 +463,102 @@ describe('trading plan budget', () => {
     expect(result.totalStatus).toBe('passed');
     expect(result.allocations[0]?.reasons).toEqual([]);
     expect(result.allocations[0]?.incrementalPct).toBe(15);
+  });
+});
+
+// ---------- T21 预算验收：max 口径、min/max 合计、draft/active 分界 ----------
+
+const rangePlan = (input: {
+  readonly id: string;
+  readonly stockId: string;
+  readonly min: number;
+  readonly max: number;
+  readonly status?: TradingPlan['status'];
+  readonly currentPct?: number;
+}): TradingPlan => ({
+  ...plan({
+    id: input.id,
+    stockId: input.stockId,
+    currentPct: input.currentPct ?? 0,
+    targetPct: input.max,
+    action: 'add',
+  }),
+  status: input.status ?? 'active',
+  position: {
+    currentPct: input.currentPct ?? 0,
+    targetPctRange: { min: input.min, max: input.max },
+    appliedPct: input.min,
+    fallbackPct: input.min,
+    rangePick: { ruleId: 'lower-bound' },
+    constraintStatus: 'passed',
+    constraintReasons: [],
+    prerequisiteActions: [],
+  },
+});
+
+const zeroExposureFacts: AccountFacts = {
+  ...facts,
+  cashBalance: money(1000),
+  stockMarketValue: money(0),
+  totalAssets: money(1000),
+  positions: [],
+};
+
+describe('T21 预算按 max 计与 min/max 合计', () => {
+  it('三个 max=30（合计 90）不误伤，min 合计 66', () => {
+    const result = evaluateTradingPlanBudget({
+      facts: zeroExposureFacts,
+      plans: [
+        rangePlan({ id: 'a', stockId: '600519.SH', min: 22, max: 30 }),
+        rangePlan({ id: 'b', stockId: '601398.SH', min: 22, max: 30 }),
+        rangePlan({ id: 'c', stockId: '002594.SZ', min: 22, max: 30 }),
+      ],
+      stocks: new Map(),
+    });
+    expect(result.totalStatus).toBe('passed');
+    expect(result.maxTotalPct).toBe(90);
+    expect(result.minTotalPct).toBe(66);
+    expect(result.allocations.map((item) => item.status)).toEqual([
+      'included',
+      'included',
+      'included',
+    ]);
+    expect(result.reasons).toEqual([]);
+  });
+
+  it('第四个 max=40 使合计 130：draft 可存、active 抛 InvariantError（含 min 复算）', () => {
+    const planA = rangePlan({ id: 'a', stockId: '600519.SH', min: 22, max: 30 });
+    const planB = rangePlan({ id: 'b', stockId: '601398.SH', min: 22, max: 30 });
+    const planC = rangePlan({ id: 'c', stockId: '002594.SZ', min: 22, max: 30 });
+    const planD = rangePlan({ id: 'd', stockId: '000001.SZ', min: 32, max: 40 });
+    const plans = [planA, planB, planC, planD];
+    const result = evaluateTradingPlanBudget({
+      facts: zeroExposureFacts,
+      plans,
+      stocks: new Map(),
+    });
+    expect(result.totalStatus).toBe('blocked');
+    expect(result.maxTotalPct).toBe(130);
+    expect(result.minTotalPct).toBe(98);
+    const blocked = result.allocations.find((item) => item.planId === 'd:v1');
+    expect(blocked).toMatchObject({ status: 'blocked', targetPctMax: 40 });
+    expect(blocked?.reasons).toContain('single-stock-limit');
+
+    const draft = { ...planD, status: 'draft' as const };
+    const draftResult = evaluateTradingPlanBudget({
+      facts: zeroExposureFacts,
+      plans: [planA, planB, planC, draft],
+      stocks: new Map(),
+    });
+    expect(applyTradingPlanBudgetConstraint(draft, draftResult)).toMatchObject({
+      status: 'draft',
+      position: { constraintStatus: 'blocked' },
+    });
+    expect(() =>
+      assertTradingPlanBudgetAllowsActivation({ ...draft, status: 'active' }, draftResult),
+    ).toThrow(InvariantError);
+    expect(() =>
+      assertTradingPlanBudgetAllowsActivation({ ...draft, status: 'active' }, draftResult),
+    ).toThrow(/min 合计 98/);
   });
 });

@@ -1,18 +1,25 @@
 import {
+  type AccountFacts,
+  applyTradingPlanBudgetConstraint,
   assertTradingPlanBudgetLimits,
   DEFAULT_TRADING_PLAN_BUDGET_LIMITS,
   evaluateTradingPlanBudget,
   type Stock,
   type ToolContext,
+  type TradingPlan,
+  type TradingPlanBudgetLimits,
   TradingPlanBudgetLimitsSchema,
   TradingPlanBudgetResultSchema,
   type TradingPlanMonitoring,
   TradingPlanMonitoringSchema,
   TradingPlanQuerySchema,
+  TradingPlanReadSchema,
   type TradingPlanReview,
   TradingPlanReviewSchema,
   TradingPlanSchema,
+  TradingPlanV2Schema,
   TradingPlanViewSchema,
+  toTradingPlanRead,
   tradingPlanMonitoring,
   tradingPlanVersionId,
   tradingPlanView,
@@ -43,13 +50,43 @@ const latestReviews = async (ctx: ToolContext, accountId: string) => {
   return reviews;
 };
 
+const budgetFor = async (
+  ctx: ToolContext,
+  facts: AccountFacts,
+  plans: readonly TradingPlan[],
+  limits: TradingPlanBudgetLimits,
+  candidate?: TradingPlan,
+): Promise<z.infer<typeof TradingPlanBudgetResultSchema>> => {
+  const stocks = new Map<string, Stock>();
+  const stockIds = new Set([
+    ...facts.positions.map((position) => position.stockId),
+    ...plans.map((plan) => plan.stockId),
+    ...(candidate === undefined ? [] : [candidate.stockId]),
+  ]);
+  for (const stockId of stockIds) {
+    const stock = await ctx.repos.stock.findById(stockId);
+    if (stock !== null) stocks.set(stock.id, stock);
+  }
+  return TradingPlanBudgetResultSchema.parse(
+    evaluateTradingPlanBudget({
+      facts,
+      plans: candidate === undefined ? [...plans] : [...plans, candidate],
+      stocks,
+      limits,
+    }),
+  );
+};
+
 export const SaveTradingPlanInput = z.object({
-  plan: TradingPlanSchema,
+  /** 写路径只接受 v2（区间 + 选点 + 结构化失效条件）；旧形状必须由调用方先迁移。 */
+  plan: TradingPlanV2Schema,
   limits: TradingPlanBudgetLimitsSchema.default(DEFAULT_TRADING_PLAN_BUDGET_LIMITS),
 });
 export const SaveTradingPlanOutput = z.object({
   plan: TradingPlanSchema,
   versionId: z.string().min(1),
+  /** 本次保存的预算结论（含 min/max 合计）；facts 不可用时缺省。 */
+  budget: TradingPlanBudgetResultSchema.optional(),
 });
 
 export const saveTradingPlanTool = defineTool({
@@ -115,11 +152,31 @@ export const saveTradingPlanTool = defineTool({
           `计划未通过组合预算：${allocation?.reasons.join(',') ?? saved.budget.reasons.join(',')}`,
         );
       }
-      return { plan: input.plan, versionId: tradingPlanVersionId(input.plan) };
+      return {
+        plan: input.plan,
+        versionId: tradingPlanVersionId(input.plan),
+        budget: TradingPlanBudgetResultSchema.parse(saved.budget),
+      };
     }
     const versionId = tradingPlanVersionId(input.plan);
-    await ctx.repos.tradingPlan.save(input.plan);
-    return { plan: input.plan, versionId };
+    // draft：预算冲突不阻止保存，但必须记录 constraintStatus/constraintReasons。
+    const active = await ctx.repos.tradingPlan.list({
+      accountId: input.plan.accountId,
+      activeOnly: true,
+      asOf: ctx.clock(),
+      limit: 500,
+    });
+    const others = active.filter(
+      (plan) => plan.id !== input.plan.id && plan.accountFactsDigest === facts.digest,
+    );
+    const budget =
+      facts.status === 'complete'
+        ? await budgetFor(ctx, facts, others, input.limits, input.plan)
+        : undefined;
+    const stored =
+      budget === undefined ? input.plan : applyTradingPlanBudgetConstraint(input.plan, budget);
+    await ctx.repos.tradingPlan.save(stored);
+    return { plan: stored, versionId, ...(budget === undefined ? {} : { budget }) };
   },
 });
 
@@ -127,7 +184,7 @@ export const GetTradingPlanInput = z.object({
   versionId: z.string().min(1),
 });
 export const GetTradingPlanOutput = z.object({
-  plan: TradingPlanSchema,
+  plan: TradingPlanReadSchema,
   monitoring: TradingPlanMonitoringSchema,
 });
 
@@ -149,7 +206,7 @@ export const getTradingPlanTool = defineTool({
       limit: 1,
     });
     return {
-      plan,
+      plan: toTradingPlanRead(plan),
       monitoring: tradingPlanMonitoring(
         plan,
         facts,
@@ -165,7 +222,7 @@ export const ListTradingPlansInput = TradingPlanQuerySchema.extend({
   includeMonitoring: z.boolean().optional(),
 });
 export const ListTradingPlansOutput = z.object({
-  plans: z.array(TradingPlanSchema),
+  plans: z.array(TradingPlanReadSchema),
   monitoring: z.array(TradingPlanMonitoringSchema).optional(),
   views: z.array(TradingPlanViewSchema).optional(),
 });
@@ -185,7 +242,7 @@ export const listTradingPlansTool = defineTool({
         ...(query.currentOnly === true && query.asOf === undefined ? { asOf: now } : {}),
       })),
     ];
-    if (!includeMonitoring) return { plans };
+    if (!includeMonitoring) return { plans: plans.map(toTradingPlanRead) };
     const monitoring: TradingPlanMonitoring[] = [];
     const views: z.infer<typeof TradingPlanViewSchema>[] = [];
     for (const accountId of new Set(plans.map((plan) => plan.accountId))) {
@@ -222,13 +279,15 @@ export const listTradingPlansTool = defineTool({
         if (view !== null) views.push(view);
       }
     }
-    return { plans, monitoring, views };
+    return { plans: plans.map(toTradingPlanRead), monitoring, views };
   },
 });
 
 const BudgetInput = z.object({
   accountId: z.string().min(1).optional(),
   limits: TradingPlanBudgetLimitsSchema.default(DEFAULT_TRADING_PLAN_BUDGET_LIMITS),
+  /** 可选：把尚未落库的候选版本一起评估（生成器在 reuse 前用它避免版本抖动）。 */
+  candidate: TradingPlanV2Schema.optional(),
 });
 export const EvaluateTradingPlanBudgetInput = BudgetInput;
 export const EvaluateTradingPlanBudgetOutput = TradingPlanBudgetResultSchema;
@@ -244,29 +303,24 @@ export const evaluateTradingPlanBudgetTool = defineTool({
     const facts = await deriveAccountFacts(ctx, accountId);
     if (facts === null) return errNotFound('Account', accountId);
     assertTradingPlanBudgetLimits(input.limits);
-    const plans = await ctx.repos.tradingPlan.list({
-      accountId,
-      activeOnly: true,
-      asOf: ctx.clock(),
-      limit: 500,
-    });
-    const stocks = new Map<string, Stock>();
-    const stockIds = new Set([
-      ...facts.positions.map((position) => position.stockId),
-      ...plans.map((plan) => plan.stockId),
-    ]);
-    for (const stockId of stockIds) {
-      const stock = await ctx.repos.stock.findById(stockId);
-      if (stock !== null) stocks.set(stock.id, stock);
-    }
+    const plans = (
+      await ctx.repos.tradingPlan.list({
+        accountId,
+        activeOnly: true,
+        asOf: ctx.clock(),
+        limit: 500,
+      })
+    ).filter((plan) => plan.accountFactsDigest === facts.digest);
+    const candidates =
+      input.candidate === undefined
+        ? plans
+        : [...plans, input.candidate].filter(
+            (plan, index, all) =>
+              all.findIndex((item) => tradingPlanVersionId(item) === tradingPlanVersionId(plan)) ===
+              index,
+          );
     return TradingPlanBudgetResultSchema.parse(
-      evaluateTradingPlanBudget({
-        facts,
-        // 只合并「基于同一份账户事实」的有效计划：账本变了，旧计划的额度不再占用。
-        plans: plans.filter((plan) => plan.accountFactsDigest === facts.digest),
-        stocks,
-        limits: input.limits,
-      }),
+      await budgetFor(ctx, facts, candidates, input.limits),
     );
   },
 });

@@ -37,8 +37,10 @@ const makePlan = (accountId: string, accountFactsDigest: string, stockId = '0025
     invalidEntryConditions: [],
     position: {
       currentPct: 0,
-      targetPct: 10,
-      deltaPct: 10,
+      targetPctRange: { min: 10, max: 10 },
+      appliedPct: 10,
+      fallbackPct: 10,
+      rangePick: { ruleId: 'lower-bound' },
       constraintStatus: 'passed',
       constraintReasons: [],
       prerequisiteActions: ['用户手动执行后更新账户快照'],
@@ -54,6 +56,17 @@ const makePlan = (accountId: string, accountFactsDigest: string, stockId = '0025
     validFrom: new Date('2026-07-16T00:00:00.000Z'),
     validUntil: new Date('2026-07-20T00:00:00.000Z'),
     invalidationConditions: ['账户快照版本改变'],
+    invalidationRules: [
+      {
+        id: 'invalidate-stop',
+        kind: 'price-threshold',
+        phase: 'risk',
+        metric: 'price',
+        comparator: 'lte',
+        value: 1,
+        description: '跌破止损',
+      },
+    ],
     accountFactsAsOf: NOW,
     accountFactsDigest: accountFactsDigest,
     marketFacts: [],
@@ -549,7 +562,13 @@ describe('intraday trading plan watch', () => {
         ...held,
         action: 'hold',
         entryConditions: [],
-        position: { ...held.position, currentPct: 10, targetPct: 10, deltaPct: 0 },
+        position: {
+          ...held.position,
+          currentPct: 10,
+          targetPctRange: { min: 10, max: 10 },
+          appliedPct: 10,
+          fallbackPct: 10,
+        },
         exit: {
           ...held.exit,
           canSellNow: true,
@@ -561,7 +580,13 @@ describe('intraday trading plan watch', () => {
       ...unheld,
       action: 'hold',
       entryConditions: [],
-      position: { ...unheld.position, currentPct: 0, targetPct: 0, deltaPct: 0 },
+      position: {
+        ...unheld.position,
+        currentPct: 0,
+        targetPctRange: { min: 5, max: 5 },
+        appliedPct: 5,
+        fallbackPct: 5,
+      },
       exit: { ...unheld.exit, triggerConditions: [stop('600519.SH', 'stop-unheld')] },
     });
 
@@ -635,7 +660,13 @@ describe('intraday trading plan watch', () => {
         ...plan,
         action: 'hold',
         entryConditions: [],
-        position: { ...plan.position, currentPct: 10, targetPct: 10, deltaPct: 0 },
+        position: {
+          ...plan.position,
+          currentPct: 10,
+          targetPctRange: { min: 10, max: 10 },
+          appliedPct: 10,
+          fallbackPct: 10,
+        },
         exit: {
           ...plan.exit,
           canSellNow: true,
@@ -792,7 +823,13 @@ describe('intraday trading plan watch', () => {
       ...plan,
       action: 'hold',
       entryConditions: [],
-      position: { ...plan.position, currentPct: 10, targetPct: 10, deltaPct: 0 },
+      position: {
+        ...plan.position,
+        currentPct: 10,
+        targetPctRange: { min: 10, max: 10 },
+        appliedPct: 10,
+        fallbackPct: 10,
+      },
       exit: {
         ...plan.exit,
         canSellNow: true,
