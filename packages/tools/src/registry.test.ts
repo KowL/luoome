@@ -182,6 +182,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_ashare_sentiment',
   'list_workflow_runs',
   'get_strategy_recommendation_preflight_history',
+  'get_strategy_ic',
   'get_strategy_reliability_summary',
   // Vibe A 股报告迁移 Phase 1
   'get_report',

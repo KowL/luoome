@@ -177,6 +177,7 @@ import {
   getStrategyDslCatalogTool,
   getStrategyExperimentContextTool,
 } from './tools/strategy-experiment.js';
+import { getStrategyIcTool } from './tools/strategy-ic.js';
 import { getStrategyInsightFactsTool } from './tools/strategy-insight.js';
 import {
   archiveStrategyTool,
@@ -563,6 +564,7 @@ export const toolRegistry: Registry = createRegistry([
   getMarketDataStatusTool,
   getAShareSentimentTool,
   listWorkflowRunsTool,
+  getStrategyIcTool,
   getStrategyReliabilitySummaryTool,
   getReportTool,
   listReportsTool,

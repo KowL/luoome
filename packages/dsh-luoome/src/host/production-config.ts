@@ -71,6 +71,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'get_strategy_decision_cycles',
   'evaluate_strategy_candidate_preflight',
   'get_strategy_reliability_summary',
+  'get_strategy_ic',
   'get_strategy_schedule',
   'list_strategy_watchlist_subscriptions',
   // 关注、触发与计划（看板）

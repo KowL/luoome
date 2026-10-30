@@ -87,7 +87,9 @@ const criteriaFor = (options: {
 const sorted = (names: readonly string[]): readonly string[] => [...names].sort();
 
 describe('exposure reconciliation · 插件面与共享判定同源', () => {
-  it('全收配置下 read 面逐工具等于共享判定的输出', () => {
+  // 该用例对全部工具做一次完整判定对账（约 1000+ 文件规模的判定期），空闲约 0.9s、
+  // 高负载可达 2.9s+，默认 5s 会误报；此处显式放宽而非削减断言范围。
+  it('全收配置下 read 面逐工具等于共享判定的输出', { timeout: 20_000 }, () => {
     const criteria = criteriaFor({ allowedSideEffects: ['read'], allowlist: registryNames });
     const expected = selectExposedTools(tools, criteria).map((tool) => tool.name);
     expect(sorted(readNames())).toEqual(sorted(expected));

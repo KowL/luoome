@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-30T16:52:52.053Z",
+  "generatedAt": "2026-10-30T17:11:35.173Z",
   "runner": {
     "node": "v24.3.0",
     "bun": null
@@ -10,34 +10,34 @@
       "name": "test",
       "command": "bun run test",
       "exitCode": 0,
-      "durationMs": 26826,
-      "files": 316,
-      "tests": 3333,
+      "durationMs": 29464,
+      "files": 318,
+      "tests": 3356,
       "skipped": 0
     },
     {
       "name": "test:db",
       "command": "bun run test:db",
       "exitCode": 0,
-      "durationMs": 5466,
-      "files": 16,
-      "tests": 669,
+      "durationMs": 5546,
+      "files": 17,
+      "tests": 674,
       "skipped": null
     },
     {
       "name": "test:db:node",
       "command": "bun run test:db:node",
       "exitCode": 0,
-      "durationMs": 6344,
+      "durationMs": 6752,
       "files": 1,
-      "tests": 287,
+      "tests": 291,
       "skipped": 0
     },
     {
       "name": "test:web",
       "command": "bun run test:web",
       "exitCode": 0,
-      "durationMs": 1659,
+      "durationMs": 1841,
       "files": 29,
       "tests": 549,
       "skipped": null
@@ -46,15 +46,15 @@
       "name": "test:dsh-luoome:e2e",
       "command": "bun run test:dsh-luoome:e2e",
       "exitCode": 0,
-      "durationMs": 1077,
+      "durationMs": 1151,
       "files": 1,
       "tests": 16,
       "skipped": null
     }
   ],
   "totals": {
-    "files": 363,
-    "tests": 4854
+    "files": 366,
+    "tests": 4886
   },
   "lint": {
     "errors": 0,
@@ -62,9 +62,9 @@
   },
   "coverage": {
     "scope": "vitest 段（bun test 段不产出覆盖率）",
-    "statements": 85.19,
-    "branches": 73.88,
-    "functions": 88.67,
-    "lines": 87.69
+    "statements": 85.26,
+    "branches": 73.95,
+    "functions": 88.74,
+    "lines": 87.76
   }
 }

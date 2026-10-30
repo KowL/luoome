@@ -128,6 +128,7 @@ export * from './tools/strategy-data-preflight.js';
 export * from './tools/strategy-definition.js';
 export * from './tools/strategy-evaluation.js';
 export * from './tools/strategy-experiment.js';
+export * from './tools/strategy-ic.js';
 export * from './tools/strategy-insight.js';
 export * from './tools/strategy-lifecycle.js';
 export * from './tools/strategy-manifest.js';
