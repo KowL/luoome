@@ -24,6 +24,15 @@
 指标、Strategy 和 AlertPlan 统一使用前复权（`qfq`）日线。缺少复权因子或上一交易日收盘价
 时必须返回 unavailable/unknown，不得用当日开盘价或伪造因子替代。
 
+### 严格回测（StrictBacktest）
+
+回答“策略在可交易性事实齐全的历史区间里，按 D+1 开盘、整手、费用与滑点能跑出什么”。
+market facts 由同步任务按 evaluation day 的 `revisionCutoff` 从 `daily_bar_revisions` 生成：
+涨跌停价 = 前收盘 × 板块幅度（`tradability-rule-v1`：主板非 ST 10%、主板 ST 5%、科创/创业 20%、
+北交所 30%），ST 取自 PIT universe 快照属性（unknown 不猜、该日不写事实并披露缺失）。
+公司行动无数据源，事实固定 `corporateActionsStatus='unavailable'`，门禁逐项披露为 unavailable
+（§8 不在本期范围），不阻断已披露范围内的执行；不得据此声称完整复权回测。
+
 ### Strategy
 
 回答“如何发现、评分并解释研究机会”。Strategy 是稳定身份，StrategyVersion 是不可变定义；

@@ -29,6 +29,53 @@ export const CURRENT_STRATEGY_EVALUATOR_IDENTITY: StrategyEvaluatorIdentity = {
   codeHash: STRATEGY_EVALUATOR_CODE_HASH,
 };
 
+/** 涨跌停幅度表版本；口径变化必须换版本，回测事实的 source 里记录它。 */
+export const TRADABILITY_RULE_VERSION = 'tradability-rule-v1';
+
+export type TradabilityBoard = 'main_board' | 'chinext' | 'star' | 'bse';
+
+/** 板块由 stockId 的代码前缀确定性判定（不信外部标签）。 */
+export const tradabilityBoard = (stockId: string): TradabilityBoard | null => {
+  const index = stockId.lastIndexOf('.');
+  const code = index > 0 ? stockId.slice(0, index) : stockId;
+  const exchange = index > 0 ? stockId.slice(index + 1) : '';
+  if (exchange === 'BJ' || /^[84]/.test(code)) return 'bse';
+  if (exchange === 'SH')
+    return code.startsWith('68') ? 'star' : code.startsWith('60') ? 'main_board' : null;
+  if (exchange === 'SZ')
+    return /^30[01]/.test(code) ? 'chinext' : code.startsWith('00') ? 'main_board' : null;
+  return null;
+};
+
+/**
+ * 涨跌停幅度（比例，0.05 = 5%）。规则表 v1：
+ * - 北交所 30%；科创板/创业板 20%；
+ * - 主板非 ST 10%，主板 ST 5%；
+ * - ST 状态 unknown 时无法判定（返回 null）——不得猜。
+ */
+export const tradabilityLimitPct = (input: {
+  readonly stockId: string;
+  readonly stStatus: 'st' | 'non-st' | 'unknown';
+}): number | null => {
+  const board = tradabilityBoard(input.stockId);
+  if (board === null) return null;
+  if (board === 'bse') return 0.3;
+  if (board === 'star' || board === 'chinext') return 0.2;
+  if (input.stStatus === 'unknown') return null;
+  return input.stStatus === 'st' ? 0.05 : 0.1;
+};
+
+const roundPrice = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** 由前收盘价 × 幅度确定性计算涨停/跌停价（两位小数，四舍五入）。 */
+export const tradabilityLimitPrices = (
+  prevClose: number,
+  pct: number,
+): { readonly up: number; readonly down: number } => ({
+  up: roundPrice(prevClose * (1 + pct)),
+  down: roundPrice(prevClose * (1 - pct)),
+});
+
 export const StrictBacktestGateKeySchema = z.enum([
   'pit-universe',
   'daily-bar-revisions',

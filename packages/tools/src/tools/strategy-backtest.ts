@@ -4,6 +4,7 @@ import {
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
   type StrategyEvaluationDay,
+  type StrategyEvaluationSession,
   type StrategyResult,
   type StrictBacktestGateAudit,
   type StrictBacktestGateItem,
@@ -18,6 +19,11 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import {
+  type BacktestMarketFactSyncReport,
+  describeBacktestFactSkips,
+  syncBacktestMarketFacts,
+} from '../internal/backtest-market-facts.js';
 
 const BacktestCostsInput = z.object({
   commissionBps: z.number().nonnegative().max(100),
@@ -65,6 +71,19 @@ const gate = (
   reason: string,
   evidenceRefs: readonly string[],
 ): StrictBacktestGateItem => ({ key, status, reason, evidenceRefs: [...evidenceRefs] });
+
+/**
+ * 已披露的范围缺口：`corporate-actions` 无数据源（§8 不在本期范围），
+ * 不阻断回测执行，但必须在 gateAudit 里逐项可见。其余门禁仍必须 complete。
+ */
+const DISCLOSED_GAP_GATES: ReadonlySet<StrictBacktestGateItem['key']> = new Set([
+  'corporate-actions',
+]);
+
+export const blockingGatesComplete = (audit: StrictBacktestGateAudit): boolean =>
+  audit.items
+    .filter((item) => !DISCLOSED_GAP_GATES.has(item.key))
+    .every((item) => item.status === 'complete');
 
 const gateAudit = (
   items: readonly StrictBacktestGateItem[],
@@ -119,10 +138,28 @@ interface AssembledBacktest {
   readonly benchmarkFacts: readonly StrictBacktestMarketFact[];
 }
 
-const assembleBacktest = async (
+interface BacktestContext {
+  readonly session: StrategyEvaluationSession;
+  readonly days: readonly StrategyEvaluationDay[];
+  readonly completeDays: readonly StrategyEvaluationDay[];
+  readonly executionDays: readonly StrategyEvaluationDay[];
+  readonly targets: readonly { readonly date: Date; readonly stockIds: readonly string[] }[];
+  readonly targetStockIds: readonly string[];
+  readonly cutoffByDate: ReadonlyMap<string, Date>;
+  readonly runs: ReadonlyMap<
+    string,
+    Awaited<ReturnType<ToolContext['repos']['strategyRun']['findRunById']>>
+  >;
+  readonly resultsByDay: ReadonlyMap<string, readonly StrategyResult[]>;
+  readonly pitComplete: boolean;
+  readonly revisionComplete: boolean;
+  readonly evaluatorComplete: boolean;
+}
+
+const collectBacktestContext = async (
   spec: z.infer<typeof StrictBacktestSpecSchema>,
   ctx: ToolContext,
-): Promise<AssembledBacktest> => {
+): Promise<BacktestContext> => {
   const session = await ctx.repos.strategyEvaluation.findSessionById(spec.evaluationSessionId);
   if (session === null)
     throw new Error(`StrategyEvaluationSession not found: ${spec.evaluationSessionId}`);
@@ -192,6 +229,41 @@ const assembleBacktest = async (
         : ([[day.dataAsOf.toISOString(), day.revisionCutoff]] as const),
     ),
   );
+  return {
+    session,
+    days,
+    completeDays,
+    executionDays,
+    targets,
+    targetStockIds,
+    cutoffByDate,
+    runs,
+    resultsByDay,
+    pitComplete,
+    revisionComplete,
+    evaluatorComplete,
+  };
+};
+
+const assembleBacktest = async (
+  spec: z.infer<typeof StrictBacktestSpecSchema>,
+  ctx: ToolContext,
+  context: BacktestContext,
+  report?: BacktestMarketFactSyncReport,
+): Promise<AssembledBacktest> => {
+  const {
+    session,
+    days,
+    completeDays,
+    executionDays,
+    targets,
+    targetStockIds,
+    cutoffByDate,
+    runs,
+    pitComplete,
+    revisionComplete,
+    evaluatorComplete,
+  } = context;
   const maxCutoff = [...cutoffByDate.values()].sort((a, b) => b.getTime() - a.getTime())[0];
   const allMarketFacts = await ctx.repos.strategyBacktest.listMarketFacts({
     stockIds: targetStockIds,
@@ -208,8 +280,6 @@ const assembleBacktest = async (
     return fact === undefined ? [] : [fact];
   });
   const tradabilityComplete = requiredMarketKeys.every((key) => marketByKey.has(key));
-  const corporateActionsComplete =
-    tradabilityComplete && marketFacts.every((fact) => fact.corporateActionsStatus === 'complete');
 
   const benchmarkFacts: StrictBacktestMarketFact[] = [];
   let benchmarkComplete = revisionComplete;
@@ -242,7 +312,7 @@ const assembleBacktest = async (
       sellAllowed: true,
       buyRestriction: 'none',
       sellRestriction: 'none',
-      corporateActionsStatus: 'complete',
+      corporateActionsStatus: 'unavailable',
       corporateActions: [],
       source: `${revision.source}:${spec.benchmark.datasetVersion}`,
       recordedAt: revision.recordedAt,
@@ -287,20 +357,16 @@ const assembleBacktest = async (
             : 'partial',
       tradabilityComplete
         ? '所有潜在持仓在全部执行日都有 PIT 可交易性事实'
-        : '缺少停牌/涨跌停/退市可交易性事实',
+        : `缺少可交易性事实${describeBacktestFactSkips(report) === null ? '' : `：${describeBacktestFactSkips(report)}`}`,
       marketFacts.map(
         (fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}:${fact.contentHash}`,
       ),
     ),
     gate(
       'corporate-actions',
-      corporateActionsComplete ? 'complete' : marketFacts.length === 0 ? 'unavailable' : 'partial',
-      corporateActionsComplete
-        ? '所有市场事实明确记录公司行动完整状态'
-        : '公司行动事实不可用或不完整',
-      marketFacts
-        .filter((fact) => fact.corporateActionsStatus === 'complete')
-        .map((fact) => `corporate-actions:${fact.stockId}:${fact.date.toISOString()}`),
+      'unavailable',
+      '无分红送转数据源，属 §8 不在本期范围',
+      marketFacts.map((fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}`),
     ),
     gate(
       'benchmark',
@@ -382,13 +448,18 @@ export const createStrictStrategyBacktestTool = defineTool({
         sellBps: input.costs.sellSlippageBps,
       },
     });
-    const assembled = await assembleBacktest(spec, ctx);
+    const context = await collectBacktestContext(spec, ctx);
+    const report = await syncBacktestMarketFacts(
+      { stockIds: context.targetStockIds, days: context.executionDays },
+      ctx,
+    );
+    const assembled = await assembleBacktest(spec, ctx, context, report);
     const specHash = strictBacktestSpecHash(spec);
     const id = `strict-backtest-${strictBacktestHash({ specHash, inputFingerprint: assembled.inputFingerprint }).slice(0, 32)}`;
     const existing = await ctx.repos.strategyBacktest.findRunById(id);
     if (existing !== null) return { run: existing };
     const now = ctx.clock();
-    const runnable = assembled.gateAudit.status === 'complete';
+    const runnable = blockingGatesComplete(assembled.gateAudit);
     const run = StrictBacktestRunSchema.parse({
       id,
       status: runnable ? 'queued' : 'complete',
@@ -416,9 +487,14 @@ export const executeStrictStrategyBacktestTool = defineTool({
     const existing = await ctx.repos.strategyBacktest.findRunById(input.backtestRunId);
     if (existing === null) return errNotFound('StrictStrategyBacktest', input.backtestRunId);
     if (existing.status === 'complete' || existing.status === 'failed') return { run: existing };
-    if (existing.gateAudit.status !== 'complete')
+    if (!blockingGatesComplete(existing.gateAudit))
       return errInvalidInput('strict backtest facts gate 未完成');
-    const assembled = await assembleBacktest(existing.spec, ctx);
+    const context = await collectBacktestContext(existing.spec, ctx);
+    const report = await syncBacktestMarketFacts(
+      { stockIds: context.targetStockIds, days: context.executionDays },
+      ctx,
+    );
+    const assembled = await assembleBacktest(existing.spec, ctx, context, report);
     if (assembled.inputFingerprint !== existing.inputFingerprint) {
       const failed = StrictBacktestRunSchema.parse({
         ...existing,
