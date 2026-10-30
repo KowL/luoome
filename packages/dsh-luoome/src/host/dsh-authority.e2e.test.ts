@@ -805,4 +805,57 @@ describe('DSH personal execution and schedule integration with durable facts', (
       clock.restore();
     }
   });
+
+  // T24-b / H5=B 层③：**可见 ≠ 权威**。
+  //
+  // 要分开两件长得很像的事（骨架 T2/T3）：
+  //   - 工具**不存在**（不可见）→ isError:true + error.code === 'UNKNOWN_TOOL'（ToolNotFoundError）；
+  //   - 工具**存在但被权威层拒绝** → isError:true + error 只有 message、**无 code**。
+  // 现有 `expect(childCall.isError).toBe(true)` 两者都满足，分不出来；这里必须断 message 与 code。
+  //
+  // 陷阱 T4：**不要**用 `ctx.tools.get(name, child.agent.ctx)` 做静态可见集断言——
+  // scope 是 dsh-scope 的私有 symbol，传 agent.ctx 会静默退化成全局视图 → 「子 agent 看不到 X」会假绿。
+  // 因此本用例只做行为等价断言。
+  it('T24-b 层③：子 agent 用不了父写工具 —— 拒绝来自执行期权威，不是「工具不存在」', async () => {
+    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const child = await fixture.ctx.agents.create({
+      sessionId: SessionId('reconciliation-child'),
+      parentAgent: fixture.handle.agent,
+      meta: { origin: 'subagent', delegationDepth: 1 },
+      agentOptions: { provider: 'fixture', model: 'scripted' },
+    });
+    try {
+      const childCall = await fixture.ctx.tools.execute({
+        name: MANUAL_OPERATION_TOOL,
+        callId: ToolCallId('reconciliation-child-call'),
+        arguments: { id: randomUUID(), tool: 'save_decision_review', input: {} },
+        agent: child.agent,
+        signal: new AbortController().signal,
+      });
+
+      // (a) 被拒。
+      expect(childCall.isError).toBe(true);
+
+      // (b) 拒绝原因是**执行期权威**，不是「工具不存在」——这是「看不到」与「用不了」的分水岭。
+      expect(childCall.error?.message).toContain(
+        'A live, top-level authorized session is required',
+      );
+
+      // (c) 明确排除「不可见」：不可见会报 UNKNOWN_TOOL（dsh-tools ToolNotFoundError）。
+      // `ToolFailure` 的公开类型没有 code（只有 UNKNOWN_TOOL 变体才带），所以在这里窄化读取，
+      // 断言强度不变：仍然要求 code 不等于 'UNKNOWN_TOOL'。
+      const errorCode = (childCall.error as { readonly code?: string } | undefined)?.code;
+      expect(errorCode).not.toBe('UNKNOWN_TOOL');
+
+      // (d) 权威层从未授权：没有任何 approval 发生。
+      expect(fixture.approvals).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  // 将来若 DSH 提供 spawn 期的稳定 per-agent 收窄（切 A 路径），把上面 (b)(c) 翻成：
+  //   expect(childCall.error?.code).toBe('UNKNOWN_TOOL');
+  //   expect(childCall.error?.message).not.toContain('top-level authorized session');
+  // 翻转条件（三条同时满足）：DSH 发 GA；提供 spawn 前收窄钩子；允许直接依赖 @deepseek-ai/dsh-scope。
 });

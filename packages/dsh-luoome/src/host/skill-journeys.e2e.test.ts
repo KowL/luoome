@@ -179,6 +179,16 @@ interface SkillJourneyFixture {
   readonly domain: ToolContext;
   /** 插件暴露集：read 面 ∪ market 面 ∪ operation policy 面（与生产装配同一份声明）。 */
   readonly exposed: ReadonlySet<string>;
+  /**
+   * 暴露面的三类拆分。`exposed` 混了两类**性质不同**的名字：
+   * read / market 是真 DSH 工具（走 ctx.tools.register），operation policy 是**操作目标**
+   * （经 luoome_confirmed_operation 分发）。层①必须按这个拆分分别对账。
+   */
+  readonly exposedSurfaces: {
+    readonly read: readonly string[];
+    readonly market: readonly string[];
+    readonly operations: readonly string[];
+  };
   /** DSH catalog 里实际注册的技能名 → 正文。 */
   readonly skillContents: ReadonlyMap<string, string>;
   execute(call: JourneyCall): Promise<ExecutedCall>;
@@ -263,12 +273,19 @@ const createFixture = async (): Promise<SkillJourneyFixture> => {
 
   // 暴露面的 policy 名单取自生产装配本身；researchJobs 只用于 policy 装配，用例结束一并 dispose。
   const researchJobs = createResearchJobs();
-  const exposed = new Set<string>([
-    ...read.descriptors().map((descriptor) => descriptor.name),
-    ...marketSurface.descriptors().map((descriptor) => descriptor.name),
-    ...createProductionOperationPolicies(undefined, { researchJobs }).map(
+  const exposedSurfaces = {
+    read: read.descriptors().map((descriptor) => descriptor.name),
+    market: marketSurface.descriptors().map((descriptor) => descriptor.name),
+    // 注意：这些是**操作目标**，不是 DSH 工具——它们经 luoome_confirmed_operation 分发，
+    // 永远不该出现在 ctx.tools.schemas() 里。T24-a 层①据此分开对账。
+    operations: createProductionOperationPolicies(undefined, { researchJobs }).map(
       (policy) => policy.tool.name,
     ),
+  };
+  const exposed = new Set<string>([
+    ...exposedSurfaces.read,
+    ...exposedSurfaces.market,
+    ...exposedSurfaces.operations,
   ]);
 
   return {
@@ -276,6 +293,7 @@ const createFixture = async (): Promise<SkillJourneyFixture> => {
     db,
     domain,
     exposed,
+    exposedSurfaces,
     skillContents,
     async execute(call) {
       const executed = await ctx.tools.execute({
@@ -370,4 +388,72 @@ describe('技能级旅程 · 技能单一真源（REQ-M1-01）', () => {
       ).toBe(true);
     });
   }
+});
+
+// T24-a / H5=B 层①②：插件暴露面 ↔ DSH **实际可见集**对账。
+//
+// 与 `exposure-reconciliation.test.ts` 的区别：那是「插件面 ↔ 共享判定」，本块是「插件面 ↔
+// DSH 运行时真正吐给模型的 schemas()」。两者不重叠，不能互相当证明。
+//
+// 陷阱（骨架 T1/T6）：
+//   - `schemas()` 是**同步**方法，不加 await；
+//   - native 模式下 `run_code` 不进 schemas()，且本 fixture 没挂任何 DSH 自带工具 →
+//     `dshVisible \ exposed` **必然为空**，所以层②绝不能写「差额非空」。
+const HOST_OWNED_TOOLS = new Set(['run_code']);
+
+/** 差额里的每一条都必须有名字级理由；不认识的直接红（'unknown'）。 */
+const explainExtra = (name: string): 'host-tool' | 'unknown' =>
+  HOST_OWNED_TOOLS.has(name) ? 'host-tool' : 'unknown';
+
+describe('暴露面对账 · 插件面 ↔ DSH 可见集（H5=B 层①②）', () => {
+  it('层①：注册进 ctx.tools 的暴露面（read ∪ market）逐工具都在 DSH 全局可见集里', () => {
+    const dshVisible = new Set(fixture.ctx.tools.schemas().map((schema) => schema.name));
+    const registered = [...fixture.exposedSurfaces.read, ...fixture.exposedSurfaces.market];
+    const missing = registered.filter((name) => !dshVisible.has(name));
+    expect(missing).toEqual([]);
+    // 防空转：注册面不能是空集，否则"全部都在"毫无意义。
+    expect(registered.length).toBeGreaterThan(0);
+    expect(dshVisible.size).toBeGreaterThan(0);
+  });
+
+  it('层①-b：operation policy 名是「操作目标」而不是 DSH 工具，绝不进 schemas()', () => {
+    // 这条钉住一个结构性事实：`exposed` 混了两类名字。
+    //   - read / market：真 DSH 工具，走 ctx.tools.register；
+    //   - operation policy：**操作目标**，经 luoome_confirmed_operation 分发（见 dsh-authority.ts:322），
+    //     永远不该作为独立工具出现在 schemas() 里。
+    // 若哪天有人把它们逐个注册成 DSH 工具，这条会红——那正是要发现的。
+    const dshVisible = new Set(fixture.ctx.tools.schemas().map((schema) => schema.name));
+    expect(fixture.exposedSurfaces.operations.length).toBeGreaterThan(0);
+    // 少数名字**同时**是 read 工具与 operation policy（如 trial_strategy_version、
+    // run_strategy_research_comparison，见 production-config.ts:113-114）。它们经 read 面注册，
+    // 出现在 schemas() 里是合法的；要钉的是「只作操作目标、没有注册成 DSH 工具」的那批。
+    const registered = new Set([
+      ...fixture.exposedSurfaces.read,
+      ...fixture.exposedSurfaces.market,
+    ]);
+    const operationOnly = fixture.exposedSurfaces.operations.filter(
+      (name) => !registered.has(name),
+    );
+    expect(operationOnly.length).toBeGreaterThan(0);
+    const leaked = operationOnly.filter((name) => dshVisible.has(name));
+    expect(leaked).toEqual([]);
+    // 权威层包装工具本身也不在本 fixture（本 fixture 只挂 read + market）。
+    expect(dshVisible.has('luoome_confirmed_operation')).toBe(false);
+  });
+
+  it('层②：差额逐条可归因，且 run_code 恒不属插件暴露面', () => {
+    const dshVisible = new Set(fixture.ctx.tools.schemas().map((schema) => schema.name));
+    const extra = [...dshVisible].filter((name) => !fixture.exposed.has(name));
+
+    // 每一条差额都必须能归因到 DSH 自带工具；归因不了的立刻红。
+    for (const name of extra) expect(explainExtra(name), `未归因的差额：${name}`).toBe('host-tool');
+
+    // 反向硬事实 1：DSH 保留传输 run_code 永远不属于插件暴露面。
+    expect(fixture.exposed.has('run_code')).toBe(false);
+    // 反向硬事实 2：native 模式下 run_code 也不在 schemas() 里（骨架 T1）。
+    // 若哪天 DSH 改了这条，本断言会红——那正是我们要知道的。
+    expect(dshVisible.has('run_code')).toBe(false);
+
+    // ⚠️ 刻意不写 expect(extra.length).toBeGreaterThan(0)：native 最小 fixture 下必然为空（T1）。
+  });
 });
