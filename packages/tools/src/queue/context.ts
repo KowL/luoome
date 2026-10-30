@@ -278,6 +278,37 @@ export const assembleAnalysisContext = async (
       times.push(quote.ts.getTime());
     } else limitations.push('缺少已保存行情；请先显式刷新行情，当前事实包不能写回建议。');
   }
+  // 盘后策略候选建议：把「哪次已发布运行、哪只股票、什么分数排名」冻进事实包，
+  // 供 record_advice 还原 basedOn.strategy；下游逐股计划据此判断建议来源账户。
+  if (stockId !== undefined && typeof input.options.strategyRunId === 'string') {
+    const run = await ctx.repos.strategyRun.findRunById(input.options.strategyRunId);
+    if (run === null || !isPublishableOperationalRun(run)) return null;
+    const results = await ctx.repos.strategyRun.listResults(run.id);
+    const result = results.find((item) => item.stockId === stockId);
+    if (result === undefined) return null;
+    const signals = (await ctx.repos.strategyRun.signalsByRun(run.id)).filter(
+      (signal) => signal.stockId === stockId,
+    );
+    facts.push({
+      id: `strategy-run:${run.id}:${stockId}`,
+      label: '已发布策略运行结果',
+      value: {
+        strategyId: run.strategyId,
+        strategyVersionId: run.strategyVersionId,
+        runId: run.id,
+        stockId,
+        accountId,
+        ...(result.score === undefined ? {} : { score: result.score }),
+        ...(result.rank === undefined ? {} : { rank: result.rank }),
+        resultEvidence: [...result.evidence],
+        signalIds: signals.map((signal) => signal.id),
+        observationIds: [],
+        recommendationTrigger: 'run' as const,
+      },
+      evidenceIds: [`run:${run.id}`],
+    });
+    times.push(run.dataAsOf.getTime());
+  }
   if (input.subject.kind === 'strategy') {
     const strategy = await ctx.repos.strategy.findById(input.subject.id);
     if (!strategy) return null;

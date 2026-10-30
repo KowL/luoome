@@ -665,8 +665,6 @@ const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) 
   };
 };
 
-const STRATEGY_ADVICE_SOURCE_TOOL = 'analyze_strategy_candidate';
-
 const adviceDecisionLabel = (decision: string): string => {
   switch (decision) {
     case 'buy':
@@ -770,8 +768,9 @@ const strategyActionsSection = async (
       since: dayStart,
       limit: 500,
     }),
+    // 与逐股计划同一口径：按建议维度读，再用 basedOn.strategy 判别是否来自已发布运行。
     ctx.tools.get_advice.execute({
-      sourceTool: STRATEGY_ADVICE_SOURCE_TOOL,
+      subjectKind: 'stock',
       since: dayStart,
       until: new Date(dayStart.getTime() + DAY_MS - 1),
       includeExpired: true,
@@ -823,7 +822,9 @@ const strategyActionsSection = async (
   const dayAdvices = advices.data.advices.filter(
     (advice) =>
       dateInShanghai(advice.createdAt) === date &&
-      (scope.kind === 'all-accounts' || advice.basedOn.strategy?.accountId === scope.accountId),
+      // 只有携带已发布运行证据的个股建议才属于「策略行动」；普通个股建议不在此列。
+      advice.basedOn.strategy !== undefined &&
+      (scope.kind === 'all-accounts' || advice.basedOn.strategy.accountId === scope.accountId),
   );
   const summaryCount = (
     run: (typeof dayRuns)[number] | undefined,

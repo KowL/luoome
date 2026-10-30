@@ -4,6 +4,7 @@ import {
   AdviceOutcomeSchema,
   AdviceQuerySchema,
   AdviceSchema,
+  adviceDataSnapshotFromFacts,
   isAdviceQuoteCurrent,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
@@ -180,5 +181,73 @@ describe('新策略建议契约', () => {
       source,
     });
     expect(isAdviceQuoteCurrent(quote, new Date(now))).toBe(expected);
+  });
+});
+
+describe('adviceDataSnapshotFromFacts', () => {
+  const dataAsOf = new Date('2026-10-29T10:00:00.000Z');
+  const quote = {
+    stockId: '600519.SH',
+    ts: '2026-10-29T10:00:00.000Z',
+    observedAt: '2026-10-29T10:00:00.000Z',
+    fetchedAt: '2026-10-29T10:00:00.000Z',
+    timestampSource: 'upstream',
+    open: 10,
+    high: 11,
+    low: 9,
+    close: 10.5,
+    volume: 1000,
+    source: 'fixture',
+  };
+  const strategy = {
+    strategyId: 'strategy-1',
+    strategyVersionId: 'strategy-1-v1',
+    runId: 'run-1',
+    stockId: '600519.SH',
+    accountId: 'default-account',
+    score: 88,
+    rank: 2,
+    resultEvidence: ['放量突破'],
+    signalIds: ['signal-1'],
+    observationIds: [],
+    recommendationTrigger: 'run',
+  };
+
+  it('从冻结事实还原行情与策略运行证据', () => {
+    const snapshot = adviceDataSnapshotFromFacts(
+      [
+        { id: 'quote:600519.SH', value: quote },
+        { id: 'strategy-run:run-1:600519.SH', value: strategy },
+      ],
+      dataAsOf,
+    );
+    expect(snapshot.quotes?.['600519.SH']?.close).toBe(10.5);
+    expect(snapshot.strategy).toMatchObject({
+      runId: 'run-1',
+      accountId: 'default-account',
+      score: 88,
+      rank: 2,
+      recommendationTrigger: 'run',
+    });
+    expect(snapshot.dataAsOf).toEqual(dataAsOf);
+  });
+
+  it('没有可还原事实时只保留 dataAsOf', () => {
+    const snapshot = adviceDataSnapshotFromFacts([], dataAsOf);
+    expect(snapshot.quotes).toBeUndefined();
+    expect(snapshot.strategy).toBeUndefined();
+    expect(snapshot.dataAsOf).toEqual(dataAsOf);
+  });
+
+  it('忽略形状不合法的事实，不抛错', () => {
+    const snapshot = adviceDataSnapshotFromFacts(
+      [
+        { id: 'quote:600519.SH', value: { stockId: '600519.SH' } },
+        { id: 'strategy-run:run-1:600519.SH', value: { runId: 'run-1' } },
+      ],
+      dataAsOf,
+    );
+    expect(snapshot.quotes).toBeUndefined();
+    expect(snapshot.strategy).toBeUndefined();
   });
 });

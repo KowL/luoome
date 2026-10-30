@@ -333,6 +333,52 @@ export const AdviceOutcomeSchema = z.object({
   recordedAt: z.coerce.date(),
 });
 
+/**
+ * 从**冻结的 analysis context 事实**派生 `basedOn`。
+ *
+ * 历史上 `recordAdvice` 直接写 `basedOn: { dataAsOf }`，把 context 里已经冻结的行情与
+ * 策略运行证据丢掉了；而下游（逐股交易计划、收盘报告「策略行动」）恰恰依赖
+ * `basedOn.strategy` 判断这条建议来自哪次已发布运行。这里改为从事实包还原，
+ * 保证「建议引用了什么证据」与「context 冻结了什么证据」是同一份。
+ */
+export const adviceDataSnapshotFromFacts = (
+  facts: readonly { readonly id: string; readonly value: unknown }[],
+  dataAsOf: Date,
+): AdviceDataSnapshot => {
+  const quotes: Record<string, Quote> = {};
+  let strategy: StrategyAdviceEvidence | undefined;
+  for (const fact of facts) {
+    if (fact.id.startsWith('quote:')) {
+      const parsed = QuoteSchema.safeParse(fact.value);
+      if (parsed.success) quotes[parsed.data.stockId] = parsed.data;
+      continue;
+    }
+    if (fact.id.startsWith('strategy-run:')) {
+      const parsed = AdviceDataSnapshotSchema.shape.strategy.safeParse(fact.value);
+      if (!parsed.success || parsed.data === undefined) continue;
+      const value = parsed.data;
+      strategy = {
+        strategyId: value.strategyId,
+        strategyVersionId: value.strategyVersionId,
+        runId: value.runId,
+        stockId: value.stockId,
+        ...(value.accountId === undefined ? {} : { accountId: value.accountId }),
+        ...(value.score === undefined ? {} : { score: value.score }),
+        ...(value.rank === undefined ? {} : { rank: value.rank }),
+        resultEvidence: value.resultEvidence,
+        signalIds: value.signalIds,
+        observationIds: value.observationIds,
+        recommendationTrigger: value.recommendationTrigger,
+      };
+    }
+  }
+  return {
+    ...(Object.keys(quotes).length === 0 ? {} : { quotes }),
+    ...(strategy === undefined ? {} : { strategy }),
+    dataAsOf,
+  };
+};
+
 export const AdviceSchema = z.object({
   provenance: AnalysisProvenanceSchema.optional(),
   id: z.string().min(1),

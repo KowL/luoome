@@ -74,6 +74,7 @@ describe('analysis context timing rules', () => {
         'advice_position',
         'advice_stock',
         'advice_strategy_candidate',
+        'advice_strategy_candidate_after_close',
         'research_directions',
         'strategy_insight_narrative',
         'strategy_version_proposal',
@@ -87,6 +88,12 @@ describe('analysis context timing rules', () => {
       });
     }
     expect(analysisTimingRules.advice_market).toEqual({
+      writeWindowMs: 24 * HOUR,
+      dataMaxAgeMs: 7 * DAY,
+      closesAtSessionEnd: false,
+    });
+    // 盘后策略候选：不受 15:00 截断，但仍受 24h 写回窗口与 7 天数据有效期约束。
+    expect(analysisTimingRules.advice_strategy_candidate_after_close).toEqual({
       writeWindowMs: 24 * HOUR,
       dataMaxAgeMs: 7 * DAY,
       closesAtSessionEnd: false,

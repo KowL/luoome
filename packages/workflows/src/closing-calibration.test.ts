@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   type Advice,
   money,
@@ -15,7 +14,11 @@ import {
 } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { currentStrategyFingerprint } from './account-plan-batch.js';
+import {
+  accountPlanBatchId,
+  adviceWatermark,
+  currentStrategyFingerprint,
+} from './account-plan-batch.js';
 import { closingReportWorkflow } from './closing-report.js';
 import { buildWorkflowTools } from './define-workflow.js';
 import { openingReportWorkflow } from './opening-report.js';
@@ -69,22 +72,29 @@ const setup = async () => {
     tools: buildWorkflowTools(ctx),
   });
   if (fingerprint === null) throw new Error('fixture fingerprint missing');
-  const digest = createHash('sha256')
-    .update(`${fingerprint}:${facts.data.facts.digest}`)
-    .digest('hex')
-    .slice(0, 16);
-  await ctx.repos.workflowRun.save({
-    id: `account-plan-batch:2026-10-15:${ctx.user.defaultAccountId}:${digest}`,
-    workflowName: 'account-plan-batch',
-    mode: 'scheduled',
-    status: 'succeeded',
-    startedAt: NOW,
-    finishedAt: NOW,
-    inputSummary: {},
-    outputSummary: { status: 'complete' },
-    providerStatuses: [],
-  });
+  // 批次键含当日建议水位：每个用例会先补种 advice，所以要在出报前按当前水位重建批次行。
+  const prepareBatch = async (): Promise<void> => {
+    const workflowCtx = { ...ctx, tools: buildWorkflowTools(ctx) };
+    await ctx.repos.workflowRun.save({
+      id: accountPlanBatchId(
+        ctx.user.defaultAccountId,
+        '2026-10-15',
+        fingerprint,
+        facts.data.facts.digest,
+        await adviceWatermark('2026-10-15', workflowCtx),
+      ),
+      workflowName: 'account-plan-batch',
+      mode: 'scheduled',
+      status: 'succeeded',
+      startedAt: NOW,
+      finishedAt: NOW,
+      inputSummary: {},
+      outputSummary: { status: 'complete' },
+      providerStatuses: [],
+    });
+  };
   const run = async (): Promise<Report> => {
+    await prepareBatch();
     const scope = { kind: 'account' as const, accountId: ctx.user.defaultAccountId };
     const opening = await openingReportWorkflow.run(
       { date: '2026-10-15', scope, mode: 'scheduled', notify: false },

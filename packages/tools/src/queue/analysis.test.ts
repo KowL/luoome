@@ -537,6 +537,42 @@ describe('advice_market timing after the close', () => {
     expect(recorded.ok).toBe(true);
   });
 
+  it('盘后可以写回策略候选建议，且 basedOn 从冻结事实还原行情', async () => {
+    const base = await setup();
+    const ctx = { ...base, clock: () => postClose };
+    const snapshot = await getAnalysisContextTool.execute(
+      {
+        kind: 'advice_strategy_candidate_after_close',
+        subject: { kind: 'stock', id: '600519.SH' },
+      },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    const recorded = await recordAdviceTool.execute(
+      { contextId: snapshot.data.id, result, provenance },
+      ctx,
+    );
+    expect(recorded.ok).toBe(true);
+    if (!recorded.ok) return;
+    // 历史实现把 basedOn 写死成 { dataAsOf }，冻结的行情证据被丢弃。
+    expect(recorded.data.basedOn.quotes?.['600519.SH']?.close).toEqual(money(100));
+  });
+
+  it('盘中行动类候选建议仍然在收盘后过期，新 kind 不放宽旧口径', async () => {
+    const base = await setup();
+    const ctx = { ...base, clock: () => postClose };
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_strategy_candidate', subject: { kind: 'stock', id: '600519.SH' } },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    expect(
+      await recordAdviceTool.execute({ contextId: snapshot.data.id, result, provenance }, ctx),
+    ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'context_expired' } });
+  });
+
   it('expires the advice_market write window after 24h and stale facts after 7d', async () => {
     const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
     const context = marketContext(ctx, close, postClose);

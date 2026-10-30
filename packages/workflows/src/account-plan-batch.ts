@@ -11,16 +11,40 @@ export type AccountPlanBatchResult = {
   readonly newlyFinished: boolean;
 };
 
-const batchId = (
+export const accountPlanBatchId = (
   accountId: string,
   date: string,
   strategyFingerprint: string,
   accountFactsDigest: string,
+  adviceWatermark: string,
 ): string =>
   `account-plan-batch:${date}:${accountId}:${createHash('sha256')
-    .update(`${strategyFingerprint}:${accountFactsDigest}`)
+    .update(`${strategyFingerprint}:${accountFactsDigest}:${adviceWatermark}`)
     .digest('hex')
     .slice(0, 16)}`;
+
+/**
+ * 当日**会被计划消费的**建议水位：持仓维度建议 + 携带已发布运行证据的个股建议。
+ *
+ * 批次键必须包含它，否则「先跑出零计划的完成批次 → 之后补录建议」不会触发重算，
+ * 报告也会沿用旧批次判定（封版）。
+ */
+export const adviceWatermark = async (date: string, ctx: WorkflowContext): Promise<string> => {
+  const dayStart = new Date(`${date}T00:00:00+08:00`);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
+  const result = await ctx.tools.get_advice.execute({
+    since: dayStart,
+    until: dayEnd,
+    includeExpired: true,
+    limit: 500,
+  });
+  if (!result.ok) return 'advice-unavailable';
+  const consumed = result.data.advices
+    .filter((advice) => advice.subjectKind === 'position' || advice.basedOn.strategy !== undefined)
+    .map((advice) => `${advice.id}@${advice.createdAt.getTime()}`)
+    .sort();
+  return createHash('sha256').update(consumed.join('\n')).digest('hex').slice(0, 16);
+};
 
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -56,7 +80,13 @@ export const getAccountPlanBatchStatus = async (
 ): Promise<AccountPlanBatchStatus> => {
   if (strategyFingerprint === null || accountFactsDigest === null) return 'blocked';
   const result = await ctx.tools.get_account_plan_batch.execute({
-    id: batchId(accountId, date, strategyFingerprint, accountFactsDigest),
+    id: accountPlanBatchId(
+      accountId,
+      date,
+      strategyFingerprint,
+      accountFactsDigest,
+      await adviceWatermark(date, ctx),
+    ),
   });
   if (!result.ok || result.data.run === null) return 'blocked';
   const run = result.data.run;
@@ -72,7 +102,13 @@ export const runAccountPlanBatch = async (
   accountFactsDigest: string,
   ctx: WorkflowContext,
 ): Promise<AccountPlanBatchResult> => {
-  const id = batchId(accountId, date, strategyFingerprint, accountFactsDigest);
+  const id = accountPlanBatchId(
+    accountId,
+    date,
+    strategyFingerprint,
+    accountFactsDigest,
+    await adviceWatermark(date, ctx),
+  );
   const startedAt = ctx.clock();
   const claimToken = randomUUID();
   const inputSummary = { accountId, date, strategyFingerprint, accountFactsDigest, claimToken };

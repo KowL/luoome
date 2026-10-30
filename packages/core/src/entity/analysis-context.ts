@@ -86,6 +86,15 @@ const marketAnalysisRule: AnalysisTimingRule = {
   dataMaxAgeMs: 7 * DAY_MS,
   closesAtSessionEnd: false,
 };
+/**
+ * 盘后策略候选建议：结论依据当日收盘后的已发布运行事实，天然晚于 15:00，
+ * 因此不能套用盘中行动类的 30 分钟窗口与收盘截断；数据仍受 7 天有效期约束。
+ */
+const afterCloseStrategyRule: AnalysisTimingRule = {
+  writeWindowMs: 24 * HOUR_MS,
+  dataMaxAgeMs: 7 * DAY_MS,
+  closesAtSessionEnd: false,
+};
 const researchAnalysisRule: AnalysisTimingRule = {
   writeWindowMs: 24 * HOUR_MS,
   dataMaxAgeMs: 30 * DAY_MS,
@@ -97,6 +106,7 @@ export const analysisTimingRules: Readonly<Record<AnalysisKind, AnalysisTimingRu
   advice_stock: intradayActionRule,
   advice_position: intradayActionRule,
   advice_strategy_candidate: intradayActionRule,
+  advice_strategy_candidate_after_close: afterCloseStrategyRule,
   advice_market: marketAnalysisRule,
   research_directions: researchAnalysisRule,
   strategy_version_proposal: researchAnalysisRule,

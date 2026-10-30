@@ -280,6 +280,9 @@ export const buildTradingPlanFromAdvice = (input: {
       (advice.entryPriceLow !== undefined &&
         advice.entryPriceHigh !== undefined &&
         entryConditions.length > 0)) &&
+    // 建仓类计划必须至少有一条可核验行情事实，否则空数组会让 every 恒真而错误激活；
+    // 持有/减仓类计划不强制要求行情，但只要有事实就必须全部 available。
+    (!carriesEntryPlan || facts.length > 0) &&
     facts.every((fact) => fact.status === 'available') &&
     !ruleFallback &&
     conflictReason === undefined;
@@ -497,8 +500,10 @@ const run = async (
   if (!syncResult.ok) {
     errors.push({ stockId: accountId, stage: 'holding', reason: errorText(syncResult.error) });
   }
+  // 读取口径按**建议本身的维度**过滤：真实写入方是 record_advice / complete_analysis_job，
+  // 历史 sourceTool 过滤（analyze_position / analyze_strategy_candidate）已无写入方，会恒空。
   const positionAdvicesResult = await ctx.tools.get_advice.execute({
-    sourceTool: 'analyze_position',
+    subjectKind: 'position',
     since: dayStart,
     until: dayEnd,
     includeExpired: true,
@@ -540,7 +545,7 @@ const run = async (
 
   let candidateReviews = 0;
   const candidatesResult = await ctx.tools.get_advice.execute({
-    sourceTool: 'analyze_strategy_candidate',
+    subjectKind: 'stock',
     since: dayStart,
     until: dayEnd,
     includeExpired: true,
@@ -551,8 +556,9 @@ const run = async (
     const holdingStocks = new Set(holdings.map((item) => item.holding.stockId));
     for (const adviceValue of candidatesResult.data.advices) {
       const advice = adviceValue as Advice;
+      // 只有携带已发布运行证据的建议才是「策略候选」；普通个股建议不参与计划。
       const strategy = advice.basedOn.strategy;
-      if (strategy?.accountId !== accountId) continue;
+      if (strategy === undefined || strategy.accountId !== accountId) continue;
       if (advice.validFrom > now || advice.validUntil <= now) continue;
       const stockId = adviceStockId(advice, holdings);
       if (stockId === null) continue;
