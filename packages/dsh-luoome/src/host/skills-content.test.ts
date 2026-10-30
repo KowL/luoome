@@ -28,6 +28,15 @@ const NON_TOOL_BACKTICKS = new Set([
   'schedule_list',
 ]);
 
+/** 技能里可以引用的 analysis context kind：它们是分析口径，不是工具名。 */
+const ANALYSIS_KINDS = new Set([
+  'advice_stock',
+  'advice_position',
+  'advice_market',
+  'advice_strategy_candidate',
+  'advice_strategy_candidate_after_close',
+]);
+
 const EXPECTED_SKILLS = [
   'daily-market-analysis',
   'post-close-review',
@@ -216,7 +225,12 @@ describe('dsh-luoome 打包技能内容', () => {
     for (const skill of skills()) {
       for (const match of skill.content.matchAll(backticked)) {
         const token = match[1] as string;
-        if (token === NATIVE_OPERATION_TOOL || NON_TOOL_BACKTICKS.has(token)) continue;
+        if (
+          token === NATIVE_OPERATION_TOOL ||
+          NON_TOOL_BACKTICKS.has(token) ||
+          ANALYSIS_KINDS.has(token)
+        )
+          continue;
         expect(
           toolRegistry.get(token),
           `${skill.dir} 反引号引用了未知工具名 ${token}`,

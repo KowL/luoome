@@ -47,6 +47,16 @@ whenToUse: 用户问策略为什么入选或未入选、对照和验证有什么
 - 用户取消、执行超时或切换账户时视为未执行，不重试写入。
 - 执行后响应丢失：用 `luoome_operation_status` 按原 operationId 查询，必要时 reconcile=true 核对已有业务回执；它不会重启任务。不重复保存。
 
+## 盘后候选建议（仅在用户明确要求「生成建议」时）
+
+盘后把某次已发布运行的入选结果落成建议，走三步，缺一步都不要写库：
+
+1. **账户级预检**：`evaluate_strategy_candidate_preflight`（只读）。入参 `strategyId` 必填，`runId` 缺省取该策略最新已发布运行；`policy` 缺省读 `StrategySchedule.recommendationPolicy`（必须是 `schemaVersion: 2`，否则工具直接返回配置提示）。逐股看 `status` 与 `reasons`：`eligible` 才能继续；`skipped` 说明账户已有持仓、冷却未过、信号冲突或仓位/行业超限；`unavailable` 说明缺行情、缺组合估值或冷却事实不完整，都要如实告诉用户，不能当成合格。
+2. **冻结事实**：`get_analysis_context`，`kind` 取 `advice_strategy_candidate_after_close`，`subject` 取 `{ kind: 'stock', id }`，`options.strategyRunId` 传第 1 步的 `runId`。该 kind 是盘后口径（24h 写回窗口、7 天数据有效期、不受 15:00 截断）；盘中口径 `advice_strategy_candidate` 在收盘后会直接 `context_expired`，不要混用。
+3. **写回建议**：`luoome_confirmed_operation` 的 `record_advice` policy，提交第 2 步的 `contextId`、结论与 provenance。建议的 `basedOn.strategy` 由冻结事实自动还原（策略、版本、运行、账户、分数与排名），不需要也不要手写；`evidenceFactIds` 只能落在 `context.factIds` 内。
+
+写回后逐股交易计划（trading_plans）才会在盘后计划批次（16:30 之后）消费这条建议；建议不等于计划，也不等于交易。
+
 ## 边界
 
 - 不把有限样本的观察称为严格回测或可复现实验；样本不足时明确写样本不足。

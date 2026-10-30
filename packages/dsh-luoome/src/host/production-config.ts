@@ -69,6 +69,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'list_pending_strategy_observations',
   'get_signal_observation_stats',
   'get_strategy_decision_cycles',
+  'evaluate_strategy_candidate_preflight',
   'get_strategy_reliability_summary',
   'get_strategy_schedule',
   'list_strategy_watchlist_subscriptions',

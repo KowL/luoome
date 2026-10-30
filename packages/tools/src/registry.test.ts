@@ -81,6 +81,7 @@ const EXPECTED_TOOL_NAMES = [
   'run_strategy',
   'prepare_strategy_data',
   'prune_strategy_runs',
+  'evaluate_strategy_candidate_preflight',
   'get_strategy_pit_universe',
   'get_strategy_evaluation_session',
   'list_strategy_evaluation_sessions',
