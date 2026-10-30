@@ -427,6 +427,9 @@ describe('暴露面对账 · 插件面 ↔ DSH 可见集（H5=B 层①②）', (
     // 少数名字**同时**是 read 工具与 operation policy（如 trial_strategy_version、
     // run_strategy_research_comparison，见 production-config.ts:113-114）。它们经 read 面注册，
     // 出现在 schemas() 里是合法的；要钉的是「只作操作目标、没有注册成 DSH 工具」的那批。
+    //
+    // 判据是**名字重叠推断**，已知误判条件：若将来某个 operation policy 名与某个 DSH 自带工具
+    // 重名，它会被当成"已注册"而漏检。要消除这个盲点，得让 operation policy 带显式类别标记。
     const registered = new Set([
       ...fixture.exposedSurfaces.read,
       ...fixture.exposedSurfaces.market,
@@ -441,6 +444,9 @@ describe('暴露面对账 · 插件面 ↔ DSH 可见集（H5=B 层①②）', (
     expect(dshVisible.has('luoome_confirmed_operation')).toBe(false);
   });
 
+  // ⚠️ 本 fixture 下 `extra` **必然为空**（native 模式 + 没挂任何 DSH 自带工具，骨架 T1），
+  // 所以这条只证明两件事：① 差额的归因逻辑本身（有差额就会逐条检查）；② 两条 run_code 反向硬事实。
+  // 它**没有**验证"差额可枚举"——那需要 PTC 变体（骨架 §2.3，本轮不做）。
   it('层②：差额逐条可归因，且 run_code 恒不属插件暴露面', () => {
     const dshVisible = new Set(fixture.ctx.tools.schemas().map((schema) => schema.name));
     const extra = [...dshVisible].filter((name) => !fixture.exposed.has(name));

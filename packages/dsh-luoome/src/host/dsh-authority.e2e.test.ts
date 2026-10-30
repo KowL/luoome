@@ -842,10 +842,30 @@ describe('DSH personal execution and schedule integration with durable facts', (
       );
 
       // (c) 明确排除「不可见」：不可见会报 UNKNOWN_TOOL（dsh-tools ToolNotFoundError）。
-      // `ToolFailure` 的公开类型没有 code（只有 UNKNOWN_TOOL 变体才带），所以在这里窄化读取，
-      // 断言强度不变：仍然要求 code 不等于 'UNKNOWN_TOOL'。
-      const errorCode = (childCall.error as { readonly code?: string } | undefined)?.code;
-      expect(errorCode).not.toBe('UNKNOWN_TOOL');
+      // 实测形状（dsh 0.2.1-rc.2）：`error.info.code === 'UNKNOWN_TOOL'`，**不在 error.code 上**；
+      // 权威拒绝则连 `info` 都没有。骨架写的 `error?.code` 会取到 undefined → 断言恒真 → 假绿。
+      const childFailure = childCall.error as
+        | { readonly message?: string; readonly info?: { readonly code?: string } }
+        | undefined;
+      expect(childFailure?.info?.code).not.toBe('UNKNOWN_TOOL');
+      // 更硬的一条：权威拒绝**根本没有 info**，而 ToolNotFoundError 一定有。
+      expect(childFailure?.info).toBeUndefined();
+
+      // (c-anchor) 正向对照：用一个**确实不存在**的工具名，把 code 通路钉住。
+      // 若 DSH 哪天改了 ToolNotFoundError 的形状，这里会响亮地红，而不是让 (c) 静默退化成恒真。
+      const unknownCall = await fixture.ctx.tools.execute({
+        name: 'luoome_tool_that_does_not_exist',
+        callId: ToolCallId('reconciliation-unknown'),
+        arguments: {},
+        agent: child.agent,
+        signal: new AbortController().signal,
+      });
+      expect(unknownCall.isError).toBe(true);
+      const unknownFailure = unknownCall.error as
+        | { readonly message?: string; readonly info?: { readonly code?: string } }
+        | undefined;
+      expect(unknownFailure?.info?.code).toBe('UNKNOWN_TOOL');
+      expect(unknownFailure?.message).toContain('unknown tool');
 
       // (d) 权威层从未授权：没有任何 approval 发生。
       expect(fixture.approvals).toHaveLength(0);
