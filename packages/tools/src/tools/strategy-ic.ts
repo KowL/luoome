@@ -7,6 +7,7 @@
 //   3. 缺失日进 `skippedDays`，不补 0。
 import {
   computeStrategyIc,
+  isObservableStrategySignal,
   type SignalObservationVintage,
   STRATEGY_IC_MIN_SAMPLE_DAYS,
   type StrategyIcDayInput,
@@ -61,6 +62,11 @@ export const GetStrategyIcOutput = z.object({
   minSampleDays: z.number().int().positive(),
   /** 每个 vintage 一组；不同 vintage 绝不合并。 */
   groups: z.array(VintageSummarySchema),
+  /**
+   * 有评分横截面、但该 run 零信号因而拿不到 vintage 的交易日数。
+   * 这是**标注限制**，不是"统计上算不出来"：IC 只需要分数，信号只用来贴 vintage 标签。
+   */
+  scoreOnlyDays: z.number().int().nonnegative(),
   /** 无法归属 vintage 而被排除的交易日（不猜口径、不补 0）。 */
   skippedDays: z.array(
     z.object({
@@ -137,6 +143,7 @@ export const getStrategyIcTool = defineTool({
       | 'duplicate-day'
       | 'results-missing';
     const skippedDays: { dataAsOf: Date; reason: SkippedReason }[] = [];
+    let scoreOnlyDays = 0;
     const seenDays = new Set<number>();
     for (const run of filtered) {
       const dayKey = run.dataAsOf.getTime();
@@ -167,12 +174,19 @@ export const getStrategyIcTool = defineTool({
       // 反例（曾经的真 bug）：100 个信号只有 1 个有观察时，用那 1 个给整个 run 贴标签
       // = 用 1 个样本给 100 个信号背书。覆盖不全一律 vintage-partial，不猜。
       const observedSignalIds = new Set(observations.map((row) => row.sourceId));
-      const coveredSignals = signals.filter((signal) => observedSignalIds.has(signal.id)).length;
+      // 门禁与写入方契约逐字对齐：写入方只对 isObservableStrategySignal 为真的信号产观察，
+      // 所以分母也用同一谓词（而不是全部信号）——把"碰巧相等"变成"契约相等"。
+      const observableSignals = signals.filter(isObservableStrategySignal);
+      const coveredSignals = observableSignals.filter((signal) =>
+        observedSignalIds.has(signal.id),
+      ).length;
       if (coveredSignals === 0) {
+        // 零信号日：横截面有分数，但没有信号可贴 vintage。这是标注限制，不是算不出来。
+        if (signals.length === 0) scoreOnlyDays += 1;
         skippedDays.push({ dataAsOf: run.dataAsOf, reason: 'vintage-unknown' });
         continue;
       }
-      if (coveredSignals < signals.length) {
+      if (coveredSignals < observableSignals.length) {
         skippedDays.push({ dataAsOf: run.dataAsOf, reason: 'vintage-partial' });
         continue;
       }
@@ -199,6 +213,7 @@ export const getStrategyIcTool = defineTool({
       strategyId: input.strategyId,
       minSampleDays: STRATEGY_IC_MIN_SAMPLE_DAYS,
       groups,
+      scoreOnlyDays,
       skippedDays: skippedDays.sort(
         (left, right) => left.dataAsOf.getTime() - right.dataAsOf.getTime(),
       ),
@@ -208,7 +223,8 @@ export const getStrategyIcTool = defineTool({
         'IR = mean(RankIC) / std(RankIC)，**样本标准差（n−1）、非年化**：25 日样本年化要乘 √252≈15.87，会把噪声放大成看起来很确定的数字。',
         '不同 vintage 分组各自给数，不合并；缺失日不填 0。',
         '停牌超过收益窗口（前后各 10 天）的股票拿不到次日收益，不会进配对——这可能**系统性偏向流动性好的标的**，与回溯轨「可实现换手受容量约束」属同一类偏差。',
-        'vintage 判定要求该 run 全部信号都有观察；覆盖不全（vintage-partial）或口径混合（vintage-mixed）的交易日一律跳过，不用部分样本代表整天。',
+        'vintage 判定要求该 run 全部**可观察**信号都有观察；覆盖不全（vintage-partial）或口径混合（vintage-mixed）的交易日一律跳过，不用部分样本代表整天。',
+        '零信号日（有评分横截面、但没有信号可贴 vintage）的 IC 缺失是**标注限制，不是统计上算不出来**：IC 只需要分数横截面，信号只用来判定 vintage。这类交易日计入 scoreOnlyDays。',
         `有效交易日少于 ${STRATEGY_IC_MIN_SAMPLE_DAYS} 的组返回 unavailable。`,
       ],
     };

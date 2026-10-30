@@ -102,6 +102,10 @@ const stubContext = (options: StubOptions): ToolContext => {
           const total = run?.signalCount ?? run?.vintages.length ?? 0;
           return Array.from({ length: total }, (_, index) => ({
             id: `${runId}:signal:${String(index)}`,
+            // 真实信号必然带 tracking（signal-policy.ts 发射时写入），否则不算可观察。
+            evaluationSnapshot: {
+              tracking: { policyVersion: 1, kind: 'entry', eligible: true },
+            },
           }));
         },
       },
@@ -301,6 +305,53 @@ describe('T19 get_strategy_ic', () => {
     if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
     // 次日收益 = (10+index)/10 − 1，随评分递增 → RankIC = 1；错取 999 会得到别的值
     expect(outcome.data.groups[0]?.days[0]?.rankIc).toBeCloseTo(1, 12);
+  });
+
+  it('零信号日：有评分横截面但无信号 → 计入 scoreOnlyDays（标注限制，不是算不出来）', async () => {
+    const ctx = stubContext({
+      runs: [{ id: 'run-quiet', dataAsOf: new Date('2026-01-05T00:00:00.000Z'), vintages: [] }],
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    expect(outcome.data.groups).toEqual([]);
+    expect(outcome.data.scoreOnlyDays).toBe(1);
+    expect(outcome.data.skippedDays.map((item) => item.reason)).toEqual(['vintage-unknown']);
+    expect(outcome.data.limitations.join('')).toContain('标注限制，不是统计上算不出来');
+  });
+
+  it('非零信号但覆盖不全 → vintage-partial，且不计入 scoreOnlyDays', async () => {
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-partial',
+          dataAsOf: new Date('2026-01-05T00:00:00.000Z'),
+          vintages: ['pit'],
+          signalCount: 100,
+        },
+      ],
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    expect(outcome.data.scoreOnlyDays).toBe(0);
+    expect(outcome.data.skippedDays.map((item) => item.reason)).toEqual(['vintage-partial']);
   });
 
   it('缺次日收益的股票不进配对；整日缺收益则进 missingDays 而不是 0', async () => {
