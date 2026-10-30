@@ -88,6 +88,7 @@ export const STYLE = `
 .luo-root *, .luo-root *::before, .luo-root *::after { box-sizing: border-box; }
 
 .luo-shell { max-width: 1240px; margin: 0 auto; padding: 26px clamp(18px, 3vw, 44px) 56px; }
+.luo-app .luo-shell { padding-top: 0; }
 .luo-root.luo-settings { height: auto; overflow: visible; background: transparent; }
 .luo-settings .luo-shell { padding: 0 0 24px; }
 .luo-settings .luo-title { font-size: 26px; }
@@ -488,7 +489,7 @@ export const STYLE = `
 
 @keyframes luo-shimmer { 100% { transform: translateX(100%); } }
 @keyframes luo-spin { to { transform: rotate(360deg); } }
-.luo-strategies .luo-shell { max-width: 1320px; padding: 22px clamp(16px, 2.5vw, 36px) 36px; }
+.luo-strategies .luo-shell { padding-bottom: 36px; }
 .luo-strategies .luo-head { padding-bottom: 16px; flex-direction: row; align-items: center; gap: 12px; }
 .luo-strategies .luo-head-side { flex-shrink: 0; }
 .luo-strategies .luo-title { margin: 6px 0; font: 600 24px/1.3 var(--lu-sans); }
@@ -536,7 +537,7 @@ export const STYLE = `
   .luo-strategy-modes { gap: 22px; }
 }
 @media (max-width: 600px) {
-  .luo-strategies .luo-shell { padding-inline: 16px; }
+  .luo-strategies .luo-shell { padding-inline: clamp(18px, 3vw, 44px); }
   .luo-strategies .luo-head .luo-eyebrow, .luo-strategies .luo-head .luo-sub { display: none; }
   .luo-strategies .luo-strategy-hero h2 { font-size: 21px; }
   .luo-strategy-heading > .luo-btn { flex-shrink: 0; }
@@ -586,7 +587,7 @@ export const STYLE = `
   .luo-matches-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; font: 10px/1.4 var(--lu-sans); color: var(--lu-ink-3); }
 }
 .luo-root.luo-overview { background-image: none; container: luo-terminal / inline-size; }
-.luo-overview .luo-shell { max-width: none; padding: 14px 16px 28px; }
+.luo-overview .luo-shell { padding-bottom: 28px; }
 .luo-overview .luo-head { gap: 12px; align-items: center; padding-bottom: 12px; }
 .luo-overview .luo-eyebrow { font-size: 10px; letter-spacing: .08em; }
 .luo-overview .luo-title { margin: 6px 0 3px; font: 600 20px/1.2 var(--lu-sans); }
@@ -620,10 +621,11 @@ export const STYLE = `
 .luo-market-tabs button.is-active { color: var(--lu-accent); background: var(--lu-accent-soft); }
 .luo-market-tabs button:focus-visible, .luo-sort:focus-visible, .luo-market-scroll:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
 /* 业务应用外壳：侧栏单入口，主区顶部标签切换五个视图；窄屏横向滚动，不折行。 */
-.luo-app-tabs { display: flex; gap: 2px; align-items: stretch; overflow-x: auto; scrollbar-width: none; position: sticky; top: 0; z-index: 6; margin-bottom: 20px; border-bottom: 1px solid var(--lu-line); background: var(--lu-bg); }
+.luo-app-tabs { display: flex; gap: 2px; align-items: stretch; overflow-x: auto; scrollbar-width: none; position: sticky; top: 0; z-index: 6; padding-top: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--lu-line); background: var(--lu-bg); }
 .luo-app-tabs::-webkit-scrollbar { display: none; }
 .luo-app-tab { display: flex; align-items: center; gap: 7px; padding: 11px 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--lu-ink-2); font: 500 13px var(--lu-sans); white-space: nowrap; cursor: pointer; }
 .luo-app-tab svg { color: var(--lu-ink-3); }
+.luo-app-tab:first-child { padding-left: 0; }
 .luo-app-tab.is-active { border-bottom-color: var(--lu-accent); color: var(--lu-accent); background: var(--lu-accent-soft); }
 .luo-app-tab.is-active svg { color: var(--lu-accent); }
 .luo-app-tab:hover { background: var(--lu-hover); }
@@ -674,7 +676,7 @@ export const STYLE = `
   .luo-terminal-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; align-items: start; }
 }
 @container luo-terminal (max-width: 580px) {
-  .luo-overview .luo-shell { padding: 12px 10px 24px; }
+  .luo-overview .luo-shell { padding-bottom: 24px; }
   .luo-overview .luo-head { align-items: start; flex-direction: column; }
   .luo-overview .luo-head-side { justify-content: start; }
   .luo-overview .luo-grid.is-index { grid-template-columns: repeat(2, minmax(0, 1fr)); }

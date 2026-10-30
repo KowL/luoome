@@ -2,7 +2,7 @@
 //
 // 视图各自负责取数与展示，标签只做视图切换：未激活的视图不挂载，因此不会发起
 // 状态请求，看盘页的定时刷新也只在该视图激活时运行。
-import { createElement as h, useCallback, useState } from 'react';
+import { createElement as h, useCallback, useEffect, useState } from 'react';
 
 import { OverviewPanel } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -147,6 +147,10 @@ export function App(props) {
     writeStoredView(globalThis.sessionStorage, next);
   }, []);
   const active = VIEWS.find((view) => view.id === viewId) ?? VIEWS[0];
+  // 切换视图后回到顶部，否则新视图会停在上一视图的滚动位置。
+  useEffect(() => {
+    globalThis.document?.querySelector('.luo-app')?.scrollTo({ top: 0 });
+  }, [viewId]);
   return h(
     Panel,
     { className: cx('luo-app', active.className) },

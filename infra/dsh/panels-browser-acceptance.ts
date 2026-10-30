@@ -1103,6 +1103,33 @@ const runAcceptance = async () => {
     `document.querySelector('[data-luoome-view="overview"][aria-current="page"]') !== null`,
     '回到看盘视图',
   );
+  // 布局一致性：切换视图时壳的列宽与左右内边距不变，标签栏吸顶，切换后回到顶部。
+  const shellGeometry = async () =>
+    page.evaluate<string>(`(() => {
+      const shell = document.querySelector('.luo-app .luo-shell');
+      const style = getComputedStyle(shell);
+      const rect = shell.getBoundingClientRect();
+      return JSON.stringify({
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        padLeft: style.paddingLeft,
+        padRight: style.paddingRight,
+      });
+    })()`);
+  const overviewGeometry = await shellGeometry();
+  await page.evaluate(`document.querySelector('[data-luoome-view="strategies"]')?.click()`);
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="strategies"][aria-current="page"]') !== null`,
+    '切到策略视图',
+  );
+  const strategyGeometry = await shellGeometry();
+  if (overviewGeometry !== strategyGeometry)
+    throw new Error(`切换视图后壳几何发生变化：${overviewGeometry} vs ${strategyGeometry}`);
+  await clickPanel('看盘');
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="overview"][aria-current="page"]') !== null`,
+    '回到看盘视图',
+  );
   await page.waitFor(`document.body.innerText.includes('核心指数')`, '看盘面板');
   await page.waitFor(
     `document.body.innerText.includes(${JSON.stringify(fixtureInfo.stock.name)})`,
@@ -1969,6 +1996,34 @@ const runAcceptance = async () => {
   const refreshedText = await page.evaluate<string>('document.body.innerText');
   if (!refreshedText.includes(fixtureInfo.stock.name) || !refreshedText.includes('核心指数'))
     throw new Error('刷新后 DOM 与事实不一致');
+
+  // 5.1) 布局：标签栏吸顶，切换视图回到顶部。矮视口保证看盘内容可滚动。
+  await page.setViewport(1320, 620, false);
+  await new Promise((done) => setTimeout(done, 300));
+  const scrollable = await page.evaluate<number>(
+    `document.querySelector('.luo-app').scrollHeight - document.querySelector('.luo-app').clientHeight`,
+  );
+  if (scrollable < 100) throw new Error(`看盘视图内容不足以验证吸顶：${String(scrollable)}px`);
+  await page.evaluate(`document.querySelector('.luo-app').scrollTop = 600`);
+  await new Promise((done) => setTimeout(done, 200));
+  const stickyGap = await page.evaluate<number>(
+    `Math.round(document.querySelector('.luo-app-tabs').getBoundingClientRect().top - document.querySelector('.luo-app').getBoundingClientRect().top)`,
+  );
+  if (Math.abs(stickyGap) > 2) throw new Error(`标签栏未吸顶，偏移 ${String(stickyGap)}px`);
+  await clickPanel('持仓');
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="positions"][aria-current="page"]') !== null`,
+    '切到持仓视图',
+  );
+  const scrollTop = await page.evaluate<number>(`document.querySelector('.luo-app').scrollTop`);
+  if (scrollTop > 2) throw new Error(`切换视图后未回到顶部，scrollTop=${String(scrollTop)}`);
+  await clickPanel('看盘');
+  await page.waitFor(
+    `document.querySelector('[data-luoome-view="overview"][aria-current="page"]') !== null`,
+    '回到看盘视图',
+  );
+  await page.setViewport(1320, 900, false);
+  await new Promise((done) => setTimeout(done, 300));
 
   // 6) 移动端基本可读：窄屏侧栏自动折叠为图标 rail（aria-label 仍可定位），
   //    通过 rail 按钮切换面板，主面板仍可见且无横向溢出。
