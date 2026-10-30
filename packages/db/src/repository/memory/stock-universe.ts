@@ -153,6 +153,23 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
     );
   }
 
+  async latestSyncRun(input?: {
+    readonly source?: string;
+    readonly coverage?: MarketCoverage;
+  }): Promise<StockUniverseSyncRun | null> {
+    return (
+      [...this.runs.values()]
+        .filter(
+          (run) =>
+            (input?.source === undefined || run.source === input.source) &&
+            (input?.coverage === undefined || run.coverage === input.coverage),
+        )
+        .sort(
+          (a, b) => b.startedAt.getTime() - a.startedAt.getTime() || b.id.localeCompare(a.id),
+        )[0] ?? null
+    );
+  }
+
   async listCurrent(input: {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';

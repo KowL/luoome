@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 const SEED = new URL('./profile-seed.mjs', import.meta.url).pathname;
 const SKILLS = [
   'daily-market-analysis',
+  'decision-journal',
+  'luoome-batch',
+  'morning-brief',
   'post-close-review',
+  'stock-deep-dive',
   'strategy-lab',
   'strategy-result-review',
 ];

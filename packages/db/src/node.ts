@@ -10,6 +10,13 @@ import { applyNodePragmas, drizzleNodeSqlite } from './node-sqlite-driver.js';
 import { createReposFromDatabase } from './repositories.js';
 import { type Schema, schema } from './schema/index.js';
 
+// 数据导入 manifest 是纯常量契约（无 driver 依赖）：host 装配、备份校验与验收共用同一份表分类。
+export {
+  DATA_IMPORT_BUSINESS_TABLES,
+  DATA_IMPORT_FTS_SHADOW_TABLES,
+  DATA_IMPORT_MANIFEST,
+} from './data-import-manifest.js';
+export { readDataImportStorageSchema, readSqliteImportSnapshot } from './node-data-import.js';
 export { ensureSchema };
 
 /** Node 入口的数据库句柄类型（绑定本包 schema）。 */
@@ -19,6 +26,8 @@ export type NodeDrizzleDb = DrizzleDatabase<Schema>;
 export interface NodeDrizzleReposHandle {
   readonly repos: RepositoryRegistry;
   readonly db: NodeDrizzleDb;
+  /** 同一连接的原生句柄：只读用途（schema 探测、一致性 backup），不得绕过仓储写业务事实。 */
+  readonly sqlite: DatabaseSync;
   readonly close: () => void;
 }
 
@@ -43,5 +52,5 @@ export const createNodeDrizzleRepos = (
     sqlite.close();
     throw error;
   }
-  return { repos: createReposFromDatabase(db), db, close: () => sqlite.close() };
+  return { repos: createReposFromDatabase(db), db, sqlite, close: () => sqlite.close() };
 };

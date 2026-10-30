@@ -284,7 +284,7 @@ ResearchNote
 - `thesis` 版本语义：编辑研究假设不是原地改，而是插入一条新 `thesis` 行——新行 `active = true`、`supersedesId` 指向旧行，旧行 `active` 置 `false`；同一股票任意时刻最多一条 active thesis，历史版本全部保留并进入时间线。非 thesis 笔记原地编辑，不做版本。
 - `source-summary` 必须保留 URL、抓取时间和引用；无法验证来源时标记为 unverified。
 - 删除笔记不删除关联的 Advice、WatchTrigger 或交易事实。
-- `ResearchNote` 是早期 `list_notes` / `add_note` 需求的正式落地形态（`kind = note` 对应普通笔记），不再新增平行的 Note 实体；外部 Agent 通过 MCP discovery 获取当前 `list_research_notes` / `add_research_note` 等实际工具。
+- `ResearchNote` 是早期 `list_notes` / `add_note` 需求的正式落地形态（`kind = note` 对应普通笔记），不再新增平行的 Note 实体；外部接入通过 DSH 插件获取当前 `list_research_notes` / `add_research_note` 等实际工具（stdio MCP 入口与 `packages/mcp` 已随 REQ-M2-03 删除，工具库存以 registry 与插件 descriptor 为准）。
 
 ### 6.2 公司事件日历
 

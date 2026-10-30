@@ -17,8 +17,106 @@ import {
   makeWatchRun,
   makeWatchTrigger,
 } from './repository/contract-tests.js';
+import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
 import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
+
+const SIGNAL_VINTAGE_MIGRATION_ID = 'm1-06-signal-observation-vintage-v1';
+const LEGACY_OBSERVATION_BASELINE_MS = 1782748800000;
+const LEGACY_OBSERVATION_PROVENANCE = '{"kind":"legacy-fixture"}';
+
+type LegacySignalObservationSeed = {
+  readonly id: string;
+  readonly sourceKind: 'strategy-signal' | 'tactic-signal' | 'watch-trigger';
+  readonly horizon: 't1' | 't3' | 't5' | 't20';
+};
+
+type SignalObservationVintageRow = {
+  id: string;
+  source_kind: string;
+  horizon: string;
+  status: string;
+  vintage: string;
+};
+
+type SignalVintageMigrationRecord = {
+  id: string;
+  applied_at: number;
+  details_json: string;
+};
+
+type DrizzleHandle = ReturnType<typeof createDrizzleRepos>;
+
+/**
+ * 造一个 M1-06 之前的 signal_observations：既没有 vintage 列，也没有 due_at / attempt_count
+ * 等后补列。迁移必须完全靠启动时的 ensureColumn + 回填把列和数据补齐。
+ */
+const seedLegacySignalObservationDatabase = (
+  rows: readonly LegacySignalObservationSeed[],
+): { dir: string; dbPath: string } => {
+  const dir = mkdtempSync(join(tmpdir(), 'luoome-signal-vintage-migration-'));
+  const dbPath = join(dir, 'legacy.sqlite');
+  const sqlite = new Database(dbPath);
+  try {
+    sqlite.exec(`
+      CREATE TABLE signal_observations (
+        id TEXT PRIMARY KEY,
+        source_kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        stock_id TEXT NOT NULL,
+        baseline_price REAL,
+        baseline_at INTEGER,
+        horizon TEXT NOT NULL,
+        close_price REAL,
+        return_pct REAL,
+        max_favorable_excursion_pct REAL,
+        max_adverse_excursion_pct REAL,
+        benchmark_return_pct REAL,
+        benchmark_status TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provenance TEXT NOT NULL,
+        unavailable_reason TEXT,
+        observed_at INTEGER
+      )
+    `);
+    const insert = sqlite.prepare(`
+      INSERT INTO signal_observations
+        (id, source_kind, source_id, stock_id, baseline_price, baseline_at, horizon,
+         benchmark_status, status, provenance, observed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of rows) {
+      insert.run(
+        row.id,
+        row.sourceKind,
+        `source-${row.id}`,
+        '600519.SH',
+        1500,
+        LEGACY_OBSERVATION_BASELINE_MS,
+        row.horizon,
+        'unavailable',
+        'pending',
+        LEGACY_OBSERVATION_PROVENANCE,
+        LEGACY_OBSERVATION_BASELINE_MS,
+      );
+    }
+  } finally {
+    sqlite.close();
+  }
+  return { dir, dbPath };
+};
+
+const signalObservationVintageRows = (handle: DrizzleHandle): SignalObservationVintageRow[] =>
+  handle.db.all<SignalObservationVintageRow>(
+    sql`SELECT id, source_kind, horizon, status, vintage FROM signal_observations ORDER BY id`,
+  );
+
+const signalVintageMigrationRecords = (handle: DrizzleHandle): SignalVintageMigrationRecord[] =>
+  handle.db.all<SignalVintageMigrationRecord>(
+    sql`SELECT id, applied_at, details_json FROM schema_migrations
+        WHERE id = ${SIGNAL_VINTAGE_MIGRATION_ID}
+        ORDER BY applied_at`,
+  );
 
 describe('createDrizzleRepos / ensureSchema', () => {
   it('signal state 表从存量库幂等创建，重复迁移保留独立状态与复合主键', async () => {
@@ -576,6 +674,8 @@ describe('createDrizzleRepos / ensureSchema', () => {
           (value as Record<PropertyKey, unknown>)[drizzleTableMarker] === true,
       );
       expect(tables.length).toBeGreaterThanOrEqual(50);
+      // T48 导入回执表必须在这张逐列 DDL↔Drizzle 清单里，不能只在迁移里出现。
+      expect(tables.map(([exportName]) => exportName)).toContain('dataImportReceipts');
       for (const [exportName, table] of tables) {
         const config = getTableConfig(table as Parameters<typeof getTableConfig>[0]);
         const quotedTable = JSON.stringify(config.name);
@@ -595,6 +695,70 @@ describe('createDrizzleRepos / ensureSchema', () => {
           );
         }
       }
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('生产装配在 Drizzle registry 上暴露 dataImport 仓储', () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      expect(handle.repos.dataImport).toBeInstanceOf(DrizzleDataImportRepository);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('data_import_receipts 启动迁移幂等，列/类型/主键与 Drizzle 一致且保留回执', () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const config = getTableConfig(schema.dataImportReceipts);
+      const primaryKeyColumns = config.primaryKeys.flatMap((key) =>
+        key.columns.map((column) => column.name),
+      );
+      const columns = handle.db.all<{
+        name: string;
+        type: string;
+        notnull: number;
+        pk: number;
+      }>(sql.raw(`PRAGMA table_xinfo(${JSON.stringify(config.name)})`));
+      expect(
+        columns.map((column) => ({
+          name: column.name,
+          type: column.type.toLowerCase(),
+          notNull: column.notnull === 1,
+          primaryKey: column.pk,
+        })),
+      ).toEqual(
+        Object.values(config.columns).map((column) => ({
+          name: column.name,
+          type: column.getSQLType(),
+          notNull: column.notNull,
+          primaryKey: primaryKeyColumns.indexOf(column.name) + 1,
+        })),
+      );
+      expect(columns.filter((column) => column.pk > 0).map((column) => column.name)).toEqual([
+        'user_id',
+        'account_id',
+        'request_id',
+      ]);
+      expect(
+        handle.db
+          .all<{ sql: string }>(
+            sql`SELECT sql FROM sqlite_master WHERE name = 'data_import_receipts'`,
+          )[0]
+          ?.sql.replace(/\s+/g, ' ')
+          .trim(),
+      ).toBe("CREATE TABLE data_import_receipts ( user_id TEXT NOT NULL, account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, archive_digest TEXT NOT NULL, original_request_id TEXT NOT NULL, committed_at INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (user_id, account_id, request_id) )");
+      handle.db.run(
+        sql`INSERT INTO data_import_receipts (user_id,account_id,request_id,request_hash,archive_digest,original_request_id,committed_at,result_json)
+          VALUES ('u','a','r','${'a'.repeat(64)}','${'b'.repeat(64)}','r',1000,'{}')`,
+      );
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      expect(
+        handle.db.all<{ request_id: string }>(sql`SELECT request_id FROM data_import_receipts`),
+      ).toEqual([{ request_id: 'r' }]);
     } finally {
       handle.close();
     }
@@ -1076,6 +1240,221 @@ describe('createDrizzleRepos / ensureSchema', () => {
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('旧库 signal_observations 缺 vintage 列时启动迁移把 t20 与历史来源回填为 legacy', async () => {
+    const { dir, dbPath } = seedLegacySignalObservationDatabase([
+      { id: 'retired-horizon', sourceKind: 'strategy-signal', horizon: 't20' },
+      { id: 'legacy-source', sourceKind: 'tactic-signal', horizon: 't1' },
+      { id: 'forward-looking', sourceKind: 'strategy-signal', horizon: 't1' },
+    ]);
+    try {
+      const handle = createDrizzleRepos(dbPath);
+      try {
+        const columns = handle.db
+          .all<{ name: string }>(sql`PRAGMA table_info(signal_observations)`)
+          .map((column) => column.name);
+        expect(columns).toContain('vintage');
+
+        expect(signalObservationVintageRows(handle)).toEqual([
+          {
+            id: 'forward-looking',
+            source_kind: 'strategy-signal',
+            horizon: 't1',
+            status: 'pending',
+            vintage: 'pit',
+          },
+          {
+            id: 'legacy-source',
+            source_kind: 'tactic-signal',
+            horizon: 't1',
+            status: 'pending',
+            vintage: 'legacy',
+          },
+          {
+            id: 'retired-horizon',
+            source_kind: 'strategy-signal',
+            horizon: 't20',
+            status: 'pending',
+            vintage: 'legacy',
+          },
+        ]);
+
+        // 仓库读取层看到的也是同一个口径，而不是只在裸 SQL 里对。
+        expect(await handle.repos.signalObservation.findById('retired-horizon')).toMatchObject({
+          vintage: 'legacy',
+          horizon: 't20',
+        });
+        expect(await handle.repos.signalObservation.findById('legacy-source')).toMatchObject({
+          vintage: 'legacy',
+          sourceKind: 'tactic-signal',
+        });
+        expect(await handle.repos.signalObservation.findById('forward-looking')).toMatchObject({
+          vintage: 'pit',
+          horizon: 't1',
+        });
+
+        const records = signalVintageMigrationRecords(handle);
+        expect(records).toHaveLength(1);
+        expect(JSON.parse(records[0]?.details_json ?? '{}')).toMatchObject({
+          demotedByHorizon: 1,
+          demotedBySourceKind: 1,
+          vintageCounts: { legacy: 2, pit: 1 },
+        });
+      } finally {
+        handle.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('signal_observations vintage 回填幂等：重复启动不改动已标注行与迁移记录', () => {
+    const { dir, dbPath } = seedLegacySignalObservationDatabase([
+      { id: 'retired-horizon', sourceKind: 'strategy-signal', horizon: 't20' },
+      { id: 'legacy-source', sourceKind: 'tactic-signal', horizon: 't3' },
+      { id: 'forward-looking', sourceKind: 'watch-trigger', horizon: 't1' },
+    ]);
+    const expectedRows: SignalObservationVintageRow[] = [
+      {
+        id: 'forward-looking',
+        source_kind: 'watch-trigger',
+        horizon: 't1',
+        status: 'pending',
+        vintage: 'pit',
+      },
+      {
+        id: 'legacy-source',
+        source_kind: 'tactic-signal',
+        horizon: 't3',
+        status: 'pending',
+        vintage: 'legacy',
+      },
+      {
+        id: 'retired-horizon',
+        source_kind: 'strategy-signal',
+        horizon: 't20',
+        status: 'pending',
+        vintage: 'legacy',
+      },
+    ];
+    let firstAppliedAt: number | undefined;
+    try {
+      const first = createDrizzleRepos(dbPath);
+      try {
+        const baselineRows = signalObservationVintageRows(first);
+        const baselineRecords = signalVintageMigrationRecords(first);
+        expect(baselineRows).toEqual(expectedRows);
+        expect(baselineRecords).toHaveLength(1);
+        firstAppliedAt = baselineRecords[0]?.applied_at;
+        expect(firstAppliedAt).toEqual(expect.any(Number));
+
+        // 同一连接上再跑两次启动迁移：不报错、不重写已标注行、不重复记账。
+        ensureSchema(first.db);
+        ensureSchema(first.db);
+        expect(signalObservationVintageRows(first)).toEqual(baselineRows);
+        expect(signalVintageMigrationRecords(first)).toEqual(baselineRecords);
+      } finally {
+        first.close();
+      }
+
+      // 第二次「启动」：重开同一个库文件。
+      const second = createDrizzleRepos(dbPath);
+      try {
+        expect(signalObservationVintageRows(second)).toEqual(expectedRows);
+        const secondRecords = signalVintageMigrationRecords(second);
+        expect(secondRecords).toHaveLength(1);
+        expect(secondRecords[0]?.applied_at).toBe(firstAppliedAt);
+        expect(JSON.parse(secondRecords[0]?.details_json ?? '{}')).toMatchObject({
+          demotedByHorizon: 1,
+          demotedBySourceKind: 1,
+          vintageCounts: { legacy: 2, pit: 1 },
+        });
+      } finally {
+        second.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('vintage 回填只降级默认池：restated 行同时命中 t20 与历史来源也保持 restated', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      // restated-declared 一条行同时命中两条降级条件的所有字段：restated + t20 + tactic-signal。
+      // 只要 guard 写成 `vintage <> 'legacy'`，它就会被静默折成 legacy——用迁移推断覆盖掉
+      // 「这条是历史重算口径」的刻意声明。pit-retired / pit-legacy-source 是同批必须被降级的
+      // 对照样本：证明迁移确实跑过，restated 没被改是「被 guard 排除」而不是「迁移没执行」。
+      handle.db.run(sql`
+        INSERT INTO signal_observations
+          (id, source_kind, source_id, stock_id, baseline_price, baseline_at, horizon, vintage,
+           benchmark_status, status, provenance, observed_at)
+        VALUES
+          ('restated-declared', 'tactic-signal', 'source-restated-declared', '600519.SH', 1500,
+           ${LEGACY_OBSERVATION_BASELINE_MS}, 't20', 'restated', 'unavailable', 'pending',
+           ${LEGACY_OBSERVATION_PROVENANCE}, ${LEGACY_OBSERVATION_BASELINE_MS}),
+          ('pit-retired', 'strategy-signal', 'source-pit-retired', '600519.SH', 1500,
+           ${LEGACY_OBSERVATION_BASELINE_MS}, 't20', 'pit', 'unavailable', 'pending',
+           ${LEGACY_OBSERVATION_PROVENANCE}, ${LEGACY_OBSERVATION_BASELINE_MS}),
+          ('pit-legacy-source', 'tactic-signal', 'source-pit-legacy-source', '600519.SH', 1500,
+           ${LEGACY_OBSERVATION_BASELINE_MS}, 't5', 'pit', 'unavailable', 'pending',
+           ${LEGACY_OBSERVATION_PROVENANCE}, ${LEGACY_OBSERVATION_BASELINE_MS})
+      `);
+      // 前置事实：确实存在一行「显式 restated 且落在降级集合里」，因此下面的保持 restated 非空断言。
+      expect(
+        handle.db.all(sql`
+          SELECT count(*) AS rows FROM signal_observations
+          WHERE vintage = 'restated' AND (horizon = 't20' OR source_kind = 'tactic-signal')
+        `),
+      ).toEqual([{ rows: 1 }]);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      expect(signalObservationVintageRows(handle)).toEqual([
+        {
+          id: 'pit-legacy-source',
+          source_kind: 'tactic-signal',
+          horizon: 't5',
+          status: 'pending',
+          vintage: 'legacy',
+        },
+        {
+          id: 'pit-retired',
+          source_kind: 'strategy-signal',
+          horizon: 't20',
+          status: 'pending',
+          vintage: 'legacy',
+        },
+        {
+          id: 'restated-declared',
+          source_kind: 'tactic-signal',
+          horizon: 't20',
+          status: 'pending',
+          vintage: 'restated',
+        },
+      ]);
+      // 两条 UPDATE 都仍在改默认池：horizon 一条、source_kind 一条，各降级 1 行。
+      expect(
+        JSON.parse(signalVintageMigrationRecords(handle)[0]?.details_json ?? '{}'),
+      ).toMatchObject({ demotedByHorizon: 1, demotedBySourceKind: 1 });
+      // 仓库读取层看到同一口径：刻意声明的 restated 不被迁移推断改写。
+      expect(await handle.repos.signalObservation.findById('restated-declared')).toMatchObject({
+        vintage: 'restated',
+        horizon: 't20',
+        sourceKind: 'tactic-signal',
+      });
+      expect(await handle.repos.signalObservation.findById('pit-retired')).toMatchObject({
+        vintage: 'legacy',
+        horizon: 't20',
+      });
+      expect(await handle.repos.signalObservation.findById('pit-legacy-source')).toMatchObject({
+        vintage: 'legacy',
+        sourceKind: 'tactic-signal',
+      });
+    } finally {
+      handle.close();
     }
   });
 });

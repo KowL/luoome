@@ -1,3 +1,4 @@
+import type { DataImportStagingAdapter } from './data-import.js';
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
 import type {
@@ -289,6 +290,11 @@ export interface ToolContext {
   };
   /** Phase 3 P3-1：显式基本面数据 adapter；未注入时同步入口保持 unavailable。 */
   readonly fundamentalData?: FundamentalDataAdapterLike;
+  /**
+   * T48：专用有界上传的暂存读取器。只在 DSH 插件 host 装配时注入；未注入时
+   * 导入 tool 返回 unavailable。暂存文件的创建/清理属于 host 载体 IO，不进 tools。
+   */
+  readonly dataImport?: DataImportStagingAdapter;
 }
 
 export type AShareSentimentManagerResult =

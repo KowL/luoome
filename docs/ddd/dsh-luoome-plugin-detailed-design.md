@@ -9,7 +9,7 @@
 
 最终业务执行进入 DSH Node 进程，面板不再逐请求启动 Bun CLI；工作台保留首页、持仓、复盘、策略、设置五页。后台工作随所属 DSH 进程退出而停止，切换页面、窗口隐藏和 SSE 断开不影响已启用的盯盘。
 
-已存在的资产包括三个 DSH 只读面板、独立 profile、Web 四个 MCP 实例（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）与手动 worker、分析事实包/队列、决策回执、批处理工具与业务租约。Node SQLite 目前只有 spike；已有只读/操作内核、持久确认、无模型预检与 Web 宿主装配。隔离 profile 已接官方认证、SessionController 和审批组件，正式 Node 数据装配尚未完成。实现必须复用这些资产，而不是另造分析任务状态机。
+已存在的资产包括三个 DSH 只读面板、独立 profile、分析事实包/队列、决策回执、批处理工具与业务租约；曾存在的 Web 四个 MCP 实例（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）与手动 worker 已于 M2-03 删除。Node SQLite 目前只有 spike；已有只读/操作内核、持久确认、无模型预检与 Web 宿主装配。隔离 profile 已接官方认证、SessionController 和审批组件，正式 Node 数据装配尚未完成。实现必须复用这些资产，而不是另造分析任务状态机。
 
 | 现有入口 | 目标 | 退役前要求 |
 |---|---|---|
@@ -224,7 +224,7 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
   再求值基线和候选；相同 stockIds 不是同一事实快照的证明。返回输入 hash、时间与可复现限制，
   非持久化试跑不会替换 published operational current 或同步 Watchlist。
 - 数据预检按定义字段、前序窗口、股票和日期读取真实保留覆盖，分开说明即时试跑、历史逐日评估
-  与严格回测资格。未知、部分覆盖和无历史不能转成零值或空成功；在线源仍需实际请求验证。
+  与组合回测资格。未知、部分覆盖和无历史不能转成零值或空成功；在线源仍需实际请求验证。
 - 逐股解释复用领域结果分类和 scoring breakdown，保留入选、规则/排名临界、未入选、数据缺失，
   规则值/门槛和贡献来自工具；客户端不重新选股或计算收益。
 - 历史任务复用 evaluation session、逐日 checkpoint 与 replay workflow，进度和取消独立查询。
@@ -344,13 +344,13 @@ Strategy/Experiment 领域聚合。浏览器保留界面状态和恢复身份，
 - **配置与接线**：`production-config.ts` 新增独立 `market` 配置块（allowlist/denylist/timeoutMs，exposeResearch 固定 false），与 read allowlist 分离且冻结；`production.ts` 在任何 IO 前做 market 能力对账，`ProductionHost` 暴露 `market`/`registerMarket`/`invokeMarket`；`apply` 分开注册/撤销 read 与 market 并复用 owner/top-level guard，装配失败回滚已注册工具、路由与 DB 连接。`/api/luoome/call` 仍只读（对 `fetch_quote` 返回 403）。
 - **测试/验收**：新增 `market-surface.test.ts` 19 项；`production.test.ts` 扩到 15 项（read/market 独立配置、误配 IO 前拒绝、空名单、分开注册、注册失败回滚、dispose 拒绝、静态依赖图）。`test:dsh-luoome` → 10 文件 77 项 + Bun e2e 12 项通过；`test` 277 文件/2602 项通过；`test:plugin-install` 扩展断言 read 45 / market 5、market 配置冻结、HTTP `/call` 调 external 返回 403、无 MCP/Bun CLI/worker/queue probe、产物无 forbidden needle。
 - **M2a-followup（同日完成）**：`fetch_news` 的 handler 只调用第三方新闻源、不写库/不发通知，按既有副作用语义由 `read` 修正为 `external`；MCP 默认 read 面不再包含它（需 `LUOOME_EXPOSE_EXTERNAL=true` opt-in），dsh-luoome market 面默认名单补入（5→6 项）。`fetch_sector_quotes` 当时保持 read；现已随看盘行业排行调整为 external。同步更新 registry/MCP 默认暴露面测试、market-surface/skills-content 断言与 plugin-install 验收。
-- **未覆盖/遗留**：market 工具的模型侧真实调用需随 M2b/M3 的真实 Agent + 审批链路验收；`skills/luoome/references/tools.md` 中 fetch_news 的 “Pure read-only” 措辞可在文档清理轮改为 “read-only, external opt-in”。
+- **未覆盖/遗留**：market 工具的模型侧真实调用需随 M2b/M3 的真实 Agent + 审批链路验收；fetch_news 的 “Pure read-only” 措辞原记录在独立 Skill 目录的 `references/tools.md`，该目录已随 M2-03 收口整体删除，工具库存统一以 registry 与插件 descriptor 为准。
 
 ### 9.7 M3 四旅程技能内容实施记录（2026-10-24）
 
 > 需求来源：需求文档 §3、§8。本切片只产出技能内容与内容校验；注册/打包接线在后续 M3/M4 切片完成。
 
-- `packages/dsh-luoome/skills/` 新增四个纯插件投研技能：`strategy-lab`（读策略/版本/DSL/数据健康 → 未持久化草案 → 确定性校验 → 有限样本试跑 → 展示 diff/规则/样本/缺口/试跑结果 → 逐项原生审批 create/version/validate/publish，创建与校验不隐含发布）、`strategy-result-review`（published operational run/结果/信号/观察/insight facts 分层解释，结论引用真实 run/version/fact id，不把观察称严格回测、不承诺收益；只解释不落库；改版走 strategy-lab；可选经审批保存 proposal）、`post-close-review`（Advice 快照、DecisionReview、显式 Trade、观察、绩效、校准分写；不按同股/同日/后市涨跌推断跟随、不伪造盈亏；复盘笔记经原生 Operation，仅用户明确反馈后经 record_advice_outcome 审批，AI 不代填 outcome）、`daily-market-analysis`（经精确 market external 刷新指数/情绪/要闻/行情 + 本地事实，保留 source/dataAsOf/unavailable/partial；个人上下文不推断全市场；日常留会话不伪造 Report；形成 Advice 需另取有效 AnalysisContext 并审批）。
+- `packages/dsh-luoome/skills/` 新增四个纯插件投研技能：`strategy-lab`（读策略/版本/DSL/数据健康 → 未持久化草案 → 确定性校验 → 有限样本试跑 → 展示 diff/规则/样本/缺口/试跑结果 → 逐项原生审批 create/version/validate/publish，创建与校验不隐含发布）、`strategy-result-review`（published operational run/结果/信号/观察/insight facts 分层解释，结论引用真实 run/version/fact id，不把观察称组合回测、不承诺收益；只解释不落库；改版走 strategy-lab；可选经审批保存 proposal）、`post-close-review`（Advice 快照、DecisionReview、显式 Trade、观察、绩效、校准分写；不按同股/同日/后市涨跌推断跟随、不伪造盈亏；复盘笔记经原生 Operation，仅用户明确反馈后经 record_advice_outcome 审批，AI 不代填 outcome）、`daily-market-analysis`（经精确 market external 刷新指数/情绪/要闻/行情 + 本地事实，保留 source/dataAsOf/unavailable/partial；个人上下文不推断全市场；日常留会话不伪造 Report；形成 Advice 需另取有效 AnalysisContext 并审批）。
 - **内容约束**：四技能不含 `mcp__`/`luoome-worker`/队列管理工具，工具名与 `packages/tools/src/registry.ts` 对账；所有写入统一经 `luoome_confirmed_operation` 直接执行（个人版零人工审批）；模型自报 approved/callId/taskId 不构成授权；context 失效重取一次并重新核对、不重放；trade 永不调用。
 - **校验**：`packages/dsh-luoome/src/host/skills-content.test.ts`（7 项）验证四目录/frontmatter/工具名副作用对账/无 MCP 前缀/审批与 outcome 约束/四旅程覆盖点/context 与 trade 边界。`bun --no-env-file x vitest run packages/dsh-luoome` 10 文件 77 项通过；typecheck/lint/`git diff --check` 通过。
 - **未覆盖/遗留**：技能注册（`ctx.skills.register`）、`package.json files` 与安装路径纳入后续 M3 接线/M4 打包；`fetch_news` 分类修正后每日市场分析技能需确认其可达性；旧 `.dsh/skills` 保留至 P5 退役。

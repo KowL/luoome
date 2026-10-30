@@ -183,6 +183,14 @@ export const OBSERVATION_STATUS = {
   complete: '已完成',
   unavailable: '不可用',
 };
+/**
+ * 时点口径角标：pit 是默认口径且占多数，不占位；restated/legacy 必须让用户一眼看见，
+ * 否则回溯补算数据会被当成前瞻观察读。
+ */
+export const OBSERVATION_VINTAGE = {
+  restated: { label: 'restated', tone: 'warn', hint: '事后用修订数据回溯补算，只进统计层' },
+  legacy: { label: 'legacy', tone: 'quiet', hint: '退役周期或已下线来源的存量观察' },
+};
 export const RUN_STATUS = {
   running: '运行中',
   succeeded: '成功',

@@ -1,5 +1,11 @@
 import type { ToolContext, ToolResult } from '@luoome/core';
-import { createRegistry, privateResearchTools, selectExposedTools, type Tool } from '@luoome/tools';
+import {
+  assertTradeNeverExposed,
+  createRegistry,
+  exposureCriteria,
+  selectExposedTools,
+  type Tool,
+} from '@luoome/tools';
 import { z } from 'zod';
 
 const ReadConfig = z
@@ -33,21 +39,25 @@ export const createReadSurface = (options: {
   readonly context: () => ToolContext | Promise<ToolContext>;
   readonly accountId?: string;
 }): ReadSurface => {
-  if (process.env.LUOOME_EXPOSE_TRADE === 'true')
-    throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed in the DSH plugin');
+  // trade 硬卡与 MCP 面共用同一条判定与同一条文案（`@luoome/tools` 的 exposure 判定层）。
+  assertTradeNeverExposed(process.env.LUOOME_EXPOSE_TRADE);
   const config = ReadConfig.parse(options.config);
   const registry = createRegistry(options.tools);
   for (const name of config.allowlist) {
     if (registry.get(name) === undefined) throw new Error(`Unknown configured tool: ${name}`);
   }
+  // 判定（名字白名单 / 拒绝清单 / 私人研究 / 能力 / trade）全部在 tools 侧；
+  // 本文件只把配置搬成 criteria，并把选出的工具包成 DSH 的 descriptor 与 ToolResult。
   const selected = createRegistry(
-    selectExposedTools(options.tools, new Set(['read']), {
-      allowlist: new Set(config.allowlist),
-      denylist: new Set([
-        ...config.denylist,
-        ...(config.exposeResearch ? [] : privateResearchTools),
-      ]),
-    }),
+    selectExposedTools(
+      options.tools,
+      exposureCriteria({
+        allowedSideEffects: ['read'],
+        allowlist: config.allowlist,
+        denylist: config.denylist,
+        exposeResearch: config.exposeResearch,
+      }),
+    ),
   );
   const accountBound = new Set(
     selected

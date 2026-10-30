@@ -16,6 +16,7 @@ const toObservation = (row: Row): SignalObservation => ({
   ...(row.baselinePrice === null ? {} : { baselinePrice: row.baselinePrice }),
   ...(row.baselineAt === null ? {} : { baselineAt: row.baselineAt }),
   horizon: row.horizon,
+  vintage: row.vintage,
   ...(row.closePrice === null ? {} : { closePrice: row.closePrice }),
   ...(row.returnPct === null ? {} : { returnPct: row.returnPct }),
   ...(row.maxFavorableExcursionPct === null

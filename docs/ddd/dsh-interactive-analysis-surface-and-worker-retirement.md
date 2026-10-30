@@ -72,7 +72,7 @@ MVP 允许的最小操作策略：
 用户询问“这个策略最近跑得怎样/为什么选出这些股票/该怎么改”：
 
 1. 读取确切 Strategy、StrategyVersion、published operational StrategyRun、Result/Signal、SignalObservation 和 `get_strategy_insight_facts`；
-2. AI 区分执行事实、数据缺口、事后观察和推断，不把观察称为严格回测，不承诺收益；
+2. AI 区分执行事实、数据缺口、事后观察和推断，不把观察称为组合回测，不承诺收益；
 3. 结论引用真实 run/version/fact id；
 4. 如果只是解释，对话完成，不强制落库；
 5. 如果形成版本修改，复用 3.1 的草案、校验、试跑和按明确意图直接执行的路径；可选通过 `record_analysis_result` 保存带来源的 proposal，不得直接发布。

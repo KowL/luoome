@@ -180,6 +180,7 @@ const getLimitations = [
   'providerKind=mock 仅表示当前 mock 切片，gate=not-ready；不宣称 evaluation-ready。',
   '读取严格通过 repository.resolveVintage，不回源当前接口补历史。',
   'missing 保留数据缺口；缺失事实不会隐式填零或回退到最新值。',
+  '本次是披露型读取（sources=all），mock 行可见；它不是真实评分输入，真实评分只解析真实 provider 来源。',
 ] as const;
 
 const parseAdapterResult = (
@@ -370,6 +371,9 @@ export const getFinancialFactsTool = defineTool({
       metricIds: dedupeIds(input.metricIds),
       asOf: input.asOf,
       policy: input.policy,
+      // 披露型读取：显式接受任意来源，把已同步的 mock 行连同 providerKind=mock /
+      // gate=not-ready 一起展示。真实评分走 run_fundamental_score 的真实源白名单。
+      sources: 'all',
     });
     const parsed = FinancialVintageSchema.parse(vintage);
     assertFinancialVintageInvariants(parsed);

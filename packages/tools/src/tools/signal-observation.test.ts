@@ -19,6 +19,7 @@ const pending = (horizon: SignalObservation['horizon']): SignalObservation => ({
   baselinePrice: 10,
   baselineAt: BASELINE,
   horizon,
+  vintage: 'pit',
   benchmarkStatus: 'unavailable',
   status: 'pending',
   provenance: {
@@ -37,6 +38,7 @@ const observed = (id: string, overrides: Partial<SignalObservation> = {}): Signa
   baselinePrice: 10,
   baselineAt: BASELINE,
   horizon: 't1',
+  vintage: 'pit',
   closePrice: 11,
   returnPct: 0.1,
   maxFavorableExcursionPct: 0.2,
@@ -219,5 +221,125 @@ describe('strategy signal observation tools', () => {
       ctx,
     );
     expect(invalid).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+  });
+});
+
+describe('signal observation vintage 口径', () => {
+  const seedThreeVintages = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
+    await ctx.repos.signalObservation.save(observed('pit-1', { vintage: 'pit' }));
+    await ctx.repos.signalObservation.save(
+      observed('restated-1', {
+        vintage: 'restated',
+        stockId: '000001.SZ',
+        baselineAt: new Date('2026-08-04T08:00:00.000Z'),
+      }),
+    );
+    await ctx.repos.signalObservation.save(
+      observed('legacy-1', {
+        vintage: 'legacy',
+        stockId: '600000.SH',
+        horizon: 't3',
+        baselineAt: new Date('2026-08-05T08:00:00.000Z'),
+      }),
+    );
+  };
+
+  it('三组样本：默认只统计 pit，并在 limitations 里明示被排除的 restated/legacy 数量', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedThreeVintages(ctx);
+
+    const result = await getSignalObservationStatsTool.execute(
+      { sourceKind: 'strategy-signal' },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        vintage: 'pit',
+        vintageCounts: { pit: 1, restated: 1, legacy: 1 },
+        mixedVintages: false,
+        total: 1,
+      },
+    });
+    if (!result.ok) return;
+    const observationIds = result.data.stats.flatMap((item) => item.observationIds);
+    expect(observationIds).toEqual(['pit-1']);
+    const text = result.data.limitations.join(' ');
+    expect(text).toContain('默认只统计 vintage=pit');
+    expect(text).toContain('另有 1 条 restated、1 条 legacy 未计入');
+  });
+
+  it('混算守卫：单一口径结果内不出现第二种 vintage', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedThreeVintages(ctx);
+    const vintageById = new Map([
+      ['pit-1', 'pit'],
+      ['restated-1', 'restated'],
+      ['legacy-1', 'legacy'],
+    ]);
+
+    for (const vintage of ['pit', 'restated', 'legacy'] as const) {
+      const result = await getSignalObservationStatsTool.execute(
+        { sourceKind: 'strategy-signal', vintage },
+        ctx,
+      );
+      expect(result).toMatchObject({ ok: true, data: { vintage, mixedVintages: false } });
+      if (!result.ok) return;
+      const seen = new Set(
+        result.data.stats
+          .flatMap((item) => item.observationIds)
+          .map((id) => vintageById.get(id) ?? 'unknown'),
+      );
+      expect([...seen]).toEqual([vintage]);
+    }
+  });
+
+  it('混算负例：显式请求全量时输出混算提示与分组计数', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedThreeVintages(ctx);
+
+    const result = await getSignalObservationStatsTool.execute(
+      { sourceKind: 'strategy-signal', includeAllVintages: true },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        vintage: 'all',
+        vintageCounts: { pit: 1, restated: 1, legacy: 1 },
+        mixedVintages: true,
+        total: 3,
+      },
+    });
+    if (!result.ok) return;
+    const text = result.data.limitations.join(' ');
+    expect(text).toContain('显式全量请求');
+    expect(text).toContain('混合了 pit 1 条 / restated 1 条 / legacy 1 条');
+    expect(text).toContain('不得用于策略历史命中');
+    expect(result.data.limitations.join(' ')).not.toContain('另有 1 条 restated');
+  });
+
+  it('restated 单口径只进统计层，并提示不得冒充 pit', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedThreeVintages(ctx);
+
+    const result = await getSignalObservationStatsTool.execute(
+      { sourceKind: 'strategy-signal', vintage: 'restated' },
+      ctx,
+    );
+    expect(result).toMatchObject({ ok: true, data: { vintage: 'restated', total: 1 } });
+    if (!result.ok) return;
+    expect(result.data.stats.flatMap((item) => item.observationIds)).toEqual(['restated-1']);
+    expect(result.data.limitations.join(' ')).toContain('restated 只允许用于统计层');
+  });
+
+  it('vintage 与 includeAllVintages 互斥', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedThreeVintages(ctx);
+    const result = await getSignalObservationStatsTool.execute(
+      { sourceKind: 'strategy-signal', vintage: 'pit', includeAllVintages: true },
+      ctx,
+    );
+    expect(result).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
   });
 });

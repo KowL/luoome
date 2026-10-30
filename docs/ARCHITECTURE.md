@@ -84,7 +84,7 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 
 每个 tool 必须显式声明**副作用等级**，消费者据此决定是否可调用：
 
-| 等级 | 含义 | 例子 | 默认暴露给 MCP |
+| 等级 | 含义 | 例子 | 默认暴露给远端面 |
 |---|---|---|---|
 | `read` | 只读本地 | `list_holdings`, `get_advice` | ✅ |
 | `write` | 写本地状态 | `add_holding` | ⚠️ 可配置 |
@@ -115,7 +115,6 @@ luoome/
 │   ├── tools/          Tool 注册表 + schema 生成
 │   ├── adapters/       行情 / 通知 / 事件 / 研究库 适配
 │   ├── workflows/      内置编排：review / report / watch / plan / strategy
-│   ├── mcp/            MCP server
 │   ├── cli/            命令行入口
 │   └── tui/            opentui 应用
 └── apps/
@@ -127,8 +126,8 @@ luoome/
 ```txt
 cli ──┐
 tui ──┤
-mcp ──┼──► tools ──► core
-web ──┤        │
+web ──┼──► tools ──► core
+      │        │
       │        ├──► db ──► core
       │        │
       │        └──► adapters ──► core
@@ -145,6 +144,23 @@ web ──┤        │
 - 领域包（`core` / `db` / `tools` / `workflows` / `mcp` / `adapters`）不得导入 AI SDK。
 - 领域能力仍统一经 tools 使用；领域层不推理、不计费。
 - `infra/check-layers.ts` 守住 AI SDK 依赖边界。
+
+「零 AI」按**行为**判定，不只看包依赖：领域包（`core` / `db` / `tools` / `workflows` / `adapters` /
+`batch`）的源码里不得出现模型 endpoint 字面量（`/embeddings`、`/chat/completions`、`/completions`），
+由同一支 `infra/check-layers.ts` 扫描。只 import `node:fs` 的适配器照样能 POST 到模型供应商，
+只查 import 会放过这种写法。需要模型结论的流程由 DSH 写回（§6.3、§8.3）。
+
+唯一受控例外是 `packages/adapters/src/research-embedding/`（`OpenAICompatibleResearchEmbeddingAdapter`），
+白名单在 `infra/check-layers.ts` 中以目录形式声明：
+
+- **为什么例外**：研究库向量检索要求查询向量与文档向量出自同一模型，向量空间无法在仓外代算。
+  这项能力做的是「检索文本 → 向量」，属于检索基础设施，不是判断能力。
+- **边界**：只接受 `purpose=document|query|evaluation` 的文本并回传向量与用量；向量只写入本地研究库
+  索引；不产出判断、不写 Advice、不进入 tool/workflow 决策，也没有 chat/completions 通道。默认关闭，
+  `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 才装配；模型目录缺失或密钥环境变量为空直接报错，
+  不回退 mock。
+- **如何收紧**：DSH 侧提供 embedding 供应商后，删除 `packages/adapters/src/research-embedding/`、
+  对应 provider 目录与这条白名单，领域层回到零模型请求。白名单只允许随这条路径一起收缩，不新增目录。
 
 设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14、D9。
 
@@ -416,7 +432,7 @@ binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类�
 
 东方财富在本仓库的全部能力收敛到单一 `EastmoneySource`（adapters/eastmoney/source.ts）：
 HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
-方法委托。CLI/MCP/Web 三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
+方法委托。CLI/Web/插件三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
 分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
 market 的 sentiment manager。单机部署的数据源配置写入持久卷
 `operator/market.env`：Web 保存后立即重建共享行情栈，消费者按文件 mtime 在任务批次前同步。
@@ -425,7 +441,7 @@ market 的 sentiment manager。单机部署的数据源配置写入持久卷
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
 composition root 将 adapter 的实际能力绑定到 Registry；tool、workflow 和 surface 不改。
 
-surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
+surface 装配（v0.5 起）：CLI/TUI/Web/插件四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
@@ -463,8 +479,8 @@ Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优�
 EastmoneySource 实例，无关 manager 的缓存不清空。
 
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时包，没有模型设置页，也没有
-`/api/settings/ai` 与运行时热替换。CLI/TUI/MCP 不装配模型，需要模型判断的能力由
-DSH agent 经 MCP 调用工具完成。core 不持有模型调用端口，领域层不推理、不计费。
+`/api/settings/ai` 与运行时热替换。CLI/TUI/Web 不装配模型，需要模型判断的能力由
+DSH agent 经插件注册的原生工具调用完成。core 不持有模型调用端口，领域层不推理、不计费。
 
 Web 的模型对话已退役：没有 AI 流端点，也没有对话页面。保留下来的是不依赖模型的
 「起草 → 明确确认 → 原子执行」链路，写工具在 Web 上只生成待确认描述，只有用户在
@@ -484,16 +500,17 @@ DSH 接入有两条路径，默认部署只保留第一条：
    Node SQLite 的 `$LUOOME_HOME/luoome.db`。运行期不需要 Bun、MCP server、旧 Bun Web、
    analysis worker 或 queue probe。部署入口见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
    容器栈保留为整栈回退方案。
-2. **旧「当前 MCP 过渡形态」（仅手动/隔离验收）**：Web profile 的四个 MCP 实例（只读面 `luoome` /
+2. ~~旧「当前 MCP 过渡形态」~~（已删除）：Web profile 的四个 MCP 实例（只读面 `luoome` /
    设置面 `luoome-settings` / 分析面 `luoome-analysis` / 批处理面 `luoome-batch`）、三个旧 DSH
-   插件与手动 worker。源码保留但默认部署不再启动，P5 统一删除。
+   插件与手动 worker 随 REQ-M2-03 一起下线；`packages/mcp` 与 `luoome mcp serve` 已删除，
+   暴露面判定保留在 `packages/tools/src/exposure/`。
 3. ~~内嵌 DSH Host~~（已随托管形态下线）：原 `apps/agent-runtime` 的内嵌 Host 路径与 hosted ledger 计量一并删除。
 
 批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用插件注册的工具，门槛判定随工具走
 （非交易日/非盘中时段返回 `skipped`）。不再有 luoome 侧的常驻调度进程。
 交互式分析经插件的原生确认操作直接写回，不创建 `analysis_job`；队列能力保留，但默认部署
 没有生产者、也没有常驻消费者。仓库完成隔离切换/回退演练后，生产服务器已于 2026-10-25 切到
-纯插件形态（`dsh-web` + `caddy`），旧 MCP/Bun 源码仍保留但不再启动。
+纯插件形态（`dsh-web` + `caddy`）；旧 MCP 用户入口源码已删除，Bun 只作为构建工具。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
@@ -724,7 +741,6 @@ export interface Advice {
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly llmReasoning?: string;        // 经过 sanitized 的 LLM 推理文本（用于审计）
   readonly ladder?: AdviceLadderSnapshot;  // 连板天梯摘要
   readonly strategy?: StrategyAdviceEvidence; // 策略证据（版本、运行、信号、观察）
   readonly dataAsOf: Date;               // 数据截止时间
@@ -879,7 +895,7 @@ schema 与完整存储 schema 分开，合并函数无 IO；policy 的异步 bin
 `save_decision_review` 校验成功后追加修订；
 `record_decision_trade` 登记系统外已完成但尚未入账的成交，事务内同时保存 Trade、Holding、
 Account.cashBalance、所选来源修订和请求回执。该路径只允许对账可用账本的顺序追加，
-不调用券商，sideEffect 为 trade，MCP 永不暴露。
+不调用券商，sideEffect 为 trade，任何暴露面都不暴露。
 
 写请求由 `accountId + requestId` 标识：同键同内容返回已保存回执，同键异内容拒绝；
 账本、来源或修订已变化时要求刷新确认，任一提交失败不得留下部分成交或关联。
@@ -922,7 +938,7 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 
 ### 7.1 副作用分级（重申）
 
-| 等级 | tool 例 | MCP 默认 | Web 默认 | CLI/TUI 默认 |
+| 等级 | tool 例 | 远端面默认 | Web 默认 | CLI/TUI 默认 |
 |---|---|---|---|---|
 | `read` | `list_holdings`, `get_advice` | ✅ | ✅ | ✅ |
 | `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
@@ -930,7 +946,7 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 | `queue` | `claim_analysis_jobs`, `complete_analysis_job` | ⚠️ opt-in | ❌ | ✅ |
 | `trade` | `record_decision_trade` | ❌ | ❌ | ✅ |
 
-MCP 与 Web 是模型/远端可调用面，trade 类工具由 `selectExposedTools` 按类型过滤掉，
+插件与 Web 是模型/远端可调用面，trade 类工具由 `selectExposedTools` 按类型过滤掉，
 `requiredCapabilities` 含 `trade` 的工具一并拒绝。CLI 与 TUI 是本机可信操作员入口，
 `tools call <name>` 直接取注册表执行、不设副作用闸口，由人显式指名调用即视为人工确认。
 
@@ -1051,8 +1067,9 @@ type ToolError =
   正文空指标聚合说明，全空表格列省略，诊断缺口去重后集中展示；结构化快照保留原始 null 和缺失原因。
   单日账户绩效向前取一个交易日作为收益基点；未配置基准不输出空指标，多账户 TWR/回撤不做算术聚合。
   情绪指数按请求交易日逐条筛选，混合日期仅使该维度 partial，不丢弃同日行情；空返回仍为 unavailable。
-  规则兜底标记（`RULE_FALLBACK_PREMISE_MARKER` / `RULE_FALLBACK_EVIDENCE_MARKER`）只用于识别
-  存量数据：带标记的建议不是模型研究结论，通知中合并提示且不形成交易判断。
+  规则兜底标记（`RULE_FALLBACK_EVIDENCE_MARKER`，以及 premise 侧的内联字面量「LLM 推理不可用」）
+  只用于识别存量数据：`isRuleFallbackAdvice` 按 **premise 或 evidence 任一命中**判定，命中的建议
+  不是模型研究结论，通知中合并提示且不形成交易判断。规则兜底生成路径已删除，标记只读不写。
 - **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` 通过
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
   日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
@@ -1062,7 +1079,7 @@ type ToolError =
 | | Tool | Workflow |
 |---|---|---|
 | 粒度 | 原子 | 组合 |
-| 可独立暴露 MCP | ✅ | ❌ |
+| 可独立暴露给远端面 | ✅ | ❌ |
 | 可被 agent 编排 | ✅ | ❌（避免循环） |
 | 可手动触发 | ✅ | ✅ |
 | 必须有 Zod schema | ✅ | ✅ |
@@ -1081,45 +1098,49 @@ core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContex
 - 只经 `ctx.tools.*.execute()` 取事实与写入，不直接访问 repository / adapter
 - 步骤返回 `ToolResult` error 即短路；抛 `InvariantError` 归 `invariant_violation`，其它异常归 `internal`
 
-## 9. MCP Server
+## 9. 暴露面判定（原 MCP Server 章节，stdio 入口已下线）
 
-### 9.1 传输
+> **已下线（REQ-M2-03 / T13）**：`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例已删除，
+> `deploy/dsh/mcp-tool-probe.ts` 一并移除。本节的规则本身仍然生效，但唯一实现已归位到
+> `packages/tools/src/exposure/judge.ts`，由 DSH 插件的 read/market surface 与 Web 面消费；
+> 交互分析写回契约迁到 `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`。
 
-v0.1: **stdio**（harness 默认）。
-v0.3+：HTTP/SSE（远程、移动）。
+### 9.1 传输（历史）
+
+v0.1 曾用 **stdio**（harness 默认），v0.3+ 规划 HTTP/SSE（远程、移动）。两条路径都随
+stdio 入口一起下线；当前唯一的远端调用面是插件注册进 DSH ToolRuntime 的原生工具。
 
 ### 9.2 暴露策略
 
+判定集中在 `packages/tools/src/exposure/judge.ts`，surface 只负责把配置解析成 criteria：
+
 ```ts
-// packages/mcp/src/exposure.ts
-export const resolveAllowedSideEffects = (
-  env: NodeJS.ProcessEnv = process.env,
-): ReadonlySet<SideEffect> => {
-  if (env.LUOOME_EXPOSE_TRADE === 'true') {
-    throw new Error(
-      'LUOOME_EXPOSE_TRADE=true is not allowed: trade tools are never exposed over MCP ' +
-        '(AGENTS.md「副作用与权限」硬约束)。',
-    );
-  }
-  const allowed = new Set<SideEffect>(['read']);
-  if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
-  if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
-  if (env.LUOOME_EXPOSE_QUEUE === 'true') allowed.add('queue');
-  return allowed;
+// packages/tools/src/exposure/judge.ts
+export const judgeTool = (tool: JudgedTool, criteria: ExposureCriteria): ExposureVerdict => {
+  if (declaresTrade(tool)) return { exposed: false, reason: 'trade' };
+  if (!isNameAllowed(tool.name, criteria.allowlist))
+    return { exposed: false, reason: 'not-in-allowlist' };
+  if (isNameDenied(tool.name, criteria.denylist)) return { exposed: false, reason: 'denylisted' };
+  if (!criteria.exposeResearch && isPrivateResearchTool(tool.name))
+    return { exposed: false, reason: 'private-research' };
+  if (!capabilitiesSatisfied(capabilitiesOf(tool), criteria.allowedSideEffects))
+    return { exposed: false, reason: 'capability-not-allowed' };
+  return { exposed: true };
 };
 ```
 
 read 默认暴露；write / external / queue 须显式 opt-in。trade 没有 opt-in 通道 ——
-`LUOOME_EXPOSE_TRADE=true` 直接让 MCP 启动失败，trade 类工具同时被 `selectExposedTools`
-按类型过滤掉（`sideEffect === 'trade'` 或 `requiredCapabilities` 含 `'trade'` 都拒绝）。
+`LUOOME_EXPOSE_TRADE=true` 让插件/Web 在创建目录、打开事实库之前就启动失败
+（`assertTradeNeverExposed`），trade 类工具同时被 `selectExposedTools` 按类型过滤掉
+（`sideEffect === 'trade'` 或 `requiredCapabilities` 含 `'trade'` 都拒绝）。
 
-工具名单另有两层收窄：`LUOOME_EXPOSE_TOOLS` 是显式白名单（**显式设为空即 fail closed**，
-只有不设该变量才表示全部允许）；`LUOOME_EXPOSE_DENY` 是黑名单。私有研究类 tool
-（`privateResearchTools`）默认进黑名单，需 `LUOOME_EXPOSE_RESEARCH=true` 才放行。
+surface 侧另有两层收窄：点名白名单（**显式空名单即 fail closed**）与拒绝清单；配置里出现
+registry 不存在的工具名时 `assertSurfaceSelection` 直接拒绝装配，而不是静默过滤。私有研究类
+tool（`privateResearchTools`）默认拒绝，需部署侧显式 opt-in 才放行。
 
-### 9.3 MCP tool 命名
+### 9.3 命名
 
-luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**三套统一**，避免翻译层。
+luoome 内部 snake_case，派生出的 MCP / OpenAI schema 同样 snake_case。**统一命名**，避免翻译层。
 
 ## 10. 多端消费
 
@@ -1128,29 +1149,29 @@ luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**
 | CLI | `bin/luoome <cmd>` | 全量（`tools call` 不设副作用闸口） |
 | TUI | opentui app | 全量（含交互） |
 | Web | Hono HTTP API | read 默认；write 需 opt-in + 同源校验；trade 仅走专用人工路由 |
-| MCP | stdio server | read 默认；write / external / queue 需 opt-in；trade 永不 |
+| DSH 插件 | `dsh-luoome` 原生工具 + 精确写回 policy | read 默认；write/external/queue 走精确 policy；trade 永不 |
 
 Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 ## 11. 数据流示例
 
-### 场景 A：MCP 客户端问"今天盈亏 + 已有建议"
+### 场景 A：DSH 会话问"今天盈亏 + 已有建议"
 
 ```txt
-[MCP 客户端 LLM]
+[DSH agent]
       │  决策：调 get_account_facts + get_advice
       ▼
-[MCP stdio] ───► luoome MCP Server
+[dsh-luoome 工具] ───► toolRegistry
                     │
                     ├──► list_holdings (read)        ──► HoldingRepo ──► SQLite
                     ├──► get_account_facts (read)    ──► 现金 + 持仓市值 + 账本指纹
                     └──► get_advice (read)           ──► AdviceRepo ──► SQLite（已落库的建议）
                     │
                     ▼
-[MCP stdio] ◄── { facts: {...}, advices: [Advice, ...] }
+[dsh-luoome 工具] ◄── { facts: {...}, advices: [Advice, ...] }
       │
       ▼
-[MCP 客户端 LLM]  整合生成自然语言答复（保留反证、风险、免责声明、有效期）
+[DSH agent]  整合生成自然语言答复（保留反证、风险、免责声明、有效期）
 ```
 
 默认暴露面只有 read；要取实时行情需另开 `LUOOME_EXPOSE_EXTERNAL=true` 才能用 `batch_quote`。
@@ -1193,7 +1214,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
       └──► complete_analysis_job (queue) ─┴─► record_advice (queue) ──► Advice 落库
                                                    │
                                                    ▼
-                                          [TUI / MCP / Web 读到新 Advice]
+                                          [TUI / Web / DSH 插件读到新 Advice]
 ```
 
 事实包过期时消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
@@ -1212,7 +1233,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 - advice 输出必含 disclaimers
 - advice 可被 outcome 验证，准确率可统计
 - 密钥只走本地 `.env`，不入 git，不入日志
-- MCP stdio 默认信任宿主（本地进程），HTTP 模式需要 token
+- 宿主工具面默认信任本地 DSH 进程（stdio 入口已随 M2-03 下线），HTTP 面需要同源校验与登录 token
 - 所有 adapter 调用有超时和重试上限
 - 所有 IO 异常落到 `ToolError`，不抛 raw exception
 
@@ -1223,7 +1244,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 1. 在 `tools/<name>.ts` 用 `defineTool` 定义
 2. 注册到 `toolRegistry`
 3. 加单元测试 + 集成测试
-4. 自动获得 MCP / OpenAI / OpenAPI / TUI / CLI / Web 暴露
+4. 自动获得 toolRegistry 的 MCP / OpenAI / OpenAPI schema 派生，以及 TUI / CLI / Web 暴露
 
 ### 13.2 加新 advice workflow
 
@@ -1251,7 +1272,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 - ✅ SQLite + Drizzle
 - ✅ opentui
 - ✅ Zod 4.x
-- ✅ MCP stdio 主 + HTTP 后置
+- ~~✅ MCP stdio 主 + HTTP 后置~~（stdio 入口已随 REQ-M2-03 下线）
 - ✅ Monorepo from day 1
 - ✅ Advice 内置（不是可选模块）
 - ✅ Advisor 思路：human-in-the-loop，advice ≠ trade
@@ -1268,7 +1289,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ## 16. 个人订阅服务装配
 
 Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts`），
-没有登录、没有租户隔离、没有支付计量。CLI/TUI/MCP/DSH 插件共用同一份单机事实库。
+没有登录、没有租户隔离、没有支付计量。CLI/TUI/Web/DSH 插件共用同一份单机事实库。
 默认部署是纯插件形态：DSH（Node）加载 `dsh-luoome`，安装/升级/备份/回退步骤见
 [用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [宿主机直部署](../deploy/direct/luoome-dsh.service)。
 
@@ -1289,7 +1310,7 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
 `packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
 公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（精确只读白名单、market external
-白名单与个人直接执行 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例
+白名单与个人直接执行 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例（已删除）
 （`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）仅保留给手动/隔离验收。
 
 单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
@@ -1298,7 +1319,7 @@ core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现�
 原 Strategy schedule、账户计划、报告、观察、绩效及历史评估的编排保留在领域 workflow 里，
 由 DSH 定时任务调用的批处理工具触发（保留原领域 lease/fencing/checkpoint）。
 workflow 继续只通过 `ctx.tools.*` 编排。`@luoome/batch` 是位于 surface 层的共享入口，依赖
-workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK；MCP 兼容转发同一实现，
+workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK；插件按明确意图直接执行同一实现，
 插件只在显式 batch opt-in 后挂载五条账户绑定 policy，完整要求 write + external。
 业务成功、用户额度、provider成本和通知状态分别表达，unknown不按超时猜测为零。
 
@@ -1333,10 +1354,39 @@ core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边�
 
 默认纯插件部署的 read / market / 写操作面互相隔离：read 只接受纯 read 工具，market 只接受
 `sideEffect==='external'` 的精确工具，写操作只经个人直接执行 policy（含账户改名）；queue 管理工具、
-任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后按明确意图直接执行或通过精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面分实例隔离，
+任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后按明确意图直接执行或通过精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面曾按实例隔离（该形态已删除），
 手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
 精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
 `LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
+
+插件形态下 queue 面与 chat 面当前无生产者、也无常驻消费者；按 H1 保留不暴露，不摘除。
+「不暴露」的理由是没有调用入口，不是已经废弃，所以两者归「不暴露面（保留）」而不进 `retired`
+（`retired` 只表示已从 registry 摘除）：
+
+- `enqueue_analysis_job` 不在领域 registry，只被 `packages/workflows/src/define-workflow.ts:232` 编排，
+  插件面没有任何入队入口；
+- `claim_analysis_jobs` / `complete_analysis_job` / `fail_analysis_job` 需要 claim → complete/fail 循环，
+  插件不运行 worker，三者被 `infra/dsh/plugin-install-acceptance.ts:731-733` 断言不得进入 policy；
+- `record_advice` / `record_analysis_result` 只作为 queue policy 可达，不作为 agent 工具暴露；
+- chat 面（`list_chat_sessions`、`append_chat_message` 等 6 个工具）的会话与消息由 DSH 宿主承载，
+  领域层没有插件入口。
+
+**`execute_strict_strategy_backtest` 是内部执行步，不是对外入口**：它在 registry 里（保证
+「一个能力一份实现」），但既不在 read / market 白名单、也没有 operation policy，所以
+`bun run tools:list` 把它标成 `unreachable-by-design`。插件里的组合回测执行由
+`create_strict_strategy_backtest` policy 在门禁完备后经后台任务触发，不另开第二个对外名字。
+能力声明由 `packages/dsh-luoome/src/host/surface-consistency.test.ts` 逐字段对账：
+`start_/resume_strategy_evaluation_session` 在 registry 侧也声明 `external`（受理即代表宿主推进的
+逐日 replay 会经 `prepare_strategy_data` 取外部数据），`create_strict_strategy_backtest` 只声明
+`write`（创建与执行都只读本地事实）。
+
+`record_decision_trade` 是**专用人工入口：永不暴露、不摘除、不经远端暴露面**。它的不可达是暴露规则的结果，
+不是摘除依据，维护时不得标成废弃、也不得按「不暴露」标签删掉。三条依据：AGENTS.md「trade tool
+永不通过任何暴露面暴露；不得绕过 `LUOOME_EXPOSE_TRADE=true` 的启动硬卡」；插件宿主在创建目录、打开数据库
+等任何 IO 之前用该变量硬卡启动失败（`packages/dsh-luoome/src/host/production.ts:77`）；
+[插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) §1 要求「trade 语义不可改记为 write，
+只能保留专用人工入口」。
+
 看盘、持仓、关注、策略、复盘通过 `ctx.slots` 注册主面板与侧栏入口；投资设置注册到 DSH 原生
 `settings.section`，不占业务侧栏。宿主 prefix 路由复用 DSH Connection.admit
 与 Host/Origin 校验；固定 state GET 只投影白名单工具及受信任配置。账户改名走 prepare 后直接执行的
@@ -1411,6 +1461,6 @@ admission、Host/Origin、no-store 和有界取消。历史读取由用户主动
 
 新 Web 装配在官方 WebServer 上注册业务前缀，逐请求经 Connection.admit 的 cookie/Host/Origin 与 owner 检查，保持真实监听器 origin 和 64 KiB 流式输入限制。操作页只把操作编号存入 sessionStorage，执行凭据仅在组件内存；HTTP prepare 直接返回最终回执。预检经 appReady/appExit 独立退出，或在可信 worker 的 pre-step 中先于模型解析阻断空队列/异常。
 
-无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**生产服务器已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，旧 MCP/Bun 源码尚未删除**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
+无模型预检、完整官方 Web profile、Node DB 只读/写回与 M5 默认部署纯插件切换（含一致性备份与回退合并演练）已有隔离验收。**生产服务器已于 2026-10-25 完成纯插件切换并通过宿主侧、HTTP 与浏览器验收，旧 MCP 用户入口源码已删除（REQ-M2-03）**；自动执行默认关闭。实现与验证边界见[纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
 
 原生操作参数中的账户与 requestId 由 policy 绑定；模型参数 schema 将这些字段标为可省略，完整领域校验仍在绑定后执行。冲突错误只返回安全字段路径。个人版按用户明确意图直接执行，不再把审批拒绝作为会话状态保存。

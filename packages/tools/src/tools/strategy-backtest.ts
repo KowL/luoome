@@ -345,7 +345,7 @@ const assembleBacktest = async (
 
 export const createStrictStrategyBacktestTool = defineTool({
   name: 'create_strict_strategy_backtest',
-  description: '基于已完成 PIT evaluation 创建隔离严格回测；门禁不全时只返回审计，不输出收益指标',
+  description: '基于已完成 PIT 历史评估创建隔离的组合回测运行；门禁不全时只返回门禁审计，不输出任何收益指标',
   sideEffect: 'write',
   input: CreateStrictStrategyBacktestInput,
   output: CreateStrictStrategyBacktestOutput,
@@ -407,7 +407,7 @@ export const createStrictStrategyBacktestTool = defineTool({
 
 export const executeStrictStrategyBacktestTool = defineTool({
   name: 'execute_strict_strategy_backtest',
-  description: '执行已通过全部事实门禁的严格回测；不生成 Advice、Trade 或通知',
+  description: '执行已通过全部事实门禁的组合回测运行（内部执行步）；不生成 Advice、Trade 或通知',
   sideEffect: 'write',
   input: ExecuteStrictStrategyBacktestInput,
   output: ExecuteStrictStrategyBacktestOutput,
@@ -465,7 +465,7 @@ export const executeStrictStrategyBacktestTool = defineTool({
 
 export const getStrictStrategyBacktestTool = defineTool({
   name: 'get_strict_strategy_backtest',
-  description: '读取隔离严格回测运行、逐项数据门禁和可用指标',
+  description: '读取隔离的组合回测运行、逐项数据门禁和可用指标',
   sideEffect: 'read',
   input: GetStrictStrategyBacktestInput,
   output: GetStrictStrategyBacktestOutput,
@@ -476,7 +476,7 @@ export const getStrictStrategyBacktestTool = defineTool({
 
 export const listStrictStrategyBacktestsTool = defineTool({
   name: 'list_strict_strategy_backtests',
-  description: '列出严格回测运行；与 StrategyRun operational/evaluation 事实隔离',
+  description: '列出组合回测运行；与 StrategyRun operational/evaluation 事实隔离',
   sideEffect: 'read',
   input: ListStrictStrategyBacktestsInput,
   output: ListStrictStrategyBacktestsOutput,

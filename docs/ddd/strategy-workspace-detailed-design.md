@@ -68,7 +68,7 @@ Strategy
 
 | 层 | 当前能力 | 主要差距 |
 |---|---|---|
-| Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view、run-diff 与 StrategyWatchlistSubscription 已落地 | 严格回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
+| Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view、run-diff 与 StrategyWatchlistSubscription 已落地 | 组合回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
 | Repository | run、results、signals、publication/scope 查询均可落库，终态 run 可原子提交；Drizzle/memory 合约已覆盖 | 大规模 result 查询达到瓶颈后再评估索引或物化策略 |
 | Tools | `get_strategy_workspace`、`list_strategy_result_views`、run diff、scope/publication 过滤、订阅管理与 producer-run 同步门禁已统一 | 真实生产样本的完整率、benchmark 可用率仍需持续观察 |
 | Web API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff、历史评估与显式订阅/取消端点已接入 | 账户级认证仍需独立产品决策 |
@@ -225,7 +225,7 @@ interface StrategyRunInputSnapshotV2 {
 - legacy run 可以展示已有字段，但标记 `auditStatus='legacy-partial'`。
 
 这使运行可审计，但不宣称严格收益回测；行情快照、历史 universe 和 DailyBar revision 已由
-可靠性设计支持历史评估，费用、滑点、可交易性和 evaluator code identity 仍是严格回测前置条件。
+可靠性设计支持历史评估，费用、滑点、可交易性和 evaluator code identity 仍是组合回测前置条件。
 
 ### 5.4 结果视图分类
 
@@ -699,14 +699,14 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 - 统计继续来自 current run；
 - “查看失败详情”跳到执行记录并选中失败 run。
 
-头部在样本试跑、正式运行之前提供「模拟回测」。弹窗输入开始/结束日期和可选股票代码；默认最近
+头部在样本试跑、正式运行之前提供「历史评估（逐日重放）」。弹窗输入开始/结束日期和可选股票代码；默认最近
 31 个自然日，Web 上限 31 日、显式子集上限 500。提交后逐交易日历史回放，并在结果弹窗展示：
 
 - 区间交易日、完成/失败日、累计求值、入选、信号和失败数；
 - 每日历史数据版本可用性及失败原因；
 - evaluation session id，便于在「执行记录 → 历史评估」继续审计。
 
-这里的“模拟回测”是 point-in-time 历史回放，不输出收益率、净值、胜率、费用或滑点。结果固定进入
+这里的“历史评估（逐日重放）”是 point-in-time 历史回放，不输出收益率、净值、胜率、费用或滑点。结果固定进入
 evaluation/non-publishing，不得替换当前股票池；Web API 同时要求 write 与 external 能力。
 
 ### 10.6 股票池 tab
@@ -768,7 +768,7 @@ score 和命中规则。数据不完整列出 missing paths/error，并明确“
 | 字段 | 说明 |
 |---|---|
 | 时间 | startedAt/finishedAt 与耗时 |
-| 模式 | scan/scheduled/replay/backtest；当前产品不把 backtest 解释为严格回测 |
+| 模式 | scan/scheduled/replay/backtest；当前产品不把 backtest 解释为组合回测 |
 | 版本 | vN + definitionHash 短值 |
 | 状态 | complete/failed/running；存量可见 partial，文字与 badge 同时存在 |
 | 摘要 | dataHealth 与 universe/evaluated/selected/signal/incomplete/failed |
@@ -1091,7 +1091,7 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - Origin 行为不回归；
 - partial/failed 作为业务数据返回，不误报 500；
 - warnings 降级不会伪造 current run。
-- 模拟回测路由校验 YYYY-MM-DD、from/to 顺序、31 日上限、500 只子集上限，并强制持久化到
+- 历史评估（逐日重放）路由校验 YYYY-MM-DD、from/to 顺序、31 日上限、500 只子集上限，并强制持久化到
   evaluation；write/external 任一能力未开启或跨站 Origin 时拒绝。
 
 ### 16.5 Web 前端
@@ -1107,7 +1107,7 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - 所有 stock result/signal/diff 均展示名称和完整代码，点击股票标识进入默认 3m 行情页；
 - 名称缺失时展示“名称暂缺”，不省略第二行代码；
 - DOM 使用 textContent，不产生注入。
-- 模拟回测输入规范化、逐日汇总、空交易日、partial/failed 与 vintage unavailable 状态；页面不得
+- 历史评估（逐日重放）输入规范化、逐日汇总、空交易日、partial/failed 与 vintage unavailable 状态；页面不得
   把历史回放描述为严格收益回测。
 
 ### 16.6 浏览器验收
@@ -1168,7 +1168,7 @@ bun run lint
 4. 样本试算；
 5. 用户确认校验和发布。
 
-Phase D 严格回测必须等待 Strategy DSL PRD 中的历史数据前置条件全部满足。
+Phase D 组合回测必须等待 Strategy DSL PRD 中的历史数据前置条件全部满足。
 
 ## 18. 验收门槛
 
@@ -1192,6 +1192,6 @@ Phase A 完成必须同时满足：
 1. StrategySchedule 已具备 cron、时区、节假日、补跑和 fencing ownership；参数边界与跨阶段续租已落地，剩余是跨实例真实运行证据和跨交易日性能分布；
 2. StrategySignal baseline price 的具体交易时点与 provider fallback 的真实样本审计已接入运行汇总，仍需在真实生产样本中持续观察可用率与来源切换；
 3. 大规模 result 查询达到瓶颈后的索引或物化策略；
-4. 严格回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
+4. 组合回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
 
-页面不得暴露未经订阅的自动 Watchlist 同步或严格回测指标；当前已实施的订阅面板只允许显式创建/取消。
+页面不得暴露未经订阅的自动 Watchlist 同步或组合回测指标；当前已实施的订阅面板只允许显式创建/取消。

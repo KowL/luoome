@@ -3,6 +3,7 @@ import {
   type FinancialFact,
   type FinancialFactRepository,
   FinancialFactSchema,
+  type FinancialFactSourceScope,
   InvariantError,
   resolveStrictPitFinancialVintage,
 } from '@luoome/core';
@@ -163,6 +164,8 @@ export class DrizzleFinancialFactRepository implements FinancialFactRepository {
     readonly from?: Date;
     readonly to?: Date;
     readonly recordedAt?: Date;
+    /** 来源白名单；在 SQL 层用 source 标签隔离，mock/fixture 行不会进入结果集。 */
+    readonly sources?: readonly string[];
   }): FactRow[] {
     const stockIds = [...new Set(input.stockIds)].sort();
     if (stockIds.length === 0) return [];
@@ -176,29 +179,42 @@ export class DrizzleFinancialFactRepository implements FinancialFactRepository {
         : Array.from({ length: Math.ceil(metricIds.length / 400) }, (_, index) =>
             metricIds.slice(index * 400, index * 400 + 400),
           );
+    // 白名单为空 → sourceChunks 为空 → 一行都不查，天然拒绝一切事实。
+    const sources = input.sources === undefined ? undefined : [...new Set(input.sources)].sort();
+    const sourceChunks =
+      sources === undefined
+        ? [undefined]
+        : Array.from({ length: Math.ceil(sources.length / 400) }, (_, index) =>
+            sources.slice(index * 400, index * 400 + 400),
+          );
     for (let index = 0; index < stockIds.length; index += 400) {
       const chunk = stockIds.slice(index, index + 400);
       for (const metricChunk of metricChunks) {
-        const conditions: SQL[] = [inArray(financialFactRevisions.stockId, chunk)];
-        if (metricChunk !== undefined) {
-          conditions.push(inArray(financialFactRevisions.metricId, metricChunk));
+        for (const sourceChunk of sourceChunks) {
+          const conditions: SQL[] = [inArray(financialFactRevisions.stockId, chunk)];
+          if (metricChunk !== undefined) {
+            conditions.push(inArray(financialFactRevisions.metricId, metricChunk));
+          }
+          if (sourceChunk !== undefined) {
+            conditions.push(inArray(financialFactRevisions.source, sourceChunk));
+          }
+          if (input.from !== undefined) {
+            conditions.push(gte(financialFactRevisions.periodEnd, input.from));
+          }
+          if (input.to !== undefined) {
+            conditions.push(lte(financialFactRevisions.periodEnd, input.to));
+          }
+          if (input.recordedAt !== undefined) {
+            conditions.push(lte(financialFactRevisions.recordedAt, input.recordedAt));
+          }
+          rows.push(
+            ...this.db
+              .select()
+              .from(financialFactRevisions)
+              .where(and(...conditions))
+              .all(),
+          );
         }
-        if (input.from !== undefined) {
-          conditions.push(gte(financialFactRevisions.periodEnd, input.from));
-        }
-        if (input.to !== undefined) {
-          conditions.push(lte(financialFactRevisions.periodEnd, input.to));
-        }
-        if (input.recordedAt !== undefined) {
-          conditions.push(lte(financialFactRevisions.recordedAt, input.recordedAt));
-        }
-        rows.push(
-          ...this.db
-            .select()
-            .from(financialFactRevisions)
-            .where(and(...conditions))
-            .all(),
-        );
       }
     }
     return rows.sort(compareRows);
@@ -219,11 +235,13 @@ export class DrizzleFinancialFactRepository implements FinancialFactRepository {
     readonly metricIds: readonly string[];
     readonly asOf: Date;
     readonly policy: 'strict-pit-v1';
+    readonly sources: FinancialFactSourceScope;
   }) {
-    const facts = await this.listRevisions({
+    const facts = this.listRows({
       stockIds: input.stockIds,
       metricIds: input.metricIds,
-    });
+      ...(input.sources === 'all' ? {} : { sources: input.sources }),
+    }).map(fromRow);
     return resolveStrictPitFinancialVintage({ ...input, facts });
   }
 }

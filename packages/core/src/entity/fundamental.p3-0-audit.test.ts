@@ -69,6 +69,7 @@ const resolve = (
     metricIds: ['roe'],
     asOf: date(asOf),
     policy: 'strict-pit-v1',
+    sources: 'all',
     facts,
   });
 

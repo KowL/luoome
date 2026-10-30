@@ -294,7 +294,7 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
 |---|---|---|
 | 基本面真实源 | `/api/a-share/financials/{income-statements,balance-sheets,cash-flow-statements,indicators}` | 实现 `FundamentalDataAdapterLike`，替换 mock，注意 `FinancialFact` 的 PIT 时间链（fuyao 返回 `report_date_ms` 可作 `publishedAt` 候选，需单独设计 vintage 映射） |
 | 交易日历 | `/api/a-share/calendar/trading-days` | Strategy 日运行 checkpoint |
-| 复权因子事件流 | `/api/a-share/corporate-actions/adjustment-factors` | `DailyBar.sourceAdjFactor` 补全、严格回测数据门禁 |
+| 复权因子事件流 | `/api/a-share/corporate-actions/adjustment-factors` | `DailyBar.sourceAdjFactor` 补全、组合回测数据门禁 |
 | 集合竞价 / 龙虎榜 / 特色数据 | `/api/a-share/{auction,special-data}/**` | 在对应域 registry 增加 fuyao binding（`LUOOME_*_SOURCES=eastmoney,fuyao` 有序切换），不进 MarketDataManager |
 | 全市场离线导出 | `/api/dump/market-dumps/**`（S3 预签名链接，5 分钟过期） | 盘后归档通道，另行设计 |
 

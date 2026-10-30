@@ -19,6 +19,7 @@ import {
   type FundamentalScoreVersionRepository,
   FundamentalScoreVersionSchema,
   getFundamentalFactor,
+  REAL_FINANCIAL_FACT_SOURCES,
   runFundamentalScore,
   type ToolContext,
 } from '@luoome/core';
@@ -80,6 +81,7 @@ const scoreLimitations = [
   'providerKind=mock 仅表示当前合成/mock 事实装配；gate=not-ready，不宣称 evaluation-ready 或 operational。',
   'score 是确定性的基本面规则分，不是收益概率、置信度、Advice 或交易授权。',
   '事实读取严格通过 FinancialFactRepository.resolveVintage，不回源当前接口，不以行情或股票目录补齐 PIT 数据。',
+  '真实 provider 未接入（REAL_FINANCIAL_FACT_SOURCES 为空）时一律 unavailable：mock/fixture 来源被 source 白名单挡在评分之外，run 只留不可消费的审计记录。',
 ] as const;
 
 export const RunFundamentalScoreOutput = z
@@ -315,12 +317,15 @@ const runFundamentalScoreToolHandler = async (
     );
   }
   const metricIds = metricIdsForVersion(version);
+  // 真实评分只接受真实 provider 来源；真实源接入前白名单为空，因此解析不到任何事实
+  // （包括已落库的 mock 行），引擎必然降级成 unavailable 且不产出可消费结果。
   const vintage = FinancialVintageSchema.parse(
     await ctx.repos.financialFact.resolveVintage({
       stockIds,
       metricIds,
       asOf: input.asOf,
       policy: 'strict-pit-v1',
+      sources: REAL_FINANCIAL_FACT_SOURCES,
     }),
   );
   assertFinancialVintageInvariants(vintage);

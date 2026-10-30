@@ -518,7 +518,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
    - `ARCHITECTURE.md` §5.1 数据模型补充 `LimitUpLadder` / `LimitUpLadderEntry` 实体说明
    - `ARCHITECTURE.md` §8.1 列 Phase 1 不引入新 workflow，Phase 2 起 `daily-review` 改造
    - `docs/README.md` 在 DDD 表增加一行
-   - `skills/luoome/references/tools.md` 补充 `limit_up_ladder` 与 `limit_up_ladder_compare` 在"市场数据"桶下
+   - ~~独立 Skill 目录 `references/tools.md` 补充 `limit_up_ladder` 与 `limit_up_ladder_compare` 在"市场数据"桶下~~（该 Skill 目录已随 M2-03 收口删除；工具库存以 registry 与插件 descriptor 为准）
 8. **全量验证**
    - `bun run test` —— 包含新 vitest 文件
    - `bun run test:db` —— 不涉及新表，跳过也行；CI 跑一遍确认

@@ -16,10 +16,10 @@ whenToUse: 用户想选股、验证或比较策略、恢复未完成研究、修
 
 - **恢复**：先读 `get_strategy_research_state` 和 `list_strategy_evaluation_sessions`，再按保存的版本读取 `get_strategy_experiment_context`。发布版本变化不替换已保存基线；版本丢失或归属不符时停止相关执行并说明缺口。Operation 正在 executing 或 unknown 时用 `luoome_operation_status` 查询原 operationId；必要时 reconcile=true 只核对既有回执，不启动任务，不能新建 operation 盲跑。
 - **初次研究**：读 `get_account`、`list_strategies`、`get_stock_universe_status` 和 `get_market_data_status`。没有策略时可展示 catalog 与 starterTemplate，用户选择后直接创建草案；不凭空创建示例账户、持仓或投资资产，不更改部署 owner，也不自动开启日程或通知。
-- **数据资格**：候选冻结后用 `get_strategy_data_preflight` 检查确切 versionId、from/to、stockIds 和 benchmarkStockId。报告字段、窗口、PIT 修订和严格回测门禁缺口。预检只证明本地可核对事实；实时源可用性还须实际试跑，partial/unavailable 不视为通过。
+- **数据资格**：候选冻结后用 `get_strategy_data_preflight` 检查确切 versionId、from/to、stockIds 和 benchmarkStockId。报告字段、窗口、PIT 修订和组合回测门禁缺口。预检只证明本地可核对事实；实时源可用性还须实际试跑，partial/unavailable 不视为通过。
 - **同快照对照**：`trial_strategy_version` 对照基线与一个候选，或用 `run_strategy_research_comparison` 比较最多八个明确候选。必须展示返回的 inputIdentity、实际股票集合、事实时间、失败和 limitations；不能把同一 stockIds 的两次独立运行叫作同快照。同快照 diagnostic 与 scoringBreakdown 解释入选、临界、未入选和缺失；缺失不补零。
 - **验证**：按用户明确意图通过 `start_strategy_evaluation_session` 开始后台执行，用 `get_strategy_evaluation_progress` 查看 checkpoint。需要时直接调用 `cancel_strategy_evaluation_session` 或 `resume_strategy_evaluation_session`；刷新后 worker idle 但 session running 需明确恢复，不能宣称仍在执行。使用原 session 身份保留完成日期；不向用户暴露逐日 record/finish 的任意写入。
-- **证据分层**：trial 为内存试算，evaluation 为历史逐日选股重放，strict backtest 才使用组合执行模型，T+1/T+3/T+5 为真实信号观察。训练/验证分别固定 session、区间与样本；`assess_adaptive_personality` 只报告可信门禁，不生成最优收益结论。严格回测缺可交易性、公司行动或基准事实时保留阻塞，不降级冒充严格回测。
+- **证据分层**：trial 为内存试算，evaluation 为历史逐日选股重放，组合回测才使用组合执行模型，T+1/T+3/T+5 为真实信号观察。训练/验证分别固定 session、区间与样本；`assess_adaptive_personality` 只报告可信门禁，不生成最优收益结论。组合回测缺可交易性、公司行动或基准事实时保留阻塞，不拿历史评估冒充组合回测。
 - **结论留档**：用户要求保存时，经 `luoome_confirmed_operation` 的 `save_strategy_research_state` 直接保存 question、基线/候选、范围/区间/基准、证据引用、反证、limitations 和 nextStep。outcome 区分 supported、inconclusive、rejected；失败或证据不足也可保存，不能写成验证通过。先读当前 revision，按 expectedRevision 防止覆盖别处更新；requestId 与账户由宿主绑定。导出用 `export_strategy_manifest`，说明定义和证据引用可携带，供应商历史数据并不随 manifest 打包，不能保证异机完整重放。
 
 ## 流程
@@ -32,7 +32,7 @@ whenToUse: 用户想选股、验证或比较策略、恢复未完成研究、修
    取不到就明说取不到，不凭记忆补 DSL 字段、行情或历史运行。
 2. **生成草案，不落库、不发布**：
    - 用 `get_strategy_dsl_catalog` 对齐 DSL 版本与字段路径；
-   - 把 AI 生成的 definition 交给 `propose_strategy_version_draft` 做确定性 schema 校验，取得 diff、事实引用与未持久化草案；该工具不可用时，在对话中给出完整 definition，并用 `compare_strategy_definitions` 与现有版本对比；
+   - 插件形态下 `propose_strategy_version_draft` 不可用：它没有对应的 operation policy，不在本插件的暴露面内，不要调用它、也不要先探测是否可用。AI 生成的 definition 直接在对话中给出完整 definition，并用 `compare_strategy_definitions` 与现有版本对比，取得 diff 与事实引用；这一步不落库、不产生草案版本；
    - 草案只是候选版本，不是已发布策略，也不是正式运行结果。
 3. **展示冻结内容**（写入前必须完成）：
    - definition diff 与规则解释：每条规则在什么条件下选股、排除或评分；

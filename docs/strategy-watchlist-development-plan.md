@@ -316,7 +316,7 @@ StockPool   → AlertPlan
 - `bun run test:all`、typecheck、lint、build 全绿。
 - migration verify 无 blocking issue。
 - 真实浏览器端到端通过。
-- MCP discovery 不暴露 trade 或内部 migration/sync。
+- 任何暴露面（插件 descriptor、工具清单、旧 MCP discovery）都不暴露 trade 或内部 migration/sync。
 - 当前代码和文档不再把 Tactic/StockGroup/StockPool 当作目标领域语言。
 - 回滚流程经过临时库验证。
 

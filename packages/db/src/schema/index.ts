@@ -73,7 +73,10 @@ import type {
   WorkflowRun,
 } from '@luoome/core';
 import { sql } from 'drizzle-orm';
+import { dataImportReceipts } from './data-import.js';
 import { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
+
+export { dataImportReceipts } from './data-import.js';
 
 export { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
 
@@ -1186,6 +1189,8 @@ export const signalObservations = sqliteTable(
     baselinePrice: real('baseline_price'),
     baselineAt: integer('baseline_at', { mode: 'timestamp_ms' }),
     horizon: text('horizon').$type<SignalObservation['horizon']>().notNull(),
+    /** 时点口径；存量行由启动迁移落为 pit/legacy，前瞻写入恒为 pit。 */
+    vintage: text('vintage').$type<SignalObservation['vintage']>().notNull().default('pit'),
     closePrice: real('close_price'),
     returnPct: real('return_pct'),
     maxFavorableExcursionPct: real('max_favorable_excursion_pct'),
@@ -1210,6 +1215,7 @@ export const signalObservations = sqliteTable(
     statusBaselineIdx: index('signal_observations_status_baseline_idx').on(t.status, t.baselineAt),
     sourceIdx: index('signal_observations_source_idx').on(t.sourceKind, t.sourceId),
     dueIdx: index('signal_observations_due_idx').on(t.status, t.dueAt, t.nextAttemptAt),
+    vintageIdx: index('signal_observations_vintage_idx').on(t.vintage, t.horizon),
   }),
 );
 
@@ -2039,6 +2045,7 @@ export const analysisContexts = sqliteTable(
 );
 
 export const schema = {
+  dataImportReceipts,
   pluginOperations,
   pluginAutomationGrants,
   analysisJobs,

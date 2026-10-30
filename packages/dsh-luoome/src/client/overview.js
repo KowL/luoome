@@ -197,7 +197,7 @@ const BreadthCard = ({ snapshot, loading, error }) => {
   );
 };
 
-export const HoldingsTable = ({ holdings, loading, error }) => {
+export const HoldingsTable = ({ holdings, loading, error, actions }) => {
   if (!holdings) {
     return h(
       Card,
@@ -242,6 +242,7 @@ export const HoldingsTable = ({ holdings, loading, error }) => {
             h('th', null, '市值'),
             h('th', null, '浮动盈亏'),
             h('th', null, '今日'),
+            actions ? h('th', null, '记账') : null,
           ),
         ),
         h(
@@ -284,6 +285,7 @@ export const HoldingsTable = ({ holdings, loading, error }) => {
                   ratio(item.todayPnlPct),
                 ),
               ),
+              actions ? h('td', null, actions(item)) : null,
             );
           }),
         ),

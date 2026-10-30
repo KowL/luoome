@@ -5,6 +5,15 @@ export {
   type TrustedAnalysisProvenance,
 } from './host/analysis-operations.js';
 export {
+  type DisciplineContext,
+  type DisciplineService,
+  formatDisciplineText,
+  LUOOME_DISCIPLINE_CONSTRAINTS,
+  LUOOME_DISCIPLINE_ORDER,
+  LUOOME_DISCIPLINE_SECTION,
+  registerDiscipline,
+} from './host/discipline.js';
+export {
   createDshOperationHost,
   MANUAL_OPERATION_TOOL,
   OPERATION_STATUS_TOOL,
@@ -67,7 +76,6 @@ export {
 } from './host/research.js';
 export { createResearchJobs, type ResearchJobs } from './host/research-jobs.js';
 export {
-  createExecuteResearchStrictBacktestOperationPolicy,
   createResearchComparisonOperationPolicy,
   createResearchEvaluationOperationPolicies,
   createResearchOperationPolicies,

@@ -60,7 +60,7 @@ R5 发布后的 T+5 事实继续按运维手册观察，但不再设置 T+20 等
 
 - 不实现自动交易；
 - 不把 StrategySignal 变成 Advice；
-- 不在 P0/P1 输出净值、年化、Sharpe 或严格回测胜率；
+- 不在 P0/P1 输出净值、年化、Sharpe 或组合回测胜率；
 - 不让 LLM 参与逐股 selection/scoring/signal 求值；
 - 不修改已发布 StrategyVersion；
 - 不扩大到分钟行情或非沪深 A 股。
@@ -1157,11 +1157,11 @@ Strategy Workspace 增加：
 - cycle phase timeline；
 - insight generated/facts-only 状态；
 - operational/evaluation 明确切换，默认不显示 evaluation。
-- 头部「模拟回测」入口调用 `POST /api/strategies/:id/backtests`；Web 单次限制 31 个自然日，
+- 头部「历史评估（逐日重放）」入口调用 `POST /api/strategies/:id/evaluations`；Web 单次限制 31 个自然日，
   可选显式股票子集上限 500，服务端强制 `persist=true`、`owner=web`；
 - 区间结果返回逐日 `evaluated/selected/signal/failed` 与总汇总，并保留 `vintageStatus`、
   `runId` 和 evaluation session；失败日期不能被吞掉；
-- 结果文案固定为“模拟回测（历史回放）”，明确不含收益、费用、滑点和可交易性模拟。
+- 结果文案固定为“历史评估（逐日重放）”，明确不含收益、费用、滑点和可交易性模拟。
 
 UI 不提供“一键自动发布 v2”。定义 draft、试算、校验、发布仍是分步确认。
 
@@ -1178,7 +1178,7 @@ luoome workflow run strategy-replay-range --strategy-id ... --from ... --to ...
 luoome strategy runs --scope operational|evaluation --publication published|withheld|non-publishing
 ```
 
-CLI 输出明确使用“历史评估”，不使用“严格回测”。
+CLI 输出明确使用“历史评估”，不使用“组合回测”。
 
 ### 16.3 MCP
 
@@ -1334,6 +1334,6 @@ evaluation；中断后从最后完成日继续；整个过程不改变 current p
 | withheld/non-publishing signal 是否创建观察 | 不创建；避免把低覆盖或评估 run 混入正式观察 |
 | evaluation 是否自动生成洞察 | 默认否；用户显式请求且 scope=session 时生成 |
 | 是否新增 abandoned status | P0 不新增；使用 failed + 稳定 error code，减少迁移面 |
-| 是否立刻做严格回测 | 否；等 benchmark、费用、滑点、可交易性和数据/代码版本门禁完成 |
+| 是否立刻做组合回测 | 否；等 benchmark、费用、滑点、可交易性和数据/代码版本门禁完成 |
 
 这些默认决策如在实现前被产品修改，应先更新本文和开发计划，再改 schema，避免 interface 漂移。

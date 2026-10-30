@@ -74,6 +74,12 @@ export const startStrategyEvaluationSessionTool = defineTool({
   name: 'start_strategy_evaluation_session',
   description: '创建可续跑的 Strategy 历史评估 session；不发布 operational current',
   sideEffect: 'write',
+  // 本体只写本地 session 行，但受理即代表「由宿主推进的逐日 replay」：replay 会调
+  // `prepare_strategy_data`（requiredCapabilities=['external','write']）去取外部数据。
+  // 能力装配必须在受理时就把外部取数算进来，否则 write-only 装配可以借这次受理间接
+  // 触发外部访问。声明 external 是 fail-closed 方向，与 USER_GUIDE 的「需同时开启
+  // WRITE 与 EXTERNAL」一致（T06 判定：policy 侧原本就写对了，是 registry 少声明）。
+  requiredCapabilities: ['write', 'external'],
   input: StartStrategyEvaluationSessionInput,
   output: StartStrategyEvaluationSessionOutput,
   handler: async (input, ctx: ToolContext) => {
@@ -191,6 +197,8 @@ export const resumeStrategyEvaluationSessionTool = defineTool({
   name: 'resume_strategy_evaluation_session',
   description: '将失败或部分完成的历史评估 session 重新置为 running，供失败日期重试与断点续跑',
   sideEffect: 'write',
+  // 同 start：续跑会让宿主对未完成日期重跑 replay，取数走 `prepare_strategy_data` 的外部路径。
+  requiredCapabilities: ['write', 'external'],
   input: ResumeStrategyEvaluationSessionInput,
   output: ResumeStrategyEvaluationSessionOutput,
   handler: async (input, ctx: ToolContext) => {
@@ -334,7 +342,7 @@ export const getStrategyEvaluationProgressTool = defineTool({
           ? ['部分日期缺少当时已知 PIT vintage，后补历史不等于无前视偏差。']
           : []),
         ...(days.some((day) => day.status === 'complete' && day.runId === undefined)
-          ? ['存在未持久化运行的日期，不能作为严格回测证据。']
+          ? ['存在未持久化运行的日期，不能作为组合回测证据。']
           : []),
       ],
     };

@@ -12,6 +12,14 @@ export const SignalObservationSourceKindSchema = z.enum([
 ]);
 export type SignalObservationSourceKind = z.infer<typeof SignalObservationSourceKindSchema>;
 
+/**
+ * 历史兼容来源：写入方已下线，只剩存量行，因此这些观察不属于前瞻轨。
+ * 启动迁移把它们显式降级为 vintage='legacy'，而不是留在 pit 池里冒充前瞻样本。
+ */
+export const LEGACY_SIGNAL_OBSERVATION_SOURCE_KINDS = ['tactic-signal'] as const;
+/** 退役观察周期：t20 只用于读既有持久化观察，迁移时同样降级为 legacy。 */
+export const RETIRED_SIGNAL_OBSERVATION_HORIZONS = ['t20'] as const;
+
 export const ACTIVE_SIGNAL_OBSERVATION_HORIZONS = ['t1', 't3', 't5'] as const;
 export const ActiveSignalObservationHorizonSchema = z.enum(ACTIVE_SIGNAL_OBSERVATION_HORIZONS);
 export type ActiveSignalObservationHorizon = z.infer<typeof ActiveSignalObservationHorizonSchema>;
@@ -28,6 +36,22 @@ export const isActiveSignalObservationHorizon = (
 export const SignalObservationStatusSchema = z.enum(['pending', 'complete', 'unavailable']);
 export type SignalObservationStatus = z.infer<typeof SignalObservationStatusSchema>;
 
+/**
+ * 观察的时点口径（vintage）：
+ * - `pit`：信号发生时点前瞻写入，只用当时可得事实；
+ * - `restated`：事后用修订/回溯数据补算，只能进统计层，不得冒充 pit 用于策略历史命中、Advice 证据链或复盘「当时依据」；
+ * - `legacy`：存量兼容数据（退役的 t20 周期或已下线来源），历史产物，不具备前瞻可复现性。
+ */
+export const SIGNAL_OBSERVATION_VINTAGES = ['pit', 'restated', 'legacy'] as const;
+export const SignalObservationVintageSchema = z.enum(SIGNAL_OBSERVATION_VINTAGES);
+export type SignalObservationVintage = z.infer<typeof SignalObservationVintageSchema>;
+
+/** 当前生产写入方只产生 pit；迁移把其余存量显式降级为 legacy。 */
+export const DEFAULT_SIGNAL_OBSERVATION_VINTAGE: SignalObservationVintage = 'pit';
+
+/** 统计默认口径：只算 pit，避免 restated/legacy 混进前瞻样本池。 */
+export const DEFAULT_SIGNAL_OBSERVATION_STATS_VINTAGE: SignalObservationVintage = 'pit';
+
 export const SignalObservationSchema = z.object({
   id: z.string().min(1),
   sourceKind: SignalObservationSourceKindSchema,
@@ -36,6 +60,7 @@ export const SignalObservationSchema = z.object({
   baselinePrice: z.number().positive().optional(),
   baselineAt: z.coerce.date().optional(),
   horizon: SignalObservationHorizonSchema,
+  vintage: SignalObservationVintageSchema.default(DEFAULT_SIGNAL_OBSERVATION_VINTAGE),
   closePrice: z.number().positive().optional(),
   returnPct: z.number().finite().optional(),
   maxFavorableExcursionPct: z.number().finite().optional(),

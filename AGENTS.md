@@ -1,7 +1,7 @@
 # AGENTS.md — luoome 编码 Agent 开发规范
 
 > 本文件面向在仓库内修改代码的 Claude Code、Codex、Cursor 等编码 Agent。
-> 如果要让外部 Agent 调用 luoome，请安装 [luoome Skill](./skills/luoome/SKILL.md)，不要把本文件当作 MCP 接入手册。
+> 如果要让外部 Agent 调用 luoome，外部接入通过安装 DSH 插件（[`packages/dsh-luoome`](./packages/dsh-luoome)）实现，不要把本文件当作接入手册。stdio MCP 入口已随 REQ-M2-03 下线。
 
 ## 权威资料
 
@@ -15,7 +15,7 @@
 | 副作用、鉴权与投资建议边界 | [docs/SECURITY.md](./docs/SECURITY.md) |
 | 命令和测试入口 | [package.json](./package.json) |
 
-不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、MCP discovery 和 `luoome tools list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，MCP 面兼容转发，个人版 DSH 插件按明确意图直接执行或通过精确任务授权调用，保留 Operation 回执。
+不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、插件注册的 descriptor 和 `luoome tools list --json` 为准。批处理入口（`run_*` 编排工具）不在领域 registry 里；共享编排位于 `packages/batch`，个人版 DSH 插件按明确意图直接执行或通过精确任务授权调用，保留 Operation 回执。
 
 ## 开始修改前
 
@@ -28,7 +28,7 @@
 ## 架构硬约束
 
 ```text
-cli / tui / mcp / web ──► tools ──► core
+cli / tui / web ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -36,7 +36,7 @@ workflows ──► tools ──► core
 
 - `packages/core` 是纯领域层，零 IO，不反向依赖其它包。
 - `db` 与 `adapters` 可依赖 `core`，不可依赖 `tools`、`workflows` 或 surface。
-- CLI、TUI、MCP、Web 统一通过 tools 使用业务能力，不复制领域逻辑。
+- CLI、TUI、Web 与 DSH 插件统一通过 tools 使用业务能力，不复制领域逻辑。
 - Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
 - Workflow 只通过 `ctx.tools.*` 编排能力，不直接绕过 tool 调 repository 或 adapter。
@@ -56,7 +56,7 @@ workflows ──► tools ──► core
 ## 安全与副作用
 
 - `advice` 永远不等于 `trade`，任何建议或盯盘触发都不能自动下单。
-- `trade` tool 永不通过 MCP 暴露；不得绕过 `LUOOME_EXPOSE_TRADE=true` 的启动硬卡。
+- `trade` tool 永不通过任何暴露面（插件/Web/远端）暴露；不得绕过 `LUOOME_EXPOSE_TRADE=true` 的启动硬卡。
 - `write` 与 `external` 能力必须保持显式 opt-in；新增 tool 时正确声明 `sideEffect`。
 - 面向用户呈现 Advice 时保留反证、风险、免责声明和有效期，不把 confidence 表述成确定性。
 - 不记录、提交或输出 `.env`、API key、token、数据库中的私人投资数据。

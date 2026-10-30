@@ -17,6 +17,7 @@ describe('complete-strategy-observations workflow', () => {
       baselinePrice: 10,
       baselineAt,
       horizon: 't1',
+      vintage: 'pit',
       benchmarkStatus: 'unavailable',
       status: 'pending',
       provenance: {
@@ -75,6 +76,7 @@ describe('complete-strategy-observations workflow', () => {
       baselinePrice: 10,
       baselineAt: new Date('2026-07-30T08:00:00.000Z'),
       horizon: 't1',
+      vintage: 'pit',
       benchmarkStatus: 'unavailable',
       status: 'pending',
       provenance: {

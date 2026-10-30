@@ -66,6 +66,24 @@ export type FinancialVintagePolicy = z.infer<typeof FinancialVintagePolicySchema
 export const FinancialVintageStatusSchema = z.enum(['complete', 'partial', 'unavailable']);
 export type FinancialVintageStatus = z.infer<typeof FinancialVintageStatusSchema>;
 
+/**
+ * 真实（非 fixture/mock）财务事实来源白名单。接入真实 provider 时必须在此登记其 `source`。
+ * 接入前为空：`sources` 取该常量的 vintage 查询解析不到任何事实，评分只能得到 unavailable，
+ * 因此 mock 事实即使写入 `financial_fact_revisions` 也无法污染真实评分。
+ */
+export const REAL_FINANCIAL_FACT_SOURCES: readonly string[] = [];
+
+/**
+ * vintage 查询的 source 约束。数组是白名单（只解析列出的 `source`），空数组拒绝一切事实；
+ * `'all'` 是显式声明接受任意来源，只允许用于披露型读取，真实评分不得使用。
+ */
+export type FinancialFactSourceScope = 'all' | readonly string[];
+
+export const isFinancialFactSourceAccepted = (
+  scope: FinancialFactSourceScope,
+  source: string,
+): boolean => scope === 'all' || scope.includes(source);
+
 export const FinancialFactSchema = z
   .object({
     id: z.string().min(1).max(200),
@@ -276,6 +294,8 @@ export interface ResolveFinancialVintageInput {
   readonly metricIds: readonly string[];
   readonly asOf: Date;
   readonly policy: FinancialVintagePolicy;
+  /** 来源约束；真实评分必须传真实 provider 白名单，fixture/mock 事实不在其中。 */
+  readonly sources: FinancialFactSourceScope;
   readonly facts: readonly FinancialFact[];
 }
 
@@ -308,6 +328,8 @@ const missingReasonForPeriod = (
 /**
  * Pure strict PIT resolver. Repository/adapters are intentionally outside this
  * function; callers pass the append-only facts visible to the core contract.
+ * `sources` 先做来源过滤再选 revision：不在白名单的来源（含 mock/fixture）
+ * 既不参与 selected，也不进入 missing，等同于仓储里不存在这些行。
  */
 export const resolveStrictPitFinancialVintage = (
   input: ResolveFinancialVintageInput,
@@ -316,11 +338,13 @@ export const resolveStrictPitFinancialVintage = (
     throw new InvariantError(`不支持的 financial vintage policy: ${input.policy}`);
   }
   const asOf = new Date(input.asOf.getTime());
-  const facts = input.facts.map((fact) => {
-    const parsed = FinancialFactSchema.parse(fact);
-    assertFinancialFactInvariants(parsed);
-    return parsed;
-  });
+  const facts = input.facts
+    .map((fact) => {
+      const parsed = FinancialFactSchema.parse(fact);
+      assertFinancialFactInvariants(parsed);
+      return parsed;
+    })
+    .filter((fact) => isFinancialFactSourceAccepted(input.sources, fact.source));
   const factsById = new Map(facts.map((fact) => [fact.id, fact]));
   for (const fact of facts) {
     if (fact.supersedesId === undefined) continue;

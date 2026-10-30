@@ -1,5 +1,9 @@
 // MVP 最终验收：真实旅程 + 负例/恢复矩阵（需求 §10.2/§10.3/§10.5，task-20）。
 //
+// **术语**：本文件的「工具级旅程 1–5」是工具级用例（策略 create/publish、研究、DecisionReview、
+// external 事实、策略上线），不是 PRD §3.0 的 J1–J6 用户旅程。技能级旅程另见
+// `skill-journeys.e2e.test.ts`（J1 盘前 / J3 盘后 / J4 研究 / J5 复盘），两者不得互相当证明。
+//
 // 运行环境：Node/vitest（`@luoome/db/node` 的 node:sqlite），进程内真实 DSH
 // AgentLoop/SessionStore/ApprovalService 与官方组件；业务数据在临时 Node SQLite。
 // 模型是**脚本模型**——这里只验证协议/装配/个人直接执行/事实链路，绝不宣称真实模型质量。
@@ -39,6 +43,7 @@ import type {
   PluginAuthorityRepository,
   PluginAutomationGrant,
   PluginOperation,
+  PluginOperationNonTerminal,
   PluginOperationProof,
   PluginOperationScope,
 } from '@luoome/core';
@@ -422,7 +427,7 @@ const dataOf = <T>(value: unknown): T => {
 const confirmed = async (fixture: JourneyFixture, tool: string, input: unknown) =>
   fixture.run({ name: MANUAL_OPERATION_TOOL, input: { id: randomUUID(), tool, input } });
 
-describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + Node SQLite）', () => {
+describe('工具级旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + Node SQLite）', () => {
   it('executes the real batch in Node without approval and keeps its report account scoped', async () => {
     const fixture = await createJourneyFixture({ batchEnabled: true });
     try {
@@ -778,7 +783,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + 
       await fixture.close();
     }
   });
-  it('旅程 1：策略 create/version/validate 直接执行，trial 不落库，publish 后回读', async () => {
+  it('工具级旅程 1：策略 create/version/validate 直接执行，trial 不落库，publish 后回读', async () => {
     const fixture = await createJourneyFixture();
     try {
       const strategyId = `strategy-${randomUUID()}`;
@@ -881,7 +886,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + 
     }
   });
 
-  it('旅程 2：研究指定 run/version/insight facts 并带引用，proposal 经审批保存但不发布', async () => {
+  it('工具级旅程 2：研究指定 run/version/insight facts 并带引用，proposal 经审批保存但不发布', async () => {
     const fixture = await createJourneyFixture();
     try {
       const strategyId = 'strategy-journey2';
@@ -986,7 +991,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + 
     }
   });
 
-  it('旅程 3：DecisionReview 直接保存；用户明确反馈后直接记录 outcome', async () => {
+  it('工具级旅程 3：DecisionReview 直接保存；用户明确反馈后直接记录 outcome', async () => {
     const fixture = await createJourneyFixture();
     try {
       const advice = testAdviceFor(TEST_STOCKS[0]?.id ?? '600519.SH', () => new Date(NOW));
@@ -1058,7 +1063,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + 
     }
   });
 
-  it('旅程 4：market external 刷新保留 source/dataAsOf/unavailable/partial；Advice 需另取 context 并审批', async () => {
+  it('工具级旅程 4：market external 刷新保留 source/dataAsOf/unavailable/partial；Advice 需另取 context 并审批', async () => {
     const fixture = await createJourneyFixture();
     try {
       // 对话主动刷新：AgentLoop 调 market external 白名单工具。
@@ -1152,7 +1157,7 @@ describe('MVP 旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执行 + 
     }
   });
 
-  it('旅程 5：策略上线——publish 不隐含 schedule/订阅；set/subscribe/pause/resume 各自独立审批且 read 回读一致', async () => {
+  it('工具级旅程 5：策略上线——publish 不隐含 schedule/订阅；set/subscribe/pause/resume 各自独立审批且 read 回读一致', async () => {
     const fixture = await createJourneyFixture();
     try {
       const strategyId = `strategy-${randomUUID()}`;
@@ -1336,13 +1341,24 @@ describe('MVP 负例/恢复矩阵', () => {
     try {
       // 领域 registry 的 trade 工具永不进入 read/market allowlist，也不进入任何 operation policy。
       expect(toolRegistry.get('record_decision_trade')?.sideEffect).toBe('trade');
+      // `add_trade` 是人工记账 write（T47），不是 trade 能力；它可以成为 policy，但不能带 trade 声明。
+      expect(toolRegistry.get('add_trade')?.sideEffect).toBe('write');
+      const policies = createProductionOperationPolicies();
+      const policyNames = policies.map((policy) => policy.tool.name);
       for (const name of ['add_trade', 'record_decision_trade']) {
         expect(DEFAULT_READ_TOOL_ALLOWLIST).not.toContain(name);
         expect(DEFAULT_MARKET_TOOL_ALLOWLIST).not.toContain(name);
-        expect(createProductionOperationPolicies().map((policy) => policy.tool.name)).not.toContain(
-          name,
-        );
       }
+      expect(policyNames).not.toContain('record_decision_trade');
+      expect(policyNames).toContain('add_trade');
+      expect(
+        policies.filter(
+          (policy) =>
+            policy.tool.sideEffect === 'trade' ||
+            policy.tool.requiredCapabilities.includes('trade'),
+        ),
+        'operation policy 里的 trade 能力入口必须为 0 条',
+      ).toHaveLength(0);
       // 生产 host 启动硬卡（不创建目录/DB）
       const { createProductionHost } = await import('./production.js');
       const home = join(mkdtempSync(join(tmpdir(), 'luoome-trade-gate-')), 'home');
@@ -1549,6 +1565,11 @@ class FailOnceSettleRepository implements PluginAuthorityRepository {
   }
   findOperation(scope: PluginOperationScope): Promise<PluginOperation | null> {
     return this.inner.findOperation(scope);
+  }
+  listNonTerminalOperationsByAccount(
+    accountId: string,
+  ): Promise<readonly PluginOperationNonTerminal[]> {
+    return this.inner.listNonTerminalOperationsByAccount(accountId);
   }
   claimOperation(
     proof: PluginOperationProof & { readonly claimToken: string },

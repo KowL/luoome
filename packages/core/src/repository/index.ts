@@ -14,7 +14,11 @@ import type {
   DecisionReviewWithRevision,
   DecisionTradeCommitResult,
 } from '../entity/decision-review.js';
-import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
+import type {
+  FinancialFact,
+  FinancialFactSourceScope,
+  FinancialVintage,
+} from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
@@ -178,6 +182,14 @@ export interface StockUniverseRepository {
     readonly appliedAt: Date;
   }): Promise<StockUniverseApplySummary>;
   latestSuccessfulSync(input?: {
+    readonly source?: string;
+    readonly coverage?: MarketCoverage;
+  }): Promise<StockUniverseSyncRun | null>;
+  /**
+   * 最近一次同步运行（**不看状态**）。诊断要用它识别「最近一次就是失败」——
+   * 只查成功运行会把「一直连不上」误判成「从未同步」。
+   */
+  latestSyncRun(input?: {
     readonly source?: string;
     readonly coverage?: MarketCoverage;
   }): Promise<StockUniverseSyncRun | null>;
@@ -387,6 +399,10 @@ export interface DailyBarRepository {
 /**
  * Append-only 基本面事实修订仓储；PIT vintage 选择仍由 core strict resolver 定义。
  * 实现必须同时提供 Drizzle/SQLite 与 in-memory 版本，并保持查询排序和副本语义一致。
+ *
+ * `resolveVintage` 的 `sources` 必填，用来把 fixture/mock 事实隔离在真实查询之外：
+ * 真实评分只能传真实 provider 白名单（当前为 `REAL_FINANCIAL_FACT_SOURCES`，未接入时为空），
+ * 披露型读取才允许显式声明 `'all'`。实现必须在查询/选 revision 前完成来源过滤。
  */
 export interface FinancialFactRepository {
   appendMany(facts: readonly FinancialFact[]): Promise<void>;
@@ -402,6 +418,7 @@ export interface FinancialFactRepository {
     readonly metricIds: readonly string[];
     readonly asOf: Date;
     readonly policy: 'strict-pit-v1';
+    readonly sources: FinancialFactSourceScope;
   }): Promise<FinancialVintage>;
 }
 
@@ -551,6 +568,14 @@ export interface RepositoryRegistry {
   readonly analysis: import('./analysis.js').AnalysisRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly personal?: import('../personal/repository.js').PersonalRepository;
+  /**
+   * T48 业务快照导入：预检/提交/回执。事务与 receipt 原子性只在真实 SQLite 连接上有意义，
+   * 因此只有 Drizzle 装配提供；in-memory 的 `InMemoryDataImportRepository` 是合约替身，
+   * 不得进入生产装配。
+   */
+  readonly dataImport?: import('./data-import.js').DataImportRepository;
+  /** T14 诊断：只读 `schema_migrations`，用于判断迁移是否完成。 */
+  readonly schemaMigration?: import('./schema-migration.js').SchemaMigrationRepository;
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;
@@ -595,7 +620,7 @@ export interface RepositoryRegistry {
   readonly strategyDataCheckpoint: StrategyDataCheckpointRepository;
   /** P2 历史评估 session/day 进度。 */
   readonly strategyEvaluation: StrategyEvaluationRepository;
-  /** 严格回测运行与 PIT 可成交性/公司行动事实；与 operational/evaluation run 隔离。 */
+  /** 组合回测运行与 PIT 可成交性/公司行动事实；与 operational/evaluation run 隔离。 */
   readonly strategyBacktest: StrategyBacktestRepository;
   readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
   /** M2-S0：Strategy 自主管理动作（提议/发布/暂停）审计。 */

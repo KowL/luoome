@@ -2,6 +2,10 @@
 
 // 依赖注入上下文
 export * from './context.js';
+export * from './data-import.js';
+export * from './schema-migrations.js';
+export * from './repository/data-import.js';
+export * from './repository/schema-migration.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/account-facts.js';

@@ -67,7 +67,6 @@ export interface AdviceReasoning {
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly llmReasoning?: string; // 经过 sanitized 的 LLM 推理文本（用于审计与复盘）
   readonly ladder?: AdviceLadderSnapshot;
   readonly strategy?: StrategyAdviceEvidence;
   readonly dataAsOf: Date; // 数据截止时间
@@ -302,7 +301,6 @@ export const isAdviceQuoteCurrent = (quote: Quote, now: Date): boolean => {
 export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
-  llmReasoning: z.string().optional(),
   ladder: AdviceLadderSnapshotSchema.optional(),
   strategy: z
     .object({
@@ -407,14 +405,15 @@ export const AdviceSchema = z.object({
 });
 
 /**
- * 规则兜底标记：LLMManager 在 AI 两次失败后返回确定性模板，带此标记的建议不是 AI 研究结论，
- * 不能作为生效计划（与 adapters/llm/manager.ts 的 fallback 输出共用同一段文字）。
+ * 规则兜底标记：已删除的规则 fallback 生成路径曾在 `reasoning.evidence` 写此标记、
+ * 在 `reasoning.premise` 写「LLM 推理不可用」。带任一标记的建议不是研究结论，
+ * 不能作为生效计划；生成路径已下线，标记只读不写，这里只用于识别存量 Advice。
  */
-export const RULE_FALLBACK_PREMISE_MARKER = 'LLM 推理不可用';
 export const RULE_FALLBACK_EVIDENCE_MARKER = '规则 fallback';
 
+/** premise 侧标记没有导出常量：没有生产写入方，内联字面量即可（详见 ARCHITECTURE §8.1）。 */
 export const isRuleFallbackAdvice = (advice: Pick<Advice, 'reasoning'>): boolean =>
-  advice.reasoning.premise.includes(RULE_FALLBACK_PREMISE_MARKER) ||
+  advice.reasoning.premise.includes('LLM 推理不可用') ||
   advice.reasoning.evidence.some((line) => line.includes(RULE_FALLBACK_EVIDENCE_MARKER));
 
 export const AdviceQuerySchema = z.object({

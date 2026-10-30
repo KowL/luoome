@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { dailyCycleAvailable, dailyCycleResult } from './daily-cycle.js';
+import {
+  closingBatchAvailable,
+  closingBatchResult,
+  dailyCycleAvailable,
+  dailyCycleResult,
+} from './daily-cycle.js';
 
 describe('daily cycle operation presentation', () => {
   it('requires an account and the exact batch policy', () => {
@@ -40,5 +45,35 @@ describe('daily cycle operation presentation', () => {
       text: '日循环结果待核对，请勿重复执行。',
     });
     expect(dailyCycleResult({ state: 'executing' }).tone).toBe('warn');
+  });
+
+  it('收盘批处理：可用性看 run_closing_report_cutoff policy，结果读 created/failed', () => {
+    expect(closingBatchAvailable(null)).toBe(false);
+    expect(
+      closingBatchAvailable({ accountId: 'a', policies: [{ name: 'run_closing_report_cutoff' }] }),
+    ).toBe(true);
+    expect(
+      closingBatchResult({
+        state: 'succeeded',
+        result: {
+          ok: true,
+          data: {
+            outcome: 'due',
+            summary: { date: '2026-10-30', created: 2, failed: 0, recoveredFailed: 0 },
+          },
+        },
+      }),
+    ).toMatchObject({ tone: 'ok', text: expect.stringContaining('2026-10-30') });
+    expect(
+      closingBatchResult({
+        state: 'succeeded',
+        result: {
+          ok: true,
+          data: { outcome: 'partial', summary: { date: '2026-10-30', created: 0, failed: 1 } },
+        },
+      }),
+    ).toMatchObject({ tone: 'warn' });
+    expect(closingBatchResult({ state: 'unknown' })).toMatchObject({ tone: 'warn' });
+    expect(closingBatchResult(null)).toBeNull();
   });
 });

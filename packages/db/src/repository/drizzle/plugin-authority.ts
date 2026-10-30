@@ -1,9 +1,11 @@
 import {
   canClaimPluginOperation,
+  PLUGIN_OPERATION_NON_TERMINAL_STATES,
   type PluginAuthorityRepository,
   type PluginAutomationGrant,
   PluginAutomationGrantSchema,
   type PluginOperation,
+  type PluginOperationNonTerminal,
   PluginOperationSchema,
   type PluginOperationScope,
   samePluginTask,
@@ -56,6 +58,31 @@ export class DrizzlePluginAuthorityRepository implements PluginAuthorityReposito
   async findOperation(scope: PluginOperationScope) {
     const row = this.db.select().from(operations).where(scoped(scope)).get();
     return row ? PluginOperationSchema.parse(row.recordJson) : null;
+  }
+  async listNonTerminalOperationsByAccount(accountId: string) {
+    return this.db
+      .select({
+        id: operations.id,
+        userId: operations.userId,
+        accountId: operations.accountId,
+        state: operations.state,
+        recordJson: operations.recordJson,
+      })
+      .from(operations)
+      .where(
+        and(
+          eq(operations.accountId, accountId),
+          inArray(operations.state, [...PLUGIN_OPERATION_NON_TERMINAL_STATES]),
+        ),
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        accountId: row.accountId,
+        state: row.state as PluginOperationNonTerminal['state'],
+        tool: row.recordJson.tool,
+      }));
   }
   async claimOperation(proof: Parameters<PluginAuthorityRepository['claimOperation']>[0]) {
     return this.db.transaction(

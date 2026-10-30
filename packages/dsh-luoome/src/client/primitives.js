@@ -69,10 +69,15 @@ export const Pill = ({ tone = 'quiet', dot = false, children }) =>
     children,
   );
 
-export const Section = ({ title, meta, children, delay = 0 }) =>
+export const Section = ({ title, meta, children, delay = 0, id }) =>
   h(
     'section',
-    { className: 'luo-section', style: delay ? { animationDelay: `${delay}ms` } : undefined },
+    {
+      className: 'luo-section',
+      style: delay ? { animationDelay: `${delay}ms` } : undefined,
+      // 面板内 section 锚点（T14 诊断：settings 内的 section=diagnostics，不新增顶层面板）。
+      ...(id === undefined ? {} : { id, 'data-luoome-section': id }),
+    },
     title
       ? h(
           'div',

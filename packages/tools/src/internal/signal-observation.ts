@@ -25,6 +25,8 @@ const pending = (
     baselinePrice,
     baselineAt,
     horizon,
+    // 前瞻写入：候选由当时的信号与价格快照构成，口径恒为 pit。
+    vintage: 'pit',
     status: 'pending',
     benchmarkStatus: 'unavailable',
     dueAt: signalObservationDueAt(baselineAt, horizon),
@@ -42,6 +44,7 @@ export const observationsForWatchTrigger = (
         sourceId: trigger.id,
         stockId: trigger.stockId,
         horizon,
+        vintage: 'pit' as const,
         status: 'unavailable' as const,
         benchmarkStatus: 'unavailable' as const,
         provenance: {
@@ -78,6 +81,7 @@ export const observationsForStrategySignal = (
         sourceId: signal.id,
         stockId: signal.stockId,
         horizon,
+        vintage: 'pit' as const,
         status: 'unavailable' as const,
         benchmarkStatus: 'unavailable' as const,
         provenance: {

@@ -2,14 +2,20 @@ import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   ActiveSignalObservationHorizonSchema,
   aggregateSignalObservationStats,
+  assertSignalObservationVintageHomogeneity,
   completeSignalObservationFromDailyBars,
+  countSignalObservationVintages,
   type DailyBar,
+  DEFAULT_SIGNAL_OBSERVATION_STATS_VINTAGE,
   deduplicateSignalObservations,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
   SignalObservationSchema,
   SignalObservationSourceKindSchema,
+  type SignalObservationVintage,
+  SignalObservationVintageSchema,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+  signalObservationVintages,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -48,6 +54,10 @@ export const GetSignalObservationStatsInput = z
     until: z.coerce.date().optional(),
     sourceKind: SignalObservationSourceKindSchema.optional(),
     horizons: z.array(ActiveSignalObservationHorizonSchema).min(1).max(3).optional(),
+    /** 显式指定单一 vintage 口径；缺省只统计 pit，绝不让 restated/legacy 混进前瞻样本池。 */
+    vintage: SignalObservationVintageSchema.optional(),
+    /** 显式请求全量口径（pit + restated + legacy）；结果必须带混算披露，仅供诊断对照。 */
+    includeAllVintages: z.boolean().default(false),
     limit: z.number().int().min(1).max(SIGNAL_OBSERVATION_STATS_LIMIT).default(1000),
   })
   .superRefine((input, context) => {
@@ -56,6 +66,13 @@ export const GetSignalObservationStatsInput = z
         code: z.ZodIssueCode.custom,
         path: ['until'],
         message: 'until 必须不早于 since',
+      });
+    }
+    if (input.vintage !== undefined && input.includeAllVintages) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['includeAllVintages'],
+        message: 'vintage 与 includeAllVintages 互斥：要么指定单一口径，要么显式请求全量混算',
       });
     }
   });
@@ -68,6 +85,16 @@ export const GetSignalObservationStatsOutput = z.object({
   }),
   sourceKind: SignalObservationSourceKindSchema.optional(),
   horizons: z.array(ActiveSignalObservationHorizonSchema),
+  /** 本次统计实际使用的口径回显；'all' 表示显式请求的全量混算。 */
+  vintage: SignalObservationVintageSchema.or(z.literal('all')),
+  /** 候选池内各 vintage 的条数（读取窗口内），用于披露被排除的组。 */
+  vintageCounts: z.object({
+    pit: z.number().int().nonnegative(),
+    restated: z.number().int().nonnegative(),
+    legacy: z.number().int().nonnegative(),
+  }),
+  /** true 仅当显式全量且候选池里确实存在多种 vintage。 */
+  mixedVintages: z.boolean(),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
   missingRate: z.number().min(0).max(1),
@@ -90,12 +117,38 @@ const buildLimitations = (
   total: number,
   missingRate: number,
   hasObservedAsOf: boolean,
+  vintageCounts: Readonly<Record<SignalObservationVintage, number>>,
 ): string[] => {
   const limitations = [
     '这是信号后续表现的描述性统计，不是回测、不是胜率承诺，也不是因果结论。',
     '样本按 stock-day-horizon 去重；pending/unavailable 不计入收益均值，但计入 missingRate。',
     `本次最多读取 ${input.limit} 条 observation；更大范围请分段查询。`,
   ];
+  if (input.vintage === undefined && !input.includeAllVintages) {
+    limitations.push(
+      `默认只统计 vintage=pit；本次读取范围内另有 ${vintageCounts.restated} 条 restated、${vintageCounts.legacy} 条 legacy 未计入（不计入均值、分位与 missingRate）。`,
+    );
+  }
+  if (input.includeAllVintages) {
+    const mixed =
+      vintageCounts.pit + vintageCounts.restated + vintageCounts.legacy > 0 &&
+      [vintageCounts.pit > 0, vintageCounts.restated > 0, vintageCounts.legacy > 0].filter(
+        (present) => present,
+      ).length > 1;
+    limitations.push(
+      mixed
+        ? `本次为显式全量请求，结果混合了 pit ${vintageCounts.pit} 条 / restated ${vintageCounts.restated} 条 / legacy ${vintageCounts.legacy} 条；混算均值只作诊断对照，不得用于策略历史命中、Advice 证据链或复盘「当时依据」。`
+        : '本次为显式全量请求，但读取范围内只有一个 vintage 口径，未发生混算。',
+    );
+  }
+  if (input.vintage === 'restated') {
+    limitations.push(
+      'restated 只允许用于统计层（IC / 分位 / 换手）；不得冒充 pit 用于策略历史命中、Advice 证据链或复盘「当时依据」。',
+    );
+  }
+  if (input.vintage === 'legacy') {
+    limitations.push('legacy 是退役周期或已下线来源的存量数据，不具备前瞻可复现性，仅作历史对照。');
+  }
   if (input.sourceKind === undefined) {
     limitations.push(
       '未限定 sourceKind，结果可能混合 watch-trigger、strategy-signal 与历史兼容来源。',
@@ -120,15 +173,24 @@ export const getSignalObservationStatsTool = defineTool({
   input: GetSignalObservationStatsInput,
   output: GetSignalObservationStatsOutput,
   handler: async (input, ctx) => {
-    const observations = await ctx.repos.signalObservation.list({
+    const pool = await ctx.repos.signalObservation.list({
       ...(input.since === undefined ? {} : { from: input.since }),
       ...(input.until === undefined ? {} : { to: input.until }),
       ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
       horizons: input.horizons ?? SIGNAL_OBSERVATION_HORIZONS,
       limit: input.limit,
     });
-    const sampled = deduplicateSignalObservations(observations);
-    const aggregates = aggregateSignalObservationStats(observations);
+    const vintageCounts = countSignalObservationVintages(pool);
+    const vintage: SignalObservationVintage | 'all' = input.includeAllVintages
+      ? 'all'
+      : (input.vintage ?? DEFAULT_SIGNAL_OBSERVATION_STATS_VINTAGE);
+    const selected =
+      vintage === 'all' ? pool : pool.filter((observation) => observation.vintage === vintage);
+    // 混算守卫：非「显式全量」路径下，同一统计结果只能有一个 vintage 口径。
+    if (vintage !== 'all') assertSignalObservationVintageHomogeneity(selected);
+    const mixedVintages = signalObservationVintages(selected).length > 1;
+    const sampled = deduplicateSignalObservations(selected);
+    const aggregates = aggregateSignalObservationStats(selected);
     const stats: SignalObservationStatsItem[] = aggregates.map((aggregate) => {
       const rows = sampled.filter((observation) => observation.horizon === aggregate.horizon);
       const completeRows = rows.filter((observation) => observation.status === 'complete');
@@ -186,12 +248,21 @@ export const getSignalObservationStatsTool = defineTool({
       },
       ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
       horizons,
+      vintage,
+      vintageCounts,
+      mixedVintages,
       total,
       complete,
       missingRate,
       ...(observedAsOf === undefined ? {} : { observedAsOf }),
       stats,
-      limitations: buildLimitations(input, total, missingRate, observedAsOf !== undefined),
+      limitations: buildLimitations(
+        input,
+        total,
+        missingRate,
+        observedAsOf !== undefined,
+        vintageCounts,
+      ),
     };
   },
 });

@@ -17,6 +17,7 @@ import {
   money,
   OBSERVATION_HORIZON,
   OBSERVATION_STATUS,
+  OBSERVATION_VINTAGE,
   points,
   ratio,
   relative,
@@ -183,7 +184,18 @@ const ObservationsTable = ({ pending, loading, error }) => {
                   'tr',
                   { key: item.id },
                   h('td', null, h('span', { className: 'luo-stock-name' }, item.stockId)),
-                  h('td', null, OBSERVATION_HORIZON[item.horizon] ?? item.horizon),
+                  h(
+                    'td',
+                    null,
+                    OBSERVATION_HORIZON[item.horizon] ?? item.horizon,
+                    OBSERVATION_VINTAGE[item.vintage] === undefined
+                      ? null
+                      : h(
+                          Pill,
+                          { tone: OBSERVATION_VINTAGE[item.vintage].tone },
+                          OBSERVATION_VINTAGE[item.vintage].label,
+                        ),
+                  ),
                   h('td', null, when(item.dueAt)),
                   h('td', null, int(item.attemptCount ?? 0)),
                   h('td', null, OBSERVATION_STATUS[item.status] ?? item.status),

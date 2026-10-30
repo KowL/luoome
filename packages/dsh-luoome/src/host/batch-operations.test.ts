@@ -23,9 +23,11 @@ describe('native batch policies', () => {
         LUOOME_AUTOMATIONS_ENABLED: 'true',
       }),
     ).toMatchObject({ batchEnabled: true, automationsEnabled: true });
-    expect(createProductionOperationPolicies()).toHaveLength(29);
+    // 不写死 policy 总数：集合成员由 `production.test.ts` 的精确名单断言，
+    // 这里只断言「批处理开关恰好追加 5 条 scheduled policy」。
+    const base = createProductionOperationPolicies();
     const policies = createProductionOperationPolicies(undefined, { batchEnabled: true });
-    expect(policies).toHaveLength(34);
+    expect(policies).toHaveLength(base.length + 5);
     expect(policies.filter((policy) => policy.scheduled)).toHaveLength(5);
   });
 

@@ -678,7 +678,7 @@ describe('Strategy Experiment Lab', () => {
         },
         {
           id: 'strict-backtest',
-          title: '严格回测',
+          title: '组合回测',
           status: 'unavailable',
           persisted: true,
           description: '数据门禁未满足。',
@@ -766,7 +766,7 @@ describe('Strategy Experiment Lab', () => {
     expect(node.textContent).toContain('未建档');
     expect(node.textContent).toContain('0.00%');
     expect(node.textContent).toContain('尚无真实生产 SignalObservation');
-    expect(node.textContent).toContain('严格回测');
+    expect(node.textContent).toContain('组合回测');
 
     const noObservationContext = {
       ...x4Context,
@@ -878,7 +878,7 @@ describe('Strategy Experiment Lab', () => {
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0);
   });
 
-  it('严格回测经过二次确认，第二步取消时不发送 POST', async () => {
+  it('组合回测经过二次确认，第二步取消时不发送 POST', async () => {
     invalidateExperimentCache();
     const strictContext = {
       ...experimentContext,
@@ -916,7 +916,7 @@ describe('Strategy Experiment Lab', () => {
     );
     node
       .querySelectorAll('button')
-      .find((button) => button.textContent === '创建严格回测')
+      .find((button) => button.textContent === '创建组合回测')
       .click();
     modalBody
       .querySelectorAll('button')
@@ -1082,7 +1082,7 @@ describe('Strategy Experiment Lab', () => {
       }
       if (
         init?.method === 'POST' &&
-        String(path).includes('/backtests/validation-running/cancel')
+        String(path).includes('/evaluations/validation-running/cancel')
       ) {
         return jsonResponse({
           ok: true,
@@ -1289,7 +1289,7 @@ describe('运行详情弹窗信号列表', () => {
   });
 });
 
-describe('模拟回测（历史回放）', () => {
+describe('历史评估（逐日重放）', () => {
   it('规范化可选股票范围并去重', () => {
     expect(parseBacktestStockIds('600519.sh, 000001.SZ\n600519.SH')).toEqual([
       '600519.SH',
@@ -1352,7 +1352,7 @@ describe('模拟回测（历史回放）', () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(requestedPath).toContain('/api/strategies/ma-bullish/backtests');
+    expect(requestedPath).toContain('/api/strategies/ma-bullish/evaluations');
     expect(requestedBody).toEqual({
       from: '2026-08-10',
       to: '2026-08-11',
@@ -1427,7 +1427,7 @@ describe('模拟回测（历史回放）', () => {
 
   it('历史评估取消后状态文案不冒充完成', async () => {
     globalThis.fetch = async (path) => {
-      if (String(path).endsWith('/backtests')) {
+      if (String(path).endsWith('/evaluations')) {
         return jsonResponse({
           ok: true,
           data: {
@@ -1464,7 +1464,7 @@ describe('模拟回测（历史回放）', () => {
   });
 });
 
-describe('严格回测', () => {
+describe('组合回测', () => {
   it('门禁不完整时只展示不可用说明，不展示伪指标', () => {
     const node = buildStrictBacktestResultContent({
       id: 'strict-1',

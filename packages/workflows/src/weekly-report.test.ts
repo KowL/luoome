@@ -96,6 +96,7 @@ const completeSignalObservation = (): SignalObservation => ({
   baselinePrice: 100,
   baselineAt: new Date('2026-07-28T08:00:00.000Z'),
   horizon: 't1',
+  vintage: 'pit',
   closePrice: 110,
   returnPct: 0.1,
   maxFavorableExcursionPct: 0.12,
@@ -120,6 +121,7 @@ const pendingSignalObservation = (): SignalObservation => ({
   baselinePrice: 50,
   baselineAt: new Date('2026-07-29T08:00:00.000Z'),
   horizon: 't1',
+  vintage: 'pit',
   benchmarkStatus: 'unavailable',
   status: 'pending',
   provenance: {
@@ -243,6 +245,7 @@ const seedStrategyWithPublishedRun = async (ctx: ToolContext): Promise<void> => 
   });
   const observationBase: Omit<SignalObservation, 'id' | 'horizon' | 'benchmarkStatus'> = {
     sourceKind: 'strategy-signal',
+    vintage: 'pit',
     sourceId: 'weekly-review-signal-1',
     stockId: '600519.SH',
     baselinePrice: 100,

@@ -1,13 +1,13 @@
 # luoome 用户手册
 
-> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算让外部 Agent 使用 luoome，请安装 [luoome Skill](../skills/luoome/SKILL.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算让外部 Agent 使用 luoome，请安装 [dsh-luoome 插件](../packages/dsh-luoome/README.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
-- 作为 **DSH 插件**接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供三面板、四条投研技能与原生工具/审批（旧 MCP 四实例仅保留给手动验收）
+- 作为 **DSH 插件**接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供五个业务面板、随包技能与原生工具/审批
 - 在**终端（TUI）**盯盘、看今日建议
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
-- 作为 **MCP server** 按显式授权向 Claude Desktop / OpenClaw 等 AI agent 暴露能力
+- 作为 **CLI / TUI** 本地工具：`luoome tools`、`luoome watch`、`luoome workflow run` 直连同一份事实库
 - 通过**工作流**运行 Strategy、同步 Watchlist、盯盘与生成报告
 
 但 luoome **不会**替你下单。所有建议都带 `decision / confidence / horizon / reasoning / risks / disclaimers / validUntil`，人最终拍板。
@@ -23,7 +23,7 @@ DSH 是唯一入口，`$LUOOME_HOME/luoome.db` 是唯一事实库。批处理由
 3. [CLI 速查](#3-cli-速查)
 4. [TUI 用法](#4-tui-用法)
 5. [Web 用法](#5-web-用法)
-6. [MCP 接入](#6-mcp-接入)
+6. [MCP 接入（已下线）](#6-mcp-接入已下线)
 7. [DSH 单机用法](#7-dsh-单机用法)
 8. [多账户切换](#8-多账户切换)
 9. [复盘与 confidence 校准](#9-复盘与-confidence-校准)
@@ -89,7 +89,9 @@ luoome tools list | head
 
 ### 1.5 不安装直接用
 
-如果只是接 MCP / Agent，跳过本地 install；先按 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md) 连接 `luoome mcp serve`，再通过 Agent harness 的 Skill 机制安装整个 `skills/luoome/` 目录。
+> stdio MCP 入口已按 REQ-M2-03 下线（`luoome mcp serve` 与 `packages/mcp` 都已删除）。
+> 现在让外部 Agent 使用 luoome 的唯一路径是 DSH 插件：装好本机 luoome 与
+> [DSH 插件](#7-dsh-单机用法)，再由 DSH 会话调用插件注册的工具。
 
 ---
 
@@ -172,11 +174,11 @@ luoome web serve
 
 所有 write/external mutation 同时要求显式环境开关与同源 `Origin`。
 
-**持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；MCP 暴露策略不受影响。
+**持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；插件暴露策略不受影响。
 
 **Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 published operational run 会投影，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
-**Strategy 模拟回测**：进入已发布且运行中的策略工作台，点击「模拟回测」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是历史回放模拟，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
+**Strategy 历史评估（逐日重放）**：进入已发布且运行中的策略工作台，点击「历史评估（逐日重放）」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是逐日选股重放，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
 
 **研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。默认搜索只使用本地 FTS5。勾选“语义扩展（外部）”后，查询文本会发送给显式配置的 embedding provider；“增量重建”还会发送私人 chunk 正文并要求 `external + write`。页面会显示模型 identity、覆盖状态与不完整诊断；未配置、provider 失败或覆盖不完整时稳定回退 FTS5，零命中不代表完整研究库无证据。固定评测只比较版本化判定集的 Recall@K/MRR/成本/延迟，不等同于生产质量结论。
 
@@ -242,13 +244,11 @@ luoome workflow run sync-research-vault-remote --mode manual
 
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
 
-### 2.4 MCP 模式
+### 2.4 插件模式（原 MCP 模式，已下线）
 
-```bash
-luoome mcp serve    # stdio JSON-RPC
-```
-
-安装 [luoome Skill](../skills/luoome/SKILL.md) 并连接 MCP 后，Agent 即可发现当前版本默认暴露的 read + advice tools；完整库存以 MCP discovery 为准。
+`luoome mcp serve` 已删除（REQ-M2-03）。Agent 侧的能力发现改为 DSH 插件注册的 descriptor：
+装好插件后，DSH 会话直接看到插件的只读工具、market external 工具与精确写回 policy；
+完整库存以插件 descriptor 与 `luoome tools list --json` 为准。
 
 ---
 
@@ -267,7 +267,6 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome tools call subscribe_strategy_to_watchlist --input '{...}'` | 明确订阅 Strategy 到目标 Watchlist |
 | `luoome tools call unsubscribe_strategy_from_watchlist --input '{...}'` | 取消订阅并保留审计历史 |
 | `luoome alert list` | 查询 AlertPlan |
-| `luoome mcp serve` | 启动 MCP stdio server |
 | `luoome tools list [--json]` | 列全部注册 tool（含 sideEffect） |
 | `luoome tools inspect <name>` | 看 tool 的 input/output schema |
 | `luoome tools call <name> --input '{...}'` | 直接调 tool（按解析后的 ctx） |
@@ -378,20 +377,19 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 
 ---
 
-## 6. MCP 接入
+## 6. MCP 接入（已下线）
 
-`luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认暴露：
+> **本节已下线（REQ-M2-03 / T13）**：`packages/mcp`、`luoome mcp serve`、`LUOOME_MCP_*` 环境项、
+> `deploy/dsh/mcp-tool-probe.ts` 与四个 MCP 实例都已删除。对外接入统一走
+> [DSH 插件](#7-dsh-单机用法)；暴露面判定保留在 `packages/tools/src/exposure/`，
+> 交互分析写回契约迁到 `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`。
 
-- **read** tools（list / search / get / compute）
+历史行为（仅供理解旧部署）：`luoome mcp serve` 启动 stdio JSON-RPC server，默认暴露只读
+read tools；`LUOOME_EXPOSE_WRITE` / `LUOOME_EXPOSE_EXTERNAL` / `LUOOME_EXPOSE_QUEUE` 逐项 opt-in，
+`LUOOME_EXPOSE_TOOLS` / `LUOOME_EXPOSE_DENY` 按名字放行或拒绝。
 
-opt-in 追加：
-
-- `LUOOME_EXPOSE_WRITE=true` → 追加账户、持仓、交易、研究、事件和反馈等 write tools
-- `LUOOME_EXPOSE_EXTERNAL=true` → 追加行情、同步、刷新和通知等 external tools
-- `LUOOME_EXPOSE_QUEUE=true` → 追加队列工具（分析面与手动 worker 实例专用）
-- `LUOOME_EXPOSE_TOOLS` / `LUOOME_EXPOSE_DENY` → 按工具名精确放行 / 拒绝
-
-`LUOOME_EXPOSE_TRADE=true` **永远硬卡**：MCP server 启动即抛错退出；advice × trade 隔离硬约束绝不通过 MCP 暴露。
+当前仍生效的硬约束：`LUOOME_EXPOSE_TRADE=true` **永远硬卡** —— 插件与 Web 在创建目录、
+打开事实库之前就抛错退出；advice × trade 隔离，trade 类工具在任何暴露面都不可达。
 
 ---
 
@@ -429,7 +427,7 @@ analysis worker 或 queue probe。部署细节见 [7.7](#77-安装升级备份�
 `/api/luoome/call` 仍只读；`trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 启动即失败；自动任务默认关闭。
 
 旧「当前 MCP 过渡形态」的四个实例（`luoome` / `luoome-settings` / `luoome-analysis` /
-`luoome-batch`）与手动 worker 仍保留源码，但**只用于手动/隔离验收**，默认部署不启动；P5 再统一删除。
+`luoome-batch`）与手动 worker 已随 REQ-M2-03 删除源码，不再有手动 MCP 验收入口。
 
 ### 7.2 面板
 
@@ -481,7 +479,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 不再需要 `DSH_TOOLS_MODE=ptc`。PTC 仍是官方备选通道，需要时在启动 DSH 进程时显式设置即可，
 默认配置不会自动切换。完整边界见[部分更新与真实模型验收记录](./ddd/dsh-luoome-plugin-detailed-design.md#917-decisionreview-部分更新回归修复2026-10-25)。
 旧 `.dsh/skills/`（`morning-brief`、`stock-deep-dive`、`decision-journal`、`luoome-batch`、
-`analysis-worker`）属于旧 MCP 过渡形态，默认部署不安装；`analysis-worker` 仅用于手动 worker 验收。
+`analysis-worker`）属于旧 MCP 过渡形态，已随 REQ-M1-01/M2-03 删除；技能唯一根是插件包。
 
 看盘页在交易时段每 60 秒自动刷新一次，非交易时段停止轮询、等下一次开盘再恢复；标签页隐藏时不发请求，回到前台立即刷新一次；刷新失败保留最后一次成功画面并提示，也可点「刷新全部」或各分区的「刷新 / 重试」。指数、市场温度、账户、持仓、自选、行业、要闻等分区独立请求并立即展示各自结果，慢接口不会阻塞其他区；刷新失败保留同一页上次成功数据，显示简短错误与重试入口。卡片和行情表不展示数据来源、读取时间或说明性提示，数值缺失保持空缺。自选汇总已启用关注列表中当前账户可见的成员，每页 40 只，涨跌幅和成交额排序仅作用于当前页；切页时不会展示上一页行情。今日触发按北京时间自然日筛选，显示优先级最高的 8 条。点击股票打开详情，历史日 K 按需读取，对话分析由用户主动点击。持仓页回读当前账户持仓、最近成交和绩效快照；DSH「设置 → 投资设置」可预览、取消和确认账户改名，名称以外的账本字段不变。刷新后可按操作 UUID 核对结果，浏览器不保存确认 token。新增/切换账户、完整持仓维护、其他供应商凭据配置和数据导入恢复仍使用现有受控管理入口。
 
@@ -501,10 +499,10 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 |---|---|---|
 | 同快照试跑 | 同一批实际输入上，规则修改改变了哪些入选结果和评分？ | 有限样本、非持久化运行；缺失数据保留为未知，不能推断全市场或收益 |
 | 历史评估 | 每个历史交易日哪些股票满足规则？ | 需要本地历史与 PIT 事实；任务进度、失败日和缺失日分别保留 |
-| 严格回测 | 按固定执行模型，组合在历史上如何变化？ | 必须通过可交易性、公司行动、基准等数据门禁；不能用当前行情补历史 |
+| 组合回测 | 按固定执行模型，组合在历史上如何变化？ | 必须通过可交易性、公司行动、基准等数据门禁；不能用当前行情补历史 |
 | T+1/T+3/T+5 真实观察 | 已有信号随后实际出现了什么？ | 是逐股事后观察，不是组合回测；小样本和未到期观察不能证明策略有效 |
 
-严格回测当前执行模型是 `next-open-full-rebalance-equal-weight-v1`。真实历史数据不具备所需字段时，页面应列出日期、字段或来源缺口；有日线不等于具备严格回测资格。同日不同版本、同策略跨日和不同策略比较的范围不同，只有后端提供的同口径事实才能比较。
+组合回测当前执行模型是 `next-open-full-rebalance-equal-weight-v1`。真实历史数据不具备所需字段时，页面应列出日期、字段或来源缺口；有日线不等于具备组合回测资格。同日不同版本、同策略跨日和不同策略比较的范围不同，只有后端提供的同口径事实才能比较。
 
 持续观察还要核对 DSH 任务、有效授权和实际运行回执。仅开启策略日程不能证明后台正在运行，通知受理也不等于送达。研究结论应保存反证、限制和下一步；导出的 manifest 携带定义与证据引用，不携带完整供应商历史数据，也不会自动发布或交易。
 
@@ -542,7 +540,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 - 单机形态没有生产者进程，默认部署也没有常驻消费者，空队列是正常状态。
 - 过期租约可以重新领取，旧 token 不能写回。
 - `queue` 是独立能力；默认部署只由两条 analysis record policy 使用，claim/complete/fail 与
-  job 查询不在插件暴露面。手动 worker 验收才用完整队列消费白名单（旧 MCP profile）。
+  job 查询不在插件暴露面（旧 MCP profile 的完整队列消费白名单已随入口删除）。
 
 建议展示保留反证、风险、免责声明和有效期；`legacy-ai` 表示迁移前的建议，
 不能据此推断当时模型或技能版本。校准页面按生成方式、模型和技能版本分别统计，
@@ -669,7 +667,7 @@ node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('<
 
 - **TUI**：持仓 / 建议全部按新账户重读。list_holdings 等读路径走 `ctx.user.defaultAccountId`。
 - **Web**：账户下拉切换会触发 `/api/account/select`，然后 reload 当前路由。
-- **CLI / MCP**：账户相关 tool 可通过 `accountId` 显式选账户，缺省使用当前上下文账户；MCP 不暴露 `add_trade` 或 `record_decision_trade`。
+- **CLI**：账户相关 tool 可通过 `accountId` 显式选账户，缺省使用当前上下文账户；插件暴露面不暴露 `add_trade` 或 `record_decision_trade`。
 
 ### 8.1 给新账户加仓（演示）
 
@@ -717,8 +715,8 @@ luoome tools call add_trade --input '{
 最新上下文，允许修改内容后新建请求。网络结果未知时仍保留原请求，不能用此方式跳过核对。
 
 CLI 仍可用 `luoome advice outcome <adviceId> --followed true --pnl 80` 记录当前账户的明确反馈；
-MCP 在开启 write 能力后可用 `record_advice_outcome` 或 `save_decision_review`。
-这些反馈入口不会登记成交，成交类 tool 不通过 MCP 暴露。
+DSH 插件用 `record_advice_outcome` 或 `save_decision_review` 精确 policy 做同一件事。
+这些反馈入口不会登记成交，成交类 tool 不在任何暴露面出现。
 
 旧版本没有账户归属的反馈仍留在历史数据中，不会自动分摊到当前账户。迁移只恢复可验证的旧成交与
 Advice 显式关联，不据此生成采纳反馈；需要时由用户重新核对并记录。
@@ -785,8 +783,8 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | `false` | 显式挂载 Research embedding 外部 capability；默认仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | embedding 模型目录路径；密钥由目录里的 `apiKeyEnv` 从环境读取 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | `false` | `git` 启用独立安全拉取 workflow；不配置则完全不装配 |
-| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行复盘、报告补充等本地写入端点 |
-| `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
+| `LUOOME_EXPOSE_WRITE` | `false` | Web 放行复盘、报告补充等本地写入端点；CLI 侧同一开关 |
+| `LUOOME_EXPOSE_EXTERNAL` | `false` | Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web 设置页配置，缺失降级为 log channel |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
@@ -821,7 +819,7 @@ Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，
 ### 12.5 luoome 侧找不到模型或 provider 密钥
 
 模型推理与模型配置都由 DSH 承担，luoome 侧没有模型运行时、模型目录与模型设置页。
-需要模型判断的任务由 DSH agent 通过 MCP 调用工具完成，密钥由 DSH 侧配置。
+需要模型判断的任务由 DSH agent 通过插件注册的工具完成，密钥由 DSH 侧配置。
 
 看板、持仓、策略、提醒、待确认草案与数据导入导出都不依赖模型，可直接使用。
 
@@ -851,8 +849,8 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ### 13.1 配置模型
 
-模型推理在 DSH 侧完成：先在 DSH Settings → Models 配置模型与密钥，DSH agent 再通过 MCP
-调用 luoome 工具产出建议、简报与复盘。未配置模型时，历史事实、建议与只读面板仍可读取，
+模型推理在 DSH 侧完成：先在 DSH Settings → Models 配置模型与密钥，DSH agent 再通过插件
+注册的 luoome 工具产出建议、简报与复盘。未配置模型时，历史事实、建议与只读面板仍可读取，
 分析不会成功；不要把本机 API key 复制进部署配置。
 
 luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只负责看板、持仓、策略、提醒、
@@ -867,9 +865,9 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 - 默认部署已切纯插件：`dsh-web`（Node + DSH + dsh-luoome）与 `caddy` 两个服务，没有 MCP/Bun/
   worker/queue probe 进程；插件 profile 由 `deploy/dsh/profile-seed.mjs` 装配。安装、升级、
   一致性备份与回退步骤见 [7.7](#77-安装升级备份与回退宿主机直部署)。
-- 旧 MCP 过渡形态源码保留但默认不启动；仓库完成隔离切换/回退演练后，生产服务器已于
-  2026-10-25 切到纯插件形态（切换记录见服务器 `/opt/luoome/DEPLOYMENT.md`），旧 MCP/Bun
-  源码尚未删除（P5）。
+- 旧 MCP 过渡形态源码已删除（REQ-M2-03：`packages/mcp`、`luoome mcp serve`、部署侧探针）；
+  仓库完成隔离切换/回退演练后，生产服务器已于 2026-10-25 切到纯插件形态（切换记录见服务器
+  `/opt/luoome/DEPLOYMENT.md`）。
 - 线上版本与升级结果保存在对应 release 的 `release-manifest.json`、`deployment-result.json`，
   升级与回退记录见服务器 `/opt/luoome/DEPLOYMENT.md`；升级保留既有自动任务开关与逐任务授权。
 
@@ -878,7 +876,7 @@ luoome 侧不再保留模型目录、provider 密钥或模型设置页；Web 只
 - [文档导航](./README.md) — 产品需求、技术设计、运维手册与历史归档
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型
 - [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) — 当前形态的契约、阶段与验收口径
-- [luoome Skill](../skills/luoome/SKILL.md) — 外部 Agent 接入、工具编排与安全规则
+- [dsh-luoome 安装说明](../packages/dsh-luoome/README.md) — 外部接入：插件安装、面板与随包技能
 - [AGENTS.md](../AGENTS.md) — 编码 Agent 仓库开发规范
 - [ROADMAP.md](./ROADMAP.md) — 版本演进
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献者指南

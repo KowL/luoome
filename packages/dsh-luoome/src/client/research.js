@@ -454,7 +454,7 @@ function ResearchWorkbenchBody({
       })),
     ...(context?.strictBacktests ?? []).map((run) => ({
       id: `strict-backtest:${run.id}`,
-      label: `${when(run.spec.from)} → ${when(run.spec.to)} · 严格回测审计`,
+      label: `${when(run.spec.from)} → ${when(run.spec.to)} · 组合回测门禁审计`,
     })),
     ...(context?.realObservations.observationIds ?? []).map((id, index) => ({
       id: `signal-observation:${id}`,
@@ -741,7 +741,7 @@ function ResearchWorkbenchBody({
               : h(
                   'p',
                   { className: 'luo-fine' },
-                  '尚未检查。实时试跑、历史评估与严格回测的数据资格各自判断。',
+                  '尚未检查。实时试跑、历史评估与组合回测门禁的资格各自判断。',
                 ),
           ),
           h(
@@ -1095,7 +1095,7 @@ function ResearchWorkbenchBody({
                       {
                         trial: '同快照试跑',
                         'historical-evaluation': '历史选股评估',
-                        'strict-backtest': '严格组合回测',
+                        'strict-backtest': '组合回测（门禁审计）',
                         'signal-observation': '真实信号观察',
                       }[layer.id],
                     ),
@@ -1255,7 +1255,7 @@ function ResearchWorkbenchBody({
             {
               onClick: () =>
                 research(
-                  '请核对当前候选是否具备严格组合回测的数据门禁，逐项报告 PIT、历史修订、费用、滑点、可交易性、公司行动与基准缺口；完整数据可用时再直接执行回测操作。',
+                  '请核对当前候选是否具备组合回测门禁，逐项报告 PIT、历史修订、费用、滑点、可交易性、公司行动与基准缺口；门禁未完备时只报告阻塞项，完备时再确认创建组合回测运行。',
                 ),
             },
             '核对回测门禁',

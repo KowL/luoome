@@ -355,7 +355,7 @@ export const researchRequestFor = (strategyId, runId = null, context = {}) => {
     strategyId,
     runId: runId ?? null,
     researchContext,
-    prompt: `请继续策略“${strategyText(context.strategyName) || '所选策略'}”的研究工作台。给出结论、证据、反证、风险与有效期。只有在我明确提出写入意图时才直接执行。\n\n当前研究问题：${context.question || '尚未填写，先帮助我缩小到一个可反证的问题。'}\n本次意图：${context.intent || '继续当前研究'}\n基线：第 ${context.baseVersion} 版；候选：${context.candidateVersion ? `第 ${context.candidateVersion} 版` : '尚未保存'}。${runId ? `当前正式匹配来自第 ${context.runVersion ?? '待核对'} 版，事实时间 ${context.dataAsOf ?? '待核对'}，与候选试跑分开。` : ''}\n下一步：${context.nextStep || '待确定'}。\n请读取当前账户的已保存研究并核对修订；页面上下文若尚未保存，只作为我的研究草稿。刷新或跨日继续时保留上述版本，不自动替换为最新发布版本。分别说明同快照试跑、历史选股评估、严格组合回测与真实信号观察，缺失数据不计为零。\n研究绑定（仅用于精确读取与操作参数）：${JSON.stringify(researchContext)}${context.definition ? `\n尚未保存的候选规则：${JSON.stringify(context.definition)}` : ''}`,
+    prompt: `请继续策略“${strategyText(context.strategyName) || '所选策略'}”的研究工作台。给出结论、证据、反证、风险与有效期。只有在我明确提出写入意图时才直接执行。\n\n当前研究问题：${context.question || '尚未填写，先帮助我缩小到一个可反证的问题。'}\n本次意图：${context.intent || '继续当前研究'}\n基线：第 ${context.baseVersion} 版；候选：${context.candidateVersion ? `第 ${context.candidateVersion} 版` : '尚未保存'}。${runId ? `当前正式匹配来自第 ${context.runVersion ?? '待核对'} 版，事实时间 ${context.dataAsOf ?? '待核对'}，与候选试跑分开。` : ''}\n下一步：${context.nextStep || '待确定'}。\n请读取当前账户的已保存研究并核对修订；页面上下文若尚未保存，只作为我的研究草稿。刷新或跨日继续时保留上述版本，不自动替换为最新发布版本。分别说明同快照试跑、历史选股评估、组合回测（门禁审计）与真实信号观察，缺失数据不计为零。\n研究绑定（仅用于精确读取与操作参数）：${JSON.stringify(researchContext)}${context.definition ? `\n尚未保存的候选规则：${JSON.stringify(context.definition)}` : ''}`,
   };
 };
 

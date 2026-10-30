@@ -6,6 +6,7 @@ import {
   AdviceSchema,
   adviceDataSnapshotFromFacts,
   isAdviceQuoteCurrent,
+  isRuleFallbackAdvice,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
 } from './advice.js';
@@ -249,5 +250,32 @@ describe('adviceDataSnapshotFromFacts', () => {
     );
     expect(snapshot.quotes).toBeUndefined();
     expect(snapshot.strategy).toBeUndefined();
+  });
+});
+
+describe('isRuleFallbackAdvice', () => {
+  const reasoning = (premise: string, evidence: readonly string[]) => ({
+    reasoning: { premise, evidence, counterEvidence: [] },
+  });
+
+  it('只带 premise 标记（evidence 无标记）的存量建议仍判为规则兜底', () => {
+    // 历史生成器写 premise: `${RULE_FALLBACK_PREMISE_MARKER}，基于规则的保守判断`；
+    // 存量行的 evidence 可能为空或被截断，此时只有 premise 能证明它是规则兜底。
+    expect(
+      isRuleFallbackAdvice(reasoning('LLM 推理不可用，基于规则的保守判断', ['日线 MA5 上穿 MA20'])),
+    ).toBe(true);
+    expect(isRuleFallbackAdvice(reasoning('LLM 推理不可用，基于规则的保守判断', []))).toBe(true);
+  });
+
+  it('只有 evidence 标记时同样判为规则兜底', () => {
+    expect(
+      isRuleFallbackAdvice(reasoning('箱体震荡，等待方向选择', ['规则 fallback：MA20 上穿'])),
+    ).toBe(true);
+  });
+
+  it('两条标记都不存在时视为研究结论', () => {
+    expect(isRuleFallbackAdvice(reasoning('箱体震荡，等待方向选择', ['日线 MA5 上穿 MA20']))).toBe(
+      false,
+    );
   });
 });

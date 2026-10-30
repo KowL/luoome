@@ -1,6 +1,9 @@
 import { InMemoryAnalysisRepository } from './analysis.js';
 
 export * from './analysis.js';
+// 仅合约替身：内存导入状态不与既有 typed repos 共享，不得进入 createInMemoryRepos/生产装配。
+export { InMemoryDataImportRepository } from './data-import.js';
+export { InMemorySchemaMigrationRepository } from './schema-migration.js';
 
 import type {
   Account,

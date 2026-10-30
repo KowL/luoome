@@ -377,6 +377,19 @@ export const batchTools = [
   runStrategyAutonomyWeeklyTool,
 ] as const;
 
+/**
+ * 批处理面暴露给 DSH 定时任务的工具白名单。
+ * 名单与 `batchTools` 一一对应（`packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`
+ * 守着这条契约）；部署脚本从这里取，profile 装配不再自留第二份名字表。
+ */
+export const BATCH_TOOL_NAMES = [
+  'run_strategy_daily_cycle',
+  'run_closing_report_cutoff',
+  'run_portfolio_performance_snapshot',
+  'run_intraday_plan_batch',
+  'run_strategy_autonomy_weekly',
+] as const;
+
 /** 批处理工具是否应当出现在当前暴露面里。 */
 export const isBatchToolName = (name: string): boolean =>
   batchTools.some((tool) => tool.name === name);

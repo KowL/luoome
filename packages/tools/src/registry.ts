@@ -37,6 +37,7 @@ import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
+import { previewDataImportTool, restoreDataImportTool } from './tools/data-import.js';
 import {
   getDecisionReviewContextTool,
   getDecisionWriteReceiptTool,
@@ -58,6 +59,7 @@ import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
+import { getDataDiagnosticsTool } from './tools/get-data-diagnostics.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
 import { getDecisionReviewSnapshotTool } from './tools/get-decision-review-snapshot.js';
 import { getHoldingTool } from './tools/get-holding.js';
@@ -147,6 +149,7 @@ import {
 } from './tools/strategy-autonomy-action.js';
 import {
   createStrictStrategyBacktestTool,
+  executeStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
 } from './tools/strategy-backtest.js';
@@ -376,6 +379,7 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceTool,
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
+  getDataDiagnosticsTool,
   getDecisionLoopReviewTool,
   getDecisionReviewSnapshotTool,
   refreshDecisionReviewReportTool,
@@ -450,6 +454,13 @@ export const toolRegistry: Registry = createRegistry([
   resumeStrategyEvaluationSessionTool,
   cancelStrategyEvaluationSessionTool,
   createStrictStrategyBacktestTool,
+  // T48 数据导入：preview 是只读预检；restore 只作精确 Operation policy，
+  // 不进 read/market allowlist、也没有 agent 入口（见 registry-list 的 exposed 口径）。
+  previewDataImportTool,
+  restoreDataImportTool,
+  // 内部执行步（REQ-M1-05）：进 registry 是为了「一个能力一份实现」，不给 agent 面入口 ——
+  // 它不在 read/market allowlist，也没有 operation policy（见 registry-list 的 exposed 口径）。
+  executeStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
   listStrategyRunsTool,

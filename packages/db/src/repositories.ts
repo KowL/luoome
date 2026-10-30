@@ -5,6 +5,8 @@ import { DrizzlePersonalRepository } from './personal/client.js';
 import { createDrizzleReportAutomationRepository } from './personal/report-automation-client.js';
 import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-client.js';
 import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
+import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
+import { DrizzleSchemaMigrationRepository } from './repository/drizzle/schema-migration.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -65,6 +67,8 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
     personal: new DrizzlePersonalRepository(db),
     watchDelivery: createDrizzleWatchDeliveryRepository(db),
     reportAutomation: createDrizzleReportAutomationRepository(db),
+    dataImport: new DrizzleDataImportRepository(db),
+    schemaMigration: new DrizzleSchemaMigrationRepository(db),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),

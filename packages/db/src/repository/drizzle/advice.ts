@@ -23,8 +23,8 @@ type OutcomeRow = typeof adviceOutcomes.$inferSelect;
  * basedOn 走 text + json 存储，JSON.stringify 会把 Date 序列化为 ISO 字符串。
  * 读出时必须把快照里的 Date 字段（dataAsOf / quotes.*.ts）revive 回 Date；
  * 其余字段（numbers / strings）JSON 往返无损。
- * 存量行的 basedOn 可能仍含已下线的 tacticSignals key：这里不读取它，
- * 落库对象不再携带该字段即可（读兼容 = 不 crash、不 resurrect）。
+ * 存量行的 basedOn 可能仍含已下线的 key（`tacticSignals`、`llmReasoning`）：这里只按白名单
+ * 重建快照，不读取这些 key，落库对象不再携带即可（读兼容 = 不 crash、不 resurrect）。
  */
 const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
   const quotes: Record<string, Quote> | undefined =
@@ -36,7 +36,6 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
   return {
     ...(quotes !== undefined ? { quotes } : {}),
     ...(raw.indicators !== undefined ? { indicators: raw.indicators } : {}),
-    ...(raw.llmReasoning !== undefined ? { llmReasoning: raw.llmReasoning } : {}),
     ...(raw.ladder !== undefined ? { ladder: raw.ladder } : {}),
     ...(raw.strategy !== undefined ? { strategy: raw.strategy } : {}),
     dataAsOf: new Date(raw.dataAsOf),

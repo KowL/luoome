@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { SignalObservation } from '../entity/signal-observation.js';
 import {
   aggregateSignalObservationStats,
+  assertSignalObservationVintageHomogeneity,
+  countSignalObservationVintages,
   deduplicateSignalObservations,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
+  signalObservationVintageOf,
 } from './observation-stats.js';
 
 const observation = (
@@ -18,6 +21,7 @@ const observation = (
   baselinePrice: 100,
   baselineAt: new Date('2026-08-10T00:00:00.000Z'),
   horizon: 't1',
+  vintage: 'pit',
   benchmarkStatus: 'unavailable',
   status,
   provenance: {
@@ -78,5 +82,25 @@ describe('signal observation descriptive samples', () => {
     expect(stats.every((item) => item.total === 1 && item.complete === 1)).toBe(true);
     expect(stats.every((item) => item.averageBenchmarkReturnPct === undefined)).toBe(true);
     expect(SIGNAL_OBSERVATION_SAMPLE_UNIT).toBe('stock-day-horizon');
+  });
+});
+
+describe('signal observation vintage 混算守卫', () => {
+  it('统计 vintage 计数与出现顺序', () => {
+    const rows = [
+      observation('pit', 'complete'),
+      observation('legacy', 'complete', { vintage: 'legacy' }),
+      observation('legacy-2', 'pending', { vintage: 'legacy' }),
+    ];
+    expect(countSignalObservationVintages(rows)).toEqual({ pit: 1, restated: 0, legacy: 2 });
+    expect(signalObservationVintageOf(rows)).toBe('mixed');
+    expect(() => assertSignalObservationVintageHomogeneity(rows)).toThrow(/不得混合 vintage/);
+  });
+
+  it('单一归组时守卫放行，空集返回 undefined', () => {
+    const rows = [observation('pit', 'complete'), observation('pit-2', 'pending')];
+    expect(signalObservationVintageOf(rows)).toBe('pit');
+    expect(() => assertSignalObservationVintageHomogeneity(rows)).not.toThrow();
+    expect(signalObservationVintageOf([])).toBeUndefined();
   });
 });

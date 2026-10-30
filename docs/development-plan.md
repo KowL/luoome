@@ -8,8 +8,9 @@
 
 > 形态变更（2026-10-23）：多租户托管形态已下线，单机版成为唯一形态。
 > 当前主线是[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)：
-> 三个 MCP 实例、只读面板、技能目录、DSH 定时任务与队列消费。本页其余内容描述单机能力
-> （行情底座、Strategy、Watchlist、账户绩效、报告与复盘）的历史执行证据与长期门槛，仍然有效。
+> 插件工具面、只读面板、技能目录、DSH 定时任务与队列消费（MCP 实例已随 REQ-M2-03 删除，
+> 见上文形态变更）。本页其余内容描述单机能力（行情底座、Strategy、Watchlist、账户绩效、
+> 报告与复盘）的历史执行证据与长期门槛，仍然有效。
 > 已下线的托管方向文档（开发改造计划、详细设计、运行手册、定价与支付调研等）统一见
 > [文档归档清单](./README.md#历史归档)，只作历史留存，不是当前行为说明。
 
@@ -178,7 +179,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 - [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
 - SignalObservation 是真实事后观察，point-in-time replay 也是历史规则回放；即使已有 PIT universe、
   DailyBar revision 和 benchmark 事实，在费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本
-  门禁满足前，仍不展示净值、年化、Sharpe、胜率或严格回测曲线。
+  门禁满足前，仍不展示净值、年化、Sharpe、胜率或组合回测曲线。
 - [策略工作台 PRD](./prd/strategy-v2.md) 中"工作台不自动生成 Advice""发布、暂停必须人工确认"
   已被 [策略自动化与 AI 管理 PRD](./prd/strategy-ai-managed-automation.md)（2026-09-01）取代：
   daily-cycle 自动候选分析产出 Advice；发布改为晋级门自动放行，暂停/归档按确定性规则自动执行。
@@ -231,7 +232,7 @@ Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下
 | 可移植策略研究定义 | 最小 JSON 纵向切片已完成 | canonical/versioned manifest、能力/字段依赖、数据集/evaluator identity、时间切片/执行模型及 export/validate/import read tools 已落地；跨实例文件传输 UI/CLI 可后续扩展 | 导入包自带 schema/version、字段/能力依赖、数据集与 evaluator identity、时间切片和执行模型；缺能力返回 unsupported，未知 DSL 字段拒绝，不静默降级 |
 
 现实开发顺序：先完成 Phase 2 的契约与真实装配，再修正组合绩效完整性语义并积累 provider 证据；
-随后收口严格回测的八项门禁；只有 PIT 基本面事实和数据字典可用时才立项基本面因子；最后冻结可移植
+随后收口组合回测的八项门禁；只有 PIT 基本面事实和数据字典可用时才立项基本面因子；最后冻结可移植
 研究定义，以已稳定的 Strategy schema、数据版本和 evaluator identity 作为 canonical manifest。Phase 3
 任何一项的真实数据门禁都不能靠补测试、浏览器截图或一次性 mock smoke 关闭。
 
@@ -242,7 +243,7 @@ Strategy Workspace Phase C 按
 已于 2026-08-30 完成：持久化外部 Tool 已收紧为 `external + write`，独立非持久化 trial 入口、
 StrategyResult scoring breakdown、DSL catalog、实验上下文和通用人工晋级门禁均已落地。Wave B 也已完成：
 Field Registry 驱动的 Web 实验室、规则构建器、JSON 高级模式、同样本 Trial 和独立验证编排已通过自动测试
-及三档真实浏览器验收。Wave C 已完成四层证据、四周期 observation、发布后真实反馈、严格回测门禁和
+及三档真实浏览器验收。Wave C 已完成四层证据、四周期 observation、发布后真实反馈、组合回测门禁和
 发布前事实快照，并完成主线组合验证。Wave D 的 RecommendationPolicy V2 账户级确定性预检已于
 2026-08-31 完成。Wave E 也已完成显式 V2 设置和既有 WorkflowRun 预检结果的只读可观测；未扩大默认
 Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证据。
@@ -252,7 +253,7 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 - sample trial 继续 `persist=false`，不成为 current run；
 - eligible 只进入人工评审，不自动校验、发布或运行；
 - 不扩大 Advice、通知或 Watchlist 默认范围；
-- 基本面与严格回测仍分别受真实 PIT provider 和历史市场事实门禁约束；
+- 基本面与组合回测仍分别受真实 PIT provider 和历史市场事实门禁约束；
 - 不新增自动交易路径。
 
 ### 2.9 策略自动化与 AI 管理立项（2026-09-01）
@@ -264,7 +265,7 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 
 随本次立项的方向性决策：
 
-- 数据源约束：只使用行情数据，不获取公司行动与财务数据；严格回测八项门禁与基本面因子
+- 数据源约束：只使用行情数据，不获取公司行动与财务数据；组合回测八项门禁与基本面因子
   P3-3～P3-5 从候选方向中移除（代码保留，不继续投入）；
 - §2.2 第 3 条"S3 观察期内只做收口工作"不再适用于本方向；S3 观测与 v0.10 证据积累作为
   非阻塞运营项继续，不占开发主线；

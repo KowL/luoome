@@ -36,7 +36,7 @@ StrategyVersion、definition diff、样本试算、历史评估、SignalObservat
 - evaluation session/day 已支持后台进度、重试、断点续跑和取消；
 - SignalObservation 已有 `stock-day-horizon` 去重、benchmark、超额收益、MFE/MAE 和缺失率统计；
 - `run_local_selector_research` 与 `assess_adaptive_personality` 已提供 PIT 横截面研究和训练/验证门禁；
-- Web 已有 Strategy Workspace、版本创建/校验/发布、运行 Diff、历史评估和严格回测入口；
+- Web 已有 Strategy Workspace、版本创建/校验/发布、运行 Diff、历史评估和组合回测入口；
 - Tool 支持 `requiredCapabilities`，Web/MCP 会对所有声明能力执行交集门控。
 
 ### 2.2 尚未形成闭环的差距
@@ -70,7 +70,7 @@ StrategyVersion、definition diff、样本试算、历史评估、SignalObservat
 - 默认扩大 Advice、通知或 Watchlist 投影范围；
 - 自动交易、自动调仓或 MCP trade 暴露；
 - 在真实 PIT 基本面数据门禁未通过前接入 StrategyDslV2；
-- 在可交易性、公司行动和 benchmark 历史事实未齐全前放宽严格回测门禁；
+- 在可交易性、公司行动和 benchmark 历史事实未齐全前放宽组合回测门禁；
 - 新前端框架、第二套策略 DSL 或新的持久化 Experiment 表。
 
 ## 4. 依赖与执行波次
@@ -98,7 +98,7 @@ Web 141 项均通过，typecheck、lint 和 build 通过。全量 Vitest 为 168
 相对日期 fixture 失败；失败路径不涉及本计划改动。Wave B 随后完成并合入，主工作树 Web 全量 357 项、
 typecheck、lint、build 和 diff check 均通过；真实浏览器已覆盖 1320/1020/640 三档及关键错误恢复。
 Wave C 已完成并合入：主工作树 Web 360 项、DB 343 项全部通过，typecheck、lint、build、diff check
-均通过；四层证据、三周期 observation、发布后真实反馈、严格回测门禁和发布前事实快照均已在隔离数据下
+均通过；四层证据、三周期 observation、发布后真实反馈、组合回测门禁和发布前事实快照均已在隔离数据下
 完成三档浏览器验收。观察周期现固定为 T+1/T+3/T+5，不再等待 T+20。
 
 ## 5. 里程碑

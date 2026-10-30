@@ -20,6 +20,12 @@ export interface ConfirmablePluginTool {
   readonly tool: Tool;
   readonly scheduled: boolean;
   readonly hostBoundFields?: readonly ('accountId' | 'requestId')[];
+  /**
+   * 该 policy 保证「返回非 ok 结果 ⇒ 业务未提交」时置 true：内核据此把失败落成终态 `failed`，
+   * 而不是保守的 `unknown`。抛出异常仍按 `unknown` 处理（业务可能已提交）。
+   * 只有事务内自检失败、明确回滚的写入口（如数据导入 commit）才可声明。
+   */
+  readonly settleFailureAsFailed?: boolean;
   bind(input: unknown, principal: PluginPrincipal, operationId: string, ctx: ToolContext): unknown;
   receipt(input: unknown, ctx: ToolContext): Promise<ToolResult<unknown> | null>;
 }
@@ -31,6 +37,48 @@ export class PluginOperationScopeError extends Error {
         ? 'Omit requestId; the host supplies the top-level operation id'
         : 'Operation account must match the current owner account',
     );
+  }
+}
+
+/**
+ * 同账户异步互斥（T48 恢复 gate）。
+ *
+ * 边界：只在**同一 Node 写实例**内成立。SQLite 的写锁只覆盖单条语句，覆盖不了
+ * prepare 里 `bind → insertOperation` 的 await 窗口，也覆盖不了 confirm 的
+ * `read → claim → 业务 → settle`。跨进程多写实例需要持久 epoch/CAS 协议，本实现不声称支持，
+ * 部署必须保证单写实例（见实施方案 §7）。
+ *
+ * 语义：非重入。持有者内部的调用链（`confirm → execute`、`executeScheduled → execute`、
+ * 导入 handler 里的 commit）不得再次 acquire；否则同一个 Promise 永远等自己。
+ * 需要复用 lease 的入口一律走内部不取锁的函数，或由外层已持锁的调用方直接调用。
+ */
+class AccountLease {
+  private tail: Promise<void> = Promise.resolve();
+  private holders = 0;
+  private peak = 0;
+  private waiters = 0;
+  async acquire(): Promise<() => void> {
+    this.waiters += 1;
+    let releaseNext!: () => void;
+    const next = new Promise<void>((resolve) => {
+      releaseNext = resolve;
+    });
+    const previous = this.tail;
+    this.tail = previous.then(() => next);
+    await previous;
+    this.waiters -= 1;
+    this.holders += 1;
+    this.peak = Math.max(this.peak, this.holders);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.holders -= 1;
+      releaseNext();
+    };
+  }
+  stats(): { readonly holders: number; readonly peak: number; readonly waiters: number } {
+    return { holders: this.holders, peak: this.peak, waiters: this.waiters };
   }
 }
 
@@ -124,6 +172,24 @@ export const createPluginOperationService = (options: {
   }
   const repo = options.repository;
   let disposed = false;
+  const leases = new Map<string, AccountLease>();
+  const leaseFor = (accountId: string): AccountLease => {
+    let lease = leases.get(accountId);
+    if (lease === undefined) {
+      lease = new AccountLease();
+      leases.set(accountId, lease);
+    }
+    return lease;
+  };
+  /** 账户级临界区；调用方必须已经不在同账户 lease 内（非重入）。 */
+  const withAccountLease = async <T>(accountId: string, run: () => Promise<T>): Promise<T> => {
+    const release = await leaseFor(accountId).acquire();
+    try {
+      return await run();
+    } finally {
+      release();
+    }
+  };
   const allowed = (policy: ConfirmablePluginTool) =>
     !disposed &&
     policy.tool.requiredCapabilities.every((c) =>
@@ -286,7 +352,12 @@ export const createPluginOperationService = (options: {
     } catch {
       // A thrown/failed business call may already have committed; never blindly replay it.
     }
-    const state = result?.ok ? 'succeeded' : 'unknown';
+    const state =
+      result?.ok === true
+        ? 'succeeded'
+        : result !== null && policy.settleFailureAsFailed === true
+          ? 'failed'
+          : 'unknown';
     await repo.settleOperation({
       ...proof,
       claimToken,
@@ -320,105 +391,118 @@ export const createPluginOperationService = (options: {
       }));
     },
     prepare(principal: PluginPrincipal, request: { id: string; tool: string; input: unknown }) {
-      return safe(async () => {
-        const policy = policies.get(request.tool);
-        if (!policy || !allowed(policy)) return denied();
-        if (!z.uuid().safeParse(request.id).success) return invalid();
-        const token = randomBytes(32).toString('base64url');
-        let op: PluginOperation;
-        try {
-          op = await makeOperation(principal, request.id, policy, request.input, {
-            kind: 'human',
-            tokenHash: tokenHash(token),
-          });
-        } catch (error) {
-          return invalid(
-            error instanceof PluginOperationScopeError
-              ? [{ code: 'custom', path: [error.field], message: error.message }]
-              : error instanceof z.ZodError
-                ? error.issues.map((issue) => ({
-                    code: 'custom',
-                    path: issue.path,
-                    message:
-                      issue.code === 'invalid_type'
-                        ? `Expected ${issue.expected}`
-                        : `Invalid value (${issue.code})`,
-                  }))
-                : [],
-          );
-        }
-        if (!(await repo.insertOperation(op))) {
-          const existing = await repo.findOperation({ ...principal, id: request.id });
-          return existing && identical(existing, op)
-            ? { ok: true, data: publicOperation(existing) }
-            : invalid();
-        }
-        return { ok: true, data: { ...publicOperation(op), confirmationToken: token } };
-      });
+      // 整段 bind → insertOperation 都在账户 lease 内：bind 的 await 窗口里 Operation 尚未入库，
+      // 只靠数据库查询看不见它，必须由 lease 挡住同账户的恢复提交。
+      return safe(() =>
+        withAccountLease(principal.accountId, async () => {
+          const policy = policies.get(request.tool);
+          if (!policy || !allowed(policy)) return denied();
+          if (!z.uuid().safeParse(request.id).success) return invalid();
+          const token = randomBytes(32).toString('base64url');
+          let op: PluginOperation;
+          try {
+            op = await makeOperation(principal, request.id, policy, request.input, {
+              kind: 'human',
+              tokenHash: tokenHash(token),
+            });
+          } catch (error) {
+            return invalid(
+              error instanceof PluginOperationScopeError
+                ? [{ code: 'custom', path: [error.field], message: error.message }]
+                : error instanceof z.ZodError
+                  ? error.issues.map((issue) => ({
+                      code: 'custom',
+                      path: issue.path,
+                      message:
+                        issue.code === 'invalid_type'
+                          ? `Expected ${issue.expected}`
+                          : `Invalid value (${issue.code})`,
+                    }))
+                  : [],
+            );
+          }
+          if (!(await repo.insertOperation(op))) {
+            const existing = await repo.findOperation({ ...principal, id: request.id });
+            return existing && identical(existing, op)
+              ? { ok: true, data: publicOperation(existing) }
+              : invalid();
+          }
+          return { ok: true, data: { ...publicOperation(op), confirmationToken: token } };
+        }),
+      );
     },
     confirm(
       principal: PluginPrincipal,
       request: { id: string; token: string },
       signal: AbortSignal,
     ) {
-      return safe(async () => {
-        const op = await repo.findOperation({ ...principal, id: request.id });
-        if (
-          op?.authorization.kind !== 'human' ||
-          op.authorization.tokenHash !== tokenHash(request.token)
-        )
-          return denied();
-        return execute(
-          op,
-          {
+      // read → claim → 业务 → settle 全程持锁：中途不放开，恢复提交才拿得到一致视图。
+      return safe(() =>
+        withAccountLease(principal.accountId, async () => {
+          const op = await repo.findOperation({ ...principal, id: request.id });
+          if (
+            op?.authorization.kind !== 'human' ||
+            op.authorization.tokenHash !== tokenHash(request.token)
+          )
+            return denied();
+          return execute(
+            op,
+            {
+              ...principal,
+              id: op.id,
+              now: options.now(),
+              policyVersion: options.policyVersion,
+              authorization: { kind: 'human', tokenHash: tokenHash(request.token) },
+            },
+            signal,
+          );
+        }),
+      );
+    },
+    cancel(principal: PluginPrincipal, request: { id: string; token: string }) {
+      return safe(() =>
+        withAccountLease(principal.accountId, async () =>
+          (await repo.cancelOperation({
             ...principal,
-            id: op.id,
+            id: request.id,
             now: options.now(),
             policyVersion: options.policyVersion,
             authorization: { kind: 'human', tokenHash: tokenHash(request.token) },
-          },
-          signal,
-        );
-      });
-    },
-    cancel(principal: PluginPrincipal, request: { id: string; token: string }) {
-      return safe(async () =>
-        (await repo.cancelOperation({
-          ...principal,
-          id: request.id,
-          now: options.now(),
-          policyVersion: options.policyVersion,
-          authorization: { kind: 'human', tokenHash: tokenHash(request.token) },
-        }))
-          ? { ok: true, data: { state: 'cancelled' } }
-          : denied(),
+          }))
+            ? { ok: true, data: { state: 'cancelled' } }
+            : denied(),
+        ),
       );
     },
     get(principal: PluginPrincipal, id: string) {
+      // 只读状态查询不取锁：面板刷新不能排在写操作后面，也不能被长任务拖住。
       return safe(async () => {
         const op = await repo.findOperation({ ...principal, id });
         return op ? { ok: true, data: publicOperation(op) } : denied();
       });
     },
     reconcile(principal: PluginPrincipal, id: string) {
-      return safe(async () => {
-        const op = await repo.findOperation({ ...principal, id });
-        const policy = op && policies.get(op.tool);
-        if (!op || !policy || !allowed(policy)) return denied();
-        if (op.state === 'executing' || op.state === 'unknown') {
-          const receipt = await policy.receipt(JSON.parse(op.inputJson), await options.context());
-          await repo.settleOperation({
-            ...principal,
-            id,
-            claimToken: op.claimToken,
-            state: receipt?.ok ? 'succeeded' : 'unknown',
-            resultJson: receipt?.ok ? JSON.stringify(receipt) : op.resultJson,
-            now: options.now(),
-          });
-        }
-        const saved = await repo.findOperation({ ...principal, id });
-        return saved ? { ok: true, data: publicOperation(saved) } : denied();
-      });
+      // reconcile 会按业务回执把 executing/unknown 升级成 succeeded，本身就是一次判定写入。
+      return safe(() =>
+        withAccountLease(principal.accountId, async () => {
+          const op = await repo.findOperation({ ...principal, id });
+          const policy = op && policies.get(op.tool);
+          if (!op || !policy || !allowed(policy)) return denied();
+          if (op.state === 'executing' || op.state === 'unknown') {
+            const receipt = await policy.receipt(JSON.parse(op.inputJson), await options.context());
+            await repo.settleOperation({
+              ...principal,
+              id,
+              claimToken: op.claimToken,
+              state: receipt?.ok ? 'succeeded' : 'unknown',
+              resultJson: receipt?.ok ? JSON.stringify(receipt) : op.resultJson,
+              now: options.now(),
+            });
+          }
+          const saved = await repo.findOperation({ ...principal, id });
+          return saved ? { ok: true, data: publicOperation(saved) } : denied();
+        }),
+      );
     },
     executeScheduled(
       identity: PluginTaskIdentity,
@@ -432,44 +516,50 @@ export const createPluginOperationService = (options: {
       },
       signal: AbortSignal,
     ) {
-      return safe(async () => {
-        const policy = policies.get(request.tool);
-        if (
-          !policy?.scheduled ||
-          !allowed(policy) ||
-          !request.occurrenceId ||
-          hasForce(request.input)
-        )
-          return denied();
-        const principal = { userId: identity.userId, accountId: request.accountId };
-        const id = `schedule:${pluginInputHash({ identity, occurrenceId: request.occurrenceId, tool: request.tool, accountId: request.accountId })}`;
-        let op: PluginOperation;
-        try {
-          op = await makeOperation(principal, id, policy, request.input, {
-            kind: 'schedule',
-            grantId: request.grantId,
-            grantVersion: request.grantVersion,
-          });
-        } catch {
-          return invalid();
-        }
-        // Validate current authority before creating even a pending record; claim repeats this atomically.
-        const grant = await repo.findGrant(request.grantId, identity.userId);
-        const proof: PluginOperationProof = {
-          ...principal,
-          id,
-          now: options.now(),
-          policyVersion: options.policyVersion,
-          authorization: { kind: 'schedule', identity },
-        };
-        if (!canClaimPluginOperation(op, proof, grant)) return denied();
-        if (!(await repo.insertOperation(op))) {
-          const existing = await repo.findOperation({ ...principal, id });
-          if (!existing || !identical(existing, op)) return invalid();
-          op = existing;
-        }
-        return execute(op, proof, signal);
-      });
+      return safe(() =>
+        withAccountLease(request.accountId, async () => {
+          const policy = policies.get(request.tool);
+          if (
+            !policy?.scheduled ||
+            !allowed(policy) ||
+            !request.occurrenceId ||
+            hasForce(request.input)
+          )
+            return denied();
+          const principal = { userId: identity.userId, accountId: request.accountId };
+          const id = `schedule:${pluginInputHash({ identity, occurrenceId: request.occurrenceId, tool: request.tool, accountId: request.accountId })}`;
+          let op: PluginOperation;
+          try {
+            op = await makeOperation(principal, id, policy, request.input, {
+              kind: 'schedule',
+              grantId: request.grantId,
+              grantVersion: request.grantVersion,
+            });
+          } catch {
+            return invalid();
+          }
+          // Validate current authority before creating even a pending record; claim repeats this atomically.
+          const grant = await repo.findGrant(request.grantId, identity.userId);
+          const proof: PluginOperationProof = {
+            ...principal,
+            id,
+            now: options.now(),
+            policyVersion: options.policyVersion,
+            authorization: { kind: 'schedule', identity },
+          };
+          if (!canClaimPluginOperation(op, proof, grant)) return denied();
+          if (!(await repo.insertOperation(op))) {
+            const existing = await repo.findOperation({ ...principal, id });
+            if (!existing || !identical(existing, op)) return invalid();
+            op = existing;
+          }
+          return execute(op, proof, signal);
+        }),
+      );
+    },
+    /** 观测用：同账户 lease 的当前持有者/峰值/等待者；峰值 >1 即说明互斥失效。 */
+    accountLease(accountId: string) {
+      return leaseFor(accountId).stats();
     },
     dispose() {
       disposed = true;

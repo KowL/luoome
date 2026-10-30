@@ -2,6 +2,7 @@ import {
   assertFinancialFactInvariants,
   type FinancialFact,
   type FinancialFactRepository,
+  type FinancialFactSourceScope,
   InvariantError,
   resolveStrictPitFinancialVintage,
 } from '@luoome/core';
@@ -111,11 +112,15 @@ export class InMemoryFinancialFactRepository implements FinancialFactRepository 
     readonly metricIds: readonly string[];
     readonly asOf: Date;
     readonly policy: 'strict-pit-v1';
+    readonly sources: FinancialFactSourceScope;
   }) {
-    const facts = await this.listRevisions({
-      stockIds: input.stockIds,
-      metricIds: input.metricIds,
-    });
+    const sources = input.sources === 'all' ? undefined : new Set(input.sources);
+    const facts = (
+      await this.listRevisions({
+        stockIds: input.stockIds,
+        metricIds: input.metricIds,
+      })
+    ).filter((fact) => sources === undefined || sources.has(fact.source));
     return resolveStrictPitFinancialVintage({ ...input, facts });
   }
 }

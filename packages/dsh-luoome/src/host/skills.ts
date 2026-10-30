@@ -21,10 +21,20 @@ import {
   type SkillSource,
 } from '@deepseek-ai/dsh-skill';
 
-/** 随包技能的唯一事实来源；注册和内容校验都以它为清单。 */
+/**
+ * 随包技能的唯一事实来源；注册和内容校验都以它为清单。
+ *
+ * 八条 = 四条插件写回技能（M3b 起随包）+ 四条从工作区 `.dsh/skills` 迁入的旅程技能
+ * （REQ-M1-01）。工作区技能根已删除，仓库里只有这一个技能根；`analysis-worker` 退役后
+ * 不随包（队列代码保留，消费端不再由技能触发）。
+ */
 export const BUNDLED_SKILL_NAMES = [
   'daily-market-analysis',
+  'decision-journal',
+  'luoome-batch',
+  'morning-brief',
   'post-close-review',
+  'stock-deep-dive',
   'strategy-lab',
   'strategy-result-review',
 ] as const;

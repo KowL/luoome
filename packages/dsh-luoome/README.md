@@ -40,6 +40,6 @@ export LUOOME_OWNER_ACCOUNT_ID=existing-account-id
 - 个人版写入不再要求人工审批：对话和面板按明确意图直接执行，仍保留 owner/账户绑定、能力白名单、输入冻结、幂等和 Operation 回执。复盘更新省略字段保留原值，显式 `null` 清除可空字段。
 - 批处理和自动执行默认关闭。`LUOOME_BATCH_ENABLED=true` 允许直接执行五个批处理入口；`LUOOME_AUTOMATIONS_ENABLED=true` 还需精确任务授权。
 
-策略试跑不等于回测，建议不等于交易。插件不提供自动下单；`LUOOME_EXPOSE_TRADE=true` 会拒绝启动。完整账户维护、其他供应商凭据配置、导入恢复和 external 市场事实持久化尚未全部迁入插件。
+策略试跑不等于回测，建议不等于交易。插件不提供自动下单；`LUOOME_EXPOSE_TRADE=true` 会拒绝启动。分析队列在默认部署下无生产者与消费者，交互分析直接写回 Advice，队列只保留给手动/隔离 worker 验收。账户维护（改名、登记成交、平仓、入金/出金/分红/费用）已随持仓面板提供，写入走 Operation 冻结输入 + 业务回执；其他供应商凭据配置、导入恢复和 external 市场事实持久化尚未全部迁入插件。
 
 源码、部署及备份说明见 [luoome](https://github.com/KowL/luoome)。

@@ -1,6 +1,7 @@
 import {
   type FinancialFact,
   type FinancialFactRepository,
+  type FinancialFactSourceScope,
   type FinancialVintage,
   type FundamentalDataAdapterLike,
   type FundamentalIngestionIssue,
@@ -73,6 +74,7 @@ const makeRepo = (initialFacts: readonly FinancialFact[] = []) => {
       readonly metricIds: readonly string[];
       readonly asOf: Date;
       readonly policy: 'strict-pit-v1';
+      readonly sources: FinancialFactSourceScope;
     }): Promise<FinancialVintage> =>
       resolveStrictPitFinancialVintage({
         ...input,
@@ -248,6 +250,7 @@ describe('financial facts P3-1 mock tools', () => {
       metricIds: ['roe', 'eps'],
       asOf: AS_OF,
       policy: 'strict-pit-v1',
+      sources: 'all',
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(adviceQuery).not.toHaveBeenCalled();

@@ -8,7 +8,31 @@ export * from './agent-whitelist.js';
 export * from './context.js';
 export * from './decision-review-operation.js';
 export * from './define-tool.js';
-export { privateResearchTools, selectExposedTools, type ToolExposureNames } from './exposure.js';
+export {
+  assertSurfaceSelection,
+  assertTradeNeverExposed,
+  capabilitiesOf,
+  capabilitiesSatisfied,
+  declaresTrade,
+  type ExposureCriteria,
+  type ExposureCriteriaSpec,
+  type ExposureDenial,
+  type ExposureVerdict,
+  exposureCriteria,
+  isNameAllowed,
+  isNameDenied,
+  isPrivateResearchTool,
+  type JudgedTool,
+  judgeTool,
+  judgeTools,
+  privateResearchTools,
+  type SelectionAssertionOptions,
+  type SelectionSurface,
+  selectExposedTools,
+  type ToolVerdict,
+  TRADE_EXPOSURE_MESSAGE,
+  tradeExposureRequested,
+} from './exposure.js';
 export * from './personal/index.js';
 export * from './plugin-operations.js';
 export * from './queue/index.js';
@@ -25,6 +49,7 @@ export * from './tools/close-holding.js';
 export * from './tools/compute-indicators.js';
 export * from './tools/create-account.js';
 export * from './tools/create-strategy-observation-candidates.js';
+export * from './tools/data-import.js';
 export * from './tools/decision-review.js';
 export * from './tools/delete-advice.js';
 export * from './tools/delete-report.js';
@@ -42,6 +67,7 @@ export * from './tools/get-advice-stats.js';
 export * from './tools/get-ashare-sentiment.js';
 export * from './tools/get-closing-batch-audit.js';
 export * from './tools/get-confidence-calibration.js';
+export * from './tools/get-data-diagnostics.js';
 export * from './tools/get-decision-loop-review.js';
 export * from './tools/get-decision-review-snapshot.js';
 export * from './tools/get-holding.js';

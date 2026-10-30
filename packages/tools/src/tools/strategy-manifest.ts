@@ -133,10 +133,10 @@ export const exportStrategyManifestTool = defineTool({
           trialSnapshotsIncluded: false as const,
           limitations: [
             'manifest 固定定义与求值器/数据集声明；证据引用依赖原本地库，不包含完整日线、行情或供应商历史修订包。',
-            '内存 trial 快照只保留身份，不保证重新下载相同事实；evaluation 的 PIT universe/checkpoint/revision 与严格回测市场事实必须另行保留。',
+            '内存 trial 快照只保留身份，不保证重新下载相同事实；evaluation 的 PIT universe/checkpoint/revision 与组合回测市场事实必须另行保留。',
             '此导出不表示证据通过门禁，不改变发布状态；T+1/T+3/T+5 观察不是组合回测。',
             ...(sessions.length === 100 || backtests.length === 100
-              ? ['证据发现最多扫描最近 100 个会话与 100 个严格回测；可能存在更多旧证据。']
+              ? ['证据发现最多扫描最近 100 个会话与 100 个组合回测运行；可能存在更多旧证据。']
               : []),
           ],
         },

@@ -6,7 +6,7 @@
 
 ## P1 — 文档与实现不符（会误导使用者）
 
-1. ~~**AGENTS.md 静态工具清单超前于实现**~~ ✅ 已修（根 AGENTS 改为编码 Agent 开发规范；外部 luoome Skill 通过 MCP discovery 与 `luoome tools list --json` 获取运行时工具库存，不再维护完整静态表）
+1. ~~**AGENTS.md 静态工具清单超前于实现**~~ ✅ 已修（根 AGENTS 改为编码 Agent 开发规范；运行时工具库存以 registry 与插件 descriptor 为准，不再维护完整静态表）
 
 2. ~~**apps/web 零测试 + 依赖声明缺失**~~ ✅ 已修（v0.8：`package.json` 补声明 `@luoome/adapters` / `@luoome/db`；新增 `server.test.ts` 闸口矩阵 9 例，`bun run test:web` 执行并纳入 `test:all`）
 
@@ -24,6 +24,7 @@
 7. ~~**MCP smoke 硬编码 17 tool**~~ ✅ 已修：`packages/mcp/src/smoke.ts` 按运行时 registry 与
    exposure policy 计算默认暴露集合，不再固定数量；新增 `bun run mcp:smoke` 与
    `bun --cwd packages/mcp run smoke` 入口，仍保留真实 stdio/SQLite 握手验收。
+   （该入口已随 REQ-M2-03 删除：stdio MCP 包与 `mcp:smoke` 脚本都不在仓库里。）
 8. **db DDL 与 Drizzle schema 双份手写**（部分收口）：`ensureSchema` 编程式 DDL 与
    `schema/index.ts` 仍需手工同步，完整迁移生成仍待后续；已补 50 张表的启动契约测试，逐表
    校验实际 SQLite 列和显式索引名称，schema drift 现在会在测试中直接失败。

@@ -28,9 +28,15 @@ import { basename, join, resolve } from 'node:path';
 const PLUGIN_NAME = 'dsh-luoome';
 const POCKET_NAME = 'dsh-pocket';
 const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
+// 与插件 `BUNDLED_SKILL_NAMES` 同一份清单（REQ-M1-01 的三集合相等：随包目录 / 注册清单 /
+// 部署校验名单）。工作区 `.dsh/skills` 已删除，插件包是唯一技能根。
 const REQUIRED_SKILLS = [
   'daily-market-analysis',
+  'decision-journal',
+  'luoome-batch',
+  'morning-brief',
   'post-close-review',
+  'stock-deep-dive',
   'strategy-lab',
   'strategy-result-review',
 ];

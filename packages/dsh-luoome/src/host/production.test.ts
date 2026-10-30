@@ -119,6 +119,41 @@ const seedOwnerAccount = async (home: string): Promise<void> => {
 };
 
 describe('dsh-luoome production composition root', () => {
+  it('空库且 owner 缺失时进入 recovery-only：只装配恢复面，不注册普通业务能力', async () => {
+    const home = tempRoot();
+    const host = await createProductionHost(productionInput(home));
+    try {
+      expect(host.mode).toBe('recovery-only');
+      // 不注册市场与普通业务读面；只留只读预检。
+      expect(host.market.descriptors()).toEqual([]);
+      expect(host.read.descriptors().map((tool) => tool.name)).toEqual(['preview_data_import']);
+      // 不造示例账户：业务库仍然没有 accounts 行。
+      const handle = createNodeDrizzleRepos(join(home, 'luoome.db'));
+      try {
+        expect(await handle.repos.account.findById(OWNER.accountId)).toBeNull();
+      } finally {
+        handle.close();
+      }
+      // 恢复入口在：上传暂存可用，且拒绝非 SQLite 内容。
+      await expect(host.dataImport.describe('a'.repeat(32))).resolves.toBeNull();
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('owner 缺失但已有事实时仍拒绝装配，不降级成可覆盖空库', async () => {
+    const home = tempRoot();
+    const handle = createNodeDrizzleRepos(join(home, 'luoome.db'));
+    try {
+      await handle.repos.account.save(makeAccount('another-account'));
+    } finally {
+      handle.close();
+    }
+    await expect(createProductionHost(productionInput(home))).rejects.toThrow(
+      'owner account does not exist',
+    );
+  });
+
   it('opens the real Node DB, binds the configured owner and executes real read tools as JSON', async () => {
     const home = tempRoot();
     await seedOwnerAccount(home);
@@ -306,11 +341,15 @@ describe('dsh-luoome production composition root', () => {
     ).not.toThrow();
     expect(() => resolveProductionConfig({ env: {} })).toThrow();
 
+    // 空库不再直接失败：owner 缺失且业务库确实为空 → recovery-only（T48 §4）。
+    // 这里只钉住「不造账户、不注册普通业务能力」，配置错误路径见上一条用例。
     const home = tempRoot();
-    await expect(createProductionHost(productionInput(home))).rejects.toThrow(
-      /owner account does not exist/,
-    );
-    // 装配失败后连接必须关闭，重开同一文件仍可用。
+    const recovery = await createProductionHost(productionInput(home));
+    try {
+      expect(recovery.mode).toBe('recovery-only');
+    } finally {
+      recovery.dispose();
+    }
     const reopened = createNodeDrizzleRepos(join(home, 'luoome.db'));
     reopened.close();
   });
@@ -561,8 +600,11 @@ describe('dsh-luoome production write policies', () => {
       'run_strategy_research_comparison',
       'save_strategy_research_state',
       'create_strict_strategy_backtest',
-      'execute_strict_strategy_backtest',
       'update_account',
+      // T47 / REQ-M2-08 账户维护三写：登记成交（人工记账 write）、平仓、现金流水
+      'add_trade',
+      'close_holding',
+      'create_portfolio_cash_flow',
       'create_watchlist',
       'update_watchlist',
       'archive_watchlist',
@@ -592,6 +634,16 @@ describe('dsh-luoome production write policies', () => {
       expect(byName.get(strategyTool)?.tool.sideEffect, strategyTool).toBe('write');
       expect(byName.get(strategyTool)?.tool.requiredCapabilities, strategyTool).toEqual(['write']);
     }
+    // T47：账户维护四写全是人工记账 write；`add_trade` 不得因为名字里带 trade 就被改记成 trade 能力。
+    for (const accountTool of [
+      'update_account',
+      'add_trade',
+      'close_holding',
+      'create_portfolio_cash_flow',
+    ]) {
+      expect(byName.get(accountTool)?.tool.sideEffect, accountTool).toBe('write');
+      expect(byName.get(accountTool)?.tool.requiredCapabilities, accountTool).toEqual(['write']);
+    }
     expect(TRUSTED_ANALYSIS_PROVENANCE).toEqual({ generatorKind: 'dsh-chat' });
     for (const forbidden of [
       'claim_analysis_jobs',
@@ -603,7 +655,8 @@ describe('dsh-luoome production write policies', () => {
       'list_analysis_jobs',
       'get_analysis_job',
       'record_decision_trade',
-      'add_trade',
+      // `add_trade` 是人工记账 write（T47 起是 policy）；真正不能成为 policy 的是 trade 能力入口，
+      // 它仍然只能经 `record_decision_trade` 这类 trade 工具存在，永不暴露。
       'send_notification',
       // 策略生命周期里的删除/归档与调度 lease 内部桥不是确认操作
       'delete_strategy',
@@ -750,13 +803,7 @@ describe('dsh-luoome production dependency graph', () => {
   it('never reaches bun:sqlite, MCP, CLI or Web modules from the production root', () => {
     const entry = fileURLToPath(new URL('./production.ts', import.meta.url));
     const specifiers = collectModuleGraph(entry);
-    const forbidden = [
-      'bun:sqlite',
-      '@luoome/mcp',
-      '@luoome/cli',
-      '@luoome/web',
-      '@luoome/dsh-bridge',
-    ];
+    const forbidden = ['bun:sqlite', '@luoome/mcp', '@luoome/cli', '@luoome/web'];
     for (const packageName of forbidden)
       expect(specifiers.has(packageName), `production graph must not import ${packageName}`).toBe(
         false,

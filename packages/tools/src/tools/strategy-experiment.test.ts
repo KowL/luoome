@@ -134,6 +134,7 @@ const observation = (
   baselinePrice: 10,
   baselineAt: new Date('2026-08-03T08:00:00.000Z'),
   horizon: 't5',
+  vintage: 'pit',
   closePrice: 11,
   returnPct: 0.1,
   maxFavorableExcursionPct: 0.2,

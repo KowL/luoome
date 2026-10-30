@@ -1,5 +1,6 @@
 import type {
   AShareSentimentManagerLike,
+  DataImportStagingAdapter,
   DragonTigerManagerLike,
   FundamentalDataAdapterLike,
   LimitUpLadderManagerLike,
@@ -56,6 +57,8 @@ export interface BuildContextDependencies {
   readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
   /** Phase 3 P3-1：只从显式基本面 adapter 读取，未注入时 sync 保持 unavailable。 */
   readonly fundamentalData?: FundamentalDataAdapterLike;
+  /** T48：host 侧专用有界上传的暂存读取器；未注入时导入 tool 返回 unavailable。 */
+  readonly dataImport?: DataImportStagingAdapter;
 }
 
 export type BuildContextInput = BuildContextDependencies & {
@@ -97,6 +100,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
       ? {}
       : { portfolioBenchmark: input.portfolioBenchmark }),
     ...(input.fundamentalData === undefined ? {} : { fundamentalData: input.fundamentalData }),
+    ...(input.dataImport === undefined ? {} : { dataImport: input.dataImport }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
     ...(input.stockProfile === undefined ? {} : { stockProfile: input.stockProfile }),
     ...(input.northboundFlow === undefined ? {} : { northboundFlow: input.northboundFlow }),

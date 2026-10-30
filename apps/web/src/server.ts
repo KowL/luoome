@@ -1958,7 +1958,7 @@ export const createWebApp = (
         ok: false,
         error: {
           kind: 'invalid_input',
-          message: '严格回测参数无效',
+          message: '组合回测参数无效',
           issues: parsed.error.issues,
         },
       });
@@ -1976,7 +1976,7 @@ export const createWebApp = (
       created.data.run.status === 'queued' ? 202 : 200,
     );
   });
-  app.get('/api/strategies/:id/backtests/:sessionId', async (c) => {
+  app.get('/api/strategies/:id/evaluations/:sessionId', async (c) => {
     const session = await getEvaluationSession({
       sessionId: c.req.param('sessionId'),
     });
@@ -1989,7 +1989,7 @@ export const createWebApp = (
     }
     return jsonResult(await evaluationSnapshot(c.req.param('sessionId')));
   });
-  app.post('/api/strategies/:id/backtests', async (c) => {
+  app.post('/api/strategies/:id/evaluations', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(c.req.raw);
@@ -2029,7 +2029,7 @@ export const createWebApp = (
       202,
     );
   });
-  app.post('/api/strategies/:id/backtests/:sessionId/retry', async (c) => {
+  app.post('/api/strategies/:id/evaluations/:sessionId/retry', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
     const sessionId = c.req.param('sessionId');
@@ -2052,7 +2052,7 @@ export const createWebApp = (
     });
     return jsonResult({ ok: true, data: { session: resumed.data.session, status: 'queued' } }, 202);
   });
-  app.post('/api/strategies/:id/backtests/:sessionId/cancel', async (c) => {
+  app.post('/api/strategies/:id/evaluations/:sessionId/cancel', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
     const sessionId = c.req.param('sessionId');

@@ -16,6 +16,7 @@ const completeObservation = {
   baselinePrice: 100,
   baselineAt: new Date('2026-07-20T00:00:00.000Z'),
   horizon: 't1' as const,
+  vintage: 'pit' as const,
   closePrice: 101,
   returnPct: 0.01,
   maxFavorableExcursionPct: 0.02,
@@ -40,6 +41,7 @@ const pendingObservation = {
   baselinePrice: 100,
   baselineAt: new Date('2026-07-22T00:00:00.000Z'),
   horizon: 't3' as const,
+  vintage: 'pit' as const,
   benchmarkStatus: 'unavailable' as const,
   status: 'pending' as const,
   provenance: {

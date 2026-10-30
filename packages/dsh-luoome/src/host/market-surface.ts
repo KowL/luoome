@@ -6,7 +6,14 @@
 
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type { ToolContext, ToolResult } from '@luoome/core';
-import { createRegistry, privateResearchTools, selectExposedTools, type Tool } from '@luoome/tools';
+import {
+  assertSurfaceSelection,
+  assertTradeNeverExposed,
+  createRegistry,
+  exposureCriteria,
+  selectExposedTools,
+  type Tool,
+} from '@luoome/tools';
 import { z } from 'zod';
 import { toolResultJsonSchema } from './tools.js';
 
@@ -61,21 +68,16 @@ const inactiveRequest = (signal: AbortSignal): ToolResult<never> =>
       }
     : denied('active request');
 
-/** 装配期 fail-closed：未知名字、非 external 或带写能力的工具直接拒绝，而不是静默过滤。 */
+/**
+ * 装配期 fail-closed：未知名字、非 external 或带写能力的工具直接拒绝，而不是静默过滤。
+ *
+ * 判定本体是 `@luoome/tools` 的 `assertSurfaceSelection`（与 read 面共用同一套声明校验），
+ * 这里只绑定「本 surface 的名字与报错主体」。
+ */
 export const assertExternalMarketAllowlist = (
   allowlist: readonly string[],
   tools: readonly Tool[],
-): void => {
-  const registry = createRegistry(tools);
-  for (const name of allowlist) {
-    const tool = registry.get(name);
-    if (tool === undefined) throw new Error(`Unknown configured market tool: ${name}`);
-    if (tool.sideEffect !== 'external')
-      throw new Error(`Configured market tool is not external: ${name}`);
-    if (tool.requiredCapabilities.some((capability) => capability !== 'external'))
-      throw new Error(`Configured market tool requires unsupported capabilities: ${name}`);
-  }
-};
+): void => assertSurfaceSelection(allowlist, tools, 'external', { label: 'market tool' });
 
 /**
  * 创建 market external surface。
@@ -90,8 +92,7 @@ export const createMarketSurface = (options: {
   readonly context: () => ToolContext | Promise<ToolContext>;
   readonly accountId?: string;
 }): MarketSurface => {
-  if (process.env.LUOOME_EXPOSE_TRADE === 'true')
-    throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed in the DSH plugin');
+  assertTradeNeverExposed(process.env.LUOOME_EXPOSE_TRADE);
   const parsed = MarketConfigSchema.parse(options.config);
   const config: MarketSurfaceConfig = Object.freeze({
     allowlist: Object.freeze([...parsed.allowlist]),
@@ -100,14 +101,17 @@ export const createMarketSurface = (options: {
     exposeResearch: false as const,
   });
   assertExternalMarketAllowlist(config.allowlist, options.tools);
+  // 判定全在 tools 侧；本文件只把冻结后的配置搬成 criteria 并包成 DSH descriptor。
   const selected = createRegistry(
-    selectExposedTools(options.tools, new Set(['external']), {
-      allowlist: new Set(config.allowlist),
-      denylist: new Set([
-        ...config.denylist,
-        ...(config.exposeResearch ? [] : privateResearchTools),
-      ]),
-    }),
+    selectExposedTools(
+      options.tools,
+      exposureCriteria({
+        allowedSideEffects: ['external'],
+        allowlist: config.allowlist,
+        denylist: config.denylist,
+        exposeResearch: config.exposeResearch,
+      }),
+    ),
   );
   let disposed = false;
   return {

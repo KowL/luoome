@@ -346,8 +346,8 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 托管层代码与旧租户库已于 2026-10-23 按授权删除，不恢复。
 
 DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署由 DSH 用 Node 加载 dsh-luoome 插件
-（host + client + skills），事实库是 Node SQLite 的 `luoome.db`。旧「当前 MCP 过渡形态」
-（四个 MCP 实例与手动 worker）源码保留，仅用于手动/隔离验收，默认部署不再启动，P5 再统一删除；
+（host + client + skills），事实库是 Node SQLite 的 `luoome.db`。旧「当前 MCP 过渡形态」的四个
+MCP 实例、手动 worker 与 MCP 用户入口（`packages/mcp`、`luoome mcp serve`）已随 REQ-M2-03 删除；
 两种形态共用同一份领域层、事实库与 ToolResult 契约，不是两个产品方向。真实生产切换已于
 2026-10-25 执行，首次切换见 [插件详细设计 §9.16](docs/ddd/dsh-luoome-plugin-detailed-design.md#916-生产切换与真实部署记录2026-10-25)；MVP 补齐及同日升级见 [§9.18](docs/ddd/dsh-luoome-plugin-detailed-design.md#918-mvp-后续补齐minimax-四旅程与升级2026-10-25)。生产批处理和自动执行仍默认关闭。
 

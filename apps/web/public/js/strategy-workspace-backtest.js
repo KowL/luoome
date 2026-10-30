@@ -88,7 +88,7 @@ export const buildStrictBacktestResultContent = (run) => {
     el(
       'p',
       'muted',
-      `严格回测 ${run.id} · ${run.status} · 输入指纹 ${String(run.inputFingerprint ?? '').slice(0, 12) || '--'}${run.inputFingerprint ? '…' : ''}`,
+      `组合回测 ${run.id} · ${run.status} · 输入指纹 ${String(run.inputFingerprint ?? '').slice(0, 12) || '--'}${run.inputFingerprint ? '…' : ''}`,
     ),
     ...metricNodes,
     el('h4', null, '门禁审计'),
@@ -111,12 +111,12 @@ export const buildStrictBacktestResultContent = (run) => {
           ]),
         ]),
     ...(run.error === undefined ? [] : [el('p', 'status error', run.error)]),
-    el('p', 'muted', '严格回测与生产运行、历史评估隔离，不生成 Advice、Trade 或通知。'),
+    el('p', 'muted', '组合回测与生产运行、历史评估隔离，不生成 Advice、Trade 或通知。'),
   ]);
 };
 
 export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
-  setStatus('正在检查严格回测数据门禁…');
+  setStatus('正在检查组合回测数据门禁…');
   const created = await post(
     `/api/strategies/${encodeURIComponent(strategy.id)}/strict-backtests`,
     input,
@@ -143,13 +143,13 @@ export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
       return snapshot;
     }
     run = snapshot.data.run;
-    setStatus(`严格回测：${run.status}，门禁 ${run.gateAudit?.status ?? 'unknown'}`);
+    setStatus(`组合回测：${run.status}，门禁 ${run.gateAudit?.status ?? 'unknown'}`);
   }
-  openModal(`严格回测 · ${strategy.name}`, buildStrictBacktestResultContent(run));
+  openModal(`组合回测 · ${strategy.name}`, buildStrictBacktestResultContent(run));
   setStatus(
     run.metrics === undefined
-      ? `严格回测${run.resultAvailability === 'unavailable' ? '不可用' : '部分完成'}：请查看门禁审计`
-      : `严格回测完成：净收益 ${fmtSigned(run.metrics.netReturnPct)}%`,
+      ? `组合回测${run.resultAvailability === 'unavailable' ? '不可用' : '部分完成'}：请查看门禁审计`
+      : `组合回测完成：净收益 ${fmtSigned(run.metrics.netReturnPct)}%`,
     run.metrics === undefined,
   );
   return { ...created, data: { run } };
@@ -157,7 +157,7 @@ export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
 
 const openStrictBacktestDialog = async (strategy, setStatus) => {
   const values = await promptDialog({
-    title: `严格回测 · ${strategy.name}`,
+    title: `组合回测 · ${strategy.name}`,
     fields: [
       { key: 'evaluationSessionId', label: '历史评估 session ID', value: '' },
       { key: 'initialCash', label: '初始资金', value: '1000000' },
@@ -167,7 +167,7 @@ const openStrictBacktestDialog = async (strategy, setStatus) => {
       { key: 'buySlippageBps', label: '买入滑点（bps）', value: '2' },
       { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
     ],
-    confirmLabel: '创建严格回测',
+    confirmLabel: '创建组合回测',
     note: '必须提供已完成的历史评估 session。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
   });
   if (values === null) return;
@@ -269,7 +269,7 @@ const buildBacktestProgressContent = (data, strategyId, sessionId, setStatus) =>
   cancel.addEventListener('click', async () => {
     cancel.disabled = true;
     const result = await post(
-      `/api/strategies/${encodeURIComponent(strategyId)}/backtests/${encodeURIComponent(sessionId)}/cancel`,
+      `/api/strategies/${encodeURIComponent(strategyId)}/evaluations/${encodeURIComponent(sessionId)}/cancel`,
       {},
     );
     setStatus(result.ok ? '已请求取消历史评估，已完成日期会保留' : errorText(result), !result.ok);
@@ -287,7 +287,7 @@ const buildBacktestProgressContent = (data, strategyId, sessionId, setStatus) =>
 
 export const runStrategyBacktest = async (strategy, input, setStatus) => {
   setStatus('正在逐交易日运行历史模拟…');
-  const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/backtests`, input);
+  const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/evaluations`, input);
   if (!result.ok) {
     setStatus(errorText(result), true);
     return result;
@@ -296,12 +296,12 @@ export const runStrategyBacktest = async (strategy, input, setStatus) => {
   const sessionId = result.data?.sessionId ?? result.data?.session?.id;
   if (completed === undefined && typeof sessionId === 'string') {
     openModal(
-      `模拟回测（历史回放）· ${strategy.name}`,
+      `历史评估（逐日重放）· ${strategy.name}`,
       buildBacktestProgressContent(result.data, strategy.id, sessionId, setStatus),
     );
     for (let attempt = 0; attempt < 360; attempt += 1) {
       const snapshot = await callApi(
-        `/api/strategies/${encodeURIComponent(strategy.id)}/backtests/${encodeURIComponent(sessionId)}`,
+        `/api/strategies/${encodeURIComponent(strategy.id)}/evaluations/${encodeURIComponent(sessionId)}`,
       );
       if (!snapshot.ok) {
         setStatus(errorText(snapshot), true);
@@ -317,7 +317,7 @@ export const runStrategyBacktest = async (strategy, input, setStatus) => {
         break;
       }
       openModal(
-        `模拟回测（历史回放）· ${strategy.name}`,
+        `历史评估（逐日重放）· ${strategy.name}`,
         buildBacktestProgressContent(data, strategy.id, sessionId, setStatus),
       );
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -329,7 +329,7 @@ export const runStrategyBacktest = async (strategy, input, setStatus) => {
   }
   featureCache.clear();
   openModal(
-    `模拟回测（历史回放）· ${strategy.name}`,
+    `历史评估（逐日重放）· ${strategy.name}`,
     buildBacktestResultContent(completed, strategy.id, sessionId),
   );
   const completionLabel =
@@ -357,7 +357,7 @@ const openBacktestDialog = async (strategy, setStatus) => {
   const from = new Date(to);
   from.setDate(from.getDate() - 30);
   const values = await promptDialog({
-    title: `模拟回测（历史回放）· ${strategy.name}`,
+    title: `历史评估（逐日重放）· ${strategy.name}`,
     fields: [
       { key: 'from', label: '开始日期（YYYY-MM-DD）', value: localDateText(from) },
       { key: 'to', label: '结束日期（YYYY-MM-DD）', value: localDateText(to) },
@@ -438,13 +438,13 @@ export const renderStrategyActions = (workspace, setStatus, refresh) => {
   const strategy = workspace.strategy;
   const headerActions = el('div', 'row-actions');
   if (workspace.currentVersion !== undefined && strategy.status === 'active') {
-    const strictBacktest = el('button', 'btn btn-outline btn-sm', '严格回测');
+    const strictBacktest = el('button', 'btn btn-outline btn-sm', '组合回测');
     strictBacktest.type = 'button';
     strictBacktest.addEventListener(
       'click',
       () => void openStrictBacktestDialog(strategy, setStatus),
     );
-    const backtest = el('button', 'btn btn-outline btn-sm', '模拟回测');
+    const backtest = el('button', 'btn btn-outline btn-sm', '历史评估（逐日重放）');
     backtest.type = 'button';
     backtest.addEventListener('click', () => void openBacktestDialog(strategy, setStatus));
     const sample = el('button', 'btn btn-outline btn-sm', '样本试跑');

@@ -135,6 +135,8 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('get_account'),
       fixed('get_market_data_status'),
       fixed('get_stock_universe_status'),
+      // T14：诊断只读读模型（settings 面板内的 section，不是新面板）。
+      fixed('get_data_diagnostics'),
     ]),
     market: Object.freeze([]),
   }),

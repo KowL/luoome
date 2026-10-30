@@ -4,6 +4,7 @@ import { Card, Empty, ErrorNote, Pill, Stat } from './primitives.js';
 import { strategyExpression, strategyText } from './projection.js';
 import { DIAGNOSIS_KIND, evidenceValue, RESEARCH_STATUS } from './research-model.js';
 import { operationIsUnsettled, researchErrorText } from './research-transport.js';
+import { STRICT_BACKTEST_COPY, strictBacktestView } from './strict-backtest-view.js';
 
 export const ResearchStatus = ({ status }) => {
   const [label, tone] = RESEARCH_STATUS[status] ?? ['待核对', 'quiet'];
@@ -39,7 +40,7 @@ export const PreflightFacts = ({ preflight }) =>
       [
         ['trial', '即时试跑'],
         ['historicalEvaluation', '历史选股评估'],
-        ['strictBacktest', '严格组合回测'],
+        ['strictBacktest', '组合回测（门禁审计）'],
       ].map(([key, label]) =>
         h(
           'div',
@@ -55,7 +56,7 @@ export const PreflightFacts = ({ preflight }) =>
         title: {
           trial: '即时试跑资格',
           historicalEvaluation: '历史评估资格',
-          strictBacktest: '严格回测资格',
+          strictBacktest: '组合回测门禁资格',
         }[key],
         items: layer.reasons,
       }),
@@ -707,7 +708,7 @@ export const ObservationSummary = ({ observations, version, title = '真实信�
     h(
       'p',
       { className: 'luo-fine' },
-      'T+1 / T+3 / T+5 跟踪信号发生后的个股表现。观察均值不是组合净收益，也不是严格回测。',
+      'T+1 / T+3 / T+5 跟踪信号发生后的个股表现。观察均值不是组合净收益，也不是组合回测。',
     ),
     h(
       'p',
@@ -750,26 +751,25 @@ export const ObservationSummary = ({ observations, version, title = '真实信�
 export const StrictBacktests = ({ runs = [] }) =>
   h(
     Card,
-    { title: '严格组合回测', meta: `${runs.length} 份记录` },
+    { title: STRICT_BACKTEST_COPY.title, meta: `${runs.length} 份记录` },
     h(
       'p',
       { className: 'luo-fine' },
       '执行模型：下一交易日开盘全量调仓、等权配置；费用、滑点、可交易性、公司行动、基准和 PIT 数据分别检查。',
     ),
     runs.length
-      ? runs.map((run) =>
-          h(
+      ? runs.map((run) => {
+          // 门禁未 complete 时 metrics 恒为 null：面板不出现收益率 / 回撤 / Sharpe 数字
+          // （含 `—` 占位），只给门禁审计表与阻塞项清单。判定见 strict-backtest-view.js。
+          const view = strictBacktestView(run);
+          return h(
             'div',
             { key: run.id, className: 'luo-strict-result' },
             h(
               'div',
               { className: 'luo-rule-heading' },
               h(ResearchStatus, { status: run.status }),
-              h(
-                Pill,
-                { tone: run.resultAvailability === 'complete' ? 'accent' : 'warn' },
-                run.resultAvailability === 'complete' ? '数据门禁完备' : '数据门禁存在缺口',
-              ),
+              h(Pill, { tone: view.gateComplete ? 'accent' : 'warn' }, view.gateLabel),
               h('span', { className: 'luo-fine' }, `${when(run.spec.from)} → ${when(run.spec.to)}`),
             ),
             h(
@@ -777,29 +777,57 @@ export const StrictBacktests = ({ runs = [] }) =>
               { className: 'luo-fine' },
               `基准 ${run.spec.benchmark.stockId} · 初始资金 ${money(run.spec.initialCash)} · 最大持仓 ${int(run.spec.execution.maxPositions)}`,
             ),
-            run.resultAvailability === 'complete' && run.metrics
+            view.metrics
               ? h(
                   'div',
                   { className: 'luo-stats' },
-                  h(Stat, { k: '净收益', v: ratio(run.metrics.netReturnPct) }),
-                  h(Stat, { k: '最大回撤', v: ratio(run.metrics.maxDrawdownPct, 2, false) }),
-                  h(Stat, { k: '基准收益', v: ratio(run.metrics.benchmarkReturnPct) }),
-                  h(Stat, { k: '成交笔数', v: int(run.metrics.tradeCount) }),
+                  view.metrics.map((metric) =>
+                    h(Stat, { key: metric.key, k: metric.label, v: metric.value }),
+                  ),
                 )
-              : h('p', { className: 'luo-fine' }, '未产生完整组合绩效；请先补齐下方证据。'),
+              : null,
             run.error ? h(ErrorNote, { error: strategyText(run.error) }) : null,
+            view.auditRows.length
+              ? h(
+                  'div',
+                  { className: 'luo-table-wrap' },
+                  h('strong', null, STRICT_BACKTEST_COPY.auditTitle),
+                  h(
+                    'table',
+                    { className: 'luo-table' },
+                    h(
+                      'thead',
+                      null,
+                      h(
+                        'tr',
+                        null,
+                        ['门禁项', '状态', '原因'].map((label) => h('th', { key: label }, label)),
+                      ),
+                    ),
+                    h(
+                      'tbody',
+                      null,
+                      view.auditRows.map((row) =>
+                        h(
+                          'tr',
+                          { key: row.key },
+                          h('td', null, row.key),
+                          h('td', null, h(ResearchStatus, { status: row.status })),
+                          h('td', null, strategyText(row.reason)),
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              : null,
             h(ResearchLimitations, {
-              items: [
-                ...(run.gateAudit?.items ?? [])
-                  .filter((item) => item.status !== 'complete')
-                  .map((item) => item.reason),
-                ...(run.limitations ?? []),
-              ],
+              items: view.blockers,
+              title: STRICT_BACKTEST_COPY.blockerTitle,
             }),
-          ),
-        )
+          );
+        })
       : h(Empty, {
-          title: '尚无严格回测记录',
-          hint: '数据门禁完备后才能计算组合绩效；可在对话中发起检查。',
+          title: STRICT_BACKTEST_COPY.empty.title,
+          hint: STRICT_BACKTEST_COPY.empty.hint,
         }),
   );

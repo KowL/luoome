@@ -947,7 +947,7 @@ export const getStrategyExperimentContextTool = defineTool({
         },
         {
           id: 'strict-backtest' as const,
-          title: '严格回测',
+          title: '组合回测（门禁审计）',
           status:
             strictBacktests.length === 0
               ? ('not-started' as const)

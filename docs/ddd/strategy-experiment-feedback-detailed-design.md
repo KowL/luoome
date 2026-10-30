@@ -59,7 +59,7 @@ Strategy
 - 不修改已发布 StrategyVersion；
 - 不在 RecommendationPolicy 中调用交易 adapter；
 - 不把基本面 mock 或当前值接入生产策略；
-- 不改变严格回测八项数据门禁。
+- 不改变组合回测八项数据门禁。
 
 ## 4. 模块边界
 

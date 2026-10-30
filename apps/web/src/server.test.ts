@@ -2116,7 +2116,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/publish'))).status).toBe(
       403,
     );
-    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/backtests'))).status).toBe(
+    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/evaluations'))).status).toBe(
       403,
     );
     expect((await writeOnly.fetch(guardedRequest('/api/strategies/x3/draft'))).status).toBe(403);
@@ -2272,7 +2272,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(generate.status).toBe(404);
   });
 
-  it('POST /api/strategies/:id/backtests 持久化隔离的历史模拟并返回区间汇总', async () => {
+  it('POST /api/strategies/:id/evaluations 持久化隔离的历史模拟并返回区间汇总', async () => {
     const strategyId = 'web-strategy-backtest';
     expect(
       (
@@ -2280,7 +2280,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
           targetRequest('/api/strategies', {
             id: strategyId,
             name: 'Web Backtest Strategy',
-            description: '验证历史模拟回测入口',
+            description: '验证历史评估（逐日重放）入口',
           }),
         )
       ).status,
@@ -2322,7 +2322,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     ).toBe(200);
 
     const response = await app.fetch(
-      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+      targetRequest(`/api/strategies/${strategyId}/evaluations`, {
         versionId,
         from: '2026-08-09',
         to: '2026-08-09',
@@ -2340,7 +2340,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     };
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const status = await app.fetch(
-        new Request(`http://test/api/strategies/${strategyId}/backtests/${queued.data.sessionId}`),
+        new Request(`http://test/api/strategies/${strategyId}/evaluations/${queued.data.sessionId}`),
       );
       snapshot = (await status.json()) as typeof snapshot;
       if (snapshot.data?.status !== 'running') break;
@@ -2367,7 +2367,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(await runs.json()).toMatchObject({ ok: true, data: { runs: [] } });
 
     const tooLong = await app.fetch(
-      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+      targetRequest(`/api/strategies/${strategyId}/evaluations`, {
         from: '2026-07-01',
         to: '2026-08-01',
       }),
@@ -2379,14 +2379,14 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
   });
 
-  it('严格回测 API 独立于历史回放，并在参数缺失时返回门禁入口错误', async () => {
+  it('组合回测 API 独立于历史回放，并在参数缺失时返回门禁入口错误', async () => {
     const invalid = await app.fetch(
       targetRequest('/api/strategies/strict-api-check/strict-backtests', {}),
     );
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toMatchObject({
       ok: false,
-      error: { kind: 'invalid_input', message: '严格回测参数无效' },
+      error: { kind: 'invalid_input', message: '组合回测参数无效' },
     });
     const list = await app.fetch(
       new Request('http://test/api/strategies/strict-api-check/strict-backtests'),

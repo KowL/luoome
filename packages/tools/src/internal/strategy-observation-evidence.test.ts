@@ -32,6 +32,7 @@ const observation = (
   baselinePrice: 100,
   baselineAt: SIGNAL_DAY,
   horizon: 't1',
+  vintage: 'pit',
   closePrice: 105,
   returnPct: 0.05,
   maxFavorableExcursionPct: 0.08,

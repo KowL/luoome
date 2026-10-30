@@ -1,9 +1,11 @@
 import {
   canClaimPluginOperation,
+  PLUGIN_OPERATION_NON_TERMINAL_STATES,
   type PluginAuthorityRepository,
   type PluginAutomationGrant,
   PluginAutomationGrantSchema,
   type PluginOperation,
+  type PluginOperationNonTerminal,
   PluginOperationSchema,
   samePluginTask,
 } from '@luoome/core';
@@ -28,6 +30,18 @@ export class InMemoryPluginAuthorityRepository implements PluginAuthorityReposit
     return op?.userId === scope.userId && op.accountId === scope.accountId
       ? structuredClone(op)
       : null;
+  }
+  async listNonTerminalOperationsByAccount(accountId: string) {
+    const states = new Set<string>(PLUGIN_OPERATION_NON_TERMINAL_STATES);
+    return [...this.operations.values()]
+      .filter((op) => op.accountId === accountId && states.has(op.state))
+      .map((op) => ({
+        id: op.id,
+        userId: op.userId,
+        accountId: op.accountId,
+        state: op.state as PluginOperationNonTerminal['state'],
+        tool: op.tool,
+      }));
   }
   async claimOperation(proof: Parameters<PluginAuthorityRepository['claimOperation']>[0]) {
     const op = this.operations.get(proof.id);

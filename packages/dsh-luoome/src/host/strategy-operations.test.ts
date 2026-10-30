@@ -7,6 +7,7 @@ import type {
   PluginAuthorityRepository,
   PluginAutomationGrant,
   PluginOperation,
+  PluginOperationNonTerminal,
   PluginOperationProof,
   PluginOperationScope,
   RepositoryRegistry,
@@ -1304,6 +1305,11 @@ class FailOnceSettleRepository implements PluginAuthorityRepository {
   }
   findOperation(scope: PluginOperationScope): Promise<PluginOperation | null> {
     return this.delegate().findOperation(scope);
+  }
+  listNonTerminalOperationsByAccount(
+    accountId: string,
+  ): Promise<readonly PluginOperationNonTerminal[]> {
+    return this.delegate().listNonTerminalOperationsByAccount(accountId);
   }
   claimOperation(
     proof: PluginOperationProof & { readonly claimToken: string },

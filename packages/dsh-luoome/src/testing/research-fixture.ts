@@ -339,6 +339,7 @@ export const seedResearchFixture = async (
         baselinePrice: 12,
         baselineAt: dataAsOf,
         horizon,
+        vintage: 'pit',
         dueAt,
         status,
         benchmarkStatus: status === 'complete' ? 'complete' : 'unavailable',

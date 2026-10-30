@@ -181,6 +181,49 @@ for (const mode of ['memory', 'drizzle'] as const) {
         close();
       }
     });
+    it('enumerates non-terminal operations by account without leaking other users', async () => {
+      const { repo, close } = setup();
+      try {
+        await repo.insertOperation(operation('op-pending'));
+        await repo.insertOperation({ ...operation('op-other-user'), userId: 'u2' });
+        await repo.insertOperation({ ...operation('op-other-account'), accountId: 'b' });
+        await repo.insertOperation(operation('op-terminal'));
+        const otherUserClaim = await repo.claimOperation({
+          ...proof('op-other-user'),
+          userId: 'u2',
+          claimToken: 'claim-other-user',
+        });
+        expect(otherUserClaim?.state).toBe('executing');
+        await repo.claimOperation(proof('op-terminal'));
+        expect(
+          await repo.settleOperation({
+            ...proof('op-terminal'),
+            now: 300,
+            state: 'succeeded',
+            resultJson: '{"ok":true}',
+          }),
+        ).toBe(true);
+        const accountA = await repo.listNonTerminalOperationsByAccount('a');
+        expect(accountA.map((entry) => [entry.id, entry.userId, entry.state, entry.tool]).sort()).toEqual([
+          ['op-other-user', 'u2', 'executing', 'batch'],
+          ['op-pending', 'u', 'pending', 'batch'],
+        ]);
+        // 窄投影只带身份与状态：不含业务输入/结果/claim token。
+        expect(Object.keys(accountA[0] ?? {}).sort()).toEqual([
+          'accountId',
+          'id',
+          'state',
+          'tool',
+          'userId',
+        ]);
+        expect(await repo.listNonTerminalOperationsByAccount('b')).toMatchObject([
+          { id: 'op-other-account', accountId: 'b', state: 'pending' },
+        ]);
+        expect(await repo.listNonTerminalOperationsByAccount('missing')).toEqual([]);
+      } finally {
+        close();
+      }
+    });
     it('does not allow caller mutation to change persisted authorization', async () => {
       const { repo, close } = setup();
       try {

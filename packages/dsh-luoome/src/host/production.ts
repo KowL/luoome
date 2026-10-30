@@ -1,10 +1,11 @@
 // dsh-luoome 纯插件生产 composition root（需求 §6.2，插件详细设计 §2/§3/§7）。
 //
 // 数据路径：受信任部署配置 → Node SQLite（`@luoome/db/node`）→ 真实 adapters *FromEnv
-// → `buildContext` → 真实只读 surface。本模块不 import bun:sqlite、@luoome/mcp、CLI 或 Web，
+// → `buildContext` → 真实只读 surface。本模块不 import bun:sqlite、已下线的 stdio MCP 包、CLI 或 Web，
 // 也不读取 memory fixture：装配失败时拒绝启动，而不是降级成假数据。
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { backup as sqliteBackup } from 'node:sqlite';
 
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-api-session-controller';
@@ -25,19 +26,33 @@ import {
   type ToolContext,
   type ToolResult,
 } from '@luoome/core';
-import { createNodeDrizzleRepos, type NodeDrizzleReposHandle } from '@luoome/db/node';
 import {
+  createNodeDrizzleRepos,
+  type NodeDrizzleReposHandle,
+  readDataImportStorageSchema,
+} from '@luoome/db/node';
+import {
+  assertSurfaceSelection,
+  assertTradeNeverExposed,
   buildContext,
   type ConfirmablePluginTool,
   decisionReviewOperation,
+  previewDataImportTool,
   toolRegistry,
 } from '@luoome/tools';
-import { updateAccountOperation } from './account-operations.js';
+import { createAccountOperationPolicies } from './account-operations.js';
 import {
   createAnalysisOperationPolicies,
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
+import {
+  createDataImportBackups,
+  createDataImportStaging,
+  type DataImportBackupStore,
+  type DataImportStaging,
+} from './data-import.js';
+import { createDataImportOperationPolicies } from './data-import-operations.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -76,28 +91,31 @@ const createPluginLogger = (): Logger => {
 export const assertNoTradeExposure = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void => {
-  if (env.LUOOME_EXPOSE_TRADE === 'true' || process.env.LUOOME_EXPOSE_TRADE === 'true')
-    throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed in the dsh-luoome production host');
+  // 判定与文案来自 `@luoome/tools` 的 exposure 判定层，与 read/market surface、MCP 面同一条。
+  assertTradeNeverExposed(env.LUOOME_EXPOSE_TRADE, process.env.LUOOME_EXPOSE_TRADE);
 };
 
 /**
  * allowlist 只接受 registry 中真实的纯 read 工具；写/外部/队列/trade 名字直接拒绝装配
  * （而不是注册后静默过滤），把配置错误挡在任何 IO 之前。
  */
-export const assertReadOnlyAllowlist = (allowlist: readonly string[]): void => {
-  for (const name of allowlist) {
-    const tool = toolRegistry.get(name);
-    if (tool === undefined) throw new Error(`Unknown configured dsh-luoome read tool: ${name}`);
-    if (
-      tool.sideEffect !== 'read' ||
-      tool.requiredCapabilities.some((capability) => capability !== 'read')
-    )
-      throw new Error(`Configured dsh-luoome tool is not read-only: ${name}`);
-  }
-};
+export const assertReadOnlyAllowlist = (allowlist: readonly string[]): void =>
+  assertSurfaceSelection(allowlist, toolRegistry.all(), 'read', {
+    label: 'dsh-luoome read tool',
+  });
 
 export interface ProductionHost {
   readonly config: ProductionConfig;
+  /**
+   * `recovery-only`：业务库为空且 owner 账户尚不存在。此时只装配恢复入口
+   * （上传/预检/导入 Operation），不注册市场、批处理与普通业务写能力。
+   * 导入成功后必须重新装配或重启插件才进入 `normal`。
+   */
+  readonly mode: 'normal' | 'recovery-only';
+  /** T48 有界上传暂存与预检面；未装配时为 undefined（CLI/TUI 不提供恢复入口）。 */
+  readonly dataImport: DataImportStaging;
+  /** T48 恢复前一致性备份（node:sqlite backup，事务外生成）。 */
+  readonly dataImportBackups: DataImportBackupStore;
   readonly context: ToolContext;
   readonly read: ReadSurface;
   /** 独立的 native market external surface；与 read 分开注册/撤销。 */
@@ -114,6 +132,29 @@ export interface ProductionHost {
   dispose(): void;
 }
 
+const RECOVERY_EMPTY_PROBES = [
+  'accounts',
+  'holdings',
+  'trades',
+  'portfolio_cash_flows',
+  'strategies',
+  'advices',
+  'reports',
+  'watchlists',
+  'stock_universe_memberships',
+  'chat_sessions',
+] as const;
+
+/**
+ * 只有「确实没有任何业务事实」才允许进入 recovery-only；owner 缺失但有事实是配置问题，
+ * 不能降级成可覆盖的空库。
+ */
+const isEmptyBusinessDatabase = (handle: NodeDrizzleReposHandle): boolean =>
+  RECOVERY_EMPTY_PROBES.every(
+    (table) =>
+      Number(handle.sqlite.prepare(`SELECT count(*) AS n FROM "${table}"`).get()?.n ?? 0) === 0,
+  );
+
 export interface CreateProductionHostOptions {
   readonly logger?: Logger;
 }
@@ -129,25 +170,39 @@ export const TRUSTED_ANALYSIS_PROVENANCE: TrustedAnalysisProvenance = Object.fre
 });
 
 /**
- * M2b 精确写回策略清单：
+ * 精确写回策略清单：
  * - M2b-1：DecisionReview 保存 + 交互分析 record_advice / record_analysis_result；
  * - M2b-2：策略 create / create-version / validate / publish + 用户反馈 record_advice_outcome；
- * - 策略上线：schedule / pause / resume / Watchlist subscribe / unsubscribe。
+ * - 策略上线：schedule / pause / resume / Watchlist subscribe / unsubscribe；
+ * - T47（REQ-M2-08）：账户维护四写 —— update_account / add_trade / close_holding /
+ *   create_portfolio_cash_flow。`add_trade` 是**人工记账 write**，不是 trade 能力。
  *
  * 不包含 claim/complete/fail/metrics/job、通用 settings 或 trade；batch 仅由部署显式开启。
  * 个人版按明确意图直接执行，每个写工具仍保留独立 Operation 与业务回执。
  */
 export const createProductionOperationPolicies = (
   trusted: TrustedAnalysisProvenance = TRUSTED_ANALYSIS_PROVENANCE,
-  options: { readonly batchEnabled?: boolean; readonly researchJobs?: ResearchJobs } = {},
+  options: {
+    readonly batchEnabled?: boolean;
+    readonly researchJobs?: ResearchJobs;
+    readonly dataImport?: Pick<DataImportStaging, 'describe'>;
+    readonly dataImportBackups?: Pick<DataImportBackupStore, 'describe'>;
+  } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
   ...createAnalysisOperationPolicies(trusted),
   ...createStrategyOperationPolicies(),
   ...createResearchOperationPolicies(options.researchJobs ?? createResearchJobs()),
-  updateAccountOperation,
+  ...createAccountOperationPolicies(),
   ...createWatchlistOperationPolicies(),
   ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
+  // T48 恢复：只作精确 Operation policy，不进 agent 面。
+  ...(options.dataImport === undefined || options.dataImportBackups === undefined
+    ? []
+    : createDataImportOperationPolicies({
+        staging: options.dataImport,
+        backups: options.dataImportBackups,
+      })),
 ];
 
 /**
@@ -172,16 +227,41 @@ export const createProductionHost = async (
   const settingsStore = new MarketSettingsStore(config.env, join(config.home, '.env'));
   mkdirSync(config.home, { recursive: true });
   const handle: NodeDrizzleReposHandle = createNodeDrizzleRepos(join(config.home, 'luoome.db'));
+  // 暂存目录与 TTL/配额在装配期固定；targetSchema 读共享主连接，不另开第二连接。
+  // 备份走 node:sqlite 的 backup（事务外生成，与单写实例的写串行，得到自洽快照）。
+  const dataImportBackups = createDataImportBackups({
+    directory: join(config.home, 'imports', 'backups'),
+    userId: config.owner.userId,
+    accountId: config.owner.accountId,
+    now: () => Date.now(),
+    backupDatabase: async (path) => {
+      await sqliteBackup(handle.sqlite, path);
+    },
+  });
+  const dataImportStaging = createDataImportStaging({
+    directory: join(config.home, 'imports'),
+    userId: config.owner.userId,
+    accountId: config.owner.accountId,
+    now: () => Date.now(),
+    targetSchema: () => readDataImportStorageSchema(handle.sqlite),
+    // 提交前复核备份文件（事务外）。
+    backups: dataImportBackups,
+  });
   let read: ReadSurface | undefined;
   let market: MarketSurface | undefined;
   let context: ToolContext;
   let saveMarketSettings: MarketSettings['save'];
+  let mode: 'normal' | 'recovery-only' = 'normal';
   try {
     const ownerAccount = await handle.repos.account.findById(config.owner.accountId);
-    if (ownerAccount === null)
-      throw new Error(
-        `Configured dsh-luoome owner account does not exist: ${config.owner.accountId}`,
-      );
+    if (ownerAccount === null) {
+      if (!isEmptyBusinessDatabase(handle))
+        throw new Error(
+          `Configured dsh-luoome owner account does not exist: ${config.owner.accountId}`,
+        );
+      // 空库从 0 到设置入口：只装配恢复面，不造示例账户、不注册普通业务能力。
+      mode = 'recovery-only';
+    }
 
     const adapters = createLocalAdapters({
       env: settingsStore.runtimeEnv(),
@@ -227,6 +307,7 @@ export const createProductionHost = async (
       ...(adapters.fundamentalData === undefined
         ? {}
         : { fundamentalData: adapters.fundamentalData }),
+      dataImport: dataImportStaging,
     });
     context = built;
     saveMarketSettings = (input) =>
@@ -250,7 +331,7 @@ export const createProductionHost = async (
       accountId: config.owner.accountId,
       // 同一冻结快照同时用于注册与执行；createReadSurface 再 parse 一次只读校验。
       config: {
-        allowlist: [...config.read.allowlist],
+        allowlist: mode === 'recovery-only' ? ['preview_data_import'] : [...config.read.allowlist],
         denylist: [...config.read.denylist],
         exposeResearch: config.read.exposeResearch,
       },
@@ -264,7 +345,7 @@ export const createProductionHost = async (
       accountId: config.owner.accountId,
       // 与 read 完全独立的冻结快照；只允许 external 能力。
       config: {
-        allowlist: [...config.market.allowlist],
+        allowlist: mode === 'recovery-only' ? [] : [...config.market.allowlist],
         denylist: [...config.market.denylist],
         timeoutMs: config.market.timeoutMs,
         exposeResearch: config.market.exposeResearch,
@@ -278,6 +359,8 @@ export const createProductionHost = async (
   } catch (error) {
     read?.dispose();
     market?.dispose();
+    dataImportStaging.dispose();
+    dataImportBackups.dispose();
     handle.close();
     throw error;
   }
@@ -295,11 +378,16 @@ export const createProductionHost = async (
     for (const remove of removers.splice(0).reverse()) remove();
     resolvedRead.dispose();
     resolvedMarket.dispose();
+    dataImportStaging.dispose();
+    dataImportBackups.dispose();
     handle.close();
   };
 
   return {
     config,
+    mode,
+    dataImport: dataImportStaging,
+    dataImportBackups,
     get context() {
       return context;
     },
@@ -371,6 +459,7 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
   if (resolved.batchEnabled && ctx.get('schedule') === undefined)
     throw new Error('dsh-luoome batches require the host schedule service');
   const host = await createProductionHost(resolved);
+  const recoveryOnly = host.mode === 'recovery-only';
   const owner = Object.freeze({
     userId: host.config.owner.userId,
     accountId: host.config.owner.accountId,
@@ -381,12 +470,19 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
   try {
     web = mountDshWebProfile(ctx, {
       repository: host.context.repos.pluginAuthority,
-      policies: createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, {
-        ...host.config,
-        researchJobs: host.researchJobs,
-      }),
+      policies: recoveryOnly
+        ? createDataImportOperationPolicies({
+            staging: host.dataImport,
+            backups: host.dataImportBackups,
+          })
+        : createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, {
+            ...host.config,
+            researchJobs: host.researchJobs,
+            dataImport: host.dataImport,
+            dataImportBackups: host.dataImportBackups,
+          }),
       // queue 只由这里的精确 analysis policy 使用；generic `/api/luoome/call` 仍是只读 read surface。
-      capabilities: ['read', 'write', 'external', 'queue'],
+      capabilities: recoveryOnly ? ['write'] : ['read', 'write', 'external', 'queue'],
       policyVersion: 1,
       now: Date.now,
       context: () => host.context,
@@ -398,6 +494,25 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       market: host.market,
       marketSettings: host.marketSettings,
       researchJobs: host.researchJobs,
+      dataImport: {
+        staging: host.dataImport,
+        backups: host.dataImportBackups,
+        // 预检是只读 tool 调用：不创建 Operation，也不持有账户 lease。
+        preview: (uploadId: string) =>
+          previewDataImportTool.execute(
+            { uploadId, mode: 'restore-business-v1' as const },
+            host.context,
+          ),
+        // 备份复核用同一份目标摘要口径（与 previewHash 内的 preDigest 相同）。
+        targetDigest: () => {
+          const repository = host.context.repos.dataImport;
+          if (repository === undefined) throw new Error('data import repository is unavailable');
+          return repository.targetDigest({
+            userId: host.config.owner.userId,
+            accountId: host.config.owner.accountId,
+          });
+        },
+      },
     });
     // market external 面与 read 分开注册，但使用同一 owner/top-level guard 语义：
     // 子 Agent、跨账户会话和 HTTP bridge 都不能只靠工具名获得外部调用权限。

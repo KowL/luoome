@@ -5,7 +5,9 @@
 当前形态是**单机版**：DSH 是唯一入口，luoome 以插件接入 DSH，`$LUOOME_HOME/luoome.db` 是唯一事实库。
 多租户托管形态（登录、订阅计费、托管站点、内嵌 DSH Host、用量计量）已经下线，相关文档归入
 [历史归档](#历史归档)，只作阶段留存，不是当前行为说明。当前形态的设计与边界见
-[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+[dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)；
+[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 是形态演进记录，
+其中按 MCP 实例描述的运行构成已于 REQ-M2-03 下线，不代表当前行为。
 
 ## 快速入口
 
@@ -13,7 +15,6 @@
 |---|---|
 | 产品用户 | [用户手册](./USER_GUIDE.md) |
 | DSH 插件安装 | [dsh-luoome 安装说明](../packages/dsh-luoome/README.md) |
-| 外部 Agent / MCP 使用者 | [luoome Skill](../skills/luoome/SKILL.md) |
 | 编码 Agent | [仓库开发规范](../AGENTS.md) |
 | 贡献者 | [贡献者指南](./CONTRIBUTING.md) |
 | 架构与领域开发者 | [架构说明](./ARCHITECTURE.md) |
@@ -23,7 +24,7 @@
 | 文档 | 用途 |
 |---|---|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 模块边界、领域模型、数据流和 workflow 约束 |
-| [USER_GUIDE.md](./USER_GUIDE.md) | 安装、CLI、TUI、Web、MCP 与日常使用 |
+| [USER_GUIDE.md](./USER_GUIDE.md) | 安装、CLI、TUI、Web 与日常使用（stdio MCP 入口已下线） |
 | [ROADMAP.md](./ROADMAP.md) | 版本演进、已交付能力和后续方向 |
 | [SECURITY.md](./SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、测试、代码规范和贡献流程 |
@@ -71,7 +72,7 @@
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
 | [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
 | [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 现金流、公司行动、每日估值、TWR、回撤、benchmark、贡献归因与缺失语义 |
-| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
+| [Strategy 组合回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
 | [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
 | [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘目标用户旅程、冻结契约、竖向切片、迁移/安全/测试、浏览器验收与外部数据门禁 |
 | [MVP3 决策与复盘详细设计](./ddd/mvp3-decision-review-detailed-design.md) | 账户记录、成交关联、幂等账本、聚合、报告补充与跨端验收 |

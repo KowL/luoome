@@ -210,6 +210,24 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
     });
   }
 
+  async latestSyncRun(input?: {
+    readonly source?: string;
+    readonly coverage?: MarketCoverage;
+  }): Promise<StockUniverseSyncRun | null> {
+    const filters = [];
+    if (input?.source !== undefined) filters.push(eq(stockUniverseSyncRuns.source, input.source));
+    if (input?.coverage !== undefined)
+      filters.push(eq(stockUniverseSyncRuns.coverage, input.coverage));
+    const row = this.db
+      .select()
+      .from(stockUniverseSyncRuns)
+      .where(filters.length === 0 ? undefined : and(...filters))
+      .orderBy(desc(stockUniverseSyncRuns.startedAt), desc(stockUniverseSyncRuns.id))
+      .limit(1)
+      .get();
+    return row === undefined ? null : toSyncRun(row);
+  }
+
   async latestSuccessfulSync(input?: {
     readonly source?: string;
     readonly coverage?: MarketCoverage;

@@ -3,8 +3,10 @@
 // 生产 apply 直接复用 task-6 的 composition root：Node SQLite + 真实 adapters + 真实只读/市场
 // 工具 + 宿主认证路由 + 个人版直接执行的写回 policies。owner、LUOOME_HOME 与 adapters env 全部
 // 来自受信任部署环境，不接受 HTTP/模型参数提升。M3b 起随包注册四个投研技能；M4 起
-// 提供宿主认证的 GET /api/luoome/state?panel=overview|strategies|review 与随包 client bundle。
+// 提供宿主认证的 GET /api/luoome/state?panel=overview|strategies|review 与随包 client bundle；
+// T11b 起把原 luoome-discipline 插件的七条全局纪律注册成 `luoome:discipline` 提示词 section。
 import type { Context } from '@deepseek-ai/cordis';
+import { registerDiscipline } from './discipline.js';
 import { apply as applyProductionHost, REQUIRED_HOST_SERVICES } from './production.js';
 import { registerBundledSkills } from './skills.js';
 
@@ -73,6 +75,8 @@ export const inject = [
   'schedule',
   // 随包技能注册需要 DSH skill registry；缺失时插件不激活（fail-loud），不降级成无技能启动。
   'skills',
+  // 全局纪律段（七条红线）注册在 system prompt registry 上；缺失时不激活，避免无红线的默认部署。
+  'systemPrompt',
 ] as const;
 
 /**
@@ -81,8 +85,9 @@ export const inject = [
  * DSH fail-loud 报告，不写入任何业务数据。
  */
 export const apply = async (ctx: Context): Promise<void> => {
-  // 先装配生产 host，再注册随包技能：装配失败不会留下半注册的 catalog。
-  // effect 挂在插件 fiber 上，宿主 dispose 插件时四个技能注册一起撤销。
+  // 先装配生产 host，再挂全局纪律段，最后注册随包技能：装配失败不会留下半注册的 catalog。
+  // effect 挂在插件 fiber 上，宿主 dispose 插件时纪律段与技能注册一起撤销。
   await applyProductionHost(ctx);
+  ctx.effect(() => registerDiscipline(ctx));
   ctx.effect(() => registerBundledSkills(ctx));
 };

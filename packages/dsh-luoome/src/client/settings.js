@@ -1,6 +1,21 @@
-import { createElement as h, useEffect, useState } from 'react';
+import { createElement as h, useEffect, useRef, useState } from 'react';
 import { dataOf, errorOf, usePanelState } from './data.js';
+import { diagnosticRows, diagnosticsSummary } from './diagnostics.js';
 import { clock, money, when } from './format.js';
+import {
+  backupSummary,
+  canReuseSession,
+  clearImportSession,
+  digestLabel,
+  IMPORT_MODE,
+  importDecision,
+  importLimitations,
+  importReceipt,
+  previewTableRows,
+  readImportSession,
+  structuralOnlyTables,
+  writeImportSession,
+} from './import-preview.js';
 import {
   Card,
   ErrorNote,
@@ -353,8 +368,475 @@ function AccountNameForm({ account, enabled, onSaved }) {
   );
 }
 
+const importPreviewRequest = async (uploadId) => {
+  const response = await fetch('api/luoome/import/preview', {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ uploadId }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok)
+    throw new Error(result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`);
+  return result.data;
+};
+
+const importBackupRequest = async (uploadId) => {
+  const response = await fetch('api/luoome/import/backup', {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ uploadId }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok)
+    throw new Error(result.error?.message ?? result.error?.cause ?? `HTTP ${response.status}`);
+  return result.data;
+};
+
+const importUploadRequest = async (file) => {
+  const response = await fetch('api/luoome/import/upload', {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: file,
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok)
+    throw new Error(result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`);
+  return result.data;
+};
+
+function DataImportForm({ accountId, enabled }) {
+  const [upload, setUpload] = useState(null);
+  const [preview, setPreview] = useState(null);
+  // 备份由服务端生成并绑定 targetDigest；不是勾选框。
+  const [backup, setBackup] = useState(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [receipt, setReceipt] = useState(null);
+  const [session, setSession] = useState(() => readImportSession(sessionStorage));
+  // 同步闸门：React 状态在同一 tick 内尚未生效，双击只能靠 ref 挡住第二次提交。
+  const inFlight = useRef(false);
+
+  // 刷新后回执可读：只按 sessionStorage 里的 operationId 回读，不依赖暂存文件。
+  useEffect(() => {
+    const current = readImportSession(sessionStorage);
+    if (!current) return;
+    let alive = true;
+    operationRequest(encodeURIComponent(current.operationId))
+      .then((operation) => {
+        if (!alive) return;
+        const summary = importReceipt(operation);
+        setReceipt(summary);
+        const next = { ...current, state: summary.state };
+        setSession(next);
+        writeImportSession(sessionStorage, next);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const choose = async (selected) => {
+    setUpload(null);
+    setPreview(null);
+    setBackup(null);
+    setReceipt(null);
+    setError('');
+    setMessage('');
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const uploaded = await importUploadRequest(selected);
+      setUpload(uploaded);
+      const result = await importPreviewRequest(uploaded.uploadId);
+      setPreview(result);
+      setMessage(
+        `预检完成：${Object.keys(result.counts ?? {}).length} 张表，快照 ${digestLabel(uploaded.archiveDigest)}`,
+      );
+    } catch (err) {
+      setError(err.message);
+      setUpload(null);
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestBackup = async () => {
+    if (!upload || backupBusy) return;
+    setBackupBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const created = await importBackupRequest(upload.uploadId);
+      setBackup(created);
+      setMessage('已生成恢复前一致性备份，可以提交恢复。');
+    } catch (err) {
+      setBackup(null);
+      setError(`备份失败：${err.message}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (inFlight.current || !upload || !preview || !backup) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    // 每次提交都是新 operationId；failed 之后绝不复用旧 id。
+    const operationId = crypto.randomUUID();
+    const pending = {
+      operationId,
+      requestId: operationId,
+      archiveDigest: preview.archiveDigest,
+      previewHash: preview.previewHash,
+      state: 'preparing',
+    };
+    writeImportSession(sessionStorage, pending);
+    setSession(pending);
+    try {
+      const operation = await operationRequest('prepare', {
+        id: operationId,
+        tool: 'restore_data_import',
+        input: {
+          uploadId: upload.uploadId,
+          previewHash: preview.previewHash,
+          previewExpiresAt: preview.expiresAt,
+          backupId: backup.backupId,
+          mode: IMPORT_MODE,
+        },
+      });
+      const summary = importReceipt(operation);
+      setReceipt(summary);
+      if (summary.state === 'failed') {
+        // failed 是终态：清掉本地 id 与本次备份，要求重新预检 + 重新备份 + 新 operationId。
+        clearImportSession(sessionStorage);
+        setSession(null);
+        setBackup(null);
+        setMessage(
+          `提交被拒：${summary.error || '恢复条件不满足'}。请重新预检并重新生成备份后再提交（旧操作号与旧备份不可复用）。`,
+        );
+      } else {
+        const next = { ...pending, state: summary.state };
+        writeImportSession(sessionStorage, next);
+        setSession(next);
+        setMessage(
+          summary.state === 'succeeded'
+            ? '业务快照已恢复。请刷新面板或重启插件以读取新数据。'
+            : '结果尚未明确，请点击「核对结果」。',
+        );
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
+  };
+
+  const check = async () => {
+    const current = readImportSession(sessionStorage);
+    if (!current) return;
+    setBusy(true);
+    setError('');
+    try {
+      let operation = await operationRequest(encodeURIComponent(current.operationId));
+      if (operation.state === 'executing' || operation.state === 'unknown')
+        operation = await operationRequest(
+          `${encodeURIComponent(current.operationId)}/reconcile`,
+          {},
+        );
+      const summary = importReceipt(operation);
+      setReceipt(summary);
+      const next = { ...current, state: summary.state };
+      setSession(next);
+      writeImportSession(sessionStorage, next);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decision = importDecision({ preview, backup, busy, submitting });
+  const backupInfo = backupSummary(backup);
+  const rows = previewTableRows(preview);
+  const structural = structuralOnlyTables(preview);
+  const limitations = importLimitations(preview);
+
+  return h(
+    Card,
+    {
+      title: '恢复业务快照（SQLite）',
+      meta: h(Pill, { tone: enabled ? 'ok' : 'quiet' }, enabled ? '可用' : '未启用恢复策略'),
+    },
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '选择一份关闭后或一致性 backup 生成的 luoome SQLite 快照。上传只走专用二进制载体，普通接口不承载数据库；预检只读，不写目标库。',
+    ),
+    error ? h(ErrorNote, { error }) : null,
+    h(
+      'label',
+      { className: 'luo-field' },
+      '快照文件',
+      h('input', {
+        type: 'file',
+        'aria-label': '快照文件',
+        accept: '.db,.sqlite,.sqlite3,application/octet-stream',
+        disabled: busy || submitting || !enabled,
+        onChange: (event) => choose(event.target.files?.[0] ?? null),
+      }),
+    ),
+    busy ? h('p', { role: 'status', className: 'luo-fine' }, '上传并预检中…') : null,
+    upload
+      ? h(
+          'p',
+          { className: 'luo-fine' },
+          `暂存 ${digestLabel(upload.archiveDigest)} · ${Math.round(upload.size / 1024)} KiB · 预检有效期至 ${when(preview?.expiresAt ?? upload.expiresAt)}`,
+        )
+      : null,
+    preview
+      ? h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'luo-substats' },
+            h(Stat, { k: '格式', v: 'SQLite 业务快照' }),
+            h(Stat, { k: '模式', v: preview.mode ?? IMPORT_MODE }),
+            h(Stat, { k: 'owner', v: accountId ?? '—' }),
+            h(Stat, { k: '表数', v: String(rows.length) }),
+          ),
+          h(
+            'div',
+            { className: 'luo-table-wrap' },
+            h(
+              'table',
+              { className: 'luo-table' },
+              h(
+                'thead',
+                null,
+                h(
+                  'tr',
+                  null,
+                  h('th', null, '表'),
+                  h('th', null, '策略'),
+                  h('th', null, '校验'),
+                  h('th', null, '来源'),
+                  h('th', null, '当前'),
+                  h('th', null, '预计'),
+                  h('th', null, '增/改/删'),
+                ),
+              ),
+              h(
+                'tbody',
+                null,
+                rows.map((row) =>
+                  h(
+                    'tr',
+                    { key: row.table },
+                    h('td', null, row.table),
+                    h('td', null, row.policy),
+                    h('td', null, row.validation === 'domain' ? '领域' : '仅结构'),
+                    h('td', null, row.source),
+                    h('td', null, row.current),
+                    h('td', null, row.expected),
+                    h('td', null, row.delta),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          structural.length > 0
+            ? h(
+                'div',
+                { className: 'luo-fine', role: 'note' },
+                h('strong', null, `仅做结构校验的 ${structural.length} 张表：`),
+                h('span', null, structural.join('、')),
+                h(
+                  'p',
+                  null,
+                  '这些表只校验主键存在、布尔列 0/1、JSON 列可解析与枚举取值，不校验领域不变量。恢复不重新推导任何事实。',
+                ),
+              )
+            : null,
+          limitations.length > 0
+            ? h(
+                'ul',
+                { className: 'luo-setting-list' },
+                limitations.map((item, index) => h('li', { key: index }, item)),
+              )
+            : null,
+        )
+      : null,
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'button',
+        {
+          className: 'luo-btn',
+          type: 'button',
+          'aria-label': '生成恢复前备份',
+          disabled: !preview || busy || submitting || backupBusy,
+          onClick: requestBackup,
+        },
+        backupBusy ? '备份中…' : backupInfo ? '重新生成备份' : '生成恢复前备份',
+      ),
+      backupInfo
+        ? h(
+            'span',
+            { role: 'status', className: 'luo-fine', 'data-backup-id': backupInfo.backupId },
+            `备份 ${backupInfo.digest} · ${backupInfo.size} KiB · ${when(backupInfo.createdAt)}`,
+          )
+        : h('span', { className: 'luo-fine' }, '提交前必须由服务端生成一致性备份'),
+    ),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '服务端只保留最近 10 份备份，更早的会被清理；需要长期留存请自行导出该备份文件。',
+    ),
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'button',
+        {
+          className: 'luo-btn',
+          type: 'button',
+          disabled: decision.disabled || !enabled,
+          onClick: submit,
+        },
+        submitting ? '提交中…' : '恢复业务快照',
+      ),
+      h(
+        'button',
+        {
+          className: 'luo-btn',
+          type: 'button',
+          disabled: true,
+          title: '旧 JSON 分类合并由后续切片提供',
+          'aria-describedby': 'luo-import-merge-note',
+        },
+        '合并分类数据',
+      ),
+      decision.reason ? h('span', { className: 'luo-fine' }, decision.reason) : null,
+    ),
+    h(
+      'p',
+      { className: 'luo-fine', id: 'luo-import-merge-note' },
+      '旧 JSON 分类合并（合并分类数据）为后续切片，本版本不提供；当前只支持 SQLite 业务快照恢复。',
+    ),
+    message ? h('p', { role: 'status', className: 'luo-fine' }, message) : null,
+    receipt
+      ? h(
+          'div',
+          { className: 'luo-fine luo-operation-ref' },
+          h('span', null, `操作 ${receipt.operationId} · ${receipt.state}`),
+          receipt.requestId ? h('span', null, `回执 ${receipt.requestId}`) : null,
+          receipt.archiveDigest
+            ? h('span', null, `快照 ${digestLabel(receipt.archiveDigest)}`)
+            : null,
+          receipt.committedAt ? h('span', null, `提交于 ${when(receipt.committedAt)}`) : null,
+          receipt.error ? h('span', null, receipt.error) : null,
+          Object.keys(receipt.actual ?? {}).length > 0
+            ? h(
+                'span',
+                null,
+                `回读 ${Object.entries(receipt.actual)
+                  .filter(([, count]) => count > 0)
+                  .map(([table, count]) => `${table}=${count}`)
+                  .join('，')}`,
+              )
+            : null,
+        )
+      : null,
+    session?.operationId && canReuseSession(session)
+      ? h(
+          'div',
+          { className: 'luo-fine luo-operation-ref' },
+          h('span', null, `上次操作 ${session.operationId}（${session.state}）`),
+          h(
+            'button',
+            { className: 'luo-btn', type: 'button', disabled: busy, onClick: check },
+            '核对结果',
+          ),
+        )
+      : null,
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '浏览器只保存操作号与摘要，不保存凭证或原始文件；提交失败后必须重新预检并使用新的操作号。',
+    ),
+  );
+}
+
+function DiagnosticsSection({ diagnostics, error }) {
+  const summary = diagnosticsSummary(diagnostics);
+  const rows = diagnosticRows(diagnostics);
+  return h(
+    Section,
+    {
+      title: '诊断',
+      id: 'diagnostics',
+      meta: h(Pill, { tone: summary.tone }, summary.text),
+    },
+    h(
+      Card,
+      { title: '数据诊断', meta: h('span', { className: 'luo-fine' }, '只读 · 不探测上游') },
+      h(
+        'p',
+        { className: 'luo-fine' },
+        '每条结论都给出具体表名、字段与日期；缺失日期显示「从未」，不推断时间。',
+      ),
+      error ? h(ErrorNote, { label: '诊断', error }) : null,
+      rows.length === 0
+        ? h('p', { role: 'status', className: 'luo-fine' }, '未发现数据问题。')
+        : h(
+            'ul',
+            { className: 'luo-setting-list' },
+            rows.map((row) =>
+              h(
+                'li',
+                { key: row.key, 'data-diagnostic-code': row.code },
+                h(
+                  'span',
+                  null,
+                  h(Pill, { tone: row.severity }, row.label),
+                  h('span', { className: 'luo-diagnostic-subject' }, `${row.subject} · ${row.at}`),
+                  h('span', { className: 'luo-fine' }, row.message),
+                ),
+              ),
+            ),
+          ),
+    ),
+  );
+}
+
 export function SettingsPanel() {
   const state = usePanelState('settings');
+  // section 深链：settings?section=diagnostics / #diagnostics 直接定位到诊断区块。
+  useEffect(() => {
+    const wanted =
+      new URLSearchParams(window.location.search).get('section') ??
+      window.location.hash.replace(/^#/, '');
+    if (wanted !== 'diagnostics') return;
+    document
+      .querySelector('[data-luoome-section="diagnostics"]')
+      ?.scrollIntoView({ block: 'start' });
+  }, []);
   const account = dataOf(state.results, 'get_account')?.account;
   const health = dataOf(state.results, 'get_market_data_status');
   const universe = dataOf(state.results, 'get_stock_universe_status');
@@ -403,6 +885,21 @@ export function SettingsPanel() {
     ),
     h(
       Section,
+      {
+        title: '数据恢复',
+        meta: h(
+          Pill,
+          { tone: policies.some((item) => item.name === 'restore_data_import') ? 'warn' : 'quiet' },
+          policies.some((item) => item.name === 'restore_data_import') ? '替换业务事实' : '未启用',
+        ),
+      },
+      h(DataImportForm, {
+        accountId: config?.accountId,
+        enabled: policies.some((item) => item.name === 'restore_data_import'),
+      }),
+    ),
+    h(
+      Section,
       { title: '数据健康' },
       h(
         'div',
@@ -437,6 +934,10 @@ export function SettingsPanel() {
         ),
       ),
     ),
+    h(DiagnosticsSection, {
+      diagnostics: dataOf(state.results, 'get_data_diagnostics'),
+      error: errorOf(state.results, 'get_data_diagnostics'),
+    }),
     h(
       Section,
       {

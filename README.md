@@ -5,9 +5,12 @@
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
 Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，并把多源数据织成可追溯事实。
 
-- 作为 **DSH 插件** 接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供三面板、四技能与原生工具/审批，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）；旧 MCP 四实例仅保留给手动/隔离验收
-- 作为 **MCP server** 被 DSH / Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
+- 作为 **DSH 插件** 接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供五块业务面板、随包技能与原生工具/审批，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）
 - 作为 **Web** 看板：账户、持仓、Strategy、Watchlist 与 AlertPlan（本地单机装配，随 DSH 面板使用）
+- 作为 **CLI / TUI** 本地工具：`luoome tools`、`luoome watch`、`luoome workflow run` 直连同一份事实库
+
+> stdio MCP 用户入口（`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例）已按 REQ-M2-03
+> 删除；暴露面判定归位到 `packages/tools/src/exposure/`，由插件面与 Web 面共同使用。
 
 当前形态是**单机版**：没有多租户、没有订阅计费、没有托管站点——DSH 是唯一入口，
 `$LUOOME_HOME/luoome.db` 是唯一事实库。批处理调度由 DSH 的定时任务负责，
@@ -37,7 +40,7 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 
 ### 数据维度（读 + 写）
 
-- 账户（单机多账户；Web 与 CLI/TUI/MCP 共享同一份账户事实）
+- 账户（单机多账户；Web、CLI/TUI 与 DSH 插件共享同一份账户事实）
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
@@ -75,15 +78,12 @@ packages/
   tools/       Tool 注册表 + Zod → TS/MCP/OpenAI 自动生成
   adapters/    行情 / LLM / 通知 / 券商 等外部依赖适配
   workflows/   内置编排：review / scan / diagnose / advise
-  mcp/         MCP server，把 tool registry 暴露给外部（含批处理入口）
-  dsh-bridge/  DSH 插件：只读面板、纪律提示词与独立 profile 装配
   cli/         命令行入口
   tui/         opentui 应用
 apps/
   web/         Hono + 同源静态仪表盘（本地单机装配）
 deploy/dsh/    独立 DSH 纯插件部署（compose、Caddy、插件 profile 装配）
 infra/dsh/     DSH 构建与受控验证底座
-.dsh/skills/   旧 MCP 过渡形态技能目录（P5 前保留给手动验收；默认部署使用插件随包的四条投研技能）
 docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
@@ -91,7 +91,7 @@ homebrew/
 
 ## 环境变量
 
-单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 CLI/TUI/MCP/DSH 共用的配置；
+单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 CLI/TUI/Web 与 DSH 插件共用的配置；
 部署侧的 DSH/插件变量（`DSH_*`、`LUOOME_OWNER_*`、`LUOOME_HOME`、`CADDY_IMAGE`）见
 [DSH 部署配置](deploy/dsh/production.env.example)。默认部署不再需要 `LUOOME_MCP_*`。
 
@@ -112,8 +112,8 @@ homebrew/
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力；Web 仍需同源校验与当前账户绑定 |
-| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
-| `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
+| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：Web/CLI 放行 external 类 tool |
+| `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 DSH 插件与 Web 启动即抛错退出（trade 永不暴露） |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 单机飞书通知 webhook；单机形态下只服务这台机器上的操作者 |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
@@ -124,7 +124,7 @@ homebrew/
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 
-生产拒绝 fixture provider。CLI/TUI/MCP/Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite，旧 MCP 实例仅在手动/隔离验收时使用。
+生产拒绝 fixture provider。CLI/TUI/Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
@@ -132,9 +132,9 @@ homebrew/
 Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可通过 `get_market_data_status` 查询。
 
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时、模型目录与模型设置页。
-需要模型判断的任务由 DSH agent 经 MCP 调用工具完成，密钥由 DSH 侧配置。
+需要模型判断的任务由 DSH agent 经插件原生工具调用完成，密钥由 DSH 侧配置。
 
-模型推理与模型配置由 DSH 承担，luoome 侧不再有模型设置页；本地 CLI/TUI/MCP 读取同一份
+模型推理与模型配置由 DSH 承担，luoome 侧不再有模型设置页；本地 CLI/TUI 读取同一份
 默认目录和环境变量。Web 只管数据源、通知、账户与数据导入导出，没有管理员与普通用户之分，
 也没有订阅与权益概念。
 
@@ -143,8 +143,8 @@ Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可
 | 文档 | 用途 |
 |---|---|
 | [docs/README.md](./docs/README.md) | **完整文档导航**：产品需求、技术设计、运维手册与历史归档 |
-| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
-| [skills/luoome/SKILL.md](./skills/luoome/SKILL.md) | 外部 Agent 接入：Skill 编排 + luoome MCP typed tools |
+| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / TUI / Web / 多账户 / 复盘 / 校准 / FAQ |
+| [packages/dsh-luoome/README.md](./packages/dsh-luoome/README.md) | 外部接入：DSH 插件安装、面板与随包技能 |
 | [AGENTS.md](./AGENTS.md) | 编码 Agent 开发规范：架构边界、实现约定、测试与安全规则 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
 | [docs/ROADMAP.md](./docs/ROADMAP.md) | 版本演进与交付状态 |
@@ -188,8 +188,8 @@ bun --no-env-file run web
 
 队列消费能力保留，但默认部署已切纯插件、不运行常驻 worker：交互式分析经插件的原生
 `record_advice` / `record_analysis_result` 确认操作直接写回，不创建 `analysis_job`；默认部署
-没有生产者，也没有常驻消费者。旧 MCP worker 链路只作为手动/隔离验收入口保留在源码中
-（见[用户手册](docs/USER_GUIDE.md#75-批量分析与队列)）。
+没有生产者，也没有常驻消费者。旧 MCP worker 链路（`packages/mcp`、`luoome mcp serve`）
+已随 REQ-M2-03 删除（见[用户手册](docs/USER_GUIDE.md#75-批量分析与队列)）。
 
 单机 CLI 的 `watch` 与 `workflow run` 能力继续保留，仅访问自己的单机库。下列 cron 是单机使用示例；
 每次 workflow 运行落一条 `WorkflowRun` 审计：
@@ -255,12 +255,13 @@ bun --no-env-file run web
 - 写操作（交互分析 record、复盘、策略创建/校验/发布、用户反馈）只经 DSH 原生确认操作执行；
   `trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 启动即失败；自动任务默认关闭。
 - 旧 MCP 过渡形态（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch` 四实例与
-  手动 worker）源码保留，仅用于手动/隔离验收，**默认部署不再启动**；P5 再统一删除。
+  手动 worker）已删除：`packages/mcp`、`deploy/dsh/mcp-tool-probe.ts` 与 `luoome mcp serve`
+  子命令都不再存在；交互分析写回契约迁到 `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`。
 - 批量分析仍使用 `analysis_job` 租约队列；队列实体、repository、claim/complete/fail 与手动验收链路
   全部保留，默认部署没有生产者 workflow，也不再运行常驻消费者。消费者取得冻结事实包后生成结果，
   由 `complete_analysis_job` 在同一事务中校验来源、写回并完成任务。
 - 存量建议标为 `legacy-ai`；新建议保留生成器、模型、技能版本和事实时点。
 - 模型调用只在 DSH 侧发生；luoome 领域工具与工作流不直接调用模型。
 
-> 当前仓库只完成隔离切换/回退演练（`infra/dsh/plugin-switch-acceptance.ts`），**尚未在真实生产
-> 服务器执行切换**；旧 MCP/Bun 源码尚未删除。
+> 切换/回退演练见 `infra/dsh/plugin-switch-acceptance.ts`；旧 MCP 用户入口源码已随 REQ-M2-03
+> 删除（判定层保留在 `packages/tools/src/exposure/`）。

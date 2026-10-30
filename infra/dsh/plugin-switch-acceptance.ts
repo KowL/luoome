@@ -41,13 +41,19 @@ const owner = Object.freeze({
 });
 const READ_TOOL_COUNT = 63;
 const MARKET_TOOL_COUNT = 8;
+// 与插件 `BUNDLED_SKILL_NAMES`、`deploy/dsh/profile-seed.mjs` 的 `REQUIRED_SKILLS` 同一份清单
+// （REQ-M1-01 的三集合相等）。工作区 `.dsh/skills` 已删除，`analysis-worker` 退役。
 const SKILL_NAMES = [
   'daily-market-analysis',
+  'decision-journal',
+  'luoome-batch',
+  'morning-brief',
   'post-close-review',
+  'stock-deep-dive',
   'strategy-lab',
   'strategy-result-review',
 ] as const;
-const LEGACY_SKILL_NAMES = ['analysis-worker', 'stock-deep-dive', 'morning-brief', 'luoome-batch'];
+const LEGACY_SKILL_NAMES = ['analysis-worker'];
 const PANEL_TOOL_NAMES = {
   overview: [
     'list_accounts',
@@ -722,7 +728,7 @@ process.stdout.write('seeded');
   if (unauthenticatedState.status !== 401)
     throw new Error('unauthenticated state route must be 401');
 
-  // 3b) 四条技能经真实 DSH skills catalog 可见，旧 MCP 技能不在默认 Web。
+  // 3b) 八条随包技能经真实 DSH skills catalog 可见，退役的 analysis-worker 不在默认 Web。
   const skillsReport = await waitForJsonFile(join(root, 'skills-catalog.json'));
   if (skillsReport.ok !== true)
     throw new Error(`skill catalog probe failed: ${JSON.stringify(skillsReport)}`);
@@ -735,7 +741,7 @@ process.stdout.write('seeded');
       throw new Error(`default Web profile must not install legacy skill ${legacy}`);
   if (catalogSkills.length !== SKILL_NAMES.length)
     throw new Error(
-      `skills catalog must contain exactly the four bundled skills: ${JSON.stringify(
+      `skills catalog must contain exactly the eight bundled skills: ${JSON.stringify(
         catalogSkills.map((skill) => skill.name),
       )}`,
     );

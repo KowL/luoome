@@ -2,7 +2,7 @@
 
 > 状态：P2-0～P2-5 代码、自动化测试和本地浏览器切片已完成；P2-5 全链路真实数据证据仍待积累，Phase 2 不标记为完全完成（2026-08-24）
 > 上位文档：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
-> 关联：[AI 投资 Agent 协作体验](../prd/ai-investment-agent.md)、[Agent 协作体验 Phase 0+1 详细设计](./agent-collaboration-phase0-1-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 严格回测详细设计](./strategy-strict-backtest-detailed-design.md)
+> 关联：[AI 投资 Agent 协作体验](../prd/ai-investment-agent.md)、[Agent 协作体验 Phase 0+1 详细设计](./agent-collaboration-phase0-1-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 组合回测详细设计](./strategy-strict-backtest-detailed-design.md)
 > 说明：本文件只冻结 Phase 2 的实现边界和验收顺序，不修改上位 PRD 的状态。只有代码、测试、浏览器和真实数据证据全部满足门禁后，主线程才更新 PRD 状态。
 
 ## 1. 目标、现状与完成定义
@@ -228,7 +228,7 @@ Phase 2 的代码可以在生产数据不足时返回 `partial/unavailable` 并�
 | 反馈版本 | Strategy/AlertPlan 可审计版本与可执行字段；研究来源和发布时间；若引用基本面，必须 PIT/发布时点一致 | 只生成草案或列为 unsupported；不得用当前快照回填历史假设 |
 | 运行运营 | 跨真实交易日的 schedule/lease/checkpoint/publication/观察补全、长区间和大账户预算 | 记录 partial/failed 和可观测数据；不能用一次 smoke 宣称持续生产闭合 |
 
-严格回测的八项门禁（PIT universe、DailyBar revision、费用、滑点、可交易性、公司行动、benchmark、evaluator identity）仍由[严格回测详细设计](./strategy-strict-backtest-detailed-design.md)单独拥有。Phase 2 的 SignalObservation 和账户绩效不得绕过这些门禁改称严格回测或收益回测。
+组合回测的八项门禁（PIT universe、DailyBar revision、费用、滑点、可交易性、公司行动、benchmark、evaluator identity）仍由[组合回测详细设计](./strategy-strict-backtest-detailed-design.md)单独拥有。Phase 2 的 SignalObservation 和账户绩效不得绕过这些门禁改称组合回测或收益回测。
 
 ## 9. 开发顺序与退出条件
 

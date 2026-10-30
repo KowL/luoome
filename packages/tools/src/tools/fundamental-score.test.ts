@@ -9,6 +9,7 @@ import {
   FundamentalScoreVersionSchema,
   financialFactContentHash,
   fundamentalScoreVersionDefinitionHash,
+  REAL_FINANCIAL_FACT_SOURCES,
 } from '@luoome/core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -108,12 +109,15 @@ const contextWithScoreFixture = async () => {
 };
 
 describe('fundamental score tools', () => {
-  it('scores a stable 20-stock market percentile and persist=false performs no score writes', async () => {
+  it('真实源缺失时 mock 事实不产生任何分数，persist=false 不写 run', async () => {
     const ctx = await contextWithScoreFixture();
     const saveStarted = vi.spyOn(ctx.repos.fundamentalScoreRun, 'saveStarted');
     const commit = vi.spyOn(ctx.repos.fundamentalScoreRun, 'commit');
     const adviceQuery = vi.spyOn(ctx.repos.advice, 'query');
     const tradeList = vi.spyOn(ctx.repos.trade, 'listByAccount');
+
+    // mock 事实确实落在主表里：报错的是解析路径，不是写入路径。
+    expect(await ctx.repos.financialFact.listRevisions({ stockIds })).toHaveLength(20);
 
     const result = await runFundamentalScoreTool.execute(runInput(false), ctx);
     expect(result.ok).toBe(true);
@@ -121,26 +125,23 @@ describe('fundamental score tools', () => {
     expect(result.data).toMatchObject({
       providerKind: 'mock',
       gate: 'not-ready',
-      status: 'complete',
+      status: 'unavailable',
+      results: [],
       run: {
-        status: 'committed',
-        providerStatus: 'complete',
+        status: 'unavailable',
+        providerStatus: 'unavailable',
         evaluatorCodeIdentity: FUNDAMENTAL_SCORE_EVALUATOR_CODE_IDENTITY,
+        terminalReason: { code: 'no-available-score' },
+        counts: { evaluated: 20, available: 0, missing: 20, excluded: 0 },
       },
     });
-    expect(result.data.results).toHaveLength(20);
-    expect(result.data.results.map((row) => row.rank)).toEqual(
-      Array.from({ length: 20 }, (_, index) => 20 - index),
-    );
-    expect(result.data.results[0]?.score).toBe(0);
-    expect(result.data.results[19]?.score).toBe(100);
     expect(saveStarted).not.toHaveBeenCalled();
     expect(commit).not.toHaveBeenCalled();
     expect(adviceQuery).not.toHaveBeenCalled();
     expect(tradeList).not.toHaveBeenCalled();
   });
 
-  it('persist=true atomically stores committed run/results and get exposes the version/vintage explanation', async () => {
+  it('persist=true 只保留 unavailable 审计记录，不写可消费结果', async () => {
     const ctx = await contextWithScoreFixture();
     const saveStarted = vi.spyOn(ctx.repos.fundamentalScoreRun, 'saveStarted');
     const commit = vi.spyOn(ctx.repos.fundamentalScoreRun, 'commit');
@@ -149,21 +150,26 @@ describe('fundamental score tools', () => {
     if (!result.ok) return;
     expect(saveStarted).toHaveBeenCalledTimes(1);
     expect(commit).toHaveBeenCalledTimes(1);
+    const committed = commit.mock.calls[0]?.[0];
+    expect(committed?.run.status).toBe('unavailable');
+    expect(committed?.results).toEqual([]);
     const runId = result.data.run.id;
+    expect(await ctx.repos.fundamentalScoreRun.listResults(runId)).toEqual([]);
     const fetched = await getFundamentalScoreTool.execute({ runId }, ctx);
-    expect(fetched).toMatchObject({ ok: true });
-    if (!fetched.ok) return;
-    expect(fetched.data).toMatchObject({
-      gate: 'not-ready',
-      status: 'committed',
-      scoreVersion: { id: 'fundamental-score-v1', status: 'published' },
-      version: { id: 'fundamental-score-v1' },
-      run: { id: runId, financialVintageKey: result.data.run.financialVintageKey },
-    });
-    expect(fetched.data.results[0]?.components[0]).toMatchObject({
-      unit: 'percent-points',
-      direction: 'higher',
-      sourceRevisionIds: expect.any(Array),
+    expect(fetched).toMatchObject({
+      ok: true,
+      data: {
+        gate: 'not-ready',
+        status: 'unavailable',
+        results: [],
+        scoreVersion: { id: 'fundamental-score-v1', status: 'published' },
+        version: { id: 'fundamental-score-v1' },
+        run: {
+          id: runId,
+          status: 'unavailable',
+          financialVintageKey: result.data.run.financialVintageKey,
+        },
+      },
     });
   });
 
@@ -200,7 +206,18 @@ describe('fundamental score tools', () => {
     expect(mismatchedUniverse).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
   });
 
-  it('wires industry-percentile-v1 through strict PIT facts and keeps each 20-stock group stable', async () => {
+  it('评分输入只使用真实源白名单，不会退化成披露型 all', async () => {
+    const ctx = await contextWithScoreFixture();
+    const resolveVintage = vi.spyOn(ctx.repos.financialFact, 'resolveVintage');
+    const result = await runFundamentalScoreTool.execute(runInput(false), ctx);
+    expect(result.ok).toBe(true);
+    expect(resolveVintage).toHaveBeenCalledTimes(1);
+    const input = resolveVintage.mock.calls[0]?.[0];
+    expect(input?.sources).toEqual(REAL_FINANCIAL_FACT_SOURCES);
+    expect(REAL_FINANCIAL_FACT_SOURCES).not.toContain('mock-score-fixture');
+  });
+
+  it('industry-percentile-v1 版本在真实源缺失时同样不产出分数', async () => {
     const ctx = await buildTestContext({ clock: () => new Date('2026-08-22T01:00:00.000Z') });
     const version = scoreVersion({
       id: 'fundamental-score-industry-v1',
@@ -222,6 +239,9 @@ describe('fundamental score tools', () => {
         ),
       ),
     );
+    expect(
+      await ctx.repos.financialFact.listRevisions({ stockIds: industryStockIds }),
+    ).toHaveLength(40);
 
     const result = await runFundamentalScoreTool.execute(
       {
@@ -236,52 +256,11 @@ describe('fundamental score tools', () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      data: { status: 'complete', results: expect.any(Array) },
-    });
-    if (!result.ok) return;
-    expect(result.data.results).toHaveLength(40);
-    const byStock = new Map(result.data.results.map((row) => [row.stockId, row]));
-    expect(byStock.get(industryStockIds[0] as string)).toMatchObject({ score: 0 });
-    expect(byStock.get(industryStockIds[19] as string)).toMatchObject({ score: 100 });
-    expect(byStock.get(industryStockIds[20] as string)).toMatchObject({ score: 0 });
-    expect(byStock.get(industryStockIds[39] as string)).toMatchObject({ score: 100 });
-    expect(byStock.get(industryStockIds[0] as string)?.components[0]).toMatchObject({
-      normalizedValue: 0,
-      rawValue: 1,
-      sourceRevisionIds: [expect.stringContaining('fact-industry-01.SH')],
-    });
-    expect(byStock.get(industryStockIds[20] as string)?.components[0]).toMatchObject({
-      normalizedValue: 0,
-      rawValue: 101,
-    });
-  });
-
-  it('keeps unavailable runs explicit when the 20-stock denominator is not met', async () => {
-    const ctx = await buildTestContext({ clock: () => new Date('2026-08-22T01:00:00.000Z') });
-    await ctx.repos.fundamentalScoreVersion.save(scoreVersion());
-    await ctx.repos.financialFact.appendMany(
-      stockIds.slice(0, 19).map((id, index) => factFor(id, index + 1)),
-    );
-    const result = await runFundamentalScoreTool.execute(runInput(true), ctx);
-    expect(result).toMatchObject({
-      ok: true,
       data: {
-        gate: 'not-ready',
         status: 'unavailable',
-        run: { status: 'unavailable', terminalReason: { code: 'no-available-score' } },
         results: [],
+        run: { status: 'unavailable', counts: { evaluated: 40, available: 0 } },
       },
     });
-    if (!result.ok) return;
-    expect(await ctx.repos.fundamentalScoreRun.findById(result.data.run.id)).toMatchObject({
-      status: 'unavailable',
-      terminalReason: { code: 'no-available-score' },
-    });
-    expect(await getFundamentalScoreTool.execute({ runId: result.data.run.id }, ctx)).toMatchObject(
-      {
-        ok: true,
-        data: { status: 'unavailable', results: [] },
-      },
-    );
   });
 });

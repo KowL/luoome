@@ -1,4 +1,8 @@
-import type { SignalObservation } from '../entity/signal-observation.js';
+import {
+  SIGNAL_OBSERVATION_VINTAGES,
+  type SignalObservation,
+  type SignalObservationVintage,
+} from '../entity/signal-observation.js';
 
 export interface SignalObservationStats {
   readonly group: string;
@@ -73,6 +77,50 @@ export const deduplicateSignalObservations = (
         (right.baselineAt?.getTime() ?? Number.MAX_SAFE_INTEGER) ||
       left.id.localeCompare(right.id),
   );
+};
+
+/**
+ * 按 vintage 统计条数；用于在默认口径下披露被排除的组，而不是让它们静默消失。
+ * 顺序固定为 pit / restated / legacy，便于报告与断言稳定。
+ */
+export const countSignalObservationVintages = (
+  observations: readonly SignalObservation[],
+): Readonly<Record<SignalObservationVintage, number>> => {
+  const counts: Record<SignalObservationVintage, number> = { pit: 0, restated: 0, legacy: 0 };
+  for (const observation of observations) counts[observation.vintage] += 1;
+  return counts;
+};
+
+/** 结果里实际出现的 vintage 集合，按固定顺序返回。 */
+export const signalObservationVintages = (
+  observations: readonly SignalObservation[],
+): readonly SignalObservationVintage[] => {
+  const present = new Set(observations.map((observation) => observation.vintage));
+  return SIGNAL_OBSERVATION_VINTAGES.filter((vintage) => present.has(vintage));
+};
+
+/** 单一 vintage 时返回该值；空集返回 undefined；混算返回 'mixed'。 */
+export const signalObservationVintageOf = (
+  observations: readonly SignalObservation[],
+): SignalObservationVintage | 'mixed' | undefined => {
+  const present = signalObservationVintages(observations);
+  if (present.length === 0) return undefined;
+  return present.length === 1 ? present[0] : 'mixed';
+};
+
+/**
+ * 混算守卫：同一份统计结果必须只有一个 vintage 口径。
+ * 只有调用方显式请求全量并披露混算时，才允许跳过本断言。
+ */
+export const assertSignalObservationVintageHomogeneity = (
+  observations: readonly SignalObservation[],
+): void => {
+  const present = signalObservationVintages(observations);
+  if (present.length > 1) {
+    throw new Error(
+      `SignalObservation 统计不得混合 vintage：实际出现 ${present.join(' + ')}；全量混算必须显式请求并在输出披露`,
+    );
+  }
 };
 
 const average = (values: readonly number[]): number | undefined =>

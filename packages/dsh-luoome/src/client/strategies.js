@@ -1,5 +1,10 @@
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react';
-import { dailyCycleAvailable, dailyCycleResult } from './daily-cycle.js';
+import {
+  closingBatchAvailable,
+  closingBatchResult,
+  dailyCycleAvailable,
+  dailyCycleResult,
+} from './daily-cycle.js';
 import {
   dataOf,
   errorOf,
@@ -18,6 +23,7 @@ import {
   money,
   OBSERVATION_HORIZON,
   OBSERVATION_STATUS,
+  OBSERVATION_VINTAGE,
   OWNER,
   points,
   RUN_STATUS,
@@ -244,7 +250,18 @@ const ObservationsTable = ({ pending, loading, error }) => {
                   'tr',
                   { key: item.id },
                   h('td', null, h('span', { className: 'luo-stock-name' }, item.stockId)),
-                  h('td', null, OBSERVATION_HORIZON[item.horizon] ?? item.horizon),
+                  h(
+                    'td',
+                    null,
+                    OBSERVATION_HORIZON[item.horizon] ?? item.horizon,
+                    OBSERVATION_VINTAGE[item.vintage] === undefined
+                      ? null
+                      : h(
+                          Pill,
+                          { tone: OBSERVATION_VINTAGE[item.vintage].tone },
+                          OBSERVATION_VINTAGE[item.vintage].label,
+                        ),
+                  ),
                   h('td', null, when(item.dueAt)),
                   h('td', null, int(item.attemptCount ?? 0)),
                   h(
@@ -1171,6 +1188,150 @@ const DailyCycleCard = ({ refresh }) => {
   );
 };
 
+/**
+ * 手动补跑收盘批处理（T14 / REQ-M2-04）。
+ *
+ * 与日循环同一范式：一次点击 → 一条 Operation（prepare/confirm + 回执），不轮询、不自起调度；
+ * 完成后用 `get_closing_batch_audit` 回读该批次，证明批次真的落在 workflow_runs 里。
+ */
+const ClosingBatchCard = ({ refresh }) => {
+  const [profile, setProfile] = useState(null);
+  const [audit, setAudit] = useState(null);
+  const [auditError, setAuditError] = useState(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('api/luoome/profile', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!controller.signal.aborted) setProfile(data);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
+  const accountId = profile?.accountId;
+  const available = closingBatchAvailable(profile);
+  const control = useResearchOperation({
+    accountId,
+    strategyId: 'closing-batch',
+    onCompleted: refresh,
+  });
+  const result = closingBatchResult(control.operation);
+  const operationId = control.operation?.operationId;
+  const settled = control.operation?.state;
+  const batchDate = control.operation?.result?.data?.summary?.date;
+  useEffect(() => {
+    if (operationId === undefined || settled !== 'succeeded') return undefined;
+    const controller = new AbortController();
+    setAuditError(null);
+    fetch('api/luoome/call', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'get_closing_batch_audit',
+        input: typeof batchDate === 'string' ? { date: batchDate } : {},
+      }),
+    })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok || !body.ok)
+          throw new Error(body.error?.message ?? `HTTP ${response.status}`);
+        if (!controller.signal.aborted) setAudit(body.data);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setAuditError(String(error.message ?? error));
+      });
+    return () => controller.abort();
+  }, [operationId, settled, batchDate]);
+  const batchRuns = (audit?.accounts ?? []).flatMap((entry) => [
+    ...(entry.mainReport === null || entry.mainReport === undefined
+      ? []
+      : [
+          {
+            id: entry.mainReport.workflowRunId,
+            accountId: entry.accountId,
+            status: entry.mainReport.status,
+            outcome: 'main-report',
+            startedAt: entry.mainReport.generatedAt,
+            errorCount: entry.mainReport.missingDimensions.length,
+          },
+        ]),
+    ...(entry.batchRuns ?? []).map((run) => ({ ...run, accountId: entry.accountId })),
+  ]);
+  return h(
+    Card,
+    { title: '收盘批处理', meta: '手动补跑' },
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '按当前时间补跑当日收盘批处理；一次点击只产生一条操作回执，完成后可在同一张卡里核对批次。',
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'luo-btn',
+        disabled: !available || control.locked,
+        onClick: () => control.prepare('run_closing_report_cutoff', {}),
+      },
+      control.operation?.state === 'executing' ? '运行中' : '补跑收盘批处理',
+    ),
+    !available && profile !== null
+      ? h('p', { className: 'luo-fine' }, '当前部署未开启批处理（batchEnabled=false）。')
+      : null,
+    result
+      ? h('p', { className: `luo-fine is-${result.tone}`, 'aria-live': 'polite' }, result.text)
+      : null,
+    h(OperationReceipt, { control }),
+    auditError ? h(ErrorNote, { label: '批次审计', error: auditError }) : null,
+    audit === null
+      ? null
+      : h(
+          'div',
+          { 'data-batch-audit': audit.date ?? '' },
+          h(
+            'p',
+            { className: 'luo-fine', role: 'status' },
+            `批次审计 ${audit.date ?? ''}：预期账户 ${audit.summary?.knownExpectedAccounts ?? 0} · 有主报告 ${audit.summary?.withMainReport ?? 0}`,
+          ),
+          batchRuns.length === 0
+            ? h(
+                'p',
+                { className: 'luo-fine' },
+                '该日审计里没有主报告：补跑可能补的是前一交易日缺口，报告日期以操作回执为准。',
+              )
+            : null,
+        ),
+    batchRuns.length > 0
+      ? h(
+          'ul',
+          { className: 'luo-setting-list', 'aria-label': '批次审计' },
+          batchRuns.map((run) =>
+            h(
+              'li',
+              { key: `${run.accountId}:${run.id}`, 'data-batch-run-id': run.id },
+              h('span', null, `批次 ${run.id} · ${run.status} · ${run.outcome ?? '—'}`),
+              h(
+                'span',
+                { className: 'luo-fine' },
+                `开始 ${when(run.startedAt)} · 错误 ${run.errorCount}`,
+              ),
+            ),
+          ),
+        )
+      : null,
+  );
+};
+
 function UnsavedResearchDialog({ pending, guard, onStay, onDiscard, onSave, saving }) {
   const dialog = useRef(null);
   useEffect(() => {
@@ -1461,6 +1622,7 @@ export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
         Section,
         null,
         h(DailyCycleCard, { refresh }),
+        h(ClosingBatchCard, { refresh }),
         h(
           'div',
           { className: 'luo-grid is-two' },

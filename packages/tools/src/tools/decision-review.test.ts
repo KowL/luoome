@@ -235,6 +235,7 @@ describe('decision review tools', () => {
       baselinePrice: 100,
       baselineAt: advice.createdAt,
       horizon: 't1' as const,
+      vintage: 'pit' as const,
       benchmarkStatus: 'unavailable' as const,
       status: 'pending' as const,
       provenance: {

@@ -107,7 +107,7 @@ const coverageStatus = (count: number, total: number): 'ready' | 'partial' | 'un
 export const getStrategyDataPreflightTool = defineTool({
   name: 'get_strategy_data_preflight',
   description:
-    '按不可变策略字段与指定区间检查本地真实日线修订、PIT 股票池/天梯及基准覆盖；披露试跑/历史评估/严格回测各层限制，不访问即时行情或放宽门禁',
+    '按不可变策略字段与指定区间检查本地真实日线修订、PIT 股票池/天梯及基准覆盖；披露试跑/历史评估/组合回测门禁各层限制，不访问即时行情或放宽门禁',
   sideEffect: 'read',
   input: GetStrategyDataPreflightInput,
   output: GetStrategyDataPreflightOutput,
@@ -356,14 +356,14 @@ export const getStrategyDataPreflightTool = defineTool({
               : ['版本尚未校验通过，历史执行前必须先校验。']),
             ...(pitDays === total
               ? []
-              : ['PIT vintage 不完整，允许研究重放但不能宣称无前视偏差或严格回测合格。']),
+              : ['PIT vintage 不完整，允许研究重放但不能宣称无前视偏差或组合回测门禁合格。']),
           ],
         },
         strictBacktest: {
           status: 'blocked' as const,
           executionModel: 'next-open-full-rebalance-equal-weight-v1' as const,
           reasons: [
-            '需要完整持久化 evaluation session、同求值器代码、逐日 PIT universe/revision、执行日可交易性与公司行动、费用/滑点及基准事实；由既有严格回测 gateAudit 逐项判定。',
+            '需要完整持久化 evaluation session、同求值器代码、逐日 PIT universe/revision、执行日可交易性与公司行动、费用/滑点及基准事实；由既有组合回测 gateAudit 逐项判定。',
             ...(benchmarkPitDays === dates.length
               ? []
               : [`基准 PIT 覆盖 ${benchmarkPitDays}/${dates.length}。`]),

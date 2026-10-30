@@ -101,6 +101,26 @@ export const PluginOperationSchema = z
   );
 export type PluginOperation = z.infer<typeof PluginOperationSchema>;
 
+/**
+ * 尚未终结的 Operation 状态。恢复互斥 gate 与导入提交的权威复查都以这三个状态为准：
+ * pending 覆盖「已 prepare 未 claim」，executing 覆盖「已 claim 业务未落地」，unknown 覆盖
+ * 「业务可能已提交但 settle 丢失」。terminal（succeeded/failed/cancelled）不阻断。
+ */
+export const PLUGIN_OPERATION_NON_TERMINAL_STATES = ['pending', 'executing', 'unknown'] as const;
+export type PluginOperationNonTerminalState = (typeof PLUGIN_OPERATION_NON_TERMINAL_STATES)[number];
+
+/**
+ * 窄投影：只用于「同账户是否还有未终结操作」的判定，刻意不含 inputJson/resultJson/claimToken。
+ * 恢复互斥 gate 只需要身份与状态，不需要也不应该把业务输入带进判定路径。
+ */
+export interface PluginOperationNonTerminal {
+  readonly id: string;
+  readonly userId: string;
+  readonly accountId: string;
+  readonly state: PluginOperationNonTerminalState;
+  readonly tool: string;
+}
+
 export interface PluginOperationScope {
   readonly id: string;
   readonly userId: string;

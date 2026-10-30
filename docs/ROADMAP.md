@@ -27,9 +27,9 @@
   - read: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `get_advice`, `get_advice_stats`
   - advice: `analyze_stock`（mock LLM，输出结构化 Advice + disclaimers + validUntil；该 tool 已随 DSH 瘦身上下线）
 - mcp 包：stdio server，暴露 read + advice 类
-- cli 包：`luoome` 命令入口，至少 `tools list`, `tools call`, `advice list`, `advice stats`, `mcp serve`
+- cli 包：`luoome` 命令入口，至少 `tools list`, `tools call`, `advice list`, `advice stats`, `mcp serve`（该入口已删除，REQ-M2-03）
 - tui 包：opentui 应用，`luoome tui` 显示持仓列表 + 今日建议（mock 数据）
-- 测试：vitest + 核心工具的单元测试 + advice 不变量测试 + mcp server smoke test
+- 测试：vitest + 核心工具的单元测试 + advice 不变量测试 + mcp server smoke test（mcp server 已删除）
 
 **验收**：
 - ✅ `bun run tui` 在终端显示 mock 持仓表格 + mock 建议列表
@@ -450,7 +450,7 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 - ❌ 多用户 / 团队功能（个人工具）
 - ❌ 跨用户跟单、公开策略市场或平台级策略订阅（个人 advisor，不是平台）
 - ❌ 移动原生 App（Web PWA 优先）
-- ❌ 在费用、滑点、可交易性、公司行动和版本门禁缺失时输出严格回测收益、胜率或 Sharpe
+- ❌ 在费用、滑点、可交易性、公司行动和版本门禁缺失时输出组合回测收益、胜率或 Sharpe
 
 ## 评估指标
 

@@ -1307,7 +1307,7 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 - [x] 本地日线完成观察，样本统计返回样本数、唯一股票、时间范围、缺失率及收益描述统计；同一股票、
   同一基准交易日、同一周期按 `stock-day-horizon` 去重，代表 observation id 可回溯。
 - [x] SignalObservation 使用版本化 benchmark 数据集 `000300.SH:qfq:daily:v1`；同步失败时显式标为
-  unavailable/partial；满足 §17.3 后才建设严格回测 Module 和曲线。
+  unavailable/partial；满足 §17.3 后才建设组合回测 Module 和曲线。
 
 ### Phase 7：三项延后能力收口
 
@@ -1358,7 +1358,6 @@ packages/workflows/src/refresh-groups.ts
 packages/cli/src/index.ts
 apps/web/src/server.ts
 apps/web/public/*
-skills/luoome/SKILL.md
 ```
 
 本次 Phase 7 还新增/修改：`packages/core/src/strategy/local-selector.ts`、

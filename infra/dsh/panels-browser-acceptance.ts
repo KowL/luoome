@@ -2486,7 +2486,7 @@ const runAcceptance = async () => {
     !preflight.preflight.data.fields.some((field) => field.availableSamples < field.totalSamples) ||
     preflight.preflight.data.layers.strictBacktest.status !== 'blocked'
   )
-    throw new Error('预检未保留真实历史缺口与严格回测门禁');
+    throw new Error('预检未保留真实历史缺口与组合回测门禁');
   await page.screenshot(join(evidenceDir, 'research-question-desktop.png'));
   await researchTab('试跑与诊断');
   await researchFill('事实来源', 'replay');

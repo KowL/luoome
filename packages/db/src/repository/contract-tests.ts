@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import {
   type Account,
   type Advice,
+  type AdviceDataSnapshot,
   type AdviceOutcome,
+  AdviceSchema,
   type AlertPlan,
   buildAccountFacts,
   type ChatMessage,
@@ -510,6 +512,7 @@ const makeSignalObservation = (
   baselinePrice: 10,
   baselineAt: T1,
   horizon: 't1',
+  vintage: 'pit',
   benchmarkStatus: 'unavailable',
   status: 'pending',
   provenance: {
@@ -1827,7 +1830,6 @@ export const registerRepositoryContractTests = (
               },
             },
             indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
-            llmReasoning: '原始推理文本',
             strategy: {
               strategyId: 'strategy-1',
               strategyVersionId: 'strategy-version-1',
@@ -1855,6 +1857,68 @@ export const registerRepositoryContractTests = (
         });
         expect(got?.basedOn.dataAsOf).toBeInstanceOf(Date);
         expect(got?.basedOn.quotes?.['stk-1']?.ts).toBeInstanceOf(Date);
+      });
+
+      // 存量行在删除 `llmReasoning` 之前写入，basedOn JSON 里仍带着该 key。
+      // 读入必须由实体 schema strip 掉它，且相邻字段（quotes / indicators / strategy /
+      // dataAsOf 的 Date 还原）逐一保留——防止 strip 时误伤相邻字段。
+      it('存量 basedOn 带已删除的 llmReasoning 时读入 strip，其余字段逐一相等', async () => {
+        const legacyBasedOn = {
+          quotes: {
+            'stk-1': {
+              stockId: 'stk-1',
+              observedAt: T2.toISOString(),
+              fetchedAt: T2.toISOString(),
+              timestampSource: 'retrieval' as const,
+              ts: T2.toISOString(),
+              open: 10,
+              high: 11,
+              low: 9,
+              close: 10.5,
+              volume: 1_234_567,
+              source: 'test',
+            },
+          },
+          indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
+          llmReasoning: '原始推理文本',
+          ladder: {
+            date: '2026-07-03',
+            total: 2,
+            maxLevel: 3,
+            source: 'eastmoney',
+            levels: [{ level: 3, count: 2 }],
+            warnings: [],
+          },
+          strategy: {
+            strategyId: 'strategy-1',
+            strategyVersionId: 'strategy-version-1',
+            runId: 'strategy-run-1',
+            stockId: 'stk-1',
+            resultEvidence: ['result-fact'],
+            signalIds: ['signal-1'],
+            observationIds: ['observation-1'],
+            recommendationTrigger: 'run' as const,
+          },
+          dataAsOf: T3.toISOString(),
+        };
+        const legacyAdvice = makeAdvice('adv-legacy-llm', {
+          basedOn: legacyBasedOn as unknown as AdviceDataSnapshot,
+        });
+        // 旧行的读入入口是实体 schema：zod object 默认 strip 未知键。
+        const imported = AdviceSchema.parse(legacyAdvice);
+        expect('llmReasoning' in imported.basedOn).toBe(false);
+
+        await repos.advice.save({
+          ...legacyAdvice,
+          basedOn: imported.basedOn as AdviceDataSnapshot,
+        });
+        const got = await repos.advice.findById('adv-legacy-llm');
+        expect(got?.basedOn).toEqual(imported.basedOn);
+        expect(got?.basedOn.quotes?.['stk-1']?.close).toBe(10.5);
+        expect(got?.basedOn.indicators).toEqual(legacyBasedOn.indicators);
+        expect(got?.basedOn.ladder).toEqual(legacyBasedOn.ladder);
+        expect(got?.basedOn.strategy).toEqual(imported.basedOn.strategy);
+        expect(got?.basedOn.dataAsOf).toEqual(T3);
       });
 
       it('sourceTool / sourceWorkflow 可选字段往返', async () => {
@@ -3913,6 +3977,33 @@ export const registerRepositoryContractTests = (
         expect(await repos.signalObservation.findById('observation-1')).toBeNull();
         expect(await repos.signalObservation.findById('observation-2')).not.toBeNull();
       });
+
+      it('vintage 三值往返一致，不把 restated/legacy 折叠成 pit', async () => {
+        await repos.signalObservation.save(
+          makeSignalObservation('vintage-pit', 'vintage-signal-1', { vintage: 'pit' }),
+        );
+        await repos.signalObservation.save(
+          makeSignalObservation('vintage-restated', 'vintage-signal-2', { vintage: 'restated' }),
+        );
+        await repos.signalObservation.save(
+          makeSignalObservation('vintage-legacy', 'vintage-signal-3', {
+            vintage: 'legacy',
+            horizon: 't20',
+            sourceKind: 'tactic-signal',
+          }),
+        );
+        for (const [id, vintage] of [
+          ['vintage-pit', 'pit'],
+          ['vintage-restated', 'restated'],
+          ['vintage-legacy', 'legacy'],
+        ] as const) {
+          expect((await repos.signalObservation.findById(id))?.vintage).toBe(vintage);
+        }
+        const listed = await repos.signalObservation.list({
+          sourceIds: ['vintage-signal-1', 'vintage-signal-2', 'vintage-signal-3'],
+        });
+        expect(listed.map((row) => row.vintage).sort()).toEqual(['legacy', 'pit', 'restated']);
+      });
     });
 
     describe('Watchlist repositories', () => {
@@ -5395,6 +5486,7 @@ export const registerRepositoryContractTests = (
           metricIds: ['revenue'],
           asOf: T2,
           policy: 'strict-pit-v1',
+          sources: 'all',
         });
         expect(vintage.facts).toEqual([]);
         expect(vintage.missing).toEqual([
@@ -5412,6 +5504,73 @@ export const registerRepositoryContractTests = (
           missing: 1,
           retracted: 1,
         });
+      });
+
+      it('resolveVintage 的 source 白名单把 mock 事实挡在真实查询之外', async () => {
+        const mock = makeFinancialFact('fact-mock', {
+          source: 'mock-fundamental-pit-fixture',
+          value: 42,
+        });
+        await repos.financialFact.appendMany([mock]);
+
+        const disclosed = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+          sources: 'all',
+        });
+        expect(disclosed.facts.map((fact) => fact.id)).toEqual([mock.id]);
+        expect(disclosed.status).toBe('complete');
+
+        const realOnly = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+          sources: ['tushare-pit-v1'],
+        });
+        expect(realOnly.facts).toEqual([]);
+        expect(realOnly.status).toBe('unavailable');
+        expect(realOnly.missing).toEqual([
+          { stockId: 'stk-1', metricId: 'revenue', reason: 'not-covered' },
+        ]);
+        expect(realOnly.vintageKey).not.toBe(disclosed.vintageKey);
+      });
+
+      it('resolveVintage 真实源白名单为空（真实 provider 未接入）时解析不到任何事实', async () => {
+        const mock = makeFinancialFact('fact-mock', {
+          source: 'mock-fundamental-pit-fixture',
+          value: 42,
+        });
+        const real = makeFinancialFact('fact-real', { source: 'tushare-pit-v1', value: 100 });
+        await repos.financialFact.appendMany([mock, real]);
+
+        const nothing = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+          sources: [],
+        });
+        expect(nothing.facts).toEqual([]);
+        expect(nothing.status).toBe('unavailable');
+        expect(nothing.coverage).toEqual({
+          requested: 1,
+          available: 0,
+          missing: 1,
+          retracted: 0,
+        });
+
+        const realOnly = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+          sources: ['tushare-pit-v1'],
+        });
+        expect(realOnly.facts.map((fact) => `${fact.id}:${fact.value}`)).toEqual(['fact-real:100']);
+        expect(realOnly.status).toBe('complete');
       });
 
       it('读写对象不暴露可变引用', async () => {

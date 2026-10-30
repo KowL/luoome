@@ -1685,7 +1685,7 @@ const defaultExperimentEvidenceLayers = () => [
   },
   {
     id: 'strict-backtest',
-    title: '严格回测',
+    title: '组合回测',
     status: 'not-started',
     persisted: true,
     description: '通过数据门禁后才显示组合指标。',
@@ -1715,7 +1715,7 @@ const renderExperimentEvidenceLayers = (context, state) => {
     el(
       'p',
       'muted',
-      'Trial 是页面内存；历史评估是持久化覆盖；严格回测受数据门禁约束；SignalObservation 只记录真实后续事实。',
+      'Trial 是页面内存；历史评估是持久化覆盖；组合回测受数据门禁约束；SignalObservation 只记录真实后续事实。',
     ),
     el(
       'div',
@@ -1906,10 +1906,10 @@ const renderExperimentStrictBacktests = (context, state, setStatus, refresh) => 
     candidate !== undefined &&
     typeof validationSessionId === 'string' &&
     context?.versionState?.candidateValid === true;
-  const create = experimentButton('创建严格回测', 'btn btn-outline btn-sm', async () => {
+  const create = experimentButton('创建组合回测', 'btn btn-outline btn-sm', async () => {
     if (!canCreate || candidate === undefined || validationSessionId === undefined) return;
     const values = await promptDialog({
-      title: `严格回测 · ${candidate.id}`,
+      title: `组合回测 · ${candidate.id}`,
       fields: [
         { key: 'initialCash', label: '初始资金', value: '1000000' },
         { key: 'commissionBps', label: '佣金（bps）', value: '3' },
@@ -1919,11 +1919,11 @@ const renderExperimentStrictBacktests = (context, state, setStatus, refresh) => 
         { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
       ],
       confirmLabel: '继续填写后确认',
-      note: `将绑定 validation session ${validationSessionId}。严格回测只在数据门禁完整时输出组合指标。`,
+      note: `将绑定 validation session ${validationSessionId}。组合回测只在数据门禁完整时输出组合指标。`,
     });
     if (values === null) return;
     const confirmed = await confirmDialog({
-      title: '确认创建严格回测',
+      title: '确认创建组合回测',
       message:
         '这是独立的持久化回测运行。它不会发布 StrategyVersion、创建 Advice、发送通知或执行 Trade；门禁不完整时只保留不可用/部分状态。',
       confirmLabel: '创建并检查门禁',
@@ -1962,7 +1962,7 @@ const renderExperimentStrictBacktests = (context, state, setStatus, refresh) => 
     el('div', 'experiment-panel-heading', [
       el('div', null, [
         el('span', 'section-kicker', 'STRICT BACKTEST / GATED'),
-        el('h3', null, '严格回测'),
+        el('h3', null, '组合回测'),
       ]),
       create,
     ]),
@@ -1977,7 +1977,7 @@ const renderExperimentStrictBacktests = (context, state, setStatus, refresh) => 
       ? []
       : [el('p', 'status error', `最近失败：${state.strictBacktestError}`)]),
     ...(runs.length === 0
-      ? [el('p', 'placeholder', '尚无当前候选绑定的严格回测运行。')]
+      ? [el('p', 'placeholder', '尚无当前候选绑定的组合回测运行。')]
       : runs.map((run) =>
           el('details', 'experiment-strict-run', [
             el(
@@ -2069,7 +2069,7 @@ const renderExperimentValidation = (state, context, strategyId, setStatus, refre
     state.validationRunning = true;
     state.validationError = undefined;
     setStatus('独立验证已排队…');
-    const result = await post(`/api/strategies/${encodeURIComponent(strategyId)}/backtests`, {
+    const result = await post(`/api/strategies/${encodeURIComponent(strategyId)}/evaluations`, {
       versionId: candidate.id,
       from: state.validationFrom,
       to: state.validationTo,
@@ -2158,7 +2158,7 @@ const renderExperimentValidation = (state, context, strategyId, setStatus, refre
                   });
                   if (!confirmed) return;
                   const cancelled = await post(
-                    `/api/strategies/${encodeURIComponent(strategyId)}/backtests/${encodeURIComponent(session.id)}/cancel`,
+                    `/api/strategies/${encodeURIComponent(strategyId)}/evaluations/${encodeURIComponent(session.id)}/cancel`,
                     {},
                   );
                   if (!cancelled.ok) {
@@ -2211,7 +2211,7 @@ const renderExperimentValidation = (state, context, strategyId, setStatus, refre
 const pollExperimentValidation = async (state, strategyId, setStatus, refresh) => {
   if (state.validationPolling === true || typeof state.validationSessionId !== 'string') return;
   state.validationPolling = true;
-  const snapshotPath = `/api/strategies/${encodeURIComponent(strategyId)}/backtests/${encodeURIComponent(state.validationSessionId)}`;
+  const snapshotPath = `/api/strategies/${encodeURIComponent(strategyId)}/evaluations/${encodeURIComponent(state.validationSessionId)}`;
   let terminalStatus = 'running';
   for (let attempt = 0; attempt < 360; attempt += 1) {
     featureCache.delete(snapshotPath);
@@ -2403,7 +2403,7 @@ const renderExperimentReview = (context, strategyId, state, setStatus, refresh) 
           'span',
           'muted',
           strictBacktests.length === 0
-            ? '没有严格回测结果；不影响通用门禁，但不能声称已完成。'
+            ? '没有组合回测结果；不影响通用门禁，但不能声称已完成。'
             : strictBacktests
                 .map((run) => `${run.id}: ${run.gateAudit?.status ?? run.resultAvailability}`)
                 .join(' · '),

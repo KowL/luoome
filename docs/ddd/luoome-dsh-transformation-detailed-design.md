@@ -121,6 +121,18 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 
 ### 1.7 单机形态的运行构成（D9 起）
 
+> **状态：本节已下线（REQ-M2-02 / REQ-M2-03 / T13），只作历史记录。** 下面的 MCP 实例构成是
+> 「当前 MCP 过渡形态」的历史记录，已被纯插件形态取代，不是当前运行构成：`packages/mcp`、
+> `packages/dsh-bridge` 与部署侧 `bootstrap.ts` / `queue-probe` / `settings-tools` 均已于
+> REQ-M2-02/M2-03 删除，`luoome` / `-settings` / `-analysis` / `-batch` / `-worker` 五个 MCP
+> 实例与 `.dsh/skills` 技能目录都不再存在。
+> 当前运行构成见 [dsh-luoome README](../../packages/dsh-luoome/README.md) 与
+> [dsh-luoome 纯插件详细设计](./dsh-luoome-plugin-detailed-design.md)。
+> 本文件其余仍把 MCP 实例写成现存形态的段落同属历史记录：§1.4（D10 设置面实例）、§1.6、
+> §1.6.1 调度归属、§2.1 部署矩阵、§2.6 的 `packages/mcp/src/exposure.ts` 指针、§5.4.4 消费者身份、
+> §12.2 术语（只读面 / 消费者面）、§12.3 关键证据索引与 §16 实施进度。这些段落待 T38
+> （文档即事实表）统一重写，本次只加本状态说明，不改正文。
+
 ```text
 DSH 进程（dsh-web profile）
 ├── MCP 实例 luoome            只读面：事实、建议、策略、盯盘（read capability）
@@ -128,7 +140,8 @@ DSH 进程（dsh-web profile）
 ├── MCP 实例 luoome-analysis   分析面：交互分析三个工具（read + queue 精确白名单，2026-10-24 增补）
 ├── MCP 实例 luoome-batch      批处理面：五个批处理入口（write capability，D12）
 ├── 插件 luoome-panels         三个只读面板（overview / strategies / review）
-├── 插件 luoome-discipline     系统提示词六条约束
+├── 插件 dsh-luoome 内纪律段   systemPrompt `luoome:discipline`，七条全局约束
+│                             （2026-10-30 从 dsh-bridge 迁入；此前只挂在 LEGACY bootstrap，默认部署从未生效）
 ├── 插件 dsh-schedule          DSH 定时任务服务（持久化提醒、到点投递）
 ├── 插件 dsh-tool-schedule     agent 建/查/改提醒的工具
 └── 技能目录 .dsh/skills       晨报、盯盘复核、持仓复盘、研究、写回、批处理调度
@@ -154,7 +167,7 @@ DSH 进程（dsh-worker profile，headless；仅手动/隔离验收，默认部�
 
 | 路径 | 入口 | 数据 | 现状 |
 |---|---|---|---|
-| 单机 | `luoome` CLI / TUI / `luoome mcp serve` | `$LUOOME_HOME/luoome.db`（默认 `~/.luoome`） | 自带 AI 与调度；MCP 为 stdio |
+| 单机 | `luoome` CLI / TUI / `luoome mcp serve`（已删除，REQ-M2-03） | `$LUOOME_HOME/luoome.db`（默认 `~/.luoome`） | 自带 AI 与调度；MCP 为 stdio |
 | 托管 | `apps/web`（登录/订阅/租户）+ `apps/worker`（持久任务） | 每租户 SQLite | AI 为付费能力；已有成本账本 |
 | 内嵌 DSH | `apps/agent-runtime`（Node Host）+ `packages/dsh-bridge`（Cordis 插件） | 私有临时 `DSH_HOME` | D01–D07 开发验收；`LUOOME_CHAT_RUNTIME=dsh` 仅开发环境；生产拒绝启动 |
 | 外部 DSH | DSH Web + MCP client | 通过 MCP 访问单机库 | 设计目标（线 A） |
@@ -996,7 +1009,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | `packages/ai-runtime`（新） | 模型目录、AI SDK adapter、hosted meter/transport、profile 路由 | — | — |
 | `packages/workflows` | — | `daily-advice.ts`、`strategy-daily-cycle.ts`、`strategy-autonomy-weekly.ts`、`weekly-report.ts`、`strategy-recommendations.ts`、`trading-plan-daily-cycle.ts` | — |
 | `packages/mcp` | allowlist/denylist 解析 | `exposure.ts`、`server.ts` | research 子串特判 |
-| `packages/cli` | — | `context.ts`、`env.ts`、`mcp serve` | AI 配置命令/环境变量 |
+| `packages/cli` | — | `context.ts`、`env.ts`、`mcp serve`（已删除） | AI 配置命令/环境变量 |
 | `packages/tui` | — | `index.ts` | AI 装配 |
 | `apps/web` | 托管 Chat 改用 `ai-runtime` | `server.ts`、`hosted-providers.ts`、`hosted-ai-settings.ts` | 单机 AI 设置页；按 tool 名拦截 |
 | `apps/worker` | `analysis` pass | `index.ts` | — |

@@ -4,10 +4,10 @@
 
 ## 威胁模型
 
-luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
+luoome 是本地工具 + DSH 插件 + advisor agent。五类潜在威胁：
 
-1. **恶意 prompt injection**：agent 上层被攻击者注入指令，agent 通过 MCP 调 luoome 执行未授权操作
-2. **MCP server 被未授权方连接**：远程 MCP 暴露、token 泄露
+1. **恶意 prompt injection**：agent 上层被攻击者注入指令，agent 通过插件注册的工具调 luoome 执行未授权操作
+2. **宿主工具面被未授权方连接**：DSH 会话越权、HTTP 入口 token 泄露（stdio MCP 入口已随 REQ-M2-03 下线）
 3. **本地密钥泄露**：API key、券商密码写入日志 / git / 报告
 4. **advice 误导用户**：模型幻觉 / 数据源错误 / 推理偏差，让用户做出错误决策
 5. **advice → trade 链失控**：advice 自动触发下单，资金风险
@@ -20,25 +20,25 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 
 | 等级 | 含义 | 默认暴露 |
 |---|---|---|
-| `read` | 只读本地 | ✅ MCP / Web / CLI / TUI |
+| `read` | 只读本地 | ✅ Web / CLI / TUI / 插件 |
 | `write` | 写本地状态 | ⚠️ opt-in |
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
-| `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ MCP / 通用 Web 工具路由永不暴露 |
+| `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ 任何暴露面 / 通用 Web 工具路由永不暴露 |
 
 > DSH 瘦身后内置 AI 下线，原 `advice` 副作用等级已删除；存量 Advice 数据的展示与
 > 复盘约束（免责声明、有效期、confidence 不自称为确定性）仍然适用。
 
-一个 tool 同时需要多类授权时，通过 `requiredCapabilities` 声明组合能力，Web 与 MCP
+一个 tool 同时需要多类授权时，通过 `requiredCapabilities` 声明组合能力，Web 与插件面
 必须逐项满足后才能暴露。例如 `import_remote_research_document` 会访问外部网络并写入
 本地 Vault，因此同时要求 `write` 与 `external`，只开启其中任一能力都不能调用。
 
-### trade 永不通过 MCP 暴露（硬约束）
+### trade 永不通过任何暴露面（硬约束）
 
-MCP server 启动时检查 `LUOOME_EXPOSE_TRADE`：
+插件 / Web 启动时检查 `LUOOME_EXPOSE_TRADE`（判定在 `packages/tools/src/exposure/judge.ts`）：
 
 ```ts
 if (env.LUOOME_EXPOSE_TRADE === 'true') {
-  throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed. Trade tools are never exposed via MCP.');
+  throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed: trade tools are never exposed ...');
 }
 ```
 
@@ -48,7 +48,7 @@ Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。本
 录入可经专用路由暴露，但必须同时满足以下条件：
 
 - 只登记用户在系统外已经完成的成交；不得下单、撤单、调用券商执行接口或触发外部资金动作。
-- 路由固定绑定经过审查的记账工具，不接受任意工具名，也不进入 MCP 或模型可调用工具表。
+- 路由固定绑定经过审查的记账工具，不接受任意工具名，也不进入插件暴露面或模型可调用工具表。
 - 要求显式 write opt-in、同源校验（请求提供 Origin 时）、当前账户绑定，以及用户明确确认该成交尚未入账。
 - 校验成交输入、来源与账本指纹及预期修订；成交、持仓、现金、复盘与请求回执原子提交，
   以请求 ID 保证重试幂等。
@@ -58,7 +58,7 @@ Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。本
 专用路由的 write 授权仅适用于上述人工记账边界，不是把 `trade` 统一降为 `write`，也不受
 `LUOOME_EXPOSE_TRADE` 开关放行。任何新增专用路由都须逐项满足这些条件。
 
-研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
+研究正文和全文搜索属于私人研究能力，暴露到远端面时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
 
 Research embedding 默认关闭。只有 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 才挂载外部 adapter，且查询/评测仍要求 `external`，chunk 投影重建同时要求 `external + write`。模型目录只记录 provider endpoint、model identity、维度、version 与 `apiKeyEnv` 名称；密钥从环境读取。查询、私人正文、向量和密钥不进入日志或错误。混合检索中的正文继续是 tool data，不是指令；结果必须保留 EvidenceRef、反证、风险、unknowns 和 prompt-injection 警告。
 
@@ -79,8 +79,10 @@ tool.sideEffect !== 'trade' && !tool.requiredCapabilities?.includes('trade')
 
 配套三道闸，任一命中即拒绝：
 
-- `packages/mcp/src/exposure.ts`：`LUOOME_EXPOSE_TRADE=true` 在解析暴露面时直接抛错，MCP 启动失败
-- `packages/dsh-luoome/src/host/read-surface.ts`：DSH 插件装配时同样抛错
+- `packages/tools/src/exposure/judge.ts`：`assertTradeNeverExposed` 是唯一判定与文案，两侧 surface 共用
+  （旧 `packages/mcp/src/exposure.ts` 已随 REQ-M2-03 删除）
+- `packages/dsh-luoome/src/host/read-surface.ts` 与 `market-surface.ts`：DSH 插件装配时抛错，`production.ts`
+  在创建目录、打开事实库之前再查一次
 - `packages/tools/src/plugin-operations.ts`：操作策略不接受 `trade` 能力，个人直接执行通道也到不了 trade
 
 因此 trade 只能由人经专用人工入口触发。`record_decision_trade` 另走 Web 的
@@ -172,20 +174,24 @@ export const sanitizeAdviceRisks = (risks: readonly string[]): readonly string[]
   对 `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条清理，命中模式的片段替换为
   `[redacted]`；实现见 `packages/tools/src/internal/sanitize-advice.ts`
 - 写回只接受 `StrategyAdviceAnalysisSchema`（decision / confidence / horizon / 价位 / reasoning / risks），
-  `basedOn` 由工具重建为 `{ dataAsOf }`；`AdviceDataSnapshot.llmReasoning` 只保留给存量数据读取，
-  新写回不写该字段
+  `basedOn` 由工具重建为 `{ dataAsOf }`；`AdviceDataSnapshot` 已无 `llmReasoning` 字段，interface 与
+  zod schema 两处同步删除，新写回没有该字段可写。存量 `basedOn` JSON 里若仍含该 key，由实体 schema
+  读入时 strip，落库对象不再携带 —— 读兼容只承诺不 crash、不 resurrect
 - `provenance` 的 model / skillVersion 等是标识符而非散文，不做清理
 
 清理只覆盖文本层，**不等于**消费者输出可信：展示侧仍按不可信文本处理（只读展示，不自动回灌
 system prompt）。
 
-## MCP 暴露配置
+## 暴露配置（原 MCP 暴露配置）
+
+> stdio MCP 入口已删除（REQ-M2-03：`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例）。
+> 下表保留的是仍被 Web / CLI / 插件面读取的开关与判定规则。
 
 | Env Var | 默认 | 允许值 | 说明 |
 |---|---|---|---|
 | `LUOOME_EXPOSE_WRITE` | `false` | `true` / `false` | write 类 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
-| `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由旧 MCP 分析面/手动 worker 或插件精确 policy 显式开启，分析面另用精确三工具白名单收窄 |
+| `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由插件两条 analysis record policy 显式开启（旧 MCP 分析面已删除） |
 | `LUOOME_EXPOSE_TOOLS` | 未设置 | 逗号分隔 allowlist | 按工具名精确放行；空串表示不放行任何工具 |
 | `LUOOME_EXPOSE_DENY` | 未设置 | 逗号分隔 denylist | deny 优先于 allowlist |
 | `LUOOME_EXPOSE_RESEARCH` | `false` | `true` / `false` | 放行私人研究正文与检索工具 |
@@ -198,9 +204,8 @@ read 类恒定暴露，没有对应的 env var（`LUOOME_EXPOSE_READ` 不存在�
 「能力满足 ∧ 名字在 allowlist 内（allowlist 为空则不限）∧ 名字不在 denylist 内」。
 
 默认纯插件部署不读取 `LUOOME_EXPOSE_*`：暴露面由受信任部署配置（read allowlist、market
-allowlist、个人写 policy）固定，HTTP/模型参数不能提升。旧 MCP 过渡形态的暴露面由 profile 补丁
-固定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，避免一次配置失误把只读实例变成
-写面实例。暴露面划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
+allowlist、个人写 policy）固定，HTTP/模型参数不能提升；`LUOOME_EXPOSE_TRADE` 例外——它在
+打开事实库之前直接硬卡。暴露面划分见[单机形态的入口与暴露面](#单机形态的入口与暴露面)。
 
 Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
 策略盘后、盘中账户计划、账户绩效与策略自治 scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照或 WorkflowRun，因此只有
@@ -223,12 +228,10 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 
 ## 传输安全
 
-### stdio（本地进程）
+### stdio（本地进程，已下线）
 
-stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。**默认纯插件部署不使用 stdio MCP**：
-插件在 DSH Node 进程内直接打开 Node SQLite。旧 MCP 过渡形态（`luoome` / `luoome-settings` /
-`luoome-analysis` / `luoome-batch` 四个实例与手动 worker）仅在手动/隔离验收时以 stdio 连接同一份
-单机事实库。
+stdio 曾假设**宿主可信**：仅本地进程可连、无网络暴露。该入口已随 REQ-M2-03 删除——纯插件部署
+由插件在 DSH Node 进程内直接打开 Node SQLite，不再有 stdio 传输层。
 
 ### DSH 入口（HTTP）
 
@@ -292,7 +295,7 @@ Web 对话和草案确认要求 write + external 双 opt-in 和同源 Origin。�
 executing 状态不自动重试，需先核对实际业务数据；核对后可显式取消该草案（终态，不会补执行）。
 模型下一轮读取真实 ToolResult，用户伪造的文本处理记录不能作为成功凭据。
 
-`record_decision_trade` 是 trade 类工具（登记成交会联动现金与持仓，风险高于普通状态写入），永不通过 MCP 暴露；`confirm: true` 不能绕过这一边界。设置 `LUOOME_EXPOSE_TRADE=true` 会触发 MCP 启动硬卡。`add_trade` 是普通人工记账，副作用为 write，在 `LUOOME_EXPOSE_WRITE=true` 时可经 MCP 暴露。Web 的实际成交录入只登记用户已在系统外完成的成交，要求 write opt-in、同源校验、当前账户绑定与明确的尚未入账确认，不调用券商下单。
+`record_decision_trade` 是 trade 类工具（登记成交会联动现金与持仓，风险高于普通状态写入），永不通过任何暴露面；`confirm: true` 不能绕过这一边界。设置 `LUOOME_EXPOSE_TRADE=true` 会触发插件/Web 启动硬卡。`add_trade` 是普通人工记账，副作用为 write，在 `LUOOME_EXPOSE_WRITE=true` 时可经 Web 暴露。Web 的实际成交录入只登记用户已在系统外完成的成交，要求 write opt-in、同源校验、当前账户绑定与明确的尚未入账确认，不调用券商下单。
 
 ## 数据完整性
 
@@ -351,7 +354,8 @@ Tool 的业务输入、业务输出和错误详情不写入 audit log；失败�
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
 Advice 的 `reasoning` / `risks` 在写回前过 prompt-injection 文本清理（见「输出反 prompt injection」）；
-`basedOn.llmReasoning` 只保留给存量数据读取。
+`basedOn.llmReasoning` 字段已删除：interface 与 zod schema 同步移除，repository 读出时只按白名单重建
+快照，不再读取该 key；存量 `basedOn` JSON 里的同名 key 在读入时被 schema strip，落库对象不再携带。
 审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
 
 ## 上游信任
@@ -425,7 +429,12 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
   提升账户或打开 automations/trade。
 - 默认不启用自动任务；`trade` 永不注册，`LUOOME_EXPOSE_TRADE=true` 在打开数据库前即失败。
 
-### 旧 MCP 过渡形态的暴露面（手动/隔离验收，默认部署不启动）
+### 旧 MCP 过渡形态的暴露面（已删除，仅留历史）
+
+> **已删除（REQ-M2-03 / T13）**：`packages/mcp`、`luoome mcp serve`、`deploy/dsh/mcp-tool-probe.ts`
+> 与下列四个实例都已下线，下面的表与规则仅用于理解历史部署；判定层保留在
+> `packages/tools/src/exposure/`，交互分析写回契约迁到
+> `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`。
 
 | 实例 | 挂载位置 | 暴露内容 | 能力 |
 |---|---|---|---|
@@ -448,36 +457,33 @@ DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）�
 
 ### trade 永不暴露
 
-- `LUOOME_EXPOSE_TRADE=true` 时 MCP server 启动即抛错退出（代码层硬卡，无配置绕过路径）。
-- Web 通用工具路由拒绝所有 trade 工具；人工成交录入只经专用路由，条件见上文「trade 永不通过 MCP 暴露」。
+- `LUOOME_EXPOSE_TRADE=true` 时插件/Web 启动即抛错退出（代码层硬卡，无配置绕过路径）。
+- Web 通用工具路由拒绝所有 trade 工具；人工成交录入只经专用路由，条件见上文「trade 永不通过任何暴露面」。
 - 建议与交易继续分离：Advice、盯盘结果与报告都不会自动下单。
 
 ### 单机事实库
 
-- `$LUOOME_HOME/luoome.db` 是唯一事实源；默认部署由插件在 DSH Node 进程内直接打开，
-  旧 MCP 交互面、分析面与手动 worker 实例在做手动验收时指向同一份文件。
+- `$LUOOME_HOME/luoome.db` 是唯一事实源；默认部署由插件在 DSH Node 进程内直接打开。
 - 历史托管租户库已下线，不会再同步；不要把旧租户库挂回单机部署。
 - 面板与聊天读同一份数据：面板只做投影，不自己算数，数值必须与工具输出逐位一致。
 - 面板走 harness 的 `/api` 路由，继承浏览器认证与 Origin 栅栏，不自建裸端口。
-- 技能（`.dsh/skills`）本身不授予权限：它只决定 agent 怎么做事，能调哪些工具仍由实例白名单决定。
+- 技能本身不授予权限：它只决定 agent 怎么做事，能调哪些工具仍由插件暴露面决定（技能唯一根是插件包）。
 
 ### 调度与批处理
 
-- 单机形态没有常驻调度进程：批处理由 **DSH 定时任务**唤起会话，agent 再调用插件或旧
-  `luoome-batch` 实例的批处理工具（默认部署不使用 MCP 实例）。
+- 单机形态没有常驻调度进程：批处理由 **DSH 定时任务**唤起会话，agent 再调用插件的批处理工具。
 - 门槛判定（交易日、盘中时段、盘后小时、周几）随工具走，不满足时返回 `skipped`，不会写库；
   调度时间点错了也不会写坏事实。
 - 交互式分析不经过队列：插件 read surface 取得持久化 context 后由 DSH 推理，再经个人操作
   `record_*` 校验并直接写回，不创建 `analysis_job`；`record_*` 不能伪造已 claim 的 job 结果。
 - 队列能力保留，但默认部署不运行 MCP/worker：没有生产者、没有常驻消费者，空队列不产生任何
-  模型请求，避免空转的真实模型成本。需要验证消费链路时，用旧入口脚本在手动/隔离环境显式拉起
-  legacy worker；租约先到先得，与插件共享同一份事实库。
+  模型请求，避免空转的真实模型成本。旧 `luoome-batch` / worker 入口脚本已随 REQ-M2-03 删除。
 
 ### DSH 集成面的安全边界
 
 默认纯插件部署的 DSH 集成面是 `dsh-luoome` 插件：host（Node SQLite + 真实 adapters + read/market
-surface + 个人写 policy）、client（三面板 slots）、随包 skills（四技能）。旧 MCP 过渡形态的
-profile 装配、只读面板插件与纪律提示词插件源码保留，仅用于手动验收。
+surface + 个人写 policy）、client（面板 slots）、随包 skills。旧 MCP 过渡形态的 profile 装配
+已删除（`deploy/dsh/bootstrap.ts`、`packages/mcp` 都不在仓库里）。
 
 - 插件 profile 由镜像管理：`deploy/dsh/profile-seed.mjs` 每次启动把构建产物安装进 DSH profile，
   只重写插件文件与补丁层，不改会话目录与业务事实库。

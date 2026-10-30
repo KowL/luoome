@@ -1,8 +1,8 @@
 // dsh-luoome 随包技能注册测试（需求 §8；task-16 验收）。
 //
 // 用真实的 DSH SkillRegistry（`@deepseek-ai/dsh-skill` + cordis Context）验证：
-// - 四个 SKILL.md 从包内目录解析成功，frontmatter 与目录名一致；
-// - 注册后 catalog 含四个技能，provider/source/content 正确；
+// - 八个 SKILL.md 从包内目录解析成功，frontmatter 与目录名一致；
+// - 注册后 catalog 含八个技能，provider/source/content 正确；
 // - dispose 撤销注册、重复 dispose 幂等、重复注册不泄漏；
 // - 更高优先级的 project provider 同名技能不被覆盖；
 // - 目录缺失 / frontmatter 损坏 / 缺 SKILL.md 时 fail-loud；
@@ -94,14 +94,15 @@ const registerFakeSkillProvider = (ctx: Context, input: FakeProviderInput): void
 };
 
 describe('dsh-luoome 随包技能文件', () => {
-  it('解析四个技能，frontmatter 与目录名一致，正文是 Markdown', () => {
+  it('解析八个技能，frontmatter 与目录名一致，正文是 Markdown', () => {
     const skills = readBundledSkills();
     expect(skills.map((skill) => skill.name)).toEqual([...BUNDLED_SKILL_NAMES]);
     for (const skill of skills) {
       expect(skill.description.length).toBeGreaterThan(10);
       expect(skill.whenToUse.length).toBeGreaterThan(5);
       expect(skill.content).toContain('本技能版本：');
-      expect(skill.content).toContain('## 流程');
+      // 技能按领域起二级章节名（流程 / 调度表 / 边界），共享约束是「正文有 Markdown 二级分节」。
+      expect(skill.content).toMatch(/^## /m);
       expect(skill.content.startsWith('---')).toBe(false);
       expect(skill.path).toBe(join(skillsRoot, skill.name, 'SKILL.md'));
     }
@@ -159,10 +160,10 @@ describe('dsh-luoome 技能注册', () => {
     const first = candidates[0] as SkillCandidate | undefined;
     expect(first).toBeDefined();
     const definition = await provider.get(first as SkillCandidate, {});
-    expect(definition?.content).toContain('## 流程');
+    expect(definition?.content).toMatch(/^## /m);
   });
 
-  it('注册后 catalog 与 get 都包含四个技能，provider/source 正确', async () => {
+  it('注册后 catalog 与 get 都包含八个技能，provider/source 正确', async () => {
     const ctx = createRegistry();
     const dispose = registerBundledSkills(ctx);
     try {
@@ -176,7 +177,7 @@ describe('dsh-luoome 技能注册', () => {
         expect(summary?.description.length).toBeGreaterThan(10);
         expect(summary?.whenToUse).toBeDefined();
         const definition = await ctx.skills.get(name);
-        expect(definition?.content).toContain('## 流程');
+        expect(definition?.content).toMatch(/^## /m);
         expect(definition?.content).not.toContain('whenToUse:');
       }
     } finally {
@@ -224,8 +225,10 @@ describe('dsh-luoome 技能注册', () => {
         expect(winner?.source).toBe(fake.source);
         expect(winner?.description).toBe(`${fake.provider} 的技能`);
       }
-      // 四个同名条目全部由更高优先级来源胜出；插件技能不覆盖它们。
-      expect(catalog.filter((skill) => skill.provider === 'dsh-luoome')).toHaveLength(0);
+      // 四个同名条目全部由更高优先级来源胜出；插件只保留没有被覆盖的其余技能。
+      expect(catalog.filter((skill) => skill.provider === 'dsh-luoome')).toHaveLength(
+        BUNDLED_SKILL_NAMES.length - fakeProviders.length,
+      );
       const definition = await ctx.skills.get(fakeProviders[0].name);
       expect(definition?.content).toBe('# fake-project\n');
     } finally {
@@ -239,7 +242,7 @@ describe('dsh-luoome 技能注册', () => {
     expect(afterDispose.filter((skill) => skill.provider === 'dsh-luoome')).toHaveLength(0);
   });
 
-  it('无同名技能时四个插件技能全部可见且 source/provider 正确', async () => {
+  it('无同名技能时八个插件技能全部可见且 source/provider 正确', async () => {
     const ctx = createRegistry();
     const dispose = registerBundledSkills(ctx);
     try {
@@ -274,7 +277,7 @@ describe('dsh-luoome 技能注册', () => {
 });
 
 describe('dsh-luoome 打包内容', () => {
-  it('package.json files 包含 skills，bun pm pack 清单含四个 SKILL.md 且不含源码', () => {
+  it('package.json files 包含 skills，bun pm pack 清单含八个 SKILL.md 且不含源码', () => {
     const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
       files?: string[];
     };

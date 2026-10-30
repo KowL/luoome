@@ -4,9 +4,12 @@
 // 连接创建、pragma 与 repo 装配分别由 client.ts（bun:sqlite）和 node.ts（node:sqlite）负责。
 import { createHash } from 'node:crypto';
 import {
+  EXPECTED_SCHEMA_MIGRATIONS,
+  LEGACY_SIGNAL_OBSERVATION_SOURCE_KINDS,
   ledgerCoverage,
   migrateLegacyTradingPlan,
   money,
+  RETIRED_SIGNAL_OBSERVATION_HORIZONS,
   recomputeCashFromLedger,
 } from '@luoome/core';
 import { eq, sql } from 'drizzle-orm';
@@ -14,6 +17,7 @@ import type { DrizzleDatabase } from './database.js';
 import { ensureReportAutomationSchema } from './personal/report-automation-schema.js';
 import { ensurePersonalSchema } from './personal/schema.js';
 import { ensureWatchDeliverySchema } from './personal/watch-delivery-schema.js';
+import { ensureDataImportSchema } from './schema/data-import.js';
 import { type Schema, schema } from './schema/index.js';
 
 const ensureColumn = (
@@ -38,6 +42,7 @@ const ensureColumn = (
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
+  ensureDataImportSchema(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS plugin_operations (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, account_id TEXT NOT NULL,
     state TEXT NOT NULL, claim_token TEXT, updated_at INTEGER NOT NULL, record_json TEXT NOT NULL
@@ -252,7 +257,8 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS signal_observations (
       id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, close_price REAL, return_pct REAL,
+      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, vintage TEXT NOT NULL DEFAULT 'pit',
+      close_price REAL, return_pct REAL,
       max_favorable_excursion_pct REAL, max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
       benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
       unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
@@ -265,6 +271,7 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   ensureColumn(db, 'signal_observations', 'last_attempt_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'next_attempt_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'last_error_kind', 'TEXT');
+  ensureColumn(db, 'signal_observations', 'vintage', "TEXT NOT NULL DEFAULT 'pit'");
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
   );
@@ -274,6 +281,11 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_due_idx ON signal_observations (status, due_at, next_attempt_at)`,
   );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS signal_observations_vintage_idx ON signal_observations (vintage, horizon)`,
+  );
+  // 存量观察的 vintage 回填（幂等）：见下方 migrateSignalObservationVintages。
+  migrateSignalObservationVintages(db);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
@@ -1938,7 +1950,7 @@ const migrateLegacyTradingPlans = (db: DrizzleDatabase<Schema>): void => {
 };
 
 const migrateLegacyDecisionTradeLinks = (db: DrizzleDatabase<Schema>): void => {
-  const migrationId = 'mvp3-legacy-explicit-trade-links-v1';
+  const migrationId = EXPECTED_SCHEMA_MIGRATIONS[0];
   const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   db.transaction(
     (tx) => {
@@ -2118,4 +2130,94 @@ const migrateLegacyBuiltinStrategyOwners = (db: DrizzleDatabase<Schema>): void =
       `[migrate] strategies: 将 ${changes} 个旧 builtin Strategy 转为可编辑、可删除的 user 实例`,
     );
   }
+};
+
+/**
+ * SignalObservation 时点口径（vintage）回填。
+ *
+ * 存量行默认 pit（DDL 的 DEFAULT 'pit'），但两类必须显式降级为 legacy：
+ * 1. `horizon = 't20'`：已退役的观察周期，不属前瞻轨；
+ * 2. `source_kind ∈ LEGACY_SIGNAL_OBSERVATION_SOURCE_KINDS`：写入方已下线的历史兼容来源。
+ *
+ * 只降级默认池：两条 UPDATE 的 guard 都是 `vintage = 'pit'`，即只有「从没被显式标注过」的行才可被推断改写。
+ * `restated` 是回溯轨对「这条是历史重算口径、不是当时判断」的刻意声明，显式标注压过迁移推断——
+ * 若写成 `vintage <> 'legacy'`，一条 restated 行只要命中 t20 或历史来源就会被静默折成 legacy，
+ * 等于让推断覆盖一段明确的口径声明。非 pit 行不参与更新，连续启动两次结果一致。
+ * 不为存量数据编造 restated——没有修订事实就没有回溯口径，缺样本是诚实的，混算是虚假的。
+ */
+const migrateSignalObservationVintages = (db: DrizzleDatabase<Schema>): void => {
+  const migrationId = EXPECTED_SCHEMA_MIGRATIONS[1];
+  const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  db.transaction(
+    (tx) => {
+      const priorMigration = tx
+        .select()
+        .from(schema.schemaMigrations)
+        .where(eq(schema.schemaMigrations.id, migrationId))
+        .get();
+      const changesOf = (result: unknown): number =>
+        typeof result === 'object' && result !== null && 'changes' in result
+          ? Number((result as { changes: unknown }).changes)
+          : 0;
+      const retiredHorizons = [...RETIRED_SIGNAL_OBSERVATION_HORIZONS];
+      const legacySourceKinds = [...LEGACY_SIGNAL_OBSERVATION_SOURCE_KINDS];
+      const demotedByHorizon =
+        retiredHorizons.length === 0
+          ? 0
+          : changesOf(
+              tx.run(
+                // guard 必须是 `vintage = 'pit'`，不能是 `<> 'legacy'`：后者会把显式标注的 restated 折成 legacy。
+                sql`UPDATE signal_observations SET vintage = 'legacy'
+                    WHERE vintage = 'pit'
+                      AND horizon IN (${sql.join(
+                        retiredHorizons.map((horizon) => sql`${horizon}`),
+                        sql`, `,
+                      )})`,
+              ),
+            );
+      const demotedBySourceKind =
+        legacySourceKinds.length === 0
+          ? 0
+          : changesOf(
+              tx.run(
+                // 同上一处：只允许降级默认池 pit，显式标注的 restated / legacy 一律不覆盖。
+                sql`UPDATE signal_observations SET vintage = 'legacy'
+                    WHERE vintage = 'pit'
+                      AND source_kind IN (${sql.join(
+                        legacySourceKinds.map((sourceKind) => sql`${sourceKind}`),
+                        sql`, `,
+                      )})`,
+              ),
+            );
+      const vintageCounts = Object.fromEntries(
+        tx
+          .all<{ vintage: string; rows: number }>(
+            sql`SELECT vintage, count(*) AS rows FROM signal_observations GROUP BY vintage`,
+          )
+          .map((row) => [row.vintage, Number(row.rows)]),
+      );
+      const details = {
+        demotedByHorizon,
+        demotedBySourceKind,
+        horizon: retiredHorizons,
+        sourceKind: legacySourceKinds,
+        vintageCounts,
+      };
+      if (priorMigration === undefined || demotedByHorizon + demotedBySourceKind > 0) {
+        tx.insert(schema.schemaMigrations)
+          .values({ id: migrationId, appliedAt: new Date(), checksum: hash(migrationId), details })
+          .onConflictDoUpdate({
+            target: schema.schemaMigrations.id,
+            set: { appliedAt: new Date(), details },
+          })
+          .run();
+      }
+      if (demotedByHorizon + demotedBySourceKind > 0 && priorMigration === undefined) {
+        console.warn(
+          `[migrate] signal_observations: ${demotedByHorizon} 行 t20、${demotedBySourceKind} 行历史来源标记为 vintage=legacy`,
+        );
+      }
+    },
+    { behavior: 'immediate' },
+  );
 };

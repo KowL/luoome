@@ -7,6 +7,7 @@
 // 临时 DSH_HOME/profile 全部在 /tmp 下，结束（或 KEEP=1 时保留）清理。
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,59 +20,55 @@ const owner = Object.freeze({
 });
 const profileName = 'luoome-plugin';
 const nodeCommand = process.env.NODE24_PATH ?? 'node';
-const READ_TOOL_COUNT = 63;
-const MARKET_TOOL_COUNT = 9;
-const EXPECTED_MARKET_TOOLS = [
-  'fetch_index_quotes',
-  'get_ashare_sentiment',
-  'fetch_quote',
-  'batch_quote',
-  'trial_strategy_version',
-  'run_strategy_research_comparison',
-  'get_stock_market_view',
-  'fetch_news',
-  'fetch_sector_quotes',
-] as const;
+/**
+ * 默认 allowlist 的唯一真源是插件源码。验收脚本不手抄工具数/名单——手抄的常量会随 registry
+ * 增删漂移（PRD 冻结口径「不写死运行时数字」，本轮已实测漂移两次：新增
+ * `evaluate_strategy_candidate_preflight` 与 `get_stock_profile` 后常量没跟着变）。
+ */
+const readDefaultAllowlist = (constantName: string): readonly string[] => {
+  const source = readFileSync(join(packageDir, 'src/host/production-config.ts'), 'utf8');
+  const block = new RegExp(
+    `export const ${constantName} = Object\\.freeze\\(\\[([\\s\\S]*?)\\n\\]\\);`,
+  ).exec(source);
+  if (block === null)
+    throw new Error(
+      `cannot read ${constantName} from packages/dsh-luoome/src/host/production-config.ts`,
+    );
+  return [...(block[1] ?? '').matchAll(/'([a-z0-9_]+)'/g)].map((item) => item[1] as string);
+};
+const EXPECTED_READ_TOOLS = readDefaultAllowlist('DEFAULT_READ_TOOL_ALLOWLIST');
+const EXPECTED_MARKET_TOOLS = readDefaultAllowlist('DEFAULT_MARKET_TOOL_ALLOWLIST');
+// 与插件 `BUNDLED_SKILL_NAMES`、`deploy/dsh/profile-seed.mjs` 的 `REQUIRED_SKILLS` 同一份清单
+// （REQ-M1-01 的三集合相等）。工作区 `.dsh/skills` 已删除，`analysis-worker` 退役。
 const SKILL_NAMES = [
   'daily-market-analysis',
+  'decision-journal',
+  'luoome-batch',
+  'morning-brief',
   'post-close-review',
+  'stock-deep-dive',
   'strategy-lab',
   'strategy-result-review',
 ] as const;
-const LEGACY_SKILL_NAMES = [
-  'analysis-worker',
-  'stock-deep-dive',
-  'morning-brief',
-  'decision-journal',
-  'luoome-batch',
-] as const;
-const PANEL_TOOL_NAMES = {
-  overview: [
-    'list_accounts',
-    'list_holdings',
-    'list_watch_triggers',
-    'list_watchlists',
-    'get_advice',
-    'get_market_data_status',
-    'get_ashare_sentiment',
-    'fetch_index_quotes',
-  ],
-  strategies: [
-    'list_strategies',
-    'get_watch_status',
-    'get_strategy_reliability_summary',
-    'list_strategy_runs',
-    'list_pending_strategy_observations',
-  ],
-  review: [
-    'get_advice_stats',
-    'get_confidence_calibration',
-    'list_decision_reviews',
-    'get_advice',
-    'get_decision_loop_review',
-    'list_pending_strategy_observations',
-  ],
-} as const;
+const LEGACY_SKILL_NAMES = ['analysis-worker'] as const;
+/**
+ * panel → 工具名映射直接取宿主源码里冻结的 `PANEL_PLANS`，不手抄：看盘页布局每次调整都会改
+ * 这份映射（e638a28 就删掉过 overview 的关注列表/在期建议卡片），手抄版本会悄悄过期。
+ */
+interface PanelToolEntry {
+  readonly name: string;
+}
+const { PANEL_PLANS } = (await import(join(packageDir, 'src/host/panels.ts'))) as {
+  PANEL_PLANS: Readonly<
+    Record<string, { read: readonly PanelToolEntry[]; market: readonly PanelToolEntry[] }>
+  >;
+};
+const PANEL_TOOL_NAMES: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(PANEL_PLANS).map(([panel, plan]) => [
+    panel,
+    [...plan.read, ...plan.market].map((tool) => tool.name),
+  ]),
+);
 const CLIENT_BUNDLE_LIMIT_BYTES = 800 * 1024;
 
 const FORBIDDEN_MARKET_TOOLS = [
@@ -292,7 +289,8 @@ interface DetectedSkill {
   readonly source: string;
   readonly provider: string;
   readonly contentLength: number;
-  readonly hasProcessSection: boolean;
+  /** 正文是否按 Markdown 二级分节（技能按领域起章节名：流程 / 调度表 / 边界）。 */
+  readonly hasSection: boolean;
 }
 
 /** 读技能 Markdown 的 frontmatter 字段，用来核对已安装文件与宿主 catalog 一致。 */
@@ -481,7 +479,7 @@ export const apply = async (ctx) => {
         source: summary.source,
         provider: summary.provider,
         contentLength: definition?.content.length ?? 0,
-        hasProcessSection: definition?.content.includes('## 流程') ?? false,
+        hasSection: /^## /m.test(definition?.content ?? ''),
       });
     }
     const missing = EXPECTED.filter((name) => !skills.some((skill) => skill.name === name));
@@ -561,20 +559,17 @@ export const apply = async (ctx) => {
     LUOOME_SKILLS_OUT: join(root, 'skills-catalog.json'),
   };
 
-  // 4) 预置 owner 账户：用打包产物自身的 createProductionHost 建 schema（首次按设计
-  //    因账户缺失拒绝），再用 node:sqlite 写入账户事实。此时不启动模型或供应商。
+  // 4) 预置 owner 账户：用打包产物自身的 createProductionHost 建 schema。T48 起空库不再
+  //    拒绝装配，而是进入 recovery-only（只装配恢复面）；这里断言这条契约后再写入账户事实。
   const seedCode = `
 const { createProductionHost } = await import(process.env.PLUGIN_HOST);
 const { DatabaseSync } = await import('node:sqlite');
 const home = process.env.LUOOME_HOME;
 const owner = JSON.parse(process.env.PLUGIN_OWNER);
-try {
-  const host = await createProductionHost({ home, owner, env: { LUOOME_MARKET_PROVIDER: 'real' } });
-  host.dispose();
-  throw new Error('owner account unexpectedly existed');
-} catch (error) {
-  if (!/owner account does not exist/.test(String(error))) throw error;
-}
+const host = await createProductionHost({ home, owner, env: { LUOOME_MARKET_PROVIDER: 'real' } });
+const recoveryOnly = host.mode === 'recovery-only';
+host.dispose();
+if (!recoveryOnly) throw new Error('empty business DB did not enter recovery-only');
 const db = new DatabaseSync(home + '/luoome.db');
 db.prepare('INSERT INTO accounts (id, name, kind, currency, initial_capital, cash_balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(owner.accountId, 'Plugin acceptance', 'real', 'CNY', 1000000, 1000000, Date.now());
 db.close();
@@ -606,7 +601,11 @@ const host = await createProductionHost({
 const readTools = host.read.descriptors().map((tool) => tool.name);
 const marketTools = host.market.descriptors().map((tool) => tool.name);
 const marketConfig = host.config.market;
-const policies = createProductionOperationPolicies().map((policy) => ({
+// 恢复 policy 只在注入 staging 时装配；用 host 自己的载体，验证随包分发的那一条。
+const policies = createProductionOperationPolicies(TRUSTED_ANALYSIS_PROVENANCE, {
+  dataImport: host.dataImport,
+  dataImportBackups: host.dataImportBackups,
+}).map((policy) => ({
   name: policy.tool.name,
   sideEffect: policy.tool.sideEffect,
   requiredCapabilities: policy.tool.requiredCapabilities,
@@ -641,10 +640,10 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     }[];
     trustedProvenance: { generatorKind: string; model?: string; skillVersion?: string };
   };
-  if (installed.readTools.length !== READ_TOOL_COUNT)
-    throw new Error(`installed read surface has ${String(installed.readTools.length)} tools`);
-  if (installed.marketTools.length !== MARKET_TOOL_COUNT)
-    throw new Error(`installed market surface has ${String(installed.marketTools.length)} tools`);
+  if ([...installed.readTools].sort().join(',') !== [...EXPECTED_READ_TOOLS].sort().join(','))
+    throw new Error(
+      `installed read surface does not match DEFAULT_READ_TOOL_ALLOWLIST: ${JSON.stringify(installed.readTools)}`,
+    );
   if ([...installed.marketTools].sort().join(',') !== [...EXPECTED_MARKET_TOOLS].sort().join(','))
     throw new Error(`installed market surface mismatch: ${JSON.stringify(installed.marketTools)}`);
   for (const name of EXPECTED_MARKET_TOOLS)
@@ -662,6 +661,11 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   const PRODUCTION_QUEUE_POLICIES = ['record_advice', 'record_analysis_result'] as const;
   const PRODUCTION_WRITE_POLICIES = [
     'update_account',
+    // 账户维护（`src/host/account-operations.ts`，T47 / REQ-M2-08）：登记成交、平仓、现金流水。
+    // `add_trade` 是**人工记账 write**，不是 trade 能力；trade 入口仍只存在于领域层且永不暴露。
+    'add_trade',
+    'close_holding',
+    'create_portfolio_cash_flow',
     'save_decision_review',
     'create_strategy',
     'create_strategy_version',
@@ -675,12 +679,26 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'record_advice_outcome',
     'save_strategy_research_state',
     'cancel_strategy_evaluation_session',
+    // 纯本地写：assembleBacktest 只读 strategyEvaluation/strategyRun/strategyBacktest/dailyBar，
+    // 门禁完备后的执行步同样只读本地事实，因此不需要 external（REQ-M1-05 能力漂移整改）。
+    'create_strict_strategy_backtest',
+    // 关注管理（`src/host/watchlist-operations.ts`）：52757c2 起是 7 个独立写策略，
+    // 与上面同契约（write / 非 scheduled / capabilities=['write']），本清单当时漏同步。
+    'create_watchlist',
+    'update_watchlist',
+    'archive_watchlist',
+    'add_watchlist_member',
+    'add_watchlist_members',
+    'update_watchlist_member',
+    'archive_watchlist_member',
+    // T48 数据恢复（`src/host/data-import-operations.ts`）：只作精确 Operation policy，
+    // 不进 agent 面；数据库文件走专用 octet-stream 载体，不进通用操作输入。
+    'restore_data_import',
   ] as const;
+  // write + external：受理即代表由宿主推进的逐日 replay，取数走 prepare_strategy_data 的外部路径。
   const PRODUCTION_COMBINED_POLICIES = [
     'start_strategy_evaluation_session',
     'resume_strategy_evaluation_session',
-    'create_strict_strategy_backtest',
-    'execute_strict_strategy_backtest',
   ] as const;
   const PRODUCTION_EXTERNAL_POLICIES = [
     'trial_strategy_version',
@@ -737,7 +755,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'list_analysis_jobs',
     'get_analysis_job',
     'record_decision_trade',
-    'add_trade',
+    // `add_trade` 不是 trade 入口（sideEffect=write 的人工记账），T47 起是写策略，见上面名单。
     'send_notification',
     'delete_strategy',
     'archive_strategy',
@@ -882,7 +900,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       throw new Error(
         `skill ${name} must be a bundled dsh-luoome skill: ${JSON.stringify(detected)}`,
       );
-    if (!detected.hasProcessSection || detected.contentLength < 500)
+    if (!detected.hasSection || detected.contentLength < 500)
       throw new Error(`skill ${name} content was not loaded: ${JSON.stringify(detected)}`);
   }
   for (const legacy of LEGACY_SKILL_NAMES)
@@ -890,7 +908,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       throw new Error(`skills catalog must not contain legacy skill ${legacy}`);
   if (catalogSkills.length !== SKILL_NAMES.length)
     throw new Error(
-      `skills catalog must contain exactly the four bundled skills: ${JSON.stringify(
+      `skills catalog must contain exactly the eight bundled skills: ${JSON.stringify(
         catalogSkills.map((skill) => skill.name),
       )}`,
     );
@@ -1016,9 +1034,9 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       throw new Error(
         `generic /call must reject ${isolation.tool}: ${String(isolation.status)} ${String(isolation.errorKind)}`,
       );
-  if (readTools.length !== READ_TOOL_COUNT)
+  if ([...readTools].sort().join(',') !== [...EXPECTED_READ_TOOLS].sort().join(','))
     throw new Error(
-      `expected ${String(READ_TOOL_COUNT)} read tools, received ${String(readTools.length)}`,
+      `registered read tools do not match DEFAULT_READ_TOOL_ALLOWLIST: ${JSON.stringify(readTools)}`,
     );
   if (!readTools.includes('list_accounts')) throw new Error('list_accounts is not registered');
   if (!firstCall.ok || firstCall.total !== 1 || firstCall.accountId !== owner.accountId)

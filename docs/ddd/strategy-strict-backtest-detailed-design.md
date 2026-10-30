@@ -1,8 +1,8 @@
-# Strategy 严格回测详细设计
+# Strategy 组合回测详细设计
 
 ## 目标与边界
 
-严格回测是独立于 operational（日运行）和 evaluation（历史评估/回放）的 `backtest` scope。它消费带历史时点的策略求值结果与市场事实，产生可复现的组合净值结果；不会写入当前股票池，不生成 Advice、Trade 或通知。现有“模拟回测（历史回放）”仍保持原语义，只统计规则求值与信号，不能改名充当严格回测。
+组合回测是独立于 operational（日运行）和 evaluation（历史评估/回放）的 `backtest` scope。它消费带历史时点的策略求值结果与市场事实，产生可复现的组合净值结果；不会写入当前股票池，不生成 Advice、Trade 或通知。现有“历史评估（逐日重放）”仍保持原语义，只统计规则求值与信号，不能改名充当组合回测。
 
 每次运行冻结 `strategyId/versionId/evaluationSessionId/区间/基准/执行模型/费用/滑点`，并保存 `specHash`、市场事实 `contentHash` 集合、输入 `inputFingerprint` 与 evaluator 版本及代码 SHA-256。相同身份和指纹只能得到同一个运行；运行进入 `running` 后身份不可变。
 
@@ -30,6 +30,6 @@
 - Core：`StrictBacktestSpec/Run/MarketFact` schema、门禁审计和纯执行引擎。
 - Repository：`StrategyBacktestRepository` 提供 Drizzle 与 in-memory 双实现，并由 contract tests 验证身份不可变、生命周期和 cutoff 查询。
 - Tool：创建、读取、列表为公开 read/write tools；后台执行 tool 只由 Web job 调用。Tool 负责组装历史事实和门禁，Workflow（如后续接入）只能通过 `ctx.tools.*` 编排。
-- Web：`/api/strategies/:id/strict-backtests` 创建并异步执行；工作台“严格回测”入口展示运行身份、门禁审计和完整时才可用的指标。
+- Web：`/api/strategies/:id/strict-backtests` 创建并异步执行；工作台“组合回测”入口展示运行身份、门禁审计和完整时才可用的指标。
 
 当前仓库已提供确定性切片、fixtures 与契约，但真实停牌/涨跌停/退市、公司行动和 benchmark 历史事实尚未由生产数据同步器填充；因此真实运行在事实缺失时会诚实返回 `partial/unavailable`，不会用当前快照或推断数据补齐。

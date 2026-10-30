@@ -10,7 +10,7 @@
 把 Strategy 从“功能可运行”提升为“每天可持续运行、结果可验收、失败可恢复、历史评估不污染
 生产视图”的研究系统。
 
-本计划不新增自动交易，不把 StrategySignal 或 SignalObservation 表述为 Advice、胜率或严格回测。
+本计划不新增自动交易，不把 StrategySignal 或 SignalObservation 表述为 Advice、胜率或组合回测。
 
 研究算法边界：`run_local_selector_research` 只消费 PIT StockUniverse 与批量 qfq DailyBar revision，
 输出可重算的横截面 score/evidence；`assess_adaptive_personality` 只做版本化训练/验证可信门禁，
@@ -41,7 +41,7 @@ ResearchTopic/ResearchDocument 的显式链接读模型承载。
 | 日线同步 | `Promise.all` 无界并发；首选 provider 大量 socket 失败 | 放大全市场外部依赖波动 |
 
 隔离模拟使用当前股票目录、显式样本和本地 qfq 日线，存在幸存者偏差，且没有费用、滑点、
-停牌/涨跌停可交易性、benchmark 与 point-in-time universe。因此以上数字不是严格回测结果，
+停牌/涨跌停可交易性、benchmark 与 point-in-time universe。因此以上数字不是组合回测结果，
 只用于发现运行和策略定义缺口。
 
 ### 2.1 当前实现证据
@@ -354,4 +354,4 @@ P0 完成的判定不是“定时任务被触发”，而是已具备可验证�
 都有 WorkflowRun 审计。真实交易日样本继续用于运营观测，不设置固定数量的完成门禁。
 
 P1 完成后，早期突破 v2 进入 T+1/T+3/T+5 真实观察；不再设置 T+20 等待条件。P2 完成前，任何历史区间结果
-都继续标记为“历史评估/描述性观察”，不得称为严格回测。
+都继续标记为“历史评估/描述性观察”，不得称为组合回测。

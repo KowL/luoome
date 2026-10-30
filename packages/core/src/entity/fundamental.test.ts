@@ -15,6 +15,7 @@ const makeFact = (input: {
   readonly stockId?: string;
   readonly metricId?: string;
   readonly value?: number;
+  readonly source?: string;
   readonly sourceRevision?: string;
   readonly publishedAt?: string;
   readonly revisionPublishedAt?: string;
@@ -30,7 +31,7 @@ const makeFact = (input: {
     periodEnd: new Date('2023-12-31T00:00:00.000Z'),
     value: input.value ?? 10,
     canonicalUnit: 'percent-points' as const,
-    source: 'fixture',
+    source: input.source ?? 'fixture',
     sourceRecordId: `record-${input.id}`,
     sourceRevision: input.sourceRevision ?? input.id,
     publishedAt: new Date(input.publishedAt ?? '2024-03-01T00:00:00.000Z'),
@@ -105,6 +106,7 @@ describe('FinancialFact / strict PIT vintage', () => {
       metricIds: ['roe'],
       asOf: new Date('2024-12-31T23:59:59.000Z'),
       policy: 'strict-pit-v1',
+      sources: 'all',
       facts: [first, restated, retracted],
     });
     expect(beforeRestatement.status).toBe('complete');
@@ -116,6 +118,7 @@ describe('FinancialFact / strict PIT vintage', () => {
       metricIds: ['roe'],
       asOf: new Date('2026-02-01T00:00:00.000Z'),
       policy: 'strict-pit-v1',
+      sources: 'all',
       facts: [first, restated, retracted],
     });
     expect(afterRetraction.status).toBe('unavailable');
@@ -132,6 +135,43 @@ describe('FinancialFact / strict PIT vintage', () => {
     expect(() => assertFinancialVintageInvariants(afterRetraction)).not.toThrow();
   });
 
+  it('source 白名单把 mock/fixture 事实挡在 vintage 之外，空白名单拒绝一切事实', () => {
+    const mockFact = makeFact({
+      id: 'fact-mock',
+      stockId: '600000.SH',
+      source: 'mock-fundamental-pit-fixture',
+    });
+    const realFact = makeFact({ id: 'fact-real', stockId: '600001.SH', source: 'tushare-pit-v1' });
+    const input = {
+      stockIds: ['600000.SH', '600001.SH'],
+      metricIds: ['roe'],
+      asOf: new Date('2025-12-31T00:00:00.000Z'),
+      policy: 'strict-pit-v1' as const,
+      facts: [mockFact, realFact],
+    };
+
+    const all = resolveStrictPitFinancialVintage({ ...input, sources: 'all' });
+    expect(all.facts.map((fact) => fact.id).sort()).toEqual(['fact-mock', 'fact-real']);
+    expect(all.status).toBe('complete');
+
+    const realOnly = resolveStrictPitFinancialVintage({ ...input, sources: ['tushare-pit-v1'] });
+    expect(realOnly.facts.map((fact) => fact.id)).toEqual(['fact-real']);
+    expect(realOnly.missing).toEqual([
+      { stockId: '600000.SH', metricId: 'roe', reason: 'not-covered' },
+    ]);
+    expect(realOnly.status).toBe('partial');
+
+    const emptyWhitelist = resolveStrictPitFinancialVintage({ ...input, sources: [] });
+    expect(emptyWhitelist.facts).toEqual([]);
+    expect(emptyWhitelist.status).toBe('unavailable');
+    expect(emptyWhitelist.coverage).toEqual({
+      requested: 2,
+      available: 0,
+      missing: 2,
+      retracted: 0,
+    });
+  });
+
   it('distinguishes local recorded-after-cutoff from publication cutoff and hashes deterministically', () => {
     const lateRecorded = makeFact({
       id: 'fact-late',
@@ -143,6 +183,7 @@ describe('FinancialFact / strict PIT vintage', () => {
       metricIds: ['roe'],
       asOf: new Date('2024-12-31T23:59:59.000Z'),
       policy: 'strict-pit-v1',
+      sources: 'all',
       facts: [lateRecorded],
     });
     expect(result.status).toBe('unavailable');
@@ -185,6 +226,7 @@ describe('FinancialFact / strict PIT vintage', () => {
         metricIds: ['roe'],
         asOf: new Date('2025-12-31T00:00:00.000Z'),
         policy: 'strict-pit-v1',
+        sources: 'all',
         facts: [original, crossStockWithHash],
       }),
     ).toThrow(/同 stock\/metric\/period/);

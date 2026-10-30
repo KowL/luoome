@@ -2,9 +2,17 @@ import { Readable } from 'node:stream';
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-connection';
 import type {} from '@deepseek-ai/dsh-host-webserver';
+import type { ToolResult } from '@luoome/core';
 import type { PluginPrincipal } from '@luoome/tools';
 import { z } from 'zod';
 import { AUTOMATION_CATALOG_TOOL } from './automation-catalog.js';
+import {
+  createDataImportBackupHandler,
+  createDataImportPreviewHandler,
+  createDataImportUploadHandler,
+  type DataImportBackupStore,
+  type DataImportStaging,
+} from './data-import.js';
 import {
   createDshOperationHost,
   MANUAL_OPERATION_TOOL,
@@ -37,6 +45,13 @@ export const mountDshWebProfile = (
     readonly market: MarketSurface;
     readonly marketSettings?: MarketSettings;
     readonly researchJobs?: ResearchJobs;
+    /** T48 专用有界上传与只读预检；未提供时不注册恢复入口。 */
+    readonly dataImport?: {
+      readonly staging: DataImportStaging;
+      readonly backups: DataImportBackupStore;
+      readonly preview: (uploadId: string) => Promise<ToolResult<unknown>>;
+      readonly targetDigest: () => Promise<string>;
+    };
     readonly principalForOwner: () => PluginPrincipal | null;
   },
 ) => {
@@ -195,6 +210,28 @@ export const mountDshWebProfile = (
       }),
     );
     register('/api/luoome/operations/prepare', ['POST'], operations);
+    // T48：数据库文件走专用 octet-stream 载体，通用 64 KiB JSON 操作接口永不承载 base64 库。
+    if (options.dataImport !== undefined) {
+      register(
+        '/api/luoome/import/upload',
+        ['POST'],
+        createDataImportUploadHandler(options.dataImport.staging),
+      );
+      register(
+        '/api/luoome/import/preview',
+        ['POST'],
+        createDataImportPreviewHandler(options.dataImport.preview),
+      );
+      register(
+        '/api/luoome/import/backup',
+        ['POST'],
+        createDataImportBackupHandler({
+          staging: options.dataImport.staging,
+          backups: options.dataImport.backups,
+          targetDigest: options.dataImport.targetDigest,
+        }),
+      );
+    }
     if (options.marketSettings !== undefined)
       register(
         '/api/luoome/settings/market',

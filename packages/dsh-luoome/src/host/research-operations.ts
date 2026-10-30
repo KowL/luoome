@@ -12,7 +12,6 @@ import {
   getStrategyEvaluationSessionTool,
   getStrategyResearchStateTool,
   getStrategyTool,
-  getStrictStrategyBacktestTool,
   PluginOperationScopeError,
   type PluginPrincipal,
   pluginInputJson,
@@ -358,9 +357,13 @@ export const createResearchStrictBacktestOperationPolicy = (
     tool: defineTool({
       name: createStrictStrategyBacktestTool.name,
       description:
-        '为绑定的历史评估创建严格组合回测；先执行完整事实门禁，缺少历史可交易性、公司行动或基准数据时只保存缺口审计，不生成收益。',
+        '为绑定的历史评估创建隔离的组合回测运行（门禁审计）；缺少历史可交易性、公司行动或基准数据时只保存缺口审计，不生成任何收益指标。',
       sideEffect: 'write',
-      requiredCapabilities: ['write', 'external'],
+      // 本 policy 全程只读写本地库：创建时 assembleBacktest 读 strategyEvaluation/strategyRun/
+      // strategyBacktest/dailyBar 四张本地表；门禁完备后排的 `execute_strict_strategy_backtest`
+      // 同样只读本地事实。外部取数发生在更早的 evaluation replay（`prepare_strategy_data`），
+      // 不在这条操作的链路里，所以不声明 external（T06 判定：registry 本体写得对，是 policy 多声明）。
+      requiredCapabilities: ['write'],
       input,
       output: CreateStrictStrategyBacktestOutput,
       handler: async (args, ctx) => {
@@ -389,66 +392,15 @@ export const createResearchStrictBacktestOperationPolicy = (
   };
 };
 
-export const createExecuteResearchStrictBacktestOperationPolicy = (
-  jobs: ResearchJobs,
-): ConfirmablePluginTool => {
-  const input = z
-    .object({ accountId: id, strategyId: id, versionId: id, backtestRunId: id })
-    .strict();
-  const load = async (args: z.output<typeof input>, ctx: ToolContext) => {
-    const result = await getStrictStrategyBacktestTool.execute(args, ctx);
-    if (!result.ok) return result;
-    if (result.data.run === null) return errNotFound('StrictStrategyBacktest', args.backtestRunId);
-    if (
-      result.data.run.spec.strategyId !== args.strategyId ||
-      result.data.run.spec.strategyVersionId !== args.versionId
-    )
-      return errInvalidInput('Strict backtest must match the bound strategy version');
-    return { ok: true as const, data: { run: result.data.run } };
-  };
-  return {
-    scheduled: false,
-    hostBoundFields: ['accountId'],
-    tool: defineTool({
-      name: 'execute_strict_strategy_backtest',
-      description:
-        '显式恢复已有严格回测运行；只使用原模型、事实指纹与完整门禁，不重建输入、不发布或交易。',
-      sideEffect: 'write',
-      requiredCapabilities: ['write', 'external'],
-      input,
-      output: CreateStrictStrategyBacktestOutput,
-      handler: async (args, ctx) => {
-        if (args.accountId !== ctx.user.defaultAccountId)
-          return errInvalidInput('Account binding changed');
-        const current = await load(args, ctx);
-        if (!current.ok) return current;
-        if (current.data.run.status === 'queued' || current.data.run.status === 'running') {
-          if (!jobs.canStart(`strict:${args.backtestRunId}`))
-            return errInvalidInput('Research task capacity reached; wait for an active task');
-          if (!ctx.abortSignal?.aborted) jobs.startStrict(args.backtestRunId, ctx);
-        }
-        return current.data;
-      },
-    }),
-    async bind(raw, principal, _operationId, ctx) {
-      const args = input.parse(bindScope(raw, principal, ctx));
-      const current = await load(args, ctx);
-      if (!current.ok) throw new Error('Strict backtest scope mismatch');
-      return args;
-    },
-    async receipt(raw, ctx) {
-      const args = input.parse(raw);
-      const result = await load(args, ctx);
-      return result.ok &&
-        (result.data.run.status === 'complete' ||
-          result.data.run.status === 'failed' ||
-          jobs.status(`strict:${args.backtestRunId}`) === 'running')
-        ? result
-        : null;
-    },
-  };
-};
-
+/**
+ * 插件暴露的写面 policy 全集。
+ *
+ * `execute_strict_strategy_backtest` **不在这里**（REQ-M1-05 §2）：它的对外入口名不副实
+ * （门禁恒 partial 时永远拿不到 metrics），已降为内部工具——域内实现进 registry（一份实现），
+ * 插件侧副本删除。执行仍由本文件的 create policy 在门禁完备后通过 `jobs.startStrict` 触发；
+ * 重复调用 create 是幂等的（同输入返回同 id 的 run），所以恢复一条 queued run 仍有路径，
+ * 不需要第二条对外入口。
+ */
 export const createResearchOperationPolicies = (
   jobs: ResearchJobs,
 ): readonly ConfirmablePluginTool[] => [
@@ -457,5 +409,4 @@ export const createResearchOperationPolicies = (
   createResearchComparisonOperationPolicy(),
   createSaveResearchStateOperationPolicy(),
   createResearchStrictBacktestOperationPolicy(jobs),
-  createExecuteResearchStrictBacktestOperationPolicy(jobs),
 ];

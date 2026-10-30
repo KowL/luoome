@@ -1,6 +1,6 @@
 # DSH 插件构建与验收
 
-当前默认部署是 Node 运行 DSH + dsh-luoome，包含 host/client、五个业务面板、DSH 内的投资设置与随包技能；不启动 MCP、Bun CLI 或常驻 worker。固定 SDK 依赖和解析图见 [artifacts.json](./artifacts.json) 与 [bun.lock](../../bun.lock)。
+当前默认部署是 Node 运行 DSH + dsh-luoome，包含 host/client、五个业务面板、DSH 内的投资设置与随包技能；不启动 MCP、Bun CLI 或常驻 worker。stdio MCP 用户入口（`packages/mcp`、`luoome mcp serve`、`deploy/dsh/mcp-tool-probe.ts`）已按 REQ-M2-03 删除，暴露面判定保留在 `packages/tools/src/exposure/`；交互分析写回契约迁到 `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`（随 `test:dsh-luoome` 运行）。固定 SDK 依赖和解析图见 [artifacts.json](./artifacts.json) 与 [bun.lock](../../bun.lock)。
 
 从仓库根目录运行：
 
@@ -22,4 +22,4 @@ bun --no-env-file infra/dsh/plugin-switch-acceptance.ts
 
 日常应用升级使用 [upgrade.py](../../deploy/dsh/upgrade.py) 的 `bundle` / `apply` 流程，将当前应用和部署配置一起发布，保留 Pocket 的 loopback 监听；具体命令和回退说明见[用户手册](../../docs/USER_GUIDE.md)。
 
-`build.ts` / `acceptance.ts` 及 dsh-bridge 的旧代理产物只保留给兼容开发验收，不是当前产品运行入口。旧托管 Host、网关模型代理与计费运行时已退役，历史设计见[归档](../../docs/archive/dsh-plugin-platform-development-plan.md)。
+`acceptance.ts` 只保留给受控验证底座，不是当前产品运行入口。旧托管 Host、网关模型代理、计费运行时，以及旧 DSH 桥接包的适配产物构建（`build.ts`、`standalone-panels` / `standalone-prompt` 两个 entrypoint）已随旧 MCP 过渡面退役，历史设计见[归档](../../docs/archive/dsh-plugin-platform-development-plan.md)。

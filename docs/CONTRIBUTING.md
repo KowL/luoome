@@ -2,7 +2,7 @@
 
 > 欢迎加入 luoome。这份文档面向**想动手改代码的贡献者**：如何拉仓库、本地开发、跑测试、提 PR、加新 tool / 战法 / 适配器。
 >
-> 如果你只是想通过外部 Agent **调用** luoome，请安装 [luoome Skill](../skills/luoome/SKILL.md)；编码 Agent 的仓库规则见 [AGENTS.md](../AGENTS.md)；架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+> 如果你只是想通过外部 Agent **调用** luoome，请安装 [DSH 插件](../packages/dsh-luoome/README.md)；编码 Agent 的仓库规则见 [AGENTS.md](../AGENTS.md)；架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 ## 目录
 
@@ -65,15 +65,12 @@ luoome/
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
 │   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
 │   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
-│   ├── mcp/           MCP stdio server（env 控制暴露面）+ 批处理入口
-│   ├── dsh-bridge/    DSH 插件：面板、纪律提示词与独立 profile 装配
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
 ├── apps/
 │   └── web/           Hono + 原生 HTML/JS 仪表盘（本地单机装配）
-├── deploy/dsh/        独立 DSH 部署（compose、Caddy、profile 装配、批处理与设置面探针）
+├── deploy/dsh/        独立 DSH 部署（compose、Caddy、profile 装配与部署静态守卫）
 ├── infra/dsh/         DSH 构建与受控验证底座
-├── .dsh/skills/       DSH 侧技能目录（晨报、复盘、深挖、决策记录、队列消费、批处理调度）
 ├── docs/              项目文档（入口见 docs/README.md）
 │   ├── README.md          分类导航与维护约定
 │   ├── ARCHITECTURE.md    架构核心
@@ -86,7 +83,6 @@ luoome/
 │   ├── ddd/               技术详细设计
 │   ├── runbooks/          可重复执行的运维手册
 │   └── archive/           已完成计划与验收快照
-├── skills/luoome/     外部 Agent Skill（MCP 编排、示例与安全规则）
 ├── bin/luoome         bash 转发到 bun run packages/cli/src/index.ts
 ├── .github/workflows/ CI（typecheck + test:all + lint）
 ├── AGENTS.md          编码 Agent 开发规范
@@ -97,7 +93,7 @@ luoome/
 **包之间的依赖方向（硬约束，禁止反向）**
 
 ```txt
-cli / tui / mcp / web ──► tools ──► core
+cli / tui / web ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -105,7 +101,7 @@ workflows ──► tools ──► core
 
 - `core` **绝对不能** import 任何其它包（保证纯领域类型）
 - `db` / `adapters` 可以依赖 `core`，不能依赖 `tools` / `workflows` / `cli` 等上层
-- `tools` 是所有 surface（CLI / TUI / MCP / Web）的唯一上游依赖
+- `tools` 是所有 surface（CLI / TUI / Web / DSH 插件）的唯一上游依赖
 - 跨包合约变更先开 issue 讨论，不要悄悄改
 
 ## 日常命令
@@ -119,16 +115,15 @@ workflows ──► tools ──► core
 | `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
-| `bun run test:dsh` | DSH 插件与 Node Host 侧测试（Vitest） |
+| `bun run test:dsh-luoome` | DSH 插件（host / client / skills）与 Node Host 侧测试 + Bun 端到端组 |
 | `bun run test:panels-browser --overview-only` | 真实 DSH 看盘浏览器验收：分区慢响应、失败恢复、分页、排序、个股详情与窄屏；需 Chrome，可用 `CHROME_PATH` 指定 |
-| `bun run build:dsh` | 构建 DSH Node Host 与插件产物 |
+| `bun run build:dsh-luoome` | 构建 DSH 插件产物（`dist/host.js` + `dist/client.js`） |
 | `bun run check:layers` | 依赖方向静态检查 |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
 | `bun packages/tui/src/smoke.ts` | TUI headless smoke |
 | `bash bin/luoome --help` | CLI 帮助 |
 | `bash bin/luoome tools list --json` | 输出当前 registry tool 清单 |
-| `bash bin/luoome mcp serve` | 起 MCP stdio server |
 | `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
 | `bash bin/luoome workflow run run-strategies --input '{}'` | 跑已发布 Strategy |
@@ -178,7 +173,7 @@ Web 页面展示股票身份时统一复用首页看板的两行样式，不允�
 
 每个 tool / workflow 都要标 `sideEffect`：
 
-| level | 含义 | MCP 默认暴露 |
+| level | 含义 | 默认暴露 |
 |---|---|---|
 | `read` | 只读 | ✓ |
 | `write` | 改本地状态 | opt-in |
@@ -187,7 +182,7 @@ Web 页面展示股票身份时统一复用首页看板的两行样式，不允�
 | `trade` | 成交记账或真实资金动作 | **永不**（启动硬卡） |
 
 原 `advice` 等级已随 DSH 瘦身后内置 AI 下线一并删除；模型推理改由队列消费者承担，
-建议数据实体本身保留。新加 tool 时选错等级会被 MCP / Web 拒绝；不确定就选最严的，写 issue 讨论。
+建议数据实体本身保留。新加 tool 时选错等级会被暴露面判定（`packages/tools/src/exposure/`）与 Web 拒绝；不确定就选最严的，写 issue 讨论。
 本地 Web 人工成交录入的专用路由例外与审查条件见 [Security](./SECURITY.md)，通用工具路由仍拒绝所有 trade。
 
 ### 不变量
@@ -221,7 +216,6 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 - `packages/core` — entity 不变量 + 工具函数 + branded types
 - `packages/tools` — 每个 tool 至少 1 个单测（input validation + happy path + 关键 error kind）
 - `packages/cli` — argv 解析 + help 输出 + 子命令分发
-- `packages/mcp` — stdio server smoke（list tools + 只读调用）
 - `packages/workflows` — 引擎 + 内置 workflow（v0.4 加 5 个）
 
 `bun run test:db` 跑 bun test，专覆盖：
@@ -274,7 +268,7 @@ TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
 - [ ] `bun run test:all` 通过
 - [ ] `bun run lint` 通过
 - [ ] 如果改了 core entity，同步改了 invariants + 测试
-- [ ] 如果新增或改变了外部 Agent 能力，同步 `skills/luoome/` 的能力分类、示例或安全规则
+- [ ] 如果新增或改变了外部 Agent 能力，同步 `packages/dsh-luoome/skills/` 的技能内容与安全规则
 - [ ] 如果改了 API/CLI/Web，更新对应 README / USER_GUIDE / 开发规范
 ```
 
@@ -292,7 +286,7 @@ test(area): 测试
 perf(area): 性能
 ```
 
-`area` 通常是包名（`core / db / tools / adapters / workflows / mcp / cli / tui / web`）或主题（`v0.3 / repo / ci`）。
+`area` 通常是包名（`core / db / tools / adapters / workflows / batch / cli / tui / web`）或主题（`v0.3 / repo / ci`）。
 
 例子：
 
@@ -347,7 +341,7 @@ toolRegistry.register(myTool);
 2. 在 `packages/core/src/entity/invariants.ts` 加 entity 不变量（如果是新 entity）
 3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle + memory 各实现
 4. 如果改 core：在 `packages/workflows/src/define-workflow.ts` 的 `WorkflowToolMap` 同步加 accessor
-5. 如果外部 Agent 的能力选择、调用顺序或安全边界变化，同步 `skills/luoome/` 对应 reference
+5. 如果外部 Agent 的能力选择、调用顺序或安全边界变化，同步 `packages/dsh-luoome/skills/` 对应技能内容
 6. CLI `tools list` 应能见到（不需要额外改动，registry 自动）
 
 ### 加一个新战法
@@ -435,8 +429,8 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 **禁止反向依赖**：
 
 - `core` 不能 import 任何其它包
-- `db` / `adapters` 不能 import `tools` / `workflows` / `cli` / `tui` / `mcp` / `web`
-- `tools` 是上层（cli / tui / mcp / web / workflows）的唯一上游
+- `db` / `adapters` 不能 import `tools` / `workflows` / `cli` / `tui` / `web`
+- `tools` 是上层（cli / tui / web / workflows）的唯一上游
 - workflow 不能直接调 adapter / repo，必须通过 tool
 
 破例需在 PR 描述里显式说明 + reviewer 通过。CI 用 ESLint 风格 import 检查（v0.5 计划加）。
@@ -447,13 +441,13 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 |---|---|
 | `bug` | 缺陷 |
 | `feature` | 新功能 |
-| `agent` | 涉及编码 Agent 规范、外部 Skill 或 MCP 接入同步 |
+| `agent` | 涉及编码 Agent 规范或外部 Skill 同步 |
 | `security` | 安全相关（详见 [SECURITY.md](./SECURITY.md)） |
 | `tool` | 加新 tool |
 | `tactic` | 加新战法 / 战法引擎改动 |
 | `adapter` | 加新数据源 |
 | `workflow` | 加新 workflow |
-| `tui` / `web` / `cli` / `mcp` | 表面层改动 |
+| `tui` / `web` / `cli` | 表面层改动 |
 | `docs` | 文档 |
 | `good first issue` | 适合新手 |
 | `help wanted` | 求协助 |
@@ -464,7 +458,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 
 关键约束（PR review 时要重点确认）：
 
-- 不引入 `place_order` / `cancel_order` 这类 trade 类 tool（MCP / Web 永不应暴露）
+- 不引入 `place_order` / `cancel_order` 这类 trade 类 tool（任何 surface 都永不应暴露）
 - 建议能力（analysis 队列、面板展示）不允许直接触发 trade
 - 加新写副作用的 tool 时同步写：[SECURITY.md](./SECURITY.md) 的副作用分级
 - LLM 调用必须 fallback（不可让一次失败导致整个 workflow 死）
@@ -475,10 +469,10 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 
 luoome 以插件形态接入 DSH，开发与验证都围绕单机装配：
 
-- `deploy/dsh/bootstrap.ts` 装配两个独立 profile：`luoome-web`（交互面，挂三个 MCP 实例 + 面板 + 纪律插件 + 定时任务）和 `luoome-worker`（headless 消费者，只挂队列白名单）。
-- 三个 MCP 实例的白名单互不重叠：读面只读、`luoome-settings` 只放配置类写工具、`luoome-batch` 只放五个批处理入口。改白名单时同步 `packages/dsh-bridge/src/standalone-profile.ts` 与 `deploy/dsh/batch-tools.test.ts`、`deploy/dsh/settings-tools.test.ts` 的契约测试。
-- 暴露面开关由 profile 补丁决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，不要绕过这层保护。
-- `bun run build:dsh` 构建 DSH 侧插件产物（只读面板 + 纪律提示词），`bun run test:dsh` 跑 `packages/dsh-bridge` 侧测试；两者都要在已安装依赖的仓库根目录执行。
+- `deploy/dsh/profile-seed.mjs` 把 `packages/dsh-luoome` 的构建产物装进 DSH profile（host + client + skills），`entrypoint.sh` 先 seed 再用 Node `dsh --profile` 启动；旧的 MCP 实例 profile 装配器（`deploy/dsh/bootstrap.ts`）、`packages/dsh-bridge`、stdio MCP 用户入口（`packages/mcp` 与 `luoome mcp serve`）均已删除，不要再按「装配三个 MCP 实例」的思路改部署。
+- 暴露面开关由环境决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，不要绕过这层保护。
+- 批处理工具名单归于 `packages/batch`：改名单时同步 `deploy/dsh/batch-tools.test.ts` 的契约测试，部署侧只做转发。
+- `bun run build:dsh-luoome` 构建 DSH 插件产物（host / client），`bun run test:dsh-luoome` 跑插件侧测试；两者都要在已安装依赖的仓库根目录执行。
 - `bun --no-env-file apps/web/src/index.ts` 起单机 Web（默认 `127.0.0.1:5173`）；它读同一份 `$LUOOME_HOME/luoome.db`。
 - 单机没有常驻调度进程：批处理由 DSH 定时任务唤起会话后调用 `luoome-batch` 实例的工具触发；门槛判定随工具走，不满足时返回 `skipped`，不要用「昨天是交易日吧」这类推断代替。
 
