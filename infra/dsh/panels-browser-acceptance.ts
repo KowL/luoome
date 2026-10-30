@@ -1069,7 +1069,7 @@ const runAcceptance = async () => {
     '持仓',
   );
   await page.waitFor(
-    `document.body.innerText.includes(${JSON.stringify(fixtureInfo.advicePremise)}) && document.querySelector('[data-overview-section="account"][aria-busy="false"]')`,
+    `document.body.innerText.includes(${JSON.stringify('验收要闻：市场成交活跃')}) && document.querySelector('[data-overview-section="account"][aria-busy="false"]')`,
     '独立账户与建议',
   );
   if (
@@ -1162,10 +1162,8 @@ const runAcceptance = async () => {
     'sentiment',
     'account',
     'holdings',
-    'watchlists',
     'watchlist',
     'triggers',
-    'advice',
     'sectors',
     'news',
   ]) {
@@ -1174,7 +1172,7 @@ const runAcceptance = async () => {
   const overviewText = await page.evaluate<string>('document.body.innerText');
   for (const expected of [
     fixtureInfo.stock.name,
-    fixtureInfo.advicePremise,
+    '验收要闻：市场成交活跃',
     '持仓市值',
     '建议不等于交易',
   ])
@@ -2721,7 +2719,7 @@ const runAcceptance = async () => {
     sidebarLabels,
     panels: {
       overview: {
-        domChecks: [fixtureInfo.stock.name, fixtureInfo.advicePremise, '持仓市值'],
+        domChecks: [fixtureInfo.stock.name, '验收要闻：市场成交活跃', '持仓市值'],
         stateAccountTotal: overviewAccounts?.total,
         stateHoldings: dbHoldings,
         dbAccountId: dbAccount?.id,

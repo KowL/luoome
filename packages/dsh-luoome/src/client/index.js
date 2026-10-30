@@ -59,7 +59,7 @@ const RewindIcon = () =>
 const PortfolioIcon = () => icon(['M2 5h12v8H2z', 'M5.5 5V2.5h5V5', 'M2 8.5h12', 'M7 8.5v2h2v-2']);
 const WatchlistIcon = () => icon(['M4 2h8v12l-4-2.5L4 14V2Z']);
 const panels = [
-  ['overview', '看盘', '市场温度 · 账户概览 · 今日触发', PulseIcon, OverviewPanel],
+  ['overview', '看盘', '市场温度 · 账户概览 · 市场要闻', PulseIcon, OverviewPanel],
   ['positions', '持仓', '账本 · 成交 · 绩效快照', PortfolioIcon, PositionsPanel],
   ['watchlists', '关注', '关注列表 · 手动管理 · AI 协作', WatchlistIcon, WatchlistsPanel],
   ['strategies', '策略', '研究问题 · 规则对照 · 持续优化', LayersIcon, StrategiesPanel],

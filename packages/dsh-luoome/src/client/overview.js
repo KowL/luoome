@@ -3,22 +3,13 @@ import { createElement as h, useCallback, useState } from 'react';
 import { dataOf, useAutoRefresh, useOverviewSection } from './data.js';
 import {
   bigMoney,
-  DECISION,
-  DELIVERY,
-  HORIZON,
   int,
   MARKET_SESSION,
   money,
-  PRIORITY,
   points,
-  RULE_KIND,
   ratio,
-  SUBJECT_KIND,
   signedMoney,
-  subjectTitle,
   toneOf,
-  WATCHLIST_KIND,
-  when,
 } from './format.js';
 import { AccountSummary, MarketTable, NewsFeed, SectorRanking } from './overview-market.js';
 import {
@@ -28,10 +19,8 @@ import {
   Footer,
   Head,
   Kpi,
-  Meter,
   Panel,
   Pill,
-  Section,
   Skeleton,
   SkeletonLines,
   Stat,
@@ -304,255 +293,6 @@ export const HoldingsTable = ({ holdings, loading, error }) => {
   );
 };
 
-const TriggersCard = ({ triggers, loading, error }) => {
-  if (!triggers) {
-    return h(
-      Card,
-      { title: '今日触发', meta: loading ? '读取中' : null },
-      loading ? h(SkeletonLines, { lines: 4 }) : h(ErrorNote, { label: '今日触发', error }),
-    );
-  }
-  const rows = triggers.triggers ?? [];
-  if (rows.length === 0) {
-    return h(
-      Card,
-      { title: '今日触发', meta: '0 条' },
-      h(Empty, {
-        mark: '○',
-        title: '今天没有触发',
-      }),
-    );
-  }
-  return h(
-    Card,
-    { title: '今日触发', meta: `${triggers.total} 条` },
-    h(
-      'div',
-      { className: 'luo-list' },
-      rows.slice(0, 8).map((trigger) => {
-        const priority = PRIORITY[trigger.priority] ?? PRIORITY.normal;
-        return h(
-          'div',
-          { key: trigger.id, className: 'luo-row' },
-          h('i', { className: `luo-pri is-${priority.tone}`, 'aria-hidden': true }),
-          h(
-            'div',
-            { className: 'luo-row-main' },
-            h(
-              'div',
-              { className: 'luo-row-title' },
-              h('b', null, trigger.stockName ?? trigger.stockId),
-              h(Pill, { tone: priority.tone === 'urgent' ? 'warn' : 'quiet' }, priority.label),
-              h(
-                'span',
-                { className: 'luo-muted' },
-                RULE_KIND[trigger.ruleKind] ?? trigger.ruleKind,
-              ),
-            ),
-            h('div', { className: 'luo-row-sub' }, trigger.reason),
-          ),
-          h(
-            'div',
-            { className: 'luo-row-side' },
-            h('div', null, DELIVERY[trigger.deliveryStatus] ?? trigger.deliveryStatus),
-          ),
-        );
-      }),
-    ),
-  );
-};
-
-const WatchlistsCard = ({ watchlists, loading, error }) => {
-  if (!watchlists) {
-    return h(
-      Card,
-      { title: '关注列表', meta: loading ? '读取中' : null },
-      loading ? h(SkeletonLines, { lines: 3 }) : h(ErrorNote, { label: '关注列表', error }),
-    );
-  }
-  const rows = watchlists.items ?? [];
-  if (rows.length === 0) {
-    return h(
-      Card,
-      { title: '关注列表', meta: '0 个' },
-      h(Empty, { mark: '◇', title: '还没有关注列表' }),
-    );
-  }
-  return h(
-    Card,
-    { title: '关注列表', meta: `${watchlists.total} 个` },
-    h(
-      'div',
-      { className: 'luo-list' },
-      rows.map(({ watchlist, memberCount }) =>
-        h(
-          'div',
-          { key: watchlist.id, className: 'luo-watch-row' },
-          h(
-            'div',
-            null,
-            h('div', { className: 'luo-watch-name' }, watchlist.name),
-            h(
-              'div',
-              { className: 'luo-watch-meta' },
-              `${WATCHLIST_KIND[watchlist.kind] ?? watchlist.kind} · ${watchlist.enabled ? '启用' : '停用'}`,
-            ),
-          ),
-          h(
-            'div',
-            { style: { textAlign: 'right' } },
-            h('div', { className: 'luo-mono', style: { fontSize: '12px' } }, `${memberCount} 只`),
-          ),
-        ),
-      ),
-    ),
-  );
-};
-
-const AdviceCard = ({ advice }) => {
-  const decision = DECISION[advice.decision] ?? { label: advice.decision, tone: 'quiet' };
-  const toneVar =
-    decision.tone === 'quiet' ? 'var(--lu-line-strong)' : `var(--lu-${decision.tone})`;
-  const title = subjectTitle(advice);
-  return h(
-    'article',
-    { className: 'luo-advice', style: { '--lu-tone': toneVar } },
-    h(
-      'div',
-      { className: 'luo-advice-h' },
-      h(
-        'div',
-        null,
-        h('div', { className: 'luo-advice-title' }, title),
-        h(
-          'div',
-          { className: 'luo-advice-sub' },
-          `${SUBJECT_KIND[advice.subjectKind] ?? advice.subjectKind} · ${HORIZON[advice.horizon] ?? advice.horizon}`,
-        ),
-      ),
-      h(Pill, { tone: decision.tone === 'quiet' ? 'quiet' : decision.tone }, decision.label),
-    ),
-    h(
-      'div',
-      { className: 'luo-meter-row' },
-      h(Meter, { value: advice.confidence }),
-      h('span', { className: 'luo-meter-cap' }, `信心 ${Math.round(advice.confidence)}`),
-    ),
-    h(
-      'p',
-      { className: 'luo-advice-premise', style: { margin: 0 } },
-      advice.reasoning?.premise ?? '—',
-    ),
-    h(
-      'details',
-      { className: 'luo-details' },
-      h('summary', null, '证据 · 反证 · 风险'),
-      h(
-        'dl',
-        { className: 'luo-dl' },
-        h(
-          'div',
-          null,
-          h('dt', null, '证据'),
-          h(
-            'dd',
-            null,
-            h(
-              'ul',
-              null,
-              (advice.reasoning?.evidence ?? []).map((line, index) =>
-                h('li', { key: index }, line),
-              ),
-            ),
-          ),
-        ),
-        h(
-          'div',
-          null,
-          h('dt', null, '反证'),
-          h(
-            'dd',
-            null,
-            h(
-              'ul',
-              null,
-              (advice.reasoning?.counterEvidence ?? []).map((line, index) =>
-                h('li', { key: index }, line),
-              ),
-            ),
-          ),
-        ),
-        h(
-          'div',
-          null,
-          h('dt', null, '风险'),
-          h(
-            'dd',
-            null,
-            h(
-              'ul',
-              null,
-              (advice.risks ?? []).map((line, index) => h('li', { key: index }, line)),
-            ),
-          ),
-        ),
-        advice.validUntil
-          ? h('div', null, h('dt', null, '有效期'), h('dd', null, when(advice.validUntil)))
-          : null,
-      ),
-    ),
-    h(
-      'p',
-      { className: 'luo-fine', style: { margin: 0 } },
-      (advice.disclaimers ?? [])[0] ?? '建议不等于交易。',
-    ),
-  );
-};
-
-const AdviceSection = ({ advice, loading, error }) => {
-  if (!advice) {
-    return h(
-      Section,
-      { title: '在期建议', meta: loading ? '读取中' : null, delay: 260 },
-      loading
-        ? h(
-            'div',
-            { className: 'luo-grid is-halves' },
-            Array.from({ length: 2 }, (_, index) => h(Skeleton, { key: index, variant: 'card' })),
-          )
-        : h(ErrorNote, { label: '建议', error }),
-    );
-  }
-  const rows = advice.advices ?? [];
-  if (rows.length === 0) {
-    return h(
-      Section,
-      { title: '在期建议', meta: '0 条', delay: 260 },
-      h(
-        Card,
-        null,
-        h(Empty, {
-          mark: '✳',
-          title: '还没有在期建议',
-        }),
-      ),
-    );
-  }
-  return h(
-    Section,
-    {
-      title: '在期建议',
-      meta: `显示 ${Math.min(rows.length, 9)} / 共 ${advice.total} 条`,
-      delay: 260,
-    },
-    h(
-      'div',
-      { className: 'luo-advice-grid' },
-      rows.slice(0, 9).map((item) => h(AdviceCard, { key: item.id, advice: item })),
-    ),
-  );
-};
-
 const Region = ({ name, title, state, children, className = '' }) =>
   h(
     'section',
@@ -599,10 +339,8 @@ export function OverviewPanel({ onAnalyzeStock }) {
   const sentiment = useOverviewSection('sentiment');
   const account = useOverviewSection('account');
   const holdings = useOverviewSection('holdings');
-  const watchlists = useOverviewSection('watchlists');
   const watchlist = useOverviewSection('watchlist', page);
   const triggers = useOverviewSection('triggers');
-  const advice = useOverviewSection('advice');
   const sectors = useOverviewSection('sectors');
   const news = useOverviewSection('news');
   const refreshers = [
@@ -610,10 +348,8 @@ export function OverviewPanel({ onAnalyzeStock }) {
     sentiment.refresh,
     account.refresh,
     holdings.refresh,
-    watchlists.refresh,
     watchlist.refresh,
     triggers.refresh,
-    advice.refresh,
     sectors.refresh,
     news.refresh,
   ];
@@ -767,21 +503,12 @@ export function OverviewPanel({ onAnalyzeStock }) {
           ),
         ),
         region(
-          'watchlists',
-          '关注列表',
-          watchlists,
-          h(WatchlistsCard, { watchlists: dataOf(watchlists.results, 'list_watchlists') }),
-        ),
-        region(
-          'advice',
-          '在期建议',
-          advice,
-          h(
-            'details',
-            { className: 'luo-advice-fold', open: true },
-            h('summary', null, '研究摘要'),
-            h(AdviceSection, { advice: dataOf(advice.results, 'get_advice') }),
-          ),
+          'news',
+          '市场要闻',
+          news,
+          dataOf(news.results, 'fetch_news')
+            ? h(NewsFeed, { data: dataOf(news.results, 'fetch_news') })
+            : null,
         ),
       ),
       h(
@@ -799,15 +526,6 @@ export function OverviewPanel({ onAnalyzeStock }) {
           sectors,
           dataOf(sectors.results, 'fetch_sector_quotes')
             ? h(SectorRanking, { data: dataOf(sectors.results, 'fetch_sector_quotes') })
-            : null,
-        ),
-        region('triggers', '今日触发', triggers, h(TriggersCard, { triggers: triggerData })),
-        region(
-          'news',
-          '市场要闻',
-          news,
-          dataOf(news.results, 'fetch_news')
-            ? h(NewsFeed, { data: dataOf(news.results, 'fetch_news') })
             : null,
         ),
       ),

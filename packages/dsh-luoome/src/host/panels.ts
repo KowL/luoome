@@ -79,10 +79,8 @@ export const OVERVIEW_PLANS = {
   sentiment: { read: [], market: [sentimentCall()] },
   account: { read: [fixed('get_account_facts')], market: [] },
   holdings: { read: [fixed('list_holdings')], market: [] },
-  watchlists: { read: [fixed('list_watchlists', { enabledOnly: true })], market: [] },
   watchlist: { read: [], market: [] },
   triggers: { read: [todayTriggers()], market: [] },
-  advice: { read: [fixed('get_advice', { limit: 9 })], market: [] },
   health: { read: [fixed('get_market_data_status')], market: [] },
   sectors: { read: [], market: [fixed('fetch_sector_quotes', { sort: 'changePct', limit: 5 })] },
   news: { read: [], market: [fixed('fetch_news', { limit: 8 })] },
@@ -99,7 +97,8 @@ interface WatchlistPage {
 
 /**
  * 面板固定映射（需求 §7）：
- * - overview：市场（情绪/指数 external + 本地行情状态）、账户概览、触发、建议卡；
+ * - overview：市场（情绪/指数 external + 本地行情状态）、账户概览、市场要闻；
+ *   关注列表与在期建议已从看盘页移除（关注列表见 watchlists 面板）；
  * - watchlists：关注列表目录，成员详情按需经只读调用获取；
  * - strategies：目录、当前版本/最近 published operational run（派生 get_strategy_workspace）、
  *   数据健康、实际结果版本与有界匹配明细、待补观察；
@@ -114,8 +113,6 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('list_accounts'),
       fixed('list_holdings'),
       todayTriggers(),
-      fixed('list_watchlists'),
-      fixed('get_advice'),
       fixed('get_market_data_status'),
     ]),
     market: Object.freeze([sentimentCall(), fixed('fetch_index_quotes')]),
