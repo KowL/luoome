@@ -1,4 +1,5 @@
 import {
+  deriveStStatus,
   type ListingStatus,
   type MarketCoverage,
   type StockUniverseEntry,
@@ -118,6 +119,8 @@ const mapRow = (
     exchange,
     name: row.name.trim(),
     listingStatus,
+    // ST 是同步时点的名称事实；存进快照后即为 PIT 属性，不用当前名称回推。
+    stStatus: deriveStStatus(row.name.trim()),
     ...(industry === undefined ? {} : { industry }),
     ...(listDate === undefined ? {} : { listDate }),
     ...(delistDate === undefined ? {} : { delistDate }),

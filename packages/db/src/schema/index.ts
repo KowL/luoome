@@ -61,6 +61,7 @@ import type {
   StrictBacktestMetrics,
   StrictBacktestRun,
   StrictBacktestSpec,
+  StStatus,
   TradeSide,
   TradeSource,
   TradingPlan,
@@ -298,6 +299,7 @@ export const stockUniverseSnapshotMembers = sqliteTable(
     stockId: text('stock_id').notNull(),
     // PIT 属性快照；旧行（T35 之前）为 NULL = unknown，迁移不回填当前值。
     listingStatus: text('listing_status').$type<ListingStatus | null>(),
+    stStatus: text('st_status').$type<StStatus | null>(),
     industry: text('industry'),
     listDate: integer('list_date', { mode: 'timestamp_ms' }),
     delistDate: integer('delist_date', { mode: 'timestamp_ms' }),

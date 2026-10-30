@@ -8,12 +8,14 @@ import {
   type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
+  type StStatus,
   stockUniverseMemberIdentity,
 } from '@luoome/core';
 
 interface SnapshotMember {
   readonly stockId: string;
   readonly listingStatus: ListingStatus;
+  readonly stStatus: StStatus;
   readonly industry?: string;
   readonly listDate?: Date;
   readonly delistDate?: Date;
@@ -96,6 +98,7 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
       members.push({
         stockId,
         listingStatus: entry.listingStatus,
+        stStatus: entry.stStatus ?? 'unknown',
         ...(entry.industry === undefined ? {} : { industry: entry.industry }),
         ...(entry.listDate === undefined ? {} : { listDate: entry.listDate }),
         ...(entry.delistDate === undefined ? {} : { delistDate: entry.delistDate }),
@@ -266,6 +269,7 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
         exchange: stock?.exchange ?? identity.exchange,
         ...(stock === null ? {} : { name: stock.name }),
         listingStatus: member.listingStatus,
+        stStatus: member.stStatus,
         ...(member.industry === undefined ? {} : { industry: member.industry }),
         ...(member.listDate === undefined ? {} : { listDate: member.listDate }),
         ...(member.delistDate === undefined ? {} : { delistDate: member.delistDate }),

@@ -1,4 +1,5 @@
 import {
+  deriveStStatus,
   type MarketCoverage,
   type StockUniverseEntry,
   type StockUniverseSnapshot,
@@ -200,5 +201,7 @@ const mapItem = (value: unknown, node: (typeof EXCHANGES)[number]): StockUnivers
     exchange,
     name,
     listingStatus: 'unknown',
+    // ST 是同步时点的名称事实；存进快照后即为 PIT 属性。
+    stStatus: deriveStStatus(name),
   };
 };

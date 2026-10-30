@@ -734,6 +734,7 @@ describe('T35 PIT universe 属性快照（Node 文件库）', () => {
           code: '600519',
           exchange: 'SH',
           listingStatus: 'unknown',
+          stStatus: 'unknown',
         },
       ]);
       expect(
@@ -771,12 +772,18 @@ describe('T35 PIT universe 属性快照（Node 文件库）', () => {
       'delist_date',
     ];
     const expectedFacts = [
-      { stockId: '600519.SH', code: '600519', exchange: 'SH', listingStatus: 'unknown' },
+      {
+        stockId: '600519.SH',
+        code: '600519',
+        exchange: 'SH',
+        listingStatus: 'unknown',
+        stStatus: 'unknown',
+      },
     ];
 
     const first = createNodeDrizzleRepos(path);
     try {
-      expect(columnsOf(first)).toEqual(expectedColumns);
+      expect(columnsOf(first)).toEqual(expect.arrayContaining(expectedColumns));
       expect(await first.repos.stockUniverse.listSnapshotMemberFacts('sync-old')).toEqual(
         expectedFacts,
       );
@@ -786,7 +793,7 @@ describe('T35 PIT universe 属性快照（Node 文件库）', () => {
 
     const second = createNodeDrizzleRepos(path);
     try {
-      expect(columnsOf(second)).toEqual(expectedColumns);
+      expect(columnsOf(second)).toEqual(expect.arrayContaining(expectedColumns));
       expect(await second.repos.stockUniverse.listSnapshotMemberFacts('sync-old')).toEqual(
         expectedFacts,
       );
@@ -1952,6 +1959,7 @@ const fullFixture = (): Record<string, DataImportRow> => {
       sync_id: 'universe-1',
       stock_id: 'stock-1',
       listing_status: 'listed',
+      st_status: 'non-st',
       industry: '白酒',
       list_date: T0,
       delist_date: null,

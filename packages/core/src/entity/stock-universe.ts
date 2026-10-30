@@ -14,6 +14,20 @@ export type MarketCoverage = z.infer<typeof MarketCoverageSchema>;
 export const ListingStatusSchema = z.enum(['listed', 'suspended', 'delisted', 'unknown']);
 export type ListingStatus = z.infer<typeof ListingStatusSchema>;
 
+/** ST 状态：来自同步时点的目录属性（PIT），不是当前名称推断。 */
+export const StStatusSchema = z.enum(['st', 'non-st', 'unknown']);
+export type StStatus = z.infer<typeof StStatusSchema>;
+
+/**
+ * 从**同步时点**的目录名称派生 ST 状态（与 limit-up-ladder 的 `isSTName` 同一约定）。
+ * 股改旧前缀 `S*ST` / `SST` 语义不稳定，返回 unknown，不猜。
+ */
+export const deriveStStatus = (name: string): StStatus => {
+  const normalized = name.trim().toUpperCase();
+  if (/^S(\*?ST)/.test(normalized)) return 'unknown';
+  return /^\*?ST/.test(normalized) ? 'st' : 'non-st';
+};
+
 export const StockUniverseEntrySchema = z
   .object({
     stockId: z.string().regex(/^[A-Z0-9]{1,12}\.(SH|SZ|BJ|HK|US)$/),
@@ -21,6 +35,7 @@ export const StockUniverseEntrySchema = z
     exchange: ExchangeSchema,
     name: z.string().trim().min(1).max(100),
     listingStatus: ListingStatusSchema,
+    stStatus: StStatusSchema.optional(),
     industry: z.string().trim().min(1).max(100).optional(),
     listDate: z.coerce.date().optional(),
     delistDate: z.coerce.date().optional(),
@@ -115,6 +130,8 @@ export interface StockUniverseSnapshotMember {
   /** 当前目录里能解析到时的展示名；股票已从 `stocks` 删除时缺省（成员行仍返回）。 */
   readonly name?: string;
   readonly listingStatus: ListingStatus;
+  /** 快照期的 ST 状态；旧行/来源未提供时为 'unknown'（tradability 因此 partial）。 */
+  readonly stStatus: StStatus;
   readonly industry?: string;
   readonly listDate?: Date;
   readonly delistDate?: Date;

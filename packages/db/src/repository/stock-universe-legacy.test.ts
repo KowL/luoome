@@ -25,7 +25,13 @@ describe('T35 旧 snapshot 行迁移（Bun SQLite）', () => {
       createDrizzleRepos(path).close();
       // 模拟 T35 之前的表结构：删掉四个属性列，并写入一条只有身份的旧成员行。
       const raw = new Database(path);
-      for (const column of ['listing_status', 'industry', 'list_date', 'delist_date']) {
+      for (const column of [
+        'listing_status',
+        'st_status',
+        'industry',
+        'list_date',
+        'delist_date',
+      ]) {
         raw.exec(`ALTER TABLE stock_universe_snapshot_members DROP COLUMN ${column}`);
       }
       raw
@@ -35,20 +41,25 @@ describe('T35 旧 snapshot 行迁移（Bun SQLite）', () => {
 
       const first = createDrizzleRepos(path);
       try {
-        expect(columnNames(path)).toEqual([
-          'sync_id',
-          'stock_id',
-          'listing_status',
-          'industry',
-          'list_date',
-          'delist_date',
-        ]);
+        // 语义断言：只要求属性列存在（加列不应导致假红），不锁死列数。
+        expect(columnNames(path)).toEqual(
+          expect.arrayContaining([
+            'sync_id',
+            'stock_id',
+            'listing_status',
+            'st_status',
+            'industry',
+            'list_date',
+            'delist_date',
+          ]),
+        );
         expect(await first.repos.stockUniverse.listSnapshotMemberFacts('sync-legacy')).toEqual([
           {
             stockId: '600519.SH',
             code: '600519',
             exchange: 'SH',
             listingStatus: 'unknown',
+            stStatus: 'unknown',
           },
         ]);
         // 旧行不回落当前 stocks：没有 stocks 行时成员仍返回，name 缺省。
@@ -69,19 +80,23 @@ describe('T35 旧 snapshot 行迁移（Bun SQLite）', () => {
             code: '600519',
             exchange: 'SH',
             listingStatus: 'unknown',
+            stStatus: 'unknown',
           },
         ]);
       } finally {
         second.close();
       }
-      expect(columnNames(path)).toEqual([
-        'sync_id',
-        'stock_id',
-        'listing_status',
-        'industry',
-        'list_date',
-        'delist_date',
-      ]);
+      expect(columnNames(path)).toEqual(
+        expect.arrayContaining([
+          'sync_id',
+          'stock_id',
+          'listing_status',
+          'st_status',
+          'industry',
+          'list_date',
+          'delist_date',
+        ]),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

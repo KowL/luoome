@@ -1,4 +1,5 @@
 import {
+  deriveStStatus,
   type MarketCoverage,
   type StockUniverseEntry,
   type StockUniverseSnapshot,
@@ -95,6 +96,8 @@ export class EastmoneyStockUniverseAdapter implements StockUniverseSourceLike {
           exchange,
           name: item.f14.trim(),
           listingStatus: 'unknown',
+          // ST 是同步时点的名称事实；存进快照后即为 PIT 属性。
+          stStatus: deriveStStatus(item.f14.trim()),
         });
       }
       if (entries.length >= reportedTotal) break;

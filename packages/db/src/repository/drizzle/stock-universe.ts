@@ -7,6 +7,7 @@ import {
   type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
+  type StStatus,
   stockUniverseMemberIdentity,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
@@ -168,6 +169,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             syncId: input.syncId,
             stockId,
             listingStatus: entry.listingStatus,
+            stStatus: entry.stStatus ?? 'unknown',
             industry: entry.industry ?? null,
             listDate: entry.listDate ?? null,
             delistDate: entry.delistDate ?? null,
@@ -348,6 +350,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
         exchange: row.exchange ?? identity.exchange,
         ...(row.name === null ? {} : { name: row.name }),
         listingStatus: (row.listingStatus ?? 'unknown') as ListingStatus,
+        stStatus: (row.stStatus ?? 'unknown') as StStatus,
         ...(row.industry === null ? {} : { industry: row.industry }),
         ...(row.listDate === null ? {} : { listDate: row.listDate }),
         ...(row.delistDate === null ? {} : { delistDate: row.delistDate }),
@@ -360,6 +363,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
       .select({
         stockId: stockUniverseSnapshotMembers.stockId,
         listingStatus: stockUniverseSnapshotMembers.listingStatus,
+        stStatus: stockUniverseSnapshotMembers.stStatus,
         industry: stockUniverseSnapshotMembers.industry,
         listDate: stockUniverseSnapshotMembers.listDate,
         delistDate: stockUniverseSnapshotMembers.delistDate,

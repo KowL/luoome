@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { StockUniverseSnapshotSchema } from './stock-universe.js';
+import { deriveStStatus, StockUniverseSnapshotSchema } from './stock-universe.js';
 
 describe('StockUniverseSnapshotSchema', () => {
   it('accepts a complete non-empty Shanghai/Shenzhen A-share snapshot', () => {
@@ -106,5 +106,15 @@ describe('StockUniverseSnapshotSchema', () => {
         ],
       }),
     ).toThrow();
+  });
+});
+
+describe('T22 deriveStStatus', () => {
+  it('按同步时点名称派生 ST；股改旧前缀不猜', () => {
+    expect(deriveStStatus('ST康美')).toBe('st');
+    expect(deriveStStatus('*ST海航')).toBe('st');
+    expect(deriveStStatus('贵州茅台')).toBe('non-st');
+    expect(deriveStStatus('S*ST长油')).toBe('unknown');
+    expect(deriveStStatus('SST天海')).toBe('unknown');
   });
 });
