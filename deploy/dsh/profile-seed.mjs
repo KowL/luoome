@@ -127,9 +127,26 @@ const assertPluginLayout = (installed) => {
   if (manifest.name !== PLUGIN_NAME) fail(`plugin artifact is ${String(manifest.name)}`);
   if (manifest.dsh?.client?.platform !== 'web')
     fail('plugin artifact must declare dsh.client.platform=web');
-  for (const skill of REQUIRED_SKILLS)
-    if (!existsSync(join(installed, 'skills', skill, 'SKILL.md')))
-      fail(`plugin artifact is missing skills/${skill}/SKILL.md`);
+  for (const skill of REQUIRED_SKILLS) {
+    const skillFile = join(installed, 'skills', skill, 'SKILL.md');
+    if (!existsSync(skillFile)) fail(`plugin artifact is missing skills/${skill}/SKILL.md`);
+    // 存在 ≠ 可被服务用户读：tarball 会原样保留打包机上的文件权限，0600 的 SKILL.md
+    // 装到 luoome 用户下就是 EACCES，DSH 只报 "1 entry did not activate"，profile 路由
+    // 404 —— 表现为「升级成功但页面打不开」，而本地测试用打包者身份跑，全绿。
+    // （本脚本只用 Node：判权限位，不调用任何外部命令。）
+    //
+    // 必须**直接看权限位**：本脚本由 root 执行，`accessSync(R_OK)` 对 root 恒通过，
+    // 用它判断等于没判断（实测过）。判据是「other 位可读」——服务用户不是属主、
+    // 也不在属组里，只能靠 other 位。
+    const mode = statSync(skillFile).mode & 0o777;
+    if ((mode & 0o004) !== 0o004) {
+      fail(
+        `plugin artifact has skills/${skill}/SKILL.md not readable by the service user ` +
+          `(mode ${mode.toString(8).padStart(3, '0')}, need other-read; the tarball keeps ` +
+          'the packer machine file modes). fix: chmod 644 the file before packing',
+      );
+    }
+  }
   return { version: manifest.version, skills: REQUIRED_SKILLS };
 };
 
