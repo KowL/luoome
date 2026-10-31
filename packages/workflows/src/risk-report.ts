@@ -1,4 +1,9 @@
-import { MoneySchema, PortfolioMetricReasonSchema, ReportSchema } from '@luoome/core';
+import {
+  dateInShanghai,
+  MoneySchema,
+  PortfolioMetricReasonSchema,
+  ReportSchema,
+} from '@luoome/core';
 import {
   type GetPortfolioRiskOutput,
   PORTFOLIO_RISK_SCHEMA_VERSION,
@@ -212,7 +217,9 @@ const stepFinalize: WorkflowStep = async (prev) => {
 const stepReport: WorkflowStep = async (prev, ctx) => {
   const output = prev as RiskReportOutputT;
   const now = ctx.clock();
-  const date = now.toISOString().slice(0, 10);
+  // 报告期 = Asia/Shanghai 自然日：与 daily-review 及 PRD 口径一致。
+  // 用 UTC 日会让北京时间 00:00–08:00 生成的风险报告文件名与内容日期差一天。
+  const date = dateInShanghai(now);
   const degraded = output.metrics.filter(
     (metric) => metric.status === 'unavailable' || metric.status === 'insufficient',
   );
