@@ -436,6 +436,11 @@ export const portfolioSection = async (
     }
     accountIds.push(...accounts.data.accounts.map((account) => account.id));
   }
+  // task-14：list_holdings 纯读 → 先逐账户显式刷新。
+  // 刷新失败不阻断：报告照常生成，缺价持仓由 `priceStatus` 如实披露（不再用旧价冒充现价）。
+  await Promise.all(
+    accountIds.map((accountId) => ctx.tools.refresh_holdings_quotes.execute({ accountId })),
+  );
   const results = await Promise.all(
     accountIds.map((accountId) => ctx.tools.list_holdings.execute({ accountId })),
   );

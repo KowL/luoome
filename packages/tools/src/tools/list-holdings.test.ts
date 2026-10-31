@@ -4,10 +4,23 @@ import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { listHoldingsTool } from './list-holdings.js';
+import { refreshHoldingsQuotesTool } from './refresh-holdings-quotes.js';
+
+/**
+ * task-14：`list_holdings` 已改**纯读**（只读已落库报价），所以这些用例必须**先显式刷新**
+ * 才能拿到现价——原来它们依赖 `list_holdings` 内部回源，那正是被拆掉的行为。
+ * 不刷新的场景（缺价）由 `list-holdings-pure-read.test.ts` 覆盖。
+ */
+const refreshed = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
+  const result = await refreshHoldingsQuotesTool.execute({}, ctx);
+  if (!result.ok) throw new Error('refresh failed');
+  return result.data;
+};
 
 describe('list_holdings', () => {
   it('正常路径：6 条持仓 + PnL 汇总自洽', async () => {
     const ctx = await buildTestContext();
+    await refreshed(ctx);
     const result = await listHoldingsTool.execute({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -27,12 +40,16 @@ describe('list_holdings', () => {
     expect(byd?.pnl).toBe(7300);
     expect(byd?.pnlPct).toBeCloseTo(7300 / 98500, 6);
 
-    // 今日盈亏：FakeMarketAdapter 日线最后一根（昨日）close 为昨收基准。
-    expect(byd?.previousClose).not.toBeNull();
-    const prevClose = byd?.previousClose ?? 0;
-    expect(prevClose).toBeGreaterThan(0);
-    expect(byd?.todayPnl).toBeCloseTo((105.8 - prevClose) * 1000, 4);
-    expect(byd?.todayPnlPct).toBeCloseTo((105.8 - prevClose) / prevClose, 6);
+    /**
+     * task-14 行为变更：昨收现在**只从已落库日线**取（纯读）。
+     *
+     * 这个 fixture 的日线只存在于 FakeMarketAdapter，从未落库 → 纯读拿不到昨收 → `null`。
+     * 旧实现在这里会回源 `fetchDailyBars` 拿到值——那正是被拆掉的外部 IO。
+     * 正确语义：**没有已落库的昨收就不伪造基准**，今日盈亏保持 `null`。
+     */
+    expect(byd?.previousClose).toBeNull();
+    expect(byd?.todayPnl).toBeNull();
+    expect(byd?.todayPnlPct).toBeNull();
 
     // 汇总 = 各项之和（Money 4 位小数不变量）。
     const sumValue = data.holdings.reduce((s, h) => s + (h.marketValue ?? 0), 0);

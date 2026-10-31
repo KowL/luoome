@@ -176,6 +176,8 @@ import type {
   RecordStrategyEvaluationDayOutput,
   RecordWorkflowRunInput,
   RecordWorkflowRunOutput,
+  RefreshHoldingsQuotesInput,
+  RefreshHoldingsQuotesOutput,
   RenderReportInput,
   RenderReportOutput,
   RenewStrategyScheduleClaimInput,
@@ -346,6 +348,11 @@ export interface WorkflowToolMap {
     typeof GetPortfolioRiskOutput
   >;
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
+  /** task-14：持仓行情的唯一回源入口（`list_holdings` 纯读）。 */
+  readonly refresh_holdings_quotes: ToolAccessor<
+    typeof RefreshHoldingsQuotesInput,
+    typeof RefreshHoldingsQuotesOutput
+  >;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_watchlist: ToolAccessor<typeof GetWatchlistInput, typeof GetWatchlistOutput>;
   readonly list_strategy_watchlist_subscriptions: ToolAccessor<

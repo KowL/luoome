@@ -86,7 +86,14 @@ describe('intraday-watch workflow', () => {
     expect(result.data.unavailableQuoteStocks).toBe(101);
     expect(result.data.unknownRules).toBe(202);
     expect(result.data.triggers).toEqual([]);
-    expect(batch.mock.calls.map(([stocks]) => stocks.length)).toEqual([6, 100, 1]);
+    /**
+     * task-14 行为变更：这里曾是 `[6, 100, 1]` —— 那个 `6` 是 `list_holdings` 内部
+     * `resolveQuotes` 顺带刷的**持仓**标的（本步骤只需要 avgCost，根本不用现价）。
+     * 拆分后 `list_holdings` 纯读、不再回源，于是批量取价只包含**盯盘真正需要的标的**：
+     * 101 只关注股按 100 一批 → `[100, 1]`。
+     * 这是**减少**了不必要的外部调用，不是丢了功能。
+     */
+    expect(batch.mock.calls.map(([stocks]) => stocks.length)).toEqual([100, 1]);
   });
 
   it('启用的 AlertPlan 引用停用 Watchlist 时不评估其旧成员', async () => {

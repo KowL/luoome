@@ -107,21 +107,25 @@ const withAsOf = (assessment: OutputAssessment, dataAsOf: Date | undefined): Out
 
 /** 逐工具的可用性映射表：**不在 client 里推断**，这里是唯一口径。 */
 const OUTPUT_PROBES: Readonly<Record<string, (data: unknown) => OutputAssessment>> = {
-  // 持仓缺价：`list_holdings` 会用成本价顶替现价（task-14 登记在案），
-  // 所以「有持仓但没有任何报价」必须在角标上体现为降级，否则面板上的 0% 会被当成真实盈亏。
+  // 持仓缺价：`list_holdings` 现在**纯读**（task-14 已拆分；旧形态才用成本价顶替现价），
+  // 缺价持仓由 `priceStatus: 'unpriced'` + `priceUnavailableReason` 如实披露。
+  // 所以「有持仓但没有任何库内报价」必须在角标上体现为降级——否则面板会被当成「全都正常」。
+  // 判据同时兼容两种形态：`quote === null`（旧输出）与 `priceStatus === 'unpriced'`（S3 起）。
   list_holdings: (data) => {
     const record = asRecord(data);
     const holdings = asArray(record?.holdings);
     if (holdings.length === 0) return ok;
     const unpriced = holdings.filter((item) => {
       const holding = asRecord(item);
-      return holding !== null && holding.quote === null;
+      if (holding === null) return false;
+      // 两种形态都算缺价：S3 之前的 `quote === null`，以及 S3 起的 `priceStatus: 'unpriced'`。
+      return holding.quote === null || holding.priceStatus === 'unpriced';
     });
     return unpriced.length === 0
       ? ok
       : partial(
-          `${String(unpriced.length)} 只持仓没有可用报价（现价回退为成本价）`,
-          '先运行 batch_quote 刷新报价后重试',
+          `${String(unpriced.length)} 只持仓没有库内报价（缺价的合计字段缺席，不按 0 计）`,
+          '先运行 refresh_holdings_quotes 刷新报价后重试',
         );
   },
   list_account_performance_snapshots: (data) => {

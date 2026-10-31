@@ -104,6 +104,8 @@ describe('market external allowlist reconciliation', () => {
       expect(privateResearch.has(name), `${name} must not be private research`).toBe(false);
     }
     expect([...DEFAULT_MARKET_TOOL_ALLOWLIST]).toEqual([
+      // task-14：持仓行情的唯一回源入口（list_holdings 已改纯读）。
+      'refresh_holdings_quotes',
       'fetch_index_quotes',
       'get_ashare_sentiment',
       'fetch_quote',

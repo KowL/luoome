@@ -110,6 +110,7 @@ import { pruneStrategyRunsTool } from './tools/prune-strategy-runs.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
 import { refreshDecisionReviewReportTool } from './tools/refresh-decision-review-report.js';
+import { refreshHoldingsQuotesTool } from './tools/refresh-holdings-quotes.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
   evaluateResearchEmbeddingsTool,
@@ -382,6 +383,7 @@ export const toolRegistry: Registry = createRegistry([
   getAccountFactsTool,
   reconcileAccountCashTool,
   listHoldingsTool,
+  refreshHoldingsQuotesTool,
   listTradesTool,
   getHoldingTool,
   getAdviceTool,

@@ -186,7 +186,7 @@ describe('S1 角标语义：两层输入 + 聚合时点取最旧', () => {
     expect(health.issues.map((issue) => issue.reason)).toContain('missing-data-as-of');
   });
 
-  it('持仓缺价 → partial 且点名「先跑 batch_quote」', () => {
+  it('持仓缺价 → partial 且点名「先跑 refresh_holdings_quotes」', () => {
     const health = assessPanelHealth([
       {
         name: 'list_holdings',
@@ -195,8 +195,29 @@ describe('S1 角标语义：两层输入 + 聚合时点取最旧', () => {
       },
     ]);
     expect(health.status).toBe('partial');
-    expect(health.issues[0]?.detail).toContain('没有可用报价');
-    expect(health.issues[0]?.remedy).toContain('batch_quote');
+    expect(health.issues[0]?.detail).toContain('没有库内报价');
+    // task-14：`list_holdings` 已纯读，刷新的正解是 refresh_holdings_quotes（batch_quote 不在 read 面）。
+    expect(health.issues[0]?.remedy).toContain('refresh_holdings_quotes');
+  });
+
+  it('S3 起的新形态（priceStatus=unpriced，无 quote 键）同样判缺价', () => {
+    const health = assessPanelHealth([
+      {
+        name: 'list_holdings',
+        ok: true,
+        data: {
+          holdings: [
+            {
+              holding: { stockId: '600519.SH' },
+              priceStatus: 'unpriced',
+              priceUnavailableReason: '缺价：该标的没有可用行情',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(health.status).toBe('partial');
+    expect(health.issues[0]?.detail).toContain('没有库内报价');
   });
 
   it('输出形状异常不会让角标崩：降级并点名「无法判定」', () => {

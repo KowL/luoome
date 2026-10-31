@@ -585,6 +585,10 @@ const adviceExpirySection = async (
       result.error.kind,
     );
   }
+  // task-14：list_holdings 纯读 → 显式刷新。收盘复盘要当日收盘估值，刷新失败仍照常出报告，
+  // 缺价持仓由 `priceStatus` 如实披露（旧实现在这里会静默回退上次写库的价）。
+  if (scope.kind === 'account')
+    await ctx.tools.refresh_holdings_quotes.execute({ accountId: scope.accountId });
   const holdings =
     scope.kind === 'account'
       ? await ctx.tools.list_holdings.execute({ accountId: scope.accountId, status: 'all' })

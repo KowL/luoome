@@ -499,7 +499,9 @@ const stepLoadPlans: WorkflowStep = async (prev, ctx) => {
 
 const stepResolveMembers: WorkflowStep = async (prev, ctx) => {
   const state = prev as LoadedState;
-  // 全活跃持仓只查一次，供所有池共享 avgCost（避免逐池重复 list_holdings）
+  // 全活跃持仓只查一次，供所有池共享 avgCost（避免逐池重复 list_holdings）。
+  // task-14：这里**只读 avgCost**，不需要现价 → 刻意**不调用** refresh_holdings_quotes。
+  // 盯盘每轮都回源会让外部行情源承受不必要的压力，而本步骤用不到现价。
   const holdings = await ctx.tools.list_holdings.execute({ status: 'active' });
   const avgCostByStock = new Map<string, Money>();
   if (holdings.ok) {

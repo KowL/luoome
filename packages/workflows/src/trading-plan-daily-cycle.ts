@@ -712,6 +712,9 @@ const run = async (
   }
   const errors: Array<z.infer<typeof PlanErrorSchema>> = [];
   // 当前持仓就是权威仓位来源（账本持仓），不再经由账户快照。
+  // task-14：list_holdings 纯读，先显式刷新。刷新失败**不阻断**计划生成——
+  // 计划用库内已有报价，缺价的持仓在 `priceStatus` 上如实标 unpriced。
+  await ctx.tools.refresh_holdings_quotes.execute({ accountId });
   const holdingsResult = await ctx.tools.list_holdings.execute({ accountId, status: 'active' });
   if (!holdingsResult.ok) {
     errors.push({ stockId: accountId, stage: 'holding', reason: errorText(holdingsResult.error) });

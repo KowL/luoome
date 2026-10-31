@@ -112,6 +112,7 @@ export * from './tools/record-decision-trade.js';
 export * from './tools/record-watch-run.js';
 export * from './tools/record-workflow-run.js';
 export * from './tools/refresh-decision-review-report.js';
+export * from './tools/refresh-holdings-quotes.js';
 export * from './tools/render-report.js';
 export * from './tools/research-embedding.js';
 export * from './tools/research-hypothesis.js';

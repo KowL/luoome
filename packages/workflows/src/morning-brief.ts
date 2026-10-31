@@ -80,6 +80,12 @@ const buildSections = async (
   pieces: { section: ReportSection; evidence: ReportEvidence[] }[];
 }> => {
   const accountId = ctx.user.defaultAccountId;
+  /**
+   * task-14：`list_holdings` 已改纯读。盘前简报需要「当日/最近」的持仓估值，所以**先显式刷新**。
+   * 刷新失败**不阻断报告**：报告会照常生成，缺价的持仓按 `priceStatus: 'unpriced'` 如实披露
+   * （而不是像旧实现那样静默用上次写库的旧价冒充现价）。
+   */
+  await ctx.tools.refresh_holdings_quotes.execute({ accountId });
   const [account, holdings, facts, indexes, events, plans, advices] = await Promise.all([
     ctx.tools.get_account.execute({ accountId }),
     ctx.tools.list_holdings.execute({ accountId }),

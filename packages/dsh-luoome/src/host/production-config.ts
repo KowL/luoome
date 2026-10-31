@@ -123,6 +123,9 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
  * `list_account_performance_snapshots`（已在 read allowlist），本工具负责显式刷新。
  */
 export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
+  // task-14：持仓行情的**唯一回源入口**（访问外部源 + 写 price_snapshots）。
+  // `list_holdings` 已改成纯读（只读已落库报价），刷新必须显式调用本工具。
+  'refresh_holdings_quotes',
   'fetch_index_quotes',
   'get_ashare_sentiment',
   'fetch_quote',

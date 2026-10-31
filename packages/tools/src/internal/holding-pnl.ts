@@ -17,6 +17,16 @@ import { z } from 'zod';
 export const HOLDING_PRICE_UNAVAILABLE = '缺价：该标的没有可用行情，成本价不代表现价';
 
 /**
+ * 库内**有过报价但已过期**（task-14 拆分后新增的第二种缺价原因）。
+ *
+ * 为什么值得区分：`price_snapshots` 能回答「这条标的历史上有没有被写过」——
+ * `latestByStocks` 返回了行就是「有过」，返回空就是「从未有过」。两种情形的**补法不同**：
+ * 前者是「刷新一下就好」，后者是「这个标的根本没接进行情源」。
+ * 统一说「缺价」会把用户导向错误的动作（moka 反复刷新一个永远刷不出来的标的）。
+ */
+export const HOLDING_PRICE_STALE = '缺价：库内报价已过期（最近一次报价不在当日），成本价不代表现价';
+
+/**
  * 用现价丰富单条持仓。
  *
  * **行情缺失时不降级用成本价**（REQ-M3-09 / D2）：成本价顶替会产出伪造的 0% 盈亏，
@@ -28,6 +38,8 @@ export const enrichHolding = (
   quote: Quote | undefined,
   stockName: string,
   previousClose: Money | null = null,
+  /** 缺价时的具体原因；缺省为「没有可用行情」。调用方按库内事实选更准的那句。 */
+  unavailableReason: string = HOLDING_PRICE_UNAVAILABLE,
 ): HoldingPnl => {
   const cost = money(holding.avgCost * holding.quantity);
   if (quote === undefined) {
@@ -35,7 +47,7 @@ export const enrichHolding = (
       holding,
       stockName,
       priceStatus: 'unpriced',
-      priceUnavailableReason: HOLDING_PRICE_UNAVAILABLE,
+      priceUnavailableReason: unavailableReason,
       quote: null,
       previousClose,
       cost,

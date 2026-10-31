@@ -8,9 +8,13 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
-import { enrichHolding, HoldingPnlSchema, summarizePnl } from '../internal/holding-pnl.js';
+import {
+  enrichHolding,
+  HOLDING_PRICE_STALE,
+  HoldingPnlSchema,
+  summarizePnl,
+} from '../internal/holding-pnl.js';
 import { derivePreviousClose, normalizeDailyBars } from '../internal/market-view.js';
-import { resolveQuotes } from '../internal/resolve-quotes.js';
 
 const HoldingStatusSchema = z.enum(['active', 'closed', 'all']);
 
@@ -69,22 +73,28 @@ export const listHoldingsTool = defineTool({
     });
 
     const stockIds = holdings.map((h) => h.stockId);
-    // 统一行情获取：实时优先，实时缺席回退本地最近快照（resolveQuotes 内部落库）。
-    const resolvedQuotes = await resolveQuotes(ctx, stockIds, { context: 'display' });
-    const quotes = new Map(
-      resolvedQuotes.flatMap((item) =>
-        item.status === 'ok' ? [[item.stockId, item.quote] as const] : [],
-      ),
-    );
+    /**
+     * **纯读（task-14）**：只读已落库报价，不回源、不写库。
+     *
+     * 这里曾是 `resolveQuotes(...)`——它会访问外部行情源并 `quote.save` 落库，
+     * 而工具声明是 `sideEffect: 'read'`。名实不符等于给模型一个**错误的安全担保**
+     * （模型据此认为「调用它没有副作用」）。拆分后：本工具只读，刷新走
+     * `refresh_holdings_quotes`（external），由明确意图触发。
+     */
+    const quotes = await ctx.repos.quote.latestByStocks(stockIds);
     const previousCloses = await resolvePreviousCloses(ctx, stockIds);
     const items = await Promise.all(
       holdings.map(async (holding) => {
         const stock = await ctx.repos.stock.findById(holding.stockId);
+        const stored = quotes.get(holding.stockId);
         return enrichHolding(
           holding,
-          quotes.get(holding.stockId),
+          stored,
           stock?.name ?? holding.stockId,
           previousCloses.get(holding.stockId) ?? null,
+          // 缺价原因按库内事实区分：库里有行但不在当日 = 过期；一行都没有 = 从未有过。
+          // （`latestByStocks` 返回的是**最新一行**，所以「有行」⇔「历史上有过报价」。）
+          HOLDING_PRICE_STALE,
         );
       }),
     );
@@ -99,7 +109,7 @@ export const listHoldingsTool = defineTool({
   },
 });
 
-/** 逐股取昨收：实时日线优先，失败回退本地缓存；都取不到为 null（今日盈亏留空）。 */
+/** 逐股取昨收：**只读已落库日线**；取不到为 null（今日盈亏留空，不伪造基准）。 */
 const resolvePreviousCloses = async (
   ctx: ToolContext,
   stockIds: readonly string[],
@@ -109,22 +119,7 @@ const resolvePreviousCloses = async (
   const uniqueIds = [...new Set(stockIds)];
   const entries = await Promise.all(
     uniqueIds.map(async (stockId): Promise<readonly [string, Money | null]> => {
-      try {
-        const bars = await ctx.adapters.market.fetchDailyBars(stockId, {
-          start,
-          end: todayStart,
-        });
-        const close = derivePreviousClose(
-          normalizeDailyBars(bars, start, todayStart).bars,
-          todayStart,
-        );
-        if (close !== null) return [stockId, close];
-      } catch (error) {
-        ctx.logger.warn('list_holdings live daily bars unavailable, using stored bars', {
-          stockId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      // 纯读：只读已落库日线，不回源（原实现在这里 `ctx.adapters.market.fetchDailyBars`）。
       const cached = await ctx.repos.dailyBar.findInRange(stockId, start, todayStart);
       return [
         stockId,
