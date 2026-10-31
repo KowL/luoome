@@ -605,9 +605,8 @@ export const buildAdviceAttribution = (
   const inWindow = input.advices.filter((advice) => advice.createdAt.getTime() <= to.getTime());
   const afterWindow = input.advices.length - inWindow.length;
   // 不可映射的 subjectKind（market/sector/portfolio）：不存在「成交」概念，不是三态之一。
-  const attributable = inWindow.filter(
-    (advice) => advice.subjectKind === 'stock' || advice.subjectKind === 'position',
-  );
+  // 判据只有一份：`isAttributableSubjectKind`（decision-loop 的披露计数也用它）。
+  const attributable = inWindow.filter((advice) => isAttributableSubjectKind(advice.subjectKind));
   const unattributableSubjectKind = inWindow.length - attributable.length;
   const missingAdvice = 0;
 
@@ -972,9 +971,22 @@ export const buildAdviceAttribution = (
   };
 };
 
-/** 复用口径：不可映射 subjectKind 的计数（供工具层披露）。 */
+/**
+ * **「哪些建议能产生贡献度」的唯一判据**（task-29 收口）。
+ *
+ * 归因工具的核心链路是「单条建议 → **单标的** → 成交 → 贡献度」。`portfolio` / `market` /
+ * `sector` 主体没有单一标的，所以**回答不了「该建议贡献了多少」**——不是三态之一，也不是缺数据。
+ *
+ * ⚠️ **这不等于「属不属于复盘范围」**。`get_decision_loop_review` 的 `adviceBelongsToScope`
+ * 判的是 scope（portfolio 主体的 `subjectId` 就是 accountId，天然属于该账户的复盘范围）。
+ * **两件事，别混。** 谁把本判据当成 scope 判据去删分支，就是让 portfolio 主体的建议
+ * 从复盘范围里消失——那是功能退化，不是口径统一。
+ */
 export const ATTRIBUTABLE_SUBJECT_KINDS = ['stock', 'position'] as const;
 export type AttributableSubjectKind = (typeof ATTRIBUTABLE_SUBJECT_KINDS)[number];
+
+export const isAttributableSubjectKind = (subjectKind: string): boolean =>
+  (ATTRIBUTABLE_SUBJECT_KINDS as readonly string[]).includes(subjectKind);
 
 export type { Holding, PortfolioCashFlow };
 export { PortfolioMetricReasonSchema };

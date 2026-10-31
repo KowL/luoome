@@ -391,3 +391,93 @@ describe('task-16 双链并认的对拍', () => {
     expect(review.data.trades.unattributed).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// task-29：scope ≠ attributability（portfolio 主体在范围内，但不参与贡献度归因）
+// ---------------------------------------------------------------------------
+
+describe('task-29 scope ≠ attributability', () => {
+  const seedPortfolioAdvice = async (
+    ctx: Awaited<ReturnType<typeof buildTestContext>>,
+    id: string,
+  ) => {
+    const template = (await ctx.repos.advice.query({ includeExpired: true }))[0];
+    if (!template) throw new Error('missing advice fixture');
+    await ctx.repos.advice.save({
+      ...template,
+      id,
+      // portfolio 主体的 subjectId 就是 accountId：它**天然属于**该账户的复盘范围。
+      subjectKind: 'portfolio',
+      subjectId: TEST_ACCOUNT.id,
+      createdAt: NOW,
+    });
+  };
+
+  it('portfolio 主体的建议仍在 decision-loop 的复盘范围内（scope 分支不许删）', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedPortfolioAdvice(ctx, 'advice-portfolio-scope');
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    if (!review.ok) throw new Error('review failed');
+    // 在范围内 → 它的回填/研究计数能看到它（这里用 advice 总数为锚）。
+    expect(review.data.advice.total).toBeGreaterThan(0);
+    // 但它不参与贡献度归因 → 披露计数如实为 1。
+    expect(review.data.trades.unattributableAdvice).toBe(1);
+  });
+
+  it('unattributableAdvice 恒给数字：没有 portfolio 建议时是 0，不是缺席', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    if (!review.ok) throw new Error('review failed');
+    expect(review.data.trades.unattributableAdvice).toBe(0);
+    // 字段一定存在（不是 undefined）。
+    expect('unattributableAdvice' in review.data.trades).toBe(true);
+  });
+
+  it('既有 attributionCounts 语义不变：一条建议关联两笔成交仍计 2（成交笔数）', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const template = (await ctx.repos.advice.query({ includeExpired: true }))[0];
+    if (!template) throw new Error('missing advice fixture');
+    await ctx.repos.advice.save({
+      ...template,
+      id: 'advice-two-trades',
+      subjectKind: 'stock',
+      subjectId: '002594.SZ',
+      createdAt: NOW,
+    });
+    const base = TEST_TRADES[0] as Trade;
+    for (const suffix of ['x', 'y'])
+      await ctx.repos.trade.save({
+        ...base,
+        id: `trade-two-${suffix}`,
+        accountId: TEST_ACCOUNT.id,
+        adviceId: 'advice-two-trades',
+        executedAt: NOW,
+      });
+    await recordAdviceOutcomeTool.execute(
+      { adviceId: 'advice-two-trades', accountId: TEST_ACCOUNT.id, outcome: 'ignored' },
+      { ...ctx, adviceOutcomeOrigin: 'user' },
+    );
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    if (!review.ok) throw new Error('review failed');
+    // 两条成交 → attributionCounts.advice = 2（**成交笔数**，不是建议数）。
+    expect(review.data.trades.attributionCounts.advice).toBe(2);
+    // 而归因工具那边是 1 条建议行 —— 两个数不同是**正确**的，不可对拍。
+    const attribution = await getAdviceAttributionTool.execute(
+      { accountId: TEST_ACCOUNT.id, adviceId: 'advice-two-trades' },
+      ctx,
+    );
+    if (!attribution.ok) throw new Error('attribution failed');
+    expect(attribution.data.totals.traded).toBe(1);
+    // 一条 stock 建议不产生额外的不归因披露。
+    expect(review.data.trades.unattributableAdvice).toBe(0);
+  });
+});

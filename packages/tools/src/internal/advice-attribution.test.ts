@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import {
   type Advice,
@@ -23,6 +23,7 @@ import {
   buildAdviceAttribution,
   ContributionSchema,
   GetAdviceAttributionOutput,
+  isAttributableSubjectKind,
 } from './advice-attribution.js';
 
 const NOW = new Date('2026-10-31T06:00:00.000Z');
@@ -997,5 +998,55 @@ describe('口径与形状', () => {
     });
     expect(output.rows).toEqual([]);
     expect(output.excludedSubjects.afterWindow).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task-29：可归因 subjectKind 的判据只有一份
+// ---------------------------------------------------------------------------
+
+const sourceFiles = (): string[] => {
+  const root = resolve(import.meta.dirname, '../..');
+  const skip = new Set(['node_modules', 'dist', 'build', '.git', 'coverage']);
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir)) {
+      if (skip.has(entry)) continue;
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full, out);
+      else if (full.endsWith('.ts') && !full.endsWith('.test.ts')) out.push(full);
+    }
+    return out;
+  };
+  return walk(resolve(root, 'src'));
+};
+
+describe('task-29 可归因判据单一化', () => {
+  it('isAttributableSubjectKind 只认 stock / position', () => {
+    expect(isAttributableSubjectKind('stock')).toBe(true);
+    expect(isAttributableSubjectKind('position')).toBe(true);
+    // portfolio 主体没有单一标的 → 回答不了「该建议贡献了多少」。
+    expect(isAttributableSubjectKind('portfolio')).toBe(false);
+    expect(isAttributableSubjectKind('market')).toBe(false);
+    expect(isAttributableSubjectKind('sector')).toBe(false);
+  });
+
+  it('全仓没有第二份 `subjectKind === "stock" || …` 硬编码判据', () => {
+    const offenders = sourceFiles().filter((file) => {
+      const code = readFileSync(file, 'utf8');
+      // 只查**非测试**源码；判据本身定义处（ATTRIBUTABLE_SUBJECT_KINDS）不算。
+      return /subjectKind === 'stock'\s*\|\|/.test(code);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it('两个消费者都 import 同一判据函数', () => {
+    const root = resolve(import.meta.dirname, '../..');
+    for (const relative of [
+      'src/internal/advice-attribution.ts',
+      'src/tools/get-decision-loop-review.ts',
+    ]) {
+      const code = readFileSync(resolve(root, relative), 'utf8');
+      expect(code).toContain('isAttributableSubjectKind');
+    }
   });
 });

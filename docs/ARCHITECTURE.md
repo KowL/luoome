@@ -1317,7 +1317,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 > 发现新的「同一语义两实现」时：先判断属于本节哪一类，不属于才动代码。
 > 排查清单见 `output/dsh-brainstorm/review/t25-same-semantics-two-impls.md`。
 
-#### 11.1.1 有意不同（8 项）
+#### 11.1.1 有意不同（9 项）
 
 | # | 两个实现 | 为什么有意不同 | 适用范围 |
 |---|---|---|---|
@@ -1330,6 +1330,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
 | 7 | **建议五段 vs 报告六槽 vs 通知摘要**：`ADVICE_SEGMENTS`（5 段） / `REPORT_ENVELOPE_SLOTS`（6 槽）/ `report-notification.ts` 的 `notificationSections` 白名单 | **三者不是同一集合**，所以不是「抽一个常量三处引用」。① 六槽 = 五段 + `dataAsOf`（报告作为交付物多一个观测时点，代码里 `[...ADVICE_SEGMENTS, 'dataAsOf']`）；② 通知摘要选的是 **`Report.sections[].key`**（`market-pulse` / `strategy-actions` / …），与建议五段**完全不重叠**——把它并进五段是「把两套语义硬焊」 | 段名同源（通知兜底文案由 `ADVICE_SEGMENTS` + `segmentLabel()` 生成），**措辞可各自不同**。谁要新增「建议段」，改 `ADVICE_SEGMENTS` 一处；谁要新增「报告段」，改 `ReportSection.key` 与通知白名单两处 |
 | 8 | **结果级可用性 vs 值级存在性**：`available/partial/insufficient/unavailable`（单项指标 / 面板 / 报告） vs `RuleInputFact.status = available\|missing`（`packages/core/src/entity/strategy.ts:526`） | `missing` 回答「**这条输入**有没有」，不是「**这份结果**能不能用」。粒度不同（值级 vs 结果级）、可缺性不同（值级没有 `partial`）、落盘与否不同（`missing` 进 `strategy_results.rule_evaluations_json`） | 新增「结果」用结果级词汇；新增「单条输入」用值级词汇。**不许把 `missing` 映射成 `unavailable`**——见下方反证 |
+| 9 | **scope vs attributability**：`get_decision_loop_review` 的 `adviceBelongsToScope`（`packages/tools/src/tools/get-decision-loop-review.ts:179-183`：portfolio 主体的 `subjectId === accountId`，**天然在复盘范围内**） vs `get_advice_attribution` 的 `isAttributableSubjectKind`（`packages/tools/src/internal/advice-attribution.ts`：只认 `stock`/`position`，**能否算贡献度**） | **两个不同的问题**：前者问「这条建议属不属于本次复盘范围」，后者问「这条建议能不能产生贡献度」。`portfolio` 主体没有单一标的，回答不了「该建议贡献了多少」——但**它仍然属于该账户的复盘范围**。把后者当 scope 判据去删分支，等于让 portfolio 主体的建议从复盘范围里消失，是**功能退化**而不是口径统一 | **两工具的计数单位不同，不可对拍**：decision-loop 的 `attributionCounts.advice` 是**成交笔数**（`trades.filter(...)`），attribution 的 `totals.traded` 是**建议行数**。一条建议关联 5 笔成交 → 前者 +5、后者 +1。**这两个数不该相等**。要披露「有建议算不了贡献度」，用 `unattributableAdvice`（建议计数），不要动 `attributionCounts` |
 
 **第 2 项的细则（REQ 共享维度，写成可执行规则）**
 
@@ -1377,6 +1378,14 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 > 全仓可用性类 `z.enum` 有一百多处（严格判据下，`core/entity` + `tools/src` 两个根内就有 7 处
 > 需要标注）。把其中 3 个统一成「一个枚举」，会让**剩下那些没被统一的地方被误认为已统一**。
 > **做一个看起来像收了口的事，比不做更坏——因为它会让人停止检查。**
+
+
+**第 9 项的数据依据（为什么这个口径今天只留痕、不改行为）**
+
+> 本机库 `advices.subject_kind` 分布：`stock` **705** 条，`portfolio` / `position` / `market` /
+> `sector` 均 **0** 条。**单机库样本，不可外推**；但它足以说明「今天没有真实场景驱动把
+> portfolio 主体挪进/挪出归因」。所以本项只做三件事：判据单一化、新增 `unattributableAdvice`
+> 披露计数、写下这条留痕——**不改任何现有数字**。
 
 
 #### 11.1.2 「缺数据」的表达优先级：`缺席 > null > 0`（**可引用规则**）

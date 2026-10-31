@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
 import { accountAdviceOutcomes } from '../internal/account-advice-outcomes.js';
+import { isAttributableSubjectKind } from '../internal/advice-attribution.js';
 import {
   AdviceOutcomeScopeSchema,
   partitionAdviceOutcomes,
@@ -67,6 +68,14 @@ const TradeAttributionSchema = z.object({
   }),
   /** 没有任何一类显式依据的交易；缺一类依据但有其它依据不计入此数。 */
   unattributed: z.number().int().nonnegative(),
+  /**
+   * 本次复盘范围内**不参与贡献度归因**的建议数（`portfolio` / `market` / `sector` 主体）。
+   *
+   * **它不是「未归因」**：`unattributed` 数的是**成交**，这里数的是**建议**。
+   * 披露它是为了「不许静默丢弃」——用户要知道有几条建议「有建议但算不了贡献度」。
+   * 判据与 `get_advice_attribution` 共用 `isAttributableSubjectKind`。
+   */
+  unattributableAdvice: z.number().int().nonnegative(),
 });
 
 const SignalStatsSchema = z.object({
@@ -337,6 +346,16 @@ export const getDecisionLoopReviewTool = defineTool({
       ).length,
       strategyVersion: trades.filter((trade) => trade.strategyVersionId !== undefined).length,
     };
+    /**
+     * 不参与贡献度归因的建议数（**建议**计数，不是成交计数）。
+     *
+     * 零值语义：**恒给 0，不缺席**。理由——`unattributableAdvice` 回答的是「有没有被丢掉的建议」，
+     * 0 就是「一条都没丢」，是一个**确定的结论**；缺席会被读成「不知道」，反而制造疑虑。
+     * （对照：`dataAsOf` 那种「没有事实就不该编一个时间」的字段才用缺席。）
+     */
+    const unattributableAdvice = advices.filter(
+      (advice) => !isAttributableSubjectKind(advice.subjectKind),
+    ).length;
     // `unattributed` 必须与 `attributionCounts.advice` 用**同一个**链接集合（双链并认后），
     // 否则会出现「计为已归因、同时又算未归因」的自相矛盾。
     const unattributed = trades.filter(
@@ -471,6 +490,7 @@ export const getDecisionLoopReviewTool = defineTool({
         total: trades.length,
         attributionCounts,
         unattributed,
+        unattributableAdvice,
       },
       signalObservations: signalReview,
       researchHypothesisVersions,
