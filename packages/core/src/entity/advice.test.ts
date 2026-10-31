@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ADVICE_OUTCOME_ANSWER_LABELS,
+  ADVICE_OUTCOME_ANSWERS,
+  AdviceOutcomeOriginSchema,
   AdviceOutcomeSchema,
   AdviceQuerySchema,
   AdviceSchema,
@@ -344,5 +347,34 @@ describe('T29 Advice 目标仓位区间', () => {
       createdAt: new Date(NOW_ISO),
     });
     expect(adviceNotificationSummary(advice)).toContain('目标仓位 8.0–12.0%');
+  });
+});
+
+describe('REQ-M3-18 回填来源与四选项', () => {
+  it('回填选项恰好四项且含「不知道」：缺了它就是在逼用户猜', () => {
+    expect(ADVICE_OUTCOME_ANSWERS).toEqual([
+      'followed',
+      'partially_followed',
+      'ignored',
+      'unknown',
+    ]);
+    expect(ADVICE_OUTCOME_ANSWERS).toContain('unknown');
+    expect(ADVICE_OUTCOME_ANSWER_LABELS.unknown).toBe('不知道');
+    expect(Object.keys(ADVICE_OUTCOME_ANSWER_LABELS)).toHaveLength(4);
+  });
+
+  it('来源只有 user / model / import 三种，不接受任意字符串', () => {
+    expect(AdviceOutcomeOriginSchema.options).toEqual(['user', 'model', 'import']);
+    expect(AdviceOutcomeOriginSchema.safeParse('ai').success).toBe(false);
+    expect(AdviceOutcomeOriginSchema.safeParse('user').success).toBe(true);
+  });
+
+  it('存量 outcome 没有来源时仍可读，不伪造 user', () => {
+    const parsed = AdviceOutcomeSchema.parse({
+      adviceId: 'a1',
+      outcome: 'followed',
+      recordedAt: NOW_ISO,
+    });
+    expect(parsed.origin).toBeUndefined();
   });
 });

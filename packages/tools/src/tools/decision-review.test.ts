@@ -22,6 +22,11 @@ describe('decision review tools', () => {
       triggerFeedback: null,
       note: 'original note',
     };
+    // 写入层按通道盖章（本上下文不是用户亲自操作 → model），与调用方传的字段无关。
+    const stored = {
+      ...content,
+      adviceFeedback: { ...content.adviceFeedback, origin: 'model' as const },
+    };
     const save = (
       expectedRevision: number,
       patch: unknown,
@@ -45,18 +50,18 @@ describe('decision review tools', () => {
     const edited = await save(1, { tradeIds: [], note: 'updated note' }, undefined, editId);
     expect(edited.ok, JSON.stringify(edited)).toBe(true);
     if (!edited.ok) return;
-    expect(edited.data.result.revision.content).toEqual({ ...content, note: 'updated note' });
+    expect(edited.data.result.revision.content).toEqual({ ...stored, note: 'updated note' });
     const clearedNote = await save(2, { note: null });
     expect(clearedNote.ok, JSON.stringify(clearedNote)).toBe(true);
     if (!clearedNote.ok) return;
-    expect(clearedNote.data.result.revision.content).toEqual({ ...content, note: null });
+    expect(clearedNote.data.result.revision.content).toEqual({ ...stored, note: null });
     const noReason = await save(3, { adviceFeedback: null });
     expect(noReason.ok).toBe(false);
     const clearedFeedback = await save(3, { adviceFeedback: null }, '用户明确要求清除反馈');
     expect(clearedFeedback.ok, JSON.stringify(clearedFeedback)).toBe(true);
     if (!clearedFeedback.ok) return;
     expect(clearedFeedback.data.result.revision.content).toEqual({
-      ...content,
+      ...stored,
       adviceFeedback: null,
       note: null,
     });
@@ -102,7 +107,10 @@ describe('decision review tools', () => {
     );
     expect(edited.ok, JSON.stringify(edited)).toBe(true);
     if (!edited.ok) return;
-    expect(edited.data.result.revision.content.adviceFeedback).toEqual({ outcome: 'ignored' });
+    expect(edited.data.result.revision.content.adviceFeedback).toEqual({
+      outcome: 'ignored',
+      origin: 'model',
+    });
   });
   it('在仓储筛选最新候选成交，并保留窗口外已关联成交', async () => {
     const ctx = await buildTestContext();
@@ -270,5 +278,36 @@ describe('decision review tools', () => {
     expect(linked.ok && linked.data.observations.map((item) => item.id)).toEqual([
       'explicit-observation',
     ]);
+  });
+
+  it('save_decision_review 也是写入口：调用方自报 origin=user 会被通道值覆盖', async () => {
+    const ctx = await buildTestContext();
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || preview.data.context === null) throw new Error('missing review context');
+    const saved = await saveDecisionReviewTool.execute(
+      {
+        requestId: crypto.randomUUID(),
+        subject,
+        contextHash: preview.data.context.contextHash,
+        expectedRevision: 0,
+        content: {
+          tradeIds: [],
+          adviceFeedback: { outcome: 'followed', origin: 'user', pnl: 100 } as never,
+          triggerFeedback: null,
+          note: null,
+        },
+      },
+      ctx,
+    );
+    expect(saved.ok, JSON.stringify(saved)).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.data.result.revision.content.adviceFeedback).toEqual({
+      outcome: 'followed',
+      origin: 'model',
+      pnl: 100,
+    });
   });
 });

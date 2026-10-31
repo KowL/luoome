@@ -525,4 +525,216 @@ describe('portfolio performance tools', () => {
       inputFingerprint: expect.any(String),
     });
   });
+
+  it('样本不足只报 insufficient 与覆盖事实，快照摘要不给百分比', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const input = {
+      accountId,
+      from: new Date('2026-07-01T00:00:00.000Z'),
+      to: new Date('2026-07-03T00:00:00.000Z'),
+    };
+    const performance = await getAccountPerformanceTool.execute(input, ctx);
+    expect(performance.ok).toBe(true);
+    if (!performance.ok) return;
+    // 3 个交易日 = 噪声：状态是 insufficient，三个百分比字段全部缺席。
+    expect(performance.data.metrics).toEqual({
+      twr: { status: 'insufficient', reason: 'sample-too-small' },
+      benchmarkTwr: { status: 'unavailable', reason: 'benchmark-not-configured' },
+      excessTwr: { status: 'unavailable', reason: 'benchmark-unavailable' },
+    });
+    expect(performance.data.twrPct).toBeUndefined();
+    expect(performance.data.benchmarkTwrPct).toBeUndefined();
+    expect(performance.data.excessTwrPct).toBeUndefined();
+    expect(performance.data.coverage).toEqual({
+      status: 'complete',
+      expectedTradingDays: 3,
+      completeTradingDays: 3,
+      missingDates: [],
+      sampleDays: 3,
+      requiredSampleDays: 20,
+    });
+    expect(performance.data.warnings).toContain('TWR 样本不足：完整估值日 3 < 20，未给出百分比');
+
+    const summary = await listPortfolioPerformanceSnapshotsTool.execute(
+      { accountId, limit: 10 },
+      ctx,
+    );
+    expect(summary.ok).toBe(true);
+    if (!summary.ok) return;
+    const snapshot = summary.data.snapshots[0];
+    expect(snapshot?.metrics?.twr).toEqual({ status: 'insufficient', reason: 'sample-too-small' });
+    expect(snapshot?.twrPct).toBeUndefined();
+    expect(snapshot?.benchmarkTwrPct).toBeUndefined();
+    expect(snapshot?.excessTwrPct).toBeUndefined();
+    expect(snapshot?.coverage?.requiredSampleDays).toBe(20);
+    expect(snapshot?.attribution.length).toBeGreaterThan(0);
+    for (const row of snapshot?.attribution ?? []) expect(row.factIds.length).toBeGreaterThan(0);
+  });
+
+  it('存量快照没有覆盖/样本字段与 fact id 时如实报「无法判定」，不补默认值', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const performance = await getAccountPerformanceTool.execute(
+      {
+        accountId,
+        from: new Date('2026-07-01T00:00:00.000Z'),
+        to: new Date('2026-07-03T00:00:00.000Z'),
+      },
+      ctx,
+    );
+    expect(performance.ok).toBe(true);
+    if (!performance.ok) return;
+    const current = await ctx.repos.portfolioPerformanceSnapshot.findById(
+      performance.data.audit?.snapshotId ?? '',
+    );
+    expect(current).not.toBeNull();
+    if (current === null) return;
+    // 模拟 REQ-M3-07 之前的存量快照：没有 coverage / metrics，归因也没有 fact id。
+    await ctx.repos.portfolioPerformanceSnapshot.save({
+      ...current,
+      id: 'performance-legacy-snapshot',
+      inputFingerprint: 'legacy-fingerprint',
+      performance: {
+        ...current.performance,
+        coverage: undefined,
+        metrics: undefined,
+        twrPct: 1.23,
+        contributions: current.performance.contributions.map((item) => ({
+          ...item,
+          factIds: undefined,
+        })),
+      },
+    });
+    const summary = await listPortfolioPerformanceSnapshotsTool.execute(
+      { accountId, limit: 10 },
+      ctx,
+    );
+    expect(summary.ok).toBe(true);
+    if (!summary.ok) return;
+    const legacy = summary.data.snapshots.find((item) => item.id === 'performance-legacy-snapshot');
+    expect(legacy).toBeDefined();
+    if (legacy === undefined) return;
+    // 不补默认 complete / 0：字段缺席就是缺席，并把「无法判定」写进 warnings。
+    expect(legacy.coverage).toBeUndefined();
+    expect(legacy.metrics).toBeUndefined();
+    expect(legacy.warnings).toContain('快照早于覆盖/样本字段，无法判定 TWR 样本是否充足');
+    expect(legacy.warnings).toContain('部分归因缺少 fact id，无法追溯到账本事实');
+    expect(legacy.attribution.every((row) => row.factIds.length === 0)).toBe(true);
+    // 口径未知的百分比一律不转述（快照里存的 1.23 不出现）。
+    expect(legacy.twrPct).toBeUndefined();
+    expect(legacy.benchmarkTwrPct).toBeUndefined();
+    expect(legacy.excessTwrPct).toBeUndefined();
+  });
+
+  it('覆盖缺口只返回状态与缺失日期，不填 0 也不给百分比', async () => {
+    const base = await buildTestContext();
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (): Promise<DailyBar[]> => {
+            throw new Error('network: provider unavailable');
+          },
+        },
+      },
+    };
+    const result = await getAccountPerformanceTool.execute(
+      {
+        accountId: base.user.defaultAccountId,
+        from: new Date('2026-07-01T00:00:00.000Z'),
+        to: new Date('2026-07-06T00:00:00.000Z'),
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.coverage).toMatchObject({
+      status: 'partial',
+      expectedTradingDays: 4,
+      completeTradingDays: 0,
+      missingDates: ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06'],
+      sampleDays: 0,
+    });
+    expect(result.data.metrics?.twr).toEqual({ status: 'unavailable', reason: 'coverage-gap' });
+    expect(result.data.twrPct).toBeUndefined();
+    expect(result.data.benchmarkTwrPct).toBeUndefined();
+    expect(result.data.excessTwrPct).toBeUndefined();
+    // 缺价日不给 0 总市值，也不给日收益。
+    for (const day of result.data.valuation) {
+      expect(day.totalValue).toBeUndefined();
+      expect(day.twrReturnPct).toBeUndefined();
+    }
+  });
+
+  it('样本达标时给出 TWR / 基准 TWR / 超额，归因 fact id 可回表核对', async () => {
+    const base = await buildTestContext();
+    const ctx = {
+      ...base,
+      portfolioBenchmark: { stockId: '000300.SH', name: '沪深300' },
+    };
+    const input = {
+      accountId: base.user.defaultAccountId,
+      from: new Date('2026-06-01T00:00:00.000Z'),
+      to: new Date('2026-06-30T00:00:00.000Z'),
+    };
+    const result = await getAccountPerformanceTool.execute(input, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.coverage?.status).toBe('complete');
+    expect(result.data.coverage?.expectedTradingDays).toBeGreaterThanOrEqual(20);
+    expect(result.data.metrics).toEqual({
+      twr: { status: 'available' },
+      benchmarkTwr: { status: 'available' },
+      excessTwr: { status: 'available' },
+    });
+    expect(typeof result.data.twrPct).toBe('number');
+    expect(typeof result.data.benchmarkTwrPct).toBe('number');
+    expect(result.data.excessTwrPct).toBeCloseTo(
+      (result.data.twrPct ?? 0) - (result.data.benchmarkTwrPct ?? 0),
+      8,
+    );
+
+    const summary = await listPortfolioPerformanceSnapshotsTool.execute(
+      { accountId: input.accountId, limit: 10 },
+      ctx,
+    );
+    expect(summary.ok).toBe(true);
+    if (!summary.ok) return;
+    const snapshot = summary.data.snapshots[0];
+    expect(snapshot?.metrics?.excessTwr).toEqual({ status: 'available' });
+    expect(snapshot?.twrPct).toBe(result.data.twrPct);
+    expect(snapshot?.benchmarkTwrPct).toBe(result.data.benchmarkTwrPct);
+    expect(snapshot?.excessTwrPct).toBe(result.data.excessTwrPct);
+
+    // 归因不是自由文本：每个 fact id 都能在事实库里查到对应记录。
+    const factIds = (snapshot?.attribution ?? []).flatMap((row) => row.factIds);
+    expect(factIds.length).toBeGreaterThan(0);
+    for (const factId of factIds) {
+      const [kind, rest] = [
+        factId.slice(0, factId.indexOf(':')),
+        factId.slice(factId.indexOf(':') + 1),
+      ];
+      if (kind === 'trade') expect(await ctx.repos.trade.findById(rest)).not.toBeNull();
+      else if (kind === 'cash-flow')
+        expect(await ctx.repos.portfolioCashFlow.findById(rest)).not.toBeNull();
+      else if (kind === 'corporate-action')
+        expect(await ctx.repos.portfolioCorporateAction.findById(rest)).not.toBeNull();
+      else if (kind === 'holding') expect(await ctx.repos.holding.findById(rest)).not.toBeNull();
+      else if (kind === 'daily_bar') {
+        const [stockId, day] = [
+          rest.slice(0, rest.lastIndexOf(':')),
+          rest.slice(rest.lastIndexOf(':') + 1),
+        ];
+        const bars = await ctx.repos.dailyBar.findInRange(
+          stockId,
+          new Date(`${day}T00:00:00.000Z`),
+          new Date(`${day}T00:00:00.000Z`),
+        );
+        expect(bars).toHaveLength(1);
+      } else throw new Error(`unexpected fact id kind: ${factId}`);
+    }
+  });
 });

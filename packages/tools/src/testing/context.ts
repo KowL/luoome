@@ -11,6 +11,7 @@ import {
 } from '@luoome/adapters/testing';
 import type {
   Advice,
+  AdviceOutcomeOrigin,
   AShareSentimentManagerLike,
   DragonTigerManagerLike,
   LimitUpLadderManagerLike,
@@ -44,6 +45,11 @@ export interface BuildTestContextOptions {
   readonly sectorQuote?: SectorQuoteManagerLike;
   readonly stockUniverse?: StockUniverseManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+  /**
+   * 模拟哪个通道在写回填（REQ-M3-18）：缺省与生产一致按 `model`，
+   * 只有模拟「用户亲自在复盘页回填」的用例才显式传 `user`。
+   */
+  readonly adviceOutcomeOrigin?: AdviceOutcomeOrigin;
 }
 
 const createSilentLogger = (): Logger => {
@@ -95,6 +101,9 @@ export const buildTestContext = async (
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
     ...(opts.news === undefined ? {} : { news: opts.news }),
     ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
+    ...(opts.adviceOutcomeOrigin === undefined
+      ? {}
+      : { adviceOutcomeOrigin: opts.adviceOutcomeOrigin }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };

@@ -12,6 +12,7 @@ import {
   accountAdviceOutcomes,
   accountScopedAdvices,
 } from '../internal/account-advice-outcomes.js';
+import { partitionAdviceOutcomes } from '../internal/advice-outcome-scope.js';
 
 export const GetAdviceStatsInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -21,6 +22,11 @@ export const GetAdviceStatsInput = z.object({
   since: z.coerce.date().optional(),
   /** ISO 日期时间字符串；按 createdAt 过滤（闭区间上界）。 */
   until: z.coerce.date().optional(),
+  /**
+   * 回填来源口径（REQ-M3-18 §3）：默认 `user` 只统计用户亲自回填的 outcome；
+   * `all` 才把 model / import / 无法追溯的历史回填纳入，并在 `excluded` 披露数量。
+   */
+  originFilter: z.enum(['user', 'all']).default('user'),
 });
 
 /**
@@ -34,6 +40,8 @@ const flatStatsSchema = z.object({
   totalAdvices: z.number().int().nonnegative(),
   avgConfidence: z.number().min(0).max(100),
   feedbackCount: z.number().int().nonnegative(),
+  /** 与 feedbackCount 同值的显式分母：口径内（默认 origin='user'）的回填条数。 */
+  denominator: z.number().int().nonnegative(),
   followedWithPnl: z.number().int().nonnegative(),
   outcomeRate: z.object({
     followed: z.number().min(0).max(1).nullable(),
@@ -46,8 +54,24 @@ const flatStatsSchema = z.object({
   hitRate: z.number().min(0).max(1).nullable(),
 });
 
+const originCountsSchema = z.object({
+  user: z.number().int().nonnegative(),
+  model: z.number().int().nonnegative(),
+  import: z.number().int().nonnegative(),
+  unattested: z.number().int().nonnegative(),
+});
+
 export const GetAdviceStatsOutput = flatStatsSchema.extend({
   byDecision: z.record(AdviceDecisionSchema, flatStatsSchema),
+  /** 本次统计采用的来源口径（默认 user）。 */
+  originFilter: z.enum(['user', 'all']),
+  /** 窗口内回填记录按来源计数，用于解释分母为什么是现在这个数。 */
+  originCounts: originCountsSchema,
+  /** 被本次口径排除的条数；`originFilter='all'` 时两者都是 0。 */
+  excluded: z.object({
+    nonUserOrigin: z.number().int().nonnegative(),
+    unattested: z.number().int().nonnegative(),
+  }),
 });
 
 type FlatStats = z.infer<typeof flatStatsSchema>;
@@ -90,6 +114,7 @@ const computeFlatStats = (
     totalAdvices,
     avgConfidence,
     feedbackCount,
+    denominator: feedbackCount,
     followedWithPnl,
     outcomeRate: {
       followed: rate(followed),
@@ -124,7 +149,8 @@ export const getAdviceStatsTool = defineTool({
   name: 'get_advice_stats',
   description:
     '聚合建议准确率统计（总条数 / 平均信心度 / outcome 比例 / 命中率 / 按决策分解）；' +
-    '复盘口径统计包含已过期 advice',
+    '复盘口径统计包含已过期 advice；默认只统计用户亲自回填（origin=user）的 outcome，' +
+    '其它来源需显式 originFilter=all，被排除条数在 excluded 披露',
   sideEffect: 'read',
   input: GetAdviceStatsInput,
   output: GetAdviceStatsOutput,
@@ -146,7 +172,17 @@ export const getAdviceStatsTool = defineTool({
     );
 
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
+    const { inScope, originCounts, excluded } = partitionAdviceOutcomes(
+      outcomes,
+      input.originFilter,
+    );
 
-    return { ...computeFlatStats(advices, outcomes), byDecision: byDecisionOf(advices, outcomes) };
+    return {
+      ...computeFlatStats(advices, inScope),
+      byDecision: byDecisionOf(advices, inScope),
+      originFilter: input.originFilter,
+      originCounts,
+      excluded,
+    };
   },
 });

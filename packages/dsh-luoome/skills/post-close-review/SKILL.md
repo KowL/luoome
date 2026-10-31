@@ -27,7 +27,19 @@ whenToUse: 用户问「当时的判断如何、我实际怎么做了、错在哪
    - AI 事后判断：只作为分析，不能当作事实写入用户记录。
    不根据同股、同日或后市涨跌推断用户跟随；不伪造盈亏；盈亏未知保持缺失，不写 0。
 4. **保存复盘笔记**（用户要求时）：先调用 `get_decision_review_context` 取得 contextHash 与 expectedRevision，向用户展示冻结内容（来源、tradeIds、changeNote）；再经 `luoome_confirmed_operation` 的 `save_decision_review` policy 直接提交并保留回执。响应丢失时只查询操作状态与业务回执核对，不重复保存。
-5. **记录用户 outcome（仅在用户明确说明后）**：用户明确说明自己跟随、部分跟随或忽略，并给出实际结果后，才允许经 `luoome_confirmed_operation` 的 `record_advice_outcome` policy 直接提交。outcome 取 followed、partially_followed 或 ignored；tradeIds 只列显式核对过的成交；pnl 未知时缺省，不用 0 伪装。AI 不得替用户选择 outcome，也不得自动填写盈亏。
+5. **记录用户 outcome（必须由用户本人四选一）**：兑现、部分兑现、忽略、不知道这四件事只有用户自己知道。
+   用 `ask_user_question` 就**这一条建议**提问，`options` 必须**恰好**是这四项，按此顺序、带这个措辞：
+   `兑现` / `部分兑现` / `忽略` / `不知道`。没有预选，也不要把某一项标成推荐（不要写 `(Recommended)`）；
+   不许把四项合成「是/否」，也不许用自由文本输入代替选项。
+   - 用户选 `兑现` / `部分兑现` / `忽略`：经 `luoome_confirmed_operation` 的 `record_advice_outcome` policy 提交，
+     outcome 分别对应 followed、partially_followed、ignored；tradeIds 只列显式核对过的成交；
+     pnl 未知时缺省，不用 0 伪装。
+   - 用户选 `不知道` 或没作答：**不调用** `record_advice_outcome`。没有兑现事实就没有样本，
+     分母不该因为一次提问而变化；直接说明「这条按不知道处理，未回填」。
+   - 用户主动用文字说出结果时，先复述成这四个选项里的一个并让用户确认，再提交；不要自己挑。
+   AI 不得替用户选择 outcome，也不得自动填写盈亏。写入层会给这条回填盖来源戳：
+   经对话写下的记录是 `origin=model`，默认统计不把它算进命中率分母；只有用户在复盘页亲自点的
+   才是 `origin=user`。所以不要为了让数字好看而绕过提问。
    `record_advice_outcome.notes` 与 `save_decision_review.content.note` 写入同一个复盘笔记字段，更正原因单独放 changeNote。需要同时回填结果与保存笔记时优先用一次 outcome 操作并提交完整目标 notes；分两步时先 outcome、回读新 revision，再只更新 content.note。不得用更正原因覆盖已有笔记，也不得提交旧 expectedRevision。
    相同复盘内容可能返回既有修订：成功回执不代表新增 revision。不要为更换更正原因措辞反复提交相同内容，也不能伪造内容迫使新增修订；如更正原因未更新，明确说明实际回执与当前修订的差异。
 6. **与面板同口径**：展示样本数、未知盈亏、数据缺口与时间范围；面板只投影工具结果，不在对话里另造统计口径。

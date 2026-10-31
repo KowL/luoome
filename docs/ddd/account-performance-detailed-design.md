@@ -22,6 +22,17 @@
 4. TWR 从前一完整估值日开始计算；任一估值日缺价时，整段收益率与最大回撤保持 unavailable，但仍返回已知日的估值事实。
 5. 持仓贡献拆分为已实现 PnL、未实现 PnL、分红和当前市值；没有交易事实的直接录入持仓作为期初仓位，并从期初现金中扣除成本。
 6. benchmark TWR 使用 benchmark 日线首末有效收盘，`excessTwrPct = portfolioTwrPct - benchmarkTwrPct`；覆盖不足时只返回状态和 warning。
+7. **样本闸门（REQ-M3-07）**：区间 TWR 需要 `MIN_TWR_SAMPLE_TRADING_DAYS = 20` 个完整估值日；
+   不足时 `metrics.twr.status = 'insufficient'` 且 `twrPct` 字段缺席——2 个交易日的涨跌幅是噪声，
+   不是区间收益。基准 TWR 与超额收益各有独立状态（`benchmark-not-configured` /
+   `benchmark-coverage-gap` / `benchmark-sample-too-small` / `twr-unavailable` /
+   `benchmark-unavailable`），任一不可用即不给百分比，绝不用 0 代替。
+8. **覆盖事实**：`coverage` 输出 `status` / `expectedTradingDays` / `completeTradingDays` /
+   `missingDates`（YYYY-MM-DD）/ `sampleDays` / `requiredSampleDays`。缺口只报日期，不补价、不补 0。
+9. **归因 fact id**：每条 `contributions` 带 `factIds`，格式为 `trade:<id>` /
+   `cash-flow:<id>` / `corporate-action:<id>` / `holding:<id>` /
+   `daily_bar:<stockId>:<YYYY-MM-DD>`（后者是 `daily_bars` 复合主键，可回表核对）。
+   归因是「哪些事实产出了这条贡献」，不是自由文本结论。
 
 ## 3. 契约与存储
 
@@ -59,7 +70,10 @@ Web 长期进程只在 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=tr
 ## 4. Surface 约束
 
 - Web：`GET /api/account/performance` 使用当前账户，`GET /api/accounts/:id/performance` 显式指定账户；均要求 `LUOOME_EXPOSE_EXTERNAL=true`。
-- 审计：`list_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshots` 只读已持久化快照摘要；`audit_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshot-audit` 通过账户+区间重叠查询汇总交易日覆盖、缺失日期、partial 原因和 `dataAsOf`，不会被最新的非重叠快照遮蔽。这些读取均不重新请求行情或重算绩效；摘要保留区间、输入指纹、完整度、benchmark 状态、估值天数和收益字段。
+- 审计：`list_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshots` 只读已持久化快照摘要；`audit_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshot-audit` 通过账户+区间重叠查询汇总交易日覆盖、缺失日期、partial 原因和 `dataAsOf`，不会被最新的非重叠快照遮蔽。这些读取均不重新请求行情或重算绩效；摘要保留区间、输入指纹、完整度、benchmark 状态、估值天数和收益字段，
+并带 `coverage`（覆盖缺口与缺失日期）、`metrics`（TWR / 基准 TWR / 超额的可用性）、`attribution`（每项带 `factIds`）。
+REQ-M3-07 之前的存量快照没有这三项：摘要不补默认 complete、不转述口径未知的百分比，只在 `warnings` 说明
+「无法判定样本是否充足 / 无法追溯归因」。
 - 当前账户也提供 `/api/account/performance/snapshots` 与
   `/api/account/performance/snapshot-audit`；复盘页直接展示快照版本、输入指纹、`dataAsOf`、预算事实及逐交易日
   审计，不需要开启 external 才能读取已持久化审计。

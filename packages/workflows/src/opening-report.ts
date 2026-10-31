@@ -396,7 +396,9 @@ export const portfolioSection = async (
     : null;
   const periodValueChange =
     periodStartValue === null || periodEndValue === null ? null : periodEndValue - periodStartValue;
-  const periodTwrValues = performanceValues.map((value) => value.twrPct);
+  // 「当日收益率」取最后一个估值日的日收益事实，不取区间 TWR：区间 TWR 有 20 个完整
+  // 估值日的样本下限（REQ-M3-07），单日报告只取 1 个交易日，用 twrPct 会让这一行永远缺席。
+  const periodTwrValues = performanceValues.map((value) => value.valuation.at(-1)?.twrReturnPct);
   const periodTwrPct = accountIds.length === 1 ? (periodTwrValues[0] ?? null) : null;
   const drawdownValues = performanceValues.map((value) => value.maxDrawdownPct);
   const maxDrawdownPct = accountIds.length === 1 ? (drawdownValues[0] ?? null) : null;

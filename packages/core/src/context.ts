@@ -1,4 +1,5 @@
 import type { DataImportStagingAdapter } from './data-import.js';
+import type { AdviceOutcomeOrigin } from './entity/advice.js';
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
 import type {
@@ -276,6 +277,14 @@ export interface ToolContext {
   readonly auditLog?: AuditLoggerLike;
   /** 审计事件的调用方标签，例如 cli / mcp / web / tui。 */
   readonly auditCaller?: string;
+  /**
+   * 本次执行的通道来源，写入 Advice 回填时盖章用（REQ-M3-18 §2）。
+   *
+   * 由装配方按 surface 固定：用户亲自操作的入口（复盘页表单）注入 `user`，
+   * 导入入口注入 `import`；未注入一律按 `model` 处理——agent 会话里无论谁调用
+   * `record_advice_outcome` / `save_decision_review`，都盖不出 `user`。
+   */
+  readonly adviceOutcomeOrigin?: AdviceOutcomeOrigin;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
   /** 私人正文外发的 embedding capability；仅由 external tool 显式调用。 */

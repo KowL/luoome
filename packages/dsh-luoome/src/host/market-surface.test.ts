@@ -114,6 +114,8 @@ describe('market external allowlist reconciliation', () => {
       'fetch_news',
       'fetch_sector_quotes',
       'get_stock_profile',
+      // REQ-M3-07：账户绩效回源 + 落快照，声明 external，因此只能进 external 名单。
+      'get_account_performance',
     ]);
     // fetch_news 访问第三方新闻源，归为 external 后才能进入 external surface（需求 §4.2/§5-3）。
     expect(toolRegistry.get('fetch_news')?.sideEffect).toBe('external');

@@ -102,6 +102,60 @@ describe('决策与复盘 API 账户绑定', () => {
     expect((await json(trade)).error).toMatchObject({ kind: 'permission_denied' });
   });
 
+  it('回填来源按路由盖章：复盘页表单是 user，通用工具路由是 model', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const advices = await ctx.repos.advice.query({ includeExpired: true, limit: 2 });
+    if (advices.length < 2) throw new Error('missing advice fixtures');
+    const [pageAdvice, toolAdvice] = advices;
+    if (pageAdvice === undefined || toolAdvice === undefined)
+      throw new Error('missing advice fixtures');
+    const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: false });
+    const headers = {
+      'content-type': 'application/json',
+      'x-luoome-account-id': accountId,
+      origin: 'http://test',
+    };
+    const page = await local.fetch(
+      new Request(`http://test/api/review/${pageAdvice.id}/outcome`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ input: { outcome: 'followed', pnl: 100 } }),
+      }),
+    );
+    expect(await page.json()).toMatchObject({ ok: true });
+    const generic = await local.fetch(
+      new Request('http://test/api/tools/record_advice_outcome/call', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          input: { adviceId: toolAdvice.id, outcome: 'followed', pnl: 100 },
+        }),
+      }),
+    );
+    expect(await generic.json()).toMatchObject({ ok: true });
+
+    const feedbackOf = async (id: string) =>
+      (
+        await ctx.repos.decisionReview.findBySubject({
+          accountId,
+          subject: { kind: 'advice', id },
+        })
+      )?.revision.content.adviceFeedback;
+    expect(await feedbackOf(pageAdvice.id)).toMatchObject({ origin: 'user' });
+    // 通用路由（agent 可用的那条）写不出 user：默认统计因此不含它。
+    expect(await feedbackOf(toolAdvice.id)).toMatchObject({ origin: 'model' });
+
+    const stats = await local.fetch(new Request('http://test/api/advice/stats'));
+    const body = (await stats.json()) as {
+      ok: boolean;
+      data: { denominator: number; originCounts: Record<string, number> };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data.denominator).toBe(1);
+    expect(body.data.originCounts).toMatchObject({ user: 1, model: 1 });
+  });
+
   it('成交专用路由要求 write、同源与账户一致，明确确认后仅入账一次', async () => {
     const ctx = await buildTestContext();
     const accountId = ctx.user.defaultAccountId;

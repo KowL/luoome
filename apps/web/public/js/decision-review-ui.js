@@ -21,6 +21,19 @@ const rejectedKinds = new Set([
   'invariant_violation',
   'permission_denied',
 ]);
+/**
+ * 复盘页的结构化回填选项（REQ-M3-18 §1）：兑现 / 部分兑现 / 忽略 / 不知道。
+ * 「不知道」必须存在：缺了它就等于逼用户在不知道时猜一个，样本会变成伪样本。
+ * 「不知道」不落 outcome（见保存路径），所以这里不给它预选值，默认是「尚未记录」。
+ */
+export const ADVICE_OUTCOME_OPTIONS = [
+  ['', '尚未记录'],
+  ['followed', '兑现'],
+  ['partially_followed', '部分兑现'],
+  ['ignored', '忽略'],
+  ['unknown', '不知道'],
+];
+
 const subjectLabel = {
   advice: 'Advice',
   'trading-plan-version': '交易计划版本',
@@ -166,12 +179,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
 
   const feedback =
     subject.kind === 'advice'
-      ? makeSelect(undefined, [
-          ['', '尚未记录'],
-          ['followed', '跟随'],
-          ['partially_followed', '部分跟随'],
-          ['ignored', '忽略'],
-        ])
+      ? makeSelect(undefined, ADVICE_OUTCOME_OPTIONS)
       : subject.kind === 'watch-trigger'
         ? makeSelect(undefined, [
             ['', '尚未记录'],
@@ -185,6 +193,14 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
     feedback.value =
       subject.kind === 'advice' ? (old.adviceFeedback?.outcome ?? '') : (old.triggerFeedback ?? '');
     body.append(fieldWrap('我的反馈（由我明确选择）', feedback));
+    if (subject.kind === 'advice')
+      body.append(
+        el(
+          'p',
+          'muted',
+          '四选一，没有预选；选「不知道」不记为回填——没有兑现事实就不进命中率分母，也不会替你猜。',
+        ),
+      );
   }
   const note = makeTextarea(undefined, {
     rows: 3,
@@ -388,12 +404,13 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       const pnlRaw = pnl?.value.trim() ?? '';
       const pnlValue = pnlRaw ? Number(pnlRaw) : undefined;
       if (pnlRaw && !Number.isFinite(pnlValue)) return showError('盈亏必须是有效数字。');
+      // 「不知道」是回答不是 outcome：不写 adviceFeedback，避免把猜测变成统计样本。
+      const answered = subject.kind === 'advice' && feedback.value && feedback.value !== 'unknown';
       const content = {
         tradeIds,
-        adviceFeedback:
-          subject.kind === 'advice' && feedback.value
-            ? { outcome: feedback.value, ...(pnlValue === undefined ? {} : { pnl: pnlValue }) }
-            : null,
+        adviceFeedback: answered
+          ? { outcome: feedback.value, ...(pnlValue === undefined ? {} : { pnl: pnlValue }) }
+          : null,
         triggerFeedback: subject.kind === 'watch-trigger' && feedback.value ? feedback.value : null,
         note: note.value.trim() || null,
       };

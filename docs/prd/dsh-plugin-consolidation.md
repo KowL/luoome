@@ -775,9 +775,22 @@ H5 选 B 的三条理由：
 
 #### REQ-M3-07 账户层归因与超额收益可见
 
-**需求**：`get_account_performance` 进 read allowlist；快照摘要带 TWR / 基准 TWR / 超额 / 完整性。
+**需求**：账户层归因与超额收益在插件对话面可见；快照摘要带 TWR / 基准 TWR / 超额 / 完整性。
 
 **验收标准**：覆盖不足只返回状态与缺失日期，不填 0；归因指向 fact id；样本不足写「不足」不给百分比。
+
+**v3.10 修正「进 read allowlist」这条不可行的验收**：
+`get_account_performance` 的 `sideEffect` 是 `external`——它回源拉日线、写 `daily_bars`、落绩效快照。
+而 read 面装配期有硬校验（`assertSurfaceSelection(...,'read')` + `exposureCriteria({allowedSideEffects:['read']})`），
+要求 `sideEffect==='read'`。**把它塞进 read 名单等于谎报副作用**，因此：
+
+- 它进 `DEFAULT_MARKET_TOOL_ALLOWLIST`（external 面，对话面同样可见，仍需 external opt-in）；
+- read 面的归因读取由 `list_account_performance_snapshots`（已在 read 名单）承担，
+  摘要补全 TWR / 基准 TWR / 超额 / 覆盖 / fact id。
+
+即：**对话面既能「读已落库归因」，也能「显式回一次源刷新」**，两条路都通且不谎报副作用。
+若将来要求字面进 read 名单，唯一诚实做法是把取数拆出去（工具只读已落库日线，
+workflow 先同步再算），那是独立改动。
 
 ---
 

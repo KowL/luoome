@@ -39,6 +39,7 @@ import {
   NotificationManager,
 } from '@luoome/adapters';
 import {
+  type AdviceOutcomeOrigin,
   BUILTIN_STRATEGY_TEMPLATES,
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
@@ -510,11 +511,23 @@ export const createWebApp = (
 
   /**
    * 内部组合调用：直接返回 ToolResult（不包 Response），便于聚合端点统一 wrap。
+   *
+   * `origin` 只由**服务端路由**决定：复盘页的表单提交是本机用户亲自点击，路由层把
+   * 通道标成 `user`；通用 `/api/tools/:name/call` 不传，于是回填被标成 `model`
+   * 并默认排除在命中率之外（REQ-M3-18 §2/§3）。
    */
-  const invokeTool = async (name: string, input: unknown): Promise<ToolResult<unknown>> => {
+  const invokeTool = async (
+    name: string,
+    input: unknown,
+    options: { readonly origin?: AdviceOutcomeOrigin } = {},
+  ): Promise<ToolResult<unknown>> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
-    return tool.execute(input, contextForRequest());
+    const ctx = contextForRequest();
+    return tool.execute(
+      input,
+      options.origin === undefined ? ctx : { ...ctx, adviceOutcomeOrigin: options.origin },
+    );
   };
 
   const decisionAccountTools = new Set([
@@ -828,7 +841,14 @@ export const createWebApp = (
     if (!('parsed' in body)) return jsonResult(body);
     const bound = bindDecisionAccount(request, { ...body.data, ...fixed });
     if ('denied' in bound) return jsonResult(bound.denied);
-    return jsonResult(await invokeTool(name, bound.input));
+    // 复盘页表单是用户亲自填写并点击保存的：只有这条路由把来源标成 user。
+    return jsonResult(
+      await invokeTool(
+        name,
+        bound.input,
+        name === 'save_decision_review' ? { origin: 'user' } : {},
+      ),
+    );
   };
 
   app.get('/api/research/embeddings/status', () => callTool('get_research_embedding_status', {}));
@@ -3255,7 +3275,8 @@ export const createWebApp = (
           : {};
       const bound = bindDecisionAccount(c.req.raw, { ...input, adviceId: id });
       if ('denied' in bound) return jsonResult(bound.denied);
-      return jsonResult(await invokeTool('record_advice_outcome', bound.input));
+      // 复盘页的「兑现/部分兑现/忽略/不知道」按钮是用户本人在浏览器里点的。
+      return jsonResult(await invokeTool('record_advice_outcome', bound.input, { origin: 'user' }));
     });
   }
 

@@ -923,6 +923,8 @@ describe('closing-report workflow', () => {
     const metrics =
       performance?.blocks.flatMap((block) => (block.kind === 'metrics' ? block.items : [])) ?? [];
     expect(metrics.some((metric) => metric.key === 'benchmarkTwrPct')).toBe(false);
+    // 该 fixture 是「全部账户」作用域：单账户口径的「当日收益率」行本就不生成，
+    // 这里只断言不出现空占位；单账户口径由 opening-report.test.ts 覆盖。
     expect(
       metrics.filter((metric) => metric.key === 'twrPct').every((metric) => metric.value !== null),
     ).toBe(true);

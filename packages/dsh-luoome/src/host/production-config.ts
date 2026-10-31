@@ -24,6 +24,8 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'list_accounts',
   'get_account',
   'get_account_facts',
+  // 账户层归因与超额收益（REQ-M3-07）：TWR / 基准 TWR / 超额 / 覆盖缺口 / 归因 fact id。
+  // 会回源刷新行情的 get_account_performance 属 external，见 DEFAULT_MARKET_TOOL_ALLOWLIST。
   'list_account_performance_snapshots',
   'list_holdings',
   'get_holding',
@@ -104,6 +106,12 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
  * `fetch_sector_quotes` 与新闻一致归入 external，供看盘分区读取行业排行。
  * `sync_quotes`/`send_notification` 等 external 工具虽
  * 满足能力规则，但不属于「对话主动刷新市场事实」的精确名单，默认不点名。
+ *
+ * `get_account_performance`（REQ-M3-07）：它回源拉日线、写 `daily_bars` 并落绩效快照，
+ * 声明是 `external`，而只读面只收 `sideEffect==='read'`（见 `assertSurfaceSelection`），
+ * 所以它**只能**进这份 external 名单——塞进 read allowlist 等于把「会写库 + 会访问外部
+ * 服务」的工具谎报成只读。对话面的归因读取走只读的
+ * `list_account_performance_snapshots`（已在 read allowlist），本工具负责显式刷新。
  */
 export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'fetch_index_quotes',
@@ -116,6 +124,7 @@ export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'fetch_news',
   'fetch_sector_quotes',
   'get_stock_profile',
+  'get_account_performance',
 ]);
 
 const ToolNameSchema = z.string().trim().min(1).max(120);

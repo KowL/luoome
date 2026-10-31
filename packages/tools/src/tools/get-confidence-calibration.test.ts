@@ -19,7 +19,7 @@ const accountEvidence = (stockId: string, accountId: string) => ({
 
 describe('get_confidence_calibration', () => {
   it('正常路径：空 advice 库 → 全 0 bucket，total=0', async () => {
-    const ctx = await buildTestContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [], adviceOutcomeOrigin: 'user' });
     const result = await getConfidenceCalibrationTool.execute({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -35,7 +35,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('正常路径：含 outcome 后按桶聚合（hitRate + avgPnl 不跨桶算错）', async () => {
-    const ctx = await buildTestContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [], adviceOutcomeOrigin: 'user' });
     // 直接灌入不同 confidence 的 advice + outcome，验证桶归位与命中逻辑。
     const now = new Date('2026-07-15T08:00:00Z');
     const seedAdvices = [
@@ -170,7 +170,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('正常路径：未回填的 advice 计入 total，不污染 hitRate', async () => {
-    const ctx = await buildTestContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [], adviceOutcomeOrigin: 'user' });
     const now = new Date('2026-07-15T08:00:00Z');
     // 灌 3 条 advice，1 条 outcome
     for (const id of ['a1', 'a2', 'a3']) {
@@ -219,7 +219,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('按 since 过滤：窗口外的 advice 不计入', async () => {
-    const ctx = await buildTestContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [], adviceOutcomeOrigin: 'user' });
     const t0 = new Date('2026-06-01T08:00:00Z');
     const t1 = new Date('2026-07-01T08:00:00Z');
     // 在 t0 灌一条建议，t1 灌一条
@@ -264,7 +264,7 @@ describe('get_confidence_calibration', () => {
 
 describe('calibration provenance groups', () => {
   it('keeps legacy and model/skill cohorts separate and suppresses small-sample conclusions', async () => {
-    const ctx = await buildTestContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [], adviceOutcomeOrigin: 'user' });
     const now = ctx.clock();
     for (const [id, model, skill] of [
       ['legacy', null, null],
@@ -345,5 +345,48 @@ describe('calibration provenance groups', () => {
     expect(
       expanded.data.groups.find((group) => group.generatorKind === 'legacy-ai')?.overallHitRate,
     ).toBeNull();
+  });
+
+  it('负例：模型代填默认不进校准，显式 originFilter=all 才纳入并披露', async () => {
+    const ctx = await buildTestContext({ advices: [] });
+    const now = ctx.clock();
+    await ctx.repos.advice.save({
+      id: 'cal-origin',
+      subjectKind: 'stock',
+      subjectId: '002594.SZ',
+      decision: 'buy',
+      confidence: 80,
+      horizon: 'short',
+      reasoning: { premise: 'x', evidence: [], counterEvidence: [] },
+      risks: [],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      basedOn: { dataAsOf: now, strategy: accountEvidence('002594.SZ', ctx.user.defaultAccountId) },
+      validFrom: now,
+      validUntil: new Date(now.getTime() + 3 * 86_400_000),
+      createdAt: now,
+    });
+    const recorded = await recordAdviceOutcomeTool.execute(
+      { adviceId: 'cal-origin', outcome: 'followed', pnl: 100 },
+      ctx,
+    );
+    expect(recorded.ok).toBe(true);
+
+    const strict = await getConfidenceCalibrationTool.execute({}, ctx);
+    expect(strict.ok).toBe(true);
+    if (!strict.ok) return;
+    expect(strict.data.originFilter).toBe('user');
+    expect(strict.data.totalWithOutcome).toBe(0);
+    expect(strict.data.followedWithPnl).toBe(0);
+    expect(strict.data.overallHitRate).toBeNull();
+    expect(strict.data.originCounts).toEqual({ user: 0, model: 1, import: 0, unattested: 0 });
+    expect(strict.data.excluded).toEqual({ nonUserOrigin: 1, unattested: 0 });
+
+    const all = await getConfidenceCalibrationTool.execute({ originFilter: 'all' }, ctx);
+    expect(all.ok).toBe(true);
+    if (!all.ok) return;
+    expect(all.data.totalWithOutcome).toBe(1);
+    expect(all.data.followedWithPnl).toBe(1);
+    expect(all.data.overallHitRate).toBe(1);
+    expect(all.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
   });
 });

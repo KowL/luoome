@@ -65,6 +65,65 @@ export type PortfolioCorporateAction = z.infer<typeof PortfolioCorporateActionSc
 export const PortfolioValuationCompletenessSchema = z.enum(['complete', 'partial', 'unavailable']);
 export type PortfolioValuationCompleteness = z.infer<typeof PortfolioValuationCompletenessSchema>;
 
+/**
+ * TWR 的最小样本：完整估值日少于该数量时只报 `insufficient`，不给百分比。
+ *
+ * 2 个交易日也能算出「TWR=5%」，但那是两天噪声而不是区间收益，把噪声写成百分比
+ * 等于用「有数据」冒充「有结论」。与 `get_confidence_calibration` 的
+ * `minimumOutcomes: 20` 取同一量级，避免同一产品里出现两套「样本够不够」口径。
+ */
+export const MIN_TWR_SAMPLE_TRADING_DAYS = 20;
+
+/** 单项指标的可用性；`insufficient` 专指「样本不够，不给数字」，不是 0。 */
+export const PortfolioMetricStatusSchema = z.enum(['available', 'insufficient', 'unavailable']);
+export type PortfolioMetricStatus = z.infer<typeof PortfolioMetricStatusSchema>;
+
+/**
+ * 非 `available` 的机器可读原因。刻意用枚举而不是自由文本：调用方要能据原因
+ * 决定「补数据」还是「换区间」，而不是解析一句人话。
+ */
+export const PortfolioMetricReasonSchema = z.enum([
+  'no-valuation-day',
+  'coverage-gap',
+  'no-return-sample',
+  'sample-too-small',
+  'benchmark-not-configured',
+  'benchmark-coverage-gap',
+  'benchmark-sample-too-small',
+  'twr-unavailable',
+  'benchmark-unavailable',
+]);
+export type PortfolioMetricReason = z.infer<typeof PortfolioMetricReasonSchema>;
+
+export const PortfolioMetricAvailabilitySchema = z.object({
+  status: PortfolioMetricStatusSchema,
+  reason: PortfolioMetricReasonSchema.optional(),
+});
+export type PortfolioMetricAvailability = z.infer<typeof PortfolioMetricAvailabilitySchema>;
+
+export const PortfolioPerformanceMetricsSchema = z.object({
+  twr: PortfolioMetricAvailabilitySchema,
+  benchmarkTwr: PortfolioMetricAvailabilitySchema,
+  excessTwr: PortfolioMetricAvailabilitySchema,
+});
+export type PortfolioPerformanceMetrics = z.infer<typeof PortfolioPerformanceMetricsSchema>;
+
+/**
+ * 区间覆盖事实：缺口只报状态和日期，不用 0 或上一日价格补位。
+ *
+ * `missingDates` 是「该交易日的估值不完整（缺任一持仓价格）」的日期，`sampleDays`
+ * 是可用于 TWR 的完整估值日数——两者都不含推算值。
+ */
+export const PortfolioCoverageSchema = z.object({
+  status: PortfolioValuationCompletenessSchema,
+  expectedTradingDays: z.number().int().nonnegative(),
+  completeTradingDays: z.number().int().nonnegative(),
+  missingDates: z.array(z.string().date()),
+  sampleDays: z.number().int().nonnegative(),
+  requiredSampleDays: z.literal(MIN_TWR_SAMPLE_TRADING_DAYS),
+});
+export type PortfolioCoverage = z.infer<typeof PortfolioCoverageSchema>;
+
 export const PortfolioValuationDaySchema = z.object({
   date: z.coerce.date(),
   cash: z.number().finite(),
@@ -83,6 +142,14 @@ export type PortfolioValuationDay = z.infer<typeof PortfolioValuationDaySchema>;
 
 export const PortfolioContributionSchema = z.object({
   stockId: z.string().min(1),
+  /**
+   * 归因指向的事实 id，不是自由文本结论。格式固定为
+   * `trade:<Trade.id>` / `cash-flow:<PortfolioCashFlow.id>` /
+   * `corporate-action:<PortfolioCorporateAction.id>` / `holding:<Holding.id>` /
+   * `daily_bar:<stockId>:<YYYY-MM-DD>`（后者是 daily_bars 的复合主键，可回表核对）。
+   * 存量快照没有该字段，读取方必须按「无法追溯」处理，不能当空结论。
+   */
+  factIds: z.array(z.string().min(1)).optional(),
   /** 缺价时保持 undefined，不能用 0 伪造当前市值。 */
   currentValue: z.number().finite().nonnegative().optional(),
   realizedPnl: z.number().finite(),
@@ -112,6 +179,14 @@ export const PortfolioPerformanceSchema = z.object({
   completeness: PortfolioValuationCompletenessSchema,
   cashFlowComplete: z.boolean(),
   benchmarkStatus: z.enum(['available', 'unavailable', 'partial']),
+  /**
+   * 覆盖与样本事实。optional 只为兼容存量快照 JSON：旧记录没有该字段时读取方
+   * 必须报「无法判定」，不能默认成 complete（给默认值就是把「不知道」伪造成结论）。
+   * 计算器本身总是输出它。
+   */
+  coverage: PortfolioCoverageSchema.optional(),
+  /** TWR / 基准 TWR / 超额的可用性；非 available 时对应百分比字段必须缺席。 */
+  metrics: PortfolioPerformanceMetricsSchema.optional(),
   benchmarkStockId: z.string().min(1).optional(),
   twrPct: z.number().finite().optional(),
   maxDrawdownPct: z.number().finite().optional(),

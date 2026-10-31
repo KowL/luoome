@@ -1,10 +1,14 @@
 import type { Holding } from '../entity/holding.js';
-import type {
-  PortfolioCashFlow,
-  PortfolioContribution,
-  PortfolioCorporateAction,
-  PortfolioPerformance,
-  PortfolioValuationDay,
+import {
+  MIN_TWR_SAMPLE_TRADING_DAYS,
+  type PortfolioCashFlow,
+  type PortfolioContribution,
+  type PortfolioCorporateAction,
+  type PortfolioCoverage,
+  type PortfolioMetricAvailability,
+  type PortfolioPerformance,
+  type PortfolioPerformanceMetrics,
+  type PortfolioValuationDay,
 } from '../entity/portfolio-performance.js';
 import type { DailyBar } from '../entity/quote.js';
 import type { Trade } from '../entity/trade.js';
@@ -17,8 +21,10 @@ export interface PortfolioPerformanceInput {
   readonly from: Date;
   readonly to: Date;
   readonly trades: readonly Trade[];
-  /** 只有没有对应 Trade 事实的直接录入持仓才作为期初仓位使用。 */
-  readonly initialHoldings?: readonly Pick<Holding, 'stockId' | 'quantity' | 'avgCost'>[];
+  /** 只有没有对应 Trade 事实的直接录入持仓才作为期初仓位使用。`id` 可选：给了才能归因到 `holding:<id>`。 */
+  readonly initialHoldings?: readonly (Pick<Holding, 'stockId' | 'quantity' | 'avgCost'> & {
+    readonly id?: string;
+  })[];
   readonly cashFlows: readonly PortfolioCashFlow[];
   readonly corporateActions: readonly PortfolioCorporateAction[];
   readonly barsByStock: ReadonlyMap<string, readonly DailyBar[]>;
@@ -60,12 +66,31 @@ const priceAt = (bars: readonly DailyBar[] | undefined, date: Date): number | un
 
 const emptyContribution = (stockId: string): PortfolioContribution => ({
   stockId,
+  factIds: [],
   currentValue: 0,
   realizedPnl: 0,
   dividends: 0,
   contribution: 0,
   completeness: 'unavailable',
 });
+
+/**
+ * 归因事实 id：每条持仓贡献都指回产出它的账本/行情事实，而不是一句「因为大盘涨了」。
+ * 只收集真正被用到的 id（没交易就没有 trade 事实），不补占位符。
+ */
+class FactIndex {
+  private readonly byStock = new Map<string, Set<string>>();
+
+  add(stockId: string, factId: string): void {
+    const facts = this.byStock.get(stockId) ?? new Set<string>();
+    facts.add(factId);
+    this.byStock.set(stockId, facts);
+  }
+
+  of(stockId: string): string[] {
+    return [...(this.byStock.get(stockId) ?? [])].sort();
+  }
+}
 
 export const calculatePortfolioPerformance = (
   input: PortfolioPerformanceInput,
@@ -105,6 +130,12 @@ export const calculatePortfolioPerformance = (
     (left, right) =>
       left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id),
   );
+  const facts = new FactIndex();
+  for (const holding of input.initialHoldings ?? []) {
+    // 只有真正作为期初仓位使用的直接录入持仓才参与归因；有成交事实时仓位由成交重建。
+    if (holding.id === undefined || tradedStockIds.has(holding.stockId)) continue;
+    facts.add(holding.stockId, `holding:${holding.id}`);
+  }
   const directHoldingCost = (input.initialHoldings ?? [])
     .filter((holding) => !tradedStockIds.has(holding.stockId))
     .reduce((sum, holding) => sum + holding.quantity * holding.avgCost, 0);
@@ -143,6 +174,7 @@ export const calculatePortfolioPerformance = (
         };
         state.dividends += flow.amount;
         positions.set(flow.stockId, state);
+        facts.add(flow.stockId, `cash-flow:${flow.id}`);
       } else if (flow.kind === 'dividend') {
         unallocatedDividends += flow.amount;
       }
@@ -170,6 +202,7 @@ export const calculatePortfolioPerformance = (
         state.dividends += dividend;
       }
       positions.set(action.stockId, state);
+      facts.add(action.stockId, `corporate-action:${action.id}`);
     }
     while (
       tradeIndex < trades.length &&
@@ -198,6 +231,7 @@ export const calculatePortfolioPerformance = (
         if (state.quantity === 0) state.averageCost = 0;
       }
       positions.set(trade.stockId, state);
+      facts.add(trade.stockId, `trade:${trade.id}`);
     }
 
     let holdingsValue: number | undefined = 0;
@@ -245,9 +279,11 @@ export const calculatePortfolioPerformance = (
     previousTotal = completeness === 'complete' ? totalValue : undefined;
   }
 
+  const lastValuationDate = valuation.at(-1)?.date ?? input.to;
   const contributions = [...positions.entries()].map(([stockId, state]) => {
-    const lastDay = valuation.at(-1);
-    const lastPrice = priceAt(input.barsByStock.get(stockId), lastDay?.date ?? input.to);
+    const lastPrice = priceAt(input.barsByStock.get(stockId), lastValuationDate);
+    if (lastPrice !== undefined)
+      facts.add(stockId, `daily_bar:${stockId}:${dayKey(lastValuationDate)}`);
     const currentValue =
       state.quantity <= 0 ? 0 : lastPrice === undefined ? undefined : state.quantity * lastPrice;
     const unrealizedPnl =
@@ -258,6 +294,7 @@ export const calculatePortfolioPerformance = (
           : (currentValue ?? 0) - state.quantity * state.averageCost;
     return {
       stockId,
+      factIds: facts.of(stockId),
       ...(currentValue === undefined ? {} : { currentValue }),
       realizedPnl: state.realizedPnl,
       ...(unrealizedPnl === undefined ? {} : { unrealizedPnl }),
@@ -277,8 +314,23 @@ export const calculatePortfolioPerformance = (
     unrealizedPnl === undefined ? undefined : realizedPnl + unrealizedPnl + dividendPnl - cashCosts;
   const completeDays = valuation.filter((day) => day.completeness === 'complete');
   const twrDays = completeDays.filter((day) => day.twrReturnPct !== undefined);
+  const gapDates = valuation
+    .filter((day) => day.completeness !== 'complete')
+    .map((day) => dayKey(day.date));
+  // 样本 = 完整估值日数。2 天的「TWR」是噪声，样本不足时只报 insufficient。
+  const sampleDays = completeDays.length;
+  const twrMetric: PortfolioMetricAvailability =
+    valuation.length === 0
+      ? { status: 'unavailable', reason: 'no-valuation-day' }
+      : anyIncomplete
+        ? { status: 'unavailable', reason: 'coverage-gap' }
+        : twrDays.length === 0
+          ? { status: 'unavailable', reason: 'no-return-sample' }
+          : sampleDays < MIN_TWR_SAMPLE_TRADING_DAYS
+            ? { status: 'insufficient', reason: 'sample-too-small' }
+            : { status: 'available' };
   const twrPct =
-    twrDays.length === 0 || anyIncomplete ? undefined : (twrDays.at(-1)?.cumulativeTwrPct ?? 0);
+    twrMetric.status === 'available' ? (twrDays.at(-1)?.cumulativeTwrPct ?? 0) : undefined;
   const maxDrawdownPct =
     completeDays.length === 0 || anyIncomplete
       ? undefined
@@ -300,12 +352,44 @@ export const calculatePortfolioPerformance = (
       : valuation
           .map((day) => priceAt(input.benchmarkBars, day.date))
           .filter((price): price is number => price !== undefined && price > 0);
+  const benchmarkMetric: PortfolioMetricAvailability =
+    input.benchmarkBars === undefined
+      ? { status: 'unavailable', reason: 'benchmark-not-configured' }
+      : valuation.length === 0
+        ? { status: 'unavailable', reason: 'no-valuation-day' }
+        : benchmarkStatus !== 'available'
+          ? { status: 'unavailable', reason: 'benchmark-coverage-gap' }
+          : benchmarkPrices.length < MIN_TWR_SAMPLE_TRADING_DAYS
+            ? { status: 'insufficient', reason: 'benchmark-sample-too-small' }
+            : { status: 'available' };
   const benchmarkTwrPct =
-    benchmarkStatus === 'available' && benchmarkPrices.length >= 2
+    benchmarkMetric.status === 'available' && benchmarkPrices.length >= 2
       ? ((benchmarkPrices.at(-1) ?? 0) / (benchmarkPrices[0] ?? 1) - 1) * 100
       : undefined;
+  const excessMetric: PortfolioMetricAvailability = (() => {
+    if (twrMetric.status === 'unavailable')
+      return { status: 'unavailable', reason: 'twr-unavailable' };
+    if (benchmarkMetric.status === 'unavailable')
+      return { status: 'unavailable', reason: 'benchmark-unavailable' };
+    if (twrMetric.status === 'insufficient' || benchmarkMetric.status === 'insufficient')
+      return { status: 'insufficient', reason: 'sample-too-small' };
+    return { status: 'available' };
+  })();
   const excessTwrPct =
     twrPct === undefined || benchmarkTwrPct === undefined ? undefined : twrPct - benchmarkTwrPct;
+  const coverage: PortfolioCoverage = {
+    status: valuation.length === 0 ? 'unavailable' : anyIncomplete ? 'partial' : 'complete',
+    expectedTradingDays: valuation.length,
+    completeTradingDays: sampleDays,
+    missingDates: gapDates,
+    sampleDays,
+    requiredSampleDays: MIN_TWR_SAMPLE_TRADING_DAYS,
+  };
+  const metrics: PortfolioPerformanceMetrics = {
+    twr: twrMetric,
+    benchmarkTwr: benchmarkMetric,
+    excessTwr: excessMetric,
+  };
 
   return {
     accountId: input.accountId,
@@ -315,6 +399,8 @@ export const calculatePortfolioPerformance = (
     completeness: valuation.length === 0 ? 'unavailable' : anyIncomplete ? 'partial' : 'complete',
     cashFlowComplete: true,
     benchmarkStatus,
+    coverage,
+    metrics,
     ...(twrPct === undefined ? {} : { twrPct }),
     ...(maxDrawdownPct === undefined ? {} : { maxDrawdownPct }),
     ...(benchmarkTwrPct === undefined ? {} : { benchmarkTwrPct }),
@@ -324,10 +410,27 @@ export const calculatePortfolioPerformance = (
     ...(totalPnl === undefined ? {} : { totalPnl }),
     valuation,
     contributions:
-      contributions.length === 0 ? [...positions.keys()].map(emptyContribution) : contributions,
+      contributions.length === 0
+        ? [...positions.keys()].map((stockId) => ({
+            ...emptyContribution(stockId),
+            factIds: facts.of(stockId),
+          }))
+        : contributions,
     warnings: [
       ...(anyIncomplete ? ['部分持仓缺少对应估值日行情，收益指标保持 unavailable'] : []),
       ...(benchmarkStatus !== 'available' ? ['benchmark 日线不可用，未填充替代值'] : []),
+      ...(twrMetric.status === 'insufficient'
+        ? [
+            `TWR 样本不足：完整估值日 ${String(sampleDays)} < ${String(MIN_TWR_SAMPLE_TRADING_DAYS)}，未给出百分比`,
+          ]
+        : []),
+      ...(benchmarkMetric.status === 'insufficient'
+        ? [
+            `benchmark 样本不足：有效收盘日 ${String(benchmarkPrices.length)} < ${String(MIN_TWR_SAMPLE_TRADING_DAYS)}，未给出百分比`,
+          ]
+        : []),
+      // 超额收益不给百分比的原因由 `metrics.excessTwr.reason` 机器可读地表达，
+      // 不在这里重复一条人话：benchmark 缺失与覆盖缺口已有各自的 warning。
       ...(unallocatedDividends > 0
         ? ['存在未关联股票的分红现金流，已计入总 PnL 但无法拆分到持仓']
         : []),

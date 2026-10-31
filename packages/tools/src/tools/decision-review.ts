@@ -21,6 +21,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { adviceOutcomeOriginOf } from '../internal/advice-outcome-origin.js';
 import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 
 const digest = (value: unknown): string =>
@@ -369,7 +370,17 @@ export const saveDecisionReviewTool = defineTool({
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
     const resolved = await resolveDecisionReviewWriteContent({ ...input, accountId }, ctx);
-    const content = { ...resolved, tradeIds: [...new Set(resolved.tradeIds)].sort() };
+    // REQ-M3-18 §2：`save_decision_review` 也能直接带 adviceFeedback，是
+    // `record_advice_outcome` 之外的第二条写入口。来源一律按通道重盖，调用方传的
+    // `adviceFeedback.origin` 在这里被覆盖，模型无法借这条路径写成 user。
+    const content = {
+      ...resolved,
+      tradeIds: [...new Set(resolved.tradeIds)].sort(),
+      adviceFeedback:
+        resolved.adviceFeedback === null
+          ? null
+          : { ...resolved.adviceFeedback, origin: adviceOutcomeOriginOf(ctx) },
+    };
     const requestHash = decisionReviewWriteHash({ ...input, accountId, content });
     const receipt = await ctx.repos.decisionReview.findWriteReceipt({
       accountId,

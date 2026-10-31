@@ -274,3 +274,47 @@ describe('决策复盘未决请求恢复', () => {
     expect(saved).toBe(1);
   });
 });
+
+describe('REQ-M3-18 结构化回填四选一', () => {
+  const adviceSelect = () => allNodes(body).find((node) => node.tagName === 'select');
+
+  it('选项恰好四个且含「不知道」，且默认不预选', async () => {
+    await openDecisionReview(subject);
+    const select = adviceSelect();
+    expect(select.children.map((option) => option.value)).toEqual([
+      '',
+      'followed',
+      'partially_followed',
+      'ignored',
+      'unknown',
+    ]);
+    expect(select.children.map((option) => option.textContent)).toEqual([
+      '尚未记录',
+      '兑现',
+      '部分兑现',
+      '忽略',
+      '不知道',
+    ]);
+    // 没有预选：用户没选就是没选。
+    expect(select.value).toBe('');
+  });
+
+  it('选「不知道」不写 outcome：一次提问不会改变命中率分母', async () => {
+    respond = () => ({ ok: true, data: {} });
+    await openDecisionReview(subject);
+    adviceSelect().value = 'unknown';
+    await click('保存复盘');
+    const write = requests.find((request) => request.input);
+    expect(write.input.content.adviceFeedback).toBeNull();
+    expect(pending()).toBeNull();
+  });
+
+  it('选「兑现」写入 followed，交给写入层盖来源戳', async () => {
+    respond = () => ({ ok: true, data: {} });
+    await openDecisionReview(subject);
+    adviceSelect().value = 'followed';
+    await click('保存复盘');
+    const write = requests.find((request) => request.input);
+    expect(write.input.content.adviceFeedback).toEqual({ outcome: 'followed' });
+  });
+});

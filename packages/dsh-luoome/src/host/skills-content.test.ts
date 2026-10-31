@@ -51,6 +51,8 @@ const NATIVE_OPERATION_TOOL = 'luoome_confirmed_operation';
 const NON_TOOL_BACKTICKS = new Set([
   // DSH `schedule_create` 的参数名，不是工具名。
   'time_zone',
+  // 宿主（DSH）的交互提问工具，不在 luoome registry 里；技能只要求模型用它提问。
+  'ask_user_question',
   'context_expired',
   'stale_context',
   'configure_plugin_automation',
@@ -423,6 +425,19 @@ describe('dsh-luoome 打包技能内容', () => {
       expect(skill.content, `${skill.dir} 未禁止自报 callId`).toContain('callId');
       expect(skill.content, `${skill.dir} 未禁止自报 taskId`).toContain('taskId');
     }
+  });
+
+  it('复盘回填用 ask-user 四选一，且必须含「不知道」', () => {
+    const close = skills().find((skill) => skill.dir === 'post-close-review')?.content ?? '';
+    expect(close).toContain('ask_user_question');
+    // 选项集合按原样断言：少一项（尤其「不知道」）或多一项都要红。
+    expect(close).toContain('`兑现` / `部分兑现` / `忽略` / `不知道`');
+    for (const label of ['兑现', '部分兑现', '忽略', '不知道'])
+      expect(close, `回填技能缺选项 ${label}`).toContain(label);
+    expect(close).toMatch(/没有预选|不得替用户选择/);
+    // 预选的一种具体形态：给某一项打「推荐」标签。
+    expect(close).toContain('(Recommended)');
+    expect(close).toContain('不调用');
   });
 
   it('四条旅程覆盖点齐全', () => {

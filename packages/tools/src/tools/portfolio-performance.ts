@@ -5,7 +5,9 @@ import {
   isWeekend,
   PortfolioCashFlowSchema,
   PortfolioCorporateActionSchema,
+  PortfolioCoverageSchema,
   PortfolioPerformanceInputFactsSchema,
+  PortfolioPerformanceMetricsSchema,
   PortfolioPerformanceSchema,
   PortfolioPerformanceSnapshotSchema,
   type ToolContext,
@@ -96,6 +98,17 @@ export const ListPortfolioPerformanceSnapshotsInput = z.object({
   accountId: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(200).default(30),
 });
+/**
+ * 归因行：每项都必须能指回账本/行情事实 id，而不是一句「因为大盘涨了」。
+ * 存量快照没有 factIds 时给空数组并在 warnings 里说明「无法追溯」，不编造 id。
+ */
+const PortfolioSnapshotAttributionSchema = z.object({
+  stockId: z.string().min(1),
+  contribution: z.number().finite(),
+  completeness: PortfolioPerformanceSchema.shape.completeness,
+  factIds: z.array(z.string().min(1)),
+});
+
 export const PortfolioPerformanceSnapshotSummarySchema = z.object({
   id: z.string().min(1),
   accountId: z.string().min(1),
@@ -107,9 +120,17 @@ export const PortfolioPerformanceSnapshotSummarySchema = z.object({
   dataAsOf: z.coerce.date().optional(),
   completeness: PortfolioPerformanceSchema.shape.completeness,
   benchmarkStatus: PortfolioPerformanceSchema.shape.benchmarkStatus,
+  /** 覆盖与样本事实：缺口只报状态和日期，不给百分比。 */
+  coverage: PortfolioCoverageSchema.optional(),
+  /** TWR / 基准 TWR / 超额各自可用性；非 available 时对应百分比字段必须缺席。 */
+  metrics: PortfolioPerformanceMetricsSchema.optional(),
+  /** 归因行：每项带 fact id，可回表核对。 */
+  attribution: z.array(PortfolioSnapshotAttributionSchema),
   valuationDays: z.number().int().nonnegative(),
   warnings: z.array(z.string()),
   twrPct: z.number().finite().optional(),
+  benchmarkTwrPct: z.number().finite().optional(),
+  excessTwrPct: z.number().finite().optional(),
   maxDrawdownPct: z.number().finite().optional(),
   totalPnl: z.number().finite().optional(),
   calculationDurationMs: z.number().finite().nonnegative().optional(),
@@ -163,7 +184,8 @@ export const AuditPortfolioPerformanceSnapshotsOutput = z.object({
 
 export const listPortfolioPerformanceSnapshotsTool = defineTool({
   name: 'list_account_performance_snapshots',
-  description: '查询账户绩效快照审计摘要，不重新请求行情或重算绩效',
+  description:
+    '查询账户绩效快照摘要（TWR / 基准 TWR / 超额 / 覆盖缺口与缺失日期 / 归因 fact id），不重新请求行情或重算绩效',
   sideEffect: 'read',
   input: ListPortfolioPerformanceSnapshotsInput,
   output: ListPortfolioPerformanceSnapshotsOutput,
@@ -177,35 +199,60 @@ export const listPortfolioPerformanceSnapshotsTool = defineTool({
       input.limit,
     );
     return {
-      snapshots: snapshots.map((snapshot) => ({
-        id: snapshot.id,
-        accountId: snapshot.accountId,
-        from: snapshot.from,
-        to: snapshot.to,
-        currency: snapshot.currency,
-        inputFingerprint: snapshot.inputFingerprint,
-        calculatedAt: snapshot.calculatedAt,
-        ...(snapshot.dataAsOf === undefined ? {} : { dataAsOf: snapshot.dataAsOf }),
-        completeness: snapshot.performance.completeness,
-        benchmarkStatus: snapshot.performance.benchmarkStatus,
-        valuationDays: snapshot.performance.valuation.length,
-        warnings: [...snapshot.performance.warnings],
-        ...(snapshot.performance.twrPct === undefined
-          ? {}
-          : { twrPct: snapshot.performance.twrPct }),
-        ...(snapshot.performance.maxDrawdownPct === undefined
-          ? {}
-          : { maxDrawdownPct: snapshot.performance.maxDrawdownPct }),
-        ...(snapshot.performance.totalPnl === undefined
-          ? {}
-          : { totalPnl: snapshot.performance.totalPnl }),
-        ...(snapshot.performance.audit?.calculationDurationMs === undefined
-          ? {}
-          : { calculationDurationMs: snapshot.performance.audit.calculationDurationMs }),
-        ...(snapshot.performance.audit?.inputFacts === undefined
-          ? {}
-          : { inputFacts: snapshot.performance.audit.inputFacts }),
-      })),
+      snapshots: snapshots.map((snapshot) => {
+        const performance = snapshot.performance;
+        const attribution = performance.contributions.map((item) => ({
+          stockId: item.stockId,
+          contribution: item.contribution,
+          completeness: item.completeness,
+          factIds: [...(item.factIds ?? [])],
+        }));
+        const metricsAvailable = performance.metrics !== undefined;
+        const warnings = [...performance.warnings];
+        // 存量快照没有覆盖/样本字段与 fact id：如实说「无法判定/无法追溯」，
+        // 不按「默认完整」或「默认 0 贡献」补齐。
+        if (performance.coverage === undefined || !metricsAvailable)
+          warnings.push('快照早于覆盖/样本字段，无法判定 TWR 样本是否充足');
+        if (attribution.some((item) => item.factIds.length === 0))
+          warnings.push('部分归因缺少 fact id，无法追溯到账本事实');
+        return {
+          id: snapshot.id,
+          accountId: snapshot.accountId,
+          from: snapshot.from,
+          to: snapshot.to,
+          currency: snapshot.currency,
+          inputFingerprint: snapshot.inputFingerprint,
+          calculatedAt: snapshot.calculatedAt,
+          ...(snapshot.dataAsOf === undefined ? {} : { dataAsOf: snapshot.dataAsOf }),
+          completeness: performance.completeness,
+          benchmarkStatus: performance.benchmarkStatus,
+          ...(performance.coverage === undefined ? {} : { coverage: performance.coverage }),
+          ...(performance.metrics === undefined ? {} : { metrics: performance.metrics }),
+          attribution,
+          valuationDays: performance.valuation.length,
+          warnings,
+          // 没有样本/覆盖判定（存量快照）就不转述百分比：口径未知的数字比没有数字更危险。
+          ...(metricsAvailable && performance.twrPct !== undefined
+            ? { twrPct: performance.twrPct }
+            : {}),
+          ...(metricsAvailable && performance.benchmarkTwrPct !== undefined
+            ? { benchmarkTwrPct: performance.benchmarkTwrPct }
+            : {}),
+          ...(metricsAvailable && performance.excessTwrPct !== undefined
+            ? { excessTwrPct: performance.excessTwrPct }
+            : {}),
+          ...(performance.maxDrawdownPct === undefined
+            ? {}
+            : { maxDrawdownPct: performance.maxDrawdownPct }),
+          ...(performance.totalPnl === undefined ? {} : { totalPnl: performance.totalPnl }),
+          ...(performance.audit?.calculationDurationMs === undefined
+            ? {}
+            : { calculationDurationMs: performance.audit.calculationDurationMs }),
+          ...(performance.audit?.inputFacts === undefined
+            ? {}
+            : { inputFacts: performance.audit.inputFacts }),
+        };
+      }),
     };
   },
 });
@@ -512,7 +559,8 @@ const dataAsOfFor = (
 
 export const getAccountPerformanceTool = defineTool({
   name: 'get_account_performance',
-  description: '使用真实交易、现金流、公司行动和日线计算账户估值、TWR、回撤与持仓贡献',
+  description:
+    '使用真实交易、现金流、公司行动和日线计算账户估值、TWR、基准 TWR、超额、回撤与持仓贡献；覆盖不足只返回状态与缺失日期，样本不足只给 insufficient 不给百分比',
   sideEffect: 'external',
   input: GetAccountPerformanceInput,
   output: GetAccountPerformanceOutput,

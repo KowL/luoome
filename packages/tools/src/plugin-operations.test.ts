@@ -162,7 +162,12 @@ describe('persistent operation execution', () => {
     const prepared = data(await service.prepare(principal, request));
     const frozen = await ctx.repos.pluginAuthority.findOperation({ ...principal, id: request.id });
     if (!frozen) throw new Error('Missing frozen operation');
-    expect(JSON.parse(frozen.inputJson).content).toEqual({ ...original, note: 'approved note' });
+    // 冻结的是解析后的完整 content：adviceFeedback 来自基准修订，已带写入层盖的来源戳。
+    expect(JSON.parse(frozen.inputJson).content).toEqual({
+      ...original,
+      adviceFeedback: { ...original.adviceFeedback, origin: 'model' },
+      note: 'approved note',
+    });
     expect(
       (
         await saveDecisionReviewTool.execute(
@@ -195,7 +200,11 @@ describe('persistent operation execution', () => {
       subject,
     });
     expect(current?.review.currentRevision).toBe(2);
-    expect(current?.revision.content).toEqual({ ...original, note: 'concurrent note' });
+    expect(current?.revision.content).toEqual({
+      ...original,
+      adviceFeedback: { ...original.adviceFeedback, origin: 'model' },
+      note: 'concurrent note',
+    });
   });
   it('reports input issue paths without echoing submitted values or preparing a write', async () => {
     const { service, principal, handler, ctx } = await setup();

@@ -167,6 +167,8 @@ export const adviceFeedbackOf = (advice) => {
   return {
     ...meta,
     outcome: outcome.outcome,
+    // REQ-M3-18：来源随回填一起落库，面板照实显示，不把模型代填画成用户回填。
+    origin: typeof outcome.origin === 'string' ? outcome.origin : null,
     pnl: typeof outcome.pnl === 'number' ? outcome.pnl : null,
     notes: typeof outcome.notes === 'string' ? outcome.notes : null,
     recordedAt: typeof outcome.recordedAt === 'string' ? outcome.recordedAt : null,

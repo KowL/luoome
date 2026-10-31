@@ -199,6 +199,8 @@ describe('client panel state projection', () => {
       label: '已跟随',
       tone: 'accent',
       outcome: 'followed',
+      // 存量回填没有来源戳：面板显示为未知，不假定是用户填的。
+      origin: null,
       pnl: 12.5,
       notes: '已分批',
       recordedAt: '2026-10-24T00:00:00Z',

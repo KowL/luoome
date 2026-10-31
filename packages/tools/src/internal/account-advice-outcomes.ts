@@ -20,6 +20,9 @@ export const accountAdviceOutcomes = async (
             adviceId: review.subject.id,
             tradeIds: revision.content.tradeIds,
             outcome: feedback.outcome,
+            // 存量修订没有 origin：保持缺省，让统计侧能把它单列为 unattested，
+            // 而不是悄悄算成用户回填。
+            ...(feedback.origin === undefined ? {} : { origin: feedback.origin }),
             ...(feedback.pnl === undefined ? {} : { pnl: money(feedback.pnl) }),
             ...(feedback.benchmarkPnl === undefined
               ? {}

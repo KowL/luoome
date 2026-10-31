@@ -2,8 +2,13 @@ import { type AdviceOutcome, AdviceOutcomeSchema, money } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
+import { adviceOutcomeOriginOf } from '../internal/advice-outcome-origin.js';
 import { getDecisionReviewContextTool, saveDecisionReviewTool } from './decision-review.js';
 
+/**
+ * 注意：这里**没有** `origin` 入参。来源由执行通道决定（`ctx.adviceOutcomeOrigin`），
+ * 模型即使额外传 `origin: 'user'` 也会被 zod 剥掉，落库值只可能是通道值。
+ */
 export const RecordAdviceOutcomeInput = z.object({
   adviceId: z.string().min(1),
   accountId: z.string().min(1).optional(),
@@ -52,6 +57,7 @@ export const recordAdviceOutcomeTool = defineTool({
   output: RecordAdviceOutcomeOutput,
   handler: async (input, ctx) => {
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    const origin = adviceOutcomeOriginOf(ctx);
     const subject = { kind: 'advice' as const, id: input.adviceId };
     const preview = await getDecisionReviewContextTool.execute({ accountId, subject }, ctx);
     if (!preview.ok) return preview;
@@ -69,6 +75,7 @@ export const recordAdviceOutcomeTool = defineTool({
           tradeIds: input.tradeIds,
           adviceFeedback: {
             outcome: input.outcome,
+            origin,
             ...(input.pnl === undefined ? {} : { pnl: input.pnl }),
             ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: input.benchmarkPnl }),
             ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),
@@ -87,6 +94,7 @@ export const recordAdviceOutcomeTool = defineTool({
       adviceId: input.adviceId,
       tradeIds: input.tradeIds,
       outcome: outcomeKind,
+      origin,
       ...(input.pnl === undefined ? {} : { pnl: money(input.pnl) }),
       ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: money(input.benchmarkPnl) }),
       ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),

@@ -6,6 +6,7 @@
 // 不重新执行 handler，也不把失败包装成成功。
 import {
   type AdviceOutcome,
+  type AdviceOutcomeOrigin,
   AdviceOutcomeSchema,
   inspectStrategyDefinitionReferences,
   money,
@@ -163,11 +164,19 @@ const publishStrategyVersionOperation: ConfirmablePluginTool = {
   },
 };
 
-/** 与 record_advice_outcome 落库时相同的 content 映射，用于核对业务回执。 */
-const adviceOutcomeContent = (input: z.output<typeof RecordAdviceOutcomeInput>) => ({
+/**
+ * 与 record_advice_outcome 落库时相同的 content 映射，用于核对业务回执。
+ * `origin` 由执行通道决定（`ctx.adviceOutcomeOrigin`，agent 会话缺省即 `model`），
+ * 不在 input 里，所以回执核对也必须按同一个通道值重建。
+ */
+const adviceOutcomeContent = (
+  input: z.output<typeof RecordAdviceOutcomeInput>,
+  origin: AdviceOutcomeOrigin,
+) => ({
   tradeIds: [...new Set(input.tradeIds)].sort(),
   adviceFeedback: {
     outcome: input.outcome,
+    origin,
     ...(input.pnl === undefined ? {} : { pnl: input.pnl }),
     ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: input.benchmarkPnl }),
     ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),
@@ -208,12 +217,14 @@ const recordAdviceOutcomeOperation: ConfirmablePluginTool = {
       review.subject.id !== input.adviceId
     )
       return null;
-    if (!jsonEqual(revision.content, adviceOutcomeContent(input))) return null;
+    const origin = ctx.adviceOutcomeOrigin ?? 'model';
+    if (!jsonEqual(revision.content, adviceOutcomeContent(input, origin))) return null;
     if (revision.changeNote !== (input.changeNote ?? null)) return null;
     const outcome: AdviceOutcome = {
       adviceId: input.adviceId,
       tradeIds: input.tradeIds,
       outcome: input.outcome,
+      origin,
       ...(input.pnl === undefined ? {} : { pnl: money(input.pnl) }),
       ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: money(input.benchmarkPnl) }),
       ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),

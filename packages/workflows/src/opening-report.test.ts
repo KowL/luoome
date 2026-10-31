@@ -184,6 +184,37 @@ describe('opening-report workflow', () => {
     expect(rerun.data.report.id).toBe(first.data.report.id);
   });
 
+  it('单账户「当日收益率」取最后一个估值日的日收益，不因区间 TWR 样本不足而消失', async () => {
+    // 收盘后生成：当日日线已收盘，最后一个估值日才有价格事实。
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-27T10:00:00.000Z'),
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      },
+    });
+    const result = await openingReportWorkflow.run(
+      {
+        date: '2026-07-27',
+        notify: false,
+        scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'overnight-portfolio');
+    const metrics =
+      section?.blocks.flatMap((block) => (block.kind === 'metrics' ? block.items : [])) ?? [];
+    // REQ-M3-07 给区间 TWR 加了 20 个完整估值日的样本下限，单日报告只有 2 个估值日；
+    // 这一行必须继续用「最后一个估值日的日收益」表达当日收益率，而不是整行消失。
+    const twrRow = metrics.find((metric) => metric.key === 'twrPct');
+    expect(twrRow).toBeDefined();
+    expect(typeof twrRow?.value).toBe('number');
+    // 未配置基准时不生成空占位。
+    expect(metrics.some((metric) => metric.key === 'benchmarkTwrPct')).toBe(false);
+  });
+
   it('scheduled 模式默认发送通知并把报告 deliveryStatus 更新为 sent', async () => {
     const manager: AShareSentimentManagerLike = {
       status: () => [],

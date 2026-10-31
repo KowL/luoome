@@ -145,12 +145,49 @@ export interface Advice {
   readonly outcome?: AdviceOutcome;
 }
 
+/**
+ * 回填来源（REQ-M3-18 §2）。
+ *
+ * 「AI 不得代填建议兑现」不能只靠复盘页的 UI 入口：`record_advice_outcome` 在任何会话
+ * 里都能被直接调用。所以写入层必须自己标注来源，统计层默认只认 `user`。
+ * 该字段**不是调用方入参**：由写入路径按所在通道盖章（见 `ToolContext.adviceOutcomeOrigin`），
+ * 模型无法通过工具参数把它写成 `user`。
+ */
+export type AdviceOutcomeOrigin = 'user' | 'model' | 'import';
+export const AdviceOutcomeOriginSchema = z.enum(['user', 'model', 'import']);
+
+/**
+ * 用户回填的四个选项（REQ-M3-18 §1）：兑现 / 部分兑现 / 忽略 / 不知道。
+ *
+ * `unknown` 是**回答**而不是 outcome：用户选「不知道」时没有任何可统计的兑现事实，
+ * 因此不落 adviceFeedback（见 `record_advice_outcome` 与复盘页），分母不变。
+ * 缺「不知道」等于逼用户在不知道时猜一个，正是本需求要堵的伪样本。
+ */
+export const ADVICE_OUTCOME_ANSWERS = [
+  'followed',
+  'partially_followed',
+  'ignored',
+  'unknown',
+] as const;
+export type AdviceOutcomeAnswer = (typeof ADVICE_OUTCOME_ANSWERS)[number];
+export const ADVICE_OUTCOME_ANSWER_LABELS: Readonly<Record<AdviceOutcomeAnswer, string>> = {
+  followed: '兑现',
+  partially_followed: '部分兑现',
+  ignored: '忽略',
+  unknown: '不知道',
+};
+
 /** 建议结果回填（事后验证，ARCHITECTURE §5.2）。 */
 export interface AdviceOutcome {
   readonly adviceId: string;
   /** 实际执行关联的交易记录；空数组表示未关联具体成交。 */
   readonly tradeIds: readonly string[];
   readonly outcome: 'followed' | 'partially_followed' | 'ignored';
+  /**
+   * 回填来源。存量（REQ-M3-18 之前）记录没有该字段：无法追溯是谁填的，
+   * 统计侧单列为 unattested，不默认当成用户回填。
+   */
+  readonly origin?: AdviceOutcomeOrigin;
   readonly pnl?: Money; // 实际盈亏
   readonly benchmarkPnl?: Money; // 同期基准盈亏
   /** 跟单持仓时长（小时）。 */
@@ -362,6 +399,7 @@ export const AdviceOutcomeSchema = z.object({
   adviceId: z.string().min(1),
   tradeIds: z.array(z.string().min(1)).default([]),
   outcome: z.enum(['followed', 'partially_followed', 'ignored']),
+  origin: AdviceOutcomeOriginSchema.optional(),
   pnl: MoneySchema.optional(),
   benchmarkPnl: MoneySchema.optional(),
   holdingHours: z.number().nonnegative().optional(),

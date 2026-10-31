@@ -41,6 +41,27 @@ import {
   Stat,
 } from './primitives.js';
 
+/**
+ * REQ-M3-18 §3：默认口径只算用户亲自回填。被排除的条数必须显式披露，
+ * 否则「命中率 100%」可能只是把模型代填全筛掉了。
+ */
+const excludedNoteOf = (stats) => {
+  const excluded = stats.excluded ?? {};
+  const counts = stats.originCounts ?? {};
+  const parts = [
+    `回填来源：用户 ${int(counts.user ?? 0)} 条`,
+    `模型 ${int(counts.model ?? 0)} 条`,
+    `导入 ${int(counts.import ?? 0)} 条`,
+    `无法追溯 ${int(counts.unattested ?? 0)} 条`,
+  ];
+  const scope = stats.originFilter === 'all' ? '当前口径含非用户来源' : '当前口径只统计用户回填';
+  const dropped =
+    stats.originFilter === 'all'
+      ? '未排除任何来源'
+      : `已排除非用户来源 ${int(excluded.nonUserOrigin ?? 0)} 条、无法追溯 ${int(excluded.unattested ?? 0)} 条`;
+  return `${parts.join(' · ')}；${scope}，${dropped}。`;
+};
+
 const OutcomeCard = ({ stats }) => {
   const outcome = stats.outcomeRate ?? {};
   const rows = [
@@ -72,6 +93,7 @@ const OutcomeCard = ({ stats }) => {
         { className: 'luo-fine', style: { margin: 0 } },
         '按用户明确回填的 outcome 统计；缺失盈亏不计为零。',
       ),
+      h('p', { className: 'luo-fine', style: { margin: 0 } }, excludedNoteOf(stats)),
     ),
   );
 };
@@ -421,9 +443,20 @@ const AdviceFeedbackCard = ({ advices, loading, error }) => {
                 null,
                 feedback
                   ? h(
-                      Pill,
-                      { tone: feedback.tone === 'quiet' ? 'quiet' : feedback.tone },
-                      feedback.label,
+                      Fragment,
+                      null,
+                      h(
+                        Pill,
+                        { tone: feedback.tone === 'quiet' ? 'quiet' : feedback.tone },
+                        feedback.label,
+                      ),
+                      feedback.origin === null || feedback.origin === 'user'
+                        ? null
+                        : h(
+                            'span',
+                            { className: 'luo-fine' },
+                            ` ${feedback.origin === 'import' ? '导入' : '模型代填'}（不计入默认统计）`,
+                          ),
                     )
                   : h('span', { className: 'luo-fine' }, '未回填（不推断）'),
                 feedback?.pnl === null || feedback?.pnl === undefined

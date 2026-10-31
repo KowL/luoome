@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 import { AccountSchema } from './account.js';
+import { AdviceOutcomeOriginSchema } from './advice.js';
 import { HoldingSchema } from './holding.js';
 import { TradeSchema } from './trade.js';
 
@@ -18,6 +19,11 @@ export const DecisionReviewContentSchema = z
     adviceFeedback: z
       .object({
         outcome: z.enum(['followed', 'partially_followed', 'ignored']),
+        /**
+         * 回填来源（REQ-M3-18 §2）。写入工具总是按通道盖章，调用方传什么都会被覆盖；
+         * 可选只是为了读出 REQ-M3-18 之前的历史修订（无法追溯 = unattested）。
+         */
+        origin: AdviceOutcomeOriginSchema.optional(),
         pnl: z.number().finite().optional(),
         benchmarkPnl: z.number().finite().optional(),
         holdingHours: z.number().finite().nonnegative().optional(),

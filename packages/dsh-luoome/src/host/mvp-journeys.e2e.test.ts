@@ -664,7 +664,10 @@ describe('工具级旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执�
           ...fixture.principal,
           id,
         });
-        expect(frozen?.inputJson).toContain('"adviceFeedback":{"outcome":"ignored","pnl":0}');
+        // 冻结的 content 带写入层盖的来源戳（agent 会话 → model），键按 pluginInputJson 排序。
+        expect(frozen?.inputJson).toContain(
+          '"adviceFeedback":{"origin":"model","outcome":"ignored","pnl":0}',
+        );
         expect(frozen?.inputJson).toContain('"triggerFeedback":null');
         const current = () =>
           fixture.repos.decisionReview.findBySubject({
@@ -673,6 +676,7 @@ describe('工具级旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执�
           });
         expect((await current())?.revision.content).toEqual({
           ...original,
+          adviceFeedback: { ...original.adviceFeedback, origin: 'model' },
           note: 'only update the note',
         });
         const replay = await fixture.execute(MANUAL_OPERATION_TOOL, {
@@ -691,7 +695,11 @@ describe('工具级旅程（脚本模型 + 真实 DSH AgentLoop/个人直接执�
           },
         });
         expect(cleared?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
-        expect((await current())?.revision.content).toEqual({ ...original, note: null });
+        expect((await current())?.revision.content).toEqual({
+          ...original,
+          adviceFeedback: { ...original.adviceFeedback, origin: 'model' },
+          note: null,
+        });
       } finally {
         await fixture.close();
       }

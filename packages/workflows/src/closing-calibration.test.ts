@@ -60,7 +60,11 @@ const advice = (id: string, accountId: string | null, createdAt = NOW): Advice =
 });
 const setup = async () => {
   let now = NOW;
-  const base = await buildTestContext({ clock: () => now, advices: [] });
+  const base = await buildTestContext({
+    clock: () => now,
+    advices: [],
+    adviceOutcomeOrigin: 'user',
+  });
   const ctx: ToolContext = { ...base };
   const account = await ctx.repos.account.findById(ctx.user.defaultAccountId);
   if (!account) throw new Error('fixture account missing');
