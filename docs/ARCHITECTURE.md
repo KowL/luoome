@@ -869,11 +869,27 @@ worker profile 仅作手动/隔离验收。
 旧快照仍可审计但不能写回，同一有效租约只允许刷新一次。租约保证同一 job 只被一个消费者
 完成；租约超时的 job 被回收后可重新认领。
 
+**这套机制的边界**（`missingFacts` 与 `contextHash`）：
+
+> hash 与完整性 checker 防的是「已有 context 的缺口被事后删除或篡改」；
+> 它们不保证「缺口一定被发现」——若 context 生成阶段本身就没识别出缺口，
+> 下游无从得知。后者需要生成侧的事实对账，不在本机制范围内。
+
 写回路径的校验（`packages/tools/src/queue/record.ts`）：
 
 - 事实包必须存在且 `kind` 以 `advice_` 开头，否则 `context_mismatch`
-- `contextHash` 必须等于 `analysisHash({ facts, dataAsOf })`，否则 `context_mismatch`
+- `contextHash` 必须与事实包一致，否则 `context_mismatch`。口径有版本（`ANALYSIS_CONTEXT_HASH_VERSION`）：
+  **v1** 只覆盖 `{ facts, dataAsOf }`；**v2** 追加 `missingFacts`。校验侧用
+  `analysisContextHashMatches` 按口径重算比对（先 v2 再 v1），因此历史 context 不会被误判，
+  而 `missingFacts` 的增删改**会改变 hash**——它是 P8 的判断输入（`unavailable` 必须阻断），
+  必须受 hash 保护，否则删掉一条 blocking 缺口就能绕过门禁而 hash 不变。
 - `provenance.evidenceFactIds` 必须全部落在事实包的 `factIds` 内，否则 `unknown_fact_reference`
+- `checkAnalysisReportCompleteness` 做**完整性**对账：事实包里的每条 blocking 缺口，报告必须用
+  `provenance.acknowledgedMissingFacts` 按 **(kind, subjectId) 配对**逐条声明，否则
+  `omitted-blocking-missing-fact`（带具体 kind 与 subjectId）。只对 `advice_*` 生效——研究类报告
+  允许在缺行情时产出，套这条会挡住合法研究。
+- 错误优先级是产品语义：引用错误 → 时序错误 → 完整性错误。完整性检查因此**独立成函数**而不是
+  并进 `checkAnalysisReportReferences`，避免"上下文已过期"被"缺口没声明"抢答。
 - 写回时效按 `kind` 取 `packages/core/src/entity/analysis-context.ts` 的 `analysisTimingRules`
   （`analysisContextTiming` / `analysisContextTimingError` 是唯一事实来源，context 装配、
   enqueue、record、refresh 共用，不复制规则）：
