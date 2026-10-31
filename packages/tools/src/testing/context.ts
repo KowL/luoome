@@ -50,6 +50,11 @@ export interface BuildTestContextOptions {
    * 只有模拟「用户亲自在复盘页回填」的用例才显式传 `user`。
    */
   readonly adviceOutcomeOrigin?: AdviceOutcomeOrigin;
+  /**
+   * 组合基准标的（REQ-M3-06/07）。缺省不注入，与「测试上下文显式保持 unavailable」
+   * 的既有约定一致；只有要断言基准身份的用例才传生产装配同款的值。
+   */
+  readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
 }
 
 const createSilentLogger = (): Logger => {
@@ -104,6 +109,9 @@ export const buildTestContext = async (
     ...(opts.adviceOutcomeOrigin === undefined
       ? {}
       : { adviceOutcomeOrigin: opts.adviceOutcomeOrigin }),
+    ...(opts.portfolioBenchmark === undefined
+      ? {}
+      : { portfolioBenchmark: opts.portfolioBenchmark }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };

@@ -20,7 +20,7 @@ import { defineTool, errNotFound } from '../define-tool.js';
  * 上一交易日的收盘价顶掉，于是明明有昨收也会被判为缺行情。这里按时间倒序取第一条
  * 通过决策资格校验的行情，保证盘前、收盘后、盘中都能得到稳定口径。
  */
-const latestQualifiedQuote = async (
+export const latestQualifiedQuote = async (
   ctx: ToolContext,
   stockId: string,
   now: Date,
@@ -45,7 +45,7 @@ const latestQualifiedQuote = async (
   return null;
 };
 
-const latestQuoteWithinDays = async (
+export const latestQuoteWithinDays = async (
   ctx: ToolContext,
   stockId: string,
   now: Date,

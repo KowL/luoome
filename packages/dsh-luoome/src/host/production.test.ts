@@ -564,6 +564,8 @@ describe('dsh-luoome production composition root', () => {
       // 策略调度与订阅契约读面
       'get_strategy_schedule',
       'list_strategy_watchlist_subscriptions',
+      // 组合风险（REQ-M3-06）：只读、零回源，VaR 读已落库绩效快照
+      'get_portfolio_risk',
       // 三面板
       'list_holdings',
       'list_watch_triggers',

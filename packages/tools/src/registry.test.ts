@@ -217,6 +217,7 @@ const EXPECTED_TOOL_NAMES = [
   'create_portfolio_corporate_action',
   'get_account_performance',
   'list_account_performance_snapshots',
+  'get_portfolio_risk',
   'audit_account_performance_snapshots',
   // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列 write 入口；
   // 创建/转移为 workflow-only，不进公共 registry）

@@ -98,6 +98,7 @@ export * from './tools/news.js';
 export * from './tools/northbound-flow.js';
 export * from './tools/personal.js';
 export * from './tools/portfolio-performance.js';
+export * from './tools/portfolio-risk.js';
 export * from './tools/prepare-strategy-data.js';
 export * from './tools/prune-strategy-runs.js';
 export * from './tools/reconcile-stale-strategy-runs.js';

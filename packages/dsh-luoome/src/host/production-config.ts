@@ -24,6 +24,10 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'list_accounts',
   'get_account',
   'get_account_facts',
+  // 组合风险（REQ-M3-06）：只读本地持仓 + 已落库报价 + 已落库绩效快照 + active TradingPlan，
+  // 零回源、零写库。VaR 读已落库绩效快照；要刷新快照走 external 面的 get_account_performance
+  // 或盘后 snapshot-account-performance 任务，本工具不自己算组合日收益序列。
+  'get_portfolio_risk',
   // 账户层归因与超额收益（REQ-M3-07）：TWR / 基准 TWR / 超额 / 覆盖缺口 / 归因 fact id。
   // 会回源刷新行情的 get_account_performance 属 external，见 DEFAULT_MARKET_TOOL_ALLOWLIST。
   'list_account_performance_snapshots',

@@ -92,6 +92,8 @@ export const PortfolioMetricReasonSchema = z.enum([
   'benchmark-sample-too-small',
   'twr-unavailable',
   'benchmark-unavailable',
+  /** 账户没有未平仓持仓：集中度/上限判定没有对象，不是「零集中度」。 */
+  'no-holdings',
 ]);
 export type PortfolioMetricReason = z.infer<typeof PortfolioMetricReasonSchema>;
 

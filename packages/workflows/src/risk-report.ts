@@ -1,10 +1,26 @@
+import { MoneySchema, PortfolioMetricReasonSchema } from '@luoome/core';
+import {
+  type GetPortfolioRiskOutput,
+  PORTFOLIO_RISK_SCHEMA_VERSION,
+  PortfolioRiskCoverageSchema,
+  PortfolioRiskLimitCheckSchema,
+  RiskMetricSchema,
+} from '@luoome/tools';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
+type PortfolioRiskData = z.output<typeof GetPortfolioRiskOutput>;
+
 /**
- * risk-report（v0.3，plan-v0.2-v0.3 §3.5）：
- * list_holdings + 集中度 + VaR 估算拼成风险日报；大盘背景随内置 AI 下线移除。
+ * risk-report（v0.4）：
+ * 集中度与 VaR 的**数学只有一份实现**——`get_portfolio_risk` 工具。
+ * 本 workflow 只负责把工具输出映射成日报形状，不再自己算 HHI、不再自己算 VaR、
+ * 也不再持有 `HHI_THRESHOLD_*` / `VAR_LOOKBACK_DAYS` 这类口径常量。
+ *
+ * 旧版（v0.3）用 `list_holdings.totalValue` 当 HHI 分母，而那个分母在缺价时会用
+ * `avgCost` 顶替（`holding-pnl.ts`），等于伪造分母；`historicalVaR95` 又会把
+ * 「样本全为涨」返回成 0 元。两处都已在工具侧修正，workflow 不再保留第二份。
  */
 
 export const RiskReportInput = z.object({
@@ -13,177 +29,178 @@ export const RiskReportInput = z.object({
 
 export type RiskReportInputT = z.infer<typeof RiskReportInput>;
 
-export const RiskMetricSchema = z.object({
-  name: z.string().min(1),
-  /** 无足够历史事实时保持 null，不能用固定比例伪造 VaR。 */
-  value: z.number().nullable(),
-  unit: z.enum(['pct', 'ratio', 'cny', 'fraction']),
-  level: z.enum(['low', 'mid', 'high', 'unavailable']),
-  note: z.string().min(1),
-});
-
 export const RiskReportOutput = z.object({
+  /** 与工具同源：`value` 从「可为 null」改为「键缺席」是破坏性形状变更，外部脚本据此判定。 */
+  schemaVersion: z.literal(PORTFOLIO_RISK_SCHEMA_VERSION),
   accountId: z.string(),
-  totalValue: z.number(),
+  /**
+   * 总资产（含现金）。**仅在总资产分母完整可用时出现**；有未定价持仓或缺价时
+   * 字段缺席而不是填 0 或填一个不完整的数。
+   */
+  totalValue: MoneySchema.optional(),
   holdingsCount: z.number().int().nonnegative(),
+  /** 指标可用性由工具表达（`available` / `partial` / `insufficient` / `unavailable`）。 */
   metrics: z.array(RiskMetricSchema),
+  limitCheck: PortfolioRiskLimitCheckSchema,
+  coverage: PortfolioRiskCoverageSchema,
+  benchmark: z.object({
+    stockId: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    status: z.enum(['available', 'unavailable', 'not-evaluated']),
+    reason: PortfolioMetricReasonSchema.optional(),
+    note: z.string().min(1),
+  }),
+  /**
+   * 披露行：工具的 warnings + 刷新结论。刷新失败/跳过时不追加任何文案——
+   * 此时工具自己的 `note` 已经点名「缺什么 + 怎么补」，两处说法必须一致。
+   */
+  warnings: z.array(z.string().min(1)),
+  /** 数据健康角标：任一指标非 available 时列出原因，避免「报告看起来完整」。 */
+  dataHealth: z.object({
+    status: z.enum(['available', 'partial', 'insufficient', 'unavailable']),
+    unavailableMetrics: z.array(z.string().min(1)),
+  }),
   marketSummary: z.string(),
   generatedAt: z.coerce.date(),
 });
 
 export type RiskReportOutputT = z.infer<typeof RiskReportOutput>;
 
-const HHI_THRESHOLD_HIGH = 0.5;
-const HHI_THRESHOLD_MID = 0.3;
-
-interface ComputeState {
-  accountId: string;
-  totalValue: number;
-  holdingsCount: number;
-  metrics: Array<z.infer<typeof RiskMetricSchema>>;
-}
+const MARKET_SUMMARY = '（大盘背景随内置 AI 下线，不再生成本地市场判断）';
 
 const DAY_MS = 86_400_000;
-const VAR_LOOKBACK_DAYS = 30;
 
 /**
- * Historical 95% VaR from daily portfolio returns.
- * Returns are percentage points (e.g. -2 means -2%).
- * A null result is intentional when there is no usable historical fact.
+ * 刷新区间：≥31 个交易日的自然日跨度，跨春节/国庆长假仍够 VaR 的 30 个样本。
+ * 具体样本够不够由工具判定，这里只负责「把区间给足」。
  */
-export const historicalVaR95 = (
-  portfolioValue: number,
-  dailyReturnPct: readonly number[],
-): number | null => {
-  if (!Number.isFinite(portfolioValue) || portfolioValue <= 0) return null;
-  const returns = dailyReturnPct.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-  if (returns.length === 0) return null;
-  const position = (returns.length - 1) * 0.05;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  const fraction = position - lower;
-  const quantile =
-    lower === upper
-      ? (returns[lower] ?? 0)
-      : (returns[lower] ?? 0) + ((returns[upper] ?? 0) - (returns[lower] ?? 0)) * fraction;
-  return Math.max(0, (-quantile / 100) * portfolioValue);
+const PERFORMANCE_REFRESH_LOOKBACK_DAYS = 120;
+
+/** 只有「收益样本缺失」才值得刷新；缺价导致的 `coverage-gap` 刷新行情快照也治不了。 */
+const needsReturnSampleRefresh = (data: PortfolioRiskData): boolean => {
+  const var95Pct = data.metrics.find((metric) => metric.name === 'var95Pct');
+  return var95Pct !== undefined && var95Pct.status !== 'available';
 };
 
-const riskLevelForVaR = (
-  value: number | null,
-  portfolioValue: number,
-): 'low' | 'mid' | 'high' | 'unavailable' => {
-  if (value === null || portfolioValue <= 0) return 'unavailable';
-  const ratio = value / portfolioValue;
-  return ratio >= 0.1 ? 'high' : ratio >= 0.05 ? 'mid' : 'low';
-};
-
-const stepHoldings: WorkflowStep = async (prev, ctx) => {
-  const input = prev as RiskReportInputT;
-  return ctx.tools.list_holdings.execute(
-    input.accountId === undefined ? {} : { accountId: input.accountId },
-  );
-};
-
-const stepCompute: WorkflowStep = async (prev, ctx) => {
-  // 引擎已自动 unwrap ToolResult：prev 直接就是 list_holdings 的 data。
-  // 若 stepHoldings 透传了 error result，则 prev 为 { ok: false, error }，
-  // 此处把它当作 ComputeState 透传会被后续 stepMarket spread — 提前判别短路。
-  const maybeError = prev as { ok?: unknown };
-  if (maybeError.ok === false) return prev as unknown as ComputeState;
-  const { accountId, totalValue, holdings } = prev as {
-    accountId: string;
-    totalValue: { readonly __brand: 'Money' } & number;
-    holdings: readonly {
-      holding: { stockId: string; quantity: number; avgCost: number; close?: number };
-    }[];
-  };
-  const totalValueNum = Number(totalValue);
-  const active = holdings.filter((h) => h.holding.quantity > 0);
-  const weights = active.map((h) => {
-    const v = Number(h.holding.close ?? h.holding.avgCost) * h.holding.quantity;
-    return totalValueNum === 0 ? 0 : v / totalValueNum;
+const executeRisk = async (
+  ctx: Parameters<WorkflowStep>[1],
+  accountId: string | undefined,
+  asOf: Date,
+) =>
+  ctx.tools.get_portfolio_risk.execute({
+    asOf,
+    ...(accountId === undefined ? {} : { accountId }),
   });
-  const hhi = weights.reduce((acc, w) => acc + w * w, 0);
-  const top1 = weights.length > 0 ? Math.max(...weights) : 0;
-  const sorted = [...weights].sort((a, b) => b - a);
-  const top3 = sorted.slice(0, 3).reduce((a, b) => a + b, 0);
 
-  // Use the existing account-performance Tool as the single fact path. It loads
-  // real daily bars, applies cash flows/company actions, and exposes only complete
-  // daily TWR observations. If history is unavailable, report null explicitly.
-  const to = ctx.clock();
-  const performance = await ctx.tools.get_account_performance.execute({
-    accountId,
-    from: new Date(to.getTime() - VAR_LOOKBACK_DAYS * DAY_MS),
+const stepRisk: WorkflowStep = async (prev, ctx) => {
+  const input = prev as RiskReportInputT;
+  // PIT 时点固定一次：刷新后重试必须落在同一个时点，否则两次口径不可比。
+  return executeRisk(ctx, input.accountId, ctx.clock());
+};
+
+/**
+ * 刷新步骤：`get_portfolio_risk` 是纯 read（R3：**工具**不自算收益序列），
+ * 但报告流程有权编排 external 能力——旧版 `stepCompute` 就是这样做的。
+ *
+ * 缺收益样本时先跑一次 `get_account_performance`（external：回源拉日线 + 落绩效快照），
+ * 再重试一次工具。这样「新装账户第一次跑 risk-report」不会因为库里没快照就交白卷；
+ * 刷新失败则保留第一次的诚实缺口，不伪造数字。
+ */
+/**
+ * 刷新结论。用户看到「跑完还是不足」时必须能分辨是**数据本身不够**还是**没去拿数据**——
+ * 两者的下一步动作完全不同（补历史 vs 跑刷新）。
+ */
+type RefreshOutcome = 'not-needed' | 'refreshed' | 'refreshed-still-insufficient' | 'failed';
+
+interface RiskState {
+  readonly data: PortfolioRiskData;
+  readonly refresh: RefreshOutcome;
+}
+
+const var95Metric = (data: PortfolioRiskData) =>
+  data.metrics.find((metric) => metric.name === 'var95Pct');
+
+const stepRefresh: WorkflowStep = async (prev, ctx) => {
+  const maybeError = prev as { ok?: unknown };
+  if (maybeError.ok === false) return prev;
+  const first = prev as PortfolioRiskData;
+  if (!needsReturnSampleRefresh(first)) {
+    return { data: first, refresh: 'not-needed' } satisfies RiskState;
+  }
+
+  const to = first.asOf;
+  const from = new Date(to.getTime() - PERFORMANCE_REFRESH_LOOKBACK_DAYS * DAY_MS);
+  const refreshed = await ctx.tools.get_account_performance.execute({
+    accountId: first.accountId,
+    from,
     to,
   });
-  const dailyReturns = performance.ok
-    ? performance.data.valuation
-        .map((day) => day.twrReturnPct)
-        .filter((value): value is number => value !== undefined && Number.isFinite(value))
-    : [];
-  const historicalVaR = historicalVaR95(totalValueNum, dailyReturns);
+  if (!refreshed.ok) return { data: first, refresh: 'failed' } satisfies RiskState;
+  const retried = await executeRisk(ctx, first.accountId, to);
+  if (!retried.ok) return { data: first, refresh: 'failed' } satisfies RiskState;
+  return {
+    data: retried.data,
+    refresh:
+      var95Metric(retried.data)?.status === 'available'
+        ? 'refreshed'
+        : 'refreshed-still-insufficient',
+  } satisfies RiskState;
+};
 
-  const classify = (v: number, high: number, mid: number): 'low' | 'mid' | 'high' =>
-    v >= high ? 'high' : v >= mid ? 'mid' : 'low';
-
-  const state: ComputeState = {
-    accountId,
-    totalValue: totalValueNum,
-    holdingsCount: active.length,
-    metrics: [
-      {
-        name: 'concentration_hhi',
-        value: hhi,
-        unit: 'fraction',
-        level: classify(hhi, HHI_THRESHOLD_HIGH, HHI_THRESHOLD_MID),
-        note: `Herfindahl 指数：≥${HHI_THRESHOLD_HIGH} 高 / ≥${HHI_THRESHOLD_MID} 中`,
-      },
-      {
-        name: 'concentration_top1',
-        value: top1,
-        unit: 'fraction',
-        level: classify(top1, 0.4, 0.25),
-        note: '单只最大持仓权重',
-      },
-      {
-        name: 'concentration_top3',
-        value: top3,
-        unit: 'fraction',
-        level: classify(top3, 0.75, 0.5),
-        note: '前 3 大持仓权重合计',
-      },
-      {
-        name: 'var95_30d',
-        value: historicalVaR,
-        unit: 'cny',
-        level: riskLevelForVaR(historicalVaR, totalValueNum),
-        note:
-          historicalVaR === null
-            ? '最近 30 日没有足够完整估值收益，VaR 不可用'
-            : `最近 30 日历史 95% VaR（有效收益样本 ${dailyReturns.length}）`,
-      },
-    ],
-  };
-  return state;
+/**
+ * 只有「刷新过、样本仍然不够」才追加一行——这一行回答的是「我已经去拿数据了，
+ * 是数据本身不够」。刷新失败/跳过不追加：此时工具自己的 note 就是「没去拿数据」的补法。
+ */
+const refreshWarnings = (state: RiskState): string[] => {
+  if (state.refresh !== 'refreshed-still-insufficient') return [];
+  const metric = var95Metric(state.data);
+  if (metric === undefined || metric.status !== 'insufficient') return [];
+  const count = metric.window?.returnsCount;
+  const min = metric.window?.minReturns;
+  return [
+    `已刷新绩效快照（get_account_performance），但有效日收益仍只有 ${String(count ?? 0)} 个` +
+      `${min === undefined ? '' : `（需 ≥${String(min)}）`}，样本本身不足：` +
+      '需要更长的账户历史或更多完整估值日，刷新解决不了',
+  ];
 };
 
 const stepFinalize: WorkflowStep = async (prev) => {
-  const state = prev as ComputeState;
+  const state = prev as RiskState;
+  const data = state.data;
+  const totalAssets = data.valuation.totalAssets;
+  const unavailableMetrics = data.metrics
+    .filter((metric) => metric.status === 'unavailable' || metric.status === 'insufficient')
+    .map((metric) => metric.name);
   return RiskReportOutput.parse({
-    accountId: state.accountId,
-    totalValue: state.totalValue,
-    holdingsCount: state.holdingsCount,
-    metrics: state.metrics,
-    marketSummary: '（大盘背景随内置 AI 下线，不再生成本地市场判断）',
+    schemaVersion: PORTFOLIO_RISK_SCHEMA_VERSION,
+    accountId: data.accountId,
+    // 分母不完整时不给 totalValue：不完整的总额比缺席更容易被当成结论。
+    ...(totalAssets.status === 'available' ? { totalValue: totalAssets.value } : {}),
+    holdingsCount: data.coverage.holdingsCount,
+    metrics: data.metrics,
+    limitCheck: data.limitCheck,
+    coverage: data.coverage,
+    benchmark: data.benchmark,
+    dataHealth: {
+      // 缺口优先于「部分可用」：有 unavailable 就不把整份报告标成 partial。
+      status: data.metrics.some(
+        (metric) => metric.status === 'unavailable' || metric.status === 'insufficient',
+      )
+        ? 'unavailable'
+        : data.metrics.some((metric) => metric.status === 'partial')
+          ? 'partial'
+          : 'available',
+      unavailableMetrics,
+    },
+    warnings: [...data.warnings, ...refreshWarnings(state)],
+    marketSummary: MARKET_SUMMARY,
     generatedAt: new Date(),
   });
 };
 
 export const riskReportWorkflow = defineWorkflow<RiskReportInputT, RiskReportOutputT>({
   name: 'risk-report',
-  description: '生成账户风险日报（集中度 + VaR）',
+  description: '生成账户风险日报（集中度 + VaR，口径唯一实现：get_portfolio_risk）',
   input: RiskReportInput,
-  steps: [stepHoldings, stepCompute, stepFinalize],
+  steps: [stepRisk, stepRefresh, stepFinalize],
 });

@@ -101,6 +101,7 @@ import {
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
 } from './tools/portfolio-performance.js';
+import { getPortfolioRiskTool } from './tools/portfolio-risk.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { pruneStrategyRunsTool } from './tools/prune-strategy-runs.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
@@ -442,6 +443,7 @@ export const toolRegistry: Registry = createRegistry([
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
   auditPortfolioPerformanceSnapshotsTool,
+  getPortfolioRiskTool,
   getStrategyPitUniverseTool,
   getStrategyEvaluationSessionTool,
   listStrategyEvaluationDaysTool,

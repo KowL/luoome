@@ -72,6 +72,8 @@ import type {
   GetInvestmentCandidatesOutput,
   GetInvestmentWorkspaceInput,
   GetInvestmentWorkspaceOutput,
+  GetPortfolioRiskInput,
+  GetPortfolioRiskOutput,
   GetPreviousClosesInput,
   GetPreviousClosesOutput,
   GetReportInput,
@@ -333,6 +335,11 @@ export interface WorkflowToolMap {
   readonly get_account_performance: ToolAccessor<
     typeof GetAccountPerformanceInput,
     typeof GetAccountPerformanceOutput
+  >;
+  /** REQ-M3-06：组合风险口径的唯一实现；risk-report 只做映射，不再自己算 HHI / VaR。 */
+  readonly get_portfolio_risk: ToolAccessor<
+    typeof GetPortfolioRiskInput,
+    typeof GetPortfolioRiskOutput
   >;
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
