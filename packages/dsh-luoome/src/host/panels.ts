@@ -14,6 +14,8 @@ import {
   isHoliday,
   isWeekend,
   type MarketSession,
+  marketObservationLabel,
+  marketObservationScope,
   nextTradingSessionStart,
   previousTradingDate,
   type ToolResult,
@@ -254,6 +256,19 @@ export interface PanelStateResponse {
   readonly configuration?: Readonly<Record<string, unknown>>;
   readonly section?: OverviewSection;
   readonly watchlistPage?: WatchlistPage;
+  /**
+   * 市场级判断的观测标注（REQ-M3-09 Q5 / S6）：三档 `scope` + 固定 `label` + `observedAt`。
+   *
+   * **服务端算**（`marketObservationScope` / `marketObservationLabel` 是 core 的唯一实现）：
+   * 客户端只渲染 `label` 字符串，**不写第二份日期比较**——M3-20 的教训就是同一条日期规则
+   * 被写了两遍。`reference` 取 `now`（实时面板），与 `opening-report` 取**报告期**的理由不同
+   * （那里是补跑历史报告）。
+   */
+  readonly marketObservation?: {
+    readonly observedAt: string;
+    readonly scope: 'current' | 'prior-session' | 'historical';
+    readonly label: string;
+  };
 }
 
 const jsonNoStore = (body: unknown, status = 200): Response =>
@@ -592,9 +607,28 @@ export const createPanelStateHandler =
       );
     }
 
+    // 市场级判断的观测标注：只有情绪快照带 `dataAsOf`，其它工具没有市场级判断。
+    const sentimentSnapshot = asRecord(
+      asRecord(tools.find((tool) => tool.name === 'get_ashare_sentiment')?.data)?.snapshot,
+    );
+    const sentimentObservedAt = (() => {
+      const raw = sentimentSnapshot?.dataAsOf;
+      const parsed = raw instanceof Date ? raw : typeof raw === 'string' ? new Date(raw) : null;
+      return parsed !== null && Number.isFinite(parsed.getTime()) ? parsed : undefined;
+    })();
+    const marketObservation =
+      sentimentObservedAt === undefined
+        ? undefined
+        : {
+            observedAt: sentimentObservedAt.toISOString(),
+            scope: marketObservationScope(sentimentObservedAt, now),
+            label: marketObservationLabel(sentimentObservedAt, now),
+          };
+
     const body: PanelStateResponse = {
       panel: name,
       asOf: now.toISOString(),
+      ...(marketObservation === undefined ? {} : { marketObservation }),
       session: {
         marketSession: computeMarketSession(now),
         nextSessionStart: nextTradingSessionStart(now).toISOString(),

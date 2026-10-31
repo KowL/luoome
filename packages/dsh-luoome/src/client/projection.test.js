@@ -2,6 +2,8 @@
 // 不重算 PnL/统计、不推断用户跟随、不把未知写成零。
 import { describe, expect, it } from 'vitest';
 import {
+  adviceCardEntriesOf,
+  adviceCardEntry,
   adviceFeedbackOf,
   calibrationRows,
   dataOf,
@@ -9,7 +11,10 @@ import {
   decisionReviewRows,
   errorOf,
   mapStateBody,
+  marketObservationOf,
   mergeOverviewSection,
+  metricTimeText,
+  panelHealthBadge,
   publishedRunsByStrategy,
   researchRequestFor,
   stateUrl,
@@ -450,5 +455,112 @@ describe('client panel state projection', () => {
     expect(fallback.strategyId).toBe('strategy-x');
     expect(fallback.prompt).toContain('所选策略');
     expect(fallback.prompt).not.toContain('strategy-x');
+  });
+});
+
+describe('REQ-M3-09 事实缺口投影（client 侧唯一实现，判定全在服务端）', () => {
+  it('角标只读服务端 health：三档映射到配色，缺 health 时返回 null（不伪造健康）', () => {
+    expect(panelHealthBadge(null)).toBeNull();
+    expect(panelHealthBadge({ status: 'weird' })).toBeNull();
+    expect(
+      panelHealthBadge({ status: 'available', checkedTools: ['a'], issues: [] }),
+    ).toMatchObject({
+      status: 'available',
+      tone: 'ok',
+      label: '数据健康',
+      asOf: null,
+      checkedTools: 1,
+    });
+    const partial = panelHealthBadge({
+      status: 'partial',
+      asOf: '2026-10-20T00:00:00.000Z',
+      issues: [{ tool: 'list_holdings', detail: '缺价', remedy: '先跑 batch_quote' }],
+    });
+    expect(partial.tone).toBe('warn');
+    expect(partial.asOf).toBe('2026-10-20T00:00:00.000Z');
+    expect(partial.detail[0]).toContain('batch_quote');
+    expect(panelHealthBadge({ status: 'unavailable' }).tone).toBe('bad');
+  });
+
+  it('缺时点渲染「时点未知」而不是省略（PRD「出现即带」）', () => {
+    expect(metricTimeText(null)).toBe('时点未知');
+    expect(metricTimeText(undefined)).toBe('时点未知');
+    expect(metricTimeText('')).toBe('时点未知');
+    expect(metricTimeText('2026-10-30T00:00:00.000Z')).toBe('2026-10-30T00:00:00.000Z');
+  });
+
+  it('卡片条目：renderable 给五段；blocked 给 warning 文案且列出缺段', () => {
+    expect(adviceCardEntry(null)).toBeNull();
+    const blocked = adviceCardEntry({
+      status: 'blocked',
+      adviceId: 'a1',
+      missing: ['counterEvidence', 'risks'],
+      available: ['conclusion', 'validity', 'disclaimer'],
+      note: '不可渲染：缺反证 / 风险',
+    });
+    expect(blocked).toMatchObject({ status: 'blocked', tone: 'warning', adviceId: 'a1' });
+    expect(blocked.text).toContain('不可渲染');
+    expect(blocked.missing).toEqual(['counterEvidence', 'risks']);
+
+    const renderable = adviceCardEntry({
+      status: 'renderable',
+      adviceId: 'a2',
+      conclusion: 'c',
+      counterEvidence: ['ce'],
+      risks: ['r'],
+      validity: { validUntil: '2026-11-01T00:00:00.000Z', expired: false },
+      disclaimer: ['d1', 'd2', 'd3'],
+      dataAsOf: '2026-10-30T00:00:00.000Z',
+    });
+    expect(renderable).toMatchObject({ status: 'renderable', tone: 'factual' });
+    expect(renderable.counterEvidence).toEqual(['ce']);
+    expect(renderable.disclaimer).toHaveLength(3);
+  });
+
+  it('cards 按 advice id 对齐，坏条目被跳过而不是伪造', () => {
+    const entries = adviceCardEntriesOf({
+      cards: [
+        {
+          status: 'renderable',
+          adviceId: 'a1',
+          conclusion: 'c',
+          counterEvidence: ['x'],
+          risks: ['y'],
+          validity: null,
+          disclaimer: ['d'],
+          dataAsOf: null,
+        },
+        { status: 'blocked', adviceId: 'a2', missing: ['risks'], note: '不可渲染：缺风险' },
+        { status: 'unknown', adviceId: 'a3' },
+      ],
+    });
+    expect([...entries.keys()]).toEqual(['a1', 'a2']);
+  });
+
+  it('市场观察三档：只挑服务端字段，current 静默、其余 warn', () => {
+    expect(marketObservationOf({})).toBeNull();
+    expect(
+      marketObservationOf({ marketObservation: { scope: 'current', label: '观测于 X' } }),
+    ).toMatchObject({
+      tone: 'quiet',
+      label: '观测于 X',
+    });
+    expect(
+      marketObservationOf({
+        marketObservation: { scope: 'prior-session', label: '上一交易日收盘观察（观测于 X）' },
+      }),
+    ).toMatchObject({ tone: 'warn', scope: 'prior-session' });
+  });
+
+  it('mapStateBody 透传服务端 health 与 marketObservation（不在 client 重算）', () => {
+    const mapped = mapStateBody({
+      panel: 'overview',
+      asOf: '2026-10-31T00:00:00.000Z',
+      tools: [],
+      health: { status: 'partial', checkedTools: ['a'], issues: [] },
+      marketObservation: { scope: 'historical', label: '历史观察（观测于 X）', observedAt: 'X' },
+    });
+    expect(mapped.health).toMatchObject({ status: 'partial' });
+    expect(mapped.marketObservation).toMatchObject({ scope: 'historical' });
   });
 });

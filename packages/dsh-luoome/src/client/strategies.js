@@ -41,6 +41,7 @@ import {
   Footer,
   Head,
   Meter,
+  PanelHealthBadge,
   Pill,
   Refresh,
   Section,
@@ -1396,7 +1397,7 @@ function UnsavedResearchDialog({ pending, guard, onStay, onDiscard, onSave, savi
 
 export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
   const state = usePanelState('strategies');
-  const { results, loading, refresh } = state;
+  const { results, loading, health, refresh } = state;
   const listed = dataOf(results, 'list_strategies');
   const rows = listed?.strategies ?? [];
   const [selected, setSelected] = useState(() => {
@@ -1556,6 +1557,8 @@ export function StrategiesPanel({ onResearch, onManage, onAnalyzeStock }) {
   return h(
     'div',
     { className: 'luo-strategies-body' },
+    // REQ-M3-09：面板顶层「数据健康」角标（只渲染服务端 health，不在这里判断可用性）。
+    h(PanelHealthBadge, { key: 'health', health }),
     h(Head, {
       eyebrow: 'Strategy workspace',
       title: '策略',

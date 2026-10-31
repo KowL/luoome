@@ -7,6 +7,7 @@ import {
   ErrorNote,
   Footer,
   Head,
+  PanelHealthBadge,
   Pill,
   Refresh,
   Section,
@@ -225,6 +226,7 @@ function OperationPreview({ operation, items, busy, onAction, onClose }) {
 
 export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
   const state = usePanelState('watchlists');
+  const health = state.health ?? null;
   const catalog = dataOf(state.results, 'list_watchlists');
   const items = catalog?.items ?? [];
   const [selectedId, setSelectedId] = useState(null);
@@ -359,6 +361,8 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
   return h(
     Fragment,
     null,
+    // REQ-M3-09：面板顶层「数据健康」角标（只渲染服务端 health，不在这里判断可用性）。
+    h(PanelHealthBadge, { key: 'health', health }),
     h(Head, {
       eyebrow: 'LUOOME / 关注',
       title: '关注',

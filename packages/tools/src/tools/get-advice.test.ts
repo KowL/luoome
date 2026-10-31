@@ -239,6 +239,38 @@ describe('get_advice', () => {
     expect(scoped.data.unattributedCount).toBe(1);
   });
 
+  it('cards 与 advices 按 id 对齐，五段判定用 core 的同一实现', async () => {
+    const ctx = await buildTestContext({ advices: [futureAdvice, expiredAdvice] });
+    const result = await getAdviceTool.execute({ includeExpired: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.cards.map((card) => card.adviceId)).toEqual(
+      result.data.advices.map((advice) => advice.id),
+    );
+    expect(result.data.cards[0]?.status).toBe('renderable');
+    if (result.data.cards[0]?.status === 'renderable') {
+      expect(result.data.cards[0].counterEvidence).toEqual(['c1']);
+      expect(result.data.cards[0].disclaimer).toHaveLength(STANDARD_DISCLAIMERS.length);
+    }
+    // 缺段建议 → blocked，且 missing 逐项列出（服务端算，client 不判断）。
+    const blockedCtx = await buildTestContext({
+      advices: [
+        attributedAdvice({
+          id: 'test-advice-blocked',
+          reasoning: { premise: 'p', evidence: [], counterEvidence: [] },
+          risks: [],
+        }),
+      ],
+    });
+    const blocked = await getAdviceTool.execute({}, blockedCtx);
+    expect(blocked.ok).toBe(true);
+    if (!blocked.ok) return;
+    expect(blocked.data.cards[0]).toMatchObject({
+      status: 'blocked',
+      missing: ['counterEvidence', 'risks'],
+    });
+  });
+
   it('错误路径：非法日期 → invalid_input', async () => {
     const ctx = await buildTestContext();
     const result = await getAdviceTool.execute({ since: 'not-a-date' }, ctx);

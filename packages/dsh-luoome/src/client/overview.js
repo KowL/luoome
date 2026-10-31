@@ -1,6 +1,6 @@
 import { Fragment, createElement as h, useCallback, useState } from 'react';
 
-import { dataOf, useAutoRefresh, useOverviewSection } from './data.js';
+import { dataOf, marketObservationOf, useAutoRefresh, useOverviewSection } from './data.js';
 import {
   bigMoney,
   int,
@@ -14,11 +14,13 @@ import {
 import { AccountSummary, MarketTable, NewsFeed, SectorRanking } from './overview-market.js';
 import {
   Card,
+  cx,
   Empty,
   ErrorNote,
   Footer,
   Head,
   Kpi,
+  PanelHealthBadge,
   Pill,
   Skeleton,
   SkeletonLines,
@@ -89,7 +91,7 @@ const IndexStrip = ({ quotes, loading, error }) => {
   );
 };
 
-const BreadthCard = ({ snapshot, loading, error }) => {
+const BreadthCard = ({ snapshot, marketObservation, loading, error }) => {
   const breadth = snapshot?.breadth?.value;
   const limitUp = snapshot?.limitUp?.value;
   const themes = snapshot?.themes?.value;
@@ -109,6 +111,18 @@ const BreadthCard = ({ snapshot, loading, error }) => {
   return h(
     Card,
     { title: '市场温度' },
+    // 三档标注（S6）：`label` 由服务端用 core 的 `marketObservationLabel` 算好，
+    // client **不做任何日期比较**，只渲染字符串 + 配色。
+    marketObservation === null
+      ? null
+      : h(
+          'div',
+          {
+            className: cx('luo-stamp', `luo-${marketObservation.tone}`),
+            'data-market-observation': marketObservation.scope ?? 'unknown',
+          },
+          marketObservation.label,
+        ),
     breadth
       ? h(
           'div',
@@ -373,6 +387,8 @@ export function OverviewPanel({ onAnalyzeStock }) {
   return h(
     Fragment,
     null,
+    // REQ-M3-09：面板顶层「数据健康」角标（只渲染服务端 health，不在这里判断可用性）。
+    h(PanelHealthBadge, { key: 'health', health: indices.health ?? null }),
     h(Head, {
       eyebrow: 'LUOOME / MARKET',
       title: '看盘',
@@ -519,7 +535,10 @@ export function OverviewPanel({ onAnalyzeStock }) {
           'sentiment',
           '市场温度',
           sentiment,
-          h(BreadthCard, { snapshot: dataOf(sentiment.results, 'get_ashare_sentiment')?.snapshot }),
+          h(BreadthCard, {
+            snapshot: dataOf(sentiment.results, 'get_ashare_sentiment')?.snapshot,
+            marketObservation: marketObservationOf(state),
+          }),
         ),
         region(
           'sectors',

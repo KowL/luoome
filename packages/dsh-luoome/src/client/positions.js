@@ -9,6 +9,7 @@ import {
   Footer,
   Head,
   Kpi,
+  PanelHealthBadge,
   Pill,
   Refresh,
   Section,
@@ -493,7 +494,7 @@ const useLedgerWrites = (refresh, currency) => {
 
 export function PositionsPanel() {
   const state = usePanelState('positions');
-  const { results, loading, refresh } = state;
+  const { results, loading, health, refresh } = state;
   const account = dataOf(results, 'get_account')?.account;
   const holdings = dataOf(results, 'list_holdings');
   const trades = dataOf(results, 'list_trades');
@@ -528,6 +529,8 @@ export function PositionsPanel() {
   return h(
     Fragment,
     null,
+    // REQ-M3-09：面板顶层「数据健康」角标（只渲染服务端 health，不在这里判断可用性）。
+    h(PanelHealthBadge, { key: 'health', health }),
     h(Head, {
       eyebrow: 'Portfolio ledger',
       title: '持仓与账本',

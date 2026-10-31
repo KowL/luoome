@@ -81,6 +81,9 @@ export const mapStateBody = (body) => {
   return {
     panel: typeof body.panel === 'string' ? body.panel : '',
     asOf: typeof body.asOf === 'string' ? body.asOf : null,
+    // 服务端算好的面板健康（S1）与市场观察标注（S6）；client 只渲染，不重算。
+    health: isRecord(body.health) ? body.health : null,
+    marketObservation: isRecord(body.marketObservation) ? body.marketObservation : null,
     results,
     strategies,
     configuration: isRecord(body.configuration) ? body.configuration : null,
@@ -105,6 +108,9 @@ export const mergeOverviewSection = (previous, next) => {
     }
   }
   return {
+    // 面板级 health / marketObservation 是整面板字段（每个 section 相同），合并时保留。
+    health: next.health ?? previous.health ?? null,
+    marketObservation: next.marketObservation ?? previous.marketObservation ?? null,
     ...previous,
     results,
     session: next.session,
@@ -391,3 +397,96 @@ export const stockResearchRequestFor = (context) =>
             runId: context.runId,
             prompt: `请分析${strategyText(context.stockName)}（${context.stockId}）。该股来自策略“${strategyText(context.strategyName)}”第 ${context.version} 版的已发布匹配结果，匹配事实时间 ${context.dataAsOf}。先按名称、版本和事实时间核对策略及这只股票的匹配依据，再读取这只股票的最新可用行情与相关事实；区分历史匹配结果与当前行情，缺失或过期数据请明确说明。给出结论、证据、反证、风险与有效期，用可读名称说明来源。匹配与规则评分不代表买入建议或成功概率。只在对话中分析；只有在我明确提出保存建议、修改策略或其他写入意图时才直接执行。`,
           };
+
+// ---------------------------------------------------------------------------
+// REQ-M3-09：事实缺口 UX —— 纯展示投影（client 侧唯一实现，判定全在服务端）
+// ---------------------------------------------------------------------------
+
+/** 数字缺时点时**必须显式说缺**，不许省略这个数字（PRD §1「出现即带」）。 */
+export const UNKNOWN_TIME_TEXT = '时点未知';
+
+const HEALTH_TONE = { available: 'ok', partial: 'warn', unavailable: 'bad' };
+const HEALTH_LABEL = { available: '数据健康', partial: '数据部分可用', unavailable: '数据不可用' };
+
+/**
+ * 面板健康角标。**只读服务端 `health`**：这里不做任何可用性判断，只决定措辞与配色。
+ * 返回 null 表示「服务端没给」（老响应），调用方据此不渲染角标而不是伪造「健康」。
+ */
+export const panelHealthBadge = (health) => {
+  if (!isRecord(health)) return null;
+  const status = typeof health.status === 'string' ? health.status : null;
+  if (status === null || HEALTH_LABEL[status] === undefined) return null;
+  const issues = Array.isArray(health.issues) ? health.issues.filter(isRecord) : [];
+  return {
+    status,
+    tone: HEALTH_TONE[status],
+    label: HEALTH_LABEL[status],
+    asOf: typeof health.asOf === 'string' ? health.asOf : null,
+    checkedTools: Array.isArray(health.checkedTools) ? health.checkedTools.length : 0,
+    detail: issues.map((issue) =>
+      [issue.tool, issue.detail, issue.remedy]
+        .filter((part) => typeof part === 'string' && part.length > 0)
+        .join('：'),
+    ),
+  };
+};
+
+/** `Kpi`/`Stat` 的时间槽：有值渲染时间，没值渲染「时点未知」（不是留空）。 */
+export const metricTimeText = (asOf) =>
+  typeof asOf === 'string' && asOf.length > 0 ? asOf : UNKNOWN_TIME_TEXT;
+
+/**
+ * 建议卡片 → 可渲染条目。
+ *
+ * `blocked` **不产出卡片**，但必须产出一条 warning 条目（文案直接用服务端的 `note`，
+ * 里面已经列出缺哪几段）——阻断的是卡片，不是条目：空白会让人以为没有这条建议。
+ */
+export const adviceCardEntry = (card) => {
+  if (!isRecord(card)) return null;
+  if (card.status === 'blocked')
+    return {
+      status: 'blocked',
+      tone: 'warning',
+      adviceId: typeof card.adviceId === 'string' ? card.adviceId : '',
+      text:
+        typeof card.note === 'string' && card.note.length > 0 ? card.note : '不可渲染：建议不完整',
+      missing: Array.isArray(card.missing) ? card.missing : [],
+    };
+  if (card.status !== 'renderable') return null;
+  return {
+    status: 'renderable',
+    tone: 'factual',
+    adviceId: typeof card.adviceId === 'string' ? card.adviceId : '',
+    conclusion: typeof card.conclusion === 'string' ? card.conclusion : '',
+    counterEvidence: Array.isArray(card.counterEvidence) ? card.counterEvidence : [],
+    risks: Array.isArray(card.risks) ? card.risks : [],
+    validity: isRecord(card.validity) ? card.validity : null,
+    disclaimer: Array.isArray(card.disclaimer) ? card.disclaimer : [],
+    dataAsOf: typeof card.dataAsOf === 'string' ? card.dataAsOf : null,
+  };
+};
+
+/** 按 advice id 取卡片条目（`get_advice` 的 `cards` 与 `advices` 按 id 对齐）。 */
+export const adviceCardEntriesOf = (data) => {
+  const cards = isRecord(data) && Array.isArray(data.cards) ? data.cards : [];
+  const entries = new Map();
+  for (const card of cards) {
+    const entry = adviceCardEntry(card);
+    if (entry !== null && entry.adviceId.length > 0) entries.set(entry.adviceId, entry);
+  }
+  return entries;
+};
+
+/** 市场观察三档：服务端已给出 `scope` / `label`，这里只挑字段，**不做日期比较**。 */
+export const marketObservationOf = (state) => {
+  const value = isRecord(state) ? state.marketObservation : null;
+  if (!isRecord(value)) return null;
+  const label = typeof value.label === 'string' ? value.label : null;
+  if (label === null) return null;
+  return {
+    label,
+    scope: typeof value.scope === 'string' ? value.scope : null,
+    observedAt: typeof value.observedAt === 'string' ? value.observedAt : null,
+    tone: value.scope === 'current' ? 'quiet' : 'warn',
+  };
+};

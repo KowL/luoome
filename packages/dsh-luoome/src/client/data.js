@@ -7,6 +7,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { nextRefreshDelayMs } from './auto-refresh.js';
 
 export {
+  adviceCardEntriesOf,
+  adviceCardEntry,
   adviceFeedbackOf,
   calibrationRows,
   dataOf,
@@ -14,6 +16,9 @@ export {
   decisionReviewRows,
   errorOf,
   mapStateBody,
+  marketObservationOf,
+  metricTimeText,
+  panelHealthBadge,
   publishedRunsByStrategy,
   researchRequestFor,
   resultOf,

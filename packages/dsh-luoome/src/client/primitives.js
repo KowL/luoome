@@ -1,5 +1,6 @@
 import { createElement as h } from 'react';
 
+import { metricTimeText, panelHealthBadge } from './projection.js';
 import { STYLE } from './theme.js';
 
 export const cx = (...values) => values.filter(Boolean).join(' ');
@@ -104,22 +105,62 @@ export const Card = ({ title, meta, children, className, style }) =>
     children,
   );
 
-export const Kpi = ({ label, value, sub, tone }) =>
+/**
+ * 数字的时点/可用性槽（REQ-M3-09 Q2）。
+ *
+ * 调用方**传了 `asOf` 这个键**（哪怕是 `null`）就渲染时间行：缺时点渲染「时点未知」
+ * 而**不是省略**——PRD 是「出现即带」，省略等于静默违规。不传该键的既有调用点行为不变。
+ */
+const TimeSlot = (props, className) => {
+  if (!('asOf' in props) && props.status === undefined) return null;
+  const parts = [metricTimeText(props.asOf)];
+  if (typeof props.status === 'string' && props.status.length > 0)
+    parts.push(`可用性 ${props.status}`);
+  return h('div', { className }, parts.join(' · '));
+};
+
+export const Kpi = (props) =>
   h(
     'div',
     { className: 'luo-kpi' },
-    h('div', { className: 'luo-kpi-label' }, h('span', null, label)),
-    h('div', { className: cx('luo-kpi-value', tone && `luo-${tone}`) }, value),
-    sub ? h('div', { className: 'luo-kpi-sub' }, sub) : null,
+    h('div', { className: 'luo-kpi-label' }, h('span', null, props.label)),
+    h('div', { className: cx('luo-kpi-value', props.tone && `luo-${props.tone}`) }, props.value),
+    props.sub ? h('div', { className: 'luo-kpi-sub' }, props.sub) : null,
+    TimeSlot(props, 'luo-kpi-asof'),
   );
 
-export const Stat = ({ k, v, tone }) =>
+export const Stat = (props) =>
   h(
     'div',
     null,
-    h('div', { className: 'luo-stat-k' }, k),
-    h('div', { className: cx('luo-stat-v', tone && `luo-${tone}`) }, v),
+    h('div', { className: 'luo-stat-k' }, props.k),
+    h('div', { className: cx('luo-stat-v', props.tone && `luo-${props.tone}`) }, props.v),
+    TimeSlot(props, 'luo-stat-asof'),
   );
+
+/**
+ * 面板「数据健康」角标（S5）：**只渲染服务端 `panel.health`**，不在这里判断可用性。
+ * 服务端没给（老响应）时返回 null——不伪造「健康」。
+ */
+export const PanelHealthBadge = ({ health }) => {
+  const badge = panelHealthBadge(health);
+  if (badge === null) return null;
+  return h(
+    'div',
+    { className: cx('luo-panel-health', `luo-${badge.tone}`), 'data-health-status': badge.status },
+    h('span', { className: 'luo-panel-health-label' }, badge.label),
+    badge.asOf === null
+      ? h('span', { className: 'luo-fine' }, metricTimeText(null))
+      : h('span', { className: 'luo-fine' }, `数据时点 ${badge.asOf}`),
+    badge.detail.length === 0
+      ? null
+      : h(
+          'ul',
+          { className: 'luo-panel-health-issues' },
+          badge.detail.map((text) => h('li', null, text)),
+        ),
+  );
+};
 
 const METER_TONE = {
   up: 'var(--lu-up)',

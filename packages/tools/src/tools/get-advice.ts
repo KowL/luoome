@@ -1,8 +1,10 @@
 import {
+  AdviceCardSchema,
   AdviceDecisionSchema,
   type AdviceQuery,
   AdviceSchema,
   AdviceSubjectKindSchema,
+  renderAdviceCard,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -44,6 +46,13 @@ export const GetAdviceOutput = z
      * 它们不会出现在 `advices` 里，但必须被计数披露——不许静默丢弃。
      */
     unattributedCount: z.number().int().nonnegative(),
+    /**
+     * 每条返回建议的**卡片产物**（REQ-M3-09 §2 / S2）。五段的组装与「缺段 → blocked」
+     * 判定只有一份实现（core `renderAdviceCard`），这里只是把它随建议一起下发，
+     * 让任何消费 `get_advice` 的面都吃同一个产物，而不是各自再拼一遍。
+     * 与 `advices` **按 id 对齐**。
+     */
+    cards: z.array(AdviceCardSchema),
   })
   .strict();
 
@@ -77,11 +86,14 @@ export const getAdviceTool = defineTool({
       limit: input.limit,
     });
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
+    const parsed = z.array(AdviceSchema).parse(advices);
+    const now = ctx.clock();
     return {
       scope: 'account' as const,
-      advices: z.array(AdviceSchema).parse(advices),
-      total: advices.length,
+      advices: parsed,
+      total: parsed.length,
       unattributedCount,
+      cards: parsed.map((advice) => renderAdviceCard(advice, now)),
     };
   },
 });

@@ -1,6 +1,7 @@
 import { Fragment, createElement as h } from 'react';
 
 import {
+  adviceCardEntriesOf,
   adviceFeedbackOf,
   calibrationRows,
   dataOf,
@@ -33,6 +34,7 @@ import {
   Head,
   Kpi,
   Meter,
+  PanelHealthBadge,
   Pill,
   Refresh,
   Section,
@@ -371,7 +373,7 @@ const DecisionReviewCard = ({ reviewList, loading, error }) => {
   );
 };
 
-const AdviceFeedbackCard = ({ advices, loading, error }) => {
+const AdviceFeedbackCard = ({ advices, cards, loading, error }) => {
   if (!advices) {
     return h(
       Card,
@@ -417,53 +419,59 @@ const AdviceFeedbackCard = ({ advices, loading, error }) => {
           rows.map((advice) => {
             const feedback = adviceFeedbackOf(advice);
             const decision = DECISION[advice.decision] ?? { label: advice.decision, tone: 'quiet' };
+            const cardEntry = cards.get(advice.id) ?? null;
             return h(
-              'tr',
+              Fragment,
               { key: advice.id },
               h(
-                'td',
-                null,
-                h('span', { className: 'luo-stock-name' }, subjectTitle(advice)),
-                h('span', { className: 'luo-fine' }, ` ${shortId(advice.id)}`),
-              ),
-              h(
-                'td',
+                'tr',
                 null,
                 h(
-                  Pill,
-                  { tone: decision.tone === 'quiet' ? 'quiet' : decision.tone },
-                  decision.label,
+                  'td',
+                  null,
+                  h('span', { className: 'luo-stock-name' }, subjectTitle(advice)),
+                  h('span', { className: 'luo-fine' }, ` ${shortId(advice.id)}`),
                 ),
+                h(
+                  'td',
+                  null,
+                  h(
+                    Pill,
+                    { tone: decision.tone === 'quiet' ? 'quiet' : decision.tone },
+                    decision.label,
+                  ),
+                ),
+                h('td', null, points(advice.confidence, 1, false)),
+                h('td', null, HORIZON[advice.horizon] ?? advice.horizon),
+                h('td', null, when(advice.validUntil)),
+                h(
+                  'td',
+                  null,
+                  feedback
+                    ? h(
+                        Fragment,
+                        null,
+                        h(
+                          Pill,
+                          { tone: feedback.tone === 'quiet' ? 'quiet' : feedback.tone },
+                          feedback.label,
+                        ),
+                        feedback.origin === null || feedback.origin === 'user'
+                          ? null
+                          : h(
+                              'span',
+                              { className: 'luo-fine' },
+                              ` ${feedback.origin === 'import' ? '导入' : '模型代填'}（不计入默认统计）`,
+                            ),
+                      )
+                    : h('span', { className: 'luo-fine' }, '未回填（不推断）'),
+                  feedback?.pnl === null || feedback?.pnl === undefined
+                    ? null
+                    : h('span', { className: 'luo-fine' }, ` ${money(feedback.pnl)}`),
+                ),
+                h('td', null, feedback?.notes ?? '—'),
               ),
-              h('td', null, points(advice.confidence, 1, false)),
-              h('td', null, HORIZON[advice.horizon] ?? advice.horizon),
-              h('td', null, when(advice.validUntil)),
-              h(
-                'td',
-                null,
-                feedback
-                  ? h(
-                      Fragment,
-                      null,
-                      h(
-                        Pill,
-                        { tone: feedback.tone === 'quiet' ? 'quiet' : feedback.tone },
-                        feedback.label,
-                      ),
-                      feedback.origin === null || feedback.origin === 'user'
-                        ? null
-                        : h(
-                            'span',
-                            { className: 'luo-fine' },
-                            ` ${feedback.origin === 'import' ? '导入' : '模型代填'}（不计入默认统计）`,
-                          ),
-                    )
-                  : h('span', { className: 'luo-fine' }, '未回填（不推断）'),
-                feedback?.pnl === null || feedback?.pnl === undefined
-                  ? null
-                  : h('span', { className: 'luo-fine' }, ` ${money(feedback.pnl)}`),
-              ),
-              h('td', null, feedback?.notes ?? '—'),
+              cardEntry === null ? null : h(AdviceCardRow, { key: 'card', entry: cardEntry }),
             );
           }),
         ),
@@ -473,6 +481,46 @@ const AdviceFeedbackCard = ({ advices, loading, error }) => {
       'p',
       { className: 'luo-fine', style: { margin: '10px 0 0' } },
       '用户反馈只来自明确回填的 outcome；没有回填显示“未回填”，不按股价走势推断跟随或盈亏。',
+    ),
+  );
+};
+
+/**
+ * 建议卡片条目（REQ-M3-09 §2 / S5）：**吃服务端 `get_advice.cards`**，不在 client 拼五段。
+ *
+ * `blocked` 时**不渲染卡片**，但必须留一条 warning 行——文案直接用服务端的 `note`
+ * （里面已列出缺哪几段）。空白会让人以为没有这条建议。
+ */
+const AdviceCardRow = ({ entry }) => {
+  if (entry.status === 'blocked')
+    return h(
+      'tr',
+      { className: 'luo-advice-card is-blocked', 'data-advice-card': 'blocked' },
+      h(
+        'td',
+        { colSpan: 6 },
+        h(Pill, { tone: 'warn' }, '不可渲染'),
+        h('span', { className: 'luo-fine' }, ` ${entry.text}`),
+        h('span', { className: 'luo-fine' }, ` （缺 ${entry.missing.join(' / ')}）`),
+      ),
+    );
+  return h(
+    'tr',
+    { className: 'luo-advice-card', 'data-advice-card': 'renderable' },
+    h(
+      'td',
+      { colSpan: 6 },
+      h('div', null, h('strong', null, '结论：'), entry.conclusion),
+      h('div', null, h('strong', null, '反证：'), entry.counterEvidence.join('；')),
+      h('div', null, h('strong', null, '风险：'), entry.risks.join('；')),
+      h(
+        'div',
+        null,
+        h('strong', null, '有效期：'),
+        entry.validity === null ? '时点未知' : `${when(entry.validity.validUntil)}`,
+        entry.validity !== null && entry.validity.expired === true ? '（已过期）' : '',
+      ),
+      h('div', { className: 'luo-fine' }, entry.disclaimer.join(' ')),
     ),
   );
 };
@@ -527,17 +575,21 @@ const DecisionLoopCard = ({ summary, loading, error }) => {
 };
 
 export function ReviewPanel() {
-  const { results, loading, panelError, loadedAt, refresh } = usePanelState('review');
+  const { results, loading, panelError, loadedAt, health, refresh } = usePanelState('review');
   const stats = dataOf(results, 'get_advice_stats');
   const calibration = dataOf(results, 'get_confidence_calibration');
   const reviews = dataOf(results, 'list_decision_reviews');
   const adviceList = dataOf(results, 'get_advice')?.advices ?? null;
   const loop = decisionLoopSummary(dataOf(results, 'get_decision_loop_review'));
   const pending = dataOf(results, 'list_pending_strategy_observations');
+  // 卡片产物随 get_advice 一起下发（S2 的唯一实现），这里只按 id 取。
+  const cards = adviceCardEntriesOf(dataOf(results, 'get_advice'));
 
   return h(
     Fragment,
     null,
+    // REQ-M3-09：面板顶层「数据健康」角标（只渲染服务端 health，不在这里判断可用性）。
+    h(PanelHealthBadge, { key: 'health', health }),
     h(Head, {
       eyebrow: 'LUOOME / 复盘',
       title: '复盘',
@@ -623,6 +675,7 @@ export function ReviewPanel() {
       { title: '逐条建议与用户反馈', delay: 200 },
       h(AdviceFeedbackCard, {
         advices: adviceList,
+        cards,
         loading,
         error: errorOf(results, 'get_advice'),
       }),
