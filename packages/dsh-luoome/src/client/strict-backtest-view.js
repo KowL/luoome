@@ -24,7 +24,17 @@ export const STRICT_BACKTEST_COPY = Object.freeze({
     missing: '门禁审计缺失：没有可比对的逐项事实。',
   },
   auditTitle: '门禁审计',
+  // 两个清单语义不同，标题必须分开：阻塞项 = 门禁为什么不完备；
+  // 披露 = 这次结果已经产出，但存在已知偏差（例如未考虑分红送转）。
   blockerTitle: '阻塞项',
+  disclosureTitle: '结果已知偏差披露',
+});
+
+/** 指标缺失的具体原因；只在 `metrics` 为 null 时出现，绝不用于放宽 fail-closed。 */
+export const METRICS_UNAVAILABLE_COPY = Object.freeze({
+  missingAvailability: '该 run 缺少 resultAvailability 字段，无法判定结果可用性',
+  incomplete: (status) => `resultAvailability 为 ${status}：本次运行未产出可用结果`,
+  missingMetrics: 'resultAvailability 为 complete 但缺少 metrics：没有可渲染的绩效数字',
 });
 
 /** 只有门禁完备时才允许出现的指标（标签与取值同源，避免各写一份）。 */
@@ -41,14 +51,19 @@ const metricRows = (metrics) => [
  * - `gateComplete`：门禁是否没有缺口（`gateAudit.status === 'complete'`），只影响文案；
  * - `metrics`：唯一判定源是 `resultAvailability === 'complete'`，且必须真的带 metrics；
  *   两者缺一就 fail-closed 为 `null`（不看门禁 partial——那是缺口披露，不是无效）；
- * - `auditRows` / `blockers`：任何状态都带审计表；阻塞项 = 门禁未 complete 时的逐项原因
- *   + `run.limitations`（机制级缺口，例如未考虑分红送转）。
+ * - `metricsUnavailableReason`：`metrics` 为 null 时的具体原因，保证「数字不见了」有解释；
+ *   判定不放宽——旧 run 没有 resultAvailability 就如实说无法判定；
+ * - `auditRows`：任何状态都带审计表；
+ * - `blockers`：只装门禁未 complete 时的逐项原因（回答「为什么门禁不完备」）；
+ * - `disclosures`：只装 `run.limitations`（回答「这次结果已知有哪些偏差」）。
+ *   两者混在一个字段里会让 UI 把「已产出但有偏差」误读成「被挡住没跑」。
  */
 export const strictBacktestView = (run) => {
   const gateAudit = run?.gateAudit ?? null;
   const gateStatus = gateAudit?.status ?? 'unavailable';
   const gateComplete = gateStatus === 'complete';
-  const resultComplete = run?.resultAvailability === 'complete';
+  const availability = run?.resultAvailability;
+  const resultComplete = availability === 'complete';
   const auditRows = (gateAudit?.items ?? []).map((item) => ({
     key: item.key,
     status: item.status,
@@ -57,6 +72,14 @@ export const strictBacktestView = (run) => {
   const gateBlockers = auditRows
     .filter((row) => row.status !== 'complete')
     .map((row) => row.reason);
+  const metricList = resultComplete && run?.metrics ? metricRows(run.metrics) : null;
+  const unavailableReason = (() => {
+    if (availability === undefined || availability === null) {
+      return METRICS_UNAVAILABLE_COPY.missingAvailability;
+    }
+    if (!resultComplete) return METRICS_UNAVAILABLE_COPY.incomplete(availability);
+    return METRICS_UNAVAILABLE_COPY.missingMetrics;
+  })();
   return {
     gateStatus,
     gateComplete,
@@ -64,14 +87,13 @@ export const strictBacktestView = (run) => {
       ? STRICT_BACKTEST_COPY.gate.complete
       : STRICT_BACKTEST_COPY.gate.incomplete,
     auditRows,
-    blockers: [
-      ...(gateComplete
-        ? []
-        : gateBlockers.length === 0
-          ? [STRICT_BACKTEST_COPY.gate.missing]
-          : gateBlockers),
-      ...(run?.limitations ?? []),
-    ],
-    metrics: resultComplete && run?.metrics ? metricRows(run.metrics) : null,
+    blockers: gateComplete
+      ? []
+      : gateBlockers.length === 0
+        ? [STRICT_BACKTEST_COPY.gate.missing]
+        : gateBlockers,
+    disclosures: [...(run?.limitations ?? [])],
+    metrics: metricList,
+    metricsUnavailableReason: metricList ? undefined : unavailableReason,
   };
 };

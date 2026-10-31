@@ -759,8 +759,10 @@ export const StrictBacktests = ({ runs = [] }) =>
     ),
     runs.length
       ? runs.map((run) => {
-          // 门禁未 complete 时 metrics 恒为 null：面板不出现收益率 / 回撤 / Sharpe 数字
-          // （含 `—` 占位），只给门禁审计表与阻塞项清单。判定见 strict-backtest-view.js。
+          // 指标区只认 `resultAvailability === 'complete'` 且带 metrics；否则不出数字，
+          // 但必须显示 `metricsUnavailableReason` 说明为什么没有数字（旧 run 缺字段即如实说
+          // 无法判定）。门禁审计表、阻塞项与已知偏差披露是三个独立区块。判定见
+          // strict-backtest-view.js。
           const view = strictBacktestView(run);
           return h(
             'div',
@@ -785,7 +787,7 @@ export const StrictBacktests = ({ runs = [] }) =>
                     h(Stat, { key: metric.key, k: metric.label, v: metric.value }),
                   ),
                 )
-              : null,
+              : h('p', { className: 'luo-fine' }, view.metricsUnavailableReason),
             run.error ? h(ErrorNote, { error: strategyText(run.error) }) : null,
             view.auditRows.length
               ? h(
@@ -823,6 +825,10 @@ export const StrictBacktests = ({ runs = [] }) =>
             h(ResearchLimitations, {
               items: view.blockers,
               title: STRICT_BACKTEST_COPY.blockerTitle,
+            }),
+            h(ResearchLimitations, {
+              items: view.disclosures,
+              title: STRICT_BACKTEST_COPY.disclosureTitle,
             }),
           );
         })
