@@ -486,6 +486,24 @@ export const REPORT_STANCE_LABELS: Readonly<Record<string, string>> = {
 export const reportStanceLabel = (decision: string): string =>
   REPORT_STANCE_LABELS[decision] ?? decision;
 
+/**
+ * **成交事实词表**（U1）：账本方向的规范中文词。
+ *
+ * 与 `REPORT_STANCE_LABELS`（研究立场）是两张表，**不许合并**：
+ * - `Trade.side` 是**已发生的账本事实**；`Advice.decision` 是**研究立场**。
+ *   把成交方向写成立场词（「看多」）会让事实看起来像建议；
+ *   把立场写成动作词（「买入」）会让建议看起来像已经执行的动作。
+ * - 合并后还会让报告文本禁令的 `side` 白名单「取决于写中文还是英文」——
+ *   两个报告都用本表后，白名单按**字段键**生效，与语言无关。
+ */
+export const TRADE_SIDE_LABELS: Readonly<Record<string, string>> = {
+  buy: '买入',
+  sell: '卖出',
+};
+
+/** 账本方向的展示词；只接受 `buy` / `sell`，未知值原样透出（不猜测方向）。 */
+export const tradeSideLabel = (side: string): string => TRADE_SIDE_LABELS[side] ?? side;
+
 export const assertReportInvariants = (report: Report): void => {
   if ((report.kind === 'watchlist-facts') !== (report.scope.kind === 'watchlist'))
     throw new InvariantError('watchlist facts kind and scope must appear together');

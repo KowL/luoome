@@ -38,7 +38,12 @@ export const AdviceListItemSchema = z
     risks: z.array(z.string()),
     disclaimers: z.array(z.string()),
     outcome: AdviceSchema.shape.outcome,
-    /** 该建议缺反证时为 true——不补默认值，由调用方按可用性披露。 */
+    /**
+     * 该建议缺反证时为 true——不补默认值，由调用方按可用性披露。
+     *
+     * 档位：`0`（false = 有反证；true = **缺席**的显式标记）。这里用布尔而不是 `?? []`，
+     * 因为空数组与「没有反证」在语义上不可区分。
+     */
     counterEvidenceMissing: z.boolean(),
   })
   .strict();
@@ -53,7 +58,11 @@ export const ListAdvicesOutput = z
     scope: z.literal('account'),
     advices: z.array(AdviceListItemSchema),
     total: z.number().int().nonnegative(),
-    /** 缺反证的建议 id 列表（可用性披露用，不假装有反证）。 */
+    /**
+     * 缺反证的建议 id 列表（可用性披露用，不假装有反证）。
+     *
+     * 档位：`0`（空数组 = 全部有反证，是事实；非空 = 点名哪些是**缺席**）。
+     */
     missingCounterEvidenceIds: z.array(z.string()),
     /**
      * 本次查询命中、但**无法归属到任何账户**的建议条数（存量无归属数据）。

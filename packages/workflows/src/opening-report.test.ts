@@ -754,3 +754,32 @@ describe('opening-report workflow', () => {
     expect(text).not.toMatch(/买入|卖出|已建仓|下单/);
   });
 });
+
+// U7（task-25）：交易日历只有 core 一份实现，workflow 侧是对它的薄包装。
+import { previousTradingDate as corePreviousTradingDate } from '@luoome/core';
+
+import { previousTradingDay, shanghaiDate } from './opening-report.js';
+
+describe('U7 上一交易日：workflow 薄包装与 core 唯一事实源一致', () => {
+  const cases = [
+    '2026-07-27', // 周一 → 上个周五
+    '2026-07-28',
+    '2026-10-09', // 国庆后首个交易日
+    '2026-10-12', // 周一
+    '2026-01-05', // 跨年
+    '2026-06-22',
+  ];
+
+  it('同一输入两侧结果相同（core previousTradingDate vs workflow previousTradingDay）', () => {
+    for (const date of cases)
+      expect(previousTradingDay(date), date).toBe(corePreviousTradingDate(shanghaiDate(date)));
+  });
+
+  it('结果是合法的前一交易日：早于输入、且本身是交易日', () => {
+    for (const date of cases) {
+      const previous = previousTradingDay(date);
+      expect(previous < date, date).toBe(true);
+      expect(previousTradingDay(previous) < previous, date).toBe(true);
+    }
+  });
+});

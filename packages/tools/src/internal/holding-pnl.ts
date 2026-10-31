@@ -83,7 +83,11 @@ export const HoldingPnlSchema = z
     stockName: z.string().min(1),
     /** 报价可用性：`priced` 才保证下面四个字段存在。 */
     priceStatus: z.enum(['priced', 'unpriced']),
-    /** 缺价原因（只在 `unpriced` 时出现）：让调用方能渲染「缺价」而不是「0」。 */
+    /**
+     * 缺价原因（只在 `unpriced` 时出现）：让调用方能渲染「缺价」而不是「0」。
+     *
+     * 档位：**缺席**（`priced` 时整个字段不出现，不是 `null`、不是 `''`）。
+     */
     priceUnavailableReason: z.string().min(1).optional(),
     currentPrice: MoneySchema.optional(),
     quote: QuoteSchema.nullable().optional(),

@@ -19,6 +19,7 @@ import {
   type TradingPlanMonitoring,
   type TradingPlanReview,
   TradingPlanReviewSchema,
+  tradeSideLabel,
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -539,7 +540,7 @@ const priorDayReviewSection = async (
         ? trades.data.trades.slice(0, 20).map((trade) => ({
             id: trade.id,
             stock: trade.stockId,
-            side: trade.side === 'buy' ? '买入' : '卖出',
+            side: tradeSideLabel(trade.side),
             quantity: trade.quantity,
             price: trade.price,
             executedAt: `${notificationTime(trade.executedAt)}（北京时间）`,

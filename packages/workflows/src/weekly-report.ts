@@ -7,6 +7,7 @@ import {
   ReportSchema,
   AccountReportScopeSchema as ReportScopeSchema,
   type ToolResult,
+  tradeSideLabel,
 } from '@luoome/core';
 import type { GetDecisionLoopReviewOutput, ListTradesOutput } from '@luoome/tools';
 import { z } from 'zod';
@@ -1226,7 +1227,9 @@ const tradeAttributionWeekSection = (
             tradeId: trade.id,
             stockId: trade.stockId,
             executedAt: trade.executedAt.toISOString(),
-            side: trade.side,
+            // U1：成交方向统一用 core 的账本事实词（与 closing-report 同一张表），
+            // 这样报告文本禁令的 `side` 白名单按字段键生效，与语言无关。
+            side: tradeSideLabel(trade.side),
             quantity: Number(trade.quantity),
           })),
         },

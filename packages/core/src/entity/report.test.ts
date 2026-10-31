@@ -10,6 +10,8 @@ import {
   ReportSchema,
   reportDisplayTitle,
   reportStanceLabel,
+  TRADE_SIDE_LABELS,
+  tradeSideLabel,
 } from './report.js';
 
 const NOW = new Date('2026-07-29T10:00:00.000Z');
@@ -368,5 +370,70 @@ describe('REQ-M3-08 成交事实字段白名单', () => {
     // 加键不写理由 → 红；通配 → 红。
     expect(() => assertFactualFieldReasons({ action: '   ' })).toThrow(/缺少理由/);
     expect(() => assertFactualFieldReasons({ '*': '通配' })).toThrow(/非法键/);
+  });
+});
+
+// U1（task-25）：成交事实词与立场词是两张表；白名单按字段键生效，与语言无关。
+describe('U1 成交事实词表', () => {
+  it('买卖方向的规范词，且与立场词表不共享任何取值', () => {
+    expect(tradeSideLabel('buy')).toBe('买入');
+    expect(tradeSideLabel('sell')).toBe('卖出');
+    expect(tradeSideLabel('unknown-side')).toBe('unknown-side');
+    // 两张表的语义不相交：成交事实 ≠ 研究立场。
+    for (const value of Object.values(TRADE_SIDE_LABELS))
+      expect(Object.values(REPORT_STANCE_LABELS)).not.toContain(value);
+  });
+
+  it('白名单豁免与语言无关：英文 side 与中文 label 都被 side 键豁免', () => {
+    const tableReport = (cell: string): Report =>
+      makeReport({
+        sections: [
+          {
+            key: 'prior-day-review',
+            title: '回执',
+            required: true,
+            status: 'complete',
+            blocks: [
+              {
+                kind: 'table',
+                columns: [
+                  { key: 'side', label: '方向' },
+                  { key: 'quantity', label: '数量' },
+                ],
+                rows: [{ side: cell, quantity: 100 }],
+              },
+            ],
+            evidenceIds: [],
+            missingDimensions: [],
+          },
+        ],
+      });
+    // 中文（closing-report 的口径）与英文原值（weekly-report 旧口径）都因 `side` 键而豁免。
+    expect(() => assertReportInvariants(tableReport('买入'))).not.toThrow();
+    expect(() => assertReportInvariants(tableReport('buy'))).not.toThrow();
+    expect(() => assertReportInvariants(tableReport('卖出'))).not.toThrow();
+    expect(() => assertReportInvariants(tableReport('sell'))).not.toThrow();
+  });
+});
+
+// U1 回归：两个报告的成交表都必须用 `tradeSideLabel`（同一张表），
+// 否则「豁免与语言解耦」这件事只在白名单侧成立、在渲染侧又分叉了。
+describe('U1 两个报告的成交表用同一张词表', () => {
+  it('closing-report 与 weekly-report 都用 tradeSideLabel 渲染 side 列', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const sources = [
+      'packages/workflows/src/closing-report.ts',
+      'packages/workflows/src/weekly-report.ts',
+    ];
+    for (const relative of sources) {
+      const text = readFileSync(join(root, relative), 'utf8');
+      expect(text, relative).toContain('side: tradeSideLabel(trade.side)');
+      // 旧写法必须绝迹：一个写死中文三元、一个直接透出英文原值。
+      expect(text, relative).not.toContain("trade.side === 'buy' ? '买入' : '卖出'");
+      expect(text, relative).not.toMatch(/side:\s*trade\.side\s*,/);
+    }
   });
 });

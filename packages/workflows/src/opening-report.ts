@@ -7,6 +7,7 @@ import {
   MARKET_OBSERVATION_PRIOR_SESSION_LABEL,
   marketObservationLabel,
   marketObservationScope,
+  previousTradingDate,
   type ReportEvidence,
   type ReportMissingDimension,
   ReportSchema,
@@ -41,14 +42,13 @@ export const DAY_MS = 86_400_000;
 
 export const shanghaiDate = (date: string): Date => new Date(`${date}T12:00:00+08:00`);
 
-export const previousTradingDay = (date: string): string => {
-  const current = shanghaiDate(date);
-  for (let offset = 1; offset <= 15; offset++) {
-    const candidate = new Date(current.getTime() - offset * DAY_MS);
-    if (!isWeekend(candidate) && !isHoliday(candidate)) return dateInShanghai(candidate);
-  }
-  throw new Error(`无法解析 ${date} 的前一 A 股交易日`);
-};
+/**
+ * 上一 A 股交易日的**薄包装**（U7）：日历逻辑只有 core `previousTradingDate` 一份。
+ *
+ * 这里只是把入参从日期字符串转成 `shanghaiDate` 锚点、再把结果转回字符串，
+ * 不再自带 `isWeekend/isHoliday` 循环——第二份日历实现曾经让「节假日表更新时要改两处」。
+ */
+export const previousTradingDay = (date: string): string => previousTradingDate(shanghaiDate(date));
 
 export const localEvidence = (
   id: string,

@@ -39,7 +39,11 @@ export const ListHoldingsOutput = z
     totalCost: MoneySchema,
     totalPnL: MoneySchema.optional(),
     totalPnLPct: PercentageSchema.optional(),
-    /** 缺价持仓数；>0 时上面三个合计字段缺席。 */
+    /**
+     * 缺价持仓数；>0 时上面三个合计字段**缺席**。
+     *
+     * 档位：`0`（真值 = 没有缺价持仓，合计字段因此可用）。
+     */
     unpricedCount: z.number().int().nonnegative(),
     /** 今日盈亏合计；任一持仓缺昨收或缺价时为 null。 */
     totalTodayPnl: MoneySchema.nullable(),
