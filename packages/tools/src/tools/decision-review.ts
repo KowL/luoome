@@ -21,7 +21,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
-import { adviceOutcomeOriginOf } from '../internal/advice-outcome-origin.js';
+import { normalizeDecisionReviewWriteContent } from '../internal/decision-review-write-content.js';
 import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 
 const digest = (value: unknown): string =>
@@ -309,6 +309,9 @@ export const getDecisionReviewContextTool = defineTool({
  * `content.adviceFeedback` 是 AdviceOutcome 的权威持久事实：工具层读面
  * （get_advice / get_advice_stats / get_confidence_calibration / weekly report）都从
  * DecisionReview 修订派生。旧 `advice_outcomes` 表只保留历史/审计数据，写入路径不回填。
+ *
+ * `content` 必须是 `normalizeDecisionReviewWriteContent` 的输出：hash 本身不再做任何
+ * 规范化（早先在这里再排一次 tradeIds，等于把同一转换写在第三处，是本次漂移的同源风险）。
  */
 export const decisionReviewWriteHash = (input: {
   accountId: string;
@@ -324,7 +327,7 @@ export const decisionReviewWriteHash = (input: {
     subject: input.subject,
     contextHash: input.contextHash,
     expectedRevision: input.expectedRevision,
-    content: { ...input.content, tradeIds: [...new Set(input.content.tradeIds)].sort() },
+    content: input.content,
     changeNote: input.changeNote ?? null,
   });
 
@@ -369,18 +372,14 @@ export const saveDecisionReviewTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
-    const resolved = await resolveDecisionReviewWriteContent({ ...input, accountId }, ctx);
     // REQ-M3-18 §2：`save_decision_review` 也能直接带 adviceFeedback，是
     // `record_advice_outcome` 之外的第二条写入口。来源一律按通道重盖，调用方传的
     // `adviceFeedback.origin` 在这里被覆盖，模型无法借这条路径写成 user。
-    const content = {
-      ...resolved,
-      tradeIds: [...new Set(resolved.tradeIds)].sort(),
-      adviceFeedback:
-        resolved.adviceFeedback === null
-          ? null
-          : { ...resolved.adviceFeedback, origin: adviceOutcomeOriginOf(ctx) },
-    };
+    // 规范化必须与回执路径共用同一个函数，否则 requestHash 两处各算一次就会漂移。
+    const content = normalizeDecisionReviewWriteContent(
+      await resolveDecisionReviewWriteContent({ ...input, accountId }, ctx),
+      ctx,
+    );
     const requestHash = decisionReviewWriteHash({ ...input, accountId, content });
     const receipt = await ctx.repos.decisionReview.findWriteReceipt({
       accountId,

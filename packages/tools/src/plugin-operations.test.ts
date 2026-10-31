@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { PluginAutomationGrant, ToolResult } from '@luoome/core';
+import {
+  money,
+  type PluginAutomationGrant,
+  quantity,
+  type ToolResult,
+  type Trade,
+} from '@luoome/core';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { decisionReviewOperation } from './decision-review-operation.js';
@@ -66,6 +72,48 @@ const setup = async () => {
       now += ms;
     },
   };
+};
+
+type Fixture = Awaited<ReturnType<typeof setup>>;
+
+/**
+ * 复现 response-loss：业务提交成功，但 `settleOperation` 写回执失败。
+ * 操作停在 `executing`，只能靠 reconcile 用业务回执认领已经落库的修订。
+ */
+const loseSettle = async (fixture: Fixture, content: Record<string, unknown>) => {
+  const { ctx, service, options, principal } = fixture;
+  const [advice] = await ctx.repos.advice.query({ includeExpired: true, limit: 1 });
+  if (!advice) throw new Error('Missing advice fixture');
+  const subject = { kind: 'advice' as const, id: advice.id };
+  const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+  if (!preview.ok || !preview.data.context) throw new Error('Missing review context');
+  const contextHash = preview.data.context.contextHash;
+  const prepared = data(
+    await service.prepare(principal, {
+      id: randomUUID(),
+      tool: 'save_decision_review',
+      input: { subject, contextHash, expectedRevision: 0, content },
+    }),
+  );
+  const settle = vi
+    .spyOn(options.repository, 'settleOperation')
+    .mockRejectedValueOnce(new Error('lost acknowledgement'));
+  const confirmed = await service.confirm(
+    principal,
+    { id: prepared.operationId, token: prepared.confirmationToken },
+    signal(),
+  );
+  settle.mockRestore();
+  return { subject, contextHash, operationId: prepared.operationId, confirmed };
+};
+
+const writeReceipt = async (fixture: Fixture, requestId: string) => {
+  const receipt = await fixture.ctx.repos.decisionReview.findWriteReceipt({
+    accountId: fixture.principal.accountId,
+    requestId,
+  });
+  if (receipt === null) throw new Error('Missing write receipt');
+  return receipt;
 };
 
 describe('persistent operation execution', () => {
@@ -358,6 +406,118 @@ describe('persistent operation execution', () => {
     });
     expect(review?.review.currentRevision).toBe(1);
     settle.mockRestore();
+  });
+
+  /**
+   * 回归位：写入路径与回执路径必须用**同一份** content 规范化。
+   * `adviceFeedback` 非空时写入侧会按通道盖 `origin`，回执侧若漏了这一步，
+   * `requestHash` 必然不等，response-loss 后的操作就永久卡在 `unknown`。
+   */
+  it('reconciles a response-lost decision review whose content carries adviceFeedback', async () => {
+    const fixture = await setup();
+    const { ctx, principal } = fixture;
+    const run = await loseSettle(fixture, {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'followed', pnl: 100 },
+      triggerFeedback: null,
+      note: 'feedback review',
+    });
+    expect(run.confirmed.ok).toBe(false);
+    expect(data(await fixture.service.get(principal, run.operationId)).state).toBe('executing');
+    const receipt = await writeReceipt(fixture, run.operationId);
+    expect(receipt.result.revision.content.adviceFeedback).toEqual({
+      outcome: 'followed',
+      origin: 'model',
+      pnl: 100,
+    });
+    const restarted = createPluginOperationService(fixture.options);
+    const reconciled = data(await restarted.reconcile(principal, run.operationId));
+    // reconcile 变 succeeded 的唯一路径就是回执核对通过（requestHash 相等）；
+    // 认领到的 result 直接是那条已提交的回执，没有重新执行业务。
+    expect(reconciled.state).toBe('succeeded');
+    expect(reconciled.result).toMatchObject({ ok: true, data: { replayed: true } });
+    const review = await ctx.repos.decisionReview.findBySubject({
+      accountId: principal.accountId,
+      subject: run.subject,
+    });
+    expect(review?.review.currentRevision).toBe(1);
+  });
+  /**
+   * 上一条的阴性对照：reconcile 的 succeeded 只来自「回执 hash 相等」。
+   * 把回执的 requestHash 改坏后同一流程必须回到 unknown，说明那条断言是活的。
+   */
+  it('only claims the operation when the recomputed receipt hash equals the stored one', async () => {
+    const fixture = await setup();
+    const { ctx, principal } = fixture;
+    const run = await loseSettle(fixture, {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'ignored', pnl: 0 },
+      triggerFeedback: null,
+      note: null,
+    });
+    const receipt = await writeReceipt(fixture, run.operationId);
+    const tampered = vi
+      .spyOn(ctx.repos.decisionReview, 'findWriteReceipt')
+      .mockResolvedValueOnce({ ...receipt, requestHash: '0'.repeat(64) });
+    const restarted = createPluginOperationService(fixture.options);
+    expect(data(await restarted.reconcile(principal, run.operationId)).state).toBe('unknown');
+    tampered.mockRestore();
+  });
+  it('hashes the same tradeIds order on write and on receipt replay', async () => {
+    const fixture = await setup();
+    const { ctx, principal } = fixture;
+    const [advice] = await ctx.repos.advice.query({ includeExpired: true, limit: 1 });
+    if (!advice) throw new Error('Missing advice fixture');
+    const accountId = principal.accountId;
+    const trade = (id: string): Trade => ({
+      id,
+      accountId,
+      stockId: advice.subjectId,
+      side: 'buy',
+      quantity: quantity(100),
+      price: money(10),
+      fee: money(0),
+      executedAt: new Date(advice.createdAt.getTime() + 1000),
+      createdAt: ctx.clock(),
+      source: 'manual',
+    });
+    for (const id of ['trade-b', 'trade-a']) await ctx.repos.trade.save(trade(id));
+    const run = await loseSettle(fixture, {
+      tradeIds: ['trade-b', 'trade-a'],
+      adviceFeedback: null,
+      triggerFeedback: null,
+      note: null,
+    });
+    expect(run.confirmed.ok).toBe(false);
+    const receipt = await writeReceipt(fixture, run.operationId);
+    expect(receipt.result.revision.content.tradeIds).toEqual(['trade-a', 'trade-b']);
+    const restarted = createPluginOperationService(fixture.options);
+    expect(data(await restarted.reconcile(principal, run.operationId)).state).toBe('succeeded');
+  });
+  it('stamps the channel origin on the operation path even when the caller claims user', async () => {
+    const fixture = await setup();
+    const { ctx, principal } = fixture;
+    const run = await loseSettle(fixture, {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'followed', origin: 'user', pnl: 100 },
+      triggerFeedback: null,
+      note: null,
+    });
+    const receipt = await writeReceipt(fixture, run.operationId);
+    expect(receipt.result.revision.content.adviceFeedback).toEqual({
+      outcome: 'followed',
+      origin: 'model',
+      pnl: 100,
+    });
+    // 冻结的输入里还是调用方自报的 origin，写入与回执都按通道重盖 → 仍能认领。
+    const frozen = await ctx.repos.pluginAuthority.findOperation({
+      ...principal,
+      id: run.operationId,
+    });
+    if (!frozen) throw new Error('Missing frozen operation');
+    expect(JSON.parse(frozen.inputJson).content.adviceFeedback.origin).toBe('user');
+    const restarted = createPluginOperationService(fixture.options);
+    expect(data(await restarted.reconcile(principal, run.operationId)).state).toBe('succeeded');
   });
   it('keeps uncertain effects unknown and never automatically retries them', async () => {
     const { service, principal, handler } = await setup();
