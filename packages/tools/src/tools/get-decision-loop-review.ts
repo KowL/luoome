@@ -18,6 +18,7 @@ import {
   partitionAdviceOutcomes,
 } from '../internal/advice-outcome-scope.js';
 import { rejectNonPitObservations } from '../internal/observation-vintage.js';
+import { linkTrades } from '../internal/trade-advice-links.js';
 
 const REVIEW_LIMIT = 1000;
 
@@ -266,11 +267,18 @@ export const getDecisionLoopReviewTool = defineTool({
     const currentLinkedTradeIds = new Set(
       allReviews.flatMap(({ revision }) => revision.content.tradeIds),
     );
-    const linkedAdviceTradeIds = new Set(
-      allReviews
-        .filter(({ review }) => review.subject.kind === 'advice')
-        .flatMap(({ revision }) => revision.content.tradeIds),
-    );
+    /**
+     * 建议↔成交的链接：**双链并认**（task-16），与 `get_advice_attribution` 共用
+     * `linkTrades`（`internal/trade-advice-links.ts`）。只认 `review.tradeIds` 会让
+     * 「用 `add_trade` 显式关联了 advice 的成交」在两工具之间给出不同计数。
+     */
+    const reviewTradeIdsByAdvice = new Map<string, string[]>();
+    for (const { review, revision } of allReviews) {
+      if (review.subject.kind !== 'advice') continue;
+      const existing = reviewTradeIdsByAdvice.get(review.subject.id) ?? [];
+      existing.push(...revision.content.tradeIds);
+      reviewTradeIdsByAdvice.set(review.subject.id, existing);
+    }
 
     const accountStockIds = stockIdsForAccount(allAccountTrades, holdings);
     const positionIdsByStock = new Map<string, ReadonlySet<string>>();
@@ -316,16 +324,24 @@ export const getDecisionLoopReviewTool = defineTool({
       } else if (outcome?.outcome === 'ignored') outcomeDistribution.ignored += 1;
     }
 
+    // 双链并认 + 去重：一条成交只记一个 advice owner（再与其它两类依据互斥）。
+    const adviceLinks = linkTrades(advices, trades, reviewTradeIdsByAdvice);
+    const adviceLinkedTradeIds = new Set<string>();
+    for (const candidates of adviceLinks.byAdvice.values())
+      for (const candidate of candidates) adviceLinkedTradeIds.add(candidate.trade.id);
+
     const attributionCounts = {
-      advice: trades.filter((trade) => linkedAdviceTradeIds.has(trade.id)).length,
+      advice: trades.filter((trade) => adviceLinkedTradeIds.has(trade.id)).length,
       researchHypothesisVersion: trades.filter(
         (trade) => trade.researchHypothesisVersionId !== undefined,
       ).length,
       strategyVersion: trades.filter((trade) => trade.strategyVersionId !== undefined).length,
     };
+    // `unattributed` 必须与 `attributionCounts.advice` 用**同一个**链接集合（双链并认后），
+    // 否则会出现「计为已归因、同时又算未归因」的自相矛盾。
     const unattributed = trades.filter(
       (trade) =>
-        !currentLinkedTradeIds.has(trade.id) &&
+        !adviceLinkedTradeIds.has(trade.id) &&
         trade.researchHypothesisVersionId === undefined &&
         trade.strategyVersionId === undefined,
     ).length;
@@ -439,6 +455,9 @@ export const getDecisionLoopReviewTool = defineTool({
       },
       decisionRecords: {
         total: allReviews.length,
+        // 决策记录层的 `linkedTrades` 语义保持为「有 DecisionReview 链接的成交」——
+        // 那一层统计的是**复盘记录**的链接，不掺 `Trade.adviceId`；与 `attributionCounts.advice`
+        // （双链并认）是两个不同口径，字段名已区分。
         linkedTrades: trades.filter((trade) => currentLinkedTradeIds.has(trade.id)).length,
         triggerFeedbackCount: allReviews.filter(
           ({ review, revision }) =>

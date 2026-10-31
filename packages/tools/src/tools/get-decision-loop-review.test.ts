@@ -3,10 +3,19 @@ import type { Trade } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
+import { getAdviceAttributionTool } from './get-advice-attribution.js';
 import { getDecisionLoopReviewTool } from './get-decision-loop-review.js';
 import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const NOW = new Date('2026-08-01T00:00:00.000Z');
+
+/** 归因工具里的「已归因成交数」= 所有建议关联成交的条数（每条只归一个 owner）。 */
+const attrActributionCountFor = (data: {
+  rows: readonly { status: string; tradeLinks?: readonly unknown[] }[];
+}): number =>
+  data.rows
+    .filter((row) => row.status === 'traded')
+    .reduce((total, row) => total + (row.tradeLinks?.length ?? 0), 0);
 
 const completeObservation = {
   id: 'review-observation-complete',
@@ -251,5 +260,134 @@ describe('get_decision_loop_review', () => {
     });
     expect(strict.data.trades).toEqual(all.data.trades);
     expect(strict.data.limitations.join(' ')).toContain('无来源戳 1 条');
+  });
+});
+
+// task-16：Trade ↔ Advice 双链并认，两工具对同一批成交给出同一计数。
+describe('task-16 双链并认的对拍', () => {
+  const seedAdvice = async (ctx: Awaited<ReturnType<typeof buildTestContext>>, id: string) => {
+    const template = (await ctx.repos.advice.query({ includeExpired: true }))[0];
+    if (!template) throw new Error('missing advice fixture');
+    await ctx.repos.advice.save({
+      ...template,
+      id,
+      // get_advice_attribution 只归因可映射到股票的 advice（portfolio 主体不可归因）。
+      subjectKind: 'stock',
+      subjectId: '002594.SZ',
+      createdAt: NOW,
+    });
+    return template;
+  };
+
+  /** 只带 `Trade.adviceId` 的成交：账本上有显式链接，但没有 DecisionReview.tradeIds。 */
+  it('仅有 Trade.adviceId 时两工具都算已归因，且计数一致', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedAdvice(ctx, 'advice-chain-a');
+    const base = TEST_TRADES[0] as Trade;
+    await ctx.repos.trade.save({
+      ...base,
+      id: 'trade-chain-a',
+      accountId: TEST_ACCOUNT.id,
+      adviceId: 'advice-chain-a',
+      executedAt: NOW,
+    });
+    // 归因工具只处理「账户归属明确」的建议（stock 建议需 review 认领或 strategy 归属）。
+    await recordAdviceOutcomeTool.execute(
+      { adviceId: 'advice-chain-a', accountId: TEST_ACCOUNT.id, outcome: 'ignored' },
+      { ...ctx, adviceOutcomeOrigin: 'user' },
+    );
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    const attribution = await getAdviceAttributionTool.execute(
+      { accountId: TEST_ACCOUNT.id, adviceId: 'advice-chain-a' },
+      ctx,
+    );
+    if (!attribution.ok)
+      throw new Error(`attribution failed: ${JSON.stringify(attribution.error)}`);
+    if (!review.ok || !attribution.ok) throw new Error('fixture failed');
+    expect(review.data.trades.attributionCounts.advice).toBe(1);
+    expect(review.data.trades.unattributed).toBe(0);
+    const attributed = attribution.data.rows.find((row) => row.adviceId === 'advice-chain-a');
+    expect(attributed?.status).toBe('traded');
+    expect(attributed?.status === 'traded' ? attributed.tradeLinks[0]?.relation : undefined).toBe(
+      'trade.adviceId',
+    );
+    // 对拍：两工具对同一批成交给出同一「已归因成交数」。
+    expect(review.data.trades.attributionCounts.advice).toBe(
+      attrActributionCountFor(attribution.data),
+    );
+  });
+
+  /** 只带 `DecisionReview.tradeIds` 的成交：账本上无 adviceId。 */
+  it('仅有 DecisionReview.tradeIds 时两工具都算已归因，且计数一致', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedAdvice(ctx, 'advice-chain-b');
+    const base = TEST_TRADES[0] as Trade;
+    await ctx.repos.trade.save({
+      ...base,
+      id: 'trade-chain-b',
+      accountId: TEST_ACCOUNT.id,
+      executedAt: NOW,
+    });
+    const outcome = await recordAdviceOutcomeTool.execute(
+      {
+        adviceId: 'advice-chain-b',
+        accountId: TEST_ACCOUNT.id,
+        outcome: 'followed',
+        tradeIds: ['trade-chain-b'],
+      },
+      { ...ctx, adviceOutcomeOrigin: 'user' },
+    );
+    expect(outcome.ok).toBe(true);
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    const attribution = await getAdviceAttributionTool.execute(
+      { accountId: TEST_ACCOUNT.id, adviceId: 'advice-chain-b' },
+      ctx,
+    );
+    if (!review.ok || !attribution.ok) throw new Error('fixture failed');
+    expect(review.data.trades.attributionCounts.advice).toBe(1);
+    const attributed = attribution.data.rows.find((row) => row.adviceId === 'advice-chain-b');
+    expect(attributed?.status === 'traded' ? attributed.tradeLinks[0]?.relation : undefined).toBe(
+      'decision-review.tradeIds',
+    );
+    expect(review.data.trades.attributionCounts.advice).toBe(
+      attrActributionCountFor(attribution.data),
+    );
+  });
+
+  /** 同一条成交两条链都指向同一建议：**不重复计数**。 */
+  it('两处都关联同一建议时不重复计数', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedAdvice(ctx, 'advice-chain-c');
+    const base = TEST_TRADES[0] as Trade;
+    await ctx.repos.trade.save({
+      ...base,
+      id: 'trade-chain-c',
+      accountId: TEST_ACCOUNT.id,
+      adviceId: 'advice-chain-c',
+      executedAt: NOW,
+    });
+    await recordAdviceOutcomeTool.execute(
+      {
+        adviceId: 'advice-chain-c',
+        accountId: TEST_ACCOUNT.id,
+        outcome: 'followed',
+        tradeIds: ['trade-chain-c'],
+      },
+      { ...ctx, adviceOutcomeOrigin: 'user' },
+    );
+    const review = await getDecisionLoopReviewTool.execute(
+      { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW },
+      ctx,
+    );
+    if (!review.ok) throw new Error('fixture failed');
+    // 一条成交 = 1，不是 2。
+    expect(review.data.trades.attributionCounts.advice).toBe(1);
+    expect(review.data.trades.unattributed).toBe(0);
   });
 });

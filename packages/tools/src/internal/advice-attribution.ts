@@ -19,6 +19,8 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
+import { type LinkCandidate, linkTrades } from './trade-advice-links.js';
+
 /**
  * 单条建议事后归因的**纯函数层**（REQ-M3-14 / S2，无 IO）。
  *
@@ -437,88 +439,10 @@ const LIMITATIONS = [
   '观察是每股收益率，不是实际盈亏，也不参与任何求和。',
   '未归因残差（无建议的成交、未分配分红、费用税）单列，不摊派给任何建议。',
   `本口径（${ADVICE_ATTRIBUTION_METRIC_VERSION}）与 advice-hit-rate-v3 不可相除、不可互相校验。`,
-  '成交链接**双链并认**（trade.adviceId + decisionReview.tradeIds）；get_decision_loop_review 目前只认后者，两者的「已归因成交数」可能不同（task-16 负责消除）。',
+  '成交链接**双链并认**（trade.adviceId + decisionReview.tradeIds），同一成交只记一个建议 owner；get_decision_loop_review 与本文具同一口径。',
 ] as const;
 
 const NO_TRADE_NOTE = '用户回填为兑现，但没有关联成交记录；本工具不据此推断实际盈亏。';
-
-interface LinkCandidate {
-  readonly trade: Trade;
-  readonly relation: 'decision-review.tradeIds' | 'trade.adviceId';
-}
-
-/** 按裁定 T4 双链并认；同一成交被多条 advice 链接时按确定性规则选唯一 owner。 */
-const linkTrades = (
-  advices: readonly Advice[],
-  trades: readonly Trade[],
-  reviewTradeIds: ReadonlyMap<string, readonly string[]>,
-): {
-  readonly byAdvice: ReadonlyMap<string, LinkCandidate[]>;
-  readonly shared: ReadonlyMap<string, readonly string[]>;
-  readonly unknowns: string[];
-} => {
-  const adviceIds = new Set(advices.map((advice) => advice.id));
-  const tradeById = new Map(trades.map((trade) => [trade.id, trade]));
-  const candidates = new Map<string, LinkCandidate[]>();
-  const sharedByTrade = new Map<string, string[]>();
-  const unknowns: string[] = [];
-
-  const push = (adviceId: string, candidate: LinkCandidate): void => {
-    const list = candidates.get(adviceId) ?? [];
-    list.push(candidate);
-    candidates.set(adviceId, list);
-    const claimed = sharedByTrade.get(candidate.trade.id) ?? [];
-    if (!claimed.includes(adviceId)) claimed.push(adviceId);
-    sharedByTrade.set(candidate.trade.id, claimed);
-  };
-
-  // 路径 A：Trade.adviceId（单值）。
-  for (const trade of trades) {
-    if (trade.adviceId === undefined || !adviceIds.has(trade.adviceId)) continue;
-    push(trade.adviceId, { trade, relation: 'trade.adviceId' });
-  }
-  // 路径 B：DecisionReview.content.tradeIds（多值）。
-  for (const [adviceId, tradeIds] of reviewTradeIds) {
-    if (!adviceIds.has(adviceId)) continue;
-    for (const tradeId of tradeIds) {
-      const trade = tradeById.get(tradeId);
-      // 链接指向不存在 / 他账户的成交：进 unknowns，不静默丢弃（先例 get_strategy_decision_cycles）。
-      if (trade === undefined) {
-        unknowns.push(`建议 ${adviceId} 关联的成交 ${tradeId} 不在本账户账本内，已跳过`);
-        continue;
-      }
-      push(adviceId, { trade, relation: 'decision-review.tradeIds' });
-    }
-  }
-
-  // 唯一 owner：relation 优先级 review.tradeIds > trade.adviceId，同级按 adviceId 字典序。
-  const ownerOf = new Map<string, string>();
-  for (const [adviceId, list] of candidates)
-    for (const candidate of list) {
-      const current = ownerOf.get(candidate.trade.id);
-      if (current === undefined) {
-        ownerOf.set(candidate.trade.id, adviceId);
-        continue;
-      }
-      const better = (a: string, b: string): boolean => a.localeCompare(b) < 0;
-      const currentRank = candidates
-        .get(current)
-        ?.find((item) => item.trade.id === candidate.trade.id)?.relation;
-      if (candidate.relation === 'decision-review.tradeIds' && currentRank === 'trade.adviceId') {
-        ownerOf.set(candidate.trade.id, adviceId);
-        continue;
-      }
-      if (candidate.relation === currentRank && better(adviceId, current))
-        ownerOf.set(candidate.trade.id, adviceId);
-    }
-
-  const owned = new Map<string, LinkCandidate[]>();
-  for (const [adviceId, list] of candidates) {
-    const mine = list.filter((candidate) => ownerOf.get(candidate.trade.id) === adviceId);
-    if (mine.length > 0) owned.set(adviceId, mine);
-  }
-  return { byAdvice: owned, shared: sharedByTrade, unknowns };
-};
 
 const observationEvidence = (observations: readonly SignalObservation[]): ObservationEvidence[] =>
   observations
