@@ -4,6 +4,8 @@ import {
   assembleLadder,
   type LimitUpLadderManagerLike,
   money,
+  type Report,
+  type ReportSection,
 } from '@luoome/core';
 import { getReportTool, listWorkflowRunsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -80,6 +82,87 @@ const sentimentSnapshot = (): AShareSentimentSnapshot => ({
   },
 });
 
+/**
+ * 市场级判断的 observedAt：metrics 块里 `key === 'observedAt'` 的那一项。
+ * 结构断言靠它，不靠人眼看渲染文本。
+ */
+const marketObservedAtValue = (section: ReportSection): string | undefined => {
+  for (const block of section.blocks) {
+    if (block.kind !== 'metrics') continue;
+    const item = block.items.find((entry) => entry.key === 'observedAt');
+    if (item !== undefined && typeof item.value === 'string') return item.value;
+  }
+  return undefined;
+};
+
+/** REQ-M3-20 验收 2：报告渲染层不存在「无 observedAt 的市场级判断」。 */
+const assertMarketJudgmentsCarryObservedAt = (report: Report): void => {
+  const marketSections = report.sections.filter((section) => section.key === 'market-pulse');
+  expect(marketSections.length).toBeGreaterThan(0);
+  for (const section of marketSections) {
+    // unavailable = 没有判断，只有缺口说明，不需要 observedAt。
+    if (section.status === 'unavailable') continue;
+    const value = marketObservedAtValue(section);
+    expect(value).toBeDefined();
+    const observedAt = new Date(value as string);
+    expect(Number.isNaN(observedAt.getTime())).toBe(false);
+    expect(section.dataAsOf).toBeInstanceOf(Date);
+    expect(observedAt.getTime()).toBe(section.dataAsOf?.getTime());
+  }
+};
+
+/** 市场脉搏里的 warning 文本块：盘前常态不该有，当日判断被降级时必须出现。 */
+const marketWarningBlocks = (section: ReportSection) =>
+  section.blocks.filter((block) => block.kind === 'text' && block.tone === 'warning');
+
+const marketPulseSection = (report: Report): ReportSection => {
+  const section = report.sections.find((entry) => entry.key === 'market-pulse');
+  if (section === undefined) throw new Error('报告缺少 market-pulse 段');
+  return section;
+};
+
+const marketObservedAtItem = (section: ReportSection) => {
+  const metrics = section.blocks.find((block) => block.kind === 'metrics');
+  return metrics?.kind === 'metrics'
+    ? metrics.items.find((item) => item.key === 'observedAt')
+    : undefined;
+};
+
+/** 天梯成功返回一份快照；`asOf` 与情绪快照的 `dataAsOf` 刻意可不同。 */
+const ladderManagerWith = (asOf: Date): LimitUpLadderManagerLike => ({
+  name: 'limit-up-ladder',
+  sources: ['eastmoney'],
+  status: () => [],
+  fetchLadder: async () => ({
+    ok: true,
+    data: assembleLadder(
+      '2026-07-24',
+      'eastmoney',
+      [
+        {
+          code: '600111',
+          name: '测试医药',
+          industry: '医药',
+          ladderLevel: 6,
+          uncategorized: false,
+          firstTime: '09:30:00',
+          finalTime: '09:30:00',
+          reason: '--',
+          price: 10,
+          rawClose: 10,
+          corrected: false,
+          changePct: 0.1,
+          limitUpDate: '2026-07-24',
+          board: 'main_board',
+        },
+      ],
+      [],
+      asOf,
+    ),
+  }),
+  compareLadder: async () => ({ ok: false }),
+});
+
 describe('opening-report workflow', () => {
   it('部分市场数据仍展示有效指数、涨跌样本和行业，并保留覆盖限制', () => {
     const snapshot = sentimentSnapshot();
@@ -103,7 +186,7 @@ describe('opening-report workflow', () => {
       status: 'partial',
       value: { advancing: 3000, declining: 2000, unchanged: 50, total: 5050 },
     };
-    const result = marketPulse(snapshot);
+    const result = marketPulse(snapshot, generatedAt);
     expect(result.section.status).toBe('partial');
     const content = JSON.stringify(result.section.blocks);
     expect(content).toContain('上证指数 +0.33%');
@@ -400,4 +483,274 @@ describe('opening-report workflow', () => {
       });
     },
   );
+
+  // REQ-M3-20 验收 2：真实报告渲染输出里不存在「无 observedAt 的市场级判断」。
+  it('renders every market-level judgment with observedAt', async () => {
+    const ctx = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      },
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    assertMarketJudgmentsCarryObservedAt(result.data.report);
+    const market = result.data.report.sections.find((section) => section.key === 'market-pulse');
+    expect(marketObservedAtValue(market as ReportSection)).toBe(marketAsOf.toISOString());
+  });
+
+  // 结构断言必须有牙：把 observedAt 摘掉后必须报错，否则它只是装饰。
+  it('fails the structural assertion once observedAt is stripped from a market judgment', async () => {
+    const ctx = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      },
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const stripped: Report = {
+      ...result.data.report,
+      sections: result.data.report.sections.map((section) =>
+        section.key !== 'market-pulse'
+          ? section
+          : {
+              ...section,
+              blocks: section.blocks.map((block) =>
+                block.kind !== 'metrics'
+                  ? block
+                  : { ...block, items: block.items.filter((item) => item.key !== 'observedAt') },
+              ),
+            },
+      ),
+    };
+    expect(() => assertMarketJudgmentsCarryObservedAt(stripped)).toThrow();
+  });
+
+  // REQ-M3-20 验收 4：当日 15:00 后引用当日观察 → 标为「历史观察」，不是删除。
+  it('downgrades a post-close same-day market judgment to a historical observation without dropping it', () => {
+    const snapshot = sentimentSnapshot();
+    // 当日 16:00（+08:00）观测，当日 17:00 渲染。
+    const observedAt = new Date('2026-07-24T08:00:00.000Z');
+    snapshot.dataAsOf = observedAt;
+    const result = marketPulse(snapshot, new Date('2026-07-24T09:00:00.000Z'));
+
+    const metrics = result.section.blocks.find((block) => block.kind === 'metrics');
+    const keys = metrics?.kind === 'metrics' ? metrics.items.map((item) => item.key) : [];
+    // 降级不是丢弃：市场级数字与观测时点都还在。
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        'observedAt',
+        'sealedCount',
+        'brokenCount',
+        'brokenRate',
+        'maxLadderLevel',
+      ]),
+    );
+    const observedItem =
+      metrics?.kind === 'metrics'
+        ? metrics.items.find((item) => item.key === 'observedAt')
+        : undefined;
+    expect(observedItem?.value).toBe(observedAt.toISOString());
+    expect(observedItem?.displayValue).toContain('历史观察');
+    expect(
+      result.section.blocks.some(
+        (block) =>
+          block.kind === 'text' && block.tone === 'warning' && block.text.includes('历史观察'),
+      ),
+    ).toBe(true);
+    // 判断本身仍在：封板家数没有被抹掉。
+    expect(
+      metrics?.kind === 'metrics'
+        ? metrics.items.find((item) => item.key === 'sealedCount')?.value
+        : undefined,
+    ).toBe(12);
+  });
+
+  // 正例：当日盘中的观察是当前依据，不挂历史观察标注。
+  it('keeps a same-day pre-close market judgment as current', () => {
+    const snapshot = sentimentSnapshot();
+    const observedAt = new Date('2026-07-24T02:00:00.000Z'); // 当日 10:00 +08:00
+    snapshot.dataAsOf = observedAt;
+    const result = marketPulse(snapshot, new Date('2026-07-24T06:00:00.000Z')); // 当日 14:00
+    const metrics = result.section.blocks.find((block) => block.kind === 'metrics');
+    const observedItem =
+      metrics?.kind === 'metrics'
+        ? metrics.items.find((item) => item.key === 'observedAt')
+        : undefined;
+    expect(observedItem?.displayValue).not.toContain('历史观察');
+    expect(
+      result.section.blocks.some(
+        (block) => block.kind === 'text' && block.text.includes('历史观察'),
+      ),
+    ).toBe(false);
+  });
+
+  // REQ-M3-20 跟进验收 1：盘前简报的数据天然是上一交易日收盘——那是背景，不是告警。
+  it('labels a pre-market prior-session snapshot as a prior-close observation without a warning', () => {
+    // generatedAt = 今日 09:00；snapshot.dataAsOf = 上一交易日 15:00 收盘。
+    const result = marketPulse(sentimentSnapshot(), generatedAt);
+    const observedItem = marketObservedAtItem(result.section);
+    expect(observedItem?.displayValue).toContain('上一交易日收盘观察');
+    // 不是「被降级的当日判断」——两种 historical 的措辞不能混用。
+    expect(observedItem?.displayValue).not.toContain('历史观察');
+    expect(marketWarningBlocks(result.section)).toEqual([]);
+    // 语义不弱化：仍写明是上一交易日、不得作为今日依据。
+    const note = result.section.blocks.find(
+      (block) =>
+        block.kind === 'text' &&
+        block.tone === 'factual' &&
+        block.text.includes('上一交易日收盘观察'),
+    );
+    const noteText = note?.kind === 'text' ? note.text : '';
+    expect(noteText).toContain('不得作为今日依据');
+    expect(noteText).toContain(marketAsOf.toISOString());
+  });
+
+  // 真实盘前简报：整段市场脉搏不该出现 warning，否则每天常态告警就是噪音。
+  it('renders a pre-market opening report with no market warning block', async () => {
+    const ctx = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      },
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const market = marketPulseSection(result.data.report);
+    expect(marketObservedAtValue(market)).toBe(marketAsOf.toISOString());
+    expect(marketWarningBlocks(market)).toEqual([]);
+    expect(JSON.stringify(market.blocks)).toContain('上一交易日收盘观察');
+    expect(JSON.stringify(market.blocks)).not.toContain('历史观察');
+  });
+
+  // 反向对照：同一天但复用当日 16:00 的观察时 warning 必须还在，否则上一条只是装饰。
+  it('still warns when a same-day post-close observation is reused in a report', async () => {
+    const snapshot = sentimentSnapshot();
+    snapshot.dataAsOf = new Date('2026-07-27T08:00:00.000Z'); // 当日 16:00
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-27T09:00:00.000Z'), // 当日 17:00
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: snapshot }),
+      },
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const market = marketPulseSection(result.data.report);
+    expect(marketWarningBlocks(market)).toHaveLength(1);
+    expect(JSON.stringify(market.blocks)).toContain('历史观察');
+    expect(JSON.stringify(market.blocks)).not.toContain('上一交易日收盘观察');
+  });
+
+  // 发现 (d) 修复：参照日是报告期，不是 now。补跑 3 天前的报告时标签仍对得上事实。
+  it('labels the previous session relative to the report period, not to now', () => {
+    const snapshot = sentimentSnapshot();
+    snapshot.dataAsOf = new Date('2026-07-23T07:00:00.000Z'); // 报告期 07-24 的前一交易日 15:00
+    // 参照日 = 报告期 07-24；now 是 3 天后的 07-27，若拿 now 当参照就会说成「5 天前的数据」。
+    const result = marketPulse(snapshot, new Date('2026-07-24T04:00:00.000Z'));
+    expect(marketObservedAtItem(result.section)?.displayValue).toContain('上一交易日收盘观察');
+    expect(marketWarningBlocks(result.section)).toEqual([]);
+  });
+
+  // 第三档不是死代码：同一报告期下，5 个交易日前的数据必须仍是「历史观察」+ warning。
+  it('keeps the historical warning when the data is older than the previous session', () => {
+    const snapshot = sentimentSnapshot();
+    snapshot.dataAsOf = new Date('2026-07-17T07:00:00.000Z'); // 报告期 07-24 的前 5 个交易日
+    const result = marketPulse(snapshot, new Date('2026-07-24T04:00:00.000Z'));
+    expect(marketObservedAtItem(result.section)?.displayValue).toContain('历史观察');
+    expect(marketWarningBlocks(result.section)).toHaveLength(1);
+    expect(JSON.stringify(result.section.blocks)).not.toContain('上一交易日收盘观察');
+  });
+
+  // 端到端补跑：报告期 = 3 天前，市场数据 = 该报告期的前一交易日 → 不告警。
+  it('renders a backfilled opening report without a market warning', async () => {
+    const snapshot = sentimentSnapshot();
+    snapshot.date = '2026-07-23';
+    snapshot.dataAsOf = new Date('2026-07-23T07:00:00.000Z');
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-27T01:00:00.000Z'), // now = 3 天后
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: snapshot }),
+      },
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-24', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const market = marketPulseSection(result.data.report);
+    expect(marketWarningBlocks(market)).toEqual([]);
+    expect(marketObservedAtValue(market)).toBe('2026-07-23T07:00:00.000Z');
+    expect(JSON.stringify(market.blocks)).toContain('上一交易日收盘观察');
+    expect(JSON.stringify(market.blocks)).not.toContain('历史观察');
+  });
+
+  // 发现 (b) 修复：段级 dataAsOf 属于市场级判断本身，天梯快照时间不被混进来。
+  it('keeps the section dataAsOf on the market judgment and exposes the ladder time separately', async () => {
+    const ladderAsOf = new Date('2026-07-24T07:05:00.000Z'); // 15:05，与情绪快照不同时点
+    const ladderManager = ladderManagerWith(ladderAsOf);
+    const ctx = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      },
+      limitUpLadder: ladderManager,
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const market = marketPulseSection(result.data.report);
+    // 段级 dataAsOf = 市场级判断的观测时点，不是天梯时间。
+    expect(market.dataAsOf?.toISOString()).toBe(marketAsOf.toISOString());
+    expect(market.dataAsOf?.toISOString()).not.toBe(ladderAsOf.toISOString());
+    expect(marketObservedAtValue(market)).toBe(marketAsOf.toISOString());
+    // 天梯时间没丢：作为它自己的事实可见。
+    const metrics = market.blocks.find((block) => block.kind === 'metrics');
+    const ladderItem =
+      metrics?.kind === 'metrics'
+        ? metrics.items.find((item) => item.key === 'ladderAsOf')
+        : undefined;
+    expect(ladderItem?.label).toBe('天梯快照时间');
+    expect(ladderItem?.value).toBe(ladderAsOf.toISOString());
+    // 结构断言在生产形态（天梯时间 ≠ 情绪时间）下成立，而不是靠 fixture 凑巧对齐。
+    assertMarketJudgmentsCarryObservedAt(result.data.report);
+  });
+
+  // 缺陷：情绪源失败 + 天梯有缓存时，unavailable 段曾被塞进 list 块 → save_report 抛 InvariantError。
+  it('keeps an unavailable market section warning-only when the ladder still has data', async () => {
+    const ladderAsOf = new Date('2026-07-24T07:05:00.000Z');
+    const ctx = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: {
+        status: () => [],
+        fetch: async () => ({
+          ok: false,
+          error: { kind: 'adapter_error', message: '情绪源超时', recoverable: true },
+        }),
+      },
+      limitUpLadder: ladderManagerWith(ladderAsOf),
+    });
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    // 报告能保存：runner 会走 save_report → assertReportInvariants，抛错这里就红了。
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const market = marketPulseSection(result.data.report);
+    expect(market.status).toBe('unavailable');
+    // 比「不含 list」更强：整段只允许 warning 文本块。
+    expect(market.blocks.every((block) => block.kind === 'text' && block.tone === 'warning')).toBe(
+      true,
+    );
+    expect(market.blocks.some((block) => block.kind === 'list')).toBe(false);
+    expect(market.blocks.some((block) => block.kind === 'metrics')).toBe(false);
+    // 天梯的存在不被静默吞掉：说明省略原因、单独查询入口与快照时间。
+    const text = JSON.stringify(market.blocks);
+    expect(text).toContain('市场情绪源不可用');
+    expect(text).toContain('limit_up_ladder');
+    expect(text).toContain(ladderAsOf.toISOString());
+    // 不可用说明里不许出现行动词。
+    expect(text).not.toMatch(/买入|卖出|已建仓|下单/);
+  });
 });

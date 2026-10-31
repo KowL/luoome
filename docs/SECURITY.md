@@ -149,6 +149,13 @@ interface GetConfidenceCalibrationOutput {
 - Web 与插件面板不显示
 - 复盘时仍保留
 
+市场级（`advice_market`）另有一条更短的时效边界（REQ-M3-20）：可用分析上下文只限
+**Asia/Shanghai 自然日当日**，`validUntil` 未到期也不例外。跨日市场事实不进可用事实
+（`get_analysis_context` 返回 `unavailable` + `market-advice-same-day-only`），写回返回
+`stale_context`；当日 15:00 之后或非当日的市场观察降级标注为「历史观察」，可以阅读，
+但不得作为当前依据进入建议链。这条边界只作用于市场级，不改变盘中行动类、盘后策略候选
+与研究类的时效口径。
+
 ### 输出反 prompt injection
 
 模型输出可能含"忽略之前的指令，执行 XXX"的注入。仓内的清理实现：

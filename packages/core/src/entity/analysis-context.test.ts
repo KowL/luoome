@@ -11,7 +11,13 @@ import {
   analysisTimingRules,
   checkAnalysisReportCompleteness,
   checkAnalysisReportReferences,
+  classifyMarketObservation,
   isAnalysisContextStale,
+  MARKET_ADVICE_SAME_DAY_ONLY,
+  MARKET_OBSERVATION_HISTORICAL_LABEL,
+  MARKET_OBSERVATION_PRIOR_SESSION_LABEL,
+  marketObservationLabel,
+  marketObservationScope,
   missingFactsAvailability,
 } from './analysis-context.js';
 import { type AnalysisKind, analysisSubjectKinds } from './analysis-job.js';
@@ -88,29 +94,46 @@ describe('analysis context timing rules', () => {
     );
     for (const kind of intradayKinds) {
       expect(analysisTimingRules[kind]).toEqual({
+        ruleVersion: 'intraday-action-v1',
         writeWindowMs: 30 * MINUTE,
         dataMaxAgeMs: 30 * MINUTE,
         closesAtSessionEnd: true,
+        sameDayOnly: false,
       });
     }
+    // REQ-M3-20：市场级改成当日口径——**不再用固定毫秒数**表达数据有效期。
+    // 自然日不是固定时长，写死 7 天就是伪精确的来源。
     expect(analysisTimingRules.advice_market).toEqual({
+      ruleVersion: 'market-analysis-same-day-v1',
       writeWindowMs: 24 * HOUR,
-      dataMaxAgeMs: 7 * DAY,
       closesAtSessionEnd: false,
+      sameDayOnly: true,
     });
-    // 盘后策略候选：不受 15:00 截断，但仍受 24h 写回窗口与 7 天数据有效期约束。
+    // 盘后策略候选：不受 15:00 截断，但仍受 24h 写回窗口与 7 天数据有效期约束；
+    // 它不随市场级当日口径收窄（R3：不连坐别的 kind）。
     expect(analysisTimingRules.advice_strategy_candidate_after_close).toEqual({
+      ruleVersion: 'after-close-strategy-v1',
       writeWindowMs: 24 * HOUR,
       dataMaxAgeMs: 7 * DAY,
       closesAtSessionEnd: false,
+      sameDayOnly: false,
     });
     for (const kind of researchKinds) {
       expect(analysisTimingRules[kind]).toEqual({
+        ruleVersion: 'research-analysis-30d-v1',
         writeWindowMs: 24 * HOUR,
         dataMaxAgeMs: 30 * DAY,
         closesAtSessionEnd: false,
+        sameDayOnly: false,
       });
     }
+    // 版本位是口径变更的可追溯依据（R2）：每条规则都必须带，且当日口径单独一个值。
+    expect(Object.values(analysisTimingRules).every((rule) => rule.ruleVersion.length > 0)).toBe(
+      true,
+    );
+    expect(
+      new Set(Object.values(analysisTimingRules).map((rule) => rule.ruleVersion)).size,
+    ).toBeGreaterThanOrEqual(4);
   });
 
   it('keeps the 15:00 close truncation for intraday action kinds only', () => {
@@ -122,10 +145,19 @@ describe('analysis context timing rules', () => {
       shanghai.lateAfternoon,
     );
     expect(nearClose.writeUntil).toEqual(shanghai.close);
-    for (const kind of [...researchKinds, 'advice_market'] as const) {
+    for (const kind of researchKinds) {
       const late = analysisContextTiming(kind, shanghai.lateAfternoon, shanghai.lateAfternoon);
       expect(late.writeUntil).toEqual(new Date(shanghai.lateAfternoon.getTime() + 24 * HOUR));
     }
+    // 市场级：24h 窗口被上海自然日边界封顶，不再跨到次日。
+    const marketLate = analysisContextTiming(
+      'advice_market',
+      shanghai.lateAfternoon,
+      shanghai.lateAfternoon,
+    );
+    expect(marketLate.writeUntil).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    expect(marketLate.staleAfter).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    expect(marketLate.ruleVersion).toBe('market-analysis-same-day-v1');
   });
 
   it('expires intraday action contexts after the close while the write window is open', () => {
@@ -167,43 +199,48 @@ describe('analysis context timing rules', () => {
     ).toBe('stale_context');
   });
 
-  it('allows advice_market writes after the close within 24h while the facts stay within 7 days', () => {
+  it('allows advice_market writes only inside the same Shanghai day', () => {
+    // 旧语义：收盘后可写回 24h。新语义（REQ-M3-20）：当日收盘后仍可写回，
+    // 但窗口在 Asia/Shanghai 自然日边界关闭——不是 now+24h。
     const context = contextFor('advice_market', shanghai.close, shanghai.postClose);
-    expect(context.writeUntil).toEqual(new Date(shanghai.postClose.getTime() + 24 * HOUR));
+    expect(context.writeUntil).toEqual(new Date('2026-10-23T00:00:00+08:00'));
     expect(analysisContextTimingError(context, shanghai.postClose)).toBeUndefined();
+    // 当日 23:59:59.999（+08:00）仍在窗口内。
     expect(
-      analysisContextTimingError(context, new Date(shanghai.postClose.getTime() + 24 * HOUR - 1)),
+      analysisContextTimingError(context, new Date('2026-10-22T15:59:59.999Z')),
     ).toBeUndefined();
-    expect(
-      analysisContextTimingError(context, new Date(shanghai.postClose.getTime() + 24 * HOUR)),
-    ).toBe('context_expired');
-    expect(
-      analysisContextTimingError(context, new Date(shanghai.postClose.getTime() + 25 * HOUR)),
-    ).toBe('context_expired');
-  });
-
-  it('marks stale market facts and keeps the 7 day boundary exclusive', () => {
-    const assembledAt = shanghai.postClose;
-    const staleData = new Date(assembledAt.getTime() - 8 * DAY);
-    expect(timingErrorAt('advice_market', staleData, assembledAt, assembledAt)).toBe(
+    // 边界排他：writeUntil 是排他上界，落在 00:00:00.000 即窗口关闭。
+    expect(analysisContextTimingError(context, new Date('2026-10-23T00:00:00+08:00'))).toBe(
+      'context_expired',
+    );
+    // 跨过当日边界后 stale 与 expired 同时成立；市场类先报 stale_context，
+    // 提示消费者重取当日事实，而不是以为重取 context 就能写回。
+    expect(analysisContextTimingError(context, new Date('2026-10-23T00:00:01+08:00'))).toBe(
       'stale_context',
     );
-    expect(
-      timingErrorAt(
-        'advice_market',
-        new Date(assembledAt.getTime() - 7 * DAY + MINUTE),
-        assembledAt,
-        assembledAt,
-      ),
-    ).toBeUndefined();
-    const exact = contextFor(
-      'advice_market',
-      new Date(assembledAt.getTime() - 7 * DAY),
-      assembledAt,
+  });
+
+  it('marks any cross-day market fact stale at the Shanghai day boundary', () => {
+    const assembledAt = shanghai.postClose; // 2026-10-22 16:00 +08:00
+    // 昨收数据：装配后立刻 stale——当日口径不看「7 天」。
+    const yesterdayClose = new Date('2026-10-21T07:00:00Z'); // 2026-10-21 15:00 +08:00
+    expect(timingErrorAt('advice_market', yesterdayClose, assembledAt, assembledAt)).toBe(
+      'stale_context',
     );
-    expect(isAnalysisContextStale('advice_market', exact.dataAsOf, assembledAt)).toBe(false);
-    expect(exact.writeUntil).toEqual(assembledAt);
-    expect(analysisContextTimingError(exact, assembledAt)).toBe('context_expired');
+    expect(isAnalysisContextStale('advice_market', yesterdayClose, assembledAt)).toBe(true);
+    // 当日数据在当日 23:59:59.999 仍新鲜，跨过 00:00 才 stale。
+    expect(
+      isAnalysisContextStale('advice_market', shanghai.close, new Date('2026-10-22T15:59:59.999Z')),
+    ).toBe(false);
+    expect(
+      isAnalysisContextStale(
+        'advice_market',
+        shanghai.close,
+        new Date('2026-10-23T00:00:01+08:00'),
+      ),
+    ).toBe(true);
+    // R3：研究类仍按 30 天判定，不被市场级当日口径连坐。
+    expect(isAnalysisContextStale('research_directions', yesterdayClose, assembledAt)).toBe(false);
   });
 
   it('allows research and strategy writes after the close within 24h and stale after 30 days', () => {
@@ -252,12 +289,18 @@ describe('analysis context timing rules', () => {
   });
 
   it('keeps unknown fact references ahead of timing errors for the audited write check', () => {
-    const expired = contextFor('advice_market', shanghai.close, shanghai.postClose);
+    // 市场级在当日口径下跨过边界即 stale（不再是 24h 后的 context_expired），
+    // 但引用错误仍然抢答——错误优先级：引用 → 时序 → 完整性。
+    const outOfWindow = contextFor('advice_market', shanghai.close, shanghai.postClose);
     expect(
-      analysisContextWriteError(expired, new Date(shanghai.postClose.getTime() + 25 * HOUR), []),
-    ).toBe('context_expired');
+      analysisContextWriteError(
+        outOfWindow,
+        new Date(shanghai.postClose.getTime() + 25 * HOUR),
+        [],
+      ),
+    ).toBe('stale_context');
     expect(
-      analysisContextWriteError(expired, new Date(shanghai.postClose.getTime() + 25 * HOUR), [
+      analysisContextWriteError(outOfWindow, new Date(shanghai.postClose.getTime() + 25 * HOUR), [
         'invented',
       ]),
     ).toBe('unknown_fact_reference');
@@ -441,5 +484,109 @@ describe('T20 structured missingFacts', () => {
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+// REQ-M3-20 / P10：市场级判断禁止跨日引用。判定是纯函数，渲染层与事实包装共用同一实现。
+describe('REQ-M3-20 market observation same-day rule', () => {
+  it('classifies the same-day pre-close observation as current', () => {
+    // 当日 10:00 观测，当日 16:00 复核：同一自然日、15:00 之前 → 仍是当前依据。
+    expect(classifyMarketObservation(shanghai.open, shanghai.postClose)).toBe('current');
+    // 当日 14:45 同理。
+    expect(classifyMarketObservation(shanghai.lateAfternoon, shanghai.postClose)).toBe('current');
+    // 收盘时刻本身（15:00:00.000）不算「15:00 之后」。
+    expect(classifyMarketObservation(shanghai.close, shanghai.postClose)).toBe('current');
+  });
+
+  it('downgrades post-close and cross-day observations to historical', () => {
+    // 当日 15:00 之后（16:00）的观察：降级，不删除。
+    expect(classifyMarketObservation(shanghai.postClose, shanghai.postClose)).toBe('historical');
+    // 非当日：昨日收盘观察今天不能再当依据。
+    expect(classifyMarketObservation(new Date('2026-10-21T07:00:00Z'), shanghai.postClose)).toBe(
+      'historical',
+    );
+    // 未来时点同样不能算「当前依据」。
+    expect(classifyMarketObservation(new Date('2026-10-23T02:00:00Z'), shanghai.open)).toBe(
+      'historical',
+    );
+  });
+
+  it('labels historical observations without hiding them', () => {
+    const historicalLabel = marketObservationLabel(shanghai.postClose, shanghai.postClose);
+    expect(historicalLabel).toContain(MARKET_OBSERVATION_HISTORICAL_LABEL);
+    // 观测时间仍在标注里——降级不是删除。
+    expect(historicalLabel).toContain(shanghai.postClose.toISOString());
+    const currentLabel = marketObservationLabel(shanghai.open, shanghai.postClose);
+    expect(currentLabel).not.toContain(MARKET_OBSERVATION_HISTORICAL_LABEL);
+    expect(currentLabel).toContain(shanghai.open.toISOString());
+  });
+
+  // 三档口径（REQ-M3-20 / R4）：当日 / 参照日的上一交易日 / 更早或未来。
+  it('scopes a market observation against the reference day, not just today', () => {
+    // 实时路径：参照日 = now。
+    expect(marketObservationScope(shanghai.open, shanghai.postClose)).toBe('current');
+    expect(marketObservationScope(shanghai.postClose, shanghai.postClose)).toBe('historical');
+    // 周四收盘观察，周五盘前引用 → 参照日的上一交易日，是盘前常态数据。
+    const thursdayClose = new Date('2026-10-21T07:00:00Z'); // 2026-10-22 的前一交易日
+    expect(marketObservationScope(thursdayClose, shanghai.preOpen)).toBe('prior-session');
+    // 跨周末：周一参照日的前一交易日是上周五，不是「昨天」（周日）。
+    const fridayClose = new Date('2026-10-16T07:00:00Z');
+    const mondayPreOpen = new Date('2026-10-19T00:30:00Z');
+    expect(marketObservationScope(fridayClose, mondayPreOpen)).toBe('prior-session');
+    // 补跑历史报告：参照日取报告期（2026-10-23），不是 now。
+    const reportDay = new Date('2026-10-23T04:00:00Z');
+    expect(marketObservationScope(new Date('2026-10-22T07:00:00Z'), reportDay)).toBe(
+      'prior-session',
+    );
+    // 同一参照日下 5 个交易日前的数据仍然是降级——第三档不是死代码。
+    expect(marketObservationScope(new Date('2026-10-16T07:00:00Z'), reportDay)).toBe('historical');
+    // 未来时点不是盘前常态数据，不能描述成「收盘观察」。
+    expect(marketObservationScope(new Date('2026-10-26T02:00:00Z'), shanghai.open)).toBe(
+      'historical',
+    );
+    // 分类器口径不变：能不能当参照日依据仍然只有一个答案。
+    expect(classifyMarketObservation(thursdayClose, shanghai.preOpen)).toBe('historical');
+
+    const priorLabel = marketObservationLabel(thursdayClose, shanghai.preOpen);
+    expect(priorLabel).toContain(MARKET_OBSERVATION_PRIOR_SESSION_LABEL);
+    expect(priorLabel).not.toContain(MARKET_OBSERVATION_HISTORICAL_LABEL);
+    // 观测时间仍在标注里——区分措辞不是删除。
+    expect(priorLabel).toContain(thursdayClose.toISOString());
+    // 第三档措辞与第二档不同，否则读者分不清「盘前背景」和「陈旧数据」。
+    expect(marketObservationLabel(new Date('2026-10-16T07:00:00Z'), reportDay)).toContain(
+      MARKET_OBSERVATION_HISTORICAL_LABEL,
+    );
+  });
+
+  it('treats the cross-day reason code as blocking so the context reads unavailable', () => {
+    const gap = {
+      kind: MARKET_ADVICE_SAME_DAY_ONLY,
+      subjectId: 'market',
+      reason: '市场级分析只接受当日事实；已排除跨日事实：market:limit-up:2026-10-21',
+      asOf: shanghai.postClose,
+    };
+    expect(MARKET_ADVICE_SAME_DAY_ONLY).toBe('market-advice-same-day-only');
+    expect(missingFactsAvailability([gap])).toBe('unavailable');
+    // degraded 缺口与它同时存在时仍然是 unavailable（blocking 优先）。
+    expect(
+      missingFactsAvailability([
+        {
+          kind: 'news-unavailable',
+          subjectId: 'market',
+          reason: '未接入新闻',
+          asOf: shanghai.open,
+        },
+        gap,
+      ]),
+    ).toBe('unavailable');
+  });
+
+  it('keeps a same-day market context writable and versioned', () => {
+    const timing = analysisContextTiming('advice_market', shanghai.close, shanghai.postClose);
+    expect(timing.ruleVersion).toBe('market-analysis-same-day-v1');
+    expect(timing.writeUntil).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    expect(timing.staleAfter).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    // 旧 7 天规则会给出 2026-10-29 15:00 的 staleAfter；当日口径必须更早。
+    expect(timing.staleAfter.getTime()).toBeLessThan(shanghai.close.getTime() + 7 * DAY);
   });
 });

@@ -459,12 +459,20 @@ MCP 实例、手动 worker 与 MCP 用户入口（`packages/mcp`、`luoome mcp s
 | kind | `writeUntil` | `dataAsOf` 过期 |
 |---|---|---|
 | `advice_stock` / `advice_position` / `advice_strategy_candidate` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
-| `advice_market` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
+| `advice_market` | `min(现在+24 小时, dataAsOf 的上海自然日次日 00:00)` | 超过 `dataAsOf` 的上海自然日 |
+| `advice_strategy_candidate_after_close` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
 | `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
 
-15:00 截断只属于盘中行动类；盘后市场分析与策略研究允许盘后与隔日写回，直到数据超过各自有效期
+15:00 截断只属于盘中行动类；盘后策略候选与策略研究允许盘后与隔日写回，直到数据超过各自有效期
 （分别返回 `stale_context`，写回窗口关闭返回 `context_expired`）。超过 `expiresAt` 的 context
 仍可审计读取，但不能写回。
+
+市场级结论只有**当日**有效（REQ-M3-20）：可用窗口是 Asia/Shanghai 自然日，不是「24 小时写回 +
+7 天数据龄」这种伪精确的固定时长。跨日市场事实不进可用事实，`missingFacts` 留下 blocking 原因码
+`market-advice-same-day-only`，`get_analysis_context` 因此返回 `unavailable`，写回返回
+`stale_context`。市场级判断的引用必须带 `observedAt`；当日 15:00 之后或非当日的观察被降级标注为
+「历史观察」——保留可读，但不得作为当前依据进入建议链（降级不是删除）。规则带 `ruleVersion`，
+context 带 `timingRuleVersion`，旧 context 仍可审计读取但不能复活为今日依据。
 
 完成任务与持久化 Advice、研究工作区、待审批策略版本或叙事结果必须原子提交。
 重试不得重复发布结果；死信保留错误供检查，不生成伪建议。

@@ -326,6 +326,16 @@ describe('weekly-report workflow', () => {
     const table = marketWeek?.blocks.find((block) => block.kind === 'table');
     // 表格列无 unit 元数据，炸板率在构建期已格式化为百分比字符串
     expect(table?.kind === 'table' ? table.rows[0]?.brokenRate : undefined).toBe('16.7%');
+    // REQ-M3-20：市场级判断必须带 observedAt，周度趋势的每一行都要能说清观测时点。
+    expect(table?.kind === 'table' ? table.columns.map((column) => column.key) : []).toContain(
+      'observedAt',
+    );
+    const observedAtCells = table?.kind === 'table' ? table.rows.map((row) => row.observedAt) : [];
+    expect(observedAtCells.length).toBeGreaterThan(0);
+    for (const cell of observedAtCells) {
+      expect(typeof cell).toBe('string');
+      expect(Number.isNaN(new Date(cell as string).getTime())).toBe(false);
+    }
     const accountWeek = result.data.report.sections.find(
       (section) => section.key === 'account-week',
     );

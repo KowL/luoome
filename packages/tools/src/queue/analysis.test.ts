@@ -1,6 +1,9 @@
 import {
   AnalysisContextSchema,
+  analysisContextTiming,
   type LimitUpLadder,
+  MARKET_ADVICE_SAME_DAY_ONLY,
+  missingFactsAvailability,
   money,
   type StockEvent,
   type StrategyDslV1,
@@ -578,9 +581,9 @@ describe('analysis context timing after the close', () => {
 });
 
 describe('advice_market timing after the close', () => {
-  const marketContext = (ctx: ToolContext, dataAsOf: Date, now: Date) => {
-    const staleAfter = new Date(dataAsOf.getTime() + 7 * DAY_MS);
-    return AnalysisContextSchema.parse({
+  // 写回截止直接取自唯一事实来源（当日口径），避免 fixture 与规则各写一套。
+  const marketContext = (ctx: ToolContext, dataAsOf: Date, now: Date) =>
+    AnalysisContextSchema.parse({
       id: `market-context-${dataAsOf.getTime()}`,
       jobId: null,
       kind: 'advice_market',
@@ -591,11 +594,11 @@ describe('advice_market timing after the close', () => {
       factIds: [],
       limitations: ['合成验收：只验证市场建议的写回时效，不含真实市场事实。'],
       contextHash: analysisHash({ facts: [], dataAsOf }),
-      writeUntil: new Date(Math.min(now.getTime() + 24 * HOUR_MS, staleAfter.getTime())),
+      timingRuleVersion: analysisContextTiming('advice_market', dataAsOf, now).ruleVersion,
+      writeUntil: analysisContextTiming('advice_market', dataAsOf, now).writeUntil,
       expiresAt: new Date(now.getTime() + 180 * DAY_MS),
       createdAt: now,
     });
-  };
   const marketResult = {
     decision: 'watch' as const,
     confidence: 50,
@@ -614,7 +617,7 @@ describe('advice_market timing after the close', () => {
     evidenceFactIds: [],
   };
 
-  it('records advice_market after the close within the 24h window', async () => {
+  it('records advice_market after the close within the same Shanghai day', async () => {
     const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
     const context = marketContext(ctx, close, postClose);
     await ctx.repos.analysis.saveContext(context);
@@ -661,19 +664,22 @@ describe('advice_market timing after the close', () => {
     ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'context_expired' } });
   });
 
-  it('expires the advice_market write window after 24h and stale facts after 7d', async () => {
+  it('closes the advice_market write window at the Shanghai day boundary instead of +24h', async () => {
     const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
     const context = marketContext(ctx, close, postClose);
     await ctx.repos.analysis.saveContext(context);
-    const later = new Date(postClose.getTime() + 25 * HOUR_MS);
+    // 旧语义：postClose + 24h 才关窗。新语义：次日 00:00（+08:00）即关窗。
+    expect(context.writeUntil).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    const later = new Date('2026-10-23T00:00:01+08:00');
     expect(
       await recordAdviceTool.execute(
         { contextId: context.id, result: marketResult, provenance: marketProvenance },
         { ...ctx, clock: () => later },
       ),
-    ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'context_expired' } });
+    ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'stale_context' } });
 
-    const staleContext = marketContext(ctx, new Date(postClose.getTime() - 8 * DAY_MS), postClose);
+    // 昨日市场事实：当日口径下装配后立刻不可写回（不再是「7 天内仍可写」）。
+    const staleContext = marketContext(ctx, new Date(close.getTime() - DAY_MS), postClose);
     await ctx.repos.analysis.saveContext(staleContext);
     expect(
       await recordAdviceTool.execute(
@@ -739,7 +745,9 @@ describe('advice_market timing after the close', () => {
       ]),
     );
     expect(snapshot.data.dataAsOf).toEqual(close);
-    expect(snapshot.data.writeUntil).toEqual(new Date(postClose.getTime() + 24 * HOUR_MS));
+    // 当日口径：写回窗口封顶在次日 00:00（+08:00），不再是 postClose + 24h。
+    expect(snapshot.data.writeUntil).toEqual(new Date('2026-10-23T00:00:00+08:00'));
+    expect(snapshot.data.timingRuleVersion).toBe('market-analysis-same-day-v1');
     const recorded = await recordAdviceTool.execute(
       {
         contextId: snapshot.data.id,
@@ -829,5 +837,135 @@ describe('advice_market timing after the close', () => {
     });
     expect(JSON.stringify(snapshot.data.facts)).not.toContain('600000.SH');
     expect(JSON.stringify(snapshot.data.facts)).not.toContain('601001.SH');
+  });
+
+  // REQ-M3-20 验收 1：跨日读取 advice_market context → unavailable + 原因码。
+  it('returns unavailable with market-advice-same-day-only when every market fact is cross-day', async () => {
+    const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
+    const yesterdayClose = new Date(close.getTime() - DAY_MS);
+    await seedLadderSnapshot(ctx, '2026-10-21', yesterdayClose);
+    await ctx.repos.quote.save({
+      stockId: '600519.SH',
+      ts: yesterdayClose,
+      observedAt: yesterdayClose,
+      fetchedAt: yesterdayClose,
+      timestampSource: 'upstream',
+      open: money(99),
+      high: money(101),
+      low: money(98),
+      close: money(100),
+      prevClose: money(99),
+      volume: 1000,
+      source: 'test',
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    // 跨日事实不进可用事实。
+    expect(snapshot.data.factIds).toEqual([]);
+    expect(snapshot.data.missingFacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: MARKET_ADVICE_SAME_DAY_ONLY,
+          subjectId: 'market',
+        }),
+      ]),
+    );
+    expect(missingFactsAvailability(snapshot.data.missingFacts)).toBe('unavailable');
+    // 不可写回：跨日市场 context 不是当前依据。
+    expect(
+      await recordAdviceTool.execute(
+        { contextId: snapshot.data.id, result: marketResult, provenance: marketProvenance },
+        ctx,
+      ),
+    ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'stale_context' } });
+  });
+
+  // REQ-M3-20 验收 1 正例：当日事实仍然可用可写回。
+  it('keeps the same-day market context available and writable', async () => {
+    const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
+    await seedLadderSnapshot(ctx, '2026-10-22', close);
+    await ctx.repos.quote.save({
+      stockId: '600519.SH',
+      ts: new Date(close.getTime() - 5 * MINUTE_MS),
+      observedAt: new Date(close.getTime() - 5 * MINUTE_MS),
+      fetchedAt: new Date(close.getTime() - 5 * MINUTE_MS),
+      timestampSource: 'upstream',
+      open: money(99),
+      high: money(101),
+      low: money(98),
+      close: money(100),
+      prevClose: money(99),
+      volume: 1000,
+      source: 'test',
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    expect(snapshot.data.factIds).toEqual(
+      expect.arrayContaining(['market:limit-up:2026-10-22', 'market:local-quotes']),
+    );
+    expect(
+      snapshot.data.missingFacts.some((fact) => fact.kind === MARKET_ADVICE_SAME_DAY_ONLY),
+    ).toBe(false);
+    expect(missingFactsAvailability(snapshot.data.missingFacts)).not.toBe('unavailable');
+    // 当日事实的观察分类是 current，不是 historical。
+    const quotesFact = snapshot.data.facts.find((fact) => fact.id === 'market:local-quotes');
+    expect(quotesFact?.value).toMatchObject({ observationClass: 'current' });
+    expect(
+      await recordAdviceTool.execute(
+        { contextId: snapshot.data.id, result: marketResult, provenance: marketProvenance },
+        ctx,
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  // REQ-M3-20 验收 3：昨日会话的市场结论不进今日 get_analysis_context 的可用事实。
+  it('does not resurrect yesterday market context facts into today get_analysis_context', async () => {
+    const yesterdayClose = new Date('2026-10-21T07:00:00Z'); // 2026-10-21 15:00 +08:00
+    const yesterdayAt = new Date('2026-10-21T08:00:00Z'); // 2026-10-21 16:00 +08:00
+    let now = yesterdayAt;
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    await seedLadderSnapshot(ctx, '2026-10-21', yesterdayClose);
+
+    const yesterdaySnapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!yesterdaySnapshot.ok) throw new Error('yesterday context failed');
+    expect(yesterdaySnapshot.data.factIds).toContain('market:limit-up:2026-10-21');
+    expect(yesterdaySnapshot.data.timingRuleVersion).toBe('market-analysis-same-day-v1');
+
+    now = postClose; // 次日 16:00（+08:00）
+    const todaySnapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!todaySnapshot.ok) throw new Error('today context failed');
+    expect(todaySnapshot.data.factIds).not.toContain('market:limit-up:2026-10-21');
+    expect(todaySnapshot.data.factIds).toEqual([]);
+    expect(todaySnapshot.data.dataAsOf.getTime()).toBe(0);
+    expect(todaySnapshot.data.limitations.join('\n')).toContain('不是当日');
+    expect(todaySnapshot.data.missingFacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: MARKET_ADVICE_SAME_DAY_ONLY })]),
+    );
+    // 昨日那份 context 仍可审计读出（读兼容 = 不 crash），但不能写回。
+    expect(
+      await ctx.repos.analysis.findContext(ctx.user.defaultAccountId, yesterdaySnapshot.data.id),
+    ).not.toBeNull();
+    expect(
+      await recordAdviceTool.execute(
+        {
+          contextId: yesterdaySnapshot.data.id,
+          result: marketResult,
+          provenance: marketProvenance,
+        },
+        ctx,
+      ),
+    ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'stale_context' } });
   });
 });

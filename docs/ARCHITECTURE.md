@@ -894,14 +894,24 @@ worker profile 仅作手动/隔离验收。
   （`analysisContextTiming` / `analysisContextTimingError` 是唯一事实来源，context 装配、
   enqueue、record、refresh 共用，不复制规则）：
 
-  | kind | `writeUntil` | `dataAsOf` 过期 |
-  |---|---|---|
-  | `advice_stock` / `advice_position` / `advice_strategy_candidate` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
-  | `advice_market` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
-  | `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
+  | kind | `ruleVersion` | `writeUntil` | `dataAsOf` 过期 |
+  |---|---|---|---|
+  | `advice_stock` / `advice_position` / `advice_strategy_candidate` | `intraday-action-v1` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
+  | `advice_market` | `market-analysis-same-day-v1` | `min(现在+24 小时, dataAsOf 的上海自然日次日 00:00)` | 超过 `dataAsOf` 的上海自然日（次日 00:00） |
+  | `advice_strategy_candidate_after_close` | `after-close-strategy-v1` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
+  | `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `research-analysis-30d-v1` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
 
   超过 `writeUntil` / `expiresAt` → `context_expired`；超过该 kind 的数据有效期 → `stale_context`。
-  15:00 截断只适用于盘中行动类，盘后市场分析与策略研究不被当日收盘截断。
+  15:00 截断只适用于盘中行动类，盘后策略候选与策略研究不被当日收盘截断。
+
+  市场级（`advice_market`）自 REQ-M3-20 起按 **Asia/Shanghai 自然日**判定：自然日不是固定时长，
+  规则用显式布尔 `sameDayOnly` 表达，不用「把数据龄改成某个魔法毫秒数」——写死会立刻腐烂。
+  跨日市场事实不进可用事实，`missingFacts` 留下 blocking 原因码 `market-advice-same-day-only`
+  （`get_analysis_context` 因此返回 `unavailable`），写回返回 `stale_context`。市场级判断的引用必须
+  带 `observedAt`；当日 15:00 之后或非当日的观察由 `classifyMarketObservation` 降级为「历史观察」，
+  保留可读但不得作为当前依据进入建议链（降级不是删除）。时效规则带 `ruleVersion`，context 落库带
+  `timingRuleVersion`，因此「这条 context 按旧 7 天口径还是新当日口径判定」可追溯；旧 context 仍可
+  审计读取（不 crash、不 resurrect），只是不能再作为今日依据。
 - `AdviceSchema.parse` 校验结构，`disclaimers` 由工具直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略
 - `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条过 prompt-injection 文本清理，
   命中模式的片段替换为 `[redacted]`（`packages/tools/src/internal/sanitize-advice.ts`）

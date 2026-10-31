@@ -1509,7 +1509,7 @@ const runClosingReport = async (
           planReviewAudit(since, until, input.scope, ctx),
         ]);
         const market = sentiment.ok
-          ? marketPulse(sentiment.data.snapshot)
+          ? marketPulse(sentiment.data.snapshot, shanghaiDate(date))
           : unavailableSection(
               'market-pulse',
               '市场脉搏',

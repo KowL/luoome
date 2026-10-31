@@ -134,6 +134,9 @@ const marketWeekSection = async (
           kind: 'table',
           columns: [
             { key: 'date', label: '交易日' },
+            // 市场级判断必须带 observedAt（REQ-M3-20）：周度趋势本身是历史对照，
+            // 每一行都要能说清「这个数字对应哪个观测时点」，不能只有交易日。
+            { key: 'observedAt', label: '观测时间' },
             { key: 'sealedCount', label: '封板家数' },
             { key: 'brokenRate', label: '炸板率' },
             { key: 'maxLadderLevel', label: '最高连板' },
@@ -142,6 +145,7 @@ const marketWeekSection = async (
             const brokenRate = result.data.snapshot.limitUp.value?.brokenRate;
             return {
               date,
+              observedAt: result.data.snapshot.dataAsOf.toISOString(),
               sealedCount: result.data.snapshot.limitUp.value?.sealedCount ?? null,
               // 表格列无 unit 元数据，ratio 在构建期格式化为百分比字符串
               brokenRate:

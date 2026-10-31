@@ -1,12 +1,19 @@
 import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
-import { dateInShanghai } from '../trading-calendar.js';
+import { dateInShanghai, previousTradingDate } from '../trading-calendar.js';
 import {
   type AnalysisKind,
   AnalysisKindSchema,
   AnalysisSubjectSchema,
   analysisSubjectKinds,
 } from './analysis-job.js';
+
+/**
+ * 跨日引用禁令的原因码（REQ-M3-20）。市场级结论只有当日有效，昨日事实不能顶替今日市场状态：
+ * 装配时被排除的跨日市场事实会留下这条 blocking 缺口，`get_analysis_context` 因此返回
+ * `unavailable` 而不是静默降级成 partial。
+ */
+export const MARKET_ADVICE_SAME_DAY_ONLY = 'market-advice-same-day-only' as const;
 
 /**
  * 结构化缺口（REQ-M3-02）。`kind` 可枚举，供多智能体 gate 区分：
@@ -26,6 +33,7 @@ export const ANALYSIS_MISSING_FACT_KINDS = [
   'industry-unavailable',
   'position-unavailable',
   'watch-facts-unavailable',
+  MARKET_ADVICE_SAME_DAY_ONLY,
 ] as const;
 export const AnalysisMissingFactKindSchema = z.enum(ANALYSIS_MISSING_FACT_KINDS);
 export type AnalysisMissingFactKind = z.infer<typeof AnalysisMissingFactKindSchema>;
@@ -45,6 +53,9 @@ export const BLOCKING_MISSING_FACT_KINDS: ReadonlySet<AnalysisMissingFactKind> =
   'quote-stale',
   'account-facts-unavailable',
   'strategy-run-unavailable',
+  // 跨日市场事实被排除后不能给出当日市场结论，因此它是 blocking 而不是 degraded：
+  // 降级成 partial 会让「昨日市场结构」继续当作今日依据（REQ-M3-20）。
+  MARKET_ADVICE_SAME_DAY_ONLY,
 ]);
 
 export const missingFactsAvailability = (
@@ -142,6 +153,11 @@ export const AnalysisContextSchema = z
      * 历史 fixture / 旧存档补字段；读取侧统一 `?? 1` 归一。
      */
     contextHashVersion: z.number().int().min(1).optional(),
+    /**
+     * 判定该 context 写回/有效期时所用的时效规则版本（REQ-M3-20 / R2）。
+     * 缺省 = 该 context 早于版本位落地，按旧规则判定（读兼容：不 crash、不 resurrect）。
+     */
+    timingRuleVersion: z.string().min(1).optional(),
     contextHash: z.string().regex(/^[a-f0-9]{64}$/),
     writeUntil: z.coerce.date(),
     expiresAt: z.coerce.date(),
@@ -178,42 +194,66 @@ const DAY_MS = 86_400_000;
 
 /**
  * `AnalysisKind` 的写回时效规则（docs/ARCHITECTURE.md §6.3）。
- * 盘中行动类的事实只有收盘前且足够新鲜时才有行动价值；市场/研究/策略结论允许
- * 盘后与隔日写回，但市场事实最长 7 天、研究/策略事实最长 30 天。
- * 15:00 截断只属于盘中行动类，套在其它 kind 上会让盘后研究恒过期。
+ * 盘中行动类的事实只有收盘前且足够新鲜时才有行动价值；研究/策略结论允许盘后与隔日写回，
+ * 但研究/策略事实最长 30 天。15:00 截断只属于盘中行动类，套在其它 kind 上会让盘后研究恒过期。
+ *
+ * 市场级结论按 `sameDayOnly` 走自然日边界（REQ-M3-20）：A 股市场状态一天即变，
+ * 「24h 写回 + 7 天数据龄」是伪精确——自然日不是固定时长，写死毫秒数会立刻腐烂。
  */
-export interface AnalysisTimingRule {
+interface AnalysisTimingRuleBase {
+  /** 口径版本位：同一 kind 的规则语义变更时必须换值，不许静默改语义。 */
+  readonly ruleVersion: string;
   /** 从 context 装配时刻起允许写回的最长时长。 */
   readonly writeWindowMs: number;
-  /** `dataAsOf` 至今允许的最大年龄，超过即 stale。 */
-  readonly dataMaxAgeMs: number;
   /** 盘中行动类以当日 15:00（Asia/Shanghai）为硬截断。 */
   readonly closesAtSessionEnd: boolean;
 }
 
+export type AnalysisTimingRule =
+  | (AnalysisTimingRuleBase & {
+      /** 可用窗口收窄为 Asia/Shanghai 自然日当日；跨日即不可用。 */
+      readonly sameDayOnly: true;
+    })
+  | (AnalysisTimingRuleBase & {
+      readonly sameDayOnly: false;
+      /** `dataAsOf` 至今允许的最大年龄，超过即 stale。 */
+      readonly dataMaxAgeMs: number;
+    });
+
+/** 市场级建议的时效口径版本位；口径变了就换值（REQ-M3-20 / R2）。 */
+export const MARKET_ANALYSIS_TIMING_RULE_VERSION = 'market-analysis-same-day-v1';
+
 const intradayActionRule: AnalysisTimingRule = {
+  ruleVersion: 'intraday-action-v1',
   writeWindowMs: 30 * MINUTE_MS,
   dataMaxAgeMs: 30 * MINUTE_MS,
   closesAtSessionEnd: true,
+  sameDayOnly: false,
 };
 const marketAnalysisRule: AnalysisTimingRule = {
+  ruleVersion: MARKET_ANALYSIS_TIMING_RULE_VERSION,
   writeWindowMs: 24 * HOUR_MS,
-  dataMaxAgeMs: 7 * DAY_MS,
   closesAtSessionEnd: false,
+  sameDayOnly: true,
 };
 /**
  * 盘后策略候选建议：结论依据当日收盘后的已发布运行事实，天然晚于 15:00，
  * 因此不能套用盘中行动类的 30 分钟窗口与收盘截断；数据仍受 7 天有效期约束。
+ * 它不随市场级当日口径收窄——策略候选的引用对象是运行结果，不是当日市场状态。
  */
 const afterCloseStrategyRule: AnalysisTimingRule = {
+  ruleVersion: 'after-close-strategy-v1',
   writeWindowMs: 24 * HOUR_MS,
   dataMaxAgeMs: 7 * DAY_MS,
   closesAtSessionEnd: false,
+  sameDayOnly: false,
 };
 const researchAnalysisRule: AnalysisTimingRule = {
+  ruleVersion: 'research-analysis-30d-v1',
   writeWindowMs: 24 * HOUR_MS,
   dataMaxAgeMs: 30 * DAY_MS,
   closesAtSessionEnd: false,
+  sameDayOnly: false,
 };
 
 /** 唯一事实来源：context 装配、enqueue、record、refresh 都读这张表。 */
@@ -233,28 +273,113 @@ export interface AnalysisContextTiming {
   readonly writeUntil: Date;
   /** 数据有效期：`now` 严格晚于该时刻即 stale_context。 */
   readonly staleAfter: Date;
+  /** 算出这份 timing 的规则版本，随 context 落库可追溯（REQ-M3-20 / R2）。 */
+  readonly ruleVersion: string;
 }
 
 const shanghaiSessionClose = (now: Date): Date => new Date(`${dateInShanghai(now)}T15:00:00+08:00`);
 
-/** 按 kind 计算写回截止与数据有效期；盘后分析不再被 15:00 截断。 */
+/**
+ * `at` 之后那个 Asia/Shanghai 自然日的 00:00。
+ * 用日历而不是「+24h」表达当日：自然日不是固定时长（跨月、跨年都一样按日期走）。
+ */
+const nextShanghaiDayStart = (at: Date): Date =>
+  new Date(`${dateInShanghai(new Date(at.getTime() + DAY_MS))}T00:00:00+08:00`);
+
+const dataStaleAfter = (rule: AnalysisTimingRule, dataAsOf: Date): Date =>
+  rule.sameDayOnly
+    ? nextShanghaiDayStart(dataAsOf)
+    : new Date(dataAsOf.getTime() + rule.dataMaxAgeMs);
+
+/** 按 kind 计算写回截止与数据有效期；盘后分析不再被 15:00 截断，市场级当日即止。 */
 export const analysisContextTiming = (
   kind: AnalysisKind,
   dataAsOf: Date,
   now: Date,
 ): AnalysisContextTiming => {
   const rule = analysisTimingRules[kind];
-  const staleAfter = new Date(dataAsOf.getTime() + rule.dataMaxAgeMs);
+  const staleAfter = dataStaleAfter(rule, dataAsOf);
   const windowEnd = new Date(now.getTime() + rule.writeWindowMs);
   const cap = rule.closesAtSessionEnd ? shanghaiSessionClose(now) : staleAfter;
   return {
     writeUntil: new Date(Math.min(windowEnd.getTime(), cap.getTime())),
     staleAfter,
+    ruleVersion: rule.ruleVersion,
   };
 };
 
 export const isAnalysisContextStale = (kind: AnalysisKind, dataAsOf: Date, now: Date): boolean =>
-  now.getTime() - dataAsOf.getTime() > analysisTimingRules[kind].dataMaxAgeMs;
+  now.getTime() > dataStaleAfter(analysisTimingRules[kind], dataAsOf).getTime();
+
+/**
+ * 市场级观察的时效分类（REQ-M3-20 / R4，纯函数）。
+ *
+ * 渲染层与事实包装都调它，不在各 surface 各写一遍判断（AGENTS.md：不变量放 core）。
+ * `reference` 是判定所依据的时点：实时路径下即 now，补跑历史报告时应传报告期，
+ * 否则 N 个交易日前的数据会被按「今天」判定（见 `marketObservationScope`）。
+ * - 非同一上海日（含未来时点）→ `historical`：不能代表参照日的市场状态
+ * - 同一上海日但落在 15:00 收盘之后 → `historical`：收盘后的观察不是「当前依据」
+ * - 其余 → `current`
+ *
+ * `historical` 是**降级标注**，不是删除：观察本身仍然可读，只是不得作为当前依据进入建议链。
+ */
+export const classifyMarketObservation = (
+  observedAt: Date,
+  reference: Date,
+): 'current' | 'historical' =>
+  dateInShanghai(observedAt) !== dateInShanghai(reference) ||
+  observedAt.getTime() > shanghaiSessionClose(reference).getTime()
+    ? 'historical'
+    : 'current';
+
+/** 历史观察的固定标注词；渲染层与事实包装共用，避免各写一遍。 */
+export const MARKET_OBSERVATION_HISTORICAL_LABEL = '历史观察';
+
+/** 上一交易日观察的固定标注词：盘前简报的常态数据，不是降级。 */
+export const MARKET_OBSERVATION_PRIOR_SESSION_LABEL = '上一交易日收盘观察';
+
+/** 市场级观察相对参照日的三档口径（REQ-M3-20 / R4）。 */
+export type MarketObservationScope = 'current' | 'prior-session' | 'historical';
+
+/**
+ * 市场级观察的三档口径：参照「报告期」而不是固定用 now。
+ *
+ * 两种被标成 `historical` 的情形处置不同，措辞必须精确到能对上事实：
+ * - `current`：同一上海日且未过当日 15:00 收盘 → 当前依据，不加标注
+ * - `prior-session`：观测日的上海日期恰是参照日的**前一交易日** → 盘前/盘后复用的上一交易日收盘，
+ *   这是盘前本来就该有的数据，不是降级
+ * - `historical`：更早或未来时点 → 降级，必须显眼
+ *
+ * 参照日取报告期而不是 now：补跑历史报告时若拿 now 当参照，N 个交易日前的数据会被说成
+ * 「上一交易日收盘观察」，措辞与事实不符。实时路径下两者同日，行为不变。
+ * 「前一交易日」复用 `previousTradingDate`（trading-calendar 的唯一日历实现），
+ * 这里不写第二份周末/节假日判断。
+ */
+export const marketObservationScope = (
+  observedAt: Date,
+  reference: Date,
+): MarketObservationScope =>
+  classifyMarketObservation(observedAt, reference) === 'current'
+    ? 'current'
+    : dateInShanghai(observedAt) === previousTradingDate(reference)
+      ? 'prior-session'
+      : 'historical';
+
+/**
+ * 市场级判断的观测时间标注：降级显式标注，而不是被丢弃。
+ * 三种口径各一句话——当前依据 / 盘前沿用的上一交易日收盘 / 被降级的历史观察。
+ */
+export const marketObservationLabel = (observedAt: Date, reference: Date): string => {
+  const stamp = `观测于 ${observedAt.toISOString()}`;
+  switch (marketObservationScope(observedAt, reference)) {
+    case 'current':
+      return stamp;
+    case 'prior-session':
+      return `${MARKET_OBSERVATION_PRIOR_SESSION_LABEL}（${stamp}）`;
+    case 'historical':
+      return `${MARKET_OBSERVATION_HISTORICAL_LABEL}（${stamp}）`;
+  }
+};
 
 /**
  * 写回窗口与数据新鲜度的统一校验。

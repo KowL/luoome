@@ -3,6 +3,10 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  MARKET_OBSERVATION_HISTORICAL_LABEL,
+  MARKET_OBSERVATION_PRIOR_SESSION_LABEL,
+  marketObservationLabel,
+  marketObservationScope,
   type ReportEvidence,
   type ReportMissingDimension,
   ReportSchema,
@@ -73,8 +77,19 @@ export const missing = (
   retryable: errorKind !== 'not_implemented',
 });
 
+/**
+ * 市场脉搏：报告里唯一的市场级判断。
+ *
+ * 每个市场级判断必须带 `observedAt`（REQ-M3-20）——数字本身没有时点就没有意义。
+ * `reference` 是判定口径所依据的日期，取**报告期**（实时路径下与 now 同日）。
+ * 标注分三档，但都不删除观察本身（读者仍能看到它，只是不能当今日依据）：
+ * - 报告期当日盘中观察 → 当前依据；
+ * - 报告期的上一交易日收盘 → 「上一交易日收盘观察」+ factual，盘前简报本来就只有这份数据；
+ * - 其余（更早或未来）→ 「历史观察」+ warning，被降级的判断必须显眼。
+ */
 export const marketPulse = (
   snapshot: AShareSentimentSnapshot,
+  reference: Date,
 ): { section: ReportSection; evidence: ReportEvidence[] } => {
   const dimensions = [
     ['indexes', snapshot.indexes],
@@ -124,6 +139,11 @@ export const marketPulse = (
   const indexQuotes = snapshot.indexes.values ?? [];
   const breadth = snapshot.breadth.value;
   const themes = snapshot.themes.value;
+  // 三档口径全部来自 core（`marketObservationScope`）：报告期当日 / 报告期的上一交易日 / 更早或未来。
+  // 盘前简报常态复用上一交易日收盘，那是背景；只有第三档才是被降级的判断、必须告警。
+  const scope = marketObservationScope(snapshot.dataAsOf, reference);
+  const priorSession = scope === 'prior-session';
+  const downgraded = scope === 'historical';
   return {
     evidence,
     section: {
@@ -136,6 +156,13 @@ export const marketPulse = (
         {
           kind: 'metrics',
           items: [
+            // 观测时点排第一：下面每个数字都只在这一点上成立。
+            {
+              key: 'observedAt',
+              label: '市场观测时间',
+              value: snapshot.dataAsOf.toISOString(),
+              displayValue: marketObservationLabel(snapshot.dataAsOf, reference),
+            },
             { key: 'sealedCount', label: '封板家数', value: value?.sealedCount ?? null },
             { key: 'brokenCount', label: '炸板家数', value: value?.brokenCount ?? null },
             {
@@ -158,6 +185,30 @@ export const marketPulse = (
                 ]),
           ],
         },
+        ...(priorSession
+          ? [
+              {
+                kind: 'text' as const,
+                tone: 'factual' as const,
+                text:
+                  `${MARKET_OBSERVATION_PRIOR_SESSION_LABEL}：本节市场级数据观测于 ` +
+                  `${snapshot.dataAsOf.toISOString()}，是上一交易日收盘时的市场状态；` +
+                  '盘前只能作为背景参照，不得作为今日依据进入建议链。',
+              },
+            ]
+          : []),
+        ...(downgraded
+          ? [
+              {
+                kind: 'text' as const,
+                tone: 'warning' as const,
+                text:
+                  `${MARKET_OBSERVATION_HISTORICAL_LABEL}：本节市场级判断观测于 ` +
+                  `${snapshot.dataAsOf.toISOString()}，不属于当日盘中观察；` +
+                  '只能作为历史对照，不得作为当前依据进入建议链。',
+              },
+            ]
+          : []),
         ...(breadth === undefined
           ? []
           : [
@@ -233,6 +284,27 @@ const attachLadderFacts = async (
       },
     };
   }
+  if (base.section.status === 'unavailable') {
+    // 不可用段只允许 warning 文本块（assertReportInvariants）。缓存的天梯事实不能混进
+    // 「市场判断不可用」的结论里，但也不能静默吞掉它——说明省略原因、单独查询入口与快照时间。
+    return {
+      evidence: [...base.evidence, evidence],
+      section: {
+        ...base.section,
+        blocks: [
+          ...base.section.blocks,
+          {
+            kind: 'text' as const,
+            tone: 'warning' as const,
+            text:
+              '市场情绪源不可用；本节不展示涨停天梯快照（避免把缓存事实混入不可用判断），' +
+              `天梯数据可用 limit_up_ladder 单独查询（快照时间 ${result.data.asOf.toISOString()}）。`,
+          },
+        ],
+        evidenceIds: [...base.section.evidenceIds, evidence.id],
+      },
+    };
+  }
   const entries = result.data.levels
     .flatMap((level) => level.stocks.map((stock) => ({ level: level.level, stock })))
     .slice(0, 20);
@@ -259,8 +331,26 @@ const attachLadderFacts = async (
     evidence: [...base.evidence, evidence],
     section: {
       ...base.section,
-      dataAsOf: result.data.asOf,
-      blocks: [...base.section.blocks, list],
+      // 段级 `dataAsOf` 属于市场级判断本身（sentiment 的观测时点），不被天梯快照时间覆盖：
+      // 天梯是独立事实，用自己的 metrics item 带时点，否则段级时点在描述一个不描述它指标的时间。
+      blocks: [
+        ...base.section.blocks.map((block) =>
+          block.kind === 'metrics' && block.items.some((entry) => entry.key === 'observedAt')
+            ? {
+                ...block,
+                items: [
+                  ...block.items,
+                  {
+                    key: 'ladderAsOf',
+                    label: '天梯快照时间',
+                    value: result.data.asOf.toISOString(),
+                  },
+                ],
+              }
+            : block,
+        ),
+        list,
+      ],
       evidenceIds: [...base.section.evidenceIds, evidence.id],
     },
   };
@@ -687,7 +777,7 @@ const runOpeningReport = async (
           date: marketDate,
         });
         const marketBase = sentimentResult.ok
-          ? marketPulse(sentimentResult.data.snapshot)
+          ? marketPulse(sentimentResult.data.snapshot, shanghaiDate(date))
           : unavailableSection(
               'market-pulse',
               '市场脉搏',

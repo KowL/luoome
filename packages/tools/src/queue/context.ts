@@ -8,11 +8,13 @@ import {
   analysisContextHashPayload,
   analysisContextTiming,
   BUILTIN_HOLIDAYS,
+  classifyMarketObservation,
   dateInShanghai,
   isHoliday,
   isPublishableOperationalRun,
   isWeekend,
   type LimitUpLadder,
+  MARKET_ADVICE_SAME_DAY_ONLY,
   type Quote,
   type ToolContext,
 } from '@luoome/core';
@@ -41,9 +43,12 @@ export const AnalysisContextRequest = z.object({
 });
 
 const DAY_MS = 86_400_000;
-/** 公司事件作为「未来已知事实」的观察窗口；与涨停天梯一致受市场 7 天数据有效期约束。 */
+/** 公司事件作为「未来已知事实」的观察窗口（未来 7 天内已排定的日程）。 */
 const MARKET_EVENT_WINDOW_DAYS = 7;
-/** 回查 PIT 快照的交易日上限；超过 7 天的市场事实已超出 advice_market 数据有效期。 */
+/**
+ * 回查 PIT 快照的交易日上限。市场级只接受当日快照（REQ-M3-20），这个回查窗口不是有效期，
+ * 而是用来判断「有没有更早的快照被当日口径排除」——排除要留原因码，不能静默当成没有事实。
+ */
 const MARKET_SNAPSHOT_LOOKBACK_DAYS = 7;
 
 /** 最近 N 个交易日（Asia/Shanghai，降序）；用于回查已持久化的 PIT 快照。 */
@@ -111,6 +116,11 @@ interface MarketFactPack {
  * advice_market 的冻结事实包：只用本地已持久化事实（涨停天梯 PIT 快照、持仓/关注股票
  * 已保存行情、相关公司事件），不调用 adapter、不刷新外部数据、也不用 `now` 伪造 `dataAsOf`。
  * 新闻/宽度/指数/财报不在本地事实内，保留 limitations，不从模型记忆补齐。
+ *
+ * 市场级当日口径（REQ-M3-20）：跨日事实**不进可用事实**，只留下
+ * `market-advice-same-day-only` 这条 blocking 缺口；当日但在 15:00 收盘之后的观察
+ * 保留在事实包里，但标成 `historical` 降级——降级不等于删除。
+ * 公司事件不套这条口径：它是「未来已知事实」，验证时点不是市场状态观察。
  */
 const collectMarketFacts = async (
   ctx: ToolContext,
@@ -121,10 +131,19 @@ const collectMarketFacts = async (
   const limitations: string[] = [];
   const missingFacts: AnalysisContext['missingFacts'] = [];
   const verifiedAt: Date[] = [];
+  /** 被当日口径排除的跨日市场事实；存在即说明昨日结论想顶替今日市场状态。 */
+  const crossDayFactIds: string[] = [];
+  const today = dateInShanghai(now);
 
   const ladder = await loadLatestLimitUpLadder(ctx, now);
   if (ladder === null) {
     limitations.push('缺少已保存的涨停天梯快照；市场情绪与涨停结构维度 unavailable。');
+  } else if (ladder.date !== today) {
+    crossDayFactIds.push(`market:limit-up:${ladder.date}`);
+    limitations.push(
+      `已保存的涨停天梯快照属于 ${ladder.date}，不是当日（${today}）；` +
+        '按市场级当日口径排除，不用昨日的涨停结构代表今日市场情绪。',
+    );
   } else {
     const cutoff = limitUpSnapshotCutoff(ladder);
     const entries = ladder.levels.flatMap((level) => level.stocks);
@@ -136,6 +155,7 @@ const collectMarketFacts = async (
         source: ladder.source,
         asOf: ladder.asOf.toISOString(),
         dataAsOf: cutoff.toISOString(),
+        observationClass: classifyMarketObservation(cutoff, now),
         total: ladder.total,
         maxLevel: ladder.maxLevel,
         levels: ladder.levels.map((level) => ({ level: level.level, count: level.stocks.length })),
@@ -160,10 +180,20 @@ const collectMarketFacts = async (
     limitations.push('当前账户没有持仓或启用的关注列表，个人上下文为空。');
   }
   const quotes = stockIds.length === 0 ? new Map() : await ctx.repos.quote.latestByStocks(stockIds);
-  const currentQuotes = [...quotes.values()]
-    .filter((quote) => quote.observedAt.getTime() <= now.getTime())
-    .sort((left, right) => right.observedAt.getTime() - left.observedAt.getTime());
-  const [latestQuote] = currentQuotes;
+  const visibleQuotes = [...quotes.values()].filter(
+    (quote) => quote.observedAt.getTime() <= now.getTime(),
+  );
+  const currentQuotes = visibleQuotes.filter((quote) => dateInShanghai(quote.observedAt) === today);
+  if (currentQuotes.length < visibleQuotes.length) {
+    crossDayFactIds.push('market:local-quotes');
+    limitations.push(
+      `持仓与关注股票有 ${visibleQuotes.length - currentQuotes.length} 条行情不是当日（${today}）；` +
+        '按市场级当日口径排除，不用昨日行情代表今日个股层面事实。',
+    );
+  }
+  const [latestQuote] = currentQuotes.sort(
+    (left, right) => right.observedAt.getTime() - left.observedAt.getTime(),
+  );
   if (latestQuote === undefined) {
     limitations.push('持仓与关注股票没有可用的本地已保存行情；个股层面事实 unavailable。');
     missingFacts.push({
@@ -180,6 +210,7 @@ const collectMarketFacts = async (
         accountId,
         count: currentQuotes.length,
         latestObservedAt: latestQuote.observedAt.toISOString(),
+        observationClass: classifyMarketObservation(latestQuote.observedAt, now),
         quotes: currentQuotes.slice(0, 20).map(quoteFactValue),
       },
       evidenceIds: [],
@@ -231,6 +262,19 @@ const collectMarketFacts = async (
       evidenceIds: [],
     });
     verifiedAt.push(latestVerifiedAt);
+  }
+
+  // 跨日市场事实被排除后必须留痕：这是 blocking 缺口（→ unavailable + 原因码），
+  // 不是 degraded——否则模型会把「昨日市场结构」继续当成今日依据（REQ-M3-20）。
+  if (crossDayFactIds.length > 0) {
+    missingFacts.push({
+      kind: MARKET_ADVICE_SAME_DAY_ONLY,
+      subjectId: 'market',
+      reason:
+        `市场级分析只接受当日（Asia/Shanghai 自然日 ${today}）的事实；` +
+        `已排除跨日事实：${crossDayFactIds.join('、')}`,
+      asOf: now,
+    });
   }
 
   missingFacts.push(
@@ -412,7 +456,15 @@ export const assembleAnalysisContext = async (
         ? Math.min(...times)
         : 0,
   );
-  const { writeUntil } = analysisContextTiming(input.kind, dataAsOf, now);
+  const timing = analysisContextTiming(input.kind, dataAsOf, now);
+  if (input.kind === 'advice_market') {
+    // 规则版本落进 limitations：它随 context 持久化，跨版本读回时能说清
+    // 「这条市场级 context 是按当日口径还是旧 7 天口径判定的」（REQ-M3-20 / R2）。
+    limitations.push(
+      `时效规则 ${timing.ruleVersion}：市场级结论仅当日（Asia/Shanghai 自然日）有效，` +
+        '跨日观察只能标为历史观察，不得作为当前依据进入建议链。',
+    );
+  }
   return AnalysisContextSchema.parse({
     id: randomUUID(),
     jobId: null,
@@ -425,6 +477,7 @@ export const assembleAnalysisContext = async (
     limitations,
     missingFacts,
     contextHashVersion: ANALYSIS_CONTEXT_HASH_VERSION,
+    timingRuleVersion: timing.ruleVersion,
     contextHash: analysisHash(
       analysisContextHashPayload({
         version: ANALYSIS_CONTEXT_HASH_VERSION,
@@ -433,7 +486,7 @@ export const assembleAnalysisContext = async (
         missingFacts,
       }),
     ),
-    writeUntil,
+    writeUntil: timing.writeUntil,
     expiresAt: new Date(now.getTime() + 180 * 86400000),
     createdAt: now,
   });
