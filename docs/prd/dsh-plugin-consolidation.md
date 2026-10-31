@@ -1,6 +1,8 @@
 # DSH 插件形态收敛 PRD
 
 > 状态：**评审后修订版 v3.1**（2026-10-30）。v1 / v2 / v3 与四份评审记录见 `output/dsh-brainstorm/review/`。
+> **实施期修订到 v3.11**（2026-10-31，REQ-M3-09 实现期发现，按需求原文按字面不可执行的两处：
+> REQ-M3-09 第 5 条的提醒要素适用范围、REQ-M3-08 的「字段级 diff 为空」验收——逐处标注在对应段落里）。
 > 日期：2026-10-30
 > 上位文档：[luoome 的 DSH 改造详细设计](../ddd/luoome-dsh-transformation-detailed-design.md)、[dsh-luoome 纯插件详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)
 > 决策依据：`output/dsh-brainstorm/06-decisions.md`（P1–P10）
@@ -837,9 +839,35 @@ v2 只要求「可打开 + 含 dataAsOf/反证/免责/有效期」——没有�
 4. `FundamentalScore` 在 `gate=not-ready` 时零数字输出。
 5. 提醒消息必须含触发价、止损 / 目标价、反证、风险、有效期、卖出限制；缺任一项则该条**不投递**并记 `not-requested`。
 
-**验收标准**：缺价账户不出现百分比仓位；面板角标数量 === `PANEL_NAMES.length`；
+**v3.11 修正第 5 条的适用范围（实现期发现，原文按字面不可执行）**：
+第 5 条的六个要素里，「止损 / 目标价、有效期、卖出限制」本质是 **TradingPlan 层概念**，而 PRD 从未要求
+「提醒 ↔ TradingPlan 的关联」（`AlertPlanSchema` 至今无 TradingPlan 引用，`WatchTrigger` 也无 `tradingPlanId`）。
+**字面读法与 PRD 自己的数据模型矛盾**：按字面执行，AlertPlan 盘中提醒与 event-date 提醒会 100% 不可投递，
+等于把两条既有功能静默下线。故第 5 条按**两类提醒**分列：
+- **计划型提醒**（关联 active TradingPlan）：六要素全要，缺任一 → 不投递 + `not-requested` +
+  `evalSnapshot.missingElements` 逐项列出（**本条即原 PRD 的硬验收**）
+- **阈值型 / 事件型提醒**（无 plan 关联）：要素为「触发条件（价位规则 / 事件本身）+ 依据来源 + 观察时点」；
+  计划相关的五项判为 **`not-applicable`**（**不进 `missingElements`**，因为不是缺失），
+  且投递内容必须附可见披露：「这是价格 / 事件提醒，不含止损、反证、风险、有效期与卖出限制——它不是建议。」
+- 面板计数**必须分开**：`missingElements`（真没投出去）与 `notApplicableElements`（都发出去了）
+- 事件型的「触发条件」**就是事件本身**；事件事实缺失时判 `absent`（真缺失、不可投递），
+  **不许**把「没有事件」当成「不适用」
+- 要素存在性分四态：`present` / `empty`（字段在但内容为空）/ `absent`（字段不存在）/ `not-applicable`；
+  `empty` 与 `absent` 不可混同（否则「填了空值」会被当成「没填」）
+- 形状说明：`missingElements` / `notApplicableElements` / `reminderType` 附加式写进既有
+  `WatchTrigger.evalSnapshot`（`z.record(z.string(), z.unknown())`），**无 schema 变更、无 DB 变更**
+
+**验收标准**：缺价账户不出现百分比仓位（**且不出现伪造的 0%** —— 缺价时该字段**缺席**，
+真实零盈亏仍显示 0）；面板角标数量 === `PANEL_NAMES.length`；
 **渲染函数在五段任一为空时阻断渲染并报缺段名**，5 组缺段 fixture 逐条红（不靠人工看截图）；
 构造缺要素提醒，断言未投递且状态 `not-requested`。
+
+**v3.11 同时修正第 3 条与验收标准的表述**：
+- 角标断言应针对**客户端实际渲染的面板清单**（遍历得出，不写死数字）；`settings` 不是 client 渲染的
+  顶层面板，其健康由 `settings` 内的诊断 section 承担（**不新增顶层面板**）；
+  服务端侧另有「遍历 `PANEL_NAMES` 每个面板都算出 `health`」的断言
+- 「五段任一为空即阻断渲染」**阻断的是卡片、不是条目**：被阻断的建议在面板上仍要有一条
+  「不可渲染：缺 X / Y」的 warning 条目（空白会让人以为没有这条建议）
 
 ---
 
