@@ -24,14 +24,31 @@ export const GetAdviceInput = z.object({
   limit: z.number().int().positive().max(500).default(50),
 });
 
-export const GetAdviceOutput = z.object({
-  advices: z.array(AdviceSchema),
-  total: z.number().int().nonnegative(),
-});
+/**
+ * 输出口径标注（REQ-M3-17 ③ / task-20）：
+ *
+ * `scope` **必须**出现在结果里，而不只是写在 description 上——调用方拿到一批建议时
+ * 要能就地判断「这批是不是本账户的」。本工具是**跨账户检索**，`accountId` 只决定
+ * 「附加哪一份 outcome」与「账户是否存在」，**不参与建议归属过滤**。
+ */
+export const GetAdviceScopeSchema = z.literal('all-accounts');
+
+export const GetAdviceOutput = z
+  .object({
+    /** 恒为 `all-accounts`：本工具不做账户归属过滤。按账户归属过滤请用 `list_advices`。 */
+    scope: GetAdviceScopeSchema,
+    advices: z.array(AdviceSchema),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
 
 export const getAdviceTool = defineTool({
   name: 'get_advice',
-  description: '查询历史建议（按标的 / 决策 / 来源 / 时间窗过滤，默认不含已过期）',
+  description:
+    '跨账户检索历史建议（按标的 / 决策 / 来源 / 时间窗过滤，默认不含已过期）。' +
+    '**不做账户归属过滤**：accountId 只决定附加哪一份回填 outcome 与账户是否存在，' +
+    '返回结果可能包含其它账户的建议（输出 scope 恒为 all-accounts）；' +
+    '要「只属于本账户的建议」请用 list_advices',
   sideEffect: 'read',
   input: GetAdviceInput,
   output: GetAdviceOutput,
@@ -55,6 +72,10 @@ export const getAdviceTool = defineTool({
       limit: input.limit,
     });
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
-    return { advices: z.array(AdviceSchema).parse(advices), total: advices.length };
+    return {
+      scope: 'all-accounts' as const,
+      advices: z.array(AdviceSchema).parse(advices),
+      total: advices.length,
+    };
   },
 });

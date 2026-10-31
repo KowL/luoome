@@ -39,6 +39,17 @@ describe('list_advices', () => {
     expect(result.data.missingCounterEvidenceIds).toEqual([]);
   });
 
+  it('口径诚实化：description 明写按账户归属过滤，输出 scope 恒为 account', async () => {
+    expect(listAdvicesTool.description).toContain('按账户归属过滤');
+    expect(listAdvicesTool.description).toContain('get_advice');
+
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    const result = await listAdvicesTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.scope).toBe('account');
+  });
+
   it('flags advice without counter-evidence instead of inventing one', async () => {
     const base = await buildTestContext({ clock: () => now, advices: [] });
     const accountId = base.user.defaultAccountId;

@@ -47,6 +47,11 @@ export type AdviceListItem = z.output<typeof AdviceListItemSchema>;
 
 export const ListAdvicesOutput = z
   .object({
+    /**
+     * 恒为 `account`：本工具**按账户归属过滤**（与 `get_advice` 的 `all-accounts` 相对）。
+     * 标注放在结果里，调用方不必靠文档判断这批建议属于谁。
+     */
+    scope: z.literal('account'),
     advices: z.array(AdviceListItemSchema),
     total: z.number().int().nonnegative(),
     /** 缺反证的建议 id 列表（可用性披露用，不假装有反证）。 */
@@ -58,7 +63,9 @@ export type ListAdvicesOutput = z.output<typeof ListAdvicesOutput>;
 export const listAdvicesTool = defineTool({
   name: 'list_advices',
   description:
-    '列出账户既有建议（含决策、有效期、反证、风险、免责与回填状态），默认不含已过期；用于盘前简报的「既有建议与反证」段',
+    '列出**本账户**既有建议（按账户归属过滤，输出 scope 恒为 account；含决策、有效期、反证、风险、免责与回填状态），' +
+    '默认不含已过期；用于盘前简报的「既有建议与反证」段。' +
+    '需要跨账户按条件检索时用 get_advice',
   sideEffect: 'read',
   input: ListAdvicesInput,
   output: ListAdvicesOutput,
@@ -95,6 +102,7 @@ export const listAdvicesTool = defineTool({
       counterEvidenceMissing: advice.reasoning.counterEvidence.length === 0,
     }));
     return ListAdvicesOutput.parse({
+      scope: 'account',
       advices,
       total: advices.length,
       missingCounterEvidenceIds: advices

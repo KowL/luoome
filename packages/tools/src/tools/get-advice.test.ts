@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { getAdviceTool } from './get-advice.js';
+import { listAdvicesTool } from './list-advices.js';
 
 /** 永不过期的 advice（validUntil 2099，与真实时钟无关）。 */
 const futureAdvice: Advice = {
@@ -143,6 +144,66 @@ describe('get_advice', () => {
     if (!bySince.ok) return;
     expect(bySince.data.total).toBe(1);
     expect(bySince.data.advices[0]?.id).toBe('test-advice-future');
+  });
+
+  it('口径诚实化：description 明写不做账户归属过滤，输出 scope 恒为 all-accounts', async () => {
+    expect(getAdviceTool.description).toContain('不做账户归属过滤');
+    expect(getAdviceTool.description).toContain('跨账户');
+    expect(getAdviceTool.description).toContain('list_advices');
+
+    const ctx = await buildTestContext({ advices: [futureAdvice, expiredAdvice] });
+    const result = await getAdviceTool.execute({ includeExpired: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.scope).toBe('all-accounts');
+  });
+
+  it('与 list_advices 的口径差异是可执行的：无归属的 stock 建议 get_advice 会返回、list_advices 不会', async () => {
+    const probe = await buildTestContext({
+      clock: () => new Date('2020-06-01T12:00:00.000Z'),
+      advices: [],
+    });
+    const accountId = probe.user.defaultAccountId;
+    /** 有账户归属：`basedOn.strategy.accountId` 指向当前账户。 */
+    const attributed: Advice = {
+      ...futureAdvice,
+      id: 'test-advice-attributed',
+      basedOn: {
+        dataAsOf: new Date('2020-06-01T00:00:00.000Z'),
+        strategy: {
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1:v1',
+          runId: 'run-1',
+          stockId: '002594.SZ',
+          accountId,
+          resultEvidence: [],
+          signalIds: [],
+          observationIds: [],
+          recommendationTrigger: 'run',
+        },
+      },
+    };
+    /** 无归属：subjectKind='stock'、无 strategy.accountId、无 DecisionReview → 谁都不认。 */
+    const unattributed: Advice = { ...futureAdvice, id: 'test-advice-unattributed' };
+    const ctx = await buildTestContext({
+      clock: () => new Date('2020-06-01T12:00:00.000Z'),
+      advices: [attributed, unattributed],
+    });
+
+    const broad = await getAdviceTool.execute({}, ctx);
+    expect(broad.ok).toBe(true);
+    if (!broad.ok) return;
+    expect(broad.data.scope).toBe('all-accounts');
+    expect(broad.data.advices.map((advice) => advice.id).sort()).toEqual([
+      'test-advice-attributed',
+      'test-advice-unattributed',
+    ]);
+
+    const scoped = await listAdvicesTool.execute({}, ctx);
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    expect(scoped.data.scope).toBe('account');
+    expect(scoped.data.advices.map((item) => item.id)).toEqual(['test-advice-attributed']);
   });
 
   it('错误路径：非法日期 → invalid_input', async () => {
