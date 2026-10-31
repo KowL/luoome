@@ -330,7 +330,9 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     const { limitations: _ignored, ...legacyRun } = executed.data.run;
     await ctx.repos.strategyBacktest.saveRun(legacyRun);
     const legacyRead = await getStrictStrategyBacktestTool.execute({ backtestRunId: run.id }, ctx);
-    expect(legacyRead.ok && legacyRead.data.run?.limitations?.join('\n')).toContain('未考虑分红送转');
+    expect(legacyRead.ok && legacyRead.data.run?.limitations?.join('\n')).toContain(
+      '未考虑分红送转',
+    );
     const listed = await listStrictStrategyBacktestsTool.execute({ limit: 10 }, ctx);
     expect(listed.ok && listed.data.runs[0]?.limitations?.join('\n')).toContain('高估可交易性');
 

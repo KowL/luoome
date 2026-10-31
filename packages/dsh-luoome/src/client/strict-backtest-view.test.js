@@ -61,7 +61,9 @@ describe('组合回测面板：结果可用性与缺口披露分离（T22 语义
         gateStatus: 'partial',
         resultAvailability: 'complete',
         metrics: 'present',
-        limitations: ['未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。'],
+        limitations: [
+          '未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。',
+        ],
       }),
     );
     expect(view.gateComplete).toBe(false);
