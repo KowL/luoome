@@ -276,6 +276,8 @@ export const StrictBacktestRunSchema = z
     evaluator: StrategyEvaluatorIdentitySchema,
     gateAudit: StrictBacktestGateAuditSchema,
     metrics: StrictBacktestMetricsSchema.optional(),
+    /** 结果旁边必须能看到的已知缺口（分红送转、ST 派生依据等）。 */
+    limitations: z.array(z.string().min(1)).optional(),
     error: z.string().min(1).optional(),
     createdAt: z.coerce.date(),
     startedAt: z.coerce.date().optional(),

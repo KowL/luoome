@@ -19,6 +19,7 @@ import { buildTestContext } from '../testing/context.js';
 import {
   createStrictStrategyBacktestTool,
   executeStrictStrategyBacktestTool,
+  getStrictStrategyBacktestTool,
 } from './strategy-backtest.js';
 
 const D0 = new Date('2026-08-12T00:00:00.000Z');
@@ -276,9 +277,19 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     expect(item('pit-universe')).toMatchObject({ status: 'complete' });
     expect(item('daily-bar-revisions')).toMatchObject({ status: 'complete' });
     expect(item('tradability')).toMatchObject({ status: 'complete' });
+    expect(item('tradability')?.reason).toContain('名称前缀');
+    expect(item('tradability')?.reason).toContain('高估可交易性');
     expect(item('corporate-actions')).toMatchObject({ status: 'unavailable' });
     expect(item('corporate-actions')?.reason).toContain('无分红送转数据源');
     expect(item('corporate-actions')?.reason).toContain('§8');
+    expect(item('corporate-actions')?.reason).toContain('未考虑分红送转');
+    expect(item('corporate-actions')?.reason).toContain('真实亏损');
+    // metrics 旁（run result）也要能看到同样的缺口，不能只留在门禁里。
+    expect(run.limitations?.join('\n')).toContain('未考虑分红送转');
+    expect(run.limitations?.join('\n')).toContain('高股息标的总收益被低估');
+    expect(run.limitations?.join('\n')).toContain('除权除息日的价格跳空被当成真实亏损');
+    expect(run.limitations?.join('\n')).toContain('名称前缀');
+    expect(run.limitations?.join('\n')).toContain('高估可交易性');
     expect(item('benchmark')).toMatchObject({ status: 'complete' });
     expect(item('evaluator-code')).toMatchObject({ status: 'complete' });
     // 门禁整体仍是 partial（corporate-actions 缺口），但不阻断执行。
@@ -309,6 +320,10 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     expect(executed.data.run.status).toBe('complete');
     expect(executed.data.run.resultAvailability).toBe('complete');
     expect(executed.data.run.metrics?.tradeCount).toBe(15);
+    expect(executed.data.run.limitations?.join('\n')).toContain('未考虑分红送转');
+    // get 读回的 result 与 metrics 旁边同样带 limitations。
+    const read = await getStrictStrategyBacktestTool.execute({ backtestRunId: run.id }, ctx);
+    expect(read.ok && read.data.run?.limitations?.join('\n')).toContain('高股息标的总收益被低估');
 
     // 同一 spec + 同一输入指纹：重复 create 返回同一 run；重复 execute 幂等。
     const again = await createStrictStrategyBacktestTool.execute(

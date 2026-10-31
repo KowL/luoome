@@ -66,6 +66,14 @@ export const ExecuteStrictStrategyBacktestInput = z.object({
 });
 export const ExecuteStrictStrategyBacktestOutput = z.object({ run: StrictBacktestRunSchema });
 
+/** 用户看 metrics 时也必须看到的缺口；不只留在门禁里。 */
+const ST_DERIVATION_LIMITATION =
+  'ST 判定来自同步时点的股票名称前缀（非 provider 专用字段）；若来源去掉前缀会得到错误的 non-st，方向上高估可交易性（按 10% 带而非 5% 带处理）。';
+const CORPORATE_ACTIONS_LIMITATION =
+  '未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。';
+
+const BACKTEST_LIMITATIONS = [ST_DERIVATION_LIMITATION, CORPORATE_ACTIONS_LIMITATION] as const;
+
 const gate = (
   key: StrictBacktestGateItem['key'],
   status: StrictBacktestGateItem['status'],
@@ -367,8 +375,8 @@ const assembleBacktest = async (
             ? 'unavailable'
             : 'partial',
       tradabilityComplete
-        ? '所有潜在持仓在全部执行日都有 PIT 可交易性事实'
-        : `缺少可交易性事实${describeBacktestFactSkips(report) === null ? '' : `：${describeBacktestFactSkips(report)}`}`,
+        ? `所有潜在持仓在全部执行日都有 PIT 可交易性事实；${ST_DERIVATION_LIMITATION}`
+        : `缺少可交易性事实${describeBacktestFactSkips(report) === null ? '' : `：${describeBacktestFactSkips(report)}`}；${ST_DERIVATION_LIMITATION}`,
       marketFacts.map(
         (fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}:${fact.contentHash}`,
       ),
@@ -376,7 +384,7 @@ const assembleBacktest = async (
     gate(
       'corporate-actions',
       'unavailable',
-      '无分红送转数据源，属 §8 不在本期范围',
+      `无分红送转数据源，属 §8 不在本期范围。${CORPORATE_ACTIONS_LIMITATION}`,
       marketFacts.map((fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}`),
     ),
     gate(
@@ -497,6 +505,7 @@ export const createStrictStrategyBacktestTool = defineTool({
       inputFingerprint: assembled.inputFingerprint,
       evaluator: CURRENT_STRATEGY_EVALUATOR_IDENTITY,
       gateAudit: assembled.gateAudit,
+      limitations: [...BACKTEST_LIMITATIONS],
       createdAt: now,
       ...(runnable ? {} : { finishedAt: now }),
     });
@@ -536,6 +545,7 @@ export const executeStrictStrategyBacktestTool = defineTool({
     const running = StrictBacktestRunSchema.parse({
       ...existing,
       status: 'running',
+      limitations: existing.limitations ?? [...BACKTEST_LIMITATIONS],
       startedAt: ctx.clock(),
     });
     await ctx.repos.strategyBacktest.saveRun(running);
