@@ -1586,21 +1586,18 @@ const runAcceptance = async () => {
 
   await clickPanel('投资设置');
   /**
-   * **已知不可达（task-27 排查结论，关联任务 task-28）**：DSH 宿主打开设置弹窗后，
-   * 「投资设置」nav 行会出现并可点击、`aria-current` 也切到它，但
-   * `renderSlot('settings.section', { close }, { only: active })` 渲染出的内容容器
-   * （`.options`）始终为空 —— 我们的 `SettingsPanel` 从未被挂载。
+   * 「投资设置」section 的挂载门。
    *
-   * 已排除：客户端崩溃（`pageErrors` 为空）、policy 缺失（`configuration.policies` 含
-   * `update_account`）、`get_account` 失败（返回 ok）、locale 缺失（补了 locale 仍为空）、
-   * 点击没命中（手动 `target.click()` 后仍为 0 个 `.luo-settings`）。
-   *
-   * **这条不做 skip、不改恒真**：它必须保持红色并输出原因与任务号，否则问题会被永久掩盖。
-   * 产品风险：用户点「投资设置」同样看不到内容 —— 这是产品缺陷，不只是验收缺陷。
+   * 历史（task-28）：这里曾长期不可达 —— nav 行出现、`aria-current` 也切过去，但
+   * `renderSlot('settings.section', …)` 的内容容器是空的。真因不是宿主不支持自定义
+   * section，而是 `MarketSettingsForm` 里引用了一个已被删除的局部变量 `needsKey`：
+   * 组件**挂载后立即抛 `ReferenceError`**，被 `SlotErrorBoundary` 收走并「让位」，
+   * 于是 `.options` 退回 `<div data-slot-error="settings.section">`。
+   * 修好引用后本断言恢复正常等待，不再带任何「已知不可达」前缀。
    */
   await page.waitFor(
     `document.querySelector('input[name="account-name"]') !== null`,
-    '账户设置表单（已知不可达：DSH settings.section 内容区为空，见 task-28）',
+    '账户设置表单',
     15_000,
   );
   const newAccountName = '浏览器验收：已确认改名';

@@ -187,7 +187,9 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
                 autoComplete: 'new-password',
                 value: apiKey,
                 maxLength: 4096,
-                required: needsKey,
+                // 「启用 fuyao 但尚未配置密钥」时才必填；已配置留空 = 保留原密钥（REQ-M3-15）。
+                required:
+                  selected.includes('fuyao') && !data.fuyao.configured && !clearFor('fuyao'),
                 placeholder: data.fuyao.configured ? '留空保留现有密钥' : '输入 API Key',
                 disabled: busy,
                 onChange: (event) => setApiKey(event.target.value),

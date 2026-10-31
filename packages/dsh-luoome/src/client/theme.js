@@ -261,6 +261,13 @@ export const STYLE = `
 .luo-dl dd ul { margin: 0; padding-left: 14px; }
 .luo-dl dd li + li { margin-top: 3px; }
 .luo-fine { color: var(--lu-ink-3); font-size: 10.5px; line-height: 1.45; }
+/* 面板数据健康角标（REQ-M3-09）：单行不换行——它是一句话结论，不是内容区；换行会把首屏推下去。 */
+.luo-panel-health { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 8px; margin: 0; padding: 0; border: 0; background: transparent; font-size: 10.5px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.luo-panel-health-label { font-weight: 600; }
+.luo-panel-health.luo-ok .luo-panel-health-label { color: var(--lu-down); }
+.luo-panel-health.luo-warn .luo-panel-health-label { color: var(--lu-warn); }
+.luo-panel-health.luo-bad .luo-panel-health-label { color: var(--lu-up); }
+.luo-panel-health-issues { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; color: var(--lu-ink-2); }
 
 .luo-list { display: flex; flex-direction: column; }
 .luo-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 6px; border-bottom: 1px solid color-mix(in srgb, var(--lu-line) 62%, transparent); }
@@ -540,6 +547,11 @@ export const STYLE = `
   .luo-strategy-heading { align-items: flex-start; }
   .luo-strategy-identity { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .luo-strategy-modes { gap: 22px; }
+  /* 窄屏首屏预算紧张：角标只留「状态 + 时点」，明细在宽屏显示。 */
+  .luo-panel-health-issues { display: none; }
+  /* 窄屏下角标不再独占一行：浮到 shell 顶部右侧，首屏高度一分不占。 */
+  .luo-shell { position: relative; }
+  .luo-panel-health { position: absolute; top: 0; right: 0; margin: 0; font-size: 10px; }
 }
 @media (max-width: 600px) {
   .luo-strategies .luo-shell { padding-inline: clamp(18px, 3vw, 44px); }
