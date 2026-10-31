@@ -142,6 +142,8 @@ const emptyPanel = () => ({
   configuration: null,
   asOf: null,
   session: null,
+  health: null,
+  marketObservation: null,
   panelError: null,
   loadedAt: null,
 });
@@ -165,6 +167,10 @@ export function usePanelState(panel) {
           configuration: next.configuration,
           asOf: next.asOf,
           session: next.session,
+          // 整面板字段（REQ-M3-09 ③）：漏了它们，client 就永远拿不到 health，
+          // 角标在生产上不渲染（S5 引入时的真实缺陷）。
+          health: next.health ?? null,
+          marketObservation: next.marketObservation ?? null,
           panelError: null,
           loadedAt: new Date(),
         };

@@ -471,3 +471,32 @@ DSH 侧（面板、纪律提示词、profile 装配）的改动还要跑一次�
 ## 致谢
 
 感谢每一个想动手改这个项目的人。luoome 不是想做平台，是想做"个人真能用的 advisor agent"。如果你的改动让它更贴近这个目标，那就是好的贡献。
+
+## 浏览器验收（`test:panels-browser`）
+
+`bun run test:panels-browser`（= `env bun x --yes node@24 infra/dsh/panels-browser-acceptance.ts`）
+用**本机 Chrome + CDP** 跑真实的 DSH 页面，是仓库里**唯一的 DOM 级门**。
+
+1. **需要本机 Chrome**，且 `npx --yes node@24` 能取到（首次需要网络）。
+
+2. **不在 `test:all` 里** —— `bun run test` / `test:db` / `test:web` 都不包含它。
+   **但改 `packages/dsh-luoome/src/client/**` 的人必须手动跑它并贴末行**：
+   client 是 `.js`、不在 `tsc` 覆盖内、仓库也没有 react/react-dom 可写组件渲染单测，
+   **这条门是唯一能发现「`state is not defined` 这类运行时崩溃」的地方**。
+   （真实案例：REQ-M3-09 S5 引入的 `overview.js` 未声明变量让整个面板挂不出来，
+   而默认套件全绿——只有这条门抓到了它。）
+
+3. **当前状态（2026-10-31，修整中，不是「已可用」）**：
+   - ✅ 引导层已通（`dismissNotice` 不再静默失败，失败会 dump DOM 与 `pageErrors`）
+   - ✅ 已修两个真实缺陷：`overview.js` 未声明的 `state`（面板崩溃）、
+     `usePanelState` 漏传 `health`/`marketObservation` + `mergeOverviewSection` 的展开顺序
+     （导致面板健康角标在生产上从未渲染）
+   - ❌ **已知不可达（关联 task-28）**：`clickPanel('投资设置')` 之后 `input[name="account-name"]` 不出现。
+     DSH 设置弹窗里「投资设置」nav 行存在、可点击、`aria-current` 也切过去了，但
+     `renderSlot('settings.section', ..., { only: active })` 的内容容器始终为空 —— 我们的
+     `SettingsPanel` 从未挂载。已排除客户端崩溃 / policy 缺失 / `get_account` 失败 / locale 缺失 / 点击未命中。
+     **产品风险：用户点「投资设置」同样看不到内容。** 该断言**保持红色并输出原因与任务号**（不 skip、不恒真）。
+   - 在这条修好之前，**不要**把 `test:panels-browser` 记成绿灯，也不要据此声称 client 改动「已验证」。
+   - **门当前能覆盖**：引导层、侧栏、五个业务视图、持仓页事实、性能快照、行情源保存与生效、
+     面板健康角标、缺价渲染、提醒两个计数、`blocked` 建议卡、时点未知。
+   - **门当前不能覆盖**：设置分区 `投资设置`（task-28）、以及任何需要 DSH 宿主 slot 切换的路径。

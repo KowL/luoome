@@ -696,3 +696,67 @@ describe('S4 提醒要素缺口：两个数分开', () => {
     expect(reminderGapsView(undefined)).toBeNull();
   });
 });
+
+// REQ-M3-09 ③：整面板字段（health / marketObservation）合并时必须以新值为准，且不丢上一次。
+
+describe('mergeOverviewSection 的整面板字段', () => {
+  const base = (overrides = {}) => ({
+    identity: 'indices:1',
+    results: {},
+    loading: true,
+    error: null,
+    loadedAt: null,
+    session: null,
+    watchlistPage: null,
+    health: null,
+    marketObservation: null,
+    ...overrides,
+  });
+  const nextWith = (overrides = {}) => ({
+    ...base(),
+    health: null,
+    marketObservation: null,
+    loading: false,
+    ...overrides,
+  });
+
+  it('health：新值覆盖旧值', () => {
+    const merged = mergeOverviewSection(
+      base({ health: { status: 'partial' } }),
+      nextWith({ health: { status: 'available' }, results: { t: { ok: true, data: {} } } }),
+    );
+    expect(merged.health).toEqual({ status: 'available' });
+  });
+
+  it('health：本次为 null 时保留上一次（?? 语义，不是清空）', () => {
+    const merged = mergeOverviewSection(
+      base({ health: { status: 'available' } }),
+      nextWith({ health: null, results: { t: { ok: true, data: {} } } }),
+    );
+    expect(merged.health).toEqual({ status: 'available' });
+  });
+
+  it('marketObservation：同一组语义（新值覆盖、null 保留上一次）', () => {
+    const over = { scope: 'prior-session', label: '上一交易日收盘观察' };
+    expect(
+      mergeOverviewSection(
+        base({ marketObservation: { scope: 'historical' } }),
+        nextWith({ marketObservation: over, results: { t: { ok: true, data: {} } } }),
+      ).marketObservation,
+    ).toEqual(over);
+    expect(
+      mergeOverviewSection(
+        base({ marketObservation: over }),
+        nextWith({ marketObservation: null, results: { t: { ok: true, data: {} } } }),
+      ).marketObservation,
+    ).toEqual(over);
+  });
+
+  it('首次加载（previous.health 为 null）时，新 health 不会被 previous 覆盖', () => {
+    const merged = mergeOverviewSection(
+      base({ health: null }),
+      nextWith({ health: { status: 'unavailable' }, results: { t: { ok: true, data: {} } } }),
+    );
+    expect(merged.health).toEqual({ status: 'unavailable' });
+  });
+});

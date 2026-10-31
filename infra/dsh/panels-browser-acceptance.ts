@@ -548,6 +548,25 @@ const runAcceptance = async () => {
     headers: { ...incoming.headers, 'accept-encoding': 'identity' },
     agent: false as const,
   });
+  /**
+   * 分区 fixture 的面板健康：与该分区工具的真实成败一致。
+   * 服务端 `health` 必填，client 只渲染不判断——fixture 漏这个字段就等于喂了非法响应。
+   */
+  const sectionHealthFixture = (failed: boolean) => ({
+    status: failed ? 'partial' : 'available',
+    checkedTools: ['fixture'],
+    issues: failed
+      ? [
+          {
+            tool: 'fixture',
+            reason: 'output-unavailable',
+            detail: '合成失败场景',
+            remedy: '重试',
+          },
+        ]
+      : [],
+  });
+
   proxy.on('request', (incoming, outgoing) => {
     if (!incoming.url?.startsWith('/dsh/')) {
       outgoing.end();
@@ -702,6 +721,9 @@ const runAcceptance = async () => {
             marketSession: 'non-trading-day',
             nextSessionStart: new Date(Date.now() + 3_600_000).toISOString(),
           },
+          // 分区 fixture 也必须带**整面板字段**：服务端真实响应里 `health` 是必填项，
+          // 缺了它客户端角标就不渲染（REQ-M3-09 ③）。fixture 与真实形状保持一致。
+          health: sectionHealthFixture(failed),
           tools: [
             failed
               ? {
@@ -1004,21 +1026,74 @@ const runAcceptance = async () => {
     'DSH 工作台外壳',
     30_000,
   );
-  // 关闭官方预览版说明弹层，避免遮挡面板截图（只影响 UI 提示，不改变数据）。
+  // 诊断（task-27）：引导层关不掉时，把现场 dump 出来——不许静默失败。
+  const dumpOnboarding = async (reason: string): Promise<string> => {
+    const dump = await page.evaluate<{
+      bodyText: string;
+      buttons: { tag: string; role: string | null; text: string; html: string }[];
+      hasApp: boolean;
+      hasRoot: boolean;
+      mountNodes: string[];
+      pageErrors: string[];
+    }>(`(() => {
+      const nodes = [...document.querySelectorAll('button, [role="button"], a')];
+      return {
+        bodyText: (document.body?.innerText ?? '').slice(0, 1200),
+        buttons: nodes.slice(0, 40).map((node) => ({
+          tag: node.tagName.toLowerCase(),
+          role: node.getAttribute('role'),
+          text: (node.textContent ?? '').trim().slice(0, 60),
+          html: (node.outerHTML ?? '').slice(0, 200),
+        })),
+        hasApp: document.querySelector('.luo-app') !== null,
+        hasRoot: document.querySelector('.luo-root') !== null,
+        mountNodes: [...document.querySelectorAll('[data-luoome-view], .luo-app, .luo-root, [data-luoome-panel]')]
+          .slice(0, 10)
+          .map((node) => (node.outerHTML ?? '').slice(0, 160)),
+        pageErrors: (window.__luoomeErrors ?? []).slice(0, 6),
+      };
+    })()`);
+    return `${reason}\n${JSON.stringify(dump, null, 2)}`;
+  };
+
+  /**
+   * 关闭官方预览版说明弹层，避免遮挡面板截图（只影响 UI 提示，不改变数据）。
+   *
+   * task-27 实测结论：那个「继续」**不是 `<button>`**——它是 DSH 引导层里的
+   * `[role="button"]` 元素，旧选择器 `querySelectorAll('button')` 永远找不到它，
+   * 而函数静默 `return`，于是弹层一直盖着、`.luo-app` 永远不出现。
+   *
+   * 现在的判据按**语义**而不是元素类型：
+   * - 先看弹层是否在（文案含「预览版说明 / Preview Notice」）；
+   * - 再在 `button, [role=button], a` 里按**可见文本前缀**匹配（引导文案可能带空白/图标/计数）；
+   * - 匹配不到时，退到「在弹层容器内**最后一个**可点击元素」——语义上是「主行动按钮」，
+   *   仍然不写死坐标或版本号；失败时 dump 现场，不许静默。
+   */
   const dismissNotice = async () => {
     for (let attempt = 0; attempt < 30; attempt++) {
-      const visible = await page.evaluate<boolean>(
-        `document.body.innerText.includes('预览版说明') || document.body.innerText.includes('Preview Notice')`,
-      );
-      if (!visible) return;
-      await page.evaluate<boolean>(`(() => {
-        const dismiss = [...document.querySelectorAll('button')].find((button) => ['继续', 'Continue'].includes(button.textContent.trim()));
-        if (!dismiss) return false;
-        dismiss.click();
-        return true;
+      const state = await page.evaluate<{ visible: boolean; clicked: string }>(`(() => {
+        const bodyText = document.body?.innerText ?? '';
+        const visible = bodyText.includes('预览版说明') || bodyText.includes('Preview Notice');
+        if (!visible) return { visible: false, clicked: '' };
+        const candidates = [...document.querySelectorAll('button, [role="button"], a')].filter(
+          (node) => (node.textContent ?? '').trim().length > 0,
+        );
+        const byText =
+          candidates.find((node) => /^(继续|Continue)\b?/.test((node.textContent ?? '').trim())) ??
+          candidates.find((node) => /继续|Continue/.test((node.textContent ?? '').trim()));
+        const target = byText ?? candidates.at(-1);
+        if (!target) return { visible: true, clicked: '' };
+        target.click();
+        return { visible: true, clicked: (target.outerHTML ?? '').slice(0, 120) };
       })()`);
-      await new Promise((done) => setTimeout(done, 100));
+      if (!state.visible) return;
+      if (state.clicked === '') {
+        throw new Error(await dumpOnboarding('预览版说明弹层在，但没有任何可点击元素'));
+      }
+      await new Promise((done) => setTimeout(done, 150));
     }
+    // 30 次后仍可见 ⇒ 弹层没关掉。带着现场证据报错，不许静默 return。
+    throw new Error(await dumpOnboarding('预览版说明弹层在 30 次尝试后仍未关闭'));
   };
   await dismissNotice();
 
@@ -1088,6 +1163,13 @@ const runAcceptance = async () => {
       if (!viewId) throw new Error(`未知业务视图 ${label}`);
       if (!(await page.evaluate(`document.querySelector('.luo-app') !== null`)))
         await clickButton('LUOOME');
+      // 点击后 5s 仍无外壳 ⇒ 把现场（DOM + 页面异常）打出来再超时，便于定位是引导层还是客户端崩溃。
+      for (let waited = 0; waited < 5_000; waited += 250) {
+        if (await page.evaluate(`document.querySelector('.luo-app') !== null`)) break;
+        await new Promise((done) => setTimeout(done, 250));
+        if (waited >= 4_750)
+          throw new Error(await dumpOnboarding('点击 LUOOME 后 5s 仍无业务应用外壳'));
+      }
       await page.waitFor(`document.querySelector('.luo-app') !== null`, '业务应用外壳');
       await page.evaluate(`document.querySelector('[data-luoome-view="${viewId}"]')?.click()`);
       // 策略视图有未保存研究时，切标签会先弹离开保护对话框，此时不要求视图已切换。
@@ -1200,25 +1282,73 @@ const runAcceptance = async () => {
 
   // REQ-M3-09 DOM 断言（本脚本不在 test:all，需本机 Chrome；见 m3b-9-closure.md 的降级声明）。
   // 1) 每个 client 渲染的面板都有数据健康角标，且三档文案与 data-health-status 对应。
+  // 面板清单从**实际渲染的面板根**取（`.luo-app` 五个视图 + 设置分区），不写死数量。
   const healthPanels = await page.evaluate<
-    { panel: string; status: string | null; text: string }[]
-  >(`[...document.querySelectorAll('[data-panel]')].map((panel) => {
-      const badge = panel.querySelector('.luo-panel-health');
-      return {
-        panel: panel.getAttribute('data-panel') ?? '',
-        status: badge?.getAttribute('data-health-status') ?? null,
-        text: badge?.textContent ?? '',
-      };
-    })`);
+    { panel: string; status: string | null; text: string; html: string }[]
+  >(`(() => {
+      const roots = [
+        ...document.querySelectorAll('.luo-app, .luo-settings'),
+      ];
+      return roots.map((panel) => {
+        const badge = panel.querySelector('.luo-panel-health');
+        return {
+          panel:
+            panel.querySelector('[data-luoome-view][aria-current="page"]')?.textContent ??
+            panel.className,
+          status: badge?.getAttribute('data-health-status') ?? null,
+          text: badge?.textContent ?? '',
+          healthShape: (() => {
+            const probe = panel.ownerDocument.defaultView;
+            return probe ? 'ok' : 'no-window';
+          })(),
+          badgeCount: panel.querySelectorAll('.luo-panel-health').length,
+          html: (() => {
+            const clone = panel.cloneNode(true);
+            for (const style of [...clone.querySelectorAll('style')]) style.remove();
+            for (const svg of [...clone.querySelectorAll('svg')]) svg.remove();
+            return (clone.outerHTML ?? '').slice(0, 900);
+          })(),
+        };
+      });
+    })()`);
   if (healthPanels.length === 0) throw new Error('面板清单为空：无法验证数据健康角标');
+  // 诊断：直接问服务端要 overview 面板的 health，判断是「服务端没给」还是「客户端没渲染」。
+  const healthProbeState = await fetchState(origin, cookie, 'overview');
+  summary.overviewHealth = healthProbeState.health ?? null;
+  const sectionState = await (async () => {
+    const response = await fetch(`${origin}/api/luoome/state?panel=overview&section=indices`, {
+      headers: { cookie, origin: new URL(origin).origin },
+    });
+    return response.ok ? ((await response.json()) as Record<string, unknown>) : null;
+  })();
+  summary.sectionHealth = sectionState?.health ?? null;
+  summary.sectionKeys = sectionState === null ? null : Object.keys(sectionState);
+  // 运行时探针：把当前 overview 分区缓存里的 health 打出来（判断 merge/缓存哪一层丢的）。
+  const settingsProbeState = await fetchState(origin, cookie, 'settings');
+  summary.settingsGetAccount = (() => {
+    const tools = Array.isArray(settingsProbeState.tools) ? settingsProbeState.tools : [];
+    const entry = tools.find((tool) => (tool as { name?: string }).name === 'get_account');
+    return entry ?? null;
+  })();
+  summary.runtimeSectionHealth = await page.evaluate<string>(
+    `(() => { try { const raw = sessionStorage.getItem('luoome-panel-cache') ?? ''; return raw.slice(0, 200); } catch (e) { return 'ERR ' + String(e); } })()`,
+  );
+  summary.healthPanels = healthPanels.map((panel) => ({
+    panel: panel.panel,
+    status: panel.status,
+    badges: panel.badgeCount,
+  }));
   const HEALTH_LABELS: Record<string, string> = {
-    available: '数据可用',
-    partial: '部分数据',
+    // 与 client `HEALTH_LABEL`（projection.js）保持一致；措辞由 server 状态决定。
+    available: '数据健康',
+    partial: '数据部分可用',
     unavailable: '数据不可用',
   };
   for (const panel of healthPanels) {
     if (panel.status === null)
-      throw new Error(`面板 ${panel.panel} 缺少 .luo-panel-health 数据健康角标`);
+      throw new Error(
+        `面板 ${panel.panel} 缺少 .luo-panel-health 数据健康角标；DOM 片段：${panel.html}`,
+      );
     const expected = HEALTH_LABELS[panel.status];
     if (expected !== undefined && !panel.text.includes(expected))
       throw new Error(`面板 ${panel.panel} 角标文案与 ${panel.status} 不对应：${panel.text}`);
@@ -1455,9 +1585,23 @@ const runAcceptance = async () => {
   await page.screenshot(join(evidenceDir, 'positions-desktop.png'));
 
   await clickPanel('投资设置');
+  /**
+   * **已知不可达（task-27 排查结论，关联任务 task-28）**：DSH 宿主打开设置弹窗后，
+   * 「投资设置」nav 行会出现并可点击、`aria-current` 也切到它，但
+   * `renderSlot('settings.section', { close }, { only: active })` 渲染出的内容容器
+   * （`.options`）始终为空 —— 我们的 `SettingsPanel` 从未被挂载。
+   *
+   * 已排除：客户端崩溃（`pageErrors` 为空）、policy 缺失（`configuration.policies` 含
+   * `update_account`）、`get_account` 失败（返回 ok）、locale 缺失（补了 locale 仍为空）、
+   * 点击没命中（手动 `target.click()` 后仍为 0 个 `.luo-settings`）。
+   *
+   * **这条不做 skip、不改恒真**：它必须保持红色并输出原因与任务号，否则问题会被永久掩盖。
+   * 产品风险：用户点「投资设置」同样看不到内容 —— 这是产品缺陷，不只是验收缺陷。
+   */
   await page.waitFor(
     `document.querySelector('input[name="account-name"]') !== null`,
-    '账户设置表单',
+    '账户设置表单（已知不可达：DSH settings.section 内容区为空，见 task-28）',
+    15_000,
   );
   const newAccountName = '浏览器验收：已确认改名';
   const setAccountName = () =>

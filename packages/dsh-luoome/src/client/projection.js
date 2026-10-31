@@ -108,18 +108,33 @@ export const mergeOverviewSection = (previous, next) => {
     }
   }
   return {
-    // 面板级 health / marketObservation 是整面板字段（每个 section 相同），合并时保留。
-    health: next.health ?? previous.health ?? null,
-    marketObservation: next.marketObservation ?? previous.marketObservation ?? null,
     ...previous,
     results,
-    session: next.session,
-    loading: false,
-    error: errors[0] ?? null,
-    loadedAt: succeeded ? next.asOf : previous.loadedAt,
-    watchlistPage: succeeded ? next.watchlistPage : previous.watchlistPage,
+    // ↓ 以下键**以本次结果为准**，必须写在 `...previous` 之后（否则首次加载的 null 会把新值盖掉）。
+    ...mergeOverrides(previous, next, errors, succeeded),
   };
 };
+
+/**
+ * `mergeOverviewSection` 里**以新值为准**的键（整面板字段 + 本次合并产出的键）。
+ *
+ * 为什么单独列出来：这些键必须写在 `...previous` **之后**。之前 `health` 写在前、
+ * `...previous` 在后，首次加载 `previous.health === null` 直接把 `health` 覆盖成 null，
+ * **面板健康角标在生产上从来没渲染过**（REQ-M3-09 ③）。下一个加字段的人不该再踩一次，
+ * 所以这里是唯一列表：新增「整面板/以新值为准」的键，只加在这个函数里。
+ *
+ * 语义：`??` = 「本次没给就保留上一次」——不是「本次为 null 就清空」。
+ */
+const mergeOverrides = (previous, next, errors, succeeded) => ({
+  /** 整面板字段：服务端每次都在顶层回同一份。 */
+  health: next.health ?? previous.health ?? null,
+  marketObservation: next.marketObservation ?? previous.marketObservation ?? null,
+  session: next.session,
+  loading: false,
+  error: errors[0] ?? null,
+  loadedAt: succeeded ? next.asOf : previous.loadedAt,
+  watchlistPage: succeeded ? next.watchlistPage : previous.watchlistPage,
+});
 
 export const resultOf = (results, tool) => results?.[tool] ?? null;
 export const dataOf = (results, tool) => {

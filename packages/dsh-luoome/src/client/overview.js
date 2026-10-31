@@ -577,7 +577,7 @@ export function OverviewPanel({ onAnalyzeStock }) {
           sentiment,
           h(BreadthCard, {
             snapshot: dataOf(sentiment.results, 'get_ashare_sentiment')?.snapshot,
-            marketObservation: marketObservationOf(state),
+            marketObservation: marketObservationOf(sentiment),
           }),
         ),
         region(
