@@ -352,6 +352,51 @@ describe('T20 structured missingFacts', () => {
     );
   });
 
+  // T28 补充（自查第 2 项）：不只"删一条"，"改一条"也必须被两条防线各自抓到。
+  it('篡改一条 blocking 缺口（改 subjectId / 改 kind）→ hash 变、声明也不再匹配', () => {
+    const base = {
+      kind: 'quote-unavailable',
+      subjectId: '600519.SH',
+      reason: '缺少行情',
+      asOf: shanghai.open,
+    };
+    const hashOf = (missingFacts: readonly unknown[]): string =>
+      createHash('sha256')
+        .update(
+          JSON.stringify(
+            analysisContextHashPayload({
+              version: ANALYSIS_CONTEXT_HASH_VERSION,
+              facts: [],
+              dataAsOf: shanghai.open,
+              missingFacts: missingFacts as never,
+            }),
+          ),
+        )
+        .digest('hex');
+    // hash 防线：改 subjectId、改 kind、改 reason 都会变
+    expect(hashOf([base])).not.toBe(hashOf([{ ...base, subjectId: '000001.SZ' }]));
+    expect(hashOf([base])).not.toBe(hashOf([{ ...base, kind: 'quote-stale' }]));
+    expect(hashOf([base])).not.toBe(hashOf([{ ...base, reason: '另一个原因' }]));
+
+    // 完整性防线：声明"同 kind 但不同 subjectId"不算声明过
+    const context = AnalysisContextSchema.parse({
+      ...contextFor('advice_stock', shanghai.open, shanghai.open),
+      missingFacts: [base],
+    });
+    expect(
+      checkAnalysisReportCompleteness({
+        context,
+        missingFacts: [{ kind: 'quote-unavailable', subjectId: '000001.SZ' }],
+      }),
+    ).toEqual([
+      {
+        code: 'omitted-blocking-missing-fact',
+        path: 'missingFacts[0]',
+        message: '报告未声明 blocking 缺口: quote-unavailable / 600519.SH',
+      },
+    ]);
+  });
+
   // T28 验收 2：checker 的**完整性方向**——报告漏引 blocking 缺口必须报具体 kind 与 subjectId。
   it('报告未声明 context 里的 blocking 缺口 → omitted-blocking-missing-fact（带 kind 与 subjectId）', () => {
     const context = AnalysisContextSchema.parse({
