@@ -244,7 +244,8 @@ const EXPECTED_TOOLS: Readonly<Record<string, Readonly<Record<string, SideEffect
     get_market_data_status: 'read',
     list_holdings: 'read',
     list_watch_triggers: 'read',
-    get_advice: 'read',
+    // REQ-M3-17 ③：既有建议改用列表入口（get_advice 只能按 id 取，盘前简报拿不到列表）。
+    list_advices: 'read',
     list_watchlists: 'read',
     list_strategies: 'read',
     get_watch_status: 'read',
@@ -513,6 +514,37 @@ describe('dsh-luoome 打包技能内容', () => {
  * 本组把判定基准换成**暴露集**，并要求「禁止引用」显式登记：
  *   建议调用 ⊆ 暴露集；禁止引用 ⊂ 暴露集之外（每条带理由，且引用处必须写明禁止）。
  */
+describe('REQ-M3-08 R1：盘前简报的交付链在提示词层可断言', () => {
+  const morningBrief = (): string => {
+    const skill = skills().find((item) => item.dir === 'morning-brief');
+    if (skill === undefined) throw new Error('missing morning-brief skill');
+    return skill.content;
+  };
+
+  it('names both tools: write_report_artifact first, present second', () => {
+    const content = morningBrief();
+    expect(content).toContain('write_report_artifact');
+    expect(content).toContain('present');
+    expect(content.indexOf('write_report_artifact')).toBeLessThan(content.indexOf('`present`'));
+  });
+
+  it('requires exactly one present call and forbids repeated delivery', () => {
+    const content = morningBrief();
+    expect(content).toContain('恰好一次');
+    expect(content).not.toMatch(/按需多次|可以多次|多次调用 present/);
+  });
+
+  it('tells the model to reuse the returned presentArgs instead of inventing them', () => {
+    const content = morningBrief();
+    expect(content).toContain('presentArgs');
+    expect(content).toContain('presentArgs.files.length === 1');
+  });
+
+  it('keeps the skill body free of action words', () => {
+    expect(morningBrief()).not.toMatch(/买入|卖出|已建仓|下单/);
+  });
+});
+
 describe('技能 → 插件暴露面对账（REQ-M1-02）', () => {
   it('技能建议调用的工具名必须落在插件暴露集内，而不是「在 registry 里」', () => {
     const surface = exposedSurface();

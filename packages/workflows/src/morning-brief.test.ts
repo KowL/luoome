@@ -1,9 +1,11 @@
 import {
+  type Advice,
   assertReportInvariants,
   money,
   parseReportDocument,
   type ReportArtifactWriter,
   type ReportSection,
+  STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { writeReportArtifactTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -31,8 +33,35 @@ const memoryWriter = (): ReportArtifactWriter & { readonly files: Map<string, st
   };
 };
 
-const contextWithOvernight = async (options: { readonly withEvents: boolean }) => {
-  const base = await buildTestContext({ clock: () => generatedAt });
+const adviceFixture = (overrides: Partial<Advice> = {}): Advice => ({
+  id: 'advice-fixture',
+  subjectKind: 'portfolio',
+  subjectId: 'account-fixture',
+  decision: 'hold',
+  confidence: 60,
+  horizon: 'short',
+  reasoning: {
+    premise: 'fixture premise',
+    evidence: ['fixture evidence'],
+    counterEvidence: ['fixture counter evidence'],
+  },
+  risks: ['fixture risk'],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  basedOn: { dataAsOf: generatedAt },
+  validFrom: generatedAt,
+  validUntil: new Date('2026-08-05T00:00:00.000Z'),
+  createdAt: generatedAt,
+  ...overrides,
+});
+
+const contextWithOvernight = async (options: {
+  readonly withEvents: boolean;
+  readonly advices?: readonly Advice[];
+}) => {
+  const base = await buildTestContext({
+    clock: () => generatedAt,
+    ...(options.advices === undefined ? {} : { advices: [...options.advices] }),
+  });
   const market = Object.create(base.adapters.market, {
     fetchIndexQuotes: {
       value: async () => [
@@ -168,8 +197,9 @@ describe('REQ-M3-17 盘前简报 workflow', () => {
     expect(items.find((item) => item.key === 'basis')?.value).toBe('report-period');
   });
 
-  it('does not fabricate an existing-advice section it cannot source', async () => {
-    const ctx = await contextWithOvernight({ withEvents: true });
+  // 账户没有生效中的建议时才 unavailable；不推断、不编造。
+  it('marks existing-advice unavailable only when the account has no advice', async () => {
+    const ctx = await contextWithOvernight({ withEvents: true, advices: [] });
     const result = await morningBriefWorkflow.run({ date: '2026-07-29', notify: false }, ctx);
     if (!result.ok) throw new Error('report failed');
     const section = sectionOf(result.data.report, 'existing-advice');
@@ -177,6 +207,24 @@ describe('REQ-M3-17 盘前简报 workflow', () => {
     expect(section.blocks.every((block) => block.kind === 'text' && block.tone === 'warning')).toBe(
       true,
     );
+  });
+
+  // 归属与过期语义复用同一实现：本账户的建议出现，别的账户的不出现。
+  it('lists the account’s own advice with id, validity and counter-evidence', async () => {
+    const base = await buildTestContext({ clock: () => generatedAt, advices: [] });
+    const accountId = base.user.defaultAccountId;
+    const mine = adviceFixture({ id: 'advice-mine', subjectId: accountId });
+    const others = adviceFixture({ id: 'advice-other-account', subjectId: 'someone-else-account' });
+    const ctx = await contextWithOvernight({ withEvents: true, advices: [mine, others] });
+    const result = await morningBriefWorkflow.run({ date: '2026-07-29', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const section = sectionOf(result.data.report, 'existing-advice');
+    expect(section.status).toBe('complete');
+    const items = section.blocks.flatMap((block) => (block.kind === 'list' ? block.items : []));
+    expect(items.map((item) => item.entityId)).toEqual(['advice-mine']);
+    expect(items[0]?.detail).toContain('有效期至 2026-08-05T00:00:00.000Z');
+    expect(items[0]?.detail).toContain('反证：');
+    expect(items[0]?.detail).not.toContain('反证：未提供');
   });
 
   // 端到端：workflow 产出的 Report 必须能真的落盘成可交付文件。

@@ -8,6 +8,7 @@ import {
   type ReportScope,
   ReportScopeSchema,
   type ReportSection,
+  reportStanceLabel,
   STANDARD_DISCLAIMERS,
   type ToolResult,
 } from '@luoome/core';
@@ -78,7 +79,7 @@ const buildSections = async (
   pieces: { section: ReportSection; evidence: ReportEvidence[] }[];
 }> => {
   const accountId = ctx.user.defaultAccountId;
-  const [account, holdings, facts, indexes, events, plans] = await Promise.all([
+  const [account, holdings, facts, indexes, events, plans, advices] = await Promise.all([
     ctx.tools.get_account.execute({ accountId }),
     ctx.tools.list_holdings.execute({ accountId }),
     ctx.tools.get_account_facts.execute({ accountId }),
@@ -89,6 +90,7 @@ const buildSections = async (
       limit: 20,
     }),
     ctx.tools.list_alert_plans.execute({ enabledOnly: true }),
+    ctx.tools.list_advices.execute({ accountId, includeExpired: false, limit: 10 }),
   ]);
 
   const availability: string[] = [];
@@ -184,11 +186,44 @@ const buildSections = async (
   }
   if (overnight.length === 0) counterEvidence.push('隔夜事实为空，今日观察条件缺少外部参照');
 
-  // ③ 既有建议：当前没有「列出既有建议」的工具入口，如实标 unavailable，不推断。
-  const adviceUnavailable = true;
-  counterEvidence.push(
-    '既有建议无法读取：当前没有可列出既有建议的工具入口，本报告不包含既有建议的反证',
-  );
+  // ③ 既有建议与反证：来自 `list_advices`（账户归属与过期语义与 `get_advice` 同一实现）。
+  const adviceItems: {
+    title: string;
+    detail: string;
+    entityKind?: 'advice';
+    entityId?: string;
+    textOrigin?: 'advice';
+  }[] = [];
+  const missingCounterEvidence: string[] = [];
+  if (advices.ok) {
+    for (const advice of advices.data.advices) {
+      const name = advice.stockName ?? advice.subjectId;
+      adviceItems.push({
+        title: `${name} · ${reportStanceLabel(advice.decision)}`,
+        detail:
+          `有效期至 ${advice.validUntil.toISOString()}` +
+          ` · 反证：${advice.counterEvidence.join('；') || '未提供'}` +
+          ` · 风险：${advice.risks.join('；') || '未提供'}`,
+        entityKind: 'advice' as const,
+        entityId: advice.id,
+        // 建议正文是外部（模型）自由文本：渲染时按词面策略规范化，原文留在结构化投影里。
+        textOrigin: 'advice',
+      });
+    }
+    missingCounterEvidence.push(...advices.data.missingCounterEvidenceIds);
+    if (advices.data.advices.length === 0) {
+      availability.push('账户没有生效中的既有建议。');
+    }
+    if (missingCounterEvidence.length > 0) {
+      counterEvidence.push(
+        `有 ${missingCounterEvidence.length} 条既有建议没有提供反证（不补默认值）`,
+      );
+    }
+  } else {
+    availability.push(`既有建议读取失败（${advices.error.kind}）。`);
+    counterEvidence.push('既有建议无法读取，本报告不包含既有建议的反证');
+  }
+  const adviceUnavailable = adviceItems.length === 0;
 
   // ④ 今日观察条件：只写数据里真实存在的触发价/条件；缺失效条件就披露，不补。
   const watchItems: { title: string; detail: string }[] = [];
@@ -272,27 +307,42 @@ const buildSections = async (
       },
     },
     {
-      evidence: [],
+      evidence: [
+        evidence('morning-brief:advice', 'existing-advice.list', generatedAt, 'local/advices'),
+      ],
       section: {
         key: 'existing-advice',
         title: '既有建议与反证',
         required: true,
-        status: 'unavailable',
+        status: adviceItems.length > 0 ? 'complete' : 'unavailable',
         dataAsOf: generatedAt,
-        blocks: [
-          text(
-            '既有建议不可用：当前没有可列出既有建议的工具入口，本段不推断建议内容与有效期。',
-            'warning',
-          ),
-        ],
-        evidenceIds: [],
-        missingDimensions: [
-          {
-            dimension: 'existing-advice',
-            reason: '缺少既有建议列表读取入口',
-            retryable: false,
-          },
-        ],
+        blocks:
+          adviceItems.length > 0
+            ? [
+                list(adviceItems),
+                text(
+                  missingCounterEvidence.length === 0
+                    ? '每条建议都带有效期、反证与风险。'
+                    : `有 ${missingCounterEvidence.length} 条建议未提供反证：${missingCounterEvidence.join('、')}（不补默认值）。`,
+                ),
+              ]
+            : [
+                text(
+                  '既有建议不可用：账户没有生效中的建议，或建议读取失败；本段不推断建议内容与有效期。',
+                  'warning',
+                ),
+              ],
+        evidenceIds: ['morning-brief:advice'],
+        missingDimensions:
+          adviceItems.length > 0
+            ? []
+            : [
+                {
+                  dimension: 'existing-advice',
+                  reason: '账户没有生效中的既有建议',
+                  retryable: true,
+                },
+              ],
       },
     },
     {

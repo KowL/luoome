@@ -88,6 +88,8 @@ export * from './tools/get-watch-status.js';
 export * from './tools/investment-workspace.js';
 export * from './tools/limit-up-ladder.js';
 export * from './tools/list-accounts.js';
+export * from './tools/list-advices.js';
+export * from './tools/list-advices.js';
 export * from './tools/list-holdings.js';
 export * from './tools/list-reports.js';
 export * from './tools/list-stock-events.js';

@@ -85,6 +85,7 @@ import {
 } from './tools/investment-workspace.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
+import { listAdvicesTool } from './tools/list-advices.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listReportsTool } from './tools/list-reports.js';
 import { listStockEventsTool } from './tools/list-stock-events.js';
@@ -382,6 +383,7 @@ export const toolRegistry: Registry = createRegistry([
   listTradesTool,
   getHoldingTool,
   getAdviceTool,
+  listAdvicesTool,
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
   getDataDiagnosticsTool,

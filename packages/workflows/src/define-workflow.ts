@@ -114,6 +114,8 @@ import type {
   LimitUpLadderOutput,
   ListAccountsInput,
   ListAccountsOutput,
+  ListAdvicesInput,
+  ListAdvicesOutput,
   ListAlertPlansInput,
   ListAlertPlansOutput,
   ListHoldingsInput,
@@ -607,7 +609,9 @@ export interface WorkflowToolMap {
     typeof ListStockEventsInput,
     typeof ListStockEventsOutput
   >;
-  /** 指数行情（external）：盘前简报的隔夜事实来源之一。 */
+  /** 账户既有建议列表（REQ-M3-17 ③）。 */
+  readonly list_advices: ToolAccessor<typeof ListAdvicesInput, typeof ListAdvicesOutput>;
+  /** 指数行情（external）：盘前隔夜事实来源之一。 */
   readonly fetch_index_quotes: ToolAccessor<
     typeof FetchIndexQuotesInput,
     typeof FetchIndexQuotesOutput

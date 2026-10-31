@@ -37,6 +37,8 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'get_investment_workspace',
   // Advice、复盘与校准
   'get_advice',
+  // REQ-M3-17 ③：盘前简报的「既有建议与反证」段需要列表入口（read，零回源）。
+  'list_advices',
   'get_advice_stats',
   'get_confidence_calibration',
   'list_decision_reviews',
