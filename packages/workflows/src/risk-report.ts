@@ -1,4 +1,4 @@
-import { MoneySchema, PortfolioMetricReasonSchema } from '@luoome/core';
+import { MoneySchema, PortfolioMetricReasonSchema, ReportSchema } from '@luoome/core';
 import {
   type GetPortfolioRiskOutput,
   PORTFOLIO_RISK_SCHEMA_VERSION,
@@ -9,6 +9,8 @@ import {
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { envelopeSections } from './internal/report-envelope.js';
+import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 
 type PortfolioRiskData = z.output<typeof GetPortfolioRiskOutput>;
 
@@ -62,6 +64,11 @@ export const RiskReportOutput = z.object({
   }),
   marketSummary: z.string(),
   generatedAt: z.coerce.date(),
+  /**
+   * S6a 新增：同时落一份 `Report`（kind `risk`），供 `write_report_artifact` 交付成文件。
+   * 既有字段一个不改；落库失败时为 undefined。
+   */
+  report: ReportSchema.optional(),
 });
 
 export type RiskReportOutputT = z.infer<typeof RiskReportOutput>;
@@ -198,9 +205,98 @@ const stepFinalize: WorkflowStep = async (prev) => {
   });
 };
 
+/**
+ * S6a：把已算好的风险日报落成 `Report`（kind `risk`）+ 六槽 envelope。
+ * 反证与风险全部来自工具输出的**真实缺口**（指标 status / coverage / limitCheck），不是模板话术。
+ */
+const stepReport: WorkflowStep = async (prev, ctx) => {
+  const output = prev as RiskReportOutputT;
+  const now = ctx.clock();
+  const date = now.toISOString().slice(0, 10);
+  const degraded = output.metrics.filter(
+    (metric) => metric.status === 'unavailable' || metric.status === 'insufficient',
+  );
+  const partial = output.metrics.filter((metric) => metric.status === 'partial');
+  const counterEvidence = [
+    ...degraded.map(
+      (metric) =>
+        `${metric.name} 不可用（${metric.status}）${metric.reason === undefined ? '' : `：${metric.reason}`}`,
+    ),
+    ...partial.map((metric) => `${metric.name} 只是部分可用，口径不完整`),
+    output.coverage.unpricedCount > 0
+      ? `有 ${output.coverage.unpricedCount} 只持仓缺少可用价格，市值与权重口径不完整`
+      : '全部持仓都有可用价格，覆盖完整',
+  ];
+  const risks = [
+    ...output.limitCheck.breaches.map(
+      (breach) => `集中度上限被突破：${breach.stockId} 权重超过 ${String(breach.maxPct)}%`,
+    ),
+    output.dataHealth.status === 'available'
+      ? '数据健康为 available；本报告不含缺口'
+      : `数据健康为 ${output.dataHealth.status}：${output.dataHealth.unavailableMetrics.join('、') || '存在部分缺口'}`,
+    'VaR 只读已落库绩效快照，样本不足时不外推、不估算',
+  ];
+
+  const result = await executeReportWorkflow(
+    {
+      workflowName: 'risk-report',
+      kind: 'risk',
+      template: 'risk-v1',
+      mode: 'manual',
+      notify: false,
+      scope: { kind: 'account', accountId: output.accountId },
+      periodStart: date,
+      periodEnd: date,
+      title: `${date} 风险日报`,
+      buildSections: async (generatedAt): Promise<readonly ReportSectionPiece[]> => [
+        {
+          evidence: [],
+          section: {
+            key: 'risk-metrics',
+            title: '风险指标',
+            required: true,
+            status: 'complete',
+            dataAsOf: generatedAt,
+            blocks: [
+              {
+                kind: 'metrics',
+                items: output.metrics.map((metric) => ({
+                  key: metric.name,
+                  label: metric.name,
+                  value: metric.status === 'available' ? (metric.value ?? null) : null,
+                  ...(metric.status === 'available' ? {} : { displayValue: metric.status }),
+                })),
+              },
+              {
+                kind: 'text',
+                tone: 'factual' as const,
+                text: `覆盖：${output.coverage.pricedCount}/${output.coverage.holdingsCount} 只持仓有可用价格。`,
+              },
+            ],
+            evidenceIds: [],
+            missingDimensions: [],
+          },
+        },
+        ...envelopeSections({
+          dataAsOf: generatedAt,
+          conclusion: `${date} 风险日报：${output.holdingsCount} 只持仓，数据健康 ${output.dataHealth.status}。`,
+          counterEvidence,
+          risks,
+          validUntil: new Date(`${date}T23:59:59+08:00`),
+        }).map((section) => ({ evidence: [], section })),
+      ],
+    },
+    ctx,
+  );
+  return {
+    ...output,
+    ...('ok' in result ? {} : { report: result.report }),
+  } satisfies RiskReportOutputT;
+};
+
 export const riskReportWorkflow = defineWorkflow<RiskReportInputT, RiskReportOutputT>({
   name: 'risk-report',
   description: '生成账户风险日报（集中度 + VaR，口径唯一实现：get_portfolio_risk）',
   input: RiskReportInput,
-  steps: [stepRisk, stepRefresh, stepFinalize],
+  steps: [stepRisk, stepRefresh, stepFinalize, stepReport],
 });

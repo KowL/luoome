@@ -1,9 +1,11 @@
 import type { LimitUpLadder, LimitUpLadderDiff, ToolResult } from '@luoome/core';
-import { LimitUpLadderSourceSchema } from '@luoome/core';
+import { LimitUpLadderSourceSchema, ReportSchema } from '@luoome/core';
 import { GetAdviceStatsOutput } from '@luoome/tools';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { envelopeSections } from './internal/report-envelope.js';
+import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 
 /**
  * daily-review（v0.3，plan-v0.2-v0.3 §3.5）：
@@ -91,6 +93,11 @@ export const DailyReviewOutput = z.object({
   excluded: GetAdviceStatsOutput.shape.excluded,
   /** 读数口径说明：分母定义与排除规则必须随数字一起给出。 */
   limitations: z.array(z.string()),
+  /**
+   * S6a 新增：同时落一份 `Report`（kind `daily-review`），供 `write_report_artifact` 交付成文件。
+   * 落库失败时为 undefined——既有字段一个不改，交付失败不影响复盘数据本身。
+   */
+  report: ReportSchema.optional(),
 });
 
 export type DailyReviewOutputT = z.infer<typeof DailyReviewOutput>;
@@ -243,10 +250,125 @@ const stepFinalize: WorkflowStep = async (prev, ctx) => {
   });
 };
 
+/**
+ * S6a：把已算好的复盘落成 `Report`（kind `daily-review`）+ 六槽 envelope。
+ *
+ * R6：`daily-review` 的输入只有 `timezoneOffsetHours`，**没有账户维度**，所以 scope 只能是
+ * `all-accounts`，并在报告正文里显式披露这一点（不合并跨账户）。
+ */
+const stepReport: WorkflowStep = async (prev, ctx) => {
+  const output = prev as DailyReviewOutputT;
+  const date = output.summary.date;
+  const stats = output.summary;
+  const ladderAvailable = output.ladder !== null;
+  const sampleShort = !stats.minimumSampleMet;
+
+  const excludedTotal = Object.values(output.excluded).reduce((sum, value) => sum + value, 0);
+  const counterEvidence = [
+    `当日 ${stats.totalAdvices} 条建议中只有 ${stats.denominator} 条进入命中率分母，其余不代表已兑现`,
+    sampleShort
+      ? `命中率分母只有 ${stats.denominator} 个已了结样本（未达 20 的样本门槛），当日比例不具代表性`
+      : `命中率分母为 ${stats.denominator} 个已了结样本，仅代表该口径下的样本`,
+    excludedTotal > 0
+      ? `有 ${excludedTotal} 条回填被排除在分母外（未了结 / 非用户来源 / 部分采纳 / 忽略）`
+      : '当日没有需要排除的回填样本',
+    ladderAvailable
+      ? '涨停天梯快照已取得，梯队 diff 可与前一日对照'
+      : '涨停天梯不可用，梯队与 diff 缺失',
+  ];
+  const risks = [
+    `本报告按当前默认账户统计，不合并跨账户；跨账户口径未纳入`,
+    sampleShort
+      ? '样本不足时不得据此判断策略有效性，需要更多完整估值日'
+      : '命中率仅描述历史样本，不代表未来',
+    ladderAvailable
+      ? '梯队结构变化可能来自样本口径而非市场结构'
+      : '缺少天梯数据时市场情绪判断不完整',
+  ];
+
+  const result = await executeReportWorkflow(
+    {
+      workflowName: 'daily-review',
+      kind: 'daily-review',
+      template: 'daily-review-v1',
+      mode: 'manual',
+      notify: false,
+      // R6：没有账户维度，只能 all-accounts，并在正文披露。
+      scope: { kind: 'all-accounts' },
+      periodStart: date,
+      periodEnd: date,
+      title: `${date} 日复盘`,
+      buildSections: async (generatedAt): Promise<readonly ReportSectionPiece[]> => [
+        {
+          evidence: [],
+          section: {
+            key: 'daily-summary',
+            title: '当日复盘摘要',
+            required: true,
+            status: 'complete',
+            dataAsOf: generatedAt,
+            blocks: [
+              {
+                kind: 'metrics' as const,
+                items: [
+                  { key: 'totalAdvices', label: '当日建议数', value: stats.totalAdvices },
+                  { key: 'highConfidence', label: '高信心建议', value: stats.highConfidence },
+                  { key: 'denominator', label: '命中率分母', value: stats.denominator },
+                  { key: 'hits', label: '命中数', value: stats.hits },
+                  { key: 'metricVersion', label: '口径版本', value: stats.metricVersion },
+                ],
+              },
+              {
+                kind: 'text' as const,
+                tone: 'factual' as const,
+                text: '本报告按当前默认账户统计，不合并跨账户；账户维度未纳入本次复盘。',
+              },
+            ],
+            evidenceIds: [],
+            missingDimensions: [],
+          },
+        },
+        {
+          evidence: [],
+          section: {
+            key: 'daily-limitations',
+            title: '口径与限制',
+            required: true,
+            status: 'complete',
+            dataAsOf: generatedAt,
+            blocks: [
+              {
+                kind: 'list' as const,
+                items: output.limitations.map((item) => ({ title: item })),
+              },
+            ],
+            evidenceIds: [],
+            missingDimensions: [],
+          },
+        },
+        ...envelopeSections({
+          dataAsOf: generatedAt,
+          conclusion: `${date} 复盘：建议 ${stats.totalAdvices} 条，命中率分母 ${stats.denominator}，${
+            ladderAvailable ? '天梯可用' : '天梯不可用'
+          }。`,
+          counterEvidence,
+          risks,
+          validUntil: new Date(`${date}T23:59:59+08:00`),
+        }).map((section) => ({ evidence: [], section })),
+      ],
+    },
+    ctx,
+  );
+  return {
+    ...output,
+    ...('ok' in result ? {} : { report: result.report }),
+  } satisfies DailyReviewOutputT;
+};
+
 export const dailyReviewWorkflow = defineWorkflow<DailyReviewInputT, DailyReviewOutputT>({
   name: 'daily-review',
   description:
     '生成当日复盘（今日 advice 汇总 + 当日统一口径命中率 + 7 日准确率 + 涨停梯队快照 + vs 昨日 diff）',
   input: DailyReviewInput,
-  steps: [stepAdvices, stepStats, stepLadder, stepFinalize],
+  steps: [stepAdvices, stepStats, stepLadder, stepFinalize, stepReport],
 });
