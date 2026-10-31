@@ -191,6 +191,7 @@ export const getDecisionReviewContextTool = defineTool({
   input: SubjectInput,
   output: z.object({
     accountId: z.string(),
+    // 可用性粒度:结果级（决策依据的来源可不可用）。
     sourceStatus: z.enum(['available', 'unavailable']),
     context: DecisionReviewContextSchema.nullable(),
     current: ReviewViewSchema.nullable(),
@@ -210,6 +211,7 @@ export const getDecisionReviewContextTool = defineTool({
       .nullable(),
     candidateTrades: z.array(TradeSchema),
     observations: z.array(SignalObservationSchema),
+    // 可用性粒度:结果级（观察样本是否可用于复盘）。
     observationStatus: z.enum(['available', 'unavailable']),
     observationReason: z.string().nullable(),
   }),

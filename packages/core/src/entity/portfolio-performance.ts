@@ -75,6 +75,7 @@ export type PortfolioValuationCompleteness = z.infer<typeof PortfolioValuationCo
 export const MIN_TWR_SAMPLE_TRADING_DAYS = 20;
 
 /** 单项指标的可用性；`insufficient` 专指「样本不够，不给数字」，不是 0。 */
+// 可用性粒度:结果级（单项指标的结论信度）。`insufficient` = 样本不够、不给数字。
 export const PortfolioMetricStatusSchema = z.enum(['available', 'insufficient', 'unavailable']);
 export type PortfolioMetricStatus = z.infer<typeof PortfolioMetricStatusSchema>;
 
@@ -180,6 +181,7 @@ export const PortfolioPerformanceSchema = z.object({
   currency: z.string().length(3),
   completeness: PortfolioValuationCompletenessSchema,
   cashFlowComplete: z.boolean(),
+  // 可用性粒度:结果级（基准对比这一项的结论信度）。落盘：`performance_json.benchmarkStatus`。
   benchmarkStatus: z.enum(['available', 'unavailable', 'partial']),
   /**
    * 覆盖与样本事实。optional 只为兼容存量快照 JSON：旧记录没有该字段时读取方

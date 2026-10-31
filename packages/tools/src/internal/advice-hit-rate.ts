@@ -41,7 +41,8 @@ export const AdviceHitRateSchema = AdviceOutcomeScopeSchema.extend({
     ignored: z.number().int().nonnegative(),
   }),
   excessHitRate: z.object({
-    status: z.enum(['available', 'unavailable', 'insufficient']),
+    status: // 可用性粒度:结果级（命中率比例的结论信度）。
+      z.enum(['available', 'unavailable', 'insufficient']),
     value: z.number().min(0).max(1).nullable(),
     /** absolute denominator 中同时有有限同期 benchmarkPnl 的样本数。 */
     denominator: z.number().int().nonnegative(),

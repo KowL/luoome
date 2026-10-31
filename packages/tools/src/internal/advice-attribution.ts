@@ -249,7 +249,8 @@ export type AdviceAttributionRow = z.infer<typeof AdviceAttributionRowSchema>;
 
 export const ResidualSchema = z
   .object({
-    status: z.enum(['available', 'partial', 'unavailable']),
+    status: // 可用性粒度:结果级（单条归因金额的结论信度）。
+      z.enum(['available', 'partial', 'unavailable']),
     unattributedTrades: z.array(
       z
         .object({
@@ -367,7 +368,8 @@ export const GetAdviceAttributionOutput = z
     denominator: z
       .object({
         basis: z.literal('sum-of-stock-contribution'),
-        status: z.enum(['available', 'unavailable']),
+        status: // 可用性粒度:结果级（账户层对账能否成立）。
+          z.enum(['available', 'unavailable']),
         value: z.number().finite().optional(),
         reason: z.enum(['denominator-nonpositive', 'zero-denominator', 'no-snapshot']).optional(),
       })

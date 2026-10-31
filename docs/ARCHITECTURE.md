@@ -1317,7 +1317,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 > 发现新的「同一语义两实现」时：先判断属于本节哪一类，不属于才动代码。
 > 排查清单见 `output/dsh-brainstorm/review/t25-same-semantics-two-impls.md`。
 
-#### 11.1.1 有意不同（7 项）
+#### 11.1.1 有意不同（8 项）
 
 | # | 两个实现 | 为什么有意不同 | 适用范围 |
 |---|---|---|---|
@@ -1329,6 +1329,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | 5 | **交易日键 vs 日历日**：`DailyBar.date` / `factDate`（UTC 午夜键，`packages/core/src/strategy/fact-date.ts:54`） vs `dateInShanghai`（用户可见日历日） | **必须不同**：bar 的日期是全仓约定（`tradingMidnight` = UTC 午夜），事实日和回测窗口都建在它上面；用户可见日期是 Asia/Shanghai 自然日。把两者统一会让已落库的 bar 日期整体错位 | 行情/事实/回测**一律用交易日键**；报告期、文件名、展示**一律用上海日**。判据是「这个日期会不会拿去和已落库的 bar 比对」 |
 | 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
 | 7 | **建议五段 vs 报告六槽 vs 通知摘要**：`ADVICE_SEGMENTS`（5 段） / `REPORT_ENVELOPE_SLOTS`（6 槽）/ `report-notification.ts` 的 `notificationSections` 白名单 | **三者不是同一集合**，所以不是「抽一个常量三处引用」。① 六槽 = 五段 + `dataAsOf`（报告作为交付物多一个观测时点，代码里 `[...ADVICE_SEGMENTS, 'dataAsOf']`）；② 通知摘要选的是 **`Report.sections[].key`**（`market-pulse` / `strategy-actions` / …），与建议五段**完全不重叠**——把它并进五段是「把两套语义硬焊」 | 段名同源（通知兜底文案由 `ADVICE_SEGMENTS` + `segmentLabel()` 生成），**措辞可各自不同**。谁要新增「建议段」，改 `ADVICE_SEGMENTS` 一处；谁要新增「报告段」，改 `ReportSection.key` 与通知白名单两处 |
+| 8 | **结果级可用性 vs 值级存在性**：`available/partial/insufficient/unavailable`（单项指标 / 面板 / 报告） vs `RuleInputFact.status = available\|missing`（`packages/core/src/entity/strategy.ts:526`） | `missing` 回答「**这条输入**有没有」，不是「**这份结果**能不能用」。粒度不同（值级 vs 结果级）、可缺性不同（值级没有 `partial`）、落盘与否不同（`missing` 进 `strategy_results.rule_evaluations_json`） | 新增「结果」用结果级词汇；新增「单条输入」用值级词汇。**不许把 `missing` 映射成 `unavailable`**——见下方反证 |
 
 **第 2 项的细则（REQ 共享维度，写成可执行规则）**
 
@@ -1339,6 +1340,44 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | **冲突时怎么办** | **两个独立维度各自披露，不做整体降级。** 两份输出都带一句固定声明（`ACCOUNT_FACTS_AVAILABILITY_DIMENSION` / `PORTFOLIO_RISK_AVAILABILITY_DIMENSION`）：本工具的可用性只看自己那一维，另一维的问题**不反映**在本工具的状态里，要看另一维请调另一个工具 |
 | **`totalAssets` 为什么数值同源而状态可以不同** | 两者都用 `Account.cashBalance` + 合格行情估值，所以**数值口径同源**；但一侧可能因为**账本对账缺口**把整份结果标 `unavailable`（数值因此为 `null`），另一侧只看价格覆盖仍给 `available`。这是「同一个数、两种可用性判定」，不是两套算法 |
 | **不要在这里再造聚合视角** | 聚合视角是 `PANEL_NAMES` 的面板健康（REQ-M3-09 S1，`packages/dsh-luoome/src/host/panel-health.ts`）。要让角标同时反映这两维，改的是 `panel-health.ts` 的 `OUTPUT_PROBES`——**不属于这两个工具** |
+
+**第 8 项的反证（这个裁定只需要这一条证据）**
+
+> 一条表达式有 8 条输入，7 条 `available` + 1 条 `missing` 时，正确语义是**「缺输入」**
+> （`RuleExplanationSchema.code` 已有 `'missing-input'`，`strategy.ts:534`），
+> **不是「这条输入不可用」**。强行把 `missing` 映射成 `unavailable`，会把用户排查规则的方向
+> 从「补这条输入」带偏到「这条输入坏了」——两种说法导向完全不同的动作。
+
+#### 11.1.1a 可用性词汇的粒度判据（**可引用规则**）
+
+**主判据（一句话问法）**：
+
+> 问：「取值变了，用户看到的是『**结果信度变了**』还是『**这一行有没有数据**』？」
+> ——**后者不属于结果级可用性。**
+
+三种粒度各用哪套词（按「被描述对象的数量」判，**不按词面判**）：
+
+| 粒度 | 描述对象 | 词汇 | 例 |
+|---|---|---|---|
+| **结果级** | 一整份结果：一个指标 / 一个面板 / 一份报告 | `available` / `partial` / `insufficient` / `unavailable` | `PortfolioMetricStatusSchema`、`PANEL_HEALTH_STATUSES` |
+| **值级存在性** | 一条输入 / 一个标的有**没有**这条数据 | `available` / `missing` | `RuleInputFactSchema.status` |
+| **样本级** | 一批样本**够不够** | `sufficient` / `insufficient` | `advice-hit-rate.ts` 的 `sampleStatus` |
+
+**「样本级 `sufficient|insufficient` 是正向表述，映射会丢语义」**：
+`sufficient` 说的是「够用」，不是「可用」；把它压成 `available` 会丢掉「样本量达标」这层意思，
+而 `insufficient` 压成 `partial` 又会和「结果部分可用」混为一谈（前者等数据、后者补数据）。
+
+**执行守卫**：`packages/core/src/entity/availability-granularity.test.ts`。
+判据是**取值集合**（一个 `z.enum` 的**全部**取值都落在结果级词表里 ⇒ 必须在其**本行或上方 3 行**
+标注 `可用性粒度:`），**不是**「名字里带 status」——后者会把几十个运行状态机误判进来。
+白名单 `GRANULARITY_EXEMPT` 每条必须写理由（照 `REPORT_FACTUAL_FIELD_KEYS` 的做法）。
+
+**为什么是守卫而不是统一（**本节的警示语**）**：
+
+> 全仓可用性类 `z.enum` 有一百多处（严格判据下，`core/entity` + `tools/src` 两个根内就有 7 处
+> 需要标注）。把其中 3 个统一成「一个枚举」，会让**剩下那些没被统一的地方被误认为已统一**。
+> **做一个看起来像收了口的事，比不做更坏——因为它会让人停止检查。**
+
 
 #### 11.1.2 「缺数据」的表达优先级：`缺席 > null > 0`（**可引用规则**）
 
