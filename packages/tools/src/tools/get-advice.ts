@@ -25,30 +25,35 @@ export const GetAdviceInput = z.object({
 });
 
 /**
- * 输出口径标注（REQ-M3-17 ③ / task-20）：
+ * 输出口径标注（REQ-M3-17 ③ / task-20 → task-21）：
  *
  * `scope` **必须**出现在结果里，而不只是写在 description 上——调用方拿到一批建议时
- * 要能就地判断「这批是不是本账户的」。本工具是**跨账户检索**，`accountId` 只决定
- * 「附加哪一份 outcome」与「账户是否存在」，**不参与建议归属过滤**。
+ * 要能就地判断「这批是不是本账户的」。本工具与 `list_advices` 用**同一份**归属实现
+ * （`selectAdvices` → `adviceAttribution`），`scope` 恒为 `account`。
  */
-export const GetAdviceScopeSchema = z.literal('all-accounts');
+export const GetAdviceScopeSchema = z.literal('account');
 
 export const GetAdviceOutput = z
   .object({
-    /** 恒为 `all-accounts`：本工具不做账户归属过滤。按账户归属过滤请用 `list_advices`。 */
+    /** 恒为 `account`：本工具按账户归属过滤，与 `list_advices` 同一口径。 */
     scope: GetAdviceScopeSchema,
     advices: z.array(AdviceSchema),
     total: z.number().int().nonnegative(),
+    /**
+     * 本次查询命中、但**无法归属到任何账户**的建议条数（存量无归属数据）。
+     * 它们不会出现在 `advices` 里，但必须被计数披露——不许静默丢弃。
+     */
+    unattributedCount: z.number().int().nonnegative(),
   })
   .strict();
 
 export const getAdviceTool = defineTool({
   name: 'get_advice',
   description:
-    '跨账户检索历史建议（按标的 / 决策 / 来源 / 时间窗过滤，默认不含已过期）。' +
-    '**不做账户归属过滤**：accountId 只决定附加哪一份回填 outcome 与账户是否存在，' +
-    '返回结果可能包含其它账户的建议（输出 scope 恒为 all-accounts）；' +
-    '要「只属于本账户的建议」请用 list_advices',
+    '查询**本账户**历史建议（按账户归属过滤，输出 scope 恒为 account；' +
+    '另按标的 / 决策 / 来源 / 时间窗过滤，默认不含已过期）。' +
+    '归属判定与 list_advices 是同一实现（basedOn.strategy.accountId 或本账户复盘记录）；' +
+    '无法归属到任何账户的存量建议不进列表，条数见 unattributedCount',
   sideEffect: 'read',
   input: GetAdviceInput,
   output: GetAdviceOutput,
@@ -67,15 +72,16 @@ export const getAdviceTool = defineTool({
       ...(input.until !== undefined ? { until: input.until } : {}),
       includeExpired: true,
     };
-    const advices = await selectAdvices(ctx, accountId, filter, {
+    const { advices, unattributedCount } = await selectAdvices(ctx, accountId, filter, {
       includeExpired: input.includeExpired,
       limit: input.limit,
     });
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
     return {
-      scope: 'all-accounts' as const,
+      scope: 'account' as const,
       advices: z.array(AdviceSchema).parse(advices),
       total: advices.length,
+      unattributedCount,
     };
   },
 });

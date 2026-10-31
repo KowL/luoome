@@ -348,6 +348,7 @@ const seedStrategyAdvice = async (ctx: ToolContext, date: string): Promise<void>
         strategyVersionId: 'closing-strategy-v1',
         runId: `closing-strategy-run-${date}`,
         stockId: '600519.SH',
+        accountId: ctx.user.defaultAccountId,
         resultEvidence: ['fixture'],
         signalIds: [`closing-strategy-signal-${date}`],
         observationIds: [],

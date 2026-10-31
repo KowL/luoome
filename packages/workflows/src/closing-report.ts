@@ -569,7 +569,11 @@ const adviceExpirySection = async (
   ctx: WorkflowContext,
   scope: ClosingInput['scope'],
 ) => {
-  const result = await ctx.tools.get_advice.execute({ includeExpired: true, limit: 500 });
+  const result = await ctx.tools.get_advice.execute({
+    ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
+    includeExpired: true,
+    limit: 500,
+  });
   if (!result.ok) {
     return unavailableSection(
       'advice-expiry',
@@ -787,6 +791,7 @@ const strategyActionsSection = async (
     }),
     // 与逐股计划同一口径：按建议维度读，再用 basedOn.strategy 判别是否来自已发布运行。
     ctx.tools.get_advice.execute({
+      ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
       subjectKind: 'stock',
       since: dayStart,
       until: new Date(dayStart.getTime() + DAY_MS - 1),

@@ -85,7 +85,7 @@ const setup = async () => {
         '2026-10-15',
         fingerprint,
         facts.data.facts.digest,
-        await adviceWatermark('2026-10-15', workflowCtx),
+        await adviceWatermark('2026-10-15', workflowCtx, ctx.user.defaultAccountId),
       ),
       workflowName: 'account-plan-batch',
       mode: 'scheduled',

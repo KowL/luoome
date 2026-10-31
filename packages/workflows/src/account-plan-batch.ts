@@ -28,11 +28,20 @@ export const accountPlanBatchId = (
  *
  * 批次键必须包含它，否则「先跑出零计划的完成批次 → 之后补录建议」不会触发重算，
  * 报告也会沿用旧批次判定（封版）。
+ *
+ * **水位按账户**：批次键的其它两项（`strategyFingerprint` 之外）里 `accountFactsDigest`
+ * 本身就是按账户算的。水位若跨账户，A 账户会因 B 账户补录建议而换键 → A 的批次无谓重跑
+ * 并重新生成计划（虚假触发）。所以 `accountId` 必填并显式传给 `get_advice`。
  */
-export const adviceWatermark = async (date: string, ctx: WorkflowContext): Promise<string> => {
+export const adviceWatermark = async (
+  date: string,
+  ctx: WorkflowContext,
+  accountId: string,
+): Promise<string> => {
   const dayStart = new Date(`${date}T00:00:00+08:00`);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
   const result = await ctx.tools.get_advice.execute({
+    accountId,
     since: dayStart,
     until: dayEnd,
     includeExpired: true,
@@ -85,7 +94,7 @@ export const getAccountPlanBatchStatus = async (
       date,
       strategyFingerprint,
       accountFactsDigest,
-      await adviceWatermark(date, ctx),
+      await adviceWatermark(date, ctx, accountId),
     ),
   });
   if (!result.ok || result.data.run === null) return 'blocked';
@@ -107,7 +116,7 @@ export const runAccountPlanBatch = async (
     date,
     strategyFingerprint,
     accountFactsDigest,
-    await adviceWatermark(date, ctx),
+    await adviceWatermark(date, ctx, accountId),
   );
   const startedAt = ctx.clock();
   const claimToken = randomUUID();

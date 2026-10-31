@@ -220,9 +220,16 @@ const ADVICE_HORIZONS: readonly AdviceHorizon[] = ['short', 'medium', 'long'];
  * deterministic：同一 stockId + 同一 clock 永远得到同一结果；
  * 必含 3 条 STANDARD_DISCLAIMERS、validUntil > validFrom，可过 assertAdviceInvariants。
  */
+/**
+ * 确定性 advice fixture。
+ *
+ * `options.accountId` 会写进 `basedOn.strategy.accountId`——这是 `get_advice` / `list_advices`
+ * 账户归属判定的依据（`adviceAttribution`）。不传时保持「无归属」，用于显式测试缺口披露。
+ */
 export const testAdviceFor = (
   stockId: string,
   clock: () => Date = () => new Date(DEFAULT_TEST_NOW.getTime()),
+  options: { readonly accountId?: string } = {},
 ): Advice => {
   const now = clock();
   const seed = hashString(`advice|${stockId}`);
@@ -252,7 +259,24 @@ export const testAdviceFor = (
     risks: ['测试风险：本 fixture 不反映真实基本面', '测试风险：大盘系统性下行风险'],
     disclaimers: [...STANDARD_DISCLAIMERS],
     sourceTool: 'analyze_stock',
-    basedOn: { dataAsOf: validFrom },
+    basedOn: {
+      dataAsOf: validFrom,
+      ...(options.accountId === undefined
+        ? {}
+        : {
+            strategy: {
+              strategyId: `test-strategy:${resolvedStockId}`,
+              strategyVersionId: `test-strategy:${resolvedStockId}:v1`,
+              runId: `test-run:${resolvedStockId}`,
+              stockId: resolvedStockId,
+              accountId: options.accountId,
+              resultEvidence: [],
+              signalIds: [],
+              observationIds: [],
+              recommendationTrigger: 'run' as const,
+            },
+          }),
+    },
     validFrom,
     validUntil,
     createdAt: validFrom,

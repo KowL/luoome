@@ -1,13 +1,17 @@
 import {
+  type Advice,
   type AShareSentimentManagerLike,
   type AShareSentimentSnapshot,
   type SignalObservation,
+  STANDARD_DISCLAIMERS,
   type StrategyDslV1,
   type StrategyVersion,
   strategyDefinitionHash,
   type ToolContext,
 } from '@luoome/core';
 import {
+  getAdviceStatsTool,
+  getAdviceTool,
   getDecisionReviewContextTool,
   recordAdviceOutcomeTool,
   saveDecisionReviewTool,
@@ -18,6 +22,37 @@ import { describe, expect, it } from 'vitest';
 import { weeklyReportWorkflow } from './weekly-report.js';
 
 const now = new Date('2026-07-31T11:00:00.000Z');
+
+/** 有账户归属的建议（`basedOn.strategy.accountId` 是归属判定的依据）。 */
+const attributedAdvice = (id: string, stockId: string, accountId: string): Advice => ({
+  id,
+  subjectKind: 'stock',
+  subjectId: stockId,
+  decision: 'hold',
+  confidence: 60,
+  horizon: 'short',
+  reasoning: { premise: 'p', evidence: ['e'], counterEvidence: ['c'] },
+  risks: ['r'],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  sourceTool: 'analyze_stock',
+  basedOn: {
+    dataAsOf: now,
+    strategy: {
+      strategyId: `strategy-${stockId}`,
+      strategyVersionId: `strategy-${stockId}:v1`,
+      runId: `run-${stockId}`,
+      stockId,
+      accountId,
+      resultEvidence: [],
+      signalIds: [],
+      observationIds: [],
+      recommendationTrigger: 'run',
+    },
+  },
+  validFrom: now,
+  validUntil: new Date(now.getTime() + 3 * 86_400_000),
+  createdAt: now,
+});
 
 const snapshotFor = (date: string): AShareSentimentSnapshot => {
   const observedAt = new Date(`${date}T07:00:00.000Z`);
@@ -521,6 +556,42 @@ describe('weekly-report workflow', () => {
       ]),
     );
     expect(JSON.stringify(accountSection)).toContain('全局关注预警不并入账户反馈率');
+  });
+
+  it('建议列表与命中率分母使用同一账户口径（不混入其它账户的建议）', async () => {
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    const accountId = ctx.user.defaultAccountId;
+    await ctx.repos.advice.save(attributedAdvice('advice-mine', '002594.SZ', accountId));
+    await ctx.repos.advice.save(attributedAdvice('advice-other', '600519.SH', 'other-account'));
+
+    const since = new Date('2026-07-27T00:00:00+08:00');
+    const until = new Date('2026-07-31T23:59:59.999+08:00');
+    const listed = await getAdviceTool.execute(
+      { accountId, since, until, includeExpired: true, limit: 500 },
+      ctx,
+    );
+    const stats = await getAdviceStatsTool.execute(
+      { accountId, since, until, originFilter: 'user' },
+      ctx,
+    );
+    expect(listed.ok && stats.ok).toBe(true);
+    if (!listed.ok || !stats.ok) return;
+    // 列表只含本账户；命中率分母（totalAdvices）与列表长度必须是同一个数。
+    expect(listed.data.advices.map((advice) => advice.id)).toEqual(['advice-mine']);
+    expect(stats.data.totalAdvices).toBe(listed.data.advices.length);
+
+    const result = await weeklyReportWorkflow.run(
+      { periodEnd: '2026-07-31', scope: { kind: 'account', accountId }, notify: false },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'advice-outcomes');
+    const metrics = section?.blocks.find((block) => block.kind === 'metrics');
+    const items = metrics?.kind === 'metrics' ? metrics.items : [];
+    const value = (key: string): unknown => items.find((item) => item.key === key)?.value;
+    // 周报的「Advice 样本数」与上面两个工具同源同口径。
+    expect(value('totalAdvices')).toBe(listed.data.advices.length);
   });
 
   it('将 signal observation 和 Advice outcome 以描述性统计写入周报', async () => {

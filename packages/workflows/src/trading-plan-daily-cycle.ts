@@ -750,6 +750,7 @@ const run = async (
   // 读取口径按**建议本身的维度**过滤：真实写入方是 record_advice / complete_analysis_job，
   // 历史 sourceTool 过滤（analyze_position / analyze_strategy_candidate）已无写入方，会恒空。
   const positionAdvicesResult = await ctx.tools.get_advice.execute({
+    accountId,
     subjectKind: 'position',
     since: dayStart,
     until: dayEnd,
@@ -792,6 +793,7 @@ const run = async (
 
   let candidateReviews = 0;
   const candidatesResult = await ctx.tools.get_advice.execute({
+    accountId,
     subjectKind: 'stock',
     since: dayStart,
     until: dayEnd,

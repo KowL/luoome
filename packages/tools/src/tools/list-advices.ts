@@ -1,15 +1,14 @@
 import { AdviceDecisionSchema, type AdviceQuery, AdviceSchema } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
-import { accountScopedAdvices } from '../internal/account-advice-outcomes.js';
 import { selectAdvices } from '../internal/advice-selection.js';
 
 /**
  * 列出账户既有建议（REQ-M3-17 ③ 的数据来源）。
  *
- * 归属：复用 `accountScopedAdvices`（`get_advice_stats` / `get-confidence-calibration` /
- * `get-strategy-decision-cycles` 用的是同一份），**不另写一套「哪些建议属于这个账户」**。
- * 过期与 outcome：复用 `selectAdvices`，与 `get_advice` 同一实现。
+ * 归属 / 过期 / outcome：全部复用 `selectAdvices`（它内部用 `adviceAttribution`，
+ * 与 `get_advice_stats` / `get_confidence_calibration` / `get_strategy_decision_cycles` 同一份），
+ * **不另写一套「哪些建议属于这个账户」**。
  */
 export const ListAdvicesInput = z
   .object({
@@ -56,6 +55,11 @@ export const ListAdvicesOutput = z
     total: z.number().int().nonnegative(),
     /** 缺反证的建议 id 列表（可用性披露用，不假装有反证）。 */
     missingCounterEvidenceIds: z.array(z.string()),
+    /**
+     * 本次查询命中、但**无法归属到任何账户**的建议条数（存量无归属数据）。
+     * 它们不会出现在 `advices` 里，但必须被计数披露——不许静默丢弃。
+     */
+    unattributedCount: z.number().int().nonnegative(),
   })
   .strict();
 export type ListAdvicesOutput = z.output<typeof ListAdvicesOutput>;
@@ -79,12 +83,11 @@ export const listAdvicesTool = defineTool({
       ...(input.until !== undefined ? { until: input.until } : {}),
       includeExpired: true,
     };
-    const selected = await selectAdvices(ctx, accountId, filter, {
+    // 账户归属 + 过期 + outcome 全在 `selectAdvices` 里（与 `get_advice` 同一实现）。
+    const { advices: scoped, unattributedCount } = await selectAdvices(ctx, accountId, filter, {
       includeExpired: input.includeExpired,
       limit: input.limit,
     });
-    // 归属过滤复用既有实现：`selectAdvices` 只负责过期/outcome，账户归属在这里。
-    const scoped = await accountScopedAdvices(ctx, accountId, selected);
     const advices = scoped.map((advice) => ({
       id: advice.id,
       subjectKind: advice.subjectKind,
@@ -108,6 +111,7 @@ export const listAdvicesTool = defineTool({
       missingCounterEvidenceIds: advices
         .filter((advice) => advice.counterEvidenceMissing)
         .map((advice) => advice.id),
+      unattributedCount,
     });
   },
 });

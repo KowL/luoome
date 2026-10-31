@@ -9,8 +9,10 @@ const now = new Date('2026-08-22T01:00:00.000Z');
 
 describe('delete_advice tool', () => {
   it('批量删除：命中删除 + 未命中进 notFound，部分命中不是错误', async () => {
-    const a = testAdviceFor('002594.SZ', () => now);
-    const b = testAdviceFor('600519.SH', () => now);
+    const probe = await buildTestContext({ clock: () => now, advices: [] });
+    const accountId = probe.user.defaultAccountId;
+    const a = testAdviceFor('002594.SZ', () => now, { accountId });
+    const b = testAdviceFor('600519.SH', () => now, { accountId });
     const ctx = await buildTestContext({ clock: () => now, advices: [a, b] });
 
     const result = await deleteAdviceTool.execute({ ids: [a.id, 'adv-missing'] }, ctx);
@@ -23,7 +25,8 @@ describe('delete_advice tool', () => {
   });
 
   it('删除后 outcome 一并清理；全部未命中 → deleted 0', async () => {
-    const a = testAdviceFor('002594.SZ', () => now);
+    const probe = await buildTestContext({ clock: () => now, advices: [] });
+    const a = testAdviceFor('002594.SZ', () => now, { accountId: probe.user.defaultAccountId });
     const ctx = await buildTestContext({ clock: () => now, advices: [a] });
     await ctx.repos.advice.recordOutcome(a.id, {
       adviceId: a.id,

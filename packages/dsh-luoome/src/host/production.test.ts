@@ -77,7 +77,21 @@ const makeAdvice = (id: string): Advice => ({
   risks: ['大盘系统性下行风险'],
   disclaimers: [...STANDARD_DISCLAIMERS],
   sourceTool: 'production-fixture',
-  basedOn: { dataAsOf: T1 },
+  basedOn: {
+    dataAsOf: T1,
+    // 账户归属：`get_advice` / `list_advices` 按 `basedOn.strategy.accountId` 判定归属。
+    strategy: {
+      strategyId: 'production-fixture-strategy',
+      strategyVersionId: 'production-fixture-strategy:v1',
+      runId: 'production-fixture-run',
+      stockId: '600519.SH',
+      accountId: OWNER.accountId,
+      resultEvidence: [],
+      signalIds: [],
+      observationIds: [],
+      recommendationTrigger: 'run',
+    },
+  },
   validFrom: T1,
   validUntil: FAR_FUTURE,
   createdAt: T1,
