@@ -4,7 +4,17 @@ import { InvariantError } from '../error/index.js';
 import { DataProvenanceSchema } from './provenance.js';
 import { DeliveryStatusSchema } from './watch-trigger.js';
 
-export const ReportKindSchema = z.enum(['opening', 'closing', 'weekly', 'watchlist-facts']);
+export const ReportKindSchema = z.enum([
+  'opening',
+  'closing',
+  'weekly',
+  'watchlist-facts',
+  // M3-08 五类里原本没有 Report 生产者的三类（REQ-M3-08）：盘前简报、日复盘、风险。
+  // 加值是向后兼容的（旧行仍可解析），且都按单日报告处理（periodStart === periodEnd）。
+  'morning-brief',
+  'daily-review',
+  'risk',
+]);
 export type ReportKind = z.infer<typeof ReportKindSchema>;
 
 export const ReportStatusSchema = z.enum(['complete', 'partial']);
@@ -58,6 +68,13 @@ const TableBlockSchema = z.object({
   rows: z.array(z.record(z.string(), ReportValueSchema)),
 });
 
+/**
+ * 自由文本的来源。只有 `advice` 来源的文本会在渲染时按词面策略规范化；
+ * 报告自撰文本不带此标记——它命中行动词就是 bug，必须拒绝而不是被兜底改掉。
+ */
+export const ReportTextOriginSchema = z.enum(['advice']);
+export type ReportTextOrigin = z.infer<typeof ReportTextOriginSchema>;
+
 const ListBlockSchema = z.object({
   kind: z.literal('list'),
   items: z.array(
@@ -83,6 +100,8 @@ const ListBlockSchema = z.object({
           ])
           .optional(),
         entityId: z.string().optional(),
+        /** `detail` / `notificationSummary` 的来源；渲染时按来源决定是否规范化。 */
+        textOrigin: ReportTextOriginSchema.optional(),
       })
       .refine((item) => (item.entityKind === undefined) === (item.entityId === undefined), {
         message: 'entityKind and entityId must appear together',
@@ -94,6 +113,8 @@ const TextBlockSchema = z.object({
   kind: z.literal('text'),
   text: z.string().min(1),
   tone: z.enum(['factual', 'warning']).default('factual'),
+  /** 正文来源；`advice` 来源在渲染时规范化，自撰文本不得使用该标记。 */
+  textOrigin: ReportTextOriginSchema.optional(),
 });
 
 export const ReportBlockSchema = z.discriminatedUnion('kind', [
@@ -118,6 +139,20 @@ export const ReportMissingDimensionSchema = z.object({
   retryable: z.boolean(),
 });
 export type ReportMissingDimension = z.infer<typeof ReportMissingDimensionSchema>;
+
+/**
+ * 盘前简报的四段（REQ-M3-17），**顺序固定**。
+ *
+ * 与报告级六槽是并列关系而不是嵌套：六槽是「整份报告对外声明」（全部 kind 都有），
+ * 四段是「盘前简报的内部结构」（只有 `morning-brief` 强制）。
+ */
+export const MORNING_BRIEF_SECTION_KEYS = [
+  'account-overview',
+  'overnight-facts',
+  'existing-advice',
+  'watch-conditions',
+] as const;
+export type MorningBriefSectionKey = (typeof MORNING_BRIEF_SECTION_KEYS)[number];
 
 export const ReportSectionSchema = z.object({
   key: z.string().min(1),
@@ -217,6 +252,151 @@ const findAdviceDecisionField = (value: unknown): string | null => {
   return null;
 };
 
+/**
+ * 报告正文的行动词禁令（REQ-M3-08）。
+ *
+ * 报告是研究材料，不是下单指令；`买入/卖出/已建仓/下单` 出现在正文里会被读成动作。
+ * 键名守卫（`ADVICE_DECISION_FIELDS`）只查对象键，`{kind:'text', text:'建议买入'}` 能整体通过——
+ * 所以判定必须分两层，且只写一份：写回路径（`assertReportInvariants`）与每条渲染出口共用本函数。
+ *
+ * **交付物的自由文本规则（本文件的核心不变量）**：任何进入交付物的自由文本，都必须过同一套
+ * 词面策略——不管是产品文案、模型推理（`advice.reasoning.*`），还是将来的外部事实摘要
+ * （news / research 结论）。来源分两类，处置不同、不许混同：
+ * - **自撰文本**（无 `textOrigin`）：命中即拒绝——那是我们自己的 bug，改文案，不许被规范化兜底；
+ * - **外部来源文本**（`textOrigin: 'advice'` 等）：渲染时按 `DELIVERABLE_TEXT_NORMALIZATIONS`
+ *   规范化成人读立场词，原文留在结构化投影（canonical JSON 块）里，信息不丢。
+ * 新增任何外部自由文本来源时，先给它一个 `textOrigin`，再确认它进了本函数的扫描范围。
+ */
+export const FORBIDDEN_ACTION_WORDS = ['买入', '卖出', '已建仓', '下单'] as const;
+
+/**
+ * 交付物词面策略的**固定映射表**（不做模糊匹配、不做上下文推断）。
+ *
+ * 方法论（比修好某一处更重要）：**任何进入交付物的自由文本，都必须过同一套词面策略**——
+ * 不管是产品文案、模型推理，还是将来的外部事实摘要（news / research 结论）。
+ * 今天的触发点是 `advice.reasoning.premise`，明天可能是新闻摘要。
+ */
+export const DELIVERABLE_TEXT_NORMALIZATIONS = [
+  ['买入', '看多'],
+  ['卖出', '看空'],
+  ['已建仓', '已持有'],
+  ['下单', '委托'],
+] as const;
+
+/** 把行动词换成立场词：用于**外部来源**的自由文本在人读正文里的呈现。 */
+export const normalizeDeliverableText = (text: string): string =>
+  DELIVERABLE_TEXT_NORMALIZATIONS.reduce(
+    (current, [from, to]) => current.replaceAll(from, to),
+    text,
+  );
+
+/**
+ * 人读正文的取词口径：`advice` 来源规范化，自撰文本原样（自撰命中会先被守卫拒绝）。
+ * 所有渲染出口都调它，避免某一层「记得改」而另一层忘掉。
+ */
+export const reportDisplayText = (text: string, origin?: ReportTextOrigin): string =>
+  origin === 'advice' ? normalizeDeliverableText(text) : text;
+export type ForbiddenActionWord = (typeof FORBIDDEN_ACTION_WORDS)[number];
+
+/** 命中位置（字段路径）、命中的词、以及原文片段——报错要让用户能直接改。 */
+export interface ReportActionTextViolation {
+  readonly where: string;
+  readonly word: ForbiddenActionWord;
+  readonly snippet: string;
+}
+
+const SNIPPET_PADDING = 12;
+
+const snippetAround = (text: string, at: number, length: number): string => {
+  const start = Math.max(0, at - SNIPPET_PADDING);
+  const end = Math.min(text.length, at + length + SNIPPET_PADDING);
+  return `${start === 0 ? '' : '…'}${text.slice(start, end)}${end === text.length ? '' : '…'}`;
+};
+
+/**
+ * 文本层：扫每个 `text` 块的正文。`where` 是字段路径前缀，用于把违规点定位到段与块。
+ *
+ * 一个块只报第一处命中——报告正文的错误按块改，堆一串同词命中只会淹没重点。
+ */
+export const findReportActionTextViolations = (
+  blocks: readonly ReportBlock[],
+  where: string,
+): readonly ReportActionTextViolation[] => {
+  const violations: ReportActionTextViolation[] = [];
+  const check = (text: string, field: string): void => {
+    for (const word of FORBIDDEN_ACTION_WORDS) {
+      const at = text.indexOf(word);
+      if (at < 0) continue;
+      violations.push({ where: field, word, snippet: snippetAround(text, at, word.length) });
+      return;
+    }
+  };
+  blocks.forEach((block, index) => {
+    if (block.kind === 'text') {
+      // advice 来源的自由文本在渲染时规范化，原文留在结构化投影里；自撰文本没有这个豁免。
+      if (block.textOrigin !== 'advice') check(block.text, `${where}[${index}].text`);
+      return;
+    }
+    // 列表项的 title/detail/notificationSummary 都是报告正文的一部分：
+    // 立场描述写在 detail 里同样会被读成动作。
+    if (block.kind !== 'list') return;
+    block.items.forEach((item, itemIndex) => {
+      check(item.title, `${where}[${index}].items[${itemIndex}].title`);
+      if (item.textOrigin === 'advice') return;
+      if (item.detail !== undefined) {
+        check(item.detail, `${where}[${index}].items[${itemIndex}].detail`);
+      }
+      if (item.notificationSummary !== undefined) {
+        check(
+          item.notificationSummary,
+          `${where}[${index}].items[${itemIndex}].notificationSummary`,
+        );
+      }
+    });
+  });
+  return violations;
+};
+
+/**
+ * 报告 block 的共享守卫（两层：键名 + 文本）。写回路径与所有渲染出口都调它。
+ * 报错点名违规字段与原文片段，而不是只说「含禁用词」。
+ */
+export const assertReportBlocksPolicy = (blocks: readonly ReportBlock[], where: string): void => {
+  const decisionField = findAdviceDecisionField(blocks);
+  if (decisionField !== null) {
+    throw new InvariantError(`report block contains Advice decision field: ${decisionField}`);
+  }
+  const [violation] = findReportActionTextViolations(blocks, where);
+  if (violation === undefined) return;
+  throw new InvariantError(
+    `${violation.where} 含行动词「${violation.word}」：${violation.snippet}`,
+  );
+};
+
+/** 整份报告（全部段）过一遍共享守卫；渲染出口只需要这一句。 */
+export const assertReportTextPolicy = (report: Pick<Report, 'sections'>): void => {
+  for (const section of report.sections) {
+    assertReportBlocksPolicy(section.blocks, `sections[${section.key}].blocks`);
+  }
+};
+
+/**
+ * 报告面向的立场标签（REQ-M3-08）。
+ *
+ * 报告正文不写「买入/卖出」这类动作词，只写立场；同一个 `decision` 在面板/工具提示里仍用
+ * `adviceDecisionLabel`（买入/卖出）——两套词面向两种读者，信息不丢、词面合规。
+ */
+export const REPORT_STANCE_LABELS: Readonly<Record<string, string>> = {
+  buy: '看多',
+  sell: '看空',
+  hold: '观望',
+  watch: '观察',
+  avoid: '回避',
+};
+
+export const reportStanceLabel = (decision: string): string =>
+  REPORT_STANCE_LABELS[decision] ?? decision;
+
 export const assertReportInvariants = (report: Report): void => {
   if ((report.kind === 'watchlist-facts') !== (report.scope.kind === 'watchlist'))
     throw new InvariantError('watchlist facts kind and scope must appear together');
@@ -302,12 +482,17 @@ export const assertReportInvariants = (report: Report): void => {
   ) {
     throw new InvariantError('partial report requires at least one missing dimension');
   }
-  const decisionField = findAdviceDecisionField(
-    report.sections.flatMap((section) => section.blocks),
-  );
-  if (decisionField !== null) {
-    throw new InvariantError(`report block contains Advice decision field: ${decisionField}`);
+  if (report.kind === 'morning-brief') {
+    const keys = report.sections.map((section) => section.key);
+    const outOfOrder = MORNING_BRIEF_SECTION_KEYS.some((key, index) => keys[index] !== key);
+    if (outOfOrder || keys.length < MORNING_BRIEF_SECTION_KEYS.length) {
+      throw new InvariantError(
+        `morning-brief 四段缺失或顺序不符：期望 ${MORNING_BRIEF_SECTION_KEYS.join(' → ')}，实际 ${keys.join(' → ')}`,
+      );
+    }
   }
+  // 键名层 + 文本层共用同一份判定：写回路径与渲染出口不能各守一套（REQ-M3-08）。
+  assertReportTextPolicy(report);
 };
 
 export const assertReportDeliveryTransition = (

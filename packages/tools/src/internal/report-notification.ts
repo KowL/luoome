@@ -1,10 +1,12 @@
 import {
+  assertReportTextPolicy,
   notificationText,
   notificationTime,
   type Report,
   type ReportBlock,
   type ReportSection,
   type ReportValue,
+  reportDisplayText,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 
@@ -106,7 +108,10 @@ const sectionLines = (section: ReportSection): string[] => {
       ...adviceItems.slice(0, 2).map(
         (item) =>
           `**${notificationText(item.title, 30)}**\n${
-            item.notificationSummary
+            (item.notificationSummary === undefined
+              ? undefined
+              : reportDisplayText(item.notificationSummary, item.textOrigin)
+            )
               ?.split('\n')
               .filter((line) => !line.startsWith('目标仓位 '))
               .join('\n') ?? '请在应用中核对结论、反证、风险和有效期。'
@@ -137,7 +142,7 @@ const sectionLines = (section: ReportSection): string[] => {
   for (const block of section.blocks) {
     if (block.kind === 'metrics') output.push(...metricLines(block));
     if (block.kind === 'text') {
-      const text = notificationText(block.text, 150);
+      const text = notificationText(reportDisplayText(block.text, block.textOrigin), 150);
       if (text.length > 0) output.push(text);
     }
     if (block.kind === 'list') {
@@ -148,7 +153,7 @@ const sectionLines = (section: ReportSection): string[] => {
             return title.length > 0 ? `${title}：详情请在应用核对。` : '建议详情请在应用核对。';
           return section.key === 'market-pulse'
             ? title
-            : `${title}${item.detail === undefined ? '' : ` · ${notificationText(item.detail, 80)}`}`;
+            : `${title}${item.detail === undefined ? '' : ` · ${notificationText(reportDisplayText(item.detail, item.textOrigin), 80)}`}`;
         }),
       );
       if (block.items.length > 4) output.push(`其余 ${block.items.length - 4} 项见完整报告。`);
@@ -190,6 +195,8 @@ const gapLabels: Record<string, string> = {
 };
 
 export const renderReportNotification = (report: Report): string => {
+  // 飞书渠道是第二条渲染路径：不在这里复检，同一个报告会在两个渠道给出两个口径（REQ-M3-08）。
+  assertReportTextPolicy(report);
   const sections = report.sections.filter((section) => notificationSections.has(section.key));
   const gaps = [
     ...new Set(

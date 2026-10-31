@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertReportInvariants, type Report, ReportSchema, reportDisplayTitle } from './report.js';
+import {
+  assertReportInvariants,
+  MORNING_BRIEF_SECTION_KEYS,
+  REPORT_STANCE_LABELS,
+  type Report,
+  ReportSchema,
+  reportDisplayTitle,
+  reportStanceLabel,
+} from './report.js';
 
 const NOW = new Date('2026-07-29T10:00:00.000Z');
 const DATA_AS_OF = new Date('2026-07-29T08:00:00.000Z');
@@ -197,5 +205,98 @@ describe('Report', () => {
       ],
     });
     expect(() => assertReportInvariants(decisionTable)).toThrow(/Advice decision field/);
+  });
+});
+
+// REQ-M3-08：键名守卫只查键，正文里的行动词要单独一层——两层共用同一份判定。
+describe('REQ-M3-08 报告正文行动词禁令', () => {
+  const withText = (text: string): Report =>
+    makeReport({
+      sections: [
+        {
+          key: 'strategy-actions',
+          title: '策略行动',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text, tone: 'factual' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+    });
+
+  it('rejects each forbidden action word and names the field with the snippet', () => {
+    for (const word of ['买入', '卖出', '已建仓', '下单']) {
+      expect(() => assertReportInvariants(withText(`今日计划：${word} 600519`)), word).toThrow(
+        new RegExp(`sections\\[strategy-actions\\]\\.blocks\\[0\\]\\.text 含行动词「${word}」`),
+      );
+    }
+  });
+
+  // 这条钉住「键名守卫 ≠ 文本守卫」：block 的键只有 kind/text/tone，键名层永远看不到正文。
+  it('catches advice phrasing that the key-name guard alone lets through', () => {
+    expect(() => assertReportInvariants(withText('建议买入，止损 9.8'))).toThrow(
+      /含行动词「买入」/,
+    );
+    expect(() => assertReportInvariants(withText('建议买入，止损 9.8'))).toThrow(
+      /建议买入，止损 9\.8/,
+    );
+  });
+
+  it('keeps reports whose text carries no action word', () => {
+    expect(() => assertReportInvariants(withText('今日以观察为主，等待量能确认。'))).not.toThrow();
+  });
+
+  // 报告面的立场标签必须自身合规：把「买入」写回标签，正文立刻违规（mutation 钉住这一点）。
+  it('uses report-facing stance labels that never contain action words', () => {
+    expect(REPORT_STANCE_LABELS).toEqual({
+      buy: '看多',
+      sell: '看空',
+      hold: '观望',
+      watch: '观察',
+      avoid: '回避',
+    });
+    for (const label of Object.values(REPORT_STANCE_LABELS)) {
+      expect(label).not.toMatch(/买入|卖出|已建仓|下单/);
+    }
+    expect(reportStanceLabel('buy')).toBe('看多');
+    expect(reportStanceLabel('sell')).toBe('看空');
+    // 未登记的 decision 原样透出，不静默替换成某个立场。
+    expect(reportStanceLabel('unknown')).toBe('unknown');
+  });
+});
+
+// REQ-M3-17：盘前简报四段，顺序固定；缺段或错序都要红。
+describe('REQ-M3-17 盘前简报四段', () => {
+  const brief = (keys: readonly string[]): Report =>
+    makeReport({
+      kind: 'morning-brief',
+      sections: keys.map((key) => ({
+        key,
+        title: key,
+        required: true,
+        status: 'complete' as const,
+        blocks: [{ kind: 'text' as const, text: '观察条件见下。', tone: 'factual' as const }],
+        evidenceIds: [],
+        missingDimensions: [],
+      })),
+    });
+
+  it('accepts the four sections in the fixed order', () => {
+    expect(() => assertReportInvariants(brief(MORNING_BRIEF_SECTION_KEYS))).not.toThrow();
+  });
+
+  it('rejects a missing section', () => {
+    expect(() =>
+      assertReportInvariants(brief(['account-overview', 'overnight-facts', 'existing-advice'])),
+    ).toThrow(/morning-brief 四段缺失或顺序不符/);
+  });
+
+  it('rejects out-of-order sections', () => {
+    expect(() =>
+      assertReportInvariants(
+        brief(['account-overview', 'existing-advice', 'overnight-facts', 'watch-conditions']),
+      ),
+    ).toThrow(/morning-brief 四段缺失或顺序不符/);
   });
 });

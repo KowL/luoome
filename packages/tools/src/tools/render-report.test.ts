@@ -302,3 +302,175 @@ describe('手机报告摘要', () => {
     },
   );
 });
+
+// REQ-M3-08：报告是研究材料，正文不得出现行动词。两条渲染路径各守一遍——只守一条必漏。
+describe('REQ-M3-08 行动词禁令', () => {
+  const reportWithText = (text: string): Report => {
+    const base = reportFixture();
+    return {
+      ...base,
+      status: 'complete',
+      missingDimensions: [],
+      sections: base.sections.map((section) => ({
+        ...section,
+        status: 'complete' as const,
+        missingDimensions: [],
+        blocks: [{ kind: 'text' as const, text, tone: 'factual' as const }],
+      })),
+    };
+  };
+
+  /**
+   * 存量违规行：写回路径（`assertReportInvariants`）现在会拒绝它，所以仓储里只可能存在
+   * 守卫落地**之前**落库的行。渲染层必须自己再守一遍，否则这些行会原样渲染出去。
+   */
+  const ctxWithLegacyReport = async (report: Report) => {
+    const ctx = await buildTestContext({ clock: () => now });
+    return {
+      ...ctx,
+      repos: {
+        ...ctx.repos,
+        report: {
+          ...ctx.repos.report,
+          findById: async (id: string) => (id === report.id ? report : null),
+        },
+      },
+    } as typeof ctx;
+  };
+
+  it('rejects forbidden action language on the markdown path and names the field', async () => {
+    for (const word of ['买入', '卖出', '已建仓', '下单']) {
+      const report = reportWithText(`今日计划：${word} 600519`);
+      const ctx = await ctxWithLegacyReport(report);
+      const result = await renderReportTool.execute(
+        { reportId: report.id, format: 'markdown' },
+        ctx,
+      );
+      expect(result.ok, word).toBe(false);
+      if (result.ok) continue;
+      expect(result.error.kind).toBe('invariant_violation');
+      const message = 'message' in result.error ? result.error.message : '';
+      expect(message).toContain(`含行动词「${word}」`);
+      expect(message).toContain('sections[market-pulse].blocks[0].text');
+    }
+  });
+
+  it('rejects forbidden action language on the notification path too', async () => {
+    for (const word of ['买入', '卖出', '已建仓', '下单']) {
+      const report = reportWithText(`盘前提示：${word} 600519`);
+      const ctx = await ctxWithLegacyReport(report);
+      const result = await renderReportTool.execute(
+        { reportId: report.id, format: 'notification' },
+        ctx,
+      );
+      expect(result.ok, word).toBe(false);
+      if (result.ok) continue;
+      expect(result.error.kind).toBe('invariant_violation');
+      expect('message' in result.error ? result.error.message : '').toContain(
+        `含行动词「${word}」`,
+      );
+    }
+  });
+
+  // 正文里没有行动词时三条格式都必须照常渲染（守卫不能误伤）。
+  it('keeps rendering reports whose text has no action language', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const report = reportWithText('今日以观察为主，等待量能确认。');
+    await ctx.repos.report.upsertForPeriod(report);
+    for (const format of ['markdown', 'plain-text', 'notification'] as const) {
+      const result = await renderReportTool.execute({ reportId: report.id, format }, ctx);
+      expect(result.ok, format).toBe(true);
+    }
+  });
+});
+
+// D：外部来源（advice）的自由文本在渲染时规范化；报告自撰文本命中则拒绝。两条不许混同。
+describe('REQ-M3-08 交付物词面策略分层', () => {
+  const layeredReport = (textOrigin?: 'advice'): Report => {
+    const base = reportFixture();
+    return {
+      ...base,
+      status: 'complete',
+      missingDimensions: [],
+      sections: [
+        {
+          key: 'market-pulse',
+          title: '市场脉搏',
+          required: true,
+          status: 'complete',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                {
+                  title: '测试标的',
+                  detail: '反证：值得买入；风险：已建仓后卖出',
+                  ...(textOrigin === undefined ? {} : { textOrigin }),
+                },
+              ],
+            },
+          ],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+        {
+          key: 'strategy-actions',
+          title: '策略行动',
+          required: true,
+          status: 'complete',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                {
+                  title: '贵州茅台',
+                  notificationSummary: '**考虑买入** · 已建仓后下单',
+                  entityKind: 'advice' as const,
+                  entityId: 'advice-1',
+                  ...(textOrigin === undefined ? {} : { textOrigin }),
+                },
+              ],
+            },
+          ],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+    };
+  };
+
+  it('normalizes advice-origin list text on every render path', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const report = layeredReport('advice');
+    await ctx.repos.report.upsertForPeriod(report);
+    for (const format of ['markdown', 'plain-text', 'notification'] as const) {
+      const result = await renderReportTool.execute({ reportId: report.id, format }, ctx);
+      expect(result.ok, format).toBe(true);
+      if (!result.ok) continue;
+      expect(result.data.content, format).not.toMatch(/买入|卖出|已建仓|下单/);
+    }
+  });
+
+  it('rejects the same text when it is report-authored (no origin marker)', async () => {
+    const report = layeredReport();
+    const ctx = await buildTestContext({ clock: () => now });
+    const stub = {
+      ...ctx,
+      repos: {
+        ...ctx.repos,
+        report: {
+          ...ctx.repos.report,
+          findById: async (id: string) => (id === report.id ? report : null),
+        },
+      },
+    } as typeof ctx;
+    const result = await renderReportTool.execute(
+      { reportId: report.id, format: 'markdown' },
+      stub,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('invariant_violation');
+    expect('message' in result.error ? result.error.message : '').toContain('items[0].detail');
+  });
+});

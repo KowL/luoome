@@ -334,7 +334,7 @@ const seedStrategyAdvice = async (ctx: ToolContext, date: string): Promise<void>
     targetPrice: money(12),
     stopLoss: money(9.8),
     reasoning: {
-      premise: '策略信号触发且量价配合，值得买入。',
+      premise: '策略信号触发且量价配合，立场偏多。',
       evidence: ['fixture evidence'],
       counterEvidence: ['fixture counter'],
     },
@@ -1394,13 +1394,20 @@ describe('closing-report workflow', () => {
       }),
     ]);
     const item = list?.kind === 'list' ? list.items[0] : undefined;
-    expect(item?.detail).toContain('买入');
+    expect(item?.detail).toContain('看多');
     expect(item?.detail).toContain('买点 10.5');
     expect(item?.detail).toContain('卖点 12');
     expect(item?.detail).toContain('止损 9.8');
-    expect(item?.detail).toContain('策略信号触发且量价配合');
+    // 报告不再嵌模型推理原文（premise）：原文在 get_advice 可查，进交付物只会带动作词。
+    expect(item?.detail).not.toContain('策略信号触发且量价配合');
+    expect(item?.detail).toContain('看多');
+    // detail 是人读正文，已按词面策略规范化。
+    expect(JSON.stringify(item?.detail)).not.toMatch(/买入|卖出|已建仓|下单/);
+    // 结构化投影保留 advice 原文（渲染时才规范化），信息不丢。
+    expect(item?.notificationSummary).toContain('考虑买入');
+    expect(item?.textOrigin).toBe('advice');
     const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('AI 买入判断');
+    expect(text?.kind === 'text' ? text.text : '').toContain('AI 看多判断');
     const serialized = JSON.stringify(section?.blocks);
     for (const field of [
       '"decision"',

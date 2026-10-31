@@ -1,8 +1,10 @@
 import {
+  assertReportTextPolicy,
   notificationTime,
   type Report,
   type ReportBlock,
   type ReportValue,
+  reportDisplayText,
   reportDisplayTitle,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -45,7 +47,10 @@ const markdownCell = (value: ReportValue): string =>
   displayValue(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
 
 const renderBlockMarkdown = (block: ReportBlock): string[] => {
-  if (block.kind === 'text') return [block.tone === 'warning' ? `> ⚠️ ${block.text}` : block.text];
+  if (block.kind === 'text') {
+    const text = reportDisplayText(block.text, block.textOrigin);
+    return [block.tone === 'warning' ? `> ⚠️ ${text}` : text];
+  }
   if (block.kind === 'metrics') {
     const available = block.items.filter(
       (item) => item.value !== null || item.displayValue !== undefined,
@@ -78,7 +83,9 @@ const renderBlockMarkdown = (block: ReportBlock): string[] => {
         item.entityKind === undefined
           ? ''
           : `（${ENTITY_LABELS[item.entityKind] ?? item.entityKind}:${item.entityId ?? ''}）`;
-      return `- ${item.title}${entity}${item.detail === undefined ? '' : ` — ${item.detail}`}`;
+      const detail =
+        item.detail === undefined ? '' : reportDisplayText(item.detail, item.textOrigin);
+      return `- ${item.title}${entity}${detail === '' ? '' : ` — ${detail}`}`;
     });
   }
   if (block.rows.length === 0) return [];
@@ -103,6 +110,9 @@ const renderBlockMarkdown = (block: ReportBlock): string[] => {
 };
 
 const renderMarkdown = (report: Report): string => {
+  // 报告是研究材料，正文不得出现行动词（REQ-M3-08）。与 notification 路径共用同一份判定，
+  // 只守一条渲染路径必然漏另一条。
+  assertReportTextPolicy(report);
   const lines = [
     `# ${reportDisplayTitle(report)}`,
     '',

@@ -34,6 +34,7 @@ export * from './entity/portfolio-performance.js';
 export * from './entity/provenance.js';
 export * from './entity/quote.js';
 export * from './entity/report.js';
+export * from './entity/report-document.js';
 export * from './entity/research-brief.js';
 export * from './entity/research-embedding.js';
 export * from './entity/research-hypothesis.js';

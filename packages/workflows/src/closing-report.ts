@@ -11,6 +11,7 @@ import {
   type ReportBlock,
   ReportSchema,
   AccountReportScopeSchema as ReportScopeSchema,
+  reportStanceLabel,
   StrategyRecommendationBatchSummarySchema,
   type StrategySchedule,
   type ToolResult,
@@ -680,7 +681,8 @@ const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) 
   };
 };
 
-const adviceDecisionLabel = (decision: string): string => {
+// 非报告面（面板/工具提示）的动作标签；报告正文用 reportStanceLabel 的立场词。
+export const adviceDecisionLabel = (decision: string): string => {
   switch (decision) {
     case 'buy':
       return '买入';
@@ -985,7 +987,6 @@ const strategyActionsSection = async (
     if (advice.targetPrice !== undefined) pricePlan.push(`卖点 ${advice.targetPrice}`);
     if (advice.stopLoss !== undefined) pricePlan.push(`止损 ${advice.stopLoss}`);
     if (pricePlan.length > 0) parts.push(pricePlan.join(' / '));
-    parts.push(advice.reasoning.premise);
     parts.push(`反证：${advice.reasoning.counterEvidence.join('；') || '历史建议未记录'}`);
     if (advice.risks.length > 0) parts.push(`风险：${advice.risks.join('；')}`);
     parts.push(
@@ -996,10 +997,12 @@ const strategyActionsSection = async (
   };
   const adviceItem = (advice: (typeof dayAdvices)[number]) => ({
     title: advice.stockName ?? advice.subjectId,
-    detail: `${adviceDecisionLabel(advice.decision)} · ${adviceActionDetail(advice)}`,
+    detail: `${reportStanceLabel(advice.decision)} · ${adviceActionDetail(advice)}`,
     notificationSummary: adviceNotificationSummary(advice),
     entityKind: 'advice' as const,
     entityId: advice.id,
+    // 反证/风险/免责/通知摘要都是建议自由文本（模型生成）：渲染时规范化成人读立场词。
+    textOrigin: 'advice' as const,
   });
   const evidence = [
     localEvidence('strategy-actions:runs', 'strategy-actions.runs', now, 'tool:list_strategy_runs'),
@@ -1031,8 +1034,8 @@ const strategyActionsSection = async (
         buyAdvices.length === 0
           ? dayAdvices.length === 0
             ? `${date} 今日尚无策略建议；未分析不代表不存在机会。`
-            : `${date} 已有分析中暂无买入判断。`
-          : `AI 买入判断（${buyAdvices.length}，请核对条件与风险）：`,
+            : `${date} 已有分析中暂无看多判断。`
+          : `AI 看多判断（${buyAdvices.length}，请核对条件与风险）：`,
     },
   ];
   if (buyAdvices.length > 0) {
