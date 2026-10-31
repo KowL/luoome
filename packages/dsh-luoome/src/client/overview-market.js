@@ -1,6 +1,7 @@
 import { createElement as h, useState } from 'react';
 import { bigMoney, int, money, points, ratio, signedMoney, toneOf } from './format.js';
 import { Empty, Kpi, Pill } from './primitives.js';
+import { holdingPriceView } from './projection.js';
 
 export function AccountSummary({ facts }) {
   return h(
@@ -96,6 +97,8 @@ export function MarketTable({ quotes, holdings, triggers, onStock }) {
           null,
           sorted.map((item) => {
             const quote = item.quote;
+            // 缺价判据只看服务端 priceStatus（REQ-M3-09）：缺价时渲染原因，绝不渲染 0。
+            const priceView = holdingPriceView(item);
             const hit = triggers?.triggers?.find((trigger) => trigger.stockId === item.stockId);
             return h(
               'tr',
@@ -125,12 +128,25 @@ export function MarketTable({ quotes, holdings, triggers, onStock }) {
                       money(item.holding.avgCost),
                       h('small', null, `${int(item.holding.quantity)} 股`),
                     ),
-                    h('td', { key: 'value' }, money(item.marketValue)),
                     h(
                       'td',
-                      { key: 'pnl', className: `luo-${toneOf(item.pnl)}` },
-                      signedMoney(item.pnl),
-                      h('small', null, ratio(item.pnlPct)),
+                      { key: 'value' },
+                      priceView.canShowNumbers
+                        ? money(item.marketValue)
+                        : priceView.unavailableText,
+                    ),
+                    h(
+                      'td',
+                      {
+                        key: 'pnl',
+                        className: `luo-${priceView.canShowNumbers ? toneOf(item.pnl) : 'flat'}`,
+                      },
+                      priceView.canShowNumbers ? signedMoney(item.pnl) : priceView.unavailableText,
+                      h(
+                        'small',
+                        null,
+                        priceView.canShowNumbers ? ratio(item.pnlPct) : priceView.unavailableText,
+                      ),
                     ),
                     h(
                       'td',

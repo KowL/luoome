@@ -564,3 +564,103 @@ describe('REQ-M3-09 事实缺口投影（client 侧唯一实现，判定全在�
     expect(mapped.marketObservation).toMatchObject({ scope: 'historical' });
   });
 });
+
+import { money, ratio, signedMoney } from './format.js';
+// REQ-M3-09 S3 client 侧：缺价渲染「缺价」，绝不渲染 0；真实 0 盈亏仍显示 0.00%。
+import { holdingPriceView, holdingsTotalsView } from './projection.js';
+
+const renderHolding = (item) => {
+  const view = holdingPriceView(item);
+  if (!view.canShowNumbers) {
+    return { price: view.unavailableText, pnl: view.unavailableText, pnlPct: view.unavailableText };
+  }
+  return {
+    price: money(item.currentPrice),
+    pnl: signedMoney(item.pnl),
+    pnlPct: ratio(item.pnlPct),
+  };
+};
+
+describe('S3 缺价渲染', () => {
+  it('renders the reason instead of numbers when the server says unpriced', () => {
+    const rendered = renderHolding({
+      priceStatus: 'unpriced',
+      priceUnavailableReason: '缺价：该标的没有可用行情，成本价不代表现价',
+    });
+    const text = JSON.stringify(rendered);
+    expect(text).not.toContain('0.00%');
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('NaN');
+    expect(rendered.pnlPct).toContain('缺价');
+  });
+
+  it('still renders a genuine zero when the server says priced', () => {
+    const rendered = renderHolding({
+      priceStatus: 'priced',
+      currentPrice: 10,
+      marketValue: 1000,
+      pnl: 0,
+      pnlPct: 0,
+    });
+    expect(rendered.pnlPct).toBe('0.00%');
+    expect(rendered.pnl).toBe('0.00');
+  });
+
+  it('never falls back to a zero when the field is missing but no status is given', () => {
+    // 服务端没给 priceStatus（老载荷）时同样不许编数字。
+    const view = holdingPriceView({});
+    expect(view.canShowNumbers).toBe(false);
+  });
+
+  it('surfaces the unpriced count on the summary layer', () => {
+    const view = holdingsTotalsView({ unpricedCount: 2 });
+    expect(view.partiallyUnpriced).toBe(true);
+    expect(view.note).toContain('含缺价持仓（2）');
+    expect(view.canShowTotals).toBe(false);
+    const ok = holdingsTotalsView({ unpricedCount: 0, totalValue: 1000, totalPnL: 0 });
+    expect(ok.note).toBeNull();
+    expect(ok.canShowTotals).toBe(true);
+  });
+});
+
+// 静态守卫（S3）：client 不许把缺席的盈亏字段补成 0。
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+describe('S3 静态守卫：缺席字段不得被补成 0', () => {
+  const root = dirname(fileURLToPath(import.meta.url));
+  const files = readdirSync(root).filter(
+    (name) => name.endsWith('.js') && !name.endsWith('.test.js'),
+  );
+
+  it('client 里没有对持仓盈亏字段的 `?? 0` / `|| 0` 兜底', () => {
+    const offenders = [];
+    for (const name of files) {
+      const text = readFileSync(join(root, name), 'utf8');
+      for (const pattern of [
+        /(pnlPct|todayPnlPct|currentPrice|marketValue|totalPnL|totalPnLPct|totalValue)\s*\?\?\s*0\b/g,
+        /(pnlPct|todayPnlPct|currentPrice|marketValue|totalPnL|totalPnLPct|totalValue)\s*\|\|\s*0\b/g,
+      ]) {
+        for (const match of text.matchAll(pattern)) {
+          offenders.push(`${name}: ${match[0]}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('渲染盈亏的组件都过 holdingPriceView 判据', () => {
+    const withPnl = files.filter((name) => {
+      const text = readFileSync(join(root, name), 'utf8');
+      return /ratio\(item\.pnlPct\)|signedMoney\(item\.pnl\)/.test(text);
+    });
+    expect(withPnl.length).toBeGreaterThan(0);
+    for (const name of withPnl) {
+      const text = readFileSync(join(root, name), 'utf8');
+      expect(text, name).toContain('holdingPriceView');
+      // 直接渲染（不经过 canShowNumbers）就会把缺价渲染成 0.00%。
+      expect(text, name).not.toMatch(/(?<!canShowNumbers \? )ratio\(item\.pnlPct\)/);
+    }
+  });
+});

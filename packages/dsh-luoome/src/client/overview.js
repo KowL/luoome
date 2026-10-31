@@ -26,6 +26,7 @@ import {
   SkeletonLines,
   Stat,
 } from './primitives.js';
+import { holdingPriceView } from './projection.js';
 import { StockDetail } from './stock.js';
 
 const SESSION_TONE = {
@@ -264,7 +265,9 @@ export const HoldingsTable = ({ holdings, loading, error, actions }) => {
           null,
           rows.map((item) => {
             const holding = item.holding ?? {};
-            const pnlTone = toneOf(item.pnl);
+            // 缺价判据只看服务端 priceStatus（REQ-M3-09）：缺价时渲染原因，绝不渲染 0。
+            const priceView = holdingPriceView(item);
+            const pnlTone = priceView.canShowNumbers ? toneOf(item.pnl) : 'flat';
             const todayTone = toneOf(item.todayPnl);
             return h(
               'tr',
@@ -277,16 +280,28 @@ export const HoldingsTable = ({ holdings, loading, error, actions }) => {
               ),
               h('td', null, int(holding.quantity)),
               h('td', null, money(holding.avgCost)),
-              h('td', null, money(item.currentPrice)),
-              h('td', null, money(item.marketValue)),
+              h(
+                'td',
+                null,
+                priceView.canShowNumbers ? money(item.currentPrice) : priceView.unavailableText,
+              ),
+              h(
+                'td',
+                null,
+                priceView.canShowNumbers ? money(item.marketValue) : priceView.unavailableText,
+              ),
               h(
                 'td',
                 { className: `luo-${pnlTone}` },
-                h('span', { className: 'luo-strong' }, signedMoney(item.pnl)),
+                h(
+                  'span',
+                  { className: 'luo-strong' },
+                  priceView.canShowNumbers ? signedMoney(item.pnl) : priceView.unavailableText,
+                ),
                 h(
                   'span',
                   { className: 'luo-fine', style: { display: 'block' } },
-                  ratio(item.pnlPct),
+                  priceView.canShowNumbers ? ratio(item.pnlPct) : priceView.unavailableText,
                 ),
               ),
               h(

@@ -490,3 +490,32 @@ export const marketObservationOf = (state) => {
     tone: value.scope === 'current' ? 'quiet' : 'warn',
   };
 };
+
+/**
+ * 持仓盈亏的展示投影（REQ-M3-09 / S3 的 client 侧）。
+ *
+ * 判据**只用服务端给的 `priceStatus`**，不在 client 里推断缺不缺价
+ * （`currentPrice === undefined` 之类会把「服务端字段改名」和「真的缺价」混为一谈）。
+ * 缺价时不产出任何数字：S3 的意义就是不许拿 0 顶替缺席值，渲染层同样要守住。
+ */
+export const holdingPriceView = (item) => {
+  const unpriced = item?.priceStatus === 'unpriced';
+  return {
+    unpriced,
+    /** 缺价时的展示文案；有价时为 null（由各渲染点照旧格式化数字）。 */
+    unavailableText: unpriced ? (item?.priceUnavailableReason ?? '缺价') : null,
+    /** 是否允许渲染数字字段（缺价时一律 false）。 */
+    canShowNumbers: item?.priceStatus === 'priced',
+  };
+};
+
+/** 汇总层：任一条缺价 → 合计缺席，展示「含缺价持仓（N）」而不是 0。 */
+export const holdingsTotalsView = (summary) => {
+  const unpricedCount = Number.isInteger(summary?.unpricedCount) ? summary.unpricedCount : 0;
+  return {
+    unpricedCount,
+    partiallyUnpriced: unpricedCount > 0,
+    note: unpricedCount > 0 ? `含缺价持仓（${unpricedCount}）` : null,
+    canShowTotals: unpricedCount === 0 && summary?.totalValue !== undefined,
+  };
+};
