@@ -1,4 +1,5 @@
 import {
+  ADVICE_SEGMENTS,
   assertReportTextPolicy,
   notificationText,
   notificationTime,
@@ -8,6 +9,7 @@ import {
   type ReportValue,
   reportDisplayText,
   STANDARD_DISCLAIMERS,
+  segmentLabel,
 } from '@luoome/core';
 
 const number = (value: number): string =>
@@ -114,7 +116,9 @@ const sectionLines = (section: ReportSection): string[] => {
             )
               ?.split('\n')
               .filter((line) => !line.startsWith('目标仓位 '))
-              .join('\n') ?? '请在应用中核对结论、反证、风险和有效期。'
+              .join('\n') ??
+            // 兜底文案由 `ADVICE_SEGMENTS` 生成：**段名与标签同源**，措辞（「请在应用中核对」）是通知侧自己的。
+            `请在应用中核对${ADVICE_SEGMENTS.map(segmentLabel).join('、')}。`
           }`,
       ),
       ...(adviceItems.length > 2 ? [`另有 ${adviceItems.length - 2} 条建议，见完整报告。`] : []),

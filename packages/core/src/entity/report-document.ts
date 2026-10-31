@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-
 import { InvariantError } from '../error/index.js';
+import { ADVICE_SEGMENTS, type AdviceSegment, missingAdviceSegments } from './advice-card.js';
 import {
   assertReportBlocksPolicy,
   blockHasFactualFields,
@@ -340,6 +340,27 @@ export const parseReportDocument = (content: string): ReportDocument => {
  * 六槽**不许给默认值**：Report 里没有这些段时，文档生成直接失败并点名缺哪个槽——
  * 用默认值填上等于废掉「缺段即红」这条验收。
  */
+/**
+ * 报告级六槽 = **五段 + `dataAsOf`**。关系用代码表达，不靠注释：
+ * 组合自 `ADVICE_SEGMENTS`，顺序也继承它（前 5 个恒为五段，第 6 个恒为 `dataAsOf`）。
+ *
+ * **六不是五**：只给五槽会让报告缺观测时点；`dataAsOf` 是报告作为交付物的额外要求。
+ */
+export const REPORT_ENVELOPE_SLOTS = [...ADVICE_SEGMENTS, 'dataAsOf'] as const;
+export type ReportEnvelopeSlot = (typeof REPORT_ENVELOPE_SLOTS)[number];
+export const ReportEnvelopeSlotSchema = z.enum(REPORT_ENVELOPE_SLOTS);
+
+/**
+ * 五段在 `Report.sections[].key` 里对应的段键。
+ *
+ * **这些键不是 `ReportDocument.envelope` 的 JSON 字段名，也不进落盘 JSON**：
+ * 它们是 workflow 组装 `Report` 时写出的 section key（`envelopeSections()` / `morning-brief.ts`），
+ * 只有「把一条已落库的 `Report` 重新渲染成文档」时才会被读到。
+ * 所以改这些键**不会**让已落盘的报告文件解析失败——但仍**不改**：省一次迁移与别名兼容。
+ *
+ * 仓里曾有三份**逐字相同**的副本（本文件、`workflows/internal/report-envelope.ts`、
+ * `workflows/morning-brief.ts`）；现在只有这一份，另两处 import 它。
+ */
 export const REPORT_ENVELOPE_SECTION_KEYS = {
   conclusion: 'envelope-conclusion',
   counterEvidence: 'envelope-counter-evidence',
@@ -377,6 +398,25 @@ const listTexts = (report: Report, slot: keyof typeof REPORT_ENVELOPE_SECTION_KE
  * `slot` 保持 undefined。
  */
 export const reportDocumentFromReport = (report: Report): ReportDocument => {
+  /**
+   * 缺槽判据与卡片**同一份**（`missingAdviceSegments`）：这里先把「哪些槽还缺」算出来，
+   * 缺任何一个就抛——抛的第一个缺槽与卡片的 `missing[0]` 恒等。
+   * 失败形态不同（这里抛 `InvariantError`，卡片返回 `blocked`），判据只有一份。
+   */
+  const presentSlots: Partial<Record<AdviceSegment, boolean>> = {};
+  for (const segment of ADVICE_SEGMENTS) {
+    presentSlots[segment] = report.sections.some(
+      (section) => section.key === REPORT_ENVELOPE_SECTION_KEYS[segment],
+    );
+  }
+  const missingSlots = missingAdviceSegments(presentSlots);
+  const first = missingSlots[0];
+  if (first !== undefined) {
+    throw new InvariantError(
+      `报告缺少 envelope 槽「${first}」：需要 section「${REPORT_ENVELOPE_SECTION_KEYS[first]}」；不给默认值` +
+        (missingSlots.length > 1 ? `（同时缺 ${missingSlots.slice(1).join('、')}）` : ''),
+    );
+  }
   const conclusionSection = envelopeSection(report, 'conclusion');
   const conclusion = conclusionSection.blocks.find((block) => block.kind === 'text');
   if (conclusion === undefined || conclusion.kind !== 'text') {

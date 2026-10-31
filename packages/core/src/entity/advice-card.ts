@@ -15,16 +15,31 @@ import { STANDARD_DISCLAIMERS } from './advice.js';
  * 否则用户会以为「没有这条建议」。
  */
 
-export const ADVICE_CARD_SEGMENTS = [
+export const ADVICE_SEGMENTS = [
   'conclusion',
   'counterEvidence',
   'risks',
   'validity',
   'disclaimer',
 ] as const;
-export type AdviceCardSegment = (typeof ADVICE_CARD_SEGMENTS)[number];
+export type AdviceSegment = (typeof ADVICE_SEGMENTS)[number];
 
-export const AdviceCardSegmentSchema = z.enum(ADVICE_CARD_SEGMENTS);
+/**
+ * **兼容别名**，主名是 {@link ADVICE_SEGMENTS}（同一个数组引用，不是第二份内容）。
+ *
+ * 保留它只是为了不动仓里已有的引用点（通知兜底文案、卡片测试、client 投影）；
+ * 新代码一律用 `ADVICE_SEGMENTS`。两者恒等由测试静态断言，
+ * 免得将来有人把它们改成两份不一样的内容。
+ */
+export const ADVICE_CARD_SEGMENTS = ADVICE_SEGMENTS;
+
+/** 兼容别名：`AdviceCardSegment` 只是 `AdviceSegment` 的旧名。 */
+export type AdviceCardSegment = AdviceSegment;
+
+export const AdviceSegmentSchema = z.enum(ADVICE_SEGMENTS);
+
+/** 兼容别名，主名 {@link AdviceSegmentSchema}。 */
+export const AdviceCardSegmentSchema = AdviceSegmentSchema;
 
 const AdviceCardValiditySchema = z
   .object({
@@ -108,17 +123,16 @@ export const renderAdviceCard = (advice: AdviceCardSource, now: Date): AdviceCar
   const disclaimer =
     advice.disclaimers.length > 0 ? [...advice.disclaimers] : [...STANDARD_DISCLAIMERS];
 
-  const missing: AdviceCardSegment[] = [];
-  const available: AdviceCardSegment[] = [];
-  const record = (segment: AdviceCardSegment, present: boolean): void => {
-    if (present) available.push(segment);
-    else missing.push(segment);
+  // 判据只有一份：`missingAdviceSegments`（报告文档侧也用它）。
+  const present: Partial<Record<AdviceSegment, boolean>> = {
+    conclusion: conclusion !== undefined,
+    counterEvidence: counterEvidence.length > 0,
+    risks: risks.length > 0,
+    validity: validityValid,
+    disclaimer: disclaimer.length > 0,
   };
-  record('conclusion', conclusion !== undefined);
-  record('counterEvidence', counterEvidence.length > 0);
-  record('risks', risks.length > 0);
-  record('validity', validityValid);
-  record('disclaimer', disclaimer.length > 0);
+  const missing = missingAdviceSegments(present);
+  const available: AdviceSegment[] = ADVICE_SEGMENTS.filter((segment) => present[segment] === true);
 
   if (missing.length > 0)
     return {
@@ -144,7 +158,19 @@ export const renderAdviceCard = (advice: AdviceCardSource, now: Date): AdviceCar
   };
 };
 
-const SEGMENT_LABELS: Readonly<Record<AdviceCardSegment, string>> = {
+/**
+ * **「哪些段算缺」的唯一判据**（U2/U3 收口）。
+ *
+ * 卡片与报告文档的**失败形态不同**（卡片返回 `blocked + missing[]`，文档抛 `InvariantError`），
+ * 但「缺段」这件事只有这一份判定。两边都调它，不许各写一套。
+ *
+ * 入参是「已具备」的段集合，输出**恒按 `ADVICE_SEGMENTS` 顺序**，便于逐条断言。
+ */
+export const missingAdviceSegments = (
+  present: Partial<Record<AdviceSegment, boolean>>,
+): AdviceSegment[] => ADVICE_SEGMENTS.filter((segment) => present[segment] !== true);
+
+const SEGMENT_LABELS: Readonly<Record<AdviceSegment, string>> = {
   conclusion: '结论',
   counterEvidence: '反证',
   risks: '风险',
@@ -152,4 +178,4 @@ const SEGMENT_LABELS: Readonly<Record<AdviceCardSegment, string>> = {
   disclaimer: '免责声明',
 };
 
-export const segmentLabel = (segment: AdviceCardSegment): string => SEGMENT_LABELS[segment];
+export const segmentLabel = (segment: AdviceSegment): string => SEGMENT_LABELS[segment];

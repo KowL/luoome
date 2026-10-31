@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { STANDARD_DISCLAIMERS } from './advice.js';
 import {
   ADVICE_CARD_SEGMENTS,
+  ADVICE_SEGMENTS,
   AdviceCardSchema,
   type AdviceCardSource,
+  missingAdviceSegments,
   renderAdviceCard,
 } from './advice-card.js';
+import { REPORT_ENVELOPE_SLOTS } from './report-document.js';
 
 const NOW = new Date('2026-10-31T06:00:00.000Z');
 
@@ -134,5 +137,43 @@ describe('B 建议卡片五段：唯一组装实现', () => {
   it('schema 是 strict：多出未声明键直接报错（Zod 默认会静默 strip）', () => {
     const card = renderAdviceCard(source(), NOW);
     expect(AdviceCardSchema.safeParse({ ...card, unexpectedKey: 1 }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U2/U3 收口：两个常量的关系 + 「缺段」判据只有一份
+// ---------------------------------------------------------------------------
+
+describe('U2 五段与六槽：关系在代码里，判据只有一份', () => {
+  it('ADVICE_CARD_SEGMENTS 是 ADVICE_SEGMENTS 的同一个引用（不是两份内容）', () => {
+    // 静态断言：有人把它们改成两份不同的内容，这里立刻红。
+    expect(ADVICE_CARD_SEGMENTS).toBe(ADVICE_SEGMENTS);
+    expect(ADVICE_CARD_SEGMENTS).toHaveLength(5);
+  });
+
+  it('REPORT_ENVELOPE_SLOTS = [...ADVICE_SEGMENTS, "dataAsOf"]，顺序继承五段', () => {
+    expect(REPORT_ENVELOPE_SLOTS).toEqual([...ADVICE_SEGMENTS, 'dataAsOf']);
+    // 前 5 个恒为五段，第 6 个恒为 dataAsOf。
+    expect(REPORT_ENVELOPE_SLOTS.slice(0, 5)).toEqual([...ADVICE_SEGMENTS]);
+    expect(REPORT_ENVELOPE_SLOTS.at(-1)).toBe('dataAsOf');
+    expect(REPORT_ENVELOPE_SLOTS).toHaveLength(6);
+  });
+
+  it('missingAdviceSegments 恒按 ADVICE_SEGMENTS 顺序输出，且空集合 = 全缺', () => {
+    expect(missingAdviceSegments({})).toEqual([...ADVICE_SEGMENTS]);
+    expect(missingAdviceSegments({ conclusion: true, disclaimer: true })).toEqual([
+      'counterEvidence',
+      'risks',
+      'validity',
+    ]);
+    expect(
+      missingAdviceSegments({
+        conclusion: true,
+        counterEvidence: true,
+        risks: true,
+        validity: true,
+        disclaimer: true,
+      }),
+    ).toEqual([]);
   });
 });

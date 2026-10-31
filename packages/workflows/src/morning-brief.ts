@@ -2,6 +2,7 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  REPORT_ENVELOPE_SECTION_KEYS,
   type ReportBlock,
   type ReportEvidence,
   ReportSchema,
@@ -33,14 +34,14 @@ export const MorningBriefOutput = z.object({
 
 type BriefInput = z.output<typeof MorningBriefInput>;
 
-/** 六槽段键（与 `reportDocumentFromReport` 的 `REPORT_ENVELOPE_SECTION_KEYS` 一致）。 */
-const ENVELOPE_SECTION_KEYS = {
-  conclusion: 'envelope-conclusion',
-  counterEvidence: 'envelope-counter-evidence',
-  risks: 'envelope-risks',
-  validity: 'envelope-validity',
-  disclaimer: 'envelope-disclaimer',
-} as const;
+/**
+ * 六槽段键：**直接引用 core 的 `REPORT_ENVELOPE_SECTION_KEYS`**。
+ *
+ * 这里曾是全仓三份逐字相同副本中的一份（另两份在 `core/entity/report-document.ts` 与
+ * `workflows/internal/report-envelope.ts`）。副本分叉时不会报错，只会让
+ * `reportDocumentFromReport` 在**另一处**抛「缺少 envelope 槽」——极难定位。
+ */
+const ENVELOPE_SECTION_KEYS = REPORT_ENVELOPE_SECTION_KEYS;
 
 const evidence = (id: string, dimension: string, now: Date, provider: string): ReportEvidence => ({
   id,

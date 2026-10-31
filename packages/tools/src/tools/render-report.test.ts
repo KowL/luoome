@@ -1,4 +1,10 @@
-import { REPORT_FACTUAL_TABLE_NOTE, type Report, STANDARD_DISCLAIMERS } from '@luoome/core';
+import {
+  ADVICE_SEGMENTS,
+  REPORT_FACTUAL_TABLE_NOTE,
+  type Report,
+  STANDARD_DISCLAIMERS,
+  segmentLabel,
+} from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -522,5 +528,49 @@ describe('REQ-M3-08 成交事实边界', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.content).not.toContain(REPORT_FACTUAL_TABLE_NOTE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U2 收口：通知摘要的兜底文案由 ADVICE_SEGMENTS 生成（段名同源，措辞自定）
+// ---------------------------------------------------------------------------
+
+describe('通知摘要的段名同源', () => {
+  it('建议项缺 notificationSummary 时，兜底文案按 ADVICE_SEGMENTS 列出全部段标签', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const report = reportFixture();
+    report.sections.push({
+      key: 'strategy-actions',
+      title: '策略行动',
+      required: false,
+      status: 'complete',
+      evidenceIds: [],
+      missingDimensions: [],
+      blocks: [
+        {
+          kind: 'list',
+          items: [
+            {
+              title: '某只票',
+              entityKind: 'advice' as const,
+              entityId: 'advice-without-summary',
+              // 关键：不给 notificationSummary → 走 `??` 兜底分支。
+            },
+          ],
+        },
+      ],
+    });
+    await ctx.repos.report.upsertForPeriod(report);
+    const result = await renderReportTool.execute(
+      { reportId: report.id, format: 'notification' },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const content = result.data.content;
+    // 每一段的**标签**都必须出现（顺序 = ADVICE_SEGMENTS），证明不是手写字符串。
+    for (const segment of ADVICE_SEGMENTS) expect(content).toContain(segmentLabel(segment));
+    // 措辞仍是通知侧自己的（「请在应用中核对」）。
+    expect(content).toContain('请在应用中核对');
   });
 });

@@ -1317,7 +1317,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 > 发现新的「同一语义两实现」时：先判断属于本节哪一类，不属于才动代码。
 > 排查清单见 `output/dsh-brainstorm/review/t25-same-semantics-two-impls.md`。
 
-#### 11.1.1 有意不同（6 项）
+#### 11.1.1 有意不同（7 项）
 
 | # | 两个实现 | 为什么有意不同 | 适用范围 |
 |---|---|---|---|
@@ -1328,6 +1328,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | 4 | **交易日历**：core `previousTradingDate`（`packages/core/src/trading-calendar.ts:230`，入参 `Date`） vs `previousTradingDay`（`packages/workflows/src/opening-report.ts:44`，入参 `string`） | 签名不同（Date vs 日期字符串），但**语义相同**。core 版是唯一日历事实源；workflow 版目前自带一份 `isWeekend/isHoliday` 循环 | **两者当前结果一致**（都按上海日倒推）。下一轮统一时应把 workflow 版改成 `previousTradingDate(shanghaiDate(date))` 的薄包装——**在此之前，新增日历逻辑不许多出第三份** |
 | 5 | **交易日键 vs 日历日**：`DailyBar.date` / `factDate`（UTC 午夜键，`packages/core/src/strategy/fact-date.ts:54`） vs `dateInShanghai`（用户可见日历日） | **必须不同**：bar 的日期是全仓约定（`tradingMidnight` = UTC 午夜），事实日和回测窗口都建在它上面；用户可见日期是 Asia/Shanghai 自然日。把两者统一会让已落库的 bar 日期整体错位 | 行情/事实/回测**一律用交易日键**；报告期、文件名、展示**一律用上海日**。判据是「这个日期会不会拿去和已落库的 bar 比对」 |
 | 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
+| 7 | **建议五段 vs 报告六槽 vs 通知摘要**：`ADVICE_SEGMENTS`（5 段） / `REPORT_ENVELOPE_SLOTS`（6 槽）/ `report-notification.ts` 的 `notificationSections` 白名单 | **三者不是同一集合**，所以不是「抽一个常量三处引用」。① 六槽 = 五段 + `dataAsOf`（报告作为交付物多一个观测时点，代码里 `[...ADVICE_SEGMENTS, 'dataAsOf']`）；② 通知摘要选的是 **`Report.sections[].key`**（`market-pulse` / `strategy-actions` / …），与建议五段**完全不重叠**——把它并进五段是「把两套语义硬焊」 | 段名同源（通知兜底文案由 `ADVICE_SEGMENTS` + `segmentLabel()` 生成），**措辞可各自不同**。谁要新增「建议段」，改 `ADVICE_SEGMENTS` 一处；谁要新增「报告段」，改 `ReportSection.key` 与通知白名单两处 |
 
 **第 2 项的细则（REQ 共享维度，写成可执行规则）**
 

@@ -2,15 +2,21 @@
 //
 // 盘前简报、日复盘、风险日报共用同一份段形状：`reportDocumentFromReport()` 按固定段键取值，
 // 取不到就抛——所以这里**不做任何默认值**，空数组/空串由调用方负责（它们各自的数据决定）。
-import { type ReportBlock, type ReportSection, STANDARD_DISCLAIMERS } from '@luoome/core';
+import {
+  REPORT_ENVELOPE_SECTION_KEYS,
+  type ReportBlock,
+  type ReportSection,
+  STANDARD_DISCLAIMERS,
+} from '@luoome/core';
 
-export const ENVELOPE_SECTION_KEYS = {
-  conclusion: 'envelope-conclusion',
-  counterEvidence: 'envelope-counter-evidence',
-  risks: 'envelope-risks',
-  validity: 'envelope-validity',
-  disclaimer: 'envelope-disclaimer',
-} as const;
+/**
+ * **兼容别名**，主名是 core 的 `REPORT_ENVELOPE_SECTION_KEYS`。
+ *
+ * 这里曾是**逐字相同的第二份副本**（加上 `morning-brief.ts` 的第三份）；
+ * 现在收敛成 core 一份，这里只转发引用——段键一旦分叉，`reportDocumentFromReport`
+ * 就会取不到段而抛错，且**报错信息会指向一个没人写过的键**。
+ */
+export const ENVELOPE_SECTION_KEYS = REPORT_ENVELOPE_SECTION_KEYS;
 
 export interface EnvelopeInput {
   readonly dataAsOf: Date;

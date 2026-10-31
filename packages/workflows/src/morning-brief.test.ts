@@ -1,10 +1,14 @@
 import {
+  ADVICE_SEGMENTS,
   type Advice,
   assertReportInvariants,
+  missingAdviceSegments,
   money,
   parseReportDocument,
+  REPORT_ENVELOPE_SECTION_KEYS,
   type ReportArtifactWriter,
   type ReportSection,
+  reportDocumentFromReport,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { writeReportArtifactTool } from '@luoome/tools';
@@ -246,5 +250,63 @@ describe('REQ-M3-17 盘前简报 workflow', () => {
     const parsed = parseReportDocument(stored as string);
     expect(parsed).toEqual(written.data.document);
     expect(parsed.envelope.conclusion).toContain('盘前');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U2/U3：「缺段」判据只有一份 —— 卡片与文档用同一套
+// ---------------------------------------------------------------------------
+
+describe('U3 缺段判据单一化：卡片 blocked 与文档抛错报同一个缺口集合', () => {
+  const missingFromError = (message: string): string[] =>
+    ADVICE_SEGMENTS.filter((segment) => message.includes(segment));
+
+  it('缺同一批段时，卡片 missing 与文档报错段名集合相等', async () => {
+    const ctx = await contextWithOvernight({ withEvents: true });
+    const result = await morningBriefWorkflow.run({ date: '2026-07-29', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const report = result.data.report;
+
+    // 先确认完整报告能渲染（否则这条测试没有意义）。
+    expect(() => reportDocumentFromReport(report)).not.toThrow();
+
+    // 去掉「反证」与「风险」两个槽的 section。
+    const withoutTwo = {
+      ...report,
+      sections: report.sections.filter(
+        (item) =>
+          item.key !== REPORT_ENVELOPE_SECTION_KEYS.counterEvidence &&
+          item.key !== REPORT_ENVELOPE_SECTION_KEYS.risks,
+      ),
+    };
+    let thrown: string | undefined;
+    try {
+      reportDocumentFromReport(withoutTwo);
+    } catch (error) {
+      thrown = (error as Error).message;
+    }
+    expect(thrown).toBeDefined();
+    const docMissing = missingFromError(thrown ?? '');
+    expect(new Set(docMissing)).toEqual(new Set(['counterEvidence', 'risks']));
+
+    // 卡片侧：同一个「已具备」集合（缺反证与风险）应报同一批段。
+    const present: Record<string, boolean> = {};
+    for (const segment of ADVICE_SEGMENTS) present[segment] = true;
+    present.counterEvidence = false;
+    present.risks = false;
+    const cardMissing = missingAdviceSegments(present);
+    expect(new Set(cardMissing)).toEqual(new Set(docMissing));
+    // 顺序也一致（都按 ADVICE_SEGMENTS）。
+    expect(cardMissing).toEqual([...ADVICE_SEGMENTS].filter((s) => docMissing.includes(s)));
+  });
+
+  it('六槽段键只有一份定义：workflow 组装出的段键能被 reportDocumentFromReport 取到', async () => {
+    const ctx = await contextWithOvernight({ withEvents: true });
+    const result = await morningBriefWorkflow.run({ date: '2026-07-29', notify: false }, ctx);
+    if (!result.ok) throw new Error('report failed');
+    const keys = result.data.report.sections.map((item) => item.key);
+    // 五段的段键全部来自 core 的同一份映射（副本分叉时这里会红）。
+    for (const segment of ADVICE_SEGMENTS)
+      expect(keys).toContain(REPORT_ENVELOPE_SECTION_KEYS[segment]);
   });
 });
