@@ -1,9 +1,17 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools';
-import { PluginAutomationGrantSchema, PluginCapabilitySchema } from '@luoome/core';
+import {
+  type AdviceOutcomeOrigin,
+  AdviceOutcomeOriginSchema,
+  PluginAutomationGrantSchema,
+  PluginCapabilitySchema,
+  type ToolContext,
+} from '@luoome/core';
 import type { PluginPrincipal } from '@luoome/tools';
-import { createPluginOperationService } from '@luoome/tools';
+import { createPluginOperationService, recordAdviceOutcomeTool } from '@luoome/tools';
 import { z } from 'zod';
+import { type AdviceOutcomeAsker, adviceOutcomeAskerOf } from './advice-outcome-ask.js';
 import { AUTOMATION_CATALOG_TOOL, createAutomationCatalog } from './automation-catalog.js';
 import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
 import { createScheduledOperationInvoker } from './operations.js';
@@ -56,8 +64,19 @@ const preparedInput = z.object({
   confirmationToken: z.string().optional(),
   requiredCapabilities: z.array(PluginCapabilitySchema),
 });
+/** 模型提交的 outcome 与建议 id：只用来问用户，不参与写入（写入仍走 policy 的 bind）。 */
+const adviceOutcomeSubject = z.object({
+  adviceId: z.string().min(1),
+  outcome: z.enum(['followed', 'partially_followed', 'ignored']),
+});
 type Ticket =
-  | { readonly principal: PluginPrincipal; readonly id: string; readonly token: string | null }
+  | {
+      readonly principal: PluginPrincipal;
+      readonly id: string;
+      readonly token: string | null;
+      /** 用户亲自背书的通道值；缺省即 `model`（没有 harness 提问或不是回填 policy）。 */
+      readonly origin?: AdviceOutcomeOrigin;
+    }
   | { readonly scheduled: true };
 
 export const createDshOperationHost = (
@@ -66,14 +85,28 @@ export const createDshOperationHost = (
     readonly profile: string;
     readonly principalForSession: (sessionId: string) => PluginPrincipal | null;
     readonly automationsEnabled?: boolean;
+    /**
+     * 用户回填提问器；缺省用宿主的 `ctx.userQuestions`（每次提问时解析）。
+     * 宿主确实没有该接缝时提问器返回 `not_configured`，写入保持 `origin=model`。
+     */
+    readonly askAdviceOutcome?: AdviceOutcomeAsker;
   },
 ) => {
   const identity = createDshIdentity(ctx, options);
-  const service = createPluginOperationService({
+  // 通道值只挂在当前异步链上：同账户并发操作各有各的 origin，不共享可变状态。
+  const adviceOrigin = new AsyncLocalStorage<AdviceOutcomeOrigin>();
+  const baseContext = options.context;
+  const base = createPluginOperationService({
     ...options,
+    // policy 的 bind/execute/receipt 都从这里取 ToolContext：提问背书过的 origin 在这里盖章。
+    context: async (): Promise<ToolContext> => {
+      const context = await baseContext();
+      const origin = adviceOrigin.getStore();
+      return origin === undefined ? context : { ...context, adviceOutcomeOrigin: origin };
+    },
     validateGrant: identity.validateGrant,
   });
-  const invokeScheduled = createScheduledOperationInvoker(service, identity.scheduled);
+  const askAdviceOutcome = options.askAdviceOutcome ?? adviceOutcomeAskerOf(ctx);
   const tickets = new Map<ToolExecutionToken, Ticket>();
   const lifetime = new AbortController();
   const automationsEnabled = options.automationsEnabled === true;
@@ -83,6 +116,82 @@ export const createDshOperationHost = (
   });
   const owned = (execution: ToolExecution) =>
     execution.name === MANUAL_OPERATION_TOOL || execution.name === SCHEDULED_OPERATION_TOOL;
+  /**
+   * 回填 policy 的通道值：模型提交什么 outcome 都不改变来源，只有 harness 把同一个
+   * 四选一问题递给用户、用户亲自选中同一结论，才允许盖 `origin=user`。
+   * 没选（不知道/别的结论/文字作答/超时/通道不可用）一律不写入，并把原因回给模型。
+   */
+  const requestOutcomeOrigin = async (
+    tool: string,
+    input: unknown,
+    execution: ToolExecution,
+  ): Promise<
+    | { readonly kind: 'model' }
+    | { readonly kind: 'user' }
+    | { readonly kind: 'denied'; reason: string }
+  > => {
+    if (tool !== recordAdviceOutcomeTool.name) return { kind: 'model' };
+    const subject = adviceOutcomeSubject.safeParse(input);
+    // 业务参数本身不合法时由 policy 的 bind 报 invalid_input；这里不替它判定。
+    if (!subject.success) return { kind: 'model' };
+    const agent = execution.agent;
+    if (agent === undefined)
+      return {
+        kind: 'denied',
+        reason: '用户回填需要存活的会话 Agent 才能提问，本次回填未写入',
+      };
+    const asked = await askAdviceOutcome({
+      agent,
+      signal: execution.signal,
+      adviceId: subject.data.adviceId,
+      outcome: subject.data.outcome,
+    });
+    if (asked.kind === 'user') return { kind: 'user' };
+    // 宿主没有提问接缝：保持「模型自报即 model」，绝不猜成 user。
+    if (asked.kind === 'not_configured') return { kind: 'model' };
+    return { kind: 'denied', reason: asked.reason };
+  };
+  /**
+   * reconcile 必须用写入时同一个 origin 才能按同一 content 核对回执（否则 replay 永远
+   * not_found）。跨进程/重启后进程内票据已经不在，就从这条 requestId 的**业务回执**读回
+   * 写入路径已经盖好的 origin：模型设置不了它，读到的正是那条已提交的修订。
+   */
+  const committedOutcomeOrigin = async (
+    principal: PluginPrincipal,
+    operationId: string,
+  ): Promise<AdviceOutcomeOrigin | undefined> => {
+    try {
+      const operation = await options.repository.findOperation({ ...principal, id: operationId });
+      if (operation === null) return undefined;
+      const requestId = z
+        .object({ requestId: z.string().min(1) })
+        .passthrough()
+        .safeParse(JSON.parse(operation.inputJson));
+      if (!requestId.success) return undefined;
+      const receipt = await (await options.context()).repos.decisionReview.findWriteReceipt({
+        accountId: principal.accountId,
+        requestId: requestId.data.requestId,
+      });
+      const origin = AdviceOutcomeOriginSchema.safeParse(
+        receipt?.result.revision.content.adviceFeedback?.origin,
+      );
+      return origin.success ? origin.data : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  // 所有 reconcile 入口（工具、HTTP 路由、面板）都必须带同一 origin 核对回执，
+  // 所以包在 service 上，而不是只在某个调用点加。
+  const service = {
+    ...base,
+    reconcile: async (principal: PluginPrincipal, operationId: string) => {
+      const origin = await committedOutcomeOrigin(principal, operationId);
+      return origin === undefined
+        ? base.reconcile(principal, operationId)
+        : adviceOrigin.run(origin, () => base.reconcile(principal, operationId));
+    },
+  };
+  const invokeScheduled = createScheduledOperationInvoker(service, identity.scheduled);
   const removers: (() => void)[] = [];
   let disposed = false;
   try {
@@ -134,11 +243,14 @@ export const createDshOperationHost = (
           if (input === null || typeof input !== 'object' || Array.isArray(input))
             return { kind: 'deny', reason: 'Invalid operation inputJson: expected a JSON object' };
         }
-        const prepared = await service.prepare(principal, {
-          id: parsed.data.id,
-          tool: parsed.data.tool,
-          input,
-        });
+        // 提问必须在 prepare→bind 冻结输入之前，也不能落在账户 lease 里等人工作答。
+        const asked = await requestOutcomeOrigin(parsed.data.tool, input, execution);
+        if (asked.kind === 'denied') return { kind: 'deny', reason: asked.reason };
+        const prepared = await (asked.kind === 'user'
+          ? adviceOrigin.run('user', () =>
+              service.prepare(principal, { id: parsed.data.id, tool: parsed.data.tool, input }),
+            )
+          : service.prepare(principal, { id: parsed.data.id, tool: parsed.data.tool, input }));
         if (!prepared.ok)
           return {
             kind: 'deny',
@@ -188,6 +300,7 @@ export const createDshOperationHost = (
           principal,
           id: value.operationId,
           token: value.confirmationToken,
+          ...(asked.kind === 'user' ? { origin: 'user' as const } : {}),
         });
         return { kind: 'allow' };
       }),
@@ -341,13 +454,17 @@ export const createDshOperationHost = (
               ok: false,
               error: { kind: 'permission_denied', required: 'current operation ticket' },
             };
-          return ticket.token === null
-            ? service.get(ticket.principal, ticket.id)
-            : service.confirm(
-                ticket.principal,
-                { id: ticket.id, token: ticket.token },
-                execution.signal,
-              );
+          const settle = () =>
+            ticket.token === null
+              ? service.get(ticket.principal, ticket.id)
+              : service.confirm(
+                  ticket.principal,
+                  { id: ticket.id, token: ticket.token },
+                  execution.signal,
+                );
+          // confirm 内部执行 handler 与回执核对都读 ctx.adviceOutcomeOrigin：
+          // 用户背书过的写入必须在这里带上同一个 origin。
+          return ticket.origin === undefined ? settle() : adviceOrigin.run(ticket.origin, settle);
         },
       }),
     );
