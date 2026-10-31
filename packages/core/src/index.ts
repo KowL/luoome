@@ -94,6 +94,7 @@ export * from './strategy/expression.js';
 export * from './strategy/fact-date.js';
 export * from './strategy/field-registry.js';
 export * from './strategy/fundamental-factor.js';
+export * from './strategy/fundamental-gate.js';
 export * from './strategy/ic.js';
 export * from './strategy/local-selector.js';
 export * from './strategy/observation-stats.js';

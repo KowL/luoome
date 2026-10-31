@@ -100,7 +100,9 @@ const buildSections = async (
   // ① 账户概览：可用性与数字一起披露，缺数据不写 0。
   const accountBlocks: ReportBlock[] = [];
   const holdingCount = holdings.ok ? holdings.data.holdings.length : null;
-  const totalValue = holdings.ok ? holdings.data.totalValue : null;
+  // 缺价时 `totalValue` 字段缺席：显式披露，不填 0、不填 null 冒充数字。
+  const totalValue = holdings.ok ? (holdings.data.totalValue ?? null) : null;
+  const unpricedCount = holdings.ok ? holdings.data.unpricedCount : null;
   if (holdings.ok) {
     accountBlocks.push({
       kind: 'metrics',
@@ -108,6 +110,9 @@ const buildSections = async (
         { key: 'dataAsOf', label: '数据截止', value: generatedAt.toISOString() },
         { key: 'holdingCount', label: '持仓数', value: holdingCount },
         { key: 'totalValue', label: '持仓总市值', value: totalValue, unit: '元' },
+        ...(unpricedCount !== null && unpricedCount > 0
+          ? [{ key: 'unpricedCount', label: '缺价持仓数', value: unpricedCount }]
+          : []),
         {
           key: 'todayPnL',
           label: '今日盈亏',

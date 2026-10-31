@@ -35,7 +35,7 @@ describe('list_holdings', () => {
     expect(byd?.todayPnlPct).toBeCloseTo((105.8 - prevClose) / prevClose, 6);
 
     // 汇总 = 各项之和（Money 4 位小数不变量）。
-    const sumValue = data.holdings.reduce((s, h) => s + h.marketValue, 0);
+    const sumValue = data.holdings.reduce((s, h) => s + (h.marketValue ?? 0), 0);
     const sumCost = data.holdings.reduce((s, h) => s + h.cost, 0);
     expect(data.totalValue).toBeCloseTo(sumValue, 4);
     expect(data.totalCost).toBeCloseTo(sumCost, 4);

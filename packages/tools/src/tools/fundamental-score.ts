@@ -18,6 +18,7 @@ import {
   type FundamentalScoreVersion,
   type FundamentalScoreVersionRepository,
   FundamentalScoreVersionSchema,
+  fundamentalGate,
   getFundamentalFactor,
   REAL_FINANCIAL_FACT_SOURCES,
   runFundamentalScore,
@@ -87,7 +88,8 @@ const scoreLimitations = [
 export const RunFundamentalScoreOutput = z
   .object({
     providerKind: z.literal('mock'),
-    gate: z.literal('not-ready'),
+    /** 计算值（`fundamentalGate`），不再是字面常量；not-ready 时不许有任何评分数字。 */
+    gate: z.enum(['not-ready', 'evaluation-ready']),
     run: FundamentalScoreRunSchema,
     scoreVersion: FundamentalScoreVersionSchema,
     version: FundamentalScoreVersionSchema,
@@ -104,7 +106,7 @@ export const GetFundamentalScoreInput = z.object({
 export const GetFundamentalScoreOutput = z
   .object({
     providerKind: z.literal('mock'),
-    gate: z.literal('not-ready'),
+    gate: z.enum(['not-ready', 'evaluation-ready']),
     run: FundamentalScoreRunSchema,
     /** `scoreVersion` is the canonical field; `version` keeps query clients explicit. */
     scoreVersion: FundamentalScoreVersionSchema,
@@ -393,13 +395,20 @@ const runFundamentalScoreToolHandler = async (
     }
   }
 
+  // mock 装配 + 真实源白名单为空 ⇒ 闸位必然 not-ready；数字与闸位同时判定，不靠字面常量。
+  const gate = fundamentalGate({
+    providerKind: 'mock',
+    status: engine.status,
+    resultCount: engine.results.length,
+  });
   return {
     providerKind: 'mock' as const,
-    gate: 'not-ready' as const,
+    gate,
     run: finalRun,
     scoreVersion: version,
     version,
-    results: engine.status === 'unavailable' ? [] : [...engine.results],
+    // gate=not-ready 时零数字输出：算出来的结果也不外泄（PRD §4）。
+    results: gate === 'evaluation-ready' ? [...engine.results] : [],
     status: engine.status,
     limitations: [...scoreLimitations],
   };
@@ -450,13 +459,18 @@ export const getFundamentalScoreTool = defineTool({
         true,
       );
     }
+    const gate = fundamentalGate({
+      providerKind: 'mock',
+      status: run.status === 'committed' ? 'complete' : run.status,
+      resultCount: results.length,
+    });
     return {
       providerKind: 'mock' as const,
-      gate: 'not-ready' as const,
+      gate,
       run,
       scoreVersion,
       version: scoreVersion,
-      results: run.status === 'committed' ? results : [],
+      results: gate === 'evaluation-ready' ? results : [],
       status: run.status,
       limitations: [...scoreLimitations],
     };

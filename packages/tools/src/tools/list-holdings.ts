@@ -25,18 +25,27 @@ export const ListHoldingsInput = z.object({
   status: HoldingStatusSchema.default('active'),
 });
 
-export const ListHoldingsOutput = z.object({
-  accountId: z.string().min(1),
-  status: HoldingStatusSchema,
-  holdings: z.array(HoldingPnlSchema),
-  totalValue: MoneySchema,
-  totalCost: MoneySchema,
-  totalPnL: MoneySchema,
-  totalPnLPct: PercentageSchema,
-  /** 今日盈亏合计；任一持仓缺昨收时为 null。 */
-  totalTodayPnl: MoneySchema.nullable(),
-  totalTodayPnlPct: PercentageSchema.nullable(),
-});
+/**
+ * 持仓列表输出。**形状变更（REQ-M3-09 / D2）**：缺价时 `totalValue` / `totalPnL` / `totalPnLPct`
+ * 字段缺席（而不是 0），`unpricedCount > 0`。这是破坏性变更，已在 `docs/ARCHITECTURE.md` 记录；
+ * 消费方必须渲染「缺价」而不是 0。
+ */
+export const ListHoldingsOutput = z
+  .object({
+    accountId: z.string().min(1),
+    status: HoldingStatusSchema,
+    holdings: z.array(HoldingPnlSchema),
+    totalValue: MoneySchema.optional(),
+    totalCost: MoneySchema,
+    totalPnL: MoneySchema.optional(),
+    totalPnLPct: PercentageSchema.optional(),
+    /** 缺价持仓数；>0 时上面三个合计字段缺席。 */
+    unpricedCount: z.number().int().nonnegative(),
+    /** 今日盈亏合计；任一持仓缺昨收或缺价时为 null。 */
+    totalTodayPnl: MoneySchema.nullable(),
+    totalTodayPnlPct: PercentageSchema.nullable(),
+  })
+  .strict();
 
 export const listHoldingsTool = defineTool({
   name: 'list_holdings',
@@ -76,7 +85,13 @@ export const listHoldingsTool = defineTool({
       }),
     );
 
-    return { accountId, status: input.status, holdings: items, ...summarizePnl(items) };
+    // 经 schema parse：把「字段缺席」落到输出类型上，避免可选字段被推断成全量。
+    return ListHoldingsOutput.parse({
+      accountId,
+      status: input.status,
+      holdings: items,
+      ...summarizePnl(items),
+    });
   },
 });
 

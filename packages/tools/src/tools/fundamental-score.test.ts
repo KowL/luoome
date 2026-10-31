@@ -264,3 +264,29 @@ describe('fundamental score tools', () => {
     });
   });
 });
+
+// REQ-M3-09 §4：gate 必须是计算值，且 not-ready 时零数字输出。
+describe('基本面评分 gate 不是字面常量', () => {
+  it('run 路径的 gate 由输入算出，且 not-ready 时结果为空', async () => {
+    const ctx = await contextWithScoreFixture();
+    const result = await runFundamentalScoreTool.execute(runInput(false), ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(['not-ready', 'evaluation-ready']).toContain(result.data.gate);
+    expect(result.data.gate).toBe('not-ready');
+    expect(result.data.results).toEqual([]);
+    // 零数字：逐字段确认没有评分泄漏。
+    expect(JSON.stringify(result.data.results)).not.toMatch(/"score":/);
+  });
+
+  it('run 路径在数据完整时仍给出 not-ready（mock 装配），数字不外泄', async () => {
+    const ctx = await contextWithScoreFixture();
+    // 同一输入下若把 gate 判定改成「恒 ready」，results 会冒出来——下面这条断言就是它的牙。
+    const result = await runFundamentalScoreTool.execute(runInput(false), ctx);
+    if (!result.ok) throw new Error('expected ok');
+    const evaluated = result.data.run.counts.evaluated;
+    expect(evaluated).toBeGreaterThan(0);
+    expect(result.data.results).toHaveLength(0);
+    expect(result.data.gate).toBe('not-ready');
+  });
+});
