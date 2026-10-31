@@ -52,7 +52,14 @@ const makePlan = (accountId: string, accountFactsDigest: string, stockId = '0025
       earlyExitConditions: [],
       extensionBasis: [],
     },
-    exit: { conditions: [], triggerConditions: [], canSellNow: false },
+    exit: {
+      conditions: [],
+      triggerConditions: [],
+      stopLoss: money(8),
+      takeProfit: money(15),
+      canSellNow: false,
+      unavailableReason: 'T+1 当日买入不可卖出',
+    },
     validFrom: new Date('2026-07-16T00:00:00.000Z'),
     validUntil: new Date('2026-07-20T00:00:00.000Z'),
     invalidationConditions: ['账户快照版本改变'],
@@ -72,7 +79,14 @@ const makePlan = (accountId: string, accountFactsDigest: string, stockId = '0025
     marketFacts: [],
     evidence: [],
     source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
-    explanation: { supportingEvidenceIds: [], counterEvidence: [], risks: [], unknowns: [] },
+    // 计划型提醒的六要素：计划必须带反证 / 风险 / 止损或目标价 / 卖出限制原因，
+    // 否则按 REQ-M3-09 §5 不会投递（那正是同一需求要的行为，不在这里重复验证）。
+    explanation: {
+      supportingEvidenceIds: [],
+      counterEvidence: ['板块轮动风险未纳入'],
+      risks: ['大盘系统性下行'],
+      unknowns: [],
+    },
     confidence: 60,
     createdAt: NOW,
   });
@@ -94,6 +108,77 @@ const seedFacts = async (
   if (!facts.ok) throw new Error(`seed facts failed: ${JSON.stringify(facts.error)}`);
   return facts.data.facts;
 };
+
+describe('REQ-M3-09 §5：计划型提醒的六要素闸门', () => {
+  it('计划缺反证与风险 → 不投递（not-requested）+ evalSnapshot.missingElements 逐项列出', async () => {
+    const ctx = await buildPlanWatchContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx);
+    // 六要素里计划层五项齐全，只把反证与风险留空。
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    const incomplete = TradingPlanSchema.parse({
+      ...plan,
+      explanation: { ...plan.explanation, counterEvidence: [], risks: [] },
+    });
+    await ctx.repos.tradingPlan.save(incomplete);
+
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.notified).toBe(0);
+    expect(result.data.notRequestedByMissingElements).toBeGreaterThan(0);
+    const trigger = result.data.triggers[0];
+    expect(trigger?.deliveryStatus).toBe('not-requested');
+    expect(trigger?.evalSnapshot.missingElements).toEqual(['counterEvidence', 'risks']);
+    expect(trigger?.evalSnapshot.reminderElements).toBe('incomplete');
+    expect(trigger?.evalSnapshot.reminderType).toBe('planned');
+  });
+
+  it('幂等：重复评估两次，not-requested 是终态——第二次 not notified、不重复增长、不再次投递', async () => {
+    const ctx = await buildPlanWatchContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    await ctx.repos.tradingPlan.save(
+      TradingPlanSchema.parse({
+        ...plan,
+        explanation: { ...plan.explanation, counterEvidence: [], risks: [] },
+      }),
+    );
+
+    const first = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.notified).toBe(0);
+    const firstBlocked = first.data.notRequestedByMissingElements;
+    expect(firstBlocked).toBeGreaterThan(0);
+    const firstAttempts =
+      (await ctx.repos.watchTrigger.listRecent({ poolId: `trading-plan-watch:${ACCOUNT_ID}` }))[0]
+        ?.deliveryAttempts ?? 0;
+
+    const second = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    // 终态：第二次不投递、不重复计数。
+    expect(second.data.notified).toBe(0);
+    expect(second.data.notRequestedByMissingElements).toBe(0);
+    const triggers = await ctx.repos.watchTrigger.listRecent({
+      poolId: `trading-plan-watch:${ACCOUNT_ID}`,
+    });
+    expect(triggers.filter((item) => item.deliveryStatus === 'not-requested')).toHaveLength(
+      firstBlocked,
+    );
+    // 没有第二次投递尝试：deliveryAttempts 不增长。
+    expect(triggers[0]?.deliveryAttempts ?? 0).toBe(firstAttempts);
+  });
+});
 
 describe('intraday trading plan watch', () => {
   it('其它持仓只有抓取时间时，不用该估值形成新股票的行动候选', async () => {

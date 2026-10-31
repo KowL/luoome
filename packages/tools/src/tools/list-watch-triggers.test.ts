@@ -32,6 +32,81 @@ const save = async (
     ctx,
   );
 
+describe('REQ-M3-09 §5：提醒要素缺口两个计数分开', () => {
+  const NOW = new Date('2026-08-22T01:00:00.000Z');
+  const triggerOf = (input: {
+    readonly id: string;
+    readonly ruleKind: 'price-level' | 'price-change';
+    readonly deliveryStatus: 'not-requested' | 'sent';
+    readonly evalSnapshot: Record<string, unknown>;
+  }) => ({
+    id: input.id,
+    poolId: 'holdings-watch',
+    stockId: '600519.SH',
+    ruleKind: input.ruleKind,
+    ruleId: 'r1',
+    direction: 'watch' as const,
+    triggerType: 'triggered' as const,
+    reason: 'fixture trigger',
+    evidence: ['observable evidence'],
+    quote: { close: 100 as never, ts: NOW },
+    priority: 'normal' as const,
+    deliveryStatus: input.deliveryStatus,
+    evalSnapshot: input.evalSnapshot,
+    notified: input.deliveryStatus === 'sent',
+    createdAt: NOW,
+  });
+
+  it('not-requested（要素不全未投递）与 notApplicable（不适用）分别计数', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    // 一条计划型：要素不全 → not-requested，evalSnapshot 记 missingElements。
+    await ctx.repos.watchTrigger.save(
+      triggerOf({
+        id: 'wt-planned-blocked',
+        ruleKind: 'price-level',
+        deliveryStatus: 'not-requested',
+        evalSnapshot: {
+          ruleId: 'r1',
+          reminderType: 'planned',
+          reminderElements: 'incomplete',
+          missingElements: ['counterEvidence', 'risks'],
+        },
+      }),
+    );
+    // 一条阈值型：**已投递**，五项计划要素不适用。
+    await ctx.repos.watchTrigger.save(
+      triggerOf({
+        id: 'wt-threshold-sent',
+        ruleKind: 'price-change',
+        deliveryStatus: 'sent',
+        evalSnapshot: {
+          ruleId: 'r2',
+          reminderType: 'threshold',
+          reminderElements: 'complete',
+          notApplicableElements: [
+            'stopOrTarget',
+            'counterEvidence',
+            'risks',
+            'validity',
+            'sellRestriction',
+          ],
+        },
+      }),
+    );
+
+    const result = await listWatchTriggersTool.execute({ includeSummary: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // 两个数分开：不适用**不算**未投递，否则用户会以为有 1 条提醒发不出去。
+    expect(result.data.summary?.reminderGaps).toEqual({
+      missingElements: 1,
+      notApplicableElements: 1,
+    });
+    expect(result.data.summary?.deliveryStatusCounts['not-requested']).toBe(1);
+    expect(result.data.summary?.deliveryStatusCounts.sent).toBe(1);
+  });
+});
+
 describe('list_watch_triggers', () => {
   it('分页不改变总数，反馈和优先级在分页前生效', async () => {
     const ctx = await buildTestContext();

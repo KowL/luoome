@@ -20,6 +20,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { collectReminderElements, reminderSnapshotFields } from './internal/reminder-elements.js';
 import { type WatchWorkflowContext, watchExecutionStep } from './internal/watch-execution.js';
 
 export const IntradayTradingPlanWatchInput = z.object({
@@ -49,6 +50,11 @@ export const IntradayTradingPlanWatchOutput = z.object({
   suppressedByCooldown: z.number().int().nonnegative(),
   suppressedByDailyLimit: z.number().int().nonnegative(),
   notifyFailed: z.number().int().nonnegative(),
+  /**
+   * 因**提醒要素不全**而未投递的条数（REQ-M3-09 §5）：记 `not-requested` +
+   * `evalSnapshot.missingElements`。面板据此显示「未投递 N 条」，**不静默丢弃**。
+   */
+  notRequestedByMissingElements: z.number().int().nonnegative(),
   errors: z.array(z.string()),
 });
 export type IntradayTradingPlanWatchOutputT = z.infer<typeof IntradayTradingPlanWatchOutput>;
@@ -567,6 +573,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: ['非交易时段，盘中计划监控未执行'],
     };
   }
@@ -589,6 +596,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [errorText(plansResult.error)],
     };
   }
@@ -612,6 +620,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors,
     };
   }
@@ -630,6 +639,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [...errors, errorText(holdingsResult.error)],
     };
   }
@@ -663,6 +673,7 @@ const run = async (
         suppressedByCooldown: 0,
         suppressedByDailyLimit: 0,
         notifyFailed: 0,
+        notRequestedByMissingElements: 0,
         errors: [...errors, errorText(quotesResult.error)],
       };
     }
@@ -687,6 +698,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [...errors, errorText(factsResult.error)],
     };
   }
@@ -705,6 +717,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [
         ...errors,
         `账户事实不可用，暂停精确盘中计划监控：${accountFacts.reasons.join('；')}`,
@@ -734,6 +747,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors,
     };
   }
@@ -753,6 +767,7 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [...errors, errorText(stateResult.error)],
     };
   }
@@ -796,6 +811,7 @@ const run = async (
         suppressedByCooldown: 0,
         suppressedByDailyLimit: 0,
         notifyFailed: 0,
+        notRequestedByMissingElements: 0,
         errors: [...errors, errorText(latest.error)],
       };
     }
@@ -840,6 +856,7 @@ const run = async (
         suppressedByCooldown: 0,
         suppressedByDailyLimit: 0,
         notifyFailed: 0,
+        notRequestedByMissingElements: 0,
         errors: [...errors, errorText(reset.error)],
       };
     }
@@ -1022,6 +1039,7 @@ const run = async (
       suppressedByCooldown,
       suppressedByDailyLimit,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [
         ...errors,
         reason,
@@ -1094,13 +1112,64 @@ const run = async (
       suppressedByCooldown,
       suppressedByDailyLimit,
       notifyFailed: 0,
+      notRequestedByMissingElements: 0,
       errors: [...errors, errorText(committed.error)],
     };
   }
   let notified = 0;
   let delivered = 0;
   let notifyFailed = 0;
+  let notRequestedByMissingElements = 0;
   if (input.notify) {
+    /**
+     * 六要素不全的触发**不投递**（REQ-M3-09 §5）：记 `not-requested` + 把缺口写进
+     * `evalSnapshot`，并计入 `notRequestedByMissingElements` 让面板能显示「未投递 N 条」。
+     *
+     * 这一步在发送循环之前、并且用 `commit_watch_evaluation` 落库，保证「不投递」不是
+     * 只在内存里发生。
+     */
+    const blocked = finalTriggers
+      .filter((trigger) => trigger.deliveryStatus === 'pending')
+      .flatMap((trigger) => {
+        const candidate = publication.candidates.find((item) => item.trigger.id === trigger.id);
+        if (candidate === undefined) return [];
+        const elements = collectReminderElements({ trigger, plan: candidate.plan });
+        if (elements.status === 'complete') return [];
+        return [{ trigger, elements }];
+      });
+    if (blocked.length > 0) {
+      const update = await ctx.tools.commit_watch_evaluation.execute({
+        owner,
+        triggers: blocked.map(({ trigger, elements }) => ({
+          ...trigger,
+          deliveryStatus: 'not-requested',
+          notified: false,
+          evalSnapshot: { ...trigger.evalSnapshot, ...reminderSnapshotFields(elements) },
+        })),
+        states: [],
+      });
+      if (!update.ok) errors.push(errorText(update.error));
+      const blockedIds = new Set(blocked.map(({ trigger }) => trigger.id));
+      const blockedById = new Map(blocked.map(({ trigger, elements }) => [trigger.id, elements]));
+      finalTriggers = finalTriggers.map((trigger) => {
+        if (!blockedIds.has(trigger.id)) return trigger;
+        const elements = blockedById.get(trigger.id);
+        return {
+          ...trigger,
+          deliveryStatus: 'not-requested' as const,
+          notified: false,
+          evalSnapshot:
+            elements === undefined
+              ? trigger.evalSnapshot
+              : { ...trigger.evalSnapshot, ...reminderSnapshotFields(elements) },
+        };
+      });
+      notRequestedByMissingElements = blocked.length;
+      for (const { trigger, elements } of blocked)
+        errors.push(
+          `触发 ${trigger.stockId} 未投递：提醒要素不全（${elements.status === 'incomplete' ? elements.reasons.join('；') : ''}）`,
+        );
+    }
     const invalidatePending = async (): Promise<void> => {
       const pending = finalTriggers.filter((trigger) => trigger.deliveryStatus === 'pending');
       if (pending.length === 0) return;
@@ -1146,6 +1215,13 @@ const run = async (
         await invalidatePending();
         break;
       }
+      /**
+       * 落 `not-requested` **之前**先 begin：`beginDelivery` 会把状态改成 `pending` 并累加
+       * `deliveryAttempts`。先 begin 再判，才能保证
+       * ① `setDeliveryStatus('not-requested')` 不会被它覆盖；
+       * ② `not-requested` 是**终态**——重跑时这条不会因为状态被重置而重新进入待投递
+       *    （Lead 的幂等要求）。
+       */
       const attempt = await ctx.tools.begin_watch_delivery.execute({ triggerIds: [trigger.id] });
       if (!attempt.ok) {
         errors.push(errorText(attempt.error));
@@ -1211,6 +1287,7 @@ const run = async (
     suppressedByCooldown,
     suppressedByDailyLimit,
     notifyFailed,
+    notRequestedByMissingElements,
     errors,
   };
 };

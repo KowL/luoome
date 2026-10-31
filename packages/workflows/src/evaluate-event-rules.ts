@@ -14,6 +14,7 @@ import {
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { collectReminderElements, NON_PLAN_DISCLOSURE } from './internal/reminder-elements.js';
 import {
   type WatchWorkflowStep as WorkflowStep,
   watchExecutionStep,
@@ -74,6 +75,11 @@ export const EvaluateEventRulesOutput = z.object({
   triggered: z.number().int().nonnegative(),
   notified: z.number().int().nonnegative(),
   deduped: z.number().int().nonnegative(),
+  /**
+   * 因**提醒要素不全**而未投递的条数（REQ-M3-09 §5）。事件类提醒结构性没有触发价，
+   * 所以这里通常等于 `triggered`——如实披露，**不伪造价格也不静默丢弃**。
+   */
+  notRequestedByMissingElements: z.number().int().nonnegative(),
 });
 
 /** 解析 AlertPlan 所属 Watchlist 的当前非归档成员。 */
@@ -127,6 +133,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
   let triggered = 0;
   let notified = 0;
   let deduped = 0;
+  let notRequestedByMissingElements = 0;
   const pending: WatchTrigger[] = [];
 
   try {
@@ -287,6 +294,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
 
     // 发送 pending（按 AlertPlan 分组），回写 deliveryStatus
     let sendFailed = false;
+    const errors: string[] = [];
     const byPlan = new Map<string, WatchTrigger[]>();
     for (const t of pending) {
       const arr = byPlan.get(t.poolId) ?? [];
@@ -294,7 +302,36 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       byPlan.set(t.poolId, arr);
     }
     for (const [alertPlanId, group] of byPlan) {
-      const lines = group.map((t) => {
+      /**
+       * 事件类提醒**结构性没有触发价**（`evaluate-event-rules` 不读行情），
+       * 所以 PRD §5 的六要素永远不全 —— 该路径在 PRD §5 下**永久不可投递**。
+       *
+       * 处置（Lead 裁定 ③）：如实记录 `not-requested` + 缺口原因，**不伪造价格**、
+       * 也不静默丢弃；计入 `notRequestedByMissingElements` 让面板可见。
+       */
+      const blockedElements = group.map((trigger) => ({
+        trigger,
+        elements: collectReminderElements({ trigger }),
+      }));
+      const nonBlocked = blockedElements.filter((item) => item.elements.status === 'complete');
+      const blocked = blockedElements.filter((item) => item.elements.status !== 'complete');
+      if (blocked.length > 0) {
+        requireToolData(
+          'set_watch_trigger_delivery_status',
+          await ctx.tools.set_watch_trigger_delivery_status.execute({
+            triggerIds: blocked.map(({ trigger }) => trigger.id),
+            status: 'not-requested',
+          }),
+        );
+        notRequestedByMissingElements += blocked.length;
+        sendFailed = sendFailed || false;
+        for (const { trigger, elements } of blocked)
+          errors.push(
+            `事件提醒 ${trigger.stockId} 未投递：提醒要素不全（${elements.status === 'incomplete' ? elements.reasons.join('；') : ''}）`,
+          );
+      }
+      if (nonBlocked.length === 0) continue;
+      const lines = nonBlocked.map(({ trigger: t }) => {
         const prio =
           t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
         return `· ${prio}${t.stockId} — ${t.reason}`;
@@ -302,14 +339,15 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       requireToolData(
         'begin_watch_delivery',
         await ctx.tools.begin_watch_delivery.execute({
-          triggerIds: group.map((trigger) => trigger.id),
+          triggerIds: nonBlocked.map(({ trigger }) => trigger.id),
         }),
       );
       const r = await ctx.tools.send_notification.execute({
         channel: 'feishu',
         feishu: {
           title: `事件提醒 · ${plans.find((plan) => plan.id === alertPlanId)?.name ?? '关注列表'} · ${group.length} 条`,
-          content: lines.join('\n'),
+          // 事件型提醒没有计划层五项：不适用必须被说出来。
+          content: [...lines, NON_PLAN_DISCLOSURE].join('\n'),
           level: notificationLevelForAlertPriority(
             highestAlertPriority(group.map((trigger) => trigger.priority)),
           ),
@@ -329,12 +367,12 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
         sendFailed = true;
       } else {
         notificationId = r.data.notification.id;
-        notified += group.length;
+        notified += nonBlocked.length;
       }
       requireToolData(
         'set_watch_trigger_delivery_status',
         await ctx.tools.set_watch_trigger_delivery_status.execute({
-          triggerIds: group.map((t) => t.id),
+          triggerIds: nonBlocked.map(({ trigger }) => trigger.id),
           status,
           ...(notificationId === undefined ? {} : { notificationId }),
         }),
@@ -346,7 +384,13 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       ...runningRun,
       status,
       finishedAt: ctx.clock(),
-      outputSummary: { evaluatedPlans, triggered, notified, deduped },
+      outputSummary: {
+        evaluatedPlans,
+        triggered,
+        notified,
+        deduped,
+        notRequestedByMissingElements,
+      },
     };
     await recordRun(ctx, terminal);
 
@@ -357,6 +401,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       triggered,
       notified,
       deduped,
+      notRequestedByMissingElements,
     });
   } catch (error) {
     const failed: WorkflowRun = {
@@ -373,6 +418,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       triggered,
       notified,
       deduped,
+      notRequestedByMissingElements,
     });
   }
 };

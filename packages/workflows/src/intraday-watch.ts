@@ -18,7 +18,14 @@ import {
 } from '@luoome/core';
 import { recordWatchRunTool } from '@luoome/tools';
 import { z } from 'zod';
+
+const errorTextOf = (error: unknown): string =>
+  typeof error === 'object' && error !== null && 'message' in error
+    ? String((error as { message: unknown }).message)
+    : String(error);
+
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { collectReminderElements, NON_PLAN_DISCLOSURE } from './internal/reminder-elements.js';
 import {
   type WatchWorkflowStep as WorkflowStep,
   watchExecutionStep,
@@ -92,6 +99,11 @@ export const IntradayWatchOutput = z.object({
   notifyFailed: z.number().int().nonnegative(),
   unknownRules: z.number().int().nonnegative(),
   delivered: z.number().int().nonnegative(),
+  /**
+   * 因**提醒要素不全**而未投递的条数（REQ-M3-09 §5）：记 `not-requested`，
+   * 面板据此显示「未投递 N 条」，**不静默丢弃**。
+   */
+  notRequestedByMissingElements: z.number().int().nonnegative(),
   /** MVP2：同一轮盘中检查的结构化交易计划结果。 */
   tradingPlanWatch: z.unknown().optional(),
 });
@@ -1243,6 +1255,8 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
   let notifiedCount = 0;
   let notifyFailed = 0;
   let delivered = 0;
+  const errors: string[] = [];
+  let notRequestedByMissingElements = 0;
   const finalDelivery = new Map<
     string,
     { status: DeliveryStatus; notificationId?: string; notified: boolean }
@@ -1263,9 +1277,41 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
         t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
       return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote ? t.quote.close.toFixed(2) : '—'} — ${t.reason}`;
     });
-    const content = lines.join('\n');
+    /**
+     * 六要素不全的触发不投递（REQ-M3-09 §5）：记 `not-requested` 并计入
+     * `notRequestedByMissingElements`。盘中 AlertPlan 触发没有关联交易计划，
+     * 所以止损/目标价、反证、风险、有效期、卖出限制**结构性拿不到** —— 如实记录，不伪造。
+     */
+    const gated = group.map((t) => ({
+      trigger: t,
+      elements: collectReminderElements({ trigger: t }),
+    }));
+    const deliverable = gated.filter((item) => item.elements.status === 'complete');
+    const blocked = gated.filter((item) => item.elements.status !== 'complete');
+    if (blocked.length > 0) {
+      const blockedUpdate = await ctx.tools.set_watch_trigger_delivery_status.execute({
+        triggerIds: blocked.map(({ trigger }) => trigger.id),
+        status: 'not-requested',
+      });
+      if (!blockedUpdate.ok) errors.push(errorTextOf(blockedUpdate.error));
+      for (const { trigger, elements } of blocked) {
+        finalDelivery.set(trigger.id, { status: 'not-requested', notified: false });
+        ctx.logger.warn('[intraday-watch] 提醒要素不全，未投递', {
+          triggerId: trigger.id,
+          missingElements: elements.status === 'incomplete' ? elements.missingElements : [],
+          reasons: elements.status === 'incomplete' ? elements.reasons : [],
+        });
+      }
+      notRequestedByMissingElements += blocked.length;
+    }
+    if (deliverable.length === 0) continue;
+    const content = [
+      ...deliverable.map(({ trigger: t }) => lines[group.indexOf(t)] ?? ''),
+      // 不适用必须被说出来（REQ-M3-09 §5）：阈值型提醒没有计划层五项，读者有权知道。
+      NON_PLAN_DISCLOSURE,
+    ].join('\n');
     const attempt = await ctx.tools.begin_watch_delivery.execute({
-      triggerIds: group.map((t) => t.id),
+      triggerIds: deliverable.map(({ trigger }) => trigger.id),
     });
     if (!attempt.ok) return attempt;
     const r = await ctx.tools.send_notification.execute({
@@ -1298,15 +1344,15 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     } else {
       notificationId = r.data.notification.id;
     }
-    notifiedCount += group.length;
-    if (deliveryStatus === 'sent') delivered += group.length;
+    notifiedCount += deliverable.length;
+    if (deliveryStatus === 'sent') delivered += deliverable.length;
     const delivery = await ctx.tools.set_watch_trigger_delivery_status.execute({
-      triggerIds: group.map((t) => t.id),
+      triggerIds: deliverable.map(({ trigger }) => trigger.id),
       status: deliveryStatus,
       ...(notificationId === undefined ? {} : { notificationId }),
     });
     if (!delivery.ok) return delivery;
-    for (const trigger of group) {
+    for (const { trigger } of deliverable) {
       finalDelivery.set(trigger.id, {
         status: deliveryStatus,
         ...(notificationId === undefined ? {} : { notificationId }),
@@ -1345,6 +1391,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     notifyFailed,
     unknownRules: state.unknownRules,
     delivered,
+    notRequestedByMissingElements,
   });
 };
 

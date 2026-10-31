@@ -1123,6 +1123,42 @@ type ToolError =
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
   日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
 
+### 8.1.1 提醒要素矩阵（REQ-M3-09 §5）
+
+PRD §5 要求「提醒消息必须含触发价、止损/目标价、反证、风险、有效期、卖出限制」，缺任一项则不投递。
+但这六项里有三项（止损/目标价、有效期、卖出限制）**本质是 plan 层概念**：若要求每条提醒都有它们，
+就必须同时要求「每条提醒都关联一个 `TradingPlan`」——而 PRD 没有这条要求，`AlertPlan` 里也
+**没有任何指向 `TradingPlan` 的字段**（`alertPlan.ts` 的 `AlertPlanSchema` 只有 watchlist / rules /
+送达策略）。字面读法与数据模型矛盾，因此按**两类提醒**执行（实现对：`workflows/src/internal/reminder-elements.ts`）：
+
+| 类型 | 何时 | 判定依据 | 要素 |
+|---|---|---|---|
+| `planned` 计划型 | `intraday-trading-plan-watch`，关联 active `TradingPlan` | 计划 + 触发行情 | **六项全要**；缺任一 → 不投递 |
+| `threshold` 阈值型 | `intraday-watch`（AlertPlan 盘中），无 plan | `WatchTrigger.quote.close` | 触发价必须有；计划五项 **`not-applicable`** |
+| `event` 事件型 | `evaluate-event-rules`（事件日期），无 plan | 事件本身（`eventKind` + `occursAt` + `remindDay`） | 触发条件即事件；计划五项（含触发价）**`not-applicable`** |
+
+**要素的四种状态**（`present` / `empty` / `absent` / `not-applicable`）必须分开：
+`empty` 是「字段在但值为空」，`absent` 是「字段不存在」，`not-applicable` 是「这类提醒本就不该有」。
+三者都不等于「填了 0 / 填了 false」——`stopLoss: 0` 是 `present`。
+`missingElements` 只装 `empty` / `absent`；`notApplicableElements` 另计。
+
+**不适用必须被说出来**：阈值型与事件型的投递正文末尾必须追加
+`NON_PLAN_DISCLOSURE`，原文为：
+
+> 这是价格/事件提醒，不含止损、反证、风险、有效期与卖出限制——它不是建议。
+
+**缺口留痕与计数**：判为不投递的触发记 `deliveryStatus='not-requested'`，并把
+`reminderType` / `reminderElements` / `missingElements` / `missingElementReasons` /
+`notApplicableElements` 写进 `evalSnapshot`（附加式，无 schema 变更）。
+`not-requested` 是**终态**——重跑评估不会把它重新算成待投递。
+`list_watch_triggers(includeSummary=true)` 的 `summary.reminderGaps` 把
+`missingElements`（真正没投出去的）与 `notApplicableElements`（都发出去了的）**分开计数**，
+避免用户把「不适用」误读成「提醒失败」。
+
+> **这是对 PRD §5 字面适用范围的收窄。** PRD 正文仍写「提醒消息必须含六要素」，本矩阵把
+> §5 限定为**关联计划**的提醒；阈值型/事件型按「触发条件 + 依据来源 + 观察时点」判定，
+> 并以可见披露替代计划五项。PRD 是否同步改写由需求负责人决定。
+
 ### 8.2 Workflow 与 tool 的边界
 
 | | Tool | Workflow |
