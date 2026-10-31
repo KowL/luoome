@@ -249,6 +249,7 @@ import {
   updateWatchlistMemberTool,
   updateWatchlistTool,
 } from './tools/watchlist.js';
+import { writeReportArtifactTool } from './tools/write-report-artifact.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -573,6 +574,7 @@ export const toolRegistry: Registry = createRegistry([
   getReportTool,
   listReportsTool,
   renderReportTool,
+  writeReportArtifactTool,
   deleteReportTool,
   deleteAdviceTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）

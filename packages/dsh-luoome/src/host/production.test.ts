@@ -614,6 +614,8 @@ describe('dsh-luoome production write policies', () => {
       'add_watchlist_members',
       'update_watchlist_member',
       'archive_watchlist_member',
+      // REQ-M3-08：报告交付物写盘（write，只经 Operation policy）
+      'write_report_artifact',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
     const byName = new Map(policies.map((policy) => [policy.tool.name, policy]));

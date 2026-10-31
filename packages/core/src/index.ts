@@ -68,6 +68,7 @@ export * from './portfolio/ledger.js';
 export * from './portfolio/performance.js';
 export * from './portfolio/trading-plan-budget.js';
 export * from './public-market-store.js';
+export * from './report-artifact.js';
 export * from './report-automation.js';
 export * from './repository/data-import.js';
 // 仓储接口

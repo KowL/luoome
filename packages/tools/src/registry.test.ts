@@ -189,6 +189,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_report',
   'list_reports',
   'render_report',
+  'write_report_artifact',
   'delete_report',
   // Phase 1：连板天梯
   'limit_up_ladder',
@@ -471,6 +472,7 @@ describe('toolRegistry', () => {
       'update_watchlist',
       'update_watchlist_member',
       'validate_strategy_version',
+      'write_report_artifact',
     ]);
   });
 

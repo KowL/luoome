@@ -373,6 +373,22 @@ export const assertReportBlocksPolicy = (blocks: readonly ReportBlock[], where: 
   );
 };
 
+/**
+ * 写盘前复检：**人读正文**不得含行动词。
+ *
+ * 入参必须是 `reportDocumentHumanBody(content)` 的结果——直接对整份文件跑正则会把
+ * canonical JSON 块里保留的原文误判成违规，让含 advice 的报告恒红。
+ */
+export const assertDeliverableBodyPolicy = (body: string, where: string): void => {
+  for (const word of FORBIDDEN_ACTION_WORDS) {
+    const at = body.indexOf(word);
+    if (at < 0) continue;
+    throw new InvariantError(
+      `${where} 含行动词「${word}」：${snippetAround(body, at, word.length)}`,
+    );
+  }
+};
+
 /** 整份报告（全部段）过一遍共享守卫；渲染出口只需要这一句。 */
 export const assertReportTextPolicy = (report: Pick<Report, 'sections'>): void => {
   for (const section of report.sections) {

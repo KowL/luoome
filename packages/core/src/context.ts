@@ -25,6 +25,7 @@ import type { StockProfile, StockProfileQuery } from './entity/stock-profile.js'
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
 import type { ExecutionIdentity } from './personal/execution-identity.js';
+import type { ReportArtifactWriter } from './report-artifact.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
   ResearchEmbeddingAdapterLike,
@@ -304,6 +305,12 @@ export interface ToolContext {
    * 导入 tool 返回 unavailable。暂存文件的创建/清理属于 host 载体 IO，不进 tools。
    */
   readonly dataImport?: DataImportStagingAdapter;
+  /**
+   * 报告交付物写盘（REQ-M3-08 / S3）。只在 DSH 插件 host 装配时注入；
+   * 未注入时 `write_report_artifact` 返回 adapter_error。与 dataImport 同一条纪律：
+   * 载体 IO 不进 tools。
+   */
+  readonly reportArtifacts?: ReportArtifactWriter;
 }
 
 export type AShareSentimentManagerResult =

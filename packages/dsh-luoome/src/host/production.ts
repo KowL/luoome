@@ -66,6 +66,8 @@ import {
   resolveProductionConfigFromEnv,
 } from './production-config.js';
 import { createReadSurface, denied, type ReadSurface } from './read-surface.js';
+import { createWriteReportArtifactOperation } from './report-artifact-operations.js';
+import { createReportArtifacts } from './report-artifacts.js';
 import { createResearchJobs, type ResearchJobs } from './research-jobs.js';
 import { createResearchOperationPolicies } from './research-operations.js';
 import { createStrategyOperationPolicies } from './strategy-operations.js';
@@ -196,6 +198,8 @@ export const createProductionOperationPolicies = (
   ...createAccountOperationPolicies(),
   ...createWatchlistOperationPolicies(),
   ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
+  // REQ-M3-08：报告交付物写盘，只作精确 Operation policy（不进 read/market allowlist）。
+  createWriteReportArtifactOperation(),
   // T48 恢复：只作精确 Operation policy，不进 agent 面。
   ...(options.dataImport === undefined || options.dataImportBackups === undefined
     ? []
@@ -246,6 +250,9 @@ export const createProductionHost = async (
     targetSchema: () => readDataImportStorageSchema(handle.sqlite),
     // 提交前复核备份文件（事务外）。
     backups: dataImportBackups,
+  });
+  const reportArtifacts = createReportArtifacts({
+    directory: join(config.home, 'reports'),
   });
   let read: ReadSurface | undefined;
   let market: MarketSurface | undefined;
@@ -308,6 +315,7 @@ export const createProductionHost = async (
         ? {}
         : { fundamentalData: adapters.fundamentalData }),
       dataImport: dataImportStaging,
+      reportArtifacts,
     });
     context = built;
     saveMarketSettings = (input) =>

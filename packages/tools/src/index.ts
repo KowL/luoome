@@ -148,3 +148,4 @@ export * from './tools/update-holding.js';
 export * from './tools/update-stock-event.js';
 export * from './tools/watchlist.js';
 export * from './tools/workflow-operations.js';
+export * from './tools/write-report-artifact.js';

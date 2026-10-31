@@ -6,6 +6,7 @@ import {
   assertReportBlocksPolicy,
   MORNING_BRIEF_SECTION_KEYS,
   type MorningBriefSectionKey,
+  type Report,
   type ReportBlock,
   ReportBlockSchema,
   ReportEvidenceSchema,
@@ -327,4 +328,114 @@ export const parseReportDocument = (content: string): ReportDocument => {
   }
   assertReportDocumentInvariants(parsed.data);
   return parsed.data;
+};
+
+/**
+ * 六槽的来源段键（REQ-M3-08 / S4）。
+ *
+ * 六槽**不许给默认值**：Report 里没有这些段时，文档生成直接失败并点名缺哪个槽——
+ * 用默认值填上等于废掉「缺段即红」这条验收。
+ */
+export const REPORT_ENVELOPE_SECTION_KEYS = {
+  conclusion: 'envelope-conclusion',
+  counterEvidence: 'envelope-counter-evidence',
+  risks: 'envelope-risks',
+  validity: 'envelope-validity',
+  disclaimer: 'envelope-disclaimer',
+} as const;
+
+const envelopeSection = (report: Report, slot: keyof typeof REPORT_ENVELOPE_SECTION_KEYS) => {
+  const key = REPORT_ENVELOPE_SECTION_KEYS[slot];
+  const section = report.sections.find((item) => item.key === key);
+  if (section === undefined) {
+    throw new InvariantError(`报告缺少 envelope 槽「${slot}」：需要 section「${key}」；不给默认值`);
+  }
+  return section;
+};
+
+const listTexts = (report: Report, slot: keyof typeof REPORT_ENVELOPE_SECTION_KEYS): string[] => {
+  const section = envelopeSection(report, slot);
+  const items = section.blocks.flatMap((block) =>
+    block.kind === 'list' ? block.items.map((item) => item.title) : [],
+  );
+  if (items.length === 0) {
+    throw new InvariantError(
+      `报告 envelope 槽「${slot}」为空：section「${section.key}」需要至少 1 条 list 项`,
+    );
+  }
+  return items;
+};
+
+/**
+ * `Report` → `ReportDocument`（纯函数）。
+ *
+ * 六槽从固定的 envelope 段取；取不到就抛，**不兜底**。非 morning-brief 报告没有盘前四段，
+ * `slot` 保持 undefined。
+ */
+export const reportDocumentFromReport = (report: Report): ReportDocument => {
+  const conclusionSection = envelopeSection(report, 'conclusion');
+  const conclusion = conclusionSection.blocks.find((block) => block.kind === 'text');
+  if (conclusion === undefined || conclusion.kind !== 'text') {
+    throw new InvariantError(
+      `报告 envelope 槽「conclusion」缺失：section「${conclusionSection.key}」需要文本块`,
+    );
+  }
+  const validitySection = envelopeSection(report, 'validity');
+  const validityItems = validitySection.blocks.flatMap((block) =>
+    block.kind === 'metrics' ? block.items : [],
+  );
+  const validUntilItem = validityItems.find((item) => item.key === 'validUntil');
+  const basisItem = validityItems.find((item) => item.key === 'basis');
+  const validUntil = validUntilItem?.value;
+  const basis = basisItem?.value;
+  if (typeof validUntil !== 'string' || Number.isNaN(Date.parse(validUntil))) {
+    throw new InvariantError(
+      `报告 envelope 槽「validity」缺失 validUntil：section「${validitySection.key}」需要 metrics.validUntil（ISO 时间）`,
+    );
+  }
+  const basisParsed = ReportValidityBasisSchema.safeParse(basis);
+  if (!basisParsed.success) {
+    throw new InvariantError(
+      `报告 envelope 槽「validity」缺失 basis：section「${validitySection.key}」需要 metrics.basis ∈ advice-expiry|report-period|explicit`,
+    );
+  }
+  const gaps = [
+    ...report.missingDimensions,
+    ...report.sections.flatMap((section) => section.missingDimensions),
+  ];
+  const document: ReportDocument = {
+    schemaVersion: REPORT_DOCUMENT_SCHEMA_VERSION,
+    rendererVersion: REPORT_DOCUMENT_RENDERER_VERSION,
+    kind: report.kind,
+    reportId: report.id,
+    title: report.title,
+    scope: report.scope,
+    periodStart: report.periodStart,
+    periodEnd: report.periodEnd,
+    generatedAt: report.generatedAt,
+    envelope: {
+      dataAsOf: report.dataAsOf,
+      conclusion: conclusion.text,
+      counterEvidence: listTexts(report, 'counterEvidence'),
+      risks: listTexts(report, 'risks'),
+      validity: { validUntil: new Date(validUntil), basis: basisParsed.data },
+      disclaimer: listTexts(report, 'disclaimer'),
+    },
+    sections: report.sections.map((section) => ({
+      key: section.key,
+      title: section.title,
+      ...(report.kind === 'morning-brief' &&
+      (MORNING_BRIEF_SECTION_KEYS as readonly string[]).includes(section.key)
+        ? { slot: section.key as MorningBriefSectionKey }
+        : {}),
+      status: section.status,
+      dataAsOf: section.dataAsOf ?? report.dataAsOf,
+      blocks: section.blocks,
+      evidenceIds: section.evidenceIds,
+      missingDimensions: section.missingDimensions,
+    })),
+    evidence: report.evidence,
+    gaps,
+  };
+  return ReportDocumentSchema.parse(document);
 };
