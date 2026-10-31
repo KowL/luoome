@@ -1,7 +1,10 @@
-// 组合回测面板的渲染判定（REQ-M1-05 §4：门禁未 complete 时不出现收益数字）。
+// 组合回测面板的渲染判定（REQ-M1-05 §4 + T22 语义）。
 //
-// 面板只能说门禁事实：`gateAudit.status` 不是 `complete` 时，收益率 / 回撤 / Sharpe
-// 这类数字一个都不许出现（含 `—` 占位），只渲染门禁审计表与阻塞项清单。
+// 两个字段回答两个不同问题，不能混用：
+// - `gateAudit.status` 答「有没有已披露缺口」（T22 起 corporate-actions 恒 unavailable，
+//   所以它通常是 partial；partial 只表示有缺口，不表示结果无效）；
+// - `resultAvailability` 答「这次运行的结果能不能用」（执行确实产出 metrics 时为 complete）。
+// 只有 `resultAvailability === 'complete'` 才渲染收益数字；门禁 partial 只影响披露。
 //
 // 为什么把判定抽到这个模块：client 组件依赖 `react`（由 DSH 宿主注入，本仓不安装，
 // 测试环境无法渲染），所以「什么该显示」必须是一份不依赖 react 的纯数据判定，
@@ -35,15 +38,17 @@ const metricRows = (metrics) => [
 /**
  * 一次运行的渲染视图。
  *
- * - `gateComplete`：唯一判定源 —— 取 `gateAudit.status`，不取 `resultAvailability`
- *   （后者由门禁派生，门禁与派生字段不一致时**以门禁为准**，这是 fail-closed 方向）；
- * - `metrics`：非完备态恒为 `null`，即使 run 上残留了 metrics 也不渲染；
- * - `auditRows` / `blockers`：完备态也要带上审计表；阻塞项在完备态只留 `limitations`。
+ * - `gateComplete`：门禁是否没有缺口（`gateAudit.status === 'complete'`），只影响文案；
+ * - `metrics`：唯一判定源是 `resultAvailability === 'complete'`，且必须真的带 metrics；
+ *   两者缺一就 fail-closed 为 `null`（不看门禁 partial——那是缺口披露，不是无效）；
+ * - `auditRows` / `blockers`：任何状态都带审计表；阻塞项 = 门禁未 complete 时的逐项原因
+ *   + `run.limitations`（机制级缺口，例如未考虑分红送转）。
  */
 export const strictBacktestView = (run) => {
   const gateAudit = run?.gateAudit ?? null;
   const gateStatus = gateAudit?.status ?? 'unavailable';
   const gateComplete = gateStatus === 'complete';
+  const resultComplete = run?.resultAvailability === 'complete';
   const auditRows = (gateAudit?.items ?? []).map((item) => ({
     key: item.key,
     status: item.status,
@@ -67,6 +72,6 @@ export const strictBacktestView = (run) => {
           : gateBlockers),
       ...(run?.limitations ?? []),
     ],
-    metrics: gateComplete && run?.metrics ? metricRows(run.metrics) : null,
+    metrics: resultComplete && run?.metrics ? metricRows(run.metrics) : null,
   };
 };

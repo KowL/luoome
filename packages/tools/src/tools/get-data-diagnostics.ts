@@ -65,6 +65,8 @@ export const TargetPositionRangeDiagnosticsSchema = z.object({
   degenerate: z.number().int().nonnegative(),
   ranged: z.number().int().nonnegative(),
   missingRange: z.number().int().nonnegative(),
+  /** 超过统计上限被截断时为 true：此时计数是**下界**，不是全量。 */
+  truncated: z.boolean(),
 });
 
 export const GetDataDiagnosticsOutput = z.object({
@@ -142,16 +144,21 @@ export const getDataDiagnosticsTool = defineTool({
     }
 
     // 2.5) 目标仓位区间退化计数（T31）。
-    const buyAdvices = await ctx.repos.advice.query({
+    // 多取 1 条用来判断是否被截断：截断后给出的计数只是**下界**，不标注就是撒谎。
+    const RANGE_SCAN_LIMIT = 5000;
+    const scanned = await ctx.repos.advice.query({
       decision: 'buy',
       includeExpired: true,
-      limit: 5000,
+      limit: RANGE_SCAN_LIMIT + 1,
     });
+    const truncated = scanned.length > RANGE_SCAN_LIMIT;
+    const buyAdvices = truncated ? scanned.slice(0, RANGE_SCAN_LIMIT) : scanned;
     const targetPositionRanges = {
       checked: buyAdvices.length,
       degenerate: 0,
       ranged: 0,
       missingRange: 0,
+      truncated,
     };
     for (const advice of buyAdvices) {
       const range = advice.targetPositionPctRange;

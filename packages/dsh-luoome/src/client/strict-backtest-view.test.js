@@ -8,10 +8,10 @@ import { STRICT_BACKTEST_COPY, strictBacktestView } from './strict-backtest-view
 
 const gateItem = (key, status, reason) => ({ key, status, reason, evidenceRefs: [] });
 
-const run = ({ gateStatus, metrics }) => ({
+const run = ({ gateStatus, metrics, resultAvailability = gateStatus, limitations }) => ({
   id: 'strict-backtest-fixture',
   status: 'complete',
-  resultAvailability: gateStatus,
+  resultAvailability,
   spec: {
     from: '2026-01-05',
     to: '2026-01-09',
@@ -41,6 +41,7 @@ const run = ({ gateStatus, metrics }) => ({
       ),
     ],
   },
+  ...(limitations === undefined ? {} : { limitations }),
   ...(metrics === undefined
     ? {}
     : {
@@ -53,17 +54,42 @@ const run = ({ gateStatus, metrics }) => ({
       }),
 });
 
-describe('组合回测面板：门禁未 complete 时不得出现收益数字', () => {
-  it('partial 门禁 + 残留 metrics → 面板视图不产出任何指标（含 — 占位）', () => {
-    // 故意构造「门禁 partial 但 run 上残留 metrics」：仓库/DB 层不一致时以门禁为准。
-    const view = strictBacktestView(run({ gateStatus: 'partial', metrics: 'present' }));
+describe('组合回测面板：结果可用性与缺口披露分离（T22 语义）', () => {
+  it('partial 门禁 + resultAvailability complete + metrics → 指标渲染，limitations 同时可见', () => {
+    const view = strictBacktestView(
+      run({
+        gateStatus: 'partial',
+        resultAvailability: 'complete',
+        metrics: 'present',
+        limitations: ['未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。'],
+      }),
+    );
     expect(view.gateComplete).toBe(false);
     expect(view.gateLabel).toBe(STRICT_BACKTEST_COPY.gate.incomplete);
+    expect(view.metrics?.map((metric) => metric.label)).toEqual([
+      '净收益',
+      '最大回撤',
+      '基准收益',
+      '成交笔数',
+    ]);
+    expect(view.metrics?.find((metric) => metric.key === 'netReturn')?.value).toContain('18.4');
+    expect(view.blockers.join('\n')).toContain('未考虑分红送转');
+  });
+
+  it('resultAvailability 缺失时 metrics 为 null（fail-closed）', () => {
+    const view = strictBacktestView(
+      run({ gateStatus: 'partial', resultAvailability: undefined, metrics: 'present' }),
+    );
     expect(view.metrics).toBeNull();
-    // 整份视图序列化后不得出现收益/回撤/Sharpe 字样，也不得出现 metrics 的数值。
+  });
+
+  it('resultAvailability=partial 但残留 metrics → 不渲染（fail-closed）', () => {
+    const view = strictBacktestView(
+      run({ gateStatus: 'partial', resultAvailability: 'partial', metrics: 'present' }),
+    );
+    expect(view.metrics).toBeNull();
     const text = JSON.stringify(view);
-    for (const banned of ['收益率', '回撤', 'Sharpe', '净收益', '18.4', '9.3', '42'])
-      expect(text).not.toContain(banned);
+    for (const banned of ['净收益', '18.4', '42']) expect(text).not.toContain(banned);
   });
 
   it('partial 门禁只给门禁审计表与阻塞项清单，且阻塞项 ≥1 条具体事实', () => {
@@ -94,7 +120,7 @@ describe('组合回测面板：门禁未 complete 时不得出现收益数字', 
     expect(view.blockers).toEqual([STRICT_BACKTEST_COPY.gate.missing]);
   });
 
-  it('门禁 complete 才渲染指标，且指标来源只有一份（本模块）', () => {
+  it('门禁 complete 也渲染指标，且指标来源只有一份（本模块）', () => {
     const view = strictBacktestView(run({ gateStatus: 'complete', metrics: 'present' }));
     expect(view.gateComplete).toBe(true);
     expect(view.metrics.map((metric) => metric.label)).toEqual([

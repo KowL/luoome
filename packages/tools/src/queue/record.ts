@@ -96,8 +96,16 @@ const recordAdvice = async (
   // 拒绝 ⇒ 模型在重试中改正。非买入 action（sell/hold/watch/avoid）仍允许单值：
   // "清仓"就是 0，一刀切会把合法建议挡住。
   // 只拦**新写入**：旧 advice 仍可读，不要求历史补区间。
-  if (advice.decision === 'buy' && advice.targetPositionPctRange === undefined)
-    return errInvalidInput('买入建议必须给出目标仓位区间（百分点），单值不足以表达纪律范围');
+  if (advice.decision === 'buy') {
+    if (advice.targetPositionPctRange === undefined)
+      return errInvalidInput('买入建议必须给出目标仓位区间（百分点），单值不足以表达纪律范围');
+    // `{t, t}` 是"伪装成区间的点估计"：它满足"有区间"，但仍然不表达不确定性，
+    // H4 宽度纪律照样永不触发。P3 要的是用区间承认边界——真有把握就给紧区间。
+    if (advice.targetPositionPctRange.min >= advice.targetPositionPctRange.max)
+      return errInvalidInput(
+        '买入建议的区间必须 min < max（单值点估计不算区间）；若确有把握，请给出紧区间如 9.5–10.5',
+      );
+  }
   const recorded = await ctx.repos.analysis.recordAdvice({
     accountId,
     contextId: context.id,

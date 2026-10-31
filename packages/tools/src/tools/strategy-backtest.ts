@@ -11,6 +11,7 @@ import {
   type StrictBacktestGateAudit,
   type StrictBacktestGateItem,
   type StrictBacktestMarketFact,
+  type StrictBacktestRun,
   StrictBacktestRunSchema,
   StrictBacktestSpecSchema,
   strictBacktestHash,
@@ -73,6 +74,13 @@ const CORPORATE_ACTIONS_LIMITATION =
   '未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。';
 
 const BACKTEST_LIMITATIONS = [ST_DERIVATION_LIMITATION, CORPORATE_ACTIONS_LIMITATION] as const;
+
+/**
+ * 读侧注入：limitations 是机制级披露（所有 run 都没考虑分红），不是 run 级数据；
+ * 旧 run 没有该字段时，读回也要带上，避免“历史 run 看不到缺口”。
+ */
+const withBacktestLimitations = (run: StrictBacktestRun): StrictBacktestRun =>
+  run.limitations === undefined ? { ...run, limitations: [...BACKTEST_LIMITATIONS] } : run;
 
 const gate = (
   key: StrictBacktestGateItem['key'],
@@ -493,7 +501,7 @@ export const createStrictStrategyBacktestTool = defineTool({
     const specHash = strictBacktestSpecHash(spec);
     const id = `strict-backtest-${strictBacktestHash({ specHash, inputFingerprint: assembled.inputFingerprint }).slice(0, 32)}`;
     const existing = await ctx.repos.strategyBacktest.findRunById(id);
-    if (existing !== null) return { run: existing };
+    if (existing !== null) return { run: withBacktestLimitations(existing) };
     const now = ctx.clock();
     const runnable = blockingGatesComplete(assembled.gateAudit);
     const run = StrictBacktestRunSchema.parse({
@@ -510,7 +518,7 @@ export const createStrictStrategyBacktestTool = defineTool({
       ...(runnable ? {} : { finishedAt: now }),
     });
     await ctx.repos.strategyBacktest.saveRun(run);
-    return { run };
+    return { run: withBacktestLimitations(run) };
   },
 });
 
@@ -523,7 +531,8 @@ export const executeStrictStrategyBacktestTool = defineTool({
   handler: async (input, ctx: ToolContext) => {
     const existing = await ctx.repos.strategyBacktest.findRunById(input.backtestRunId);
     if (existing === null) return errNotFound('StrictStrategyBacktest', input.backtestRunId);
-    if (existing.status === 'complete' || existing.status === 'failed') return { run: existing };
+    if (existing.status === 'complete' || existing.status === 'failed')
+      return { run: withBacktestLimitations(existing) };
     if (!blockingGatesComplete(existing.gateAudit))
       return errInvalidInput('strict backtest facts gate 未完成');
     const context = await collectBacktestContext(existing.spec, ctx);
@@ -584,9 +593,10 @@ export const getStrictStrategyBacktestTool = defineTool({
   sideEffect: 'read',
   input: GetStrictStrategyBacktestInput,
   output: GetStrictStrategyBacktestOutput,
-  handler: async (input, ctx) => ({
-    run: await ctx.repos.strategyBacktest.findRunById(input.backtestRunId),
-  }),
+  handler: async (input, ctx) => {
+    const run = await ctx.repos.strategyBacktest.findRunById(input.backtestRunId);
+    return { run: run === null ? null : withBacktestLimitations(run) };
+  },
 });
 
 export const listStrictStrategyBacktestsTool = defineTool({
@@ -596,9 +606,11 @@ export const listStrictStrategyBacktestsTool = defineTool({
   input: ListStrictStrategyBacktestsInput,
   output: ListStrictStrategyBacktestsOutput,
   handler: async (input, ctx) => ({
-    runs: await ctx.repos.strategyBacktest.listRuns({
-      ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
-      limit: input.limit,
-    }),
+    runs: (
+      await ctx.repos.strategyBacktest.listRuns({
+        ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
+        limit: input.limit,
+      })
+    ).map(withBacktestLimitations),
   }),
 });

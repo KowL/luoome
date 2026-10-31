@@ -230,21 +230,43 @@ describe('analysis tools', () => {
         message: '买入建议必须给出目标仓位区间（百分点），单值不足以表达纪律范围',
       });
 
-    // 买入 + 区间 → 过
-    const accepted = await recordAdviceTool.execute(
+    // 买入 + 退化区间 {t,t} → 拒（伪装成区间的点估计）
+    const degenerate = await recordAdviceTool.execute(
       {
         contextId: snapshot.data.id,
         result: {
           ...result,
           decision: 'buy',
           ...prices,
-          targetPositionPctRange: { min: 8, max: 12 },
+          targetPositionPctRange: { min: 10, max: 10 },
         },
         provenance,
       },
       ctx,
     );
-    expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+    expect(degenerate.ok).toBe(false);
+    if (!degenerate.ok)
+      expect(degenerate.error).toMatchObject({
+        kind: 'invalid_input',
+        message:
+          '买入建议的区间必须 min < max（单值点估计不算区间）；若确有把握，请给出紧区间如 9.5–10.5',
+      });
+
+    // 买入 + 紧区间 9.5–10.5 → 过（紧区间是允许的，只有 min === max 不行）
+    const tight = await recordAdviceTool.execute(
+      {
+        contextId: snapshot.data.id,
+        result: {
+          ...result,
+          decision: 'buy',
+          ...prices,
+          targetPositionPctRange: { min: 9.5, max: 10.5 },
+        },
+        provenance,
+      },
+      ctx,
+    );
+    expect(tight.ok, JSON.stringify(tight)).toBe(true);
 
     // 非买入（sell）+ 单值 → 不被区间规则挡住
     const sellSnapshot = await getAnalysisContextTool.execute(

@@ -175,5 +175,7 @@ describe('T14 get_data_diagnostics', () => {
     expect(ranges.degenerate).toBe(2);
     expect(ranges.ranged).toBe(1);
     expect(ranges.checked).toBe(3);
+    // 未达上限 → 不是截断，计数是全量
+    expect((ranges as { truncated?: boolean }).truncated).toBe(false);
   });
 });

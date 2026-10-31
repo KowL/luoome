@@ -20,6 +20,7 @@ import {
   createStrictStrategyBacktestTool,
   executeStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
+  listStrictStrategyBacktestsTool,
 } from './strategy-backtest.js';
 
 const D0 = new Date('2026-08-12T00:00:00.000Z');
@@ -324,6 +325,14 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     // get 读回的 result 与 metrics 旁边同样带 limitations。
     const read = await getStrictStrategyBacktestTool.execute({ backtestRunId: run.id }, ctx);
     expect(read.ok && read.data.run?.limitations?.join('\n')).toContain('高股息标的总收益被低估');
+
+    // 读侧注入：旧 run 没有 limitations 字段，读回也要带机制级披露。
+    const { limitations: _ignored, ...legacyRun } = executed.data.run;
+    await ctx.repos.strategyBacktest.saveRun(legacyRun);
+    const legacyRead = await getStrictStrategyBacktestTool.execute({ backtestRunId: run.id }, ctx);
+    expect(legacyRead.ok && legacyRead.data.run?.limitations?.join('\n')).toContain('未考虑分红送转');
+    const listed = await listStrictStrategyBacktestsTool.execute({ limit: 10 }, ctx);
+    expect(listed.ok && listed.data.runs[0]?.limitations?.join('\n')).toContain('高估可交易性');
 
     // 同一 spec + 同一输入指纹：重复 create 返回同一 run；重复 execute 幂等。
     const again = await createStrictStrategyBacktestTool.execute(

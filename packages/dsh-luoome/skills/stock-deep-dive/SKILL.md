@@ -48,7 +48,9 @@ whenToUse: 用户点名某个标的问「这只票怎么样」「深度分析一
 ## 边界
 
 - 事实包之外的信息不得作为证据；研究检索结果只作背景，不能替代事实包里的数字与 `factIds`。
-- 给目标仓位时**优先给区间** `targetPositionPctRange: {min,max}`（百分点），只在没有区间依据时才给单值 `targetPositionPct`；
+- **买入建议必须给区间** `targetPositionPctRange: {min,max}`（百分点），且 `min < max`；
+  `{10,10}` 这类点估计会被 `record_advice` 拒绝——真有把握就给紧区间（如 9.5–10.5），不要用点估计冒充区间。
+  非买入 action（sell/hold/watch/avoid）可给单值 `targetPositionPct`（"清仓"就是 0）。
   区间会按 H4 纪律被系统对称收窄并记录 `rangeAdjustment`，超出上限不是错误，但收窄结果会在计划里可见。
 - 缺口逐条引用 `missingFacts`（`kind` / `subjectId` / `reason` / `asOf`），不要只写自由文本；
   `kind` 是枚举值，`quote-unavailable` / `quote-stale` / `account-facts-unavailable` /
