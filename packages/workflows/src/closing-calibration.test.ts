@@ -207,6 +207,11 @@ describe('DS-6 closing report calibration', () => {
     expect(values).toEqual({
       adviceSampleCount: 8,
       explicitFeedbackCount: 6,
+      excludedNonUserOrigin: 0,
+      excludedUnattested: 0,
+      excludedUnsettled: 1,
+      excludedPartiallyFollowed: 1,
+      excludedIgnored: 1,
       feedbackCoverage: 0.75,
       followedWithReportedPnlCount: 3,
       reportedProfitShare: 1 / 3,

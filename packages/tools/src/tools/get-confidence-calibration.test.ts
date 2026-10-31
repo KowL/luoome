@@ -120,7 +120,7 @@ describe('get_confidence_calibration', () => {
     expect(result.data.totalAdvices).toBe(5);
     expect(result.data.totalWithOutcome).toBe(5);
     expect(result.data.buckets).toHaveLength(10);
-    // bucket2 = 20-29：adv-low 落入；hits=1；withOutcome=1；hitRate=1
+    // bucket2 = 20-29：adv-low 落入；保留 hits，但小样本不输出分组比例。
     const b2 = result.data.buckets[2];
     expect(b2).toBeDefined();
     if (b2 !== undefined) {
@@ -128,16 +128,17 @@ describe('get_confidence_calibration', () => {
       expect(b2.total).toBe(1);
       expect(b2.withOutcome).toBe(1);
       expect(b2.hits).toBe(1);
-      expect(b2.hitRate).toBe(1);
+      expect(b2.hitRate).toBeNull();
+      expect(b2.minimumSampleMet).toBe(false);
     }
-    // bucket3 = 30-39：adv-low-2；hit=false → hits=0；hitRate=0；avgPnl=-5
+    // bucket3 = 30-39：adv-low-2；hit=false → hits=0；不能用 0 代替不足样本的结论。
     const b3 = result.data.buckets[3];
     expect(b3).toBeDefined();
     if (b3 !== undefined) {
       expect(b3.total).toBe(1);
       expect(b3.withOutcome).toBe(1);
       expect(b3.hits).toBe(0);
-      expect(b3.hitRate).toBe(0);
+      expect(b3.hitRate).toBeNull();
       expect(b3.avgPnl).toBeNull();
     }
     // bucket6 = 60-69：adv-mid；hits=1
@@ -153,7 +154,7 @@ describe('get_confidence_calibration', () => {
     if (b7 !== undefined) {
       expect(b7.total).toBe(1);
       expect(b7.hits).toBe(0);
-      expect(b7.hitRate).toBe(0);
+      expect(b7.hitRate).toBeNull();
     }
     // bucket9 = 90-100：adv-high；hits=1；confidence=92 → avgConfidence=92
     const b9 = result.data.buckets[9];
@@ -162,7 +163,7 @@ describe('get_confidence_calibration', () => {
       expect(b9.range).toEqual({ min: 90, max: 100 });
       expect(b9.total).toBe(1);
       expect(b9.hits).toBe(1);
-      expect(b9.hitRate).toBe(1);
+      expect(b9.hitRate).toBeNull();
       expect(b9.avgConfidence).toBe(92);
     }
     // overallHitRate = (1+0+1+0+1) / 5 = 0.6
@@ -213,7 +214,7 @@ describe('get_confidence_calibration', () => {
       expect(b5.total).toBe(3);
       expect(b5.withOutcome).toBe(1);
       expect(b5.hits).toBe(1);
-      expect(b5.hitRate).toBe(1);
+      expect(b5.hitRate).toBeNull();
     }
     expect(result.data.overallHitRate).toBe(1);
   });
@@ -312,7 +313,8 @@ describe('calibration provenance groups', () => {
     if (!result.ok) throw new Error(result.error.kind);
     expect(result.data.groups).toHaveLength(4);
     expect(result.data.buckets).toEqual([]);
-    expect(result.data.overallHitRate).toBeNull();
+    expect(result.data.overallHitRate).toBe(1);
+    expect(result.data.minimumSampleMet).toBe(false);
     expect(result.data.groups.find((group) => group.generatorKind === 'legacy-ai')).toMatchObject({
       model: null,
       skillVersion: null,
@@ -379,7 +381,13 @@ describe('calibration provenance groups', () => {
     expect(strict.data.followedWithPnl).toBe(0);
     expect(strict.data.overallHitRate).toBeNull();
     expect(strict.data.originCounts).toEqual({ user: 0, model: 1, import: 0, unattested: 0 });
-    expect(strict.data.excluded).toEqual({ nonUserOrigin: 1, unattested: 0 });
+    expect(strict.data.excluded).toEqual({
+      nonUserOrigin: 1,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
 
     const all = await getConfidenceCalibrationTool.execute({ originFilter: 'all' }, ctx);
     expect(all.ok).toBe(true);
@@ -387,6 +395,12 @@ describe('calibration provenance groups', () => {
     expect(all.data.totalWithOutcome).toBe(1);
     expect(all.data.followedWithPnl).toBe(1);
     expect(all.data.overallHitRate).toBe(1);
-    expect(all.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
+    expect(all.data.excluded).toEqual({
+      nonUserOrigin: 0,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
   });
 });

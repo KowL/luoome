@@ -13,6 +13,10 @@ import {
 import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
 import { accountAdviceOutcomes } from '../internal/account-advice-outcomes.js';
+import {
+  AdviceOutcomeScopeSchema,
+  partitionAdviceOutcomes,
+} from '../internal/advice-outcome-scope.js';
 import { rejectNonPitObservations } from '../internal/observation-vintage.js';
 
 const REVIEW_LIMIT = 1000;
@@ -21,6 +25,7 @@ export const GetDecisionLoopReviewInput = z
   .object({
     /** 账户 id；缺省为当前用户默认账户。 */
     accountId: z.string().min(1).optional(),
+    originFilter: z.enum(['user', 'all']).default('user'),
     /** 可选股票范围；Advice/Trade/SignalObservation 均按该股票过滤。 */
     stockId: z.string().min(1).optional(),
     /** Advice 按 createdAt、Trade/SignalObservation 按各自事实时间过滤。 */
@@ -45,7 +50,7 @@ const OutcomeDistributionSchema = z.object({
   ignored: z.number().int().nonnegative(),
 });
 
-const AdviceReviewSchema = z.object({
+const AdviceReviewSchema = AdviceOutcomeScopeSchema.extend({
   total: z.number().int().nonnegative(),
   backfilled: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
@@ -252,7 +257,7 @@ export const getDecisionLoopReviewTool = defineTool({
     const vintageRejection = rejectNonPitObservations(allObservations, '策略历史命中陈述');
     if (vintageRejection !== null) return vintageRejection;
     const allReviews = await ctx.repos.decisionReview.list({ accountId, limit: 10000 });
-    const outcomeByAdvice = await accountAdviceOutcomes(ctx, accountId);
+    const accountOutcomes = await accountAdviceOutcomes(ctx, accountId);
     const selectedSharedAdviceIds = new Set(
       allReviews
         .filter(({ review }) => review.subject.kind === 'advice')
@@ -293,6 +298,12 @@ export const getDecisionLoopReviewTool = defineTool({
       input.stockId === undefined
         ? accountStockIds.has(observation.stockId)
         : observation.stockId === input.stockId,
+    );
+
+    const { inScope: outcomeByAdvice, ...outcomeScope } = partitionAdviceOutcomes(
+      accountOutcomes,
+      input.originFilter,
+      advices.map((advice) => advice.id),
     );
 
     const backfilled = advices.filter((advice) => outcomeByAdvice.has(advice.id)).length;
@@ -361,7 +372,9 @@ export const getDecisionLoopReviewTool = defineTool({
     const unknowns: string[] = [];
     if (advices.length === 0) unknowns.push('当前账户/股票范围没有可见 Advice，无法判断建议结果。');
     if (backfilled < advices.length) {
-      unknowns.push(`${advices.length - backfilled} 条 Advice 尚未回填 AdviceOutcome。`);
+      unknowns.push(
+        `${advices.length - backfilled} 条 Advice 尚无当前来源口径内的 AdviceOutcome。`,
+      );
     }
     if (trades.length === 0) unknowns.push('当前账户/股票范围没有交易事实，无法判断实际行动。');
     if (observations.length === 0) {
@@ -391,6 +404,7 @@ export const getDecisionLoopReviewTool = defineTool({
       'Trade 依据字段是用户显式 provenance；缺失关联不代表 Advice 未采纳，也不会自动补链。',
       'SignalObservation 没有 accountId 维度；账户范围按该账户交易/持仓股票投影，不能证明观察只属于该账户。',
       'AdviceOutcome 的 pnl/benchmarkPnl 缺省时保持未知，不折算为 0；本摘要也不从 Trade 或行情反推 outcome。',
+      `AdviceOutcome 来源口径为 ${input.originFilter}；排除 model/import ${outcomeScope.excluded.nonUserOrigin} 条、无来源戳 ${outcomeScope.excluded.unattested} 条，成交归因不受该过滤影响。`,
     ];
     const evidenceIds = [
       ...new Set([
@@ -417,6 +431,7 @@ export const getDecisionLoopReviewTool = defineTool({
         ...(input.until === undefined ? {} : { until: input.until }),
       },
       advice: {
+        ...outcomeScope,
         total: advices.length,
         backfilled,
         pending: advices.length - backfilled,

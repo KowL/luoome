@@ -54,7 +54,7 @@ const pendingObservation = {
 
 describe('get_decision_loop_review', () => {
   it('按账户/股票聚合 Advice、Trade 归因、SignalObservation 与研究假设证据', async () => {
-    const ctx = await buildTestContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW, adviceOutcomeOrigin: 'user' });
     const advice = (
       await ctx.repos.advice.query({
         subjectKind: 'stock',
@@ -110,6 +110,9 @@ describe('get_decision_loop_review', () => {
 
     expect(result.data.scope).toEqual({ accountId: TEST_ACCOUNT.id, stockId: '002594.SZ' });
     expect(result.data.advice).toEqual({
+      originFilter: 'user',
+      originCounts: { user: 1, model: 0, import: 0, unattested: 0 },
+      excluded: { nonUserOrigin: 0, unattested: 0 },
       total: 1,
       backfilled: 1,
       pending: 0,
@@ -181,5 +184,72 @@ describe('get_decision_loop_review', () => {
       ctx,
     );
     expect(invalid).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+  });
+
+  it('默认只统计窗口内 user，显式 all 保留原来源；成交归因不随过滤改变', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const template = (await ctx.repos.advice.query({ includeExpired: true }))[0];
+    if (!template) throw new Error('missing advice fixture');
+    for (const id of ['user', 'model', 'import', 'legacy', 'outside-window', 'other-account']) {
+      const accountId = id === 'other-account' ? TEST_ACCOUNT_LONGTERM.id : TEST_ACCOUNT.id;
+      const createdAt = id === 'outside-window' ? new Date('2026-07-01') : NOW;
+      await ctx.repos.advice.save({
+        ...template,
+        id,
+        subjectKind: 'portfolio',
+        subjectId: accountId,
+        createdAt,
+      });
+      const origin = id === 'user' ? 'user' : id === 'import' ? 'import' : 'model';
+      expect(
+        (
+          await recordAdviceOutcomeTool.execute(
+            { adviceId: id, accountId, outcome: 'ignored' },
+            { ...ctx, adviceOutcomeOrigin: origin },
+          )
+        ).ok,
+      ).toBe(true);
+      if (id === 'legacy') {
+        const row = await ctx.repos.decisionReview.findBySubject({
+          accountId,
+          subject: { kind: 'advice', id },
+        });
+        if (!row?.revision.content.adviceFeedback) throw new Error('missing review fixture');
+        const { origin: _origin, ...feedback } = row.revision.content.adviceFeedback;
+        await ctx.repos.decisionReview.commit({
+          accountId,
+          requestId: crypto.randomUUID(),
+          requestHash: 'legacy',
+          expectedRevision: 1,
+          review: row.review,
+          content: { ...row.revision.content, adviceFeedback: feedback },
+          contentHash: 'legacy',
+          tradeFactHashes: {},
+          changeNote: 'legacy fixture',
+          recordedAt: NOW,
+        });
+      }
+    }
+    const input = { accountId: TEST_ACCOUNT.id, since: NOW, until: NOW };
+    const strict = await getDecisionLoopReviewTool.execute(input, ctx);
+    const all = await getDecisionLoopReviewTool.execute({ ...input, originFilter: 'all' }, ctx);
+    if (!strict.ok || !all.ok) throw new Error('review fixture failed');
+    expect(strict.data.advice).toMatchObject({
+      backfilled: 1,
+      pending: 3,
+      originFilter: 'user',
+      originCounts: { user: 1, model: 1, import: 1, unattested: 1 },
+      excluded: { nonUserOrigin: 2, unattested: 1 },
+      outcomeDistribution: { followed: 0, partiallyFollowed: 0, ignored: 1 },
+    });
+    expect(all.data.advice).toMatchObject({
+      backfilled: 4,
+      pending: 0,
+      originFilter: 'all',
+      excluded: { nonUserOrigin: 0, unattested: 0 },
+      outcomeDistribution: { ignored: 4 },
+    });
+    expect(strict.data.trades).toEqual(all.data.trades);
+    expect(strict.data.limitations.join(' ')).toContain('无来源戳 1 条');
   });
 });

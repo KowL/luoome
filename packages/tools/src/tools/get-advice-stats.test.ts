@@ -1,10 +1,11 @@
-import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import { TEST_ACCOUNT, TEST_ACCOUNT_LONGTERM } from '@luoome/adapters/testing';
 import { type Advice, type AdviceRepository, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildContext } from '../context.js';
 import { buildTestContext } from '../testing/context.js';
 import { getAdviceStatsTool } from './get-advice-stats.js';
+import { getConfidenceCalibrationTool } from './get-confidence-calibration.js';
 import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const makeAdvice = (id: string, decision: Advice['decision'], confidence: number): Advice => ({
@@ -43,6 +44,117 @@ const seedTwo = (): Advice[] => [
 ];
 
 describe('get_advice_stats', () => {
+  it('M3-10：同账户窗口的混合回填在两个真实工具中使用相同已了结分母', async () => {
+    const ctx = await buildTestContext({ advices: [], clock: () => new Date('2026-01-05') });
+    const samples = [
+      { id: 'profit', outcome: 'followed', origin: 'user', pnl: 10, benchmarkPnl: 5 },
+      { id: 'loss', outcome: 'followed', origin: 'user', pnl: -5, benchmarkPnl: -10 },
+      { id: 'zero', outcome: 'followed', origin: 'user', pnl: 0, benchmarkPnl: 0 },
+      { id: 'unclosed', outcome: 'followed', origin: 'user' },
+      { id: 'partial', outcome: 'partially_followed', origin: 'user', pnl: 100 },
+      { id: 'ignored', outcome: 'ignored', origin: 'user', pnl: 100 },
+      { id: 'model', outcome: 'followed', origin: 'model', pnl: 100 },
+      { id: 'import', outcome: 'followed', origin: 'import', pnl: 100 },
+      { id: 'legacy', outcome: 'followed', origin: undefined, pnl: 100 },
+      { id: 'before', outcome: 'followed', origin: 'model', pnl: 100 },
+      { id: 'after', outcome: 'followed', origin: undefined, pnl: 100 },
+      { id: 'other-account', outcome: 'followed', origin: 'model', pnl: 100 },
+    ] as const;
+    for (const sample of samples) {
+      const { id, origin, ...input } = sample;
+      const accountId = id === 'other-account' ? TEST_ACCOUNT_LONGTERM.id : TEST_ACCOUNT.id;
+      const createdAt = new Date(
+        id === 'before' ? '2025-12-31' : id === 'after' ? '2026-01-02' : '2026-01-01',
+      );
+      await ctx.repos.advice.save({
+        ...makeAdvice(id, 'buy', 80),
+        subjectKind: 'portfolio',
+        subjectId: accountId,
+        createdAt,
+      });
+      const recorded = await recordAdviceOutcomeTool.execute(
+        { ...input, adviceId: id, accountId },
+        { ...ctx, adviceOutcomeOrigin: origin ?? 'user' },
+      );
+      expect(recorded.ok).toBe(true);
+      if (origin === undefined) {
+        const row = await ctx.repos.decisionReview.findBySubject({
+          accountId,
+          subject: { kind: 'advice', id },
+        });
+        if (!row?.revision.content.adviceFeedback) throw new Error('missing fixture feedback');
+        const { origin: _origin, ...legacy } = row.revision.content.adviceFeedback;
+        await ctx.repos.decisionReview.commit({
+          accountId,
+          requestId: crypto.randomUUID(),
+          requestHash: `legacy-${id}`,
+          expectedRevision: row.review.currentRevision,
+          review: row.review,
+          content: { ...row.revision.content, adviceFeedback: legacy },
+          contentHash: `legacy-content-${id}`,
+          tradeFactHashes: {},
+          changeNote: 'fixture: pre-origin revision',
+          recordedAt: ctx.clock(),
+        });
+      }
+    }
+    await ctx.repos.advice.save(makeAdvice('no-feedback', 'buy', 80));
+    const window = { accountId: TEST_ACCOUNT.id, since: '2026-01-01', until: '2026-01-01' };
+    const stats = await getAdviceStatsTool.execute(window, ctx);
+    const calibration = await getConfidenceCalibrationTool.execute(window, ctx);
+    if (!stats.ok || !calibration.ok) throw new Error('fixture tools failed');
+    expect(stats.data.denominator).toBe(3);
+    for (const data of [stats.data, calibration.data]) {
+      expect(data).toMatchObject({
+        schemaVersion: 2,
+        metricVersion: 'advice-hit-rate-v3',
+        denominator: 3,
+        hitRate: 1 / 3,
+        hits: 1,
+        minimumSampleMet: false,
+        sampleStatus: 'insufficient',
+        originCounts: { user: 6, model: 1, import: 1, unattested: 1 },
+        excluded: {
+          nonUserOrigin: 2,
+          unattested: 1,
+          unsettled: 1,
+          partiallyFollowed: 1,
+          ignored: 1,
+        },
+        excessHitRate: {
+          status: 'available',
+          value: 2 / 3,
+          denominator: 3,
+          hits: 2,
+          missingBenchmark: 0,
+        },
+      });
+    }
+    expect(stats.data.feedbackCount).toBe(6);
+    expect(calibration.data.overallHitRate).toBe(stats.data.hitRate);
+    expect(stats.data.byDecision.buy).toMatchObject({ hitRate: null, minimumSampleMet: false });
+    const allStats = await getAdviceStatsTool.execute({ ...window, originFilter: 'all' }, ctx);
+    const allCalibration = await getConfidenceCalibrationTool.execute(
+      { ...window, originFilter: 'all' },
+      ctx,
+    );
+    if (!allStats.ok || !allCalibration.ok) throw new Error('fixture all tools failed');
+    for (const data of [allStats.data, allCalibration.data]) {
+      expect(data).toMatchObject({
+        denominator: 6,
+        hitRate: 4 / 6,
+        excluded: {
+          nonUserOrigin: 0,
+          unattested: 0,
+          unsettled: 1,
+          partiallyFollowed: 1,
+          ignored: 1,
+        },
+        excessHitRate: { status: 'unavailable', value: null, denominator: 3, missingBenchmark: 3 },
+      });
+    }
+  });
+
   it('正常路径：总数 / 平均信心度 / outcome 比例 / 命中率 / 按决策分解', async () => {
     const ctx = await buildTestContext({ advices: seedTwo(), adviceOutcomeOrigin: 'user' });
     const recorded = await recordAdviceOutcomeTool.execute(
@@ -63,7 +175,7 @@ describe('get_advice_stats', () => {
     expect(stats.outcomeRate.ignored).toBe(0);
     expect(stats.pnlWhenFollowed).toBeNull();
     expect(stats.pnlWhenIgnored).toBeNull();
-    // confidence 80 >= 70 且 followed 且 pnl > 0 → 命中。
+    // 顶层保留采样描述，决策分组不足 20 条时不提供比例结论。
     expect(stats.hitRate).toBe(1);
 
     expect(stats.byDecision.buy?.totalAdvices).toBe(1);
@@ -71,7 +183,8 @@ describe('get_advice_stats', () => {
     expect(stats.byDecision.hold?.totalAdvices).toBe(0);
     expect(stats.byDecision.watch?.totalAdvices).toBe(0);
     expect(stats.byDecision.avoid?.totalAdvices).toBe(0);
-    expect(stats.byDecision.buy?.hitRate).toBe(1);
+    expect(stats.byDecision.buy?.hitRate).toBeNull();
+    expect(stats.byDecision.buy?.sampleStatus).toBe('insufficient');
   });
 
   it('filter：subjectId 无命中 → 全零统计', async () => {
@@ -131,7 +244,13 @@ describe('get_advice_stats', () => {
     if (!before.ok) return;
     expect(before.data.denominator).toBe(0);
     expect(before.data.originCounts).toEqual({ user: 0, model: 0, import: 0, unattested: 0 });
-    expect(before.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
+    expect(before.data.excluded).toEqual({
+      nonUserOrigin: 0,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
 
     const recorded = await recordAdviceOutcomeTool.execute(
       { adviceId: 'stats-s1', outcome: 'followed', pnl: 500 },
@@ -146,7 +265,19 @@ describe('get_advice_stats', () => {
     expect(after.data.denominator).toBe(1);
     expect(after.data.feedbackCount).toBe(1);
     expect(after.data.originCounts).toEqual({ user: 1, model: 0, import: 0, unattested: 0 });
-    expect(after.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
+    expect(after.data.excluded).toEqual({
+      nonUserOrigin: 0,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
+    expect(after.data.excessHitRate).toMatchObject({
+      status: 'unavailable',
+      value: null,
+      denominator: 0,
+      missingBenchmark: 1,
+    });
     expect(after.data.hitRate).toBe(1);
   });
 
@@ -170,7 +301,13 @@ describe('get_advice_stats', () => {
     expect(stats.data.hitRate).toBeNull();
     expect(stats.data.outcomeRate.followed).toBe(0);
     expect(stats.data.originCounts).toEqual({ user: 0, model: 1, import: 0, unattested: 0 });
-    expect(stats.data.excluded).toEqual({ nonUserOrigin: 1, unattested: 0 });
+    expect(stats.data.excluded).toEqual({
+      nonUserOrigin: 1,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
     expect(stats.data.byDecision.buy?.denominator).toBe(0);
 
     // 显式请求才纳入。
@@ -179,7 +316,13 @@ describe('get_advice_stats', () => {
     if (!all.ok) return;
     expect(all.data.originFilter).toBe('all');
     expect(all.data.denominator).toBe(1);
-    expect(all.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
+    expect(all.data.excluded).toEqual({
+      nonUserOrigin: 0,
+      unattested: 0,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
     expect(all.data.originCounts.model).toBe(1);
   });
 
@@ -217,6 +360,135 @@ describe('get_advice_stats', () => {
     if (!stats.ok) return;
     expect(stats.data.denominator).toBe(0);
     expect(stats.data.originCounts.unattested).toBe(1);
-    expect(stats.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 1 });
+    expect(stats.data.excluded).toEqual({
+      nonUserOrigin: 0,
+      unattested: 1,
+      unsettled: 0,
+      partiallyFollowed: 0,
+      ignored: 0,
+    });
+  });
+
+  it('M3-10：19 条拒绝所有分组结论，20 条使用 Wilson 手算锚点；缺一条基准也 unavailable', async () => {
+    const ctx = await buildTestContext({
+      advices: [],
+      adviceOutcomeOrigin: 'user',
+      clock: () => new Date('2026-01-05'),
+    });
+    for (let i = 0; i < 19; i++) {
+      const id = `wilson-${i}`;
+      await ctx.repos.advice.save(makeAdvice(id, 'buy', 80));
+      expect(
+        (
+          await recordAdviceOutcomeTool.execute(
+            {
+              adviceId: id,
+              outcome: 'followed',
+              pnl: i < 10 ? 10 : -10,
+              benchmarkPnl: i < 5 ? 0 : 20,
+            },
+            ctx,
+          )
+        ).ok,
+      ).toBe(true);
+    }
+    const smallStats = await getAdviceStatsTool.execute({}, ctx);
+    const smallCalibration = await getConfidenceCalibrationTool.execute({}, ctx);
+    if (!smallStats.ok || !smallCalibration.ok) throw new Error('small fixture tools failed');
+    for (const data of [smallStats.data, smallCalibration.data]) {
+      expect(data).toMatchObject({
+        denominator: 19,
+        hitRate: 10 / 19,
+        minimumSampleMet: false,
+        sampleStatus: 'insufficient',
+      });
+    }
+    const smallGroups = [
+      smallStats.data.byDecision.buy,
+      smallCalibration.data.groups[0],
+      smallCalibration.data.buckets[8],
+      smallCalibration.data.groups[0]?.buckets[8],
+    ];
+    for (const group of smallGroups) {
+      expect(group).toMatchObject({
+        denominator: 19,
+        hits: 10,
+        hitRate: null,
+        confidenceInterval: null,
+        minimumSampleMet: false,
+        sampleStatus: 'insufficient',
+        excessHitRate: { status: 'insufficient', value: null, hits: 5, denominator: 19 },
+      });
+    }
+    await ctx.repos.advice.save(makeAdvice('wilson-19', 'buy', 80));
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          { adviceId: 'wilson-19', outcome: 'followed', pnl: -10, benchmarkPnl: 20 },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    const stats = await getAdviceStatsTool.execute({}, ctx);
+    const calibration = await getConfidenceCalibrationTool.execute({}, ctx);
+    if (!stats.ok || !calibration.ok) throw new Error('Wilson fixture tools failed');
+    for (const data of [
+      stats.data,
+      calibration.data,
+      stats.data.byDecision.buy,
+      calibration.data.groups[0],
+      calibration.data.buckets[8],
+    ]) {
+      expect(data).toMatchObject({
+        denominator: 20,
+        hitRate: 0.5,
+        minimumSampleMet: true,
+        sampleStatus: 'sufficient',
+        excessHitRate: { status: 'available', value: 0.25, denominator: 20, missingBenchmark: 0 },
+      });
+      // n=20, p=1/2: center=1/2; radius=1.959964*sqrt(.25/20+3.841459/(4*400))/(1+3.841459/20).
+      expect(data?.confidenceInterval?.lower).toBeCloseTo(0.299298008, 8);
+      expect(data?.confidenceInterval?.upper).toBeCloseTo(0.700701992, 8);
+      expect(data?.confidenceInterval?.width).toBeCloseTo(0.401403983, 8);
+      expect(data?.minimumSampleInterval).toMatchObject({
+        denominator: 20,
+        hitRate: 0.5,
+        method: 'wilson',
+        confidenceLevel: 0.95,
+      });
+      expect(data?.minimumSampleInterval.width).toBeCloseTo(0.401403983, 8);
+      expect(data?.excessHitRate.confidenceInterval?.lower).toBeCloseTo(0.111861702, 8);
+      expect(data?.excessHitRate.confidenceInterval?.upper).toBeCloseTo(0.468700878, 8);
+    }
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          {
+            adviceId: 'wilson-19',
+            outcome: 'followed',
+            pnl: -10,
+            expectedRevision: 1,
+            changeNote: '基准不可确认',
+          },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    for (const tool of [getAdviceStatsTool, getConfidenceCalibrationTool]) {
+      const result = await tool.execute({}, ctx);
+      if (!result.ok) throw new Error('missing benchmark fixture failed');
+      expect(result.data).toMatchObject({
+        denominator: 20,
+        hitRate: 0.5,
+        excessHitRate: {
+          status: 'unavailable',
+          value: null,
+          denominator: 19,
+          eligibleDenominator: 20,
+          missingBenchmark: 1,
+          confidenceInterval: null,
+        },
+      });
+    }
   });
 });

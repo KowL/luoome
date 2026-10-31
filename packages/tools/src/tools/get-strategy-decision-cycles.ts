@@ -2,6 +2,7 @@ import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   ActiveSignalObservationHorizonSchema,
   type Advice,
+  type AdviceOutcome,
   AdviceSchema,
   isPublishableOperationalRun,
   type SignalObservation,
@@ -22,6 +23,11 @@ import {
   accountScopedAdvices,
   attachAccountAdviceOutcomes,
 } from '../internal/account-advice-outcomes.js';
+import {
+  type AdviceOutcomeOriginFilter,
+  AdviceOutcomeScopeSchema,
+  partitionAdviceOutcomes,
+} from '../internal/advice-outcome-scope.js';
 import {
   collectStrategyObservationEvidence,
   type StrategyObservationEvidence,
@@ -57,12 +63,13 @@ const ExcludedRunSchema = z.object({
 export const GetStrategyDecisionCyclesInput = z.object({
   strategyId: z.string().min(1),
   accountId: z.string().min(1).optional(),
+  originFilter: z.enum(['user', 'all']).default('user'),
   runId: z.string().min(1).optional(),
   stockId: z.string().min(1).optional(),
   limit: z.number().int().min(1).max(200).default(50),
 });
 
-const StrategyCandidateCycleSchema = z.object({
+const StrategyCandidateCycleSchema = AdviceOutcomeScopeSchema.extend({
   strategyId: z.string().min(1),
   strategyVersionId: z.string().min(1),
   runId: z.string().min(1),
@@ -87,7 +94,7 @@ const StrategyCandidateCycleSchema = z.object({
   factsAsOf: z.coerce.date(),
 });
 
-export const GetStrategyDecisionCyclesOutput = z.object({
+export const GetStrategyDecisionCyclesOutput = AdviceOutcomeScopeSchema.extend({
   accountId: z.string().min(1),
   strategyId: z.string().min(1),
   total: z.number().int().nonnegative(),
@@ -282,6 +289,8 @@ async function loadCycle(
   observationEvidence: StrategyObservationEvidence,
   accountTrades: Trade[],
   advicesForStock: Advice[],
+  accountOutcomes: ReadonlyMap<string, AdviceOutcome>,
+  originFilter: AdviceOutcomeOriginFilter,
   factsAsOf: Date,
 ): Promise<StrategyCandidateCycle> {
   const signals = observationEvidence.signals.filter(
@@ -304,6 +313,12 @@ async function loadCycle(
     result.stockId,
     run.strategyVersionId,
   );
+  // 来源过滤只作用于回填；显式成交关联仍使用过滤前的账户复盘事实。
+  const { inScope, ...outcomeScope } = partitionAdviceOutcomes(
+    accountOutcomes,
+    originFilter,
+    advices.map((advice) => advice.id),
+  );
   const unknowns = [...progressRows.flatMap((row) => row.unknowns), ...tradeRelations.unknowns];
   if (advices.length === 0) {
     unknowns.push('本周期尚无匹配的 Strategy Advice；可能未启用推荐策略或尚未到生成阶段。');
@@ -313,6 +328,7 @@ async function loadCycle(
     'SignalObservation 是信号后的确定性事实观察，不是回测，也不包含成交、费用或滑点假设。',
     'Trade 只按当前账户复盘修订中的明确关联归因；不会从旧登记字段、日期或股票推断周期。',
     'replay、evaluation、withheld 与 non-publishing 运行不会进入生产闭环或触发 Advice。',
+    `AdviceOutcome 来源口径为 ${originFilter}；排除 model/import ${outcomeScope.excluded.nonUserOrigin} 条、无来源戳 ${outcomeScope.excluded.unattested} 条。`,
     ...observationEvidence.limitations,
   ];
   const evidenceIds = unique([
@@ -326,6 +342,7 @@ async function loadCycle(
   ]);
 
   return {
+    ...outcomeScope,
     strategyId: run.strategyId,
     strategyVersionId: run.strategyVersionId,
     runId: run.id,
@@ -339,7 +356,7 @@ async function loadCycle(
     })),
     observations: cycleObservations,
     observationProgress: progressRows.map((row) => row.progress),
-    advices: AdviceSchema.array().parse(advices),
+    advices: AdviceSchema.array().parse(attachAccountAdviceOutcomes(advices, inScope)),
     trades: tradeRelations.trades,
     tradeLinks: tradeRelations.tradeLinks,
     evidenceIds,
@@ -443,6 +460,8 @@ export const getStrategyDecisionCyclesTool = defineTool({
             observationEvidence,
             accountTrades,
             adviceByStock.get(stockId) ?? [],
+            accountOutcomes,
+            input.originFilter,
             factsAsOf,
           ),
         );
@@ -463,8 +482,14 @@ export const getStrategyDecisionCyclesTool = defineTool({
       ...cycles.flatMap((cycle) => cycle.evidenceIds),
       ...excludedRuns.map((run) => run.runId),
     ]);
+    const { inScope: _inScope, ...outcomeScope } = partitionAdviceOutcomes(
+      accountOutcomes,
+      input.originFilter,
+      cycles.flatMap((cycle) => cycle.advices.map((advice) => advice.id)),
+    );
 
     return {
+      ...outcomeScope,
       accountId,
       strategyId: input.strategyId,
       total: cycles.length,

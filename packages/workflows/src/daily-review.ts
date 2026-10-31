@@ -1,13 +1,17 @@
 import type { LimitUpLadder, LimitUpLadderDiff, ToolResult } from '@luoome/core';
 import { LimitUpLadderSourceSchema } from '@luoome/core';
+import { GetAdviceStatsOutput } from '@luoome/tools';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 /**
  * daily-review（v0.3，plan-v0.2-v0.3 §3.5）：
- *   get_advice（今日）→ get_advice_stats（7 日准确率）→ limit_up_ladder → limit_up_ladder_compare
- *   → 输出结构化日报（含天梯快照 + vs 昨日 diff）。
+ *   get_advice（今日）→ get_advice_stats（当日窗口 + 7 日窗口）→ limit_up_ladder
+ *   → limit_up_ladder_compare → 输出结构化日报（含天梯快照 + vs 昨日 diff）。
+ *
+ * 命中率口径（REQ-M3-10 / REQ-M3-18）：当日摘要的命中率直接消费 get_advice_stats
+ * 的当日窗口结果，workflow 不再按 outcome 自行重算；口径版本由工具侧维护。
  *
  * 步骤间类型被擦除（defineWorkflow 限制），这里用 unknown / 显式 cast 处理；
  * 运行时数据由上下游 zod schema 保证形状正确。
@@ -23,14 +27,35 @@ export const DailyReviewInput = z.object({
 
 export type DailyReviewInputT = z.infer<typeof DailyReviewInput>;
 
+/** 当日命中率口径的来源：get_advice_stats 输出（口径版本、分母、排除数都由它定义）。 */
+type TodayStats = z.infer<typeof GetAdviceStatsOutput>;
+
 export const DailyReviewSummarySchema = z.object({
   date: z.string(),
   totalAdvices: z.number().int().nonnegative(),
   byDecision: z.record(z.string(), z.number().int().nonnegative()),
   highConfidence: z.number().int().nonnegative(),
+  /**
+   * 当前口径内的回填条数（= get_advice_stats.feedbackCount）：
+   * origin=user 且落在当日窗口的已回填样本，含未了结 / 部分采纳 / 忽略。
+   * 这是回填数，不是命中率分母。
+   */
   outcomeFilled: z.number().int().nonnegative(),
+  /** 分母内盈利的样本数（= get_advice_stats.hits）。 */
   hits: z.number().int().nonnegative(),
-  hitRate: z.number().min(0).max(1),
+  /**
+   * 命中率分母（= get_advice_stats.denominator）：origin=user 且明确采纳（followed）
+   * 并填写有限盈亏的已了结样本数。分母与 hits 同窗口同来源，hitRate 可由此复算。
+   */
+  denominator: z.number().int().nonnegative(),
+  /**
+   * 当日命中率 = hits / denominator。无已了结样本时为 null（未知不写 0）。
+   */
+  hitRate: z.number().min(0).max(1).nullable(),
+  /** 分母是否达到 20 条门槛；不足时命中率只作趋势参考，不给分组结论。 */
+  minimumSampleMet: z.boolean(),
+  /** 统计口径版本（= get_advice_stats.metricVersion），口径变更即升版。 */
+  metricVersion: z.string(),
 });
 
 export const DailyReviewLadderSnapshotSchema = z.object({
@@ -62,6 +87,10 @@ export const DailyReviewOutput = z.object({
   stats: z.unknown().nullable(),
   /** Phase 2：null 表示无 manager 注入或上游不可达（不阻断日报） */
   ladder: DailyReviewLadderSchema.nullable(),
+  /** 当日命中率被排除的回填计数（未了结 / 非用户来源 / 部分采纳 / 忽略）。 */
+  excluded: GetAdviceStatsOutput.shape.excluded,
+  /** 读数口径说明：分母定义与排除规则必须随数字一起给出。 */
+  limitations: z.array(z.string()),
 });
 
 export type DailyReviewOutputT = z.infer<typeof DailyReviewOutput>;
@@ -85,7 +114,8 @@ const previousDayString = (today: string): string => {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 };
 
-interface ReviewState {
+/** stepAdvices 产出的中间态；stepStats 补齐 todayStats 后才是完整 ReviewState。 */
+interface ReviewStateBase {
   advices: readonly unknown[];
   stats: unknown;
   input: DailyReviewInputT;
@@ -95,6 +125,11 @@ interface ReviewState {
     prev: Pick<LimitUpLadder, 'date' | 'total' | 'maxLevel' | 'source' | 'warnings'>;
     diff: LimitUpLadderDiff;
   } | null;
+}
+
+interface ReviewState extends ReviewStateBase {
+  /** 当日窗口的 get_advice_stats 结果：命中率口径的唯一来源。 */
+  todayStats: TodayStats;
 }
 
 const stepAdvices: WorkflowStep = async (prev, ctx) => {
@@ -112,16 +147,27 @@ const stepAdvices: WorkflowStep = async (prev, ctx) => {
     stats: null,
     input,
     ladder: null,
-  } satisfies ReviewState;
+  } satisfies ReviewStateBase;
 };
 
 const stepStats: WorkflowStep = async (prev, ctx) => {
-  const state = prev as ReviewState;
+  const state = prev as ReviewStateBase;
   const now = ctx.clock();
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3_600_000);
-  const r = await ctx.tools.get_advice_stats.execute({ since: sevenDaysAgo });
-  if (!r.ok) return r as unknown as ToolResult<ReviewState>;
-  return { ...state, stats: r.data } satisfies ReviewState;
+  const dateStr = computeDateString(now, state.input.timezoneOffsetHours);
+  const todayStart = computeTodayStart(now, state.input.timezoneOffsetHours);
+  const todayUntil = new Date(`${dateStr}T23:59:59.999Z`);
+  const [week, today] = await Promise.all([
+    ctx.tools.get_advice_stats.execute({ since: sevenDaysAgo }),
+    ctx.tools.get_advice_stats.execute({ since: todayStart, until: todayUntil }),
+  ]);
+  if (!week.ok) return week as unknown as ToolResult<ReviewState>;
+  if (!today.ok) return today as unknown as ToolResult<ReviewState>;
+  return {
+    ...state,
+    stats: week.data,
+    todayStats: today.data,
+  } satisfies ReviewState;
 };
 
 /**
@@ -162,27 +208,15 @@ const stepFinalize: WorkflowStep = async (prev, ctx) => {
 
   const byDecision: Record<string, number> = {};
   let highConfidence = 0;
-  let outcomeFilled = 0;
-  let hits = 0;
   for (const a of advices as Array<{
     decision: string;
     confidence: number;
-    outcome?: { outcome: string; pnl?: { readonly __brand: 'Money' } & number };
   }>) {
     byDecision[a.decision] = (byDecision[a.decision] ?? 0) + 1;
     if (a.confidence >= HIGH_CONFIDENCE_THRESHOLD) highConfidence++;
-    if (a.outcome !== undefined) {
-      outcomeFilled++;
-      if (
-        a.outcome.outcome === 'followed' &&
-        a.outcome.pnl !== undefined &&
-        Number(a.outcome.pnl) > 0
-      ) {
-        hits++;
-      }
-    }
   }
-  const hitRate = outcomeFilled === 0 ? 0 : hits / outcomeFilled;
+
+  const todayStats = state.todayStats;
 
   return DailyReviewOutput.parse({
     summary: DailyReviewSummarySchema.parse({
@@ -190,19 +224,29 @@ const stepFinalize: WorkflowStep = async (prev, ctx) => {
       totalAdvices: advices.length,
       byDecision,
       highConfidence,
-      outcomeFilled,
-      hits,
-      hitRate,
+      // 命中率相关字段一律取自 get_advice_stats 的当日窗口结果（口径单一来源）。
+      outcomeFilled: todayStats.feedbackCount,
+      hits: todayStats.hits,
+      denominator: todayStats.denominator,
+      hitRate: todayStats.hitRate,
+      minimumSampleMet: todayStats.minimumSampleMet,
+      metricVersion: todayStats.metricVersion,
     }),
     advices: [...advices],
     stats: state.stats,
     ladder: state.ladder,
+    excluded: todayStats.excluded,
+    limitations: [
+      `当日命中率按统一口径计算：分母 = origin=user 且明确采纳并填写有限盈亏的已了结样本；口径版本 ${todayStats.metricVersion}。`,
+      '模型/导入来源的回填与无来源戳的历史回填不计入当日分母，排除数见 excluded。',
+    ],
   });
 };
 
 export const dailyReviewWorkflow = defineWorkflow<DailyReviewInputT, DailyReviewOutputT>({
   name: 'daily-review',
-  description: '生成当日复盘（今日 advice 汇总 + 7 日准确率 + 涨停梯队快照 + vs 昨日 diff）',
+  description:
+    '生成当日复盘（今日 advice 汇总 + 当日统一口径命中率 + 7 日准确率 + 涨停梯队快照 + vs 昨日 diff）',
   input: DailyReviewInput,
   steps: [stepAdvices, stepStats, stepLadder, stepFinalize],
 });

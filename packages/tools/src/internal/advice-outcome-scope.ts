@@ -1,4 +1,19 @@
 import type { AdviceOutcome, AdviceOutcomeOrigin } from '@luoome/core';
+import { z } from 'zod';
+
+export const AdviceOutcomeScopeSchema = z.object({
+  originFilter: z.enum(['user', 'all']),
+  originCounts: z.object({
+    user: z.number().int().nonnegative(),
+    model: z.number().int().nonnegative(),
+    import: z.number().int().nonnegative(),
+    unattested: z.number().int().nonnegative(),
+  }),
+  excluded: z.object({
+    nonUserOrigin: z.number().int().nonnegative(),
+    unattested: z.number().int().nonnegative(),
+  }),
+});
 
 /**
  * 统计口径的来源过滤（REQ-M3-18 §3）。
@@ -18,6 +33,7 @@ export interface AdviceOutcomeOriginCounts {
 }
 
 export interface AdviceOutcomePartition {
+  readonly originFilter: AdviceOutcomeOriginFilter;
   /** 本次口径内可参与统计的回填。 */
   readonly inScope: Map<string, AdviceOutcome>;
   readonly originCounts: AdviceOutcomeOriginCounts;
@@ -31,6 +47,7 @@ const originKey = (origin: AdviceOutcomeOrigin | undefined): keyof AdviceOutcome
 export const partitionAdviceOutcomes = (
   outcomes: ReadonlyMap<string, AdviceOutcome>,
   filter: AdviceOutcomeOriginFilter,
+  adviceIds: Iterable<string>,
 ): AdviceOutcomePartition => {
   const counts: Record<keyof AdviceOutcomeOriginCounts, number> = {
     user: 0,
@@ -39,13 +56,17 @@ export const partitionAdviceOutcomes = (
     unattested: 0,
   };
   const inScope = new Map<string, AdviceOutcome>();
-  for (const [adviceId, outcome] of outcomes) {
+  // 先限制账户/窗口/分组，再计来源，避免窗口外反馈污染排除计数。
+  for (const adviceId of new Set(adviceIds)) {
+    const outcome = outcomes.get(adviceId);
+    if (outcome === undefined) continue;
     const key = originKey(outcome.origin);
     counts[key] += 1;
     if (key === 'user' || filter === 'all') inScope.set(adviceId, outcome);
   }
   const excludedNonUser = counts.model + counts.import;
   return {
+    originFilter: filter,
     inScope,
     originCounts: counts,
     excluded:

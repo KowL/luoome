@@ -741,9 +741,16 @@ const adviceOutcomesWeekSection = async (
 ): Promise<ReportSectionPiece> => {
   const since = new Date(`${periodStart}T00:00:00+08:00`);
   const until = new Date(`${periodEnd}T23:59:59.999+08:00`);
+  const accountScope = input.scope.kind === 'account' ? { accountId: input.scope.accountId } : {};
   const [adviceResult, statsResult] = await Promise.all([
-    ctx.tools.get_advice.execute({ since, until, includeExpired: true, limit: 500 }),
-    ctx.tools.get_advice_stats.execute({ since, until }),
+    ctx.tools.get_advice.execute({
+      ...accountScope,
+      since,
+      until,
+      includeExpired: true,
+      limit: 500,
+    }),
+    ctx.tools.get_advice_stats.execute({ ...accountScope, since, until, originFilter: 'user' }),
   ]);
   if (!adviceResult.ok && !statsResult.ok) {
     return unavailableSection(
@@ -759,17 +766,33 @@ const adviceOutcomesWeekSection = async (
   const advices = adviceResult.ok ? adviceResult.data.advices : [];
   const stats = statsResult.ok ? statsResult.data : undefined;
   const detailsAreComplete = adviceResult.ok && advices.length < 500;
+  const userOutcomes = advices.flatMap((advice) =>
+    advice.outcome?.origin === 'user' ? [advice.outcome] : [],
+  );
+  const excludedNonUserOrigin =
+    stats?.excluded.nonUserOrigin ??
+    (detailsAreComplete
+      ? advices.filter(
+          (advice) => advice.outcome?.origin === 'model' || advice.outcome?.origin === 'import',
+        ).length
+      : null);
+  const excludedUnattested =
+    stats?.excluded.unattested ??
+    (detailsAreComplete
+      ? advices.filter(
+          (advice) => advice.outcome !== undefined && advice.outcome.origin === undefined,
+        ).length
+      : null);
   const counts = { followed: 0, partiallyFollowed: 0, ignored: 0 };
-  for (const advice of advices) {
-    const outcome = advice.outcome?.outcome;
+  for (const { outcome } of userOutcomes) {
     if (outcome === 'followed') counts.followed += 1;
     if (outcome === 'partially_followed') counts.partiallyFollowed += 1;
     if (outcome === 'ignored') counts.ignored += 1;
   }
   const total = stats?.totalAdvices ?? (adviceResult.ok ? adviceResult.data.total : 0);
-  const withOutcome = detailsAreComplete
-    ? counts.followed + counts.partiallyFollowed + counts.ignored
-    : undefined;
+  const withOutcome =
+    stats?.feedbackCount ??
+    (detailsAreComplete ? counts.followed + counts.partiallyFollowed + counts.ignored : undefined);
   const pending = withOutcome === undefined ? undefined : Math.max(0, total - withOutcome);
   const outcomeMissingRate = total === 0 || pending === undefined ? null : pending / total;
   const ratio = (value: number | undefined): number | null =>
@@ -778,7 +801,7 @@ const adviceOutcomesWeekSection = async (
     total === 0 || !detailsAreComplete ? null : count / total;
   const limitations = [
     '仅描述 Advice 的回填状态和采纳分布，不评价建议正确性、收益因果或胜率。',
-    'Advice 结果由用户回填或可信事实提供，不从行情反推是否采纳。',
+    'Advice 结果仅统计 origin=user 的明确回填；model/import 与无来源戳分别披露排除数，不从行情反推是否采纳。',
   ];
   const missingDimensions = [];
   if (!adviceResult.ok) {
@@ -807,15 +830,8 @@ const adviceOutcomesWeekSection = async (
       missing('advice-outcomes.details-limit', 'Advice 明细达到 500 条读取上限', 'limit_reached'),
     );
   }
-  if (input.scope.kind === 'account') {
-    limitations.push('Advice 当前没有账户归属字段，账户范围周报无法隔离 Advice 样本。');
-    missingDimensions.push(
-      missing(
-        'advice-outcomes.account-scope',
-        'Advice 当前没有可靠的 account scope，当前区块按全局 Advice 统计',
-        'scope_unavailable',
-      ),
-    );
+  if (input.scope.kind !== 'account') {
+    limitations.push('all-accounts 报告的 Advice 复盘区块使用当前默认账户，不合并跨账户反馈。');
   }
   if (total === 0) {
     limitations.push('本周没有 Advice 样本。');
@@ -851,6 +867,12 @@ const adviceOutcomesWeekSection = async (
           items: [
             { key: 'totalAdvices', label: 'Advice 样本数', value: total },
             { key: 'withOutcome', label: '已回填结果', value: withOutcome ?? null },
+            {
+              key: 'excludedNonUserOrigin',
+              label: '排除模型/导入回填',
+              value: excludedNonUserOrigin,
+            },
+            { key: 'excludedUnattested', label: '排除无来源戳回填', value: excludedUnattested },
             { key: 'pendingOutcome', label: '待回填', value: pending ?? null },
             {
               key: 'outcomeMissingRate',
@@ -899,14 +921,14 @@ const adviceOutcomesWeekSection = async (
               key: 'knownPnlSamples',
               label: '已知盈亏样本',
               value: detailsAreComplete
-                ? advices.filter((advice) => advice.outcome?.pnl !== undefined).length
+                ? userOutcomes.filter((outcome) => Number.isFinite(outcome.pnl)).length
                 : null,
             },
             {
               key: 'knownBenchmarkPnlSamples',
               label: '已知基准盈亏样本',
               value: detailsAreComplete
-                ? advices.filter((advice) => advice.outcome?.benchmarkPnl !== undefined).length
+                ? userOutcomes.filter((outcome) => Number.isFinite(outcome.benchmarkPnl)).length
                 : null,
             },
             {
@@ -969,6 +991,7 @@ const loadDecisionLoopScope = async (
       const [review, trades] = await Promise.all([
         ctx.tools.get_decision_loop_review.execute({
           accountId,
+          originFilter: 'user',
           since,
           until,
           limit: 1000,
@@ -1284,6 +1307,7 @@ const behaviorPatternsWeekSection = (
   const status = missingDimensions.length === 0 ? 'complete' : 'partial';
   const limitations = [
     '只描述 AdviceOutcome 回填与采纳分布，不评价建议正确性、收益因果或胜率。',
+    '采纳分布仅使用 origin=user 的明确反馈；model/import 和无来源戳的回填分别披露排除数。',
     `行为模式最小样本门槛为 ${MIN_BEHAVIOR_SAMPLE} 条 Advice；不足时不生成模式结论，指标保持 unknown。`,
   ];
   if (input.scope.kind !== 'account') {
@@ -1304,6 +1328,16 @@ const behaviorPatternsWeekSection = (
           items: [
             { key: 'sampleCount', label: 'Advice 样本数', value: total },
             { key: 'minimumSample', label: '最小样本门槛', value: MIN_BEHAVIOR_SAMPLE },
+            {
+              key: 'excludedNonUserOrigin',
+              label: '排除模型/导入回填',
+              value: review?.advice.excluded.nonUserOrigin ?? null,
+            },
+            {
+              key: 'excludedUnattested',
+              label: '排除无来源戳回填',
+              value: review?.advice.excluded.unattested ?? null,
+            },
             {
               key: 'backfilled',
               label: '已回填',

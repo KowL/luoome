@@ -197,21 +197,6 @@ export interface AdviceOutcome {
   readonly recordedAt: Date;
 }
 
-/** 建议统计（ARCHITECTURE §6.4）。 */
-export interface AdviceStats {
-  readonly totalAdvices: number;
-  readonly avgConfidence: number;
-  readonly outcomeRate: {
-    readonly followed: number;
-    readonly partiallyFollowed: number;
-    readonly ignored: number;
-  };
-  readonly pnlWhenFollowed: Money;
-  readonly pnlWhenIgnored: Money;
-  readonly hitRate: number; // confidence >= 70 且 followed 且 pnl > 0 的比例
-  readonly byDecision: Record<AdviceDecision, AdviceStats>;
-}
-
 /** AdviceRepository.query 的过滤条件。 */
 export interface AdviceQuery {
   readonly subjectKind?: AdviceSubjectKind;

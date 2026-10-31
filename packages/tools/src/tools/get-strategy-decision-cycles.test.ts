@@ -276,6 +276,13 @@ describe('get_strategy_decision_cycles', () => {
       recommendationTrigger: 'run',
     });
     expect(cycle?.trades.map((trade) => trade.id)).toEqual(['cycle-trade-explicit']);
+    expect(cycle?.advices[0]?.outcome).toBeUndefined();
+    expect(cycle?.excluded).toEqual({ nonUserOrigin: 1, unattested: 0 });
+    expect(result.data).toMatchObject({
+      originFilter: 'user',
+      originCounts: { user: 0, model: 1, import: 0, unattested: 0 },
+      excluded: { nonUserOrigin: 1, unattested: 0 },
+    });
     expect(cycle?.tradeLinks).toEqual([
       {
         tradeId: 'cycle-trade-explicit',
@@ -294,6 +301,82 @@ describe('get_strategy_decision_cycles', () => {
     );
     expect(result.data.unknowns.join('；')).toContain('strategyVersionId');
     expect(result.data.limitations.join('；')).toContain('不是回测');
+    const all = await getStrategyDecisionCyclesTool.execute(
+      { strategyId: STRATEGY_ID, runId: RUN_ID, originFilter: 'all' },
+      ctx,
+    );
+    if (!all.ok) throw new Error('all cycle fixture failed');
+    expect(all.data.cycles[0]?.advices[0]?.outcome?.origin).toBe('model');
+    expect(all.data.excluded).toEqual({ nonUserOrigin: 0, unattested: 0 });
+    expect(all.data.cycles[0]?.trades).toEqual(cycle?.trades);
+    expect(all.data.cycles[0]?.tradeLinks).toEqual(cycle?.tradeLinks);
+  });
+
+  it('仅所选周期的来源计数进入披露，保留 user 并排除 import/无戳且不丢成交', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW, adviceOutcomeOrigin: 'user' });
+    await seedStrategy(ctx);
+    await seedFacts(ctx);
+    await seedAdviceAndTrades(ctx);
+    const template = await ctx.repos.advice.findById('cycle-advice-1');
+    if (!template?.basedOn.strategy) throw new Error('missing cycle advice fixture');
+    for (const id of ['import', 'legacy', 'outside-run']) {
+      await ctx.repos.advice.save({
+        ...template,
+        id,
+        basedOn: {
+          ...template.basedOn,
+          strategy: {
+            ...template.basedOn.strategy,
+            runId: id === 'outside-run' ? 'another-run' : RUN_ID,
+          },
+        },
+      });
+      expect(
+        (
+          await recordAdviceOutcomeTool.execute(
+            { adviceId: id, outcome: 'followed', pnl: 1, tradeIds: ['cycle-trade-explicit'] },
+            { ...ctx, adviceOutcomeOrigin: 'import' },
+          )
+        ).ok,
+      ).toBe(true);
+      if (id === 'legacy') {
+        const accountId = ctx.user.defaultAccountId;
+        const row = await ctx.repos.decisionReview.findBySubject({
+          accountId,
+          subject: { kind: 'advice', id },
+        });
+        if (!row?.revision.content.adviceFeedback) throw new Error('missing legacy fixture');
+        const { origin: _origin, ...feedback } = row.revision.content.adviceFeedback;
+        await ctx.repos.decisionReview.commit({
+          accountId,
+          requestId: crypto.randomUUID(),
+          requestHash: 'legacy',
+          expectedRevision: 1,
+          review: row.review,
+          content: { ...row.revision.content, adviceFeedback: feedback },
+          // 保留原成交事实哈希：只去掉 origin 戳，不解绑成交（仓储会逐条校验 tradeIds 的事实哈希）。
+          contentHash: 'legacy',
+          tradeFactHashes: row.revision.tradeFactHashes,
+          changeNote: 'legacy fixture',
+          recordedAt: NOW,
+        });
+      }
+    }
+    const result = await getStrategyDecisionCyclesTool.execute(
+      { strategyId: STRATEGY_ID, runId: RUN_ID },
+      ctx,
+    );
+    if (!result.ok) throw new Error('cycle fixture failed');
+    expect(result.data).toMatchObject({
+      originCounts: { user: 1, model: 0, import: 1, unattested: 1 },
+      excluded: { nonUserOrigin: 1, unattested: 1 },
+    });
+    const cycle = result.data.cycles[0];
+    expect(
+      cycle?.advices.filter((advice) => advice.outcome !== undefined).map((advice) => advice.id),
+    ).toEqual(['cycle-advice-1']);
+    expect(cycle?.tradeLinks).toHaveLength(3);
+    expect(cycle?.trades.map((trade) => trade.id)).toEqual(['cycle-trade-explicit']);
   });
 
   it('不允许跨策略 run 关联，并排除 replay/evaluation/non-publishing 运行', async () => {

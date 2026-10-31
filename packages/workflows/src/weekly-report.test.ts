@@ -514,7 +514,7 @@ describe('weekly-report workflow', () => {
   });
 
   it('将 signal observation 和 Advice outcome 以描述性统计写入周报', async () => {
-    const ctx = await buildTestContext({ clock: () => now });
+    const ctx = await buildTestContext({ clock: () => now, adviceOutcomeOrigin: 'user' });
     await ctx.repos.signalObservation.save(completeSignalObservation());
     await ctx.repos.signalObservation.save(pendingSignalObservation());
     const advices = await ctx.repos.advice.query({ includeExpired: true, limit: 500 });
@@ -580,6 +580,8 @@ describe('weekly-report workflow', () => {
     expect(adviceMetrics?.kind === 'metrics' ? adviceMetrics.items : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'withOutcome', value: 2 }),
+        expect.objectContaining({ key: 'excludedNonUserOrigin', value: 0 }),
+        expect.objectContaining({ key: 'excludedUnattested', value: 0 }),
         expect.objectContaining({ key: 'pendingOutcome', value: 0 }),
         expect.objectContaining({ key: 'outcomeMissingRate', value: 0 }),
         expect.objectContaining({ key: 'knownPnlSamples', value: 1 }),
@@ -589,6 +591,65 @@ describe('weekly-report workflow', () => {
     expect(advice?.evidenceIds).toEqual(
       expect.arrayContaining(['advice-outcomes:advice', 'advice-outcomes:stats']),
     );
+  });
+
+  it('周报的 Advice 复盘不计入模型代填，并把排除条数与待回填分开披露', async () => {
+    const ctx = await buildTestContext({ clock: () => now, adviceOutcomeOrigin: 'user' });
+    const advices = await ctx.repos.advice.query({ includeExpired: true, limit: 500 });
+    const [followed, modelFilled] = advices;
+    if (followed === undefined || modelFilled === undefined) {
+      throw new Error('fixture advice missing');
+    }
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          {
+            adviceId: followed.id,
+            outcome: 'followed',
+            tradeIds: [],
+            pnl: 100,
+            benchmarkPnl: 20,
+          },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    // 同一仓储、换通道盖章：模型代填仍落库，但不得进入 origin=user 口径。
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          { adviceId: modelFilled.id, outcome: 'ignored', tradeIds: [] },
+          { ...ctx, adviceOutcomeOrigin: 'model' },
+        )
+      ).ok,
+    ).toBe(true);
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const advice = result.data.report.sections.find((section) => section.key === 'advice-outcomes');
+    expect(advice?.status).toBe('partial');
+    const adviceMetrics = advice?.blocks.find((block) => block.kind === 'metrics');
+    expect(adviceMetrics?.kind === 'metrics' ? adviceMetrics.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'totalAdvices', value: 2 }),
+        expect.objectContaining({ key: 'withOutcome', value: 1 }),
+        expect.objectContaining({ key: 'excludedNonUserOrigin', value: 1 }),
+        expect.objectContaining({ key: 'excludedUnattested', value: 0 }),
+        expect.objectContaining({ key: 'pendingOutcome', value: 1 }),
+        expect.objectContaining({ key: 'followed', value: 1 }),
+        expect.objectContaining({ key: 'ignored', value: 0 }),
+        expect.objectContaining({ key: 'knownPnlSamples', value: 1 }),
+      ]),
+    );
+    expect(advice?.missingDimensions.map((item) => item.dimension)).toEqual([
+      'advice-outcomes.pending',
+    ]);
+    const text = advice?.blocks
+      .flatMap((block) => (block.kind === 'text' ? [block.text] : []))
+      .join('\n');
+    expect(text).toContain('仅统计 origin=user 的明确回填');
   });
 
   it('账户范围周报只投影指定账户的交易归因', async () => {

@@ -41,9 +41,9 @@ import { seedData } from '@luoome/db/memory';
 import { createNodeDrizzleRepos, type NodeDrizzleReposHandle } from '@luoome/db/node';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import { seedTestStockUniverse } from '@luoome/tools/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adviceOutcomeAskerOf } from './advice-outcome-ask.js';
-import { createDshOperationHost } from './dsh-authority.js';
+import { createDshOperationHost, OPERATION_STATUS_TOOL } from './dsh-authority.js';
 import { createProductionOperationPolicies } from './production.js';
 import { DEFAULT_READ_TOOL_ALLOWLIST } from './production-config.js';
 import { createReadSurface } from './read-surface.js';
@@ -75,6 +75,7 @@ type Answerer = (request: {
 
 interface Fixture {
   readonly ctx: Context;
+  readonly dbPath: string;
   readonly db: NodeDrizzleReposHandle;
   readonly repos: RepositoryRegistry;
   readonly principal: { userId: string; accountId: string };
@@ -88,6 +89,8 @@ interface Fixture {
 
 const createFixture = async (
   options: {
+    /** 重启时复用已有数据库，不重复 seed。 */
+    readonly dbPath?: string;
     /** `false` 时宿主不挂 `userQuestions`：对应「没有 harness 提问通道」的降级路径。 */
     readonly withUserQuestions?: boolean;
     readonly answerer?: Answerer;
@@ -95,10 +98,15 @@ const createFixture = async (
     readonly wrapRepository?: (repository: PluginAuthorityRepository) => PluginAuthorityRepository;
   } = {},
 ): Promise<Fixture> => {
-  const root = mkdtempSync(join(tmpdir(), 'luoome-outcome-origin-'));
-  rootDirs.push(root);
-  const db = createNodeDrizzleRepos(join(root, 'luoome.db'));
-  await seedData(db.repos, { accounts: [TEST_ACCOUNT], stocks: TEST_STOCKS.slice(0, 3) });
+  let dbPath = options.dbPath;
+  if (dbPath === undefined) {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-outcome-origin-'));
+    rootDirs.push(root);
+    dbPath = join(root, 'luoome.db');
+  }
+  const db = createNodeDrizzleRepos(dbPath);
+  if (options.dbPath === undefined)
+    await seedData(db.repos, { accounts: [TEST_ACCOUNT], stocks: TEST_STOCKS.slice(0, 3) });
 
   const ctx = new Context();
   const fibers: { dispose(): Promise<void> }[] = [];
@@ -130,7 +138,7 @@ const createFixture = async (
     clock: () => new Date(NOW),
     logger: silentLogger,
   });
-  await seedTestStockUniverse(domain);
+  if (options.dbPath === undefined) await seedTestStockUniverse(domain);
   const principal = Object.freeze({ userId: 'origin-owner', accountId: TEST_ACCOUNT.id });
   const read = createReadSurface({
     config: { allowlist: [...DEFAULT_READ_TOOL_ALLOWLIST] },
@@ -173,6 +181,7 @@ const createFixture = async (
     });
   return {
     ctx,
+    dbPath,
     db,
     repos: db.repos,
     principal,
@@ -409,6 +418,93 @@ describe('DSH 回填来源：harness 提问背书 origin=user（REQ-M3-18 主路
       expect(review?.review.currentRevision).toBe(1);
     } finally {
       await fixture.close();
+    }
+  });
+
+  it('跨重启：用户回填已提交但 settle 丢失，status reconcile 保留 user 来源且不重复写入', async () => {
+    const answerer = vi.fn(picking('兑现'));
+    const fixture = await createFixture({
+      answerer,
+      wrapRepository: (repository) => new FailOnceSettleRepository(repository),
+    });
+    const operationId = randomUUID();
+    const scope = { accountId: fixture.principal.accountId, requestId: operationId };
+    const feedback = { outcome: 'followed', origin: 'user', pnl: 66 };
+    let committed: Awaited<ReturnType<RepositoryRegistry['decisionReview']['findWriteReceipt']>>;
+    try {
+      const advice = await seedAdvice(fixture);
+      const commit = vi.spyOn(fixture.repos.decisionReview, 'commit');
+      const lost = await fixture.call(MANUAL_OPERATION_TOOL, {
+        id: operationId,
+        tool: 'record_advice_outcome',
+        input: { adviceId: advice.id, outcome: 'followed', tradeIds: [], pnl: 66 },
+      });
+      expect(toolValue(lost)).toMatchObject({ ok: false, error: { kind: 'internal' } });
+      expect(answerer).toHaveBeenCalledTimes(1);
+      expect(answerer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          questions: [expect.objectContaining({ id: ADVICE_OUTCOME_QUESTION_ID })],
+        }),
+      );
+      expect(commit).toHaveBeenCalledTimes(1);
+      committed = await fixture.repos.decisionReview.findWriteReceipt(scope);
+      expect(committed).toMatchObject({
+        result: {
+          review: { currentRevision: 1, subject: { kind: 'advice', id: advice.id } },
+          revision: { revision: 1, content: { adviceFeedback: feedback } },
+        },
+      });
+      expect(toolValue(await fixture.call(OPERATION_STATUS_TOOL, { operationId }))).toMatchObject({
+        ok: true,
+        data: { operationId, state: 'executing', result: null },
+      });
+    } finally {
+      await fixture.close();
+    }
+
+    expect(() => fixture.db.sqlite.prepare('SELECT 1')).toThrow();
+    const restartedAnswerer = vi.fn(picking('兑现'));
+    const restarted = await createFixture({
+      dbPath: fixture.dbPath,
+      answerer: restartedAnswerer,
+    });
+    try {
+      expect(restarted.ctx).not.toBe(fixture.ctx);
+      expect(restarted.db.sqlite === fixture.db.sqlite).toBe(false);
+      expect(restarted.hostService).not.toBe(fixture.hostService);
+      expect(await restarted.repos.decisionReview.findWriteReceipt(scope)).toEqual(committed);
+      expect(toolValue(await restarted.call(OPERATION_STATUS_TOOL, { operationId }))).toMatchObject(
+        { ok: true, data: { operationId, state: 'executing', result: null } },
+      );
+
+      const commit = vi.spyOn(restarted.repos.decisionReview, 'commit');
+      const reconciled = toolValue(
+        await restarted.call(OPERATION_STATUS_TOOL, { operationId, reconcile: true }),
+      );
+      expect(reconciled).toMatchObject({
+        ok: true,
+        data: {
+          operationId,
+          state: 'succeeded',
+          result: { ok: true, data: { replayed: true, outcome: feedback } },
+        },
+      });
+      expect(toolValue(await restarted.call(OPERATION_STATUS_TOOL, { operationId }))).toEqual(
+        reconciled,
+      );
+      expect(
+        toolValue(await restarted.call(OPERATION_STATUS_TOOL, { operationId, reconcile: true })),
+      ).toEqual(reconciled);
+      const reviews = await restarted.repos.decisionReview.list({ accountId: scope.accountId });
+      expect(reviews).toEqual([committed?.result]);
+      const [review] = reviews;
+      expect(review?.review.currentRevision).toBe(1);
+      expect(review?.revision.content.adviceFeedback).toEqual(feedback);
+      expect(await restarted.repos.decisionReview.findWriteReceipt(scope)).toEqual(committed);
+      expect(commit).not.toHaveBeenCalled();
+      expect(restartedAnswerer).not.toHaveBeenCalled();
+    } finally {
+      await restarted.close();
     }
   });
 });

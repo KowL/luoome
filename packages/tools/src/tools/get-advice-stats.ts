@@ -12,7 +12,8 @@ import {
   accountAdviceOutcomes,
   accountScopedAdvices,
 } from '../internal/account-advice-outcomes.js';
-import { partitionAdviceOutcomes } from '../internal/advice-outcome-scope.js';
+import { AdviceHitRateSchema, computeAdviceHitRate } from '../internal/advice-hit-rate.js';
+import type { AdviceOutcomeOriginFilter } from '../internal/advice-outcome-scope.js';
 
 export const GetAdviceStatsInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -30,19 +31,17 @@ export const GetAdviceStatsInput = z.object({
 });
 
 /**
- * 单层决策统计。
- * 注：core 的 AdviceStats.byDecision 类型是无限递归（byDecision 的每个值仍含
- * 必填 byDecision），没有任何有限值能满足它；因此本工具输出一层拍平的
- * byDecision 分解（叶子不再嵌套），字段与 core AdviceStats 其余部分对齐。
+ * 单层决策统计（叶子不再嵌套）。
+ * byDecision 只展开一层：每层自带 totalAdvices、命中率分母与 excluded 分类，
+ * 足够做决策之间的横向对比；继续递归既没有消费方，也会让输出体积随决策数
+ * 指数增长，因此这里刻意拍平而不是复用嵌套结构。
  */
-const flatStatsSchema = z.object({
+const flatStatsSchema = AdviceHitRateSchema.extend({
+  /** 输出结构版本；统计语义由独立 metricVersion 标识。 */
   schemaVersion: z.literal(2),
   totalAdvices: z.number().int().nonnegative(),
   avgConfidence: z.number().min(0).max(100),
   feedbackCount: z.number().int().nonnegative(),
-  /** 与 feedbackCount 同值的显式分母：口径内（默认 origin='user'）的回填条数。 */
-  denominator: z.number().int().nonnegative(),
-  followedWithPnl: z.number().int().nonnegative(),
   outcomeRate: z.object({
     followed: z.number().min(0).max(1).nullable(),
     partiallyFollowed: z.number().min(0).max(1).nullable(),
@@ -50,28 +49,10 @@ const flatStatsSchema = z.object({
   }),
   pnlWhenFollowed: z.null(),
   pnlWhenIgnored: z.null(),
-  /** 用户明确 followed 且填写 pnl 的样本中盈利比例。 */
-  hitRate: z.number().min(0).max(1).nullable(),
-});
-
-const originCountsSchema = z.object({
-  user: z.number().int().nonnegative(),
-  model: z.number().int().nonnegative(),
-  import: z.number().int().nonnegative(),
-  unattested: z.number().int().nonnegative(),
 });
 
 export const GetAdviceStatsOutput = flatStatsSchema.extend({
   byDecision: z.record(AdviceDecisionSchema, flatStatsSchema),
-  /** 本次统计采用的来源口径（默认 user）。 */
-  originFilter: z.enum(['user', 'all']),
-  /** 窗口内回填记录按来源计数，用于解释分母为什么是现在这个数。 */
-  originCounts: originCountsSchema,
-  /** 被本次口径排除的条数；`originFilter='all'` 时两者都是 0。 */
-  excluded: z.object({
-    nonUserOrigin: z.number().int().nonnegative(),
-    unattested: z.number().int().nonnegative(),
-  }),
 });
 
 type FlatStats = z.infer<typeof flatStatsSchema>;
@@ -79,6 +60,8 @@ type FlatStats = z.infer<typeof flatStatsSchema>;
 const computeFlatStats = (
   advices: readonly Advice[],
   outcomes: ReadonlyMap<string, AdviceOutcome>,
+  originFilter: AdviceOutcomeOriginFilter,
+  grouped = false,
 ): FlatStats => {
   const totalAdvices = advices.length;
   const avgConfidence =
@@ -86,36 +69,22 @@ const computeFlatStats = (
       ? 0
       : Math.round((advices.reduce((sum, a) => sum + a.confidence, 0) / totalAdvices) * 100) / 100;
 
-  let followed = 0;
-  let partiallyFollowed = 0;
-  let ignored = 0;
-  let followedWithPnl = 0;
-  let hits = 0;
-
-  for (const advice of advices) {
-    const outcome = outcomes.get(advice.id);
-    if (outcome === undefined) continue;
-    if (outcome.outcome === 'followed') followed += 1;
-    else if (outcome.outcome === 'partially_followed') partiallyFollowed += 1;
-    else ignored += 1;
-
-    if (outcome.pnl === undefined) continue;
-    if (outcome.outcome === 'followed') {
-      followedWithPnl += 1;
-      if (outcome.pnl > 0) hits += 1;
-    }
-  }
-
-  const feedbackCount = followed + partiallyFollowed + ignored;
-  const rate = (n: number): number | null => (totalAdvices === 0 ? null : n / totalAdvices);
+  const metric = computeAdviceHitRate(advices, outcomes, originFilter, grouped);
+  const followed = metric.denominator + metric.excluded.unsettled;
+  const { partiallyFollowed, ignored } = metric.excluded;
+  // 20 条门槛同样约束采纳分布比例，不只是命中率：n=3 的 66.7% 与 n=3 的
+  // 命中率一样误导。分组不足门槛时比例置 null，但 raw counts 与
+  // sampleStatus=insufficient 仍保留，调用方仍能读到原始分布。
+  const rate = (n: number): number | null =>
+    totalAdvices === 0 || (grouped && !metric.minimumSampleMet) ? null : n / totalAdvices;
 
   return {
+    ...metric,
     schemaVersion: 2,
     totalAdvices,
     avgConfidence,
-    feedbackCount,
-    denominator: feedbackCount,
-    followedWithPnl,
+    // 口径内回填条数直接取分区结果，不再由 excluded 分类二次相加推导。
+    feedbackCount: metric.feedbackCount,
     outcomeRate: {
       followed: rate(followed),
       partiallyFollowed: rate(partiallyFollowed),
@@ -123,18 +92,20 @@ const computeFlatStats = (
     },
     pnlWhenFollowed: null,
     pnlWhenIgnored: null,
-    hitRate: followedWithPnl === 0 ? null : hits / followedWithPnl,
   };
 };
 
 const byDecisionOf = (
   advices: readonly Advice[],
   outcomes: ReadonlyMap<string, AdviceOutcome>,
+  originFilter: AdviceOutcomeOriginFilter,
 ): Record<AdviceDecision, FlatStats> => {
   const forDecision = (decision: AdviceDecision): FlatStats =>
     computeFlatStats(
       advices.filter((a) => a.decision === decision),
       outcomes,
+      originFilter,
+      true,
     );
   return {
     buy: forDecision('buy'),
@@ -150,7 +121,8 @@ export const getAdviceStatsTool = defineTool({
   description:
     '聚合建议准确率统计（总条数 / 平均信心度 / outcome 比例 / 命中率 / 按决策分解）；' +
     '复盘口径统计包含已过期 advice；默认只统计用户亲自回填（origin=user）的 outcome，' +
-    '其它来源需显式 originFilter=all，被排除条数在 excluded 披露',
+    '其它来源需显式 originFilter=all，被排除条数在 excluded 披露。' +
+    '命中率只统计 followed 且填有有限盈亏的已了结样本；不足 20 条不提供分组结论。',
   sideEffect: 'read',
   input: GetAdviceStatsInput,
   output: GetAdviceStatsOutput,
@@ -172,17 +144,9 @@ export const getAdviceStatsTool = defineTool({
     );
 
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
-    const { inScope, originCounts, excluded } = partitionAdviceOutcomes(
-      outcomes,
-      input.originFilter,
-    );
-
     return {
-      ...computeFlatStats(advices, inScope),
-      byDecision: byDecisionOf(advices, inScope),
-      originFilter: input.originFilter,
-      originCounts,
-      excluded,
+      ...computeFlatStats(advices, outcomes, input.originFilter),
+      byDecision: byDecisionOf(advices, outcomes, input.originFilter),
     };
   },
 });

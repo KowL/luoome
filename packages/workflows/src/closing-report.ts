@@ -74,6 +74,7 @@ const adviceCalibrationSection = async (
   );
   const calibration = await ctx.tools.get_confidence_calibration.execute({
     accountId,
+    originFilter: 'user',
     since: new Date(`${periodStart}T00:00:00+08:00`),
     until,
   });
@@ -99,7 +100,8 @@ const adviceCalibrationSection = async (
       },
     };
   }
-  const { totalAdvices, totalWithOutcome, followedWithPnl, overallHitRate } = calibration.data;
+  const { totalAdvices, totalWithOutcome, followedWithPnl, overallHitRate, excluded } =
+    calibration.data;
   const evidence = [
     localEvidence(
       'advice-calibration:0',
@@ -134,6 +136,19 @@ const adviceCalibrationSection = async (
               ...(totalWithOutcome === 0 ? { displayValue: '暂无明确反馈' } : {}),
             },
             {
+              key: 'excludedNonUserOrigin',
+              label: '排除模型/导入回填',
+              value: excluded.nonUserOrigin,
+            },
+            { key: 'excludedUnattested', label: '排除无来源戳回填', value: excluded.unattested },
+            { key: 'excludedUnsettled', label: '排除未了结回填', value: excluded.unsettled },
+            {
+              key: 'excludedPartiallyFollowed',
+              label: '排除部分采纳回填',
+              value: excluded.partiallyFollowed,
+            },
+            { key: 'excludedIgnored', label: '排除忽略回填', value: excluded.ignored },
+            {
               key: 'feedbackCoverage',
               label: '反馈覆盖率',
               unit: 'ratio',
@@ -158,7 +173,7 @@ const adviceCalibrationSection = async (
         {
           kind: 'text',
           tone: 'factual',
-          text: '反馈覆盖率 = 当前账户明确反馈样本量 / 账户建议样本量。填报盈利占比仅统计用户明确采纳且填写盈亏的样本；未知盈亏保持缺失，零盈亏仅来自用户明确填报。该占比不代表账户收益率、预测准确率或未来成功概率。',
+          text: `反馈覆盖率 = 当前账户明确反馈样本量 / 账户建议样本量。来源口径为 origin=user；模型、导入与无来源戳不作为用户回填。填报盈利占比仅统计用户明确采纳且填写有限盈亏的已了结样本；未知盈亏保持缺失，零盈亏仅来自用户明确填报。该占比不代表账户收益率、预测准确率或未来成功概率。统计口径 ${calibration.data.metricVersion}；${calibration.data.minimumSampleMet ? '样本达到 20 条门槛' : '样本不足 20 条，仅展示采样描述，不提供分组结论'}。20 条且盈利占比 50% 时，95% Wilson 区间约为 30%–70%。`,
         },
       ],
       evidenceIds: evidence.map((item) => item.id),
