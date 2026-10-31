@@ -32,6 +32,8 @@ import type {
   DragonTigerListOutput,
   EvaluateTradingPlanBudgetInput,
   EvaluateTradingPlanBudgetOutput,
+  FetchIndexQuotesInput,
+  FetchIndexQuotesOutput,
   FetchNewsInput,
   FetchNewsOutput,
   FetchQuoteInput,
@@ -604,6 +606,11 @@ export interface WorkflowToolMap {
   readonly list_stock_events: ToolAccessor<
     typeof ListStockEventsInput,
     typeof ListStockEventsOutput
+  >;
+  /** 指数行情（external）：盘前简报的隔夜事实来源之一。 */
+  readonly fetch_index_quotes: ToolAccessor<
+    typeof FetchIndexQuotesInput,
+    typeof FetchIndexQuotesOutput
   >;
   readonly list_trades: ToolAccessor<typeof ListTradesInput, typeof ListTradesOutput>;
   readonly list_watch_triggers: ToolAccessor<

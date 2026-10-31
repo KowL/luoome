@@ -9,6 +9,7 @@ export * from './define-workflow.js';
 export * from './evaluate-event-rules.js';
 export * from './intraday-trading-plan-watch.js';
 export * from './intraday-watch.js';
+export * from './morning-brief.js';
 export * from './opening-report.js';
 export * from './post-market-data.js';
 export * from './replay-strategy-range.js';
