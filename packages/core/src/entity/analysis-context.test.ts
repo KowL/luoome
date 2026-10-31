@@ -1,11 +1,15 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  ANALYSIS_CONTEXT_HASH_VERSION,
   type AnalysisContext,
   AnalysisContextSchema,
+  analysisContextHashPayload,
   analysisContextTiming,
   analysisContextTimingError,
   analysisContextWriteError,
   analysisTimingRules,
+  checkAnalysisReportCompleteness,
   checkAnalysisReportReferences,
   isAnalysisContextStale,
   missingFactsAvailability,
@@ -317,5 +321,80 @@ describe('T20 structured missingFacts', () => {
       ]),
     );
     expect(issues.length).toBeGreaterThanOrEqual(4);
+  });
+
+  // T28 验收 1：blocking 缺口是 P8 的判断输入，必须受 contextHash 保护。
+  it('删掉一条 blocking 缺口 → contextHash 必变（v2 口径）', () => {
+    const hashOf = (missingFacts: readonly unknown[]): string =>
+      createHash('sha256')
+        .update(
+          JSON.stringify(
+            analysisContextHashPayload({
+              version: ANALYSIS_CONTEXT_HASH_VERSION,
+              facts: [{ id: 'fact-1', label: '收盘价', value: 10, evidenceIds: [] }],
+              dataAsOf: shanghai.open,
+              missingFacts: missingFacts as never,
+            }),
+          ),
+        )
+        .digest('hex');
+    const blocking = [
+      {
+        kind: 'quote-unavailable',
+        subjectId: '600519.SH',
+        reason: '缺少行情',
+        asOf: shanghai.open,
+      },
+    ];
+    expect(hashOf(blocking)).not.toBe(hashOf([]));
+    expect(hashOf(blocking)).not.toBe(
+      hashOf([{ ...blocking[0], kind: 'strategy-run-unavailable' }]),
+    );
+  });
+
+  // T28 验收 2：checker 的**完整性方向**——报告漏引 blocking 缺口必须报具体 kind 与 subjectId。
+  it('报告未声明 context 里的 blocking 缺口 → omitted-blocking-missing-fact（带 kind 与 subjectId）', () => {
+    const context = AnalysisContextSchema.parse({
+      ...contextFor('advice_stock', shanghai.open, shanghai.open),
+      missingFacts: [
+        {
+          kind: 'quote-unavailable',
+          subjectId: '600519.SH',
+          reason: '缺少行情',
+          asOf: shanghai.open,
+        },
+        {
+          kind: 'news-unavailable',
+          subjectId: '600519.SH',
+          reason: '新闻源失败',
+          asOf: shanghai.open,
+        },
+      ],
+    });
+    const issues = checkAnalysisReportCompleteness({ context, missingFacts: [] });
+    // 只有 blocking 的那条被要求声明；degraded（news-unavailable）不强制。
+    expect(issues).toEqual([
+      {
+        code: 'omitted-blocking-missing-fact',
+        path: 'missingFacts[0]',
+        message: '报告未声明 blocking 缺口: quote-unavailable / 600519.SH',
+      },
+    ]);
+
+    // 声明之后不再报——证明它检查的是"有没有提"，不是"有没有缺口"。
+    expect(
+      checkAnalysisReportReferences({
+        context,
+        evidenceFactIds: context.factIds,
+        missingFacts: [
+          {
+            kind: 'quote-unavailable',
+            subjectId: '600519.SH',
+            reason: '缺少行情',
+            asOf: shanghai.open,
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });

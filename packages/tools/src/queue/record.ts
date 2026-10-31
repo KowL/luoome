@@ -5,7 +5,9 @@ import {
   addTradingDays,
   adviceDataSnapshotFromFacts,
   adviceExpiryDays,
+  analysisContextHashMatches,
   analysisContextTimingError,
+  checkAnalysisReportCompleteness,
   checkAnalysisReportReferences,
   dateInShanghai,
   STANDARD_DISCLAIMERS,
@@ -40,12 +42,20 @@ const recordAdvice = async (
   const context = await ctx.repos.analysis.findContext(accountId, input.contextId);
   if (!context) return errNotFound('AnalysisContext', input.contextId);
   if (!context.kind.startsWith('advice_')) return errInvalidInput('context_mismatch');
-  if (context.contextHash !== analysisHash({ facts: context.facts, dataAsOf: context.dataAsOf }))
+  if (
+    !analysisContextHashMatches({
+      contextHash: context.contextHash,
+      facts: context.facts,
+      dataAsOf: context.dataAsOf,
+      missingFacts: context.missingFacts,
+      compute: analysisHash,
+    })
+  )
     return errInvalidInput('context_mismatch');
   const referenceIssues = checkAnalysisReportReferences({
     context,
     evidenceFactIds: input.provenance.evidenceFactIds,
-    missingFacts: [],
+    missingFacts: input.provenance.acknowledgedMissingFacts ?? [],
   });
   if (referenceIssues.length > 0) return errInvalidInput('unknown_fact_reference');
   const now = ctx.clock();
@@ -53,6 +63,12 @@ const recordAdvice = async (
     const timingError = analysisContextTimingError(context, now);
     if (timingError) return errInvalidInput(timingError);
   }
+  // 完整性：时序检查之后再做（保持既有错误优先级：引用 → 时序 → 完整性）。
+  const completenessIssues = checkAnalysisReportCompleteness({
+    context,
+    missingFacts: input.provenance.acknowledgedMissingFacts ?? [],
+  });
+  if (completenessIssues.length > 0) return errInvalidInput('unknown_fact_reference');
   const advice = AdviceSchema.parse({
     ...input.result,
     reasoning: sanitizeAdviceReasoning(input.result.reasoning),

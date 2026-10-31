@@ -1,7 +1,9 @@
 import {
   AnalysisProvenanceSchema,
   type AnalysisPublication,
+  analysisContextHashMatches,
   analysisContextTimingError,
+  checkAnalysisReportCompleteness,
   checkAnalysisReportReferences,
   InvestmentDirectionSchema,
   InvestmentEvidenceSchema,
@@ -56,13 +58,19 @@ export const recordAnalysisPublication = async (
   if (!context) return errNotFound('AnalysisContext', input.contextId);
   if (
     context.kind !== input.result.kind ||
-    context.contextHash !== analysisHash({ facts: context.facts, dataAsOf: context.dataAsOf })
+    !analysisContextHashMatches({
+      contextHash: context.contextHash,
+      facts: context.facts,
+      dataAsOf: context.dataAsOf,
+      missingFacts: context.missingFacts,
+      compute: analysisHash,
+    })
   )
     return errInvalidInput('context_mismatch');
   const referenceIssues = checkAnalysisReportReferences({
     context,
     evidenceFactIds: input.provenance.evidenceFactIds,
-    missingFacts: [],
+    missingFacts: input.provenance.acknowledgedMissingFacts ?? [],
   });
   if (referenceIssues.length > 0) return errInvalidInput('unknown_fact_reference');
   const now = ctx.clock();
@@ -83,6 +91,16 @@ export const recordAnalysisPublication = async (
   }
   const timingError = analysisContextTimingError(context, now);
   if (timingError) return errInvalidInput(timingError);
+  // 完整性：只对 advice_* 生效。blocking 缺口（quote-unavailable / account-facts-unavailable /
+  // strategy-run-unavailable）是 **P8 决策**的判断输入；研究类报告（strategy_version_proposal、
+  // research_directions 等）本来就可以在缺行情时产出，套这条会把合法研究挡住。
+  if (context.kind.startsWith('advice_')) {
+    const completenessIssues = checkAnalysisReportCompleteness({
+      context,
+      missingFacts: input.provenance.acknowledgedMissingFacts ?? [],
+    });
+    if (completenessIssues.length > 0) return errInvalidInput('unknown_fact_reference');
+  }
   const provenance = {
     ...input.provenance,
     contextId: context.id,

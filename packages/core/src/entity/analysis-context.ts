@@ -56,6 +56,66 @@ export const missingFactsAvailability = (
       ? 'partial'
       : 'complete';
 
+/**
+ * contextHash 口径版本。
+ * - **1**：`{ facts, dataAsOf }`——历史口径，**不覆盖 missingFacts**，因此删掉一条 blocking 缺口
+ *   时 hash 不变、门禁可被绕过（本需求要修的洞）。
+ * - **2**：追加 `missingFacts`。缺口的增删会改变 hash，P8 的判断输入因此受 hash 保护。
+ * 旧 context 读回时缺该字段 → 默认 1，继续按老口径校验，不悄悄改变历史 hash 的含义。
+ */
+export const ANALYSIS_CONTEXT_HASH_VERSION = 2;
+
+/** 参与 contextHash 的载荷；版本决定是否纳入 missingFacts。 */
+export const analysisContextHashPayload = (input: {
+  readonly version: number;
+  readonly facts: readonly unknown[];
+  readonly dataAsOf: Date;
+  readonly missingFacts?: readonly AnalysisMissingFact[];
+}): Record<string, unknown> =>
+  input.version >= 2
+    ? {
+        version: input.version,
+        facts: input.facts,
+        dataAsOf: input.dataAsOf,
+        missingFacts: input.missingFacts ?? [],
+      }
+    : { facts: input.facts, dataAsOf: input.dataAsOf };
+
+/**
+ * 校验 contextHash 是否与当前事实+缺口一致。
+ *
+ * 为什么要"两版都试"：`contextHashVersion` 是新增字段，历史存档/未加列的存储读回来是 undefined，
+ * 只看字段会把 v2 写入的 context 误判成 v1 而报 mismatch。这里改为**按口径重算比对**：
+ * 先按 v2（含 missingFacts）算，不等再按 v1（不含）算。两者都不等才判失败。
+ *
+ * 这不削弱保护：v2 写入的 context 的 hash 里含 `version` 键，删掉一条 blocking 缺口后
+ * v2 重算必变、v1 重算也不可能撞上——两条路径都失败，篡改仍被发现。
+ */
+export const analysisContextHashMatches = (input: {
+  readonly contextHash: string;
+  readonly facts: readonly unknown[];
+  readonly dataAsOf: Date;
+  readonly missingFacts: readonly AnalysisMissingFact[];
+  readonly compute: (payload: Record<string, unknown>) => string;
+}): boolean => {
+  if (
+    input.compute(
+      analysisContextHashPayload({
+        version: ANALYSIS_CONTEXT_HASH_VERSION,
+        facts: input.facts,
+        dataAsOf: input.dataAsOf,
+        missingFacts: input.missingFacts,
+      }),
+    ) === input.contextHash
+  )
+    return true;
+  return (
+    input.compute(
+      analysisContextHashPayload({ version: 1, facts: input.facts, dataAsOf: input.dataAsOf }),
+    ) === input.contextHash
+  );
+};
+
 export const AnalysisContextSchema = z
   .object({
     recordedResult: z.object({ hash: z.string().min(1), ref: z.string().min(1) }).optional(),
@@ -77,6 +137,11 @@ export const AnalysisContextSchema = z
     limitations: z.array(z.string().min(1)),
     /** 结构化缺口；旧 context 没有该字段时按空数组读取（兼容）。 */
     missingFacts: z.array(AnalysisMissingFactSchema).default([]),
+    /**
+     * hash 口径版本；**缺省即 1（老口径）**。用 optional 而不是 default，是为了不强制
+     * 历史 fixture / 旧存档补字段；读取侧统一 `?? 1` 归一。
+     */
+    contextHashVersion: z.number().int().min(1).optional(),
     contextHash: z.string().regex(/^[a-f0-9]{64}$/),
     writeUntil: z.coerce.date(),
     expiresAt: z.coerce.date(),
@@ -254,6 +319,7 @@ export const AnalysisReportReferenceIssueSchema = z
       'unknown-missing-kind',
       'empty-missing-fact',
       'duplicate-missing-fact',
+      'omitted-blocking-missing-fact',
     ]),
     path: z.string().min(1),
     message: z.string().min(1).max(500),
@@ -319,6 +385,38 @@ export const checkAnalysisReportReferences = (input: {
       });
     }
     seenGaps.add(key);
+  });
+
+  return issues;
+};
+
+/**
+ * 完整性方向（T28）：context 里有 blocking 缺口，报告必须**逐条声明**。
+ *
+ * 与 `checkAnalysisReportReferences` 分开成两个函数，是为了保持既有错误优先级不变
+ * （引用错误 → 时序错误 → 完整性错误）：直接塞进前者会让"上下文已过期"被
+ * "缺口没声明"抢答，改变用户看到的第一个错误。
+ *
+ * 为什么必须有这条：blocking 缺口是 P8 的**判断输入**（unavailable 必须阻断）。
+ * 只查"引用的对不对"不查"该提的提了没"，就等于允许报告删掉一条 blocking 缺口绕过门禁。
+ */
+export const checkAnalysisReportCompleteness = (input: {
+  readonly context: Pick<AnalysisContext, 'missingFacts'>;
+  readonly missingFacts: readonly {
+    readonly kind: string;
+    readonly subjectId: string;
+  }[];
+}): readonly AnalysisReportReferenceIssue[] => {
+  const declared = new Set(input.missingFacts.map((fact) => `${fact.kind}\0${fact.subjectId}`));
+  const issues: AnalysisReportReferenceIssue[] = [];
+  input.context.missingFacts.forEach((fact, index) => {
+    if (!BLOCKING_MISSING_FACT_KINDS.has(fact.kind)) return;
+    if (declared.has(`${fact.kind}\0${fact.subjectId}`)) return;
+    issues.push({
+      code: 'omitted-blocking-missing-fact',
+      path: `missingFacts[${index}]`,
+      message: `报告未声明 blocking 缺口: ${fact.kind} / ${fact.subjectId}`,
+    });
   });
   return issues;
 };

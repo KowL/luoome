@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  ANALYSIS_CONTEXT_HASH_VERSION,
   type AnalysisContext,
   AnalysisContextSchema,
   AnalysisKindSchema,
   AnalysisSubjectSchema,
+  analysisContextHashPayload,
   analysisContextTiming,
   BUILTIN_HOLIDAYS,
   dateInShanghai,
@@ -422,7 +424,15 @@ export const assembleAnalysisContext = async (
     factIds: facts.map((fact) => fact.id),
     limitations,
     missingFacts,
-    contextHash: analysisHash({ facts, dataAsOf }),
+    contextHashVersion: ANALYSIS_CONTEXT_HASH_VERSION,
+    contextHash: analysisHash(
+      analysisContextHashPayload({
+        version: ANALYSIS_CONTEXT_HASH_VERSION,
+        facts,
+        dataAsOf,
+        missingFacts,
+      }),
+    ),
     writeUntil,
     expiresAt: new Date(now.getTime() + 180 * 86400000),
     createdAt: now,
