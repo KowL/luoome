@@ -519,3 +519,28 @@ export const holdingsTotalsView = (summary) => {
     canShowTotals: unpricedCount === 0 && summary?.totalValue !== undefined,
   };
 };
+
+/**
+ * 提醒要素缺口（REQ-M3-09 §5）的展示投影。
+ *
+ * 两个数必须分开说：`missingElements` 是**真的没投递**（要警告），
+ * `notApplicableElements` 是**不适用要素但都发出去了**（不是失败，别写成错误）。
+ */
+export const reminderGapsView = (summary) => {
+  const gaps = summary?.reminderGaps;
+  if (gaps === undefined || gaps === null) return null;
+  const missing = Number.isInteger(gaps.missingElements) ? gaps.missingElements : 0;
+  const notApplicable = Number.isInteger(gaps.notApplicableElements)
+    ? gaps.notApplicableElements
+    : 0;
+  return {
+    missingElements: missing,
+    notApplicableElements: notApplicable,
+    /** 未投递：这是用户要关心的失败面。 */
+    missingText: missing > 0 ? `${missing} 条未投递（缺提醒要素）` : null,
+    missingTone: 'warning',
+    /** 不适用：**已发出**，只是没有计划要素；不是错误。 */
+    notApplicableText: notApplicable > 0 ? `${notApplicable} 条不含计划要素（已发出）` : null,
+    notApplicableTone: 'factual',
+  };
+};

@@ -1197,6 +1197,74 @@ const runAcceptance = async () => {
   )
     throw new Error('慢新闻/情绪必须保持读取中，同时已渲染账户、指数、自选');
   await page.screenshot(join(evidenceDir, 'overview-progressive-loading.png'));
+
+  // REQ-M3-09 DOM 断言（本脚本不在 test:all，需本机 Chrome；见 m3b-9-closure.md 的降级声明）。
+  // 1) 每个 client 渲染的面板都有数据健康角标，且三档文案与 data-health-status 对应。
+  const healthPanels = await page.evaluate<
+    { panel: string; status: string | null; text: string }[]
+  >(`[...document.querySelectorAll('[data-panel]')].map((panel) => {
+      const badge = panel.querySelector('.luo-panel-health');
+      return {
+        panel: panel.getAttribute('data-panel') ?? '',
+        status: badge?.getAttribute('data-health-status') ?? null,
+        text: badge?.textContent ?? '',
+      };
+    })`);
+  if (healthPanels.length === 0) throw new Error('面板清单为空：无法验证数据健康角标');
+  const HEALTH_LABELS: Record<string, string> = {
+    available: '数据可用',
+    partial: '部分数据',
+    unavailable: '数据不可用',
+  };
+  for (const panel of healthPanels) {
+    if (panel.status === null)
+      throw new Error(`面板 ${panel.panel} 缺少 .luo-panel-health 数据健康角标`);
+    const expected = HEALTH_LABELS[panel.status];
+    if (expected !== undefined && !panel.text.includes(expected))
+      throw new Error(`面板 ${panel.panel} 角标文案与 ${panel.status} 不对应：${panel.text}`);
+  }
+  summary.panelHealth = healthPanels;
+
+  // 2) 缺价持仓渲染「缺价」，不得出现 0.00% / undefined / NaN。
+  const unpricedCells = await page.evaluate<string[]>(`(() => {
+      const rows = [...document.querySelectorAll('[data-market-stock]')];
+      return rows
+        .filter((row) => row.textContent.includes('缺价'))
+        .map((row) => row.textContent);
+    })()`);
+  for (const text of unpricedCells) {
+    if (/0\.00%|undefined|NaN/.test(text))
+      throw new Error(`缺价持仓仍渲染了数字：${text.slice(0, 200)}`);
+  }
+  summary.unpricedRows = unpricedCells.length;
+
+  // 3) 两个提醒计数分别出现，且「不适用」不得写成「未投递」。
+  const gapTexts = await page.evaluate<string[]>(
+    `[...document.querySelectorAll('.luo-fine')].map((node) => node.textContent ?? '').filter((text) => text.includes('未投递') || text.includes('不含计划要素'))`,
+  );
+  for (const text of gapTexts) {
+    if (text.includes('不含计划要素') && /未投递|失败/.test(text))
+      throw new Error(`不适用要素被写成失败：${text}`);
+  }
+  summary.reminderGaps = gapTexts;
+
+  // 4) blocked 建议卡可见且含缺段名；Kpi/Stat 缺时点渲染「时点未知」。
+  const blockedCards = await page.evaluate<
+    { visible: boolean; text: string }[]
+  >(`[...document.querySelectorAll('[data-advice-card="blocked"]')].map((node) => ({
+      visible: node.getBoundingClientRect().height > 0,
+      text: node.textContent ?? '',
+    }))`);
+  for (const card of blockedCards) {
+    if (!card.visible) throw new Error('blocked 建议卡不可见');
+    if (/结论|反证|风险|有效期|免责/.test(card.text) && !/缺/.test(card.text))
+      throw new Error(`blocked 建议卡没有点名缺哪一段：${card.text.slice(0, 160)}`);
+  }
+  const unknownTime = await page.evaluate<number>(
+    `[...document.querySelectorAll('.luo-fine')].filter((node) => node.textContent.includes('时点未知')).length`,
+  );
+  summary.unknownTimeNodes = unknownTime;
+
   overviewPending = false;
   for (const send of releaseOverview.splice(0)) send();
   await page.waitFor(

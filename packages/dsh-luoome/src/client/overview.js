@@ -26,7 +26,7 @@ import {
   SkeletonLines,
   Stat,
 } from './primitives.js';
-import { holdingPriceView } from './projection.js';
+import { holdingPriceView, reminderGapsView } from './projection.js';
 import { StockDetail } from './stock.js';
 
 const SESSION_TONE = {
@@ -490,6 +490,31 @@ export function OverviewPanel({ onAnalyzeStock }) {
                     }),
                   )
                 : null,
+              // 提醒要素缺口（REQ-M3-09 §5）：两个数分开显示，未投递用 warning，不适用用 factual。
+              ...(() => {
+                const gaps = reminderGapsView(triggerData?.summary);
+                if (gaps === null) return [];
+                return [
+                  ...(gaps.missingText === null
+                    ? []
+                    : [
+                        h(
+                          'p',
+                          { key: 'gap-missing', className: 'luo-fine luo-warn-text' },
+                          gaps.missingText,
+                        ),
+                      ]),
+                  ...(gaps.notApplicableText === null
+                    ? []
+                    : [
+                        h(
+                          'p',
+                          { key: 'gap-na', className: 'luo-fine luo-muted' },
+                          gaps.notApplicableText,
+                        ),
+                      ]),
+                ];
+              })(),
               h(MarketTable, {
                 key: tab,
                 quotes: dataOf(watchlist.results, 'batch_quote'),

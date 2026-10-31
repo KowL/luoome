@@ -664,3 +664,35 @@ describe('S3 静态守卫：缺席字段不得被补成 0', () => {
     }
   });
 });
+
+import { reminderGapsView } from './projection.js';
+
+describe('S4 提醒要素缺口：两个数分开', () => {
+  it('separates undelivered from not-applicable, and never calls the latter a failure', () => {
+    const view = reminderGapsView({
+      reminderGaps: { missingElements: 3, notApplicableElements: 7 },
+    });
+    expect(view.missingElements).toBe(3);
+    expect(view.notApplicableElements).toBe(7);
+    expect(view.missingText).toContain('3 条未投递');
+    expect(view.notApplicableText).toContain('7 条不含计划要素');
+    // 不适用那条不能出现「未投递 / 失败」；未投递那条不能出现「不适用」。
+    expect(view.notApplicableText).not.toMatch(/未投递|失败|缺要素/);
+    expect(view.missingText).not.toMatch(/不适用/);
+    expect(view.missingTone).toBe('warning');
+    expect(view.notApplicableTone).toBe('factual');
+  });
+
+  it('hides a zero count instead of printing 0', () => {
+    const view = reminderGapsView({
+      reminderGaps: { missingElements: 0, notApplicableElements: 0 },
+    });
+    expect(view.missingText).toBeNull();
+    expect(view.notApplicableText).toBeNull();
+  });
+
+  it('returns null when the server gave no gaps', () => {
+    expect(reminderGapsView({})).toBeNull();
+    expect(reminderGapsView(undefined)).toBeNull();
+  });
+});
