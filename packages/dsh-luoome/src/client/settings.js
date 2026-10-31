@@ -65,6 +65,10 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
   const [sources, setSources] = useState(['', '', '']);
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
+  /** 按源收集的密钥输入（非 FUYAO 的其它凭据源）；空串 = 保留。 */
+  const [keys, setKeys] = useState({});
+  /** 按源收集的显式清空开关（clear:true 才会删密钥）。 */
+  const [clears, setClears] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -87,20 +91,44 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
 
   const selected = sources.filter(Boolean);
   const duplicate = new Set(selected).size !== selected.length;
-  const needsKey = selected.includes('fuyao') && !data?.fuyao.configured;
+  // 凭据分区从服务端 `credentials` 派生（REQ-M3-15）：用户新增一家源，这里自动多一格。
+  const credentialSections = data?.credentials ?? [];
+  const apiKeyFor = (id) => keys[id] ?? '';
+  const clearFor = (id) => clears[id] === true;
+  const setKey = (id, value) => setKeys((current) => ({ ...current, [id]: value }));
+  const setClear = (id, value) => setClears((current) => ({ ...current, [id]: value }));
   const save = async (event) => {
     event.preventDefault();
     setBusy(true);
     setMessage('');
     setError('');
     try {
+      const credentials = Object.fromEntries(
+        credentialSections
+          .filter((section) => section.id !== 'fuyao')
+          .map((section) => {
+            const key = apiKeyFor(section.id).trim();
+            const clear = clearFor(section.id);
+            return [
+              section.id,
+              { ...(key.length > 0 ? { apiKey: key } : {}), ...(clear ? { clear: true } : {}) },
+            ];
+          }),
+      );
       const next = await marketRequest({
         sources: selected,
-        fuyao: { baseUrl: baseUrl.trim(), ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) },
+        fuyao: {
+          baseUrl: baseUrl.trim(),
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+          ...(clearFor('fuyao') ? { clear: true } : {}),
+        },
+        credentials,
       });
       setData(next);
       setBaseUrl(next.fuyao.baseUrl);
       setApiKey('');
+      setKeys({});
+      setClears({});
       setMessage('行情设置已保存，立即生效');
       onSaved();
     } catch (err) {
@@ -166,6 +194,48 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
               }),
             ),
             h('p', { className: 'luo-fine' }, '密钥仅保存在本机，保存后不回显。'),
+            // 其它凭据源（Tushare 等）：**从服务端 credentials 派生**，新增一家源自动多一格。
+            ...credentialSections
+              .filter((section) => section.id !== 'fuyao')
+              .map((section) =>
+                h(
+                  'div',
+                  { key: section.id, 'data-credential-section': section.id },
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    `${section.label} · ${section.configured ? '已配置' : '未配置'}`,
+                    h('input', {
+                      type: 'password',
+                      'aria-label': `${section.label} API Key`,
+                      autoComplete: 'new-password',
+                      value: apiKeyFor(section.id),
+                      maxLength: 4096,
+                      required:
+                        selected.includes(section.id) &&
+                        !section.configured &&
+                        !clearFor(section.id),
+                      placeholder: section.configured ? '留空保留现有密钥' : '输入 API Key',
+                      disabled: busy,
+                      onChange: (event) => setKey(section.id, event.target.value),
+                    }),
+                  ),
+                  section.configured
+                    ? h(
+                        'label',
+                        { className: 'luo-fine' },
+                        h('input', {
+                          type: 'checkbox',
+                          'aria-label': `清空 ${section.label} 密钥`,
+                          checked: clearFor(section.id),
+                          disabled: busy,
+                          onChange: (event) => setClear(section.id, event.target.checked),
+                        }),
+                        ` 清空 ${section.envKey}（显式动作，留空不会清空）`,
+                      )
+                    : null,
+                ),
+              ),
             h(
               'div',
               { className: 'luo-source-order' },

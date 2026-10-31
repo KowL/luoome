@@ -298,7 +298,12 @@ describe('dsh-luoome production composition root', () => {
       const previous = host.context;
       host.marketSettings.save({
         sources: ['fuyao'],
-        fuyao: { baseUrl: 'https://fuyao.example.test', apiKey: 'synthetic-live-key' },
+        fuyao: {
+          baseUrl: 'https://fuyao.example.test',
+          apiKey: 'synthetic-live-key',
+          clear: false,
+        },
+        credentials: {},
       });
       expect(host.context.adapters.market).not.toBe(previous.adapters.market);
       expect(host.context.ashareSentiment).not.toBe(previous.ashareSentiment);

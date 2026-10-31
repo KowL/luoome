@@ -114,7 +114,7 @@ describe('DSH market settings', () => {
     expect(reopened.read()).toEqual(result);
     expect(reopened.runtimeEnv().FUYAO_API_KEY).toBe('synthetic-fuyao-key');
     reopened.save(
-      { ...input(), fuyao: { baseUrl: 'https://changed.example.test' } },
+      { ...input(), fuyao: { baseUrl: 'https://changed.example.test', clear: false } },
       () => () => {},
     );
     expect(new MarketSettingsStore({}, path).runtimeEnv().FUYAO_API_KEY).toBe(
@@ -203,5 +203,92 @@ describe('DSH market settings', () => {
     expect(await response.text()).not.toMatch(/synthetic-fuyao-key|private\/path/);
     const read = await handler(new Request('https://dsh.test/api/luoome/settings/market'));
     expect(read.headers.get('cache-control')).toBe('no-store');
+  });
+});
+
+// REQ-M3-15 三条 PRD 硬验收的回归测试（此前只靠既有行为，没有测试 = 没有验收）。
+describe('REQ-M3-15 PRD 硬验收', () => {
+  it('留空保存：原密钥仍保留（留在磁盘与运行时），且不回显', () => {
+    const { settings, path } = store({});
+    settings.save(input(), () => () => {});
+    // 留空（apiKey 缺席）再存一次，只改地址。
+    settings.save(
+      {
+        sources: ['fuyao', 'tencent'],
+        fuyao: { baseUrl: 'https://other.example.test', clear: false },
+        credentials: {},
+      },
+      () => () => {},
+    );
+    expect(readFileSync(path, 'utf8')).toContain('FUYAO_API_KEY="synthetic-fuyao-key"');
+    expect(settings.runtimeEnv().FUYAO_API_KEY).toBe('synthetic-fuyao-key');
+    // 空串同样表示保留，不是清空。
+    settings.save(
+      { sources: ['fuyao', 'tencent'], fuyao: { apiKey: '', clear: false }, credentials: {} },
+      () => () => {},
+    );
+    expect(settings.runtimeEnv().FUYAO_API_KEY).toBe('synthetic-fuyao-key');
+  });
+
+  it('不回显：视图里只有 configured 布尔，任何序列化都不含密钥原文', () => {
+    const { settings } = store({});
+    const view = settings.save(input(), () => () => {});
+    expect(view.fuyao.configured).toBe(true);
+    expect(JSON.stringify(view)).not.toContain('synthetic-fuyao-key');
+    for (const section of view.credentials) {
+      expect(Object.keys(section)).toEqual(
+        expect.arrayContaining(['id', 'label', 'envKey', 'configured']),
+      );
+      expect(Object.keys(section)).not.toContain('apiKey');
+    }
+  });
+
+  it('重启保留：新建 store（模拟重启）后配置与凭据都在', () => {
+    const { settings, path } = store({});
+    settings.save(input(), () => () => {});
+    const restarted = new MarketSettingsStore({}, path);
+    expect(restarted.read().activeOrder).toEqual(['fuyao', 'tencent']);
+    expect(restarted.read().fuyao.configured).toBe(true);
+    expect(restarted.runtimeEnv().FUYAO_API_KEY).toBe('synthetic-fuyao-key');
+  });
+
+  it('磁盘上不在 SETTINGS_KEYS 的键，保存后运行时也认（重读盘修复）', () => {
+    const { settings, path } = store({});
+    settings.save(input(), () => () => {});
+    // 人工往 .env 写一个不在白名单里的键（例如新增供应商的 token）。
+    const current = readFileSync(path, 'utf8');
+    writeFileSync(path, `${current}TUSHARE_TOKEN="manual-token"\n`);
+    // 再保存一次别的配置：运行时候选必须来自磁盘，而不是被内存覆盖。
+    settings.save(
+      {
+        sources: ['fuyao', 'tencent'],
+        fuyao: { baseUrl: 'https://changed.example.test', clear: false },
+        credentials: {},
+      },
+      () => () => {},
+    );
+    expect(settings.runtimeEnv().TUSHARE_TOKEN).toBe('manual-token');
+    expect(readFileSync(path, 'utf8')).toContain('TUSHARE_TOKEN="manual-token"');
+  });
+
+  it('凭据分区从 manifest 的 requiredEnv 派生（Tushare 也有一格）', () => {
+    const { settings } = store({});
+    const ids = settings.read().credentials.map((item) => item.id);
+    expect(ids).toContain('tushare');
+    expect(ids).toContain('fuyao');
+    // 无 requiredEnv 的源不出现。
+    expect(ids).not.toContain('eastmoney');
+  });
+
+  it('显式清空：clear:true 才删除密钥行；空串绝不等于清空', () => {
+    const { settings, path } = store({});
+    settings.save(input(), () => () => {});
+    settings.save(
+      { sources: ['tencent'], fuyao: { clear: true }, credentials: {} },
+      () => () => {},
+    );
+    expect(readFileSync(path, 'utf8')).not.toContain('FUYAO_API_KEY');
+    expect(settings.runtimeEnv().FUYAO_API_KEY).toBeUndefined();
+    expect(settings.read().fuyao.configured).toBe(false);
   });
 });

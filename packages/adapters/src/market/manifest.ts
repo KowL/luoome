@@ -1,3 +1,4 @@
+import { FUYAO_DEFAULT_BASE_URL } from '../fuyao/client.js';
 import type { MarketSourceId } from './factory.js';
 import type { MarketCapability } from './source-registry.js';
 
@@ -13,6 +14,17 @@ export interface MarketSourceManifestEntry {
   readonly capabilities: readonly MarketCapability[];
   /** 启用该源前必须配置的凭证；无则开箱即用。 */
   readonly requiredEnv?: { readonly key: string; readonly label: string };
+  /**
+   * 设置页需要**额外**收集的非凭据配置（如自建服务地址）。
+   *
+   * 设置页的凭据分区**从 `requiredEnv` 派生**（M3-15：用户加一家源就自动多一格）；
+   * 这里声明「除 API Key 之外还要收集什么」，避免把 FUYAO 这类特例硬编码进设置页。
+   */
+  readonly settingsFields?: readonly {
+    readonly key: 'baseUrl';
+    readonly label: string;
+    readonly defaultValue: string;
+  }[];
 }
 
 export const MARKET_SOURCE_MANIFEST: Readonly<Record<MarketSourceId, MarketSourceManifestEntry>> = {
@@ -58,5 +70,8 @@ export const MARKET_SOURCE_MANIFEST: Readonly<Record<MarketSourceId, MarketSourc
       'delayed-index',
     ],
     requiredEnv: { key: 'FUYAO_API_KEY', label: 'fuyao' },
+    settingsFields: [
+      { key: 'baseUrl', label: 'FUYAO 服务地址', defaultValue: FUYAO_DEFAULT_BASE_URL },
+    ],
   },
 };

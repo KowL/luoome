@@ -28,23 +28,59 @@ const BaseUrl = z
     );
   }, '请输入不含凭据、查询参数或片段的 HTTP(S) 服务地址');
 
+/** 设置页可收集凭据的源（**从 manifest 的 `requiredEnv` 派生**，不硬编码）。 */
+export const CREDENTIAL_SOURCES = (Object.keys(MARKET_SOURCE_MANIFEST) as MarketSourceId[]).filter(
+  (id) => MARKET_SOURCE_MANIFEST[id].requiredEnv !== undefined,
+);
+
+/**
+ * 凭据分区（M3-15）：每个需要 `requiredEnv` 的源一格。
+ *
+ * 三态契约（task-25 同族）：
+ * - **缺席** = 保留现有密钥；`''` = 保留（等同缺席）
+ * - **非空** = 更新
+ * - **`clear: true`** = **显式清空**（唯一的删除入口；`''` 绝不等于清空）
+ */
+const CredentialSectionSchema = z
+  .object({
+    baseUrl: BaseUrl.optional(),
+    apiKey: z
+      .string()
+      .trim()
+      .max(4096)
+      .regex(/^[^\r\n\0]*$/)
+      .optional(),
+    clear: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (value) => !(value.clear && value.apiKey !== undefined && value.apiKey.trim().length > 0),
+    'clear 与 apiKey 不能同时给出',
+  );
+
 export const SaveMarketSettingsSchema = z
   .object({
     sources: MarketSourceOrderSchema,
-    fuyao: z
-      .object({
-        baseUrl: BaseUrl,
-        apiKey: z
-          .string()
-          .trim()
-          .min(1)
-          .max(4096)
-          .regex(/^[^\r\n\0]+$/)
-          .optional(),
-      })
-      .strict(),
+    fuyao: CredentialSectionSchema,
+    /** 其它需要凭据的源（Tushare 等）；键 = 源 id。 */
+    credentials: z.record(z.string(), CredentialSectionSchema).optional().default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    for (const [id, section] of Object.entries(value.credentials)) {
+      const entry = MARKET_SOURCE_MANIFEST[id as MarketSourceId];
+      if (entry === undefined || entry.requiredEnv === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['credentials', id], message: `未知的凭据源：${id}` });
+        continue;
+      }
+      if (section.baseUrl !== undefined && (entry.settingsFields ?? []).length === 0)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['credentials', id],
+          message: `${id} 不接受服务地址`,
+        });
+    }
+  });
 
 export type SaveMarketSettings = z.infer<typeof SaveMarketSettingsSchema>;
 
@@ -66,6 +102,14 @@ export interface MarketSettingsView {
     readonly configured: boolean;
   }[];
   readonly fuyao: { readonly baseUrl: string; readonly configured: boolean };
+  /** 设置页凭据分区（M3-15）：从 manifest 的 `requiredEnv` 派生，**只有 `configured` 布尔，永不回显密钥**。 */
+  readonly credentials: readonly {
+    readonly id: MarketSourceId;
+    readonly label: string;
+    readonly envKey: string;
+    readonly configured: boolean;
+    readonly baseUrl?: string;
+  }[];
 }
 
 export interface MarketSettings {
@@ -92,6 +136,22 @@ export class MarketSettingsStore {
     return existsSync(this.path) ? readFileSync(this.path, 'utf8') : '';
   }
 
+  /**
+   * 运行时候选 = 磁盘上的**全部**键（不只 `SETTINGS_KEYS`）。
+   *
+   * 修复（REQ-M3-15 §3）：原实现把 `changes` 合并到内存 `this.env` 上，
+   * 于是「磁盘上不在 `SETTINGS_KEYS` 里的键」（人工写入、或将来新增的凭据键）
+   * 在保存之后运行时不生效——设置页显示已配置、运行时却读不到。
+   */
+  private candidateFromDisk(
+    overrides: Readonly<Record<string, string>>,
+    removals: ReadonlySet<string>,
+  ): Record<string, string | undefined> {
+    const candidate: Record<string, string | undefined> = { ...this.env, ...overrides };
+    for (const key of removals) delete candidate[key];
+    return candidate;
+  }
+
   runtimeEnv(): Record<string, string | undefined> {
     return { ...this.env };
   }
@@ -112,6 +172,25 @@ export class MarketSettingsStore {
         baseUrl: this.env.FUYAO_BASE_URL?.trim() || FUYAO_DEFAULT_BASE_URL,
         configured: Boolean(this.env.FUYAO_API_KEY?.trim()),
       },
+      // 设置页凭据分区：一格一个源，全部从 manifest 的 requiredEnv 派生（不硬编码）。
+      credentials: CREDENTIAL_SOURCES.map((id) => {
+        const entry = MARKET_SOURCE_MANIFEST[id];
+        const key = entry.requiredEnv?.key ?? '';
+        return {
+          id,
+          label: SOURCE_LABELS[id],
+          envKey: key,
+          configured: Boolean(this.env[key]?.trim()),
+          ...((entry.settingsFields ?? []).length === 0
+            ? {}
+            : {
+                baseUrl:
+                  this.env[`${id.toUpperCase()}_BASE_URL`]?.trim() ||
+                  entry.settingsFields?.[0]?.defaultValue ||
+                  '',
+              }),
+        };
+      }),
     };
   }
 
@@ -119,12 +198,24 @@ export class MarketSettingsStore {
     input: SaveMarketSettings,
     prepareApply: (env: Record<string, string | undefined>) => () => void,
   ): MarketSettingsView {
-    const changes: Record<string, string> = {
-      LUOOME_MARKET_SOURCES: input.sources.join(','),
-      FUYAO_BASE_URL: input.fuyao.baseUrl.replace(/\/+$/, ''),
-      ...(input.fuyao.apiKey === undefined ? {} : { FUYAO_API_KEY: input.fuyao.apiKey }),
-    };
-    const candidate = { ...this.env, ...changes };
+    const removals = new Set<string>();
+    const changes: Record<string, string> = { LUOOME_MARKET_SOURCES: input.sources.join(',') };
+    if (input.fuyao.baseUrl !== undefined)
+      changes.FUYAO_BASE_URL = input.fuyao.baseUrl.replace(/\/+$/, '');
+    // 空串与缺席同义：都表示「保留现有密钥」。
+    if (input.fuyao.apiKey !== undefined && input.fuyao.apiKey.trim().length > 0)
+      changes.FUYAO_API_KEY = input.fuyao.apiKey;
+    if (input.fuyao.clear) removals.add('FUYAO_API_KEY');
+    for (const [id, section] of Object.entries(input.credentials)) {
+      const entry = MARKET_SOURCE_MANIFEST[id as MarketSourceId];
+      const key = entry.requiredEnv?.key;
+      if (key === undefined) continue;
+      if (section.apiKey !== undefined && section.apiKey.trim().length > 0)
+        changes[key] = section.apiKey;
+      if (section.clear) removals.add(key);
+      if (section.baseUrl !== undefined) changes[`${id.toUpperCase()}_BASE_URL`] = section.baseUrl;
+    }
+    const candidate = this.candidateFromDisk(changes, removals);
     for (const source of input.sources) {
       const required = MARKET_SOURCE_MANIFEST[source].requiredEnv;
       if (required !== undefined && !candidate[required.key]?.trim())
@@ -135,7 +226,7 @@ export class MarketSettingsStore {
       .split('\n')
       .filter(
         (line) =>
-          !Object.keys(changes).some((key) =>
+          ![...Object.keys(changes), ...removals].some((key) =>
             new RegExp(`^(?:export\\s+)?${key}\\s*=`).test(line.trim()),
           ),
       );
@@ -153,7 +244,17 @@ export class MarketSettingsStore {
     } finally {
       rmSync(temporary, { force: true });
     }
-    this.env = candidate;
+    // 落盘后**重读磁盘**：磁盘上不在 `SETTINGS_KEYS` 的键也要进运行时（见 candidateFromDisk）。
+    // 同时按磁盘为准**删掉已移除的键**——否则 `clear:true` 之后内存里还留着旧密钥。
+    const saved = parseEnvFile(this.readFile());
+    const installed = new Set([...SETTINGS_KEYS, ...Object.keys(saved)]);
+    const merged: Record<string, string | undefined> = { ...this.env };
+    for (const key of Object.keys(saved)) merged[key] = saved[key];
+    for (const key of Object.keys(merged)) {
+      if (!installed.has(key)) continue;
+      if (saved[key] === undefined) delete merged[key];
+    }
+    this.env = merged;
     apply();
     return this.read();
   }
