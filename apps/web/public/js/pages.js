@@ -11,6 +11,7 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
+import { holdingPriceView, holdingSortValue } from './holdings-price.js';
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
@@ -1284,9 +1285,17 @@ const renderHoldings = async (setStatus) => {
 
   const holdingRow = (item) => {
     const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
-    const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
+    const view = holdingPriceView(item);
+    // 缺价时 pnl 缺席，`undefined > 0` 恒 false —— 走 else 分支留空类名即可，不是 0 盈亏。
+    const pnlCls = view.canShowNumbers ? (item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '') : '';
     const todayCls =
-      item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
+      !view.canShowNumbers || item.todayPnl === null || item.todayPnl === undefined
+        ? ''
+        : item.todayPnl > 0
+          ? 'pos'
+          : item.todayPnl < 0
+            ? 'neg'
+            : '';
     const h = {
       id: item.holding.id,
       stockId: item.holding.stockId,
@@ -1312,15 +1321,40 @@ const renderHoldings = async (setStatus) => {
       ]),
       el('td', 'num', String(item.holding.quantity)),
       el('td', 'num', fmtNum(item.holding.avgCost)),
-      el('td', 'num', fmtNum(item.currentPrice)),
-      el('td', 'num', fmtNum(item.marketValue)),
+      // 缺价：**完全不碰数字格式化**，显示服务端给的原因（REQ-M3-09 S3 / task-26）。
+      el(
+        'td',
+        'num',
+        view.canShowNumbers ? fmtNum(item.currentPrice) : el('span', 'muted', view.unavailableText),
+      ),
+      el(
+        'td',
+        'num',
+        view.canShowNumbers ? fmtNum(item.marketValue) : el('span', 'muted', view.unavailableText),
+      ),
       el('td', `num ${todayCls}`, [
-        el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
-        el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
+        el(
+          'div',
+          null,
+          view.canShowNumbers && item.todayPnl !== null && item.todayPnl !== undefined
+            ? fmtSigned(item.todayPnl)
+            : '--',
+        ),
+        el(
+          'div',
+          'cell-sub',
+          view.canShowNumbers && item.todayPnlPct !== null && item.todayPnlPct !== undefined
+            ? fmtPct(item.todayPnlPct)
+            : '',
+        ),
       ]),
       el('td', `num ${pnlCls}`, [
-        el('div', null, fmtSigned(item.pnl)),
-        el('div', 'cell-sub', fmtPct(item.pnlPct)),
+        el(
+          'div',
+          null,
+          view.canShowNumbers ? fmtSigned(item.pnl) : el('span', 'muted', view.unavailableText),
+        ),
+        el('div', 'cell-sub', view.canShowNumbers ? fmtPct(item.pnlPct) : ''),
       ]),
       el('td', null, [
         el('div', 'row-actions', [
@@ -1339,23 +1373,39 @@ const renderHoldings = async (setStatus) => {
   const table = body.closest('table');
   const thead = table?.querySelector('thead');
   const getSortValue = (item, key) => {
-    if (key === 'currentPrice') return item.currentPrice ?? null;
-    if (key === 'marketValue') return item.marketValue ?? null;
-    if (key === 'todayPnlPct') return item.todayPnlPct ?? null;
-    if (key === 'pnlPct') return item.pnlPct ?? null;
+    // 缺价（或无 priceStatus）→ null：**没有值**，不是「最小的值」。
+    if (key === 'currentPrice') return holdingSortValue(item, 'currentPrice');
+    if (key === 'pnlPct') return holdingSortValue(item, 'pnlPct');
+    if (key === 'marketValue') {
+      return holdingPriceView(item).canShowNumbers && typeof item.marketValue === 'number'
+        ? item.marketValue
+        : null;
+    }
+    if (key === 'todayPnlPct') {
+      return holdingPriceView(item).canShowNumbers && typeof item.todayPnlPct === 'number'
+        ? item.todayPnlPct
+        : null;
+    }
     return null;
   };
   const sortedHoldings = () => {
     if (holdingsSortState.key === null) return holdings;
     const direction = holdingsSortState.order === 'asc' ? 1 : -1;
-    return [...holdings].sort(
-      (a, b) =>
-        direction *
-        compareValues(
-          getSortValue(a, holdingsSortState.key),
-          getSortValue(b, holdingsSortState.key),
-        ),
-    );
+    return [...holdings].sort((a, b) => {
+      const left = getSortValue(a, holdingsSortState.key);
+      const right = getSortValue(b, holdingsSortState.key);
+      /**
+       * 缺价持仓**恒排末尾**，与升降序无关。
+       * 不能把 null 交给通用 `compareValues`：它对 null 恒返回 1，
+       * 乘上降序的 -1 会把缺价行翻到**最前**——那正是「看起来最该关注」的位置。
+       */
+      const leftMissing = left === null;
+      const rightMissing = right === null;
+      if (leftMissing && rightMissing) return 0;
+      if (leftMissing) return 1;
+      if (rightMissing) return -1;
+      return direction * compareValues(left, right);
+    });
   };
   const renderHead = () => {
     if (thead === null) return;

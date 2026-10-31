@@ -275,7 +275,15 @@ export const openTradeModal = (holding, side) => {
   });
   const priceInput = makeInput('f-price', {
     type: 'number',
-    value: holding.currentPrice > 0 ? String(holding.currentPrice) : '',
+    /**
+     * 缺价时**预填空串**（不是 0）。这是「成交单价」输入框，用户自己填真实成交价；
+     * 用 `currentPrice ?? 0` 兜底会把 0 预填进去，用户一路回车就会录入一笔 0 元成交。
+     * 注意这里不是「按钮显隐」问题——按钮照常显示，点击后由用户填价。
+     */
+    value:
+      typeof holding.currentPrice === 'number' && holding.currentPrice > 0
+        ? String(holding.currentPrice)
+        : '',
     placeholder: '成交单价',
   });
   const feeInput = makeInput('f-fee', { type: 'number', placeholder: '0（可选）' });

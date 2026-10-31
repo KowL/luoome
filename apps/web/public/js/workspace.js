@@ -587,11 +587,21 @@ const renderHoldings = (data) => {
           stockIdentityLink({ stockId: holding.stockId, stockName: item.stockName }),
           el('span', 'workspace-card-index', `0${index + 1}`),
         ]),
-        el('p', 'workspace-price', qualified ? `¥ ${fmtNum(position.price)}` : '行情待核验'),
+        el(
+          'p',
+          'workspace-price',
+          qualified && typeof position.price === 'number'
+            ? `¥ ${fmtNum(position.price)}`
+            : '行情待核验',
+        ),
         el(
           'p',
           'workspace-caption',
-          qualified && item.currentPrice === position.price && item.todayPnlPct !== null
+          qualified &&
+            typeof item.currentPrice === 'number' &&
+            typeof position.price === 'number' &&
+            item.currentPrice === position.price &&
+            typeof item.todayPnlPct === 'number'
             ? `相对昨收 ${fmtPct(item.todayPnlPct)} · 行情事实`
             : '今日变化尚未完成核验',
         ),
