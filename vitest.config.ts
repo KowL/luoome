@@ -31,6 +31,8 @@ export default defineConfig({
       'packages/db/src/repository/stock-universe-legacy.test.ts',
       // Bun 运行时的只读迁移契约（bun:test），Node/vitest 解析不到该内置模块。
       'packages/db/src/repository/schema-migration.contract.test.ts',
+      // schema ↔ 表列集对账守卫：顶层 import bun:test（与上面同理），由 test:db 执行。
+      'packages/db/src/repository/schema-parity.contract.test.ts',
       'packages/db/src/personal/**',
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
