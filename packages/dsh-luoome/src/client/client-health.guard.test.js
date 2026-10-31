@@ -124,3 +124,36 @@ describe('S5 client 静态守卫', () => {
     expect(projection).toContain("UNKNOWN_TIME_TEXT = '时点未知'");
   });
 });
+
+// ── task-30：持仓报价时点必须被渲染（不是只加进输出就完事）─────────────────────
+//
+// `list_holdings` 的 `quoteObservedAt` / `quoteFreshness` 是服务端算好的结论，
+// 但如果 client 不渲染它，用户看到的仍是「有数字但不知道多旧」——**输出有、界面无，等于没做**。
+// 这里扫源码而不是渲染，理由见文件头：client `.js` 无 typecheck、DOM 断言不在 `test:all`。
+describe('task-30 · 持仓报价时点', () => {
+  it('overview 的持仓表格渲染 holdingQuoteView（不是只 import）', () => {
+    const overview = read('overview.js');
+    expect(overview.includes('holdingQuoteView')).toBe(true);
+    // 括号是关键：`h(holdingQuoteView` 之外还必须真的调用它。
+    // 只 import 不用、或只在注释里提到，都不算渲染（第一版守卫就栽在 import 上）。
+    expect(/holdingQuoteView\s*\(/.test(overview)).toBe(true);
+  });
+
+  it('client 不自己判断报价是否陈旧（阈值只在 core）', () => {
+    // 判据必须来自服务端 `quoteFreshness.tone`；client 出现日期/时刻比较即为第二份判定。
+    const sources = readdirSync(ROOT)
+      .filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))
+      .map((name) => read(name));
+    const offenders = sources.filter(
+      (code) =>
+        /quoteObservedAt[\s\S]{0,200}(getHours|15:\s*00|09:\s*30)/.test(code) ||
+        /observedAt\s*[<>]=?\s*Date\.now\(\)/.test(code),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('持仓卡片的 meta 渲染 staleCount 汇总（用户不必逐行扫）', () => {
+    const overview = read('overview.js');
+    expect(/holdingsStaleSummary\s*\(/.test(overview)).toBe(true);
+  });
+});

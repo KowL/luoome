@@ -26,7 +26,12 @@ import {
   SkeletonLines,
   Stat,
 } from './primitives.js';
-import { holdingPriceView, reminderGapsView } from './projection.js';
+import {
+  holdingPriceView,
+  holdingQuoteView,
+  holdingsStaleSummary,
+  reminderGapsView,
+} from './projection.js';
 import { StockDetail } from './stock.js';
 
 const SESSION_TONE = {
@@ -232,11 +237,13 @@ export const HoldingsTable = ({ holdings, loading, error, actions }) => {
       }),
     );
   }
+  // 报价时效汇总（task-30）：staleCount 恒给（0 是确定结论），这里只渲染服务端算好的结果。
+  const staleView = holdingsStaleSummary(holdings);
   return h(
     Card,
     {
       title: '持仓',
-      meta: `${rows.length} 只 · 市值 ${money(holdings.totalValue)}`,
+      meta: `${rows.length} 只 · 市值 ${money(holdings.totalValue)} · ${staleView.text}`,
     },
     h(
       'div',
@@ -283,7 +290,23 @@ export const HoldingsTable = ({ holdings, loading, error, actions }) => {
               h(
                 'td',
                 null,
-                priceView.canShowNumbers ? money(item.currentPrice) : priceView.unavailableText,
+                priceView.canShowNumbers
+                  ? [
+                      money(item.currentPrice),
+                      (() => {
+                        // 报价时点由服务端算好（task-30）：client 只渲染，零阈值。
+                        const quoteView = holdingQuoteView(item);
+                        return h(
+                          'div',
+                          {
+                            className:
+                              quoteView.tone === 'warning' ? 'luo-sub luo-warn-text' : 'luo-sub',
+                          },
+                          quoteView.text,
+                        );
+                      })(),
+                    ]
+                  : priceView.unavailableText,
               ),
               h(
                 'td',
