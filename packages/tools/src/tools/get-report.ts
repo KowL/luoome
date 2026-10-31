@@ -1,5 +1,6 @@
 import {
   BUILTIN_HOLIDAYS,
+  dateInShanghai,
   isHoliday,
   isWeekend,
   ReportKindSchema,
@@ -42,7 +43,12 @@ const mondayOf = (date: string): Date => {
   return value;
 };
 
-const isoDate = (date: Date): string => date.toISOString().slice(0, 10);
+/**
+ * 报告期的日期口径 = Asia/Shanghai 自然日（与 PRD / daily-review / risk-report 一致）。
+ * `mondayOf` 把日期字符串锚在 04:00Z（= Shanghai 12:00），`dateInShanghai` 读回同一天，
+ * 早盘时段不会退到前一天。
+ */
+const isoDate = (date: Date): string => dateInShanghai(date);
 
 const derivePeriodStart = (kind: z.infer<typeof ReportKindSchema>, periodEnd: string): string => {
   if (kind !== 'weekly') return periodEnd;

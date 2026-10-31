@@ -188,3 +188,25 @@ describe('report tools', () => {
     expect(rollback.error.kind).toBe('invariant_violation');
   });
 });
+
+// task-23：周报的报告期起点按 Asia/Shanghai 自然日推导（回归锚点）。
+describe('get_report 的报告期日期口径', () => {
+  it('上海 00:30 时周报 periodStart 仍是本周一（Shanghai 日），不退到前一天', async () => {
+    const preDawn = new Date('2026-11-01T16:30:00.000Z'); // 2026-11-02 00:30 Asia/Shanghai（周一）
+    const ctx = await buildTestContext({ clock: () => preDawn });
+    const weekly: Report = makeReport({
+      id: 'report-weekly-shanghai',
+      kind: 'weekly',
+      periodStart: '2026-11-02',
+      periodEnd: '2026-11-06',
+      title: 'A 股周报',
+    });
+    await ctx.repos.report.upsertForPeriod(weekly);
+    // 按 (kind, scope, periodEnd) 查询时，periodStart 由 derivePeriodStart 推导：
+    // 若口径退化成 UTC 日，周起点会落到上一周，查询就会 not_found。
+    const found = await getReportTool.execute({ kind: 'weekly', periodEnd: '2026-11-06' }, ctx);
+    expect(found.ok).toBe(true);
+    if (!found.ok) return;
+    expect(found.data.report.periodStart).toBe('2026-11-02');
+  });
+});

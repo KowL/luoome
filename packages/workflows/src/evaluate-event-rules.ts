@@ -2,6 +2,7 @@ import {
   type AlertPlan,
   type AlertPriority,
   type AlertRule,
+  dateInShanghai,
   eventImportanceToPriority,
   highestAlertPriority,
   notificationLevelForAlertPriority,
@@ -98,11 +99,12 @@ const buildReason = (event: StockEvent, d: number): string => {
   return `${event.title}（${when}，${event.kind}）`;
 };
 
-const buildEvidence = (event: StockEvent): string[] => {
+export const buildEventEvidence = (event: StockEvent): string[] => {
   const ev: string[] = [];
   if (event.provider !== undefined) ev.push(`来源: ${event.provider}`);
   if (event.sourceUrl !== undefined) ev.push(event.sourceUrl);
-  ev.push(`发生时间: ${event.occursAt.toISOString().slice(0, 10)}`);
+  // 事件日期按 Asia/Shanghai 自然日展示，同时保留精确时刻（不许只留日期把时刻丢掉）。
+  ev.push(`发生时间: ${dateInShanghai(event.occursAt)}（${event.occursAt.toISOString()}）`);
   if (event.stale) ev.push('数据可能过期');
   return ev;
 };
@@ -228,7 +230,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
               direction: 'watch',
               triggerType: 'triggered',
               reason: buildReason(event, d),
-              evidence: buildEvidence(event),
+              evidence: buildEventEvidence(event),
               priority,
               deliveryStatus,
               evalSnapshot: {

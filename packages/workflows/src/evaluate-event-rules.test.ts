@@ -8,7 +8,7 @@ import {
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { evaluateEventRulesWorkflow } from './evaluate-event-rules.js';
+import { buildEventEvidence, evaluateEventRulesWorkflow } from './evaluate-event-rules.js';
 
 const CLOCK = () => new Date('2026-07-25T01:00:00.000Z');
 /** now 的 Asia/Shanghai 当日 = 07-25；+3 自然日 = 07-28 00:00 SH = 07-27T16:00Z。 */
@@ -243,5 +243,34 @@ describe('evaluate-event-rules workflow', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ status: 'failed' });
     expect(runs[0]?.error).toContain('list_stock_events');
+  });
+});
+
+// task-23：事件日期展示按 Asia/Shanghai 自然日，且保留精确时刻。
+describe('事件证据的日期口径', () => {
+  const event = (occursAt: Date): StockEvent => ({
+    id: 'evt-date',
+    stockId: 'stk-evt',
+    kind: 'earnings',
+    title: 'Q2 财报',
+    occursAt,
+    allDay: false,
+    importance: 'important',
+    status: 'scheduled',
+    source: 'manual',
+    stale: false,
+    remindBeforeDays: [],
+    createdAt: new Date('2026-10-30T00:00:00.000Z'),
+    updatedAt: new Date('2026-10-30T00:00:00.000Z'),
+  });
+
+  it('上海 00:30 的事件显示当天日期，并保留精确时刻', () => {
+    // 2026-10-30T16:30Z = 2026-10-31 00:30 Asia/Shanghai（UTC 日仍是 10-30）。
+    const at = new Date('2026-10-30T16:30:00.000Z');
+    const evidence = buildEventEvidence(event(at));
+    expect(evidence).toContain('发生时间: 2026-10-31（2026-10-30T16:30:00.000Z）');
+    // 精确时刻没有被丢掉。
+    expect(evidence.join('\n')).toContain('2026-10-30T16:30:00.000Z');
+    expect(evidence.join('\n')).not.toContain('发生时间: 2026-10-30（');
   });
 });
