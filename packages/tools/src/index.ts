@@ -99,6 +99,7 @@ export * from './tools/list-watch-triggers.js';
 export * from './tools/list-workflow-runs.js';
 export * from './tools/news.js';
 export * from './tools/northbound-flow.js';
+export * from './tools/persist-external-facts.js';
 export * from './tools/personal.js';
 export * from './tools/portfolio-performance.js';
 export * from './tools/portfolio-risk.js';

@@ -7,6 +7,7 @@ export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleDataImportRepository } from './data-import.js';
 export { DrizzleDecisionReviewRepository } from './decision-review.js';
 export { DrizzleDecisionTradeRepository } from './decision-trade.js';
+export { DrizzleExternalMarketFactRepository } from './external-fact.js';
 export { DrizzleFinancialFactRepository } from './financial-fact.js';
 export {
   DrizzleFundamentalScoreRunRepository,

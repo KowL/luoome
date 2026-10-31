@@ -14,6 +14,7 @@ import type {
   DecisionReviewContext,
   DeliveryStatus,
   Exchange,
+  ExternalMarketFact,
   FinancialFact,
   FundamentalScoreResult,
   FundamentalScoreRun,
@@ -1453,6 +1454,41 @@ export const watchExecutionLease = sqliteTable('watch_execution_lease', {
   until: integer('until', { mode: 'timestamp_ms' }).notNull(),
 });
 
+/**
+ * External 市场事实（REQ-M3-16）。
+ *
+ * 主键就是**稳定 id**（`extfact:<kind>:<source>:<subjectKey>:<observedAt ISO>`）：
+ * 同一条事实重抓会 upsert 命中同一行，Advice 的引用链不会因为重抓而断。
+ * `content_hash` 只做变更检测，**不参与主键**（否则上游更正一次就多一行）。
+ */
+export const externalMarketFacts = sqliteTable(
+  'external_market_facts',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<ExternalMarketFact['kind']>().notNull(),
+    subjectKey: text('subject_key').notNull(),
+    category: text('category'),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    source: text('source').notNull(),
+    provenance: text('provenance', { mode: 'json' })
+      .$type<ExternalMarketFact['provenance']>()
+      .notNull(),
+    payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    contentHash: text('content_hash').notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    revisedAt: integer('revised_at', { mode: 'timestamp_ms' }),
+    referencedBy: text('referenced_by', { mode: 'json' }).$type<readonly string[]>().notNull(),
+  },
+  (t) => ({
+    kindObservedIdx: index('external_market_facts_kind_observed_idx').on(t.kind, t.observedAt),
+    sourceObservedIdx: index('external_market_facts_source_observed_idx').on(
+      t.source,
+      t.observedAt,
+    ),
+  }),
+);
+
 export const watchTriggers = sqliteTable(
   'watch_triggers',
   {
@@ -2131,6 +2167,7 @@ export const schema = {
   // v0.6 起
   alertPlans,
   watchTriggers,
+  externalMarketFacts,
   // v0.7 起：边沿状态机
   watchRuleStates,
   watchRuns,

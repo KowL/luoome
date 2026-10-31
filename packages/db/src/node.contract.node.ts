@@ -1969,6 +1969,29 @@ const fullFixture = (): Record<string, DataImportRow> => {
       list_date: T0,
       delist_date: null,
     },
+    // REQ-M3-16：external 市场事实（业务事实，可导出；凭据不在表里）。
+    external_market_facts: {
+      // id 必须与 (kind, source, subjectKey, observedAt) 严格一致——不变量在导出校验里也跑。
+      id: 'extfact:news:eastmoney:20261030001:2026-07-01T01:00:00.000Z',
+      kind: 'news',
+      subject_key: '20261030001',
+      category: '宏观',
+      observed_at: T0,
+      fetched_at: T1,
+      source: 'eastmoney',
+      // JSON 列在存储层是字符串（导出/导入按文本搬运），与其它表同口径。
+      provenance: JSON.stringify({
+        provider: 'eastmoney',
+        observedAt: T0,
+        fetchedAt: T1,
+        freshness: 'fresh',
+      }),
+      payload: JSON.stringify({ title: '央行 MLF 操作' }),
+      content_hash: 'a'.repeat(64),
+      recorded_at: T1,
+      revised_at: null,
+      referenced_by: JSON.stringify([]),
+    },
     price_snapshots: {
       stock_id: 'stock-1',
       observed_at: T0,

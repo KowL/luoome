@@ -445,12 +445,41 @@ export const AnalysisReportReferenceIssueSchema = z
       'empty-missing-fact',
       'duplicate-missing-fact',
       'omitted-blocking-missing-fact',
+      /** REQ-M3-16：`extfact:*` 出现在了证据链里，但表里查不到这条事实。 */
+      'persisted-fact-missing',
     ]),
     path: z.string().min(1),
     message: z.string().min(1).max(500),
   })
   .strict();
 export type AnalysisReportReferenceIssue = z.infer<typeof AnalysisReportReferenceIssueSchema>;
+
+/**
+ * L2 强制点（REQ-M3-16）：外部事实必须**在表里查得到**。
+ *
+ * L1（`checkAnalysisReportReferences`）只证明「这条 id 在这条 context 的事实包里」，
+ * 证明不了「那条事实还在库里」——而 context 的 facts 是抓取快照，事实可能从未落库
+ * （模型直接编一个 `extfact:` payload）。所以这里再查一次表。
+ *
+ * **本项的强制点 = 表查询，不是签名**：模型伪造的 `extfact:*` 只要表里没有就会被拒；
+ * 但工具层无法证明 payload 真的来自 `fetch_*`（那需要 `fetchToken` 硬签，登记 backlog）。
+ *
+ * 只校 `extfact:` 前缀，避免误伤既有非外部 fact id（`quote:` / `trade:` …）。
+ */
+export const externalFactIdsOf = (factIds: readonly string[]): readonly string[] =>
+  factIds.filter((id) => id.startsWith('extfact:'));
+
+export const checkExternalFactPersistence = (input: {
+  readonly evidenceFactIds: readonly string[];
+  readonly persistedFactIds: ReadonlySet<string>;
+}): readonly AnalysisReportReferenceIssue[] =>
+  externalFactIdsOf(input.evidenceFactIds)
+    .filter((id) => !input.persistedFactIds.has(id))
+    .map((id, index) => ({
+      code: 'persisted-fact-missing' as const,
+      path: `evidenceFactIds[${index}]`,
+      message: `引用了未落库的外部事实: ${id}；先落库（persist_external_facts）再引用`,
+    }));
 
 export const checkAnalysisReportReferences = (input: {
   readonly context: Pick<AnalysisContext, 'factIds' | 'missingFacts'>;

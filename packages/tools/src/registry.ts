@@ -95,6 +95,7 @@ import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
+import { persistExternalFactsTool } from './tools/persist-external-facts.js';
 import { personalTools } from './tools/personal.js';
 import {
   auditPortfolioPerformanceSnapshotsTool,
@@ -528,6 +529,7 @@ export const toolRegistry: Registry = createRegistry([
   getStockProfileTool,
   // 北向资金历史流（只读；东方财富数据中心公开报表）
   northboundFlowTool,
+  persistExternalFactsTool,
   // 财经要闻（只读；东方财富公开新闻 API）
   fetchNewsTool,
   // 行业板块行情（只读；东方财富 push2 板块列表公开 API）

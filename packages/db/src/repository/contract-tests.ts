@@ -4582,6 +4582,85 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('ExternalMarketFactRepository', () => {
+      const draft = (overrides: Record<string, unknown> = {}) => ({
+        kind: 'news' as const,
+        subjectKey: '20261030001',
+        observedAt: T1,
+        source: 'eastmoney',
+        provenance: {
+          provider: 'eastmoney',
+          observedAt: T1,
+          fetchedAt: T1,
+          freshness: 'fresh' as const,
+        },
+        payload: {
+          title: '央行公开市场操作',
+          summary: '净投放 2000 亿',
+          url: 'https://example.com/a',
+        },
+        ...overrides,
+      });
+
+      it('幂等：同 (kind, source, subjectKey, observedAt) 重抓不新增行，recordedAt 保留首次', async () => {
+        const first = await repos.externalMarketFact.upsert({ draft: draft(), now: T1 });
+        expect(first.outcome).toBe('inserted');
+        const again = await repos.externalMarketFact.upsert({ draft: draft(), now: T2 });
+        expect(again.outcome).toBe('unchanged');
+        expect(again.fact.id).toBe(first.fact.id);
+        expect(again.fact.recordedAt).toEqual(T1);
+        expect(await repos.externalMarketFact.findByIds([first.fact.id])).toHaveLength(1);
+      });
+
+      it('内容更正：id 不变、事实更新、recordedAt 保留首次并写 revisedAt', async () => {
+        const first = await repos.externalMarketFact.upsert({ draft: draft(), now: T1 });
+        const revised = await repos.externalMarketFact.upsert({
+          draft: draft({
+            payload: { title: '央行公开市场操作（更正）', summary: '净投放 2500 亿' },
+          }),
+          now: T2,
+        });
+        expect(revised.outcome).toBe('updated');
+        // 引用链不断：id 不因内容变化而改变。
+        expect(revised.fact.id).toBe(first.fact.id);
+        expect(revised.fact.contentHash).not.toBe(first.fact.contentHash);
+        expect(revised.fact.recordedAt).toEqual(T1);
+        expect(revised.fact.revisedAt).toEqual(T2);
+        expect(revised.fact.payload.title).toBe('央行公开市场操作（更正）');
+      });
+
+      it('引用方是唯一可变字段，重复追加幂等；不存在的 id 不伪造', async () => {
+        const { fact } = await repos.externalMarketFact.upsert({ draft: draft(), now: T1 });
+        const once = await repos.externalMarketFact.addReference(fact.id, 'advice:adv-1');
+        expect(once?.referencedBy).toEqual(['advice:adv-1']);
+        const twice = await repos.externalMarketFact.addReference(fact.id, 'advice:adv-1');
+        expect(twice?.referencedBy).toEqual(['advice:adv-1']);
+        expect(await repos.externalMarketFact.addReference('extfact:nope', 'advice:x')).toBeNull();
+      });
+
+      it('findByIds 只返回存在的行（L2 强制点据此判定未落库）', async () => {
+        const { fact } = await repos.externalMarketFact.upsert({ draft: draft(), now: T1 });
+        const found = await repos.externalMarketFact.findByIds([fact.id, 'extfact:news:x:y:z']);
+        expect(found.map((item) => item.id)).toEqual([fact.id]);
+      });
+
+      it('listByKind 按 observedAt 倒序并按区间过滤', async () => {
+        await repos.externalMarketFact.upsert({ draft: draft({ subjectKey: 'a' }), now: T1 });
+        await repos.externalMarketFact.upsert({
+          draft: draft({ subjectKey: 'b', observedAt: T2 }),
+          now: T2,
+        });
+        const all = await repos.externalMarketFact.listByKind({ kind: 'news' });
+        expect(all.map((item) => item.subjectKey)).toEqual(['b', 'a']);
+        const windowed = await repos.externalMarketFact.listByKind({
+          kind: 'news',
+          from: T1,
+          to: T1,
+        });
+        expect(windowed.map((item) => item.subjectKey)).toEqual(['a']);
+      });
+    });
+
     describe('WatchTriggerRepository', () => {
       it('query 在复合筛选后分页并准确计数，同时间按 id 倒序', async () => {
         for (const id of ['a', 'c', 'b']) {

@@ -203,6 +203,7 @@ const EXPECTED_TOOL_NAMES = [
   'northbound_flow',
   // 财经要闻（只读）
   'fetch_news',
+  'persist_external_facts',
   // 行业板块行情（只读）
   'fetch_sector_quotes',
   // 持久化 AI 对话会话
@@ -438,6 +439,7 @@ describe('toolRegistry', () => {
       'link_research_document',
       'pause_personal_alert_plan',
       'pause_strategy',
+      'persist_external_facts',
       'preview_watchlist_import',
       'prune_strategy_runs',
       'publish_strategy_version',

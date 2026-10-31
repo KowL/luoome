@@ -47,6 +47,7 @@ import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryDecisionReviewRepository } from './decision-review.js';
+import { InMemoryExternalMarketFactRepository } from './external-fact.js';
 import { InMemoryFinancialFactRepository } from './financial-fact.js';
 import {
   InMemoryFundamentalScoreRunRepository,
@@ -96,6 +97,7 @@ export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
+export { InMemoryExternalMarketFactRepository } from './external-fact.js';
 export { InMemoryFinancialFactRepository } from './financial-fact.js';
 export {
   InMemoryFundamentalScoreRunRepository,
@@ -218,6 +220,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const alertPlan = new InMemoryAlertPlanRepository();
   const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository(watchRuleState);
+  const externalMarketFact = new InMemoryExternalMarketFactRepository();
   const watchDelivery = createMemoryWatchDeliveryRepository({
     watchTrigger,
     alertPlan,
@@ -352,6 +355,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     notification,
     alertPlan,
     watchTrigger,
+    externalMarketFact,
     watchRuleState,
     watchRun,
     researchIndex,

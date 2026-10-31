@@ -9,7 +9,9 @@ import {
   analysisContextTimingError,
   checkAnalysisReportCompleteness,
   checkAnalysisReportReferences,
+  checkExternalFactPersistence,
   dateInShanghai,
+  externalFactIdsOf,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
   type ToolContext,
@@ -58,6 +60,37 @@ const recordAdvice = async (
     missingFacts: input.provenance.acknowledgedMissingFacts ?? [],
   });
   if (referenceIssues.length > 0) return errInvalidInput('unknown_fact_reference');
+  /**
+   * L2（REQ-M3-16）：`extfact:*` 必须**在表里查得到**。
+   *
+   * 两条写 Advice 的路径（record / publication）**都要堵**——只堵一条，另一条就是后门
+   * （与「双链不对称」同一条教训）。这里查的是事实表，不是 context。
+   */
+  const externalIssues = checkExternalFactPersistence({
+    evidenceFactIds: input.provenance.evidenceFactIds,
+    persistedFactIds: new Set(
+      (
+        await ctx.repos.externalMarketFact.findByIds(
+          externalFactIdsOf(input.provenance.evidenceFactIds),
+        )
+      ).map((fact) => fact.id),
+    ),
+  });
+  if (externalIssues.length > 0) {
+    // 复用既有 `invalid_input` kind（不新造），issues 里点名缺哪条 + 补法。
+    return {
+      ok: false,
+      error: {
+        kind: 'invalid_input',
+        message: 'unknown_fact_reference',
+        // 既有 `ToolError.issues` 的形状是 `{ message }[]`，这里逐个包起来（不新造 kind）。
+        issues: externalIssues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+      },
+    } as never;
+  }
   const now = ctx.clock();
   if (!context.recordedResult) {
     const timingError = analysisContextTimingError(context, now);

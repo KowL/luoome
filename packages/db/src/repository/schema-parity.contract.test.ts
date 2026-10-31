@@ -38,6 +38,7 @@ import {
   AnalysisJobSchema,
   DecisionReviewRevisionSchema,
   DecisionReviewSchema,
+  ExternalMarketFactSchema,
   HoldingSchema,
   PortfolioCashFlowSchema,
   QuoteSchema,
@@ -73,6 +74,13 @@ interface Pair {
 const SUBJECT_SPLIT = 'subject 拆成 subject_kind + subject_id，读取侧显式重建 subject 对象';
 
 const PAIRS: readonly Pair[] = [
+  {
+    name: 'ExternalMarketFact ↔ external_market_facts',
+    entity: ExternalMarketFactSchema,
+    table: schema.externalMarketFacts,
+    entityOnly: {},
+    tableOnly: {},
+  },
   { name: 'Account ↔ accounts', entity: AccountSchema, table: schema.accounts },
   {
     name: 'Advice ↔ advices',

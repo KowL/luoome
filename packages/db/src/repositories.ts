@@ -14,6 +14,7 @@ import {
   DrizzleDailyBarRepository,
   DrizzleDecisionReviewRepository,
   DrizzleDecisionTradeRepository,
+  DrizzleExternalMarketFactRepository,
   DrizzleFinancialFactRepository,
   DrizzleFundamentalScoreRunRepository,
   DrizzleFundamentalScoreVersionRepository,
@@ -105,6 +106,7 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
     // v0.6 起
     alertPlan: new DrizzleAlertPlanRepository(db),
     watchTrigger: new DrizzleWatchTriggerRepository(db),
+    externalMarketFact: new DrizzleExternalMarketFactRepository(db),
     // v0.7 起：边沿状态机
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),

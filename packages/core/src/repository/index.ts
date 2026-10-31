@@ -15,6 +15,11 @@ import type {
   DecisionTradeCommitResult,
 } from '../entity/decision-review.js';
 import type {
+  ExternalFactDraft,
+  ExternalFactKind,
+  ExternalMarketFact,
+} from '../entity/external-fact.js';
+import type {
   FinancialFact,
   FinancialFactSourceScope,
   FinancialVintage,
@@ -648,6 +653,8 @@ export interface RepositoryRegistry {
   readonly watchDelivery: WatchDeliveryRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
+  /** REQ-M3-16：external 市场事实（幂等落库 + 可被 Advice 引用）。 */
+  readonly externalMarketFact: ExternalMarketFactRepository;
   /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */
   readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
@@ -1245,6 +1252,34 @@ export interface WatchTriggerRepository {
  * 边沿状态机表（v0.7 策略预警，docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §5）。
  * 仅 (poolId, stockId, ruleId) 维度的 active 状态；不替代 watch_triggers 历史。
  */
+/**
+ * External 市场事实仓储（REQ-M3-16）。
+ *
+ * **事实不可变，只有 `referencedBy` 会变**：`upsert` 是唯一写入口，它对同一 `id` 覆盖
+ * payload / contentHash 并保留首次 `recordedAt`（内容更正时写 `revisedAt`）。
+ */
+export interface ExternalMarketFactRepository {
+  /**
+   * 幂等落库：同 `id` 重抓 → 覆盖 payload + 新 `contentHash` + 保留 `recordedAt`；
+   * 内容未变 → 不动行（返回 `unchanged`）。
+   */
+  upsert(input: { readonly draft: ExternalFactDraft; readonly now: Date }): Promise<{
+    readonly outcome: 'inserted' | 'updated' | 'unchanged';
+    readonly fact: ExternalMarketFact;
+  }>;
+  findById(id: string): Promise<ExternalMarketFact | null>;
+  /** L2 强制点用：批量取已落库的 id 集合（查不到的不在结果里）。 */
+  findByIds(ids: readonly string[]): Promise<readonly ExternalMarketFact[]>;
+  listByKind(input: {
+    readonly kind: ExternalFactKind;
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly limit?: number;
+  }): Promise<readonly ExternalMarketFact[]>;
+  /** 追加引用方（幂等，重复追加不产生重复项）。 */
+  addReference(id: string, referencedBy: string): Promise<ExternalMarketFact | null>;
+}
+
 export interface WatchRuleStateRepository {
   /** 取该池所有规则的当前状态；一般 watch 流程批量加载以减少查询。 */
   listByPool(poolId: string): Promise<readonly WatchRuleState[]>;

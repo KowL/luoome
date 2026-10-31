@@ -1236,6 +1236,30 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS watch_triggers_stock_created_id_idx ON watch_triggers (stock_id, created_at, id)`,
   );
+  // REQ-M3-16：external 市场事实（幂等落库，主键 = 稳定 id）。
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS external_market_facts (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      subject_key TEXT NOT NULL,
+      category TEXT,
+      observed_at INTEGER NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      revised_at INTEGER,
+      referenced_by TEXT NOT NULL DEFAULT '[]'
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS external_market_facts_kind_observed_idx ON external_market_facts (kind, observed_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS external_market_facts_source_observed_idx ON external_market_facts (source, observed_at)`,
+  );
   // v0.7 起：边沿状态机表（§3.5）
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_rule_states (

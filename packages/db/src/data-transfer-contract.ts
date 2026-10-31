@@ -9,6 +9,7 @@ import {
   assertAlertPlanInvariants,
   assertChatMessageInvariants,
   assertChatSessionInvariants,
+  assertExternalMarketFactInvariants,
   assertHoldingInvariants,
   assertNotificationInvariants,
   assertReportInvariants,
@@ -47,6 +48,7 @@ import {
   DecisionReviewRevisionSchema,
   DecisionReviewSchema,
   DecisionTradeCommitResultSchema,
+  ExternalMarketFactSchema,
   HoldingCashAdjustmentSchema,
   HoldingSchema,
   LimitUpLadderSchema,
@@ -200,6 +202,8 @@ const JSON_COLUMNS = new Set([
   'rules',
   'tags',
   'trade_ids',
+  // REQ-M3-16：external 市场事实的 JSON 列（referenced_by 不带 _json 后缀）。
+  'referenced_by',
 ]);
 
 const snakeToCamel = (value: string): string =>
@@ -503,6 +507,10 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   stock_universe_memberships: domainValidator(stockUniverseMembershipSchema),
   stock_universe_sync_runs: domainValidator(stockUniverseSyncRunSchema),
   price_snapshots: domainValidator(QuoteSchema),
+  // REQ-M3-16：external 市场事实是业务事实（可导出）；凭据不在表里，天然不会被导出。
+  external_market_facts: domainValidator(ExternalMarketFactSchema, (fact) =>
+    assertExternalMarketFactInvariants(fact),
+  ),
   daily_bars: domainValidator(DailyBarSchema),
   limit_up_ladder_snapshots: domainValidator(LimitUpLadderSchema),
   stock_events: domainValidator(StockEventSchema, assertStockEventInvariants),

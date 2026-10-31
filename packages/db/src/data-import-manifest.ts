@@ -48,6 +48,8 @@ const replace = [
   'stock_universe_sync_runs',
   'stock_universe_snapshot_members',
   'price_snapshots',
+  // REQ-M3-16：external 市场事实是**业务事实**（可导出），凭据不是（在 .env，不入表）。
+  'external_market_facts',
   'daily_bars',
   'minute_bars',
   'daily_bar_revisions',
