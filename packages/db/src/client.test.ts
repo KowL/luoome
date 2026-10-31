@@ -576,14 +576,20 @@ describe('createDrizzleRepos / ensureSchema', () => {
           'trade_ids',
           'holding_hours',
           'notes',
+          // REQ-M3-18 的回填来源：存量库必须补列，否则 drizzle 读回丢掉 origin，
+          // 统计侧会把用户回填误判成 unattested。
+          'origin',
         ]);
-        expect(await handle.repos.advice.findOutcome('legacy-advice')).toMatchObject({
+        const legacy = await handle.repos.advice.findOutcome('legacy-advice');
+        expect(legacy).toMatchObject({
           adviceId: 'legacy-advice',
           tradeIds: [],
           outcome: 'followed',
           pnl: 12.5,
           benchmarkPnl: 8.5,
         });
+        // 存量行没有来源戳：读回保持「无键」，不伪造 user，也不产出 undefined 键。
+        expect(legacy === null ? null : 'origin' in legacy).toBe(false);
       } finally {
         handle.close();
       }

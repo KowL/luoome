@@ -82,9 +82,14 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
     recorded_result_json TEXT, id TEXT PRIMARY KEY, job_id TEXT, kind TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, data_as_of INTEGER NOT NULL,
     facts_json TEXT NOT NULL, fact_ids_json TEXT NOT NULL, limitations_json TEXT NOT NULL,
+    missing_facts_json TEXT, context_hash_version INTEGER, timing_rule_version TEXT,
     context_hash TEXT NOT NULL, write_until INTEGER NOT NULL, expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
   )`);
+  // 存量库补列（幂等）：CREATE TABLE IF NOT EXISTS 对已存在的表是 no-op，不会补列。
+  ensureColumn(db, 'analysis_contexts', 'missing_facts_json', 'TEXT');
+  ensureColumn(db, 'analysis_contexts', 'context_hash_version', 'INTEGER');
+  ensureColumn(db, 'analysis_contexts', 'timing_rule_version', 'TEXT');
   db.run(sql`CREATE INDEX IF NOT EXISTS analysis_contexts_job_idx ON analysis_contexts(job_id)`);
   db.run(
     sql`CREATE INDEX IF NOT EXISTS analysis_contexts_expiry_idx ON analysis_contexts(expires_at)`,
@@ -588,6 +593,7 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
       advice_id TEXT PRIMARY KEY,
       trade_ids TEXT NOT NULL DEFAULT '[]',
       outcome TEXT NOT NULL,
+      origin TEXT,
       pnl REAL,
       benchmark_pnl REAL,
       holding_hours REAL,
@@ -598,6 +604,8 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   ensureColumn(db, 'advice_outcomes', 'trade_ids', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(db, 'advice_outcomes', 'holding_hours', 'REAL');
   ensureColumn(db, 'advice_outcomes', 'notes', 'TEXT');
+  // 回填来源（REQ-M3-18）：存量库补列，可空——加列前的行没有来源戳，读回保持「无键」。
+  ensureColumn(db, 'advice_outcomes', 'origin', 'TEXT');
   db.run(
     sql`CREATE INDEX IF NOT EXISTS advice_outcomes_recorded_at_idx ON advice_outcomes (recorded_at)`,
   );

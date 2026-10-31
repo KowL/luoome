@@ -2241,6 +2241,9 @@ export const registerRepositoryContractTests = (
           adviceId: 'adv-1',
           tradeIds: ['trade-1'],
           outcome: 'followed',
+          // origin 是回填来源（REQ-M3-18）；它必须真的落库，否则统计侧把用户回填
+          // 误判成 unattested。memory 存整对象看不出来，drizzle 的手写映射会静默丢。
+          origin: 'user',
           pnl: money(123.4567),
           benchmarkPnl: money(50),
           holdingHours: 12,
@@ -2262,6 +2265,11 @@ export const registerRepositoryContractTests = (
         };
         await repos.advice.recordOutcome('adv-2', otherOutcome);
         expect(await repos.advice.listOutcomes({ subjectId: 'stk-2' })).toEqual([otherOutcome]);
+        // 无来源戳的 outcome 读回必须**没有** origin 键（不是 null、也不是 undefined 键）：
+        // 统计侧用 `origin === undefined` 判 unattested，多出一个 undefined 键会让
+        // 序列化后的存档与 memory 实现不一致。
+        const withoutOrigin = await repos.advice.findOutcome('adv-2');
+        expect(withoutOrigin === null ? null : 'origin' in withoutOrigin).toBe(false);
 
         const updated: AdviceOutcome = {
           adviceId: 'adv-1',

@@ -37,8 +37,27 @@ const jobRow = (job: AnalysisJob): typeof analysisJobs.$inferInsert => {
 };
 const contextRow = (context: AnalysisContext): typeof analysisContexts.$inferInsert => {
   const { subject, ...rest } = context;
-  return { ...rest, subjectKind: subject.kind, subjectId: subject.id };
+  return {
+    ...rest,
+    subjectKind: subject.kind,
+    subjectId: subject.id,
+    // 显式列出三列：它们曾是「schema 有字段、表无列」，drizzle 对无列键静默丢弃，
+    // 于是 missingFacts 从没落库、v2 contextHash 读回必然不匹配。
+    missingFacts: context.missingFacts,
+    contextHashVersion: context.contextHashVersion ?? null,
+    timingRuleVersion: context.timingRuleVersion ?? null,
+  };
 };
+const decodeContext = (row: typeof analysisContexts.$inferSelect): AnalysisContext =>
+  AnalysisContextSchema.parse({
+    ...row,
+    recordedResult: row.recordedResult ?? undefined,
+    subject: { kind: row.subjectKind, id: row.subjectId },
+    // 加列前的存量行为 null：缺口退回 []（不伪造恢复），版本位退回 undefined。
+    missingFacts: row.missingFacts ?? [],
+    contextHashVersion: row.contextHashVersion ?? undefined,
+    timingRuleVersion: row.timingRuleVersion ?? undefined,
+  });
 
 export class DrizzleAnalysisRepository implements AnalysisRepository {
   constructor(private readonly db: DrizzleDatabase<Schema>) {}
@@ -51,13 +70,7 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
           .from(analysisContexts)
           .where(eq(analysisContexts.id, input.contextId))
           .get();
-        const context = row
-          ? AnalysisContextSchema.parse({
-              ...row,
-              recordedResult: row.recordedResult ?? undefined,
-              subject: { kind: row.subjectKind, id: row.subjectId },
-            })
-          : null;
+        const context = row ? decodeContext(row) : null;
         const job = context?.jobId ? this.readJob(input.accountId, context.jobId) : null;
         const adviceRepository = new DrizzleAdviceRepository(this.db);
         if (!context || context.accountId !== input.accountId)
@@ -138,13 +151,7 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
           .from(analysisContexts)
           .where(eq(analysisContexts.id, input.contextId))
           .get();
-        const context = row
-          ? AnalysisContextSchema.parse({
-              ...row,
-              recordedResult: row.recordedResult ?? undefined,
-              subject: { kind: row.subjectKind, id: row.subjectId },
-            })
-          : null;
+        const context = row ? decodeContext(row) : null;
         const job = context?.jobId ? this.readJob(input.accountId, context.jobId) : null;
         if (!context || context.accountId !== input.accountId)
           return { ok: false, reason: 'not_found' };
@@ -477,13 +484,7 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
       .from(analysisContexts)
       .where(and(eq(analysisContexts.accountId, accountId), eq(analysisContexts.id, id)))
       .get();
-    return row
-      ? AnalysisContextSchema.parse({
-          ...row,
-          recordedResult: row.recordedResult ?? undefined,
-          subject: { kind: row.subjectKind, id: row.subjectId },
-        })
-      : null;
+    return row ? decodeContext(row) : null;
   }
 
   private update(job: AnalysisJob): void {

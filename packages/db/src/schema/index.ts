@@ -3,6 +3,7 @@ import type {
   AdviceDataSnapshot,
   AdviceDecision,
   AdviceHorizon,
+  AdviceOutcomeOrigin,
   AdviceReasoning,
   AdviceSubjectKind,
   AlertPlan,
@@ -498,6 +499,12 @@ export const adviceOutcomes = sqliteTable(
     adviceId: text('advice_id').primaryKey(),
     tradeIds: text('trade_ids', { mode: 'json' }).$type<readonly string[]>().notNull(),
     outcome: text('outcome').$type<'followed' | 'partially_followed' | 'ignored'>().notNull(),
+    /**
+     * 回填来源（REQ-M3-18）：user / model / import。**必须落库**——统计侧用
+     * `origin === undefined` 判 unattested，丢了来源就会把用户回填算成模型代填。
+     * 可空：加列前的存量行没有来源戳，读回保持「无键」而不是 null。
+     */
+    origin: text('origin').$type<AdviceOutcomeOrigin>(),
     pnl: real('pnl').$type<Money>(),
     benchmarkPnl: real('benchmark_pnl').$type<Money>(),
     holdingHours: real('holding_hours'),
@@ -2043,6 +2050,18 @@ export const analysisContexts = sqliteTable(
     facts: text('facts_json', { mode: 'json' }).$type<AnalysisContext['facts']>().notNull(),
     factIds: text('fact_ids_json', { mode: 'json' }).$type<string[]>().notNull(),
     limitations: text('limitations_json', { mode: 'json' }).$type<string[]>().notNull(),
+    /**
+     * 结构化缺口。**必须落库**：v2 contextHash 把 missingFacts 算进口径，
+     * 读回时若退回 schema 默认 []，任何带缺口的 context 写回都会 context_mismatch。
+     * 可空是为了兼容加列前的存量行（读回 `?? []`，不伪造恢复）。
+     */
+    missingFacts: text('missing_facts_json', { mode: 'json' }).$type<
+      AnalysisContext['missingFacts']
+    >(),
+    /** contextHash 口径版本；存量行为 null，读取侧按「未知版本」处理。 */
+    contextHashVersion: integer('context_hash_version'),
+    /** 判定写回/有效期所用的时效规则版本（REQ-M3-20 / R2）。 */
+    timingRuleVersion: text('timing_rule_version'),
     contextHash: text('context_hash').notNull(),
     writeUntil: integer('write_until', { mode: 'timestamp_ms' }).notNull(),
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),

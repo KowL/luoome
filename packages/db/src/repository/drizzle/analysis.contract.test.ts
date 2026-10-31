@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   type Advice,
+  ANALYSIS_CONTEXT_HASH_VERSION,
   type AnalysisContext,
   type AnalysisJob,
+  analysisContextHashMatches,
+  analysisContextHashPayload,
+  analysisContextTiming,
+  MARKET_ADVICE_SAME_DAY_ONLY,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
+import { sql } from 'drizzle-orm';
 import { createDrizzleRepos, ensureSchema } from '../../client.js';
 import { makeStrategy, makeStrategyVersion } from '../contract-tests.js';
 import { createInMemoryRepos } from '../memory/index.js';
@@ -59,6 +66,38 @@ const claim = (token = 'token', time = now) => ({
   leaseUntil: new Date(time.getTime() + 1000),
   context: context(token),
 });
+
+/**
+ * 与 tools 层 `analysisHash` 同构的 contextHash 计算（本包不依赖 tools，contract 里自带一份）。
+ * 只需确定性：被测性质是「hash 口径里含 missingFacts」，与具体序列化无关。
+ */
+const contextHashOf = (
+  facts: readonly unknown[],
+  dataAsOf: Date,
+  missingFacts: readonly unknown[],
+): string =>
+  createHash('sha256')
+    .update(
+      JSON.stringify(
+        analysisContextHashPayload({
+          version: ANALYSIS_CONTEXT_HASH_VERSION,
+          facts,
+          dataAsOf,
+          missingFacts: missingFacts as never,
+        }),
+      ),
+    )
+    .digest('hex');
+
+/** 与 record.ts / publication.ts 读回后做的校验完全一致。 */
+const hashMatches = (context: AnalysisContext): boolean =>
+  analysisContextHashMatches({
+    contextHash: context.contextHash,
+    facts: context.facts,
+    dataAsOf: context.dataAsOf,
+    missingFacts: context.missingFacts,
+    compute: (payload) => createHash('sha256').update(JSON.stringify(payload)).digest('hex'),
+  });
 
 for (const mode of ['memory', 'drizzle'] as const) {
   describe(`AnalysisRepository [${mode}]`, () => {
@@ -434,8 +473,12 @@ for (const mode of ['memory', 'drizzle'] as const) {
           { kind: 'strategy', id: 'strategy' },
           day,
         );
+        // REQ-M3-20：市场级改为 Asia/Shanghai 当日口径——跨日即 stale，不再有 7 天宽限。
+        // 旧断言是「1 天前的市场事实仍可认领」，它反映的正是被废弃的伪精确窗口。
         await expectStale('market-8d', 'advice_market', { kind: 'market', id: 'market' }, 8 * day);
-        await expectClaimed('market-1d', 'advice_market', { kind: 'market', id: 'market' }, day);
+        await expectStale('market-1d', 'advice_market', { kind: 'market', id: 'market' }, day);
+        // 正例换成当日事实：同一自然日内仍然可认领。
+        await expectClaimed('market-1m', 'advice_market', { kind: 'market', id: 'market' }, minute);
       } finally {
         close();
       }
@@ -551,6 +594,120 @@ for (const mode of ['memory', 'drizzle'] as const) {
         close();
       }
     });
+    // P0 回归：missingFacts 曾经根本没落库（表无列 + contextRow 展开 → drizzle 静默丢弃），
+    // 读回落回 schema 默认 []，带缺口的 context 写回 advice 必然 context_mismatch。
+    it('persists blocking missingFacts and the hash version across insert and update', async () => {
+      const { repo, close } = setup();
+      try {
+        const facts = context().facts;
+        const blocking: AnalysisContext['missingFacts'] = [
+          { kind: 'quote-unavailable', subjectId: '600519.SH', reason: '缺少行情', asOf: now },
+          { kind: 'quote-stale', subjectId: '600519.SH', reason: '行情过期', asOf: now },
+        ];
+        const snapshot: AnalysisContext = {
+          ...context('gaps'),
+          missingFacts: blocking,
+          contextHashVersion: ANALYSIS_CONTEXT_HASH_VERSION,
+          timingRuleVersion: analysisContextTiming('advice_stock', now, now).ruleVersion,
+          contextHash: contextHashOf(facts, now, blocking),
+        };
+        await repo.enqueue(pending());
+        await repo.claim({ ...claim('gaps'), context: snapshot });
+
+        const inserted = await repo.findContext('account', 'gaps');
+        expect(inserted?.missingFacts).toEqual(blocking);
+        expect(inserted?.contextHashVersion).toBe(ANALYSIS_CONTEXT_HASH_VERSION);
+        expect(inserted?.timingRuleVersion).toBe(snapshot.timingRuleVersion);
+        expect(inserted && hashMatches(inserted)).toBe(true);
+
+        const advice: Advice = {
+          id: 'analysis:gaps',
+          subjectKind: 'stock',
+          subjectId: snapshot.subject.id,
+          decision: 'watch',
+          confidence: 50,
+          horizon: 'short',
+          reasoning: { premise: '观察', evidence: ['行情'], counterEvidence: ['缺口未补'] },
+          risks: ['数据有限'],
+          disclaimers: STANDARD_DISCLAIMERS,
+          basedOn: { dataAsOf: now },
+          validFrom: now,
+          validUntil: new Date(now.getTime() + 86400000),
+          createdAt: now,
+          provenance: {
+            generatorKind: 'dsh-worker',
+            contextId: 'gaps',
+            jobId: 'job',
+            evidenceFactIds: ['quote'],
+            generatedAt: now,
+          },
+        };
+        expect(
+          await repo.recordAdvice({
+            accountId: 'account',
+            contextId: 'gaps',
+            now,
+            resultHash: 'hash',
+            advice,
+            claim: { jobId: 'job', token: 'gaps' },
+          }),
+        ).toEqual({ ok: true, advice, replayed: false });
+
+        // update 路径（recordedResult 写回）同样不能把缺口冲掉。
+        const recorded = await repo.findContext('account', 'gaps');
+        expect(recorded?.missingFacts).toEqual(blocking);
+        expect(recorded?.contextHashVersion).toBe(ANALYSIS_CONTEXT_HASH_VERSION);
+        expect(recorded?.timingRuleVersion).toBe(snapshot.timingRuleVersion);
+        expect(recorded?.recordedResult?.ref).toBe(advice.id);
+        expect(recorded && hashMatches(recorded)).toBe(true);
+      } finally {
+        close();
+      }
+    });
+    it('round-trips a market same-day gap and an explicitly gap-free context', async () => {
+      const { repo, close } = setup();
+      try {
+        const facts = context().facts;
+        const gap: AnalysisContext['missingFacts'] = [
+          {
+            kind: MARKET_ADVICE_SAME_DAY_ONLY,
+            subjectId: 'market',
+            reason: '已排除跨日涨停天梯快照，不得用昨日结构代表今日情绪',
+            asOf: now,
+          },
+        ];
+        const market: AnalysisContext = {
+          ...context('market'),
+          jobId: null,
+          kind: 'advice_market',
+          subject: { kind: 'market', id: 'market' },
+          missingFacts: gap,
+          contextHashVersion: ANALYSIS_CONTEXT_HASH_VERSION,
+          timingRuleVersion: analysisContextTiming('advice_market', now, now).ruleVersion,
+          contextHash: contextHashOf(facts, now, gap),
+        };
+        await repo.saveContext(market);
+        const readMarket = await repo.findContext('account', 'market');
+        expect(readMarket?.missingFacts).toEqual(gap);
+        // 规则版本必须落在列上（M3-20 之前只能塞 limitations 字符串当 workaround）。
+        expect(readMarket?.timingRuleVersion).toBe('market-analysis-same-day-v1');
+        expect(readMarket && hashMatches(readMarket)).toBe(true);
+
+        const clean: AnalysisContext = {
+          ...context('clean'),
+          jobId: null,
+          contextHash: contextHashOf(facts, now, []),
+        };
+        await repo.saveContext(clean);
+        const readClean = await repo.findContext('account', 'clean');
+        expect(readClean?.missingFacts).toEqual([]);
+        expect(readClean?.contextHashVersion).toBeUndefined();
+        expect(readClean?.timingRuleVersion).toBeUndefined();
+        expect(readClean && hashMatches(readClean)).toBe(true);
+      } finally {
+        close();
+      }
+    });
     it('honors retry delays and keeps interactive snapshots immutable', async () => {
       const { repo, close, handle } = setup();
       try {
@@ -572,3 +729,90 @@ for (const mode of ['memory', 'drizzle'] as const) {
     });
   });
 }
+
+describe('AnalysisRepository [drizzle] 存量库迁移', () => {
+  /** 修复前的 15 列 DDL（无 missing_facts_json / context_hash_version / timing_rule_version）。 */
+  const LEGACY_DDL = `CREATE TABLE analysis_contexts (
+    recorded_result_json TEXT, id TEXT PRIMARY KEY, job_id TEXT, kind TEXT NOT NULL,
+    account_id TEXT NOT NULL, subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
+    data_as_of INTEGER NOT NULL, facts_json TEXT NOT NULL, fact_ids_json TEXT NOT NULL,
+    limitations_json TEXT NOT NULL, context_hash TEXT NOT NULL, write_until INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+  )`;
+  const facts = [{ id: 'quote', label: '行情', value: 100, evidenceIds: [] }];
+  const gap = [
+    {
+      kind: MARKET_ADVICE_SAME_DAY_ONLY,
+      subjectId: 'market',
+      reason: '跨日涨停天梯快照被当日口径排除',
+      asOf: now,
+    },
+  ];
+
+  // fail-closed：旧库行写入时 hash 按 v2 口径算过（含真实缺口），但列不存在 → 缺口在存储里丢了。
+  // 迁移后读回 missingFacts 仍是 []（不伪造恢复），hash 两条口径都不等 → 写回继续 context_mismatch。
+  it('adds the missing columns idempotently and keeps legacy rows fail-closed', async () => {
+    const handle = createDrizzleRepos(':memory:', { migrate: false });
+    try {
+      handle.db.run(sql.raw(LEGACY_DDL));
+      handle.db.run(sql`INSERT INTO analysis_contexts (
+          recorded_result_json, id, job_id, kind, account_id, subject_kind, subject_id, data_as_of,
+          facts_json, fact_ids_json, limitations_json, context_hash, write_until, expires_at, created_at
+        ) VALUES (
+          NULL, ${'legacy'}, NULL, ${'advice_market'}, ${'account'}, ${'market'}, ${'market'},
+          ${now.getTime()}, ${JSON.stringify(facts)}, ${JSON.stringify(['quote'])},
+          ${JSON.stringify(['旧库行：缺口列尚不存在'])},
+          ${contextHashOf(facts, now, gap)}, ${now.getTime() + 86_400_000},
+          ${now.getTime() + 31 * 86_400_000}, ${now.getTime()}
+        )`);
+
+      ensureSchema(handle.db);
+      const migratedColumns = handle.db
+        .all<{ name: string }>(sql.raw('PRAGMA table_info(analysis_contexts)'))
+        .map((row) => row.name);
+      expect(migratedColumns).toEqual(
+        expect.arrayContaining([
+          'missing_facts_json',
+          'context_hash_version',
+          'timing_rule_version',
+        ]),
+      );
+
+      // 幂等：第二次 ensureSchema 不报错，且不动已有数据。
+      const beforeSecondRun = handle.db.all<Record<string, unknown>>(
+        sql.raw('SELECT * FROM analysis_contexts ORDER BY id'),
+      );
+      ensureSchema(handle.db);
+      expect(
+        handle.db.all<Record<string, unknown>>(
+          sql.raw('SELECT * FROM analysis_contexts ORDER BY id'),
+        ),
+      ).toEqual(beforeSecondRun);
+
+      const legacy = await handle.repos.analysis.findContext('account', 'legacy');
+      expect(legacy?.missingFacts).toEqual([]);
+      expect(legacy?.contextHashVersion).toBeUndefined();
+      expect(legacy?.timingRuleVersion).toBeUndefined();
+      expect(legacy && hashMatches(legacy)).toBe(false);
+
+      // 迁移后新写入必须能带缺口完整往返——否则「加列」只解决了幂等没解决问题本身。
+      const fresh: AnalysisContext = {
+        ...context('fresh-market'),
+        jobId: null,
+        kind: 'advice_market',
+        subject: { kind: 'market', id: 'market' },
+        missingFacts: gap,
+        contextHashVersion: ANALYSIS_CONTEXT_HASH_VERSION,
+        timingRuleVersion: 'market-analysis-same-day-v1',
+        contextHash: contextHashOf(facts, now, gap),
+      };
+      await handle.repos.analysis.saveContext(fresh);
+      const readFresh = await handle.repos.analysis.findContext('account', 'fresh-market');
+      expect(readFresh?.missingFacts).toEqual(gap);
+      expect(readFresh?.timingRuleVersion).toBe('market-analysis-same-day-v1');
+      expect(readFresh && hashMatches(readFresh)).toBe(true);
+    } finally {
+      handle.close();
+    }
+  });
+});

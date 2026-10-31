@@ -91,6 +91,9 @@ const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
   adviceId: row.adviceId,
   tradeIds: row.tradeIds,
   outcome: row.outcome,
+  // 存量行没有来源戳：保持「无键」，不要产出 `origin: undefined`——统计侧与
+  // memory 实现都靠 `undefined` 判 unattested，多一个键会让两实现序列化不一致。
+  ...(row.origin === null ? {} : { origin: row.origin }),
   ...(row.pnl !== null ? { pnl: row.pnl } : {}),
   ...(row.benchmarkPnl !== null ? { benchmarkPnl: row.benchmarkPnl } : {}),
   ...(row.holdingHours !== null ? { holdingHours: row.holdingHours } : {}),
@@ -183,6 +186,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       adviceId,
       tradeIds: outcome.tradeIds,
       outcome: outcome.outcome,
+      origin: outcome.origin ?? null,
       pnl: outcome.pnl ?? null,
       benchmarkPnl: outcome.benchmarkPnl ?? null,
       holdingHours: outcome.holdingHours ?? null,
