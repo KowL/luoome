@@ -20,6 +20,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { DEFAULT_MARKET_TIMEOUT_MS, type MarketSurface } from './market-surface.js';
+import { assessPanelHealth, type PanelHealth } from './panel-health.js';
 import { denied, invalidInput, type ReadSurface } from './read-surface.js';
 import type { ResearchContinuity } from './research-status.js';
 import type { RequestAdmission } from './routes.js';
@@ -244,6 +245,11 @@ export interface PanelStateResponse {
   readonly asOf: string;
   readonly session: PanelSession;
   readonly tools: readonly PanelStateTool[];
+  /**
+   * 面板级「数据健康」角标（REQ-M3-09 / S1）。**必填**：客户端不自己判断
+   * 「这块能不能信」，只渲染这里给出的三档 + 原因 + 聚合时点。
+   */
+  readonly health: PanelHealth;
   readonly strategies?: readonly PanelStrategyWorkspace[];
   readonly configuration?: Readonly<Record<string, unknown>>;
   readonly section?: OverviewSection;
@@ -594,6 +600,7 @@ export const createPanelStateHandler =
         nextSessionStart: nextTradingSessionStart(now).toISOString(),
       },
       tools,
+      health: assessPanelHealth(tools),
       ...(section === null ? {} : { section }),
       ...(watchlist?.watchlistPage === undefined ? {} : { watchlistPage: watchlist.watchlistPage }),
       ...(strategies === undefined ? {} : { strategies }),

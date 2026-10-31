@@ -7,6 +7,7 @@ export * from './data-import.js';
 export * from './entity/account.js';
 export * from './entity/account-facts.js';
 export * from './entity/advice.js';
+export * from './entity/advice-card.js';
 export * from './entity/alert-plan.js';
 export * from './entity/analysis-context.js';
 export * from './entity/analysis-job.js';

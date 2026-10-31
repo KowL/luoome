@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dateInShanghai, isHoliday, isWeekend, previousTradingDate } from '../trading-calendar.js';
 import { type Money, MoneySchema, money } from '../types/branded.js';
+import { renderAdviceCard } from './advice-card.js';
 import { type AnalysisProvenance, AnalysisProvenanceSchema } from './analysis-provenance.js';
 import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
 import { notificationText, notificationTime } from './notification.js';
@@ -489,8 +490,20 @@ export const AdviceQuerySchema = z.object({
   limit: z.number().int().positive().optional(),
 });
 
-export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>): string => {
+/**
+ * 通知文本：**消费 `renderAdviceCard`**，不再自己拼五段。
+ *
+ * 缺段时不再输出「未提供，需人工核对」这种半张卡（那会让人以为其余四段是完整结论），
+ * 而是明确写「不可渲染：缺 X」。这与 PRD §2 的「阻断渲染并报缺段名」是同一条。
+ */
+export const adviceNotificationSummary = (
+  advice: z.output<typeof AdviceSchema>,
+  now: Date = new Date(),
+): string => {
   if (isRuleFallbackAdvice(advice)) return 'AI 分析未完成，仅有规则兜底，暂不形成交易判断。';
+  const card = renderAdviceCard(advice, now);
+  if (card.status === 'blocked')
+    return `${card.note}（建议 ${advice.id}）——本条建议不完整，不按建议内容行动，请核对原始研究结论。`;
   const decision = {
     buy: '考虑买入',
     sell: '考虑卖出',
@@ -508,7 +521,7 @@ export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>)
     ...(advice.targetPrice === undefined ? [] : [`目标 ${advice.targetPrice.toFixed(2)}`]),
   ];
   return [
-    `**${decision}** · ${notificationText(advice.reasoning.premise, 100) || '请核对完整研究结论'}`,
+    `**${decision}** · ${notificationText(card.conclusion, 100)}`,
     ...(prices.length === 0 ? [] : [prices.join(' · ')]),
     ...(advice.targetPositionPctRange !== undefined
       ? [
@@ -517,8 +530,9 @@ export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>)
       : advice.targetPositionPct === undefined
         ? []
         : [`目标仓位 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
-    `反证：${notificationText(advice.reasoning.counterEvidence.join('；'), 100) || '未提供，需人工核对'}`,
-    `风险：${notificationText(advice.risks.join('；'), 100) || '未提供，需人工核对'}`,
-    `数据 ${notificationTime(advice.basedOn.dataAsOf)} · 有效至 ${notificationTime(advice.validUntil)}（北京时间）`,
+    `反证：${notificationText(card.counterEvidence.join('；'), 100)}`,
+    `风险：${notificationText(card.risks.join('；'), 100)}`,
+    `数据 ${notificationTime(card.dataAsOf)} · 有效至 ${notificationTime(card.validity.validUntil)}（北京时间）`,
+    ...card.disclaimer.map((item) => `· ${item}`),
   ].join('\n');
 };
