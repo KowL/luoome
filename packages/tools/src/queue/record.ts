@@ -92,6 +92,12 @@ const recordAdvice = async (
       generatedAt: now,
     },
   });
+  // T31：买入建议**必须**带目标仓位区间。接受单值 ⇒ H4 宽度纪律永不触发（死代码）；
+  // 拒绝 ⇒ 模型在重试中改正。非买入 action（sell/hold/watch/avoid）仍允许单值：
+  // "清仓"就是 0，一刀切会把合法建议挡住。
+  // 只拦**新写入**：旧 advice 仍可读，不要求历史补区间。
+  if (advice.decision === 'buy' && advice.targetPositionPctRange === undefined)
+    return errInvalidInput('买入建议必须给出目标仓位区间（百分点），单值不足以表达纪律范围');
   const recorded = await ctx.repos.analysis.recordAdvice({
     accountId,
     contextId: context.id,

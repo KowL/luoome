@@ -197,6 +197,72 @@ describe('analysis tools', () => {
     ).toBe(false);
   });
 
+  // T31：买入建议**必须**带目标仓位区间（接受单值 ⇒ H4 宽度纪律是死代码）；
+  // 非买入 action 仍允许单值（"清仓"就是 0），不能一刀切。
+  it('T31 买入建议缺区间被拒，非买入单值仍放行', async () => {
+    const ctx = await setup();
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_stock', subject: { kind: 'stock', id: '600519.SH' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('snapshot failed');
+    const prices = {
+      entryPrice: 10,
+      entryPriceLow: 9.8,
+      entryPriceHigh: 10.2,
+      targetPrice: 12,
+      stopLoss: 9,
+    };
+
+    // 买入 + 只给单值 → 拒，且消息能指导模型
+    const rejected = await recordAdviceTool.execute(
+      {
+        contextId: snapshot.data.id,
+        result: { ...result, decision: 'buy', ...prices, targetPositionPct: 10 },
+        provenance,
+      },
+      ctx,
+    );
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok)
+      expect(rejected.error).toMatchObject({
+        kind: 'invalid_input',
+        message: '买入建议必须给出目标仓位区间（百分点），单值不足以表达纪律范围',
+      });
+
+    // 买入 + 区间 → 过
+    const accepted = await recordAdviceTool.execute(
+      {
+        contextId: snapshot.data.id,
+        result: {
+          ...result,
+          decision: 'buy',
+          ...prices,
+          targetPositionPctRange: { min: 8, max: 12 },
+        },
+        provenance,
+      },
+      ctx,
+    );
+    expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+
+    // 非买入（sell）+ 单值 → 不被区间规则挡住
+    const sellSnapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_stock', subject: { kind: 'stock', id: '600519.SH' } },
+      { ...ctx, clock: () => new Date(now.getTime() + 2 * MINUTE_MS) },
+    );
+    if (!sellSnapshot.ok) throw new Error('snapshot failed');
+    const sell = await recordAdviceTool.execute(
+      {
+        contextId: sellSnapshot.data.id,
+        result: { ...result, decision: 'sell', ...prices, targetPositionPct: 0 },
+        provenance,
+      },
+      { ...ctx, clock: () => new Date(now.getTime() + 2 * MINUTE_MS) },
+    );
+    expect(sell.ok, JSON.stringify(sell)).toBe(true);
+  });
+
   it('redacts prompt-injection text before persisting an advice', async () => {
     const ctx = await setup();
     const snapshot = await getAnalysisContextTool.execute(

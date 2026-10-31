@@ -53,9 +53,24 @@ export const DataDiagnosticFindingSchema = z.object({
 
 export const GetDataDiagnosticsInput = z.object({});
 
+/**
+ * T31：目标仓位区间的**退化**观测。
+ *
+ * `min === max` 的区间等于没有区间——H4 宽度纪律永不触发。T29 让生成器"可以不退化"，
+ * 这里让"退化"变成**可见指标**，而不是只能靠读代码发现。
+ * `missingRange` 单列：那是 T31 之前写入的历史建议（新写入已被 record_advice 拒绝）。
+ */
+export const TargetPositionRangeDiagnosticsSchema = z.object({
+  checked: z.number().int().nonnegative(),
+  degenerate: z.number().int().nonnegative(),
+  ranged: z.number().int().nonnegative(),
+  missingRange: z.number().int().nonnegative(),
+});
+
 export const GetDataDiagnosticsOutput = z.object({
   checkedAt: z.coerce.date(),
   findings: z.array(DataDiagnosticFindingSchema),
+  targetPositionRanges: TargetPositionRangeDiagnosticsSchema,
 });
 
 const iso = (value: Date | null): string =>
@@ -126,6 +141,25 @@ export const getDataDiagnosticsTool = defineTool({
         });
     }
 
+    // 2.5) 目标仓位区间退化计数（T31）。
+    const buyAdvices = await ctx.repos.advice.query({
+      decision: 'buy',
+      includeExpired: true,
+      limit: 5000,
+    });
+    const targetPositionRanges = {
+      checked: buyAdvices.length,
+      degenerate: 0,
+      ranged: 0,
+      missingRange: 0,
+    };
+    for (const advice of buyAdvices) {
+      const range = advice.targetPositionPctRange;
+      if (range === undefined) targetPositionRanges.missingRange += 1;
+      else if (range.min === range.max) targetPositionRanges.degenerate += 1;
+      else targetPositionRanges.ranged += 1;
+    }
+
     // 3) 迁移未完成：schema_migrations 与期望清单的差集。
     const migrations = await ctx.repos.schemaMigration?.list();
     if (migrations !== undefined) {
@@ -178,6 +212,6 @@ export const getDataDiagnosticsTool = defineTool({
       });
     }
 
-    return { checkedAt: now, findings };
+    return { checkedAt: now, findings, targetPositionRanges };
   },
 });

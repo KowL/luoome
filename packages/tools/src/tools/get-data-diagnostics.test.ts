@@ -1,3 +1,4 @@
+import { testAdviceFor } from '@luoome/adapters/testing';
 import {
   EXPECTED_SCHEMA_MIGRATIONS,
   type MarketSourceStatus,
@@ -140,5 +141,39 @@ describe('T14 get_data_diagnostics', () => {
     expect(persisted).toMatchObject({ table: 'stock_universe_sync_runs', field: 'status' });
     expect(new Date(String(persisted?.at)).toISOString()).toBe(failedAt.toISOString());
     expect(persisted?.message).toContain('errorKind=network');
+  });
+
+  // T31：退化 plan 必须成为**可见指标**，而不是只能靠读代码发现。
+  it('目标仓位区间：2 条退化（min===max）+ 1 条非退化 → degenerate 计数 2', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    const buy = testAdviceFor('600519.SH', () => NOW);
+    await base.repos.advice.save({
+      ...buy,
+      id: 'buy-degenerate-1',
+      decision: 'buy',
+      targetPositionPctRange: { min: 10, max: 10 },
+    });
+    await base.repos.advice.save({
+      ...buy,
+      id: 'buy-degenerate-2',
+      decision: 'buy',
+      targetPositionPctRange: { min: 20, max: 20 },
+    });
+    await base.repos.advice.save({
+      ...buy,
+      id: 'buy-ranged',
+      decision: 'buy',
+      targetPositionPctRange: { min: 8, max: 12 },
+    });
+    const result = await getDataDiagnosticsTool.execute({}, base);
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    const ranges = (
+      result.data as {
+        targetPositionRanges: { checked: number; degenerate: number; ranged: number };
+      }
+    ).targetPositionRanges;
+    expect(ranges.degenerate).toBe(2);
+    expect(ranges.ranged).toBe(1);
+    expect(ranges.checked).toBe(3);
   });
 });
