@@ -56,6 +56,7 @@ import { getFinancialFactsTool, syncFinancialFactsTool } from './tools/financial
 import { getFundamentalScoreTool, runFundamentalScoreTool } from './tools/fundamental-score.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
+import { getAdviceAttributionTool } from './tools/get-advice-attribution.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
@@ -383,6 +384,7 @@ export const toolRegistry: Registry = createRegistry([
   listTradesTool,
   getHoldingTool,
   getAdviceTool,
+  getAdviceAttributionTool,
   listAdvicesTool,
   getAdviceStatsTool,
   getConfidenceCalibrationTool,

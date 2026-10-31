@@ -12,7 +12,7 @@ import {
 } from '../entity/portfolio-performance.js';
 import type { DailyBar } from '../entity/quote.js';
 import type { Trade } from '../entity/trade.js';
-import { isHoliday, isWeekend } from '../trading-calendar.js';
+import { priceAt, replayAccountLedger, replayDayKey } from './replay.js';
 
 export interface PortfolioPerformanceInput {
   readonly accountId: string;
@@ -31,39 +31,7 @@ export interface PortfolioPerformanceInput {
   readonly benchmarkBars?: readonly DailyBar[];
 }
 
-interface PositionState {
-  quantity: number;
-  averageCost: number;
-  realizedPnl: number;
-  dividends: number;
-}
-
-const dayKey = (date: Date): string => date.toISOString().slice(0, 10);
-const signOfCashFlow = (kind: PortfolioCashFlow['kind']): number =>
-  kind === 'deposit' || kind === 'dividend' || kind === 'transfer-in' ? 1 : -1;
-
-const isExternalCashFlow = (kind: PortfolioCashFlow['kind']): boolean =>
-  kind === 'deposit' || kind === 'withdrawal' || kind === 'transfer-in' || kind === 'transfer-out';
-
-const tradingDays = (from: Date, to: Date): Date[] => {
-  const result: Date[] = [];
-  for (
-    let cursor = new Date(from);
-    cursor <= to;
-    cursor = new Date(cursor.getTime() + 86_400_000)
-  ) {
-    if (!isWeekend(cursor) && !isHoliday(cursor)) result.push(new Date(cursor));
-  }
-  return result;
-};
-
-const priceAt = (bars: readonly DailyBar[] | undefined, date: Date): number | undefined => {
-  if (bars === undefined) return undefined;
-  const key = dayKey(date);
-  const bar = bars.find((item) => dayKey(item.date) === key);
-  return bar?.close;
-};
-
+/** 空贡献行：没有任何成交也没有估值的股票仍要出现在归因里（事实为空，不是「零贡献」）。 */
 const emptyContribution = (stockId: string): PortfolioContribution => ({
   stockId,
   factIds: [],
@@ -74,181 +42,41 @@ const emptyContribution = (stockId: string): PortfolioContribution => ({
   completeness: 'unavailable',
 });
 
-/**
- * 归因事实 id：每条持仓贡献都指回产出它的账本/行情事实，而不是一句「因为大盘涨了」。
- * 只收集真正被用到的 id（没交易就没有 trade 事实），不补占位符。
- */
-class FactIndex {
-  private readonly byStock = new Map<string, Set<string>>();
-
-  add(stockId: string, factId: string): void {
-    const facts = this.byStock.get(stockId) ?? new Set<string>();
-    facts.add(factId);
-    this.byStock.set(stockId, facts);
-  }
-
-  of(stockId: string): string[] {
-    return [...(this.byStock.get(stockId) ?? [])].sort();
-  }
-}
-
 export const calculatePortfolioPerformance = (
   input: PortfolioPerformanceInput,
 ): PortfolioPerformance => {
-  const positions = new Map<string, PositionState>();
-  const allStockIds = new Set<string>();
-  const tradedStockIds = new Set<string>();
-  for (const trade of input.trades) allStockIds.add(trade.stockId);
-  for (const trade of input.trades) tradedStockIds.add(trade.stockId);
-  for (const holding of input.initialHoldings ?? []) allStockIds.add(holding.stockId);
-  for (const flow of input.cashFlows) if (flow.stockId !== undefined) allStockIds.add(flow.stockId);
-  for (const action of input.corporateActions) allStockIds.add(action.stockId);
-  for (const stockId of allStockIds) {
-    const holding = input.initialHoldings?.find((item) => item.stockId === stockId);
-    positions.set(
-      stockId,
-      holding !== undefined && !tradedStockIds.has(stockId)
-        ? {
-            quantity: holding.quantity,
-            averageCost: holding.avgCost,
-            realizedPnl: 0,
-            dividends: 0,
-          }
-        : { quantity: 0, averageCost: 0, realizedPnl: 0, dividends: 0 },
-    );
-  }
-
-  const trades = [...input.trades].sort(
-    (left, right) =>
-      left.executedAt.getTime() - right.executedAt.getTime() || left.id.localeCompare(right.id),
-  );
-  const flows = [...input.cashFlows].sort(
-    (left, right) =>
-      left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id),
-  );
-  const actions = [...input.corporateActions].sort(
-    (left, right) =>
-      left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id),
-  );
-  const facts = new FactIndex();
-  for (const holding of input.initialHoldings ?? []) {
-    // 只有真正作为期初仓位使用的直接录入持仓才参与归因；有成交事实时仓位由成交重建。
-    if (holding.id === undefined || tradedStockIds.has(holding.stockId)) continue;
-    facts.add(holding.stockId, `holding:${holding.id}`);
-  }
-  const directHoldingCost = (input.initialHoldings ?? [])
-    .filter((holding) => !tradedStockIds.has(holding.stockId))
-    .reduce((sum, holding) => sum + holding.quantity * holding.avgCost, 0);
-  let cash = input.initialCapital - directHoldingCost;
-  let tradeIndex = 0;
-  let flowIndex = 0;
-  let actionIndex = 0;
-  const valuation: PortfolioValuationDay[] = [];
+  // 逐笔重放只有一份实现（`replay.ts`）：账户层绩效与单条建议归因共用它。
+  const replay = replayAccountLedger({
+    initialCapital: input.initialCapital,
+    from: input.from,
+    to: input.to,
+    trades: input.trades,
+    ...(input.initialHoldings === undefined ? {} : { initialHoldings: input.initialHoldings }),
+    cashFlows: input.cashFlows,
+    corporateActions: input.corporateActions,
+    barsByStock: input.barsByStock,
+  });
+  const { positions, unallocatedDividends, cashCosts } = replay;
+  const facts = {
+    add: (stockId: string, factId: string): void => {
+      // replay 已记录全部事实；这里只为「最近估值日的日线」补一条（它依赖 lastValuationDate）。
+      dynamicFacts.set(stockId, [...(dynamicFacts.get(stockId) ?? []), factId]);
+    },
+    of: (stockId: string): string[] =>
+      [
+        ...new Set([...(replay.facts.get(stockId) ?? []), ...(dynamicFacts.get(stockId) ?? [])]),
+      ].sort(),
+  };
+  const dynamicFacts = new Map<string, string[]>();
   let previousTotal: number | undefined;
   let cumulativeTwr = 1;
   let peakTwr = 1;
   let anyIncomplete = false;
-  let unallocatedDividends = 0;
-  let cashCosts = 0;
-
-  for (const date of tradingDays(input.from, input.to)) {
-    const dayEnd = date.getTime() + 86_400_000 - 1;
-    let externalCashFlow = 0;
-    while (
-      flowIndex < flows.length &&
-      (flows[flowIndex]?.occurredAt.getTime() ?? Infinity) <= dayEnd
-    ) {
-      const flow = flows[flowIndex];
-      if (flow === undefined) break;
-      flowIndex += 1;
-      const signed = signOfCashFlow(flow.kind) * flow.amount;
-      cash += signed;
-      if (isExternalCashFlow(flow.kind)) externalCashFlow += signed;
-      if (flow.kind === 'fee' || flow.kind === 'tax') cashCosts += flow.amount;
-      if (flow.stockId !== undefined && flow.kind === 'dividend') {
-        const state = positions.get(flow.stockId) ?? {
-          quantity: 0,
-          averageCost: 0,
-          realizedPnl: 0,
-          dividends: 0,
-        };
-        state.dividends += flow.amount;
-        positions.set(flow.stockId, state);
-        facts.add(flow.stockId, `cash-flow:${flow.id}`);
-      } else if (flow.kind === 'dividend') {
-        unallocatedDividends += flow.amount;
-      }
-    }
-    while (
-      actionIndex < actions.length &&
-      (actions[actionIndex]?.occurredAt.getTime() ?? Infinity) <= dayEnd
-    ) {
-      const action = actions[actionIndex];
-      if (action === undefined) break;
-      actionIndex += 1;
-      const state = positions.get(action.stockId) ?? {
-        quantity: 0,
-        averageCost: 0,
-        realizedPnl: 0,
-        dividends: 0,
-      };
-      if ((action.kind === 'split' || action.kind === 'bonus') && action.ratio !== undefined) {
-        state.quantity *= action.ratio;
-        state.averageCost =
-          action.ratio === 0 ? state.averageCost : state.averageCost / action.ratio;
-      } else if (action.kind === 'dividend' && action.cashPerShare !== undefined) {
-        const dividend = state.quantity * action.cashPerShare;
-        cash += dividend;
-        state.dividends += dividend;
-      }
-      positions.set(action.stockId, state);
-      facts.add(action.stockId, `corporate-action:${action.id}`);
-    }
-    while (
-      tradeIndex < trades.length &&
-      (trades[tradeIndex]?.executedAt.getTime() ?? Infinity) <= dayEnd
-    ) {
-      const trade = trades[tradeIndex];
-      if (trade === undefined) break;
-      tradeIndex += 1;
-      const state = positions.get(trade.stockId) ?? {
-        quantity: 0,
-        averageCost: 0,
-        realizedPnl: 0,
-        dividends: 0,
-      };
-      const gross = trade.quantity * trade.price;
-      if (trade.side === 'buy') {
-        cash -= gross + trade.fee;
-        state.averageCost =
-          (state.averageCost * state.quantity + gross + trade.fee) /
-          (state.quantity + trade.quantity);
-        state.quantity += trade.quantity;
-      } else {
-        cash += gross - trade.fee;
-        state.realizedPnl += trade.quantity * (trade.price - state.averageCost) - trade.fee;
-        state.quantity = Math.max(0, state.quantity - trade.quantity);
-        if (state.quantity === 0) state.averageCost = 0;
-      }
-      positions.set(trade.stockId, state);
-      facts.add(trade.stockId, `trade:${trade.id}`);
-    }
-
-    let holdingsValue: number | undefined = 0;
-    const missingStockIds: string[] = [];
-    for (const [stockId, state] of positions) {
-      if (state.quantity <= 0) continue;
-      const price = priceAt(input.barsByStock.get(stockId), date);
-      if (price === undefined || !Number.isFinite(price) || price <= 0) {
-        missingStockIds.push(stockId);
-        holdingsValue = undefined;
-      } else if (holdingsValue !== undefined) {
-        holdingsValue += state.quantity * price;
-      }
-    }
-    const completeness = missingStockIds.length > 0 ? 'partial' : 'complete';
+  const valuation: PortfolioValuationDay[] = [];
+  for (const day of replay.valuation) {
+    const completeness = day.completeness;
+    const totalValue = day.totalValue;
     anyIncomplete ||= completeness !== 'complete';
-    const totalValue = holdingsValue === undefined ? undefined : Math.max(0, cash + holdingsValue);
     let twrReturnPct: number | undefined;
     if (
       totalValue !== undefined &&
@@ -256,19 +84,19 @@ export const calculatePortfolioPerformance = (
       previousTotal > 0 &&
       completeness === 'complete'
     ) {
-      twrReturnPct = ((totalValue - externalCashFlow) / previousTotal - 1) * 100;
+      twrReturnPct = ((totalValue - day.externalCashFlow) / previousTotal - 1) * 100;
       cumulativeTwr *= 1 + twrReturnPct / 100;
       peakTwr = Math.max(peakTwr, cumulativeTwr);
     }
     const drawdownPct = cumulativeTwr === 0 ? -100 : (cumulativeTwr / peakTwr - 1) * 100;
     valuation.push({
-      date,
-      cash,
-      ...(holdingsValue === undefined ? {} : { holdingsValue }),
+      date: day.date,
+      cash: day.cash,
+      ...(day.holdingsValue === undefined ? {} : { holdingsValue: day.holdingsValue }),
       ...(totalValue === undefined ? {} : { totalValue }),
       completeness,
-      missingStockIds,
-      externalCashFlow,
+      missingStockIds: [...day.missingStockIds],
+      externalCashFlow: day.externalCashFlow,
       ...(completeness === 'complete' && twrReturnPct !== undefined ? { twrReturnPct } : {}),
       ...(completeness === 'complete' && previousTotal !== undefined
         ? { cumulativeTwrPct: (cumulativeTwr - 1) * 100 }
@@ -283,7 +111,7 @@ export const calculatePortfolioPerformance = (
   const contributions = [...positions.entries()].map(([stockId, state]) => {
     const lastPrice = priceAt(input.barsByStock.get(stockId), lastValuationDate);
     if (lastPrice !== undefined)
-      facts.add(stockId, `daily_bar:${stockId}:${dayKey(lastValuationDate)}`);
+      facts.add(stockId, `daily_bar:${stockId}:${replayDayKey(lastValuationDate)}`);
     const currentValue =
       state.quantity <= 0 ? 0 : lastPrice === undefined ? undefined : state.quantity * lastPrice;
     const unrealizedPnl =
@@ -316,7 +144,7 @@ export const calculatePortfolioPerformance = (
   const twrDays = completeDays.filter((day) => day.twrReturnPct !== undefined);
   const gapDates = valuation
     .filter((day) => day.completeness !== 'complete')
-    .map((day) => dayKey(day.date));
+    .map((day) => replayDayKey(day.date));
   // 样本 = 完整估值日数。2 天的「TWR」是噪声，样本不足时只报 insufficient。
   const sampleDays = completeDays.length;
   const twrMetric: PortfolioMetricAvailability =

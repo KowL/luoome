@@ -67,6 +67,7 @@ export * from './portfolio/apply-trade-to-holding.js';
 export * from './portfolio/decision-ledger-state.js';
 export * from './portfolio/ledger.js';
 export * from './portfolio/performance.js';
+export * from './portfolio/replay.js';
 export * from './portfolio/trading-plan-budget.js';
 export * from './public-market-store.js';
 export * from './report-artifact.js';

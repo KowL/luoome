@@ -45,6 +45,9 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'get_decision_review_context',
   'get_decision_review_snapshot',
   'get_decision_loop_review',
+  // 单条建议事后归因（REQ-M3-14）：只读已落库事实（建议/回填/成交/现金流/观察/绩效快照），
+  // 零回源、零写库；要刷新快照走 external 面的 get_account_performance。
+  'get_advice_attribution',
   // 交互分析上下文（读业务事实并持久化审计快照，口径见需求 §5.4）
   'get_analysis_context',
   // Strategy 制定与结果研究

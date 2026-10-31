@@ -64,6 +64,7 @@ export * from './tools/financial-facts.js';
 export * from './tools/fundamental-score.js';
 export * from './tools/get-account.js';
 export * from './tools/get-advice.js';
+export * from './tools/get-advice-attribution.js';
 export * from './tools/get-advice-stats.js';
 export * from './tools/get-ashare-sentiment.js';
 export * from './tools/get-closing-batch-audit.js';

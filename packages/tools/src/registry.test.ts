@@ -32,6 +32,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_holding',
   'list_trades',
   'get_advice',
+  'get_advice_attribution',
   'list_advices',
   'get_advice_stats',
   'get_trading_plan',
