@@ -11,7 +11,7 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
-import { holdingPriceView, holdingSortValue } from './holdings-price.js';
+import { holdingPriceView, holdingSortValue, quoteFreshnessView } from './holdings-price.js';
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
@@ -1286,6 +1286,7 @@ const renderHoldings = async (setStatus) => {
   const holdingRow = (item) => {
     const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
     const view = holdingPriceView(item);
+    const quoteView = quoteFreshnessView(item);
     // 缺价时 pnl 缺席，`undefined > 0` 恒 false —— 走 else 分支留空类名即可，不是 0 盈亏。
     const pnlCls = view.canShowNumbers ? (item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '') : '';
     const todayCls =
@@ -1322,10 +1323,20 @@ const renderHoldings = async (setStatus) => {
       el('td', 'num', String(item.holding.quantity)),
       el('td', 'num', fmtNum(item.holding.avgCost)),
       // 缺价：**完全不碰数字格式化**，显示服务端给的原因（REQ-M3-09 S3 / task-26）。
+      // 有价时追加报价时点（task-30）：判据由 `holdings-price.js` 渲染服务端结论，不在这里算档位。
       el(
         'td',
         'num',
-        view.canShowNumbers ? fmtNum(item.currentPrice) : el('span', 'muted', view.unavailableText),
+        view.canShowNumbers
+          ? [
+              fmtNum(item.currentPrice),
+              el(
+                'div',
+                quoteView.tone === 'warning' ? 'cell-sub warn' : 'cell-sub muted',
+                quoteView.text,
+              ),
+            ]
+          : el('span', 'muted', view.unavailableText),
       ),
       el(
         'td',

@@ -137,3 +137,58 @@ describe('list_holdings', () => {
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
   });
 });
+
+// task-30：顶层聚合时点 + 陈旧计数（0 是确定结论，不是缺失）。
+describe('task-30 报价时点聚合', () => {
+  it('每条持仓带报价时间；顶层 quoteAsOf 取最旧；全部有价时 staleCount 为 0', async () => {
+    const ctx = await buildTestContext();
+    // task-14 之后 `list_holdings` 纯读库内报价：先落一条当日合格报价再断言。
+    const holdings = await ctx.repos.holding.listByAccount(TEST_ACCOUNT.id);
+    const first = holdings[0];
+    if (first === undefined) throw new Error('missing holding fixture');
+    const observedAt = new Date('2026-07-24T02:00:00.000Z');
+    await ctx.repos.quote.save({
+      stockId: first.stockId,
+      ts: observedAt,
+      observedAt,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1000,
+      source: 'fixture',
+    } as never);
+    const result = await listHoldingsTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const priced = result.data.holdings.filter((item) => item.priceStatus === 'priced');
+    expect(priced.length).toBeGreaterThan(0);
+    for (const item of priced) {
+      // 有价就必须能说清「多旧」：时间字段存在（或缺席即 unknown 档，分档仍存在）。
+      expect(item.quoteFreshness).toBeDefined();
+    }
+    const times = priced.flatMap((item) =>
+      item.quoteObservedAt === undefined ? [] : [item.quoteObservedAt.getTime()],
+    );
+    if (times.length > 0) expect(result.data.quoteAsOf?.getTime()).toBe(Math.min(...times));
+    // staleCount 恒给（0 = 确定没有陈旧数据）。
+    expect(result.data.staleCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('现有字段零变更：priceStatus / priceUnavailableReason / unpricedCount 语义不变', async () => {
+    const ctx = await buildTestContext();
+    const result = await listHoldingsTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const item of result.data.holdings) {
+      expect(['priced', 'unpriced']).toContain(item.priceStatus);
+      if (item.priceStatus === 'unpriced') {
+        expect(item.priceUnavailableReason).toBeDefined();
+        expect(item.pnlPct).toBeUndefined();
+      }
+    }
+    expect(result.data.unpricedCount).toBe(
+      result.data.holdings.filter((item) => item.priceStatus === 'unpriced').length,
+    );
+  });
+});

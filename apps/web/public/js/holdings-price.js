@@ -62,3 +62,37 @@ export const holdingSortValue = (item, key) => {
   const value = item?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
+
+/**
+ * 持仓报价时点的**渲染**（task-30）。
+ *
+ * **不在这里判档位**：`quoteFreshness.tier/tone/label` 全部由服务端（core 的
+ * `classifyQuoteFreshness`）算好，本函数只把结论渲染成一段可显示的文字。
+ * 阈值（日界、15:00、上一交易日、盘前/盘中）**一个字都不许在这里出现**——
+ * 否则就是第二份判定，正是 task-26 消灭过的那种。
+ *
+ * 与 `holdingPriceView` 的区别：那个是「渲染判据」（缺不缺价、能不能出数字），
+ * 这个是「渲染服务端已判好的结论」。
+ *
+ * @param {unknown} item 持仓项（`list_holdings` 输出元素）
+ * @returns {{ tone: 'factual' | 'warning', text: string, tier: string }}
+ */
+export const quoteFreshnessView = (item) => {
+  const freshness = item?.quoteFreshness;
+  const observedAt =
+    typeof item?.quoteObservedAt === 'string' && item.quoteObservedAt.length > 0
+      ? item.quoteObservedAt
+      : null;
+  // 服务端没给分档（老载荷）：显示「时点未知」，不假装是最新的。
+  if (freshness === undefined || freshness === null)
+    return { tone: 'warning', tier: 'unknown', text: '时点未知' };
+  const label =
+    typeof freshness.label === 'string' && freshness.label.length > 0
+      ? freshness.label
+      : '时点未知';
+  return {
+    tone: freshness.tone === 'warning' ? 'warning' : 'factual',
+    tier: typeof freshness.tier === 'string' ? freshness.tier : 'unknown',
+    text: `${label} · ${observedAt ?? '时点未知'}`,
+  };
+};

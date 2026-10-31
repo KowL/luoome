@@ -228,3 +228,45 @@ describe('S1 角标语义：两层输入 + 聚合时点取最旧', () => {
     expect(health.status).toBe('available'); // holdings 非数组 → 视为空持仓，不伪造降级
   });
 });
+
+// task-30：持仓报价时点进聚合 asOf，且被拖低时必须点名是它。
+describe('task-30 持仓报价时点参与聚合 asOf', () => {
+  it('list_holdings 声明时点后，聚合 asOf 取最旧并点名拖低者', () => {
+    const health = assessPanelHealth([
+      {
+        name: 'list_holdings',
+        ok: true,
+        data: {
+          holdings: [{ priceStatus: 'priced', quoteObservedAt: '2026-10-24T02:00:00.000Z' }],
+          quoteAsOf: '2026-10-24T02:00:00.000Z',
+          staleCount: 0,
+        },
+      },
+      {
+        // 用**确实声明时点**的工具做对照（`get_ashare_sentiment` 的探针会 withAsOf）。
+        name: 'get_ashare_sentiment',
+        ok: true,
+        data: { snapshot: { dataAsOf: '2026-10-25T04:00:00.000Z' } },
+      },
+    ]);
+    // 聚合取最旧 = 持仓报价时点（比情绪快照旧）。
+    expect(health.asOf).toBe('2026-10-24T02:00:00.000Z');
+    // 不许让时间悄悄后退：`asOfSource` 必须点名 list_holdings，并给出落后幅度。
+    expect(health.asOfSource?.tool).toBe('list_holdings');
+    expect(health.asOfSource?.trailingMs).toBeGreaterThan(0);
+    // 但**不因此降级**：多源时点不同步是常态，降级会让每个面板常驻 partial。
+    expect(health.status).toBe('available');
+  });
+
+  it('各工具时点一致时不产生「拖低」噪音', () => {
+    const health = assessPanelHealth([
+      {
+        name: 'list_holdings',
+        ok: true,
+        data: { holdings: [], quoteAsOf: '2026-10-25T04:00:00.000Z' },
+      },
+      { name: 'get_account_facts', ok: true, data: { dataAsOf: '2026-10-25T04:00:00.000Z' } },
+    ]);
+    expect(health.issues.filter((issue) => issue.detail.includes('聚合时点由'))).toHaveLength(0);
+  });
+});

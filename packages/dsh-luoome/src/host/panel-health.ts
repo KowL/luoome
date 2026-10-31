@@ -41,6 +41,18 @@ export interface PanelHealth {
    * （无法给出上界时不给数字，也不拿请求时间顶替——`PanelStateResponse.asOf` 是请求时间）。
    */
   readonly asOf?: string;
+  /**
+   * 聚合时点由谁决定（task-30）：当某个工具的时点**拖低**了聚合 `asOf` 时出现。
+   *
+   * 只在这一种情况出现，且**不改变 `status`**——时点不同步是常态，不是降级。
+   * 客户端可用它解释「为什么角标时间比预期旧」（点名工具 + 落后毫秒数）。
+   */
+  readonly asOfSource?: {
+    readonly tool: string;
+    readonly at: string;
+    /** 比聚合时点新的工具里，最旧的那个落后多少毫秒（即「被拖低」的幅度）。 */
+    readonly trailingMs: number;
+  };
   readonly checkedTools: readonly string[];
   readonly issues: readonly PanelHealthIssue[];
 }
@@ -114,6 +126,10 @@ const OUTPUT_PROBES: Readonly<Record<string, (data: unknown) => OutputAssessment
   list_holdings: (data) => {
     const record = asRecord(data);
     const holdings = asArray(record?.holdings);
+    // task-30：持仓报价的**顶层聚合时点**参与面板健康（取最旧，见 `assessPanelHealth`）。
+    // 没有持仓时不声明时点（没有数字就无需上界）；有持仓但一条报价时间都没有 → 缺席，
+    // 由 `declaredMissing` 记成 `missing-data-as-of`（不拿请求时间顶替）。
+    const asOf = asDate(record?.quoteAsOf);
     if (holdings.length === 0) return ok;
     const unpriced = holdings.filter((item) => {
       const holding = asRecord(item);
@@ -121,12 +137,14 @@ const OUTPUT_PROBES: Readonly<Record<string, (data: unknown) => OutputAssessment
       // 两种形态都算缺价：S3 之前的 `quote === null`，以及 S3 起的 `priceStatus: 'unpriced'`。
       return holding.quote === null || holding.priceStatus === 'unpriced';
     });
-    return unpriced.length === 0
-      ? ok
-      : partial(
-          `${String(unpriced.length)} 只持仓没有库内报价（缺价的合计字段缺席，不按 0 计）`,
-          '先运行 refresh_holdings_quotes 刷新报价后重试',
-        );
+    const assessment =
+      unpriced.length === 0
+        ? ok
+        : partial(
+            `${String(unpriced.length)} 只持仓没有库内报价（缺价的合计字段缺席，不按 0 计）`,
+            '先运行 refresh_holdings_quotes 刷新报价后重试',
+          );
+    return withAsOf(assessment, asOf);
   },
   list_account_performance_snapshots: (data) => {
     const record = asRecord(data);
@@ -244,7 +262,8 @@ const assessOutput = (tool: PanelHealthTool): OutputAssessment => {
 export const assessPanelHealth = (tools: readonly PanelHealthTool[]): PanelHealth => {
   const issues: PanelHealthIssue[] = [];
   const checkedTools = tools.map((tool) => tool.name);
-  const observedAt: Date[] = [];
+  /** 时点贡献者：用于在聚合 `asOf` 被拖低时**点名**是哪个工具（task-30 要求）。 */
+  const contributors: { readonly tool: string; readonly at: Date }[] = [];
   let declaredMissing = 0;
   let failed = 0;
 
@@ -264,7 +283,7 @@ export const assessPanelHealth = (tools: readonly PanelHealthTool[]): PanelHealt
     const assessment = assessOutput(tool);
     if (assessment.declaresDataAsOf) {
       if (assessment.dataAsOf === undefined) declaredMissing += 1;
-      else observedAt.push(assessment.dataAsOf);
+      else contributors.push({ tool: tool.name, at: assessment.dataAsOf });
     }
     if (assessment.status === 'available') continue;
     issues.push({
@@ -283,6 +302,12 @@ export const assessPanelHealth = (tools: readonly PanelHealthTool[]): PanelHealt
       remedy: '补齐该工具输出的 dataAsOf 字段；面板不拿请求时间顶替数据时间',
     });
 
+  // 聚合时点取**最旧**：角标时间必须 ≤ 任何行内时间。
+  const oldest = contributors.reduce<{ tool: string; at: Date } | undefined>(
+    (best, item) => (best === undefined || item.at.getTime() < best.at.getTime() ? item : best),
+    undefined,
+  );
+  const asOf = declaredMissing > 0 || oldest === undefined ? undefined : oldest.at.toISOString();
   const status: PanelHealthStatus =
     tools.length > 0 && failed === tools.length
       ? 'unavailable'
@@ -290,15 +315,29 @@ export const assessPanelHealth = (tools: readonly PanelHealthTool[]): PanelHealt
         ? 'partial'
         : 'available';
 
-  // 聚合时点取**最旧**：角标时间必须 ≤ 任何行内时间。
-  const asOf =
-    declaredMissing > 0 || observedAt.length === 0
+  /**
+   * **不许让时间悄悄后退**：聚合时点由某个工具拖低时，必须能指明是谁。
+   *
+   * 但**不因此把角标降级**——「多源时点不同步」是常态（持仓报价按需刷新、其它工具各自节奏），
+   * 把它算成降级会让每个面板常态 `partial`，正是 M3-20「每天报历史观察」的教训。
+   * 所以它单独成字段 `asOfSource`（点名）+ `asOfSpread`（差距），而不是塞进 `issues` 的降级语义。
+   */
+  const asOfSource =
+    oldest === undefined
       ? undefined
-      : new Date(Math.min(...observedAt.map((date) => date.getTime()))).toISOString();
+      : {
+          tool: oldest.tool,
+          at: oldest.at.toISOString(),
+          trailingMs: Math.max(
+            0,
+            ...contributors.map((item) => item.at.getTime() - oldest.at.getTime()),
+          ),
+        };
 
   return {
     status,
     ...(asOf === undefined ? {} : { asOf }),
+    ...(asOfSource === undefined || asOfSource.trailingMs === 0 ? {} : { asOfSource }),
     checkedTools,
     issues,
   };

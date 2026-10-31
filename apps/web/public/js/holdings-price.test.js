@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { holdingPriceView, holdingSortValue, holdingsTotalsView } from './holdings-price.js';
+import {
+  holdingPriceView,
+  holdingSortValue,
+  holdingsTotalsView,
+  quoteFreshnessView,
+} from './holdings-price.js';
 
 /**
  * task-26：`apps/web` 的持仓价格判据。
@@ -84,5 +89,33 @@ describe('task-26 合计层', () => {
       canShowTotals: true,
       note: null,
     });
+  });
+});
+
+describe('task-30 报价时点渲染（档位来自服务端，这里只渲染）', () => {
+  it('有分档时渲染「label · 时点」，tone 跟随服务端', () => {
+    const live = quoteFreshnessView({
+      quoteObservedAt: '2026-11-02T01:30:00.000Z',
+      quoteFreshness: { tier: 'live', tone: 'factual', label: '当日报价' },
+    });
+    expect(live.text).toBe('当日报价 · 2026-11-02T01:30:00.000Z');
+    expect(live.tone).toBe('factual');
+
+    const stale = quoteFreshnessView({
+      quoteObservedAt: '2026-10-28T07:00:00.000Z',
+      quoteFreshness: { tier: 'stale', tone: 'warning', label: '陈旧报价' },
+    });
+    expect(stale.tone).toBe('warning');
+    expect(stale.text).toContain('陈旧报价');
+  });
+
+  it('没有分档 / 没有时点时显示「时点未知」，不显示 undefined、不省略', () => {
+    expect(quoteFreshnessView({}).text).toBe('时点未知');
+    expect(quoteFreshnessView({}).tone).toBe('warning');
+    const unknown = quoteFreshnessView({
+      quoteFreshness: { tier: 'unknown', tone: 'warning', label: '报价时点未知' },
+    });
+    expect(unknown.text).toContain('时点未知');
+    expect(unknown.text).not.toContain('undefined');
   });
 });

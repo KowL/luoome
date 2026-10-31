@@ -665,7 +665,7 @@ describe('S3 静态守卫：缺席字段不得被补成 0', () => {
   });
 });
 
-import { reminderGapsView } from './projection.js';
+import { holdingQuoteView, holdingsStaleSummary, reminderGapsView } from './projection.js';
 
 describe('S4 提醒要素缺口：两个数分开', () => {
   it('separates undelivered from not-applicable, and never calls the latter a failure', () => {
@@ -758,5 +758,50 @@ describe('mergeOverviewSection 的整面板字段', () => {
       nextWith({ health: { status: 'unavailable' }, results: { t: { ok: true, data: {} } } }),
     );
     expect(merged.health).toEqual({ status: 'unavailable' });
+  });
+});
+
+// task-30：持仓报价时点与陈旧计数的展示投影（判据全来自服务端）。
+
+describe('task-30 持仓报价时点展示', () => {
+  it('有分档时显示「档位 · 时点」，tone 跟随服务端', () => {
+    const live = holdingQuoteView({
+      quoteObservedAt: '2026-11-02T01:30:00.000Z',
+      quoteFreshness: { tier: 'live', tone: 'factual', label: '当日报价' },
+    });
+    expect(live.text).toContain('当日报价');
+    expect(live.text).toContain('2026-11-02T01:30:00.000Z');
+    expect(live.tone).toBe('factual');
+
+    const stale = holdingQuoteView({
+      quoteObservedAt: '2026-10-28T07:00:00.000Z',
+      quoteFreshness: { tier: 'stale', tone: 'warning', label: '陈旧报价' },
+    });
+    expect(stale.tone).toBe('warning');
+  });
+
+  it('时点缺失时显示「时点未知」，不显示 undefined / 不省略', () => {
+    const view = holdingQuoteView({
+      quoteFreshness: { tier: 'unknown', tone: 'warning', label: '报价时点未知' },
+    });
+    expect(view.text).toContain('时点未知');
+    expect(view.text).not.toContain('undefined');
+    expect(view.tone).toBe('warning');
+  });
+
+  it('服务端没给分档时同样显示「时点未知」（不假装最新）', () => {
+    expect(holdingQuoteView({}).text).toBe('时点未知');
+    expect(holdingQuoteView({}).tone).toBe('warning');
+  });
+
+  it('陈旧计数：0 是确定结论，不是缺失', () => {
+    expect(holdingsStaleSummary({ staleCount: 0 })).toEqual({
+      staleCount: 0,
+      text: '全部持仓报价在可用时效内',
+      tone: 'factual',
+    });
+    expect(holdingsStaleSummary({ staleCount: 3 }).text).toContain('3 只');
+    expect(holdingsStaleSummary({ staleCount: 3 }).tone).toBe('warning');
+    expect(holdingsStaleSummary({}).text).toBe('时点未知');
   });
 });

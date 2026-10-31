@@ -83,3 +83,63 @@ describe('REQ-M3-09 缺价诚实化', () => {
     expect(summary.totalPnLPct).toBe(0);
   });
 });
+
+// task-30：报价时间与时效分档（**与缺价正交**）。
+describe('task-30 报价时点', () => {
+  const quoteAt = (at: Date): Quote =>
+    ({
+      stockId: '600519.SH',
+      ts: at,
+      observedAt: at,
+      open: money(10),
+      high: money(10),
+      low: money(10),
+      close: money(10),
+      volume: 1000,
+      source: 'fixture',
+    }) as Quote;
+  const tradingNow = new Date('2026-11-02T02:00:00.000Z'); // 周一 10:00 上海（盘中）
+  const yesterdayClose = new Date('2026-10-30T07:00:00.000Z'); // 上一交易日 15:00
+
+  it('有价时输出 quoteObservedAt 与分档；当日 = live', () => {
+    const today = new Date('2026-11-02T01:30:00.000Z');
+    const item = enrichHolding(holding(), quoteAt(today), 'A', null, undefined, {
+      now: tradingNow,
+      session: 'trading',
+    });
+    expect(item.priceStatus).toBe('priced');
+    expect(item.quoteObservedAt?.toISOString()).toBe(today.toISOString());
+    expect(item.quoteFreshness?.tier).toBe('live');
+  });
+
+  // ② 核心验收：同一份昨日数据，盘前 factual / 盘中 warning。
+  it('同一份上一交易日数据：盘前 factual、盘中 warning（依赖 marketSession，不是靠日期蒙对）', () => {
+    const preOpen = enrichHolding(holding(), quoteAt(yesterdayClose), 'A', null, undefined, {
+      now: tradingNow,
+      session: 'pre-open',
+    });
+    expect(preOpen.quoteFreshness?.tier).toBe('prior-session');
+    expect(preOpen.quoteFreshness?.tone).toBe('factual');
+
+    const trading = enrichHolding(holding(), quoteAt(yesterdayClose), 'A', null, undefined, {
+      now: tradingNow,
+      session: 'trading',
+    });
+    expect(trading.quoteFreshness?.tier).toBe('stale');
+    expect(trading.quoteFreshness?.tone).toBe('warning');
+  });
+
+  // ① 时间缺失 ≠ 价格缺失：有价但不知多旧 → unknown（仍 priced）。
+  it('有价但没有观测时间 → priced + unknown（不是 unpriced、不是 live）', () => {
+    const noTime = { ...(quoteAt(tradingNow) as unknown as Record<string, unknown>) };
+    delete noTime.observedAt;
+    const item = enrichHolding(holding(), noTime as unknown as Quote, 'A', null, undefined, {
+      now: tradingNow,
+      session: 'trading',
+    });
+    expect(item.priceStatus).toBe('priced');
+    expect(item.quoteObservedAt).toBeUndefined();
+    expect(item.quoteFreshness?.tier).toBe('unknown');
+    expect(item.quoteFreshness?.tone).toBe('warning');
+  });
+});

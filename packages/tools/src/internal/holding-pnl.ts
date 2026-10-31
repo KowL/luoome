@@ -1,5 +1,6 @@
 import {
   addMoney,
+  classifyQuoteFreshness,
   type Holding,
   HoldingSchema,
   type Money,
@@ -10,10 +11,20 @@ import {
   percentage,
   type Quote,
   QuoteSchema,
+  type QuoteSession,
 } from '@luoome/core';
 import { z } from 'zod';
 
 /** 缺价原因的统一文案：渲染层直接用它，不再各自拼。 */
+/** 报价时效分档的 schema（与 core 的 `classifyQuoteFreshness` 输出一一对应）。 */
+export const QuoteFreshnessSchema = z
+  .object({
+    tier: z.enum(['live', 'prior-session', 'stale', 'unknown']),
+    tone: z.enum(['factual', 'warning']),
+    label: z.string().min(1),
+  })
+  .strict();
+
 export const HOLDING_PRICE_UNAVAILABLE = '缺价：该标的没有可用行情，成本价不代表现价';
 
 /**
@@ -40,8 +51,14 @@ export const enrichHolding = (
   previousClose: Money | null = null,
   /** 缺价时的具体原因；缺省为「没有可用行情」。调用方按库内事实选更准的那句。 */
   unavailableReason: string = HOLDING_PRICE_UNAVAILABLE,
+  /** 分档参照时刻与时段（task-30）：阈值与措辞全在 core，这里只传事实。 */
+  freshnessContext?: { readonly now: Date; readonly session: QuoteSession },
 ): HoldingPnl => {
   const cost = money(holding.avgCost * holding.quantity);
+  const freshness =
+    freshnessContext === undefined
+      ? undefined
+      : classifyQuoteFreshness(quote?.observedAt, freshnessContext.now, freshnessContext.session);
   if (quote === undefined) {
     return {
       holding,
@@ -53,6 +70,7 @@ export const enrichHolding = (
       cost,
       todayPnl: null,
       todayPnlPct: null,
+      ...(freshness === undefined ? {} : { quoteFreshness: freshness }),
     };
   }
   const currentPrice = quote.close;
@@ -79,6 +97,9 @@ export const enrichHolding = (
     ...(pnlPct === undefined ? {} : { pnlPct }),
     todayPnl,
     todayPnlPct,
+    // 有价就要能说清「多旧」：观测时间恒给（缺席即 `unknown` 档），分档由 core 算。
+    ...(quote.observedAt === undefined ? {} : { quoteObservedAt: quote.observedAt }),
+    ...(freshness === undefined ? {} : { quoteFreshness: freshness }),
   };
 };
 
@@ -113,6 +134,15 @@ export const HoldingPnlSchema = z
     todayPnl: MoneySchema.nullable(),
     /** 今日涨跌幅 = (现价 − 昨收) / 昨收。 */
     todayPnlPct: PercentageSchema.nullable(),
+    /**
+     * 该股报价的观测时间（task-30）。**与价格缺失正交**：
+     * `priceStatus: 'priced'` 但 `quoteObservedAt` 缺席 = 「有价但不知多旧」（tier `unknown`）。
+     *
+     * 档位：**缺席**（不是 null、不是 ''）——「不知道」和「没有」必须分开表达。
+     */
+    quoteObservedAt: z.coerce.date().optional(),
+    /** 报价时效分档（阈值全在 core 的 `classifyQuoteFreshness`）。 */
+    quoteFreshness: QuoteFreshnessSchema.optional(),
   })
   .strict();
 

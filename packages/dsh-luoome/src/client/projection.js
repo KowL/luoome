@@ -559,3 +559,42 @@ export const reminderGapsView = (summary) => {
     notApplicableTone: 'factual',
   };
 };
+
+/**
+ * 持仓报价时点的展示投影（task-30）。
+ *
+ * **判据全部来自服务端**：`quoteFreshness.tier/tone/label` 由 core 的
+ * `classifyQuoteFreshness` 算出（阈值在 core，client 零魔数）。
+ * 这里只决定「显示什么字符串」，不再自己判断新旧。
+ */
+export const holdingQuoteView = (item) => {
+  const freshness = item?.quoteFreshness;
+  const observedAt =
+    typeof item?.quoteObservedAt === 'string' && item.quoteObservedAt.length > 0
+      ? item.quoteObservedAt
+      : null;
+  if (freshness === undefined || freshness === null)
+    // 服务端没给分档（老载荷）：显示「时点未知」，不假装是最新的。
+    return { tone: 'warning', text: `${UNKNOWN_TIME_TEXT}`, tier: 'unknown' };
+  const stamp = observedAt === null ? UNKNOWN_TIME_TEXT : observedAt;
+  return {
+    tone: freshness.tone === 'warning' ? 'warning' : 'factual',
+    tier: typeof freshness.tier === 'string' ? freshness.tier : 'unknown',
+    text: `${freshness.label ?? UNKNOWN_TIME_TEXT} · ${stamp}`,
+  };
+};
+
+/** 顶层陈旧计数（0 是**确定结论**「没有陈旧数据」，不是缺失）。 */
+export const holdingsStaleSummary = (summary) => {
+  const staleCount = Number.isInteger(summary?.staleCount) ? summary.staleCount : null;
+  return {
+    staleCount,
+    text:
+      staleCount === null
+        ? UNKNOWN_TIME_TEXT
+        : staleCount === 0
+          ? '全部持仓报价在可用时效内'
+          : `${staleCount} 只持仓报价陈旧或时点未知`,
+    tone: staleCount !== null && staleCount > 0 ? 'warning' : 'factual',
+  };
+};

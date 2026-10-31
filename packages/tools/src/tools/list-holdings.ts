@@ -1,4 +1,5 @@
 import {
+  computeMarketSession,
   dateInShanghai,
   type Money,
   MoneySchema,
@@ -6,7 +7,6 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool, errNotFound } from '../define-tool.js';
 import {
   enrichHolding,
@@ -43,6 +43,18 @@ export const ListHoldingsOutput = z
     totalCost: MoneySchema,
     totalPnL: MoneySchema.optional(),
     totalPnLPct: PercentageSchema.optional(),
+    /**
+     * 报价时效的顶层聚合（task-30）：**取最旧**，与 `panel-health` 的聚合 `asOf` 同口径。
+     *
+     * 档位：**缺席** = 没有任何持仓带报价时间（无法给出上界时不给数字）。
+     */
+    quoteAsOf: z.coerce.date().optional(),
+    /**
+     * 落在 `stale` / `unknown` 档的持仓数——用户不该为了知道「有没有陈旧数据」而逐行扫。
+     *
+     * 档位：`0` = **确定结论**「没有陈旧数据」，不是缺失。
+     */
+    staleCount: z.number().int().nonnegative(),
     /**
      * 缺价持仓数；>0 时上面三个合计字段**缺席**。
      *
@@ -83,6 +95,9 @@ export const listHoldingsTool = defineTool({
      */
     const quotes = await ctx.repos.quote.latestByStocks(stockIds);
     const previousCloses = await resolvePreviousCloses(ctx, stockIds);
+    // 时效分档的参照时刻与交易时段（task-30）：阈值在 core，这里只取事实。
+    const now = ctx.clock();
+    const session = computeMarketSession(now);
     const items = await Promise.all(
       holdings.map(async (holding) => {
         const stock = await ctx.repos.stock.findById(holding.stockId);
@@ -95,16 +110,29 @@ export const listHoldingsTool = defineTool({
           // 缺价原因按库内事实区分：库里有行但不在当日 = 过期；一行都没有 = 从未有过。
           // （`latestByStocks` 返回的是**最新一行**，所以「有行」⇔「历史上有过报价」。）
           HOLDING_PRICE_STALE,
+          { now, session },
         );
       }),
     );
 
     // 经 schema parse：把「字段缺席」落到输出类型上，避免可选字段被推断成全量。
+    // 顶层聚合（task-30）：取最旧报价时点（与 panel-health 同口径）+ 陈旧计数（0 是确定结论）。
+    const observedTimes = items.flatMap((item) =>
+      item.quoteObservedAt === undefined ? [] : [item.quoteObservedAt.getTime()],
+    );
+    const staleCount = items.filter(
+      (item) =>
+        item.quoteFreshness === undefined ||
+        item.quoteFreshness.tier === 'stale' ||
+        item.quoteFreshness.tier === 'unknown',
+    ).length;
     return ListHoldingsOutput.parse({
       accountId,
       status: input.status,
       holdings: items,
       ...summarizePnl(items),
+      ...(observedTimes.length === 0 ? {} : { quoteAsOf: new Date(Math.min(...observedTimes)) }),
+      staleCount,
     });
   },
 });
