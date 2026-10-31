@@ -46,6 +46,7 @@ import {
   StockSchema,
   StrategySchema,
   StrategyVersionSchema,
+  StrategyWatchlistSubscriptionSchema,
   TradeSchema,
   TradingPlanSchema,
   WorkflowRunSchema,
@@ -143,6 +144,11 @@ const PAIRS: readonly Pair[] = [
     table: schema.strategyVersions,
   },
   {
+    name: 'StrategyWatchlistSubscription ↔ strategy_watchlist_subscriptions',
+    entity: StrategyWatchlistSubscriptionSchema,
+    table: schema.strategyWatchlistSubscriptions,
+  },
+  {
     name: 'SignalObservation ↔ signal_observations',
     entity: SignalObservationSchema,
     table: schema.signalObservations,
@@ -238,7 +244,6 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   strategySchedules: 'pending',
   strategySignals: 'pending',
   strategySignalStates: 'pending',
-  strategyWatchlistSubscriptions: 'pending',
   watchRuleStates: 'pending',
   watchRuns: 'pending',
   watchTriggers: 'pending',
@@ -263,7 +268,7 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   stockUniverseMemberships: 'internal: 成员状态表，实体是聚合视图 StockUniverseSnapshot',
   stockUniverseSyncRuns: 'internal: 同步运行记账，实体是聚合视图 StockUniverseSnapshot',
   strategyRunLeases: 'internal: 运行租约（fence/heartbeat）',
-  watchExecutionLease: 'internal: 单行执行租约',
+  watchExecutionLease: 'internal: 单行执行租约，无 core 行实体（DDL 侧已由 client.test.ts 覆盖）',
 };
 
 const drizzleTableMarker = Symbol.for('drizzle:IsDrizzleTable');
@@ -385,6 +390,6 @@ describe('实体 schema ↔ 表列集对账守卫', () => {
     const names = PAIRS.map((pair) => pair.name);
     expect(names).toContain('AdviceOutcome ↔ advice_outcomes');
     expect(names).toContain('AnalysisContext ↔ analysis_contexts');
-    expect(PAIRS.length).toBeGreaterThanOrEqual(18);
+    expect(PAIRS.length).toBeGreaterThanOrEqual(19);
   });
 });

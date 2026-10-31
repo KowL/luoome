@@ -2125,6 +2125,7 @@ export const schema = {
   strategyBacktestRuns,
   strategyBacktestMarketFacts,
   strategyAutonomyActions,
+  strategyWatchlistSubscriptions,
   signalObservations,
   notifications,
   // v0.6 起
@@ -2137,6 +2138,7 @@ export const schema = {
   watchlistMembers,
   watchlistMemberSources,
   watchlistSyncRuns,
+  watchExecutionLease,
   membershipSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
   researchTopicIndex,
