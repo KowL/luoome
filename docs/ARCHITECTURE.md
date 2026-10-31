@@ -1310,6 +1310,82 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 > 日常交互分析经 `luoome-analysis` 实例的 `record_*` 直接写回，不创建 `analysis_job`；
 > 本场景仅在手动/隔离 worker 验收时使用，空队列不会产生任何模型请求。
 
+### 11.1 同一语义的两处实现：有意不同清单（task-25 排查留痕）
+
+> **本节的目的**：M3b 期间「同一语义两个实现」出现过多次，其中一部分是**刻意如此**。
+> 本节逐条记录「为什么有意不同」与「各自的适用范围」——**不要因为看起来像 bug 就顺手统一**。
+> 发现新的「同一语义两实现」时：先判断属于本节哪一类，不属于才动代码。
+> 排查清单见 `output/dsh-brainstorm/review/t25-same-semantics-two-impls.md`。
+
+#### 11.1.1 有意不同（6 项）
+
+| # | 两个实现 | 为什么有意不同 | 适用范围 |
+|---|---|---|---|
+| 1 | **Advice 过期**（`packages/tools/src/internal/advice-selection.ts:44`，注入时钟 `ctx.clock()`） vs **TradingPlan 有效期**（`packages/workflows/src/intraday-trading-plan-watch.ts:605`） | 两种实体、两种写回纪律：Advice 的可用窗口由 core 时效规则决定（含当日 15:00 截断、当日口径），TradingPlan 的有效期是计划自身字段。合并会把两种时效纪律缠在一起 | Advice 侧只认 `selectAdvices`；TradingPlan 侧只认 `validFrom/validUntil`。**边界比较符（`>` vs `>=`）两处必须显式写，不许抽成「顺手」的共享函数** |
+| 2 | **账户健康**：`get_account_facts`（账本完整性：现金/持仓与成交对账） vs `get_portfolio_risk`（价格覆盖：未定价持仓） | 两个**独立维度**：账本是否自洽 ≠ 价格是否齐全。合并会让「手工录入持仓（无对应成交）」这类合法路径被整体打成 `unavailable`（误报） | 同一账户可能出现「facts 说 unavailable、risk 说 available」——这是**正常**，不是矛盾。两者各自在输出里披露自己的维度，**不做整体降级** |
+| 3 | **报告写入口**：`save_report`（`packages/tools/src/internal/workflow-only-tools.ts:52`，**workflow-only，无 agent 面入口**） vs `write_report_artifact`（`packages/dsh-luoome/src/host/report-artifact-operations.ts`，**operation policy，模型可经 prepare/confirm 调用**） | **写库 = 改事实**，只能由 workflow 在算完全部事实后一次性提交；**写文件 = 产出交付物**，可由模型按用户明确意图触发。这是**刻意的不对称** | 想给模型「存报告」的能力时，不要顺手把 `save_report` 加进 policy——那会让模型可以不经事实装配直接写库。要交付文件就调 `write_report_artifact` |
+| 4 | **交易日历**：core `previousTradingDate`（`packages/core/src/trading-calendar.ts:230`，入参 `Date`） vs `previousTradingDay`（`packages/workflows/src/opening-report.ts:44`，入参 `string`） | 签名不同（Date vs 日期字符串），但**语义相同**。core 版是唯一日历事实源；workflow 版目前自带一份 `isWeekend/isHoliday` 循环 | **两者当前结果一致**（都按上海日倒推）。下一轮统一时应把 workflow 版改成 `previousTradingDate(shanghaiDate(date))` 的薄包装——**在此之前，新增日历逻辑不许多出第三份** |
+| 5 | **交易日键 vs 日历日**：`DailyBar.date` / `factDate`（UTC 午夜键，`packages/core/src/strategy/fact-date.ts:54`） vs `dateInShanghai`（用户可见日历日） | **必须不同**：bar 的日期是全仓约定（`tradingMidnight` = UTC 午夜），事实日和回测窗口都建在它上面；用户可见日期是 Asia/Shanghai 自然日。把两者统一会让已落库的 bar 日期整体错位 | 行情/事实/回测**一律用交易日键**；报告期、文件名、展示**一律用上海日**。判据是「这个日期会不会拿去和已落库的 bar 比对」 |
+| 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
+
+#### 11.1.2 「缺数据」的表达优先级：`缺席 > null > 0`（**可引用规则**）
+
+同一个缺失概念有三种表达，**优先级固定**，越靠前越诚实：
+
+| 表达 | 含义 | 适用场景 | 反例（本仓库真实发生过） |
+|---|---|---|---|
+| **字段缺席** | 「这个值**不存在**」——连计算它的分母都不存在 | 缺价导致市值/盈亏整体不成立（`packages/tools/src/internal/holding-pnl.ts` 的 `currentPrice`/`marketValue`/`pnl`/`pnlPct`）；上限/下限本身未配置 | 旧实现用 `avgCost` 顶替缺价，于是 `pnlPct` 算出 **0%** 并渲染成 `0.00%`——**用户看到的假结论**，比「没有数字」坏得多 |
+| **`null`** | 「值**存在但未知**」——基准缺失导致这一项算不出来，但对象本身是有效的 | 昨收缺失时的 `todayPnl`（不伪造基准）；`totalTodayPnl` 任一项缺失即 `null` | 用 `0` 表示「昨收未知」，会让「今日没涨没跌」和「算不出来」看起来一样 |
+| **`0`** | 「**真值就是 0**」 | 有价且成本等于市值（真实零盈亏）；空持仓账户的合计 | 因「算不出来」而给 `0`，等于把缺失伪装成结论 |
+
+**违反的后果**（活教材）：REQ-M3-09 S3 修的就是这条——缺价被兜底成成本价，`pnlPct` 输出 `0%`，
+渲染层显示 `0.00%`。这不是「少了一个数字」，而是**用户会把它当成真实结论**。
+**新增字段时必须显式选择三档之一，并在字段注释里写明选了哪档、为什么。**
+
+client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的静态守卫禁止对
+`pnlPct / todayPnlPct / currentPrice / marketValue / totalPnL / totalPnLPct / totalValue` 写 `?? 0` / `|| 0`。
+
+#### 11.1.3 建议账户归属的三层职责（不要在外面再加一层）
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 判定 | `adviceAttribution`（`packages/tools/src/internal/account-advice-outcomes.ts:78`） | 对**一条**建议给出归属结论：`this-account` / `other-account` / `undetermined` / `unscoped`。判据顺序：复盘记录认领 → strategy 快照 `accountId` → portfolio `subjectId` → position 所属持仓 → analysis context → 无信号（stock 可能被他账户认领，其余判 unscoped） |
+| 过滤 | `accountScopedAdvices`（同文件 `:127`） | 对**一批**建议套用上面的判定，只留 `this-account`。**不重复实现判定** |
+| 选择 + 统计 | `selectAdvices`（`packages/tools/src/internal/advice-selection.ts:37`） | 过期过滤（注入时钟）→ 账户过滤（调 `adviceAttribution`）→ limit 截断，并额外统计 `unattributedCount`（「因没有任何账户认领而没进列表」的条数，缺数据要说不许静默丢弃） |
+
+顺序固定：**账户过滤 → 过期过滤 → limit 截断**。先截断再过滤会让「前 N 条都不属于本账户」把结果误压成空。
+`get_advice` / `list_advices` 走 `selectAdvices`；`get_advice_stats` / `get_confidence_calibration` /
+`get_strategy_decision_cycles` 走 `accountScopedAdvices` 后再各自聚合——**两条路径共用同一个判定内核**，
+新增消费方只能二选一复用，**不许再写第三份归属逻辑**。
+
+#### 11.1.4 成交方向词与立场词：两张表，不许合并
+
+| 概念 | 表 | 词面 | 语义 |
+|---|---|---|---|
+| **成交方向**（账本事实） | `Trade.side`：`buy` / `sell` | 展示词「买入 / 卖出」 | 「这笔成交实际发生在哪个方向」——已记账的事实 |
+| **投资立场**（研究结论） | `Advice.decision`：`buy/sell/hold/watch/avoid` | 报告面 `REPORT_STANCE_LABELS`（看多 / 看空 / 观望 / 观察 / 回避） | 「研究结论倾向」——不是动作，也不是既成事实 |
+
+**不许合并的原因**：把成交方向换成立场词（「看多」）会让**账本事实看起来像建议**；
+把立场词换成成交词（「买入」）会让**建议看起来像已执行的动作**（这正是 REQ-M3-08 文本禁令要防的）。
+今天的现状是**同一笔成交在收盘报告写「买入/卖出」、在周报写 `buy`/`sell`**——这是待统一项（task-25 U1），
+但统一的目标是**一张「成交事实词」表**，**不是**合并进 `REPORT_STANCE_LABELS`。
+另外：报告文本禁令的 `REPORT_FACTUAL_FIELD_KEYS.side` 白名单豁免的是**成交事实字段**，
+词面统一后这条豁免才不再取决于「写中文还是英文」。
+
+#### 11.1.5 五段概念：三处渲染，一份定义
+
+`结论 / 反证 / 风险 / 有效期 / 免责` 这个概念现在有三处渲染实现：
+
+| 位置 | 形态 |
+|---|---|
+| `packages/core/src/entity/advice-card.ts:18` `ADVICE_CARD_SEGMENTS` | 建议卡片（`renderable` / `blocked` + `missing[]`） |
+| `packages/core/src/entity/report-document.ts` + `workflows/src/internal/report-envelope.ts` | 报告 envelope（`REPORT_ENVELOPE_SECTION_KEYS`，六槽：另含 `dataAsOf`） |
+| `packages/tools/src/internal/report-notification.ts` | 通知摘要（第二套措辞，只做裁剪） |
+
+**现状**：三处**同构但独立**——任一处的段名/阻断规则改动，另外两处不会跟着变，且没有测试能发现。
+**结论**：这是待统一项（task-25 U2/U3），**必须一批做**（抽 core 的段常量 + `missingSegments()`，三处引用），
+不许只改一处。在统一前，改任一处必须在另外两处加对照断言。
+
 ## 12. 安全模型
 
 详见 [SECURITY.md](./SECURITY.md)。要点：
