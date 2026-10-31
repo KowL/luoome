@@ -64,6 +64,14 @@ describe('stock-universe/TushareStockUniverseAdapter', () => {
     ]);
     expect(snapshot.entries[0]?.industry).toBe('白酒');
     expect(snapshot.entries[2]?.delistDate).toEqual(new Date('2026-12-31T00:00:00.000Z'));
+    // tushare stock_basic 是唯一同时给行业/上市/退市日期的目录源。
+    expect(snapshot.attributeCoverage).toEqual([
+      'listingStatus',
+      'stStatus',
+      'industry',
+      'listDate',
+      'delistDate',
+    ]);
   });
 
   it('上游忽略 list_status 返回重复全集时按 stockId 去重，先出现的状态优先', async () => {

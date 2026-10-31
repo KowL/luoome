@@ -527,6 +527,8 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
       action?.evaluationSessionId ?? '',
     );
     expect(session?.status).toBe('complete');
+    // 验证 session 属前瞻轨：provenance 必须记成 prospective，否则零信号日会被误标成 restated。
+    expect(session?.origin).toBe('prospective');
     expect(await ctx.repos.strategyEvaluation.listDays(session?.id ?? '')).toHaveLength(20);
     expect(
       await ctx.repos.strategyEvaluation.findSessionById(original.evaluationSessionId as string),

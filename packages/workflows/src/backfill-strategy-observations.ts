@@ -92,7 +92,9 @@ const VINTAGE_LIMITATIONS = [
 
 const replay: WorkflowStep = async (previous, ctx) => {
   const input = previous as BackfillStrategyObservationsInputT;
-  const replayed = await replayStrategyRangeWorkflow.run(input, ctx);
+  // provenance=backfill：这条轨的观察恒为 restated，所以 session 记下来源轨，
+  // 让零信号日（有评分横截面、无观察可贴标签）也能按 restated 参与统计层计算。
+  const replayed = await replayStrategyRangeWorkflow.run({ ...input, origin: 'backfill' }, ctx);
   if (!replayed.ok) return replayed;
   const output: BackfillStrategyObservationsOutputT = {
     sessionId: replayed.data.sessionId,

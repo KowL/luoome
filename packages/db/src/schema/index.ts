@@ -1050,6 +1050,7 @@ export const strategyEvaluationSessions = sqliteTable(
     stockIdChecksum: text('stock_id_checksum'),
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
     error: text('error'),
+    origin: text('origin').$type<StrategyEvaluationSession['origin']>(),
   },
   (t) => ({
     strategyCreatedIdx: index('strategy_evaluation_sessions_strategy_created_idx').on(

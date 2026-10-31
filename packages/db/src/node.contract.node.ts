@@ -1569,6 +1569,7 @@ const fullFixture = (): Record<string, DataImportRow> => {
       stock_id_checksum: null,
       finished_at: T1,
       error: null,
+      origin: null,
     },
     strategy_research_states: {
       strategy_id: 'strategy-a',

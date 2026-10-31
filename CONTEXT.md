@@ -267,7 +267,49 @@ SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 too
 退出/回避等动作与价格涨跌方向分开，入场用价格区间而非单个价格。目标仓位用**区间**表达：
 `targetPctRange{min,max}` 单位为百分点（0–100，与 `currentPct`/单票上限同量纲），并记录本次选点
 `rangePick`（`lower-bound`/`mid`/`volatility-scaled`，后者必须带可复算参数）、实际落点 `appliedPct`
-与降级值 `fallbackPct`（等于区间下限）。区间宽度取「分层上限（max≤10→4、≤20→6、其余 8）与
+与降级值 `fallbackPct`（等于区间下限）。
+`volatility-scaled` 的波动率口径是 `daily_bars` 上最近 20 个交易日收益率（收盘价环比）的总体标准差
+（百分点，与 `volatility-20` 同一定义）：分档 1.5/2.5/4/6 依次对应落点占区间宽度的 100%/67%/33%/0%，
+波动越大越靠下限。窗口取「最近 21 **根 bar**」，不是「最近 21 个自然日」：停牌期间通常不产生 bar，
+按 bar 取才能拿到 21 个真实收盘价。窗口与 σ 同属可复算事实，随计划落库
+（`rangePick.windowStart/windowEnd/barsCount`，窗口跨停牌时另有 `maxGapTradingDays` 记录相邻 bar 之间
+缺了几个交易日），因此「这个 σ 是哪 21 根 bar 算的」只凭计划就能回答；本字段引入前的旧计划没有它们，
+读侧不强制。
+
+「停牌不产生 bar」是上游 provider 的**常见行为，不是写入侧的保证**：`sync_daily_bars` 只丢弃未收盘的
+当日 bar（`dropUnclosedBars`），既不丢 `volume === 0` 的行、也不校验日期是不是交易日；adapter 也只过滤
+非正 OHLC。若 provider 在停牌期仍写一条 `volume=0`、收盘价微动的 bar，`stalenessTradingDays` 会恒为 0，
+新鲜度闸门完全失效，只剩 σ 下限兜底——而「volume=0 + 价格微动 > 0.1%」恰好能穿过 σ 下限、拿到接近
+区间上限的仓位。因此 σ 的**样本口径**是：只有「正好相差 1 个交易日、且两端都有成交」的 bar 对才产生
+收益率，有效收益率必须满 20 个；不足即判 `insufficient-volatility`。跨断档的那个收益率是多日收益、
+不是日收益，剔除它是定义问题（不需要「gap 多大算不可用」的阈值）；零成交 bar 是停牌占位，不是
+「一笔成交价为 0 的交易」。`volume` 的数值仍不参与 σ（与 `volatility-20` 同口径，只用收盘价环比），
+它只用来判断这根 bar 是不是真实成交。
+
+选点前有三道闸门，任一不过即降级为 `lower-bound`，并在 `constraintReasons` 写明原因与当次阈值：
+
+- **σ 下限**：`σ < 0.1` 视为「没有有效价格」，不是「最安全」。21 根 bar 收益率为 0 在 A 股几乎只可能
+  是停牌或长期无成交，若当成低波动，第一档就会给出区间上限（最大仓位），方向完全反了。语义是
+  「样本无效」，与「波动很小」区分开。
+- **样本新鲜度**：最新日线停更超过 5 个交易日即视为过期，不把两个月前的窗口当「当前波动率」。
+  语义是「样本旧了」，与「样本无效」是两种降级：前者是数据没跟上，后者是数据本身不代表可交易价格。
+- **有效收益率个数**：21 根 bar 里只要有一对跨断档或含零成交 bar，就凑不满 20 个日收益率，
+  同样判 `insufficient-volatility`。回执里 `returnsCount` / `zeroVolumeBars` / `maxGapTradingDays`
+  区分成因（「跨停牌」与「σ 过低」不是一回事），`ok` 项的 `maxGapTradingDays` 恒为 0。
+
+日线样本本身不足时**不猜**波动率，同样降级为 `lower-bound` 并写明「波动率不可用」。
+两个阈值都是**未标定的经验值**（默认 0.1 / 5），可按真实分布覆盖
+（`get_daily_volatility.minVolatilityPct`、`trading-plan-daily-cycle` 的 `volatilityMinPct` /
+`volatilityMaxStalenessTradingDays`，或环境变量 `LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT` /
+`LUOOME_TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS`；优先级为显式入参 > 环境变量 > 默认值，
+定时路径不传入参，只能靠环境变量标定）。降级文案写的是**当次实际用的阈值**，所以调阈值不会让历史计划
+失去解释力。标定前需知道：春节等连续长假（休市叠加周末）足以让正常停更跨过 5 个交易日，
+长假前后的复核会被误判成「数据过期」。
+
+行为变更：波动率**低但有效**（例如 1% 上下）的标的现在会命中第一档、落点取区间**上限**，
+执行仓位高于此前恒取 `lower-bound` 时的下限。这是「波动小可以用满计划仓位」的本意，但也意味着
+`appliedPct > min` 成为常态而非例外；`fallbackPct` 仍恒等于 `min`，`lower-bound` 路径与旧单值计划
+行为不变。退化区间（`min = max`）没有可选点，仍记 `lower-bound`。区间宽度取「分层上限（max≤10→4、≤20→6、其余 8）与
 `0.30×max`」中更严者；`add`/`hold` 要求 `min>0`，`exit`/`avoid` 只允许 `{0,0}`，`observe` 未设条件仓位
 时允许 `{0,0}`。`deltaPct` 不再持久化，读取时由 `min/max − currentPct` 派生 `deltaPctMin/Max`；
 旧单值计划（`targetPct`）读取时归一化为退化区间 `{t,t}`，`plan_json` 不被改写。

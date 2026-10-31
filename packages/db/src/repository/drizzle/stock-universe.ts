@@ -4,10 +4,12 @@ import {
   type Stock,
   type StockUniverseApplySummary,
   type StockUniverseRepository,
+  type StockUniverseSnapshotAttributeCoverage,
   type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
   type StStatus,
+  stockUniverseMemberAttributeCoverage,
   stockUniverseMemberIdentity,
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
@@ -356,6 +358,50 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
         ...(row.delistDate === null ? {} : { delistDate: row.delistDate }),
       };
     });
+  }
+
+  /**
+   * 属性覆盖只读 `stock_universe_snapshot_members`（不 join `stocks`，不读当前属性），
+   * 旧行为 NULL → 按「未提供」计，与 `stockUniverseMemberAttributeCoverage` 同一判定。
+   */
+  async describeSnapshotAttributes(
+    syncId: string,
+  ): Promise<StockUniverseSnapshotAttributeCoverage | null> {
+    const run = this.db
+      .select({
+        source: stockUniverseSyncRuns.source,
+        observedAt: stockUniverseSyncRuns.observedAt,
+      })
+      .from(stockUniverseSyncRuns)
+      .where(eq(stockUniverseSyncRuns.id, syncId))
+      .get();
+    if (run === undefined) return null;
+    const members = this.db
+      .select({
+        listingStatus: stockUniverseSnapshotMembers.listingStatus,
+        stStatus: stockUniverseSnapshotMembers.stStatus,
+        industry: stockUniverseSnapshotMembers.industry,
+        listDate: stockUniverseSnapshotMembers.listDate,
+        delistDate: stockUniverseSnapshotMembers.delistDate,
+      })
+      .from(stockUniverseSnapshotMembers)
+      .where(eq(stockUniverseSnapshotMembers.syncId, syncId))
+      .all();
+    return {
+      syncId,
+      source: run.source,
+      observedAt: run.observedAt,
+      memberCount: members.length,
+      provided: stockUniverseMemberAttributeCoverage(
+        members.map((member) => ({
+          listingStatus: (member.listingStatus ?? 'unknown') as ListingStatus,
+          stStatus: (member.stStatus ?? 'unknown') as StStatus,
+          ...(member.industry === null ? {} : { industry: member.industry }),
+          ...(member.listDate === null ? {} : { listDate: member.listDate }),
+          ...(member.delistDate === null ? {} : { delistDate: member.delistDate }),
+        })),
+      ),
+    };
   }
 
   private snapshotRows(syncId: string) {

@@ -72,6 +72,32 @@ export const StrategyEvaluationSessionStatusSchema = z.enum([
 ]);
 export type StrategyEvaluationSessionStatus = z.infer<typeof StrategyEvaluationSessionStatusSchema>;
 
+/**
+ * evaluation session 的 provenance：创建它的那条轨。
+ *
+ * - `backfill`：回溯轨（backfill-strategy-observations）逐日 replay，观察口径恒为 restated；
+ * - `prospective`：前瞻轨（autonomy 验证 session）推进，观察口径恒为 pit。
+ *
+ * 为什么需要它：`StrategyRun.scope` 对两条轨都是 `evaluation`，区分不出 pit / restated；
+ * 而平静日（有评分横截面、零信号）根本没有观察可判 vintage——于是「贴不上标签」被当成
+ * 「算不出来」，把本来能算的 IC 样本丢掉了。存量 session 无该字段 = provenance 未知，
+ * 消费方必须退回观察判定，**不得**默认成任一口径（H8：restated 不得冒充 pit）。
+ */
+export const StrategyEvaluationSessionOriginSchema = z.enum(['backfill', 'prospective']);
+export type StrategyEvaluationSessionOrigin = z.infer<typeof StrategyEvaluationSessionOriginSchema>;
+
+/**
+ * session provenance → 该 session 逐日 replay 产出的**评分横截面**口径。
+ *
+ * 映射放在 core 而不是各消费方：provenance 是事实（谁创建了 session），vintage 是口径
+ * 判断，两者分开后，新增来源轨时必须显式在这里给出口径，而不是被某个 surface 静默默认。
+ * 未知 provenance 返回 undefined，由调用方退回观察判定。
+ */
+export const strategyEvaluationSessionVintage = (
+  origin: StrategyEvaluationSessionOrigin | undefined,
+): 'pit' | 'restated' | undefined =>
+  origin === undefined ? undefined : origin === 'backfill' ? 'restated' : 'pit';
+
 export const StrategyEvaluationSessionSchema = z
   .object({
     id: z.string().min(1),
@@ -87,6 +113,11 @@ export const StrategyEvaluationSessionSchema = z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
+    /**
+     * 创建期 provenance：只有创建方给值；resume/finish/cancel 都以原值回写，不重新推断。
+     * 缺省 = 未知（存量 session 或不属于两条轨的入口），消费方必须退回观察判定。
+     */
+    origin: StrategyEvaluationSessionOriginSchema.optional(),
     finishedAt: z.coerce.date().optional(),
     error: z.string().min(1).optional(),
   })

@@ -67,6 +67,7 @@ const toSession = (row: SessionRow): StrategyEvaluationSession => ({
   createdAt: row.createdAt,
   ...(row.stockIds === null || row.stockIds === undefined ? {} : { stockIds: [...row.stockIds] }),
   ...(row.stockIdChecksum === null ? {} : { stockIdChecksum: row.stockIdChecksum }),
+  ...(row.origin === null || row.origin === undefined ? {} : { origin: row.origin }),
   ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
   ...(row.error === null ? {} : { error: row.error }),
 });
@@ -287,10 +288,13 @@ export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRe
         finishedAt: parsed.finishedAt ?? null,
         error: parsed.error ?? null,
       })
+      // origin 是创建期 provenance：只有创建方给值；resume/finish/cancel 都以 `{...existing}`
+      // 回写，所以这里一并写回既不会丢 provenance，也和 memory 实现保持同一语义。
       .onConflictDoUpdate({
         target: strategyEvaluationSessions.id,
         set: {
           status: parsed.status,
+          origin: parsed.origin ?? null,
           finishedAt: parsed.finishedAt ?? null,
           error: parsed.error ?? null,
         },

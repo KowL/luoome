@@ -2008,6 +2008,12 @@ export const createWebApp = (
     const started = await startEvaluationSession({
       strategyId: c.req.param('id'),
       ...parsed.data,
+      // provenance 由这条轨声明，不由请求体决定（`StrategyBacktestRequest` 也不接受该字段）：
+      // Web「历史模拟」是对用户给定历史区间**当场逐日 replay 完**（startEvaluationJob 一次推到底，
+      // 不等待未来行情），所以任何观察都只能是事后补算的 restated。标成 prospective 就是把
+      // 回溯补算写成前瞻样本（H8 禁止方向）。将来若改成「未来窗口按日推进」，必须改回
+      // prospective——届时 pit 写入会被 backfill 守卫拒绝，不会静默错标。
+      origin: 'backfill',
     });
     if (!started.ok) return jsonResult(started);
     startEvaluationJob(started.data.session.id, {

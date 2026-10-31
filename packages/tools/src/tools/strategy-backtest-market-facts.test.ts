@@ -114,7 +114,10 @@ const runFor = (id: string, day: Date, selected: readonly string[]): StrategyRun
   publication: undefined,
 });
 
-const seed = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
+const seed = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  options: { readonly degradedUniverse?: boolean } = {},
+) => {
   for (const stockId of [...stockIds, benchmarkId]) {
     const [code, exchange] = stockId.split('.') as [string, 'SH' | 'SZ'];
     await ctx.repos.stock.save({ id: stockId, code: stockCode(code), exchange, name: stockId });
@@ -182,7 +185,7 @@ const seed = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
       syncId: `sync-${day.toISOString()}`,
       appliedAt: day,
       snapshot: {
-        source: 'fixture',
+        source: options.degradedUniverse === true ? 'eastmoney' : 'fixture',
         coverage: 'CN_A_SHARES_SH_SZ',
         observedAt: day,
         complete: true,
@@ -194,9 +197,14 @@ const seed = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
             code: stockCode(code),
             exchange,
             name: stockId,
-            listingStatus: 'listed' as const,
-            stStatus: 'non-st' as const,
-            industry: 'fixture',
+            // 降级形状 = 默认部署（eastmoney/sina）：只有名称派生的 ST 状态。
+            ...(options.degradedUniverse === true
+              ? { listingStatus: 'unknown' as const, stStatus: 'non-st' as const }
+              : {
+                  listingStatus: 'listed' as const,
+                  stStatus: 'non-st' as const,
+                  industry: 'fixture',
+                }),
           };
         }),
       },
@@ -347,6 +355,46 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
       ctx,
     );
     expect(reexecuted.ok && reexecuted.data.run.metrics).toEqual(executed.data.run.metrics);
+  });
+
+  it('默认数据源缺 PIT 属性时，门禁 reason 说明缺哪些字段、来源与补法', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seed(ctx, { degradedUniverse: true });
+    const result = await createStrictStrategyBacktestTool.execute(
+      {
+        strategyId: session.strategyId,
+        evaluationSessionId: session.id,
+        costs,
+      },
+      ctx,
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const items = result.data.run.gateAudit.items;
+    const item = (key: string) => items.find((entry) => entry.key === key);
+
+    // PIT universe 身份/运行本身完整，但属性缺口必须写进同一条 reason。
+    const pit = item('pit-universe');
+    expect(pit).toMatchObject({ status: 'complete' });
+    expect(pit?.reason).toContain('PIT universe 与逐日运行完整');
+    expect(pit?.reason).toContain('快照属性缺口');
+    expect(pit?.reason).toContain('eastmoney');
+    expect(pit?.reason).toContain('上市状态');
+    expect(pit?.reason).toContain('行业');
+    expect(pit?.reason).toContain('上市日期');
+    expect(pit?.reason).toContain('退市日期');
+    expect(pit?.reason).toContain('unknown');
+    expect(pit?.reason).toContain('TUSHARE_TOKEN');
+    expect(pit?.reason).toContain('LUOOME_STOCK_UNIVERSE_SOURCES');
+    expect((pit?.reason ?? '').length).toBeLessThanOrEqual(500);
+
+    // 真正被卡住的可交易性门禁也要指出来源与补法，而不是只说“缺上市状态”。
+    const tradability = item('tradability');
+    expect(tradability).toMatchObject({ status: 'unavailable' });
+    expect(tradability?.reason).toContain('缺上市状态');
+    expect(tradability?.reason).toContain('eastmoney');
+    expect(tradability?.reason).toContain('TUSHARE_TOKEN');
+    expect((tradability?.reason ?? '').length).toBeLessThanOrEqual(500);
   });
 });
 

@@ -36,5 +36,7 @@ describe('stock-universe/EastmoneyStockUniverseAdapter', () => {
     expect(urls).toHaveLength(2);
     expect(urls[0]?.searchParams.get('fid')).toBe('f12');
     expect(urls[0]?.searchParams.get('fields')).toBe('f12,f13,f14');
+    // 显式降级：clist 只回代码/市场/名称，快照自报只提供 stStatus（名称派生）。
+    expect(snapshot.attributeCoverage).toEqual(['stStatus']);
   });
 });

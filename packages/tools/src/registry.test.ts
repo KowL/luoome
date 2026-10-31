@@ -51,6 +51,7 @@ const EXPECTED_TOOL_NAMES = [
   'sync_financial_facts',
   'run_fundamental_score',
   'get_previous_closes',
+  'get_daily_volatility',
   'search_stocks',
   'compute_indicators',
   // Strategy + 统一 Watchlist W2

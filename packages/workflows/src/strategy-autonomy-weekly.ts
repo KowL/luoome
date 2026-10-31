@@ -629,6 +629,8 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
           versionId: action.strategyVersionId,
           from: window.from,
           to: window.to,
+          // 验证 session 属前瞻轨：它的信号观察恒为 pit，provenance 必须与写入路径一致。
+          origin: 'prospective',
         });
         if (!historical.ok) {
           const lastError = `历史验证 session 创建失败: ${errorText(historical.error)}`;

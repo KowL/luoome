@@ -119,6 +119,10 @@ describe('research operation binding and task lifecycle', () => {
       { ...startInput, versionId: 'research-b-v1' },
       { ...startInput, versionId: undefined },
       { ...startInput, approved: true },
+      // provenance 是这条轨的事实，不由调用方自报：模型把回溯补算标成 prospective
+      // 正是 H8 禁止的方向，所以该字段连入参都不收。
+      { ...startInput, origin: 'prospective' },
+      { ...startInput, origin: 'backfill' },
     ])
       expect(
         (
@@ -177,6 +181,11 @@ describe('research operation binding and task lifecycle', () => {
     expect(accepted.state).toBe('succeeded');
     expect(result.worker).toBe('running');
     const sessionId = result.session?.id as string;
+    // 研究任务这条轨当场逐日 replay 完历史区间 → 观察只能是事后补算的 restated，
+    // provenance 必须在创建时就落库，否则零信号日的 IC 样本照旧丢。
+    expect(
+      data(await getStrategyEvaluationSessionTool.execute({ sessionId }, ctx)).session?.origin,
+    ).toBe('backfill');
     await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
     const read = await Promise.race([
       getStrategyEvaluationSessionTool.execute({ sessionId }, ctx),

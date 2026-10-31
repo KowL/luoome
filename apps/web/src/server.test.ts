@@ -2331,9 +2331,15 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
 
     expect(response.status).toBe(202);
     const queued = (await response.json()) as {
-      readonly data?: { readonly sessionId?: string };
+      readonly data?: {
+        readonly sessionId?: string;
+        readonly session?: { readonly origin?: string };
+      };
     };
     expect(queued.data?.sessionId).toBeString();
+    // Web 历史模拟当场把区间 replay 完 → 观察只能是事后补算的 restated。
+    // provenance 必须在创建时落库，否则这些 session 的零信号日照旧被 IC 丢掉。
+    expect(queued.data?.session?.origin).toBe('backfill');
     if (queued.data?.sessionId === undefined) return;
     let snapshot: { readonly ok: boolean; readonly data?: { readonly status?: string } } = {
       ok: false,

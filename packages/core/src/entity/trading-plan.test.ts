@@ -4,12 +4,20 @@ import { InvariantError } from '../error/index.js';
 import {
   assertTradingPlanInvariants,
   assertTradingPlanReadable,
+  DEFAULT_TRADING_PLAN_VOLATILITY_POLICY,
   evaluateTradingPlanCondition,
   evaluateTradingPlanEntryConditions,
   isMaterialTradingPlanChange,
+  isUsableVolatilityPct,
   narrowTradingPlanRange,
+  resolveTradingPlanVolatilityPolicy,
   selectTradingPlans,
   symmetricRangeAroundMid,
+  TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS,
+  TRADING_PLAN_VOLATILITY_METRIC,
+  TRADING_PLAN_VOLATILITY_MIN_PCT,
+  TRADING_PLAN_VOLATILITY_TIERS,
+  TRADING_PLAN_VOLATILITY_WINDOW,
   type TradingPlan,
   TradingPlanSchema,
   TradingPlanV2Schema,
@@ -18,9 +26,11 @@ import {
   tradingPlanExpiresAt,
   tradingPlanInvalidation,
   tradingPlanMonitoring,
+  tradingPlanPickedPct,
   tradingPlanRangeWidthCap,
   tradingPlanVersionId,
   tradingPlanView,
+  volatilityScaledRangePick,
 } from './trading-plan.js';
 
 const fixture = {
@@ -630,6 +640,140 @@ describe('T21 选点与落库取值', () => {
     expect(pick(3, 8.5).success).toBe(true);
     expect(pick(3, 9).success).toBe(false);
     expect(pick(9, 7).success).toBe(true);
+  });
+
+  it('标准波动率分档：波动越大落点越低，且始终落在区间内', () => {
+    const range = { min: 8.24, max: 11.77 };
+    const pickAt = (volatilityPct: number) => volatilityScaledRangePick(volatilityPct);
+    // 分档 1.5 / 2.5 / 4 / 6 → 区间宽度占比 100% / 67% / 33% / 0%。
+    expect([0.8, 2, 3, 5, 7.5].map((vol) => tradingPlanPickedPct(range, pickAt(vol)))).toEqual([
+      11.77, 10.61, 9.4, 8.24, 8.24,
+    ]);
+    expect(pickAt(3)).toMatchObject({
+      ruleId: 'volatility-scaled',
+      volatilityMetric: TRADING_PLAN_VOLATILITY_METRIC,
+      volatilityPct: 3,
+    });
+    // H4 宽度校验不因选点放宽：任何波动率下的落点都在区间内。
+    for (const vol of [0, 0.8, 1.5, 2, 3, 5, 6, 20]) {
+      const picked = tradingPlanPickedPct(range, pickAt(vol));
+      expect(picked).toBeGreaterThanOrEqual(range.min);
+      expect(picked).toBeLessThanOrEqual(range.max);
+    }
+  });
+
+  it('波动率窗口随 rangePick 落库，且不影响 appliedPct 复算', () => {
+    const range = { min: 8.24, max: 11.77 };
+    const withWindow = (window: {
+      windowStart: Date;
+      windowEnd: Date;
+      barsCount: number;
+      maxGapTradingDays?: number;
+    }) =>
+      v2(
+        withPosition(range, {
+          appliedPct: 9.4,
+          rangePick: volatilityScaledRangePick(3, window),
+        }),
+      );
+
+    const ok = withWindow({
+      windowStart: new Date('2026-07-01T00:00:00.000Z'),
+      windowEnd: new Date('2026-07-31T00:00:00.000Z'),
+      barsCount: 21,
+      maxGapTradingDays: 0,
+    });
+    expect(ok.success).toBe(true);
+    if (!ok.success) return;
+    expect(ok.data.position.rangePick).toMatchObject({
+      ruleId: 'volatility-scaled',
+      windowStart: new Date('2026-07-01T00:00:00.000Z'),
+      windowEnd: new Date('2026-07-31T00:00:00.000Z'),
+      barsCount: 21,
+      maxGapTradingDays: 0,
+    });
+    // 加了窗口不改变选点结果：H4 宽度与落点规则都没动。
+    expect(ok.data.position.appliedPct).toBe(9.4);
+    expect(ok.data.position.targetPctRange).toEqual(range);
+  });
+
+  it('波动率窗口不自洽时拒绝：起点晚于终点 / bar 数不足以算出 20 个收益率', () => {
+    const range = { min: 8.24, max: 11.77 };
+    const build = (window: { windowStart: Date; windowEnd: Date; barsCount: number }) =>
+      v2(
+        withPosition(range, {
+          appliedPct: 9.4,
+          rangePick: volatilityScaledRangePick(3, window),
+        }),
+      );
+
+    const reversed = build({
+      windowStart: new Date('2026-07-31T00:00:00.000Z'),
+      windowEnd: new Date('2026-07-01T00:00:00.000Z'),
+      barsCount: 21,
+    });
+    expect(reversed.success).toBe(false);
+    if (!reversed.success) expect(reversed.error.message).toContain('窗口起点');
+
+    const tooFew = build({
+      windowStart: new Date('2026-07-11T00:00:00.000Z'),
+      windowEnd: new Date('2026-07-31T00:00:00.000Z'),
+      barsCount: TRADING_PLAN_VOLATILITY_WINDOW,
+    });
+    expect(tooFew.success).toBe(false);
+    if (!tooFew.success) expect(tooFew.error.message).toContain('bar 数');
+  });
+
+  it('旧计划没有窗口字段仍可读（optional），选点复算不变', () => {
+    const parsed = v2(
+      withPosition(
+        { min: 8.24, max: 11.77 },
+        {
+          appliedPct: 9.4,
+          // 本字段引入前落库的形状：只有 tiers + volatilityPct，没有 windowStart/windowEnd。
+          rangePick: {
+            ruleId: 'volatility-scaled',
+            volatilityMetric: TRADING_PLAN_VOLATILITY_METRIC,
+            volatilityPct: 3,
+            tiers: TRADING_PLAN_VOLATILITY_TIERS.map((tier) => ({ ...tier })),
+          },
+        },
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const pick = parsed.data.position.rangePick;
+    if (pick === null || pick.ruleId !== 'volatility-scaled') throw new Error('expected pick');
+    expect(pick.windowStart).toBeUndefined();
+    expect(pick.windowEnd).toBeUndefined();
+    expect(pick.barsCount).toBeUndefined();
+    expect(pick.maxGapTradingDays).toBeUndefined();
+    expect(parsed.data.position.appliedPct).toBe(9.4);
+  });
+
+  it('波动率阈值可配置：默认值仍是 0.1 / 5，可局部覆盖', () => {
+    // 默认值本身是「未标定的经验值」，改动它们必须同时改这条断言。
+    expect(TRADING_PLAN_VOLATILITY_MIN_PCT).toBe(0.1);
+    expect(TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS).toBe(5);
+    expect(DEFAULT_TRADING_PLAN_VOLATILITY_POLICY).toEqual({
+      minVolatilityPct: 0.1,
+      maxStalenessTradingDays: 5,
+    });
+    expect(resolveTradingPlanVolatilityPolicy()).toEqual(DEFAULT_TRADING_PLAN_VOLATILITY_POLICY);
+    expect(resolveTradingPlanVolatilityPolicy({ minVolatilityPct: 0.5 })).toEqual({
+      minVolatilityPct: 0.5,
+      maxStalenessTradingDays: 5,
+    });
+    expect(resolveTradingPlanVolatilityPolicy({ maxStalenessTradingDays: 10 })).toEqual({
+      minVolatilityPct: 0.1,
+      maxStalenessTradingDays: 10,
+    });
+
+    // 下限参与判定：0.3% 在默认下限下可用，在 1% 下限下不可用。
+    expect(isUsableVolatilityPct(0.3)).toBe(true);
+    expect(isUsableVolatilityPct(0.3, 1)).toBe(false);
+    expect(isUsableVolatilityPct(0)).toBe(false);
+    expect(isUsableVolatilityPct(Number.NaN)).toBe(false);
   });
 
   it('区间为空时 appliedPct/fallbackPct/rangePick 必须为空', () => {

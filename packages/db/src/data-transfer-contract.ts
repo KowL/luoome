@@ -528,6 +528,7 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   }),
   strategy_evaluation_sessions: storageColumns(['id'], {
     status: ['running', 'complete', 'partial', 'failed'],
+    origin: ['backfill', 'prospective'],
   }),
   strategy_research_states: storageColumns(['strategy_id', 'account_id']),
   strategy_evaluation_days: storageColumns(['session_id', 'data_as_of'], {

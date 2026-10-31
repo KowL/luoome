@@ -6,6 +6,7 @@ import {
   StockUniverseSnapshotSchema,
   type StockUniverseSourceLike,
   stockCode,
+  stockUniverseAttributeCoverage,
 } from '@luoome/core';
 import { SourceExecutionError } from '../source-error.js';
 
@@ -85,6 +86,9 @@ export class SinaStockUniverseAdapter implements StockUniverseSourceLike {
       observedAt: this.clock(),
       complete: true,
       reportedTotal: entries.length,
+      // 显式降级：Market_Center 只给 symbol/code/name（外加报价字段），
+      // listingStatus、industry、listDate、delistDate 都不在这条接口里。
+      attributeCoverage: stockUniverseAttributeCoverage(entries),
       entries,
     });
   }

@@ -218,10 +218,144 @@ export const TradingPlanRangePickSchema = z.discriminatedUnion('ruleId', [
         )
         .min(1)
         .max(8),
+      /**
+       * 波动率窗口：这个 σ 由哪段日线算出。与 `tiers`、`volatilityPct` 同属「可复算参数」，
+       * 计划本身必须能回答「这 20 个收益率是哪 21 根 bar」，否则事后只能信一个孤零零的数字。
+       * 三个字段对旧计划（本字段引入前落库）缺失，读侧不强制；新写路径必须给。
+       */
+      windowStart: z.coerce.date().optional(),
+      windowEnd: z.coerce.date().optional(),
+      barsCount: z.number().int().positive().optional(),
+      /**
+       * 窗口内相邻日线之间**缺失**的交易日数（0 = 无断档）。> 0 说明窗口跨过停牌 / 缺 bar：
+       * 跨断档的那一个收益率其实是多日收益，σ 会被抬高。落库是为了让这种失真**可见**，
+       * 而不是让复盘者以为 20 个收益率都是日收益。
+       */
+      maxGapTradingDays: z.number().int().nonnegative().optional(),
     })
     .strict(),
 ]);
 export type TradingPlanRangePick = z.infer<typeof TradingPlanRangePickSchema>;
+
+/**
+ * 波动率选点的指标口径：最近 `TRADING_PLAN_VOLATILITY_WINDOW` 个交易日收益率（收盘价环比）
+ * 的总体标准差，单位百分点。与 `local-selector` 的 `volatility-20` 同一定义，
+ * 避免同一系统里出现两套「波动率」说法。
+ */
+export const TRADING_PLAN_VOLATILITY_METRIC = 'realized-vol-20d';
+export const TRADING_PLAN_VOLATILITY_WINDOW = 20;
+
+/**
+ * 波动率 → 区间内落点：`bandFractionPct` 是落点占区间宽度的百分比（0 = 下限，100 = 上限）。
+ * 波动越小越敢用满计划仓位（靠上限），波动越大越保守（靠下限）。
+ * 超过最后一档（> 6%）不匹配任何 tier，由 `tradingPlanPickedPct` 降级到下限。
+ */
+export const TRADING_PLAN_VOLATILITY_TIERS: readonly {
+  readonly volatilityUpToPct: number;
+  readonly bandFractionPct: number;
+}[] = [
+  { volatilityUpToPct: 1.5, bandFractionPct: 100 },
+  { volatilityUpToPct: 2.5, bandFractionPct: 67 },
+  { volatilityUpToPct: 4, bandFractionPct: 33 },
+  { volatilityUpToPct: 6, bandFractionPct: 0 },
+];
+
+/**
+ * 波动率下限（百分点）：低于该值的 20 日样本按「不可用」处理。
+ *
+ * 20 个交易日收益率全为 0（σ=0）在 A 股几乎只可能是停牌或长期无成交——那不是「低波动」，
+ * 是「没有有效价格」：卖不出去、价格失真，风险反而更高。若把 σ=0 当成「最安全」，
+ * 第一档就会给出区间上限（最大仓位），方向完全反了。
+ *
+ * **这是默认值，不是标定值**：0.1 是保守初值（远低于最低档 1.5%），没有用真实
+ * `daily_bars` 分布验证过「有多少标的会落进 [0, 0.1)」。调用方可以且应该按自己的
+ * 数据分布覆盖它，见 `TradingPlanVolatilityPolicy`。
+ */
+export const TRADING_PLAN_VOLATILITY_MIN_PCT = 0.1;
+
+/**
+ * 波动率样本新鲜度上限（交易日）。最新日线停更超过该值即按「数据过期」降级到下限，
+ * 不把两个月前的窗口当「当前波动率」。
+ *
+ * **这是默认值，不是回测结论**：5 是保守初值，能容忍普通周末与一两天同步延迟。
+ * 已知会误伤的情形：春节 / 国庆等连续长假（休市 + 周末很容易让正常停更跨过 5 个交易日），
+ * 长假前后的复核应显式调高该阈值，否则会把「正常放假」当成「数据过期」。
+ */
+export const TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS = 5;
+
+/**
+ * 波动率选点的两个阈值。
+ *
+ * 两者都是**未标定的经验值**，随计划落库的是它们的**实际取值**（见
+ * `rangePick.volatilityPct` 与降级文案里的阈值数字），所以改阈值不会让历史计划
+ * 变得不可解释：复盘看到的是当时用的阈值。
+ *
+ * 标定需要的数据与做法（尚未执行，属已知债务）：
+ * - σ 下限：拉全市场 `daily_bars` 算 20 日 σ 的截面分布，看 [0, 0.1) 里有多少标的、
+ *   其中多少是真实低波动（有成交）而非停牌；把下限放在「停牌密度」明显抬升的拐点。
+ * - 新鲜度上限：按交易日历统计每个标的的日线停更天数分布，并结合长假日历（春节前后）
+ *   区分「正常休市」与「数据断供」；5 这个值需要按最长合法休市长度回测后再定。
+ */
+export interface TradingPlanVolatilityPolicy {
+  readonly minVolatilityPct: number;
+  readonly maxStalenessTradingDays: number;
+}
+
+export const DEFAULT_TRADING_PLAN_VOLATILITY_POLICY: TradingPlanVolatilityPolicy = {
+  minVolatilityPct: TRADING_PLAN_VOLATILITY_MIN_PCT,
+  maxStalenessTradingDays: TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS,
+};
+
+/** 把调用方给的局部覆盖补成完整阈值；未给的字段用（未标定的）默认值。 */
+export const resolveTradingPlanVolatilityPolicy = (
+  override?: Partial<TradingPlanVolatilityPolicy>,
+): TradingPlanVolatilityPolicy => ({
+  minVolatilityPct:
+    override?.minVolatilityPct ?? DEFAULT_TRADING_PLAN_VOLATILITY_POLICY.minVolatilityPct,
+  maxStalenessTradingDays:
+    override?.maxStalenessTradingDays ??
+    DEFAULT_TRADING_PLAN_VOLATILITY_POLICY.maxStalenessTradingDays,
+});
+
+/** 波动率样本是否可用于选点；低于下限视为无效样本（停牌 / 无成交），不是「最安全」。 */
+export const isUsableVolatilityPct = (
+  volatilityPct: number,
+  minVolatilityPct: number = DEFAULT_TRADING_PLAN_VOLATILITY_POLICY.minVolatilityPct,
+): boolean => Number.isFinite(volatilityPct) && volatilityPct >= minVolatilityPct;
+
+/** 波动率窗口（可复盘）：σ 由哪段日线算出。 */
+export interface TradingPlanVolatilityWindow {
+  readonly windowStart: Date;
+  readonly windowEnd: Date;
+  readonly barsCount: number;
+  /** 窗口内相邻日线之间缺失的交易日数；0 = 无断档，> 0 = 窗口跨过停牌。 */
+  readonly maxGapTradingDays?: number;
+}
+
+/**
+ * 由实测波动率构造 `volatility-scaled` 选点。
+ * 波动率与窗口一起随计划落库：复盘时能用同一份 tiers 复算出 appliedPct，也能回答
+ * 「这个 σ 是哪 21 天算的」，这正是该规则「可复算参数」的含义。
+ */
+export const volatilityScaledRangePick = (
+  volatilityPct: number,
+  window?: TradingPlanVolatilityWindow,
+): TradingPlanRangePick => ({
+  ruleId: 'volatility-scaled',
+  volatilityMetric: TRADING_PLAN_VOLATILITY_METRIC,
+  volatilityPct: round2(volatilityPct),
+  tiers: TRADING_PLAN_VOLATILITY_TIERS.map((tier) => ({ ...tier })),
+  ...(window === undefined
+    ? {}
+    : {
+        windowStart: window.windowStart,
+        windowEnd: window.windowEnd,
+        barsCount: window.barsCount,
+        ...(window.maxGapTradingDays === undefined
+          ? {}
+          : { maxGapTradingDays: window.maxGapTradingDays }),
+      }),
+});
 
 /** 按选点规则计算落点；无匹配 tier 时降级到下限（fallbackPct）。 */
 export const tradingPlanPickedPct = (
@@ -325,6 +459,39 @@ const positionRangeChecks = (
       code: 'custom',
       path: ['appliedPct'],
       message: `appliedPct 必须等于选点结果 ${expected}`,
+    });
+  }
+  volatilityWindowChecks(position.rangePick, ctx);
+};
+
+/**
+ * 波动率窗口的自洽性：窗口必须正向、bar 数至少能产出 1 个收益率。
+ * 不校验「窗口是否真由这么多 bar 算出」——那需要回查 `daily_bars`，core 零 IO；
+ * 这里只挡掉明显矛盾的记录（起点晚于终点、单根 bar 却声明 20 个收益率）。
+ */
+const volatilityWindowChecks = (pick: TradingPlanRangePick, ctx: z.RefinementCtx): void => {
+  if (pick.ruleId !== 'volatility-scaled') return;
+  const { windowStart, windowEnd, barsCount } = pick;
+  if (
+    windowStart !== undefined &&
+    windowEnd !== undefined &&
+    windowStart.getTime() > windowEnd.getTime()
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rangePick', 'windowStart'],
+      message: '波动率窗口起点不能晚于终点',
+    });
+  }
+  if (
+    barsCount !== undefined &&
+    pick.volatilityMetric === TRADING_PLAN_VOLATILITY_METRIC &&
+    barsCount < TRADING_PLAN_VOLATILITY_WINDOW + 1
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rangePick', 'barsCount'],
+      message: `波动率窗口 bar 数 ${barsCount} 不足以算出 ${TRADING_PLAN_VOLATILITY_WINDOW} 个收益率`,
     });
   }
 };

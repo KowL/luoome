@@ -95,6 +95,12 @@ export const createRestatedStrategyObservationCandidatesTool = defineTool({
       return errInvalidInput(
         'restated 观察必须关联同一 session 的已完成 evaluation 运行（不接受 operational 运行）',
       );
+    // 前瞻轨 session 的观察恒为 pit：把 restated 观察写进它，等于让回溯补算冒充前瞻样本
+    // （H8 最怕的方向）。provenance 未知的存量 session 不拦，保持原有可用性。
+    if (session.origin === 'prospective')
+      return errInvalidInput(
+        '该 evaluation session 的 provenance 是 prospective（前瞻轨），不能写入 restated 观察',
+      );
     const signals = (await ctx.repos.strategyRun.signalsByRun(input.runId)).filter(
       isObservableStrategySignal,
     );

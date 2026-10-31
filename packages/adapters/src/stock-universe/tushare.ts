@@ -7,6 +7,7 @@ import {
   StockUniverseSnapshotSchema,
   type StockUniverseSourceLike,
   stockCode,
+  stockUniverseAttributeCoverage,
 } from '@luoome/core';
 
 import { type TushareConfig, tushareQuery } from '../tushare/client.js';
@@ -84,6 +85,7 @@ export class TushareStockUniverseAdapter implements StockUniverseSourceLike {
       observedAt: this.clock(),
       complete: true,
       reportedTotal: entries.length,
+      attributeCoverage: stockUniverseAttributeCoverage(entries),
       entries,
     });
   }

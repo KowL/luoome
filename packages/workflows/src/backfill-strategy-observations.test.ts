@@ -9,7 +9,7 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
-import { getDecisionReviewContextTool } from '@luoome/tools';
+import { getDecisionReviewContextTool, getStrategyIcTool } from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,7 @@ import {
   backfillStrategyObservationsWorkflow,
 } from './backfill-strategy-observations.js';
 import { buildWorkflowTools, type WorkflowContext } from './define-workflow.js';
+import { replayStrategyRangeWorkflow } from './replay-strategy-range.js';
 
 /** buildTestContext 只给 ToolContext；workflow 步骤里的 ctx.tools 由引擎注入，测试要自己补。 */
 const workflowContext = (ctx: Awaited<ReturnType<typeof buildTestContext>>): WorkflowContext =>
@@ -66,20 +67,29 @@ const definition: StrategyDslV1 = {
   },
 };
 
-const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): Promise<void> => {
+const seedStrategy = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  options: {
+    readonly strategyId?: string;
+    readonly versionId?: string;
+    readonly definition?: StrategyDslV1;
+  } = {},
+): Promise<void> => {
+  const strategyId = options.strategyId ?? 'backfill-strategy';
+  const versionId = options.versionId ?? 'backfill-strategy-v1';
   const version: StrategyVersion = {
-    id: 'backfill-strategy-v1',
-    strategyId: 'backfill-strategy',
+    id: versionId,
+    strategyId,
     version: 1,
-    definition,
-    definitionHash: strategyDefinitionHash(definition),
+    definition: options.definition ?? definition,
+    definitionHash: strategyDefinitionHash(options.definition ?? definition),
     validationStatus: 'valid',
     validationErrors: [],
     publishedAt: NOW,
     createdAt: NOW,
   };
   const strategy: Strategy = {
-    id: 'backfill-strategy',
+    id: strategyId,
     name: '回溯轨测试策略',
     description: 'T18 验收',
     owner: 'user',
@@ -105,6 +115,83 @@ const bar = (date: string, close: number) => {
     adjustment: 'qfq' as const,
     source: 'backfill-fixture',
   };
+};
+
+/**
+ * 平静日策略：评分随收盘价变化（横截面有方差，IC 算得出），但入场信号永不触发（零信号）。
+ * 零信号 = 没有观察可贴 vintage，`get_strategy_ic` 只能靠 session provenance 判口径。
+ */
+const QUIET_STRATEGY_ID = 'quiet-strategy';
+const QUIET_VERSION_ID = 'quiet-strategy-v1';
+const QUIET_FROM = new Date('2026-07-27T00:00:00.000Z');
+const QUIET_TO = new Date('2026-07-28T00:00:00.000Z');
+
+const quietDefinition: StrategyDslV1 = {
+  schemaVersion: 1,
+  metadata: {},
+  universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+  selection: {
+    logic: 'all',
+    rules: [
+      { id: 'positive-price', name: '价格有效', when: 'quote.close > 0', evidence: ['价格有效'] },
+    ],
+  },
+  scoring: {
+    method: 'weighted-sum',
+    components: [{ ruleId: 'positive-price', score: 'quote.close', weight: 1 }],
+  },
+  signals: {
+    entry: [
+      {
+        id: 'entry',
+        name: '永不触发的信号',
+        when: 'quote.close > 1000000',
+        score: '60',
+        direction: 'bullish',
+        evidence: ['平静日无信号'],
+      },
+    ],
+    exit: [],
+    risk: [],
+  },
+};
+
+/** 两个交易日的收盘价（按 universe 下标取）：评分（= 当日收盘价）与次日收益同序 → RankIC 必须正好 1。 */
+const quietClosesFor = (index: number): readonly [string, number][] => [
+  ['2026-07-27', [10, 20, 30][index] ?? 0],
+  ['2026-07-28', [10.1, 22, 36][index] ?? 0],
+];
+
+/** 按股票分别给历史日线（同一根日线喂所有股票会让评分没有横截面方差）。 */
+const marketForQuietDays = (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  stockIds: readonly string[],
+) => {
+  const rowsFor = (stockId: string) => {
+    const index = stockIds.indexOf(stockId);
+    return (index === -1 ? [] : quietClosesFor(index)).map(([date, close]) => ({
+      ...bar(date, close),
+      stockId,
+      source: 'quiet-fixture',
+    }));
+  };
+  vi.spyOn(ctx.adapters.market, 'fetchQuote').mockImplementation(async (code) => ({
+    stockId: String(code),
+    close: money(99),
+    open: money(99),
+    high: money(100),
+    low: money(98),
+    volume: 1_000_000,
+    source: 'live-fixture',
+    observedAt: NOW,
+    ts: NOW,
+    fetchedAt: NOW,
+    timestampSource: 'retrieval' as const,
+  }));
+  vi.spyOn(ctx.adapters.market, 'fetchDailyBars').mockImplementation(async (stockId, range) =>
+    rowsFor(stockId).filter((row) => row.date >= range.start && row.date <= range.end),
+  );
+  return { rowsFor };
 };
 
 /** 只按区间返回该区间内的历史日线；"今天"那根用 99，代表当前行情。 */
@@ -468,5 +555,232 @@ describe('T18 回溯轨观察流水线', () => {
     }
     expect(BACKFILL_BOUNDARY_STATEMENTS.c).toContain('能补但被排除');
     expect(BACKFILL_BOUNDARY_STATEMENTS.c).toContain('当时可见性');
+  });
+
+  it('回溯轨创建的 evaluation session 记 provenance=backfill（零信号日靠它判 restated）', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: FROM });
+    await seedStrategy(ctx);
+    marketWithCloses(ctx);
+    const result = await backfillStrategyObservationsWorkflow.run(
+      {
+        strategyId: 'backfill-strategy',
+        versionId: 'backfill-strategy-v1',
+        from: FROM,
+        to: TO,
+        stockIds: [STOCK],
+      },
+      workflowContext(ctx),
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const session = await ctx.repos.strategyEvaluation.findSessionById(result.data.sessionId);
+    expect(session?.origin).toBe('backfill');
+  });
+
+  // ① 端到端验收（Lead 裁定）：provenance 不能只证明「调用方能传 origin」，必须证明
+  // **真跑回溯 workflow** 产出的 session 落库后带着 backfill，再被 IC 消费成 restated。
+  // 链路：backfill workflow → replay workflow → start_strategy_evaluation_session → 落库 → get_strategy_ic。
+  it('端到端：workflow 产出的零信号日，provenance 从 replay 一路传到落库并判成 restated', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 3, observedAt: QUIET_FROM });
+    await seedStrategy(ctx, {
+      strategyId: QUIET_STRATEGY_ID,
+      versionId: QUIET_VERSION_ID,
+      definition: quietDefinition,
+    });
+    const stockIds = (
+      await ctx.repos.stockUniverse.listCurrent({
+        coverage: 'CN_A_SHARES_SH_SZ',
+        status: 'active',
+      })
+    )
+      .map((stock) => stock.id)
+      .sort();
+    expect(stockIds.length).toBe(3);
+    const { rowsFor } = marketForQuietDays(ctx, stockIds);
+
+    const wctx = workflowContext(ctx);
+    const result = await backfillStrategyObservationsWorkflow.run(
+      {
+        strategyId: QUIET_STRATEGY_ID,
+        versionId: QUIET_VERSION_ID,
+        from: QUIET_FROM,
+        to: QUIET_TO,
+        stockIds,
+      },
+      wctx,
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+
+    // 落库层：session 行自己记着 provenance（不是把入参回显给调用方）
+    const session = await ctx.repos.strategyEvaluation.findSessionById(result.data.sessionId);
+    expect(session?.origin).toBe('backfill');
+
+    // 前提：这两天的 run 确实零信号、零观察——provenance 是唯一可用的 vintage 标签来源。
+    // 否则下面的 IC 断言会被观察判定"顺带"满足，证明力就没了。
+    const runs = await ctx.repos.strategyRun.listRuns({
+      strategyId: QUIET_STRATEGY_ID,
+      status: 'complete',
+      limit: 10,
+    });
+    expect(runs.length).toBe(2);
+    for (const run of runs) {
+      expect(await ctx.repos.strategyRun.signalsByRun(run.id)).toEqual([]);
+      expect(await ctx.repos.strategyRun.listResultsByRuns([run.id])).not.toEqual([]);
+    }
+    expect(
+      await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal', limit: 100 }),
+    ).toEqual([]);
+
+    // IC 的次日收益读本地日线：显式落两天日线，避免把行情管线混进这条 provenance 验收。
+    await ctx.repos.dailyBar.saveMany(
+      stockIds.flatMap((stockId) => rowsFor(stockId).map((row) => ({ ...row, date: row.date }))),
+    );
+
+    const ic = await getStrategyIcTool.execute({ strategyId: QUIET_STRATEGY_ID }, ctx);
+    expect(ic.ok, JSON.stringify(ic)).toBe(true);
+    if (!ic.ok) return;
+    // 没有 provenance 时这两天会进 scoreOnlyDays + vintage-unknown（旧行为）；现在按 restated 算。
+    expect(ic.data.provenanceDays).toBe(2);
+    expect(ic.data.scoreOnlyDays).toBe(0);
+    expect(ic.data.skippedDays).toEqual([]);
+    expect(ic.data.groups.map((group) => group.vintage)).toEqual(['restated']);
+    const [group] = ic.data.groups;
+    // 07-27 有次日收益 → 真实算出 IC；07-28 缺次日收益 → 进 missingDays，不填 0。
+    expect(group?.days.map((day) => day.dataAsOf.toISOString().slice(0, 10))).toEqual([
+      '2026-07-27',
+    ]);
+    expect(group?.days[0]?.rankIc).toBeCloseTo(1, 12);
+    expect(group?.missingDays.map((day) => day.dataAsOf.toISOString().slice(0, 10))).toEqual([
+      '2026-07-28',
+    ]);
+  });
+
+  it('前瞻轨 session（provenance=prospective）拒绝写入 restated 观察', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: FROM });
+    await seedStrategy(ctx);
+    marketWithCloses(ctx);
+    const wctx = workflowContext(ctx);
+    const started = await wctx.tools.start_strategy_evaluation_session.execute({
+      strategyId: 'backfill-strategy',
+      versionId: 'backfill-strategy-v1',
+      from: FROM,
+      to: TO,
+      stockIds: [STOCK],
+      origin: 'prospective',
+    });
+    expect(started.ok, JSON.stringify(started)).toBe(true);
+    if (!started.ok) return;
+    expect(started.data.session.origin).toBe('prospective');
+    const run = await wctx.tools.run_strategy.execute({
+      strategyId: 'backfill-strategy',
+      versionId: 'backfill-strategy-v1',
+      mode: 'replay',
+      asOf: FROM,
+      stockIds: [STOCK],
+      evaluationSessionId: started.data.session.id,
+    });
+    expect(run.ok, JSON.stringify(run)).toBe(true);
+    if (!run.ok) return;
+    await wctx.tools.record_strategy_evaluation_day.execute({
+      sessionId: started.data.session.id,
+      dataAsOf: run.data.run.dataAsOf,
+      runId: run.data.run.id,
+      status: 'complete',
+    });
+    const rejected = await wctx.tools.create_restated_strategy_observation_candidates.execute({
+      runId: run.data.run.id,
+      evaluationSessionId: started.data.session.id,
+    });
+    // restated 写进 pit session = 让回溯补算冒充前瞻样本，这是 H8 最怕的方向。
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    expect(rejected.error).toMatchObject({ kind: 'invalid_input' });
+    expect(JSON.stringify(rejected.error)).toContain('prospective');
+  });
+
+  // 反向守卫（Lead 裁定 ②）：只拦「restated → prospective」是半条守卫。pit 写进回溯轨
+  // session 会让同一天既称「事后补算」又称「前瞻写入」，`get_strategy_ic` 只能判
+  // vintage-conflict 跳过——fail-closed 成立，但那是可避免的样本永久损失。
+  it('回溯轨 session（provenance=backfill）拒绝写入 pit 观察', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: FROM });
+    await seedStrategy(ctx);
+    marketWithCloses(ctx);
+    const wctx = workflowContext(ctx);
+    const started = await wctx.tools.start_strategy_evaluation_session.execute({
+      strategyId: 'backfill-strategy',
+      versionId: 'backfill-strategy-v1',
+      from: FROM,
+      to: TO,
+      stockIds: [STOCK],
+      origin: 'backfill',
+    });
+    expect(started.ok, JSON.stringify(started)).toBe(true);
+    if (!started.ok) return;
+    const run = await wctx.tools.run_strategy.execute({
+      strategyId: 'backfill-strategy',
+      versionId: 'backfill-strategy-v1',
+      mode: 'replay',
+      asOf: FROM,
+      stockIds: [STOCK],
+      evaluationSessionId: started.data.session.id,
+    });
+    expect(run.ok, JSON.stringify(run)).toBe(true);
+    if (!run.ok) return;
+    await wctx.tools.record_strategy_evaluation_day.execute({
+      sessionId: started.data.session.id,
+      dataAsOf: run.data.run.dataAsOf,
+      runId: run.data.run.id,
+      status: 'complete',
+    });
+    const rejected = await wctx.tools.create_strategy_observation_candidates.execute({
+      runId: run.data.run.id,
+      evaluationSessionId: started.data.session.id,
+    });
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    expect(rejected.error).toMatchObject({ kind: 'invalid_input' });
+    // 报错必须说清「这条轨的观察是 restated」，否则调用方只会换个工具重试同一件事。
+    expect(JSON.stringify(rejected.error)).toContain('回溯轨');
+    expect(JSON.stringify(rejected.error)).toContain('restated');
+  });
+
+  // 守卫不能连坐：provenance 未知的存量 session 没有可对照的创建期事实，
+  // 拦下来等于把升级前已经在用的 session 判死。走真实 replay（prepare + 逐日 run），
+  // 这样信号与观察都是生产路径产生的，不是测试塞的对象。
+  it('provenance 未知的 session 仍接受 pit 观察（不连坐存量）', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: FROM });
+    await seedStrategy(ctx);
+    marketWithCloses(ctx);
+    const wctx = workflowContext(ctx);
+    const replayed = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'backfill-strategy',
+        versionId: 'backfill-strategy-v1',
+        from: FROM,
+        to: TO,
+        stockIds: [STOCK],
+      },
+      wctx,
+    );
+    expect(replayed.ok, JSON.stringify(replayed)).toBe(true);
+    if (!replayed.ok) return;
+    const session = await ctx.repos.strategyEvaluation.findSessionById(replayed.data.sessionId);
+    expect(session?.origin).toBeUndefined();
+    const runId = replayed.data.days[0]?.runId;
+    expect(runId).toBeDefined();
+    if (runId === undefined) return;
+    const created = await wctx.tools.create_strategy_observation_candidates.execute({
+      runId,
+      evaluationSessionId: replayed.data.sessionId,
+    });
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    if (!created.ok) return;
+    expect(created.data.created).toBeGreaterThan(0);
   });
 });

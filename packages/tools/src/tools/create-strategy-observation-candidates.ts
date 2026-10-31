@@ -83,6 +83,15 @@ export const createStrategyObservationCandidatesTool = defineTool({
       ) {
         return errInvalidInput('验证观察必须关联同一 session 的已完成 evaluation 运行');
       }
+      // 反向守卫，与 `create_restated_strategy_observation_candidates` 的 prospective 守卫对称：
+      // 回溯轨 session 的观察恒为 restated，这里写 pit 会让同一天既称「事后补算」又称「前瞻写入」，
+      // `get_strategy_ic` 只能判 vintage-conflict 并跳过——fail-closed 成立，但那是可避免的样本损失。
+      // provenance 未知的存量 session 不拦：没有可对照的创建期事实，拦了等于把存量数据判死。
+      if (session.origin === 'backfill') {
+        return errInvalidInput(
+          '该 evaluation session 的 provenance 是 backfill（回溯轨），观察必须是 restated；请用 create_restated_strategy_observation_candidates',
+        );
+      }
     } else if (!isPublishableOperationalRun(run)) {
       return errInvalidInput(
         '只有 published operational StrategyRun 或显式验证 session 才能创建观察候选',

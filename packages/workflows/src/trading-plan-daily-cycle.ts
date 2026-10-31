@@ -9,19 +9,25 @@ import {
   isAdviceQuoteCurrent,
   isMaterialTradingPlanChange,
   isRuleFallbackAdvice,
+  isUsableVolatilityPct,
   money,
   narrowTradingPlanRange,
   resolveTradingPlanVersions,
+  resolveTradingPlanVolatilityPolicy,
   TRADING_PLAN_DRAFT_TRADING_DAYS,
+  TRADING_PLAN_VOLATILITY_WINDOW,
   type TradingPlan,
   type TradingPlanCondition,
+  type TradingPlanRangePick,
   TradingPlanReviewSchema,
   TradingPlanSchema,
   TradingPlanV2Schema,
+  type TradingPlanVolatilityPolicy,
   tradingPlanExpiresAt,
   tradingPlanPickedPct,
   tradingPlanRangeWidthCap,
   tradingPlanVersionId,
+  volatilityScaledRangePick,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -32,6 +38,19 @@ export const TradingPlanDailyCycleInput = z.object({
   date: z.string().date().optional(),
   maxCandidates: z.number().int().positive().max(10).default(10),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
+  /**
+   * 波动率 σ 下限（百分点）。缺省 0.1 —— **未标定的经验值**，需按真实 `daily_bars` 分布调整。
+   * 低于下限的样本按「停牌 / 无成交」处理，选点降级到区间下限。
+   * 优先级：本入参 > 环境变量 `LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT` > 0.1。
+   */
+  volatilityMinPct: z.number().finite().min(0).max(100).optional(),
+  /**
+   * 日线新鲜度上限（交易日）。缺省 5 —— **未回测的经验值**。
+   * 春节 / 国庆等连续长假会让正常停更跨过该值而被误判为「数据过期」，长假前后的复核
+   * 应显式调高；调高后计划里的降级文案会写出实际用的阈值，历史计划仍可解释。
+   * 优先级：本入参 > 环境变量 `LUOOME_TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS` > 5。
+   */
+  volatilityMaxStalenessTradingDays: z.number().int().nonnegative().max(365).optional(),
 });
 export type TradingPlanDailyCycleInputT = z.infer<typeof TradingPlanDailyCycleInput>;
 
@@ -145,6 +164,110 @@ const currentPositionPct = (stockId: string, accountFacts: AccountFacts): number
     : roundPct((position.marketValue / accountFacts.totalAssets) * 100);
 };
 
+/**
+ * 生成器看到的波动率输入：可用样本带新鲜度与窗口，不可用时带原因。
+ * 缺省（undefined）表示调用方根本没取到样本，与「取到了但不可用」在文案上区分。
+ *
+ * 窗口字段是必填的：可用样本必须能回答「这个 σ 是哪 21 根 bar」，否则计划落库后无法复盘。
+ */
+export type TradingPlanVolatilityInput =
+  | {
+      readonly status: 'available';
+      readonly volatilityPct: number;
+      readonly latestBarDate: Date;
+      readonly stalenessTradingDays: number;
+      readonly windowStart: Date;
+      readonly windowEnd: Date;
+      readonly barsCount: number;
+      /** 窗口内相邻 bar 之间缺失的交易日数；0 = 无断档，> 0 = 窗口跨过停牌。 */
+      readonly maxGapTradingDays: number;
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly reason: 'insufficient-daily-bars' | 'invalid-daily-bars' | 'insufficient-volatility';
+      /**
+       * 有效日收益率个数（仅 `insufficient-volatility` 由 `get_daily_volatility` 给出）。
+       * 不足窗口宽度说明窗口跨了停牌断档或含零成交 bar——与「σ 太低」同属样本无效，
+       * 但成因不同，降级文案要能说清是哪一种。
+       */
+      readonly returnsCount?: number;
+    };
+
+const VOLATILITY_NOTE_MISSING = '波动率不可用（daily_bars 缺 20 个交易日样本），区间选点降级取下限';
+const VOLATILITY_NOTE_LOW = '波动率异常低（可能停牌或无成交），按不可用处理，取区间下限';
+/** 有效收益率不足：窗口跨了停牌断档，或含 volume=0 的占位 bar（停牌但 provider 仍写了 bar）。 */
+const VOLATILITY_NOTE_SHORT =
+  '波动率样本不足（窗口跨停牌断档或含零成交 bar，有效日收益率少于 20 个），按不可用处理，取区间下限';
+
+/** 只需要 warn：阈值解析失败时留一条可见记录。 */
+type VolatilityThresholdLogger = {
+  readonly warn: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+/** 阈值也可从环境变量给（运维按真实分布标定用，不必改代码）。 */
+const VOLATILITY_MIN_PCT_ENV = 'LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT';
+const VOLATILITY_MAX_STALENESS_ENV = 'LUOOME_TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS';
+
+const readEnvThreshold = (name: string, logger: VolatilityThresholdLogger): number | undefined => {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    // 不静默吞掉：配错了要能看见，否则会以为「阈值改了但没生效」。
+    logger.warn(`[trading-plan-daily-cycle] 忽略无法解析的 ${name}`, { value: raw });
+    return undefined;
+  }
+  return value;
+};
+
+/**
+ * 阈值来源优先级：显式入参 > 环境变量 > 默认值（0.1 / 5，未标定）。
+ * 环境变量是给**定时路径**用的——`account-plan-batch` 不传阈值，只有 env 能在不改代码的前提下调整。
+ */
+const volatilityPolicyFromEnv = (
+  logger: VolatilityThresholdLogger,
+): Partial<TradingPlanVolatilityPolicy> => {
+  const minVolatilityPct = readEnvThreshold(VOLATILITY_MIN_PCT_ENV, logger);
+  const maxStalenessTradingDays = readEnvThreshold(VOLATILITY_MAX_STALENESS_ENV, logger);
+  return {
+    ...(minVolatilityPct === undefined ? {} : { minVolatilityPct }),
+    ...(maxStalenessTradingDays === undefined ? {} : { maxStalenessTradingDays }),
+  };
+};
+
+/**
+ * 波动率样本能不能用来选点；能用返回 null，不能用返回降级原因。
+ *
+ * 两道闸门都是「看起来有样本、其实不能用」：
+ * - σ 低于下限（停牌 / 长期无成交）：不是低波动，是没有有效价格，按不可用处理。
+ * - 最新日线过期：两个月前的窗口不等于「当前波动率」，不静默当当前。
+ * 两个阈值都来自 `policy`（默认值未标定），降级文案写出**实际用的阈值**，改阈值不破坏可复盘性。
+ */
+const volatilityDegradeReason = (
+  volatility: TradingPlanVolatilityInput | undefined,
+  policy: TradingPlanVolatilityPolicy,
+): string | null => {
+  if (volatility === undefined) return VOLATILITY_NOTE_MISSING;
+  if (volatility.status === 'unavailable') {
+    switch (volatility.reason) {
+      case 'insufficient-volatility':
+        return volatility.returnsCount !== undefined &&
+          volatility.returnsCount < TRADING_PLAN_VOLATILITY_WINDOW
+          ? VOLATILITY_NOTE_SHORT
+          : VOLATILITY_NOTE_LOW;
+      case 'insufficient-daily-bars':
+        return VOLATILITY_NOTE_MISSING;
+      case 'invalid-daily-bars':
+        return '波动率样本异常（收盘价非正或日期乱序），按不可用处理，取区间下限';
+    }
+  }
+  if (!isUsableVolatilityPct(volatility.volatilityPct, policy.minVolatilityPct))
+    return VOLATILITY_NOTE_LOW;
+  if (volatility.stalenessTradingDays > policy.maxStalenessTradingDays)
+    return `波动率样本已过期（最新日线 ${dateInShanghai(volatility.latestBarDate)}，滞后 ${String(volatility.stalenessTradingDays)} 个交易日，阈值 ${String(policy.maxStalenessTradingDays)}），按不可用处理，取区间下限`;
+  return null;
+};
+
 export const buildTradingPlanFromAdvice = (input: {
   readonly accountId: string;
   readonly accountFacts: AccountFacts;
@@ -153,6 +276,17 @@ export const buildTradingPlanFromAdvice = (input: {
   readonly holding?: TradingPlanHoldingContext;
   readonly previous: readonly TradingPlan[];
   readonly now: Date;
+  /**
+   * 已实现波动率样本（百分点，20 日窗口）与新鲜度；缺省表示不可用。
+   * 只有非退化区间（min < max）且样本可用（σ ≥ 下限、日线不过期）才据此选点，
+   * 否则降级为 `lower-bound` 并在 `constraintReasons` 说明，不猜一个波动率。
+   */
+  readonly volatility?: TradingPlanVolatilityInput;
+  /**
+   * 波动率闸门阈值（局部覆盖）；缺省用 `DEFAULT_TRADING_PLAN_VOLATILITY_POLICY` 的未标定默认值。
+   * 阈值随降级文案落库，改阈值不会让历史计划失去解释力。
+   */
+  readonly volatilityPolicy?: Partial<TradingPlanVolatilityPolicy>;
 }): TradingPlan => {
   const { advice, holding, accountFacts, now } = input;
   const stockId = adviceStockId(advice, holding === undefined ? [] : [holding]);
@@ -361,10 +495,40 @@ export const buildTradingPlanFromAdvice = (input: {
   // H4 对称收窄：保中点、只削宽度；钳制后仍由 TradingPlanV2Schema 校验。
   const narrowed = requestedRange === null ? null : narrowTradingPlanRange(requestedRange);
   const targetPctRange = narrowed === null ? null : narrowed.applied;
-  const appliedPct =
+  // 波动率样本不可用（缺样本 / σ 贴地 / 日线过期）时只降级到下限，不猜一个波动率。
+  const volatilityPolicy = resolveTradingPlanVolatilityPolicy(input.volatilityPolicy);
+  const volatilityDegrade = volatilityDegradeReason(input.volatility, volatilityPolicy);
+  const usableVolatility =
+    input.volatility !== undefined &&
+    input.volatility.status === 'available' &&
+    volatilityDegrade === null
+      ? input.volatility
+      : null;
+  // 退化区间（min === max）没有可选点，仍用 lower-bound：把 `volatility-scaled` 写进零宽区间
+  // 只会让复盘看到一个"选过点"的假象。
+  const rangePick: TradingPlanRangePick | null =
     targetPctRange === null
       ? null
-      : tradingPlanPickedPct(targetPctRange, { ruleId: 'lower-bound' });
+      : targetPctRange.max > targetPctRange.min && usableVolatility !== null
+        ? volatilityScaledRangePick(usableVolatility.volatilityPct, {
+            // 窗口与 σ 一起落库：复盘能从计划本身回答「这个 σ 是哪 21 根 bar」。
+            windowStart: usableVolatility.windowStart,
+            windowEnd: usableVolatility.windowEnd,
+            barsCount: usableVolatility.barsCount,
+            maxGapTradingDays: usableVolatility.maxGapTradingDays,
+          })
+        : { ruleId: 'lower-bound' as const };
+  const appliedPct =
+    targetPctRange === null || rangePick === null
+      ? null
+      : tradingPlanPickedPct(targetPctRange, rangePick);
+  const fallbackPct = targetPctRange === null ? null : targetPctRange.min;
+  const volatilityNote =
+    targetPctRange === null ||
+    targetPctRange.max <= targetPctRange.min ||
+    volatilityDegrade === null
+      ? []
+      : [volatilityDegrade];
   const rangeAdjustment =
     narrowed === null || !narrowed.clamped || requestedRange === null || targetPctRange === null
       ? undefined
@@ -384,15 +548,17 @@ export const buildTradingPlanFromAdvice = (input: {
     currentPct,
     targetPctRange,
     appliedPct,
-    fallbackPct: appliedPct,
-    rangePick: targetPctRange === null ? null : { ruleId: 'lower-bound' as const },
+    fallbackPct,
+    rangePick,
     ...(rangeAdjustment === undefined ? {} : { rangeAdjustment }),
     constraintStatus: canActivate
       ? ('passed' as const)
       : conflictReason === undefined
         ? ('unavailable' as const)
         : ('blocked' as const),
-    constraintReasons: canActivate ? rangeAdjustmentNote : [...rangeAdjustmentNote, ...unknowns],
+    constraintReasons: canActivate
+      ? [...rangeAdjustmentNote, ...volatilityNote]
+      : [...rangeAdjustmentNote, ...volatilityNote, ...unknowns],
     prerequisiteActions:
       action === 'enter' || action === 'add'
         ? ['用户确认条件满足后手动执行；执行后更新持仓与资金记录']
@@ -682,12 +848,66 @@ const run = async (
       reason: errorText(candidatesResult.error),
     });
   }
+  // 波动率一次批量取，按标的落到生成器：缺样本 / σ 无效的标的不会拿到可用值，选点据此降级到下限。
+  // 两个阈值在入口解析一次，同时喂给数据层（σ 下限）与生成器（新鲜度上限），避免两处各判一套。
+  const volatilityPolicy = resolveTradingPlanVolatilityPolicy({
+    ...volatilityPolicyFromEnv(ctx.logger),
+    ...(input.volatilityMinPct === undefined ? {} : { minVolatilityPct: input.volatilityMinPct }),
+    ...(input.volatilityMaxStalenessTradingDays === undefined
+      ? {}
+      : { maxStalenessTradingDays: input.volatilityMaxStalenessTradingDays }),
+  });
+  const volatilityByStock = new Map<string, TradingPlanVolatilityInput>();
+  const volatilityStockIds = [
+    ...new Set(
+      advices
+        .map((item) => adviceStockId(item.advice, item.holding === undefined ? [] : [item.holding]))
+        .filter((stockId): stockId is string => stockId !== null),
+    ),
+  ];
+  if (volatilityStockIds.length > 0) {
+    const volatilityResult = await ctx.tools.get_daily_volatility.execute({
+      stockIds: volatilityStockIds,
+      // σ 是百分点，理论上限 100：把阈值调到 100 以上在语义上是「一律不放行」，
+      // 但工具入参 schema 只接受到 100。夹到 100 保持同一语义，同时让降级原因仍是
+      // 「σ 过低」而不是被 schema 拒掉、伪装成「daily_bars 缺样本」。
+      minVolatilityPct: Math.min(volatilityPolicy.minVolatilityPct, 100),
+    });
+    if (volatilityResult.ok) {
+      for (const item of volatilityResult.data.items) {
+        volatilityByStock.set(
+          item.stockId,
+          item.status === 'ok'
+            ? {
+                status: 'available',
+                volatilityPct: item.volatilityPct,
+                latestBarDate: item.latestBarDate,
+                stalenessTradingDays: item.stalenessTradingDays,
+                windowStart: item.windowStart,
+                windowEnd: item.windowEnd,
+                barsCount: item.barsCount,
+                maxGapTradingDays: item.maxGapTradingDays,
+              }
+            : {
+                status: 'unavailable',
+                reason: item.reason,
+                ...(item.returnsCount === undefined ? {} : { returnsCount: item.returnsCount }),
+              },
+        );
+      }
+    } else {
+      ctx.logger.warn('[trading-plan-daily-cycle] get_daily_volatility failed', {
+        error: volatilityResult.error,
+      });
+    }
+  }
   const plans: TradingPlan[] = [];
   const reviews: Array<z.infer<typeof TradingPlanReviewSchema>> = [];
   for (const item of advices) {
     const stockId = adviceStockId(item.advice, item.holding === undefined ? [] : [item.holding]);
     if (stockId === null) continue;
     try {
+      const volatility = volatilityByStock.get(stockId);
       const previousPlans = existing.filter((plan) => plan.stockId === stockId);
       const prior = resolveTradingPlanVersions(previousPlans);
       const draft = buildTradingPlanFromAdvice({
@@ -698,6 +918,8 @@ const run = async (
           candidateGroups.get(stockId)?.filter((supporting) => supporting.id !== item.advice.id) ??
           [],
         ...(item.holding === undefined ? {} : { holding: item.holding }),
+        ...(volatility === undefined ? {} : { volatility }),
+        volatilityPolicy,
         previous: previousPlans,
         // 计划在行情抓取与 AI 分析之后构建，必须用构建时刻的时钟；沿用工作流启动时刻会把
         // retrieval 口径的抓取时间（必然晚于启动时钟）误判为未来时间，计划被压成草案。

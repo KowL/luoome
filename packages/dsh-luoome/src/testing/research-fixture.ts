@@ -365,6 +365,9 @@ export const seedResearchFixture = async (
     }
   }
   const stockIds = [...RESEARCH_FIXTURE.stockIds].sort();
+  // 这个 fixture 自己直接写 pit 观察，不经过任何一条轨的写入方，因此没有可声明的 provenance：
+  // 标成 backfill 会与它自己写的 pit 观察冲突（同一天既称补算又称前瞻），标成 prospective
+  // 则是替测试编造事实。保持未知 = 消费方退回观察判定，与存量 session 行为一致。
   await ctx.repos.strategyEvaluation.saveSession({
     id: RESEARCH_FIXTURE.sessionId,
     strategyId,

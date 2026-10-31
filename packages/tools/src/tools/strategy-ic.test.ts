@@ -63,7 +63,11 @@ interface StubOptions {
     vintages: readonly SignalObservation['vintage'][];
     /** 该 run 的信号总数；缺省等于 vintages.length。 */
     signalCount?: number;
+    /** 该 run 所属 evaluation session；缺省 = run 没有 session 关联。 */
+    evaluationSessionId?: string;
   }[];
+  /** sessionId → session provenance；缺省表里没有的 session 视为 provenance 未知。 */
+  readonly sessionOrigins?: Readonly<Record<string, 'backfill' | 'prospective'>>;
   /** stockId → 日线（按时间升序）。 */
   readonly bars: Readonly<Record<string, readonly { date: string; close: number }[]>>;
 }
@@ -79,7 +83,10 @@ const stubContext = (options: StubOptions): ToolContext => {
     startedAt: run.dataAsOf,
     status: 'complete' as const,
     scope: 'evaluation' as const,
-    inputSnapshot: {},
+    inputSnapshot:
+      run.evaluationSessionId === undefined
+        ? {}
+        : { schemaVersion: 3, evaluationSessionId: run.evaluationSessionId },
     summary: {},
   }));
   return {
@@ -87,6 +94,24 @@ const stubContext = (options: StubOptions): ToolContext => {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     user: { id: 'u', defaultAccountId: 'a' },
     repos: {
+      strategyEvaluation: {
+        findSessionById: async (id: string) => {
+          const origin = options.sessionOrigins?.[id];
+          return origin === undefined
+            ? null
+            : {
+                id,
+                strategyId: 'ic-strategy',
+                strategyVersionId: 'ic-strategy-v1',
+                from: new Date('2026-01-01T00:00:00.000Z'),
+                to: new Date('2026-01-31T00:00:00.000Z'),
+                status: 'complete' as const,
+                definitionHash: 'a'.repeat(64),
+                createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                origin,
+              };
+        },
+      },
       strategyRun: {
         listRuns: async () => runs,
         listResultsByRuns: async (ids: readonly string[]) =>
@@ -326,6 +351,170 @@ describe('T19 get_strategy_ic', () => {
     expect(outcome.data.scoreOnlyDays).toBe(1);
     expect(outcome.data.skippedDays.map((item) => item.reason)).toEqual(['vintage-unknown']);
     expect(outcome.data.limitations.join('')).toContain('标注限制，不是统计上算不出来');
+  });
+
+  it('验收 1：零信号 + backfill provenance → IC 照算，vintage=restated（不再被跳过）', async () => {
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-quiet-backfill',
+          dataAsOf: new Date('2026-01-05T00:00:00.000Z'),
+          vintages: [],
+          evaluationSessionId: 'session-backfill',
+        },
+      ],
+      sessionOrigins: { 'session-backfill': 'backfill' },
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    // 修复点：横截面有分数、零信号，标签来自 session provenance → 该日不再丢失。
+    expect(outcome.data.groups.map((group) => group.vintage)).toEqual(['restated']);
+    expect(outcome.data.groups[0]?.sampleDays).toBe(1);
+    expect(outcome.data.groups[0]?.days[0]?.rankIc).toBeCloseTo(1, 12);
+    expect(outcome.data.provenanceDays).toBe(1);
+    expect(outcome.data.scoreOnlyDays).toBe(0);
+    expect(outcome.data.skippedDays).toEqual([]);
+    // 口径标注：restated 只能进统计层。
+    expect(outcome.data.groups[0]?.limitations.join('')).toContain('vintage=restated');
+  });
+
+  it('验收 2：零信号 + 无 provenance（旧 session）→ 行为与现状一致：跳过并计入 scoreOnlyDays', async () => {
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-quiet-legacy',
+          dataAsOf: new Date('2026-01-05T00:00:00.000Z'),
+          vintages: [],
+          evaluationSessionId: 'session-legacy',
+        },
+      ],
+      // session 存在但没有 provenance（升级前的存量行）。
+      sessionOrigins: {},
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    expect(outcome.data.groups).toEqual([]);
+    expect(outcome.data.scoreOnlyDays).toBe(1);
+    expect(outcome.data.provenanceDays).toBe(0);
+    expect(outcome.data.skippedDays.map((item) => item.reason)).toEqual(['vintage-unknown']);
+  });
+
+  it('验收 3：前瞻验证 session 的 replay → vintage=pit，不是 restated（防误标）', async () => {
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-quiet-prospective',
+          dataAsOf: new Date('2026-01-05T00:00:00.000Z'),
+          vintages: [],
+          evaluationSessionId: 'session-prospective',
+        },
+      ],
+      sessionOrigins: { 'session-prospective': 'prospective' },
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    // 两条轨的 run.scope 都是 evaluation，只能靠 provenance 区分；这里必须落在 pit。
+    expect(outcome.data.groups.map((group) => group.vintage)).toEqual(['pit']);
+    expect(outcome.data.groups[0]?.limitations.join('')).not.toContain('vintage=restated');
+    expect(outcome.data.provenanceDays).toBe(1);
+    expect(outcome.data.scoreOnlyDays).toBe(0);
+  });
+
+  it('provenance 与观察口径冲突 → vintage-conflict，不选边（尤其不偏向 pit）', async () => {
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-conflict',
+          dataAsOf: new Date('2026-01-05T00:00:00.000Z'),
+          vintages: ['restated'],
+          evaluationSessionId: 'session-prospective',
+        },
+      ],
+      sessionOrigins: { 'session-prospective': 'prospective' },
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    expect(outcome.data.groups).toEqual([]);
+    expect(outcome.data.skippedDays.map((item) => item.reason)).toEqual(['vintage-conflict']);
+  });
+
+  // 混合日回归（Lead 裁定 ④）：冲突判定必须**逐日**，不能因为同 session 里有能算的天
+  // 就把整条 session 判死，也不能把冲突日「挑一边」塞进任一分组。
+  it('同一 session 内 pit 天与 restated 天混排：只跳过冲突日，其余照算', async () => {
+    const day = (n: number) => new Date(Date.UTC(2026, 0, 5 + n));
+    const ctx = stubContext({
+      runs: [
+        {
+          id: 'run-mixed-pit-day',
+          dataAsOf: day(0),
+          vintages: ['pit'],
+          evaluationSessionId: 'session-prospective',
+        },
+        {
+          id: 'run-mixed-restated-day',
+          dataAsOf: day(1),
+          vintages: ['restated'],
+          evaluationSessionId: 'session-prospective',
+        },
+      ],
+      sessionOrigins: { 'session-prospective': 'prospective' },
+      bars: Object.fromEntries(
+        STOCKS.map((stockId, index) => [
+          stockId,
+          [
+            { date: '2026-01-05', close: 10 },
+            { date: '2026-01-06', close: 10 + index },
+            { date: '2026-01-07', close: 10 + index * 2 },
+          ],
+        ]),
+      ),
+    });
+    const outcome = await getStrategyIcTool.execute({ strategyId: 'ic-strategy' }, ctx);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
+    // 能算的天照算：pit 天（provenance 与观察一致）进 pit 组。
+    expect(outcome.data.groups.map((group) => group.vintage)).toEqual(['pit']);
+    expect(outcome.data.groups[0]?.sampleDays).toBe(1);
+    expect(outcome.data.groups[0]?.days[0]?.dataAsOf.toISOString().slice(0, 10)).toBe('2026-01-05');
+    // 冲突的天单独跳过，不选边：不出现 restated 组，也不把它算成 pit。
+    expect(outcome.data.skippedDays).toEqual([{ dataAsOf: day(1), reason: 'vintage-conflict' }]);
+    expect(outcome.data.provenanceDays).toBe(0);
+    expect(outcome.data.scoreOnlyDays).toBe(0);
   });
 
   it('非零信号但覆盖不全 → vintage-partial，且不计入 scoreOnlyDays', async () => {

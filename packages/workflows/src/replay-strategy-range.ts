@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isHoliday, isWeekend } from '@luoome/core';
+import { isHoliday, isWeekend, StrategyEvaluationSessionOriginSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
@@ -18,6 +18,11 @@ export const ReplayStrategyRangeInput = z.object({
   owner: z.string().min(1).optional(),
   maxDays: z.number().int().min(1).max(20).optional(),
   requestId: z.string().min(1).max(100).optional(),
+  /**
+   * 新建 session 时记录来源轨；续跑（resumeSessionId）以已存 provenance 为准，这里不生效。
+   * 缺省不猜：不知道来源的 session 留给消费方按观察判定。
+   */
+  origin: StrategyEvaluationSessionOriginSchema.optional(),
 });
 export type ReplayStrategyRangeInputT = z.infer<typeof ReplayStrategyRangeInput>;
 

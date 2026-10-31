@@ -33,11 +33,30 @@ import type { ResearchJobs } from './research-jobs.js';
 
 const id = z.string().min(1).max(200);
 
-export const StartResearchEvaluationInput = StartStrategyEvaluationSessionInput.extend({
-  accountId: id,
-  versionId: id,
-  requestId: z.uuid(),
+/**
+ * dsh 研究任务（本轨）创建 evaluation session 时声明的 provenance。
+ *
+ * 为什么是 backfill：本轨把用户给的历史区间**当场逐日 replay 完**（research-jobs 立即推进，
+ * 不等待未来行情），因此每一天的评分横截面与次日收益在计算时都已存在——任何观察都只能是
+ * 「事后用回溯数据补算」的 restated。反过来标成 prospective 就是把回溯补算写成前瞻样本，
+ * 正是 H8 明令禁止的方向。
+ *
+ * 边界：区间 `to` 允许落在今天之后，但未来交易日的 replay 必然失败（无 PIT universe / 无日线），
+ * 不会产出样本；若将来本轨改成「创建后逐日等行情推进」，就必须改回 prospective——那时
+ * `create_strategy_observation_candidates` 会因 backfill 守卫直接拒绝 pit 写入，改动不会静默。
+ */
+const RESEARCH_EVALUATION_ORIGIN = 'backfill' as const;
+
+export const StartResearchEvaluationInput = StartStrategyEvaluationSessionInput.omit({
+  // provenance 是本轨的事实，不由调用方（模型）自报：模型把回溯补算标成 prospective
+  // 就是 H8 禁止的方向，所以这个字段干脆不进插件入参，由 handler 按轨显式声明。
+  origin: true,
 })
+  .extend({
+    accountId: id,
+    versionId: id,
+    requestId: z.uuid(),
+  })
   .strict()
   .superRefine((input, ctx) => {
     if (input.from > input.to || input.to.getTime() - input.from.getTime() > 366 * 86_400_000)
@@ -147,7 +166,10 @@ export const createResearchEvaluationOperationPolicies = (
       const sessionId = operationEvaluationSessionId(input.strategyId, input.requestId);
       if (!jobs.canStart(sessionId))
         return errInvalidInput('Research task capacity reached; wait or cancel an active task');
-      const started = await startStrategyEvaluationSessionTool.execute(input, ctx);
+      const started = await startStrategyEvaluationSessionTool.execute(
+        { ...input, origin: RESEARCH_EVALUATION_ORIGIN },
+        ctx,
+      );
       if (!started.ok) return started;
       if (started.data.session.status === 'running' && !ctx.abortSignal?.aborted)
         jobs.startEvaluation(started.data.session, ctx);

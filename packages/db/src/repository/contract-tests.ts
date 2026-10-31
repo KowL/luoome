@@ -901,6 +901,44 @@ export const registerRepositoryContractTests = (
     });
 
     describe('TradingPlanRepository', () => {
+      it('volatility-scaled 选点参数随 plan_json 原样往返（可复算）', async () => {
+        const account = makeAccount('vol-plan-account');
+        await repos.account.save(account);
+        const facts = buildAccountFacts({ account, holdings: [], asOf: T2 });
+        const plan = makeTradingPlan('vol-plan-1', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+          position: {
+            currentPct: 0,
+            targetPctRange: { min: 8, max: 10 },
+            appliedPct: 9.2,
+            fallbackPct: 8,
+            rangePick: {
+              ruleId: 'volatility-scaled',
+              volatilityMetric: 'realized-vol-20d',
+              volatilityPct: 1,
+              tiers: [{ volatilityUpToPct: 2, bandFractionPct: 60 }],
+            },
+            constraintStatus: 'passed',
+            constraintReasons: [],
+            prerequisiteActions: [],
+          },
+        });
+        await repos.tradingPlan.save(plan);
+        const stored = await repos.tradingPlan.findByVersionId('vol-plan-1:v1');
+        expect(stored?.position).toMatchObject({
+          targetPctRange: { min: 8, max: 10 },
+          appliedPct: 9.2,
+          fallbackPct: 8,
+          rangePick: {
+            ruleId: 'volatility-scaled',
+            volatilityMetric: 'realized-vol-20d',
+            volatilityPct: 1,
+            tiers: [{ volatilityUpToPct: 2, bandFractionPct: 60 }],
+          },
+        });
+      });
+
       it('最新修订为草案时，原生效计划仍占用预算', async () => {
         const account = makeAccount('budget-draft-account');
         await repos.account.save(account);
@@ -1337,6 +1375,47 @@ export const registerRepositoryContractTests = (
           id: '600519.SH',
           industry: '白酒（快照）',
         });
+      });
+
+      it('describeSnapshotAttributes 只报真实提供的属性，并带出来源与成员数', async () => {
+        await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-attr-coverage',
+          appliedAt: T1,
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt: T1,
+            complete: true,
+            reportedTotal: 2,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH',
+                name: '贵州茅台',
+                listingStatus: 'unknown',
+                stStatus: 'non-st',
+              },
+              {
+                stockId: '002594.SZ',
+                code: stockCode('002594'),
+                exchange: 'SZ',
+                name: 'ST比亚迪',
+                listingStatus: 'unknown',
+                stStatus: 'st',
+              },
+            ],
+          },
+        });
+        // listingStatus 全是 unknown = 来源没提供，不能算进覆盖。
+        expect(await repos.stockUniverse.describeSnapshotAttributes('sync-attr-coverage')).toEqual({
+          syncId: 'sync-attr-coverage',
+          source: 'eastmoney',
+          observedAt: T1,
+          memberCount: 2,
+          provided: ['stStatus'],
+        });
+        expect(await repos.stockUniverse.describeSnapshotAttributes('sync-missing')).toBeNull();
       });
 
       it('股票从当前 stocks 删除后，PIT 成员行仍返回（不得静默丢弃）', async () => {
@@ -6498,6 +6577,58 @@ export const registerRepositoryContractTests = (
           vintageStatus: 'available',
         });
         expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
+      });
+
+      it('evaluation session provenance 落库后可读回；缺省保持未知，状态更新不改写它', async () => {
+        const base: StrategyEvaluationSession = {
+          id: 'evaluation-origin',
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1-v1',
+          from: T1,
+          to: T3,
+          status: 'running',
+          definitionHash: 'a'.repeat(64),
+          createdAt: T1,
+        };
+        await repos.strategyEvaluation.saveSession({
+          ...base,
+          id: 'eval-backfill',
+          origin: 'backfill',
+        });
+        await repos.strategyEvaluation.saveSession({
+          ...base,
+          id: 'eval-prospective',
+          origin: 'prospective',
+        });
+        await repos.strategyEvaluation.saveSession({ ...base, id: 'eval-legacy' });
+        expect(await repos.strategyEvaluation.findSessionById('eval-backfill')).toEqual({
+          ...base,
+          id: 'eval-backfill',
+          origin: 'backfill',
+        });
+        expect(await repos.strategyEvaluation.findSessionById('eval-prospective')).toEqual({
+          ...base,
+          id: 'eval-prospective',
+          origin: 'prospective',
+        });
+        // 存量 session 没有 provenance：读回不能凭空补出一个口径。
+        expect(await repos.strategyEvaluation.findSessionById('eval-legacy')).toEqual({
+          ...base,
+          id: 'eval-legacy',
+        });
+
+        // resume/finish 都以 {...existing} 回写，provenance 必须原样保留。
+        const finished = await repos.strategyEvaluation.findSessionById('eval-backfill');
+        if (finished === null) throw new Error('missing session');
+        await repos.strategyEvaluation.saveSession({
+          ...finished,
+          status: 'complete',
+          finishedAt: T2,
+        });
+        expect(await repos.strategyEvaluation.findSessionById('eval-backfill')).toMatchObject({
+          origin: 'backfill',
+          status: 'complete',
+        });
       });
     });
 

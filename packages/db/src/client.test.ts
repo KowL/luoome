@@ -641,6 +641,39 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('旧 evaluation session 表补齐 provenance 列：历史行读回不带口径，写入后保留', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const session = {
+        id: 'old-evaluation-session',
+        strategyId: 'strategy-1',
+        strategyVersionId: 'strategy-1-v1',
+        from: new Date('2026-01-05T00:00:00.000Z'),
+        to: new Date('2026-01-06T00:00:00.000Z'),
+        status: 'complete' as const,
+        definitionHash: 'a'.repeat(64),
+        createdAt: new Date('2026-01-05T00:00:00.000Z'),
+      };
+      await handle.repos.strategyEvaluation.saveSession(session);
+      // 模拟升级前的库：列还不存在。
+      handle.db.run(sql`ALTER TABLE strategy_evaluation_sessions DROP COLUMN origin`);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      // 存量行 = provenance 未知：读回不能凭空补出一个口径。
+      expect(await handle.repos.strategyEvaluation.findSessionById(session.id)).toEqual(session);
+      await handle.repos.strategyEvaluation.saveSession({
+        ...session,
+        origin: 'backfill' as const,
+      });
+      expect(await handle.repos.strategyEvaluation.findSessionById(session.id)).toEqual({
+        ...session,
+        origin: 'backfill',
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
   it('旧 WatchRun 幂等补齐健康指标，历史缺省保持未知', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {

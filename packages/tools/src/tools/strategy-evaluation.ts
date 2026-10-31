@@ -3,6 +3,7 @@ import {
   isHoliday,
   isWeekend,
   StrategyEvaluationDaySchema,
+  StrategyEvaluationSessionOriginSchema,
   StrategyEvaluationSessionSchema,
   type ToolContext,
 } from '@luoome/core';
@@ -50,6 +51,16 @@ export const StartStrategyEvaluationSessionInput = z.object({
   to: z.coerce.date(),
   stockIds: z.array(z.string().min(1)).min(1).max(500).optional(),
   requestId: z.string().min(1).max(100).optional(),
+  /**
+   * 创建期 provenance：只有产生该 session 的那条轨知道自己走哪条轨，所以由调用方给出。
+   * 缺省 = 未知，消费方必须退回观察判定（不得默认成 pit 或 restated）。
+   *
+   * **刻意不给默认值**：本工具是创建原语，回溯轨与前瞻轨都调它，两者只差「观察由谁写」。
+   * 给默认值等于把「不知道」伪造成一条轨：默认成 pit 会让回溯补算冒充前瞻样本（H8 禁止的
+   * 方向）；默认成 restated 会把真正前瞻的样本压进统计层。两个方向都错，所以这里只收事实。
+   * 已知轨的入口（backfill workflow / autonomy 周报 / dsh 研究任务 / Web 历史模拟）各自显式声明。
+   */
+  origin: StrategyEvaluationSessionOriginSchema.optional(),
 });
 export const StartStrategyEvaluationSessionOutput = z.object({
   session: StrategyEvaluationSessionSchema,
@@ -112,6 +123,7 @@ export const startStrategyEvaluationSessionTool = defineTool({
             stockIds,
             stockIdChecksum: createHash('sha256').update(JSON.stringify(stockIds)).digest('hex'),
           }),
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
     });
     const existing = await ctx.repos.strategyEvaluation.findSessionById(session.id);
     if (existing !== null) {
@@ -119,7 +131,9 @@ export const startStrategyEvaluationSessionTool = defineTool({
         existing.strategyVersionId !== session.strategyVersionId ||
         existing.from.getTime() !== session.from.getTime() ||
         existing.to.getTime() !== session.to.getTime() ||
-        existing.stockIdChecksum !== session.stockIdChecksum
+        existing.stockIdChecksum !== session.stockIdChecksum ||
+        // provenance 是口径来源：同一个 requestId 不能先声明一条轨、再按另一条轨续跑。
+        existing.origin !== session.origin
       )
         return errInvalidInput('requestId 已用于不同的 evaluation 输入');
       return { session: existing };

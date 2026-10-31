@@ -2,13 +2,16 @@ import {
   AccountFactsSchema,
   type Advice,
   AdviceSchema,
+  type DailyBar,
+  isHoliday,
+  isWeekend,
   money,
   STANDARD_DISCLAIMERS,
   tradingPlanExpiresAt,
 } from '@luoome/core';
-import { addHoldingTool, getTradingPlanTool } from '@luoome/tools';
+import { addHoldingTool, getDailyVolatilityTool, getTradingPlanTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildTradingPlanFromAdvice,
@@ -77,7 +80,116 @@ const candidateAdvice = (now: Date, overrides: Partial<Advice> = {}): Advice => 
   ...overrides,
 });
 
+/**
+ * 由日收益率序列构造 21 根 qfq 日线（20 个收益率 → 一个 20 日波动率窗口）。
+ * 日期落在**连续交易日**上：`get_daily_volatility` 只认「相邻且正好差 1 个交易日」的 bar 对，
+ * 用自然日排会跨周末，窗口就不再是 20 个日收益率。
+ */
+const dailyBarsFromReturns = (returns: readonly number[], end: Date = NOW): DailyBar[] => {
+  const closes = [100];
+  for (const value of returns) closes.push((closes.at(-1) as number) * (1 + value));
+  const dates = tradingDaysBack(closes.length, { end });
+  return closes.map((close, index) => ({
+    stockId: STOCK_ID,
+    date: dates[index] as Date,
+    open: money(close),
+    high: money(close),
+    low: money(close),
+    close: money(close),
+    volume: 1_000_000,
+    adjustment: 'qfq' as const,
+    source: 'fixture',
+  }));
+};
+
+/** 交替 ±3% 的 20 个收益率 → 已实现波动率 3.0%。 */
+const THREE_PCT_VOLATILITY_RETURNS = Array.from({ length: 20 }, (_, index) =>
+  index % 2 === 0 ? 0.03 : -0.03,
+);
+
+/** 21 根完全相同收盘价 → 20 个收益率全为 0（停牌 / 无成交的形态）。 */
+const FLAT_PRICE_RETURNS = Array.from({ length: 20 }, () => 0);
+
+/**
+ * 从 `end` 往前取 `count` 个交易日（跳过周末与节假日），可指定在最新 `afterNewest` 根之后
+ * 再跳过 `missing` 个交易日——模拟停牌期间不产生 bar。返回按时间升序的日期。
+ */
+const tradingDaysBack = (
+  count: number,
+  options: { readonly end?: Date; readonly afterNewest?: number; readonly missing?: number } = {},
+): Date[] => {
+  const end = options.end ?? NOW;
+  const afterNewest = options.afterNewest ?? -1;
+  let remainingMissing = options.missing ?? 0;
+  const descending: Date[] = [];
+  let cursor = end.getTime();
+  while (descending.length < count) {
+    const day = new Date(cursor);
+    if (!isWeekend(day) && !isHoliday(day)) {
+      if (descending.length === afterNewest && remainingMissing > 0) remainingMissing -= 1;
+      else descending.push(day);
+    }
+    cursor -= 86_400_000;
+  }
+  return descending.reverse();
+};
+
+/** 按给定日期落位 21 根日线（价格沿用 `dailyBarsFromReturns` 的收益率序列）。 */
+const dailyBarsAtDates = (returns: readonly number[], dates: readonly Date[]): DailyBar[] =>
+  dailyBarsFromReturns(returns).map((bar, index) => ({ ...bar, date: dates[index] as Date }));
+
+const volatilitySample = (
+  volatilityPct: number,
+  overrides: {
+    readonly latestBarDate?: Date;
+    readonly stalenessTradingDays?: number;
+    readonly windowStart?: Date;
+    readonly barsCount?: number;
+    readonly maxGapTradingDays?: number;
+  } = {},
+) => {
+  const latestBarDate = overrides.latestBarDate ?? NOW;
+  return {
+    status: 'available' as const,
+    volatilityPct,
+    latestBarDate,
+    stalenessTradingDays: overrides.stalenessTradingDays ?? 0,
+    windowStart: overrides.windowStart ?? new Date(latestBarDate.getTime() - 20 * 86_400_000),
+    windowEnd: latestBarDate,
+    barsCount: overrides.barsCount ?? 21,
+    maxGapTradingDays: overrides.maxGapTradingDays ?? 0,
+  };
+};
+
+/**
+ * 波动率阈值的 env 出口（`trading-plan-daily-cycle` 的 `volatilityPolicyFromEnv` 读的就是这两个）。
+ * 阈值优先级是「显式入参 > env > 默认值」，所以任何一条断言都可能被 CI 预设的 env 改写：
+ * 这里每个用例开始前保存原值并清空，结束后恢复，断言只依赖用例自己设置的 env。
+ */
+const VOLATILITY_ENV_KEYS = [
+  'LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT',
+  'LUOOME_TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS',
+] as const;
+
 describe('trading plan daily cycle', () => {
+  let savedVolatilityEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    savedVolatilityEnv = {};
+    for (const key of VOLATILITY_ENV_KEYS) {
+      savedVolatilityEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of VOLATILITY_ENV_KEYS) {
+      const value = savedVolatilityEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
   it('复核无变化时维持原版本与硬期限，新的 Advice 留在复核审计中', async () => {
     let now = NOW;
     const ctx = await buildTestContext({ clock: () => now, advices: [candidateAdvice(now)] });
@@ -820,6 +932,302 @@ describe('trading plan daily cycle', () => {
     expect(conflict.data.plans[0]?.position.constraintStatus).toBe('blocked');
     expect(conflict.data.plans[0]?.explanation.unknowns.join('；')).toContain('条件不一致');
   });
+  it('T21 端到端：日线 → 波动率选点 → 落库 plan 的 appliedPct 高于下限', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 真实日线先进 daily_bars，再由 workflow 经 get_daily_volatility 读出 3.0% 的已实现波动率。
+    const bars = dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS);
+    await ctx.repos.dailyBar.saveMany(bars);
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    // H4 收窄后的区间 8.24–11.77；3.0% 落在 tiers 第三档（区间宽度的 33%）。
+    expect(plan.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    expect(plan.position.rangePick).toMatchObject({
+      ruleId: 'volatility-scaled',
+      volatilityMetric: 'realized-vol-20d',
+      volatilityPct: 3,
+      // 窗口随计划落库：从计划本身就能回答「这个 σ 是哪 21 根 bar」。
+      windowStart: bars[0]?.date,
+      windowEnd: NOW,
+      barsCount: 21,
+      maxGapTradingDays: 0,
+    });
+    // 8.24 + (11.77 − 8.24) × 33% = 9.40：选点真的生效，不是退化成 min。
+    expect(plan.position.appliedPct).toBe(9.4);
+    expect(plan.position.appliedPct).not.toBe(plan.position.targetPctRange?.min);
+    expect(plan.position.fallbackPct).toBe(8.24);
+    // 读侧复用同一份 tiers 复算，写入值与读出值必须一致。
+    const read = await getTradingPlanTool.execute(
+      { versionId: `${plan.id}:v${plan.version}` },
+      ctx,
+    );
+    expect(read.ok && read.data.plan.position.appliedPct).toBe(9.4);
+  });
+
+  it('T21 端到端：缺日线样本时降级 lower-bound 并在 constraintReasons 说明', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.fallbackPct).toBe(8.24);
+    expect(plan.position.constraintReasons.join('；')).toContain('波动率不可用');
+  });
+
+  it('T21 端到端：21 根相同收盘价（停牌形态）取区间下限，不给区间上限', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 21 根完全相同的收盘价 → 20 个收益率全为 0：A 股里这几乎只可能是停牌或长期无成交。
+    await ctx.repos.dailyBar.saveMany(dailyBarsFromReturns(FLAT_PRICE_RETURNS));
+
+    const volatility = await getDailyVolatilityTool.execute({ stockIds: [STOCK_ID] }, ctx);
+    expect(volatility.ok && volatility.data.items[0]).toMatchObject({
+      status: 'unavailable',
+      reason: 'insufficient-volatility',
+      volatilityPct: 0,
+    });
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    expect(plan.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    // σ=0 是「没有有效价格」，不是「最安全」：落点必须是下限 8.24，绝不是上限 11.77。
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.appliedPct).toBe(plan.position.targetPctRange?.min);
+    expect(plan.position.appliedPct).not.toBe(plan.position.targetPctRange?.max);
+    expect(plan.position.constraintReasons.join('；')).toContain(
+      '波动率异常低（可能停牌或无成交），按不可用处理，取区间下限',
+    );
+  });
+
+  it('T21 端到端：低波动（1%）取区间上限——appliedPct 高于历史 lower-bound', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 交替 ±1% → σ ≈ 1.0%，落在第一档（≤1.5% → 区间宽度 100%）。
+    await ctx.repos.dailyBar.saveMany(
+      dailyBarsFromReturns(
+        Array.from({ length: 20 }, (_, index) => (index % 2 === 0 ? 0.01 : -0.01)),
+      ),
+    );
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    const pick = plan.position.rangePick;
+    if (pick === null || pick.ruleId !== 'volatility-scaled')
+      throw new Error('expected volatility-scaled');
+    expect(pick.volatilityPct).toBeCloseTo(1, 1);
+    // 行为变更：波动小到有效 → 用满区间，落点等于上限，高于此前恒取下限的 8.24。
+    expect(plan.position.appliedPct).toBe(11.77);
+    expect(plan.position.appliedPct).toBe(plan.position.targetPctRange?.max);
+    expect(plan.position.appliedPct).toBeGreaterThan(plan.position.targetPctRange?.min ?? 0);
+    // 降级值仍恒等于下限：降级路径的语义没变。
+    expect(plan.position.fallbackPct).toBe(8.24);
+  });
+
+  it('T21 端到端：日线停更两个月按过期处理，降级下限并写明滞后交易日数', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 窗口本身是完整的 3.0%，但最后一根日线停在两个月前：那是「两个月前的波动率」。
+    await ctx.repos.dailyBar.saveMany(
+      dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS, new Date(NOW.getTime() - 60 * 86_400_000)),
+    );
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    const reasons = plan.position.constraintReasons.join('；');
+    expect(reasons).toContain('波动率样本已过期');
+    expect(reasons).toMatch(/滞后 \d+ 个交易日/);
+  });
+
+  it('T21 端到端：停牌断档的窗口不算 20 日波动率，降级 lower-bound', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 最新 10 根之后停牌 12 个交易日：21 根 bar 里跨断档的那一对是多日收益，不是日收益。
+    // 剔除它只剩 19 个有效收益率 < 20 → 样本不足，不是「3% 的 20 日波动率」。
+    const dates = tradingDaysBack(21, { afterNewest: 10, missing: 12 });
+    await ctx.repos.dailyBar.saveMany(dailyBarsAtDates(THREE_PCT_VOLATILITY_RETURNS, dates));
+
+    const volatility = await getDailyVolatilityTool.execute({ stockIds: [STOCK_ID] }, ctx);
+    expect(volatility.ok && volatility.data.items[0]).toMatchObject({
+      status: 'unavailable',
+      reason: 'insufficient-volatility',
+      barsCount: 21,
+      returnsCount: 19,
+      requiredReturns: 20,
+      maxGapTradingDays: 12,
+      zeroVolumeBars: 0,
+    });
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    // 降级到下限：不再把「21 根 bar 的 σ」当成「20 个日收益率的 σ」。
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.appliedPct).toBe(plan.position.targetPctRange?.min);
+    expect(plan.position.constraintReasons.join('；')).toContain('波动率样本不足');
+  });
+
+  it('T21 端到端：停牌期 provider 仍写 volume=0 的 bar 时降级 lower-bound，不给接近上限的仓位', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    // 「停牌不产生 bar」是 provider 行为，不是写入侧保证：这里模拟 provider 在停牌期也写 bar。
+    // 21 根 bar 一路排到最新交易日（staleness=0，新鲜度闸门失效），volume=0，收盘价仍 ±3% 摆动。
+    // 只看收盘价会得到 3% → 第三档 → 9.4（接近区间上限）。必须被零成交判据拦下。
+    const bars = dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS).map((bar) => ({
+      ...bar,
+      volume: 0,
+    }));
+    await ctx.repos.dailyBar.saveMany(bars);
+
+    const volatility = await getDailyVolatilityTool.execute({ stockIds: [STOCK_ID] }, ctx);
+    expect(volatility.ok && volatility.data.items[0]).toMatchObject({
+      status: 'unavailable',
+      reason: 'insufficient-volatility',
+      returnsCount: 0,
+      zeroVolumeBars: 21,
+    });
+
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    // 关键：不是 9.4（volatility-scaled 会给出的落点），也不是上限 11.77。
+    expect(plan.position.appliedPct).not.toBe(9.4);
+    expect(plan.position.appliedPct).not.toBe(plan.position.targetPctRange?.max);
+    expect(plan.position.constraintReasons.join('；')).toContain('波动率样本不足');
+  });
+
+  it('T21 端到端：σ 下限可配置——调高后 3% 的样本被拒，降级下限', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    await ctx.repos.dailyBar.saveMany(dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS));
+
+    // 默认下限 0.1 放行 3%；把下限调到 5 就是「3% 也不算有效波动」。
+    const result = await tradingPlanDailyCycleWorkflow.run(
+      { accountId: EMPTY_ACCOUNT_ID, volatilityMinPct: 5 },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.constraintReasons.join('；')).toContain('波动率异常低');
+  });
+
+  it('T21 端到端：阈值可由环境变量给（定时路径无入参），显式入参优先于 env', async () => {
+    const fresh = async () => {
+      const ctx = await buildTestContext({
+        clock: () => NOW,
+        advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+      });
+      await ctx.repos.dailyBar.saveMany(dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS));
+      return ctx;
+    };
+
+    // env 由本文件的 beforeEach/afterEach 统一隔离（先保存原值、清空，结束后恢复）。
+    // 999 远离 3% 这个样本值：只要 env 生效，3% 的窗口必然被拒。
+    process.env.LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT = '999';
+    const fromEnv = await fresh();
+    await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, fromEnv);
+    const envPlan = (await fromEnv.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID }))[0];
+    if (envPlan === undefined) throw new Error('plan missing');
+    // 不传显式入参 → 走 env 的 999：3% 的样本被拒，降级下限。
+    expect(envPlan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(envPlan.position.appliedPct).toBe(8.24);
+    expect(envPlan.position.constraintReasons.join('；')).toContain('波动率异常低');
+
+    // 显式入参优先：入参把下限降回 0.1，env 的 999 不再生效（否则这里仍是 lower-bound）。
+    const overridden = await fresh();
+    await tradingPlanDailyCycleWorkflow.run(
+      { accountId: EMPTY_ACCOUNT_ID, volatilityMinPct: 0.1 },
+      overridden,
+    );
+    const overriddenPlan = (
+      await overridden.repos.tradingPlan.list({
+        accountId: EMPTY_ACCOUNT_ID,
+      })
+    )[0];
+    if (overriddenPlan === undefined) throw new Error('plan missing');
+    expect(overriddenPlan.position.rangePick).toMatchObject({ ruleId: 'volatility-scaled' });
+    expect(overriddenPlan.position.appliedPct).toBe(9.4);
+  });
+
+  it('T21 端到端：新鲜度阈值可配置——滞后 3 个交易日在默认 5 内可用，调到 2 即过期', async () => {
+    // 最新 bar 停在 2026-07-14（周五 07-17 往前 3 个交易日）。
+    const staleEnd = new Date('2026-07-14T07:00:00.000Z');
+    const bars = dailyBarsFromReturns(THREE_PCT_VOLATILITY_RETURNS, staleEnd);
+    const fresh = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    await fresh.repos.dailyBar.saveMany(bars);
+    await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, fresh);
+    const freshPlan = (await fresh.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID }))[0];
+    if (freshPlan === undefined) throw new Error('plan missing');
+    // 默认阈值 5：滞后 3 个交易日仍算当前样本。
+    expect(freshPlan.position.rangePick).toMatchObject({ ruleId: 'volatility-scaled' });
+    expect(freshPlan.position.appliedPct).toBe(9.4);
+
+    const strict = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    await strict.repos.dailyBar.saveMany(bars);
+    await tradingPlanDailyCycleWorkflow.run(
+      { accountId: EMPTY_ACCOUNT_ID, volatilityMaxStalenessTradingDays: 2 },
+      strict,
+    );
+    const strictPlan = (await strict.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID }))[0];
+    if (strictPlan === undefined) throw new Error('plan missing');
+    expect(strictPlan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(strictPlan.position.appliedPct).toBe(8.24);
+    // 降级文案写实际用的阈值，改阈值不会让历史计划变得不可解释。
+    expect(strictPlan.position.constraintReasons.join('；')).toContain('滞后 3 个交易日，阈值 2');
+  });
+
   it('非 UUID 账户键（如 default-account）不会触发 sync_quotes 的 Invalid UUID', async () => {
     const now = NOW;
     const ctx = await buildTestContext({ clock: () => now });
@@ -923,5 +1331,152 @@ describe('T21 生成器：v2 区间/选点/失效规则与指纹重算', () => {
     expect(next.position.targetPctRange).toEqual({ min: 20, max: 20 });
     expect(next.position.appliedPct).toBe(20);
     expect(next.version).toBe(2);
+  });
+
+  it('高波动标的压到区间下限，但仍留下可复算的 volatility-scaled 参数', () => {
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+      volatility: volatilitySample(5),
+    });
+    expect(plan.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    expect(plan.position.rangePick).toMatchObject({
+      ruleId: 'volatility-scaled',
+      volatilityPct: 5,
+    });
+    // 5% 落在「≤6% → 区间宽度 0%」这一档：保守到下限，且 fallbackPct 仍等于 min。
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.fallbackPct).toBe(8.24);
+    expect(plan.position.constraintReasons.join('；')).not.toContain('波动率不可用');
+  });
+
+  it('σ=0 的样本按不可用处理：落点是下限，不是上限', () => {
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+      // 直接调用方绕过 tool 时同样不能把 σ=0 当「最安全」：第一档会给出区间上限。
+      volatility: volatilitySample(0),
+    });
+    expect(plan.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.appliedPct).toBe(plan.position.targetPctRange?.min);
+    expect(plan.position.constraintReasons.join('；')).toContain(
+      '波动率异常低（可能停牌或无成交），按不可用处理，取区间下限',
+    );
+  });
+
+  it('样本过期降级下限并写明最新日线与滞后交易日数；临界 5 个交易日仍可用', () => {
+    const stale = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+      volatility: volatilitySample(3, {
+        latestBarDate: new Date('2026-05-18T00:00:00.000Z'),
+        stalenessTradingDays: 42,
+      }),
+    });
+    expect(stale.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(stale.position.appliedPct).toBe(8.24);
+    expect(stale.position.constraintReasons.join('；')).toContain(
+      '波动率样本已过期（最新日线 2026-05-18，滞后 42 个交易日，阈值 5）',
+    );
+
+    const fresh = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+      volatility: volatilitySample(3, { stalenessTradingDays: 5 }),
+    });
+    expect(fresh.position.rangePick).toMatchObject({
+      ruleId: 'volatility-scaled',
+      volatilityPct: 3,
+    });
+    expect(fresh.position.appliedPct).toBe(9.4);
+  });
+
+  it('生成器把波动率窗口写进 rangePick（σ 与窗口是同一类可复算事实）', () => {
+    const windowStart = new Date('2026-07-01T00:00:00.000Z');
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+      volatility: volatilitySample(3, { windowStart, maxGapTradingDays: 4 }),
+    });
+    expect(plan.position.rangePick).toMatchObject({
+      ruleId: 'volatility-scaled',
+      volatilityPct: 3,
+      windowStart,
+      windowEnd: NOW,
+      barsCount: 21,
+      // 窗口跨过停牌：断档天数一并落库，复盘能看出 σ 里有跨多日的收益率。
+      maxGapTradingDays: 4,
+    });
+    // 窗口不影响落点：仍是 8.24 + (11.77 − 8.24) × 33% = 9.40。
+    expect(plan.position.appliedPct).toBe(9.4);
+  });
+
+  it('生成器接受阈值覆盖：σ 下限调高即降级，新鲜度上限调高即放行', () => {
+    const base = {
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 0),
+      advice: candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } }),
+      previous: [],
+      now: NOW,
+    };
+    const strictFloor = buildTradingPlanFromAdvice({
+      ...base,
+      volatility: volatilitySample(3),
+      volatilityPolicy: { minVolatilityPct: 5 },
+    });
+    expect(strictFloor.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(strictFloor.position.appliedPct).toBe(8.24);
+    expect(strictFloor.position.constraintReasons.join('；')).toContain('波动率异常低');
+
+    const looseFreshness = buildTradingPlanFromAdvice({
+      ...base,
+      volatility: volatilitySample(3, { stalenessTradingDays: 8 }),
+      volatilityPolicy: { maxStalenessTradingDays: 10 },
+    });
+    expect(looseFreshness.position.rangePick).toMatchObject({ ruleId: 'volatility-scaled' });
+    expect(looseFreshness.position.appliedPct).toBe(9.4);
+  });
+
+  it('退化区间（min === max）不声明 volatility-scaled，选点仍是 lower-bound', () => {
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts: factsFor('facts-digest-a', 10),
+      advice: candidateAdvice(NOW, { decision: 'hold' }),
+      holding: {
+        holding: {
+          id: 'holding-1',
+          accountId: ACCOUNT_ID,
+          stockId: STOCK_ID,
+          quantity: 10,
+          availableQuantity: 10,
+          closedAt: null,
+        },
+        stockName: '贵州茅台',
+      },
+      previous: [],
+      now: NOW,
+      volatility: volatilitySample(3),
+    });
+    expect(plan.position.targetPctRange).toEqual({ min: 10, max: 10 });
+    expect(plan.position.rangePick).toEqual({ ruleId: 'lower-bound' });
+    expect(plan.position.appliedPct).toBe(10);
+    expect(plan.position.fallbackPct).toBe(10);
   });
 });

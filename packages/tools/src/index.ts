@@ -68,6 +68,7 @@ export * from './tools/get-advice-stats.js';
 export * from './tools/get-ashare-sentiment.js';
 export * from './tools/get-closing-batch-audit.js';
 export * from './tools/get-confidence-calibration.js';
+export * from './tools/get-daily-volatility.js';
 export * from './tools/get-data-diagnostics.js';
 export * from './tools/get-decision-loop-review.js';
 export * from './tools/get-decision-review-snapshot.js';

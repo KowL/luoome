@@ -3,8 +3,10 @@ import {
   compareStrategyRunEvaluator,
   EVALUATOR_CODE_IDENTITY_SOURCE,
   runStrictBacktest,
+  STOCK_UNIVERSE_ATTRIBUTES,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
+  type StockUniverseAttribute,
   type StrategyEvaluationDay,
   type StrategyEvaluationSession,
   type StrategyResult,
@@ -74,6 +76,114 @@ const CORPORATE_ACTIONS_LIMITATION =
   '未考虑分红送转：高股息标的总收益被低估；除权除息日的价格跳空被当成真实亏损。';
 
 const BACKTEST_LIMITATIONS = [ST_DERIVATION_LIMITATION, CORPORATE_ACTIONS_LIMITATION] as const;
+
+/** PIT 属性缺口 → 用户可读标签（门禁 reason 用）。 */
+const PIT_ATTRIBUTE_LABELS: Record<StockUniverseAttribute, string> = {
+  listingStatus: '上市状态',
+  stStatus: 'ST 状态',
+  industry: '行业',
+  listDate: '上市日期',
+  delistDate: '退市日期',
+};
+
+/**
+ * 属性缺口只在数据源不提供时出现（例如默认 eastmoney/sina 只给名称派生 ST），
+ * 目前唯一能补齐 industry/listDate/delistDate 的目录源是 tushare。
+ */
+const PIT_ATTRIBUTE_REMEDY =
+  '配置 TUSHARE_TOKEN 并在 LUOOME_STOCK_UNIVERSE_SOURCES 中加入 tushare 后重新同步 universe 可补';
+
+/** 诊断只做代表性抽样：属性缺口是来源级属性，逐日全量查询会让门禁退化成 N×全市场扫描。 */
+const PIT_ATTRIBUTE_GAP_SAMPLE = 5;
+
+interface PitAttributeGap {
+  /** 参与抽样的快照来源。 */
+  readonly sources: readonly string[];
+  /** 抽样内**所有**快照都缺的属性（交集取反）。 */
+  readonly missing: readonly StockUniverseAttribute[];
+  /** universeSyncId 指向的快照已查不到（不是属性缺口，是数据缺失）。 */
+  readonly missingSnapshotCount: number;
+  readonly sampled: number;
+  readonly total: number;
+}
+
+/**
+ * 读 evaluation day 的 PIT 快照属性覆盖，得出「缺哪些属性、来自哪个源」。
+ * 只读快照列，不读当前 `stocks` 属性（否则会把前视当成缺口证据）。
+ */
+const describePitAttributeGap = async (
+  ctx: ToolContext,
+  days: readonly StrategyEvaluationDay[],
+): Promise<PitAttributeGap | null> => {
+  const syncIds = [
+    ...new Set(
+      days.flatMap((day) => (day.universeSyncId === undefined ? [] : [day.universeSyncId])),
+    ),
+  ];
+  if (syncIds.length === 0) return null;
+  const sampledIds = syncIds.slice(0, PIT_ATTRIBUTE_GAP_SAMPLE);
+  const sources = new Set<string>();
+  let missingSnapshotCount = 0;
+  let provided: Set<StockUniverseAttribute> | null = null;
+  for (const syncId of sampledIds) {
+    const coverage = await ctx.repos.stockUniverse.describeSnapshotAttributes(syncId);
+    if (coverage === null) {
+      missingSnapshotCount += 1;
+      continue;
+    }
+    sources.add(coverage.source);
+    const current = new Set<StockUniverseAttribute>(coverage.provided);
+    if (provided === null) {
+      provided = current;
+      continue;
+    }
+    const intersection = new Set<StockUniverseAttribute>();
+    for (const attribute of provided) {
+      if (current.has(attribute)) intersection.add(attribute);
+    }
+    provided = intersection;
+  }
+  if (provided === null) {
+    return missingSnapshotCount === 0
+      ? null
+      : {
+          sources: [],
+          missing: [],
+          missingSnapshotCount,
+          sampled: sampledIds.length,
+          total: syncIds.length,
+        };
+  }
+  const missing = STOCK_UNIVERSE_ATTRIBUTES.filter((attribute) => !provided.has(attribute));
+  if (missing.length === 0 && missingSnapshotCount === 0) return null;
+  return {
+    sources: [...sources].sort(),
+    missing,
+    missingSnapshotCount,
+    sampled: sampledIds.length,
+    total: syncIds.length,
+  };
+};
+
+/** 门禁 reason 里的缺口说明；`null` = 属性齐全。 */
+const describePitAttributeGapText = (gap: PitAttributeGap | null): string | null => {
+  if (gap === null) return null;
+  const parts: string[] = [];
+  if (gap.missing.length > 0) {
+    const sourceLabel = gap.sources.length === 0 ? '未知来源' : gap.sources.join('、');
+    const sampling =
+      gap.total > gap.sampled ? `（抽样 ${gap.sampled}/${gap.total} 个评估日快照）` : '';
+    parts.push(
+      `快照属性缺口：来源 ${sourceLabel}${sampling} 未提供 ${gap.missing
+        .map((attribute) => PIT_ATTRIBUTE_LABELS[attribute])
+        .join('、')}（PIT 判定只能按 unknown 处理）；${PIT_ATTRIBUTE_REMEDY}`,
+    );
+  }
+  if (gap.missingSnapshotCount > 0) {
+    parts.push(`${gap.missingSnapshotCount} 个 universeSyncId 查不到快照记录`);
+  }
+  return parts.join('；');
+};
 
 /**
  * 读侧注入：limitations 是机制级披露（所有 run 都没考虑分红），不是 run 级数据；
@@ -169,6 +279,7 @@ interface BacktestContext {
   >;
   readonly resultsByDay: ReadonlyMap<string, readonly StrategyResult[]>;
   readonly pitComplete: boolean;
+  readonly pitAttributeGap: PitAttributeGap | null;
   readonly revisionComplete: boolean;
   readonly evaluatorComplete: boolean;
   readonly evaluatorComparisons: readonly (
@@ -265,6 +376,7 @@ const collectBacktestContext = async (
     runs,
     resultsByDay,
     pitComplete,
+    pitAttributeGap: await describePitAttributeGap(ctx, days),
     revisionComplete,
     evaluatorComplete,
     evaluatorComparisons,
@@ -287,6 +399,7 @@ const assembleBacktest = async (
     cutoffByDate,
     runs,
     pitComplete,
+    pitAttributeGap,
     revisionComplete,
     evaluatorComplete,
     evaluatorComparisons,
@@ -348,13 +461,37 @@ const assembleBacktest = async (
   }
   if (benchmarkFacts.length !== executionDays.length) benchmarkComplete = false;
 
+  const pitAttributeGapText = describePitAttributeGapText(pitAttributeGap);
+  /** 追加说明：去掉原句尾的句号/分号，避免出现「。；」。 */
+  const appendReason = (reason: string, extra: string): string =>
+    `${reason.replace(/[。；]\s*$/, '')}；${extra}`;
+  const withPitGap = (reason: string): string =>
+    pitAttributeGapText === null ? reason : appendReason(reason, pitAttributeGapText);
+  /** 可交易性门禁只关心上市状态/ST 状态这两列的来源缺口。 */
+  const tradabilitySourceGapText = ((): string | null => {
+    if (pitAttributeGap === null) return null;
+    const relevant = pitAttributeGap.missing.filter(
+      (attribute) => attribute === 'listingStatus' || attribute === 'stStatus',
+    );
+    if (relevant.length === 0) return null;
+    const sourceLabel =
+      pitAttributeGap.sources.length === 0 ? '未知来源' : pitAttributeGap.sources.join('、');
+    return `快照来源 ${sourceLabel} 未提供 ${relevant
+      .map((attribute) => PIT_ATTRIBUTE_LABELS[attribute])
+      .join('、')}，${PIT_ATTRIBUTE_REMEDY}`;
+  })();
+  const withTradabilitySource = (reason: string): string =>
+    tradabilitySourceGapText === null ? reason : appendReason(reason, tradabilitySourceGapText);
+
   const items = [
     gate(
       'pit-universe',
       pitComplete ? 'complete' : days.length === 0 ? 'unavailable' : 'partial',
-      pitComplete
-        ? 'PIT universe 与逐日运行完整'
-        : 'evaluation session/day 缺少完整 PIT universe 或终态 run',
+      withPitGap(
+        pitComplete
+          ? 'PIT universe 与逐日运行完整'
+          : 'evaluation session/day 缺少完整 PIT universe 或终态 run',
+      ),
       days.flatMap((day) =>
         day.universeSyncId === undefined ? [] : [`universe:${day.universeSyncId}`],
       ),
@@ -382,9 +519,11 @@ const assembleBacktest = async (
           : marketFacts.length === 0
             ? 'unavailable'
             : 'partial',
-      tradabilityComplete
-        ? `所有潜在持仓在全部执行日都有 PIT 可交易性事实；${ST_DERIVATION_LIMITATION}`
-        : `缺少可交易性事实${describeBacktestFactSkips(report) === null ? '' : `：${describeBacktestFactSkips(report)}`}；${ST_DERIVATION_LIMITATION}`,
+      withTradabilitySource(
+        tradabilityComplete
+          ? `所有潜在持仓在全部执行日都有 PIT 可交易性事实；${ST_DERIVATION_LIMITATION}`
+          : `缺少可交易性事实${describeBacktestFactSkips(report) === null ? '' : `：${describeBacktestFactSkips(report)}`}；${ST_DERIVATION_LIMITATION}`,
+      ),
       marketFacts.map(
         (fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}:${fact.contentHash}`,
       ),

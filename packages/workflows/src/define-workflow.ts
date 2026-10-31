@@ -60,6 +60,8 @@ import type {
   GetAShareSentimentOutput,
   GetConfidenceCalibrationInput,
   GetConfidenceCalibrationOutput,
+  GetDailyVolatilityInput,
+  GetDailyVolatilityOutput,
   GetDecisionLoopReviewInput,
   GetDecisionLoopReviewOutput,
   GetDecisionReviewSnapshotInput,
@@ -383,6 +385,10 @@ export interface WorkflowToolMap {
   readonly get_previous_closes: ToolAccessor<
     typeof GetPreviousClosesInput,
     typeof GetPreviousClosesOutput
+  >;
+  readonly get_daily_volatility: ToolAccessor<
+    typeof GetDailyVolatilityInput,
+    typeof GetDailyVolatilityOutput
   >;
   readonly get_stock_universe_status: ToolAccessor<
     typeof GetStockUniverseStatusInput,

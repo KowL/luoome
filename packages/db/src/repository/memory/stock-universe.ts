@@ -5,10 +5,12 @@ import {
   type StockRepository,
   type StockUniverseApplySummary,
   type StockUniverseRepository,
+  type StockUniverseSnapshotAttributeCoverage,
   type StockUniverseSnapshotMember,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
   type StStatus,
+  stockUniverseMemberAttributeCoverage,
   stockUniverseMemberIdentity,
 } from '@luoome/core';
 
@@ -275,6 +277,21 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
         ...(member.delistDate === undefined ? {} : { delistDate: member.delistDate }),
       };
     });
+  }
+
+  async describeSnapshotAttributes(
+    syncId: string,
+  ): Promise<StockUniverseSnapshotAttributeCoverage | null> {
+    const run = this.runs.get(syncId);
+    if (run === undefined) return null;
+    const members = this.snapshotMembers.get(syncId) ?? [];
+    return {
+      syncId,
+      source: run.source,
+      observedAt: run.observedAt,
+      memberCount: members.length,
+      provided: stockUniverseMemberAttributeCoverage(members),
+    };
   }
 
   private key(source: string, coverage: MarketCoverage, stockId: string): string {

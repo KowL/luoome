@@ -6,6 +6,7 @@ import {
   StockUniverseSnapshotSchema,
   type StockUniverseSourceLike,
   stockCode,
+  stockUniverseAttributeCoverage,
 } from '@luoome/core';
 
 const DEFAULT_URL = 'https://push2.eastmoney.com/api/qt/clist/get';
@@ -112,6 +113,9 @@ export class EastmoneyStockUniverseAdapter implements StockUniverseSourceLike {
       observedAt: this.clock(),
       complete: true,
       reportedTotal,
+      // 显式降级：clist 只给代码/市场/名称，listingStatus、industry、listDate、delistDate
+      // 都不在这条接口里，快照自报「只有 stStatus」，不让缺口静默成 unknown。
+      attributeCoverage: stockUniverseAttributeCoverage(entries),
       entries,
     });
   }

@@ -46,6 +46,8 @@ describe('stock-universe/SinaStockUniverseAdapter', () => {
       '002594.SZ',
     ]);
     expect(snapshot.entries.every((entry) => entry.listingStatus === 'unknown')).toBe(true);
+    // 显式降级：Market_Center 只有代码/名称，快照自报只提供 stStatus，不静默 unknown。
+    expect(snapshot.attributeCoverage).toEqual(['stStatus']);
     expect(requests.filter((url) => url.pathname.includes('getHQNodeStockCount'))).toHaveLength(2);
     expect(requests.filter((url) => url.searchParams.get('node') === 'sh_a')).toHaveLength(3);
     expect(requests.filter((url) => url.searchParams.get('node') === 'sz_a')).toHaveLength(2);

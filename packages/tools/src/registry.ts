@@ -60,6 +60,7 @@ import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
+import { getDailyVolatilityTool } from './tools/get-daily-volatility.js';
 import { getDataDiagnosticsTool } from './tools/get-data-diagnostics.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
 import { getDecisionReviewSnapshotTool } from './tools/get-decision-review-snapshot.js';
@@ -409,6 +410,7 @@ export const toolRegistry: Registry = createRegistry([
   syncFinancialFactsTool,
   runFundamentalScoreTool,
   getPreviousClosesTool,
+  getDailyVolatilityTool,
   searchStocksTool,
   computeIndicatorsTool,
   // Strategy / Watchlist / AlertPlan 是唯一公开研究与盯盘模型。
