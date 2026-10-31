@@ -320,6 +320,15 @@ export const PortfolioRiskLimitCheckSchema = z.object({
   note: z.string().min(1),
 });
 
+/**
+ * 本工具的可用性维度声明（与 `get_account_facts` 的账本完整性是两个独立维度）。
+ * 见 `docs/ARCHITECTURE.md` §11.1「有意不同」第 ② 项。
+ */
+export const PORTFOLIO_RISK_AVAILABILITY_DIMENSION =
+  '本工具的可用性只看价格覆盖（多少持仓有可用报价），与 get_account_facts 的账本完整性是不同维度：' +
+  '若账本对账存在缺口（现金与成交对不上、持仓与成交数量不符），本工具的价格覆盖状态**不反映**该问题；' +
+  '请用 get_account_facts 查看账本完整性。两者可能给出不同状态，那不是互相矛盾。';
+
 export const GetPortfolioRiskOutput = z.object({
   /** 输出形状版本；`value` 从「可为 null」改为「键缺席」是破坏性变更，外部脚本据此判定。 */
   schemaVersion: z.literal(PORTFOLIO_RISK_SCHEMA_VERSION),
@@ -797,6 +806,12 @@ export const getPortfolioRiskTool = defineTool({
         );
     }
     if (account.cashBalance < 0) warnings.push('账户现金余额为负，总资产口径请先核对账本');
+    /**
+     * 可用性维度声明（与 `get_account_facts` 的账本完整性是两个独立维度）。
+     * 本工具**只看价格覆盖**、刻意不接 reconciliation：手工录入持仓（无对应成交）
+     * 在生产上是合法路径，接进来会把这类账户全打成 unavailable，属误报。
+     */
+    warnings.push(PORTFOLIO_RISK_AVAILABILITY_DIMENSION);
     if (unpriced.length > 0)
       warnings.push(
         `${String(unpriced.length)} 只持仓没有可用报价（${unpriced

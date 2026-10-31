@@ -7,6 +7,7 @@ import {
   isWeekend,
   money,
   type PortfolioPerformanceSnapshot,
+  quantity,
   type ToolContext,
   TradingPlanSchema,
 } from '@luoome/core';
@@ -20,6 +21,7 @@ import {
   selectExposedTools,
 } from '../exposure.js';
 import { toolRegistry } from '../registry.js';
+import { getAccountFactsTool } from './account-facts.js';
 import {
   getPortfolioRiskTool,
   herfindahlIndex,
@@ -859,5 +861,76 @@ describe('E 暴露面：read 声明 + read allowlist 装配期硬校验', () => 
         label: 'read tool',
       }),
     ).toThrow(/not read-only/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REQ 共享维度：账本对账缺口 ≠ 价格覆盖缺口（两个独立维度）
+// ---------------------------------------------------------------------------
+
+describe('可用性维度隔离：账本对账缺口不影响本工具的价格覆盖状态', () => {
+  it('账本有对账缺口 + 价格全覆盖 → get_portfolio_risk 仍 available，且 warnings 点名账本属另一维度', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const accountId = 'acct-risk-ledger-gap';
+    await seedAccount(ctx, { id: accountId, cashBalance: 50_000 });
+    // 持有 100 股，但没有任何成交记录 → 账本对账必然有数量缺口。
+    await seedHolding(ctx, { accountId, stockId: '600519.SH', quantity: 100, avgCost: 800 });
+    // 价格全覆盖。
+    await seedQualifiedQuote(ctx, { stockId: '600519.SH', price: 900 });
+
+    const data = await execute(ctx, { accountId });
+
+    // 价格覆盖维度完全正常 → available，不因为账本缺口降级。
+    expect(data.coverage).toMatchObject({ pricedCount: 1, unpricedStockIds: [] });
+    expect(data.valuation.holdingsValue).toMatchObject({ status: 'available' });
+    expect(data.valuation.totalAssets).toMatchObject({ status: 'available' });
+    expect(metricNamed(data, 'concentration_hhi').status).toBe('available');
+    // 但必须显式声明「账本完整性是另一个维度」，把用户导向正确的工具。
+    const dimensionNote = data.warnings.find((item) => item.includes('get_account_facts'));
+    expect(dimensionNote).toBeDefined();
+    expect(dimensionNote).toContain('不反映');
+  });
+
+  it('价格有缺口 + 账本无缺口 → get_account_facts 的 status 不因缺价以外的账本问题变化，且披露另一维度', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const accountId = 'acct-facts-price-gap';
+    // 账本自洽的 fixture：initialCapital = 现金 + 买入支出，成交与持仓数量一致。
+    // （上一版只落买入、不改现金，账本本来就会对不上——那是真实缺口，不是误报。）
+    const initialCapital = 130_000;
+    const cashBalance = 50_000;
+    const account: Account = {
+      id: accountId,
+      name: `fixture-${accountId}`,
+      kind: 'real',
+      currency: 'CNY',
+      initialCapital: money(initialCapital),
+      cashBalance: money(cashBalance),
+      createdAt: new Date('2026-01-05T01:00:00.000Z'),
+    };
+    await ctx.repos.account.save(account);
+    await seedHolding(ctx, { accountId, stockId: '600519.SH', quantity: 100, avgCost: 800 });
+    await ctx.repos.trade.save({
+      id: 'trade-1',
+      accountId,
+      stockId: '600519.SH',
+      side: 'buy',
+      quantity: quantity(100),
+      price: money(800),
+      fee: money(0),
+      executedAt: new Date('2026-06-01T01:00:00.000Z'),
+      createdAt: new Date('2026-06-01T01:00:00.000Z'),
+      source: 'manual',
+    });
+    // 价格缺口：没有任何报价。
+    const facts = await getAccountFactsTool.execute({ accountId }, ctx);
+    expect(facts.ok).toBe(true);
+    if (!facts.ok) return;
+    // 缺价本身是 account-facts 自己的原因之一 —— 但它不能伪装成「账本对账缺口」。
+    const ledgerReason = facts.data.facts.reasons.find((item) => item.includes('账本对账缺口'));
+    expect(ledgerReason).toBeUndefined();
+    // 缺价的真实原因必须点名（本工具自己的维度），不能被「账本」措辞掩盖。
+    expect(facts.data.facts.reasons.join('；')).toContain('缺少合格行情');
+    // 维度声明必须在 notes 里（即使 status 是 unavailable，也要让人区分原因归属）。
+    expect(facts.data.facts.notes.join('；')).toContain('get_portfolio_risk');
   });
 });

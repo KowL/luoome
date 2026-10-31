@@ -1322,11 +1322,22 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | # | 两个实现 | 为什么有意不同 | 适用范围 |
 |---|---|---|---|
 | 1 | **Advice 过期**（`packages/tools/src/internal/advice-selection.ts:44`，注入时钟 `ctx.clock()`） vs **TradingPlan 有效期**（`packages/workflows/src/intraday-trading-plan-watch.ts:605`） | 两种实体、两种写回纪律：Advice 的可用窗口由 core 时效规则决定（含当日 15:00 截断、当日口径），TradingPlan 的有效期是计划自身字段。合并会把两种时效纪律缠在一起 | Advice 侧只认 `selectAdvices`；TradingPlan 侧只认 `validFrom/validUntil`。**边界比较符（`>` vs `>=`）两处必须显式写，不许抽成「顺手」的共享函数** |
-| 2 | **账户健康**：`get_account_facts`（账本完整性：现金/持仓与成交对账） vs `get_portfolio_risk`（价格覆盖：未定价持仓） | 两个**独立维度**：账本是否自洽 ≠ 价格是否齐全。合并会让「手工录入持仓（无对应成交）」这类合法路径被整体打成 `unavailable`（误报） | 同一账户可能出现「facts 说 unavailable、risk 说 available」——这是**正常**，不是矛盾。两者各自在输出里披露自己的维度，**不做整体降级** |
+| 2 | **账户健康**：`get_account_facts`（账本完整性：`reconcileCashBalance` 的 `reconciled` 与 `gaps`） vs `get_portfolio_risk`（价格覆盖：`coverage.pricedCount` / `unpricedStockIds`） | 两个**独立维度**：账本是否自洽 ≠ 价格是否齐全。合并会让「手工录入持仓（无对应成交）」这类合法路径被整体打成 `unavailable`（误报） | 同一账户可能出现「facts 说 unavailable、risk 说 available」——这是**正常**，不是矛盾。两者各自在输出里披露自己的维度，**不做整体降级**（细则见下） |
+
 | 3 | **报告写入口**：`save_report`（`packages/tools/src/internal/workflow-only-tools.ts:52`，**workflow-only，无 agent 面入口**） vs `write_report_artifact`（`packages/dsh-luoome/src/host/report-artifact-operations.ts`，**operation policy，模型可经 prepare/confirm 调用**） | **写库 = 改事实**，只能由 workflow 在算完全部事实后一次性提交；**写文件 = 产出交付物**，可由模型按用户明确意图触发。这是**刻意的不对称** | 想给模型「存报告」的能力时，不要顺手把 `save_report` 加进 policy——那会让模型可以不经事实装配直接写库。要交付文件就调 `write_report_artifact` |
 | 4 | **交易日历**：core `previousTradingDate`（`packages/core/src/trading-calendar.ts:230`，入参 `Date`） vs `previousTradingDay`（`packages/workflows/src/opening-report.ts:44`，入参 `string`） | 签名不同（Date vs 日期字符串），但**语义相同**。core 版是唯一日历事实源；workflow 版目前自带一份 `isWeekend/isHoliday` 循环 | **两者当前结果一致**（都按上海日倒推）。下一轮统一时应把 workflow 版改成 `previousTradingDate(shanghaiDate(date))` 的薄包装——**在此之前，新增日历逻辑不许多出第三份** |
 | 5 | **交易日键 vs 日历日**：`DailyBar.date` / `factDate`（UTC 午夜键，`packages/core/src/strategy/fact-date.ts:54`） vs `dateInShanghai`（用户可见日历日） | **必须不同**：bar 的日期是全仓约定（`tradingMidnight` = UTC 午夜），事实日和回测窗口都建在它上面；用户可见日期是 Asia/Shanghai 自然日。把两者统一会让已落库的 bar 日期整体错位 | 行情/事实/回测**一律用交易日键**；报告期、文件名、展示**一律用上海日**。判据是「这个日期会不会拿去和已落库的 bar 比对」 |
 | 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
+
+**第 2 项的细则（REQ 共享维度，写成可执行规则）**
+
+| 问题 | 结论 |
+|---|---|
+| **各自适用范围** | `get_account_facts` 回答「这个账户的现金/持仓能不能与成交、调整记录对上」→ 维度 = **账本完整性**；任一原因成立即整份 `status: 'unavailable'`（含 `reconciled === false`、`gaps.length > 0`、缺合格行情、现金为负）。`get_portfolio_risk` 回答「有多少持仓有可用报价、集中度能不能算」→ 维度 = **价格覆盖**；`pricedCount === 0` → `unavailable`，部分未定价 → `partial` |
+| **为什么不能合并** | 手工录入持仓（无对应成交）在生产上是**合法路径**。把 reconciliation 接进 `get_portfolio_risk` 会把这类账户全打成 `unavailable`，属**误报**；反过来把价格覆盖接进 `get_account_facts` 会让「账本完全自洽、只是今天还没行情」的账户被说成「账本有问题」，也是误报 |
+| **冲突时怎么办** | **两个独立维度各自披露，不做整体降级。** 两份输出都带一句固定声明（`ACCOUNT_FACTS_AVAILABILITY_DIMENSION` / `PORTFOLIO_RISK_AVAILABILITY_DIMENSION`）：本工具的可用性只看自己那一维，另一维的问题**不反映**在本工具的状态里，要看另一维请调另一个工具 |
+| **`totalAssets` 为什么数值同源而状态可以不同** | 两者都用 `Account.cashBalance` + 合格行情估值，所以**数值口径同源**；但一侧可能因为**账本对账缺口**把整份结果标 `unavailable`（数值因此为 `null`），另一侧只看价格覆盖仍给 `available`。这是「同一个数、两种可用性判定」，不是两套算法 |
+| **不要在这里再造聚合视角** | 聚合视角是 `PANEL_NAMES` 的面板健康（REQ-M3-09 S1，`packages/dsh-luoome/src/host/panel-health.ts`）。要让角标同时反映这两维，改的是 `panel-health.ts` 的 `OUTPUT_PROBES`——**不属于这两个工具** |
 
 #### 11.1.2 「缺数据」的表达优先级：`缺席 > null > 0`（**可引用规则**）
 

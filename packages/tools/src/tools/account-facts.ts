@@ -128,10 +128,33 @@ export const deriveAccountFacts = async (
     holdingAdjustments,
   });
   const extraReasons: string[] = [...fallbackReasons];
+  /**
+   * 账本对账缺口是**本工具**的可用性维度（现金/持仓与成交能否对上），
+   * 与「价格覆盖」是两件事：手工录入持仓（无对应成交）在生产上是合法路径，
+   * 所以另一侧 `get_portfolio_risk` 不会因此降级，反之亦然。见 `docs/ARCHITECTURE.md` §11.1。
+   */
+  const notes: string[] = [...fallbackNotes, ACCOUNT_FACTS_AVAILABILITY_DIMENSION];
   if (!reconciliation.reconciled)
-    extraReasons.push('账户现金与账本重算不一致，请核对资金和持仓记录');
+    extraReasons.push(
+      '账户现金与账本重算不一致（账本对账缺口）：按成交与现金流重算的现金余额对不上账户余额，请核对资金流水与持仓记录',
+    );
   if (reconciliation.gaps.length > 0)
-    extraReasons.push('持仓与交易、调整记录存在数量缺口，请先核对账本');
+    extraReasons.push(
+      `持仓与交易、调整记录存在数量缺口（账本对账缺口）：${reconciliation.gaps
+        .map((gap) => {
+          const detail = [
+            gap.uncoveredQuantity > 0 ? `持仓多于记录 ${String(gap.uncoveredQuantity)} 股` : '',
+            gap.unmatchedTradeQuantity > 0
+              ? `记录多于持仓 ${String(gap.unmatchedTradeQuantity)} 股`
+              : '',
+            gap.oversoldQuantity > 0 ? `净卖出超仓 ${String(gap.oversoldQuantity)} 股` : '',
+          ]
+            .filter(Boolean)
+            .join('，');
+          return `${gap.stockId}（${detail}）`;
+        })
+        .join('；')}；先核对账本再引用本账户的事实`,
+    );
   return buildAccountFacts({
     account,
     holdings,
@@ -139,9 +162,20 @@ export const deriveAccountFacts = async (
     prices,
     asOf: now,
     extraReasons,
-    notes: fallbackNotes,
+    notes,
   });
 };
+
+/**
+ * 本工具的可用性维度声明（REQ 共享常量）。
+ *
+ * `get_account_facts` 看**账本完整性**，`get_portfolio_risk` 看**价格覆盖**——两者独立。
+ * 同一账户完全可能出现「本工具 unavailable、另一个 available」，那不是矛盾。
+ * 见 `docs/ARCHITECTURE.md` §11.1「有意不同」第 ② 项。
+ */
+export const ACCOUNT_FACTS_AVAILABILITY_DIMENSION =
+  '本工具的可用性只看账本完整性（现金与持仓能否与成交、调整记录对上），与 get_portfolio_risk 的价格覆盖是不同维度：' +
+  '账本有缺口不代表价格不可用，价格缺失也不代表账本有缺口；两者可能给出不同状态，请按各自的原因分别核对。';
 
 export const getAccountFactsTool = defineTool({
   name: 'get_account_facts',
