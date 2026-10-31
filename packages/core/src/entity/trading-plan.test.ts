@@ -7,7 +7,9 @@ import {
   evaluateTradingPlanCondition,
   evaluateTradingPlanEntryConditions,
   isMaterialTradingPlanChange,
+  narrowTradingPlanRange,
   selectTradingPlans,
+  symmetricRangeAroundMid,
   type TradingPlan,
   TradingPlanSchema,
   TradingPlanV2Schema,
@@ -785,5 +787,52 @@ describe('T21 指纹与结构化失效条件', () => {
     });
     expect(parsed.success).toBe(false);
     if (!parsed.success) expect(parsed.error.message).toContain('结构化失效条件');
+  });
+});
+
+// ---------- T29 / M3-03：区间纪律生产接线 ----------
+describe('T29 H4 对称收窄', () => {
+  it('8–12 迭代收窄到 8.24–11.77（中点保持 10，宽度随 max 的 cap 收敛）', () => {
+    const result = narrowTradingPlanRange({ min: 8, max: 12 });
+    expect(result).toEqual({ applied: { min: 8.24, max: 11.77 }, clamped: true });
+    // 旧单向方案会得到 8.4–12，appliedPct 从 8 抬到 8.4；对称收窄不会加大敞口。
+    expect(result.applied.min).toBeLessThan(8.4);
+    expect((result.applied.min + result.applied.max) / 2).toBeCloseTo(10, 1);
+    // 不动点：宽度必须 ≤ 收窄后 max 的 H4 上限。
+    expect(result.applied.max - result.applied.min).toBeLessThanOrEqual(
+      tradingPlanRangeWidthCap(result.applied.max) + 1e-9,
+    );
+  });
+
+  it('{0,6} 迭代收窄到 2.47–3.55（中点 3 不变）', () => {
+    expect(narrowTradingPlanRange({ min: 0, max: 6 })).toEqual({
+      applied: { min: 2.47, max: 3.55 },
+      clamped: true,
+    });
+  });
+
+  it('边界：mid±cap/2 越界时把剩余宽度补到另一侧', () => {
+    // 这两条直接测边界函数：H4 的 cap 下对称收窄永远落在原区间内，0/100 钳制不可达。
+    expect(symmetricRangeAroundMid(3, 3.6)).toEqual({ min: 1.2, max: 4.8 });
+    expect(symmetricRangeAroundMid(98, 3.6)).toEqual({ min: 96.2, max: 99.8 });
+    expect(symmetricRangeAroundMid(1, 3.6)).toEqual({ min: 0, max: 3.6 });
+    expect(symmetricRangeAroundMid(99, 3.6)).toEqual({ min: 96.4, max: 100 });
+  });
+
+  it('H4 在 schema 层真的拒：4–10（宽 6 > cap 3）parse 失败', () => {
+    const parsed = v2(withPosition({ min: 4, max: 10 }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(parsed.error.message).toContain('宽度');
+  });
+
+  it('未超限时不收窄、不产生 adjustment', () => {
+    expect(narrowTradingPlanRange({ min: 9, max: 10 })).toEqual({
+      applied: { min: 9, max: 10 },
+      clamped: false,
+    });
+    expect(narrowTradingPlanRange({ min: 96, max: 100 })).toEqual({
+      applied: { min: 96, max: 100 },
+      clamped: false,
+    });
   });
 });

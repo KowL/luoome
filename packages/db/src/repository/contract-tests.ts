@@ -1973,6 +1973,20 @@ export const registerRepositoryContractTests = (
         expect(got?.basedOn.quotes?.['stk-1']?.ts).toBeInstanceOf(Date);
       });
 
+      it('T29 targetPositionPctRange 往返一致；旧单值行不产生区间', async () => {
+        const withRange = makeAdvice('adv-range', {
+          targetPositionPctRange: { min: 8, max: 12 },
+        });
+        await repos.advice.save(withRange);
+        expect((await repos.advice.findById('adv-range'))?.targetPositionPctRange).toEqual({
+          min: 8,
+          max: 12,
+        });
+        const pointOnly = makeAdvice('adv-point', { targetPositionPct: 10 });
+        await repos.advice.save(pointOnly);
+        expect((await repos.advice.findById('adv-point'))?.targetPositionPctRange).toBeUndefined();
+      });
+
       // 存量行在删除 `llmReasoning` 之前写入，basedOn JSON 里仍带着该 key。
       // 读入必须由实体 schema strip 掉它，且相邻字段（quotes / indicators / strategy /
       // dataAsOf 的 Date 还原）逐一保留——防止 strip 时误伤相邻字段。

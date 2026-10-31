@@ -10,6 +10,7 @@ import {
   isMaterialTradingPlanChange,
   isRuleFallbackAdvice,
   money,
+  narrowTradingPlanRange,
   resolveTradingPlanVersions,
   TRADING_PLAN_DRAFT_TRADING_DAYS,
   type TradingPlan,
@@ -18,6 +19,8 @@ import {
   TradingPlanSchema,
   TradingPlanV2Schema,
   tradingPlanExpiresAt,
+  tradingPlanPickedPct,
+  tradingPlanRangeWidthCap,
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -347,19 +350,49 @@ export const buildTradingPlanFromAdvice = (input: {
     ...accountFacts.notes,
     ...(facts.some((fact) => fact.status !== 'available') ? ['行情时间未达到盘中实时资格'] : []),
   ];
-  const targetPctRange = targetPct === null ? null : { min: targetPct, max: targetPct };
+  // 区间来源：Advice 的 targetPositionPctRange 优先；旧单值回落退化区间 {t,t}。
+  const adviceRangeApplies = action === 'enter' || action === 'add' || action === 'observe';
+  const requestedRange =
+    adviceRangeApplies && advice.targetPositionPctRange !== undefined
+      ? advice.targetPositionPctRange
+      : targetPct === null
+        ? null
+        : { min: targetPct, max: targetPct };
+  // H4 对称收窄：保中点、只削宽度；钳制后仍由 TradingPlanV2Schema 校验。
+  const narrowed = requestedRange === null ? null : narrowTradingPlanRange(requestedRange);
+  const targetPctRange = narrowed === null ? null : narrowed.applied;
+  const appliedPct =
+    targetPctRange === null
+      ? null
+      : tradingPlanPickedPct(targetPctRange, { ruleId: 'lower-bound' });
+  const rangeAdjustment =
+    narrowed === null || !narrowed.clamped || requestedRange === null || targetPctRange === null
+      ? undefined
+      : {
+          requested: requestedRange,
+          applied: targetPctRange,
+          reason: 'h4-width-cap' as const,
+          ruleVersion: 'trading-plan-h4-v1' as const,
+        };
+  const rangeAdjustmentNote =
+    rangeAdjustment === undefined
+      ? []
+      : [
+          `区间被 H4 收窄：请求 ${rangeAdjustment.requested.min}–${rangeAdjustment.requested.max}%，实际 ${rangeAdjustment.applied.min}–${rangeAdjustment.applied.max}%（上限 ${tradingPlanRangeWidthCap(rangeAdjustment.requested.max)} 个百分点）`,
+        ];
   const position = {
     currentPct,
     targetPctRange,
-    appliedPct: targetPct,
-    fallbackPct: targetPct,
+    appliedPct,
+    fallbackPct: appliedPct,
     rangePick: targetPctRange === null ? null : { ruleId: 'lower-bound' as const },
+    ...(rangeAdjustment === undefined ? {} : { rangeAdjustment }),
     constraintStatus: canActivate
       ? ('passed' as const)
       : conflictReason === undefined
         ? ('unavailable' as const)
         : ('blocked' as const),
-    constraintReasons: canActivate ? [] : unknowns,
+    constraintReasons: canActivate ? rangeAdjustmentNote : [...rangeAdjustmentNote, ...unknowns],
     prerequisiteActions:
       action === 'enter' || action === 'add'
         ? ['用户确认条件满足后手动执行；执行后更新持仓与资金记录']

@@ -466,6 +466,8 @@ export const advices = sqliteTable(
     entryPriceLow: real('entry_price_low').$type<Money>(),
     entryPriceHigh: real('entry_price_high').$type<Money>(),
     targetPositionPct: real('target_position_pct'),
+    targetPositionPctMin: real('target_position_pct_min'),
+    targetPositionPctMax: real('target_position_pct_max'),
     targetPrice: real('target_price').$type<Money>(),
     stopLoss: real('stop_loss').$type<Money>(),
     reasoning: text('reasoning', { mode: 'json' }).$type<AdviceReasoning>().notNull(),

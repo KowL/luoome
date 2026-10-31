@@ -121,13 +121,15 @@ export interface Advice {
   /**
    * 操作价位建议（AI 基于近期走势 + 策略信号给出）；观望（watch）或信息不足时可缺省。
    * entryPrice=兼容旧 Advice 的建议买点；entryPriceLow/High 是新计划使用的入场区间；
-   * targetPositionPct 是按账户总资产计算的目标仓位；targetPrice=建议卖点/目标价；
+   * targetPositionPct 是按账户总资产计算的目标仓位（旧单值）；
+   * targetPositionPctRange 是区间版本（百分点，min≤max），有区间时以区间为准；
    * stopLoss=止损价。
    */
   readonly entryPrice?: Money;
   readonly entryPriceLow?: Money;
   readonly entryPriceHigh?: Money;
   readonly targetPositionPct?: number;
+  readonly targetPositionPctRange?: TargetPositionPctRange;
   readonly targetPrice?: Money;
   readonly stopLoss?: Money;
   readonly reasoning: AdviceReasoning;
@@ -205,6 +207,20 @@ export const AdviceReasoningSchema = z.object({
   counterEvidence: z.array(z.string()),
 });
 
+/** 目标仓位区间：百分点 0–100，与 TradingPlan 的 targetPctRange 同量纲；min ≤ max。 */
+export const TargetPositionPctRangeSchema = z
+  .object({
+    min: z.number().finite().min(0).max(100),
+    max: z.number().finite().min(0).max(100),
+  })
+  .strict()
+  .superRefine((range, ctx) => {
+    if (range.min > range.max) {
+      ctx.addIssue({ code: 'custom', path: ['min'], message: '区间 min 不能大于 max' });
+    }
+  });
+export type TargetPositionPctRange = z.infer<typeof TargetPositionPctRangeSchema>;
+
 /** 新生成的个股策略判断使用严格契约，历史 Advice 继续由 AdviceSchema 读取。 */
 export const StrategyAdviceAnalysisSchema = z
   .object({
@@ -215,6 +231,8 @@ export const StrategyAdviceAnalysisSchema = z
     entryPriceLow: z.number().finite().positive().optional(),
     entryPriceHigh: z.number().finite().positive().optional(),
     targetPositionPct: z.number().finite().min(0).max(100).optional(),
+    /** 区间优先于单值；单值保留给旧数据与展示兼容。 */
+    targetPositionPctRange: TargetPositionPctRangeSchema.optional(),
     targetPrice: z.number().finite().positive().optional(),
     stopLoss: z.number().finite().positive().optional(),
     reasoning: AdviceReasoningSchema.extend({
@@ -225,14 +243,22 @@ export const StrategyAdviceAnalysisSchema = z
     risks: z.array(z.string().trim().min(1)).min(1),
   })
   .superRefine((advice, ctx) => {
-    const { entryPrice, entryPriceLow, entryPriceHigh, targetPositionPct, targetPrice, stopLoss } =
-      advice;
+    const {
+      entryPrice,
+      entryPriceLow,
+      entryPriceHigh,
+      targetPositionPct,
+      targetPositionPctRange,
+      targetPrice,
+      stopLoss,
+    } = advice;
     if (
       advice.decision === 'buy' ||
       entryPrice !== undefined ||
       entryPriceLow !== undefined ||
       entryPriceHigh !== undefined ||
       targetPositionPct !== undefined ||
+      targetPositionPctRange !== undefined ||
       targetPrice !== undefined ||
       stopLoss !== undefined
     ) {
@@ -250,7 +276,7 @@ export const StrategyAdviceAnalysisSchema = z
         (advice.decision === 'buy' &&
           (entryPriceLow === undefined ||
             entryPriceHigh === undefined ||
-            targetPositionPct === undefined)) ||
+            (targetPositionPct === undefined && targetPositionPctRange === undefined))) ||
         !(
           money(stopLoss) > 0 &&
           money(stopLoss) < money(entryPrice) &&
@@ -270,7 +296,19 @@ export const StrategyAdviceAnalysisSchema = z
           code: 'custom',
           path: ['stopLoss'],
           message:
-            '价格必须满足 0 < 止损价 < 入场区间 <= 目标价，且买点落在入场区间内；买入还必须提供目标仓位',
+            '价格必须满足 0 < 止损价 < 入场区间 <= 目标价，且买点落在入场区间内；买入还必须提供目标仓位（单值或区间）',
+        });
+      }
+      if (
+        targetPositionPct !== undefined &&
+        targetPositionPctRange !== undefined &&
+        (targetPositionPct < targetPositionPctRange.min ||
+          targetPositionPct > targetPositionPctRange.max)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['targetPositionPctRange'],
+          message: '单值目标仓位必须落在目标仓位区间内',
         });
       }
     }
@@ -390,6 +428,7 @@ export const AdviceSchema = z.object({
   entryPriceLow: MoneySchema.optional(),
   entryPriceHigh: MoneySchema.optional(),
   targetPositionPct: z.number().finite().min(0).max(100).optional(),
+  targetPositionPctRange: TargetPositionPctRangeSchema.optional(),
   targetPrice: MoneySchema.optional(),
   stopLoss: MoneySchema.optional(),
   reasoning: AdviceReasoningSchema,
@@ -448,9 +487,13 @@ export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>)
   return [
     `**${decision}** · ${notificationText(advice.reasoning.premise, 100) || '请核对完整研究结论'}`,
     ...(prices.length === 0 ? [] : [prices.join(' · ')]),
-    ...(advice.targetPositionPct === undefined
-      ? []
-      : [`目标仓位 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
+    ...(advice.targetPositionPctRange !== undefined
+      ? [
+          `目标仓位 ${advice.targetPositionPctRange.min.toFixed(1)}–${advice.targetPositionPctRange.max.toFixed(1)}%（占账户总资产）`,
+        ]
+      : advice.targetPositionPct === undefined
+        ? []
+        : [`目标仓位 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
     `反证：${notificationText(advice.reasoning.counterEvidence.join('；'), 100) || '未提供，需人工核对'}`,
     `风险：${notificationText(advice.risks.join('；'), 100) || '未提供，需人工核对'}`,
     `数据 ${notificationTime(advice.basedOn.dataAsOf)} · 有效至 ${notificationTime(advice.validUntil)}（北京时间）`,

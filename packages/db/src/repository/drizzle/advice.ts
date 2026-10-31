@@ -63,6 +63,14 @@ const toAdvice = (row: AdviceRow, outcome: AdviceOutcome | null): Advice => {
     ...(row.entryPriceLow === null ? {} : { entryPriceLow: row.entryPriceLow }),
     ...(row.entryPriceHigh === null ? {} : { entryPriceHigh: row.entryPriceHigh }),
     ...(row.targetPositionPct === null ? {} : { targetPositionPct: row.targetPositionPct }),
+    ...(row.targetPositionPctMin === null || row.targetPositionPctMax === null
+      ? {}
+      : {
+          targetPositionPctRange: {
+            min: row.targetPositionPctMin,
+            max: row.targetPositionPctMax,
+          },
+        }),
     ...(row.targetPrice === null ? {} : { targetPrice: row.targetPrice }),
     ...(row.stopLoss === null ? {} : { stopLoss: row.stopLoss }),
     reasoning: row.reasoning,
@@ -113,6 +121,8 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       entryPriceLow: advice.entryPriceLow ?? null,
       entryPriceHigh: advice.entryPriceHigh ?? null,
       targetPositionPct: advice.targetPositionPct ?? null,
+      targetPositionPctMin: advice.targetPositionPctRange?.min ?? null,
+      targetPositionPctMax: advice.targetPositionPctRange?.max ?? null,
       targetPrice: advice.targetPrice ?? null,
       stopLoss: advice.stopLoss ?? null,
       reasoning: advice.reasoning,

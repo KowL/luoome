@@ -142,6 +142,62 @@ export const tradingPlanRangeWidthCap = (max: number): number => {
   return Math.min(tier, round2(max * 0.3));
 };
 
+/** H4 收窄记录：请求区间 → 实际区间，保留模型意图的审计痕迹。 */
+export const TradingPlanRangeAdjustmentSchema = z
+  .object({
+    requested: TradingPlanTargetRangeSchema,
+    applied: TradingPlanTargetRangeSchema,
+    reason: z.literal('h4-width-cap'),
+    ruleVersion: z.literal('trading-plan-h4-v1'),
+  })
+  .strict();
+export type TradingPlanRangeAdjustment = z.infer<typeof TradingPlanRangeAdjustmentSchema>;
+
+/**
+ * H4 对称收窄：保中点、只削宽度。
+ *
+ * 单向收窄 min（8–12 → 8.4–12）会让 `rangePick='lower-bound'` 的 appliedPct 从 8 抬到 8.4，
+ * 等于“触发纪律检查反而加大敞口”。对称收窄保持中心，只缩小不确定性。
+ * 边界：mid±cap/2 越界时把剩余宽度补到另一侧，保证宽度仍 ≤ cap。
+ */
+export const symmetricRangeAroundMid = (mid: number, cap: number): TradingPlanTargetRange => {
+  let min = round2(mid - cap / 2);
+  let max = round2(mid + cap / 2);
+  if (min < 0) {
+    min = 0;
+    max = round2(cap);
+  }
+  if (max > 100) {
+    max = 100;
+    min = round2(100 - cap);
+  }
+  return { min, max };
+};
+
+export const narrowTradingPlanRange = (
+  requested: TradingPlanTargetRange,
+  cap?: number,
+): { readonly applied: TradingPlanTargetRange; readonly clamped: boolean } => {
+  if (cap !== undefined) {
+    if (requested.max - requested.min <= cap + 1e-9) return { applied: requested, clamped: false };
+    return {
+      applied: symmetricRangeAroundMid((requested.min + requested.max) / 2, cap),
+      clamped: true,
+    };
+  }
+  // 收窄会降低 max，而 H4 上限依赖 max（0.30×max），需要迭代到不动点：
+  // 8–12 → 8.2–11.8（cap 3.6）→ 8.23–11.77（cap 3.54）→ 8.24–11.77（cap 3.53，收敛）。
+  let applied = requested;
+  let clamped = false;
+  for (let index = 0; index < 16; index += 1) {
+    const currentCap = tradingPlanRangeWidthCap(applied.max);
+    if (applied.max - applied.min <= currentCap + 1e-9) break;
+    applied = symmetricRangeAroundMid((applied.min + applied.max) / 2, currentCap);
+    clamped = true;
+  }
+  return { applied, clamped };
+};
+
 /** 区间内选点规则；volatility-scaled 带可复算参数，复盘能回答"为什么是这个仓位"。 */
 export const TradingPlanRangePickSchema = z.discriminatedUnion('ruleId', [
   z.object({ ruleId: z.literal('lower-bound') }).strict(),
@@ -195,6 +251,7 @@ const positionRangeChecks = (
     readonly appliedPct: number | null;
     readonly fallbackPct: number | null;
     readonly rangePick: TradingPlanRangePick | null;
+    readonly rangeAdjustment?: TradingPlanRangeAdjustment | undefined;
   },
   ctx: z.RefinementCtx,
 ): void => {
@@ -219,6 +276,16 @@ const positionRangeChecks = (
   }
   const width = max - min;
   const cap = tradingPlanRangeWidthCap(max);
+  if (position.rangeAdjustment !== undefined) {
+    const { requested, applied } = position.rangeAdjustment;
+    if (applied.min !== min || applied.max !== max || requested.max - requested.min <= cap + 1e-9) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rangeAdjustment'],
+        message: 'rangeAdjustment 必须记录真实的请求区间与收窄结果',
+      });
+    }
+  }
   if (width > cap + 1e-9) {
     ctx.addIssue({
       code: 'custom',
@@ -269,6 +336,8 @@ export const TradingPlanPositionSchema = z
     appliedPct: z.number().finite().min(0).max(100).nullable(),
     fallbackPct: z.number().finite().min(0).max(100).nullable(),
     rangePick: TradingPlanRangePickSchema.nullable(),
+    /** 仅在 H4 收窄过区间时出现；applied 必须等于 targetPctRange。 */
+    rangeAdjustment: TradingPlanRangeAdjustmentSchema.optional(),
     constraintStatus: z.enum(['passed', 'blocked', 'unavailable']),
     constraintReasons: z.array(z.string().min(1)),
     prerequisiteActions: z.array(z.string().min(1)),

@@ -1770,7 +1770,9 @@ const fullFixture = (): Record<string, DataImportRow> => {
       entry_price: 10,
       entry_price_low: null,
       entry_price_high: null,
-      target_position_pct: null,
+      target_position_pct: 10,
+      target_position_pct_min: 8,
+      target_position_pct_max: 12,
       target_price: 12,
       stop_loss: 9,
       reasoning: JSON.stringify({

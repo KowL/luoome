@@ -115,6 +115,23 @@ describe('trading plan daily cycle', () => {
     });
   });
 
+  it('T29 生产路径：Advice 区间 8–12 → 生成器 → 落库 TradingPlan 非退化区间', async () => {
+    const ctx = await buildTestContext({
+      clock: () => NOW,
+      advices: [candidateAdvice(NOW, { targetPositionPctRange: { min: 8, max: 12 } })],
+    });
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    const plans = await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    expect(plans[0]?.position.rangeAdjustment).toMatchObject({
+      requested: { min: 8, max: 12 },
+      applied: { min: 8.24, max: 11.77 },
+      reason: 'h4-width-cap',
+    });
+  });
+
   it('价位改变或原计划到期时发布新版本，不能无证据自动续期', async () => {
     let now = NOW;
     const ctx = await buildTestContext({ clock: () => now, advices: [candidateAdvice(now)] });
@@ -272,6 +289,96 @@ describe('trading plan daily cycle', () => {
     expect(plan.entryPriceLow).toBe(100);
     expect(plan.entryPriceHigh).toBe(105);
     expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105 });
+    // 旧单值 Advice 仍产退化区间 {t,t}，且没有收窄记录。
+    expect(plan.position.targetPctRange).toEqual({ min: 10, max: 10 });
+    expect(plan.position.rangeAdjustment).toBeUndefined();
+  });
+
+  it('T29：Advice 区间 8–12 经 H4 对称收窄为 8.24–11.77，并记录 requested/applied', () => {
+    const accountFacts = AccountFactsSchema.parse({
+      accountId: ACCOUNT_ID,
+      asOf: NOW,
+      digest: 'daily-cycle-test-digest',
+      cashBalance: 9000,
+      stockMarketValue: 1000,
+      totalAssets: 10000,
+      status: 'complete',
+      reasons: [],
+      notes: [],
+      positions: [
+        {
+          stockId: '000001.SZ',
+          quantity: 100,
+          availableQuantity: 100,
+          marketValue: 1000,
+          industry: '银行',
+        },
+      ],
+    });
+    const advice = AdviceSchema.parse({
+      id: 'advice-range-1',
+      subjectKind: 'stock',
+      subjectId: STOCK_ID,
+      stockName: '贵州茅台',
+      decision: 'buy',
+      confidence: 78,
+      horizon: 'short',
+      entryPrice: 102,
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 10,
+      targetPositionPctRange: { min: 8, max: 12 },
+      targetPrice: 120,
+      stopLoss: 95,
+      reasoning: {
+        premise: '趋势与回撤结构一致',
+        evidence: ['价格站上短期均线'],
+        counterEvidence: ['市场宽度仍有限'],
+      },
+      risks: ['波动扩大'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        quotes: {
+          [STOCK_ID]: {
+            stockId: STOCK_ID,
+            observedAt: new Date('2026-07-17T06:59:00.000Z'),
+            fetchedAt: new Date('2026-07-17T06:59:30.000Z'),
+            timestampSource: 'upstream',
+            open: 101,
+            high: 103,
+            low: 99,
+            close: 102,
+            volume: 1000,
+            source: 'fixture',
+          },
+        },
+        dataAsOf: new Date('2026-07-17T06:59:30.000Z'),
+      },
+      validFrom: NOW,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: NOW,
+    }) as Advice;
+
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts,
+      advice,
+      previous: [],
+      now: NOW,
+    });
+
+    expect(plan.position.targetPctRange).toEqual({ min: 8.24, max: 11.77 });
+    expect(plan.position.appliedPct).toBe(8.24);
+    expect(plan.position.fallbackPct).toBe(8.24);
+    expect(plan.position.rangeAdjustment).toEqual({
+      requested: { min: 8, max: 12 },
+      applied: { min: 8.24, max: 11.77 },
+      reason: 'h4-width-cap',
+      ruleVersion: 'trading-plan-h4-v1',
+    });
+    expect(plan.position.constraintReasons.join('；')).toContain('区间被 H4 收窄');
+    expect(plan.position.constraintReasons.join('；')).toContain('8.24–11.77');
   });
 
   it('观察候选也带条件性价位、目标仓位与等待条件（watch ≠ 空白记录）', () => {

@@ -5,6 +5,7 @@ import {
   AdviceQuerySchema,
   AdviceSchema,
   adviceDataSnapshotFromFacts,
+  adviceNotificationSummary,
   isAdviceQuoteCurrent,
   isRuleFallbackAdvice,
   STANDARD_DISCLAIMERS,
@@ -277,5 +278,71 @@ describe('isRuleFallbackAdvice', () => {
     expect(isRuleFallbackAdvice(reasoning('箱体震荡，等待方向选择', ['日线 MA5 上穿 MA20']))).toBe(
       false,
     );
+  });
+});
+
+describe('T29 Advice 目标仓位区间', () => {
+  const base = {
+    decision: 'buy' as const,
+    confidence: 70,
+    horizon: 'short' as const,
+    entryPrice: 100,
+    entryPriceLow: 98,
+    entryPriceHigh: 102,
+    targetPrice: 120,
+    stopLoss: 95,
+    reasoning: {
+      premise: '趋势保持',
+      evidence: ['均线向上'],
+      counterEvidence: ['量能不足'],
+    },
+    risks: ['波动'],
+  };
+
+  it('买入可只给区间（不再强制单值）', () => {
+    const parsed = StrategyAdviceAnalysisSchema.parse({
+      ...base,
+      targetPositionPctRange: { min: 8, max: 12 },
+    });
+    expect(parsed.targetPositionPctRange).toEqual({ min: 8, max: 12 });
+  });
+
+  it('单值与区间同时存在时，单值必须落在区间内', () => {
+    expect(
+      StrategyAdviceAnalysisSchema.safeParse({
+        ...base,
+        targetPositionPct: 10,
+        targetPositionPctRange: { min: 8, max: 12 },
+      }).success,
+    ).toBe(true);
+    expect(
+      StrategyAdviceAnalysisSchema.safeParse({
+        ...base,
+        targetPositionPct: 15,
+        targetPositionPctRange: { min: 8, max: 12 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('区间 min 不能大于 max；通知按区间展示', () => {
+    expect(
+      StrategyAdviceAnalysisSchema.safeParse({
+        ...base,
+        targetPositionPctRange: { min: 12, max: 8 },
+      }).success,
+    ).toBe(false);
+    const advice = AdviceSchema.parse({
+      id: 'advice-range',
+      subjectKind: 'stock',
+      subjectId: '600519.SH',
+      ...base,
+      targetPositionPctRange: { min: 8, max: 12 },
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      basedOn: { dataAsOf: new Date(NOW_ISO) },
+      validFrom: new Date(NOW_ISO),
+      validUntil: new Date('2026-07-20T02:00:00.000Z'),
+      createdAt: new Date(NOW_ISO),
+    });
+    expect(adviceNotificationSummary(advice)).toContain('目标仓位 8.0–12.0%');
   });
 });

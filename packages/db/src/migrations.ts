@@ -545,6 +545,8 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
       entry_price_low REAL,
       entry_price_high REAL,
       target_position_pct REAL,
+      target_position_pct_min REAL,
+      target_position_pct_max REAL,
       target_price REAL,
       stop_loss REAL,
       reasoning TEXT NOT NULL,
@@ -1520,6 +1522,10 @@ const migrateAdviceColumns = (db: DrizzleDatabase<Schema>): void => {
     db.run(sql`ALTER TABLE advices ADD COLUMN entry_price_high REAL`);
   if (!have.has('target_position_pct'))
     db.run(sql`ALTER TABLE advices ADD COLUMN target_position_pct REAL`);
+  if (!have.has('target_position_pct_min'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN target_position_pct_min REAL`);
+  if (!have.has('target_position_pct_max'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN target_position_pct_max REAL`);
   if (!have.has('target_price')) db.run(sql`ALTER TABLE advices ADD COLUMN target_price REAL`);
   if (!have.has('stop_loss')) db.run(sql`ALTER TABLE advices ADD COLUMN stop_loss REAL`);
 };

@@ -26,6 +26,7 @@ whenToUse: 用户问「今天市场怎么样」「给我今日分析」「盘面
    - 先展示结论、反面证据、风险、有效期与将写回的内容；只有用户明确提出保存意图时才写回，一次分析请求不等于持久化请求；
    - 用 `get_analysis_context` 取 advice_market 的有效 context，subject 取 market（以工具 input schema 为准）；
    - context 缺少市场事实、或遇到 context_expired、stale_context 时：先刷新外部事实，再重取一次并逐项重新核对；仍不可用就明确告知用户当前无法落库，不重放旧结论、不把旧数据当新事实；
+   - 目标仓位优先给区间 `targetPositionPctRange: {min,max}`（百分点），没有区间依据才给单值；区间会被 H4 对称收窄并记录 `rangeAdjustment`；
    - 经 `luoome_confirmed_operation` 的 `record_advice` policy 直接提交冻结的 contextId、result 与 provenance，保留 Operation 回执；evidenceFactIds 只能落在 context.factIds 内；
    - provenance 使用真实生成信息：generatorKind 取 dsh-chat，skillVersion 取本技能版本，model 只在宿主提供真实标识时填写，未知就省略；生成时间由领域工具填写，不自行编造。
 
