@@ -267,6 +267,51 @@ const findAdviceDecisionField = (value: unknown): string | null => {
  *   规范化成人读立场词，原文留在结构化投影（canonical JSON 块）里，信息不丢。
  * 新增任何外部自由文本来源时，先给它一个 `textOrigin`，再确认它进了本函数的扫描范围。
  */
+/**
+ * 成交事实字段白名单（REQ-M3-08 的**收窄**，逐键豁免，不是整块豁免）。
+ *
+ * 报告里有一类文本**必须**写「买入/卖出」：已发生成交的方向。那是账本事实的转述，
+ * 不是给读者的动作；把它一并禁掉等于让成交明细表永久违规。
+ * 因此只豁免**这些字段键**的值，同一块里的其它字段（列名、label、其它列）照常检查。
+ *
+ * 加键的规矩：每条必须有非空理由，且理由要说清「为什么这是事实而不是指令」。
+ * 不许写通配、不许按文本嗅探、不许因为「这段是成交表」整块跳过。
+ */
+export const REPORT_FACTUAL_FIELD_KEYS: Readonly<Record<string, string>> = {
+  // 成交方向：`Trade.side` 已落库（买入/卖出），报告照实转述；读它不会产生任何动作。
+  side: '已发生成交的方向（Trade.side 的事实转述），不是对读者的动作指令',
+};
+
+/**
+ * 白名单自检：每条必须带非空理由，键必须是具体字段名（不许通配、不许空键）。
+ * 加键的人必须解释「为什么这是事实而不是指令」。
+ */
+export const assertFactualFieldReasons = (
+  keys: Readonly<Record<string, string>> = REPORT_FACTUAL_FIELD_KEYS,
+): void => {
+  for (const [key, reason] of Object.entries(keys)) {
+    if (key.trim().length === 0 || key.includes('*'))
+      throw new InvariantError(`报告事实字段白名单出现非法键：${key}`);
+    if (reason.trim().length === 0)
+      throw new InvariantError(`报告事实字段「${key}」缺少理由：豁免必须被解释`);
+  }
+};
+
+/** 该字段键是否被豁免（逐键判断；没有通配分支）。 */
+export const isReportFactualField = (key: string): boolean =>
+  Object.hasOwn(REPORT_FACTUAL_FIELD_KEYS, key);
+
+/** 含成交事实字段时，报告正文必须附的说明句（由内容派生，不常驻）。 */
+export const REPORT_FACTUAL_TABLE_NOTE = '以下为已发生成交的记录，不是建议。';
+
+/** 该 block 是否含被豁免的成交事实字段——渲染层据此决定要不要加说明句。 */
+export const blockHasFactualFields = (block: ReportBlock): boolean =>
+  block.kind === 'table'
+    ? block.columns.some((column) => isReportFactualField(column.key))
+    : block.kind === 'metrics'
+      ? block.items.some((item) => isReportFactualField(item.key))
+      : false;
+
 export const FORBIDDEN_ACTION_WORDS = ['买入', '卖出', '已建仓', '下单'] as const;
 
 /**
@@ -335,6 +380,34 @@ export const findReportActionTextViolations = (
     if (block.kind === 'text') {
       // advice 来源的自由文本在渲染时规范化，原文留在结构化投影里；自撰文本没有这个豁免。
       if (block.textOrigin !== 'advice') check(block.text, `${where}[${index}].text`);
+      return;
+    }
+    // 表格：列名永远是报告自撰文本（必查）；单元格只在**列 key 命中白名单**时豁免。
+    if (block.kind === 'table') {
+      block.columns.forEach((column, columnIndex) => {
+        check(column.label, `${where}[${index}].columns[${columnIndex}].label`);
+        if (isReportFactualField(column.key)) return;
+        block.rows.forEach((row, rowIndex) => {
+          const cell = row[column.key];
+          if (typeof cell === 'string') {
+            check(cell, `${where}[${index}].rows[${rowIndex}].${column.key}`);
+          }
+        });
+      });
+      return;
+    }
+    // 指标：label 是自撰措辞（必查）；值只在 key 命中白名单时豁免。
+    if (block.kind === 'metrics') {
+      block.items.forEach((item, itemIndex) => {
+        check(item.label, `${where}[${index}].items[${itemIndex}].label`);
+        if (isReportFactualField(item.key)) return;
+        if (item.displayValue !== undefined) {
+          check(item.displayValue, `${where}[${index}].items[${itemIndex}].displayValue`);
+        }
+        if (typeof item.value === 'string') {
+          check(item.value, `${where}[${index}].items[${itemIndex}].value`);
+        }
+      });
       return;
     }
     // 列表项的 title/detail/notificationSummary 都是报告正文的一部分：

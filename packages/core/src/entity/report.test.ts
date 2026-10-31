@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertFactualFieldReasons,
   assertReportInvariants,
   MORNING_BRIEF_SECTION_KEYS,
+  REPORT_FACTUAL_FIELD_KEYS,
   REPORT_STANCE_LABELS,
   type Report,
   ReportSchema,
@@ -298,5 +300,73 @@ describe('REQ-M3-17 盘前简报四段', () => {
         brief(['account-overview', 'existing-advice', 'overnight-facts', 'watch-conditions']),
       ),
     ).toThrow(/morning-brief 四段缺失或顺序不符/);
+  });
+});
+
+// REQ-M3-08 收窄：成交事实字段按**字段键**豁免，不是整块豁免。
+describe('REQ-M3-08 成交事实字段白名单', () => {
+  const tableReport = (columnKey: string, cell: string): Report =>
+    makeReport({
+      sections: [
+        {
+          key: 'prior-day-review',
+          title: '前一交易日',
+          required: true,
+          status: 'complete',
+          blocks: [
+            {
+              kind: 'table',
+              columns: [
+                { key: columnKey, label: '方向' },
+                { key: 'quantity', label: '数量' },
+              ],
+              rows: [{ [columnKey]: cell, quantity: 100 }],
+            },
+          ],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+    });
+
+  it('exempts the whitelisted trade-side column', () => {
+    expect(() => assertReportInvariants(tableReport('side', '买入'))).not.toThrow();
+  });
+
+  it('does not let the exemption spill to other columns', () => {
+    expect(() => assertReportInvariants(tableReport('action', '买入'))).toThrow(
+      /rows\[0\]\.action 含行动词「买入」/,
+    );
+  });
+
+  it('still checks metrics labels even when the key is whitelisted', () => {
+    const report = makeReport({
+      sections: [
+        {
+          key: 'market-pulse',
+          title: '市场脉搏',
+          required: true,
+          status: 'complete',
+          blocks: [
+            {
+              kind: 'metrics',
+              items: [{ key: 'side', label: '买入方向金额', value: 100 }],
+            },
+          ],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+    });
+    expect(() => assertReportInvariants(report)).toThrow(/items\[0\]\.label 含行动词「买入」/);
+  });
+
+  it('requires a non-empty reason for every whitelisted key', () => {
+    expect(() => assertFactualFieldReasons()).not.toThrow();
+    for (const reason of Object.values(REPORT_FACTUAL_FIELD_KEYS))
+      expect(reason.trim().length).toBeGreaterThan(0);
+    // 加键不写理由 → 红；通配 → 红。
+    expect(() => assertFactualFieldReasons({ action: '   ' })).toThrow(/缺少理由/);
+    expect(() => assertFactualFieldReasons({ '*': '通配' })).toThrow(/非法键/);
   });
 });

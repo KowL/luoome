@@ -3,6 +3,7 @@ import {
   FORBIDDEN_ACTION_WORDS,
   MORNING_BRIEF_SECTION_KEYS,
   normalizeDeliverableText,
+  REPORT_FACTUAL_TABLE_NOTE,
   reportDisplayText,
 } from './report.js';
 import {
@@ -327,6 +328,34 @@ describe('REQ-M3-08 ReportDocument 文档模型', () => {
     // 报告自撰文本原样返回：规范化不能成为自撰文本的兜底。
     expect(reportDisplayText('建议买入')).toBe('建议买入');
     expect(reportDisplayText('建议买入', 'advice')).toBe('建议看多');
+  });
+
+  // 成交事实字段：含成交表才附说明句（由内容派生），且说明句自身过守卫。
+  it('adds the trade-fact note only when the document contains trade facts', () => {
+    const withTrades = makeDocument({
+      sections: makeDocument().sections.map((item) =>
+        item.slot === 'watch-conditions'
+          ? {
+              ...item,
+              blocks: [
+                {
+                  kind: 'table' as const,
+                  columns: [
+                    { key: 'side', label: '方向' },
+                    { key: 'quantity', label: '数量' },
+                  ],
+                  rows: [{ side: '买入', quantity: 100 }],
+                },
+              ],
+            }
+          : item,
+      ),
+    });
+    expect(renderReportDocument(withTrades).content).toContain(REPORT_FACTUAL_TABLE_NOTE);
+    // 没有成交事实的文档不出现说明句。
+    expect(renderReportDocument(makeDocument()).content).not.toContain(REPORT_FACTUAL_TABLE_NOTE);
+    // 说明句本身不含行动词（它也要过守卫）。
+    expect(REPORT_FACTUAL_TABLE_NOTE).not.toMatch(/买入|卖出|已建仓|下单/);
   });
 
   it('detects a tampered document hash and a missing marker', () => {

@@ -1,6 +1,8 @@
 import {
   assertReportTextPolicy,
+  blockHasFactualFields,
   notificationTime,
+  REPORT_FACTUAL_TABLE_NOTE,
   type Report,
   type ReportBlock,
   type ReportValue,
@@ -106,6 +108,8 @@ const renderBlockMarkdown = (block: ReportBlock): string[] => {
       : [
           `\n> 未展示列：${missingColumns.map((column) => column.label).join('、')}（缺少计算所需数据）；表内 — 表示该项数据尚缺。`,
         ]),
+    // 含成交事实字段时才附说明句：由内容派生，不是常驻文案。
+    ...(blockHasFactualFields(block) ? ['', REPORT_FACTUAL_TABLE_NOTE] : []),
   ];
 };
 

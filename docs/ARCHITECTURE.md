@@ -1100,6 +1100,14 @@ type ToolError =
   飞书没有端到端幂等确认：外部已接收但本地回写前崩溃时，补偿仍可能重复，不能承诺恰好一次送达。
   WatchRun 的历史 `delivered` 计数只表示渠道受理；Dashboard API 投影为 `channelAccepted`，
   `deviceDelivered` 保持 `null`，直到有真实设备回执。
+  报告正文的行动词禁令（REQ-M3-08）覆盖 `text` 块与 `list` 的 `title`/`detail`，并对 `table` / `metrics`
+  逐字段检查：列名与 `metrics.label` 永远是报告自撰文本，**一律检查**；单元格与指标值只在**字段键**
+  命中 `REPORT_FACTUAL_FIELD_KEYS` 时豁免。白名单当前只有 `side`（已发生成交的方向，`Trade.side` 的
+  事实转述），每条必须带非空理由（`assertFactualFieldReasons` 强制），不许通配、不许按文本嗅探、
+  不许因为「这段是成交表」整块跳过。这是对 PRD 字面正则的**收窄**：成交明细表里的「买入/卖出」是
+  账本事实而不是指令，禁掉它等于让用户看不到自己的成交记录。含成交事实字段时，正文追加一句
+  「以下为已发生成交的记录，不是建议。」（`REPORT_FACTUAL_TABLE_NOTE`，由内容派生、不常驻，且自身过守卫）。
+  新增豁免键时必须同时回答「为什么这是事实而不是指令」，否则白名单测试会红。
   `render_report(format=notification)` 从结构化报告生成有长度预算的移动摘要，不截取完整 Markdown；
   `markdown/plain-text` 继续保留完整证据。列表可保存 `notificationSummary` 作为生成时的阅读投影，
   旧报告缺少该字段时仅提供核对入口，不从长文本猜测交易结论。飞书适配器只在卡头展示标题。

@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 import {
   assertReportBlocksPolicy,
+  blockHasFactualFields,
   MORNING_BRIEF_SECTION_KEYS,
   type MorningBriefSectionKey,
+  REPORT_FACTUAL_TABLE_NOTE,
   type Report,
   type ReportBlock,
   ReportBlockSchema,
@@ -179,6 +181,8 @@ const renderBlock = (block: ReportBlock): string[] => {
       (row) =>
         `| ${block.columns.map((column) => markdownCell(row[column.key] ?? null)).join(' | ')} |`,
     ),
+    // 含成交事实字段时才附说明句：由内容派生，不是常驻文案。
+    ...(blockHasFactualFields(block) ? ['', REPORT_FACTUAL_TABLE_NOTE] : []),
   ];
 };
 

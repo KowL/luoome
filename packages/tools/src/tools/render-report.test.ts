@@ -1,4 +1,4 @@
-import { type Report, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { REPORT_FACTUAL_TABLE_NOTE, type Report, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -472,5 +472,55 @@ describe('REQ-M3-08 交付物词面策略分层', () => {
     if (result.ok) return;
     expect(result.error.kind).toBe('invariant_violation');
     expect('message' in result.error ? result.error.message : '').toContain('items[0].detail');
+  });
+});
+
+// REQ-M3-08 收窄：成交事实字段按字段键豁免，且说明句由内容派生。
+describe('REQ-M3-08 成交事实边界', () => {
+  const tradeReport = (withTrades: boolean): Report => {
+    const base = reportFixture();
+    return {
+      ...base,
+      status: 'complete',
+      missingDimensions: [],
+      sections: base.sections.map((section) => ({
+        ...section,
+        status: 'complete' as const,
+        missingDimensions: [],
+        blocks: withTrades
+          ? [
+              {
+                kind: 'table' as const,
+                columns: [
+                  { key: 'side', label: '方向' },
+                  { key: 'quantity', label: '数量' },
+                ],
+                rows: [{ side: '买入', quantity: 100 }],
+              },
+            ]
+          : [{ kind: 'text' as const, text: '今日以观察为主。', tone: 'factual' as const }],
+      })),
+    };
+  };
+
+  it('renders the trade-side column and appends the factual note', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const report = tradeReport(true);
+    await ctx.repos.report.upsertForPeriod(report);
+    const result = await renderReportTool.execute({ reportId: report.id, format: 'markdown' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.content).toContain('买入');
+    expect(result.data.content).toContain(REPORT_FACTUAL_TABLE_NOTE);
+  });
+
+  it('omits the note when the report has no trade facts', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const report = tradeReport(false);
+    await ctx.repos.report.upsertForPeriod(report);
+    const result = await renderReportTool.execute({ reportId: report.id, format: 'markdown' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.content).not.toContain(REPORT_FACTUAL_TABLE_NOTE);
   });
 });
