@@ -969,3 +969,116 @@ describe('advice_market timing after the close', () => {
     ).toMatchObject({ ok: false, error: { kind: 'invalid_input', message: 'stale_context' } });
   });
 });
+
+// ---------------------------------------------------------------------------
+// REQ-M3-16 / S7：外部新闻事实只从**已落库表**读，且沿用三档当日口径
+// ---------------------------------------------------------------------------
+
+const newsFactDraft = (input: {
+  readonly subjectKey: string;
+  readonly observedAt: Date;
+  readonly title: string;
+}) => ({
+  kind: 'news' as const,
+  subjectKey: input.subjectKey,
+  category: '宏观',
+  observedAt: input.observedAt,
+  source: 'eastmoney',
+  provenance: {
+    provider: 'eastmoney',
+    observedAt: input.observedAt,
+    fetchedAt: input.observedAt,
+    freshness: 'fresh' as const,
+  },
+  payload: {
+    title: input.title,
+    summary: '测试摘要',
+    media: '东方财富',
+    url: 'https://example.com/a',
+  },
+});
+
+describe('REQ-M3-16 S7：新闻事实只从已落库表读', () => {
+  it('表里有的当日新闻进 facts，且每条带 extfact id 可回表', async () => {
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    const observedAt = new Date('2026-10-22T01:00:00.000Z'); // 当日 09:00（未过收盘）
+    const { fact } = await ctx.repos.externalMarketFact.upsert({
+      draft: newsFactDraft({ subjectKey: 'n-1', observedAt, title: '央行开展 MLF 操作' }),
+      now,
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    const newsFact = snapshot.data.facts.find((item) => item.id.startsWith('market:news:'));
+    expect(newsFact).toBeDefined();
+    expect(newsFact?.evidenceIds).toContain(fact.id);
+    expect(JSON.stringify(newsFact?.value)).toContain('央行开展 MLF 操作');
+    // 可回表：evidenceIds 就是事实表主键。
+    expect(await ctx.repos.externalMarketFact.findById(fact.id)).not.toBeNull();
+    // 当日可用 → 不再报「未落库」。
+    const missing = snapshot.data.missingFacts.find((item) => item.kind === 'news-unavailable');
+    expect(missing?.reason).not.toContain('未落库');
+  });
+
+  it('表里没有新闻 → facts 里没有它，且 missingFacts 如实披露「未落库」+ 补法', async () => {
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    expect(snapshot.data.facts.some((item) => item.id.startsWith('market:news:'))).toBe(false);
+    const missing = snapshot.data.missingFacts.find((item) => item.kind === 'news-unavailable');
+    // 「表里没有」≠「不存在」：必须点名缺什么 + 怎么补。
+    expect(missing?.reason).toContain('未落库');
+    expect(missing?.reason).toContain('persist_external_facts');
+  });
+
+  it('跨日新闻按三档口径排除（不进 facts，但进跨日缺口留痕）', async () => {
+    const ctx = await buildTestContext({ clock: () => now, advices: [] });
+    // 昨日 10:00 发布的新闻：跨日。
+    await ctx.repos.externalMarketFact.upsert({
+      draft: newsFactDraft({
+        subjectKey: 'n-old',
+        observedAt: new Date('2026-10-21T02:00:00.000Z'),
+        title: '昨日新闻',
+      }),
+      now,
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    expect(snapshot.data.facts.some((item) => item.id.startsWith('market:news:'))).toBe(false);
+    // 跨日事实必须留痕（REQ-M3-20），不能被静默丢弃。
+    const crossDay = snapshot.data.missingFacts.find(
+      (item) => item.kind === MARKET_ADVICE_SAME_DAY_ONLY,
+    );
+    expect(crossDay?.reason).toContain('extfact:news:eastmoney:n-old');
+  });
+
+  it('当日 15:00 之后的新闻属 historical：不进可用事实（与涨停天梯同一条口径）', async () => {
+    const ctx = await buildTestContext({ clock: () => postClose, advices: [] });
+    // 当日 16:00 发布（已过收盘）。
+    await ctx.repos.externalMarketFact.upsert({
+      draft: newsFactDraft({
+        subjectKey: 'n-after-close',
+        observedAt: new Date('2026-10-22T08:00:00.000Z'),
+        title: '盘后新闻',
+      }),
+      now: postClose,
+    });
+    const snapshot = await getAnalysisContextTool.execute(
+      { kind: 'advice_market', subject: { kind: 'market', id: 'CN_A_SHARES' } },
+      ctx,
+    );
+    if (!snapshot.ok) throw new Error('context failed');
+    expect(snapshot.data.facts.some((item) => item.id.startsWith('market:news:'))).toBe(false);
+    expect(
+      snapshot.data.missingFacts.some((item) => item.kind === MARKET_ADVICE_SAME_DAY_ONLY),
+    ).toBe(true);
+  });
+});

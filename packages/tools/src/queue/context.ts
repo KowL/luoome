@@ -122,6 +122,11 @@ interface MarketFactPack {
  * 保留在事实包里，但标成 `historical` 降级——降级不等于删除。
  * 公司事件不套这条口径：它是「未来已知事实」，验证时点不是市场状态观察。
  */
+/** 新闻事实回看窗口（自然日）：只读已落库事实，不回源。 */
+const NEWS_LOOKBACK_DAYS = 30;
+/** 单次最多取多少条已落库新闻事实（10 条进 payload，全部进 evidenceIds）。 */
+const NEWS_FACT_LIMIT = 50;
+
 const collectMarketFacts = async (
   ctx: ToolContext,
   now: Date,
@@ -264,6 +269,61 @@ const collectMarketFacts = async (
     verifiedAt.push(latestVerifiedAt);
   }
 
+  /**
+   * 新闻类外部事实（REQ-M3-16 / S7）：**只读已落库事实表**，不再回退到 `fetch_*` 实时取。
+   *
+   * 「当日」判定沿用 core 的三档口径（`marketObservationScope` / `classifyMarketObservation`），
+   * 与涨停天梯、持仓行情同一条纪律——用 `publishedAt` 做朴素日期比较会让 REQ-M3-20 回退。
+   * - `historical`（更早，或当日 15:00 收盘之后被复用）：**保留在事实包里但显式降级**，
+   *   不删除；并且**不进可用事实**（由跨日口径留痕）。
+   * - `current`：当日未过收盘 → 当前依据。
+   * - `prior-session`：上一交易日收盘观察 → 盘前常态数据，保留并标注。
+   */
+  const newsWindowStart = new Date(now.getTime() - NEWS_LOOKBACK_DAYS * 86_400_000);
+  const storedNews = await ctx.repos.externalMarketFact.listByKind({
+    kind: 'news',
+    from: newsWindowStart,
+    to: now,
+    limit: NEWS_FACT_LIMIT,
+  });
+  const usableNews: (typeof storedNews)[number][] = [];
+  for (const fact of storedNews) {
+    if (classifyMarketObservation(fact.observedAt, now) === 'current') {
+      usableNews.push(fact);
+      continue;
+    }
+    // 跨日（或当日盘后被复用）的新闻：不进可用事实，但**留痕**——降级不等于删除。
+    crossDayFactIds.push(fact.id);
+  }
+  if (usableNews.length > 0) {
+    const latestNewsAt = new Date(Math.max(...usableNews.map((fact) => fact.observedAt.getTime())));
+    facts.push({
+      id: `market:news:${dateInShanghai(latestNewsAt)}`,
+      label: `已落库财经要闻（${String(usableNews.length)} 条）`,
+      value: {
+        // 每条都带**事实表主键**：Advice 引用它就必须逐条落库（L2 会查表）。
+        items: usableNews.slice(0, 10).map((fact) => ({
+          factId: fact.id,
+          title: String(fact.payload.title ?? ''),
+          summary: String(fact.payload.summary ?? ''),
+          category: fact.category ?? '',
+          media: String(fact.payload.media ?? ''),
+          url: String(fact.payload.url ?? ''),
+          observedAt: fact.observedAt.toISOString(),
+          source: fact.source,
+          observationClass: classifyMarketObservation(fact.observedAt, now),
+        })),
+        dataAsOf: latestNewsAt.toISOString(),
+        observationClass: classifyMarketObservation(latestNewsAt, now),
+        source: 'external_market_facts',
+        factIds: usableNews.map((fact) => fact.id),
+      },
+      // 证据 id 就是事实表主键：Advice 引用它们时会被 L2 校验「表里查得到」。
+      evidenceIds: usableNews.map((fact) => fact.id),
+    });
+    verifiedAt.push(latestNewsAt);
+  }
+
   // 跨日市场事实被排除后必须留痕：这是 blocking 缺口（→ unavailable + 原因码），
   // 不是 degraded——否则模型会把「昨日市场结构」继续当成今日依据（REQ-M3-20）。
   if (crossDayFactIds.length > 0) {
@@ -284,7 +344,16 @@ const collectMarketFacts = async (
       reason: '未接入实时指数、市场宽度与情绪指标',
       asOf: now,
     },
-    { kind: 'news-unavailable', subjectId: 'market', reason: '未接入新闻数据', asOf: now },
+    {
+      kind: 'news-unavailable',
+      subjectId: 'market',
+      // 「表里没有」≠「不存在」：点名缺什么 + 怎么补（先抓取再落库），不回退到实时抓取。
+      reason:
+        usableNews.length === 0
+          ? '已落库的财经要闻为空：外部事实未落库（先运行 fetch_news 抓取，再运行 persist_external_facts 落库）；本上下文只读已落库事实，不临时回退到实时抓取'
+          : '已落库的财经要闻没有当日可用的条目（跨日条目按市场级当日口径排除，见跨日缺口）',
+      asOf: now,
+    },
     {
       kind: 'fundamental-unavailable',
       subjectId: 'market',
