@@ -213,13 +213,13 @@ describe('事前成本确认（需求 6）', () => {
   });
 });
 
-describe('降级路径（需求 7）', () => {
+describe('预算超限 → **拒绝启动**，不降级（需求 7 修订版）', () => {
   const okEstimate = {
     estimatedTokenRange: { min: 1000, max: 2000 },
     estimatedDurationMs: { min: 1000, max: 2000 },
   };
 
-  it('**token 预算超限 → 降级为单 agent**，阈值可注入', async () => {
+  it('**token 超预算 → 零角色执行**，且说明超出哪一项', async () => {
     const { ctx, context } = await setup();
     const ran: string[] = [];
     const result = await runTriangleAnalysis({
@@ -237,16 +237,20 @@ describe('降级路径（需求 7）', () => {
       now: () => Date.now(),
       ctx,
     });
-    expect(result.degraded).toBe('token-budget-exceeded');
-    // **只跑一个** agent（不是四个）
-    expect(ran).toEqual(['judge']);
-    // 首段必须写明已降级及原因
-    expect(result.lead).toContain('已降级');
-    expect(result.lead).toContain('token 预算超限');
+    // **一个角色都没跑**（不是「只跑了裁决官」）
+    expect(ran).toEqual([]);
+    expect(result.roles).toHaveLength(0);
+    // 拒绝原因指明是哪一项
+    expect(result.blocked?.code).toBe('token-budget-exceeded');
+    expect(result.blocked?.message).toContain('拒绝启动');
+    expect(result.blocked?.message).toContain('token');
+    // 不再有「已降级」这个说法
+    expect(result.lead).not.toContain('已降级');
   });
 
-  it('**时长超限 → 降级**，阈值可注入（15 分钟在测试里等不起）', async () => {
+  it('**时长超限 → 零角色执行**，阈值可注入', async () => {
     const { ctx, context } = await setup();
+    let called = 0;
     const result = await runTriangleAnalysis({
       context,
       dataHealth: 'complete',
@@ -254,17 +258,23 @@ describe('降级路径（需求 7）', () => {
       estimate: okEstimate,
       confirmed: true,
       budget: { maxTokens: 1_000_000, maxDurationMs: 1 },
-      executor: async () => ({ tokenUsed: 10 }),
+      executor: async () => {
+        called += 1;
+        return { tokenUsed: 10 };
+      },
       now: () => Date.now(),
       ctx,
     });
-    expect(result.degraded).toBe('duration-exceeded');
-    expect(result.lead).toContain('已降级');
-    expect(result.lead).toContain('时长上限');
+    expect(called).toBe(0);
+    expect(result.roles).toHaveLength(0);
+    expect(result.blocked?.code).toBe('duration-exceeded');
+    expect(result.blocked?.message).toContain('拒绝启动');
+    expect(result.blocked?.message).toContain('时长');
   });
 
-  it('不超预算则不降级，四角色全跑', async () => {
+  it('不超预算 → **四角色全跑**', async () => {
     const { ctx, context } = await setup();
+    const ran: string[] = [];
     const result = await runTriangleAnalysis({
       context,
       dataHealth: 'complete',
@@ -272,13 +282,38 @@ describe('降级路径（需求 7）', () => {
       estimate: okEstimate,
       confirmed: true,
       budget: { maxTokens: 1_000_000, maxDurationMs: 900_000 },
-      executor: async () => ({ tokenUsed: 10 }),
+      executor: async (task) => {
+        ran.push(task.role);
+        return { tokenUsed: 10 };
+      },
       now: () => Date.now(),
       ctx,
     });
-    expect(result.degraded).toBeNull();
+    expect(result.blocked).toBeNull();
+    expect(ran).toEqual(['bull', 'bear', 'judge', 'risk-officer']);
     expect(result.roles).toHaveLength(4);
-    expect(result.lead).not.toContain('已降级');
+  });
+
+  it('**风控不可被预算绕过**：超预算时风险官同样没跑', async () => {
+    const { ctx, context } = await setup();
+    const ran: string[] = [];
+    await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate: okEstimate,
+      confirmed: true,
+      budget: { maxTokens: 1, maxDurationMs: 900_000 },
+      executor: async (task) => {
+        ran.push(task.role);
+        return {};
+      },
+      now: () => Date.now(),
+      ctx,
+    });
+    // 关键：既没有「只跑裁决官」，也没有「跳过风险官但跑了别的」
+    expect(ran).not.toContain('risk-officer');
+    expect(ran).toEqual([]);
   });
 });
 

@@ -159,20 +159,48 @@ export const runTriangleAnalysis = async (input: {
    * 需求 7：按**预估上限**判降级，而不是跑到一半才放弃——
    * 后者会让前面已投入的角色白花。
    */
-  const degraded =
+  /**
+   * REQ-M4-02（修订版）：超预算 / 超时 → **拒绝启动**，不降级。
+   *
+   * ## 为什么不能降级成单 agent
+   *
+   * 原实现「只跑裁决官」意味着**跳过风险官**——
+   * 三角分析的价值就在四角色互相制衡，砍掉三个只剩裁决官，
+   * 产出的「结论」没有任何制衡，而且**风控可以被预算绕过**。
+   *
+   * ⇒ 要么四角色全跑，要么一个都不跑。
+   */
+  const budgetBreach =
     input.estimate === undefined
       ? null
       : shouldDegrade({
           estimate: input.estimate,
           budget: input.budget ?? DEFAULT_TRIANGLE_BUDGET,
         });
-  // 降级 = 只跑**一个** agent（裁决官，它负责给结论）。
-  const rolesToRun: readonly TriangleRole[] =
-    degraded === null ? TRIANGLE_ROLES : (['judge'] as const);
+  if (budgetBreach !== null)
+    return {
+      contextId: context.id,
+      factIds: context.factIds,
+      gate,
+      // **零角色执行**：不是「跑一个」，是「一个都不跑」。
+      roles: [],
+      blocked: {
+        code: budgetBreach,
+        message:
+          budgetBreach === 'token-budget-exceeded'
+            ? '拒绝启动：预估 token 超出预算上限。请缩小分析范围或调整预算后重试。'
+            : '拒绝启动：预估时长超出上限。请缩小分析范围或调整预算后重试。',
+      },
+      lead: '',
+      degraded: null,
+      tokenUsed: null,
+      elapsedMs: 0,
+    };
 
   const startedAt = input.now();
   const roles: TriangleRoleRun[] = [];
-  for (const role of rolesToRun) {
+  // **永远是四角色全跑** —— 没有「跑一部分」这个选项。
+  for (const role of TRIANGLE_ROLES) {
     // **同一个 contextId + 同一份 factIds** 发给每个角色。
     const task: TriangleRoleTask = {
       role,
@@ -202,8 +230,9 @@ export const runTriangleAnalysis = async (input: {
     gate,
     roles,
     blocked: null,
-    lead: triangleSummaryLead({ tokenUsed, elapsedMs, degraded }),
-    degraded,
+    lead: triangleSummaryLead({ tokenUsed, elapsedMs, degraded: null }),
+    // 走到这里说明**没有超预算**，也就没有降级——降级这个状态本身已被取消。
+    degraded: null,
     tokenUsed,
     elapsedMs,
   };
