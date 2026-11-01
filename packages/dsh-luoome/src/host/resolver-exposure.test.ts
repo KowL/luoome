@@ -40,9 +40,11 @@ describe('内部 resolver 不得进入模型可调面', () => {
     // 入口 `resolve_watch_notification` 在 registry 里（见 tools 侧 watch.guard.test.ts）；
     // 但**当前它也不在这两张 allowlist 里**——即模型暂时调不到它。
     // 这属于暴露面决策（M4-01 尚未把通知目标接到对话面），不是本守卫的职责，
-    // 因此这里只记录事实、不强制要求它在表内，避免守卫替产品做决定。
+    // 决策已定（外部评审 gpt-6-astra）：入口**应当**在 read 面。
+    // 理由：它的契约是「定位提醒来源」，不判断当前是否仍成立 ⇒ 与 `state` 三档口径无关。
+    // 但**只读面，不进 market 面**——它不访问外部行情。
     const inRead = DEFAULT_READ_TOOL_ALLOWLIST.includes('resolve_watch_notification');
     const inMarket = DEFAULT_MARKET_TOOL_ALLOWLIST.includes('resolve_watch_notification');
-    expect({ inRead, inMarket }).toEqual({ inRead: false, inMarket: false });
+    expect({ inRead, inMarket }).toEqual({ inRead: true, inMarket: false });
   });
 });

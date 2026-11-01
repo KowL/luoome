@@ -104,6 +104,10 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'get_previous_closes',
   'search_stocks',
   'list_stock_events',
+  // 「这条提醒属于哪条计划的哪一版」——**只读不可变依据**，不判断当前是否仍成立。
+  // 外部评审（gpt-6-astra）裁定：它的契约是「定位来源」，与 `state` 三档口径无关，
+  // 因此不必等 `state` 定案才开放。刻意不含 `state`/`changes`（那三个要现算）。
+  'resolve_watch_notification',
 ]);
 
 /**
