@@ -1667,6 +1667,48 @@ const runAcceptance = async () => {
     '账户设置表单',
     15_000,
   );
+
+  // ── M4-09：用户可见的「入口变更」说明 ──
+  //
+  // 四个入口（CLI / TUI / stdio MCP / 旧 Web 看板）删掉后，界面上必须有一处告诉用户
+  // 「那些入口去哪了」。这里断言三件事：
+  // 1. 四条都在（限定到 `data-retired-entry`，不是「文本里出现过这个词」）
+  // 2. **每条都带替代路径**（`data-retired-replacement` 非空且足够具体）
+  // 3. 用的是 `factual` 呈现，不是 warn/error（否则会变成每天看到的常态告警）
+  const retiredEntries = await page.evaluate<{
+    keys: string[];
+    replacements: { key: string; text: string }[];
+    tones: string[];
+    hasSection: boolean;
+  }>(`(() => ({
+    keys: [...document.querySelectorAll('[data-retired-entry]')].map((node) => node.getAttribute('data-retired-entry')),
+    replacements: [...document.querySelectorAll('[data-retired-replacement]')].map((node) => ({
+      key: node.getAttribute('data-retired-replacement'),
+      text: (node.textContent ?? '').trim(),
+    })),
+    tones: [...document.querySelectorAll('[data-retired-entries] .luo-pill')].map((node) => node.className),
+    hasSection: document.querySelector('[data-luoome-section="retired-entries"], #retired-entries') !== null,
+  }))()`);
+  if (retiredEntries.keys.length !== 4)
+    throw new Error(
+      `入口变更应有 4 条，实际 ${String(retiredEntries.keys.length)}：${JSON.stringify(retiredEntries.keys)}`,
+    );
+  for (const key of ['cli', 'tui', 'mcp', 'web']) {
+    if (!retiredEntries.keys.includes(key))
+      throw new Error(`入口变更缺 ${key}：${JSON.stringify(retiredEntries.keys)}`);
+    const replacement = retiredEntries.replacements.find((item) => item.key === key);
+    // **不许只写「已下线」**：替代路径必须真的在、且不是一句话空话。
+    if (replacement === undefined || replacement.text.length <= 20)
+      throw new Error(
+        `入口 ${key} 缺少具体替代路径：${JSON.stringify(retiredEntries.replacements)}`,
+      );
+  }
+  // 呈现纪律：不得出现 warn / error 色调（这是说明，不是告警）。
+  for (const tone of retiredEntries.tones) {
+    if (/is-warn|is-error|is-danger/u.test(tone))
+      throw new Error(`入口变更误用了告警色调：${tone}`);
+  }
+
   const newAccountName = '浏览器验收：已确认改名';
   const setAccountName = () =>
     page.evaluate(`(() => {
@@ -3303,8 +3345,8 @@ const runAcceptance = async () => {
       const count = row.querySelector('[data-plan-history-count]');
       return {
         planId: row.getAttribute('data-plan-row'),
-        text: (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
-        version: row.children[2]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        text: (row.textContent ?? '').replace(/s+/g, ' ').trim(),
+        version: row.children[2]?.textContent?.replace(/s+/g, ' ').trim() ?? '',
         historyCount: count?.getAttribute('data-plan-history-count') ?? null,
       };
     }),
@@ -3477,6 +3519,17 @@ const runAcceptance = async () => {
   };
   const evidence = {
     mode: '真实浏览器验收（Chrome headless CDP）；合成 fixture，非真实模型质量',
+    retiredEntries: {
+      keys: retiredEntries.keys,
+      replacements: retiredEntries.replacements.map((item) => ({
+        key: item.key,
+        text: item.text.slice(0, 60),
+      })),
+      warningTonesUsed: retiredEntries.tones.filter((tone) =>
+        /is-warn|is-error|is-danger/u.test(tone),
+      ),
+      sectionPresent: retiredEntries.hasSection,
+    },
     plansForm,
     research: researchEvidence,
     chrome: chromePath,

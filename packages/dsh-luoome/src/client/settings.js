@@ -1034,6 +1034,104 @@ function DiagnosticsSection({ diagnostics, error }) {
   );
 }
 
+/**
+ * 已下线的用户入口（M4-09）。
+ *
+ * ## 为什么要有这一块
+ *
+ * 四个入口（CLI / TUI / stdio MCP / 旧 Web 看板）删掉之后，用户界面上**没有任何地方
+ * 告诉他「那些入口去哪了」**。能力没丢，但路径变了——不说清楚，用户只会以为功能没了。
+ *
+ * ## 呈现纪律
+ *
+ * - 用 `factual` tone 的 `Pill`：这是**说明**，不是告警。
+ *   **不许用 warning / 红黄**——那会变成「每天看到的常态告警」，
+ *   像 M3-20 那次「每天报历史观察」一样最终变成噪音。
+ * - 每条必须带**具体的**替代路径（「点哪里 / 用什么工具」），只写「用插件」等于没说。
+ * - 文案不含行动词（买入/卖出/已建仓/下单）：这里是入口说明，不是投资建议。
+ *
+ * `r` 字段是 PRD 的需求编号，用于追溯；编号本身不展示给用户（用户不关心编号），
+ * 但留在 DOM 属性里，验收与 CHANGELOG 能对上。
+ */
+export const RETIRED_ENTRIES = [
+  {
+    key: 'cli',
+    name: '命令行工具（CLI）',
+    r: 'REQ-M2-05',
+    replacement:
+      '用 DSH 插件面板：侧栏「LUOOME」下的看盘 / 持仓 / 关注 / 策略 / 告警 / 计划 / 复盘七个视图',
+  },
+  {
+    key: 'tui',
+    name: '终端界面（TUI）',
+    r: 'REQ-M2-05',
+    replacement: '同上，用 DSH 插件面板的七个视图；对话里也可以直接让我读取同样的数据',
+  },
+  {
+    key: 'mcp',
+    name: 'stdio MCP 服务入口',
+    r: 'REQ-M2-03',
+    replacement:
+      '插件内已直接提供同名能力（见 packages/tools 的 registry），不需要再单独起 MCP 服务',
+  },
+  {
+    key: 'web',
+    name: '旧 Web 看板',
+    r: 'REQ-M4-01',
+    replacement: '改用 DSH 插件面板；数据导入导出、告警规则、通知目标、交易计划面板都已迁入其中',
+  },
+];
+
+/** 入口变更区块。**每一项都要能回答「原来在哪 / 现在点哪」。** */
+function RetiredEntriesSection() {
+  return h(
+    Section,
+    {
+      title: '入口变更',
+      id: 'retired-entries',
+      meta: h(Pill, { tone: 'factual' }, '说明'),
+    },
+    h(
+      Card,
+      {
+        title: '已下线的入口与替代路径',
+        meta: h('span', { className: 'luo-fine' }, '能力未删除，路径变更'),
+      },
+      h(
+        'p',
+        { className: 'luo-fine' },
+        '以下入口已下线；对应能力已迁入 DSH 插件，用法见每条后面的替代路径。',
+      ),
+      h(
+        'ul',
+        { className: 'luo-setting-list', 'data-retired-entries': 'true' },
+        RETIRED_ENTRIES.map((entry) =>
+          h(
+            'li',
+            {
+              key: entry.key,
+              'data-retired-entry': entry.key,
+              'data-retired-r': entry.r,
+            },
+            h(
+              'span',
+              null,
+              h(Pill, { tone: 'factual' }, '已下线'),
+              h('strong', null, entry.name),
+              // 替代路径必须具体：点哪里 / 用什么工具。
+              h(
+                'span',
+                { className: 'luo-fine', 'data-retired-replacement': entry.key },
+                entry.replacement,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 export function SettingsPanel() {
   const state = usePanelState('settings');
   // section 深链：settings?section=diagnostics / #diagnostics 直接定位到诊断区块。
@@ -1148,6 +1246,7 @@ export function SettingsPanel() {
         ),
       ),
     ),
+    h(RetiredEntriesSection),
     h(DiagnosticsSection, {
       diagnostics: dataOf(state.results, 'get_data_diagnostics'),
       error: errorOf(state.results, 'get_data_diagnostics'),
