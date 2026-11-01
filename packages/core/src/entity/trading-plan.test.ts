@@ -402,6 +402,25 @@ describe('交易计划的监控资格与组合条件', () => {
     );
   });
 
+  // ── 「已证实的不可用」不能被缺数掩盖（外部评审决策 2 纪律 ①） ──
+  // `draft` / `scheduled` 是**计划的确定属性**，与账户事实能不能读到无关。
+  // 旧顺序把「账户事实不可用」排在它们前面，于是缺数赢得了它不该赢的优先级。
+  it('账户事实不可用时仍报 draft —— 计划属性优先于「无法判断」', () => {
+    const draft = plan({ status: 'draft' });
+    const facts = { digest: draft.accountFactsDigest, status: 'unavailable' as const };
+    expect(tradingPlanMonitoring(draft, facts, now).status).toBe('draft');
+  });
+
+  it('账户事实不可用时仍报 scheduled —— validFrom 未到与事实无关', () => {
+    const active = plan({
+      status: 'active',
+      validFrom: new Date(now.getTime() + 86_400_000),
+      validUntil: new Date(now.getTime() + 2 * 86_400_000),
+    });
+    const facts = { digest: active.accountFactsDigest, status: 'unavailable' as const };
+    expect(tradingPlanMonitoring(active, facts, now).status).toBe('scheduled');
+  });
+
   it('草案超过有效期后归为已过期，不能永久停留在待补全', () => {
     const draft = plan({ validUntil: now });
     expect(tradingPlanMonitoring(draft, null, now).status).toBe('expired');

@@ -1326,10 +1326,17 @@ export const tradingPlanMonitoring = (
   }
   if (tradingPlanExpiresAt(plan) <= now)
     return result('expired', '计划已超过有效期', '基于新证据重新复核计划');
-  if (facts !== null && facts.digest !== plan.accountFactsDigest)
-    return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
-  if (facts !== null && facts.status !== 'complete')
-    return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
+  /**
+   * 判定次序纪律（外部评审决策 2 纪律 ①）：**已确证的状态优先于「无法判断」**。
+   *
+   * `draft` / `scheduled` 是 `plan` 自身的确定属性，与账户事实能不能读到**无关**；
+   * 把它们排在 `facts.unavailable` 之后，会让「读不到账户事实」赢得它不该赢的优先级，
+   * 于是「这份计划本来就是草案」被说成「暂时判不了」——用户会一直等下去。
+   *
+   * 依赖 `facts` 的只有 `account-changed` 与 `unavailable`，所以它们必须排在后面；
+   * `constraints` 是存进计划快照里的结论（`position.constraintStatus`），也不依赖 facts，
+   * 同理提前到事实判定之前。
+   */
   if (plan.status === 'draft')
     return result(
       'draft',
@@ -1339,13 +1346,25 @@ export const tradingPlanMonitoring = (
         '补齐证据后重新生成计划',
     );
   if (plan.validFrom > now) return result('scheduled', '尚未到计划生效时间', '等待生效时间');
-  if (facts === null || facts.status !== 'complete')
-    return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
   if (plan.position.constraintStatus !== 'passed')
     return result(
+      // ⚠️ 与下方「账户事实不可用」分支共用同一个 status 值 `unavailable`，
+      // 两处靠 **reason 文案**区分（消费方 `watchNotificationVerdictFromMonitoring`
+      // 用 `reason === '计划约束未通过'` 判别）。**改这里的文案会静默改变四档映射**，
+      // 一并修要动 `TradingPlanMonitoring.status` 枚举（动 core 契约），单独立项。
       'unavailable',
       '计划约束未通过',
       plan.position.constraintReasons.join('；') || '重新生成计划',
+    );
+  // 以下两条依赖账户事实：**必须**排在所有「计划自身已确证」的判定之后。
+  if (facts !== null && facts.digest !== plan.accountFactsDigest)
+    return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
+  if (facts === null || facts.status !== 'complete')
+    return result(
+      // ⚠️ 与上方「计划约束未通过」共用 status 值，靠 reason 文案区分（见上）。
+      'unavailable',
+      '账户事实不可用',
+      '刷新持仓行情并检查账户对账',
     );
   if (plan.entryConditions.length + plan.exit.triggerConditions.length === 0)
     return result('no-conditions', '没有可检查的盘中条件', '复核并补充结构化条件');
