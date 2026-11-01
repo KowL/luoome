@@ -34,13 +34,6 @@ export default defineConfig({
       // schema ↔ 表列集对账守卫：顶层 import bun:test（与上面同理），由 test:db 执行。
       'packages/db/src/repository/schema-parity.contract.test.ts',
       'packages/db/src/personal/**',
-      // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
-      // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
-      'apps/web/src/server.test.ts',
-      'apps/web/src/workspace.test.ts',
-      'apps/web/src/local-start.test.ts',
-      'apps/web/src/data-transfer.test.ts',
-      'apps/web/public/js/**/*.test.js',
     ],
   },
 });

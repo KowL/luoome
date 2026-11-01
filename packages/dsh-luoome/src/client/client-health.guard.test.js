@@ -157,3 +157,25 @@ describe('task-30 · 持仓报价时点', () => {
     expect(/holdingsStaleSummary\s*\(/.test(overview)).toBe(true);
   });
 });
+
+// ── task-32/33：`localPaths` 的键是**协议键**（camelCase），不是分区 id（kebab）────────
+//
+// 真实事故：client 曾经把 `section.id`（`research-vault`）直接当 `localPaths` 的键发出去，
+// 而服务端 schema 的键是 `researchVault` 且 `.strict()` ⇒ **整次保存被静默拒绝**，
+// 浏览器验收表现为「保存后没有成功文案」。这类键名不一致不会被 typecheck 抓到（client 是 .js）。
+describe('设置保存的协议键', () => {
+  it('client 不按分区 id 特判协议键，而是用服务端给的 pathKey', () => {
+    const settings = read('settings.js');
+    expect(/section\.pathKey/.test(settings)).toBe(true);
+    // 禁止再次出现按 id 硬映射协议键。
+    expect(/section\.id === 'research-vault'/.test(settings)).toBe(false);
+  });
+
+  it('服务端视图为每个 local-path 分区提供 pathKey', () => {
+    const { readFileSync } = require('node:fs');
+    const host = readFileSync(resolve(ROOT, '../host/market-settings.ts'), 'utf8');
+    // 类型声明与构造处都必须有 pathKey，且值为协议键。
+    expect(/readonly pathKey: 'researchVault'/.test(host)).toBe(true);
+    expect(/pathKey: 'researchVault' as const/.test(host)).toBe(true);
+  });
+});

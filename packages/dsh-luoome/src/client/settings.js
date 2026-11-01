@@ -173,6 +173,9 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
         ...(localPathSections.length === 0
           ? {}
           : {
+              // `localPaths` 的键是**协议键**（`researchVault`），不是分区的 `id`（`research-vault`）。
+              // 服务端 schema 是 `.strict()`，键名不一致会**静默拒绝整次保存**——
+              // 浏览器验收就是这么发现的（行情设置保存后没有成功文案）。
               localPaths: Object.fromEntries(
                 localPathSections.map((section) => {
                   const value = String(pathsFor(section.id) ?? '').trim();
@@ -185,7 +188,8 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
                     advancedFor(section.id, 'maxAttachmentMb') ?? '',
                   ).trim();
                   return [
-                    section.id,
+                    // 协议键来自服务端（`pathKey`），client **不按 id 特判**。
+                    section.pathKey ?? section.id,
                     {
                       ...(value.length > 0 ? { path: value } : {}),
                       ...(vaultId.length > 0 ? { vaultId } : {}),

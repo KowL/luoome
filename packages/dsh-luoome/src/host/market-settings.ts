@@ -334,6 +334,12 @@ export interface MarketSettingsView {
     | {
         readonly kind: 'local-path';
         readonly id: typeof LOCAL_PATH_GUARDED_ID;
+        /**
+         * 保存时在 `localPaths` 对象里使用的**协议键**（如 `researchVault`）。
+         * 分区 `id` 是 URL/锚点风格（`research-vault`），协议键是 camelCase，**两者不同**；
+         * 由服务端提供，避免 client 自己按 id 特判（`.strict()` 下键名不一致会拒绝整次保存）。
+         */
+        readonly pathKey: 'researchVault';
         readonly label: string;
         readonly envKey: typeof RESEARCH_VAULT_KEY;
         readonly configured: boolean;
@@ -447,6 +453,7 @@ export class MarketSettingsStore {
         {
           kind: 'local-path' as const,
           id: LOCAL_PATH_GUARDED_ID,
+          pathKey: 'researchVault' as const,
           label: RESEARCH_VAULT_LABEL,
           envKey: RESEARCH_VAULT_KEY,
           configured: Boolean(this.env[RESEARCH_VAULT_KEY]?.trim()),

@@ -230,14 +230,7 @@ const descendantsOf = (pid: number): Descendant[] => {
 const forbiddenProcess = (command: string): string | undefined => {
   const executable = command.trim().split(/\s+/)[0] ?? '';
   if (executable === 'bun' || executable.endsWith('/bun')) return 'bun';
-  for (const needle of [
-    'luoome-mcp',
-    'mcp-server',
-    'analysis-worker',
-    'queue-probe',
-    'luoome/cli',
-    'apps/web/src/index.ts',
-  ])
+  for (const needle of ['luoome-mcp', 'mcp-server', 'analysis-worker', 'queue-probe', 'luoome/cli'])
     if (command.includes(needle)) return needle;
   return undefined;
 };

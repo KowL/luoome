@@ -499,9 +499,6 @@ describe('task-33 研究库路径通道', () => {
 });
 
 // task-33 补：四项高级配置（研究目录 / 受管目录 / 文本上限 / 附件上限）。
-type ZodLike = {
-  safeParse(input: unknown): { success: boolean };
-};
 
 describe('task-33 研究库高级配置', () => {
   let vaultDir: string;
@@ -577,11 +574,11 @@ describe('task-33 研究库高级配置', () => {
     reject({ path: vaultDir, maxAttachmentMb: 1_025 }, /too_big|less than or equal/);
   });
 
-  it('对照：apps/web 的 SaveResearchVaultSettingsSchema 与本 schema 对同一组输入接受/拒绝一致', async () => {
-    const { SaveResearchVaultSettingsSchema } = await import(
-      '../../../../apps/web/src/research-vault-settings.js'
-    ).then((module) => module as { SaveResearchVaultSettingsSchema: ZodLike });
-    // 本插件侧：把同一组输入包进 `localPaths.researchVault`，看 SaveMarketSettingsSchema 是否接受。
+  // apps/web 已下线（M3-01）。这条原先是「与 apps/web 的
+  // `SaveResearchVaultSettingsSchema` 对拍 10 组输入」——搬迁当时实测 **10/10 一致**。
+  // 现在把那份结果**固化成期望值表**：它不再是「对拍」，而是「回归快照」——
+  // 将来有人放宽/收紧 research vault 的校验，这里会红，并告诉他是哪一组变了。
+  it('回归快照：research vault 六字段的接受/拒绝与搬迁时（apps/web 对拍 10/10 一致）保持一致', () => {
     const pluginAccepts = (input: Record<string, unknown>): boolean =>
       SaveMarketSettingsSchema.safeParse({
         sources: ['fuyao', 'tencent'],
@@ -591,57 +588,113 @@ describe('task-33 研究库高级配置', () => {
       }).success;
 
     const cases: {
-      researchRoot: string;
-      managedRoot: string;
-      maxTextMb: number;
-      maxAttachmentMb: number;
+      label: string;
+      input: {
+        researchRoot: string;
+        managedRoot: string;
+        maxTextMb: number;
+        maxAttachmentMb: number;
+      };
+      /** 搬迁时 apps/web 的判定结果（固化）。 */
+      accepted: boolean;
     }[] = [
       {
-        researchRoot: 'Research',
-        managedRoot: 'Research/Luoome',
-        maxTextMb: 10,
-        maxAttachmentMb: 100,
-      },
-      { researchRoot: 'Notes', managedRoot: 'Notes/Bot', maxTextMb: 1, maxAttachmentMb: 1 },
-      { researchRoot: 'A/B', managedRoot: 'A/B/C', maxTextMb: 100, maxAttachmentMb: 1_024 },
-      { researchRoot: '   ', managedRoot: 'Research/Luoome', maxTextMb: 10, maxAttachmentMb: 100 },
-      { researchRoot: 'a\nb', managedRoot: 'Research/Luoome', maxTextMb: 10, maxAttachmentMb: 100 },
-      { researchRoot: 'Research', managedRoot: '  ', maxTextMb: 10, maxAttachmentMb: 100 },
-      {
-        researchRoot: 'Research',
-        managedRoot: 'Research/Luoome',
-        maxTextMb: 0,
-        maxAttachmentMb: 100,
+        label: '默认值组合',
+        input: {
+          researchRoot: 'Research',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 10,
+          maxAttachmentMb: 100,
+        },
+        accepted: true,
       },
       {
-        researchRoot: 'Research',
-        managedRoot: 'Research/Luoome',
-        maxTextMb: 101,
-        maxAttachmentMb: 100,
+        label: '下界 1/1',
+        input: {
+          researchRoot: 'Notes',
+          managedRoot: 'Notes/Bot',
+          maxTextMb: 1,
+          maxAttachmentMb: 1,
+        },
+        accepted: true,
       },
       {
-        researchRoot: 'Research',
-        managedRoot: 'Research/Luoome',
-        maxTextMb: 10,
-        maxAttachmentMb: 0,
+        label: '上界 100/1024',
+        input: {
+          researchRoot: 'A/B',
+          managedRoot: 'A/B/C',
+          maxTextMb: 100,
+          maxAttachmentMb: 1_024,
+        },
+        accepted: true,
       },
       {
-        researchRoot: 'Research',
-        managedRoot: 'Research/Luoome',
-        maxTextMb: 10,
-        maxAttachmentMb: 1_025,
+        label: '研究目录纯空格',
+        input: {
+          researchRoot: '   ',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 10,
+          maxAttachmentMb: 100,
+        },
+        accepted: false,
+      },
+      {
+        label: '研究目录含换行',
+        input: {
+          researchRoot: 'a\nb',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 10,
+          maxAttachmentMb: 100,
+        },
+        accepted: false,
+      },
+      {
+        label: '受管目录纯空格',
+        input: { researchRoot: 'Research', managedRoot: '  ', maxTextMb: 10, maxAttachmentMb: 100 },
+        accepted: false,
+      },
+      {
+        label: 'maxTextMb=0',
+        input: {
+          researchRoot: 'Research',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 0,
+          maxAttachmentMb: 100,
+        },
+        accepted: false,
+      },
+      {
+        label: 'maxTextMb=101',
+        input: {
+          researchRoot: 'Research',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 101,
+          maxAttachmentMb: 100,
+        },
+        accepted: false,
+      },
+      {
+        label: 'maxAttachmentMb=0',
+        input: {
+          researchRoot: 'Research',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 10,
+          maxAttachmentMb: 0,
+        },
+        accepted: false,
+      },
+      {
+        label: 'maxAttachmentMb=1025',
+        input: {
+          researchRoot: 'Research',
+          managedRoot: 'Research/Luoome',
+          maxTextMb: 10,
+          maxAttachmentMb: 1_025,
+        },
+        accepted: false,
       },
     ];
-    for (const item of cases) {
-      const webAccepts = SaveResearchVaultSettingsSchema.safeParse({
-        vaultPath: vaultDir,
-        researchRoot: item.researchRoot,
-        managedRoot: item.managedRoot,
-        vaultId: '',
-        maxTextMb: item.maxTextMb,
-        maxAttachmentMb: item.maxAttachmentMb,
-      }).success;
-      expect(pluginAccepts({ path: vaultDir, ...item }), JSON.stringify(item)).toBe(webAccepts);
-    }
+    for (const item of cases)
+      expect(pluginAccepts({ path: vaultDir, ...item.input }), item.label).toBe(item.accepted);
   });
 });
