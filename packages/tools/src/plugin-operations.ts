@@ -182,6 +182,18 @@ export const createPluginOperationService = (options: {
    * 这里是所有 operation 调用的共同准入点（`allowed`），看得清这次调用是什么。
    */
   readonly allowBusinessWrite?: boolean;
+  /**
+   * **执行时**读取「当前是否允许写业务数据」（REQ-M4-06 P0）。
+   *
+   * ## 为什么必须是函数，而不是 boolean 常量
+   *
+   * `allowBusinessWrite` 是**构造时**算好的常量。用户在设置页把档位从 `notify`
+   * 切到 `granted` 之后常量不会变 —— 于是「开关点得动、存得下、但派发行为不变」，
+   * 比假开关更糟：**它看起来成功了**。
+   *
+   * 传了这个函数时以它为准（每次派发都重新读）；否则回退到常量（既有调用点不变）。
+   */
+  readonly resolveAllowBusinessWrite?: () => boolean | Promise<boolean>;
 }) => {
   if (process.env.LUOOME_EXPOSE_TRADE === 'true')
     throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed');
@@ -219,7 +231,18 @@ export const createPluginOperationService = (options: {
       release();
     }
   };
-  const allowBusinessWrite = options.allowBusinessWrite !== false;
+  const allowBusinessWriteStatic = options.allowBusinessWrite !== false;
+  /**
+   * **每次判定都重新读档位**——切档位后立刻生效，不需要重启。
+   *
+   * 这里曾经是构造时常量（`options.allowBusinessWrite !== false`），
+   * 于是「设置页切档位」能存能读、**但派发行为不变**。
+   * 那比假开关更糟：它看起来成功了。
+   */
+  const currentAllowBusinessWrite = async (): Promise<boolean> =>
+    options.resolveAllowBusinessWrite === undefined
+      ? allowBusinessWriteStatic
+      : await options.resolveAllowBusinessWrite();
   const allowed = (policy: ConfirmablePluginTool) =>
     !disposed &&
     policy.tool.requiredCapabilities.every((c) =>
@@ -240,8 +263,13 @@ export const createPluginOperationService = (options: {
    * `sideEffect` 是工具契约的一部分，**新增写工具自动被覆盖**；
    * 按名字匹配（`name.includes('save')`）则名字不含写词的写工具会漏网。
    */
-  const scheduleDeniedByTier = (policy: ConfirmablePluginTool, authorization: { kind: string }) =>
-    !allowBusinessWrite && authorization.kind === 'schedule' && policy.tool.sideEffect !== 'read';
+  const scheduleDeniedByTier = async (
+    policy: ConfirmablePluginTool,
+    authorization: { kind: string },
+  ): Promise<boolean> =>
+    authorization.kind === 'schedule' &&
+    policy.tool.sideEffect !== 'read' &&
+    !(await currentAllowBusinessWrite());
 
   const grantInput = z
     .object({
@@ -380,7 +408,7 @@ export const createPluginOperationService = (options: {
     const ctx = await options.context();
     if (!allowed(policy) || signal.aborted) return denied();
     // `notify` 档下，定时派发不得写业务数据（用户手动操作不受此限）。
-    if (scheduleDeniedByTier(policy, operation.authorization)) return deniedByTier();
+    if (await scheduleDeniedByTier(policy, operation.authorization)) return deniedByTier();
     const claimToken = randomUUID();
     const claimed = await repo.claimOperation({
       ...proof,
@@ -580,7 +608,7 @@ export const createPluginOperationService = (options: {
             return denied();
           // **档位闸门放在最前**：早于 grant 校验，这样「被档位拒」的原因不会
           // 被「授权链不通过」掩盖——用户能看出该去调档位，而不是去补授权。
-          if (scheduleDeniedByTier(policy, { kind: 'schedule' })) return deniedByTier();
+          if (await scheduleDeniedByTier(policy, { kind: 'schedule' })) return deniedByTier();
           const principal = { userId: identity.userId, accountId: request.accountId };
           const id = `schedule:${pluginInputHash({ identity, occurrenceId: request.occurrenceId, tool: request.tool, accountId: request.accountId })}`;
           let op: PluginOperation;
