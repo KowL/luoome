@@ -97,3 +97,36 @@ export const triangleGate = (input: {
     recommended: input.dataHealth === 'partial',
   };
 };
+
+/**
+ * 从 `get_market_data_status` 的结果推导三角分析的**数据健康档**（REQ-M4-02）。
+ *
+ * ## 判据（PRD 只写了 `complete` / `partial` / `unavailable` 三个词，
+ *    没有说从什么状态推——这里把规则定死）
+ *
+ * | 条件 | 档位 | 理由 |
+ * |---|---|---|
+ * | `datasets` 为空（没有任何数据集状态） | `unavailable` | **完全没有数据可读**，不是「有缺口」 |
+ * | 全部 dataset 都是 `failed` | `unavailable` | 同上：一个能读的都没有 |
+ * | 存在 `stale` / `failed` 的 dataset | `partial` | 有数据但不可全信——**这正是 PRD 说「允许并推荐」的场景** |
+ * | `watchlistStale` 非空 | `partial` | 关注列表数据陈旧 = 结论会基于旧事实 |
+ * | 其余（全部 `ok` 等） | `complete` | — |
+ *
+ * ## 为什么「全部 failed」算 `unavailable` 而不是 `partial`
+ *
+ * `partial` 的语义是「**有缺口但仍可分析**」——分析会产出缺口清单与阻塞条件。
+ * 但如果一个 dataset 都读不出来，产出的「分析」全是猜测，那不是缺口，
+ * 那是**没有输入**。这两者的处置完全不同：前者继续（并标注缺口），后者直接拦。
+ */
+export const triangleDataHealthOf = (status: {
+  readonly datasets: readonly { readonly state: string }[];
+  readonly watchlistStale?: readonly unknown[];
+}): TriangleDataHealth => {
+  const datasets = status.datasets ?? [];
+  if (datasets.length === 0) return 'unavailable';
+  if (datasets.every((dataset) => dataset.state === 'failed')) return 'unavailable';
+  if (datasets.some((dataset) => dataset.state === 'stale' || dataset.state === 'failed'))
+    return 'partial';
+  if ((status.watchlistStale ?? []).length > 0) return 'partial';
+  return 'complete';
+};

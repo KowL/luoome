@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { triangleGate } from './triangle-gate.js';
+import { triangleDataHealthOf, triangleGate } from './triangle-gate.js';
 
 /**
  * REQ-M4-02 需求 4 / 5：门槛与**独立原因码**。
@@ -82,5 +82,47 @@ describe('三角分析门槛', () => {
       // 提醒存在，但 allowed 仍是 true —— **提醒永不阻止**。
       expect(result.advisories.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('dataHealth 推导规则（PRD 未定义，此处定死）', () => {
+  const status = (datasets: { state: string }[], watchlistStale: unknown[] = []) => ({
+    datasets,
+    watchlistStale,
+  });
+
+  it('**没有任何数据集** → unavailable（不是「有缺口」而是「没有输入」）', () => {
+    expect(triangleDataHealthOf(status([]))).toBe('unavailable');
+  });
+
+  it('**全部 failed** → unavailable（一个能读的都没有）', () => {
+    expect(triangleDataHealthOf(status([{ state: 'failed' }, { state: 'failed' }]))).toBe(
+      'unavailable',
+    );
+  });
+
+  it('有 stale → partial（有数据但不可全信）', () => {
+    expect(triangleDataHealthOf(status([{ state: 'ok' }, { state: 'stale' }]))).toBe('partial');
+  });
+
+  it('部分 failed 但有可用的 → partial（不是 unavailable）', () => {
+    expect(triangleDataHealthOf(status([{ state: 'ok' }, { state: 'failed' }]))).toBe('partial');
+  });
+
+  it('watchlistStale 非空 → partial（结论会基于旧事实）', () => {
+    expect(triangleDataHealthOf(status([{ state: 'ok' }], [{}]))).toBe('partial');
+  });
+
+  it('全部 ok 且无 stale → complete', () => {
+    expect(triangleDataHealthOf(status([{ state: 'ok' }, { state: 'ok' }]))).toBe('complete');
+  });
+
+  it('**unavailable 与 partial 的边界**：全靠读不出来 vs 有一部分读不出来', () => {
+    // 这条是规则的核心：两者处置完全不同（前者拦，后者继续并产缺口清单）。
+    const allDead = triangleDataHealthOf(status([{ state: 'failed' }]));
+    const someDead = triangleDataHealthOf(status([{ state: 'ok' }, { state: 'failed' }]));
+    expect(allDead).toBe('unavailable');
+    expect(someDead).toBe('partial');
+    expect(allDead).not.toBe(someDead);
   });
 });
