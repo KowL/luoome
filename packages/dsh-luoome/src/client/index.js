@@ -59,6 +59,15 @@ export const openStrategyOperationInConversation = (ctx, strategyId, context = {
     '__luoomeLastStrategyOperationRequest',
   );
 
+/**
+ * 触发 → 改条件的 AI 草稿（M4-10 路径二）。
+ *
+ * **只写 composer，不发送**——与 `openWatchlistOperationInConversation` 同款机制。
+ * 草稿的意义是用户还能改；自动发送等于替用户做决定。
+ */
+export const openTriggerEditInConversation = (ctx, request) =>
+  openPromptInConversation(ctx, request, '__luoomeLastTriggerEditRequest');
+
 export const openWatchlistOperationInConversation = (ctx, watchlist) =>
   openPromptInConversation(
     ctx,
@@ -118,6 +127,8 @@ export function apply(ctx) {
             openStrategyOperationInConversation(ctx, strategyId, context),
           onManageWatchlist: (watchlist) => openWatchlistOperationInConversation(ctx, watchlist),
           onAnalyzeStock: (context) => openStockAnalysisInConversation(ctx, context),
+          // M4-10 路径二：草稿填入输入框，不自动发送。
+          onDraftTriggerEdit: (request) => openTriggerEditInConversation(ctx, request),
         }),
       },
       App,
