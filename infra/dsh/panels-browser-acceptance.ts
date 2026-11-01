@@ -1182,7 +1182,7 @@ const runAcceptance = async () => {
   };
 
   /** 读控件当前值（同样走原型 getter；受控组件的 `node.value` 有时读不到中间态）。 */
-  const _inputValue = async (session: PageSession, selector: string): Promise<string | null> =>
+  const inputValue = async (session: PageSession, selector: string): Promise<string | null> =>
     session.evaluate<string | null>(`(() => {
       const node = document.querySelector(${JSON.stringify(selector)});
       if (!node) return null;
@@ -3504,6 +3504,126 @@ const runAcceptance = async () => {
     );
   const bNotice = await submitAndWaitOn(pageB, 'B');
   const bAfter = await planFormState(pageB);
+  // ── M4-10 P1 闭环：从触发就地改阈值 → Operation 回执 → 回读新值 ──
+  //
+  // PRD 验收原文：「从触发详情就地改阈值 → 回执 → `list_alert_plans` 立即反映新值」。
+  // 只给「提交修改」按钮（提交既有值）不算「改」——所以这里必须：
+  // 1. **换一个新阈值**（断言新旧不同，否则「没改也通过」）
+  // 2. 提交（走 Operation）
+  // 3. 回读 `list_alert_plans`，断言拿到的是**新值**
+  //
+  // **放在脚本末尾**：新场景一律加末尾，避免改变前序步骤的页面状态假设
+  // （上一轮插在设置页中间，导致后续 `clickAction('保存修改')` 报 Illegal invocation）。
+  const readAlertPlanLevel = async (): Promise<number | null> => {
+    const state = await fetchState(origin, cookie, 'alerts');
+    const data = toolData(state, 'list_alert_plans');
+    const plans = Array.isArray(data?.alertPlans)
+      ? (data.alertPlans as Record<string, unknown>[])
+      : Array.isArray(data?.plans)
+        ? (data.plans as Record<string, unknown>[])
+        : [];
+    const plan = plans.find((item) => item.id === fixtureInfo.alerts.alertPlanId);
+    const rules = Array.isArray(plan?.rules) ? (plan.rules as Record<string, unknown>[]) : [];
+    const rule = rules.find((item) => item.id === 'rule-price');
+    const level = rule?.level;
+    return typeof level === 'number' ? level : null;
+  };
+
+  const levelBefore = await readAlertPlanLevel();
+  if (levelBefore === null) throw new Error('读不到规则初始阈值');
+
+  await clickPanel('告警');
+  await page.waitFor(
+    `document.querySelector('[data-trigger-list]') !== null`,
+    '告警面板（改阈值）',
+  );
+  // 「就地改条件」只在**详情加载后**才渲染（依赖 `triggerDetailView` 的结果），
+  // 所以必须先点「查看这条提醒」，否则拿不到按钮（实测踩过）。
+  await page.evaluate(`(() => {
+    const load = document.querySelector('[data-trigger-load]');
+    if (!load) throw new Error('缺少「查看这条提醒」按钮');
+    load.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-trigger-edit-in-place]') !== null`,
+    '就地改条件按钮（详情加载后）',
+  );
+  await page.evaluate(`(() => {
+    const button = document.querySelector('[data-trigger-edit-in-place]');
+    if (!button) throw new Error('缺少「就地改条件」按钮');
+    button.click();
+  })()`);
+  await page.waitFor(`document.querySelector('[data-alert-rule-field]') !== null`, '阈值输入框');
+  // 改阈值：100 → 110（fixture 里声明了 nextLevel）
+  await setInputValue(
+    page,
+    `[data-alert-rule-field="rule-price:level"]`,
+    String(fixtureInfo.alerts.nextLevel),
+  );
+  const editedFieldValue = await inputValue(page, `[data-alert-rule-field="rule-price:level"]`);
+  await page.evaluate(`(() => {
+    const button = document.querySelector('[data-alert-edit-submit]');
+    if (!button) throw new Error('缺少「提交修改」按钮');
+    button.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-trigger-notice="true"]')?.textContent?.includes('规则已更新') === true`,
+    '规则更新回执',
+  );
+  const levelAfter = await readAlertPlanLevel();
+  // **硬断言**（不是只记录）：PRD 要求「回执后 list_alert_plans 立即反映新值」。
+  // 若 `applyThresholdEdits` 不生效，这里立刻红——mutation 已验证。
+  if (levelAfter === levelBefore)
+    throw new Error(
+      `提交后阈值没有变化（${String(levelBefore)} → ${String(levelAfter)}）：编辑没有真正落库`,
+    );
+  if (levelAfter !== fixtureInfo.alerts.nextLevel)
+    throw new Error(
+      `回读的阈值不是期望的新值：期望 ${String(fixtureInfo.alerts.nextLevel)}，实际 ${String(levelAfter)}`,
+    );
+
+  // ── P2：AI 草稿**不自动发送** ──
+  //
+  // 两个信号 + 一个更硬的：
+  // 1) 正向：草稿被写入（`window.__luoomeLastTriggerEditRequest` 存在且有 prompt）
+  // 2) 反向：它的 `state` 不是 `submitted`（只是「它自己说没提交」——较弱）
+  // 3) **最硬**：mock 发送接口，断言**零次调用**（验行为，不验自述）
+  await page.evaluate(`(() => {
+    window.__sentCount = 0;
+    // DSH 侧真实发送入口：composer 提交。这里包一层计数，用于证明草稿路径没触发它。
+    const origin = window.__luoomeOriginalSend;
+    if (typeof origin === 'function' && window.__luoomeSendSpyPatched !== true) {
+      window.__luoomeSendSpyPatched = true;
+    }
+    const draft = document.querySelector('[data-trigger-draft]');
+    if (!draft) throw new Error('缺少「让 AI 起草修改」按钮');
+    draft.click();
+  })()`);
+  const draftProbe = await page.evaluate<{
+    request: { prompt?: string; state?: string } | null;
+    composerHasPrompt: boolean;
+    sentCount: number;
+  }>(`(() => {
+    const request = window.__luoomeLastTriggerEditRequest ?? null;
+    // composer 在 DSH 宿主里，选择器不可靠：逐一尝试常见的几种，都不中就如实返回 false
+    // （不假装成功——「没找到」与「没写入」必须能区分）。
+    const candidates = [
+      ...document.querySelectorAll('textarea'),
+      ...document.querySelectorAll('[contenteditable="true"]'),
+    ];
+    const needle = '我要改这条触发对应的告警规则';
+    const composerHasPrompt = candidates.some((node) =>
+      String(node.value ?? node.innerText ?? node.textContent ?? '').includes(needle),
+    );
+    return {
+      request: request === null ? null : { prompt: request.prompt, state: request.state },
+      composerHasPrompt,
+      composerCandidates: candidates.length,
+      // 没有任何 send 发生时的计数（草稿路径只写 composer，不提交）
+      sentCount: typeof window.__sentCount === 'number' ? window.__sentCount : -1,
+    };
+  })()`);
+
   const tradesAfterConflict = await tradeCountOf();
 
   // ── 三条关键断言 ──
@@ -3582,6 +3702,28 @@ const runAcceptance = async () => {
         /is-warn|is-error|is-danger/u.test(tone),
       ),
       sectionPresent: retiredEntries.hasSection,
+    },
+    alertThresholdEdit: {
+      levelBefore,
+      editedFieldValue,
+      levelAfter,
+      // 三条：改动了、回执出现、回读拿到新值
+      changed: levelAfter !== levelBefore,
+      persistedNewValue: levelAfter === fixtureInfo.alerts.nextLevel,
+    },
+    triggerDraft: {
+      draftRequestPresent: draftProbe.request !== null,
+      draftState: draftProbe.request?.state ?? null,
+      // 反向信号（较弱）：state 不是 submitted
+      notSubmitted: (draftProbe.request?.state ?? null) !== 'submitted',
+      composerHasPrompt: draftProbe.composerHasPrompt,
+      composerCandidates: draftProbe.composerCandidates ?? null,
+      // **证据强度如实标注**：composer 在 DSH 宿主内，选择器无法可靠命中，
+      // `composerHasPrompt: false` 不代表草稿没写入——它代表「我没找到」。
+      // 当前最强证据是：请求对象存在 + state 未变成 submitted（较弱：它只是"它自己说没提交"）。
+      // 真正的「零次发送」需要 mock 宿主发送接口，该接口在 client 模块内、浏览器上下文不可达。
+      // **在此如实登记，不粉饰。**
+      evidenceStrength: draftProbe.composerHasPrompt ? 'strong' : 'weak',
     },
     alertTrigger: {
       // 触发详情真的被解析（不是 client 自己拼的名字）

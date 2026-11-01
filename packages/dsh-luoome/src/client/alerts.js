@@ -5,7 +5,9 @@
 import { Fragment, createElement as h, useState } from 'react';
 
 import {
+  applyThresholdEdits,
   requestTriggerDetail,
+  ruleEditorView,
   submitAlertPlanUpdate,
   triggerDetailView,
   triggerEditPrompt,
@@ -188,6 +190,8 @@ export function AlertsPanel({ onDraftTriggerEdit } = {}) {
       // 形状由 `updateAlertPlanInput` 表达（只带 alertPlanId + 完整 rules）。
       input: updateAlertPlanInput({ alertPlanId: plan.id, rules: plan.rules ?? [] }),
       planName: plan.name,
+      // 编辑态：`{ [ruleId]: { [field]: 界面值 } }`。初始为空 = 全部保持原值。
+      values: {},
     });
   };
   /**
@@ -265,8 +269,53 @@ export function AlertsPanel({ onDraftTriggerEdit } = {}) {
           h(
             'p',
             { className: 'luo-fine', 'data-alert-edit-target': editing.input.alertPlanId },
-            '将更新该告警计划的规则；这是写入操作，会先冻结输入再提交。',
+            // 整体替换语义必须让用户看见：改一条实际提交的是**整个 rules 数组**。
+            `将保存该计划的全部 ${String((editing.input.rules ?? []).length)} 条规则（整体替换）。`,
           ),
+          // 每条规则一个编辑块：可编辑的渲染数字框，不可编辑的标为只读 + 说明原因。
+          ...(editing.input.rules ?? []).map((rule) => {
+            const view = ruleEditorView(rule);
+            return h(
+              'div',
+              { key: rule.id, className: 'luo-fine', 'data-alert-rule-editor': rule.id },
+              h('strong', null, `${rule.kind ?? '未知类型'} · ${rule.id ?? ''}`),
+              view.editable
+                ? h(
+                    'div',
+                    null,
+                    ...view.fields.map((item) =>
+                      h(
+                        'label',
+                        { key: item.field, className: 'luo-field' },
+                        `${item.label}${item.unit === 'percent' ? '（%）' : ''}`,
+                        h('input', {
+                          type: 'number',
+                          step: 'any',
+                          // 界面值：比例类已由 `ruleEditorView` 换成百分比。
+                          value: editing.values[rule.id]?.[item.field] ?? item.value ?? '',
+                          'data-alert-rule-field': `${String(rule.id)}:${item.field}`,
+                          onChange: (event) =>
+                            setEditing((current) =>
+                              current === null
+                                ? current
+                                : {
+                                    ...current,
+                                    values: {
+                                      ...current.values,
+                                      [rule.id]: {
+                                        ...(current.values[rule.id] ?? {}),
+                                        [item.field]: event.target.value,
+                                      },
+                                    },
+                                  },
+                            ),
+                        }),
+                      ),
+                    ),
+                  )
+                : h('span', { 'data-alert-rule-readonly': rule.id }, `${view.reason}（保持原值）`),
+            );
+          }),
           h(
             'div',
             { className: 'luo-actions' },
@@ -276,14 +325,24 @@ export function AlertsPanel({ onDraftTriggerEdit } = {}) {
                 className: 'luo-btn',
                 type: 'button',
                 'data-alert-edit-submit': editing.input.alertPlanId,
-                onClick: () =>
-                  submitAlertPlanUpdate(editing.input, { operationId: crypto.randomUUID() })
+                onClick: () => {
+                  // 把界面编辑结果合并回**完整 rules**（其余规则原样带回）。
+                  const edits = Object.entries(editing.values).map(([ruleId, values]) => ({
+                    ruleId,
+                    values,
+                  }));
+                  const rules = applyThresholdEdits(editing.input.rules ?? [], edits);
+                  submitAlertPlanUpdate(
+                    updateAlertPlanInput({ alertPlanId: editing.input.alertPlanId, rules }),
+                    { operationId: crypto.randomUUID() },
+                  )
                     .then(() => {
                       setNotice(`规则已更新：${String(editing.planName ?? '')}`);
                       setEditing(null);
                       refresh();
                     })
-                    .catch((failure) => setNotice(String(failure?.message ?? failure))),
+                    .catch((failure) => setNotice(String(failure?.message ?? failure)));
+                },
               },
               '提交修改',
             ),
