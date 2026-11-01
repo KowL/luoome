@@ -64,7 +64,56 @@ export const getStrategyTool = defineTool({
 });
 
 export const DeleteStrategyInput = z.object({ strategyId: z.string().min(1) });
-export const DeleteStrategyOutput = z.object({ deleted: z.boolean() });
+
+/**
+ * 删除摘要（决策 3-B，外部评审裁定）。
+ *
+ * ## 为什么不是 `StrategySchema.optional()`
+ *
+ * 删除的语义是「让它消失」。把完整实体塞进回执，等于**换个地方继续留着**；
+ * 策略的级联数据（运行结果、信号）可达 MB 级——那既扩大数据量，又违背删除意图。
+ * 所以这里只留**能自证删了什么**的最小集合：主体身份 + **级联范围（计数）**。
+ *
+ * ## 为什么只有 4 个计数
+ *
+ * `strategySchedule.removeByStrategyId` 与
+ * `strategyEvaluation.removeResearchStates` **只有 remove、没有 list**，
+ * 拿不到「删了几条」。这两类显式登记在 `notCounted` 里，**不猜**。
+ * （宁可少给，不许编——给一个编出来的数字比不给更糟。）
+ */
+export const StrategyDeletionSummarySchema = z
+  .object({
+    strategyId: z.string().min(1),
+    name: z.string().min(1),
+    status: z.string().min(1),
+    /** 随策略一并删除的不可变版本数。 */
+    versionCount: z.number().int().nonnegative(),
+    /** 随策略一并删除的运行记录数（含结果与信号）。 */
+    runCount: z.number().int().nonnegative(),
+    /** 随策略一并删除的信号数。 */
+    signalCount: z.number().int().nonnegative(),
+    /** 被取消的 Watchlist 订阅数（不删除订阅，只置 cancelled）。 */
+    cancelledSubscriptionCount: z.number().int().nonnegative(),
+    /**
+     * 同样被级联清理、但**当前拿不到计数**的类别。
+     * 出现这些名字是**诚实的缺失声明**，不是遗漏。
+     */
+    notCounted: z.array(z.enum(['schedules', 'evaluationStates'])),
+  })
+  .strict();
+
+export const DeleteStrategyOutput = z.object({
+  deleted: z.boolean(),
+  /**
+   * 删除摘要：**必填**。
+   *
+   * 选必填而非 `.optional()` 的理由：`resultJson` 的读取是裸 `JSON.parse`，
+   * 工具输出 schema 从不参与回执读取（`plugin-operations.ts:135-144`），
+   * 所以「存量记录读不读得起」与这个字段无关——它只约束**新写入的形状**。
+   * 而本任务的目的正是「让新写入能自证」，一个可选的摘要等于允许新代码悄悄退化成布尔值。
+   */
+  summary: StrategyDeletionSummarySchema,
+});
 
 export const deleteStrategyTool = defineTool({
   name: 'delete_strategy',
@@ -90,9 +139,14 @@ export const deleteStrategyTool = defineTool({
       );
     }
 
-    const signalIds = (await ctx.repos.strategyRun.signalsByStrategy(strategy.id)).map(
-      (signal) => signal.id,
-    );
+    // 级联计数必须在删除**之前**取：删完就再也数不出来了。
+    const signals = await ctx.repos.strategyRun.signalsByStrategy(strategy.id);
+    const signalIds = signals.map((signal) => signal.id);
+    const versions = await ctx.repos.strategy.listVersions(strategy.id);
+    const runs = await ctx.repos.strategyRun.listRuns({
+      strategyId: strategy.id,
+      limit: Number.MAX_SAFE_INTEGER,
+    });
     await ctx.repos.signalObservation.removeBySources('strategy-signal', signalIds);
     const cancelledAt = ctx.clock();
     const subscriptions = await ctx.repos.strategyWatchlistSubscription.list({
@@ -112,7 +166,20 @@ export const deleteStrategyTool = defineTool({
     await ctx.repos.strategyRun.removeByStrategyId(strategy.id);
     await ctx.repos.strategyEvaluation.removeResearchStates(strategy.id);
     await ctx.repos.strategy.remove(strategy.id);
-    return { deleted: true };
+    return {
+      deleted: true,
+      summary: {
+        strategyId: strategy.id,
+        name: strategy.name,
+        status: strategy.status,
+        versionCount: versions.length,
+        runCount: runs.length,
+        signalCount: signalIds.length,
+        cancelledSubscriptionCount: subscriptions.length,
+        // 这两类只有 remove 没有 list：删了多少条**拿不到**，显式声明而不是猜。
+        notCounted: ['schedules', 'evaluationStates'] as ('schedules' | 'evaluationStates')[],
+      },
+    };
   },
 });
 

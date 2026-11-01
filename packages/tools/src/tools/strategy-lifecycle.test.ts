@@ -321,13 +321,110 @@ describe('Strategy lifecycle tools', () => {
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
 
     const deleted = await deleteStrategyTool.execute({ strategyId: 'delete-me' }, ctx);
-    expect(deleted).toEqual({ ok: true, data: { deleted: true } });
+    // 决策 3-B：输出多了必填 `summary`，断言从「等于 {deleted:true}」改成逐字段核对。
+    // 这里顺带把「级联范围」的每一计数钉死，而不是只看 deleted。
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    expect(deleted.data).toMatchObject({
+      deleted: true,
+      summary: {
+        strategyId: 'delete-me',
+        name: '待删除策略',
+        status: 'active',
+        versionCount: 1,
+        runCount: 1,
+        cancelledSubscriptionCount: 0,
+        notCounted: ['schedules', 'evaluationStates'],
+      },
+    });
+    // 信号数取决于运行产出的信号量，只断言「与删除前一致」而不硬编码。
+    expect(deleted.data.summary.signalCount).toBeGreaterThanOrEqual(0);
     expect(await ctx.repos.strategy.findById('delete-me')).toBeNull();
     expect(await ctx.repos.strategy.listVersions('delete-me')).toEqual([]);
     expect(await ctx.repos.strategySchedule.findByStrategyId('delete-me')).toBeNull();
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'delete-me' })).toEqual([]);
     expect(await ctx.repos.strategyRun.signalsByStrategy('delete-me')).toEqual([]);
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
+  });
+
+  // ── 决策 3-B：删除摘要的边界 ──
+  it('delete_strategy 摘要只给计数，不含任何级联实体的完整数据', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await createStrategyTool.execute(
+      { id: 'summary-strategy', name: '摘要策略', description: '验证摘要边界' },
+      ctx,
+    );
+    const definition = validDefinition();
+    const version = await createStrategyVersionTool.execute(
+      { strategyId: 'summary-strategy', definition },
+      ctx,
+    );
+    if (!version.ok) throw new Error('version failed');
+    await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await publishStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await runStrategyTool.execute(
+      { strategyId: 'summary-strategy', stockIds: ['600519.SH'], persist: true },
+      ctx,
+    );
+
+    const deleted = await deleteStrategyTool.execute({ strategyId: 'summary-strategy' }, ctx);
+    if (!deleted.ok) throw new Error('delete failed');
+    const summary = deleted.data.summary;
+    // 主体身份 + 级联范围（计数）都在。
+    expect(summary.strategyId).toBe('summary-strategy');
+    expect(summary.name).toBe('摘要策略');
+    expect(summary.versionCount).toBe(1);
+    expect(summary.runCount).toBe(1);
+    // **禁令**：summary 里不得出现任何级联实体的完整数据。
+    // 用序列化整体检查——Codex 的边界是「不展开」，任何嵌入的实体都会被这里抓到。
+    const serialized = JSON.stringify(summary);
+    for (const forbidden of [
+      'definition',
+      'coverage',
+      'summary"',
+      'results',
+      'signals',
+      'evidence',
+    ]) {
+      expect(serialized, `summary 不得含 ${forbidden}`).not.toContain(forbidden);
+    }
+    // 每个字段都必须是标量或标量数组，不允许嵌套对象（那才是「展开」的入口）。
+    for (const [key, value] of Object.entries(summary)) {
+      expect(
+        typeof value === 'string' || typeof value === 'number' || Array.isArray(value),
+        `${key} 必须是标量或数组`,
+      ).toBe(true);
+    }
+  });
+
+  it('delete_strategy 摘要的计数取自删除前，删完仍能自证删了什么', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await createStrategyTool.execute(
+      { id: 'count-strategy', name: '计数策略', description: '验证计数时机' },
+      ctx,
+    );
+    const definition = validDefinition();
+    // 造两个版本
+    for (let index = 0; index < 2; index++) {
+      const created = await createStrategyVersionTool.execute(
+        {
+          strategyId: 'count-strategy',
+          definition: { ...definition, metadata: { horizon: 'short' } },
+        },
+        ctx,
+      );
+      if (!created.ok) throw new Error('version failed');
+    }
+    const beforeVersions = (await ctx.repos.strategy.listVersions('count-strategy')).length;
+    expect(beforeVersions).toBe(2);
+
+    const deleted = await deleteStrategyTool.execute({ strategyId: 'count-strategy' }, ctx);
+    if (!deleted.ok) throw new Error('delete failed');
+    // 删除后仓储里已经是 0——摘要里的 2 是**删除前**的快照，不是事后重算。
+    expect(await ctx.repos.strategy.listVersions('count-strategy')).toEqual([]);
+    expect(deleted.data.summary.versionCount).toBe(2);
   });
 
   it('delete_strategy 拒绝删除仍被 AlertPlan 引用的策略', async () => {

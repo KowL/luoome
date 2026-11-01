@@ -50,6 +50,76 @@ describe('chat session tools', () => {
     expect(await ctx.repos.chat.listMessages(sessionId)).toEqual([]);
   });
 
+  // ── 决策 3-B：删除摘要的 PII 边界 ──
+  it('delete_chat_session 摘要不含标题与任何消息正文', async () => {
+    const ctx = await buildTestContext();
+    const created = await createChatSessionTool.execute({}, ctx);
+    if (!created.ok) throw new Error('create failed');
+    const sessionId = created.data.session.id;
+    // 造一段**独一无二**的正文，便于断言它没有出现在摘要里。
+    const secretBody = '我的持仓成本是 1234.56 元，这条不该被复制进回执';
+    await appendChatMessageTool.execute(
+      {
+        sessionId,
+        messageId: 'user-message-pii',
+        role: 'user',
+        parts: [{ type: 'text', text: secretBody }],
+      },
+      ctx,
+    );
+    const renamed = await renameChatSessionTool.execute(
+      { sessionId, title: '我的私人对话标题' },
+      ctx,
+    );
+    expect(renamed.ok).toBe(true);
+
+    const deleted = await deleteChatSessionTool.execute({ sessionId }, ctx);
+    if (!deleted.ok) throw new Error('delete failed');
+    const serialized = JSON.stringify(deleted.data.summary);
+    // **禁令一**：标题不得出现（自动标题与重命名后的标题都试一遍）。
+    expect(serialized).not.toContain('我的私人对话标题');
+    expect(serialized).not.toContain('title');
+    // **禁令二**：正文任何片段都不得出现。
+    expect(serialized).not.toContain(secretBody);
+    expect(serialized).not.toContain('1234.56');
+    expect(serialized).not.toContain('持仓成本');
+    // 但身份与时间元数据必须在（否则摘要也没自证力）。
+    expect(deleted.data.summary.sessionId).toBe(sessionId);
+    expect(deleted.data.summary.createdAt).toBeInstanceOf(Date);
+    expect(deleted.data.summary.messageCount.value).toBe(1);
+    expect(deleted.data.summary.messageCount.lowerBound).toBe(false);
+  });
+
+  it('delete_chat_session 达到探测上限时给出下界而不是错值', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    await ctx.repos.chat.saveSession({
+      id: 'big-session',
+      accountId: ctx.user.defaultAccountId,
+      title: '大会话',
+      createdAt: now,
+      updatedAt: now,
+    });
+    // 造 501 条（超过 MESSAGE_COUNT_PROBE_LIMIT = 500），验证不会被静默截断成 500。
+    for (let index = 0; index <= 500; index++) {
+      await ctx.repos.chat.saveMessage({
+        id: `msg-${index}`,
+        sessionId: 'big-session',
+        role: 'user',
+        parts: [{ type: 'text', text: `第 ${index} 条` }],
+        createdAt: new Date(now.getTime() + index),
+      });
+    }
+
+    const deleted = await deleteChatSessionTool.execute({ sessionId: 'big-session' }, ctx);
+    if (!deleted.ok) throw new Error('delete failed');
+    const count = deleted.data.summary.messageCount;
+    // 关键：**不是**一个看起来精确的错误数字（500），而是显式的下界。
+    expect(count.lowerBound).toBe(true);
+    expect(count.value).toBe(500);
+    expect(count.value).not.toBe(501);
+  });
+
   it('拒绝访问其它账户的会话', async () => {
     const ctx = await buildTestContext();
     const now = ctx.clock();
