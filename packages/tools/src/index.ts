@@ -35,6 +35,7 @@ export {
   tradeExposureRequested,
 } from './exposure.js';
 export * from './personal/index.js';
+export * from './pit-layers.js';
 export * from './plugin-operations.js';
 export * from './queue/index.js';
 export * from './registry.js';

@@ -6,6 +6,7 @@ import { createDrizzleReportAutomationRepository } from './personal/report-autom
 import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-client.js';
 import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
 import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
+import { DrizzleFinancialIngestSnapshotRepository } from './repository/drizzle/financial-ingest-snapshot.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -65,6 +66,7 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
   const repos: RepositoryRegistry = {
     pluginAuthority: new DrizzlePluginAuthorityRepository(db),
     pluginSetting: new DrizzlePluginSettingRepository(db),
+    financialIngestSnapshot: new DrizzleFinancialIngestSnapshotRepository(db),
     analysis: new DrizzleAnalysisRepository(db),
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     personal: new DrizzlePersonalRepository(db),

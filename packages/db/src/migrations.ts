@@ -61,6 +61,16 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(sql`CREATE TABLE IF NOT EXISTS plugin_settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL
   )`);
+  // REQ-M4-05 层 3：数据商快照。**独立于 financial_fact_revisions**——
+  // 层 3 只告警不入库，合并会让上游漂移被当成真实修订。
+  db.run(sql`CREATE TABLE IF NOT EXISTS financial_ingest_snapshots (
+    id TEXT PRIMARY KEY, stock_id TEXT NOT NULL, metric_id TEXT NOT NULL,
+    period_end INTEGER NOT NULL, ingest_hash TEXT NOT NULL,
+    vendor_updated_at INTEGER, captured_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS financial_ingest_snapshots_lookup_idx ON financial_ingest_snapshots(stock_id, metric_id, period_end)`,
+  );
   db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,

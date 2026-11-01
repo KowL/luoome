@@ -180,6 +180,7 @@ export interface InMemorySeed {
 /** 构造全部 in-memory repository，可选灌入种子。 */
 export { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 
+import { InMemoryFinancialIngestSnapshotRepository } from './financial-ingest-snapshot.js';
 import { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 import { InMemoryPluginSettingRepository } from './plugin-setting.js';
 
@@ -312,6 +313,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   return {
     pluginAuthority: new InMemoryPluginAuthorityRepository(),
     pluginSetting: new InMemoryPluginSettingRepository(),
+    financialIngestSnapshot: new InMemoryFinancialIngestSnapshotRepository(),
     analysis: new InMemoryAnalysisRepository(
       advice,
       investmentWorkspace,

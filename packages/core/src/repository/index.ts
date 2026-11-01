@@ -1,4 +1,5 @@
 export * from './analysis.js';
+export type { FinancialIngestSnapshotRepository } from './financial-ingest-snapshot.js';
 export * from './plugin-authority.js';
 export type { PluginSettingRepository } from './plugin-setting.js';
 
@@ -620,6 +621,8 @@ export interface RepositoryRegistry {
   readonly pluginAuthority: import('./plugin-authority.js').PluginAuthorityRepository;
   /** REQ-M4-06：自动化档位的持久化（极窄 KV，只存 automationTier）。 */
   readonly pluginSetting: import('./plugin-setting.js').PluginSettingRepository;
+  /** REQ-M4-05 层 3：数据商快照（**只告警，不参与 PIT 判定**）。 */
+  readonly financialIngestSnapshot: import('./financial-ingest-snapshot.js').FinancialIngestSnapshotRepository;
   readonly analysis: import('./analysis.js').AnalysisRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly personal?: import('../personal/repository.js').PersonalRepository;

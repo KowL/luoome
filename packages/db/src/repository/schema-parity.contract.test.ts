@@ -233,6 +233,9 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   // REQ-M4-06：极窄 KV，只有 key/value/updatedAt 三列；
   // 它刻意不是「实体 → 表列」的映射（没有多字段实体），故不进 PAIRS。
   pluginSettings: 'kv: 单键字符串值，无多字段实体可对账',
+  // REQ-M4-05 层 3：观测记录表，字段与 FinancialIngestSnapshotSchema 一一对应但
+  // **不参与 PIT 判定**（resolveVintage 永不读它），故不进 PAIRS。
+  financialIngestSnapshots: '观测表：层 3 告警专用，不参与 resolveVintage',
   researchDocumentChunks: 'pending',
   researchDocumentIndex: 'pending',
   researchEmbeddingIndexStates: 'pending',

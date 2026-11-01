@@ -102,6 +102,9 @@ const transient = [
   'watch_execution_lease',
   'report_execution',
   'watchlist_import_previews',
+  // REQ-M4-05 层 3：数据商快照是**本机观测记录**，不随导入导出迁移
+  // （换机后应重新观测，而不是把别人的漂移历史搬过来）。
+  'financial_ingest_snapshots',
 ] as const;
 
 export const DATA_IMPORT_MANIFEST: Readonly<Record<string, DataImportTablePolicy>> = Object.freeze({

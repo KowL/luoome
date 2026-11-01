@@ -15,9 +15,11 @@ export * from './dragon-tiger/types.js';
 export * from './eastmoney/client.js';
 export * from './eastmoney/coercion.js';
 export * from './eastmoney/source.js';
+export * from './fundamental/disclosure-source.js';
 // 基本面 PIT mock（仅显式测试注入，永不自动装配）
 export * from './fundamental/factory.js';
 export * from './fundamental/mock.js';
+export * from './fundamental/mock-disclosure-source.js';
 // fuyao（同花顺金融数据 API）行情源
 export * from './fuyao/client.js';
 export * from './fuyao/envelope.js';
