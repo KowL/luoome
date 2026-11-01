@@ -18,11 +18,15 @@ import {
   createLocalAdapters,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
+  DEFAULT_AUDIT_KEEP,
+  DEFAULT_AUDIT_MAX_MB,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
   type Logger,
+  parsePositiveInteger,
+  parsePositiveMegabytes,
   type ToolContext,
   type ToolResult,
 } from '@luoome/core';
@@ -46,7 +50,7 @@ import {
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
-import { createDataArchives } from './data-archives.js';
+import { createDataArchives, DEFAULT_EXPORT_KEEP } from './data-archives.js';
 import {
   createDataImportBackups,
   createDataImportStaging,
@@ -261,7 +265,13 @@ export const createProductionHost = async (
     directory: join(config.home, 'reports'),
   });
   // task-35：事实库导出物单独一个目录（不混进 reports/）。
-  const dataArchives = createDataArchives({ directory: join(config.home, 'exports') });
+  const dataArchives = createDataArchives({
+    directory: join(config.home, 'exports'),
+    keep: parsePositiveInteger(config.env.LUOOME_EXPORT_KEEP, {
+      name: 'LUOOME_EXPORT_KEEP',
+      fallback: DEFAULT_EXPORT_KEEP,
+    }),
+  });
   let read: ReadSurface | undefined;
   let market: MarketSurface | undefined;
   let context: ToolContext;
@@ -291,7 +301,17 @@ export const createProductionHost = async (
       identity: { mode: 'local', userId: config.owner.userId },
       clock,
       logger,
-      auditLog: createFileAuditLogger(join(config.home, 'logs', 'audit.log')),
+      auditLog: createFileAuditLogger(join(config.home, 'logs', 'audit.log'), {
+        // 与 `LUOOME_BACKUP_KEEP` / `LUOOME_EXPORT_KEEP` 共用同一条判据（core `retention.ts`）。
+        maxMb: parsePositiveMegabytes(config.env.LUOOME_AUDIT_MAX_MB, {
+          name: 'LUOOME_AUDIT_MAX_MB',
+          fallback: DEFAULT_AUDIT_MAX_MB,
+        }),
+        keep: parsePositiveInteger(config.env.LUOOME_AUDIT_KEEP, {
+          name: 'LUOOME_AUDIT_KEEP',
+          fallback: DEFAULT_AUDIT_KEEP,
+        }),
+      }),
       auditCaller: 'dsh-luoome',
       portfolioBenchmark: {
         stockId:

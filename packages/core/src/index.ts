@@ -81,6 +81,7 @@ export * from './repository/index.js';
 export * from './repository/investment-workspace.js';
 export * from './repository/schema-migration.js';
 export * from './research-vault.js';
+export * from './retention.js';
 export * from './schema-migrations.js';
 // 数据源可插拔与统一观测端口（SourceId / SourceErrorKind / SourceStatus）
 export * from './source.js';
