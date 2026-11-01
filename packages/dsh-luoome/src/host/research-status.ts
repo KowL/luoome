@@ -333,7 +333,9 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
     return {
       status,
       reasons,
-      automationTier: enabled ? 'granted' : 'off',
+      // 原样回显档位：压成 granted/off 会把 `notify` 吞掉，
+      // 用户就看不到「派发但不写」这个状态。
+      automationTier: options.automationTier,
       schedule: scheduleResult,
       tasks,
       taskSource,

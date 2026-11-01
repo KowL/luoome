@@ -122,6 +122,17 @@ const denied = (): ToolResult<never> => ({
   ok: false,
   error: { kind: 'permission_denied', required: 'current operation authority' },
 });
+/**
+ * 被**自动化档位**拒绝（REQ-M4-06）。
+ *
+ * 与 `denied()` 分开是为了让调用方与测试能区分「档位不允许」与「授权链不通过」——
+ * 两者都叫 `permission_denied` 时，用户看不出该去调档位还是该去授权，
+ * 测试也无法证明「是档位拦的」。
+ */
+const deniedByTier = (): ToolResult<never> => ({
+  ok: false,
+  error: { kind: 'permission_denied', required: 'automation tier allowing business writes' },
+});
 const invalid = (issues: readonly z.ZodIssue[] = []): ToolResult<never> => ({
   ok: false,
   error: { kind: 'invalid_input', message: 'Invalid or conflicting operation', issues },
@@ -153,6 +164,24 @@ export const createPluginOperationService = (options: {
   readonly validateGrant?: (
     grant: import('@luoome/core').PluginAutomationGrant,
   ) => Promise<boolean>;
+  /**
+   * 是否允许**写业务数据**（REQ-M4-06 的 `notify` 档边界）。
+   *
+   * - 缺省 `true`（既有行为不变）
+   * - 传 `false` 时，`sideEffect !== 'read'` 的 policy **一律不可执行**
+   *
+   * ## 为什么判据是 `sideEffect` 而不是工具名
+   *
+   * `sideEffect` 是工具契约的一部分（`defineTool` 强制声明），**新增写工具自动被覆盖**；
+   * 按名字匹配（如 `name.includes('save')`）则新工具默认漏网。
+   *
+   * ## 为什么闸门在这里而不是 dispatch
+   *
+   * dispatch 只知道「这个 policy 要不要跑」，**不知道 policy 里调了哪些 tool**；
+   * 在 dispatch 层拦等于「凭 policy 名字猜它写不写」，猜错就是漏洞。
+   * 这里是所有 operation 调用的共同准入点（`allowed`），看得清这次调用是什么。
+   */
+  readonly allowBusinessWrite?: boolean;
 }) => {
   if (process.env.LUOOME_EXPOSE_TRADE === 'true')
     throw new Error('LUOOME_EXPOSE_TRADE=true is not allowed');
@@ -190,11 +219,29 @@ export const createPluginOperationService = (options: {
       release();
     }
   };
+  const allowBusinessWrite = options.allowBusinessWrite !== false;
   const allowed = (policy: ConfirmablePluginTool) =>
     !disposed &&
     policy.tool.requiredCapabilities.every((c) =>
       capabilities.has(c as 'read' | 'write' | 'external' | 'queue'),
     );
+  /**
+   * `notify` 档的业务写入闸门（REQ-M4-06）。
+   *
+   * ## 只约束**定时派发**，不约束用户手动操作
+   *
+   * `off` / `notify` 说的是「**自动**能做什么」，不是「用户不能做什么」。
+   * 用户手动点一次写入，与他把档位调到 `off` 并不矛盾——档位管的是
+   * 「机器自己跑的时候允许做什么」。所以判据里带上 `authorization.kind`：
+   * 只有 `schedule` 授权（定时派发）才受档位约束。
+   *
+   * ## 判据是 `sideEffect`，不是工具名
+   *
+   * `sideEffect` 是工具契约的一部分，**新增写工具自动被覆盖**；
+   * 按名字匹配（`name.includes('save')`）则名字不含写词的写工具会漏网。
+   */
+  const scheduleDeniedByTier = (policy: ConfirmablePluginTool, authorization: { kind: string }) =>
+    !allowBusinessWrite && authorization.kind === 'schedule' && policy.tool.sideEffect !== 'read';
 
   const grantInput = z
     .object({
@@ -242,6 +289,9 @@ export const createPluginOperationService = (options: {
           call.accountId !== principal.accountId ||
           !policy?.scheduled ||
           !allowed(policy) ||
+          // 注意：**不在这里**判档位。`configure_plugin_automation` 本身就是 write，
+          // 若被 `notify` 档拦住，用户就永远无法从 notify 升到 granted——死锁。
+          // 档位闸门只在 `executeScheduled`（真正派发业务工具时）生效。
           policy.tool.requiredCapabilities.some(
             (c) => !call.capabilities.includes(c as 'read' | 'write' | 'external' | 'queue'),
           )
@@ -329,6 +379,8 @@ export const createPluginOperationService = (options: {
     if (operation.state !== 'pending') return { ok: true, data: publicOperation(operation) };
     const ctx = await options.context();
     if (!allowed(policy) || signal.aborted) return denied();
+    // `notify` 档下，定时派发不得写业务数据（用户手动操作不受此限）。
+    if (scheduleDeniedByTier(policy, operation.authorization)) return deniedByTier();
     const claimToken = randomUUID();
     const claimed = await repo.claimOperation({
       ...proof,
@@ -526,6 +578,9 @@ export const createPluginOperationService = (options: {
             hasForce(request.input)
           )
             return denied();
+          // **档位闸门放在最前**：早于 grant 校验，这样「被档位拒」的原因不会
+          // 被「授权链不通过」掩盖——用户能看出该去调档位，而不是去补授权。
+          if (scheduleDeniedByTier(policy, { kind: 'schedule' })) return deniedByTier();
           const principal = { userId: identity.userId, accountId: request.accountId };
           const id = `schedule:${pluginInputHash({ identity, occurrenceId: request.occurrenceId, tool: request.tool, accountId: request.accountId })}`;
           let op: PluginOperation;

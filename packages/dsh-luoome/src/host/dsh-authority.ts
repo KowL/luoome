@@ -15,7 +15,11 @@ import { type AdviceOutcomeAsker, adviceOutcomeAskerOf } from './advice-outcome-
 import { AUTOMATION_CATALOG_TOOL, createAutomationCatalog } from './automation-catalog.js';
 import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
 import { createScheduledOperationInvoker } from './operations.js';
-import { type AutomationTier, tierAllowsDispatch } from './production-config.js';
+import {
+  type AutomationTier,
+  tierAllowsBusinessWrite,
+  tierAllowsDispatch,
+} from './production-config.js';
 import { createScheduleDispatcher } from './schedule-dispatcher.js';
 import { toolResultJsonSchema } from './tools.js';
 
@@ -97,6 +101,7 @@ export const createDshOperationHost = (
   const identity = createDshIdentity(ctx, options);
   // 通道值只挂在当前异步链上：同账户并发操作各有各的 origin，不共享可变状态。
   const adviceOrigin = new AsyncLocalStorage<AdviceOutcomeOrigin>();
+  const automationTier: AutomationTier = options.automationTier ?? 'off';
   const baseContext = options.context;
   const base = createPluginOperationService({
     ...options,
@@ -107,11 +112,13 @@ export const createDshOperationHost = (
       return origin === undefined ? context : { ...context, adviceOutcomeOrigin: origin };
     },
     validateGrant: identity.validateGrant,
+    // REQ-M4-06：`notify` 档只派发、不写业务数据——闸门在 operation 准入点
+    // （按 `sideEffect` 判，不按工具名），与 dispatch 层无关。
+    allowBusinessWrite: tierAllowsBusinessWrite(automationTier),
   });
   const askAdviceOutcome = options.askAdviceOutcome ?? adviceOutcomeAskerOf(ctx);
   const tickets = new Map<ToolExecutionToken, Ticket>();
   const lifetime = new AbortController();
-  const automationTier: AutomationTier = options.automationTier ?? 'off';
   const automationCatalog = createAutomationCatalog({
     ...options,
     tasks: () => ctx.schedule.catalog(),
