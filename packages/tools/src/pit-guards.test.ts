@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -54,5 +54,61 @@ describe('recordedAt 永不回填', () => {
     const source = stripComments(read('packages/tools/src/pit-layers.ts'));
     for (const forbidden of ['recordedAt: publishedAt', 'recordedAt: revisionPublishedAt'])
       expect(source).not.toContain(forbidden);
+  });
+});
+
+describe('直接调用 resolveVintage 的白名单（T+1 不被静默绕过）', () => {
+  /**
+   * ## 为什么是「白名单恰好这两处」而不是「零调用」
+   *
+   * 这两处传的是 **`dataAsOf`（数据截止日）**，不是「按披露日判断可见性」——
+   * 它们**本来就不该**走 T+1。把它们算进「绕过者」会把语义搞混。
+   *
+   * 所以断言的是：**除这两处之外，没有任何其它直接调用**。
+   * 将来有人新增直接调用，这条会红——**那一刻他必须回答「为什么不用 wrapper」**。
+   *
+   * > 「现在还没有所以测不了」不成立：**断言它现在是白名单就够了**。
+   */
+  const ALLOWED_DIRECT_CALLS = [
+    // 按 dataAsOf 查财务事实（数据截止日语义，与披露日粒度无关）
+    'packages/tools/src/tools/fundamental-score.ts',
+    'packages/tools/src/tools/financial-facts.ts',
+  ];
+
+  it('除白名单外，没有其它直接调用 `resolveVintage(` 的地方', () => {
+    // 用 `readdirSync` 递归而不是 `Bun.Glob`：后者在 vitest 环境下相对路径解析不稳定
+    // （实测返回空结果，会让这条断言变成恒真——那比没有断言更糟）。
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(resolve(ROOT, dir), { withFileTypes: true })) {
+        const path = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+          walk(path);
+          continue;
+        }
+        if (!entry.name.endsWith('.ts')) continue;
+        if (path.includes('.test.')) continue;
+        if (path.includes('/repository/')) continue; // 接口与实现，不是调用方
+        if (path === 'packages/tools/src/pit-layers.ts') continue; // wrapper 自己（注释里提到）
+        const source = stripComments(read(path));
+        if (!source.includes('.resolveVintage(')) continue;
+        if (!ALLOWED_DIRECT_CALLS.includes(path)) offenders.push(path);
+      }
+    };
+    walk('packages');
+    // **零绕过者**。将来新增一个直接调用，这里立刻红。
+    expect(offenders).toEqual([]);
+    // 自检：扫描确实扫到了东西（否则「空数组」毫无意义）。
+    expect(read('packages/tools/src/tools/financial-facts.ts')).toContain('.resolveVintage(');
+  });
+
+  it('白名单里的两处确实存在（白名单不能变成空话）', () => {
+    for (const path of ALLOWED_DIRECT_CALLS) {
+      const source = stripComments(read(path));
+      expect(source, `${path} 已不再直接调用 resolveVintage，白名单该更新`).toContain(
+        '.resolveVintage(',
+      );
+    }
   });
 });
