@@ -194,6 +194,23 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
   // DSH 瘦身后 advice 副作用级别已随内置 AI 一并删除。
 
   const execute = async (rawInput: unknown, ctx: C): Promise<ToolResult<O>> => {
+    /**
+     * REQ-M4-02 需求 8：**子 agent / 只读上下文不得写**。
+     *
+     * 判定放在**所有 tool 的统一入口**，而不是各自的 handler 里：
+     * 前者新工具自动被覆盖，后者要每个写工具都记得加（早晚会漏）。
+     *
+     * 判据用 `sideEffect`，与档位闸门同一条纪律：**按契约判，不按工具名**。
+     */
+    if ((ctx as { readOnly?: boolean }).readOnly === true && sideEffect !== 'read')
+      return {
+        ok: false,
+        error: {
+          kind: 'permission_denied',
+          required: 'read-only context cannot perform write or external side effects',
+        },
+      } as ToolResult<O>;
+
     const audit = (result: ToolResult<unknown>): Promise<void> =>
       writeAudit(ctx, name, sideEffect, result, auditCaller(ctx));
     const failure = async (error: unknown): Promise<ToolResult<O>> => {

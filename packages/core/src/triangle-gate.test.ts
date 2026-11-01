@@ -117,6 +117,18 @@ describe('dataHealth 推导规则（PRD 未定义，此处定死）', () => {
     expect(triangleDataHealthOf(status([{ state: 'ok' }, { state: 'ok' }]))).toBe('complete');
   });
 
+  it('**只有一条 ok、其余 failed → partial**（分界线在「有没有至少一条能读」）', () => {
+    // 这条与「全部 failed → unavailable」并排，才说明规则不是拍脑袋的：
+    // 分界线不是「failed 的比例」，而是「有没有至少一条能读」。
+    expect(
+      triangleDataHealthOf(status([{ state: 'ok' }, { state: 'failed' }, { state: 'failed' }])),
+    ).toBe('partial');
+    // 反向：同一条 ok 拿掉就变成 unavailable
+    expect(triangleDataHealthOf(status([{ state: 'failed' }, { state: 'failed' }]))).toBe(
+      'unavailable',
+    );
+  });
+
   it('**unavailable 与 partial 的边界**：全靠读不出来 vs 有一部分读不出来', () => {
     // 这条是规则的核心：两者处置完全不同（前者拦，后者继续并产缺口清单）。
     const allDead = triangleDataHealthOf(status([{ state: 'failed' }]));

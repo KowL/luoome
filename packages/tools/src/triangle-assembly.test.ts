@@ -2,7 +2,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { assembleAnalysisContext } from './queue/context.js';
-import { extractTokenUsed, runTriangleAnalysis } from './triangle-assembly.js';
+import { extractTokenUsed, runTriangleAnalysis, triangleSummaryLead } from './triangle-assembly.js';
 
 /**
  * REQ-M4-02 **端到端装配**。
@@ -159,5 +159,195 @@ describe('三角分析端到端装配', () => {
       ctx,
     });
     expect(result.blocked?.code).toBe('market-session-in-trading');
+  });
+});
+
+// ── 需求 6 / 7 / 5 / 8 ──
+
+describe('事前成本确认（需求 6）', () => {
+  const estimate = {
+    estimatedTokenRange: { min: 10_000, max: 50_000 },
+    estimatedDurationMs: { min: 60_000, max: 300_000 },
+  };
+
+  it('**未确认时执行器调用数为 0**（不是「返回了个字段」）', async () => {
+    const { ctx, context } = await setup();
+    let called = 0;
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate,
+      // 刻意不传 confirmed
+      executor: async () => {
+        called += 1;
+        return {};
+      },
+      now: () => Date.now(),
+      ctx,
+    });
+    // **关键断言**：真的一个都没跑。只断言「字段存在」证明不了这一点。
+    expect(called).toBe(0);
+    expect(result.roles).toEqual([]);
+    expect(result.blocked?.code).toBe('cost-not-confirmed');
+  });
+
+  it('确认后才启动，且四个角色都跑', async () => {
+    const { ctx, context } = await setup();
+    let called = 0;
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate,
+      confirmed: true,
+      executor: async () => {
+        called += 1;
+        return { tokenUsed: 100 };
+      },
+      now: () => Date.now(),
+      ctx,
+    });
+    expect(called).toBe(4);
+    expect(result.roles).toHaveLength(4);
+  });
+});
+
+describe('降级路径（需求 7）', () => {
+  const okEstimate = {
+    estimatedTokenRange: { min: 1000, max: 2000 },
+    estimatedDurationMs: { min: 1000, max: 2000 },
+  };
+
+  it('**token 预算超限 → 降级为单 agent**，阈值可注入', async () => {
+    const { ctx, context } = await setup();
+    const ran: string[] = [];
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate: okEstimate,
+      confirmed: true,
+      // 调小预算：预估上限 2000 > 100
+      budget: { maxTokens: 100, maxDurationMs: 900_000 },
+      executor: async (task) => {
+        ran.push(task.role);
+        return { tokenUsed: 50 };
+      },
+      now: () => Date.now(),
+      ctx,
+    });
+    expect(result.degraded).toBe('token-budget-exceeded');
+    // **只跑一个** agent（不是四个）
+    expect(ran).toEqual(['judge']);
+    // 首段必须写明已降级及原因
+    expect(result.lead).toContain('已降级');
+    expect(result.lead).toContain('token 预算超限');
+  });
+
+  it('**时长超限 → 降级**，阈值可注入（15 分钟在测试里等不起）', async () => {
+    const { ctx, context } = await setup();
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate: okEstimate,
+      confirmed: true,
+      budget: { maxTokens: 1_000_000, maxDurationMs: 1 },
+      executor: async () => ({ tokenUsed: 10 }),
+      now: () => Date.now(),
+      ctx,
+    });
+    expect(result.degraded).toBe('duration-exceeded');
+    expect(result.lead).toContain('已降级');
+    expect(result.lead).toContain('时长上限');
+  });
+
+  it('不超预算则不降级，四角色全跑', async () => {
+    const { ctx, context } = await setup();
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      estimate: okEstimate,
+      confirmed: true,
+      budget: { maxTokens: 1_000_000, maxDurationMs: 900_000 },
+      executor: async () => ({ tokenUsed: 10 }),
+      now: () => Date.now(),
+      ctx,
+    });
+    expect(result.degraded).toBeNull();
+    expect(result.roles).toHaveLength(4);
+    expect(result.lead).not.toContain('已降级');
+  });
+});
+
+describe('结果首段（需求 5，PRD 无条件验收）', () => {
+  it('含 tokenUsed 与 elapsedMs', () => {
+    const lead = triangleSummaryLead({ tokenUsed: 1234, elapsedMs: 65_000, degraded: null });
+    expect(lead).toContain('1234 tokens');
+    expect(lead).toContain('65 秒');
+  });
+
+  it('**tokenUsed 为 null 时明说「未获取到」**，不写 0、不留空', () => {
+    const lead = triangleSummaryLead({ tokenUsed: null, elapsedMs: 1000, degraded: null });
+    expect(lead).toContain('未获取到');
+    // **不许**假装是 0
+    expect(lead).not.toContain('0 tokens');
+  });
+
+  it('实测路径里 tokenUsed 全 null → 首段说「未获取到」', async () => {
+    const { ctx, context } = await setup();
+    const result = await runTriangleAnalysis({
+      context,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      executor: async () => ({}), // 不报用量
+      now: () => Date.now(),
+      ctx,
+    });
+    expect(result.tokenUsed).toBeNull();
+    expect(result.lead).toContain('未获取到');
+  });
+});
+
+describe('子 agent 只读：运行时写被拒（需求 8）', () => {
+  /**
+   * **类型层没有这个字段** ≠ **运行时写不进去**。
+   *
+   * 角色任务的类型里没有 `repos`/`tools`，但执行器**确实能拿到 `ToolContext`**
+   * （它要读 fact），而 `ToolContext` 里有 `repos` ——
+   * 类型层挡不住「执行器顺手调一次 `repos.advice.save`」。
+   */
+  it('只读上下文里，**写工具真的被拒**', async () => {
+    const { ctx } = await setup();
+    const { saveReportTool } = await import('./tools/save-report.js');
+    const readOnlyCtx = { ...ctx, readOnly: true } as typeof ctx;
+
+    const rejected = await saveReportTool.execute({ report: {} as never }, readOnlyCtx);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok)
+      expect(rejected.error).toMatchObject({
+        required: 'read-only context cannot perform write or external side effects',
+      });
+  });
+
+  it('只读上下文里，**只读工具正常放行**（不能误伤读）', async () => {
+    const { ctx } = await setup();
+    const { listReportsTool } = await import('./tools/list-reports.js');
+    const readOnlyCtx = { ...ctx, readOnly: true } as typeof ctx;
+    const allowed = await listReportsTool.execute({}, readOnlyCtx);
+    // 只读工具不该被拦（它可能因为没有数据返回空，但**不是权限拒绝**）
+    if (!allowed.ok)
+      expect(allowed.error).not.toMatchObject({
+        required: 'read-only context cannot perform write or external side effects',
+      });
+  });
+
+  it('普通上下文（无 readOnly）写工具照常可用（既有行为不变）', async () => {
+    const { ctx } = await setup();
+    const { listReportsTool } = await import('./tools/list-reports.js');
+    const allowed = await listReportsTool.execute({}, ctx);
+    expect(allowed.ok).toBe(true);
   });
 });

@@ -287,6 +287,19 @@ export interface ToolContext {
    * `record_advice_outcome` / `save_decision_review`，都盖不出 `user`。
    */
   readonly adviceOutcomeOrigin?: AdviceOutcomeOrigin;
+  /**
+   * 只读标记（REQ-M4-02 需求 8）：子 agent / 角色执行器拿到的上下文。
+   *
+   * ## 为什么类型层不够，必须运行时再拦一次
+   *
+   * 角色任务的类型里没有 `repos` / `tools`（结构上拿不到），
+   * 但**执行器仍然可以拿到 `ToolContext`**（它要读 fact）。而 `ToolContext`
+   * 里有 `repos`——类型层挡不住「执行器顺手调一次 `repos.advice.save`」。
+   *
+   * ⇒ 所以写工具在执行时必须看这个标记：**只读上下文里一律拒绝写**。
+   * 「类型层没有这个字段」和「运行时写不进去」是两件事。
+   */
+  readonly readOnly?: boolean;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
   /** 私人正文外发的 embedding capability；仅由 external tool 显式调用。 */

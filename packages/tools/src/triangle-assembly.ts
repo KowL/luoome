@@ -72,10 +72,18 @@ export interface TriangleAssemblyResult {
   readonly contextId: string;
   readonly factIds: readonly string[];
   readonly gate: ReturnType<typeof triangleGate>;
-  /** 四个角色的产出（门禁拒绝时为空）。 */
+  /** 四个角色的产出（门禁拒绝 / 未确认时为空）。 */
   readonly roles: readonly TriangleRoleRun[];
   /** 门禁原因（`allowed=false` 时）。 */
   readonly blocked: { readonly code: string; readonly message: string } | null;
+  /** 结果首段（含 tokenUsed / elapsedMs / 降级说明）。门禁拒绝或未确认时为空串。 */
+  readonly lead: string;
+  /** 是否发生降级，及原因。 */
+  readonly degraded: TriangleDegradeReason | null;
+  /** 累计 token（拿不到就是 `null`）。 */
+  readonly tokenUsed: number | null;
+  /** 总耗时（实测）。 */
+  readonly elapsedMs: number;
 }
 
 /**
@@ -93,6 +101,17 @@ export const runTriangleAnalysis = async (input: {
   readonly executor: TriangleRoleExecutor;
   readonly now: () => number;
   readonly ctx: ToolContext;
+  /**
+   * 事前成本预估（需求 6）。**未提供 = 不启用成本确认**（保持既有调用点行为）。
+   */
+  readonly estimate?: TriangleEstimate;
+  /**
+   * 用户是否已确认成本。**未确认时一个角色都不跑** ——
+   * 不是「返回一个 requiresConfirmation 字段」，而是**执行器调用数为 0**。
+   */
+  readonly confirmed?: boolean;
+  /** 降级阈值；缺省 `DEFAULT_TRIANGLE_BUDGET`。 */
+  readonly budget?: TriangleBudget;
 }): Promise<TriangleAssemblyResult> => {
   const gate = triangleGate({
     dataHealth: input.dataHealth,
@@ -107,13 +126,53 @@ export const runTriangleAnalysis = async (input: {
       gate,
       roles: [],
       blocked: { code: gate.code, message: gate.message },
+      lead: '',
+      degraded: null,
+      tokenUsed: null,
+      elapsedMs: 0,
+    };
+
+  /**
+   * 需求 6：**未确认成本就不启动**。
+   *
+   * 判定方式是「执行器调用数为 0」，不是「返回一个 requiresConfirmation 字段」——
+   * 后者只证明字段存在，证明不了「真的没开始跑」。
+   */
+  if (input.estimate !== undefined && input.confirmed !== true)
+    return {
+      contextId: input.context?.id ?? '',
+      factIds: input.context?.factIds ?? [],
+      gate,
+      roles: [],
+      blocked: { code: 'cost-not-confirmed', message: '尚未确认预估成本，分析未启动。' },
+      lead: '',
+      degraded: null,
+      tokenUsed: null,
+      elapsedMs: 0,
     };
 
   if (input.context === null) throw new Error('三角分析需要一份已装配的 AnalysisContext');
 
   const context = input.context;
+
+  /**
+   * 需求 7：按**预估上限**判降级，而不是跑到一半才放弃——
+   * 后者会让前面已投入的角色白花。
+   */
+  const degraded =
+    input.estimate === undefined
+      ? null
+      : shouldDegrade({
+          estimate: input.estimate,
+          budget: input.budget ?? DEFAULT_TRIANGLE_BUDGET,
+        });
+  // 降级 = 只跑**一个** agent（裁决官，它负责给结论）。
+  const rolesToRun: readonly TriangleRole[] =
+    degraded === null ? TRIANGLE_ROLES : (['judge'] as const);
+
+  const startedAt = input.now();
   const roles: TriangleRoleRun[] = [];
-  for (const role of TRIANGLE_ROLES) {
+  for (const role of rolesToRun) {
     // **同一个 contextId + 同一份 factIds** 发给每个角色。
     const task: TriangleRoleTask = {
       role,
@@ -131,12 +190,22 @@ export const runTriangleAnalysis = async (input: {
     });
   }
 
+  const elapsedMs = input.now() - startedAt;
+  // 任何一个角色拿不到用量，整体就是 `null`（不做部分求和——那会低估）。
+  const tokenUsed = roles.some((role) => role.tokenUsed === null)
+    ? null
+    : roles.reduce((sum, role) => sum + (role.tokenUsed ?? 0), 0);
+
   return {
     contextId: context.id,
     factIds: context.factIds,
     gate,
     roles,
     blocked: null,
+    lead: triangleSummaryLead({ tokenUsed, elapsedMs, degraded }),
+    degraded,
+    tokenUsed,
+    elapsedMs,
   };
 };
 
@@ -151,4 +220,88 @@ export const extractTokenUsed = (output: unknown): number | null => {
   if (output === null || typeof output !== 'object') return null;
   const value = (output as { tokenUsed?: unknown }).tokenUsed;
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+};
+
+// ── 需求 6 / 7 / 5：事前成本、降级、结果首段 ──
+
+/**
+ * 事前成本预估（PRD 需求 6）。
+ *
+ * `estimatedTokenRange` 与 `estimatedDurationMs` 都是**区间**——单点数字会让人
+ * 以为是承诺。区间来自「同类分析的历史实测」，这里由调用方注入（本层不查库）。
+ */
+export const TriangleEstimateSchema = z
+  .object({
+    estimatedTokenRange: z.object({
+      min: z.number().int().nonnegative(),
+      max: z.number().int().nonnegative(),
+    }),
+    estimatedDurationMs: z.object({
+      min: z.number().int().nonnegative(),
+      max: z.number().int().nonnegative(),
+    }),
+  })
+  .strict();
+export type TriangleEstimate = z.infer<typeof TriangleEstimateSchema>;
+
+/** 降级阈值：**可注入**，测试里调小即可触发（PRD 需求 7 的 >15 分钟在测试里等不起）。 */
+export interface TriangleBudget {
+  /** 总 token 预算上限；超出即降级。 */
+  readonly maxTokens: number;
+  /** 总时长上限（毫秒）；超出即降级。PRD 的 15 分钟 = 900_000。 */
+  readonly maxDurationMs: number;
+}
+
+export const DEFAULT_TRIANGLE_BUDGET: TriangleBudget = {
+  maxTokens: 200_000,
+  maxDurationMs: 15 * 60 * 1_000,
+};
+
+/** 降级原因（写进结果首段，用户必须能看懂为什么）。 */
+export type TriangleDegradeReason = 'token-budget-exceeded' | 'duration-exceeded';
+
+/**
+ * 结果首段的**文案**（PRD 需求 5 + 7 的无条件验收）。
+ *
+ * ## 为什么 `tokenUsed` 为 null 时必须明说
+ *
+ * PRD：「结果首段含 `tokenUsed` 与 `elapsedMs`」。
+ * 拿不到用量时，**留空或写 0 都是撒谎**——留空让人以为忘了写，
+ * 写 0 让人以为没花 token。**明说「未获取到」才是诚实的第三种状态。**
+ */
+export const triangleSummaryLead = (input: {
+  readonly tokenUsed: number | null;
+  readonly elapsedMs: number;
+  readonly degraded: TriangleDegradeReason | null;
+  readonly blockedCode?: string | null;
+}): string => {
+  const parts: string[] = [];
+  parts.push(
+    input.tokenUsed === null
+      ? '本次未获取到 token 用量（上游未提供），其余指标为实测值。'
+      : `本次消耗 ${String(input.tokenUsed)} tokens。`,
+  );
+  parts.push(`用时 ${String(Math.round(input.elapsedMs / 1000))} 秒（实测）。`);
+  if (input.degraded !== null) {
+    // PRD 明文：「结果首段写明已降级及原因」。
+    parts.push(
+      input.degraded === 'token-budget-exceeded'
+        ? '已降级为单 agent：token 预算超限，四角色并行无法完成。'
+        : '已降级为单 agent：超过时长上限，四角色并行无法在时限内完成。',
+    );
+  }
+  return parts.join('');
+};
+
+/** 判定是否应当降级（在执行**之前**就按预算决定，而不是跑到一半才放弃）。 */
+export const shouldDegrade = (input: {
+  readonly estimate: TriangleEstimate;
+  readonly budget: TriangleBudget;
+}): TriangleDegradeReason | null => {
+  // 预估**上限**超预算就降级：等到真的超了才降级，前面的角色投入已经浪费。
+  if (input.estimate.estimatedTokenRange.max > input.budget.maxTokens)
+    return 'token-budget-exceeded';
+  if (input.estimate.estimatedDurationMs.max > input.budget.maxDurationMs)
+    return 'duration-exceeded';
+  return null;
 };
