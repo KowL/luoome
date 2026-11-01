@@ -158,24 +158,24 @@ describe('task-30 · 持仓报价时点', () => {
   });
 });
 
-// ── task-32/33：`localPaths` 的键是**协议键**（camelCase），不是分区 id（kebab）────────
+// ── task-38：研究库设置分区已按 PRD M4-01 废弃 ─────────────────────────────
 //
-// 真实事故：client 曾经把 `section.id`（`research-vault`）直接当 `localPaths` 的键发出去，
-// 而服务端 schema 的键是 `researchVault` 且 `.strict()` ⇒ **整次保存被静默拒绝**，
-// 浏览器验收表现为「保存后没有成功文案」。这类键名不一致不会被 typecheck 抓到（client 是 .js）。
-describe('设置保存的协议键', () => {
-  it('client 不按分区 id 特判协议键，而是用服务端给的 pathKey', () => {
+// 历史：task-33 曾为 `localPaths` 引入 `pathKey`（协议键 ≠ 分区 id，键名不一致会让
+// `.strict()` 的保存被静默拒绝）。分区废弃后 `pathKey` 与其守护一并移除，
+// 这里改成**反向守卫**：不许残留，也不许有人把界面悄悄加回来而不写测试。
+describe('研究库设置已废弃（task-38）', () => {
+  it('client 不再渲染 local-path 分支，也不再构造 localPaths', () => {
     const settings = read('settings.js');
-    expect(/section\.pathKey/.test(settings)).toBe(true);
-    // 禁止再次出现按 id 硬映射协议键。
-    expect(/section\.id === 'research-vault'/.test(settings)).toBe(false);
+    expect(/local-path/.test(settings)).toBe(false);
+    expect(/localPaths/.test(settings)).toBe(false);
+    expect(/researchVault/.test(settings)).toBe(false);
+    expect(/section\.pathKey/.test(settings)).toBe(false);
   });
 
-  it('服务端视图为每个 local-path 分区提供 pathKey', () => {
+  it('服务端视图不再声明 local-path 或 pathKey', () => {
     const { readFileSync } = require('node:fs');
     const host = readFileSync(resolve(ROOT, '../host/market-settings.ts'), 'utf8');
-    // 类型声明与构造处都必须有 pathKey，且值为协议键。
-    expect(/readonly pathKey: 'researchVault'/.test(host)).toBe(true);
-    expect(/pathKey: 'researchVault' as const/.test(host)).toBe(true);
+    expect(/'local-path'/.test(host)).toBe(false);
+    expect(/pathKey/.test(host)).toBe(false);
   });
 });

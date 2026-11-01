@@ -1,16 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, parse } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
   FUYAO_DEFAULT_BASE_URL,
   MARKET_SOURCE_MANIFEST,
@@ -68,129 +58,6 @@ const CredentialSectionSchema = z
     'clear 与 apiKey 不能同时给出',
   );
 
-/** 研究库（task-33）：本机路径配置，**不是凭据也不是通知通道**。 */
-export const LOCAL_PATH_GUARDED_ID = 'research-vault' as const;
-export const RESEARCH_VAULT_KEY = 'LUOOME_RESEARCH_VAULT' as const;
-export const RESEARCH_VAULT_ID_KEY = 'LUOOME_RESEARCH_VAULT_ID' as const;
-export const RESEARCH_ROOT_KEY = 'LUOOME_RESEARCH_ROOT' as const;
-export const RESEARCH_MANAGED_ROOT_KEY = 'LUOOME_RESEARCH_MANAGED_ROOT' as const;
-export const RESEARCH_MAX_TEXT_MB_KEY = 'LUOOME_RESEARCH_MAX_TEXT_MB' as const;
-export const RESEARCH_MAX_ATTACHMENT_MB_KEY = 'LUOOME_RESEARCH_MAX_ATTACHMENT_MB' as const;
-
-/** 四位高级配置的默认值（与搬迁来源 `apps/web/src/research-vault-settings.ts:29-40` 一致；该文件已随 M3-01 删除）。 */
-export const RESEARCH_DEFAULTS = {
-  researchRoot: 'Research',
-  managedRoot: 'Research/Luoome',
-  maxTextMb: 10,
-  maxAttachmentMb: 100,
-} as const;
-
-const RESEARCH_VAULT_LABEL = '研究库（Obsidian Vault 路径）';
-
-/**
- * 研究库路径的校验（task-33）——**逐条对应适配器的真实要求**，不是「看起来像路径就通过」：
- *
- * 1. **必须是绝对路径**：`adapters/src/research-vault/path-safety.ts:11`
- *    `if (!isAbsolute(vaultPath)) throw new Error('vault path must be absolute')`
- * 2. **必须已存在**：`path-safety.ts:12` 用 `realpathSync(vaultPath)`——
- *    路径不存在会抛 ENOENT，适配器**不会**替你创建根目录（只有写文件时才 `mkdir` 子目录）
- * 3. **必须是目录**：同上，`realpathSync` 指向文件时后续读写会失败；这里提前判
- * 4. **不能是文件系统根 / home 目录 / 当前工作目录 / 名为 `.obsidian` 的目录**：
- *    `path-safety.ts:15-22`（太宽或保留路径直接抛）
- *
- * **不在这里做**：可写性（适配器在真正写入时才失败）、是否 git 仓库
- * （那是 `LUOOME_RESEARCH_REMOTE_SYNC=git` 的额外要求，不是 vault 本身的）。
- */
-const ResearchVaultPathSchema = z
-  .string()
-  .trim()
-  .max(4_096)
-  .refine((value) => !/[\r\n\0]/.test(value), '路径必须是单行文本')
-  .refine((value) => isAbsolute(value), '必须填绝对路径（例如 /Users/you/Documents/Vault）')
-  .superRefine((value, ctx) => {
-    if (!existsSync(value)) {
-      ctx.addIssue({ code: 'custom', message: '路径不存在，请先创建该目录' });
-      return;
-    }
-    if (!statSync(value).isDirectory()) {
-      ctx.addIssue({ code: 'custom', message: '路径存在但不是目录' });
-      return;
-    }
-    // 与 `resolveSafeVaultRoot` 同一组「太宽/保留」判据（realpath 后比较，防符号链接绕过）。
-    const root = realpathSync(value);
-    const tooBroad =
-      root === parse(root).root ||
-      root === realpathSync(homedir()) ||
-      root === realpathSync(process.cwd()) ||
-      basename(root) === '.obsidian';
-    if (tooBroad)
-      ctx.addIssue({ code: 'custom', message: '路径太宽泛或是保留目录，请选一个具体的库目录' });
-  });
-
-/** 从 env 读正整数，非法/缺席时回落到默认值（**不因为一个坏值让整个面板读不出来**）。 */
-const positiveIntFromEnv = (raw: string | undefined, fallback: number): number => {
-  const parsed = Number(raw?.trim());
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-};
-
-/** 单行非空文本的可省字段（空串在进入前已被 transform 成 undefined）。 */
-const singleLineOptional = (label: string) =>
-  z
-    .string()
-    .trim()
-    .min(1, `${label}不能为空`)
-    .refine((value) => !/[\r\n\0]/.test(value), `${label}必须是单行文本`)
-    .optional();
-
-/**
- * 研究库通道的保存入参（三态，与 task-32 同语义）：
- * - **缺席 / `''`** = 保留原值
- * - **非空** = 更新
- * - **`clearVault: true`** = 显式删除 `LUOOME_RESEARCH_VAULT` 与库 ID
- */
-const ResearchVaultChannelSchema = z
-  .object({
-    /**
-     * 三态里的「空串 = 保留」在**进入路径校验之前**就要短路：
-     * 空串不是「合法路径」，直接交给 `ResearchVaultPathSchema` 会因为「非绝对路径」被拒。
-     */
-    path: z
-      .string()
-      .trim()
-      .max(4_096)
-      .optional()
-      .transform((value) => (value === undefined || value.length === 0 ? undefined : value))
-      .pipe(ResearchVaultPathSchema.optional()),
-    /**
-     * 研究目录 / 受管目录是**库内相对路径**（相对 `vaultPath`），
-     * **不许**用 `ResearchVaultPathSchema`（那是绝对路径 + 存在性校验，语义完全不同）。
-     * 判据照搬迁来源 `apps/web` 的 `singleLine()`（已随 M3-01 删除）：trim 后非空 + 单行。
-     */
-    researchRoot: singleLineOptional('研究目录'),
-    managedRoot: singleLineOptional('受管目录'),
-    /** 文本/附件上限：整数 + 上下界（与搬迁来源 `apps/web` 的 `int().min().max()` 一致，该目录已删除）。 */
-    maxTextMb: z.coerce.number().int().min(1).max(100).optional(),
-    maxAttachmentMb: z.coerce.number().int().min(1).max(1_024).optional(),
-    vaultId: z
-      .string()
-      .trim()
-      .max(256)
-      .refine((value) => !/[\r\n\0]/.test(value), '库 ID 必须是单行文本')
-      .optional(),
-    clearVault: z.boolean().default(false),
-  })
-  .strict()
-  .refine(
-    (value) => !(value.clearVault && value.path !== undefined && value.path.trim().length > 0),
-    'clearVault 与 path 不能同时给出',
-  );
-
-/**
- * 飞书 Webhook 的**安全边界**（task-32 从 `apps/web/src/feishu-settings.ts` 原样搬过来，该文件已随 M3-01 删除）：
- * 只接受 `https:` + `open.feishu.cn` + `/open-apis/bot/v2/hook/<token>` + 无 userinfo/query/hash。
- *
- * **这是白名单，不是格式校验**：放宽任何一条都会让密钥/内容被发到非飞书域名。
- */
 const FeishuWebhookUrlSchema = z
   .url('Webhook 必须是合法 URL')
   .max(2_048)
@@ -238,11 +105,6 @@ export const SaveMarketSettingsSchema = z
     credentials: z.record(z.string(), CredentialSectionSchema).optional().default({}),
     /** 非行情源通道（task-32）：飞书通知。与 `credentials` 并列，不混进 manifest。 */
     notifications: z.object({ feishu: FeishuChannelSchema.optional() }).strict().optional(),
-    /** 本机路径配置（task-33）：研究库。**既不是凭据也不是通知通道**。 */
-    localPaths: z
-      .object({ researchVault: ResearchVaultChannelSchema.optional() })
-      .strict()
-      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -289,13 +151,15 @@ const SETTINGS_KEYS = [
   'FUYAO_BASE_URL',
   'FUYAO_API_KEY',
   FEISHU_SECRET_KEY,
-  // task-33：研究库的两个键同样必须在这里，否则重启后磁盘上的配置读不进运行时。
-  RESEARCH_VAULT_KEY,
-  RESEARCH_VAULT_ID_KEY,
-  RESEARCH_ROOT_KEY,
-  RESEARCH_MANAGED_ROOT_KEY,
-  RESEARCH_MAX_TEXT_MB_KEY,
-  RESEARCH_MAX_ATTACHMENT_MB_KEY,
+  // task-38：研究库**界面已废弃**，但这几个键**必须留在白名单里**——
+  // 移出白名单意味着磁盘上用户手写的值读不进运行时，等于「废弃界面顺带废掉已有配置」。
+  // 这是 task-32 那个坑（键不加进白名单 → 重启后读不到）的同一机制的两面。
+  'LUOOME_RESEARCH_VAULT',
+  'LUOOME_RESEARCH_VAULT_ID',
+  'LUOOME_RESEARCH_ROOT',
+  'LUOOME_RESEARCH_MANAGED_ROOT',
+  'LUOOME_RESEARCH_MAX_TEXT_MB',
+  'LUOOME_RESEARCH_MAX_ATTACHMENT_MB',
 ] as const;
 
 export interface MarketSettingsView {
@@ -330,31 +194,6 @@ export interface MarketSettingsView {
         readonly configured: boolean;
         /** 飞书 webhook 的**端点域名**（固定值，不回显完整 URL）。 */
         readonly endpoint: 'open.feishu.cn';
-      }
-    | {
-        readonly kind: 'local-path';
-        readonly id: typeof LOCAL_PATH_GUARDED_ID;
-        /**
-         * 保存时在 `localPaths` 对象里使用的**协议键**（如 `researchVault`）。
-         * 分区 `id` 是 URL/锚点风格（`research-vault`），协议键是 camelCase，**两者不同**；
-         * 由服务端提供，避免 client 自己按 id 特判（`.strict()` 下键名不一致会拒绝整次保存）。
-         */
-        readonly pathKey: 'researchVault';
-        readonly label: string;
-        readonly envKey: typeof RESEARCH_VAULT_KEY;
-        readonly configured: boolean;
-        /**
-         * 研究库路径**可以回显**：它不是秘密（是用户自己的目录），
-         * 而且「我现在指向哪个库」正是用户需要核对的信息。
-         */
-        readonly path?: string;
-        /** 库 ID 也回显——它只是库的标识（缺省时适配器按路径哈希生成），不含凭据。 */
-        readonly vaultId?: string;
-        /** 库内研究根（相对 vaultPath），未配置时回显默认值。 */
-        readonly researchRoot: string;
-        readonly managedRoot: string;
-        readonly maxTextMb: number;
-        readonly maxAttachmentMb: number;
       }
   )[];
 }
@@ -449,32 +288,6 @@ export class MarketSettingsStore {
           configured: Boolean(this.env[FEISHU_SECRET_KEY]?.trim()),
           endpoint: 'open.feishu.cn' as const,
         },
-        // 本机路径配置：既不是凭据（无密钥）也不是通知通道（不发消息）。
-        {
-          kind: 'local-path' as const,
-          id: LOCAL_PATH_GUARDED_ID,
-          pathKey: 'researchVault' as const,
-          label: RESEARCH_VAULT_LABEL,
-          envKey: RESEARCH_VAULT_KEY,
-          configured: Boolean(this.env[RESEARCH_VAULT_KEY]?.trim()),
-          ...(this.env[RESEARCH_VAULT_KEY]?.trim()
-            ? { path: this.env[RESEARCH_VAULT_KEY]?.trim() }
-            : {}),
-          ...(this.env[RESEARCH_VAULT_ID_KEY]?.trim()
-            ? { vaultId: this.env[RESEARCH_VAULT_ID_KEY]?.trim() }
-            : {}),
-          // 四项高级配置：未配置时回显**默认值**（空库首次打开要能看见 Research / 10 / 100）。
-          researchRoot: this.env[RESEARCH_ROOT_KEY]?.trim() || RESEARCH_DEFAULTS.researchRoot,
-          managedRoot: this.env[RESEARCH_MANAGED_ROOT_KEY]?.trim() || RESEARCH_DEFAULTS.managedRoot,
-          maxTextMb: positiveIntFromEnv(
-            this.env[RESEARCH_MAX_TEXT_MB_KEY],
-            RESEARCH_DEFAULTS.maxTextMb,
-          ),
-          maxAttachmentMb: positiveIntFromEnv(
-            this.env[RESEARCH_MAX_ATTACHMENT_MB_KEY],
-            RESEARCH_DEFAULTS.maxAttachmentMb,
-          ),
-        },
       ],
     };
   }
@@ -499,29 +312,6 @@ export class MarketSettingsStore {
         changes[key] = section.apiKey;
       if (section.clear) removals.add(key);
       if (section.baseUrl !== undefined) changes[`${id.toUpperCase()}_BASE_URL`] = section.baseUrl;
-    }
-    // 研究库（task-33）：同三态——空串/缺席保留，`clearVault` 才删除两个键。
-    const vault = input.localPaths?.researchVault;
-    if (vault !== undefined) {
-      if (vault.clearVault) {
-        removals.add(RESEARCH_VAULT_KEY);
-        removals.add(RESEARCH_VAULT_ID_KEY);
-      } else {
-        if (vault.path !== undefined && vault.path.trim().length > 0)
-          changes[RESEARCH_VAULT_KEY] = ResearchVaultPathSchema.parse(vault.path.trim());
-        // 库 ID 可选：不填就让适配器按路径哈希生成（factory.ts 有 `?.` 判断）。
-        if (vault.vaultId !== undefined && vault.vaultId.trim().length > 0)
-          changes[RESEARCH_VAULT_ID_KEY] = vault.vaultId.trim();
-        // 四项高级配置：同样三态（缺席保留，非空更新）。
-        if (vault.researchRoot !== undefined && vault.researchRoot.trim().length > 0)
-          changes[RESEARCH_ROOT_KEY] = vault.researchRoot.trim();
-        if (vault.managedRoot !== undefined && vault.managedRoot.trim().length > 0)
-          changes[RESEARCH_MANAGED_ROOT_KEY] = vault.managedRoot.trim();
-        if (vault.maxTextMb !== undefined)
-          changes[RESEARCH_MAX_TEXT_MB_KEY] = String(vault.maxTextMb);
-        if (vault.maxAttachmentMb !== undefined)
-          changes[RESEARCH_MAX_ATTACHMENT_MB_KEY] = String(vault.maxAttachmentMb);
-      }
     }
     // 飞书通知通道（task-32）：与凭据**同三态**——空串/缺席保留，`clearWebhook` 才删除。
     const feishu = input.notifications?.feishu;

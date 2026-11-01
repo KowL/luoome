@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMarketAdapterFromEnv } from '@luoome/adapters';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createMarketSettingsHandler,
   MarketSettingsStore,
@@ -312,13 +312,13 @@ describe('task-32 飞书通知通道', () => {
     expect(feishu?.kind).toBe('notification-channel');
     expect(feishu?.configured).toBe(true);
     expect(feishu?.envKey).toBe(FEISHU);
-    // 行情源条目都带 market-source 判别字段（task-33 后 credentials 里还有 local-path 条目）。
+    // 行情源条目都带 market-source 判别字段。
     for (const section of view.credentials.filter((item) => item.kind === 'market-source'))
       expect(section.kind).toBe('market-source');
-    // 非行情源条目必须是另外两种 kind（不是 market-source）。
+    // 非行情源条目只剩通知通道（task-38：local-path 已按 PRD 废弃）。
     for (const section of view.credentials.filter((item) => item.kind !== 'market-source'))
-      expect(['notification-channel', 'local-path']).toContain(section.kind);
-    expect(view.credentials.filter((item) => item.kind === 'local-path')).toHaveLength(1);
+      expect(section.kind).toBe('notification-channel');
+    // 类型上已无 `local-path` 分支；运行时用源码守卫再钉一次（见下方 task-38 用例）。
   });
 
   it('任何序列化都不含 Webhook 原文（只给 configured + 端点域名）', () => {
@@ -394,307 +394,63 @@ describe('task-32 飞书通知通道', () => {
   });
 });
 
-// task-33：研究库（本机路径）配置搬进设置分区。
-describe('task-33 研究库路径通道', () => {
+// task-38：研究库设置分区按 PRD M4-01 废弃——**只拆界面，不动工具层与磁盘已有值**。
+describe('task-38 研究库设置已废弃', () => {
   const VAULT = 'LUOOME_RESEARCH_VAULT';
   const VAULT_ID = 'LUOOME_RESEARCH_VAULT_ID';
-  let vaultDir: string;
 
-  beforeEach(() => {
-    vaultDir = mkdtempSync(join(tmpdir(), 'luoome-vault-'));
-    roots.push(vaultDir);
+  it('设置视图与源码里都不再出现研究库分区', async () => {
+    const { settings } = store({ [VAULT]: '/opt/vault' });
+    // 运行时：只有行情源 + 飞书两类。
+    expect(new Set(settings.read().credentials.map((section) => section.kind))).toEqual(
+      new Set(['market-source', 'notification-channel']),
+    );
+    // 静态：源码里不再有 local-path / localPaths / 研究库常量。
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'market-settings.ts'),
+      'utf8',
+    );
+    for (const token of ['local-path', 'localPaths', 'RESEARCH_VAULT_CHANNEL', 'pathKey'])
+      expect(source, token).not.toContain(token);
   });
 
-  const withVault = (researchVault: unknown) =>
-    SaveMarketSettingsSchema.parse({
-      sources: ['fuyao', 'tencent'],
-      fuyao: { baseUrl: 'https://fuyao.example.test/', apiKey: 'k' },
-      credentials: {},
-      localPaths: { researchVault },
-    });
-
-  it('credentials 数组里追加 local-path 条目，与凭据/通知通道在类型上可区分', () => {
-    const { settings } = store({ [VAULT]: vaultDir });
-    const view = settings.read();
-    const vault = view.credentials.find((section) => section.id === 'research-vault');
-    expect(vault?.kind).toBe('local-path');
-    expect(vault?.configured).toBe(true);
-    expect(vault?.envKey).toBe(VAULT);
-    // 三个 kind 互不混淆。
-    expect(view.credentials.filter((s) => s.kind === 'local-path')).toHaveLength(1);
-    expect(view.credentials.filter((s) => s.kind === 'notification-channel')).toHaveLength(1);
-  });
-
-  it('路径可以回显（不是秘密），且库 ID 也回显', () => {
-    const { settings } = store({ [VAULT]: vaultDir, [VAULT_ID]: 'my-vault' });
-    const vault = settings.read().credentials.find((s) => s.id === 'research-vault');
-    expect(vault?.kind === 'local-path' ? vault.path : undefined).toBe(vaultDir);
-    expect(vault?.kind === 'local-path' ? vault.vaultId : undefined).toBe('my-vault');
-  });
-
-  it('保存三态：非空更新 / 空串与缺席保留 / clearVault 才删除（两个键一起删）', () => {
+  it('保存设置**不会删掉** .env 里已有的研究库键（只停界面读写）', () => {
     const { path, settings } = store({});
-    settings.save(withVault({ path: vaultDir, vaultId: 'v1' }), () => () => undefined);
-    expect(settings.read().credentials.find((s) => s.id === 'research-vault')?.configured).toBe(
-      true,
-    );
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-
-    // 空串 → 保留（断言的是「值还在」，不是「没抛错」——mutation「空串即清空」必须在这里红）
-    settings.save(withVault({ path: '' }), () => () => undefined);
-    expect(readFileSync(path, 'utf8')).toContain(`${VAULT}="${vaultDir}"`);
-    expect(settings.read().credentials.find((s) => s.id === 'research-vault')?.configured).toBe(
-      true,
-    );
-    // 缺席 → 保留
-    settings.save(withVault({}), () => () => undefined);
-    expect(readFileSync(path, 'utf8')).toContain(VAULT);
-
-    // clearVault → 两个键都删
-    settings.save(withVault({ clearVault: true }), () => () => undefined);
-    const text = readFileSync(path, 'utf8');
-    expect(text).not.toContain(VAULT);
-    expect(text).not.toContain(VAULT_ID);
-    expect(settings.read().credentials.find((s) => s.id === 'research-vault')?.configured).toBe(
-      false,
-    );
-  });
-
-  it('非法路径被拒且点名原因（相对 / 不存在 / 是文件 / 太宽 / .obsidian）', () => {
-    const { settings } = store({});
-    const filePath = join(vaultDir, 'a-file.txt');
-    writeFileSync(filePath, 'x');
-    const rejects: [string, RegExp][] = [
-      ['relative/path', /必须填绝对路径/],
-      [join(vaultDir, 'does-not-exist'), /路径不存在/],
-      [filePath, /路径存在但不是目录/],
-      ['/', /路径太宽泛或是保留目录/],
-      [join(vaultDir, '.obsidian'), /路径太宽泛或是保留目录/],
-    ];
-    mkdirSync(join(vaultDir, '.obsidian'));
-    for (const [path, expected] of rejects)
-      expect(() => settings.save(withVault({ path }), () => () => undefined), path).toThrow(
-        expected,
-      );
-    expect(settings.read().credentials.find((s) => s.id === 'research-vault')?.configured).toBe(
-      false,
-    );
-  });
-
-  it('clearVault 与 path 同时给出 → 拒绝', () => {
-    expect(() => withVault({ path: vaultDir, clearVault: true })).toThrow(
-      'clearVault 与 path 不能同时给出',
-    );
-  });
-
-  it('重启保留：磁盘上的研究库配置在重建 store 后仍可见（SETTINGS_KEYS 覆盖两个键）', () => {
-    const { path, settings } = store({});
-    settings.save(withVault({ path: vaultDir, vaultId: 'kept' }), () => () => undefined);
-    const reopened = new MarketSettingsStore({}, path);
-    const vault = reopened.read().credentials.find((s) => s.id === 'research-vault');
-    expect(vault?.configured).toBe(true);
-    expect(reopened.runtimeEnv()[VAULT]).toBe(vaultDir);
-    expect(reopened.runtimeEnv()[VAULT_ID]).toBe('kept');
-  });
-});
-
-// task-33 补：四项高级配置（研究目录 / 受管目录 / 文本上限 / 附件上限）。
-
-describe('task-33 研究库高级配置', () => {
-  let vaultDir: string;
-  beforeEach(() => {
-    vaultDir = mkdtempSync(join(tmpdir(), 'luoome-vault-'));
-    roots.push(vaultDir);
-  });
-  const withVault = (researchVault: unknown) =>
-    SaveMarketSettingsSchema.parse({
-      sources: ['fuyao', 'tencent'],
-      fuyao: { baseUrl: 'https://fuyao.example.test/', apiKey: 'k' },
-      credentials: {},
-      localPaths: { researchVault },
-    });
-
-  it('空库首次打开：四项回显默认值（Research / Research/Luoome / 10 / 100）', () => {
-    const { settings } = store({});
-    const vault = settings.read().credentials.find((s) => s.id === 'research-vault');
-    if (vault?.kind !== 'local-path') throw new Error('missing local-path section');
-    expect(vault.researchRoot).toBe('Research');
-    expect(vault.managedRoot).toBe('Research/Luoome');
-    expect(vault.maxTextMb).toBe(10);
-    expect(vault.maxAttachmentMb).toBe(100);
-  });
-
-  it('保存四项后写入 .env 并回读一致', () => {
-    const { path, settings } = store({});
+    // 模拟用户手写过：直接落盘（走 save 之外的路径，等价于 `echo ... >> .env`）。
+    writeFileSync(path, `${VAULT}="/opt/vault"\n${VAULT_ID}="my-vault"\n`, { mode: 0o600 });
     settings.save(
-      withVault({
-        path: vaultDir,
-        researchRoot: 'Notes',
-        managedRoot: 'Notes/Bot',
-        maxTextMb: 25,
-        maxAttachmentMb: 512,
+      SaveMarketSettingsSchema.parse({
+        sources: ['fuyao', 'tencent'],
+        fuyao: { baseUrl: 'https://fuyao.example.test/', apiKey: 'k' },
+        credentials: {},
       }),
       () => () => undefined,
     );
     const text = readFileSync(path, 'utf8');
-    expect(text).toContain('LUOOME_RESEARCH_ROOT="Notes"');
-    expect(text).toContain('LUOOME_RESEARCH_MANAGED_ROOT="Notes/Bot"');
-    expect(text).toContain('LUOOME_RESEARCH_MAX_TEXT_MB="25"');
-    expect(text).toContain('LUOOME_RESEARCH_MAX_ATTACHMENT_MB="512"');
-    const vault = settings.read().credentials.find((s) => s.id === 'research-vault');
-    if (vault?.kind !== 'local-path') throw new Error('missing section');
-    expect(vault.researchRoot).toBe('Notes');
-    expect(vault.maxTextMb).toBe(25);
+    // **磁盘上原有的键必须还在**。
+    expect(text).toContain(`${VAULT}="/opt/vault"`);
+    expect(text).toContain(`${VAULT_ID}="my-vault"`);
   });
 
-  it('重启保留：四个键都在 SETTINGS_KEYS 里', () => {
-    const { path, settings } = store({});
-    settings.save(
-      withVault({ path: vaultDir, researchRoot: 'Notes', maxTextMb: 25 }),
-      () => () => undefined,
-    );
+  it('手写值仍然进运行时（SETTINGS_KEYS 保留研究库键 ⇒ 已有配置不失效）', () => {
+    const { path } = store({});
+    writeFileSync(path, `${VAULT}="/opt/vault"\n`, { mode: 0o600 });
     const reopened = new MarketSettingsStore({}, path);
-    expect(reopened.runtimeEnv().LUOOME_RESEARCH_ROOT).toBe('Notes');
-    expect(reopened.runtimeEnv().LUOOME_RESEARCH_MAX_TEXT_MB).toBe('25');
+    // 移出 SETTINGS_KEYS 会让这里变 undefined —— 那正是「界面废弃顺带废掉已有配置」的事故。
+    expect(reopened.runtimeEnv()[VAULT]).toBe('/opt/vault');
   });
 
-  it('校验：目录拒空串与换行；上限拒 0 / 超界 / 非整数', () => {
-    const { settings } = store({});
-    const reject = (input: unknown, expected: RegExp | string) =>
-      expect(() => settings.save(withVault(input), () => () => undefined)).toThrow(expected);
-    // 目录字段：空串（注意空串在三态里表示「保留」，所以先填非空再传空串不适用）
-    reject({ path: vaultDir, researchRoot: '   ' }, /研究目录不能为空/);
-    reject({ path: vaultDir, researchRoot: 'a\nb' }, /研究目录必须是单行文本/);
-    reject({ path: vaultDir, managedRoot: '   ' }, /受管目录不能为空/);
-    // 上限字段
-    // 上限字段：断言「抛错」+ 错误里带上界约束（zod 的措辞随版本变化，不锁具体文案）。
-    reject({ path: vaultDir, maxTextMb: 0 }, /too_small|greater than or equal/);
-    reject({ path: vaultDir, maxTextMb: 101 }, /too_big|less than or equal/);
-    reject({ path: vaultDir, maxTextMb: 10.5 }, /invalid_type|int/i);
-    reject({ path: vaultDir, maxAttachmentMb: 1_025 }, /too_big|less than or equal/);
-  });
-
-  // apps/web 已下线（M3-01）。这条原先是「与 apps/web 的
-  // `SaveResearchVaultSettingsSchema` 对拍 10 组输入」——搬迁当时实测 **10/10 一致**。
-  // 现在把那份结果**固化成期望值表**：它不再是「对拍」，而是「回归快照」——
-  // 将来有人放宽/收紧 research vault 的校验，这里会红，并告诉他是哪一组变了。
-  it('回归快照：research vault 六字段的接受/拒绝与搬迁时（apps/web 对拍 10/10 一致）保持一致', () => {
-    const pluginAccepts = (input: Record<string, unknown>): boolean =>
-      SaveMarketSettingsSchema.safeParse({
-        sources: ['fuyao', 'tencent'],
-        fuyao: { baseUrl: 'https://fuyao.example.test/', apiKey: 'k' },
-        credentials: {},
-        localPaths: { researchVault: input },
-      }).success;
-
-    const cases: {
-      label: string;
-      input: {
-        researchRoot: string;
-        managedRoot: string;
-        maxTextMb: number;
-        maxAttachmentMb: number;
-      };
-      /** 搬迁时 apps/web 的判定结果（固化）。 */
-      accepted: boolean;
-    }[] = [
-      {
-        label: '默认值组合',
-        input: {
-          researchRoot: 'Research',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 10,
-          maxAttachmentMb: 100,
-        },
-        accepted: true,
-      },
-      {
-        label: '下界 1/1',
-        input: {
-          researchRoot: 'Notes',
-          managedRoot: 'Notes/Bot',
-          maxTextMb: 1,
-          maxAttachmentMb: 1,
-        },
-        accepted: true,
-      },
-      {
-        label: '上界 100/1024',
-        input: {
-          researchRoot: 'A/B',
-          managedRoot: 'A/B/C',
-          maxTextMb: 100,
-          maxAttachmentMb: 1_024,
-        },
-        accepted: true,
-      },
-      {
-        label: '研究目录纯空格',
-        input: {
-          researchRoot: '   ',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 10,
-          maxAttachmentMb: 100,
-        },
-        accepted: false,
-      },
-      {
-        label: '研究目录含换行',
-        input: {
-          researchRoot: 'a\nb',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 10,
-          maxAttachmentMb: 100,
-        },
-        accepted: false,
-      },
-      {
-        label: '受管目录纯空格',
-        input: { researchRoot: 'Research', managedRoot: '  ', maxTextMb: 10, maxAttachmentMb: 100 },
-        accepted: false,
-      },
-      {
-        label: 'maxTextMb=0',
-        input: {
-          researchRoot: 'Research',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 0,
-          maxAttachmentMb: 100,
-        },
-        accepted: false,
-      },
-      {
-        label: 'maxTextMb=101',
-        input: {
-          researchRoot: 'Research',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 101,
-          maxAttachmentMb: 100,
-        },
-        accepted: false,
-      },
-      {
-        label: 'maxAttachmentMb=0',
-        input: {
-          researchRoot: 'Research',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 10,
-          maxAttachmentMb: 0,
-        },
-        accepted: false,
-      },
-      {
-        label: 'maxAttachmentMb=1025',
-        input: {
-          researchRoot: 'Research',
-          managedRoot: 'Research/Luoome',
-          maxTextMb: 10,
-          maxAttachmentMb: 1_025,
-        },
-        accepted: false,
-      },
-    ];
-    for (const item of cases)
-      expect(pluginAccepts({ path: vaultDir, ...item.input }), item.label).toBe(item.accepted);
+  it('工具层未被误伤：研究库相关工具仍然注册', async () => {
+    const { toolRegistry } = await import('@luoome/tools');
+    const names = toolRegistry.all().map((tool) => tool.name);
+    for (const name of [
+      'create_research_document',
+      'list_research_documents',
+      'search_research_documents',
+    ])
+      expect(names, name).toContain(name);
   });
 });

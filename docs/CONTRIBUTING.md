@@ -463,6 +463,29 @@ luoome 以插件形态接入 DSH，开发与验证都围绕单机装配：
 - 旧单机 Web（`apps/web`）**已随 M3-01 下线**，不再有 `bun run web` 入口；DSH 插件形态是唯一形态，本地起服务用 `deploy/dsh` 的 compose 或 `profile-seed.mjs` + `dsh --profile`。
 - 单机没有常驻调度进程：批处理由 DSH 定时任务唤起会话后调用 `luoome-batch` 实例的工具触发；门槛判定随工具走，不满足时返回 `skipped`，不要用「昨天是交易日吧」这类推断代替。
 
+### 研究库配置（已废弃界面，按 PRD M4-01）
+
+研究库（Obsidian Vault）的**设置界面已于 task-38 按 PRD M4-01 废弃**，工具层与适配器**保持不变**：
+`create_research_document` / `list_research_documents` / `search_research_documents`
+以及 `packages/adapters/src/research-vault/**` 都照常工作。
+
+如需使用研究库，**直接设置环境变量**（不要指望设置页）：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `LUOOME_RESEARCH_VAULT` | 未设置=停用 | 库根目录的**绝对路径**，必须已存在；不能是文件系统根 / home / 项目目录 / 名为 `.obsidian` 的目录（校验见 `adapters/src/research-vault/path-safety.ts`） |
+| `LUOOME_RESEARCH_VAULT_ID` | 按路径哈希生成 | 库标识 |
+| `LUOOME_RESEARCH_ROOT` | `Research` | 库内研究根（相对路径） |
+| `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | 托管根（相对路径） |
+| `LUOOME_RESEARCH_MAX_TEXT_MB` | `10` | 单篇文本上限 |
+| `LUOOME_RESEARCH_MAX_ATTACHMENT_MB` | `100` | 单个附件上限 |
+
+**这几个键仍留在 `SETTINGS_KEYS` 白名单里**（`market-settings.ts`）——白名单只决定「重启后是否从磁盘读入运行时」，
+与界面无关。移出白名单会让**已手写配置的用户配置失效**，那不是「废弃界面」该有的副作用。
+
+`LUOOME_RESEARCH_REMOTE_SYNC`（Git 同步开关）**本来就没有界面**，也从未进过白名单；需要时在
+`production.env` 里设置即可。
+
 ### 宿主机直部署（`deploy/direct/upgrade.sh`）
 
 升级脚本在**写任何东西之前**做磁盘预检，并在**部署成功后**按保留策略清理旧备份：
