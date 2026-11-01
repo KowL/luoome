@@ -23,13 +23,20 @@ const silent = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
 describe('REQ-M3-15 新增供应商凭据', () => {
   it('manifest 里每个需要凭据的源都在设置页有一格（分区从 requiredEnv 派生）', () => {
     const { settings } = store();
-    const ids = settings.read().credentials.map((item) => item.id);
+    const sections = settings.read().credentials;
+    // task-32：`credentials` 现在也容纳**非行情源**通道（飞书通知），
+    // 所以按 `kind` 取行情源那一支再对账——判据更严：不仅「有这一格」，
+    // 还要求它确实被标成 `market-source`（而不是混进通知通道里）。
+    const ids = sections.filter((item) => item.kind === 'market-source').map((item) => item.id);
     const expected = (
       Object.keys(MARKET_SOURCE_MANIFEST) as (keyof typeof MARKET_SOURCE_MANIFEST)[]
     )
       .filter((id) => MARKET_SOURCE_MANIFEST[id].requiredEnv !== undefined)
       .sort();
     expect([...ids].sort()).toEqual(expected);
+    // 非行情源条目**不得**被标成 market-source，且不得出现在 manifest 派生的 id 里。
+    for (const section of sections.filter((item) => item.kind === 'notification-channel'))
+      expect(expected).not.toContain(section.id as never);
   });
 
   it('配置 Tushare 凭据后切到它，请求打到 tushare 端点并解析出收盘价', async () => {

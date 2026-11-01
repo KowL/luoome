@@ -67,6 +67,9 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
   const [apiKey, setApiKey] = useState('');
   /** 按源收集的密钥输入（非 FUYAO 的其它凭据源）；空串 = 保留。 */
   const [keys, setKeys] = useState({});
+  const [paths, setPaths] = useState({});
+  const [advanced, setAdvancedState] = useState({});
+  const [vaultIds, setVaultIds] = useState({});
   /** 按源收集的显式清空开关（clear:true 才会删密钥）。 */
   const [clears, setClears] = useState({});
   const [busy, setBusy] = useState(false);
@@ -94,6 +97,24 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
   // 凭据分区从服务端 `credentials` 派生（REQ-M3-15）：用户新增一家源，这里自动多一格。
   const credentialSections = data?.credentials ?? [];
   const apiKeyFor = (id) => keys[id] ?? '';
+  // 本机路径（task-33）：本地状态，初值取服务端回显的 path / vaultId（它们不是秘密）。
+  const serverPath = (id) => credentialSections.find((section) => section.id === id)?.path ?? '';
+  const serverVaultId = (id) =>
+    credentialSections.find((section) => section.id === id)?.vaultId ?? '';
+  const pathsFor = (id) => paths[id] ?? serverPath(id);
+  // 高级配置（task-33）：研究目录 / 受管目录 / 文本上限 / 附件上限。同样从服务端回显（含默认值）。
+  const advancedFor = (id, field) => {
+    const draft = advanced[id]?.[field];
+    if (draft !== undefined) return draft;
+    const section = credentialSections.find((item) => item.id === id);
+    return section?.[field] ?? '';
+  };
+  const setAdvanced = (id, field, value) =>
+    setAdvancedState((current) => ({
+      ...current,
+      [id]: { ...(current[id] ?? {}), [field]: value },
+    }));
+  const vaultIdsFor = (id) => vaultIds[id] ?? serverVaultId(id);
   const clearFor = (id) => clears[id] === true;
   const setKey = (id, value) => setKeys((current) => ({ ...current, [id]: value }));
   const setClear = (id, value) => setClears((current) => ({ ...current, [id]: value }));
@@ -103,9 +124,18 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
     setMessage('');
     setError('');
     try {
+      // 按 `kind` 分流（task-32）：行情源凭据走 `credentials`，通知通道走 `notifications`。
+      // **不按 id 特判**——新增一个通道时这段不用改。
+      const notificationSections = credentialSections.filter(
+        (section) => section.kind === 'notification-channel',
+      );
+      // 本机路径配置（task-33）：走 `localPaths`，与凭据/通知分开。
+      const localPathSections = credentialSections.filter(
+        (section) => section.kind === 'local-path',
+      );
       const credentials = Object.fromEntries(
         credentialSections
-          .filter((section) => section.id !== 'fuyao')
+          .filter((section) => section.kind === 'market-source' && section.id !== 'fuyao')
           .map((section) => {
             const key = apiKeyFor(section.id).trim();
             const clear = clearFor(section.id);
@@ -123,6 +153,54 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
           ...(clearFor('fuyao') ? { clear: true } : {}),
         },
         credentials,
+        ...(notificationSections.length === 0
+          ? {}
+          : {
+              notifications: Object.fromEntries(
+                notificationSections.map((section) => {
+                  const value = apiKeyFor(section.id).trim();
+                  const clear = clearFor(section.id);
+                  return [
+                    section.id,
+                    {
+                      ...(value.length > 0 ? { webhookUrl: value } : {}),
+                      ...(clear ? { clearWebhook: true } : {}),
+                    },
+                  ];
+                }),
+              ),
+            }),
+        ...(localPathSections.length === 0
+          ? {}
+          : {
+              localPaths: Object.fromEntries(
+                localPathSections.map((section) => {
+                  const value = String(pathsFor(section.id) ?? '').trim();
+                  const vaultId = String(vaultIdsFor(section.id) ?? '').trim();
+                  const clear = clearFor(section.id);
+                  const researchRoot = String(advancedFor(section.id, 'researchRoot') ?? '').trim();
+                  const managedRoot = String(advancedFor(section.id, 'managedRoot') ?? '').trim();
+                  const maxTextMb = String(advancedFor(section.id, 'maxTextMb') ?? '').trim();
+                  const maxAttachmentMb = String(
+                    advancedFor(section.id, 'maxAttachmentMb') ?? '',
+                  ).trim();
+                  return [
+                    section.id,
+                    {
+                      ...(value.length > 0 ? { path: value } : {}),
+                      ...(vaultId.length > 0 ? { vaultId } : {}),
+                      ...(researchRoot.length > 0 ? { researchRoot } : {}),
+                      ...(managedRoot.length > 0 ? { managedRoot } : {}),
+                      ...(maxTextMb.length > 0 ? { maxTextMb: Number(maxTextMb) } : {}),
+                      ...(maxAttachmentMb.length > 0
+                        ? { maxAttachmentMb: Number(maxAttachmentMb) }
+                        : {}),
+                      ...(clear ? { clearVault: true } : {}),
+                    },
+                  ];
+                }),
+              ),
+            }),
       });
       setData(next);
       setBaseUrl(next.fuyao.baseUrl);
@@ -196,9 +274,10 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
               }),
             ),
             h('p', { className: 'luo-fine' }, '密钥仅保存在本机，保存后不回显。'),
-            // 其它凭据源（Tushare 等）：**从服务端 credentials 派生**，新增一家源自动多一格。
+            // 其它凭据格子：**从服务端 credentials 派生**，新增一家源/通道自动多一格。
+            // 按 `kind` 决定走哪条分支（task-32），**不按 id 特判**。
             ...credentialSections
-              .filter((section) => section.id !== 'fuyao')
+              .filter((section) => section.kind === 'market-source' && section.id !== 'fuyao')
               .map((section) =>
                 h(
                   'div',
@@ -234,6 +313,168 @@ function MarketSettingsForm({ refreshKey, onSaved }) {
                           onChange: (event) => setClear(section.id, event.target.checked),
                         }),
                         ` 清空 ${section.envKey}（显式动作，留空不会清空）`,
+                      )
+                    : null,
+                ),
+              ),
+            // 通知通道（task-32）：与行情源凭据同一个数组、不同 `kind`，渲染上单列一段。
+            ...credentialSections
+              .filter((section) => section.kind === 'notification-channel')
+              .map((section) =>
+                h(
+                  'div',
+                  { key: section.id, 'data-credential-section': section.id },
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    `${section.label} · ${section.configured ? '已配置' : '未配置'}`,
+                    h('input', {
+                      type: 'password',
+                      'aria-label': `${section.label} Webhook URL`,
+                      autoComplete: 'new-password',
+                      value: apiKeyFor(section.id),
+                      maxLength: 2048,
+                      placeholder: section.configured
+                        ? '留空保留现有 Webhook'
+                        : `https://${section.endpoint}/open-apis/bot/v2/hook/…`,
+                      disabled: busy,
+                      onChange: (event) => setKey(section.id, event.target.value),
+                    }),
+                  ),
+                  h(
+                    'p',
+                    { className: 'luo-fine' },
+                    `只接受 https://${section.endpoint} 的自定义机器人 Webhook；密钥仅保存在本机，保存后不回显。`,
+                  ),
+                  section.configured
+                    ? h(
+                        'label',
+                        { className: 'luo-fine' },
+                        h('input', {
+                          type: 'checkbox',
+                          'aria-label': `清空 ${section.label} Webhook`,
+                          checked: clearFor(section.id),
+                          disabled: busy,
+                          onChange: (event) => setClear(section.id, event.target.checked),
+                        }),
+                        ` 清除 Webhook（显式动作，留空不会清空）`,
+                      )
+                    : null,
+                ),
+              ),
+            // 本机路径配置（task-33）：普通文本框（路径不是秘密，可回显），显式清除才删键。
+            ...credentialSections
+              .filter((section) => section.kind === 'local-path')
+              .map((section) =>
+                h(
+                  'div',
+                  { key: section.id, 'data-credential-section': section.id },
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    `${section.label} · ${section.configured ? '已配置' : '未配置'}`,
+                    h('input', {
+                      type: 'text',
+                      'aria-label': `${section.label} 绝对路径`,
+                      value: pathsFor(section.id),
+                      maxLength: 4096,
+                      placeholder: '/Users/you/Documents/Vault',
+                      disabled: busy,
+                      onChange: (event) =>
+                        setPaths((current) => ({ ...current, [section.id]: event.target.value })),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    '库 ID（可选，留空按路径自动生成）',
+                    h('input', {
+                      type: 'text',
+                      'aria-label': `${section.label} 库 ID`,
+                      value: vaultIdsFor(section.id),
+                      maxLength: 256,
+                      disabled: busy,
+                      onChange: (event) =>
+                        setVaultIds((current) => ({
+                          ...current,
+                          [section.id]: event.target.value,
+                        })),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    '研究目录（库内相对路径）',
+                    h('input', {
+                      type: 'text',
+                      'aria-label': `${section.label} 研究目录`,
+                      value: advancedFor(section.id, 'researchRoot'),
+                      maxLength: 512,
+                      disabled: busy,
+                      onChange: (event) =>
+                        setAdvanced(section.id, 'researchRoot', event.target.value),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    '受管目录（库内相对路径）',
+                    h('input', {
+                      type: 'text',
+                      'aria-label': `${section.label} 受管目录`,
+                      value: advancedFor(section.id, 'managedRoot'),
+                      maxLength: 512,
+                      disabled: busy,
+                      onChange: (event) =>
+                        setAdvanced(section.id, 'managedRoot', event.target.value),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    '单篇文本上限（MB）',
+                    h('input', {
+                      type: 'number',
+                      min: 1,
+                      max: 100,
+                      'aria-label': `${section.label} 文本上限 MB`,
+                      value: advancedFor(section.id, 'maxTextMb'),
+                      disabled: busy,
+                      onChange: (event) => setAdvanced(section.id, 'maxTextMb', event.target.value),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'luo-field' },
+                    '单个附件上限（MB）',
+                    h('input', {
+                      type: 'number',
+                      min: 1,
+                      max: 1024,
+                      'aria-label': `${section.label} 附件上限 MB`,
+                      value: advancedFor(section.id, 'maxAttachmentMb'),
+                      disabled: busy,
+                      onChange: (event) =>
+                        setAdvanced(section.id, 'maxAttachmentMb', event.target.value),
+                    }),
+                  ),
+                  h(
+                    'p',
+                    { className: 'luo-fine' },
+                    '路径必须是已存在的绝对目录；两个目录是库内相对路径。留空不会清空。',
+                  ),
+                  section.configured
+                    ? h(
+                        'label',
+                        { className: 'luo-fine' },
+                        h('input', {
+                          type: 'checkbox',
+                          'aria-label': `清空 ${section.label}`,
+                          checked: clearFor(section.id),
+                          disabled: busy,
+                          onChange: (event) => setClear(section.id, event.target.checked),
+                        }),
+                        ` 清除研究库配置（显式动作，留空不会清空）`,
                       )
                     : null,
                 ),
