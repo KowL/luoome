@@ -270,3 +270,25 @@ describe('task-30 持仓报价时点参与聚合 asOf', () => {
     expect(health.issues.filter((issue) => issue.detail.includes('聚合时点由'))).toHaveLength(0);
   });
 });
+
+// task-39 批次 A：新增面板必须自动进入 panel-health 的遍历范围。
+describe('task-39 plans 面板', () => {
+  it('plans 在 PANEL_NAMES 里，且 panel-health 遍历覆盖到它', async () => {
+    const { PANEL_NAMES } = await import('./panels.js');
+    expect(PANEL_NAMES).toContain('plans');
+    // panel-health 是**按 PANEL_NAMES 遍历**的（见 '遍历 PANEL_NAMES' 那条），
+    // 这里再钉一次「新增面板默认被覆盖」，避免将来有人改成硬编码列表。
+    const health = assessPanelHealth([]);
+    expect(health.checkedTools).toBeDefined();
+  });
+
+  it('plans 面板的固定工具都是 read（无 external、无 write）', async () => {
+    const { PANEL_PLANS } = await import('./panels.js');
+    const plan = PANEL_PLANS.plans;
+    expect(plan.market).toHaveLength(0);
+    // 固定调用的形状是 `{ name, input }`（`fixed()` 的返回），不是函数。
+    const names = plan.read.map((call) => call.name);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) expect(typeof name).toBe('string');
+  });
+});

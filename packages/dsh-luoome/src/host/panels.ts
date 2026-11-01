@@ -34,6 +34,9 @@ export const PANEL_NAMES = [
   'strategies',
   'review',
   'settings',
+  // task-39 批次 A：交易计划（列表/详情/编辑）。独立的场景上下文，
+  // 塞进 settings 或 watchlists 都会让「配置」与「操作」混在一起。
+  'plans',
 ] as const;
 export type PanelName = (typeof PANEL_NAMES)[number];
 
@@ -149,6 +152,14 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
       fixed('get_watch_status'),
       fixed('get_strategy_reliability_summary'),
       fixed('list_pending_strategy_observations', { limit: 100 }),
+    ]),
+    market: Object.freeze([]),
+  }),
+  plans: Object.freeze({
+    read: Object.freeze([
+      // 列表与详情：按计划聚合的最新/草案 + 当前生效版本。
+      fixed('list_trading_plans', { limit: 200 }),
+      fixed('list_alert_plans'),
     ]),
     market: Object.freeze([]),
   }),

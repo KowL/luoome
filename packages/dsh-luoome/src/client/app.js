@@ -5,6 +5,7 @@
 import { createElement as h, useCallback, useEffect, useState } from 'react';
 
 import { OverviewPanel } from './overview.js';
+import { PlansPanel } from './plans.js';
 import { PositionsPanel } from './positions.js';
 import { cx, Panel } from './primitives.js';
 import { ReviewPanel } from './review.js';
@@ -82,6 +83,14 @@ export const VIEWS = [
     icon: LayersIcon,
     className: 'luo-strategies',
     View: StrategiesPanel,
+  },
+  {
+    id: 'plans',
+    label: '计划',
+    hint: '逐股结构化计划 · 版本链 · 四要素提示',
+    icon: LayersIcon,
+    className: null,
+    View: PlansPanel,
   },
   {
     id: 'review',

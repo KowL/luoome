@@ -68,6 +68,7 @@ import {
   type MarketSurface,
   registerMarketTools,
 } from './market-surface.js';
+import { saveTradingPlanOperation } from './plan-operations.js';
 import {
   type ProductionConfig,
   resolveProductionConfig,
@@ -210,6 +211,8 @@ export const createProductionOperationPolicies = (
   createWriteReportArtifactOperation(),
   // task-35：导出业务数据（write 副作用，会落文件）。
   createExportBusinessDataOperation(),
+  // task-39 批次 A：交易计划保存（write）。**没有乐观锁**，见 plan-operations.ts 的头注释。
+  saveTradingPlanOperation,
   // T48 恢复：只作精确 Operation policy，不进 agent 面。
   ...(options.dataImport === undefined || options.dataImportBackups === undefined
     ? []

@@ -637,6 +637,8 @@ describe('dsh-luoome production write policies', () => {
       'write_report_artifact',
       // task-35：导出业务数据（write，会落文件；与恢复同源）
       'export_business_data',
+      // task-39 批次 A：交易计划保存（write；没有乐观锁，见 plan-operations.ts）
+      'save_trading_plan',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
     const byName = new Map(policies.map((policy) => [policy.tool.name, policy]));

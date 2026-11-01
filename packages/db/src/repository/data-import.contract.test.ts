@@ -304,6 +304,11 @@ describe('task-35 export_business_data round-trip', () => {
       now: Date.now(),
     });
     expect(receipt.requestId).toBe('round-trip-request');
+
+    // 5) **回读一致**（task-39）：commit 之后再导一次，digest 必须与第一次**逐字节相同**。
+    //    这比「字段逐个对比」更强——digest 相同意味着整份内容一致。
+    const afterCommit = await repository.exportBusinessTables();
+    expect(afterCommit.digest).toBe(exported.digest);
     handle.close();
   });
 });
