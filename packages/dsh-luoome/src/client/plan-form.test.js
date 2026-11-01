@@ -71,7 +71,7 @@ describe('区间上限与落点：来自服务端，client 不重算', () => {
     expect(hint?.text).not.toMatch(/上限\s*\d/);
   });
 
-  it('落点：区间/选点没变时沿用服务端值；变了则不给结论（不猜）', () => {
+  it('落点：没改就沿服务端值；改了按 core 的恒等式算（否则保存必被拒）', () => {
     const plan = {
       position: {
         targetPctRange: { min: 10, max: 12 },
@@ -79,13 +79,25 @@ describe('区间上限与落点：来自服务端，client 不重算', () => {
         appliedPct: 11,
       },
     };
-    // 未改区间与选点 → 沿用服务端的 11
+    // 未改 → 沿用服务端的 11
     expect(appliedPctFor(plan, {})).toBe(11);
     expect(appliedPctFor(plan, { range: { min: 10, max: 12 }, pick: { ruleId: 'mid' } })).toBe(11);
-    // 改了区间 → 不给结论（保存后由服务端算）
-    expect(appliedPctFor(plan, { range: { min: 5, max: 8 } })).toBeNull();
-    // 改了选点 → 同样不给
-    expect(appliedPctFor(plan, { pick: { ruleId: 'lower-bound' } })).toBeNull();
+    // 改了区间（mid）→ **必须算出来**：core 要求 appliedPct 精确等于选点结果，
+    // 留 null 会被 `positionRangeChecks` 拒（浏览器实测踩过：保存报 Invalid operation）。
+    expect(appliedPctFor(plan, { range: { min: 5, max: 8 } })).toBe(6.5);
+    // 改选点为 lower-bound → 落点 = 下限
+    expect(appliedPctFor(plan, { pick: { ruleId: 'lower-bound' } })).toBe(10);
+    // volatility-scaled 需要波动率参数，本表单不提供 → 不给结论
+    expect(
+      appliedPctFor(plan, {
+        pick: {
+          ruleId: 'volatility-scaled',
+          volatilityMetric: 'x',
+          volatilityPct: 1,
+          tiers: [{ volatilityUpToPct: 2, bandFractionPct: 50 }],
+        },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -158,16 +170,16 @@ describe('合并编辑：只碰四步覆盖的字段，证据原样保留', () =
     },
   };
 
-  it('改仓位区间：fallbackPct 恒等于下限，appliedPct **不在 client 计算**（置 null 待服务端）', () => {
+  it('改仓位区间：fallbackPct 恒等于下限，appliedPct 按选点规则算出（否则保存必被拒）', () => {
     const merged = mergePlanEdit(base, {
       targetPctRange: { min: 5, max: 8 },
       rangePick: { ruleId: 'mid' },
     });
-    // `fallbackPct === min` 是 core 的硬不变量（`trading-plan.ts:442`），直接复述它。
+    // `fallbackPct === min` 是 core 的硬不变量（`trading-plan.ts:442`）。
     expect(merged.position.fallbackPct).toBe(5);
-    // `appliedPct` 需要选点规则，client **不算**（否则就是第二份 core 规则）：
-    // 置 null，保存后由服务端算出——不猜一个 6.5 给用户看。
-    expect(merged.position.appliedPct).toBeNull();
+    // `appliedPct` 必须写回一个合法值：core 要求它**精确等于**选点结果，
+    // 留 null 的话 `save_trading_plan` 被 schema 直接拒（真实浏览器验收发现）。
+    expect(merged.position.appliedPct).toBe(6.5);
     expect(merged.position.targetPctRange).toEqual({ min: 5, max: 8 });
   });
 

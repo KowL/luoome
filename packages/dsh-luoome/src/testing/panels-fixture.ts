@@ -20,11 +20,13 @@ import {
   type StrategyRun,
   strategyDefinitionHash,
   type ToolContext,
+  TradingPlanV2Schema,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import {
   buildContext,
   createWatchlistTool,
+  getAccountFactsTool,
   getDecisionReviewContextTool,
   saveDecisionReviewTool,
   setStrategyScheduleTool,
@@ -53,6 +55,8 @@ const DECISION_NOTE = '浏览器验收：用户明确回填跟随';
 const ADVICE_PREMISE = '浏览器验收：等待量能确认后再判断方向';
 const STRATEGY_NAME = '浏览器验收策略';
 const WATCHLIST_ID = 'watchlist-browser-strategy';
+/** 交易计划 fixture 的计划 id（版本 id 为 `${PLAN_ID}:v1`）。 */
+const PLAN_ID = 'account:panels-browser:stock:600519.SH';
 
 export const PANELS_FIXTURE = Object.freeze({
   stock: STOCK,
@@ -360,7 +364,77 @@ export const seedPanelsFixture = async (
     if (!subscription.ok)
       throw new Error(`策略订阅写入失败: ${JSON.stringify(subscription.error)}`);
     await seedResearchFixture(ctx, [STOCK]);
-    return { ...PANELS_FIXTURE, owner, database: join(home, 'luoome.db') };
+
+    // 交易计划 fixture（决策 3-C ②）：浏览器验收要「打开面板 → 四步表单 → 保存 → 回读」。
+    // 必须是 draft：草案不要求 active 的失效条件，四步表单能在它上面完整走通。
+    // `accountFactsDigest` 取真实账户事实，否则 `save_trading_plan` 会以「事实已变化」拒绝。
+    const factsResult = await getAccountFactsTool.execute({ accountId: owner.accountId }, ctx);
+    if (!factsResult.ok) throw new Error(`账户事实失败: ${JSON.stringify(factsResult.error)}`);
+    const facts = factsResult.data.facts;
+    const tradingPlan = TradingPlanV2Schema.parse({
+      id: PLAN_ID,
+      version: 1,
+      accountId: owner.accountId,
+      stockId: STOCK.id,
+      stockName: STOCK.name,
+      industry: '食品饮料',
+      status: 'draft',
+      action: 'observe',
+      entryPriceLow: 1500 as never,
+      entryPriceHigh: 1600 as never,
+      entryConditions: [],
+      invalidEntryConditions: [],
+      position: {
+        currentPct: 10,
+        targetPctRange: { min: 8, max: 10 },
+        appliedPct: 8,
+        fallbackPct: 8,
+        rangePick: { ruleId: 'lower-bound' },
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+      holding: {
+        minTradingDays: 1,
+        maxTradingDays: 5,
+        nextReviewAt: new Date(now.getTime() + 86_400_000),
+        earlyExitConditions: [],
+        extensionBasis: [],
+      },
+      exit: { conditions: [], triggerConditions: [], canSellNow: true },
+      validFrom: now,
+      validUntil: new Date(now.getTime() + 30 * 86_400_000),
+      invalidationConditions: [],
+      invalidationRules: [],
+      accountFactsAsOf: facts.asOf,
+      accountFactsDigest: facts.digest,
+      // 空数组：既有 marketFacts 不影响——**这正是要验证的「未编辑项沿用」**。
+      marketFacts: [],
+      evidence: [],
+      source: {
+        strategyIds: [],
+        strategyVersionIds: [],
+        runIds: [],
+        signalIds: [],
+        adviceIds: [],
+      },
+      explanation: {
+        supportingEvidenceIds: [],
+        counterEvidence: ['浏览器验收：原有反证'],
+        risks: ['浏览器验收：原有风险'],
+        unknowns: [],
+      },
+      confidence: 50,
+      createdAt: now,
+    });
+    await repos.tradingPlan.save(tradingPlan);
+
+    return {
+      ...PANELS_FIXTURE,
+      owner,
+      tradingPlan: { id: PLAN_ID, versionId: `${PLAN_ID}:v1` },
+      database: join(home, 'luoome.db'),
+    };
   } finally {
     close();
   }

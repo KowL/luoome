@@ -91,6 +91,10 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'list_watchlist_changes',
   'list_watch_triggers',
   'list_alert_plans',
+  // 交易计划面板（决策 3-C ②）：`PANEL_PLANS.plans` 早就在读它，但它**从未**进过
+  // 默认 allowlist ⇒ 面板恒为 permission_denied、列表永远空白。
+  // 这正是「面板要用但读面没开」的暴露面缺口：装配期不报错，只在浏览器里表现为空列表。
+  'list_trading_plans',
   'get_watch_status',
   // 本地市场事实与数据健康（每日市场分析；external 刷新留待 M2）
   'get_market_data_status',

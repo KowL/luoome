@@ -95,6 +95,8 @@ export const rangeWidthCap = (plan) => {
 export const appliedPctFor = (plan, { range, pick } = {}) => {
   const base = plan?.position;
   if (base === undefined || base === null) return null;
+  const targetRange = range === undefined || range === null ? base.targetPctRange : range;
+  const targetPick = pick === undefined || pick === null ? base.rangePick : pick;
   const unchangedRange =
     range === undefined ||
     range === null ||
@@ -105,9 +107,42 @@ export const appliedPctFor = (plan, { range, pick } = {}) => {
     pick === undefined ||
     pick === null ||
     (base.rangePick !== null && JSON.stringify(pick) === JSON.stringify(base.rangePick));
-  if (!unchangedRange || !unchangedPick) return null;
-  return typeof base.appliedPct === 'number' ? base.appliedPct : null;
+  // 区间与选点都没动 → 沿用服务端已算的值（唯一真源）。
+  if (unchangedRange && unchangedPick)
+    return typeof base.appliedPct === 'number' ? base.appliedPct : null;
+  return pickedPct(targetRange, targetPick);
 };
+
+/**
+ * 保存前算出合法落点。
+ *
+ * ## 为什么这里允许在 client 写这个式子
+ *
+ * core 的 `tradingPlanPickedPct` 对这两个规则是**算术恒等式**，不是业务判断：
+ * - `lower-bound` → `min`
+ * - `mid` → `min + (max-min)/2`（四舍五入到 2 位）
+ *
+ * 而且 `positionRangeChecks` 要求 `appliedPct` **精确等于**选点结果（`trading-plan.ts:454-460`），
+ * 所以表单**必须**能算出这个值才可能保存成功——否则用户改了区间就永远存不进去
+ * （实测踩过：`appliedPct: null` 直接被 schema 拒）。
+ *
+ * 只支持这两条规则：`volatility-scaled` 需要波动率分档参数，**不在本表单提供**
+ * （那是工具产出的事实，不是用户手填的配置），因此返回 null 并禁止保存。
+ */
+const pickedPct = (range, pick) => {
+  if (range === null || range === undefined) return null;
+  const min = Number(range.min);
+  const max = Number(range.max);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) return null;
+  if (pick === null || pick === undefined) return null;
+  if (pick.ruleId === 'lower-bound') return min;
+  if (pick.ruleId === 'mid') return Math.round((min + (max - min) / 2) * 100) / 100;
+  // volatility-scaled：需要 volatilityPct / tiers，本表单不提供 → 不给结论。
+  return null;
+};
+
+/** 该选点规则能否在表单里安全计算（决定保存按钮是否可用）。 */
+export const canComputeApplied = (pick) => pick?.ruleId === 'lower-bound' || pick?.ruleId === 'mid';
 
 /**
  * 区间校验提示（**不阻断保存**，与既有「四要素只是提示」的口径一致）。

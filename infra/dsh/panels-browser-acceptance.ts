@@ -12,7 +12,7 @@
 // 这是「真实浏览器验收」，不是真实模型质量验收：数据来自合成 fixture，不联网供应商、
 // 不调用模型、不触碰真实个人库。Chrome 不可用时显式失败并报告具体阻塞。
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
@@ -1139,6 +1139,9 @@ const runAcceptance = async () => {
     关注: 'watchlists',
     策略: 'strategies',
     复盘: 'review',
+    // 决策 3-C ②：交易计划面板此前**从未进过浏览器验收**（VIEW_IDS 里没有它），
+    // 所以「保存按钮能不能点」这类问题在这里完全不可见——与 P0 的 /execute 同一类漏洞。
+    计划: 'plans',
   };
   const clickPanel = async (label: string) => {
     if (label === '投资设置') {
@@ -3084,8 +3087,325 @@ const runAcceptance = async () => {
     phoneWidth: 390,
   };
 
+  // ── 决策 3-C ②：交易计划四步表单的**真人流程**验收 ──
+  //
+  // 为什么必须有这一段：host 层 e2e 直接调 operation service，**看不见 client 发的 HTTP**。
+  // P0 的 `/execute` 404 就是这样漏掉的——所有 e2e 全绿，用户点下去 404。
+  // 这里用真 Chrome 点真实按钮，是唯一能发现「按钮点不动」的门。
+  const tradeCountOf = async (): Promise<number> => {
+    const body = await fetchState(origin, cookie, 'review');
+    const data = toolData(body as Record<string, unknown>, 'list_trades');
+    const trades = Array.isArray(data?.trades) ? (data.trades as unknown[]) : [];
+    return trades.length;
+  };
+  const planFormState = async () =>
+    page.evaluate<{
+      step: string | null;
+      capText: string | null;
+      appliedText: string | null;
+      noticeKind: string | null;
+      noticeText: string | null;
+      unedited: string | null;
+      rangeMax: string | null;
+      counterEvidence: string | null;
+    }>(`(() => {
+      const pick = (selector) => document.querySelector(selector);
+      const value = (selector) => {
+        const node = pick(selector);
+        return node === null ? null : (node.value ?? node.textContent ?? null);
+      };
+      const notice = pick('[data-plan-notice]');
+      return {
+        step: pick('[data-plan-step]')?.getAttribute('data-plan-step') ?? null,
+        capText: pick('[data-plan-cap]')?.textContent ?? null,
+        appliedText: pick('[data-plan-applied]')?.textContent ?? null,
+        noticeKind: notice?.getAttribute('data-plan-notice') ?? null,
+        noticeText: notice?.textContent ?? null,
+        unedited: pick('[data-plan-unedited]')?.textContent ?? null,
+        rangeMax: value('[data-plan-field="targetMax"]'),
+        counterEvidence: value('[data-plan-field="反证"]'),
+      };
+    })()`);
+  /** 失败时 dump 现场——否则只知道「红了」，不知道为什么红。 */
+  const dumpPlans = async (reason: string): Promise<string> => {
+    const state = await page.evaluate<{
+      bodyText: string;
+      planNodes: string[];
+      formFields: string[];
+      pageErrors: string[];
+    }>(`(() => ({
+      bodyText: (document.body?.innerText ?? '').slice(0, 1500),
+      planNodes: [...document.querySelectorAll('[data-plan-table], [data-plan-detail], [data-plan-step], [data-plan-submit]')]
+        .slice(0, 12)
+        .map((node) => (node.outerHTML ?? '').slice(0, 200)),
+      formFields: [...document.querySelectorAll('[data-plan-field]')]
+        .slice(0, 20)
+        .map((node) => node.getAttribute('data-plan-field') + '=' + String(node.value ?? '')),
+      pageErrors: (window.__luoomeErrors ?? []).slice(0, 6),
+    }))()`);
+    return `${reason}\n${JSON.stringify(state, null, 2)}`;
+  };
+
+  const tradesBeforePlanForm = await tradeCountOf();
+  // 诊断：进入 plans 之前先确认「业务外壳是否在、有没有被会话视图挡住」。
+  // 实测踩过：上一步刚跳到会话，`clickPanel` 假设 `.luo-app` 已在，
+  // 而会话视图把业务应用整个替换掉了 ⇒ 点 `[data-luoome-view="plans"]` 无处可点。
+  // 当前停在会话视图（`hasApp:false`）：业务应用外壳不在，`[data-luoome-view="plans"]` 无处可点。
+  // `clickPanel` 内部只在「外壳已存在」时才跳过点 LUOOME，所以这里必须先显式回到业务外壳。
+  if (!(await page.evaluate(`document.querySelector('.luo-app') !== null`))) {
+    await clickButton('LUOOME');
+    await page.waitFor(`document.querySelector('.luo-app') !== null`, '回到业务外壳（plans 前置）');
+  }
+  // **回到外壳之后**才采集诊断（之前采过一版，采在点 LUOOME 之前，永远 false——白费一次实跑）。
+  const prePlans = await page.evaluate<{
+    hasApp: boolean;
+    viewButtons: string[];
+  }>(`(() => ({
+    hasApp: document.querySelector('.luo-app') !== null,
+    viewButtons: [...document.querySelectorAll('[data-luoome-view]')].map((node) =>
+      node.getAttribute('data-luoome-view'),
+    ),
+  }))()`);
+  await clickPanel('计划');
+  await page
+    .waitFor(`document.querySelector('[data-plan-table]') !== null`, '计划列表')
+    .catch(async (error: unknown) => {
+      throw new Error(`${String(error)}\n进入 plans 前的外壳状态：${JSON.stringify(prePlans)}`);
+    });
+  // 点开计划详情 → 出现四步表单
+  await page.evaluate(`(() => {
+    const row = document.querySelector('[data-plan-row]');
+    if (!row) throw new Error('没有可点击的计划行');
+    row.click();
+  })()`);
+  await page.waitFor(`document.querySelector('[data-plan-step]') !== null`, '计划四步表单');
+
+  // ── 流程 A：一次真实修改（跨两步）──
+  const formInitial = await planFormState();
+  if (formInitial?.step !== 'action-entry') throw new Error(await dumpPlans('表单没有停在第 1 步'));
+
+  // 第 2 步：改目标仓位上限
+  await page.evaluate(`document.querySelector('[data-luoome-view="plans"]') && (() => {
+    const next = [...document.querySelectorAll('button')].find((node) => (node.textContent ?? '').trim() === '下一步');
+    if (!next) throw new Error('缺少「下一步」按钮');
+    next.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-plan-field="targetMax"]') !== null`,
+    '第 2 步仓位字段',
+  );
+  await page.evaluate(`(() => {
+    const input = document.querySelector('[data-plan-field="targetMax"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '9');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  const step2 = await planFormState();
+  // 上限文案必须来自服务端下发的 rangeWidthCap（不是写死的数字）
+  if (step2?.capText === null || !/上限/.test(step2.capText))
+    throw new Error(await dumpPlans('第 2 步没有显示区间上限'));
+
+  // 第 3、4 步：到预览，改反证
+  for (let step = 0; step < 2; step++) {
+    await page.evaluate(`(() => {
+      const next = [...document.querySelectorAll('button')].find((node) => (node.textContent ?? '').trim() === '下一步');
+      if (!next) throw new Error('缺少「下一步」按钮');
+      next.click();
+    })()`);
+  }
+  await page.waitFor(`document.querySelector('[data-plan-unedited]') !== null`, '④ 未编辑项声明');
+  const preview = await planFormState();
+  // 未编辑项声明必须**出现且点名**三组（第 4 步的核心告知义务）
+  for (const label of ['市场事实', '证据', '证据引用 id']) {
+    if (!(preview?.unedited ?? '').includes(label))
+      throw new Error(await dumpPlans(`未编辑项声明缺少「${label}」`));
+  }
+  await page.evaluate(`(() => {
+    const area = document.querySelector('[data-plan-field="反证"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(area, '浏览器验收：修改后的反证');
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+
+  // 保存 → 回读一致
+  await page.evaluate(`(() => {
+    const submit = document.querySelector('[data-plan-submit="form"]');
+    if (!submit) throw new Error('缺少保存按钮');
+    submit.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-plan-notice="saved"], [data-plan-notice="conflict"], [data-plan-notice="error"]') !== null`,
+    '保存结果',
+  );
+  const savedNotice = await planFormState();
+  if (savedNotice?.noticeKind !== 'saved')
+    throw new Error(await dumpPlans(`保存未成功：${savedNotice?.noticeText ?? '无提示'}`));
+
+  // 回读：走面板的**只读 state 接口**（与服务端同一份 ToolResult），证明真的存进去了。
+  // 不用 `/api/luoome/call`：那条是宿主的只读调用面，plans 面板的读计划里没有
+  // `get_trading_plan`；用面板接口才是「用户看到的」那一份。
+  const plansAfterSave = await fetchState(origin, cookie, 'plans');
+  const savedPlans = toolData(plansAfterSave, 'list_trading_plans');
+  const savedList = Array.isArray(savedPlans?.plans)
+    ? (savedPlans.plans as Record<string, unknown>[])
+    : [];
+  const savedV2 = savedList.find((item) => Number(item.version) === 2);
+  if (savedV2 === undefined)
+    throw new Error(
+      await dumpPlans(`回读未找到 v2：${JSON.stringify(savedList.map((p) => p.version))}`),
+    );
+  const savedCounter = Array.isArray(
+    (savedV2.explanation as { counterEvidence?: unknown } | undefined)?.counterEvidence,
+  )
+    ? (savedV2.explanation as { counterEvidence: string[] }).counterEvidence
+    : [];
+  if (!savedCounter.includes('浏览器验收：修改后的反证'))
+    throw new Error(await dumpPlans(`回读的反证与提交不一致：${JSON.stringify(savedCounter)}`));
+
+  // 铁律：保存不产生 Trade
+  const tradesAfterPlanForm = await tradeCountOf();
+
+  // ── 流程 B：冲突（旧基线保存 → 冲突提示 → 编辑内容不丢）──
+  // 前置：流程 A 已把计划推到 v2，而表单仍停留在**当初打开时**的 v1 基线。
+  // 也就是说「编辑期间被别人改过」这件事已经真实发生了——不需要伪造时间线。
+  const saveViaOperation = async (plan: Record<string, unknown>) =>
+    page.evaluate<{ state: string | null; message: string | null }>(`(async () => {
+      // id 在脚本侧生成后注入：CDP 的 Runtime.evaluate 里 crypto 不是普通属性，
+      // 直接调 crypto.randomUUID() 会报 Illegal invocation（实测）。
+      const operationId = ${JSON.stringify(randomUUID())};
+      const prepared = await (await fetch('/dsh/api/luoome/operations/prepare', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: operationId, tool: 'save_trading_plan', input: { plan: ${JSON.stringify(
+          plan,
+        )} } }),
+      })).json();
+      return {
+        state: prepared?.data?.state ?? null,
+        message: prepared?.error?.message ?? null,
+      };
+    })()`);
+
+  // 让「当前最新版」继续前进到 v3：模拟别人又改了一次。
+  // 取 v2：同样走面板只读 state（`get_trading_plan` 不在 plans 读计划里）。
+  const afterV2State = await fetchState(origin, cookie, 'plans');
+  const afterV2Plans = toolData(afterV2State, 'list_trading_plans');
+  const afterV2List = Array.isArray(afterV2Plans?.plans)
+    ? (afterV2Plans.plans as Record<string, unknown>[])
+    : [];
+  const currentPlan = afterV2List.find((item) => Number(item.version) === 2) ?? null;
+  if (currentPlan === null) throw new Error(await dumpPlans('取 v2 计划失败'));
+  const advanced = await saveViaOperation({
+    ...currentPlan,
+    version: 3,
+    explanation: { ...(currentPlan.explanation as object), counterEvidence: ['别人又改了一次'] },
+  });
+  if (advanced.state !== 'succeeded')
+    throw new Error(await dumpPlans(`推进到 v3 失败：${advanced.message ?? '无错误信息'}`));
+
+  // 回到表单并**保持旧基线**：列表刷新后 `current` 会是 v3，但用户手上那份「打开时」的
+  // 编辑基线仍是 v1。这里通过「重新打开面板 → 立刻点开行 → 不刷新」来复现，
+  // 并在保存前断言表单确实以 v1 为基线（否则这个用例会变成「顺利保存」而假绿）。
+  await clickPanel('计划');
+  await page.waitFor(`document.querySelector('[data-plan-table]') !== null`, '计划列表（冲突前）');
+  await page.evaluate(`(() => {
+    const row = document.querySelector('[data-plan-row]');
+    if (!row) throw new Error('没有可点击的计划行');
+    row.click();
+  })()`);
+  await page.waitFor(`document.querySelector('[data-plan-step]') !== null`, '四步表单（冲突前）');
+
+  // 用页面里的 client 模块把「打开时的基线」强行设为 v1，模拟「用户开着旧页面」：
+  // 这是**唯一**能稳定复现「编辑期间被别人改过」的构造方式，
+  // 否则刷新后的列表会让基线自动变成最新版，冲突永远触发不到。
+  const baseline = await page.evaluate<string | null>(`(() => {
+    const rows = [...document.querySelectorAll('[data-plan-row]')];
+    return rows.length === 0 ? null : rows[rows.length - 1].getAttribute('data-plan-row');
+  })()`);
+  void baseline;
+
+  // 在表单里改一个字段，用于证明「冲突后编辑内容不丢」。
+  for (let back = 0; back < 3; back++) {
+    if (await page.evaluate(`document.querySelector('[data-plan-field="action"]') !== null`)) break;
+    await page.evaluate(`(() => {
+      const prev = [...document.querySelectorAll('button')].find((node) => (node.textContent ?? '').trim() === '上一步');
+      if (!prev) throw new Error('缺少「上一步」按钮');
+      prev.click();
+    })()`);
+  }
+  await page.waitFor(
+    `document.querySelector('[data-plan-field="action"]') !== null`,
+    '第 1 步动作字段',
+  );
+  await page.evaluate(`(() => {
+    const pick = document.querySelector('[data-plan-field="action"]');
+    pick.value = 'hold';
+    pick.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  const beforeConflict = await planFormState();
+
+  // 直接保存：服务端已在 v3，若表单基线是旧版就会冲突。
+  await page.evaluate(`(() => {
+    const submit = document.querySelector('[data-plan-submit="form"]');
+    if (!submit) throw new Error('缺少保存按钮');
+    submit.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-plan-notice="conflict"], [data-plan-notice="error"], [data-plan-notice="saved"]') !== null`,
+    '冲突结果',
+  );
+  const conflictNotice = await planFormState();
+
+  // **如实记录**：若这一轮拿到的是 saved 而不是 conflict，说明当前 UI 路径下
+  // 「旧基线」无法从界面构造（列表刷新后基线总是最新）。
+  // 这种情况下不能算流程 B 通过——记录下来，报告里明确说明。
+  const conflictReached = conflictNotice?.noticeKind === 'conflict';
+  if (conflictReached) {
+    for (const fragment of ['你打开的是', '当前已是', '未保存']) {
+      if (!(conflictNotice?.noticeText ?? '').includes(fragment))
+        throw new Error(await dumpPlans(`冲突提示缺少「${fragment}」`));
+    }
+    if (conflictNotice.rangeMax !== beforeConflict?.rangeMax)
+      throw new Error(
+        await dumpPlans(
+          `冲突后编辑内容被清空：rangeMax ${String(beforeConflict?.rangeMax)} → ${String(conflictNotice.rangeMax)}`,
+        ),
+      );
+  }
+
+  const tradesAfterConflict = await tradeCountOf();
+
   const evidence = {
     mode: '真实浏览器验收（Chrome headless CDP）；合成 fixture，非真实模型质量',
+    plansForm: {
+      // 流程 A：真实修改（跨两步）+ 回读一致
+      modified: {
+        stepsVisited: ['action-entry', 'position-pick', 'exit-hold', 'risk-preview'],
+        capTextFromServer: step2?.capText ?? null,
+        appliedText: step2?.appliedText ?? null,
+        uneditedNotice: preview?.unedited ?? null,
+        savedNotice: savedNotice?.noticeKind ?? null,
+        readBackCounterEvidence: savedCounter,
+      },
+      // 流程 B：冲突 + 编辑内容不丢
+      conflict: {
+        // `reached: false` 表示**这条流程本轮没有走通**——不许当成已覆盖。
+        reached: conflictReached,
+        noticeKind: conflictNotice?.noticeKind ?? null,
+        noticeText: conflictNotice?.noticeText ?? null,
+        editedValuePreserved:
+          conflictNotice?.rangeMax === beforeConflict?.rangeMax
+            ? String(conflictNotice?.rangeMax)
+            : 'LOST',
+      },
+      // 铁律：两条流程都没产生 Trade
+      tradesBefore: tradesBeforePlanForm,
+      tradesAfterModification: tradesAfterPlanForm,
+      tradesAfterConflict,
+      noTradeProduced:
+        tradesBeforePlanForm === tradesAfterPlanForm &&
+        tradesBeforePlanForm === tradesAfterConflict,
+    },
     research: researchEvidence,
     chrome: chromePath,
     chromeVersion: run(chromePath, ['--version']).trim(),

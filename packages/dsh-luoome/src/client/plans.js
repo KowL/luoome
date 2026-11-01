@@ -440,7 +440,14 @@ const PlanRow = ({ entry, selected, onSelect }) =>
   );
 
 export function PlansPanel() {
-  const { results, loading, panelError, loadedAt, health: healthState } = usePanelState('plans');
+  const {
+    results,
+    loading,
+    panelError,
+    loadedAt,
+    health: healthState,
+    refresh,
+  } = usePanelState('plans');
   const listed = dataOf(results, 'list_trading_plans');
   const [selected, setSelected] = useState(null);
   // 打开详情时记下当时的版本：保存后用它判断「我编辑期间是否被替换」（A-1 硬要求 2）。
@@ -460,6 +467,9 @@ export function PlansPanel() {
     persistPlan({ plan, expectedRevision })
       .then((saved) => {
         const clash = replacedWhileEditing({ openedVersionId, saved });
+        // 保存成功必须刷新列表：否则 `current` 仍是旧版本，
+        // 下一次保存会基于**陈旧基线**，冲突提示永远不出现（浏览器验收实测踩过）。
+        refresh();
         setNotice(
           clash === null
             ? { kind: 'saved', text: `已保存 v${String(saved.version ?? '?')}` }
@@ -501,7 +511,14 @@ export function PlansPanel() {
   const current = plans.find((plan) => (plan.id ?? plan.planId) === selected) ?? null;
 
   useEffect(() => {
-    if (current !== null) setOpenedVersionId(current.versionId ?? current.id ?? null);
+    // `TradingPlanReadSchema` **不含 `versionId`**（它只是 `id` + `version` 的派生值），
+    // 所以不能指望 `current.versionId`。按 core 的同一口径自己拼：
+    // `tradingPlanVersionId = \`${id}:v${version}\``（`trading-plan.ts:966`）。
+    if (current !== null)
+      setOpenedVersionId(
+        current.versionId ??
+          (current.id === undefined ? null : `${current.id}:v${String(current.version ?? 1)}`),
+      );
   }, [selected]);
 
   return h(
@@ -607,7 +624,14 @@ export function PlansPanel() {
             plan: current,
             busy: saving,
             onSave: (editable) =>
-              saveDraft({ ...editable, version: (current.version ?? 1) + 1 }, current.versionId),
+              saveDraft(
+                { ...editable, version: (current.version ?? 1) + 1 },
+                // 基线同样按派生口径给出（读 schema 没有 versionId 字段）。
+                current.versionId ??
+                  (current.id === undefined
+                    ? undefined
+                    : `${current.id}:v${String(current.version ?? 1)}`),
+              ),
           }),
           h('span', { className: 'luo-fine' }, '保存不会自动下单；计划只是记录与约束。'),
           h(
