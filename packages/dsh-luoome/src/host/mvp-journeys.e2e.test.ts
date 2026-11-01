@@ -341,7 +341,7 @@ const createJourneyFixture = async (
     context: () => domain,
     profile: 'mvp-journeys',
     principalForSession: () => principal,
-    automationsEnabled: false,
+    automationTier: 'off',
   });
 
   const approvals: string[] = [];

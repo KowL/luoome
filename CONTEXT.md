@@ -195,8 +195,9 @@ StrategySignal，不临时运行全市场 Strategy。
 ### 决策与复盘（DecisionReview）
 
 回答“这个账户面对哪份当时依据，用户实际记录了什么，后来有哪些可核对事实”。记录以
-`accountId + subject.kind + subject.id` 唯一，来源限定为 Advice、确切的 TradingPlan 版本或
-WatchTrigger。首次保存冻结来源快照；后续内容以不可变 DecisionReviewRevision 追加，保留修订时间、
+`accountId + subject.kind + subject.id` 唯一，来源限定为 Advice、确切的 TradingPlan 版本、
+WatchTrigger，或**账户级日复盘**（`account-review`，`id` 为 `<accountId>:<YYYY-MM-DD>`，一天一条；
+由盘后草稿经用户确认后写入，`context.source.sourceDraftId` 指向来源草稿）。首次保存冻结来源快照；后续内容以不可变 DecisionReviewRevision 追加，保留修订时间、
 说明和显式成交关联。来源删除后仍可回看冻结快照。来源发生时间与用户记录时间是两种独立查询口径。
 内容更新只替换显式给出的顶层字段，省略字段保留 expectedRevision 对应原值；可空字段只有显式
 null 才清除，成交关联用显式空数组解除。新建时省略字段为空数组/null，持久修订始终保存完整内容。

@@ -15,6 +15,7 @@ import { type AdviceOutcomeAsker, adviceOutcomeAskerOf } from './advice-outcome-
 import { AUTOMATION_CATALOG_TOOL, createAutomationCatalog } from './automation-catalog.js';
 import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
 import { createScheduledOperationInvoker } from './operations.js';
+import { type AutomationTier, tierAllowsDispatch } from './production-config.js';
 import { createScheduleDispatcher } from './schedule-dispatcher.js';
 import { toolResultJsonSchema } from './tools.js';
 
@@ -84,7 +85,8 @@ export const createDshOperationHost = (
   options: Omit<Parameters<typeof createPluginOperationService>[0], 'validateGrant'> & {
     readonly profile: string;
     readonly principalForSession: (sessionId: string) => PluginPrincipal | null;
-    readonly automationsEnabled?: boolean;
+    /** 自动化档位（REQ-M4-06）。旧 `automationsEnabled` 布尔由调用方先迁移成档位。 */
+    readonly automationTier?: AutomationTier;
     /**
      * 用户回填提问器；缺省用宿主的 `ctx.userQuestions`（每次提问时解析）。
      * 宿主确实没有该接缝时提问器返回 `not_configured`，写入保持 `origin=model`。
@@ -109,7 +111,7 @@ export const createDshOperationHost = (
   const askAdviceOutcome = options.askAdviceOutcome ?? adviceOutcomeAskerOf(ctx);
   const tickets = new Map<ToolExecutionToken, Ticket>();
   const lifetime = new AbortController();
-  const automationsEnabled = options.automationsEnabled === true;
+  const automationTier: AutomationTier = options.automationTier ?? 'off';
   const automationCatalog = createAutomationCatalog({
     ...options,
     tasks: () => ctx.schedule.catalog(),
@@ -206,7 +208,7 @@ export const createDshOperationHost = (
         if (execution.name === SCHEDULED_OPERATION_TOOL) {
           const parsed = scheduledInput.safeParse(execution.arguments);
           if (
-            !automationsEnabled ||
+            !tierAllowsDispatch(automationTier) ||
             !parsed.success ||
             !(await identity.scheduled(
               { ...execution, signal: AbortSignal.any([execution.signal, lifetime.signal]) },
@@ -378,7 +380,7 @@ export const createDshOperationHost = (
               };
             return {
               ok: true,
-              data: { ...(await automationCatalog(principal)), automationsEnabled },
+              data: { ...(await automationCatalog(principal)), automationTier },
             };
           },
         }),
@@ -478,7 +480,12 @@ export const createDshOperationHost = (
         execute: async (input, execution) => {
           const ticket = tickets.get(execution.token);
           tickets.delete(execution.token);
-          if (!ticket || !('scheduled' in ticket) || disposed || !automationsEnabled)
+          if (
+            !ticket ||
+            !('scheduled' in ticket) ||
+            disposed ||
+            !tierAllowsDispatch(automationTier)
+          )
             return {
               ok: false,
               error: { kind: 'permission_denied', required: 'enabled scheduled authority' },
@@ -490,14 +497,14 @@ export const createDshOperationHost = (
         },
       }),
     );
-    if (automationsEnabled && options.policies.some((policy) => policy.scheduled)) {
+    if (tierAllowsDispatch(automationTier) && options.policies.some((policy) => policy.scheduled)) {
       const dispatcher = createScheduleDispatcher(ctx, {
         service,
         repository: options.repository,
         identity,
         policies: options.policies,
         principalForSession: options.principalForSession,
-        automationsEnabled: true,
+        automationTier: 'granted',
         now: options.now,
       });
       removers.push(dispatcher.dispose);

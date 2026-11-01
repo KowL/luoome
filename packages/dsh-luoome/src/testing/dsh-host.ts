@@ -33,6 +33,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { z } from 'zod';
 import { createDshOperationHost } from '../host/dsh-authority.js';
 import { dshScheduleHash } from '../host/dsh-identity.js';
+import type { AutomationTier } from '../host/production-config.js';
 
 export type Call = { name: string; input: unknown };
 class ScriptedModel extends LlmAdapter {
@@ -93,7 +94,7 @@ export const createDshTestHost = async (
   root: string,
   db: { repos: RepositoryRegistry; close(): void },
   options: {
-    automationsEnabled?: boolean;
+    automationTier?: AutomationTier;
     policy?: 'ask' | 'never';
     resume?: boolean;
     withoutApproval?: boolean;
@@ -191,7 +192,7 @@ export const createDshTestHost = async (
     context: () => domain,
     profile: 'validation',
     principalForSession: () => principal,
-    automationsEnabled: options.automationsEnabled ?? false,
+    automationTier: options.automationTier ?? 'off',
   });
   const results: Array<{ name: string; value: unknown; isError: boolean; diagnostic: string }> = [];
   const approvals: ApprovalOutcome[] = [];

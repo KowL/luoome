@@ -134,7 +134,7 @@ export async function apply(ctx: Context) {
     profile: 'luoome-acceptance',
     principalForOwner: () => principal,
     principalForSession: () => principal,
-    automationsEnabled: false,
+    automationTier: 'off',
     read: createReadSurface({
       config: { allowlist: ['get_advice', 'get_decision_review_context'] },
       tools: toolRegistry.all(),

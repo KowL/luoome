@@ -11,7 +11,7 @@ describe('native batch policies', () => {
     const env = { LUOOME_OWNER_USER_ID: 'owner', LUOOME_OWNER_ACCOUNT_ID: 'account' };
     expect(resolveProductionConfigFromEnv(env)).toMatchObject({
       batchEnabled: false,
-      automationsEnabled: false,
+      automationTier: 'off',
     });
     expect(() =>
       resolveProductionConfigFromEnv({ ...env, LUOOME_AUTOMATIONS_ENABLED: 'true' }),
@@ -22,7 +22,7 @@ describe('native batch policies', () => {
         LUOOME_BATCH_ENABLED: 'true',
         LUOOME_AUTOMATIONS_ENABLED: 'true',
       }),
-    ).toMatchObject({ batchEnabled: true, automationsEnabled: true });
+    ).toMatchObject({ batchEnabled: true, automationTier: 'granted' });
     // 不写死 policy 总数：集合成员由 `production.test.ts` 的精确名单断言，
     // 这里只断言「批处理开关恰好追加 5 条 scheduled policy」。
     const base = createProductionOperationPolicies();

@@ -14,6 +14,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { dshScheduleHash } from './dsh-identity.js';
 import { createMarketSurface } from './market-surface.js';
+import type { AutomationTier } from './production-config.js';
 import { createReadSurface } from './read-surface.js';
 import { createResearchReadHandler } from './research.js';
 import { createResearchContinuityReader, scheduledResearchOperationId } from './research-status.js';
@@ -93,7 +94,7 @@ const setup = async (admit: () => Response | null = () => null) => {
     repository: ctx.repos.pluginAuthority,
     profile: 'research-test',
     policyVersion: 1,
-    automationsEnabled: false,
+    automationTier: 'off',
     dailyCycleEnabled: false,
     principalForSession: () => principal,
     now: () => now.getTime(),
@@ -236,7 +237,7 @@ describe('fixed research read routes', () => {
 describe('continuous research status', () => {
   const configured = async (
     options: {
-      automationsEnabled?: boolean;
+      automationTier?: AutomationTier;
       grant?: boolean;
       receipt?: 'executing' | 'unknown' | 'succeeded';
       outcome?: string;
@@ -403,7 +404,7 @@ describe('continuous research status', () => {
       repository: ctx.repos.pluginAuthority,
       profile: 'research-test',
       policyVersion: 1,
-      automationsEnabled: options.automationsEnabled ?? true,
+      automationTier: options.automationTier ?? 'granted',
       dailyCycleEnabled: true,
       tasks: async () => tasks,
       principalForSession: (sessionId) => (sessionId === task.sessionId ? principal : null),
@@ -418,7 +419,7 @@ describe('continuous research status', () => {
   };
 
   it('never treats enabled strategy schedule as proof of a running backend', async () => {
-    const disabled = await configured({ automationsEnabled: false, receipt: 'succeeded' });
+    const disabled = await configured({ automationTier: 'off', receipt: 'succeeded' });
     expect((await disabled.read()).status).toBe('disabled');
     const missing = await configured({ grant: false });
     expect((await missing.read()).status).toBe('blocked');

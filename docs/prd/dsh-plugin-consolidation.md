@@ -1065,6 +1065,23 @@ v2 只有 M4-01 的「告警规则编辑迁移」，没有「从触发到改规�
 
 #### REQ-M4-06 自动化三档
 
+**需求（v3.5 补，原稿只写了验收标准、未定义三档）**：
+
+自动化档位是**一个状态**（`automationTier`），取代原先的二值 `automationsEnabled`；
+旧值 `false → off`、`true → granted`。三档：
+
+| 档位 | 允许什么 | 不允许什么 |
+|---|---|---|
+| `off`（关闭） | 不自动派发；设置页只显示日程与下次到期 | 任何自动执行 |
+| `notify`（仅提醒） | 自动派发**只产出草稿 / 提醒**，**不写业务数据** | 写 Advice / DecisionReview / Trade |
+| `granted`（授权执行） | 凭 `PluginAutomationGrant` 执行写入 | 绕过 grant；`advice≠trade` 与 trade 不暴露两条红线不变 |
+
+**与 M4-11 的接口**：收盘档**只负责到「产出复盘草稿」**；「确认写入 DecisionReview」永远是用户动作
+（或 `granted` 档下的显式授权）—— 即使档位开到最高，草稿与写入之间仍保留人工确认。
+
+**「5 行」的口径**：`5` 是叙述用词，实际渲染的是 `automation-catalog` 返回的全部 `scheduled` policy
+（数量由 registry 决定）；断言按实际条数，不硬编码 5。
+
 **验收标准**：首启向导完成后设置页渲染 5 行 × 3 字段（下次到期 / `scheduleHash` / grant 版本）且值来自真实调度；
 关→开→关产生 3 条 Operation 回执可查；非交易日返回 `skipped` 且事实表零写入。
 「3 分钟」记为可用性目标，**不进断言**。

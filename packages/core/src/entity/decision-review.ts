@@ -67,6 +67,39 @@ export const DecisionReviewContextSchema = z
   .strict();
 export type DecisionReviewContext = z.infer<typeof DecisionReviewContextSchema>;
 
+/**
+ * 从复盘里读「来源草稿 id」（M4-11）。
+ *
+ * ## 为什么需要这个函数，而不是各处读 `context.source.sourceDraftId`
+ *
+ * `context.source` 是 `z.record(z.string(), z.unknown())` —— **类型上无法保证**该键存在、
+ * 也无法保证它是字符串。若各调用点自己 `review.context.source.sourceDraftId`，
+ * 将来存储形状一变就会漏改。
+ *
+ * 所以：**存储形状只在这里被解释一次**，所有读取点都调它。
+ * 返回 `undefined` = 这条复盘不是从草稿确认来的（历史复盘、直接写入等）。
+ */
+export const reviewSourceDraftId = (
+  review:
+    | {
+        readonly context?: { readonly source?: Readonly<Record<string, unknown>> } | null;
+      }
+    | null
+    | undefined,
+): string | undefined => {
+  const value = review?.context?.source?.sourceDraftId;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+};
+
+/** 写入侧：把来源草稿 id 放进 `context.source`（唯一写入点）。 */
+export const decisionReviewContextSource = (
+  base: Readonly<Record<string, unknown>> | undefined,
+  sourceDraftId: string | undefined,
+): Record<string, unknown> => ({
+  ...(base ?? {}),
+  ...(sourceDraftId === undefined ? {} : { sourceDraftId }),
+});
+
 export const DecisionReviewSchema = z
   .object({
     id: z.string().min(1),

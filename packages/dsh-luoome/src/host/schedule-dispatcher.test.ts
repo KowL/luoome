@@ -8,9 +8,10 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 import { scheduledOperationFixture } from '../testing/dsh-host.js';
 import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
+import type { AutomationTier } from './production-config.js';
 import { createScheduleDispatcher } from './schedule-dispatcher.js';
 
-const setup = async (options: { automationsEnabled?: boolean } = {}) => {
+const setup = async (options: { automationTier?: AutomationTier } = {}) => {
   const domain = await buildTestContext();
   const principal = { userId: 'owner', accountId: domain.user.defaultAccountId };
   const now = Date.now();
@@ -88,7 +89,7 @@ const setup = async (options: { automationsEnabled?: boolean } = {}) => {
     identity,
     policies: [policy],
     principalForSession: () => principal,
-    automationsEnabled: options.automationsEnabled ?? true,
+    automationTier: options.automationTier ?? 'granted',
     now: () => now,
   });
   return { domain, principal, task, tasks, listeners, grant, dispatcher, service };
@@ -128,7 +129,7 @@ describe('schedule dispatcher', () => {
           ),
           policies: [scheduledOperationFixture().policy],
           principalForSession: () => fixture.principal,
-          automationsEnabled: true,
+          automationTier: 'granted',
           now: Date.now,
         },
       );
@@ -144,7 +145,7 @@ describe('schedule dispatcher', () => {
   });
 
   it('does not execute when automations are disabled', async () => {
-    const fixture = await setup({ automationsEnabled: false });
+    const fixture = await setup({ automationTier: 'off' });
     try {
       const before = (await fixture.domain.repos.account.findById(fixture.principal.accountId))
         ?.name;

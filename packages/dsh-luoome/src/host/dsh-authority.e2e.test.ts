@@ -187,7 +187,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
   it('runs the real weekly batch only for its approved account and delivered occurrence', async () => {
     const clock = fixtureClock();
     const fixture = await start(await rootDir(), {
-      automationsEnabled: true,
+      automationTier: 'granted',
       policies: createBatchOperationPolicies(),
       clock: () => new Date('2026-10-25T02:00:00Z'),
     });
@@ -241,7 +241,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
   });
   it('executes a delivered occurrence in the host without any model tool call', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     try {
       const { handle, model, results, domain, principal } = fixture;
       const task = await fixture.ctx.schedule.create(handle.agent.id, {
@@ -360,7 +360,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
 
   it('runs only the delivered occurrence, deduplicates it, and rejects a later human replay', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     try {
       const { ctx, handle, principal, grant, answer, model, results, domain, run } = fixture;
       const task = await ctx.schedule.create(handle.agent.id, {
@@ -475,7 +475,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
 
   it('rejects revoked grants, changed task definitions and forged schedule identity', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     try {
       fixture.answer('allowed-once');
       const input = { accountId: fixture.principal.accountId, label: 'denied' };
@@ -527,7 +527,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
 
   it('resolves two tasks sharing one real reminder message without conflating their occurrences', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     try {
       fixture.answer('allowed-once');
       const tasks = [];
@@ -569,7 +569,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
 
   it('waits for the real schedule delivery acknowledgment before granting execution', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     let release = () => {};
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
@@ -632,7 +632,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
   it('preserves grants, schedule history and occurrence deduplication across real service and database restart', async () => {
     const clock = fixtureClock();
     const root = await rootDir();
-    let fixture = await start(root, { automationsEnabled: true });
+    let fixture = await start(root, { automationTier: 'granted' });
     try {
       fixture.answer('allowed-once');
       const task = await fixture.ctx.schedule.create(fixture.handle.agent.id, {
@@ -651,7 +651,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
       await fixture.handle.agent.whenIdle();
       await fixture.ctx.sessions.flush(fixture.handle.agent.session);
       await fixture.close();
-      fixture = await start(root, { automationsEnabled: true, resume: true });
+      fixture = await start(root, { automationTier: 'granted', resume: true });
       expect(
         (await fixture.db.repos.pluginAuthority.findGrant(grant.id, fixture.principal.userId))
           ?.enabled,
@@ -741,7 +741,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
 
   it('refuses delegated children, cross-session scheduled calls and calls with no Agent', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     const child = await fixture.ctx.agents.create({
       sessionId: SessionId('child-fixture'),
       parentAgent: fixture.handle.agent,
@@ -817,7 +817,7 @@ describe('DSH personal execution and schedule integration with durable facts', (
   // scope 是 dsh-scope 的私有 symbol，传 agent.ctx 会静默退化成全局视图 → 「子 agent 看不到 X」会假绿。
   // 因此本用例只做行为等价断言。
   it('T24-b 层③：子 agent 用不了父写工具 —— 拒绝来自执行期权威，不是「工具不存在」', async () => {
-    const fixture = await start(await rootDir(), { automationsEnabled: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted' });
     const child = await fixture.ctx.agents.create({
       sessionId: SessionId('reconciliation-child'),
       parentAgent: fixture.handle.agent,

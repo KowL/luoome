@@ -3,6 +3,7 @@ import type { ScheduleCatalogEntry } from '@deepseek-ai/dsh-schedule';
 import type { PluginAuthorityRepository } from '@luoome/core';
 import type { ConfirmablePluginTool, createPluginOperationService } from '@luoome/tools';
 import type { createDshIdentity } from './dsh-identity.js';
+import { type AutomationTier, tierAllowsDispatch } from './production-config.js';
 
 const DELIVERY_MAX_AGE_MS = 600_000;
 
@@ -18,7 +19,7 @@ export const createScheduleDispatcher = (
     readonly principalForSession: (
       sessionId: string,
     ) => { userId: string; accountId: string } | null;
-    readonly automationsEnabled: boolean;
+    readonly automationTier: AutomationTier;
     readonly now: () => number;
   },
 ) => {
@@ -80,7 +81,7 @@ export const createScheduleDispatcher = (
 
   const reconcile = (): Promise<void> => {
     chain = chain.then(async () => {
-      if (disposed || !options.automationsEnabled) return;
+      if (disposed || !tierAllowsDispatch(options.automationTier)) return;
       const tasks = await ctx.schedule.catalog();
       for (const task of tasks) {
         const delivery = task.lastDelivery;

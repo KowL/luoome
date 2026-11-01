@@ -14,6 +14,7 @@ import {
 } from '@luoome/core';
 import { type PluginPrincipal, pluginInputHash, pluginInputJson } from '@luoome/tools';
 import { dshScheduleHash } from './dsh-identity.js';
+import { type AutomationTier, tierAllowsDispatch } from './production-config.js';
 import type { ReadSurface } from './read-surface.js';
 
 export interface ResearchTaskStatus {
@@ -45,7 +46,7 @@ export interface ResearchContinuity {
     | 'stale'
     | 'unknown';
   readonly reasons: readonly string[];
-  readonly automationsEnabled: boolean;
+  readonly automationTier: AutomationTier;
   readonly schedule: ToolResult<unknown>;
   readonly tasks: readonly ResearchTaskStatus[];
   readonly taskSource: 'available' | 'unavailable';
@@ -61,7 +62,7 @@ export interface ResearchContinuityOptions {
   readonly repository: PluginAuthorityRepository;
   readonly profile: string;
   readonly policyVersion: number;
-  readonly automationsEnabled: boolean;
+  readonly automationTier: AutomationTier;
   readonly dailyCycleEnabled: boolean;
   readonly tasks?: () => Promise<readonly ScheduleCatalogEntry[]>;
   readonly principalForSession: (sessionId: string) => PluginPrincipal | null;
@@ -224,7 +225,7 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
         taskSource = 'unavailable';
       }
     }
-    const enabled = options.automationsEnabled && options.dailyCycleEnabled;
+    const enabled = tierAllowsDispatch(options.automationTier) && options.dailyCycleEnabled;
     const active = tasks.filter((task) => task.status === 'active' && task.grantStatus === 'valid');
     const receipts = active
       .flatMap((task) => (task.operation === null ? [] : [task.operation]))
@@ -332,7 +333,7 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
     return {
       status,
       reasons,
-      automationsEnabled: enabled,
+      automationTier: enabled ? 'granted' : 'off',
       schedule: scheduleResult,
       tasks,
       taskSource,

@@ -188,15 +188,35 @@ export const productionConfigSchema = z
     read: ReadSchema.optional(),
     market: MarketSchema.optional(),
     batchEnabled: z.boolean().optional(),
+    /**
+     * 自动化档位（REQ-M4-06）。
+     *
+     * - `off`：不自动派发
+     * - `notify`：派发，但**只产草稿/提醒**，不写 Advice / DecisionReview / Trade
+     * - `granted`：凭 `PluginAutomationGrant` 执行写入
+     */
+    automationTier: z.enum(['off', 'notify', 'granted']).optional(),
+    /**
+     * @deprecated 已被 `automationTier` 取代。仍接受只是为了**读旧配置**：
+     * `false → off`、`true → granted`（见 `resolveAutomationTier`）。
+     * 同时给出两者时以 `automationTier` 为准——**不保留两个真相源**。
+     */
     automationsEnabled: z.boolean().optional(),
     /** 透传给 adapters *FromEnv 工厂（行情/研究/通知等），不在此复制领域规则。 */
     env: z.record(z.string(), z.string().optional()).optional(),
   })
   .strict()
-  .refine((config) => !config.automationsEnabled || config.batchEnabled === true, {
-    path: ['automationsEnabled'],
-    message: 'Automations require explicit batchEnabled opt-in',
-  });
+  .refine(
+    (config) =>
+      (config.automationTier === undefined || config.automationTier === 'off') &&
+      config.automationsEnabled !== true
+        ? true
+        : config.batchEnabled === true,
+    {
+      path: ['automationTier'],
+      message: 'Automations beyond `off` require explicit batchEnabled opt-in',
+    },
+  );
 
 export type ProductionConfigInput = z.input<typeof productionConfigSchema>;
 
@@ -204,6 +224,37 @@ export interface ProductionOwner {
   readonly userId: string;
   readonly accountId: string;
 }
+
+/** 自动化三档（REQ-M4-06）。 */
+export type AutomationTier = 'off' | 'notify' | 'granted';
+
+/**
+ * 解析自动化档位，**含旧配置迁移**。
+ *
+ * 旧字段 `automationsEnabled: boolean` 已被 `automationTier` 取代：
+ * `false → 'off'`、`true → 'granted'`（旧语义就是「启用授权执行」）。
+ *
+ * 两者同时给出时**以 `automationTier` 为准**——不保留两个真相源，
+ * 也不做「更严格者胜」这类隐式规则（那会让读配置的人无法预测结果）。
+ */
+export const resolveAutomationTier = (input: {
+  readonly automationTier?: AutomationTier | undefined;
+  readonly automationsEnabled?: boolean | undefined;
+}): AutomationTier => {
+  if (input.automationTier !== undefined) return input.automationTier;
+  return input.automationsEnabled === true ? 'granted' : 'off';
+};
+
+/** 档位是否允许自动派发（`off` 之外都派发）。 */
+export const tierAllowsDispatch = (tier: AutomationTier): boolean => tier !== 'off';
+
+/**
+ * 档位是否允许**写业务数据**（Advice / DecisionReview / Trade）。
+ *
+ * 只有 `granted` 允许，且仍需 `PluginAutomationGrant`。
+ * `notify` 档的派发**只能产草稿**——这条是 REQ-M4-06 的核心边界。
+ */
+export const tierAllowsBusinessWrite = (tier: AutomationTier): boolean => tier === 'granted';
 
 export interface ProductionReadConfig {
   readonly allowlist: readonly string[];
@@ -224,7 +275,8 @@ export interface ProductionConfig {
   readonly read: ProductionReadConfig;
   readonly market: ProductionMarketConfig;
   readonly batchEnabled: boolean;
-  readonly automationsEnabled: boolean;
+  /** 自动化档位（REQ-M4-06）。**取代** 旧的 `automationsEnabled` 布尔值。 */
+  readonly automationTier: AutomationTier;
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
@@ -269,7 +321,7 @@ export const resolveProductionConfig = (
       exposeResearch: false as const,
     }),
     batchEnabled: parsed.batchEnabled === true,
-    automationsEnabled: parsed.automationsEnabled === true,
+    automationTier: resolveAutomationTier(parsed),
     env,
   };
   return Object.freeze(config);
@@ -300,7 +352,14 @@ export const resolveProductionConfigFromEnv = (
     ...(home === undefined || home.length === 0 ? {} : { home }),
     owner: { userId: ownerUserId, accountId: ownerAccountId },
     batchEnabled: env.LUOOME_BATCH_ENABLED === 'true',
-    automationsEnabled: env.LUOOME_AUTOMATIONS_ENABLED === 'true',
+    // 新变量优先；旧 `LUOOME_AUTOMATIONS_ENABLED=true` 仍映射为 `granted`（向后兼容）。
+    automationTier:
+      env.LUOOME_AUTOMATION_TIER === 'off' ||
+      env.LUOOME_AUTOMATION_TIER === 'notify' ||
+      env.LUOOME_AUTOMATION_TIER === 'granted'
+        ? env.LUOOME_AUTOMATION_TIER
+        : undefined,
+    automationsEnabled: env.LUOOME_AUTOMATIONS_ENABLED === 'true' ? true : undefined,
     env,
   });
 };

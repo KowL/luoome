@@ -501,7 +501,7 @@ describe('panel state route', () => {
           status: 'partial',
           reasons: ['等待业务回执'],
           limitations: ['观察不证明送达'],
-          automationsEnabled: true,
+          automationTier: 'granted',
           schedule: { ok: true, data: { huge: 'x'.repeat(4096) } },
           tasks: [
             {

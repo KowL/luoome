@@ -388,7 +388,8 @@ describe('dsh-luoome production composition root', () => {
     expect(Object.isFrozen(config.market)).toBe(true);
     expect(Object.isFrozen(config.market.allowlist)).toBe(true);
     expect(Object.isFrozen(config.market.denylist)).toBe(true);
-    expect(config.automationsEnabled).toBe(false);
+    // REQ-M4-06：布尔已由档位取代，旧值 false 迁移为 off。
+    expect(config.automationTier).toBe('off');
     expect(config.read.exposeResearch).toBe(false);
     expect(config.market.exposeResearch).toBe(false);
     expect([...config.market.allowlist]).toEqual([...DEFAULT_MARKET_TOOL_ALLOWLIST]);
@@ -400,7 +401,7 @@ describe('dsh-luoome production composition root', () => {
       resolveProductionConfig({ ...(config as unknown as object), extra: true }),
     ).toThrow();
     expect(() =>
-      resolveProductionConfig({ owner: { ...OWNER }, automationsEnabled: true, env: {} }),
+      resolveProductionConfig({ owner: { ...OWNER }, automationTier: 'granted', env: {} }),
     ).toThrow();
     expect(() =>
       resolveProductionConfig({
@@ -731,7 +732,7 @@ describe('dsh-luoome production apply entry', () => {
       apply(fake.ctx, {
         ...(productionInput(home) as object),
         batchEnabled: true,
-        automationsEnabled: true,
+        automationTier: 'granted',
       }),
     ).rejects.toThrow('require the host schedule service');
     expect(existsSync(home)).toBe(false);

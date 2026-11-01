@@ -77,7 +77,7 @@ export const mountDshWebProfile = (
     repository: options.repository,
     profile: options.profile,
     policyVersion: options.policyVersion,
-    automationsEnabled: options.automationsEnabled === true,
+    automationTier: options.automationTier ?? 'off',
     dailyCycleEnabled: options.policies.some(
       (policy) => policy.scheduled && policy.tool.name === 'run_strategy_daily_cycle',
     ),
@@ -88,7 +88,7 @@ export const mountDshWebProfile = (
   const configuration = () => ({
     profile: options.profile,
     accountId: options.principalForOwner()?.accountId,
-    automationsEnabled: options.automationsEnabled === true,
+    automationTier: options.automationTier ?? 'off',
     readTools: [...readNames],
     policies: options.policies.map(({ tool, scheduled }) => ({
       name: tool.name,

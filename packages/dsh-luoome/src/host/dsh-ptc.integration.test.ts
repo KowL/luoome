@@ -65,7 +65,7 @@ const scheduledCall = (grant: PluginAutomationGrant, input: unknown): Call => {
 describe('Node PTC personal execution and scheduled delivery integration', () => {
   it('runs direct and scheduled inner calls through the actual Node PTC runtime', async () => {
     const clock = fixtureClock();
-    const fixture = await start(await rootDir(), { automationsEnabled: true, ptc: true });
+    const fixture = await start(await rootDir(), { automationTier: 'granted', ptc: true });
     try {
       const removeAnswer = fixture.answer('allowed-once');
       const task = await fixture.ctx.schedule.create(fixture.handle.agent.id, {

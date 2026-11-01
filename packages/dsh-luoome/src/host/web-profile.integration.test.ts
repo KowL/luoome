@@ -167,7 +167,7 @@ describe('official DSH profile lifecycle and Web carrier', () => {
     expect(metadata.status).toBe(200);
     expect(await metadata.json()).toMatchObject({
       profile: 'luoome-acceptance',
-      automationsEnabled: false,
+      automationTier: 'off',
     });
     const forgedHost = await new Promise<number | undefined>((done, reject) => {
       const req = httpRequest(
@@ -289,7 +289,7 @@ describe('official DSH profile lifecycle and Web carrier', () => {
       unscopedReadDenied: true,
     });
     expect(await (await get('/api/luoome/profile')).json()).toMatchObject({
-      automationsEnabled: false,
+      automationTier: 'off',
     });
     expect(diagnostic.parse(await (await get('/api/luoome-acceptance')).json()).requests).toBe(0);
     expect(fixture.output()).not.toContain('did not activate');

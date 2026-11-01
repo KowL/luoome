@@ -157,7 +157,7 @@ const createFixture = async (
     context: () => domain,
     profile: 'advice-outcome-origin',
     principalForSession: () => principal,
-    automationsEnabled: false,
+    automationTier: 'off',
     // 默认走真实 `ctx.userQuestions`；只有显式给 timeout 时换成同一条 asker 的短上限。
     ...(options.askTimeoutMs === undefined
       ? {}

@@ -23,6 +23,7 @@ import {
 import { z } from 'zod';
 import { DEFAULT_MARKET_TIMEOUT_MS, type MarketSurface } from './market-surface.js';
 import { assessPanelHealth, type PanelHealth } from './panel-health.js';
+import type { AutomationTier } from './production-config.js';
 import { denied, invalidInput, type ReadSurface } from './read-surface.js';
 import type { ResearchContinuity } from './research-status.js';
 import type { RequestAdmission } from './routes.js';
@@ -221,7 +222,7 @@ export interface PanelContinuitySummary {
   readonly reasons: readonly string[];
   readonly limitations: readonly string[];
   readonly factCutoff: string | null;
-  readonly automationsEnabled: boolean;
+  readonly automationTier: AutomationTier;
   readonly taskSource: 'available' | 'unavailable';
   readonly taskCount: number;
   readonly notificationStatus: 'not-verified';
@@ -238,7 +239,7 @@ const continuitySummary = (continuity: ResearchContinuity): PanelContinuitySumma
   reasons: continuity.reasons,
   limitations: continuity.limitations,
   factCutoff: continuity.factCutoff,
-  automationsEnabled: continuity.automationsEnabled,
+  automationTier: continuity.automationTier,
   taskSource: continuity.taskSource,
   taskCount: continuity.tasks.length,
   notificationStatus: continuity.notificationStatus,

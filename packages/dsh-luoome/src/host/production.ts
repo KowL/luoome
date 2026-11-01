@@ -544,7 +544,7 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       profile: 'dsh-luoome-plugin',
       principalForOwner: () => owner,
       principalForSession: () => owner,
-      automationsEnabled: host.config.automationsEnabled,
+      automationTier: host.config.automationTier,
       read: host.read,
       market: host.market,
       marketSettings: host.marketSettings,
