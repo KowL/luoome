@@ -51,11 +51,16 @@ export const updateAlertPlanOperation: ConfirmablePluginTool = {
 /**
  * 删除。
  *
- * **已知缺口（已上报）**：`delete_alert_plan` 只返回 `{ deleted: true }`，
- * 而 `policy.receipt` 只在 reconcile 路径被调用（`plugin-operations.ts:492`），
- * 正常 confirm 成功路径只返回工具自身输出。
- * ⇒ **「回执证明删了什么」在当前契约下做不到**，需要让 `DeleteAlertPlanOutput` 带快照
- * （改工具契约，超出本任务边界）。这里如实返回 `null`，**不伪造一个看起来像回执的东西**。
+ * ## 回执怎么来（旧注释这里写错过，2026-11 更正）
+ *
+ * 曾经这里写着「正常 confirm 成功路径只返回工具自身输出 ⇒ 回执证明删了什么做不到」。
+ * 那句话**错在一半**：`plugin-operations.ts:365` 的成功路径
+ * `settleOperation({ resultJson: JSON.stringify(result) })` 写的**就是工具自身输出**。
+ * 所以只要 `delete_alert_plan` 的输出带摘要（决策 3-B 已加），摘要就**确实进了 `resultJson`**，
+ * 事后可通过 `findOperation` 读回。`policy.receipt` 只在 reconcile 补写，不是唯一写入点。
+ *
+ * 因此 `receipt()` 仍返回 `null`：**不是做不到**，而是**不重复实现**——
+ * 摘要已经在工具输出里，回执再算一遍就是第二份事实来源，容易漂移。
  */
 export const deleteAlertPlanOperation: ConfirmablePluginTool = {
   tool: deleteAlertPlanTool,

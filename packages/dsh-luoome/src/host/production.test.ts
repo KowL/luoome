@@ -643,6 +643,14 @@ describe('dsh-luoome production write policies', () => {
       'create_alert_plan',
       'update_alert_plan',
       'delete_alert_plan',
+      // 决策 3-C：删除类工具接入精确 policy（取回执可查）。
+      // 全部 scheduled:false、**不新增人工二次确认**。
+      // `delete_strategy` 已接入——删除是最需要「删了什么」可审计的操作。
+      // `delete_chat_session` 不在列：H1 决策保留 chat 面不暴露（见 deletion-operations.ts）。
+      'delete_strategy',
+      'delete_advice',
+      'delete_report',
+      'delete_stock_event',
     ]);
     for (const policy of policies) expect(policy.scheduled).toBe(false);
     const byName = new Map(policies.map((policy) => [policy.tool.name, policy]));
@@ -689,8 +697,16 @@ describe('dsh-luoome production write policies', () => {
       // `add_trade` 是人工记账 write（T47 起是 policy）；真正不能成为 policy 的是 trade 能力入口，
       // 它仍然只能经 `record_decision_trade` 这类 trade 工具存在，永不暴露。
       'send_notification',
-      // 策略生命周期里的删除/归档与调度 lease 内部桥不是确认操作
-      'delete_strategy',
+      // 策略生命周期里的**归档**与调度 lease 内部桥不是确认操作。
+      //
+      // ⚠️ 这份清单表达的是「**当前判断不需要操作回执**」，**不是「永远不许」**。
+      // 两个先例都因需求变化被移出：
+      //   - `pause_strategy` / `resume_strategy`（原在此列，见 MVP 提交 4e4f7da）——
+      //     策略暂停/恢复需要可审计的回执，遂成为 policy 并移出；
+      //   - `delete_strategy`（2026-11 移出）——删除同样需要「删了什么」可审计，
+      //     与 Codex 决策 3-C 一致，理由与前者相同。
+      // 所以：**别把它当成不可触碰的红线，也别随手往里加**——
+      // 加一条之前先问「这个工具失败后，用户能不能从回执自证发生了什么」。
       'archive_strategy',
       'claim_due_strategy_schedules',
       'finish_strategy_schedule_claim',

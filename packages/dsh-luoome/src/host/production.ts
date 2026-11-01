@@ -62,6 +62,7 @@ import {
   createDataImportOperationPolicies,
   createExportBusinessDataOperation,
 } from './data-import-operations.js';
+import { DELETION_OPERATION_POLICIES } from './deletion-operations.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -216,6 +217,17 @@ export const createProductionOperationPolicies = (
   saveTradingPlanOperation,
   // task-39 批次 B：告警规则增删改（write）。删除的回执冻结了**删除前的完整快照**。
   ...ALERT_PLAN_OPERATION_POLICIES,
+  // 决策 3-C：删除类工具接入精确 policy（取回执可查）。
+  // 全部 scheduled:false，**不新增人工二次确认**——prepare 端点自己会 confirm。
+  //
+  // `delete_strategy` **已接入**（需求负责人裁定）：删除是最需要「删了什么」可审计的操作，
+  // 与 `pause_strategy` / `resume_strategy` 当年移出 forbidden 清单的理由相同
+  // （那份清单表达的是「当时判断不需要回执」，不是「永远不许」，见 `production.test.ts`）。
+  //
+  // `delete_chat_session` **刻意不在此列**：chat 面按 H1 决策保留不暴露
+  // （`exposure/classify.ts:19-22`：会话由 DSH 宿主承载，领域层 chat 工具没有插件入口）。
+  // 详细理由见 `deletion-operations.ts` 的头注释。
+  ...DELETION_OPERATION_POLICIES,
   // T48 恢复：只作精确 Operation policy，不进 agent 面。
   ...(options.dataImport === undefined || options.dataImportBackups === undefined
     ? []
