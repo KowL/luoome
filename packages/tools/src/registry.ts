@@ -145,6 +145,7 @@ import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { sendNotificationTool } from './tools/send-notification.js';
+import { setAutomationTierTool } from './tools/set-automation-tier.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import {
   completeStrategyObservationsTool,
@@ -401,6 +402,8 @@ export const toolRegistry: Registry = createRegistry([
   listDecisionReviewsTool,
   getDecisionWriteReceiptTool,
   saveDecisionReviewTool,
+  // REQ-M4-06：档位写入。write 副作用，走 Operation；不受档位闸门约束（否则死锁）。
+  setAutomationTierTool,
   recordDecisionTradeTool,
   getStrategyDecisionCyclesTool,
   getStrategyRecommendationPreflightHistoryTool,

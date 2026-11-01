@@ -7346,5 +7346,29 @@ export const registerRepositoryContractTests = (
         expect(await repos.chat.listMessages('c1')).toEqual([]);
       });
     });
+
+    // REQ-M4-06：`plugin_settings` 的极窄 KV。两套实现的**幂等语义**必须一致，
+    // 否则「设置页点两次保存」在两种部署下行为不同。
+    describe('PluginSettingRepository', () => {
+      it('没有记录时返回 null（调用方据此回退到环境变量/默认）', async () => {
+        expect(await repos.pluginSetting.find('automationTier')).toBeNull();
+      });
+
+      it('写入后读回一致', async () => {
+        await repos.pluginSetting.save({ key: 'automationTier', value: 'notify', updatedAt: T1 });
+        const stored = await repos.pluginSetting.find('automationTier');
+        expect(stored?.value).toBe('notify');
+        expect(stored?.key).toBe('automationTier');
+      });
+
+      it('同 key 重复写**覆盖**而不是新增（幂等）', async () => {
+        await repos.pluginSetting.save({ key: 'automationTier', value: 'notify', updatedAt: T1 });
+        await repos.pluginSetting.save({ key: 'automationTier', value: 'granted', updatedAt: T2 });
+        const stored = await repos.pluginSetting.find('automationTier');
+        expect(stored?.value).toBe('granted');
+        // 只有一行：KV 不是事件流，重复写不该留历史。
+        expect(stored?.updatedAt.getTime()).toBe(T2.getTime());
+      });
+    });
   });
 };

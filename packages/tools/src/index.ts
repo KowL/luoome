@@ -126,6 +126,7 @@ export * from './tools/save-watch-trigger.js';
 export * from './tools/search-stocks.js';
 export * from './tools/sector-quote.js';
 export * from './tools/send-notification.js';
+export * from './tools/set-automation-tier.js';
 export * from './tools/set-report-delivery-status.js';
 export * from './tools/set-watch-trigger-feedback.js';
 export * from './tools/settle-chat-draft.js';

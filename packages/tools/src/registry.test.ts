@@ -237,6 +237,8 @@ const EXPECTED_TOOL_NAMES = [
   'list_decision_reviews',
   'get_decision_write_receipt',
   'save_decision_review',
+  // REQ-M4-06：档位写入（write，走 Operation，不受档位闸门约束）。
+  'set_automation_tier',
   'refresh_decision_review_report',
   'record_decision_trade',
   // 个人域（单机版）：自选导入、事实摘要与用户价格条件预警
@@ -470,6 +472,7 @@ describe('toolRegistry', () => {
       'save_personal_alert_plan',
       'save_strategy_research_state',
       'save_trading_plan',
+      'set_automation_tier',
       'set_investment_tracking',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',

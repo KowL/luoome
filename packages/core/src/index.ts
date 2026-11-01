@@ -33,6 +33,7 @@ export * from './entity/news.js';
 export * from './entity/northbound-flow.js';
 export * from './entity/notification.js';
 export * from './entity/plugin-authority.js';
+export * from './entity/plugin-setting.js';
 export * from './entity/portfolio-performance.js';
 export * from './entity/provenance.js';
 export * from './entity/quote.js';

@@ -82,6 +82,7 @@ import { pluginAutomationGrants, pluginOperations } from './plugin-authority.js'
 export { dataImportReceipts } from './data-import.js';
 
 export { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
+export { pluginSettings } from './plugin-setting.js';
 
 import {
   index,

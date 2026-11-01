@@ -57,6 +57,10 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS plugin_grants_task_idx ON plugin_automation_grants(user_id, profile, session_id, task_id)`,
   );
+  // REQ-M4-06：自动化档位的极窄 KV。`value` 是字符串，语义由 core 校验。
+  db.run(sql`CREATE TABLE IF NOT EXISTS plugin_settings (
+    key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL
+  )`);
   db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,

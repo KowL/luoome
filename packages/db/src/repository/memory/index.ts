@@ -181,6 +181,7 @@ export interface InMemorySeed {
 export { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 
 import { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
+import { InMemoryPluginSettingRepository } from './plugin-setting.js';
 
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
@@ -310,6 +311,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   });
   return {
     pluginAuthority: new InMemoryPluginAuthorityRepository(),
+    pluginSetting: new InMemoryPluginSettingRepository(),
     analysis: new InMemoryAnalysisRepository(
       advice,
       investmentWorkspace,

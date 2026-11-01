@@ -91,6 +91,8 @@ const union = [
 const preserve = [
   'plugin_operations',
   'plugin_automation_grants',
+  // REQ-M4-06：档位是**用户配置**，导入导出后应保留（与 grant 同类）。
+  'plugin_settings',
   'data_import_receipts',
   'schema_migrations',
   'watch_notification_settings',

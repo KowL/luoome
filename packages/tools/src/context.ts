@@ -65,6 +65,8 @@ export interface BuildContextDependencies {
   readonly reportArtifacts?: ReportArtifactWriter;
   /** task-35：事实库导出物写盘载体；未注入时 export_business_data 返回 adapter_error。 */
   readonly dataArchives?: DataArchiveWriter;
+  /** REQ-M4-06：档位读写口；未注入时 set_automation_tier 返回 adapter_error。 */
+  readonly automationTierStore?: ToolContext['automationTierStore'];
 }
 
 export type BuildContextInput = BuildContextDependencies & {
@@ -108,6 +110,9 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.fundamentalData === undefined ? {} : { fundamentalData: input.fundamentalData }),
     ...(input.dataImport === undefined ? {} : { dataImport: input.dataImport }),
     ...(input.reportArtifacts === undefined ? {} : { reportArtifacts: input.reportArtifacts }),
+    ...(input.automationTierStore === undefined
+      ? {}
+      : { automationTierStore: input.automationTierStore }),
     ...(input.dataArchives === undefined ? {} : { dataArchives: input.dataArchives }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
     ...(input.stockProfile === undefined ? {} : { stockProfile: input.stockProfile }),

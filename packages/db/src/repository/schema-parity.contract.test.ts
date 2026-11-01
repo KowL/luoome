@@ -230,6 +230,9 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   notifications: 'pending',
   portfolioCorporateActions: 'pending',
   portfolioPerformanceSnapshots: 'pending',
+  // REQ-M4-06：极窄 KV，只有 key/value/updatedAt 三列；
+  // 它刻意不是「实体 → 表列」的映射（没有多字段实体），故不进 PAIRS。
+  pluginSettings: 'kv: 单键字符串值，无多字段实体可对账',
   researchDocumentChunks: 'pending',
   researchDocumentIndex: 'pending',
   researchEmbeddingIndexStates: 'pending',

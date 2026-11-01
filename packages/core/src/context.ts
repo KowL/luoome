@@ -313,6 +313,17 @@ export interface ToolContext {
    */
   readonly reportArtifacts?: ReportArtifactWriter;
   /**
+   * 自动化档位的读写口（REQ-M4-06）。
+   *
+   * 与 `reportArtifacts` 同一条纪律：**载体语义不进 tools**。这里只暴露
+   * `resolve()` / `save()`，`tools` 不关心它落 drizzle 还是 memory。
+   * 未注入时 `set_automation_tier` 返回 adapter_error。
+   */
+  readonly automationTierStore?: {
+    resolve(): Promise<{ readonly tier: 'off' | 'notify' | 'granted'; readonly source: string }>;
+    save(tier: 'off' | 'notify' | 'granted', now: Date): Promise<void>;
+  };
+  /**
    * 事实库导出物的写盘载体（task-35）。未注入时 `export_business_data` 返回 adapter_error。
    *
    * 与 `reportArtifacts` 同一条纪律（载体 IO 不进 tools），但**目录与命名语义不同**：

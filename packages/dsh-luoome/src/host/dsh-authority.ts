@@ -92,6 +92,16 @@ export const createDshOperationHost = (
     /** 自动化档位（REQ-M4-06）。旧 `automationsEnabled` 布尔由调用方先迁移成档位。 */
     readonly automationTier?: AutomationTier;
     /**
+     * **执行时**读取当前档位（表 > env > 默认）。
+     *
+     * 传了它就以它为准——这是「设置页切档位立刻生效」的唯一路径。
+     * 不传时回退到 `automationTier` 常量（测试与旧装配可用）。
+     */
+    readonly resolveAutomationTier?: () => Promise<{
+      readonly tier: AutomationTier;
+      readonly source: string;
+    }>;
+    /**
      * 用户回填提问器；缺省用宿主的 `ctx.userQuestions`（每次提问时解析）。
      * 宿主确实没有该接缝时提问器返回 `not_configured`，写入保持 `origin=model`。
      */
@@ -114,7 +124,15 @@ export const createDshOperationHost = (
     validateGrant: identity.validateGrant,
     // REQ-M4-06：`notify` 档只派发、不写业务数据——闸门在 operation 准入点
     // （按 `sideEffect` 判，不按工具名），与 dispatch 层无关。
+    //
+    // **执行时读**而不是构造时常量：否则设置页切完档位、行为不变（假开关）。
     allowBusinessWrite: tierAllowsBusinessWrite(automationTier),
+    ...(options.resolveAutomationTier === undefined
+      ? {}
+      : {
+          resolveAllowBusinessWrite: async () =>
+            tierAllowsBusinessWrite((await options.resolveAutomationTier?.())?.tier ?? 'off'),
+        }),
   });
   const askAdviceOutcome = options.askAdviceOutcome ?? adviceOutcomeAskerOf(ctx);
   const tickets = new Map<ToolExecutionToken, Ticket>();

@@ -1,5 +1,6 @@
 export * from './analysis.js';
 export * from './plugin-authority.js';
+export type { PluginSettingRepository } from './plugin-setting.js';
 
 import type { Account } from '../entity/account.js';
 import type { AccountFacts } from '../entity/account-facts.js';
@@ -617,6 +618,8 @@ export interface ReportRepository {
 
 export interface RepositoryRegistry {
   readonly pluginAuthority: import('./plugin-authority.js').PluginAuthorityRepository;
+  /** REQ-M4-06：自动化档位的持久化（极窄 KV，只存 automationTier）。 */
+  readonly pluginSetting: import('./plugin-setting.js').PluginSettingRepository;
   readonly analysis: import('./analysis.js').AnalysisRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly personal?: import('../personal/repository.js').PersonalRepository;

@@ -50,6 +50,7 @@ import {
   createAnalysisOperationPolicies,
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
+import { createAutomationTierStore } from './automation-tier-store.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
 import { createDataArchives, DEFAULT_EXPORT_KEEP } from './data-archives.js';
 import {
@@ -282,6 +283,14 @@ export const createProductionHost = async (
   const reportArtifacts = createReportArtifacts({
     directory: join(config.home, 'reports'),
   });
+  // REQ-M4-06：档位的读写口。`envTier` 是启动默认值，表里有记录时以表为准。
+  const automationTierStore = createAutomationTierStore({
+    repository: handle.repos.pluginSetting,
+    envTier: config.automationTier,
+    envProvided:
+      config.env.LUOOME_AUTOMATION_TIER !== undefined ||
+      config.env.LUOOME_AUTOMATIONS_ENABLED !== undefined,
+  });
   // task-35：事实库导出物单独一个目录（不混进 reports/）。
   const dataArchives = createDataArchives({
     directory: join(config.home, 'exports'),
@@ -362,6 +371,7 @@ export const createProductionHost = async (
         : { fundamentalData: adapters.fundamentalData }),
       dataImport: dataImportStaging,
       reportArtifacts,
+      automationTierStore,
       dataArchives,
     });
     context = built;
@@ -543,6 +553,13 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       context: () => host.context,
       profile: 'dsh-luoome-plugin',
       principalForOwner: () => owner,
+      // REQ-M4-06 P1-c：把**执行时读档位**接进 operation 准入点。
+      // 不传它的话，`allowBusinessWrite` 就是构造时常量——设置页切完行为不变。
+      resolveAutomationTier: () => {
+        const store = host.context.automationTierStore;
+        if (store === undefined) throw new Error('automation tier store is not configured');
+        return store.resolve();
+      },
       principalForSession: () => owner,
       automationTier: host.config.automationTier,
       read: host.read,
