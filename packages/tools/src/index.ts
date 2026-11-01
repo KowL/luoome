@@ -119,6 +119,7 @@ export * from './tools/research-embedding.js';
 export * from './tools/research-hypothesis.js';
 export * from './tools/research-vault.js';
 export * from './tools/research-vault-git-sync.js';
+export * from './tools/resolve-watch-notification.js';
 export * from './tools/run-strategy.js';
 export * from './tools/save-report.js';
 export * from './tools/save-watch-trigger.js';

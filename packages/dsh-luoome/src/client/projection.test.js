@@ -851,3 +851,15 @@ describe('task-39 alertPlanHints', () => {
     expect(hints).toEqual([]);
   });
 });
+
+// task-39 批次 C：披露文案必须有断言守着（删掉就红）。
+describe('task-39 通知目标披露', () => {
+  it('披露文案包含三条原因（判定逻辑移除 / 无持久化关联 / 只能显示所属计划）', async () => {
+    const { WATCH_NOTIFICATION_DISCLOSURE } = await import('./projection.js');
+    expect(WATCH_NOTIFICATION_DISCLOSURE).toContain('能力未迁移');
+    expect(WATCH_NOTIFICATION_DISCLOSURE).toContain('判定逻辑随旧版服务端一起移除');
+    // 第三条原因特别重要：让用户明白不是「我们没做」，是数据模型里没有这条边。
+    expect(WATCH_NOTIFICATION_DISCLOSURE).toContain('没有持久化关联');
+    expect(WATCH_NOTIFICATION_DISCLOSURE).toContain('不代表当前条件仍成立');
+  });
+});

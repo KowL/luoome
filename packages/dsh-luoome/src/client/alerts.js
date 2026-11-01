@@ -7,7 +7,7 @@ import { Fragment, createElement as h, useState } from 'react';
 import { usePanelState } from './data.js';
 import { int, when } from './format.js';
 import { Card, ErrorNote, Head, PanelHealthBadge, Pill, Section } from './primitives.js';
-import { alertPlanHints, dataOf } from './projection.js';
+import { alertPlanHints, dataOf, WATCH_NOTIFICATION_DISCLOSURE } from './projection.js';
 
 const triggerCounts = (triggers) => {
   const counts = new Map();
@@ -92,6 +92,12 @@ export function AlertsPanel() {
     h(
       Section,
       { title: '规则集' },
+      // 通知目标的**降级版披露**：用户必须能看见「为什么这里只有这么点信息」。
+      h(
+        'p',
+        { className: 'luo-fine', 'data-watch-notification-disclosure': 'true' },
+        WATCH_NOTIFICATION_DISCLOSURE,
+      ),
       plans.length === 0
         ? h('p', { className: 'luo-fine' }, loading ? '读取中…' : '还没有告警规则。')
         : h(

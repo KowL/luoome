@@ -149,6 +149,8 @@ const EXPECTED_TOOL_NAMES = [
   // v0.5 W4：confidence 自校准
   'get_confidence_calibration',
   'list_watch_triggers',
+  // task-39 批次 C：按 triggerId 核对历史提醒（read）。
+  'resolve_watch_notification',
   'get_intraday_delivery_audit',
   'get_closing_batch_audit',
   'get_watch_status',

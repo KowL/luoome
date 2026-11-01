@@ -140,6 +140,7 @@ import {
   syncResearchVaultTool,
 } from './tools/research-vault.js';
 import { getResearchVaultRemoteSyncStatusTool } from './tools/research-vault-git-sync.js';
+import { resolveWatchNotificationTool } from './tools/resolve-watch-notification.js';
 import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
@@ -546,6 +547,8 @@ export const toolRegistry: Registry = createRegistry([
   updateHoldingTool,
   closeHoldingTool,
   listWatchTriggersTool,
+  // task-39 批次 C：按 triggerId 核对历史提醒（read；不判断「现在是否仍成立」）。
+  resolveWatchNotificationTool,
   getIntradayDeliveryAuditTool,
   getClosingBatchAuditTool,
   // v0.7 策略预警：触发反馈（write）
