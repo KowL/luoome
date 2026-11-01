@@ -20,6 +20,7 @@ import {
   type WatchTrigger,
   WatchTriggerSchema,
   WorkflowRunSchema,
+  watchTriggerPlanSource,
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -93,16 +94,13 @@ export const resolveHostedWatchNotificationTool = defineTool({
   handler: async ({ triggerId }, ctx) => {
     const trigger = await ctx.repos.watchTrigger.findById(triggerId);
     if (trigger === null) return errNotFound('WatchTrigger', triggerId);
-    if (
-      trigger.poolId.startsWith('trading-plan-watch:') &&
-      trigger.poolId !== `trading-plan-watch:${ctx.user.defaultAccountId}`
-    )
+    // 计划来源的判定走 core 唯一实现，不在每个 surface 各写一遍前缀比较（AGENTS.md）。
+    const source = watchTriggerPlanSource(trigger);
+    if (source.kind === 'trading-plan-watch' && source.accountId !== ctx.user.defaultAccountId)
       return errNotFound('WatchTrigger', triggerId);
     const state = await tradingPlanState(trigger, ctx);
     const alertPlan =
-      tradingPlanTriggerSource(trigger) === null
-        ? await ctx.repos.alertPlan.findById(trigger.poolId)
-        : null;
+      source.kind === 'alert-plan' ? await ctx.repos.alertPlan.findById(source.alertPlanId) : null;
     const [watchlist, member] =
       alertPlan === null
         ? [null, null]

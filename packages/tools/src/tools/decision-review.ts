@@ -18,6 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
   TradeSchema,
+  watchTriggerPlanSource,
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -76,15 +77,17 @@ const resolveSource = async (
   }
   const trigger = await ctx.repos.watchTrigger.findById(subject.id);
   if (trigger === null) return null;
-  if (trigger.poolId.startsWith('trading-plan-watch:')) {
-    if (trigger.poolId !== `trading-plan-watch:${accountId}`) return 'denied' as const;
-    const versionId = trigger.evalSnapshot.planVersionId;
-    if (typeof versionId !== 'string') return null;
+  // 计划来源走 core 唯一实现：`alertPlanId` 对计划类触发装的是 poolId，不是 AlertPlan.id。
+  const triggerSource = watchTriggerPlanSource(trigger);
+  if (triggerSource.kind === 'trading-plan-watch') {
+    if (triggerSource.accountId !== accountId) return 'denied' as const;
+    const versionId = triggerSource.versionId;
+    if (versionId === undefined) return null;
     const plan = await ctx.repos.tradingPlan.findByVersionId(versionId);
     if (plan === null || plan.accountId !== accountId || plan.stockId !== trigger.stockId)
       return 'denied' as const;
-  } else if (trigger.alertPlanId !== undefined) {
-    const plan = await ctx.repos.alertPlan.findById(trigger.alertPlanId);
+  } else if (triggerSource.kind === 'alert-plan') {
+    const plan = await ctx.repos.alertPlan.findById(triggerSource.alertPlanId);
     if (plan === null) {
       if (trigger.poolId !== 'holdings-watch') return null;
       if ((await ctx.repos.holding.findByAccountAndStock(accountId, trigger.stockId)) === null)
