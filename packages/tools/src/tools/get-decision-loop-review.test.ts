@@ -159,7 +159,8 @@ describe('get_decision_loop_review', () => {
         'hypothesis_review',
       ]),
     );
-    expect(result.data.dataAsOf).toEqual(NOW);
+    // task-31：`dataAsOf` → `evaluatedAt`（求值时刻，不是数据边界）。
+    expect(result.data.evaluatedAt).toEqual(NOW);
     expect(result.data.limitations.length).toBeGreaterThan(0);
   });
 

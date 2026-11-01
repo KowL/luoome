@@ -305,7 +305,8 @@ describe('client panel state projection', () => {
   it('projects decision-loop window, unknowns and limitations without causal claims', () => {
     expect(decisionLoopSummary(null)).toBeNull();
     const summary = decisionLoopSummary({
-      dataAsOf: '2026-10-22T02:00:00.000Z',
+      // task-31：源字段改名（dataAsOf → evaluatedAt），投影输出仍叫 dataAsOf（client 语义是「事实时点」）。
+      evaluatedAt: '2026-10-22T02:00:00.000Z',
       window: { since: '2026-09-22T00:00:00.000Z' },
       unknowns: ['未核验公告'],
       limitations: ['仅账户范围'],

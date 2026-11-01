@@ -270,7 +270,8 @@ export const decisionLoopSummary = (review) => {
     ? review.limitations.filter((item) => typeof item === 'string')
     : [];
   return {
-    dataAsOf: typeof review.dataAsOf === 'string' ? review.dataAsOf : null,
+    // 决策闭环的「求值时刻」（task-31 改名：dataAsOf → evaluatedAt，它不是数据边界）。
+    dataAsOf: typeof review.evaluatedAt === 'string' ? review.evaluatedAt : null,
     since: typeof window.since === 'string' ? window.since : null,
     until: typeof window.until === 'string' ? window.until : null,
     unknowns,

@@ -492,3 +492,66 @@ describe('get_advice_stats', () => {
     }
   });
 });
+
+// task-31：`sampleAsOf` 取**分母口径**——未了结但更近的回填不许把样本截止推高。
+describe('task-31 sampleAsOf（样本截止）', () => {
+  const LATER = new Date('2099-01-01T00:00:00.000Z');
+
+  it('未了结但更近的回填不会推高 sampleAsOf（分母口径）', async () => {
+    const ctx = await buildTestContext({ advices: seedTwo(), adviceOutcomeOrigin: 'user' });
+    // 一条进入分母（followed + 有限 pnl）的样本。
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          { adviceId: 'stats-s1', outcome: 'followed', pnl: 500 },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    const afterSettled = await getAdviceStatsTool.execute({}, ctx);
+    if (!afterSettled.ok) throw new Error('stats failed');
+    const settledSampleAsOf = afterSettled.data.sampleAsOf;
+    expect(settledSampleAsOf).toBeInstanceOf(Date);
+    if (settledSampleAsOf === undefined) throw new Error('missing sampleAsOf');
+
+    // 再造一条**更近但未了结**的回填（followed 但 pnl 缺失 → 进 excluded.unsettled）。
+    expect(
+      (await recordAdviceOutcomeTool.execute({ adviceId: 'stats-s2', outcome: 'followed' }, ctx))
+        .ok,
+    ).toBe(true);
+    // 把它的 recordedAt 推到很晚，模拟「更近的回填」。
+    const review = await ctx.repos.decisionReview.findBySubject({
+      accountId: ctx.user.defaultAccountId,
+      subject: { kind: 'advice', id: 'stats-s2' },
+    });
+    if (review === null) throw new Error('missing review');
+    await ctx.repos.decisionReview.commit({
+      accountId: ctx.user.defaultAccountId,
+      requestId: crypto.randomUUID(),
+      requestHash: 'later-unsettled',
+      expectedRevision: review.revision.revision,
+      review: review.review,
+      content: review.revision.content,
+      contentHash: review.revision.contentHash,
+      tradeFactHashes: review.revision.tradeFactHashes,
+      changeNote: 'later unsettled fixture',
+      recordedAt: LATER,
+    });
+
+    const after = await getAdviceStatsTool.execute({}, ctx);
+    if (!after.ok) throw new Error('stats failed');
+    // 关键断言：样本截止**不被推高**（分母口径）。
+    expect(after.data.sampleAsOf?.getTime()).toBe(settledSampleAsOf.getTime());
+    expect(after.data.sampleAsOf?.getTime()).not.toBe(LATER.getTime());
+    // 未了结那条确实进了 excluded（证明它确实「更近但没进分母」）。
+    expect(after.data.excluded.unsettled).toBeGreaterThan(0);
+  });
+
+  it('没有可观测 outcome 时 sampleAsOf 缺席（不给假时间）', async () => {
+    const ctx = await buildTestContext({ advices: seedTwo(), adviceOutcomeOrigin: 'user' });
+    const result = await getAdviceStatsTool.execute({}, ctx);
+    if (!result.ok) throw new Error('stats failed');
+    expect(result.data.sampleAsOf).toBeUndefined();
+    expect('sampleAsOf' in result.data).toBe(false);
+  });
+});

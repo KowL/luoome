@@ -377,11 +377,15 @@ describe('技能级旅程 · 技能单一真源（REQ-M1-01）', () => {
         journey.firstRound.length,
       );
 
-      // ④ 产出含 dataAsOf，且至少含 1 条 missingFacts 或显式 unavailable 标注。
-      //    M3-02 之前事实包用 `limitations` / `freshness: 'unavailable'` 表达缺口，
-      //    因此两者都算「显式缺口标注」，`missingFacts` 一旦落地同样满足。
+      // ④ 产出含**时间字段**，且至少含 1 条 missingFacts 或显式 unavailable 标注。
+      //    task-31：`get_decision_loop_review` 的 `dataAsOf` 已改名 `evaluatedAt`
+      //    （它一直是求值时刻、不是数据边界）。断言本意是「产出带时点」，所以两者都接受，
+      //    但**仍要求至少一个真实时间字段**——不是放宽成「有没有都行」。
       const payload = JSON.stringify(executed.map((result) => result.value));
-      expect(payload, `${journey.id} 产出缺少 dataAsOf`).toContain('dataAsOf');
+      expect(
+        payload.includes('dataAsOf') || payload.includes('evaluatedAt') || payload.includes('asOf'),
+        `${journey.id} 产出缺少时间字段（dataAsOf / evaluatedAt / asOf）`,
+      ).toBe(true);
       expect(
         payload.includes('missingFacts') || payload.includes('unavailable'),
         `${journey.id} 产出缺少缺口标注（missingFacts / unavailable）`,

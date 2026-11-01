@@ -148,7 +148,15 @@ export const GetDecisionLoopReviewOutput = z.object({
   evidenceIds: z.array(z.string().min(1)),
   unknowns: z.array(z.string().min(1)),
   limitations: z.array(z.string().min(1)),
-  dataAsOf: z.coerce.date(),
+  /**
+   * **求值时刻**（task-31 改名）——`ctx.clock()`，回答「这份复盘是什么时候算的」。
+   *
+   * 原先叫 `dataAsOf`，但它**不是数据边界**：字段名听起来是「数据到哪一天」，
+   * 实际只是请求时钟（`ctx.clock()`）。要回答「样本截止到何时」需要最晚
+   * `decisionReview.revision.recordedAt`，那是另一个字段、另一件事。
+   * 改名后语义诚实；消费方（weekly-report / client projection）已同步。
+   */
+  evaluatedAt: z.coerce.date(),
 });
 
 type DecisionLoopReviewInput = z.infer<typeof GetDecisionLoopReviewInput>;
@@ -451,7 +459,7 @@ export const getDecisionLoopReviewTool = defineTool({
         ...referencedStrategyVersionIds,
       ]),
     ];
-    const dataAsOf = ctx.clock();
+    const evaluatedAt = ctx.clock();
     const signalReview = buildSignalReview(observations);
     return {
       schemaVersion: 2 as const,
@@ -497,7 +505,7 @@ export const getDecisionLoopReviewTool = defineTool({
       evidenceIds,
       unknowns,
       limitations,
-      dataAsOf,
+      evaluatedAt,
     };
   },
 });

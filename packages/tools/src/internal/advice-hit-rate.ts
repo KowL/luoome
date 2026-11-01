@@ -24,6 +24,16 @@ export const AdviceHitRateSchema = AdviceOutcomeScopeSchema.extend({
   denominator: z.number().int().nonnegative(),
   /** 兼容别名，恒等于 denominator；与 feedbackCount 不同。 */
   followedWithPnl: z.number().int().nonnegative(),
+  /**
+   * **样本截止**（REQ-M3-09 ① / task-31）：进入**命中率分母**的 outcome 的最晚 `recordedAt`。
+   *
+   * 取**分母口径**而不是「全部 inScope 的最大值」：后者会被「未了结但更近的回填」推高，
+   * 制造「数字看着新、分母其实旧」的错觉——那正是这个字段要消灭的误判。
+   * 它**不是**请求的 `until`（那是用户要的范围，样本可能差很远），也**不是** `advice.validUntil`。
+   *
+   * 档位：**缺席** = 没有可观测 outcome（不存在「截止到何时」，不给假时间）。
+   */
+  sampleAsOf: z.coerce.date().optional(),
   hits: z.number().int().nonnegative(),
   hitRate: z.number().min(0).max(1).nullable(),
   minimumOutcomes: z.literal(MINIMUM_OUTCOMES),
@@ -84,6 +94,8 @@ export const computeAdviceHitRate = (
   let hits = 0;
   let benchmarkDenominator = 0;
   let excessHits = 0;
+  /** 分母口径的样本截止：只在「进入分母」的分支推进（见下方 else）。 */
+  let sampleAsOfMs: number | undefined;
   for (const outcome of scope.inScope.values()) {
     if (outcome.outcome === 'partially_followed') {
       excluded.partiallyFollowed += 1;
@@ -94,6 +106,9 @@ export const computeAdviceHitRate = (
     } else {
       // 当前反馈契约没有独立 settled 字段；只有明确 followed + finite pnl 表示已了结。
       denominator += 1;
+      // **分母口径**的样本截止：只有进了分母的 outcome 才推进（未了结的更近回填不算）。
+      const recordedAtMs = outcome.recordedAt.getTime();
+      if (sampleAsOfMs === undefined || recordedAtMs > sampleAsOfMs) sampleAsOfMs = recordedAtMs;
       if (outcome.pnl > 0) hits += 1;
       if (outcome.benchmarkPnl !== undefined && Number.isFinite(outcome.benchmarkPnl)) {
         benchmarkDenominator += 1;
@@ -119,6 +134,7 @@ export const computeAdviceHitRate = (
     excluded,
     denominator,
     followedWithPnl: denominator,
+    ...(sampleAsOfMs === undefined ? {} : { sampleAsOf: new Date(sampleAsOfMs) }),
     hits,
     hitRate: showRate ? hits / denominator : null,
     minimumOutcomes: MINIMUM_OUTCOMES,

@@ -1024,7 +1024,7 @@ const decisionLoopEvidence = (
       dimension: `${prefix}.review.${entry.accountId}`,
       provenance: {
         provider: 'tool:get_decision_loop_review',
-        observedAt: entry.review?.dataAsOf ?? now,
+        observedAt: entry.review?.evaluatedAt ?? now,
         fetchedAt: now,
         freshness: entry.review === undefined ? 'unavailable' : 'unknown',
         ...(entry.reviewError === undefined ? {} : { errorKind: entry.reviewError }),
@@ -1328,7 +1328,7 @@ const behaviorPatternsWeekSection = (
       title: '行为模式',
       required: false,
       status,
-      ...(review?.dataAsOf === undefined ? { dataAsOf: now } : { dataAsOf: review.dataAsOf }),
+      ...(review?.evaluatedAt === undefined ? { dataAsOf: now } : { dataAsOf: review.evaluatedAt }),
       blocks: [
         {
           kind: 'metrics',
