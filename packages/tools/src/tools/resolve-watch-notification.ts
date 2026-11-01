@@ -12,6 +12,20 @@ import { defineTool, errNotFound } from '../define-tool.js';
 /**
  * 按 `triggerId` 核对一条历史提醒（task-39 批次 C / PRD M4-01 的「通知目标」）。
  *
+ * ## 定位：模型可调的唯一入口（请勿与内部实现合并）
+ *
+ * 仓里还有 `resolve_hosted_watch_notification`（`../personal/watch.ts`），它**不在 registry**，
+ * 是保留完整 `state`/`monitoring` 的内部实现。两者分工是刻意的：
+ *
+ * | | 本工具（入口） | `resolve_hosted_watch_notification`（内部） |
+ * |---|---|---|
+ * | 给什么 | **只给不可变依据** | 不可变快照 + **现算**的监控资格 + `state`/`changes` |
+ * | 谁能调 | 模型/对话面（registry + allowlist） | 只有仓内调用方（零消费方，留给内部路径） |
+ *
+ * **合并成一个会破坏本工具的立意**：`state` 是三档**策略级判定**，随时点变；
+ * 给模型当结论，调用方会写 `state === null ? '未知' : state`，用户会以为「系统核对过、还成立」。
+ * `state` 三档的口径还有 4 项待产品裁定（task-40 报告 §4.3），在此之前把结论暴露给模型是错的。
+ *
  * ## 为什么输出只有这么点
  *
  * 旧版 `apps/web` 的 `/api/watch/notifications/:triggerId` 返回

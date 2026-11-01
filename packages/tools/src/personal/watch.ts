@@ -75,6 +75,25 @@ const tradingPlanState = async (trigger: WatchTrigger, ctx: ToolContext) => {
   };
 };
 
+/**
+ * 内部实现：**不是**模型可调入口，不得进 `toolRegistry`，也不得进任何 allowlist。
+ *
+ * ## 为什么有两个 resolver（请勿随手删掉其中一个）
+ *
+ * | | 本工具 `resolve_hosted_watch_notification` | `resolve_watch_notification`（在 registry） |
+ * |---|---|---|
+ * | 定位 | **内部**完整实现 | **模型可调的唯一入口** |
+ * | 给什么 | 不可变快照 + **现算**的监控资格 + `state`/`changes` | **只给不可变依据**（trigger + 告警计划/计划版本） |
+ * | 为什么这样分 | `state` 是三档**策略级判定**，随时点变；给模型当结论会被读成「系统核对过、还成立」 | 不可变依据可以放心给：计划版本不可改（`TradingPlan` 版本不可变），告警计划是可查实体 |
+ *
+ * **合并成一个是错的**：会把 `state`/`changes` 塞进模型可见面，等于把一个「需要现算的资格判定」
+ * 伪装成「已核对的事实」——这正是 `resolve_watch_notification` 刻意剥离它们的原因。
+ * **删掉本工具也是错的**：`state` 只有这一份实现，`state` 三档口径（4 项待产品裁定）的讨论依赖它。
+ *
+ * 什么时候用哪个：模型/对话面用 `resolve_watch_notification`；
+ * 需要「当前还有没有监控资格」的内部路径（未来 UI 或复盘）用本工具。
+ * 两者共用 core 的 `watchTriggerPlanSource` 判定来源链，**不要在各自实现里再写前缀比较**。
+ */
 export const resolveHostedWatchNotificationTool = defineTool({
   name: 'resolve_hosted_watch_notification',
   description: '核对确切提醒的原始快照和当前计划状态；历史触发不作为当前行动授权',
