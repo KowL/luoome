@@ -59,6 +59,7 @@ export * from './entity/strategy-schedule.js';
 export * from './entity/strategy-watchlist-subscription.js';
 export * from './entity/trade.js';
 export * from './entity/trading-plan.js';
+export * from './entity/triangle-roles.js';
 export * from './entity/watch-run.js';
 export * from './entity/watch-trigger.js';
 export * from './entity/watchlist.js';
@@ -117,6 +118,7 @@ export * from './strategy/signal-policy.js';
 export * from './strategy-watchlist-policy.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）
 export * from './trading-calendar.js';
+export * from './triangle-gate.js';
 // 基础类型
 export * from './types/branded.js';
 export * from './types/result.js';
