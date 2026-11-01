@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ScheduleCatalogEntry } from '@deepseek-ai/dsh-schedule';
 import type { PluginAuthorityRepository } from '@luoome/core';
 import type { ConfirmablePluginTool, createPluginOperationService } from '@luoome/tools';
+import { dispatchOutcome } from './dispatch-outcome.js';
 import type { createDshIdentity } from './dsh-identity.js';
 import { type AutomationTier, tierAllowsDispatch } from './production-config.js';
 
@@ -21,6 +22,13 @@ export const createScheduleDispatcher = (
     ) => { userId: string; accountId: string } | null;
     readonly automationTier: AutomationTier;
     readonly now: () => number;
+    /**
+     * 今天是否交易日（REQ-M4-06 ⑤）。
+     *
+     * 非交易日**不派发**——这是 PRD 明文要求「非交易日返回 skipped 且事实表零写入」。
+     * 缺省 `true`（既有装配行为不变）；装配方注入真实的交易日判断。
+     */
+    readonly isTradingDay?: () => boolean;
   },
 ) => {
   const seen = new Map<string, string>();
@@ -81,7 +89,13 @@ export const createScheduleDispatcher = (
 
   const reconcile = (): Promise<void> => {
     chain = chain.then(async () => {
-      if (disposed || !tierAllowsDispatch(options.automationTier)) return;
+      if (disposed) return;
+      // 派发前先分类：档位关闭 / 非交易日 都不执行，但**原因不同**（见 `dispatch-outcome`）。
+      const outcome = dispatchOutcome({
+        tierAllowsDispatch: tierAllowsDispatch(options.automationTier),
+        isTradingDay: options.isTradingDay?.() ?? true,
+      });
+      if (outcome.status === 'skipped') return;
       const tasks = await ctx.schedule.catalog();
       for (const task of tasks) {
         const delivery = task.lastDelivery;
