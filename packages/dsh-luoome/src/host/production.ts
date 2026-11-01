@@ -45,6 +45,7 @@ import {
   toolRegistry,
 } from '@luoome/tools';
 import { createAccountOperationPolicies } from './account-operations.js';
+import { ALERT_PLAN_OPERATION_POLICIES } from './alert-plan-operations.js';
 import {
   createAnalysisOperationPolicies,
   type TrustedAnalysisProvenance,
@@ -213,6 +214,8 @@ export const createProductionOperationPolicies = (
   createExportBusinessDataOperation(),
   // task-39 批次 A：交易计划保存（write）。**没有乐观锁**，见 plan-operations.ts 的头注释。
   saveTradingPlanOperation,
+  // task-39 批次 B：告警规则增删改（write）。删除的回执冻结了**删除前的完整快照**。
+  ...ALERT_PLAN_OPERATION_POLICIES,
   // T48 恢复：只作精确 Operation policy，不进 agent 面。
   ...(options.dataImport === undefined || options.dataImportBackups === undefined
     ? []

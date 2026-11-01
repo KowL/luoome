@@ -37,6 +37,9 @@ export const PANEL_NAMES = [
   // task-39 批次 A：交易计划（列表/详情/编辑）。独立的场景上下文，
   // 塞进 settings 或 watchlists 都会让「配置」与「操作」混在一起。
   'plans',
+  // task-39 批次 B：告警规则（Watchlist 级配置）。与 `plans`（逐股计划）是两个场景，
+  // 不共用面板 —— 两处各一份告警列表就是「同一语义两处实现」。
+  'alerts',
 ] as const;
 export type PanelName = (typeof PANEL_NAMES)[number];
 
@@ -158,8 +161,18 @@ export const PANEL_PLANS: Readonly<Record<PanelName, PanelPlan>> = Object.freeze
   plans: Object.freeze({
     read: Object.freeze([
       // 列表与详情：按计划聚合的最新/草案 + 当前生效版本。
+      // 告警规则**不在这里**：那是 `alerts` 面板的事（批次 B 的自纠）。
       fixed('list_trading_plans', { limit: 200 }),
+    ]),
+    market: Object.freeze([]),
+  }),
+  alerts: Object.freeze({
+    read: Object.freeze([
       fixed('list_alert_plans'),
+      // 规则要引用 watchlist；编辑时要能选，且要判断「计划启用了但列表是空的」。
+      fixed('list_watchlists'),
+      // 只读：让用户看到「这条规则最近触发了几次」。
+      fixed('list_watch_triggers', { limit: 50 }),
     ]),
     market: Object.freeze([]),
   }),

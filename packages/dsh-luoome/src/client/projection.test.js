@@ -806,3 +806,48 @@ describe('task-30 持仓报价时点展示', () => {
     expect(holdingsStaleSummary({}).text).toBe('时点未知');
   });
 });
+
+// task-39 批次 B：告警规则的配置提示（判据全在 projection 层，不在 alerts.js）。
+import { alertPlanHints } from './projection.js';
+
+describe('task-39 alertPlanHints', () => {
+  const watchlists = (members) => ({ watchlists: [{ id: 'wl-1', members }] });
+
+  it('P0：启用了但关注列表没有成员 → 提示出现', () => {
+    const hints = alertPlanHints(
+      { enabled: true, watchlistId: 'wl-1', cooldownMinutes: 30, rules: [{ priority: 'normal' }] },
+      watchlists([]),
+    );
+    expect(hints.map((hint) => hint.code)).toContain('enabled-empty-watchlist');
+    expect(hints.find((hint) => hint.code === 'enabled-empty-watchlist')?.level).toBe('P0');
+  });
+
+  it('关注列表有成员时不产生 P0 提示', () => {
+    const hints = alertPlanHints(
+      { enabled: true, watchlistId: 'wl-1', cooldownMinutes: 30, rules: [{ priority: 'normal' }] },
+      watchlists([{ stockId: '600519.SH' }]),
+    );
+    expect(hints.map((hint) => hint.code)).not.toContain('enabled-empty-watchlist');
+  });
+
+  it('冷却为 0 与 repeat 组合各自成提示', () => {
+    const hints = alertPlanHints(
+      { enabled: false, watchlistId: 'wl-1', cooldownMinutes: 0, triggerMode: 'repeat', rules: [] },
+      watchlists([{ stockId: '600519.SH' }]),
+    );
+    const codes = hints.map((hint) => hint.code);
+    expect(codes).toContain('no-cooldown');
+    expect(codes).toContain('repeat-without-cooldown');
+  });
+
+  it('**不产生六要素类提示**：AlertRule 没有那些字段，硬凑就是假校验', () => {
+    const hints = alertPlanHints(
+      { enabled: true, watchlistId: 'wl-1', cooldownMinutes: 30, rules: [{ priority: 'normal' }] },
+      watchlists([{ stockId: '600519.SH' }]),
+    );
+    for (const forbidden of ['counter-evidence', 'risks', 'invalidation', 'disclaimer'])
+      expect(hints.map((hint) => hint.code)).not.toContain(forbidden);
+    // 健康配置应当**零提示**。
+    expect(hints).toEqual([]);
+  });
+});

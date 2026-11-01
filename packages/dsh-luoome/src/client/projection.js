@@ -599,3 +599,73 @@ export const holdingsStaleSummary = (summary) => {
     tone: staleCount !== null && staleCount > 0 ? 'warning' : 'factual',
   };
 };
+
+/**
+ * 告警规则的**配置提示**（task-39 批次 B）。
+ *
+ * ## 为什么这里不是「六要素提示」
+ *
+ * Advice（建议）有六要素：反证 / 风险 / 失效条件 / 有效期 / 依据 / 免责。
+ * **`AlertRule` 没有这些字段**（`core/src/entity/alert-plan.ts:14-34`：
+ * 只有 `id` / `priority` / `kind` + 各 kind 的阈值字段）。
+ * 在这里硬凑「缺反证」会变成**看起来在校验、实际什么都没查**——
+ * 用户会误以为系统按六要素评估过这条规则。**不要「补全」它。**
+ *
+ * 提示的依据全部是 `AlertPlanSchema` 里**真实存在**的字段组合，
+ * 且**永不阻止保存**（配置期只提示，这是 REQ-M3-09 Q4 的纪律）。
+ *
+ * @param {unknown} plan `AlertPlan`
+ * @param {unknown} watchlists `list_watchlists` 的输出（用于判断「启用了但列表是空的」）
+ */
+export const alertPlanHints = (plan, watchlists) => {
+  if (plan === null || typeof plan !== 'object') return [];
+  const hints = [];
+  const watchlistId = plan.watchlistId;
+  const lists = watchlists?.watchlists ?? watchlists?.items ?? [];
+  const members =
+    Array.isArray(lists) && typeof watchlistId === 'string'
+      ? (lists.find((item) => (item?.id ?? item?.watchlistId) === watchlistId)?.members ?? [])
+      : null;
+
+  // P0：启用了但监控列表没有成员 —— 「配了但永远不会触发」，最贵的误配。
+  if (plan.enabled === true && Array.isArray(members) && members.length === 0)
+    hints.push({
+      level: 'P0',
+      code: 'enabled-empty-watchlist',
+      text: '规则已启用，但关联的关注列表没有任何成员——它不会触发任何提醒。',
+    });
+
+  // P1：无冷却，可能刷屏。
+  if (plan.cooldownMinutes === 0)
+    hints.push({
+      level: 'P1',
+      code: 'no-cooldown',
+      text: '冷却时间为 0：条件持续成立时可能连续提醒。',
+    });
+
+  // P1：触发模式与冷却语义冲突。
+  if (plan.triggerMode === 'repeat' && plan.cooldownMinutes === 0)
+    hints.push({
+      level: 'P1',
+      code: 'repeat-without-cooldown',
+      text: '触发模式为「重复」且冷却为 0：同一条规则会持续触发。',
+    });
+
+  // P2：日上限接近上限值（500），可能被静默截断。
+  if (typeof plan.dailyNotificationLimit === 'number' && plan.dailyNotificationLimit >= 100)
+    hints.push({
+      level: 'P2',
+      code: 'daily-limit-high',
+      text: `每日提醒上限为 ${String(plan.dailyNotificationLimit)}：超过后当天的提醒会被静默截断。`,
+    });
+
+  // P3：规则未设优先级（继承计划级）。
+  if (Array.isArray(plan.rules) && plan.rules.some((rule) => rule?.priority === undefined))
+    hints.push({
+      level: 'P3',
+      code: 'rule-priority-inherited',
+      text: '有规则未设优先级，将继承计划级优先级。',
+    });
+
+  return hints;
+};

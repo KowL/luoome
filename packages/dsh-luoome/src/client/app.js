@@ -3,7 +3,7 @@
 // 视图各自负责取数与展示，标签只做视图切换：未激活的视图不挂载，因此不会发起
 // 状态请求，看盘页的定时刷新也只在该视图激活时运行。
 import { createElement as h, useCallback, useEffect, useState } from 'react';
-
+import { AlertsPanel } from './alerts.js';
 import { OverviewPanel } from './overview.js';
 import { PlansPanel } from './plans.js';
 import { PositionsPanel } from './positions.js';
@@ -83,6 +83,14 @@ export const VIEWS = [
     icon: LayersIcon,
     className: 'luo-strategies',
     View: StrategiesPanel,
+  },
+  {
+    id: 'alerts',
+    label: '告警',
+    hint: '规则集 · 冷却与日上限 · 配置提示',
+    icon: LayersIcon,
+    className: null,
+    View: AlertsPanel,
   },
   {
     id: 'plans',
