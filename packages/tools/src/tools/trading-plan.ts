@@ -21,6 +21,7 @@ import {
   TradingPlanViewSchema,
   toTradingPlanRead,
   tradingPlanMonitoring,
+  tradingPlanRangeWidthCap,
   tradingPlanVersionId,
   tradingPlanView,
 } from '@luoome/core';
@@ -253,7 +254,20 @@ export const ListTradingPlansInput = TradingPlanQuerySchema.extend({
   includeMonitoring: z.boolean().optional(),
 });
 export const ListTradingPlansOutput = z.object({
-  plans: z.array(TradingPlanReadSchema),
+  plans: z.array(
+    TradingPlanReadSchema.extend({
+      /**
+       * 该计划目标仓位区间的**允许宽度上限**（百分点），由 core 的
+       * `tradingPlanRangeWidthCap` 算出：`min(分层上限, 0.30 × max)`。
+       *
+       * 为 **0 或缺失**：`targetPctRange` 为空，谈不上上限。
+       *
+       * 为什么由服务端下发：client 不得 import core（`client-health.guard.test.js`），
+       * 若让前端自己算，分层表就会变成第二份真源——改 core 而前端不跟即静默不一致。
+       */
+      rangeWidthCap: z.number().finite().nonnegative().nullable(),
+    }),
+  ),
   monitoring: z.array(TradingPlanMonitoringSchema).optional(),
   views: z.array(TradingPlanViewSchema).optional(),
 });
@@ -273,7 +287,17 @@ export const listTradingPlansTool = defineTool({
         ...(query.currentOnly === true && query.asOf === undefined ? { asOf: now } : {}),
       })),
     ];
-    if (!includeMonitoring) return { plans: plans.map(toTradingPlanRead) };
+    // 区间宽度上限随计划下发：client 只渲染，不重算（见 schema 注释）。
+    const withCap = (plan: TradingPlan) => {
+      const read = toTradingPlanRead(plan);
+      const range = read.position.targetPctRange;
+      return {
+        ...read,
+        rangeWidthCap:
+          range === null || range === undefined ? null : tradingPlanRangeWidthCap(range.max),
+      };
+    };
+    if (!includeMonitoring) return { plans: plans.map(withCap) };
     const monitoring: TradingPlanMonitoring[] = [];
     const views: z.infer<typeof TradingPlanViewSchema>[] = [];
     for (const accountId of new Set(plans.map((plan) => plan.accountId))) {
@@ -310,7 +334,7 @@ export const listTradingPlansTool = defineTool({
         if (view !== null) views.push(view);
       }
     }
-    return { plans: plans.map(toTradingPlanRead), monitoring, views };
+    return { plans: plans.map(withCap), monitoring, views };
   },
 });
 

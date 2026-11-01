@@ -4,12 +4,22 @@
 // - 格式化**复用 `format.js`**、取数**复用 `projection.js` 的 `dataOf`**，不新造第二套。
 // - 四要素缺失**只是提示，不阻断保存**：`save_trading_plan` 没有这条硬校验
 //   （`trading-plan.ts:100-130` 只拒「事实变化 / active 时事实不完整 / active 时约束未过」）。
-// - **不承诺并发安全**：`save_trading_plan` 没有乐观锁，保护只来自 `accountFactsDigest` + 版本链，
-//   不覆盖「同事实并发编辑」。冲突只能**事后发现并显式提示**。
+// - **并发安全**：`save_trading_plan` 自决策 3-A 起有乐观锁（`expectedRevision`），
+//   保存时带「打开时那一版」；冲突工具返回 `actual`，表单保留编辑内容并提示重新核对。
+//   `replacedWhileEditing` 作为保存成功后的**事后**版本链核对保留（两层保险）。
 import { Fragment, createElement as h, useEffect, useState } from 'react';
 
 import { usePanelState } from './data.js';
 import { money, when } from './format.js';
+import {
+  activeBlockNotice,
+  appliedPctFor,
+  mergePlanEdit,
+  PLAN_FORM_STEPS,
+  rangeHint,
+  revisionConflictNotice,
+  uneditedNotice,
+} from './plan-form.js';
 import { Card, ErrorNote, Head, Kpi, PanelHealthBadge, Pill, Section } from './primitives.js';
 import { dataOf } from './projection.js';
 
@@ -85,12 +95,16 @@ const operationRequest = async (path, body) => {
  *
  * 回执里的 `versionId` / `supersedesVersionId` 是「事后发现并发」的唯一依据。
  */
-export const persistPlan = async ({ plan }) => {
+export const persistPlan = async ({ plan, expectedRevision }) => {
   const operationId = crypto.randomUUID();
   const operation = await operationRequest('prepare', {
     id: operationId,
     tool: 'save_trading_plan',
-    input: { plan },
+    input: {
+      plan,
+      // 决策 3-A 的乐观锁：声明「我基于哪一版编辑的」。不传 = 不做版本比对。
+      ...(expectedRevision === undefined || expectedRevision === null ? {} : { expectedRevision }),
+    },
   });
 
   // 兼容「prepare 只冻结、未执行」的形态：那时才需要显式 confirm。
@@ -110,6 +124,290 @@ export const persistPlan = async ({ plan }) => {
     );
   // 回执形状：`{ versionId, planId, version, supersedesVersionId, status }`。
   return settled.result?.data ?? settled.result ?? {};
+};
+
+/**
+ * 四步编辑表单（决策 3-C / 外部评审②）。
+ *
+ * **所有计算都调 `plan-form.js`**，那里再调 core：
+ * 区间上限 `tradingPlanRangeWidthCap`、落点 `tradingPlanPickedPct`。
+ * 这个组件只负责摆放控件，不做任何数值判断——否则数字会散落成第二份真源。
+ */
+const PlanForm = ({ plan, onSave, busy }) => {
+  const [step, setStep] = useState(PLAN_FORM_STEPS[0].id);
+  // 编辑草稿：只放四步覆盖的字段。`marketFacts`/`evidence` 不在这里出现。
+  const [edit, setEdit] = useState({
+    action: plan.action,
+    targetPctRange: plan.position?.targetPctRange ?? null,
+    rangePick: plan.position?.rangePick ?? null,
+    exit: { stopLoss: plan.exit?.stopLoss, takeProfit: plan.exit?.takeProfit },
+    holding: {
+      minTradingDays: plan.holding?.minTradingDays,
+      maxTradingDays: plan.holding?.maxTradingDays,
+    },
+    explanation: {
+      counterEvidence: plan.explanation?.counterEvidence ?? [],
+      risks: plan.explanation?.risks ?? [],
+      unknowns: plan.explanation?.unknowns ?? [],
+    },
+  });
+  const patch = (next) => setEdit((current) => ({ ...current, ...next }));
+  const merged = mergePlanEdit(plan, edit);
+  // 两个值都**消费服务端**（`list_trading_plans` 下发 rangeWidthCap；
+  // appliedPct 来自计划本身），client 不做任何数值计算。
+  const cap = rangeHint(edit.targetPctRange, plan);
+  const applied = appliedPctFor(plan, {
+    range: edit.targetPctRange,
+    pick: edit.rangePick,
+  });
+  const blockNotice = activeBlockNotice({
+    marketFacts: plan.marketFacts,
+    status: plan.status,
+  });
+  const index = PLAN_FORM_STEPS.findIndex((item) => item.id === step);
+  const go = (delta) => {
+    const next = PLAN_FORM_STEPS[index + delta];
+    if (next !== undefined) setStep(next.id);
+  };
+  const field = (label, control, hint) =>
+    h(
+      'label',
+      { className: 'luo-field', key: label },
+      label,
+      control,
+      hint === undefined ? null : h('span', { className: 'luo-fine' }, hint),
+    );
+  const listEditor = (label, values, onChange) =>
+    field(
+      label,
+      h('textarea', {
+        'data-plan-field': label,
+        rows: 3,
+        value: values.join('\n'),
+        onChange: (event) =>
+          onChange(
+            event.target.value
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0),
+          ),
+      }),
+      '每行一条',
+    );
+
+  const body = (() => {
+    if (step === 'action-entry')
+      return [
+        field(
+          '动作',
+          h(
+            'select',
+            {
+              'data-plan-field': 'action',
+              value: edit.action,
+              onChange: (event) => patch({ action: event.target.value }),
+            },
+            ['observe', 'enter', 'add', 'hold', 'reduce', 'exit', 'avoid'].map((value) =>
+              h('option', { key: value, value }, value),
+            ),
+          ),
+        ),
+      ];
+    if (step === 'position-pick')
+      return [
+        field(
+          '目标仓位下限（%）',
+          h('input', {
+            type: 'number',
+            min: 0,
+            max: 100,
+            'data-plan-field': 'targetMin',
+            value: edit.targetPctRange?.min ?? 0,
+            onChange: (event) =>
+              patch({
+                targetPctRange: {
+                  min: Number(event.target.value),
+                  max: edit.targetPctRange?.max ?? 0,
+                },
+              }),
+          }),
+        ),
+        field(
+          '目标仓位上限（%）',
+          h('input', {
+            type: 'number',
+            min: 0,
+            max: 100,
+            'data-plan-field': 'targetMax',
+            value: edit.targetPctRange?.max ?? 0,
+            onChange: (event) =>
+              patch({
+                targetPctRange: {
+                  min: edit.targetPctRange?.min ?? 0,
+                  max: Number(event.target.value),
+                },
+              }),
+          }),
+        ),
+        field(
+          '选点规则',
+          h(
+            'select',
+            {
+              'data-plan-field': 'rangePick',
+              value: edit.rangePick?.ruleId ?? 'lower-bound',
+              onChange: (event) =>
+                patch({
+                  rangePick:
+                    event.target.value === 'mid' ? { ruleId: 'mid' } : { ruleId: 'lower-bound' },
+                }),
+            },
+            [
+              { value: 'lower-bound', label: '下限' },
+              { value: 'mid', label: '中点' },
+            ].map((option) =>
+              h('option', { key: option.value, value: option.value }, option.label),
+            ),
+          ),
+        ),
+        // 落点与底价**只读**：由 core 算，用户改区间/选点即可。
+        h(
+          'p',
+          { className: 'luo-fine', 'data-plan-applied': String(applied ?? '—') },
+          `落点 appliedPct = ${String(applied ?? '—')}（由选点规则计算，不可手填） · ` +
+            `底价 fallbackPct = ${String(edit.targetPctRange?.min ?? '—')}（恒等于区间下限）`,
+        ),
+        cap === null
+          ? null
+          : h('p', { className: 'luo-fine', 'data-plan-cap': cap.text }, cap.text),
+      ];
+    if (step === 'exit-hold')
+      return [
+        field(
+          '止损',
+          h('input', {
+            type: 'number',
+            'data-plan-field': 'stopLoss',
+            value: edit.exit.stopLoss ?? '',
+            onChange: (event) =>
+              patch({
+                exit: {
+                  ...edit.exit,
+                  stopLoss: event.target.value === '' ? undefined : Number(event.target.value),
+                },
+              }),
+          }),
+        ),
+        field(
+          '止盈',
+          h('input', {
+            type: 'number',
+            'data-plan-field': 'takeProfit',
+            value: edit.exit.takeProfit ?? '',
+            onChange: (event) =>
+              patch({
+                exit: {
+                  ...edit.exit,
+                  takeProfit: event.target.value === '' ? undefined : Number(event.target.value),
+                },
+              }),
+          }),
+        ),
+        field(
+          '最少持有交易日',
+          h('input', {
+            type: 'number',
+            min: 0,
+            'data-plan-field': 'minTradingDays',
+            value: edit.holding.minTradingDays ?? 0,
+            onChange: (event) =>
+              patch({
+                holding: { ...edit.holding, minTradingDays: Number(event.target.value) },
+              }),
+          }),
+        ),
+        field(
+          '最多持有交易日',
+          h('input', {
+            type: 'number',
+            min: 0,
+            'data-plan-field': 'maxTradingDays',
+            value: edit.holding.maxTradingDays ?? 0,
+            onChange: (event) =>
+              patch({
+                holding: { ...edit.holding, maxTradingDays: Number(event.target.value) },
+              }),
+          }),
+        ),
+      ];
+    return [
+      listEditor('反证', edit.explanation.counterEvidence, (counterEvidence) =>
+        patch({ explanation: { ...edit.explanation, counterEvidence } }),
+      ),
+      listEditor('风险', edit.explanation.risks, (risks) =>
+        patch({ explanation: { ...edit.explanation, risks } }),
+      ),
+      listEditor('未知项', edit.explanation.unknowns, (unknowns) =>
+        patch({ explanation: { ...edit.explanation, unknowns } }),
+      ),
+      // 未编辑项声明：**必须出现**，否则用户以为「没看到就是没有」。
+      h(
+        'p',
+        { className: 'luo-fine', 'data-plan-unedited': 'true' },
+        uneditedNotice(plan.versionId ?? `v${String(plan.version ?? 1)}`),
+      ),
+      // 激活警告：必须**在保存之前**出现，不许让用户点完才知道。
+      blockNotice === null
+        ? null
+        : h('p', { className: 'luo-fine', 'data-plan-active-block': 'true' }, blockNotice.text),
+      h(
+        'p',
+        { className: 'luo-fine', 'data-plan-preview': 'true' },
+        `将保存：动作 ${String(merged.action)} · 区间 ${String(merged.position?.targetPctRange?.min ?? '—')}–${String(merged.position?.targetPctRange?.max ?? '—')} · 落点 ${String(merged.position?.appliedPct ?? '—')} · 底价 ${String(merged.position?.fallbackPct ?? '—')}`,
+      ),
+    ];
+  })();
+
+  return h(
+    Card,
+    { title: `编辑计划 · ${PLAN_FORM_STEPS[index].title}` },
+    h(
+      'p',
+      { className: 'luo-fine', 'data-plan-step': step },
+      `第 ${String(index + 1)} / ${String(PLAN_FORM_STEPS.length)} 步`,
+    ),
+    ...body,
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'button',
+        { type: 'button', className: 'luo-btn', disabled: index === 0, onClick: () => go(-1) },
+        '上一步',
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'luo-btn',
+          disabled: index === PLAN_FORM_STEPS.length - 1,
+          onClick: () => go(1),
+        },
+        '下一步',
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'luo-btn',
+          'data-plan-submit': 'form',
+          disabled: busy === true,
+          onClick: () => onSave(merged),
+        },
+        busy === true ? '保存中…' : '保存为下一版本',
+      ),
+    ),
+  );
 };
 
 const PlanRow = ({ entry, selected, onSelect }) =>
@@ -148,15 +446,18 @@ export function PlansPanel() {
   // 打开详情时记下当时的版本：保存后用它判断「我编辑期间是否被替换」（A-1 硬要求 2）。
   const [openedVersionId, setOpenedVersionId] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   /**
-   * 保存 d 草稿（走 Operation：`save_trading_plan` 是 write）。
+   * 保存（走 Operation：`save_trading_plan` 是 write）。
    *
-   * **不承诺并发安全**：工具没有乐观锁。这里能做的只有「保存后对比版本链」，
-   * 发现被替换就**显式告诉用户**，而不是静默成功。
+   * 决策 3-A 之后工具已有乐观锁：`persistPlan` 会带上 `expectedRevision`（=打开时那一版）。
+   * 冲突时工具返回带 `actual` 的错误，表单**保留编辑内容**并提示重新核对。
+   * `replacedWhileEditing` 仍保留，作为保存成功后的**事后**版本链核对（两层保险）。
    */
-  const saveDraft = (plan) => {
-    persistPlan({ plan, openedVersionId })
+  const saveDraft = (plan, expectedRevision = openedVersionId) => {
+    setSaving(true);
+    persistPlan({ plan, expectedRevision })
       .then((saved) => {
         const clash = replacedWhileEditing({ openedVersionId, saved });
         setNotice(
@@ -168,7 +469,23 @@ export function PlansPanel() {
               },
         );
       })
-      .catch((error) => setNotice({ kind: 'error', text: String(error.message ?? error) }));
+      .catch((error) => {
+        // 冲突**保留编辑内容**：只更新提示，不动表单 state。
+        const message = String(error.message ?? error);
+        const conflict = /已被更新到\s+(\S+)/.exec(message);
+        setNotice(
+          conflict === null
+            ? { kind: 'error', text: message }
+            : {
+                kind: 'conflict',
+                text: revisionConflictNotice({
+                  openedVersionId,
+                  actualVersionId: conflict[1],
+                }),
+              },
+        );
+      })
+      .finally(() => setSaving(false));
   };
 
   const plans = listed?.plans ?? listed?.items ?? [];
@@ -286,22 +603,13 @@ export function PlansPanel() {
               `反证 ${String((current.counterEvidence ?? []).length)} 条 · 风险 ${String((current.risks ?? []).length)} 条`,
             ),
           ),
-          h(
-            'div',
-            { className: 'luo-actions' },
-            h(
-              'button',
-              {
-                className: 'luo-btn',
-                type: 'button',
-                'aria-label': '保存为下一版本',
-                'data-plan-save': 'next-version',
-                onClick: () => saveDraft({ ...current, version: (current.version ?? 1) + 1 }),
-              },
-              '保存为下一版本',
-            ),
-            h('span', { className: 'luo-fine' }, '保存不会自动下单；计划只是记录与约束。'),
-          ),
+          h(PlanForm, {
+            plan: current,
+            busy: saving,
+            onSave: (editable) =>
+              saveDraft({ ...editable, version: (current.version ?? 1) + 1 }, current.versionId),
+          }),
+          h('span', { className: 'luo-fine' }, '保存不会自动下单；计划只是记录与约束。'),
           h(
             Card,
             { title: '版本链' },
@@ -314,8 +622,8 @@ export function PlansPanel() {
             ),
             h(
               'p',
-              { className: 'luo-fine', 'data-no-optimistic-lock': 'true' },
-              '保存没有乐观锁：并发编辑可能后写覆盖前写。保存后请核对版本号是否变化。',
+              { className: 'luo-fine', 'data-optimistic-lock': 'true' },
+              '保存带乐观锁：以你打开时的版本为基线，若期间已被别人更新，本次保存会被拒绝并提示重新核对。',
             ),
           ),
         ),
