@@ -91,6 +91,8 @@ export const createDshOperationHost = (
     readonly principalForSession: (sessionId: string) => PluginPrincipal | null;
     /** 自动化档位（REQ-M4-06）。旧 `automationsEnabled` 布尔由调用方先迁移成档位。 */
     readonly automationTier?: AutomationTier;
+    /** 当前生效档位来自哪（table / env / default）——供设置页显示来源。 */
+    readonly automationTierSource?: 'table' | 'env' | 'default';
     /**
      * **执行时**读取当前档位（表 > env > 默认）。
      *

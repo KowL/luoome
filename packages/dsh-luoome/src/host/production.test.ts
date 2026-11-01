@@ -603,6 +603,8 @@ describe('dsh-luoome production write policies', () => {
     const policies = createProductionOperationPolicies();
     expect(policies.map((policy) => policy.tool.name)).toEqual([
       'save_decision_review',
+      // REQ-M4-06：档位切换（write）。回执记**提交当时的档位**。
+      'set_automation_tier',
       'record_advice',
       'record_analysis_result',
       'create_strategy',

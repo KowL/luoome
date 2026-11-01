@@ -1132,6 +1132,49 @@ function RetiredEntriesSection() {
   );
 }
 
+/**
+ * 三档的**用户可见叫法**。刻意不含任何行动词（买入/卖出/下单那一类）——
+ * 这是权限说明，不是操作建议。
+ */
+export const AUTOMATION_TIER_LABELS = Object.freeze({
+  off: '关闭',
+  notify: '仅提醒',
+  granted: '授权执行',
+});
+
+export const AUTOMATION_TIER_CHOICES = Object.freeze([
+  { value: 'off', label: '关闭' },
+  { value: 'notify', label: '仅提醒' },
+  { value: 'granted', label: '授权执行' },
+]);
+
+/**
+ * 切换档位（REQ-M4-06 P2）。
+ *
+ * 走 **Operation**：这是写入，必须留下「谁在什么时候把档位改成了什么」的回执
+ * ——「关→开→关 3 条回执可查」依赖这条路径。
+ */
+export const runTierChange = async (
+  tier,
+  { fetcher = globalThis.fetch, operationId, path = 'api/luoome/operations/prepare' } = {},
+) => {
+  const response = await fetcher(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      id: operationId,
+      tool: 'set_automation_tier',
+      input: { tier },
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok || result?.ok !== true)
+    throw new Error(result?.error?.message ?? result?.error?.kind ?? '档位切换失败');
+  return result.data;
+};
+
 export function SettingsPanel() {
   const state = usePanelState('settings');
   // section 深链：settings?section=diagnostics / #diagnostics 直接定位到诊断区块。
@@ -1149,6 +1192,7 @@ export function SettingsPanel() {
   const universe = dataOf(state.results, 'get_stock_universe_status');
   const config = state.configuration;
   const policies = config?.policies ?? [];
+  const [tierNotice, setTierNotice] = useState('');
   return h(
     Panel,
     { className: 'luo-settings' },
@@ -1268,6 +1312,60 @@ export function SettingsPanel() {
           'p',
           null,
           '自动任务由 DSH 的「自动化任务」管理时间和会话。每项批处理仍绑定对应账户、工具、参数和有效期。',
+        ),
+        // REQ-M4-06：三档切换。文案用「关闭 / 仅提醒 / 授权执行」，**不含行动词**。
+        h(
+          'div',
+          {
+            'data-automation-tier': config?.automationTier ?? 'off',
+            'data-tier-source': config?.automationTierSource ?? 'default',
+          },
+          h(
+            'p',
+            { className: 'luo-fine' },
+            `当前档位：${AUTOMATION_TIER_LABELS[config?.automationTier ?? 'off'] ?? '关闭'}`,
+          ),
+          // **来源要可见**：运维改了环境变量发现没生效时，得能看出「这个值来自哪」。
+          config?.automationTierSource === 'env'
+            ? h(
+                'p',
+                { className: 'luo-fine', 'data-tier-source-note': 'env' },
+                '当前档位来自启动配置，设置页修改后会以设置页为准。',
+              )
+            : null,
+          h(
+            'div',
+            { className: 'luo-actions' },
+            AUTOMATION_TIER_CHOICES.map((choice) =>
+              h(
+                'button',
+                {
+                  key: choice.value,
+                  className: 'luo-btn',
+                  type: 'button',
+                  'data-tier-choice': choice.value,
+                  'aria-pressed': (config?.automationTier ?? 'off') === choice.value,
+                  onClick: () =>
+                    setTierNotice('正在切换…') ||
+                    runTierChange(choice.value).then(
+                      () => {
+                        setTierNotice(`档位已切换为「${choice.label}」`);
+                        state.refresh();
+                      },
+                      (failure) => setTierNotice(String(failure?.message ?? failure)),
+                    ),
+                },
+                choice.label,
+              ),
+            ),
+          ),
+          tierNotice === ''
+            ? null
+            : h(
+                'p',
+                { role: 'status', className: 'luo-fine', 'data-tier-notice': 'true' },
+                tierNotice,
+              ),
         ),
         h(
           'p',

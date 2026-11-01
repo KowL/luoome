@@ -42,6 +42,8 @@ import {
   type ConfirmablePluginTool,
   decisionReviewOperation,
   previewDataImportTool,
+  // REQ-M4-06：档位切换（write）。回执记录**提交当时的档位**，供「关→开→关 3 条可查」。
+  setAutomationTierOperation,
   toolRegistry,
 } from '@luoome/tools';
 import { createAccountOperationPolicies } from './account-operations.js';
@@ -204,6 +206,8 @@ export const createProductionOperationPolicies = (
   } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
+  // REQ-M4-06：档位切换（write）。回执记录**提交当时的档位**，供「关→开→关 3 条可查」。
+  setAutomationTierOperation,
   ...createAnalysisOperationPolicies(trusted),
   ...createStrategyOperationPolicies(),
   ...createResearchOperationPolicies(options.researchJobs ?? createResearchJobs()),
@@ -562,6 +566,7 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       },
       principalForSession: () => owner,
       automationTier: host.config.automationTier,
+      automationTierSource: 'env',
       read: host.read,
       market: host.market,
       marketSettings: host.marketSettings,

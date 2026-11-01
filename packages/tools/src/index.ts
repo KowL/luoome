@@ -5,6 +5,7 @@ export * from './agent/draft-display.js';
 export * from './agent/route.js';
 export * from './agent/scenarios.js';
 export * from './agent-whitelist.js';
+export * from './automation-tier-operation.js';
 export * from './context.js';
 export * from './decision-review-operation.js';
 export * from './define-tool.js';

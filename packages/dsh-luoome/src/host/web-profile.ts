@@ -89,6 +89,9 @@ export const mountDshWebProfile = (
     profile: options.profile,
     accountId: options.principalForOwner()?.accountId,
     automationTier: options.automationTier ?? 'off',
+    // REQ-M4-06：当前生效值**来自哪**（table / env / default）。
+    // 运维改了环境变量没生效时，靠这个字段能立刻看出原因。
+    automationTierSource: options.automationTierSource ?? 'default',
     readTools: [...readNames],
     policies: options.policies.map(({ tool, scheduled }) => ({
       name: tool.name,
