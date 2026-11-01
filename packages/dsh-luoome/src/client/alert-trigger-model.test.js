@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  applyThresholdEdits,
+  canEditThresholds,
   requestTriggerDetail,
+  ruleEditorView,
   ruleSummaryText,
   submitAlertPlanUpdate,
   triggerDetailRequest,
@@ -168,5 +171,67 @@ describe('路径一必须走 Operation（不许绕过 policy）', () => {
     await expect(
       submitAlertPlanUpdate({ alertPlanId: 'p', rules: [] }, { fetcher, operationId: 'o' }),
     ).rejects.toThrow('规则不合法');
+  });
+});
+
+describe('就地改阈值（最小可用范围）', () => {
+  it('三种 kind 可编辑，其余不可编辑并给出原因', () => {
+    expect(canEditThresholds('price-level')).toBe(true);
+    expect(canEditThresholds('price-change')).toBe(true);
+    expect(canEditThresholds('cost-threshold')).toBe(true);
+    expect(canEditThresholds('strategy-signal')).toBe(false);
+    expect(canEditThresholds('event-date')).toBe(false);
+    const view = ruleEditorView({ id: 'r', kind: 'strategy-signal' });
+    expect(view.editable).toBe(false);
+    expect(view.reason).toBe('该规则类型暂不支持就地编辑');
+  });
+
+  it('`cost-threshold` 对应**两个**输入框（没有单个 percent 字段）', () => {
+    // 真实 schema 是 stopLossPct / takeProfitPct 两个可选比例（`watch-trigger.ts:94-105`），
+    // 不是 Lead 口述的 `percent`。按 schema 实现。
+    const view = ruleEditorView({
+      id: 'r1',
+      kind: 'cost-threshold',
+      stopLossPct: 0.05,
+      takeProfitPct: 0.12,
+    });
+    expect(view.fields.map((item) => item.field)).toEqual(['stopLossPct', 'takeProfitPct']);
+    // 界面值是百分比：0.05 → 5
+    expect(view.fields[0].value).toBe(5);
+    expect(view.fields[1].value).toBe(12);
+  });
+
+  it('`price-change` 的界面值是百分比，存储是 0–1', () => {
+    const view = ruleEditorView({ id: 'r2', kind: 'price-change', pct: 0.03 });
+    expect(view.fields[0].value).toBe(3);
+    expect(view.fields[0].scale).toBe(0.01);
+  });
+
+  it('**其余规则原样带回**（整体替换语义，不能只传被改的那条）', () => {
+    const rules = [
+      { id: 'r1', kind: 'price-level', level: 100, side: 'above' },
+      { id: 'r2', kind: 'price-change', pct: 0.03, direction: 'any' },
+      { id: 'r3', kind: 'event-date', eventKinds: ['dividend'] },
+    ];
+    const next = applyThresholdEdits(rules, [{ ruleId: 'r1', values: { level: '110' } }]);
+    // 被改的那条变了
+    expect(next[0]).toEqual({ id: 'r1', kind: 'price-level', level: 110, side: 'above' });
+    // 其余两条**逐字段相同**
+    expect(next[1]).toEqual(rules[1]);
+    expect(next[2]).toEqual(rules[2]);
+    // 入参没被就地修改
+    expect(rules[0].level).toBe(100);
+  });
+
+  it('百分比输入换算成存储值（5 → 0.05），只换算一次', () => {
+    const rules = [{ id: 'r2', kind: 'price-change', pct: 0.03, direction: 'any' }];
+    const next = applyThresholdEdits(rules, [{ ruleId: 'r2', values: { pct: '5' } }]);
+    expect(next[0].pct).toBe(0.05);
+  });
+
+  it('空值不覆盖原值（用户没填的字段保持原样）', () => {
+    const rules = [{ id: 'r1', kind: 'price-level', level: 100, side: 'above' }];
+    const next = applyThresholdEdits(rules, [{ ruleId: 'r1', values: { level: '' } }]);
+    expect(next[0].level).toBe(100);
   });
 });

@@ -204,3 +204,96 @@ export const submitAlertPlanUpdate = async (
     throw new Error(result?.error?.message ?? result?.error?.kind ?? '规则更新失败');
   return result.data;
 };
+
+/**
+ * 就地可编辑的阈值字段（M4-10 ②，最小可用范围）。
+ *
+ * ## 只覆盖三种 kind 的数值阈值
+ *
+ * | kind | 字段 | 单位 |
+ * |---|---|---|
+ * | `price-level` | `level` | 价格 |
+ * | `price-change` | `pct` | 比例（界面用百分比输入，存 0–1） |
+ * | `cost-threshold` | `stopLossPct` / `takeProfitPct` | 比例（同上） |
+ *
+ * 注意 `cost-threshold` **没有单个 `percent` 字段**——它的 schema 是两个可选比例
+ * （`stopLossPct` / `takeProfitPct`，至少给一个，见 `watch-trigger.ts:94-105`）。
+ * 所以它可能对应**两个**输入框，不是一个。
+ *
+ * `strategy-signal` / `event-date` **不可就地编辑**：它们没有「阈值」这个动作，
+ * 改它们等于改策略订阅或事件窗口，属于告警面板（M4-01），不在本任务范围。
+ */
+export const EDITABLE_THRESHOLD_FIELDS = Object.freeze({
+  'price-level': [{ field: 'level', label: '阈值价格', unit: 'price', scale: 1 }],
+  'price-change': [{ field: 'pct', label: '涨跌幅阈值', unit: 'percent', scale: 0.01 }],
+  'cost-threshold': [
+    { field: 'stopLossPct', label: '止损比例', unit: 'percent', scale: 0.01, optional: true },
+    { field: 'takeProfitPct', label: '止盈比例', unit: 'percent', scale: 0.01, optional: true },
+  ],
+});
+
+/** 该 kind 是否支持就地编辑阈值。 */
+export const canEditThresholds = (kind) => Object.hasOwn(EDITABLE_THRESHOLD_FIELDS, kind ?? '');
+
+/**
+ * 把规则映射成可编辑控件描述（只读 kind 返回 `editable: false` + 原因）。
+ *
+ * `scale` 表示「界面值 → 存储值」的换算：比例类字段界面用百分比（5 表示 5%），
+ * 存储用 0–1（0.05）。**换算只在提交时做一次**，避免两边各算一遍。
+ */
+export const ruleEditorView = (rule) => {
+  if (rule === null || rule === undefined)
+    return { ruleId: null, kind: null, editable: false, reason: '规则详情缺失', fields: [] };
+  const spec = EDITABLE_THRESHOLD_FIELDS[rule.kind];
+  if (spec === undefined)
+    return {
+      ruleId: rule.id ?? null,
+      kind: rule.kind ?? null,
+      editable: false,
+      reason: '该规则类型暂不支持就地编辑',
+      fields: [],
+    };
+  return {
+    ruleId: rule.id ?? null,
+    kind: rule.kind,
+    editable: true,
+    reason: null,
+    fields: spec.map((item) => ({
+      ...item,
+      // 界面值 = 存储值 / scale（比例类乘 100）。
+      value:
+        typeof rule[item.field] === 'number'
+          ? Number((rule[item.field] / item.scale).toFixed(6))
+          : null,
+    })),
+  };
+};
+
+/**
+ * 把界面的编辑结果写回**完整 rules 数组**。
+ *
+ * ## 为什么必须返回整个数组
+ *
+ * `update_alert_plan` 的 `rules` 是**整体替换**（`alert-plan.ts:38/105`）。
+ * 只传被改的那一条会把其它规则删掉——那是数据损失，不是「只改一条」。
+ *
+ * 所以：命中的规则替换其阈值字段，**其余规则原样带回**（深拷贝，不改入参）。
+ */
+export const applyThresholdEdits = (rules, edits) => {
+  const byId = new Map((edits ?? []).map((edit) => [edit.ruleId, edit]));
+  return (rules ?? []).map((rule) => {
+    const edit = byId.get(rule?.id);
+    if (edit === undefined || edit.values === undefined) return { ...rule };
+    const spec = EDITABLE_THRESHOLD_FIELDS[rule.kind] ?? [];
+    const next = { ...rule };
+    for (const item of spec) {
+      const uiValue = edit.values[item.field];
+      if (uiValue === undefined || uiValue === null || uiValue === '') continue;
+      const numeric = Number(uiValue);
+      if (!Number.isFinite(numeric)) continue;
+      // 界面 → 存储只在这里换算一次。
+      next[item.field] = Number((numeric * item.scale).toFixed(6));
+    }
+    return next;
+  });
+};

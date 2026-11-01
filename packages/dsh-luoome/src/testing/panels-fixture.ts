@@ -13,6 +13,7 @@ import { FakeMarketAdapter } from '@luoome/adapters/testing';
 import {
   type Account,
   type Advice,
+  AlertPlanSchema,
   type Holding,
   STANDARD_DISCLAIMERS,
   type Stock,
@@ -21,6 +22,7 @@ import {
   strategyDefinitionHash,
   type ToolContext,
   TradingPlanV2Schema,
+  WatchTriggerSchema,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import {
@@ -453,9 +455,61 @@ export const seedPanelsFixture = async (
     await repos.tradingPlan.save(planV1);
     await repos.tradingPlan.save(planV2);
 
+    // ── 告警方案 + 触发（M4-10）：浏览器验收要「从触发就地改阈值并证明 trigger 未变」。
+    // 规则用 `price-level`（唯一能用一个数字阈值表达「改条件」的 kind）。
+    const alertPlanId = 'alert-plan-browser-m4-10';
+    await repos.alertPlan.save(
+      AlertPlanSchema.parse({
+        id: alertPlanId,
+        name: '浏览器验收告警',
+        watchlistId: WATCHLIST_ID,
+        rules: [{ id: 'rule-price', kind: 'price-level', level: 100, side: 'above' }],
+        logic: 'ANY',
+        triggerMode: 'on-enter',
+        cooldownMinutes: 30,
+        dailyNotificationLimit: 20,
+        notifyOnRecovery: false,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    // 一条已存在的触发：**改规则前后必须逐字段相同**（PRD 硬要求）。
+    const watchTriggerId = 'watch-trigger-browser-m4-10';
+    await repos.watchTrigger.save(
+      WatchTriggerSchema.parse({
+        id: watchTriggerId,
+        alertPlanId,
+        poolId: alertPlanId,
+        stockId: STOCK.id,
+        ruleKind: 'price-level',
+        ruleId: 'rule-price',
+        direction: 'watch',
+        triggerType: 'triggered',
+        reason: '浏览器验收：价格上穿 100',
+        evidence: ['价格 100.00 上穿阈值 100'],
+        priority: 'normal',
+        deliveryStatus: 'not-requested',
+        evalSnapshot: {
+          ruleId: 'rule-price',
+          kind: 'price-level',
+          quoteClose: 101,
+          threshold: 100,
+        },
+        notified: false,
+        createdAt: now,
+      }),
+    );
+
     return {
       ...PANELS_FIXTURE,
       owner,
+      alerts: {
+        alertPlanId,
+        watchTriggerId,
+        initialLevel: 100,
+        nextLevel: 110,
+      },
       // `latestVersionId` = 去重后应显示的那一版；`olderVersionId` 用于断言「仍可访问」。
       tradingPlan: {
         id: PLAN_ID,

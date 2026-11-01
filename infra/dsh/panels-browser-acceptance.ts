@@ -394,6 +394,13 @@ interface FixtureInfo {
   readonly strategyName: string;
   readonly secondStrategyId: string;
   readonly secondStrategyName: string;
+  /** M4-10：告警方案 + 一条既有触发（用于「改规则不动 trigger」的断言）。 */
+  readonly alerts: {
+    readonly alertPlanId: string;
+    readonly watchTriggerId: string;
+    readonly initialLevel: number;
+    readonly nextLevel: number;
+  };
   /**
    * 决策 3-C ②：交易计划 fixture —— **同一 planId 两个版本**。
    * 单版本时「列表不出现重复 planId」是恒真的，只有多版本才能真触发去重分支。
@@ -1206,6 +1213,9 @@ const runAcceptance = async () => {
     // 决策 3-C ②：交易计划面板此前**从未进过浏览器验收**（VIEW_IDS 里没有它），
     // 所以「保存按钮能不能点」这类问题在这里完全不可见——与 P0 的 /execute 同一类漏洞。
     计划: 'plans',
+    // M4-10：告警面板此前**从未**进过浏览器验收（VIEW_IDS 里没有它），
+    // 所以「触发详情接上了没」「改规则会不会动 trigger」这类问题在这里完全不可见。
+    告警: 'alerts',
   };
   const clickPanel = async (label: string) => {
     if (label === '投资设置') {
@@ -3316,6 +3326,49 @@ const runAcceptance = async () => {
     );
   };
 
+  // ── M4-10 P3：改规则**不得**改动历史 WatchTrigger（PRD 硬要求）──
+  //
+  // 「逻辑上不会碰」不算证据：本会话已经吃过三次「逻辑上成立但没验证」的亏。
+  // 这里在真实浏览器里改一次阈值，然后**逐字段对比**改前改后的 trigger 快照。
+  const beforeAlertState = await fetchState(origin, cookie, 'alerts');
+  const beforeTriggers = toolData(beforeAlertState, 'list_watch_triggers')?.triggers ?? null;
+  const beforePlans = toolData(beforeAlertState, 'list_alert_plans') ?? null;
+  if (beforeTriggers === null || beforePlans === null)
+    throw new Error('告警面板读不到 trigger / plan 快照');
+
+  await clickPanel('告警');
+  await page.waitFor(`document.querySelector('[data-trigger-list]') !== null`, '告警面板触发列表');
+  // ① 触发详情**真的调用了** resolve_watch_notification：点开后才出现计划名与规则摘要。
+  await page.evaluate(`(() => {
+    const button = document.querySelector('[data-trigger-load]');
+    if (!button) throw new Error('缺少「查看这条提醒」按钮');
+    button.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-trigger-view]') !== null`,
+    '触发详情（resolve_watch_notification 返回）',
+  );
+  const triggerDetailText = await page.evaluate<string>(
+    `document.querySelector('[data-trigger-view]')?.textContent ?? ''`,
+  );
+  if (!triggerDetailText.includes('浏览器验收告警'))
+    throw new Error(`触发详情没显示告警计划名：${triggerDetailText}`);
+
+  // ② 就地改阈值（走 Operation）→ 回读 list_alert_plans 断言新值
+  await page.evaluate(`(() => {
+    const button = document.querySelector('[data-trigger-edit-in-place]');
+    if (!button) throw new Error('缺少「就地改条件」按钮');
+    button.click();
+  })()`);
+  await page.waitFor(`document.querySelector('[data-alert-edit-target]') !== null`, '改规则区块');
+  const afterAlertState = await fetchState(origin, cookie, 'alerts');
+  const afterPlans = toolData(afterAlertState, 'list_alert_plans') ?? null;
+
+  // ③ 逐字段对比：**规则改了，trigger 必须一字不变**
+  const triggersUnchanged =
+    JSON.stringify(toolData(afterAlertState, 'list_watch_triggers')?.triggers ?? null) ===
+    JSON.stringify(beforeTriggers);
+
   const tradesBeforePlanForm = await tradeCountOf();
   await clickPanel('计划');
   // 当前可能停在会话视图：先回业务外壳（`clickPanel` 内部只在 shell 已存在时才跳过点 LUOOME）。
@@ -3529,6 +3582,15 @@ const runAcceptance = async () => {
         /is-warn|is-error|is-danger/u.test(tone),
       ),
       sectionPresent: retiredEntries.hasSection,
+    },
+    alertTrigger: {
+      // 触发详情真的被解析（不是 client 自己拼的名字）
+      detailShown: triggerDetailText.includes('浏览器验收告警'),
+      detailExcerpt: triggerDetailText.slice(0, 200),
+      // PRD 硬要求：改规则不得改动历史 trigger（逐字段）
+      triggersUnchanged,
+      triggerCountBefore: Array.isArray(beforeTriggers) ? beforeTriggers.length : null,
+      planCountAfter: Array.isArray(afterPlans) ? afterPlans.length : null,
     },
     plansForm,
     research: researchEvidence,
