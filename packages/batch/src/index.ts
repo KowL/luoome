@@ -20,9 +20,11 @@ import {
   GetStrategyEvaluationProgressOutput,
   getStrategyEvaluationProgressTool,
   getStrategyEvaluationSessionTool,
+  writeReportArtifactTool,
 } from '@luoome/tools';
 import {
   closingReportCutoffWorkflow,
+  dailyReviewWorkflow,
   intradayTradingPlanWatchWorkflow,
   ReplayStrategyRangeOutput,
   replayStrategyRangeWorkflow,
@@ -133,6 +135,37 @@ export const runClosingReportCutoffTool = defineTool({
       ctx.logger.error('收盘报告截止批处理失败', { error: result.error });
       return { outcome: 'failed' as const, reason: failureText(result.error) };
     }
+    /**
+     * REQ-M4-11：收盘档**只负责到产出复盘草稿**。
+     *
+     * 这里跑 `daily-review`（它已能产 `Report`），再由 `write_report_artifact`
+     * 落盘到 `$LUOOME_HOME/reports/`。**到此为止——不写 DecisionReview**：
+     * 用户确认才写，那是 `confirm_review_draft` 的事。
+     *
+     * 失败不阻断收盘截断本身（它是主职责）：`draft` 字段如实报错。
+     */
+    let draft: { readonly reportId: string | null; readonly path: string | null } | null = null;
+    let draftError: string | null = null;
+    try {
+      const review = await dailyReviewWorkflow.run(
+        { accountId: input.accountId, date: result.data.date },
+        ctx,
+      );
+      if (!review.ok) draftError = failureText(review.error);
+      else if (review.data.report !== undefined) {
+        const written = await writeReportArtifactTool.execute(
+          { reportId: review.data.report.id },
+          ctx,
+        );
+        draft = {
+          reportId: review.data.report.id,
+          path: written.ok ? written.data.deliverablePath : null,
+        };
+        if (!written.ok) draftError = failureText(written.error);
+      }
+    } catch (error) {
+      draftError = error instanceof Error ? error.message : String(error);
+    }
     return {
       outcome:
         !recovered.ok || recovered.data.failed.length > 0 || result.data.failed.length > 0
@@ -144,6 +177,9 @@ export const runClosingReportCutoffTool = defineTool({
         created: result.data.created.length,
         failed: result.data.failed.length,
         recoveredFailed: recovered.ok ? recovered.data.failed.length : null,
+        // 草稿状态如实上报：`null` = 本轮没产出（可能上游无数据）；`draftError` 给出原因。
+        draft,
+        draftError,
       },
     };
   },

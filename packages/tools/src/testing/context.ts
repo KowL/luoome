@@ -19,6 +19,7 @@ import type {
   Logger,
   NewsManagerLike,
   NorthboundFlowManagerLike,
+  ReportArtifactWriter,
   RepositoryRegistry,
   SectorQuoteManagerLike,
   StockProfileManagerLike,
@@ -31,6 +32,8 @@ export interface BuildTestContextOptions {
   readonly clock?: () => Date;
   /** task-35：导出物写盘载体；测试用内存实现，不碰真文件系统。 */
   readonly dataArchives?: DataArchiveWriter;
+  /** REQ-M4-11：报告产物写盘载体；测试注入内存实现，断言「草稿真的落盘」。 */
+  readonly reportArtifacts?: ReportArtifactWriter;
   readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
   readonly advices?: readonly Advice[];
@@ -116,6 +119,7 @@ export const buildTestContext = async (
       ? {}
       : { portfolioBenchmark: opts.portfolioBenchmark }),
     ...(opts.dataArchives === undefined ? {} : { dataArchives: opts.dataArchives }),
+    ...(opts.reportArtifacts === undefined ? {} : { reportArtifacts: opts.reportArtifacts }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };
