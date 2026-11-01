@@ -91,8 +91,27 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
           .get();
         if (existing !== undefined) {
           const existingPlan = TradingPlanSchema.parse(existing.plan);
-          if (JSON.stringify(existingPlan) !== JSON.stringify(parsed))
+          if (JSON.stringify(existingPlan) !== JSON.stringify(parsed)) {
+            /**
+             * 同 versionId 不同内容 —— 两种语义，**判据是「有没有声明编辑基线」**：
+             *
+             * - **传了 `expectedRevision`** ⇒ 这是编辑会话（双标签页 / 两台设备 /
+             *   编辑期间他人另存）。版本号撞车在这里是**并发**的正常形态：
+             *   调用方的 `version` 往往是本地算出来的 `当前版本 + 1`，
+             *   `「2 = 1 + 1」与「2 = 2」在提交里长得一模一样`，服务端无从区分
+             *   「我基于 v2 改完存回」与「我基于 v1、本地算出 v2」。
+             *   所以一律按并发处理 → `revision-conflict`，让用户基于最新版重来。
+             *   **不能报 `version-immutable`**：那是个用户无法自救的错误
+             *   （他不知道该基于谁重做），而他的修改其实并没有丢。
+             * - **没传 `expectedRevision`** ⇒ 不是编辑会话，此时「同号不同内容」
+             *   只能是**改写已存在历史** → 保持 `version-immutable`。
+             */
+            if (expectedRevision !== undefined) {
+              const latest = latestRowInTransaction(tx, parsed.id);
+              return { saved: false, reason: 'revision-conflict', actual: latest } as const;
+            }
             return { saved: false, reason: 'version-immutable', actual: versionId } as const;
+          }
           // 同 versionId 同内容：幂等重放。基线检查同样适用（否则重放会绕过锁）。
           if (expectedRevision !== undefined) {
             const latest = latestRowInTransaction(tx, parsed.id);

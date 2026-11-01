@@ -1127,6 +1127,97 @@ export const registerRepositoryContractTests = (
         expect((await repos.tradingPlan.latestByPlanId('plan-lock'))?.version).toBe(2);
       });
 
+      // ── P0-2（Codex 缺陷②）：并发生成同一版本号 → 冲突，不是「改写历史」 ──
+      // 真实双标签页时序：A、B 都从 v1 打开，各自本地算出 version=2；
+      // A 先存成功，B 提交**内容不同**的 v2 —— 旧实现在这里先撞 `version-immutable`，
+      // 用户拿到一个「无法自救」的错误（他不知道该基于谁重做），而他的修改其实没丢。
+      it('并发生成同一版本号（传了基线）→ revision-conflict，不是 version-immutable', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-race', 1));
+        // A 基于 v1 先存成功 → v2
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-race', 2, { status: 'draft', createdAt: T2 }),
+          { expectedRevision: 'plan-race:v1' },
+        );
+        // B 也基于 v1 打开、本地算出 version=2，但内容不同
+        const bResult = await repos.tradingPlan.save(
+          makeTradingPlan('plan-race', 2, {
+            status: 'draft',
+            createdAt: T3,
+            explanation: {
+              supportingEvidenceIds: [],
+              counterEvidence: ['B 的反证'],
+              risks: [],
+              unknowns: [],
+            },
+          }),
+          { expectedRevision: 'plan-race:v1' },
+        );
+        expect(bResult).toEqual({
+          saved: false,
+          reason: 'revision-conflict',
+          actual: 'plan-race:v2',
+        });
+        // A 的 v2 不能被 B 覆盖。
+        const stored = await repos.tradingPlan.findByVersionId('plan-race:v2');
+        expect(stored?.explanation.counterEvidence).not.toEqual(['B 的反证']);
+      });
+
+      // **分歧的可执行形式**：`expectedRevision` 恰好等于那个已存在且内容不同的 versionId。
+      // Lead 裁定：**一律归 revision-conflict**。
+      // 理由：`2 = 1 + 1` 与 `2 = 2` 在提交里长得一模一样，服务端无从区分
+      // 「我基于 v2 改完存回」与「我基于 v1、本地算出 v2」；
+      // 而 `plans.js` 的 version 正是 `当前 + 1` 算出来的 ⇒ 这种形态在并发里是**常态**。
+      it('expectedRevision 等于已存在但内容不同的 versionId → 仍是 revision-conflict', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-edge', 2, { createdAt: T2 }));
+        const result = await repos.tradingPlan.save(
+          makeTradingPlan('plan-edge', 2, {
+            createdAt: T2,
+            explanation: {
+              supportingEvidenceIds: [],
+              counterEvidence: ['不同的内容'],
+              risks: [],
+              unknowns: [],
+            },
+          }),
+          { expectedRevision: 'plan-edge:v2' },
+        );
+        expect(result).toEqual({
+          saved: false,
+          reason: 'revision-conflict',
+          actual: 'plan-edge:v2',
+        });
+      });
+
+      // 反过来：**没声明基线**时，「同号不同内容」只能是改写历史。
+      it('没有声明基线却提交同号不同内容 → version-immutable（改写历史）', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-immutable', 1));
+        const result = await repos.tradingPlan.save(
+          makeTradingPlan('plan-immutable', 1, {
+            explanation: {
+              supportingEvidenceIds: [],
+              counterEvidence: ['改写历史'],
+              risks: [],
+              unknowns: [],
+            },
+          }),
+        );
+        expect(result).toEqual({
+          saved: false,
+          reason: 'version-immutable',
+          actual: 'plan-immutable:v1',
+        });
+      });
+
+      // 幂等不变量：同号同内容仍然是 saved:true（不受上面改动影响）。
+      it('同版本号同内容仍是幂等重放（传基线时也一样）', async () => {
+        const plan = makeTradingPlan('plan-idem', 1);
+        expect(await repos.tradingPlan.save(plan)).toEqual({ saved: true });
+        expect(await repos.tradingPlan.save(plan)).toEqual({ saved: true });
+        expect(await repos.tradingPlan.save(plan, { expectedRevision: 'plan-idem:v1' })).toEqual({
+          saved: true,
+        });
+      });
+
       it('expectedRevision 匹配当前最新版 → 正常保存', async () => {
         await repos.tradingPlan.save(makeTradingPlan('plan-ok', 1));
         const updated = makeTradingPlan('plan-ok', 2, { status: 'draft', createdAt: T2 });

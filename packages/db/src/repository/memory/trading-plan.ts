@@ -54,8 +54,18 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       const versionId = tradingPlanVersionId(parsed);
       const existing = this.items.get(versionId);
       if (existing !== undefined) {
-        if (JSON.stringify(existing) !== JSON.stringify(parsed))
+        if (JSON.stringify(existing) !== JSON.stringify(parsed)) {
+          // 同 versionId 不同内容：判据是「有没有声明编辑基线」（与 drizzle 实现一致）：
+          // - 传了 `expectedRevision` ⇒ 编辑会话，版本号撞车是并发 → `revision-conflict`
+          // - 没传 ⇒ 非编辑会话，只可能是改写历史 → `version-immutable`
+          if (expectedRevision !== undefined)
+            return {
+              saved: false,
+              reason: 'revision-conflict',
+              actual: this.latestVersionIdLocked(parsed.id),
+            } as const;
           return { saved: false, reason: 'version-immutable', actual: versionId } as const;
+        }
         // 幂等重放同样受基线检查约束，否则重放会绕过锁。
         if (expectedRevision !== undefined) {
           const latest = this.latestVersionIdLocked(parsed.id);

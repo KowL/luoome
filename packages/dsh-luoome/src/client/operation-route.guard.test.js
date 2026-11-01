@@ -91,6 +91,31 @@ describe('client 的 Operation 路由守卫', () => {
     expect(source).toContain('/confirm');
   });
 
+  // P0-1（Codex 查出）：提交基线必须是**打开时**的版本，不能是列表当前版本。
+  it('plans.js 的保存基线绑定 openedVersionId，不随列表刷新漂移', () => {
+    const source = stripComments(read(resolve(CLIENT_ROOT, 'plans.js')));
+    // 找到 onSave 那段，断言它把 openedVersionId 传下去。
+    const onSave = source.slice(source.indexOf('onSave:'), source.indexOf('onSave:') + 600);
+    expect(onSave).toContain('openedVersionId');
+    // 并且**不许**在同一处用 current.versionId 当基线——那是「列表当前版本」，
+    // 保存成功后列表一刷新基线就漂，乐观锁形同虚设。
+    expect(onSave).not.toContain('current.versionId');
+  });
+
+  // P0-3（Codex 缺陷③）：冲突识别必须走**结构化 issues**，不许正则解析消息。
+  it('plans.js 按结构化 issues 识别冲突，不用正则解析文案', () => {
+    const source = stripComments(read(resolve(CLIENT_ROOT, 'plans.js')));
+    // 必须读 path 里的 reason / actual
+    expect(source).toContain('issue.path[0] === name');
+    expect(source).toContain("reasonOf('reason')");
+    expect(source).toContain("reasonOf('actual')");
+    // **不许**再靠「已被更新到」这类文案正则（改了文案就失效）
+    expect(source).not.toContain('已被更新到\\s+');
+    // 真正的「结果未知」必须与「确定的冲突」分开表达
+    expect(source).toContain("kind: 'conflict'");
+    expect(source).toContain("kind: 'error'");
+  });
+
   it('plans.js 的未知态（unknown）必须显式处理，不能当成功', () => {
     const source = stripComments(read(resolve(CLIENT_ROOT, 'plans.js')));
     expect(source).toContain("state !== 'succeeded'");

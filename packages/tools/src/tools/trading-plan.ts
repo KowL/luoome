@@ -78,6 +78,31 @@ const budgetFor = async (
   );
 };
 
+/**
+ * 并发冲突的结构化错误（Codex 缺陷③ / P0-3）。
+ *
+ * 为什么用 `issues` 承载而不是只给一句话：
+ * - Operation 链路会把 `invalid_input` 一并吞进通用失败分支，只有 message 时
+ *   client 只能靠**正则**猜「这是不是冲突」——文案一改就失效。
+ * - `issues` 是既有 `ToolError` 结构里唯一能带结构化字段的槽位，
+ *   用 `path[0]` 承载字段名、`message` 承载值：
+ *   `['reason'] → 'revision-conflict'`、`['actual'] → <当前最新 versionId>`。
+ *
+ * **与 `unknown` 严格区分**：`unknown` = 结果未知（可能已提交），
+ * 这里是**确定的、未提交的**冲突。两者不能混为一谈。
+ */
+const revisionConflictError = (actual: string, expectedRevision: string | undefined) => ({
+  ok: false as const,
+  error: {
+    kind: 'invalid_input' as const,
+    message: `交易计划已被更新到 ${actual}，本次编辑基于 ${String(expectedRevision)} 已过期；请重新读取该版本后再保存`,
+    issues: [
+      { code: 'custom' as const, path: ['reason'], message: 'revision-conflict' },
+      { code: 'custom' as const, path: ['actual'], message: actual },
+    ],
+  },
+});
+
 export const SaveTradingPlanInput = z.object({
   /** 写路径只接受 v2（区间 + 选点 + 结构化失效条件）；旧形状必须由调用方先迁移。 */
   plan: TradingPlanV2Schema,
@@ -156,12 +181,8 @@ export const saveTradingPlanTool = defineTool({
             '交易计划基于的账户事实已变化（持仓或现金已更新），请重新生成计划',
           );
         }
-        if (saved.reason === 'revision-conflict') {
-          return errInvalidInput(
-            `交易计划已被更新到 ${saved.actual}，本次编辑基于 ${input.expectedRevision} 已过期；` +
-              '请重新读取该版本后再保存',
-          );
-        }
+        if (saved.reason === 'revision-conflict')
+          return revisionConflictError(saved.actual, input.expectedRevision);
         if (saved.reason === 'version-immutable') {
           return errInvalidInput(`交易计划版本不可变：${saved.actual} 已存在且内容不同`);
         }
@@ -200,12 +221,9 @@ export const saveTradingPlanTool = defineTool({
       input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision },
     );
     if (!saved.saved) {
-      // 冲突必须把「该基于哪一版重试」透给调用方，不能只说失败。
+      // 冲突必须把「该基于哪一版重试」**结构化**透给调用方，不能只说失败。
       return saved.reason === 'revision-conflict'
-        ? errInvalidInput(
-            `交易计划已被更新到 ${saved.actual}，本次编辑基于 ${input.expectedRevision} 已过期；` +
-              '请重新读取该版本后再保存',
-          )
+        ? revisionConflictError(saved.actual, input.expectedRevision)
         : errInvalidInput(`交易计划版本不可变：${saved.actual} 已存在且内容不同`);
     }
     return { plan: stored, versionId, ...(budget === undefined ? {} : { budget }) };

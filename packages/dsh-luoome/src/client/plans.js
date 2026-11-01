@@ -73,8 +73,16 @@ const operationRequest = async (path, body) => {
       : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
   const result = await response.json();
-  if (!response.ok || !result.ok)
-    throw new Error(result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`);
+  if (!response.ok || !result.ok) {
+    // **把结构化 issues 带出来**：工具用 `issues` 承载 `reason`/`actual`，
+    // 只抛 message 会让上层只能靠正则猜（Codex 缺陷③）。
+    const failure = new Error(
+      result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`,
+    );
+    failure.issues = Array.isArray(result.error?.issues) ? result.error.issues : [];
+    failure.kind = result.error?.kind ?? null;
+    throw failure;
+  }
   return result.data;
 };
 
@@ -480,19 +488,28 @@ export function PlansPanel() {
         );
       })
       .catch((error) => {
-        // 冲突**保留编辑内容**：只更新提示，不动表单 state。
-        const message = String(error.message ?? error);
-        const conflict = /已被更新到\s+(\S+)/.exec(message);
+        // 冲突**保留编辑内容**：只更新提示，不动表单 state（草稿还在，用户可重新核对）。
+        //
+        // 识别方式：读工具错误里的**结构化 issues**（`path: ['reason']` = 'revision-conflict'，
+        // `path: ['actual']` = 当前最新版本），**不用正则解析消息**——
+        // 文案会变，结构不会（Codex 缺陷③要求「明确传递『冲突且未提交』，
+        // 同时继续区分真正的结果未知」）。
+        const issues = Array.isArray(error?.issues) ? error.issues : [];
+        const reasonOf = (name) =>
+          issues.find((issue) => Array.isArray(issue?.path) && issue.path[0] === name)?.message;
+        const actualVersionId = reasonOf('actual');
+        const isConflict = reasonOf('reason') === 'revision-conflict';
         setNotice(
-          conflict === null
-            ? { kind: 'error', text: message }
-            : {
+          isConflict
+            ? {
                 kind: 'conflict',
                 text: revisionConflictNotice({
                   openedVersionId,
-                  actualVersionId: conflict[1],
+                  actualVersionId: actualVersionId ?? '（服务端未给出）',
                 }),
-              },
+              }
+            : // 真正的「结果未知」仍然单独表达——不许和「确定的冲突」混为一谈。
+              { kind: 'error', text: String(error?.message ?? error) },
         );
       })
       .finally(() => setSaving(false));
@@ -626,11 +643,14 @@ export function PlansPanel() {
             onSave: (editable) =>
               saveDraft(
                 { ...editable, version: (current.version ?? 1) + 1 },
-                // 基线同样按派生口径给出（读 schema 没有 versionId 字段）。
-                current.versionId ??
-                  (current.id === undefined
-                    ? undefined
-                    : `${current.id}:v${String(current.version ?? 1)}`),
+                // ⚠️ 基线**只能**是 `openedVersionId`（打开编辑时那一版）。
+                //
+                // 这里曾经写成 `current.versionId`，那是「**列表当前**的版本」——
+                // 保存成功后列表刷新，它就会跟着变成新版本，于是下次保存声明的基线
+                // 悄悄被换掉，**乐观锁形同虚设**（Codex 查出的缺陷①）。
+                //
+                // 列表刷新只更新列表；**不许**动正在编辑的草稿的基线。
+                openedVersionId,
               ),
           }),
           h('span', { className: 'luo-fine' }, '保存不会自动下单；计划只是记录与约束。'),
