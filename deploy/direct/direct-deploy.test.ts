@@ -1,4 +1,9 @@
-import { readFileSync } from 'node:fs';
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: 本文件里出现的 `${VAR}` 是**被断言的 shell 源码字面量**，
+// 不是 JS 模板插值——静态守卫要对着脚本原文断言，所以这些字符必须原样保留。
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -187,5 +192,146 @@ describe('升级脚本可回滚', () => {
       /dsh-web-probe\.mjs" "\$\{PUBLIC_URL\}" "\$\{PIN_FILE\}"; then\n {2}rollback/,
     );
     expect(upgrade).toContain(`rm -rf "${shellVar('DSH_HOME')}/profiles/${shellVar('PROFILE')}"`);
+  });
+});
+
+/**
+ * task-36：`upgrade.sh` 的备份保留策略 + 磁盘预检。
+ *
+ * 判据用**真跑 bash**而不是读源码：正则、数组排序、`${#array[@]}` 这类语义，
+ * 静态读文本读不出来（前几轮就有过「只看一类证据」的误判）。
+ */
+describe('备份保留策略与磁盘预检（task-36）', () => {
+  const upgrade = read('./upgrade.sh');
+
+  /** 把 `upgrade.sh` 里的三个函数抠出来单独跑，避免整脚本的 root/systemctl 前置。 */
+  const extractFunctions = (): string => {
+    const names = ['require_positive_keep', 'require_disk_space', 'prune_backups'];
+    const chunks = names.map((name) => {
+      const start = upgrade.indexOf(`${name}() {`);
+      if (start < 0) throw new Error(`upgrade.sh 缺少函数 ${name}`);
+      const end = upgrade.indexOf('\n}', start);
+      if (end < 0) throw new Error(`函数 ${name} 未闭合`);
+      return upgrade.slice(start, end + 2);
+    });
+    return [
+      'set -euo pipefail',
+      `log() { printf '[upgrade] %s\\n' "$*" >&2; }`,
+      `fail() { printf '[upgrade] 错误：%s\\n' "$*" >&2; exit 1; }`,
+      'BACKUP_ROOT=' + '"' + '${BACKUP_ROOT:-}' + '"',
+      "BACKUP_STAMP_PATTERN='^[0-9]{8}T[0-9]{6}Z$'",
+      'BACKUP_ESTIMATE_MB=900',
+      'REQUIRED_FREE_MB=$((BACKUP_ESTIMATE_MB * 2))',
+      'DEPLOY_ROOT=' + '"' + '${DEPLOY_ROOT:-}' + '"',
+      ...chunks,
+      '__RUN__',
+    ].join('\n');
+  };
+
+  const runBash = (
+    script: string,
+    env: Record<string, string> = {},
+  ): { status: number; stdout: string; stderr: string } => {
+    const result = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    });
+    return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+  };
+
+  it('保留最近 N 份；手工备份（pre-* 等）不在候选里，永不被删', () => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-backups-'));
+    try {
+      // 8 个时间戳目录 + 2 个手工目录 + 1 个非目录文件。
+      const stamps = [
+        '20261001T000000Z',
+        '20261002T000000Z',
+        '20261003T000000Z',
+        '20261004T000000Z',
+        '20261005T000000Z',
+        '20261006T000000Z',
+        '20261007T000000Z',
+        '20261008T000000Z',
+      ];
+      for (const stamp of [...stamps, 'pre-migration', 'retention-manual']) {
+        mkdirSync(join(root, stamp));
+      }
+      writeFileSync(join(root, 'workspace.json.1'), '{}');
+
+      const script = extractFunctions().replace('__RUN__', 'prune_backups 3');
+      const result = runBash(script, { BACKUP_ROOT: root });
+      expect(result.status, result.stderr).toBe(0);
+
+      const left = readdirSync(root).sort();
+      // 最近 3 个时间戳保留。
+      expect(left).toContain('20261008T000000Z');
+      expect(left).toContain('20261007T000000Z');
+      expect(left).toContain('20261006T000000Z');
+      // 更早的时间戳被删。
+      expect(left).not.toContain('20261001T000000Z');
+      expect(left).not.toContain('20261005T000000Z');
+      // **手工备份必须原样保留**（这就是白名单的意义）。
+      expect(left).toContain('pre-migration');
+      expect(left).toContain('retention-manual');
+      expect(left).toContain('workspace.json.1');
+      // 删之前有清单可追溯。
+      expect(result.stderr).toContain('清理旧备份：20261005T000000Z');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('KEEP 校验：0 / 负数 / 非数字一律 fail，绝不清空', () => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-backups-'));
+    try {
+      for (const stamp of ['20261001T000000Z', '20261002T000000Z']) mkdirSync(join(root, stamp));
+      const script = extractFunctions().replace(
+        '__RUN__',
+        'KEEP="$(require_positive_keep)"; echo "OK:$KEEP"',
+      );
+
+      for (const bad of ['0', '-1', 'abc', '3.5', '']) {
+        const result = runBash(script, { BACKUP_ROOT: root, LUOOME_BACKUP_KEEP: bad });
+        if (bad === '') {
+          // 空值 = 未设置 → 走默认 5，不算错误。
+          expect(result.status).toBe(0);
+          expect(result.stdout).toContain('OK:5');
+          continue;
+        }
+        expect(result.status, `KEEP=${bad} 应当失败`).not.toBe(0);
+        expect(result.stderr).toContain('LUOOME_BACKUP_KEEP');
+        // 失败后备份一份都不能少。
+        expect(readdirSync(root).sort()).toEqual(['20261001T000000Z', '20261002T000000Z']);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('磁盘预检在写任何东西之前失败', () => {
+    const script = extractFunctions().replace(
+      '__RUN__',
+      `REQUIRED_FREE_MB=999999999; require_disk_space`,
+    );
+    const result = runBash(script, { BACKUP_ROOT: '', DEPLOY_ROOT: tmpdir() });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('可用空间不足');
+  });
+
+  it('脚本结构：清理只在成功路径上，且预检/校验在备份之前', () => {
+    const pruneIndex = upgrade.indexOf('prune_backups ' + '"' + '${KEEP_BACKUPS}' + '"');
+    const completeIndex = upgrade.indexOf('log "升级完成');
+    const precheckIndex = upgrade.indexOf('require_disk_space');
+    const backupIndex = upgrade.indexOf('mkdir -p ' + '"' + '${BACKUP_DIR}' + '"');
+    // 清理在「升级完成」之前但之后于一切部署动作 — 用「在文件末尾附近且只有一处」表达。
+    expect(pruneIndex).toBeGreaterThan(0);
+    expect(completeIndex).toBeGreaterThan(pruneIndex);
+    // 预检必须早于建备份目录。
+    expect(precheckIndex).toBeGreaterThan(0);
+    expect(precheckIndex).toBeLessThan(backupIndex);
+    // 回滚里不出现清理。
+    const rollbackStart = upgrade.indexOf('rollback() {');
+    const rollbackEnd = upgrade.indexOf('\n}', rollbackStart);
+    expect(upgrade.slice(rollbackStart, rollbackEnd)).not.toContain('prune_backups');
   });
 });

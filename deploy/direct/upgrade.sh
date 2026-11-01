@@ -35,8 +35,68 @@ GLOBAL_MODULES="$(npm root -g)"
 PIN_FILE="${DSH_HOME}/dsh-pocket/token"
 [ -f "${PIN_FILE}" ] || fail "缺少访问密码文件 ${PIN_FILE}"
 
+# 备份保留策略（task-36）：
+# - 默认留最近 5 份；`LUOOME_BACKUP_KEEP` 可覆盖，**必须是正整数**。
+# - 候选集用**白名单**：目录名必须匹配 `^[0-9]{8}T[0-9]{6}Z$` 才进候选，
+#   于是 `pre-*` / `retention-*` / `workspace.json.*` 这些手工产物天然不会被碰到。
+# - **KEEP=0 / 负数 / 非数字一律 fail**：一个笔误就能把全部回滚能力删光。
+BACKUP_ROOT="${DEPLOY_ROOT}/backups"
+BACKUP_STAMP_PATTERN='^[0-9]{8}T[0-9]{6}Z$'
+# 单份备份的保守估算（实测 460-464M，取 900M 留余量）；预检要求 ≥ 2 份空间。
+BACKUP_ESTIMATE_MB="${LUOOME_BACKUP_ESTIMATE_MB:-900}"
+REQUIRED_FREE_MB="$((BACKUP_ESTIMATE_MB * 2))"
+
+require_positive_keep() {
+  local raw="${LUOOME_BACKUP_KEEP:-5}"
+  case "${raw}" in
+    '' | *[!0-9]*) fail "LUOOME_BACKUP_KEEP 必须是正整数（当前：'${raw}'）；拒绝继续，避免误清空备份" ;;
+  esac
+  [ "${raw}" -gt 0 ] || fail "LUOOME_BACKUP_KEEP 必须 ≥ 1（当前：${raw}）；拒绝继续，避免误清空备份"
+  printf '%s' "${raw}"
+}
+
+# 部署**写任何东西之前**先看磁盘：写一半满盘会留下半成品 profile 与半截 db，
+# 比不部署更糟（回滚也要读这些文件）。
+require_disk_space() {
+  local available_mb
+  available_mb="$(df -Pm "${DEPLOY_ROOT}" | awk 'NR==2 {print $4}')"
+  [ -n "${available_mb}" ] || fail "无法读取 ${DEPLOY_ROOT} 的可用空间"
+  if [ "${available_mb}" -lt "${REQUIRED_FREE_MB}" ]; then
+    fail "可用空间不足：剩余 ${available_mb}M，需要至少 ${REQUIRED_FREE_MB}M（单份备份约 ${BACKUP_ESTIMATE_MB}M）。先清理 ${BACKUP_ROOT} 再重试"
+  fi
+}
+
+# 只删**匹配时间戳白名单**的目录，且永远保留最近 keep 份（按名字倒序 = 时间倒序）。
+# 删之前把清单打到 stderr，便于事后追溯。
+prune_backups() {
+  local keep="$1"
+  [ -d "${BACKUP_ROOT}" ] || return 0
+  local candidates=()
+  local entry
+  for entry in "${BACKUP_ROOT}"/*; do
+    [ -d "${entry}" ] || continue
+    [[ "$(basename "${entry}")" =~ ${BACKUP_STAMP_PATTERN} ]] || continue
+    candidates+=("$(basename "${entry}")")
+  done
+  [ "${#candidates[@]}" -eq 0 ] && return 0
+  # 时间戳格式可按字典序排序，所以排序即按时间。
+  # 不用 `mapfile`：macOS 自带 bash 3.2 没有它，而这份脚本也要能在开发机上被测。
+  local sorted index=0 name
+  sorted="$(printf '%s\n' "${candidates[@]}" | sort -r)"
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    index=$((index + 1))
+    [ "${index}" -le "${keep}" ] && continue
+    log "清理旧备份：${name}（保留最近 ${keep} 份）"
+    rm -rf -- "${BACKUP_ROOT}/${name}"
+  done <<<"${sorted}"
+}
+
+KEEP_BACKUPS="$(require_positive_keep)"
+require_disk_space
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_DIR="${DEPLOY_ROOT}/backups/${STAMP}"
+BACKUP_DIR="${BACKUP_ROOT}/${STAMP}"
 mkdir -p "${BACKUP_DIR}"
 sha256sum "${PLUGIN_ARTIFACT}" >"${BACKUP_DIR}/plugin.sha256"
 
@@ -93,4 +153,9 @@ if ! node "${DEPLOY_ROOT}/deploy/dsh-web-probe.mjs" "${PUBLIC_URL}" "${PIN_FILE}
   fail '探针验收失败，已回滚'
 fi
 
+# 清理**只在部署成功后**执行：失败回滚时那份备份是唯一的回退依据，绝不能删。
+# 候选集白名单见 `prune_backups`；手工备份（`pre-*` 等）永不在候选里。
+prune_backups "${KEEP_BACKUPS}"
+
 log "升级完成：${PLUGIN_ARTIFACT}"
+log "备份保留：最近 ${KEEP_BACKUPS} 份（${BACKUP_ROOT}；可用 LUOOME_BACKUP_KEEP 调整）"
