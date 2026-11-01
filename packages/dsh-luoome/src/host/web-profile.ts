@@ -85,20 +85,39 @@ export const mountDshWebProfile = (
     principalForSession: options.principalForSession,
     now: options.now,
   });
-  const configuration = () => ({
-    profile: options.profile,
-    accountId: options.principalForOwner()?.accountId,
-    automationTier: options.automationTier ?? 'off',
-    // REQ-M4-06：当前生效值**来自哪**（table / env / default）。
-    // 运维改了环境变量没生效时，靠这个字段能立刻看出原因。
-    automationTierSource: options.automationTierSource ?? 'default',
-    readTools: [...readNames],
-    policies: options.policies.map(({ tool, scheduled }) => ({
-      name: tool.name,
-      description: tool.description,
-      scheduled,
-    })),
-  });
+  /**
+   * 设置页的配置快照。
+   *
+   * ## 档位必须**每次重新读**
+   *
+   * 这里曾经读 `options.automationTier`（启动时常量），于是用户在设置页切完档位、
+   * Operation 回执也成功了、**面板显示的档位却不变**——
+   * 这是「常量 vs 运行时」bug 的第三次出现（前两次：`allowBusinessWrite`、
+   * `research-status` 压两态）。**凡是活的配置，就不能在装配时算死。**
+   */
+  const configuration = async () => {
+    const resolved =
+      options.resolveAutomationTier === undefined
+        ? {
+            tier: options.automationTier ?? 'off',
+            source: options.automationTierSource ?? 'default',
+          }
+        : await options.resolveAutomationTier();
+    return {
+      profile: options.profile,
+      accountId: options.principalForOwner()?.accountId,
+      automationTier: resolved.tier,
+      // REQ-M4-06：当前生效值**来自哪**（table / env / default）。
+      // 运维改了环境变量没生效时，靠这个字段能立刻看出原因。
+      automationTierSource: resolved.source,
+      readTools: [...readNames],
+      policies: options.policies.map(({ tool, scheduled }) => ({
+        name: tool.name,
+        description: tool.description,
+        scheduled,
+      })),
+    };
+  };
   const routes = new Map<
     string,
     { methods: ('GET' | 'POST')[]; fetch: (r: Request) => Promise<Response> }
@@ -271,7 +290,7 @@ export const mountDshWebProfile = (
     register('/api/luoome/profile', ['GET'], async () => {
       const principal = options.principalForOwner();
       if (!principal) return new Response(null, { status: 403 });
-      return Response.json(configuration(), { headers: { 'cache-control': 'no-store' } });
+      return Response.json(await configuration(), { headers: { 'cache-control': 'no-store' } });
     });
   } catch (error) {
     for (const remove of removers.reverse()) remove();

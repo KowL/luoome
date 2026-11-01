@@ -1347,7 +1347,7 @@ export function SettingsPanel() {
                   'aria-pressed': (config?.automationTier ?? 'off') === choice.value,
                   onClick: () =>
                     setTierNotice('正在切换…') ||
-                    runTierChange(choice.value).then(
+                    runTierChange(choice.value, { operationId: crypto.randomUUID() }).then(
                       () => {
                         setTierNotice(`档位已切换为「${choice.label}」`);
                         state.refresh();

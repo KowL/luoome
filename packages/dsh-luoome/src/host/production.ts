@@ -557,16 +557,19 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
       context: () => host.context,
       profile: 'dsh-luoome-plugin',
       principalForOwner: () => owner,
+      principalForSession: () => owner,
+      automationTier: host.config.automationTier,
+      automationTierSource: 'env',
       // REQ-M4-06 P1-c：把**执行时读档位**接进 operation 准入点。
       // 不传它的话，`allowBusinessWrite` 就是构造时常量——设置页切完行为不变。
+
+      // REQ-M4-06：档位**每次请求重新读**（表 > env > 默认）。
+      // 不传它的话 `configuration()` 只能拿到启动常量——切完档位面板显示不变。
       resolveAutomationTier: () => {
         const store = host.context.automationTierStore;
         if (store === undefined) throw new Error('automation tier store is not configured');
         return store.resolve();
       },
-      principalForSession: () => owner,
-      automationTier: host.config.automationTier,
-      automationTierSource: 'env',
       read: host.read,
       market: host.market,
       marketSettings: host.marketSettings,

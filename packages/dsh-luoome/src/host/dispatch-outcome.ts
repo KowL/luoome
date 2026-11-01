@@ -21,12 +21,10 @@ export type DispatchOutcome =
 
 export type DispatchSkipReason = 'tier-off' | 'non-trading-day';
 
-export const dispatchOutcome = (
-  input: {
-    readonly tierAllowsDispatch: boolean;
-    readonly isTradingDay: boolean;
-  },
-): DispatchOutcome => {
+export const dispatchOutcome = (input: {
+  readonly tierAllowsDispatch: boolean;
+  readonly isTradingDay: boolean;
+}): DispatchOutcome => {
   // 档位优先：用户明确关了自动化，就不该再谈「今天是否交易日」。
   if (!input.tierAllowsDispatch) return { status: 'skipped', reason: 'tier-off' };
   if (!input.isTradingDay) return { status: 'skipped', reason: 'non-trading-day' };

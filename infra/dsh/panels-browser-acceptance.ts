@@ -1746,6 +1746,37 @@ const runAcceptance = async () => {
     envNoteVisible: document.querySelector('[data-tier-source-note="env"]') !== null,
   }))()`);
 
+  // ── 五段链路诊断（先 dump，不猜）──
+  const tierDiag = await page.evaluate<{
+    hasTierRoot: boolean;
+    hasChoices: boolean;
+    sectionTitles: string[];
+    choiceCount: number;
+    raw: string;
+  }>(`(() => {
+    const root = document.querySelector('[data-automation-tier]');
+    const choices = document.querySelectorAll('[data-tier-choice]');
+    const titles = [...document.querySelectorAll('.luo-section h2, .luo-section-title, [data-luoome-section]')]
+      .map((node) => (node.textContent ?? '').trim().slice(0, 30));
+    const settingsRoot = document.querySelector('.luo-settings');
+    return {
+      hasTierRoot: root !== null,
+      hasChoices: choices.length > 0,
+      sectionTitles: titles.slice(0, 20),
+      choiceCount: choices.length,
+      raw: (settingsRoot?.innerText ?? '').slice(0, 600),
+    };
+  })()`);
+  // ① 区块渲染了吗？
+  if (!tierDiag.hasTierRoot)
+    throw new Error(
+      `【链路第1段断】设置页里没有 [data-automation-tier]\nsection 标题：${JSON.stringify(tierDiag.sectionTitles)}\n设置页文本：${tierDiag.raw}`,
+    );
+  if (!tierDiag.hasChoices)
+    throw new Error(
+      `【链路第1段断】有档位根节点但无按钮（choiceCount=${String(tierDiag.choiceCount)}）\n文本：${tierDiag.raw}`,
+    );
+
   // ① 三个按钮都在，且文案零行动词
   const expectedTierLabels = [
     { value: 'off', label: '关闭' },
@@ -1779,17 +1810,60 @@ const runAcceptance = async () => {
 
   // ④ **点「授权执行」→ 档位显示真的变化**（完整链路）
   const tierBefore = tierProbe.current;
+  // 第 2 段：按钮存在且可点吗？onClick 是不是函数？
+  const clickProbe = await page.evaluate<{
+    hasButton: boolean;
+    disabled: boolean;
+  }>(`(() => {
+    const button = document.querySelector('[data-tier-choice="granted"]');
+    return { hasButton: button !== null, disabled: button?.disabled === true };
+  })()`);
+  if (!clickProbe.hasButton)
+    throw new Error('【链路第2段断】找不到 [data-tier-choice="granted"] 按钮');
+  if (clickProbe.disabled) throw new Error('【链路第2段断】「授权执行」按钮是 disabled');
+
+  // 第 3 段：点击是否真的发出了请求？包一层 fetch 计数。
+  await page.evaluate(`(() => {
+    window.__tierCalls = [];
+    window.__tierOriginalFetch = window.fetch;
+    window.fetch = function (input, init) {
+      const url = typeof input === 'string' ? input : input?.url;
+      if (String(url).includes('/operations/')) {
+        window.__tierCalls.push({ url: String(url), body: init?.body ?? null });
+      }
+      return window.__tierOriginalFetch.apply(this, arguments);
+    };
+  })()`);
   await page.evaluate(`(() => {
     const button = document.querySelector('[data-tier-choice="granted"]');
     if (!button) throw new Error('缺少「授权执行」按钮');
     button.click();
   })()`);
-  await page.waitFor(
-    `document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') === 'granted' ||
-     document.querySelector('[data-tier-notice]')?.textContent?.includes('档位已切换') === true`,
-    '档位切换结果',
-    15_000,
+  // 给请求一点时间落地（不阻塞：即使没发出也要继续 dump，好定位断点）。
+  await new Promise((done) => setTimeout(done, 1_500));
+  const callProbe = await page.evaluate<{ calls: { url: string; body: string | null }[] }>(
+    `({ calls: window.__tierCalls ?? [] })`,
   );
+  if (callProbe.calls.length === 0)
+    throw new Error(
+      '【链路第3段断】点击「授权执行」后没有发出任何 /operations/ 请求 —— onClick 没接上（或 runTierChange 未被调用）',
+    );
+  // **只等属性本身变化**：notice 出现不代表界面读到了新档位（那是两个数据源）。
+  await page
+    .waitFor(
+      `document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') === 'granted'`,
+      '档位切换结果',
+      15_000,
+    )
+    .catch(async () => {
+      // 第 4/5 段：请求发了但显示没变 —— 把请求与响应现场带出来。
+      const after = await page.evaluate(
+        `({ tier: document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') ?? null, notice: document.querySelector('[data-tier-notice]')?.textContent ?? null })`,
+      );
+      throw new Error(
+        `【链路第4/5段断】请求已发出但显示未更新。请求=${JSON.stringify(callProbe.calls)} 现状=${JSON.stringify(after)}`,
+      );
+    });
   const tierAfter = await page.evaluate<string | null>(
     `document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') ?? null`,
   );

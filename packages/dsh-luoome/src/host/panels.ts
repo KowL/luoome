@@ -423,7 +423,13 @@ export interface CreatePanelStateHandlerOptions {
   ) => Promise<ResearchContinuity | undefined>;
   readonly marketTimeoutMs?: number;
   readonly maxStrategyWorkspaces?: number;
-  readonly configuration?: () => Readonly<Record<string, unknown>>;
+  /**
+   * 设置页的配置快照。**允许异步**：档位来自 KV 表（每次请求重新读），
+   * 同步函数拿不到它 —— 那正是「切了档位但面板显示不变」的原因。
+   */
+  readonly configuration?: () =>
+    | Readonly<Record<string, unknown>>
+    | Promise<Readonly<Record<string, unknown>>>;
 }
 
 const StockDetailQuery = z.object({ stockId: z.string().regex(/^\d{6}\.(SH|SZ|BJ)$/) }).strict();
@@ -664,7 +670,7 @@ export const createPanelStateHandler =
       ...(watchlist?.watchlistPage === undefined ? {} : { watchlistPage: watchlist.watchlistPage }),
       ...(strategies === undefined ? {} : { strategies }),
       ...(name === 'settings' && options.configuration !== undefined
-        ? { configuration: options.configuration() }
+        ? { configuration: await options.configuration() }
         : {}),
     };
     return jsonNoStore(body);
