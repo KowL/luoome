@@ -140,8 +140,10 @@ export const WATCH_NOTIFICATION_REASONS = [
   'account-changed',
   /** 历史版本不再参与监控（被后续版本替代 / revoked）。 */
   'inactive',
-  /** 计划约束未通过。 */
+  /** 计划约束**明确**未通过（已确证不合格）。 */
   'constraints-failed',
+  /** 约束**事实**不可用：判不了，不等于不合格。 */
+  'constraints-unavailable',
   /** 草案尚未通过生效门槛；重新检查行情不会使它自动获得资格。 */
   'draft',
   /** `validFrom` 未到；不证明后台任务已经排期。 */
@@ -187,8 +189,20 @@ export type WatchNotificationVerdict = z.infer<typeof WatchNotificationVerdictSc
 /**
  * `tradingPlanMonitoring().status` → 四档 + 原因。**唯一映射实现。**
  *
- * 注意顺序纪律：`expired` / `account-changed` / `constraints-failed` 是**已证实**的，
- * 一律 `ineligible`；只有 `unavailable` 才是「缺事实」。把前者塞进 `facts-unavailable`
+ * ## 为什么这里**只看 status**，不再看 `reason` 文案
+ *
+ * 旧实现把「约束明确不通过」和「账户事实读不到」压进同一个 `unavailable`，
+ * 然后靠 `monitoring.reason === '计划约束未通过'` 这串**中文文案**区分。
+ * 那意味着：改一句用户可见的文案，就会静默改变这里的判定结果。
+ * 现在 core 把它们拆成 `constraints-failed` / `constraints-unavailable` / `unavailable`
+ * 三个独立状态，映射直接按 `status` 分支——**删掉了文案耦合，改文案不再影响结论**。
+ *
+ * ## 四档归属
+ * - 已确证不合格（`expired` / `account-changed` / `inactive` / `no-conditions` /
+ *   `draft` / `scheduled` / `constraints-failed`）→ `ineligible`
+ * - 缺事实（`unavailable` / `constraints-unavailable`）→ `facts-unavailable`
+ *
+ * 顺序纪律不变：**已确证优先于缺事实**——把前者塞进 `facts-unavailable`
  * 会让「计划早就过期了」被说成「暂时读不到数据」，用户会一直等下去。
  */
 export const watchNotificationVerdictFromMonitoring = (monitoring: {
@@ -210,12 +224,15 @@ export const watchNotificationVerdictFromMonitoring = (monitoring: {
       return { state: 'ineligible', reason: 'draft' };
     case 'scheduled':
       return { state: 'ineligible', reason: 'scheduled' };
+    case 'constraints-failed':
+      // 约束**明确**不通过：已确证的不合格，不是缺数据。
+      return { state: 'ineligible', reason: 'constraints-failed' };
+    case 'constraints-unavailable':
+      // 约束**事实**没判出来：只说明「判不了」，不能读成约束失败。
+      return { state: 'facts-unavailable', reason: 'constraints-unavailable' };
     case 'unavailable':
-      // `tradingPlanMonitoring` 用 `unavailable` 同时表达「账户事实读不到」和
-      // 「计划约束未通过」——前者是缺事实，后者是**已证实**不合格，必须分开。
-      return monitoring.reason === '计划约束未通过'
-        ? { state: 'ineligible', reason: 'constraints-failed' }
-        : { state: 'facts-unavailable', reason: 'facts-unavailable' };
+      // 账户事实缺失/不可用。
+      return { state: 'facts-unavailable', reason: 'facts-unavailable' };
     default:
       // 未知 monitoring 状态：不能当成合格，也不能编一个具体原因。
       return { state: 'facts-unavailable', reason: 'facts-unavailable' };

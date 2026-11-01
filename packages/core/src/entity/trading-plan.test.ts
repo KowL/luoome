@@ -405,6 +405,66 @@ describe('交易计划的监控资格与组合条件', () => {
   // ── 「已证实的不可用」不能被缺数掩盖（外部评审决策 2 纪律 ①） ──
   // `draft` / `scheduled` 是**计划的确定属性**，与账户事实能不能读到无关。
   // 旧顺序把「账户事实不可用」排在它们前面，于是缺数赢得了它不该赢的优先级。
+  // ── 决策 3-C：`unavailable` 一码三义拆分 ──
+  it('约束 blocked / unavailable / 账户事实缺失 给出三个不同 status', () => {
+    const blocked = plan({
+      status: 'active',
+      action: 'observe',
+      position: {
+        currentPct: 0,
+        targetPctRange: { min: 0, max: 0 },
+        appliedPct: 0,
+        fallbackPct: 0,
+        rangePick: { ruleId: 'lower-bound' },
+        constraintStatus: 'blocked',
+        constraintReasons: ['预算不足'],
+        prerequisiteActions: [],
+      },
+    });
+    const constraintsUnknown = plan({
+      status: 'active',
+      action: 'observe',
+      position: {
+        ...blocked.position,
+        constraintStatus: 'unavailable',
+        constraintReasons: ['缺少账户事实'],
+      },
+    });
+    const factsMissing = plan({ status: 'active' });
+    const completeFacts = { digest: factsMissing.accountFactsDigest, status: 'complete' as const };
+    const missingFacts = {
+      digest: factsMissing.accountFactsDigest,
+      status: 'unavailable' as const,
+    };
+
+    // 三个结论必须互不相同——旧实现把前两者合并成同一个 `unavailable`。
+    expect(tradingPlanMonitoring(blocked, completeFacts, now).status).toBe('constraints-failed');
+    expect(tradingPlanMonitoring(constraintsUnknown, completeFacts, now).status).toBe(
+      'constraints-unavailable',
+    );
+    expect(tradingPlanMonitoring(factsMissing, missingFacts, now).status).toBe('unavailable');
+  });
+
+  it('已确证的约束失败优先于账户事实缺失（缺事实不能盖掉已确证结论）', () => {
+    const blocked = plan({
+      status: 'active',
+      action: 'observe',
+      position: {
+        currentPct: 0,
+        targetPctRange: { min: 0, max: 0 },
+        appliedPct: 0,
+        fallbackPct: 0,
+        rangePick: { ruleId: 'lower-bound' },
+        constraintStatus: 'blocked',
+        constraintReasons: ['预算不足'],
+        prerequisiteActions: [],
+      },
+    });
+    // 同时：账户事实也读不到。
+    const missingFacts = { digest: blocked.accountFactsDigest, status: 'unavailable' as const };
+    expect(tradingPlanMonitoring(blocked, missingFacts, now).status).toBe('constraints-failed');
+  });
+
   it('账户事实不可用时仍报 draft —— 计划属性优先于「无法判断」', () => {
     const draft = plan({ status: 'draft' });
     const facts = { digest: draft.accountFactsDigest, status: 'unavailable' as const };

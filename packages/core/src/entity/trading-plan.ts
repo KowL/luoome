@@ -1274,7 +1274,21 @@ export const TradingPlanMonitoringSchema = z.object({
     'expired',
     'scheduled',
     'account-changed',
+    /**
+     * 账户事实缺失或不可用 —— 只说明「判不了」，**不说明计划有问题**。
+     * 与下面两个约束状态必须分开：把三者混成一个值，会让「缺事实」被读成「已证实不合格」。
+     */
     'unavailable',
+    /**
+     * 计划约束**明确不通过**（`position.constraintStatus === 'blocked'`）。
+     * 这是已确证的结论，优先于任何「判不了」。
+     */
+    'constraints-failed',
+    /**
+     * 约束**事实本身缺失**（`position.constraintStatus === 'unavailable'`）——
+     * 与 `constraints-failed` 的差别是「没判」vs「判了不合格」。
+     */
+    'constraints-unavailable',
     'no-conditions',
   ]),
   reason: z.string(),
@@ -1346,26 +1360,34 @@ export const tradingPlanMonitoring = (
         '补齐证据后重新生成计划',
     );
   if (plan.validFrom > now) return result('scheduled', '尚未到计划生效时间', '等待生效时间');
-  if (plan.position.constraintStatus !== 'passed')
+  /**
+   * 约束结果三态**各自独立**（决策 3-C / 外部评审）：
+   * - `blocked` → `constraints-failed`：**已确证**不合格
+   * - `unavailable` → `constraints-unavailable`：约束**事实**没判出来，只说明「判不了」
+   * - 二者都不再共用 `unavailable` —— 旧实现把 `blocked` 与 `unavailable` 合并成同一个
+   *   `unavailable` 状态、再靠 `reason` 文案区分，结果是「缺事实被说成约束失败」
+   *   （收盘报告还会把它显示成「等待数据」）。
+   *
+   * 这两个状态都**不依赖 `facts`**，因此仍然排在账户事实判定之前
+   * （与 `draft` / `scheduled` 同理：已确证优先于缺事实）。
+   */
+  if (plan.position.constraintStatus === 'blocked')
     return result(
-      // ⚠️ 与下方「账户事实不可用」分支共用同一个 status 值 `unavailable`，
-      // 两处靠 **reason 文案**区分（消费方 `watchNotificationVerdictFromMonitoring`
-      // 用 `reason === '计划约束未通过'` 判别）。**改这里的文案会静默改变四档映射**，
-      // 一并修要动 `TradingPlanMonitoring.status` 枚举（动 core 契约），单独立项。
-      'unavailable',
+      'constraints-failed',
       '计划约束未通过',
       plan.position.constraintReasons.join('；') || '重新生成计划',
+    );
+  if (plan.position.constraintStatus === 'unavailable')
+    return result(
+      'constraints-unavailable',
+      '计划约束事实不可用',
+      plan.position.constraintReasons.join('；') || '补齐约束所需事实后重新评估',
     );
   // 以下两条依赖账户事实：**必须**排在所有「计划自身已确证」的判定之后。
   if (facts !== null && facts.digest !== plan.accountFactsDigest)
     return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
   if (facts === null || facts.status !== 'complete')
-    return result(
-      // ⚠️ 与上方「计划约束未通过」共用 status 值，靠 reason 文案区分（见上）。
-      'unavailable',
-      '账户事实不可用',
-      '刷新持仓行情并检查账户对账',
-    );
+    return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
   if (plan.entryConditions.length + plan.exit.triggerConditions.length === 0)
     return result('no-conditions', '没有可检查的盘中条件', '复核并补充结构化条件');
   return result('ready', '计划具备监控资格', '等待新鲜行情；实际运行与送达请查看预警记录');

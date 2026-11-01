@@ -62,11 +62,19 @@ describe('watchNotificationVerdictFromMonitoring（四档唯一映射）', () =>
     });
   });
 
-  it('约束不通过归 ineligible/constraints-failed——它与「事实不可用」共用一个 monitoring.status，必须分开', () => {
-    // `tradingPlanMonitoring` 用 `unavailable` 同时表达这两件事，靠 reason 区分。
+  // 旧版本这里断言的是「status=unavailable + reason='计划约束未通过' → constraints-failed」。
+  // 决策 3-C 把那个 `reason` 文案耦合**删掉了**：core 现在直接给出 `constraints-failed`
+  // 独立状态。所以旧断言必须改——**同一条规则，不再靠文案承载**。
+  // 反向断言一起加上：带着旧文案的 `unavailable` 现在必须是「缺事实」，不能被文案带偏。
+  it('约束结论由 status 承载，不再由 reason 文案承载（旧文案不再改变判定）', () => {
+    expect(watchNotificationVerdictFromMonitoring({ status: 'constraints-failed' })).toEqual({
+      state: 'ineligible',
+      reason: 'constraints-failed',
+    });
+    // 旧实现会把这个组合判成 constraints-failed；现在它只能表示「账户事实不可用」。
     expect(
       watchNotificationVerdictFromMonitoring({ status: 'unavailable', reason: '计划约束未通过' }),
-    ).toEqual({ state: 'ineligible', reason: 'constraints-failed' });
+    ).toEqual({ state: 'facts-unavailable', reason: 'facts-unavailable' });
   });
 
   it('draft → ineligible/draft：重新检查行情不会让草案取得资格', () => {
@@ -112,6 +120,65 @@ describe('watchNotificationVerdictFromMonitoring（四档唯一映射）', () =>
       if (verdict.state === 'conditions-unchecked') expect(verdict.reason).toBeUndefined();
       else expect(WATCH_NOTIFICATION_REASONS as readonly string[]).toContain(verdict.reason);
     }
+  });
+
+  // ── 决策 3-C：`unavailable` 一码三义拆分 ──
+  it('约束明确不通过 → ineligible/constraints-failed（已确证，不是缺数据）', () => {
+    expect(watchNotificationVerdictFromMonitoring({ status: 'constraints-failed' })).toEqual({
+      state: 'ineligible',
+      reason: 'constraints-failed',
+    });
+  });
+
+  it('约束**事实**不可用 → facts-unavailable/constraints-unavailable（判不了 ≠ 不合格）', () => {
+    expect(watchNotificationVerdictFromMonitoring({ status: 'constraints-unavailable' })).toEqual({
+      state: 'facts-unavailable',
+      reason: 'constraints-unavailable',
+    });
+  });
+
+  it('账户事实缺失 → facts-unavailable/facts-unavailable（与上面两个互不混用）', () => {
+    expect(watchNotificationVerdictFromMonitoring({ status: 'unavailable' })).toEqual({
+      state: 'facts-unavailable',
+      reason: 'facts-unavailable',
+    });
+  });
+
+  // **核心验收**：改文案不改变结论 —— 证明 reason 文案判定真的删干净了。
+  it('**改 monitoring.reason 文案不改变四档结论**', () => {
+    const statuses = [
+      'ready',
+      'draft',
+      'inactive',
+      'expired',
+      'scheduled',
+      'account-changed',
+      'unavailable',
+      'constraints-failed',
+      'constraints-unavailable',
+      'no-conditions',
+    ] as const;
+    // 旧实现靠 `reason === '计划约束未通过'` 区分，改文案会静默改变判定；
+    // 现在映射只看 status，任意文案的结果都必须完全一致。
+    const texts = ['计划约束未通过', '账户事实不可用', '', '随便什么文案', '约束失败'];
+    for (const status of statuses) {
+      const baseline = watchNotificationVerdictFromMonitoring({ status });
+      for (const reason of texts) {
+        expect(
+          watchNotificationVerdictFromMonitoring({ status, reason }),
+          `${status} + reason="${reason}" 与基线不一致——文案仍参与判定`,
+        ).toEqual(baseline);
+      }
+    }
+  });
+
+  it('已确证状态优先于缺事实：constraints-failed 与 unavailable 是不同结论', () => {
+    const failed = watchNotificationVerdictFromMonitoring({ status: 'constraints-failed' });
+    const missing = watchNotificationVerdictFromMonitoring({ status: 'unavailable' });
+    // 一个说「不合格」，一个说「判不了」——绝不能相等。
+    expect(failed).not.toEqual(missing);
+    expect(failed.state).toBe('ineligible');
+    expect(missing.state).toBe('facts-unavailable');
   });
 
   it('未知 monitoring 状态不冒充合格，也不编造具体原因', () => {

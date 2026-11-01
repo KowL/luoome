@@ -1103,11 +1103,24 @@ const PLAN_RECORD_LABELS: Record<TradingPlan['status'], string> = {
   revoked: '已撤销',
   expired: '已过期',
 };
+/**
+ * 监控资格 → 报告用语。
+ *
+ * 三个「不行」必须分开说，因为它们对用户意味着完全不同的事：
+ * - `constraints-failed`：**已确证**约束不通过 → 「约束未通过」（不是等数据能解决的）
+ * - `constraints-unavailable`：约束**事实**缺失 → 「约束数据待补」
+ * - `unavailable`：账户事实缺失 → 「等待数据」
+ *
+ * 旧实现把前两者合并在 `unavailable` 里，于是**已经判定不合格的计划被显示成「等待数据」**，
+ * 用户会一直等一个永远不会来的数据（决策 3-C / 外部评审点名）。
+ */
 const PLAN_MONITOR_LABELS: Record<TradingPlanMonitoring['status'], string> = {
   ready: '可监控',
   draft: '待补全',
   'no-conditions': '待补全',
   unavailable: '等待数据',
+  'constraints-failed': '约束未通过',
+  'constraints-unavailable': '约束数据待补',
   scheduled: '待生效',
   'account-changed': '已失效',
   expired: '已过期',
@@ -1195,10 +1208,19 @@ const tradingPlansSection = async (
   const stopped = rows.filter((row) =>
     ['expired', 'account-changed', 'inactive'].includes(row.monitoring.status),
   );
+  /**
+   * 排序优先级：**要用户动手的排前面**。
+   *
+   * `constraints-failed` 是已确证的不合格 ⇒ 与 `draft` / `no-conditions` 同档（都要用户改），
+   * 不能因为它「看起来像缺数据」而被排到 `ready` 后面。
+   * 两个「缺数据」状态（`unavailable` / `constraints-unavailable`）排在中间：等等可能自愈。
+   */
   const priority: Record<TradingPlanMonitoring['status'], number> = {
     draft: 0,
     'no-conditions': 0,
+    'constraints-failed': 0,
     unavailable: 1,
+    'constraints-unavailable': 1,
     scheduled: 2,
     ready: 3,
     expired: 4,
@@ -1295,6 +1317,13 @@ const tradingPlansSection = async (
           items: [
             { key: 'ready', label: '可监控', value: count('ready') },
             { key: 'pending', label: '待补全', value: count('draft', 'no-conditions') },
+            // 三个「不行」分开计数：约束失败是**已确证**的结论，不能混进「等待数据」。
+            { key: 'constraintsFailed', label: '约束未通过', value: count('constraints-failed') },
+            {
+              key: 'constraintsUnavailable',
+              label: '约束数据待补',
+              value: count('constraints-unavailable'),
+            },
             { key: 'unavailable', label: '等待数据', value: count('unavailable') },
             { key: 'scheduled', label: '待生效', value: count('scheduled') },
             { key: 'revisionDrafts', label: '未发布修订', value: revisions.length },

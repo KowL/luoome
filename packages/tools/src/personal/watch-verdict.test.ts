@@ -241,7 +241,7 @@ describe('resolve_hosted_watch_notification 四档（外部评审决策 2）', (
     expect(result.data.reason).toBe('scheduled');
   });
 
-  it('⑥ ineligible/constraints-failed：约束不通过（与 facts-unavailable 共用一个 monitoring.status，靠 reason 分开）', async () => {
+  it('⑥ ineligible/constraints-failed：约束**明确**不通过 → 已确证不合格', async () => {
     const { ctx } = await setup(() => ({
       position: {
         currentPct: 20,
