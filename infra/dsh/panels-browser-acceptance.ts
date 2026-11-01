@@ -3723,7 +3723,12 @@ const runAcceptance = async () => {
       // 当前最强证据是：请求对象存在 + state 未变成 submitted（较弱：它只是"它自己说没提交"）。
       // 真正的「零次发送」需要 mock 宿主发送接口，该接口在 client 模块内、浏览器上下文不可达。
       // **在此如实登记，不粉饰。**
+      //
+      // 真正的**强证据不在这一层**：`trigger-draft.guard.test.js` 用源码级断言证明
+      // 草稿路径复用 `openPromptInConversation` 且不含任何发送调用——
+      // 那验的是代码结构（可靠），这里验的是运行时的一次观察（不可靠）。
       evidenceStrength: draftProbe.composerHasPrompt ? 'strong' : 'weak',
+      structuralGuarantee: 'trigger-draft.guard.test.js',
     },
     alertTrigger: {
       // 触发详情真的被解析（不是 client 自己拼的名字）
