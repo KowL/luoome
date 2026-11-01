@@ -10,12 +10,41 @@
 import { DATA_IMPORT_PREVIEW_TTL_MS, type ToolContext, type ToolResult } from '@luoome/core';
 import {
   type ConfirmablePluginTool,
+  ExportBusinessDataInput,
+  exportBusinessDataTool,
   PluginOperationScopeError,
   type PluginPrincipal,
   RestoreDataImportInput,
   restoreDataImportTool,
 } from '@luoome/tools';
 import type { DataImportBackupStore, DataImportStaging } from './data-import.js';
+
+/**
+ * 导出业务数据（task-35）的精确 Operation policy。
+ *
+ * 为什么走 Operation 而不是 read 通道：`export_business_data` 是 **`write`** 副作用
+ * （会落一个文件），走 Operation 才有回执与被授权记录。
+ * 入参只有可选的 `note`，没有任何路径/字节可被伪造。
+ */
+export const createExportBusinessDataOperation = (): ConfirmablePluginTool => ({
+  tool: exportBusinessDataTool,
+  scheduled: false,
+  // 导出是账户范围事实：accountId 由 host 绑定，客户端自报别的账户直接拒绝。
+  hostBoundFields: ['accountId'],
+  bind(raw, principal: PluginPrincipal) {
+    const input = ExportBusinessDataInput.parse(raw);
+    // 入参里没有 accountId（导出永远是「当前账户」），所以只做形状校验。
+    return { ...input, accountId: principal.accountId };
+  },
+  async receipt(raw, ctx) {
+    // 导出不改变业务事实，因此不产生「可按 receipt 复原」的读模型；
+    // 幂等由文件名 = 日期 + digest 保证（同内容重复导出返回 written:false）。
+    const input = ExportBusinessDataInput.parse(raw);
+    void input;
+    void ctx;
+    return null;
+  },
+});
 
 export const createDataImportOperationPolicies = (options: {
   readonly staging: Pick<DataImportStaging, 'describe'>;

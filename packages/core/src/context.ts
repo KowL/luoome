@@ -1,3 +1,4 @@
+import type { DataArchiveWriter } from './data-archive.js';
 import type { DataImportStagingAdapter } from './data-import.js';
 import type { AdviceOutcomeOrigin } from './entity/advice.js';
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
@@ -311,6 +312,13 @@ export interface ToolContext {
    * 载体 IO 不进 tools。
    */
   readonly reportArtifacts?: ReportArtifactWriter;
+  /**
+   * 事实库导出物的写盘载体（task-35）。未注入时 `export_business_data` 返回 adapter_error。
+   *
+   * 与 `reportArtifacts` 同一条纪律（载体 IO 不进 tools），但**目录与命名语义不同**：
+   * `exports/` 放全库归档，`reports/` 放报告产物。合并会让两类产物混杂。
+   */
+  readonly dataArchives?: DataArchiveWriter;
 }
 
 export type AShareSentimentManagerResult =

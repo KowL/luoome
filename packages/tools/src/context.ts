@@ -1,5 +1,6 @@
 import type {
   AShareSentimentManagerLike,
+  DataArchiveWriter,
   DataImportStagingAdapter,
   DragonTigerManagerLike,
   FundamentalDataAdapterLike,
@@ -62,6 +63,8 @@ export interface BuildContextDependencies {
   readonly dataImport?: DataImportStagingAdapter;
   /** REQ-M3-08：报告交付物写盘载体；未注入时 write_report_artifact 返回 adapter_error。 */
   readonly reportArtifacts?: ReportArtifactWriter;
+  /** task-35：事实库导出物写盘载体；未注入时 export_business_data 返回 adapter_error。 */
+  readonly dataArchives?: DataArchiveWriter;
 }
 
 export type BuildContextInput = BuildContextDependencies & {
@@ -105,6 +108,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.fundamentalData === undefined ? {} : { fundamentalData: input.fundamentalData }),
     ...(input.dataImport === undefined ? {} : { dataImport: input.dataImport }),
     ...(input.reportArtifacts === undefined ? {} : { reportArtifacts: input.reportArtifacts }),
+    ...(input.dataArchives === undefined ? {} : { dataArchives: input.dataArchives }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
     ...(input.stockProfile === undefined ? {} : { stockProfile: input.stockProfile }),
     ...(input.northboundFlow === undefined ? {} : { northboundFlow: input.northboundFlow }),

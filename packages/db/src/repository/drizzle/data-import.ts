@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   DATA_IMPORT_PREVIEW_TTL_MS,
   DATA_IMPORT_RESTORE_TOOL,
@@ -35,6 +36,26 @@ export class DrizzleDataImportRepository implements DataImportRepository {
         db.all<DataImportRow>(sql.raw(`SELECT * FROM ${quote(table)}`)),
       ]),
     );
+  }
+
+  /**
+   * 导出业务事实（task-35）：只读，全在事务里读同一快照。
+   *
+   * 表集合**直接来自 `DATA_IMPORT_BUSINESS_TABLES`**（= `replace ∪ union`），
+   * 与 `restore` 的读集合是同一份常量 ⇒ 「导出的东西恰好能被吃回去」是结构性保证。
+   * `preserve` / `transient` 天然不在其中；`research_document_fts` 走 `rebuild`，恢复时重建。
+   */
+  async exportBusinessTables(): Promise<{
+    readonly tables: DataImportTables;
+    readonly digest: string;
+  }> {
+    return this.db.transaction((tx) => {
+      const tables = this.readTables(tx);
+      return {
+        tables,
+        digest: createHash('sha256').update(canonicalDataImportJson(tables)).digest('hex'),
+      };
+    });
   }
 
   private receipt(

@@ -49,6 +49,7 @@ import { deleteAdviceTool } from './tools/delete-advice.js';
 import { deleteReportTool } from './tools/delete-report.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
+import { exportBusinessDataTool } from './tools/export-business-data.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
@@ -472,6 +473,9 @@ export const toolRegistry: Registry = createRegistry([
   // 不进 read/market allowlist、也没有 agent 入口（见 registry-list 的 exposed 口径）。
   previewDataImportTool,
   restoreDataImportTool,
+  // task-35：导出与恢复同源（表集合来自 manifest 的 replace ∪ union），
+  // 让「导出的东西恰好能被吃回去」成为结构性保证。
+  exportBusinessDataTool,
   // 内部执行步（REQ-M1-05）：进 registry 是为了「一个能力一份实现」，不给 agent 面入口 ——
   // 它不在 read/market allowlist，也没有 operation policy（见 registry-list 的 exposed 口径）。
   executeStrictStrategyBacktestTool,

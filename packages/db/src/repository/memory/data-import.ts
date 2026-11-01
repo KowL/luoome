@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   DATA_IMPORT_PREVIEW_TTL_MS,
   DATA_IMPORT_RESTORE_TOOL,
@@ -8,7 +9,9 @@ import {
   type DataImportScope,
   type DataImportTables,
 } from '@luoome/core';
+import { DATA_IMPORT_BUSINESS_TABLES } from '../../data-import-manifest.js';
 import {
+  canonicalDataImportJson,
   dataImportBusinessDigest,
   dataImportHash,
   planDataImportRestore,
@@ -76,6 +79,19 @@ export class InMemoryDataImportRepository implements DataImportRepository {
   }
   async targetDigest(scope: DataImportScope) {
     return dataImportBusinessDigest(this.state.tables, scope);
+  }
+  /** 导出业务事实（task-35）：与 drizzle 实现同一口径（表集合来自 `DATA_IMPORT_BUSINESS_TABLES`）。 */
+  async exportBusinessTables(): Promise<{
+    readonly tables: DataImportTables;
+    readonly digest: string;
+  }> {
+    const tables = Object.fromEntries(
+      DATA_IMPORT_BUSINESS_TABLES.map((table) => [table, this.state.tables[table] ?? []]),
+    ) as DataImportTables;
+    return {
+      tables,
+      digest: createHash('sha256').update(canonicalDataImportJson(tables)).digest('hex'),
+    };
   }
   async preview(input: Parameters<DataImportRepository['preview']>[0]) {
     return planDataImportRestore(input.snapshot, this.state.tables, input.scope, input.now).preview;

@@ -5,6 +5,7 @@ import type {
   DataImportReceipt,
   DataImportScope,
   DataImportSnapshot,
+  DataImportTables,
 } from '../data-import.js';
 
 export interface DataImportCommand {
@@ -30,4 +31,15 @@ export interface DataImportRepository {
   findReceipt(scope: DataImportScope, requestId: string): Promise<DataImportReceipt | null>;
   /** 当前目标业务事实的完整摘要（备份与提交复核用，口径与 previewHash 内的 preDigest 相同）。 */
   targetDigest(scope: DataImportScope): Promise<string>;
+  /**
+   * **导出**当前业务事实（task-35）：只读，返回与 `restore` 同一套 `replace ∪ union` 表集合。
+   *
+   * 为什么在仓储里而不是 tools 里拼 SQL：表集合的唯一真源是 `DATA_IMPORT_MANIFEST`
+   * （`packages/db` 持有），tools 拿不到；这样「导出的东西恰好能被吃回去」是**结构性保证**，
+   * 而不是两处各自维护的巧合。
+   */
+  exportBusinessTables(): Promise<{
+    readonly tables: DataImportTables;
+    readonly digest: string;
+  }>;
 }

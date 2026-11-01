@@ -46,13 +46,17 @@ import {
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
+import { createDataArchives } from './data-archives.js';
 import {
   createDataImportBackups,
   createDataImportStaging,
   type DataImportBackupStore,
   type DataImportStaging,
 } from './data-import.js';
-import { createDataImportOperationPolicies } from './data-import-operations.js';
+import {
+  createDataImportOperationPolicies,
+  createExportBusinessDataOperation,
+} from './data-import-operations.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -200,6 +204,8 @@ export const createProductionOperationPolicies = (
   ...(options.batchEnabled === true ? createBatchOperationPolicies() : []),
   // REQ-M3-08：报告交付物写盘，只作精确 Operation policy（不进 read/market allowlist）。
   createWriteReportArtifactOperation(),
+  // task-35：导出业务数据（write 副作用，会落文件）。
+  createExportBusinessDataOperation(),
   // T48 恢复：只作精确 Operation policy，不进 agent 面。
   ...(options.dataImport === undefined || options.dataImportBackups === undefined
     ? []
@@ -254,6 +260,8 @@ export const createProductionHost = async (
   const reportArtifacts = createReportArtifacts({
     directory: join(config.home, 'reports'),
   });
+  // task-35：事实库导出物单独一个目录（不混进 reports/）。
+  const dataArchives = createDataArchives({ directory: join(config.home, 'exports') });
   let read: ReadSurface | undefined;
   let market: MarketSurface | undefined;
   let context: ToolContext;
@@ -316,6 +324,7 @@ export const createProductionHost = async (
         : { fundamentalData: adapters.fundamentalData }),
       dataImport: dataImportStaging,
       reportArtifacts,
+      dataArchives,
     });
     context = built;
     saveMarketSettings = (input) =>

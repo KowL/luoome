@@ -2,6 +2,7 @@
 
 // 依赖注入上下文
 export * from './context.js';
+export * from './data-archive.js';
 export * from './data-import.js';
 // 实体
 export * from './entity/account.js';

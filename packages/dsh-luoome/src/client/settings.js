@@ -723,6 +723,75 @@ const importUploadRequest = async (file) => {
   return result.data;
 };
 
+/**
+ * 导出业务数据（task-35）。
+ *
+ * 交付路径与报告产物一致：**服务端写文件 → 返回 `presentArgs` → 模型调宿主 `present`**。
+ * 这里不直接下载：`export_business_data` 是 `write` 副作用（会落文件），
+ * 走 Operation 才能留下回执与被授权记录。
+ */
+function DataExportForm({ accountId, enabled }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const run = async () => {
+    setBusy(true);
+    setError('');
+    setResult(null);
+    const operationId = crypto.randomUUID();
+    try {
+      await operationRequest('prepare', {
+        id: operationId,
+        tool: 'export_business_data',
+        input: {},
+      });
+      const completed = await operationRequest(`${encodeURIComponent(operationId)}/execute`, {});
+      const output = completed?.output ?? completed?.result?.data ?? completed;
+      setResult(output ?? null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return h(
+    'div',
+    { className: 'luo-card', 'data-export-form': 'business-data' },
+    h('h3', { className: 'luo-card-t' }, '导出业务数据'),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      '导出与「恢复业务快照」同一套业务表集合（manifest 的 replace ∪ union），导出的文件可直接用于恢复。',
+    ),
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'button',
+        {
+          className: 'luo-btn',
+          type: 'button',
+          'aria-label': '导出业务数据包',
+          disabled: busy || !enabled || !accountId,
+          onClick: run,
+        },
+        busy ? '导出中…' : '导出业务数据包',
+      ),
+      !enabled ? h('span', { className: 'luo-fine' }, '需要启用 export_business_data 能力') : null,
+    ),
+    error ? h('p', { className: 'luo-fine', role: 'alert' }, error) : null,
+    result
+      ? h(
+          'p',
+          { className: 'luo-fine', 'data-export-summary': 'ok' },
+          `已生成 ${result.tables ? Object.keys(result.tables).length : 0} 张表 · ${result.totalRows ?? 0} 行 · ${result.bytes ?? 0} 字节${
+            result.written === false ? '（同内容文件已存在，未重写）' : ''
+          }`,
+        )
+      : null,
+  );
+}
+
 function DataImportForm({ accountId, enabled }) {
   const [upload, setUpload] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -1209,6 +1278,11 @@ export function SettingsPanel() {
       h(DataImportForm, {
         accountId: config?.accountId,
         enabled: policies.some((item) => item.name === 'restore_data_import'),
+      }),
+      // task-35：导出是恢复的反向操作——恢复需要一份文件，这份文件必须能在这里生成。
+      h(DataExportForm, {
+        accountId: config?.accountId,
+        enabled: policies.some((item) => item.name === 'export_business_data'),
       }),
     ),
     h(

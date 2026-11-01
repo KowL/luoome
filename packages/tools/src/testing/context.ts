@@ -13,6 +13,7 @@ import type {
   Advice,
   AdviceOutcomeOrigin,
   AShareSentimentManagerLike,
+  DataArchiveWriter,
   DragonTigerManagerLike,
   LimitUpLadderManagerLike,
   Logger,
@@ -28,6 +29,8 @@ import { createInMemoryRepos, seedData } from '@luoome/db/memory';
 
 export interface BuildTestContextOptions {
   readonly clock?: () => Date;
+  /** task-35：导出物写盘载体；测试用内存实现，不碰真文件系统。 */
+  readonly dataArchives?: DataArchiveWriter;
   readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
   readonly advices?: readonly Advice[];
@@ -112,6 +115,7 @@ export const buildTestContext = async (
     ...(opts.portfolioBenchmark === undefined
       ? {}
       : { portfolioBenchmark: opts.portfolioBenchmark }),
+    ...(opts.dataArchives === undefined ? {} : { dataArchives: opts.dataArchives }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };

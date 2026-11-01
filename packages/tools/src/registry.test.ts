@@ -254,6 +254,8 @@ const EXPECTED_TOOL_NAMES = [
   'get_data_diagnostics',
   'preview_data_import',
   'restore_data_import',
+  // task-35：导出与恢复同源（表集合来自 manifest 的 replace ∪ union）。
+  'export_business_data',
   'prepare_personal_alert_request',
   'get_personal_alert_evaluation',
 ] as const;
@@ -436,6 +438,8 @@ describe('toolRegistry', () => {
       'delete_stock_event',
       'delete_strategy',
       'execute_strict_strategy_backtest',
+      // task-35：导出会落文件 ⇒ write（不是 read）；判据是「有没有改变外部状态」。
+      'export_business_data',
       'finish_strategy_evaluation_session',
       'import_local_research_document',
       'link_research_document',

@@ -227,3 +227,83 @@ describe('T48 FTS 投影在提交内重建', () => {
     }
   });
 });
+
+// task-35：导出 → preview → restore 的真 round-trip（真实 sqlite，不是内存替身）。
+describe('task-35 export_business_data round-trip', () => {
+  it('导出的表集合与 restore 读集合一致，且能通过 preview 与 commit', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    await handle.repos.account.save({
+      id: scope.accountId,
+      name: 'round-trip-account',
+      currency: 'CNY',
+      initialCapital: money(1000),
+      cashBalance: money(1000),
+      kind: 'real',
+      createdAt: new Date(1000),
+    });
+
+    const repository = handle.repos.dataImport;
+    if (repository === undefined) throw new Error('missing data import repository');
+    // 1) 导出当前业务事实。
+    const exported = await repository.exportBusinessTables();
+    // 导出的表集合**就是** manifest 的业务表集合（同一份常量，不是两处维护）。
+    expect(Object.keys(exported.tables).sort()).toEqual([...DATA_IMPORT_BUSINESS_TABLES].sort());
+    // 至少有一条真数据（accounts），证明不是空跑。
+    expect(exported.tables.accounts?.length ?? 0).toBeGreaterThan(0);
+    expect(exported.digest).toMatch(/^[a-f0-9]{64}$/);
+
+    // 2) 真实表结构（preview 需要它来核对列）。
+    const schema: DataImportStorageSchema = Object.fromEntries(
+      DATA_IMPORT_BUSINESS_TABLES.map((table) => [
+        table,
+        {
+          columns: handle.db
+            .all<{ name: string; type: string; notnull: number; pk: number; hidden: number }>(
+              sql.raw(`PRAGMA table_xinfo("${table}")`),
+            )
+            .map((column) => ({
+              name: column.name,
+              type: column.type,
+              notNull: Boolean(column.notnull),
+              primaryKey: column.pk,
+              hidden: column.hidden,
+            })),
+          indexes: [],
+        },
+      ]),
+    );
+    const snapshot: DataImportSnapshot = {
+      format: 'sqlite',
+      manifestVersion: 1,
+      archiveDigest: exported.digest,
+      schema,
+      tables: exported.tables,
+      ignoredCounts: {},
+    };
+
+    // 3) preview 必须成功（「导出的东西能被吃回去」的直接证据）。
+    const preview = await repository.preview({
+      scope,
+      snapshot,
+      now: Date.now(),
+    });
+    expect(preview).toBeDefined();
+
+    // 4) commit：必须带**同一次 preview 的 ref**（commit 会在事务内复核它）。
+    const receipt = await repository.commit({
+      scope,
+      requestId: 'round-trip-request',
+      snapshot,
+      // preview 结果本身就是合法的 `DataImportPreviewRef`（它 extends 那个接口）。
+      preview,
+      backup: {
+        backupId: 'a'.repeat(32),
+        archiveDigest: exported.digest,
+        targetDigest: await repository.targetDigest(scope),
+      },
+      now: Date.now(),
+    });
+    expect(receipt.requestId).toBe('round-trip-request');
+    handle.close();
+  });
+});
