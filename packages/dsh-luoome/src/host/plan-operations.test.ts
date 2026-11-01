@@ -130,7 +130,10 @@ describe('task-39 save_trading_plan Operation 闭环', () => {
       stockId: '000001.SZ',
       stockName: '平安银行',
     });
-    await expect(repos.tradingPlan.save(bare)).resolves.toBeUndefined();
+    // 旧断言是 `resolves.toBeUndefined()`——锁定的是 `save` 的 `Promise<void>` 签名。
+    // 决策 3-A 把签名改成返回 `TradingPlanSaveResult`，语义未变（仍然保存成功），
+    // 断言随之改成**更严**的形态：不仅要求成功，还要求明确回报 saved。
+    await expect(repos.tradingPlan.save(bare)).resolves.toEqual({ saved: true });
     // 版本身份用 core 的 `tradingPlanVersionId`，不自己拼（拼错就找不到）。
     const readBack = await repos.tradingPlan.findByVersionId(tradingPlanVersionId(bare));
     expect(readBack?.stockId).toBe('000001.SZ');

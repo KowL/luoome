@@ -36,8 +36,66 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     this.items.set(versionId, parsed);
   }
 
-  async save(plan: TradingPlan): Promise<void> {
-    this.put(plan);
+  /**
+   * 保存一个计划版本，可选启用乐观锁（决策 3-A）。
+   *
+   * memory 没有数据库事务，用与 `saveIfBudgetAvailable` 相同的串行化锁
+   * （`withWriteLock`）模拟「同一事务内读 → 比对 → 写」：
+   * 读和写都在锁内完成，两个并发调用不会读到同一个旧基线。
+   */
+  async save(
+    plan: TradingPlan,
+    options: { readonly expectedRevision?: string } = {},
+  ): ReturnType<TradingPlanRepository['save']> {
+    const expectedRevision = options.expectedRevision;
+    return this.withWriteLock(() => {
+      const parsed = TradingPlanV2Schema.parse(plan);
+      assertTradingPlanInvariants(parsed);
+      const versionId = tradingPlanVersionId(parsed);
+      const existing = this.items.get(versionId);
+      if (existing !== undefined) {
+        if (JSON.stringify(existing) !== JSON.stringify(parsed))
+          return { saved: false, reason: 'version-immutable', actual: versionId } as const;
+        // 幂等重放同样受基线检查约束，否则重放会绕过锁。
+        if (expectedRevision !== undefined) {
+          const latest = this.latestVersionIdLocked(parsed.id);
+          if (latest !== versionId)
+            return { saved: false, reason: 'revision-conflict', actual: latest } as const;
+        }
+        return { saved: true } as const;
+      }
+      if (expectedRevision !== undefined) {
+        const latest = this.latestVersionIdLocked(parsed.id);
+        if (latest !== expectedRevision)
+          return { saved: false, reason: 'revision-conflict', actual: latest } as const;
+      }
+      this.items.set(versionId, parsed);
+      return { saved: true } as const;
+    });
+  }
+
+  /** 该计划当前最新版本 id；无版本时返回空串（与 drizzle 侧 `latestRowInTransaction` 对齐）。 */
+  private latestVersionIdLocked(planId: string): string {
+    const latest = [...this.items.values()]
+      .filter((plan) => plan.id === planId)
+      .sort((a, b) => b.version - a.version || b.createdAt.getTime() - a.createdAt.getTime())
+      .at(0);
+    return latest === undefined ? '' : tradingPlanVersionId(latest);
+  }
+
+  /** 串行化写：memory 侧的「事务」。读与写都必须在同一个临界区内完成。 */
+  private async withWriteLock<T>(run: () => T): Promise<T> {
+    const previous = this.budgetLock;
+    let release!: () => void;
+    this.budgetLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return run();
+    } finally {
+      release();
+    }
   }
 
   async saveIfBudgetAvailable(input: {
@@ -46,6 +104,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
+    readonly expectedRevision?: string;
   }): ReturnType<TradingPlanRepository['saveIfBudgetAvailable']> {
     const previous = this.budgetLock;
     let release!: () => void;
@@ -86,6 +145,21 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       );
       if (allocation?.status !== 'included')
         return { saved: false, reason: 'budget-exceeded', budget };
+      // 乐观锁（决策 3-A）：比对与写入都在同一临界区内，与 `save` 一致。
+      // 版本不可变检查必须排在基线检查**之前**：同 versionId 不同内容是更强的事实。
+      const existing = this.items.get(tradingPlanVersionId(plan));
+      if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(plan))
+        return {
+          saved: false,
+          reason: 'version-immutable',
+          actual: tradingPlanVersionId(plan),
+        };
+      if (input.expectedRevision !== undefined) {
+        const latest = this.latestVersionIdLocked(plan.id);
+        const target = tradingPlanVersionId(plan);
+        if (latest !== input.expectedRevision && latest !== target)
+          return { saved: false, reason: 'revision-conflict', actual: latest };
+      }
       this.put(plan);
       return { saved: true, budget };
     } finally {

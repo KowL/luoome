@@ -252,6 +252,82 @@ describe('trading plan tools', () => {
     expect(await ctx.repos.tradingPlan.list({ accountId: ACCOUNT_ID })).toEqual([]);
   });
 
+  // ── 决策 3-A：save_trading_plan 的乐观锁 ──
+  it('expectedRevision 过期时拒绝保存，并告知该基于哪一版重试', async () => {
+    const now = new Date('2026-09-09T02:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const facts = await deriveFacts(ctx);
+    const draft = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'draft',
+    });
+    // 1) 先存 V1 作为编辑基线
+    const v1 = await saveTradingPlanTool.execute({ plan: draft }, ctx);
+    expect(v1.ok).toBe(true);
+    // 2) 另一个调用把计划推进到 V2
+    const v2 = await saveTradingPlanTool.execute(
+      { plan: { ...draft, version: 2, createdAt: new Date(now.getTime() + 1000) } },
+      ctx,
+    );
+    expect(v2.ok).toBe(true);
+    // 3) 仍基于 V1 的编辑 → 必须被拒绝，且错误里带出 V2
+    const stale = await saveTradingPlanTool.execute(
+      {
+        plan: { ...draft, version: 3, createdAt: new Date(now.getTime() + 2000) },
+        expectedRevision: `${draft.id}:v1`,
+      },
+      ctx,
+    );
+    expect(stale.ok).toBe(false);
+    if (stale.ok) return;
+    const message = JSON.stringify(stale.error);
+    // 冲突必须可定位：既说明基线已过期，也说明当前最新版本。
+    expect(message).toContain(`${draft.id}:v2`);
+    expect(message).toContain(`${draft.id}:v1`);
+    // 冲突时不得写入 V3。
+    expect(await ctx.repos.tradingPlan.findByVersionId(`${draft.id}:v3`)).toBeNull();
+  });
+
+  it('expectedRevision 匹配当前最新版时正常保存', async () => {
+    const now = new Date('2026-09-09T02:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const facts = await deriveFacts(ctx);
+    const draft = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'draft',
+    });
+    expect((await saveTradingPlanTool.execute({ plan: draft }, ctx)).ok).toBe(true);
+    const next = await saveTradingPlanTool.execute(
+      {
+        plan: { ...draft, version: 2, createdAt: new Date(now.getTime() + 1000) },
+        expectedRevision: `${draft.id}:v1`,
+      },
+      ctx,
+    );
+    expect(next.ok).toBe(true);
+    if (next.ok) expect(next.data.versionId).toBe(`${draft.id}:v2`);
+  });
+
+  it('不传 expectedRevision 时行为完全不变（存量调用兼容）', async () => {
+    const now = new Date('2026-09-09T02:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const facts = await deriveFacts(ctx);
+    const draft = makePlan({
+      accountId: ACCOUNT_ID,
+      accountFactsDigest: facts.digest,
+      status: 'draft',
+    });
+    expect((await saveTradingPlanTool.execute({ plan: draft }, ctx)).ok).toBe(true);
+    // 不声明基线：即使已有 V1，也能直接写 V2。
+    const next = await saveTradingPlanTool.execute(
+      { plan: { ...draft, version: 2, createdAt: new Date(now.getTime() + 1000) } },
+      ctx,
+    );
+    expect(next.ok).toBe(true);
+  });
+
   it('saves an active plan only after account facts and budget validation', async () => {
     const ctx = await buildTestContext();
     const facts = await deriveFacts(ctx);

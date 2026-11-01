@@ -12,6 +12,7 @@ import {
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type DailyBarRevision,
+  DEFAULT_TRADING_PLAN_BUDGET_LIMITS,
   type FinancialFact,
   FUNDAMENTAL_FACTOR_REGISTRY_HASH,
   type FundamentalScoreResult,
@@ -1097,14 +1098,153 @@ export const registerRepositoryContractTests = (
         ).toMatchObject({ saved: true });
       });
 
+      // ── 决策 3-A：真正的乐观锁（expectedRevision 绑定编辑基线） ──
+      // Codex 裁定：`expectedRevision` 必须绑定**编辑时读取的基线**，并在**同一事务内**
+      // 完成比较与写入。下面这组用例是「假锁」的直接检测器：
+      // 若实现退化成「事务外先读再写」，或干脆不检查，第一条就会静默成功而失败。
+      it('expectedRevision 冲突：基于旧基线另存 → revision-conflict 且给出 actual', async () => {
+        const base = makeTradingPlan('plan-lock', 1);
+        await repos.tradingPlan.save(base);
+        // 1) 模拟「打开编辑界面」：读到 V1
+        const opened = await repos.tradingPlan.findByVersionId('plan-lock:v1');
+        expect(opened).not.toBeNull();
+        // 2) 另一个调用先保存成功 → 产生 V2
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-lock', 2, { status: 'draft', createdAt: T2 }),
+        );
+        // 3) 拿基于 V1 的 expectedRevision 再存 V3 → 必须拒绝，并告知该基于哪一版重试
+        const conflict = await repos.tradingPlan.save(
+          makeTradingPlan('plan-lock', 3, { status: 'draft', createdAt: T3 }),
+          { expectedRevision: 'plan-lock:v1' },
+        );
+        expect(conflict).toEqual({
+          saved: false,
+          reason: 'revision-conflict',
+          actual: 'plan-lock:v2',
+        });
+        // 冲突时**不得**写入
+        expect(await repos.tradingPlan.findByVersionId('plan-lock:v3')).toBeNull();
+        expect((await repos.tradingPlan.latestByPlanId('plan-lock'))?.version).toBe(2);
+      });
+
+      it('expectedRevision 匹配当前最新版 → 正常保存', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-ok', 1));
+        const updated = makeTradingPlan('plan-ok', 2, { status: 'draft', createdAt: T2 });
+        expect(await repos.tradingPlan.save(updated, { expectedRevision: 'plan-ok:v1' })).toEqual({
+          saved: true,
+        });
+        expect(await repos.tradingPlan.findByVersionId('plan-ok:v2')).toEqual(updated);
+      });
+
+      it('不传 expectedRevision → 行为不变（存量调用兼容）', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-compat', 1));
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-compat', 2, { status: 'draft', createdAt: T2 }),
+        );
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-compat', 3, { status: 'draft', createdAt: T3 }),
+        );
+        expect(await repos.tradingPlan.latestByPlanId('plan-compat')).toMatchObject({ version: 3 });
+      });
+
+      it('首次保存（该 planId 还没有任何版本）时 expectedRevision 不匹配 → revision-conflict', async () => {
+        // 调用方声称基于某版编辑，但该计划并不存在：这同样是基线错位。
+        expect(
+          await repos.tradingPlan.save(makeTradingPlan('plan-fresh', 1), {
+            expectedRevision: 'plan-fresh:v9',
+          }),
+        ).toEqual({ saved: false, reason: 'revision-conflict', actual: expect.any(String) });
+      });
+
+      it('saveIfBudgetAvailable 同样受 expectedRevision 保护（覆盖生效版路径）', async () => {
+        const account = makeAccount('acc-lock');
+        await repos.account.save(account);
+        const facts = buildAccountFacts({
+          account,
+          holdings: [],
+          asOf: T1,
+          extraReasons: [],
+          notes: [],
+        });
+        const active = makeTradingPlan('plan-budget-lock', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+          status: 'active',
+          action: 'observe',
+          position: {
+            currentPct: 0,
+            targetPctRange: { min: 0, max: 0 },
+            appliedPct: 0,
+            fallbackPct: 0,
+            rangePick: { ruleId: 'lower-bound' },
+            constraintStatus: 'passed',
+            constraintReasons: [],
+            prerequisiteActions: [],
+          },
+          evidence: [
+            {
+              id: 'ev-lock',
+              kind: 'account',
+              source: 'fixture',
+              factIds: [],
+              summary: '来源证据，避免被判定为无证据',
+            },
+          ],
+        });
+        const input = {
+          plan: active,
+          facts,
+          stocks: new Map(),
+          limits: DEFAULT_TRADING_PLAN_BUDGET_LIMITS,
+          asOf: T1,
+        };
+        expect(await repos.tradingPlan.saveIfBudgetAvailable(input)).toMatchObject({ saved: true });
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-budget-lock', 2, {
+            accountId: account.id,
+            accountFactsDigest: facts.digest,
+            status: 'draft',
+            createdAt: T2,
+          }),
+        );
+        const next = makeTradingPlan('plan-budget-lock', 3, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+          status: 'active',
+          action: 'observe',
+          position: active.position,
+          evidence: active.evidence,
+          createdAt: T3,
+        });
+        expect(
+          await repos.tradingPlan.saveIfBudgetAvailable({
+            ...input,
+            plan: next,
+            expectedRevision: 'plan-budget-lock:v1',
+          }),
+        ).toEqual({
+          saved: false,
+          reason: 'revision-conflict',
+          actual: 'plan-budget-lock:v2',
+        });
+      });
+
       it('版本身份不可变，重复保存同一版本幂等', async () => {
         const plan = makeTradingPlan('plan-1', 1);
         await repos.tradingPlan.save(plan);
-        await repos.tradingPlan.save(plan);
+        // 幂等重放：同 versionId 同内容 → saved: true。
+        expect(await repos.tradingPlan.save(plan)).toEqual({ saved: true });
         expect(await repos.tradingPlan.findByVersionId('plan-1:v1')).toEqual(plan);
-        await expect(repos.tradingPlan.save({ ...plan, confidence: 51 })).rejects.toThrow(
-          'immutable',
-        );
+        // 同 versionId 不同内容：**语义不变**（拒绝），但表达方式从「抛错」改为返回值
+        // （决策 3-A：同一仓储里两种冲突表达方式更坏）。断言变得更严：不仅要求失败，
+        // 还要求给出 reason 与 actual。
+        expect(await repos.tradingPlan.save({ ...plan, confidence: 51 })).toEqual({
+          saved: false,
+          reason: 'version-immutable',
+          actual: 'plan-1:v1',
+        });
+        // 关键：拒绝之后原版本内容不得被改写。
+        expect(await repos.tradingPlan.findByVersionId('plan-1:v1')).toEqual(plan);
       });
 
       it('activeOnly：更新的草案回退到上一个生效版本，退役状态则停止监控', async () => {

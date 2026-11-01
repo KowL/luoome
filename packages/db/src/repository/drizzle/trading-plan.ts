@@ -25,6 +25,23 @@ type DrizzleTransaction = Parameters<Parameters<DrizzleDatabase<Schema>['transac
 
 const toPlan = (row: TradingPlanRow): TradingPlan => assertTradingPlanReadable(row.plan);
 
+/**
+ * 事务内的「该计划当前最新版本」查询。
+ *
+ * **必须**接收事务句柄：用 `this.db` 或 `this.latestByPlanId` 会读到事务外的连接，
+ * 让乐观锁退化成「先读后写」而失效（决策 3-A，见 `save` 的方法注释）。
+ */
+const latestRowInTransaction = (tx: DrizzleTransaction, planId: string): string => {
+  const row = tx
+    .select({ versionId: tradingPlans.versionId })
+    .from(tradingPlans)
+    .where(eq(tradingPlans.planId, planId))
+    .orderBy(desc(tradingPlans.version), desc(tradingPlans.createdAt))
+    .limit(1)
+    .get();
+  return row?.versionId ?? '';
+};
+
 const toRow = (plan: TradingPlan) => ({
   versionId: tradingPlanVersionId(plan),
   planId: plan.id,
@@ -41,23 +58,64 @@ const toRow = (plan: TradingPlan) => ({
 export class DrizzleTradingPlanRepository implements TradingPlanRepository {
   constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
-  async save(plan: TradingPlan): Promise<void> {
+  /**
+   * 保存一个计划版本，可选启用乐观锁（决策 3-A）。
+   *
+   * ## 为什么必须是 `this.db.transaction((tx) => …)`
+   *
+   * 「读当前最新版 → 比对 → 写」三步如果在事务**外**做，两个并发调用会读到同一个旧基线、
+   * 各自认为通过，然后都写入——这就是**假锁**：代码看起来有锁，实际没有。
+   *
+   * ## 为什么闭包里**不许**调用 `this.latestByPlanId(...)`
+   *
+   * `latestByPlanId` 绑在 `this.db` 上。在事务闭包里调用它，读的是**事务外**的连接——
+   * 那正好就是「分两步读再写」的等价物，锁会失效，而且**看不出来**。
+   * 所以下面用 `tx` 重写同一个查询（`where planId / order by version desc / limit 1`）。
+   * `verifyOptimisticLockUsesTransaction`（见 `trading-plan.lock.guard.test.ts`）守住这条：
+   * 谁把这里改成复用 `latestByPlanId`，那条测试会红。
+   */
+  async save(
+    plan: TradingPlan,
+    options: { readonly expectedRevision?: string } = {},
+  ): ReturnType<TradingPlanRepository['save']> {
     const parsed = TradingPlanV2Schema.parse(plan);
     assertTradingPlanInvariants(parsed);
     const versionId = tradingPlanVersionId(parsed);
-    const existing = this.db
-      .select()
-      .from(tradingPlans)
-      .where(eq(tradingPlans.versionId, versionId))
-      .get();
-    if (existing !== undefined) {
-      const existingPlan = TradingPlanSchema.parse(existing.plan);
-      if (JSON.stringify(existingPlan) !== JSON.stringify(parsed)) {
-        throw new Error(`trading plan version is immutable: ${versionId}`);
-      }
-      return;
-    }
-    this.db.insert(tradingPlans).values(toRow(parsed)).run();
+    const expectedRevision = options.expectedRevision;
+    return this.db.transaction(
+      (tx: DrizzleTransaction) => {
+        const existing = tx
+          .select()
+          .from(tradingPlans)
+          .where(eq(tradingPlans.versionId, versionId))
+          .get();
+        if (existing !== undefined) {
+          const existingPlan = TradingPlanSchema.parse(existing.plan);
+          if (JSON.stringify(existingPlan) !== JSON.stringify(parsed))
+            return { saved: false, reason: 'version-immutable', actual: versionId } as const;
+          // 同 versionId 同内容：幂等重放。基线检查同样适用（否则重放会绕过锁）。
+          if (expectedRevision !== undefined) {
+            const latest = latestRowInTransaction(tx, parsed.id);
+            if (latest !== versionId)
+              return {
+                saved: false,
+                reason: 'revision-conflict',
+                actual: latest,
+              } as const;
+          }
+          return { saved: true } as const;
+        }
+        if (expectedRevision !== undefined) {
+          // ⚠️ 必须用 `tx`，不能用 `this.db` / `this.latestByPlanId`（见方法注释）。
+          const latest = latestRowInTransaction(tx, parsed.id);
+          if (latest !== expectedRevision)
+            return { saved: false, reason: 'revision-conflict', actual: latest } as const;
+        }
+        tx.insert(tradingPlans).values(toRow(parsed)).run();
+        return { saved: true } as const;
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async saveIfBudgetAvailable(input: {
@@ -66,6 +124,7 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
+    readonly expectedRevision?: string;
   }): ReturnType<TradingPlanRepository['saveIfBudgetAvailable']> {
     const plan = TradingPlanV2Schema.parse(input.plan);
     assertTradingPlanInvariants(plan);
@@ -118,12 +177,24 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
         const existing = rows.find((row) => row.versionId === tradingPlanVersionId(plan));
         if (existing !== undefined) {
           const existingPlan = toPlan(existing);
-          if (JSON.stringify(existingPlan) !== JSON.stringify(plan)) {
-            throw new Error(`trading plan version is immutable: ${tradingPlanVersionId(plan)}`);
-          }
-          return { saved: true, budget } as const;
+          // 版本不可变：同 versionId 不同内容。原先是抛错，现在改为返回值——
+          // 调用方**必须**处理，静默当成功是行为松动（决策 3-A）。
+          if (JSON.stringify(existingPlan) !== JSON.stringify(plan))
+            return {
+              saved: false,
+              reason: 'version-immutable',
+              actual: tradingPlanVersionId(plan),
+            } as const;
         }
-        tx.insert(tradingPlans).values(toRow(plan)).run();
+        // 乐观锁（决策 3-A）：比对与写入在同一事务内。**必须用 `tx`**，
+        // 用 `this.db` / `this.latestByPlanId` 会读到事务外连接，锁会失效。
+        if (input.expectedRevision !== undefined) {
+          const latest = latestRowInTransaction(tx, plan.id);
+          // 幂等重放（同 versionId 已存在且内容相同）不算冲突。
+          if (latest !== input.expectedRevision && latest !== tradingPlanVersionId(plan))
+            return { saved: false, reason: 'revision-conflict', actual: latest } as const;
+        }
+        if (existing === undefined) tx.insert(tradingPlans).values(toRow(plan)).run();
         return { saved: true, budget } as const;
       },
       { behavior: 'immediate' },

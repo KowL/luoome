@@ -500,8 +500,36 @@ export interface AdviceRepository {
 }
 
 /** 逐股结构化计划版本；版本 immutable，active 状态切换由新版本替代表达。 */
+/**
+ * 保存结果的统一形态（决策 3-A）。
+ *
+ * 冲突**必须**给出 `actual`（当前最新 versionId）——只返回 `false` 等于让调用方
+ * 「不知道该基于哪一版重试」，这是本会话反复批评的输出信息不足。
+ */
+export type TradingPlanSaveResult =
+  | { readonly saved: true }
+  /**
+   * 调用方声明的编辑基线（`expectedRevision`）已不是该计划的最新版本。
+   * `actual` = 当前最新 versionId，调用方可基于它重新读取后重试。
+   */
+  | { readonly saved: false; readonly reason: 'revision-conflict'; readonly actual: string }
+  /**
+   * 同一 versionId 已被写入且内容不同。版本不可变是既有语义，
+   * 这里从「抛错」改为返回值，但**调用方仍必须处理**——静默当成功是行为松动。
+   */
+  | { readonly saved: false; readonly reason: 'version-immutable'; readonly actual: string };
+
 export interface TradingPlanRepository {
-  save(plan: TradingPlan): Promise<void>;
+  /**
+   * 保存一个计划版本。传入 `options.expectedRevision` 时启用**乐观锁**：
+   * 只有该计划的最新版本等于它才写入，否则返回 `revision-conflict` + `actual`。
+   *
+   * 不传 = 不做版本比对（存量调用兼容），但仍保留「同 versionId 内容不同 → 拒绝」的不可变语义。
+   */
+  save(
+    plan: TradingPlan,
+    options?: { readonly expectedRevision?: string },
+  ): Promise<TradingPlanSaveResult>;
   /** 在同一持久化事务内核对账户事实、读取当前计划预算并条件写入 active 版本。 */
   saveIfBudgetAvailable(input: {
     readonly plan: TradingPlan;
@@ -509,6 +537,8 @@ export interface TradingPlanRepository {
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
+    /** 同 `save`：声明编辑基线，事务内比对；不传则不比对。 */
+    readonly expectedRevision?: string;
   }): Promise<
     | { readonly saved: true; readonly budget: TradingPlanBudgetResult }
     | {
@@ -517,6 +547,8 @@ export interface TradingPlanRepository {
         readonly budget: TradingPlanBudgetResult;
       }
     | { readonly saved: false; readonly reason: 'account-facts-changed' }
+    | { readonly saved: false; readonly reason: 'revision-conflict'; readonly actual: string }
+    | { readonly saved: false; readonly reason: 'version-immutable'; readonly actual: string }
   >;
   findByVersionId(versionId: string): Promise<TradingPlan | null>;
   list(query?: TradingPlanQuery): Promise<readonly TradingPlan[]>;
