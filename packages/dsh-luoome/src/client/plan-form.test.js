@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   activeBlockNotice,
   appliedPctFor,
+  latestPlanPerPlanId,
   mergePlanEdit,
   PLAN_FORM_STEPS,
   rangeHint,
@@ -216,5 +217,62 @@ describe('冲突文案', () => {
     expect(text).toContain('plan-1:v3');
     expect(text).toContain('plan-1:v4');
     expect(text).toContain('未保存');
+  });
+});
+
+/**
+ * 列表去重（产品缺陷修复）：同一 `planId` 只保留最新版。
+ *
+ * 不去重 → 选中态 `selected = planId` 不唯一 → `useEffect([selected])` 不重算 →
+ * **编辑基线静默停在旧版**。表现不是报错，而是「用户以为在编辑 v2、实际基于 v1」。
+ * 这类缺陷只有守卫能防。
+ */
+describe('列表按 planId 去重', () => {
+  const plan = (version, extra = {}) => ({
+    id: 'plan-1',
+    version,
+    createdAt: new Date(2026, 0, version),
+    ...extra,
+  });
+
+  it('同一 planId 只保留 version 最大的一行，并给出历史版数', () => {
+    const result = latestPlanPerPlanId([plan(3), plan(1), plan(2)]);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.plan.version).toBe(3);
+    expect(result[0]?.versionCount).toBe(3);
+  });
+
+  it('不同 planId 各自保留，互不影响', () => {
+    const result = latestPlanPerPlanId([
+      plan(1),
+      plan(2),
+      { id: 'plan-2', version: 1, createdAt: new Date(2026, 0, 1) },
+    ]);
+    expect(result.map((entry) => entry.plan.id).sort()).toEqual(['plan-1', 'plan-2']);
+  });
+
+  it('version 与 createdAt 不一致时以 **version** 为准', () => {
+    // createdAt 更新但 version 更小的行不得胜出：
+    // 版本号才是计划的真实修订序，createdAt 受导入/回填影响。
+    const result = latestPlanPerPlanId([
+      { id: 'plan-1', version: 5, createdAt: new Date(2026, 0, 1) },
+      { id: 'plan-1', version: 4, createdAt: new Date(2026, 11, 31) },
+    ]);
+    expect(result[0]?.plan.version).toBe(5);
+  });
+
+  it('version 相同时用 createdAt 兜底（同版本多行只留较新的一条）', () => {
+    const result = latestPlanPerPlanId([
+      { id: 'plan-1', version: 2, createdAt: new Date(2026, 0, 1) },
+      { id: 'plan-1', version: 2, createdAt: new Date(2026, 0, 5) },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(new Date(result[0]?.plan.createdAt).getTime()).toBe(new Date(2026, 0, 5).getTime());
+  });
+
+  it('空输入与缺 id 的行不会崩，也不会造出假行', () => {
+    expect(latestPlanPerPlanId([])).toEqual([]);
+    expect(latestPlanPerPlanId(undefined)).toEqual([]);
+    expect(latestPlanPerPlanId([{ version: 1 }])).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import { money, when } from './format.js';
 import {
   activeBlockNotice,
   appliedPctFor,
+  latestPlanPerPlanId,
   mergePlanEdit,
   PLAN_FORM_STEPS,
   rangeHint,
@@ -141,7 +142,7 @@ export const persistPlan = async ({ plan, expectedRevision }) => {
  * 区间上限 `tradingPlanRangeWidthCap`、落点 `tradingPlanPickedPct`。
  * 这个组件只负责摆放控件，不做任何数值判断——否则数字会散落成第二份真源。
  */
-const PlanForm = ({ plan, onSave, busy }) => {
+const PlanForm = ({ plan, onSave, busy, baseline }) => {
   const [step, setStep] = useState(PLAN_FORM_STEPS[0].id);
   // 编辑草稿：只放四步覆盖的字段。`marketFacts`/`evidence` 不在这里出现。
   const [edit, setEdit] = useState({
@@ -384,6 +385,16 @@ const PlanForm = ({ plan, onSave, busy }) => {
       { className: 'luo-fine', 'data-plan-step': step },
       `第 ${String(index + 1)} / ${String(PLAN_FORM_STEPS.length)} 步`,
     ),
+    // 编辑基线可见：用户能看出「我这份草稿基于哪一版」，
+    // 验收也能断言「两个标签页都基于 v1」，而不用猜。
+    h(
+      'p',
+      {
+        className: 'luo-fine',
+        'data-plan-baseline': baseline ?? '',
+      },
+      `编辑基线：${baseline ?? '（未确定）'}`,
+    ),
     ...body,
     h(
       'div',
@@ -436,7 +447,20 @@ const PlanRow = ({ entry, selected, onSelect }) =>
         entry.status === 'active' ? '生效中' : entry.status === 'draft' ? '草案' : '历史',
       ),
     ),
-    h('td', null, `v${String(entry.version ?? 1)}`),
+    h(
+      'td',
+      null,
+      `v${String(entry.version ?? 1)}`,
+      // 去重不等于丢弃：历史版本仍在详情页的版本链里只读可见。
+      // 这里明示「共 N 版」，用户不会以为老版本被删了。
+      entry.historyCount > 0
+        ? h(
+            'span',
+            { className: 'luo-fine', 'data-plan-history-count': String(entry.historyCount) },
+            ` · 共 ${String(entry.historyCount + 1)} 版`,
+          )
+        : null,
+    ),
     h('td', null, when(entry.validUntil)),
     h(
       'td',
@@ -515,7 +539,14 @@ export function PlansPanel() {
       .finally(() => setSaving(false));
   };
 
-  const plans = listed?.plans ?? listed?.items ?? [];
+  const rawPlans = listed?.plans ?? listed?.items ?? [];
+  // **同一 planId 只留最新版**：选中态是 `planId`，同一计划出现多行会让
+  // `useEffect([selected])` 失效、编辑基线静默停在旧版（详见 `latestPlanPerPlanId` 注释）。
+  const deduped = latestPlanPerPlanId(rawPlans);
+  const plans = deduped.map((entry) => entry.plan);
+  const versionCounts = new Map(
+    deduped.map((entry) => [entry.plan.id ?? entry.plan.planId, entry.versionCount]),
+  );
   const rows = plans.map((plan) => ({
     planId: plan.id ?? plan.planId,
     stockId: plan.stockId,
@@ -524,7 +555,10 @@ export function PlansPanel() {
     version: plan.version,
     validUntil: plan.validUntil,
     gaps: planGaps(plan),
+    // 历史版本数：让用户知道「这个计划还有 N 个历史版本」（去重不等于丢弃）。
+    historyCount: (versionCounts.get(plan.id ?? plan.planId) ?? 1) - 1,
   }));
+  // 去重后 `planId → 唯一一行` ⇒ 这里的 find 与 `useEffect([selected])` 语义一致。
   const current = plans.find((plan) => (plan.id ?? plan.planId) === selected) ?? null;
 
   useEffect(() => {
@@ -536,6 +570,14 @@ export function PlansPanel() {
         current.versionId ??
           (current.id === undefined ? null : `${current.id}:v${String(current.version ?? 1)}`),
       );
+    // ## 依赖只放 `selected` —— **不能**放 `current?.version`
+    //
+    // 基线 = 「我打开编辑时那一版」，它是**编辑会话的属性**，不是「列表当前最新版」。
+    // 一旦把 `current?.version` 放进依赖，列表刷新（别人保存、定时重取）就会把
+    // 正在编辑的草稿基线**悄悄改掉**——那正是乐观锁要防的情形，等于自己废掉锁。
+    //
+    // 之前列表里同一 planId 有多行导致 `selected` 不唯一，看起来像「基线不更新」；
+    // 修法是**列表去重**（`latestPlanPerPlanId`），而不是往这里加依赖。
   }, [selected]);
 
   return h(
@@ -640,6 +682,9 @@ export function PlansPanel() {
           h(PlanForm, {
             plan: current,
             busy: saving,
+            // 把「这次编辑声明的是哪一版基线」暴露到 DOM：
+            // 用户和验收都需要能看见它，否则「乐观锁到底锁了谁」不可观测。
+            baseline: openedVersionId,
             onSave: (editable) =>
               saveDraft(
                 { ...editable, version: (current.version ?? 1) + 1 },

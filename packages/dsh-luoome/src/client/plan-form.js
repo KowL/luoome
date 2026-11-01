@@ -56,6 +56,56 @@ export const PLAN_FORM_STEPS = Object.freeze([
 ]);
 
 /**
+ * 列表去重：同一 `planId` 只保留**最新一版**。
+ *
+ * ## 为什么必须去重（不是美观问题）
+ *
+ * `PlansPanel` 的选中态是 `selected = planId`，`openedVersionId` 由
+ * `useEffect([selected])` 推导。列表里同一个 `planId` 出现多行时：
+ * 点 v1 或点 v2，`selected` **都是同一个值** ⇒ effect 不重算 ⇒
+ * **编辑基线停在你第一次点开的那一版**。
+ *
+ * 后果不是报错而是**静默的错误数据**：用户看着 v2 那一行，以为在编辑 v2，
+ * 实际基线是 v1，保存时要么莫名冲突、要么把基于 v1 的修改写成新版本。
+ *
+ * 去重之后 `planId → 唯一一行`，状态模型与 UI 表达一致。
+ * 历史版本仍在**详情页的版本链**里只读可见，不需要为编辑而在列表里重复出现。
+ *
+ * ## 判据：`version` 优先，`createdAt` 次之
+ *
+ * 与仓储的 `latestByPlanId`（memory `:196`、drizzle `:259`）和 core 的
+ * `resolveTradingPlanVersions` **同一口径**：`version` 降序，`createdAt` 降序兜底。
+ *
+ * 注意 `selectTradingPlans` 的**默认列表排序**是 `createdAt` 优先（`:1040-1045`），
+ * 与这里不同。两者不一致时以 **`version` 为准**——版本号才是计划的真实修订序，
+ * 而 `createdAt` 受导入/回填影响，可能晚于更高版本却版本号更小。
+ */
+export const latestPlanPerPlanId = (plans) => {
+  const byId = new Map();
+  for (const plan of plans ?? []) {
+    const id = plan?.id ?? plan?.planId;
+    if (id === undefined || id === null) continue;
+    const existing = byId.get(id);
+    if (existing === undefined) {
+      byId.set(id, { plan, count: 1 });
+      continue;
+    }
+    const existingVersion = Number(existing.plan?.version ?? 0);
+    const incomingVersion = Number(plan?.version ?? 0);
+    const newer =
+      incomingVersion > existingVersion ||
+      (incomingVersion === existingVersion &&
+        new Date(plan?.createdAt ?? 0).getTime() >
+          new Date(existing.plan?.createdAt ?? 0).getTime());
+    byId.set(id, {
+      plan: newer ? plan : existing.plan,
+      count: existing.count + 1,
+    });
+  }
+  return [...byId.values()].map(({ plan, count }) => ({ plan, versionCount: count }));
+};
+
+/**
  * **本表单不编辑**的字段组——沿用被编辑版本（vN）的值。
  *
  * 为什么不在表单里编辑（需求负责人裁定）：
