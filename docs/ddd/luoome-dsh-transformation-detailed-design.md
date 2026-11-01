@@ -328,7 +328,13 @@ P0 决策冻结
 
 ### 4.3 MCP 暴露面
 
-当前 inventory（2026-10-22 瘦身后实测，`bun packages/cli/src/index.ts tools list --json`）：178 个 tool，`read 89 / write 64 / external 24 / trade 1`（`advice` 已删除，见 §16）。默认仅暴露 `read`（89 个，按现行 research 子串特判扣除后 78 个）。目标：
+**历史 inventory（2026-10-22 瘦身后实测，当时用 `bun packages/cli/src/index.ts tools list --json`；该 CLI 已随 REQ-M2-05 下线）**：
+当时为 178 个 tool，`read 89 / write 64 / external 24 / trade 1`（`advice` 已删除，见 §16）。
+默认仅暴露 `read`（89 个，按现行 research 子串特判扣除后 78 个）。
+
+> 这是**历史快照**，不是当前数量。当前库存以 `bun run tools:list --json` 为准
+> （`packages/tools/src/registry.ts` 是单一真源）。**本节其余内容描述的是当时的暴露面设计**，
+> 数字变化不改变分层结论。目标：
 
 | 层 | 暴露内容 | 说明 |
 |---|---|---|

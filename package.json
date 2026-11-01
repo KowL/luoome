@@ -25,7 +25,8 @@
     "format": "biome format --write .",
     "build": "for d in packages/* apps/*; do if [ -f \"$d/src/index.ts\" ]; then echo \"== build $d\"; bun --no-env-file build \"$d/src/index.ts\" --outdir \"$d/dist\" --target bun --packages external || exit 1; fi; done",
     "build:dsh-luoome": "bun --no-env-file run --cwd packages/dsh-luoome build",
-    "check:layers": "bun --no-env-file infra/check-layers.ts"
+    "check:layers": "bun --no-env-file infra/check-layers.ts",
+    "check:docs": "bun --no-env-file infra/check-docs.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",

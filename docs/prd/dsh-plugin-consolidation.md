@@ -1108,7 +1108,9 @@ v2 只有 M4-01 的「告警规则编辑迁移」，没有「从触发到改规�
 **需求**：重写 `ARCHITECTURE` §3/§9/§10/§11、`SECURITY` MCP 章、`USER_GUIDE` 入口章节、`AGENTS.md` 架构图；
 新增 `infra/check-docs.ts`；**把本文纳入过期检查**（附录 A 的 asOf 过期即告警）。
 
-**验收标准**：`grep -n "packages/dsh-luoome" docs/ARCHITECTURE.md` 有命中；`grep -rn "178 个 tool" docs/` 无命中；
+**验收标准**：`grep -n "packages/dsh-luoome" docs/ARCHITECTURE.md` 有命中；
+**文档中不得出现「现在时」的过时工具数断言**（历史快照可保留「当时为 N」，但必须标注为历史并指向当前真源；
+由 `bun run check:docs` 对账，**数字不符即失败、`asOf` 过期即告警**）；
 `USER_GUIDE` 前 100 行不含 CLI/TUI 安装步骤；`check-docs` 进 CI；`git diff --check` 干净。
 
 ---
@@ -1300,7 +1302,7 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 ---
 
-## 附录 A：事实快照（asOf 2026-10-30，随代码漂移即失效）
+## 附录 A：事实快照（asOf 2026-11-01，随代码漂移即失效）
 
 > 正文只引用本附录，不重复维护。REQ-M4-07 的 `check-docs` 对本附录的 `asOf` 做过期检查。
 
@@ -1308,15 +1310,15 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 > **已知缺口**：`check-docs` 由 REQ-M4-07 引入，**M1–M3 期间本附录没有自动过期检查**——
 > 本轮就是靠工程评审人工发现的。在此之前，改代码的人必须手动核对本附录。
 
-| 项 | 实测值（2026-10-30，T03 与 Lead 复核后） | 取证方式 |
+| 项 | 实测值（2026-11-01，随 `check:docs` 对账） | 取证方式 |
 |---|---|---|
-| registry 工具数 | **220**（M2/M3a 完成后实测） | `bun run tools:list --json` |
-| 工具源文件数 | 194（部分文件含多个 tool 定义） | `ls packages/tools/src/tools/*.ts \| wc -l` |
-| read allowlist | **67**（M3a 增 `get_strategy_ic` 等） | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
-| market allowlist | 10 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
-| 插件暴露面（可达） | **106** | `bun run tools:list --json` 的 `exposed` 计数 |
-| 不可达工具 | **114** | 同上（`unreachable-by-design`） |
-| 五类归类 | 只读面 94 / 可写面 92 / queue-worker 12 / 私人研究 22 / 废弃 **0** = 220 | `tools:list`；废弃为 0 是 H1 口径（不摘除任何工具） |
+| registry 工具数 | **231**（M4 完成后实测；`check:docs` 对账项） | `bun run tools:list --json` |
+| 工具源文件数 | 226（部分文件含多个 tool 定义） | `ls packages/tools/src/tools/*.ts \| wc -l` |
+| read allowlist | **72** | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
+| market allowlist | 12 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
+| 插件暴露面（可达） | **124** | `bun run tools:list --json` 的 `tag: exposed` 计数 |
+| 不可达工具 | **107** | 同上（`tag: unreachable-by-design`） |
+| 五类归类 | 只读面 **99** / 可写面 **98** / queue-worker **12** / 私人研究 **22** / 废弃 **0** = **231** | `tools:list` 的 `exposure` 字段；废弃为 0 是 H1 口径（不摘除任何工具） |
 | 全仓测试文件 | 346 | `find packages apps -name '*.test.ts' -o -name '*.test.js'` |
 | M2 删除的测试文件 | **17**（cli 6 / tui 1 / dsh-bridge 3 / mcp 3 / deploy 4）；`apps/web` 的 29 个属 M4-01 | `git diff --name-status <M2起点>..HEAD \| grep '^D.*\.test\.'` |
 | 遗留五面 LOC | ~50,562（占 18%） | 工程审计实测 |

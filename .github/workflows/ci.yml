@@ -35,6 +35,12 @@ jobs:
       - name: Architecture boundaries
         run: bun run check:layers
 
+      # REQ-M4-07：文档与当前事实对账。
+      # **失败** = 文档断言了与当前事实不符的数字（读者会据此误判）；
+      # **告警** = 附录 A 的 asOf 该复核了（不一定是错的）——不阻断 CI。
+      - name: Docs facts
+        run: bun run check:docs
+
       - name: Typecheck
         run: bun run typecheck
 
