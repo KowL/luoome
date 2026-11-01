@@ -19,7 +19,8 @@ const repo = fileURLToPath(new URL('..', import.meta.url));
 const output = join(repo, 'infra/test-baseline.json');
 
 /** test:all 的组成段（与 package.json 的 test:all 定义一一对应）。 */
-const SEGMENTS = ['test', 'test:db', 'test:db:node', 'test:web', 'test:dsh-luoome:e2e'] as const;
+// `test:web` 随 apps/web 下线移除（M3-01）。
+const SEGMENTS = ['test', 'test:db', 'test:db:node', 'test:dsh-luoome:e2e'] as const;
 
 interface SegmentResult {
   readonly name: string;

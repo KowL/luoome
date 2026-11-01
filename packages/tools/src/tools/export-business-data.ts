@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { defineTool, errAdapterError } from '../define-tool.js';
 
-/** 与 `apps/web/src/data-transfer.ts:497` 的 `LuoomeDataArchive` 兼容（导出物要被 restore 吃回去）。 */
+/** 与搬迁前 `apps/web/src/data-transfer.ts:497` 的 `LuoomeDataArchive` 形状兼容（该文件已随 M3-01 删除；导出物要被 restore 吃回去）。 */
 export const BusinessDataArchiveSchema = z
   .object({
     format: z.literal('luoome-data'),

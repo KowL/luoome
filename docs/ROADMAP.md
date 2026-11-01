@@ -115,6 +115,9 @@
 **技术栈定调**：保留 vanilla JS + Hono + Bun（无构建步骤），通过 ES modules 拆模块。引入 Solid/Tailwind 会显著增加构建复杂度，与现有架构风格不符；选择 CSS 设计 tokens + 组件类 + 响应式断点达成同等目标。
 
 **实际产物（W4.A → W4.F，commit 见 git log）**：
+
+> ⚠️ **历史记录**：下列 `apps/web/public/*` 路径已随 M3-01 下线删除。此段保留作为那次迭代的存档，
+> **不要照此查找现有代码**；当前前端在 `packages/dsh-luoome/src/client/`。
 - 设计系统（apps/web/public/style.css，934 行）：
   - 设计 tokens：颜色（基础 / 文字 / 边框 / 品牌 / 涨跌 / 决策 / 语义）+ 间距（4 倍数）+ 字号 + 字重 + 行高 + 圆角 + 阴影 + 动效。
   - 组件库：`.btn`（4 variant + 3 size）、`.card`、`.table`、`.badge`（5 决策色 + 涨跌）、`.confidence-bar`（3 level）、`.stat-grid`、`.advice-card`（含 expand toggle）、`.field`。

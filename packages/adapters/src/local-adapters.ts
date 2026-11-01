@@ -2,7 +2,7 @@
 //
 // CLI、MCP 与 Web 三个入口都要按 env 装配同一套市场/研究/情绪适配器。
 // 装配逻辑放在这里，入口只负责注入仓储、用户身份与审计 sink；
-// 托管形态另有自己的 provider 组合根（apps/web/src/hosted-composition.ts），与此无关。
+// 托管形态另有自己的 provider 组合根（原 `apps/web/src/hosted-composition.ts`，已随 M3-01 删除），与此无关。
 
 import type { Logger } from '@luoome/core';
 

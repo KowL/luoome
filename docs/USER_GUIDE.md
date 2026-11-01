@@ -751,13 +751,18 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 按官网安装 Bun 或用 `npx bun`。
 
-### 12.2 Web 端打开是空白，console 报 `await is only valid in async functions`
+### 12.2 面板打开是空白
 
-检查 `apps/web/public/js/app.js` 与 `pages.js` 是否被浏览器当 ES module 解析——确认 `<script type="module">` 或 http 头 `content-type: text/javascript`。
+旧单机 Web（`apps/web`）已随 M3-01 下线，`apps/web/public/js/*` 不再存在——**这类报错不会来自本仓库**。
+当前形态是 DSH 插件：面板空白先看
+①DSH 是否加载了 `dsh-luoome`（`bun run build:dsh-luoome` 后由 `profile-seed.mjs` 装配）；
+②`test:panels-browser` 的失败末行（它是唯一 DOM 级门，会给出缺失元素与现场 DOM）；
+③插件 client 的 `window.__luoomeErrors` 与页面里的 `[data-slot-error]` 标记——
+**client 崩溃会被 `SlotErrorBoundary` 接走并「让位」，表现为「组件没渲染」而不是「组件报错」**。
 
 ### 12.3 终端界面（已下线）
 
-TUI 已随 T15 删除，不再有「需要交互式终端」这类报错；请改用 `bun run web` 或 DSH 插件面板。
+TUI 已随 T15 删除，旧单机 Web 亦随 M3-01 下线（不再有 `bun run web`）；请使用 DSH 插件面板。
 
 ### 12.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
 

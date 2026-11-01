@@ -5,7 +5,7 @@
  * .env 文件并调用 applyEnvEntries 注入 process.env（仅填未设置的 key，
  * 真实环境变量永远优先）。
  *
- * 文件读取在 surface 侧（apps/web/src/env.ts），core 只提供解析与应用两个纯函数。
+ * 文件读取在 surface 侧（原 `apps/web/src/env.ts`，已随 M3-01 删除），core 只提供解析与应用两个纯函数。
  */
 
 /**

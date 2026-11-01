@@ -1510,10 +1510,15 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 
 ## 16. 个人订阅服务装配
 
-Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts`），
-没有登录、没有租户隔离、没有支付计量。CLI/TUI/Web/DSH 插件共用同一份单机事实库。
+**单机形态只有一个入口：DSH 插件。** 旧单机 Web（`apps/web`）已随 M3-01 下线，
+其能力（五块面板、设置分区、数据导入导出）全部由 `packages/dsh-luoome` 提供；
+没有登录、没有租户隔离、没有支付计量。DSH 与事实库共用同一份单机 `luoome.db`。
 默认部署是纯插件形态：DSH（Node）加载 `dsh-luoome`，安装/升级/备份/回退步骤见
 [用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [宿主机直部署](../deploy/direct/luoome-dsh.service)。
+
+> 下面几段（认证传输、Origin 校验、CSRF/验证码限流、登录页 `/api/auth/config`、租户隔离）
+> 描述的是**已下线的 `apps/web` 服务器**。保留原文是为了让历史设计可追溯；
+> 当前形态不存在这些端点与开关，**不要按下文去改代码**。
 
 认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
 浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。

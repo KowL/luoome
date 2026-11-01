@@ -160,7 +160,7 @@ Web 页面展示股票身份时统一复用首页看板的两行样式，不允�
 - 第一行展示股票名称，第二行展示带交易所后缀的完整代码；不得只显示代码，也不得挤在同一行。
 - 两行必须放在同一个真实 `<a>` 中，整个股票标识区域都可点击，默认跳转
   `#market?stockId={stockId}&range=3m`。
-- 使用 `apps/web/public/js/stock-link.js` 的 `stockIdentityLink`，不复制链接、样式或 fallback 逻辑。
+- 使用 `packages/dsh-luoome/src/client/` 里既有的链接/样式原语，不复制链接、样式或 fallback 逻辑（旧 `apps/web/public/js/stock-link.js` 已随 M3-01 下线）。
 - 股票名称由 Tool/API 从本地股票目录解析，前端不得从代码猜名称；无法解析时显示“名称暂缺”，保留代码和行情入口。
 - 链接需支持键盘焦点、复制链接、浏览器返回/前进以及修饰键新开标签页。
 - 存在展开、Watchlist、Advice 等行内操作时，只让股票标识区域跳转，避免把整行设为链接造成嵌套交互或误触。
@@ -460,10 +460,10 @@ luoome 以插件形态接入 DSH，开发与验证都围绕单机装配：
 - 暴露面开关由环境决定：部署传入的环境变量里出现 `LUOOME_EXPOSE_*` 一律丢弃，不要绕过这层保护。
 - 批处理工具名单归于 `packages/batch`：改名单时同步 `deploy/dsh/batch-tools.test.ts` 的契约测试，部署侧只做转发。
 - `bun run build:dsh-luoome` 构建 DSH 插件产物（host / client），`bun run test:dsh-luoome` 跑插件侧测试；两者都要在已安装依赖的仓库根目录执行。
-- `bun --no-env-file apps/web/src/index.ts` 起单机 Web（默认 `127.0.0.1:5173`）；它读同一份 `$LUOOME_HOME/luoome.db`。
+- 旧单机 Web（`apps/web`）**已随 M3-01 下线**，不再有 `bun run web` 入口；DSH 插件形态是唯一形态，本地起服务用 `deploy/dsh` 的 compose 或 `profile-seed.mjs` + `dsh --profile`。
 - 单机没有常驻调度进程：批处理由 DSH 定时任务唤起会话后调用 `luoome-batch` 实例的工具触发；门槛判定随工具走，不满足时返回 `skipped`，不要用「昨天是交易日吧」这类推断代替。
 
-`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 与 Web server 文件。
+`test:db` 使用 Bun（`test:web` 随 `apps/web` 下线移除）；Vitest 明确排除 Bun SQLite 相关文件。
 真实进程 crash 用隔离临时目录和 fixture 验证，不使用个人数据。
 UI 修改除自动测试外，实际启动并检查手机、单账户/多标签与断线恢复，记录 fixture 边界。
 DSH 侧（面板、纪律提示词、profile 装配）的改动还要跑一次受控验证底座，说明见 [infra/dsh/README.md](../infra/dsh/README.md)。

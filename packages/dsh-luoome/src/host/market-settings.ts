@@ -77,7 +77,7 @@ export const RESEARCH_MANAGED_ROOT_KEY = 'LUOOME_RESEARCH_MANAGED_ROOT' as const
 export const RESEARCH_MAX_TEXT_MB_KEY = 'LUOOME_RESEARCH_MAX_TEXT_MB' as const;
 export const RESEARCH_MAX_ATTACHMENT_MB_KEY = 'LUOOME_RESEARCH_MAX_ATTACHMENT_MB' as const;
 
-/** 四位高级配置的默认值（与 `apps/web/src/research-vault-settings.ts:29-40` 一致）。 */
+/** 四位高级配置的默认值（与搬迁来源 `apps/web/src/research-vault-settings.ts:29-40` 一致；该文件已随 M3-01 删除）。 */
 export const RESEARCH_DEFAULTS = {
   researchRoot: 'Research',
   managedRoot: 'Research/Luoome',
@@ -164,11 +164,11 @@ const ResearchVaultChannelSchema = z
     /**
      * 研究目录 / 受管目录是**库内相对路径**（相对 `vaultPath`），
      * **不许**用 `ResearchVaultPathSchema`（那是绝对路径 + 存在性校验，语义完全不同）。
-     * 判据照 `apps/web` 的 `singleLine()`：trim 后非空 + 单行。
+     * 判据照搬迁来源 `apps/web` 的 `singleLine()`（已随 M3-01 删除）：trim 后非空 + 单行。
      */
     researchRoot: singleLineOptional('研究目录'),
     managedRoot: singleLineOptional('受管目录'),
-    /** 文本/附件上限：整数 + 上下界（与 apps/web 的 `int().min().max()` 一致）。 */
+    /** 文本/附件上限：整数 + 上下界（与搬迁来源 `apps/web` 的 `int().min().max()` 一致，该目录已删除）。 */
     maxTextMb: z.coerce.number().int().min(1).max(100).optional(),
     maxAttachmentMb: z.coerce.number().int().min(1).max(1_024).optional(),
     vaultId: z
@@ -186,7 +186,7 @@ const ResearchVaultChannelSchema = z
   );
 
 /**
- * 飞书 Webhook 的**安全边界**（task-32 从 `apps/web/src/feishu-settings.ts` 原样搬过来）：
+ * 飞书 Webhook 的**安全边界**（task-32 从 `apps/web/src/feishu-settings.ts` 原样搬过来，该文件已随 M3-01 删除）：
  * 只接受 `https:` + `open.feishu.cn` + `/open-apis/bot/v2/hook/<token>` + 无 userinfo/query/hash。
  *
  * **这是白名单，不是格式校验**：放宽任何一条都会让密钥/内容被发到非飞书域名。
