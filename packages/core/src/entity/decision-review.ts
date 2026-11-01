@@ -7,7 +7,11 @@ import { TradeSchema } from './trade.js';
 
 export const DecisionReviewSubjectSchema = z
   .object({
-    kind: z.enum(['advice', 'trading-plan-version', 'watch-trigger']),
+    /**
+     * `account-review`：账户级日复盘（REQ-M4-11）。
+     * `id` 为 `<accountId>:<YYYY-MM-DD>`，**一天一条** —— 这同时是确认路径的幂等键。
+     */
+    kind: z.enum(['advice', 'trading-plan-version', 'watch-trigger', 'account-review']),
     id: z.string().min(1),
   })
   .strict();
@@ -61,7 +65,21 @@ export const DecisionReviewContextSchema = z
     capturedAt: z.coerce.date(),
     sourceDataAsOf: z.coerce.date().nullable(),
     captureOrigin: z.enum(['user', 'legacy-explicit-link']),
+    /**
+     * 来源快照。**不含**确认动作的元信息（如来源草稿 id）——
+     * 那些进 `confirmationSourceDraftId`，否则会让「同一来源、两条路径」算出不同
+     * `contextHash`，永远报「来源已变化」。
+     */
     source: z.record(z.string(), z.unknown()),
+    /**
+     * 确认动作来自哪份草稿（REQ-M4-11）。
+     *
+     * **刻意不放进 `source`**：`contextHash` 摘要的是「来源是否还是当时那个来源」，
+     * 而草稿 id 是确认动作的附属信息。放进 `source` 就需要「算 hash 前记得剥掉」，
+     * 而「记得剥」是会漏的（本仓库 `tools/decision-review.ts` 两处算 hash 的地方
+     * 就曾一处剥、一处没剥）。**放这里，任何地方算 hash 都天然一致。**
+     */
+    confirmationSourceDraftId: z.string().min(1).optional(),
     contextHash: z.string().min(1),
   })
   .strict();
@@ -82,13 +100,18 @@ export type DecisionReviewContext = z.infer<typeof DecisionReviewContextSchema>;
 export const reviewSourceDraftId = (
   review:
     | {
-        readonly context?: { readonly source?: Readonly<Record<string, unknown>> } | null;
+        readonly context?: DecisionReviewContext | null;
       }
     | null
     | undefined,
 ): string | undefined => {
-  const value = review?.context?.source?.sourceDraftId;
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  // 优先 `context.confirmationSourceDraftId`（REQ-M4-11 起的存放位置）：
+  // 它不进 `source`，因此不参与 `contextHash` —— 两条路径算出的 hash 天然一致。
+  const direct = review?.context?.confirmationSourceDraftId;
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+  // 兼容旧位置（`source.sourceDraftId`）。
+  const legacy = review?.context?.source?.sourceDraftId;
+  return typeof legacy === 'string' && legacy.length > 0 ? legacy : undefined;
 };
 
 /** 写入侧：把来源草稿 id 放进 `context.source`（唯一写入点）。 */

@@ -49,6 +49,7 @@ export * from './tools/batch-quote.js';
 export * from './tools/chat-session.js';
 export * from './tools/close-holding.js';
 export * from './tools/compute-indicators.js';
+export * from './tools/confirm-review-draft.js';
 export * from './tools/create-account.js';
 export * from './tools/create-strategy-observation-candidates.js';
 export * from './tools/data-import.js';

@@ -63,6 +63,29 @@ const resolveSource = async (
       source: snapshot(original),
     };
   }
+  if (subject.kind === 'account-review') {
+    /**
+     * 账户级日复盘（REQ-M4-11）。
+     *
+     * 它没有「上游来源对象」——这份复盘描述的是**账户当天的结果**，不是某条建议。
+     * 所以这里直接以账户本身作为来源快照，`occurredAt` 取该日（`id` 的日期部分）。
+     *
+     * `source.sourceDraftId` 由 `confirm_review_draft` 在写入后盖章；
+     * 这里给一个空对象打底，保证 `context.source` 存在且是可扩展的 record。
+     */
+    const day = subject.id.slice(accountId.length + 1);
+    if (!subject.id.startsWith(`${accountId}:`) || !/^\d{4}-\d{2}-\d{2}$/.test(day))
+      return 'denied' as const;
+    const occurredAt = new Date(`${day}T00:00:00.000Z`);
+    return {
+      stockId: null,
+      occurredAt,
+      validUntil: occurredAt,
+      sourceDataAsOf: occurredAt,
+      // **纯净的 source**：确认动作的草稿 id 不在这里（见 context.confirmationSourceDraftId）。
+      source: { kind: 'account-review', accountId, day },
+    };
+  }
   if (subject.kind === 'trading-plan-version') {
     const plan = await ctx.repos.tradingPlan.findByVersionId(subject.id);
     if (plan === null) return null;
@@ -254,6 +277,9 @@ export const getDecisionReviewContextTool = defineTool({
             sourceDataAsOf: source.sourceDataAsOf,
             captureOrigin: 'user' as const,
             source: source.source,
+            // `contextHash` 只摘要「来源本身」，**不含** `sourceDraftId`：
+            // 草稿 id 是确认动作的附属信息，若进摘要，预览时算出的 hash 与
+            // 确认时算出的就永远不一致（实测「来源已变化」）。
             contextHash: digest({ subject: input.subject, source: source.source }),
           });
     const ledgerState = await ctx.repos.decisionTrade.getLedgerState(accountId);
@@ -371,6 +397,13 @@ export const saveDecisionReviewTool = defineTool({
     expectedRevision: z.number().int().nonnegative(),
     content: DecisionReviewContentPatchSchema,
     changeNote: z.string().max(2000).nullable().optional(),
+    /**
+     * REQ-M4-11：来源草稿 id。仅 `account-review` 使用，盖进 `context.source.sourceDraftId`。
+     *
+     * 只对 `account-review` 生效——其它 subject 的来源由 `resolveSource` 决定，
+     * 传了也会被忽略（不静默改语义）。
+     */
+    sourceDraftId: z.string().min(1).optional(),
   }).strict(),
   output: z.object({ result: ReviewViewSchema, replayed: z.boolean() }),
   handler: async (input, ctx) => {
@@ -414,6 +447,10 @@ export const saveDecisionReviewTool = defineTool({
         sourceDataAsOf: source.sourceDataAsOf,
         captureOrigin: 'user' as const,
         source: source.source,
+        // 确认动作的草稿 id 放这里（不进 `source`，因此不影响 `contextHash`）。
+        ...(input.subject.kind === 'account-review' && input.sourceDraftId !== undefined
+          ? { confirmationSourceDraftId: input.sourceDraftId }
+          : {}),
         contextHash: digest({ subject: input.subject, source: source.source }),
       };
       occurredAt = source.occurredAt;

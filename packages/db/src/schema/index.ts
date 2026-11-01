@@ -136,7 +136,8 @@ export const decisionReviews = sqliteTable(
     id: text('id').primaryKey(),
     accountId: text('account_id').notNull(),
     subjectKind: text('subject_kind')
-      .$type<'advice' | 'trading-plan-version' | 'watch-trigger'>()
+      // REQ-M4-11：`account-review` 为账户级日复盘（一天一条）。
+      .$type<'advice' | 'trading-plan-version' | 'watch-trigger' | 'account-review'>()
       .notNull(),
     subjectId: text('subject_id').notNull(),
     stockId: text('stock_id'),

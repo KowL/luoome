@@ -237,6 +237,8 @@ const EXPECTED_TOOL_NAMES = [
   'list_decision_reviews',
   'get_decision_write_receipt',
   'save_decision_review',
+  // REQ-M4-11：草稿确认写入（草稿本身不写复盘）。
+  'confirm_review_draft',
   // REQ-M4-06：档位写入（write，走 Operation，不受档位闸门约束）。
   'set_automation_tier',
   'refresh_decision_review_report',
@@ -420,6 +422,7 @@ describe('toolRegistry', () => {
       'close_holding',
       'commit_watchlist_import',
       'complete_strategy_observations',
+      'confirm_review_draft',
       'confirm_strategy_autonomy_action',
       'create_account',
       'create_alert_plan',

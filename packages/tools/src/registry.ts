@@ -36,6 +36,7 @@ import {
 } from './tools/chat-session.js';
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
+import { confirmReviewDraftTool } from './tools/confirm-review-draft.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
 import { previewDataImportTool, restoreDataImportTool } from './tools/data-import.js';
@@ -402,6 +403,8 @@ export const toolRegistry: Registry = createRegistry([
   listDecisionReviewsTool,
   getDecisionWriteReceiptTool,
   saveDecisionReviewTool,
+  // REQ-M4-11：草稿确认写入（write）。草稿本身不写复盘，只有它写。
+  confirmReviewDraftTool,
   // REQ-M4-06：档位写入。write 副作用，走 Operation；不受档位闸门约束（否则死锁）。
   setAutomationTierTool,
   recordDecisionTradeTool,
