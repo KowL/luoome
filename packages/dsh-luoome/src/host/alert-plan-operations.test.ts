@@ -119,7 +119,7 @@ describe('task-39 告警规则 Operation 闭环', () => {
     });
   });
 
-  it('delete：删除前抓到快照，但**回执里拿不到**——这是已知缺口', async () => {
+  it('delete：摘要进入持久化回执并可读回（决策 3-B 补齐了原已知缺口）', async () => {
     const { repos, service } = await harness();
     await repos.alertPlan.save({
       id: 'plan-3',
@@ -136,22 +136,44 @@ describe('task-39 告警规则 Operation 闭环', () => {
       updatedAt: NOW,
     } as never);
 
-    const { confirmed } = await runOperation(service, 'delete_alert_plan', {
+    const { confirmed, operationId } = await runOperation(service, 'delete_alert_plan', {
       alertPlanId: 'plan-3',
     });
     expect(confirmed.ok).toBe(true);
     // 删除确实发生了。
     expect(await repos.alertPlan.findById('plan-3')).toBeNull();
 
-    // **如实记录的缺口**：`policy.receipt` 只在 reconcile 路径被调用
-    // （`plugin-operations.ts:492`，且仅当 state 为 executing/unknown）。
-    // 正常 confirm 成功路径只返回工具自身的输出，而 `delete_alert_plan` 只返回
-    // `{ deleted: true }` ⇒ **删除前的快照进不了回执**。
-    //
-    // 要真正做到「回执证明删了什么」，必须让 delete 工具的输出带快照
-    // （改 `DeleteAlertPlanOutput`）——那是改工具契约，超出本任务边界，已上报。
+    // 原先这里断言的是「回执里拿不到」——那是**缺口**，不是期望行为。
+    // 决策 3-B 让 `delete_alert_plan` 的输出带摘要，而成功路径的 `resultJson`
+    // 写的就是工具自身输出（`plugin-operations.ts:365`），所以摘要会真的落库。
     const data = (confirmed as { ok: true; data: { result?: { data?: Record<string, unknown> } } })
       .data;
-    expect(data.result?.data).toEqual({ deleted: true });
+    const summary = (data.result?.data as { summary?: Record<string, unknown> } | undefined)
+      ?.summary;
+    expect(summary).toEqual({
+      alertPlanId: 'plan-3',
+      name: '要删的规则',
+      watchlistId: 'wl-1',
+      ruleCount: 1,
+    });
+
+    // **持久化**读回：直接查 plugin_operations 的 resultJson，而不是只看内存里的返回值。
+    const row = await repos.pluginAuthority.findOperation({
+      userId: principal.userId,
+      accountId: principal.accountId,
+      id: operationId,
+    });
+    expect(row?.state).toBe('succeeded');
+    expect(row?.resultJson).not.toBeNull();
+    // 真正读**落库的那一行**的 resultJson，而不是复用内存里的返回值。
+    const persisted = JSON.parse(row?.resultJson ?? '{}') as {
+      data?: { summary?: Record<string, unknown> };
+    };
+    expect(persisted.data?.summary).toEqual({
+      alertPlanId: 'plan-3',
+      name: '要删的规则',
+      watchlistId: 'wl-1',
+      ruleCount: 1,
+    });
   });
 });

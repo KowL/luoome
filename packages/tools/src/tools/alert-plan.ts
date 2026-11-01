@@ -139,7 +139,28 @@ export const updateAlertPlanTool = defineTool({
 });
 
 export const DeleteAlertPlanInput = z.object({ alertPlanId: z.string().min(1) });
-export const DeleteAlertPlanOutput = z.object({ deleted: z.boolean() });
+
+/**
+ * 告警方案删除摘要（决策 3-B）。
+ *
+ * 只给身份 + **规则条数**，不展开 `rules`：规则可能是几十条带阈值的配置，
+ * 复制进回执既扩大数据量，又等于把删掉的东西换个地方留着。
+ */
+export const AlertPlanDeletionSummarySchema = z
+  .object({
+    alertPlanId: z.string().min(1),
+    name: z.string().min(1),
+    watchlistId: z.string().min(1),
+    /** 随方案一并删除的规则条数（不展开规则本体）。 */
+    ruleCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const DeleteAlertPlanOutput = z.object({
+  deleted: z.boolean(),
+  /** 删除摘要：必填（可选等于允许新代码退化成布尔值）。 */
+  summary: AlertPlanDeletionSummarySchema,
+});
 export const deleteAlertPlanTool = defineTool({
   name: 'delete_alert_plan',
   description: '删除 AlertPlan 配置；保留 WatchTrigger 历史',
@@ -147,12 +168,19 @@ export const deleteAlertPlanTool = defineTool({
   input: DeleteAlertPlanInput,
   output: DeleteAlertPlanOutput,
   handler: async (input, ctx) => {
-    if ((await ctx.repos.alertPlan.findById(input.alertPlanId)) === null) {
-      return errNotFound('AlertPlan', input.alertPlanId);
-    }
+    const existing = await ctx.repos.alertPlan.findById(input.alertPlanId);
+    if (existing === null) return errNotFound('AlertPlan', input.alertPlanId);
     await ctx.repos.alertPlan.remove(input.alertPlanId);
     // 级联清理该计划遗留的 watch_rule_states（poolId = plan.id），避免孤儿状态
     await ctx.repos.watchRuleState.removeByPool(input.alertPlanId);
-    return { deleted: true };
+    return {
+      deleted: true,
+      summary: {
+        alertPlanId: existing.id,
+        name: existing.name,
+        watchlistId: existing.watchlistId,
+        ruleCount: existing.rules.length,
+      },
+    };
   },
 });

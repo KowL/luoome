@@ -6,8 +6,20 @@ export const DeleteStockEventInput = z.object({
   eventId: z.string().min(1),
 });
 
+/** 公司事件删除摘要（决策 3-B）：身份 + 时间，不含事件正文。 */
+export const StockEventDeletionSummarySchema = z
+  .object({
+    eventId: z.string().min(1),
+    stockId: z.string().min(1),
+    eventKind: z.string().min(1),
+    occursAt: z.coerce.date(),
+  })
+  .strict();
+
 export const DeleteStockEventOutput = z.object({
   ok: z.literal(true),
+  /** 删除摘要：必填。 */
+  summary: StockEventDeletionSummarySchema,
 });
 
 /**
@@ -27,6 +39,14 @@ export const deleteStockEventTool = defineTool({
       return errInvalidInput('external 事件不可删除；如需失效请把 status 改为 cancelled');
     }
     await ctx.repos.stockEvent.remove(input.eventId);
-    return { ok: true as const };
+    return {
+      ok: true as const,
+      summary: {
+        eventId: existing.id,
+        stockId: existing.stockId,
+        eventKind: existing.kind,
+        occursAt: existing.occursAt,
+      },
+    };
   },
 });

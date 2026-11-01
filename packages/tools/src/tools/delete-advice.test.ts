@@ -16,7 +16,23 @@ describe('delete_advice tool', () => {
     const ctx = await buildTestContext({ clock: () => now, advices: [a, b] });
 
     const result = await deleteAdviceTool.execute({ ids: [a.id, 'adv-missing'] }, ctx);
-    expect(result).toEqual({ ok: true, data: { deleted: 1, notFound: ['adv-missing'] } });
+    // 决策 3-B：`deleted` 从「数字」改成**逐项清单**——删了哪一条必须能核对。
+    if (!result.ok) throw new Error('delete failed');
+    expect(result.data.deleted).toEqual([
+      {
+        adviceId: a.id,
+        subjectKind: a.subjectKind,
+        subjectId: a.subjectId,
+        decision: a.decision,
+        createdAt: a.createdAt,
+      },
+    ]);
+    expect(result.data.notFound).toEqual([{ id: 'adv-missing', reason: 'not-found' }]);
+    // 逐项断言同时证明：回执里**不含**建议全文（reasoning / risks）。
+    const serialized = JSON.stringify(result.data);
+    expect(serialized).not.toContain('reasoning');
+    expect(serialized).not.toContain('counterEvidence');
+    expect(serialized).not.toContain('risks');
 
     const remaining = await getAdviceTool.execute({ includeExpired: true }, ctx);
     expect(remaining.ok).toBe(true);
@@ -36,11 +52,15 @@ describe('delete_advice tool', () => {
     });
 
     const result = await deleteAdviceTool.execute({ ids: [a.id] }, ctx);
-    expect(result).toEqual({ ok: true, data: { deleted: 1, notFound: [] } });
+    if (!result.ok) throw new Error('delete failed');
+    expect(result.data.deleted.map((item) => item.adviceId)).toEqual([a.id]);
+    expect(result.data.notFound).toEqual([]);
     expect(await ctx.repos.advice.findOutcome(a.id)).toBeNull();
 
     const again = await deleteAdviceTool.execute({ ids: [a.id] }, ctx);
-    expect(again).toEqual({ ok: true, data: { deleted: 0, notFound: [a.id] } });
+    if (!again.ok) throw new Error('delete failed');
+    expect(again.data.deleted).toEqual([]);
+    expect(again.data.notFound).toEqual([{ id: a.id, reason: 'not-found' }]);
   });
 
   it('输入校验：空数组 / 超上限 → invalid_input', async () => {

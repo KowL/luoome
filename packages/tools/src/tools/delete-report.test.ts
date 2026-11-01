@@ -44,7 +44,19 @@ describe('delete_report tool', () => {
     await ctx.repos.report.upsertForPeriod(reportFixture());
 
     const deleted = await deleteReportTool.execute({ reportId: 'report-delete' }, ctx);
-    expect(deleted).toEqual({ ok: true, data: { ok: true } });
+    // 决策 3-B：输出多了必填 summary。断言改成逐字段核对，并把**体积口径**钉死为字符数。
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    expect(deleted.data.ok).toBe(true);
+    expect(deleted.data.summary).toMatchObject({
+      reportId: 'report-delete',
+      kind: reportFixture().kind,
+      periodEnd: reportFixture().periodEnd,
+    });
+    // `serializedChars` 必须与实际序列化长度一致（证明它是量出来的，不是编的）。
+    expect(deleted.data.summary.serializedChars).toBe(JSON.stringify(reportFixture()).length);
+    // 回执里不得含报告正文。
+    expect(JSON.stringify(deleted.data.summary)).not.toContain('sections');
 
     const fetched = await getReportTool.execute({ id: 'report-delete' }, ctx);
     expect(fetched.ok).toBe(false);
