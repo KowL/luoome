@@ -371,9 +371,11 @@ export const seedPanelsFixture = async (
     const factsResult = await getAccountFactsTool.execute({ accountId: owner.accountId }, ctx);
     if (!factsResult.ok) throw new Error(`账户事实失败: ${JSON.stringify(factsResult.error)}`);
     const facts = factsResult.data.facts;
-    const tradingPlan = TradingPlanV2Schema.parse({
+    // 同一 planId **两个版本**：这是「列表去重」这条业务语义唯一能真被触发的数据形状。
+    // 只造一版时，DOM 里「同一 planId 不出现两次」是**恒真**的——
+    // 它证明「唯一」，不证明「去重生效」（Codex 指出的验收盲点）。
+    const planFields = {
       id: PLAN_ID,
-      version: 1,
       accountId: owner.accountId,
       stockId: STOCK.id,
       stockName: STOCK.name,
@@ -425,14 +427,42 @@ export const seedPanelsFixture = async (
         unknowns: [],
       },
       confidence: 50,
+    } as const;
+    const planV1 = TradingPlanV2Schema.parse({
+      ...planFields,
+      version: 1,
       createdAt: now,
+      explanation: {
+        ...planFields.explanation,
+        counterEvidence: ['浏览器验收：v1 的反证'],
+      },
     });
-    await repos.tradingPlan.save(tradingPlan);
+    // v2：内容不同、createdAt 更晚（`version` 与 `createdAt` 同向，避免歧义）。
+    const planV2 = TradingPlanV2Schema.parse({
+      ...planFields,
+      version: 2,
+      // 版本链要能说清「v2 取代了 v1」，否则详情页看不到历史版本的存在。
+      supersedesVersionId: `${PLAN_ID}:v1`,
+      action: 'enter',
+      createdAt: new Date(now.getTime() + 1000),
+      explanation: {
+        ...planFields.explanation,
+        counterEvidence: ['浏览器验收：v2 的反证'],
+      },
+    });
+    await repos.tradingPlan.save(planV1);
+    await repos.tradingPlan.save(planV2);
 
     return {
       ...PANELS_FIXTURE,
       owner,
-      tradingPlan: { id: PLAN_ID, versionId: `${PLAN_ID}:v1` },
+      // `latestVersionId` = 去重后应显示的那一版；`olderVersionId` 用于断言「仍可访问」。
+      tradingPlan: {
+        id: PLAN_ID,
+        latestVersionId: `${PLAN_ID}:v2`,
+        olderVersionId: `${PLAN_ID}:v1`,
+        versionCount: 2,
+      },
       database: join(home, 'luoome.db'),
     };
   } finally {

@@ -394,8 +394,16 @@ interface FixtureInfo {
   readonly strategyName: string;
   readonly secondStrategyId: string;
   readonly secondStrategyName: string;
-  /** 决策 3-C ②：交易计划 fixture（draft v1）。 */
-  readonly tradingPlan: { readonly id: string; readonly versionId: string };
+  /**
+   * 决策 3-C ②：交易计划 fixture —— **同一 planId 两个版本**。
+   * 单版本时「列表不出现重复 planId」是恒真的，只有多版本才能真触发去重分支。
+   */
+  readonly tradingPlan: {
+    readonly id: string;
+    readonly latestVersionId: string;
+    readonly olderVersionId: string;
+    readonly versionCount: number;
+  };
   readonly research: {
     readonly strategyId: string;
     readonly strategyName: string;
@@ -3275,16 +3283,73 @@ const runAcceptance = async () => {
   }
   await page.waitFor(`document.querySelector('[data-plan-table]') !== null`, '计划列表');
 
-  // ── DOM 级去重守卫（上次欠的）──
+  // ── DOM 级去重守卫（Codex 要求：限定到目标 planId，四条断言都要）──
+  //
+  // ## 为什么必须造**两个版本**才能验
+  //
+  // 单版本 fixture 下「同一 planId 不出现两次」是**恒真**的——它证明「唯一」，
+  // 不证明「去重生效」。只有同一 planId 有 v1+v2 时，不去重就会渲染两行，
+  // 这条断言才会红（mutation 已验证）。
+  //
+  // ## `data-plan-history-count` 是**旧版本数**，不是总版数
+  //
+  // `plans.js`：属性 = `entry.historyCount`（旧版本数，v1+v2 时为 "1"），
+  // 可见文字 = `共 ${historyCount + 1} 版`（总数，为「共 2 版」）。
+  // 所以：**属性断言 "1"，文字断言 "共 2 版"** —— 两者都要断，只查属性存在不够。
   const dedupProbe = await page.evaluate<{
-    ids: string[];
-    historyCounts: string[];
+    rows: { planId: string; text: string; version: string; historyCount: string | null }[];
   }>(`(() => ({
-    ids: [...document.querySelectorAll('[data-plan-row]')].map((row) => row.getAttribute('data-plan-row')),
-    historyCounts: [...document.querySelectorAll('[data-plan-history-count]')].map((node) => node.getAttribute('data-plan-history-count')),
+    rows: [...document.querySelectorAll('[data-plan-row]')].map((row) => {
+      const count = row.querySelector('[data-plan-history-count]');
+      return {
+        planId: row.getAttribute('data-plan-row'),
+        text: (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        version: row.children[2]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        historyCount: count?.getAttribute('data-plan-history-count') ?? null,
+      };
+    }),
   }))()`);
-  if (new Set(dedupProbe.ids).size !== dedupProbe.ids.length)
-    throw new Error(`列表里同一 planId 出现了两次：${JSON.stringify(dedupProbe.ids)}`);
+  const targetPlanId = fixtureInfo.tradingPlan.id;
+  const targetRows = dedupProbe.rows.filter((row) => row.planId === targetPlanId);
+  // ① **恰好一行**（不是「至少一行」）——去重生效的证据
+  if (targetRows.length !== 1)
+    throw new Error(
+      `目标 planId 应恰好 1 行，实际 ${String(targetRows.length)} 行：${JSON.stringify(dedupProbe.rows)}`,
+    );
+  const targetRow = targetRows[0];
+  // ② 显示的是**最新版**（v2）
+  if (!/^v2\b/.test(targetRow.version) && !targetRow.version.startsWith('v2'))
+    throw new Error(`目标行应显示 v2，实际「${targetRow.version}」`);
+  // ③ 属性 = **旧版本数** = "1"
+  if (targetRow.historyCount !== '1')
+    throw new Error(
+      `data-plan-history-count 应为 "1"（旧版本数），实际「${String(targetRow.historyCount)}」`,
+    );
+  // ④ 可见文字 = **总版数** = 「共 2 版」——属性对不代表文字对（Codex 特别点名）
+  if (!targetRow.text.includes('共 2 版'))
+    throw new Error(`可见文字应含「共 2 版」，实际「${targetRow.text}」`);
+  // 全局再确认一次：没有任何 planId 出现两次
+  const allIds = dedupProbe.rows.map((row) => row.planId);
+  if (new Set(allIds).size !== allIds.length)
+    throw new Error(`列表里同一 planId 出现了两次：${JSON.stringify(allIds)}`);
+
+  // ── 历史版本仍可访问（去重 ≠ 丢弃）：详情页版本链要能看到 v1 ──
+  //
+  // 注意**顺序**：必须先点开详情，版本链才渲染。之前的探针跑在点击之前，
+  // 拿到的 `false` 是「详情没开」而不是「历史不可见」——那是探针位置错，不是产品缺陷。
+  await page.evaluate(`(() => {
+    const row = document.querySelector('[data-plan-row]');
+    if (!row) throw new Error('没有可点击的计划行');
+    row.click();
+  })()`);
+  await page.waitFor(`document.querySelector('[data-plan-detail]') !== null`, '计划详情（版本链）');
+  const detailProbe = await page.evaluate<{ text: string; hasOlder: boolean }>(`(() => {
+    const detail = document.querySelector('[data-plan-detail]');
+    const text = (detail?.parentElement?.innerText ?? document.body.innerText ?? '');
+    const older = ${JSON.stringify(fixtureInfo.tradingPlan.olderVersionId)};
+    return { text: text.slice(0, 800), hasOlder: text.includes(older) || /取代了/.test(text) };
+  })()`);
+  const detailShowsOlder = detailProbe.hasOlder;
 
   // ── 第二个 page：独立会话 ──
   const pageB = await connectPage(websocketUrl);
@@ -3371,11 +3436,17 @@ const runAcceptance = async () => {
   const notPersisted = latestAction !== 'hold';
 
   const plansForm = {
-    // DOM 级去重守卫的结果
+    // DOM 级去重守卫的结果（**双版本** fixture 下）
     dedup: {
-      planIds: dedupProbe.ids,
-      historyCounts: dedupProbe.historyCounts,
-      unique: new Set(dedupProbe.ids).size === dedupProbe.ids.length,
+      targetPlanId,
+      matchingRows: targetRows.length,
+      shownVersion: targetRow.version,
+      historyCountAttr: targetRow.historyCount,
+      rowText: targetRow.text,
+      allPlanIds: allIds,
+      unique: new Set(allIds).size === allIds.length,
+      detailShowsOlderVersion: detailShowsOlder,
+      detailText: detailProbe.text,
     },
     // 两个 page 确实独立
     pagesIndependent,
