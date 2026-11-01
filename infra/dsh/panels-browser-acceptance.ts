@@ -1719,6 +1719,91 @@ const runAcceptance = async () => {
       throw new Error(`入口变更误用了告警色调：${tone}`);
   }
 
+  // ── REQ-M4-06：三档切换（P2 的浏览器验收）──
+  //
+  // ## 为什么要断言「点了之后显示真的变」
+  //
+  // 只断言三个按钮存在，等于没验——常量也能渲染出三个按钮。
+  // 这三条验的是「用户点了、Operation 发出去了、界面跟着变了」的完整链路。
+  //
+  // ## 为什么从 `off` 起步
+  //
+  // fixture 的默认档位是 `off`（环境变量未设时的默认），
+  // 所以「点『授权执行』→ data-automation-tier 变成 granted」是一个**真实的变化**，
+  // 不是「本来就对」。
+  const tierProbe = await page.evaluate<{
+    choices: { value: string; label: string }[];
+    current: string | null;
+    source: string | null;
+    envNoteVisible: boolean;
+  }>(`(() => ({
+    choices: [...document.querySelectorAll('[data-tier-choice]')].map((node) => ({
+      value: node.getAttribute('data-tier-choice'),
+      label: (node.textContent ?? '').trim(),
+    })),
+    current: document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') ?? null,
+    source: document.querySelector('[data-tier-source]')?.getAttribute('data-tier-source') ?? null,
+    envNoteVisible: document.querySelector('[data-tier-source-note="env"]') !== null,
+  }))()`);
+
+  // ① 三个按钮都在，且文案零行动词
+  const expectedTierLabels = [
+    { value: 'off', label: '关闭' },
+    { value: 'notify', label: '仅提醒' },
+    { value: 'granted', label: '授权执行' },
+  ];
+  if (tierProbe.choices.length !== 3)
+    throw new Error(`三档应有 3 个按钮，实际 ${String(tierProbe.choices.length)}`);
+  for (const expected of expectedTierLabels) {
+    const found = tierProbe.choices.find((choice) => choice.value === expected.value);
+    if (found === undefined || found.label !== expected.label)
+      throw new Error(
+        `档位按钮文案不符：期望 ${expected.value}=${expected.label}，实际 ${JSON.stringify(tierProbe.choices)}`,
+      );
+    // 零行动词：这是权限说明，不是操作建议。
+    for (const word of ['买入', '卖出', '下单', '建仓', '已建仓'])
+      if ((found.label ?? '').includes(word))
+        throw new Error(`档位按钮含行动词「${word}」：${found.label}`);
+  }
+
+  // ② data-tier-source 是三个合法值之一
+  if (!['table', 'env', 'default'].includes(tierProbe.source ?? ''))
+    throw new Error(`data-tier-source 非法：${String(tierProbe.source)}`);
+
+  // ③ source === 'env' 时那句说明真的出现
+  const envNoteExpected = tierProbe.source === 'env';
+  if (envNoteExpected !== tierProbe.envNoteVisible)
+    throw new Error(
+      `source=${String(tierProbe.source)} 时 env 说明应为 ${String(envNoteExpected)}，实际 ${String(tierProbe.envNoteVisible)}`,
+    );
+
+  // ④ **点「授权执行」→ 档位显示真的变化**（完整链路）
+  const tierBefore = tierProbe.current;
+  await page.evaluate(`(() => {
+    const button = document.querySelector('[data-tier-choice="granted"]');
+    if (!button) throw new Error('缺少「授权执行」按钮');
+    button.click();
+  })()`);
+  await page.waitFor(
+    `document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') === 'granted' ||
+     document.querySelector('[data-tier-notice]')?.textContent?.includes('档位已切换') === true`,
+    '档位切换结果',
+    15_000,
+  );
+  const tierAfter = await page.evaluate<string | null>(
+    `document.querySelector('[data-automation-tier]')?.getAttribute('data-automation-tier') ?? null`,
+  );
+  if (tierAfter === tierBefore)
+    throw new Error(`点击「授权执行」后档位没有变化（仍是 ${String(tierAfter)}）：链路没接通`);
+  if (tierAfter !== 'granted')
+    throw new Error(`点击「授权执行」后应为 granted，实际 ${String(tierAfter)}`);
+  const tierSourceAfter = await page.evaluate<string | null>(
+    `document.querySelector('[data-tier-source]')?.getAttribute('data-tier-source') ?? null`,
+  );
+  // 改过之后来源必须是 table（表里的值压过环境变量默认）。
+  if (tierSourceAfter !== 'table')
+    throw new Error(`切换后来源应为 table，实际 ${String(tierSourceAfter)}`);
+
   const newAccountName = '浏览器验收：已确认改名';
   const setAccountName = () =>
     page.evaluate(`(() => {
@@ -3692,6 +3777,16 @@ const runAcceptance = async () => {
   };
   const evidence = {
     mode: '真实浏览器验收（Chrome headless CDP）；合成 fixture，非真实模型质量',
+    automationTier: {
+      choices: tierProbe.choices,
+      sourceBefore: tierProbe.source,
+      envNoteVisible: tierProbe.envNoteVisible,
+      before: tierBefore,
+      after: tierAfter,
+      sourceAfter: tierSourceAfter,
+      // 关键：点击真的改变了显示（不是「按钮存在」）
+      changed: tierAfter !== tierBefore,
+    },
     retiredEntries: {
       keys: retiredEntries.keys,
       replacements: retiredEntries.replacements.map((item) => ({
