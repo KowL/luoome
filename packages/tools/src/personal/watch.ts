@@ -17,9 +17,13 @@ import {
   tradingPlanTriggerSource,
   tradingPlanVersionId,
   WatchDeliveryIntentSchema,
+  WatchNotificationReasonSchema,
+  WatchNotificationStateSchema,
+  type WatchNotificationVerdict,
   type WatchTrigger,
   WatchTriggerSchema,
   WorkflowRunSchema,
+  watchNotificationVerdictFromMonitoring,
   watchTriggerPlanSource,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -105,7 +109,9 @@ export const resolveHostedWatchNotificationTool = defineTool({
     latestVersion: TradingPlanSchema.nullable(),
     monitoring: TradingPlanMonitoringSchema.nullable(),
     alertPlan: AlertPlanSchema.nullable(),
-    state: z.enum(['requires-recheck', 'changed', 'unavailable']),
+    state: WatchNotificationStateSchema,
+    /** 具体原因；`conditions-unchecked` 不带（它表示「门槛全过」）。 */
+    reason: WatchNotificationReasonSchema.optional(),
     changes: z.array(z.string()),
     currentActionAllowed: z.literal(false),
     checkedAt: z.coerce.date(),
@@ -128,30 +134,38 @@ export const resolveHostedWatchNotificationTool = defineTool({
             ctx.repos.watchlistMember.findMember(alertPlan.watchlistId, trigger.stockId),
           ]);
     const alertEligible = isWatchAlertDeliveryEligible(trigger, alertPlan, watchlist, member);
+    // 四档判定**只走 core 的唯一映射**：这里不判断任何 `monitoring.status` 的语义，
+    // 否则四个新名字会重新长出第二套（外部评审决策 2 纪律 ③）。
+    const verdict: WatchNotificationVerdict =
+      state !== null
+        ? watchNotificationVerdictFromMonitoring(state.monitoring)
+        : alertPlan !== null
+          ? alertEligible
+            ? { state: 'conditions-unchecked' }
+            : { state: 'ineligible', reason: 'alert-plan-ineligible' }
+          : source.kind === 'trading-plan-watch'
+            ? // 计划类触发本来就没有 alertPlan，不能据此判「来源缺失」；
+              // 走到这里是因为 `tradingPlanState` 已判定版本不可解析。
+              { state: 'source-unavailable', reason: 'plan-version-not-found' }
+            : { state: 'source-unavailable', reason: 'trigger-without-plan-source' };
     const changes =
-      state === null
-        ? alertEligible
-          ? ['原提醒计划和成员仍有效；需要使用当前事实重新检查触发条件']
-          : ['原提醒计划已停用、删除、条件变化或成员已退出；请查看原始快照，不沿用原行动']
-        : state.monitoring.status === 'ready'
+      state !== null
+        ? state.monitoring.status === 'ready'
           ? ['原计划仍具备监控资格；触发条件需使用当前合格行情重新检查']
-          : [state.monitoring.reason, state.monitoring.nextStep];
+          : [state.monitoring.reason, state.monitoring.nextStep]
+        : alertPlan !== null
+          ? alertEligible
+            ? ['原提醒计划和成员仍有效；需要使用当前事实重新检查触发条件']
+            : ['原提醒计划已停用、删除、条件变化或成员已退出；请查看原始快照，不沿用原行动']
+          : ['这条提醒的计划来源已不可解析；请查看原始快照，不沿用原行动'];
     return {
       trigger,
       sourcePlan: state?.plan ?? null,
       latestVersion: state?.latestVersion ?? null,
       monitoring: state?.monitoring ?? null,
       alertPlan,
-      state:
-        state === null
-          ? alertPlan === null
-            ? ('unavailable' as const)
-            : alertEligible
-              ? ('requires-recheck' as const)
-              : ('changed' as const)
-          : state.monitoring.status === 'ready'
-            ? ('requires-recheck' as const)
-            : ('changed' as const),
+      state: verdict.state,
+      ...(verdict.reason === undefined ? {} : { reason: verdict.reason }),
       changes,
       currentActionAllowed: false as const,
       checkedAt: ctx.clock(),

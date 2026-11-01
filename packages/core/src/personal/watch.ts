@@ -91,6 +91,137 @@ export const tradingPlanTriggerSource = (trigger: WatchTrigger) => {
   return { accountId, ...parsed.data };
 };
 
+// ── 提醒核对的资格状态（外部评审决策 2，task-40 后续） ─────────────────────
+
+/**
+ * 「这条历史提醒现在还能不能作为依据」的**四档**结论 + 原因码。
+ *
+ * ## 为什么是四档而不是三档
+ *
+ * 旧口径 `requires-recheck` / `changed` / `unavailable` 把**语义不同、修复动作也不同**的情况
+ * 压进同一个词里，于是「读不到账户事实」和「账户真的变了」共用 `changed`，
+ * 「来源解析不出来」和「缺事实判不了」共用 `unavailable`。用户看到的是同一个词，
+ * 要做的却是完全不同的事（去刷新行情 vs 去重新生成计划）。
+ *
+ * 四档的判据是**「我们能证明什么」**，不是「谁的错」：
+ *
+ * | state | 能证明什么 | 典型原因 |
+ * |---|---|---|
+ * | `conditions-unchecked` | **资格门槛全部通过**，只差用当前行情重新核验触发条件 | `ready` |
+ * | `ineligible` | 已证实**不具备资格**（过期 / 账户变化 / 门槛未过 / 未到生效时间） | `expired`、`account-changed`、`draft`、`scheduled`、`inactive`、`no-conditions`、`constraints-failed`、`alert-plan-ineligible` |
+ * | `facts-unavailable` | 缺事实，**只证明「无法判断」**，不能推出账户变了 | `monitoring.status === 'unavailable'` |
+ * | `source-unavailable` | 对应**来源无法解析**（计划版本找不到、字段对不上、提醒没有计划来源） | `plan-version-not-found` 等 |
+ *
+ * ## 三条不可违反的纪律
+ *
+ * 1. **已证实的不可用（过期 / 账户变化 / 约束不通过）归 `ineligible`，且必须给具体原因**——
+ *    不能被缺数状态掩盖。既过期又缺事实时报 `expired`，不报 `facts-unavailable`。
+ * 2. **判定对象是「提醒引用的那一版」**（`sourcePlan`），不能因为出现新草稿就否定原生效版。
+ * 3. 资格规则复用 `tradingPlanMonitoring` / `isWatchAlertDeliveryEligible`，
+ *    **映射只在本文件实现一次**，不要在 surface 各写一遍。
+ */
+export const WATCH_NOTIFICATION_STATES = [
+  'conditions-unchecked',
+  'ineligible',
+  'facts-unavailable',
+  'source-unavailable',
+] as const;
+export const WatchNotificationStateSchema = z.enum(WATCH_NOTIFICATION_STATES);
+export type WatchNotificationState = z.infer<typeof WatchNotificationStateSchema>;
+
+/**
+ * `ineligible` / `facts-unavailable` / `source-unavailable` 的具体原因。
+ * 保留原因是为了让「四档」不重新长出「压成同一个词」的老问题。
+ */
+export const WATCH_NOTIFICATION_REASONS = [
+  /** 计划已过期（status=expired 或超过 validUntil）。 */
+  'expired',
+  /** 可靠指纹差异：持仓或现金变了，计划前提失效。 */
+  'account-changed',
+  /** 历史版本不再参与监控（被后续版本替代 / revoked）。 */
+  'inactive',
+  /** 计划约束未通过。 */
+  'constraints-failed',
+  /** 草案尚未通过生效门槛；重新检查行情不会使它自动获得资格。 */
+  'draft',
+  /** `validFrom` 未到；不证明后台任务已经排期。 */
+  'scheduled',
+  /** 计划没有可检查的盘中条件。 */
+  'no-conditions',
+  /** 账户事实读不到或状态非 complete：只能判「无法判断」。 */
+  'facts-unavailable',
+  /** 告警计划停用 / 规则已改 / 成员退出 / 观察列表停用。 */
+  'alert-plan-ineligible',
+  /** 提醒引用的计划版本已不可解析（被 remove 或与账户/股票对不上）。 */
+  'plan-version-not-found',
+  /** 这条提醒没有任何可解析的计划来源。 */
+  'trigger-without-plan-source',
+] as const;
+export const WatchNotificationReasonSchema = z.enum(WATCH_NOTIFICATION_REASONS);
+export type WatchNotificationReason = z.infer<typeof WatchNotificationReasonSchema>;
+
+/** 一次核对的完整结论；`reason` 只在需要解释时出现（`conditions-unchecked` 不带）。 */
+export const WatchNotificationVerdictSchema = z
+  .object({
+    state: WatchNotificationStateSchema,
+    reason: WatchNotificationReasonSchema.optional(),
+  })
+  .strict()
+  .superRefine((verdict, ctx) => {
+    // `conditions-unchecked` 表示「已通过全部门槛」，带原因会把「合格」重新说成「有毛病」。
+    if (verdict.state === 'conditions-unchecked' && verdict.reason !== undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message: 'conditions-unchecked 不带原因码',
+      });
+    if (verdict.state !== 'conditions-unchecked' && verdict.reason === undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message: `${verdict.state} 必须给出具体原因`,
+      });
+  });
+export type WatchNotificationVerdict = z.infer<typeof WatchNotificationVerdictSchema>;
+
+/**
+ * `tradingPlanMonitoring().status` → 四档 + 原因。**唯一映射实现。**
+ *
+ * 注意顺序纪律：`expired` / `account-changed` / `constraints-failed` 是**已证实**的，
+ * 一律 `ineligible`；只有 `unavailable` 才是「缺事实」。把前者塞进 `facts-unavailable`
+ * 会让「计划早就过期了」被说成「暂时读不到数据」，用户会一直等下去。
+ */
+export const watchNotificationVerdictFromMonitoring = (monitoring: {
+  readonly status: string;
+  readonly reason?: string;
+}): WatchNotificationVerdict => {
+  switch (monitoring.status) {
+    case 'ready':
+      return { state: 'conditions-unchecked' };
+    case 'expired':
+      return { state: 'ineligible', reason: 'expired' };
+    case 'account-changed':
+      return { state: 'ineligible', reason: 'account-changed' };
+    case 'inactive':
+      return { state: 'ineligible', reason: 'inactive' };
+    case 'no-conditions':
+      return { state: 'ineligible', reason: 'no-conditions' };
+    case 'draft':
+      return { state: 'ineligible', reason: 'draft' };
+    case 'scheduled':
+      return { state: 'ineligible', reason: 'scheduled' };
+    case 'unavailable':
+      // `tradingPlanMonitoring` 用 `unavailable` 同时表达「账户事实读不到」和
+      // 「计划约束未通过」——前者是缺事实，后者是**已证实**不合格，必须分开。
+      return monitoring.reason === '计划约束未通过'
+        ? { state: 'ineligible', reason: 'constraints-failed' }
+        : { state: 'facts-unavailable', reason: 'facts-unavailable' };
+    default:
+      // 未知 monitoring 状态：不能当成合格，也不能编一个具体原因。
+      return { state: 'facts-unavailable', reason: 'facts-unavailable' };
+  }
+};
+
 /**
  * `WatchTrigger.alertPlanId` 的**唯一**语义解析（REQ-M4-01 / task-40）。
  *

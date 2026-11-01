@@ -30,8 +30,10 @@ import { defineTool, errNotFound } from '../define-tool.js';
  *
  * 旧版 `apps/web` 的 `/api/watch/notifications/:triggerId` 返回
  * `{ state, changes, trigger, sourcePlan, latestVersion, checkedAt }`，
- * 其中 `state`（`requires-recheck` / `changed` / `unavailable`）依赖
- * 「原触发条件 + 当前行情 + 账户状态」三方对比——**那是策略级判定**。
+ * 其中 `state` 依赖「原触发条件 + 当前行情 + 账户状态」三方对比——**那是策略级判定**。
+ * （该字段现已按外部评审决策 2 改为四档 `conditions-unchecked` / `ineligible` /
+ * `facts-unavailable` / `source-unavailable` + 原因码，定义在
+ * `@luoome/core` 的 `WatchNotificationVerdictSchema`。）
  * 它并非「随旧服务端一起移除」（那份实现在 `@luoome/tools/personal` 的
  * `resolve_hosted_watch_notification`，见 task-40 报告），但它把「不可变快照」
  * 与「随时点变的监控资格」混在同一份输出里，**本工具只给前者**。
