@@ -124,7 +124,23 @@ export const persistPlan = async ({ plan, expectedRevision }) => {
         })
       : operation;
 
-  // `unknown` 表示「可能已提交但结果未明」：不能当成功，也不能盲目重试。
+  // ## 为什么先看 `settled.result`，再看 state
+  //
+  // 工具的**业务失败**（如 `revision-conflict`）会让 Operation 落到 `unknown`
+  // ——`execute` 在 `result.ok === false` 且 policy 未声明 `settleFailureAsFailed` 时
+  // 一律保守落 `unknown`（业务可能已提交）。但这里的 `result` **是拿得到的**，
+  // 里面已经带了工具的结构化 `issues`。
+  //
+  // 只看 state 就抛「结果尚未明确」，会把**确定的冲突**说成**未知**——
+  // 用户既不知道冲突了、也不知道该基于哪一版重来（Codex 缺陷③）。
+  const toolFailure = settled.result;
+  if (toolFailure !== null && toolFailure !== undefined && toolFailure.ok === false) {
+    const failure = new Error(toolFailure.error?.message ?? toolFailure.error?.kind ?? '保存失败');
+    failure.issues = Array.isArray(toolFailure.error?.issues) ? toolFailure.error.issues : [];
+    failure.kind = toolFailure.error?.kind ?? null;
+    throw failure;
+  }
+  // 到这里才是**真正**的结果未知（没有可读的工具结果）：不能当成功，也不能盲目重试。
   if (settled.state !== 'succeeded')
     throw new Error(
       settled.state === 'unknown'
@@ -500,8 +516,14 @@ export function PlansPanel() {
       .then((saved) => {
         const clash = replacedWhileEditing({ openedVersionId, saved });
         // 保存成功必须刷新列表：否则 `current` 仍是旧版本，
-        // 下一次保存会基于**陈旧基线**，冲突提示永远不出现（浏览器验收实测踩过）。
+        // 下一次保存会基于**陈旧基线**（浏览器验收实测踩过）。
         refresh();
+        // **本会话已经产出新版本**，后续编辑应以它为基础 —— 把基线推进到刚保存的那一版。
+        //
+        // 注意边界：这只影响**本 page**（React state 各自独立）。
+        // 另一个标签页的会话基线**不动**，所以它保存时仍会撞冲突——这正是要验证的。
+        if (typeof saved.versionId === 'string' && saved.versionId.length > 0)
+          setOpenedVersionId(saved.versionId);
         setNotice(
           clash === null
             ? { kind: 'saved', text: `已保存 v${String(saved.version ?? '?')}` }
