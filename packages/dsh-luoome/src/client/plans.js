@@ -52,36 +52,64 @@ export const replacedWhileEditing = ({ openedVersionId, saved }) => {
   return { savedVersionId, superseded, openedVersionId };
 };
 
+/** 服务端 Operation 路由只接受这三个动作（`operations.ts:43`）。 */
+const operationRequest = async (path, body) => {
+  const response = await fetch(`api/luoome/operations/${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    ...(body === undefined
+      ? {}
+      : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok)
+    throw new Error(result.error?.message ?? result.error?.kind ?? `HTTP ${response.status}`);
+  return result.data;
+};
+
 /**
  * 走 Operation 通道保存计划（`save_trading_plan` 是 `write`）。
  *
- * 与 `settings.js` 的 `operationRequest` 同一形态：prepare → execute → 取回执。
+ * ## 服务端的 prepare 实际语义（实测 `operations.test.ts:55`）
+ *
+ * `POST /operations/prepare` **不是**「只冻结输入、等人确认」：
+ * - 若 `prepare` 返回了 `confirmationToken`，服务端**在同一次请求里就 confirm 了**
+ *   （`operations.ts:59-72`），响应是**已终结**的 Operation（`state: 'succeeded'`）；
+ * - 若 `prepare` 没返回 token（`confirmationToken` 字段缺席），说明它已直接执行完。
+ *
+ * 也就是说：**客户端发一次 prepare 就够，不需要再发 confirm。**
+ * 之前的 `/execute` 是错的（服务端没有这个动作）；但把它换成「prepare 后再 confirm」
+ * **同样是错的**——第二次 confirm 打在一个已终结的 Operation 上，只会拿到状态冲突。
+ * 这里两种返回形状都处理，不假设只有一种。
+ *
  * 回执里的 `versionId` / `supersedesVersionId` 是「事后发现并发」的唯一依据。
  */
-const persistPlan = async ({ plan }) => {
+export const persistPlan = async ({ plan }) => {
   const operationId = crypto.randomUUID();
-  const prepare = await fetch(`api/luoome/operations/prepare`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id: operationId, tool: 'save_trading_plan', input: { plan } }),
+  const operation = await operationRequest('prepare', {
+    id: operationId,
+    tool: 'save_trading_plan',
+    input: { plan },
   });
-  const prepared = await prepare.json();
-  if (!prepare.ok || !prepared.ok)
-    throw new Error(prepared.error?.message ?? prepared.error?.kind ?? `HTTP ${prepare.status}`);
-  const execute = await fetch(`api/luoome/operations/${encodeURIComponent(operationId)}/execute`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  const executed = await execute.json();
-  if (!execute.ok || !executed.ok)
-    throw new Error(executed.error?.message ?? executed.error?.kind ?? `HTTP ${execute.status}`);
+
+  // 兼容「prepare 只冻结、未执行」的形态：那时才需要显式 confirm。
+  const settled =
+    operation.state === 'pending' && operation.confirmationToken != null
+      ? await operationRequest(`${encodeURIComponent(operationId)}/confirm`, {
+          token: operation.confirmationToken,
+        })
+      : operation;
+
+  // `unknown` 表示「可能已提交但结果未明」：不能当成功，也不能盲目重试。
+  if (settled.state !== 'succeeded')
+    throw new Error(
+      settled.state === 'unknown'
+        ? '保存结果尚未明确，请核对计划列表后再决定是否重试（不要直接重复提交）'
+        : `保存未成功（${String(settled.state)}）`,
+    );
   // 回执形状：`{ versionId, planId, version, supersedesVersionId, status }`。
-  return executed.data?.receipt ?? executed.data ?? {};
+  return settled.result?.data ?? settled.result ?? {};
 };
 
 const PlanRow = ({ entry, selected, onSelect }) =>

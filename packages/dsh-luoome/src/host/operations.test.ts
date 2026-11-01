@@ -91,6 +91,44 @@ describe('operation transport boundaries', () => {
       await ctx.repos.decisionReview.findBySubject({ accountId: principal.accountId, subject }),
     ).toMatchObject({ review: { currentRevision: 1 } });
   });
+  // P0 回归（codex 查出，批次 A 引入）：client 曾打 `/operations/:id/execute`。
+  // 服务端路由只认 confirm|cancel|reconcile ⇒ 交易计划面板的「保存」实际是坏的。
+  // 这条测试把**真实的 HTTP 行为**钉死：/execute 必须是 404，prepare 必须 200 且已终结。
+  it('HTTP 路由不接受 /execute；prepare 当场执行并返回回执', async () => {
+    const { service, principal, ctx } = await setup();
+    const handle = createOperationHandler(service, () => principal);
+
+    // 1) 不存在的动作：实测 404 `Unknown operation route`。
+    const legacy = await handle(post(`${randomUUID()}/execute`, {}));
+    expect(legacy.status).toBe(404);
+    expect(await legacy.json()).toMatchObject({
+      ok: false,
+      error: { message: 'Unknown operation route' },
+    });
+
+    // 2) 正确路径：prepare 自带 confirm（`operations.ts:59-72`），直接返回 succeeded。
+    const [advice] = await ctx.repos.advice.query({ includeExpired: true, limit: 1 });
+    if (!advice) throw new Error('Missing advice fixture');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    if (!preview.ok || !preview.data.context) throw new Error('Missing review context');
+    const saved = await handle(
+      post('prepare', {
+        id: randomUUID(),
+        tool: 'save_decision_review',
+        input: {
+          subject,
+          contextHash: preview.data.context.contextHash,
+          expectedRevision: 0,
+          content: { note: 'p0 route regression' },
+        },
+      }),
+    );
+    expect(saved.status).toBe(200);
+    const body = (await saved.json()) as { ok: boolean; data: { state: string } };
+    expect(body).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+  });
+
   it('keeps operation lookup account-scoped and never returns stored credential hashes', async () => {
     const { service, principal, ctx } = await setup();
     const id = randomUUID();
