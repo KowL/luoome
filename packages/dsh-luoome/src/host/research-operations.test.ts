@@ -408,6 +408,9 @@ describe('research operation binding and task lifecycle', () => {
     const input = {
       strategyId: 'research-a',
       expectedRevision: 0,
+      // REQ-M4-03：来源复盘 id 与事实引用必填。
+      sourceReviewId: 'review-fixture',
+      factIds: ['fact-fixture'],
       state: {
         question: '提高门槛是否减少临界结果？',
         baseVersionId: 'research-a-v1',

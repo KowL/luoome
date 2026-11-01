@@ -330,6 +330,22 @@ export const SaveStrategyResearchStateInput = GetStrategyResearchStateInput.exte
   requestId: z.string().min(1).max(100),
   expectedRevision: z.number().int().nonnegative(),
   state: StrategyResearchSettingsSchema,
+  /**
+   * 来源复盘 id（REQ-M4-03）。**可选**。
+   *
+   * ## 为什么不是必填
+   *
+   * 研究面板直存的研究**不来自复盘**——用户直接问「提高价格门槛后样本是否变化？」。
+   * 强制必填会逼前端编一个 id，得到「**看起来有来源、实际是编的**」数据，
+   * 那比没有来源更危险：追溯链看起来完整，实际是假的。
+   *
+   * PRD 说的是「新研究 state **可读**来源复盘 id」——「可读」= 有就一定读得出来，
+   * 不是「必须每条都有」。**强制只能加在真正的入口上**：
+   * `propose_review_revision`（从复盘产提案）那边是必填。
+   */
+  sourceReviewId: z.string().min(1).optional(),
+  /** 该结论引用的事实 id（复用 M4-02 的结构，**不是自由文本**）。**必填**。 */
+  factIds: z.array(z.string().min(1)).min(1),
 });
 export const SaveStrategyResearchStateOutput = z.object({
   state: StrategyResearchStateSchema,
@@ -489,6 +505,15 @@ export const saveStrategyResearchStateTool = defineTool({
     const changedComparison =
       comparison !== undefined &&
       JSON.stringify(comparison) !== JSON.stringify(current?.state.comparison);
+    /**
+     * REQ-M4-03：**研究结论至少要引用一条事实**。
+     *
+     * zod 的 `min(1)` 会在输入校验阶段拒绝空数组，但那条错误对用户是
+     * 「参数不合法」——他看不出该补什么。所以这里在**有结论变更时**给一句能行动的话。
+     * **不静默接受空数组**：那会产出「结论没有依据」的记录。
+     */
+    if (changedConclusion && input.factIds.length === 0)
+      return errInvalidInput('研究结论需要至少引用一条事实：请在证据里选择后再保存。');
     if (changedConclusion && (current?.conclusions.length ?? 0) >= 100)
       return errInvalidInput(
         '研究结论已达 100 条，请导出并在新的策略研究中继续；不会自动删除旧结论',
@@ -517,6 +542,11 @@ export const saveStrategyResearchStateTool = defineTool({
                 candidateVersionId: input.state.candidateVersionId,
                 recordedAt: now,
                 conclusion,
+                // REQ-M4-03：来源复盘 id（有则记）与事实引用随结论一起持久化。
+                ...(input.sourceReviewId === undefined
+                  ? {}
+                  : { sourceReviewId: input.sourceReviewId }),
+                factIds: [...input.factIds],
               },
             ]
           : []),

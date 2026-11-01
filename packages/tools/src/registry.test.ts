@@ -237,6 +237,8 @@ const EXPECTED_TOOL_NAMES = [
   'list_decision_reviews',
   'get_decision_write_receipt',
   'save_decision_review',
+  // REQ-M4-03：从复盘产策略修订提案（只提案不发布）。
+  'propose_review_revision',
   // REQ-M4-11：草稿确认写入（草稿本身不写复盘）。
   'confirm_review_draft',
   // REQ-M4-06：档位写入（write，走 Operation，不受档位闸门约束）。
@@ -454,6 +456,7 @@ describe('toolRegistry', () => {
       'pause_strategy',
       'persist_external_facts',
       'preview_watchlist_import',
+      'propose_review_revision',
       'prune_strategy_runs',
       'publish_strategy_version',
       'record_advice_outcome',

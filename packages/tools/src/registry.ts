@@ -108,6 +108,7 @@ import {
 } from './tools/portfolio-performance.js';
 import { getPortfolioRiskTool } from './tools/portfolio-risk.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
+import { proposeReviewRevisionTool } from './tools/propose-review-revision.js';
 import { pruneStrategyRunsTool } from './tools/prune-strategy-runs.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
@@ -405,6 +406,8 @@ export const toolRegistry: Registry = createRegistry([
   saveDecisionReviewTool,
   // REQ-M4-11：草稿确认写入（write）。草稿本身不写复盘，只有它写。
   confirmReviewDraftTool,
+  // REQ-M4-03：从复盘产策略修订提案（write）。**只提案不发布**。
+  proposeReviewRevisionTool,
   // REQ-M4-06：档位写入。write 副作用，走 Operation；不受档位闸门约束（否则死锁）。
   setAutomationTierTool,
   recordDecisionTradeTool,

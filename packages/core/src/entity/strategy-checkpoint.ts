@@ -252,6 +252,23 @@ export const StrategyResearchStateSchema = z.object({
         candidateVersionId: z.string().min(1).optional(),
         recordedAt: z.coerce.date(),
         conclusion: StrategyResearchConclusionSchema,
+        /**
+         * 来源复盘 id（REQ-M4-03）。**可选**。
+         *
+         * ## 为什么可选（裁定 B）
+         *
+         * 研究面板直存的研究**不来自复盘**（用户直接问「提高门槛后样本是否变化？」）。
+         * 强制必填会逼前端编一个 id —— 得到「看起来有来源、实际是编的」数据，
+         * **比没有来源更危险**：追溯链看起来完整，实际是假的。
+         *
+         * PRD 说的是「**可读**」= 有就一定读得出来，不是「必须每条都有」。
+         * 强制只加在真正的入口上：`propose_review_revision` 那边是必填。
+         */
+        sourceReviewId: z.string().min(1).optional(),
+        /**
+         * 该结论引用的事实 id（复用 M4-02 的 `factIds` 结构，**不是自由文本**）。
+         */
+        factIds: z.array(z.string().min(1)).min(1),
       }),
     )
     .max(100),

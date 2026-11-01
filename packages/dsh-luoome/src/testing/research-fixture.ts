@@ -395,6 +395,9 @@ export const seedResearchFixture = async (
       accountId: ctx.user.defaultAccountId,
       requestId: 'research-browser-initial-state',
       expectedRevision: 0,
+      // REQ-M4-03：来源复盘 id 与事实引用必填。
+      sourceReviewId: 'review-research-fixture',
+      factIds: ['fact-research-fixture'],
       state: {
         question: '只提高价格门槛，能否在相同样本中减少规则临界结果？',
         baseVersionId: RESEARCH_FIXTURE.baseVersionId,

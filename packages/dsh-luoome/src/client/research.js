@@ -357,6 +357,9 @@ function ResearchWorkbenchBody({
       expectedRevision: revision,
       requestId,
       state: researchSettingsOf(form),
+      // REQ-M4-03：结论必须至少引用一条事实。面板里「证据引用」就是事实 id 的来源。
+      // **不编造**：用户没选证据时就是空数组，保存会给出可行动的拒绝提示。
+      factIds: [...form.evidenceReferences],
     }));
     return Boolean(operationResult(receipt)?.state);
   };

@@ -250,6 +250,9 @@ describe('strategy research controlled inputs', () => {
         strategyId: input.strategyId,
         requestId: 'save-comparison',
         expectedRevision: 0,
+        // REQ-M4-03：来源复盘 id 与事实引用必填。
+        sourceReviewId: 'review-workspace',
+        factIds: ['fact-workspace'],
         state: {
           question: '多个候选的规则敏感性',
           baseVersionId: input.baseVersionId,
@@ -505,6 +508,9 @@ describe('strategy research persisted recovery and qualification', () => {
       strategyId: input.strategyId,
       requestId: 'save-question',
       expectedRevision: 0,
+      // REQ-M4-03：来源复盘 id 与事实引用必填。
+      sourceReviewId: 'review-workspace',
+      factIds: ['fact-workspace'],
       state: {
         question: '提高价格门槛后样本是否变化？',
         baseVersionId: input.baseVersionId,
@@ -561,7 +567,14 @@ describe('strategy research persisted recovery and qualification', () => {
         state: {
           revision: 1,
           state: { baseVersionId: input.baseVersionId },
-          conclusions: [{ conclusion: { outcome: 'inconclusive' } }],
+          conclusions: [
+            {
+              conclusion: { outcome: 'inconclusive' },
+              // REQ-M4-03：来源复盘 id 与 fact 引用必填。
+              sourceReviewId: 'review-workspace',
+              factIds: ['fact-workspace'],
+            },
+          ],
         },
       },
     });
