@@ -31,27 +31,38 @@ export const enqueueAnalysisJobTool = defineTool({
   }),
   output: z.object({ jobId: z.string(), deduped: z.boolean() }),
   handler: async (input, ctx) => {
-    const snapshot = await assembleAnalysisContext(input, ctx);
-    if (!snapshot) return errNotFound('AnalysisSubject', input.subject.id);
+    /**
+     * ## 受理与执行解耦（REQ-M5-01）
+     *
+     * 受理路径**只做三件事**：校验 subject → 算去重键 → 入队。**不装配上下文。**
+     *
+     * 为什么：`assembleAnalysisContext` 要读库、聚合行情/持仓/事件事实——那是重活。
+     * 它留在这里，受理耗时**必然**随数据量增长，`≤2s` 靠机器快是碰巧，不是保证。
+     *
+     * ⇒ 装配移到**执行阶段**（claim 时）。代价是 `dataAsOf` 在受理时还不可知，
+     * 暂记 `now`，claim 时用真实装配结果覆盖。
+     */
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    if ((await ctx.repos.account.findById(accountId)) === null)
+      return errNotFound('Account', accountId);
     const now = ctx.clock();
-    const timingError = analysisContextTimingError(snapshot, now);
-    if (timingError) return errInvalidInput(timingError);
     const job: AnalysisJob = {
       id: randomUUID(),
       kind: input.kind,
       source: input.source,
-      accountId: snapshot.accountId,
+      accountId,
       subject: input.subject,
       priority: input.priority,
       dedupeKey: analysisHash({
         kind: input.kind,
-        accountId: snapshot.accountId,
+        accountId,
         subject: input.subject,
         tradingDate: dateInShanghai(now),
         options: input.options,
       }),
-      payload: { options: input.options, snapshot: JSON.parse(JSON.stringify(snapshot)) },
-      dataAsOf: snapshot.dataAsOf,
+      // **不再携带 snapshot**：装配推迟到 claim。`payload` 只留受理阶段已知的东西。
+      payload: { options: input.options, subject: input.subject, kind: input.kind },
+      dataAsOf: now,
       notBefore: input.notBefore ?? now,
       status: 'pending',
       attempts: 0,
@@ -174,9 +185,45 @@ export const claimAnalysisJobsTool = defineTool({
     const claims = [];
     for (const candidate of jobs) {
       if (claims.length >= input.limit) break;
-      const snapshot = AnalysisContextSchema.parse(candidate.payload.snapshot);
+      /**
+       * **执行阶段才装配**（REQ-M5-01）：受理只排期，装配发生在 claim。
+       *
+       * 装配结果写进 `context`，供下游执行使用；同时把真实的 `dataAsOf`
+       * 回填到 job（受理时它只能是 `now`）。
+       */
+      const assembled = await assembleAnalysisContext(
+        {
+          kind: candidate.kind,
+          subject: candidate.subject,
+          accountId: candidate.accountId,
+          options: (candidate.payload.options ?? {}) as never,
+        },
+        ctx,
+      );
+      if (assembled === null) continue;
+      /**
+       * `context.dataAsOf` 必须与 `job.dataAsOf` **完全一致**（repository 的 `context_mismatch` 校验）。
+       *
+       * 受理时 `job.dataAsOf` 记的是 `now`（装配还没发生）；这里拿到真实装配结果后，
+       * **先把 job 的 `dataAsOf` 回填成真实值**，再构造 context —— 否则两者永远不等。
+       */
+      /**
+       * **时序**（REQ-M5-01）：claim 的陈旧判定（`isAnalysisContextStale`）用的是
+       * `job.dataAsOf` —— 此刻它还是受理时写的占位值 `now`，那一步**先发生**。
+       * 装配成功后**立即回填**，于是**下一次** claim 用的是真值。
+       *
+       * ⇒ 「第一次 claim 用占位值」是解耦的已知代价；回填保证它只影响一次。
+       */
+      const backfilled = await ctx.repos.analysis.setJobDataAsOf({
+        accountId,
+        jobId: candidate.id,
+        dataAsOf: assembled.dataAsOf,
+        now,
+      });
+      if (backfilled === null) continue;
+
       const context = {
-        ...snapshot,
+        ...assembled,
         id: randomUUID(),
         jobId: candidate.id,
         writeUntil: new Date(now.getTime() + input.leaseSeconds * 1000),

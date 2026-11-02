@@ -207,6 +207,29 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     );
   }
 
+  /**
+   * 回填 `dataAsOf`（REQ-M5-01）。**只在 claim 装配成功后调用**。
+   *
+   * 只允许对**尚未终结**的 job 回填：已 `completed` / `failed` / `dead_letter` 的
+   * job 其 `dataAsOf` 已经是事实记录，改它就是改写历史。
+   */
+  async setJobDataAsOf(input: {
+    readonly accountId: string;
+    readonly jobId: string;
+    readonly dataAsOf: Date;
+    readonly now: Date;
+  }): Promise<AnalysisJob | null> {
+    const job = this.jobs.get(input.jobId);
+    if (!job || job.accountId !== input.accountId) return null;
+    // 终结态不可回填（只允许 pending / claimed）。
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'dead_letter')
+      return null;
+    const next: AnalysisJob = { ...job, dataAsOf: input.dataAsOf, updatedAt: input.now };
+    assertAnalysisJobInvariants(next);
+    this.jobs.set(job.id, next);
+    return next;
+  }
+
   async claim(input: AnalysisClaim): Promise<AnalysisJob | null> {
     const previousJobs = new Map(this.jobs);
     const previousContexts = new Map(this.contexts);

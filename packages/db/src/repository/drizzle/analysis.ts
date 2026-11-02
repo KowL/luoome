@@ -279,6 +279,29 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
     );
   }
 
+  /** 回填 `dataAsOf`（REQ-M5-01）。**只在 claim 装配成功后调用**；终结态不可回填。 */
+  async setJobDataAsOf(input: {
+    readonly accountId: string;
+    readonly jobId: string;
+    readonly dataAsOf: Date;
+    readonly now: Date;
+  }): Promise<AnalysisJob | null> {
+    const row = this.db
+      .select()
+      .from(analysisJobs)
+      .where(and(eq(analysisJobs.id, input.jobId), eq(analysisJobs.accountId, input.accountId)))
+      .get();
+    if (row === undefined) return null;
+    const job = decodeJob(row);
+    // 终结态不可回填：它们的 dataAsOf 已是事实记录，改它就是改写历史。
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'dead_letter')
+      return null;
+    const next: AnalysisJob = { ...job, dataAsOf: input.dataAsOf, updatedAt: input.now };
+    assertAnalysisJobInvariants(next);
+    this.db.update(analysisJobs).set(jobRow(next)).where(eq(analysisJobs.id, job.id)).run();
+    return next;
+  }
+
   async claim(input: AnalysisClaim): Promise<AnalysisJob | null> {
     assertAnalysisContextInvariants(input.context);
     if (!input.owner || !input.token || input.leaseUntil <= input.now)
