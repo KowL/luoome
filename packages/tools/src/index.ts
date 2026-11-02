@@ -89,6 +89,7 @@ export * from './tools/get-stock-universe-status.js';
 export * from './tools/get-strategy-decision-cycles.js';
 export * from './tools/get-strategy-recommendation-preflight-history.js';
 export * from './tools/get-strategy-reliability-summary.js';
+export * from './tools/get-token-usage.js';
 export * from './tools/get-watch-status.js';
 export * from './tools/investment-workspace.js';
 export * from './tools/limit-up-ladder.js';

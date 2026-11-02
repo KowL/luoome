@@ -219,6 +219,8 @@ const EXPECTED_TOOL_NAMES = [
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   'get_stock_market_view',
   'get_stock_universe_status',
+  // REQ-M5-03：token 用量（只读；当前未接宿主 usage，返回 null）
+  'get_token_usage',
   // v0.10 账户绩效与组合归因
   'create_portfolio_cash_flow',
   'create_portfolio_corporate_action',

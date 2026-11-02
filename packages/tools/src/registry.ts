@@ -79,6 +79,7 @@ import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js
 import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
 import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
+import { getTokenUsageTool } from './tools/get-token-usage.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import {
   getInvestmentCandidatesTool,
@@ -408,6 +409,8 @@ export const toolRegistry: Registry = createRegistry([
   confirmReviewDraftTool,
   // REQ-M4-03：从复盘产策略修订提案（write）。**只提案不发布**。
   proposeReviewRevisionTool,
+  // REQ-M5-03：token 用量（**只读**）。当前未接宿主 usage，返回 null 不估算。
+  getTokenUsageTool,
   // REQ-M4-06：档位写入。write 副作用，走 Operation；不受档位闸门约束（否则死锁）。
   setAutomationTierTool,
   recordDecisionTradeTool,

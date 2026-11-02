@@ -1,4 +1,11 @@
-import { AdviceDecisionSchema, type AdviceQuery, AdviceSchema } from '@luoome/core';
+import {
+  AdviceDecisionSchema,
+  AdviceHistoryStatusSchema,
+  type AdviceQuery,
+  AdviceSchema,
+  AdviceStaleReasonSchema,
+  adviceHistoryMark,
+} from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
 import { selectAdvices } from '../internal/advice-selection.js';
@@ -32,6 +39,9 @@ export const AdviceListItemSchema = z
     decision: AdviceDecisionSchema,
     confidence: z.number().min(0).max(100),
     dataAsOf: z.coerce.date(),
+    /** REQ-M5-03 第 1 项：历史标识（与 `list_advices` 输出里的同名同义）。 */
+    historyStatus: AdviceHistoryStatusSchema,
+    staleReason: AdviceStaleReasonSchema.nullable(),
     validFrom: z.coerce.date(),
     validUntil: z.coerce.date(),
     counterEvidence: z.array(z.string()),
@@ -97,6 +107,20 @@ export const listAdvicesTool = defineTool({
       includeExpired: input.includeExpired,
       limit: input.limit,
     });
+    /**
+     * 历史标识需要「今天」的起点。**按业务时区算**（与其它面板一致用 Asia/Shanghai），
+     * 而不是 UTC——否则跨日判断会差 8 小时。
+     */
+    const now = ctx.clock();
+    const shanghaiToday = new Date(now.getTime() + 8 * 3_600_000);
+    const todayStart = new Date(
+      Date.UTC(
+        shanghaiToday.getUTCFullYear(),
+        shanghaiToday.getUTCMonth(),
+        shanghaiToday.getUTCDate(),
+      ) -
+        8 * 3_600_000,
+    );
     const advices = scoped.map((advice) => ({
       id: advice.id,
       subjectKind: advice.subjectKind,
@@ -105,6 +129,14 @@ export const listAdvicesTool = defineTool({
       decision: advice.decision,
       confidence: advice.confidence,
       dataAsOf: advice.basedOn.dataAsOf,
+      // REQ-M5-03 第 1 项：**历史标识**。回显原 `dataAsOf` 之外，
+      // 还要标明「它是不是今天的」——否则跨会话检索到的旧结论会被当成当前事实。
+      ...adviceHistoryMark({
+        validUntil: advice.validUntil,
+        dataAsOf: advice.basedOn.dataAsOf,
+        now,
+        todayStart,
+      }),
       validFrom: advice.validFrom,
       validUntil: advice.validUntil,
       counterEvidence: advice.reasoning.counterEvidence,

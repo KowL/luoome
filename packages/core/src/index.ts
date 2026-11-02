@@ -1,5 +1,6 @@
 // @luoome/core 桶导出：纯领域类型 + 不变量 + advice 模型，无 IO。
 
+export * from './advice-history.js';
 // 依赖注入上下文
 export * from './context.js';
 export * from './data-archive.js';

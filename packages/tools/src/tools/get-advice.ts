@@ -1,9 +1,12 @@
 import {
   AdviceCardSchema,
   AdviceDecisionSchema,
+  AdviceHistoryStatusSchema,
   type AdviceQuery,
   AdviceSchema,
+  AdviceStaleReasonSchema,
   AdviceSubjectKindSchema,
+  adviceHistoryMark,
   renderAdviceCard,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -53,6 +56,22 @@ export const GetAdviceOutput = z
      * 与 `advices` **按 id 对齐**。
      */
     cards: z.array(AdviceCardSchema),
+    /**
+     * REQ-M5-03 第 1 项：**每条建议的历史标识**，与 `advices` 按 id 对齐。
+     *
+     * 单列一个字段而不是塞进 `AdviceSchema`：历史性是**读取时派生**的
+     * （取决于「现在几点」），不是建议自身的事实。把它写进实体会让
+     * 同一条建议在不同时刻解析出不同值，破坏「实体是不可变快照」。
+     */
+    historyMarks: z.array(
+      z
+        .object({
+          adviceId: z.string().min(1),
+          historyStatus: AdviceHistoryStatusSchema,
+          staleReason: AdviceStaleReasonSchema.nullable(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 
@@ -94,6 +113,24 @@ export const getAdviceTool = defineTool({
       total: parsed.length,
       unattributedCount,
       cards: parsed.map((advice) => renderAdviceCard(advice, now)),
+      /**
+       * 按业务时区（Asia/Shanghai）算「今天」的起点——
+       * 用 UTC 会让跨日判断差 8 小时，把刚过零点披露的建议误标为历史。
+       */
+      historyMarks: parsed.map((advice) => {
+        const shanghai = new Date(now.getTime() + 8 * 3_600_000);
+        const todayStart = new Date(
+          Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), shanghai.getUTCDate()) -
+            8 * 3_600_000,
+        );
+        const mark = adviceHistoryMark({
+          validUntil: advice.validUntil,
+          dataAsOf: advice.basedOn.dataAsOf,
+          now,
+          todayStart,
+        });
+        return { adviceId: advice.id, ...mark };
+      }),
     };
   },
 });
