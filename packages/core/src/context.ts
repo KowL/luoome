@@ -339,6 +339,18 @@ export interface ToolContext {
    * 调用方需自行 claim 并执行。
    */
   readonly jobRunner?: import('./job-runner.js').JobRunner;
+  /**
+   * 分析执行器（REQ-M5-01）：由宿主注入，`tools` 不能发起模型请求。
+   *
+   * **未注入时**：执行体会 append `analyzer-unavailable` 并如实返回，
+   * **不假装完成**——「没执行分析却说 done」是最坏的一种假。
+   */
+  readonly analysisRunner?: (task: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly kind: string;
+    readonly subject: { readonly kind: string; readonly id: string };
+  }) => Promise<unknown>;
   readonly automationTierStore?: {
     resolve(): Promise<{ readonly tier: 'off' | 'notify' | 'granted'; readonly source: string }>;
     save(tier: 'off' | 'notify' | 'granted', now: Date): Promise<void>;

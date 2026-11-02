@@ -88,9 +88,94 @@ export const enqueueAnalysisJobTool = defineTool({
     if (ctx.jobRunner !== undefined) {
       ctx.jobRunner.start({
         label: `${input.kind} · ${input.subject.kind}:${input.subject.id}`,
+        /**
+         * ## 执行体（REQ-M5-01）
+         *
+         * 分阶段推进，**每个阶段边界都检查取消**：
+         * ```
+         * claimed → assembled → analyzed → completed
+         * ```
+         *
+         * ## 为什么每阶段都 append
+         *
+         * 「job 真的在跑」不能只看状态字段——**状态可以造假，阶段输出不能**。
+         * 这也是 `cancelledOutput` 可读的实现：取消时把已累积的输出写进那一栏。
+         *
+         * ## 为什么必须走 claim
+         *
+         * 绕过租约直接跑会让「去重 / 重试 / 死信」全部失效。
+         * claim 拿不到就直接中止——**宁可什么都不做，也不做没有租约的事**。
+         */
         run: async (handle) => {
-          handle.append('accepted');
-          return { output: handle.cancelled ? 'cancelled' : 'done' };
+          /**
+           * 先装配，再**回填** `dataAsOf`，最后 claim —— 顺序不能变：
+           * repository 的 claim 校验要求 `context.dataAsOf === job.dataAsOf`，
+           * 而受理时 job 记的是占位值 `now`。
+           */
+          const built = await assembleAnalysisContext(
+            { kind: input.kind, subject: input.subject, accountId, options: input.options },
+            ctx,
+          );
+          if (built === null) {
+            handle.append('assembled-unavailable');
+            return { output: 'assembled-unavailable' };
+          }
+          await ctx.repos.analysis.setJobDataAsOf({
+            accountId,
+            jobId: result.job.id,
+            dataAsOf: built.dataAsOf,
+            now: ctx.clock(),
+          });
+
+          const claimed = await ctx.repos.analysis.claim({
+            accountId,
+            jobId: result.job.id,
+            owner: `job-runner:${result.job.id}`,
+            token: randomUUID(),
+            now: ctx.clock(),
+            // 租约时长与 `claim_analysis_jobs` 的默认值一致（30 分钟）
+            leaseUntil: new Date(ctx.clock().getTime() + 30 * 60 * 1000),
+            context: {
+              ...built,
+              id: randomUUID(),
+              jobId: result.job.id,
+              writeUntil: new Date(ctx.clock().getTime() + 30 * 60 * 1000),
+              expiresAt: new Date(ctx.clock().getTime() + 30 * 86400000),
+              createdAt: ctx.clock(),
+            },
+          });
+          if (claimed === null) {
+            handle.append('claim-failed');
+            return { output: 'claim-failed' };
+          }
+          handle.append('claimed');
+
+          if (handle.cancelled) return { output: 'cancelled-after-claim' };
+
+          handle.append('assembled');
+          if (handle.cancelled) return { output: 'cancelled-after-assembled' };
+
+          // 分析本身需要模型推理，`tools` 不能发起 —— 由注入的分析器完成。
+          // 未注入时如实报「未执行分析」，不假装 done。
+          const analyzer = ctx.analysisRunner;
+          if (analyzer === undefined) {
+            handle.append('analyzer-unavailable');
+            return { output: 'analyzer-unavailable' };
+          }
+          const analyzed = await analyzer({
+            jobId: result.job.id,
+            claimToken: claimed.claimToken ?? '',
+            kind: input.kind,
+            subject: input.subject,
+          });
+          if (handle.cancelled) {
+            handle.append('cancelled-after-analyzed');
+            return { output: 'cancelled-after-analyzed' };
+          }
+          handle.append('analyzed');
+          handle.append('completed');
+          void analyzed;
+          return { output: 'completed' };
         },
       });
     }
