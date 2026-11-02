@@ -67,6 +67,18 @@ export const AnalysisJobSchema = z
         completedClaimToken: z.string().min(1),
       })
       .nullable(),
+    /**
+     * 取消时仍可读的输出（REQ-M5-01）。
+     *
+     * ## 为什么不能塞进 `result`
+     *
+     * `result` 的不变量是「**只有 `completed` 才能有 `result`**」——
+     * 那是「有 result 就等于成功了」的保证。取消后的输出塞进去，
+     * 这条等式就断了。
+     *
+     * ⇒ 单独一栏：取消的内容可读，但**不冒充成功**。
+     */
+    cancelledOutput: z.string().max(20000).nullable().default(null),
     error: AnalysisFailureSchema.nullable(),
     createdAt: z.coerce.date(),
     updatedAt: z.coerce.date(),
@@ -75,6 +87,19 @@ export const AnalysisJobSchema = z
   .superRefine((job, ctx) => {
     const invalid = (message: string) => ctx.addIssue({ code: 'custom', message });
     if (analysisSubjectKinds[job.kind] !== job.subject.kind) invalid('analysis_subject_mismatch');
+    /**
+     * **成功态不得带取消输出**（REQ-M5-01）。
+     *
+     * 这条不变量放 core 而不是只放测试：否则将来有人两边都写，
+     * 就说不清「这到底成功了没有」。两个字段同时有值 = 语义冲突。
+     */
+    if (job.status === 'completed' && job.cancelledOutput !== null)
+      invalid('completed_job_must_not_carry_cancelled_output');
+    /**
+     * **取消态不得带 result**：`result` 代表「完成产物」，取消的任务没有完成产物。
+     */
+    if (job.status === 'cancelled' && job.result !== null)
+      invalid('cancelled_job_must_not_carry_result');
     const claimed = job.status === 'claimed';
     if (
       claimed

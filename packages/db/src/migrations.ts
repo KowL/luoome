@@ -82,9 +82,12 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
     dedupe_key TEXT NOT NULL, payload_json TEXT NOT NULL, data_as_of INTEGER NOT NULL,
     not_before INTEGER NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 3, claim_token TEXT, claimed_by TEXT, lease_until INTEGER,
-    context_id TEXT, result_json TEXT, error_json TEXT, created_at INTEGER NOT NULL,
+    context_id TEXT, result_json TEXT, cancelled_output TEXT, error_json TEXT,
+    created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL, finished_at INTEGER
   )`);
+  // REQ-M5-01：取消时可读输出。**存量库幂等补列**（`ensureColumn` 先查 PRAGMA）。
+  ensureColumn(db, 'analysis_jobs', 'cancelled_output', 'TEXT');
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_active_dedupe_unique ON analysis_jobs(dedupe_key) WHERE status IN ('pending','claimed')`,
   );

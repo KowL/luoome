@@ -2058,6 +2058,8 @@ export const analysisJobs = sqliteTable(
     leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
     contextId: text('context_id'),
     result: text('result_json', { mode: 'json' }).$type<AnalysisJob['result']>(),
+    /** REQ-M5-01：取消时可读输出。**不进 `result`**（那条不变量是「有 result = 成功了」）。 */
+    cancelledOutput: text('cancelled_output'),
     error: text('error_json', { mode: 'json' }).$type<AnalysisJob['error']>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),

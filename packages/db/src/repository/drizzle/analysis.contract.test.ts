@@ -36,6 +36,7 @@ const pending = (id = 'job'): AnalysisJob => ({
   leaseUntil: null,
   contextId: null,
   result: null,
+  cancelledOutput: null,
   error: null,
   createdAt: now,
   updatedAt: now,

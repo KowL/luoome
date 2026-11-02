@@ -72,6 +72,7 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+export * from './job-runner.js';
 export * from './personal/index.js';
 export * from './portfolio/apply-trade-to-holding.js';
 export * from './portfolio/decision-ledger-state.js';

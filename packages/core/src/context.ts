@@ -332,6 +332,13 @@ export interface ToolContext {
    * `resolve()` / `save()`，`tools` 不关心它落 drizzle 还是 memory。
    * 未注入时 `set_automation_tier` 返回 adapter_error。
    */
+  /**
+   * 长任务执行器（REQ-M5-01）。由宿主注入，领域只认窄契约。
+   *
+   * **不注入时**：`start_analysis_job` 仍能受理（只排期），但不启动后台执行——
+   * 调用方需自行 claim 并执行。
+   */
+  readonly jobRunner?: import('./job-runner.js').JobRunner;
   readonly automationTierStore?: {
     resolve(): Promise<{ readonly tier: 'off' | 'notify' | 'granted'; readonly source: string }>;
     save(tier: 'off' | 'notify' | 'granted', now: Date): Promise<void>;

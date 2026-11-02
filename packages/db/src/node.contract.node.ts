@@ -248,6 +248,7 @@ describe('node:sqlite 入口：真实 repository 在 Node 下同语义', () => {
       leaseUntil: null,
       contextId: null,
       result: null,
+      cancelledOutput: null,
       error: null,
       createdAt: now,
       updatedAt: now,
@@ -2301,6 +2302,8 @@ const fullFixture = (): Record<string, DataImportRow> => {
       lease_until: null,
       context_id: 'context-1',
       result_json: null,
+      // REQ-M5-01：取消时可读输出（新列，全量事实覆盖需要它）
+      cancelled_output: null,
       error_json: null,
       created_at: T0,
       updated_at: T1,

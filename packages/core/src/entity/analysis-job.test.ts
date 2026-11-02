@@ -27,6 +27,7 @@ const claimed: AnalysisJob = {
   leaseUntil: new Date(now.getTime() + 1000),
   contextId: 'context',
   result: null,
+  cancelledOutput: null,
   error: null,
   createdAt: now,
   updatedAt: now,
