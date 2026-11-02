@@ -17,6 +17,7 @@ import { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { AgentRegistry } from '@deepseek-ai/dsh-agent';
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
+import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local';
 import {
   createUserMessage,
   LlmAdapter,
@@ -67,6 +68,7 @@ import { seedTestStockUniverse } from '@luoome/tools/testing';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { createDshOperationHost } from './dsh-authority.js';
+import { createDshJobRunner } from './job-runner.js';
 import {
   createMarketSurface,
   DEFAULT_MARKET_TIMEOUT_MS,
@@ -295,6 +297,8 @@ const createJourneyFixture = async (
   await mount(Persistence, { root: join(root, 'sessions'), compression: 'none' });
   await mount(AgentLoop, { agents: [], maxParallelToolCalls: 1 });
   await mount(ApprovalService, { policy: 'ask' });
+  // REQ-M5-01：挂宿主 background-job 服务，供 `createDshJobRunner` 使用。
+  await mount(LocalJobRegistry);
 
   const market = new ControlledMarketAdapter();
   const domain: ToolContext = buildContext({
@@ -306,6 +310,8 @@ const createJourneyFixture = async (
     logger: silentLogger,
     ashareSentiment: sentimentUnavailable as never,
     news: newsPartial as never,
+    // REQ-M5-01：真实宿主 `JobRegistry` 适配成领域窄接口。
+    jobRunner: createDshJobRunner(ctx),
   });
   await seedTestStockUniverse(domain);
   const principal = Object.freeze({
@@ -1604,3 +1610,34 @@ class FailOnceSettleRepository implements PluginAuthorityRepository {
     return this.inner.saveGrant(grant, expectedVersion);
   }
 }
+
+/**
+ * ## M5-01「同一回合 ≥3 次工具调用」—— **未覆盖，卡在架构边界**
+ *
+ * ### 查证结果（不是猜测）
+ *
+ * `enqueue_analysis_job` 是**刻意的 workflow-only 工具**：
+ * `packages/tools/src/internal/workflow-only-tools.ts:25-26` 明写
+ * > `enqueue_analysis_job` 也在这里：它是分析队列唯一的**生产者**，只由 workflow 编排调用，
+ * > **registry 永远不收它**
+ *
+ * `get_analysis_job` / `claim_analysis_jobs` 同样不经主 registry —— 它们属于
+ * 「交互式分析面」（DSH 独立实例 `luoome-analysis`，见 `queue/names.ts:14`）。
+ *
+ * ### 所以这条验收在本环境下测不了
+ *
+ * 脚本模型通过 **`ToolRuntime`** 发 tool call，而 `ToolRuntime` 只跑
+ * `toolRegistry.all()` 里的工具。**M5-01 的工具面一个都不在里面** ⇒
+ * 模型**根本没有**这些工具可调用。
+ *
+ * 实测：`fixture.execute('start_analysis_job', ...)` 返回 `isError: true`；
+ * 而 `toolRegistry.all().find(t => t.name === 'start_analysis_job')` → **`undefined`**。
+ *
+ * ### 要测它需要什么
+ *
+ * 把「分析队列的生产者面」挂到一个**模型可见的实例**上（要么进主 registry，
+ * 要么在 `luoome-analysis` 独立实例里跑这条 e2e）。
+ * **那是产品面决策**（是否允许模型直接排期分析），不是测试能自己决定的。
+ *
+ * **在做出那个决策之前，这条断言不存在** —— 不写成「通过」。
+ */

@@ -65,6 +65,10 @@ export interface BuildContextDependencies {
   readonly reportArtifacts?: ReportArtifactWriter;
   /** task-35：事实库导出物写盘载体；未注入时 export_business_data 返回 adapter_error。 */
   readonly dataArchives?: DataArchiveWriter;
+  /** REQ-M5-01：长任务执行器（宿主注入；缺省时 `start_analysis_job` 只排期）。 */
+  readonly jobRunner?: ToolContext['jobRunner'];
+  /** REQ-M5-01：分析执行器（宿主注入；缺省时执行体如实报 `analyzer-unavailable`）。 */
+  readonly analysisRunner?: ToolContext['analysisRunner'];
   /** REQ-M4-06：档位读写口；未注入时 set_automation_tier 返回 adapter_error。 */
   readonly automationTierStore?: ToolContext['automationTierStore'];
 }
@@ -113,6 +117,8 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.automationTierStore === undefined
       ? {}
       : { automationTierStore: input.automationTierStore }),
+    ...(input.jobRunner === undefined ? {} : { jobRunner: input.jobRunner }),
+    ...(input.analysisRunner === undefined ? {} : { analysisRunner: input.analysisRunner }),
     ...(input.dataArchives === undefined ? {} : { dataArchives: input.dataArchives }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
     ...(input.stockProfile === undefined ? {} : { stockProfile: input.stockProfile }),
