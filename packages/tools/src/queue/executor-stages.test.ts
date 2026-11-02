@@ -1,10 +1,44 @@
 import type { JobRunner } from '@luoome/core';
+import { money } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { enqueueAnalysisJobTool } from './jobs.js';
 
 const ACCOUNT = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+const NOW = new Date('2026-07-29T16:00:00+08:00');
+
+/**
+ * 造**装配能成功**的上下文（REQ-M5-01 fixture）。
+ *
+ * ## 为什么必须存行情
+ *
+ * `assembleAnalysisContext` 的 `dataAsOf` **只来自真实已存事实**——
+ * `context.ts:117` 明确写着「不调用 adapter、不刷新外部数据、**也不用 `now` 伪造 `dataAsOf`**」。
+ * 没有已存行情 ⇒ `verifiedAt` 为空 ⇒ `dataAsOf` 落成 epoch 0 ⇒ claim 判 `stale_context`。
+ *
+ * ## 范式来源
+ *
+ * 照搬 `analysis.test.ts:153-171` 的 `setup()`：`repos.quote.save` 一笔当日行情，
+ * `observedAt` 即 `dataAsOf` 的来源。
+ */
+const setupWithFacts = async () => {
+  const ctx = await buildTestContext({ clock: () => NOW, advices: [] });
+  await ctx.repos.quote.save({
+    stockId: '600519.SH',
+    ts: NOW,
+    observedAt: NOW,
+    fetchedAt: NOW,
+    timestampSource: 'upstream',
+    open: money(100),
+    high: money(101),
+    low: money(99),
+    close: money(100),
+    volume: 1000,
+    source: 'test',
+  } as never);
+  return ctx;
+};
 
 /** 记录 append 内容的 jobRunner 替身（只验本层，不冒充 DSH 真身）。 */
 const recordingRunner = () => {
@@ -58,7 +92,7 @@ describe('执行体阶段（output 是可观测证据）', () => {
     try {
       const recorder = recordingRunner();
       const ctx = {
-        ...(await buildTestContext({ clock: () => new Date('2026-07-29T16:00:00+08:00') })),
+        ...(await setupWithFacts()),
         jobRunner: recorder.runner,
       };
       const queued = await enqueueAnalysisJobTool.execute(
@@ -81,7 +115,7 @@ describe('执行体阶段（output 是可观测证据）', () => {
   it('**`output` 累积多个阶段**（不是只有 accepted）', async () => {
     const recorder = recordingRunner();
     const ctx = {
-      ...(await buildTestContext({ clock: () => new Date('2026-07-29T16:00:00+08:00') })),
+      ...(await setupWithFacts()),
       jobRunner: recorder.runner,
     };
     const queued = await enqueueAnalysisJobTool.execute(
@@ -96,20 +130,21 @@ describe('执行体阶段（output 是可观测证据）', () => {
     await recorder.settle();
     const output = recorder.outputOf('job-1');
     /**
-     * 当前测试环境的装配会退化（`dataAsOf` 落成 epoch 0，见下），
-     * 因此执行体**如实报告** `assembled-unavailable` 或 `claim-failed`。
+     * 本用例**刻意不注入 `analysisRunner`**：验的是「没有分析器时执行体停在
+     * `analyzer-unavailable`，**不假装 completed**」。
      *
-     * **这不是「通过」**：它验证的是「执行体在装配不可用时不会假装完成」，
-     * **不是**「完整链路走通」。后者见文末的未覆盖说明。
+     * 走到 `completed` 的那条在下个用例（注入分析器）。
      */
-    expect(output.trim().length).toBeGreaterThan(0);
+    expect(output).toContain('claimed');
+    expect(output).toContain('assembled');
+    expect(output).toContain('analyzer-unavailable');
     expect(output).not.toContain('completed');
   });
 
   it('注入分析器后走完全程（analyzed + completed）', async () => {
     const recorder = recordingRunner();
     const ctx = {
-      ...(await buildTestContext({ clock: () => new Date('2026-07-29T16:00:00+08:00') })),
+      ...(await setupWithFacts()),
       jobRunner: recorder.runner,
       analysisRunner: async () => ({ ok: true }),
     };
@@ -124,15 +159,15 @@ describe('执行体阶段（output 是可观测证据）', () => {
     expect(queued.ok).toBe(true);
     await recorder.settle();
     const output = recorder.outputOf('job-1');
-    // 同上：装配退化时不会进入 analyze 阶段
-    expect(output).not.toContain('completed');
+    expect(output).toContain('analyzed');
+    expect(output).toContain('completed');
   });
 
   it('**取消在阶段边界生效**：assembled 之后取消 → 不继续分析', async () => {
     const recorder = recordingRunner();
     const analyzer = vi.fn(async () => ({ ok: true }));
     const ctx = {
-      ...(await buildTestContext({ clock: () => new Date('2026-07-29T16:00:00+08:00') })),
+      ...(await setupWithFacts()),
       jobRunner: recorder.runner,
       analysisRunner: analyzer,
     };
@@ -156,3 +191,77 @@ describe('执行体阶段（output 是可观测证据）', () => {
 });
 
 void ACCOUNT;
+
+/**
+ * REQ-M5-01 第三批：取消版 / 对照版（PRD 最后两条）。
+ *
+ * **对照版是关键**：没有它，「取消版 result 为 null」可能是恒真的
+ * （若这条路径本来就拿不到结果）。
+ */
+describe('取消与对照（result vs cancelledOutput）', () => {
+  it('**取消版**：`analyzed` 之后取消 → result 为 null、cancelledOutput 可读', async () => {
+    const recorder = recordingRunner();
+    let releaseAnalysis!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseAnalysis = resolve;
+    });
+    const ctx = {
+      ...(await setupWithFacts()),
+      jobRunner: recorder.runner,
+      // 分析器在 gate 上等待 —— 让我们能在「analyzed 之前」插入取消
+      analysisRunner: async () => {
+        await gate;
+        return { ok: true };
+      },
+    };
+    const queued = await enqueueAnalysisJobTool.execute(
+      {
+        kind: 'advice_market',
+        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        source: 'schedule',
+      },
+      ctx,
+    );
+    expect(queued.ok).toBe(true);
+    /**
+     * 等到执行体真正进入分析阶段（它卡在 `gate` 上）再取消。
+     *
+     * 用轮询等 `assembled` 出现 —— 比数微任务可靠：
+     * `claim` 与 `assemble` 都是 await，微任务数量会随实现变化。
+     */
+    for (let waited = 0; waited < 200; waited += 1) {
+      if (recorder.outputOf('job-1').includes('assembled')) break;
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    recorder.kill();
+    releaseAnalysis();
+    await recorder.settle();
+    const output = recorder.outputOf('job-1');
+    // **取消后不写 completed**，而是报取消原因
+    expect(output).not.toContain('completed');
+    expect(output).toContain('cancelled-after-analyzed');
+  });
+
+  it('**对照版**：不取消 → 走完 `analyzed` + `completed`', async () => {
+    const recorder = recordingRunner();
+    const ctx = {
+      ...(await setupWithFacts()),
+      jobRunner: recorder.runner,
+      analysisRunner: async () => ({ ok: true }),
+    };
+    const queued = await enqueueAnalysisJobTool.execute(
+      {
+        kind: 'advice_market',
+        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        source: 'schedule',
+      },
+      ctx,
+    );
+    expect(queued.ok).toBe(true);
+    await recorder.settle();
+    const output = recorder.outputOf('job-1');
+    // **这条证明上面那个「没有 completed」是取消造成的**
+    expect(output).toContain('analyzed');
+    expect(output).toContain('completed');
+  });
+});
