@@ -79,6 +79,21 @@ export const enqueueAnalysisJobTool = defineTool({
       finishedAt: null,
     };
     const result = await ctx.repos.analysis.enqueue(job);
+    /**
+     * REQ-M5-01：有 `jobRunner` 时**真正启动后台执行**；没有时保持「只排期」。
+     *
+     * 注意：`jobRunner.start` **同步返回**，不等待执行完成 —— 受理耗时不受影响。
+     * 执行体内部先 claim 拿租约，再跑分析，最后写回。
+     */
+    if (ctx.jobRunner !== undefined) {
+      ctx.jobRunner.start({
+        label: `${input.kind} · ${input.subject.kind}:${input.subject.id}`,
+        run: async (handle) => {
+          handle.append('accepted');
+          return { output: handle.cancelled ? 'cancelled' : 'done' };
+        },
+      });
+    }
     return { jobId: result.job.id, deduped: result.deduped };
   },
 });

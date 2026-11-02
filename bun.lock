@@ -12,20 +12,6 @@
         "vitest": "^4.1.10",
       },
     },
-    "apps/web": {
-      "name": "@luoome/web",
-      "version": "0.1.0",
-      "dependencies": {
-        "@luoome/adapters": "workspace:*",
-        "@luoome/core": "workspace:*",
-        "@luoome/db": "workspace:*",
-        "@luoome/tools": "workspace:*",
-        "@luoome/workflows": "workspace:*",
-        "hono": "^4.12.30",
-        "lightweight-charts": "5.2.0",
-        "zod": "^4.4.3",
-      },
-    },
     "packages/adapters": {
       "name": "@luoome/adapters",
       "version": "0.1.0",
@@ -69,6 +55,7 @@
         "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
         "@deepseek-ai/dsh-cmdline": "0.2.1-rc.2",
         "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
+        "@deepseek-ai/dsh-jobs": "0.2.1-rc.2",
         "@deepseek-ai/dsh-schedule": "0.2.1-rc.2",
         "@deepseek-ai/dsh-session": "0.2.1-rc.2",
         "@deepseek-ai/dsh-skill": "0.2.1-rc.2",
@@ -947,8 +934,6 @@
 
     "@luoome/tools": ["@luoome/tools@workspace:packages/tools"],
 
-    "@luoome/web": ["@luoome/web@workspace:apps/web"],
-
     "@luoome/workflows": ["@luoome/workflows@workspace:packages/workflows"],
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
@@ -1289,8 +1274,6 @@
 
     "extend": ["extend@3.0.2", "", {}, "sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g=="],
 
-    "fancy-canvas": ["fancy-canvas@2.1.0", "", {}, "sha512-nifxXJ95JNLFR2NgRV4/MxVP45G9909wJTEKz5fg/TZS20JJZA6hfgRVh/bC9bwl2zBtBNcYPjiBE4njQHVBwQ=="],
-
     "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
 
     "fast-sha256": ["fast-sha256@1.3.0", "", {}, "sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ=="],
@@ -1440,8 +1423,6 @@
     "lightningcss-win32-arm64-msvc": ["lightningcss-win32-arm64-msvc@1.32.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-8SbC8BR40pS6baCM8sbtYDSwEVQd4JlFTOlaD3gWGHfThTcABnNDBda6eTZeqbofalIJhFx0qKzgHJmcPTnGdw=="],
 
     "lightningcss-win32-x64-msvc": ["lightningcss-win32-x64-msvc@1.32.0", "", { "os": "win32", "cpu": "x64" }, "sha512-Amq9B/SoZYdDi1kFrojnoqPLxYhQ4Wo5XiL8EVJrVsB8ARoC1PWW6VGtT0WKCemjy8aC+louJnjS7U18x3b06Q=="],
-
-    "lightweight-charts": ["lightweight-charts@5.2.0", "", { "dependencies": { "fancy-canvas": "2.1.0" } }, "sha512-ey3Vas8UhV06ni+LT9TA1nEe4y8So4Mi6CL/oarNHFMyTktz/xy8e8+oh04Q//eO3t6etvFXgayz2fClyFQb5w=="],
 
     "long": ["long@5.3.2", "", {}, "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA=="],
 

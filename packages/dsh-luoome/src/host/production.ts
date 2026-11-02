@@ -66,6 +66,7 @@ import {
   createExportBusinessDataOperation,
 } from './data-import-operations.js';
 import { DELETION_OPERATION_POLICIES } from './deletion-operations.js';
+import { createDshJobRunner } from './job-runner.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -173,6 +174,13 @@ const isEmptyBusinessDatabase = (handle: NodeDrizzleReposHandle): boolean =>
 
 export interface CreateProductionHostOptions {
   readonly logger?: Logger;
+  /**
+   * 长任务执行器（REQ-M5-01）。由 `plugin.ts` 用 `createDshJobRunner(ctx)` 提供。
+   *
+   * **缺省时不注入**：`start_analysis_job` 仍能受理（只排期），但不启动后台执行。
+   * 这样既有调用方（含 e2e）行为不变。
+   */
+  readonly jobRunner?: import('@luoome/core').JobRunner;
 }
 
 const DISPOSED_MESSAGE = 'dsh-luoome production host is disposed';
@@ -376,6 +384,7 @@ export const createProductionHost = async (
       dataImport: dataImportStaging,
       reportArtifacts,
       automationTierStore,
+      ...(options.jobRunner === undefined ? {} : { jobRunner: options.jobRunner }),
       dataArchives,
     });
     context = built;
@@ -527,7 +536,14 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
   const resolved = resolveProductionConfig(config ?? resolveProductionConfigFromEnv());
   if (resolved.batchEnabled && ctx.get('schedule') === undefined)
     throw new Error('dsh-luoome batches require the host schedule service');
-  const host = await createProductionHost(resolved);
+  /**
+   * REQ-M5-01：注入长任务执行器。
+   *
+   * 只有宿主提供 `jobs` 服务时才注入（`dsh-base` 默认带 `dsh-jobs-local`）；
+   * 缺失时 `start_analysis_job` 退回「只排期」——**不静默假装在跑**。
+   */
+  const jobRunner = ctx.get('jobs') === undefined ? undefined : createDshJobRunner(ctx);
+  const host = await createProductionHost(resolved, jobRunner === undefined ? {} : { jobRunner });
   const recoveryOnly = host.mode === 'recovery-only';
   const owner = Object.freeze({
     userId: host.config.owner.userId,
