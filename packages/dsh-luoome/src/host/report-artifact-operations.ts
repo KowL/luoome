@@ -45,7 +45,8 @@ export const createWriteReportArtifactOperation = (): ConfirmablePluginTool => (
     if (writer === undefined) return null;
     const report = await loadReport(input, ctx);
     if (report === null) return null;
-    const document = input.document ?? reportDocumentFromReport(report);
+    // 没有直传入口了（REQ-M5-02）：文档永远从持久化报告映射。
+    const document = reportDocumentFromReport(report);
     const fileName = reportArtifactFileName({
       kind: document.kind,
       periodEnd: document.periodEnd,

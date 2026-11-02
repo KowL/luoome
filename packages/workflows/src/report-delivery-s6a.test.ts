@@ -5,7 +5,7 @@ import {
   type ReportArtifactWriter,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
-import { writeReportArtifactTool } from '@luoome/tools';
+import { publishReportTool, writeReportArtifactTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -68,6 +68,9 @@ const titlesOf = (report: Report, key: string): string[] =>
   );
 
 const writeArtifact = async (report: Report, ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
+  // REQ-M5-02：导出要求**已发布**。测试按真实流程走一遍发布，而不是绕过它。
+  const published = await publishReportTool.execute({ reportId: report.id }, ctx);
+  expect(published.ok).toBe(true);
   const written = await writeReportArtifactTool.execute({ reportId: report.id }, ctx);
   expect(written.ok).toBe(true);
   if (!written.ok) return null;

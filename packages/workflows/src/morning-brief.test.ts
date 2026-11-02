@@ -11,7 +11,7 @@ import {
   reportDocumentFromReport,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
-import { writeReportArtifactTool } from '@luoome/tools';
+import { publishReportTool, writeReportArtifactTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -236,6 +236,9 @@ describe('REQ-M3-17 盘前简报 workflow', () => {
     const ctx = await contextWithOvernight({ withEvents: true });
     const result = await morningBriefWorkflow.run({ date: '2026-07-29', notify: false }, ctx);
     if (!result.ok) throw new Error('report failed');
+    // REQ-M5-02：先发布再导出。
+    const published = await publishReportTool.execute({ reportId: result.data.report.id }, ctx);
+    expect(published.ok).toBe(true);
     const written = await writeReportArtifactTool.execute({ reportId: result.data.report.id }, ctx);
     expect(written.ok).toBe(true);
     if (!written.ok) return;

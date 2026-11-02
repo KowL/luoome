@@ -20,6 +20,7 @@ import {
   GetStrategyEvaluationProgressOutput,
   getStrategyEvaluationProgressTool,
   getStrategyEvaluationSessionTool,
+  publishReportTool,
   writeReportArtifactTool,
 } from '@luoome/tools';
 import {
@@ -153,6 +154,12 @@ export const runClosingReportCutoffTool = defineTool({
       );
       if (!review.ok) draftError = failureText(review.error);
       else if (review.data.report !== undefined) {
+        /**
+         * REQ-M5-02：导出前必须**发布**——「已发布」是「可导出」的唯一判据。
+         * 这一步是收盘档的正常流程（复盘草稿产出即视为发布），不是为测试加的。
+         */
+        const published = await publishReportTool.execute({ reportId: review.data.report.id }, ctx);
+        if (!published.ok) draftError = failureText(published.error);
         const written = await writeReportArtifactTool.execute(
           { reportId: review.data.report.id },
           ctx,

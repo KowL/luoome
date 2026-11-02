@@ -483,3 +483,101 @@ export const reportDocumentFromReport = (report: Report): ReportDocument => {
   };
   return ReportDocumentSchema.parse(document);
 };
+
+/**
+ * 逐字段递归比较两份文档，**返回第一处差异的具体路径**（REQ-M5-02）。
+ *
+ * ## 为什么不用 `JSON.stringify` 比较
+ *
+ * 两个原因，都是「会静默放过」的类型：
+ * 1. **键顺序**：同一份内容按不同顺序序列化，全串比较会报不等 —— 假阳性
+ * 2. **无法定位**：只知道「整串不等」，不知道差在哪一层
+ *
+ * 返回路径（如 `sections[0].blocks[0].text`）才能直接定位到要改的地方。
+ *
+ * `null` 表示完全相同。
+ */
+export const firstDiffPath = (
+  a: unknown,
+  b: unknown,
+  path = '',
+  seen = new WeakSet<object>(),
+): string | null => {
+  if (a === b) return null;
+  // NaN 与 NaN 在 `===` 下不等，但它们是同一个值。
+  if (typeof a === 'number' && typeof b === 'number' && Number.isNaN(a) && Number.isNaN(b))
+    return null;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object')
+    return path === '' ? '(root)' : path;
+  if (seen.has(a as object))
+    // 循环引用：当作相同（文档是 JSON 树，正常不会有循环；防御而已）。
+    return null;
+  seen.add(a as object);
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return path === '' ? '(root)' : path;
+    const length = Math.max(a.length, b.length);
+    for (let index = 0; index < length; index += 1) {
+      const child = `${path}[${String(index)}]`;
+      if (index >= a.length || index >= b.length) return child;
+      const diff = firstDiffPath(a[index], b[index], child, seen);
+      if (diff !== null) return diff;
+    }
+    return null;
+  }
+
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  for (const key of keys) {
+    const child = path === '' ? key : `${path}.${key}`;
+    if (!(key in left) || !(key in right)) return child;
+    const diff = firstDiffPath(left[key], right[key], child, seen);
+    if (diff !== null) return diff;
+  }
+  return null;
+};
+
+/**
+ * 交付物 manifest（REQ-M5-02）。
+ *
+ * ## 为什么声明必须**能自证**
+ *
+ * 「不含供应商历史数据，不能保证异机重放」——这句话如果只写在文案里，
+ * 没有任何东西在验它。所以 manifest 里同时给出**扫描结果**（`scannedKeys`），
+ * 并有断言证明「声明的不含 ⇒ 实际扫不到」。
+ */
+export const REPORT_ARTIFACT_MANIFEST = Object.freeze({
+  /** 交付物不含供应商历史数据（只有本地事实与结构化结论）。 */
+  containsVendorHistoricalData: false,
+  /** 不能保证异机重放（文件名与内容依赖本机数据时点）。 */
+  replayableAcrossMachines: false,
+  /** 内容来源：持久化报告（**不是**调用方直传）。 */
+  contentSource: 'persisted-report' as const,
+});
+
+/**
+ * 已知的**供应商历史数据**字段名（用于自证扫描）。
+ *
+ * 只列真正可能被误带进来的：供应商原始 payload、历史行情缓存。
+ */
+export const VENDOR_HISTORICAL_KEYS = [
+  'vendorHistory',
+  'vendorRawPayload',
+  'providerHistory',
+  'rawHistory',
+] as const;
+
+/** 递归收集 JSON 树里出现的所有键名（用于 manifest 自证）。 */
+export const collectKeys = (value: unknown, into = new Set<string>()): Set<string> => {
+  if (value === null || typeof value !== 'object') return into;
+  if (Array.isArray(value)) {
+    for (const item of value) collectKeys(item, into);
+    return into;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    into.add(key);
+    collectKeys(child, into);
+  }
+  return into;
+};
