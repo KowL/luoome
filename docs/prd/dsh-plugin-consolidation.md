@@ -1142,6 +1142,25 @@ vintage 混算 / restated 不可引用 / 文档过期）；`test:panels-browser`
 **验收标准**：触发同步 ≤2s 返回 job id；**同一回合内可继续 ≥3 次工具调用**；job `kill` 后状态 `cancelled` 且输出可读；
 失败输出含 `lastErrorKind`；调度不写入「数据是否到位」的判断字段（由 `get_market_data_status` 决定）。
 
+> **v3.7 已知缺口（「同一回合 ≥3 次」在 M5-01 内不覆盖）**
+>
+> **根因是设计而不是缺件**：`enqueue_analysis_job` 是分析队列唯一的**生产者**，只由 workflow 编排调用，
+> **`registry` 永远不收它**（`packages/tools/src/internal/workflow-only-tools.ts:25-26` 的设计说明）。
+> 模型经 `ToolRuntime` 发调用，而 `ToolRuntime` 只跑 registry 里的工具 ⇒ **模型没有这些工具可调用**。
+> ⇒ **当前架构下这条验收没有可验证的场景。**
+>
+> **产品决策**（需求负责人 2026-11-02）：**接受该缺口，不为通过验收而改变工具暴露面**。
+> 备选方案均被否决：
+> - 把 `enqueue_analysis_job` 收进主 registry = **推翻 `workflow-only-tools` 的既有设计**（注释明确说「永远不收」），
+>   且等于**允许模型直接排期分析作业** —— 为一条验收改变产品暴露面。
+> - 在 `luoome-analysis` 独立实例跑该 e2e —— 保持设计不变，但环境成本高，收益与成本不匹配。
+>
+> **若将来产品决定让模型直接排期分析，这条自然可验**；届时补 e2e 即可。
+>
+> **其余四条已覆盖**：≤2s 受理有结构性保证（受理路径零装配 + spy 计数 0 + mutation）；
+> `kill` 后 `cancelled` 且 `cancelledOutput` 可读（含取消/对照两条）；
+> 失败含 `lastErrorKind`；调度不写「数据是否到位」（源码守卫）。
+
 ---
 
 #### REQ-M5-02 交付物体系扩展
