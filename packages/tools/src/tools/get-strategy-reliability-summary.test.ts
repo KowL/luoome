@@ -488,4 +488,94 @@ describe('get_strategy_reliability_summary', () => {
       gate: { ready: true, blockers: [] },
     });
   });
+  it('失败周期给出 reason 分桶与样本，belowAcceptance 只认流水线自己的门槛判定', async () => {
+    const ctx = await buildTestContext();
+    // ① 真门槛失败：checkpoint 覆盖 0.5，reason 是流水线当场写下的判定。
+    await ctx.repos.workflowRun.save({
+      id: 'cycle-gate-failed',
+      workflowName: 'strategy-daily-cycle',
+      mode: 'scheduled',
+      status: 'failed',
+      startedAt: new Date('2026-08-13T09:00:00.000Z'),
+      finishedAt: new Date('2026-08-13T09:01:00.000Z'),
+      inputSummary: {
+        strategyId: 'strategy-fail',
+        scheduleId: 'schedule-fail',
+        dataAsOf: new Date('2026-08-13T00:00:00.000Z'),
+      },
+      outputSummary: {
+        status: 'failed',
+        phase: 'data-prep',
+        leaseRenewals: 0,
+        checkpoint: {
+          status: 'partial',
+          requestedCount: 10,
+          availableCount: 5,
+          failedCount: 5,
+          coverageRatio: 0.5,
+          fallbackUsed: false,
+          providers: ['eastmoney'],
+        },
+        phaseTimings: [],
+      },
+      providerStatuses: [],
+      error: 'data-checkpoint-below-min',
+    });
+    // ② 覆盖率 0.9（在默认 0.8 门槛之上）但失败原因是异常文本：它不是「低于验收」。
+    await ctx.repos.workflowRun.save({
+      id: 'cycle-error-text',
+      workflowName: 'strategy-daily-cycle',
+      mode: 'scheduled',
+      status: 'failed',
+      startedAt: new Date('2026-08-14T09:00:00.000Z'),
+      finishedAt: new Date('2026-08-14T09:01:00.000Z'),
+      inputSummary: {
+        strategyId: 'strategy-fail',
+        scheduleId: 'schedule-fail',
+        dataAsOf: new Date('2026-08-14T00:00:00.000Z'),
+      },
+      outputSummary: {
+        status: 'failed',
+        phase: 'run',
+        leaseRenewals: 1,
+        checkpoint: {
+          status: 'complete',
+          requestedCount: 10,
+          availableCount: 9,
+          failedCount: 1,
+          coverageRatio: 0.9,
+          fallbackUsed: false,
+          providers: ['eastmoney'],
+        },
+        phaseTimings: [],
+      },
+      providerStatuses: [],
+      error: 'provider eastmoney: 连接被重置',
+    });
+
+    const result = await getStrategyReliabilitySummaryTool.execute(
+      { strategyId: 'strategy-fail', targetTradingDays: 2 },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.statuses).toMatchObject({ failed: 2, partial: 0, succeeded: 0 });
+    // 覆盖率 0.9 的周期已经过门，不能被算成 belowAcceptance（旧口径 0.98 会把它算进去）。
+    expect(result.data.checkpoints.belowAcceptance).toBe(1);
+    expect(result.data.failures.byReason).toEqual({
+      'data-checkpoint-below-min': 1,
+      'error-message': 1,
+    });
+    expect(result.data.failures.samples).toHaveLength(2);
+    expect(result.data.failures.samples[0]).toMatchObject({
+      status: 'failed',
+      reason: 'provider eastmoney: 连接被重置',
+      coverageRatio: 0.9,
+    });
+    expect(result.data.failures.samples[1]).toMatchObject({
+      status: 'failed',
+      reason: 'data-checkpoint-below-min',
+      coverageRatio: 0.5,
+    });
+  });
 });

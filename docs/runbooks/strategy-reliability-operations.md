@@ -35,6 +35,10 @@ luoome workflow run complete-strategy-observations --input '{"limit":1000}'
 4. observation baseline 的 available/unavailable 和 provider 分布可解释；不可用不能填 0 或当前价。
 5. `byHorizon.t1/t3/t5` 的 created/completed/pending 随真实交易 session 推进；未到期保持 pending。
 6. AI 不可用时周期可为 `partial` + facts-only，但已发布的事实运行不能因此被改写成 failed。
+7. `statuses.running > 0` 时先看是不是失租残留：每次周期启动都会先收敛失去租约的
+   WorkflowRun 与 StrategyRun（`stale_strategy_run_reconciled`），正常路径下不应有跨小时
+   的 `running` 行。它们会以 `cycle-running` 永久阻塞 `gate.ready`，而这两个收敛工具都是
+   workflow-only，没有其它入口能手动解除。
 
 ## 3. 周度汇总
 
@@ -54,6 +58,11 @@ luoome tools call get_strategy_reliability_summary --input \
 - `phaseDurations`：直接从每个正式周期的 phase timing 计算 P50/P95/max；样本数少时只作为事实展示。
 - `providerLatencies`：持久化周期摘要只保存成员延迟分位点，因此跨周期结果是等权近似，不应冒充原始请求
   样本的精确全局分位数。
+- `failures.byReason/samples`：失败与部分成功周期的 reason 分桶 + 最近 20 条样本（带当次
+  checkpoint 覆盖率与 runId）。归因先看这里：聚合 `coverageRatio` 是所有周期的加总，
+  拿它反推「单次丢了多少只」必然得出错误结论。
+- `checkpoints.belowAcceptance`：按流水线自己的门槛判定（`data-checkpoint-below-min`）计数，
+  不是本工具另立的覆盖率阈值；覆盖率在门槛之上的周期即使低于 0.98 也不算「低于验收」。
 - `checkpoints.fallbackRuns/providers`：审计数据准备的真实来源切换。
 - `observations.baselines/byHorizon`：审计信号基准价来源与各观察周期的创建、完成、等待数量。
 

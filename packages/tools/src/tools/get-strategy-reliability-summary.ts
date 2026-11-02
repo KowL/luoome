@@ -12,6 +12,20 @@ import { defineTool } from '../define-tool.js';
 
 const dayKey = (value: Date): string => value.toISOString().slice(0, 10);
 
+/**
+ * 失败 reason 的分桶键。
+ *
+ * 流水线写下的稳定 code（kebab/snake）直接当键；自由文本（异常 message）统一归到
+ * `error-message`。否则每条 message 都会长成一个只出现一次的键，分布被打散成噪声，
+ * 归因价值等于零。
+ */
+const FAILURE_REASON_CODE = /^[a-z][a-z0-9_-]{0,60}$/;
+const failureReasonKey = (reason: string | undefined): string => {
+  if (reason === undefined) return 'unknown';
+  const trimmed = reason.trim();
+  return FAILURE_REASON_CODE.test(trimmed) ? trimmed : 'error-message';
+};
+
 export const GetStrategyReliabilitySummaryInput = z.object({
   strategyId: z.string().min(1).optional(),
   scheduleId: z.string().min(1).optional(),
@@ -53,6 +67,15 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
   }),
   checkpoints: z.object({
     runsWithCheckpoint: z.number().int().nonnegative(),
+    /**
+     * 因 checkpoint 未过门槛而失败的周期数（`data-checkpoint-below-min`）。
+     *
+     * 口径是**流水线自己的判定**，不是本工具另定的阈值。这里曾经硬编码
+     * `coverageRatio < 0.98`：而流水线过门用的是验收策略的 `minEvaluatedRatio`
+     * （默认 0.8），于是「低于验收」报出的是「低于我自己定的 0.98」——
+     * 0.8–0.98 之间的周期其实**已经过门**，却被打上 belowAcceptance，
+     * 反过来把「覆盖率不足」当成了失败的解释。
+     */
     belowAcceptance: z.number().int().nonnegative(),
     requestedCount: z.number().int().nonnegative(),
     availableCount: z.number().int().nonnegative(),
@@ -88,6 +111,30 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
     runsWithFailure: z.number().int().nonnegative(),
   }),
   providerErrors: z.record(z.string(), z.number().int().nonnegative()),
+  /**
+   * 失败/部分成功周期的**归因证据**。
+   *
+   * 在此之前这里只有状态计数：`failed: 12` 说不出为什么失败，读的人只能拿
+   * `coverageRatio` 这类聚合值去猜——把 20 次运行的聚合覆盖率当成「每次丢 80 只」，
+   * 再用行情源 health 拼一条并不成立的因果链。reason 是流水线当场写下的判定，
+   * 这里原样分桶并保留样本，归因就不需要猜。
+   */
+  failures: z.object({
+    /** 稳定 reason code → 次数；非 code 的自由文本统一归到 `error-message`。 */
+    byReason: z.record(z.string(), z.number().int().nonnegative()),
+    /** 最近 20 条失败/部分成功周期样本，带当次 checkpoint 覆盖率。 */
+    samples: z
+      .array(
+        z.object({
+          dataAsOf: z.coerce.date(),
+          status: z.enum(['failed', 'partial']),
+          reason: z.string().min(1).optional(),
+          runId: z.string().min(1).optional(),
+          coverageRatio: z.number().min(0).max(1).optional(),
+        }),
+      )
+      .max(20),
+  }),
   /** 同一 schedule 在同一交易日出现多条正式周期运行的重复计数。 */
   scheduleDayDuplicates: z.number().int().nonnegative(),
   /** WorkflowRun.phaseTimings 的真实样本分位数，供性能门禁复核。 */
@@ -181,6 +228,14 @@ export const getStrategyReliabilitySummaryTool = defineTool({
     const insight = { factsOnly: 0, unavailable: 0 };
     const notifications = { failed: 0, runsWithFailure: 0 };
     const providerErrors = new Map<string, number>();
+    const failureReasons = new Map<string, number>();
+    const failureSamples: Array<{
+      dataAsOf: Date;
+      status: 'failed' | 'partial';
+      reason?: string;
+      runId?: string;
+      coverageRatio?: number;
+    }> = [];
     const scheduleDayRunCounts = new Map<string, number>();
     const phaseDurationSamples = new Map<string, number[]>();
     const providerLatencySamples = new Map<string, number[]>();
@@ -226,8 +281,24 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       if (renewalCount > 0) leases.runsWithRenewal += 1;
       const reason = audit.reason;
       if (reason === 'lease_lost_before_commit') leases.leaseLost += 1;
-
+      // 门槛判定以流水线当场写下的 reason 为准（口径见 checkpoints.belowAcceptance 注释）。
+      // 放在 checkpoint 判空之外：存量周期即使没留下 checkpoint，这个判定仍然是事实。
+      if (reason === 'data-checkpoint-below-min') checkpoints.belowAcceptance += 1;
       const checkpoint = audit.checkpoint;
+      if (run.status === 'failed' || run.status === 'partial') {
+        const reasonKey = failureReasonKey(reason);
+        failureReasons.set(reasonKey, (failureReasons.get(reasonKey) ?? 0) + 1);
+        failureSamples.push({
+          dataAsOf,
+          status: run.status,
+          ...(reason === undefined ? {} : { reason }),
+          ...(audit.runId === undefined ? {} : { runId: audit.runId }),
+          ...(checkpoint?.coverageRatio === undefined
+            ? {}
+            : { coverageRatio: checkpoint.coverageRatio }),
+        });
+      }
+
       if (checkpoint !== undefined) {
         checkpoints.runsWithCheckpoint += 1;
         const requested = checkpoint.requestedCount ?? 0;
@@ -236,9 +307,6 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         checkpoints.requestedCount += Math.max(0, Math.floor(requested));
         checkpoints.availableCount += Math.max(0, Math.floor(available));
         checkpoints.failedCount += Math.max(0, Math.floor(failed));
-        if ((checkpoint.coverageRatio ?? 0) < 0.98) {
-          checkpoints.belowAcceptance += 1;
-        }
         if (checkpoint.fallbackUsed === true) checkpoints.fallbackRuns += 1;
         if (Array.isArray(checkpoint.providers)) {
           for (const provider of checkpoint.providers) {
@@ -421,6 +489,12 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       providerErrors: Object.fromEntries(
         [...providerErrors].sort(([a], [b]) => a.localeCompare(b)),
       ),
+      failures: {
+        byReason: Object.fromEntries([...failureReasons].sort(([a], [b]) => a.localeCompare(b))),
+        samples: [...failureSamples]
+          .sort((left, right) => right.dataAsOf.getTime() - left.dataAsOf.getTime())
+          .slice(0, 20),
+      },
       scheduleDayDuplicates,
       phaseDurations,
       providerLatencies,

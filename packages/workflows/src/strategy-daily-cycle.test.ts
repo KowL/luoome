@@ -6,7 +6,12 @@ import type {
   StrategyVersion,
   ToolContext,
 } from '@luoome/core';
-import { money, STANDARD_DISCLAIMERS, strategyDefinitionHash } from '@luoome/core';
+import {
+  money,
+  STANDARD_DISCLAIMERS,
+  StrategyRunSchema,
+  strategyDefinitionHash,
+} from '@luoome/core';
 import {
   addHoldingTool,
   addTradeTool,
@@ -914,6 +919,21 @@ describe('strategy-daily-cycle reliability matrix', () => {
       reason: 'data-checkpoint-below-min',
     });
     expect(await staleCtx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toEqual([]);
+    // 门槛失败的周期同样要留下触发失败的 checkpoint：否则审计只剩一个 reason code，
+    // 事后分不清「覆盖率不足」「provider 全挂」「universe 为空」，归因只能靠猜。
+    const staleAudits = await staleCtx.repos.workflowRun.listRecent({
+      workflowName: 'strategy-daily-cycle',
+    });
+    expect(staleAudits[0]).toMatchObject({
+      status: 'failed',
+      error: 'data-checkpoint-below-min',
+    });
+    expect(staleAudits[0]?.outputSummary?.checkpoint).toMatchObject({
+      requestedCount: 1,
+      availableCount: 0,
+      coverageRatio: 0,
+      providers: ['test'],
+    });
 
     // 显式放宽到 1 个交易日后同一份数据可用，证明拦截来自事实日口径而不是数据本身。
     const relaxedCtx = await withBarsEndingAt(barEnd);
@@ -924,6 +944,49 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(relaxed.ok).toBe(true);
     if (!relaxed.ok) return;
     expect(relaxed.data.items[0]?.status).not.toBe('failed');
+  });
+
+  it('周期启动时收敛失去租约的 running StrategyRun，避免 cycle-running 永久阻塞', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    await seedSchedule(base);
+    const staleStartedAt = new Date(NOW.getTime() - 3 * 60 * 60_000);
+    await base.repos.strategyRun.saveStartedRun(
+      StrategyRunSchema.parse({
+        id: 'stale-running-run',
+        strategyId: 'cycle-strategy',
+        strategyVersionId: 'cycle-v1',
+        mode: 'scheduled',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf: staleStartedAt,
+        startedAt: staleStartedAt,
+        status: 'running',
+        scope: 'operational',
+        inputSnapshot: {
+          schemaVersion: 2,
+          strategyVersionId: 'cycle-v1',
+          definitionHash: 'a'.repeat(64),
+          evaluatorVersion: 'strategy-evaluator-v1',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          stockIds: ['600519.SH'],
+          stockIdChecksum: 'b'.repeat(64),
+          requestedBy: 'scheduled',
+        },
+        providerStatuses: [],
+        providerCoverage: [],
+      }),
+    );
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-reconcile', leaseMinutes: 5 },
+      base,
+    );
+    expect(result.ok).toBe(true);
+    // 没有任何租约持有者：这条 running 必须被收敛成 failed，否则 gate 的
+    // `cycle-running` 阻塞项永远解不掉（该工具是 workflow-only，没有别的入口）。
+    expect(await base.repos.strategyRun.findRunById('stale-running-run')).toMatchObject({
+      status: 'failed',
+      error: 'stale_strategy_run_reconciled',
+    });
   });
 
   it('事实日推进后同一 cron tick 不再被判为重复', async () => {

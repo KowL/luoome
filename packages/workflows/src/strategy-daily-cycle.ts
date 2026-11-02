@@ -10,6 +10,7 @@ import {
   readStrategyRunSnapshot,
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+  type StrategyDataCheckpoint,
   StrategyRecommendationPreflightSummarySchema,
   type StrategySchedule,
 } from '@luoome/core';
@@ -19,6 +20,33 @@ import { currentStrategyFingerprint, runAccountPlanBatch } from './account-plan-
 import { closingReportStrategiesReady } from './closing-report.js';
 import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+
+/**
+ * checkpoint → 审计摘要。
+ *
+ * 两个调用点（通过门槛 / 未通过门槛）必须给出**同一形状**的摘要：
+ * 门槛失败的周期如果丢掉 checkpoint，审计里就只剩一句 `data-checkpoint-below-min`，
+ * 事后无法区分「覆盖率不足」「provider 全挂」「universe 为空」——归因只能靠猜。
+ */
+const checkpointAuditOf = (checkpoint: StrategyDataCheckpoint) => ({
+  status: checkpoint.status,
+  requestedCount: checkpoint.requestedCount,
+  availableCount: checkpoint.availableCount,
+  failedCount: checkpoint.failedCount,
+  coverageRatio:
+    checkpoint.requestedCount === 0 ? 0 : checkpoint.availableCount / checkpoint.requestedCount,
+  fallbackUsed: checkpoint.providerStatuses.some((item) => item.fallbackUsed),
+  providers: checkpoint.providerStatuses.map((item) => item.provider),
+});
+
+/** checkpoint 的 provider 覆盖事实 → 审计 providerStatuses（同一口径，两处共用）。 */
+const checkpointProviderStatuses = (checkpoint: StrategyDataCheckpoint) =>
+  checkpoint.providerStatuses.map((item) => ({
+    provider: item.provider,
+    ok: item.failed === 0 && item.freshness !== 'unavailable',
+    ...(item.errorKinds[0] === undefined ? {} : { errorKind: item.errorKinds[0] }),
+    ...(item.latencyMs === undefined ? {} : { latencyMs: item.latencyMs }),
+  }));
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
@@ -130,6 +158,22 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   if (!reconciled.ok) {
     ctx.logger.warn('strategy-daily-cycle: stale workflow reconciliation failed', {
       error: reconciled.error,
+    });
+  }
+  /**
+   * 同时收敛失去租约的 `running` StrategyRun。
+   *
+   * 只收敛 WorkflowRun 是不够的：进程在 `run_strategy` 中途崩掉会留下一条永久 `running`
+   * 的 StrategyRun，而 `get_strategy_reliability_summary` 的 `cycle-running` 阻塞项据此
+   * 把 `gate.ready` 永久钉死——那个阻塞没有任何其它入口能解除（该工具是 workflow-only）。
+   */
+  const staleStrategyRuns = await ctx.tools.reconcile_stale_strategy_runs.execute({
+    olderThanMinutes: Math.max(30, input.leaseMinutes * 2),
+    limit: 100,
+  });
+  if (!staleStrategyRuns.ok) {
+    ctx.logger.warn('strategy-daily-cycle: stale strategy run reconciliation failed', {
+      error: staleStrategyRuns.error,
     });
   }
   // Shared plan/report artifacts must see every schedule that was due at this tick. The
@@ -591,27 +635,17 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     ) {
       status = 'failed';
       reason = 'data-checkpoint-below-min';
+      // 未过门槛的周期同样要留下**触发失败的那个 checkpoint**（不写 checkpointId：
+      // 它没有产出可复用的通过凭证）。否则这条审计只剩一个 reason code，
+      // 归因阶段只能靠猜——覆盖率不足 / provider 全挂 / universe 为空三种原因不可分。
+      checkpointSummary = checkpointAuditOf(prepared.data.checkpoint);
+      dataPreparationPerformance = prepared.data.performance;
+      providerStatuses = checkpointProviderStatuses(prepared.data.checkpoint);
     } else {
       checkpointId = prepared.data.checkpoint.id;
-      checkpointSummary = {
-        status: prepared.data.checkpoint.status,
-        requestedCount: prepared.data.checkpoint.requestedCount,
-        availableCount: prepared.data.checkpoint.availableCount,
-        failedCount: prepared.data.checkpoint.failedCount,
-        coverageRatio:
-          prepared.data.checkpoint.requestedCount === 0
-            ? 0
-            : prepared.data.checkpoint.availableCount / prepared.data.checkpoint.requestedCount,
-        fallbackUsed: prepared.data.checkpoint.providerStatuses.some((item) => item.fallbackUsed),
-        providers: prepared.data.checkpoint.providerStatuses.map((item) => item.provider),
-      };
+      checkpointSummary = checkpointAuditOf(prepared.data.checkpoint);
       dataPreparationPerformance = prepared.data.performance;
-      providerStatuses = prepared.data.checkpoint.providerStatuses.map((item) => ({
-        provider: item.provider,
-        ok: item.failed === 0 && item.freshness !== 'unavailable',
-        ...(item.errorKinds[0] === undefined ? {} : { errorKind: item.errorKinds[0] }),
-        ...(item.latencyMs === undefined ? {} : { latencyMs: item.latencyMs }),
-      }));
+      providerStatuses = checkpointProviderStatuses(prepared.data.checkpoint);
       if (!(await renewScheduleLease())) {
         status = 'failed';
         reason = 'lease_lost_before_commit';

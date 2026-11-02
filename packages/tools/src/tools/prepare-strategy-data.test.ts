@@ -613,4 +613,70 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(result.data.members[0]?.errorKind).toBe('provider_timeout');
     expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['provider_timeout']);
   });
+
+  it('结构化 kind 优先于消息推断：源错误自带的 kind 原样进入 errorKinds', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          // 消息里没有任何可识别的 token：只有结构化 kind 能说清这是什么故障。
+          fetchDailyBars: async () => {
+            throw Object.assign(new Error('boom'), { kind: 'network' });
+          },
+        },
+      },
+    };
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxRetries: 0,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]?.errorKind).toBe('network');
+    expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['network']);
+  });
+
+  it('没有结构化 kind 也不把 Error 的构造器名当成分类', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async () => {
+            throw new Error('socket hang up');
+          },
+        },
+      },
+    };
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxRetries: 0,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // 兜底必须是 unclassified：`error.name` 是 "Error"，那不是一个分类。
+    expect(result.data.members[0]?.errorKind).toBe('unclassified');
+    expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['unclassified']);
+  });
 });

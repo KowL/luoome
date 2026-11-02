@@ -160,6 +160,13 @@ export interface StrategyDailyCycleAudit {
   readonly notificationFailed?: number;
   readonly reconciliation?: 'stale_workflow_run_reconciled';
   readonly reason?: string;
+  /**
+   * 本周期产出的 `StrategyRun` id。
+   *
+   * 审计里本来写了（`outputSummary.runId`），读模型却没解出来：于是「这条失败周期
+   * 对应哪次运行」在归因时断链——只能回 `list_strategy_runs` 按时间猜。
+   */
+  readonly runId?: string;
   readonly checkpoint?: z.output<typeof StrategyDailyCycleCheckpointProjectionSchema>;
   readonly observations?: z.output<typeof StrategyDailyCycleObservationsProjectionSchema>;
   readonly phaseTimings: readonly z.output<typeof StrategyDailyCyclePhaseTimingProjectionSchema>[];
@@ -250,6 +257,7 @@ export const decodeStrategyDailyCycleAudit = (
     z.number().int().nonnegative(),
     outputSummary?.notificationFailed,
   );
+  const runId = optionalValue(z.string().min(1), outputSummary?.runId);
   const reason = optionalValue(z.string().min(1), outputSummary?.reason) ?? run.error;
   const checkpoint = optionalValue(
     StrategyDailyCycleCheckpointProjectionSchema,
@@ -284,6 +292,7 @@ export const decodeStrategyDailyCycleAudit = (
     ...(outputSummary?.reconciliation === 'stale_workflow_run_reconciled'
       ? { reconciliation: 'stale_workflow_run_reconciled' as const }
       : {}),
+    ...(runId === undefined ? {} : { runId }),
     ...(reason === undefined ? {} : { reason }),
     ...(checkpoint === undefined ? {} : { checkpoint }),
     ...(observations === undefined ? {} : { observations }),

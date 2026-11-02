@@ -6,6 +6,7 @@ import {
   isHoliday,
   isWeekend,
   latestClosedTradingDate,
+  SourceErrorKindSchema,
   StrategyDataCheckpointSchema,
   type ToolContext,
 } from '@luoome/core';
@@ -100,12 +101,41 @@ export const PrepareStrategyDataOutput = z.object({
   performance: PrepareStrategyDataPerformanceSchema,
 });
 
+/**
+ * 消息里的稳定 token → 规范词表。
+ *
+ * 只做归一化，不做猜测：`rate limit` / `rate-limit` 必须落到同一个 `rate_limited`，
+ * 否则同一个故障会在 `errorKinds` 里长出三个键，分桶统计就失去意义。
+ */
+const normalizeStableKind = (raw: string): string => {
+  const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  return normalized === 'rate_limit' ? 'rate_limited' : normalized;
+};
+
+/**
+ * 把一次抓取异常归到**稳定**的 errorKind。
+ *
+ * 三条纪律：
+ * 1. **先读结构化 kind**：源客户端抛的 `SourceExecutionError` 自带 `kind` 词表，
+ *    那才是事实；从 message 正则重新推断是在丢信息（adapter 已经归过类）。
+ * 2. 消息正则只是**兼容兜底**，用于没有结构化 kind 的第三方/运行时异常。
+ * 3. 兜底值必须是 `unclassified`。**不能**退回 `error.name`——普通 `Error` 的 name
+ *    就是字符串 `"Error"`，它会以"分类"的身份写进 `errorKinds`，再被门禁、归因和
+ *    报告当作事实消费，等于把「没分类」伪装成「有一个分类叫 Error」。
+ */
 const providerErrorKind = (error: unknown): string => {
+  const structured =
+    error !== null && typeof error === 'object'
+      ? (error as { readonly kind?: unknown }).kind
+      : undefined;
+  if (typeof structured === 'string' && SourceErrorKindSchema.safeParse(structured).success) {
+    return structured;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const stable = message.match(
-    /\b(operation_cancelled|provider_timeout|no_data|unsupported_[a-z_]+|invalid[_-]payload|rate[_-]?limit)\b/i,
+    /\b(operation_cancelled|provider_timeout|no_data|unsupported_[a-z_]+|invalid[_-]payload|rate[_-]?\s?limit)\b/i,
   )?.[1];
-  return stable?.toLowerCase() ?? (error instanceof Error ? error.name : 'provider_error');
+  return stable === undefined ? 'unclassified' : normalizeStableKind(stable);
 };
 
 const shanghaiDay = (date: Date): Date => new Date(`${dateInShanghai(date)}T00:00:00.000Z`);
