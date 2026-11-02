@@ -184,6 +184,7 @@ import { InMemoryFinancialIngestSnapshotRepository } from './financial-ingest-sn
 import { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 import { InMemoryPluginSettingRepository } from './plugin-setting.js';
 import { InMemoryReportPublicationRepository } from './report-publication.js';
+import { InMemoryRiskVetoRepository } from './risk-veto.js';
 
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
@@ -197,6 +198,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const portfolioCorporateAction = new InMemoryPortfolioCorporateActionRepository();
   const decisionWriteLock = new MemoryWriteLock();
   const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();
+  const riskVeto = new InMemoryRiskVetoRepository();
   const advice = new InMemoryAdviceRepository();
   const investmentWorkspace = new InMemoryInvestmentWorkspaceRepository();
   const report = new InMemoryReportRepository();
@@ -312,6 +314,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     watchRuleState,
   });
   return {
+    riskVeto,
     pluginAuthority: new InMemoryPluginAuthorityRepository(),
     pluginSetting: new InMemoryPluginSettingRepository(),
     financialIngestSnapshot: new InMemoryFinancialIngestSnapshotRepository(),
@@ -321,6 +324,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
       investmentWorkspace,
       strategy,
       strategyAutonomyAction,
+      riskVeto,
     ),
     investmentWorkspace,
     personal,

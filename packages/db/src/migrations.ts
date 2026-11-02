@@ -76,6 +76,20 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
     report_id TEXT PRIMARY KEY, version INTEGER NOT NULL, published_at INTEGER NOT NULL,
     document_hash TEXT NOT NULL, frozen_at INTEGER NOT NULL
   )`);
+  // REQ-M5-04：风险官否决。**绑定键是 (account_id, subject_kind, subject_id)**，
+  // 不是 context_id —— 按 context 绑定挡不住「重新取数绕过否决」。
+  db.run(sql`CREATE TABLE IF NOT EXISTS risk_vetoes (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL, reason TEXT NOT NULL, fact_ids_json TEXT NOT NULL,
+    context_id TEXT NOT NULL, created_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS risk_vetoes_subject_idx ON risk_vetoes(account_id, subject_kind, subject_id)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS risk_veto_overrides (
+    id TEXT PRIMARY KEY, veto_id TEXT NOT NULL, overridden_by TEXT NOT NULL,
+    reason TEXT NOT NULL, new_fact_ids_json TEXT NOT NULL, overridden_at INTEGER NOT NULL
+  )`);
   db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,

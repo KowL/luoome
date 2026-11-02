@@ -58,6 +58,7 @@ import {
 import { DrizzlePluginAuthorityRepository } from './repository/drizzle/plugin-authority.js';
 import { DrizzlePluginSettingRepository } from './repository/drizzle/plugin-setting.js';
 import { DrizzleReportPublicationRepository } from './repository/drizzle/report-publication.js';
+import { DrizzleRiskVetoRepository } from './repository/drizzle/risk-veto.js';
 import { DrizzleSchemaMigrationRepository } from './repository/drizzle/schema-migration.js';
 import type { Schema } from './schema/index.js';
 
@@ -69,6 +70,7 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
     pluginSetting: new DrizzlePluginSettingRepository(db),
     financialIngestSnapshot: new DrizzleFinancialIngestSnapshotRepository(db),
     reportPublication: new DrizzleReportPublicationRepository(db),
+    riskVeto: new DrizzleRiskVetoRepository(db),
     analysis: new DrizzleAnalysisRepository(db),
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     personal: new DrizzlePersonalRepository(db),

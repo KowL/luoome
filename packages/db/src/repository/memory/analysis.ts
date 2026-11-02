@@ -17,8 +17,10 @@ import {
   hasAnalysisLease,
   InvariantError,
   isAnalysisContextStale,
+  type RiskVetoRepository,
   releaseAnalysisJob,
 } from '@luoome/core';
+import { assertNoActiveVeto } from '../risk-veto-check.js';
 import type { InMemoryAdviceRepository } from './advice.js';
 import type { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
 import type { InMemoryStrategyRepository } from './strategy.js';
@@ -30,6 +32,8 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     private readonly workspace: InMemoryInvestmentWorkspaceRepository,
     private readonly strategy: InMemoryStrategyRepository,
     private readonly actions: InMemoryStrategyAutonomyActionRepository,
+    /** REQ-M5-04：风险官否决（**事务内**读取，不留并发窗口）。 */
+    private readonly vetos: RiskVetoRepository,
   ) {}
 
   private readonly jobs = new Map<string, AnalysisJob>();
@@ -69,6 +73,9 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     if (context.jobId === null && input.claim) return { ok: false, reason: 'context_mismatch' };
     if (input.now >= context.writeUntil || input.now >= context.expiresAt)
       return { ok: false, reason: 'context_expired' };
+    // REQ-M5-04：**否决状态在同一判定序列里**——不另起一次查询，避免并发窗口。
+    if (!(await assertNoActiveVeto({ vetos: this.vetos, context })))
+      return { ok: false, reason: 'risk_officer_veto' };
     assertAdviceInvariants(input.advice);
     const completed: AnalysisJob | null =
       job && input.claim
@@ -132,6 +139,9 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     if (context.jobId === null && input.claim) return { ok: false, reason: 'context_mismatch' };
     if (input.now >= context.writeUntil || input.now >= context.expiresAt)
       return { ok: false, reason: 'context_expired' };
+    // REQ-M5-04：发布路径同样受否决约束（与 recordAdvice 同一判据）。
+    if (!(await assertNoActiveVeto({ vetos: this.vetos, context })))
+      return { ok: false, reason: 'risk_officer_veto' };
     assertAnalysisPublication(context, input.publication);
     const resultRef = analysisPublicationRef(input.publication);
     const completed: AnalysisJob | null =

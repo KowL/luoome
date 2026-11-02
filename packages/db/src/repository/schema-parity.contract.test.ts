@@ -239,6 +239,10 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   // REQ-M5-02：发布记录表。列与 ReportPublicationSchema 一一对应，但**刻意不进 PAIRS**——
   // 它是「动作记录」而非实体投影（`reportId` 是主键，语义不是「实体 id」）。
   reportPublications: '动作记录：发布快照，无对应实体投影',
+  // REQ-M5-04：否决记录。绑定键是 (account_id, subject_kind, subject_id)，
+  // 不是实体 id —— 与 ReportPublication 同属「动作记录」。
+  riskVetoes: '动作记录：否决，无对应实体投影',
+  riskVetoOverrides: '动作记录：人工推翻否决（审计），无对应实体投影',
   researchDocumentChunks: 'pending',
   researchDocumentIndex: 'pending',
   researchEmbeddingIndexStates: 'pending',

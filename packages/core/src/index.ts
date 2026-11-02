@@ -49,6 +49,7 @@ export * from './entity/research-embedding.js';
 export * from './entity/research-hypothesis.js';
 export * from './entity/research-vault.js';
 export * from './entity/review-revision-proposal.js';
+export * from './entity/risk-veto.js';
 export * from './entity/sector-quote.js';
 export * from './entity/signal-observation.js';
 export * from './entity/stock.js';

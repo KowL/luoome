@@ -3,6 +3,7 @@ export type { FinancialIngestSnapshotRepository } from './financial-ingest-snaps
 export * from './plugin-authority.js';
 export type { PluginSettingRepository } from './plugin-setting.js';
 export type { ReportPublicationRepository } from './report-publication.js';
+export type { RiskVetoRepository } from './risk-veto.js';
 
 import type { Account } from '../entity/account.js';
 import type { AccountFacts } from '../entity/account-facts.js';
@@ -626,6 +627,8 @@ export interface RepositoryRegistry {
   readonly financialIngestSnapshot: import('./financial-ingest-snapshot.js').FinancialIngestSnapshotRepository;
   /** REQ-M5-02：报告发布记录（**「已发布」的唯一判据**）。 */
   readonly reportPublication: import('./report-publication.js').ReportPublicationRepository;
+  /** REQ-M5-04：风险官否决（**绑定 accountId + subject**，不是 contextId）。 */
+  readonly riskVeto: import('./risk-veto.js').RiskVetoRepository;
   readonly analysis: import('./analysis.js').AnalysisRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly personal?: import('../personal/repository.js').PersonalRepository;

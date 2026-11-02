@@ -108,6 +108,10 @@ const transient = [
   // REQ-M5-02：发布记录是**本机动作记录**，不随导入导出迁移
   // （换机后「谁发布过」这件事不该被搬过来）。
   'report_publications',
+  // REQ-M5-04：否决记录是**本机判断与人工推翻的审计痕迹**，不随导入导出迁移
+  // （换机后「谁否决过、谁推翻了」不该被搬过来——那是另一台机器上的人做的决定）。
+  'risk_vetoes',
+  'risk_veto_overrides',
 ] as const;
 
 export const DATA_IMPORT_MANIFEST: Readonly<Record<string, DataImportTablePolicy>> = Object.freeze({

@@ -30,7 +30,9 @@ export type AnalysisRecordResult =
         | 'context_expired'
         | 'context_mismatch'
         | 'lease_lost_before_commit'
-        | 'duplicate_result';
+        | 'duplicate_result'
+        // REQ-M5-04：风险官已否决该 (accountId, subject)，拒绝写入。
+        | 'risk_officer_veto';
     };
 
 export interface AnalysisRecordAdvice {

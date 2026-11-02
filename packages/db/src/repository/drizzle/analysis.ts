@@ -26,6 +26,7 @@ import type { DrizzleDatabase } from '../../database.js';
 import { analysisContexts, analysisJobs, type Schema } from '../../schema/index.js';
 import { DrizzleAdviceRepository } from './advice.js';
 import { DrizzleInvestmentWorkspaceRepository } from './investment-workspace.js';
+import { DrizzleRiskVetoRepository } from './risk-veto.js';
 import { DrizzleStrategyRepository } from './strategy.js';
 import { DrizzleStrategyAutonomyActionRepository } from './strategy-autonomy-action.js';
 
@@ -104,6 +105,14 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
         if (context.jobId === null && input.claim) return { ok: false, reason: 'context_mismatch' };
         if (input.now >= context.writeUntil || input.now >= context.expiresAt)
           return { ok: false, reason: 'context_expired' };
+        // REQ-M5-04：**同一事务内**读否决状态 —— 分两步检查等于没检查。
+        if (
+          new DrizzleRiskVetoRepository(this.db).findActiveBySubjectSync({
+            accountId: context.accountId,
+            subject: context.subject,
+          }) !== null
+        )
+          return { ok: false, reason: 'risk_officer_veto' };
         assertAdviceInvariants(input.advice);
         const completed: AnalysisJob | null =
           job && input.claim
@@ -182,6 +191,14 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
         if (context.jobId === null && input.claim) return { ok: false, reason: 'context_mismatch' };
         if (input.now >= context.writeUntil || input.now >= context.expiresAt)
           return { ok: false, reason: 'context_expired' };
+        // REQ-M5-04：发布路径同样受否决约束（与 recordAdvice 同一判据）。
+        if (
+          new DrizzleRiskVetoRepository(this.db).findActiveBySubjectSync({
+            accountId: context.accountId,
+            subject: context.subject,
+          }) !== null
+        )
+          return { ok: false, reason: 'risk_officer_veto' };
         assertAnalysisPublication(context, input.publication);
         const resultRef = analysisPublicationRef(input.publication);
         const completed: AnalysisJob | null =
