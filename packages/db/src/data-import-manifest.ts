@@ -105,6 +105,9 @@ const transient = [
   // REQ-M4-05 层 3：数据商快照是**本机观测记录**，不随导入导出迁移
   // （换机后应重新观测，而不是把别人的漂移历史搬过来）。
   'financial_ingest_snapshots',
+  // REQ-M5-02：发布记录是**本机动作记录**，不随导入导出迁移
+  // （换机后「谁发布过」这件事不该被搬过来）。
+  'report_publications',
 ] as const;
 
 export const DATA_IMPORT_MANIFEST: Readonly<Record<string, DataImportTablePolicy>> = Object.freeze({

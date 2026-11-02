@@ -236,6 +236,9 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   // REQ-M4-05 层 3：观测记录表，字段与 FinancialIngestSnapshotSchema 一一对应但
   // **不参与 PIT 判定**（resolveVintage 永不读它），故不进 PAIRS。
   financialIngestSnapshots: '观测表：层 3 告警专用，不参与 resolveVintage',
+  // REQ-M5-02：发布记录表。列与 ReportPublicationSchema 一一对应，但**刻意不进 PAIRS**——
+  // 它是「动作记录」而非实体投影（`reportId` 是主键，语义不是「实体 id」）。
+  reportPublications: '动作记录：发布快照，无对应实体投影',
   researchDocumentChunks: 'pending',
   researchDocumentIndex: 'pending',
   researchEmbeddingIndexStates: 'pending',

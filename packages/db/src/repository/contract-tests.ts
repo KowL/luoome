@@ -7347,6 +7347,53 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    // REQ-M5-02：报告发布记录。**「已发布」的唯一判据**。
+    // 双实现必须对拍：memory 与 drizzle 的「重复发布不覆盖」语义要一致。
+    describe('ReportPublicationRepository', () => {
+      const publication = (reportId: string, hash: string, version = 1) => ({
+        reportId,
+        version,
+        publishedAt: T1,
+        documentHash: hash,
+        frozenAt: T1,
+      });
+
+      it('未发布时返回 null（不能拿「记录存在」当已发布判据）', async () => {
+        expect(await repos.reportPublication.findByReportId('never-published')).toBeNull();
+      });
+
+      it('首次发布 → published: true', async () => {
+        const result = await repos.reportPublication.publish(
+          publication('report-a', 'a'.repeat(64)),
+        );
+        expect(result.published).toBe(true);
+        expect(result.publication.documentHash).toBe('a'.repeat(64));
+      });
+
+      it('**重复发布同一 reportId → 不覆盖**，返回旧记录', async () => {
+        await repos.reportPublication.publish(publication('report-b', 'b'.repeat(64)));
+        // 第二次发布带不同 hash —— 必须被拒，且旧记录不变
+        const second = await repos.reportPublication.publish(
+          publication('report-b', 'c'.repeat(64)),
+        );
+        expect(second.published).toBe(false);
+        // **关键**：旧哈希仍在（发布是一次性动作）
+        expect(second.publication.documentHash).toBe('b'.repeat(64));
+        expect((await repos.reportPublication.findByReportId('report-b'))?.documentHash).toBe(
+          'b'.repeat(64),
+        );
+      });
+
+      it('**快照性质**：发布后内容变化，发布记录仍指向旧 hash', async () => {
+        // 模拟：发布时是 hash1；之后报告被 upsert 覆盖成 hash2
+        await repos.reportPublication.publish(publication('report-c', '1'.repeat(64)));
+        const after = await repos.reportPublication.findByReportId('report-c');
+        // 发布记录不跟随后续变化 —— 这正是「时间点快照」
+        expect(after?.documentHash).toBe('1'.repeat(64));
+        expect(after?.publishedAt.getTime()).toBe(T1.getTime());
+      });
+    });
+
     // REQ-M4-06：`plugin_settings` 的极窄 KV。两套实现的**幂等语义**必须一致，
     // 否则「设置页点两次保存」在两种部署下行为不同。
     describe('PluginSettingRepository', () => {

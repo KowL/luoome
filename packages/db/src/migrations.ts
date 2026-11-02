@@ -71,6 +71,11 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS financial_ingest_snapshots_lookup_idx ON financial_ingest_snapshots(stock_id, metric_id, period_end)`,
   );
+  // REQ-M5-02：报告发布记录。`report_id` 是主键 ⇒ **同一报告只能发布一次**。
+  db.run(sql`CREATE TABLE IF NOT EXISTS report_publications (
+    report_id TEXT PRIMARY KEY, version INTEGER NOT NULL, published_at INTEGER NOT NULL,
+    document_hash TEXT NOT NULL, frozen_at INTEGER NOT NULL
+  )`);
   db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,

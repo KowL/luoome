@@ -111,6 +111,7 @@ export * from './tools/portfolio-risk.js';
 export * from './tools/prepare-strategy-data.js';
 export * from './tools/propose-review-revision.js';
 export * from './tools/prune-strategy-runs.js';
+export * from './tools/publish-report.js';
 export * from './tools/reconcile-stale-strategy-runs.js';
 export * from './tools/reconcile-stale-workflow-runs.js';
 export * from './tools/record-advice-outcome.js';

@@ -83,6 +83,7 @@ export { dataImportReceipts } from './data-import.js';
 export { financialIngestSnapshots } from './financial-ingest-snapshot.js';
 export { pluginAutomationGrants, pluginOperations } from './plugin-authority.js';
 export { pluginSettings } from './plugin-setting.js';
+export { reportPublications } from './report-publication.js';
 
 import {
   index,

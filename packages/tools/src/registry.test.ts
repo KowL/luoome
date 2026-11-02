@@ -195,6 +195,8 @@ const EXPECTED_TOOL_NAMES = [
   'list_reports',
   'render_report',
   'write_report_artifact',
+  // REQ-M5-02：发布报告（「已发布」的唯一入口）。
+  'publish_report',
   'delete_report',
   // Phase 1：连板天梯
   'limit_up_ladder',
@@ -460,6 +462,7 @@ describe('toolRegistry', () => {
       'preview_watchlist_import',
       'propose_review_revision',
       'prune_strategy_runs',
+      'publish_report',
       'publish_strategy_version',
       'record_advice_outcome',
       'record_personal_watch_feedback',

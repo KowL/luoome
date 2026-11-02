@@ -57,6 +57,7 @@ import {
 } from './repository/drizzle/index.js';
 import { DrizzlePluginAuthorityRepository } from './repository/drizzle/plugin-authority.js';
 import { DrizzlePluginSettingRepository } from './repository/drizzle/plugin-setting.js';
+import { DrizzleReportPublicationRepository } from './repository/drizzle/report-publication.js';
 import { DrizzleSchemaMigrationRepository } from './repository/drizzle/schema-migration.js';
 import type { Schema } from './schema/index.js';
 
@@ -67,6 +68,7 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
     pluginAuthority: new DrizzlePluginAuthorityRepository(db),
     pluginSetting: new DrizzlePluginSettingRepository(db),
     financialIngestSnapshot: new DrizzleFinancialIngestSnapshotRepository(db),
+    reportPublication: new DrizzleReportPublicationRepository(db),
     analysis: new DrizzleAnalysisRepository(db),
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     personal: new DrizzlePersonalRepository(db),

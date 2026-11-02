@@ -183,6 +183,7 @@ export { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 import { InMemoryFinancialIngestSnapshotRepository } from './financial-ingest-snapshot.js';
 import { InMemoryPluginAuthorityRepository } from './plugin-authority.js';
 import { InMemoryPluginSettingRepository } from './plugin-setting.js';
+import { InMemoryReportPublicationRepository } from './report-publication.js';
 
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
@@ -314,6 +315,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     pluginAuthority: new InMemoryPluginAuthorityRepository(),
     pluginSetting: new InMemoryPluginSettingRepository(),
     financialIngestSnapshot: new InMemoryFinancialIngestSnapshotRepository(),
+    reportPublication: new InMemoryReportPublicationRepository(),
     analysis: new InMemoryAnalysisRepository(
       advice,
       investmentWorkspace,

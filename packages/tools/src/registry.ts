@@ -111,6 +111,7 @@ import { getPortfolioRiskTool } from './tools/portfolio-risk.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { proposeReviewRevisionTool } from './tools/propose-review-revision.js';
 import { pruneStrategyRunsTool } from './tools/prune-strategy-runs.js';
+import { publishReportTool } from './tools/publish-report.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
 import { refreshDecisionReviewReportTool } from './tools/refresh-decision-review-report.js';
@@ -411,6 +412,8 @@ export const toolRegistry: Registry = createRegistry([
   proposeReviewRevisionTool,
   // REQ-M5-03：token 用量（**只读**）。当前未接宿主 usage，返回 null 不估算。
   getTokenUsageTool,
+  // REQ-M5-02：发布报告（write）。**「已发布」的唯一入口**，无它则不可导出。
+  publishReportTool,
   // REQ-M4-06：档位写入。write 副作用，走 Operation；不受档位闸门约束（否则死锁）。
   setAutomationTierTool,
   recordDecisionTradeTool,
