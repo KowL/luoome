@@ -32,6 +32,11 @@ const toBar = (row: BarRow): DailyBar => ({
 export class DrizzleDailyBarRepository implements DailyBarRepository {
   constructor(private readonly db: DrizzleDatabase<Schema>) {}
 
+  async listStockIdsWithBars(): Promise<ReadonlySet<string>> {
+    const rows = this.db.selectDistinct({ stockId: dailyBars.stockId }).from(dailyBars).all();
+    return new Set(rows.map((row) => row.stockId));
+  }
+
   async saveMany(bars: readonly DailyBar[]): Promise<void> {
     if (bars.length === 0) return;
     const rows = bars.map((input) => {

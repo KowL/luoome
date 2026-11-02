@@ -1527,6 +1527,38 @@ export const registerRepositoryContractTests = (
         ).toHaveLength(1);
       });
 
+      it('listFirstSeenAt 取各成员最早观察时点，重复快照不刷新', async () => {
+        const apply = (syncId: string, observedAt: Date, stockId: string) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: observedAt,
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt,
+              complete: true,
+              reportedTotal: 1,
+              entries: [
+                {
+                  stockId,
+                  code: stockCode(stockId.slice(0, 6)),
+                  exchange: stockId.endsWith('.SH') ? 'SH' : 'SZ',
+                  name: stockId,
+                  listingStatus: 'listed',
+                },
+              ],
+            },
+          });
+        await apply('sync-seen-1', T1, '600519.SH');
+        await apply('sync-seen-2', T3, '600519.SH');
+        await apply('sync-seen-3', T3, '002594.SZ');
+        const firstSeen = await repos.stockUniverse.listFirstSeenAt({
+          coverage: 'CN_A_SHARES_SH_SZ',
+        });
+        expect(firstSeen.get('600519.SH')).toEqual(T1);
+        expect(firstSeen.get('002594.SZ')).toEqual(T3);
+      });
+
       it('保存成功快照成员并按 asOf 选择 PIT universe', async () => {
         const apply = (syncId: string, observedAt: Date, stockId: string) =>
           repos.stockUniverse.applySnapshot({
@@ -2686,6 +2718,16 @@ export const registerRepositoryContractTests = (
 
       it('findInRange 空区间返回空数组（不抛错）', async () => {
         expect(await repos.dailyBar.findInRange('stk-1', T1, T3)).toEqual([]);
+      });
+
+      it('listStockIdsWithBars 返回「曾经有过任意一根日线」的股票全集', async () => {
+        expect(await repos.dailyBar.listStockIdsWithBars()).toEqual(new Set());
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1),
+          makeDailyBar('stk-1', T2),
+          makeDailyBar('stk-2', T1),
+        ]);
+        expect(await repos.dailyBar.listStockIdsWithBars()).toEqual(new Set(['stk-1', 'stk-2']));
       });
 
       it('latestBefore 取 ≤ to 的最近 N 根，按 date 升序返回', async () => {

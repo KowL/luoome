@@ -20,6 +20,10 @@ export class InMemoryDailyBarRepository implements DailyBarRepository {
     for (const b of bars) this.put(b);
   }
 
+  async listStockIdsWithBars(): Promise<ReadonlySet<string>> {
+    return new Set([...this.items.values()].map((bar) => bar.stockId));
+  }
+
   private keyOf(stockId: string, date: Date): string {
     return `${stockId}|${date.getTime()}`;
   }

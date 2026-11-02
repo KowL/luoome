@@ -35,6 +35,7 @@ import {
   errNotFound,
 } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import { excludeUntradeableStockIds } from '../internal/operational-universe.js';
 import {
   createCheckpointStrategyEvaluationDataAdapter,
   createLiveStrategyEvaluationDataAdapter,
@@ -239,15 +240,34 @@ export const runStrategyTool = defineTool({
         successfulSync === null
           ? []
           : await ctx.repos.stockUniverse.listSnapshotMembers(successfulSync.id);
+      /**
+       * 全市场运行剔除「长期无任何日线」的退市代码，口径与 `prepare_strategy_data` 完全一致
+       * （同一 helper、同一 grace 窗口）——两边不一致会让 `memberChecksum` 对不上，
+       * scheduled 运行直接报「成员集合不匹配」。replay 保留当时的全量成员，显式 stockIds 照办。
+       */
+      const operationalStocks =
+        input.stockIds === undefined && input.mode !== 'replay' && snapshotStocks.length > 0
+          ? await (async () => {
+              const { kept } = await excludeUntradeableStockIds(
+                ctx,
+                snapshotStocks.map((stock) => stock.id),
+                dataAsOf,
+              );
+              const keptIds = new Set(kept);
+              return snapshotStocks.filter((stock) => keptIds.has(stock.id));
+            })()
+          : snapshotStocks;
       if (
         input.stockIds === undefined &&
         (input.mode === 'replay' || input.mode === 'scheduled') &&
-        snapshotStocks.length === 0
+        operationalStocks.length === 0
       ) {
         return errInvalidInput('该 mode 需要可读取的 immutable StockUniverse snapshot');
       }
       const validationStocks =
-        input.stockIds === undefined && snapshotStocks.length > 0 ? snapshotStocks : activeStocks;
+        input.stockIds === undefined && operationalStocks.length > 0
+          ? operationalStocks
+          : activeStocks;
       const validationById = new Map(validationStocks.map((stock) => [stock.id, stock]));
       const requestedIds = input.stockIds ?? validationStocks.map((stock) => stock.id);
       const unknownIds = requestedIds.filter((stockId) => !validationById.has(stockId));

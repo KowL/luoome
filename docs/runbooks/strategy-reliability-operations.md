@@ -64,6 +64,11 @@ luoome tools call get_strategy_reliability_summary --input \
 - `checkpoints.belowAcceptance`：按流水线自己的门槛判定（`data-checkpoint-below-min`）计数，
   不是本工具另立的覆盖率阈值；覆盖率在门槛之上的周期即使低于 0.98 也不算「低于验收」。
 - `checkpoints.fallbackRuns/providers`：审计数据准备的真实来源切换。
+- `checkpoint.requestedCount` 不含**长期无任何日线**的退市代码：行情目录里仍留着
+  `000003.SZ` / `000013.SZ` 这类代码，任何源都取不到日线（eastmoney `rc=102`、
+  tencent 501、sina `no_data`、fuyao `Unknown thscode`），留在请求集里只会每轮白拉
+  2–3 个源。剔除按「首次进入目录超过 30 天且库里从未有过日线」判定，
+  `prepare_strategy_data.untradeableExcluded` 给出当次剔除数；新上市股票在窗口内照常请求。
 - `observations.baselines/byHorizon`：审计信号基准价来源与各观察周期的创建、完成、等待数量。
 
 任何 blocker 都应回查对应 WorkflowRun 和 provider status。不要删除失败审计，也不要通过提高超时、重试或

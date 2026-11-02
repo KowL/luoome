@@ -19,6 +19,7 @@ import {
   fetchDailyBarsWithRetry,
   mapWithConcurrency,
 } from '../internal/daily-bar-ingestion.js';
+import { excludeUntradeableStockIds } from '../internal/operational-universe.js';
 
 const DAY_MS = 86_400_000;
 const monotonicNow = (): number =>
@@ -97,6 +98,13 @@ export const PrepareStrategyDataOutput = z.object({
       errorKind: z.string().optional(),
     }),
   ),
+  /**
+   * 因「长期无任何日线」被剔除的成员数（全市场路径才有；显式 stockIds 不剔除）。
+   *
+   * 退市代码会留在行情目录里，任何源都拿不到日线；把它们留在请求集里，每轮都要
+   * 为每只白拉 2–3 个源，并把覆盖率按下去。剔除是**事实判定**，不是数据填充。
+   */
+  untradeableExcluded: z.number().int().nonnegative(),
   /** 真实成员请求延迟，供性能门禁审计；不含估算或 mock 样本。 */
   performance: PrepareStrategyDataPerformanceSchema,
 });
@@ -212,7 +220,12 @@ export const prepareStrategyDataTool = defineTool({
       sync === null
         ? []
         : (await ctx.repos.stockUniverse.listSnapshotMembers(sync.id)).map((stock) => stock.id);
-    const stockIds = [...new Set(input.stockIds ?? snapshotIds)].sort();
+    // 显式 stockIds 一律照办；只有全市场路径才剔除长期无数据的退市代码。
+    const universe = await excludeUntradeableStockIds(ctx, input.stockIds ?? snapshotIds, asOf);
+    const stockIds = [
+      ...new Set(input.stockIds === undefined ? universe.kept : input.stockIds),
+    ].sort();
+    const untradeableExcluded = input.stockIds === undefined ? universe.untradeable.length : 0;
     if (stockIds.length === 0)
       return errInvalidInput('prepare_strategy_data 需要非空 PIT StockUniverse');
     const universeSyncId =
@@ -466,6 +479,6 @@ export const prepareStrategyDataTool = defineTool({
       checkpoint,
       members: prepared.map((member) => ({ checkpointId: checkpoint.id, ...member })),
     });
-    return { checkpoint, members: prepared, performance };
+    return { checkpoint, members: prepared, untradeableExcluded, performance };
   },
 });

@@ -12,7 +12,7 @@ import {
   stockUniverseMemberAttributeCoverage,
   stockUniverseMemberIdentity,
 } from '@luoome/core';
-import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, or, sql } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../database.js';
 
 import {
@@ -329,6 +329,21 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
    * code/exchange 从 `stockId` 解析，name 缺失时用 stockId 兜底（展示用）。
    * `industry` 取**快照列**，旧行为 join 当前值（属性前视）。
    */
+  async listFirstSeenAt(input: {
+    readonly coverage: MarketCoverage;
+  }): Promise<ReadonlyMap<string, Date>> {
+    const rows = this.db
+      .select({
+        stockId: stockUniverseMemberships.stockId,
+        firstSeenAt: sql<number>`min(${stockUniverseMemberships.firstSeenAt})`,
+      })
+      .from(stockUniverseMemberships)
+      .where(eq(stockUniverseMemberships.coverage, input.coverage))
+      .groupBy(stockUniverseMemberships.stockId)
+      .all();
+    return new Map(rows.map((row) => [row.stockId, new Date(row.firstSeenAt)]));
+  }
+
   async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
     return this.snapshotRows(syncId).map((row) => {
       const identity = stockUniverseMemberIdentity(row.stockId);

@@ -1,5 +1,6 @@
 export * from './analysis.js';
 export type { FinancialIngestSnapshotRepository } from './financial-ingest-snapshot.js';
+export * from './goal-run.js';
 export * from './plugin-authority.js';
 export type { PluginSettingRepository } from './plugin-setting.js';
 export type { ReportPublicationRepository } from './report-publication.js';
@@ -208,6 +209,13 @@ export interface StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';
   }): Promise<readonly Stock[]>;
+  /**
+   * 各成员在**任一启用源**里最早被观察到的时间（当前 coverage）。
+   *
+   * 判定「长期无数据」需要它：刚进目录的新股要留出观察窗口，不能因为当天还没有日线
+   * 就被永久剔除——剔除之后它永远不会再被请求，也就永远拿不到第一根 bar。
+   */
+  listFirstSeenAt(input: { readonly coverage: MarketCoverage }): Promise<ReadonlyMap<string, Date>>;
   /** P2 PIT universe：只选择 observedAt 不晚于目标时点的成功快照。 */
   latestSnapshotAtOrBefore(input: {
     readonly coverage: MarketCoverage;
@@ -418,6 +426,13 @@ export interface DailyBarRepository {
     readonly to?: Date;
     readonly recordedAt?: Date;
   }): Promise<readonly DailyBarRevision[]>;
+  /**
+   * 库里**曾经有过任意一根日线**的 stockId 集合。
+   *
+   * 用于把「从来没交易过」和「最近几天缺数据」分开：退市代码在任何源都拿不到日线，
+   * 逐只 `latestBefore` 又要 5000+ 次往返，所以由仓储一次性给出全集。
+   */
+  listStockIdsWithBars(): Promise<ReadonlySet<string>>;
 }
 
 /**
@@ -630,6 +645,7 @@ export interface RepositoryRegistry {
   /** REQ-M5-04：风险官否决（**绑定 accountId + subject**，不是 contextId）。 */
   readonly riskVeto: import('./risk-veto.js').RiskVetoRepository;
   readonly analysis: import('./analysis.js').AnalysisRepository;
+  readonly goalRun: import('./goal-run.js').GoalRunRepository;
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly personal?: import('../personal/repository.js').PersonalRepository;
   /**

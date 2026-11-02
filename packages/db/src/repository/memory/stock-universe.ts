@@ -29,6 +29,8 @@ interface Membership {
   readonly stockId: string;
   readonly state: 'active' | 'missing';
   readonly lastSyncId: string;
+  /** 首次被该源观察到的时点；重复快照不刷新（与 drizzle 的 first_seen_at 同语义）。 */
+  readonly firstSeenAt: Date;
 }
 
 export class InMemoryStockUniverseRepository implements StockUniverseRepository {
@@ -115,6 +117,7 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
         stockId,
         state: 'active',
         lastSyncId: input.syncId,
+        firstSeenAt: this.memberships.get(membershipKey)?.firstSeenAt ?? snapshot.observedAt,
       });
     }
 
@@ -220,6 +223,20 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
     return stocks
       .filter((stock): stock is Stock => stock !== null)
       .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async listFirstSeenAt(input: {
+    readonly coverage: MarketCoverage;
+  }): Promise<ReadonlyMap<string, Date>> {
+    const earliest = new Map<string, Date>();
+    for (const membership of this.memberships.values()) {
+      if (membership.coverage !== input.coverage) continue;
+      const current = earliest.get(membership.stockId);
+      if (current === undefined || membership.firstSeenAt < current) {
+        earliest.set(membership.stockId, membership.firstSeenAt);
+      }
+    }
+    return earliest;
   }
 
   async latestSnapshotAtOrBefore(input: {

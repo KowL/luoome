@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DailyBarRevision } from '@luoome/core';
-import { type DailyBar, money } from '@luoome/core';
+import { type DailyBar, money, stockCode } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
@@ -678,5 +678,93 @@ describe('prepare_strategy_data freshness and vintage', () => {
     // 兜底必须是 unclassified：`error.name` 是 "Error"，那不是一个分类。
     expect(result.data.members[0]?.errorKind).toBe('unclassified');
     expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['unclassified']);
+  });
+  it('全市场路径剔除长期无日线的退市代码，显式 stockIds 照办不剔除', async () => {
+    const now = new Date('2026-11-02T10:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const longAgo = new Date(now.getTime() - 120 * 86_400_000);
+    await base.repos.stockUniverse.applySnapshot({
+      syncId: 'sync-delisted',
+      appliedAt: longAgo,
+      snapshot: {
+        source: 'eastmoney',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        observedAt: longAgo,
+        complete: true,
+        reportedTotal: 2,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: stockCode('600519'),
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'unknown',
+          },
+          {
+            stockId: '000003.SZ',
+            code: stockCode('000003'),
+            exchange: 'SZ',
+            name: 'PT金田A',
+            listingStatus: 'unknown',
+          },
+        ],
+      },
+    });
+    await base.repos.dailyBar.saveMany([
+      {
+        stockId: '600519.SH',
+        date: new Date('2026-11-02T00:00:00.000Z'),
+        open: money(10),
+        high: money(11),
+        low: money(9),
+        close: money(10),
+        volume: 1_000_000,
+        adjustment: 'qfq',
+        source: 'sina',
+      },
+    ]);
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async () => {
+            throw new Error('不应为退市代码回源');
+          },
+        },
+      },
+    };
+
+    const full = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        cachePolicy: 'reuse-fresh',
+        maxStalenessTradingDays: 0,
+      },
+      ctx,
+    );
+    expect(full.ok).toBe(true);
+    if (!full.ok) return;
+    expect(full.data.untradeableExcluded).toBe(1);
+    expect(full.data.checkpoint.requestedCount).toBe(1);
+    expect(full.data.members.map((member) => member.stockId)).toEqual(['600519.SH']);
+
+    // 显式 stockIds 是调用方的明确请求：不剔除，也不改 requestedCount。
+    const explicit = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        cachePolicy: 'reuse-fresh',
+        maxStalenessTradingDays: 0,
+      },
+      ctx,
+    );
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) return;
+    expect(explicit.data.untradeableExcluded).toBe(0);
+    expect(explicit.data.checkpoint.requestedCount).toBe(1);
   });
 });
