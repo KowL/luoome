@@ -1,3 +1,7 @@
+import { goalRuns } from './goal-run.js';
+
+export { goalRuns };
+
 import type {
   AccountKind,
   AdviceDataSnapshot,
@@ -2116,6 +2120,7 @@ export const analysisContexts = sqliteTable(
 );
 
 export const schema = {
+  goalRuns,
   dataImportReceipts,
   pluginOperations,
   pluginAutomationGrants,

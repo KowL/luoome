@@ -447,6 +447,12 @@ MCP 实例、手动 worker 与 MCP 用户入口（`packages/mcp`、`luoome mcp s
 历史托管契约与验收记录见[开发计划](docs/archive/hosted-personal-subscription-development-plan.md)，
 只作历史资料，不代表当前产品范围。
 
+## 目标研究长跑
+
+`GoalRun` 是一次明确意图启动的有界研究进度，不是 `AnalysisJob`、建议或成交。请求冻结目标、事实范围、模型路由、轮次与成本预算；每轮取持久化 `AnalysisContext`，一次修订沿用同一快照。尝试记录保留 contextId、dataAsOf、实际用量或 null；只有有合法 factIds 且无需继续修订的输出才算该轮成果。
+
+`completed` 表示已有经结构和证据校验的目标结论；`blocked` 必有具体条件，轮次耗尽仍未达成目标时同样是 blocked。`cancelled` 保留此前产出，`failed` 表示模型或执行依赖失败；宿主任务完成仅表示执行器结束。进度用版本 CAS 防止取消被迟到提交覆盖。目标模型没有工具权限，研究进度不自动写成 Advice、策略或交易。重启后保留本机审计，不自动重放模型请求。
+
 ## 分析任务与来源
 
 `AnalysisJob`（存储 `analysis_job`）是待执行分析的租约任务，不是策略信号、建议或成交。

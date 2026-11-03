@@ -28,6 +28,24 @@ whenToUse: 用户点名某个标的问「这只票怎么样」「深度分析一
      再用 `get_analysis_context` 取有效 context，并调用
      `record_advice` 写回。
 
+## 多角色审查
+
+- 用户要求多空与风控联合审查时，先取得同一份 `get_analysis_context` 快照。`run_triangle_analysis` 是 `external` 工具，另需 `queue` 能力；通过精确 Operation 确认执行，不自动或定时运行。
+- 执行前列出四个角色各自的 provider/model、`estimatedTokenRange` 和 `estimatedDurationMs`，取得成本确认。缺少模型路由或调用能力时明确报告缺口。
+- 该工具会向宿主模型服务发送四个独立、无工具权限的请求。`record_triangle_review` 仅校验并记录已有四角色输出，不代表执行了模型调用。
+- 结果 `blocked` 非空时展示具体条件；风险官 veto 按账户与标的持续生效，重取 context 或新的 pass 都不解除。
+- 人工推翻仅走宿主认证的人工入口，需明确原因以及否决之后新快照中的新 `factIds`；主 agent 不调用人工解除入口，也不自行声明人工身份。
+- 用量没有 provider 实际报告时保留 `null`，不得用预估替代实耗。角色审查本身不写 Advice，建议写回仍按下述独立确认流程。
+
+## 目标式长跑
+
+- 用户明确要求持续研究到某个目标时，使用 `start_goal_run`；它是 `external`，同时需要 `write` 和 `external` 能力，经精确 Operation 执行，不定时自动启动。
+- 明确 goal、kind/subject、provider/model、maxRounds（1–10），列出 estimatedTokens、estimatedDurationMs 与预算上限，取得成本确认后传 confirmed=true。单目标最多 15 分钟；每轮最多一次修订，每次模型请求没有工具权限。
+- 用 `get_goal_run` 查询持久化进度；attempts 里 output 非空且 needsRevision=false 的记录才是该轮最终产出。每份产出必须引用同轮持久化 context 中的 factIds，并保留 dataAsOf。无效草稿和修订失败只作为审计，不算完成轮次。
+- blocked 时逐字展示具体条件。轮次或预算耗尽表示目标尚未达成，不报告研究完成；provider 没有报告用量时保留 null，不用预估填充。
+- 用户要求停止时调用 `cancel_goal_run`，保留已产出的证据。进程重启后可查历史和取消遗留状态，不自动重放模型请求。
+- 长跑只保存研究进度，不写 Advice、策略或成交。需要建议写回时仍走下述独立流程；不把宿主 job 完成等同于研究目标达成。
+
 ## 写回确认
 
 - 一次分析请求不是持久化授权：不得因为用户说了「分析一下」就自行落库。

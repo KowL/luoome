@@ -5,6 +5,9 @@ import { createRegistry, toolRegistry } from './registry.js';
 
 // 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
+  'start_goal_run',
+  'get_goal_run',
+  'cancel_goal_run',
   'get_analysis_context',
   'list_analysis_jobs',
   'get_analysis_job',
@@ -15,6 +18,8 @@ const EXPECTED_TOOL_NAMES = [
   'requeue_analysis_job',
   'record_advice',
   'record_analysis_result',
+  'record_triangle_review',
+  'run_triangle_analysis',
   'complete_analysis_job',
 
   'get_investment_workspace',
@@ -397,8 +402,10 @@ describe('toolRegistry', () => {
       'refresh_holdings_quotes',
       'run_strategy',
       'run_strategy_research_comparison',
+      'run_triangle_analysis',
       'search_research_documents_hybrid',
       'send_notification',
+      'start_goal_run',
       'sync_daily_bars',
       'sync_financial_facts',
       'sync_quotes',
@@ -424,6 +431,7 @@ describe('toolRegistry', () => {
       'archive_watchlist',
       'archive_watchlist_member',
       'cancel_analysis_job',
+      'cancel_goal_run',
       'cancel_strategy_evaluation_session',
       'close_holding',
       'commit_watchlist_import',

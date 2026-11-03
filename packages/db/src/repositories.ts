@@ -7,6 +7,7 @@ import { createDrizzleWatchDeliveryRepository } from './personal/watch-delivery-
 import { DrizzleAnalysisRepository } from './repository/drizzle/analysis.js';
 import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
 import { DrizzleFinancialIngestSnapshotRepository } from './repository/drizzle/financial-ingest-snapshot.js';
+import { DrizzleGoalRunRepository } from './repository/drizzle/goal-run.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -65,13 +66,15 @@ import type { Schema } from './schema/index.js';
 /** 在给定 drizzle 句柄上装配全部 repository（不负责连接、pragma 与迁移）。 */
 export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): RepositoryRegistry => {
   const researchIndex = new DrizzleResearchIndexRepository(db);
+  const analysis = new DrizzleAnalysisRepository(db);
   const repos: RepositoryRegistry = {
     pluginAuthority: new DrizzlePluginAuthorityRepository(db),
     pluginSetting: new DrizzlePluginSettingRepository(db),
     financialIngestSnapshot: new DrizzleFinancialIngestSnapshotRepository(db),
     reportPublication: new DrizzleReportPublicationRepository(db),
     riskVeto: new DrizzleRiskVetoRepository(db),
-    analysis: new DrizzleAnalysisRepository(db),
+    analysis,
+    goalRun: new DrizzleGoalRunRepository(db, analysis),
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     personal: new DrizzlePersonalRepository(db),
     watchDelivery: createDrizzleWatchDeliveryRepository(db),

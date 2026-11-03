@@ -1,6 +1,7 @@
 import { SIDE_EFFECTS } from '@luoome/core';
 import { z } from 'zod';
 import type { Tool } from './define-tool.js';
+import { cancelGoalRunTool, getGoalRunTool, startGoalRunTool } from './goal-runs.js';
 import {
   cancelAnalysisJobTool,
   claimAnalysisJobsTool,
@@ -14,6 +15,8 @@ import {
   recordAnalysisResultTool,
   requeueAnalysisJobTool,
 } from './queue/index.js';
+import { recordTriangleReviewTool } from './queue/record-triangle-review.js';
+import { runTriangleAnalysisTool } from './queue/run-triangle-analysis.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
@@ -366,6 +369,9 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 
 /** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
+  startGoalRunTool,
+  getGoalRunTool,
+  cancelGoalRunTool,
   getAnalysisContextTool,
   listAnalysisJobsTool,
   getAnalysisJobTool,
@@ -374,6 +380,8 @@ export const toolRegistry: Registry = createRegistry([
   failAnalysisJobTool,
   cancelAnalysisJobTool,
   requeueAnalysisJobTool,
+  recordTriangleReviewTool,
+  runTriangleAnalysisTool,
   recordAdviceTool,
   recordAnalysisResultTool,
   completeAnalysisJobTool,

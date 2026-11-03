@@ -23,6 +23,7 @@ export * from './entity/dragon-tiger.js';
 export * from './entity/external-fact.js';
 export * from './entity/financial-ingest-snapshot.js';
 export * from './entity/fundamental.js';
+export * from './entity/goal-run.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';

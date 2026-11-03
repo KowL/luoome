@@ -83,6 +83,9 @@ export const RiskVetoOverrideSchema = z
     vetoId: z.string().min(1),
     /** **只能是 `user`**：不接受 agent 自述的身份。 */
     overriddenBy: z.enum(['user']),
+    /** Legacy overrides lack these fields; new human overrides always record both. */
+    actorUserId: z.string().min(1).optional(),
+    evidenceContextId: z.string().min(1).optional(),
     reason: z.string().trim().min(1).max(1000),
     /**
      * **新**证据：不能只是复述被否决时的 factIds。

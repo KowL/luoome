@@ -218,12 +218,11 @@ const context = {
   expiresAt: new Date(raw.expiresAt),
   createdAt: new Date(raw.createdAt),
 };
+const recovery = await createProductionHost({ home, owner, env: { LUOOME_MARKET_PROVIDER: 'real' } });
 try {
-  const host = await createProductionHost({ home, owner, env: { LUOOME_MARKET_PROVIDER: 'real' } });
-  host.dispose();
-  throw new Error('owner account unexpectedly existed');
-} catch (error) {
-  if (!/owner account does not exist/.test(String(error))) throw error;
+  if (recovery.mode !== 'recovery-only') throw new Error('empty facts database must start in recovery-only mode');
+} finally {
+  recovery.dispose();
 }
 const db = new DatabaseSync(home + '/luoome.db');
 db.prepare('INSERT INTO accounts (id, name, kind, currency, initial_capital, cash_balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(owner.accountId, 'MVP Node24', 'real', 'CNY', 1000000, 1000000, Date.now());

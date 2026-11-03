@@ -195,6 +195,61 @@ afterEach(() => {
 });
 
 describe('analysis operation policies', () => {
+  it('persists a four-role veto through its production policy and blocks Advice from a new context', async () => {
+    const { ctx, service, principal, adviceContext } = await setup();
+    const snapshot = await adviceContext();
+    const roles = {
+      bull: {
+        role: 'bull',
+        factIds: [FACT_ID],
+        thesis: '支持',
+        falsifiable: [1, 2, 3].map((n) => ({ statement: `条件${n}`, factIds: [FACT_ID] })),
+      },
+      bear: { role: 'bear', factIds: [FACT_ID], thesis: '反证', refutations: [] },
+      judge: {
+        role: 'judge',
+        status: 'concluded',
+        disagreementPoints: [],
+        agreements: [],
+        blockers: [],
+      },
+      riskOfficer: {
+        role: 'risk-officer',
+        status: 'veto',
+        reason: '风险事实不足以支持建议',
+        factIds: [FACT_ID],
+      },
+    };
+    const review = await prepare(service, principal, 'record_triangle_review', {
+      contextId: snapshot.id,
+      roles,
+    });
+    const reviewToken = data<Prepared>(review.result).confirmationToken;
+    if (!reviewToken) throw new Error('missing review token');
+    const recorded = data<{ state: string; result: { ok: boolean; data: { blocked: boolean } } }>(
+      await service.confirm(principal, { id: review.id, token: reviewToken }, signal()),
+    );
+    expect(recorded.state).toBe('succeeded');
+    expect(recorded.result.data.blocked).toBe(true);
+    expect(
+      await ctx.repos.riskVeto.findActiveBySubject({
+        accountId: principal.accountId,
+        subject: snapshot.subject,
+      }),
+    ).not.toBeNull();
+    const fresh = await adviceContext();
+    const advice = await prepare(service, principal, 'record_advice', adviceInput(fresh.id));
+    const adviceToken = data<Prepared>(advice.result).confirmationToken;
+    if (!adviceToken) throw new Error('missing advice token');
+    const rejected = data<{ result: { ok: boolean } }>(
+      await service.confirm(principal, { id: advice.id, token: adviceToken }, signal()),
+    );
+    expect(rejected.result.ok).toBe(false);
+    expect(await ctx.repos.advice.findById(`analysis:${fresh.id}`)).toBeNull();
+    expect(
+      (await ctx.repos.analysis.findContext(principal.accountId, fresh.id))?.recordedResult,
+    ).toBeUndefined();
+  });
   it('prepares an advice operation with frozen account/context/result and trusted provenance', async () => {
     const { service, principal, adviceContext } = await setup();
     const context = await adviceContext();
@@ -617,6 +672,7 @@ describe('analysis operation policies', () => {
     expect(policies.map((policy) => policy.tool.name)).toEqual([
       'record_advice',
       'record_analysis_result',
+      'record_triangle_review',
     ]);
     for (const policy of policies) {
       expect(policy.scheduled).toBe(false);

@@ -7,7 +7,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import type { Context } from '@deepseek-ai/cordis';
+import { Context } from '@deepseek-ai/cordis';
+import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local';
+import LlmRuntime, {
+  type GenerateOptions,
+  LlmAdapter,
+  type StreamChunk,
+} from '@deepseek-ai/dsh-llm';
 import {
   type Account,
   type Advice,
@@ -16,7 +22,12 @@ import {
   type Strategy,
 } from '@luoome/core';
 import { createNodeDrizzleRepos } from '@luoome/db/node';
-import { privateResearchTools, toolRegistry } from '@luoome/tools';
+import {
+  enqueueAnalysisJobTool,
+  privateResearchTools,
+  startGoalRunTool,
+  toolRegistry,
+} from '@luoome/tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MARKET_TIMEOUT_MS } from './market-surface.js';
 import {
@@ -373,6 +384,57 @@ describe('dsh-luoome production composition root', () => {
     reopened.close();
   });
 
+  it('keeps ordinary background models opt-in and freezes an explicitly selected route', () => {
+    expect(resolveProductionConfig({ owner: OWNER, env: {} }).analysisModel).toBeUndefined();
+    const config = resolveProductionConfig({
+      owner: OWNER,
+      env: {
+        LUOOME_ANALYSIS_PROVIDER: ' scripted ',
+        LUOOME_ANALYSIS_MODEL: ' model-a ',
+      },
+    });
+    expect(config.analysisModel).toEqual({ provider: 'scripted', model: 'model-a' });
+    expect(Object.isFrozen(config.analysisModel)).toBe(true);
+    expect(
+      resolveProductionConfig({
+        owner: OWNER,
+        analysisModel: { provider: 'explicit', model: 'model-b' },
+        env: config.env,
+      }).analysisModel,
+    ).toEqual({ provider: 'explicit', model: 'model-b' });
+  });
+  it.each(['LUOOME_ANALYSIS_PROVIDER', 'LUOOME_ANALYSIS_MODEL'])(
+    'rejects a partial background model route before creating the home (%s)',
+    async (key) => {
+      const home = join(tempRoot(), 'invalid-model');
+      const fake = createFakeHostContext();
+      await expect(
+        apply(fake.ctx, productionInput(home, { env: { [key]: 'configured-half' } })),
+      ).rejects.toThrow();
+      expect(existsSync(home)).toBe(false);
+    },
+  );
+  it.each(['llm', 'jobs'])(
+    'rejects an enabled background model without its host service (%s)',
+    async (missing) => {
+      const services: Record<string, unknown> = { llm: {}, jobs: {} };
+      delete services[missing];
+      const fake = createFakeHostContext({ services });
+      const home = join(tempRoot(), 'missing-model-service');
+      await expect(
+        apply(
+          fake.ctx,
+          productionInput(home, {
+            env: {
+              LUOOME_ANALYSIS_PROVIDER: 'scripted',
+              LUOOME_ANALYSIS_MODEL: 'analysis',
+            },
+          }),
+        ),
+      ).rejects.toThrow('background analysis requires host llm and jobs services');
+      expect(existsSync(home)).toBe(false);
+    },
+  );
   it('freezes parsed config and rejects privilege-expanding options', async () => {
     const home = tempRoot();
     const config = resolveProductionConfig({
@@ -540,6 +602,7 @@ describe('dsh-luoome production composition root', () => {
     for (const writeTool of [
       'record_advice',
       'record_analysis_result',
+      'record_triangle_review',
       'save_decision_review',
       'create_strategy',
       'create_strategy_version',
@@ -607,6 +670,10 @@ describe('dsh-luoome production write policies', () => {
       'set_automation_tier',
       'record_advice',
       'record_analysis_result',
+      'record_triangle_review',
+      'run_triangle_analysis',
+      'start_goal_run',
+      'cancel_goal_run',
       'create_strategy',
       'create_strategy_version',
       'validate_strategy_version',
@@ -721,10 +788,261 @@ describe('dsh-luoome production write policies', () => {
   });
 });
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+class AnalysisFixtureAdapter extends LlmAdapter {
+  readonly entered = deferred();
+  readonly aborted = deferred();
+  readonly cleanup = deferred();
+  readonly requests: GenerateOptions[] = [];
+  released = false;
+  constructor(
+    private readonly mode: 'goal' | 'valid' | 'cancel' | 'cancel-write' | 'invalid' | 'veto',
+  ) {
+    super();
+  }
+  async *stream(request: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(request);
+    this.entered.resolve();
+    try {
+      if (this.mode === 'cancel') {
+        await new Promise<void>((resolve) =>
+          request.signal?.addEventListener(
+            'abort',
+            () => {
+              this.aborted.resolve();
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+        await this.cleanup.promise;
+        request.signal?.throwIfAborted();
+      }
+      const output =
+        this.mode === 'goal'
+          ? {
+              summary: '基于已保存行情的研究结论',
+              factIds: ['quote:600519.SH'],
+              needsRevision: false,
+              status: 'completed',
+              blockedCondition: null,
+            }
+          : this.mode === 'invalid'
+            ? { ok: true }
+            : {
+                result: {
+                  decision: 'watch',
+                  confidence: 50,
+                  horizon: 'short',
+                  reasoning: {
+                    premise: '等待确认',
+                    evidence: ['已保存行情'],
+                    counterEvidence: ['量能不足'],
+                  },
+                  risks: ['数据有限'],
+                },
+                evidence: { evidenceFactIds: ['quote:600519.SH'] },
+              };
+      yield { type: 'text-delta', index: 0, text: JSON.stringify(output) };
+      yield { type: 'usage', usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    } finally {
+      this.released = true;
+    }
+  }
+}
+
 describe('dsh-luoome production apply entry', () => {
+  it.each(['goal', 'valid', 'cancel', 'cancel-write', 'invalid', 'veto'] as const)(
+    'executes a real configured background analysis through apply (%s)',
+    async (mode) => {
+      const real = new Context();
+      const llm = real.plugin(LlmRuntime);
+      const jobs = real.plugin(LocalJobRegistry, {});
+      await Promise.all([llm.await(), jobs.await()]);
+      const adapter = new AnalysisFixtureAdapter(mode);
+      const unregister = real.llm.registerAdapter(['scripted'], adapter);
+      const home = tempRoot();
+      const beforeWrite = deferred();
+      const releaseWrite = deferred();
+      const cancelling = mode === 'cancel' || mode === 'cancel-write';
+      let host: Awaited<ReturnType<typeof apply>> | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(T1);
+        await seedOwnerAccount(home);
+        const fake = createFakeHostContext({ services: { jobs: real.jobs, llm: real.llm } });
+        host = await apply(
+          fake.ctx,
+          productionInput(home, {
+            env: {
+              LUOOME_MARKET_PROVIDER: 'real',
+              LUOOME_ANALYSIS_PROVIDER: 'scripted',
+              LUOOME_ANALYSIS_MODEL: 'analysis',
+            },
+          }),
+        );
+        const ctx = host.context;
+        expect(ctx.analysisRunner).toBeTypeOf('function');
+        expect(fake.registered).not.toContain('enqueue_analysis_job');
+        expect(fake.registered).not.toContain('start_analysis_job');
+        await ctx.repos.quote.save({
+          stockId: '600519.SH',
+          ts: T1,
+          observedAt: T1,
+          fetchedAt: T1,
+          timestampSource: 'upstream',
+          open: money(100),
+          high: money(101),
+          low: money(99),
+          close: money(100),
+          volume: 1000,
+          source: 'fixture',
+        });
+        if (mode === 'goal') {
+          expect(ctx.goalRoundRunner).toBeTypeOf('function');
+          expect(fake.registered).toContain('luoome_confirmed_operation');
+          expect(fake.registered).toContain('get_goal_run');
+          const started = await startGoalRunTool.execute(
+            {
+              confirmed: true,
+              request: {
+                goal: '核对行情研究条件',
+                kind: 'advice_stock',
+                subject: { kind: 'stock', id: '600519.SH' },
+                provider: 'scripted',
+                model: 'goal-analysis',
+                maxRounds: 1,
+                estimatedTokens: 100,
+                estimatedDurationMs: 1000,
+              },
+            },
+            ctx,
+          );
+          if (!started.ok || !started.data.hostJobId) throw new Error('goal was not accepted');
+          const nativeGoal = real.jobs
+            .list()
+            .find((job) => String(job.id) === started.data.hostJobId);
+          if (!nativeGoal) throw new Error('goal host ID does not match a real job');
+          expect((await real.jobs.wait(nativeGoal.id, 5000)).status).toBe('completed');
+          const goal = await ctx.repos.goalRun.find(OWNER.accountId, started.data.goalId);
+          expect(goal?.status).toBe('completed');
+          expect(goal?.attempts).toHaveLength(1);
+          expect(goal?.attempts[0]?.output?.factIds).toEqual(['quote:600519.SH']);
+          expect(
+            await ctx.repos.analysis.findContext(
+              OWNER.accountId,
+              goal?.attempts[0]?.contextId ?? '',
+            ),
+          ).not.toBeNull();
+          expect(await ctx.repos.advice.query({ includeExpired: true })).toEqual([]);
+          expect(adapter.requests[0]?.tools).toEqual([]);
+          return;
+        }
+        if (mode === 'cancel-write') {
+          const original = ctx.repos.externalMarketFact.findByIds.bind(
+            ctx.repos.externalMarketFact,
+          );
+          vi.spyOn(ctx.repos.externalMarketFact, 'findByIds').mockImplementation(async (ids) => {
+            beforeWrite.resolve();
+            await releaseWrite.promise;
+            return original(ids);
+          });
+        }
+        if (mode === 'veto')
+          await ctx.repos.riskVeto.save({
+            id: 'active-veto',
+            accountId: OWNER.accountId,
+            subject: { kind: 'stock', id: '600519.SH' },
+            contextId: 'old-context',
+            reason: '已有风险仍未排除',
+            factIds: ['quote:600519.SH'],
+            createdAt: T0,
+          });
+        const queued = await enqueueAnalysisJobTool.execute(
+          { kind: 'advice_stock', subject: { kind: 'stock', id: '600519.SH' }, source: 'workflow' },
+          ctx,
+        );
+        if (!queued.ok) throw new Error('enqueue failed');
+        await adapter.entered.promise;
+        const id = real.jobs.list()[0]?.id;
+        if (!id) throw new Error('missing real host job');
+        if (mode === 'cancel') {
+          expect(real.jobs.kill(id)).toBe('requested');
+          await adapter.aborted.promise;
+          expect(real.jobs.get(id).status).toBe('stopping');
+          expect(adapter.released).toBe(false);
+          adapter.cleanup.resolve();
+        }
+        if (mode === 'cancel-write') {
+          await beforeWrite.promise;
+          expect(real.jobs.kill(id)).toBe('requested');
+          releaseWrite.resolve();
+        }
+        const terminal = await real.jobs.wait(id, 5000);
+        expect(terminal.status).toBe(
+          mode === 'valid' ? 'completed' : cancelling ? 'killed' : 'failed',
+        );
+        expect(adapter.released).toBe(true);
+        expect(adapter.requests).toHaveLength(1);
+        expect(adapter.requests[0]?.provider).toBe('scripted');
+        expect(adapter.requests[0]?.model).toBe('analysis');
+        expect(adapter.requests[0]?.tools).toEqual([]);
+        const saved = await ctx.repos.analysis.findJob(OWNER.accountId, queued.data.jobId);
+        expect(saved?.status).toBe(
+          mode === 'valid' ? 'completed' : cancelling ? 'cancelled' : 'dead_letter',
+        );
+        if (mode === 'valid') {
+          expect(saved?.result).not.toBeNull();
+          const advice = await ctx.repos.advice.findById(saved?.result?.resultRef ?? '');
+          expect(advice?.provenance).toMatchObject({
+            generatorKind: 'dsh-worker',
+            model: 'scripted:analysis',
+            contextId: saved?.contextId,
+            jobId: queued.data.jobId,
+          });
+          const snapshot = await ctx.repos.analysis.findContext(
+            OWNER.accountId,
+            saved?.contextId ?? '',
+          );
+          expect(snapshot?.recordedResult?.ref).toBe(advice?.id);
+        } else {
+          expect(saved?.result).toBeNull();
+          expect(await ctx.repos.advice.query({ includeExpired: true })).toEqual([]);
+          if (cancelling) expect(saved?.cancelledOutput).toContain('assembled');
+          else expect(saved?.error).not.toBeNull();
+          expect(
+            (await ctx.repos.analysis.findContext(OWNER.accountId, saved?.contextId ?? ''))
+              ?.recordedResult,
+          ).toBeUndefined();
+          if (mode === 'veto') expect(saved?.error?.message).toContain('已有风险仍未排除');
+        }
+      } finally {
+        releaseWrite.resolve();
+        adapter.cleanup.resolve();
+        for (const job of real.jobs.list()) {
+          real.jobs.kill(job.id);
+          await real.jobs.wait(job.id, 5000);
+        }
+        host?.dispose();
+        unregister();
+        await jobs.dispose();
+        await llm.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
   it('declares the schedule dependency required by batch assembly', async () => {
     const { inject } = await import('./plugin.js');
     expect(inject).toContain('schedule');
+    expect(inject).toContain('jobs');
+    expect(inject).toContain('llm');
   });
   it('requires the schedule service for automation opt-in before opening a database', async () => {
     const parent = tempRoot();
@@ -752,6 +1070,7 @@ describe('dsh-luoome production apply entry', () => {
     const fake = createFakeHostContext();
     const host = await apply(fake.ctx, productionInput(home));
     try {
+      expect(host.context.analysisRunner).toBeUndefined();
       const readNames = new Set(host.read.descriptors().map((tool) => tool.name));
       const marketNames = new Set(host.market.descriptors().map((tool) => tool.name));
       expect(marketNames.size).toBeGreaterThan(0);
@@ -783,6 +1102,7 @@ describe('dsh-luoome production apply entry', () => {
       for (const writeTool of [
         'record_advice',
         'record_analysis_result',
+        'record_triangle_review',
         'save_decision_review',
         'create_strategy',
         'create_strategy_version',
@@ -818,6 +1138,7 @@ describe('dsh-luoome production apply entry', () => {
     for (const writeTool of [
       'record_advice',
       'record_analysis_result',
+      'record_triangle_review',
       'save_decision_review',
       'create_strategy',
       'create_strategy_version',
@@ -879,7 +1200,11 @@ interface FakeHostContext {
 }
 
 const createFakeHostContext = (
-  options: { readonly omit?: readonly string[]; readonly failNames?: ReadonlySet<string> } = {},
+  options: {
+    readonly omit?: readonly string[];
+    readonly failNames?: ReadonlySet<string>;
+    readonly services?: Record<string, unknown>;
+  } = {},
 ): FakeHostContext => {
   const omit = options.omit ?? [];
   const registered: string[] = [];
@@ -898,7 +1223,7 @@ const createFakeHostContext = (
       return () => {};
     },
   };
-  const services: Record<string, unknown> = {};
+  const services: Record<string, unknown> = { ...options.services };
   if (!omit.includes('connection')) services.connection = {};
   if (!omit.includes('webServer'))
     services.webServer = {
@@ -926,6 +1251,7 @@ const createFakeHostContext = (
     },
     tools,
     agents: services.agents,
+    jobs: services.jobs,
     schedule: { catalog: async () => [] },
     webServer: services.webServer,
     connection: services.connection,

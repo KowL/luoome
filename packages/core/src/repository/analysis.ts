@@ -100,7 +100,8 @@ export interface AnalysisRepository {
     error: NonNullable<AnalysisJob['error']>;
     notBefore: Date;
   }): Promise<AnalysisJob | null>;
-  cancel(accountId: string, id: string, now: Date): Promise<AnalysisJob | null>;
+  /** Cancels active work; a producer may fill an empty cancelledOutput once after cancellation without reopening the job. */
+  cancel(accountId: string, id: string, now: Date, output?: string): Promise<AnalysisJob | null>;
   requeue(accountId: string, id: string, now: Date): Promise<AnalysisJob | null>;
   saveContext(context: AnalysisContext): Promise<void>;
   findContext(accountId: string, id: string): Promise<AnalysisContext | null>;

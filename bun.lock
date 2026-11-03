@@ -48,7 +48,7 @@
     },
     "packages/dsh-luoome": {
       "name": "dsh-luoome",
-      "version": "0.2.3",
+      "version": "0.2.5",
       "dependencies": {
         "@deepseek-ai/cordis": "4.0.5",
         "@deepseek-ai/dsh-agent": "0.2.1-rc.2",

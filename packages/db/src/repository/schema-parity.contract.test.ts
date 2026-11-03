@@ -276,6 +276,7 @@ const UNCOVERED_TABLES: Readonly<Record<string, string>> = {
   investmentConsensus: 'json-blob:payload',
   investmentResearch: 'json-blob:payload',
   investmentTracking: 'json-blob:payload',
+  goalRuns: 'json-blob:record',
   pluginAutomationGrants: 'json-blob:record',
   pluginOperations: 'json-blob:record',
   researchChunkEmbeddings: 'json-blob:vector',

@@ -54,14 +54,19 @@ const TRUSTED: TrustedAnalysisProvenance = {
   model: 'contract:scripted-model',
 };
 
-/** §7.1 / §7.2-8：analysis 面恰好三工具，其中两条是写回 policy，一条是只读事实装配。 */
+/** §7.1 / §7.2-8：analysis 面恰好四工具，其中三条是写回 policy，一条是只读事实装配。 */
 const ANALYSIS_SURFACE_TOOL_NAMES = [
   'get_analysis_context',
   'record_advice',
   'record_analysis_result',
+  'record_triangle_review',
 ] as const;
-/** 分析面的写回入口：只有这两条 policy，读面不持有它们。 */
-const ANALYSIS_WRITEBACK_TOOL_NAMES = ['record_advice', 'record_analysis_result'] as const;
+/** 分析面的写回入口：只有这三条 policy，读面不持有它们。 */
+const ANALYSIS_WRITEBACK_TOOL_NAMES = [
+  'record_advice',
+  'record_analysis_result',
+  'record_triangle_review',
+] as const;
 /**
  * operation 内核自带的宿主工具（自动化授权）。它由 `createPluginOperationService` 注册在
  * 每个面上，不是分析面写入入口，判定分析面名单时按名字排除。
@@ -89,6 +94,7 @@ const QUEUE_ANALYSIS_TOOL_NAMES = [
   'get_analysis_context',
   'record_advice',
   'record_analysis_result',
+  'record_triangle_review',
   'claim_analysis_jobs',
   'complete_analysis_job',
   'fail_analysis_job',
@@ -161,6 +167,7 @@ const SETTINGS_TOOL_NAMES = [
 const READ_FORBIDDEN_TOOL_NAMES = [
   'record_advice',
   'record_analysis_result',
+  'record_triangle_review',
   'claim_analysis_jobs',
   'complete_analysis_job',
   'fail_analysis_job',
@@ -325,12 +332,12 @@ afterEach(() => {
 });
 
 describe('DSH 交互分析面写回契约（§7.1 面隔离 + §7.2 领域链路）', () => {
-  it('A1 · analysis 面恰好三工具：两条写回 policy + 一条只读事实装配，read 面可读回但不能 record（§7.2-1/2）', async () => {
+  it('A1 · analysis 面恰好四工具：三条写回 policy + 一条只读事实装配，read 面可读回但不能 record（§7.2-1/2）', async () => {
     const { ctx, accountId, analysisService, readSurface } = await setup();
     const writebackNames = faceNames(analysisService().descriptors());
 
     assertNamesEqual(
-      '§7.1 analysis 写回入口恰好是 record_advice/record_analysis_result',
+      '§7.1 analysis 写回入口恰好是 record_advice/record_analysis_result/record_triangle_review',
       writebackNames,
       ANALYSIS_WRITEBACK_TOOL_NAMES,
     );
@@ -342,9 +349,9 @@ describe('DSH 交互分析面写回契约（§7.1 面隔离 + §7.2 领域链路
 
     const read = readSurface();
     const readNames = read.descriptors().map((descriptor) => descriptor.name);
-    // analysis 面三工具 = 两条写回 policy ∪ 读面上的 get_analysis_context。
+    // analysis 面四工具 = 三条写回 policy ∪ 读面上的 get_analysis_context。
     assertNamesEqual(
-      '§7.1 analysis 面合计恰好三工具',
+      '§7.1 analysis 面合计恰好四工具',
       [...writebackNames, ...readNames.filter((name) => name === 'get_analysis_context')],
       ANALYSIS_SURFACE_TOOL_NAMES,
     );

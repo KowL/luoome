@@ -221,6 +221,12 @@ export interface NotificationManagerLike {
 }
 
 export interface ToolContext {
+  /** Injected only by the authenticated owner HTTP route, never from tool arguments. */
+  readonly riskVetoOverrideAuthorization?: {
+    readonly userId: string;
+    readonly accountId: string;
+    readonly vetoId: string;
+  };
   readonly reportExecutionOwner?: string;
   readonly identity?: Readonly<ExecutionIdentity>;
   readonly repos: RepositoryRegistry;
@@ -335,10 +341,26 @@ export interface ToolContext {
   /**
    * 长任务执行器（REQ-M5-01）。由宿主注入，领域只认窄契约。
    *
-   * **不注入时**：`start_analysis_job` 仍能受理（只排期），但不启动后台执行——
+   * **不注入时**：`enqueue_analysis_job` 仍能受理（只排期），但不启动后台执行——
    * 调用方需自行 claim 并执行。
    */
   readonly jobRunner?: import('./job-runner.js').JobRunner;
+  readonly goalRoundRunner?: (request: {
+    readonly run: import('./entity/goal-run.js').GoalRun;
+    readonly round: number;
+    readonly revision: number;
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly feedback: string | null;
+    readonly signal: AbortSignal;
+  }) => Promise<{ readonly output: unknown; readonly tokenUsed: number | null }>;
+  readonly triangleRoleRunner?: (request: {
+    readonly provider: string;
+    readonly model: string;
+    readonly role: 'bull' | 'bear' | 'judge' | 'risk-officer';
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly priorOutputs: readonly unknown[];
+    readonly signal: AbortSignal;
+  }) => Promise<{ readonly output: unknown; readonly tokenUsed: number | null }>;
   /**
    * 分析执行器（REQ-M5-01）：由宿主注入，`tools` 不能发起模型请求。
    *
@@ -350,6 +372,8 @@ export interface ToolContext {
     readonly claimToken: string;
     readonly kind: string;
     readonly subject: { readonly kind: string; readonly id: string };
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly signal?: AbortSignal;
   }) => Promise<unknown>;
   readonly automationTierStore?: {
     resolve(): Promise<{ readonly tier: 'off' | 'notify' | 'granted'; readonly source: string }>;

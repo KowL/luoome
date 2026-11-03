@@ -1,3 +1,4 @@
+import { money } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -22,14 +23,95 @@ const request = {
   options: {},
 };
 
+const roleOutput = (task: { role: string; factIds: readonly string[] }) => {
+  const factIds = [...task.factIds];
+  if (task.role === 'bull')
+    return {
+      role: 'bull',
+      factIds,
+      thesis: '支持证据',
+      falsifiable: [1, 2, 3].map((n) => ({ statement: `条件${n}`, factIds, checkBy: null })),
+    };
+  if (task.role === 'bear') return { role: 'bear', factIds, thesis: '反证', refutations: [] };
+  if (task.role === 'judge')
+    return {
+      role: 'judge',
+      status: 'concluded',
+      disagreementPoints: [],
+      agreements: [],
+      blockers: [],
+    };
+  return { role: 'risk-officer', status: 'pass' };
+};
+
 const setup = async () => {
   const ctx = await buildTestContext({ clock: () => new Date('2026-07-29T20:00:00+08:00') });
+  await ctx.repos.quote.save({
+    stockId: '600519.SH',
+    ts: ctx.clock(),
+    observedAt: ctx.clock(),
+    fetchedAt: ctx.clock(),
+    timestampSource: 'upstream',
+    open: money(100),
+    high: money(101),
+    low: money(99),
+    close: money(100),
+    volume: 1000,
+    source: 'test',
+  });
   const context = await assembleAnalysisContext(request, ctx);
   if (context === null) throw new Error('上下文装配失败（fixture 不满足前置）');
+  await ctx.repos.analysis.saveContext(context);
   return { ctx, context };
 };
 
 describe('三角分析端到端装配', () => {
+  it('persists a validated risk-officer veto before returning blocked', async () => {
+    const { ctx, context } = await setup();
+    const result = await runTriangleAnalysis({
+      context,
+      ctx,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      now: Date.now,
+      executor: async (task, prior) => {
+        expect(Array.isArray(prior)).toBe(true);
+        expect(Object.hasOwn(prior, 'repos')).toBe(false);
+        return task.role === 'risk-officer'
+          ? { role: 'risk-officer', status: 'veto', reason: '风险过高', factIds: task.factIds }
+          : roleOutput(task);
+      },
+    });
+    expect(result.blocked).toEqual({ code: 'risk_officer_veto', message: '风险过高' });
+    expect(
+      (
+        await ctx.repos.riskVeto.findActiveBySubject({
+          accountId: context.accountId,
+          subject: context.subject,
+        })
+      )?.veto.factIds,
+    ).toEqual(context.factIds);
+  });
+
+  it('rejects fabricated evidence in nested role output', async () => {
+    const { ctx, context } = await setup();
+    const result = await runTriangleAnalysis({
+      context,
+      ctx,
+      dataHealth: 'complete',
+      marketSession: 'closed',
+      now: Date.now,
+      executor: async (task) =>
+        task.role === 'bull'
+          ? {
+              ...roleOutput(task),
+              falsifiable: [1, 2, 3].map(() => ({ statement: '条件', factIds: ['invented'] })),
+            }
+          : roleOutput(task),
+    });
+    expect(result.blocked?.code).toBe('invalid-role-output');
+    expect(result.roles).toHaveLength(1);
+  });
   it('四角色**共享同一个 contextId 与 factIds**', async () => {
     const { ctx, context } = await setup();
     const seen: { role: string; contextId: string; factIds: readonly string[] }[] = [];
@@ -40,7 +122,7 @@ describe('三角分析端到端装配', () => {
       marketSession: 'closed',
       executor: async (task) => {
         seen.push({ role: task.role, contextId: task.contextId, factIds: task.factIds });
-        return { tokenUsed: 10 };
+        return { ...roleOutput(task), tokenUsed: 10 };
       },
       now: () => Date.now(),
       ctx,
@@ -65,7 +147,7 @@ describe('三角分析端到端装配', () => {
         // 结构上就不存在 `evidence` / `thesis` 这类入口
         expect(Object.keys(task).sort()).toEqual(['contextId', 'factIds', 'role']);
         expect(Array.isArray(task.factIds)).toBe(true);
-        return {};
+        return roleOutput(task);
       },
       now: () => Date.now(),
       ctx,
@@ -81,7 +163,7 @@ describe('三角分析端到端装配', () => {
       executor: async (task) => {
         for (const forbidden of ['repos', 'tools', 'writer', 'writeScope', 'permissions'])
           expect(Object.hasOwn(task, forbidden)).toBe(false);
-        return {};
+        return roleOutput(task);
       },
       now: () => Date.now(),
       ctx,
@@ -97,7 +179,7 @@ describe('三角分析端到端装配', () => {
       marketSession: 'closed',
       // 每次推进 7ms —— 若 elapsedMs 是常量或 0，这条会红
       now: () => (clock += 7),
-      executor: async () => ({ tokenUsed: 5 }),
+      executor: async (task) => ({ ...roleOutput(task), tokenUsed: 5 }),
       ctx,
     });
     // bull→bear 之间推进了两次 now（取起始 + 结束）
@@ -112,7 +194,7 @@ describe('三角分析端到端装配', () => {
       dataHealth: 'complete',
       marketSession: 'closed',
       // 执行器不报 token —— 必须如实留空
-      executor: async () => ({ somethingElse: true }),
+      executor: async (task) => roleOutput(task),
       now: () => Date.now(),
       ctx,
     });
@@ -135,9 +217,9 @@ describe('三角分析端到端装配', () => {
       context,
       dataHealth: 'unavailable',
       marketSession: 'closed',
-      executor: async () => {
+      executor: async (task) => {
         called += 1;
-        return {};
+        return roleOutput(task);
       },
       now: () => Date.now(),
       ctx,
@@ -154,7 +236,7 @@ describe('三角分析端到端装配', () => {
       context,
       dataHealth: 'complete',
       marketSession: 'trading',
-      executor: async () => ({}),
+      executor: async (task) => roleOutput(task),
       now: () => Date.now(),
       ctx,
     });
@@ -179,9 +261,9 @@ describe('事前成本确认（需求 6）', () => {
       marketSession: 'closed',
       estimate,
       // 刻意不传 confirmed
-      executor: async () => {
+      executor: async (task) => {
         called += 1;
-        return {};
+        return roleOutput(task);
       },
       now: () => Date.now(),
       ctx,
@@ -201,9 +283,9 @@ describe('事前成本确认（需求 6）', () => {
       marketSession: 'closed',
       estimate,
       confirmed: true,
-      executor: async () => {
+      executor: async (task) => {
         called += 1;
-        return { tokenUsed: 100 };
+        return { ...roleOutput(task), tokenUsed: 100 };
       },
       now: () => Date.now(),
       ctx,
@@ -232,7 +314,7 @@ describe('预算超限 → **拒绝启动**，不降级（需求 7 修订版）'
       budget: { maxTokens: 100, maxDurationMs: 900_000 },
       executor: async (task) => {
         ran.push(task.role);
-        return { tokenUsed: 50 };
+        return { ...roleOutput(task), tokenUsed: 50 };
       },
       now: () => Date.now(),
       ctx,
@@ -258,9 +340,9 @@ describe('预算超限 → **拒绝启动**，不降级（需求 7 修订版）'
       estimate: okEstimate,
       confirmed: true,
       budget: { maxTokens: 1_000_000, maxDurationMs: 1 },
-      executor: async () => {
+      executor: async (task) => {
         called += 1;
-        return { tokenUsed: 10 };
+        return { ...roleOutput(task), tokenUsed: 10 };
       },
       now: () => Date.now(),
       ctx,
@@ -284,7 +366,7 @@ describe('预算超限 → **拒绝启动**，不降级（需求 7 修订版）'
       budget: { maxTokens: 1_000_000, maxDurationMs: 900_000 },
       executor: async (task) => {
         ran.push(task.role);
-        return { tokenUsed: 10 };
+        return { ...roleOutput(task), tokenUsed: 10 };
       },
       now: () => Date.now(),
       ctx,
@@ -306,7 +388,7 @@ describe('预算超限 → **拒绝启动**，不降级（需求 7 修订版）'
       budget: { maxTokens: 1, maxDurationMs: 900_000 },
       executor: async (task) => {
         ran.push(task.role);
-        return {};
+        return roleOutput(task);
       },
       now: () => Date.now(),
       ctx,
@@ -337,7 +419,7 @@ describe('结果首段（需求 5，PRD 无条件验收）', () => {
       context,
       dataHealth: 'complete',
       marketSession: 'closed',
-      executor: async () => ({}), // 不报用量
+      executor: async (task) => roleOutput(task), // 不报用量
       now: () => Date.now(),
       ctx,
     });

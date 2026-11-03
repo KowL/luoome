@@ -43,6 +43,13 @@ const ensureColumn = (
  */
 export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   ensureDataImportSchema(db);
+  db.run(sql`CREATE TABLE IF NOT EXISTS goal_runs (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, request_id TEXT NOT NULL,
+    status TEXT NOT NULL, version INTEGER NOT NULL, record_json TEXT NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS goal_runs_request_unique ON goal_runs(account_id, request_id)`,
+  );
   db.run(sql`CREATE TABLE IF NOT EXISTS plugin_operations (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, account_id TEXT NOT NULL,
     state TEXT NOT NULL, claim_token TEXT, updated_at INTEGER NOT NULL, record_json TEXT NOT NULL
@@ -88,8 +95,11 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
   );
   db.run(sql`CREATE TABLE IF NOT EXISTS risk_veto_overrides (
     id TEXT PRIMARY KEY, veto_id TEXT NOT NULL, overridden_by TEXT NOT NULL,
-    reason TEXT NOT NULL, new_fact_ids_json TEXT NOT NULL, overridden_at INTEGER NOT NULL
+    reason TEXT NOT NULL, new_fact_ids_json TEXT NOT NULL, overridden_at INTEGER NOT NULL,
+    actor_user_id TEXT, evidence_context_id TEXT
   )`);
+  ensureColumn(db, 'risk_veto_overrides', 'actor_user_id', 'TEXT');
+  ensureColumn(db, 'risk_veto_overrides', 'evidence_context_id', 'TEXT');
   db.run(sql`CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL,
     subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, priority INTEGER NOT NULL,

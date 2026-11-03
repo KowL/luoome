@@ -17,6 +17,7 @@ import {
   errNotFound,
 } from '../define-tool.js';
 import { AnalysisContextRequest, analysisHash, assembleAnalysisContext } from './context.js';
+import { completeAnalysisJobTool } from './record.js';
 
 const Account = z.object({ accountId: z.string().min(1).optional() });
 const JobId = Account.extend({ jobId: z.string().min(1) });
@@ -85,7 +86,7 @@ export const enqueueAnalysisJobTool = defineTool({
      * 注意：`jobRunner.start` **同步返回**，不等待执行完成 —— 受理耗时不受影响。
      * 执行体内部先 claim 拿租约，再跑分析，最后写回。
      */
-    if (ctx.jobRunner !== undefined) {
+    if (ctx.jobRunner !== undefined && !result.deduped && job.notBefore <= now) {
       ctx.jobRunner.start({
         label: `${input.kind} · ${input.subject.kind}:${input.subject.id}`,
         /**
@@ -107,75 +108,132 @@ export const enqueueAnalysisJobTool = defineTool({
          * claim 拿不到就直接中止——**宁可什么都不做，也不做没有租约的事**。
          */
         run: async (handle) => {
-          /**
-           * 先装配，再**回填** `dataAsOf`，最后 claim —— 顺序不能变：
-           * repository 的 claim 校验要求 `context.dataAsOf === job.dataAsOf`，
-           * 而受理时 job 记的是占位值 `now`。
-           */
-          const built = await assembleAnalysisContext(
-            { kind: input.kind, subject: input.subject, accountId, options: input.options },
-            ctx,
-          );
-          if (built === null) {
-            handle.append('assembled-unavailable');
-            return { output: 'assembled-unavailable' };
-          }
-          await ctx.repos.analysis.setJobDataAsOf({
-            accountId,
-            jobId: result.job.id,
-            dataAsOf: built.dataAsOf,
-            now: ctx.clock(),
-          });
-
-          const claimed = await ctx.repos.analysis.claim({
-            accountId,
-            jobId: result.job.id,
-            owner: `job-runner:${result.job.id}`,
-            token: randomUUID(),
-            now: ctx.clock(),
-            // 租约时长与 `claim_analysis_jobs` 的默认值一致（30 分钟）
-            leaseUntil: new Date(ctx.clock().getTime() + 30 * 60 * 1000),
-            context: {
+          let cancellation: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+          const abort = () => {
+            // Revoke the lease at the accepted cancel event, including while validation awaits IO.
+            cancellation = ctx.repos.analysis.cancel(accountId, result.job.id, ctx.clock()).then(
+              () => ({ ok: true as const }),
+              (error: unknown) => ({ ok: false as const, error }),
+            );
+          };
+          handle.signal?.addEventListener('abort', abort, { once: true });
+          if (handle.signal?.aborted) abort();
+          const execute = async () => {
+            const output: string[] = [];
+            const isCancelled = async () =>
+              handle.cancelled ||
+              (await ctx.repos.analysis.findJob(accountId, result.job.id))?.status === 'cancelled';
+            const append = (stage: string) => {
+              output.push(stage);
+              handle.append(`${stage}\n`);
+            };
+            const cancel = async (stage: string) => {
+              append(stage);
+              await ctx.repos.analysis.cancel(
+                accountId,
+                result.job.id,
+                ctx.clock(),
+                output.join('\n'),
+              );
+              return { output: output.join('\n') };
+            };
+            if (await isCancelled()) return cancel('cancelled-before-assembly');
+            const built = await assembleAnalysisContext(
+              { kind: input.kind, subject: input.subject, accountId, options: input.options },
+              ctx,
+            );
+            if (await isCancelled()) return cancel('cancelled-after-assembly');
+            if (built === null) throw new Error('assembled-unavailable');
+            const backfilled = await ctx.repos.analysis.setJobDataAsOf({
+              accountId,
+              jobId: result.job.id,
+              dataAsOf: built.dataAsOf,
+              now: ctx.clock(),
+            });
+            if (!backfilled) throw new Error('lease_lost_before_claim');
+            const claimedAt = ctx.clock();
+            const leaseUntil = new Date(claimedAt.getTime() + 30 * 60 * 1000);
+            const snapshot = {
               ...built,
               id: randomUUID(),
               jobId: result.job.id,
-              writeUntil: new Date(ctx.clock().getTime() + 30 * 60 * 1000),
-              expiresAt: new Date(ctx.clock().getTime() + 30 * 86400000),
-              createdAt: ctx.clock(),
-            },
-          });
-          if (claimed === null) {
-            handle.append('claim-failed');
-            return { output: 'claim-failed' };
+              writeUntil: leaseUntil,
+              expiresAt: new Date(claimedAt.getTime() + 30 * 86400000),
+              createdAt: claimedAt,
+            };
+            const claimed = await ctx.repos.analysis.claim({
+              accountId,
+              jobId: result.job.id,
+              owner: `job-runner:${result.job.id}`,
+              token: randomUUID(),
+              now: claimedAt,
+              leaseUntil,
+              context: snapshot,
+            });
+            if (claimed === null || claimed.claimToken === null) throw new Error('claim-failed');
+            append('claimed');
+            if (await isCancelled()) return cancel('cancelled-after-claim');
+            append('assembled');
+            if (await isCancelled()) return cancel('cancelled-after-assembled');
+            const fail = async (code: string, message = `Analysis execution failed: ${code}`) => {
+              append(`lastErrorKind:${code}`);
+              await ctx.repos.analysis.fail({
+                accountId,
+                jobId: result.job.id,
+                token: claimed.claimToken as string,
+                now: ctx.clock(),
+                error: { code, message, retryable: false },
+                notBefore: ctx.clock(),
+              });
+              throw new Error(`lastErrorKind:${code}`);
+            };
+            const analyzer = ctx.analysisRunner;
+            if (analyzer === undefined) {
+              append('analyzer-unavailable');
+              return fail('analyzer_unavailable');
+            }
+            let analyzed: unknown;
+            try {
+              analyzed = await analyzer({
+                jobId: result.job.id,
+                claimToken: claimed.claimToken,
+                kind: input.kind,
+                subject: input.subject,
+                context: structuredClone(snapshot),
+                ...(handle.signal === undefined ? {} : { signal: handle.signal }),
+              });
+            } catch {
+              if (await isCancelled()) return cancel('cancelled-after-analyzed');
+              return fail('analysis_execution_failed');
+            }
+            if (await isCancelled()) return cancel('cancelled-after-analyzed');
+            append('analyzed');
+            const completion = completeAnalysisJobTool.inputSchema.safeParse({
+              ...(analyzed !== null && typeof analyzed === 'object' ? analyzed : {}),
+              accountId,
+              jobId: result.job.id,
+              claimToken: claimed.claimToken,
+            });
+            if (!completion.success) return fail('invalid_analysis_result');
+            const written = await completeAnalysisJobTool.execute(completion.data, ctx);
+            if (!written.ok && (await isCancelled())) return cancel('cancelled-before-commit');
+            if (!written.ok)
+              return fail(
+                written.error.kind,
+                'message' in written.error ? written.error.message : undefined,
+              );
+            append('completed');
+            return { output: output.join('\n') };
+          };
+          try {
+            const result = await execute();
+            const settled = await cancellation;
+            if (settled?.ok === false) throw settled.error;
+            return result;
+          } finally {
+            handle.signal?.removeEventListener('abort', abort);
+            await cancellation;
           }
-          handle.append('claimed');
-
-          if (handle.cancelled) return { output: 'cancelled-after-claim' };
-
-          handle.append('assembled');
-          if (handle.cancelled) return { output: 'cancelled-after-assembled' };
-
-          // 分析本身需要模型推理，`tools` 不能发起 —— 由注入的分析器完成。
-          // 未注入时如实报「未执行分析」，不假装 done。
-          const analyzer = ctx.analysisRunner;
-          if (analyzer === undefined) {
-            handle.append('analyzer-unavailable');
-            return { output: 'analyzer-unavailable' };
-          }
-          const analyzed = await analyzer({
-            jobId: result.job.id,
-            claimToken: claimed.claimToken ?? '',
-            kind: input.kind,
-            subject: input.subject,
-          });
-          if (handle.cancelled) {
-            handle.append('cancelled-after-analyzed');
-            return { output: 'cancelled-after-analyzed' };
-          }
-          handle.append('analyzed');
-          handle.append('completed');
-          void analyzed;
-          return { output: 'completed' };
         },
       });
     }

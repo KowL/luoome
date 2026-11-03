@@ -35,11 +35,12 @@ describe('队列工具名单', () => {
 describe('交互式分析面工具名单', () => {
   const registry = new Map(toolRegistry.all().map((tool) => [tool.name, tool]));
 
-  it('三个名字都在公共 registry，且副作用符合交互写回语义', () => {
+  it('四个名字都在公共 registry，且副作用符合交互写回语义', () => {
     expect([...INTERACTIVE_ANALYSIS_TOOL_NAMES]).toEqual([
       'get_analysis_context',
       'record_advice',
       'record_analysis_result',
+      'record_triangle_review',
     ]);
     for (const name of INTERACTIVE_ANALYSIS_TOOL_NAMES) {
       expect(registry.get(name), `${name} 不在工具库存中`).toBeDefined();

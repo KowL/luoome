@@ -311,8 +311,7 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
     if (row === undefined) return null;
     const job = decodeJob(row);
     // 终结态不可回填：它们的 dataAsOf 已是事实记录，改它就是改写历史。
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'dead_letter')
-      return null;
+    if (job.status !== 'pending' && job.status !== 'claimed') return null;
     const next: AnalysisJob = { ...job, dataAsOf: input.dataAsOf, updatedAt: input.now };
     assertAnalysisJobInvariants(next);
     this.db.update(analysisJobs).set(jobRow(next)).where(eq(analysisJobs.id, job.id)).run();
@@ -455,14 +454,26 @@ export class DrizzleAnalysisRepository implements AnalysisRepository {
     );
   }
 
-  async cancel(accountId: string, id: string, now: Date): Promise<AnalysisJob | null> {
+  async cancel(
+    accountId: string,
+    id: string,
+    now: Date,
+    output?: string,
+  ): Promise<AnalysisJob | null> {
     return this.db.transaction(
       () => {
         const job = this.readJob(accountId, id);
+        if (job?.status === 'cancelled' && job.cancelledOutput === null && output !== undefined) {
+          const next = { ...job, cancelledOutput: output };
+          this.update(next);
+          return next;
+        }
         if (!job || !['pending', 'claimed'].includes(job.status)) return null;
         const next: AnalysisJob = {
           ...job,
           status: 'cancelled',
+          cancelledOutput: output ?? null,
+          result: null,
           claimToken: null,
           claimedBy: null,
           leaseUntil: null,

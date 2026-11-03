@@ -34,10 +34,14 @@ export {
   TRADE_EXPOSURE_MESSAGE,
   tradeExposureRequested,
 } from './exposure.js';
+export * from './goal-runs.js';
 export * from './personal/index.js';
 export * from './pit-layers.js';
 export * from './plugin-operations.js';
 export * from './queue/index.js';
+export * from './queue/override-risk-veto.js';
+export * from './queue/record-triangle-review.js';
+export * from './queue/run-triangle-analysis.js';
 export * from './registry.js';
 export * from './tools/account-facts.js';
 export * from './tools/account-plan-batch-state.js';

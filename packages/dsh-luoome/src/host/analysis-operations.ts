@@ -11,8 +11,12 @@ import {
   PluginOperationScopeError,
   RecordAdviceInput,
   RecordAnalysisResultInput,
+  RecordTriangleReviewInput,
+  RunTriangleAnalysisInput,
   recordAdviceTool,
   recordAnalysisResultTool,
+  recordTriangleReviewTool,
+  runTriangleAnalysisTool,
 } from '@luoome/tools';
 import { z } from 'zod';
 
@@ -152,10 +156,48 @@ export const createRecordAnalysisResultOperation = (
   },
 });
 
+export const createTriangleAnalysisOperation = (): ConfirmablePluginTool => ({
+  tool: runTriangleAnalysisTool,
+  scheduled: false,
+  hostBoundFields: ['accountId'],
+  bind(raw, principal) {
+    const input = RunTriangleAnalysisInput.parse(raw);
+    if (input.accountId !== undefined && input.accountId !== principal.accountId)
+      throw new PluginOperationScopeError('accountId');
+    return { ...input, accountId: principal.accountId };
+  },
+  // A partial provider run is not a completed analysis receipt; never replay model calls in recovery.
+  async receipt() {
+    return null;
+  },
+});
+
 /** 生产装配使用的一组精确分析写回 policy：不包含 queue 管理、settings、batch 或 trade。 */
 export const createAnalysisOperationPolicies = (
   trusted: TrustedAnalysisProvenance,
 ): readonly ConfirmablePluginTool[] => [
   createRecordAdviceOperation(trusted),
   createRecordAnalysisResultOperation(trusted),
+  {
+    tool: recordTriangleReviewTool,
+    scheduled: false,
+    hostBoundFields: ['accountId'],
+    bind(raw, principal) {
+      const parsed = z.record(z.string(), z.unknown()).parse(raw);
+      if (parsed.accountId !== undefined && parsed.accountId !== principal.accountId)
+        throw new PluginOperationScopeError('accountId');
+      return RecordTriangleReviewInput.parse({ ...parsed, accountId: principal.accountId });
+    },
+    async receipt(raw, ctx) {
+      const input = RecordTriangleReviewInput.parse(raw);
+      const accountId = input.accountId;
+      if (!accountId || input.roles.riskOfficer.status !== 'veto') return null;
+      const veto = await ctx.repos.riskVeto.findVetoById(accountId, `triangle:${input.contextId}`);
+      if (!veto || veto.reason !== input.roles.riskOfficer.reason) return null;
+      return {
+        ok: true,
+        data: { contextId: input.contextId, vetoId: veto.id, blocked: true, reason: veto.reason },
+      };
+    },
+  },
 ];

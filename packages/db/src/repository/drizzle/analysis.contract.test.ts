@@ -148,7 +148,34 @@ for (const mode of ['memory', 'drizzle'] as const) {
         ).rejects.toThrow();
         expect((await repo.findJob('account', 'job'))?.status).toBe('claimed');
         expect(await repos.advice.findById(advice.id)).toBeNull();
-        expect((await repo.recordAdvice(input)).ok).toBe(true);
+        await repos.riskVeto.save({
+          id: 'advice-veto',
+          accountId: 'account',
+          subject: pending().subject,
+          contextId: 'token',
+          reason: '风险限制',
+          factIds: ['quote'],
+          createdAt: now,
+        });
+        expect(await repo.recordAdvice(input)).toEqual({ ok: false, reason: 'risk_officer_veto' });
+        expect(await repos.advice.findById(advice.id)).toBeNull();
+        expect((await repo.findContext('account', 'token'))?.recordedResult).toBeUndefined();
+        expect((await repo.findJob('account', 'job'))?.status).toBe('claimed');
+        await repos.riskVeto.saveOverride({
+          id: 'advice-override',
+          vetoId: 'advice-veto',
+          overriddenBy: 'user',
+          reason: 'contract positive control',
+          newFactIds: ['new-fact'],
+          overriddenAt: now,
+        });
+        const writing = repo.recordAdvice(input);
+        const cancellation = await repo.cancel('account', 'job', now);
+        const written = await writing;
+        // A committed cancellation must never be overwritten by an in-flight writer.
+        if (cancellation !== null)
+          expect((await repo.findJob('account', 'job'))?.status).toBe(cancellation.status);
+        expect(written.ok).toBe(true);
         expect((await repo.findJob('account', 'job'))?.status).toBe('completed');
         expect(await repos.advice.findById(advice.id)).toEqual(advice);
         expect(await repo.recordAdvice({ ...input, now: new Date(now.getTime() + 5000) })).toEqual({
@@ -175,6 +202,54 @@ for (const mode of ['memory', 'drizzle'] as const) {
         handle,
       };
     };
+    it('retains producer output once after an earlier domain cancellation', async () => {
+      const { repo, close } = setup();
+      try {
+        await repo.enqueue(pending());
+        const cancelled = await repo.cancel('account', 'job', now);
+        if (!cancelled) throw new Error('expected active job cancellation');
+        expect(cancelled.cancelledOutput).toBeNull();
+        const finalized = await repo.cancel(
+          'account',
+          'job',
+          new Date(now.getTime() + 1000),
+          'assembled\nlate cancellation',
+        );
+        expect(finalized).toEqual({
+          ...cancelled,
+          cancelledOutput: 'assembled\nlate cancellation',
+        });
+        expect(
+          await repo.cancel('account', 'job', new Date(now.getTime() + 2000), 'overwrite'),
+        ).toBeNull();
+        expect(await repo.findJob('account', 'job')).toEqual(finalized);
+      } finally {
+        close();
+      }
+    });
+    it('does not change dataAsOf or timestamps after cancellation', async () => {
+      const { repo, close } = setup();
+      try {
+        await repo.enqueue(pending());
+        await repo.cancel('account', 'job', now, 'claimed\nassembled\ncancelled');
+        const before = await repo.findJob('account', 'job');
+        expect(before?.status).toBe('cancelled');
+        expect(before?.result).toBeNull();
+        expect(before?.cancelledOutput).toBe('claimed\nassembled\ncancelled');
+        expect(
+          await repo.setJobDataAsOf({
+            accountId: 'account',
+            jobId: 'job',
+            dataAsOf: new Date(now.getTime() - 1000),
+            now: new Date(now.getTime() + 1000),
+          }),
+        ).toBeNull();
+        expect(await repo.findJob('account', 'job')).toEqual(before);
+      } finally {
+        close();
+      }
+    });
+
     it('atomically publishes non-Advice research with fencing and idempotency', async () => {
       const handle = mode === 'drizzle' ? createDrizzleRepos(':memory:') : null;
       const repos = handle?.repos ?? createInMemoryRepos();
@@ -239,6 +314,36 @@ for (const mode of ['memory', 'drizzle'] as const) {
           }),
         ).toBeNull();
         expect((await repo.findJob('account', job.id))?.status).toBe('claimed');
+        await repos.riskVeto.save({
+          id: 'publication-veto',
+          accountId: 'account',
+          subject: snapshot.subject,
+          contextId: snapshot.id,
+          reason: '风险限制',
+          factIds: ['quote'],
+          createdAt: now,
+        });
+        expect(await repo.recordPublication(input)).toEqual({
+          ok: false,
+          reason: 'risk_officer_veto',
+        });
+        expect((await repo.findContext('account', snapshot.id))?.recordedResult).toBeUndefined();
+        expect((await repo.findJob('account', job.id))?.status).toBe('claimed');
+        expect(
+          await repos.investmentWorkspace.findResearch({
+            ownerUserId: 'user',
+            accountId: 'account',
+            id: research.id,
+          }),
+        ).toBeNull();
+        await repos.riskVeto.saveOverride({
+          id: 'publication-override',
+          vetoId: 'publication-veto',
+          overriddenBy: 'user',
+          reason: 'contract positive control',
+          newFactIds: ['new-fact'],
+          overriddenAt: now,
+        });
         expect(await repo.recordPublication(input)).toEqual({
           ok: true,
           resultRef: research.id,

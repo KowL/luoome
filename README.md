@@ -100,6 +100,8 @@ homebrew/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`） |
+| `LUOOME_ANALYSIS_PROVIDER` | 关 | 与 `LUOOME_ANALYSIS_MODEL` 成对配置，显式启用 DSH 普通后台分析模型；provider 须已由 DSH 注册，不增加模型可见队列生产者 |
+| `LUOOME_ANALYSIS_MODEL` | 关 | 普通后台分析所用 DSH 模型 ID；路由启动时冻结，凭据由 DSH 管理；详见[插件说明](packages/dsh-luoome/README.md#可选后台分析模型) |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
 | `LUOOME_FUNDAMENTAL_PROVIDER` | 可选 | 默认不装配；仅显式设置 `mock` 才注入固定 PIT fixture，gate 永远为 `not-ready`，不代表真实数据可用 |
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |

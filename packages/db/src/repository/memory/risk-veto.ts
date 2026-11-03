@@ -6,13 +6,20 @@ export class InMemoryRiskVetoRepository implements RiskVetoRepository {
   private readonly overrides = new Map<string, RiskVetoOverride>();
 
   async save(veto: RiskVeto): Promise<void> {
-    this.vetoes.set(veto.id, veto);
+    this.vetoes.set(veto.id, structuredClone(veto));
   }
 
   async findActiveBySubject(input: {
     readonly accountId: string;
     readonly subject: AnalysisSubject;
   }): Promise<{ readonly veto: RiskVeto; readonly override: RiskVetoOverride | null } | null> {
+    return this.findActiveBySubjectSync(input);
+  }
+
+  findActiveBySubjectSync(input: {
+    readonly accountId: string;
+    readonly subject: AnalysisSubject;
+  }): { readonly veto: RiskVeto; readonly override: RiskVetoOverride | null } | null {
     // 取**最新一条**未推翻的否决：绑定键是 accountId + subject
     const matching = [...this.vetoes.values()]
       .filter(
@@ -23,13 +30,19 @@ export class InMemoryRiskVetoRepository implements RiskVetoRepository {
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     for (const veto of matching) {
-      const override = this.overrides.get(veto.id) ?? null;
-      if (override === null) return { veto, override: null };
+      const override = [...this.overrides.values()].find((item) => item.vetoId === veto.id) ?? null;
+      if (override === null) return structuredClone({ veto, override: null });
     }
     return null;
   }
 
+  async findVetoById(accountId: string, vetoId: string): Promise<RiskVeto | null> {
+    const veto = this.vetoes.get(vetoId);
+    if (veto === undefined || veto.accountId !== accountId) return null;
+    return structuredClone(veto);
+  }
+
   async saveOverride(override: RiskVetoOverride): Promise<void> {
-    this.overrides.set(override.vetoId, override);
+    this.overrides.set(override.id, structuredClone(override));
   }
 }

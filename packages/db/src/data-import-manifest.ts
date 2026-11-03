@@ -89,6 +89,7 @@ const union = [
   'watchlist_facts_report_keys',
 ] as const;
 const preserve = [
+  'goal_runs',
   'plugin_operations',
   'plugin_automation_grants',
   // REQ-M4-06：档位是**用户配置**，导入导出后应保留（与 grant 同类）。

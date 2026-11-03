@@ -1,4 +1,5 @@
 import { InMemoryAnalysisRepository } from './analysis.js';
+import { InMemoryGoalRunRepository } from './goal-run.js';
 
 export * from './analysis.js';
 // 仅合约替身：内存导入状态不与既有 typed repos 共享，不得进入 createInMemoryRepos/生产装配。
@@ -313,19 +314,21 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     alertPlan,
     watchRuleState,
   });
+  const analysis = new InMemoryAnalysisRepository(
+    advice,
+    investmentWorkspace,
+    strategy,
+    strategyAutonomyAction,
+    riskVeto,
+  );
   return {
     riskVeto,
+    goalRun: new InMemoryGoalRunRepository(analysis),
     pluginAuthority: new InMemoryPluginAuthorityRepository(),
     pluginSetting: new InMemoryPluginSettingRepository(),
     financialIngestSnapshot: new InMemoryFinancialIngestSnapshotRepository(),
     reportPublication: new InMemoryReportPublicationRepository(),
-    analysis: new InMemoryAnalysisRepository(
-      advice,
-      investmentWorkspace,
-      strategy,
-      strategyAutonomyAction,
-      riskVeto,
-    ),
+    analysis,
     investmentWorkspace,
     personal,
     watchDelivery,

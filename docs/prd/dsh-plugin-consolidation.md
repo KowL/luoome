@@ -1186,12 +1186,27 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 **验收标准**：`veto` 后主 agent 无法继续写建议；升级路径可审计；每次否决有 reason + evidence。
 
+当前实现：`run_triangle_analysis` 经精确 Operation policy 执行四个独立、无工具权限的宿主 LLM 请求，要求显式选择各角色模型、提供成本估计并确认。四角色共享同一持久化事实快照，按顺序传递已校验输出；引用快照外证据会阻断后续执行。`record_triangle_review` 只处理已有结构化输出，不计为模型执行。
+
+否决按账户与标的持续阻断 Advice 和 publication 两条仓储提交路径；换 context 或新的角色 pass 均不清除。人工升级走 owner 认证、同源且仅启用 write 时挂载的 `POST /api/luoome/risk-veto/override`，模型工具表不暴露解除入口。审计保存实际操作者、原因、否决后新快照 ID 与去重后的新证据 ID；自报人工身份、虚构证据和空证据均被拦截。新增审计列启动迁移保持幂等。
+
+验证使用真实 `LocalJobRegistry`、真实 `LlmRuntime` 与脚本 provider，检查实际领域记录；这不等于已验证外部付费 provider 或服务器部署。普通后台分析在显式配置 `analysisModel` 或成对的 `LUOOME_ANALYSIS_PROVIDER` / `LUOOME_ANALYSIS_MODEL` 后，由真实插件 `apply()` 装配执行器，使用已领取任务的同一快照，经既有租约工具提交结果。模型无工具权限，路由由部署冻结；取消信号传递到模型流并等待资源收尾。未配置时保持关闭，半配置或缺失宿主服务在打开数据库前失败。生产装配测试覆盖成功、模型期间取消、模型返回后但提交前取消、无效输出及已有 veto，直接核对 SQLite 中的任务、Advice 与上下文回执；提交前的宿主取消事件立即撤销领域租约，异步校验结束后的迟到提交仍受租约屏障阻止。队列生产者仍为 workflow-only，不扩大 M5-01 模型可见面。
+
+
 ---
 
 #### REQ-M5-05 目标式长跑
 
 **验收标准**：registry 无 `trade`；目标轮次内 tool 调用集不含交易类写；每轮 ≥1 个 `factId` 进产出；
 每轮修订次数 ≤1；`blocked` 必带具体条件字符串。
+
+当前实现：`start_goal_run` 是明确意图触发的 external/write Operation，账户与请求身份由宿主冻结，不提供定时运行策略；`get_goal_run` 只读进度，`cancel_goal_run` 原子取消并保留已有输出。目标模型不加载领域 registry，每次实际请求的工具集合为空；模型发来工具调用会直接失败，交易和 Advice 均不写回。
+
+目标配置冻结为最多 10 轮、每轮最多一次修订、最长 15 分钟，并要求模型路由、预估成本和确认。每轮重新生成并持久化事实快照，修订复用同一快照；core 和双仓储再次核验账户、标的与 factIds 归属。只有有效且无需继续修订的输出计为该轮成果，无效尝试保存为审计。轮次耗尽仍未形成完成结论时明确 blocked；用量超限和时限均阻止后续执行，不自动删减事实或冒充完成。
+
+`goal_runs` 保存请求 hash、宿主任务 ID、CAS 版本、各次尝试、实际用量或 null、具体阻塞条件及终态。取消在异步证据读取后仍通过 CAS 阻断迟到写入；宿主等待模型资源收尾。进程重启保留审计，遗留目标可查询和取消，不自动重放模型调用。Operation 回执恢复只认可匹配请求和真实宿主受理 ID，不以 pending 记录冒充执行。
+
+本地验证覆盖真实 LlmRuntime/JobRegistry、完整生产 apply 与临时 Node SQLite、双仓储合同及重启迁移；外部付费 provider 和服务器部署不在本次验证中。M5-01 原分析队列生产者仍为 workflow-only，已接受的 ≥3 调用缺口不变。
 
 ---
 
@@ -1336,13 +1351,13 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 | 项 | 实测值（2026-11-01，随 `check:docs` 对账） | 取证方式 |
 |---|---|---|
-| registry 工具数 | **234**（M5-02 第一批后实测；`check:docs` 对账项） | `bun run tools:list --json` |
+| registry 工具数 | **239**（M5-05 目标受理、查询、取消接线后实测；`check:docs` 对账项） | `bun run tools:list --json` |
 | 工具源文件数 | 226（部分文件含多个 tool 定义） | `ls packages/tools/src/tools/*.ts \| wc -l` |
 | read allowlist | **72** | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
 | market allowlist | 12 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
 | 插件暴露面（可达） | **124** | `bun run tools:list --json` 的 `tag: exposed` 计数 |
 | 不可达工具 | **110** | 同上（`tag: unreachable-by-design`） |
-| 五类归类 | 只读面 **100** / 可写面 **100** / queue-worker **12** / 私人研究 **22** / 废弃 **0** = **234** | `tools:list` 的 `exposure` 字段；废弃为 0 是 H1 口径（不摘除任何工具） |
+| 五类归类 | 只读面 **101** / 可写面 **103** / queue-worker **13** / 私人研究 **22** / 废弃 **0** = **239** | `tools:list` 的 `exposure` 字段；废弃为 0 是 H1 口径（不摘除任何工具） |
 | 全仓测试文件 | 346 | `find packages apps -name '*.test.ts' -o -name '*.test.js'` |
 | M2 删除的测试文件 | **17**（cli 6 / tui 1 / dsh-bridge 3 / mcp 3 / deploy 4）；`apps/web` 的 29 个属 M4-01 | `git diff --name-status <M2起点>..HEAD \| grep '^D.*\.test\.'` |
 | 遗留五面 LOC | ~50,562（占 18%） | 工程审计实测 |

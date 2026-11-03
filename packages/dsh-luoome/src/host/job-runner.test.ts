@@ -19,27 +19,36 @@ const fakeContext = () => {
   const started: { id: string; label: string }[] = [];
   const killed: string[] = [];
   const statuses = new Map<string, string>();
+  const hooks = new Map<string, { cancel(): void }>();
   let seq = 0;
   const ctx = {
     jobs: {
+      attachController: () => () => undefined,
       start(spec: {
         label: string;
-        run: (job: { id: string; append: (t: string) => void }) => unknown;
+        run: (job: { id: string; append: (t: string) => void }) => {
+          cancel(): void;
+          done: Promise<{ status: string }>;
+        };
       }) {
         const id = `luoome-analysis-${String(++seq)}`;
         started.push({ id, label: spec.label });
         statuses.set(id, 'running');
         // 真实契约：`run` 同步返回 hooks，工作在其内部异步跑
-        spec.run({
+        hooks.set(
           id,
-          append: () => undefined,
-        });
+          spec.run({
+            id,
+            append: () => undefined,
+          }),
+        );
         return id;
       },
       kill(id: string) {
         killed.push(id);
         if (statuses.get(id) !== 'running') return 'already-finished';
         statuses.set(id, 'killed');
+        hooks.get(id)?.cancel();
         return 'requested';
       },
       get(id: string) {
