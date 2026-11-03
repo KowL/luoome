@@ -1206,7 +1206,7 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 `goal_runs` 保存请求 hash、宿主任务 ID、CAS 版本、各次尝试、实际用量或 null、具体阻塞条件及终态。取消在异步证据读取后仍通过 CAS 阻断迟到写入；宿主等待模型资源收尾。进程重启保留审计，遗留目标可查询和取消，不自动重放模型调用。Operation 回执恢复只认可匹配请求和真实宿主受理 ID，不以 pending 记录冒充执行。
 
-本地验证覆盖真实 LlmRuntime/JobRegistry、完整生产 apply 与临时 Node SQLite、双仓储合同及重启迁移。收尾阶段补充 Node 24 tarball 独立安装、原生后台 controller 与生产者卸载收尾验收；2026-11-03 已将 0.2.5 部署到既有生产实例，profile 200、匿名 401、外站 Origin 403、WebSocket 101 与目标查询契约均通过。真实计费 provider 联调仍待明确模型路由，未自动启用普通后台模型。M5-01 原分析队列生产者仍为 workflow-only，已接受的 ≥3 调用缺口不变。
+本地验证覆盖真实 LlmRuntime/JobRegistry、完整生产 apply 与临时 Node SQLite、双仓储合同及重启迁移。收尾阶段补充 Node 24 tarball 独立安装、原生后台 controller 与生产者卸载收尾验收；2026-11-03 已将 0.2.5 部署到既有生产实例，profile 200、匿名 401、外站 Origin 403、WebSocket 101 与目标查询契约均通过。真实计费联调已使用线上 `minimax-cn / MiniMax-M3.1-Flash` 完成一次有界 M5 单轮回调：SDK 报告实耗 636 tokens，合成事实的目标状态 completed 可在临时 SQLite 重开后读回，Advice/Trade 写入为 0，未使用个人投资数据或修改生产配置。普通后台模型的启动路由仍未配置。M5-01 原分析队列生产者仍为 workflow-only，已接受的 ≥3 调用缺口不变。
 
 ---
 
