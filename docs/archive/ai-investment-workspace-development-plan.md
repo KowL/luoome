@@ -2,7 +2,7 @@
 
 > **已归档（2026-10-23）**：本文描述的是已下线的多租户托管形态，当前形态是单机版（见 docs/ddd/luoome-dsh-transformation-detailed-design.md 的 D9–D12）。仅作历史留存，不是当前行为说明。
 
-> 日期：2026-10-16。需求依据：[产品 PRD](../prd/ai-investment-workspace.md)。
+> 日期：2026-10-16。需求依据：产品 PRD。
 > 用户已授权拆分任务、创建开发线程并开始实现；全部线程使用 `gpt-6.1-sol`、`max`。
 > 任务在同一本地工作目录执行，沿用当前分支；不 commit、push、创建 PR、切换分支或覆盖其它线程改动。
 > 本计划由分派线程维护；开发线程将交接结果写入各自的 `output/ai-investment-workspace/` 文件。

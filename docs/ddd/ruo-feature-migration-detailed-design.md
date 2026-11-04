@@ -25,7 +25,7 @@
 | 提醒窗口（§6.2） | 规则级 `daysBefore` 默认 + 事件级 `remindBeforeDays` 覆盖；去重键含 `eventId` |
 | DataProvenance 值对象（§6.3，决策 13） | 公共 schema；Phase 1 只嵌入 `StockEvent` + 行情状态读模型 |
 | 运行审计（§6.4） | 新表 `WorkflowRun`；`WatchRun` 保留，查询层适配统一读模型 |
-| 调度（决策 11） | cron + `luoome workflow run`，workflow 幂等 |
+| 调度（决策 11） | DSH 定时任务（原 cron + `luoome workflow run` 已随 CLI 删除），workflow 幂等 |
 
 ## 3. 领域模型与 Schema
 
@@ -243,6 +243,9 @@ interface StockEventProvider {
 
 ### 4.4 调度（cron 建议，文档化在 docs/ 与 README）
 
+> 现状（2026-11-04）：独立 CLI 已删除，下列 `luoome workflow run` crontab 命令不再可执行；
+> 调度归 DSH 定时任务（到点唤起会话、agent 调用插件注册的工具），workflow 名与幂等语义不变。
+
 ```cron
 # 事件同步：每交易日 08:30
 30 8 * * 1-5  luoome workflow run sync-stock-events
@@ -356,6 +359,11 @@ list_workflow_runs({ workflowName?, status?, since?, limit?,              // rea
 read 全暴露；note/event CRUD 归 write（opt-in）；`sync_stock_events` 归 external（opt-in）。无新增 exposure 组。
 
 ## 8. Web 交互要点
+
+> 现状（2026-11-04）：单机 Web 已删除。研究页签与 thesis 编辑已由[研究主题与 Obsidian Vault 详细设计](./research-vault-detailed-design.md)
+> 的 `ResearchTopic`/`ResearchDocument` 及插件研究面板替代（`update_research_note` 等 research-note tool 已删除）；
+> 事件组件与数据健康组件改由 `dsh-luoome` 面板与 DSH 侧 tool 调用消费，数据仍来自
+> `list_stock_events` / `get_market_data_status` / `list_workflow_runs`。以下保留当时的 Web 交互设计。
 
 - **研究页签**（Phase 1A 主交付）：顶部摘要 + 时间线 + 侧栏（PRD §6.1 页面结构）。时间线由服务端聚合接口 `GET /stocks/:id/research-timeline` 输出（内部组合 list_research_notes / list_stock_events / list_watch_triggers / get_advice / list_trades，按时间倒序、支持类型筛选），不作为 MCP tool。
 - **thesis 编辑**：前端走 `update_research_note`，展示「将保存为新版本，历史版本保留在时间线」。

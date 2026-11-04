@@ -108,9 +108,13 @@ invalid_payload | unsupported_market | unsupported_capability | unsupported_adju
 - core 新增通用 `SourceIdSchema`（小写字母/数字/连字符的非空标识），上述请求与结果的 source 字段改为该 schema。manager 必须把**实际成功的 `handle.source`**写入结果 provenance 和缓存 key，不能回写 query.source；这项兼容扩宽在第一刀完成，第二源接入时无需再改 core/tool；
 - 非交易日等 manager 本地早退没有成功 handle：为保持现有字段形状，结果 source 使用显式约束或配置顺序第一项，同时以 `warnings=['non-trading-day']` 明确该结果来自本地日历而非远端；早退不写 registry 观测。“实际成功 source”约束只适用于发生外部读取并返回数据的路径；
 - 实例共享：各 factory（含 market）的 deps 增加可选 `sources?: { eastmoney?: EastmoneySource }`；未注入时保持现状自行构造（存量测试与单域装配不受影响）；
-- web（`apps/web/src/server.ts:299` 与热更新路径 `:916`）、cli（`packages/cli/src/context.ts`）、mcp（`packages/mcp/src/context.ts`）三个组装根先建一次 `EastmoneySource` 再分发；tui 只装配 market，可选择走共享或不走。
+- 唯一组装根（`packages/adapters/src/local-adapters.ts` 的 `createLocalAdapters`，由 `packages/dsh-luoome/src/host/production.ts` 装配）先建一次 `EastmoneySource` 再分发给 market 与五个非行情 factory；原 web / cli / mcp / tui 四个组装根已随对应 surface 删除。
 
 ### 4.7 Web 热更新的实例生命周期
+
+> 现状（2026-11-04）：单机 Web 已删除，本节的热更新路径现由 `dsh-luoome` 插件承载
+> （`packages/dsh-luoome/src/host/production.ts` 的 `saveMarketSettings` 重建 market 与
+> sentiment manager）。下文的 `/api/settings/market` 与 Web server 相关描述按当时设计阅读。
 
 - composition root 除 `ToolContext` 外持有进程级 `SourceSet`，不把供应商实例泄漏进 core；
 - `/api/settings/market` 只改变来源顺序时，candidate market registry 复用现有 `SourceSet`，只重建 market manager 以及直接依赖 market 的 sentiment manager，避免无关 manager 缓存失效，也不会产生第二个 Eastmoney 实例；
@@ -284,7 +288,7 @@ export class SourceRegistry<M extends CapabilityMap> {
 - `packages/core/src/context.ts`、`index.ts`（五个 `*ManagerLike.status()` 与共享 source 类型导出）
 - `packages/core/src/entity/{limit-up-ladder,dragon-tiger,northbound-flow,news}.ts`（通用 `SourceIdSchema`、可选 query source、结果 source 兼容扩宽）
 - `packages/tools/src/tools/get-market-data-status.ts`（五域真实观测聚合 + freshness 状态机）
-- `apps/web/src/server.ts`、`packages/cli/src/context.ts`、`packages/mcp/src/context.ts`（共享实例接线）
+- `packages/adapters/src/local-adapters.ts`、`packages/dsh-luoome/src/host/production.ts`（共享实例接线；原 web / cli / mcp 组装根已随对应 surface 删除）
 - `.env.example`、ARCHITECTURE §4.7/§4.8、CONTEXT.md（已登记）、fuyao 设计文档 §11
 
 删除：

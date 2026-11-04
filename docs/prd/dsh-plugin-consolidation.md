@@ -4,7 +4,7 @@
 > **实施期修订到 v3.11**（2026-10-31，REQ-M3-09 实现期发现，按需求原文按字面不可执行的两处：
 > REQ-M3-09 第 5 条的提醒要素适用范围、REQ-M3-08 的「字段级 diff 为空」验收——逐处标注在对应段落里）。
 > 日期：2026-10-30
-> 上位文档：[luoome 的 DSH 改造详细设计](../ddd/luoome-dsh-transformation-detailed-design.md)、[dsh-luoome 纯插件详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)
+> 上位文档：[luoome 的 DSH 改造详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)、[dsh-luoome 纯插件详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)
 > 决策依据：`output/dsh-brainstorm/06-decisions.md`（P1–P10）
 > 关联：[CONTEXT.md](../../CONTEXT.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)、[SECURITY.md](../SECURITY.md)、[AGENTS.md](../../AGENTS.md)
 > 交付对象：把「已完成 DSH 迁移的 luoome」收敛为「一个可交付的 DSH 投资能力」，五个里程碑共 **54 条需求**。

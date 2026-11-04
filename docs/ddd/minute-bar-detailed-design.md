@@ -98,6 +98,10 @@ and DailyBar tools remain independent and continue to work.
 
 ## 6. Web behavior and acceptance
 
+> **现状（2026-11-04 修订）**：本节描述的单机 Web 分时/分钟 K 视图随 `apps/web` 删除，插件面板没有对应图表页；
+> `get_stock_minute_bars` 目前只经 tool registry 供 DSH 侧读取。以下为当时的视图行为与验收记录，
+> schema、provider 能力、缺口与保留语义（§1～§5）仍是当前实现。
+
 Market View always exposes `分时` and `分钟K` tabs plus a 1/5/15/30/60 switch. The chart consumes
 MinuteBar OHLCV directly (volume is not differenced). The status strip displays live/partial,
 stale/local fallback, unavailable, gaps, raw adjustment, source, and freshness. Empty or partial

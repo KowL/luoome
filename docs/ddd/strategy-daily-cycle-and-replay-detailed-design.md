@@ -3,10 +3,10 @@
 > 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+5 仍按开发计划持续验收
 > 日期：2026-08-20
 > 2026-09-02 修订：evaluation scope 的 persist run 允许绑定未发布 valid 版本（operational 拒绝
-> 语义不变），作为自治验证与 Web 实验页独立验证的前置；见
+> 语义不变），作为自治验证与当时 Web 实验页独立验证的前置；见
 > [Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md) §8。
-> 关联计划：[Strategy 日运行与评估可靠性开发计划](../strategy-reliability-development-plan.md)
-> 影响范围：core、db、tools、workflows、Web/CLI/MCP 读取面
+> 关联计划：[Strategy 日运行与评估可靠性开发计划](../archive/strategy-reliability-development-plan.md)
+> 影响范围：core、db、tools、workflows、插件读取面
 
 实现复核（2026-08-20）：R0～R4、R6～R7 的 Tool/Workflow/存储契约已接入当前代码；真实 Sina 全市场
 5,207 只数据准备、首个 schedule 审计和 2 个交易日 PIT replay 已验证。历史区间缺少对应
@@ -54,7 +54,7 @@ R5 发布后的 T+5 事实继续按运维手册观察，但不再设置 T+20 等
 5. scheduled run 消费可追溯的数据 checkpoint，减少执行期外部 IO；正式运行完成后只按 active
    StrategyWatchlistSubscription 投影到 Watchlist。
 6. 历史区间可断点重放，并使用 point-in-time universe。
-7. LLM 不可用时仍交付确定性事实，且不伪造 AI narrative。
+7. 洞察恒为 facts-only（内置 AI 已下线，不依赖模型），不伪造 AI narrative。
 
 ### 2.2 非目标
 
@@ -101,7 +101,7 @@ workflows ──► tools ──► core
   schedule/UTC 交易日是否已有 `mode=scheduled` 正式运行；重复 cron claim 只释放 lease 并保留
   `schedule-day-duplicate` skipped 审计，不重复拉取外部数据或写入 StrategyRun；可靠性汇总不把
   skipped claim 计入生产周期样本；
-- Web/API 不复制 current-run、acceptance 或观察聚合规则。
+- 插件面板不复制 current-run、acceptance 或观察聚合规则。
 
 `StrategyRunExecution` 内部保留两个真实 adapter implementation：
 
@@ -127,7 +127,7 @@ sequenceDiagram
   participant Tools as Atomic tools
   participant Repo as Repositories
   participant Market as Market adapters
-  participant LLM as LLM adapter
+  participant Facts as get_strategy_insight_facts（facts-only）
 
   Tick->>Dispatch: 每分钟唤醒
   Dispatch->>Tools: claim_due_strategy_schedules
@@ -146,8 +146,8 @@ sequenceDiagram
   alt published
     Cycle->>Tools: create_strategy_observation_candidates
     Cycle->>Tools: complete_strategy_observations
-    Cycle->>Tools: generate_strategy_insight
-    Tools->>LLM: narrative（一次修复重试）
+    Cycle->>Tools: get_strategy_insight_facts
+    Tools->>Facts: 事实包（内置 AI 已下线，恒 facts-only）
     opt recommendationPolicy.enabled
       Cycle->>Tools: recommendation tools
     end
@@ -292,7 +292,7 @@ function decideStrategyRunPublication(input: {
 - `published` 必须 reasons 为空；其它状态至少一个 reason；
 - publication 不等于 Advice/notify，也不改变 run 的执行事实。
 
-`requestedBy` 只记录运行来源，不参与 publication 决策。Web 的运行确认不能替代结果生成后的数据质量门；手工、scheduled 与 replay 使用一致的 acceptance policy。
+`requestedBy` 只记录运行来源，不参与 publication 决策。插件的运行确认不能替代结果生成后的数据质量门；手工、scheduled 与 replay 使用一致的 acceptance policy。
 
 `StrategyRunSchema` 新增：
 
@@ -753,7 +753,7 @@ facts-only fallback 属于 workflow 组合结果，而不是伪造 `StrategyInsi
 | run failed/lease-lost | 不创建观察/推荐；可输出运行诊断 facts |
 | run withheld/non-publishing | 保存审计；不创建生产观察/推荐/通知；周期 partial |
 | observation completion partial | 继续 insight；周期 partial |
-| LLM 失败 | 调 facts tool，返回 facts-only；周期 partial |
+| 洞察事实不可用 | 返回 facts-only 审计（内置 AI 已下线）；周期 partial |
 | recommendation 失败 | 不回滚 run/observations；周期 partial |
 | notification 失败 | 保存 delivery failure；周期 partial |
 
@@ -772,7 +772,7 @@ workflow 必须检查 `result.data.run.status/publication`，不能只检查 Too
 - outputSummary：phase statuses、runId、publication/acceptance、计数、lease 续期、checkpoint 覆盖、
   观察补全、`000300.SH:qfq:daily:v1` benchmark 同步状态/来源/bar 数/失败原因、insight mode、
   advice/notification count；
-- providerStatuses：market checkpoint、LLM、notification；
+- providerStatuses：market checkpoint、insight（facts-only）、notification；
 - 不写完整 DSL、逐股结果或 prompt。
 
 ### 9.4 `complete-strategy-observations`
@@ -782,7 +782,7 @@ run 终态后先显式同步 `000300.SH` qfq 日线，再补“所有已到期�
 同样记录 benchmark 数据集版本和逐项同步结果。同步失败不填替代值，个股观察仍可保存但周期保持 partial。
 
 同一 daily cycle 在 run 提交成功且 publication 为 `published` 后，通过
-`ctx.tools.sync_strategy_watchlist_subscriptions` 这个不进入公共 registry/MCP 的内部编排 tool 处理
+`ctx.tools.sync_strategy_watchlist_subscriptions` 这个不进入公共 registry 的内部编排 tool 处理
 Strategy→Watchlist 订阅。该步骤使用 run 的
 `dataHealth` 决定 complete/partial：partial 只标 stale，failed/withheld/evaluation/非持久化运行不调用
 source commit；无 active 订阅时跳过。它不创建 Advice、Notification、AlertPlan 或 Trade。
@@ -1123,11 +1123,11 @@ Workflow 输出示例：
 观察事实聚合统一采用 `stock-day-horizon` 描述性样本单位：以 `stockId + baselineAt` 的交易日 +
 `horizon` 作为 sample key，同一 key 只保留一个代表性 observation，complete 优先于 pending，
 同等级按 observation id 稳定选择；baselineAt 缺失的 unavailable 事实不臆测交易日，保留为独立缺失行。
-聚合返回的 `observationIds` 是实际参与统计的代表事实，Tool/Web/AI facts 共用该列表和去重口径，
+聚合返回的 `observationIds` 是实际参与统计的代表事实，Tool/面板/AI facts 共用该列表和去重口径，
 并同时保留 total、complete、uniqueStocks、missingRate、分位数、benchmark/excess、MFE/MAE 与 observedAsOf。
 
 如果项目当前没有 metrics backend，先以结构化 WorkflowRun/logger 输出，并通过
-`get_strategy_reliability_summary`（Web：`/api/strategy/reliability-summary`）按真实审计记录聚合，避免为本功能引入新的监控基础设施。
+`get_strategy_reliability_summary`（原 Web 端点 `/api/strategy/reliability-summary` 已随 `apps/web` 删除，现经工具供面板读取）按真实审计记录聚合，避免为本功能引入新的监控基础设施。
 
 汇总同时按 `scheduleId + dataAsOf` 交易日去重计数；同一 schedule 同一交易日出现重复正式运行时，
 门禁返回 `schedule-day-duplicate`，不能把重复运行计入通过条件。
@@ -1146,6 +1146,10 @@ checkpoint 同时汇总实际 provider 与 fallback 次数；observation 汇总�
 聚合，日志最多采样 20 个 stockId；不输出 API key、完整 adapter URL 或私人投资数据。
 
 ## 16. Web / CLI / MCP
+
+> 现状（2026-11-04）：单机 Web、独立 CLI/TUI 与 stdio MCP 入口均已删除。§16.1 的 Web 页面清单、
+> §16.2 的 CLI 命令与 §16.3 的 MCP 暴露清单均属当时设计；当前由 `dsh-luoome` 策略面板与研究面板
+> 经 tool registry 承载，fencing/acceptance/publication 契约不变。
 
 ### 16.1 Web
 
@@ -1234,7 +1238,7 @@ memory 与 Drizzle 共用：
 5. published 完整周期；
 6. withheld/non-publishing 不运行下游副作用；
 7. observation partial + insight success；
-8. LLM failure + facts-only；
+8. 洞察只出 facts-only（内置 AI 已下线）；
 9. recommendation/notification failure 不回滚 run；
 10. crash 后 resume 不重复日期。
 
@@ -1247,6 +1251,8 @@ nextAttemptAt 退避且不阻塞其它股票。
 
 ### 17.5 Web / browser
 
+> 现状（2026-11-04）：浏览器验收改走插件面板（`bun run test:panels-browser`）；下列验收项针对已删除的单机 Web，语义仍适用。
+
 - never-run、running、published partial、withheld over published、failed over published；
 - facts-only banner；
 - operational/evaluation 切换；
@@ -1258,7 +1264,7 @@ nextAttemptAt 退避且不阻塞其它股票。
 - 首选 daily-bars provider 70% connection reset；
 - fallback 延迟和限流；
 - SQLite commit 前失租；
-- LLM 返回错误 schema/未知 fact id；
+- 洞察事实包缺 fact id 或结构异常；
 - 观察期日线缺失；
 - 进程在第 N 个交易日退出并恢复。
 
@@ -1271,8 +1277,8 @@ nextAttemptAt 退避且不阻塞其它股票。
 | 全市场增量数据准备 | P95 < 30 分钟 |
 | checkpoint 上的 5,200 股票纯求值 | P95 < 15 分钟 |
 | current workspace 查询 | P95 < 500ms（本地 SQLite） |
-| insight facts 聚合 | P95 < 3 秒，不含 LLM |
-| 单次 LLM + 修复 | 总超时沿用 adapter 配置，最多 2 次 generation |
+| insight facts 聚合 | P95 < 3 秒（纯本地聚合，无模型调用） |
+| daily cycle 单次执行 | 受 schedule lease 与请求超时约束（不含模型生成） |
 
 如果纯求值仍超过预算，先 profile indicator 重复计算和 repository 批量读取，不提前引入新的分布式
 执行框架。
@@ -1315,10 +1321,10 @@ acceptance accepted、publication published；workspace 发布明确结果并显
 fence 只提交
 一个 bundle 并推进一次 nextRunAt。
 
-### D. LLM 无效结构
+### D. 洞察结构异常
 
-首次和修复输出都引用未知 fact id。generation tool 返回 `llm_error`；daily cycle 调 facts tool，
-返回 facts-only，WorkflowRun partial；运行和观察事实不回滚。
+洞察事实包引用未知 fact id 或结构不合法。facts tool 仍返回 facts-only 事实，
+daily cycle 记为 facts-only 并通过 WorkflowRun partial 收敛；运行和观察事实不回滚。
 
 ### E. 历史评估
 

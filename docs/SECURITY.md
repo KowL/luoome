@@ -405,7 +405,7 @@ luoome 现在是**单机版**：没有多租户、没有订阅计费、没有托
 DSH 是唯一入口；**默认部署已完成纯插件切换**：DSH（Node）加载 `dsh-luoome` 插件，
 `$LUOOME_HOME/luoome.db` 是唯一事实库（Node SQLite），插件与旧 MCP 手动验收面共享同一份事实库。
 多租户托管形态（登录、订阅、支付、托管站点、用量计量）已随 D9–D12 下线，历史设计见
-[DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+[DSH 改造详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
 
 ### 两层鉴权
 

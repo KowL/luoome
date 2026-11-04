@@ -1,6 +1,6 @@
 # 同花顺 fuyao 行情适配器设计
 
-> 状态：已实施（2026-08-22；真实 FUYAO_API_KEY smoke + Web 端到端验收通过，realtime-index 维持不放行，见 §10.5）
+> 状态：已实施（2026-08-22；真实 FUYAO_API_KEY smoke + 浏览器端到端验收通过（当时的单机 Web，`apps/web` 已删除）；realtime-index 维持不放行，见 §10.5）
 > 日期：2026-08-22
 > 范围：将同花顺金融数据 API（`https://fuyao.aicubes.cn`）接入为 `MarketDataManager` 的第四个真实行情源 `fuyao`，覆盖 quote / batchQuote / fetchDailyBars / searchStocks / fetchMarketSnapshot / fetchIndexQuotes
 > 关联文档：[ARCHITECTURE.md §4.7](../ARCHITECTURE.md)、[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)、[Tushare 行情适配器设计](./tushare-market-adapter-design.md)、[Tushare 集成手册](../runbooks/tushare-integration.md)
@@ -278,11 +278,11 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
 
 - [x] 真实 `FUYAO_API_KEY` smoke（2026-08-22，临时脚本 `/tmp/fuyao-smoke.ts`，用完即删）：fetchQuote(600519)、fetchDailyBars（近 30 天 21 根 qfq 日 K）、searchStocks(茅台)、fetchMarketSnapshot（5218 条分页取尽）、fetchIndexQuotes（5 只大盘指数）全链路返回。当时将信封 `data.timestamp` 当作行情时间的判断已撤回，见下方修正；
 - [x] 缺 `FUYAO_API_KEY` 启动期快速失败（buildFuyao 单测）；错误 Key 运行时返回 `code=2003` → `permission`（smoke 验证）；
-- [x] Web 个股行情页在 fuyao 源下渲染正常（2026-08-22，`LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=fuyao` 起 Web，`#market?stockId=600519.SH&range=3m` 实测）：quote 卡片齐全（来源标注 fuyao、非交易日标识正确）、3M 日 K + 均线渲染正常；已知限制照常呈现——名称回退为代码（快照不返回 name）、换手率 `--`；
+- [x] Web 个股行情页（当时的单机 Web；`apps/web` 已随 REQ-M2-03 系列改造删除，现由 `dsh-luoome` 行情视图承载）在 fuyao 源下渲染正常（2026-08-22，`LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=fuyao` 起 Web，`#market?stockId=600519.SH&range=3m` 实测）：quote 卡片齐全（来源标注 fuyao、非交易日标识正确）、3M 日 K + 均线渲染正常；已知限制照常呈现——名称回退为代码（快照不返回 name）、换手率 `--`；
 - [x] `realtime-index` 放行决策（2026-08-22 静态评估，周六休市无法盘中观察）：**维持只绑 `delayed-index`，不放行**。依据：
   1. 休市日 `fetchIndexQuotes` 实测返回 5 只指数（价格 / 涨跌幅 / 中文名映射均正确），但 `ts` 恒等于响应组装时刻（如 2026-08-22T15:43:07Z ≈ 请求当下），证实信封 `data.timestamp` 不是行情时间，无法用于时效观测，盘中观察失去判据；
   2. 若绑 `realtime-index`，休市 / 延迟场景下指数条会显示"刚刚更新"的假象，违反「Tushare 日线型指数不得进实时接口」同源抑制原则；
-  3. `LUOOME_MARKET_SOURCES=fuyao` 单源时 `/api/market/indices` 按既有语义降级为 `{ indices: [], unsupported: true }`（fetch_index_quotes 只路由 realtime-index），行为与 tushare 单源一致，属合法降级而非缺陷。
+  3. `LUOOME_MARKET_SOURCES=fuyao` 单源时指数行情（`fetch_index_quotes` tool 与插件概览面板的指数条）按既有语义降级为 `{ indices: [], unsupported: true }`（fetch_index_quotes 只路由 realtime-index），行为与 tushare 单源一致，属合法降级而非缺陷。
   后续若要放行，需 fuyao 上游提供真实行情时间戳字段，盘中复核后单独提变更。
 - [x] 2026-09-27 休市日再次实测：A 股快照信封时间距本机抓取仅约 2 秒，逐股行无时间字段；
   个股/批量报价现统一标 `retrieval`，全市场快照不再填行情观测时间，延时指数只显示抓取时间。
@@ -311,11 +311,11 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
 - `packages/adapters/src/market/factory.ts`（`MarketSourceIdSchema` + `buildFuyao` + `fuyaoBindings` + `deps.sources.fuyao`）
 - `packages/adapters/src/market/factory.test.ts`（fuyao 路由 / 降级 / 快速失败 / 不注册能力）
 - `packages/adapters/src/index.ts`（桶导出）
-- `apps/web/src/market-settings.ts` + 测试（fuyao 源元信息与 `FUYAO_API_KEY` 配置检查）
+- `packages/dsh-luoome/src/host/market-settings.ts` + 测试（fuyao 源元信息与 `FUYAO_API_KEY` 配置检查；原 `apps/web/src/market-settings.ts` 已随单机 Web 删除）
 - `.env.example`（FUYAO 配置段 + `LUOOME_MARKET_SOURCES` 可选值注释）
 - `docs/README.md`（DDD 索引）
 
-不动：core 全部实体与端口、`MarketDataManager` / `MarketSourceRegistry`、DB schema、四个 surface 组装根、`testing/fake-market.ts`。
+不动：core 全部实体与端口、`MarketDataManager` / `MarketSourceRegistry`、DB schema、唯一插件组装根（`packages/adapters/src/local-adapters.ts`、`packages/dsh-luoome/src/host/production.ts`）、`testing/fake-market.ts`。
 
 ## 13. 验收原则
 

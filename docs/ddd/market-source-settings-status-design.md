@@ -4,6 +4,16 @@
 > 日期：2026-08-23
 > 范围：Web 设置页「行情数据源」分区——从源级开关列表升级为「源 × capability」的配置态 + 运行态视图
 > 关联文档：[ARCHITECTURE.md §4.7](../ARCHITECTURE.md)、[数据源可插拔与统一观测设计](./source-pluggability-and-observation-design.md)（§4.3 观测状态机、§6.1 registry 契约）、[ruo 迁移设计 §8](./ruo-feature-migration-detailed-design.md)（数据健康读模型）
+>
+> **现状修订（2026-11-04）**：本文的消费面（单机 Web `apps/web` 设置页）已删除，当前唯一消费面是
+> `dsh-luoome` 插件。现行「行情数据源」设置由 `packages/dsh-luoome/src/host/market-settings.ts`
+> 写回 `$LUOOME_HOME/.env` 并经 `production.ts` 热替换 manager，前端在
+> `packages/dsh-luoome/src/client/settings.js`；§4 的静态 manifest 仍是唯一真源
+> （`packages/adapters/src/market/manifest.ts`），设置面板另读 `get_market_data_status` 与
+> `get_data_diagnostics` 展示数据健康。**未随插件保留的部分**：§5 的 `/api/settings/market` 视图扩展、
+> §6 的 capability 展开表与「测试」按钮、§6.1 的 `POST /api/settings/market/:id/test` 端点——
+> `MarketDataManager.probeSource` 端口仍在（`packages/adapters/src/market/manager.ts`），
+> 但当前没有消费面调用它。§8 验收清单记录的是当时 Web 端的浏览器结果。
 
 ## 1. 目标
 
@@ -19,7 +29,7 @@
 
 ## 2. 现状与缺口
 
-现状（事实来源：`apps/web/src/market-settings.ts`、`apps/web/public/js/market-settings.js`、`packages/tools/src/tools/get-market-data-status.ts`、`packages/adapters/src/source-registry.ts`）：
+当时的现状（事实来源：`apps/web/src/market-settings.ts`、`apps/web/public/js/market-settings.js`、`packages/tools/src/tools/get-market-data-status.ts`、`packages/adapters/src/source-registry.ts`；前两个文件随 `apps/web` 删除）：
 
 - 设置页每源一行：rank、label、READY / NOT CONFIGURED badge、开关、↑↓；`MarketSettingsStore` 把 `LUOOME_MARKET_SOURCES` 原子写回 `$LUOOME_HOME/.env`，`POST /api/settings/market` 热替换 market + sentiment adapter。
 - 运行态数据其实已存在：`MarketSourceRegistry.describe()` 产出每（source × capability）的 `MarketSourceStatus`（`lastAttemptAt / lastSuccessAt / dataAsOf / lastErrorKind`），`get_market_data_status` 的 `datasets` 已实现 §4.3 freshness 状态机（fresh / stale / unavailable / unknown）。

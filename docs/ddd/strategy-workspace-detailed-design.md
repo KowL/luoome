@@ -4,9 +4,14 @@
 > 日期：2026-08-20
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
-> 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
-> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
+> 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
+> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`packages/dsh-luoome/src/host/panels.ts`（`strategies` 面板派生 `get_strategy_workspace`）、`packages/dsh-luoome/src/client/strategies.js` 与 `research*.js`（策略面板与研究工作台）
 > 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5 审计已接入；T+20 已退役，不再作为观察等待项。
+>
+> **消费面现状（2026-11-04 修订）**：单机 Web（`apps/web`）与独立 CLI/TUI、stdio MCP 已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件（策略面板 + 研究工作台）。下文 §「接口」的 `/api/**` 路由表、
+> §9/§10 的 Web 信息架构与页面设计，以及时序图中的 Web 参与者均属当时设计；
+> 规则解释、派生股票池、Diff 与运行语义仍以正文为准。
 
 ## 1. 设计结论
 
@@ -36,10 +41,10 @@ Strategy
 本设计采用以下实现决策：
 
 1. Phase A 不新增数据库表；扩展 JSON 契约并提供旧运行兼容读取；
-2. 规则解释由 evaluator 保存结构化求值快照，Web 和 Agent 不重新解析表达式猜原因；
-3. 派生规则放在 `core` 纯函数中，Tool、Web、MCP 共享同一语义；
-4. Tool 返回规范化工作台视图，Web server 不直接访问 repository；
-5. Web 保持 Hono + 原生 HTML/CSS/JS，沿用现有深色量化终端视觉和 split-pane 骨架；
+2. 规则解释由 evaluator 保存结构化求值快照，插件面板和 Agent 不重新解析表达式猜原因；
+3. 派生规则放在 `core` 纯函数中，Tool 与各消费面共享同一语义；
+4. Tool 返回规范化工作台视图，插件宿主不直接访问 repository；
+5. 插件面板沿用现有 DSH client plugin 技术栈（React），保持深色量化终端视觉和 split-pane 骨架；
 6. 数据部分可用的完成运行仍发布明确结果；failed run 不覆盖当前股票池；
 7. StrategySignal、候选和 score 都不等于 Advice，更不能触发交易；
 8. Phase B 的调度采用独立运行配置，不写入不可变 Strategy DSL；
@@ -71,8 +76,8 @@ Strategy
 | Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view、run-diff 与 StrategyWatchlistSubscription 已落地 | 组合回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
 | Repository | run、results、signals、publication/scope 查询均可落库，终态 run 可原子提交；Drizzle/memory 合约已覆盖 | 大规模 result 查询达到瓶颈后再评估索引或物化策略 |
 | Tools | `get_strategy_workspace`、`list_strategy_result_views`、run diff、scope/publication 过滤、订阅管理与 producer-run 同步门禁已统一 | 真实生产样本的完整率、benchmark 可用率仍需持续观察 |
-| Web API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff、历史评估与显式订阅/取消端点已接入 | 账户级认证仍需独立产品决策 |
-| Web UI | `#strategies` 支持 overview/pool/runs/insights/settings、publication/partial/legacy 状态、Diff、后台历史评估和 Strategy→Watchlist 显式订阅面板 | 更长历史任务与持续快照审计仍待真实数据积累 |
+| 插件 API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff、历史评估与显式订阅/取消经宿主路由与 tool policy 接入（原 Web `/api/**` 端点已随 `apps/web` 删除） | 多用户认证不在单机形态范围；账户身份由 DSH 宿主提供 |
+| 插件面板 | 策略面板与研究工作台支持目录/股票池/运行/洞察/设置、publication/partial/legacy 状态、Diff、后台历史评估和 Strategy→Watchlist 显式订阅（原 `#strategies` Web 页已随 `apps/web` 删除） | 更长历史任务与持续快照审计仍待真实数据积累 |
 | Observation | watch-trigger 与 strategy-signal 均接入 SignalObservation | 真实日线补齐、benchmark 可用率和聚合仍需生产样本 |
 
 设计不改变以下已成立的行为：
@@ -396,7 +401,7 @@ Tool，任何路径不得自动交易。Phase B 已实现标准 5 段 cron 与 I
 
 ## 7. Tool 契约
 
-所有 schema 使用 Zod 定义并派生 TypeScript、MCP 和 OpenAI schema；所有失败返回 `ToolResult`。
+所有 schema 使用 Zod 定义并派生 TypeScript 类型与运行时校验；所有失败返回 `ToolResult`。
 
 ### 7.1 保留并调整现有 Tool
 
@@ -409,7 +414,7 @@ Tool，任何路径不得自动交易。Phase B 已实现标准 5 段 cron 与 I
 | `run_strategy` | 写 V2 summary/inputSnapshot/evaluations；正式运行继续原子提交 |
 | `strategy_signals_by_stock` | 保持 signal ≠ Advice 的描述与 read 副作用 |
 
-所有面向 Web、Agent 或 MCP 的策略查询视图统一使用展示身份契约，但不修改 StrategyResult 和
+所有面向插件面板或 Agent 的策略查询视图统一使用展示身份契约，但不修改 StrategyResult 和
 StrategySignal 事实：
 
 ```ts
@@ -511,7 +516,7 @@ Strategy。输出使用 §5.5 的 `StrategyRunDiffSchema`，每个 Diff row 补�
 | 创建草案、校验、发布、调度修改 | write 或 external，沿用现有显式 opt-in |
 | AI 洞察 | advice 或受控 LLM 推理，不得调用 trade |
 
-`trade` Tool 不通过 MCP 暴露，任何 Strategy workflow 都不得包含交易步骤。
+`trade` Tool 永不通过任何暴露面（插件/面板/远端）暴露，任何 Strategy workflow 都不得包含交易步骤。
 
 ## 8. HTTP API
 
@@ -1081,7 +1086,7 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - compare 默认选择最近两次 published operational run；
 - 单边 runId、跨 Strategy 和不存在 run 返回正确 ToolError.kind；
 - get_strategy_run 不扫描整个 Strategy signal 历史；
-- schema 能派生 MCP/OpenAI 定义。
+- schema 能派生 TypeScript 类型与运行时校验。
 
 ### 16.4 Web server
 

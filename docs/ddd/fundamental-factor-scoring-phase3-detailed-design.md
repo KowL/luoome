@@ -523,7 +523,7 @@ adapter 不负责：
 | `run_fundamental_score` | `write`（`persist=false` 也不改变副作用声明） | 读取已发布 score version + PIT facts，计算并可持久化 score run | 只接受显式 asOf/scoreVersion；不产生 Advice/Trade |
 | `get_fundamental_score` | `read` | 查询已持久化 score run/result 和逐因子解释 | 只读；必须展示 score version、vintage、缺失和 dataAsOf |
 
-Tool input/output 用 Zod schema 派生，失败统一 `ToolResult`。`sync_financial_facts` 与可持久化 `run_fundamental_score` 的 write/external 能力须经过现有 Web/MCP hard gate；MCP 默认不暴露写入路径。score 工具即使被用户确认，也只写事实/研究结果，不能调用 `add_trade`、Advice 或通知。
+Tool input/output 用 Zod schema 派生，失败统一 `ToolResult`。`sync_financial_facts` 与可持久化 `run_fundamental_score` 的 write/external 能力须经过现有能力闸口（`LUOOME_EXPOSE_WRITE` / `LUOOME_EXPOSE_EXTERNAL` 与插件 operation policy）；写入路径不进 Agent read 白名单。score 工具即使被用户确认，也只写事实/研究结果，不能调用 `add_trade`、Advice 或通知。
 
 ### 9.3 Workflow
 
@@ -586,13 +586,13 @@ Financial facts 和 score results 是审计事实，默认不物理删除；撤�
 - `sync` 失败/部分覆盖的 `ToolResult`、provider health、ingestion issue 和 workflow audit；
 - score tool 的 persist=false 不写库，persist=true 只写 score run/result；不调用 Advice/Trade；
 - workflow 只经 `ctx.tools`，evaluation/non-publishing 不覆盖 operational Strategy；
-- Agent/CLI/Web 只看到注册工具契约，未通过 gate 的基本面分数展示原因而非空数组。
+- Agent/插件面板只看到注册工具契约，未通过 gate 的基本面分数展示原因而非空数组。
 
 ### 11.4 Migration and browser acceptance
 
 - 使用旧 schema 建临时 SQLite，启动 `ensureSchema` 后检查四张表、索引、旧数据和重复启动；
 - 使用真实 tool API 验证 `asOf`、vintage、missing、score version、factor explanation 和 dataAsOf；
-- UI（若 Phase 3 slice 包含 Strategy workspace 展示）必须实际启动 Web，用浏览器确认 score version、PIT cutoff、分母样本、缺失原因和“非收益概率”文案；测试不能只验证 HTML 字符串。
+- UI（若 Phase 3 slice 包含 Strategy workspace 展示）必须实际启动插件面板，用浏览器确认 score version、PIT cutoff、分母样本、缺失原因和“非收益概率”文案；测试不能只验证 HTML 字符串。
 
 测试 fixture 可以使用合成财务行，但只能证明 schema/算法/仓储 contract，不能作为真实数据门禁证据或生产完成证明。
 

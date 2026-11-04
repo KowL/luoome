@@ -13,6 +13,11 @@
 > [连板天梯详细设计](./limit-up-ladder-detailed-design.md)
 >
 > 参考实现：`/Volumes/mm/project/Vibe-Trading` 的 A 股市场报告与策略市场
+>
+> **现状修订（2026-11-04）**：①单机 Web（`apps/web`）、独立 CLI/TUI 与 stdio MCP 入口均已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件；§13 的 Web 页面/端点与 §13.4 的 CLI 契约、以及文中所有
+> Web/CLI 消费描述均属当时设计。②仓内已无模型运行时（内置 AI 下线），涉及 LLM 的可选步骤
+> （如 §12.7 LLM 精排）未落地；报告与研究的确定性事实链仍以正文为准。
 
 本文是 Vibe-Trading「A 股市场报告」与「策略市场」迁入 luoome 的实现事实来源。
 产品语义以 PRD 和 [CONTEXT.md](../../CONTEXT.md) 为准；行情底座契约以
@@ -655,7 +660,7 @@ output = {
 ```
 
 - sideEffect：`write`。
-- 供 report workflow 使用；MCP write 未 opt-in 时不可调用。
+- 供 report workflow 使用；write 未 opt-in（`LUOOME_EXPOSE_WRITE` / operation policy）时不可调用。
 - 调用 repository 前执行 schema 和全部不变量。
 - repository 返回逻辑键对应的稳定 id。
 
@@ -1025,6 +1030,9 @@ Implementation 必须是确定性纯计算，不直接访问网络、数据库�
 
 ### 12.7 LLM 精排
 
+> 现状（2026-11-04）：仓内无模型运行时，本节的可选 LLM 精排未落地；下方约束作为设计意图保留
+> （确定性过滤与排序在前、模型只做可选解释），当前链路只输出确定性结果。
+
 现有 `tactic-scan` 的 `score_signals` 最多接收 50 条，而聚合信号可能超过 50 条。迁移前必须：
 
 - 把确定性过滤和排序放在 LLM 前。
@@ -1076,6 +1084,11 @@ Profile 是可重建的研究投影，不新增策略聚合根、收益概率字
 显式 Tool，研究页面只展示事实、反证、限制和不可用原因。
 
 ## 13. Web、CLI 与实时更新
+
+> 现状（2026-11-04）：本节描述的 Web 报告页/端点与 CLI 入口已随 `apps/web` 与 `packages/cli` 删除；
+> 结构化 Report 契约与报告 workflow 不变，报告对象目前经工具（如 `list_reports` / `get_report` /
+> `render_report`）在 DSH 侧读取，插件只展示批处理结果摘要（`packages/dsh-luoome/src/client/daily-cycle.js`），
+> 没有等价的一级「报告」页。
 
 ### 13.1 报告页
 

@@ -8,12 +8,17 @@
 > [个股行情查看详细设计](./stock-market-view-detailed-design.md)、
 > [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
 > [Tushare 行情适配器设计](./tushare-market-adapter-design.md)
+>
+> **消费面现状（2026-11-04 修订）**：独立 CLI / TUI、stdio MCP 与单机 Web（`apps/web`）均已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件（面板经 `/dsh/api/luoome/*` 取数，能力经 tool registry 暴露）。
+> 下文出现的 Web 路由/页面、CLI 命令、TUI 视图与 MCP 暴露均按当时设计阅读；行情契约、存储与工具语义仍以正文为准。
 
 ## 1. 背景
 
 当前行情实现已经具备 Eastmoney、Tencent、Sina、Tushare 四个真实数据源，以及
-`MarketDataManager` 提供的缓存、限速和 fallback。CLI、TUI、MCP、Web 也统一通过
-`createMarketAdapterFromEnv` 装配，依赖方向符合 `surface → tools → adapters/core`。
+`MarketDataManager` 提供的缓存、限速和 fallback。`dsh-luoome` 插件也统一通过
+`createMarketAdapterFromEnv`（单机装配根 `packages/adapters/src/local-adapters.ts`）装配，
+依赖方向符合 `surface → tools → adapters/core`。
 
 但现有 seam 主要保证 TypeScript 形状兼容，没有完整保证行为可替换：
 
@@ -345,7 +350,7 @@ K 线与 qfq 因子接口；只注册 `daily-bars` 能力，不伪装成实时�
 ## 6. 目标架构
 
 ```text
-cli / tui / mcp / web
+dsh-luoome（唯一插件消费面）
           │
           ▼
         tools
@@ -855,6 +860,9 @@ DailyBarRepository。
 
 ## 13. Workflow 与调度
 
+> 现状（2026-11-04）：下面的 cron 命令形态已失效（独立 CLI 已删除，调度归 DSH 定时任务：到点唤起
+> 会话、由 agent 调用插件注册的批处理工具）。workflow 名与幂等/partial 语义仍有效。
+
 ### 13.1 `sync-stock-universe`
 
 单步 workflow 调 `sync_stock_universe`，由 workflow 引擎写 `WorkflowRun`。支持人工执行和
@@ -980,8 +988,8 @@ lastErrorKind
 
 ## 16. 安全与副作用
 
-- `sync_stock_universe`、`sync_daily_bars` 为 `external`，MCP 默认不暴露。
-- Web 手动同步需要同源 Origin，并受 external 能力开关控制。
+- `sync_stock_universe`、`sync_daily_bars` 为 `external`，默认不暴露，须显式开启 external 能力。
+- 手动同步入口（`dsh-luoome` 面板与宿主路由）需要同源 Origin 校验，并受 external 能力开关控制。
 - 数据同步不会触发 Advice 或 trade。
 - 数据源配置继续存 `$LUOOME_HOME/.env`，权限 `0600`，读接口不返回密钥。
 - provider 原始 payload 不整包落库，避免未知字段携带敏感信息或导致数据库膨胀。

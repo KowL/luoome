@@ -6,10 +6,14 @@
 > [策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) 扩展——eligible 版本由
 > strategy-autonomy-weekly 自动接 publish（晋级门阈值不变），人工评审只处理 blocked；
 > 见 [Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)。
-> 开发计划：[Strategy 实验、晋级与反馈闭环开发计划](../strategy-experiment-feedback-development-plan.md)
+> 开发计划：[Strategy 实验、晋级与反馈闭环开发计划](../archive/strategy-experiment-feedback-development-plan.md)
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)、[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
 > 上位设计：[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)
 > 安全约束：[SECURITY.md](../SECURITY.md)、[CONTEXT.md](../../CONTEXT.md)
+>
+> **消费面现状（2026-11-04 修订）**：单机 Web（`apps/web`）、独立 CLI/TUI 与 stdio MCP 入口均已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件（策略面板 + 研究工作台）。§10 的 Web 交互设计、§15.4/§15.5 的
+> Web server/frontend 与 §15.6 的浏览器验收均属当时设计；能力门控、实验上下文与晋级语义仍以正文为准。
 
 ## 1. 设计结论
 
@@ -103,15 +107,15 @@ flowchart LR
 
 Tool capability 是静态契约，不根据 `persist` input 动态改变。通用 `run_strategy` 既包含正式持久化能力，
 就必须声明组合能力；external-only 的样本试算继续走 `trial_strategy_version`。这会让调用方在能力层面
-无法用 `persist=false` 为 `run_strategy` 降权，但换来 Web/MCP 的静态可审计性。
+无法用 `persist=false` 为 `run_strategy` 降权，但换来消费面与 tool registry 的静态可审计性。
 
 ### 5.2 门控位置
 
 - registry 暴露 `requiredCapabilities`；
-- Web 专用 route 和通用 Tool route 都检查所有 required capabilities；
-- MCP exposure 使用相同的 every-capability 语义；
-- CLI/TUI 在执行 mutation 前沿用确认和审计；
-- advice/trade 硬隔离不变，trade 仍不进入 MCP。
+- 插件宿主路由和通用 Tool 调用都检查所有 required capabilities；
+- 原 MCP exposure 的 every-capability 语义已随入口删除，等价检查保留在 tool registry 与插件 policy；
+- 插件面板与 batch 入口在执行 mutation 前沿用确认和审计；
+- advice/trade 硬隔离不变，trade 永不进入任何暴露面。
 
 ## 6. Scoring Breakdown 领域契约
 
@@ -341,11 +345,15 @@ benchmark 覆盖至少 90%。这些是证据质量门禁，不是收益阈值。
 ### 9.3 与发布关系
 
 Phase 1 不改变 `publish_strategy_version` 的核心领域前置条件，避免旧用户 Strategy 被新证据门禁锁死。
-Web 实验路径仅在 eligible 或用户明确查看 blocked 原因后提供发布确认；服务端仍要求 version valid、归属正确
+插件实验路径（原 Web 实验路径）仅在 eligible 或用户明确查看 blocked 原因后提供发布确认；服务端仍要求 version valid、归属正确
 和 write capability。后续若要把 promotion assessment 变成强制发布契约，必须另行设计可持久化、可复核的
 assessment snapshot，不能依赖浏览器本地状态。
 
 ## 10. Web 交互设计
+
+> 现状（2026-11-04）：本节描述的实验 tab 已随单机 Web 删除；插件目前只有策略面板与研究工作台
+> （`packages/dsh-luoome/src/client/strategies.js`、`research*.js`），没有等价的 experiment tab，
+> 实验上下文、试跑与晋级相关 tool 能力保留给 DSH 侧调用。以下为当时的交互设计记录。
 
 ### 10.1 信息架构
 

@@ -46,7 +46,7 @@ Strategy 的“执行”指运行研究规则和产生结果，永远不表示�
 - 希望把个人投资方法标准化和持续复用的投资者。
 - 希望用自然语言创建策略、再检查具体规则的普通用户。
 - 需要确定性运行、版本对比和真实信号复盘的高级用户。
-- 通过 MCP 或 Agent 调用 luoome 策略能力的外部客户端。
+- 通过 DSH 技能或对话调用 luoome 策略能力的调用方。
 
 ### 2.3 核心价值
 
@@ -494,7 +494,7 @@ Agent 不可以：
 - 发布、暂停、复制、回滚和版本差异；
 - 注册数据字典与静态校验；
 - 通过显式 StrategyWatchlistSubscription，StrategyRun 原子更新统一 Watchlist；
-- Agent/Web/CLI/MCP 使用统一 Strategy tools。
+- DSH 技能、面板与对话使用统一 Strategy tools。
 
 ### Phase 3：风险与真实复盘
 

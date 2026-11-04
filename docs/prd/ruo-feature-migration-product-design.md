@@ -3,7 +3,7 @@
 > 状态：产品方案已确认；Phase 1 已实现（2026-07-25）
 > 日期：2026-07-24
 > 参考：旧项目 `ruo` 源码审计、[统一 Watchlist](./watchlist.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)
-> 产品边界：本地单用户、Web 为主入口、CLI/MCP 为高级入口；只提供研究、提醒、建议和复盘，不自动下单
+> 产品边界：本地单用户，唯一入口是 DSH 插件（host + 面板 + 技能；旧 Web/CLI/MCP 已下线）；只提供研究、提醒、建议和复盘，不自动下单
 > 研究模型更新：本文以 Stock/ResearchNote 为主体的研究档案部分已由[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)替代；公司事件、来源可信度、报告与复盘需求继续有效。文中 StockGroup/StockPool 等旧名称仅用于迁移追溯，当前代码以 Watchlist/AlertPlan 为准
 
 ## 1. 文档结论
@@ -66,7 +66,7 @@ ruo 中值得迁移的不是 Python、Celery、Redis 或大型页面，而是几
 - `Advice`、`AdviceOutcome`、建议历史和统计；
 - 行情 Eastmoney 主源、Tencent 备源的降级链；
 - `daily-advice`、`daily-review`、`risk-report` 等 workflow；
-- Web、CLI、MCP 多入口及副作用分级；
+- Web、CLI、MCP 多入口及副作用分级（Web/CLI/MCP 已下线，入口收敛为 DSH 插件，副作用分级保留）；
 - advice 与 trade 的强制隔离。
 
 当前缺口不是“再做一个信息中心”，而是：
@@ -161,9 +161,11 @@ ruo 中值得迁移的不是 Python、Celery、Redis 或大型页面，而是几
 
 ### 4.6 先做本地单用户闭环
 
-不为迁移功能引入多用户订阅、Redis Streams、Celery 集群或消息扇出表。定时任务复用 luoome CLI/workflow 运行方式和本地 SQLite。
+不为迁移功能引入多用户订阅、Redis Streams、Celery 集群或消息扇出表。定时任务由 DSH 定时任务触发 `packages/batch` 编排，事实库为本地 `$LUOOME_HOME/luoome.db`。
 
 ## 5. 整体信息架构
+
+> 形态变更（2026-11-04）：旧 Web 入口已下线，本节导航与页面为迁移期历史设计；当前由 DSH 插件面板承接。
 
 ### 5.1 Web 导航
 
@@ -388,7 +390,7 @@ Phase 1 落地范围（避免存量实体大改拖期）：
 - 动态分组：沿用当前 daily refresh 和 stale 语义；
 - 报告：显示报告使用的数据截止时间，不因生成时间较新就视为数据新。
 
-具体阈值进入技术设计和配置，不硬编码在 Web。
+具体阈值进入技术设计和配置，不硬编码在前端。
 
 #### 用户展示
 
@@ -450,7 +452,7 @@ Phase 1 建议新增或扩展：
 | `get_market_data_status` | read | 查看数据源和新鲜度 |
 | `list_workflow_runs` | read | 查看自动任务历史 |
 
-事件同步 workflow 不通过 MCP 暴露；原子同步 tool 仍按 `external` 权限控制。
+事件同步 workflow 不通过 DSH 通用工具面暴露；原子同步 tool 仍按 `external` 权限控制。
 
 ## 7. Phase 2：证据主动送达
 
@@ -734,7 +736,7 @@ SignalObservation
 - 外部事件支持幂等同步；失败时保留旧快照并显示 stale。
 - 未来事件可进入简报和 `event-date` 预警。
 - 事件和行情状态能显示数据截止时间与来源；Advice 的 `basedOn.dataAsOf` 如实展示。
-- fallback、stale、unavailable 在 Web 上有不同状态。
+- fallback、stale、unavailable 在面板/对话上有不同状态。
 - 用户可从研究档案或事件预警主动生成 Advice；后台不会自动生成。
 - 自动事件同步和报告运行记录可查询。
 

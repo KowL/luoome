@@ -2,9 +2,9 @@
 
 > 状态：Wave A～Wave E 已完成
 > 基线日期：2026-08-31
-> 对应需求：[策略工作台 PRD](./prd/strategy-v2.md)、[AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md)
-> 详细设计：[Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md)
-> 上位约束：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、[安全说明](./SECURITY.md)
+> 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)、[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
+> 详细设计：[Strategy 实验、晋级与反馈闭环详细设计](../ddd/strategy-experiment-feedback-detailed-design.md)
+> 上位约束：[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 
 ## 1. 执行结论
 
@@ -233,7 +233,7 @@ production feedback 只接受已发布版本，evaluator identity 缺失不会�
 > 现状：X5 的预检部分仍然存在 —— 版本化 policy、`eligible/skipped` reason code、输入 fact refs，
 > 以及 `get_strategy_recommendation_preflight_history` 读取面。第 4 步的 `analyze_strategy_candidate`
 > 与第 5 步的仓内 Advice 生成已随 DSH 瘦身
-> （[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）下线：
+> （[详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)）下线：
 > `StrategyRecommendationPolicy` 仍在 core，`strategy-daily-cycle` 只输出 facts-only 的
 > `preflight` 摘要，Advice 由外部消费者经分析队列 `record_advice` 写入。
 

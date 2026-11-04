@@ -128,14 +128,14 @@ flowchart LR
   Projection --> StockView["Stock Research View"]
   Events --> TopicView
   Events --> StockView
-  TopicView --> Surface["Web / CLI / MCP / Agent"]
+  TopicView --> Surface["dsh-luoome 面板 / DSH Agent"]
   StockView --> Surface
 ```
 
 ### 4.1 包依赖
 
 ```text
-web / cli / mcp ──► tools ──► core
+dsh-luoome（插件，唯一消费面）──► tools ──► core
                          │
                          ├──► db ──► core
                          └──► adapters/research-vault ──► core
@@ -148,7 +148,7 @@ workflows ──► ctx.tools.* ──► tools
 - `packages/db` 实现可重建索引的 drizzle / memory repository；
 - `packages/tools` 提供所有 surface 复用的查询和写入契约；
 - `packages/workflows` 只通过 `ctx.tools.*` 编排完整扫描、导入和索引更新；
-- Web 不直接访问文件系统、SQLite 或 Obsidian CLI。
+- 插件面板不直接访问文件系统、SQLite 或 Obsidian CLI。
 
 ### 4.2 权威来源矩阵
 
@@ -640,7 +640,7 @@ Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需�
 - `pull_research_vault_git` 是 workflow-only Tool，不注册到通用 Tool Registry，也不通过 MCP 暴露；
 - `sync-research-vault-remote` workflow 先经 `ctx.tools.pull_research_vault_git`，成功后再经既有
   `ctx.tools.sync_research_vault` 确定性重建 SQLite 索引；Workflow 不直接调用 adapter/repository；
-- 只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配 adapter；Web 调用还必须同时开启
+- 只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配 adapter；插件调用还必须同时开启
   `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`，并通过同源 Origin 校验和用户确认；
 - `.git` 永不进入 Vault 扫描、Tool 输出或日志。
 
@@ -661,14 +661,14 @@ Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需�
    `git merge --ff-only --no-edit <已解析 upstream commit>`；不运行普通 `git pull`；
 7. fast-forward 后再次确认工作树干净，随后才允许索引重建。
 
-备份写入 `$LUOOME_HOME/backups/research-vault/<vault-hash>/<backupId>.bundle`（Web 使用数据库同级
+备份写入 `$LUOOME_HOME/backups/research-vault/<vault-hash>/<backupId>.bundle`（插件使用数据库同级
 目录）。constructor 会沿 backupRoot 最近存在祖先解析真实路径，拒绝 backupRoot 等于 Vault 或位于
 Vault 内，避免创建 hooks/bundle 自己污染待同步工作树。目录 `0700`、文件 `0600`。备份失败则
 工作树不更新；系统不自动轮转或删除备份。恢复是单独的人工操作：先用
 `git bundle verify <bundle>`，再把 bundle clone 到新的恢复目录进行检查，按需复制文件或由用户
 明确选择 Git 恢复命令。luoome 绝不自动 reset/rebase/选边，也不把恢复动作混入失败处理。
 
-Web 远端同步 POST 必须是合法 JSON 对象；空体或畸形 JSON 均返回 `invalid_input`，不得进入
+插件远端同步请求体必须是合法 JSON 对象；空体或畸形 JSON 均返回 `invalid_input`，不得进入
 external workflow。设置热更新每次都替换或显式清除 Git adapter，撤销
 `LUOOME_RESEARCH_REMOTE_SYNC=git` 后 status 和 POST 在当前进程立即变为未配置。
 
@@ -892,13 +892,11 @@ Tool 不感知 Drizzle transaction 类型。
 
 ### 9.4 调度
 
-首期使用显式命令和外部 cron：
+首期使用显式命令和外部 cron。原命令 `luoome workflow run sync-research-vault --input '{}'` 已随
+`packages/cli` 删除；现在经 DSH 定时任务唤起会话、由 agent 调用插件注册的工具触发同一
+`sync-research-vault` workflow。
 
-```bash
-luoome workflow run sync-research-vault --input '{}'
-```
-
-不在 Web server 内常驻文件 watcher。建议手工编辑后主动同步，或每 5–15 分钟运行一次。重复执行在文件未变化时只更新 run，不重建 chunks。
+不在插件宿主进程内常驻文件 watcher。建议手工编辑后主动同步，或每 5–15 分钟运行一次。重复执行在文件未变化时只更新 run，不重建 chunks。
 
 ## 10. 导入管道
 
@@ -1039,7 +1037,7 @@ input = {
 
 ### 11.4 Obsidian 打开行为
 
-查询 Tool 返回经过编码的 `obsidianUri`。Web 用真实链接打开；CLI 可以打印 URI。服务端不提供通用 `open` Tool，避免远程 MCP 调用启动本机 GUI。
+查询 Tool 返回经过编码的 `obsidianUri`。插件面板用真实链接打开。服务端不提供通用 `open` Tool，避免远程调用启动本机 GUI。
 
 ## 12. Workflow
 
@@ -1068,7 +1066,7 @@ resolve-source
   → index-document
 ```
 
-需要用户确认的编排不作为无人值守 workflow 自动运行。CLI/Web 以草案卡片承接确认；scheduled workflow 只能同步已存在文件。
+需要用户确认的编排不作为无人值守 workflow 自动运行。确认在插件/DSH 会话的交互流程中承接；scheduled workflow 只能同步已存在文件。
 
 ## 13. 研究时间线读模型
 
@@ -1117,6 +1115,11 @@ observedAt ?? publishedAt ?? importedAt
 UI 同时显示所采用字段，不能把导入时间误写成事件发生时间。未来事件和历史研究分区显示，结构化 cancelled 事件不进入待关注列表但保留历史。
 
 ## 14. Web 信息架构
+
+> 现状（2026-11-04）：单机 Web 已删除，本节描述的页面与路由不再存在；研究首页、Topic 页面、
+> 股票研究投影与时间线现由 `dsh-luoome` 研究面板读取（`packages/dsh-luoome/src/client/research*.js`，
+> 数据仍经同一批 tool 投影）；导入/索引等写编排由 DSH 侧经 tool 驱动，面板没有等价的 Web 表单。
+> 以下为当时的 Web 信息架构记录。
 
 ### 14.1 研究首页
 
@@ -1233,7 +1236,7 @@ ResearchBrief {
 
 ### 16.2 私人研究暴露
 
-研究正文可能包含私人投资判断。除本地 Web/CLI 外，MCP 的 research body/search Tool 增加独立能力门控：
+研究正文可能包含私人投资判断。私人研究面只有插件一个入口，research body/search Tool 另加独立能力门控：
 
 ```text
 LUOOME_EXPOSE_RESEARCH=true
@@ -1241,7 +1244,7 @@ LUOOME_EXPOSE_RESEARCH=true
 
 未开启时只不注册正文读取和搜索 Tool；Topic/Document 写 Tool 仍同时受 `LUOOME_EXPOSE_WRITE=true` 控制，URL 导入还受 `LUOOME_EXPOSE_EXTERNAL=true` 控制。不得在日志、Tool trace 和错误中输出正文、绝对路径、认证信息或完整私人 thesis。
 
-Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显式启用。重建会把 chunk 正文发给目录指定的外部 provider，同时要求 `external + write`；查询会把用户查询发给 provider，跨模型评测会发送固定公开评测集，均要求 `external`。模型目录只保存 `apiKeyEnv` 名称，密钥只从环境读取；请求正文、查询、向量和密钥不得写日志。Web 必须在语义开关旁提示外部发送边界，默认仍使用本地 FTS5。
+Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显式启用。重建会把 chunk 正文发给目录指定的外部 provider，同时要求 `external + write`；查询会把用户查询发给 provider，跨模型评测会发送固定公开评测集，均要求 `external`。模型目录只保存 `apiKeyEnv` 名称，密钥只从环境读取；请求正文、查询、向量和密钥不得写日志。插件必须在语义开关旁提示外部发送边界，默认仍使用本地 FTS5。
 
 ### 16.3 Git 与同步风险
 
@@ -1348,6 +1351,9 @@ drizzle 与 memory 共同覆盖：
 
 ### 19.5 Web 与浏览器
 
+> 现状（2026-11-04）：本节验收项针对已删除的单机 Web；插件研究面板沿用同样的可达性要求，
+> 浏览器验收入口见 `bun run test:panels-browser`。
+
 - 研究首页不要求股票；
 - Topic kind 筛选和全文搜索；
 - 产业 Topic 显示多只显式股票；
@@ -1387,6 +1393,9 @@ drizzle 与 memory 共同覆盖：
 - Obsidian URI。
 
 ### Phase C：Web 研究工作台
+
+> 现状（2026-11-04）：该 Web 工作台随单机 Web 删除；研究首页、Topic 与股票研究投影现由
+> `dsh-luoome` 研究面板读取（同一批 tool，面板侧无领域计算），导入与索引编排由 DSH 侧驱动。
 
 - 研究首页；
 - Topic 页面；
@@ -1437,7 +1446,7 @@ drizzle 与 memory 共同覆盖：
 - StockEvent 不依赖 Vault，提醒、幂等和状态行为不回归；
 - 股票研究页只消费显式关联，不自动扩散行业噪声；
 - Vault 文件移动、缺失、损坏和重复 id 都有确定性行为；
-- 所有读写通过 Tool，Web/Workflow 不绕过边界；
+- 所有读写通过 Tool，插件/Workflow 不绕过边界；
 - write、external 和私人研究读取都有明确 opt-in；
 - Agent 输出保留来源、反证、风险和未知项，不能自动生成 Advice；
 - 无 ResearchNote 兼容入口、平行 Note 实体或自动交易路径。
