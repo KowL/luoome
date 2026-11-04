@@ -4,6 +4,14 @@
 > 上位 PRD：[策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) §6
 > 关联：[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、
 > [Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)
+>
+> **现状修订（2026-11-04）**：①内置 AI 已下线，workflow 里不再本地生成调参/全新策略提议
+> （`packages/workflows/src/strategy-autonomy-weekly.ts` 的提议步骤置空，aiNarrative 恒缺省），
+> §3.2/§3.3 的 AI 提议链路当前不产生新提议；自动暂停、自动归档、自动验证推进与门禁复核照常执行。
+> ②单机 Web、独立 CLI/TUI 与 stdio MCP 已删除：§5 的自治动作时间线与确认/否决按钮目前没有插件面板 UI，
+> 能力只经 tool registry（`list_strategy_autonomy_actions` / `confirm_strategy_autonomy_action` /
+> `reject_strategy_autonomy_action`）由 DSH 侧调用；周期执行经批处理入口 `run_strategy_autonomy_weekly`，
+> 调度归 DSH 定时任务（确定性 `WorkflowRun` id 判重）。
 
 ## 1. 范围
 
@@ -58,12 +66,13 @@ pause:            executed（创建即终态，动作已完成）
 滞留在 eligible、进而在下一周期被当作「发布失败重试」直接发布；人工确认后发布失败走
 `confirmed→blocked` 回滚回人工队列。
 
-人工队列语义：blocked 只是状态，Web 提供确认（→ 走 publish）与否决（→ rejected）入口；
+人工队列语义：blocked 只是状态，确认（→ 走 publish）与否决（→ rejected）由
+`confirm_strategy_autonomy_action` / `reject_strategy_autonomy_action` 两个 write tool 提供；
 不新增通知渠道，周报汇总可见。
 
 ## 3. 编排：strategy-autonomy-weekly workflow
 
-新 workflow，每周运行一次（挂在 Web 调度器现有周节奏上）。「先 autonomy 后 report」不依赖
+新 workflow，每周运行一次（由 DSH 定时任务按周触发）。「先 autonomy 后 report」不依赖
 调度顺序，由嵌套触发实现：本 workflow 的收尾 step 在自治完成后嵌套调用 weekly-report
 （periodEnd 回溯到最近 A 股交易日），使周报能包含本周动作；日报侧对称地由
 strategy-daily-cycle 在完成当日 scheduled 正式运行后嵌套触发 closing-report。
@@ -135,13 +144,17 @@ PIT 历史缺失仍如实记为不可用，不用当前数据替代；窗口与�
   - `list_strategy_autonomy_actions`（read：按 strategy/status/kind/时间过滤）；
   - `confirm_strategy_autonomy_action`（write：blocked → confirmed → 执行 publish）；
   - `reject_strategy_autonomy_action`（write：blocked → rejected）；
-  - workflow-only 内部 tool：action 的创建与状态转移（不暴露给 MCP/Agent 的自治写入面）。
-- MCP 暴露：list 可读；confirm/reject 属 write，按既有 write opt-in 闸口；自治执行只发生在
-  workflow 内，不新增 MCP 写入口。
+  - workflow-only 内部 tool：action 的创建与状态转移（不暴露给 Agent 的自治写入面）。
+- 暴露面：list 可读；confirm/reject 属 write，按既有 write opt-in 闸口；自治执行只发生在
+  workflow 内，不新增写入口。
 - 周报新增「AI 管理动作」section（key=`strategy-autonomy-actions`，required=false）：
   本周 action 的 list block（entityKind='strategy' + entityId，detail 含 kind/status/指标摘要）。
 
 ## 5. Web
+
+> 现状（2026-11-04）：单机 Web 已删除；本节的时间线与确认/否决入口当前没有插件面板 UI，
+> 只经 tool registry（`list_strategy_autonomy_actions` / `confirm_strategy_autonomy_action` /
+> `reject_strategy_autonomy_action`）由 DSH 侧调用，write 闸口与同源 Origin 校验仍走宿主路由。
 
 - 策略工作台「设置」tab 内增加该策略的自治动作时间线（复用 read tool）；
 - blocked 动作在动作时间线上提供 确认/否决 按钮（write 闸口 + Origin 校验，与既有 mutation 一致）；
@@ -162,10 +175,10 @@ PIT 历史缺失仍如实记为不可用，不用当前数据替代；窗口与�
 | M2-S0 | StrategyAutonomyAction 实体、双仓储、DDL、contract tests、registry 接线 | contract tests 通过；迁移幂等 |
 | M2-S1 | 自动暂停（§3.1）+ weekly workflow 骨架 + 周报 section | 命中阈值的策略被暂停且 action/周报可见；不命中不动 |
 | M2-S2 | AI 提议 + 自动验证 session（§3.2/§3.3） | draft→valid→session 链路；重复提议去重；AI 失败降级 |
-| M2-S3 | 门禁复核自动发布 + blocked 人工队列（§3.4 + tools + Web 入口） | eligible 自动发布；blocked 可确认/否决 |
+| M2-S3 | 门禁复核自动发布 + blocked 人工队列（§3.4 + tools + 面板入口） | eligible 自动发布；blocked 可确认/否决 |
 | M2-S4 | 全链路真实运行验收 + 文档同步（PRD 状态、ARCHITECTURE、本 DDD 状态） | 真实周期证据；typecheck/lint/test:all 全绿 |
 
-每片独立可合入（契约与存储 → Tool/Workflow → Web/报告），遵循 development-plan §8 节奏。
+每片独立可合入（契约与存储 → Tool/Workflow → 面板/报告），遵循 development-plan §8 节奏。
 
 ## 8. 实施记录（2026-09-02）
 
@@ -173,12 +186,13 @@ M2-S0～S4 全部交付，相对上文设计的实际偏差：
 
 - **evaluation-scope 不变量放宽**：`run_strategy`（persist=true）与双仓储 `isRunnableVersion`
   原要求版本已发布；已放宽为 evaluation scope（`publication=non-publishing`）允许绑定未发布
-  valid 版本，operational 拒绝语义不变，并有 contract test 钉住。这是自治验证（以及 Web 实验页
+  valid 版本，operational 拒绝语义不变，并有 contract test 钉住。这是自治验证（以及当时 Web 实验页
   既有「独立验证」）能对未发布候选版本运行的前置。同步记录于
   [日运行与历史评估可靠性设计](./strategy-daily-cycle-and-replay-detailed-design.md)。
-- **调度挂接**：weekly-report 并无既有周调度可挂；实际为独立 scheduler（30 分钟 tick，
+- **调度挂接**：weekly-report 并无既有周调度可挂；当时为独立 scheduler（30 分钟 tick，
   Asia/Shanghai 周日到期），幂等靠确定性 id 的 WorkflowRun 持久事实
-  （`strategy-autonomy-weekly:<上海周一日期>`）判重，failed 允许同周重试。
+  （`strategy-autonomy-weekly:<上海周一日期>`）判重，failed 允许同周重试。现由 DSH 定时任务
+  调用批处理入口 `run_strategy_autonomy_weekly`，判重事实不变。
 - **session 推进**：workflow 内嵌套调用 `replay-strategy-range`（与 Web startEvaluationJob
   同一 workflow 同一推进序列），partial/failed session 先 resume 再 replay。
 - **eligible 滞留重试**：发布失败的 eligible 动作在后续 weekly cycle 重新检查 §3.4 全部门禁，
@@ -188,7 +202,7 @@ M2-S0～S4 全部交付，相对上文设计的实际偏差：
   `validating→blocked` 直达（§2.2）。
 - **自动归档未实施**：按 §1 只做自动暂停；**AI 创造全新策略未开放**（§3.2 已收敛为只提议现有
   策略的新版本），两者均为待用户确认的后续切片。
-- 验收：vitest 1789 / test:db 365 / test:web 401 全绿，typecheck、lint 通过；Web 时间线与
+- 验收：vitest 1789 / test:db 365 / test:web 401 全绿，typecheck、lint 通过；当时的 Web 时间线与
   blocked 确认/否决经真实浏览器验收。
 
 ## 9. 回补设计（2026-09-02，用户确认后冻结）
@@ -255,7 +269,7 @@ benchmark 覆盖 ≥0.9；不检查 base/parent/diff（新策略无基线）。�
 - **门禁复核的指标装配**：首发门禁复用 `get_strategy_experiment_context` 的 promotion 指标
   （validationTradingDays/vintageCoverageRatio/completeObservationCount/benchmarkCoverageRatio），
   只替换判定函数，不新增装配路径。
-- **Web UI 未动**：kind=archive 动作在工作台时间线按原始 key 展示（标签映射未新增），
+- **面板 UI 未动**（当时的 Web 工作台）：kind=archive 动作在工作台时间线按原始 key 展示（标签映射未新增），
   周报标签已补「自动归档」。
 - **publish-version 落库已实现**（补 §2.2「由 eligible→published 转移记录」）：自动发布
   （`publishEligible`）与人工确认（`confirm_strategy_autonomy_action`）在发布成功后均落

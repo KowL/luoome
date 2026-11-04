@@ -110,7 +110,7 @@ workflows ──► tools ──► core
 | `bun run typecheck` | 全 monorepo 跑 `tsc --noEmit` |
 | `bun test` | Node 兼容的 Vitest 测试 |
 | `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
-| `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
+| `bun run test:db:node` | Node 运行时加载 `node.contract.node.ts` 的合约测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
 | `bun run test:dsh-luoome` | DSH 插件（host / client / skills）与 Node Host 侧测试 + Bun 端到端组 |
 | `bun run test:panels-browser --overview-only` | 真实 DSH 看盘浏览器验收：分区慢响应、失败恢复、分页、排序、个股详情与窄屏；需 Chrome，可用 `CHROME_PATH` 指定 |
@@ -502,7 +502,7 @@ luoome 以插件形态接入 DSH，开发与验证都围绕单机装配：
 - **删之前先打清单**：每次清理都会 `log` 出被删目录名，便于事后追溯。
 - **单份约 460-464M**：不留策略时累积很快（生产上曾 37 份 = 15G）。改这块时同步跑 `deploy/direct/direct-deploy.test.ts`。
 
-`test:db` 使用 Bun（`test:web` 随 `apps/web` 下线移除）；Vitest 明确排除 Bun SQLite 相关文件。
+`test:db` 使用 Bun（旧 `test:web` 已随 `apps/web` 下线移除）；Vitest 明确排除 Bun SQLite 相关文件。
 真实进程 crash 用隔离临时目录和 fixture 验证，不使用个人数据。
 UI 修改除自动测试外，实际启动并检查手机、单账户/多标签与断线恢复，记录 fixture 边界。
 DSH 侧（面板、纪律提示词、profile 装配）的改动还要跑一次受控验证底座，说明见 [infra/dsh/README.md](../infra/dsh/README.md)。
@@ -518,7 +518,7 @@ DSH 侧（面板、纪律提示词、profile 装配）的改动还要跑一次�
 
 1. **需要本机 Chrome**，且 `npx --yes node@24` 能取到（首次需要网络）。
 
-2. **不在 `test:all` 里** —— `bun run test` / `test:db` / `test:web` 都不包含它。
+2. **不在 `test:all` 里** —— `bun run test` / `test:db` / `test:dsh-luoome` 都不包含它。
    **但改 `packages/dsh-luoome/src/client/**` 的人必须手动跑它并贴末行**：
    client 是 `.js`、不在 `tsc` 覆盖内、仓库也没有 react/react-dom 可写组件渲染单测，
    **这条门是唯一能发现「`state is not defined` 这类运行时崩溃」的地方**。

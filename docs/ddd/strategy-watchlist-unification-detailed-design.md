@@ -6,6 +6,10 @@
 > [Strategy DSL PRD](../prd/strategy-dsl.md)、[统一 Watchlist PRD](../prd/watchlist.md)
 > 当前事实来源：[ARCHITECTURE.md](../ARCHITECTURE.md)、`packages/core`、`packages/db`、
 > `packages/tools`、`packages/workflows`
+>
+> **消费面现状（2026-11-04 修订）**：独立 CLI / TUI、stdio MCP 与单机 Web（`apps/web`）均已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件（面板 + tool registry/policy）。下文 §13 的路由、CLI 命令与
+> MCP 暴露清单属当时设计；领域模型、repository 契约与 tool/workflow 语义仍以正文为准。
 
 ## 1. 设计结论
 
@@ -52,7 +56,7 @@ Watchlist
 - Watchlist 成为手工、Strategy、AI、Portfolio 观察关系的统一容器。
 - 当前功能在迁移期间不中断：战法扫描、动态分组、盘中盯盘、Advice 和报告继续可用。
 - 动态同步失败不制造成员退出，旧来源明确进入 stale。
-- Agent、Web、CLI、MCP 使用同一 tool schema。
+- `dsh-luoome` 插件与 Agent 使用同一 tool schema。
 - 所有 repository 同时提供 drizzle 与 in-memory 实现，并复用 contract tests。
 - Drizzle schema、`ensureSchema` DDL 和存量库迁移保持同步、幂等。
 - Strategy 不默认绑定 Watchlist；目标列表必须通过持久化订阅契约显式选择。
@@ -71,7 +75,7 @@ Watchlist
 依赖方向保持不变：
 
 ```text
-cli / tui / mcp / web ──► tools ──► core
+dsh-luoome（插件，唯一消费面）──► tools ──► core
                           │
                           └─► db / adapters ──► core
 workflows ──► tools ──► core
@@ -85,8 +89,8 @@ workflows ──► tools ──► core
 | `db` | 新表、repository 双实现、幂等迁移、契约测试 |
 | `tools` | 原子 CRUD、发布、运行、同步、查询；统一 Zod schema |
 | `workflows` | 批量运行 Strategy、同步 Watchlist、盘中提醒编排 |
-| `adapters` | 行情、LLM、通知；不感知 Strategy/Watchlist repository |
-| `web/cli/tui/mcp` | 消费 tools/workflows，不复制领域判断 |
+| `adapters` | 行情、研究 embedding、通知；不感知 Strategy/Watchlist repository |
+| `dsh-luoome`（插件） | 消费 tools/workflows，不复制领域判断 |
 
 StrategyEvaluator 位于 core，只接受已经准备好的规范上下文，不拉数据、不持久化、不调用 LLM。
 StrategyRunner 的数据准备和结果持久化通过 tools/workflows 完成。
@@ -885,7 +889,7 @@ interface StrategyWatchlistSubscription {
 `subscribe_strategy_to_watchlist` 明确选择 Strategy 与目标 Watchlist，通过
 `unsubscribe_strategy_from_watchlist` 取消；UI 的选择只是这些 Tool 的入口。
 
-正式运行完成后，编排层调用不进入公共 registry/MCP 的内部 `sync_strategy_watchlist_subscriptions`：
+正式运行完成后，编排层调用不进入公共 registry 的内部 `sync_strategy_watchlist_subscriptions`：
 
 1. 仅读取指定 `producerRunId` 和该 Strategy 的 active 订阅；run 必须是持久化的
    `scope=operational`、`publication.status=published` 正式运行。
@@ -961,7 +965,7 @@ load enabled AlertPlans
 | `update_watchlist_member` | write | 修改 stage/priority |
 | `archive_watchlist_member` | write | 结束 manual source/归档 |
 | `sync_watchlist_source` | write | 内部原子同步；不直接暴露给日常 Agent |
-| `sync_strategy_watchlist_subscriptions` | write | 内部编排；不进入公共 registry/MCP，仅为 published operational run 处理 active 订阅 |
+| `sync_strategy_watchlist_subscriptions` | write | 内部编排；不进入公共 registry，仅为 published operational run 处理 active 订阅 |
 | `list_watchlist_changes` | read | sync runs/snapshots |
 
 ### 11.3 Alert tools
@@ -1016,6 +1020,10 @@ load enabled AlertPlans
 - 每轮写 WorkflowRun，并明确 partial/failed。
 
 ## 13. Web、CLI、MCP 与 Agent
+
+> 现状（2026-11-04）：单机 Web、独立 CLI/TUI 与 stdio MCP 入口均已删除。§13.1～§13.3 的路由、
+> 命令与暴露清单属当时设计；当前由 `dsh-luoome` 面板（策略/watchlist/告警/计划面板）与
+> tool registry + write/external policy 承载，§13.4 Agent 契约仍有效。
 
 ### 13.1 Web
 

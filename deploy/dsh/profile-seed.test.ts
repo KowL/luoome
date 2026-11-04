@@ -1,9 +1,20 @@
 // profile-seed 的补丁层行为：插件层由镜像管理，但同一个文件里还有 DSH 自己写入的 UI 设置
 // （例如已读的欢迎提示版本）。整份重写会把这些用户态设置抹掉，用户每次升级都要重新点一次「继续」。
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SEED = new URL('./profile-seed.mjs', import.meta.url).pathname;
@@ -17,6 +28,14 @@ const SKILLS = [
   'strategy-lab',
   'strategy-result-review',
 ];
+const PARQUET_MANIFEST = {
+  name: 'parquet-wasm',
+  version: '0.9.0',
+  exports: {
+    './node': './node/parquet_wasm.js',
+    './node/parquet_wasm_bg.wasm': './node/parquet_wasm_bg.wasm',
+  },
+};
 const temporaries: string[] = [];
 
 afterEach(() => {
@@ -42,11 +61,31 @@ const makeFixture = () => {
     mkdirSync(join(plugin, 'skills', skill), { recursive: true });
     writeFileSync(join(plugin, 'skills', skill, 'SKILL.md'), `# ${skill}\n`);
   }
-  return { root, home, modules, plugin };
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, 'npm'),
+    `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args.join(' ') === 'root -g') { console.log(${JSON.stringify(modules)}); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(join(root, 'npm-calls.jsonl'))}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
+const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+if (JSON.stringify(manifest.dependencies) !== JSON.stringify({ 'parquet-wasm': '0.9.0' })) process.exit(2);
+const target = path.join(process.cwd(), 'node_modules', 'parquet-wasm');
+fs.mkdirSync(path.join(target, 'node'), { recursive: true });
+fs.writeFileSync(path.join(target, 'package.json'), ${JSON.stringify(JSON.stringify(PARQUET_MANIFEST))});
+fs.writeFileSync(path.join(target, 'node', 'parquet_wasm.js'), 'module.exports = {};');
+fs.writeFileSync(path.join(target, 'node', 'parquet_wasm_bg.wasm'), Buffer.from([0,97,115,109,1,0,0,0]));
+`,
+  );
+  chmodSync(join(bin, 'npm'), 0o755);
+  return { root, home, modules, plugin, bin };
 };
 
 const seed = (
-  fixture: { home: string; modules: string; plugin: string; pocket?: string },
+  fixture: { home: string; modules: string; plugin: string; bin: string; pocket?: string },
   profile = 'luoome-web',
 ) =>
   execFileSync(
@@ -63,11 +102,113 @@ const seed = (
       fixture.modules,
       ...(fixture.pocket === undefined ? [] : ['--pocket', fixture.pocket]),
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}` } },
   );
 
 const patchPath = (fixture: { home: string }, profile = 'luoome-web') =>
   join(fixture.home, 'profiles', profile, 'cordis.patch.yml');
+
+const setDependencies = (plugin: string, dependencies: Record<string, string>) => {
+  const path = join(plugin, 'package.json');
+  const manifest = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...manifest, dependencies }));
+};
+
+describe('profile-seed runtime dependencies', () => {
+  it.each(['^0.9.0', '~0.9.0', 'latest', '0.8.0', 'file:../parquet'])(
+    '拒绝 parquet-wasm 的非许可版本 %s',
+    (version) => {
+      const fixture = makeFixture();
+      setDependencies(fixture.plugin, { 'parquet-wasm': version });
+      expect(() => seed(fixture)).toThrow('unsupported runtime dependency');
+      expect(() => readFileSync(join(fixture.root, 'npm-calls.jsonl'))).toThrow();
+    },
+  );
+
+  it('拒绝未知非 DSH 运行依赖', () => {
+    const fixture = makeFixture();
+    setDependencies(fixture.plugin, { unknown: '1.0.0' });
+    expect(() => seed(fixture)).toThrow('unsupported runtime dependency: unknown@1.0.0');
+  });
+
+  it('profile node_modules 指向外部目录时保留外部内容并退出', () => {
+    const fixture = makeFixture();
+    const profile = join(fixture.home, 'profiles', 'luoome-web');
+    const external = join(fixture.root, 'external');
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(join(external, '@deepseek-ai'), { recursive: true });
+    const sentinel = join(external, '@deepseek-ai', 'keep.txt');
+    writeFileSync(sentinel, 'keep');
+    symlinkSync(external, join(profile, 'node_modules'), 'dir');
+    expect(() => seed(fixture)).toThrow('outside profile');
+    expect(readFileSync(sentinel, 'utf8')).toBe('keep');
+  });
+
+  it('复用目录插件已有的有效 WASM 依赖而不运行 npm install', () => {
+    const fixture = makeFixture();
+    setDependencies(fixture.plugin, { 'parquet-wasm': '0.9.0' });
+    const requireAdapters = createRequire(
+      new URL('../../packages/adapters/package.json', import.meta.url),
+    );
+    const dependency = dirname(dirname(requireAdapters.resolve('parquet-wasm/node')));
+    mkdirSync(join(fixture.plugin, 'node_modules'));
+    symlinkSync(dependency, join(fixture.plugin, 'node_modules', 'parquet-wasm'), 'dir');
+    seed(fixture);
+    seed(fixture);
+    const installed = join(fixture.home, 'profiles', 'luoome-web', 'node_modules', 'dsh-luoome');
+    const requirePlugin = createRequire(join(installed, 'dist', 'host.js'));
+    expect(typeof requirePlugin('parquet-wasm/node').readParquet).toBe('function');
+    expect(
+      WebAssembly.validate(
+        readFileSync(requirePlugin.resolve('parquet-wasm/node/parquet_wasm_bg.wasm')),
+      ),
+    ).toBe(true);
+    expect(() => readFileSync(join(fixture.root, 'npm-calls.jsonl'))).toThrow();
+  });
+
+  it('通过 CLI 装配 tarball 的 WASM，保持 DSH singleton identity 并复用 runtime', () => {
+    const fixture = makeFixture();
+    setDependencies(fixture.plugin, {
+      '@deepseek-ai/dsh': '0.2.1-rc.2',
+      'parquet-wasm': '0.9.0',
+    });
+    const sdk = join(fixture.modules, '@deepseek-ai', 'dsh');
+    writeFileSync(
+      join(sdk, 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh', main: 'index.cjs' }),
+    );
+    writeFileSync(join(sdk, 'index.cjs'), 'module.exports = {};');
+    const tarball = join(fixture.root, 'plugin.tgz');
+    execFileSync('tar', ['-czf', tarball, '-C', fixture.root, 'plugin']);
+    const packed = { ...fixture, plugin: tarball };
+    seed(packed);
+    const profile = join(fixture.home, 'profiles', 'luoome-web');
+    const installed = join(profile, 'node_modules', 'dsh-luoome');
+    const requirePlugin = createRequire(join(installed, 'dist', 'host.js'));
+    const wasm = requirePlugin.resolve('parquet-wasm/node/parquet_wasm_bg.wasm');
+    expect(WebAssembly.validate(readFileSync(wasm))).toBe(true);
+    expect(lstatSync(join(installed, 'node_modules', 'parquet-wasm')).isSymbolicLink()).toBe(true);
+    const sdkLink = join(profile, 'node_modules', '@deepseek-ai', 'dsh');
+    expect(lstatSync(sdkLink).isSymbolicLink()).toBe(true);
+    expect(requirePlugin('@deepseek-ai/dsh')).toBe(
+      createRequire(join(sdk, 'package.json'))('./index.cjs'),
+    );
+    const patch =
+      '- insert:\n    - id: luoome-plugin\n      name: dsh-luoome\n- id: ui-settings-general\n  config:\n    welcomeNoticeVersion: fixture\n- id: llm-pi-ai\n  config:\n    providers: fixture\n';
+    writeFileSync(patchPath(fixture), patch);
+    seed(packed);
+    expect(readFileSync(patchPath(fixture), 'utf8')).toBe(patch);
+    expect(realpathSync(sdkLink)).toBe(realpathSync(sdk));
+    expect(requirePlugin.resolve('parquet-wasm/node/parquet_wasm_bg.wasm')).toBe(wasm);
+    const calls = readFileSync(join(fixture.root, 'npm-calls.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cwd).toBe(realpathSync(join(profile, 'runtime')));
+    expect(calls[0].args).toContain('--ignore-scripts');
+  });
+});
 
 describe('profile-seed 补丁层', () => {
   it('将 Pocket 装入实际 profile，并在重复装配时保留 UI 设置', () => {

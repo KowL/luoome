@@ -92,7 +92,7 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 | `queue` | 消费分析队列并写回结果 | `claim_analysis_jobs`, `complete_analysis_job` | ⚠️ 可配置 |
 | `trade` | 登记系统外已完成的资金动作 | `record_decision_trade` | ❌ 永不 |
 
-> DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
+> DSH 瘦身（设计见 [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)）后：原 `advice` 等级
 > （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 为上表 5 级；
 > Advice 实体与存量数据保留，新建议由 DSH 交互分析或手动 worker 写回。`queue` 级随分析队列引入，
 > 默认关闭，须由 `luoome-analysis` 实例（read + queue 精确三工具白名单）或手动 worker 实例
@@ -110,38 +110,42 @@ Research 检索以 SQLite FTS5 为确定性基线。可选 embedding adapter 通
 ```
 luoome/
 ├── packages/
-│   ├── core/           纯领域类型 + 不变量 + advice 模型
-│   ├── db/             Drizzle schema + repository 实现
-│   ├── tools/          Tool 注册表 + schema 生成
+│   ├── core/           纯领域类型 + 不变量 + advice 模型 + repository 接口
+│   ├── db/             Drizzle schema + repository 双实现（drizzle / in-memory）
 │   ├── adapters/       行情 / 通知 / 事件 / 研究库 适配
+│   ├── tools/          Tool 注册表 + Zod → schema 派生 + 暴露面判定
 │   ├── workflows/      内置编排：review / report / watch / plan / strategy
-│   ├── cli/            命令行入口
-│   └── tui/            opentui 应用
-└── apps/
-    └── web/            Web 端
+│   ├── batch/          确定性批处理入口（6 个 run_*），不进领域 registry
+│   └── dsh-luoome/     唯一交付面：DSH 插件（host + client 面板 + skills）
+├── deploy/             宿主机直部署（direct）与容器部署（dsh）
+└── infra/              分层守卫、文档事实守卫、测试基线与验收脚本
 ```
+
+> 独立 CLI / TUI / stdio MCP / `apps/web` 已按 REQ-M2-03、REQ-M2-05、REQ-M4-01 删除，
+> 对应目录在仓库里不再存在——不要按旧文档的图去改代码。
 
 ### 依赖方向（强约束）
 
 ```txt
-cli ──┐
-tui ──┤
-web ──┼──► tools ──► core
-      │        │
-      │        ├──► db ──► core
-      │        │
-      │        └──► adapters ──► core
-      │
-      └──► workflows ──► tools ──► core
+dsh-luoome（插件 host/client/skills）──┐
+batch（surface 编排）─────────────────┼──► tools ──► core
+                                       │        │
+                                       ├──► db ──► core
+                                       │
+                                       └──► adapters ──► core
+
+workflows ──► tools ──► core
+batch     ──► workflows / tools / core
 ```
 
-**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
+**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道插件与 batch 的存在；adapters 不知道 workflows 的存在。
+`packages/tools` 还必须保持 DSH-free（暴露面判定层不依赖宿主类型），由 `infra/check-layers.ts` 强制。
 
 ### 模型运行时边界
 
 模型推理与模型配置都由 DSH 承担，luoome 侧没有模型运行时包，也没有模型设置页：
 
-- 领域包（`core` / `db` / `tools` / `workflows` / `mcp` / `adapters`）不得导入 AI SDK。
+- 领域包（`core` / `db` / `tools` / `workflows` / `adapters` / `batch`）不得导入 AI SDK。
 - 领域能力仍统一经 tools 使用；领域层不推理、不计费。
 - `infra/check-layers.ts` 守住 AI SDK 依赖边界。
 
@@ -162,7 +166,8 @@ web ──┼──► tools ──► core
 - **如何收紧**：DSH 侧提供 embedding 供应商后，删除 `packages/adapters/src/research-embedding/`、
   对应 provider 目录与这条白名单，领域层回到零模型请求。白名单只允许随这条路径一起收缩，不新增目录。
 
-设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14、D9。
+设计依据：[dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) 与
+`packages/adapters/src/research-embedding/` 的边界说明。
 
 ### 零 IO 的受控例外：evaluator code identity
 
@@ -526,13 +531,11 @@ DSH 接入有两条路径，默认部署只保留第一条：
 没有生产者、也没有常驻消费者。仓库完成隔离切换/回退演练后，生产服务器已于 2026-10-25 切到
 纯插件形态（`dsh-web` + `caddy`）；旧 MCP 用户入口源码已删除，Bun 只作为构建工具。
 
-AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
-聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
-每轮独立装载当前结构化共识，不能靠最近 20 条聊天推断同意。首页的三项方向操作经
-`POST /api/workspace/drafts` 生成服务器草案，再复用原确认协议；不接受客户端执行结果。
-确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
-原始触发与当前资格分开，始终不把历史触发当作当前行动许可。手机讨论与恢复契约见
-[AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
+AI 协作首页的聚合能力现在由插件提供：`get_investment_workspace` 工具返回区分事实摘要、方向研究、
+共识与实际跟踪的 ToolResult；写回只在用户明确意图下经 operation prepare/confirm 执行并留回执。
+当前面板经宿主认证的固定路由（`/dsh/api/luoome/*`）取数，客户端不重算业务数字、不接受客户端提交的执行结果。
+旧的 `/api/workspace`、`/api/workspace/drafts`、`/api/watch/notifications/:triggerId` 端点属于已删除的
+旧单机 Web，不再存在。
 
 ### 4.8 Context
 
@@ -580,7 +583,10 @@ interface ToolContext {
 **当前研究与观察模型**：Strategy 是版本化研究规则；StrategyRun 产出可追溯的
 StrategyResult/StrategySignal。Watchlist 统一 manual/strategy/ai/portfolio/import 来源和成员
 生命周期；Strategy → Watchlist 只有在用户创建持久、可审计的显式订阅契约后，才由
-published operational run 投影 strategy source。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
+published operational run 投影 strategy source。AlertPlan 引用 Watchlist 并产生 WatchTrigger。
+公开 surface 读写的模型不止这三个：账户/持仓/成交、Advice、DecisionReview、TradingPlan、Report、
+Research、Analysis、PluginOperation 都有对应的 tool 面；完整实体关系见
+[ENTITY-MAP.md](./ENTITY-MAP.md)。
 旧 Tactic/StockGroup/StockPool 模型（含 migration decoder 与旧表 DDL）已整体移除，
 存量库的旧物理表不再维护（不 DROP、不读取）。
 
@@ -682,7 +688,8 @@ Account          账户（真实，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）
 Holding          持仓（账户、标的、数量、成本、开/平仓时间）
 Trade            交易记录（买/卖、数量、价、费、时间、来源）
-PriceSnapshot    实时行情快照（标的、ts、OHLC、量、源）
+Quote            市场观测报价（observedAt / fetchedAt / retrieval / freshness）
+PriceSnapshot    已落库行情快照，唯一键 (stockId, observedAt, source)
 DailyBar         规范前复权日线（标的、日期、qfq OHLC、量、来源、可选原始复权因子）
 Strategy         版本化研究规则身份
 StrategyVersion  不可变 DSL 定义、hash、校验与发布时间
@@ -694,14 +701,16 @@ Watchlist        统一观察集合
 WatchlistMember  股票、研究阶段、优先级
 AlertPlan        引用 Watchlist 的规则、冷却和通知策略
 WatchTrigger     AlertPlan 命中事实与送达状态
-Alert            预警（账户?、标的?、类型、参数、状态）
-Note             笔记（标题、内容、标签、来源）
-Config           KV 配置（user/account/global scope）
 LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）；实时 manager + PIT snapshot repository
 LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
 Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
 ```
+
+> 这是主干实体，不是全集。Advice / DecisionReview / TradingPlan / ResearchTopic & Document /
+> AnalysisJob & AnalysisContext / StockEvent / WorkflowRun / PluginOperation & PluginAuthority /
+> RiskVeto / ReportPublication 等完整清单、引用关系与物理表见 [ENTITY-MAP.md](./ENTITY-MAP.md)。
+> 旧文档里的 `Alert` / `Note` / `Config` 三个实体在代码中不存在（无 entity、无表），不要新增。
 
 账户记账通过 `LedgerRepository` 原子更新账户与交易/持仓/流水：Drizzle 在 IMMEDIATE 事务内读取现金、
 计算增减并校验余额；内存实现串行提交。持仓写入携带读取时的旧持仓，在事务内检查冲突，
@@ -759,7 +768,8 @@ export interface AdviceDataSnapshot {
   readonly dataAsOf: Date;               // 数据截止时间
 }
 
-// 建议结果的兼容输出；当前账户反馈由 DecisionReviewRevision 投影
+// 建议结果的兼容输出；当前账户反馈由 DecisionReviewRevision 投影。
+// record_advice_outcome 只写 DecisionReview，不再双写旧 advice_outcomes 表（该表仅存量与审计）。
 export interface AdviceOutcome {
   readonly adviceId: string;
   readonly outcome: 'followed' | 'partially_followed' | 'ignored';
@@ -1170,7 +1180,7 @@ PRD §5 要求「提醒消息必须含触发价、止损/目标价、反证、�
 
 ### 8.3 模型推理不在 workflow 内
 
-DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后，仓内 workflow **不含模型推理步骤**：
+DSH 瘦身（见 [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)）后，仓内 workflow **不含模型推理步骤**：
 core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContext` 也没有 LLM 槽位。
 需要模型结论的流程由 DSH 交互分析实例经 `record_advice` / `record_analysis_result`
 写回本仓（§6.3）；批量队列写回能力保留，默认部署无生产者、无常驻消费者，workflow 只消费
@@ -1225,17 +1235,15 @@ tool（`privateResearchTools`）默认拒绝，需部署侧显式 opt-in 才放�
 
 luoome 内部 snake_case，派生出的 MCP / OpenAI schema 同样 snake_case。**统一命名**，避免翻译层。
 
-## 10. 多端消费
+## 10. 消费面
 
 | 消费者 | 入口 | 暴露范围 |
 |---|---|---|
-| Web | Hono HTTP API | read 默认；write 需 opt-in + 同源校验；trade 仅走专用人工路由 |
-| DSH 插件 | `dsh-luoome` 原生工具 + 精确写回 policy | read 默认；write/external/queue 走精确 policy；trade 永不 |
+| DSH 插件（唯一） | `dsh-luoome` 原生工具 + 精确写回 policy + 宿主认证 HTTP 路由 | read 默认（白名单内）；external 走 market allowlist；write 走 operation policy；queue 默认不暴露；trade 永不 |
 
-独立 CLI 与 TUI 已随 T15 下线（`bin/luoome`、安装 shim、Homebrew formula 一并删除）；
-现在只有 Web 与 DSH 插件两个消费面。
-
-Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
+独立 CLI、TUI、stdio MCP 与旧单机 Web（`apps/web`）均已删除；现在只有 `dsh-luoome` 一个消费面。
+它的浏览器面板是普通 SPA，经 DSH 宿主的 WebServer 前缀路由（`/dsh/api/luoome/*`）取数，
+不复制领域逻辑，也不自己算业务数字。
 
 ## 11. 数据流示例
 
@@ -1261,21 +1269,24 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 默认暴露面只有 read；要取实时行情需另开 `LUOOME_EXPOSE_EXTERNAL=true` 才能用 `batch_quote`。
 **客户端拿不到本仓现场生成的建议** —— 建议只能来自已落库的 Advice（由 DSH 交互分析实例或手动 worker 写入）。
 
-### 场景 B：TUI 看持仓与已有建议
+### 场景 B：插件面板看持仓与已有建议
 
 ```txt
-[TUI 启动]
-   │
+[DSH 插件 client 面板]
+   │  GET /dsh/api/luoome/state?panel=positions（宿主认证：cookie/Host/Origin + owner）
    ▼
-[opentui] ───► list_holdings + get_advice
+[插件 host 投影] ───► 白名单只读 tool
                   │
                   ├──► list_holdings  ──► HoldingRepo
                   └──► get_advice     ──► AdviceRepo（已落库建议，按 subjectId 取最新）
                   │
                   ▼
-              [opentui 渲染持仓面板：决策 / 信心度 / 有效期 / 理由 / 证据 / 反证 / 风险]
+              [面板渲染持仓：决策 / 信心度 / 有效期 / 理由 / 证据 / 反证 / 风险]
               [无对应建议时显示「（暂无建议）」—— 内置 AI 已下线，不再本地生成]
 ```
+
+面板只渲染服务端投影，不重算业务数字；HTTP 请求不能传业务输入（输入由服务端写死）。
+独立 TUI 已随 T15 删除，等价视图在插件面板里。
 
 ### 场景 C：DSH 消费者处理待分析队列（手动/隔离验收链路）
 
@@ -1298,14 +1309,14 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
       └──► complete_analysis_job (queue) ─┴─► record_advice (queue) ──► Advice 落库
                                                    │
                                                    ▼
-                                          [TUI / Web / DSH 插件读到新 Advice]
+                                          [DSH 插件读到新 Advice]
 ```
 
 事实包过期时消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
 租约超时未完成的 job 回收后可被重新认领。
 
-> 2026-10-24 增补：默认部署（Web + Caddy）不再运行该消费者，队列只是保留的领域能力。
-> 日常交互分析经 `luoome-analysis` 实例的 `record_*` 直接写回，不创建 `analysis_job`；
+> 默认部署（纯 DSH 插件）不运行该消费者，队列只是保留的领域能力。
+> 日常交互分析由插件读面取 context 后经原生 `record_*` 直接写回，不创建 `analysis_job`；
 > 本场景仅在手动/隔离 worker 验收时使用，空队列不会产生任何模型请求。
 
 ### 11.1 同一语义的两处实现：有意不同清单（task-25 排查留痕）
@@ -1490,7 +1501,6 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 
 - ✅ Bun + TypeScript
 - ✅ SQLite + Drizzle
-- ✅ opentui
 - ✅ Zod 4.x
 - ~~✅ MCP stdio 主 + HTTP 后置~~（stdio 入口已随 REQ-M2-03 下线）
 - ✅ Monorepo from day 1
@@ -1557,7 +1567,7 @@ workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK�
 
 单机形态的运行与部署见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
 安装/升级/备份/回退步骤见[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，
-形态决策见[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) D9–D12。
+形态决策见[dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md)。
 自动证券交易仍禁止；人工已完成成交保持原专用记账契约。
 
 ## DSH 分析队列与应用层 AI 运行时
