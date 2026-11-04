@@ -49,6 +49,9 @@ export interface BuildTestContextOptions {
   readonly news?: NewsManagerLike;
   /** 可选注入行业板块行情 manager。 */
   readonly sectorQuote?: SectorQuoteManagerLike;
+  readonly sectorMembership?: ToolContext['sectorMembership'];
+  readonly financialSnapshot?: ToolContext['financialSnapshot'];
+  readonly marketDump?: ToolContext['marketDump'];
   readonly stockUniverse?: StockUniverseManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
   /**
@@ -112,6 +115,9 @@ export const buildTestContext = async (
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
     ...(opts.news === undefined ? {} : { news: opts.news }),
     ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
+    ...(opts.sectorMembership === undefined ? {} : { sectorMembership: opts.sectorMembership }),
+    ...(opts.financialSnapshot === undefined ? {} : { financialSnapshot: opts.financialSnapshot }),
+    ...(opts.marketDump === undefined ? {} : { marketDump: opts.marketDump }),
     ...(opts.adviceOutcomeOrigin === undefined
       ? {}
       : { adviceOutcomeOrigin: opts.adviceOutcomeOrigin }),

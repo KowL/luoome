@@ -46,6 +46,8 @@ export interface FuyaoSourceOptions {
   readonly logger: Logger;
   /** 由 assembly factory 从 FUYAO_* 解析后注入；adapter 不读 process.env。 */
   readonly config: FuyaoConfig;
+  /** 共享 FuyaoClient；注入时忽略 fetchImpl，用于进程级共享协调器。 */
+  readonly client?: FuyaoClient;
 }
 
 const SnapshotItemSchema = z.object({
@@ -134,9 +136,11 @@ export class FuyaoSource {
   constructor(options: FuyaoSourceOptions) {
     this.clock = options.clock ?? ((): Date => new Date());
     this.logger = options.logger;
-    this.client = new FuyaoClient(options.config, {
-      ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-    });
+    this.client =
+      options.client ??
+      new FuyaoClient(options.config, {
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+      });
   }
 
   async fetchQuote(stockCode: string): Promise<Quote> {
@@ -407,7 +411,7 @@ export class FuyaoSource {
 
   /**
    * 大盘指数快照（/api/a-share-index/prices/snapshot，必须显式 thscodes）。
-   * 单只缺失 / 价格非法跳过（warn），全部缺失抛 no_data（对齐 eastmoney / tushare 容错）。
+   * 单只缺失 / 价格非法跳过（warn），全部缺失抛 no_data（对齐 eastmoney 容错）。
    */
   async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
     try {

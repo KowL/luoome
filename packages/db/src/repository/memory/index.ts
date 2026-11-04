@@ -46,6 +46,7 @@ import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
+import { InMemoryCorporateActionEventRepository } from './corporate-action-event.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryDecisionReviewRepository } from './decision-review.js';
 import { InMemoryExternalMarketFactRepository } from './external-fact.js';
@@ -58,6 +59,7 @@ import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
 import { InMemoryLedgerRepository } from './ledger.js';
 import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+import { InMemoryMarketDumpRunRepository } from './market-dump.js';
 import { InMemoryMinuteBarRepository } from './minute-bar.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import {
@@ -66,6 +68,7 @@ import {
 } from './portfolio-performance.js';
 import { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 import { InMemoryQuoteRepository } from './quote.js';
+import { InMemoryRawDailyBarRepository } from './raw-daily-bar.js';
 import { InMemoryReportRepository } from './report.js';
 import { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
 import { InMemoryResearchHypothesisVersionRepository } from './research-hypothesis.js';
@@ -97,6 +100,7 @@ export { InMemoryAccountRepository } from './account.js';
 export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
+export { InMemoryCorporateActionEventRepository } from './corporate-action-event.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
 export { InMemoryExternalMarketFactRepository } from './external-fact.js';
 export { InMemoryFinancialFactRepository } from './financial-fact.js';
@@ -107,6 +111,7 @@ export {
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
 export { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { InMemoryMarketDumpRunRepository } from './market-dump.js';
 export { InMemoryMinuteBarRepository } from './minute-bar.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export {
@@ -115,6 +120,7 @@ export {
 } from './portfolio-performance.js';
 export { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { InMemoryQuoteRepository } from './quote.js';
+export { InMemoryRawDailyBarRepository } from './raw-daily-bar.js';
 export { InMemoryReportRepository } from './report.js';
 export { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
 export { InMemoryResearchHypothesisVersionRepository } from './research-hypothesis.js';
@@ -378,5 +384,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     stockEvent,
     workflowRun,
     chat,
+    marketDumpRun: new InMemoryMarketDumpRunRepository(),
+    rawDailyBar: new InMemoryRawDailyBarRepository(),
+    corporateActionEvent: new InMemoryCorporateActionEventRepository(),
   };
 };

@@ -1,19 +1,22 @@
-import type { FetchSectorQuotesQuery, Logger, SectorQuoteItem } from '@luoome/core';
+import type { FetchSectorQuotesQuery, Logger, SectorQuoteItem, SourceStatus } from '@luoome/core';
 
-import type { SectorQuoteAdapterLike, SectorQuoteRawItem, SectorQuoteResult } from './types.js';
+import type { SourceHandle, SourceRegistry } from '../source-registry.js';
+import type { SectorQuoteCapabilityMap, SectorQuoteRawItem, SectorQuoteResult } from './types.js';
 
 /**
- * SectorQuoteManager。
+ * SectorQuoteManager（fuyao-data-expansion §10.1：从单 primary 迁到独立 SourceRegistry）。
  *
  * 对齐 news 的最简错误模型：
  * - 板块行情是实时快照，不涉及交易日历
- * - 无缓存、无 fallback 源：当前只注册 eastmoney，未知来源在 factory 启动期失败
+ * - 无缓存；源循环替换为 registry handle 循环：按绑定顺序 fallback；
+ *   显式 query.source 只尝试该源，未启用返回既有 adapter_error 协议
  * - 排序字段映射上游 fid（changePct → f3，amount → f6），上游降序返回，manager 不再排序
+ * - 输出的 source 取实际成功 handle，不回显请求默认值
  * - 空列表 → 正常返回 + warnings=['empty-list']
  */
 
 interface ManagerOptions {
-  readonly primary: SectorQuoteAdapterLike;
+  readonly registry: SourceRegistry<SectorQuoteCapabilityMap>;
   readonly logger: Logger;
   readonly clock: () => Date;
 }
@@ -57,52 +60,76 @@ export class SectorQuoteManager {
   readonly name = 'sector-quote' as const;
   readonly sources: readonly string[];
 
-  private readonly primary: SectorQuoteAdapterLike;
+  private readonly handles: readonly SourceHandle<SectorQuoteCapabilityMap, 'sector-quote'>[];
+  private readonly registry: SourceRegistry<SectorQuoteCapabilityMap>;
   private readonly logger: Logger;
   private readonly clock: () => Date;
 
   constructor(opts: ManagerOptions) {
-    this.primary = opts.primary;
-    this.sources = [opts.primary.name];
+    this.registry = opts.registry;
+    this.handles = opts.registry.sources('sector-quote');
+    if (this.handles[0] === undefined) {
+      throw new Error('sector-quote registry 缺少 sector-quote capability 绑定');
+    }
+    this.sources = [...new Set(this.handles.map((handle) => handle.source))];
     this.logger = opts.logger;
     this.clock = opts.clock;
+  }
+
+  status(): readonly SourceStatus[] {
+    return this.registry.describe();
   }
 
   async fetchList(query: FetchSectorQuotesQuery): Promise<SectorQuoteResult> {
     const now = this.clock();
 
-    let rawResult: { items: SectorQuoteRawItem[] };
-    try {
-      rawResult = await this.primary.fetchList(
-        query.all === true ? undefined : query.limit,
-        SORT_TO_FID[query.sort],
-      );
-    } catch (err) {
-      this.logger.warn('sector-quote primary adapter failed', {
-        adapter: this.primary.name,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return errorResult(
-        `primary ${this.primary.name} failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    // 显式 source 路由约束：只尝试该源；未启用返回既有 adapter_error 协议（§4.6）
+    const handles =
+      query.source === undefined
+        ? this.handles
+        : this.handles.filter((handle) => handle.source === query.source);
+    if (handles.length === 0) {
+      return errorResult(`source ${String(query.source)} 未启用`);
     }
 
-    const items = (
-      query.all === true ? rawResult.items : rawResult.items.slice(0, query.limit)
-    ).map(mapItem);
+    let lastError: unknown;
+    for (const handle of handles) {
+      try {
+        const rawResult = await handle.execute({
+          pageSize: query.all === true ? undefined : query.limit,
+          fid: SORT_TO_FID[query.sort],
+        });
 
-    const warnings: string[] = [];
-    if (items.length === 0) warnings.push('empty-list');
+        const items = (
+          query.all === true ? rawResult.items : rawResult.items.slice(0, query.limit)
+        ).map(mapItem);
 
-    return {
-      ok: true,
-      data: {
-        total: items.length,
-        source: query.source,
-        items,
-        warnings,
-        asOf: now,
-      },
-    };
+        const warnings: string[] = [];
+        if (items.length === 0) warnings.push('empty-list');
+
+        return {
+          ok: true,
+          data: {
+            total: items.length,
+            source: handle.source,
+            items,
+            warnings,
+            asOf: now,
+          },
+        };
+      } catch (err) {
+        this.logger.warn('sector-quote source failed', {
+          source: handle.source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        lastError = err;
+      }
+    }
+
+    return errorResult(
+      `all sources failed (${handles.map((handle) => handle.source).join(' → ')}): ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`,
+    );
   }
 }

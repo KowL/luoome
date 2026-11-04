@@ -51,7 +51,7 @@ describe('createDragonTigerManagerFromEnv', () => {
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
     expect(() =>
       createDragonTigerManagerFromEnv(
-        { LUOOME_DRAGON_TIGER_SOURCES: 'tushare' },
+        { LUOOME_DRAGON_TIGER_SOURCES: 'unknown' },
         { logger: noopLogger },
       ),
     ).toThrow();

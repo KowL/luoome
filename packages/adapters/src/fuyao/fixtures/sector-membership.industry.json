@@ -1,0 +1,33 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "item": [
+      {
+        "thscode": "000713.SZ",
+        "index_list": [
+          {
+            "thscode": "881101.TI",
+            "name": "种植业与林业",
+            "type": "industry"
+          }
+        ]
+      },
+      {
+        "thscode": "600519.SH",
+        "index_list": [
+          {
+            "thscode": "881273.TI",
+            "name": "白酒",
+            "type": "industry"
+          }
+        ]
+      },
+      {
+        "thscode": "000000.SZ",
+        "index_list": []
+      }
+    ]
+  }
+}

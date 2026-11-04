@@ -414,9 +414,26 @@ try {
   )
     throw new Error('installed package must declare its public npm destination and MIT license');
   for (const [name, version] of Object.entries(installedManifest.dependencies)) {
-    if (!name.startsWith('@deepseek-ai/') || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
-      throw new Error(`runtime dependency must be a pinned DSH package: ${name}@${version}`);
+    // Parquet 的 Node loader 必须随运行依赖解析 WASM，不能内联开发机绝对路径。
+    if (
+      !(name.startsWith('@deepseek-ai/') || name === 'parquet-wasm') ||
+      !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)
+    )
+      throw new Error(
+        `runtime dependency must be a pinned DSH or Parquet package: ${name}@${version}`,
+      );
   }
+  if (installedManifest.dependencies['parquet-wasm'] !== '0.9.0')
+    throw new Error('installed package must pin the verified Parquet WASM runtime');
+  run(
+    nodeCommand,
+    [
+      '--input-type=module',
+      '-e',
+      "import { ParquetFile } from 'parquet-wasm/node'; if (typeof ParquetFile.fromFile !== 'function') throw new Error('Parquet WASM runtime did not load');",
+    ],
+    { cwd: installedDir },
+  );
   if (installedManifest.exports?.['./client'] !== './dist/client.js')
     throw new Error('installed package must export ./client -> ./dist/client.js');
   if (installedManifest.dsh?.client?.platform !== 'web')
@@ -724,6 +741,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   ] as const;
   const PRODUCTION_TRIANGLE_POLICIES = ['run_triangle_analysis'] as const;
   const PRODUCTION_GOAL_POLICIES = ['start_goal_run'] as const;
+  const PRODUCTION_DUMP_POLICIES = ['sync_market_dump'] as const;
   const PRODUCTION_POLICY_NAMES = [
     ...PRODUCTION_QUEUE_POLICIES,
     ...PRODUCTION_WRITE_POLICIES,
@@ -731,6 +749,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     ...PRODUCTION_EXTERNAL_POLICIES,
     ...PRODUCTION_TRIANGLE_POLICIES,
     ...PRODUCTION_GOAL_POLICIES,
+    ...PRODUCTION_DUMP_POLICIES,
   ].sort();
   const installedPolicyNames = installed.policies.map((policy) => policy.name).sort();
   if (
@@ -760,6 +779,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     [PRODUCTION_EXTERNAL_POLICIES, 'external', ['external']],
     [PRODUCTION_TRIANGLE_POLICIES, 'external', ['external', 'queue']],
     [PRODUCTION_GOAL_POLICIES, 'external', ['write', 'external']],
+    [PRODUCTION_DUMP_POLICIES, 'external', ['external', 'write']],
   ] as const) {
     for (const name of names) {
       const policy = installedPolicies.get(name);

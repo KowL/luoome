@@ -86,12 +86,9 @@ const PIT_ATTRIBUTE_LABELS: Record<StockUniverseAttribute, string> = {
   delistDate: '退市日期',
 };
 
-/**
- * 属性缺口只在数据源不提供时出现（例如默认 eastmoney/sina 只给名称派生 ST），
- * 目前唯一能补齐 industry/listDate/delistDate 的目录源是 tushare。
- */
+/** 属性缺口只在数据源未提供时出现（例如默认 eastmoney/sina 只给名称派生 ST）。 */
 const PIT_ATTRIBUTE_REMEDY =
-  '配置 TUSHARE_TOKEN 并在 LUOOME_STOCK_UNIVERSE_SOURCES 中加入 tushare 后重新同步 universe 可补';
+  '当前已启用目录源未覆盖这些属性；需接入具备相应 PIT 属性的目录源后重新同步 universe';
 
 /** 诊断只做代表性抽样：属性缺口是来源级属性，逐日全量查询会让门禁退化成 N×全市场扫描。 */
 const PIT_ATTRIBUTE_GAP_SAMPLE = 5;

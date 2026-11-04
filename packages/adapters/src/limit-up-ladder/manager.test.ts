@@ -326,7 +326,7 @@ describe('LimitUpLadderManager', () => {
       expect(fallbackMock).toHaveBeenCalledTimes(1);
 
       const disabled = await m.fetchLadder(
-        query({ date: '2026-07-25', days: 15, source: 'tushare' }),
+        query({ date: '2026-07-25', days: 15, source: 'unknown' }),
       );
       expect(disabled.ok).toBe(false);
       if (!disabled.ok) expect(disabled.error.kind).toBe('adapter_error');

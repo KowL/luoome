@@ -106,12 +106,11 @@ revision-preserving key 与 contract tests，schema 和 `ensureSchema` 同步。
 | 候选 | 已核实能力与发布时间 | 缺口 | 决策 |
 |---|---|---|---|
 | Eastmoney `getTopicZTPool` / `getTopicZBPool` | 2026-08-15 真实请求：2026-08-14 分别返回 63/19 条；炸板池有 `zttj.days/ct`、`ztp`、`zs`，抽样的 `zttj.ct` 与前一日封板高度一致 | 无正式 schema、历史保留、发布时间或 revision 契约；2026-07-24 对两个端点均静默返回 0，而 2026-07-27 又有数据，不能区分“无事件”和“超出滚动窗口” | 只用于当前/近期展示与情绪统计；拒绝作为炸板/断板历史 PIT 源 |
-| Tushare `daily` + `stk_limit` | 官方文档给出 raw OHLC；`daily` 交易日 15:00～16:00 入库；`stk_limit` 当日约 08:40 更新并给出 `up_limit`；可按上述确定性公式派生 | 本环境 `TUSHARE_TOKEN` 未配置，未完成真实权限、覆盖、异常日、复权/分价和跨日连续性 smoke；provider revision 契约仍需落实 | 首选候选，保持 pending；不得仅凭文档上线 |
-| Tushare `limit_list_ths` | 官方文档声明历史自 2023-11-01、约 16:00 更新，提供炸板池、`open_num`、`tag/status` 等字段 | 需 8000 积分，且仅限个人学习研究；本环境无 token，未验证权限、字段稳定性与自由文本状态映射 | 可作交叉校验源，不作为当前生产实现 |
+| Fuyao 原始日 K / 复权事件 + 涨跌停与炸板端点 | 文档提供原始 OHLC、公司行动、按交易日股票池与近 30 日天梯 | 真实 capability 权限、历史窗口、发布时间、revision、异常日与跨日连续性仍待实测 | 首选候选，保持 pending；不得仅凭文档上线 |
 
-官方依据：[Tushare A 股日线](https://tushare.pro/document/1?doc_id=27)、
-[每日涨跌停价格](https://tushare.pro/document/2?doc_id=183)、
-[同花顺涨跌停榜单](https://tushare.pro/document/2?doc_id=355)。Eastmoney 端点没有找到可承担
+Fuyao 官方依据：[行情与全市场导出](https://fuyao.aicubes.cn/docs/api-reference/prices/)、
+[除复权数据](https://fuyao.aicubes.cn/docs/api-reference/corporate-actions/)、
+[涨跌停与炸板数据](https://fuyao.aicubes.cn/docs/api-reference/limit-up-data/)。Eastmoney 端点没有找到可承担
 schema/发布时间/revision 契约的官方文档，真实响应只能作为一次观测证据，不能替代契约。
 
 ### 上线门禁与当前降级

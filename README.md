@@ -104,11 +104,24 @@ homebrew/
 | `LUOOME_ANALYSIS_MODEL` | 关 | 普通后台分析所用 DSH 模型 ID；路由启动时冻结，凭据由 DSH 管理；详见[插件说明](packages/dsh-luoome/README.md#可选后台分析模型) |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
 | `LUOOME_FUNDAMENTAL_PROVIDER` | 可选 | 默认不装配；仅显式设置 `mock` 才注入固定 PIT fixture，gate 永远为 `not-ready`，不代表真实数据可用 |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `fuyao`（需 `FUYAO_API_KEY`）/ `xueqiu` |
 | `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
-| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
-| `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
-| `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina` |
+| `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯来源；支持 `eastmoney,fuyao` |
+| `LUOOME_ASHARE_SENTIMENT_SOURCES` | `eastmoney` | A 股情绪来源；支持 `eastmoney,fuyao` |
+| `LUOOME_DRAGON_TIGER_SOURCES` | `eastmoney` | 龙虎榜来源；支持 `eastmoney,fuyao` |
+| `LUOOME_NEWS_SOURCES` | `eastmoney,10jqka` | 财经快讯来源；也支持 `fuyao` |
+| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney` | 板块行情来源；支持 `eastmoney,fuyao` |
+| `LUOOME_SECTOR_MEMBERSHIP_SOURCES` | 关 | `fuyao`：当前个股板块关系；不代表历史成分 |
+| `LUOOME_FINANCIAL_SNAPSHOT_SOURCES` | 关 | `fuyao`：财务当前快照；`pitStatus=not-ready` |
+| `LUOOME_MARKET_DUMP_SOURCES` | 关 | `fuyao`：显式启用 dump 同步；artifact 保存于 `$LUOOME_HOME/market-dumps` |
+| `LUOOME_FUYAO_NEWS_TAG_ID` | — | Fuyao 快讯启用时必填；`21103` 已验证为财经混合流 |
+| `FUYAO_API_KEY` | — | 任一 Fuyao 能力启用时必填；仅通过请求头发送 |
+| `FUYAO_BASE_URL` | `https://fuyao.aicubes.cn` | Fuyao API 地址 |
+| `FUYAO_MAX_CONCURRENCY` | `2` | 所有 Fuyao REST 请求共享并发上限 |
+| `FUYAO_MIN_INTERVAL_MS` | `200` | 共享请求启动间隔（毫秒） |
+| `FUYAO_RATE_LIMIT_COOLDOWN_MS` | `30000` | HTTP 429 缺有效 Retry-After 时的共享冷却（毫秒） |
+| `FUYAO_RATE_LIMIT_MAX_RETRIES` | `2` | 幂等请求的限流重试次数 |
 | `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径；Web 受管文件按用户隔离 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
@@ -133,7 +146,18 @@ homebrew/
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
 已成功的报价保留原来源。缺失时间的报价会标记 `retrieval`，不能作为盘中行动的可信时间证据。
-Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可通过 `get_market_data_status` 查询。
+扶摇按各领域的显式配置接入，各能力与最近运行状态可通过 `get_market_data_status` 查询。
+`get_stock_sector_memberships` 返回当前板块关系，`get_stock_financial_snapshot` 返回财务当前快照；两者均为外部只读查询。
+`sync_market_dump` 同时需要 external 与 write 能力，按显式调用下载并导入一种 artifact；用 `get_market_dump_status` 查询运行和 checkpoint。
+原始日线、市场公司行动和财务快照分别保存，不自动提升实时性、严格 PIT 或回测门禁。
+
+Tushare 已从运行时代码和来源设置中退役。升级前可显式运行配置迁移（会先创建同目录 `0600` 备份；不改数据库）：
+
+```bash
+node -- infra/migrate-retired-data-sources.mjs --env-file /path/to/.luoome/.env
+```
+
+省略 `--env-file` 时处理 `$LUOOME_HOME/.env`（缺省 `~/.luoome/.env`）。进程环境、systemd 和 compose 中的旧配置需同步移除；历史 `source='tushare'` 记录保留读取。
 
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时、模型目录与模型设置页。
 需要模型判断的任务由 DSH agent 经插件原生工具调用完成，密钥由 DSH 侧配置。

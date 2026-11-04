@@ -1,0 +1,83 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793548800000,
+    "board_type": "all",
+    "trade_date": "2026-11-02",
+    "count": 77,
+    "stock_count": 73,
+    "stock_items": [
+      {
+        "thscode": "000678.SZ",
+        "ticker": "000678",
+        "name": "襄阳轴承",
+        "change": 0.100111,
+        "concept_list": [
+          {
+            "name": "股权转让(并购重组)"
+          },
+          {
+            "name": "减速器"
+          },
+          {
+            "name": "农机"
+          },
+          {
+            "name": "机器人概念"
+          }
+        ],
+        "net_value": 128665924.03,
+        "net_rate": 0.04443623,
+        "hot_rank": 1,
+        "buy_value": 352172536.96,
+        "sell_value": 223506612.93,
+        "limit_reason": "机器人轴承+减亏+湖北国资+“羊”字辈",
+        "range_days": 1,
+        "org_net_value": -11719988.85
+      },
+      {
+        "thscode": "002172.SZ",
+        "ticker": "002172",
+        "name": "澳洋健康",
+        "change": 0.099831,
+        "concept_list": [
+          {
+            "name": "高压氧舱"
+          },
+          {
+            "name": "毛发医疗"
+          },
+          {
+            "name": "民营医院"
+          }
+        ],
+        "net_value": -8670574.85,
+        "net_rate": -0.00708643,
+        "hot_rank": 2,
+        "buy_value": 107932607,
+        "sell_value": 116603181.85,
+        "limit_reason": "脑机接口+医疗服务+国资控股+“羊”字辈",
+        "range_days": 1,
+        "org_net_value": -22156410.37,
+        "hot_money_net_value": 1910306.52
+      },
+      {
+        "thscode": null,
+        "ticker": "002731",
+        "name": "萃华退",
+        "change": -0.04,
+        "concept_list": [],
+        "net_value": -65887.8,
+        "net_rate": -0.01337655,
+        "hot_rank": 1811,
+        "buy_value": 2039257.0,
+        "sell_value": 2105144.8,
+        "range_days": 1,
+        "hot_money_net_value": -793078.8
+      }
+    ],
+    "hot_money_items": []
+  }
+}

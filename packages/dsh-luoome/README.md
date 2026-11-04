@@ -8,10 +8,10 @@ luoome 的 DeepSeek DSH 插件，提供本地投资事实、策略研究、决�
 
 要求 Node 22.22.3 或更新版本；已在 Node 24 验收。DSH SDK 固定为 `0.2.1-rc.2`。
 
-在目标 DSH profile 目录安装已验收的插件 tarball（当前源码候选版本为 `0.2.5`）：
+在目标 DSH profile 目录安装已验收的插件 tarball（当前源码候选版本为 `0.2.6`）：
 
 ```sh
-npm install --save-exact /absolute/path/to/dsh-luoome-0.2.5.tgz
+npm install --save-exact /absolute/path/to/dsh-luoome-0.2.6.tgz
 ```
 
 公开 npm 版本与源码候选独立发布；安装公开版前用 `npm view dsh-luoome version` 核对版本，不将候选包当作已发布版本。

@@ -1,0 +1,29 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "thscode": "600519.SH",
+    "ticker": "600519",
+    "item": [
+      {
+        "ticker": "600519",
+        "ex_date_ms": 1782403200000,
+        "dividend_per_share": 28.02423,
+        "per_share_bonus": 0
+      },
+      {
+        "ticker": "600519",
+        "ex_date_ms": 1766073600000,
+        "dividend_per_share": 23.957,
+        "per_share_bonus": 0
+      },
+      {
+        "ticker": "600519",
+        "ex_date_ms": 1750867200000,
+        "dividend_per_share": 27.673,
+        "per_share_bonus": 0
+      }
+    ]
+  }
+}

@@ -4,7 +4,7 @@
 >
 > 上位约束：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、[Strategy DSL PRD](../prd/strategy-dsl.md)、[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)。
 >
-> 相关实现边界：[行情与股票目录详细设计](./market-data-and-stock-universe-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Tushare 行情适配器设计](./tushare-market-adapter-design.md)。
+> 相关实现边界：[行情与股票目录详细设计](./market-data-and-stock-universe-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)。
 
 本文件冻结 Phase 3 的数据、计算、存储、门禁和验收契约；当前按 §13 逐切片实现。任何实现都不得把现有报价、日线、报告或 Strategy 运行结果解释成基本面数据，真实完成仍必须通过本文的数据证据门禁。
 

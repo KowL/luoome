@@ -27,6 +27,7 @@ import type {
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
+  MarketDumpRun,
   MembershipSnapshot,
   MinuteBarCompleteness,
   MinuteBarInterval,
@@ -642,6 +643,113 @@ export const dailyBarRevisions = sqliteTable(
       name: 'daily_bar_revisions_pk',
     }),
     lookupIdx: index('daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
+  }),
+);
+
+/**
+ * fuyao-data-expansion Phase 2：dump 同步运行审计（设计 §5.4）。
+ * DDL 与 ensureSchema 逐列一致（client.test.ts parity 守卫）。
+ */
+export const marketDumpRuns = sqliteTable(
+  'market_dump_runs',
+  {
+    runId: text('run_id').primaryKey(),
+    kind: text('kind').$type<MarketDumpRun['kind']>().notNull(),
+    dumpId: text('dump_id').notNull(),
+    source: text('source').notNull(),
+    artifactSha256: text('artifact_sha256'),
+    status: text('status').$type<MarketDumpRun['status']>().notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }),
+    requestedAt: integer('requested_at', { mode: 'timestamp_ms' }).notNull(),
+    downloadedAt: integer('downloaded_at', { mode: 'timestamp_ms' }),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    nextRowOffset: integer('next_row_offset').notNull(),
+    processedRows: integer('processed_rows').notNull(),
+    minDate: integer('min_date', { mode: 'timestamp_ms' }),
+    maxDate: integer('max_date', { mode: 'timestamp_ms' }),
+    artifactBytes: integer('artifact_bytes'),
+    errorKind: text('error_kind'),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    kindRequestedIdx: index('market_dump_runs_kind_requested_idx').on(t.kind, t.requestedAt),
+    resumableIdx: index('market_dump_runs_resumable_idx').on(
+      t.kind,
+      t.dumpId,
+      t.artifactSha256,
+      t.status,
+    ),
+  }),
+);
+
+/**
+ * fuyao-data-expansion Phase 2：append-only 原始（未复权）日线 revision（设计 §5.3）。
+ * 主键 (stock_id, date, recorded_at, content_hash)：同 recordedAt 同 hash 重放幂等；
+ * 同 (stock_id, date, recorded_at) 不同 content_hash 并存（不覆盖旧行）。
+ */
+export const rawDailyBarRevisions = sqliteTable(
+  'raw_daily_bar_revisions',
+  {
+    stockId: text('stock_id').notNull(),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    contentHash: text('content_hash').notNull(),
+    open: real('open').notNull(),
+    high: real('high').notNull(),
+    low: real('low').notNull(),
+    close: real('close').notNull(),
+    volume: real('volume').notNull(),
+    turnover: real('turnover'),
+    source: text('source').notNull(),
+    dumpId: text('dump_id').notNull(),
+    artifactSha256: text('artifact_sha256').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
+      name: 'raw_daily_bar_revisions_pk',
+    }),
+    lookupIdx: index('raw_daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
+    artifactIdx: index('raw_daily_bar_revisions_artifact_idx').on(t.dumpId, t.artifactSha256),
+  }),
+);
+
+/**
+ * fuyao-data-expansion Phase 2：append-only 市场级原始公司行动事件（设计 §6.1）。
+ * 与账户级 portfolio_corporate_actions 无任何外键或触发关系。
+ */
+export const corporateActionEventRevisions = sqliteTable(
+  'corporate_action_event_revisions',
+  {
+    stockId: text('stock_id').notNull(),
+    exDate: integer('ex_date', { mode: 'timestamp_ms' }).notNull(),
+    sourceRecordId: text('source_record_id').notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    contentHash: text('content_hash').notNull(),
+    dividendPerShare: real('dividend_per_share').notNull(),
+    perShareBonus: real('per_share_bonus').notNull(),
+    allotmentRatio: real('allotment_ratio'),
+    allotmentPrice: real('allotment_price'),
+    currency: text('currency').notNull(),
+    source: text('source').notNull(),
+    dumpId: text('dump_id'),
+    artifactSha256: text('artifact_sha256'),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.stockId, t.exDate, t.sourceRecordId, t.recordedAt, t.contentHash],
+      name: 'corporate_action_event_revisions_pk',
+    }),
+    lookupIdx: index('corporate_action_event_revisions_lookup_idx').on(
+      t.stockId,
+      t.exDate,
+      t.recordedAt,
+    ),
+    artifactIdx: index('corporate_action_event_revisions_artifact_idx').on(
+      t.dumpId,
+      t.artifactSha256,
+    ),
   }),
 );
 
@@ -2152,6 +2260,9 @@ export const schema = {
   dailyBars,
   minuteBars,
   dailyBarRevisions,
+  marketDumpRuns,
+  rawDailyBarRevisions,
+  corporateActionEventRevisions,
   financialFactRevisions,
   fundamentalScoreVersions,
   fundamentalScoreRuns,

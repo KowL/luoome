@@ -163,7 +163,7 @@ describe('DragonTigerManager（registry 集成）', () => {
     const fetchMock = vi.fn(async (date: string) => fetchResult(date));
     const m = mkManager([['eastmoney', fetchMock]]);
 
-    const disabled = await m.fetchList({ date: TRADING_DAY, source: 'tushare' });
+    const disabled = await m.fetchList({ date: TRADING_DAY, source: 'unknown' });
     expect(disabled.ok).toBe(false);
     if (!disabled.ok) expect(disabled.error.kind).toBe('adapter_error');
     expect(fetchMock).not.toHaveBeenCalled();

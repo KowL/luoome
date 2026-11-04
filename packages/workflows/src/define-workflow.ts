@@ -74,6 +74,8 @@ import type {
   GetInvestmentCandidatesOutput,
   GetInvestmentWorkspaceInput,
   GetInvestmentWorkspaceOutput,
+  GetMarketDumpStatusInput,
+  GetMarketDumpStatusOutput,
   GetPortfolioRiskInput,
   GetPortfolioRiskOutput,
   GetPreviousClosesInput,
@@ -86,6 +88,10 @@ import type {
   GetResearchTopicOutput,
   GetSignalObservationStatsInput,
   GetSignalObservationStatsOutput,
+  GetStockFinancialSnapshotInput,
+  GetStockFinancialSnapshotOutput,
+  GetStockSectorMembershipsInput,
+  GetStockSectorMembershipsOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
   GetStrategyEvaluationSessionInput,
@@ -216,6 +222,8 @@ import type {
   StrategySignalsByStockOutput,
   SyncDailyBarsInput,
   SyncDailyBarsOutput,
+  SyncMarketDumpInput,
+  SyncMarketDumpOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
   SyncResearchVaultInput,
@@ -281,6 +289,19 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly get_stock_sector_memberships: ToolAccessor<
+    typeof GetStockSectorMembershipsInput,
+    typeof GetStockSectorMembershipsOutput
+  >;
+  readonly get_stock_financial_snapshot: ToolAccessor<
+    typeof GetStockFinancialSnapshotInput,
+    typeof GetStockFinancialSnapshotOutput
+  >;
+  readonly sync_market_dump: ToolAccessor<typeof SyncMarketDumpInput, typeof SyncMarketDumpOutput>;
+  readonly get_market_dump_status: ToolAccessor<
+    typeof GetMarketDumpStatusInput,
+    typeof GetMarketDumpStatusOutput
+  >;
   readonly enqueue_analysis_job: {
     readonly execute: (
       input: import('zod').z.input<typeof enqueueAnalysisJobTool.inputSchema>,

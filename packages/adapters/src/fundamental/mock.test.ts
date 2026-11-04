@@ -119,7 +119,7 @@ describe('MockFundamentalDataAdapter', () => {
     expect(
       () =>
         new MockFundamentalDataAdapter({
-          facts: [{ ...fixture, source: 'tushare' }],
+          facts: [{ ...fixture, source: 'not-mock' }],
         }),
     ).toThrow(`mock fundamental fact source must be ${MOCK_FUNDAMENTAL_SOURCE}`);
   });

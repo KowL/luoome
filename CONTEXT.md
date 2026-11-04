@@ -24,14 +24,24 @@
 指标、Strategy 和 AlertPlan 统一使用前复权（`qfq`）日线。缺少复权因子或上一交易日收盘价
 时必须返回 unavailable/unknown，不得用当日开盘价或伪造因子替代。
 
+### 原始日线与市场公司行动
+
+Fuyao MarketDump 将全量或近期未复权日 K 写入独立的 `raw_daily_bar_revisions`，将分红、送转和配股事件写入 `corporate_action_event_revisions`。文件 hash、运行记录和 checkpoint 共同标识可审计的导入过程；`recordedAt` 表示本地首次记录时间，后补数据不进入更早的历史 cutoff。原始日线不进入规范 qfq 日线表，市场公司行动不自动修改账户持仓、现金或账户公司行动账本；是否能用于严格回测仍需独立验收。
+
+### 财务当前快照与当前板块关系
+
+FinancialSnapshot 返回 Fuyao 当前数据商视图中的三大报表、指标和估值，标记 `viewKind='current-vendor-view'`、`pitStatus='not-ready'`。报告期末、披露日、获取时间各自保留；缺少上游 revision 身份和时间证据时，不写严格 PIT FinancialFact，也不用于生产基本面评分。金额和比率按字段 registry 解释，缺失值保持 null。
+
+SectorMembership 只回答当前股票与行业/概念板块的关系；`.TI` 板块身份与本地股票身份分开，当前关系不回填历史成分。资讯、板块、财务和 dump 各有独立端口与状态，不进入 MarketDataManager。
+
 ### 严格回测（StrictBacktest）
 
 回答“策略在可交易性事实齐全的历史区间里，按 D+1 开盘、整手、费用与滑点能跑出什么”。
 market facts 由同步任务按 evaluation day 的 `revisionCutoff` 从 `daily_bar_revisions` 生成：
 涨跌停价 = 前收盘 × 板块幅度（`tradability-rule-v1`：主板非 ST 10%、主板 ST 5%、科创/创业 20%、
 北交所 30%），ST 取自 PIT universe 快照属性（unknown 不猜、该日不写事实并披露缺失）。
-公司行动无数据源，事实固定 `corporateActionsStatus='unavailable'`，门禁逐项披露为 unavailable
-（§8 不在本期范围），不阻断已披露范围内的执行；不得据此声称完整复权回测。
+严格回测同步链尚未接入市场公司行动，事实保持 `corporateActionsStatus='unavailable'`，门禁逐项披露为 unavailable。
+新增市场公司行动仓储不自动提升此门禁；不阻断已披露范围内的执行，也不得据此声称完整复权回测。
 
 ### Strategy
 

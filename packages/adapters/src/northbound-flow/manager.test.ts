@@ -128,7 +128,7 @@ describe('NorthboundFlowManager（registry 集成）', () => {
       expect(failed.error.message).toContain('eastmoney down');
     }
 
-    const disabled = await m.fetchSeries({ days: 30, endDate: TRADING_DAY, source: 'tushare' });
+    const disabled = await m.fetchSeries({ days: 30, endDate: TRADING_DAY, source: 'unknown' });
     expect(disabled.ok).toBe(false);
     if (!disabled.ok) expect(disabled.error.kind).toBe('adapter_error');
   });

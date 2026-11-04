@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719163051,
+    "item": [
+      {
+        "thscode": "885431.TI",
+        "name": "新能源汽车"
+      },
+      {
+        "thscode": "885566.TI",
+        "name": "大飞机"
+      },
+      {
+        "thscode": "885623.TI",
+        "name": "参股保险"
+      }
+    ]
+  }
+}

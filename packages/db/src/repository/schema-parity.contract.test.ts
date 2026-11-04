@@ -36,12 +36,15 @@ import {
   AdviceSchema,
   AnalysisContextSchema,
   AnalysisJobSchema,
+  CorporateActionEventRevisionSchema,
   DecisionReviewRevisionSchema,
   DecisionReviewSchema,
   ExternalMarketFactSchema,
   HoldingSchema,
+  MarketDumpRunSchema,
   PortfolioCashFlowSchema,
   QuoteSchema,
+  RawDailyBarRevisionSchema,
   ReportSchema,
   SignalObservationSchema,
   StockSchema,
@@ -74,6 +77,21 @@ interface Pair {
 const SUBJECT_SPLIT = 'subject 拆成 subject_kind + subject_id，读取侧显式重建 subject 对象';
 
 const PAIRS: readonly Pair[] = [
+  {
+    name: 'MarketDumpRun ↔ market_dump_runs',
+    entity: MarketDumpRunSchema,
+    table: schema.marketDumpRuns,
+  },
+  {
+    name: 'RawDailyBarRevision ↔ raw_daily_bar_revisions',
+    entity: RawDailyBarRevisionSchema,
+    table: schema.rawDailyBarRevisions,
+  },
+  {
+    name: 'CorporateActionEventRevision ↔ corporate_action_event_revisions',
+    entity: CorporateActionEventRevisionSchema,
+    table: schema.corporateActionEventRevisions,
+  },
   {
     name: 'ExternalMarketFact ↔ external_market_facts',
     entity: ExternalMarketFactSchema,

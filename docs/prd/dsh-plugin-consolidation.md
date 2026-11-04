@@ -1348,7 +1348,7 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 
 ---
 
-## 附录 A：事实快照（asOf 2026-11-02，随代码漂移即失效）
+## 附录 A：事实快照（asOf 2026-11-04，随代码漂移即失效）
 
 > 正文只引用本附录，不重复维护。REQ-M4-07 的 `check-docs` 对本附录的 `asOf` 做过期检查。
 
@@ -1356,15 +1356,15 @@ manifest 声明「不含供应商历史数据，不能保证异机重放」。
 > **已知缺口**：`check-docs` 由 REQ-M4-07 引入，**M1–M3 期间本附录没有自动过期检查**——
 > 本轮就是靠工程评审人工发现的。在此之前，改代码的人必须手动核对本附录。
 
-| 项 | 实测值（2026-11-01，随 `check:docs` 对账） | 取证方式 |
+| 项 | 实测值（工具库存更新于 2026-11-04；其余历史项另标日期） | 取证方式 |
 |---|---|---|
-| registry 工具数 | **239**（M5-05 目标受理、查询、取消接线后实测；`check:docs` 对账项） | `bun run tools:list --json` |
+| registry 工具数 | **243**（Fuyao 新增四项工具接线后实测；`check:docs` 对账项） | `bun run tools:list --json` |
 | 工具源文件数 | 226（部分文件含多个 tool 定义） | `ls packages/tools/src/tools/*.ts \| wc -l` |
-| read allowlist | **72** | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
-| market allowlist | 12 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
-| 插件暴露面（可达） | **124** | `bun run tools:list --json` 的 `tag: exposed` 计数 |
+| read allowlist | **74** | `DEFAULT_READ_TOOL_ALLOWLIST.length` |
+| market allowlist | 14 | `DEFAULT_MARKET_TOOL_ALLOWLIST.length` |
+| 插件暴露面（可达） | **133** | `bun run tools:list --json` 的 `tag: exposed` 计数 |
 | 不可达工具 | **110** | 同上（`tag: unreachable-by-design`） |
-| 五类归类 | 只读面 **101** / 可写面 **103** / queue-worker **13** / 私人研究 **22** / 废弃 **0** = **239** | `tools:list` 的 `exposure` 字段；废弃为 0 是 H1 口径（不摘除任何工具） |
+| 五类归类 | 只读面 **102** / 可写面 **106** / queue-worker **13** / 私人研究 **22** / 废弃 **0** = **243** | `tools:list` 的 `exposure` 字段；废弃为 0 是 H1 口径（不摘除任何工具） |
 | 全仓测试文件 | 346 | `find packages apps -name '*.test.ts' -o -name '*.test.js'` |
 | M2 删除的测试文件 | **17**（cli 6 / tui 1 / dsh-bridge 3 / mcp 3 / deploy 4）；`apps/web` 的 29 个属 M4-01 | `git diff --name-status <M2起点>..HEAD \| grep '^D.*\.test\.'` |
 | 遗留五面 LOC | ~50,562（占 18%） | 工程审计实测 |

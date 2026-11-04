@@ -72,7 +72,6 @@ const providerOf = (input: Parameters<typeof fetch>[0], fallback: string): strin
     ['eastmoney', ['eastmoney.com']],
     ['tencent', ['gtimg.cn', 'qq.com']],
     ['sina', ['sina.com.cn', 'sinajs.cn', 'sina.cn']],
-    ['tushare', ['tushare.pro']],
     ['fuyao', ['aicubes.cn']],
     ['xueqiu', ['xueqiu.com']],
     ['10jqka', ['10jqka.com.cn']],

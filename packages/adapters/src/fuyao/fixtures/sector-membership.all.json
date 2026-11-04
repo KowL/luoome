@@ -1,0 +1,44 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "item": [
+      {
+        "thscode": "600519.SH",
+        "index_list": [
+          {
+            "thscode": "885338.TI",
+            "name": "融资融券",
+            "type": "cn_concept"
+          },
+          {
+            "thscode": "885520.TI",
+            "name": "沪股通",
+            "type": "cn_concept"
+          },
+          {
+            "thscode": "885525.TI",
+            "name": "白酒概念",
+            "type": "cn_concept"
+          },
+          {
+            "thscode": "885705.TI",
+            "name": "乡村振兴",
+            "type": "cn_concept"
+          },
+          {
+            "thscode": "885761.TI",
+            "name": "超级品牌",
+            "type": "cn_concept"
+          },
+          {
+            "thscode": "885916.TI",
+            "name": "同花顺漂亮100",
+            "type": "cn_concept"
+          }
+        ]
+      }
+    ]
+  }
+}

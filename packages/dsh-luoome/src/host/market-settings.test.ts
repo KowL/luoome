@@ -257,7 +257,7 @@ describe('REQ-M3-15 PRD 硬验收', () => {
     settings.save(input(), () => () => {});
     // 人工往 .env 写一个不在白名单里的键（例如新增供应商的 token）。
     const current = readFileSync(path, 'utf8');
-    writeFileSync(path, `${current}TUSHARE_TOKEN="manual-token"\n`);
+    writeFileSync(path, `${current}MANUAL_TOKEN="manual-token"\n`);
     // 再保存一次别的配置：运行时候选必须来自磁盘，而不是被内存覆盖。
     settings.save(
       {
@@ -267,14 +267,13 @@ describe('REQ-M3-15 PRD 硬验收', () => {
       },
       () => () => {},
     );
-    expect(settings.runtimeEnv().TUSHARE_TOKEN).toBe('manual-token');
-    expect(readFileSync(path, 'utf8')).toContain('TUSHARE_TOKEN="manual-token"');
+    expect(settings.runtimeEnv().MANUAL_TOKEN).toBe('manual-token');
+    expect(readFileSync(path, 'utf8')).toContain('MANUAL_TOKEN="manual-token"');
   });
 
-  it('凭据分区从 manifest 的 requiredEnv 派生（Tushare 也有一格）', () => {
+  it('凭据分区从 manifest 的 requiredEnv 派生', () => {
     const { settings } = store({});
     const ids = settings.read().credentials.map((item) => item.id);
-    expect(ids).toContain('tushare');
     expect(ids).toContain('fuyao');
     // 无 requiredEnv 的源不出现。
     expect(ids).not.toContain('eastmoney');

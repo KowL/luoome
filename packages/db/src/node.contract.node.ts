@@ -49,6 +49,7 @@ import {
 import { registerDataImportContractTests } from './repository/data-import.contract-tests.js';
 import { DrizzleDataImportRepository } from './repository/drizzle/data-import.js';
 import type { DrizzleAdviceRepository } from './repository/drizzle/index.js';
+import { registerMarketDumpContractTests } from './repository/market-dump.contract-tests.js';
 import * as schema from './schema/index.js';
 
 // Node 入口与 Bun/memory 跑同一套 repository 契约；factory 换成 node:sqlite :memory:。
@@ -60,6 +61,11 @@ registerRepositoryContractTests('node-sqlite', () => {
       (handle.repos.advice as DrizzleAdviceRepository).getOutcome(adviceId),
     close: handle.close,
   };
+});
+
+registerMarketDumpContractTests('node-sqlite', () => {
+  const handle = createNodeDrizzleRepos(':memory:');
+  return { repos: handle.repos, close: handle.close };
 });
 
 const tempDirs: string[] = [];
@@ -2056,6 +2062,56 @@ const fullFixture = (): Record<string, DataImportRow> => {
       volume: 100,
       source: 'fixture',
       recorded_at: T1,
+    },
+    market_dump_runs: {
+      run_id: 'dump-run-1',
+      kind: 'daily-k-10d',
+      dump_id: 'fixture-dump',
+      source: 'fuyao',
+      artifact_sha256: H('a'),
+      status: 'complete',
+      recorded_at: T0,
+      requested_at: T0,
+      downloaded_at: T0,
+      started_at: T0,
+      finished_at: T1,
+      next_row_offset: 1,
+      processed_rows: 1,
+      min_date: DAY,
+      max_date: DAY,
+      artifact_bytes: 1000,
+      error_kind: null,
+      error_message: null,
+    },
+    raw_daily_bar_revisions: {
+      stock_id: 'delisted-outside-current-universe',
+      date: DAY,
+      recorded_at: T0,
+      content_hash: H('b'),
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 100,
+      turnover: null,
+      source: 'fuyao',
+      dump_id: 'fixture-dump',
+      artifact_sha256: H('a'),
+    },
+    corporate_action_event_revisions: {
+      stock_id: 'delisted-outside-current-universe',
+      ex_date: DAY,
+      source_record_id: 'event-1',
+      recorded_at: T0,
+      content_hash: H('c'),
+      dividend_per_share: 1,
+      per_share_bonus: 0,
+      allotment_ratio: null,
+      allotment_price: null,
+      currency: 'CNY',
+      source: 'fuyao',
+      dump_id: null,
+      artifact_sha256: null,
     },
     financial_fact_revisions: {
       id: 'fact-1',

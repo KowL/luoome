@@ -1,0 +1,48 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719158204,
+    "pagination": {
+      "total": 52,
+      "pages": 2,
+      "size": 50,
+      "page": 2
+    },
+    "item": [
+      {
+        "thscode": "605388.SH",
+        "ticker": "605388",
+        "name": "均瑶健康",
+        "is_st": false,
+        "is_new": false,
+        "last_price": 6.58,
+        "price_change_ratio_pct": 10.0334,
+        "limit_up_time": "09:25",
+        "limit_up_reason": "益生菌食品+益生菌出海+菌株研发",
+        "continue_day_text": "首板",
+        "continue_day_cnt": 1,
+        "seal_money": 34249565,
+        "max_seal_money": 200778830.0,
+        "open_times": null
+      },
+      {
+        "thscode": "605577.SH",
+        "ticker": "605577",
+        "name": "龙版传媒",
+        "is_st": false,
+        "is_new": false,
+        "last_price": 14.3,
+        "price_change_ratio_pct": 10,
+        "limit_up_time": "09:25",
+        "limit_up_reason": "漫剧+出版发行+数字出版",
+        "continue_day_text": "2连板",
+        "continue_day_cnt": 2,
+        "seal_money": 158468310,
+        "max_seal_money": 656184100.0,
+        "open_times": null
+      }
+    ]
+  }
+}

@@ -1,13 +1,11 @@
 import type { Logger, StockUniverseManagerLike, StockUniverseSourceLike } from '@luoome/core';
 import { z } from 'zod';
 
-import { tushareConfigFromEnv } from '../tushare/client.js';
 import { EastmoneyStockUniverseAdapter } from './eastmoney.js';
 import { StockUniverseManager } from './manager.js';
 import { SinaStockUniverseAdapter } from './sina.js';
-import { TushareStockUniverseAdapter } from './tushare.js';
 
-export const StockUniverseSourceIdSchema = z.enum(['eastmoney', 'sina', 'tushare']);
+export const StockUniverseSourceIdSchema = z.enum(['eastmoney', 'sina']);
 export type StockUniverseSourceId = z.infer<typeof StockUniverseSourceIdSchema>;
 
 const StockUniverseSourceOrderSchema = z
@@ -56,11 +54,6 @@ export const createStockUniverseManagerFromEnv = (
         return new EastmoneyStockUniverseAdapter(common);
       case 'sina':
         return new SinaStockUniverseAdapter(common);
-      case 'tushare':
-        return new TushareStockUniverseAdapter({
-          ...common,
-          config: tushareConfigFromEnv(env),
-        });
       default:
         throw new Error(`不支持的股票目录数据源：${String(source satisfies never)}`);
     }

@@ -3,11 +3,13 @@ import type {
   DataArchiveWriter,
   DataImportStagingAdapter,
   DragonTigerManagerLike,
+  FinancialSnapshotManagerLike,
   FundamentalDataAdapterLike,
   LimitUpLadderManagerLike,
   LocalExecutionIdentity,
   Logger,
   MarketDataAdapterLike,
+  MarketDumpManagerLike,
   NewsManagerLike,
   NorthboundFlowManagerLike,
   NotificationManagerLike,
@@ -17,6 +19,7 @@ import type {
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
+  SectorMembershipManagerLike,
   SectorQuoteManagerLike,
   StockProfileManagerLike,
   StockUniverseManagerLike,
@@ -50,6 +53,12 @@ export interface BuildContextDependencies {
   readonly news?: NewsManagerLike;
   /** 行业板块行情 manager（只读；东方财富 push2 板块列表公开 API）。 */
   readonly sectorQuote?: SectorQuoteManagerLike;
+  /** 个股板块关系 manager（只读；Fuyao 个股反查 + 板块目录；默认不装配）。 */
+  readonly sectorMembership?: SectorMembershipManagerLike;
+  /** 财务当前快照 manager（只读；Fuyao 财务数据 API）。 */
+  readonly financialSnapshot?: FinancialSnapshotManagerLike;
+  /** 全市场 dump 同步 manager（显式触发；LUOOME_MARKET_DUMP_SOURCES 默认不装配）。 */
+  readonly marketDump?: MarketDumpManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
@@ -131,6 +140,11 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.northboundFlow === undefined ? {} : { northboundFlow: input.northboundFlow }),
     ...(input.news === undefined ? {} : { news: input.news }),
     ...(input.sectorQuote === undefined ? {} : { sectorQuote: input.sectorQuote }),
+    ...(input.sectorMembership === undefined ? {} : { sectorMembership: input.sectorMembership }),
+    ...(input.financialSnapshot === undefined
+      ? {}
+      : { financialSnapshot: input.financialSnapshot }),
+    ...(input.marketDump === undefined ? {} : { marketDump: input.marketDump }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

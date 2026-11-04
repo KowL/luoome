@@ -57,8 +57,13 @@ export type DragonTigerCapabilityMap = {
 export interface DragonTigerRawEntry {
   readonly code: string;
   readonly name?: string | undefined;
-  readonly close: number;
+  /**
+   * 收盘价；可选 —— Fuyao 龙虎榜契约不提供（Phase 0 实测），
+   * 缺省保持缺省并携带 close-unavailable warning，不用 0 或涨跌幅反推。
+   */
+  readonly close?: number | undefined;
   readonly change_pct?: number | undefined;
+  /** 换手率小数；可选 —— Fuyao 契约不提供，缺省携带 turnover-rate-unavailable warning。 */
   readonly turnover_rate?: number | undefined;
   readonly reason?: string | undefined;
   readonly net_amount?: number | undefined;
@@ -67,6 +72,8 @@ export interface DragonTigerRawEntry {
   readonly amount?: number | undefined;
   readonly trade_date?: string | undefined;
   readonly trade_id?: string | undefined;
+  /** 榜单区间天数：1=当日榜、3=三日榜；缺省视为 1。 */
+  readonly range_days?: number | undefined;
   readonly buy_seats?: DragonTigerRawSeat[] | undefined;
   readonly sell_seats?: DragonTigerRawSeat[] | undefined;
 }

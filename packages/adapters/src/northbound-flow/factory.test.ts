@@ -51,7 +51,7 @@ describe('createNorthboundFlowManagerFromEnv', () => {
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
     expect(() =>
       createNorthboundFlowManagerFromEnv(
-        { LUOOME_NORTHBOUND_FLOW_SOURCES: 'tushare' },
+        { LUOOME_NORTHBOUND_FLOW_SOURCES: 'unknown' },
         { logger: noopLogger },
       ),
     ).toThrow();

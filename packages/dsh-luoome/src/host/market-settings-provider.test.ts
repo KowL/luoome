@@ -39,39 +39,45 @@ describe('REQ-M3-15 新增供应商凭据', () => {
       expect(expected).not.toContain(section.id as never);
   });
 
-  it('配置 Tushare 凭据后切到它，请求打到 tushare 端点并解析出收盘价', async () => {
+  it('配置 Fuyao 凭据后切到它，请求打到 Fuyao 端点并解析出收盘价', async () => {
     const { settings, path } = store({ LUOOME_MARKET_PROVIDER: 'real' });
     settings.save(
       SaveMarketSettingsSchema.parse({
-        sources: ['tushare'],
-        fuyao: { clear: false },
-        credentials: { tushare: { apiKey: 'synthetic-tushare-token' } },
+        sources: ['fuyao'],
+        fuyao: { apiKey: 'synthetic-fuyao-key' },
+        credentials: {},
       }),
       () => () => {},
     );
-    // 凭据确实落到 0600 的 .env，且视图仍不回显。
-    expect(readFileSync(path, 'utf8')).toContain('TUSHARE_TOKEN="synthetic-tushare-token"');
-    expect(JSON.stringify(settings.read())).not.toContain('synthetic-tushare-token');
-    expect(settings.read().credentials.find((item) => item.id === 'tushare')?.configured).toBe(
-      true,
-    );
+    expect(readFileSync(path, 'utf8')).toContain('FUYAO_API_KEY="synthetic-fuyao-key"');
+    expect(JSON.stringify(settings.read())).not.toContain('synthetic-fuyao-key');
+    expect(settings.read().credentials.find((item) => item.id === 'fuyao')?.configured).toBe(true);
 
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       calls.push(url);
-      return new Response(
-        JSON.stringify({
-          code: 0,
-          msg: '',
-          data: {
-            // rt_k 快照行：price 即最新价，vol 已是股（见 adapters/src/market/tushare.ts:49-58）。
-            fields: ['ts_code', 'trade_time', 'open', 'high', 'low', 'price', 'vol'],
-            items: [['600519.SH', '2026-10-31T10:00:00+08:00', 1200, 1210, 1190, 1234.5, 1000]],
-          },
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
+      return Response.json({
+        code: 0,
+        message: 'success',
+        request_id: 'settings-provider-test',
+        data: {
+          timestamp: null,
+          item: [
+            {
+              thscode: '600519.SH',
+              ticker: '600519',
+              last_price: 1234.5,
+              open_price: 1200,
+              high_price: 1210,
+              low_price: 1190,
+              prev_price: 1200,
+              volume: 1000,
+              turnover: 1_234_500,
+            },
+          ],
+        },
+      });
     }) as unknown as typeof fetch;
 
     const adapter = createMarketAdapterFromEnv(settings.runtimeEnv(), {
@@ -80,11 +86,10 @@ describe('REQ-M3-15 新增供应商凭据', () => {
       clock: () => new Date('2026-10-31T02:00:00.000Z'),
     });
     const quote = await adapter.fetchQuote('600519.SH');
-    expect(quote.source).toBe('tushare');
+    expect(quote.source).toBe('fuyao');
     expect(Number(quote.close)).toBeCloseTo(1234.5, 4);
-    // 请求确实打到了新源的端点（链路级验收：验端点与参数，不验上游）。
     expect(calls.length).toBeGreaterThan(0);
-    for (const url of calls) expect(url).toContain('tushare.pro');
+    for (const url of calls) expect(url).toContain('fuyao.aicubes.cn');
   });
 
   it('未配置凭据就启用该源时失败并点名缺哪个环境变量', () => {
@@ -92,12 +97,12 @@ describe('REQ-M3-15 新增供应商凭据', () => {
     expect(() =>
       settings.save(
         SaveMarketSettingsSchema.parse({
-          sources: ['tushare'],
+          sources: ['fuyao'],
           fuyao: { clear: false },
           credentials: {},
         }),
         () => () => {},
       ),
-    ).toThrow(/TUSHARE_TOKEN/);
+    ).toThrow(/FUYAO_API_KEY/);
   });
 });

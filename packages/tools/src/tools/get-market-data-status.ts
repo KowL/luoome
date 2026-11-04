@@ -1,4 +1,4 @@
-import type { MarketSourceStatus, SourceStatus } from '@luoome/core';
+import { MarketDumpKindSchema, type MarketSourceStatus, type SourceStatus } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -107,11 +107,39 @@ export const getMarketDataStatusTool = defineTool({
       ctx.ashareSentiment?.status(),
       ctx.northboundFlow?.status(),
       ctx.news?.status(),
+      ctx.sectorQuote?.status(),
+      ctx.sectorMembership?.status(),
+      ctx.financialSnapshot?.status(),
     ].flatMap((status) => status ?? []);
-    const inventory: readonly SourceStatus[] = [
+    const dumpRuns = await ctx.marketDump?.status();
+    const dumpInventory: readonly (Omit<SourceStatus, 'lastErrorKind'> & {
+      readonly lastErrorKind?: string;
+    })[] =
+      dumpRuns === undefined
+        ? []
+        : MarketDumpKindSchema.options.map((kind) => {
+            const runs = dumpRuns
+              .filter((run) => run.kind === kind)
+              .sort((left, right) => right.requestedAt.getTime() - left.requestedAt.getTime());
+            const latest = runs[0];
+            const success = runs.find((run) => run.status === 'complete');
+            return {
+              dataset: `market-dump-${kind}`,
+              source: 'fuyao',
+              coverage: ['CN_A_SHARES'],
+              capabilityEnabled: true,
+              configurationReady: true,
+              ...(latest === undefined ? {} : { lastAttemptAt: latest.requestedAt }),
+              ...(success?.finishedAt == null ? {} : { lastSuccessAt: success.finishedAt }),
+              ...(success?.maxDate == null ? {} : { dataAsOf: success.maxDate }),
+              ...(latest?.errorKind == null ? {} : { lastErrorKind: latest.errorKind }),
+            };
+          });
+    const inventory = [
       ...marketInventory,
       ...universeInventory,
       ...nonMarketInventory,
+      ...dumpInventory,
     ];
     const sourceIds = [
       ...new Set([...inventory.map((item) => item.source), ...latestBySource.keys()]),

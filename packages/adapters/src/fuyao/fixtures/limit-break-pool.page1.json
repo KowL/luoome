@@ -1,0 +1,52 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719150330,
+    "pagination": {
+      "total": 33,
+      "pages": 1,
+      "size": 50,
+      "page": 1
+    },
+    "item": [
+      {
+        "thscode": "301311.SZ",
+        "ticker": "301311",
+        "name": "昆船智能",
+        "last_price": 18.68,
+        "price_change_ratio_pct": 18.0784,
+        "open_times": 5,
+        "turnover_ratio_pct": 14.921,
+        "turnover": 634609870.0,
+        "first_seal_time": "10:51",
+        "last_seal_time": "13:47"
+      },
+      {
+        "thscode": "300426.SZ",
+        "ticker": "300426",
+        "name": "华智数媒",
+        "last_price": 9.0,
+        "price_change_ratio_pct": 16.2791,
+        "open_times": 3,
+        "turnover_ratio_pct": 24.7418,
+        "turnover": 869310190.0,
+        "first_seal_time": "10:12",
+        "last_seal_time": "13:29"
+      },
+      {
+        "thscode": "301487.SZ",
+        "ticker": "301487",
+        "name": "盟固利",
+        "last_price": 20.5,
+        "price_change_ratio_pct": 13.5105,
+        "open_times": 1,
+        "turnover_ratio_pct": 17.3004,
+        "turnover": 1645498000.0,
+        "first_seal_time": "09:54",
+        "last_seal_time": "14:18"
+      }
+    ]
+  }
+}

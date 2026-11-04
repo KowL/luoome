@@ -511,7 +511,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 Caddy（可从既有镜像里取二进制）。运行期不需要 Bun，也不需要 Docker。
 从 `deploy/dsh/production.env.example` 复制私有 env 文件并填写（不要提交）。
 
-插件 tarball 的运行依赖只包含固定版本的 DSH SDK；`@luoome/*` 与 Zod 是构建依赖，已编入 host bundle。
+插件 tarball 的运行依赖包含固定版本的 DSH SDK 与 Parquet WASM；`@luoome/*`、Arrow 与 Zod 已编入 host bundle，WASM 随 `parquet-wasm` 运行包安装。
 目标机器可以用 `npm install --omit=dev <插件 tarball 路径>` 正常安装，无需解析 workspace 或链接仓库模块。
 `bun --no-env-file run test:plugin-install` 会在临时 profile 中实际执行 npm 安装并启动独立 DSH CLI，
 还会用活 Agent 执行原生工具，验证 HTTP 之外的插件作用域与权限检查；此验收不调用模型。
@@ -726,8 +726,8 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 | `LUOOME_HOME` | `~/.luoome` | 数据根目录 |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序（最多三个）；可加入 `xueqiu`（访客会话）、`tushare`（需 `TUSHARE_TOKEN`）或 `fuyao`（需 `FUYAO_API_KEY`） |
-| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序（最多三个）；可加入 `xueqiu`（访客会话）或 `fuyao`（需 `FUYAO_API_KEY`） |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina` |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |

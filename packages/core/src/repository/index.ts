@@ -729,6 +729,12 @@ export interface RepositoryRegistry {
   readonly workflowRun: WorkflowRunRepository;
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
+  /** fuyao-data-expansion Phase 2：dump 同步运行审计（append-only 事实链入口）。 */
+  readonly marketDumpRun: import('./market-dump.js').MarketDumpRunRepository;
+  /** fuyao-data-expansion Phase 2：append-only 原始（未复权）日线 revision。 */
+  readonly rawDailyBar: import('./market-dump.js').RawDailyBarRepository;
+  /** fuyao-data-expansion Phase 2：append-only 市场级原始公司行动事件。 */
+  readonly corporateActionEvent: import('./market-dump.js').CorporateActionEventRepository;
 }
 
 export interface ResearchTopicQuery {

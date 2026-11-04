@@ -22,7 +22,7 @@ export type SectorQuoteResult =
   | { readonly ok: true; readonly data: SectorQuoteManagerResult }
   | { readonly ok: false; readonly error: SectorQuoteError };
 
-/** 单个数据源适配器（当前仅 eastmoney 实现；name 用于错误 / 日志标识）。 */
+/** 单个数据源适配器（name 用于错误 / 日志标识）。 */
 export interface SectorQuoteAdapterLike {
   readonly name: string;
   /**
@@ -35,6 +35,17 @@ export interface SectorQuoteAdapterLike {
     fid: 'f3' | 'f6',
   ): Promise<{ readonly items: SectorQuoteRawItem[] }>;
 }
+
+/** 板块行情域的 capability map（SourceRegistry 实例化，fuyao-data-expansion §10.1）。 */
+export type SectorQuoteCapabilityMap = {
+  readonly 'sector-quote': {
+    readonly request: {
+      readonly pageSize: number | undefined;
+      readonly fid: 'f3' | 'f6';
+    };
+    readonly result: { readonly items: SectorQuoteRawItem[] };
+  };
+};
 
 /** 数据源 adapter 返回的原始条目（snake_case，协议层；涨跌幅已归一为小数）。 */
 export interface SectorQuoteRawItem {

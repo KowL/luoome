@@ -1,0 +1,57 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "timestamp": 1767110400000,
+    "item": [
+      {
+        "thscode": "600519.SH",
+        "ticker": "600519",
+        "period": "annual",
+        "fiscal_year": 2025,
+        "fiscal_period": "FY",
+        "report_date_ms": 1776355200000,
+        "period_end_ms": 1767110400000,
+        "currency": "CNY",
+        "act_cash_flow_net": 61522204989.35,
+        "invest_cash_flow_net": -31641898948.89,
+        "financing_cash_flow_net": -73427081208.87,
+        "pay_fixed_assets_etc_cash": 3127594916.41,
+        "pay_dividends_profits_interest_cash": 67241733345.45,
+        "cash_equivalents_net_addition": -43544479810.11
+      },
+      {
+        "thscode": "600519.SH",
+        "ticker": "600519",
+        "period": "annual",
+        "fiscal_year": 2024,
+        "fiscal_period": "FY",
+        "report_date_ms": 1776355200000,
+        "period_end_ms": 1735574400000,
+        "currency": "CNY",
+        "act_cash_flow_net": 92463692168.43,
+        "invest_cash_flow_net": -1785202630.71,
+        "financing_cash_flow_net": -71067506484.81,
+        "pay_fixed_assets_etc_cash": 4678712053.56,
+        "pay_dividends_profits_interest_cash": 70951027702.94,
+        "cash_equivalents_net_addition": 19609900305.36
+      },
+      {
+        "thscode": "600519.SH",
+        "ticker": "600519",
+        "period": "annual",
+        "fiscal_year": 2023,
+        "fiscal_period": "FY",
+        "report_date_ms": 1743609600000,
+        "period_end_ms": 1703952000000,
+        "currency": "CNY",
+        "act_cash_flow_net": 66593247721.09,
+        "invest_cash_flow_net": -9724414015.16,
+        "financing_cash_flow_net": -58889101991.94,
+        "pay_fixed_assets_etc_cash": 2619755888.79,
+        "pay_dividends_profits_interest_cash": 58754786730.01,
+        "cash_equivalents_net_addition": -2018550030.36
+      }
+    ]
+  }
+}

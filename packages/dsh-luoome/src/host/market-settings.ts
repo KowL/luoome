@@ -101,7 +101,7 @@ export const SaveMarketSettingsSchema = z
   .object({
     sources: MarketSourceOrderSchema,
     fuyao: CredentialSectionSchema,
-    /** 其它需要凭据的源（Tushare 等）；键 = 源 id。 */
+    /** 其它需要凭据的源；键 = 源 id。 */
     credentials: z.record(z.string(), CredentialSectionSchema).optional().default({}),
     /** 非行情源通道（task-32）：飞书通知。与 `credentials` 并列，不混进 manifest。 */
     notifications: z.object({ feishu: FeishuChannelSchema.optional() }).strict().optional(),
@@ -130,7 +130,6 @@ const SOURCE_LABELS: Readonly<Record<MarketSourceId, string>> = {
   tencent: '腾讯行情',
   sina: '新浪行情',
   xueqiu: '雪球（沪深报价 / 日线）',
-  tushare: 'Tushare',
   fuyao: 'FUYAO（同花顺）',
 };
 /** 收到的一个「非行情源」凭据通道（task-32：飞书通知）。语义与行情源不同，见 `kind`。 */

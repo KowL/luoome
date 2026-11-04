@@ -59,11 +59,11 @@ describe('SectorQuoteItemSchema', () => {
 });
 
 describe('FetchSectorQuotesQuerySchema', () => {
-  it('缺省合法；sort 默认 changePct；limit 默认 50；source 默认 eastmoney', () => {
+  it('缺省合法；sort 默认 changePct；limit 默认 50；source 缺省为 undefined（按配置顺序 fallback）', () => {
     const r = FetchSectorQuotesQuerySchema.parse({});
     expect(r.sort).toBe('changePct');
     expect(r.limit).toBe(50);
-    expect(r.source).toBe('eastmoney');
+    expect(r.source).toBeUndefined();
   });
 
   it('非法 sort / limit 越界拒绝', () => {

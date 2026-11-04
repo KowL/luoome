@@ -71,6 +71,7 @@ import { DELETION_OPERATION_POLICIES } from './deletion-operations.js';
 import { createGoalOperationPolicies } from './goal-operations.js';
 import { createDshGoalRoundRunner } from './goal-round-runner.js';
 import { createDshJobRunner } from './job-runner.js';
+import { syncMarketDumpOperation } from './market-operations.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -222,6 +223,7 @@ export const createProductionOperationPolicies = (
   } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
+  syncMarketDumpOperation,
   // REQ-M4-06：档位切换（write）。回执记录**提交当时的档位**，供「关→开→关 3 条可查」。
   setAutomationTierOperation,
   ...createAnalysisOperationPolicies(trusted),
@@ -341,12 +343,18 @@ export const createProductionHost = async (
       mode = 'recovery-only';
     }
 
-    const adapters = createLocalAdapters({
-      env: settingsStore.runtimeEnv(),
+    const adapterOptions = {
       clock,
       logger,
       researchVaultBackupRoot: join(config.home, 'backups', 'research-vault'),
-    });
+      marketDumpStores: {
+        runs: handle.repos.marketDumpRun,
+        rawDailyBars: handle.repos.rawDailyBar,
+        corporateActionEvents: handle.repos.corporateActionEvent,
+      },
+    };
+    let adapterEnv: NodeJS.ProcessEnv = { ...settingsStore.runtimeEnv(), LUOOME_HOME: config.home };
+    let adapters = createLocalAdapters({ ...adapterOptions, env: adapterEnv });
     const built = buildContext({
       repos: handle.repos,
       adapters: { market: adapters.market, stockUniverse: adapters.stockUniverse },
@@ -378,6 +386,13 @@ export const createProductionHost = async (
       northboundFlow: adapters.northboundFlow,
       news: adapters.news,
       sectorQuote: adapters.sectorQuote,
+      ...(adapters.sectorMembership === undefined
+        ? {}
+        : { sectorMembership: adapters.sectorMembership }),
+      ...(adapters.financialSnapshot === undefined
+        ? {}
+        : { financialSnapshot: adapters.financialSnapshot }),
+      ...(adapters.marketDump === undefined ? {} : { marketDump: adapters.marketDump }),
       ashareSentiment: adapters.ashareSentiment,
       researchRemote: adapters.researchRemote,
       notification: createNotificationManagerFromEnv(config.env, {
@@ -410,11 +425,47 @@ export const createProductionHost = async (
     });
     context = built;
     saveMarketSettings = (input) =>
-      settingsStore.save(input, (env) => {
+      settingsStore.save(input, (candidateEnv) => {
+        const env: NodeJS.ProcessEnv = { ...candidateEnv, LUOOME_HOME: config.home };
+        const fuyaoCredentialsChanged = ['FUYAO_API_KEY', 'FUYAO_BASE_URL'].some(
+          (key) => env[key] !== adapterEnv[key],
+        );
+        if (
+          fuyaoCredentialsChanged ||
+          (adapters.sources.fuyao === undefined &&
+            env.LUOOME_MARKET_SOURCES?.split(',').includes('fuyao'))
+        ) {
+          const replacement = createLocalAdapters({ ...adapterOptions, env });
+          return () => {
+            adapters = replacement;
+            adapterEnv = env;
+            context = {
+              ...context,
+              adapters: { market: replacement.market, stockUniverse: replacement.stockUniverse },
+              limitUpLadder: replacement.limitUpLadder,
+              dragonTiger: replacement.dragonTiger,
+              stockProfile: replacement.stockProfile,
+              northboundFlow: replacement.northboundFlow,
+              news: replacement.news,
+              sectorQuote: replacement.sectorQuote,
+              ashareSentiment: replacement.ashareSentiment,
+              ...(replacement.sectorMembership === undefined
+                ? {}
+                : { sectorMembership: replacement.sectorMembership }),
+              ...(replacement.financialSnapshot === undefined
+                ? {}
+                : { financialSnapshot: replacement.financialSnapshot }),
+              ...(replacement.marketDump === undefined
+                ? {}
+                : { marketDump: replacement.marketDump }),
+            };
+          };
+        }
         const market = createMarketAdapterFromEnv(env, {
           clock,
           logger,
-          sources: adapters.sources,
+          sources: { eastmoney: adapters.sources.eastmoney },
+          ...(adapters.sources.fuyao === undefined ? {} : { fuyaoClient: adapters.sources.fuyao }),
         });
         const ashareSentiment = createAShareSentimentManagerFromEnv(env, {
           clock,
@@ -423,6 +474,7 @@ export const createProductionHost = async (
           sources: adapters.sources,
         });
         return () => {
+          adapterEnv = env;
           context = { ...context, adapters: { ...context.adapters, market }, ashareSentiment };
         };
       });

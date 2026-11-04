@@ -141,7 +141,7 @@ describe('FinancialFact / strict PIT vintage', () => {
       stockId: '600000.SH',
       source: 'mock-fundamental-pit-fixture',
     });
-    const realFact = makeFact({ id: 'fact-real', stockId: '600001.SH', source: 'tushare-pit-v1' });
+    const realFact = makeFact({ id: 'fact-real', stockId: '600001.SH', source: 'real-pit-v1' });
     const input = {
       stockIds: ['600000.SH', '600001.SH'],
       metricIds: ['roe'],
@@ -154,7 +154,7 @@ describe('FinancialFact / strict PIT vintage', () => {
     expect(all.facts.map((fact) => fact.id).sort()).toEqual(['fact-mock', 'fact-real']);
     expect(all.status).toBe('complete');
 
-    const realOnly = resolveStrictPitFinancialVintage({ ...input, sources: ['tushare-pit-v1'] });
+    const realOnly = resolveStrictPitFinancialVintage({ ...input, sources: ['real-pit-v1'] });
     expect(realOnly.facts.map((fact) => fact.id)).toEqual(['fact-real']);
     expect(realOnly.missing).toEqual([
       { stockId: '600000.SH', metricId: 'roe', reason: 'not-covered' },

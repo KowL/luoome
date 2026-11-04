@@ -21,7 +21,7 @@
 
 门禁结果写入不可变审计。`complete` 才能进入执行；混合缺失为 `partial`，全部关键事实缺失为 `unavailable`。没有完整门禁时只返回审计和可用性，禁止输出净收益、回撤、Sharpe、胜率等伪指标。
 
-PIT universe 门禁的 `reason` 同时披露**快照属性覆盖**：读取 evaluation day 所引用快照的 `source` 与「实际提供了哪些 PIT 属性」（`StockUniverseRepository.describeSnapshotAttributes`），把来源未提供的属性（默认 eastmoney/sina 只提供名称派生的 ST 状态，缺上市状态/行业/上市日期/退市日期）以及补齐方式（配置 `TUSHARE_TOKEN` 并在 `LUOOME_STOCK_UNIVERSE_SOURCES` 中加入 `tushare` 后重新同步 universe）写进同一条审计。属性缺口不改变 `pit-universe` 的身份判定语义，但不得静默成 `unknown`；真正被卡住的可交易性门禁 reason 同样带出来源与补齐方式。
+PIT universe 门禁的 `reason` 同时披露**快照属性覆盖**：读取 evaluation day 所引用快照的 `source` 与「实际提供了哪些 PIT 属性」（`StockUniverseRepository.describeSnapshotAttributes`），把来源未提供的属性（默认 eastmoney/sina 只提供名称派生的 ST 状态，缺上市状态/行业/上市日期/退市日期）以及当前目录能力缺口写进同一条审计。属性缺口不改变 `pit-universe` 的身份判定语义，但不得静默成 `unknown`；真正被卡住的可交易性门禁 reason 同样带出来源与缺口。新增目录源须先证明相应属性覆盖，再进入生产路由。
 
 ## 首个执行模型
 

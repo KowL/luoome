@@ -6,7 +6,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
 import { Context } from '@deepseek-ai/cordis';
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local';
 import LlmRuntime, {
@@ -14,6 +13,7 @@ import LlmRuntime, {
   LlmAdapter,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm';
+import { FuyaoClient } from '@luoome/adapters';
 import {
   type Account,
   type Advice,
@@ -318,7 +318,7 @@ describe('dsh-luoome production composition root', () => {
       });
       expect(host.context.adapters.market).not.toBe(previous.adapters.market);
       expect(host.context.ashareSentiment).not.toBe(previous.ashareSentiment);
-      expect(host.context.news).toBe(previous.news);
+      expect(host.context.news).not.toBe(previous.news);
       const quote = await host.invokeMarket('fetch_quote', { stockId: '600519.SH' }, signal());
       expect(quote).toMatchObject({
         ok: true,
@@ -340,6 +340,77 @@ describe('dsh-luoome production composition root', () => {
     } finally {
       host.dispose();
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('forwards all Fuyao ports and keeps one shared client through reorder and credential rotation', async () => {
+    const home = tempRoot();
+    await seedOwnerAccount(home);
+    const getData = vi
+      .spyOn(FuyaoClient.prototype, 'getData')
+      .mockRejectedValue(new Error('fixture upstream failure'));
+    const host = await createProductionHost(
+      productionInput(home, {
+        env: {
+          LUOOME_MARKET_PROVIDER: 'real',
+          LUOOME_MARKET_SOURCES: 'fuyao',
+          LUOOME_SECTOR_MEMBERSHIP_SOURCES: 'fuyao',
+          LUOOME_FINANCIAL_SNAPSHOT_SOURCES: 'fuyao',
+          LUOOME_MARKET_DUMP_SOURCES: 'fuyao',
+          LUOOME_ASHARE_SENTIMENT_SOURCES: 'fuyao',
+          FUYAO_API_KEY: 'fixture-key-v1',
+        },
+      }),
+    );
+    const exercise = async (includeMarket = true) => {
+      getData.mockClear();
+      if (includeMarket) await host.invokeMarket('fetch_quote', { stockId: '600519.SH' }, signal());
+      await host.invokeMarket(
+        'get_stock_sector_memberships',
+        { stockIds: ['600519.SH'] },
+        signal(),
+      );
+      await host.invokeMarket('get_stock_financial_snapshot', { stockId: '600519.SH' }, signal());
+      await expect(host.context.marketDump?.sync({ kind: 'daily-k-10d' })).rejects.toThrow(
+        'fixture upstream failure',
+      );
+      expect(getData.mock.calls.length).toBeGreaterThanOrEqual(includeMarket ? 4 : 3);
+      expect(new Set(getData.mock.contexts).size).toBe(1);
+      return getData.mock.contexts[0];
+    };
+    try {
+      expect(host.context.sectorMembership).toBeDefined();
+      expect(host.context.financialSnapshot).toBeDefined();
+      expect(host.context.marketDump).toBeDefined();
+      expect(await host.invoke('get_market_dump_status', {}, signal())).toMatchObject({
+        ok: true,
+        data: { runs: [] },
+      });
+      const firstClient = await exercise();
+      const firstMembership = host.context.sectorMembership;
+      const firstNews = host.context.news;
+      host.marketSettings.save({
+        sources: ['fuyao', 'tencent'],
+        fuyao: { clear: false },
+        credentials: {},
+      });
+      expect(host.context.sectorMembership).toBe(firstMembership);
+      expect(host.context.news).toBe(firstNews);
+      expect(await exercise(false)).toBe(firstClient);
+      host.marketSettings.save({
+        sources: ['fuyao'],
+        fuyao: {
+          apiKey: 'fixture-key-v2',
+          baseUrl: 'https://fuyao-rotated.example.test',
+          clear: false,
+        },
+        credentials: {},
+      });
+      expect(host.context.sectorMembership).not.toBe(firstMembership);
+      expect(await exercise()).not.toBe(firstClient);
+    } finally {
+      host.dispose();
+      getData.mockRestore();
     }
   });
 
@@ -666,6 +737,7 @@ describe('dsh-luoome production write policies', () => {
     const policies = createProductionOperationPolicies();
     expect(policies.map((policy) => policy.tool.name)).toEqual([
       'save_decision_review',
+      'sync_market_dump',
       // REQ-M4-06：档位切换（write）。回执记**提交当时的档位**。
       'set_automation_tier',
       'record_advice',

@@ -1,0 +1,139 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719135600,
+    "window": {
+      "length": 30,
+      "date_list": ["2026-11-03", "2026-11-02", "2026-10-30", "2026-10-29", "2026-10-28"],
+      "board_caps": {
+        "two_board": 4,
+        "three_board": 4,
+        "four_board": 3,
+        "five_board": 2,
+        "six_board": 2,
+        "seven_over": 1
+      }
+    },
+    "item": [
+      {
+        "date": "2026-11-03",
+        "boards": {
+          "two_board": [
+            {
+              "thscode": "002029.SZ",
+              "ticker": "002029",
+              "name": "七 匹 狼",
+              "board_num": 2,
+              "seal_nextday": null,
+              "sign_level": 0
+            },
+            {
+              "thscode": "600293.SH",
+              "ticker": "600293",
+              "name": "三峡新材",
+              "board_num": 2,
+              "seal_nextday": null,
+              "sign_level": 0
+            }
+          ],
+          "three_board": [
+            {
+              "thscode": "000995.SZ",
+              "ticker": "000995",
+              "name": "皇台酒业",
+              "board_num": 3,
+              "seal_nextday": null,
+              "sign_level": 0
+            }
+          ],
+          "four_board": [
+            {
+              "thscode": "002086.SZ",
+              "ticker": "002086",
+              "name": "东方海洋",
+              "board_num": 4,
+              "seal_nextday": null,
+              "sign_level": 0
+            },
+            {
+              "thscode": "600261.SH",
+              "ticker": "600261",
+              "name": "阳光照明",
+              "board_num": 4,
+              "seal_nextday": null,
+              "sign_level": 0
+            }
+          ],
+          "five_board": [],
+          "six_board": [],
+          "seven_over": []
+        }
+      },
+      {
+        "date": "2026-11-02",
+        "boards": {
+          "two_board": [
+            {
+              "thscode": "000995.SZ",
+              "ticker": "000995",
+              "name": "皇台酒业",
+              "board_num": 2,
+              "seal_nextday": true,
+              "sign_level": 0
+            },
+            {
+              "thscode": "000417.SZ",
+              "ticker": "000417",
+              "name": "合百集团",
+              "board_num": 2,
+              "seal_nextday": false,
+              "sign_level": 0
+            }
+          ],
+          "three_board": [
+            {
+              "thscode": "002086.SZ",
+              "ticker": "002086",
+              "name": "东方海洋",
+              "board_num": 3,
+              "seal_nextday": true,
+              "sign_level": 0
+            },
+            {
+              "thscode": "600261.SH",
+              "ticker": "600261",
+              "name": "阳光照明",
+              "board_num": 3,
+              "seal_nextday": true,
+              "sign_level": 0
+            }
+          ],
+          "four_board": [
+            {
+              "thscode": "002172.SZ",
+              "ticker": "002172",
+              "name": "澳洋健康",
+              "board_num": 4,
+              "seal_nextday": false,
+              "sign_level": 0
+            }
+          ],
+          "five_board": [],
+          "six_board": [
+            {
+              "thscode": "001219.SZ",
+              "ticker": "001219",
+              "name": "青岛食品",
+              "board_num": 6,
+              "seal_nextday": false,
+              "sign_level": 0
+            }
+          ],
+          "seven_over": []
+        }
+      }
+    ]
+  }
+}

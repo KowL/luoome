@@ -401,7 +401,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
   `limit-up-ladder` manager 提供；scan/scheduled 按运行 `dataAsOf` 的 Asia/Shanghai 日期查询真实快照并写入
   PIT repository，provider coverage 可审计；replay 优先读取对应历史快照，缺失时保持 `unknown`，不读取当前快照。
 - [ ] 增加"炸板 / 断板"历史语义字段。语义、审计信封、数据源矩阵与上线门禁已在 DDD 冻结；
-  当前 Eastmoney 无正式发布时间/revision/历史保留契约，Tushare 候选在本环境无 token，故字段保持
+  当前 Eastmoney 无正式发布时间/revision/历史保留契约，Fuyao 候选仍需完成真实权限、覆盖和 revision 验收，故字段保持
   未注册，历史个股事实只读 PIT repository，不用当前情绪接口或空响应倒推。
 - [x] 与个股详情/研究事实/行情 marker 区打通；缺失历史保持 unavailable。
 

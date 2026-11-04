@@ -28,7 +28,7 @@ describe('fundamental/factory', () => {
   it('未知 provider 在启动装配时明确拒绝，不 fallback 到 market', () => {
     expect(FundamentalProviderIdSchema.safeParse('mock').success).toBe(true);
     expect(() =>
-      createFundamentalDataAdapterFromEnv({ LUOOME_FUNDAMENTAL_PROVIDER: 'tushare' }),
+      createFundamentalDataAdapterFromEnv({ LUOOME_FUNDAMENTAL_PROVIDER: 'unknown' }),
     ).toThrow('仅允许 LUOOME_FUNDAMENTAL_PROVIDER=mock');
   });
 });

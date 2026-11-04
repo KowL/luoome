@@ -21,7 +21,6 @@ describe('MARKET_SOURCE_MANIFEST 与 factory binding 一致性', () => {
       const adapter = createMarketAdapterFromEnv(
         {
           LUOOME_MARKET_PROVIDER: 'real',
-          TUSHARE_TOKEN: 'manifest-test-token',
           FUYAO_API_KEY: 'manifest-test-key',
         },
         { logger: silentLogger(), sourceOrder: [id] },

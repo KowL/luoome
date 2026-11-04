@@ -100,6 +100,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   // 本地市场事实与数据健康（每日市场分析；external 刷新留待 M2）
   'get_market_data_status',
   'get_stock_universe_status',
+  'get_market_dump_status',
   'get_data_diagnostics',
   'get_closing_batch_audit',
   'limit_up_ladder',
@@ -145,6 +146,8 @@ export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'fetch_news',
   'fetch_sector_quotes',
   'get_stock_profile',
+  'get_stock_sector_memberships',
+  'get_stock_financial_snapshot',
   'get_account_performance',
 ]);
 

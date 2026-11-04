@@ -747,6 +747,91 @@ export const ensureSchema = (db: DrizzleDatabase<Schema>): void => {
     CREATE INDEX IF NOT EXISTS daily_bar_revisions_lookup_idx
     ON daily_bar_revisions (stock_id, date, recorded_at)
   `);
+  // fuyao-data-expansion Phase 2：dump 事实链三表（设计 §5.3/§5.4/§6.1），幂等 additive DDL。
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS market_dump_runs (
+      run_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      dump_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      artifact_sha256 TEXT,
+      status TEXT NOT NULL,
+      recorded_at INTEGER,
+      requested_at INTEGER NOT NULL,
+      downloaded_at INTEGER,
+      started_at INTEGER,
+      finished_at INTEGER,
+      next_row_offset INTEGER NOT NULL,
+      processed_rows INTEGER NOT NULL,
+      min_date INTEGER,
+      max_date INTEGER,
+      artifact_bytes INTEGER,
+      error_kind TEXT,
+      error_message TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_dump_runs_kind_requested_idx
+    ON market_dump_runs (kind, requested_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_dump_runs_resumable_idx
+    ON market_dump_runs (kind, dump_id, artifact_sha256, status)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS raw_daily_bar_revisions (
+      stock_id TEXT NOT NULL,
+      date INTEGER NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      content_hash TEXT NOT NULL,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume REAL NOT NULL,
+      turnover REAL,
+      source TEXT NOT NULL,
+      dump_id TEXT NOT NULL,
+      artifact_sha256 TEXT NOT NULL,
+      CONSTRAINT raw_daily_bar_revisions_pk PRIMARY KEY (stock_id, date, recorded_at, content_hash)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS raw_daily_bar_revisions_lookup_idx
+    ON raw_daily_bar_revisions (stock_id, date, recorded_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS raw_daily_bar_revisions_artifact_idx
+    ON raw_daily_bar_revisions (dump_id, artifact_sha256)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS corporate_action_event_revisions (
+      stock_id TEXT NOT NULL,
+      ex_date INTEGER NOT NULL,
+      source_record_id TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      content_hash TEXT NOT NULL,
+      dividend_per_share REAL NOT NULL,
+      per_share_bonus REAL NOT NULL,
+      allotment_ratio REAL,
+      allotment_price REAL,
+      currency TEXT NOT NULL,
+      source TEXT NOT NULL,
+      dump_id TEXT,
+      artifact_sha256 TEXT,
+      CONSTRAINT corporate_action_event_revisions_pk PRIMARY KEY (
+        stock_id, ex_date, source_record_id, recorded_at, content_hash
+      )
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS corporate_action_event_revisions_lookup_idx
+    ON corporate_action_event_revisions (stock_id, ex_date, recorded_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS corporate_action_event_revisions_artifact_idx
+    ON corporate_action_event_revisions (dump_id, artifact_sha256)
+  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS financial_fact_revisions (
       id TEXT PRIMARY KEY,

@@ -11,6 +11,8 @@ export class SourceExecutionError extends Error {
     readonly kind: SourceErrorKind,
     message: string,
     override readonly cause?: unknown,
+    /** 429 响应的 Retry-After 毫秒数；仅 kind='rate_limited' 时可能携带。 */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
   }

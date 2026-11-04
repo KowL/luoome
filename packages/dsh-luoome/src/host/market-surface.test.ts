@@ -92,6 +92,10 @@ afterEach(() => {
 });
 
 describe('market external allowlist reconciliation', () => {
+  it('sync_market_dump 的 write 能力使其不能进入 external-only surface', () => {
+    expect(() => assertExternalMarketAllowlist(['sync_market_dump'], toolRegistry.all())).toThrow();
+    expect(DEFAULT_MARKET_TOOL_ALLOWLIST).not.toContain('sync_market_dump');
+  });
   it('default allowlist matches the real registry as external-only tools', () => {
     const privateResearch = new Set<string>(privateResearchTools);
     for (const name of DEFAULT_MARKET_TOOL_ALLOWLIST) {
@@ -116,6 +120,8 @@ describe('market external allowlist reconciliation', () => {
       'fetch_news',
       'fetch_sector_quotes',
       'get_stock_profile',
+      'get_stock_sector_memberships',
+      'get_stock_financial_snapshot',
       // REQ-M3-07：账户绩效回源 + 落快照，声明 external，因此只能进 external 名单。
       'get_account_performance',
     ]);

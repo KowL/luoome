@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
+import { type SourceId, SourceIdSchema } from '../source.js';
 
 /**
  * 行业板块行情快照实体。
@@ -11,6 +12,8 @@ import { InvariantError } from '../error/index.js';
  *   f4 涨跌额 / f6 成交额(元) / f12 板块代码(BKxxxx) / f14 名称 / f104 上涨家数 /
  *   f105 下跌家数 / f128 领涨股名称 / f140 领涨股代码 / f136 领涨股涨跌幅 / f124 行情时间戳
  *   （字段码经真实请求冒烟验证 2026-08-22）
+ * - Fuyao 源（Phase 4）输出 `.TI` 同花顺指数代码，名称来自目录接口 join（快照不返回 name）；
+ *   快照时间只有 retrieval 语义，不生成盘中 observedAt
  * - 涨跌幅统一存小数（0.10 = 10%），与 limit-up-ladder / dragon-tiger 的 changePct 口径一致；
  *   成交额单位为元，不做换算
  * - 领涨股字段上游可能缺（极个别板块），item 层置 undefined，不视为数据错误
@@ -18,10 +21,13 @@ import { InvariantError } from '../error/index.js';
 
 // ---------- 枚举与基础类型 ----------
 
-/** 数据源名称（当前仅 eastmoney；保留枚举便于 schema 限定与将来扩展）。 */
-export type SectorQuoteSource = 'eastmoney';
+/**
+ * 数据源标识（通用 SourceId；当前注册 eastmoney 与 fuyao）。
+ * 兼容扩宽：docs/ddd/fuyao-data-expansion-and-tushare-retirement-design.md §10.1。
+ */
+export type SectorQuoteSource = SourceId;
 
-export const SectorQuoteSourceSchema = z.enum(['eastmoney']);
+export const SectorQuoteSourceSchema = SourceIdSchema;
 
 /** 排序字段（映射上游 fid：changePct → f3，amount → f6；均为降序）。 */
 export const SectorQuoteSortSchema = z.enum(['changePct', 'amount']);
@@ -31,7 +37,7 @@ export type SectorQuoteSort = z.infer<typeof SectorQuoteSortSchema>;
 // ---------- 单个板块 ----------
 
 export const SectorQuoteItemSchema = z.object({
-  /** 板块代码（BKxxxx）。 */
+  /** 板块代码（eastmoney 为 BKxxxx；fuyao 为 .TI 同花顺指数代码）。 */
   code: z.string().min(1),
   name: z.string().min(1),
   /** 板块指数最新点位。 */
@@ -78,7 +84,8 @@ export const FetchSectorQuotesQuerySchema = z.object({
   limit: z.number().int().min(1).max(200).default(50),
   /** 是否按上游 total 分页加载完整集合。 */
   all: z.boolean().optional(),
-  source: SectorQuoteSourceSchema.default('eastmoney'),
+  /** 可选单源路由约束：未传时按配置顺序 fallback；显式传入时只尝试该源（§4.6）。 */
+  source: SectorQuoteSourceSchema.optional(),
 });
 
 export type FetchSectorQuotesQuery = z.infer<typeof FetchSectorQuotesQuerySchema>;

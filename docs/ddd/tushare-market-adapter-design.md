@@ -1,6 +1,7 @@
 # Tushare 行情适配器详细设计
 
-> 状态：已实施（2026-07-27）
+> 状态：**已退役（2026-11-03）**。行情、股票目录、设置页、配置与协议实现均已移除；本文仅保留历史设计追溯。现行方案见 [Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)。
+> 原实施日期：2026-07-27
 > 日期：2026-07-27
 > 范围：直连 tushare 官方 HTTP API，使其成为 Eastmoney / Tencent 之外的第三个真实行情源；包含 Phase 4 MinuteBar 当前会话能力
 > 关联文档：[架构说明 §4.7](../ARCHITECTURE.md)、[个股行情查看详细设计](./stock-market-view-detailed-design.md)、[Tushare 集成手册](../runbooks/tushare-integration.md)

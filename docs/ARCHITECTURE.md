@@ -429,7 +429,7 @@ Adapter manager 提供：
   `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
   Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
-- 指数行情严格区分 `realtime-index` 与 `delayed-index`；Tushare 日线型指数数据不能进入实时接口
+- 指数行情严格区分 `realtime-index` 与 `delayed-index`；日线型或缺少可信行情时间的指数数据不能进入实时接口
 - 腾讯单股与批量报价共用 qt 原生 OHLCV，不从分时采样推算高低价；A 股量/额从手/万换算，
   港股保持股数与原币金额。新浪与腾讯缺少有效 OHLCV 时拒绝该行，不合成价格或成交量。
   腾讯指数要求有效的上游时间，恒生指数的斜杠日期也按交易所时区解析，缺失时间不能冒充实时。
@@ -460,12 +460,11 @@ surface 装配（v0.5 起）：CLI/TUI/Web/插件四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
-`eastmoney`、`sina`、`tencent`、`tushare`、`fuyao`、`xueqiu`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
-Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
-`http://api.tushare.pro`），显式启用 fuyao 时必须配置 `FUYAO_API_KEY`（`FUYAO_BASE_URL` 可选，
-缺省 `https://fuyao.aicubes.cn`），非法配置在启动期抛错。
-详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md) 与
-[fuyao-market-adapter-design](./ddd/fuyao-market-adapter-design.md)。
+`eastmoney`、`sina`、`tencent`、`fuyao`、`xueqiu`。未配置时默认 Eastmoney → Tencent → Sina。
+显式启用 fuyao 时必须配置 `FUYAO_API_KEY`（`FUYAO_BASE_URL` 可选，缺省
+`https://fuyao.aicubes.cn`），非法配置在启动期抛错。Tushare 已下线，不再是可配置来源；
+存量历史事实中的来源字符串保持只读兼容。
+详见 [fuyao-market-adapter-design](./ddd/fuyao-market-adapter-design.md)。
 雪球仅绑定沪深个股 `quote` 与 `daily-bars`，日 K 固定使用上游 `type=before` 前复权口径，按列名解析并向过去分页；成交量原本以股计，不再乘 100。访客 cookie 仅保存在适配器内存中，首次请求自动建立，会话失效最多重建一次；失败经既有 registry 降级并记录来源状态。报价保留上游交易时间，缺失时明确标记 retrieval。没有批量报价、全市场快照、指数、搜索或分时绑定。
 fuyao 快照信封时间在休市日仍随请求更新，逐股行无行情事件时间；其报价标为
 `timestampSource=retrieval`，全市场快照不填 `observedAt/dataAsOf`，不能作为盘中行动的可信时间证据。
@@ -599,8 +598,7 @@ display、intraday-rule、post-market 三类 caller 使用不同有效性边界�
 
 **行情底座 Phase 4 起收口**：`MarketSourceRegistry` 是行情来源启用顺序、capability、
 coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManager` 只接受 Registry；
-`realtime-index` 与 `delayed-index` 分路，Tushare 不再通过隐藏 Eastmoney 旁路提供实时
-指数。`get_market_data_status` 从 Registry、股票目录 checkpoint 和连板天梯显式来源动态
+`realtime-index` 与 `delayed-index` 分路，延时指数不会通过隐藏旁路进入实时接口。`get_market_data_status` 从 Registry、股票目录 checkpoint 和连板天梯显式来源动态
 生成数据集状态，不维护固定 provider 常量。
 
 **v0.7 起新增**：`luoomeHome()` 路径工具（当时从 CLI 的 context 抽出，被 watch / holidays / future paths 共享；该 CLI 包已随 T15 删除，实现归位到 core）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。

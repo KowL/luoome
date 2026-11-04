@@ -58,9 +58,9 @@
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
-| [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tushare 当前会话能力、缺口/保留和 Web 状态 |
-| [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |
-| [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 作为第四真实行情源的能力映射、envelope 错误转译与 factory 接线 |
+| [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tencent 当前会话能力、缺口/保留和 Web 状态 |
+| [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 行情能力映射、envelope 错误转译与 factory 接线 |
+| [Fuyao 扩展与 Tushare 退役设计](./ddd/fuyao-data-expansion-and-tushare-retirement-design.md) | Fuyao 分域扩展、离线 dump、公司行动、实时/PIT 门禁，以及 Tushare 全量退役与迁移验收 |
 | [数据源可插拔与统一观测设计](./ddd/source-pluggability-and-observation-design.md) | 通用 SourceRegistry、单一 EastmoneySource、非行情域源可插拔与全域源健康观测（评审中） |
 | [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 get_market_data_status 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
@@ -100,7 +100,6 @@
 | 文档 | 用途 |
 |---|---|
 | [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+1/T+3/T+5 日检、P50/P95/max 周报与真实 provider smoke |
-| [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
 
 ## 历史归档
 

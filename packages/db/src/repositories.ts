@@ -13,6 +13,7 @@ import {
   DrizzleAdviceRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
+  DrizzleCorporateActionEventRepository,
   DrizzleDailyBarRepository,
   DrizzleDecisionReviewRepository,
   DrizzleDecisionTradeRepository,
@@ -24,12 +25,14 @@ import {
   DrizzleInvestmentWorkspaceRepository,
   DrizzleLedgerRepository,
   DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMarketDumpRunRepository,
   DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
   DrizzlePortfolioCashFlowRepository,
   DrizzlePortfolioCorporateActionRepository,
   DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
+  DrizzleRawDailyBarRepository,
   DrizzleReportRepository,
   DrizzleResearchEmbeddingRepository,
   DrizzleResearchHypothesisVersionRepository,
@@ -129,6 +132,10 @@ export const createReposFromDatabase = (db: DrizzleDatabase<Schema>): Repository
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),
+    // fuyao-data-expansion Phase 2：dump 事实链
+    marketDumpRun: new DrizzleMarketDumpRunRepository(db),
+    rawDailyBar: new DrizzleRawDailyBarRepository(db),
+    corporateActionEvent: new DrizzleCorporateActionEventRepository(db),
   };
   return repos;
 };

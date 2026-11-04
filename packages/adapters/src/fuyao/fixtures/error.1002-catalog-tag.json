@@ -1,0 +1,6 @@
+{
+  "code": 1002,
+  "message": "Invalid parameter format: tag must be one of cn_concept / region / tszs / industry",
+  "request_id": "00000000000000000000000000000000",
+  "data": null
+}

@@ -1,0 +1,6 @@
+{
+  "code": 1002,
+  "message": "date must be an A-share trading day",
+  "request_id": "00000000000000000000000000000000",
+  "data": null
+}

@@ -384,8 +384,8 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     expect(pit?.reason).toContain('上市日期');
     expect(pit?.reason).toContain('退市日期');
     expect(pit?.reason).toContain('unknown');
-    expect(pit?.reason).toContain('TUSHARE_TOKEN');
-    expect(pit?.reason).toContain('LUOOME_STOCK_UNIVERSE_SOURCES');
+    expect(pit?.reason).toContain('当前已启用目录源未覆盖这些属性');
+    expect(pit?.reason).toContain('重新同步 universe');
     expect((pit?.reason ?? '').length).toBeLessThanOrEqual(500);
 
     // 真正被卡住的可交易性门禁也要指出来源与补法，而不是只说“缺上市状态”。
@@ -393,7 +393,7 @@ describe('T22 market facts 生产者 + 门禁披露', () => {
     expect(tradability).toMatchObject({ status: 'unavailable' });
     expect(tradability?.reason).toContain('缺上市状态');
     expect(tradability?.reason).toContain('eastmoney');
-    expect(tradability?.reason).toContain('TUSHARE_TOKEN');
+    expect(tradability?.reason).toContain('当前已启用目录源未覆盖这些属性');
     expect((tradability?.reason ?? '').length).toBeLessThanOrEqual(500);
   });
 });

@@ -209,6 +209,10 @@ const EXPECTED_TOOL_NAMES = [
   // 龙虎榜（只读）
   'dragon_tiger_list',
   'get_stock_profile',
+  'get_stock_financial_snapshot',
+  'get_stock_sector_memberships',
+  'sync_market_dump',
+  'get_market_dump_status',
   // 北向资金历史流（只读）
   'northbound_flow',
   // 财经要闻（只读）
@@ -309,6 +313,18 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('Fuyao tools 声明查询与 dump 同步的精确组合能力', () => {
+    expect(toolRegistry.get('sync_market_dump')?.sideEffect).toBe('external');
+    expect(toolRegistry.get('sync_market_dump')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+    expect(toolRegistry.get('get_market_dump_status')?.requiredCapabilities).toEqual(['read']);
+    for (const name of ['get_stock_sector_memberships', 'get_stock_financial_snapshot']) {
+      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external']);
+    }
+  });
+
   it('sync_financial_facts 声明 external + write 组合能力', () => {
     expect(toolRegistry.get('sync_financial_facts')?.requiredCapabilities).toEqual([
       'external',
@@ -390,9 +406,11 @@ describe('toolRegistry', () => {
       'fetch_sector_quotes',
       'get_account_performance',
       'get_ashare_sentiment',
+      'get_stock_financial_snapshot',
       'get_stock_market_view',
       'get_stock_minute_bars',
       'get_stock_profile',
+      'get_stock_sector_memberships',
       'import_remote_research_document',
       'list_strategy_result_views',
       'prepare_strategy_data',
@@ -408,6 +426,7 @@ describe('toolRegistry', () => {
       'start_goal_run',
       'sync_daily_bars',
       'sync_financial_facts',
+      'sync_market_dump',
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',

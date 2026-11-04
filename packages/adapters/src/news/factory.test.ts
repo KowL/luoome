@@ -64,7 +64,7 @@ describe('createNewsManagerFromEnv', () => {
 
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
     expect(() =>
-      createNewsManagerFromEnv({ LUOOME_NEWS_SOURCES: 'tushare' }, { logger: noopLogger }),
+      createNewsManagerFromEnv({ LUOOME_NEWS_SOURCES: 'unknown' }, { logger: noopLogger }),
     ).toThrow();
   });
 

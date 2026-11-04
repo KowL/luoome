@@ -129,7 +129,7 @@ describe('NewsManager（registry 集成）', () => {
       expect(failed.error.message).toContain('eastmoney down');
     }
 
-    const disabled = await m.fetchNews({ page: 1, limit: 30, source: 'tushare' });
+    const disabled = await m.fetchNews({ page: 1, limit: 30, source: 'unknown' });
     expect(disabled.ok).toBe(false);
     if (!disabled.ok) expect(disabled.error.kind).toBe('adapter_error');
   });
