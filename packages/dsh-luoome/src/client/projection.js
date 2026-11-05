@@ -20,6 +20,16 @@ export const stockProfileUrl = (stockId) =>
 export const stockFinancialUrl = (stockId) =>
   `api/luoome/stock-financial?stockId=${encodeURIComponent(stockId)}`;
 
+/**
+ * 雪球个股详情页地址（外链展示用）。雪球用「交易所前缀 + 代码」的 symbol：
+ * 600519.SH → SH600519，000001.SZ → SZ000001，430047.BJ → BJ430047。
+ * 非规范代码返回 null，不拼一个可能误导的外部链接。
+ */
+export const xueqiuStockUrl = (stockId) => {
+  const matched = /^(\d{6})\.(SH|SZ|BJ)$/.exec(typeof stockId === 'string' ? stockId : '');
+  return matched === null ? null : `https://xueqiu.com/S/${matched[2]}${matched[1]}`;
+};
+
 /** 均线由工具基于完整已加载历史计算；页面仅按日期对齐，再裁显示范围。 */
 export const stockHistoryRows = (marketView, range = 'all') => {
   const averages = new Map((marketView.movingAverages ?? []).map((row) => [row.date, row]));

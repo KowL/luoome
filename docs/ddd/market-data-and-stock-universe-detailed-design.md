@@ -9,12 +9,17 @@
 > [个股行情查看详细设计](./stock-market-view-detailed-design.md)、
 > [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
 > [Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)
+>
+> **消费面现状（2026-11-04 修订）**：独立 CLI / TUI、stdio MCP 与单机 Web（`apps/web`）均已删除，
+> 当前唯一消费面是 `dsh-luoome` 插件（面板经 `/dsh/api/luoome/*` 取数，能力经 tool registry 暴露）。
+> 本文保留数据底座的阶段设计与迁移依据；当前消费入口统一为插件与 DSH 定时任务。
 
 ## 1. 背景
 
 当前行情实现具备 Eastmoney、Tencent、Sina、Fuyao、Xueqiu 等真实数据源，以及
-`MarketDataManager` 提供的缓存、限速和 fallback。Tushare 已于 2026-11-03 下线。CLI、TUI、MCP、Web 也统一通过
-`createMarketAdapterFromEnv` 装配，依赖方向符合 `surface → tools → adapters/core`。
+`MarketDataManager` 提供的缓存、限速和 fallback。Tushare 已于 2026-11-03 下线，历史来源记录保留读取。
+`dsh-luoome` 插件统一通过 `createMarketAdapterFromEnv`（单机装配根
+`packages/adapters/src/local-adapters.ts`）装配，依赖方向符合 `surface → tools → adapters/core`。
 
 但现有 seam 主要保证 TypeScript 形状兼容，没有完整保证行为可替换：
 
@@ -73,7 +78,7 @@ module：统一 interface 只暴露调用方真正需要理解的语义，把协
 - 首期覆盖港股、美股、基金、债券、期货和加密资产；
 - 根据一次目录缺失自动判定退市或物理删除股票；
 - 在进程启动时阻塞等待全市场同步；
-- 内置调度器；继续使用 workflow + 外部 cron；
+- 内置调度器；调度由 DSH 定时任务驱动插件批处理入口；
 - 重写连板天梯领域模型；它只需要在来源 registry 中消除隐式配置。
 
 ## 4. 领域口径
@@ -354,7 +359,7 @@ K 线与 qfq 因子接口；只注册 `daily-bars` 能力，不伪装成实时�
 ## 6. 目标架构
 
 ```text
-cli / tui / mcp / web
+dsh-luoome（唯一插件消费面）
           │
           ▼
         tools
@@ -676,7 +681,7 @@ key = capability + stockId/query/coverage
 
 | 数据 | key | TTL | 是否允许缓存空结果 |
 |---|---|---:|---|
-| Quote | stockId | Web 10s，其它 60s | 否 |
+| Quote | stockId | 面板展示 10s，其它 60s（以调用方显式配置为准） | 否 |
 | DailyBar | stockId + 对齐日期 + adjustment | 1h | 仅无交易日区间 |
 | Realtime index | coverage/index set | 10s | 否 |
 | MarketSnapshot | coverage（含完整性 envelope） | 5min | 否 |
@@ -857,17 +862,15 @@ DailyBarRepository。
 
 ## 13. Workflow 与调度
 
+> 当前调度由 DSH 定时任务驱动插件原生入口，启用自动执行仍需匹配任务指纹的持久授权。
+> 下列 cron 只表达 Asia/Shanghai 时间点，不是可复制执行的独立 CLI 命令；workflow 名与幂等/partial 语义保留。
+
 ### 13.1 `sync-stock-universe`
 
-单步 workflow 调 `sync_stock_universe`，由 workflow 引擎写 `WorkflowRun`。支持人工执行和
-cron，不在 Web 启动时自动阻塞同步。
+单步 workflow 调 `sync_stock_universe`，由 workflow 引擎写 `WorkflowRun`。人工同步通过插件能力执行，
+不在插件启动时自动阻塞同步。需要定时同步时由 DSH 任务通过已暴露且获授权的入口编排。
 
-推荐：
-
-```cron
-# 交易日收盘后同步沪深 A 股目录
-20 16 * * 1-5  luoome workflow run sync-stock-universe
-```
+推荐时间：交易日收盘后 `20 16 * * 1-5`，同步沪深 A 股目录。
 
 workflow 内先检查交易日；非交易日输出 succeeded + skipped，不访问 provider。
 
@@ -891,13 +894,8 @@ is trading day?
 - 至少一项成功、至少一项失败 → `partial`；
 - 全部失败 → `failed`。
 
-推荐统一 cron：
-
-```cron
-30 16 * * 1-5  luoome workflow run post-market-data
-```
-
-若采用统一 workflow，就不再单独配置 16:20 的目录 cron。
+统一执行的推荐时间为 `30 16 * * 1-5`（Asia/Shanghai）。采用统一 workflow 时，不再重复配置
+16:20 的目录任务；当前 DSH 批处理入口、实际任务与授权状态见[用户手册](../USER_GUIDE.md#74-dsh-定时任务与批处理)。
 
 ### 13.3 `intraday-watch`
 
@@ -982,8 +980,8 @@ lastErrorKind
 
 ## 16. 安全与副作用
 
-- `sync_stock_universe`、`sync_daily_bars` 为 `external`，MCP 默认不暴露。
-- Web 手动同步需要同源 Origin，并受 external 能力开关控制。
+- `sync_stock_universe`、`sync_daily_bars` 为 `external`，默认不暴露，须显式开启 external 能力。
+- 手动同步入口（`dsh-luoome` 面板与宿主路由）需要同源 Origin 校验，并受 external 能力开关控制。
 - 数据同步不会触发 Advice 或 trade。
 - 数据源配置继续存 `$LUOOME_HOME/.env`，权限 `0600`，读接口不返回密钥。
 - provider 原始 payload 不整包落库，避免未知字段携带敏感信息或导致数据库膨胀。
@@ -1017,7 +1015,7 @@ items        -- 新逐股票状态
 
 所有 caller 切到 `items` 后再删除旧字段。
 
-`search_stocks.source` 扩枚举会影响 Web schema/tests，需要同一阶段更新。
+`search_stocks.source` 扩枚举会影响插件投影与对应 schema/tests，需要同一阶段更新。
 
 ### 17.3 日线
 
@@ -1154,7 +1152,7 @@ Drizzle 与 in-memory 共用：
 - 动态健康读模型；
 - 连板天梯来源接入显式 registry。
 
-每个 Phase 独立可回滚；不得一次提交同时跨完所有 schema、adapter、tool、workflow 和 Web 改动。
+每个 Phase 独立可回滚；不得一次提交同时跨完所有 schema、adapter、tool、workflow 和插件消费面改动。
 
 ## 20. 文件影响范围
 
@@ -1186,8 +1184,8 @@ packages/tools/src/tools/{sync-daily-bars,get-previous-closes}.ts
 packages/tools/src/tools/{batch-quote,search-stocks,get-market-data-status}.ts
 
 packages/workflows/src/{sync-stock-universe,post-market-data,intraday-watch}.ts
-packages/cli/src/index.ts
-apps/web/src/server.ts
+packages/dsh-luoome/src/host/production.ts
+packages/dsh-luoome/src/client/*
 ```
 
 实际实施按 Phase 逐步收敛，不为未来阶段提前创建空 module。
@@ -1201,7 +1199,7 @@ apps/web/src/server.ts
 - [x] 本地目录断网可搜索。
 - [x] 外部搜索结果仍需进入业务流程才创建目录外 Stock。
 - [x] MarketSnapshot 价格没有写入 `stocks`。
-- [x] 盘后 workflow 不依赖用户打开 Web。
+- [x] 盘后 workflow 不依赖用户打开插件面板。
 - [x] intraday price-change 不使用 quote.open 代替昨收。
 - [x] DailyBar 在所有 source 下均为 qfq。
 - [x] Quote stale 状态能传播到盯盘 caller。

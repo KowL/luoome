@@ -1,7 +1,7 @@
 # 账户绩效与组合归因详细设计
 
-> 状态：竖向切片、盘后持续快照 workflow/scheduler、修订审计、周报区间指标、缺价语义与 Web
-> 审计入口与一年真实长区间 smoke 已实现（截至 2026-08-20）；跨交易日生产样本和大账户预算仍持续积累。
+> 状态：竖向切片、盘后持续快照 workflow、修订审计、周报区间指标、缺价语义与
+> 审计入口（原 Web，现为插件复盘面板）与一年真实长区间 smoke 已实现（截至 2026-08-20）；跨交易日生产样本和大账户预算仍持续积累。
 > 本设计回答账户“实际表现如何、收益来自哪里、哪些指标因缺数据不可用”，不定义交易执行或调仓建议。
 
 ## 1. 边界与事实源
@@ -61,28 +61,27 @@ provider 返回与本地事实合并；provider 失败则保留已有日线，�
 输入事实变化则只为受影响账户创建修订快照。WorkflowRun 只保存账户总数、完整/部分/失败数、新建/复用
 数、价格序列、日线数和耗时，不把私人账本或持仓明细写入运行审计。
 
-Web 长期进程只在 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时启动
-盘后 scheduler；缺任一能力时不构造 scheduler，并记录未启动原因和两项能力状态。启用后每 5 分钟检查
-一次，A 股交易日 16:00（Asia/Shanghai）后每进程至多触发一次盘后 workflow；重启后的重复触发仍由
-快照指纹幂等收敛。手动 CLI 可用
-`luoome workflow run snapshot-account-performance --input '{...}'` 重跑指定区间或账户。
+盘后绩效快照的调度不放在 luoome 进程内：调度归 DSH 定时任务——提醒到点唤起会话，由 agent 调用
+插件注册的工具运行 `snapshot-account-performance`。启动层要求 `LUOOME_EXPOSE_WRITE=true` 与
+`LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启，缺任一能力时不派发并记录原因；重启后的重复触发由快照
+指纹幂等收敛。手动重跑经 DSH 侧执行 `snapshot-account-performance` workflow
+（原 CLI `luoome workflow run snapshot-account-performance --input '{...}'` 已随 `packages/cli` 删除）。
 
 ## 4. Surface 约束
 
-- Web：`GET /api/account/performance` 使用当前账户，`GET /api/accounts/:id/performance` 显式指定账户；均要求 `LUOOME_EXPOSE_EXTERNAL=true`。
-- 审计：`list_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshots` 只读已持久化快照摘要；`audit_account_performance_snapshots` 与 `GET /api/accounts/:id/performance/snapshot-audit` 通过账户+区间重叠查询汇总交易日覆盖、缺失日期、partial 原因和 `dataAsOf`，不会被最新的非重叠快照遮蔽。这些读取均不重新请求行情或重算绩效；摘要保留区间、输入指纹、完整度、benchmark 状态、估值天数和收益字段，
+- 插件面板：`review` 面板经 `list_account_performance_snapshots` 读取已持久化快照摘要；需要回源刷新时走 `get_account_performance` tool（`external`，要求 `LUOOME_EXPOSE_EXTERNAL=true`）。原 Web 的 `GET /api/account/performance` 与 `GET /api/accounts/:id/performance` 端点已随 `apps/web` 删除。
+- 审计：`list_account_performance_snapshots` 与 `audit_account_performance_snapshots` 只读已持久化快照摘要；后者通过账户+区间重叠查询汇总交易日覆盖、缺失日期、partial 原因和 `dataAsOf`，不会被最新的非重叠快照遮蔽。这些读取均不重新请求行情或重算绩效；摘要保留区间、输入指纹、完整度、benchmark 状态、估值天数和收益字段，
 并带 `coverage`（覆盖缺口与缺失日期）、`metrics`（TWR / 基准 TWR / 超额的可用性）、`attribution`（每项带 `factIds`）。
 REQ-M3-07 之前的存量快照没有这三项：摘要不补默认 complete、不转述口径未知的百分比，只在 `warnings` 说明
 「无法判定样本是否充足 / 无法追溯归因」。
-- 当前账户也提供 `/api/account/performance/snapshots` 与
-  `/api/account/performance/snapshot-audit`；复盘页直接展示快照版本、输入指纹、`dataAsOf`、预算事实及逐交易日
+- 当前账户与显式账户使用同一对 tool（`*_snapshots` / `*_snapshot-audit`）；复盘面板直接展示快照版本、输入指纹、`dataAsOf`、预算事实及逐交易日
   审计，不需要开启 external 才能读取已持久化审计。
 - 同一估值日存在多个输入修订时，区间审计按 `calculatedAt + snapshot id` 选择最新快照作为当前事实，并
   返回 `revisionCount`。旧的 `complete` 不能遮蔽更新后的 `partial`，旧版本仍保留在快照历史中可追溯。
-- Web 复盘页展示估值日、现金流、日 TWR、回撤、完整度、TWR/benchmark/超额收益和 PnL；缺失原因原样可见。
+- 插件复盘面板展示估值日、现金流、日 TWR、回撤、完整度、TWR/benchmark/超额收益和 PnL；缺失原因原样可见。
 - 开盘/收盘报告的账户区块和 Agent v1 查询白名单复用 `get_account_performance`，不复制计算逻辑。
 - Tool 的现金流与公司行动写入仍受 `write` 闸口约束；任何绩效结果都不自动创建 Advice、AlertPlan 或 Trade。
-- 盘后 workflow 会请求外部行情并写入日线、绩效快照和 WorkflowRun，因此 Web 后台调用不得复用仅约束
+- 盘后 workflow 会请求外部行情并写入日线、绩效快照和 WorkflowRun，因此宿主定时任务与后台调用不得复用仅约束
   HTTP Tool 路由的 capability gate；启动层必须同时验证 `write + external`。
 
 ## 5. 验收矩阵

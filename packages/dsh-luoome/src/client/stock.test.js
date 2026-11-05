@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DSH supplies React at runtime; keep these render/handler regressions dependency-free.
 const hooks = vi.hoisted(() => ({ values: [], cursor: 0 }));
-const financialRead = vi.hoisted(() => ({ state: { loading: false }, enabled: [] }));
+const financialRead = vi.hoisted(() => ({ state: { loading: true }, calls: 0 }));
 vi.mock('react', () => ({
   createElement: (type, props, ...children) => {
     const next = { ...props, children: children.flat(Infinity) };
@@ -25,8 +25,8 @@ vi.mock('./data.js', () => ({
   useStockDetail: () => ({ loading: true }),
   useStockHistory: () => ({ loading: false }),
   useStockProfile: () => ({ loading: false }),
-  useStockFinancial: (_stockId, enabled) => {
-    financialRead.enabled.push(enabled);
+  useStockFinancial: () => {
+    financialRead.calls += 1;
     return financialRead.state;
   },
 }));
@@ -71,8 +71,8 @@ const marketView = {
 beforeEach(() => {
   hooks.values = [];
   hooks.cursor = 0;
-  financialRead.state = { loading: false };
-  financialRead.enabled = [];
+  financialRead.state = { loading: true };
+  financialRead.calls = 0;
 });
 
 describe('stock rendering and event regressions', () => {
@@ -89,7 +89,7 @@ describe('stock rendering and event regressions', () => {
     expect(text(tree)).toContain('6,400 股');
     expect(text(tree)).toContain('成交额 缺失');
     expect(text(tree)).toContain('未收盘');
-    expect(text(tree)).toContain('本地保留历史');
+    expect(text(tree)).toContain('本地保留日线');
     expect(text(tree)).toContain('数据范围可能不完整');
     expect(text(tree)).not.toMatch(/NaN|undefined/);
   });
@@ -136,33 +136,39 @@ describe('stock rendering and event regressions', () => {
     expect(paths.every((node) => !node.props.d.trim())).toBe(true);
     expect(
       render(StockHistory, { marketView: { ...marketView, candles: [] } }).props.children.join(''),
-    ).toContain('缺失历史保持未知');
+    ).toContain('缺失交易日保持未知');
   });
 
-  it('preserves non-strategy evidence and keeps financial reads opt-in', () => {
+  it('preserves non-strategy evidence, links the code to Xueqiu, and has no lazy-read buttons', () => {
     const tree = render(StockDetail, {
       stock: { stockId: '600000.SH', stockName: '测试股票' },
       sourceLabel: '持仓',
       evidence: '原始持仓事实时间 2026-11-04',
     });
     expect(text(tree)).toContain('原始持仓事实时间 2026-11-04');
-    expect(text(tree)).toContain('读取财务快照');
-    expect(text(tree)).not.toContain('正在读取财务快照');
+    for (const removed of ['读取历史日 K', '读取股东户数与所属板块', '读取财务快照'])
+      expect(text(tree)).not.toContain(removed);
+    const link = nodes(tree).find(
+      (node) => node.type === 'a' && node.props.href === 'https://xueqiu.com/S/SH600000',
+    );
+    expect(link?.props.target).toBe('_blank');
+    expect(link?.props.rel).toContain('noopener');
+    expect(
+      nodes(tree).find(
+        (node) => node.type === 'button' && node.props['aria-label'] === '刷新个股数据',
+      ),
+    ).toBeTruthy();
   });
 
   it.each([
     ['permission_denied', '当前配置未启用财务快照读取'],
     ['invalid_input', '当前未配置财务快照数据源'],
-  ])('shows explicit configuration errors after requesting financial data: %s', (kind, message) => {
-    const props = { stock: { stockId: '600000.SH', stockName: '测试股票' } };
-    let tree = render(StockDetail, props);
-    expect(financialRead.enabled).toEqual([false]);
-    nodes(tree)
-      .find((node) => node.type === 'button' && text(node) === '读取财务快照')
-      .props.onClick();
+  ])('shows explicit financial configuration error: %s', (kind, message) => {
     financialRead.state = { loading: false, data: { financial: { ok: false, error: { kind } } } };
-    tree = render(StockDetail, props);
-    expect(financialRead.enabled).toEqual([false, true]);
+    const tree = render(StockDetail, {
+      stock: { stockId: '600000.SH', stockName: '测试股票' },
+    });
+    expect(financialRead.calls).toBeGreaterThan(0);
     expect(text(tree)).toContain(message);
     expect(text(tree)).not.toContain('上游缺失字段');
   });

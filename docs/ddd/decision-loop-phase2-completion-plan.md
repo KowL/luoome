@@ -2,7 +2,7 @@
 
 > 状态：P2-0～P2-5 代码、自动化测试和本地浏览器切片已完成；P2-5 全链路真实数据证据仍待积累，Phase 2 不标记为完全完成（2026-08-24）
 > 上位文档：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
-> 关联：[AI 投资 Agent 协作体验](../prd/ai-investment-agent.md)、[Agent 协作体验 Phase 0+1 详细设计](./agent-collaboration-phase0-1-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 组合回测详细设计](./strategy-strict-backtest-detailed-design.md)
+> 关联：[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 组合回测详细设计](./strategy-strict-backtest-detailed-design.md)
 > 说明：本文件只冻结 Phase 2 的实现边界和验收顺序，不修改上位 PRD 的状态。只有代码、测试、浏览器和真实数据证据全部满足门禁后，主线程才更新 PRD 状态。
 
 ## 1. 目标、现状与完成定义

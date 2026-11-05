@@ -247,12 +247,11 @@ export function useAutoRefresh({ marketSession, nextSessionStart, refresh } = {}
   }, [marketSession, nextSessionStart, refresh]);
 }
 
-/** 个股档案（股东户数 + 所属板块）：与行情分开按需读取，避免打开详情就打两个外部请求。 */
-function useStockProfileRead(stockId, enabled = true, financial = false) {
+/** 个股档案（股东户数 + 所属板块）与财务快照：与行情、日 K 并行读取，打开详情即展示。 */
+function useStockProfileRead(stockId, financial = false) {
   const [tick, setTick] = useState(0);
-  const [state, setState] = useState({ loading: false, data: null, error: null });
+  const [state, setState] = useState({ loading: true, data: null, error: null });
   useEffect(() => {
-    if (!enabled) return undefined;
     const controller = new AbortController();
     let active = true;
     setState({ loading: true, data: null, error: null });
@@ -287,15 +286,14 @@ function useStockProfileRead(stockId, enabled = true, financial = false) {
       active = false;
       controller.abort();
     };
-  }, [stockId, enabled, financial, tick]);
+  }, [stockId, financial, tick]);
   return { ...state, refresh: useCallback(() => setTick((value) => value + 1), []) };
 }
 
-function useStockRead(stockId, history, enabled = true) {
+function useStockRead(stockId, history) {
   const [tick, setTick] = useState(0);
-  const [state, setState] = useState({ loading: enabled, data: null, error: null });
+  const [state, setState] = useState({ loading: true, data: null, error: null });
   useEffect(() => {
-    if (!enabled) return undefined;
     const controller = new AbortController();
     let active = true;
     setState({ loading: true, data: null, error: null });
@@ -319,7 +317,7 @@ function useStockRead(stockId, history, enabled = true) {
             data: null,
             error: {
               message: history
-                ? '历史日线暂时无法读取，请稍后重试。'
+                ? '日 K 暂时无法读取，请稍后重试。'
                 : '行情暂时无法读取，请稍后重试。',
             },
           });
@@ -328,11 +326,11 @@ function useStockRead(stockId, history, enabled = true) {
       active = false;
       controller.abort();
     };
-  }, [stockId, history, enabled, tick]);
+  }, [stockId, history, tick]);
   return { ...state, refresh: useCallback(() => setTick((value) => value + 1), []) };
 }
 
 export const useStockDetail = (stockId) => useStockRead(stockId, false);
-export const useStockHistory = (stockId, enabled) => useStockRead(stockId, true, enabled);
-export const useStockProfile = (stockId, enabled) => useStockProfileRead(stockId, enabled);
-export const useStockFinancial = (stockId, enabled) => useStockProfileRead(stockId, enabled, true);
+export const useStockHistory = (stockId) => useStockRead(stockId, true);
+export const useStockProfile = (stockId) => useStockProfileRead(stockId);
+export const useStockFinancial = (stockId) => useStockProfileRead(stockId, true);

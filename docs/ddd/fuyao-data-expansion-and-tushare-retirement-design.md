@@ -1,6 +1,6 @@
 # Fuyao 数据能力扩展与 Tushare 退役详细设计
 
-> 状态：Phase 0–5 代码与生产接线已完成；Tushare 运行时代码与现役入口已移除。最终验收见 §17.4；Phase 6 严格门禁继续独立保留。
+> 状态：Phase 0–5 已随 dsh-luoome 0.2.6 部署；Tushare 运行时与现役入口已移除。实施验收见 §17.4、生产部署见 §17.5；Phase 6 严格门禁继续独立保留。
 > 日期：2026-11-03
 > 范围：保留现有 Fuyao 行情适配器；按独立端口扩展 market dump、公司行动、天梯/情绪、龙虎榜、资讯、板块与财务；同次移除 Tushare 运行时代码和配置，保留存量历史数据只读兼容。
 > 上游依据：`https://fuyao.aicubes.cn/llms-full.txt`，本地取证副本 `/tmp/luoome-fuyao-llms-full.txt`。
@@ -592,7 +592,7 @@ dump 通过 Tool 显式执行，不增加常驻调度开关。财务当前快照
 7. 输出仅包含变更键名和来源数量，不输出密钥值。
 8. 启动后核对设置页无 Tushare、当前来源顺序正确、历史数据查询仍可读。
 
-迁移工具已实现：[migrate-retired-data-sources.mjs](../../infra/migrate-retired-data-sources.mjs)。默认只处理 `$LUOOME_HOME/.env`，也可显式指定配置文件；进程环境、service 和 compose 由部署步骤移除，应用不改宿主配置。本次开发验收仅操作临时测试文件，未执行真实部署配置迁移。
+迁移工具已实现：[migrate-retired-data-sources.mjs](../../infra/migrate-retired-data-sources.mjs)。默认只处理 `$LUOOME_HOME/.env`，也可显式指定配置文件；进程环境、service 和 compose 由部署步骤移除，应用不改宿主配置。开发验收阶段仅操作临时测试文件；随后实际生产迁移检查结果见 §17.5。
 
 ```bash
 node -- infra/migrate-retired-data-sources.mjs --env-file /path/to/.luoome/.env
@@ -802,6 +802,34 @@ bun run build
 修复还覆盖：限流重试耗尽时仍在释放槽位前登记共享冷却；首条 revision 前冻结 recordedAt；跨批次重复和重排稳定身份；恢复前校验本地 bytes/hash；取票或下载失败保存 failed attempt。取票前失败的 dumpId 为明确的 `unresolved:<kind>:<runId>` 本地标记，hash 保持 null。
 
 动态 429/4001 使用确定性故障注入验证，并未通过真实 API 压测强行触发。浏览器使用合成账户，验证装配和交互；真实供应商验证与浏览器证据分别记录。严格 PIT、历史炸板/断板与公司行动回测门禁继续保持现状，Phase 6 尚未开放。
+
+### 17.5 生产部署记录（2026-11-04）
+
+用户明确要求提交、推送与部署后，保留原工作区 16 项独立改动，在独立发布 worktree 合并远端 `9862da5` 文档整理。核心实现提交为 `7de6ca9`，发布代码提交 `8903f71d859b1c53522039af2d36cff3c19d0e05` 已推送至 `origin/dsh`。独立发布基线为 457 文件、5,760 测试通过（Vitest 4,610 / Bun DB 798 / Node DB 335 / authority 17）；typecheck、lint、check:docs、check:layers、安装与真实 Chrome 面板验收均通过。
+
+发布阶段补充两项实际装配修复：
+
+1. 新领域开关与共享限流配置进入本地配置读取白名单；保存行情顺序时只移除已落盘删除或明确清空的键，保留仅存在于进程环境中的领域配置。生产组合测试验证来源重排保持同一 client，凭据轮换重建共享 client。
+2. tarball 直部署通过独立 profile runtime 目录安装 `parquet-wasm@0.9.0`，不让 npm 接触插件的宿主 SDK 依赖。生产已有 DSH 0.2.1-rc.5 与 PNPM overrides 保留，只向现有 seed 注入已测试的运行依赖 helper；隔离预检确认 WASM、host import 及工具/任务/调度/Agent SDK 服务均正常。
+
+| 项目 | 实际结果 |
+|---|---|
+| 生产入口 | `http://134.175.83.56/dsh/` |
+| 版本 | dsh-luoome `0.2.6`；宿主 DSH `0.2.1-rc.5` / Node `22.22.3` 保持不变 |
+| Artifact | `dsh-luoome-0.2.6.tgz`，1,060,795 bytes |
+| Artifact SHA-256 | `7b10885a17f20700fe0fcfe6f7820c8cea8f98a54245e74bd16d6d01121f1698` |
+| 线上 host bundle SHA-256 | `82106cb51c19fb12215a914d24b6842a4ebc8dc823f08a967446d1128682c7b5` |
+| 发布目录 | `/opt/luoome/dsh/releases/fuyao-0.2.6-20261104T135753Z` |
+| profile / 事实库备份 | `/opt/luoome/dsh/backups/20261104T140528Z`（SQLite backup API + gzip） |
+| 配置 / seed 补充备份 | `/opt/luoome/dsh/backups/pre-fuyao-0.2.6-20261104T135753Z` |
+| 服务与鉴权探针 | service=active；profile 200 / anonymous 401 / cross-origin 403 / WebSocket 101 |
+| 实际配置迁移检查 | production.env、host.env、市场 `.env` 均执行 CLI，changedKeys=[]；原已无现役 Tushare 配置，三文件字节指纹不变 |
+| 数据库 | quick_check=ok；新增 dump run、raw revision、公司行动 revision 三表，均为 0 行（未触发生产导入） |
+| 既有业务事实 | accounts、holdings、trades、advices、decision_reviews、strategies、strategy_versions 的行内容指纹全部不变；不记录私人事实正文 |
+| 新 Tool 线上核验 | read 74；dump 状态已注册；sync dump policy 存在且 unscheduled；行情状态 Tool 成功 |
+| 生产真实浏览器 | 独立 Chrome/CDP 会话遍历看盘、持仓、关注、策略、告警、计划、复盘七视图；390px 页面宽 390、业务根宽/滚动宽均 329；运行异常 0，无业务写入，不保存私人页面截图 |
+
+当前行情顺序仍为 `eastmoney,tencent,fuyao`。新增可选领域开关未自动开启；本次部署不运行全市场导入、不调用模型、不变更账户账本、自动化档位或严格 PIT/回测门禁。公开 npm 包未发布。失败回滚由既有 upgrade 脚本负责；生产数据发生新增后不能简单覆盖事实库备份。
 
 ## 18. 完成定义
 

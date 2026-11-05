@@ -1,50 +1,16 @@
-# AI 投资协作首页详细设计
+# 账户事实、逐股计划与方向研究实现契约
 
-> 初稿：2026-10-16；入口与领域契约核对：2026-11-05。依据：[PRD](../prd/ai-investment-workspace.md)、[任务与文件归属](../archive/ai-investment-workspace-development-plan.md)（已归档）。真实供应商与真机验收单独记录，不由 fixture 代替。
+> 契约核对：2026-11-05。本文从原 AI 投资协作首页设计中保留仍生效的领域实现契约，原文件路径仅供既有引用定位；旧独立 Web 首页、聊天、草案确认与通知路由方案已移除，不是当前产品规划。
 >
-> **当前状态**：默认产品入口是 DSH 插件。本文的旧 Web 首页 API、会话、草案确认、浏览器恢复与通知路由属于阶段设计，不代表当前插件提供相同入口。InvestmentWorkspace 的研究、共识与跟踪领域能力已实现，默认插件只开放 `get_investment_workspace`；`save_investment_consensus`、`set_investment_tracking` 尚未接入默认 Operation policy，`get_investment_candidates` 也未进入默认读面。方向研究写回沿用已有分析入口；完整的共识确认与方向跟踪旅程尚未接通。以下账户事实、逐股计划与方向主体的领域契约仍有效，不因旧 Web 方案退役而删除。
+> 默认产品入口是 DSH 插件。InvestmentWorkspace 的研究、共识与跟踪领域能力已实现，默认插件只开放 `get_investment_workspace`；`save_investment_consensus`、`set_investment_tracking` 尚未接入默认 Operation policy，`get_investment_candidates` 也未进入默认读面。方向研究写回沿用已有分析入口；完整的共识确认与方向跟踪旅程尚未接通。以下约束保留现有行为，不增加新入口或自动执行。
 >
-> 当前入口核对：[`production-config.ts`](../../packages/dsh-luoome/src/host/production-config.ts)、[`production.ts`](../../packages/dsh-luoome/src/host/production.ts)；领域工具库存：[`registry.ts`](../../packages/tools/src/registry.ts)。
-
-## 首页信息流
-
-首页以助手开场、持仓变化、参与方向、计划进展组织。事实通过现有 tools 获取，分别返回 ToolResult，单区失败不清空其它区域。开场明确标注“事实摘要”，不将确定性计数写成 AI 判断。研究结果独立展示，未研究、失败、数据不足与研究后等待分开；默认零现金账户显示“尚未核实登记”，不推断真实资金。
-
-保留原看盘内容和完整历史入口。持仓只展示合格账户事实中的估值，缺失行情不沿用成本价冒充现价。计划复用 `list_trading_plans(currentOnly=true, includeMonitoring=true)` 的版本和资格投影；`ready` 仅表示资格，后台检查时间来自真实运行，不意味着已监控或已送达。
-
-## 主体引用与服务端可信边界
-
-`POST /api/chat` 增加 `subjects`（最多 4 个）。持仓引用携带 holding id 与服务端生成的内容哈希，计划引用携带确切 version id；Advice、Trigger、Report 使用不可变 id。方向引用 researchId + directionId，共识引用 id + version。客户端仅提供引用和本轮 user 文本，不提供可信标签、事实、助手或执行结果。服务端先读取当前账户拥有的会话，再经 tools 解析引用；跨账户、版本不符、已删除主体拒绝并要求刷新。过期计划/建议可讨论历史，但上下文必须携带当前资格、有效期与禁止沿用行动措辞的限制。
-
-服务端在 user message 的 `data-luoome-subjects` part 保存已核验的引用、标签与核验时间。每轮重新读取主体事实；该标签不冒充历史事实快照，方向/共识及计划的不可变版本负责追溯。未指定主体时沿用会话最近主体；显式空数组回到全局讨论。跨卡比较列出所有主体及各自证据，提示模型逐项区分。每轮独立读取结构化当前共识，不依赖最近 20 条聊天文本。
-
-行情资格、账户指纹、计划截止遵守已有 core 规则，不在 Web 复制阈值。历史事实保留 observedAt / dataAsOf / validUntil；界面刷新时间仅是读取时间。方向研究的数据分类与阈值见[方向研究与共识契约](#方向研究与共识契约)。
-
-## 同一会话、多种视图
-
-首页、卡片内简短追问、完整讨论移动同一个聊天挂载节点，共用服务端 session、feed、草案状态和请求控制器。主体切换与发问分开；每条历史问题保留当时主体标签。关闭/返回仅退出视图，不取消已授权跟踪；“停止回答”仅中断当前流。草案确认沿用服务端存储输入与原子认领，执行中/成功/失败分别展示，未知状态先读取会话核对，不自动重放写入。
-
-浏览器 history 保存展开层级与来源卡片滚动位置；返回先退出完整讨论，再退出就地讨论并恢复来源。流式渲染只在用户已靠近底部时跟随，阅读旧消息时保留滚动锚点，提供“查看新内容”。输入支持多行与输入法，组合输入中的 Enter 不提交；使用动态视口、visualViewport 与安全区域，手机不使用固定 500px 高度。
-
-## 恢复与身份
-
-会话与消息由服务端 tools 持久化。当前 session、主体引用、未发送文本仅保存在当前浏览器 sessionStorage，并按 account 分区；退出、认证失效、账户变化立即清理、终止旧请求、清空挂载内容。读取响应附 view/identity epoch，旧账户迟到响应不可覆盖新界面。刷新后先读会话和真实草案结算；断线不自动重发 mutation。服务端对相同本轮消息 id 做幂等检查，不重复启动同一次模型请求；中断后由用户显式继续。
-
-首页进入讨论和准备草案在每次异步等待后重新核对身份；关闭讨论或打开另一主体使旧打开请求失效。成交/复盘的迟到响应在写入浏览器未决请求状态前再次核对账户 epoch，切走再切回同一账户也不接收旧响应。首页完成实际成交登记后重新读取账户事实和计划进展。
-
-单机形态没有租户与登录态：服务端按当前账户绑定上下文，浏览器侧执行 write/external opt-in 和已有账户 header，并保留同源 Origin 校验。trade 不进入模型/MCP/generic API；记录实际成交复用 DecisionReview 专用入口，数量、价格、时间与尚未入账确认由用户提供。删除聊天不撤销已确认共识或跟踪。
+> 业务概念见[领域语言](../../CONTEXT.md)，当前插件入口见[插件说明](../../packages/dsh-luoome/README.md)；入口核对依据为 [`production-config.ts`](../../packages/dsh-luoome/src/host/production-config.ts)、[`production.ts`](../../packages/dsh-luoome/src/host/production.ts)与[领域工具库存](../../packages/tools/src/registry.ts)。
 
 ## 方向、共识与通知集成
 
-旧 Web 首页阶段设计读取 `get_investment_workspace` 与 `get_investment_candidates`；正式方向研究、共识修订与跟踪开关通过 `POST /api/workspace/drafts` 保存服务端草案，再由 `settle_chat_draft` 原子确认。该流程只接受这三项明确操作，服务端建立真实 user message 来源，不接受客户端助手或执行结果；共识保存与跟踪启动结果分别显示。这些路由和确认步骤不是当前默认 DSH 插件的入口承诺；当前可用范围以上述状态说明为准。
+方向共识、研究与实际跟踪分别返回事实状态，保存成功不表示跟踪启动成功。个人写入按明确意图经插件精确 Operation policy 执行；尚未接入 policy 的领域工具不以旧 Web 确认路由补作入口。
 
-方向以 `opportunityType` 区分已发布策略选择和市场参与研究。未指定策略且没有合格策略运行时，读取实际市场广度、指数及事件池情绪；市场方向携带快照来源、事实时间和明确覆盖，不填造策略或运行 ID。页面按 `coverage.kind` 分别显示策略覆盖/入选数和市场实际观察范围；证据区同时显示供应商、对应时间和获取时间。
-
-`trackingEligibility` 决定是否提供连接入口，页面展示不能跟踪的具体原因。市场方向尚无真实股票候选映射时仍可保存共识，但不能创建个股跟踪；混合共识只连接真实策略方向并显示未映射原因。市场事实到期时当前共识投影为待复核；历史版本保留。盘中事实有效期为对应时间后 20 分钟与当日收盘的较早值，收盘事实有效至下一交易日开盘，不能以抓取时间延长。
-
-`GET /api/watch/notifications/:triggerId` 调用私有 resolver，仅作为专用鉴权入口，不进入模型/MCP/generic registry。`#alerts?triggerId=…` 保留进入时的目标，打开时同时显示触发快照和最新资格；`#reports?reportId=…` 读取确切报告，无权或删除时不以其它报告替代。复盘复用专用成交登记与显式来源链；未决成交回执在浏览器按 account 分区。
-
-方向研究由 DSH 侧的分析读面与精确写回入口承载，不再有托管计量账本；共识与跟踪仍遵守本文领域契约，尚待接入默认插件入口。通知走本机配置的飞书链路：unknown 不盲重发，accepted 不生成设备回执。当前逐股计划、关注和事件预警都走同一条飞书 watchDelivery，不能据此宣称这些提醒已可在手机到达。盘中计划的批处理由 DSH 定时任务调用批处理工具执行；候选同步未开启 StrategySchedule 时明确 partial。
+通知走本机配置的飞书链路：unknown 先核对原投递，accepted 不生成设备回执。逐股计划、关注和事件预警共用 watchDelivery，渠道受理不证明手机设备收到。盘中计划的批处理由 DSH 定时任务调用精确批处理工具执行；候选同步未开启 StrategySchedule 时明确 partial。
 
 ### 方向研究与共识契约
 
@@ -144,6 +110,4 @@ notify=false 试跑不写 Trigger、边沿或投递次数；正式执行共享�
 
 ## 验证边界
 
-自动测试覆盖主体归属、伪造版本、时效、会话隔离、幂等、局部失败、上下文恢复及草案信任。隔离服务只使用 fixture providers 和临时库；实际浏览器验证桌面与 360/390/430px、返回、滚动与刷新。网络中断和账户切换单独验证。iOS Safari / Android Chrome 键盘与后台、真实行情覆盖、模型质量和真实手机通知必须另验。
-
-性能记录区分冷启动与缓存，不在未测量时声称 P95 达标。验收结果按 AC01–AC17 写入 A 交接并同步维护文档。
+当前契约以 core 不变量、tools 测试、双仓储合约测试和插件入口测试核对；算法、账本和授权分别在各自 Interface 验证。真实供应商覆盖与质量、跨交易日持续运行、模型质量和真实手机通知另行验收，不用 fixture 或渠道受理代替。旧首页 AC、浏览器聊天与手机页面任务不作为本文当前验收清单。

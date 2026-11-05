@@ -30,7 +30,21 @@ import {
   strategyPartErrorOf,
   strategyPartOf,
   strategyText,
+  xueqiuStockUrl,
 } from './projection.js';
+
+describe('xueqiuStockUrl', () => {
+  it('把规范股票代码映射为雪球交易所前缀 symbol', () => {
+    expect(xueqiuStockUrl('600519.SH')).toBe('https://xueqiu.com/S/SH600519');
+    expect(xueqiuStockUrl('000001.SZ')).toBe('https://xueqiu.com/S/SZ000001');
+    expect(xueqiuStockUrl('430047.BJ')).toBe('https://xueqiu.com/S/BJ430047');
+  });
+
+  it('非规范代码不拼外部链接', () => {
+    for (const value of [undefined, null, '', '600519', '600519.hk', 'AAPL', 'SH600519'])
+      expect(xueqiuStockUrl(value)).toBeNull();
+  });
+});
 
 describe('stock detail projections', () => {
   it('aligns tool averages by date before clipping, and keeps missing averages unknown', () => {

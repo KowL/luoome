@@ -122,6 +122,32 @@ describe('DSH market settings', () => {
     );
   });
 
+  it('loads explicitly configured Fuyao domains and shared transport limits after restart', () => {
+    const { path } = store();
+    const saved = {
+      LUOOME_MARKET_DUMP_SOURCES: 'fuyao',
+      LUOOME_SECTOR_MEMBERSHIP_SOURCES: 'fuyao',
+      LUOOME_FINANCIAL_SNAPSHOT_SOURCES: 'fuyao',
+      LUOOME_LIMIT_UP_LADDER_SOURCES: 'eastmoney,fuyao',
+      LUOOME_ASHARE_SENTIMENT_SOURCES: 'eastmoney,fuyao',
+      LUOOME_DRAGON_TIGER_SOURCES: 'eastmoney,fuyao',
+      LUOOME_NEWS_SOURCES: 'eastmoney,fuyao',
+      LUOOME_SECTOR_QUOTE_SOURCES: 'eastmoney,fuyao',
+      LUOOME_FUYAO_NEWS_TAG_ID: '21103',
+      FUYAO_MAX_CONCURRENCY: '2',
+      FUYAO_MIN_INTERVAL_MS: '100',
+      FUYAO_MAX_RETRIES: '2',
+      FUYAO_RATE_LIMIT_COOLDOWN_MS: '30000',
+    };
+    writeFileSync(
+      path,
+      Object.entries(saved)
+        .map(([key, value]) => `${key}="${value}"`)
+        .join('\n'),
+    );
+    expect(new MarketSettingsStore({}, path).runtimeEnv()).toMatchObject(saved);
+  });
+
   it('does not let persisted market settings override ownership or tool permissions', () => {
     const { path } = store();
     writeFileSync(

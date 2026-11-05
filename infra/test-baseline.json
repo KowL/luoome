@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-05T10:23:29.704Z",
+  "generatedAt": "2026-11-05T12:46:13.578Z",
   "runner": {
     "node": "v24.3.0",
     "bun": null
@@ -10,16 +10,16 @@
       "name": "test",
       "command": "bun run test",
       "exitCode": 0,
-      "durationMs": 36884,
-      "files": 435,
-      "tests": 4669,
+      "durationMs": 60854,
+      "files": 434,
+      "tests": 4671,
       "skipped": 0
     },
     {
       "name": "test:db",
       "command": "bun run test:db",
       "exitCode": 0,
-      "durationMs": 6016,
+      "durationMs": 6518,
       "files": 24,
       "tests": 798,
       "skipped": null
@@ -28,7 +28,7 @@
       "name": "test:db:node",
       "command": "bun run test:db:node",
       "exitCode": 0,
-      "durationMs": 7115,
+      "durationMs": 7738,
       "files": 1,
       "tests": 335,
       "skipped": 0
@@ -37,15 +37,15 @@
       "name": "test:dsh-luoome:e2e",
       "command": "bun run test:dsh-luoome:e2e",
       "exitCode": 0,
-      "durationMs": 1326,
+      "durationMs": 1491,
       "files": 1,
       "tests": 20,
       "skipped": null
     }
   ],
   "totals": {
-    "files": 461,
-    "tests": 5822
+    "files": 460,
+    "tests": 5824
   },
   "lint": {
     "errors": 0,
@@ -53,9 +53,9 @@
   },
   "coverage": {
     "scope": "vitest 段（bun test 段不产出覆盖率）",
-    "statements": 85.97,
-    "branches": 74.7,
-    "functions": 88.95,
-    "lines": 88.38
+    "statements": 85.98,
+    "branches": 74.72,
+    "functions": 88.96,
+    "lines": 88.39
   }
 }

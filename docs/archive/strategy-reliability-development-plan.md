@@ -3,7 +3,7 @@
 > 状态：当前执行计划
 > 基线日期：2026-08-14；核心实现复核：2026-08-20
 > 适用范围：Strategy 的定时运行、当前股票池、SignalObservation、AI 洞察与历史评估
-> 详细设计：[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
+> 详细设计：[Strategy 日运行与历史评估可靠性详细设计](../ddd/strategy-daily-cycle-and-replay-detailed-design.md)
 
 ## 1. 目标
 
@@ -180,7 +180,7 @@ StrategyRecommendationPolicy 的使用范围。
 ### R2：日运行闭环与 AI 降级
 
 > 现状：R2 已完成，交付形态是**可审计周期 + facts-only**。下列任务 1 的编排链与任务 6～8 是
-> 当时的原始设计；DSH 瘦身（[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）
+> 当时的原始设计；DSH 瘦身（[详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)）
 > 后内置 AI 洞察与仓内推荐已下线：`generate_strategy_insight` tool 不再存在，
 > `strategy-daily-cycle` 不再生成 insight 或 Advice，改为输出 facts-only 的 `preflight` 摘要与
 > `adviceCount`；Advice 由外部消费者经分析队列 `record_advice` 写入。

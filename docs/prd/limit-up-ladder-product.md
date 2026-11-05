@@ -1,17 +1,18 @@
 # 连板天梯产品文档
 
 > 状态：目标模型已落地（Phase 1～3 核心实现完成；当前/正式日与历史 PIT Strategy DSL 字段已接入；2026-08-15 已冻结炸板/断板语义并安全降级，数据源门禁未满足前不注册字段）
+> 形态变更（2026-11-04）：Web / TUI / CLI 入口已随对应包下线，当前能力面是 `limit_up_ladder` / `limit_up_ladder_compare` 两个只读 tool，供 DSH 对话、报告与面板读取；文中页面/终端交互章节仅作历史记录。
 > 日期：2026-07-25
 > 参考：旧项目 `ruo` 的 `market limit-up` 命令及 luoome [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) 与 [统一 Watchlist](./watchlist.md)。
-> 产品边界：仅做 A 股短线方向的"看盘辅助页面 + 数据接口"；不替用户决策、不自动下单、不承诺任何"必涨/必板"语义
-> 关联产品：涨停分组同步（依赖行情源的涨停股票列表接口）、TOP10 自选股（依赖天梯 level 排序）、市场复盘报告（天梯是 LLM 输入段之一）
+> 产品边界：仅做 A 股短线方向的"看盘辅助能力（tool + 报告/面板消费）+ 数据接口"；不替用户决策、不自动下单、不承诺任何"必涨/必板"语义
+> 关联产品：涨停分组同步（依赖行情源的涨停股票列表接口）、TOP10 自选股（依赖天梯 level 排序）、市场复盘报告（天梯是报告/分析的事实输入段之一）
 
 ## 1. 文档结论
 
 luoome 应引入**连板天梯（涨停梯队）**作为看盘辅助模块，但不照搬 ruo 的"天梯驱动一切"模式。建议拆成两条产品路径：
 
 1. **页面 / TUI：可读的梯队视图**——按连板层级（首板 / N 连板 / 最高板）分组展示当日涨停股票，附首次封板时间、原因、所属行业与现价涨跌幅。
-2. **数据接口：稳定的天梯快照**——以 `tool` 形式向 LLM、报告生成、TOP10 排序等下游暴露同一份结构化数据，约定口径与日期边界。
+2. **数据接口：稳定的天梯快照**——以 `tool` 形式向报告生成、TOP10 排序、对话等下游暴露同一份结构化数据，约定口径与日期边界。
 
 天梯自身只承担"读懂市场结构"这一职责；选股、排序、决策建议分别由 strategy 模板、TOP10 排序与 advice 链路承担，**不**让天梯越过边界替代它们。
 
@@ -71,8 +72,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 ### 2.3 luoome 现状
 
-- 已有专门的 Web `/market/limit-up` 页面、TUI `L` 子视图、CLI `market limit-up` 子命令和
-  `limit_up_ladder` / `limit_up_ladder_compare` 两个只读 tool；所有入口复用同一 manager/cache。
+- 已有 `limit_up_ladder` / `limit_up_ladder_compare` 两个只读 tool；所有调用方复用同一 manager/cache。旧 Web `/market/limit-up` 页面、TUI `L` 子视图与 CLI `market limit-up` 子命令已随对应包下线。
 - `daily-review`、`opening-report`、`market_outlook` 与个股行情/研究事实已消费同一结构化快照；缺数据
   明确返回 unavailable/adapter_error，不回退到 mock 或伪造空记录。
 - 涨停、炸板、断板事实仍可作为未来 Strategy 的上游数据源，避免各规则重复拉取。
@@ -81,7 +81,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 ### 2.4 一句话缺口
 
-原始缺口已由上述页面和统一结构化 tool 闭环；剩余工作是连续真实 provider 运行证据、历史快照审计，以及
+原始缺口已由统一结构化 tool 闭环（旧页面入口已随形态收敛下线）；剩余工作是连续真实 provider 运行证据、历史快照审计，以及
 需另行冻结产品口径的 Strategy 字段联动与炸板/断板历史增强。
 
 ## 3. 产品目标
@@ -122,7 +122,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 3. **调用方决定日期，adapter 不兜底。** 与 ruo 旧实现相反：默认 `date = 今天（Asia/Shanghai）`；如果当天没有数据必须明确返回空 levels，而不是悄悄退到昨天。
 4. **下游可独立排序。** 天梯接口固定按 `level DESC, changePct DESC` 输出，**不**为 TOP10 或报告改变顺序；下游在自己的数据上重排。
 5. **修复后的字段必须可追溯。** 收盘价修正、首次封板时间缺失等异常，必须保留原始值或显式标记；不允许静默改写。
-6. **不替其它模块承担职责。** 涨停分组同步、TOP10 排序、报告 LLM 输入、预警规则触发都各自有 tool，天梯只暴露结构化快照，不参与这些模块的写入路径。
+6. **不替其它模块承担职责。** 涨停分组同步、TOP10 排序、报告的事实输入、预警规则触发都各自有 tool，天梯只暴露结构化快照，不参与这些模块的写入路径。
 
 ## 5. 领域模型
 
@@ -212,7 +212,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 1. 每日复盘报告 workflow 在生成时，先调 `limit_up_ladder(date=今天)` 与 `limit_up_ladder(date=昨天)` 拿到 `prev` 和 `curr`。
 2. 把两天的 `maxLevel` / `total` / 顶级成员 diff 写入报告的"涨停梯队"段。
-3. 把 `curr` 的字符串化版本喂给 LLM 复盘链（替代 ruo `market-review.chain.ts:31-52` 的拼装方式）；LLM 只读取、不修改。
+3. 把 `curr` 的字符串化版本作为报告/复盘的事实输入（替代 ruo `market-review.chain.ts:31-52` 的拼装方式）；只读取、不修改。
 
 ### 6.4 与 TOP10 排序联动
 
@@ -231,6 +231,8 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 | 单只股票字段缺失 | 表格显示 `--`，不阻断整个 levels 渲染 |
 
 ## 7. 页面与交互
+
+> 形态变更（2026-11-04）：Web / TUI / CLI 入口已下线，本章页面交互仅作历史记录；当前通过 `limit_up_ladder` tool 服务 DSH 对话、报告与面板。
 
 ### 7.1 Web：涨停梯队页（新增）
 
@@ -348,14 +350,14 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 - 东方财富涨停池 adapter（`EastmoneyLimitUpLadderAdapter`，公开 API、无鉴权、无环境变量）；本文档不修改上游协议。已确认不接 amazingdata，无 fallback adapter。
 - 现有涨停分组同步逻辑（依赖 `getLimitUpStocks*`），与天梯解耦。
-- 现有 TOP10 排序、报告生成、LLM 复盘链；只调整它们的"输入来源"，不改它们的核心算法。
+- 现有 TOP10 排序、报告生成与复盘分析；只调整它们的"输入来源"，不改它们的核心算法。
 
 ### 9.2 扩展
 
 - `packages/core` 增加 `LimitUpLadder` / `LimitUpLadderEntry` schema（Zod），并派生 TypeScript 与 OpenAPI schema。
 - `packages/tools` 增加 `limit_up_ladder` tool，挂在"市场数据"桶下；`sideEffect: "read"`。
-- `apps/web` 增加 `/market/limit-up` 页面与对应 API 路由。
-- `apps/tui` 增加 `L` 快捷键与"涨停梯队"子视图。
+- ~~`apps/web` 增加 `/market/limit-up` 页面与对应 API 路由~~（已随 `apps/web` 删除取消）。
+- ~~`apps/tui` 增加 `L` 快捷键与"涨停梯队"子视图~~（已随 TUI 删除取消）。
 - 缓存 key：`(date, source, schemaVersion)`。
 - 报告 workflow：`MarketReviewChain` 输入段的"涨停梯队"由字符串拼接改为引用本快照，移除硬编码示例。
 
@@ -363,7 +365,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 - 不引入新的用户配置项；不接受"自定义连板规则 / 自定义首板口径"。
 - 不引入 Redis、外部 KV；用 luoome 现有 cache adapter。
-- 不让 TUI/Web 直接连行情数据源；数据由 tool 统一封装。
+- 不让面板/对话直接连行情数据源；数据由 tool 统一封装。
 - 不复刻 ruo 旧 adapter 把修正字段写回上游缓存的做法；adapter 只暴露修正后的 `price` 与保留的 `rawClose`。
 - 不在 tool 内做"今天 → 昨天"自动回退；调用方按 §6.5 处理空态。
 
@@ -407,6 +409,8 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 ## 11. 验收标准
 
+> 形态变更（2026-11-04）：下方 Web / TUI / CLI 三条验收项已随入口下线失效；tool 层验收项仍然有效。
+
 ### 功能
 
 - 用户在 TUI 按 `L` 后 ≤ 2 秒内看到今日天梯（或明确的空态提示）。
@@ -427,7 +431,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 ### 安全
 
-- tool `sideEffect: "read"`，不在 MCP 自动暴露任何"触发/告警"能力。
+- tool `sideEffect: "read"`，不在 DSH 通用工具面暴露任何"触发/告警"能力。
 - 不在响应中包含账户、持仓、订单等用户私有信息。
 - 不通过 tool 写入数据库；下游写入路径仍走各自的写 tool。
 - 不因天梯触发任何交易；天梯纯只读。

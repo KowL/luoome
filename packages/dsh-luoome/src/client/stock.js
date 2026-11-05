@@ -2,7 +2,12 @@ import { createElement as h, useEffect, useRef, useState } from 'react';
 import { useStockDetail, useStockFinancial, useStockHistory, useStockProfile } from './data.js';
 import { bigMoney, int, money, points, tradeDate, when } from './format.js';
 import { Card, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
-import { stockFinancialSections, stockHistoryIndex, stockHistoryRows } from './projection.js';
+import {
+  stockFinancialSections,
+  stockHistoryIndex,
+  stockHistoryRows,
+  xueqiuStockUrl,
+} from './projection.js';
 
 /** 个股档案事实：股东户数（最近一期）+ 所属板块清单。 */
 function StockProfileFacts({ profile }) {
@@ -66,7 +71,7 @@ export function StockHistory({ marketView }) {
   const candles = stockHistoryRows(marketView, range);
   const status = marketView.dataStatus;
   if (!candles.length)
-    return h('p', { className: 'luo-fine' }, '没有可绘制的历史 K 线。缺失历史保持未知。');
+    return h('p', { className: 'luo-fine' }, '没有可绘制的日 K。缺失交易日保持未知。');
   const selectedIndex = candles.findIndex((bar) => bar.date === selectedDate);
   const current = selectedIndex < 0 ? candles.length - 1 : selectedIndex;
   const selected = candles[current];
@@ -104,16 +109,15 @@ export function StockHistory({ marketView }) {
     h(
       'div',
       { className: 'luo-stock-history-caption' },
-      h('strong', null, '历史日 K · 前复权'),
       h(
         Pill,
         { tone: status.retrieval === 'local-fallback' ? 'warn' : 'quiet' },
-        status.retrieval === 'local-fallback' ? '本地保留历史' : '供应商历史',
+        status.retrieval === 'local-fallback' ? '本地保留日线' : '供应商日线',
       ),
     ),
     h(
       'div',
-      { className: 'luo-stock-history-controls', role: 'group', 'aria-label': '历史交易日范围' },
+      { className: 'luo-stock-history-controls', role: 'group', 'aria-label': '日 K 范围' },
       [
         [30, '30 交易日'],
         [60, '60 交易日'],
@@ -250,16 +254,16 @@ export function StockHistory({ marketView }) {
     h(
       'figcaption',
       { className: 'luo-fine' },
-      `日线截止 ${status.barsAsOf ?? '未知'} · 显示 ${candles.length} / 已加载 ${marketView.candles.length} 根实际 K 线 · 来源 ${status.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；范围按实际日线根数裁取，全部仅指已加载历史。图表不代表历史回测。`,
+      `日线截止 ${status.barsAsOf ?? '未知'} · 显示 ${candles.length} / 已加载 ${marketView.candles.length} 根实际 K 线 · 前复权 · 来源 ${status.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；范围按实际日线根数裁取，全部仅指已加载日线，不提供回测结论。`,
     ),
     status.warnings.length
       ? h(
           'p',
           { className: 'luo-fine' },
           status.warnings.includes('bars-local-fallback')
-            ? '供应商历史读取失败，正在展示本地保留的日线；数据范围可能不完整。'
+            ? '供应商日 K 读取失败，正在展示本地保留的日线；数据范围可能不完整。'
             : status.warnings.includes('bars-insufficient')
-              ? '日线样本不足，历史范围不完整。'
+              ? '日线样本不足，区间不完整。'
               : '保留工具返回的市场收盘、来源或覆盖限制，最新行情与日线可能来自不同时点。',
         )
       : null,
@@ -396,19 +400,16 @@ export function StockDetail({
   const sending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [showHistory, setShowHistory] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
-  const [showFinancial, setShowFinancial] = useState(false);
-  const financial = useStockFinancial(stock.stockId, showFinancial);
-  const financialResponse = financial.data?.financial;
   const state = useStockDetail(stock.stockId);
-  const history = useStockHistory(stock.stockId, showHistory);
-  const profile = useStockProfile(stock.stockId, showProfile);
+  const history = useStockHistory(stock.stockId);
+  const profile = useStockProfile(stock.stockId);
+  const financial = useStockFinancial(stock.stockId);
+  const financialResponse = financial.data?.financial;
   const profileResponse = profile.data?.profile;
   const profileItem = profileResponse?.ok ? profileResponse.data : null;
   const profileError =
     profile.error ??
-    (!profile.loading && showProfile && !profileItem
+    (!profile.loading && !profileItem
       ? {
           message:
             profileResponse?.error?.kind === 'permission_denied'
@@ -416,6 +417,39 @@ export function StockDetail({
               : '个股档案不可用。',
         }
       : null);
+  const financialError =
+    financial.error ??
+    (!financial.loading && !financialResponse?.ok
+      ? {
+          message:
+            financialResponse?.error?.kind === 'permission_denied'
+              ? '当前配置未启用财务快照读取。'
+              : financialResponse?.error?.kind === 'invalid_input'
+                ? '当前未配置财务快照数据源；请核对数据源配置。'
+                : '财务快照不可用，请稍后重试。',
+        }
+      : null);
+  const kline = history.loading
+    ? h('div', { role: 'status', 'aria-label': '正在读取日 K' }, h(SkeletonLines, { lines: 3 }))
+    : history.error
+      ? h(ErrorNote, { error: history.error })
+      : history.data?.marketView?.ok
+        ? h(StockHistory, { marketView: history.data.marketView.data })
+        : h(ErrorNote, {
+            error: {
+              message:
+                history.data?.marketView?.error?.kind === 'permission_denied'
+                  ? '当前配置未启用日 K 读取。'
+                  : '日 K 不可用。不会用单次报价合成走势。',
+            },
+          });
+  const refreshAll = () => {
+    state.refresh();
+    history.refresh();
+    profile.refresh();
+    financial.refresh();
+  };
+  const refreshing = state.loading || history.loading || profile.loading || financial.loading;
   useEffect(() => {
     const element = dialog.current;
     element.showModal();
@@ -448,6 +482,7 @@ export function StockDetail({
       setBusy(false);
     }
   };
+  const xueqiu = xueqiuStockUrl(stock.stockId);
   return h(
     'dialog',
     {
@@ -476,14 +511,41 @@ export function StockDetail({
       h(
         'div',
         null,
-        h('p', { className: 'luo-eyebrow' }, '个股详情'),
         h('h2', { id: 'luo-stock-title' }, stock.stockName),
-        h('p', { className: 'luo-stock-code' }, stock.stockId),
+        h(
+          'p',
+          { className: 'luo-stock-code' },
+          xueqiu === null
+            ? stock.stockId
+            : h(
+                'a',
+                {
+                  className: 'luo-stock-code-link',
+                  href: xueqiu,
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                  title: `在雪球查看 ${stock.stockId}`,
+                  'aria-label': `在雪球查看 ${stock.stockId}`,
+                },
+                stock.stockId,
+                h('span', { className: 'luo-stock-code-external', 'aria-hidden': 'true' }, '↗'),
+              ),
+        ),
       ),
       h(
-        'button',
-        { type: 'button', className: 'luo-btn', onClick: onClose, 'aria-label': '关闭个股详情' },
-        '关闭',
+        'div',
+        { className: 'luo-stock-head-actions' },
+        h(Refresh, {
+          loading: refreshing,
+          onClick: refreshAll,
+          label: '刷新',
+          ariaLabel: '刷新个股数据',
+        }),
+        h(
+          'button',
+          { type: 'button', className: 'luo-btn', onClick: onClose, 'aria-label': '关闭个股详情' },
+          '关闭',
+        ),
       ),
     ),
     h(
@@ -491,7 +553,7 @@ export function StockDetail({
       { className: 'luo-stock-detail-body' },
       h(
         Card,
-        { title: '行情快照', meta: h(Refresh, { loading: state.loading, onClick: state.refresh }) },
+        null,
         state.loading
           ? h(
               'div',
@@ -545,101 +607,47 @@ export function StockDetail({
               h('p', { className: 'luo-fine' }, `行情读取于 ${when(quote.fetchedAt)}`),
             )
           : null,
+        h('div', { className: 'luo-stock-kline' }, kline),
       ),
       h(
         Card,
-        {
-          title: '历史走势',
-          meta: showHistory
-            ? h(Refresh, { loading: history.loading, onClick: history.refresh })
-            : '最近三个月 · 实际日 K',
-        },
-        !showHistory
+        null,
+        profile.loading
           ? h(
-              'button',
-              { type: 'button', className: 'luo-btn', onClick: () => setShowHistory(true) },
-              '读取历史日 K',
+              'div',
+              { role: 'status', 'aria-label': '正在读取个股档案' },
+              h(SkeletonLines, { lines: 3 }),
             )
-          : history.loading
-            ? h(
-                'div',
-                { role: 'status', 'aria-label': '正在读取历史日 K' },
-                h(SkeletonLines, { lines: 3 }),
-              )
-            : history.data?.marketView?.ok
-              ? h(StockHistory, { marketView: history.data.marketView.data })
-              : h(ErrorNote, {
-                  error: history.error ?? {
-                    message:
-                      history.data?.marketView?.error?.kind === 'permission_denied'
-                        ? '当前配置未启用历史行情读取。'
-                        : '历史日线不可用。不会从单次报价合成历史。',
-                  },
-                }),
+          : profileError
+            ? h(ErrorNote, { error: profileError })
+            : profileItem
+              ? h(StockProfileFacts, { profile: profileItem })
+              : null,
       ),
       h(
         Card,
-        {
-          title: '筹码与板块',
-          meta: showProfile
-            ? h(Refresh, { loading: profile.loading, onClick: profile.refresh })
-            : '股东户数与所属板块',
-        },
-        !showProfile
+        null,
+        financial.loading
           ? h(
-              'button',
-              { type: 'button', className: 'luo-btn', onClick: () => setShowProfile(true) },
-              '读取股东户数与所属板块',
+              'div',
+              { role: 'status', 'aria-label': '正在读取财务快照' },
+              h(SkeletonLines, { lines: 3 }),
             )
-          : profile.loading
-            ? h(
-                'div',
-                { role: 'status', 'aria-label': '正在读取个股档案' },
-                h(SkeletonLines, { lines: 3 }),
-              )
-            : profileError
-              ? h(ErrorNote, { error: profileError })
-              : profileItem
-                ? h(StockProfileFacts, { profile: profileItem })
-                : null,
-      ),
-      h(
-        Card,
-        {
-          title: '财务当前快照',
-          meta: showFinancial
-            ? h(Refresh, { loading: financial.loading, onClick: financial.refresh })
-            : '按需读取 · 非 PIT',
-        },
-        !showFinancial
-          ? h(
-              'button',
-              { type: 'button', className: 'luo-btn', onClick: () => setShowFinancial(true) },
-              '读取财务快照',
-            )
-          : financial.loading
-            ? h(
-                'div',
-                { role: 'status', 'aria-label': '正在读取财务快照' },
-                h(SkeletonLines, { lines: 3 }),
-              )
+          : financialError
+            ? h(ErrorNote, { error: financialError })
             : financialResponse?.ok
               ? h(StockFinancialFacts, { snapshot: financialResponse.data })
-              : h(ErrorNote, {
-                  error: financial.error ?? {
-                    message:
-                      financialResponse?.error?.kind === 'permission_denied'
-                        ? '当前配置未启用财务快照读取。'
-                        : financialResponse?.error?.kind === 'invalid_input'
-                          ? '当前未配置财务快照数据源；请核对数据源配置。'
-                          : '财务快照不可用，请稍后重试。',
-                  },
-                }),
+              : null,
       ),
       result && version
         ? h(
             Card,
-            { title: sourceLabel, meta: `第 ${version.version} 版` },
+            null,
+            h(
+              'p',
+              { className: 'luo-stock-source-meta' },
+              `${sourceLabel} · 第 ${version.version} 版`,
+            ),
             h('p', { className: 'luo-stock-strategy-name' }, strategyName),
             h('p', { className: 'luo-fine' }, `匹配事实时间 ${tradeDate(result.dataAsOf)}`),
             h(
@@ -650,12 +658,12 @@ export function StockDetail({
             ),
             evidence,
           )
-        : h(Card, { title: '关注来源' }, h('p', null, sourceLabel), evidence),
+        : h(Card, null, h('p', { className: 'luo-stock-source-meta' }, sourceLabel), evidence),
       h(
         'p',
         { className: 'luo-strategy-note' },
         result
-          ? '行情快照与策略匹配可能来自不同时点。规则评分不代表成功概率，匹配标的仅供研究。'
+          ? '行情与策略匹配可能来自不同时点。规则评分不代表成功概率，匹配标的仅供研究。'
           : '行情与账户事实可能来自不同时点。关注或持仓不代表买入建议。',
       ),
     ),

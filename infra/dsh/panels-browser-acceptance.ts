@@ -453,6 +453,7 @@ const overviewRequests: string[] = [];
 let stockQuoteFailure = false;
 let stockQuotePending = false;
 let stockDetailReads = 0;
+let stockHistoryReads = 0;
 let stockProfileReads = 0;
 let stockFinancialReads = 0;
 let stockFinancialFailure = false;
@@ -487,6 +488,72 @@ const fuyaoGateway = createServer((incoming, outgoing) => {
   );
 });
 const proxy = createServer();
+
+/** 个股详情日 K 的合成 fixture：60 个工作日，确定性价格与成交量，浏览器验收不联网取历史。 */
+const stockHistoryFixture = (stockId: string) => {
+  const candles: {
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    source: string;
+    completeness: 'closed';
+  }[] = [];
+  const day = 24 * 60 * 60 * 1000;
+  let cursor = Date.UTC(2026, 6, 24);
+  while (candles.length < 60) {
+    const date = new Date(cursor);
+    const weekday = date.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) {
+      const index = candles.length;
+      const base = 1480 + index * 3 + ((index * 7) % 11);
+      const open = Number((base + ((index * 3) % 5)).toFixed(2));
+      const close = Number((base + (((index * 5) % 9) - 4)).toFixed(2));
+      candles.push({
+        date: date.toISOString().slice(0, 10),
+        open,
+        close,
+        high: Number((Math.max(open, close) + 8 + (index % 3)).toFixed(2)),
+        low: Number((Math.min(open, close) - 6 - (index % 4)).toFixed(2)),
+        volume: 1_200_000 + index * 30_000,
+        source: 'browser-acceptance-fixture',
+        completeness: 'closed',
+      });
+    }
+    cursor += day;
+  }
+  const averageClose = (bars: number) =>
+    Number((candles.slice(-bars).reduce((total, bar) => total + bar.close, 0) / bars).toFixed(2));
+  return {
+    stock: {
+      id: stockId,
+      code: stockId.slice(0, 6),
+      name: '合成日 K 标的',
+      exchange: stockId.split('.')[1],
+    },
+    candles,
+    movingAverages: candles.map((bar, index) => ({
+      date: bar.date,
+      ma20: index >= 19 ? averageClose(20) : null,
+      ma60: index >= 59 ? averageClose(60) : null,
+    })),
+    indicators: { ma5: averageClose(5), ma10: averageClose(10), close: candles.at(-1)?.close },
+    indicatorsAsOf: candles.at(-1)?.date ?? null,
+    dataStatus: {
+      freshness: 'fresh',
+      retrieval: 'live',
+      quoteFetchedAt: '2026-10-25T04:00:00Z',
+      barsAsOf: candles.at(-1)?.date ?? null,
+      sources: ['browser-acceptance-fixture'],
+      marketSession: 'closed',
+      warnings: [],
+    },
+    markers: [],
+    limitUp: { asOf: null, events: [] },
+  };
+};
 
 const runAcceptance = async () => {
   await mkdir(evidenceDir, { recursive: true });
@@ -787,6 +854,28 @@ const runAcceptance = async () => {
         else send();
         return;
       }
+    }
+    // 固定 60 根合成日线：图表断言确定，浏览器验收也不联网取供应商历史；
+    // /stock/history 路由与 get_stock_market_view 工具链由 panels.test.ts 单独覆盖。
+    if (incoming.url.startsWith('/dsh/api/luoome/stock/history?')) {
+      stockHistoryReads++;
+      const stockId = new URL(incoming.url, 'http://fixture.invalid').searchParams.get('stockId');
+      outgoing.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      outgoing.end(
+        JSON.stringify({
+          stockId,
+          asOf: '2026-10-25T04:00:00Z',
+          marketView: {
+            name: 'get_stock_market_view',
+            ok: true,
+            data: stockHistoryFixture(stockId ?? ''),
+          },
+        }),
+      );
+      return;
     }
     if (incoming.url.startsWith('/dsh/api/luoome/stock-financial?')) {
       stockFinancialReads++;
@@ -2504,6 +2593,11 @@ const runAcceptance = async () => {
   await new Promise((done) => setTimeout(done, 150));
   await page.screenshot(join(evidenceDir, 'strategies-matches-desktop.png'));
   if (stockDetailReads !== strategyPanelStockReads) throw new Error('策略列表不应预取所有个股行情');
+  const strategyDetailReads = {
+    history: stockHistoryReads,
+    profile: stockProfileReads,
+    financial: stockFinancialReads,
+  };
   stockQuoteFailure = true;
   await page.evaluate(
     `document.querySelector('[data-stock-id="${fixtureInfo.stock.id}"]').click()`,
@@ -2517,11 +2611,32 @@ const runAcceptance = async () => {
   );
   if (!detailFailure) throw new Error('行情失败时丢失策略依据或分析入口');
   stockQuoteFailure = false;
-  await page.evaluate(`document.querySelector('dialog[open] .luo-card-h button').click()`);
+  await page.waitFor(
+    `document.querySelector('dialog[open] [aria-label="刷新个股数据"]')?.disabled === false`,
+    '详情刷新可操作',
+  );
+  await page.evaluate(`document.querySelector('dialog[open] [aria-label="刷新个股数据"]').click()`);
   await page.waitFor(
     `document.querySelector('dialog[open]')?.innerText.includes('1,520.00')`,
     '个股行情重试',
   );
+  // 详情打开即并行读取日 K、筹码档案与财务快照；头部刷新会整体重读。
+  await page.waitFor(
+    `document.querySelector('dialog[open] [data-stock-history]') !== null && document.querySelector('dialog[open] .luo-stock-profile')?.innerText.includes('股东户数 · 统计截止 2026-10-09') && document.querySelector('dialog[open] [data-stock-financial]')?.innerText.includes('12.35 亿')`,
+    '个股日 K、档案与财务自动加载',
+  );
+  if (stockHistoryReads !== strategyDetailReads.history + 2)
+    throw new Error(
+      `日 K 应在打开详情与刷新时各读取一次：${String(stockHistoryReads - strategyDetailReads.history)}`,
+    );
+  if (stockProfileReads !== strategyDetailReads.profile + 2)
+    throw new Error(
+      `个股档案应在打开详情与刷新时各读取一次：${String(stockProfileReads - strategyDetailReads.profile)}`,
+    );
+  if (stockFinancialReads !== strategyDetailReads.financial + 2)
+    throw new Error(
+      `财务快照应在打开详情与刷新时各读取一次：${String(stockFinancialReads - strategyDetailReads.financial)}`,
+    );
   const stockDetailText = await page.evaluate<string>(
     `document.querySelector('dialog[open]').innerText`,
   );
@@ -2533,9 +2648,47 @@ const runAcceptance = async () => {
     '行情时间',
     '第 6 版',
     fixtureInfo.strategyName,
+    '前复权',
     '在对话中分析这只股票',
   ])
     if (!stockDetailText.includes(expected)) throw new Error(`个股详情缺少 ${expected}`);
+  for (const removed of [
+    '历史行情',
+    '历史走势',
+    '读取历史日 K',
+    '读取股东户数与所属板块',
+    '读取财务快照',
+    '个股详情',
+    '行情快照',
+    '筹码与板块',
+    '财务当前快照',
+    '日 K 走势',
+  ])
+    if (stockDetailText.includes(removed)) throw new Error(`个股详情仍出现「${removed}」`);
+  const stockLinks = await page.evaluate<{
+    href: string | null;
+    target: string | null;
+    rel: string | null;
+  }>(
+    `(() => { const link = document.querySelector('dialog[open] .luo-stock-code-link'); return { href: link?.getAttribute('href') ?? null, target: link?.getAttribute('target') ?? null, rel: link?.getAttribute('rel') ?? null }; })()`,
+  );
+  if (
+    stockLinks.href !== 'https://xueqiu.com/S/SH600519' ||
+    stockLinks.target !== '_blank' ||
+    !stockLinks.rel?.includes('noopener')
+  )
+    throw new Error(`个股代码未跳转雪球：${JSON.stringify(stockLinks)}`);
+  const klineFacts = await page.evaluate<{ volume: number; label: string }>(
+    `(() => { const chart = document.querySelector('dialog[open] [data-stock-history]'); return { volume: chart.querySelectorAll('[data-volume-date]').length, label: chart.getAttribute('aria-label') ?? '' }; })()`,
+  );
+  if (klineFacts.volume !== 60 || !klineFacts.label.includes('共 60 根'))
+    throw new Error(`日 K 图表不完整：${JSON.stringify(klineFacts)}`);
+  // 日 K 不单独成卡：图表必须落在第一张（行情）卡片内，详情里不能再出现重复的卡片标题。
+  const klinePlacement = await page.evaluate<{ cardIndex: number; titles: string[] }>(
+    `(() => { const cards = [...document.querySelectorAll('dialog[open] .luo-card')]; const chart = document.querySelector('dialog[open] [data-stock-history]'); return { cardIndex: cards.indexOf(chart?.closest('.luo-card')), titles: [...document.querySelectorAll('dialog[open] .luo-card-t')].map((title) => title.textContent.trim()) }; })()`,
+  );
+  if (klinePlacement.cardIndex !== 0 || klinePlacement.titles.length !== 0)
+    throw new Error(`日 K 应直接展示在行情快照卡片内：${JSON.stringify(klinePlacement)}`);
   for (const internal of [
     fixtureInfo.strategyId,
     fixtureInfo.versionId,
@@ -2543,36 +2696,31 @@ const runAcceptance = async () => {
     'positive-close',
   ])
     if (stockDetailText.includes(internal)) throw new Error('个股详情暴露内部标识');
-  // 个股档案（股东户数 + 所属板块）：按需读取，读取后展示上游事实。
-  await page.evaluate(
-    `(() => { const btn = [...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent.trim() === '读取股东户数与所属板块'); btn.click(); })()`,
-  );
-  await page.waitFor(
-    `document.querySelector('dialog[open]')?.innerText.includes('股东户数 · 统计截止 2026-10-09')`,
-    '个股档案股东户数',
-  );
   const profileText = await page.evaluate<string>(
-    `document.querySelector('dialog[open]').innerText`,
+    `document.querySelector('dialog[open] .luo-stock-profile').innerText`,
   );
   for (const expected of ['274,138', '-1.84%', 'PCB', '富时罗素', '宽泛'])
     if (!profileText.includes(expected)) throw new Error(`个股档案缺少 ${expected}`);
-  if (stockProfileReads !== 1)
-    throw new Error(`个股档案读取次数异常：${String(stockProfileReads)}`);
-  if (stockFinancialReads !== 0) throw new Error('个股财务必须按需读取');
+  // 财务读取失败不伪造数据；头部刷新可整体重试，成功后再展示真实快照字段。
   stockFinancialFailure = true;
-  await page.evaluate(
-    `([...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === '读取财务快照')).click()`,
+  await page.waitFor(
+    `document.querySelector('dialog[open] [aria-label="刷新个股数据"]')?.disabled === false`,
+    '财务失败刷新前可用',
   );
+  await page.evaluate(`document.querySelector('dialog[open] [aria-label="刷新个股数据"]').click()`);
   await page.waitFor(
     `document.querySelector('dialog[open]')?.innerText.includes('财务快照不可用')`,
     '财务读取错误不伪造数据',
   );
   stockFinancialFailure = false;
-  const refreshFinancial = `(() => { const card = [...document.querySelectorAll('dialog[open] .luo-card')].find(item => item.querySelector('.luo-card-t')?.textContent === '财务当前快照'); if (!card) throw new Error('缺财务卡'); card.querySelector('button').click(); })()`;
-  await page.evaluate(refreshFinancial);
+  await page.waitFor(
+    `document.querySelector('dialog[open] [aria-label="刷新个股数据"]')?.disabled === false`,
+    '财务重试刷新前可用',
+  );
+  await page.evaluate(`document.querySelector('dialog[open] [aria-label="刷新个股数据"]').click()`);
   await page.waitFor(
     `document.querySelector('[data-stock-financial]')?.innerText.includes('12.35 亿')`,
-    '财务卡重试后展示真实快照字段',
+    '财务快照重试后展示真实字段',
   );
   const financialText = await page.evaluate<string>(
     `document.querySelector('[data-stock-financial]').innerText`,
@@ -2587,7 +2735,10 @@ const runAcceptance = async () => {
   ])
     if (!financialText.includes(expected))
       throw new Error(`财务快照缺少口径或缺失说明：${expected}`);
-  if (stockFinancialReads !== 2) throw new Error('财务卡按需/重试请求数量不符');
+  if (stockFinancialReads !== strategyDetailReads.financial + 4)
+    throw new Error(
+      `财务快照应在打开、刷新与两次重试时各读取一次：${String(stockFinancialReads - strategyDetailReads.financial)}`,
+    );
   await page.evaluate(
     `document.querySelector('[data-stock-financial]').scrollIntoView({block:'center'})`,
   );
@@ -2602,8 +2753,8 @@ const runAcceptance = async () => {
   await page.screenshot(join(evidenceDir, 'stock-financial-mobile.png'));
   await page.setViewport(1320, 900, false);
   summary.stockFinancial = {
-    onDemand: true,
-    retry: true,
+    autoLoad: true,
+    errorRetry: true,
     nonPit: true,
     missingPreserved: true,
     mobileFits: true,
@@ -2915,13 +3066,18 @@ const runAcceptance = async () => {
   );
   if (!stockMobileFits) throw new Error('移动端个股详情溢出或分析入口不可用');
   await page.screenshot(join(evidenceDir, 'stock-detail-mobile.png'));
-  await page.evaluate(
-    `(() => { const button = [...document.querySelectorAll('dialog[open] button')].find((item) => item.textContent.trim() === '读取股东户数与所属板块'); button.click(); })()`,
-  );
   await page.waitFor(
-    `document.querySelector('dialog[open] .luo-stock-profile')?.innerText.includes('274,138')`,
-    '移动端个股档案',
+    `document.querySelector('dialog[open] [data-stock-history]') !== null && document.querySelector('dialog[open] .luo-stock-profile')?.innerText.includes('274,138')`,
+    '移动端日 K 与档案自动加载',
   );
+  const klineFits = await page.evaluate<boolean>(
+    `(() => { const chart = document.querySelector('dialog[open] .luo-stock-history'); return chart.scrollWidth <= chart.clientWidth + 1; })()`,
+  );
+  if (!klineFits) throw new Error('移动端日 K 图横向溢出');
+  await page.evaluate(
+    `document.querySelector('dialog[open] .luo-stock-history').scrollIntoView({ block: 'center' })`,
+  );
+  await page.screenshot(join(evidenceDir, 'stock-kline-mobile.png'));
   const profileFits = await page.evaluate<boolean>(
     `(() => { const profile = document.querySelector('dialog[open] .luo-stock-profile'); return profile.scrollWidth <= profile.clientWidth + 1; })()`,
   );
@@ -3268,18 +3424,15 @@ const runAcceptance = async () => {
     '诊断个股详情入口',
   );
   await page.evaluate(`document.querySelector('.luo-diagnosis-list .luo-stock-link').click()`);
-  await page.waitFor(`document.querySelector('dialog[open]') !== null`, '研究个股详情');
-  await page.evaluate(
-    `(() => { const button = [...document.querySelectorAll('dialog[open] button')].find((item) => item.textContent.trim() === '读取历史日 K'); if (!button) throw new Error('历史读取入口未接线'); button.click(); })()`,
-  );
   await page.waitFor(
     `document.querySelector('dialog[open] [data-stock-history]') !== null`,
-    '真实历史 K 线',
+    '研究个股日 K 自动加载',
   );
   const historyFacts = await page.evaluate<{ points: number; label: string }>(
     `(() => { const chart = document.querySelector('dialog[open] [data-stock-history]'); return {points:chart.querySelectorAll('g').length, label:chart.getAttribute('aria-label')}; })()`,
   );
-  if (historyFacts.points < 2) throw new Error('历史图表没有实际日线事实');
+  if (historyFacts.points < 2 || !historyFacts.label.includes('共 60 根'))
+    throw new Error(`研究日 K 图表没有实际日线事实：${JSON.stringify(historyFacts)}`);
   const volumeCount = await page.evaluate<number>(
     `document.querySelectorAll('dialog[open] [data-volume-date]').length`,
   );

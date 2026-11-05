@@ -48,8 +48,8 @@ PIT universe 门禁的 `reason` 同时披露**快照属性覆盖**：读取 eval
 
 - Core：`StrictBacktestSpec/Run/MarketFact` schema、门禁审计和纯执行引擎。
 - Repository：`StrategyBacktestRepository` 提供 Drizzle 与 in-memory 双实现，并由 contract tests 验证身份不可变、生命周期和 cutoff 查询。
-- Tool：创建、读取、列表为公开 read/write tools；后台执行 tool 只由 Web job 调用。Tool 负责组装历史事实和门禁，Workflow（如后续接入）只能通过 `ctx.tools.*` 编排。
-- Web：`/api/strategies/:id/strict-backtests` 创建并异步执行；工作台“组合回测”入口展示运行身份、门禁审计和完整时才可用的指标。
+- Tool：创建、读取、列表为公开 read/write tools（`create_strict_strategy_backtest` / `list_strict_strategy_backtests` / `get_strict_strategy_backtest`）；`execute_strict_strategy_backtest` 已降为内部执行工具，由插件的 create policy 在门禁完备后经 `jobs.startStrict` 触发（`packages/dsh-luoome/src/host/research-operations.ts`）。Tool 负责组装历史事实和门禁，Workflow（如后续接入）只能通过 `ctx.tools.*` 编排。
+- 面板：研究工作台「组合回测（门禁审计）」入口展示运行身份、门禁审计和完整时才可用的指标（`packages/dsh-luoome/src/client/strict-backtest-view.js`）；原 Web 路由 `/api/strategies/:id/strict-backtests` 已随 `apps/web` 删除。
 
 当前仓库已提供确定性执行、历史事实同步与契约；能否运行仍取决于目标区间实际保留的 PIT 属性、
 日线 revision 与 benchmark 覆盖。公司行动保持上述范围限制；其它必需事实缺失时返回

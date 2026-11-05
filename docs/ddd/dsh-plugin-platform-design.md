@@ -5,15 +5,15 @@
 > 目标：将投资业务能力按域组织为插件，并复用成熟通用插件，通过组合形成不同 Agent 能力。
 > 配套：[详细研究与验证计划](../archive/dsh-plugin-platform-research-plan.md)（已归档）。
 > 实施：[开发任务与线程边界](../archive/dsh-plugin-platform-development-plan.md)（已归档）。
-> 约束依据：[领域语言](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)、[Web Chat](./web-chat-design.md)。
+> 约束依据：[领域语言](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)。
 >
 > **适用范围（2026-10-23）**：本文设计的是**内嵌 DSH Host + 原生 Cordis 插件**这条路，
 > 它的前提包含多租户托管层（租户生命周期、托管模型计量、托管站点）。
 > 托管形态下线后这些前提不再成立，内嵌 Host 与业务 Cordis 插件的代码也已从仓库删除：
 > 本文保留 Run/Tool Manifest、生命周期与事件契约部分作为插件化能力契约，
 > 托管相关的前提（Tenant、租约、计量账本、托管入口）不再是当前行为。
-> 当前单机形态（三实例 MCP、只读面板、技能目录、DSH 定时任务与队列消费）以
-> [luoome 的 DSH 改造详细设计](./luoome-dsh-transformation-detailed-design.md) 为准。
+> 当前单机形态（`dsh-luoome` 插件的 read/market surface、原生 Operation、面板与随包技能、
+> DSH 定时任务与批处理）以 [dsh-luoome 纯插件详细设计](./dsh-luoome-plugin-detailed-design.md) 为准。
 
 ## 1. 目标、范围与决策状态
 
@@ -44,7 +44,7 @@ Agent 管理和多 Agent 可视化在基础运行契约验证后增加。
 ### 2.1 Luoome 当前工作树
 
 以下为设计阶段的代码审查基线；部分实现在首批开发中更新，托管形态下线后相关文件已删除。
-现行行为见[架构文档](../ARCHITECTURE.md)与[单机形态改造设计](./luoome-dsh-transformation-detailed-design.md)，不能把下表的历史快照当成永久接口。
+现行行为见[架构文档](../ARCHITECTURE.md)与[dsh-luoome 纯插件详细设计](./dsh-luoome-plugin-detailed-design.md)，不能把下表的历史快照当成永久接口。
 
 | 能力 | 当前事实与来源 | 设计影响 |
 |---|---|---|
@@ -331,7 +331,7 @@ SDK 的 durable assistant/message 不能伪装成实时 token 流。拟由原生
 
 当时的托管链路有两处全量缓冲，必须在流式阶段解决，同时保留计量回执、响应消费与 Tenant lease 生命周期。
 （该托管链路已随托管形态下线；单机形态的流式与租约语义按
-[改造详细设计](./luoome-dsh-transformation-detailed-design.md) 的队列与 DSH 会话契约重新定义。）
+[dsh-luoome 纯插件详细设计](./dsh-luoome-plugin-detailed-design.md) §6 的队列与 DSH 会话契约重新定义。）
 onFinish 执行与有限收尾期间持有相关租约；持久化失败将 run 标记为 failed 并暴露 persistence_failed 诊断，禁止确认未保存草案或直接继续原 Session。
 执行者已停止后按恢复协议释放 lease，不无限等待数据库恢复；连失败状态也无法落库时，由先前持久运行记录与启动恢复识别未完成执行。
 上述 persistence_failed 是拟定运行诊断，不新增或替换业务 ToolError.kind。临时文本可丢失与已持久化事实可恢复的边界要明确，不能承诺进程硬退出前的每个 token 都可重放。

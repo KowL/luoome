@@ -1,20 +1,19 @@
 # luoome 开发计划
 
 > 状态：单机形态的阶段计划与验收记录；§2.10 是 2026-09 的 MVP2 基线，不代表当前插件范围。
-> 当前入口与能力状态以[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、[插件说明](../packages/dsh-luoome/README.md)为准。
+> 当前入口与能力状态以[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[插件说明](../../packages/dsh-luoome/README.md)为准。
 > 基线日期：2026-08-20；Strategy 可靠性复核：2026-08-20；账户绩效持续快照复核：2026-08-20
 > MVP 2.0 执行复核：2026-09-25。
-> 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
-> [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
+> 事实来源：[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、
+> [产品需求](../README.md#产品需求prd)、[技术设计](../README.md#技术设计ddd) 与当前代码、测试
 
 > 形态变更（2026-10-23）：多租户托管形态已下线，单机版成为唯一形态。
-> 当前形态见[dsh-luoome 纯插件设计](./ddd/dsh-luoome-plugin-detailed-design.md)与[插件说明](../packages/dsh-luoome/README.md)。
-> [DSH 改造设计](./ddd/luoome-dsh-transformation-detailed-design.md)记录迁移过程；四实例 MCP、
-> 独立 CLI/TUI 和旧 Web 调度已退役，不按旧阶段任务重复实施。AnalysisJob 是可选后台路径，
-> 不是交互分析前提。本页其余内容保留历史执行证据；新工作先核对当前入口、用户需求和数据门槛，
-> 不因已有详细设计就默认排期或继续扩展实验能力。
+> 当前形态见[dsh-luoome 纯插件设计](../ddd/dsh-luoome-plugin-detailed-design.md)与[插件说明](../../packages/dsh-luoome/README.md)。
+> 四实例 MCP、独立 CLI/TUI 和旧 Web 调度已退役，不按旧阶段任务重复实施。AnalysisJob 是可选后台路径，
+> 不是交互分析前提。本页保留行情、Strategy、Watchlist、账户绩效、报告与复盘的历史执行证据及长期门槛；
+> 新工作先核对当前入口、用户需求和数据资格，不因已有详细设计就默认排期或继续扩展实验能力。
 > 已下线的托管方向文档（开发改造计划、详细设计、运行手册、定价与支付调研等）统一见
-> [文档归档清单](./README.md#历史归档)，只作历史留存，不是当前行为说明。
+> [文档归档清单](../README.md#历史归档)，只作历史留存，不是当前行为说明。
 
 ## 1. 目标与排序原则
 
@@ -171,19 +170,19 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 
 开发前统一遵守以下覆盖关系：
 
-- `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](./ddd/research-vault-detailed-design.md)
+- `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](../ddd/research-vault-detailed-design.md)
   替代，不恢复旧 ResearchNote CRUD。
 - 旧 Watchlist PRD 中“自动绑定”的 Strategy source 同步已按较新的 Strategy Workspace 决策收敛为持久
   显式 opt-in 订阅：只有 published operational run 可投影，complete sync 才结束缺失来源，partial/failed
   只标 stale；没有订阅时不产生 Watchlist source。
-- [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) 中“当前没有 agent loop”的描述已被
+- Agent Loop 技术选型分析 中“当前没有 agent loop”的描述已被
   AI SDK 和 Web chat 实现取代，不再按旧方案重复建设 loop。
-- [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
+- [ROADMAP](../ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
 - SignalObservation 是真实事后观察，point-in-time replay 也是历史规则回放；即使已有 PIT universe、
   DailyBar revision 和 benchmark 事实，在费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本
   门禁满足前，仍不展示净值、年化、Sharpe、胜率或组合回测曲线。
-- [策略工作台 PRD](./prd/strategy-v2.md) 中"工作台不自动生成 Advice""发布、暂停必须人工确认"
-  已被 [策略自动化与 AI 管理 PRD](./prd/strategy-ai-managed-automation.md)（2026-09-01）取代：
+- [策略工作台 PRD](../prd/strategy-v2.md) 中"工作台不自动生成 Advice""发布、暂停必须人工确认"
+  已被 [策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md)（2026-09-01）取代：
   daily-cycle 自动候选分析产出 Advice；发布改为晋级门自动放行，暂停/归档按确定性规则自动执行。
 
 ### 2.5 未关闭验收项审计（2026-08-14）
@@ -203,7 +202,7 @@ provider 证据；禁止用 mock、当前快照或推断字段关闭上述门禁
 
 ### 2.6 Phase 2：真实复盘闭环执行里程碑（2026-08-21）
 
-Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md)
+Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase 2 完成计划](../ddd/decision-loop-phase2-completion-plan.md)
 执行。2026-08-21 已完成 P2-0～P2-4 核心代码切片，并用临时真实 SQLite 走通 Web outcome 回填与刷新持久化；
 这仍不等同于“真实复盘全部完成”，P2-5 的 Advice → Trade → Observation/Report → 新版本全链路、
 跨 repository 原子性和持续生产样本仍需关闭。
@@ -260,7 +259,7 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 
 ### 2.9 策略自动化与 AI 管理立项（2026-09-01）
 
-用户决策解除"冻结横向扩张"纪律，立项新方向：[策略自动化与 AI 管理 PRD](./prd/strategy-ai-managed-automation.md)。
+用户决策解除"冻结横向扩张"纪律，立项新方向：[策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md)。
 核心判断：当前痛点不是缺功能，而是"策略跑完没后续、结果需人工逐个分析、工作台复杂功能用不上"。
 方向为报告中心（扩展现有 closing/weekly report + Web 首页改版）+ AI 策略生命周期管理
 （提议 → 晋级门自动发布、确定性规则自动暂停），里程碑顺序 M1 报告中心 → M2 AI 生命周期管理。
@@ -278,14 +277,14 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 报告、工作台高级 tab 收深）。M2 AI 生命周期管理已于 2026-09-02 交付（StrategyAutonomyAction
 实体与双仓储、自动暂停、AI 提议 + 自动验证、晋级门自动发布、blocked 人工队列、周日调度挂接与
 Web 时间线），实施偏差记录于
-[Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) §8；其中
+[Strategy AI 生命周期管理详细设计](../ddd/strategy-ai-lifecycle-detailed-design.md) §8；其中
 evaluation scope 允许绑定未发布 valid 版本的不变量放宽需特别关注。§9 回补（自动归档、AI 创造
 全新策略）同日交付，实施记录见同文档 §9.3。遗留后续：M2 全链路真实运行证据积累。
 
 ### 2.10 MVP 2.0 P0/P1 收口（更新至 2026-09-28）
 
-[MVP 2.0 PRD](./prd/mvp2-ai-stock-research-automation.md) 为产品验收范围；后续领域决定以
-[CONTEXT.md](../CONTEXT.md) 为准。盘中风险、退出与入场提醒只根据计划条件和事实确定性求值，
+[MVP 2.0 PRD](../prd/mvp2-ai-stock-research-automation.md) 为产品验收范围；后续领域决定以
+[CONTEXT.md](../../CONTEXT.md) 为准。盘中风险、退出与入场提醒只根据计划条件和事实确定性求值，
 不自动调用 AI 改写计划；计划复核在盘后或用户主动研究时进行。PRD 中的盘中自动 AI 调整和
 旧账户快照描述均不作为当前实现门槛。
 
@@ -838,13 +837,13 @@ replay 只读取该快照，缺失时保持 unknown，不直接把当前快照�
 
 **预计：10～14 日；依赖：无新领域实体，基于已落地的 runtime/白名单/trace 基础**
 
-详细设计：[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)。
+详细设计：Agent 协作体验 Phase 0+1 详细设计。
 对应 PRD Phase 0（统一现有体验）与 Phase 1（可追溯研究助手）中尚未落地的产品层缺口。
 M7A～M7D 四切片均已交付：场景目录与确定性路由、计划卡、`agent_run` 部分失败契约、
 草案 display 投影与 Advice 确认卡、数据健康注入与 chat 取消链路；全量门禁与真实浏览器
 验收通过，实施偏差记录在设计文档 §11。
 
-> 后续变更：DSH 瘦身（[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）后
+> 后续变更：DSH 瘦身（[详细设计](../ddd/dsh-luoome-plugin-detailed-design.md)）后
 > `agent_run` 已删除，单机 Web 对话助手改为不依赖模型的「起草 → 明确确认 → 原子执行」链路；
 > `analyze_stock` / `analyze_position` / `market_outlook` 等内置 AI 工具同时下线。
 > 下列切片与验收条目保留为当时的设计记录，工具名不再代表当前可用能力。
@@ -892,7 +891,7 @@ N1 已排入 v0.10；N2 Phase 0+1 已立项为 M7（见 §5），N2 Phase 2 与 
 ### N2：Agent 协作体验 Phase 0～2
 
 **状态：Phase 0+1 已完成（2026-08-21，M7A～M7D）**，详细设计与实施偏差见
-[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)，
+Agent 协作体验 Phase 0+1 详细设计，
 按 M7A～M7D 切片进入排期（见 §5 M7）。Phase 2 闭环复盘助手（研究假设版本实体、
 Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向，编码前另行补详细设计。
 

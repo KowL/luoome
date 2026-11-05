@@ -52,11 +52,11 @@
 
 | 现有实现 | 依据 | 本次改造 |
 |---|---|---|
-| 原 Web 页面和业务路由 | [index](../../apps/web/public/index.html)、[server](../../apps/web/src/server.ts) | 原路由挂入认证外壳；页面不另起一套 |
+| 原 Web 页面和业务路由 | index、server | 原路由挂入认证外壳；页面不另起一套 |
 | 账户、持仓、交易、复盘契约 | [CONTEXT](../../CONTEXT.md)、[账户工具](../../packages/tools/src/tools/create-account.ts) | 自动唯一默认 Account、仅名称编辑、服务端绑定上下文 |
 | Strategy、Watchlist、AlertPlan、报告和 AI | [tools registry](../../packages/tools/src/registry.ts)、[workflows](../../packages/workflows/src/index.ts) | 原功能保留，HTTP/子工具/后台任务均校验当前 Tenant 与订阅 |
 | 托管身份、存储、支付及恢复工程 | [历史验收](./hosted-personal-subscription-fixture-acceptance.md) | 保留既有证据范围；不可替代新业务融合验收 |
-| 进程配置及部分任务持有共享 ctx | [server](../../apps/web/src/server.ts) | 请求级 context 桥接，SSE/后台执行持有 runtime lease |
+| 进程配置及部分任务持有共享 ctx | server | 请求级 context 桥接，SSE/后台执行持有 runtime lease |
 | 模型/数据源/Vault/整库导入设置 | [运行手册](./hosted-personal-subscription-runbook.md) | 管理员配置与租户偏好分离，不能让普通用户修改平台全局配置 |
 
 ### 2.1 必须保持的领域语义

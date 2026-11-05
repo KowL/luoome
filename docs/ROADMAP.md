@@ -6,11 +6,11 @@
 > 本文件 v0.8 以前章节是历史快照。当前目标模型与入口以
 > [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md)
 > 和 [CONTEXT.md](../CONTEXT.md) 为准；当前执行顺序以
-> [开发计划](./development-plan.md) 和
-> [Strategy 可靠性开发计划](./strategy-reliability-development-plan.md) 为准。
+> [开发计划](./archive/development-plan.md) 和
+> [Strategy 可靠性开发计划](./archive/strategy-reliability-development-plan.md) 为准。
 >
 > 历史章节出现的 `analyze_stock`、`daily-advice`、`market_outlook` 等内置 AI 能力已随
-> [DSH 瘦身详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 下线；战法（tactic）
+> [DSH 瘦身详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) 下线；战法（tactic）
 > 相关能力已在 strategy-watchlist 迁移中下线。这些名称只作为当时版本的事实记录保留，
 > 当前工具与 workflow 清单以 [ARCHITECTURE.md](./ARCHITECTURE.md) §8.1 与
 > `luoome tools list --json` 为准。

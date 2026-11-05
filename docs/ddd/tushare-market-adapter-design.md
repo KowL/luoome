@@ -18,7 +18,7 @@
 - A 股场景下允许用户配置一至三个真实源的启用状态与优先级，保留现有降级语义与抑制窗口。
 
 完成后，返回数据与日志必须记录 source 名 `tushare`；`MarketDataManager.stats()` 的
-`finalFallbackCalls` 继续表示第三源**尝试次数**，不把它解释为成功次数。`luoome tools list`
+`finalFallbackCalls` 继续表示第三源**尝试次数**，不把它解释为成功次数。`bun run tools:list`
 只验证既有行情 tool 仍被注册，不承担运行时数据源观测职责。
 
 ## 2. 非目标
@@ -477,6 +477,10 @@ export const translateTushareError = (error: unknown): Error => {
 
 ### 6.1 Web 设置与热更新
 
+> 现状（2026-11-04）：单机 Web 的 `/api/settings/market` 端点随 `apps/web` 删除，等价能力由
+> `dsh-luoome` 插件设置页（`packages/dsh-luoome/src/host/market-settings.ts`）与宿主路由提供；
+> 下面的 GET/POST 契约按当时的 Web 端点阅读，写回 `.env` 与热替换 manager 的语义不变。
+
 Web 的 `/api/settings/market` 提供运行时配置：
 
 - GET 返回全部源的启用状态、优先级与 `configured` 状态，不返回 token；
@@ -619,6 +623,10 @@ bun run build
 
 ### 10.5 端到端验收
 
+> 现状（2026-11-04）：第 3～6、9 步依赖的单机 Web 行情页与设置页已随 `apps/web` 删除；
+> 当前等价路径是 `dsh-luoome` 插件设置页调整源顺序、行情视图（`get_stock_market_view`）核对
+> `source`。以下步骤作为当时的验收记录保留。
+
 1. 确认 `TUSHARE_TOKEN` 已填（积分 / `rt_k` 权限满足，见集成手册 §2），并在 Web 设置页启用
    Tushare、调整优先级；
 2. 用集成手册 §3.1 的 curl 直连验证 token 有效（`code: 0`）；
@@ -626,9 +634,9 @@ bun run build
 4. 把 Eastmoney 调为第一优先级，行情正常显示 source='东方财富'；
 5. 把 Tushare 调为第一优先级，刷新行情页 → 应展示 source='tushare' 的报价；
 6. 同时屏蔽 tushare → 应展示“数据不可用”提示，不暴露价格 0；
-7. CLI：`luoome tools list` 中既有行情 tool 仍被注册；实际调用返回数据的
+7. 工具库存：`bun run tools:list` 中既有行情 tool 仍被注册；实际调用返回数据的
    `source='tushare'`，日志记录 Tushare 成功；
-8. MCP：调用同一 tool，tushare 链路可被 MCP 触发；
+8. DSH 侧 Agent：经插件注册的同一 tool 调用，tushare 链路可被触发（stdio MCP 入口已删除）；
 9. 在设置页关闭 Tushare → 路由立即恢复为其余启用源，刷新后配置仍保留；
 10. 启用 Tushare 但删除 `TUSHARE_TOKEN` → 启动期快速失败，错误信息明确。
 

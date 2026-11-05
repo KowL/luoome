@@ -234,7 +234,7 @@ Watchlist 同步器根据结果更新 strategy source，不让 Strategy 直接�
 ### 6.2 显式订阅与完整同步
 
 Strategy 不默认绑定任何 Watchlist。用户必须明确选择 Strategy 与目标 Watchlist，创建持久、可审计的
-订阅契约；Web 设置页和 `subscribe_strategy_to_watchlist` / `unsubscribe_strategy_from_watchlist`
+订阅契约；DSH 策略面板（投资设置）和 `subscribe_strategy_to_watchlist` / `unsubscribe_strategy_from_watchlist`
 提供创建、取消与历史查询。订阅只描述目标 source，不改写成员的人工 stage、笔记或其它来源。
 
 ```text
@@ -451,7 +451,7 @@ ended  → active    后续再次进入
 
 - 先新增目标 schema 和 repository，再做双读/一次性迁移，不直接重命名 SQLite 表。
 - 旧 tools 可在一个版本周期内映射到新 tools，并返回弃用信息。
-- Web 先切换产品语言；CLI/MCP 通过 discovery 获取新名称。
+- DSH 面板先切换产品语言；其它调用方通过 discovery 获取新名称。
 - 迁移必须幂等，任何失败保留旧数据。
 - 不同时维护两个可独立修改的成员事实源。
 
@@ -498,7 +498,7 @@ update_alert_plan
 - 仅 published operational run 投影，保留 run/version/evidence/dataAsOf provenance；
 - complete/partial/failed/可信空结果的完整同步语义；
 - entered/exited/score/rank 变化与同一 producerRun 幂等；
-- 多策略来源与共识展示；Web Strategy 设置页提供订阅和取消入口。
+- 多策略来源与共识展示；DSH 策略面板提供订阅和取消入口。
 
 ### Phase 3：AI 与研究工作台
 

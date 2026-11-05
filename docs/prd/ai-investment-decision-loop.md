@@ -3,7 +3,7 @@
 > 状态：方向草案，待按阶段立项
 > 日期：2026-07-29
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)、[SECURITY.md](../SECURITY.md)
-> 关联 PRD：[Agent 协作体验](./ai-investment-agent.md)、[策略定义与研究](./strategy-dsl.md)、[投资观察中心](./watchlist.md)
+> 关联 PRD：[策略定义与研究](./strategy-dsl.md)、[投资观察中心](./watchlist.md)
 > 研究模型更新：研究主体、正文存储和时间线契约以[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)为准；本总纲中的决策闭环和 Advice 边界继续有效
 
 ## 1. 文档结论
@@ -170,7 +170,7 @@ Agent 可以多步调用只读工具组织证据，但最终仍必须落到统�
 
 ## 6. 信息架构
 
-Web 保持少量稳定入口：
+当前唯一入口是 DSH 插件（旧 Web/CLI/MCP 已下线）；信息架构仍按下列对象组织：
 
 - 仪表盘：今日变化、重要预警、最新报告、数据健康。
 - 观察中心：Watchlist、成员来源与阶段、提醒方案和最近触发。
@@ -178,7 +178,7 @@ Web 保持少量稳定入口：
 - 持仓：账户、仓位、成本、风险和实际交易。
 - 报告与复盘：开盘/收盘/周报、Advice 与信号后续表现。
 - 对话：跨入口的研究和操作草案入口，不复制业务页面。
-- 设置：数据源、模型、权限和运行状态。
+- 设置：数据源、账户、权限和运行状态。
 
 ## 7. 产品指标
 
@@ -243,6 +243,6 @@ Web 保持少量稳定入口：
 
 - 用户能知道系统用了哪些数据、截止到何时。
 - 缺失或失败以 `unknown / unavailable / stale / partial` 明示。
-- Agent、Web、CLI 和 MCP 复用同一 tool 契约。
+- DSH 技能、面板与工具调用复用同一 tool 契约。
 - 写操作可确认、可审计；Advice 和交易之间没有自动路径。
 - 新对象确有独立生命周期，不能由已有对象组合得到。
