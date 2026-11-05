@@ -2,6 +2,8 @@
 
 > 状态：目标模型、显式 Strategy→Watchlist 订阅与完整/部分同步已实施；本文追踪当前契约
 > 日期：2026-08-15
+> 当前入口为 DSH 插件；本文旧模型迁移、CLI/MCP/Web 入口与 LLM 适配器章节保留阶段设计，
+> 不作为当前运行构成。现行运行与写入纪律见[架构说明](../ARCHITECTURE.md)和[插件说明](../../packages/dsh-luoome/README.md)。
 > 输入：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、
 > [Strategy DSL PRD](../prd/strategy-dsl.md)、[统一 Watchlist PRD](../prd/watchlist.md)
 > 当前事实来源：[ARCHITECTURE.md](../ARCHITECTURE.md)、`packages/core`、`packages/db`、
@@ -926,6 +928,22 @@ load enabled AlertPlans
   level（urgent→error / important→warn / normal→info）与标题前缀；notifyOnRecovery 未开启的
   recovered 与试跑仍为 not-requested。
 - AlertPlan 不拥有成员；删除被引用 Watchlist 被拒绝。
+
+### 当前触发、试跑与投递补偿契约
+
+- 试跑只返回求值结果，不写 WatchTrigger、边沿状态或信号观察，不消耗正式去重和额度；运行审计仍可记录。
+- `daily-first` 对同一计划、股票、规则的当日所有进入边沿生效，不只约束首次进入。
+- 盘中与事件预警共享数据库执行租约；触发与边沿状态原子提交。投递前持久化尝试次数。
+- 失败或中断的 pending 最多尝试三次，分别退避 1 分钟、5 分钟；仅在触发当日（上海自然日）、
+  计划与成员有效且额度允许时补偿。盘中循环也接手事件提醒失败的投递。
+- 重试计入计划与全局每日额度；成功与 fallback-log 不自动重试。渠道未配置只表示记入日志。
+- WatchRun 的 succeeded/healthy 表达心跳，unknownRules 表达求值缺口，delivered 表达送达。
+  旧 notified 字段是尝试数，包含失败与仅日志，历史未记录指标不补默认值。
+
+`create_watchlist` 输入可省略 `kind` 与 `membershipPolicy`，由 Zod 统一补为 `personal/mixed`，
+默认值在 Operation 冻结输入前确定，回执核对使用相同规范化输入。显式分类不覆盖，持久化实体仍要求完整字段；
+系统和持仓列表的约束保持原样。策略来源同步通过既有入选结果查询读取完整候选集合，
+不装载未入选诊断明细；仍核对正式发布资格、完整成员集合与可信零命中证明。
 
 ## 11. Tools
 

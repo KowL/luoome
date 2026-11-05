@@ -4,6 +4,7 @@
 > 日期：2026-07-28
 > 范围：行情 adapter seam、实时 Quote、新鲜度、规范日线、盘后归档、股票目录
 > `StockUniverse` 本地同步、搜索与全市场扫描的数据关系
+> 当前入口为 DSH 插件；下文 CLI/TUI/MCP/Web 的实施过程描述保留为阶段记录，不代表仍有这些用户入口。
 > 关联文档：[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、
 > [个股行情查看详细设计](./stock-market-view-detailed-design.md)、
 > [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
@@ -100,6 +101,17 @@ CN_A_SHARES_SH_SZ = 上海 A 股 + 深圳 A 股
 - `source`；
 - `observedAt`；
 - 可选 `industry`、`listDate`、`delistDate`。
+
+#### PIT 成员属性与存量快照
+
+每次成功同步在 `stock_universe_snapshot_members` 保存不可变的成员投影，携带快照期的
+`listing_status / industry / list_date / delist_date`。`listSnapshotMemberFacts` 只返回当时属性，
+不回落到当前目录；成员行不随当前 `stocks` 的变化删除，读取使用 LEFT JOIN，缺失属性标 unknown。
+
+T35 之前的快照没有这些属性列：启动迁移只补列，不回填当前值；旧行的
+`listing_status='unknown'`，其余缺省。用当前值回填会把前视信息固化到历史。
+`name/code/exchange` 仍依赖当前 `stocks` 作展示；code/exchange 缺失时从 stockId 解析，
+名称尚未快照化，不将当前名称视为当时的历史证据。
 
 ### 4.2 全市场行情快照（MarketSnapshot）
 

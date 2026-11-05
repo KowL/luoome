@@ -615,7 +615,7 @@ export const setInvestmentTrackingTool = defineTool({
               strategyVersionId: published.version.id,
             },
           });
-          const results = await ctx.repos.strategyRun.listResults(published.run.id);
+          const results = await ctx.repos.strategyRun.listSelectedResultsByRuns([published.run.id]);
           if (!(await ownsClaim())) {
             await unsubscribeStrategyFromWatchlistTool.execute({ subscriptionId }, ctx);
             return errInvalidInput('tracking_claim_lost: 已停止本次订阅，读取实际状态。');
@@ -631,16 +631,14 @@ export const setInvestmentTrackingTool = defineTool({
               status:
                 getStrategyRunDataHealth(published.run) === 'complete' ? 'complete' : 'partial',
               dataAsOf: published.run.dataAsOf,
-              candidates: results
-                .filter((result) => result.selected)
-                .map((result) => ({
-                  stockId: result.stockId,
-                  reason: `共识 v${consensus.version} 的方向 ${selection.direction.name}，来自 ${published.run.id}`,
-                  evidence: [...result.evidence, selection.researchId, selection.directionId],
-                  dataAsOf: result.dataAsOf,
-                  ...(result.score === undefined ? {} : { score: result.score }),
-                  ...(result.rank === undefined ? {} : { rank: result.rank }),
-                })),
+              candidates: results.map((result) => ({
+                stockId: result.stockId,
+                reason: `共识 v${consensus.version} 的方向 ${selection.direction.name}，来自 ${published.run.id}`,
+                evidence: [...result.evidence, selection.researchId, selection.directionId],
+                dataAsOf: result.dataAsOf,
+                ...(result.score === undefined ? {} : { score: result.score }),
+                ...(result.rank === undefined ? {} : { rank: result.rank }),
+              })),
             },
             ctx,
           );
@@ -758,10 +756,10 @@ export const getInvestmentCandidatesTool = defineTool({
         limitations.push(`${selection.direction.name}：版本已变或事实不合格，未输出当前候选。`);
         continue;
       }
-      const results = await ctx.repos.strategyRun.listResults(published.run.id);
+      const results = await ctx.repos.strategyRun.listSelectedResultsByRuns([published.run.id]);
       if (getStrategyRunDataHealth(published.run) !== 'complete')
         limitations.push(`${selection.direction.name}：运行仅有部分数据，候选不是完整覆盖结论。`);
-      for (const result of results.filter((result) => result.selected)) {
+      for (const result of results) {
         const candidate = byStock.get(result.stockId) ?? {
           stockId: result.stockId,
           directions: [],

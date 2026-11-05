@@ -159,8 +159,8 @@ export const CreateWatchlistInput = z.object({
   id: WatchlistSlugSchema.optional(),
   name: z.string().min(1).max(80),
   description: z.string().max(1000).optional(),
-  kind: z.enum(['personal', 'strategy', 'portfolio']),
-  membershipPolicy: WatchlistSchema.shape.membershipPolicy,
+  kind: z.enum(['personal', 'strategy', 'portfolio']).default('personal'),
+  membershipPolicy: WatchlistSchema.shape.membershipPolicy.default('mixed'),
   enabled: z.boolean().default(true),
 });
 export const CreateWatchlistOutput = z.object({ watchlist: WatchlistSchema });
@@ -531,10 +531,8 @@ export const syncWatchlistSourceTool = defineTool({
           `StrategyRun dataHealth=${health ?? 'unavailable'} 时只能以 ${expectedStatus ?? '不可同步'} 状态同步`,
         );
       }
-      const results = await ctx.repos.strategyRun.listResults(producerRun.id);
-      const selectedIds = new Set(
-        results.filter((result) => result.selected).map((result) => result.stockId),
-      );
+      const results = await ctx.repos.strategyRun.listSelectedResultsByRuns([producerRun.id]);
+      const selectedIds = new Set(results.map((result) => result.stockId));
       const candidateIds = new Set(input.candidates.map((candidate) => candidate.stockId));
       if (
         selectedIds.size !== candidateIds.size ||

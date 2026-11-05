@@ -1,511 +1,260 @@
 # Luoome 领域语言
 
-## 核心概念
+本文件定义当前产品的业务概念、对象关系与关键不变量。算法、存储、兼容和运行细节分别由
+[架构说明](./docs/ARCHITECTURE.md)及对应详细设计承载；有设计或代码不等于默认入口已接通。
+
+## 当前形态
+
+Luoome 是通过 DSH 插件使用的单机个人投资研究工具，覆盖沪深 A 股。DSH 承担对话、模型、
+任务调度与宿主身份；插件提供业务工具和面板，Node SQLite 的 `luoome.db` 是唯一事实库。
+`Account` 表示投资账户，不承担登录或租户语义；本地多账户仍分别维护账本与复盘。
+
+个人版按用户明确意图执行写入，保留账户绑定、能力控制、冻结输入、幂等和操作回执，
+不要求额外人工审批。持续运行还需 DSH 任务与精确任务授权；批处理、自动执行默认关闭。
+当前入口与配置以[插件说明](./packages/dsh-luoome/README.md)为准。
+
+## 1. 市场事实
 
 ### 股票目录（StockUniverse）
 
-回答“市场里有哪些可被系统识别的股票”。目录按明确覆盖范围低频同步股票身份；失败、空结果
-或分页不完整时保留上一版。目录不是行情快照。
+回答“明确覆盖范围内有哪些可被系统识别的股票”。目录保存股票身份，不是行情快照。
+完整快照校验后原子提交；失败、空结果或分页不完整时保留上一版，缺失不物理删除身份。
+历史查询使用当时成员及属性，缺历史属性保持 unknown，不用当前目录回填。
 
-每次成功同步会在 `stock_universe_snapshot_members` 写一份不可变的 PIT 成员投影，携带快照期的
-`listing_status / industry / list_date / delist_date`。PIT 查询（`listSnapshotMemberFacts`）返回
-**快照期**属性，不回落到当前目录；成员行不因股票从当前 `stocks` 删除而消失（LEFT JOIN，缺失属性
-标 unknown），避免幸存者偏差。T35 之前的旧 snapshot 行没有属性列：启动迁移只补列、**不回填当前
-值**，旧行 `listing_status='unknown'`、其余缺省——回填会把前视固化进历史并让 PIT 门禁恒 complete。
-`name/code/exchange` 仍依赖当前 `stocks`（展示用；code/exchange 缺失时从 stockId 解析），
-`name` 快照化是显式欠账。
+详见[行情底座设计](./docs/ddd/market-data-and-stock-universe-detailed-design.md#41-股票目录stockuniverse)。
 
-### 个股档案（StockProfile）
+### 行情与规范日线（Quote / DailyBar）
 
-回答“这只股票最近披露了哪些股东户数与所属板块事实”。当前返回最新一期股东户数、较上期变化、户均持股与户均市值，以及来源提供的板块及入选理由。股东统计截止日与读取时间分开；缺数据保持未知，接口错误不当作未披露。它是当前详情页的外部只读快照，不是用于历史回测的 PIT 财务事实，也不推导筹码集中趋势或交易信号。
+Quote 是有来源和时间的市场观测；行情发生时间与抓取时间分开，刚抓取不等于可用于当前决策。
+指标、Strategy 和 AlertPlan 统一使用前复权（`qfq`）DailyBar；缺复权因子或昨收时保留
+unknown/unavailable，不用今开或伪造因子代替。日线、原始未复权数据和当前报价分别表达。
 
-### 规范日线（DailyBar）
+### 个股档案、财务快照与板块关系
 
-指标、Strategy 和 AlertPlan 统一使用前复权（`qfq`）日线。缺少复权因子或上一交易日收盘价
-时必须返回 unavailable/unknown，不得用当日开盘价或伪造因子替代。
+`StockProfile` 提供最近披露的股东户数及来源板块事实；`FinancialSnapshot` 提供当前数据商
+财务视图；`SectorMembership` 提供当前行业/概念关系。它们不推导交易信号，也不证明历史 PIT。
+财报期间、披露日与获取时间分别保留，缺值不填零，当前关系不回填历史成分。
 
-### 原始日线与市场公司行动
+原始日线和市场公司行动可独立导入，但不进入规范 qfq 表，不自动修改账户现金或持仓，
+也不自动使严格回测具备完整公司行动事实。详见[Fuyao 分域设计](./docs/ddd/fuyao-data-expansion-and-tushare-retirement-design.md)。
 
-Fuyao MarketDump 将全量或近期未复权日 K 写入独立的 `raw_daily_bar_revisions`，将分红、送转和配股事件写入 `corporate_action_event_revisions`。文件 hash、运行记录和 checkpoint 共同标识可审计的导入过程；`recordedAt` 表示本地首次记录时间，后补数据不进入更早的历史 cutoff。原始日线不进入规范 qfq 日线表，市场公司行动不自动修改账户持仓、现金或账户公司行动账本；是否能用于严格回测仍需独立验收。
+### 市场情绪与连板天梯（AShareSentimentSnapshot / LimitUpLadder）
 
-### 财务当前快照与当前板块关系
+回答“指定交易日观察到了什么市场事实”。各维度独立保留来源、时间与可用性，缺失不等于零。
+`ladderLevel` 是当日可审计连板层级，不是 Advice、收益概率或交易信号。
+历史重放只读同日、同来源 PIT 快照，不拿当前天梯、近期炸板池或 mock 推断历史。
+炸板、断板等缺少合格历史证据的字段保持 unknown，不提前进入 Strategy 字段库。
 
-FinancialSnapshot 返回 Fuyao 当前数据商视图中的三大报表、指标和估值，标记 `viewKind='current-vendor-view'`、`pitStatus='not-ready'`。报告期末、披露日、获取时间各自保留；缺少上游 revision 身份和时间证据时，不写严格 PIT FinancialFact，也不用于生产基本面评分。金额和比率按字段 registry 解释，缺失值保持 null。
+详见[连板天梯设计](./docs/ddd/limit-up-ladder-detailed-design.md)。
 
-SectorMembership 只回答当前股票与行业/概念板块的关系；`.TI` 板块身份与本地股票身份分开，当前关系不回填历史成分。资讯、板块、财务和 dump 各有独立端口与状态，不进入 MarketDataManager。
+## 2. 策略发现
 
-### 严格回测（StrictBacktest）
+### Strategy / StrategyVersion
 
-回答“策略在可交易性事实齐全的历史区间里，按 D+1 开盘、整手、费用与滑点能跑出什么”。
-market facts 由同步任务按 evaluation day 的 `revisionCutoff` 从 `daily_bar_revisions` 生成：
-涨跌停价 = 前收盘 × 板块幅度（`tradability-rule-v1`：主板非 ST 10%、主板 ST 5%、科创/创业 20%、
-北交所 30%），ST 取自 PIT universe 快照属性（unknown 不猜、该日不写事实并披露缺失）。
-严格回测同步链尚未接入市场公司行动，事实保持 `corporateActionsStatus='unavailable'`，门禁逐项披露为 unavailable。
-新增市场公司行动仓储不自动提升此门禁；不阻断已披露范围内的执行，也不得据此声称完整复权回测。
+回答“用什么方法发现、评分并解释研究机会”。Strategy 是稳定身份；StrategyVersion 是不可变定义，
+先校验再发布。AI 可以提出草案，冻结后的规则匹配、评分和历史计算由确定性引擎执行。
+首次发布前，draft Strategy 的 valid 版本可非持久化试跑；正式运行要求 active，
+paused/archived 不接受试跑。创建、校验或试跑都不隐含发布意图。
 
-### Strategy
+### StrategyRun / StrategyResult / StrategySignal
 
-回答“如何发现、评分并解释研究机会”。Strategy 是稳定身份，StrategyVersion 是不可变定义；
-版本必须先校验再发布。StrategyRun 记录一次执行，StrategyResult 是逐股规则事实，
-StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不等于交易。
-首次发布前，draft Strategy 的 valid 版本可以做非持久化研究试跑，不需要先激活或发布；
-它不写正式运行或改变发布状态。正式运行仍要求 active，paused / archived 不接受试跑。
+StrategyRun 是一次执行，StrategyResult 是逐股入选及规则求值事实，StrategySignal 是跟踪事件。
+运行的执行状态、数据质量和发布资格分别表达：执行 complete 不代表数据齐全；
+只有通过 acceptance 且 `publication=published` 的 operational run 更新当前股票池。
+历史评估、显式子集和试跑不覆盖正式当前事实。
 
-StrategyRun 的 `status` 只表达执行生命周期：`running / complete / failed`。`complete` 表示执行已结束且
-结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的
-`dataHealth=complete / partial / unavailable` 与失败计数表达。存量 `status=partial` 只作为旧记录读取，
-语义等同“执行已完成、数据部分可用”。新的当前股票池只消费通过 acceptance 且
-`publication=published` 的 operational run；evaluation、withheld 和 non-publishing 运行不会覆盖当前事实。
-股票进入策略股票池后，其后续事实链仍归 Strategy：
-StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5
-观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
+entry 信号面向最终入选股；exit/risk 还覆盖同版本此前仍在跟踪的股票，退出后结束跟踪。
+信号按首次或恢复命中的边沿与冷却产生，不等同每日规则命中。它们不等于 Advice 或成交，
+也不由 WatchlistMember 的阶段代替。
 
-正式信号采用跟踪事件口径：entry 只面向最终入选股票；exit/risk 面向当前入选及该策略版本
-此前仍在跟踪的股票，退出条件成立后结束跟踪。持续命中只在首次命中或恢复后再次命中时生成
-事件，并遵守规则冷却期；原始规则求值仍属于诊断事实。触发前态与最近事件时间独立于可裁剪的
-StrategyResult 保存，与运行事实原子提交；operational 与各 evaluation session 隔离，试跑和
-未发布运行不改正式前态。只有带有效跟踪事件范围标记的信号创建 T+1/T+3/T+5 观察。
-历史明细清理不改写运行当时的计数、建议快照及引用；读取时区分当时产出与当前可用明细。
+### SignalObservation / StrategyInsight
 
-SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，不再创建、补全、展示或作为
-验收等待条件。存量 `horizon=t20` 行只保留读取兼容，不进入当前统计、推荐和实验事实。
-
-> 可靠性实现（2026-08-14）：`complete` 继续只表达执行终态；acceptance 与
-> `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用
-> heartbeat + fencing token、checkpoint、观察补全和 facts-only 降级；replay/backtest/显式子集不发布。
-> 跨日性能样本与真实运行记录继续作为运营观测，不设置固定交易日数量的完成门禁。详细契约见
-> [Strategy 日运行与历史评估详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
-
-AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计算由确定性规则引擎执行，AI 不介入。
-自动发布使用已有结果的历史验证区间，不强制等待提议后的 20 个交易日；历史样本门槛不等于等待期。
+SignalObservation 沿确切信号记录 T+1/T+3/T+5 的事后观察；T+20 只保留历史读取兼容。
+StrategyInsight 汇总运行变化、规则阻断和信号观察，AI 只能解释并引用已有事实。
+事后观察不等于组合回测、未来概率或买卖建议；缺失率、事实截止与小样本限制保留。
+历史明细清理不改写运行当时的计数、建议快照或引用。
 
 ### StrategySchedule
 
-回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
-cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
-definitionHash。调度 workflow 通过调度租约和正式运行租约防重；单机工具可显式执行。
-单机形态不再有领域内常驻调度器：Strategy 的自动运行由 DSH 定时任务触发批处理工具驱动
-（见「单机形态与托管退役」）。
-非交易日与暂停策略不运行。存量无 `schemaVersion` 的
-RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
-V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
-事实缺失时返回 unavailable，只有 eligible 候选才生成可追溯 Advice。配置的 T+n 观察完成时可再次生成阶段建议，
-并可选择日志或飞书通知。`maxPerRun` 限制进入 AI 分析的候选数（每个候选最多两次模型请求）；预检跳过、冷却或数据不可用的候选
-不占用名额，按排名继续检查后续候选。推荐批次记录尝试、生成失败、预检和投递结果；失败不回滚
-已提交的 StrategyRun。收盘报告区分未分析、未开启、预检跳过、数据不可用与生成失败，未分析
-不等于没有机会。个股策略分析独立校验行情时效，保留真实行情时间；新建议必须有反证和风险，
-买入价格计划满足 0 < 止损 < 买点 < 目标（按持久化价格精度校验），无效输出最多重试一次后失败。
-任何建议与通知都不会自动交易。
+回答“已发布策略何时到期”。调度是独立于版本的可变配置，修改不改变策略定义身份。
+DSH 定时任务调用批处理才会实际执行；配置日程、取得授权、执行完成和通知送达是不同事实。
+非交易日及暂停策略不运行；并发防重与执行审计由既有日循环承担。
+当前插件不开放配置自动推荐政策，不把日循环的 facts-only 结果说成已生成 Advice。
 
-可靠性目标已落地为把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun
-审计的 daily cycle；租约使用 heartbeat + fencing token。外部观察 cron 只保留为幂等补偿任务，
-真实交易日的运行记录仍需持续积累，期间不扩大自动推荐或通知默认范围；样本数量不作为固定完成门禁。
+内部运行视图、数据适配、快照兼容与审计见
+[架构契约](./docs/ARCHITECTURE.md#strategy-内部运行视图与兼容契约)；日循环与历史评估见
+[可靠性设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
 
-### StrategyDailyCycleAudit
-
-回答“某个 StrategySchedule 的一次盘后日循环发生了什么、使用了哪个事实时点、在哪一阶段降级或失败”。
-它是 `strategy-daily-cycle` WorkflowRun 的稳定领域投影：v1 写入显式版本、Strategy/Schedule 归属与
-dataAsOf；无版本旧记录继续通过同一解码边界只读兼容。按 Strategy、Schedule 或 dataAsOf 查询时，
-必须先确定归属与时间范围再截取数量，避免其它策略的新运行挤掉目标审计历史。
-
-### StrategyEvaluationData
-
-回答“本次 StrategyRun 的逐股 quote / daily-bars 从哪个时点与来源取得，以及缺失如何审计”。
-实时 scan 使用 Live Adapter；scheduled/replay 使用 Checkpoint Adapter，只读取本地 checkpoint 或 PIT
-revision。两个实现共享同一 Interface，`run_strategy` 不再承载模式分支、重试或 provider coverage 计算。
-
-### StrategyRunSnapshot
-
-StrategyRun 的不可变输入身份。当前写入 V3；V2 与任意旧对象只通过统一 Compatibility Module 读取。
-evaluator identity、requestedBy、evaluationSessionId、universe 和 data checkpoint 不得由各调用方直接
-探测原始 key，否则旧数据在不同 surface 会产生不一致语义。
-
-### StrategyObservationEvidence
-
-回答“哪些 StrategySignal 与哪些 ACTIVE SignalObservation 构成可审计事实链”。它批量校验
-run → signal → observation 的 Strategy/version/stock/horizon 归属，按 stock-day-horizon 去重，并显式
-返回 expected、missing、truncated 和 limitations。T+20 存量行不进入这条事实链。
-
-### StrategyRunTimeline
-
-Strategy 工作台、运行比较和洞察共用的只读运行视图；一次装载 run、version 与 results，并统一当前
-published operational run、上一基准和最近尝试的选择。它不是新的持久化实体，不改变 publication 规则。
-
-### StrategyInsight
-
-回答“策略最近实际发生了什么”。确定性事实层汇总运行变化、规则阻断、当前行业分布、关联
-AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5 事后观察。AI 只解释事实层并必须引用存在的
-fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
-时间、缺失率和小样本限制必须保留。
-
-### FinancialFact / FundamentalScore
-
-`FinancialFact` 是带报告期间、首次披露时间、revision 披露时间与本地记录时间的 append-only 财务事实；
-strict PIT 只读取截止 `asOf` 已公开且已被本地记录的 revision，撤回后不得回退旧值。`FundamentalScore`
-由版本化因子 registry、固定单位/方向、同一 vintage 横截面与最小样本门槛确定性计算，是 0～100 的规则分，
-不是概率、Advice 或交易授权。当前 P3-0～P3-2 已完成 Core、mock revision 装配、score version/run/result
-双仓储与确定性评分 Tool；`persist=false` 不写库，unavailable run 不保存可消费结果。mock 必须显式启用，
-评分与查询始终披露 `providerKind=mock`、`gate=not-ready`，且尚未接入 Strategy DSL。没有通过真实财务 revision 门禁前，不得用当前行情、
-股票目录行业、测试 fixture 或抓取时间替代生产 PIT 财务事实，也不得开放生产评分入口。
-
-### 参与方向与共识（InvestmentWorkspace）
-
-参与方向是有来源、明确覆盖范围和事实时间的研究提案；新用户不需要先配置 Strategy。
-`strategy-selection` 引用真实 published StrategyRun 与规则，保留确切策略/版本/运行身份；
-无合格预设策略时，`market-participation` 可引用市场广度、A股指数、封板/炸板情绪及供应商
-事件池行业分布的不可变快照，不编造 strategyId/runId。最多比较三个方向，不以有限股票样本或
-事件池推断全市场，不把池内行业计数当成完整板块行情或个股主题映射。缺公告/新闻不造催化。
-缺少合格事实时返回 unavailable，模型或引用失败返回 failed 并保留问题与实际事实。
-
-策略证据在下一交易日上海时间 16:30 到期；市场盘中事实在 observedAt 后20分钟或15:00（较早者）
-到期，收盘事实至下一交易日09:30。来源 unknown/stale、未来或跨日不作为依据；fetchedAt
-不刷新事实时间。IndexQuote 可显式提供 observedAt/fetchedAt/timestampSource；旧 Tencent 上游 ts
-可核验使用，旧 Eastmoney 的抓取时间 ts 不作为市场研究事实时间。真实供应商覆盖与质量另验。
-
-InvestmentConsensus 按用户与账户追加不可变版本，保存主次/回避方向、用户理由、系统反对、
-明确约束、近期意愿、讨论文本快照、复核与有效期。并发确认比较 expectedVersion，旧版本必须
-刷新后重新确认。省略的修改字段保留旧值，删除聊天不撤销共识；近期意愿过复核时间不继续作为
-当前授权。方向始终 research-only，用户坚持也不会把数据或账户硬约束变为可执行。
-
-市场方向可以确认并跨日保留共识，但没有真实策略与股票候选映射时不能开启个股跟踪；
-trackingEligibility 显式说明映射缺口，混合共识仅连接已映射策略并列出 unmappedDirections。
-确认方向不会自动创建或发布 Strategy，也不生成第二套逐股仓位与退出规则。
-共识保存与 InvestmentTracking 的 starting / tracking / partial / failed / paused 分开。
-跟踪只连接专用 Watchlist、Strategy 订阅与已有发布运行；不开启新的付费研究、自动调度或通知。
-方向订阅绑定确切共识和 Strategy 版本；换版、共识/意愿复核到期或暂停新机会时，不再同步新候选。
-共识修订暂停本功能旧方向的候选同步，重新开启需独立确认；它不修改已有持仓、TradingPlan
-或持仓风险提醒。失败可用新请求重试并复用专用列表；starting 表示仍在执行或执行结果待核对，
-不能盲重试。没有启用策略调度时即使候选已同步也标 partial；tracking 只表示接线完成，后台
-实际执行和投递仍以既有运行审计为准。个股研究通过 analyze_strategy_candidate，计划与预算
-继续复用 Advice / TradingPlan；同股多方向合并来源，不重复创建仓位规则。
+## 3. 关注与提醒
 
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护
-`discovered → watching → researching → confirmed → archived` 阶段与优先级。成员可同时具有
-manual、strategy、ai、portfolio、import 多个来源；一个来源结束不应删除仍被其他来源关注的成员。
+`discovered → watching → researching → confirmed → archived` 阶段及优先级。
+同一成员可有 manual、strategy、ai、portfolio、import 多个来源；一个来源结束不删除其它有效关注。
+普通列表创建可省略 kind 与 membershipPolicy，工具统一默认 personal/mixed；显式分类与持仓列表约束仍校验。
+
+Strategy 到 Watchlist 通过显式持久订阅连接；只有 published operational run 可以同步。
+complete sync 才能结束缺失来源，partial/failed 只标 stale，不将数据缺口解释为股票退出。
 
 ### AlertPlan
 
-回答“Watchlist 成员发生什么时提醒”。AlertPlan 引用一个 Watchlist，并配置稳定 rule id、
-组合逻辑、冷却、每日上限与启停状态。盘中 `strategy-signal` 规则只读取持久化
-StrategySignal，不临时运行全市场 Strategy。
+回答“Watchlist 成员发生什么时提醒”。配置规则、组合逻辑、冷却、每日上限及启停状态，
+引用列表但不拥有成员。停用列表不扫描，被方案引用的列表不直接删除。
+盘中策略信号规则读取持久化 StrategySignal，不临时运行全市场选股。
 
 ### WatchTrigger
 
-某个 Watchlist 成员命中 AlertPlan 规则后产生的可审计事实，包含规则、方向、证据、数据时间和
-送达状态。删除 AlertPlan 不删除 Trigger 历史。
+记录成员命中规则的事实、证据、数据时间与投递状态；删除 AlertPlan 不删除触发历史。
+试跑不写正式触发、边沿或观察，不消耗正式去重与额度；运行审计仍可保留。
+触发与投递分开保存；心跳正常、规则可求值、通知尝试和渠道送达分别表达。
+飞书未配置时记 fallback-log，不宣称已送达；失败补偿受当日、有效范围、重试和额度约束。
 
-试跑只返回求值结果，不写 WatchTrigger、边沿状态或信号观察，不消耗正式去重与额度；运行审计仍可记录。
-`daily-first` 对同一计划、股票、规则的当日所有进入边沿生效。盘中与事件预警共享数据库执行租约，
-触发与边沿状态原子提交。投递前持久化尝试次数；失败或中断的 pending 最多尝试三次，分别退避
-1 分钟、5 分钟，且仅在触发当日（上海自然日）、计划与成员仍有效、额度允许时补偿。盘中循环
-也接手事件提醒的失败投递。重试计入计划和全局每日额度，成功与 fallback-log 不自动重试。
+来源同步与预警补偿的精确契约见[Strategy 与 Watchlist 设计](./docs/ddd/strategy-watchlist-unification-detailed-design.md)。
 
-### 决策与复盘（DecisionReview）
+## 4. 建议与逐股计划
 
-回答“这个账户面对哪份当时依据，用户实际记录了什么，后来有哪些可核对事实”。记录以
-`accountId + subject.kind + subject.id` 唯一，来源限定为 Advice、确切的 TradingPlan 版本、
-WatchTrigger，或**账户级日复盘**（`account-review`，`id` 为 `<accountId>:<YYYY-MM-DD>`，一天一条；
-由盘后草稿经用户确认后写入，`context.source.sourceDraftId` 指向来源草稿）。首次保存冻结来源快照；后续内容以不可变 DecisionReviewRevision 追加，保留修订时间、
-说明和显式成交关联。来源删除后仍可回看冻结快照。来源发生时间与用户记录时间是两种独立查询口径。
-内容更新只替换显式给出的顶层字段，省略字段保留 expectedRevision 对应原值；可空字段只有显式
-null 才清除，成交关联用显式空数组解除。新建时省略字段为空数组/null，持久修订始终保存完整内容。
+### Advice / AnalysisContext
 
-用户反馈、成交事实与市场事后观察分别表达：关联成交不推断“采纳”，标记采纳也不伪造成交；
-盈亏未知保持缺失，0 仅表示用户明确填报的零盈亏。SignalObservation 只沿显式来源链展示，
-不按同股或相近时间拼接证据。建议统计与 confidence 校准只消费当前账户的明确反馈；
-填报盈利占比的分母是明确 followed 且填写盈亏的样本，不代表账户收益率或未来成功概率。
+Advice 回答“面对当时事实，如何判断”。它保存立场、依据、反证、风险、信心度、周期与有效期；
+confidence 不表达未来成功概率，Advice 不等于交易。
+AnalysisContext 是带事实时间、证据编号、哈希与写回期限的冻结事实包，AnalysisProvenance
+记录生成器、模型、技能及上下文来源；历史 `legacy-ai` 不补造模型身份。
 
-登记已在系统外完成且尚未入账的成交时，成交、持仓、现金、所选来源的复盘修订与请求回执在
-同一事务提交；任一校验失败全部回滚。提交前校验账户、账本指纹、来源快照和修订版本，
-只接受对账可用账本的顺序追加。相同账户下的同一 requestId 只能对应同一请求内容，重试返回原回执。
-这条路径属于 trade 能力，不通过 MCP 暴露，也不调用券商下单。
-
-旧无账户归属的 AdviceOutcome 和 Trigger feedback 只保留历史数据，不进入账户统计。
-启动迁移仅将能校验账户、股票与时间关系的旧 `Trade.adviceId` 显式链接转成复盘关联，
-不补造用户反馈；迁移可重复执行，不覆盖已存在的复盘记录。
-
-### 个性化报告（Report）
-
-回答“某个周期发生了什么、哪些数据不可用、应去哪里继续研究”。报告保存结构化事实、数据
-截止时间、来源状态与缺失原因；Markdown 只是派生展示。报告不会自动生成 Advice 或触发交易。
-
-账户收盘报告与周报固定窗口内的复盘修订水位、修订身份和成交事实指纹。收盘复盘等待当日
-预期策略与该账户交易计划批次完成后统一生成，同一日期、同一范围只生成一份；重复生成和投递重试
-复用原报告，后到的数据不追加版本或改写正文。18:00 未完成的任务继续等待，不提前发布缺口版。
-周报支持根据后补或更正的本地事实生成不可变复盘补充版，保留原报告及其它章节；同一请求重试
-复用原结果。周报复盘补充版使用 `notificationPolicy=never`，投递认领、重试和状态修改均不能
-把它变成待通知报告。常规主报告与原研究补充版继续遵循各自既有通知策略。
-
-### 账户现金余额与账户事实（AccountFacts）
-
-回答“这个账户现在有多少现金、持仓按行情值多少、总资产是多少”。现金是账户上的余额字段
-（`Account.cashBalance`）：开户即入金等于本金，之后由交易、持仓改动与资金流水在同一事务内增减，
-口径集中在 `packages/core/src/portfolio/ledger.ts`（买卖按数量 × 成交价、不计手续费；
-登记/加仓扣成本、减仓/平仓回补成本；入金/转入/分红加、出金/转出/费/税减）。写入后的余额不允许为负：
-超买或超额出金会被拒绝，要求先纠错。现金读取、增减与余额校验在同一写事务内完成；
-持仓写入校验读取时的旧值，冲突时拒绝过期修改并要求刷新重试。
-
-**账户事实（AccountFacts）是仓位计算的唯一账户输入**：现金余额 + 当前持仓 × 合格行情。
-任何一个有数量的持仓缺少达到决策资格的行情时，事实标 `unavailable` 并给出原因，
-此时不提供精确仓位与可执行建仓建议。事实里的 `digest` 是持仓 + 现金 + 本金的指纹，
-计划据此判定“账户事实是否已变化”——账本一变，旧计划即失效，而不是继续用旧分母。
-
-持仓调整（`HoldingCashAdjustment`）记录登记、纠错和平仓产生的现金变动与数量差额，
-与持仓和现金同事务保存，并随账户数据导出。对账（`reconcile_account_cash`）按本金、交易、
-资金流水和持仓调整重放现金，不再通过剩余持仓猜测已卖出部分的成本；数量覆盖同时计入调整记录。
-现金差额或数量缺口、历史负余额均使账户事实标为 `unavailable`，不给精确资产和仓位。
-分红送转等公司行为不自动改现金，由用户通过资金流水或纠错登记。
-
-旧库首次增加现金列时，按历史交易、资金流水和可恢复的未覆盖持仓成本回填，而非直接回填本金。
-旧持仓的可恢复成本保存为迁移调整记录；建列、调整记录和余额回填原子提交，可重复启动。
-已有非空现金字段不会被启动迁移覆盖。过去未记录的已卖出持仓成本或纠错历史无法凭当前持仓恢复，
-由对账保留差额与缺口，不能假定这些账户已经核对完成。
-
-账户快照（AccountSnapshot）是上一版“用户手工核对”的实现，已随本次重构整体删除：实体、仓储、
-SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 tool、Web 入口与数据导出分类都已移除，
-`analyze_position` 也不再接受 `account-snapshot-position:<id>` 这种快照持仓引用。旧库里可能残留
-`account_snapshots` 表，没有任何代码再读写它，可以直接删除。
+日常分析主线是 `AnalysisContext → DSH 推理 → record_* 校验写回`，不创建 AnalysisJob。
+只接受可核对引用与有效事实，持久化即时外部事实后才能作为冻结依据；聊天中刷新不自动入证据。
+市场判断只在上海当日有效；盘中行动与盘后研究分别按适用时效校验。过期内容可审计，
+不沿用为当前判断。精确窗口见[分析事实包与写回时效](./docs/ARCHITECTURE.md#分析事实包与写回时效)。
 
 ### 逐股交易计划（TradingPlan）
 
-回答“对这个账户的这只股票，什么条件下做什么、目标仓位多少、持有到什么时候、何时失效”。
-`id` 由账户与股票稳定派生，版本不可变；`plan_json` 是唯一完整领域载荷，外层列（`version_id`、
-`status`、有效期等）只是存储元数据，必须与 `plan_json` 一致。该一致性由写路径与导入校验器强制；
-数据库层**有意不设 CHECK 约束**，以便旧单值计划（无结构化失效条件）仍可读——这是"历史可读"的
-取舍，不是疏漏。计划把观察/建仓/加仓/持有/减仓/
-退出/回避等动作与价格涨跌方向分开，入场用价格区间而非单个价格。目标仓位用**区间**表达：
-`targetPctRange{min,max}` 单位为百分点（0–100，与 `currentPct`/单票上限同量纲），并记录本次选点
-`rangePick`（`lower-bound`/`mid`/`volatility-scaled`，后者必须带可复算参数）、实际落点 `appliedPct`
-与降级值 `fallbackPct`（等于区间下限）。
-`volatility-scaled` 的波动率口径是 `daily_bars` 上最近 20 个交易日收益率（收盘价环比）的总体标准差
-（百分点，与 `volatility-20` 同一定义）：分档 1.5/2.5/4/6 依次对应落点占区间宽度的 100%/67%/33%/0%，
-波动越大越靠下限。窗口取「最近 21 **根 bar**」，不是「最近 21 个自然日」：停牌期间通常不产生 bar，
-按 bar 取才能拿到 21 个真实收盘价。窗口与 σ 同属可复算事实，随计划落库
-（`rangePick.windowStart/windowEnd/barsCount`，窗口跨停牌时另有 `maxGapTradingDays` 记录相邻 bar 之间
-缺了几个交易日），因此「这个 σ 是哪 21 根 bar 算的」只凭计划就能回答；本字段引入前的旧计划没有它们，
-读侧不强制。
+回答“对这个账户的这只股票，什么条件下做什么、目标仓位多少、持有多久、何时失效”。
+计划拥有稳定身份与不可变版本，把观察、建仓、加仓、持有、减仓、退出、回避与价格方向分开。
+入场与目标仓位用区间表达，保留实际仓位落点与降级依据；生效计划至少有一条结构化失效条件。
 
-「停牌不产生 bar」是上游 provider 的**常见行为，不是写入侧的保证**：`sync_daily_bars` 只丢弃未收盘的
-当日 bar（`dropUnclosedBars`），既不丢 `volume === 0` 的行、也不校验日期是不是交易日；adapter 也只过滤
-非正 OHLC。若 provider 在停牌期仍写一条 `volume=0`、收盘价微动的 bar，`stalenessTradingDays` 会恒为 0，
-新鲜度闸门完全失效，只剩 σ 下限兜底——而「volume=0 + 价格微动 > 0.1%」恰好能穿过 σ 下限、拿到接近
-区间上限的仓位。因此 σ 的**样本口径**是：只有「正好相差 1 个交易日、且两端都有成交」的 bar 对才产生
-收益率，有效收益率必须满 20 个；不足即判 `insufficient-volatility`。跨断档的那个收益率是多日收益、
-不是日收益，剔除它是定义问题（不需要「gap 多大算不可用」的阈值）；零成交 bar 是停牌占位，不是
-「一笔成交价为 0 的交易」。`volume` 的数值仍不参与 σ（与 `volatility-20` 同口径，只用收盘价环比），
-它只用来判断这根 bar 是不是真实成交。
+计划锚定生成时的账户事实指纹；账本变化后，旧区间和条件同时失效，必须重新生成。
+有效计划共用建议预算，同股多策略不重复占用；总仓位/单票上限默认 100%/30%，不设置行业合计上限。
+超限持仓仍可减仓；尚未登记的卖出不释放实际现金。
 
-选点前有三道闸门，任一不过即降级为 `lower-bound`，并在 `constraintReasons` 写明原因与当次阈值：
+复核时间与硬有效期分开；仍有效且行动前提未变时复用原版，修订草案不替代生效版或释放其预算。
+草案保留未满足前提，不能当作当前可执行动作；观察计划在条件满足前不建仓。
+盘中只按计划条件确定性求值，风险/退出命中阻止入场提醒，不调用 AI 改写计划。
+`ready` 只表示具备监控资格，不代表后台已执行或通知已送达；实际持仓与可卖数量由账户事实决定。
 
-- **σ 下限**：`σ < 0.1` 视为「没有有效价格」，不是「最安全」。21 根 bar 收益率为 0 在 A 股几乎只可能
-  是停牌或长期无成交，若当成低波动，第一档就会给出区间上限（最大仓位），方向完全反了。语义是
-  「样本无效」，与「波动很小」区分开。
-- **样本新鲜度**：最新日线停更超过 5 个交易日即视为过期，不把两个月前的窗口当「当前波动率」。
-  语义是「样本旧了」，与「样本无效」是两种降级：前者是数据没跟上，后者是数据本身不代表可交易价格。
-- **有效收益率个数**：21 根 bar 里只要有一对跨断档或含零成交 bar，就凑不满 20 个日收益率，
-  同样判 `insufficient-volatility`。回执里 `returnsCount` / `zeroVolumeBars` / `maxGapTradingDays`
-  区分成因（「跨停牌」与「σ 过低」不是一回事），`ok` 项的 `maxGapTradingDays` 恒为 0。
+区间选点、波动率样本、预算口径、期限与监控细则见
+[账户事实与逐股计划实现契约](./docs/ddd/ai-investment-workspace-detailed-design.md#账户事实与逐股计划实现契约)。
 
-日线样本本身不足时**不猜**波动率，同样降级为 `lower-bound` 并写明「波动率不可用」。
-两个阈值都是**未标定的经验值**（默认 0.1 / 5），可按真实分布覆盖
-（`get_daily_volatility.minVolatilityPct`、`trading-plan-daily-cycle` 的 `volatilityMinPct` /
-`volatilityMaxStalenessTradingDays`，或环境变量 `LUOOME_TRADING_PLAN_VOLATILITY_MIN_PCT` /
-`LUOOME_TRADING_PLAN_VOLATILITY_MAX_STALENESS_TRADING_DAYS`；优先级为显式入参 > 环境变量 > 默认值，
-定时路径不传入参，只能靠环境变量标定）。降级文案写的是**当次实际用的阈值**，所以调阈值不会让历史计划
-失去解释力。标定前需知道：春节等连续长假（休市叠加周末）足以让正常停更跨过 5 个交易日，
-长假前后的复核会被误判成「数据过期」。
+## 5. 账户账本
 
-行为变更：波动率**低但有效**（例如 1% 上下）的标的现在会命中第一档、落点取区间**上限**，
-执行仓位高于此前恒取 `lower-bound` 时的下限。这是「波动小可以用满计划仓位」的本意，但也意味着
-`appliedPct > min` 成为常态而非例外；`fallbackPct` 仍恒等于 `min`，`lower-bound` 路径与旧单值计划
-行为不变。退化区间（`min = max`）没有可选点，仍记 `lower-bound`。区间宽度取「分层上限（max≤10→4、≤20→6、其余 8）与
-`0.30×max`」中更严者；`add`/`hold` 要求 `min>0`，`exit`/`avoid` 只允许 `{0,0}`，`observe` 未设条件仓位
-时允许 `{0,0}`。`deltaPct` 不再持久化，读取时由 `min/max − currentPct` 派生 `deltaPctMin/Max`；
-旧单值计划（`targetPct`）读取时归一化为退化区间 `{t,t}`，`plan_json` 不被改写。
-生效计划占用建议预算，撤销、过期或被新版本替代时释放或重算；同一股票的多策略证据不得重复占用额度。
-预算只校验总仓位上限与单只股票上限（默认 100% / 30%）；行业合计上限已按用户决定移除，
-`stocks.industry` 不参与判定。总仓位上限取 100% 是为了挡住「多个计划的建议仓位合计超过账户
-总资产」这种不可执行状态，而不是限制用户实际愿意持有的比例；单票上限 30% 只挡住继续加仓，
-超限持仓仍可减仓。预算回执同时给出两个口径：`maxTotalPct/minTotalPct` 是**全部候选**（含被
-blocked 的）按 max/min 声明的组合暴露包络，`proposedStockPct` 只统计 included 的本次增量；
-两者口径不同，对不上是预期行为。维持计划（hold / 已持仓 observe）只有在其区间整体不高于实时
-仓位、或点区间等于**实时**仓位时才不占新增额度；计划记录的 `currentPct` 与实时持仓不一致时按
-新增额度计，避免陈旧计划白拿预算。
-计划锚定生成时的账户事实指纹（`accountFactsDigest` + `accountFactsAsOf`）：账本变化后旧计划判定失效，
-区间与结构化失效条件**同时**失效（不评估任何规则，必须重新生成）。生效计划必须至少一条结构化失效
-条件（复用 `TradingPlanCondition`，`phase∈{exit,risk}` 或 `kind=market-fact`）；`invalidationConditions`
-只是展示层文本，不作为唯一失效表达。
-旧快照计划在启动迁移后仍可读取；active/draft 标为 expired，保留旧快照身份，不能沿用为当前账户指纹。
-观察计划（`watch` → `observe`）同样携带条件性价格计划：入场区间、目标仓位、止损与目标价来自建议，
-入场条件写明“等待条件满足前不建仓”，未持仓时目标仓位取建议的目标仓位，已持仓时维持当前仓位。
-计划不等于 Trade，也不等于自动下单；实际持仓、可卖数量与成交结果由用户维护的账户事实决定。
-`draft` 版本保留未满足的前置条件，不能被当作当前可执行动作发布。
-交易计划跨交易日持续跟踪：复核时间与硬有效期分开，复核到期不自动结束计划。
-新生效计划按研究周期的最长持有交易日设置硬期限；来源 Advice 必须在生成时仍有效。
-草案最多保留首次生成后的两个交易日（也适用于存量草案）；连续修订继承原草案截止时间，
-相同失败或仍未补齐的过期草案不会通过重复生成延长期限。补齐前提后可发布新生效版本。
-账户前提、行动条件、持有周期、反证与风险均未变化且原生效版仍有效时，保留原版本和硬期限；
-本次 Advice 引用与复核时间记录在复核审计中，证据可沿 Advice 追溯。
-修订草案不替代仍有效的生效版，也不释放其预算。
-AI 两次失败后由 LLM 适配器返回的规则兜底建议（`reasoning` 带“规则 fallback / LLM 推理不可用”标记）
-不是研究结论：它最多形成 `draft`，并给出“AI 推理不可用（规则兜底建议）”的草案原因。
+### Account / Holding / Trade
 
-盘中监控以计划为条件契约：入场条件按 ALL 合并为一个边沿，任何风险/退出条件命中时阻止入场提醒；
-人工确认或过期市场事实保持 unknown。风险与退出提醒直接引用原计划，不调用 AI、不自动替换计划；
-计划复核留在盘后批次或用户主动研究流程。预警只报告持仓股的操作和买入候选：观察计划命中只提示
-重新评估，未持仓计划的止损、目标价与退出条件只是入场前提的一部分，不投递提醒，只留
-`not-requested` 记录（命中仍阻止入场提醒并照常推进边沿状态）。冷却对所有优先级生效；每日上限
-只约束常规提醒；优先级决定消息紧急度（urgent→error / important→warn / normal→info）。
-通知必须披露下一步、触发价格、止损/目标价、反证、风险、有效期和卖出限制。
-`list_trading_plans(includeMonitoring=true)` 返回只读监控资格与当前版本投影（`monitoring` / `views`）；
-`currentOnly=true` 按计划聚合后应用数量限制，返回最新版本与仍需跟踪的原生效版。
-过期在读取时统一判定，保留不可变原始版本；草案、等待数据、待生效、账户已变分别呈现。
-`ready` 只表示计划具备资格，
-不代表后台已运行或通知已送达。账户变化、有效期、草案、约束和缺少条件分别说明阻塞原因。
-`notify=false` 试跑不写 Trigger、边沿或投递次数；正式执行共享预警租约并在工具调用前续租。
+分别表示投资账户、实际持仓和已发生的成交。成交由用户在系统外完成，再登记到本地；
+建议、价格穿越、提醒或“已采纳”都不推断成交。账户资金流水与持仓纠错也保留明确来源。
+市场公司行动数据不自动变成账户现金或持仓变更。
 
-### A 股市场情绪快照（AShareSentimentSnapshot）
+### 账户现金余额与账户事实（AccountFacts）
 
-指定沪深 A 股交易日的市场情绪事实集合。每个维度独立记录数据截止时间、来源与可用状态；
-数据不可用不等于正常零值。
+现金是 `Account.cashBalance`，由交易、持仓改动及资金流水在同一事务内增减；余额不为负。
+AccountFacts 是仓位计算的唯一账户输入：现金余额加当前持仓按合格行情估值，
+并用现金、持仓与本金形成指纹。账本不自洽、历史缺口或有数量持仓缺合格行情时标 unavailable，
+不输出精确可执行仓位；缺价不以成本价替代。
 
-### LimitUpLadder 与历史 PIT 天梯
+账本修改校验旧值，重试遵守请求幂等；持仓调整保留数量与现金差额，对账按原始账本重放。
+迁移不覆盖已有余额、不假定历史缺口已消失。原 AccountSnapshot 已退役，不作为当前分母。
+存储、迁移和对账细节见[账户事实实现契约](./docs/ddd/ai-investment-workspace-detailed-design.md#账户事实与逐股计划实现契约)。
 
-`LimitUpLadder` 是指定 `Asia/Shanghai` 交易日的真实涨停梯队事实，`ladderLevel` 只表示当日快照中
-可审计的连板层级，不等于 Advice、收益概率或交易信号。交互式当前查询走真实 manager/cache；
-正式 Strategy scan/scheduled 将返回写入 `LimitUpLadderSnapshotRepository`，历史 replay 只读取同一
-交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
-情绪接口或 mock 推断历史事实。
+## 6. 复盘与报告
 
-炸板固定指“当日原始最高价触及实际涨停价、但原始收盘价未封涨停”；开板后回封不算炸板。
-`consecutiveBoard(D)` 指 D 开盘前、截至上一交易日连续封板的交易日数量；断板指该值至少为 1 且
-D 未收盘封板。所需 raw OHLC、涨停价、交易日或前序窗口缺失时保持 unknown。当前没有通过
-schema、发布时间、revision 与真实凭据验收的数据源，因此这些字段不进入 Strategy registry；
-AShareSentiment 的近期炸板池不得倒灌历史 PIT。
+### 决策与复盘（DecisionReview）
+
+回答“账户面对哪份当时依据，用户记录了什么，后来有哪些可核对事实”。一条记录锚定
+Advice、确切 TradingPlan 版本、WatchTrigger 或账户级日复盘，以账户加来源身份唯一；
+首次冻结来源，后续追加不可变修订。来源发生时间与用户记录时间分别查询，来源删除仍保留快照。
+反馈、成交与事后市场观察分别表达，不按同股或相近时间拼接证据。
+
+更新省略字段保留、显式 null 清空可空值；成交关联用空数组解除。用户填报盈亏缺失不等于零，
+统计只消费当前账户明确反馈，填报盈利占比不代表账户收益率或未来概率。
+登记未入账的外部成交时，成交、持仓、现金、复盘修订与请求回执同事务提交；
+属于 trade 的专用人工路径，不通过插件或其它远端工具面开放，也不调用券商下单。
+
+详见[决策复盘设计](./docs/ddd/mvp3-decision-review-detailed-design.md)。
+
+### 个性化报告（Report）
+
+回答“周期里发生了什么、哪些数据缺失、去哪里继续研究”。结构化事实是权威，Markdown 是派生展示；
+报告不自动生成 Advice 或成交，生成与通知分别记录。
+收盘复盘等待当日期望策略与账户计划批次完成后统一生成，同日同范围只保留一份；
+当日 18:00 尚未完成仍等待，不提前发布缺口版，后到事实不追加或改写收盘正文。
+跨日恢复可按既有契约补记逾期缺口，不拿当前数据重建当时未知的事实。
+周报可对后补或更正的复盘生成不可变补充版，重试复用结果，复盘补充版始终不通知。
+
+账户绩效按真实交易、资金流水与合格行情计算，缺数据保持缺口；口径见
+[账户绩效设计](./docs/ddd/account-performance-detailed-design.md)，报告修订见[复盘设计](./docs/ddd/mvp3-decision-review-detailed-design.md)。
+
+## 按需研究与实验能力
+
+这些能力不作为理解日常主线的前提；是否可用以当前插件暴露面和事实门槛为准。
 
 ### ResearchTopic / ResearchDocument
 
-研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
+研究主题是持续上下文，资料是显式关联的证据索引；主题可覆盖多只股票、产业、事件或宏观问题。
+正文权威源为本地 Obsidian Vault，SQLite 保存可重建索引、关系、分块与同步审计。
+股票研究档案只投影显式链接，分别展示支持、反证、未知与事实时间，不按行业猜研究结论。
+资料、selector 与 adaptive personality 均不自动生成 Advice 或交易。
+详见[研究库设计](./docs/ddd/research-vault-detailed-design.md)。
 
-股票研究 Profile 是上述显式链接的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
-evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式链接时不得按
-行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
-版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
+### 参与方向与共识（InvestmentWorkspace）
 
-### 数据源观测（SourceObservation）
+方向是有来源、覆盖范围和事实时间的研究提案，共识记录用户选择、系统反对、约束与复核期限。
+方向共议是已确认需求；共识版本与跟踪能力已在 core/tools 实现，默认插件仅接部分读取，
+保存共识、开启方向跟踪和候选查询的完整入口尚未接通，不表述为当前默认旅程。
 
-每个外部数据源能力在内存中的最近运行事实：`lastAttemptAt`、`lastSuccessAt`、`dataAsOf`、
-`lastErrorKind`。它是内存态运行观测，进程重启归零，不代表历史可用性，也不是数据新鲜度的
-唯一判据（freshness 由 `get_market_data_status` 结合阈值推导为 fresh / stale / unknown /
-unavailable）。只记录源失败（网络、上游、无效响应），调用方输入错误与非交易日早退不计入。
-行情、连板天梯、龙虎榜、A 股情绪、北向资金、要闻等所有域共用同一泛化 `SourceRegistry`
-的 execute 包装层作为唯一观测点：binding 以 `observationOf` 把已 resolve 的结果分类为
-success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态，成功清除
-`lastErrorKind`，失败保留上一份 `lastSuccessAt` / `dataAsOf` 供诊断。
+策略方向引用真实已发布版本与运行；市场方向不编造策略身份，缺真实候选映射时不开展个股跟踪。
+共识保存不等于已运行或已通知，也不自动创建策略；后续跟踪复用 Watchlist、Strategy 订阅及
+Advice/TradingPlan，不另造仓位或退出规则。详细时效、版本和跟踪契约见
+[方向研究与共识契约](./docs/ddd/ai-investment-workspace-detailed-design.md#方向研究与共识契约)。
 
-## 关键约束
+### 目标研究长跑
 
-- 首期全市场覆盖固定为沪深 A 股，不暗示港股、美股或北交所。
-- 股票目录完整快照通过校验后才原子提交；缺失只标记，不物理删除股票身份。
-- StrategyVersion 发布后不可修改；运行结果与信号必须引用确切版本和 dataAsOf。
-- Watchlist 的 complete sync 才能结束缺失来源；partial/failed 不退出成员。
-- disabled Watchlist 不进入 AlertPlan 扫描；AlertPlan 不拥有成员。
-- 删除被 AlertPlan 引用的 Watchlist 必须拒绝。
-- portfolio 来源只暴露当前账户范围，不在通知中泄漏敏感数量。
-- 盘后 StrategySignal 可在下一交易日触发预警，按信号身份去重；试跑不消耗正式触发。
-- WatchRun 的 succeeded/healthy 表达心跳，`unknownRules` 表达无法求值，`delivered` 表达送达；
-  旧 `notified` 仍是尝试数（含失败和仅日志），历史缺省指标显示未记录。盘中预警和定时报表走
-  飞书；未配置时落日志并标记 fallback-log，不能宣称已送达。
-- Advice 与真实交易严格分离；Strategy、AlertPlan、WatchTrigger 都不会自动下单。
-- write/external 必须显式 opt-in；Agent 的持久化、发布、正式运行和同步必须先确认。
+GoalRun 已有插件入口，表示明确意图启动的有界研究进度；请求冻结目标、范围、模型路由及轮次/成本预算。
+每轮引用持久化 AnalysisContext，结论通过结构和证据校验才算成果；预算耗尽不等于达成目标。
+取消保留已有产出并阻止迟到提交，重启保留审计但不重放模型请求；它不自动写成 Advice、策略或成交。
+用法见[目标式研究长跑](./packages/dsh-luoome/README.md#目标式研究长跑)。
 
-旧 Tactic、StockGroup、StockPool 已彻底移除：tool、repository、entity、migration decoder
-与旧表 DDL/schema 全部下线，存量库的旧物理表不再维护（不 DROP、不读取）。
-不得作为新 surface、Agent 或写入口的领域模型。
+### 分析任务与来源
 
-## 单机形态与托管退役
+AnalysisJob 是已实现的可选后台分析任务，具有租约、重试与原子结果写回，不是日常分析的必经步骤。
+默认不开放模型可见入队入口，不运行常驻 worker；显式配置后台模型后可由受信任内部路径执行。
+队列能力的保留不要求新增生产者；空队列不触发模型请求。详见
+[可选后台模型](./packages/dsh-luoome/README.md#可选后台分析模型)和[分析架构](./docs/ARCHITECTURE.md#分析事实包与写回时效)。
 
-当前形态是**单机版**：DSH 是唯一入口；没有多租户、没有登录与订阅、没有托管站点。
-托管层代码与旧租户库已于 2026-10-23 按授权删除，不恢复。
+### 严格回测（StrictBacktest）
 
-DSH 接入已经到达「最终纯插件形态」的 MVP 实现：默认部署由 DSH 用 Node 加载 dsh-luoome 插件
-（host + client + skills），事实库是 Node SQLite 的 `luoome.db`。旧「当前 MCP 过渡形态」的四个
-MCP 实例、手动 worker 与 MCP 用户入口（`packages/mcp`、`luoome mcp serve`）已随 REQ-M2-03 删除；
-两种形态共用同一份领域层、事实库与 ToolResult 契约，不是两个产品方向。真实生产切换已于
-2026-10-25 执行，首次切换见 [插件详细设计 §9.16](docs/ddd/dsh-luoome-plugin-detailed-design.md#916-生产切换与真实部署记录2026-10-25)；MVP 补齐及同日升级见 [§9.18](docs/ddd/dsh-luoome-plugin-detailed-design.md#918-mvp-后续补齐minimax-四旅程与升级2026-10-25)。生产批处理和自动执行仍默认关闭。
+使用历史可交易性事实，按 D+1 开盘、整手、费用与滑点模拟组合执行，区别于历史选股重放和 T+n 观察。
+已有实现，但可用范围受 PIT 股票目录、日线、可交易性、公司行动和基准事实逐项限制；
+当前市场公司行动尚未接入严格同步链，保持 unavailable，不宣称完整复权回测。
+详见[组合回测设计](./docs/ddd/strategy-strict-backtest-detailed-design.md)。
 
-- 领域层不再有租户隔离概念：`hosted` 命名已下线为 `personal`；`Tenant`、`HostedUser`、
-  `HostedJob`、订阅期与用量流水等托管实体全部移除。`Account` 只表示投资账户，不承担登录语义；
-  本地多账户语义与 ledger 契约不变，`update_account` 不改变本金、现金、币种或创建时间。
-- 默认账户的 Trigger/Advice/TradingPlan 复盘继续使用 `DecisionReview`，保留来源快照、不可变修订及
-  显式成交关联。Strategy/AlertPlan 规则与数据门禁不因形态变化而放宽；通知投递仍区分受理与送达，
-  触发与投递分别保存。
-- 调度由 DSH 承担：共享 `@luoome/batch` 提供确定性 `run_*` 编排，MCP 仅兼容转发；原生插件经
-  单次确认或 PluginAutomationGrant 执行。账户报告、计划与快照限绑定账户；策略定义、调度与自治
-  仍是本地用户的全局资源，授权说明必须披露暂停、归档和门禁发布。交易日、盘中、收盘和周日门槛不变。
-- 交互式分析的写回由纯插件默认部署承担：读面注册 `get_analysis_context`，写回只经 DSH 原生
-  确认操作（`record_advice` / `record_analysis_result` 的精确 policy），交互分析不创建
-  `analysis_job`。旧 MCP 过渡形态的 `luoome-analysis` 实例仅保留给手动/隔离验收。批量队列能力
-  （`AnalysisJob`、repository、claim/complete/fail、手动 queue-e2e 验收）保留，但默认部署没有
-  生产者、没有常驻消费者；worker profile 仅在手动或隔离环境显式拉起验收。
-- 模型能力整体退役：core 不再持有模型调用端口，领域包禁止依赖模型运行时或 AI SDK。
-  推理与模型配置由 DSH 承担；luoome 侧没有模型运行时、模型目录与模型设置页，
-  Web 也不再有模型对话页面，只保留「起草 → 明确确认 → 原子执行」的待确认草案链路。
+### FinancialFact / FundamentalScore
 
-历史托管契约与验收记录见[开发计划](docs/archive/hosted-personal-subscription-development-plan.md)，
-只作历史资料，不代表当前产品范围。
+这是已实现部分代码的实验能力：当前严格财务适配只支持显式 mock，真实门槛未通过，未接入 Strategy DSL。
+FinancialFact 保存报告期间、公开/修订时间及本地记录时间；FundamentalScore 是确定性规则分，不是概率。
+不以当前财报视图、抓取时间、当前行业或测试数据替代历史 PIT 证据，未通过真实验收前保持 not-ready。
+因子、评分版本与横截面计算留在[基本面实验设计](./docs/ddd/fundamental-factor-scoring-phase3-detailed-design.md)。
 
-## 目标研究长跑
+## 跨领域约束与实现索引
 
-`GoalRun` 是一次明确意图启动的有界研究进度，不是 `AnalysisJob`、建议或成交。请求冻结目标、事实范围、模型路由、轮次与成本预算；每轮取持久化 `AnalysisContext`，一次修订沿用同一快照。尝试记录保留 contextId、dataAsOf、实际用量或 null；只有有合法 factIds 且无需继续修订的输出才算该轮成果。
+- Advice、StrategySignal、计划与提醒均不自动下单；trade 不进入任何插件或远端工具面。
+- write/external 由受信任部署显式开启；明确操作意图不自动启用批处理或定时任务授权。
+- 操作执行中或结果未知时先核对原回执，不盲重试；业务事务与宿主操作回执分别维护。
+- 个人分析限定指定账户持仓与允许的关注范围；跨账户事实与历史反馈不混入当前账户统计。
+- 数据缺失、事实过期、样本不足、执行失败及投递未知分别披露，不用零值或旧值补造结论。
+- 当前事实、历史观察、研究试跑与正式发布分别表达；旧版本读取兼容不恢复当前行动资格。
 
-`completed` 表示已有经结构和证据校验的目标结论；`blocked` 必有具体条件，轮次耗尽仍未达成目标时同样是 blocked。`cancelled` 保留此前产出，`failed` 表示模型或执行依赖失败；宿主任务完成仅表示执行器结束。进度用版本 CAS 防止取消被迟到提交覆盖。目标模型没有工具权限，研究进度不自动写成 Advice、策略或交易。重启后保留本机审计，不自动重放模型请求。
+PluginOperation / PluginAutomationGrant 的冻结输入、账户绑定、任务指纹与授权版本是执行机制，见
+[纯插件执行与授权内核](./docs/ARCHITECTURE.md#纯插件执行与授权内核)。SourceObservation 是进程内
+运行观测，重启归零，不证明历史覆盖；精确分类与新鲜度见[数据源观测设计](./docs/ddd/source-pluggability-and-observation-design.md)。
 
-## 分析任务与来源
-
-`AnalysisJob`（存储 `analysis_job`）是待执行分析的租约任务，不是策略信号、建议或成交。
-`AnalysisContext` 是带 `dataAsOf`、事实哈希和证据编号的冻结事实包；`writeUntil` 限制写回，
-`expiresAt` 仅控制审计保留。事实过时不能继续写回；同一有效租约可重新获取并绑定一次新事实包。
-刷新不延长租约，不增加尝试次数；租约丢失后旧消费者不得完成任务。
-
-写回时效按 `AnalysisKind` 分档，唯一事实来源是 `packages/core/src/entity/analysis-context.ts`
-的 `analysisTimingRules`（context 装配、enqueue、record、refresh 共用）：
-
-| kind | `writeUntil` | `dataAsOf` 过期 |
-|---|---|---|
-| `advice_stock` / `advice_position` / `advice_strategy_candidate` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
-| `advice_market` | `min(现在+24 小时, dataAsOf 的上海自然日次日 00:00)` | 超过 `dataAsOf` 的上海自然日 |
-| `advice_strategy_candidate_after_close` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
-| `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
-
-15:00 截断只属于盘中行动类；盘后策略候选与策略研究允许盘后与隔日写回，直到数据超过各自有效期
-（分别返回 `stale_context`，写回窗口关闭返回 `context_expired`）。超过 `expiresAt` 的 context
-仍可审计读取，但不能写回。
-
-市场级结论只有**当日**有效（REQ-M3-20）：可用窗口是 Asia/Shanghai 自然日，不是「24 小时写回 +
-7 天数据龄」这种伪精确的固定时长。跨日市场事实不进可用事实，`missingFacts` 留下 blocking 原因码
-`market-advice-same-day-only`，`get_analysis_context` 因此返回 `unavailable`，写回返回
-`stale_context`。市场级判断的引用必须带 `observedAt`；当日 15:00 之后或非当日的观察被降级标注为
-「历史观察」——保留可读，但不得作为当前依据进入建议链（降级不是删除）。规则带 `ruleVersion`，
-context 带 `timingRuleVersion`，旧 context 仍可审计读取但不能复活为今日依据。
-
-完成任务与持久化 Advice、研究工作区、待审批策略版本或叙事结果必须原子提交。
-重试不得重复发布结果；死信保留错误供检查，不生成伪建议。
-`AnalysisProvenance` 记录生成器、模型、技能版本、事实包与任务来源。
-`legacy-ai` 专指迁移前缺少完整来源的历史建议，不代表已知模型。
-建议始终不等于交易；策略提案仍需原有审批流程。
-
-交互式分析沿用「不创建 `analysis_job`」的既有决定：DSH 插件读面取得持久化 context，
-推理后经原生确认操作 `record_*` 校验写回；不得为了利用 worker 而新增生产 workflow 入队。
-默认部署不运行 MCP 实例、Bun CLI 或常驻 worker，队列能力与手动 worker 验收保留，空队列不再
-驱动常驻进程或模型唤醒。
-
-### PluginOperation 与 PluginAutomationGrant
-
-PluginOperation 是插件执行边界的待确认输入与操作回执，绑定用户、账户、参数摘要和授权版本；它不替代 DecisionReview/Analysis 等领域事务回执。executing/unknown 表示结果仍需核对，不能直接重试或解释为业务失败。
-
-PluginAutomationGrant 是人工确认的特定 DSH profile/session/task 授权，绑定任务定义指纹、账户、工具、精确参数、组合能力与有效期；它不等同 StrategySchedule，也不赋予交易权限。定时提醒的实际投递来自 DSH 宿主事实，prompt、callId 和模型提交的 taskId 不是授权。批处理和自动执行分别由受信任部署配置显式开启，默认均关闭；启用开关不替代逐任务授权。授权目录只读返回宿主任务指纹与规范化调用，不创建任务或授权。旧日程须在同一 ID/cron 上改用原生调用、核对指纹并逐项审批后才能启用。
-
-市场分析的个人上下文只包含指定账户的有效持仓与全局启用 Watchlist；其它账户持仓和未关注事件股票不能扩大个人范围。外部即时指数、情绪与新闻尚未持久化进入 AnalysisContext，不能把聊天中刷新的事实宣称为 Advice 的已冻结依据。
+托管、多租户、独立 CLI/TUI、stdio MCP 入口，以及旧 Tactic/StockGroup/StockPool 已退役，
+不作为新功能的领域模型或实现前提。演进与阶段验收从[文档导航](./docs/README.md)进入，
+不将历史方案作为当前运行契约。

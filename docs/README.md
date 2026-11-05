@@ -9,6 +9,22 @@
 [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 是形态演进记录，
 其中按 MCP 实例描述的运行构成已于 REQ-M2-03 下线，不代表当前行为。
 
+## 阅读顺序与能力状态
+
+先读[领域语言](../CONTEXT.md)理解六组日常业务概念，再读[架构说明](./ARCHITECTURE.md)了解当前插件与
+工具契约；只有修改具体能力时才进入对应详细设计。算法、存储、兼容与阶段记录不作为领域入门前提。
+
+| 能力 | 当前定位 | 进一步阅读 |
+|---|---|---|
+| 行情、策略、关注提醒、计划、账本、复盘 | 当前日常领域；实际调用仍受能力开关和数据资格约束 | [领域语言](../CONTEXT.md)、[插件说明](../packages/dsh-luoome/README.md) |
+| 研究资料与 GoalRun | 已实现，按明确研究需求使用 | [研究库设计](./ddd/research-vault-detailed-design.md)、[目标式研究长跑](../packages/dsh-luoome/README.md#目标式研究长跑) |
+| AnalysisJob | 已实现的可选后台执行，不是交互分析前提；默认不开放模型入队 | [可选后台模型](../packages/dsh-luoome/README.md#可选后台分析模型) |
+| 方向共识与跟踪 | core/tools 已实现，默认插件只接部分读取，完整旅程待接通 | [方向协作设计](./ddd/ai-investment-workspace-detailed-design.md#方向研究与共识契约) |
+| 严格组合回测 | 已实现，按目标区间逐项披露事实门槛与公司行动限制 | [组合回测设计](./ddd/strategy-strict-backtest-detailed-design.md) |
+| 严格 PIT 财务因子与评分 | 实验；当前仅显式 mock，真实数据未通过，未接 Strategy DSL | [基本面实验设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) |
+
+“已有详细设计”“有代码”“默认入口可用”与“真实数据已验收”分别记录，不互相推定。
+
 ## 快速入口
 
 | 读者 | 从这里开始 |
@@ -17,7 +33,7 @@
 | DSH 插件安装 | [dsh-luoome 安装说明](../packages/dsh-luoome/README.md) |
 | 编码 Agent | [仓库开发规范](../AGENTS.md) |
 | 贡献者 | [贡献者指南](./CONTRIBUTING.md) |
-| 架构与领域开发者 | [架构说明](./ARCHITECTURE.md) |
+| 架构与领域开发者 | [领域语言](../CONTEXT.md) → [架构说明](./ARCHITECTURE.md) |
 
 ## 长期维护文档
 
@@ -41,7 +57,7 @@
 | [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |
 | [MVP3 决策与复盘产品计划](./prd/mvp3-product-plan.md) | 当时依据、用户实际行动与后来结果的账户级回看 |
 | [AI 投资 Agent 协作体验](./prd/ai-investment-agent.md) | Agent 场景、工具编排、权限确认与外部能力边界 |
-| [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
+| [Strategy DSL](./prd/strategy-dsl.md) | 版本化 Strategy、运行结果与信号模型；Tactic 迁移属于已执行历史 |
 | [策略工作台](./prd/strategy-v2.md) | Strategy 的执行记录、派生股票池/候选池、运行 Diff、真实信号观察与版本迭代 |
 | [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
 | [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | 报告中心（收盘行动清单、周报复盘）与 AI 策略生命周期管理（提议、门禁自动发布、自动暂停） |
@@ -52,8 +68,8 @@
 |---|---|
 | [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | Node 插件、五页读面/账户改名、原生批处理与逐任务授权；真实模型、浏览器及发布状态见 §9 最新记录，自动执行默认关闭 |
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与 Run/Tool Manifest 契约；对应研发计划已归档，能力契约仍按此设计演进 |
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH（Web 四实例 MCP：read/settings/analysis/batch，其中 analysis 只服务交互分析写回）、领域层去 AI（事实包 + 待分析队列）与队列能力保留；含契约、DDL、阶段与验收（草案） |
-| [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 形态演进与去模型过程记录；其中四实例 MCP、旧 Web/worker 方案已退役，不作为当前部署契约 |
+| [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 方向研究与共识、账户事实与逐股计划实现契约；旧 Web 首页交互按阶段方案保留，完整方向跟踪未接默认插件入口 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
@@ -65,9 +81,9 @@
 | [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 get_market_data_status 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
 | [Vibe A 股报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md) | Report、A 股情绪证据、三类简报 workflow 与策略研究映射 |
-| [Web 对话助手设计](./ddd/web-chat-design.md) | 已随 DSH 改造退役：模型对话与 `/api/chat` 端点下线，draft-and-confirm 链路保留 |
-| [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
-| [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
+| [Web 对话助手设计](./ddd/web-chat-design.md) | 历史方案：独立 Web 对话和草案端点均已退役，当前会话由 DSH 承担，业务写入走插件 Operation |
+| [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | 历史选型；当前 agent loop 由 DSH 承担，不作为待建设能力 |
+| [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 已退役的仓内模型栈实施记录；领域层不重新引入 AI SDK |
 | [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md) | Strategy、Watchlist、AlertPlan 的领域模型、存储、迁移与跨端契约 |
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
 | [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
@@ -76,7 +92,7 @@
 | [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
 | [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘目标用户旅程、冻结契约、竖向切片、迁移/安全/测试、浏览器验收与外部数据门禁 |
 | [MVP3 决策与复盘详细设计](./ddd/mvp3-decision-review-detailed-design.md) | 账户记录、成交关联、幂等账本、聚合、报告补充与跨端验收 |
-| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | 财务事实 vintage、因子 registry、横截面评分、版本审计与真实数据门禁 |
+| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | 实验设计：财务 vintage、因子、横截面评分与版本审计；当前仅显式 mock，真实数据门槛未通过 |
 | [Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md) | 组合能力门禁、评分分解、DSL Catalog、实验上下文、人工晋级和 RecommendationPolicy V2 |
 | [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) | StrategyAutonomyAction 实体、自动暂停阈值、AI 提议/验证/晋级门自动发布编排 |
 
@@ -84,8 +100,8 @@
 
 | 文档 | 范围 |
 |---|---|
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 当前主线：单机接入 DSH 的契约、阶段与验收口径（D9–D12 对应 Web 四实例 MCP：read/settings/analysis/batch，含交互分析面、面板、技能与定时任务；队列能力保留但默认部署不运行 worker，worker 仅手动/隔离验收） |
-| [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
+| [dsh-luoome 纯插件详细设计](./ddd/dsh-luoome-plugin-detailed-design.md) | 当前插件契约与最新实施记录；安装和运行入口以插件说明为准，不再按四实例 MCP 方案排期 |
+| [luoome 开发计划](./development-plan.md) | 阶段计划与验收记录；新工作先核对当前需求、插件入口和数据门槛，不因存在设计就自动排期 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |
 

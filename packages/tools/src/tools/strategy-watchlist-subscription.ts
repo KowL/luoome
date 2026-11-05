@@ -203,7 +203,9 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
       status: 'active',
     });
     const skippedForRun = !isPublishableOperationalRun(run);
-    if (subscriptions.length === 0 || skippedForRun) {
+    const health = getStrategyRunDataHealth(run);
+    const syncStatus = health === 'complete' ? 'complete' : health === 'partial' ? 'partial' : null;
+    if (subscriptions.length === 0 || skippedForRun || syncStatus === null) {
       return {
         strategyId: input.strategyId,
         producerRunId: input.producerRunId,
@@ -211,7 +213,9 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
         reason:
           subscriptions.length === 0
             ? '没有 active Strategy→Watchlist 订阅'
-            : 'StrategyRun 不是可发布的 operational published run',
+            : skippedForRun
+              ? 'StrategyRun 不是可发布的 operational published run'
+              : 'StrategyRun 数据不可用，不改变 Watchlist',
         items: subscriptions.map((subscription) => ({
           subscription,
           status: 'skipped' as const,
@@ -226,39 +230,15 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
       } satisfies SyncStrategyWatchlistSubscriptionsOutputT;
     }
 
-    const health = getStrategyRunDataHealth(run);
-    const syncStatus = health === 'complete' ? 'complete' : health === 'partial' ? 'partial' : null;
-    if (syncStatus === null) {
-      return {
-        strategyId: input.strategyId,
-        producerRunId: input.producerRunId,
-        status: 'skipped',
-        reason: 'StrategyRun 数据不可用，不改变 Watchlist',
-        items: subscriptions.map((subscription) => ({
-          subscription,
-          status: 'skipped' as const,
-          entered: 0,
-          exited: 0,
-          unchanged: 0,
-        })),
-        complete: 0,
-        partial: 0,
-        failed: 0,
-        skipped: subscriptions.length,
-      } satisfies SyncStrategyWatchlistSubscriptionsOutputT;
-    }
-
-    const results = await ctx.repos.strategyRun.listResults(run.id);
-    const candidates = results
-      .filter((result) => result.selected)
-      .map((result) => ({
-        stockId: result.stockId,
-        reason: `Strategy ${input.strategyId} 在 run ${run.id} 中入选`,
-        ...(result.score === undefined ? {} : { score: result.score }),
-        ...(result.rank === undefined ? {} : { rank: result.rank }),
-        evidence: result.evidence,
-        dataAsOf: result.dataAsOf,
-      }));
+    const results = await ctx.repos.strategyRun.listSelectedResultsByRuns([run.id]);
+    const candidates = results.map((result) => ({
+      stockId: result.stockId,
+      reason: `Strategy ${input.strategyId} 在 run ${run.id} 中入选`,
+      ...(result.score === undefined ? {} : { score: result.score }),
+      ...(result.rank === undefined ? {} : { rank: result.rank }),
+      evidence: result.evidence,
+      dataAsOf: result.dataAsOf,
+    }));
     const items: z.infer<typeof StrategyWatchlistSyncItemSchema>[] = [];
     for (const subscription of subscriptions) {
       const binding = subscription.investmentBinding;

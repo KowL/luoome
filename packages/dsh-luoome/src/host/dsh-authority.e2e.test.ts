@@ -18,6 +18,7 @@ import {
 } from './dsh-authority.js';
 import { dshScheduleHash } from './dsh-identity.js';
 import { runQueuePreflight } from './preflight.js';
+import type { AutomationTier } from './production-config.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -427,6 +428,108 @@ describe('DSH personal execution and schedule integration with durable facts', (
       expect(
         (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name,
       ).not.toContain('|forbidden');
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  });
+
+  it('reports the current automation tier in the native catalog without restarting', async () => {
+    let tier: AutomationTier = 'off';
+    const fixture = await start(await rootDir(), {
+      automationTier: 'off',
+      policies: createBatchOperationPolicies(),
+      resolveAutomationTier: async () => ({ tier, source: 'table' }),
+    });
+    try {
+      for (const current of ['off', 'granted', 'off', 'notify'] as const) {
+        tier = current;
+        const result = await fixture.run({ name: AUTOMATION_CATALOG_TOOL, input: {} });
+        expect(result?.value).toMatchObject({ ok: true, data: { automationTier: current } });
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('dispatches durable deliveries after off to granted and stops after switching back off', async () => {
+    const clock = fixtureClock();
+    let tier: AutomationTier = 'off';
+    const fixture = await start(await rootDir(), {
+      automationTier: 'off',
+      resolveAutomationTier: async () => ({ tier, source: 'table' }),
+    });
+    try {
+      const task = await fixture.ctx.schedule.create(fixture.handle.agent.id, {
+        prompt: 'silent host callback',
+        title: 'dynamic dispatcher tier',
+        every_seconds: 60,
+      });
+      const input = { accountId: fixture.principal.accountId, label: 'dynamic-dispatch' };
+      await authorize(
+        fixture,
+        fixture.grant(task, input, `batch:${task.id}:${fixture.principal.accountId}`),
+      );
+      const accountName = async () =>
+        (await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name;
+      const before = await accountName();
+      expect(before).not.toContain('|dynamic-dispatch');
+      tier = 'granted';
+      clock.advance(65_000);
+      await drive(fixture);
+      await eventually(async () => (await accountName()) === `${before}|dynamic-dispatch`);
+      await fixture.handle.agent.whenIdle();
+      for (const current of ['off', 'notify'] as const) {
+        tier = current;
+        clock.advance(65_000);
+        await drive(fixture);
+        await fixture.handle.agent.whenIdle();
+        expect(await accountName()).toBe(`${before}|dynamic-dispatch`);
+      }
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  });
+
+  it('uses the live tier for native scheduled calls and keeps notify writes blocked', async () => {
+    const clock = fixtureClock();
+    let tier: AutomationTier = 'off';
+    const fixture = await start(await rootDir(), {
+      automationTier: 'off',
+      resolveAutomationTier: async () => ({ tier, source: 'table' }),
+    });
+    try {
+      const task = await fixture.ctx.schedule.create(fixture.handle.agent.id, {
+        prompt: 'execute the exact native scheduled call',
+        title: 'dynamic native tier',
+        every_seconds: 60,
+      });
+      const input = { accountId: fixture.principal.accountId, label: 'dynamic-native' };
+      const grant = fixture.grant(task, input);
+      await authorize(fixture, grant);
+      for (const current of ['granted', 'off', 'notify'] as const) {
+        tier = current;
+        const before = fixture.results.length;
+        fixture.model.calls.push([scheduledCall(grant, input)], []);
+        clock.advance(65_000);
+        await drive(fixture);
+        await eventually(() => fixture.results.length > before);
+        await fixture.handle.agent.whenIdle();
+        const result = fixture.results.at(-1);
+        if (current === 'off') expect(result?.isError).toBe(true);
+        else if (current === 'notify')
+          expect(result?.value).toMatchObject({
+            ok: false,
+            error: {
+              kind: 'permission_denied',
+              required: 'automation tier allowing business writes',
+            },
+          });
+        else expect(result?.value).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+        const account = await fixture.domain.repos.account.findById(fixture.principal.accountId);
+        expect(account?.name.match(/\|dynamic-native/g)).toHaveLength(1);
+      }
     } finally {
       await fixture.close();
       clock.restore();

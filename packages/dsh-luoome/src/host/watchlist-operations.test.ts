@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createPluginOperationService, getWatchlistTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createWatchlistOperationPolicies } from './watchlist-operations.js';
 
 const setup = async (capabilities: readonly ('read' | 'write')[] = ['read', 'write']) => {
@@ -29,6 +29,71 @@ const setup = async (capabilities: readonly ('read' | 'write')[] = ['read', 'wri
 };
 
 describe('watchlist confirmed operations', () => {
+  it('advertises optional defaults, freezes them and reconciles a lost receipt without another write', async () => {
+    const { ctx, service, principal, policies, prepare, confirm } = await setup();
+    try {
+      const schema = service
+        .descriptors()
+        .find(({ name }) => name === 'create_watchlist')?.inputSchema;
+      expect(schema?.required).toEqual(['name']);
+      expect(schema?.properties?.kind).toMatchObject({ default: 'personal' });
+      expect(schema?.properties?.membershipPolicy).toMatchObject({ default: 'mixed' });
+      const input = { name: '默认持续研究' };
+      const create = await prepare('create_watchlist', input);
+      const expected = {
+        id: `watchlist-${create.id}`,
+        name: '默认持续研究',
+        kind: 'personal',
+        membershipPolicy: 'mixed',
+        enabled: true,
+      };
+      expect(create.input).toEqual(expected);
+      const frozen = await ctx.repos.pluginAuthority.findOperation({ ...principal, id: create.id });
+      expect(frozen).not.toBeNull();
+      expect(JSON.parse(frozen?.inputJson ?? '{}')).toEqual(expected);
+      input.name = '冻结后修改';
+
+      const save = vi.spyOn(ctx.repos.watchlist, 'save');
+      const settle = vi
+        .spyOn(ctx.repos.pluginAuthority, 'settleOperation')
+        .mockRejectedValueOnce(new Error('lost acknowledgement'));
+      try {
+        expect(await confirm(create)).toMatchObject({ ok: false, error: { kind: 'internal' } });
+        expect(await service.get(principal, create.id)).toMatchObject({
+          ok: true,
+          data: { state: 'executing' },
+        });
+        expect(await ctx.repos.watchlist.findById(expected.id)).toMatchObject(expected);
+        expect(await service.reconcile(principal, create.id)).toMatchObject({
+          ok: true,
+          data: {
+            state: 'succeeded',
+            result: { ok: true, data: { watchlist: expected } },
+          },
+        });
+        expect(await confirm(create)).toMatchObject({ ok: true, data: { state: 'succeeded' } });
+        expect(save).toHaveBeenCalledTimes(1);
+        const policy = policies.find(({ tool }) => tool.name === 'create_watchlist');
+        expect(policy).toBeDefined();
+        expect(await policy?.receipt({ id: expected.id, name: expected.name }, ctx)).toMatchObject({
+          ok: true,
+          data: { watchlist: expected },
+        });
+        expect(
+          await policy?.receipt(
+            { id: expected.id, name: expected.name, membershipPolicy: 'manual' },
+            ctx,
+          ),
+        ).toBeNull();
+      } finally {
+        settle.mockRestore();
+        save.mockRestore();
+      }
+    } finally {
+      service.dispose();
+    }
+  });
+
   it('freezes creation, permits cancellation and confirms each member change only once', async () => {
     const { ctx, service, principal, prepare, confirm } = await setup();
     const create = await prepare('create_watchlist', {

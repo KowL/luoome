@@ -1,6 +1,7 @@
 # Architecture
 
-> luoome 的架构核心。设计哲学、模块边界、数据流、安全模型、**advisor 模型**。
+> 当前 DSH 插件的模块、数据流与实现契约。业务概念先读[领域语言](../CONTEXT.md)，安装与运行先读[插件说明](../packages/dsh-luoome/README.md)。
+> 本文保留部分旧章节标题供历史链接定位；正文标注的退役入口和阶段方案不构成当前依赖。
 
 ## 1. 目标与边界
 
@@ -37,13 +38,16 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 
 ### 2.1 Advisor-first
 
-每一份数据最终都服务于"可执行的投资建议"。如果一个数据点不能影响任何建议的产出，那它就不该被罗进来。
+事实服务于研究、提醒、建议和复盘。ResearchTopic、资料与事实型报告可以独立存在，不要求先转成 Advice。
+引入数据以当前用户问题与可验证来源为依据，不为了未来可能的建议预建整套模型。
 
-倒过来看：**advice 不是 workflow 的副产物，是 first-class 实体**。它有自己的 schema、自己的存储、自己的检索 API、自己的统计（准确率、覆盖率、平均信心度）。
+Advice 是有独立 schema、存储、检索与账户反馈统计的领域实体；推理由 DSH 承担，写回必须引用
+当时事实。统计披露样本与缺失，不把 confidence 或填报盈利占比表述为未来概率。
 
 ### 2.2 Agent-first
 
-任何用户能做的事，agent 也应该能做。包括：
+业务能力通过统一 tools 实现，插件按明确需求开放对应 Interface；用户入口与 Agent 复用业务逻辑，
+但可调用范围分别受能力与账户约束，trade 不向 Agent 开放。例如：
 - ✅ 查询持仓 → tool
 - ✅ 添加持仓 → tool
 - ✅ 校验、发布和试跑 Strategy → tool
@@ -65,7 +69,7 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 ### 2.4 Workflow ≠ Tool
 
 - **Tool**：原子能力，无编排。可独立测试，可独立暴露给上层 agent。
-- **Workflow**：组合多个 tool。有顺序、有循环、有条件分支。Workflow **不作为 tool 暴露**给上层 agent（避免循环编排），但可被人手动触发（CLI/TUI/Web）。
+- **Workflow**：组合多个 tool，有顺序、循环与条件分支。Workflow 对象不直接注册为 agent tool；需要对外触发的确定性编排由 `@luoome/batch` 提供精确 `run_*` 入口，再由 DSH 插件按明确意图或持久任务授权调用。批处理入口不进入领域 tool registry，内部仍只经 tools 编排。独立 CLI/TUI 已退役。
 
 例如：
 - `compute_indicators`（tool）= 纯计算
@@ -76,9 +80,11 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 
 core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflows 只依赖 core 接口，不耦合 Drizzle。
 
-好处：
-- 测试用 in-memory mock repo，不依赖真实数据库
-- 将来换 DuckDB / Postgres 不动业务层
+当前价值：
+- in-memory 与 Drizzle 共用 contract tests，验证相同业务行为；持久化与事务语义仍通过真实 SQLite 测试。
+- Node 插件与 Bun 测试复用领域 repository 契约，事务、幂等和存储细节留在 db。
+
+当前只维护 SQLite，不以未来更换数据库为由预建额外 Adapter 或兼容分支。
 
 ### 2.6 副作用分级 + Advisor 边界
 
@@ -94,9 +100,9 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 
 > DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
 > （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 为上表 5 级；
-> Advice 实体与存量数据保留，新建议由 DSH 交互分析或手动 worker 写回。`queue` 级随分析队列引入，
-> 默认关闭，须由 `luoome-analysis` 实例（read + queue 精确三工具白名单）或手动 worker 实例
-> 显式 opt-in（`LUOOME_EXPOSE_QUEUE=true`）。
+> Advice 实体与存量数据保留，新建议由 DSH 推理后写回。`queue` 是领域写回与租约消费能力分类，
+> 不代表部署了队列进程。交互分析通过插件精确 `record_*` policy 直接写回；队列管理工具不在
+> 默认插件暴露面。普通后台分析可显式配置 `analysisModel`，执行仍使用 DSH 宿主服务（§6.3）。
 
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
@@ -110,38 +116,36 @@ Research 检索以 SQLite FTS5 为确定性基线。可选 embedding adapter 通
 ```
 luoome/
 ├── packages/
-│   ├── core/           纯领域类型 + 不变量 + advice 模型
-│   ├── db/             Drizzle schema + repository 实现
-│   ├── tools/          Tool 注册表 + schema 生成
-│   ├── adapters/       行情 / 通知 / 事件 / 研究库 适配
-│   ├── workflows/      内置编排：review / report / watch / plan / strategy
-│   ├── cli/            命令行入口
-│   └── tui/            opentui 应用
-└── apps/
-    └── web/            Web 端
+│   ├── core/           领域类型、不变量与纯计算
+│   ├── db/             SQLite schema 与 repository 实现
+│   ├── tools/          Tool 注册表与 schema 生成
+│   ├── adapters/       行情 / 通知 / 事件 / 研究库适配
+│   ├── workflows/      review / report / watch / plan / strategy 编排
+│   ├── batch/          确定性 run_* 批处理入口
+│   └── dsh-luoome/     DSH host / client / skills，唯一产品入口
+└── deploy/             DSH 插件部署、升级与恢复
 ```
 
 ### 依赖方向（强约束）
 
 ```txt
-cli ──┐
-tui ──┤
-web ──┼──► tools ──► core
-      │        │
-      │        ├──► db ──► core
-      │        │
-      │        └──► adapters ──► core
+dsh-luoome ─────────────► tools ──► core
+      │                     │
+      │                     ├──► db ──► core
+      │                     └──► adapters ──► core
       │
-      └──► workflows ──► tools ──► core
+      └──► batch ──► workflows ──► tools ──► core
 ```
 
-**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
+**禁止反向依赖**：core 不依赖 db / tools；tools 不依赖 DSH 插件；adapters 不依赖 workflows。
+插件的 host 与 client 提供原生工具和 Web 面板，独立 `packages/cli`、`packages/tui`、
+`packages/mcp` 与 `apps/web` 已下线；历史章节中的这些入口不构成当前部署依赖。
 
 ### 模型运行时边界
 
 模型推理与模型配置都由 DSH 承担，luoome 侧没有模型运行时包，也没有模型设置页：
 
-- 领域包（`core` / `db` / `tools` / `workflows` / `mcp` / `adapters`）不得导入 AI SDK。
+- 领域包（`core` / `db` / `tools` / `workflows` / `adapters`）不得导入生成式模型 SDK；`mcp` 包已删除。
 - 领域能力仍统一经 tools 使用；领域层不推理、不计费。
 - `infra/check-layers.ts` 守住 AI SDK 依赖边界。
 
@@ -223,119 +227,32 @@ export const assertHoldingInvariants = (h: Holding): void => {
 
 ### 4.3 Repository（core 接口 + db 实现）
 
-```ts
-// core/repository/holding.ts
-export interface HoldingRepository {
-  findById(id: string): Promise<Holding | null>;
-  listByAccount(accountId: string): Promise<Holding[]>;
-  save(holding: Holding): Promise<void>;
-  remove(id: string): Promise<void>;
-}
+core 定义 repository Interface，db 提供 Drizzle 与 in-memory 两个 Adapter，并用同一组
+contract tests 验证行为。普通读取通过实体 repository；跨实体原子写入使用已有 Ledger、Analysis、
+DecisionReview 等事务契约，不在调用者拼接多次 save 代替原子提交。
 
-// core/repository/advice.ts
-export interface AdviceRepository {
-  save(advice: Advice): Promise<void>;
-  findById(id: string): Promise<Advice | null>;
-  query(filter: AdviceQuery): Promise<Advice[]>;
-  recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void>;
-}
-```
-
-```ts
-// db/repository/holding.ts (Drizzle 实现)
-export class DrizzleHoldingRepository implements HoldingRepository {
-  constructor(private readonly db: DrizzleDB) {}
-  // ...实现
-}
-```
+账户反馈的权威写入是 DecisionReviewRevision；旧 AdviceOutcome 只保留兼容投影，见 §6.4。
 
 ### 4.4 Tool（tools 包）
 
-```ts
-// tools/list-holdings.ts
-import { z } from 'zod';
-
-export const ListHoldingsInput = z.object({
-  accountId: z.string().uuid().optional(),
-  status: z.enum(['active', 'closed', 'all']).default('active'),
-});
-
-export const ListHoldingsOutput = z.object({
-  holdings: z.array(HoldingSchema),
-  totalValue: MoneySchema,
-  totalCost: MoneySchema,
-  totalPnL: MoneySchema,
-  totalPnLPct: PercentageSchema,
-});
-
-export const listHoldingsTool = defineTool({
-  name: 'list_holdings',
-  description: '列出指定账户下的当前持仓',
-  sideEffect: 'read',
-  input: ListHoldingsInput,
-  output: ListHoldingsOutput,
-  handler: async (input, ctx) => {
-    const repo = ctx.repos.holding;
-    const holdings = await repo.listByAccount(input.accountId ?? ctx.defaultAccountId);
-    return { holdings, ...aggregate(holdings) };
-  },
-});
-```
+每个 tool 通过 `defineTool` 声明稳定名字、描述、副作用、输入/输出 Zod schema 与 handler；
+跨能力操作同时声明 `requiredCapabilities`。handler 使用注入的 ToolContext 读取 repository 或
+Adapter，调用者始终收到 `ToolResult`。实际 schema 以对应 tool 源码为准，本文不复制字段快照。
+例如 `list_holdings` 只读已落库持仓与报价，刷新行情须显式调用 external 工具；缺价格不填零。
 
 ### 4.5 Tool Registry
 
-```ts
-// tools/registry.ts
-export const toolRegistry = createRegistry([
-  listHoldingsTool,
-  getHoldingTool,
-  addHoldingTool,
-  analyzeStockTool,         // advice 类
-  getAdviceTool,            // advice 类
-  // ...
-]);
+`packages/tools/src/registry.ts` 保存领域 tool 库存，workflow-only 工具单独装配；
+批处理 `run_*` 不进入该 registry。插件描述与输入契约从已有 schema 派生，allowlist 与
+Operation policy 决定当前可达范围。schema 派生能力不表示已恢复 MCP server。
 
-// 自动产物：
-const tsTypes = toolRegistry.toTypeScript();
-const mcpTools = toolRegistry.toMCP();
-const openaiTools = toolRegistry.toOpenAI();
-const openApiSpec = toolRegistry.toOpenAPI();
-```
-
-**一次定义，多处生效**。改一个 Zod schema，所有面自动同步。
+**一次定义，多处消费**。修改 schema 时同步验证描述、policy 与实际调用，不维护另一份手写契约。
 
 ### 4.6 Workflow（workflows 包）
 
-```ts
-// packages/workflows/src/daily-review.ts
-export const dailyReviewWorkflow = defineWorkflow({
-  name: 'daily-review',
-  description: '汇总当日建议、准确率统计与连板天梯，产出结构化日报',
-  input: DailyReviewInput,          // { timezoneOffsetHours }
-  steps: [
-    // 1. 读当日建议（日报要能看到已过期的）
-    async (prev, ctx) => {
-      const input = prev as DailyReviewInputT;
-      const res = await ctx.tools.get_advice.execute({
-        since: computeTodayStart(ctx.clock(), input.timezoneOffsetHours),
-        includeExpired: true,
-        limit: 500,
-      });
-      if (!res.ok) return res;       // 返回 ToolResult error 即短路
-      return { advices: res.data.advices, stats: null, input, ladder: null };
-    },
-    // 2. 读近 7 日准确率
-    async (prev, ctx) => {
-      const state = prev as ReviewState;
-      const r = await ctx.tools.get_advice_stats.execute({ since: sevenDaysAgo(ctx.clock()) });
-      if (!r.ok) return r;
-      return { ...state, stats: r.data };
-    },
-    // 3. 读当日 + 上一日天梯并算 diff（上游不可用 → ladder=null，不阻断日报）
-    ...
-  ],
-});
-```
+`defineWorkflow` 声明输入 schema 与有序步骤。例如 `daily-review` 读取已有建议、账户反馈统计
+和连板天梯，再输出确定性事实；外部缺口显式保留，不临时让模型补齐。各 workflow 的完整输入
+与结果以其源码 schema 为准，当前可触发的批处理入口见 `packages/batch` 和插件 policies。
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**。写建议统一走 `record_advice`（分析队列写入路径），不绕过层级。步骤返回 `ToolResult` error 会短路整条 workflow；步骤抛 `InvariantError` 归为 `invariant_violation`，其它异常归为 `internal`，`run` 永不外抛。
 
@@ -349,10 +266,10 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 - 候选建议由 DSH 交互分析实例经 `record_advice` 写入（见 §6.3）；仓内已无
   `strategy-recommendations` workflow 与 `analyze_strategy_candidate` tool。
 
-`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
-检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron
-只作为幂等补偿。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
-回滚已原子提交的 StrategyRun，也不会触发交易。
+`strategy-daily-cycle` 等编排由 DSH 定时任务经精确 `run_*` 批处理入口触发，luoome 不再运行
+进程内常驻调度器。宿主确认真实日程投递与任务授权后直接执行批处理，不依赖模型决定是否调用工具。
+观察补全仍可作为幂等补偿执行；所有 workflow 只通过 tool 编排。分析或通知失败不回滚已原子
+提交的 StrategyRun，也不触发交易。
 
 **2026-08-14 可靠性状态**：publication、heartbeat + fencing token、`strategy-daily-cycle`、
 WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇总会阻塞 schedule/交易日重复
@@ -363,17 +280,16 @@ WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇�
 `limit` 只决定首批，剩余继续 drain）。交易日 16:30 后按账户及当日已发布策略运行指纹领取
 `account-plan-batch`，批次身份还包含账户账本摘要；持仓或现金变化后旧批次不能充当当前账户结果。
 批次执行 `trading-plan-daily-cycle` 并持久化完成、部分或阻断状态。领取与结束
-均使用原子操作及令牌校验；超时运行被收敛后可重试。Web 有独立的每分钟截止 tick，避免策略与
-计划批次耗时阻塞 18:00 主报告；`closing-report-cutoff` 读取持久化批次状态，即使无 schedule
-或批次未完成，也按账户发布并显式标 partial。当日预期策略均有已发布正式运行且日循环领取
-已结束、全部账户计划批次完成或部分完成时，可在 18:00 前按账户提前发布；未来仍有预期运行、
-策略分析仍在进行或账户批次阻断时等待，不发送阶段性日报。
-重复 tick 不重建主报告。后到策略结果或账户账本变化后重跑的计划批次生成补充版本，原版本按
-ID 或周期版本可读；只有核心缺口补齐或计划行动条件变化才再次通知。
-`web serve` 的盘中账户计划调度每分钟在交易日上午/下午时段顺序检查全部账户，启动时立即检查；
-每个账户仍经 `intraday-trading-plan-watch` workflow 和共享预警租约求值、复查与投递。
-调度重叠 tick 被跳过，停机及午休/闭市停止新账户轮次；`luoome start` 则在同一 CLI
-盯盘循环内先顺序检查账户计划，再运行 AlertPlan，避免争抢共享租约。`start --no-watch` 关闭这两项。
+均使用原子操作及令牌校验；超时运行被收敛后可重试。`closing-report-cutoff` 由独立 DSH
+任务触发并读取持久化批次状态，避免长批次阻塞就绪检查。当日预期策略均有已发布正式运行、
+日循环领取已结束、全部账户计划批次完成或部分完成后统一出报；未来仍有预期运行、策略分析
+仍在进行或账户批次阻断时继续等待，18:00 也不发布未完成批次的缺口版。没有当日预期策略时，
+在 18:00 后完成账户计划再出报。历史日期未留存主报告的补记单独披露历史快照缺失，不用当前事实替代。
+同一日期、同一范围只保存一份收盘报告；重复调用与投递重试复用原报告，后到结果和账本变化
+不追加收盘补充版，也不改写原正文。周报复盘补充版按 §6.4 的独立契约处理。
+盘中账户计划由 DSH 的 `run_intraday_plan_batch` 触发，各账户经
+`intraday-trading-plan-watch` workflow 和共享预警租约求值、复查与投递。午休、闭市或
+非交易日由工具和 workflow 的时段门槛跳过；停机期间不新建执行轮次。
 交易时段由 core 按上海时间和 A 股休市日统一判定为 `[09:30,11:30)`、`[13:00,15:00)`；
 工作流本身也在开始、发布前及每次发送前复核时段，跨过午休或收盘的候选失效并留审计；
 已经提交但尚未发送的触发在同一预警租约和事务中作废并释放对应边沿，使下一交易时段能重新求值。
@@ -447,17 +363,17 @@ binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类�
 
 东方财富在本仓库的全部能力收敛到单一 `EastmoneySource`（adapters/eastmoney/source.ts）：
 HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
-方法委托。CLI/Web/插件三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
-分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
-market 的 sentiment manager。单机部署的数据源配置写入持久卷
-`operator/market.env`：Web 保存后立即重建共享行情栈，消费者按文件 mtime 在任务批次前同步。
+方法委托。插件组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
+分发共享；插件行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
+market 的 sentiment manager。单机行情设置经插件写入 `$LUOOME_HOME/.env` 的允许键，
+替换当前共享行情栈；不再依赖旧 Web 的 `operator/market.env` 或跨进程 worker 同步。
 
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
 composition root 将 adapter 的实际能力绑定到 Registry；tool、workflow 和 surface 不改。
 
-surface 装配（v0.5 起）：CLI/TUI/Web/插件四个组装根统一调
-`createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
+当前插件通过共享 adapter 装配调用
+`createMarketAdapterFromEnv`（adapters/market/factory.ts）；历史 CLI/TUI/Web 组装根已删除。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
 `eastmoney`、`sina`、`tencent`、`fuyao`、`xueqiu`。未配置时默认 Eastmoney → Tencent → Sina。
@@ -486,31 +402,27 @@ A 股情绪 manager 内部把封板池与炸板池注册为 `sentiment-sealed-po
 实时报价推算全市场宽度。详见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
-Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
-不返回密钥；受同源 Origin 保护的 POST 将配置原子写入权限为
-`0600` 的 `$LUOOME_HOME/.env`，验证新 adapter 后替换 `ctxRef.current.adapters.market`，
-使路由在当前 Web 进程立即生效。只改来源顺序时复用进程级共享 SourceSet，不产生第二个
-EastmoneySource 实例，无关 manager 的缓存不清空。
+插件通过 `/api/luoome/settings/market` 返回数据源启用状态、优先级和配置就绪状态，
+不回显密钥。写入经 owner 与同源 Origin 校验，先验证候选 adapter，再将允许的行情键原子
+写入权限为 `0600` 的 `$LUOOME_HOME/.env` 并替换当前 ToolContext。只改来源顺序时复用
+进程级共享 SourceSet，不产生第二个 EastmoneySource 实例，无关 manager 的缓存不清空。
+精确允许键与设置契约见文末插件装配说明。
 
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时包，没有模型设置页，也没有
-`/api/settings/ai` 与运行时热替换。CLI/TUI/Web 不装配模型，需要模型判断的能力由
-DSH agent 经插件注册的原生工具调用完成。core 不持有模型调用端口，领域层不推理、不计费。
+`/api/settings/ai` 与运行时热替换。交互判断由 DSH 会话承担；可选后台分析和 GoalRun 的插件
+Adapter 使用宿主模型服务，领域层只接收结构化结果并校验、保存。模型配置和凭据归 DSH。
 
-Web 的模型对话已退役：没有 AI 流端点，也没有对话页面。保留下来的是不依赖模型的
-「起草 → 明确确认 → 原子执行」链路，写工具在 Web 上只生成待确认描述，只有用户在
-Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage` 及
-`ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
-tools 读写当前账户的持久化历史。草案确认使用
-`POST /api/chat/sessions/:id/drafts/:messageId/:toolCallId` → `settle_chat_draft`，仅执行
-服务端存储的输入；repository 通过原子认领和 parts 比较更新保存每项执行状态，重复请求不重复写入。
-用户文本中的“已执行”不作为凭据。确认要求 write + external
-显式开启，请求沿用所选账户 header。
-多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
+独立 Web 的模型对话、草案确认 HTTP 端点和账户切换入口已退役。保留的 `ChatSession` /
+`ChatMessage` / `ChatRepository` 及其 memory、Drizzle 实现属于未暴露的历史能力，不构成
+当前插件聊天系统。会话与消息由 DSH 宿主承载；业务写入由插件精确 Operation policy 按用户
+明确意图执行，prepare 冻结输入后直接 confirm，保留幂等与业务回执，不要求面板二次确认。
+用户文本中的“已执行”不作为业务回执。多个 Watchlist 成员复用 `add_watchlist_members`
+原子写入，不复制成员处理逻辑。
 
 DSH 接入有两条路径，默认部署只保留第一条：
 
 1. **独立 DSH 部署（默认，纯插件形态）**：DSH 用 Node 加载 `dsh-luoome` 插件——host 提供原生只读 /
-   market external / 个人直接执行写面，client 提供三块核心面板，随包 skills 提供四条投研技能；事实库是
+   market external / 个人直接执行写面，client 提供看盘、持仓、关注、策略、复盘五块面板，随包 skills 提供投研技能；事实库是
    Node SQLite 的 `$LUOOME_HOME/luoome.db`。运行期不需要 Bun、MCP server、旧 Bun Web、
    analysis worker 或 queue probe。部署入口见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
    容器栈保留为整栈回退方案。
@@ -520,18 +432,18 @@ DSH 接入有两条路径，默认部署只保留第一条：
    暴露面判定保留在 `packages/tools/src/exposure/`。
 3. ~~内嵌 DSH Host~~（已随托管形态下线）：原 `apps/agent-runtime` 的内嵌 Host 路径与 hosted ledger 计量一并删除。
 
-批处理调度归 DSH 定时任务：提醒到点唤起会话，agent 调用插件注册的工具，门槛判定随工具走
-（非交易日/非盘中时段返回 `skipped`）。不再有 luoome 侧的常驻调度进程。
-交互式分析经插件的原生确认操作直接写回，不创建 `analysis_job`；队列能力保留，但默认部署
-没有生产者、也没有常驻消费者。仓库完成隔离切换/回退演练后，生产服务器已于 2026-10-25 切到
-纯插件形态（`dsh-web` + `caddy`）；旧 MCP 用户入口源码已删除，Bun 只作为构建工具。
+批处理调度归 DSH 定时任务：真实投递落库后，插件通过 `executeScheduled` 直接调用原生
+批处理入口，并核对任务定义指纹、账户、精确参数与持久授权。业务执行不依赖模型工具调用；
+当前宿主仍可唤醒会话，但业务门槛由工具判断，非交易日/非盘中时段返回 `skipped`。
+luoome 不运行常驻调度进程，批处理和自动写入默认关闭。
+交互式分析经插件 `record_*` Operation 直接写回，不创建 `analysis_job`；队列有完整执行实现，
+普通后台分析需显式配置 `analysisModel`，默认插件没有入队生产入口和常驻消费者。
+生产服务器已于 2026-10-25 切到纯插件形态；旧 MCP 用户入口源码已删除，Bun 用于构建与测试。
 
-AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
-聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
-每轮独立装载当前结构化共识，不能靠最近 20 条聊天推断同意。首页的三项方向操作经
-`POST /api/workspace/drafts` 生成服务器草案，再复用原确认协议；不接受客户端执行结果。
-确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
-原始触发与当前资格分开，始终不把历史触发当作当前行动许可。手机讨论与恢复契约见
+投资工作区仍由领域 tools 区分事实摘要、方向研究、共识与实际跟踪；当前入口是 DSH 会话与
+插件面板。旧独立 Web 的 `/api/workspace`、`/api/workspace/drafts` 与
+`/api/watch/notifications/:triggerId` 已随 `apps/web` 删除，不是当前 HTTP 契约。
+结构化共识与来源校验继续由 tools 负责，历史提醒不作为当前行动许可。历史首页设计及迁移范围见
 [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
 
 ### 4.8 Context
@@ -566,8 +478,9 @@ interface ToolContext {
 }
 ```
 
-`ctx` 是唯一被允许注入依赖的方式。**仓内不注入模型 SDK**：`ToolContext` 没有 LLM / Agent
-槽位，模型推理在 DSH 宿主侧完成，经分析队列写回（§6.3）。各 manager 缺失时对应能力
+`ctx` 是唯一被允许注入依赖的方式。**领域层不注入模型 SDK**：`ToolContext` 没有 LLM / Agent
+实例；可选 `jobRunner`、`analysisRunner`、`goalRoundRunner` 等执行 Interface 由插件的宿主 Adapter
+装配，实际模型请求仍经 DSH。交互结果直接写回，可选队列执行见 §6.3。各 manager 缺失时对应能力
 按 `unavailable` 降级，不静默回落到别的数据源。
 `limitUpLadder` 等非行情 manager 是日级批量快照端口，保持为顶层可选字段，
 不混入逐标的实时行情 Gateway；各 manager 的必填 `status()` 是统一观测端口，
@@ -614,8 +527,8 @@ ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），�
 section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺失时必须为
 `partial` 并保存原因。`ReportRepository` 同时提供 in-memory 与 Drizzle 实现；
 `get_report` / `list_reports` / `render_report` 为 read 且在公共 registry 内；`save_report` /
-`set_report_delivery_status` 为 write，属 workflow 内部 tool，不进公共 registry。Web 报告历史、详情和导出统一调用这些 tool，
-不复制 partial 判定或 renderer。详细设计见
+`set_report_delivery_status` 为 write，属 workflow 内部 tool，不进公共 registry。当前插件报告读取与导出复用领域能力，
+不复制 partial 判定或 renderer；旧独立 Web 报告页面已退役。详细设计见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
 **Vibe A 股报告迁移 Phase 2**：新增 `AShareSentimentSnapshot` 与
@@ -655,10 +568,10 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 `get_closing_batch_audit` 按上海日期只读聚合 `account-plan-batch` 的 WorkflowRun、当前账户清单及
 收盘主版/补充版，显示 16:30 批次开始、18:00 截止、报告生成延迟与通知状态。
 审计返回 `tradingDay`；休市日当前账户不计入应出报分母，已有异常批次或报告仍保留在结果中。
-Web `/api/reports/closing-audit` 仅返回当前选中账户；全账户核对使用 Tool。
+当前审计由插件获准的 `get_closing_batch_audit` 读取；旧 Web `/api/reports/closing-audit` 已退役。
 历史预期账户从当前清单及留存的批次/报告推断，已删除且无留痕的账户无法据此恢复。
-CLI 通过 `workflow run ... --mode` 触发，
-Web 通过同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
+当前通过 DSH 插件的精确批处理入口触发，沿用 owner、参数范围和执行授权校验；
+旧 CLI 命令与独立 Web `/api/reports/run/:kind` 已退役。
 
 **Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
 unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal 只表达事实，
@@ -670,12 +583,32 @@ unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal �
 意外异常也会把该记录收敛为 `failed`。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
 
-**Strategy 模块深化（2026-09-01）**：`StrategyEvaluationData` 由 Live 与 Checkpoint 两个真实
-Adapter 实现，统一 quote/daily-bars 读取和 provider audit；`StrategyRunSnapshot` Compatibility Module
-统一解释 V3/V2/legacy 输入身份；`StrategyObservationEvidence` 批量校验 run → signal → observation
-关系并报告 missing/truncated；`StrategyRunTimeline` 一次装载 run/version/results，供 Workspace、Diff
-与 Insight 复用。Web Strategy Workspace 按 overview、experiment、runs、insights、cycle、settings、
-backtest 功能模块拆分，入口文件只负责路由与页面组合。
+### Strategy 内部运行视图与兼容契约
+
+这些 Module 为 Strategy 提供运行、审计与读取契约，不是新增用户必配对象，也不新增持久化
+业务生命周期。调用者复用以下 Interface，避免在各 surface 重复解释原始记录：
+
+| Module | 当前 Implementation 与调用纪律 |
+|---|---|
+| `StrategyDailyCycleAudit` | `strategy-daily-cycle` WorkflowRun 的稳定投影。v1 显式记录版本、Strategy/Schedule 归属与 `dataAsOf`；无版本旧记录通过同一解码入口只读兼容。按 Strategy、Schedule 或 `dataAsOf` 查询时先确定归属与时间范围，再截取数量，避免其它策略的新运行挤掉目标审计。 |
+| `StrategyEvaluationData` | Live Adapter 服务实时 scan；Checkpoint Adapter 服务 scheduled/replay，只读本地 checkpoint 或 PIT revision。两者共享同一 Interface，逐股 quote/daily-bars、重试和 provider coverage 的知识集中于此，`run_strategy` 不再重复模式分支。 |
+| `StrategyRunSnapshot` | 不可变输入身份当前写入 V3；V2 与任意旧对象只经统一 Compatibility Module 读取。evaluator identity、`requestedBy`、`evaluationSessionId`、universe 与 data checkpoint 不由调用者探测原始 key。 |
+| `StrategyObservationEvidence` | 批量核验 run → signal → observation 的 Strategy/version/stock/horizon 归属，按 stock-day-horizon 去重，显式返回 `expected`、`missing`、`truncated` 与 `limitations`。只消费 ACTIVE T+1/T+3/T+5；存量 T+20 不进入事实链。 |
+| `StrategyRunTimeline` | 工作台、运行比较与洞察共用的只读视图，一次装载 run/version/results，统一选择当前 published operational run、上一基准和最近尝试。它不是新持久化实体，也不改变 publication 规则。 |
+
+正式信号沿跟踪事件求值：entry 面向最终入选股票，exit/risk 面向当前入选与该版本此前仍在跟踪
+的股票；退出条件成立后结束跟踪。持续命中仅在首次命中或恢复后再次命中时产生事件，并遵守冷却。
+触发前态与最近事件时间独立于可裁剪的 StrategyResult 保存，与运行事实原子提交；operational
+与各 evaluation session 隔离，试跑和未发布运行不改正式前态。仅有有效跟踪事件范围标记的信号
+创建 T+1/T+3/T+5 观察。明细清理不改写当时计数、建议快照与引用，读取区分当时产出与当前留存。
+
+StrategyRun 新写入只用 `running/complete/failed`，旧 `partial` 仅作读取兼容，表示执行完成且数据
+部分可用；数据健康、acceptance 与 publication 分别表达，不混成执行状态。AI 可以提出候选策略，
+冻结版本后的历史匹配与收益计算由确定性引擎完成。自治发布须通过现有历史验证门禁；历史样本要求
+不等于提议后强制等待 20 个交易日。自动批处理仍须显式开启并具备对应任务授权。
+
+这些真实 Adapter 和统一读取路径提供 Locality：历史兼容、输入身份与证据校验各有一处权威实现。
+历史独立 Web 工作台的页面拆分不构成当前插件入口；当前研究工作台契约见文末。
 
 ```txt
 Account          账户（真实，币种，初始资金）
@@ -789,16 +722,15 @@ export interface AdviceOutcome {
 
 luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步走。每一步都有 tool / workflow / 数据对应。
 
-**当前形态**：仓内不跑模型推理。core / tools / workflows / db / adapters 不依赖任何模型 SDK；
-推理由 DSH 宿主承担：交互式分析经独立 `luoome-analysis` 实例的 `record_*` 直接写回本仓，
-批量队列写回能力保留但默认部署不再运行常驻消费者（见 §6.3）。仓内保留的
-全是确定性事实计算与状态读写。
+**当前形态**：领域层不自行请求生成式模型，插件调用 DSH 宿主服务；研究 embedding 例外见 §3。
+推理由 DSH 宿主承担：交互式分析经插件精确 `record_*` Operation 直接写回；可选后台分析
+通过宿主执行 Interface 运行并沿队列事务提交（见 §6.3）。领域包负责确定性事实计算、校验与状态读写。
 
 ### 6.1 数据层
 
 来源：
 - **行情**：实时报价、日线、技术指标（多源交叉）
-- **基本面**：财报、估值、行业地位
+- **基本面**：当前财务快照与实验 strict PIT 事实分别披露，当前快照不进入生产基本面评分
 - **Strategy**：版本化规则定义、校验、运行结果与可追溯信号
 - **Watchlist**：跨 Strategy、AI、组合与手工来源的统一关注集合
 - **AlertPlan**：引用 Watchlist 的提醒规则与送达策略
@@ -823,15 +755,25 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 
 ### 6.3 建议层
 
-仓内不再有 `analyze_stock` 这类内置推理 tool。交互式建议由 DSH 宿主推理后经
-**独立分析面 `luoome-analysis`** 直接写回：该实例以 read + queue capability 但用精确工具
-白名单收窄到 `get_analysis_context`、`record_advice`、`record_analysis_result`，交互分析
-不创建 `analysis_job`。批量分析仍保留**分析队列**能力：消费者认领 job、读取冻结事实包、
-用宿主模型推理，再经队列工具把结论写回；默认部署没有生产者，也不再运行常驻消费者，
-worker profile 仅作手动/隔离验收。
+仓内不再有 `analyze_stock` 这类内置推理 tool。当前交互主线是：插件
+`get_analysis_context` 保存冻结事实包 → DSH 会话推理 → 精确 `record_advice` /
+`record_analysis_result` Operation 校验并写回。该路径不创建 `analysis_job`，也不依赖 worker。
 
-队列工具（写工具需 `LUOOME_EXPOSE_QUEUE=true`；读工具随 read 默认暴露。部署侧按
-`QUEUE_TOOL_NAMES` 名单二次收窄，漏配只会让工具更少）：
+`AnalysisJob` 是已经实现的可选租约执行能力。受信任配置显式提供 `analysisModel`，或成对设置
+`LUOOME_ANALYSIS_PROVIDER` / `LUOOME_ANALYSIS_MODEL`，插件才注入普通后台分析 Adapter；
+模型与凭据由 DSH 管理。内部 `enqueue_analysis_job` 在有 JobRunner 时可启动宿主后台任务，
+完成事实装配、认领、分析与原子写回；缺少分析器时明确失败，不伪装完成。
+默认插件不暴露入队工具，生产 workflow 没有入队调用，也不运行常驻消费者；显式配置模型不增加
+模型可见的生产者。手动队列验收通过现存工具与测试装配，已删除的 MCP 实例不是验收前提。
+
+`GoalRun` 另有已接入的 `start_goal_run` / `get_goal_run` / `cancel_goal_run` 入口：显式请求
+冻结目标、事实范围、DSH 模型路由与轮次/时间/token 预算，宿主 JobRunner 执行有界研究。
+每轮取得持久化 AnalysisContext，单次修订复用同一快照；合法事实引用与结构校验通过的输出才算成果。
+进度用 CAS 防止迟到提交覆盖取消，重启后保留审计而不自动重放请求。`completed` 表示目标结论通过
+校验；缺事实、时间或轮次耗尽为带具体条件的 `blocked`，依赖失败为 `failed`，取消保留已有产出。
+模型请求经 DSH `llm.stream`，不带工具权限；研究结果不自动写成 Advice、Strategy 或 Trade。
+
+以下是领域工具清单；是否暴露由插件精确 allowlist/policy 决定，注册不等于默认可调用：
 
 | 工具 | 副作用 | 用途 |
 |---|---|---|
@@ -845,21 +787,12 @@ worker profile 仅作手动/隔离验收。
 | `list_analysis_jobs` | read | 列出分析任务 |
 | `get_analysis_metrics` | read | 读取队列运行指标 |
 
-写入路径：
+两条写回路径共用事实校验与持久化实现：
 
 ```txt
-[DSH 消费者]  claim_analysis_jobs ──► { job, claimToken, context }
-      │
-      ▼
-             get_analysis_context(contextId) ──► 冻结事实包（行情/持仓/策略证据）
-      │
-      ▼
-             宿主模型推理（模型不在本仓，provenance 记模型与技能版本）
-      │
-      ▼
-             complete_analysis_job(jobId, claimToken, result, provenance)
-                    ├─► record_advice ──► Advice 落库（含 provenance）
-                    └─► record_analysis_result ──► 分析结果落库
+交互：get_analysis_context → DSH 推理 → record_advice / record_analysis_result
+队列：内部 enqueue → 宿主任务或显式消费者 → claim + context → DSH 推理
+                                                  → complete_analysis_job
 ```
 
 事实包过期时（`complete` 返回 `context_expired` / `stale_context`），消费者重新取事实包，
@@ -888,32 +821,47 @@ worker profile 仅作手动/隔离验收。
   允许在缺行情时产出，套这条会挡住合法研究。
 - 错误优先级是产品语义：引用错误 → 时序错误 → 完整性错误。完整性检查因此**独立成函数**而不是
   并进 `checkAnalysisReportReferences`，避免"上下文已过期"被"缺口没声明"抢答。
-- 写回时效按 `kind` 取 `packages/core/src/entity/analysis-context.ts` 的 `analysisTimingRules`
-  （`analysisContextTiming` / `analysisContextTimingError` 是唯一事实来源，context 装配、
-  enqueue、record、refresh 共用，不复制规则）：
 
-  | kind | `ruleVersion` | `writeUntil` | `dataAsOf` 过期 |
-  |---|---|---|---|
-  | `advice_stock` / `advice_position` / `advice_strategy_candidate` | `intraday-action-v1` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
-  | `advice_market` | `market-analysis-same-day-v1` | `min(现在+24 小时, dataAsOf 的上海自然日次日 00:00)` | 超过 `dataAsOf` 的上海自然日（次日 00:00） |
-  | `advice_strategy_candidate_after_close` | `after-close-strategy-v1` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
-  | `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `research-analysis-30d-v1` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
+### 分析事实包与写回时效
 
-  超过 `writeUntil` / `expiresAt` → `context_expired`；超过该 kind 的数据有效期 → `stale_context`。
-  15:00 截断只适用于盘中行动类，盘后策略候选与策略研究不被当日收盘截断。
+`AnalysisContext` 是带 `dataAsOf`、事实哈希与证据编号的冻结事实包；`writeUntil` 限制写回，
+`expiresAt` 表示审计保留期限。过期事实包仍可按 ID 审计读取，不能据此继续写回；取新事实包
+不等于沿用旧结论。交互事实包 `jobId=null`，队列绑定则必须遵守有效 claim token。
 
-  市场级（`advice_market`）自 REQ-M3-20 起按 **Asia/Shanghai 自然日**判定：自然日不是固定时长，
-  规则用显式布尔 `sameDayOnly` 表达，不用「把数据龄改成某个魔法毫秒数」——写死会立刻腐烂。
-  跨日市场事实不进可用事实，`missingFacts` 留下 blocking 原因码 `market-advice-same-day-only`
-  （`get_analysis_context` 因此返回 `unavailable`），写回返回 `stale_context`。市场级判断的引用必须
-  带 `observedAt`；当日 15:00 之后或非当日的观察由 `classifyMarketObservation` 降级为「历史观察」，
-  保留可读但不得作为当前依据进入建议链（降级不是删除）。时效规则带 `ruleVersion`，context 落库带
-  `timingRuleVersion`，因此「这条 context 按旧 7 天口径还是新当日口径判定」可追溯；旧 context 仍可
-  审计读取（不 crash、不 resurrect），只是不能再作为今日依据。
-- `AdviceSchema.parse` 校验结构，`disclaimers` 由工具直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略
+写回时效按 `kind` 取 `packages/core/src/entity/analysis-context.ts` 的 `analysisTimingRules`。
+`analysisContextTiming` / `analysisContextTimingError` 是装配、入队、写回、刷新共用的唯一规则实现：
+
+| kind | `ruleVersion` | `writeUntil` | `dataAsOf` 过期 |
+|---|---|---|---|
+| `advice_stock` / `advice_position` / `advice_strategy_candidate` | `intraday-action-v1` | `min(现在+30 分钟, 当日 15:00 Asia/Shanghai)` | 超过 30 分钟 |
+| `advice_market` | `market-analysis-same-day-v1` | `min(现在+24 小时, dataAsOf 的上海自然日次日 00:00)` | 超过 `dataAsOf` 的上海自然日（次日 00:00） |
+| `advice_strategy_candidate_after_close` | `after-close-strategy-v1` | `min(现在+24 小时, dataAsOf+7 天)` | 超过 7 天 |
+| `research_directions` / `strategy_version_proposal` / `strategy_insight_narrative` | `research-analysis-30d-v1` | `min(现在+24 小时, dataAsOf+30 天)` | 超过 30 天 |
+
+超过 `writeUntil` / `expiresAt` → `context_expired`；超过该 kind 的数据有效期 → `stale_context`。
+15:00 截断只适用于盘中行动类，盘后策略候选与策略研究不被当日收盘截断。
+
+市场级（`advice_market`）自 REQ-M3-20 起按 **Asia/Shanghai 自然日**判定，用显式 `sameDayOnly`
+表达，不用固定毫秒数近似。跨日市场事实不进可用事实，`missingFacts` 留下 blocking 原因码
+`market-advice-same-day-only`（context 披露 `unavailable`），写回返回 `stale_context`。
+市场级判断引用须带 `observedAt`；当日 15:00 之后或非当日的观察由 `classifyMarketObservation`
+标为「历史观察」，保留可读但不作为当前建议依据。规则带 `ruleVersion`，context 带
+`timingRuleVersion`；旧 context 仍可审计，但不能复活为今日依据。
+
+其它 Advice 写回约束继续由领域工具执行：
+
+- `AdviceSchema.parse` 校验结构，`disclaimers` 由工具填入 `STANDARD_DISCLAIMERS`
 - `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条过 prompt-injection 文本清理，
   命中模式的片段替换为 `[redacted]`（`packages/tools/src/internal/sanitize-advice.ts`）
 - `validUntil` 由工具按 horizon 计算：intraday 取当日 15:00，其余取 `adviceExpiryDays[horizon]` 个交易日
+
+完成 AnalysisJob 与保存 Advice、研究工作区、待审批策略版本或叙事结果须在同一事务提交；
+重试不重复发布，死信保留错误。`AnalysisProvenance` 记录生成器、模型、技能版本、事实包和任务来源；
+`legacy-ai` 仅表示迁移前缺完整来源的历史建议，不推断已知模型。策略提案仍需原有发布流程。
+
+市场分析的个人范围仅含指定账户有效持仓与全局启用 Watchlist；其它账户持仓和未关注事件股票
+不扩大范围。外部即时指数、情绪与新闻只有被持久化并纳入事实包后，才能宣称为 Advice 的冻结依据；
+聊天刷新本身不构成写回证据。实时外部事实的持久化引用还须通过 `externalMarketFact` 存在性检查。
 
 ### 6.4 复盘层
 
@@ -938,8 +886,8 @@ Account.cashBalance、所选来源修订和请求回执。该路径只允许对�
 
 写请求由 `accountId + requestId` 标识：同键同内容返回已保存回执，同键异内容拒绝；
 账本、来源或修订已变化时要求刷新确认，任一提交失败不得留下部分成交或关联。
-Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源校验，并将请求绑定到当前账户。
-页面在发送前保存未决请求，恢复时校验原账户并查询回执或复用原请求，避免丢失响应后重复入账。
+当前复盘写入由插件精确 Operation policy 绑定 owner 账户并保存请求回执；丢失响应后先核对回执，
+避免重复入账。旧 Web 的复盘、专用成交录入和补充报告端点已退役，不构成 trade 暴露例外。
 导出包含修订、关联与回执；合并导入在事务中校验跨账户关系和不可变内容冲突，失败全量回滚。
 
 `list_decision_reviews` 支持 `source`（依据发生时间）与 `recorded`（修订记录时间）两种口径，
@@ -977,17 +925,17 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 
 ### 7.1 副作用分级（重申）
 
-| 等级 | tool 例 | 远端面默认 | Web 默认 | CLI/TUI 默认 |
-|---|---|---|---|---|
-| `read` | `list_holdings`, `get_advice` | ✅ | ✅ | ✅ |
-| `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `external` | `fetch_quote`, `send_notification` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `queue` | `claim_analysis_jobs`, `complete_analysis_job` | ⚠️ opt-in | ❌ | ✅ |
-| `trade` | `record_decision_trade` | ❌ | ❌ | ✅ |
+| 等级 | tool 例 | 当前插件准入 |
+|---|---|---|
+| `read` | `list_holdings`, `get_advice` | 精确 read allowlist；不因在 registry 中就自动暴露 |
+| `write` | `add_holding`, `add_trade` | 精确 Operation policy，按明确意图执行并保留回执 |
+| `external` | `fetch_quote`, `send_notification` | market allowlist 或精确 Operation policy，组合能力逐项校验 |
+| `queue` | `record_advice`, `complete_analysis_job` | 交互 `record_*` 有精确 policy；claim/complete/fail 管理工具默认不暴露 |
+| `trade` | `record_decision_trade` | 永不经插件原生工具、HTTP 或其它远端面暴露 |
 
-插件与 Web 是模型/远端可调用面，trade 类工具由 `selectExposedTools` 按类型过滤掉，
-`requiredCapabilities` 含 `trade` 的工具一并拒绝。CLI 与 TUI 是本机可信操作员入口，
-`tools call <name>` 直接取注册表执行、不设副作用闸口，由人显式指名调用即视为人工确认。
+`selectExposedTools` 同时过滤 `sideEffect=trade` 与 `requiredCapabilities` 含 `trade` 的工具。
+`LUOOME_EXPOSE_TRADE=true` 在任何业务 IO 前使插件启动失败。独立 CLI/TUI 已删除，
+没有可绕过当前暴露规则的操作员命令入口。个人写入的幂等与授权协议见「纯插件执行与授权内核」。
 
 ### 7.2 Schema 推导
 
@@ -1028,7 +976,7 @@ type ToolError =
 - `daily-review`：当日建议 + 7 日准确率 + 连板天梯 → 结构化日报
 - `opening-report`：生成并幂等保存指定交易日的结构化开盘简报
 - `closing-report`：生成并幂等保存指定交易日的结构化收盘复盘
-- `closing-report-cutoff`：收盘截止时点核对各账户批次状态；批次未完成也按账户发布并显式标 partial
+- `closing-report-cutoff`：核对策略与账户批次就绪状态，全部预期批次完成后统一发布；18:00 不强行发布未完成批次的缺口报告
 - `weekly-report`：按本周真实交易日生成并幂等保存结构化周报
 - `risk-report`：持仓 + 集中度 + VaR 估算拼成风险日报（大盘背景随内置 AI 下线移除）
 - `snapshot-account-performance`：按账户快照绩效指标（基准未配置时保持 unavailable）
@@ -1067,7 +1015,7 @@ type ToolError =
   `list_trading_plans(currentOnly=true, includeMonitoring=true)` 按计划聚合后限制数量，
   返回 `views`（主版本、修订草案）与 `monitoring.expiresAt`（含存量草案的实际截止时间），
   监控投影从复核审计补齐 `lastReviewedAt` / `nextReviewAt`，复核时间更新不延长硬期限；
-  Web 根据服务端投影显示当前计划和历史，不复制版本选择与过期规则。
+  插件面板根据服务端投影显示当前计划和历史，不复制版本选择与过期规则。
 - `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
   `batch_quote` 落库后派生账户事实，再按新鲜行情求值计划条件，
   入场条件按 ALL 合成单个边沿，风险/退出命中阻止入场提醒；风险与退出条件只在对应仓位已持仓时才投递提醒，
@@ -1162,8 +1110,8 @@ PRD §5 要求「提醒消息必须含触发价、止损/目标价、反证、�
 | | Tool | Workflow |
 |---|---|---|
 | 粒度 | 原子 | 组合 |
-| 可独立暴露给远端面 | ✅ | ❌ |
-| 可被 agent 编排 | ✅ | ❌（避免循环） |
+| 可独立暴露给远端面 | 按暴露策略 | Workflow 对象不直接暴露；可提供精确 batch 入口 |
+| 可被 agent 编排 | 按准入调用 | 经插件精确 `run_*` 调用既定编排，不开放任意 workflow 执行 |
 | 可手动触发 | ✅ | ✅ |
 | 必须有 Zod schema | ✅ | ✅ |
 | 必须可测试 | ✅ | ✅ |
@@ -1171,10 +1119,10 @@ PRD §5 要求「提醒消息必须含触发价、止损/目标价、反证、�
 ### 8.3 模型推理不在 workflow 内
 
 DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后，仓内 workflow **不含模型推理步骤**：
-core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContext` 也没有 LLM 槽位。
-需要模型结论的流程由 DSH 交互分析实例经 `record_advice` / `record_analysis_result`
-写回本仓（§6.3）；批量队列写回能力保留，默认部署无生产者、无常驻消费者，workflow 只消费
-已落库的事实与 Advice。
+领域包不导入生成式模型 SDK，`ToolContext` 不持有 LLM 实例；研究 embedding 的受控例外见 §3。
+需要模型结论时，由 DSH 会话直接经 `record_advice` / `record_analysis_result` 写回，或由插件的
+可选宿主执行 Adapter 沿队列提交（§6.3）。默认插件没有队列生产入口与常驻消费者，workflow
+只消费已落库事实和 Advice，不自行向模型供应商发请求。
 
 因此 workflow 步骤的约束是：
 - 输入是结构化数据（不是字符串拼接）
@@ -1185,7 +1133,7 @@ core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContex
 
 > **已下线（REQ-M2-03 / T13）**：`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例已删除，
 > `deploy/dsh/mcp-tool-probe.ts` 一并移除。本节的规则本身仍然生效，但唯一实现已归位到
-> `packages/tools/src/exposure/judge.ts`，由 DSH 插件的 read/market surface 与 Web 面消费；
+> `packages/tools/src/exposure/judge.ts`，由 DSH 插件的 read/market surface 消费；
 > 交互分析写回契约迁到 `packages/dsh-luoome/src/host/analysis-surface.contract.e2e.test.ts`。
 
 ### 9.1 传输（历史）
@@ -1213,7 +1161,7 @@ export const judgeTool = (tool: JudgedTool, criteria: ExposureCriteria): Exposur
 ```
 
 read 默认暴露；write / external / queue 须显式 opt-in。trade 没有 opt-in 通道 ——
-`LUOOME_EXPOSE_TRADE=true` 让插件/Web 在创建目录、打开事实库之前就启动失败
+`LUOOME_EXPOSE_TRADE=true` 让插件在创建目录、打开事实库之前就启动失败
 （`assertTradeNeverExposed`），trade 类工具同时被 `selectExposedTools` 按类型过滤掉
 （`sideEffect === 'trade'` 或 `requiredCapabilities` 含 `'trade'` 都拒绝）。
 
@@ -1229,13 +1177,12 @@ luoome 内部 snake_case，派生出的 MCP / OpenAI schema 同样 snake_case。
 
 | 消费者 | 入口 | 暴露范围 |
 |---|---|---|
-| Web | Hono HTTP API | read 默认；write 需 opt-in + 同源校验；trade 仅走专用人工路由 |
-| DSH 插件 | `dsh-luoome` 原生工具 + 精确写回 policy | read 默认；write/external/queue 走精确 policy；trade 永不 |
+| DSH 会话 | `dsh-luoome` 原生工具 + 精确 Operation policy | read/market allowlist；写入按明确意图与精确 policy；trade 永不 |
+| DSH 插件面板与投资设置 | 官方 WebServer 的 `/api/luoome/*` 固定路由 | owner、Host/Origin、输入范围校验；共用领域 tools 与 Operation 回执 |
+| DSH 定时任务 | `executeScheduled` + 精确批处理入口 | 默认关闭；启用后仍核对真实投递、任务指纹、档位与持久授权 |
 
-独立 CLI 与 TUI 已随 T15 下线（`bin/luoome`、安装 shim、Homebrew formula 一并删除）；
-现在只有 Web 与 DSH 插件两个消费面。
-
-Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
+独立 CLI/TUI、stdio MCP 与 `apps/web` 源码均已退役；目录内残留构建产物不代表现役 surface。
+当前浏览器界面是插件的 client 面板，由 DSH 宿主提供传输与会话。
 
 ## 11. 数据流示例
 
@@ -1258,55 +1205,34 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 [DSH agent]  整合生成自然语言答复（保留反证、风险、免责声明、有效期）
 ```
 
-默认暴露面只有 read；要取实时行情需另开 `LUOOME_EXPOSE_EXTERNAL=true` 才能用 `batch_quote`。
-**客户端拿不到本仓现场生成的建议** —— 建议只能来自已落库的 Advice（由 DSH 交互分析实例或手动 worker 写入）。
+插件 read 与 market external 使用独立精确 allowlist，环境开关不扩大名单；实时行情须经获准的
+market 工具。以上只读查询返回已落库 Advice；需要新建议时另走 §6.3 的 DSH 分析与写回路径。
 
 ### 场景 B：TUI 看持仓与已有建议
 
+本标题保留历史引用锚点，TUI 与 opentui 实现已退役。当前对应旅程由 DSH 插件持仓面板承担：
+
 ```txt
-[TUI 启动]
-   │
-   ▼
-[opentui] ───► list_holdings + get_advice
-                  │
-                  ├──► list_holdings  ──► HoldingRepo
-                  └──► get_advice     ──► AdviceRepo（已落库建议，按 subjectId 取最新）
-                  │
-                  ▼
-              [opentui 渲染持仓面板：决策 / 信心度 / 有效期 / 理由 / 证据 / 反证 / 风险]
-              [无对应建议时显示「（暂无建议）」—— 内置 AI 已下线，不再本地生成]
+DSH client 面板 → 固定面板读计划 → list_holdings / get_advice → SQLite
+               ← 估值、已有建议、事实时间与缺口 ← 领域 tools
 ```
+
+client 只渲染服务端投影，不补算缺失价格或生成建议；实时刷新须另经获准的 market 工具。
 
 ### 场景 C：DSH 消费者处理待分析队列（手动/隔离验收链路）
 
 ```txt
-[手动/隔离环境显式拉起的 worker 轮询]
-      │
-      ▼
-[luoome-worker 手动/隔离验收实例] ───► claim_analysis_jobs (queue)
-      │                                   │
-      │                                   ▼
-      │                         { job, claimToken, context }
-      │                                   │
-      │                                   ▼
-      │                         get_analysis_context (read) ──► 冻结事实包
-      │                                   │
-      │                                   ▼
-      │                         宿主模型推理（不在本仓，模型信息记进 provenance）
-      │                                   │
-      │                                   ▼
-      └──► complete_analysis_job (queue) ─┴─► record_advice (queue) ──► Advice 落库
-                                                   │
-                                                   ▼
-                                          [TUI / Web / DSH 插件读到新 Advice]
+显式测试/内部生产者 → enqueue_analysis_job → AnalysisJob
+宿主 JobRunner 或显式消费者 → 装配 + claim → { job, claimToken, context }
+                            → DSH 模型 → complete_analysis_job → 原子结果与终态
+DSH 插件 → 读取已落库结果
 ```
 
-事实包过期时消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
-租约超时未完成的 job 回收后可被重新认领。
-
-> 2026-10-24 增补：默认部署（Web + Caddy）不再运行该消费者，队列只是保留的领域能力。
-> 日常交互分析经 `luoome-analysis` 实例的 `record_*` 直接写回，不创建 `analysis_job`；
-> 本场景仅在手动/隔离 worker 验收时使用，空队列不会产生任何模型请求。
+事实包过期时显式消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
+有效 token 最多刷新一次，不延长租约。失租后旧执行者停止写回，超时任务可回收重领。
+本场景描述保留的队列契约和可选执行实现；普通后台分析需显式 `analysisModel`，默认部署
+没有生产者和常驻消费者，已删除的 `luoome-worker` / `luoome-analysis` MCP 实例不再是入口。
+日常交互分析走插件 `record_*`，不创建 AnalysisJob。
 
 ### 11.1 同一语义的两处实现：有意不同清单（task-25 排查留痕）
 
@@ -1323,7 +1249,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 | 2 | **账户健康**：`get_account_facts`（账本完整性：`reconcileCashBalance` 的 `reconciled` 与 `gaps`） vs `get_portfolio_risk`（价格覆盖：`coverage.pricedCount` / `unpricedStockIds`） | 两个**独立维度**：账本是否自洽 ≠ 价格是否齐全。合并会让「手工录入持仓（无对应成交）」这类合法路径被整体打成 `unavailable`（误报） | 同一账户可能出现「facts 说 unavailable、risk 说 available」——这是**正常**，不是矛盾。两者各自在输出里披露自己的维度，**不做整体降级**（细则见下） |
 
 | 3 | **报告写入口**：`save_report`（`packages/tools/src/internal/workflow-only-tools.ts:52`，**workflow-only，无 agent 面入口**） vs `write_report_artifact`（`packages/dsh-luoome/src/host/report-artifact-operations.ts`，**operation policy，模型可经 prepare/confirm 调用**） | **写库 = 改事实**，只能由 workflow 在算完全部事实后一次性提交；**写文件 = 产出交付物**，可由模型按用户明确意图触发。这是**刻意的不对称** | 想给模型「存报告」的能力时，不要顺手把 `save_report` 加进 policy——那会让模型可以不经事实装配直接写库。要交付文件就调 `write_report_artifact` |
-| 4 | **交易日历**：core `previousTradingDate`（`packages/core/src/trading-calendar.ts:230`，入参 `Date`） vs `previousTradingDay`（`packages/workflows/src/opening-report.ts:44`，入参 `string`） | 签名不同（Date vs 日期字符串），但**语义相同**。core 版是唯一日历事实源；workflow 版目前自带一份 `isWeekend/isHoliday` 循环 | **两者当前结果一致**（都按上海日倒推）。下一轮统一时应把 workflow 版改成 `previousTradingDate(shanghaiDate(date))` 的薄包装——**在此之前，新增日历逻辑不许多出第三份** |
+| 4 | **交易日历**：core `previousTradingDate`（入参 `Date`） vs `opening-report.ts` 的 `previousTradingDay`（入参日期字符串） | 两个 Interface 的入参形式不同，日历 Implementation 已统一；workflow 通过 `previousTradingDate(shanghaiDate(date))` 薄包装调用 core | 日期字符串转换保留在调用处，交易日历规则只有 core 一份；新增调用继续复用，不另写周末/节假日循环 |
 | 5 | **交易日键 vs 日历日**：`DailyBar.date` / `factDate`（UTC 午夜键，`packages/core/src/strategy/fact-date.ts:54`） vs `dateInShanghai`（用户可见日历日） | **必须不同**：bar 的日期是全仓约定（`tradingMidnight` = UTC 午夜），事实日和回测窗口都建在它上面；用户可见日期是 Asia/Shanghai 自然日。把两者统一会让已落库的 bar 日期整体错位 | 行情/事实/回测**一律用交易日键**；报告期、文件名、展示**一律用上海日**。判据是「这个日期会不会拿去和已落库的 bar 比对」 |
 | 6 | **面板健康**：服务端 `PANEL_HEALTH_STATUSES`（`packages/dsh-luoome/src/host/panel-health.ts:14`：available/partial/unavailable + 原因码 + 聚合 asOf） vs client `HEALTH_LABEL`（`packages/dsh-luoome/src/client/projection.js:409`：数据健康 / 数据部分可用 / 数据不可用） | REQ-M3-09 Q1/Q5 裁定：**判定在服务端，client 只做措辞与配色**。client 不得自行推断可用性 | 服务端改三档语义时 client 措辞表要同步；**client 永远不允许出现「自己判断可用性」的代码**（判据只能读 `health.status`） |
 | 7 | **建议五段 vs 报告六槽 vs 通知摘要**：`ADVICE_SEGMENTS`（5 段） / `REPORT_ENVELOPE_SLOTS`（6 槽）/ `report-notification.ts` 的 `notificationSections` 白名单 | **三者不是同一集合**，所以不是「抽一个常量三处引用」。① 六槽 = 五段 + `dataAsOf`（报告作为交付物多一个观测时点，代码里 `[...ADVICE_SEGMENTS, 'dataAsOf']`）；② 通知摘要选的是 **`Report.sections[].key`**（`market-pulse` / `strategy-actions` / …），与建议五段**完全不重叠**——把它并进五段是「把两套语义硬焊」 | 段名同源（通知兜底文案由 `ADVICE_SEGMENTS` + `segmentLabel()` 生成），**措辞可各自不同**。谁要新增「建议段」，改 `ADVICE_SEGMENTS` 一处；谁要新增「报告段」，改 `ReportSection.key` 与通知白名单两处 |
@@ -1440,9 +1366,12 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 | `packages/core/src/entity/report-document.ts` + `workflows/src/internal/report-envelope.ts` | 报告 envelope（`REPORT_ENVELOPE_SECTION_KEYS`，六槽：另含 `dataAsOf`） |
 | `packages/tools/src/internal/report-notification.ts` | 通知摘要（第二套措辞，只做裁剪） |
 
-**现状**：三处**同构但独立**——任一处的段名/阻断规则改动，另外两处不会跟着变，且没有测试能发现。
-**结论**：这是待统一项（task-25 U2/U3），**必须一批做**（抽 core 的段常量 + `missingSegments()`，三处引用），
-不许只改一处。在统一前，改任一处必须在另外两处加对照断言。
+**当前实现**：core `ADVICE_SEGMENTS` 与 `missingAdviceSegments` 已统一段名和缺段判定；
+`ADVICE_CARD_SEGMENTS` 是同一数组的兼容别名，`REPORT_ENVELOPE_SLOTS` 在五段后追加
+`dataAsOf`，通知兜底措辞也复用段名与 `segmentLabel()`。
+
+三处渲染形态与用途仍有区别：卡片保留 `renderable/blocked`，报告 envelope 强制六槽，通知
+另按报告 section 白名单裁剪。维护时复用共同概念，不把三种产物或各自适用规则合并成一套输出。
 
 ## 12. 安全模型
 
@@ -1453,7 +1382,7 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 - advice 输出必含 disclaimers
 - advice 可被 outcome 验证，准确率可统计
 - 密钥只走本地 `.env`，不入 git，不入日志
-- 宿主工具面默认信任本地 DSH 进程（stdio 入口已随 M2-03 下线），HTTP 面需要同源校验与登录 token
+- 原生调用核对当前 owner 与活 Agent；HTTP 经 DSH Connection.admit、Host/Origin 与 owner guard，luoome 不自建登录体系
 - 所有 adapter 调用有超时和重试上限
 - 所有 IO 异常落到 `ToolError`，不抛 raw exception
 
@@ -1464,7 +1393,7 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 1. 在 `tools/<name>.ts` 用 `defineTool` 定义
 2. 注册到 `toolRegistry`
 3. 加单元测试 + 集成测试
-4. 自动获得 toolRegistry 的 MCP / OpenAI / OpenAPI schema 派生，以及 TUI / CLI / Web 暴露
+4. 从 Zod schema 派生类型与工具描述；按需求显式加入插件 read/market allowlist 或精确 Operation policy，注册本身不自动开放入口
 
 ### 13.2 加新 advice workflow
 
@@ -1473,55 +1402,51 @@ client 侧配套守卫：`packages/dsh-luoome/src/client/projection.test.js` 的
 1. 在 `packages/workflows/src/<name>.ts` 用 `defineWorkflow` 定义
 2. 通过 `ctx.tools.get_advice.execute()` / `ctx.tools.get_advice_stats.execute()` 读取已有建议，
    通过 `ctx.tools.*.execute()` 获取事实和写入结果，不直接访问 repository 或 adapter
-3. 需要产生新建议时，交给分析队列消费者（`record_advice`），不要在 workflow 内引入模型调用
+3. 需要新建议时，先由 DSH 交互分析经插件 `record_advice` 写回，再由 workflow 消费；明确需要批量分析时复用可选队列执行契约，不在 workflow 内引入模型调用
 4. 加 workflow 集成测试；测试替身只限测试边界，生产路径不注入 mock 数据
 
 ### 13.3 加新数据源
 
-1. 在 `adapters/market/<name>.ts` 实现 `MarketDataAdapter`
-2. 注册到 `marketManager`
-3. 加健康检查 + 限速配置
+1. 在对应领域实现能力 Adapter；行情能力满足现有 `MarketDataAdapterLike` / capability Interface，其它数据域保持独立端口
+2. 在共享 composition root 和 `SourceRegistry` 注册真实能力，复用已有配置与观测
+3. 补齐解析、健康观测、限速与失败测试；保持事实时间和缺失语义，不用当前快照代替历史 PIT
 
 ### 13.4 加新 surface
 
-新 Discord bot / Slack bot：从 `toolRegistry` 取 tool，不碰 core / tools / adapters。
+新增 surface 须有明确需求，并经现有 tools、暴露面判定和组合能力校验接入；不得复制领域逻辑或
+绕过 Operation 回执与 trade 禁止暴露规则。当前产品仅维护 DSH 插件入口，不预先增加其它通信渠道。
 
 ## 14. 不在范围的设计决策（已定，不再讨论）
 
-- ✅ Bun + TypeScript
-- ✅ SQLite + Drizzle
-- ✅ opentui
-- ✅ Zod 4.x
-- ~~✅ MCP stdio 主 + HTTP 后置~~（stdio 入口已随 REQ-M2-03 下线）
-- ✅ Monorepo from day 1
-- ✅ Advice 内置（不是可选模块）
-- ✅ Advisor 思路：human-in-the-loop，advice ≠ trade
+- ✅ TypeScript workspace；Bun 用于构建与测试，生产插件由 DSH 的 Node 运行时加载
+- ✅ 单机 SQLite + Drizzle，默认插件使用 Node SQLite
+- ✅ DSH host/client/skills；独立 opentui TUI 与 stdio MCP 入口已退役
+- ✅ Zod 4.x 与 schema 驱动工具契约
+- ✅ Monorepo，领域能力统一经 tools 调用
+- ✅ Advice 是领域实体，推理由 DSH 承担
+- ✅ Advisor 思路：按明确意图执行并保留回执，advice ≠ trade
 
 ## 15. 待定（v0.4 前再定）
 
-- Web 栈：候选 Hono + Solid / Hono + HTMX / SolidStart / SvelteKit
-- 移动端：PWA 优先
-- 多市场：A 股 → 港股 → 美股 → 加密货币的统一抽象
-- 真实券商对接：仅在确认合规与安全模型后启动，且绝不通过 MCP 暴露
-- 多用户 / 多设备同步：默认不做，提供 export/import
-- LLM 提供商：OpenAI / Anthropic / 国内大模型（DeepSeek / Kimi / Qwen / GLM）的成本-质量-延迟三角
+本标题保留旧版本文档锚点；以下更新为当前决策，不再作为 v0.4 选型清单：
+
+- Web 与移动访问复用 DSH 插件面板及宿主能力，不再选择独立 Web/PWA 技术栈。
+- 当前研究范围以沪深 A 股为准，不为未来市场预建统一抽象。
+- 不新增自动券商下单路径，trade 不对任何插件或远端面开放。
+- 单机事实库与业务导入导出继续维护；多用户托管、订阅计费和云同步已退役。
+- 生成式模型供应商、模型目录、路由与凭据由 DSH 管理；luoome 仅声明已有业务所需输入和结果契约。
 
 ## 16. 个人订阅服务装配
 
 **单机形态只有一个入口：DSH 插件。** 旧单机 Web（`apps/web`）已随 M3-01 下线，
 其能力（五块面板、设置分区、数据导入导出）全部由 `packages/dsh-luoome` 提供；
-没有登录、没有租户隔离、没有支付计量。DSH 与事实库共用同一份单机 `luoome.db`。
+luoome 不自建登录、租户隔离或支付计量；宿主准入由 DSH 和部署层负责。插件使用单机 `luoome.db` 保存业务事实。
 默认部署是纯插件形态：DSH（Node）加载 `dsh-luoome`，安装/升级/备份/回退步骤见
 [用户手册](./USER_GUIDE.md#7-dsh-单机用法)，部署约束见 [宿主机直部署](../deploy/direct/luoome-dsh.service)。
 
-> 下面几段（认证传输、Origin 校验、CSRF/验证码限流、登录页 `/api/auth/config`、租户隔离）
-> 描述的是**已下线的 `apps/web` 服务器**。保留原文是为了让历史设计可追溯；
-> 当前形态不存在这些端点与开关，**不要按下文去改代码**。
-
-认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
-浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
-CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
-登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
+本节标题保留历史锚点；“个人订阅服务”不再是当前产品形态。旧 `apps/web` 的登录、邮件、
+验证码、租户隔离及 `/api/auth/config` 已下线，历史托管资料见文档归档。当前 HTTP 身份与
+Host/Origin 校验由 DSH 宿主和插件 owner guard 负责，不恢复旧 Web 认证系统。
 
 模型推理由 DSH 承担，luoome 侧没有模型设置页，也不做用量计量。仓内已无模型目录文件
 （原 `$LUOOME_HOME/ai-models.json` 随 `packages/adapters/src/llm/` 一并删除）；
@@ -1529,14 +1454,15 @@ CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后
 
 没有 control.sqlite、没有租户：全部事实落在单机 `luoome.db`。
 core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现共享 contract tests。
-空库原子初始化一个默认投资 Account；已有唯一账户原样复用，多账户异常保留数据并停止自动迁移。
+默认插件要求受信任配置绑定已经存在的投资账户；不会在启动时创建示例账户或猜测 owner。
+历史 personal 初始化能力与当前插件启动分开，不把初始化或单账户迁移规则当作多账户领域限制。
 `update_account` 仅更新名称，资金/持仓依旧通过 ledger。
 
 托管形态的平台 Tools（私有 registry、订阅与预算门禁、请求级租户上下文）已随托管层下线删除，
 `packages/tools/src/platform` 不再存在。单机形态下所有业务能力走同一套 `packages/tools/src/registry.ts`
 公开 registry；默认部署的 DSH 暴露面由 `dsh-luoome` 插件控制（精确只读白名单、market external
-白名单与个人直接执行 policy），调度由 DSH 定时任务驱动。旧 MCP 过渡形态的四实例（已删除）
-（`luoome` / `luoome-settings` / `luoome-analysis` / `luoome-batch`）仅保留给手动/隔离验收。
+白名单与个人直接执行 policy），调度由 DSH 定时任务驱动。旧四个 MCP 实例及入口源码均已删除；
+保留的是领域队列工具和隔离验收契约，不是仍可启动的旧实例。
 
 单机形态没有租户运行时管理：每个请求一个本地 ctx，账户由 `ctx.user.defaultAccountId` 绑定。
 界面不提供新增/切换账户，服务端同时拒绝对应绕行。
@@ -1548,12 +1474,11 @@ workflows/tools/core，不进入领域 registry，也不依赖 MCP 或 DSH SDK�
 插件只在显式 batch opt-in 后挂载五条账户绑定 policy，完整要求 write + external。
 业务成功、用户额度、provider成本和通知状态分别表达，unknown不按超时猜测为零。
 
-默认账户复用原DecisionReview与开盘/收盘/周报。旧`watchlist-facts`属于补充报告，旧PersonalWatchFeedback
-保留历史读取，不与账户采纳/收益自动混算。原设置页只增加个人订阅/通知/账户名称/退出；平台模型密钥、
-数据源、Vault路径和整库恢复保留部署/运营边界，不能让一个租户修改所有用户的环境。
-
-共享写屏障覆盖Web、worker、provider活动、会话及迁移；新接入的业务/SSE也必须进入删除排空与恢复验证。
-恢复保持冻结，撤销旧凭证/fence，应用最新独立删除ledger，按业务回执对账且不重发旧通知，完成核对后才恢复外部副作用。
+默认账户复用 DecisionReview 与开盘/收盘/周报。旧 `watchlist-facts` 属于历史补充报告，
+旧 PersonalWatchFeedback 仅供历史读取，不与当前账户采纳/收益自动混算。
+投资设置提供允许的行情源与账户名称；账户维护、数据导入导出使用对应精确工具和入口，
+可用范围以当前 policy 为准，不推定已迁移全部旧 Web 设置。模型凭据由 DSH 管理。
+恢复沿用单机数据导入、备份和业务回执核对契约，不重发旧通知；旧租户删除屏障与订阅设置已退役。
 
 单机形态的运行与部署见 [宿主机直部署](../deploy/direct/luoome-dsh.service)，
 安装/升级/备份/回退步骤见[用户手册](./USER_GUIDE.md#7-dsh-单机用法)，
@@ -1577,24 +1502,21 @@ Drizzle 与 memory 实现共享合约测试。`analysis_job` 的 claim token 对
 core、tools、workflows、db、adapters 的生产代码不依赖 AI SDK；边界由 `infra/check-layers.ts`
 检查。领域工具只装配事实、校验和持久化，不自行推理。`write` / `external` opt-in 仍有效。
 
-默认纯插件部署的 read / market / 写操作面互相隔离：read 只接受纯 read 工具，market 只接受
-`sideEffect==='external'` 的精确工具，写操作只经个人直接执行 policy（含账户改名）；queue 管理工具、
-任意 settings registry 和 trade 不暴露。batch 默认关闭，启用后按明确意图直接执行或通过精确任务授权。旧 MCP 过渡形态的读面、设置面、分析面与批处理面曾按实例隔离（该形态已删除），
-手动 worker profile 仅用于隔离验收：`queue` 默认拒绝，`luoome-analysis` 用 read + queue 但收窄到
-精确三个工具名，手动 worker 实例才用 `QUEUE_TOOL_NAMES` 显式白名单。部署环境传入的
-`LUOOME_EXPOSE_*` 不得扩大任何面的暴露面。
+默认纯插件部署的 read / market / 写操作面互相隔离：read 接受精确 read 工具，market 接受
+精确 external 工具，写操作经个人直接执行 policy；queue 管理工具、任意 settings registry 与
+trade 不暴露。batch 默认关闭，启用后仍按明确意图或精确任务授权执行。
+部署环境传入的 `LUOOME_EXPOSE_*` 不得扩大任何面的名单。
 
-插件形态下 queue 面与 chat 面当前无生产者、也无常驻消费者；按 H1 保留不暴露，不摘除。
-「不暴露」的理由是没有调用入口，不是已经废弃，所以两者归「不暴露面（保留）」而不进 `retired`
-（`retired` 只表示已从 registry 摘除）：
+队列与历史 chat 能力保留但默认不暴露，不能据此推断已废弃；可选执行能力与当前入口分别是：
 
-- `enqueue_analysis_job` 不在领域 registry，只被 `packages/workflows/src/define-workflow.ts:232` 编排，
-  插件面没有任何入队入口；
-- `claim_analysis_jobs` / `complete_analysis_job` / `fail_analysis_job` 需要 claim → complete/fail 循环，
-  插件不运行 worker，三者被 `infra/dsh/plugin-install-acceptance.ts:731-733` 断言不得进入 policy；
-- `record_advice` / `record_analysis_result` 只作为 queue policy 可达，不作为 agent 工具暴露；
-- chat 面（`list_chat_sessions`、`append_chat_message` 等 6 个工具）的会话与消息由 DSH 宿主承载，
-  领域层没有插件入口。
+- `enqueue_analysis_job` 不在领域 registry，仅在 WorkflowToolMap 注册为内部工具；当前生产
+  workflow 没有入队调用，插件没有入队 policy。有 JobRunner 时已能启动后台任务，普通分析还需
+  显式 `analysisModel`，见 §6.3。
+- `claim_analysis_jobs` / `complete_analysis_job` / `fail_analysis_job` 保留租约消费与提交能力，
+  默认插件不运行轮询 worker，也不把这三个名字注册为 Operation policy。
+- `record_advice` / `record_analysis_result` 作为交互写回 policy 可达，不直接作为 agent 工具注册。
+- GoalRun 有显式生产 Operation 与宿主执行 Adapter，不等于 AnalysisJob，也不自动生成 Advice。
+- `list_chat_sessions`、`append_chat_message` 等历史 chat 工具没有插件入口，当前会话由 DSH 承载。
 
 **`execute_strict_strategy_backtest` 是内部执行步，不是对外入口**：它在 registry 里（保证
 「一个能力一份实现」），但既不在 read / market 白名单、也没有 operation policy，所以
@@ -1677,6 +1599,19 @@ admission、Host/Origin、no-store 和有界取消。历史读取由用户主动
 ## 纯插件执行与授权内核
 
 `packages/dsh-luoome` 的 DSH/HTTP 包装统一调用 tools 操作服务；`PluginAuthorityRepository` 在 core 定义，db 提供 memory/drizzle、同步 schema/DDL 与合约。操作冻结账户/输入并 CAS 认领，通用操作回执与业务事务分离，结果不明时通过既有业务 receipt 核对，不能自动重执行业务。
+
+`PluginOperation` 保存冻结输入与操作回执，绑定用户、账户、参数摘要及授权版本；它不替代
+DecisionReview 或 Analysis 的领域事务回执。`executing/unknown` 表示结果仍需核对，不可直接
+解释为业务失败或盲目重试。当前个人版 prepare 后直接 confirm，历史“待确认”命名不要求额外弹窗。
+
+`PluginAutomationGrant` 是人工建立的特定 DSH profile/session/task 授权，绑定任务定义指纹、
+账户、工具、精确参数、组合能力与有效期；它不等于 StrategySchedule，也不赋予交易权限。
+可信日程投递来自宿主持久事实，prompt、callId 和模型自报 taskId 不构成授权。batch 默认关闭，
+自动化档位默认 `off`；`notify` 只产草稿/提醒，`granted` 才在匹配 grant 后执行受控业务写入。
+设置、授权目录、持续运行状态与派发统一读取当前档位，写入闸门在实际执行时再次校验；
+不保留独立的调度器启动档位快照。派发器处理宿主投递，精确 policy 由既有操作服务集中检查。
+档位开关不替代逐任务授权。授权目录只读返回任务指纹与规范化调用，不创建任务或 grant；
+旧日程须在同一 ID/cron 上使用当前原生入口，核对指纹并逐项建立授权后再启用。
 
 个人版不再调用 ApprovalService，也不要求面板二次确认。原生与 HTTP 操作在 prepare 后直接 confirm，执行 token 的私有凭据仍经单调 guard 和 handler 核验；宿主对插件工具及 luoome 日程工具返回 ask 时由插件覆盖为 allow，明确 deny/cancel 与 owner guard 继续生效。调度身份来自当前 turn 消息与 ScheduleService 持久投递历史的关联，并绑定任务定义指纹、授权版本、账户及精确参数。
 

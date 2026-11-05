@@ -1,16 +1,18 @@
 # luoome 开发计划
 
-> 状态：单机形态的执行计划；顶层优先级以 §2.10 为准，以上日期保留为历史验收基线。
+> 状态：单机形态的阶段计划与验收记录；§2.10 是 2026-09 的 MVP2 基线，不代表当前插件范围。
+> 当前入口与能力状态以[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、[插件说明](../packages/dsh-luoome/README.md)为准。
 > 基线日期：2026-08-20；Strategy 可靠性复核：2026-08-20；账户绩效持续快照复核：2026-08-20
 > MVP 2.0 执行复核：2026-09-25。
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
 > 形态变更（2026-10-23）：多租户托管形态已下线，单机版成为唯一形态。
-> 当前主线是[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)：
-> 插件工具面、只读面板、技能目录、DSH 定时任务与队列消费（MCP 实例已随 REQ-M2-03 删除，
-> 见上文形态变更）。本页其余内容描述单机能力（行情底座、Strategy、Watchlist、账户绩效、
-> 报告与复盘）的历史执行证据与长期门槛，仍然有效。
+> 当前形态见[dsh-luoome 纯插件设计](./ddd/dsh-luoome-plugin-detailed-design.md)与[插件说明](../packages/dsh-luoome/README.md)。
+> [DSH 改造设计](./ddd/luoome-dsh-transformation-detailed-design.md)记录迁移过程；四实例 MCP、
+> 独立 CLI/TUI 和旧 Web 调度已退役，不按旧阶段任务重复实施。AnalysisJob 是可选后台路径，
+> 不是交互分析前提。本页其余内容保留历史执行证据；新工作先核对当前入口、用户需求和数据门槛，
+> 不因已有详细设计就默认排期或继续扩展实验能力。
 > 已下线的托管方向文档（开发改造计划、详细设计、运行手册、定价与支付调研等）统一见
 > [文档归档清单](./README.md#历史归档)，只作历史留存，不是当前行为说明。
 

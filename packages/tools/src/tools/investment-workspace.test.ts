@@ -70,6 +70,7 @@ const seedStrategy = async (
   id = 'direction-a',
   stockIds = ['002594.SZ', '600519.SH'],
   overrides: Partial<StrategyRun> = {},
+  unselectedStockIds: readonly string[] = [],
 ) => {
   await ctx.repos.strategy.create({
     id,
@@ -104,16 +105,16 @@ const seedStrategy = async (
       finishedAt: now,
       status: 'complete',
       scope: 'operational',
-      inputSnapshot: { stockIds, universeKind: 'explicit' },
+      inputSnapshot: { stockIds: [...stockIds, ...unselectedStockIds], universeKind: 'explicit' },
       providerStatuses: [],
       summary: { selected: stockIds.length },
       publication: { status: 'published', reasons: [], decidedAt: now },
       ...overrides,
     },
-    results: stockIds.map((stockId) => ({
+    results: [...stockIds, ...unselectedStockIds].map((stockId) => ({
       runId: `${id}-run`,
       stockId,
-      selected: true,
+      selected: !unselectedStockIds.includes(stockId),
       score: 60,
       evidence: [`${id}:rule:${stockId}`],
       ruleEvaluations: [],
@@ -422,6 +423,37 @@ describe('investment directions and consensus tools', () => {
       runId: 'direction-a-run',
       stockId: '002594.SZ',
     });
+  });
+
+  it('reads and tracks selected candidates without loading diagnostic results', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedStrategy(ctx, 'direction-a', ['600519.SH'], {}, ['000001.SZ']);
+    const research = await seedResearch(ctx);
+    expect((await saveInvestmentConsensusTool.execute(saveInput(research), ctx)).ok).toBe(true);
+    const diagnosticRead = vi
+      .spyOn(ctx.repos.strategyRun, 'listResults')
+      .mockRejectedValue(new Error('diagnostic details are not loaded by candidate readers'));
+
+    const candidates = await getInvestmentCandidatesTool.execute({}, ctx);
+    expect(candidates).toMatchObject({
+      ok: true,
+      data: { total: 1, candidates: [{ stockId: '600519.SH' }] },
+    });
+    const started = await setInvestmentTrackingTool.execute(
+      { requestId: 'selected-only', expectedVersion: 1, action: 'start' },
+      ctx,
+    );
+    expect(started).toMatchObject({ ok: true, data: { tracking: { status: 'partial' } } });
+    if (!started.ok) return;
+    const item = started.data.tracking.items.find((entry) => entry.status === 'tracking');
+    expect(item).toBeDefined();
+    if (!item) return;
+    expect(
+      (await ctx.repos.watchlistMember.listMembers(item.watchlistId)).map(
+        (member) => member.stockId,
+      ),
+    ).toEqual(['600519.SH']);
+    diagnosticRead.mockRestore();
   });
 
   it('keeps confirmed plan conflicts distinct from known risks and missing evidence when the user insists', async () => {

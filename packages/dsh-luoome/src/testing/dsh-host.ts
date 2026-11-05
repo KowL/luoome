@@ -95,6 +95,7 @@ export const createDshTestHost = async (
   db: { repos: RepositoryRegistry; close(): void },
   options: {
     automationTier?: AutomationTier;
+    resolveAutomationTier?: Parameters<typeof createDshOperationHost>[1]['resolveAutomationTier'];
     policy?: 'ask' | 'never';
     resume?: boolean;
     withoutApproval?: boolean;
@@ -193,6 +194,9 @@ export const createDshTestHost = async (
     profile: 'validation',
     principalForSession: () => principal,
     automationTier: options.automationTier ?? 'off',
+    ...(options.resolveAutomationTier === undefined
+      ? {}
+      : { resolveAutomationTier: options.resolveAutomationTier }),
   });
   const results: Array<{ name: string; value: unknown; isError: boolean; diagnostic: string }> = [];
   const approvals: ApprovalOutcome[] = [];

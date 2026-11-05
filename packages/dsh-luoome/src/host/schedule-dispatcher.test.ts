@@ -11,7 +11,12 @@ import { createDshIdentity, dshScheduleHash } from './dsh-identity.js';
 import type { AutomationTier } from './production-config.js';
 import { createScheduleDispatcher } from './schedule-dispatcher.js';
 
-const setup = async (options: { automationTier?: AutomationTier } = {}) => {
+const setup = async (
+  options: {
+    automationTier?: AutomationTier;
+    resolveAutomationTier?: () => Promise<{ tier: AutomationTier }>;
+  } = {},
+) => {
   const domain = await buildTestContext();
   const principal = { userId: 'owner', accountId: domain.user.defaultAccountId };
   const now = Date.now();
@@ -87,9 +92,11 @@ const setup = async (options: { automationTier?: AutomationTier } = {}) => {
     service,
     repository: domain.repos.pluginAuthority,
     identity,
-    policies: [policy],
     principalForSession: () => principal,
     automationTier: options.automationTier ?? 'granted',
+    ...(options.resolveAutomationTier === undefined
+      ? {}
+      : { resolveAutomationTier: options.resolveAutomationTier }),
     now: () => now,
   });
   return { domain, principal, task, tasks, listeners, grant, dispatcher, service };
@@ -127,7 +134,6 @@ describe('schedule dispatcher', () => {
               now: Date.now,
             },
           ),
-          policies: [scheduledOperationFixture().policy],
           principalForSession: () => fixture.principal,
           automationTier: 'granted',
           now: Date.now,
@@ -152,6 +158,33 @@ describe('schedule dispatcher', () => {
       await fixture.dispatcher.reconcile();
       expect((await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name).toBe(
         before,
+      );
+    } finally {
+      fixture.dispatcher.dispose();
+      fixture.service.dispose();
+    }
+  });
+
+  it('recovers on the next reconciliation when the live tier resolver fails', async () => {
+    let available = false;
+    const fixture = await setup({
+      automationTier: 'off',
+      resolveAutomationTier: async () => {
+        if (!available) throw new Error('temporary settings read failure');
+        return { tier: 'granted' };
+      },
+    });
+    try {
+      const before = (await fixture.domain.repos.account.findById(fixture.principal.accountId))
+        ?.name;
+      await fixture.dispatcher.reconcile();
+      expect((await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name).toBe(
+        before,
+      );
+      available = true;
+      await fixture.dispatcher.reconcile();
+      expect((await fixture.domain.repos.account.findById(fixture.principal.accountId))?.name).toBe(
+        `${before}|host-callback`,
       );
     } finally {
       fixture.dispatcher.dispose();

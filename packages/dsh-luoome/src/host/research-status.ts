@@ -63,6 +63,7 @@ export interface ResearchContinuityOptions {
   readonly profile: string;
   readonly policyVersion: number;
   readonly automationTier: AutomationTier;
+  readonly resolveAutomationTier?: () => Promise<{ readonly tier: AutomationTier }>;
   readonly dailyCycleEnabled: boolean;
   readonly tasks?: () => Promise<readonly ScheduleCatalogEntry[]>;
   readonly principalForSession: (sessionId: string) => PluginPrincipal | null;
@@ -225,7 +226,9 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
         taskSource = 'unavailable';
       }
     }
-    const enabled = tierAllowsDispatch(options.automationTier) && options.dailyCycleEnabled;
+    const automationTier =
+      (await options.resolveAutomationTier?.())?.tier ?? options.automationTier;
+    const enabled = tierAllowsDispatch(automationTier) && options.dailyCycleEnabled;
     const active = tasks.filter((task) => task.status === 'active' && task.grantStatus === 'valid');
     const receipts = active
       .flatMap((task) => (task.operation === null ? [] : [task.operation]))
@@ -335,7 +338,7 @@ export const createResearchContinuityReader = (options: ResearchContinuityOption
       reasons,
       // 原样回显档位：压成 granted/off 会把 `notify` 吞掉，
       // 用户就看不到「派发但不写」这个状态。
-      automationTier: options.automationTier,
+      automationTier,
       schedule: scheduleResult,
       tasks,
       taskSource,

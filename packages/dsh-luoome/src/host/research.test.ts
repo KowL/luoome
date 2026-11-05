@@ -238,6 +238,7 @@ describe('continuous research status', () => {
   const configured = async (
     options: {
       automationTier?: AutomationTier;
+      resolveAutomationTier?: () => Promise<{ tier: AutomationTier; source: string }>;
       grant?: boolean;
       receipt?: 'executing' | 'unknown' | 'succeeded';
       outcome?: string;
@@ -405,6 +406,9 @@ describe('continuous research status', () => {
       profile: 'research-test',
       policyVersion: 1,
       automationTier: options.automationTier ?? 'granted',
+      ...(options.resolveAutomationTier === undefined
+        ? {}
+        : { resolveAutomationTier: options.resolveAutomationTier }),
       dailyCycleEnabled: true,
       tasks: async () => tasks,
       principalForSession: (sessionId) => (sessionId === task.sessionId ? principal : null),
@@ -417,6 +421,24 @@ describe('continuous research status', () => {
       grant,
     };
   };
+
+  it('uses the current tier for continuity status and preserves notify after live changes', async () => {
+    let tier: AutomationTier = 'off';
+    const fixture = await configured({
+      automationTier: 'off',
+      resolveAutomationTier: async () => ({ tier, source: 'table' }),
+      receipt: 'succeeded',
+    });
+    for (const [current, status] of [
+      ['off', 'disabled'],
+      ['granted', 'healthy'],
+      ['off', 'disabled'],
+      ['notify', 'healthy'],
+    ] as const) {
+      tier = current;
+      expect(await fixture.read()).toMatchObject({ automationTier: current, status });
+    }
+  });
 
   it('never treats enabled strategy schedule as proof of a running backend', async () => {
     const disabled = await configured({ automationTier: 'off', receipt: 'succeeded' });

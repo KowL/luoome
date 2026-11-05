@@ -1,3 +1,4 @@
+import { type StrategyDslV1, strategyDefinitionHash } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -16,18 +17,20 @@ import {
 const T0 = new Date('2026-07-29T01:00:00.000Z');
 
 describe('Watchlist tools', () => {
-  it('创建 personal Watchlist 后可添加、更新和查询 manual member', async () => {
+  it('省略类型与维护方式时创建 personal/mixed Watchlist，并可维护 manual member', async () => {
     const ctx = await buildTestContext({ clock: () => T0 });
     const created = await createWatchlistTool.execute(
-      {
-        id: 'quality-watch',
-        name: '质量观察',
-        kind: 'personal',
-        membershipPolicy: 'mixed',
-      },
+      { id: 'quality-watch', name: '质量观察' },
       ctx,
     );
-    expect(created.ok).toBe(true);
+    expect(created).toMatchObject({
+      ok: true,
+      data: { watchlist: { kind: 'personal', membershipPolicy: 'mixed', enabled: true } },
+    });
+    expect(await ctx.repos.watchlist.findById('quality-watch')).toMatchObject({
+      kind: 'personal',
+      membershipPolicy: 'mixed',
+    });
 
     const added = await addWatchlistMemberTool.execute(
       { watchlistId: 'quality-watch', stockId: '600519.SH', reason: '用户关注' },
@@ -68,6 +71,29 @@ describe('Watchlist tools', () => {
     expect(listed.data.items).toMatchObject([
       { watchlist: { id: 'quality-watch' }, memberCount: 1, sourceHealth: { active: 1 } },
     ]);
+  });
+
+  it.each([
+    { input: { membershipPolicy: 'manual' }, kind: 'personal', membershipPolicy: 'manual' },
+    { input: { kind: 'strategy' }, kind: 'strategy', membershipPolicy: 'mixed' },
+  ])('仅补齐省略字段，保留显式配置 $input', async ({ input, kind, membershipPolicy }) => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    expect(
+      await createWatchlistTool.execute({ id: 'explicit-watch', name: '显式配置', ...input }, ctx),
+    ).toMatchObject({ ok: true, data: { watchlist: { kind, membershipPolicy } } });
+  });
+
+  it.each([
+    { kind: 'portfolio', membershipPolicy: 'manual', errorKind: 'invariant_violation' },
+    { kind: 'portfolio', membershipPolicy: 'mixed', errorKind: 'invariant_violation' },
+    { kind: 'portfolio', errorKind: 'invariant_violation' },
+    { kind: 'system', membershipPolicy: 'synced', errorKind: 'invalid_input' },
+  ])('默认值不放宽显式类型约束 $kind/$membershipPolicy', async ({ errorKind, ...input }) => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    expect(
+      await createWatchlistTool.execute({ id: 'invalid-watch', name: '无效组合', ...input }, ctx),
+    ).toMatchObject({ ok: false, error: { kind: errorKind } });
+    expect(await ctx.repos.watchlist.findById('invalid-watch')).toBeNull();
   });
 
   it('synced Watchlist 拒绝手工添加成员', async () => {
@@ -203,6 +229,100 @@ describe('Watchlist tools', () => {
     if (!result.ok) return;
     expect(result.data.member.stage).toBe('archived');
     expect(result.data.sources[0]?.status).toBe('ended');
+  });
+
+  it('策略同步只接受完整入选集合，不接受缺漏或混入未入选股票', async () => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'rule-1', name: '测试规则', when: 'quote.close > 0', evidence: ['事实'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    await ctx.repos.strategy.create({
+      id: 'selected-strategy',
+      name: '入选集合',
+      description: '校验同步候选',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: 'selected-version',
+      createdAt: T0,
+      updatedAt: T0,
+    });
+    await ctx.repos.strategy.createVersion({
+      id: 'selected-version',
+      strategyId: 'selected-strategy',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: T0,
+      createdAt: T0,
+    });
+    await ctx.repos.strategyRun.commitRun({
+      run: {
+        id: 'selected-run',
+        strategyId: 'selected-strategy',
+        strategyVersionId: 'selected-version',
+        mode: 'scan',
+        scope: 'operational',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf: T0,
+        startedAt: T0,
+        finishedAt: T0,
+        status: 'complete',
+        inputSnapshot: {},
+        providerStatuses: [],
+        summary: { selected: 1 },
+        publication: { status: 'published', reasons: [], decidedAt: T0 },
+      },
+      results: [
+        { stockId: '600519.SH', selected: true },
+        { stockId: '002594.SZ', selected: false },
+      ].map((result) => ({
+        ...result,
+        runId: 'selected-run',
+        ruleEvaluations: [],
+        evidence: [],
+        dataAsOf: T0,
+      })),
+      signals: [],
+    });
+    await createWatchlistTool.execute({ id: 'selected-watch', name: '只同步入选' }, ctx);
+    const sync = (stockIds: string[]) =>
+      syncWatchlistSourceTool.execute(
+        {
+          watchlistId: 'selected-watch',
+          sourceKind: 'strategy',
+          sourceKey: 'strategy:selected-strategy',
+          sourceId: 'selected-strategy',
+          sourceVersionId: 'selected-version',
+          producerRunId: 'selected-run',
+          status: 'complete',
+          candidates: stockIds.map((stockId) => ({ stockId, reason: '入选', evidence: [] })),
+        },
+        ctx,
+      );
+    for (const candidates of [[], ['002594.SZ'], ['600519.SH', '002594.SZ']]) {
+      expect(await sync(candidates)).toMatchObject({
+        ok: false,
+        error: { kind: 'invalid_input', message: expect.stringContaining('selected') },
+      });
+      expect(await ctx.repos.watchlistMember.listMembers('selected-watch')).toEqual([]);
+      expect(await ctx.repos.watchlistMember.listSyncRuns('selected-watch')).toEqual([]);
+    }
+    expect(await sync(['600519.SH'])).toMatchObject({
+      ok: true,
+      data: { run: { status: 'complete', enteredCount: 1 } },
+    });
+    expect(await ctx.repos.watchlistMember.listMembers('selected-watch')).toMatchObject([
+      { stockId: '600519.SH' },
+    ]);
   });
 
   it('failed 同步不能携带候选，避免把失败结果写成 active source', async () => {

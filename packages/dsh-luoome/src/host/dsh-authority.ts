@@ -235,7 +235,9 @@ export const createDshOperationHost = (
         if (execution.name === SCHEDULED_OPERATION_TOOL) {
           const parsed = scheduledInput.safeParse(execution.arguments);
           if (
-            !tierAllowsDispatch(automationTier) ||
+            !tierAllowsDispatch(
+              (await options.resolveAutomationTier?.())?.tier ?? automationTier,
+            ) ||
             !parsed.success ||
             !(await identity.scheduled(
               { ...execution, signal: AbortSignal.any([execution.signal, lifetime.signal]) },
@@ -407,7 +409,10 @@ export const createDshOperationHost = (
               };
             return {
               ok: true,
-              data: { ...(await automationCatalog(principal)), automationTier },
+              data: {
+                ...(await automationCatalog(principal)),
+                automationTier: (await options.resolveAutomationTier?.())?.tier ?? automationTier,
+              },
             };
           },
         }),
@@ -511,7 +516,7 @@ export const createDshOperationHost = (
             !ticket ||
             !('scheduled' in ticket) ||
             disposed ||
-            !tierAllowsDispatch(automationTier)
+            !tierAllowsDispatch((await options.resolveAutomationTier?.())?.tier ?? automationTier)
           )
             return {
               ok: false,
@@ -524,14 +529,16 @@ export const createDshOperationHost = (
         },
       }),
     );
-    if (tierAllowsDispatch(automationTier) && options.policies.some((policy) => policy.scheduled)) {
+    if (options.policies.some((policy) => policy.scheduled)) {
       const dispatcher = createScheduleDispatcher(ctx, {
         service,
         repository: options.repository,
         identity,
-        policies: options.policies,
         principalForSession: options.principalForSession,
-        automationTier: 'granted',
+        automationTier,
+        ...(options.resolveAutomationTier === undefined
+          ? {}
+          : { resolveAutomationTier: options.resolveAutomationTier }),
         now: options.now,
       });
       removers.push(dispatcher.dispose);

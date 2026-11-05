@@ -80,6 +80,9 @@ export const mountDshWebProfile = (
     profile: options.profile,
     policyVersion: options.policyVersion,
     automationTier: options.automationTier ?? 'off',
+    ...(options.resolveAutomationTier === undefined
+      ? {}
+      : { resolveAutomationTier: options.resolveAutomationTier }),
     dailyCycleEnabled: options.policies.some(
       (policy) => policy.scheduled && policy.tool.name === 'run_strategy_daily_cycle',
     ),

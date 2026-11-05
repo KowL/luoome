@@ -140,12 +140,21 @@ describe('Strategy → Watchlist subscription tools', () => {
     );
     expect(subscribed.ok).toBe(true);
     const run = makeRun('run-complete');
-    await commitRun(ctx, run, [makeResult(run.id, '600519.SH'), makeResult(run.id, '002594.SZ')]);
+    await commitRun(ctx, run, [
+      makeResult(run.id, '600519.SH'),
+      makeResult(run.id, '002594.SZ'),
+      makeResult(run.id, '000001.SZ', false),
+    ]);
     const synced = await syncStrategyWatchlistSubscriptionsTool.execute(
       { strategyId: 'strategy-1', producerRunId: run.id },
       ctx,
     );
     expect(synced).toMatchObject({ ok: true, data: { status: 'complete', complete: 1 } });
+    expect(
+      (await ctx.repos.watchlistMember.listMembers('strategy-watch'))
+        .map((member) => member.stockId)
+        .sort(),
+    ).toEqual(['002594.SZ', '600519.SH']);
     const member = await ctx.repos.watchlistMember.findMember('strategy-watch', '600519.SH');
     if (member === null) throw new Error('member missing');
     expect(

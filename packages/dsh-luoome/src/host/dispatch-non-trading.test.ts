@@ -103,7 +103,6 @@ const setup = async (options: { isTradingDay: boolean }) => {
     service,
     repository: domain.repos.pluginAuthority,
     identity,
-    policies: [policy],
     principalForSession: () => principal,
     automationTier: 'granted',
     now: () => now,

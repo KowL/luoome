@@ -13,8 +13,9 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
-      // 嵌套 git worktree（.claude/worktrees/*）是其它分支的工作副本，不参与本树测试。
+      // 嵌套 git worktree 是其它分支的工作副本，不参与本树测试。
       '.claude/**',
+      '.agents/**',
       // 本地临时目录（构建/发布中间产物），不是仓库内容。
       '.tmp/**',
       // dsh-authority e2e 需要 Node 24 的完整宿主装配，由 bun 运行：
