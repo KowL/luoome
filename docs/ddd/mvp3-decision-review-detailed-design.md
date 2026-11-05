@@ -17,7 +17,7 @@
 | WatchTrigger 有全局 feedback；账户计划触发在 evalSnapshot 中保存 planVersionId | [触发实体](../../packages/core/src/entity/watch-trigger.ts)、[计划监控](../../packages/workflows/src/intraday-trading-plan-watch.ts) | 账户级反馈与结构化来源解码，不修改触发的行情、边沿或投递状态 |
 | 复盘聚合按持仓/交易股票投影 Advice 和观察，不证明这些共享事实属于该账户 | [get-decision-loop-review](../../packages/tools/src/tools/get-decision-loop-review.ts) | 将共享研究上下文与明确账户执行事实分开，披露覆盖范围 |
 | 收盘报告不可变且有补充版；周报同周期仍可覆盖更新 | [Report 仓储](../../packages/db/src/repository/drizzle/report.ts)、[report-runner](../../packages/workflows/src/internal/report-runner.ts) | 明确周报版本增量，补充反馈不能覆盖已保存的报告，也不能意外触发通知 |
-| Web 交易表单缺少完整时间/来源选择，复盘手输 Trade ID | [持仓操作](../../apps/web/public/js/holdings-actions.js)、[页面](../../apps/web/public/js/pages.js) | 来源上下文、已有成交选择、冲突恢复和可追溯回看 |
+| Web 交易表单缺少完整时间/来源选择，复盘手输 Trade ID | `apps/web/public/js/holdings-actions.js`、`apps/web/public/js/pages.js`（均已随 Web 面删除） | 来源上下文、已有成交选择、冲突恢复和可追溯回看 |
 
 MVP2 的计划生成、预算、盘中求值、行情资格和报告截止调度继续复用。本设计不修改 100%/30%
 预算默认值，不恢复行业上限、盘中 AI 改计划、T+20 或已移除的 AccountSnapshot。

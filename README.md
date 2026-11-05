@@ -5,14 +5,13 @@
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
 Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，并把多源数据织成可追溯事实。
 
-- 作为 **DSH 插件** 接入 DSH：默认部署由 dsh-luoome 在 DSH Node 进程内提供五块业务面板、随包技能与原生工具/审批，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）
-- 作为 **Web** 看板：账户、持仓、Strategy、Watchlist 与 AlertPlan（本地单机装配，随 DSH 面板使用）
+- 作为 **DSH 插件** 接入 DSH：这是唯一入口。dsh-luoome 在 DSH Node 进程内提供 7 个业务视图、投资设置、8 条随包技能与原生工具/操作回执，事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite）
 - 独立的 `luoome` CLI / TUI 已随 T15 下线：两个包、仓库内命令入口、安装 shim 与 Homebrew
   formula 一并删除；能力改由插件面板与工具提供，见
   [packages/dsh-luoome/README.md](./packages/dsh-luoome/README.md)
 
 > stdio MCP 用户入口（`packages/mcp`、`luoome mcp serve` 与四个 MCP 实例）已按 REQ-M2-03
-> 删除；暴露面判定归位到 `packages/tools/src/exposure/`，由插件面与 Web 面共同使用。
+> 删除；暴露面判定归位到 `packages/tools/src/exposure/`，只由插件面使用。
 
 当前形态是**单机版**：没有多租户、没有订阅计费、没有托管站点——DSH 是唯一入口，
 `$LUOOME_HOME/luoome.db` 是唯一事实库。批处理调度由 DSH 的定时任务负责，
@@ -33,16 +32,16 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - **Advisor-first**：每一份数据最终都服务于"可执行的投资建议"，不是堆数据。
 - **Agent-first**：所有能力都是 tool，没有"只能人用、agent 用不了"的功能。
 - **数据自持**：SQLite 保存在本机 `$LUOOME_HOME/luoome.db`，只有一份事实库。
-- **Schema-driven**：Zod schema 是 tool I/O 的事实来源，自动生成 TypeScript 类型、MCP tool 定义、OpenAI function calling schema。
+- **Schema-driven**：Zod schema 是 tool I/O 的事实来源，自动派生 TypeScript 类型与运行时校验。
 - **Workflow ≠ Tool**：tool 是原子能力，workflow 是组合；workflow 内置编排，tool 暴露给上层 agent。
-- **No magic**：每个数据源 / 适配器 / LLM 都显式可插拔，运行时可见。
+- **No magic**：每个数据源 / 适配器都显式可插拔，运行时可见。
 - **Human-in-the-loop**：建议 ≠ 行动。advice 永远不直接触发交易；下单始终需要人确认。
 
 ## 它做什么
 
 ### 数据维度（读 + 写）
 
-- 账户（单机多账户；Web 与 DSH 插件共享同一份账户事实）
+- 账户（单机多账户；插件面板与工具共享同一份账户事实）
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
@@ -56,11 +55,11 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - 只有用户明确订阅后，published operational StrategyRun 才能同步目标 Watchlist；complete 才能结束
   缺失来源，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改 Watchlist
 - 多源行情交叉验证
-- LLM 推理总结（每日复盘、个股分析）
+- 研究结论由 DSH 侧推理生成后写回，本仓只存事实包与 Advice，不做推理
 
 ### 建议维度（核心）
 
-- **个股建议**：基于技术面、基本面、StrategySignal 与 LLM 综合判断，输出 buy / sell / hold / watch / avoid 决策
+- **个股建议**：由 DSH 侧分析基于技术面、基本面与 StrategySignal 生成并写回本仓，输出 buy / sell / hold / watch / avoid 决策
 - **持仓建议**：每个持仓的继续持有 / 加仓 / 减仓 / 清仓建议
 - **市场观点**：每日大盘观点、行业轮动、热点板块
 - **风险预警**：跌破止损位、触发风控规则、异常波动
@@ -75,25 +74,23 @@ Bun workspace monorepo：
 
 ```txt
 packages/
-  core/        纯领域类型 + 不变量（无 IO）
-  db/          Drizzle schema + repository 实现
-  tools/       Tool 注册表 + Zod → TS/MCP/OpenAI 自动生成
-  adapters/    行情 / LLM / 通知 / 券商 等外部依赖适配
-  workflows/   内置编排：review / scan / diagnose / advise
-  cli/         命令行入口
-  tui/         opentui 应用
-apps/
-  web/         Hono + 同源静态仪表盘（本地单机装配）
-deploy/dsh/    独立 DSH 纯插件部署（compose、Caddy、插件 profile 装配）
-infra/dsh/     DSH 构建与受控验证底座
-docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
-homebrew/
-  luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
+  core/        纯领域类型 + 不变量（无 IO）+ repository 接口
+  db/          Drizzle schema + repository 双实现（drizzle / in-memory）
+  tools/       Tool 注册表 + Zod → TS/JSON schema 派生 + 暴露面判定
+  adapters/    行情 / 通知 / 事件 / 研究库 / 财务等外部依赖适配
+  workflows/   内置编排：策略日循环 / 报告 / 盯盘 / 计划 / 数据同步
+  batch/       确定性批处理入口（run_*），不进领域 registry
+  dsh-luoome/  唯一交付面：DSH 插件（host + client 面板 + skills）
+deploy/
+  direct/      宿主机直部署（systemd + Caddy + dsh-pocket）
+  dsh/         容器部署（compose / 镜像 / 升级脚本）
+infra/         分层守卫、文档事实守卫、测试基线与验收脚本
+docs/          全部文档（架构 / 实体关系 / 工具库存 / 路线图 / 安全 / 用户手册 / PRD / 设计文档）
 ```
 
 ## 环境变量
 
-单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是单机 Web 与 DSH 插件共用的配置；
+单机形态没有多租户与订阅体系，也没有 `HOSTED_*` 配置族。下面是插件使用的配置；
 部署侧的 DSH/插件变量（`DSH_*`、`LUOOME_OWNER_*`、`LUOOME_HOME`、`CADDY_IMAGE`）见
 [DSH 部署配置](deploy/dsh/production.env.example)。默认部署不再需要 `LUOOME_MCP_*`。
 
@@ -122,15 +119,15 @@ homebrew/
 | `FUYAO_MIN_INTERVAL_MS` | `200` | 共享请求启动间隔（毫秒） |
 | `FUYAO_RATE_LIMIT_COOLDOWN_MS` | `30000` | HTTP 429 缺有效 Retry-After 时的共享冷却（毫秒） |
 | `FUYAO_RATE_LIMIT_MAX_RETRIES` | `2` | 幂等请求的限流重试次数 |
-| `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径；Web 受管文件按用户隔离 |
+| `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径；受管文件按 owner 隔离 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
-| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力；Web 仍需同源校验与当前账户绑定 |
-| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：Web/CLI 放行 external 类 tool |
-| `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 DSH 插件与 Web 启动即抛错退出（trade 永不暴露） |
+| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力；插件仍需账户绑定与 operation policy |
+| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：放行 market 白名单内的 external 类 tool |
+| `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 DSH 插件启动即抛错退出（trade 永不暴露） |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 单机飞书通知 webhook；单机形态下只服务这台机器上的操作者 |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
@@ -141,7 +138,7 @@ homebrew/
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 
-生产拒绝 fixture provider。Web 与 DSH 插件共用同一份单机事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库；默认部署由插件在 DSH Node 进程内直接打开 Node SQLite。
+生产拒绝 fixture provider。插件在 DSH Node 进程内直接打开唯一事实库 `$LUOOME_HOME/luoome.db`，没有第二份服务用户库。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
@@ -161,20 +158,19 @@ node -- infra/migrate-retired-data-sources.mjs --env-file /path/to/.luoome/.env
 
 模型推理与模型配置都由 DSH 承担：luoome 侧没有模型运行时、模型目录与模型设置页。
 需要模型判断的任务由 DSH agent 经插件原生工具调用完成，密钥由 DSH 侧配置。
-
-模型推理与模型配置由 DSH 承担，luoome 侧不再有模型设置页；插件与 Web 读取同一份
-默认目录和环境变量。Web 只管数据源、通知、账户与数据导入导出，没有管理员与普通用户之分，
-也没有订阅与权益概念。
+插件只管数据源、通知、账户、面板与数据导入导出，没有管理员与普通用户之分，也没有订阅与权益概念。
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
 | [docs/README.md](./docs/README.md) | **完整文档导航**：产品需求、技术设计、运维手册与历史归档 |
-| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / DSH 插件 / Web / 多账户 / 复盘 / 校准 / FAQ |
+| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / DSH 插件 / 多账户 / 复盘 / 校准 / FAQ |
 | [packages/dsh-luoome/README.md](./packages/dsh-luoome/README.md) | 外部接入：DSH 插件安装、面板与随包技能 |
 | [AGENTS.md](./AGENTS.md) | 编码 Agent 开发规范：架构边界、实现约定、测试与安全规则 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
+| [docs/ENTITY-MAP.md](./docs/ENTITY-MAP.md) | 领域实体关系图：子域分组、引用关系、repository 与物理表 |
+| [docs/TOOL-INVENTORY.md](./docs/TOOL-INVENTORY.md) | 工具库存：按域分组的 tool 与暴露面判定，当前数量以 registry 输出为准 |
 | [docs/ROADMAP.md](./docs/ROADMAP.md) | 版本演进与交付状态 |
 | [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 贡献者指南：开发环境、测试与扩展方式 |
 | [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
@@ -192,16 +188,14 @@ irm https://raw.githubusercontent.com/KowL/luoome/main/install.ps1 | iex
 # 或者从本仓库安装依赖
 bun install
 
-# 启动单机 Web（默认只监听 127.0.0.1:5173）
-bun --no-env-file run web
+# 构建并安装插件到目标 DSH profile（安装步骤见插件 README）
+bun run build:dsh-luoome
 ```
 
 单机形态没有邮箱登录，也没有订阅：DSH 是唯一入口，公网经 Caddy 转发到 dsh-pocket，
-输入 Pocket 密码后自动完成 DSH 启动 token 握手，手机使用同一个入口。独立 Web 只在本机可达，
-远程访问走 SSH 隧道或受控反代。
-
-单机 Web 用 `bun --no-env-file run web` 启动（`bun run web` 已内建 `--no-env-file`），只监听
-`127.0.0.1`。批量调度由 DSH 定时任务负责，没有常驻调度进程，也没有独立 CLI 入口。
+输入 Pocket 密码后自动完成 DSH 启动 token 握手，手机使用同一个入口。
+批量调度由 DSH 定时任务负责，没有常驻调度进程，也没有独立 CLI 入口。
+宿主机直部署步骤见[用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。
 
 ## 测试基线
 
@@ -297,17 +291,18 @@ bun run test:panels-browser
 - Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
 - Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
-- Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
-- 单机 Web 只在本机可达；批量调度由 DSH 定时任务承担，无独立 CLI
+- 默认公网入口只有一个：Caddy 只代理 `/dsh/` 到只绑 loopback 的 DSH + Pocket
+- 面板只经宿主认证路由取数；HTTP 不能传业务输入，写操作走 operation prepare/confirm 与回执
+- 批量调度由 DSH 定时任务承担，无独立 CLI
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
 
 ### 独立 DSH 部署（默认纯插件形态）
 
-默认部署由 DSH 用 Node 加载 **dsh-luoome 插件**：插件提供五块业务面板（看盘 / 持仓 / 关注 / 策略 / 复盘）、
-四条投研技能与原生只读/审批工具，安装/升级/备份/回退步骤见
-[用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。部署入口与配置见
-[DSH 部署配置](deploy/dsh/compose.yaml)。
+默认部署由 DSH 用 Node 加载 **dsh-luoome 插件**：插件提供 7 个业务视图（看盘 / 持仓 / 关注 / 策略 / 告警 / 计划 / 复盘）、
+DSH 原生「投资设置」与 8 条随包技能，安装/升级/备份/回退步骤见
+[用户手册](docs/USER_GUIDE.md#7-dsh-单机用法)。宿主机直部署入口见
+[deploy/direct](deploy/direct/luoome-dsh.service)，容器部署见 [deploy/dsh](deploy/dsh/compose.yaml)。
 
 - 事实库是 `$LUOOME_HOME/luoome.db`（Node SQLite），由插件在 DSH 进程内直接打开；没有第二份服务用户库。
 - 默认部署没有 MCP client/server、Bun CLI、旧 Bun Web、analysis worker 或 queue probe 进程；

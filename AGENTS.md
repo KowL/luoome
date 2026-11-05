@@ -28,7 +28,7 @@
 ## 架构硬约束
 
 ```text
-web / dsh 插件 ──► tools ──► core
+dsh 插件 / batch ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -36,8 +36,8 @@ workflows ──► tools ──► core
 
 - `packages/core` 是纯领域层，零 IO，不反向依赖其它包。
 - `db` 与 `adapters` 可依赖 `core`，不可依赖 `tools`、`workflows` 或 surface。
-- Web 与 DSH 插件统一通过 tools 使用业务能力，不复制领域逻辑（独立 CLI / TUI 已随 T15 删除）。
-- Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
+- DSH 插件（唯一交付面）与 batch 统一通过 tools 使用业务能力，不复制领域逻辑。
+- Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript 类型与运行时校验。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
 - Workflow 只通过 `ctx.tools.*` 编排能力，不直接绕过 tool 调 repository 或 adapter。
 - 新 repository 必须同时提供 drizzle 与 in-memory 实现，并复用 contract tests 验证一致性。
@@ -46,10 +46,10 @@ workflows ──► tools ──► core
 ## 实现约定
 
 - 使用 Bun workspace、TypeScript strict、ESM 与 `.js` import 后缀；格式和 lint 以 Biome 为准。
-- 信任内部类型和框架保证，只在用户输入、HTTP、MCP、外部 API 等系统边界校验。
+- 信任内部类型和框架保证，只在用户输入、HTTP、外部 API 等系统边界校验。
 - 不变量放在 core 的 schema/assertion 中，不在各 surface 重复实现。
 - 不新增自动交易路径；`Watchlist`、`AlertPlan`、`WatchTrigger` 等产品语义以 `CONTEXT.md` 为准。
-- Web 保持 Hono + 原生 HTML/CSS/JS 的现有技术栈；UI 改动除自动测试外必须实际启动并用浏览器验证。
+- 插件的浏览器面板保持原生 HTML/CSS/JS（DSH client plugin）的现有技术栈；UI 改动除自动测试外必须实际启动并用浏览器验证。
 - 默认不写解释代码“做什么”的注释；仅在隐藏约束、非显然原因或必要 workaround 处说明“为什么”。
 - 不为无法发生的内部状态增加 fallback；外部依赖失败按已有错误模型处理。
 
@@ -69,14 +69,18 @@ workflows ──► tools ──► core
 |---|---|
 | `bun run test` | Vitest 的 Node 兼容测试；排除项见 `vitest.config.ts` |
 | `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
-| `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
-| `bun run test:all` | 上述全部测试 |
+| `bun run test:db:node` | Node 运行时加载 `node.contract.node.ts` 的合约测试 |
+| `bun run test:dsh-luoome` | 插件单测 + host e2e |
+| `bun run test:plugin-install` | 临时 profile 里的真实 npm 安装验收 |
+| `bun run test:panels-browser` | 真实浏览器面板验收（需本地 Chrome，不在 `test:all`） |
+| `bun run test:baseline` | 重跑各段并写 `infra/test-baseline.json` |
+| `bun run test:all` | 上述 Node/Bun 测试的合并入口 |
 | `bun run typecheck` | 所有 workspace 的 TypeScript 检查 |
 | `bun run lint` | Biome lint 与格式检查 |
 | `bun run build` | workspace Bun 构建 |
 
 - 开发中先跑最小相关测试；交付前跑与改动范围匹配的 typecheck/test/lint。
-- 不要用 Node 直接加载依赖 `bun:sqlite` 的 db 或 Web server 测试。
+- 不要用 Node 直接加载依赖 `bun:sqlite` 的 db 测试。
 - 测试失败时修根因，不使用 `--no-verify`、删除测试或放宽断言绕过。
 - 纯文档改动至少检查 Markdown 相对链接和 `git diff --check`。
 
@@ -85,8 +89,8 @@ workflows ──► tools ──► core
 - **Core entity**：schema、类型、不变量、导出和测试同步。
 - **Repository**：接口、drizzle、memory、registry 接线和 contract tests 同步。
 - **Tool**：schema、实现、桶导出、registry、sideEffect、测试以及 Skill 的能力分类同步。
-- **Workflow**：`WorkflowToolMap`、实现、导出、CLI 发现和测试同步。
-- **API/Web**：服务端契约、前端调用、鉴权/Origin 行为、测试和浏览器验收同步。
+- **Workflow**：`WorkflowToolMap`、实现、导出、批处理入口和测试同步。
+- **API/面板**：插件服务端契约、前端调用、鉴权/Origin 行为、测试和浏览器验收同步。
 - **文档**：按 `docs/README.md` 分类；当前行为写入维护文档，阶段快照归入 `docs/archive/`。
 
 ## Git 操作

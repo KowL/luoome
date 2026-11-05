@@ -147,8 +147,21 @@ const FEISHU_WEBHOOK_LABEL = '飞书通知（自定义机器人 Webhook）';
  */
 const SETTINGS_KEYS = [
   'LUOOME_MARKET_SOURCES',
+  'LUOOME_LIMIT_UP_LADDER_SOURCES',
+  'LUOOME_ASHARE_SENTIMENT_SOURCES',
+  'LUOOME_DRAGON_TIGER_SOURCES',
+  'LUOOME_NEWS_SOURCES',
+  'LUOOME_SECTOR_QUOTE_SOURCES',
+  'LUOOME_SECTOR_MEMBERSHIP_SOURCES',
+  'LUOOME_FINANCIAL_SNAPSHOT_SOURCES',
+  'LUOOME_MARKET_DUMP_SOURCES',
+  'LUOOME_FUYAO_NEWS_TAG_ID',
   'FUYAO_BASE_URL',
   'FUYAO_API_KEY',
+  'FUYAO_MAX_CONCURRENCY',
+  'FUYAO_MIN_INTERVAL_MS',
+  'FUYAO_MAX_RETRIES',
+  'FUYAO_RATE_LIMIT_COOLDOWN_MS',
   FEISHU_SECRET_KEY,
   // task-38：研究库**界面已废弃**，但这几个键**必须留在白名单里**——
   // 移出白名单意味着磁盘上用户手写的值读不进运行时，等于「废弃界面顺带废掉已有配置」。
@@ -204,14 +217,16 @@ export interface MarketSettings {
 
 export class MarketSettingsStore {
   private env: Record<string, string | undefined>;
+  private persistedKeys: Set<string>;
 
   constructor(
     baseEnv: Readonly<Record<string, string | undefined>>,
     private readonly path: string,
   ) {
     const saved = parseEnvFile(this.readFile());
+    this.persistedKeys = new Set(SETTINGS_KEYS.filter((key) => saved[key] !== undefined));
     this.env = { ...baseEnv };
-    // 本地行情配置只能覆盖这三个键，不能改变 owner、工具授权或交易开关。
+    // 本地数据源配置只覆盖白名单中的键，不能改变 owner、工具授权或交易开关。
     for (const key of SETTINGS_KEYS) {
       if (saved[key] !== undefined) this.env[key] = saved[key];
     }
@@ -351,7 +366,8 @@ export class MarketSettingsStore {
     // 落盘后**重读磁盘**：磁盘上不在 `SETTINGS_KEYS` 的键也要进运行时（见 candidateFromDisk）。
     // 同时按磁盘为准**删掉已移除的键**——否则 `clear:true` 之后内存里还留着旧密钥。
     const saved = parseEnvFile(this.readFile());
-    const installed = new Set([...SETTINGS_KEYS, ...Object.keys(saved)]);
+    // 只有此前落盘的键或显式清空的键才随磁盘删除；进程环境的领域开关不能被保存操作抹掉。
+    const installed = new Set([...this.persistedKeys, ...removals]);
     const merged: Record<string, string | undefined> = { ...this.env };
     for (const key of Object.keys(saved)) merged[key] = saved[key];
     for (const key of Object.keys(merged)) {
@@ -359,6 +375,7 @@ export class MarketSettingsStore {
       if (saved[key] === undefined) delete merged[key];
     }
     this.env = merged;
+    this.persistedKeys = new Set(SETTINGS_KEYS.filter((key) => saved[key] !== undefined));
     apply();
     return this.read();
   }

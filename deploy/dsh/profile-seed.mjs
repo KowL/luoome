@@ -15,15 +15,18 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const PLUGIN_NAME = 'dsh-luoome';
 const POCKET_NAME = 'dsh-pocket';
@@ -41,6 +44,85 @@ const REQUIRED_SKILLS = [
   'strategy-result-review',
 ];
 const PLUGIN_ENTRY_FILES = ['dist/host.js', 'dist/client.js', 'package.json'];
+const RUNTIME_DEPENDENCIES = { 'parquet-wasm': '0.9.0' };
+
+const removeProfilePath = (path, profileDir) => {
+  const target = resolve(path);
+  const root = realpathSync(profileDir);
+  const parent = realpathSync(dirname(target));
+  const child = relative(root, join(parent, basename(target)));
+  if (!child || child.startsWith('..') || isAbsolute(child))
+    fail(`refusing to remove path outside profile: ${target}`);
+  rmSync(target, { recursive: true, force: true });
+};
+
+const isRuntimePackage = (directory, name, version) => {
+  try {
+    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
+    return (
+      manifest.name === name &&
+      manifest.version === version &&
+      statSync(join(directory, 'node', 'parquet_wasm.js')).isFile() &&
+      statSync(join(directory, 'node', 'parquet_wasm_bg.wasm')).isFile()
+    );
+  } catch {
+    return false;
+  }
+};
+
+const installRuntimeDependencies = (installed, profileDir) => {
+  const manifest = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'));
+  const dependencies = Object.entries(manifest.dependencies ?? {}).filter(
+    ([name]) => !name.startsWith('@deepseek-ai/'),
+  );
+  for (const [name, version] of dependencies) {
+    if (!Object.hasOwn(RUNTIME_DEPENDENCIES, name) || version !== RUNTIME_DEPENDENCIES[name])
+      fail(`unsupported runtime dependency: ${name}@${version}; expected parquet-wasm@0.9.0`);
+  }
+  if (dependencies.length === 0) return;
+  const pluginModules = join(installed, 'node_modules');
+  if (existsSync(pluginModules) && lstatSync(pluginModules).isSymbolicLink())
+    fail('plugin node_modules must be a directory');
+  mkdirSync(pluginModules, { recursive: true });
+  for (const [name, version] of dependencies) {
+    const target = join(pluginModules, name);
+    if (isRuntimePackage(target, name, version)) continue;
+    const runtime = join(profileDir, 'runtime');
+    if (existsSync(runtime) && lstatSync(runtime).isSymbolicLink())
+      fail('profile runtime must be a directory');
+    mkdirSync(runtime, { recursive: true });
+    const runtimeModules = join(runtime, 'node_modules');
+    if (existsSync(runtimeModules) && lstatSync(runtimeModules).isSymbolicLink())
+      fail('runtime node_modules must be a directory');
+    const dependency = join(runtimeModules, name);
+    if (!isRuntimePackage(dependency, name, version)) {
+      // npm never sees the plugin manifest or the host's singleton SDK dependencies.
+      writeFileSync(
+        join(runtime, 'package.json'),
+        `${JSON.stringify({ private: true, dependencies: RUNTIME_DEPENDENCIES }, null, 2)}\n`,
+      );
+      execFileSync(
+        'npm',
+        [
+          'install',
+          '--omit=dev',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+          '--package-lock=false',
+        ],
+        { cwd: runtime, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      if (!isRuntimePackage(dependency, name, version))
+        fail(`runtime installation did not provide ${name}@${version} with WASM assets`);
+    }
+    removeProfilePath(target, profileDir);
+    symlinkSync(dependency, target, 'dir');
+  }
+  const requirePlugin = createRequire(join(installed, 'dist', 'host.js'));
+  requirePlugin.resolve('parquet-wasm/node');
+  requirePlugin.resolve('parquet-wasm/node/parquet_wasm_bg.wasm');
+};
 
 const fail = (message) => {
   console.error(`[luoome-profile-seed] ${message}`);
@@ -110,7 +192,7 @@ const resolveModulesRoot = (explicit) => {
 const installPlugin = (pluginPath, profileModules) => {
   const stat = statSync(pluginPath);
   const installed = join(profileModules, PLUGIN_NAME);
-  rmSync(installed, { recursive: true, force: true });
+  removeProfilePath(installed, dirname(profileModules));
   if (stat.isDirectory()) {
     cpSync(pluginPath, installed, { recursive: true });
     return 'directory';
@@ -167,7 +249,7 @@ const main = () => {
 
   // DSH SDK 依赖按包逐个链接，避免不同 npm 布局下整目录软链失效。
   const scopeDirectory = join(profileModules, '@deepseek-ai');
-  rmSync(scopeDirectory, { recursive: true, force: true });
+  removeProfilePath(scopeDirectory, profileDir);
   mkdirSync(scopeDirectory, { recursive: true });
   for (const [name, directory] of modules.packages)
     symlinkSync(directory, join(scopeDirectory, name), 'dir');
@@ -175,6 +257,7 @@ const main = () => {
   const installedAs = installPlugin(pluginPath, profileModules);
   const installed = join(profileModules, PLUGIN_NAME);
   const artifact = assertPluginLayout(installed);
+  installRuntimeDependencies(installed, profileDir);
   const dependencies = {};
   const bundles = [...PROFILE_BUNDLES];
   if (args.pocket !== undefined) {
@@ -183,7 +266,7 @@ const main = () => {
     if (manifest.name !== POCKET_NAME || !manifest.dsh?.bundle?.patch)
       fail('pocket artifact must be the dsh-pocket bundle');
     const target = join(profileModules, POCKET_NAME);
-    rmSync(target, { recursive: true, force: true });
+    removeProfilePath(target, profileDir);
     symlinkSync(pocket, target, 'dir');
     dependencies[POCKET_NAME] = `file:${pocket}`;
     bundles.push(POCKET_NAME);

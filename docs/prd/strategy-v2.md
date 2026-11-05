@@ -12,7 +12,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 关联文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)、[Strategy DSL PRD](./strategy-dsl.md)、[Strategy 与统一 Watchlist 详细设计](../ddd/strategy-watchlist-unification-detailed-design.md)
 > 实现设计：[策略工作台详细设计](../ddd/strategy-workspace-detailed-design.md)
-> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/`、`packages/tools/src/tools/run-strategy.ts`、`packages/tools/src/tools/strategy-query.ts`、`apps/web/public/js/target-pages.js`
+> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/`、`packages/tools/src/tools/run-strategy.ts`、`packages/tools/src/tools/strategy-query.ts`
 
 ## 1. 文档结论
 
@@ -62,7 +62,7 @@ V2 的交付顺序：
 - 希望把个人选股方法持续运行和复盘的投资者；
 - 需要检查每条规则如何影响入选结果的高级用户；
 - 希望由 AI 解释变化、但不允许 AI 擅自发布策略或交易的用户；
-- 通过 MCP 或 Agent 查询 Strategy 事实的外部客户端。
+- 通过 DSH 技能或对话查询 Strategy 事实的调用方。
 
 ### 2.3 核心价值
 
@@ -89,7 +89,7 @@ V2 的交付顺序：
 - 回测收益、年化、最大回撤、Sharpe、Alpha、Beta 或策略评级；
 - 组合、仓位、调仓和订单执行参数；
 - 策略市场或跨用户订阅；
-- LLM 参与逐股规则求值；
+- AI 参与逐股规则求值；
 - StrategyRun 自动触发 Advice 或真实交易；
 - 未经显式持久订阅把策略命中自动写入 Watchlist。
 
@@ -184,7 +184,7 @@ V2 支持两类确定性候选：
 - 数据缺失或求值错误原因；
 - dataAsOf。
 
-产品不得依赖 UI 或 LLM 重新解析表达式来生成失败原因。AI 可以改写已有事实以便阅读，但不能补造
+产品不得依赖 UI 或模型重新解析表达式来生成失败原因。AI 可以改写已有事实以便阅读，但不能补造
 缺失值、阈值或因果解释。
 
 现有实现仅在部分命中路径保留 evidence。规则失败解释是股票池、候选池、Diff 和 AI 洞察上线前的
@@ -265,7 +265,7 @@ V2 先保证可审计，不宣称完整可重放。历史 StockUniverse、行情
 ### 6.1 股票标识与行情入口
 
 策略工作台内所有展示股票的地方，包括股票池、候选池、运行结果、StrategySignal、运行 Diff、
-AI 洞察的事实引用和设置页的关联标的，都必须使用与首页看板一致的两行股票标识：
+AI 洞察的事实引用和设置页的关联标的，都必须使用与面板一致的两行股票标识：
 
 ```text
 比亚迪
@@ -467,7 +467,7 @@ AlertPlan 继续消费持久化 StrategySignal：
 | 创建版本草案 | write | 必须确认 |
 | 校验并回写版本状态 | write | 必须确认 |
 | 发布、暂停、恢复 | write | 必须确认 |
-| 生成 AI 洞察 | advice 或受控 LLM 推理 | 不得触发 trade |
+| 生成 AI 洞察 | advice 或 DSH 侧受控模型推理 | 不得触发 trade |
 
 任何 Strategy 路径都不得调用真实交易 tool。
 

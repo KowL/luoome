@@ -4,6 +4,11 @@
 > 日期：2026-08-20
 > 范围：个股实时快照、日 K、MinuteBar 分时/分钟 K、成交量、指标摘要、数据来源与新鲜度
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) §6、[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
+>
+> **消费面现状（2026-11-04 修订）**：本文的 Web 图表载体（单机 Web `apps/web`）已删除，当前唯一消费面是
+> `dsh-luoome` 插件（行情视图经 `get_stock_market_view`，面板与 `/dsh/api/luoome/*` 路由取数）。
+> 下文出现的 `apps/web/**` 文件、`/api/**` 路由、CLI/TUI/MCP 入口与浏览器验收均属当时设计；
+> Tool 契约、日 K/MinuteBar 语义、数据状态与降级规则仍以正文为准。
 
 ## 1. 目标
 
@@ -39,15 +44,15 @@ MinuteBar 的冻结 schema、provider 能力、缺口和生命周期见 [MinuteB
 
 新增 `get_stock_market_view` Tool，一次返回股票、实时行情、日 K、派生涨跌、指标和数据状态。
 
-Web 不分别调用 `fetch_quote`、日线 adapter、repository 和 `compute_indicators` 后自行拼装。组合规则集中在 Tool 中，CLI、MCP、Web 和后续研究页可以复用同一契约。
+面板不分别调用 `fetch_quote`、日线 adapter、repository 和 `compute_indicators` 后自行拼装。组合规则集中在 Tool 中，`dsh-luoome` 面板和研究页复用同一契约。
 
 ### 3.2 Tool 的副作用类型是 `external`
 
 打开行情页会访问外部行情源，并把成功结果写入本地 `PriceSnapshot` / `DailyBar` repository，因此：
 
 - `sideEffect: 'external'`；
-- Web 必须把 `get_stock_market_view` 加入 `WEB_ALLOWED_EXTERNAL`；
-- MCP 仍受 `LUOOME_EXPOSE_EXTERNAL=true` 控制；
+- 插件必须把 `get_stock_market_view` 列入 external 行情白名单（`packages/dsh-luoome/src/host/production-config.ts` 的 market allowlist）；
+- 所有消费面统一受 `LUOOME_EXPOSE_EXTERNAL=true` 控制；
 - 不把它标成 `read` 绕过外部访问权限。
 
 ### 3.3 首期只提供日 K
