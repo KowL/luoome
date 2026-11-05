@@ -1,7 +1,8 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
 import { useStockDetail, useStockHistory, useStockProfile } from './data.js';
 import { bigMoney, int, money, points, tradeDate, when } from './format.js';
-import { Card, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
+import { Card, cx, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
+import { stockKlineModel, stockKlineWarning, xueqiuStockUrl } from './stock-chart.js';
 
 /** 个股档案事实：股东户数（最近一期）+ 所属板块清单。 */
 function StockProfileFacts({ profile }) {
@@ -59,92 +60,146 @@ function StockProfileFacts({ profile }) {
   );
 }
 
-export function StockHistory({ marketView }) {
-  const candles = marketView.candles;
-  const status = marketView.dataStatus;
-  if (!candles.length)
-    return h('p', { className: 'luo-fine' }, '没有可绘制的历史 K 线。缺失历史保持未知。');
-  const bottom = Math.min(...candles.map((bar) => bar.low));
-  const top = Math.max(...candles.map((bar) => bar.high));
-  const spread = top - bottom || 1;
-  const y = (value) => 12 + ((top - value) / spread) * 132;
-  const slot = 520 / candles.length;
+export function StockKline({ marketView }) {
+  const model = stockKlineModel(marketView);
+  if (model === null)
+    return h(
+      'p',
+      { className: 'luo-fine' },
+      '没有可绘制的日 K。缺失交易日保持未知，不以单次报价合成走势。',
+    );
+  const warning = stockKlineWarning(model.warnings);
   return h(
     'figure',
-    { className: 'luo-stock-history' },
+    { className: 'luo-kline' },
     h(
       'div',
-      { className: 'luo-stock-history-caption' },
-      h('strong', null, '历史日 K · 前复权'),
+      { className: 'luo-kline-caption' },
       h(
         Pill,
-        { tone: status.retrieval === 'local-fallback' ? 'warn' : 'quiet' },
-        status.retrieval === 'local-fallback' ? '本地保留历史' : '供应商历史',
+        { tone: model.retrieval === 'local-fallback' ? 'warn' : 'quiet' },
+        model.retrieval === 'local-fallback' ? '本地保留日线' : '供应商日线',
       ),
+      model.live ? h(Pill, { tone: 'accent' }, '最新日 K 未收盘') : null,
+      h('span', { className: 'luo-fine' }, `最近 ${model.range.count} 根`),
     ),
+    h(
+      'div',
+      { className: 'luo-kline-stats' },
+      h(Stat, { k: '最新收盘', v: money(model.lastClose) }),
+      h(Stat, { k: '区间最高', v: money(model.range.high) }),
+      h(Stat, { k: '区间最低', v: money(model.range.low) }),
+    ),
+    h(
+      'p',
+      { className: 'luo-kline-range' },
+      `首末收盘 ${money(model.firstClose)} → ${money(model.lastClose)}`,
+    ),
+    model.indicators.length === 0
+      ? null
+      : h(
+          'p',
+          { className: 'luo-kline-ma' },
+          '均线（最新） ',
+          model.indicators.map(([name, value]) => `${name} ${money(value)}`).join(' · '),
+        ),
     h(
       'svg',
       {
-        viewBox: '0 0 560 176',
+        viewBox: `0 0 ${model.width} ${model.height}`,
         role: 'img',
-        'aria-label': `${candles[0].date} 至 ${candles.at(-1).date} 的真实日 K，共 ${candles.length} 根`,
-        'data-stock-history': true,
+        'aria-label': `${model.range.from} 至 ${model.range.to} 的真实日 K，共 ${model.range.count} 根，前复权`,
+        'data-stock-kline': true,
       },
-      [12, 78, 144].map((position) =>
-        h('line', {
-          key: position,
-          x1: 20,
-          x2: 540,
-          y1: position,
-          y2: position,
-          className: 'luo-stock-history-grid',
-        }),
-      ),
-      candles.map((bar, index) => {
-        const x = 20 + (index + 0.5) * slot;
-        return h(
+      model.priceTicks.map((tick, index) =>
+        h(
           'g',
-          { key: bar.date, className: bar.close >= bar.open ? 'is-up' : 'is-down' },
-          h(
-            'title',
-            null,
-            `${bar.date}：开 ${bar.open}，高 ${bar.high}，低 ${bar.low}，收 ${bar.close}；来源 ${bar.source}${bar.completeness === 'live' ? '；未收盘' : ''}`,
-          ),
+          { key: index },
           h('line', {
-            x1: x,
-            x2: x,
-            y1: y(bar.high),
-            y2: y(bar.low),
-            className: 'luo-stock-history-wick',
+            x1: model.plotLeft,
+            x2: model.plotRight,
+            y1: tick.y,
+            y2: tick.y,
+            className: 'luo-kline-grid',
+          }),
+          h(
+            'text',
+            {
+              x: model.plotRight + 6,
+              y: tick.y + 3,
+              textAnchor: 'start',
+              className: 'luo-kline-axis',
+            },
+            tick.label,
+          ),
+        ),
+      ),
+      h('line', {
+        x1: model.plotLeft,
+        x2: model.plotRight,
+        y1: model.lastCloseY,
+        y2: model.lastCloseY,
+        className: 'luo-kline-last',
+      }),
+      h(
+        'text',
+        {
+          x: model.plotLeft,
+          y: model.volumeTop - 5,
+          textAnchor: 'start',
+          className: 'luo-kline-axis',
+        },
+        '成交量',
+      ),
+      model.bars.map((bar) =>
+        h(
+          'g',
+          { key: bar.key, className: bar.up ? 'is-up' : 'is-down' },
+          h('title', null, bar.title),
+          h('line', {
+            x1: bar.x,
+            x2: bar.x,
+            y1: bar.highY,
+            y2: bar.lowY,
+            className: 'luo-kline-wick',
           }),
           h('rect', {
-            x: x - Math.min(slot * 0.3, 5),
-            y: Math.min(y(bar.open), y(bar.close)),
-            width: Math.max(1, Math.min(slot * 0.6, 10)),
-            height: Math.max(1, Math.abs(y(bar.open) - y(bar.close))),
-            className: 'luo-stock-history-candle',
+            x: bar.bodyX,
+            y: bar.bodyY,
+            width: bar.bodyWidth,
+            height: bar.bodyHeight,
+            className: cx('luo-kline-body', bar.live && 'is-live'),
           }),
-        );
-      }),
-      h('text', { x: 20, y: 169 }, candles[0].date),
-      h('text', { x: 540, y: 169, textAnchor: 'end' }, candles.at(-1).date),
+          h('rect', {
+            x: bar.bodyX,
+            y: bar.volumeY,
+            width: bar.bodyWidth,
+            height: bar.volumeHeight,
+            className: 'luo-kline-volume',
+            'data-kline-volume': true,
+          }),
+        ),
+      ),
+      model.dateTicks.map((tick) =>
+        h(
+          'text',
+          {
+            key: tick.key,
+            x: tick.x,
+            y: model.height - 4,
+            textAnchor: tick.anchor,
+            className: 'luo-kline-axis',
+          },
+          tick.label,
+        ),
+      ),
     ),
     h(
       'figcaption',
       { className: 'luo-fine' },
-      `日线截止 ${status.barsAsOf ?? '未知'} · ${candles.length} 根实际 K 线 · 来源 ${status.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；图表不代表历史回测。`,
+      `日线截止 ${model.barsAsOf ?? '未知'} · 前复权 · 来源 ${model.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；日 K 只反映区间真实成交，不提供回测结论。`,
     ),
-    status.warnings.length
-      ? h(
-          'p',
-          { className: 'luo-fine' },
-          status.warnings.includes('bars-local-fallback')
-            ? '供应商历史读取失败，正在展示本地保留的日线；数据范围可能不完整。'
-            : status.warnings.includes('bars-insufficient')
-              ? '日线样本不足，历史范围不完整。'
-              : '保留工具返回的市场收盘、来源或覆盖限制，最新行情与日线可能来自不同时点。',
-        )
-      : null,
+    warning === null ? null : h('p', { className: 'luo-fine' }, warning),
   );
 }
 
@@ -162,16 +217,14 @@ export function StockDetail({
   const sending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [showHistory, setShowHistory] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
   const state = useStockDetail(stock.stockId);
-  const history = useStockHistory(stock.stockId, showHistory);
-  const profile = useStockProfile(stock.stockId, showProfile);
+  const history = useStockHistory(stock.stockId);
+  const profile = useStockProfile(stock.stockId);
   const profileResponse = profile.data?.profile;
   const profileItem = profileResponse?.ok ? profileResponse.data : null;
   const profileError =
     profile.error ??
-    (!profile.loading && showProfile && !profileItem
+    (!profile.loading && !profileItem
       ? {
           message:
             profileResponse?.error?.kind === 'permission_denied'
@@ -211,6 +264,27 @@ export function StockDetail({
       setBusy(false);
     }
   };
+  const xueqiu = xueqiuStockUrl(stock.stockId);
+  const kline = history.loading
+    ? h('div', { role: 'status', 'aria-label': '正在读取日 K' }, h(SkeletonLines, { lines: 3 }))
+    : history.error
+      ? h(ErrorNote, { error: history.error })
+      : history.data?.marketView?.ok
+        ? h(StockKline, { marketView: history.data.marketView.data })
+        : h(ErrorNote, {
+            error: {
+              message:
+                history.data?.marketView?.error?.kind === 'permission_denied'
+                  ? '当前配置未启用日 K 读取。'
+                  : '日 K 不可用。不会用单次报价合成走势。',
+            },
+          });
+  const refreshAll = () => {
+    state.refresh();
+    history.refresh();
+    profile.refresh();
+  };
+  const refreshing = state.loading || history.loading || profile.loading;
   return h(
     'dialog',
     {
@@ -239,14 +313,41 @@ export function StockDetail({
       h(
         'div',
         null,
-        h('p', { className: 'luo-eyebrow' }, '个股详情'),
         h('h2', { id: 'luo-stock-title' }, stock.stockName),
-        h('p', { className: 'luo-stock-code' }, stock.stockId),
+        h(
+          'p',
+          { className: 'luo-stock-code' },
+          xueqiu === null
+            ? stock.stockId
+            : h(
+                'a',
+                {
+                  className: 'luo-stock-code-link',
+                  href: xueqiu,
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                  title: `在雪球查看 ${stock.stockId}`,
+                  'aria-label': `在雪球查看 ${stock.stockId}`,
+                },
+                stock.stockId,
+                h('span', { className: 'luo-stock-code-external', 'aria-hidden': 'true' }, '↗'),
+              ),
+        ),
       ),
       h(
-        'button',
-        { type: 'button', className: 'luo-btn', onClick: onClose, 'aria-label': '关闭个股详情' },
-        '关闭',
+        'div',
+        { className: 'luo-stock-head-actions' },
+        h(Refresh, {
+          loading: refreshing,
+          onClick: refreshAll,
+          label: '刷新',
+          ariaLabel: '刷新个股数据',
+        }),
+        h(
+          'button',
+          { type: 'button', className: 'luo-btn', onClick: onClose, 'aria-label': '关闭个股详情' },
+          '关闭',
+        ),
       ),
     ),
     h(
@@ -254,7 +355,7 @@ export function StockDetail({
       { className: 'luo-stock-detail-body' },
       h(
         Card,
-        { title: '行情快照', meta: h(Refresh, { loading: state.loading, onClick: state.refresh }) },
+        null,
         state.loading
           ? h(
               'div',
@@ -308,68 +409,32 @@ export function StockDetail({
               h('p', { className: 'luo-fine' }, `行情读取于 ${when(quote.fetchedAt)}`),
             )
           : null,
+        h('div', { className: 'luo-stock-kline' }, kline),
       ),
       h(
         Card,
-        {
-          title: '历史走势',
-          meta: showHistory
-            ? h(Refresh, { loading: history.loading, onClick: history.refresh })
-            : '最近三个月 · 实际日 K',
-        },
-        !showHistory
+        null,
+        profile.loading
           ? h(
-              'button',
-              { type: 'button', className: 'luo-btn', onClick: () => setShowHistory(true) },
-              '读取历史日 K',
+              'div',
+              { role: 'status', 'aria-label': '正在读取个股档案' },
+              h(SkeletonLines, { lines: 3 }),
             )
-          : history.loading
-            ? h(
-                'div',
-                { role: 'status', 'aria-label': '正在读取历史日 K' },
-                h(SkeletonLines, { lines: 3 }),
-              )
-            : history.data?.marketView?.ok
-              ? h(StockHistory, { marketView: history.data.marketView.data })
-              : h(ErrorNote, {
-                  error: history.error ?? {
-                    message:
-                      history.data?.marketView?.error?.kind === 'permission_denied'
-                        ? '当前配置未启用历史行情读取。'
-                        : '历史日线不可用。不会从单次报价合成历史。',
-                  },
-                }),
-      ),
-      h(
-        Card,
-        {
-          title: '筹码与板块',
-          meta: showProfile
-            ? h(Refresh, { loading: profile.loading, onClick: profile.refresh })
-            : '股东户数与所属板块',
-        },
-        !showProfile
-          ? h(
-              'button',
-              { type: 'button', className: 'luo-btn', onClick: () => setShowProfile(true) },
-              '读取股东户数与所属板块',
-            )
-          : profile.loading
-            ? h(
-                'div',
-                { role: 'status', 'aria-label': '正在读取个股档案' },
-                h(SkeletonLines, { lines: 3 }),
-              )
-            : profileError
-              ? h(ErrorNote, { error: profileError })
-              : profileItem
-                ? h(StockProfileFacts, { profile: profileItem })
-                : null,
+          : profileError
+            ? h(ErrorNote, { error: profileError })
+            : profileItem
+              ? h(StockProfileFacts, { profile: profileItem })
+              : null,
       ),
       result && version
         ? h(
             Card,
-            { title: sourceLabel, meta: `第 ${version.version} 版` },
+            null,
+            h(
+              'p',
+              { className: 'luo-stock-source-meta' },
+              `${sourceLabel} · 第 ${version.version} 版`,
+            ),
             h('p', { className: 'luo-stock-strategy-name' }, strategyName),
             h('p', { className: 'luo-fine' }, `匹配事实时间 ${tradeDate(result.dataAsOf)}`),
             h(
@@ -380,12 +445,12 @@ export function StockDetail({
             ),
             evidence,
           )
-        : h(Card, { title: '关注来源' }, sourceLabel),
+        : h(Card, null, h('p', { className: 'luo-stock-source-meta' }, sourceLabel)),
       h(
         'p',
         { className: 'luo-strategy-note' },
         result
-          ? '行情快照与策略匹配可能来自不同时点。规则评分不代表成功概率，匹配标的仅供研究。'
+          ? '行情与策略匹配可能来自不同时点。规则评分不代表成功概率，匹配标的仅供研究。'
           : '行情与账户事实可能来自不同时点。关注或持仓不代表买入建议。',
       ),
     ),

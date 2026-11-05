@@ -1678,10 +1678,14 @@ current。数据资格预检只审计本地保留字段、前序窗口和历史�
 提交股票分析问题，收到宿主接受后再打开对话；保留期间使用真实作用域，不借用未注入服务，
 也不操作或清空已有会话草稿。失败不自动重试，任何业务写入仍按明确意图直接执行并保留回执。
 
-历史图表由独立 `/api/luoome/stock/history?stockId=...` 提供固定三个月日 K，复用
-`get_stock_market_view` 的真实 candles/dataStatus。入口只接受单个沪深股票码，沿用 owner
-admission、Host/Origin、no-store 和有界取消。历史读取由用户主动触发，报价保持独立；缺日线时
-显示不可用，不从单次报价合成历史，图表不提供组合回测结论。
+日 K 走势与筹码档案分别由 `/api/luoome/stock/history?stockId=...`、`/api/luoome/stock/profile?stockId=...`
+提供，打开详情即与报价并行读取；日 K 直接并入行情卡片，不单独成卡。详情只保留股票名一个大标题，
+刷新统一放在详情头部，不再有「个股详情 / 行情快照 / 筹码与板块」这类重复卡片标题。日 K 复用
+`get_stock_market_view` 的真实 candles/dataStatus/indicators，入口只接受单个沪深股票码；筹码档案走同一套
+路由约定调用 `get_stock_profile`，接受沪深京代码。两者都沿用 owner admission、Host/Origin、no-store 和
+有界取消；缺日线时显示不可用，不从单次报价合成历史。详情头部的股票代码链接到雪球
+`https://xueqiu.com/S/{EXCHANGE}{CODE}`（新窗口、noopener noreferrer），只做外部引用，不改变行情来源。
+图表只投影价格刻度、成交量、区间最高/最低、首末收盘与工具给出的最新均线，不提供组合回测结论。
 
 单机事实库是唯一事实源；历史托管租户库已下线。
 存量 Advice 的来源幂等回填为 `legacy-ai`，不伪造历史模型信息。

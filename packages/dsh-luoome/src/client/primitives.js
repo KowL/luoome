@@ -49,7 +49,7 @@ export const Head = ({ eyebrow, title, subtitle, side }) =>
 export const Stamp = ({ label, value }) =>
   h('span', { className: 'luo-stamp' }, label ? `${label} ` : null, h('b', null, value));
 
-export const Refresh = ({ loading, onClick, label = '刷新事实' }) =>
+export const Refresh = ({ loading, onClick, label = '刷新事实', ariaLabel }) =>
   h(
     'button',
     {
@@ -57,6 +57,7 @@ export const Refresh = ({ loading, onClick, label = '刷新事实' }) =>
       className: cx('luo-btn', loading && 'is-loading'),
       onClick,
       disabled: loading,
+      ...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel }),
     },
     h(RefreshIcon),
     loading ? '读取中' : label,

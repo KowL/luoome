@@ -204,27 +204,43 @@ export const STYLE = `
 .luo-stock-detail { position: fixed; inset: 0 0 0 auto; width: min(620px, 100%); height: 100dvh; max-width: 100%; max-height: 100dvh; margin: 0; padding: 0; border: 0; border-left: 1px solid var(--lu-line-strong); background: var(--lu-bg); color: var(--lu-ink); font: 14px/1.55 var(--lu-sans); box-shadow: var(--lu-shadow-2); }
 .luo-stock-detail[open] { display: flex; flex-direction: column; }
 .luo-stock-detail::backdrop { background: rgba(0, 0, 0, .38); backdrop-filter: blur(2px); }
-.luo-stock-detail-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 27px 28px 22px; border-bottom: 1px solid var(--lu-line); }
-.luo-stock-detail-head .luo-eyebrow { margin: 0 0 12px; }
+.luo-stock-detail-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 12px 16px; padding: 24px 28px 20px; border-bottom: 1px solid var(--lu-line); }
+.luo-stock-head-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .luo-stock-detail-head h2 { margin: 0; font: 400 28px/1.25 var(--lu-serif); overflow-wrap: anywhere; }
-.luo-stock-detail-head .luo-stock-code { margin: 9px 0 0; font-size: 11px; }
+.luo-stock-detail-head .luo-stock-code { margin: 6px 0 0; font-size: 11px; }
+.luo-stock-code-link { display: inline-flex; align-items: baseline; gap: 4px; border-bottom: 1px dashed var(--lu-line-strong); color: var(--lu-ink-2); text-decoration: none; transition: color .14s ease, border-color .14s ease; }
+.luo-stock-code-link:hover { border-color: var(--lu-accent); color: var(--lu-accent); }
+.luo-stock-code-link:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; border-radius: 2px; }
+.luo-stock-code-external { font-size: 10px; color: var(--lu-ink-3); }
+.luo-stock-code-link:hover .luo-stock-code-external { color: var(--lu-accent); }
 .luo-stock-detail-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; min-height: 0; overflow: auto; padding: 24px 28px; }
 .luo-stock-detail-body > * { min-width: 0; }
-.luo-stock-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; margin: 20px 0 8px; }
+.luo-stock-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; margin: 0 0 8px; }
 .luo-stock-price { font: 400 36px/1.1 var(--lu-mono); letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
 .luo-stock-quote-time { margin: 0 0 22px; color: var(--lu-ink-3); font-size: 11px; }
 .luo-stock-quote-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 23px 16px; margin-bottom: 20px; }
 .luo-stock-quote-grid .luo-stat-v { font-size: 13px; }
+.luo-stock-source-meta { margin: 0 0 4px; color: var(--lu-ink-3); font: 10.5px/1.4 var(--lu-mono); letter-spacing: .02em; }
 .luo-stock-strategy-name { margin: 0; color: var(--lu-ink); font-size: 14px; }
-.luo-stock-history { margin: 0; min-width: 0; }
-.luo-stock-history-caption { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; }
-.luo-stock-history svg { display: block; width: 100%; height: auto; margin: 16px 0 8px; }
-.luo-stock-history-grid { stroke: var(--lu-line); stroke-width: 1; }
-.luo-stock-history-wick { stroke: currentColor; stroke-width: 1; }
-.luo-stock-history-candle { fill: currentColor; }
-.luo-stock-history .is-up { color: var(--lu-up); }
-.luo-stock-history .is-down { color: var(--lu-down); }
-.luo-stock-history text { fill: var(--lu-ink-3); font: 10px var(--lu-mono); }
+.luo-kline { margin: 0; min-width: 0; }
+.luo-stock-kline { margin-top: 4px; padding-top: 16px; border-top: 1px solid var(--lu-line); }
+.luo-kline-caption { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; font-size: 12px; }
+.luo-kline-caption .luo-fine { margin-left: auto; }
+.luo-kline-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 16px 0 8px; }
+.luo-kline-stats .luo-stat-v { font-size: 13px; }
+.luo-kline-range { margin: 0 0 6px; color: var(--lu-ink-3); font-size: 11px; }
+.luo-kline-ma { margin: 0 0 6px; color: var(--lu-ink-3); font-size: 11px; }
+.luo-kline svg { display: block; width: 100%; height: auto; margin: 6px 0 10px; }
+.luo-kline-grid { stroke: var(--lu-line); stroke-width: 1; stroke-dasharray: 2 4; }
+.luo-kline-last { stroke: var(--lu-line-strong); stroke-width: 1; stroke-dasharray: 4 4; }
+.luo-kline-wick { stroke: currentColor; stroke-width: 1; }
+.luo-kline-body { fill: currentColor; }
+.luo-kline-body.is-live { fill: transparent; stroke: currentColor; stroke-width: 1; }
+.luo-kline-volume { fill: currentColor; opacity: .28; }
+.luo-kline .is-up { color: var(--lu-up); }
+.luo-kline .is-down { color: var(--lu-down); }
+.luo-kline-axis { fill: var(--lu-ink-3); font: 11px var(--lu-mono); }
+.luo-kline figcaption { margin-top: 4px; }
 .luo-stock-match-stats { margin: 18px 0 24px; }
 .luo-stock-profile { display: grid; gap: 14px; }
 .luo-stock-concepts ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
@@ -594,6 +610,7 @@ export const STYLE = `
   .luo-stock-detail-body { padding: 20px 18px; gap: 18px; }
   .luo-stock-detail-foot { padding: 16px 18px; }
   .luo-stock-quote-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .luo-kline-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .luo-strategy-matches .luo-table-wrap { max-height: 520px; margin: 0; }
   .luo-matches-table, .luo-matches-table tbody { display: block; }
   .luo-matches-table thead { display: none; }
