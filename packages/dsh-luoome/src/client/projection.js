@@ -17,6 +17,78 @@ export const stockHistoryUrl = (stockId) =>
   `api/luoome/stock/history?stockId=${encodeURIComponent(stockId)}`;
 export const stockProfileUrl = (stockId) =>
   `api/luoome/stock/profile?stockId=${encodeURIComponent(stockId)}`;
+export const stockFinancialUrl = (stockId) =>
+  `api/luoome/stock-financial?stockId=${encodeURIComponent(stockId)}`;
+
+/** 均线由工具基于完整已加载历史计算；页面仅按日期对齐，再裁显示范围。 */
+export const stockHistoryRows = (marketView, range = 'all') => {
+  const averages = new Map((marketView.movingAverages ?? []).map((row) => [row.date, row]));
+  const rows = marketView.candles.map((bar) => ({
+    ...bar,
+    ma20: averages.get(bar.date)?.ma20 ?? null,
+    ma60: averages.get(bar.date)?.ma60 ?? null,
+  }));
+  return range === 'all' ? rows : rows.slice(-range);
+};
+
+export const stockHistoryIndex = (key, current, count) => {
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  if (key === 'ArrowLeft') return Math.max(0, current - 1);
+  if (key === 'ArrowRight') return Math.min(count - 1, current + 1);
+  return current;
+};
+
+const FINANCIAL_STATEMENTS = [
+  [
+    'incomeStatements',
+    '利润表',
+    [
+      ['operating_income', '营业收入'],
+      ['parent_holder_net_profit', '归母净利润'],
+      ['basic_eps', '基本每股收益'],
+    ],
+  ],
+  [
+    'balanceSheets',
+    '资产负债表',
+    [
+      ['assets_total', '总资产'],
+      ['total_debt', '总负债'],
+      ['holder_equity_total', '股东权益'],
+    ],
+  ],
+  [
+    'cashFlowStatements',
+    '现金流量表',
+    [
+      ['act_cash_flow_net', '经营现金流净额'],
+      ['invest_cash_flow_net', '投资现金流净额'],
+      ['financing_cash_flow_net', '筹资现金流净额'],
+    ],
+  ],
+];
+
+/** 只选择现有快照契约字段；各表保留自己的报告期和披露日，不跨表拼接。 */
+export const stockFinancialSections = (snapshot) =>
+  FINANCIAL_STATEMENTS.map(([key, title, fields]) => {
+    const statement = [...(snapshot.statements?.[key] ?? [])].sort(
+      (a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime(),
+    )[0];
+    return {
+      key,
+      title,
+      periodEnd: statement?.periodEnd ?? null,
+      reportDate: statement?.reportDate ?? null,
+      period: statement?.period ?? null,
+      rows: fields.map(([field, label]) => ({
+        key: field,
+        label,
+        value: statement?.fields[field] ?? null,
+        unit: field === 'basic_eps' ? 'CNY/share' : 'CNY',
+      })),
+    };
+  });
 
 export const watchlistOperationRequestFor = (watchlist) => ({
   watchlistId: watchlist?.id ?? null,

@@ -70,6 +70,17 @@ const rsi = (closes: readonly number[], period: number): number | undefined => {
   return 100 - 100 / (1 + rs);
 };
 
+export const computeMovingAverageSeries = (
+  bars: readonly DailyBar[],
+): { readonly date: string; readonly ma20: number | null; readonly ma60: number | null }[] => {
+  const closes = bars.map((bar) => bar.close);
+  return bars.map((bar, index) => ({
+    date: bar.date.toISOString().slice(0, 10),
+    ma20: smaAt(closes, 20, index) ?? null,
+    ma60: smaAt(closes, 60, index) ?? null,
+  }));
+};
+
 /** 由日线序列计算 MA / RSI / MACD / 量能 / 均线交叉 / Bollinger 快照。 */
 export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalIndicators => {
   const closes = bars.map((b) => b.close);

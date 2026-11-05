@@ -1,6 +1,6 @@
 import { createElement as h, useState } from 'react';
-import { bigMoney, int, money, points, ratio, signedMoney, toneOf } from './format.js';
-import { Empty, Kpi, Pill } from './primitives.js';
+import { bigMoney, int, money, points, ratio, signedMoney, toneOf, when } from './format.js';
+import { Empty, Kpi, Pill, Stat } from './primitives.js';
 import { holdingPriceView } from './projection.js';
 
 export function AccountSummary({ facts }) {
@@ -173,38 +173,120 @@ export function MarketTable({ quotes, holdings, triggers, onStock }) {
   );
 }
 
-export function SectorRanking({ data }) {
+export function SectorRanking({ data, onStock, holdings, watchlist }) {
+  const [selected, setSelected] = useState(null);
+  if (!data.items.length) return h(Empty, { title: '暂无行业排行' });
+  const sector = data.items.find((item) => item.code === selected);
+  const leaderCode = sector?.leadingStockCode;
+  const leader =
+    typeof leaderCode === 'string' && /^\d{6}\.(SH|SZ|BJ)$/.test(leaderCode)
+      ? leaderCode
+      : typeof leaderCode === 'string' && /^[036]\d{5}$/.test(leaderCode)
+        ? `${leaderCode}.${leaderCode.startsWith('6') ? 'SH' : 'SZ'}`
+        : null;
+  const held = leader && holdings?.holdings?.some((item) => item.holding.stockId === leader);
+  const watched = leader && watchlist?.items?.some((item) => item.stockId === leader);
   return h(
     'div',
     null,
-    data.items.length
-      ? h(
-          'ol',
-          { className: 'luo-sector-list' },
-          data.items.map((sector, index) =>
+    h(
+      'ol',
+      { className: 'luo-sector-list' },
+      data.items.map((item, index) =>
+        h(
+          'li',
+          { key: item.code },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'luo-sector-select',
+              'aria-expanded': item.code === selected,
+              'aria-controls': 'luo-sector-detail',
+              onClick: () => setSelected(item.code === selected ? null : item.code),
+            },
+            h('span', { className: 'luo-sector-rank' }, index + 1),
             h(
-              'li',
-              { key: sector.code },
-              h('span', { className: 'luo-sector-rank' }, index + 1),
+              'span',
+              { className: 'luo-sector-main' },
+              h('b', null, item.name),
               h(
-                'div',
-                { className: 'luo-sector-main' },
-                h('b', null, sector.name),
-                h(
-                  'small',
-                  null,
-                  `领涨 ${sector.leadingStockName || '—'} · 成交 ${bigMoney(sector.amount)}`,
-                ),
-              ),
-              h(
-                'strong',
-                { className: `luo-mono luo-${toneOf(sector.changePct)}` },
-                ratio(sector.changePct),
+                'small',
+                null,
+                `领涨 ${item.leadingStockName || '—'} · 成交 ${bigMoney(item.amount)}`,
               ),
             ),
+            h(
+              'strong',
+              { className: `luo-mono luo-${toneOf(item.changePct)}` },
+              ratio(item.changePct),
+            ),
           ),
+        ),
+      ),
+    ),
+    sector
+      ? h(
+          'section',
+          {
+            id: 'luo-sector-detail',
+            className: 'luo-sector-detail',
+            'aria-label': `${sector.name}行业详情`,
+          },
+          h('h3', null, sector.name, h('small', null, sector.code)),
+          h(
+            'div',
+            { className: 'luo-stats' },
+            h(Stat, { k: '指数点位', v: money(sector.price) }),
+            h(Stat, { k: '成交额', v: bigMoney(sector.amount) }),
+            h(Stat, { k: '上涨家数', v: int(sector.upCount) }),
+            h(Stat, { k: '下跌家数', v: int(sector.downCount) }),
+          ),
+          leader || sector.leadingStockName
+            ? h(
+                'div',
+                { className: 'luo-sector-leader' },
+                h('span', { className: 'luo-fine' }, '领涨股'),
+                leader && onStock
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'luo-stock-link',
+                        onClick: () =>
+                          onStock({
+                            stockId: leader,
+                            stockName: sector.leadingStockName || leader,
+                            sourceLabel: `${sector.name} · 行业领涨股`,
+                          }),
+                      },
+                      sector.leadingStockName || leader,
+                      h('small', null, leader),
+                    )
+                  : h('strong', null, sector.leadingStockName || leader),
+                h(
+                  'span',
+                  { className: `luo-mono luo-${toneOf(sector.leadingStockChangePct)}` },
+                  ratio(sector.leadingStockChangePct),
+                ),
+                held ? h(Pill, { tone: 'quiet' }, '已持仓') : null,
+                watched ? h(Pill, { tone: 'quiet' }, '当前页关注') : null,
+              )
+            : h('p', { className: 'luo-fine' }, '上游未提供领涨股。'),
+          h(
+            'p',
+            { className: 'luo-fine' },
+            `来源 ${data.source} · 读取于 ${when(data.asOf)}。仅展示当前行业截面，不代表完整成分或历史归属。`,
+          ),
+          data.warnings.length
+            ? h(
+                'p',
+                { className: 'luo-fine luo-warn-text' },
+                `数据提示：${data.warnings.join('、')}`,
+              )
+            : null,
         )
-      : h(Empty, { title: '暂无行业排行' }),
+      : h('p', { className: 'luo-fine' }, '点选行业，查看涨跌家数与领涨股。'),
   );
 }
 

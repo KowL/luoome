@@ -1,7 +1,8 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
-import { useStockDetail, useStockHistory, useStockProfile } from './data.js';
+import { useStockDetail, useStockFinancial, useStockHistory, useStockProfile } from './data.js';
 import { bigMoney, int, money, points, tradeDate, when } from './format.js';
 import { Card, ErrorNote, Pill, Refresh, SkeletonLines, Stat } from './primitives.js';
+import { stockFinancialSections, stockHistoryIndex, stockHistoryRows } from './projection.js';
 
 /** 个股档案事实：股东户数（最近一期）+ 所属板块清单。 */
 function StockProfileFacts({ profile }) {
@@ -60,15 +61,43 @@ function StockProfileFacts({ profile }) {
 }
 
 export function StockHistory({ marketView }) {
-  const candles = marketView.candles;
+  const [range, setRange] = useState('all');
+  const [selectedDate, setSelectedDate] = useState(null);
+  const candles = stockHistoryRows(marketView, range);
   const status = marketView.dataStatus;
   if (!candles.length)
     return h('p', { className: 'luo-fine' }, '没有可绘制的历史 K 线。缺失历史保持未知。');
-  const bottom = Math.min(...candles.map((bar) => bar.low));
-  const top = Math.max(...candles.map((bar) => bar.high));
+  const selectedIndex = candles.findIndex((bar) => bar.date === selectedDate);
+  const current = selectedIndex < 0 ? candles.length - 1 : selectedIndex;
+  const selected = candles[current];
+  const prices = candles
+    .flatMap((bar) => [bar.low, bar.high, bar.ma20, bar.ma60])
+    .filter(Number.isFinite);
+  const bottom = Math.min(...prices);
+  const top = Math.max(...prices);
   const spread = top - bottom || 1;
-  const y = (value) => 12 + ((top - value) / spread) * 132;
+  const y = (value) => 16 + ((top - value) / spread) * 132;
+  const maxVolume = Math.max(
+    ...candles.map((bar) => (Number.isFinite(bar.volume) ? bar.volume : 0)),
+  );
   const slot = 520 / candles.length;
+  const x = (index) => 20 + (index + 0.5) * slot;
+  const readout = (bar) =>
+    `${bar.date}：开 ${money(bar.open)}，高 ${money(bar.high)}，低 ${money(bar.low)}，收 ${money(bar.close)}；成交量 ${Number.isFinite(bar.volume) ? `${int(bar.volume)} 股` : '缺失'}；成交额 ${Number.isFinite(bar.amount) ? bigMoney(bar.amount) : '缺失'}；MA20 ${bar.ma20 === null ? '不足期' : money(bar.ma20)}；MA60 ${bar.ma60 === null ? '不足期' : money(bar.ma60)}；来源 ${bar.source}${bar.completeness === 'live' ? '；未收盘' : ''}`;
+  const maPath = (key) => {
+    let connected = false;
+    return candles
+      .map((bar, index) => {
+        if (bar[key] === null) {
+          connected = false;
+          return '';
+        }
+        const command = connected ? 'L' : 'M';
+        connected = true;
+        return `${command}${x(index)},${y(bar[key])}`;
+      })
+      .join(' ');
+  };
   return h(
     'figure',
     { className: 'luo-stock-history' },
@@ -83,14 +112,59 @@ export function StockHistory({ marketView }) {
       ),
     ),
     h(
+      'div',
+      { className: 'luo-stock-history-controls', role: 'group', 'aria-label': '历史交易日范围' },
+      [
+        [30, '30 交易日'],
+        [60, '60 交易日'],
+        ['all', '全部已加载'],
+      ].map(([value, label]) =>
+        h(
+          'button',
+          {
+            key: value,
+            type: 'button',
+            className: 'luo-btn',
+            'aria-pressed': range === value,
+            'data-stock-range': value,
+            onClick: () => setRange(value),
+          },
+          label,
+        ),
+      ),
+    ),
+    h(
+      'p',
+      { className: 'luo-fine luo-stock-history-legend' },
+      h('span', { className: 'luo-stock-ma20' }, 'MA20'),
+      ' / ',
+      h('span', { className: 'luo-stock-ma60' }, 'MA60'),
+      ' · MA20/60 按完整已加载日线计算，不足期不画；含未收盘报价时为实时估算 · 成交量（股）',
+    ),
+    h(
       'svg',
       {
-        viewBox: '0 0 560 176',
-        role: 'img',
-        'aria-label': `${candles[0].date} 至 ${candles.at(-1).date} 的真实日 K，共 ${candles.length} 根`,
+        viewBox: '0 0 560 252',
+        role: 'group',
+        tabIndex: 0,
+        'aria-label': `${candles[0].date} 至 ${candles.at(-1).date} 的真实日 K 与成交量，共 ${candles.length} 根；左右方向键逐日读取，Home/End 跳至首末日`,
         'data-stock-history': true,
+        onKeyDown: (event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          setSelectedDate(candles[stockHistoryIndex(event.key, current, candles.length)].date);
+        },
+        onPointerMove: (event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const position = ((event.clientX - rect.left) / rect.width) * 560;
+          const index = Math.max(
+            0,
+            Math.min(candles.length - 1, Math.floor((position - 20) / slot)),
+          );
+          setSelectedDate(candles[index].date);
+        },
       },
-      [12, 78, 144].map((position) =>
+      [16, 82, 148, 174, 226].map((position) =>
         h('line', {
           key: position,
           x1: 20,
@@ -100,39 +174,83 @@ export function StockHistory({ marketView }) {
           className: 'luo-stock-history-grid',
         }),
       ),
-      candles.map((bar, index) => {
-        const x = 20 + (index + 0.5) * slot;
-        return h(
+      h('text', { x: 20, y: 12 }, money(top)),
+      h('text', { x: 540, y: 160, textAnchor: 'end' }, money(bottom)),
+      h(
+        'text',
+        { x: 20, y: 170 },
+        candles.some((bar) => Number.isFinite(bar.volume)) ? `量 ${int(maxVolume)} 股` : '量 缺失',
+      ),
+      candles.map((bar, index) =>
+        h(
           'g',
-          { key: bar.date, className: bar.close >= bar.open ? 'is-up' : 'is-down' },
-          h(
-            'title',
-            null,
-            `${bar.date}：开 ${bar.open}，高 ${bar.high}，低 ${bar.low}，收 ${bar.close}；来源 ${bar.source}${bar.completeness === 'live' ? '；未收盘' : ''}`,
-          ),
+          {
+            key: bar.date,
+            className: bar.close >= bar.open ? 'is-up' : 'is-down',
+            onPointerEnter: () => setSelectedDate(bar.date),
+          },
+          h('title', null, readout(bar)),
           h('line', {
-            x1: x,
-            x2: x,
+            x1: x(index),
+            x2: x(index),
             y1: y(bar.high),
             y2: y(bar.low),
             className: 'luo-stock-history-wick',
           }),
           h('rect', {
-            x: x - Math.min(slot * 0.3, 5),
+            x: x(index) - Math.min(slot * 0.3, 5),
             y: Math.min(y(bar.open), y(bar.close)),
             width: Math.max(1, Math.min(slot * 0.6, 10)),
             height: Math.max(1, Math.abs(y(bar.open) - y(bar.close))),
             className: 'luo-stock-history-candle',
           }),
-        );
+          Number.isFinite(bar.volume)
+            ? h('rect', {
+                x: x(index) - Math.min(slot * 0.3, 5),
+                y: 226 - (maxVolume ? (bar.volume / maxVolume) * 48 : 0),
+                width: Math.max(1, Math.min(slot * 0.6, 10)),
+                height: maxVolume ? (bar.volume / maxVolume) * 48 : 0,
+                className: 'luo-stock-history-volume',
+                'data-volume-date': bar.date,
+              })
+            : null,
+        ),
+      ),
+      ['ma20', 'ma60'].map((key) =>
+        h('path', {
+          key,
+          d: maPath(key),
+          fill: 'none',
+          stroke: key === 'ma20' ? 'var(--lu-accent, #65b9a5)' : 'var(--lu-warn, #d9ac65)',
+          strokeWidth: 1.5,
+          className: `luo-stock-${key}`,
+        }),
+      ),
+      h('line', {
+        x1: x(current),
+        x2: x(current),
+        y1: 16,
+        y2: 226,
+        className: 'luo-stock-history-cursor',
+        stroke: 'currentColor',
+        strokeDasharray: '3 4',
       }),
-      h('text', { x: 20, y: 169 }, candles[0].date),
-      h('text', { x: 540, y: 169, textAnchor: 'end' }, candles.at(-1).date),
+      h('text', { x: 20, y: 246 }, candles[0].date),
+      h('text', { x: 540, y: 246, textAnchor: 'end' }, candles.at(-1).date),
+    ),
+    h(
+      'p',
+      {
+        className: 'luo-fine luo-stock-history-readout',
+        'aria-live': 'polite',
+        'aria-atomic': true,
+      },
+      readout(selected),
     ),
     h(
       'figcaption',
       { className: 'luo-fine' },
-      `日线截止 ${status.barsAsOf ?? '未知'} · ${candles.length} 根实际 K 线 · 来源 ${status.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；图表不代表历史回测。`,
+      `日线截止 ${status.barsAsOf ?? '未知'} · 显示 ${candles.length} / 已加载 ${marketView.candles.length} 根实际 K 线 · 来源 ${status.sources.join('、') || '未提供'}。未补齐的交易日不生成 K 线；范围按实际日线根数裁取，全部仅指已加载历史。图表不代表历史回测。`,
     ),
     status.warnings.length
       ? h(
@@ -145,6 +263,122 @@ export function StockHistory({ marketView }) {
               : '保留工具返回的市场收盘、来源或覆盖限制，最新行情与日线可能来自不同时点。',
         )
       : null,
+  );
+}
+
+const financialDate = (value) => (value ? new Date(value).toISOString().slice(0, 10) : '缺失');
+const FINANCIAL_INDICATORS = [
+  ['calculate_operating_income_yoy_growth_ratio', '营业收入同比'],
+  ['calculate_parent_holder_net_profit_yoy_growth_ratio', '归母净利润同比'],
+  ['index_weighted_avg_roe', '加权平均净资产收益率'],
+  ['sale_gross_margin', '销售毛利率'],
+  ['assets_debt_ratio', '资产负债率'],
+];
+
+export function StockFinancialFacts({ snapshot }) {
+  return h(
+    'div',
+    { className: 'luo-stock-financial', 'data-stock-financial': true },
+    h(Pill, { tone: 'warn' }, '当前数据商视图 · 非 PIT'),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      `${snapshot.viewKind} · PIT ${snapshot.pitStatus}；不用于历史回测或生产基本面评分。季报累计值保持原口径。`,
+    ),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      `报告期末 ${financialDate(snapshot.periodEnd)} · 披露日 ${financialDate(snapshot.reportDate)}`,
+    ),
+    stockFinancialSections(snapshot).map((section) =>
+      h(
+        'section',
+        { key: section.key, className: 'luo-stock-financial-section' },
+        h('h4', null, section.title),
+        h(
+          'p',
+          { className: 'luo-fine' },
+          `报告期 ${section.period ?? '缺失'} · 期末 ${financialDate(section.periodEnd)} · 披露日 ${financialDate(section.reportDate)}`,
+        ),
+        h(
+          'div',
+          { className: 'luo-stock-quote-grid' },
+          section.rows.map((row) =>
+            h(Stat, {
+              key: row.key,
+              k: row.label,
+              v:
+                row.value === null
+                  ? '缺失'
+                  : row.unit === 'CNY/share'
+                    ? `${money(row.value)} 元/股`
+                    : bigMoney(row.value),
+            }),
+          ),
+        ),
+      ),
+    ),
+    h(
+      'section',
+      { className: 'luo-stock-financial-section' },
+      h('h4', null, '当前估值'),
+      h(
+        'div',
+        { className: 'luo-stock-quote-grid' },
+        [
+          ['peTtm', 'PE TTM'],
+          ['peMrq', 'PE MRQ'],
+          ['pbMrq', 'PB MRQ'],
+          ['psTtm', 'PS TTM'],
+          ['pcfTtm', 'PCF TTM'],
+        ].map(([key, label]) =>
+          h(Stat, {
+            key,
+            k: label,
+            v: snapshot.valuation?.[key] == null ? '缺失' : money(snapshot.valuation[key]),
+          }),
+        ),
+      ),
+    ),
+    h(
+      'section',
+      { className: 'luo-stock-financial-section' },
+      h('h4', null, '财务指标'),
+      h(
+        'p',
+        { className: 'luo-fine' },
+        `指标报告期 ${snapshot.indicators?.report ?? '缺失'} · 百分数字段按上游百分点显示`,
+      ),
+      h(
+        'div',
+        { className: 'luo-stock-quote-grid' },
+        FINANCIAL_INDICATORS.map(([key, label]) => {
+          const indicator = snapshot.indicators?.indicators.find(
+            (item) => item.indicatorId === key,
+          );
+          return h(Stat, {
+            key,
+            k: label,
+            v:
+              indicator?.value == null
+                ? '缺失'
+                : indicator.unit === 'percent-points'
+                  ? points(indicator.value, 2, false)
+                  : money(indicator.value),
+          });
+        }),
+      ),
+    ),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      `来源 ${snapshot.source} · 观察时间 ${snapshot.observedAt ? when(snapshot.observedAt) : '缺失'} · 获取时间 ${when(snapshot.fetchedAt)}`,
+    ),
+    h(
+      'p',
+      { className: 'luo-fine' },
+      `上游缺失字段：${snapshot.missingFields.join('、') || '未标记'}；问题：${snapshot.issues.join('；') || '未标记'}。估值为最新快照，不代表与各报表同刻更新。`,
+    ),
   );
 }
 
@@ -164,6 +398,9 @@ export function StockDetail({
   const [analysisError, setAnalysisError] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showFinancial, setShowFinancial] = useState(false);
+  const financial = useStockFinancial(stock.stockId, showFinancial);
+  const financialResponse = financial.data?.financial;
   const state = useStockDetail(stock.stockId);
   const history = useStockHistory(stock.stockId, showHistory);
   const profile = useStockProfile(stock.stockId, showProfile);
@@ -366,6 +603,39 @@ export function StockDetail({
                 ? h(StockProfileFacts, { profile: profileItem })
                 : null,
       ),
+      h(
+        Card,
+        {
+          title: '财务当前快照',
+          meta: showFinancial
+            ? h(Refresh, { loading: financial.loading, onClick: financial.refresh })
+            : '按需读取 · 非 PIT',
+        },
+        !showFinancial
+          ? h(
+              'button',
+              { type: 'button', className: 'luo-btn', onClick: () => setShowFinancial(true) },
+              '读取财务快照',
+            )
+          : financial.loading
+            ? h(
+                'div',
+                { role: 'status', 'aria-label': '正在读取财务快照' },
+                h(SkeletonLines, { lines: 3 }),
+              )
+            : financialResponse?.ok
+              ? h(StockFinancialFacts, { snapshot: financialResponse.data })
+              : h(ErrorNote, {
+                  error: financial.error ?? {
+                    message:
+                      financialResponse?.error?.kind === 'permission_denied'
+                        ? '当前配置未启用财务快照读取。'
+                        : financialResponse?.error?.kind === 'invalid_input'
+                          ? '当前未配置财务快照数据源；请核对数据源配置。'
+                          : '财务快照不可用，请稍后重试。',
+                  },
+                }),
+      ),
       result && version
         ? h(
             Card,
@@ -380,7 +650,7 @@ export function StockDetail({
             ),
             evidence,
           )
-        : h(Card, { title: '关注来源' }, sourceLabel),
+        : h(Card, { title: '关注来源' }, h('p', null, sourceLabel), evidence),
       h(
         'p',
         { className: 'luo-strategy-note' },

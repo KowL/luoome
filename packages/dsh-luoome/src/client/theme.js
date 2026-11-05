@@ -219,6 +219,24 @@ export const STYLE = `
 .luo-stock-history { margin: 0; min-width: 0; }
 .luo-stock-history-caption { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; }
 .luo-stock-history svg { display: block; width: 100%; height: auto; margin: 16px 0 8px; }
+.luo-stock-history-controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 14px 0 0; }
+.luo-stock-history-controls .luo-btn { min-height: 32px; padding: 6px 9px; }
+.luo-stock-history-controls [aria-pressed="true"] { color: var(--lu-accent); border-color: var(--lu-accent); background: var(--lu-accent-soft); }
+.luo-stock-history-volume { fill: currentColor; opacity: .55; }
+.luo-stock-history-cursor { stroke: var(--lu-ink-3); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.luo-stock-history svg:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; border-radius: var(--lu-r-sm); }
+.luo-stock-history-readout { display: flex; flex-wrap: wrap; gap: 6px 12px; min-height: 44px; padding: 12px 0; border-block: 1px solid var(--lu-line); color: var(--lu-ink-2); font: 11px/1.7 var(--lu-mono); font-variant-numeric: tabular-nums; }
+.luo-stock-history .luo-stock-ma20 { color: var(--lu-accent); stroke: var(--lu-accent); }
+.luo-stock-history .luo-stock-ma60 { color: #598cba; stroke: #598cba; }
+.luo-stock-history polyline { fill: none; stroke-width: 1.5; pointer-events: none; }
+.luo-stock-financial-section { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--lu-line); min-width: 0; }
+.luo-stock-financial-section h4 { margin: 0 0 10px; font: 500 13px/1.5 var(--lu-sans); }
+.luo-stock-financial-section .luo-stat-v { line-height: 1.5; overflow-wrap: anywhere; }
+.luo-watch-filters { margin: 16px 0 18px; padding: 14px 0; border-block: 1px solid var(--lu-line); }
+.luo-watch-filters .luo-actions { align-items: flex-end; }
+.luo-watch-filters .luo-field { flex: 1 1 140px; margin: 0; min-width: 0; }
+.luo-watch-filters .luo-field:first-child { flex-basis: 220px; }
+.luo-watch-filters :is(input, select) { width: 100%; min-width: 0; }
 .luo-stock-history-grid { stroke: var(--lu-line); stroke-width: 1; }
 .luo-stock-history-wick { stroke: currentColor; stroke-width: 1; }
 .luo-stock-history-candle { fill: currentColor; }
@@ -669,6 +687,21 @@ export const STYLE = `
 .luo-sector-list, .luo-news-list { list-style: none; padding: 0; margin: 0; }
 .luo-sector-list li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--lu-line); font-size: 13px; }
 .luo-sector-list li:last-child, .luo-news-list li:last-child { border-bottom: 0; }
+.luo-sector-select { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 4px; border: 0; border-radius: var(--lu-r-sm); color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.luo-sector-select:hover, .luo-sector-select[aria-expanded="true"] { background: var(--lu-hover); }
+.luo-sector-select:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 2px; }
+.luo-sector-select > strong { flex-shrink: 0; }
+.luo-sector-detail { margin-top: 14px; padding: 14px 12px; border-left: 2px solid var(--lu-accent); background: var(--lu-surface-2); }
+.luo-sector-detail h3 { margin: 0 0 16px; font: 500 15px/1.5 var(--lu-sans); }
+.luo-sector-detail h3 small { margin-left: 8px; color: var(--lu-ink-3); font: 10px var(--lu-mono); }
+.luo-sector-detail .luo-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.luo-sector-detail .luo-stat-v { font-size: 13px; overflow-wrap: anywhere; line-height: 1.4; }
+.luo-sector-leader { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--lu-line); }
+.luo-sector-leader .luo-stock-link { display: grid; gap: 3px; padding: 3px 0; border: 0; background: transparent; color: var(--lu-ink); font: 500 12px/1.5 var(--lu-sans); text-align: left; cursor: pointer; }
+.luo-sector-leader .luo-stock-link small { color: var(--lu-ink-3); font: 10px var(--lu-mono); }
+.luo-sector-leader .luo-stock-link:hover { color: var(--lu-accent); }
+.luo-sector-leader .luo-stock-link:focus-visible { outline: 2px solid var(--lu-accent); outline-offset: 3px; }
+.luo-sector-detail > p:last-child { margin-bottom: 0; overflow-wrap: anywhere; }
 .luo-sector-rank { color: var(--lu-ink-3); font: 12px var(--lu-mono); }
 .luo-sector-main { flex: 1; min-width: 0; }
 .luo-sector-main b { font-weight: 500; }

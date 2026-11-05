@@ -260,6 +260,10 @@ const connectPage = async (browserWebSocketUrl: string): Promise<PageSession> =>
       { width, height, deviceScaleFactor: 1, mobile },
       sessionId,
     );
+    // CDP 应答早于响应式布局重排；测量前等浏览器应用新视口，避免把过渡态误判为溢出。
+    await evaluate(
+      `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
+    );
   };
   const insertText = async (text: string) => {
     await cdp.send('Input.insertText', { text }, sessionId);
@@ -450,6 +454,8 @@ let stockQuoteFailure = false;
 let stockQuotePending = false;
 let stockDetailReads = 0;
 let stockProfileReads = 0;
+let stockFinancialReads = 0;
+let stockFinancialFailure = false;
 let useConfiguredMarket = false;
 let loseResearchConfirmation = false;
 let strategyAttempt: 'failed' | 'withheld' | null = null;
@@ -660,7 +666,12 @@ const runAcceptance = async () => {
               name,
               changePct: 0.05 - index * 0.008,
               amount: 20000000000,
+              price: 2500 + index * 100,
+              upCount: 32,
+              downCount: 8,
               leadingStockName: '合成领涨股',
+              leadingStockCode: index === 0 ? fixtureInfo.stock.id : undefined,
+              leadingStockChangePct: 0.08,
             })),
             source: 'browser-fixture',
             asOf,
@@ -776,6 +787,85 @@ const runAcceptance = async () => {
         else send();
         return;
       }
+    }
+    if (incoming.url.startsWith('/dsh/api/luoome/stock-financial?')) {
+      stockFinancialReads++;
+      const asOf = '2026-10-25T04:00:00Z';
+      const stockId = new URL(incoming.url, 'http://fixture.invalid').searchParams.get('stockId');
+      const statement = (statementType: string, fields: Record<string, number | null>) => ({
+        statementType,
+        stockId,
+        period: 'quarterly',
+        fiscalYear: 2026,
+        fiscalPeriod: 3,
+        periodEnd: '2026-09-30T00:00:00.000Z',
+        reportDate: '2026-10-20T00:00:00.000Z',
+        currency: 'CNY',
+        fields,
+      });
+      outgoing.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      outgoing.end(
+        JSON.stringify({
+          stockId,
+          asOf,
+          financial: stockFinancialFailure
+            ? {
+                ok: false,
+                error: {
+                  kind: 'adapter_error',
+                  cause: 'synthetic financial failure',
+                  recoverable: true,
+                },
+              }
+            : {
+                ok: true,
+                data: {
+                  stockId,
+                  source: 'fuyao',
+                  viewKind: 'current-vendor-view',
+                  pitStatus: 'not-ready',
+                  fetchedAt: asOf,
+                  rawContentHash: 'b'.repeat(64),
+                  statements: {
+                    incomeStatements: [
+                      statement('income-statement', {
+                        operating_income: 1234560000,
+                        parent_holder_net_profit: null,
+                        net_profit: 220000000,
+                      }),
+                    ],
+                    balanceSheets: [
+                      statement('balance-sheet', {
+                        assets_total: 6800000000,
+                        total_debt: 2400000000,
+                        cash: 1800000000,
+                      }),
+                    ],
+                    cashFlowStatements: [
+                      statement('cash-flow-statement', {
+                        act_cash_flow_net: 350000000,
+                        invest_cash_flow_net: -180000000,
+                        financing_cash_flow_net: -50000000,
+                      }),
+                    ],
+                  },
+                  valuation: {
+                    stockId,
+                    ticker: String(stockId).slice(0, 6),
+                    name: '合成财务公司',
+                    peTtm: 28.5,
+                    peMrq: 27.8,
+                    pbMrq: 3.2,
+                    psTtm: 6.5,
+                    pcfTtm: null,
+                  },
+                  missingFields: ['parent_holder_net_profit', 'pcf_ttm'],
+                  issues: ['synthetic-partial-financials'],
+                },
+              },
+        }),
+      );
+      return;
     }
     if (incoming.url.startsWith('/dsh/api/luoome/stock/profile?')) {
       stockProfileReads++;
@@ -1487,6 +1577,35 @@ const runAcceptance = async () => {
   sectorFailure = false;
   await page.evaluate(`document.querySelector('[data-overview-section="sectors"] button').click()`);
   await page.waitFor(`document.body.innerText.includes('半导体')`, '行业排行独立重试');
+  await page.evaluate(`document.querySelector('.luo-sector-select').click()`);
+  await page.waitFor(
+    `document.querySelector('#luo-sector-detail')?.innerText.includes('上涨家数') && document.querySelector('#luo-sector-detail')?.innerText.includes('当前页关注')`,
+    '行业详情与关注领涨股联动',
+  );
+  await page.screenshot(join(evidenceDir, 'sector-drilldown-desktop.png'));
+  await page.evaluate(`document.querySelector('#luo-sector-detail .luo-stock-link').click()`);
+  await page.waitFor(
+    `document.querySelector('dialog[open]')?.innerText.includes('半导体 · 行业领涨股')`,
+    '行业领涨股进入研究详情',
+  );
+  await page.evaluate(`document.querySelector('[aria-label="关闭个股详情"]').click()`);
+  await page.setViewport(390, 844, true);
+  await page.evaluate(
+    `document.querySelector('#luo-sector-detail').scrollIntoView({block:'center'})`,
+  );
+  await page.waitFor(
+    `(() => { const detail = document.querySelector('#luo-sector-detail'); return detail.scrollWidth <= detail.clientWidth + 1; })()`,
+    '移动端行业详情无横向溢出',
+  );
+  await page.screenshot(join(evidenceDir, 'sector-drilldown-mobile.png'));
+  await page.setViewport(1320, 900, false);
+  await page.evaluate(`document.querySelector('.luo-sector-select').click()`);
+  summary.sectorDrilldown = {
+    snapshot: true,
+    leaderStock: true,
+    watchlistMarker: true,
+    mobileFits: true,
+  };
   for (const failure of ['http', 'tool'] as const) {
     newsFailure = failure;
     await page.evaluate(`document.querySelector('[data-overview-section="news"] button').click()`);
@@ -2067,6 +2186,44 @@ const runAcceptance = async () => {
   );
   await clickAction('关闭回执');
   await page.screenshot(join(evidenceDir, 'watchlists-desktop.png'));
+  await fillWatchField('搜索成员', '持续研究理由');
+  await fillWatchField('研究阶段筛选', 'researching');
+  await fillWatchField('来源类型筛选', 'manual');
+  await fillWatchField('优先级筛选', 'important');
+  await page.waitFor(
+    `document.querySelector('.luo-watch-filters')?.innerText.includes('显示 1 / 1')`,
+    '关注条件交集与来源理由搜索',
+  );
+  await fillWatchField('优先级筛选', 'urgent');
+  await page.waitFor(
+    `document.body.innerText.includes('没有符合筛选条件的成员') && document.querySelectorAll('.luo-watch-member').length === 0`,
+    '关注筛选空态',
+  );
+  await page.screenshot(join(evidenceDir, 'watchlists-filters-empty.png'));
+  await clickAction('重置筛选与排序');
+  await page.waitFor(
+    `document.querySelector('.luo-watch-member') !== null && document.querySelector('[aria-label="搜索成员"]').value === ''`,
+    '关注筛选重置',
+  );
+  await page.setViewport(390, 844, true);
+  await page.evaluate(
+    `document.querySelector('.luo-watch-filters').scrollIntoView({block:'center'})`,
+  );
+  if (
+    !(await page.evaluate<boolean>(
+      `(() => { const filters = document.querySelector('.luo-watch-filters'); return filters.scrollWidth <= filters.clientWidth + 1; })()`,
+    ))
+  )
+    throw new Error('移动端关注筛选横向溢出');
+  await page.screenshot(join(evidenceDir, 'watchlists-filters-mobile.png'));
+  await page.setViewport(1320, 900, false);
+  summary.watchlistFilters = {
+    reasonSearch: true,
+    intersection: true,
+    empty: true,
+    reset: true,
+    mobileFits: true,
+  };
   if (stockDetailReads !== watchPanelStockReads) throw new Error('关注列表不应预取个股行情');
   await page.evaluate(`document.querySelector('.luo-watch-member .luo-stock-link').click()`);
   await page.waitFor(
@@ -2075,6 +2232,12 @@ const runAcceptance = async () => {
   );
   if (stockDetailReads !== watchPanelStockReads + 1)
     throw new Error('关注详情应只读取当前股票行情');
+  if (
+    !(await page.evaluate<boolean>(
+      `document.querySelector('dialog[open]')?.innerText.includes('验证持续研究理由')`,
+    ))
+  )
+    throw new Error('普通关注详情遗漏来源理由');
   await page.evaluate(`document.querySelector('dialog[open] [aria-label="关闭个股详情"]').click()`);
   await clickAction('移除手动关注');
   await waitWatchDone();
@@ -2395,6 +2558,56 @@ const runAcceptance = async () => {
     if (!profileText.includes(expected)) throw new Error(`个股档案缺少 ${expected}`);
   if (stockProfileReads !== 1)
     throw new Error(`个股档案读取次数异常：${String(stockProfileReads)}`);
+  if (stockFinancialReads !== 0) throw new Error('个股财务必须按需读取');
+  stockFinancialFailure = true;
+  await page.evaluate(
+    `([...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === '读取财务快照')).click()`,
+  );
+  await page.waitFor(
+    `document.querySelector('dialog[open]')?.innerText.includes('财务快照不可用')`,
+    '财务读取错误不伪造数据',
+  );
+  stockFinancialFailure = false;
+  const refreshFinancial = `(() => { const card = [...document.querySelectorAll('dialog[open] .luo-card')].find(item => item.querySelector('.luo-card-t')?.textContent === '财务当前快照'); if (!card) throw new Error('缺财务卡'); card.querySelector('button').click(); })()`;
+  await page.evaluate(refreshFinancial);
+  await page.waitFor(
+    `document.querySelector('[data-stock-financial]')?.innerText.includes('12.35 亿')`,
+    '财务卡重试后展示真实快照字段',
+  );
+  const financialText = await page.evaluate<string>(
+    `document.querySelector('[data-stock-financial]').innerText`,
+  );
+  for (const expected of [
+    '非 PIT',
+    'not-ready',
+    '2026-09-30',
+    '2026-10-20',
+    '缺失',
+    'parent_holder_net_profit',
+  ])
+    if (!financialText.includes(expected))
+      throw new Error(`财务快照缺少口径或缺失说明：${expected}`);
+  if (stockFinancialReads !== 2) throw new Error('财务卡按需/重试请求数量不符');
+  await page.evaluate(
+    `document.querySelector('[data-stock-financial]').scrollIntoView({block:'center'})`,
+  );
+  await page.screenshot(join(evidenceDir, 'stock-financial-desktop.png'));
+  await page.setViewport(390, 844, true);
+  if (
+    !(await page.evaluate<boolean>(
+      `(() => { const dialog = document.querySelector('dialog[open]'); return dialog.scrollWidth <= dialog.clientWidth + 1; })()`,
+    ))
+  )
+    throw new Error('移动端财务快照横向溢出');
+  await page.screenshot(join(evidenceDir, 'stock-financial-mobile.png'));
+  await page.setViewport(1320, 900, false);
+  summary.stockFinancial = {
+    onDemand: true,
+    retry: true,
+    nonPit: true,
+    missingPreserved: true,
+    mobileFits: true,
+  };
   await page.screenshot(join(evidenceDir, 'stock-detail-desktop.png'));
   await page.evaluate(
     `document.querySelector('dialog[open] .luo-stock-profile').scrollIntoView({ block: 'center' })`,
@@ -3067,6 +3280,40 @@ const runAcceptance = async () => {
     `(() => { const chart = document.querySelector('dialog[open] [data-stock-history]'); return {points:chart.querySelectorAll('g').length, label:chart.getAttribute('aria-label')}; })()`,
   );
   if (historyFacts.points < 2) throw new Error('历史图表没有实际日线事实');
+  const volumeCount = await page.evaluate<number>(
+    `document.querySelectorAll('dialog[open] [data-volume-date]').length`,
+  );
+  if (volumeCount !== historyFacts.points) throw new Error('量价图的日期数量不一致');
+  await page.evaluate(`document.querySelector('[data-stock-range="30"]').click()`);
+  await page.waitFor(
+    `document.querySelector('[data-stock-range="30"]').getAttribute('aria-pressed') === 'true'`,
+    '切换历史30交易日',
+  );
+  const rangeCount = await page.evaluate<number>(
+    `document.querySelectorAll('dialog[open] [data-stock-history] g').length`,
+  );
+  if (rangeCount !== Math.min(30, historyFacts.points))
+    throw new Error('历史范围没有按实际交易日裁取');
+  await page.evaluate(
+    `document.querySelector('[data-stock-history]').dispatchEvent(new KeyboardEvent('keydown', {key:'Home',bubbles:true}))`,
+  );
+  const firstReadout = await page.evaluate<string>(
+    `document.querySelector('.luo-stock-history-readout').textContent`,
+  );
+  await page.evaluate(
+    `document.querySelector('[data-stock-history]').dispatchEvent(new KeyboardEvent('keydown', {key:'End',bubbles:true}))`,
+  );
+  const lastReadout = await page.evaluate<string>(
+    `document.querySelector('.luo-stock-history-readout').textContent`,
+  );
+  if (rangeCount > 1 && firstReadout === lastReadout) throw new Error('量价图键盘日期读取未切换');
+  await page.evaluate(`document.querySelector('[data-stock-range="all"]').click()`);
+  summary.stockHistoryInteraction = {
+    volumeDatesAligned: true,
+    rangeSwitch: true,
+    keyboardReadout: true,
+    count: historyFacts.points,
+  };
   await page.evaluate(
     `document.querySelector('dialog[open] [data-stock-history]').scrollIntoView({block:'center'})`,
   );

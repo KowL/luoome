@@ -25,6 +25,7 @@ import { createOperationHandler } from './operations.js';
 import {
   createPanelStateHandler,
   createStockDetailHandler,
+  createStockFinancialHandler,
   createStockHistoryHandler,
   createStockProfileHandler,
 } from './panels.js';
@@ -284,6 +285,15 @@ export const mountDshWebProfile = (
       '/api/luoome/stock/profile',
       ['GET'],
       createStockProfileHandler({
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
+    );
+    register(
+      '/api/luoome/stock-financial',
+      ['GET'],
+      createStockFinancialHandler({
         market: options.market,
         admit: () => null,
         now: () => new Date(options.now()),

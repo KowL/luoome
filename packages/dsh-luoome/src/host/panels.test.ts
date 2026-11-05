@@ -17,6 +17,7 @@ import { createMarketSurface } from './market-surface.js';
 import {
   createPanelStateHandler,
   createStockDetailHandler,
+  createStockFinancialHandler,
   createStockHistoryHandler,
   createStockProfileHandler,
   OVERVIEW_PLANS,
@@ -846,6 +847,81 @@ describe('fixed stock history route', () => {
     expect(invoke).not.toHaveBeenCalled();
     const rejected = new Response(null, { status: 401 });
     expect(await (await setup({ admit: () => rejected })).historyHandle(request())).toBe(rejected);
+  });
+});
+
+describe('stock financial route', () => {
+  const url = 'https://dsh.example/api/luoome/stock-financial?stockId=300476.SZ';
+
+  it('projects the current vendor snapshot without changing its PIT or missing-data status', async () => {
+    const snapshot = {
+      stockId: '300476.SZ',
+      source: 'fuyao' as const,
+      viewKind: 'current-vendor-view' as const,
+      pitStatus: 'not-ready' as const,
+      fetchedAt: now,
+      rawContentHash: 'a'.repeat(64),
+      missingFields: ['statements.incomeStatements'],
+      issues: ['upstream-partial'],
+    };
+    const fetchSnapshot = vi.fn(async () => ({ ok: true, data: snapshot }));
+    const ctx = await buildTestContext({
+      financialSnapshot: {
+        name: 'financial-snapshot',
+        sources: ['fuyao'],
+        status: () => [],
+        fetchSnapshot,
+      },
+    });
+    const market = createMarketSurface({
+      config: { allowlist: ['get_stock_financial_snapshot'] },
+      tools: toolRegistry.all(),
+      context: () => ctx,
+    });
+    try {
+      const handler = createStockFinancialHandler({ market, admit: () => null, now: () => now });
+      const response = await handler(new Request(url));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.json()).toMatchObject({
+        stockId: snapshot.stockId,
+        financial: { ok: true, data: { ...snapshot, fetchedAt: now.toISOString() } },
+      });
+      expect(fetchSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ stockId: snapshot.stockId }),
+      );
+    } finally {
+      market.dispose();
+    }
+  });
+
+  it('retains external opt-in and rejects duplicate, invalid or additional query fields', async () => {
+    const { market, admit } = await setup();
+    const handler = createStockFinancialHandler({ market, admit });
+    expect(await (await handler(new Request(url))).json()).toMatchObject({
+      financial: { ok: false, error: { kind: 'permission_denied' } },
+    });
+    const invoke = vi.spyOn(market, 'invoke');
+    for (const query of [
+      'stockId=300476.SZ&tool=fetch_quote',
+      'stockId=300476.SZ&stockId=600519.SH',
+      'stockId=invalid',
+      'stockId=300476.SZ&accountId=other',
+    ]) {
+      expect(
+        (await handler(new Request(`https://dsh.example/api/luoome/stock-financial?${query}`)))
+          .status,
+      ).toBe(400);
+    }
+    const deniedHandler = createStockFinancialHandler({
+      market,
+      admit: () => new Response(null, { status: 403 }),
+    });
+    expect((await deniedHandler(new Request(url))).status).toBe(403);
+    const post = await handler(new Request(url, { method: 'POST' }));
+    expect(post.status).toBe(405);
+    expect(post.headers.get('allow')).toBe('GET');
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 
