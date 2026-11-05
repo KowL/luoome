@@ -1,6 +1,14 @@
 import type { AnalysisContext, ToolContext } from '@luoome/core';
 
-import { type TriangleDataHealth, triangleGate } from '@luoome/core';
+import {
+  BearRationaleSchema,
+  BullRationaleSchema,
+  JudgeVerdictSchema,
+  RiskOfficerVerdictSchema,
+  type TriangleDataHealth,
+  triangleEvidenceBelongsToSnapshot,
+  triangleGate,
+} from '@luoome/core';
 import { z } from 'zod';
 
 /**
@@ -49,7 +57,10 @@ export const TriangleRoleTaskSchema = z
 export type TriangleRoleTask = z.infer<typeof TriangleRoleTaskSchema>;
 
 /** 角色执行器：给定任务，产出该角色的原始输出（未校验）。 */
-export type TriangleRoleExecutor = (task: TriangleRoleTask, ctx: ToolContext) => Promise<unknown>;
+export type TriangleRoleExecutor = (
+  task: TriangleRoleTask,
+  prior: readonly TriangleRoleRun[],
+) => Promise<unknown>;
 
 /** 单角色执行的计时与用量。 */
 export interface TriangleRoleRun {
@@ -153,7 +164,18 @@ export const runTriangleAnalysis = async (input: {
 
   if (input.context === null) throw new Error('三角分析需要一份已装配的 AnalysisContext');
 
-  const context = input.context;
+  const persisted = await input.ctx.repos.analysis.findContext(
+    input.context.accountId,
+    input.context.id,
+  );
+  if (
+    !persisted ||
+    persisted.contextHash !== input.context.contextHash ||
+    persisted.subject.kind !== input.context.subject.kind ||
+    persisted.subject.id !== input.context.subject.id
+  )
+    throw new Error('三角分析必须引用同账户的持久化事实快照');
+  const context = persisted;
 
   /**
    * 需求 7：按**预估上限**判降级，而不是跑到一半才放弃——
@@ -199,8 +221,20 @@ export const runTriangleAnalysis = async (input: {
 
   const startedAt = input.now();
   const roles: TriangleRoleRun[] = [];
-  // **永远是四角色全跑** —— 没有「跑一部分」这个选项。
+  let blocked: TriangleAssemblyResult['blocked'] = null;
+  const runtimeBreach = () => {
+    const budget = input.budget ?? DEFAULT_TRIANGLE_BUDGET;
+    if (input.now() - startedAt > budget.maxDurationMs) return 'time-budget-exceeded';
+    if (roles.reduce((sum, run) => sum + (run.tokenUsed ?? 0), 0) > budget.maxTokens)
+      return 'token-budget-exceeded';
+    return null;
+  };
   for (const role of TRIANGLE_ROLES) {
+    const breach = runtimeBreach();
+    if (breach) {
+      blocked = { code: breach, message: '实际执行超出预算，未完成全部角色审查。' };
+      break;
+    }
     // **同一个 contextId + 同一份 factIds** 发给每个角色。
     const task: TriangleRoleTask = {
       role,
@@ -208,16 +242,61 @@ export const runTriangleAnalysis = async (input: {
       factIds: [...context.factIds],
     };
     const startedAt = input.now();
-    const output = await input.executor(task, input.ctx);
+    const output = await input.executor(Object.freeze(task), structuredClone(roles));
     roles.push({
       role,
       elapsedMs: input.now() - startedAt,
-      // 执行器没给用量就是 `null`——**不编**。
       tokenUsed: extractTokenUsed(output),
       output,
     });
+    const raw =
+      output !== null && typeof output === 'object' && !Array.isArray(output)
+        ? Object.fromEntries(Object.entries(output).filter(([key]) => key !== 'tokenUsed'))
+        : output;
+    const schema = {
+      bull: BullRationaleSchema,
+      bear: BearRationaleSchema,
+      judge: JudgeVerdictSchema,
+      'risk-officer': RiskOfficerVerdictSchema,
+    }[role];
+    const parsed = schema.safeParse(raw);
+    if (!parsed.success || !triangleEvidenceBelongsToSnapshot(parsed.data, context.factIds)) {
+      blocked = {
+        code: 'invalid-role-output',
+        message: `${role} 输出或证据引用不属于当前事实快照。`,
+      };
+      break;
+    }
+    if (parsed.data.role === 'risk-officer' && parsed.data.status === 'veto') {
+      const vetoId = `triangle:${context.id}`;
+      if ((await input.ctx.repos.riskVeto.findVetoById(context.accountId, vetoId)) === null)
+        await input.ctx.repos.riskVeto.save({
+          id: vetoId,
+          accountId: context.accountId,
+          subject: context.subject,
+          contextId: context.id,
+          reason: parsed.data.reason,
+          factIds: parsed.data.factIds,
+          createdAt: input.ctx.clock(),
+        });
+      blocked = { code: 'risk_officer_veto', message: parsed.data.reason };
+    } else if (parsed.data.role === 'risk-officer' && parsed.data.status === 'need-more-data') {
+      blocked = { code: 'risk-officer-needs-data', message: parsed.data.reason };
+    } else if (parsed.data.role === 'judge' && parsed.data.status === 'need-more-data') {
+      blocked = { code: 'judge-needs-data', message: '裁决官列出了尚未解决的事实缺口。' };
+    }
   }
 
+  const finalBreach = runtimeBreach();
+  if (blocked === null && finalBreach)
+    blocked = { code: finalBreach, message: '实际执行超出预算，本次审查不发布结论。' };
+  if (blocked === null) {
+    const active = await input.ctx.repos.riskVeto.findActiveBySubject({
+      accountId: context.accountId,
+      subject: context.subject,
+    });
+    if (active !== null) blocked = { code: 'risk_officer_veto', message: active.veto.reason };
+  }
   const elapsedMs = input.now() - startedAt;
   // 任何一个角色拿不到用量，整体就是 `null`（不做部分求和——那会低估）。
   const tokenUsed = roles.some((role) => role.tokenUsed === null)
@@ -229,7 +308,7 @@ export const runTriangleAnalysis = async (input: {
     factIds: context.factIds,
     gate,
     roles,
-    blocked: null,
+    blocked,
     lead: triangleSummaryLead({ tokenUsed, elapsedMs, degraded: null }),
     // 走到这里说明**没有超预算**，也就没有降级——降级这个状态本身已被取消。
     degraded: null,

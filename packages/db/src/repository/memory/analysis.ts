@@ -17,12 +17,11 @@ import {
   hasAnalysisLease,
   InvariantError,
   isAnalysisContextStale,
-  type RiskVetoRepository,
   releaseAnalysisJob,
 } from '@luoome/core';
-import { assertNoActiveVeto } from '../risk-veto-check.js';
 import type { InMemoryAdviceRepository } from './advice.js';
 import type { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
+import type { InMemoryRiskVetoRepository } from './risk-veto.js';
 import type { InMemoryStrategyRepository } from './strategy.js';
 import type { InMemoryStrategyAutonomyActionRepository } from './strategy-autonomy-action.js';
 
@@ -33,7 +32,7 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     private readonly strategy: InMemoryStrategyRepository,
     private readonly actions: InMemoryStrategyAutonomyActionRepository,
     /** REQ-M5-04：风险官否决（**事务内**读取，不留并发窗口）。 */
-    private readonly vetos: RiskVetoRepository,
+    private readonly vetos: InMemoryRiskVetoRepository,
   ) {}
 
   private readonly jobs = new Map<string, AnalysisJob>();
@@ -74,7 +73,12 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     if (input.now >= context.writeUntil || input.now >= context.expiresAt)
       return { ok: false, reason: 'context_expired' };
     // REQ-M5-04：**否决状态在同一判定序列里**——不另起一次查询，避免并发窗口。
-    if (!(await assertNoActiveVeto({ vetos: this.vetos, context })))
+    if (
+      this.vetos.findActiveBySubjectSync({
+        accountId: context.accountId,
+        subject: context.subject,
+      }) !== null
+    )
       return { ok: false, reason: 'risk_officer_veto' };
     assertAdviceInvariants(input.advice);
     const completed: AnalysisJob | null =
@@ -140,7 +144,12 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     if (input.now >= context.writeUntil || input.now >= context.expiresAt)
       return { ok: false, reason: 'context_expired' };
     // REQ-M5-04：发布路径同样受否决约束（与 recordAdvice 同一判据）。
-    if (!(await assertNoActiveVeto({ vetos: this.vetos, context })))
+    if (
+      this.vetos.findActiveBySubjectSync({
+        accountId: context.accountId,
+        subject: context.subject,
+      }) !== null
+    )
       return { ok: false, reason: 'risk_officer_veto' };
     assertAnalysisPublication(context, input.publication);
     const resultRef = analysisPublicationRef(input.publication);
@@ -232,8 +241,7 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     const job = this.jobs.get(input.jobId);
     if (!job || job.accountId !== input.accountId) return null;
     // 终结态不可回填（只允许 pending / claimed）。
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'dead_letter')
-      return null;
+    if (job.status !== 'pending' && job.status !== 'claimed') return null;
     const next: AnalysisJob = { ...job, dataAsOf: input.dataAsOf, updatedAt: input.now };
     assertAnalysisJobInvariants(next);
     this.jobs.set(job.id, next);
@@ -375,13 +383,30 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     return structuredClone(next);
   }
 
-  async cancel(accountId: string, id: string, now: Date): Promise<AnalysisJob | null> {
+  async cancel(
+    accountId: string,
+    id: string,
+    now: Date,
+    output?: string,
+  ): Promise<AnalysisJob | null> {
     const job = this.jobs.get(id);
+    if (
+      job?.accountId === accountId &&
+      job.status === 'cancelled' &&
+      job.cancelledOutput === null &&
+      output !== undefined
+    ) {
+      const next = { ...job, cancelledOutput: output };
+      this.jobs.set(id, structuredClone(next));
+      return structuredClone(next);
+    }
     if (!job || job.accountId !== accountId || !['pending', 'claimed'].includes(job.status))
       return null;
     const next: AnalysisJob = {
       ...job,
       status: 'cancelled',
+      cancelledOutput: output ?? null,
+      result: null,
       claimToken: null,
       claimedBy: null,
       leaseUntil: null,

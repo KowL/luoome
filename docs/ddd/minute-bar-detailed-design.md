@@ -1,7 +1,8 @@
 # MinuteBar 详细设计（Market View Phase 4）
 
 > 状态：首个生产级竖向切片已实施（2026-08-20）
-> 关联：[个股行情查看](./stock-market-view-detailed-design.md)、[行情数据底座](./market-data-and-stock-universe-detailed-design.md)、[Tushare 适配器](./tushare-market-adapter-design.md)
+> 关联：[个股行情查看](./stock-market-view-detailed-design.md)、[行情数据底座](./market-data-and-stock-universe-detailed-design.md)
+> 当前来源：Tencent `mkline`；Tushare 实现已随数据源退役移除，存量分钟行仍按原 source 读取
 
 ## 1. 语义边界
 
@@ -43,37 +44,22 @@ when it spans both session ends and has no interior gaps. A live/current session
 
 ## 3. Provider capability and limits
 
-The production adapter uses Tushare `rt_min` (doc_id=374), not the Tencent cumulative minute endpoint.
-The endpoint is one A-share per request, current trading day only, OHLCV, and requires the
-realtime-minute permission. The implementation requests the selected frequency and supports the
-public 1/5/15/30/60-minute contract at the adapter seam; provider-specific aggregation is not invented.
-The request omits `fields` because the official time column is `time` while the proxy gateway
-renames it to `trade_time` and silently drops unknown field names; parsing accepts either.
-Tushare documents a maximum of 1,000 rows for this realtime endpoint and a separate minute-data
-permission ([rt_min](https://tushare.pro/document/2?doc_id=374),
-[permissions/frequency](https://tushare.pro/document/1?doc_id=290)). A response over the limit is
-marked partial rather than silently truncated.
+The current production source is Tencent `mkline`
+(`ifzq.gtimg.cn/appstock/app/kline/mkline`). Unlike the cumulative `minute/query` endpoint,
+mkline returns true per-bucket OHLCV `[bucketEndLabel, open, close, high, low, volume (lots)]`
+for m1/m5/m15/m30/m60 (live-verified), so it satisfies the "provider-supplied OHLCV only" rule.
+The adapter filters the multi-day response to the latest trading day to match the current-session
+contract, drops buckets whose end label is later than `fetchedAt` instead of fabricating timestamps,
+and omits `amount` because that column's unit is unverified.
 
-The manager has a dedicated 15-second `(stockId, interval)` cache and a 500 requests/minute
-minute limiter. Empty results are not cached. Provider errors are logged and returned to the Tool
-for local fallback. `intraday-minutes` is never an implicit fallback: the Tencent cumulative
-minute endpoint cannot be differenced into bars.
+The manager has a dedicated 15-second `(stockId, interval)` cache and an independent minute
+limiter. Empty results are not cached. Provider errors are logged and returned to the Tool for
+local fallback. `intraday-minutes` is never an implicit fallback: the Tencent cumulative minute
+endpoint cannot be differenced into bars. Any further source claiming `minute-bars` must meet the
+same bar semantics; cumulative or quote-synthesized series remain prohibited.
 
-Second source (2026-10-05): Tencent `mkline` (`ifzq.gtimg.cn/appstock/app/kline/mkline`) is bound
-as an explicit `minute-bars` source alongside Tushare. Unlike the cumulative `minute/query`
-endpoint, mkline returns true per-bucket OHLCV `[bucketEndLabel, open, close, high, low, volume
-(lots)]` for m1/m5/m15/m30/m60 (live-verified), so it satisfies the "provider-supplied OHLCV
-only" rule. The adapter filters the multi-day response to the latest trading day to match the
-current-session contract, drops buckets whose end label is later than `fetchedAt` instead of
-fabricating timestamps, and omits `amount` because that column's unit is unverified. Any further
-source claiming `minute-bars` must meet the same bar semantics; cumulative or quote-synthesized
-series remain prohibited.
-
-Tushare's general historical minute API is end-of-day and separately permissioned
-([minute data](https://tushare.pro/document/1?doc_id=234)); this slice does not call it through the
-HTTP adapter. Therefore the explicit date path is local-only and returns `unavailable` when that
-date was not retained. This is an honest availability boundary, not a fabricated historical
-series.
+The explicit date path is local-only and returns `unavailable` when that date was not retained.
+This is an honest availability boundary, not a fabricated historical series.
 
 ## 4. Persistence lifecycle
 

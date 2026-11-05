@@ -193,7 +193,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | S3 生产观测 | 进行中，当前已有 2 个正式真实交易日样本 | 按真实交易日持续形成 schedule/lease/checkpoint/publication/观察/AI 降级审计；不设固定天数门禁 |
 | v0.10 更长历史与持续快照 | 基础切片可用，长区间仍受真实 PIT 数据积累限制 | 真实 PIT 日期持续沉淀后完成更长历史任务、断点幂等和快照审计 |
 | 连板天梯 → Strategy DSL 字段 | 当前/正式日与 PIT replay 已完成；无对应交易日快照时仍保持 unknown | 持续积累真实交易日快照，并获得可审计炸板/断板历史数据源 |
-| 炸板/断板历史语义 | 2026-08-15 已冻结定义、审计信封和数据源门禁；个股历史已收紧为仅读 PIT repository，字段仍未注册 | 用真实凭据完成 Tushare raw daily + daily limit（首选）覆盖/权限/revision smoke 后，再实现专用双 repository；不得用当前情绪接口推断历史天梯字段 |
+| 炸板/断板历史语义 | 2026-08-15 已冻结定义、审计信封和数据源门禁；个股历史已收紧为仅读 PIT repository，字段仍未注册 | 用真实凭据完成 Fuyao raw daily + 公司行动 + 涨跌停/炸板能力的覆盖、权限与 revision smoke 后，再实现专用双 repository；不得用当前情绪接口推断历史天梯字段 |
 | Web 账户级鉴权 | 未立项；当前只有 request-scoped 账户选择 | 独立安全/产品决策、认证模型、权限矩阵和端到端验收 |
 
 因此当前开发顺序不扩展横向产品能力：只收口可靠性、安全、测试、观测和文档，并持续积累真实
@@ -226,7 +226,7 @@ Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下
 
 | Phase 3 项目 | 当前状态 | 主要代码/设计缺口 | 外部数据门禁 |
 |---|---|---|---|
-| 基本面因子与评分 | P3-0 Core、P3-1 mock、P3-2 deterministic score engine 已完成；真实 gate `not-ready` | append-only FinancialFact、score version/run/result 双仓储与迁移、显式 mock adapter、market/industry percentile、`sync/get_financial_facts`、`run/get_fundamental_score` 和 Web 权限门禁已落地；仍缺 P3-3 StrategyDslV2/evaluation workflow、P3-4 真实门禁与 P3-5 只读解释 UI | 现有 Tushare/Eastmoney/Sina 无财报发布时间、revision identity 或重述链；仍需真实 PIT adapter、覆盖证据、单位/期间映射与 restatement 样本，mock score 永远不能升级真实门禁 |
+| 基本面因子与评分 | P3-0 Core、P3-1 mock、P3-2 deterministic score engine 已完成；真实 gate `not-ready` | append-only FinancialFact、score version/run/result 双仓储与迁移、显式 mock adapter、market/industry percentile、`sync/get_financial_facts`、`run/get_fundamental_score` 和 Web 权限门禁已落地；仍缺 P3-3 StrategyDslV2/evaluation workflow、P3-4 真实门禁与 P3-5 只读解释 UI | 现有行情源没有完整财报 revision identity 与重述链；Fuyao 虽提供披露日和多期报表，仍需真实 PIT adapter、revision 发布时间、覆盖证据、单位/期间映射与 restatement 样本，mock score 永远不能升级真实门禁 |
 | 严格时间切片回测 | 代码切片已落地；真实数据证据未闭合 | strict-backtest scope、身份冻结、门禁审计和执行模型已有设计/契约；真实停牌/涨跌停/退市、公司行动、历史 benchmark、费用/滑点和 evaluator identity 尚未形成持续生产证据 | PIT universe、DailyBar revision/checkpoint/cutoff、版本化费用、版本化滑点、每日可交易性、公司行动、同 cutoff benchmark、evaluator 版本/代码身份八项必须完整；缺失只输出门禁和 unavailable，不输出净收益/回撤/Sharpe/胜率 |
 | 组合归因与现金流口径净值 | 代码基本完成；长区间、跨日和大账户生产证据未闭合 | 现金流/公司行动/TWR/回撤/贡献归因、快照审计和 Web 基础链路已落地；`cashFlowComplete` 等完整性字段必须由账本覆盖事实推导，不能在成功计算时无条件置 true | 真实交易、持仓、入出金、分红、费用、拆股/送转、价格与 benchmark 全区间覆盖；权威交易日历、输入修订追溯、现金流完整性和连续 scheduler 运行；缺价/缺账本保持 partial/unavailable，不填 0 |
 | 可移植策略研究定义 | 最小 JSON 纵向切片已完成 | canonical/versioned manifest、能力/字段依赖、数据集/evaluator identity、时间切片/执行模型及 export/validate/import read tools 已落地；跨实例文件传输 UI/CLI 可后续扩展 | 导入包自带 schema/version、字段/能力依赖、数据集与 evaluator identity、时间切片和执行模型；缺能力返回 unsupported，未知 DSL 字段拒绝，不静默降级 |
@@ -923,7 +923,7 @@ Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向�
 
 - **严格收益回测**：PIT universe、DailyBar revision replay 和 benchmark 事实已经具备基础能力，但
   费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
-- **分钟行情**：Phase 4 已完成首个独立 MinuteBar 竖向切片（当前会话 Tushare + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
+- **分钟行情**：Phase 4 已完成独立 MinuteBar 竖向切片（Tencent 当前会话 + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
 - **Obsidian Headless 同步**：Phase F 已选择更小且本地可验收的 Git-only workflow；Headless
   仍不实现，不作为 fallback，需求变化时另行决策。

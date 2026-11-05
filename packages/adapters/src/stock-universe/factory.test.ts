@@ -7,9 +7,12 @@ describe('stock-universe/factory', () => {
     expect(stockUniverseSourceOrderFromEnv({})).toEqual(['eastmoney', 'sina']);
     expect(
       stockUniverseSourceOrderFromEnv({
-        LUOOME_STOCK_UNIVERSE_SOURCES: 'tushare,sina,eastmoney',
+        LUOOME_STOCK_UNIVERSE_SOURCES: 'sina,eastmoney',
       }),
-    ).toEqual(['tushare', 'sina', 'eastmoney']);
+    ).toEqual(['sina', 'eastmoney']);
+    expect(() =>
+      stockUniverseSourceOrderFromEnv({ LUOOME_STOCK_UNIVERSE_SOURCES: 'tushare' }),
+    ).toThrow();
     expect(() =>
       stockUniverseSourceOrderFromEnv({
         LUOOME_STOCK_UNIVERSE_SOURCES: 'eastmoney,eastmoney',

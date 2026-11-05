@@ -1,0 +1,29 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "thscode": "000001.SZ",
+    "ticker": "000001",
+    "item": [
+      {
+        "ticker": "000001",
+        "ex_date_ms": 1760457600000,
+        "dividend_per_share": 0.236,
+        "per_share_bonus": 0
+      },
+      {
+        "ticker": "000001",
+        "ex_date_ms": 1749657600000,
+        "dividend_per_share": 0.362,
+        "per_share_bonus": 0
+      },
+      {
+        "ticker": "000001",
+        "ex_date_ms": 1728489600000,
+        "dividend_per_share": 0.246,
+        "per_share_bonus": 0
+      }
+    ]
+  }
+}

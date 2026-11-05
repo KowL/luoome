@@ -110,6 +110,20 @@ export class DrizzleRiskVetoRepository implements RiskVetoRepository {
     return null;
   }
 
+  async findVetoById(accountId: string, vetoId: string): Promise<RiskVeto | null> {
+    const row = this.db.select().from(riskVetoes).where(eq(riskVetoes.id, vetoId)).get();
+    if (row === undefined || row.accountId !== accountId) return null;
+    return {
+      id: row.id,
+      accountId: row.accountId,
+      subject: { kind: row.subjectKind as AnalysisSubject['kind'], id: row.subjectId },
+      reason: row.reason,
+      factIds: JSON.parse(row.factIdsJson) as string[],
+      contextId: row.contextId,
+      createdAt: row.createdAt,
+    };
+  }
+
   async saveOverride(override: RiskVetoOverride): Promise<void> {
     this.db
       .insert(riskVetoOverrides)
@@ -117,6 +131,8 @@ export class DrizzleRiskVetoRepository implements RiskVetoRepository {
         id: override.id,
         vetoId: override.vetoId,
         overriddenBy: override.overriddenBy,
+        actorUserId: override.actorUserId ?? null,
+        evidenceContextId: override.evidenceContextId ?? null,
         reason: override.reason,
         newFactIdsJson: JSON.stringify(override.newFactIds),
         overriddenAt: override.overriddenAt,

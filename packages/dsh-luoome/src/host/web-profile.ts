@@ -25,6 +25,7 @@ import { createOperationHandler } from './operations.js';
 import {
   createPanelStateHandler,
   createStockDetailHandler,
+  createStockFinancialHandler,
   createStockHistoryHandler,
   createStockProfileHandler,
 } from './panels.js';
@@ -32,6 +33,7 @@ import type { ReadSurface } from './read-surface.js';
 import { createResearchReadHandler } from './research.js';
 import type { ResearchJobs } from './research-jobs.js';
 import { createResearchContinuityReader } from './research-status.js';
+import { createRiskVetoOverrideHandler } from './risk-veto.js';
 import { createReadCallHandler } from './routes.js';
 import { registerReadTools, toolResultJsonSchema } from './tools.js';
 
@@ -232,6 +234,16 @@ export const mountDshWebProfile = (
       }),
     );
     register('/api/luoome/operations/prepare', ['POST'], operations);
+    if (options.capabilities.includes('write'))
+      register(
+        '/api/luoome/risk-veto/override',
+        ['POST'],
+        createRiskVetoOverrideHandler({
+          admit: () => null,
+          principal: options.principalForOwner,
+          context: options.context,
+        }),
+      );
     // T48：数据库文件走专用 octet-stream 载体，通用 64 KiB JSON 操作接口永不承载 base64 库。
     if (options.dataImport !== undefined) {
       register(
@@ -273,6 +285,15 @@ export const mountDshWebProfile = (
       '/api/luoome/stock/profile',
       ['GET'],
       createStockProfileHandler({
+        market: options.market,
+        admit: () => null,
+        now: () => new Date(options.now()),
+      }),
+    );
+    register(
+      '/api/luoome/stock-financial',
+      ['GET'],
+      createStockFinancialHandler({
         market: options.market,
         admit: () => null,
         now: () => new Date(options.now()),

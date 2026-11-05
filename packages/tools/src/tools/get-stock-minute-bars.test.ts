@@ -20,7 +20,7 @@ const bar = (
   volume: 10_000,
   amount: 915_000,
   adjustment: 'raw',
-  source: 'tushare',
+  source: 'tencent',
   fetchedAt: new Date(fetchedAt),
   completeness: 'closed',
   ...overrides,
@@ -94,7 +94,7 @@ describe('tool/get_stock_minute_bars', () => {
     ]);
     const result = await getStockMinuteBarsTool.execute(
       { stockId: '002594.SZ' },
-      withMinuteBars(ctx, () => Promise.reject(new Error('tushare upstream_error: 2002'))),
+      withMinuteBars(ctx, () => Promise.reject(new Error('tencent upstream_error: 2002'))),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;

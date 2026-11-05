@@ -44,9 +44,13 @@ luoome 不再提供独立 CLI、Web 站点或 MCP 入口，唯一交付形态是
 
 1. 在目标 DSH profile 目录安装插件包：
 
+   当前源码候选版本为 `0.2.6`，在目标环境验收 tarball 后安装：
+
    ```sh
-   npm install --save-exact dsh-luoome@0.2.3
+   npm install --save-exact /absolute/path/to/dsh-luoome-0.2.6.tgz
    ```
+
+   公开 npm 版独立发布，先用 `npm view dsh-luoome version` 核对版本；候选版本不代表已经公开发布。
 
 2. 在该 profile 的 `cordis.patch.yml` 中加入插件，保留已有条目：
 
@@ -145,7 +149,7 @@ DSH 侧栏通过 LUOOME 入口进入，主区顶部标签切换七个业务视�
 | 看盘 | 核心指数、账户总资产/账面现金/持仓市值、自选与持仓行情表、市场温度及连板分布、行业涨幅榜、今日触发、要闻、关注列表与研究摘要 |
 | 持仓 | 当前账户持仓、最近成交和绩效快照；「记账与账户维护」提供登记成交、现金流水与平仓/减仓，写入走 Operation 冻结输入与业务回执 |
 | 关注 | 独立管理关注列表与成员，展示股票名称、代码、研究阶段、优先级与关注来源；支持手动管理和交给 AI 管理 |
-| 策略 | 四步骤实验工作台：问题与规则、试跑与诊断、分层验证、结论与更新；保存后恢复固定版本、范围、基准和未完成研究。保留正式策略定义、匹配结果与原始规则依据。点击股票可查看报价，个股详情自动读取日 K 与筹码档案，再进入带策略来源的新分析对话。 |
+| 策略 | 四步骤实验工作台：问题与规则、试跑与诊断、分层验证、结论与更新；保存后恢复固定版本、范围、基准和未完成研究。保留正式策略定义、匹配结果与原始规则依据。点击股票可查看报价，个股详情自动读取日 K、筹码档案与财务快照，再进入带策略来源的新分析对话。 |
 | 告警 | Watchlist 级告警规则集：规则增删改、冷却与日上限、最近触发次数与配置提示；试跑不自动交易 |
 | 计划 | 逐股结构化交易计划：版本链、目标仓位与止损/止盈等四要素提示、失效条件、反证与风险；计划不会自动下单 |
 | 复盘 | 建议命中率、真实 confidence calibration 分桶、DecisionReview 最近记录与来源、逐条 Advice 用户反馈（未回填不推断）、待补齐观察与样本数/未知/时间范围 |
@@ -154,7 +158,7 @@ DSH 侧栏通过 LUOOME 入口进入，主区顶部标签切换七个业务视�
 面板只做投影，不自己算数：数字必须与工具输出逐位一致。看盘页点击「刷新全部」或各区「刷新」，其他面板点击「刷新事实」读取当前工具结果，
 工具失败显示错误，不以零值代替缺失数据。
 
-个股详情打开后即自动并行读取行情、日 K 与筹码档案，不再需要点按钮才拉取；某块失败时显示错误，详情头部「刷新」统一重试。详情只保留股票名一个大标题，不再出现「个股详情」「行情快照」「筹码与板块」这类重复卡片标题；日 K 与行情同卡展示，包含前复权日线、价格刻度、成交量、区间最高/最低、首末收盘、工具给出的最新均线，以及来源、日线截止日和覆盖警告；缺失交易日不生成 K 线，也不从单次报价合成走势，区间数字只投影工具给出的收盘价，不重算收益率。筹码与板块内容展示最近一期统计截止日、股东户数、较上期变动、户均持股与户均市值，以及上游所属板块及入选理由；统计截止日与读取时间分开显示，合法空结果标注未披露，接口异常显示错误。两块分别使用 `get_stock_market_view` 与 `get_stock_profile` external 工具与 market 白名单，不经过通用 read 面；未启用时显示权限错误。筹码档案取自东方财富；雪球报价与日 K 由独立行情源配置控制，未接入雪球讨论。点击详情顶部的股票代码会在新窗口打开雪球个股详情页。
+个股详情打开后即自动并行读取行情、日 K、筹码档案与财务快照，不再需要点按钮才拉取；某块失败时显示错误，详情头部「刷新」统一重试。详情只保留股票名一个大标题，不再出现「个股详情」「行情快照」「筹码与板块」这类重复卡片标题。日 K 与行情同卡展示，提供 30 / 60 / 全部已加载范围切换、成交量、MA20/MA60 均线、逐日读数与键盘浏览，并标注前复权、来源、日线截止日和覆盖警告；缺失交易日不生成 K 线，也不从单次报价合成走势。筹码与板块内容展示最近一期统计截止日、股东户数、较上期变动、户均持股与户均市值，以及上游所属板块及入选理由；统计截止日与读取时间分开显示，合法空结果标注未披露。财务快照展示非 PIT 口径、报告期/披露日、报表字段、当前估值与指标，缺失字段和上游问题原样标注。三块分别使用 `get_stock_market_view`、`get_stock_profile` 与 `get_stock_financial_snapshot` external 工具与 market 白名单，不经过通用 read 面；未启用时显示权限错误。筹码档案取自东方财富；雪球报价与日 K 由独立行情源配置控制，未接入雪球讨论。点击详情顶部的股票代码会在新窗口打开雪球个股详情页。
 
 在「关注」页可新建、编辑、启停或归档列表，添加股票、调整研究阶段和优先级、移除手动关注。
 每次修改在面板提交后按冻结输入直接执行并返回 Operation 回执；移除手动关注只结束 manual 来源，
@@ -197,6 +201,27 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 看盘页在交易时段每 60 秒自动刷新一次，非交易时段停止轮询、等下一次开盘再恢复；标签页隐藏时不发请求，回到前台立即刷新一次；刷新失败保留最后一次成功画面并提示，也可点「刷新全部」或各分区的「刷新 / 重试」。指数、市场温度、账户、持仓、自选、行业、要闻等分区独立请求并立即展示各自结果，慢接口不会阻塞其他区；刷新失败保留同一页上次成功数据，显示简短错误与重试入口。卡片和行情表不展示数据来源、读取时间或说明性提示，数值缺失保持空缺。自选汇总已启用关注列表中当前账户可见的成员，每页 40 只，涨跌幅和成交额排序仅作用于当前页；切页时不会展示上一页行情。今日触发按北京时间自然日筛选，显示优先级最高的 8 条。点击股票打开详情，日 K 走势与筹码档案自动加载，对话分析由用户主动点击。持仓页回读当前账户持仓、最近成交和绩效快照；DSH「设置 → 投资设置」可预览、取消和确认账户改名，名称以外的账本字段不变。刷新后可按操作 UUID 核对结果，浏览器不保存确认 token。新增/切换账户、其他供应商凭据配置和数据导入恢复仍使用现有受控管理入口。
 
 在投资设置中填写 FUYAO 服务地址（默认 `https://fuyao.aicubes.cn`）和 API Key，再将 FUYAO 选为首选或备用行情源，点击「保存行情设置」。最多启用三个不同来源，按优先级依次尝试；保存后当前 DSH 进程立即应用，无需重启。API Key 不回显，留空保留已有密钥；配置以 `0600` 权限保存到 `$LUOOME_HOME/.env`，重启后继续生效。模型仍在 DSH 的模型设置中配置。
+
+#### Fuyao 分域数据能力与 Tushare 退役迁移
+
+行情优先级只控制在线行情。天梯、情绪、龙虎榜、快讯与板块行情分别通过 `LUOOME_LIMIT_UP_LADDER_SOURCES`、`LUOOME_ASHARE_SENTIMENT_SOURCES`、`LUOOME_DRAGON_TIGER_SOURCES`、`LUOOME_NEWS_SOURCES`、`LUOOME_SECTOR_QUOTE_SOURCES` 显式加入 `fuyao`；快讯还需 `LUOOME_FUYAO_NEWS_TAG_ID`。板块关系、财务快照与离线 dump 默认关闭，分别设置 `LUOOME_SECTOR_MEMBERSHIP_SOURCES=fuyao`、`LUOOME_FINANCIAL_SNAPSHOT_SOURCES=fuyao`、`LUOOME_MARKET_DUMP_SOURCES=fuyao` 后装配。任一 Fuyao 能力启用均需 `FUYAO_API_KEY`；独立域配置在重启 DSH 后生效，共享限流参数和完整变量见[根 README](../README.md#环境变量)。
+
+| 工具 | 用途与边界 |
+|---|---|
+| `get_stock_sector_memberships` | 外部只读查询当前板块关系，不回填历史成分 |
+| `get_stock_financial_snapshot` | 外部只读查询财务当前快照，保留 `pitStatus=not-ready`，不替代严格 PIT 财务事实 |
+| `sync_market_dump` | 显式下载并导入一种 Parquet artifact，同时需要 external 与 write；默认不自动调度 |
+| `get_market_dump_status` | 只读查询运行、文件 hash 与 checkpoint，不返回下载地址 |
+
+原始日线与市场公司行动分别保存，不写成规范 qfq 日线，不自动调整账户持仓或现金，也不自动提升严格回测资格。artifact 位于 `$LUOOME_HOME/market-dumps`；安装包需包含 Parquet WASM 运行依赖（见 [§7.7](#77-安装升级备份与回退宿主机直部署)）。
+
+Tushare 已从运行时代码、来源配置与设置入口退役。升级前显式执行配置迁移：
+
+```bash
+node -- infra/migrate-retired-data-sources.mjs --env-file /path/to/.luoome/.env
+```
+
+脚本先生成同目录 `0600` 备份，再清理旧配置，不修改数据库。省略 `--env-file` 时处理 `$LUOOME_HOME/.env`（默认 `~/.luoome/.env`）；进程环境、systemd 与 compose 中的旧配置还需同步清理。历史 `source='tushare'` 记录原样保留读取。完整步骤与回滚见 [Fuyao 扩展与退役设计](./ddd/fuyao-data-expansion-and-tushare-retirement-design.md#13-配置与迁移)。
 
 #### 策略研究的证据层次
 
@@ -268,7 +293,7 @@ tradeIds 省略保留关联，显式空数组解除关联。新建时省略字�
 Caddy（可从既有镜像里取二进制）。运行期不需要 Bun，也不需要 Docker。
 从 `deploy/dsh/production.env.example` 复制私有 env 文件并填写（不要提交）。
 
-插件 tarball 的运行依赖只包含固定版本的 DSH SDK；`@luoome/*` 与 Zod 是构建依赖，已编入 host bundle。
+插件 tarball 的运行依赖包含固定版本的 DSH SDK 与 Parquet WASM；`@luoome/*`、Arrow 与 Zod 已编入 host bundle，WASM 随 `parquet-wasm` 运行包安装。
 目标机器可以用 `npm install --omit=dev <插件 tarball 路径>` 正常安装，无需解析 workspace 或链接仓库模块。
 `bun --no-env-file run test:plugin-install` 会在临时 profile 中实际执行 npm 安装并启动独立 DSH CLI，
 还会用活 Agent 执行原生工具，验证 HTTP 之外的插件作用域与权限检查；此验收不调用模型。
@@ -475,8 +500,8 @@ Advice 显式关联，不据此生成采纳反馈；需要时由用户重新核�
 | `LUOOME_OWNER_USER_ID` | 必填 | 插件操作者 id，由宿主绑定到所有会话与 Operation |
 | `LUOOME_OWNER_ACCOUNT_ID` | 必填 | 绑定的投资账户 id，必须在事实库中已存在 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序（最多三个）；可加入 `xueqiu`（访客会话）、`tushare`（需 `TUSHARE_TOKEN`）或 `fuyao`（需 `FUYAO_API_KEY`） |
-| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序（最多三个）；可加入 `xueqiu`（访客会话）或 `fuyao`（需 `FUYAO_API_KEY`） |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina` |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；写入 `$LUOOME_HOME/.env` 后重启 DSH 生效 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |

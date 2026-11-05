@@ -5,6 +5,9 @@ import { createRegistry, toolRegistry } from './registry.js';
 
 // 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
+  'start_goal_run',
+  'get_goal_run',
+  'cancel_goal_run',
   'get_analysis_context',
   'list_analysis_jobs',
   'get_analysis_job',
@@ -15,6 +18,8 @@ const EXPECTED_TOOL_NAMES = [
   'requeue_analysis_job',
   'record_advice',
   'record_analysis_result',
+  'record_triangle_review',
+  'run_triangle_analysis',
   'complete_analysis_job',
 
   'get_investment_workspace',
@@ -204,6 +209,10 @@ const EXPECTED_TOOL_NAMES = [
   // 龙虎榜（只读）
   'dragon_tiger_list',
   'get_stock_profile',
+  'get_stock_financial_snapshot',
+  'get_stock_sector_memberships',
+  'sync_market_dump',
+  'get_market_dump_status',
   // 北向资金历史流（只读）
   'northbound_flow',
   // 财经要闻（只读）
@@ -304,6 +313,18 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('Fuyao tools 声明查询与 dump 同步的精确组合能力', () => {
+    expect(toolRegistry.get('sync_market_dump')?.sideEffect).toBe('external');
+    expect(toolRegistry.get('sync_market_dump')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+    expect(toolRegistry.get('get_market_dump_status')?.requiredCapabilities).toEqual(['read']);
+    for (const name of ['get_stock_sector_memberships', 'get_stock_financial_snapshot']) {
+      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external']);
+    }
+  });
+
   it('sync_financial_facts 声明 external + write 组合能力', () => {
     expect(toolRegistry.get('sync_financial_facts')?.requiredCapabilities).toEqual([
       'external',
@@ -385,9 +406,11 @@ describe('toolRegistry', () => {
       'fetch_sector_quotes',
       'get_account_performance',
       'get_ashare_sentiment',
+      'get_stock_financial_snapshot',
       'get_stock_market_view',
       'get_stock_minute_bars',
       'get_stock_profile',
+      'get_stock_sector_memberships',
       'import_remote_research_document',
       'list_strategy_result_views',
       'prepare_strategy_data',
@@ -397,10 +420,13 @@ describe('toolRegistry', () => {
       'refresh_holdings_quotes',
       'run_strategy',
       'run_strategy_research_comparison',
+      'run_triangle_analysis',
       'search_research_documents_hybrid',
       'send_notification',
+      'start_goal_run',
       'sync_daily_bars',
       'sync_financial_facts',
+      'sync_market_dump',
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
@@ -424,6 +450,7 @@ describe('toolRegistry', () => {
       'archive_watchlist',
       'archive_watchlist_member',
       'cancel_analysis_job',
+      'cancel_goal_run',
       'cancel_strategy_evaluation_session',
       'close_holding',
       'commit_watchlist_import',

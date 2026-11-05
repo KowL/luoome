@@ -6,7 +6,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { enqueueAnalysisJobTool } from './jobs.js';
 
 const ACCOUNT = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
-const NOW = new Date('2026-07-29T16:00:00+08:00');
+const NOW = new Date('2026-07-29T12:00:00+08:00');
+const analysisResult = () => ({
+  result: {
+    decision: 'watch',
+    confidence: 50,
+    horizon: 'short',
+    reasoning: { premise: '等待确认', evidence: ['已保存行情'], counterEvidence: ['量能不足'] },
+    risks: ['信息有限'],
+  },
+  provenance: { generatorKind: 'dsh-worker', evidenceFactIds: ['quote:600519.SH'] },
+});
 
 /**
  * 造**装配能成功**的上下文（REQ-M5-01 fixture）。
@@ -77,7 +87,7 @@ const recordingRunner = () => {
     runner,
     outputOf: (id: string) => outputs.get(id) ?? '',
     settle: async () => {
-      await executor;
+      await executor?.catch(() => undefined);
     },
     kill: () => {
       cancelled = true;
@@ -97,8 +107,8 @@ describe('执行体阶段（output 是可观测证据）', () => {
       };
       const queued = await enqueueAnalysisJobTool.execute(
         {
-          kind: 'advice_market',
-          subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+          kind: 'advice_stock',
+          subject: { kind: 'stock', id: '600519.SH' },
           source: 'schedule',
         },
         ctx,
@@ -120,8 +130,8 @@ describe('执行体阶段（output 是可观测证据）', () => {
     };
     const queued = await enqueueAnalysisJobTool.execute(
       {
-        kind: 'advice_market',
-        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        kind: 'advice_stock',
+        subject: { kind: 'stock', id: '600519.SH' },
         source: 'schedule',
       },
       ctx,
@@ -139,6 +149,11 @@ describe('执行体阶段（output 是可观测证据）', () => {
     expect(output).toContain('assembled');
     expect(output).toContain('analyzer-unavailable');
     expect(output).not.toContain('completed');
+    if (!queued.ok) throw new Error('enqueue failed');
+    const failed = await ctx.repos.analysis.findJob(ctx.user.defaultAccountId, queued.data.jobId);
+    expect(failed?.status).toBe('dead_letter');
+    expect(failed?.error?.code).toBe('analyzer_unavailable');
+    expect(failed?.result).toBeNull();
   });
 
   it('注入分析器后走完全程（analyzed + completed）', async () => {
@@ -146,12 +161,12 @@ describe('执行体阶段（output 是可观测证据）', () => {
     const ctx = {
       ...(await setupWithFacts()),
       jobRunner: recorder.runner,
-      analysisRunner: async () => ({ ok: true }),
+      analysisRunner: async () => analysisResult(),
     };
     const queued = await enqueueAnalysisJobTool.execute(
       {
-        kind: 'advice_market',
-        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        kind: 'advice_stock',
+        subject: { kind: 'stock', id: '600519.SH' },
         source: 'schedule',
       },
       ctx,
@@ -161,11 +176,38 @@ describe('执行体阶段（output 是可观测证据）', () => {
     const output = recorder.outputOf('job-1');
     expect(output).toContain('analyzed');
     expect(output).toContain('completed');
+    if (!queued.ok) throw new Error('enqueue failed');
+    const savedJob = await ctx.repos.analysis.findJob(ctx.user.defaultAccountId, queued.data.jobId);
+    expect(savedJob?.status).toBe('completed');
+    expect(savedJob?.result).not.toBeNull();
+    expect(savedJob?.cancelledOutput).toBeNull();
+    expect(await ctx.repos.advice.findById(savedJob?.result?.resultRef ?? '')).not.toBeNull();
+  });
+
+  it('does not complete a job from a success-shaped object without an analysis result', async () => {
+    const recorder = recordingRunner();
+    const ctx = {
+      ...(await setupWithFacts()),
+      jobRunner: recorder.runner,
+      analysisRunner: async () => ({ ok: true }),
+    };
+    const queued = await enqueueAnalysisJobTool.execute(
+      { kind: 'advice_stock', subject: { kind: 'stock', id: '600519.SH' }, source: 'schedule' },
+      ctx,
+    );
+    if (!queued.ok) throw new Error('enqueue failed');
+    await recorder.settle();
+    const job = await ctx.repos.analysis.findJob(ctx.user.defaultAccountId, queued.data.jobId);
+    expect(job?.status).toBe('dead_letter');
+    expect(job?.error?.code).toBe('invalid_analysis_result');
+    expect(job?.result).toBeNull();
+    expect(await ctx.repos.advice.query({ includeExpired: true })).toEqual([]);
+    expect(recorder.outputOf('job-1')).not.toContain('completed');
   });
 
   it('**取消在阶段边界生效**：assembled 之后取消 → 不继续分析', async () => {
     const recorder = recordingRunner();
-    const analyzer = vi.fn(async () => ({ ok: true }));
+    const analyzer = vi.fn(async () => analysisResult());
     const ctx = {
       ...(await setupWithFacts()),
       jobRunner: recorder.runner,
@@ -173,8 +215,8 @@ describe('执行体阶段（output 是可观测证据）', () => {
     };
     const queued = await enqueueAnalysisJobTool.execute(
       {
-        kind: 'advice_market',
-        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        kind: 'advice_stock',
+        subject: { kind: 'stock', id: '600519.SH' },
         source: 'schedule',
       },
       ctx,
@@ -211,13 +253,13 @@ describe('取消与对照（result vs cancelledOutput）', () => {
       // 分析器在 gate 上等待 —— 让我们能在「analyzed 之前」插入取消
       analysisRunner: async () => {
         await gate;
-        return { ok: true };
+        return analysisResult();
       },
     };
     const queued = await enqueueAnalysisJobTool.execute(
       {
-        kind: 'advice_market',
-        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        kind: 'advice_stock',
+        subject: { kind: 'stock', id: '600519.SH' },
         source: 'schedule',
       },
       ctx,
@@ -240,6 +282,15 @@ describe('取消与对照（result vs cancelledOutput）', () => {
     // **取消后不写 completed**，而是报取消原因
     expect(output).not.toContain('completed');
     expect(output).toContain('cancelled-after-analyzed');
+    if (!queued.ok) throw new Error('enqueue failed');
+    const cancelledJob = await ctx.repos.analysis.findJob(
+      ctx.user.defaultAccountId,
+      queued.data.jobId,
+    );
+    expect(cancelledJob?.status).toBe('cancelled');
+    expect(cancelledJob?.result).toBeNull();
+    expect(cancelledJob?.cancelledOutput).toContain('assembled');
+    expect(await ctx.repos.advice.query({ includeExpired: true })).toEqual([]);
   });
 
   it('**对照版**：不取消 → 走完 `analyzed` + `completed`', async () => {
@@ -247,12 +298,12 @@ describe('取消与对照（result vs cancelledOutput）', () => {
     const ctx = {
       ...(await setupWithFacts()),
       jobRunner: recorder.runner,
-      analysisRunner: async () => ({ ok: true }),
+      analysisRunner: async () => analysisResult(),
     };
     const queued = await enqueueAnalysisJobTool.execute(
       {
-        kind: 'advice_market',
-        subject: { kind: 'market', id: 'CN_A_SHARES_SH_SZ' },
+        kind: 'advice_stock',
+        subject: { kind: 'stock', id: '600519.SH' },
         source: 'schedule',
       },
       ctx,
@@ -263,5 +314,11 @@ describe('取消与对照（result vs cancelledOutput）', () => {
     // **这条证明上面那个「没有 completed」是取消造成的**
     expect(output).toContain('analyzed');
     expect(output).toContain('completed');
+    if (!queued.ok) throw new Error('enqueue failed');
+    const savedJob = await ctx.repos.analysis.findJob(ctx.user.defaultAccountId, queued.data.jobId);
+    expect(savedJob?.status).toBe('completed');
+    expect(savedJob?.result).not.toBeNull();
+    expect(savedJob?.cancelledOutput).toBeNull();
+    expect(await ctx.repos.advice.findById(savedJob?.result?.resultRef ?? '')).not.toBeNull();
   });
 });

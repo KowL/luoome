@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719162813,
+    "item": [
+      {
+        "thscode": "881101.TI",
+        "name": "种植业与林业"
+      },
+      {
+        "thscode": "884001.TI",
+        "name": "种子生产"
+      },
+      {
+        "thscode": "884002.TI",
+        "name": "粮食种植"
+      }
+    ]
+  }
+}

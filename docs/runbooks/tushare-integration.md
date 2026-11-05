@@ -1,4 +1,6 @@
-# Tushare 集成手册
+# Tushare 集成手册（已退役）
+
+> 2026-11-03 起 Tushare 数据源及本文所述代码、配置和设置入口均已移除。本文仅用于历史迁移追溯，不构成当前操作手册；现行方案见 [Fuyao 扩展与 Tushare 退役设计](../ddd/fuyao-data-expansion-and-tushare-retirement-design.md)。
 
 luoome 与 tushare 官方 HTTP API（tushare.pro）的对接约定。本文聚焦**配置、启用、故障排查**；协议映射与字段设计见 [`docs/ddd/tushare-market-adapter-design.md`](../ddd/tushare-market-adapter-design.md)，代码在 `packages/adapters/src/tushare/`（客户端与 envelope 解析）与 `packages/adapters/src/market/tushare.ts`（行情适配器）。
 

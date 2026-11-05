@@ -9,7 +9,7 @@ describe('tool/get_stock_universe_status', () => {
     const now = new Date('2026-07-28T08:30:00.000Z');
     const manager: StockUniverseManagerLike = {
       name: 'stock-universe',
-      sources: ['eastmoney', 'tushare'],
+      sources: ['eastmoney', 'sina'],
       fetchStockUniverse: () => Promise.reject(new Error('not used')),
     };
     const ctx = await buildTestContext({ clock: () => now, stockUniverse: manager });
@@ -39,7 +39,7 @@ describe('tool/get_stock_universe_status', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.coverage).toBe('CN_A_SHARES_SH_SZ');
-    expect(result.data.sources).toEqual(['eastmoney', 'tushare']);
+    expect(result.data.sources).toEqual(['eastmoney', 'sina']);
     expect(result.data.activeCount).toBe(1);
     expect(result.data.missingCount).toBe(0);
     expect(result.data.freshness).toBe('fresh');

@@ -33,6 +33,7 @@ const mkManager = (fetchImpl: SectorQuoteManagerLike['fetchList']): SectorQuoteM
   name: 'sector-quote',
   sources: ['eastmoney'],
   fetchList: fetchImpl,
+  status: () => [],
 });
 
 describe('fetch_sector_quotes tool', () => {
@@ -98,10 +99,10 @@ describe('fetch_sector_quotes tool', () => {
     const manager = mkManager(fetchList);
     const r = await fetchSectorQuotesTool.execute({}, makeCtx(manager));
     expect(r.ok).toBe(true);
+    // source 缺省不再回填默认值（§10.1 路由约束：undefined = 按配置顺序 fallback）
     expect(fetchList).toHaveBeenCalledWith({
       sort: 'changePct',
       limit: 50,
-      source: 'eastmoney',
     });
 
     const bad = await fetchSectorQuotesTool.execute({ limit: 0 }, makeCtx(manager));

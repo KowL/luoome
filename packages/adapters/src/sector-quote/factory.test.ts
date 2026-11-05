@@ -65,7 +65,7 @@ describe('createSectorQuoteManagerFromEnv', () => {
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
     expect(() =>
       createSectorQuoteManagerFromEnv(
-        { LUOOME_SECTOR_QUOTE_SOURCES: 'tushare' },
+        { LUOOME_SECTOR_QUOTE_SOURCES: 'unknown' },
         { logger: noopLogger },
       ),
     ).toThrow();

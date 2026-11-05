@@ -1,0 +1,54 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719159357,
+    "trade_date": "2026-11-03",
+    "seal_rate": 0.5925925925925926,
+    "open_stock_count": 33,
+    "limit_up_stock_count": 48,
+    "touched_limit_up_stock_count": 81,
+    "page_boards": [
+      {
+        "board_level": "one",
+        "stock_count": 33,
+        "promotion_rate": null
+      },
+      {
+        "board_level": "two",
+        "stock_count": 12,
+        "promotion_rate": 0.11
+      },
+      {
+        "board_level": "three",
+        "stock_count": 1,
+        "promotion_rate": 0.17
+      },
+      {
+        "board_level": "four",
+        "stock_count": 2,
+        "promotion_rate": 0.67
+      },
+      {
+        "board_level": "five_plus",
+        "stock_count": 0,
+        "promotion_rate": 0.0
+      }
+    ],
+    "exact_boards": [
+      {
+        "board_num": 4,
+        "stock_count": 2
+      },
+      {
+        "board_num": 3,
+        "stock_count": 1
+      },
+      {
+        "board_num": 2,
+        "stock_count": 12
+      }
+    ]
+  }
+}

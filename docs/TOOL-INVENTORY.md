@@ -4,14 +4,16 @@
 > 权威来源是 `packages/tools/src/registry.ts` 的 `toolRegistry`；实际数量与逐条 schema 用 `bun run tools:list --json` 取。
 > 新增/删除/改名 tool 时必须同步本文件的分组表与统计（`bun run check:docs` 校验的是 PRD 附录 A 的数字，不校验本文件，所以这里靠改动时自觉）。
 
-## 统计（asOf 2026-11-04，registry 234 项）
+## 统计（asOf 2026-11-04，registry 243 项）
+
+本次通过 `bun run tools:list --json` 在 Node 24 下核对。下表按主 `sideEffect` 计数；组合能力另看 `requiredCapabilities`，例如 dump 同步同时需要 external 与 write。
 
 | sideEffect | 数量 | 含义 | 默认暴露给插件面 |
 |---|---:|---|---|
-| `read` | 113 | 只读本地事实，零回源 | ✅ 默认（白名单内） |
-| `write` | 85 | 写本地状态 | ⚠️ 需 operation policy |
-| `external` | 30 | 调用第三方网络 | ⚠️ 需 market allowlist opt-in |
-| `queue` | 5 | 消费分析队列并写回 | ⚠️ 需 queue policy |
+| `read` | 115 | 只读本地事实，零回源 | ✅ 默认（白名单内） |
+| `write` | 86 | 写本地状态 | ⚠️ 需 operation policy |
+| `external` | 35 | 调用第三方网络 | ⚠️ 需 market allowlist 或精确 operation policy |
+| `queue` | 6 | 消费分析队列或记录分析审查与结果 | ⚠️ 需 queue policy |
 | `trade` | 1 | 登记系统外已完成的资金动作 | ❌ 永不暴露 |
 
 能力门控看 `requiredCapabilities`（跨边界能力），暴露判定看 `packages/tools/src/exposure/judge.ts`，规则见 `docs/ARCHITECTURE.md` §9。
@@ -52,7 +54,7 @@
 | `save_investment_consensus` | `write` | 确认或修订方向、约束与近期意愿；遗漏字段保留旧值，版本冲突须刷新重确认；修订暂停本功能旧候选同步，已有持仓风险跟踪不变 |
 | `set_investment_tracking` | `write` | 独立确认开启/暂停方向专用 Watchlist 与 Strategy 订阅；不自动开启付费研究、策略调度或通知，不修改已有持仓风险计划 |
 
-## 行情与市场事实（21）
+## 行情与市场事实（24）
 
 | tool | sideEffect | 用途（取自 tool description，截断） |
 |---|---|---|
@@ -77,6 +79,11 @@
 | `sync_daily_bars` | `external` | 为显式或相关股票同步规范前复权日线，逐股报告结果并保留成功项 |
 | `persist_external_facts` | `write` | 把已抓取的外部市场事实（当前仅 news）幂等落库：同一条事实重抓命中同一 id，上游更正正文时 id 不变、事实更新并留 revisedAt；缺… |
 | `fetch_news` | `external` | 分页拉取东方财富或同花顺财经要闻流：id/标题/摘要/分类/来源媒体/发布时间/原文链接，按发布时间倒序。可选 category（宏观/市场/行业/… |
+| `get_stock_sector_memberships` | `external` | 查询当前行业/概念/地域/特色板块关系，保留 .TI 身份，不充当历史 PIT 成分 |
+| `sync_market_dump` | `external+write` | 显式下载并分批导入一种 Fuyao 原始日 K 或公司行动 Parquet artifact；保留 hash、recordedAt 与 checkpoint，不改 qfq/账户账本或严格门禁 |
+| `get_market_dump_status` | `read` | 查询 dump 运行、artifact hash、处理行数、日期范围、checkpoint 与脱敏错误，不返回下载 URL 或本地路径 |
+
+配置、能力边界与 Tushare 历史兼容见 [Fuyao 扩展与退役设计](./ddd/fuyao-data-expansion-and-tushare-retirement-design.md)。
 
 ## 股票目录、档案与公司事件（9）
 
@@ -92,7 +99,7 @@
 | `delete_stock_event` | `write` | 删除手工公司事件（external 事件请改 status=cancelled，不可删） |
 | `sync_stock_events` | `external` | 从外部数据源同步公司事件（财报 / 解禁 / 分红 …），按 (provider, externalId) 幂等 upsert |
 
-## 财务与基本面（4）
+## 财务与基本面（5）
 
 | tool | sideEffect | 用途（取自 tool description，截断） |
 |---|---|---|
@@ -100,6 +107,7 @@
 | `sync_financial_facts` | `external+write` | 从显式注入的 mock 基本面 adapter 拉取并校验 PIT facts 后 append 到仓储；始终标记 gate=not-ready，不… |
 | `get_fundamental_score` | `read` | 只读查询已持久化 FundamentalScoreRun、score version 与逐股逐因子解释；unavailable/failed 不伪造… |
 | `run_fundamental_score` | `write` | 读取已发布 score version 与 strict PIT FinancialFact，执行确定性的基本面横截面评分；persist=fals… |
+| `get_stock_financial_snapshot` | `external` | 查询 Fuyao 三大报表、指标与估值的当前数据商视图；pitStatus=not-ready，不写 strict PIT 财务事实或用于生产评分 |
 
 ## Strategy 定义与生命周期（18）
 
@@ -294,7 +302,15 @@
 | `get_research_vault_remote_sync_status` | `read` | 查看 Research Vault 可选远端同步是否已显式启用（不返回远端或凭证） |
 | `get_stock_research_view` | `read` | 按显式 stock SubjectLink 聚合股票研究，不自动扩散产业研究 |
 
-## 分析队列（queue 面）（11）
+## 目标式研究长跑（3）
+
+| tool | sideEffect | 用途 |
+|---|---|---|
+| `start_goal_run` | `external+write` | 明确目标、轮次和成本后启动有界研究；每轮引用持久化事实，不生成 Advice 或交易 |
+| `get_goal_run` | `read` | 查询当前账户目标研究的轮次、修订、事实引用与具体阻塞条件 |
+| `cancel_goal_run` | `write` | 取消当前账户目标研究并保留已产出证据；已结束任务保持终态 |
+
+## 分析队列与结构化审查（13）
 
 | tool | sideEffect | 用途（取自 tool description，截断） |
 |---|---|---|
@@ -309,6 +325,8 @@
 | `get_analysis_context` | `read` | 装配并保存确定性分析事实，或按 ID 读取审计快照；不调用模型。 |
 | `cancel_analysis_job` | `write` | 人工取消尚未完成的任务，立即关闭旧事实包的写回窗口。 |
 | `requeue_analysis_job` | `write` | 人工重排死信任务；存在同键活动任务时拒绝。 |
+| `record_triangle_review` | `queue` | 记录四角色结构化审查，校验证据并持久化风险官否决，不调用模型或发布建议 |
+| `run_triangle_analysis` | `external+queue` | 确认预估成本后，以四个无工具模型请求分析同一事实快照；保留否决，不自动生成建议 |
 
 ## Chat 会话（不暴露）（6）
 

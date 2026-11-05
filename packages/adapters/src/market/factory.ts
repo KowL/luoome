@@ -2,10 +2,9 @@ import type { Logger, MarketCoverage, MarketDataAdapterLike } from '@luoome/core
 import { parseMarketProviderConfigFromEnv } from '@luoome/core';
 import { z } from 'zod';
 import { EastmoneySource } from '../eastmoney/source.js';
-import { fuyaoConfigFromEnv } from '../fuyao/client.js';
+import { type FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { FuyaoSource } from '../fuyao/source.js';
 import type { SourceResultObservation } from '../source-registry.js';
-import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
 import { MarketDataManager } from './manager.js';
 import type { MarketRequestCoordinator } from './request-coordinator.js';
@@ -16,7 +15,6 @@ import {
   MarketSourceRegistry,
 } from './source-registry.js';
 import { TencentAdapter } from './tencent.js';
-import { TushareMarketAdapter } from './tushare.js';
 import { XueqiuAdapter } from './xueqiu.js';
 
 /**
@@ -42,17 +40,15 @@ export interface CreateMarketAdapterDeps {
   readonly quoteCacheTtlMs?: number;
   /** 组装根共享的供应商实例；注入时对应分支复用而不自构（§4.6）。 */
   readonly sources?: { readonly eastmoney?: EastmoneySource; readonly fuyao?: FuyaoSource };
+  /**
+   * 组装根共享的 FuyaoClient（设计 §4.1：进程级共享协调器）；
+   * 注入时 fuyao 分支用它构造 FuyaoSource，不再自构客户端。
+   */
+  readonly fuyaoClient?: FuyaoClient;
   readonly requestCoordinator?: MarketRequestCoordinator;
 }
 
-export const MarketSourceIdSchema = z.enum([
-  'eastmoney',
-  'sina',
-  'tencent',
-  'tushare',
-  'fuyao',
-  'xueqiu',
-]);
+export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'fuyao', 'xueqiu']);
 export type MarketSourceId = z.infer<typeof MarketSourceIdSchema>;
 
 export const MarketSourceOrderSchema = z
@@ -114,12 +110,9 @@ export const createMarketAdapterFromEnv = (
         const adapter = new SinaAdapter(sourceOpts);
         return sinaBindings(adapter);
       }
-      case 'tushare': {
-        const adapter = buildTushare(env, sourceOpts, deps.logger);
-        return tushareBindings(adapter);
-      }
       case 'fuyao': {
-        const adapter = deps.sources?.fuyao ?? buildFuyao(env, sourceOpts, deps.logger);
+        const adapter =
+          deps.sources?.fuyao ?? buildFuyao(env, sourceOpts, deps.logger, deps.fuyaoClient);
         return fuyaoBindings(adapter);
       }
       case 'xueqiu': {
@@ -144,32 +137,24 @@ export const createMarketAdapterFromEnv = (
   });
 };
 
-/** Tushare 被显式排入路由时要求配置完整，避免 UI 显示已启用但运行时静默跳过。 */
-const buildTushare = (
-  env: Readonly<Record<string, string | undefined>>,
-  sourceOpts: { clock?: () => Date; fetchImpl?: typeof fetch },
-  logger: Logger,
-): TushareMarketAdapter => {
-  const token = env.TUSHARE_TOKEN;
-  if (token === undefined || token.trim().length === 0) {
-    throw new Error('Tushare 已启用，但 TUSHARE_TOKEN 未配置');
-  }
-  const config = tushareConfigFromEnv(env);
-  return new TushareMarketAdapter({ ...sourceOpts, config, logger });
-};
-
 /** fuyao 被显式排入路由时要求配置完整，避免 UI 显示已启用但运行时静默跳过。 */
 const buildFuyao = (
   env: Readonly<Record<string, string | undefined>>,
   sourceOpts: { clock?: () => Date; fetchImpl?: typeof fetch },
   logger: Logger,
+  sharedClient?: FuyaoClient,
 ): FuyaoSource => {
   const apiKey = env.FUYAO_API_KEY;
   if (apiKey === undefined || apiKey.trim().length === 0) {
     throw new Error('fuyao 已启用，但 FUYAO_API_KEY 未配置');
   }
   const config = fuyaoConfigFromEnv(env);
-  return new FuyaoSource({ ...sourceOpts, config, logger });
+  return new FuyaoSource({
+    ...sourceOpts,
+    config,
+    logger,
+    ...(sharedClient === undefined ? {} : { client: sharedClient }),
+  });
 };
 
 const CN_SH_SZ = ['CN_A_SHARES_SH_SZ'] as const satisfies readonly MarketCoverage[];
@@ -371,32 +356,6 @@ const xueqiuBindings = (adapter: XueqiuAdapter): AnyMarketCapabilityBinding[] =>
     configurationReady: true,
     execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
     observationOf: (bars) => successObservation(bars.at(-1)?.date),
-  },
-];
-
-const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBinding[] => [
-  ...commonBindings(adapter, CN_SH_SZ),
-  {
-    capability: 'minute-bars',
-    source: adapter.name,
-    coverage: CN_SH_SZ,
-    configurationReady: true,
-    execute: ({ stockId, interval }) => adapter.fetchMinuteBars(stockId, interval),
-    observationOf: (bars) => successObservation(bars.at(-1)?.endedAt),
-  },
-  {
-    capability: 'delayed-index',
-    source: adapter.name,
-    coverage: CN_SH_SZ,
-    configurationReady: true,
-    execute: () => adapter.fetchIndexQuotes(),
-    observationOf: (indices) =>
-      successObservation(
-        indices.reduce<Date | undefined>(
-          (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
-          undefined,
-        ),
-      ),
   },
 ];
 

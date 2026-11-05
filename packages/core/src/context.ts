@@ -3,6 +3,7 @@ import type { DataImportStagingAdapter } from './data-import.js';
 import type { AdviceOutcomeOrigin } from './entity/advice.js';
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
+import type { FinancialSnapshot, FinancialSnapshotQuery } from './entity/financial-snapshot.js';
 import type {
   FinancialFact,
   FinancialMissingReason,
@@ -13,12 +14,17 @@ import type {
   LimitUpLadderDiff,
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
+import type { MarketDumpKind, MarketDumpRun } from './entity/market-dump.js';
 import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
 import type { MinuteBar, MinuteBarInterval } from './entity/minute-bar.js';
 import type { FetchNewsQuery, NewsList } from './entity/news.js';
 import type { NorthboundFlowQuery, NorthboundFlowSeries } from './entity/northbound-flow.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
+import type {
+  GetStockSectorMembershipsQuery,
+  SectorMembershipSnapshot,
+} from './entity/sector-membership.js';
 import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
@@ -221,6 +227,12 @@ export interface NotificationManagerLike {
 }
 
 export interface ToolContext {
+  /** Injected only by the authenticated owner HTTP route, never from tool arguments. */
+  readonly riskVetoOverrideAuthorization?: {
+    readonly userId: string;
+    readonly accountId: string;
+    readonly vetoId: string;
+  };
   readonly reportExecutionOwner?: string;
   readonly identity?: Readonly<ExecutionIdentity>;
   readonly repos: RepositoryRegistry;
@@ -267,6 +279,22 @@ export interface ToolContext {
    * tools 层通过 ctx.sectorQuote.fetchList 访问。
    */
   readonly sectorQuote?: SectorQuoteManagerLike;
+  /**
+   * 个股板块关系 manager；顶层字段（与 sectorQuote 同级），当前关系快照语义。
+   * tools 层通过 ctx.sectorMembership.fetchMemberships 访问。
+   */
+  readonly sectorMembership?: SectorMembershipManagerLike;
+  /**
+   * 财务当前快照 manager；顶层字段（与 sectorMembership 同级），只读快照语义。
+   * tools 层通过 ctx.financialSnapshot.fetchSnapshot 访问。
+   */
+  readonly financialSnapshot?: FinancialSnapshotManagerLike;
+  /**
+   * 全市场 dump 同步 manager；顶层字段（与 financialSnapshot 同级），显式触发的
+   * 批量导入语义（append-only 事实链）。tools 层通过 ctx.marketDump.sync/status 访问。
+   * 默认不装配（LUOOME_MARKET_DUMP_SOURCES 显式启用）。
+   */
+  readonly marketDump?: MarketDumpManagerLike;
   /** A 股日级情绪证据聚合器；外部源与维度降级封装在 adapters。 */
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly user: {
@@ -335,10 +363,26 @@ export interface ToolContext {
   /**
    * 长任务执行器（REQ-M5-01）。由宿主注入，领域只认窄契约。
    *
-   * **不注入时**：`start_analysis_job` 仍能受理（只排期），但不启动后台执行——
+   * **不注入时**：`enqueue_analysis_job` 仍能受理（只排期），但不启动后台执行——
    * 调用方需自行 claim 并执行。
    */
   readonly jobRunner?: import('./job-runner.js').JobRunner;
+  readonly goalRoundRunner?: (request: {
+    readonly run: import('./entity/goal-run.js').GoalRun;
+    readonly round: number;
+    readonly revision: number;
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly feedback: string | null;
+    readonly signal: AbortSignal;
+  }) => Promise<{ readonly output: unknown; readonly tokenUsed: number | null }>;
+  readonly triangleRoleRunner?: (request: {
+    readonly provider: string;
+    readonly model: string;
+    readonly role: 'bull' | 'bear' | 'judge' | 'risk-officer';
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly priorOutputs: readonly unknown[];
+    readonly signal: AbortSignal;
+  }) => Promise<{ readonly output: unknown; readonly tokenUsed: number | null }>;
   /**
    * 分析执行器（REQ-M5-01）：由宿主注入，`tools` 不能发起模型请求。
    *
@@ -350,6 +394,8 @@ export interface ToolContext {
     readonly claimToken: string;
     readonly kind: string;
     readonly subject: { readonly kind: string; readonly id: string };
+    readonly context: import('./entity/analysis-context.js').AnalysisContext;
+    readonly signal?: AbortSignal;
   }) => Promise<unknown>;
   readonly automationTierStore?: {
     resolve(): Promise<{ readonly tier: 'off' | 'notify' | 'granted'; readonly source: string }>;
@@ -572,4 +618,86 @@ export interface SectorQuoteManagerLike {
   readonly name: 'sector-quote';
   readonly sources: readonly string[];
   fetchList(query: FetchSectorQuotesQuery): Promise<SectorQuoteResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 个股板块关系 manager 投影（Phase 4，fuyao-data-expansion §10.2）。
+ * - core 不依赖 adapters；返回类型直接是 core 的 SectorMembershipSnapshot（当前关系快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface SectorMembershipResultLike {
+  readonly ok: boolean;
+  readonly data?: SectorMembershipSnapshot;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'sector-membership';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface SectorMembershipManagerLike {
+  readonly name: 'sector-membership';
+  readonly sources: readonly string[];
+  fetchMemberships(query: GetStockSectorMembershipsQuery): Promise<SectorMembershipResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 财务当前快照 manager 投影（Phase 5，fuyao-data-expansion §11.1）。
+ * - core 不依赖 adapters；返回类型直接是 core 的 FinancialSnapshot（当前数据商视图）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface FinancialSnapshotResultLike {
+  readonly ok: boolean;
+  readonly data?: FinancialSnapshot;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'financial-snapshot';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface FinancialSnapshotManagerLike {
+  readonly name: 'financial-snapshot';
+  readonly sources: readonly string[];
+  fetchSnapshot(query: FinancialSnapshotQuery): Promise<FinancialSnapshotResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 全市场 dump 同步 manager 投影（Phase 2，fuyao-data-expansion §5.1）。
+ * - core 不依赖 adapters；sync 结果是脱敏投影（绝不携带 presignedUrl / 本地路径）
+ * - 终态失败也返回结果（status='failed' + 脱敏 errorKind/errorMessage），不抛异常
+ */
+export interface MarketDumpSyncResultLike {
+  readonly runId: string;
+  readonly kind: MarketDumpKind;
+  readonly dumpId: string;
+  readonly artifactSha256: string;
+  readonly status: 'complete' | 'failed';
+  readonly resumed: boolean;
+  readonly processedRows: number;
+  readonly nextRowOffset: number;
+  readonly minDate: Date | null;
+  readonly maxDate: Date | null;
+  readonly recordedAt: Date;
+  readonly startedAt: Date;
+  readonly finishedAt: Date;
+  readonly errorKind: string | null;
+  readonly errorMessage: string | null;
+}
+
+export interface MarketDumpManagerLike {
+  readonly name: 'market-dump';
+  sync(input: {
+    readonly kind: MarketDumpKind;
+    readonly resumeRunId?: string | undefined;
+  }): Promise<MarketDumpSyncResultLike>;
+  status(): Promise<readonly MarketDumpRun[]>;
 }

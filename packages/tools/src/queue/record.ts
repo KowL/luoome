@@ -150,6 +150,21 @@ const recordAdvice = async (
   if (recorded.ok) return AdviceSchema.parse(recorded.advice);
   if (recorded.reason === 'lease_lost_before_commit') return errLeaseLostBeforeCommit();
   if (recorded.reason === 'not_found') return errNotFound('AnalysisContext', context.id);
+  /**
+   * REQ-M5-04「当前有 veto 必须可见」：只说「被否决」用户会疑惑为什么写不进去。
+   * 这里把风险官的**原话**带出来，并说明解除路径。
+   */
+  if (recorded.reason === 'risk_officer_veto') {
+    const active = await ctx.repos.riskVeto.findActiveBySubject({
+      accountId: context.accountId,
+      subject: context.subject,
+    });
+    return errInvalidInput(
+      active === null
+        ? 'risk_officer_veto'
+        : `risk_officer_veto：风险官已否决（${active.veto.reason}）。解除需要人工推翻（override_risk_veto）并提供新证据。`,
+    );
+  }
   return errInvalidInput(recorded.reason);
 };
 

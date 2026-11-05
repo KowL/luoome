@@ -13,6 +13,10 @@ import { type SourceId, SourceIdSchema } from '../source.js';
  * - 涨跌幅 / 换手率统一存小数（0.10 = 10%），与 limit-up-ladder 的 changePct 口径一致
  * - 金额字段单位为元；netAmount 可为负（净卖出）
  * - 缺字段哨兵：name 缺失回退到 code；reason 缺失显示 '--'（manager 内归一化）
+ * - close / turnoverRate 可选：Fuyao 龙虎榜契约不提供收盘价与换手率（Phase 0 实测），
+ *   缺省保持缺省并携带 close-unavailable / turnover-rate-unavailable warning；
+ *   不用 0、最新价或涨跌幅反推。Eastmoney 行继续提供原值。
+ * - rangeDays 可选：Fuyao 当日榜（1）与三日榜（3）混排，保留身份区分；缺省视为 1（当日榜）。
  */
 
 // ---------- 枚举与基础类型 ----------
@@ -43,12 +47,18 @@ export const DragonTigerEntrySchema = z.object({
   code: z.string().regex(/^\d{6}$/),
   /** 中文名称；缺失时回退到 code（manager 内归一化）。 */
   name: z.string(),
-  /** 当日收盘价。 */
-  close: z.number().positive(),
+  /**
+   * 当日收盘价；可选 —— Fuyao 龙虎榜契约不提供收盘价（Phase 0 实测），
+   * 缺省保持缺省并携带 close-unavailable warning，不用 0 或最新价反推。
+   */
+  close: z.number().positive().optional(),
   /** 相对昨收的小数（0.10 = 10%）；[-1, 10] 覆盖跌停与无涨跌幅限制新股。 */
   changePct: z.number().min(-1).max(10),
-  /** 换手率小数（0.15 = 15%）。 */
-  turnoverRate: z.number().nonnegative(),
+  /**
+   * 换手率小数（0.15 = 15%）；可选 —— Fuyao 龙虎榜契约不提供换手率，
+   * 缺省保持缺省并携带 turnover-rate-unavailable warning。
+   */
+  turnoverRate: z.number().nonnegative().optional(),
   /** 上榜原因（EXPLANATION）；缺失显示 '--'。 */
   reason: z.string(),
   /** 龙虎榜净买入额（元）；负值 = 净卖出。 */
@@ -57,10 +67,12 @@ export const DragonTigerEntrySchema = z.object({
   buyAmount: z.number().nonnegative(),
   /** 龙虎榜卖出额（元）。 */
   sellAmount: z.number().nonnegative(),
-  /** 当日总成交额（元）。 */
+  /** 当日总成交额（元）；Fuyao all/org 榜不返回（仅 hot_money rows 有），缺省为 0 哨兵。 */
   amount: z.number().nonnegative(),
   /** 上榜交易日 YYYY-MM-DD；应 == 快照基准日 `date`（runtime 校验）。 */
   tradeDate: dateString,
+  /** 榜单区间天数：1=当日榜、3=三日榜；缺省视为 1（当日榜）。 */
+  rangeDays: z.number().int().min(1).max(5).optional(),
   /** 买入营业部席位；数据源未提供时省略。 */
   buySeats: z.array(DragonTigerSeatSchema).optional(),
   /** 卖出营业部席位；数据源未提供时省略。 */
@@ -103,7 +115,7 @@ export type DragonTigerListQuery = z.infer<typeof DragonTigerListQuerySchema>;
 /**
  * 不变量：
  * - total 为非负整数且 == entries.length
- * - entry：close > 0、changePct ∈ [-1, 10]、金额非负（netAmount 除外）
+ * - entry：close 提供时必须 > 0（缺省合法，Fuyao 契约不提供）；changePct ∈ [-1, 10]；金额非负（netAmount 除外）
  * - baseDate 提供时：entry.tradeDate 与快照 date 都必须等于 baseDate
  */
 export const assertDragonTigerListInvariants = (list: DragonTigerList, baseDate?: string): void => {
@@ -117,7 +129,9 @@ export const assertDragonTigerListInvariants = (list: DragonTigerList, baseDate?
     throw new InvariantError(`list.date (${list.date}) != date (${baseDate})`);
   }
   for (const e of list.entries) {
-    if (e.close <= 0) throw new InvariantError(`entry.close 必须 > 0 [${e.code}]`);
+    if (e.close !== undefined && e.close <= 0) {
+      throw new InvariantError(`entry.close 必须 > 0 [${e.code}]`);
+    }
     if (e.changePct < -1 || e.changePct > 10) {
       throw new InvariantError(`entry.changePct 越界 [${e.code}] = ${e.changePct}`);
     }

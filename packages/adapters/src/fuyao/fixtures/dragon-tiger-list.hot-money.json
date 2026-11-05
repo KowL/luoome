@@ -1,0 +1,50 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793548800000,
+    "board_type": "hot_money",
+    "trade_date": "2026-11-02",
+    "count": 66,
+    "stock_count": 63,
+    "stock_items": [],
+    "hot_money_items": [
+      {
+        "name": "方新侠",
+        "buying": 78925361.0,
+        "rows": [
+          {
+            "thscode": "002708.SZ",
+            "ticker": "002708",
+            "name": "光洋股份",
+            "change": 0.079916,
+            "amount": 3013388261.9,
+            "concept_list": [
+              {
+                "name": "减速器"
+              },
+              {
+                "name": "长安汽车概念"
+              },
+              {
+                "name": "人形机器人"
+              }
+            ],
+            "net_value": -71522046.63,
+            "net_rate": -0.02373476,
+            "hot_rank": 23,
+            "buy_value": 516436944.56,
+            "sell_value": 587958991.19,
+            "range_days": 1,
+            "org_net_value": -89734248.5,
+            "hot_money_net_value": 89949608,
+            "hot_money_net_rate": 0.02984999,
+            "hot_money_item_net_value": 89949608.0,
+            "hot_money_item_net_rate": 0.0298499895
+          }
+        ]
+      }
+    ]
+  }
+}

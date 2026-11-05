@@ -428,59 +428,8 @@ describe('market/factory', () => {
     ).toBeUndefined();
   });
 
-  it('LUOOME_MARKET_SOURCES 含 tushare + TUSHARE_TOKEN：主备失败 → finalFallback 返回 source=tushare', async () => {
-    const adapter = createMarketAdapterFromEnv(
-      {
-        LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'eastmoney,tencent,tushare',
-        TUSHARE_TOKEN: 'test-token',
-      },
-      {
-        logger: silentLogger(),
-        fetchImpl: ((url: string) => {
-          if (String(url).includes('api.tushare.pro')) {
-            return Promise.resolve(
-              new Response(
-                JSON.stringify({
-                  code: 0,
-                  msg: '',
-                  data: {
-                    fields: ['ts_code', 'trade_time', 'open', 'high', 'low', 'price', 'vol'],
-                    items: [['002594.SZ', '2026-07-24T07:00:00.000Z', 248, 251, 247, 250, 999]],
-                  },
-                }),
-                { status: 200 },
-              ),
-            );
-          }
-          return Promise.resolve(new Response('down', { status: 500 }));
-        }) as never,
-      },
-    );
-    const q = await adapter.fetchQuote('002594.SZ');
-    expect(q.source).toBe('tushare');
-    expect(q.close).toBe(250);
-  });
-
-  it('LUOOME_MARKET_SOURCES 含 tushare 但 TUSHARE_TOKEN 缺失 → 启动期报错', () => {
-    expect(() =>
-      createMarketAdapterFromEnv(
-        { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tushare' },
-        { logger: silentLogger() },
-      ),
-    ).toThrow(/TUSHARE_TOKEN/);
-  });
-
-  it('LUOOME_MARKET_SOURCES 含 tushare 且 TUSHARE_TOKEN 已配置 → 装配成功', () => {
-    const adapter = createMarketAdapterFromEnv(
-      {
-        LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'tushare',
-        TUSHARE_TOKEN: 'test-token',
-      },
-      { logger: silentLogger() },
-    );
-    expect(adapter.name).toBe('manager');
+  it('已退役的 Tushare 配置在启动期被拒绝', () => {
+    expect(() => marketSourceOrderFromEnv({ LUOOME_MARKET_SOURCES: 'tushare' })).toThrow();
   });
 
   it('LUOOME_MARKET_SOURCES 控制开关与优先级', async () => {
@@ -509,41 +458,11 @@ describe('market/factory', () => {
     expect(calls.some((u) => u.includes('eastmoney'))).toBe(false);
   });
 
-  it('activeOrder 仅 tushare：realtime index 明确不支持，且不会隐式调用 Eastmoney', async () => {
-    const urls: string[] = [];
-    const adapter = createMarketAdapterFromEnv(
-      {
-        LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'tushare',
-        TUSHARE_TOKEN: 'test-token',
-      },
-      {
-        logger: silentLogger(),
-        fetchImpl: ((url: string) => {
-          urls.push(String(url));
-          return Promise.resolve(new Response('unexpected request', { status: 500 }));
-        }) as never,
-      },
-    );
-    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
-    expect(
-      adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
-    ).toEqual([
-      'tushare:quote',
-      'tushare:daily-bars',
-      'tushare:search',
-      'tushare:minute-bars',
-      'tushare:delayed-index',
-    ]);
-    expect(urls).toEqual([]);
-  });
-
   it('activeOrder 含 eastmoney：realtime index 能力来自显式启用源', async () => {
     const adapter = createMarketAdapterFromEnv(
       {
         LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'eastmoney,tushare',
-        TUSHARE_TOKEN: 'test-token',
+        LUOOME_MARKET_SOURCES: 'eastmoney',
       },
       {
         logger: silentLogger(),
@@ -608,56 +527,6 @@ describe('market/factory', () => {
       eastmoneyOnly
         .marketSourceStatus()
         .some((s) => s.dataset === 'intraday-minutes' && s.source === 'eastmoney'),
-    ).toBe(true);
-  });
-
-  it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min', async () => {
-    const adapter = createMarketAdapterFromEnv(
-      {
-        LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_MARKET_SOURCES: 'tushare',
-        TUSHARE_TOKEN: 'test-token',
-      },
-      {
-        logger: silentLogger(),
-        clock: () => new Date('2026-08-14T02:00:00.000Z'),
-        fetchImpl: (async (_url: string, init?: RequestInit) => {
-          const body = JSON.parse(String(init?.body)) as { api_name: string };
-          if (body.api_name !== 'rt_min') {
-            return new Response('unexpected api', { status: 500 });
-          }
-          return new Response(
-            JSON.stringify({
-              code: 0,
-              msg: '',
-              data: {
-                fields: [
-                  'ts_code',
-                  'trade_time',
-                  'freq',
-                  'open',
-                  'close',
-                  'high',
-                  'low',
-                  'vol',
-                  'amount',
-                ],
-                items: [
-                  ['002594.SZ', '2026-08-14 09:31:00', '1MIN', 90, 90.5, 91, 89, 10000, 905000],
-                ],
-              },
-            }),
-            { status: 200 },
-          );
-        }) as never,
-      },
-    );
-    const bars = await adapter.fetchMinuteBars('002594.SZ', '1m');
-    expect(bars[0]).toMatchObject({ source: 'tushare', interval: '1m', adjustment: 'raw' });
-    expect(
-      adapter
-        .marketSourceStatus()
-        .some((status) => status.dataset === 'minute-bars' && status.source === 'tushare'),
     ).toBe(true);
   });
 

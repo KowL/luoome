@@ -43,15 +43,18 @@ function mapEntry(raw: DragonTigerRawEntry, date: string): DragonTigerEntry {
   return {
     code: raw.code,
     name: raw.name?.trim() ?? raw.code,
-    close: raw.close,
+    // close / turnoverRate 缺省保持缺省（Fuyao 契约不提供），不用 0 或反推值填充；
+    // 缺失由 fetchList 统一加 close-unavailable / turnover-rate-unavailable warning。
+    ...(raw.close === undefined ? {} : { close: raw.close }),
     changePct: raw.change_pct ?? 0,
-    turnoverRate: raw.turnover_rate ?? 0,
+    ...(raw.turnover_rate === undefined ? {} : { turnoverRate: raw.turnover_rate }),
     reason: raw.reason?.trim() ?? '--',
     netAmount: raw.net_amount ?? 0,
     buyAmount: raw.buy_amount ?? 0,
     sellAmount: raw.sell_amount ?? 0,
     amount: raw.amount ?? 0,
     tradeDate: raw.trade_date ?? date,
+    ...(raw.range_days === undefined ? {} : { rangeDays: raw.range_days }),
     ...(raw.buy_seats === undefined
       ? {}
       : { buySeats: raw.buy_seats.map((seat) => ({ name: seat.name, amount: seat.amount })) }),
@@ -171,6 +174,12 @@ export class DragonTigerManager {
         const entries = rawResult.entries.map((e) => mapEntry(e, date));
         const warnings: string[] = [];
         if (entries.length === 0) warnings.push('empty-list');
+        // 字段级缺失披露（设计 §8）：Fuyao 契约不提供收盘价 / 换手率，
+        // 缺省保持缺省并逐项披露，不用 0 或反推值填充。
+        if (entries.some((e) => e.close === undefined)) warnings.push('close-unavailable');
+        if (entries.some((e) => e.turnoverRate === undefined)) {
+          warnings.push('turnover-rate-unavailable');
+        }
 
         return {
           ok: true,

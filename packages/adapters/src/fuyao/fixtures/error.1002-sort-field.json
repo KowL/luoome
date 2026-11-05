@@ -1,0 +1,6 @@
+{
+  "code": 1002,
+  "message": "Invalid parameter format: sort_field must be last_price / continue_day_cnt / seal_money / limit_up_time",
+  "request_id": "00000000000000000000000000000000",
+  "data": null
+}

@@ -1,0 +1,64 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793719131098,
+    "pagination": {
+      "total": 52,
+      "pages": 2,
+      "size": 50,
+      "page": 1
+    },
+    "item": [
+      {
+        "thscode": "300010.SZ",
+        "ticker": "300010",
+        "name": "ST豆神",
+        "is_st": true,
+        "is_new": false,
+        "last_price": 3.79,
+        "price_change_ratio_pct": 19.9367,
+        "limit_up_time": "14:52",
+        "limit_up_reason": "AI短剧平台+AI教育+算力服务",
+        "continue_day_text": "2连板",
+        "continue_day_cnt": 2,
+        "seal_money": 11655819.1,
+        "max_seal_money": 15871436.06,
+        "open_times": null
+      },
+      {
+        "thscode": "601123.SH",
+        "ticker": "601123",
+        "name": "马矿股份",
+        "is_st": false,
+        "is_new": false,
+        "last_price": 15.07,
+        "price_change_ratio_pct": 10,
+        "limit_up_time": "14:47",
+        "limit_up_reason": "铁精粉+采选扩能+三季报增长+次新股",
+        "continue_day_text": "首板",
+        "continue_day_cnt": 1,
+        "seal_money": 44652184,
+        "max_seal_money": 105899677.95,
+        "open_times": null
+      },
+      {
+        "thscode": "002522.SZ",
+        "ticker": "002522",
+        "name": "浙江众成",
+        "is_st": false,
+        "is_new": false,
+        "last_price": 5.06,
+        "price_change_ratio_pct": 10,
+        "limit_up_time": "14:36",
+        "limit_up_reason": "光纤油膏+三季报增长+POF热收缩膜+子公司完成增资",
+        "continue_day_text": "首板",
+        "continue_day_cnt": 1,
+        "seal_money": 83934774,
+        "max_seal_money": 87434846.84,
+        "open_times": 2
+      }
+    ]
+  }
+}

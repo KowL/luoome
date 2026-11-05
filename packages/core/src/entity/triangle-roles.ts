@@ -158,3 +158,18 @@ export const TriangleRolesSchema = z
   })
   .strict();
 export type TriangleRoles = z.infer<typeof TriangleRolesSchema>;
+
+export const triangleEvidenceBelongsToSnapshot = (
+  value: unknown,
+  factIds: readonly string[],
+): boolean => {
+  if (Array.isArray(value))
+    return value.every((item) => triangleEvidenceBelongsToSnapshot(item, factIds));
+  if (value === null || typeof value !== 'object') return true;
+  return Object.entries(value).every(([key, item]) => {
+    if (key === 'factIds') return Array.isArray(item) && item.every((id) => factIds.includes(id));
+    if (key === 'factId')
+      return item === null || (typeof item === 'string' && factIds.includes(item));
+    return triangleEvidenceBelongsToSnapshot(item, factIds);
+  });
+};

@@ -34,10 +34,14 @@ export {
   TRADE_EXPOSURE_MESSAGE,
   tradeExposureRequested,
 } from './exposure.js';
+export * from './goal-runs.js';
 export * from './personal/index.js';
 export * from './pit-layers.js';
 export * from './plugin-operations.js';
 export * from './queue/index.js';
+export * from './queue/override-risk-veto.js';
+export * from './queue/record-triangle-review.js';
+export * from './queue/run-triangle-analysis.js';
 export * from './registry.js';
 export * from './tools/account-facts.js';
 export * from './tools/account-plan-batch-state.js';
@@ -80,11 +84,14 @@ export * from './tools/get-decision-review-snapshot.js';
 export * from './tools/get-holding.js';
 export * from './tools/get-intraday-delivery-audit.js';
 export * from './tools/get-market-data-status.js';
+export * from './tools/get-market-dump-status.js';
 export * from './tools/get-previous-closes.js';
 export * from './tools/get-report.js';
+export * from './tools/get-stock-financial-snapshot.js';
 export * from './tools/get-stock-market-view.js';
 export * from './tools/get-stock-minute-bars.js';
 export * from './tools/get-stock-profile.js';
+export * from './tools/get-stock-sector-memberships.js';
 export * from './tools/get-stock-universe-status.js';
 export * from './tools/get-strategy-decision-cycles.js';
 export * from './tools/get-strategy-recommendation-preflight-history.js';
@@ -153,6 +160,7 @@ export * from './tools/strategy-research.js';
 export * from './tools/strategy-schedule.js';
 export * from './tools/strategy-watchlist-subscription.js';
 export * from './tools/sync-daily-bars.js';
+export * from './tools/sync-market-dump.js';
 export * from './tools/sync-quotes.js';
 export * from './tools/sync-stock-events.js';
 export * from './tools/sync-stock-universe.js';

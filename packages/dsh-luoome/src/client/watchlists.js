@@ -30,6 +30,110 @@ const STAGES = {
 const PRIORITIES = { normal: '普通', important: '重点', urgent: '紧急' };
 const SOURCES = { manual: '手动', strategy: '策略', ai: 'AI', portfolio: '持仓', import: '导入' };
 const POLICIES = { manual: '手动维护', mixed: '手动与来源同步', synced: '来源同步' };
+export const DEFAULT_MEMBER_FILTERS = Object.freeze({
+  query: '',
+  stage: '',
+  source: '',
+  priority: '',
+  sort: 'priority',
+});
+const PRIORITY_ORDER = { urgent: 0, important: 1, normal: 2 };
+const MEMBER_SORTS = { priority: '优先级：紧急优先', recent: '最近加入', name: '股票名称' };
+
+export function filterWatchlistMembers(members, filters = DEFAULT_MEMBER_FILTERS) {
+  const query = filters.query.trim().toLocaleLowerCase('zh-CN');
+  const byName = (left, right) =>
+    (left.stockName ?? left.member.stockId).localeCompare(
+      right.stockName ?? right.member.stockId,
+      'zh-CN',
+      { numeric: true },
+    ) || left.member.stockId.localeCompare(right.member.stockId);
+  const byRecent = (left, right) =>
+    new Date(right.member.firstAddedAt).getTime() - new Date(left.member.firstAddedAt).getTime();
+  return members
+    .filter((row) => {
+      if (filters.stage && row.member.stage !== filters.stage) return false;
+      if (filters.priority && row.member.priority !== filters.priority) return false;
+      if (
+        filters.source &&
+        !row.sources.some((source) => source.kind === filters.source && source.status !== 'ended')
+      )
+        return false;
+      return (
+        !query ||
+        [row.member.stockId, row.stockName ?? '', ...row.sources.map((source) => source.reason)]
+          .join('\n')
+          .toLocaleLowerCase('zh-CN')
+          .includes(query)
+      );
+    })
+    .sort((left, right) => {
+      if (filters.sort === 'name') return byName(left, right);
+      if (filters.sort === 'recent') return byRecent(left, right) || byName(left, right);
+      return (
+        PRIORITY_ORDER[left.member.priority] - PRIORITY_ORDER[right.member.priority] ||
+        byRecent(left, right) ||
+        byName(left, right)
+      );
+    });
+}
+
+export function WatchlistMemberFilters({ filters, onChange, onReset, total, visible }) {
+  const select = (label, key, options, allLabel) =>
+    h(
+      'label',
+      { className: 'luo-field' },
+      label,
+      h(
+        'select',
+        {
+          'aria-label': label,
+          value: filters[key],
+          onChange: (event) => onChange({ ...filters, [key]: event.target.value }),
+        },
+        allLabel ? h('option', { value: '' }, allLabel) : null,
+        Object.entries(options).map(([value, text]) => h('option', { key: value, value }, text)),
+      ),
+    );
+  const changed = Object.keys(DEFAULT_MEMBER_FILTERS).some(
+    (key) => filters[key] !== DEFAULT_MEMBER_FILTERS[key],
+  );
+  return h(
+    'div',
+    { className: 'luo-form luo-watch-filters', role: 'search', 'aria-label': '筛选关注成员' },
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'label',
+        { className: 'luo-field' },
+        '搜索成员',
+        h('input', {
+          type: 'search',
+          'aria-label': '搜索成员',
+          placeholder: '代码、名称或来源理由',
+          value: filters.query,
+          onChange: (event) => onChange({ ...filters, query: event.target.value }),
+        }),
+      ),
+      select('研究阶段筛选', 'stage', STAGES, '全部阶段'),
+      select('来源类型筛选', 'source', SOURCES, '全部有效来源'),
+      select('优先级筛选', 'priority', PRIORITIES, '全部优先级'),
+      select('成员排序', 'sort', MEMBER_SORTS),
+    ),
+    h(
+      'div',
+      { className: 'luo-actions' },
+      h(
+        'p',
+        { className: 'luo-fine', role: 'status', 'aria-live': 'polite' },
+        `显示 ${visible} / ${total} 只 · 仅当前列表已加载成员`,
+      ),
+      button('重置筛选与排序', onReset, !changed),
+    ),
+    h('p', { className: 'luo-fine' }, '来源筛选包含正常与待刷新来源，不含已结束来源。'),
+  );
+}
 const ACTIONS = {
   create_watchlist: '新建关注列表',
   update_watchlist: '修改关注列表',
@@ -243,6 +347,14 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
   const [stock, setStock] = useState(null);
+  const [memberFilters, setMemberFilters] = useState({
+    watchlistId: null,
+    values: DEFAULT_MEMBER_FILTERS,
+  });
+  const filters =
+    memberFilters.watchlistId === watchlistId ? memberFilters.values : DEFAULT_MEMBER_FILTERS;
+  const changeFilters = (values) => setMemberFilters({ watchlistId, values });
+  const resetFilters = () => changeFilters(DEFAULT_MEMBER_FILTERS);
   const blocked = busy || operationIsUnsettled(operation);
 
   useEffect(() => {
@@ -357,6 +469,7 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
     detail.data && detail.data.watchlist.id === watchlistId ? detail.data.watchlist : null;
   const mutable = watchlist && watchlist.kind !== 'system';
   const members = watchlist ? detail.data.members : [];
+  const visibleMembers = filterWatchlistMembers(members, filters);
 
   return h(
     Fragment,
@@ -446,6 +559,10 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
                       disabled: blocked,
                       onClick: () => {
                         setSelectedId(watchlist.id);
+                        setMemberFilters({
+                          watchlistId: watchlist.id,
+                          values: DEFAULT_MEMBER_FILTERS,
+                        });
                         setDraft(null);
                         setStock(null);
                       },
@@ -565,6 +682,13 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
                             '成员由来源同步；可让 AI 协助核对来源和管理方案。',
                           )
                         : null,
+                      h(WatchlistMemberFilters, {
+                        filters,
+                        onChange: changeFilters,
+                        onReset: resetFilters,
+                        total: members.length,
+                        visible: visibleMembers.length,
+                      }),
                       !members.length
                         ? h(Empty, {
                             title: '列表中还没有股票',
@@ -573,96 +697,107 @@ export function WatchlistsPanel({ onManageWatchlist, onAnalyzeStock }) {
                                 ? '等待来源同步后，成员会显示在这里。'
                                 : '点击「添加股票」，记录你的第一条关注理由。',
                           })
-                        : h(
-                            'div',
-                            { className: 'luo-watch-members' },
-                            members.map((row) =>
-                              h(
-                                'article',
-                                { key: row.member.id, className: 'luo-watch-member' },
+                        : !visibleMembers.length
+                          ? h(Empty, {
+                              title: '没有符合筛选条件的成员',
+                              hint: '试试其他关键词或筛选条件，或重置筛选查看当前列表。',
+                            })
+                          : h(
+                              'div',
+                              { className: 'luo-watch-members' },
+                              visibleMembers.map((row) =>
                                 h(
-                                  'div',
-                                  { className: 'luo-watch-member-head' },
+                                  'article',
+                                  { key: row.member.id, className: 'luo-watch-member' },
                                   h(
-                                    'button',
-                                    {
-                                      type: 'button',
-                                      className: 'luo-stock-link',
-                                      'aria-label': `查看${row.stockName ?? row.member.stockId}个股详情`,
-                                      onClick: () => setStock(row),
-                                    },
+                                    'div',
+                                    { className: 'luo-watch-member-head' },
                                     h(
-                                      'strong',
-                                      { className: 'luo-stock-name' },
-                                      row.stockName ?? '名称暂缺',
+                                      'button',
+                                      {
+                                        type: 'button',
+                                        className: 'luo-stock-link',
+                                        'aria-label': `查看${row.stockName ?? row.member.stockId}个股详情`,
+                                        onClick: () => setStock(row),
+                                      },
+                                      h(
+                                        'strong',
+                                        { className: 'luo-stock-name' },
+                                        row.stockName ?? '名称暂缺',
+                                      ),
+                                      h(
+                                        'span',
+                                        { className: 'luo-stock-code' },
+                                        row.member.stockId,
+                                      ),
                                     ),
-                                    h('span', { className: 'luo-stock-code' }, row.member.stockId),
+                                    h(
+                                      'div',
+                                      { className: 'luo-actions' },
+                                      h(Pill, null, STAGES[row.member.stage]),
+                                      h(
+                                        Pill,
+                                        {
+                                          tone: row.member.priority === 'urgent' ? 'warn' : 'quiet',
+                                        },
+                                        PRIORITIES[row.member.priority],
+                                      ),
+                                    ),
+                                  ),
+                                  h(
+                                    'ul',
+                                    { className: 'luo-watch-sources' },
+                                    row.sources.map((source) =>
+                                      h(
+                                        'li',
+                                        { key: source.id },
+                                        h(
+                                          'span',
+                                          { className: 'luo-watch-source-kind' },
+                                          SOURCES[source.kind],
+                                        ),
+                                        h('span', null, source.reason),
+                                        source.status === 'stale'
+                                          ? h(Pill, { tone: 'warn' }, '待刷新')
+                                          : null,
+                                      ),
+                                    ),
                                   ),
                                   h(
                                     'div',
                                     { className: 'luo-actions' },
-                                    h(Pill, null, STAGES[row.member.stage]),
-                                    h(
-                                      Pill,
-                                      { tone: row.member.priority === 'urgent' ? 'warn' : 'quiet' },
-                                      PRIORITIES[row.member.priority],
-                                    ),
-                                  ),
-                                ),
-                                h(
-                                  'ul',
-                                  { className: 'luo-watch-sources' },
-                                  row.sources.map((source) =>
-                                    h(
-                                      'li',
-                                      { key: source.id },
-                                      h(
-                                        'span',
-                                        { className: 'luo-watch-source-kind' },
-                                        SOURCES[source.kind],
-                                      ),
-                                      h('span', null, source.reason),
-                                      source.status === 'stale'
-                                        ? h(Pill, { tone: 'warn' }, '待刷新')
-                                        : null,
-                                    ),
-                                  ),
-                                ),
-                                h(
-                                  'div',
-                                  { className: 'luo-actions' },
-                                  mutable
-                                    ? button(
-                                        '调整阶段与优先级',
-                                        () =>
-                                          edit('update_watchlist_member', {
-                                            watchlistId,
-                                            stockId: row.member.stockId,
-                                            stage: row.member.stage,
-                                            priority: row.member.priority,
-                                          }),
-                                        blocked,
+                                    mutable
+                                      ? button(
+                                          '调整阶段与优先级',
+                                          () =>
+                                            edit('update_watchlist_member', {
+                                              watchlistId,
+                                              stockId: row.member.stockId,
+                                              stage: row.member.stage,
+                                              priority: row.member.priority,
+                                            }),
+                                          blocked,
+                                        )
+                                      : null,
+                                    mutable &&
+                                      row.sources.some(
+                                        (source) =>
+                                          source.kind === 'manual' && source.status !== 'ended',
                                       )
-                                    : null,
-                                  mutable &&
-                                    row.sources.some(
-                                      (source) =>
-                                        source.kind === 'manual' && source.status !== 'ended',
-                                    )
-                                    ? button(
-                                        '移除手动关注',
-                                        () =>
-                                          act('prepare', {
-                                            tool: 'archive_watchlist_member',
-                                            input: { watchlistId, stockId: row.member.stockId },
-                                          }),
-                                        blocked,
-                                      )
-                                    : null,
+                                      ? button(
+                                          '移除手动关注',
+                                          () =>
+                                            act('prepare', {
+                                              tool: 'archive_watchlist_member',
+                                              input: { watchlistId, stockId: row.member.stockId },
+                                            }),
+                                          blocked,
+                                        )
+                                      : null,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
                     )
                   : null,
               ),

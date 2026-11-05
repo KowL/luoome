@@ -3,7 +3,7 @@
 > 状态：已实施（2026-08-22；真实 FUYAO_API_KEY smoke + 浏览器端到端验收通过（当时的单机 Web，`apps/web` 已删除）；realtime-index 维持不放行，见 §10.5）
 > 日期：2026-08-22
 > 范围：将同花顺金融数据 API（`https://fuyao.aicubes.cn`）接入为 `MarketDataManager` 的第四个真实行情源 `fuyao`，覆盖 quote / batchQuote / fetchDailyBars / searchStocks / fetchMarketSnapshot / fetchIndexQuotes
-> 关联文档：[ARCHITECTURE.md §4.7](../ARCHITECTURE.md)、[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)、[Tushare 行情适配器设计](./tushare-market-adapter-design.md)、[Tushare 集成手册](../runbooks/tushare-integration.md)
+> 关联文档：[ARCHITECTURE.md §4.7](../ARCHITECTURE.md)、[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)、[Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)
 > 上游契约来源：`https://fuyao.aicubes.cn/llms-full.txt`（同花顺金融数据 API 全站聚合文档）
 
 ## 1. 目标
@@ -37,7 +37,7 @@ fuyao 同时提供 REST 与 4 个 MCP 服务（`/mcp/a-share`、`/mcp/a-share-in
 
 ### 3.2 路由槽位：`MarketSourceRegistry` 第四个 source
 
-`MarketSourceIdSchema` 增加 `fuyao`，`LUOOME_MARKET_SOURCES` 接受最多 3 个源的约束不变（ARCHITECTURE §4.7），fuyao 与 eastmoney/tencent/sina/tushare 竞争同一排序槽位。新增来源只在 `market/factory.ts` 绑 binding，tool / workflow / surface 零改动（构造硬约束：不得在 Registry 之外临时实例化隐藏来源）。
+`MarketSourceIdSchema` 增加 `fuyao`，`LUOOME_MARKET_SOURCES` 接受最多 3 个源的约束不变（ARCHITECTURE §4.7），fuyao 与 eastmoney/tencent/sina/xueqiu 竞争同一排序槽位。新增来源只在 `market/factory.ts` 绑 binding，tool / workflow / surface 零改动（构造硬约束：不得在 Registry 之外临时实例化隐藏来源）。
 
 ### 3.3 市场范围
 
@@ -66,7 +66,7 @@ luoome 的 `DailyBar` 统一前复权（`adjustment: 'qfq'`）。fuyao `prices/h
 
 ### 3.7 失败语义与快速失败
 
-- 显式在 `LUOOME_MARKET_SOURCES` 启用 `fuyao` 但缺 `FUYAO_API_KEY`：启动期抛错（对齐 `buildTushare` 快速失败），不静默降级；
+- 显式在 `LUOOME_MARKET_SOURCES` 启用 `fuyao` 但缺 `FUYAO_API_KEY`：启动期抛错（沿用显式来源的快速失败语义），不静默降级；
 - 运行时错误统一抛 `packages/adapters/src/source-error.ts` 的结构化 `SourceExecutionError`（§5.9），registry 按 `error.kind` 观测归类，manager 按既有降级机制处理，不引入新错误类；
 - fuyao 所有响应（含错误）HTTP 恒 200，业务结果按信封 `code` 分发——adapter 不得以 HTTP 状态判定成败。
 
@@ -105,7 +105,7 @@ export class FuyaoSource {
   readonly name = 'fuyao';
   readonly indexQuoteMode = 'delayed' as const;
   constructor(options: { clock?; fetchImpl?; logger; config: FuyaoConfig });
-  // MarketDataAdapter 全量方法（结构满足，对齐 TushareMarketAdapter 不显式 implements）；
+  // MarketDataAdapter 全量方法（结构满足，不显式 implements）；
   // 不支持的能力抛 unsupported_capability
 }
 ```
@@ -117,7 +117,7 @@ export class FuyaoSource {
 export function fuyaoConfigFromEnv(env): FuyaoConfig {
   // FUYAO_API_KEY 缺失 → 抛错（快速失败由 factory 的 buildFuyao 触发）
   // FUYAO_BASE_URL 缺省 https://fuyao.aicubes.cn
-  // timeoutMs / retries 为代码常量（对齐 TushareConfig）
+  // timeoutMs / retries 为代码常量
 }
 ```
 
@@ -208,7 +208,7 @@ interface FuyaoEnvelope<T> {
 `packages/adapters/src/market/factory.ts`：
 
 ```ts
-const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare', 'fuyao']);
+const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'fuyao', 'xueqiu']);
 
 function buildFuyao(env, sourceOpts, logger): FuyaoSource {
   // LUOOME_MARKET_SOURCES 含 fuyao 且 FUYAO_API_KEY 缺失 → 启动期抛错

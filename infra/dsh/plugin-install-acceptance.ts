@@ -414,9 +414,26 @@ try {
   )
     throw new Error('installed package must declare its public npm destination and MIT license');
   for (const [name, version] of Object.entries(installedManifest.dependencies)) {
-    if (!name.startsWith('@deepseek-ai/') || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
-      throw new Error(`runtime dependency must be a pinned DSH package: ${name}@${version}`);
+    // Parquet 的 Node loader 必须随运行依赖解析 WASM，不能内联开发机绝对路径。
+    if (
+      !(name.startsWith('@deepseek-ai/') || name === 'parquet-wasm') ||
+      !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)
+    )
+      throw new Error(
+        `runtime dependency must be a pinned DSH or Parquet package: ${name}@${version}`,
+      );
   }
+  if (installedManifest.dependencies['parquet-wasm'] !== '0.9.0')
+    throw new Error('installed package must pin the verified Parquet WASM runtime');
+  run(
+    nodeCommand,
+    [
+      '--input-type=module',
+      '-e',
+      "import { ParquetFile } from 'parquet-wasm/node'; if (typeof ParquetFile.fromFile !== 'function') throw new Error('Parquet WASM runtime did not load');",
+    ],
+    { cwd: installedDir },
+  );
   if (installedManifest.exports?.['./client'] !== './dist/client.js')
     throw new Error('installed package must export ./client -> ./dist/client.js');
   if (installedManifest.dsh?.client?.platform !== 'web')
@@ -455,7 +472,7 @@ try {
     join(probePluginDir, 'index.js'),
     `import { writeFileSync } from 'node:fs';
 export const name = 'luoome-skills-probe';
-export const inject = ['skills', 'agents', 'tools'];
+export const inject = ['skills', 'agents', 'tools', 'jobs'];
 const EXPECTED = ${JSON.stringify(SKILL_NAMES)};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const apply = async (ctx) => {
@@ -499,6 +516,15 @@ export const apply = async (ctx) => {
         agent: handle.agent,
         signal: new AbortController().signal,
       });
+      const backgroundId = ctx.jobs.start({
+        kind: 'luoome-analysis', label: 'M5 installed background lifecycle',
+        run: (job) => { job.append('installed-lifecycle-output'); return {
+          cancel: () => {}, done: Promise.resolve({ status: 'completed' }),
+        }; },
+      });
+      const background = await ctx.jobs.wait(backgroundId, 2000);
+      if (background.status !== 'completed') throw new Error('installed background lifecycle did not complete');
+      report.nativeBackground = { id: backgroundId, status: background.status };
       report.nativeRead = await execute('list_accounts', {});
       if (report.nativeRead.isError || report.nativeRead.value?.ok !== true)
         throw new Error('native read failed: ' + JSON.stringify(report.nativeRead));
@@ -658,42 +684,51 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     );
 
   // 4c) M2b：安装产物必须携带精确写回 policies，且来源固定为受信任装配。
-  const PRODUCTION_QUEUE_POLICIES = ['record_advice', 'record_analysis_result'] as const;
+  const PRODUCTION_QUEUE_POLICIES = [
+    'record_advice',
+    'record_analysis_result',
+    'record_triangle_review',
+  ] as const;
+  // add_trade 是人工记账；restore_data_import 是宿主人工入口，均非交易能力。
   const PRODUCTION_WRITE_POLICIES = [
-    'update_account',
-    // 账户维护（`src/host/account-operations.ts`，T47 / REQ-M2-08）：登记成交、平仓、现金流水。
-    // `add_trade` 是**人工记账 write**，不是 trade 能力；trade 入口仍只存在于领域层且永不暴露。
     'add_trade',
-    'close_holding',
-    'create_portfolio_cash_flow',
-    'save_decision_review',
-    'create_strategy',
-    'create_strategy_version',
-    'validate_strategy_version',
-    'publish_strategy_version',
-    'set_strategy_schedule',
-    'pause_strategy',
-    'resume_strategy',
-    'subscribe_strategy_to_watchlist',
-    'unsubscribe_strategy_from_watchlist',
-    'record_advice_outcome',
-    'save_strategy_research_state',
-    'cancel_strategy_evaluation_session',
-    // 纯本地写：assembleBacktest 只读 strategyEvaluation/strategyRun/strategyBacktest/dailyBar，
-    // 门禁完备后的执行步同样只读本地事实，因此不需要 external（REQ-M1-05 能力漂移整改）。
-    'create_strict_strategy_backtest',
-    // 关注管理（`src/host/watchlist-operations.ts`）：52757c2 起是 7 个独立写策略，
-    // 与上面同契约（write / 非 scheduled / capabilities=['write']），本清单当时漏同步。
-    'create_watchlist',
-    'update_watchlist',
-    'archive_watchlist',
     'add_watchlist_member',
     'add_watchlist_members',
-    'update_watchlist_member',
+    'archive_watchlist',
     'archive_watchlist_member',
-    // T48 数据恢复（`src/host/data-import-operations.ts`）：只作精确 Operation policy，
-    // 不进 agent 面；数据库文件走专用 octet-stream 载体，不进通用操作输入。
+    'cancel_goal_run',
+    'cancel_strategy_evaluation_session',
+    'close_holding',
+    'create_alert_plan',
+    'create_portfolio_cash_flow',
+    'create_strategy',
+    'create_strategy_version',
+    'create_strict_strategy_backtest',
+    'create_watchlist',
+    'delete_advice',
+    'delete_alert_plan',
+    'delete_report',
+    'delete_stock_event',
+    'delete_strategy',
+    'export_business_data',
+    'pause_strategy',
+    'publish_strategy_version',
+    'record_advice_outcome',
     'restore_data_import',
+    'resume_strategy',
+    'save_decision_review',
+    'save_strategy_research_state',
+    'save_trading_plan',
+    'set_automation_tier',
+    'set_strategy_schedule',
+    'subscribe_strategy_to_watchlist',
+    'unsubscribe_strategy_from_watchlist',
+    'update_account',
+    'update_alert_plan',
+    'update_watchlist',
+    'update_watchlist_member',
+    'validate_strategy_version',
+    'write_report_artifact',
   ] as const;
   // write + external：受理即代表由宿主推进的逐日 replay，取数走 prepare_strategy_data 的外部路径。
   const PRODUCTION_COMBINED_POLICIES = [
@@ -704,11 +739,17 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'trial_strategy_version',
     'run_strategy_research_comparison',
   ] as const;
+  const PRODUCTION_TRIANGLE_POLICIES = ['run_triangle_analysis'] as const;
+  const PRODUCTION_GOAL_POLICIES = ['start_goal_run'] as const;
+  const PRODUCTION_DUMP_POLICIES = ['sync_market_dump'] as const;
   const PRODUCTION_POLICY_NAMES = [
     ...PRODUCTION_QUEUE_POLICIES,
     ...PRODUCTION_WRITE_POLICIES,
     ...PRODUCTION_COMBINED_POLICIES,
     ...PRODUCTION_EXTERNAL_POLICIES,
+    ...PRODUCTION_TRIANGLE_POLICIES,
+    ...PRODUCTION_GOAL_POLICIES,
+    ...PRODUCTION_DUMP_POLICIES,
   ].sort();
   const installedPolicyNames = installed.policies.map((policy) => policy.name).sort();
   if (
@@ -736,6 +777,9 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
   for (const [names, sideEffect, capabilities] of [
     [PRODUCTION_COMBINED_POLICIES, 'write', ['write', 'external']],
     [PRODUCTION_EXTERNAL_POLICIES, 'external', ['external']],
+    [PRODUCTION_TRIANGLE_POLICIES, 'external', ['external', 'queue']],
+    [PRODUCTION_GOAL_POLICIES, 'external', ['write', 'external']],
+    [PRODUCTION_DUMP_POLICIES, 'external', ['external', 'write']],
   ] as const) {
     for (const name of names) {
       const policy = installedPolicies.get(name);
@@ -757,7 +801,9 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     'record_decision_trade',
     // `add_trade` 不是 trade 入口（sideEffect=write 的人工记账），T47 起是写策略，见上面名单。
     'send_notification',
-    'delete_strategy',
+    'enqueue_analysis_job',
+    'start_analysis_job',
+    'override_risk_veto',
     'archive_strategy',
   ])
     if (installedPolicies.has(forbidden))
@@ -1020,8 +1066,8 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
     : [];
   if (firstProfile.accountId !== owner.accountId)
     throw new Error(`profile account mismatch: ${JSON.stringify(firstProfile.accountId)}`);
-  if (firstProfile.automationsEnabled !== false)
-    throw new Error('automationsEnabled must be false');
+  if (firstProfile.automationTier !== 'off' || secondProfile.automationTier !== 'off')
+    throw new Error('automationTier must remain off before and after restart');
   const profilePolicyNames = policies
     .map((policy) => (policy as { name?: string }).name ?? '')
     .sort();
@@ -1106,7 +1152,7 @@ process.stdout.write(JSON.stringify({ readTools, marketTools, marketConfig, poli
       installedAs: 'profiles/<temp>/node_modules/dsh-luoome (local tarball)',
       activated: true,
       accountId: firstProfile.accountId,
-      automationsEnabled: firstProfile.automationsEnabled,
+      automationTier: firstProfile.automationTier,
       policies,
       policyNames: profilePolicyNames,
       readToolCount: readTools.length,

@@ -50,8 +50,10 @@ import { createAccountOperationPolicies } from './account-operations.js';
 import { ALERT_PLAN_OPERATION_POLICIES } from './alert-plan-operations.js';
 import {
   createAnalysisOperationPolicies,
+  createTriangleAnalysisOperation,
   type TrustedAnalysisProvenance,
 } from './analysis-operations.js';
+import { createDshAnalysisRunner } from './analysis-runner.js';
 import { createAutomationTierStore } from './automation-tier-store.js';
 import { createBatchOperationPolicies } from './batch-operations.js';
 import { createDataArchives, DEFAULT_EXPORT_KEEP } from './data-archives.js';
@@ -66,7 +68,10 @@ import {
   createExportBusinessDataOperation,
 } from './data-import-operations.js';
 import { DELETION_OPERATION_POLICIES } from './deletion-operations.js';
+import { createGoalOperationPolicies } from './goal-operations.js';
+import { createDshGoalRoundRunner } from './goal-round-runner.js';
 import { createDshJobRunner } from './job-runner.js';
+import { syncMarketDumpOperation } from './market-operations.js';
 import { type MarketSettings, MarketSettingsStore } from './market-settings.js';
 import {
   assertExternalMarketAllowlist,
@@ -87,6 +92,7 @@ import { createResearchJobs, type ResearchJobs } from './research-jobs.js';
 import { createResearchOperationPolicies } from './research-operations.js';
 import { createStrategyOperationPolicies } from './strategy-operations.js';
 import { registerReadTools } from './tools.js';
+import { createDshTriangleRoleRunner } from './triangle-role-runner.js';
 import { createWatchlistOperationPolicies } from './watchlist-operations.js';
 import { mountDshWebProfile } from './web-profile.js';
 
@@ -177,10 +183,13 @@ export interface CreateProductionHostOptions {
   /**
    * 长任务执行器（REQ-M5-01）。由 `plugin.ts` 用 `createDshJobRunner(ctx)` 提供。
    *
-   * **缺省时不注入**：`start_analysis_job` 仍能受理（只排期），但不启动后台执行。
+   * **缺省时不注入**：`enqueue_analysis_job` 仍能受理（只排期），但不启动后台执行。
    * 这样既有调用方（含 e2e）行为不变。
    */
   readonly jobRunner?: import('@luoome/core').JobRunner;
+  readonly goalRoundRunner?: ToolContext['goalRoundRunner'];
+  readonly analysisRunner?: ToolContext['analysisRunner'];
+  readonly triangleRoleRunner?: import('@luoome/core').ToolContext['triangleRoleRunner'];
 }
 
 const DISPOSED_MESSAGE = 'dsh-luoome production host is disposed';
@@ -214,9 +223,12 @@ export const createProductionOperationPolicies = (
   } = {},
 ): readonly ConfirmablePluginTool[] => [
   decisionReviewOperation,
+  syncMarketDumpOperation,
   // REQ-M4-06：档位切换（write）。回执记录**提交当时的档位**，供「关→开→关 3 条可查」。
   setAutomationTierOperation,
   ...createAnalysisOperationPolicies(trusted),
+  createTriangleAnalysisOperation(),
+  ...createGoalOperationPolicies(),
   ...createStrategyOperationPolicies(),
   ...createResearchOperationPolicies(options.researchJobs ?? createResearchJobs()),
   ...createAccountOperationPolicies(),
@@ -265,6 +277,10 @@ export const createProductionHost = async (
   assertReadOnlyAllowlist(config.read.allowlist);
   // market allowlist 同样在任何 IO 之前 fail-closed；read 名单不能借给 market。
   assertExternalMarketAllowlist(config.market.allowlist, toolRegistry.all());
+  if (config.analysisModel && (!options.jobRunner || !options.analysisRunner))
+    throw new Error(
+      'Configured background analysis requires host jobs and analysis runner services',
+    );
 
   const logger = options.logger ?? createPluginLogger();
   const clock = (): Date => new Date();
@@ -327,12 +343,18 @@ export const createProductionHost = async (
       mode = 'recovery-only';
     }
 
-    const adapters = createLocalAdapters({
-      env: settingsStore.runtimeEnv(),
+    const adapterOptions = {
       clock,
       logger,
       researchVaultBackupRoot: join(config.home, 'backups', 'research-vault'),
-    });
+      marketDumpStores: {
+        runs: handle.repos.marketDumpRun,
+        rawDailyBars: handle.repos.rawDailyBar,
+        corporateActionEvents: handle.repos.corporateActionEvent,
+      },
+    };
+    let adapterEnv: NodeJS.ProcessEnv = { ...settingsStore.runtimeEnv(), LUOOME_HOME: config.home };
+    let adapters = createLocalAdapters({ ...adapterOptions, env: adapterEnv });
     const built = buildContext({
       repos: handle.repos,
       adapters: { market: adapters.market, stockUniverse: adapters.stockUniverse },
@@ -364,6 +386,13 @@ export const createProductionHost = async (
       northboundFlow: adapters.northboundFlow,
       news: adapters.news,
       sectorQuote: adapters.sectorQuote,
+      ...(adapters.sectorMembership === undefined
+        ? {}
+        : { sectorMembership: adapters.sectorMembership }),
+      ...(adapters.financialSnapshot === undefined
+        ? {}
+        : { financialSnapshot: adapters.financialSnapshot }),
+      ...(adapters.marketDump === undefined ? {} : { marketDump: adapters.marketDump }),
       ashareSentiment: adapters.ashareSentiment,
       researchRemote: adapters.researchRemote,
       notification: createNotificationManagerFromEnv(config.env, {
@@ -385,15 +414,58 @@ export const createProductionHost = async (
       reportArtifacts,
       automationTierStore,
       ...(options.jobRunner === undefined ? {} : { jobRunner: options.jobRunner }),
+      ...(options.goalRoundRunner === undefined
+        ? {}
+        : { goalRoundRunner: options.goalRoundRunner }),
+      ...(options.analysisRunner === undefined ? {} : { analysisRunner: options.analysisRunner }),
+      ...(options.triangleRoleRunner === undefined
+        ? {}
+        : { triangleRoleRunner: options.triangleRoleRunner }),
       dataArchives,
     });
     context = built;
     saveMarketSettings = (input) =>
-      settingsStore.save(input, (env) => {
+      settingsStore.save(input, (candidateEnv) => {
+        const env: NodeJS.ProcessEnv = { ...candidateEnv, LUOOME_HOME: config.home };
+        const fuyaoCredentialsChanged = ['FUYAO_API_KEY', 'FUYAO_BASE_URL'].some(
+          (key) => env[key] !== adapterEnv[key],
+        );
+        if (
+          fuyaoCredentialsChanged ||
+          (adapters.sources.fuyao === undefined &&
+            env.LUOOME_MARKET_SOURCES?.split(',').includes('fuyao'))
+        ) {
+          const replacement = createLocalAdapters({ ...adapterOptions, env });
+          return () => {
+            adapters = replacement;
+            adapterEnv = env;
+            context = {
+              ...context,
+              adapters: { market: replacement.market, stockUniverse: replacement.stockUniverse },
+              limitUpLadder: replacement.limitUpLadder,
+              dragonTiger: replacement.dragonTiger,
+              stockProfile: replacement.stockProfile,
+              northboundFlow: replacement.northboundFlow,
+              news: replacement.news,
+              sectorQuote: replacement.sectorQuote,
+              ashareSentiment: replacement.ashareSentiment,
+              ...(replacement.sectorMembership === undefined
+                ? {}
+                : { sectorMembership: replacement.sectorMembership }),
+              ...(replacement.financialSnapshot === undefined
+                ? {}
+                : { financialSnapshot: replacement.financialSnapshot }),
+              ...(replacement.marketDump === undefined
+                ? {}
+                : { marketDump: replacement.marketDump }),
+            };
+          };
+        }
         const market = createMarketAdapterFromEnv(env, {
           clock,
           logger,
-          sources: adapters.sources,
+          sources: { eastmoney: adapters.sources.eastmoney },
+          ...(adapters.sources.fuyao === undefined ? {} : { fuyaoClient: adapters.sources.fuyao }),
         });
         const ashareSentiment = createAShareSentimentManagerFromEnv(env, {
           clock,
@@ -402,6 +474,7 @@ export const createProductionHost = async (
           sources: adapters.sources,
         });
         return () => {
+          adapterEnv = env;
           context = { ...context, adapters: { ...context.adapters, market }, ashareSentiment };
         };
       });
@@ -534,16 +607,25 @@ export const assertProductionHostDependencies = (ctx: Context): void => {
 export const apply = async (ctx: Context, config?: unknown): Promise<ProductionHost> => {
   assertProductionHostDependencies(ctx);
   const resolved = resolveProductionConfig(config ?? resolveProductionConfigFromEnv());
+  if (resolved.analysisModel && (ctx.get('jobs') === undefined || ctx.get('llm') === undefined))
+    throw new Error('Configured background analysis requires host llm and jobs services');
   if (resolved.batchEnabled && ctx.get('schedule') === undefined)
     throw new Error('dsh-luoome batches require the host schedule service');
   /**
    * REQ-M5-01：注入长任务执行器。
    *
    * 只有宿主提供 `jobs` 服务时才注入（`dsh-base` 默认带 `dsh-jobs-local`）；
-   * 缺失时 `start_analysis_job` 退回「只排期」——**不静默假装在跑**。
+   * 缺失时 `enqueue_analysis_job` 退回「只排期」——**不静默假装在跑**。
    */
   const jobRunner = ctx.get('jobs') === undefined ? undefined : createDshJobRunner(ctx);
-  const host = await createProductionHost(resolved, jobRunner === undefined ? {} : { jobRunner });
+  const host = await createProductionHost(resolved, {
+    ...(jobRunner === undefined ? {} : { jobRunner }),
+    triangleRoleRunner: createDshTriangleRoleRunner(ctx),
+    goalRoundRunner: createDshGoalRoundRunner(ctx),
+    ...(resolved.analysisModel === undefined
+      ? {}
+      : { analysisRunner: createDshAnalysisRunner(ctx, resolved.analysisModel) }),
+  });
   const recoveryOnly = host.mode === 'recovery-only';
   const owner = Object.freeze({
     userId: host.config.owner.userId,
@@ -628,13 +710,15 @@ export const apply = async (ctx: Context, config?: unknown): Promise<ProductionH
     removeMarketGuard?.();
     removeMarket?.();
     web?.dispose();
+    await jobRunner?.dispose();
     host.dispose();
     throw error;
   }
   ctx.effect(() => () => {
     removeMarketGuard?.();
     removeMarket?.();
-    host.dispose();
+    if (jobRunner === undefined) host.dispose();
+    else return jobRunner.dispose().finally(() => host.dispose());
   });
   return host;
 };

@@ -1,6 +1,7 @@
 import { SIDE_EFFECTS } from '@luoome/core';
 import { z } from 'zod';
 import type { Tool } from './define-tool.js';
+import { cancelGoalRunTool, getGoalRunTool, startGoalRunTool } from './goal-runs.js';
 import {
   cancelAnalysisJobTool,
   claimAnalysisJobsTool,
@@ -14,6 +15,8 @@ import {
   recordAnalysisResultTool,
   requeueAnalysisJobTool,
 } from './queue/index.js';
+import { recordTriangleReviewTool } from './queue/record-triangle-review.js';
+import { runTriangleAnalysisTool } from './queue/run-triangle-analysis.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
@@ -70,11 +73,14 @@ import { getDecisionReviewSnapshotTool } from './tools/get-decision-review-snaps
 import { getHoldingTool } from './tools/get-holding.js';
 import { getIntradayDeliveryAuditTool } from './tools/get-intraday-delivery-audit.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
+import { getMarketDumpStatusTool } from './tools/get-market-dump-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
+import { getStockFinancialSnapshotTool } from './tools/get-stock-financial-snapshot.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockProfileTool } from './tools/get-stock-profile.js';
+import { getStockSectorMembershipsTool } from './tools/get-stock-sector-memberships.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
 import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
@@ -236,6 +242,7 @@ import {
   unsubscribeStrategyFromWatchlistTool,
 } from './tools/strategy-watchlist-subscription.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
+import { syncMarketDumpTool } from './tools/sync-market-dump.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
@@ -366,6 +373,9 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 
 /** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
+  startGoalRunTool,
+  getGoalRunTool,
+  cancelGoalRunTool,
   getAnalysisContextTool,
   listAnalysisJobsTool,
   getAnalysisJobTool,
@@ -374,6 +384,8 @@ export const toolRegistry: Registry = createRegistry([
   failAnalysisJobTool,
   cancelAnalysisJobTool,
   requeueAnalysisJobTool,
+  recordTriangleReviewTool,
+  runTriangleAnalysisTool,
   recordAdviceTool,
   recordAnalysisResultTool,
   completeAnalysisJobTool,
@@ -549,6 +561,9 @@ export const toolRegistry: Registry = createRegistry([
   dragonTigerListTool,
   // 个股档案（只读；东方财富数据中心公开报表）
   getStockProfileTool,
+  getStockSectorMembershipsTool,
+  syncMarketDumpTool,
+  getMarketDumpStatusTool,
   // 北向资金历史流（只读；东方财富数据中心公开报表）
   northboundFlowTool,
   persistExternalFactsTool,
@@ -610,6 +625,8 @@ export const toolRegistry: Registry = createRegistry([
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
   getStockUniverseStatusTool,
+  // 财务当前快照 Phase 5（docs/ddd/fuyao-data-expansion-and-tushare-retirement-design.md §11）
+  getStockFinancialSnapshotTool,
   // 个人域（单机版）：自选导入、事实摘要与用户价格条件预警
   ...personalTools,
 ]);

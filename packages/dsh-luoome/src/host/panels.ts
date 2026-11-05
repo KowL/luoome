@@ -507,6 +507,38 @@ export const createStockProfileHandler =
     return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), profile });
   };
 
+export const createStockFinancialHandler =
+  (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
+  async (request: Request): Promise<Response> => {
+    if (request.method !== 'GET') {
+      const response = jsonNoStore(invalidInput('GET required'), 405);
+      response.headers.set('allow', 'GET');
+      return response;
+    }
+    try {
+      const rejection = await options.admit(request);
+      if (rejection) return rejection;
+    } catch {
+      return jsonNoStore(denied('host authentication'), 403);
+    }
+    const query = new URL(request.url).searchParams;
+    const parsed = StockDetailQuery.safeParse(Object.fromEntries(query));
+    if (!parsed.success || [...query.keys()].length !== 1)
+      return jsonNoStore(invalidInput('A single supported stockId is required'), 400);
+    const now = (options.now ?? (() => new Date()))();
+    const signal = AbortSignal.any([
+      request.signal,
+      AbortSignal.timeout(options.marketTimeoutMs ?? DEFAULT_PANEL_MARKET_TIMEOUT_MS),
+    ]);
+    const financial = await invoke(
+      options.market,
+      fixed('get_stock_financial_snapshot', { stockId: parsed.data.stockId }),
+      signal,
+      now,
+    );
+    return jsonNoStore({ stockId: parsed.data.stockId, asOf: now.toISOString(), financial });
+  };
+
 export const createStockHistoryHandler =
   (options: Pick<CreatePanelStateHandlerOptions, 'market' | 'admit' | 'now' | 'marketTimeoutMs'>) =>
   async (request: Request): Promise<Response> => {

@@ -141,7 +141,7 @@ describe('PIT 属性覆盖（显式降级）', () => {
     ).toEqual(['stStatus']);
   });
 
-  it('tushare 形状的完整快照覆盖上市状态/行业/上市日期/退市日期', () => {
+  it('完整属性快照覆盖上市状态/行业/上市日期/退市日期', () => {
     expect(
       stockUniverseMemberAttributeCoverage([
         {

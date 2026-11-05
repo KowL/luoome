@@ -22,6 +22,8 @@ export interface RiskVetoRepository {
     readonly accountId: string;
     readonly subject: AnalysisSubject;
   }): Promise<{ readonly veto: RiskVeto; readonly override: RiskVetoOverride | null } | null>;
+  /** 按 id 读一条否决（供推翻时校验证据归属与新旧）。 */
+  findVetoById(accountId: string, vetoId: string): Promise<RiskVeto | null>;
   /** 记录人工推翻。 */
   saveOverride(override: RiskVetoOverride): Promise<void>;
 }

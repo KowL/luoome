@@ -33,6 +33,7 @@ import {
   assertWorkflowRunInvariants,
   ChatMessageSchema,
   ChatSessionSchema,
+  CorporateActionEventRevisionSchema,
   DATA_IMPORT_PREVIEW_TTL_MS,
   DailyBarSchema,
   DataImportError,
@@ -52,11 +53,13 @@ import {
   HoldingCashAdjustmentSchema,
   HoldingSchema,
   LimitUpLadderSchema,
+  MarketDumpRunSchema,
   MembershipSnapshotSchema,
   NotificationSchema,
   PortfolioCashFlowSchema,
   PortfolioCorporateActionSchema,
   QuoteSchema,
+  RawDailyBarRevisionSchema,
   ReportSchema,
   ResearchDocumentChunkSchema,
   ResearchDocumentIndexSchema,
@@ -157,6 +160,9 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'stock_universe_sync_runs',
     'price_snapshots',
     'daily_bars',
+    'market_dump_runs',
+    'raw_daily_bar_revisions',
+    'corporate_action_event_revisions',
     'limit_up_ladder_snapshots',
     'stock_events',
   ],
@@ -512,6 +518,13 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
     assertExternalMarketFactInvariants(fact),
   ),
   daily_bars: domainValidator(DailyBarSchema),
+  market_dump_runs: domainValidator(MarketDumpRunSchema, undefined, (row) => row),
+  raw_daily_bar_revisions: domainValidator(RawDailyBarRevisionSchema, undefined, (row) => row),
+  corporate_action_event_revisions: domainValidator(
+    CorporateActionEventRevisionSchema,
+    undefined,
+    (row) => row,
+  ),
   limit_up_ladder_snapshots: domainValidator(LimitUpLadderSchema),
   stock_events: domainValidator(StockEventSchema, assertStockEventInvariants),
   research_topic_index: domainValidator(ResearchTopicIndexSchema),
@@ -945,6 +958,12 @@ export const assertDataImportFinalTables = (
       if (table === 'strategy_evaluation_days')
         references.push(['session_id', 'strategy_evaluation_sessions', 'id']);
       for (const [column, parent, key] of references) {
+        // 全历史 dump 可包含当前目录之外的股票；两张原始事实表刻意没有 stocks 外键。
+        if (
+          column === 'stock_id' &&
+          (table === 'raw_daily_bar_revisions' || table === 'corporate_action_event_revisions')
+        )
+          continue;
         if (row[column] !== undefined && row[column] !== null && !exists(parent, key, row[column]))
           throw new DataImportError('graph', `表 ${table}.${column} 缺少引用`);
       }

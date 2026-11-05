@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "thscode": "600030.SH",
+    "ticker": "600030",
+    "item": [
+      {
+        "ticker": "600030",
+        "ex_date_ms": 1643212800000,
+        "dividend_per_share": 0,
+        "per_share_bonus": 0
+      }
+    ]
+  }
+}

@@ -421,7 +421,7 @@ export const makeMinuteBar = (
   close: money(10.5),
   volume: 10_000,
   adjustment: 'raw',
-  source: 'tushare',
+  source: 'test-provider',
   fetchedAt: new Date(endedAt.getTime() + 1_000),
   completeness: 'closed',
   ...overrides,
@@ -1887,7 +1887,7 @@ export const registerRepositoryContractTests = (
           });
 
         await apply('sync-eastmoney-a', 'eastmoney', [stockA]);
-        await apply('sync-tushare-a', 'tushare', [stockA]);
+        await apply('sync-test-provider-a', 'test-provider', [stockA]);
         await apply('sync-eastmoney-b', 'eastmoney', [stockB]);
 
         expect(
@@ -2952,7 +2952,7 @@ export const registerRepositoryContractTests = (
         expect(got[1]).toMatchObject({
           amount: 22_000,
           adjustment: 'raw',
-          source: 'tushare',
+          source: 'test-provider',
           completeness: 'live',
         });
       });
@@ -6095,7 +6095,7 @@ export const registerRepositoryContractTests = (
           metricIds: ['revenue'],
           asOf: T2,
           policy: 'strict-pit-v1',
-          sources: ['tushare-pit-v1'],
+          sources: ['real-pit-v1'],
         });
         expect(realOnly.facts).toEqual([]);
         expect(realOnly.status).toBe('unavailable');
@@ -6110,7 +6110,7 @@ export const registerRepositoryContractTests = (
           source: 'mock-fundamental-pit-fixture',
           value: 42,
         });
-        const real = makeFinancialFact('fact-real', { source: 'tushare-pit-v1', value: 100 });
+        const real = makeFinancialFact('fact-real', { source: 'real-pit-v1', value: 100 });
         await repos.financialFact.appendMany([mock, real]);
 
         const nothing = await repos.financialFact.resolveVintage({
@@ -6134,7 +6134,7 @@ export const registerRepositoryContractTests = (
           metricIds: ['revenue'],
           asOf: T2,
           policy: 'strict-pit-v1',
-          sources: ['tushare-pit-v1'],
+          sources: ['real-pit-v1'],
         });
         expect(realOnly.facts.map((fact) => `${fact.id}:${fact.value}`)).toEqual(['fact-real:100']);
         expect(realOnly.status).toBe('complete');

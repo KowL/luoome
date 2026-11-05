@@ -13,7 +13,7 @@ const base = {
   volume: 10_000,
   amount: 14_005_000,
   adjustment: 'raw',
-  source: 'tushare',
+  source: 'tencent',
   fetchedAt: '2026-08-14T01:31:05.000Z',
   completeness: 'closed',
 } as const;

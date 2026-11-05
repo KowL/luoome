@@ -33,4 +33,6 @@ export const riskVetoOverrides = sqliteTable('risk_veto_overrides', {
   reason: text('reason').notNull(),
   newFactIdsJson: text('new_fact_ids_json').notNull(),
   overriddenAt: integer('overridden_at', { mode: 'timestamp_ms' }).notNull(),
+  actorUserId: text('actor_user_id'),
+  evidenceContextId: text('evidence_context_id'),
 });

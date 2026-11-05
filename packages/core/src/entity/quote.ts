@@ -20,7 +20,7 @@ export interface Quote {
   readonly amount?: number | undefined;
   /** 换手率（%，可选）：数据源给得出才填（eastmoney f168 / tencent qt 快照）。 */
   readonly turnoverRatePct?: number | undefined;
-  /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close / tencent qt 快照）。 */
+  /** 昨收（可选）：数据源给得出才填（eastmoney f60 / fuyao prev_price / tencent qt 快照）。 */
   readonly prevClose?: Money | undefined;
   /** 总股本 / 流通股本（股，可选）。 */
   readonly totalShares?: number | undefined;

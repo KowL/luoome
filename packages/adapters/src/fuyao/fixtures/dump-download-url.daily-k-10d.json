@@ -1,0 +1,10 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "presigned_url": "https://o.thsi.cn/fuyao-financial-api.fuyao-a-share-prices-market-dump/market-dump/daily_k/releases/20261103/a_share_daily_k_1d_none_10d_20261103.parquet?<redacted-query-keys=AWSAccessKeyId,Expires,Signature>",
+    "presigned_url_expires_at": "2026-11-03T23:26:10.979815767+08:00",
+    "expires_in_seconds": 300
+  }
+}

@@ -19,6 +19,10 @@ import {
   researchRequestFor,
   stateUrl,
   stockDetailUrl,
+  stockFinancialSections,
+  stockFinancialUrl,
+  stockHistoryIndex,
+  stockHistoryRows,
   stockResearchRequestFor,
   strategyExpression,
   strategyOperationRequestFor,
@@ -26,7 +30,99 @@ import {
   strategyPartErrorOf,
   strategyPartOf,
   strategyText,
+  xueqiuStockUrl,
 } from './projection.js';
+
+describe('xueqiuStockUrl', () => {
+  it('把规范股票代码映射为雪球交易所前缀 symbol', () => {
+    expect(xueqiuStockUrl('600519.SH')).toBe('https://xueqiu.com/S/SH600519');
+    expect(xueqiuStockUrl('000001.SZ')).toBe('https://xueqiu.com/S/SZ000001');
+    expect(xueqiuStockUrl('430047.BJ')).toBe('https://xueqiu.com/S/BJ430047');
+  });
+
+  it('非规范代码不拼外部链接', () => {
+    for (const value of [undefined, null, '', '600519', '600519.hk', 'AAPL', 'SH600519'])
+      expect(xueqiuStockUrl(value)).toBeNull();
+  });
+});
+
+describe('stock detail projections', () => {
+  it('aligns tool averages by date before clipping, and keeps missing averages unknown', () => {
+    const candles = Array.from({ length: 65 }, (_, index) => ({
+      date: String(index),
+      close: index + 1,
+      volume: index === 64 ? 0 : null,
+    }));
+    const marketView = {
+      candles,
+      movingAverages: [
+        { date: '64', ma20: 0, ma60: 999 },
+        { date: '35', ma20: 123, ma60: null },
+      ],
+    };
+    const rows = stockHistoryRows(marketView, 30);
+    expect(rows).toHaveLength(30);
+    expect(rows[0]).toMatchObject({ date: '35', ma20: 123, ma60: null });
+    expect(rows[1]).toMatchObject({ date: '36', ma20: null, ma60: null, volume: null });
+    expect(rows.at(-1)).toMatchObject({ date: '64', ma20: 0, ma60: 999, volume: 0 });
+    expect(stockHistoryRows(marketView, 60)).toHaveLength(60);
+    expect(stockHistoryRows(marketView)).toHaveLength(65);
+    expect(stockHistoryRows({ candles: candles.slice(0, 2) }, 30)).toEqual([
+      { ...candles[0], ma20: null, ma60: null },
+      { ...candles[1], ma20: null, ma60: null },
+    ]);
+    expect(candles[0]).not.toHaveProperty('ma20');
+  });
+
+  it('clamps keyboard dates and supports first/last date navigation', () => {
+    expect(stockHistoryIndex('ArrowLeft', 0, 30)).toBe(0);
+    expect(stockHistoryIndex('ArrowRight', 29, 30)).toBe(29);
+    expect(stockHistoryIndex('ArrowLeft', 20, 30)).toBe(19);
+    expect(stockHistoryIndex('Home', 20, 30)).toBe(0);
+    expect(stockHistoryIndex('End', 20, 30)).toBe(29);
+    expect(stockHistoryIndex('Escape', 20, 30)).toBe(20);
+  });
+
+  it('keeps financial requests under the DSH document base and encodes stock IDs', () => {
+    expect(new URL(stockFinancialUrl('600519.SH&x=1'), 'https://example.test/dsh/').href).toBe(
+      'https://example.test/dsh/api/luoome/stock-financial?stockId=600519.SH%26x%3D1',
+    );
+  });
+
+  it('selects the latest period independently per statement without synthesizing missing values', () => {
+    const statements = {
+      incomeStatements: [
+        {
+          periodEnd: '2025-12-31',
+          reportDate: '2026-04-20',
+          period: 'annual',
+          fields: { operating_income: 999 },
+        },
+        {
+          periodEnd: '2026-06-30',
+          reportDate: '2026-08-20',
+          period: 'quarterly',
+          fields: { operating_income: 0, basic_eps: 1.25 },
+        },
+      ],
+      balanceSheets: [
+        {
+          periodEnd: '2026-03-31',
+          reportDate: '2026-04-30',
+          period: 'quarterly',
+          fields: { assets_total: 100 },
+        },
+      ],
+    };
+    const rows = stockFinancialSections({ statements });
+    expect(rows[0]).toMatchObject({ periodEnd: '2026-06-30', reportDate: '2026-08-20' });
+    expect(rows[0].rows.map((row) => row.value)).toEqual([0, null, 1.25]);
+    expect(rows[1]).toMatchObject({ periodEnd: '2026-03-31', reportDate: '2026-04-30' });
+    expect(rows[2]).toMatchObject({ periodEnd: null, reportDate: null });
+    expect(rows[2].rows.every((row) => row.value === null)).toBe(true);
+    expect(statements.incomeStatements[0].periodEnd).toBe('2025-12-31');
+  });
+});
 
 describe('client panel state projection', () => {
   it('preserves successful section data and its timestamp on tool failure, then recovers', () => {

@@ -50,6 +50,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   'get_advice_attribution',
   // 交互分析上下文（读业务事实并持久化审计快照，口径见需求 §5.4）
   'get_analysis_context',
+  'get_goal_run',
   // Strategy 制定与结果研究
   'list_strategies',
   'get_strategy',
@@ -99,6 +100,7 @@ export const DEFAULT_READ_TOOL_ALLOWLIST = Object.freeze([
   // 本地市场事实与数据健康（每日市场分析；external 刷新留待 M2）
   'get_market_data_status',
   'get_stock_universe_status',
+  'get_market_dump_status',
   'get_data_diagnostics',
   'get_closing_batch_audit',
   'limit_up_ladder',
@@ -144,6 +146,8 @@ export const DEFAULT_MARKET_TOOL_ALLOWLIST = Object.freeze([
   'fetch_news',
   'fetch_sector_quotes',
   'get_stock_profile',
+  'get_stock_sector_memberships',
+  'get_stock_financial_snapshot',
   'get_account_performance',
 ]);
 
@@ -179,6 +183,14 @@ const MarketSchema = z
  * 顺带带进生产装配。batch/automations 默认关闭；自动化须先显式打开 batch。
  * `read` 与 `market` 是两份独立 allowlist，不能互相借用。
  */
+export const AnalysisModelRouteSchema = z
+  .object({
+    provider: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+  })
+  .strict();
+export type AnalysisModelRoute = z.infer<typeof AnalysisModelRouteSchema>;
+
 export const productionConfigSchema = z
   .object({
     /** LUOOME_HOME；省略时取 `env.LUOOME_HOME`，再退回 `~/.luoome`。 */
@@ -188,6 +200,7 @@ export const productionConfigSchema = z
     read: ReadSchema.optional(),
     market: MarketSchema.optional(),
     batchEnabled: z.boolean().optional(),
+    analysisModel: AnalysisModelRouteSchema.optional(),
     /**
      * 自动化档位（REQ-M4-06）。
      *
@@ -275,6 +288,7 @@ export interface ProductionConfig {
   readonly read: ProductionReadConfig;
   readonly market: ProductionMarketConfig;
   readonly batchEnabled: boolean;
+  readonly analysisModel?: Readonly<AnalysisModelRoute>;
   /** 自动化档位（REQ-M4-06）。**取代** 旧的 `automationsEnabled` 布尔值。 */
   readonly automationTier: AutomationTier;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -301,6 +315,13 @@ export const resolveProductionConfig = (
   const env = Object.freeze({
     ...(parsed.env ?? options.env ?? process.env),
   });
+  const provider = env.LUOOME_ANALYSIS_PROVIDER;
+  const model = env.LUOOME_ANALYSIS_MODEL;
+  const analysisModel =
+    parsed.analysisModel ??
+    (provider === undefined && model === undefined
+      ? undefined
+      : AnalysisModelRouteSchema.parse({ provider, model }));
   const envHome = env.LUOOME_HOME?.trim();
   const home = parsed.home ?? (envHome === undefined || envHome.length === 0 ? undefined : envHome);
   const config: ProductionConfig = {
@@ -321,6 +342,7 @@ export const resolveProductionConfig = (
       exposeResearch: false as const,
     }),
     batchEnabled: parsed.batchEnabled === true,
+    ...(analysisModel === undefined ? {} : { analysisModel: Object.freeze(analysisModel) }),
     automationTier: resolveAutomationTier(parsed),
     env,
   };

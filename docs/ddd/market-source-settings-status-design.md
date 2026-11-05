@@ -1,6 +1,7 @@
 # 行情数据源设置与状态展示优化设计
 
 > 状态：已实施（2026-08-23；浏览器验收通过，见 §8）
+> 当前补充：Tushare 已于 2026-11-03 退役；§8 的源清单与路由仅作当时验收记录
 > 日期：2026-08-23
 > 范围：Web 设置页「行情数据源」分区——从源级开关列表升级为「源 × capability」的配置态 + 运行态视图
 > 关联文档：[ARCHITECTURE.md §4.7](../ARCHITECTURE.md)、[数据源可插拔与统一观测设计](./source-pluggability-and-observation-design.md)（§4.3 观测状态机、§6.1 registry 契约）、[ruo 迁移设计 §8](./ruo-feature-migration-detailed-design.md)（数据健康读模型）
@@ -61,7 +62,7 @@ export interface MarketSourceManifestEntry {
 export const MARKET_SOURCE_MANIFEST: Readonly<Record<MarketSourceId, MarketSourceManifestEntry>>;
 ```
 
-- manifest 是「该源实现了什么」的声明，与实际 binding 的一致性用单测钉住（遍历 manifest 逐源构建 binding，断言 capability 集合相等；tushare / fuyao 缺凭证时用注入假 config 绕过启动卡口）。
+- manifest 是「该源实现了什么」的声明，与实际 binding 的一致性用单测钉住（遍历 manifest 逐源构建 binding，断言 capability 集合相等；fuyao 缺凭证时用注入假 config 绕过启动卡口）。
 - `SOURCE_REQUIRED_ENV` 从 `market-settings.ts` 上收到 manifest，消除两处维护。
 
 ## 5. API：扩展 `GET /api/settings/market`

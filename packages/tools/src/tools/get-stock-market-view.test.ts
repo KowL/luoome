@@ -397,6 +397,110 @@ describe('tool/get_stock_market_view', () => {
     expect(res.data.indicators.ma5).toBeCloseTo(expectedMa5, 6);
   });
 
+  it.each([19, 20, 59, 60])('均线序列：%i 根日线的样本边界与指标快照一致', async (count) => {
+    const ctx = await buildCtx(new StubMarketAdapter({ bars: makeBars(STOCK_ID, TODAY, count) }));
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.movingAverages.map((row) => row.date)).toEqual(
+      res.data.candles.map((candle) => candle.date),
+    );
+    for (const [index, row] of res.data.movingAverages.entries()) {
+      for (const period of [20, 60] as const) {
+        const actual = period === 20 ? row.ma20 : row.ma60;
+        if (index + 1 < period) {
+          expect(actual).toBeNull();
+        } else {
+          const expected =
+            res.data.candles
+              .slice(index - period + 1, index + 1)
+              .reduce((sum, candle) => sum + candle.close, 0) / period;
+          expect(actual).toBeCloseTo(expected, 8);
+        }
+      }
+    }
+    const last = res.data.movingAverages.at(-1);
+    expect(last?.ma20).toEqual(res.data.indicators.ma20 ?? null);
+    expect(last?.ma60).toEqual(res.data.indicators.ma60 ?? null);
+  });
+
+  it('均线基于规范化日线，忽略输入乱序并采用同日最后一条，不读取未来值', async () => {
+    const bars = makeBars(STOCK_ID, TODAY, 80);
+    const corrected = makeBar(
+      STOCK_ID,
+      (bars[10] as DailyBar).date.toISOString().slice(0, 10),
+      200,
+    );
+    const quote = makeQuote(STOCK_ID, NOW, { close: money(1000), high: money(1001) });
+    const ctx = await buildCtx(
+      new StubMarketAdapter({ bars: [...bars].reverse().concat(corrected), quote }),
+    );
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const firstTwenty = res.data.candles.slice(0, 20);
+    expect(firstTwenty[10]?.close).toBe(200);
+    const expected = (20 * 100 + (0.1 * 19 * 20) / 2 - 101 + 200) / 20;
+    expect(res.data.movingAverages[19]?.ma20).toBeCloseTo(expected, 8);
+    expect(res.data.movingAverages[18]?.ma20).toBeNull();
+    expect(res.data.candles.at(-1)?.close).toBe(1000);
+    expect(res.data.movingAverages.at(-1)?.ma20).toBe(res.data.indicators.ma20);
+  });
+
+  it.each(['week', 'month'])('均线在%s粒度取桶末日日均线，而非聚合K线均值', async (granularity) => {
+    const daily = await callView(await buildCtx(new StubMarketAdapter()), {});
+    const aggregated = await callView(await buildCtx(new StubMarketAdapter()), { granularity });
+    expect(daily.ok && aggregated.ok).toBe(true);
+    if (!daily.ok || !aggregated.ok) return;
+    const dailyByDate = new Map(daily.data.movingAverages.map((row) => [row.date, row]));
+    expect(aggregated.data.movingAverages).toEqual(
+      aggregated.data.candles.map((candle) => dailyByDate.get(candle.date)),
+    );
+    expect(aggregated.data.candles.length).toBeLessThan(20);
+    expect(aggregated.data.movingAverages.at(-1)?.ma60).toBe(daily.data.indicators.ma60);
+    expect(aggregated.data.movingAverages.at(-1)?.ma60).not.toBeNull();
+  });
+
+  it.each(['2026-07-21T02:30:00.000Z', '2026-07-21T08:00:00.000Z'])(
+    '均线在 %s 沿用指标的live报价口径，收盘后不擅自改变',
+    async (now) => {
+      const bars = [...makeBars(STOCK_ID, YESTERDAY, 59), makeBar(STOCK_ID, TODAY, 999)];
+      const ctx = await buildCtx(new StubMarketAdapter({ bars }), () => new Date(now));
+      const res = await callView(ctx, {});
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.data.candles.at(-1)).toMatchObject({ completeness: 'live', close: 106 });
+      const expected = (bars.slice(-20, -1).reduce((sum, bar) => sum + bar.close, 0) + 106) / 20;
+      expect(res.data.movingAverages.at(-1)?.ma20).toBeCloseTo(expected, 8);
+      expect(res.data.movingAverages.at(-1)?.ma20).toBe(res.data.indicators.ma20);
+    },
+  );
+
+  it('本地日线回退、盘前与历史锚点均保持均线/蜡烛对齐', async () => {
+    const fallbackCtx = await buildCtx(new StubMarketAdapter({ barsError: new Error('down') }));
+    await fallbackCtx.repos.dailyBar.saveMany(makeBars(STOCK_ID, YESTERDAY, 60));
+    const preopenCtx = await buildCtx(
+      new StubMarketAdapter(),
+      () => new Date('2026-07-21T01:00:00Z'),
+    );
+    const historicalCtx = await buildCtx(new StubMarketAdapter());
+    for (const [ctx, input, expectedDate] of [
+      [fallbackCtx, {}, TODAY],
+      [preopenCtx, {}, YESTERDAY],
+      [historicalCtx, { date: YESTERDAY }, YESTERDAY],
+    ] as const) {
+      const res = await callView(ctx, input);
+      expect(res.ok).toBe(true);
+      if (!res.ok) continue;
+      expect(res.data.movingAverages.map((row) => row.date)).toEqual(
+        res.data.candles.map((candle) => candle.date),
+      );
+      expect(res.data.movingAverages.at(-1)?.date).toBe(expectedDate);
+      expect(res.data.movingAverages.at(-1)?.ma20).toBe(res.data.indicators.ma20);
+      expect(res.data.movingAverages.at(-1)?.ma60).toBe(res.data.indicators.ma60 ?? null);
+    }
+  });
+
   it('18. 非交易日 / 收盘后 / 午休 / 盘前 session 状态正确', async () => {
     const cases = [
       // 2026-07-25 周六 10:30 Shanghai

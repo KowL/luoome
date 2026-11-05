@@ -12,8 +12,10 @@ import {
 import { z } from 'zod';
 
 import { EastmoneySource } from '../eastmoney/source.js';
+import { FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { invalidPayloadError } from '../source-error.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
+import { FuyaoDragonTigerSource } from './fuyao.js';
 import { DragonTigerManager } from './manager.js';
 import type { DragonTigerCapabilityMap } from './types.js';
 
@@ -24,6 +26,7 @@ import type { DragonTigerCapabilityMap } from './types.js';
  * - LUOOME_DRAGON_TIGER_SOURCES：逗号分隔、有序、去重；未知源启动期抛错；缺省 eastmoney
  *   （docs/ddd/source-pluggability-and-observation-design.md §4.6）
  * - 通过显式数据源配置装配；未知或重复来源在启动时失败
+ * - fuyao 显式排入路由时要求 FUYAO_API_KEY 完整（§4.3），缺省启动期快速失败
  * - 返回的 manager 同时满足 core `DragonTigerManagerLike` 接口（structural typing）
  */
 
@@ -31,13 +34,19 @@ export interface CreateDragonTigerManagerDeps {
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
-  /** 组装根共享的供应商实例；注入时不再自构（§4.6）。 */
-  readonly sources?: { readonly eastmoney?: EastmoneySource };
+  /**
+   * 组装根共享的供应商实例；注入时不再自构（§4.6）。
+   * fuyao 是进程级共享 FuyaoClient（设计 §4.1：所有 Fuyao REST 请求共享同一协调器）。
+   */
+  readonly sources?: {
+    readonly eastmoney?: EastmoneySource;
+    readonly fuyao?: FuyaoClient;
+  };
 }
 
 /** 已注册的龙虎榜数据源（封闭启动校验；core 端口侧是开放 SourceIdSchema）。 */
 const DragonTigerSourcesSchema = z
-  .array(z.literal('eastmoney'))
+  .array(z.enum(['eastmoney', 'fuyao']))
   .min(1, '至少启用一个龙虎榜数据源')
   .superRefine((sources, ctx) => {
     if (new Set(sources).size !== sources.length) {
@@ -47,7 +56,7 @@ const DragonTigerSourcesSchema = z
 
 const dragonTigerSourcesFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
-): readonly 'eastmoney'[] => {
+): readonly ('eastmoney' | 'fuyao')[] => {
   const raw = env.LUOOME_DRAGON_TIGER_SOURCES?.trim();
   return DragonTigerSourcesSchema.parse(
     raw === undefined || raw.length === 0
@@ -73,6 +82,8 @@ export const createDragonTigerManagerFromEnv = (
     switch (source) {
       case 'eastmoney':
         return eastmoneyBindings(eastmoney);
+      case 'fuyao':
+        return fuyaoBindings(buildFuyao(env, deps, clock));
       default:
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
@@ -84,6 +95,32 @@ export const createDragonTigerManagerFromEnv = (
     logger: deps.logger,
     clock,
     holidaysProvider: async () => loadHolidaysFromEnv(env),
+  });
+};
+
+/**
+ * fuyao 显式排入路由时要求配置完整（§4.3）：缺 FUYAO_API_KEY 启动期快速失败。
+ * 优先复用组装根共享的 FuyaoClient；未注入时按 env 自构（测试便利）。
+ */
+const buildFuyao = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateDragonTigerManagerDeps,
+  clock: () => Date,
+): FuyaoDragonTigerSource => {
+  if (deps.sources?.fuyao !== undefined) {
+    return new FuyaoDragonTigerSource({ client: deps.sources.fuyao, clock });
+  }
+  const apiKey = env.FUYAO_API_KEY;
+  if (apiKey === undefined || apiKey.trim().length === 0) {
+    throw new Error('fuyao 已启用，但 FUYAO_API_KEY 未配置');
+  }
+  const config = fuyaoConfigFromEnv(env);
+  return new FuyaoDragonTigerSource({
+    client: new FuyaoClient(
+      config,
+      deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl },
+    ),
+    clock,
   });
 };
 
@@ -121,6 +158,28 @@ const eastmoneyBindings = (source: EastmoneySource): AnyBinding<DragonTigerCapab
   {
     capability: 'dragon-tiger-list',
     source: 'eastmoney',
+    coverage: ['CN_A_SHARES_SH_SZ'],
+    configurationReady: true,
+    execute: async ({ date }) => {
+      const result = await source.fetchList(date);
+      if (result.date !== date) {
+        throw invalidPayloadError(`dragon-tiger 信封日期错配: 返回 ${result.date}，请求 ${date}`);
+      }
+      return result;
+    },
+    observationOf: (result) => ({ outcome: 'success', dataAsOf: result.observedAt }),
+  },
+];
+
+/**
+ * fuyao 绑定（§8）：信封日期错配 invalid_payload（adapter 内已校验，binding 双保险）；
+ * 合法空榜也是 success（§6.2）。权限错误（2003 → permission）只将本 (source, capability)
+ * 标为不可用并走 fallback（§4.3），不影响其它已授权 Fuyao 能力。
+ */
+const fuyaoBindings = (source: FuyaoDragonTigerSource): AnyBinding<DragonTigerCapabilityMap>[] => [
+  {
+    capability: 'dragon-tiger-list',
+    source: 'fuyao',
     coverage: ['CN_A_SHARES_SH_SZ'],
     configurationReady: true,
     execute: async ({ date }) => {

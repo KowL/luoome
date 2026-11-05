@@ -184,7 +184,7 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
-  /** Tushare 官方实时分钟上限 500 次/分钟；独立 limiter 不与其它行情能力混算。 */
+  /** 分钟线独立限流，不与其它行情能力混算。 */
   private readonly minuteBarRateLimiter = new RateLimiter(500, 60_000);
   private readonly batchConcurrency: number;
   private readonly logger: Logger;

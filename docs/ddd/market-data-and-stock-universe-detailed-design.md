@@ -7,26 +7,24 @@
 > 关联文档：[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、
 > [个股行情查看详细设计](./stock-market-view-detailed-design.md)、
 > [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
-> [Tushare 行情适配器设计](./tushare-market-adapter-design.md)
+> [Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)
 >
 > **消费面现状（2026-11-04 修订）**：独立 CLI / TUI、stdio MCP 与单机 Web（`apps/web`）均已删除，
 > 当前唯一消费面是 `dsh-luoome` 插件（面板经 `/dsh/api/luoome/*` 取数，能力经 tool registry 暴露）。
-> 下文出现的 Web 路由/页面、CLI 命令、TUI 视图与 MCP 暴露均按当时设计阅读；行情契约、存储与工具语义仍以正文为准。
+> 本文保留数据底座的阶段设计与迁移依据；当前消费入口统一为插件与 DSH 定时任务。
 
 ## 1. 背景
 
-当前行情实现已经具备 Eastmoney、Tencent、Sina、Tushare 四个真实数据源，以及
-`MarketDataManager` 提供的缓存、限速和 fallback。`dsh-luoome` 插件也统一通过
-`createMarketAdapterFromEnv`（单机装配根 `packages/adapters/src/local-adapters.ts`）装配，
-依赖方向符合 `surface → tools → adapters/core`。
+当前行情实现具备 Eastmoney、Tencent、Sina、Fuyao、Xueqiu 等真实数据源，以及
+`MarketDataManager` 提供的缓存、限速和 fallback。Tushare 已于 2026-11-03 下线，历史来源记录保留读取。
+`dsh-luoome` 插件统一通过 `createMarketAdapterFromEnv`（单机装配根
+`packages/adapters/src/local-adapters.ts`）装配，依赖方向符合 `surface → tools → adapters/core`。
 
 但现有 seam 主要保证 TypeScript 形状兼容，没有完整保证行为可替换：
 
 1. `fetchDailyBars` 只在抛错时 fallback；主源返回空数组会被当成成功并缓存。
-2. Eastmoney/Tencent/Sina 返回 qfq 日线；Tushare 返回未复权 OHLC 和真实复权因子，
-   切源仍必须保持 qfq 领域口径。
-3. Tushare 的 `fetchIndexQuotes` 是最近日线而非盘中实时数据，却满足当前“实时指数”
-   方法形状。
+2. 各源原始协议和复权字段不同，切源仍必须保持 qfq 领域口径。
+3. 延时指数的 `fetchIndexQuotes` 与盘中实时指数具有相同方法形状，必须按 capability 分路。
 4. Eastmoney/Tencent 的 Quote `ts` 使用抓取时间；盘前、午休和盘后重复抓取会把冻结价格
    伪装成刚刚成交的数据。
 5. `batch_quote` 远端缺失时回退任意年龄的本地快照，调用方拿不到
@@ -79,7 +77,7 @@ module：统一 interface 只暴露调用方真正需要理解的语义，把协
 - 首期覆盖港股、美股、基金、债券、期货和加密资产；
 - 根据一次目录缺失自动判定退市或物理删除股票；
 - 在进程启动时阻塞等待全市场同步；
-- 内置调度器；继续使用 workflow + 外部 cron；
+- 内置调度器；调度由 DSH 定时任务驱动插件批处理入口；
 - 重写连板天梯领域模型；它只需要在来源 registry 中消除隐式配置。
 
 ## 4. 领域口径
@@ -219,7 +217,7 @@ readonly adapters: {
 新增 `stock_universe_memberships` 保存 provider 观测和同步状态。这样可以：
 
 - 保留手工创建的 Stock；
-- 同时记录 Eastmoney/Tushare 对同一股票的观测；
+- 同时记录不同目录源对同一股票的观测；
 - 在一个源漏数据时不删除规范身份；
 - 审计改名、缺失和覆盖范围；
 - 将“未在本轮观测到”与“退市”分开。
@@ -289,8 +287,7 @@ interface DailyBar {
 - Eastmoney：继续请求 `fqt=1`，返回 `adjustment='qfq'`，因接口未给原始 factor，
   `sourceAdjFactor` 省略。
 - Tencent：优先 `qfqday`，若只有 `day` 则该源本轮不满足 qfq 契约并触发 fallback。
-- Tushare：用 `daily + adj_factor` 在 adapter 内换算 qfq；不能只把 raw OHLC 与 factor
-  并排返回给 caller。
+- Fuyao：固定请求 `adjust=forward`，返回 `adjustment='qfq'`，不从 K 线响应伪造因子。
 - 任一源不能产生 qfq 时必须抛 `unsupported_adjustment` 或 `no_data`，不能用
   `adjFactor=1` 伪装。
 
@@ -323,7 +320,7 @@ interface Quote {
 - Eastmoney：请求并解析上游时间字段；拿不到时 `observedAt=fetchedAt` 且
   `timestampSource='retrieval'`。
 - Tencent：解析 minute 响应的 `date` 和最后一条 `HHmm`，不再无条件用本地时钟。
-- Tushare：解析 `trade_time`；缺失时按 retrieval 标记。
+- Fuyao：快照缺少可信逐股行情时间时按 retrieval 标记，不进入盘中行动资格。
 
 ### 5.9 没有隐式数据源
 
@@ -333,8 +330,8 @@ registry 之外 `new EastmoneyAdapter()`。
 初始配置：
 
 ```text
-LUOOME_MARKET_SOURCES=eastmoney,tencent,sina[,tushare]
-LUOOME_STOCK_UNIVERSE_SOURCES=eastmoney,sina[,tushare]
+LUOOME_MARKET_SOURCES=eastmoney,tencent,sina[,fuyao]
+LUOOME_STOCK_UNIVERSE_SOURCES=eastmoney,sina
 ```
 
 股票目录使用独立顺序，因为 Tencent 首期不具备完整目录能力，而 Quote 源顺序不应隐式决定
@@ -344,8 +341,8 @@ Sina 是无鉴权的公开沪深目录和复权日线来源：目录使用 `sh_a
 K 线与 qfq 因子接口；只注册 `daily-bars` 能力，不伪装成实时快照或搜索能力。qfq 因子缺失时
 返回明确错误，不回退为未复权数据。
 
-显式启用 Tushare 时继续要求 `TUSHARE_TOKEN`。如果配置了一个不支持所需能力的 source，
-启动期快速失败，不在运行时静默跳过。
+显式启用 Fuyao 时要求 `FUYAO_API_KEY`。Tushare 已退役，旧来源配置在启动期校验时拒绝；
+如果配置了一个不支持所需能力的 source，启动期快速失败，不在运行时静默跳过。
 
 ## 6. 目标架构
 
@@ -361,7 +358,7 @@ dsh-luoome（唯一插件消费面）
           │   MarketDataGateway  ── internal capability seams
           │        │                 ├── Eastmoney adapters
           │        │                 ├── Tencent adapters
-          │        │                 └── Tushare adapters
+          │        │                 └── Fuyao / Sina / Xueqiu adapters
           │        ▼
           │   Quote / DailyBar repositories
           │
@@ -371,7 +368,7 @@ dsh-luoome（唯一插件消费面）
              StockUniverseManager
                    │
                    ├── EastmoneyUniverseAdapter
-                   └── TushareUniverseAdapter
+                   └── SinaUniverseAdapter
                    │
                    ▼
              StockUniverseRepository
@@ -616,24 +613,17 @@ fields=f12,f13,f14
 
 MarketSnapshot adapter 可以复用同一个私有 clist client，但两个公开 adapter 返回不同领域形状。
 
-### 9.2 Tushare 股票目录
+### 9.2 当前股票目录来源与属性边界
 
-新增 `TushareStockUniverseAdapter`，使用 `stock_basic`：
-
-- 分别请求 `list_status=L/P/D`，避免默认只返回上市股票却被误解为完整状态全集；
-- 将 SSE/SZSE 映射为 SH/SZ；
-- 过滤不在 `CN_A_SHARES_SH_SZ` 的条目；
-- 映射 name、industry、list_date、delist_date；
-- 三个状态请求任一失败 → 整次 snapshot `partial_data`；
-- token/积分/权限失败分类为 `permission`。
-
-Eastmoney 与 Tushare 两个 implementation 让 StockUniverseSource seam 成为真实 seam，并共享
-adapter contract tests。
+当前目录源为 Eastmoney 与 Sina，两者共用完整分页、原子提交和 contract tests。它们主要提供
+身份、名称及名称派生的 ST 状态；上市状态、行业、上市日期和退市日期等缺口必须显式披露。
+Tushare 目录实现已移除，Fuyao 代码表是否补齐这些属性按扩展设计单独验收，未绑定前不进入
+生产目录路由。
 
 ### 9.3 Tencent
 
-Tencent 实现 Quote、DailyBar、Search、IntradayMinute 和 MarketSnapshot 能力，不注册为
-`minute-bars`、StockUniverseSource 或 IndexQuoteSource；MinuteBar 仅由具备 OHLCV capability
+Tencent 实现 Quote、DailyBar、Search、IntradayMinute、MarketSnapshot、IndexQuote 和
+`minute-bars` 能力，不注册为 StockUniverseSource；MinuteBar 仅由具备原生 OHLCV capability
 的 provider 显式注册。MarketSnapshot 使用真实 Sina 当前完整目录作为身份全集，
 再通过 `qt.gtimg.cn` GBK 批量接口请求实时 close/changePct；批次缺失保留 envelope 的 partial，
 不填充零值。不能添加返回空数组的占位 implementation。
@@ -643,7 +633,7 @@ Tencent 实现 Quote、DailyBar、Search、IntradayMinute 和 MarketSnapshot 能
 `IndexQuoteSource.mode` 必须参与路由：
 
 - 实时指数调用只选择 `mode='realtime'`；
-- Tushare `index_daily` 注册为 delayed index source，只能用于盘后/历史场景；
+- Fuyao 指数快照当前只注册为 delayed index source，用于盘后/展示场景；
 - 没有实时 source 时返回 `unsupported_capability`，不能把日线伪装为实时；
 - 不再创建 registry 之外的 Eastmoney index fallback。
 
@@ -679,7 +669,7 @@ key = capability + stockId/query/coverage
 
 | 数据 | key | TTL | 是否允许缓存空结果 |
 |---|---|---:|---|
-| Quote | stockId | Web 10s，其它 60s | 否 |
+| Quote | stockId | 面板展示 10s，其它 60s（以调用方显式配置为准） | 否 |
 | DailyBar | stockId + 对齐日期 + adjustment | 1h | 仅无交易日区间 |
 | Realtime index | coverage/index set | 10s | 否 |
 | MarketSnapshot | coverage（含完整性 envelope） | 5min | 否 |
@@ -860,20 +850,15 @@ DailyBarRepository。
 
 ## 13. Workflow 与调度
 
-> 现状（2026-11-04）：下面的 cron 命令形态已失效（独立 CLI 已删除，调度归 DSH 定时任务：到点唤起
-> 会话、由 agent 调用插件注册的批处理工具）。workflow 名与幂等/partial 语义仍有效。
+> 当前调度由 DSH 定时任务驱动插件原生入口，启用自动执行仍需匹配任务指纹的持久授权。
+> 下列 cron 只表达 Asia/Shanghai 时间点，不是可复制执行的独立 CLI 命令；workflow 名与幂等/partial 语义保留。
 
 ### 13.1 `sync-stock-universe`
 
-单步 workflow 调 `sync_stock_universe`，由 workflow 引擎写 `WorkflowRun`。支持人工执行和
-cron，不在 Web 启动时自动阻塞同步。
+单步 workflow 调 `sync_stock_universe`，由 workflow 引擎写 `WorkflowRun`。人工同步通过插件能力执行，
+不在插件启动时自动阻塞同步。需要定时同步时由 DSH 任务通过已暴露且获授权的入口编排。
 
-推荐：
-
-```cron
-# 交易日收盘后同步沪深 A 股目录
-20 16 * * 1-5  luoome workflow run sync-stock-universe
-```
+推荐时间：交易日收盘后 `20 16 * * 1-5`，同步沪深 A 股目录。
 
 workflow 内先检查交易日；非交易日输出 succeeded + skipped，不访问 provider。
 
@@ -897,13 +882,8 @@ is trading day?
 - 至少一项成功、至少一项失败 → `partial`；
 - 全部失败 → `failed`。
 
-推荐统一 cron：
-
-```cron
-30 16 * * 1-5  luoome workflow run post-market-data
-```
-
-若采用统一 workflow，就不再单独配置 16:20 的目录 cron。
+统一执行的推荐时间为 `30 16 * * 1-5`（Asia/Shanghai）。采用统一 workflow 时，不再重复配置
+16:20 的目录任务；当前 DSH 批处理入口、实际任务与授权状态见[用户手册](../USER_GUIDE.md#74-dsh-定时任务与批处理)。
 
 ### 13.3 `intraday-watch`
 
@@ -1023,7 +1003,7 @@ items        -- 新逐股票状态
 
 所有 caller 切到 `items` 后再删除旧字段。
 
-`search_stocks.source` 扩枚举会影响 Web schema/tests，需要同一阶段更新。
+`search_stocks.source` 扩枚举会影响插件投影与对应 schema/tests，需要同一阶段更新。
 
 ### 17.3 日线
 
@@ -1113,7 +1093,7 @@ Drizzle 与 in-memory 共用：
 外部 smoke 独立于确定性测试，要求显式凭据和网络：
 
 - Eastmoney 沪深目录条数与 reportedTotal 一致；
-- Tushare 同 coverage 条数在合理差异范围；
+- 已启用备用目录源的同 coverage 条数在合理差异范围；
 - 随机抽样代码/交易所/名称一致；
 - 当日收盘后随机关注股有 qfq 日线；
 - 本地目录同步后断网搜索成功。
@@ -1131,7 +1111,7 @@ Drizzle 与 in-memory 共用：
 
 - core StockUniverse schema；
 - repository + 两张表 + 双 implementation；
-- Eastmoney/Tushare universe adapters；
+- Eastmoney/Sina universe adapters；
 - StockUniverseManager/factory；
 - `sync_stock_universe`、status tool、workflow；
 - 本地优先搜索；
@@ -1160,7 +1140,7 @@ Drizzle 与 in-memory 共用：
 - 动态健康读模型；
 - 连板天梯来源接入显式 registry。
 
-每个 Phase 独立可回滚；不得一次提交同时跨完所有 schema、adapter、tool、workflow 和 Web 改动。
+每个 Phase 独立可回滚；不得一次提交同时跨完所有 schema、adapter、tool、workflow 和插件消费面改动。
 
 ## 20. 文件影响范围
 
@@ -1178,7 +1158,8 @@ packages/core/src/entity/{quote,stock-universe}.ts
 packages/core/src/repository/index.ts
 
 packages/adapters/src/market/{registry,gateway,manager,cache}.ts
-packages/adapters/src/market/{eastmoney,sina,tencent,tushare}.ts
+packages/adapters/src/market/{eastmoney,sina,tencent,xueqiu}.ts
+packages/adapters/src/fuyao/*
 packages/adapters/src/stock-universe/*
 
 packages/db/src/schema/index.ts
@@ -1191,8 +1172,8 @@ packages/tools/src/tools/{sync-daily-bars,get-previous-closes}.ts
 packages/tools/src/tools/{batch-quote,search-stocks,get-market-data-status}.ts
 
 packages/workflows/src/{sync-stock-universe,post-market-data,intraday-watch}.ts
-packages/cli/src/index.ts
-apps/web/src/server.ts
+packages/dsh-luoome/src/host/production.ts
+packages/dsh-luoome/src/client/*
 ```
 
 实际实施按 Phase 逐步收敛，不为未来阶段提前创建空 module。
@@ -1200,17 +1181,17 @@ apps/web/src/server.ts
 ## 21. 验收清单
 
 - [x] `CONTEXT.md` 明确 StockUniverse 与 MarketSnapshot 的区别。
-- [x] Eastmoney、Tushare 两个 universe adapter 通过同一 contract tests。
+- [x] Eastmoney、Sina 两个 universe adapter 通过同一 contract tests。
 - [x] 全市场分页失败或空结果不改变本地目录。
 - [x] 同步事务不会留下半批 Stock/membership。
 - [x] 本地目录断网可搜索。
 - [x] 外部搜索结果仍需进入业务流程才创建目录外 Stock。
 - [x] MarketSnapshot 价格没有写入 `stocks`。
-- [x] 盘后 workflow 不依赖用户打开 Web。
+- [x] 盘后 workflow 不依赖用户打开插件面板。
 - [x] intraday price-change 不使用 quote.open 代替昨收。
 - [x] DailyBar 在所有 source 下均为 qfq。
 - [x] Quote stale 状态能传播到盯盘 caller。
-- [x] Tushare delayed index 不冒充 realtime。
+- [x] delayed index 不冒充 realtime。
 - [x] source 配置与实际调用完全一致。
 - [x] health 输出自动包含新 source/capability。
 - [x] 全市场快照提供 source/fetchedAt/coverage 与 expected/received/missing/duplicate 完整性信封；

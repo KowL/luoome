@@ -27,7 +27,7 @@ describe('createAShareSentimentManagerFromEnv', () => {
   it('拒绝未验证的数据源和重复来源', () => {
     expect(() =>
       createAShareSentimentManagerFromEnv(
-        { LUOOME_ASHARE_SENTIMENT_SOURCES: 'tushare' },
+        { LUOOME_ASHARE_SENTIMENT_SOURCES: 'unknown' },
         { logger },
       ),
     ).toThrow();

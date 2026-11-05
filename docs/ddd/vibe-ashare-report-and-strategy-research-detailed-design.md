@@ -550,7 +550,7 @@ interface AShareSentimentSource {
 
 - `EastmoneyAShareSentimentAdapter`：封板池、炸板池、连板、封单和行业；概念字段需另选
   已验证来源。
-- `TushareAShareSentimentAdapter`：仅在配置 token 且相应 Interface 已验证时注册为 fallback。
+- `FuyaoAShareSentimentAdapter`：按扩展设计在配置 API Key 且相应 Interface 验证通过后注册为 fallback。
 - 指数与宽度不塞入此 Adapter；由现有 MarketData Adapter 和全市场快照/日线归档提供。
 
 Phase 2 实施事实：东方财富涨停池只提供可靠的行业字段，没有可验证的概念字段，因此

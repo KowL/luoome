@@ -23,7 +23,7 @@
 |---|---|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 模块边界、领域模型、数据流、暴露面判定和 workflow 约束 |
 | [ENTITY-MAP.md](./ENTITY-MAP.md) | core 实体关系图：子域分组、引用字段、repository、物理表与守护测试 |
-| [TOOL-INVENTORY.md](./TOOL-INVENTORY.md) | 工具库存：234 个 tool 按域分组、sideEffect 与不暴露清单 |
+| [TOOL-INVENTORY.md](./TOOL-INVENTORY.md) | 工具库存：按域分组、sideEffect 与不暴露清单，数量以 registry 输出为准 |
 | [USER_GUIDE.md](./USER_GUIDE.md) | 安装、DSH 插件、面板、批处理、多账户与复盘 |
 | [ROADMAP.md](./ROADMAP.md) | 版本演进、已交付能力和后续方向（v0.8 以前为历史快照） |
 | [SECURITY.md](./SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
@@ -56,9 +56,9 @@
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、面板图表与降级语义 |
-| [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tushare 当前会话能力、缺口/保留与面板状态 |
-| [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |
-| [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 作为第四真实行情源的能力映射、envelope 错误转译与 factory 接线 |
+| [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tencent 当前会话能力、缺口/保留与面板状态 |
+| [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 行情能力映射、envelope 错误转译与 factory 接线 |
+| [Fuyao 扩展与 Tushare 退役设计](./ddd/fuyao-data-expansion-and-tushare-retirement-design.md) | Fuyao 分域扩展、离线 dump、公司行动、实时/PIT 门禁，以及 Tushare 全量退役与迁移验收 |
 | [数据源可插拔与统一观测设计](./ddd/source-pluggability-and-observation-design.md) | 通用 SourceRegistry、单一 EastmoneySource、非行情域源可插拔与全域源健康观测（评审中） |
 | [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 `get_market_data_status` 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
@@ -79,7 +79,6 @@
 | 文档 | 用途 |
 |---|---|
 | [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+1/T+3/T+5 日检、P50/P95/max 周报与真实 provider smoke |
-| [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
 
 ## 历史归档
 
@@ -108,6 +107,11 @@
 - [DSH 插件平台开发任务](./archive/dsh-plugin-platform-development-plan.md) — 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围
 - [DSH 插件平台详细研究与验证计划](./archive/dsh-plugin-platform-research-plan.md) — 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验与逐项验收证据
 - [AI 投资协作首页开发任务](./archive/ai-investment-workspace-development-plan.md) — PRD 任务拆分、依赖、并行线程文件边界与验收交接
+
+**已退役数据源（仅用于历史追溯，不作为当前配置指南）**：
+
+- [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) — 保留退役前协议、字段映射与历史数据兼容依据
+- [Tushare 集成手册（已退役）](./runbooks/tushare-integration.md) — 旧部署排查记录；当前配置迁移见 [Fuyao 扩展与退役设计](./ddd/fuyao-data-expansion-and-tushare-retirement-design.md#13-配置与迁移)
 
 **早期 MVP 阶段**：
 

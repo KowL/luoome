@@ -3,7 +3,7 @@
 > 状态：第一刀实施中（评审修订稿已定稿）
 > 日期：2026-08-22
 > 范围：`packages/adapters` 数据源接入层重构——通用 `SourceRegistry`、单一 `EastmoneySource`、五个非行情域的源可插拔与统一观测
-> 关联文档：[ARCHITECTURE.md §4.7/§4.8](../ARCHITECTURE.md)、[CONTEXT.md](../../CONTEXT.md)「数据源观测」、[同花顺 fuyao 行情适配器设计](./fuyao-market-adapter-design.md)、[Tushare 行情适配器设计](./tushare-market-adapter-design.md)、[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)
+> 关联文档：[ARCHITECTURE.md §4.7/§4.8](../ARCHITECTURE.md)、[CONTEXT.md](../../CONTEXT.md)「数据源观测」、[同花顺 fuyao 行情适配器设计](./fuyao-market-adapter-design.md)、[Fuyao 扩展与 Tushare 退役设计](./fuyao-data-expansion-and-tushare-retirement-design.md)、[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)
 
 ## 1. 背景与问题
 
@@ -133,7 +133,7 @@ invalid_payload | unsupported_market | unsupported_capability | unsupported_adju
 
 ```text
 Source 层     EastmoneySource（全部 eastmoney 能力）
-              未来: FuyaoSource / TushareSource（各自能力切片）
+              扩展: FuyaoSource（按域实现能力切片）
                 │ 结构性满足各域 *AdapterLike
 Registry 层   SourceRegistry<CapabilityMap>（泛化自 MarketSourceRegistry）
               ├─ market        → MarketDataManager（编排语义不变）
@@ -282,7 +282,7 @@ export class SourceRegistry<M extends CapabilityMap> {
 
 修改：
 - `market/source-registry.ts` → 薄壳别名 + market capability map
-- `market/{eastmoney,tencent,sina,tushare}.ts` 与 `tushare/client.ts` 错误路径迁移到 `SourceExecutionError`（第一刀增量①的一部分，避免 registry 长期并存两套错误判定）
+- `market/{eastmoney,tencent,sina}.ts` 错误路径迁移到 `SourceExecutionError`（第一刀增量①的一部分，避免 registry 长期并存两套错误判定）
 - 五个非行情域的 `factory.ts`（sources 数组 + registry 装配 + 注入）、`manager.ts`（源循环替换 + `status()`；sentiment 拆双 capability）
 - 六个现有 `*/eastmoney.ts`：保留 URL 模板与纯解析函数，移除 adapter 类、fetch/timeout 与重复 coercion；由 `eastmoney/source.ts` 委托
 - `packages/core/src/context.ts`、`index.ts`（五个 `*ManagerLike.status()` 与共享 source 类型导出）

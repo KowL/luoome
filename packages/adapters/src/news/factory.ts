@@ -2,8 +2,10 @@ import type { Logger, NewsManagerLike } from '@luoome/core';
 import { z } from 'zod';
 
 import { EastmoneySource } from '../eastmoney/source.js';
+import { FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { TenjqkaNewsSource } from './10jqka.js';
+import { FuyaoNewsSource } from './fuyao.js';
 import { NewsManager } from './manager.js';
 import type { NewsCapabilityMap } from './types.js';
 
@@ -13,6 +15,8 @@ import type { NewsCapabilityMap } from './types.js';
  * 仿 `createDragonTigerManagerFromEnv`（dragon-tiger/factory.ts）的位置与签名风格。
  * - LUOOME_NEWS_SOURCES：逗号分隔、有序、去重；未知源启动期抛错；缺省 eastmoney,10jqka
  *   （docs/ddd/source-pluggability-and-observation-design.md §4.6）
+ * - 显式启用 fuyao 时要求 FUYAO_API_KEY 与 LUOOME_FUYAO_NEWS_TAG_ID 齐全，缺即启动期失败
+ *   （fuyao-data-expansion §4.3 / §9.1；tag_id 未实测核实的配置不得冒充已核实）
  * - 通过显式数据源配置装配；未知或重复来源在启动时失败
  * - 返回的 manager 同时满足 core `NewsManagerLike` 接口（structural typing）
  */
@@ -22,12 +26,21 @@ export interface CreateNewsManagerDeps {
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
   /** 组装根共享的供应商实例；注入时不再自构（§4.6）。 */
-  readonly sources?: { readonly eastmoney?: EastmoneySource; readonly tenjqka?: TenjqkaNewsSource };
+  readonly sources?: {
+    readonly eastmoney?: EastmoneySource;
+    readonly tenjqka?: TenjqkaNewsSource;
+    readonly fuyao?: FuyaoNewsSource;
+  };
+  /**
+   * 组装根共享的 FuyaoClient（设计 §4.1：进程级共享协调器）；
+   * 注入时 fuyao 分支用它构造 FuyaoNewsSource，不再自构客户端。
+   */
+  readonly fuyaoClient?: FuyaoClient;
 }
 
 /** 已注册的财经要闻数据源（封闭启动校验；core 端口侧是开放 SourceIdSchema）。 */
 const NewsSourcesSchema = z
-  .array(z.enum(['eastmoney', '10jqka']))
+  .array(z.enum(['eastmoney', '10jqka', 'fuyao']))
   .min(1, '至少启用一个财经要闻数据源')
   .superRefine((sources, ctx) => {
     if (new Set(sources).size !== sources.length) {
@@ -37,7 +50,7 @@ const NewsSourcesSchema = z
 
 const newsSourcesFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
-): readonly ('eastmoney' | '10jqka')[] => {
+): readonly ('eastmoney' | '10jqka' | 'fuyao')[] => {
   const raw = env.LUOOME_NEWS_SOURCES?.trim();
   return NewsSourcesSchema.parse(
     raw === undefined || raw.length === 0
@@ -66,6 +79,10 @@ export const createNewsManagerFromEnv = (
         return eastmoneyBindings(eastmoney);
       case '10jqka':
         return tenjqkaBindings(tenjqka);
+      case 'fuyao':
+        return fuyaoBindings(
+          deps.sources?.fuyao ?? buildFuyaoNewsSource(env, deps.fetchImpl, deps.fuyaoClient),
+        );
       default:
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
@@ -77,6 +94,27 @@ export const createNewsManagerFromEnv = (
     logger: deps.logger,
     clock,
   });
+};
+
+/**
+ * fuyao 被显式排入路由时要求凭据与栏目配置完整（§4.3 启动期快速失败）；
+ * LUOOME_FUYAO_NEWS_TAG_ID 缺失即抛错，不用文档示例值冒充已核实配置。
+ */
+const buildFuyaoNewsSource = (
+  env: Readonly<Record<string, string | undefined>>,
+  fetchImpl: typeof fetch | undefined,
+  sharedClient?: FuyaoClient,
+): FuyaoNewsSource => {
+  const tagId = env.LUOOME_FUYAO_NEWS_TAG_ID?.trim();
+  if (tagId === undefined || tagId.length === 0) {
+    throw new Error('fuyao news 已启用，但 LUOOME_FUYAO_NEWS_TAG_ID 未配置');
+  }
+  const client =
+    sharedClient ??
+    new FuyaoClient(fuyaoConfigFromEnv(env), {
+      ...(fetchImpl === undefined ? {} : { fetchImpl }),
+    });
+  return new FuyaoNewsSource(client, { tagId });
 };
 
 /**
@@ -110,6 +148,17 @@ const tenjqkaBindings = (source: TenjqkaNewsSource): AnyBinding<NewsCapabilityMa
   {
     capability: 'finance-news',
     source: '10jqka',
+    coverage: ['CN_FINANCE_NEWS'],
+    configurationReady: true,
+    execute: ({ page, pageSize }) => source.fetchNews(page, pageSize),
+    observationOf: observationOfNews,
+  },
+];
+
+const fuyaoBindings = (source: FuyaoNewsSource): AnyBinding<NewsCapabilityMap>[] => [
+  {
+    capability: 'finance-news',
+    source: 'fuyao',
     coverage: ['CN_FINANCE_NEWS'],
     configurationReady: true,
     execute: ({ page, pageSize }) => source.fetchNews(page, pageSize),

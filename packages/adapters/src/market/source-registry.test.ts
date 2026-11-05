@@ -10,7 +10,7 @@ describe('market/source-registry', () => {
       [
         {
           capability: 'delayed-index',
-          source: 'tushare',
+          source: 'fuyao',
           coverage: ['CN_A_SHARES_SH_SZ'],
           configurationReady: true,
           execute: () => Promise.resolve([]),
@@ -31,7 +31,7 @@ describe('market/source-registry', () => {
     expect(registry.sources('realtime-index').map((source) => source.source)).toEqual([
       'eastmoney',
     ]);
-    expect(registry.sources('delayed-index').map((source) => source.source)).toEqual(['tushare']);
+    expect(registry.sources('delayed-index').map((source) => source.source)).toEqual(['fuyao']);
   });
 
   it('coverage 约束过滤由 market 薄壳承担', () => {
@@ -165,7 +165,7 @@ describe('market/source-registry', () => {
           [
             {
               capability: 'search',
-              source: 'tushare',
+              source: 'fuyao',
               coverage: ['CN_A_SHARES_SH_SZ'],
               configurationReady: false,
               execute: () => Promise.resolve([]),

@@ -122,6 +122,32 @@ describe('DSH market settings', () => {
     );
   });
 
+  it('loads explicitly configured Fuyao domains and shared transport limits after restart', () => {
+    const { path } = store();
+    const saved = {
+      LUOOME_MARKET_DUMP_SOURCES: 'fuyao',
+      LUOOME_SECTOR_MEMBERSHIP_SOURCES: 'fuyao',
+      LUOOME_FINANCIAL_SNAPSHOT_SOURCES: 'fuyao',
+      LUOOME_LIMIT_UP_LADDER_SOURCES: 'eastmoney,fuyao',
+      LUOOME_ASHARE_SENTIMENT_SOURCES: 'eastmoney,fuyao',
+      LUOOME_DRAGON_TIGER_SOURCES: 'eastmoney,fuyao',
+      LUOOME_NEWS_SOURCES: 'eastmoney,fuyao',
+      LUOOME_SECTOR_QUOTE_SOURCES: 'eastmoney,fuyao',
+      LUOOME_FUYAO_NEWS_TAG_ID: '21103',
+      FUYAO_MAX_CONCURRENCY: '2',
+      FUYAO_MIN_INTERVAL_MS: '100',
+      FUYAO_MAX_RETRIES: '2',
+      FUYAO_RATE_LIMIT_COOLDOWN_MS: '30000',
+    };
+    writeFileSync(
+      path,
+      Object.entries(saved)
+        .map(([key, value]) => `${key}="${value}"`)
+        .join('\n'),
+    );
+    expect(new MarketSettingsStore({}, path).runtimeEnv()).toMatchObject(saved);
+  });
+
   it('does not let persisted market settings override ownership or tool permissions', () => {
     const { path } = store();
     writeFileSync(
@@ -257,7 +283,7 @@ describe('REQ-M3-15 PRD 硬验收', () => {
     settings.save(input(), () => () => {});
     // 人工往 .env 写一个不在白名单里的键（例如新增供应商的 token）。
     const current = readFileSync(path, 'utf8');
-    writeFileSync(path, `${current}TUSHARE_TOKEN="manual-token"\n`);
+    writeFileSync(path, `${current}MANUAL_TOKEN="manual-token"\n`);
     // 再保存一次别的配置：运行时候选必须来自磁盘，而不是被内存覆盖。
     settings.save(
       {
@@ -267,14 +293,13 @@ describe('REQ-M3-15 PRD 硬验收', () => {
       },
       () => () => {},
     );
-    expect(settings.runtimeEnv().TUSHARE_TOKEN).toBe('manual-token');
-    expect(readFileSync(path, 'utf8')).toContain('TUSHARE_TOKEN="manual-token"');
+    expect(settings.runtimeEnv().MANUAL_TOKEN).toBe('manual-token');
+    expect(readFileSync(path, 'utf8')).toContain('MANUAL_TOKEN="manual-token"');
   });
 
-  it('凭据分区从 manifest 的 requiredEnv 派生（Tushare 也有一格）', () => {
+  it('凭据分区从 manifest 的 requiredEnv 派生', () => {
     const { settings } = store({});
     const ids = settings.read().credentials.map((item) => item.id);
-    expect(ids).toContain('tushare');
     expect(ids).toContain('fuyao');
     // 无 requiredEnv 的源不出现。
     expect(ids).not.toContain('eastmoney');

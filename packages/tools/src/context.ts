@@ -3,11 +3,13 @@ import type {
   DataArchiveWriter,
   DataImportStagingAdapter,
   DragonTigerManagerLike,
+  FinancialSnapshotManagerLike,
   FundamentalDataAdapterLike,
   LimitUpLadderManagerLike,
   LocalExecutionIdentity,
   Logger,
   MarketDataAdapterLike,
+  MarketDumpManagerLike,
   NewsManagerLike,
   NorthboundFlowManagerLike,
   NotificationManagerLike,
@@ -17,6 +19,7 @@ import type {
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
+  SectorMembershipManagerLike,
   SectorQuoteManagerLike,
   StockProfileManagerLike,
   StockUniverseManagerLike,
@@ -50,6 +53,12 @@ export interface BuildContextDependencies {
   readonly news?: NewsManagerLike;
   /** 行业板块行情 manager（只读；东方财富 push2 板块列表公开 API）。 */
   readonly sectorQuote?: SectorQuoteManagerLike;
+  /** 个股板块关系 manager（只读；Fuyao 个股反查 + 板块目录；默认不装配）。 */
+  readonly sectorMembership?: SectorMembershipManagerLike;
+  /** 财务当前快照 manager（只读；Fuyao 财务数据 API）。 */
+  readonly financialSnapshot?: FinancialSnapshotManagerLike;
+  /** 全市场 dump 同步 manager（显式触发；LUOOME_MARKET_DUMP_SOURCES 默认不装配）。 */
+  readonly marketDump?: MarketDumpManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
@@ -65,8 +74,10 @@ export interface BuildContextDependencies {
   readonly reportArtifacts?: ReportArtifactWriter;
   /** task-35：事实库导出物写盘载体；未注入时 export_business_data 返回 adapter_error。 */
   readonly dataArchives?: DataArchiveWriter;
-  /** REQ-M5-01：长任务执行器（宿主注入；缺省时 `start_analysis_job` 只排期）。 */
+  /** REQ-M5-01：长任务执行器（宿主注入；缺省时 `enqueue_analysis_job` 只排期）。 */
   readonly jobRunner?: ToolContext['jobRunner'];
+  readonly goalRoundRunner?: ToolContext['goalRoundRunner'];
+  readonly triangleRoleRunner?: ToolContext['triangleRoleRunner'];
   /** REQ-M5-01：分析执行器（宿主注入；缺省时执行体如实报 `analyzer-unavailable`）。 */
   readonly analysisRunner?: ToolContext['analysisRunner'];
   /** REQ-M4-06：档位读写口；未注入时 set_automation_tier 返回 adapter_error。 */
@@ -117,7 +128,11 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.automationTierStore === undefined
       ? {}
       : { automationTierStore: input.automationTierStore }),
+    ...(input.goalRoundRunner === undefined ? {} : { goalRoundRunner: input.goalRoundRunner }),
     ...(input.jobRunner === undefined ? {} : { jobRunner: input.jobRunner }),
+    ...(input.triangleRoleRunner === undefined
+      ? {}
+      : { triangleRoleRunner: input.triangleRoleRunner }),
     ...(input.analysisRunner === undefined ? {} : { analysisRunner: input.analysisRunner }),
     ...(input.dataArchives === undefined ? {} : { dataArchives: input.dataArchives }),
     ...(input.dragonTiger === undefined ? {} : { dragonTiger: input.dragonTiger }),
@@ -125,6 +140,11 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.northboundFlow === undefined ? {} : { northboundFlow: input.northboundFlow }),
     ...(input.news === undefined ? {} : { news: input.news }),
     ...(input.sectorQuote === undefined ? {} : { sectorQuote: input.sectorQuote }),
+    ...(input.sectorMembership === undefined ? {} : { sectorMembership: input.sectorMembership }),
+    ...(input.financialSnapshot === undefined
+      ? {}
+      : { financialSnapshot: input.financialSnapshot }),
+    ...(input.marketDump === undefined ? {} : { marketDump: input.marketDump }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

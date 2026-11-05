@@ -5,6 +5,97 @@ import { buildTestContext } from '../testing/context.js';
 import { getMarketDataStatusTool } from './get-market-data-status.js';
 
 describe('tool/get_market_data_status', () => {
+  it('聚合新增独立端口；财务权限失败与 dump kind 状态保持独立', async () => {
+    const now = new Date('2026-11-04T08:00:00Z');
+    const marker = (
+      dataset: string,
+      lastErrorKind?: SourceStatus['lastErrorKind'],
+    ): SourceStatus => ({
+      dataset,
+      source: 'fuyao',
+      coverage: ['CN_A_SHARES_SH_SZ'],
+      capabilityEnabled: true,
+      configurationReady: true,
+      dataAsOf: now,
+      ...(lastErrorKind === undefined ? {} : { lastErrorKind }),
+    });
+    const ctx = await buildTestContext({
+      clock: () => now,
+      sectorQuote: {
+        name: 'sector-quote',
+        sources: ['fuyao'],
+        fetchList: async () => {
+          throw new Error('not used');
+        },
+        status: () => [marker('sector-quote')],
+      },
+      sectorMembership: {
+        name: 'sector-membership',
+        sources: ['fuyao'],
+        fetchMemberships: async () => {
+          throw new Error('not used');
+        },
+        status: () => [marker('sector-membership')],
+      },
+      financialSnapshot: {
+        name: 'financial-snapshot',
+        sources: ['fuyao'],
+        fetchSnapshot: async () => {
+          throw new Error('not used');
+        },
+        status: () => [marker('financial-indicators', 'permission'), marker('valuation-snapshot')],
+      },
+      marketDump: {
+        name: 'market-dump',
+        sync: async () => {
+          throw new Error('not used');
+        },
+        status: async () => [
+          {
+            runId: 'failed-run',
+            kind: 'daily-k-10d',
+            dumpId: 'fixture',
+            source: 'fuyao',
+            artifactSha256: null,
+            status: 'failed',
+            recordedAt: null,
+            requestedAt: now,
+            downloadedAt: null,
+            startedAt: null,
+            finishedAt: now,
+            nextRowOffset: 0,
+            processedRows: 0,
+            minDate: null,
+            maxDate: null,
+            artifactBytes: null,
+            errorKind: 'permission',
+            errorMessage: 'permission',
+          },
+        ],
+      },
+    });
+    const result = await getMarketDataStatusTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.datasets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dataset: 'sector-quote', freshness: 'fresh' }),
+        expect.objectContaining({ dataset: 'sector-membership', freshness: 'fresh' }),
+        expect.objectContaining({
+          dataset: 'financial-indicators',
+          freshness: 'unavailable',
+          lastErrorKind: 'permission',
+        }),
+        expect.objectContaining({ dataset: 'valuation-snapshot', freshness: 'fresh' }),
+        expect.objectContaining({
+          dataset: 'market-dump-daily-k-10d',
+          freshness: 'unavailable',
+          lastErrorKind: 'permission',
+        }),
+        expect.objectContaining({ dataset: 'market-dump-daily-k', freshness: 'unknown' }),
+      ]),
+    );
+  });
   it('数据集库存来自 Gateway，新增 capability 不依赖写死 provider 常量', async () => {
     const ctx = await buildTestContext({
       stockUniverse: {

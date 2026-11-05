@@ -58,6 +58,7 @@ export interface JobRunnerHandle {
   append(text: string): void;
   /** 外部请求取消时触发；实现方需**幂等**处理。 */
   readonly cancelled: boolean;
+  readonly signal?: AbortSignal;
 }
 
 /**

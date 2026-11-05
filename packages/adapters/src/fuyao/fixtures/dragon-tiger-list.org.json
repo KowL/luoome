@@ -1,0 +1,73 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "00000000000000000000000000000000",
+  "data": {
+    "timestamp": 1793548800000,
+    "board_type": "org",
+    "trade_date": "2026-11-02",
+    "count": 52,
+    "stock_count": 49,
+    "stock_items": [
+      {
+        "thscode": "300182.SZ",
+        "ticker": "300182",
+        "name": "捷成股份",
+        "change": 0.2,
+        "concept_list": [
+          {
+            "name": "短剧游戏"
+          },
+          {
+            "name": "AI视频"
+          },
+          {
+            "name": "AI语料"
+          }
+        ],
+        "net_value": 330788522.34,
+        "net_rate": 0.1499587,
+        "hot_rank": 99,
+        "buy_value": 460676102.45,
+        "sell_value": 129887580.11,
+        "limit_reason": "AI漫剧+影视版权+智能营销",
+        "range_days": 1,
+        "org_net_value": 100836100.42,
+        "org_net_rate": 0.04571274,
+        "org_buy_num": 2,
+        "org_sell_num": 1,
+        "hot_money_net_value": 58732456.92
+      },
+      {
+        "thscode": "000995.SZ",
+        "ticker": "000995",
+        "name": "皇台酒业",
+        "change": 0.100141,
+        "concept_list": [
+          {
+            "name": "白酒概念"
+          },
+          {
+            "name": "农业种植"
+          },
+          {
+            "name": "乡村振兴"
+          }
+        ],
+        "net_value": 102796237.85,
+        "net_rate": 0.11344272,
+        "hot_rank": 21,
+        "buy_value": 165175663.85,
+        "sell_value": 62379426,
+        "limit_reason": "白酒+老窖池+董事会换届",
+        "range_days": 3,
+        "org_net_value": 80260428.85,
+        "org_net_rate": 0.0885729,
+        "org_buy_num": 3,
+        "org_sell_num": 1,
+        "hot_money_net_value": 7955161.0
+      }
+    ],
+    "hot_money_items": []
+  }
+}

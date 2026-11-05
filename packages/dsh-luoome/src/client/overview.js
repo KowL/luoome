@@ -608,7 +608,12 @@ export function OverviewPanel({ onAnalyzeStock }) {
           '行业涨幅榜 · 前五',
           sectors,
           dataOf(sectors.results, 'fetch_sector_quotes')
-            ? h(SectorRanking, { data: dataOf(sectors.results, 'fetch_sector_quotes') })
+            ? h(SectorRanking, {
+                data: dataOf(sectors.results, 'fetch_sector_quotes'),
+                holdings: held,
+                watchlist: dataOf(watchlist.results, 'batch_quote'),
+                onStock: setStock,
+              })
             : null,
         ),
       ),

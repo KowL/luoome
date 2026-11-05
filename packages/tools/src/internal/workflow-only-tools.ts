@@ -90,6 +90,9 @@ export const BATCH_SCHEDULED_TOOL_NAMES: readonly string[] = Object.freeze([
  */
 export const OPERATION_POLICY_ONLY_TOOL_NAMES: readonly string[] = Object.freeze([]);
 
+/** Authenticated human HTTP handlers only; no model-visible or scheduled policy can invoke these. */
+export const HUMAN_ONLY_TOOL_NAMES: readonly string[] = Object.freeze(['override_risk_veto']);
+
 /**
  * 有定义、但 src 里没有任何地方引用（历史管道 / 宿主专用）的工具。
  *
@@ -110,6 +113,7 @@ export const WORKFLOW_ONLY_TOOL_NAMES: readonly string[] = Object.freeze([
   ...WORKFLOW_INTERNAL_TOOL_NAMES,
   ...BATCH_SCHEDULED_TOOL_NAMES,
   ...OPERATION_POLICY_ONLY_TOOL_NAMES,
+  ...HUMAN_ONLY_TOOL_NAMES,
   ...UNWIRED_TOOL_NAMES,
 ]);
 

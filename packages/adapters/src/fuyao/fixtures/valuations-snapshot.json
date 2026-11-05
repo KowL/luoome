@@ -1,0 +1,30 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "timestamp": 1793719186000,
+    "total": 2,
+    "item": [
+      {
+        "thscode": "600519.SH",
+        "ticker": "600519",
+        "name": "贵州茅台",
+        "pe_ttm": 22.518305,
+        "pe_mrq": 21.523902,
+        "pb_mrq": 6.82186,
+        "ps_ttm": 10.606427,
+        "pcf_ttm": 17.228956
+      },
+      {
+        "thscode": "000001.SZ",
+        "ticker": "000001",
+        "name": "平安银行",
+        "pe_ttm": 5.253166,
+        "pe_mrq": 4.371606,
+        "pb_mrq": 0.479142,
+        "ps_ttm": 1.706139,
+        "pcf_ttm": 0.433168
+      }
+    ]
+  }
+}

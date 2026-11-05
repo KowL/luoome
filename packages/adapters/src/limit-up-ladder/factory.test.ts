@@ -63,7 +63,7 @@ describe('createLimitUpLadderManagerFromEnv', () => {
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
     expect(() =>
       createLimitUpLadderManagerFromEnv(
-        { LUOOME_LIMIT_UP_LADDER_SOURCES: 'tushare' },
+        { LUOOME_LIMIT_UP_LADDER_SOURCES: 'unknown' },
         { logger: noopLogger },
       ),
     ).toThrow();

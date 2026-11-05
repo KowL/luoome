@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import { dropUnclosedBars } from '../internal/daily-bar-ingestion.js';
-import { computeSimpleIndicators } from '../internal/indicators.js';
+import { computeMovingAverageSeries, computeSimpleIndicators } from '../internal/indicators.js';
 import {
   currentLimitUpDate,
   loadStockLimitUpFacts,
@@ -74,6 +74,12 @@ export const MarketCandleSchema = z.object({
   volume: z.number().nonnegative(),
   source: z.string().min(1),
   completeness: z.enum(['closed', 'live']),
+});
+
+export const MarketMovingAverageSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  ma20: z.number().finite().nullable(),
+  ma60: z.number().finite().nullable(),
 });
 
 const MarketQuoteSummarySchema = z.object({
@@ -139,6 +145,11 @@ export const GetStockMarketViewOutput = z.object({
   }),
   quote: MarketQuoteSummarySchema,
   candles: z.array(MarketCandleSchema),
+  movingAverages: z
+    .array(MarketMovingAverageSchema)
+    .describe(
+      '按已有读取窗口的规范日级 candles 计算 MA20/MA60，不额外预热，样本不足为 null；与 indicators 同源，包含 completeness=live 的报价估算。按输出 candles 日期对齐，周/月取桶末日的日均线。',
+    ),
   indicators: TechnicalIndicatorsSchema,
   indicatorsAsOf: z.string().nullable(),
   dataStatus: MarketDataStatusSchema,
@@ -168,7 +179,7 @@ const reportStockIds = (report: z.infer<typeof ReportSchema>): Set<string> => {
 
 export const getStockMarketViewTool = defineTool({
   name: 'get_stock_market_view',
-  description: '获取个股实时快照、日 K、指标和数据状态',
+  description: '获取个股实时快照、K 线、日级 MA20/MA60 均线序列、指标和数据状态',
   sideEffect: 'external',
   input: GetStockMarketViewInput,
   output: GetStockMarketViewOutput,
@@ -305,7 +316,8 @@ export const getStockMarketViewTool = defineTool({
     const candles = buildMarketCandles(bars, quoteForCandle, candleCutoff);
     const { change, changePct } = deriveQuoteChange(quote, previousClose);
     const amplitude = deriveAmplitude(quote, previousClose);
-    const indicators = computeSimpleIndicators(candlesToBars(stock.id, candles));
+    const indicatorBars = candlesToBars(stock.id, candles);
+    const indicators = computeSimpleIndicators(indicatorBars);
     const sources = [...new Set([quote.source, ...candles.map((c) => c.source)])];
     const status = buildMarketDataStatus({
       quoteLive,
@@ -317,6 +329,10 @@ export const getStockMarketViewTool = defineTool({
     });
     // indicators / sources / markers 恒用日级 candles；聚合只影响输出 candles（CONTEXT.md 指标口径）。
     const outCandles = aggregateCandles(candles, input.granularity);
+    const outputDates = new Set(outCandles.map((candle) => candle.date));
+    const movingAverages = computeMovingAverageSeries(indicatorBars).filter((row) =>
+      outputDates.has(row.date),
+    );
     const lastCandleDate = outCandles.at(-1)?.date ?? null;
 
     const [trades, advices, triggers, signals, reports, researchLinks, limitUp] = await Promise.all(
@@ -456,6 +472,7 @@ export const getStockMarketViewTool = defineTool({
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
       quote: { quote, previousClose, change, changePct, amplitude },
       candles: outCandles,
+      movingAverages,
       indicators,
       indicatorsAsOf: lastCandleDate,
       dataStatus: {
