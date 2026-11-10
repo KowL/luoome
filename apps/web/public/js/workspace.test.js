@@ -1,27 +1,36 @@
 import { afterEach, beforeEach, expect, it } from 'bun:test';
-import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
+import { setAccountId } from './api.js';
 
-const keys = ['Node', 'document', 'window', 'location', 'history', 'sessionStorage', 'fetch'];
+const keys = [
+  'Node',
+  'document',
+  'window',
+  'location',
+  'history',
+  'localStorage',
+  'sessionStorage',
+  'fetch',
+];
 let originals;
 let values;
+let localValues;
 let input;
 let host;
 let events;
 const install = (key, value) =>
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-const login = (id) => {
-  configureHostedSession({ user: { id }, csrfToken: id });
-  setAccountId('account');
+const switchAccount = (id) => {
+  setAccountId(id);
 };
 
 beforeEach(() => {
   originals = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   values = new Map();
+  localValues = new Map();
   events = new EventTarget();
   input = { value: '', addEventListener() {}, focus() {} };
   host = { hidden: true, scrollIntoView() {} };
   install('document', {
-    body: { dataset: { runtime: 'hosted' } },
     documentElement: { style: { setProperty() {} } },
     querySelector: (selector) =>
       selector === '#chat-input' ? input : selector === '#workspace-discussion' ? host : null,
@@ -31,16 +40,20 @@ beforeEach(() => {
   install('window', { innerHeight: 800, scrollY: 120, requestAnimationFrame: (fn) => fn() });
   install('location', { hash: '#dashboard' });
   install('history', { state: null, pushState() {} });
+  install('localStorage', {
+    getItem: (key) => localValues.get(key) ?? null,
+    setItem: (key, value) => localValues.set(key, value),
+    removeItem: (key) => localValues.delete(key),
+  });
   install('sessionStorage', {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
     removeItem: (key) => values.delete(key),
   });
-  login('user-a');
+  switchAccount('account-a');
 });
 
 afterEach(() => {
-  clearHostedSession();
   for (const [key, descriptor] of originals) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else delete globalThis[key];
@@ -49,7 +62,7 @@ afterEach(() => {
 
 const subjects = [{ ref: { kind: 'stock', id: '002594.SZ' }, label: 'A 的持仓' }];
 
-it('跳转首页期间切换身份，不在新身份读取或恢复旧讨论', async () => {
+it('跳转首页期间切换账户，不在新账户读取或恢复旧讨论', async () => {
   const requests = [];
   install('fetch', async (path) => {
     requests.push(path);
@@ -57,7 +70,7 @@ it('跳转首页期间切换身份，不在新身份读取或恢复旧讨论', a
   });
   location.hash = '#holdings';
   window.requestAnimationFrame = (fn) => {
-    login('user-b');
+    switchAccount('account-b');
     fn();
   };
   const { openWorkspaceDiscussion } = await import('./workspace.js');
@@ -67,7 +80,7 @@ it('跳转首页期间切换身份，不在新身份读取或恢复旧讨论', a
   expect(host.hidden).toBe(true);
 });
 
-it('读取讨论期间切换身份，不把旧卡片和问题写入新身份草稿', async () => {
+it('读取讨论期间切换账户，不把旧卡片和问题写入新账户草稿', async () => {
   let complete;
   let requested;
   const started = new Promise((resolve) => {
@@ -84,7 +97,7 @@ it('读取讨论期间切换身份，不把旧卡片和问题写入新身份草�
   const { openWorkspaceDiscussion } = await import('./workspace.js');
   const opening = openWorkspaceDiscussion(subjects, 'A 的私人问题');
   await started;
-  login('user-b');
+  switchAccount('account-b');
   complete(Response.json({ ok: true, data: { sessions: [] } }));
   await opening;
   expect(input.value).toBe('');
@@ -92,14 +105,14 @@ it('读取讨论期间切换身份，不把旧卡片和问题写入新身份草�
   expect(sessionStorage.getItem('luoome.workspace.chat')).toBeNull();
 });
 
-it('身份未变化时正常打开卡片讨论并保存主体和问题', async () => {
+it('账户未变化时正常打开卡片讨论并保存主体和问题', async () => {
   install('fetch', async () => Response.json({ ok: true, data: { sessions: [] } }));
   const { openWorkspaceDiscussion } = await import('./workspace.js');
   await openWorkspaceDiscussion(subjects, '请核对风险');
   expect(host.hidden).toBe(false);
   expect(input.value).toBe('请核对风险');
   expect(JSON.parse(sessionStorage.getItem('luoome.workspace.chat'))).toMatchObject({
-    identity: 'user-a:account',
+    identity: 'local:account-a',
     subjects,
     draft: '请核对风险',
   });

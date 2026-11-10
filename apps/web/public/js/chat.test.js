@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
+import { setAccountId } from './api.js';
 
 import {
   draftDecisionPath,
@@ -16,36 +16,40 @@ import {
 } from './chat.js';
 
 describe('chat message whitespace', () => {
-  it('恢复历史期间切换用户，不把原用户的草稿和讨论主体恢复给新用户', async () => {
+  it('恢复历史期间切换账户，不把原账户的草稿和讨论主体恢复给新账户', async () => {
     const originals = new Map(
-      ['document', 'sessionStorage', 'fetch'].map((key) => [
+      ['document', 'localStorage', 'sessionStorage', 'fetch'].map((key) => [
         key,
         Object.getOwnPropertyDescriptor(globalThis, key),
       ]),
     );
     const input = { value: '' };
     const values = new Map();
+    const localValues = new Map();
     const events = new EventTarget();
     const install = (key, value) =>
       Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     try {
       install('document', {
-        body: { dataset: { runtime: 'hosted' } },
         querySelector: (selector) => (selector === '#chat-input' ? input : null),
         addEventListener: events.addEventListener.bind(events),
         dispatchEvent: events.dispatchEvent.bind(events),
+      });
+      install('localStorage', {
+        getItem: (key) => localValues.get(key) ?? null,
+        setItem: (key, value) => localValues.set(key, value),
+        removeItem: (key) => localValues.delete(key),
       });
       install('sessionStorage', {
         getItem: (key) => values.get(key) ?? null,
         setItem: (key, value) => values.set(key, value),
         removeItem: (key) => values.delete(key),
       });
-      configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'a' });
-      setAccountId('account');
+      setAccountId('account-a');
       sessionStorage.setItem(
         'luoome.workspace.chat',
         JSON.stringify({
-          identity: 'user-a:account',
+          identity: 'local:account-a',
           sessionId: 'session-a',
           subjects: [{ ref: { kind: 'stock', id: '002594.SZ' }, label: 'A 的私人讨论' }],
           draft: 'A 的未发送内容',
@@ -67,14 +71,12 @@ describe('chat message whitespace', () => {
       const { refreshChat } = await import('./chat.js?identity-recovery-regression');
       const refreshing = refreshChat();
       await started;
-      configureHostedSession({ user: { id: 'user-b' }, csrfToken: 'b' });
-      setAccountId('account');
+      setAccountId('account-b');
       complete(Response.json({ ok: true, data: { messages: [] } }));
       await refreshing;
       expect(input.value).toBe('');
       expect(sessionStorage.getItem('luoome.workspace.chat')).toBeNull();
     } finally {
-      clearHostedSession();
       for (const [key, descriptor] of originals) {
         if (descriptor) Object.defineProperty(globalThis, key, descriptor);
         else delete globalThis[key];

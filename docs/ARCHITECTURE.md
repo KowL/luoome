@@ -134,16 +134,14 @@ web ──┤        │
 
 **禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
 
-### 托管 Chat 的 AI 运行时例外
+### DSH Agent Runtime 边界
 
-`apps/web` 的托管 Chat 可以直接构造 `packages/ai-runtime` 的模型运行时，不经过 `ToolContext`。
-这是**显式例外**，不是新的通用规则：
+`apps/web` 的 DSH Chat 通过 `apps/agent-runtime` 与 `packages/dsh-bridge` 驱动独立 Node Host，不把 DSH SDK 耦合进 `core` / `db` / `tools` / `workflows`：
 
-- `ai-runtime` 只允许 `apps/*` 导入；`core` / `db` / `tools` / `workflows` / `mcp` / `adapters` 不得依赖它。
-- 领域能力仍统一经 tools 使用；Chat 只是模型执行宿主，不复制领域逻辑。
-- `scripts/check-layers.ts` 的白名单必须逐条列出 `apps/web` 与 `apps/worker`，其余包命中即失败。
+- `packages/dsh-bridge` 提供纯协议契约与 Cordis Tool Plugin，只允许 `apps/*` 导入。
+- 领域能力仍统一经 tools 使用；DSH Runtime 只是 Agent 执行宿主，通过 `apps/web` 的私有 Tool Gateway 回调本轮授权的 tools，不复制领域逻辑。
 
-设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14。
+设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
 
 ### packages/core 内部依赖
 
@@ -411,8 +409,7 @@ binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类�
 HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
 方法委托。CLI/MCP/Web 三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
 分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
-market 的 sentiment manager。托管部署的全站数据源配置由管理员写入持久卷
-`operator/market.env`：Web 保存后立即重建共享行情栈，worker 按文件 mtime 在任务批次前同步。
+market 的 sentiment manager。
 
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
@@ -483,24 +480,24 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
-托管开发环境另有显式启用的 DSH Chat 路径：Bun Web → 独立 Node Host → DSH/Cordis。
+另有显式启用的 DSH Chat 路径：Bun Web → 独立 Node Host → DSH/Cordis。
 `packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
 业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
 官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。此接入不使用 MCP，也不加载 DSH Web UI。
-DSH 模型请求通过独立鉴权的 Bun 代理复用 hosted ledger；共享模型传输逐块转发 SSE 并读取尾部 usage，
+DSH 模型请求通过独立鉴权的 Bun 代理转发 SSE 并读取尾部 usage，
 未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
 
 DSH 当前每轮从 Luoome 的可信历史重建临时 Session，历史超过既有窗口时明确拒绝，尚无持久 Session 恢复。
 实时事件和持久消息按 Agent/message/attempt 身份合并为现有 UI Message Stream；同会话在执行及回答保存期间保持占用。
-停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与费用；失败不自动切换运行时重跑。
+停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与用量；失败不自动切换运行时重跑。
 开发开关、固定产物与启动命令见 [DSH 运行底座](../infra/dsh/README.md)，任务与验收边界见
-[开发任务](./dsh-plugin-platform-development-plan.md)。生产配置拒绝启用此路径，不能把受控集成通过当作生产隔离或真实供应商验收。
+[开发任务](./dsh-plugin-platform-development-plan.md)。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
 每轮独立装载当前结构化共识，不能靠最近 20 条聊天推断同意。首页的三项方向操作经
 `POST /api/workspace/drafts` 生成服务器草案，再复用原确认协议；不接受客户端执行结果。
-托管确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
+确切提醒读取使用专用 `/api/watch/notifications/:triggerId`（绑定 `resolve_watch_notification`），私有 resolver 不进入通用 discovery。
 原始触发与当前资格分开，始终不把历史触发当作当前行动许可。手机讨论与恢复契约见
 [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
 
@@ -1177,50 +1174,3 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 - 真实券商对接：仅在确认合规与安全模型后启动，且绝不通过 MCP 暴露
 - 多用户 / 多设备同步：默认不做，提供 export/import
 - LLM 提供商：OpenAI / Anthropic / 国内大模型（DeepSeek / Kimi / Qwen / GLM）的成本-质量-延迟三角
-
-## 16. 个人订阅服务装配
-
-Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant 存储、任务、支付、通知及恢复基础设施。
-认证外壳复用原 `createWebApp` 和 `apps/web/public/index.html`；普通 CLI/TUI/MCP 保留单机能力。
-内置生产装配接入 SMTP 和真实行情，支付与研究邮件未配置时返回不可用；部署约束见
-[服务运行手册](./runbooks/hosted-personal-subscription.md)。
-
-认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
-浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
-CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
-登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
-
-HostedAISettingsStore 在托管持久卷保存全站 AI 配置，不复用读取个人 home 的单机 AISettingsStore。
-认证入口提供管理员专用配置路由，普通用户不能访问。配置保存不调用供应商。
-每次 Web 请求和 worker 任务在 createTenantContext 中固定配置快照，再创建 AI SDK stack 与计量器。
-管理员设置 OpenAI 兼容端点、模型和费率；计量层检查确切端点和模型并禁止重定向，按真实 usage 结算，保留额度和租户隔离。
-
-身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。
-core的`hosted/`只定义实体与不变量；db的memory/Drizzle实现共享contract tests。每个hosted Tenant
-自动一个默认投资Account；空库原子初始化，已有唯一账户原样复用，多账户异常保留数据并停止自动迁移。
-`update_account`仅更新名称，资金/持仓依旧通过ledger；local多账户不变。
-
-平台Tools位于`packages/tools/src/platform`的私有registry，只接受可信anonymous/user/worker/webhook主体，
-不加入generic registry、MCP、OpenAI或聊天discovery。普通业务保留原Tool和路由契约，在请求级context中
-核对Tenant generation、默认Account、sideEffect、订阅与预算。旧事实白名单不能成为屏蔽原Strategy、
-Advice、研究、AI/SSE或复盘的产品依据；尚未接通的调用必须列为本次实现/验收缺口。
-
-`TenantRuntimeManager`提供有界LRU和引用生命周期；请求、SSE、onFinish、后台任务完成前均持有lease。
-原`ctxRef.current`不能被不同用户请求共同改写；账户头不能改变服务端绑定的默认账户。
-托管界面移除新增/切换账户，服务端同时拒绝对应绕行；前端登出/换用户清理私人DOM、状态和延迟回调。
-
-原Strategy schedule、账户计划、报告、观察、绩效及历史评估按租户接入独立worker，保留原领域lease/fencing/checkpoint。
-不能让每个Web实例再启动全部租户的scheduler，也不能只完成旧`personal-alerts`就认定原自动业务已迁移。
-workflow继续只通过`ctx.tools.*`编排。平台Job与租户执行通过receipt/outbox/inbox恢复，跨库没有共同事务；
-业务成功、用户额度、provider成本和通知状态分别表达，unknown不按超时猜测为零。
-
-默认账户复用原DecisionReview与开盘/收盘/周报。旧`watchlist-facts`属于补充报告，旧PersonalWatchFeedback
-保留历史读取，不与账户采纳/收益自动混算。原设置页只增加个人订阅/通知/账户名称/退出；平台模型密钥、
-数据源、Vault路径和整库恢复保留部署/运营边界，不能让一个租户修改所有用户的环境。
-
-共享写屏障覆盖Web、worker、provider活动、会话及迁移；新接入的业务/SSE也必须进入删除排空与恢复验证。
-恢复保持冻结，撤销旧凭证/fence，应用最新独立删除ledger，按业务回执对账且不重发旧通知，完成核对后才恢复外部副作用。
-
-路径与运行操作见[运行手册](./runbooks/hosted-personal-subscription.md)，细节见[详细设计](./ddd/hosted-personal-subscription-detailed-design.md)。
-旧fixture证明其记录的基础设施行为，不能替代原Web融合、真实AI、原自动调度及生产恢复验收。
-自动证券交易仍禁止；人工已完成成交保持原专用记账契约；远程MCP不在本次增量范围。

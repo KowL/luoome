@@ -1054,20 +1054,16 @@ describe('Web runtime bootstrap', () => {
     }
   });
 
-  it('统一入口拒绝共享数据库，不再根据旧模式和能力开关启动单机 Web', async () => {
+  it('统一入口支持指定本地数据库路径启动单机多账户 Web', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-entry-'));
-    const previousMode = process.env.LUOOME_MODE;
-    const dbPath = join(dir, 'shared.db');
+    const dbPath = join(dir, 'local.db');
+    let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
     try {
-      for (const mode of [undefined, 'local', 'hosted']) {
-        if (mode === undefined) delete process.env.LUOOME_MODE;
-        else process.env.LUOOME_MODE = mode;
-        await expect(startWeb({ port: 0, dbPath })).rejects.toThrow('shared local database');
-        expect(existsSync(dbPath)).toBe(false);
-      }
+      handle = await startWeb({ port: 0, dbPath });
+      expect(handle.port).toBeGreaterThan(0);
+      expect(existsSync(dbPath)).toBe(true);
     } finally {
-      if (previousMode === undefined) delete process.env.LUOOME_MODE;
-      else process.env.LUOOME_MODE = previousMode;
+      await handle?.stop(true);
       rmSync(dir, { recursive: true, force: true });
     }
   });

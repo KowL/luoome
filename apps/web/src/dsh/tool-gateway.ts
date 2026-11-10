@@ -40,7 +40,7 @@ export type GatewayAuthorizer = (
 export interface RegisterGatewayRun {
   readonly scope: GatewayScopeSnapshot;
   readonly manifest: GatewayCallableManifest;
-  /** Recheck current tenant generation, ownership, entitlements and maintenance barriers. */
+  /** Recheck current user/account scope and runtime capabilities. */
   readonly authorize: GatewayAuthorizer;
   /** Existing external/fee permission gate. It must not replace the business ledger. */
   readonly admitExternal?: GatewayAuthorizer;

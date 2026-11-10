@@ -233,7 +233,7 @@ export const workspaceSnapshot = async (ctx: ToolContext) => {
       workspaceRead('get_investment_candidates', { limit: 30 }, ctx),
       workspaceRead(
         'list_workflow_runs',
-        { workflowName: 'hosted-alerts', includeWatch: false, limit: 1 },
+        { workflowName: 'intraday-trading-plan-watch', includeWatch: false, limit: 1 },
         ctx,
       ),
     ]);

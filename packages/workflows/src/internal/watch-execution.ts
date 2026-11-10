@@ -1,5 +1,4 @@
 import type { ToolResult } from '@luoome/core';
-import { BeginWatchDeliveryInput } from '@luoome/tools';
 
 import type { WorkflowContext, WorkflowStep, WorkflowToolMap } from '../define-workflow.js';
 
@@ -33,7 +32,6 @@ export const watchExecutionStep =
       return !lost;
     };
     const timer = setInterval(() => void renew(), 30_000);
-    let deliveryTriggerIds: readonly string[] = [];
     const guarded = Object.fromEntries(
       Object.entries(ctx.tools).map(([name, accessor]) => [
         name,
@@ -47,16 +45,8 @@ export const watchExecutionStep =
             const fencedValue =
               name === 'begin_watch_delivery' || name === 'set_watch_trigger_delivery_status'
                 ? { ...(value as object), owner }
-                : name === 'send_notification' && ctx.identity?.mode === 'hosted'
-                  ? {
-                      ...(value as object),
-                      watchDelivery: { owner, triggerIds: deliveryTriggerIds },
-                    }
-                  : value;
-            const result = await accessor.execute(fencedValue);
-            if (name === 'begin_watch_delivery' && result.ok)
-              deliveryTriggerIds = BeginWatchDeliveryInput.parse(fencedValue).triggerIds;
-            return result;
+                : value;
+            return accessor.execute(fencedValue);
           },
         },
       ]),

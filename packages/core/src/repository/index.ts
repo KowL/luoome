@@ -15,11 +15,7 @@ import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
-import type {
-  Notification,
-  NotificationResult,
-  WatchDeliveryRepository,
-} from '../entity/notification.js';
+import type { Notification, NotificationResult } from '../entity/notification.js';
 import type {
   PortfolioCashFlow,
   PortfolioCorporateAction,
@@ -103,7 +99,6 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
-import type { ReportAutomationRepository } from '../hosted/report-automation.js';
 import type { DecisionLedgerState } from '../portfolio/decision-ledger-state.js';
 import type { HoldingCashAdjustment } from '../portfolio/ledger.js';
 import type {
@@ -543,8 +538,6 @@ export interface ReportRepository {
 
 export interface RepositoryRegistry {
   readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
-  readonly hostedTenant?: import('../hosted/tenant.js').TenantRepository;
-  readonly hostedExports?: import('../hosted/privacy.js').TenantExportRepository;
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;
@@ -564,7 +557,6 @@ export interface RepositoryRegistry {
   readonly tradingPlan: TradingPlanRepository;
   /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
   readonly report: ReportRepository;
-  readonly reportAutomation: ReportAutomationRepository;
   /** v0.2 起；MarketDataManager 等会调 save / latestByStock。 */
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
@@ -599,7 +591,6 @@ export interface RepositoryRegistry {
   readonly alertPlan: AlertPlanRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
   readonly notification: NotificationRepository;
-  readonly watchDelivery: WatchDeliveryRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
   /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */

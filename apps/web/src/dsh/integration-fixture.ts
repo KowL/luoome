@@ -1,41 +1,19 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  FixtureEmailOtpAdapter,
-  FixtureHostedNotificationAdapter,
-  FixtureHostedPaymentAdapter,
-} from '@luoome/adapters/hosted';
-import { FakeMarketAdapter, TEST_STOCKS } from '@luoome/adapters/testing';
-import { Hono } from 'hono';
-import { openHostedService } from '../hosted-composition.js';
-import { loadHostedConfig } from '../hosted-config.js';
-import { createHostedProviders } from '../hosted-providers.js';
-import { createHostedWebApp } from '../hosted-server.js';
-import { runHostedWorkerOnce } from '../hosted-worker.js';
+import { FakeLLMAdapter, FakeMarketAdapter, TEST_STOCKS } from '@luoome/adapters/testing';
+import { money } from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
+import { buildContext } from '@luoome/tools';
+import { createWebApp } from '../server.js';
+import { DshChatRuntime } from './chat-runtime.js';
+import { loadDshDevelopmentConfig } from './config.js';
 
 const encoder = new TextEncoder();
 export const FIXTURE_WEB_URL = 'https://research.example.test/facts';
 export const FIXTURE_ORIGIN = 'http://127.0.0.1:5187';
-const plan = {
-  id: 'dsh-fixture-plan',
-  code: 'fixture',
-  currency: 'CNY' as const,
-  priceMinor: 0,
-  durationMonths: 1,
-  productPolicyVersion: 'hosted-web-v2' as const,
-  publishedAt: new Date('2026-10-20T01:00:00Z'),
-  limits: {
-    watchlistStocks: 20,
-    enabledRules: 20,
-    dailyJobs: 30,
-    concurrentJobs: 1,
-    queuedJobs: 10,
-    researchUnits: 30,
-  },
-};
 
-/** Test-only hosted tenants in temporary SQLite; model, webpage and market inputs stay controlled. */
+/** Test-only local DSH fixture in temporary SQLite; model, webpage and market inputs stay controlled. */
 export const createDshIntegrationFixture = async (
   options: {
     readonly firstChunkGate?: Promise<void>;
@@ -48,9 +26,7 @@ export const createDshIntegrationFixture = async (
   if (nodePath === null) throw new Error('Node is required for DSH integration');
   const root = mkdtempSync(join(tmpdir(), 'luoome-dsh-chat-fixture-'));
   const clock = () => new Date('2026-10-20T01:00:00Z');
-  const planFile = join(root, 'plan.json');
   const webFile = join(root, 'web.json');
-  writeFileSync(planFile, JSON.stringify(plan));
   writeFileSync(
     webFile,
     JSON.stringify({
@@ -58,17 +34,6 @@ export const createDshIntegrationFixture = async (
         '<h1>受控研究来源</h1><p>2026-10-20：这是模拟网页证据，不代表真实供应商验证。</p><script>hidden-injection</script>',
     }),
   );
-  const config = loadHostedConfig({
-    HOSTED_ENVIRONMENT: 'development',
-    HOSTED_DATA_ROOT: join(root, 'data'),
-    HOSTED_AUTH_SECRET: 'dsh-fixture-auth-secret-with-at-least-32-characters',
-    PUBLIC_ORIGIN: FIXTURE_ORIGIN,
-    HOSTED_ALLOW_INSECURE_HTTP: 'true',
-    HOSTED_PROVIDER_MODE: 'fixture',
-    HOSTED_REGISTRATION_ENABLED: 'true',
-    LUOOME_EXPOSE_WRITE: 'true',
-    LUOOME_EXPOSE_EXTERNAL: 'true',
-  });
   const bodies: Record<string, unknown>[] = [];
   let completedProviders = 0;
   const providerFetch = (async (_input, init) => {
@@ -180,126 +145,77 @@ export const createDshIntegrationFixture = async (
       { headers: { 'content-type': 'text/event-stream' } },
     );
   }) as typeof fetch;
-  const providers = createHostedProviders(
-    { ...config, registrationEnabled: false },
+
+  const dsh = loadDshDevelopmentConfig(
     {
-      HOSTED_PLAN_FILE: planFile,
-      HOSTED_JOB_BUDGET_MICRO: '100000',
-      LUOOME_MARKET_PROVIDER: 'real',
       LUOOME_CHAT_RUNTIME: 'dsh',
       LUOOME_DSH_DEVELOPMENT: 'true',
       LUOOME_DSH_NODE_PATH: nodePath,
       LUOOME_DSH_ALLOW_WEB_FIXTURES: 'true',
       LUOOME_DSH_WEB_FIXTURES_FILE: webFile,
     },
-    { fetchImpl: providerFetch },
+    'development',
   );
-  if (providers.aiSettings === undefined || providers.createTenantContext === undefined)
-    throw new Error('Missing hosted fixture assembly');
-  providers.aiSettings.save({
-    settings: { ...providers.aiSettings.read().settings, enabled: true },
-    apiKey: 'fixture-only-provider-key',
+  if (dsh === undefined) throw new Error('Missing DSH development configuration');
+
+  const handle = createDrizzleRepos(join(root, 'luoome.db'));
+  for (const stock of TEST_STOCKS) await handle.repos.stock.save(stock);
+  const defaultAccountId = 'account-default';
+  await handle.repos.account.save({
+    id: defaultAccountId,
+    name: '默认账户',
+    kind: 'real',
+    currency: 'CNY',
+    initialCapital: money(100_000),
+    cashBalance: money(100_000),
+    createdAt: clock(),
   });
-  const createTenantContext = providers.createTenantContext;
-  const emailOtp = new FixtureEmailOtpAdapter();
-  const service = openHostedService(
-    config,
-    {
-      ...providers,
-      emailOtp,
-      notification: new FixtureHostedNotificationAdapter(),
-      payment: new FixtureHostedPaymentAdapter({ clock }),
+
+  const chatStreamRuntime = new DshChatRuntime({
+    ...dsh,
+    model: {
+      endpoint: 'https://provider.example.test/v1/chat/completions',
+      model: 'deepseek-chat',
+      maxTokens: 1024,
+      headers: { authorization: 'Bearer fixture-only-provider-key' },
+      fetch: providerFetch,
+    },
+  });
+
+  const ctx = buildContext({
+    repos: handle.repos,
+    adapters: {
       market: new FakeMarketAdapter({ clock }),
-      stockSeed: TEST_STOCKS,
-      createTenantContext: (base) => {
-        const scoped = createTenantContext(base);
-        return {
-          ...base,
-          ...(scoped.agent === undefined ? {} : { agent: scoped.agent }),
-          ...(scoped.llmExecution === undefined ? {} : { llmExecution: scoped.llmExecution }),
-        };
-      },
+      llm: new FakeLLMAdapter(),
     },
     clock,
-  );
-  const app = createHostedWebApp({
-    config,
-    repos: service.repos,
-    runtimes: service.runtimes,
-    maintenance: service.maintenance,
-    emailOtp,
-    market: service.providers.market,
-    jobPolicies: service.providers.jobPolicies,
-    ...(service.providers.createTenantContext === undefined
-      ? {}
-      : { createTenantContext: service.providers.createTenantContext }),
-    clock,
-    notification: service.providers.notification,
-    payment: service.providers.payment,
-    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    user: { id: 'local-web-user', defaultAccountId },
   });
-  let cookie = '';
-  let csrf = '';
+
+  const app = createWebApp(ctx, {
+    exposeWrite: true,
+    exposeExternal: true,
+    chatStreamRuntime,
+  });
+
   const request = (path: string, init: RequestInit = {}) =>
-    app.fetch(
-      new Request(`${FIXTURE_ORIGIN}${path}`, {
-        ...init,
-        headers: {
-          origin: FIXTURE_ORIGIN,
-          'content-type': 'application/json',
-          cookie,
-          'x-csrf-token': csrf,
-          ...Object.fromEntries(new Headers(init.headers)),
-        },
-      }),
+    Promise.resolve(
+      app.fetch(
+        new Request(`${FIXTURE_ORIGIN}${path}`, {
+          ...init,
+          headers: {
+            origin: FIXTURE_ORIGIN,
+            'content-type': 'application/json',
+            ...Object.fromEntries(new Headers(init.headers)),
+          },
+        }),
+      ),
     );
-  const challengeResponse = await request('/api/auth/challenges', {
-    method: 'POST',
-    body: JSON.stringify({ email: 'dsh-fixture@example.test' }),
-  });
-  const challenge = (await challengeResponse.json()) as { data: { challengeId: string } };
-  const code = emailOtp.getMessage(challenge.data.challengeId)?.code;
-  const loginResponse = await request('/api/auth/sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      challengeId: challenge.data.challengeId,
-      code,
-      password: 'fixture-login-password',
-      acceptTerms: true,
-    }),
-  });
-  const setCookie = loginResponse.headers.get('set-cookie');
-  if (setCookie === null)
-    throw new Error(`Fixture HTTP login failed: ${await loginResponse.text()}`);
-  cookie = setCookie.split(';')[0] ?? '';
-  const meResponse = await request('/api/me');
-  const me = (await meResponse.json()) as { data: { csrfToken: string; tenant: { id: string } } };
-  csrf = me.data.csrfToken;
-  await runHostedWorkerOnce(service);
-  const accounts = await request('/api/accounts');
-  if (!accounts.ok) throw new Error(`Fixture default account failed: ${await accounts.text()}`);
-  const tenant = await service.repos.tenants.findById(me.data.tenant.id);
-  if (tenant === null) throw new Error('Fixture tenant missing');
-  const auditLease = service.runtimes.acquire({
-    tenantId: tenant.id,
-    ownerUserId: tenant.ownerUserId,
-    generation: tenant.generation,
-    schemaVersion: tenant.schemaVersion,
-  });
-  const context = { repos: auditLease.runtime.repos };
-  const platform = { ctx: { repos: service.repos } };
-  const browserApp = new Hono();
-  browserApp.get(
-    '/fixture-login',
-    () =>
-      new Response(null, { status: 302, headers: { location: '/#chat', 'set-cookie': setCookie } }),
-  );
-  browserApp.route('/', app);
+
   return {
-    app: browserApp,
+    app,
     request,
-    context,
-    platform,
+    context: { repos: handle.repos },
     bodies,
     completedProviders: () => completedProviders,
     async createSession() {
@@ -323,8 +239,7 @@ export const createDshIntegrationFixture = async (
       });
     },
     dispose() {
-      auditLease.release();
-      service.close();
+      handle.close();
       rmSync(root, { recursive: true, force: true });
     },
   };
@@ -339,7 +254,7 @@ if (import.meta.main) {
     fetch: fixture.app.fetch,
     idleTimeout: 255,
   });
-  console.log(`DSH controlled browser fixture: http://127.0.0.1:${server.port}/fixture-login`);
+  console.log(`DSH controlled browser fixture: http://127.0.0.1:${server.port}/#chat`);
   const stop = () => {
     void server.stop(true).then(() => {
       fixture.dispose();

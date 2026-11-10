@@ -23,7 +23,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-describe('DSH Web + actual Node/Cordis/Gateway/hosted ledger (controlled providers)', () => {
+describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
   it('persists distinct business and native receipts when the provider reuses a tool call ID', async () => {
     const fixture = await setup({ reuseProviderCallId: true });
     const sessionId = await fixture.createSession();
@@ -178,14 +178,6 @@ describe('DSH Web + actual Node/Cordis/Gateway/hosted ledger (controlled provide
       }),
     );
     expect(fixture.bodies).toHaveLength(3);
-    const costs = await fixture.platform.ctx.repos.llm.costs();
-    expect(costs).toHaveLength(1);
-    expect(costs[0]).toMatchObject({
-      confirmedAttempts: 3,
-      unknownAttempts: 0,
-      inputTokens: 60,
-      outputTokens: 30,
-    });
   }, 30_000);
 
   it('keeps a draft pending, confirms only saved input once and supplies the authoritative receipt in the next rebuilt run', async () => {
@@ -271,8 +263,6 @@ describe('DSH Web + actual Node/Cordis/Gateway/hosted ledger (controlled provide
         data: expect.objectContaining({ status: 'cancelled', executionStopped: true }),
       }),
     );
-    const costs = await fixture.platform.ctx.repos.llm.costs();
-    expect(costs[0]).toMatchObject({ unknownAttempts: 1 });
     expect(fixture.bodies).toHaveLength(1);
   }, 30_000);
 });

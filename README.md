@@ -9,10 +9,8 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
-Web 使用同一套页面和服务入口，默认需要邮箱登录，按用户隔离数据并校验订阅，保留自选、策略、
-预警、持仓和复盘。每位用户自动拥有一个 CNY 默认投资账户，初始本金和现金为 0；可修改名称，
-不提供新增或切换账户。开发和生产仅使用不同配置，不切换另一套业务应用。
-真实供应商、完整自动调度和生产放行仍待验收；详见[服务运行手册](./docs/runbooks/hosted-personal-subscription.md)。
+Web、CLI、TUI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和单主用户多账户模型（`Account`）。
+无需邮箱注册、订阅或独立控制平面进程；后台自动任务（Strategy 日循环、账户计划盘后/盘中盯盘、收盘报告截止、账户绩效估值与策略自治）在 Web 进程开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 时内置运行。
 
 ## 名字
 
@@ -28,7 +26,7 @@ Web 使用同一套页面和服务入口，默认需要邮箱登录，按用户�
 
 - **Advisor-first**：每一份数据最终都服务于"可执行的投资建议"，不是堆数据。
 - **Agent-first**：所有能力都是 tool，没有"只能人用、agent 用不了"的功能。
-- **数据自持**：SQLite 保存在部署者控制的存储中，Web 用户数据使用独立私有库。
+- **数据自持**：SQLite 保存在本机 `$LUOOME_HOME/luoome.db`，不经过任何云服务。
 - **Schema-driven**：Zod schema 是 tool I/O 的事实来源，自动生成 TypeScript 类型、MCP tool 定义、OpenAI function calling schema。
 - **Workflow ≠ Tool**：tool 是原子能力，workflow 是组合；workflow 内置编排，tool 暴露给上层 agent。
 - **No magic**：每个数据源 / 适配器 / LLM 都显式可插拔，运行时可见。
@@ -38,7 +36,7 @@ Web 使用同一套页面和服务入口，默认需要邮箱登录，按用户�
 
 ### 数据维度（读 + 写）
 
-- 账户（Web 每人一个默认账户；单机 CLI/TUI/MCP 保留多账户、真实/模拟能力）
+- 账户（支持单机多账户创建与切换，通过 `X-Luoome-Account-Id` 按请求绑定）
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
@@ -80,8 +78,8 @@ packages/
   cli/         命令行入口
   tui/         opentui 应用
 apps/
-  web/         Hono + 同源静态仪表盘
-  worker/      持久任务、通知/支付对账及离线恢复入口
+  web/         Hono + 同源静态仪表盘 + 单进程后台调度
+  agent-runtime/ DeepSeek Harness (DSH) + Cordis 独立 Agent Host
 docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
@@ -89,24 +87,7 @@ homebrew/
 
 ## 环境变量
 
-Web、worker 和运维命令共用显式服务配置，不读取个人目录或项目 `.env`。
-以下是主要配置；完整字段、SMTP、套餐文件与恢复要求见[运行手册](./docs/runbooks/hosted-personal-subscription.md)。
-现有 `HOSTED_*` 前缀是配置名称，不表示另一套运行模式。
-
-| 变量 | 说明 |
-|---|---|
-| `HOSTED_ENVIRONMENT` | `development` 或 `production`，业务入口相同 |
-| `HOSTED_DATA_ROOT` | 独立服务数据目录，不能使用个人单机数据目录 |
-| `PUBLIC_ORIGIN` | 通知链接的默认 origin 及传输策略，不限定访问域名或端口；默认 HTTPS，HTTP 须显式开启下项 |
-| `HOSTED_ALLOW_INSECURE_HTTP` | 默认 `false`；设为 `true` 才允许固定 HTTP origin，仅用于临时功能验证 |
-| `HOSTED_AUTH_SECRET_FILE` | 会话密钥文件；生产用部署 secret 提供 |
-| `HOSTED_PLAN_FILE` / `HOSTED_JOB_BUDGET_MICRO` | 运营套餐 JSON 与明确的单任务成本预算 |
-| `SMTP_HOST` / `SMTP_FROM` / `SMTP_USER` / `SMTP_PASSWORD_FILE` | 邮箱验证码 SMTP 配置；未配置时登录不可用，注册必须保持关闭 |
-| `HOSTED_AI_ENABLED` / `LUOOME_AI_CONFIG` | 默认不装配 AI；启用时提供明确模型配置与供应商凭证 |
-| `HOSTED_REGISTRATION_ENABLED` | 默认关闭；满足上线条件后由运营开启 |
-| `LUOOME_HOST` / `PORT` | 服务监听地址和端口；默认 `127.0.0.1:5173` |
-
-下面是保留的单机 CLI/TUI/MCP 配置，不是 Web 的另一套启动方式。服务需要的行情/模型能力由运营显式装配。
+Web、CLI、TUI 和 MCP 共用下列单机环境变量：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -120,16 +101,16 @@ Web、worker 和运维命令共用显式服务配置，不读取个人目录或�
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
-| `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径；Web 受管文件按用户隔离 |
+| `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
-| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力；Web 仍需登录、订阅与归属校验 |
-| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
+| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力 |
+| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：允许 external 类能力 |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
-| `LUOOME_FEISHU_WEBHOOK_URL` | — | 单机飞书通知 webhook；不能作为所有 Web 用户共用的私人通知目的地 |
+| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；可在 Web 设置页配置 |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
 | `LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES` | `30` | Strategy schedule claim 租约分钟数；范围 5～240 |
@@ -137,9 +118,8 @@ Web、worker 和运维命令共用显式服务配置，不读取个人目录或�
 | `LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS` | `1` | Strategy 成员日线允许陈旧交易日数；范围 0～30 |
 | `LUOOME_STRATEGY_DATA_MAX_RETRIES` | `2` | Strategy 单成员行情最大重试次数；范围 0～5 |
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
+| `LUOOME_HOST` / `LUOOME_PORT` | `127.0.0.1` / `5173` | Web 服务监听地址和端口 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
-
-生产拒绝 fixture provider。CLI/TUI/MCP 的单机库与 Web 私有库分开，不能通过缺少登录上下文的工具命令访问服务用户数据。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
@@ -156,8 +136,7 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。两者均通过
 OpenAI-compatible Chat Completions 接入。
 
-Web 的模型、数据源及密钥由运营配置，普通用户在原设置页管理个人通知、订阅与账户名称。
-单机 CLI/TUI/MCP 继续读取自己的模型目录和环境配置；这些个人文件不会被 Web 自动加载。
+Web、CLI、TUI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
 
 ## 文档
 
@@ -184,26 +163,20 @@ irm https://raw.githubusercontent.com/KowL/luoome/main/install.ps1 | iex
 # 或者从本仓库安装依赖
 bun install
 
-# 按运行手册配置服务环境后，在不同终端启动同一应用的 Web 和 worker
-bun --no-env-file run web
-bun --no-env-file run worker
+# 启动单机 Web（当同时设置 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true 时自动挂载后台调度循环）
+LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true bun run web
 ```
 
-浏览器打开服务的可达地址，通过邮箱验证码登录。开发与生产均使用这些命令；
-开发使用独立数据目录、测试套餐及邮件配置，生产使用审核后的部署配置。配置缺失会明确失败，不会退回免登录页面。
+浏览器打开 `http://127.0.0.1:5173`，首次使用可在「设置」页创建真实账户并在顶栏切换。
 
-`./bin/luoome start`、`restart` 和 `web serve` 也启动同一认证 Web，默认后台运行，日志追加到
-`$LUOOME_HOME/logs/luoome.log`；需要前台调试时加 `--foreground`。这些入口不加载个人或项目 `.env`，
-也不在 Web 中启动单机 watch；worker 仍单独运行。直接用 Bun 调 CLI 时必须带 `--no-env-file`。
+`./bin/luoome start`、`restart` 和 `web serve` 也可启动单机 Web，默认后台运行，日志追加到
+`$LUOOME_HOME/logs/luoome.log`；需要前台调试时加 `--foreground`。
 
 ## 自动任务
 
-Web 不启动单机 scheduler。独立 worker 已有持久任务、通知/支付对账和恢复基础设施；
-原策略调度、账户计划、报告及观察补全的完整租户任务接线，以及统一额度计量仍未完成。
-启动 Web 或 worker 不代表这些自动业务已经可用，交付状态见[改造计划](./docs/hosted-personal-subscription-development-plan.md)。
+当 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启时，Web 进程内置启动策略日循环、收盘报告截止检查、盘中账户计划盯盘、账户绩效估值与策略自治调度。
 
-单机 CLI 的 `watch` 与 `workflow run` 能力继续保留，仅访问自己的单机库。下列 cron 是单机使用示例，
-不能作为绕过 Web 身份与订阅的服务器租户调度方案；每次 workflow 运行落一条 `WorkflowRun` 审计：
+单机 CLI 的 `watch` 与 `workflow run` 能力也可由外部 cron 显式触发，每次 workflow 运行落一条 `WorkflowRun` 审计：
 
 ```cron
 # 事件同步：每交易日 08:30（财报 / 解禁 / 分红…，按 (provider, externalId) 幂等 upsert）
@@ -249,6 +222,6 @@ Web 不启动单机 scheduler。独立 worker 已有持久任务、通知/支付
 - Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
-- `luoome start` 与 `web serve` 使用同一认证 Web；后台任务由独立 worker 承担
+- `luoome start` 与 `web serve` 启动单机多账户 Web 并内置挂载后台自动任务
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。

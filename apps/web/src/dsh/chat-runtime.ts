@@ -66,16 +66,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     if (execution.historyTruncated)
       throw new ChatRuntimeRejection('本实验不能截断已有上下文，请创建新会话并提供必要事实。');
     const { context: ctx, conversationId, scenario } = execution;
-    if (
-      ctx.identity?.mode === 'hosted' &&
-      (ctx.hostedAuthorization === undefined || this.options.authorized === undefined)
-    )
-      throw new Error('DSH hosted authorization and metered transport are required');
-    const tenant =
-      ctx.identity?.mode === 'hosted'
-        ? `${ctx.identity.tenantId}:${ctx.identity.tenantGeneration}`
-        : `local:${ctx.user.id}`;
-    const key = JSON.stringify([tenant, ctx.user.defaultAccountId, conversationId]);
+    const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, conversationId]);
     if (activeConversations.has(key) || blockedConversations.has(key))
       throw new ChatRuntimeRejection('DSH 会话仍在执行或等待核对，请读取历史或创建新会话。');
     if (activeConversations.size >= (this.options.maxActiveRuns ?? 2))
@@ -136,19 +127,14 @@ export class DshChatRuntime implements ChatStreamRuntime {
     let adapter: DshEventAdapter | undefined;
     let runtimeStopped = false;
     let startupTerminal: string | undefined;
-    const authorize: GatewayAuthorizer = async ({ call, tool }) => {
+    const authorize: GatewayAuthorizer = async () => {
       if (
         signal.aborted ||
         Date.now() >= expiresAt ||
         (this.options.authorized !== undefined && !(await this.options.authorized()))
       )
         return denied();
-      const result = await ctx.hostedAuthorization?.(
-        call.toolName,
-        call.input,
-        tool.requiredCapabilities as ('read' | 'write' | 'external' | 'advice')[],
-      );
-      return result !== undefined && result !== null && !result.ok ? result.error : null;
+      return null;
     };
     const proxy = createDshRunProxy({
       runId,
@@ -228,8 +214,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
       if (caller !== undefined) throw new Error('DSH binding changed within run');
       adapter = new DshEventAdapter(binding, projection);
       caller = {
-        tenantId: ctx.identity?.mode === 'hosted' ? ctx.identity.tenantId : tenant,
-        tenantGeneration: ctx.identity?.mode === 'hosted' ? ctx.identity.tenantGeneration : 1,
+        userId: ctx.user.id,
         accountId: ctx.user.defaultAccountId,
         conversationId,
         runId,

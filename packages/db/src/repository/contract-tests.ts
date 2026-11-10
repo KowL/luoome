@@ -5221,7 +5221,7 @@ export const registerRepositoryContractTests = (
           const now = new Date(start.getTime() + seconds * 1000);
           return repos.workflowRun.execution({
             id: 'strategy-execution',
-            workflowName: 'hosted-strategy-execution',
+            workflowName: 'run-strategy-schedules',
             action,
             owner,
             now,

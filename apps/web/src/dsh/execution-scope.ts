@@ -1,8 +1,7 @@
 import type { SideEffect, ToolError } from '@luoome/core';
 
 export interface GatewayIdentity {
-  readonly tenantId: string;
-  readonly tenantGeneration: number;
+  readonly userId: string;
   readonly accountId: string;
   readonly conversationId: string;
   readonly runId: string;
@@ -52,8 +51,7 @@ export class GatewayExecutionScope {
     if (this.signal.aborted) return gatewayDenied('scope-revoked');
     if (now >= this.snapshot.expiresAt) return gatewayDenied('scope-expired');
     const keys = [
-      'tenantId',
-      'tenantGeneration',
+      'userId',
       'accountId',
       'conversationId',
       'runId',

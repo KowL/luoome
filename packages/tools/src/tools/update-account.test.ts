@@ -1,4 +1,3 @@
-import type { ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 import { updateAccountTool } from './update-account.js';
@@ -25,31 +24,4 @@ describe('update_account', () => {
       expect(await ctx.repos.account.findById(ctx.user.defaultAccountId)).toEqual(before);
     },
   );
-
-  it('does not let a hosted request edit a different account even with a permissive outer gate', async () => {
-    const base = await buildTestContext();
-    const other = (await base.repos.account.list()).find(
-      (account) => account.id !== base.user.defaultAccountId,
-    );
-    if (other === undefined) throw new Error('Expected multiple local accounts in fixture');
-    const ctx: ToolContext = {
-      ...base,
-      identity: {
-        mode: 'hosted',
-        userId: base.user.id,
-        tenantId: 'tenant-one',
-        tenantGeneration: 1,
-        actor: 'user',
-        requestId: 'rename-one',
-      },
-      hostedAuthorization: () => null,
-    };
-    const result = await updateAccountTool.execute({ accountId: other.id, name: '越界' }, ctx);
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: 'not_found', entity: 'Account', id: other.id },
-    });
-    expect(await ctx.repos.account.findById(other.id)).toEqual(other);
-    expect((await updateAccountTool.execute({ name: '本人账户' }, ctx)).ok).toBe(true);
-  });
 });

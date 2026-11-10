@@ -1,736 +1,414 @@
-# luoome 的 DSH 改造详细设计
+# LUOOME / AI Investment OS 整体技术架构与详细设计（去多租户 + 领域零 AI + DSH 深度集成）
 
-> 状态：草案（待外部评审，未实施）。
-> 日期：2026-10-22。
-> 决策来源：用户确认「DSH 是投资入口」并选择「方案 C：移除内置 AI，改为事实包 + 待分析队列，由消费端执行推理」；Q1、Q4、Q5 按建议确认（见 §1.4）。
-> 上位设计：[Luoome × DSH 插件能力平台设计](./dsh-plugin-platform-design.md)（DSH 负责 Agent 执行，Luoome 拥有业务事实、身份、权限、确认、任务与成本账本）。
-> 本文定位：把「单机接入 DSH」「领域层去 AI」「托管消费」三件事整合成一份可评审、可排期的改造总设计。
-> 取代关系：本文整合并取代此前的「DSH 集成设计」草稿与「内置 AI 外置与待分析队列详细设计」；实施完成后，[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md) 中「领域内 LLM 调用点不变」的部分退役。
-> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）；二轮复核见 §15，新发现问题已由 Kimi 按 owner 授权拍板为 Q17 并落实。
-> 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](./hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
-> 影响范围：`core` / `db` / `tools` / `adapters` / `workflows` / `mcp` / `cli` / `tui` / `apps/web` / `apps/worker` / `apps/agent-runtime` / 测试与文档。
+> **基线分支**：`main`（`58ae5b9`）
+> **核心架构决策**：
+> 1. **彻底移除多租户（Hosted / Tenant / Subscription / Billing）体系**，回归纯粹的**单机/自托管（Self-Hosted）、单所有者、多投资账户（Multi-Account）**架构，唯一事实数据库为 `$LUOOME_HOME/luoome.db`。
+> 2. **保留 `main` 分支完整业务底座与技术栈**（Bun Workspace + Hono Web + Drizzle/SQLite + 186 Zod Tools + 确定性 Workflows），不重写为 Next.js / NestJS / PostgreSQL / Redis。
+> 3. **领域层 100% 零 AI 依赖**：移除领域内直接 LLM 调用与静默规则兜底，统一为 **`AnalysisContext`（冻结事实包）→ DSH / 消费端推理 → `record_*` / `complete_*`（强校验写回）**。
+> 4. **DeepSeek Harness (DSH) 作为核心 Agent Runtime**：复用并演进 `main` 已验证的 `packages/dsh-bridge` + `apps/agent-runtime` + `apps/web/src/dsh`，补齐去租户化改造、持久 Session 恢复、`AgentDefinition` 领域模型与多 Agent 权限交集守卫。
 
-## 1. 背景与决策
+---
 
-### 1.1 为什么要改造
+## 一、整体技术架构与定位
 
-luoome 今天同时承担四种角色：领域数据服务、自带 UI 的应用、调度器、以及 AI 推理宿主。前三件与 DSH 大量重复，第四件让领域层直接依赖模型，带来三个具体问题。
+### 1.1 系统定位
 
-**问题一：双推理、双配置、双成本**
+`LUOOME = 投资业务操作系统（确定性事实与账本内核） + DeepSeek Harness（智能推理与多 Agent 运行时）`
 
-- 领域内有 8 处 `ctx.adapters.llm.generate` 和 1 处 `ctx.agent.run`（§2.2）。
-- 模型目录是独立的 `ai-models.json`（`LUOOME_AI_CONFIG`），与 DSH 的模型设置互不相识。
-- 同一句用户提问可能触发「外层对话模型 + tool 内层模型」两次推理，内层看不到对话语境，也无法被用户中途 steer。
-- 成本没有统一账本：托管侧有 `HOSTED_JOB_BUDGET_MICRO` 与 `hosted-model-transport`，单机侧只有 provider 的 `maxRetries`（仓库根 `ai-models.json` 里是 5）。
+- **业务内核（TypeScript / Bun）**：负责行情与财务数据同步、前复权（`qfq`）与 Point-in-Time（PIT）门禁、版本化策略 DSL 求值、严格回测、多来源 Watchlist、AlertPlan 盘中/事件盯盘、账户现金与持仓账本（`Account` / `AccountFacts` / `Holding` / `Trade`）、逐股交易计划（`TradingPlan`）、结构化投资建议（`Advice`）、决策复盘与校准（`DecisionReview`）、以及本地 Obsidian 研究库（`ResearchVault`）。
+- **Agent 运行时（Node / DeepSeek Harness）**：负责 Agent Loop、上下文管理与压缩、模型路由、Skill 装载、Subagent 协同、以及通过受控插件/MCP 调用 LUOOME 业务 Tool。
 
-**问题二：surface 重复**
-
-TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通知通道，都是 DSH 已经提供或更适合提供的能力。继续维护它们，等于用业务团队的时间维护一个二流 agent 宿主。
-
-**问题三：单机与托管分叉**
-
-单机走 CLI/TUI/MCP + 内置 AI；托管走 `apps/web` + `apps/worker`，并已有一条受控的内嵌 DSH Runtime（`packages/dsh-bridge` + `apps/agent-runtime`，D01–D07 开发验收，生产未启用）。两条路径各有各的推理实现，同一份 Advice 的质量口径无法比较。
-
-结论：**领域层只回答「事实是什么」和「结果记下来了吗」；推理交给消费者。单机的消费者是 DSH，托管的消费者是 worker 或内嵌 DSH Runtime。**
-
-### 1.2 DSH 改造的三条线
-
-```text
-线 A  单机接入 DSH        luoome → MCP 数据面 + 面板 + 技能 + 日程，DSH 成为投资入口
-线 B  领域层去 AI         fact context + analysis job + record/complete，领域包零 AI
-线 C  托管与内嵌 DSH      worker 用 ai-runtime 消费队列；未来切换内嵌 DSH Runtime，保留 AI 售卖与计量
-```
-
-三条线共享同一份领域契约：**事实包（context）→ 消费端推理 → 校验写回（record）**。线 A 和线 C 只是两个不同的消费者。
-
-### 1.3 边界：谁负责什么
-
-| 层 | 负责 | 明确不负责 |
-|---|---|---|
-| **DSH（宿主）** | agent loop、模型路由、会话持久化、鉴权、插件树、schedule、subagent、goal/job、审批与沙箱、`present`、技能发现 | 行情、领域模型、回测、投资语义 |
-| **luoome 领域层** | 领域类型与不变量、SQLite、行情/财报/通知/研究适配、策略引擎、Alert/Watch、Advice/Decision 持久化、待分析队列、事实装配、结果校验 | 调用模型、对话、UI、调度、下单 |
-| **消费端**（DSH / worker / 内嵌 DSH） | 领取任务、调用模型、按 schema 产出、写回、通知外发 | 改领域规则、伪造事实、绕过校验 |
-| **ai-runtime**（新包） | 模型目录、AI SDK adapter、provider quirks、hosted 计量传输 | 被领域包 import |
-
-### 1.4 已确认决策
-
-| 编号 | 决策 | 状态 |
-|---|---|---|
-| D1 | DSH 是投资入口，聊天是主要交互面 | 用户已确认 |
-| D2 | 保留 luoome 业务与 Web（托管产品），不重写核心 | 用户已确认 |
-| D3 | 领域层（core/db/tools/workflows/mcp/adapters）零 AI 依赖 | 用户已确认（本文方案 C） |
-| Q1 | 托管消费者先用 `ai-runtime`，接口不变，后续再切内嵌 DSH Runtime | **已确认** |
-| Q4 | 任务完成后的通知由消费者显式调用，领域不触达外部 | **已确认** |
-| Q5 | `advice` sideEffect 在 P5 删除 | **已确认** |
-| Q2 | 交互式建议**不创建** `analysis_job`，以持久化 context 作为审计等价物 | **已确认（与 Q12 对齐）** |
-| Q3 | `analysis_context` 保留期：批量到终态 + 30 天；交互 180 天 | **已确认（与 Q12 对齐）** |
-| Q6 | 存量 Chat 会话本期不迁出领域 | 待定（本期不动） |
-| Q7 | skill 版本标识用 git blob hash | 待定（倾向已定） |
-| Q8 | provenance 记录 model + skillVersion，不记完整参数 | 待定（倾向已定） |
-| Q9 | 线 A 插件包放独立仓库 | 待定 |
-| Q10 | 托管 Chat 先保留 AI SDK | 待定 |
-| Q11 | 消费者面：队列工具声明独立 `queue` capability，由 `LUOOME_EXPOSE_QUEUE` 控制 | **已确认（C）** |
-| Q12 | 交互式 context 持久化 180 天，不随 30 分钟清理 | **已确认（A）** |
-| Q13 | 双消费者先到先得，`claimed_by` 前缀仅用于观测 | **已确认（A）** |
-| Q14 | 托管 Chat 直连 `ai-runtime` 作为显式例外写入 ARCHITECTURE | **已确认（A）** |
-| Q15 | `enqueue_analysis_job` 复用 internal tool 机制（只导出、不进 registry） | **已确认（A，机制已验证）** |
-| Q16 | 线 A 验收写明宿主常驻、DSH 版本下限、节假日静默口径 | **已确认（A）** |
-| Q17 | context 的写回窗口（`write_until`）与审计保留期（`expires_at`）拆分为两个字段 | **已确认（§15.2，Kimi 代为拍板）** |
-
-### 1.5 目标
-
-1. 单机用户打开 DSH 就能完成「盘前 → 盘中 → 盘后 → 研究 → 复盘」的完整闭环，看板与聊天同源。
-2. 领域层零 AI 依赖，可用静态检查证明；模型运行时只存在于消费层。
-3. 所有需要模型产出的结论走同一条契约：事实包 → 推理 → 校验写回；批量任务异步化、可重试、可人工接管。
-4. 每条建议保留可审计来源：`generatorKind`、模型、技能版本、事实包 hash、数据时点、证据 id。
-5. 移除静默降级：不再有「模型失败 → 规则兜底 → 当作正常 Advice 落库」的路径。
-6. 单机与托管共用同一套队列契约，消费者不同、领域事实同一份。
-
-### 1.6 非目标
-
-- 不改行情抓取、技术指标、Strategy 规则引擎、回测、Watch/Alert 的确定性逻辑。
-- 不改 `Advice` 的业务语义（决策、信心度、反例、风险、免责声明、有效期）。
-- 不引入第二套调度器；托管 worker 的持久任务系统继续是唯一后台调度。
-- 不做自动交易；`trade` 永不进入 MCP，也不进入队列结果类型。
-- 不在本期重写 Web 前端；托管 Chat 与看板保持现有交互。
-- 不把 DSH 的插件 API 当作领域契约；领域只认 MCP/网关工具名。
-
-## 2. 事实基线
-
-### 2.1 运行时与执行路径
-
-| 路径 | 入口 | 数据 | 现状 |
-|---|---|---|---|
-| 单机 | `luoome` CLI / TUI / `luoome mcp serve` | `$LUOOME_HOME/luoome.db`（默认 `~/.luoome`） | 自带 AI 与调度；MCP 为 stdio |
-| 托管 | `apps/web`（登录/订阅/租户）+ `apps/worker`（持久任务） | 每租户 SQLite | AI 为付费能力；已有成本账本 |
-| 内嵌 DSH | `apps/agent-runtime`（Node Host）+ `packages/dsh-bridge`（Cordis 插件） | 私有临时 `DSH_HOME` | D01–D07 开发验收；`LUOOME_CHAT_RUNTIME=dsh` 仅开发环境；生产拒绝启动 |
-| 外部 DSH | DSH Web + MCP client | 通过 MCP 访问单机库 | 设计目标（线 A） |
-
-### 2.2 领域内 LLM 调用点（当前工作树）
-
-| 调用点 | 所属 tool | sideEffect | 触发方式 | 备注 |
-|---|---|---|---|---|
-| `analyze-stock.ts:80` | `analyze_stock` | advice | `daily-advice` 批量、chat 草案、CLI/MCP | 单次生成；含规则 fallback |
-| `analyze-position.ts:122` | `analyze_position` | advice | `trading-plan-daily-cycle.ts:495`、chat 草案 | 内层最多 2 次生成 |
-| `market-outlook.ts:147` | `market_outlook` | advice | `risk-report.ts:174`、chat 草案 | 单次生成 |
-| `analyze-strategy-candidate.ts:275` | `analyze_strategy_candidate` | advice | `generate-strategy-recommendations.ts:470`、`:616` | preflight 之后才调用 |
-| `strategy-insight.ts:704` | `generate_strategy_insight` | external | `strategy-daily-cycle.ts:759`、`weekly-report.ts:539`、`strategy-autonomy-weekly.ts:325`、`:493` | 2 次生成，失败降级 facts-only |
-| `strategy-proposal.ts:137` | `generate_strategy_version_proposal` | external | `strategy-autonomy-weekly.ts` | workflow-only；2 次生成 |
-| `investment-workspace.ts:206`、`:454` | `research_investment_directions` | advice | 用户对话/草案确认 | 研究共识生成（内部组合写库与外部数据读取，tool 声明仍为单一 sideEffect） |
-| `agent-run.ts:154` | `agent_run` | external | 用户对话 | `ctx.agent.run`，自定义 agent loop |
-
-### 2.3 批量管线
-
-| 管线 | 触发者 | 最坏模型请求 | 持久化 | 门禁/并发 | 失败语义 |
-|---|---|---|---|---|---|
-| `daily-advice` | 仅 CLI workflow 注册表 | 每持仓 1 次生成 | 每条持仓一条 Advice | 无冷却、无预算、无 WorkflowRun 审计；`Promise.all` 无上限并发（`daily-advice.ts:66`） | 单票 warn + 跳过（`:74`） |
-| `strategy-daily-cycle` | Web/worker 调度 + CLI | insight ≤4 + 推荐 ≤3 只 × 4 | StrategyRun、checkpoint、SignalObservation、Advice、WorkflowRun | schedule lease + heartbeat、同日去重、交易日、checkpoint、publication、preflight 冷却 | insight facts-only → `partial`；推荐失败 → `partial` |
-| `strategy-autonomy-weekly` | 周日定时 + 手动端点 + CLI | 每策略 3 次生成（暂停/归档 insight + proposal） | AutonomyAction、StrategyVersion、evaluation session、WorkflowRun、周报 | 7 天提议冷却、inflight 跳过、new-strategy 周限 1、确定性 runId 幂等 | adapter_error 当周跳过；invalid-output 落 failed 动作 |
-| `weekly-report` | `/api/reports/run/weekly`、CLI、autonomy | 每个有 published run 的策略 1 次 insight | Report（按 kind/scope/period upsert） | 无 LLM 预算；样本 <10、benchmark 缺失显式标注 | insight 失败记 missingDimension；报告 partial |
-| `opening-report` / `closing-report` / `daily-review` | Web/CLI | 0 | Report / 复盘 | — | 无 AI 依赖 |
-
-### 2.4 静默降级路径（必须一并处置）
-
-`LLMManager` 默认 `fallback: 'rules'`（`packages/adapters/src/llm/manager.ts:33`、`:145`）：两次生成失败后返回 MA5/MA20 规则模板，`analyze_stock` 照常落库为 Advice，仅以中文文本常量标记——`RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，由 `isRuleFallbackAdvice` 按 premise 或 evidence 任一命中判定（`packages/core/src/entity/advice.ts:364`）。托管模式用 `fallback: 'throw'`（`apps/web/src/hosted-providers.ts:171`）。
-
-后果：调用方无法区分「模型建议」与「规则兜底」，confidence 校准与命中率统计被污染。改造要求：**没有消费者就不要产生结果**；结果失败必须显式失败，不允许把降级模板当 AI 结论。
-
-### 2.5 配置与装配面
-
-- 唯一模型目录入口：`loadAIModelCatalog`（`packages/adapters/src/llm/model-catalog.ts:282`），路径 `LUOOME_AI_CONFIG` 或 `$LUOOME_HOME/ai-models.json`。
-- 装配点：`packages/cli/src/context.ts:99`、`packages/tui/src/index.ts:50`、`packages/mcp/src/context.ts:69`、`apps/web/src/server.ts:291`、`:1534`、`apps/web/src/hosted-providers.ts:168`、`:215`、`apps/web/src/hosted-ai-settings.ts:608`。
-- `ToolContext.adapters.llm` 是必填（`packages/core/src/context.ts:284`、`packages/tools/src/context.ts:30`）；`llmOperationScope` / `llmExecution` 用于托管计量包裹（`packages/core/src/context.ts:264`）。
-- 托管计量权威清单：`hostedLLMToolNames`（`packages/adapters/src/llm/hosted-meter.ts:33`），含 7 个领域 AI tool + `agent_run` + `hosted_chat_stream`。
-
-### 2.6 数据与分类现状
-
-- `Advice` 必填字段：`id`、`subjectKind`、`subjectId`、`decision`、`confidence`、`horizon`、`reasoning`、`risks`、`disclaimers`、`basedOn.dataAsOf`、`validFrom`、`validUntil`、`createdAt`（`packages/core/src/entity/advice.ts:111`、`AdviceSchema` 在 `:334`）。
-- 不变量：`assertAdviceInvariants`（`packages/core/src/entity/invariants.ts:47`），含 confidence 范围、免责声明必含 `STANDARD_DISCLAIMERS`、有效期顺序、入场区间与止损/目标价关系。
-- 有效期映射：`adviceExpiryDays`（`advice.ts:42`）。
-- `SideEffect` 五值：`read | write | external | advice | trade`（`packages/core/src/types/side-effect.ts:7`）。
-- MCP 暴露：`resolveAllowedSideEffects` 默认 `{read, advice}`，`LUOOME_EXPOSE_WRITE/EXTERNAL` 整组追加，`LUOOME_EXPOSE_TRADE=true` 启动抛错（`packages/mcp/src/exposure.ts:26`）；唯一的按名过滤是 `server.ts:69` 的 `research` 子串。
-
-### 2.7 已有 DSH 资产（不要重复建设）
-
-| 资产 | 位置 | 可复用点 |
-|---|---|---|
-| 原生 Cordis 插件 + Tool Manifest | `packages/dsh-bridge/src/plugin.ts` | `ctx.tools.register`、`ctx.llm.registerAdapter`、`ctx.systemPrompt.section`、事件桥 |
-| Node SDK Host | `apps/agent-runtime/src/host.ts` | 受限 Profile、私有 `DSH_HOME`、进程隔离、run 生命周期、取消 |
-| 模型计量代理 | `packages/adapters/src/llm/hosted-model-transport.ts`、`hosted-meter.ts` | 先准入再发送、流结束结算、unknown 费用恢复 |
-| 工具 Gateway | `packages/dsh-bridge/src/http.ts`、`apps/web/src/dsh/` | 固定 loopback、认证、manifestHash 绑定、callId 身份 |
-| 固定组合与构建 | `infra/dsh/`、`bun run build:dsh` / `test:dsh` | 依赖固定、完整性哈希、受控验证 |
-
-## 3. 目标架构
-
-### 3.1 总图
+### 1.2 逻辑与物理架构总图
 
 ```mermaid
-flowchart TD
-    subgraph Consumers[消费端：唯一允许调用模型]
-        DSH[外部 DSH：Web + MCP + skills]
-        HOSTED[托管 worker：ai-runtime]
-        EMB[内嵌 DSH Runtime：未来]
+flowchart TB
+    subgraph Surfaces["交互入口层 (Surfaces)"]
+        WEB_UI["Luoome Web SPA<br/>(看板 / 行情 / 策略工作台 / 持仓 / 复盘 / 研究 / AI 对话)"]
+        CLI_TUI["CLI / TUI<br/>(命令行与终端盯盘)"]
+        EXT_DSH["外部 DSH 客户端 (可选)<br/>(DSH Web + Skills)"]
     end
 
-    subgraph Domain[luoome 领域层：零 AI]
-        TOOLS[tools：事实读取 / 队列 / 校验写回]
-        WF[workflows：确定性编排]
-        JOB[(analysis_job)]
-        CTX[(analysis_context)]
-        ADV[(advice / research / autonomy / report)]
+    subgraph AppLayer["应用与网关层 (Bun Process: apps/web)"]
+        HONO["Hono HTTP / SSE API<br/>(同源校验 + 能力开关 + 账户上下文绑定)"]
+        SCHED["内置确定性调度器<br/>(盘中盯盘 / 盘后日循环 / 报告 / 观察补全)"]
+        GW["DSH ToolGateway & Event Projection<br/>(Callable 闭包 / 草案包装 / 会话锁 / 事件对齐)"]
+        MODEL_PROXY["本地模型观测代理<br/>(Token / 耗时统计，无多租户预占账本)"]
     end
 
-    subgraph Data[数据与适配]
-        DB[(SQLite)]
-        MKT[行情 / 财报 / 通知 / 研究适配]
+    subgraph AgentRuntime["AI Agent Runtime (Node Process: apps/agent-runtime)"]
+        HOST["NodeRuntimeHost<br/>(实例池 / 受限 Profile 校验 / 生命周期管理)"]
+        DSH_CORE["DeepSeek Harness Runtime<br/>(Agent Loop / Session / Subagent / Skills)"]
+        CORDIS["@luoome/dsh-bridge (Cordis Plugin)<br/>(动态 Tool 注册 / Pre-execute Guard / 实时流桥接)"]
     end
 
-    TOOLS --> DB
+    subgraph DomainLayer["领域与工具层 (100% 零 AI 依赖)"]
+        WF["@luoome/workflows<br/>(确定性编排：仅通过 ctx.tools.* 调用)"]
+        TOOLS["@luoome/tools<br/>(Zod Schema 驱动：read / write / external / queue / trade)"]
+        CORE["@luoome/core<br/>(纯领域实体 / 不变量 / 策略 AST / 回测引擎 / 账本计算)"]
+        DB["@luoome/db<br/>(Drizzle ORM + In-Memory 双实现 / 事务与租约)"]
+        ADAPTERS["@luoome/adapters<br/>(SourceRegistry：东财/腾讯/新浪/扶摇/雪球/飞书/Obsidian)"]
+    end
+
+    subgraph Storage["持久化与外部依赖"]
+        SQLITE[("$LUOOME_HOME/luoome.db<br/>(唯一 SQLite 事实库)")]
+        VAULT[("Obsidian Research Vault<br/>(本地 Markdown 权威源)")]
+        PROVIDERS["外部行情 API / 飞书 Webhook / 模型 API"]
+    end
+
+    WEB_UI --> HONO
+    CLI_TUI --> TOOLS
+     CLI_TUI --> WF
+    EXT_DSH -->|MCP stdio: read / queue| TOOLS
+
+    HONO --> TOOLS
+    HONO --> WF
+    HONO --> GW
+    SCHED --> WF
+
+    GW <-->|stdio JSON-RPC / HTTP Events| HOST
+    HOST --> DSH_CORE
+    DSH_CORE --> CORDIS
+    CORDIS -->|HTTP Loopback ToolCall| GW
+    CORDIS -->|LLM Stream Request| MODEL_PROXY
+    MODEL_PROXY --> PROVIDERS
+
     WF --> TOOLS
-    TOOLS --> JOB
-    JOB --> CTX
-    DSH -->|MCP 只读面| TOOLS
-    DSH -->|MCP 消费者面：claim/complete| TOOLS
-    HOSTED -->|Gateway：claim/complete| TOOLS
-    EMB -->|Gateway：claim/complete| TOOLS
-    TOOLS --> ADV
-    MKT --> TOOLS
+    TOOLS --> CORE
+    TOOLS --> DB
+    TOOLS --> ADAPTERS
+    DB --> CORE
+    ADAPTERS --> CORE
+
+    DB --> SQLITE
+    ADAPTERS --> VAULT
+    ADAPTERS --> PROVIDERS
 ```
 
-### 3.2 角色分工
+### 1.3 技术栈定案表
 
-| 角色 | 负责 | 不负责 |
+| 层次 | 选定技术 | 架构依据 |
 |---|---|---|
-| 领域生产者 | 判定「哪些标的需要分析」、装配确定性事实、入队 | 调用模型、生成叙事 |
-| `analysis_job` | 持久化待办、去重、优先级、租约、重试、终态 | 存模型输出 |
-| `analysis_context` | 保存事实包快照、hash、事实 id、过期 | 存模型文本 |
-| 消费者 | 领取任务、调用模型、按 schema 产出、写回、外发通知 | 改领域规则、伪造事实 |
-| `record_*` / `complete_*` | 校验结果、计算有效期/免责声明、落库、推进状态 | 生成内容 |
-| DSH / 托管 worker | 提供会话、预算、技能、调度 | 持有领域事实 |
+| **主力运行时与包管理** | **Bun (`>=1.3.0`) + Bun Workspace** | 极速启动、原生支持 TypeScript 与 `bun:sqlite`，现有 4,000+ 测试基线零迁移成本 |
+| **Agent 宿主运行时** | **Node.js (`>=22.19` / `24`)** | DSH SDK 依赖 `process.execPath` 与 Node 原生模块，由独立 `apps/agent-runtime` 承载 |
+| **Web 服务与前端** | **Hono + 原生 HTML/CSS/JS + Lightweight Charts** | 零构建膨胀、同源部署、已完整实现策略工作台/看板/持仓/复盘/聊天确认卡 |
+| **Agent 引擎与插件** | **DeepSeek Harness (`0.2.1-rc.2`) + Cordis (`4.0.5`)** | 复用成熟 Agent Loop、Session JSONL 持久化、Skill 加载与 Subagent 机制 |
+| **ORM 与数据库** | **Drizzle ORM + SQLite (`$LUOOME_HOME/luoome.db`)** | 单文件零运维，支持 `IMMEDIATE` 原子账本事务、Fencing Token 租约与 FTS5 全文检索 |
+| **契约与参数校验** | **Zod (`4.x`)** | 单一事实来源：自动派生 TypeScript 类型、MCP Schema、OpenAI Schema 与 DSH Tool 参数 |
+| **任务队列与并发控制** | **SQLite 持久表 (`analysis_jobs` / `strategy_run_leases`)** | 利用 SQLite 串行写事务 + 部分唯一索引 + Fencing Token 实现去重、租约与死信，无需 Redis/BullMQ |
 
-### 3.3 依赖规则（可静态检查）
+---
 
-```text
-core ← db, adapters
-core ← tools ← workflows, mcp
-apps/* ← tools, ai-runtime, dsh-bridge
-core / db / tools / workflows / mcp / adapters  ⟂  ai-runtime, ai, @ai-sdk/*, @deepseek-ai/*
-```
+## 二、去多租户化（Multi-Tenant Removal）详细设计
 
-计划在仓库根新增 `scripts/check-layers.ts`（扫描 import），并接入 `bun run lint` 或独立 `bun run check:layers`。这比依赖人工 review 可靠。
+### 2.1 为什么要移除多租户及其架构收益
 
-白名单：`apps/web`、`apps/worker` 允许 import `@luoome/ai-runtime`；领域包零容忍。托管 Chat 直连 `ai-runtime` 是显式例外，已写入 `docs/ARCHITECTURE.md`（Q14）。
+在 `main` 分支中，为支持“个人订阅托管版（Hosted）”引入了双数据库拓扑（`control.sqlite` + 每租户 `tenant-id/luoome.db`）、邮箱 OTP 登录、套餐版本（`PlanVersion`）、订阅周期（`SubscriptionPeriod`）、支付回调、跨库 Outbox/Inbox 对账、预占计费账本（`hosted-meter`）以及单默认账户限制。
 
-### 3.4 三条线的顺序
+移除多租户后，系统回归**自托管单所有者（Single-Owner）+ 本地多投资账户（Multi-Account）**模型：
+1. **存储合一**：废除 `control.sqlite` 与租户目录树，全局唯一数据库为 `$LUOOME_HOME/luoome.db`。
+2. **多账户能力完全释放**：Web 端与 CLI/MCP 一致，支持创建和切换多个投资账户（如“A 股主账户”、“高股息子账户”、“模拟实验账户”），通过请求头 `x-luoome-account-id` 或参数指定 `accountId`。
+3. **移除跨库补偿复杂度**：不再有平台 `HostedJob` 与业务 `WorkflowRun` 的跨库双写对账，所有异步任务（`WorkflowRun`、`AnalysisJob`）与业务事实处于同一 SQLite 事务边界内。
+4. **DSH 调用链大幅精简**：`GatewayExecutionScope` 不再需要校验 `tenantId`、`tenantGeneration`、订阅有效性与微元（micro-CNY）预占冻结，只需校验 `runId`、`conversationId`、`accountId`、`manifestHash` 与能力边界。
 
-```text
-P0 决策冻结
-  → 线 A 最小闭环（MCP 只读 + 面板 + 技能）：先让单机用户用起来
-  → 线 B 实体与队列工具：不改变现有行为
-  → 线 B 生产者切换：双轨开关，可回滚
-  → 线 B/C 消费者：DSH + worker
-  → 线 B 摘除领域 AI
-  → 线 C 迁移内嵌 DSH Runtime（后续版本）
-```
+### 2.2 逐包清理与重构清单
 
-先做线 A 的原因：它不依赖队列，1–2 天可验证「聊天就是入口」这个假设；假设不成立时，线 B 的投入可以延后。
-
-## 4. 改造线 A：单机接入 DSH
-
-### 4.1 目标体验：五个闭环
-
-| 闭环 | 触发 | 输入 | 产物 | 责任方 |
-|---|---|---|---|---|
-| 盘前 | 交易日 08:45 | 隔夜新闻、持仓、关注列表、策略信号、数据健康 | 今日简报和计划 | DSH schedule → skill |
-| 盘中 | 规则命中或定时检查 | AlertPlan、WatchTrigger、行情 | 分级告警和判断 | 确定性预筛（luoome）+ 事件唤醒 DSH |
-| 盘后 | 交易日 15:30 | 当日盈亏、成交、建议后续表现 | 复盘和明日计划 | DSH schedule → skill |
-| 研究 | 用户提问 | 新闻、财报、指标、研究库 | 深度报告，可落库 | DSH 会话 / subagent |
-| 复盘/校准 | 周/月 | Advice 结果、DecisionReview | 命中率、错误归因、纪律检查 | DSH schedule、面板 |
-
-只有「判断」需要模型，其余都能确定性完成；两类自动化不能混在一个循环里。
-
-### 4.2 接入载体
-
-| 载体 | DSH 机制 | 承接 | 风险 |
-|---|---|---|---|
-| agent 工具 | MCP（`@deepseek-ai/dsh-mcp-client`） | 读事实、队列消费、写回 | 写面必须显式 opt-in |
-| 人看的面板 | Client 插件（`ctx.slots`） | 持仓、触发、建议、策略、复盘 | 私人数据必须走 harness 认证路径 |
-| 行为约束 | `ctx.systemPrompt.section()` | advice≠trade、先反证后结论、confidence 语义 | 措辞不当会让 agent 越界表态 |
-| 技能 | `.dsh/skills`（`dsh-skill-filesystem`） | 晨报、复盘、深挖、队列消费 | 技能本身不授予权限 |
-| 定时 | DSH schedule / 宿主常驻 | 判断型定时任务 | 需宿主常驻、绑定原会话 |
-| 事件 | host plugin 轮询 + 会话唤醒 | 盯盘触发 | 需去重、静默、分级 |
-
-### 4.3 MCP 暴露面
-
-当前 inventory（2026-10-22 工作树实测，`bun packages/cli/src/index.ts tools list --json`）：186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`。默认暴露 `read + advice`（95 个，扣除 research 名后 83 个）。目标：
-
-| 层 | 暴露内容 | 说明 |
+| 包 / 目录 | 直接删除的文件 / 模块 | 保留并重构的文件 / 模块 |
 |---|---|---|
-| L0 只读 | read 面 | 聊天、看板、研究 |
-| L1 消费者 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`record_advice`、`record_analysis_result`、`get_analysis_context`、`get_analysis_metrics` | 单独 MCP 实例；`LUOOME_EXPOSE_QUEUE=true`（Q11） |
-| L2 写面 | 64 个 write | 默认关；按需开，依赖 DSH approval |
-| L3 external | 26 个 | 拆组：行情/同步可开；`send_notification`、外部导入不开 |
-| L4 trade | 0 | luoome 服务端硬卡，DSH 无绕过 |
+| **`packages/core`** | 删除 `src/hosted/` 整个目录（`auth.ts`、`llm.ts`、`notification.ts`、`payment-port.ts`、`payments.ts`、`platform.ts`、`privacy.ts`、`report-automation.ts`、`repository.ts`、`tenant.ts` 及测试）；删除 `src/public-market-store.ts` | 修改 [`src/index.ts`](file:///Users/lijun/project/luoome/packages/core/src/index.ts) 移除 `hosted/*` 导出；修改 [`src/context.ts`](file:///Users/lijun/project/luoome/packages/core/src/context.ts) 移除 `identity`、`hostedAuthorization`、`llmOperationScope`、`llmExecution` |
+| **`packages/db`** | 删除 `src/hosted/` 整个目录（35 个文件，含 `platform-*`、`tenant-*`、`public-market-*`、`report-automation-*`、`watch-delivery-*`） | 保留 `src/schema/index.ts`、`src/client.ts`、`src/repository/`（标准单机 Drizzle + In-Memory 双实现） |
+| **`packages/adapters`** | 删除 `src/hosted/` 整个目录（`email-otp.ts`、`payment.ts`、`smtp.ts`、`notification.ts`）；删除 `src/llm/hosted-meter.ts` 与 `src/llm/hosted-model-transport.ts` 及其测试 | 将 `src/llm/` 中的模型目录（`model-catalog.ts`）与 AI SDK 适配器迁移至独立包 `packages/ai-runtime` |
+| **`packages/tools`** | 删除 `src/hosted/`（12 个文件）、`src/platform/`（22 个文件）、`src/tools/hosted-tenant.ts` 及测试；删除 `src/tools/update-account.ts` 中的 hosted 单账户限制 | 保留 `src/registry.ts` 与全部业务 Tool；恢复 `create_account` 在 Web 端的可用性 |
+| **`packages/workflows`** | 删除 `src/hosted-reports.ts`、`src/hosted-strategy.ts` 及 5 个 `hosted-*.test.ts` | 保留全部标准业务 Workflow（`strategy-daily-cycle`、`trading-plan-daily-cycle`、`intraday-watch` 等） |
+| **`apps/web`** | 删除 `src/hosted-*.ts` 及 `src/hosted-*.test.ts`（共 25 个文件）；删除 `src/dsh/hosted-stream.ts`；删除 `public/hosted/` 目录及 `public/js/hosted-*.js`（5 个文件） | 重构 [`src/server.ts`](file:///Users/lijun/project/luoome/apps/web/src/server.ts)：移除 `options.hosted` 分支，恢复 `startWeb` 直接使用 `buildWebContext(resolveDbPath())` 启动 `Bun.serve` 并挂载进程内可选调度器；精简 `src/dsh/` |
+| **`apps/worker`** | 删除基于 `openHostedService` 的租户轮询逻辑（`src/index.ts`、`src/operations.ts`、`src/reports.ts`、`src/strategy.ts`、`src/watch.ts`、`src/fixture-load.ts`） | 重构为**单机后台 Worker（可选独立进程）**：直接连接 `$LUOOME_HOME/luoome.db`，执行定时 Workflow 与 `AnalysisJob` 队列消费 |
 
-新增通用开关：
+### 2.3 `ToolContext` 与 `startWeb` 恢复后的契约
 
-- `LUOOME_EXPOSE_TOOLS`：逗号分隔 allowlist；
-- `LUOOME_EXPOSE_DENY`：deny 优先。
+移除多租户与内置 AI 端口后，[`packages/core/src/context.ts`](file:///Users/lijun/project/luoome/packages/core/src/context.ts) 中的 `ToolContext` 收敛为纯净的确定性上下文：
 
-规则：
-
-```text
-allowed = (requiredCapabilities ?? [sideEffect]) ⊆ allowedSideEffects
-        ∧ (allowlist 为空 ∨ name ∈ allowlist)
-        ∧ (name ∉ denylist)
-```
-
-这替代现在 `server.ts:69` 的 `research` 子串特判。
-
-### 4.4 系统提示词纪律
-
-DSH 侧至少注入以下约束（保留原文，便于评审）：
-
-1. 谈具体标的时先取事实再下结论，不要凭记忆报价格、涨跌幅或财报数字；取不到就直说取不到。
-2. `advice` 不等于 `trade`；没有下单能力，永远不说「已买入/已卖出」；给出的是带条件的建议与观察计划。
-3. 引用建议时保留反证、风险、免责声明和有效期；`confidence` 是模型信心度，不是概率，更不是确定性。
-4. 区分 `StrategySignal`、`Advice` 和成交记录，不要把信号说成建议，也不要把建议说成已执行。
-5. 讨论「要不要买」时，先给反面证据，再给结论，最后给可证伪的观察条件（价位、量能、失效条件）。
-6. 侧栏面板与工具是同一份数据；聊天里读到的，面板会同步显示。
-
-### 4.5 面板（只读投影）
-
-| 面板 | 内容 | 数据来源 |
-|---|---|---|
-| 投资看板 | 账户与资产概览、持仓表（现价/涨跌/成本/市值/浮盈/今日盈亏）、盯盘触发、既有建议（决策/信心度/证据/反证/风险/免责声明/有效期）、关注列表 | `list_holdings`、`list_watch_triggers`、`get_advice`、`list_watchlists` |
-| 策略 | 策略清单、状态、当前版本、更新时间、盯盘健康度 | `list_strategies`、`get_watch_status` |
-| 复盘（后续） | 建议命中率、T+n 观察、待补齐观察 | `get_advice_stats`、`list_pending_strategy_observations` |
-
-约束：
-
-- 面板只做投影，不自己算数；数字必须与工具输出逐位一致。
-- 数据通道走 harness 的 `/api` 路由（`ctx.connection.fetch.register`），继承浏览器认证与 Origin 栅栏，不自建裸端口。
-- 不在插件里重建 163 条路由的完整 Web 后台；深度管理留给托管 Web 或命令行。
-
-### 4.6 技能目录
-
-| skill | 触发 | 行为 |
-|---|---|---|
-| `analysis-worker` | 手动或 host plugin 唤醒 | `claim` → 推理 → `record_advice`/`complete`；失败 `fail`；输出摘要 |
-| `morning-brief` | 交易日 08:45 | 读事实 → 生成本日简报 → `save_report` / `present` |
-| `post-close-review` | 交易日 15:30 | 复盘、建议兑现、`record_advice_outcome` |
-| `stock-deep-dive` | 用户提问 | 事实 + 研究检索 + 可选 `record_advice` |
-| `decision-journal` | 用户记录决策 | 落 DecisionReview，保留当时依据与失效条件 |
-
-技能文件放工作区 `.dsh/skills/<name>/SKILL.md`，frontmatter 必填 `name`、`description`；技能正文用 git 管理，版本号用 blob hash 记录进 provenance。
-
-写回约定：凡调用 `record_advice` / `record_analysis_result` / `complete_analysis_job` 的 skill，遇到 `context_expired` / `stale_context` 时必须先用 `get_analysis_context` 重取事实包并重试一次，不得直接放弃或沿用旧事实；重试仍失败才向用户报告。该流程固化在技能正文里，不留给模型自由发挥。
-
-### 4.7 日程、事件与常驻
-
-两类自动化必须分开：
-
-| 类型 | 例子 | 载体 | 花 LLM |
-|---|---|---|---|
-| 确定性定时 | 行情预热、策略日循环、观察补全、成交清算 | host 插件 `ctx.interval` 调 MCP tool（或 launchd + CLI） | 否 |
-| 判断型定时 | 早报、收盘复盘、周报 | DSH `schedule` → skill | 是 |
-| 事件驱动 | 盯盘规则命中 | luoome 规则预筛 + host 插件轮询 + 会话唤醒 | 命中才花 |
-
-已知限制（来自 DSH 0.2.1-rc.2）：
-
-- schedule 绑定创建它的会话；日程要集中在一个「投资主会话」里。
-- 宿主必须常驻；重复任务只补最近一次；headless 不能挂 schedule。
-- 子会话创建 schedule 会被拒绝。
-- 没有交易日历：cron 只按星期过滤，节假日由 skill 在开头查 `get_market_data_status` 后静默退出。
-
-兜底：不能保证电脑常开时，用 launchd + `dsh --profile headless` 做日报/复盘（headless 只读 env/`.env`），再用 luoome 的通知 adapter 外发。
-
-### 4.8 工作区与安全
-
-- **工作区分离**：投资工作区（如 `~/invest`）与 luoome 代码仓库分开，避免把编码 AGENTS.md 注入投资会话、避免会话历史混在一起。
-- **认证**：DSH Web 默认只监听 loopback + token + Host/Origin 栅栏；远程访问走 SSH 隧道或 Tailscale，不直接暴露。
-- **私有数据**：持仓/成交会进入模型上下文，这是使用云端推理的固有边界；只传分析必需字段，不上传账户号，不把密钥放进提示词。
-- **写面**：默认只读；写操作单独实例 + allowlist；`trade` 永不暴露。
-- **建议边界**：所有建议保留反证、风险、免责声明、有效期；不把 confidence 说成概率。
-
-### 4.9 线 A 验收
-
-1. 新会话问「我的持仓和今日盈亏」，数字全部来自 tool 且带 `dataAsOf`；面板同源。
-2. 连续 3 个交易日自动产出晨报/复盘；非交易日零输出。
-3. 盘中触发 60 秒内出现在会话或面板；同一触发不重复。
-4. 写工具在只读实例中不可见；消费者实例只看到 `queue` capability 的队列工具。
-5. 面板/技能失效不影响聊天读事实。
-
-验收前置条件（Q16）：
-
-- DSH 固定为 `0.2.1-rc.2`（或经评审的更高版本），升级后重跑本组验收。
-- 宿主常驻（`dsh web` 后台进程或 launchd 守护）；休眠导致漏触发时按“最近一次补发”记录，不视为失败。
-- 节假日判定：skill 在交易日检查失败时静默退出并记录 `skipped: non-trading-day`，该次计入“非交易日零输出”，不占用“连续 3 个交易日”的计数。
-
-## 5. 改造线 B：领域层去 AI
-
-### 5.1 边界与包职责
-
-| 包 | 是否允许 AI | 说明 |
-|---|---|---|
-| `packages/core` | 否 | 只保留领域类型、不变量与事实包 schema；删除 `LLMAdapterLike` / `AgentRuntimeLike` |
-| `packages/db` | 否 | 只做持久化 |
-| `packages/tools` | 否 | 工具只读事实或写结果；不调用模型 |
-| `packages/workflows` | 否 | 编排只产任务、消费结果；不调用模型 |
-| `packages/mcp` | 否 | 只暴露 tool |
-| `packages/adapters` | 否（仅行情/财报/通知/研究） | `llm/` 目录整体迁出 |
-| **`packages/ai-runtime`（新）** | 是 | 从 `adapters/llm` 抽出的模型运行时；只允许 `apps/*` 导入 |
-| `apps/web`（托管） | 是 | 对话与 AI 设置是产品能力，走 `ai-runtime` |
-| `apps/worker`（托管） | 是 | 待分析队列的托管消费者 |
-| `apps/agent-runtime` + `packages/dsh-bridge` | 是 | 已存在的内嵌 DSH 执行路径，可承接托管消费 |
-| `packages/cli` / `packages/tui` | 否 | 单机推理交给外部 DSH；本地不再配置模型 |
-
-### 5.2 三件套
-
-| 组件 | 作用 |
-|---|---|
-| `analysis_job` | 待办：kind、去重键、优先级、租约、attempts、dead-letter |
-| `analysis_context` | 事实包快照：`facts`、`factIds`、`dataAsOf`、`contextHash`、过期 |
-| `record_*` / `complete_*` | 校验后落库：证据必须来自事实包；免责声明、有效期、id 由领域计算 |
-
-### 5.3 领域模型
-
-#### 5.3.1 `AnalysisJob`
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | text PK | uuid |
-| `kind` | text enum | 见下 |
-| `source` | text enum | `workflow` / `tool` / `schedule` / `chat` |
-| `account_id` | text | 账户隔离键 |
-| `subject_kind` / `subject_id` | text | 分析对象；market 类用 `market` + 范围标识 |
-| `priority` | integer | 0–100，越大越先；默认按 kind |
-| `dedupe_key` | text | `sha256(kind|account|subject|tradingDate|options 规范序)` |
-| `payload_json` | text json | 确定性参数（policy、runId、window 等） |
-| `data_as_of` | integer ms | 事实截止时间；过期任务不再可领 |
-| `status` | text enum | `pending / claimed / completed / failed / dead_letter / cancelled` |
-| `attempts` / `max_attempts` | integer | 默认 3 |
-| `claim_token` | text nullable | fencing token，每次领取写入新 uuid |
-| `claimed_by` | text nullable | `dsh:session-xxx`、`hosted:worker-1` |
-| `lease_until` | integer ms nullable | 租约到期 |
-| `context_id` | text nullable | 领取时生成的事实包 |
-| `result_json` / `error_json` | text json nullable | 终态摘要 / 最近失败 |
-| `created_at` / `updated_at` / `finished_at` | integer ms | 审计 |
-
-`kind` 枚举：
-
-```text
-advice_stock / advice_position / advice_market / advice_strategy_candidate
-research_directions / strategy_version_proposal / strategy_insight_narrative
-```
-
-不变量：
-
-- `dedupe_key` 在 `status IN ('pending','claimed')` 内唯一；终态不占用，允许次日再入队。
-- `status='claimed'` 时 `claim_token`、`claimed_by`、`lease_until` 必填；其他状态必须为空。
-- `result_json` 只在 `completed` 存在。
-- `kind` 与 `subject_kind` 必须匹配。
-- `data_as_of` 不得由消费者修改。
-
-#### 5.3.2 `AnalysisContext`
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | text PK | uuid |
-| `job_id` | text nullable | 批量任务；交互式为空 |
-| `kind` / `account_id` / `subject_kind` / `subject_id` | text | 与 job 一致 |
-| `data_as_of` | integer ms | 事实截止 |
-| `facts_json` / `fact_ids_json` | text json | 结构化事实 / 可引用事实 id |
-| `context_hash` | text | `sha256(canonical(facts_json) + data_as_of)` |
-| `write_until` | integer ms | 写回接受截止：交互 = min（装配后 30 分钟，当交易日 15:00）；批量 = 任务终态（Q17） |
-| `expires_at` | integer ms | 审计保留期，过期后可物理清理；批量：任务终态 + 30 天；交互：180 天（Q12/Q17） |
-| `created_at` | integer ms | — |
-
-事实包通用形状：
-
-```json
-{
-  "kind": "advice_stock",
-  "dataAsOf": "2026-10-22T07:10:00.000Z",
-  "subject": { "kind": "stock", "id": "600519.SH", "name": "贵州茅台" },
-  "facts": [
-    { "id": "quote:600519.SH", "label": "最新行情", "value": { "...": "..." }, "evidenceIds": ["e1"] }
-  ],
-  "limitations": ["quote retrieval 时间不连续，不作为盘中行动依据"],
-  "factIds": ["quote:600519.SH", "indicators:600519.SH", "position:...", "strategy:...", "preflight:..."]
+```ts
+// packages/core/src/context.ts
+export interface ToolContext {
+  readonly repos: RepositoryRegistry;
+  readonly adapters: {
+    readonly market: MarketDataAdapterLike;
+    readonly stockUniverse?: StockUniverseManagerLike;
+  };
+  readonly notification?: NotificationManagerLike;
+  readonly eventProviders?: readonly StockEventProviderLike[];
+  readonly limitUpLadder?: LimitUpLadderManagerLike;
+  readonly dragonTiger?: DragonTigerManagerLike;
+  readonly northboundFlow?: NorthboundFlowManagerLike;
+  readonly news?: NewsManagerLike;
+  readonly sectorQuote?: SectorQuoteManagerLike;
+  readonly ashareSentiment?: AShareSentimentManagerLike;
+  readonly researchVault?: ResearchVaultAdapterLike;
+  readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
+  readonly researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
+  readonly fundamentalData?: FundamentalDataAdapterLike;
+  readonly portfolioBenchmark?: {
+    readonly stockId: string;
+    readonly name: string;
+  };
+  readonly user: {
+    readonly id: string;
+    readonly defaultAccountId: string;
+  };
+  readonly clock: () => Date;
+  readonly logger: Logger;
+  readonly auditLog?: AuditLoggerLike;
+  readonly auditCaller?: string;
+  readonly reportExecutionOwner?: string;
+  readonly abortSignal?: AbortSignal;
 }
 ```
 
-要求：
-
-- 事实只来自确定性数据（行情、指标、持仓、策略事实、preflight 结果、既有建议），不得包含模型生成文本。
-- 每个事实有稳定 `id`，跨多次生成可比较。
-- `dataAsOf` 反映最旧关键事实的时点，而不是装配时刻。
-- `limitations` 必填，至少列出数据缺失/降级。
-- 过期语义（Q17 拆分）：`write_until` 之后不再接受新的写回（返回 `context_expired`，skill 按 §4.6 重取约定处理）；`expires_at` 只约束审计保留与物理清理，保留期内可按 id 读取。批量任务终态后，`record_advice(contextId)` 直传路径同样拒绝写回（不只靠 job 状态机拦截）。交互式 context 不随会话结束清理（Q12）。
-
-#### 5.3.3 `AnalysisProvenance`
+[`apps/web/src/server.ts`](file:///Users/lijun/project/luoome/apps/web/src/server.ts) 的 `startWeb` 恢复为直接加载本地单库 `$LUOOME_HOME/luoome.db`：
 
 ```ts
-interface AnalysisProvenance {
-  readonly generatorKind: 'dsh-chat' | 'dsh-headless' | 'hosted-worker' | 'embedded-dsh' | 'manual' | 'legacy-ai';
-  readonly model?: string;          // provider:model
-  readonly skillVersion?: string;   // 技能文件 git blob hash / frontmatter version
-  readonly promptHash?: string;     // 可选
-  readonly sessionRef?: string;     // DSH session id 或托管 runId
-  readonly contextId?: string;
-  readonly jobId?: string;
-  readonly evidenceFactIds: readonly string[];
+// apps/web/src/server.ts
+export interface StartWebOptions {
+  readonly port: number;
+  readonly host?: string;      // 默认 '127.0.0.1'
+  readonly dbPath?: string;    // 默认 resolveDbPath() -> ~/.luoome/luoome.db
+  readonly enableScheduler?: boolean; // 默认 true（交易时段盯盘 + 盘后策略/计划/报告 tick）
+}
+
+export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
+  const dbPath = options.dbPath ?? resolveDbPath();
+  const ctx = await buildWebContext(dbPath, process.env);
+  const app = createWebApp(ctx, {
+    exposeWrite: process.env.LUOOME_EXPOSE_WRITE === 'true',
+    exposeExternal: process.env.LUOOME_EXPOSE_EXTERNAL === 'true',
+    // 注入本地设置 Store（行情源、飞书、Research Vault、AI Runtime 配置）
+  });
+  const server = Bun.serve({
+    hostname: options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1',
+    port: options.port,
+    idleTimeout: WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+    fetch: app.fetch,
+  });
+  // 按配置启动进程内确定性调度器（使用 SQLite Lease 防多进程重入）
+  ...
+};
+```
+
+---
+
+## 三、业务内核与量化数据底座详细设计
+
+### 3.1 业务域模块与核心实体全集
+
+在 `packages/core`、`packages/db`、`packages/tools`、`packages/workflows` 纵向分层下，系统包含 8 个正交业务域（保持 `main` 已验证的领域模型不变）：
+
+| 业务域 | 核心领域实体 (`packages/core/src/entity/`) | 核心职责与不变量 |
+|---|---|---|
+| **1. 行情与市场事实 (Market & Events)** | [`Stock`](file:///Users/lijun/project/luoome/packages/core/src/entity/stock.ts), [`StockUniverseSnapshot`](file:///Users/lijun/project/luoome/packages/core/src/entity/stock-universe.ts), [`Quote`](file:///Users/lijun/project/luoome/packages/core/src/entity/quote.ts), [`DailyBar`](file:///Users/lijun/project/luoome/packages/core/src/entity/quote.ts), [`MinuteBar`](file:///Users/lijun/project/luoome/packages/core/src/entity/minute-bar.ts), [`LimitUpLadder`](file:///Users/lijun/project/luoome/packages/core/src/entity/limit-up-ladder.ts), [`AShareSentimentSnapshot`](file:///Users/lijun/project/luoome/packages/core/src/entity/ashare-sentiment.ts), [`DragonTigerList`](file:///Users/lijun/project/luoome/packages/core/src/entity/dragon-tiger.ts), [`NorthboundFlowSeries`](file:///Users/lijun/project/luoome/packages/core/src/entity/northbound-flow.ts), [`StockEvent`](file:///Users/lijun/project/luoome/packages/core/src/entity/stock-event.ts) | 统一使用前复权（`qfq`）日线计算指标与策略；严格区分 `observedAt`（市场事件时间）与 `fetchedAt`（抓取时间）；股票目录完整校验后原子更新，缺失只标 `missing` 不物理删除。 |
+| **2. 策略与量化因子 (Strategy & Factor)** | [`Strategy`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy.ts), `StrategyVersion`, `StrategyRun`, `StrategyResult`, `StrategySignal`, [`SignalObservation`](file:///Users/lijun/project/luoome/packages/core/src/entity/signal-observation.ts), [`StrategySchedule`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy-schedule.ts), [`StrategyDataCheckpoint`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy-checkpoint.ts), [`FinancialFact`](file:///Users/lijun/project/luoome/packages/core/src/entity/fundamental.ts), `FundamentalScore` | 版本不可变（先校验后发布）；执行状态（`running/complete/failed`）、数据健康度（`complete/partial/unavailable`）与发布资格（`published/withheld/non-publishing`）三者正交分离；信号记录 T+1/T+3/T+5 真实表现。 |
+| **3. 回测与评估 (Replay & Backtest)** | [`StrategyEvaluationSession`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy.ts), [`StrictBacktestRun`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy-backtest.ts), `StrictBacktestSpec`, `StrictBacktestGateAudit` | 区分“历史选股重放（Replay）”与“严格组合回测（StrictBacktest：D+1 开盘、100 股整手、佣金/印花税/滑点、涨跌停/停牌门禁、Evaluator 代码 SHA-256 指纹）”。 |
+| **4. 股票池与盯盘预警 (Watchlist & Alert)** | [`Watchlist`](file:///Users/lijun/project/luoome/packages/core/src/entity/watchlist.ts), `WatchlistMember`, [`StrategyWatchlistSubscription`](file:///Users/lijun/project/luoome/packages/core/src/entity/strategy-watchlist-subscription.ts), [`AlertPlan`](file:///Users/lijun/project/luoome/packages/core/src/entity/alert-plan.ts), [`WatchTrigger`](file:///Users/lijun/project/luoome/packages/core/src/entity/watch-trigger.ts), [`WatchRun`](file:///Users/lijun/project/luoome/packages/core/src/entity/watch-run.ts) | 成员维护 `discovered → watching → researching → confirmed → archived` 阶段及 `manual/strategy/ai/portfolio/import` 多来源；Strategy 仅在显式订阅且 `published` 运行时同步至 Watchlist。 |
+| **5. 账户账本与绩效 (Account & Portfolio)** | [`Account`](file:///Users/lijun/project/luoome/packages/core/src/entity/account.ts), [`AccountFacts`](file:///Users/lijun/project/luoome/packages/core/src/entity/account-facts.ts), [`Holding`](file:///Users/lijun/project/luoome/packages/core/src/entity/holding.ts), [`Trade`](file:///Users/lijun/project/luoome/packages/core/src/entity/trade.ts), `HoldingCashAdjustment`, [`PortfolioPerformanceSnapshot`](file:///Users/lijun/project/luoome/packages/core/src/entity/portfolio-performance.ts) | 现金余额 `Account.cashBalance` 与持仓/交易/资金流水在同一 `IMMEDIATE` 事务内增减，余额禁止为负；`AccountFacts` 提供带 `digest` 指纹的实时估值与对账门禁；支持 TWR 时间加权净值与基准归因。 |
+| **6. 建议与逐股计划 (Advice & TradingPlan)** | [`Advice`](file:///Users/lijun/project/luoome/packages/core/src/entity/advice.ts), [`TradingPlan`](file:///Users/lijun/project/luoome/packages/core/src/entity/trading-plan.ts), [`InvestmentConsensus`](file:///Users/lijun/project/luoome/packages/core/src/entity/investment-workspace.ts) | `Advice` 必含核心论点、支持证据、**反证**、风险、有效期与标准免责声明；`TradingPlan` 绑定 `accountFactsDigest`，校验 100% 总仓位 / 30% 单票预算，盘中确定性监控入场与止损/退出边沿。 |
+| **7. 决策复盘与报告 (Review & Report)** | [`DecisionReview`](file:///Users/lijun/project/luoome/packages/core/src/entity/decision-review.ts), `DecisionReviewRevision`, [`Report`](file:///Users/lijun/project/luoome/packages/core/src/entity/report.ts) | 冻结当时依据快照，追加不可变修订，支持原子登记外部已发生交易（`record_decision_trade`，唯一 `trade` 级人工入口）；生成开盘、收盘、周报结构化事实简报。 |
+| **8. 研究库 (Research Vault)** | [`ResearchTopicIndex`](file:///Users/lijun/project/luoome/packages/core/src/entity/research-vault.ts), `ResearchDocument`, [`StockResearchProfile`](file:///Users/lijun/project/luoome/packages/core/src/entity/stock-research-profile.ts), [`ResearchEmbeddingIndexState`](file:///Users/lijun/project/luoome/packages/core/src/entity/research-embedding.ts) | 本地 Obsidian Markdown 为权威正文源，SQLite 维护 FTS5 全文索引、显式主体链接（`SubjectLink`）与可选向量分块投影。 |
+
+### 3.2 核心对象关系与数据流向图
+
+```mermaid
+flowchart LR
+    subgraph Market["1. 市场事实层"]
+        UNIV["StockUniverse"]
+        BARS["DailyBar (qfq) / Quote"]
+        LADD["LimitUpLadder / Sentiment"]
+    end
+
+    subgraph StrategyDomain["2. 策略与观察层"]
+        STRAT["StrategyVersion (DSL)"]
+        SRUN["StrategyRun (published)"]
+        SSIG["StrategySignal"]
+        SOBS["SignalObservation (T+1/3/5)"]
+    end
+
+    subgraph WatchDomain["3. 关注与盯盘层"]
+        SUB["StrategyWatchlistSubscription"]
+        WL["Watchlist / Member"]
+        APLAN["AlertPlan"]
+        WTRIG["WatchTrigger"]
+    end
+
+    subgraph DecisionDomain["4. 建议、计划与账本复盘层"]
+        CTX["AnalysisContext (冻结事实包)"]
+        ADV["Advice (含反证/风险/有效期)"]
+        AFACTS["AccountFacts (现金+持仓+指纹)"]
+        TPLAN["TradingPlan (区间/预算/失效条件)"]
+        REV["DecisionReview (不可变修订/校准)"]
+        LEDGER["Account / Holding / Trade"]
+    end
+
+    UNIV --> SRUN
+    BARS --> SRUN
+    LADD --> SRUN
+    STRAT --> SRUN
+    SRUN --> SSIG
+    SSIG --> SOBS
+
+    SRUN -->|显式订阅 + complete| SUB --> WL
+    WL --> APLAN --> WTRIG
+    SSIG --> APLAN
+
+    BARS --> CTX
+    SSIG --> CTX
+    SOBS --> CTX
+    LEDGER --> AFACTS --> CTX
+    CTX -->|DSH 推理 + 校验写回| ADV
+    ADV --> TPLAN
+    AFACTS --> TPLAN
+    TPLAN -->|盘中确定性监控| WTRIG
+
+    ADV --> REV
+    TPLAN --> REV
+    WTRIG --> REV
+    LEDGER <-->|record_decision_trade 原子事务| REV
+```
+
+---
+
+## 四、领域层去 AI 与异步分析管线详细设计（Domain Zero-AI）
+
+### 4.1 设计目标与核心原则
+
+1. **领域层零 AI**：`packages/core`、`packages/db`、`packages/tools`、`packages/workflows`、`packages/mcp`、`packages/adapters` 彻底移除 `LLMAdapterLike` 与 `AgentRuntimeLike`，不导入任何生成式 AI SDK。
+2. **消除静默规则兜底**：废除原 `LLMManager` 在模型失败时静默返回 `MA5/MA20` 规则模板并当作正常 `Advice` 落库的路径（该路径此前污染了 `confidence` 校准统计）。**没有推理消费者在线时，任务保持 `pending`，绝不伪造建议。**
+3. **统一写回契约**：无论是用户在 Web/DSH 中发起的**交互式分析**，还是盘后定时工作流触发的**批量分析**，全部遵循同一条可验证链路：
+   - **Step 1（装配确定性事实包）**：领域层生成 `AnalysisContext`，持久化 `facts`、`factIds`、`dataAsOf`、`contextHash`、`writeUntil` 与 `expiresAt`。
+   - **Step 2（消费端模型推理）**：DSH Agent 或后台 `ai-runtime` Worker 读取事实包，执行推理。
+   - **Step 3（领域层强校验写回）**：调用 `record_advice` / `record_analysis_result` / `complete_analysis_job`，领域层强制核对 `contextId` 时效、证据 `factIds` 子集、价格不变量、自动注入标准免责声明与 `AnalysisProvenance` 后原子落库。
+
+### 4.2 领域实体设计（`packages/core/src/entity/`）
+
+#### 4.2.1 `AnalysisContext`（分析事实包）
+
+```ts
+// packages/core/src/entity/analysis-context.ts
+export type AnalysisKind =
+  | 'advice_stock'
+  | 'advice_position'
+  | 'advice_market'
+  | 'advice_strategy_candidate'
+  | 'research_directions'
+  | 'strategy_version_proposal'
+  | 'strategy_insight_narrative';
+
+export interface AnalysisFactItem {
+  readonly id: string;                 // 稳定事实 ID，如 "quote:600519.SH", "signal:sig-123"
+  readonly category: 'quote' | 'indicators' | 'holding' | 'account' | 'strategy' | 'observation' | 'sentiment' | 'research' | 'preflight';
+  readonly label: string;
+  readonly asOf: Date;
+  readonly value: Record<string, unknown>;
+}
+
+export interface AnalysisContext {
+  readonly id: string;                 // UUID
+  readonly jobId: string | null;       // 批量任务关联 ID；交互式分析为 null
+  readonly kind: AnalysisKind;
+  readonly accountId: string;
+  readonly subjectKind: 'stock' | 'position' | 'market' | 'strategy' | 'workspace';
+  readonly subjectId: string;
+  readonly dataAsOf: Date;             // 最旧关键事实的时点（非装配时刻）
+  readonly facts: readonly AnalysisFactItem[];
+  readonly factIds: readonly string[]; // 供写回时做 O(1) 子集校验
+  readonly limitations: readonly string[]; // 必填：显式列出数据缺失或 retrieval 限制
+  readonly contextHash: string;        // sha256(canonicalJson(facts) + dataAsOf.toISOString())
+  /**
+   * 写回接受截止时间（Q17）：
+   * - 交互式：min(createdAt + 30min, 当交易日 15:00 — 若在盘中装配)
+   * - 批量：随关联 AnalysisJob 进入终态即截止
+   */
+  readonly writeUntil: Date;
+  /**
+   * 审计保留与物理清理截止时间（Q12/Q17）：
+   * - 交互式：createdAt + 180 天（支撑半年复盘与校准回溯）
+   * - 批量：finishedAt + 30 天
+   */
+  readonly expiresAt: Date;
+  readonly createdAt: Date;
+}
+```
+
+#### 4.2.2 `AnalysisJob`（待分析异步任务）
+
+```ts
+// packages/core/src/entity/analysis-job.ts
+export type AnalysisJobStatus =
+  | 'pending'
+  | 'claimed'
+  | 'completed'
+  | 'failed'
+  | 'dead_letter'
+  | 'cancelled';
+
+export interface AnalysisJob {
+  readonly id: string;
+  readonly kind: AnalysisKind;
+  readonly source: 'workflow' | 'tool' | 'schedule' | 'chat';
+  readonly accountId: string;
+  readonly subjectKind: AnalysisContext['subjectKind'];
+  readonly subjectId: string;
+  readonly priority: number;           // 0..100，默认按 kind 赋权
+  readonly dedupeKey: string;          // sha256(kind|accountId|subjectKind|subjectId|tradingDate|canonicalOptions)
+  readonly payload: Record<string, unknown>;
+  readonly dataAsOf: Date;
+  readonly status: AnalysisJobStatus;
+  readonly attempts: number;
+  readonly maxAttempts: number;        // 默认 3
+  readonly notBefore: Date | null;     // 失败退避重试时间
+  readonly claimToken: string | null;  // Fencing Token (UUID)
+  readonly claimedBy: string | null;   // 如 "dsh:session-xxx" 或 "worker:local-1"
+  readonly leaseUntil: Date | null;
+  readonly contextId: string | null;   // 首次 claim 时生成并绑定
+  readonly resultRef: string | null;   // 成功后落库的实体 ID（如 advice.id）
+  readonly lastError: {
+    readonly code: string;
+    readonly message: string;
+    readonly retryable: boolean;
+    readonly occurredAt: string;
+  } | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly finishedAt: Date | null;
+}
+```
+
+#### 4.2.3 `AnalysisProvenance`（生成来源元数据）
+
+```ts
+// packages/core/src/entity/analysis-provenance.ts
+export type AnalysisGeneratorKind =
+  | 'dsh-chat'
+  | 'dsh-worker'
+  | 'embedded-dsh'
+  | 'local-worker'
+  | 'manual'
+  | 'legacy-ai';
+
+export interface AnalysisProvenance {
+  readonly generatorKind: AnalysisGeneratorKind;
+  readonly model?: string;             // 如 "deepseek:deepseek-v4-pro"
+  readonly skillVersion?: string;      // Skill 文件的 git blob hash 或版本号
+  readonly sessionRef?: string;        // DSH sessionId 或 runId
+  readonly contextId?: string;         // 关联 AnalysisContext.id
+  readonly jobId?: string;             // 关联 AnalysisJob.id（批量路径）
+  readonly evidenceFactIds: readonly string[]; // 实际引用的 factIds（必须 ⊆ context.factIds）
   readonly generatedAt: Date;
 }
 ```
 
-挂在 `Advice`、`InvestmentResearch`、`StrategyAutonomyAction`、报告正文上。`generatorKind='legacy-ai'` 用于存量回填。`model`/`skillVersion` 用于校准分组；缺失时校准页必须显示「来源未知」。
+### 4.3 数据库 Schema（SQLite DDL）
 
-交互式建议没有 `jobId`，审计链依赖 `contextId`；对应 context 保留 180 天（Q12），因此不会因 30 分钟过期而断裂。
-
-#### 5.3.4 结果落点
-
-| kind | 结果 schema | 落库 |
-|---|---|---|
-| `advice_*` | `AdviceDraft`（复用现有 `AdviceLLMSchema` 语义） | `AdviceRepository.save`；`basedOn` 由 context 回填；`resultRef=advice.id` |
-| `research_directions` | `InvestmentResearch` 内容 | 既有 InvestmentWorkspace repository |
-| `strategy_version_proposal` | `StrategyVersionProposal` | 既有 `propose_strategy_version_draft` 校验后落 AutonomyAction / draft |
-| `strategy_insight_narrative` | `StrategyInsightNarrative` | 目标 Report / AutonomyAction 的 `aiNarrative` |
-
-所有结果只能由 `record_*`/`complete_*` 落库；tool 内不允许再直接 `repos.advice.save`。
-
-#### 5.3.5 状态机
-
-```text
-pending ──claim──► claimed ──complete──► completed
-   ▲                  │  │
-   │                  │  └──fail(retryable, attempts<max)──► pending
-   │                  └──────fail(attempts>=max | !retryable)──► dead_letter
-   │
-   └── cancel（人工）──► cancelled
-
-claimed ──lease 到期（claim 内回收）──► pending（attempts 已计）
-```
-
-- 领取即 `attempts += 1` 并写入新 `claim_token`。
-- `complete` / `fail` 要求 `claim_token` 匹配且 `lease_until > now`；否则返回 `lease_lost_before_commit`。
-- 租约到期由 `claim` 的条件更新回收（`WHERE status='claimed' AND lease_until <= now`），不额外起后台守护。
-- `completed` 后再次 `complete`：同 token + 同结果 hash 幂等返回；不同结果返回 `invalid_input`（重复提交）。
-- `dead_letter` 只能通过 `requeue_analysis_job` 人工重排。
-
-### 5.4 Tool 契约
-
-#### 5.4.1 新增（12 个）
-
-| tool | sideEffect | 输入要点 | 输出 | 消费者 |
-|---|---|---|---|---|
-| `enqueue_analysis_job` | write | kind、subject、accountId、options、priority?、notBefore?、source | `{jobId, deduped}` | workflows（内部） |
-| `list_analysis_jobs` | read | status?、kinds?、limit、since? | job 列表 | 消费端/看板 |
-| `get_analysis_job` | read | jobId | job + 结果摘要 | 消费端/运维 |
-| `get_analysis_metrics` | read | windowDays? | 队列深度、最老 pending、完成/失败率、按 kind 统计 | 看板/运维 |
-| `claim_analysis_jobs` | queue | owner、kinds?、limit(1–10)、leaseSeconds | `[{job, claimToken, context}]` | 消费端 |
-| `complete_analysis_job` | queue | jobId、claimToken、result | `{jobId, status, resultRef}` | 消费端 |
-| `fail_analysis_job` | queue | jobId、claimToken、error、retryAfterSeconds? | `{status}` | 消费端 |
-| `requeue_analysis_job` | write | jobId | `{status}` | 运维（管理实例） |
-| `cancel_analysis_job` | write | jobId | `{status}` | 人类（管理实例） |
-| `get_analysis_context` | read | kind、subject、accountId?、options? | `{contextId, facts, factIds, dataAsOf, limitations, expiresAt}` | 交互式 |
-| `record_advice` | queue | contextId、decision、confidence、horizon、价位、reasoning、risks、provenance、requestId? | `Advice` | DSH/托管 |
-| `record_analysis_result` | queue | contextId、kind、result、provenance、requestId? | 结果引用 | DSH/托管 |
-
-`queue` 是 P2 新增的 capability（`SideEffect` 从 5 值扩为 6 值，P5 删除 `advice` 后回到 5 值），表示「消费待分析队列」：`claim` / `complete` / `fail` / `record_*`。运维类 `requeue` / `cancel` 仍归 `write`，只在管理实例可见。消费者实例不再依赖 `LUOOME_EXPOSE_WRITE`，只认 `LUOOME_EXPOSE_QUEUE=true`（Q11）。
-
-约定：
-
-- `enqueue_analysis_job` 是内部 tool：只导出给 `WorkflowToolMap`，不进 `toolRegistry`，因此不出现在 MCP。该机制已存在——`save_watch_trigger` 等 internal tool 采用同一模式，workflow 经 `WorkflowToolMap`（`packages/workflows/src/define-workflow.ts:306`、`:757`）访问；P2 直接复用，无需 spike（Q15）。
-- `claim_analysis_jobs` 返回的 `context` 与 `get_analysis_context` 同形；消费者不需要二次取事实。
-- `record_advice` 与 `complete_analysis_job(kind=advice_*)` 共用同一套校验与落库函数。
-- 所有校验失败返回 `invalid_input`（带 `issues`），不落半成品。
-
-#### 5.4.2 删除（P5 执行）
-
-| tool | 替代 |
-|---|---|
-| `analyze_stock` | `get_analysis_context` + `record_advice` |
-| `analyze_position` | 同上（kind=advice_position） |
-| `market_outlook` | 同上（kind=advice_market） |
-| `analyze_strategy_candidate` | 同上（kind=advice_strategy_candidate） |
-| `research_investment_directions` | `get_analysis_context` + `record_analysis_result` |
-| `generate_strategy_insight` | `get_strategy_insight_facts` + `get_analysis_context` + `record_analysis_result` |
-| `generate_strategy_version_proposal` | `get_analysis_context` + `record_analysis_result` |
-| `generate_strategy_recommendations` | 确定性 preflight + `enqueue_analysis_job` |
-| `agent_run` | DSH 会话 / 托管 run（领域不再提供 agent loop） |
-
-保留：`get_strategy_insight_facts`、`propose_strategy_version_draft`、`get_advice`、`get_advice_stats`、`get_confidence_calibration`、`record_advice_outcome`、`render_report`、`save_report`、`settle_chat_draft`、chat 会话 CRUD（托管 Chat 现状保留，Q6）。
-
-#### 5.4.3 `advice` sideEffect 的处置（Q5 已确认删除）
-
-| 旧 | 新 |
-|---|---|
-| `analyze_*` / `generate_*`：`advice` | 删除 |
-| `get_advice` / `get_advice_stats`：`read`（现状） | 不变 |
-| `record_advice` / `complete_analysis_job` | `queue`（Q11） |
-| `advice` 枚举值 | P5 从 `SideEffect` 删除 |
-
-`SideEffect` 在 P2 从 5 值扩为 6 值（新增 `queue`），P5 删除 `advice` 后回到 5 值。
-
-影响：`resolveAllowedSideEffects` 默认集 `{read, advice}` → `{read}`；需要同步 `packages/core/src/types/side-effect.ts`、`packages/mcp/src/exposure.ts`、`docs/SECURITY.md`、`docs/ARCHITECTURE.md`、`AGENTS.md` 与测试。注意 P2 先行一步：新增 `queue` 值时就要同步 `side-effect.ts` 与 `exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`），不要等到 P5 一起改。
-
-#### 5.4.4 消费者身份与 MCP 实例
-
-| 实例 | serverName | env | 用途 |
-|---|---|---|---|
-| 只读面 | `luoome` | `LUOOME_EXPOSE_WRITE=false` | 聊天、看板、研究 |
-| 消费者面 | `luoome-worker` | `LUOOME_EXPOSE_QUEUE=true`（可选 `LUOOME_EXPOSE_TOOLS=claim_analysis_jobs,complete_analysis_job,fail_analysis_job,record_advice,record_analysis_result,get_analysis_context,get_analysis_metrics,list_analysis_jobs,get_analysis_job` 二次收窄） | 队列消费 |
-
-消费者面默认 deny：未设置 `LUOOME_EXPOSE_QUEUE` 时队列工具一律不可见；`LUOOME_EXPOSE_TOOLS` 漏配或拼写错误只会让工具更少，不会把写面打开（Q11）。
-
-#### 5.4.5 错误映射
-
-| 场景 | 错误 |
-|---|---|
-| job 不存在 | `not_found{entity:'AnalysisJob'}` |
-| job 已终态/不可领 | `invalid_input{message:'job_not_claimable'}` |
-| claim token 或租约失效 | `lease_lost_before_commit` |
-| context `write_until` 已过/hash 不符 | `invalid_input{message:'context_expired' | 'context_mismatch'}` |
-| 证据 id 不在 `context.factIds` | `invalid_input{message:'unknown_fact_reference', issues}` |
-| advice 不变量不满足 | `invariant_violation` |
-| 重复提交且结果不同 | `invalid_input{message:'duplicate_result'}` |
-| 数据时点过旧 | `invalid_input{message:'stale_context'}` |
-
-不新增 `ToolErrorKind`：现有 8 个 kind 足够，避免协议面扩散。
-
-### 5.5 生产者改造
-
-#### 5.5.1 `daily-advice`
-
-- 保留「列出持仓」的确定性部分。
-- 对每个持仓 `enqueue_analysis_job(kind='advice_stock')`。
-- 输出改为 `{enqueued, deduped, jobIds}`；不再返回 Advice。
-- 顺带修复：无上限并发 → 由队列与消费者 limit 控制；WorkflowRun 审计记录入队数。
-- CLI 命令语义从「立即生成」变为「生成待办」。
-
-#### 5.5.2 `generate_strategy_recommendations`
-
-- 保留全部确定性部分：`list_strategy_result_views`、rank/score 过滤、`evaluateStrategyRecommendationPreflight`（账户/持仓/行业暴露/流动性/信号冲突/冷却/数据年龄）、`maxPerRun`。
-- 对通过 preflight 的候选 `enqueue_analysis_job(kind='advice_strategy_candidate')`，context 带 preflight 事实、信号/观察、quote/indicators、可选 position。
-- 立即返回 `{enqueued, skippedPreflight, skippedCooldown}`；通知改由消费者在完成后调用（Q4）。
-
-#### 5.5.3 `strategy-daily-cycle`
-
-- `insight`：调 `get_strategy_insight_facts` 产事实，`enqueue_analysis_job(kind='strategy_insight_narrative')`；周期状态 `partial`，不等待模型。
-- `recommendations`：改为入队，不再同步生成。
-- `insightProvider` 改为 `narrativeState: 'pending' | 'ready' | 'unavailable'`；兼容旧记录读取。
-- 报告先渲染 facts-only 版本；narrative 到达后更新报告 revision。
-
-#### 5.5.4 报告（opening / closing / weekly / daily-review）
-
-- 报告生成本身是确定性渲染，保持不变。
-- weekly-report 的策略洞察段落改为 facts-only + 入队（`target=reportId`）。
-- 报告状态增加 `narrativePending`；缺失维度继续显式标注。
-
-#### 5.5.5 `strategy-autonomy-weekly`
-
-- 暂停/归档判定、提议冷却、每周确定性 runId、`validate → publish` 门禁保持确定性。
-- 原本 3 次同步生成改为入队（暂停/归档 insight、proposal）。
-- 自动发布仍只在「提议已落库 + 确定性验证通过 + 晋级门满足」后发生；消费者缺席时当周不发布，AutonomyAction 记录 `pending`，不允许空成功。
-
-#### 5.5.6 `research_investment_directions`
-
-- tool 从领域移除；交互式对话改用 `get_analysis_context(kind='research_directions')` + `record_analysis_result`。
-- 托管 Chat 的草案确认（`settle_chat_draft`）从「执行 tool」改为「提交结果」，写路径仍经过同一校验。
-
-#### 5.5.7 入队与去重规则
-
-- `dedupeKey`：`sha256(kind|accountId|subjectKind|subjectId|tradingDate|optionsHash)`。
-- 同一交易日内同标的同 kind 只保留一个活动任务；重复入队返回 `deduped=true`。
-- `data_as_of` 取事实装配时刻的「最旧关键事实」；claim 时超过扫描窗口（默认 1 个交易日）直接 `stale_context` 失败。
-- 优先级：`advice_strategy_candidate` 80、`advice_position` 70、`advice_stock` 60、`research_directions` 50、`strategy_version_proposal` 40、`strategy_insight_narrative` 30。
-
-### 5.6 消费者契约
-
-#### 5.6.1 个人 DSH（外部）
-
-消费循环：
-
-```text
-1. get_analysis_metrics() → pending > 0?
-2. claim_analysis_jobs(owner=sessionId, limit=3)
-3. for each job: 基于 job.context 推理 → complete_analysis_job(jobId, token, result)
-4. on error: fail_analysis_job(jobId, token, {kind, message, retryable})
-5. 汇总：完成/失败/跳过，写回总结
-```
-
-约束：
-
-- 不允许把 `context.facts` 之外的数据当作证据（schema 拒绝未知 `factIds`）。
-- 不允许修改 `dataAsOf`、`disclaimers`、`validUntil`；这些由领域计算。
-- 失败必须显式 `fail_analysis_job`；不调用则租约到期自动重排（最多 `max_attempts`）。
-
-#### 5.6.2 托管 worker
-
-- `apps/worker` 增加 `analysis` pass：逐租户 claim，调用 `packages/ai-runtime`（当前 AI SDK 路径）完成推理。
-- 计量：模型调用继续走 `hosted-model-transport`，按 `HOSTED_JOB_BUDGET_MICRO` / provider job policy 预占与结算；`hostedLLMToolNames` 改为「消费者 run 级」计量，不再按 tool 名拦截。
-- 权益：`HOSTED_ENTITLEMENT_REQUIRED` 语义不变；job 的 `budgetOperationId` 归属 `ExecutionScope`。
-- 结果写回走内部 gateway，不直接打开 SQLite 写路径。
-
-#### 5.6.3 内嵌 DSH Runtime（后续）
-
-- 复用现有 Run / Tool Manifest / 模型代理 / 事件桥；manifest 新增 `claim/complete/fail`，`executionLocation='bun-gateway'`。
-- 每个 run 固定工具清单、模型、预算；结果仍由 `complete_analysis_job` 校验，模型不能直接写库。
-
-#### 5.6.4 并发、限流与背压
-
-- 单次 `claim` 上限 10，推荐 3；托管 worker 按租户串行、跨租户并行。
-- 队列积压不影响领域事实：面板显示 pending 数与最老任务年龄；超过阈值时报告标记 `narrativePending`。
-- `claim` 使用单条 `UPDATE ... RETURNING`（SQLite）保证互斥；内存实现同语义。
-- 不允许「先写结果再 claim」。
-- 双消费者（DSH skill / 托管 worker）并存时**先到先得**：claim 互斥保证同一任务只被一个消费者取走；`claimed_by` 前缀（`dsh:` / `hosted:`）只用于观测，不做配额或按 kind 路由（Q13）。
-
-#### 5.6.5 可观测性
-
-`get_analysis_metrics` 至少返回：`pending/claimed/deadLetter`、`oldestPendingAgeMs`、`completed24h/failed24h`、`byKind`、`avgClaimToCompleteMs`、`deduped24h`、`byGenerator`。
-
-由于租约回收只发生在 `claim` 内（§5.3.5），消费者全部离线时「`claimed` 但租约已过期」的任务不会自动回到 `pending`，`oldestPendingAgeMs` 会低估真实积压。因此 metrics 必须另返回 `claimExpiredNotRecycled`（租约已过期但尚未回收的任务数与最老年龄），看板与告警以该指标覆盖「消费者不在线」场景（§10）。
-
-### 5.7 数据模型与迁移
-
-#### 5.7.1 DDL（`packages/db/src/client.ts` 的 `ensureSchema`，与 `packages/db/src/schema/index.ts` 手工对齐）
+在 [`packages/db/src/schema/index.ts`](file:///Users/lijun/project/luoome/packages/db/src/schema/index.ts) 与 [`packages/db/src/client.ts`](file:///Users/lijun/project/luoome/packages/db/src/client.ts) 的 `ensureSchema` 中同步新增：
 
 ```sql
-CREATE TABLE IF NOT EXISTS analysis_jobs (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  source TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  subject_kind TEXT NOT NULL,
-  subject_id TEXT NOT NULL,
-  priority INTEGER NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  data_as_of INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  max_attempts INTEGER NOT NULL DEFAULT 3,
-  claim_token TEXT,
-  claimed_by TEXT,
-  lease_until INTEGER,
-  context_id TEXT,
-  result_json TEXT,
-  error_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  finished_at INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_active_dedupe_unique
-  ON analysis_jobs (dedupe_key) WHERE status IN ('pending', 'claimed');
-CREATE INDEX IF NOT EXISTS analysis_jobs_claim_idx
-  ON analysis_jobs (status, priority DESC, data_as_of);
-CREATE INDEX IF NOT EXISTS analysis_jobs_lease_idx
-  ON analysis_jobs (status, lease_until);
-CREATE INDEX IF NOT EXISTS analysis_jobs_account_kind_idx
-  ON analysis_jobs (account_id, kind, created_at);
-
 CREATE TABLE IF NOT EXISTS analysis_contexts (
   id TEXT PRIMARY KEY,
   job_id TEXT,
@@ -741,427 +419,347 @@ CREATE TABLE IF NOT EXISTS analysis_contexts (
   data_as_of INTEGER NOT NULL,
   facts_json TEXT NOT NULL,
   fact_ids_json TEXT NOT NULL,
+  limitations_json TEXT NOT NULL,
   context_hash TEXT NOT NULL,
   write_until INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS analysis_contexts_job_idx ON analysis_contexts (job_id);
-CREATE INDEX IF NOT EXISTS analysis_contexts_expiry_idx ON analysis_contexts (expires_at);
-```
 
-`advices` 表新增（通过 `ensureColumn` 幂等补列）：
+CREATE INDEX IF NOT EXISTS analysis_contexts_subject_idx
+  ON analysis_contexts (account_id, kind, subject_kind, subject_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS analysis_contexts_expiry_idx
+  ON analysis_contexts (expires_at);
 
-```sql
+CREATE TABLE IF NOT EXISTS analysis_jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  source TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  subject_kind TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 50,
+  dedupe_key TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  data_as_of INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  not_before INTEGER,
+  claim_token TEXT,
+  claimed_by TEXT,
+  lease_until INTEGER,
+  context_id TEXT,
+  result_ref TEXT,
+  error_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+
+-- 活动态去重：同一 dedupe_key 在 pending/claimed 状态下全局唯一；终态后释放，允许次日或重排入队
+CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_active_dedupe_uq
+  ON analysis_jobs (dedupe_key)
+  WHERE status IN ('pending', 'claimed');
+
+CREATE INDEX IF NOT EXISTS analysis_jobs_claimable_idx
+  ON analysis_jobs (status, priority DESC, created_at ASC);
+CREATE INDEX IF NOT EXISTS analysis_jobs_lease_idx
+  ON analysis_jobs (status, lease_until)
+  WHERE status = 'claimed';
+
+-- 存量 advices 表幂等补列
 ALTER TABLE advices ADD COLUMN provenance_json TEXT;
-ALTER TABLE advices ADD COLUMN generator_kind TEXT;  -- 冗余列，避免依赖 JSON1 表达式索引
+ALTER TABLE advices ADD COLUMN generator_kind TEXT;
 CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind);
 ```
 
-#### 5.7.2 迁移步骤（幂等）
+### 4.4 分析队列与写回 Tool 契约（12 个新增 Tool）
 
-1. `ensureSchema` 创建两张新表与新索引；`ensureColumn` 给 `advices` 补两列。
-2. 回填存量建议：`generator_kind='legacy-ai'`，`provenance_json={"generatorKind":"legacy-ai","sourceTool":<旧值>}`；不猜测模型。
-3. 不迁移 chat/报告/策略数据；不删除旧行。
-4. 新代码读取时 provenance 缺失按 `legacy-ai` 处理。
-5. 回滚：旧代码忽略新表与未知列，可直接回退版本。
+`SideEffect` 枚举更新为 `read | write | external | queue | trade`（移除原 `advice` 等级）。
 
-#### 5.7.3 配置退役
-
-| 配置 | 单机 | 托管 |
+| Tool 名称 | `sideEffect` | 核心职责与幂等/校验规则 |
 |---|---|---|
-| `ai-models.json` / `ai-models.example.json` | 删除 | 保留（迁到 `ai-runtime` 目录约定） |
-| `LUOOME_AI_CONFIG` | 删除 | 保留（`HOSTED_AI_ENABLED` 配套） |
-| provider `apiKeyEnv` | 不需要 | 保留 |
-| `LUOOME_AI_*` 设置页/热替换 | 删除 | 保留（只影响托管 Chat/消费者） |
-| `HOSTED_LLM_CALL_BUDGET_MICRO` / `HOSTED_JOB_BUDGET_MICRO` | 不适用 | 保留，扩展到 `analysis` job |
-| DSH 侧模型配置 | 由 DSH 管理 | 不适用 |
+| `enqueue_analysis_job` | `write`（Internal） | 仅导出至 `WorkflowToolMap`，不进公共 `toolRegistry`。按活跃 `dedupeKey` 幂等入队，已存在活跃任务则返回 `{ jobId, deduped: true }`。 |
+| `get_analysis_context` | `read` | 交互式分析入口：实时装配目标标的/持仓/策略的确定性事实包并持久化至 `analysis_contexts`，返回 `{ contextId, facts, factIds, dataAsOf, limitations, writeUntil, expiresAt }`。 |
+| `claim_analysis_jobs` | `queue` | 原子回收 `lease_until <= now` 的过期任务（`attempts < max_attempts` 回 `pending`，否则进 `dead_letter`），再按 `priority DESC, created_at ASC` 认领最多 `limit` 条任务，生成 `claimToken` 并装配 `AnalysisContext`。 |
+| `complete_analysis_job` | `queue` | 校验 `claimToken` 与 `lease_until > now`（失租返回 `lease_lost_before_commit`）；调用统一校验器落库结果，同一事务将任务标为 `completed` 并冻结对应 `context.write_until = now`。同 token + 同结果哈希幂等返回。 |
+| `fail_analysis_job` | `queue` | 校验 `claimToken`；若 `retryable && attempts < maxAttempts` 则设置指数退避 `not_before` 并回退为 `pending`，否则转入 `dead_letter`。 |
+| `record_advice` | `queue` | 交互式建议写回入口：校验 `contextId` 存在、`now <= writeUntil`、若关联 `jobId` 则 job 未终态、`evidenceFactIds ⊆ context.factIds`、价格满足 `assertAdviceInvariants`，注入 `STANDARD_DISCLAIMERS` 与 `provenance` 后写入 `advices`。 |
+| `record_analysis_result` | `queue` | 交互式非 Advice 结果写回入口（覆盖 `research_directions`、`strategy_version_proposal`、`strategy_insight_narrative`），经各自领域校验器落库。 |
+| `list_analysis_jobs` | `read` | 按 `status`、`kinds`、`accountId` 分页查询任务队列。 |
+| `get_analysis_job` | `read` | 查询单条任务详情、关联 `contextId` 与 `resultRef`。 |
+| `get_analysis_metrics` | `read` | 返回各状态计数、`oldestPendingAgeMs`、**`claimExpiredNotRecycled`**（消费者离线监控指标）与按 `kind` 统计的成功率。 |
+| `requeue_analysis_job` | `write` | 运维/人工将 `dead_letter` 或 `failed` 任务重置为 `pending`（`attempts = 0`）。 |
+| `cancel_analysis_job` | `write` | 人工取消 `pending` 或 `claimed` 任务。 |
 
-#### 5.7.4 装配点调整
+---
 
-- `packages/cli/src/context.ts`、`packages/tui/src/index.ts`、`packages/mcp/src/context.ts`：删除 `createAIStackFromEnv` 与 `unavailableLLM`。
-- `apps/web/src/server.ts`：删除 `ctxRef.current.adapters.llm` 热替换；Chat 运行时从 `ai-runtime` 直接构造，不再经 `ToolContext`。
-- `apps/web/src/hosted-*`：继续装配模型与计量；`hosted-meter` 只保留 Provider 级计量（`hosted-model-transport`），删除按 tool 名拦截。
-- `packages/core/src/context.ts`：删除 `LLMAdapterLike`、`AgentRuntimeLike`、`ToolContext.adapters.llm`、`ToolContext.agent`、`llmOperationScope`、`llmExecution`。
+## 五、Agent 领域模型与 DSH 运行时详细设计
 
-### 5.8 校验、审计、校准与降级
+### 5.1 模块边界：在既有包上演进，不建平行空包
 
-#### 5.8.1 结果校验（领域侧强制）
+基于 `main` 分支已有资产，Agent 相关能力严格按以下四层落位，不新建冗余的 `agent-core / agent-dsh` 空包：
 
-1. `contextId` 存在、`write_until` 未过、审计保留期内、kind/subject/account 一致；
-2. 证据 `factIds ⊆ context.fact_ids`；
-3. `dataAsOf` 取 `context.data_as_of`，不采信调用方；
-4. `disclaimers` 由领域注入 `STANDARD_DISCLAIMERS`，调用方多余免责声明保留但不可替换标准三条；
-5. `id`、`createdAt`、`validFrom`、`validUntil` 由领域计算（`validUntil = validFrom + adviceExpiryDays[horizon]`，intraday 截断到当日 15:00）；
-6. 价格不变量复用 `assertAdviceInvariants`；
-7. 通过后写 provenance 与 `sourceTool/sourceWorkflow`（兼容旧读取），再落库。
+1. **`packages/core/src/entity/agent-definition.ts` & `agent-session.ts`**：纯领域定义（`AgentDefinition`、`AgentSessionBinding`、`AgentSkillDescriptor`）与 `Repository` 接口。
+2. **`packages/db/src/repository/agent.ts`**：`agent_definitions` 与 `agent_session_bindings` 的 Drizzle + In-Memory 双实现及 Contract Tests。
+3. **`packages/dsh-bridge`**：跨进程 JSON-RPC 旁路协议（`protocol.ts`）、运行时配置（`runtime-config.ts`）与 Node Cordis 插件（`plugin.ts`，负责工具动态注册、父子 Agent 权限交集守卫、实时流桥接、模型代理转发）。
+4. **`apps/agent-runtime` & `apps/web/src/dsh`**：
+   - `apps/agent-runtime`：独立的受限 Node SDK Host（`NodeRuntimeHost`），管理 `DeepSeekHarness` 实例生命周期与持久 Session 恢复。
+   - `apps/web/src/dsh`：Bun 侧的 `ToolGateway`（移除多租户字段）、`DshChatRuntime`、会话级持久绑定同步与事件流投影。
 
-#### 5.8.2 校准口径
+### 5.2 Agent 领域模型设计（`AgentDefinition` 与 `AgentSessionBinding`）
 
-- `get_confidence_calibration` 增加分组：`generatorKind`、`model`、`skillVersion`。
-- 样本 <N 时只显示样本数，不给结论。
-- 存量 `legacy-ai` 与新增来源分开统计；不混桶。
-- 校准页显示「生成方式」与「数据时点」。
+将“Agent 产品定义（可复用模板）”与“DSH Runtime Session（一次有状态的会话上下文）”解耦为 `1:N` 关系：
 
-#### 5.8.3 降级语义
+```ts
+// packages/core/src/entity/agent-definition.ts
+export type AgentRoleKind =
+  | 'coordinator' // 任务理解、分派与汇总
+  | 'research'    // 个股基本面、事件与研究库深挖
+  | 'market'      // 行情、连板天梯、情绪与技术指标分析
+  | 'strategy'    // 策略 DSL 草案、回测评估与候选筛选
+  | 'risk'        // 仓位预算、止损边沿与反证核查
+  | 'custom';     // 用户自定义 Agent
 
-| 场景 | 行为 |
-|---|---|
-| 没有消费者 | 任务停留 `pending`，报告/面板显示 `narrativePending`；不产生假建议 |
-| 消费者失败 | `fail_analysis_job` 记录；重试到上限进 `dead_letter` |
-| facts 不足 | context 的 `limitations` 显式列出；skill 可只输出事实，不落 advice |
-| 所有模型不可用 | 队列不变；`get_advice` 继续返回历史建议；面板标 `stale` |
-| 旧数据无 provenance | `generator_kind='legacy-ai'`，不进新口径统计 |
+export interface AgentExecutionPolicy {
+  readonly maxToolCallsPerRun: number;    // 默认 32
+  readonly maxModelCallsPerRun: number;   // 默认 8
+  readonly runTimeoutMs: number;          // 默认 120_000
+  readonly toolTimeoutMs: number;         // 默认 15_000
+  readonly writeMode: 'draft-only' | 'queue-only' | 'disabled'; // 聊天默认 draft-only，后台消费者 queue-only
+  readonly allowSubagents: boolean;
+  readonly allowedSubagentIds: readonly string[];
+}
 
-### 5.9 安全
+export interface AgentDefinition {
+  readonly id: string;                    // 如 "system:research", "user:high-dividend-analyst"
+  readonly name: string;
+  readonly description: string;
+  readonly type: 'system' | 'user';
+  readonly role: AgentRoleKind;
+  readonly status: 'draft' | 'active' | 'disabled';
+  readonly modelConfig: {
+    readonly provider?: string;           // 缺省使用全局默认模型
+    readonly model?: string;
+    readonly maxTokens: number;
+  };
+  readonly systemPrompt: string;          // 角色专属提示词（追加在平台安全铁律之后）
+  readonly skillIds: readonly string[];   // 允许装载的 Skill 标识
+  readonly allowedDomains: readonly ('market' | 'research' | 'strategy' | 'portfolio' | 'watch' | 'review' | 'analysis-queue' | 'web')[];
+  readonly allowedTools: readonly string[]; // 显式工具白名单；与 allowedDomains 及全局暴露面取交集
+  readonly executionPolicy: AgentExecutionPolicy;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+```
 
-| 边界 | 落地 |
-|---|---|
-| trade 永不暴露 | 保持现状；队列 kind 不含 trade；`record_*` 不接受 trade |
-| 写面最小化 | 两个 MCP 实例；消费者实例默认 deny，只暴露 `queue` capability 工具（当前 7 个，Q11） |
-| 提示词注入 | 事实包中的新闻/研报文本只作为 data，不作为指令 |
-| 数据最小化 | context 只含分析必需字段；账户号、密钥、完整成交明细不进 context |
-| 托管租户隔离 | `account_id` + tenant DB；claim 带租户上下文；worker 不跨租户合并结果 |
-| 预算防护 | 托管走既有计量；单机由 DSH 额度与消费者 limit 控制 |
-| 审计 | claim/complete/fail 记 `claimed_by`、`claim_token`、时间；结果带 provenance |
+#### 系统内置 Agent 矩阵（首期默认启用 `system:research` 与 `system:analysis-worker`，其余随多 Agent 阶段激活）
 
-### 5.10 线 B 验收
-
-1. 双实现 contract 通过；claim/lease/幂等/证据校验测试通过；MCP 默认仍只读。
-2. `flag=queue` 时批量管线模型调用为 0（用 fake LLM 计数器断言）；`flag=inline` 保持旧行为。
-3. 入队 → claim → record → `get_advice` 可见；超时进 dead_letter。
-4. 领域包无 AI import；`bun run typecheck`、`bun run test:all` 通过。
-5. 存量建议带 `legacy-ai`，校准页正确分组。
-
-## 6. 改造线 C：托管与内嵌 DSH
-
-### 6.1 现状
-
-- `packages/dsh-bridge` + `apps/agent-runtime` + `infra/dsh` 已实现受限 Node Host、Cordis 插件、工具 Gateway、模型计量代理、事件桥、私有 `DSH_HOME`、run 生命周期与取消。
-- 开发验收 D01–D07 通过；`LUOOME_CHAT_RUNTIME=dsh` 仅开发环境可用，生产拒绝启动。
-- 托管 Chat 当前默认仍是 AI SDK 路径（`ai-sdk`），DSH 路径是可选实验。
-
-### 6.2 托管消费者（Q1 已确认：先 ai-runtime）
-
-- `apps/worker` 增加 `analysis` pass：从平台队列逐租户 claim，调用 `packages/ai-runtime` 完成推理。
-- 每个 job 的模型调用走 `hosted-model-transport`，预占/结算与现有账本一致；job policy 增加 `analysis` 类别与预算。
-- 结果写回仍走内部 gateway 的 `complete_analysis_job`，不直连数据库。
-- 单机与托管共享工具契约；托管多一层租户与权益检查。
-
-### 6.3 计量、预算与通知（Q4 已确认）
-
-- 领域在 `complete_analysis_job` 成功后只返回结果，不发通知。
-- 消费者在成功回调里调用 `send_notification`（托管 worker 或 DSH skill），通知内容引用 `advice.id` 与 `provenance`。
-- 预算：`HOSTED_JOB_BUDGET_MICRO` 扩展到 `analysis` job；`HOSTED_LLM_CALL_BUDGET_MICRO` 继续限制单次调用。
-- 失败/超预算：`fail_analysis_job` 标记 `retryable=false`，通知降级为「分析未完成」，不伪造结论。
-
-### 6.4 后续切换内嵌 DSH Runtime
-
-- 消费者从 `ai-runtime` 切到 `apps/agent-runtime`：每轮 run 的 manifest 增加 `claim/complete/fail` 三个工具，模型代理沿用 `luoome-metered`。
-- 切换条件：D01–D10 全部验收、生产启用评审通过、run 恢复与多 Agent 边界明确。
-- 领域契约不变，切换只影响消费者实现。
-
-### 6.5 与平台设计的关系
-
-- 本文不改变 `dsh-plugin-platform-design.md` 的 Run/Tool Manifest/计量/生命周期契约；只是把「AI 建议生成」从领域 tool 迁移到消费者 run。
-- 不 fork 上游、不引入第二套 SDK client、不在领域层引入 DSH 类型。
-- `infra/dsh` 的固定组合与构建保持不变。
-
-## 7. 实施阶段
-
-| 阶段 | 范围 | 产出 | 验收 | 回滚 |
+| 内置 ID | 角色 | 允许工具域 (`allowedDomains`) | `writeMode` | 核心职责 |
 |---|---|---|---|---|
-| **P0 决策冻结（0.5 周）** | Q1/Q4/Q5 与 Q11–Q16 已拍板（§14）；Q2/Q3 按 §14 调整；Q6–Q10 沿用 §11 默认值；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见、§14 | 评审通过 + §14 复核清单 | — |
-| **P1 线 A 最小闭环（1–2 天）** | MCP 只读接入、系统提示、看板面板、工作区分离 | 插件/配置、面板 | §4.9 第 1、4、5 条 | 移除插件行 |
-| **P2 领域实体与工具（1.5–2 周）** | `analysis_job`/`analysis_context` 实体、repo、DDL、12 个 tool、provenance 列、`queue` capability 与消费者暴露（Q11） | 新表、双实现、contract tests | §5.10 第 1 条 | 不切换生产者，旧路径不变 |
-| **P3 生产者切换（1–1.5 周）** | daily-advice、recommendations、daily-cycle、weekly-report、autonomy；`LUOOME_ANALYSIS_MODE=inline|queue` | workflow 改造 + 测试 | §5.10 第 2、5 条 | flag 回 inline |
-| **P4 消费者（1–1.5 周）** | 单机 DSH skill + host plugin 唤醒；托管 worker `analysis` pass；端到端 | skill、worker pass、e2e | §4.9 第 2、3 条；§5.10 第 3 条 | 停消费者，任务留 pending |
-| **P5 摘除领域 AI（1 周）** | 删除 8+1 个 AI tool、`ToolContext` 端口、`adapters/llm` 迁出、CLI/TUI/MCP 配置 | 清理提交 | §5.10 第 4 条；`advice` 删除 | 回退版本（旧代码忽略新表） |
-| **P6 收口（0.5 周）** | 文档同步、校准分组、CI 守卫、旧测试清理、ARCHITECTURE 例外条款复核（Q14 已提前落笔） | 文档 + 守卫 | 链接检查、`git diff --check`、全量测试 | — |
-| **后续** | 线 C 切换内嵌 DSH Runtime | 消费者替换 | D01–D10 + 生产评审 | 保留 ai-runtime 消费者 |
+| `system:research` | 个股与组合投研助手 | `market`, `research`, `portfolio`, `watch`, `review`, `web` | `draft-only` | 默认 Web 对话 Agent；读取全量事实，生成建议/计划/持仓修改时返回待确认草案卡 |
+| `system:strategy` | 策略研发助手 | `strategy`, `market`, `research` | `draft-only` | 辅助编写 Strategy DSL、对比运行 Diff、解读 `StrategyInsight` 事实 |
+| `system:risk` | 风控与反证核查员 | `portfolio`, `market`, `watch`, `review` | `disabled` | 纯只读；专门挑刺既有论点、核查单票 30% / 总仓 100% 预算与止损失效条件 |
+| `system:coordinator` | 多 Agent 协调器 | 全只读域 + 子 Agent 派发 | `draft-only` | 拆解复杂投研问题，并行/串行调度 `research` / `strategy` / `risk` 子 Agent 并汇总 |
+| `system:analysis-worker` | 异步分析队列消费者 | `market`, `research`, `strategy`, `portfolio`, `analysis-queue` | `queue-only` | 后台认领 `AnalysisJob`（`claim` → 推理 → `complete` / `fail`），不暴露给普通聊天 |
 
-总量约 7–9 周（单人，含线 A）。
+### 5.3 持久 Session 恢复与回执增量同步设计（补齐 D08）
 
-## 8. 测试策略
+在 `main` 分支的 D01–D07 实现中，DSH 每次对话轮次都在临时目录重建 Session。为支持长周期研究上下文复用与崩溃恢复，新增 `AgentSessionBinding` 表：
 
-| 类别 | 用例 |
+```ts
+// packages/core/src/entity/agent-session.ts
+export interface AgentSessionBinding {
+  readonly conversationId: string;        // PK：对应 ChatSession.id
+  readonly accountId: string;
+  readonly agentDefinitionId: string;
+  readonly dshSessionId: string;          // DSH 持久化 JSONL 的 sessionId
+  readonly dshHomePath: string;           // $LUOOME_HOME/dsh-sessions/<conversationId>
+  readonly profileHash: string;
+  readonly configHash: string;
+  /**
+   * 已同步至 DSH Session 的最后一条 Luoome ChatMessage 序号与已结算草案回执游标，
+   * 避免每轮重复注入完整 20 条历史，同时确保用户在 Web 点击“确认草案”后的真实结果在下一轮准确进入 DSH 上下文。
+   */
+  readonly lastSyncedMessageId: string | null;
+  readonly settledDraftReceiptsCursor: number;
+  readonly status: 'active' | 'interrupted' | 'invalidated';
+  readonly updatedAt: Date;
+}
+```
+
+#### 会话续接与草案确认同步时序图
+
+```mermaid
+sequenceDiagram
+    participant U as 用户 (Web UI)
+    participant W as Luoome Web (Bun)
+    participant DB as SQLite (luoome.db)
+    participant H as NodeRuntimeHost
+    participant D as DSH Runtime + Cordis Plugin
+
+    U->>W: 1. 发送提问 ("分析宁德时代并生成建仓计划")
+    W->>DB: 2. 读取 ChatSession + AgentSessionBinding + 未同步的已确认草案回执
+    W->>H: 3. 发送 RunRequest (携带增量回执 + manifestHash + persistent dshHomePath)
+    H->>D: 4. harness.start() & resumeSession(dshSessionId) (若首次则新建)
+    D->>W: 5. 调用 get_analysis_context / fetch_quote (经 ToolGateway 校验)
+    W-->>D: 6. 返回确定性事实包 (含 contextId, factIds, dataAsOf)
+    D->>W: 7. 调用 save_trading_plan (writeMode=draft-only，Gateway 拦截并包装为 __luoomeDraft)
+    W-->>D: 8. 返回已校验草案回执 (未实际写库)
+    D-->>W: 9. 实时推送 text.delta + 最终 assistant.message
+    W->>DB: 10. 原子保存 Assistant 消息、草案 पार्ट्स，更新 AgentSessionBinding 游标
+    W-->>U: 11. 渲染回答与「确认执行交易计划草案」卡片
+
+    U->>W: 12. 点击「确认执行」 (POST /api/chat/sessions/:id/drafts/:msgId/:callId)
+    W->>DB: 13. settle_chat_draft 原子认领 -> 真实执行 save_trading_plan -> 写入回执序号
+    W-->>U: 14. 卡片状态更新为「已生效」 (下一轮提问时步骤 2 自动将该回执增量注入 DSH)
+```
+
+### 5.4 去租户化后的 `GatewayExecutionScope` 与 `ToolGateway`
+
+移除 `tenantId`、`tenantGeneration` 与托管计费预占后，[`apps/web/src/dsh/execution-scope.ts`](file:///Users/lijun/project/luoome/apps/web/src/dsh/execution-scope.ts) 精简并强化对 `accountId` 与 `agentId` 的绑定：
+
+```ts
+// apps/web/src/dsh/execution-scope.ts
+export interface GatewayIdentity {
+  readonly accountId: string;
+  readonly conversationId: string;
+  readonly runId: string;
+  readonly agentDefinitionId: string;
+  readonly runtimeInstanceId: string;
+  readonly sessionId: string;
+}
+
+export interface GatewayScopeSnapshot extends GatewayIdentity {
+  readonly audience: string;
+  readonly manifestHash: string;
+  readonly expiresAt: number;
+  readonly allowedCapabilities: readonly SideEffect[];
+}
+```
+
+`ToolGateway` 强制执行三道防线：
+1. **身份与账户强绑定**：若模型传入的 Tool 参数包含 `accountId` 且不等于 `scope.accountId`，直接拒绝（`permission_denied`）；缺省 `accountId` 的调用由服务端闭包强制注入 `scope.accountId`。
+2. **草案隔离（Draft-and-Confirm）**：当 `writeMode === 'draft-only'` 时，`ToolGateway` 只暴露由 `buildChatTools` 包装后的 callable 闭包，禁止调用 `toolRegistry.get(name).execute`，从根本上杜绝模型在对话中直接修改持仓或账本。
+3. **执行 Token 级去重**：沿用 `dsh-bridge` 按 `ToolExecution['token']` 分配的跨进程 `callId`，防止模型在不同推理步复用 `tool_call_id` 导致结果错位。
+
+### 5.5 多 Agent 协同与子 Agent 权限交集守卫（补齐 D10）
+
+根据对 DSH 上游 `subagent-spawn-in-process` 的源码审查（`dsh-plugin-platform-design.md` U14），**DSH 在进程内派生子 Agent 时，默认不会自动继承父 Agent 的 `agent.ctx.tools.restrict` 限制**。
+
+为防止子 Agent 权限逃逸，[`packages/dsh-bridge/src/plugin.ts`](file:///Users/lijun/project/luoome/packages/dsh-bridge/src/plugin.ts) 在 `agent/created` 与 `tools/pre-execute` 钩子中实施硬性交集守卫：
+
+```ts
+// packages/dsh-bridge/src/plugin.ts 演进要点
+ctx.on('agent/created', async ({ agent }) => {
+  const isRoot = agent.session.id === sessionId;
+  if (!isRoot && !run.allowSubagents) {
+    throw new Error('Subagent creation is disabled for this run');
+  }
+  // 子 Agent 的允许工具集 = 子角色声明工具 ∩ 父级 Run Manifest 允许工具
+  const subagentRoleTools = resolveSubagentAllowedTools(agent, run);
+  const effectiveAllowlist = subagentRoleTools.filter((name) => manifest.has(name));
+  agent.ctx.tools.restrict({ allow: effectiveAllowlist });
+  boundAgentAllowlists.set(agent.session.id, new Set(effectiveAllowlist));
+});
+```
+
+同时，父 Agent 与所有派生的子 Agent **共享同一个 Run 级计数器**：
+- `toolCalls` 总数不超过 `host.limits.maxToolCalls`；
+- `modelCalls` 总数不超过 `host.limits.maxModelCalls`；
+- 只有当根 Agent 及其派生的全部活跃子 Agent 均进入终态后，`NodeRuntimeHost` 才判定整个 Run 完成。
+
+---
+
+## 六、项目代码目录结构与静态分层守卫
+
+### 6.1 去多租户后的标准 Monorepo 目录结构
+
+```txt
+luoome/
+├── packages/
+│   ├── core/                  # 纯领域层（零 IO、零 AI）：实体、Branded Types、不变量、策略 AST/回测/账本纯计算、Repository 接口
+│   ├── db/                    # 数据持久层：Drizzle SQLite Schema、ensureSchema 幂等迁移、Drizzle + In-Memory 双仓储与 Contract Tests
+│   ├── adapters/              # 外部适配层：统一 SourceRegistry（东财/腾讯/新浪/扶摇/雪球/10jqka）、飞书通知、Obsidian 研究库、可选向量 Embedding
+│   ├── tools/                 # 业务工具层：190+ Zod Schema 驱动的 Tool 定义、Registry、MCP/OpenAI Schema 派生、Agent 场景白名单
+│   ├── workflows/             # 确定性编排层：盘后策略日循环、逐股计划日循环、盘中盯盘、开盘/收盘/周报、策略自治（仅调 ctx.tools.*）
+│   ├── mcp/                   # MCP 暴露层：stdio Server，支持 read / queue / write / external 暴露面与 allowlist/denylist
+│   ├── dsh-bridge/            # DSH 桥接协议与插件：跨进程 JSON Schema 协议 + Node Cordis 插件 (luoome-run-bridge)
+│   ├── ai-runtime/            # 模型运行时包（从 adapters/llm 抽离）：模型目录加载与 AI SDK 适配器（仅允许 apps/* 导入）
+│   ├── cli/                   # 命令行入口（luoome start / web serve / mcp serve / workflow run / tools list）
+│   └── tui/                   # 终端盯盘与交互界面 (opentui)
+├── apps/
+│   ├── web/                   # Hono Web 服务 + 同源 SPA + DSH ToolGateway / 会话绑定 / 实时事件投影 + 进程内可选调度器
+│   ├── worker/                # 单机后台 Worker（可选独立常驻进程）：消费 AnalysisJob 队列与执行定时 Workflow
+│   └── agent-runtime/         # 独立受限 Node DSH SDK Host（管理 DeepSeekHarness 子进程与受限 Profile）
+├── skills/
+│   └── luoome/                # 供 DSH 加载的投研技能集（analysis-worker / morning-brief / post-close-review / stock-deep-dive / decision-journal）
+├── infra/
+│   └── dsh/                   # 固定 DSH/Cordis 产物哈希、受限 Profile 模板与构建/验收脚本
+└── docs/                      # 架构、领域语言、PRD、DDD 与运维手册
+```
+
+### 6.2 依赖方向与静态守卫（`scripts/check-layers.ts`）
+
+```txt
+cli / tui / mcp ──────────────► tools ──► core
+                                  │
+                                  ├──► db ──► core
+                                  └──► adapters ──► core
+workflows ────────────────────► tools ──► core
+apps/web / apps/worker ───────► { tools, workflows, ai-runtime, dsh-bridge }
+apps/agent-runtime ───────────► dsh-bridge
+```
+
+新增 `scripts/check-layers.ts` 并接入 `bun run lint` / `bun run check:layers`，强制执行以下 4 条静态门禁：
+1. **领域包零 AI 包依赖**：`core`、`db`、`tools`、`workflows`、`mcp`、`adapters` 禁止导入 `@luoome/ai-runtime`、`ai`、`@ai-sdk/*`、`@deepseek-ai/*`。
+2. **领域包零模型端点字面量**：除 `packages/adapters/src/research-embedding/`（仅限 `/embeddings` 向量检索基础设施白名单）外，领域包源码禁止出现 `/chat/completions`、`/completions`、`/embeddings` 字面量。
+3. **零多租户残留**：全仓禁止再次引入 `control.sqlite`、`tenantId`、`tenantGeneration`、`HOSTED_*` 等多租户概念。
+4. **Core 零 IO**：`packages/core` 禁止导入 `bun:sqlite`、`drizzle-orm`、`node:http`、`node:net` 或其它工作区包。
+
+---
+
+## 七、部署架构与安全边界
+
+### 7.1 部署拓扑（单机直装 / Docker Compose）
+
+系统移除多租户后，仅需单机或单台轻量云服务器（2–4 vCPU / 4–8GB RAM）即可完整运行：
+
+```mermaid
+flowchart LR
+    subgraph HostMachine["宿主机 / Docker Compose 栈"]
+        WEB["luoome-web (Bun)<br/>127.0.0.1:5173<br/>Hono API + SPA + 内置调度"]
+        NODE_HOST["luoome-agent-runtime (Node 22/24)<br/>按需启动 / 常驻实例池<br/>DeepSeekHarness 子进程"]
+        WORKER["luoome-worker (Bun, 可选)<br/>AnalysisJob 异步队列消费"]
+        VOL[("持久卷 $LUOOME_HOME<br/>- luoome.db (SQLite WAL)<br/>- .env (0600)<br/>- ai-models.json<br/>- dsh-sessions/<br/>- logs/audit.log")]
+    end
+
+    WEB <-->|Loopback HTTP / stdio| NODE_HOST
+    WEB --> VOL
+    NODE_HOST --> VOL
+    WORKER --> VOL
+```
+
+### 7.2 安全与副作用铁律
+
+| 安全维度 | 强制机制 |
 |---|---|
-| contract（db） | job claim 互斥、租约过期回收、attempts 递增、dedupe 唯一、complete 与 enqueue 对同 dedupe_key 的并发竞争、context 过期、provenance 往返 |
-| tool 单元 | enqueue 去重、claim 返回 context、complete 幂等/重复结果冲突、fail 退避、超限 dead_letter、requeue、cancel |
-| 校验 | 未知 factId 拒绝、context 过期拒绝、dataAsOf 不匹配拒绝、免责声明不可替换、validUntil 计算、价格不变量 |
-| workflow | `flag=queue` 时模型调用为 0、入队数正确；cycle 产 job 且状态 pending；report `narrativePending` |
-| 暴露面 | 默认无写；消费者 allowlist 精确；trade 仍硬卡；research 子串过滤被通用 allowlist 取代 |
-| 消费者 | DSH 端到端（MCP stdio）；托管 worker 租户隔离 + 预算 |
-| 回归 | `get_advice`/stats/calibration 兼容；`legacy-ai` 分组；报告读取兼容 |
-| 删除守卫 | 领域包不得 import `@luoome/ai-runtime`、`ai`、`@ai-sdk/*`、`@deepseek-ai/*` |
-| 线 A | MCP 只读面零写泄漏；面板认证通道；提示词生效；交易日静默 |
-| 文档 | 相对链接检查、`git diff --check` |
+| **交易硬卡 (`advice ≠ trade`)** | 任何 Advice、StrategySignal、TradingPlan 或盯盘触发均不自动下单；`record_decision_trade` 仅用于事后登记用户在券商已完成的成交，且永不向 MCP 或 DSH Agent 暴露（`LUOOME_EXPOSE_TRADE=true` 启动即抛错退出）。 |
+| **五级副作用门控** | `read`（默认开放）、`queue`（仅 `LUOOME_EXPOSE_QUEUE=true` 的消费者实例开放）、`write`（需 `LUOOME_EXPOSE_WRITE=true`，且 Web 对话强制走草案确认）、`external`（需 `LUOOME_EXPOSE_EXTERNAL=true`）、`trade`（远端/Agent 永不开放）。 |
+| **DSH 受限 Profile** | 剥离 `Shell`、`danger-full-access`、动态 `plugin_manager` 与 `session-log-deepseek`；每次启动前执行 `--dump-config` 校验插件清单哈希。 |
+| **外部 URL 与 SSRF 防护** | 原生 `web_fetch` 及远程研究文档导入强制经过地址分类、禁止内网/回环/云 Metadata IP、DNS 解析绑定与响应体积限制。 |
+| **建议合规披露** | 所有 Advice 写回由领域层强制校验 `counterEvidence`（反证）、`risks`（风险点）、`validUntil`（有效期）并自动注入 `STANDARD_DISCLAIMERS`；`confidence` 仅表达模型信心度，严禁表述为确定性胜率。 |
 
-命令：`bun run test`、`bun run test:db`、`bun run test:web`、`bun run test:dsh`、`bun run typecheck`、`bun run lint`。
+---
 
-## 9. 影响面清单
+## 八、分阶段实施路线图与验收标准
 
-| 包 | 新增 | 修改 | 删除 |
+不再从零重写基础模块，直接在 `main` 分支上按 **4 个可独立验收、可安全回滚的阶段（M1 → M4）** 推进：
+
+| 阶段 | 核心任务范围 | 关键产出物 | 验收标准 (Acceptance Criteria) |
 |---|---|---|---|
-| `packages/core` | `entity/analysis-job.ts`、`entity/analysis-context.ts`、`entity/analysis-provenance.ts`、repository 接口 | `entity/advice.ts`（provenance）、`entity/invariants.ts`、`repository/index.ts`、`context.ts`（删 LLM/Agent 端口）、`types/side-effect.ts`（P5） | `LLMAdapterLike`、`AgentRuntimeLike`、`ToolContext.adapters.llm/agent` |
-| `packages/db` | drizzle + memory 实现、contract tests、schema 表、DDL | `schema/index.ts`、`client.ts`、`repository/index.ts` | — |
-| `packages/tools` | 12 个 analysis tool、facts builders | `context.ts`、`registry.ts`、`index.ts` | `analyze-stock.ts`、`analyze-position.ts`、`market-outlook.ts`、`analyze-strategy-candidate.ts`、`strategy-insight.ts`（generate 部分）、`strategy-proposal.ts`（generate 部分）、`investment-workspace.ts`（research AI 部分）、`agent-run.ts` |
-| `packages/adapters` | — | 桶导出 | `src/llm/` 整体迁出 |
-| `packages/ai-runtime`（新） | 模型目录、AI SDK adapter、hosted meter/transport、profile 路由 | — | — |
-| `packages/workflows` | — | `daily-advice.ts`、`strategy-daily-cycle.ts`、`strategy-autonomy-weekly.ts`、`weekly-report.ts`、`strategy-recommendations.ts`、`trading-plan-daily-cycle.ts` | — |
-| `packages/mcp` | allowlist/denylist 解析 | `exposure.ts`、`server.ts` | research 子串特判 |
-| `packages/cli` | — | `context.ts`、`env.ts`、`mcp serve` | AI 配置命令/环境变量 |
-| `packages/tui` | — | `index.ts` | AI 装配 |
-| `apps/web` | 托管 Chat 改用 `ai-runtime` | `server.ts`、`hosted-providers.ts`、`hosted-ai-settings.ts` | 单机 AI 设置页；按 tool 名拦截 |
-| `apps/worker` | `analysis` pass | `index.ts` | — |
-| 文档 | 本文 | `docs/README.md`、`ARCHITECTURE.md`、`SECURITY.md`、`CONTEXT.md`、`USER_GUIDE.md`、`README.md` | `ai-sdk-llm-refactor-design.md` 标记历史 |
-
-## 10. 风险与缓解
-
-| 风险 | 影响 | 缓解 |
-|---|---|---|
-| 托管产品依赖 AI 建议售卖，改造期断供 | 收入/体验 | P3 前保持 inline；P4 用 worker 承接；灰度按租户 |
-| 建议质量口径漂移 | 校准失真 | provenance 强制；skill 版本纳入；新旧来源分开统计；小样本不展示结论 |
-| 消费者不在线 | 批量任务堆积 | 面板显示 pending/最老年龄；死信可见；launchd/headless 兜底 |
-| 重复完成/租约丢失 | 重复建议或丢结果 | fencing token + 结果 hash 幂等；明确错误 |
-| 事实包过大或过旧 | 成本/错误建议 | 只含必需字段；`dataAsOf` 窗口校验；过期直接失败 |
-| 迁移破坏旧库 | 启动失败 | 幂等 `ensureSchema` + `ensureColumn`；先备份 |
-| DSH 插件 API 不稳定 | 消费者层返工 | 队列只依赖 MCP 工具名；DSH 改动收敛在 skill/plugin |
-| 提示词注入 | 越权/错误结论 | 事实文本作为 data；skill 禁止执行数据指令；写路径校验 factId |
-| 领域层残留 AI import | 边界回退 | 导入扫描 + CI 阻断 |
-| 单机 Web 与 DSH 入口混淆 | 用户路径分裂 | 单机以 DSH 为入口；托管 Web 保留；文档明确 |
-
-## 11. 待决问题
-
-> Q11–Q16 已于 2026-10-22 拍板，结论见 §14；下表保留原始问题记录。
-
-| 编号 | 问题 | 选项 | 建议 |
-|---|---|---|---|
-| Q2 | 交互式建议是否也创建 `analysis_job` | A. 不创建；B. 创建以便审计/重放 | **已拍板 A**，以持久化 context 作审计等价物（§14） |
-| Q3 | `analysis_context` 保留期 | A. 批量到终态；B. 交互 30 分钟；C. 统一 7 天 | **已拍板**：批量到终态 + 30 天；交互 180 天（§14） |
-| Q6 | 存量 Chat 会话是否迁出领域 | A. 本期不动；B. P6 迁移 | A，本期只处理 AI |
-| Q7 | skill 版本标识 | git blob hash / frontmatter version / 文本 hash | git blob hash 最可复现 |
-| Q8 | provenance 是否记录完整生成参数 | A. 只记 model；B. 记完整参数快照 | B 利于复盘，schema 会膨胀 |
-| Q9 | 线 A 的插件包放哪 | A. 独立仓库；B. luoome 仓库 `plugins/`；C. 用户配置目录 | A，避免与领域仓库耦合 |
-| Q10 | 托管 Chat 是否也切内嵌 DSH Runtime | A. 先保留 AI SDK；B. 同步切换 | A，先验证分析消费者 |
-| Q11 | 消费者面（L1）的写面收窄机制 | A. 维持 `LUOOME_EXPOSE_WRITE=true` + allowlist；B. 消费者实例默认 deny + 显式 allow；C. 队列工具声明独立 capability，不占 write 组 | **已拍板 C**：队列工具声明 `queue` capability；allowlist 仅二次收窄（§14） |
-| Q12 | 交互式建议的审计等价物（Q2/Q3 对齐） | A. 不建 job，但交互 context 持久化、不随 30 分钟过期清理；B. 交互式也建轻量 job | **已拍板 A**：交互 context 持久化 180 天（§14） |
-| Q13 | 双消费者（DSH skill / 托管 worker）同账户竞争 claim 的分工 | A. 先到先得；B. 按 kind 或来源划分配额 | **已拍板 A**：先到先得，`claimed_by` 仅观测（§14） |
-| Q14 | 托管 Chat 直连 `ai-runtime` 的架构例外 | A. 作为显式例外写入 `docs/ARCHITECTURE.md` 与 `check-layers.ts` 白名单；B. Chat 也改经 `ToolContext` | **已拍板 A**：ARCHITECTURE 例外条款已落笔（§14） |
-| Q15 | `enqueue_analysis_job`「只进 `WorkflowToolMap`、不进 `toolRegistry`」的注册机制 | A. P2 前置 spike 验证现有 tools 包能否支持；B. 直接进 registry，MCP 侧再过滤 | **已拍板 A**：机制已验证存在（`save_watch_trigger` 先例 + `WorkflowToolMap`）（§14） |
-| Q16 | 线 A 验收的前置条件 | A. 验收条款写明宿主常驻与 DSH 版本下限，节假日静默退出纳入判定口径；B. 维持现状 | **已拍板 A**：已写入 §4.9（§14） |
-| Q17 | context 的写回窗口与审计保留期是否拆分 | A. 合并在一个 `expires_at`；B. 拆为 `write_until`（写回截止）+ `expires_at`（审计保留/清理） | **已拍板 B**（§15.2 指出合并后交互式 180 天内可写回旧事实，与 `stale_context` 意图冲突；由 Kimi 按 owner 授权代为拍板，落笔 §5.3.2/§5.4.5/§5.7.1/§5.8.1） |
-
-## 12. 附录
-
-### 12.1 旧 → 新 tool 映射
-
-| 旧 tool | 新路径 |
-|---|---|
-| `analyze_stock` | `get_analysis_context(kind=advice_stock)` → 模型 → `record_advice` |
-| `analyze_position` | `get_analysis_context(kind=advice_position)` → 模型 → `record_advice` |
-| `market_outlook` | `get_analysis_context(kind=advice_market)` → 模型 → `record_advice` |
-| `analyze_strategy_candidate` | `enqueue_analysis_job(kind=advice_strategy_candidate)` → `claim` → `complete` |
-| `research_investment_directions` | `get_analysis_context(kind=research_directions)` → 模型 → `record_analysis_result` |
-| `generate_strategy_insight` | `get_strategy_insight_facts` + `get_analysis_context(kind=strategy_insight_narrative)` → `record_analysis_result` |
-| `generate_strategy_version_proposal` | `get_analysis_context(kind=strategy_version_proposal)` → 模型 → `record_analysis_result`（内部走 `propose_strategy_version_draft`） |
-| `generate_strategy_recommendations` | 确定性 preflight + `enqueue_analysis_job` |
-| `agent_run` | DSH 会话 / 托管 run |
-
-### 12.2 术语
-
-| 术语 | 含义 |
-|---|---|
-| 事实包 / context | 由领域装配、带 `factIds` 与 `dataAsOf` 的确定性数据快照 |
-| 生产者 | 领域内决定「要分析什么」的代码（workflow/tool） |
-| 消费者 | 唯一允许调用模型、产出结论的进程或会话 |
-| 写回 | 把消费者结果经校验后落库的路径 |
-| provenance | 建议/结果的生成来源元数据 |
-| 死信 | 超过重试上限、不再自动调度的任务 |
-| 只读面 | 默认 MCP 实例（serverName `luoome`），只暴露 read 面，供聊天、看板、研究使用（§4.3、§5.4.4） |
-| 消费者面 | 单独 MCP 实例（serverName `luoome-worker`），按 `queue` capability 暴露队列工具，`LUOOME_EXPOSE_TOOLS` 仅二次收窄（§4.3、§5.4.4，Q11） |
-
-### 12.3 关键证据索引
-
-| 主题 | 位置 |
-|---|---|
-| 领域 LLM 端口 | `packages/core/src/context.ts:164`、`:172`、`:217`、`:284` |
-| Advice 定义与不变量 | `packages/core/src/entity/advice.ts:111`、`:334`；`packages/core/src/entity/invariants.ts:47` |
-| 规则 fallback | `packages/adapters/src/llm/manager.ts:33`、`:145`；`packages/core/src/entity/advice.ts:364` |
-| MCP 暴露 | `packages/mcp/src/exposure.ts:6`、`:26`；`packages/mcp/src/server.ts:69` |
-| Tool 契约 | `packages/tools/src/define-tool.ts:54`、`:183` |
-| 租约范例 | `packages/db/src/schema/index.ts:872`（strategy_run_leases）；`packages/db/src/client.ts:902`；`packages/core/src/repository/index.ts:810` |
-| 队列式 claim 范例 | `packages/core/src/repository/index.ts:1257`（WorkflowRunRepository） |
-| 内嵌 DSH 路径 | `packages/dsh-bridge/`、`apps/agent-runtime/`、`infra/dsh/README.md` |
-| 托管计量 | `packages/adapters/src/llm/hosted-meter.ts:33`、`hosted-model-transport.ts` |
-| 订阅中 AI 的价值 | `docs/prd/subscription-pricing-v1.md` §3.1 |
-| 平台基线 | `docs/ddd/dsh-plugin-platform-design.md` |
-
-## 13. 评审意见（2026-10-22）
-
-> 评审方式：通读全文，并对事实基线章节的关键断言做了代码抽查（`packages/core`、`packages/tools`、`packages/adapters`、`packages/mcp`、`apps/agent-runtime`、`packages/dsh-bridge`，以及 `bun packages/cli/src/index.ts tools list --json` 实测快照）。
-
-### 13.1 总体结论
-
-**通过，建议按 §7 排期进入 P1，但需先修正 §13.2 的事实基线偏差。**
-
-设计的核心判断是对的：把「事实是什么」与「结论是什么」分开，用 `context → 推理 → record` 一条契约统一三条改造线，方向、边界和分期都成立。以下几点尤其值得肯定：
-
-1. **静默降级的处置**（§2.4、§5.8.3）抓住了现有系统最伤的问题——规则兜底污染 confidence 校准，「没有消费者就不要产生结果」是正确的原则。
-2. **队列机制设计扎实**：fencing token、完成幂等（同 token + 同结果 hash）、部分唯一索引做活动态去重、租约回收不起后台守护，都是与现有 `strategy_run_leases` 一致的成熟模式，没有重新发明轮子。
-3. **错误映射克制**（§5.4.5）：不新增 `ToolErrorKind`，避免协议面扩散。
-4. **阶段划分可回滚**：P1 先用 1–2 天验证「聊天就是入口」的假设再投入线 B，是这份文档最务实的一笔；每个阶段都带验收条款与回滚路径。
-5. **抽查的行号引用基本准确**：`analyze-stock.ts:80`、`manager.ts:33`、`hosted-meter.ts:33`、`context.ts` 的 `ToolContext.adapters.llm` 必填定义、`exposure.ts` 的 `LUOOME_EXPOSE_TRADE` 硬卡、`server.ts` 的 research 子串特判均与代码一致；§12.3 引用的关联文档全部存在。
-
-### 13.2 必须修正：事实基线数字与实测不符（§4.3）——**已于 2026-10-22 修正**
-
-§4.3 原称「180 个 tool，`read 87 / write 61 / external 26 / advice 5 / trade 1`」，实测（2026-10-22 工作树）为 **186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`**。两个具体偏差：
-
-- `advice` 实为 6 个而非 5 个，漏计了 `generate_strategy_recommendations`（它本身在 §5.4.2 的删除清单里，基数却漏了它，自相矛盾）。
-- 「默认暴露 `read + advice`（约 80 个，扣除 research 名）」实测为 95 个，扣除 research 名后 83 个。
-
-这不是吹毛求疵：L2/L3 层的暴露面估算、P5 删除清单的完整性、验收条款 4 的断言基数都建立在这组数字上。**修正要求：数字改为实测值，并注明取数命令与日期快照**，避免文档与代码漂移后无人察觉。（已落实：§4.3 正文已更新为实测数字并标注取数命令与日期。）
-
-另外一处小的事实出入：§2.4 原称规则兜底「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」，实际代码是中文文本常量 `RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，判定走 premise 或 evidence 任一命中（`advice.ts` 的 `isRuleFallbackAdvice`）。应引用常量名而非杜撰标记格式。（已落实：§2.4 正文已改为常量名与判定方式。）
-
-### 13.3 设计层面的意见（按重要度排序）
-
-1. **L1 消费者实例的写面收窄机制不够硬**（§4.3、§5.4.4）。当前方案是 `LUOOME_EXPOSE_WRITE=true` 打开整个 write 组（64 个），再靠 `LUOOME_EXPOSE_TOOLS` allowlist 收窄到 6 个。这意味着 allowlist 漏配或拼写错误时写面全开——默认是「开」而不是「关」。建议：消费者实例改为默认 deny + 显式 allow，或为队列工具声明独立的 capability（不占用 write 组），让「消费者身份」本身成为暴露依据，而不是依赖运维配置正确。
-
-2. **租约惰性回收会让 metrics 失真**（§5.3.5、§5.6.5）。租约回收只发生在 `claim` 内，意味着消费者全部离线时，`claimed` 且租约已过期的任务既不自动回到 `pending`，也不会体现在 `oldestPendingAgeMs` 里——而这恰好是最需要告警的场景（§10「消费者不在线」）。建议在 `list_analysis_jobs` / `get_analysis_metrics` 的读路径也做惰性回收，或在 metrics 中单列 `claimExpiredNotRecycled` 指标。
-
-3. **Q2 的默认答案与审计目标有张力**（§1.4、§5.3.3）。目标 4 要求每条建议可审计，但交互式建议不建 job 时 `provenance.jobId` 为空，审计链只剩 `contextId`，而交互式 context 默认 30 分钟过期（Q3）——过期清理后审计链断裂。建议：要么明确交互路径以 `contextId` + 持久化 context（而非 30 分钟过期）作为审计等价物，要么交互式也建轻量 job。现状是「待定 + 默认不创建」叠加「30 分钟过期」，两个默认值互相打架。
-
-4. **线 A 验收依赖的上游能力是 rc 版本**（§4.7、§4.9）。schedule 绑定会话、无交易日历、headless 不能挂 schedule，这些限制都来自 DSH 0.2.1-rc.2；验收条款 2「连续 3 个交易日自动产出晨报」还要求用户机器常驻。建议在线 A 验收中显式写明前置条件（宿主常驻、DSH 版本下限），并把「节假日静默退出」的 skill 行为纳入验收条款 2 的判定口径，否则「非交易日零输出」与「连续 3 个交易日」在同一周可能无法同时满足。
-
-5. **`enqueue_analysis_job` 的「只进 WorkflowToolMap、不进 toolRegistry」是新机制**（§5.4.1），现有 tools 包是否支持「注册但不进 registry」需要确认；若需要新增注册路径，P2 的 1.5–2 周估算可能偏紧。建议 P2 任务清单里单列这一项的技术验证。
-
-6. **部分唯一索引的并发边界值得一个显式 contract test**（§5.7.1）。`complete`（status 离开活动集）与并发 `enqueue`（同 dedupe_key 进入活动集）之间的 TOCTOU 依赖 SQLite 串行写保证，理论上安全，但这是整个去重语义的根基，建议 §8 contract 测试表中显式补上「complete 与 enqueue 并发竞争」用例，而不只写「dedupe 唯一」。
-
-7. **双消费者并存时缺少分工约定**（§5.6.1、§5.6.2）。P4 之后同一账户可能同时有 DSH skill 和托管 worker 两类消费者竞争 claim；`claimed_by` 前缀能区分来源，但没有配额或分工策略。低风险（claim 互斥保证不会重复消费），但文档应有一句说明：先到先得是否就是期望语义。
-
-8. **`apps/web` 的 AI 例外要在架构文档中显式落笔**（§5.1、§5.7.4）。「Chat 运行时从 `ai-runtime` 直接构造，不再经 `ToolContext`」打破了 AGENTS.md「surface 统一经 tools 使用业务能力」的分层规则。这个例外本身合理（Chat 本来就是托管产品能力），但 §3.3 的 `check-layers.ts` 扫描规则必须把它写成白名单条款，否则守卫脚本会误报；同时 `docs/ARCHITECTURE.md` 需要同步记录这个例外，不能只活在这篇 DDD 里。
-
-9. **交互式 30 分钟 context 过期的用户体感**（Q3 默认值）。用户在 DSH 会话中讨论超过 30 分钟后再决定落 advice，会吃到 `context_expired`，skill 需要重新取 context 再生成。语义正确（事实确实可能过时），但 §4.6 的 skill 行为表应注明「遇 `context_expired` 自动重取 context 重试一次」，把重试流程固化进技能而不是留给模型自由发挥。
-
-### 13.4 微小问题（不阻塞，顺手改）
-
-- §2.2 表中 `investment-workspace.ts` 的 sideEffect 标注为「advice（组合 write/external）」，与该 tool 实测的单一 sideEffect 声明方式不一致，建议注明这是组合语义的口头描述，避免读者去代码里找一个不存在的复合声明。（已落实：§2.2 该行已改为单一 `advice` 声明并在备注说明组合语义。）
-- §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。（已落实：§7 P0 行已补充。）
-- §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。（已落实：§12.2 已补充两条。）
-
-另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余 6 条涉及设计取舍或排期的意见已整理为 §11 待决问题 Q11–Q16（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件），待文档 owner 逐条拍板。（处理结果见 §14。）
-
-### 13.5 评审结论
-
-| 项 | 结论 |
-|---|---|
-| 总体方向 | 通过 |
-| 事实基线（§2、§4.3） | 通过（§13.2 所指偏差已于 2026-10-22 修正） |
-| 数据模型与状态机（§5.3、§5.7） | 通过，补 §13.3-6 的并发测试用例 |
-| Tool 契约（§5.4） | 通过，建议落实 §13.3-1 的消费者暴露机制 |
-| 实施分期（§7） | 通过，P2 增加注册机制验证任务 |
-| 待决问题默认值 | 已对齐（Q2/Q3 见 §14） |
-
-评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`b8b2318`）。
-
-> 评审遗留问题的处理结果见 §14。
-
-## 14. 评审意见处理结果（2026-10-22）
-
-> 评审基线：§13（评审人 Kimi）；处理人：文档 owner；处理方式：文档层拍板与修正，本阶段不改实现代码。
-
-### 14.1 逐条处理
-
-| 评审条目 | 结论 | 落点 |
-|---|---|---|
-| §13.2 事实基线（186 / 89-64-26-6-1；默认暴露 95/83） | 已复核，与 `bun packages/cli/src/index.ts tools list --json`（2026-10-22）一致 | §4.3 |
-| §13.2 规则兜底标记写法 | 改用常量名 `RULE_FALLBACK_PREMISE_MARKER` / `RULE_FALLBACK_EVIDENCE_MARKER` 与 `isRuleFallbackAdvice` 判定 | §2.4 |
-| §13.3-1 消费者写面默认 deny | 采纳 C：队列工具声明独立 `queue` capability，`LUOOME_EXPOSE_QUEUE=true` 才暴露；allowlist 仅二次收窄 | §4.3、§5.4.1、§5.4.4、Q11 |
-| §13.3-2 租约惰性回收 metrics | 已增加 `claimExpiredNotRecycled` 指标 | §5.6.5 |
-| §13.3-3 Q2/Q3 审计链断裂 | 拍板 Q12=A：交互 context 持久化 180 天；Q2 不建 job；Q3 批量到终态 + 30 天 | §1.4、§5.3.2、§5.3.3 |
-| §13.3-4 线 A 验收前置 | 写入 DSH 版本下限、宿主常驻、节假日静默判定，并调整「连续 3 个交易日」口径 | §4.9 |
-| §13.3-5 注册机制 | 已确认机制存在（internal tool 只导出、不进 registry，workflow 走 `WorkflowToolMap`），无需 P2 spike | §5.4.1、Q15 |
-| §13.3-6 并发 contract test | 已补「complete 与 enqueue 并发竞争」用例 | §8 |
-| §13.3-7 双消费者分工 | 拍板 Q13=A：先到先得；`claimed_by` 前缀仅观测，不做配额 | §5.6.4、Q13 |
-| §13.3-8 托管 Chat 架构例外 | 拍板 Q14=A：写入 `docs/ARCHITECTURE.md` §3 例外条款与 `check-layers` 白名单 | `docs/ARCHITECTURE.md`、§3.3 |
-| §13.3-9 context_expired 重试 | 已固化进 skill 写回约定 | §4.6 |
-| §13.4 三处小问题 | 已落实（sideEffect 注释、P0 口径、术语表） | §2.2、§7、§12.2 |
-
-### 14.2 Q11–Q16 拍板
-
-| 编号 | 结论 | 关键理由 |
-|---|---|---|
-| Q11 | C：队列工具独立 `queue` capability；`LUOOME_EXPOSE_QUEUE=true` 才暴露；allowlist 只做二次收窄 | 默认 deny；不依赖运维配置正确；与 `write` 组解耦 |
-| Q12 | A：交互式不建 job，context 持久化 180 天 | 审计链不因 30 分钟过期断裂；与 Advice 校准窗口一致 |
-| Q13 | A：双消费者先到先得 | claim 互斥已保证不重复消费；配额是后续优化，不是本期必需 |
-| Q14 | A：ARCHITECTURE 显式例外 + `check-layers` 白名单 | 例外合理但必须落笔，否则守卫脚本误报 |
-| Q15 | A：复用 internal tool 机制 | 机制已验证存在（`save_watch_trigger` 先例 + `WorkflowToolMap`） |
-| Q16 | A：验收写明前置条件与节假日口径 | 否则「连续 3 个交易日」与「非交易日零输出」无法同周同时成立 |
-
-### 14.3 复核清单
-
-- [x] §2.4 不再出现「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」的杜撰格式。
-- [x] §4.3 基数与实测一致，并标注取数命令与日期。
-- [x] §5.4.4 消费者实例不依赖 `LUOOME_EXPOSE_WRITE`。
-- [x] §4.9 含宿主常驻、DSH 版本、节假日三条前置。
-- [x] `docs/ARCHITECTURE.md` 已补托管 Chat 的 `ai-runtime` 例外条款。
-- [x] Q11–Q16 在 §1.4、§11 与 §14 三处状态一致。
-- [x] 文档相对链接与 `git diff --check` 通过。
-
-## 15. 二轮评审意见（2026-10-22，针对 §14 处理后版本）
-
-> 评审方式：复核 `f6d66f6` 相对 `1e3387c` 的全部改动，核对 Q11–Q16 落笔的一致性，并对 §14 中可验证的事实断言做了代码抽查。
-
-### 15.1 总体结论
-
-**通过。** §14 的处理质量高：Q11–Q16 逐条有结论、有理由、有落点，§14.3 复核清单各项经抽查属实。以下事实断言验证无误：
-
-1. **Q15 的机制声明属实**：`save_watch_trigger` 确实不在 `toolRegistry`（registry.ts / index.ts 无该 tool），workflow 经 `WorkflowToolMap`（`define-workflow.ts:306` 接口声明、`:666` 该 tool 的访问器声明、`:757` `buildWorkflowTools` 定义、`:789` 手工追加访问器）访问，与 §5.4.1 的描述完全一致。行号准确。
-2. **Q11 落笔一致**：`queue` capability 在 §4.3（L1）、§5.4.1（表格 + 注释）、§5.4.3、§5.4.4（默认 deny 语义）、§4.9（验收 4）、§1.4/§11/§14 七处口径一致；「allowlist 漏配只会让工具更少」的默认 deny 语义正确。
-3. **Q16 三条前置**（DSH 版本下限、宿主常驻、节假日静默口径）已完整进入 §4.9，且「连续 3 个交易日」与「非交易日零输出」的计数口径冲突已消解。
-4. **`docs/ARCHITECTURE.md` 例外条款**与 §3.3 的白名单表述一致，例外边界（仅 `apps/*` 可导入、Chat 不复制领域逻辑）写得清楚。
-
-### 15.2 新发现问题（1 项，建议 P2 前处理）
-
-**Q12 的落笔把「写回接受窗口」与「审计保留期」合并进了同一个 `expires_at`**（§5.3.2、§5.3.3、§1.4 Q3）。
-
-现状文本：交互式 `expires_at` = 180 天，且「`expires_at` 之后不再接受新的写回，但审计读取仍可按 id 读」。这意味着一个交互式 context 在 **180 天内都可被 `record_advice` 接受**——一个月前装配的事实仍可产出新 Advice。这与两处既有设计意图冲突：
-
-- §5.4.5 的 `stale_context`（数据时点过旧拒绝写回）变得没有触发场景：对交互式路径，文档没有定义任何短于 180 天的写回新鲜度窗口（§5.5.7 的 1 个交易日窗口只约束批量 claim）。
-- §4.6 刚固化的 `context_expired` 重试约定对交互式路径几乎成为死代码（180 天内不会触发）。
-
-Q12 的原意是「审计链不因 30 分钟过期而断裂」，要的是**保留**，不是**接受写回**。建议把两个语义拆开：
-
-| 字段 | 语义 | 建议取值 |
-|---|---|---|
-| `write_until` | `record_*` / `complete` 接受写回的截止 | 交互：装配后 30 分钟（或当交易日收盘）；批量：任务终态 |
-| `retain_until`（可复用 `expires_at`） | 审计读取保留期，过期后可物理清理 | 交互：180 天；批量：终态 + 30 天 |
-
-校验规则随之改为：写回校验 `write_until` + `stale_context` 窗口；审计读取不校验时效。批量路径还需补一句：job 终态后 `record_advice(contextId)` 直传路径同样拒绝（目前只隐含在 job 状态机里）。
-
-### 15.3 轻微不一致（3 处，顺手改）
-
-1. **§5.9 安全表**仍写「消费者实例只开 6 个工具」，Q11 拍板后 §4.3 L1 已是 7 个（含 `record_advice`、`record_analysis_result`），§5.4.4 的可选二次收窄名单是 9 个。建议改为「消费者实例只暴露 `queue` capability 工具（当前 7 个）」。
-2. **§12.2 术语表**「消费者面」定义仍写「按 allowlist 暴露队列消费工具」，应改为「按 `queue` capability 暴露，`LUOOME_EXPOSE_TOOLS` 仅二次收窄」（Q11）。
-3. **§5.4.3 影响段落**只列了 P5 删除 `advice` 的同步点；P2 新增 `queue` 值同样需要同步 `packages/core/src/types/side-effect.ts` 与 `packages/mcp/src/exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`），建议在该段补一句，避免 P2 实施时漏改暴露解析。
-
-### 15.4 结论
-
-| 项 | 结论 |
-|---|---|
-| Q11–Q16 拍板与落笔 | 通过 |
-| §14 事实断言 | 抽查全部属实 |
-| 新发现问题 | 1 项（§15.2，写回窗口与审计保留期需拆分）——**已拍板为 Q17（拆分为 `write_until` + `expires_at`）并落实**，见 §15.5 |
-| 轻微不一致 | 3 处（§15.3）——已全部修正，见 §15.5 |
-
-评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`f6d66f6`）。
-
-### 15.5 处理结果（2026-10-22，Kimi 按 owner 授权代为拍板）
-
-- **Q17 拍板为 B（拆分）**：`AnalysisContext` 新增 `write_until`（写回截止：交互 = min（装配后 30 分钟，当交易日 15:00）；批量 = 任务终态），`expires_at` 回归纯审计保留/清理语义（交互 180 天、批量终态 + 30 天）。落点：§5.3.2 字段表与过期语义、§5.4.5 错误映射、§5.7.1 DDL、§5.8.1 校验第 1 条；§1.4 与 §11 已同步登记 Q17。批量任务终态后的 `record_advice(contextId)` 直传路径也在 §5.3.2 显式拒绝。
-- **§15.3-1 已修正**：§5.9 安全表改为「消费者实例默认 deny，只暴露 `queue` capability 工具（当前 7 个，Q11）」。
-- **§15.3-2 已修正**：§12.2「消费者面」定义改为按 `queue` capability 暴露、allowlist 仅二次收窄。
-- **§15.3-3 已修正**：§5.4.3 影响段落补充 P2 新增 `queue` 值需同步 `side-effect.ts` 与 `exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`）。
-
-至此 §13 + §15 两轮评审意见全部闭环，文档可进入 P1。
+| **Phase 1 (M1)：去多租户化清理与单机多账户恢复** | 1. 删除 `core/db/adapters/tools/workflows/web` 中的 `hosted` 与 `platform` 模块及测试；<br/>2. 恢复 `apps/web/src/server.ts` 的 `startWeb` 直接挂载 `$LUOOME_HOME/luoome.db` 与进程内调度器；<br/>3. 恢复 Web 端多投资账户创建与切换；<br/>4. 精简 `apps/web/src/dsh/` 中的租户字段与计费预占传输。 | 干净的单机多账户代码树；更新后的 `README.md`、`CONTEXT.md`、`ARCHITECTURE.md` | 1. 全仓无 `hosted` / `tenant` / `control.sqlite` 残留；<br/>2. `bun run typecheck`、`bun run lint`、`bun run test:all` 全绿；<br/>3. `bun run web` 启动后可直接免登录进入完整看板并切换多账户。 |
+| **Phase 2 (M2)：领域层去 AI 与分析队列三件套** | 1. 新增 `AnalysisContext`（含 `write_until` 与 `expires_at`）、`AnalysisJob`、`AnalysisProvenance` 实体、DDL 与双仓储（含并发 Contract Tests）；<br/>2. 实现 12 个分析队列与写回 Tool，新增 `queue` capability；<br/>3. 改造 `daily-advice`、`strategy-daily-cycle`、`trading-plan-daily-cycle`、`weekly-report`、`strategy-autonomy-weekly` 为确定性事实装配 + 入队；<br/>4. 将 `adapters/llm` 抽离为 `packages/ai-runtime`，删除领域内 9 个内置 AI Tool 与 `ToolContext.adapters.llm/agent`；<br/>5. 上线 `scripts/check-layers.ts` 零 AI 守卫。 | `analysis_jobs` / `analysis_contexts` 表；12 个新 Tool；`packages/ai-runtime`；`check-layers.ts` | 1. `bun run check:layers` 证明领域包零 AI 依赖与零模型端点字面量；<br/>2. 批量工作流执行期间模型调用次数为 `0`；<br/>3. 未知 `factId`、过期 `write_until`、违反价格不变量的写回 100% 被拒绝；<br/>4. 存量 Advice 自动回填 `legacy-ai` 且校准统计分桶正确。 |
+| **Phase 3 (M3)：DSH 深度集成与持久 Session 恢复** | 1. 实现 `AgentSessionBinding` 仓储，打通 `NodeRuntimeHost` 的 `resumeSession` 与已确认草案回执增量注入；<br/>2. 重构 `apps/worker` 为单机队列消费者（支持用 `ai-runtime` 或内嵌 DSH 消费 `AnalysisJob`）；<br/>3. 落地 `skills/luoome/` 下的 5 个标准投研 Skill（含 `context_expired` 自动重取重试约定）；<br/>4. 将 Web Chat 默认运行时切换至受控内嵌 DSH Runtime（保留 `ai-sdk` 配置回退开关）。 | `agent_session_bindings` 表；单机 `apps/worker`；5 个 DSH Skills；端到端浏览器验证 | 1. Web 对话通过 DSH 调用真实行情与事实包工具，流式输出、工具卡与草案确认卡正常；<br/>2. 确认草案后下一轮提问 DSH 准确感知已执行回执，重启 Web 后会话上下文不断裂；<br/>3. 盘后策略入队的 `AnalysisJob` 被消费者成功认领并写回可追溯 Advice。 |
+| **Phase 4 (M4)：`AgentDefinition` 与多 Agent 协同** | 1. 落地 `AgentDefinition` 实体、双仓储与 CRUD Tool；<br/>2. 内置 `coordinator / research / market / strategy / risk` 五类系统 Agent 模板；<br/>3. 在 `packages/dsh-bridge/src/plugin.ts` 中激活子 Agent 派生与 `agent/created` 工具权限交集守卫；<br/>4. 在 Web 端提供 Agent 配置与运行轨迹查看界面。 | `agent_definitions` 表；多 Agent 协同插件守卫；Web Agent 管理面板 | 1. Coordinator 可拆解任务并调度 Research / Risk 子 Agent 协同产出综合报告；<br/>2. 子 Agent 越权调用父级未授权工具时 100% 被 `dsh-bridge` 拦截；<br/>3. 父子 Agent 共享单次 Run 的工具与模型调用上限，全部子任务收尾后 Run 才标记 `completed`。 |

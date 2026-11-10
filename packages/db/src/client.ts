@@ -9,14 +9,6 @@ import {
 } from '@luoome/core';
 import { eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
-import { createDrizzleReportAutomationRepository } from './hosted/report-automation-client.js';
-import { ensureReportAutomationSchema } from './hosted/report-automation-schema.js';
-import { DrizzleTenantRepository } from './hosted/tenant-client.js';
-import { DrizzleTenantExportRepository } from './hosted/tenant-export-client.js';
-import { ensureTenantExportSchema } from './hosted/tenant-export-schema.js';
-import { ensureTenantSchema } from './hosted/tenant-schema.js';
-import { createDrizzleWatchDeliveryRepository } from './hosted/watch-delivery-client.js';
-import { ensureWatchDeliverySchema } from './hosted/watch-delivery-schema.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -116,10 +108,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_tracking_starting_unique ON investment_tracking (owner_user_id, account_id) WHERE status = 'starting'`,
   );
-  ensureWatchDeliverySchema(db);
-  ensureReportAutomationSchema(db);
-  ensureTenantSchema(db);
-  ensureTenantExportSchema(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
     id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
     subject_id TEXT NOT NULL, stock_id TEXT, source_occurred_at INTEGER NOT NULL,
@@ -2125,10 +2113,6 @@ export const createDrizzleRepos = (
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
-    hostedTenant: new DrizzleTenantRepository(db),
-    hostedExports: new DrizzleTenantExportRepository(db),
-    watchDelivery: createDrizzleWatchDeliveryRepository(db),
-    reportAutomation: createDrizzleReportAutomationRepository(db),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),

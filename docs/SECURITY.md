@@ -337,68 +337,10 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
 
-## 个人订阅托管边界
+## DSH 运行时安全边界
 
-hosted已有身份/隔离/支付/恢复基础设施；本次在其上复用原Web业务，默认一个投资账户。
-安全边界用于保护用户和平台权限，不以旧facts-only范围替代现有产品。新融合路径尚需本版独立验收，
-真实运营与供应商门禁见[运行手册](./runbooks/hosted-personal-subscription.md#7-生产放行门禁)。
-
-- 显式hosted不读取个人`.env`、共享本地DB或用户home模型配置；Bun启动要求`--no-env-file`。
-  通知链接使用 `PUBLIC_ORIGIN`，传输策略默认要求HTTPS；临时HTTP验证仅在部署显式设置 `HOSTED_ALLOW_INSECURE_HTTP=true`
-  时允许，不能作为生产放行依据。生产拒绝fixture provider，注册默认关闭直到实际放行条件完成。
-- 邮箱OTP为6位/5分钟/5次尝试，平台存HMAC；邮箱/IP/全站有预算。session token仅存hash，cookie
-  使用Secure/HttpOnly/SameSite=Lax/Path=/；已有idle7天/absolute30天参数、会话轮换和敏感操作再认证保持。
-  临时HTTP入口使用独立的 `luoome_http_session`，保留HttpOnly/SameSite/Path及Origin/CSRF保护；
-  验证码与会话在HTTP中不加密。HTTPS入口不接受该Cookie，切换HTTPS后须重新登录。
-- 浏览器mutation按请求实际Host（含端口）和配置的HTTP/HTTPS传输策略校验同源Origin及会话CSRF，不绑定固定域名或端口；登录挑战只豁免已有会话/CSRF，仍查Origin及限流。
-  代理须保留原始Host及端口；不信任客户端提供的X-Forwarded-Host/Proto来放行请求。
-  支付raw-body webhook独立验签；可信代理头不能替代身份。客户端Tenant、账户、owner、价格和预算不能覆写服务端事实。
-- 平台registry不进入模型/MCP/generic HTTP。原业务Tool、专用API、SSE、确认草案和worker统一按当前Tenant授权。
-  本人的Advice、账户金额和研究资料按原业务契约可见；跨租户读取/写入/聚合必须拒绝，不能只通过前端删除字段保护。
-- hosted服务端只绑定唯一默认Account；新增/切换在HTTP、generic Tool和AI草案路径都拒绝。
-  `update_account`只收名称，不能覆盖本金/现金/币种；内部初始化不对普通用户/模型开放。local多账户行为不变。
-- 保留原AI/研究入口，但模型只能使用当前Tenant/Account与已授权工具，消耗受订阅及预算约束。
-  provider未装配明确不可用，不伪造模型输出。平台LLM/数据源密钥、任意Vault路径/Git凭据/整库恢复不是租户设置权限。
-
-### 管理员 AI 配置
-
-`/api/admin/ai-settings` 仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问；POST 还要求同源、CSRF 和 write opt-in。普通租户的 `/api/settings/*` 封锁不变。
-配置适用于全站，以单文件原子替换写入持久卷的 `operator/ai-settings.json`（0600），不读取个人 home 配置。
-“设置 → AI 模型”使用同一管理员边界。`/api/admin/ai-settings/catalog` 管理供应商、模型和默认选择；修订号拒绝过期草稿覆盖新配置。
-接口仅返回密钥是否配置，不返回密钥、路径或供应商原始错误。留空保留同一供应商地址的密钥；更换地址必须重新填写；清除正在使用的密钥前须切换模型或关闭 AI。
-`/api/admin/ai-settings/models` 还要求 external opt-in，只向管理员指定的 HTTPS 基础地址追加 `/models`，禁止重定向，限时 15 秒、响应上限 1 MiB。
-只有地址与已保存供应商完全匹配才复用密钥；未保存地址必须显式填写密钥。目录仅返回验证后的模型 ID 和名称，不写入配置。
-旧版 v1 文件只读转换，首次保存升级为 v2 多供应商格式。回滚到仅支持 v1 的旧版时，须按恢复集流程恢复兼容配置；不能直接让旧程序读取 v2 文件。
-每次请求固定模型目录、凭据与费率快照，执行仍经过租户授权、额度预占、单次/周期预算和用量结算。计量层只允许该快照的确切 Chat Completions 地址和模型，禁止跟随重定向。
-费率由管理员配置，缓存优惠所需用量缺失时保持 unknown；输入同价时无需缓存细分即可结算。
-浏览器不将密钥写入 localStorage，保存后或身份切换时清空输入。恢复集包含该私密配置，不得公开分享。
-
-### 管理员行情数据源配置
-
-托管模式下 `/api/settings/market*`（行情源开关、排序与连通性测试）仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问，POST 同样要求同源、CSRF 和 write opt-in；普通租户的其余 `/api/settings/*` 封锁不变。
-配置适用于全站，原子写入持久卷的 `operator/market.env`（0600），保存后立即重建共享行情栈；worker 按文件 mtime 在任务批次前同步，无需重启。恢复集包含该文件，须按密钥文件保护。
-
-### DSH 开发运行时
-
-DSH Chat 只接受 development 环境下的显式启用，production 配置拒绝启动该路径。
-Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装、MCP、子 Agent 或额外日志上传。
-业务调用绑定服务端 run/tenant/generation/account/manifest，经过本轮 callable 和最新授权；草案不能通过直接 registry 执行变成写入。
-工具、模型、原生网页的内部接口各用独立凭证；模型输入不能指定执行身份，供应商密钥不交给 DSH。
-当前 Web 原生网页能力仅允许显式授权的 fixture；受信插件与 Cordis scope 不构成恶意代码沙箱。
-断流、取消或缺少真实 usage 保留未知费用，执行停止事实与费用状态分开。无法证明排空或保存失败时阻断继续执行，不自动重放。
-真实供应商、生产网络/进程隔离、删除恢复与持久 Session 尚需后续验收，详见 [DSH 研究计划](./dsh-plugin-platform-research-plan.md)。
-
-### 订阅门禁运营开关
-
-`HOSTED_ENTITLEMENT_REQUIRED=false` 时，试用窗口与付费权益缺失/过期不再阻断租户业务写和 worker 后台任务（策略运行、报告生成、盯盘）；身份、租户隔离、配额与预算约束不变。默认 `true`，仅在没有启用订阅收费的部署中显式关闭。
-- 建议与交易继续分离；自动证券交易禁止，trade不进入MCP/模型/通用Web路由；人工登记已完成成交仍走既有专用契约。
-- Tenant目录使用opaque ID、owner/generation/schema manifest与私有权限，拒绝符号链接越界。
-  应用进程可访问挂载的多个租户，因此不将此当作用户代码OS沙箱。
-- 发送前检查权益、当前规则/成员、目的地及偏好；unknown邮件按provider契约查询，不盲目重发。
-  个人/全局实际尝试预算与站内展示分离；平台日志不记录投资、模型或邮件正文。
-- 到期历史读取不隐式刷新行情或调用模型；导出允许本人私人资料，不含平台鉴权/密钥/成本或受限市场缓存，下载再次鉴权并no-store。
-- 删除先撤销访问/递增generation，再排空各进程请求、SSE和执行者；独立tombstone先于清目录持久化。
-  恢复应用最新删除ledger，必要财务记录与私人资料分离；旧会话、导出和邮件不得被备份复活。
-- 硬退出残留写活动不自动过期；恢复须停写、撤销旧fence并核对回执/支付/费用，不通过手改DB或伪造零成本解锁。
-
-旧fixture验收不覆盖尚未接通的原业务/SSE/自动调度。正式条款同意、真实模型/数据/支付/邮件以及生产演练均需相应独立证据。
+- Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装或 MCP。
+- 业务调用绑定服务端 `runId + ownerId + accountId + allowedTools`，经过本轮 callable 和最新授权；写操作只能产生待确认草案，不能通过直接 registry 执行变成写入。
+- 工具、模型、原生网页的内部接口各用独立 audience 凭证；模型输入不能指定执行身份，供应商密钥留在 Bun 主进程。
+- 停止执行必须核对 Host 退出与 Gateway 实际调用排空，再收尾保存与用量；失败不自动重放。
+- 建议与交易继续分离；自动证券交易禁止，`trade` 不进入 MCP、模型或通用 Web 路由；人工登记已完成成交仍走既有专用契约。

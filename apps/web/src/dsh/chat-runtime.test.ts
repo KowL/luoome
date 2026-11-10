@@ -23,7 +23,7 @@ const runtime = () =>
     },
   });
 
-it('refuses missing trusted scope, truncated histories and unmetered hosted configuration before spawning', async () => {
+it('refuses missing trusted scope and truncated histories before spawning', async () => {
   const value = runtime();
   const request = { instructions: '', uiMessages: [], tools: [] };
   await expect(value.createUIMessageStreamResponse(request)).rejects.toThrow('trusted');
@@ -40,28 +40,6 @@ it('refuses missing trusted scope, truncated histories and unmetered hosted conf
       },
     }),
   ).rejects.toThrow('截断');
-  await expect(
-    value.createUIMessageStreamResponse({
-      ...request,
-      execution: {
-        runId: 'fixture-hosted-run',
-        context: {
-          ...ctx,
-          identity: {
-            mode: 'hosted',
-            tenantId: 't1',
-            tenantGeneration: 1,
-            userId: ctx.user.id,
-            actor: 'user',
-            requestId: 'r1',
-          },
-        },
-        conversationId: 'fixture',
-        scenario: AGENT_SCENARIOS.general,
-        historyTruncated: false,
-      },
-    }),
-  ).rejects.toThrow('metered');
 });
 
 it('treats a pre-binding Host failure with a stopped receipt as drained, without leaking conversation capacity (Node protocol fixture)', async () => {

@@ -67,19 +67,13 @@ import {
   listPortfolioPerformanceSnapshotsTool,
   listStrategyEvaluationDaysTool,
   listStrictStrategyBacktestsTool,
+  resolveWatchNotificationTool,
   resumeStrategyEvaluationSessionTool,
   settleChatDraftTool,
   startStrategyEvaluationSessionTool,
   syncStrategyWatchlistSubscriptionsTool,
   toolRegistry,
 } from '@luoome/tools';
-import {
-  getHostedWatchSettingsTool,
-  listHostedWatchDeliveriesTool,
-  resolveHostedWatchNotificationTool,
-  saveHostedWatchSettingsTool,
-  testHostedWatchSettingsTool,
-} from '@luoome/tools/hosted';
 import {
   closingReportWorkflow,
   intradayTradingPlanWatchWorkflow,
@@ -93,21 +87,24 @@ import {
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
 import { ZodError, z } from 'zod';
-import { type AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
+import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
-import { type FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
-import { resolveRuntimeMode } from './hosted-config.js';
+import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
+import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
 import {
   type MarketDatasetStatusRow,
-  type MarketSettingsStore,
+  MarketSettingsStore,
   SaveMarketSettingsSchema,
   withRuntimeStatus,
 } from './market-settings.js';
+import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
 import {
-  type ResearchVaultSettingsStore,
+  ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
+import { startStrategyAutonomyScheduler } from './strategy-autonomy-scheduler.js';
+import { startStrategyScheduler } from './strategy-scheduler.js';
 import { createWorkspaceDraft, workspaceSnapshot } from './workspace.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
@@ -279,8 +276,6 @@ export const buildWebContext = async (
   env: Readonly<Record<string, string | undefined>> = process.env,
   deps: { readonly sources?: WebSourceSet } = {},
 ): Promise<ToolContext> => {
-  if (resolveRuntimeMode({ ...env }) !== 'local')
-    throw new Error('shared Web context is local-only');
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
@@ -384,13 +379,6 @@ export const buildWebContext = async (
 };
 
 export interface CreateWebAppOptions {
-  /** Hosted 外壳完成认证后注入不可变请求上下文；后台执行另持 runtime 租约。 */
-  readonly hosted?: {
-    readonly request: (c: Context) => {
-      readonly context: ToolContext;
-      readonly retain: () => () => void;
-    };
-  };
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
   /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
@@ -399,8 +387,6 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
-  /** Hosted 模式保存行情源设置后重建共享行情栈（替代本地进程的 ctxRef 替换）。 */
-  readonly marketSettingsReload?: () => void;
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
    * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
@@ -431,23 +417,17 @@ const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
   return undefined;
 };
 
-/** 构造 Hono app（注入 ctx，便于测试与复用）。 */
 /**
  * 构造 Hono app（注入 ctx，便于测试与复用）。
- * 接受 ctx 引用对象 { current } 而非裸 ToolContext。浏览器账户选择通过
- * X-Luoome-Account-Id 形成 request-scoped context；无 header 的本地调用沿用默认账户。
+ * 浏览器账户选择通过 X-Luoome-Account-Id 形成 request-scoped context；
+ * 无 header 的本地调用沿用默认账户。
  */
 export const createWebApp = (
   initialCtx: ToolContext | undefined,
   options: CreateWebAppOptions = {},
 ): Hono => {
-  if (initialCtx?.identity?.mode === 'hosted' && options.hosted === undefined)
-    throw new Error('hosted identity requires the hosted Web entry');
-  if (initialCtx === undefined && options.hosted === undefined)
-    throw new Error('local Web requires a context');
+  if (initialCtx === undefined) throw new Error('local Web requires a context');
   const mutationPermission = (request: Request): ToolResult<never> | null => {
-    // 托管入口已按外部传输策略校验 Origin 和 CSRF，不能再按代理内部 HTTP URL 拒绝。
-    if (options.hosted !== undefined) return null;
     const origin = request.headers.get('origin');
     if (origin !== null && origin !== new URL(request.url).origin) {
       return permissionDenied('跨站 Origin 不允许执行本地 mutation');
@@ -459,18 +439,13 @@ export const createWebApp = (
   let localContext = initialCtx;
   const requestStorage = new AsyncLocalStorage<{
     request: Request;
-    context?: ToolContext;
-    retain?: () => () => void;
   }>();
   const ctxRef = {
     get current(): ToolContext {
-      const context =
-        options.hosted === undefined ? localContext : requestStorage.getStore()?.context;
-      if (context === undefined) throw new Error('Web request context unavailable');
-      return context;
+      if (localContext === undefined) throw new Error('Web request context unavailable');
+      return localContext;
     },
     set current(context: ToolContext) {
-      if (options.hosted !== undefined) throw new Error('Hosted request context is immutable');
       localContext = context;
     },
   };
@@ -490,11 +465,6 @@ export const createWebApp = (
   /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
   const contextForRequest = (): ToolContext => {
     const request = requestStorage.getStore()?.request;
-    if (options.hosted !== undefined)
-      return {
-        ...ctxRef.current,
-        ...(request === undefined ? {} : { abortSignal: request.signal }),
-      };
     const accountId = request?.headers.get('x-luoome-account-id')?.trim();
     return {
       ...ctxRef.current,
@@ -509,7 +479,6 @@ export const createWebApp = (
     requestStorage.run(
       {
         request: c.req.raw,
-        ...(c.req.path.startsWith('/api/') ? options.hosted?.request(c) : {}),
       },
       next,
     ),
@@ -546,17 +515,6 @@ export const createWebApp = (
     const headers = { 'content-type': contentType, 'cache-control': 'no-cache', etag };
     if (request.headers.get('if-none-match') === etag) {
       return new Response(null, { status: 304, headers });
-    }
-    if (options.hosted !== undefined && file === 'index.html') {
-      return new Response(
-        (await bunFile.text()).replace(
-          '<body>',
-          '<body data-runtime="hosted" class="auth-pending">',
-        ),
-        {
-          headers: { ...headers, 'cache-control': 'no-store' },
-        },
-      );
     }
     return new Response(bunFile, { headers });
   };
@@ -674,16 +632,12 @@ export const createWebApp = (
     readonly to: string;
     readonly stockIds: string[] | undefined;
   };
-  const jobKey = (id: string): string =>
-    ctxRef.current.identity?.mode === 'hosted'
-      ? `${ctxRef.current.identity.tenantId}:${ctxRef.current.identity.tenantGeneration}:${id}`
-      : id;
+  const jobKey = (id: string): string => id;
   const evaluationJobs = new Map<string, Promise<void>>();
 
   const startEvaluationJob = (sessionId: string, input: EvaluationJobInput): void => {
     const key = jobKey(sessionId);
     if (evaluationJobs.has(key)) return;
-    const release = requestStorage.getStore()?.retain?.();
     const job = (async (): Promise<void> => {
       const result = await replayStrategyRangeWorkflow.run(
         {
@@ -732,7 +686,6 @@ export const createWebApp = (
       })
       .finally(() => {
         evaluationJobs.delete(key);
-        release?.();
       });
     evaluationJobs.set(key, job);
   };
@@ -771,7 +724,6 @@ export const createWebApp = (
   const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
     const key = jobKey(backtestRunId);
     if (strictBacktestJobs.has(key)) return;
-    const release = requestStorage.getStore()?.retain?.();
     const job = executeStrictStrategyBacktestTool
       .execute({ backtestRunId }, ctxRef.current)
       .then((result) => {
@@ -792,7 +744,6 @@ export const createWebApp = (
       })
       .finally(() => {
         strictBacktestJobs.delete(key);
-        release?.();
       });
     strictBacktestJobs.set(key, job);
   };
@@ -1089,26 +1040,6 @@ export const createWebApp = (
     }
     try {
       const input = SaveMarketSettingsSchema.parse(await c.req.json());
-      if (options.hosted !== undefined) {
-        // 托管模式行情栈由 providers 共享持有；保存委托给 reload 回调重建。
-        const saved = marketSettingsStore.save(input);
-        try {
-          options.marketSettingsReload?.();
-        } catch (error) {
-          return jsonResult({
-            ok: false,
-            error: {
-              kind: 'invalid_input',
-              message: `设置已保存但行情栈重建失败：${error instanceof Error ? error.message : String(error)}`,
-              issues: [],
-            },
-          });
-        }
-        return jsonResult({
-          ok: true,
-          data: { ...saved, applied: options.marketSettingsReload !== undefined },
-        });
-      }
       const candidateEnv = {
         ...marketSettingsStore.runtimeEnv(),
         LUOOME_MARKET_SOURCES: input.sources.join(','),
@@ -1211,37 +1142,6 @@ export const createWebApp = (
   });
 
   // ===== 飞书通知设置 =====
-  app.get('/api/notifications/feishu', async () => {
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await getHostedWatchSettingsTool.execute({}, ctx));
-  });
-  app.get('/api/notifications/watch-deliveries', async () => {
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await listHostedWatchDeliveriesTool.execute({}, ctx));
-  });
-  app.post('/api/notifications/feishu', async (c) => {
-    const permission = requireMutationCapabilities(c.req.raw, ['write']);
-    if (permission !== null) return jsonResult(permission);
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    try {
-      return jsonResult(await saveHostedWatchSettingsTool.execute(await c.req.json(), ctx));
-    } catch {
-      return jsonResult({
-        ok: false,
-        error: { kind: 'invalid_input', message: '飞书配置必须是 JSON 对象', issues: [] },
-      });
-    }
-  });
-  app.post('/api/notifications/feishu/test', async (c) => {
-    const permission = requireMutationCapabilities(c.req.raw, ['write', 'external']);
-    if (permission !== null) return jsonResult(permission);
-    const ctx = contextForRequest();
-    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
-    return jsonResult(await testHostedWatchSettingsTool.execute({}, ctx));
-  });
   app.get('/api/settings/feishu', () => {
     if (feishuSettingsStore === undefined) {
       return jsonResult(notFound('FeishuSettingsStore', 'default'));
@@ -1453,7 +1353,7 @@ export const createWebApp = (
   });
   app.get('/api/watch/notifications/:triggerId', async (c) =>
     jsonResult(
-      await resolveHostedWatchNotificationTool.execute(
+      await resolveWatchNotificationTool.execute(
         { triggerId: c.req.param('triggerId') },
         contextForRequest(),
       ),
@@ -3176,10 +3076,7 @@ export const createWebApp = (
         },
       });
     }
-    const runtime =
-      options.hosted === undefined
-        ? chatRuntimeRef.current
-        : asChatStreamRuntime(contextForRequest().agent);
+    const runtime = chatRuntimeRef.current;
     if (runtime === undefined) {
       return new Response(
         JSON.stringify({
@@ -3187,10 +3084,7 @@ export const createWebApp = (
           error: {
             kind: 'llm_error',
             provider: contextForRequest().adapters.llm.name,
-            cause:
-              options.hosted === undefined
-                ? 'AI 模型尚未配置，请前往设置页完成 LLM 设置'
-                : 'AI 模型尚未配置，请联系服务管理员',
+            cause: 'AI 模型尚未配置，请前往设置页完成 LLM 设置',
             retryable: false,
           },
         }),
@@ -3200,13 +3094,7 @@ export const createWebApp = (
         },
       );
     }
-    return createChatStreamResponse(
-      body,
-      contextForRequest(),
-      runtime,
-      c.req.raw.signal,
-      requestStorage.getStore()?.retain,
-    );
+    return createChatStreamResponse(body, contextForRequest(), runtime, c.req.raw.signal);
   });
 
   app.get('/api/stocks/search', async (c) => {
@@ -3616,7 +3504,7 @@ export interface StartWebOptions {
   readonly port: number;
   /** 默认监听回环地址，由反向代理终止 HTTPS。 */
   readonly host?: string;
-  /** 旧调用方传入共享数据库时显式拒绝，避免错误地切回无认证服务。 */
+  /** 本地 SQLite 数据库路径；缺省 $LUOOME_HOME/luoome.db。 */
   readonly dbPath?: string;
 }
 
@@ -3632,13 +3520,50 @@ export interface WebServerHandle {
  */
 export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
-/** Web 始终经认证外壳启动；业务调度由按租户绑定的 worker 执行。 */
+/** 启动单机多账户 Web 服务及进程内业务调度器。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
-  if (options.dbPath !== undefined)
-    throw new Error('Web service does not accept a shared local database path');
-  const { startHostedWeb } = await import('./hosted-start.js');
-  return startHostedWeb({
-    port: options.port,
-    ...(options.host === undefined ? {} : { host: options.host }),
+  const dbPath = options.dbPath ?? resolveDbPath();
+  const sources: WebSourceSet = { eastmoney: new EastmoneySource({ clock: () => new Date() }) };
+  const aiSettingsStore = new AISettingsStore(process.env);
+  const marketSettingsStore = new MarketSettingsStore(process.env);
+  const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
+  const feishuSettingsStore = new FeishuSettingsStore(process.env);
+  const runtimeEnv = {
+    ...process.env,
+    ...aiSettingsStore.runtimeEnv(),
+    ...marketSettingsStore.runtimeEnv(),
+    ...researchVaultSettingsStore.runtimeEnv(),
+    ...feishuSettingsStore.runtimeEnv(),
+  };
+  const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
+  const app = createWebApp(ctx, {
+    aiSettingsStore,
+    marketSettingsStore,
+    sources,
+    researchVaultSettingsStore,
+    feishuSettingsStore,
+    dataTransferDbPath: dbPath,
   });
+  const schedulers = [
+    startStrategyScheduler(ctx, { startImmediately: false }),
+    startIntradayPlanScheduler(ctx, { startImmediately: false }),
+    startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
+    startStrategyAutonomyScheduler(ctx, { startImmediately: false }),
+  ];
+  const host = options.host ?? '127.0.0.1';
+  const server = Bun.serve({
+    port: options.port,
+    hostname: host,
+    fetch: app.fetch,
+    idleTimeout: WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+  });
+  const port = server.port ?? options.port;
+  console.log(`luoome web listening on http://${host}:${port}`);
+  return {
+    port,
+    stop: async (closeActiveConnections = false) => {
+      for (const scheduler of schedulers) scheduler.stop();
+      await server.stop(closeActiveConnections);
+    },
+  };
 };

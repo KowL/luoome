@@ -43,8 +43,7 @@ AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计�
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
 cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
-definitionHash。调度 workflow 通过调度租约和正式运行租约防重；单机工具可显式执行。
-统一登录 Web 不再启动单机调度器，原业务的按用户自动调度尚待接入独立 worker。
+definitionHash。调度 workflow 通过调度租约和正式运行租约防重；Web 进程在开启 `write + external` 时每分钟自动检查，单机工具也可显式执行。
 非交易日与暂停策略不运行。存量无 `schemaVersion` 的
 RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
 V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
@@ -324,33 +323,4 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 与旧表 DDL/schema 全部下线，存量库的旧物理表不再维护（不 DROP、不读取）。
 不得作为新 surface、Agent 或写入口的领域模型。
 
-## 个人订阅托管模式
-
-2026-10-12 确认的托管产品契约是：保留现有 Web 及其自选、Strategy、通知、持仓、建议、报告、复盘、
-研究和 AI 业务，在其上增加登录、用户隔离与支付订阅。旧 `hosted-facts-v1` 和无账户精简应用不再作为目标范围；
-旧 fixture 证据不代表本版页面与完整业务已验收，当前接线/验收状态见[开发计划](docs/hosted-personal-subscription-development-plan.md)。
-
-- `HostedUser` 是已验证邮箱的服务身份；`Tenant` 是私人数据与订阅隔离边界，一用户一个 Tenant。
-  `Account` 仍是投资账户，不承担登录语义；每个托管 Tenant 自动拥有且仅拥有一个默认 Account。
-- 空库默认账户为 `default-account`、“默认投资账户”、real/CNY、本金0/现金0；不代表真实券商开户或资产核实，
-  不产生入金、持仓或 Trade。已有唯一账户原样复用；多账户异常不能自动合并或删除。
-- 托管界面和普通API不提供新增/切换账户；请求和后台由服务端绑定默认账户。
-  `update_account` 只修改名称，不改变本金、现金、币种或创建时间；资金与持仓变动仍遵守已有 ledger 契约。
-  local 多账户保持不变，不将托管限制扩展到本地使用。
-- 默认账户的 Trigger/Advice/TradingPlan 复盘使用既有 `DecisionReview`，保留来源快照、不可变修订及显式成交关联。
-  旧 `PersonalWatchFeedback` 仅作为此前无账户方案历史资料，不自动迁入采纳率或账户收益统计。
-- 原 Strategy/AlertPlan 规则及显式订阅语义保留，托管身份与权益不能代替领域数据门禁。
-  `watchlist-facts` 可作为确定性补充报告，不能替代 opening/closing/weekly 或限制原 AI/Advice 功能。
-- `PlanVersion` 冻结服务器价格、资源与任务额度；`SubscriptionPeriod` 是实付或一次试用授予的服务期。
-  续期由用户主动购买，不自动扣款。任务预占/结算引用原服务期，不随完成时的新套餐漂移。
-- `HostedJob`、用户用量流水和 provider cost attempt 分别表达执行、额度与供应商成本。
-  私有输入、业务 receipt/outbox 与 control inbox 形成恢复协议；unknown 成本不能解释为0，旧执行者未停止时不能释放原预占。
-- `DeliveryIntent` 的 accepted 只表示渠道受理，delivered 需要可信回执；触发与投递分别保存。
-  暂停、成员退出、偏好撤销、到期和删除都阻止尚未发送的失效提醒。
-- 原设置页增加个人通知、账户名称、订阅与退出登录；平台模型/数据源密钥、Vault路径及整库恢复不作为普通租户全局写权限。
-  AI与其它provider未装配时明确不可用，不能返回mock结果，也不能以此永久移除业务入口。
-- 导出、删除、备份恢复继续遵守租户身份、generation、执行排空与独立tombstone契约。
-  最小订单/退款账目与私人业务资料分开保留。
-
-已有试用/到期保留工程参数为7天试用、30天历史读取窗口，导出不要求有效订阅；正式条款仍待确认。
-托管基础设施已有隔离fixture证据；本版原Web融合、默认账户、自动调度、真实模型及生产恢复必须分别验收，不能互相替代。
+旧个人订阅多租户托管模式（`HostedUser`、`Tenant`、`control.sqlite`、邮箱验证码、套餐订阅与独立 `apps/worker`）已整体下线并归档至 `docs/archive/`。当前系统固定为单主用户（`ownerId='local'`）+ 多投资账户（`Account`）本地部署模型，详见 [luoome 的 DSH 改造详细设计](./docs/ddd/luoome-dsh-transformation-detailed-design.md)。

@@ -31,10 +31,6 @@ import type {
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
-import { createMemoryReportAutomationRepository } from '../../hosted/report-automation-memory.js';
-import { InMemoryTenantExportRepository } from '../../hosted/tenant-export-memory.js';
-import { InMemoryTenantRepository } from '../../hosted/tenant-memory.js';
-import { createMemoryWatchDeliveryRepository } from '../../hosted/watch-delivery-memory.js';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
@@ -207,16 +203,6 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const alertPlan = new InMemoryAlertPlanRepository();
   const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository(watchRuleState);
-  const watchDelivery = createMemoryWatchDeliveryRepository({
-    watchTrigger,
-    alertPlan,
-    watchlist,
-    watchlistMember,
-  });
-  const reportAutomation = createMemoryReportAutomationRepository(
-    report,
-    watchDelivery.snapshotSettings,
-  );
   const watchRun = new InMemoryWatchRunRepository();
   // ruo 迁移起
   const researchIndex = new InMemoryResearchIndexRepository();
@@ -285,29 +271,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   );
   watchTrigger.setDecisionReviewRepository(decisionReview);
   report.setDecisionReviewRepository(decisionReview, trade, decisionWriteLock);
-  const hostedTenant = new InMemoryTenantRepository({
-    stock,
-    report,
-    watchlist,
-    watchlistMember,
-    watchTrigger,
-    alertPlan,
-    watchRuleState,
-  });
-  const hostedExports = new InMemoryTenantExportRepository(() => ({
-    watchlists: watchlist.snapshotForExport(),
-    ...watchlistMember.snapshotForExport(),
-    alertPlans: alertPlan.snapshotForExport(),
-    triggers: watchTrigger.snapshotForExport(),
-    reports: report.snapshotForExport(),
-    feedback: hostedTenant.snapshotPersonalFeedbackForExport(),
-  }));
   return {
     investmentWorkspace: new InMemoryInvestmentWorkspaceRepository(),
-    hostedTenant,
-    hostedExports,
-    watchDelivery,
-    reportAutomation,
     account,
     ledger,
     decisionReview,

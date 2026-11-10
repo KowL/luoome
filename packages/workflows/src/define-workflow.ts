@@ -240,22 +240,10 @@ import type {
   WatchExecutionOutput,
 } from '@luoome/tools';
 import {
-  type BuildPersonalAlertEvaluationInput,
-  type BuildPersonalAlertEvaluationOutput,
-  type BuildWatchlistFactsInput,
-  type BuildWatchlistFactsOutput,
   beginAccountPlanBatchTool,
   beginWatchDeliveryTool,
-  buildPersonalAlertEvaluationTool,
-  buildWatchlistFactsTool,
-  type CommitPersonalAlertEvaluationInput,
-  type CommitPersonalAlertEvaluationOutput,
-  type CommitWatchlistFactsInput,
-  type CommitWatchlistFactsOutput,
   claimDueStrategySchedulesTool,
-  commitPersonalAlertEvaluationTool,
   commitWatchEvaluationTool,
-  commitWatchlistFactsTool,
   createStrategyAutonomyActionTool,
   finishAccountPlanBatchTool,
   finishStrategyScheduleClaimTool,
@@ -280,13 +268,6 @@ import {
   transitionStrategyAutonomyActionTool,
   watchExecutionTool,
 } from '@luoome/tools';
-import {
-  deliverHostedReportTool,
-  type HostedStrategyExecutionInput,
-  type HostedStrategyExecutionOutput,
-  hostedReportExecutionTool,
-  hostedStrategyExecutionTool,
-} from '@luoome/tools/hosted';
 import type { z } from 'zod';
 
 /**
@@ -323,34 +304,6 @@ export interface WorkflowToolMap {
   readonly get_investment_candidates: ToolAccessor<
     typeof GetInvestmentCandidatesInput,
     typeof GetInvestmentCandidatesOutput
-  >;
-  readonly hosted_strategy_execution: ToolAccessor<
-    typeof HostedStrategyExecutionInput,
-    typeof HostedStrategyExecutionOutput
-  >;
-  readonly hosted_report_execution: ToolAccessor<
-    typeof hostedReportExecutionTool.inputSchema,
-    typeof hostedReportExecutionTool.outputSchema
-  >;
-  readonly deliver_hosted_report: ToolAccessor<
-    typeof deliverHostedReportTool.inputSchema,
-    typeof deliverHostedReportTool.outputSchema
-  >;
-  readonly build_watchlist_facts: ToolAccessor<
-    typeof BuildWatchlistFactsInput,
-    typeof BuildWatchlistFactsOutput
-  >;
-  readonly commit_watchlist_facts: ToolAccessor<
-    typeof CommitWatchlistFactsInput,
-    typeof CommitWatchlistFactsOutput
-  >;
-  readonly build_personal_alert_evaluation: ToolAccessor<
-    typeof BuildPersonalAlertEvaluationInput,
-    typeof BuildPersonalAlertEvaluationOutput
-  >;
-  readonly commit_personal_alert_evaluation: ToolAccessor<
-    typeof CommitPersonalAlertEvaluationInput,
-    typeof CommitPersonalAlertEvaluationOutput
   >;
   readonly list_research_topics: ToolAccessor<
     typeof ListResearchTopicsInput,
@@ -766,13 +719,6 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
   };
   for (const internalTool of [
-    hostedReportExecutionTool,
-    hostedStrategyExecutionTool,
-    deliverHostedReportTool,
-    buildWatchlistFactsTool,
-    commitWatchlistFactsTool,
-    buildPersonalAlertEvaluationTool,
-    commitPersonalAlertEvaluationTool,
     commitWatchEvaluationTool,
     watchExecutionTool,
     beginWatchDeliveryTool,

@@ -1,10 +1,4 @@
-import {
-  callApi,
-  getAccountId,
-  getHostedSession,
-  getSessionEpoch,
-  randomRequestId,
-} from './api.js';
+import { callApi, getAccountId, getSessionEpoch, randomRequestId } from './api.js';
 import {
   actionsRow,
   fieldWrap,
@@ -17,10 +11,10 @@ import { closeModal, openModal } from './modal.js';
 import { el, fmtDateTime, toolErrorText } from './ui.js';
 
 const PENDING_KEY = 'luoome.decisionPending';
-const pendingKey = () =>
-  getHostedSession() === null
-    ? PENDING_KEY
-    : `${PENDING_KEY}:${getHostedSession().user.id}:${getAccountId()}`;
+const pendingKey = () => {
+  const accountId = getAccountId();
+  return accountId ? `${PENDING_KEY}:${accountId}` : PENDING_KEY;
+};
 let volatilePending = null;
 let pendingBusy = false;
 let redrawPending = () => {};

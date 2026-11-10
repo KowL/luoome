@@ -6,8 +6,7 @@ import {
 } from './execution-scope.js';
 
 const snapshot: GatewayScopeSnapshot = {
-  tenantId: 'tenant-1',
-  tenantGeneration: 3,
+  userId: 'user-1',
   accountId: 'account-1',
   conversationId: 'conversation-1',
   runId: 'run-1',
@@ -30,8 +29,7 @@ describe('GatewayExecutionScope', () => {
   });
 
   it.each([
-    ['tenantId', 'tenant-2'],
-    ['tenantGeneration', 4],
+    ['userId', 'user-2'],
     ['accountId', 'account-2'],
     ['conversationId', 'conversation-2'],
     ['runId', 'run-2'],

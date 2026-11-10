@@ -43,9 +43,8 @@
 
 | 文档 | 范围 |
 |---|---|
-| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与托管边界；首批已通过受控开发验收，后续能力按设计验证 |
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH、领域层去 AI（事实包 + 待分析队列）、托管消费与内嵌 DSH 演进；含契约、DDL、阶段与验收（草案） |
-| [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
+| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与单机多账户边界；首批已通过受控开发验收，后续能力按设计验证 |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
@@ -80,7 +79,6 @@
 | [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围；开发使用 GPT-6.1 Sol / max |
 | [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
-| [个人订阅托管版开发改造计划](./hosted-personal-subscription-development-plan.md) | 原页面复用改造切片、旧工程证据与新业务验收、外部前置条件 |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |
@@ -97,12 +95,18 @@
 |---|---|
 | [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+1/T+3/T+5 日检、P50/P95/max 周报与真实 provider smoke |
 | [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
-| [个人订阅托管版运行与恢复](./runbooks/hosted-personal-subscription.md) | 显式启动、私有存储、provider 装配、写屏障、备份恢复、外部对账与生产门禁 |
 
 ## 历史归档
 
 `archive/` 保存已完成阶段的计划、任务规格和验收快照，仅用于追溯，不作为当前实现契约。当前行为以代码、长期维护文档及对应 PRD/DDD 为准。
 
+- [个人订阅托管版详细设计（已退役）](./archive/hosted-personal-subscription-detailed-design.md)
+- [个人订阅托管版开发改造计划（已退役）](./archive/hosted-personal-subscription-development-plan.md)
+- [个人订阅托管版运行与恢复（已退役）](./archive/hosted-personal-subscription-runbook.md)
+- [个人订阅托管产品设计（已退役）](./archive/hosted-subscription-product-design.md)
+- [Hosted Facts v1 MVP（已退役）](./archive/hosted-facts-v1-mvp.md)
+- [Hosted Facts v1 技术设计（已退役）](./archive/hosted-facts-v1-technical-design.md)
+- [Hosted Facts v1 开发计划（已退役）](./archive/hosted-facts-v1-development-plan.md)
 - [个人订阅托管版隔离验收](./archive/hosted-personal-subscription-fixture-acceptance.md) — 工程测试、浏览器、100 Tenant fixture 压测与尚未通过的真实渠道门禁
 
 - [v0.1 实施计划](./archive/plan.md)

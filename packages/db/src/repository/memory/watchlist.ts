@@ -65,41 +65,6 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     });
   }
 
-  applyHostedMutation(
-    members: readonly WatchlistMember[],
-    sources: readonly WatchlistMemberSource[],
-  ): void {
-    const nextMembers = new Map(this.members);
-    const nextSources = new Map(this.sources);
-    for (const member of members) {
-      assertWatchlistMemberInvariants(member);
-      nextMembers.set(member.id, member);
-    }
-    for (const source of sources) {
-      assertWatchlistMemberSourceInvariants(source);
-      nextSources.set(source.id, source);
-    }
-    const identities = new Set<string>();
-    for (const member of nextMembers.values()) {
-      const key = `${member.watchlistId}|${member.stockId}`;
-      if (identities.has(key)) throw new InvariantError('(watchlistId, stockId) 必须唯一');
-      identities.add(key);
-    }
-    const current = new Set<string>();
-    for (const source of nextSources.values()) {
-      if (!nextMembers.has(source.memberId)) throw new InvariantError('来源成员不存在');
-      if (source.status === 'ended') continue;
-      const key = `${source.memberId}|${source.sourceKey}`;
-      if (current.has(key))
-        throw new InvariantError('(memberId, sourceKey) 只能有一个非 ended 来源');
-      current.add(key);
-    }
-    this.members.clear();
-    this.sources.clear();
-    for (const [id, member] of nextMembers) this.members.set(id, member);
-    for (const [id, source] of nextSources) this.sources.set(id, source);
-  }
-
   async saveMember(member: WatchlistMember): Promise<void> {
     assertWatchlistMemberInvariants(member);
     if ((await this.watchlists.findById(member.watchlistId)) === null) {

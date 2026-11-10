@@ -24,22 +24,28 @@ vi.mock('@luoome/web', () => ({ startWeb: mocked.startWeb }));
 import { runCli } from './index.js';
 
 describe('CLI Web entry', () => {
-  const originalExecArgv = process.execArgv;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    process.execArgv = ['--no-env-file'];
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(() => {
-    process.execArgv = originalExecArgv;
     vi.restoreAllMocks();
   });
 
-  it.each([['start'], ['restart'], ['web', 'serve']])(
-    '%j 使用相同 Web 入口，不加载单机环境或启动单机 watch，并等待 SIGTERM 后关闭',
-    async (...command) => {
+  it.each([
+    [
+      ['start', '--no-watch'],
+      { port: 5173, host: '127.0.0.1', intradayPlanSchedulerEnabled: false },
+    ],
+    [
+      ['restart', '--no-watch'],
+      { port: 5173, host: '127.0.0.1', intradayPlanSchedulerEnabled: false },
+    ],
+    [['web', 'serve'], { port: 5173, host: '127.0.0.1' }],
+  ])(
+    '%j 启动单机多账户 Web 入口，加载环境并等待 SIGTERM 后优雅关闭',
+    async (command, expectedArgs) => {
       let finishStop: (() => void) | undefined;
       const stop = vi.fn(
         () =>
@@ -51,9 +57,8 @@ describe('CLI Web entry', () => {
 
       const running = runCli([...command, '--foreground']);
       await vi.waitFor(() => expect(mocked.startWeb).toHaveBeenCalledOnce());
-      expect(mocked.startWeb).toHaveBeenCalledWith({ port: 5173, host: '127.0.0.1' });
-      expect(mocked.loadProjectEnv).not.toHaveBeenCalled();
-      expect(mocked.createCliContext).not.toHaveBeenCalled();
+      expect(mocked.startWeb).toHaveBeenCalledWith(expectedArgs);
+      expect(mocked.loadProjectEnv).toHaveBeenCalledOnce();
       let completed = false;
       void running.then(() => {
         completed = true;
@@ -67,11 +72,11 @@ describe('CLI Web entry', () => {
     },
   );
 
-  it('未禁用 Bun 隐式 dotenv 时在后台启动或本地环境加载前拒绝', async () => {
-    process.execArgv = [];
-    await expect(runCli(['start'])).rejects.toThrow('必须禁用隐式环境文件');
-    expect(mocked.loadProjectEnv).not.toHaveBeenCalled();
-    expect(mocked.respawnDetached).not.toHaveBeenCalled();
+  it('未带 --foreground 时通过 respawnDetached 后台启动', async () => {
+    mocked.respawnDetached.mockReturnValue({ pid: 4242, logPath: '/tmp/luoome.log' });
+    expect(await runCli(['web', 'serve'])).toBe(0);
+    expect(mocked.loadProjectEnv).toHaveBeenCalledOnce();
+    expect(mocked.respawnDetached).toHaveBeenCalledOnce();
     expect(mocked.startWeb).not.toHaveBeenCalled();
   });
 

@@ -4,10 +4,6 @@ import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 export class InMemoryWatchRuleStateRepository implements WatchRuleStateRepository {
   private readonly items = new Map<string, WatchRuleState>();
 
-  snapshotForHostedEvaluation(): WatchRuleState[] {
-    return structuredClone([...this.items.values()]);
-  }
-
   private static key(s: WatchRuleState): string {
     return `${s.poolId}|${s.stockId}|${s.ruleId}`;
   }

@@ -26,12 +26,6 @@ export const createAccountTool = defineTool({
   input: CreateAccountInput,
   output: CreateAccountOutput,
   handler: async (input, ctx) => {
-    if (ctx.identity?.mode === 'hosted') {
-      return {
-        ok: false,
-        error: { kind: 'permission_denied', required: 'hosted:single-default-account' },
-      };
-    }
     const id = input.id ?? manualId('account');
     if ((await ctx.repos.account.findById(id)) !== null) {
       return errInvalidInput(`账户 id=${id} 已存在`);

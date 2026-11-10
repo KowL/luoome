@@ -1,14 +1,23 @@
 import {
+  AlertPlanSchema,
   AlertPrioritySchema,
   DeliveryStatusSchema,
+  isWatchAlertDeliveryEligible,
+  type ToolContext,
+  TradingPlanMonitoringSchema,
+  TradingPlanSchema,
   TriggerFeedbackSchema,
   TriggerTypeSchema,
+  tradingPlanMonitoring,
+  tradingPlanTriggerSource,
   WatchRuleKindSchema,
+  type WatchTrigger,
   WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
+import { deriveAccountFacts } from './account-facts.js';
 
 export const ListWatchTriggersInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -101,6 +110,105 @@ export const listWatchTriggersTool = defineTool({
       ),
       total,
       ...(summary === undefined ? {} : { summary: { ...summary, stocks: [...summary.stocks] } }),
+    };
+  },
+});
+
+const tradingPlanState = async (trigger: WatchTrigger, ctx: ToolContext) => {
+  const source = tradingPlanTriggerSource(trigger);
+  if (source === null || source.accountId !== ctx.user.defaultAccountId) return null;
+  const plan = await ctx.repos.tradingPlan.findByVersionId(source.planVersionId);
+  if (
+    plan === null ||
+    plan.accountId !== source.accountId ||
+    plan.stockId !== trigger.stockId ||
+    plan.accountFactsDigest !== source.accountFactsDigest ||
+    ![...plan.entryConditions, ...plan.exit.triggerConditions].some(
+      (condition) => condition.id === source.conditionId,
+    )
+  )
+    return null;
+  const [facts, versions] = await Promise.all([
+    deriveAccountFacts(ctx, plan.accountId),
+    ctx.repos.tradingPlan.list({
+      accountId: plan.accountId,
+      stockId: plan.stockId,
+      currentOnly: true,
+      limit: 1,
+    }),
+  ]);
+  return {
+    source,
+    plan,
+    latestVersion: [...versions].sort((a, b) => b.version - a.version).at(0) ?? null,
+    monitoring: tradingPlanMonitoring(plan, facts, ctx.clock(), undefined, versions),
+  };
+};
+
+export const resolveWatchNotificationTool = defineTool({
+  name: 'resolve_watch_notification',
+  description: '核对确切提醒的原始快照和当前计划状态；历史触发不作为当前行动授权',
+  sideEffect: 'read',
+  input: z.object({ triggerId: z.string().min(1).max(512) }).strict(),
+  output: z.object({
+    trigger: WatchTriggerSchema,
+    sourcePlan: TradingPlanSchema.nullable(),
+    latestVersion: TradingPlanSchema.nullable(),
+    monitoring: TradingPlanMonitoringSchema.nullable(),
+    alertPlan: AlertPlanSchema.nullable(),
+    state: z.enum(['requires-recheck', 'changed', 'unavailable']),
+    changes: z.array(z.string()),
+    currentActionAllowed: z.literal(false),
+    checkedAt: z.coerce.date(),
+  }),
+  handler: async ({ triggerId }, ctx) => {
+    const trigger = await ctx.repos.watchTrigger.findById(triggerId);
+    if (trigger === null) return errNotFound('WatchTrigger', triggerId);
+    if (
+      trigger.poolId.startsWith('trading-plan-watch:') &&
+      trigger.poolId !== `trading-plan-watch:${ctx.user.defaultAccountId}`
+    )
+      return errNotFound('WatchTrigger', triggerId);
+    const state = await tradingPlanState(trigger, ctx);
+    const alertPlan =
+      tradingPlanTriggerSource(trigger) === null
+        ? await ctx.repos.alertPlan.findById(trigger.poolId)
+        : null;
+    const [watchlist, member] =
+      alertPlan === null
+        ? [null, null]
+        : await Promise.all([
+            ctx.repos.watchlist.findById(alertPlan.watchlistId),
+            ctx.repos.watchlistMember.findMember(alertPlan.watchlistId, trigger.stockId),
+          ]);
+    const alertEligible = isWatchAlertDeliveryEligible(trigger, alertPlan, watchlist, member);
+    const changes =
+      state === null
+        ? alertEligible
+          ? ['原提醒计划和成员仍有效；需要使用当前事实重新检查触发条件']
+          : ['原提醒计划已停用、删除、条件变化或成员已退出；请查看原始快照，不沿用原行动']
+        : state.monitoring.status === 'ready'
+          ? ['原计划仍具备监控资格；触发条件需使用当前合格行情重新检查']
+          : [state.monitoring.reason, state.monitoring.nextStep];
+    return {
+      trigger,
+      sourcePlan: state?.plan ?? null,
+      latestVersion: state?.latestVersion ?? null,
+      monitoring: state?.monitoring ?? null,
+      alertPlan,
+      state:
+        state === null
+          ? alertPlan === null
+            ? ('unavailable' as const)
+            : alertEligible
+              ? ('requires-recheck' as const)
+              : ('changed' as const)
+          : state.monitoring.status === 'ready'
+            ? ('requires-recheck' as const)
+            : ('changed' as const),
+      changes,
+      currentActionAllowed: false as const,
+      checkedAt: ctx.clock(),
     };
   },
 });

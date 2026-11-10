@@ -151,7 +151,7 @@ export const WatchlistFactsSnapshotSchema = z.object({
   watchlistRevision: z.string().regex(/^[a-f0-9]{64}$/),
   ruleFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  rendererVersion: z.literal('hosted-facts-v1'),
+  rendererVersion: z.string().min(1),
   frozenInput: z.record(z.string(), z.unknown()),
 });
 export type WatchlistFactsSnapshot = z.infer<typeof WatchlistFactsSnapshotSchema>;

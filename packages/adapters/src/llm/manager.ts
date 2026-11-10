@@ -3,7 +3,6 @@ import {
   AdviceDecisionSchema,
   AdviceHorizonSchema,
   AdviceReasoningSchema,
-  HostedLLMError,
   RULE_FALLBACK_EVIDENCE_MARKER,
   RULE_FALLBACK_PREMISE_MARKER,
   STANDARD_DISCLAIMERS,
@@ -118,7 +117,6 @@ export class LLMManager implements LLMAdapter {
     try {
       return await this.inner.generate<T>(request);
     } catch (error) {
-      if (error instanceof HostedLLMError) throw error;
       firstError = error;
       this.logger.warn('llm-manager: 第一次 LLM 调用失败，准备重试', {
         error: error instanceof Error ? error.message : String(error),
@@ -135,7 +133,7 @@ export class LLMManager implements LLMAdapter {
         };
         return await this.inner.generate<T>(retryRequest);
       } catch (retryError) {
-        if (this.fallback === 'throw' || retryError instanceof HostedLLMError) throw retryError;
+        if (this.fallback === 'throw') throw retryError;
         this.logger.warn('llm-manager: 重试仍失败，走规则 fallback', {
           error: retryError instanceof Error ? retryError.message : String(retryError),
         });

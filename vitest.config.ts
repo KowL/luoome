@@ -10,18 +10,18 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
-      // 嵌套 git worktree（.claude/worktrees/*）是其它分支的工作副本，不参与本树测试。
+      // 嵌套 git worktree（.claude/worktrees/*、.agents/worktrees/*）是其它分支的工作副本，不参与本树测试。
       '.claude/**',
+      '.agents/**',
+      '.tmp/**',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',
       'packages/db/src/repository/decision-review.contract.test.ts',
-      'packages/db/src/hosted/**',
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
       'apps/web/src/workspace.test.ts',
-      'apps/web/src/hosted-*.test.ts',
       'apps/web/src/data-transfer.test.ts',
       // DSH Web includes Bun listeners and SQLite fixtures; test:web owns this slice.
       'apps/web/src/dsh/**/*.test.ts',

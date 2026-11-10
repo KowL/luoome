@@ -544,11 +544,7 @@ export const createChatStreamResponse = async (
 ): Promise<Response> => {
   const parsed = ChatStreamRequestSchema.safeParse(body);
   if (!parsed.success) return invalidRequest('chat 请求校验失败', parsed.error.issues);
-  const identity =
-    ctx.identity?.mode === 'hosted'
-      ? `${ctx.identity.tenantId}:${ctx.identity.tenantGeneration}`
-      : ctx.user.id;
-  const key = JSON.stringify([identity, ctx.user.defaultAccountId, parsed.data.sessionId]);
+  const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, parsed.data.sessionId]);
   if (startingRequests.has(key))
     return new Response(
       JSON.stringify({

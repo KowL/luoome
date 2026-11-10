@@ -41,18 +41,6 @@
         "zod": "^4.4.3",
       },
     },
-    "apps/worker": {
-      "name": "@luoome/worker",
-      "version": "0.1.0",
-      "dependencies": {
-        "@luoome/adapters": "workspace:*",
-        "@luoome/core": "workspace:*",
-        "@luoome/db": "workspace:*",
-        "@luoome/tools": "workspace:*",
-        "@luoome/web": "workspace:*",
-        "@luoome/workflows": "workspace:*",
-      },
-    },
     "packages/adapters": {
       "name": "@luoome/adapters",
       "version": "0.1.0",
@@ -62,7 +50,6 @@
         "@ai-sdk/provider": "3.0.x",
         "@luoome/core": "workspace:*",
         "ai": "6.0.x",
-        "nodemailer": "10.1.0",
         "zod": "^4.0.0",
       },
     },
@@ -986,8 +973,6 @@
 
     "@luoome/web": ["@luoome/web@workspace:apps/web"],
 
-    "@luoome/worker": ["@luoome/worker@workspace:apps/worker"],
-
     "@luoome/workflows": ["@luoome/workflows@workspace:packages/workflows"],
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
@@ -1555,8 +1540,6 @@
     "node-fetch": ["node-fetch@3.3.2", "", { "dependencies": { "data-uri-to-buffer": "^4.0.0", "fetch-blob": "^3.1.4", "formdata-polyfill": "^4.0.10" } }, "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA=="],
 
     "node-pty": ["node-pty@1.2.0-beta.15", "", { "dependencies": { "node-addon-api": "^7.1.0" } }, "sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA=="],
-
-    "nodemailer": ["nodemailer@10.1.0", "", {}, "sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg=="],
 
     "normalize-url": ["normalize-url@8.1.1", "", {}, "sha512-JYc0DPlpGWB40kH5g07gGTrYuMqV653k3uBKY6uITPWds3M0ov3GaWGp9lbE3Bzngx8+XkfzgvASb9vk9JDFXQ=="],
 

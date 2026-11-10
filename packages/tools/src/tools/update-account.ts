@@ -19,9 +19,6 @@ export const updateAccountTool = defineTool({
   output: UpdateAccountOutput,
   handler: async (input, ctx) => {
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
-    if (ctx.identity?.mode === 'hosted' && accountId !== ctx.user.defaultAccountId) {
-      return errNotFound('Account', accountId);
-    }
     const account = await ctx.repos.account.updateName(accountId, input.name);
     return account === null ? errNotFound('Account', accountId) : { account };
   },

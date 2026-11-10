@@ -45,8 +45,7 @@ const setup = (
   ];
   const manifest = buildGatewayCallableManifest(tools, AGENT_SCENARIOS.research);
   const scope: GatewayScopeSnapshot = {
-    tenantId: 'tenant-1',
-    tenantGeneration: 2,
+    userId: 'user-1',
     accountId: 'account-1',
     conversationId: 'conversation-1',
     runId: 'run-1',
@@ -224,8 +223,7 @@ describe('ToolGateway', () => {
   });
 
   it.each([
-    ['tenantId', 'other'],
-    ['tenantGeneration', 9],
+    ['userId', 'other'],
     ['accountId', 'other'],
     ['conversationId', 'other'],
     ['runId', 'other'],
@@ -261,7 +259,7 @@ describe('ToolGateway', () => {
       }),
     ).toMatchObject({ error: { code: 'manifest_mismatch' } });
     expect(
-      await fixture.gateway.execute(fixture.caller, { ...fixture.call, tenantId: 'tenant-2' }),
+      await fixture.gateway.execute(fixture.caller, { ...fixture.call, userId: 'user-2' }),
     ).toMatchObject({ error: { code: 'invalid_request' } });
     fixture.setNow(10_000);
     expect(await fixture.gateway.execute(fixture.caller, fixture.call)).toMatchObject({

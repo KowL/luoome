@@ -8,7 +8,6 @@ import {
   apiRequestSignal,
   callApi,
   getAccountId,
-  getHostedSession,
   getSessionEpoch,
   randomRequestId,
 } from './api.js';
@@ -29,7 +28,7 @@ let followOutput = true;
 let restoredIdentity = null;
 const renderedEntries = new WeakMap();
 const CHAT_RECOVERY_KEY = 'luoome.workspace.chat';
-const chatIdentity = () => `${getHostedSession()?.user.id ?? 'local'}:${getAccountId()}`;
+const chatIdentity = () => `local:${getAccountId()}`;
 const saveChatView = () => {
   try {
     sessionStorage.setItem(

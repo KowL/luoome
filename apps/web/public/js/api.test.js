@@ -4,11 +4,7 @@ import {
   ACCOUNT_KEY,
   apiHeaders,
   callApi,
-  clearHostedSession,
-  configureHostedSession,
   getAccountId,
-  getHostedSession,
-  onHostedSessionExpired,
   randomRequestId,
   setAccountId,
 } from './api.js';
@@ -22,8 +18,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalStorage === undefined) delete globalThis.localStorage;
   else Object.defineProperty(globalThis, 'localStorage', originalStorage);
-  clearHostedSession();
-  onHostedSessionExpired(() => {});
   if (originalDocument === undefined) delete globalThis.document;
   else Object.defineProperty(globalThis, 'document', originalDocument);
   Object.defineProperty(globalThis, 'crypto', originalCrypto);
@@ -41,59 +35,27 @@ describe('Web API request context', () => {
     expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(first).not.toBe(second);
   });
-  const hosted = () =>
-    Object.defineProperty(globalThis, 'document', {
-      configurable: true,
-      value: { body: { dataset: { runtime: 'hosted' } } },
-    });
 
-  it('hosted bootstrap sends no stale identity, then binds CSRF and the single account in memory', async () => {
-    hosted();
+  it('discards an old response after switching account', async () => {
+    const store = new Map([[ACCOUNT_KEY, 'account-a']]);
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: {
-        getItem: () => 'previous-user-account',
-        setItem: () => {
-          throw new Error('must not persist');
-        },
+        getItem: (key) => store.get(key) ?? null,
+        setItem: (key, value) => store.set(key, value),
+        removeItem: (key) => store.delete(key),
       },
     });
-    expect(getAccountId()).toBe('');
-    expect(apiHeaders().has('x-luoome-user-id')).toBe(false);
-    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
-    setAccountId('default-account');
-    const headers = apiHeaders({
-      'x-luoome-user-id': 'user-b',
-      'x-csrf-token': 'csrf-b',
-      'x-luoome-account-id': 'forged',
-    });
-    expect(headers.get('x-luoome-user-id')).toBe('user-a');
-    expect(headers.get('x-csrf-token')).toBe('csrf-a');
-    expect(headers.get('x-luoome-account-id')).toBe('default-account');
-    clearHostedSession();
-    expect(getAccountId()).toBe('');
-  });
-
-  it('hosted discards an old response after switching identity and clears rejected sessions', async () => {
-    hosted();
-    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
     let finish;
     globalThis.fetch = () =>
       new Promise((resolve) => {
         finish = resolve;
       });
     const pending = callApi('/api/watchlists');
-    configureHostedSession({ user: { id: 'user-b' }, csrfToken: 'csrf-b' });
+    setAccountId('account-b');
+    expect(getAccountId()).toBe('account-b');
     finish(Response.json({ ok: true, data: { private: 'A' } }));
     expect((await pending).ok).toBe(false);
-    let expired = false;
-    onHostedSessionExpired(() => {
-      expired = true;
-    });
-    globalThis.fetch = async () => Response.json({ ok: false }, { status: 401 });
-    expect((await callApi('/api/review')).ok).toBe(false);
-    expect(expired).toBe(true);
-    expect(getHostedSession()).toBeNull();
   });
   it('流式请求复用账户 header，草案确认锁定原账户而非切换后的账户', async () => {
     Object.defineProperty(globalThis, 'localStorage', {
