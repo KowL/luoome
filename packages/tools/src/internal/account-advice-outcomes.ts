@@ -10,23 +10,23 @@ export const accountAdviceOutcomes = async (
     limit: 10000,
   });
   return new Map(
-    records.flatMap(({ review, revision }) => {
-      const feedback = revision.content.adviceFeedback;
+    records.flatMap((review) => {
+      const feedback = review.content.adviceFeedback;
       if (feedback === null) return [];
       return [
         [
           review.subject.id,
           {
             adviceId: review.subject.id,
-            tradeIds: revision.content.tradeIds,
+            tradeIds: review.content.tradeIds,
             outcome: feedback.outcome,
             ...(feedback.pnl === undefined ? {} : { pnl: money(feedback.pnl) }),
             ...(feedback.benchmarkPnl === undefined
               ? {}
               : { benchmarkPnl: money(feedback.benchmarkPnl) }),
             ...(feedback.holdingHours === undefined ? {} : { holdingHours: feedback.holdingHours }),
-            ...(revision.content.note === null ? {} : { notes: revision.content.note }),
-            recordedAt: revision.recordedAt,
+            ...(review.content.note === null ? {} : { notes: review.content.note }),
+            recordedAt: review.updatedAt,
           } satisfies AdviceOutcome,
         ],
       ];
@@ -53,7 +53,7 @@ export const accountScopedAdvices = async (
     subjectKind: 'advice',
     limit: 10000,
   });
-  const selected = new Set(records.map(({ review }) => review.subject.id));
+  const selected = new Set(records.map((review) => review.subject.id));
   const resolved = await Promise.all(
     advices.map(async (advice) => {
       if (advice.subjectKind === 'stock') {

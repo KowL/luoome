@@ -535,50 +535,31 @@
               <span id="research-vault-settings-status" class="card-meta" role="status" aria-live="polite"></span>
             </div>
           </form>
-          <div class="vault-remote-sync">
-            <div>
-              <strong>可选 Git 远端同步</strong>
-              <p class="card-meta">仅在工作树干净且可 fast-forward 时拉取；先创建本地 bundle 备份，绝不自动 commit、push、reset、rebase 或解决冲突。Vault 文件仍是权威来源。</p>
-            </div>
-            <div class="flex gap-2">
-              <button id="research-remote-sync-btn" class="btn btn-outline btn-sm" type="button" disabled>拉取远端并重建索引</button>
-              <button id="research-remote-cancel-btn" class="btn btn-outline btn-sm" type="button" hidden>取消拉取</button>
-              <span id="research-remote-sync-status" class="card-meta" role="status" aria-live="polite">远端同步：检查配置中…</span>
-            </div>
-          </div>
         </div>
         <div class="card">
-          <div class="card-header"><h2>研究主题与资料</h2></div>
+          <div class="card-header"><h2>研究笔记</h2></div>
           <div class="research-search flex gap-2">
-            <input id="research-topic-input" type="search" placeholder="搜索研究主题或资料" />
+            <input id="research-topic-input" type="search" placeholder="搜索研究笔记（FTS5）" />
             <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
-            <label class="field-inline" for="research-hybrid-search">
-              <input id="research-hybrid-search" type="checkbox" />
-              <span>语义扩展（外部）</span>
-            </label>
           </div>
           <div class="research-toolbar flex gap-2 mt-2">
             <label class="field-inline" for="research-kind-filter">
               <span class="muted">类型</span>
               <select id="research-kind-filter">
                 <option value="">全部</option>
-                <option value="company">公司</option>
-                <option value="industry">产业</option>
-                <option value="event">事件</option>
-                <option value="theme">主题</option>
-                <option value="macro">宏观</option>
-                <option value="custom">自定义</option>
+                <option value="note">笔记</option>
+                <option value="article">文章</option>
+                <option value="analysis">分析</option>
+                <option value="report">报告</option>
+                <option value="thesis">论点</option>
+                <option value="filing">公告/ filings</option>
+                <option value="transcript">纪要</option>
+                <option value="timeline-update">进展</option>
               </select>
             </label>
-            <button id="research-create-topic-btn" class="btn btn-primary btn-sm" type="button">+ 新建主题</button>
-            <button id="research-import-document-btn" class="btn btn-outline btn-sm" type="button">导入本地资料</button>
-            <button id="research-import-remote-btn" class="btn btn-outline btn-sm" type="button">导入远程 URL</button>
             <button id="research-sync-btn" class="btn btn-outline btn-sm" type="button">手动同步 Vault</button>
-            <button id="research-embedding-rebuild-btn" class="btn btn-outline btn-sm" type="button">增量重建语义索引</button>
-            <button id="research-embedding-evaluate-btn" class="btn btn-outline btn-sm" type="button">跨模型评测</button>
             <span id="research-index-status" class="card-meta" aria-live="polite">索引状态：--</span>
           </div>
-          <div id="research-embedding-status" class="card-meta mt-2" role="status" aria-live="polite">语义索引：未检查</div>
           <div id="research-write-status" class="research-write-status" role="status" aria-live="polite"></div>
           <div id="research-inbox" class="research-inbox mt-2"></div>
           <div id="research-search-results" class="research-results mt-2"></div>

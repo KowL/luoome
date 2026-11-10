@@ -3,7 +3,6 @@ import { z } from 'zod';
 /** ResearchBrief 的证据类型；引用必须落到已有的持久化事实或索引 chunk。 */
 export const ResearchEvidenceKindSchema = z.enum([
   'document-chunk',
-  'stock-event',
   'strategy-signal',
   'watch-trigger',
   'advice',

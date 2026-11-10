@@ -16,14 +16,17 @@ import {
   type WatchRuleState,
   type WatchTrigger,
 } from '@luoome/core';
-import { recordWatchRunTool } from '@luoome/tools';
+import { recordWorkflowRunTool } from '@luoome/tools';
 import { z } from 'zod';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import {
+  evaluateTradingPlanWatch,
+  IntradayTradingPlanWatchOutput,
+} from './internal/trading-plan-watch.js';
 import {
   type WatchWorkflowStep as WorkflowStep,
   watchExecutionStep,
 } from './internal/watch-execution.js';
-import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
 
 /**
  * intraday-watch workflow
@@ -48,8 +51,19 @@ import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.
 export const IntradayWatchInput = z.object({
   /** 仅评估这些 AlertPlan；缺省 = 全部 enabled。 */
   alertPlanIds: z.array(z.string().min(1)).optional(),
+  /** 只评估该账户的 TradingPlan；缺省 = ctx.user.defaultAccountId。 */
+  accountId: z.string().min(1).optional(),
   /** 是否推送通知；默认 true。--no-notify 时 CLI 传 false。 */
   notify: z.boolean().default(true),
+  /** 交易计划监控参数（与 AlertPlan 共用同一轮执行）。 */
+  watchIntervalSeconds: z.number().int().positive().max(3600).default(60),
+  cooldownMinutes: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(24 * 60)
+    .default(60),
+  dailyNotificationLimit: z.number().int().positive().max(500).default(50),
 });
 
 export type IntradayWatchInputT = z.infer<typeof IntradayWatchInput>;
@@ -92,8 +106,8 @@ export const IntradayWatchOutput = z.object({
   notifyFailed: z.number().int().nonnegative(),
   unknownRules: z.number().int().nonnegative(),
   delivered: z.number().int().nonnegative(),
-  /** MVP2：同一轮盘中检查的结构化交易计划结果。 */
-  tradingPlanWatch: z.unknown().optional(),
+  /** 同一轮盘中检查的结构化交易计划结果。 */
+  tradingPlanWatch: IntradayTradingPlanWatchOutput.optional(),
 });
 
 export type IntradayWatchOutputT = z.infer<typeof IntradayWatchOutput>;
@@ -583,10 +597,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
   // 6a：批量加载该池状态（按 pool 进行顺序处理；池数一般 O(10)）
   for (const pool of state.pools) {
     if (state.skipped.has(pool.id)) continue;
-    const rulesWithIds = ensureRuleIds(pool);
-    // event-date 规则由 evaluate-event-rules workflow 每日盘前求值，intraday 跳过：
-    // 不评估、不写触发、不参与 ANY/ALL 组合判定（ruo 迁移 §3.5）。
-    const evaluableRules = rulesWithIds.filter((r) => r.kind !== 'event-date');
+    const evaluableRules = ensureRuleIds(pool);
     const members = state.members.get(pool.id) ?? [];
     if (members.length === 0) continue;
 
@@ -1050,7 +1061,7 @@ const ruleKindThreshold = (rule: AlertRule): Record<string, unknown> => {
   if (rule.kind === 'price-level') return { level: rule.level, side: rule.side };
   if (rule.kind === 'strategy-signal')
     return { strategyId: rule.strategyId, ruleId: rule.ruleId, minScore: rule.minScore };
-  // event-date：intraday 不评估（此分支不可达，仅为类型穷尽）
+  // 其余规则类型没有独立的阈值快照字段
   return {};
 };
 
@@ -1196,7 +1207,6 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
 
   if (state.input.notify) {
     const committed = await ctx.tools.commit_watch_evaluation.execute({
-      owner: ctx.watchExecutionOwner,
       triggers: out,
       states: [...state.nextStates],
     });
@@ -1315,51 +1325,77 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     }
   }
 
-  return IntradayWatchOutput.parse({
-    triggers: triggers.map((t) => {
-      const resolved = finalDelivery.get(t.id);
-      return {
-        id: t.id,
-        alertPlanId: t.alertPlanId ?? t.poolId,
-        stockId: t.stockId,
-        ruleKind: t.ruleKind,
-        ruleId: t.ruleId,
-        triggerType: t.triggerType,
-        priority: t.priority,
-        deliveryStatus: resolved?.status ?? t.deliveryStatus,
-        direction: t.direction,
-        reason: t.reason,
-        evidence: [...t.evidence],
-        ...(t.quote === undefined ? {} : { quoteClose: t.quote.close }),
-        notified: resolved?.notified ?? t.notified,
-        createdAt: t.createdAt,
-      };
+  return {
+    output: IntradayWatchOutput.omit({ tradingPlanWatch: true }).parse({
+      triggers: triggers.map((t) => {
+        const resolved = finalDelivery.get(t.id);
+        return {
+          id: t.id,
+          alertPlanId: t.alertPlanId ?? t.poolId,
+          stockId: t.stockId,
+          ruleKind: t.ruleKind,
+          ruleId: t.ruleId,
+          triggerType: t.triggerType,
+          priority: t.priority,
+          deliveryStatus: resolved?.status ?? t.deliveryStatus,
+          direction: t.direction,
+          reason: t.reason,
+          evidence: [...t.evidence],
+          ...(t.quote === undefined ? {} : { quoteClose: t.quote.close }),
+          notified: resolved?.notified ?? t.notified,
+          createdAt: t.createdAt,
+        };
+      }),
+      evaluatedPlans: state.pools.length,
+      evaluatedStocks: state.allStockIds.length,
+      quoteBatches: state.quoteBatches,
+      unavailableQuoteStocks: state.allStockIds.length - state.quotes.size,
+      notified: notifiedCount,
+      suppressedByCooldown: state.suppressedByCooldown,
+      suppressedByDailyLimit: state.suppressedByDailyLimit,
+      notifyFailed,
+      unknownRules: state.unknownRules,
+      delivered,
     }),
-    evaluatedPlans: state.pools.length,
-    evaluatedStocks: state.allStockIds.length,
-    quoteBatches: state.quoteBatches,
-    unavailableQuoteStocks: state.allStockIds.length - state.quotes.size,
-    notified: notifiedCount,
-    suppressedByCooldown: state.suppressedByCooldown,
-    suppressedByDailyLimit: state.suppressedByDailyLimit,
-    notifyFailed,
-    unknownRules: state.unknownRules,
-    delivered,
-  });
+    input: state.input,
+  };
 };
 
+export type {
+  IntradayTradingPlanWatchInputT,
+  IntradayTradingPlanWatchOutputT,
+} from './internal/trading-plan-watch.js';
 // Re-export for callers
 export type { Stock };
 
+const stepTradingPlanWatch: WorkflowStep = async (prev, ctx) => {
+  const state = prev as {
+    readonly output: IntradayWatchOutputT;
+    readonly input: IntradayWatchInputT;
+  };
+  const watch = await evaluateTradingPlanWatch(
+    {
+      ...(state.input.accountId === undefined ? {} : { accountId: state.input.accountId }),
+      notify: state.input.notify,
+      watchIntervalSeconds: state.input.watchIntervalSeconds,
+      cooldownMinutes: state.input.cooldownMinutes,
+      dailyNotificationLimit: state.input.dailyNotificationLimit,
+    },
+    ctx,
+  );
+  return IntradayWatchOutput.parse({ ...state.output, tradingPlanWatch: watch });
+};
+
 /**
- * intraday-watch workflow（v0.7）。
+ * intraday-watch workflow（v0.8）：一轮同时评估 AlertPlan 与 TradingPlan 的统一执行器，
+ * 共用进程内互斥与同一条 workflow_runs 审计事实。
  */
 export const intradayWatchWorkflow = defineWorkflow<
   z.infer<typeof IntradayWatchInput>,
   z.infer<typeof IntradayWatchOutput>
 >({
   name: 'intraday-watch',
-  description: '单轮盘中盯盘评估（v0.7 策略预警）',
+  description: '单轮盘中盯盘评估（AlertPlan + TradingPlan 统一执行器）',
   input: IntradayWatchInput,
   steps: [
     watchExecutionStep([
@@ -1370,44 +1406,50 @@ export const intradayWatchWorkflow = defineWorkflow<
       stepEvaluateRules,
       stepResolveDelivery,
       stepNotifyAndSummary,
+      stepTradingPlanWatch,
     ]),
   ],
 });
 
+const workflowErrorText = (error: unknown): string => {
+  if (typeof error === 'object' && error !== null) {
+    const details = error as {
+      readonly kind?: unknown;
+      readonly message?: unknown;
+      readonly cause?: unknown;
+    };
+    if (typeof details.message === 'string') return details.message;
+    if (typeof details.cause === 'string') return details.cause;
+    return String(details.kind ?? 'unknown error');
+  }
+  return String(error);
+};
+
 /**
- * 带持久化心跳的单轮入口。
+ * 带持久化心跳的单轮入口：运行事实统一写入 workflow_runs。
  */
 export const runIntradayWatchObserved = async (
   input: unknown,
   ctx: ToolContext,
   mode: 'once' | 'daemon',
 ): Promise<ToolResult<IntradayWatchOutputT>> => {
-  const errorText = (error: {
-    readonly kind?: unknown;
-    readonly message?: unknown;
-    readonly cause?: unknown;
-  }): string =>
-    typeof error.message === 'string'
-      ? error.message
-      : typeof error.cause === 'string'
-        ? error.cause
-        : String(error.kind ?? 'unknown error');
-  const id = `watch-run-${crypto.randomUUID()}`;
+  const parsedInput = IntradayWatchInput.safeParse(input);
+  const inputSummary = parsedInput.success
+    ? { ...parsedInput.data }
+    : ({ invalidInput: true } as const);
+  const id = `workflow-intraday-watch-${crypto.randomUUID()}`;
   const startedAt = ctx.clock();
-  const initial = await recordWatchRunTool.execute(
+  const initial = await recordWorkflowRunTool.execute(
     {
-      id,
-      mode,
-      status: 'running',
-      startedAt,
-      finishedAt: null,
-      evaluatedPools: 0,
-      evaluatedStocks: 0,
-      triggered: 0,
-      notified: 0,
-      suppressedByCooldown: 0,
-      suppressedByDailyLimit: 0,
-      notifyFailed: 0,
+      run: {
+        id,
+        workflowName: 'intraday-watch',
+        mode: mode === 'daemon' ? 'daemon' : 'manual',
+        status: 'running',
+        startedAt,
+        inputSummary,
+        providerStatuses: [],
+      },
     },
     ctx,
   );
@@ -1416,73 +1458,50 @@ export const runIntradayWatchObserved = async (
   }
 
   const result = await intradayWatchWorkflow.run(input, ctx);
-  const planWatch = result.ok
-    ? await intradayTradingPlanWatchWorkflow.run(
-        {
-          notify: IntradayWatchInput.safeParse(input).success
-            ? IntradayWatchInput.parse(input).notify
-            : true,
-        },
-        ctx,
-      )
-    : undefined;
-  const combined =
-    result.ok && planWatch !== undefined
-      ? {
-          ...result,
-          data: {
-            ...result.data,
-            tradingPlanWatch: planWatch.ok
-              ? planWatch.data
-              : { status: 'blocked', errors: [errorText(planWatch.error)] },
-          },
-        }
-      : result;
-  const finalResult = combined.ok
-    ? { ok: true as const, data: IntradayWatchOutput.parse(combined.data) }
-    : combined;
   const finishedAt = ctx.clock();
-  const terminal = finalResult.ok
-    ? await recordWatchRunTool.execute(
-        {
-          id,
-          mode,
-          status: 'succeeded',
-          startedAt,
-          finishedAt,
-          evaluatedPools: finalResult.data.evaluatedPlans,
-          evaluatedStocks: finalResult.data.evaluatedStocks,
-          triggered: finalResult.data.triggers.length,
-          notified: finalResult.data.notified,
-          suppressedByCooldown: finalResult.data.suppressedByCooldown,
-          suppressedByDailyLimit: finalResult.data.suppressedByDailyLimit,
-          notifyFailed: finalResult.data.notifyFailed,
-          delivered: finalResult.data.delivered,
-          unknownRules: finalResult.data.unknownRules,
-        },
-        ctx,
-      )
-    : await recordWatchRunTool.execute(
-        {
-          id,
-          mode,
-          status: 'failed',
-          startedAt,
-          finishedAt,
-          evaluatedPools: 0,
-          evaluatedStocks: 0,
-          triggered: 0,
-          notified: 0,
-          suppressedByCooldown: 0,
-          suppressedByDailyLimit: 0,
-          notifyFailed: 0,
-          // WatchRun.error 上限 2000 字；超长序列化截断，避免心跳写库失败
-          error: JSON.stringify(finalResult.error).slice(0, 2000),
-        },
-        ctx,
-      );
+  const terminal = await recordWorkflowRunTool.execute(
+    {
+      run: {
+        id,
+        workflowName: 'intraday-watch',
+        mode: mode === 'daemon' ? 'daemon' : 'manual',
+        status: result.ok ? 'succeeded' : 'failed',
+        startedAt,
+        finishedAt,
+        inputSummary,
+        ...(result.ok
+          ? {
+              outputSummary: {
+                evaluatedPlans: result.data.evaluatedPlans,
+                evaluatedStocks: result.data.evaluatedStocks,
+                quoteBatches: result.data.quoteBatches,
+                triggered: result.data.triggers.length,
+                notified: result.data.notified,
+                suppressedByCooldown: result.data.suppressedByCooldown,
+                suppressedByDailyLimit: result.data.suppressedByDailyLimit,
+                notifyFailed: result.data.notifyFailed,
+                delivered: result.data.delivered,
+                unknownRules: result.data.unknownRules,
+                ...(result.data.tradingPlanWatch === undefined
+                  ? {}
+                  : { tradingPlanWatch: result.data.tradingPlanWatch }),
+              },
+            }
+          : {}),
+        providerStatuses: [],
+        // WorkflowRun.error 上限 500 字；超长序列化截断，避免心跳写库失败
+        ...(result.ok ? {} : { error: JSON.stringify(result.error).slice(0, 500) }),
+      },
+    },
+    ctx,
+  );
   if (!terminal.ok) {
     ctx.logger.warn('[intraday-watch] 写入 terminal 心跳失败', { error: terminal.error });
   }
-  return finalResult;
+  if (!result.ok) {
+    ctx.logger.warn('[intraday-watch] 单轮运行失败', {
+      error: workflowErrorText(result.error),
+    });
+  }
+  return result;
 };

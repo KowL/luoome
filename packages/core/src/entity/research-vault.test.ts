@@ -1,65 +1,59 @@
 import { describe, expect, it } from 'vitest';
-
 import {
-  normalizeResearchSubject,
   ResearchDocumentIndexSchema,
-  ResearchTopicIndexSchema,
-} from '../index.js';
+  ResearchDocumentKindSchema,
+  researchDocumentDate,
+} from './research-vault.js';
 
-const base = {
-  vaultId: 'vault-test',
-  contentHash: 'a'.repeat(64),
-  fileModifiedAt: new Date('2026-08-01T00:00:00.000Z'),
-  indexedAt: new Date('2026-08-01T00:00:00.000Z'),
-  availability: 'available' as const,
-};
-
-describe('Research Vault domain', () => {
-  it('Topic 可以不关联股票，Document 可以独立属于产业或事件研究', () => {
-    expect(
-      ResearchTopicIndexSchema.parse({
-        ...base,
-        id: 'topic_industry_cycle',
-        title: '产业周期',
-        kind: 'industry',
-        tags: [],
-        relativePath: 'Research/Topics/industry.md',
-      }),
-    ).toMatchObject({ kind: 'industry' });
-    expect(
-      ResearchDocumentIndexSchema.parse({
-        ...base,
-        id: 'doc_event_update',
-        title: '事件更新',
-        kind: 'timeline-update',
-        importedAt: base.indexedAt,
-        tags: [],
-        relativePath: 'Research/Documents/event.md',
-        attachmentPaths: [],
-      }),
-    ).toMatchObject({ kind: 'timeline-update' });
+const document = () =>
+  ResearchDocumentIndexSchema.parse({
+    id: 'doc_note',
+    kind: 'note',
+    title: '库存周期笔记',
+    importedAt: new Date('2026-08-01T00:00:00Z'),
+    tags: ['周期'],
+    stockCodes: ['600519.SH'],
+    vaultId: 'vault-main',
+    relativePath: 'notes/cycle.md',
+    attachmentPaths: [],
+    contentHash: 'a'.repeat(64),
+    excerpt: '库存见底',
+    fileModifiedAt: new Date('2026-08-01T00:00:00Z'),
+    indexedAt: new Date('2026-08-02T00:00:00Z'),
+    availability: 'available',
   });
 
-  it('拒绝绝对路径、父目录和 Windows drive 注入', () => {
-    for (const relativePath of ['/etc/passwd', '../secret.md', 'C:\\secret.md']) {
-      expect(() =>
-        ResearchTopicIndexSchema.parse({
-          ...base,
-          id: 'topic_unsafe',
-          title: 'unsafe',
-          kind: 'custom',
-          tags: [],
-          relativePath,
-        }),
-      ).toThrow();
-    }
+describe('ResearchDocumentIndex', () => {
+  it('keeps document fields, stock codes and safe relative paths', () => {
+    const parsed = document();
+    expect(parsed.stockCodes).toEqual(['600519.SH']);
+    expect(parsed.availability).toBe('available');
+    expect(ResearchDocumentKindSchema.parse(parsed.kind)).toBe('note');
   });
 
-  it('规范化类型化 SubjectRef', () => {
-    expect(normalizeResearchSubject('stock: 600519.SH ')).toEqual({
-      kind: 'stock',
-      key: '600519.SH',
-    });
-    expect(() => normalizeResearchSubject('unknown:x')).toThrow();
+  it('defaults stock codes for legacy rows and rejects unsafe paths', () => {
+    const { stockCodes: _stockCodes, ...legacy } = document();
+    expect(ResearchDocumentIndexSchema.parse(legacy).stockCodes).toEqual([]);
+    expect(() =>
+      ResearchDocumentIndexSchema.parse({ ...document(), relativePath: '../escape.md' }),
+    ).toThrow();
+    expect(() =>
+      ResearchDocumentIndexSchema.parse({ ...document(), relativePath: '/abs/path.md' }),
+    ).toThrow();
+  });
+
+  it('selects observedAt, publishedAt then importedAt as the document date', () => {
+    const base = document();
+    expect(researchDocumentDate(base)).toEqual(base.importedAt);
+    expect(
+      researchDocumentDate({ ...base, publishedAt: new Date('2026-08-03T00:00:00Z') }),
+    ).toEqual(new Date('2026-08-03T00:00:00Z'));
+    expect(
+      researchDocumentDate({
+        ...base,
+        publishedAt: new Date('2026-08-03T00:00:00Z'),
+        observedAt: new Date('2026-08-04T00:00:00Z'),
+      }),
+    ).toEqual(new Date('2026-08-04T00:00:00Z'));
   });
 });

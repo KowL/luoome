@@ -16,8 +16,6 @@ export * from './eastmoney/client.js';
 export * from './eastmoney/coercion.js';
 export * from './eastmoney/source.js';
 // 基本面 PIT mock（仅显式测试注入，永不自动装配）
-export * from './fundamental/factory.js';
-export * from './fundamental/mock.js';
 // fuyao（同花顺金融数据 API）行情源
 export * from './fuyao/client.js';
 export * from './fuyao/envelope.js';
@@ -27,7 +25,6 @@ export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';
 // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）
 export * from './limit-up-ladder/types.js';
-export * from './llm/agent-runtime.js';
 export * from './llm/ai-sdk-adapter.js';
 export * from './llm/manager.js';
 export * from './llm/model-catalog.js';
@@ -60,7 +57,6 @@ export * from './northbound-flow/manager.js';
 export * from './northbound-flow/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
-export * from './research-embedding/index.js';
 export * from './research-vault/index.js';
 // 行业板块行情（东方财富 push2 板块列表公开 API）
 export * from './sector-quote/eastmoney.js';

@@ -4,10 +4,9 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
 
-import { evaluateEventRulesWorkflow } from './evaluate-event-rules.js';
 import { intradayWatchWorkflow } from './intraday-watch.js';
 
-const setup = async (logic: 'ANY' | 'ALL' = 'ANY', mode = 'on-enter', event = false) => {
+const setup = async (logic: 'ANY' | 'ALL' = 'ANY', mode = 'on-enter') => {
   let now = new Date('2026-07-27T02:00:00Z');
   const base = await buildTestContext({ clock: () => now });
   await createWatchlistTool.execute(
@@ -21,9 +20,7 @@ const setup = async (logic: 'ANY' | 'ALL' = 'ANY', mode = 'on-enter', event = fa
       name: '测试预警',
       watchlistId: 'review-list',
       logic,
-      rules: event
-        ? [{ id: 'rule', kind: 'event-date', daysBefore: [3] }]
-        : [{ id: 'rule', kind: 'price-level', level: 100, side: 'above' }],
+      rules: [{ id: 'rule', kind: 'price-level', level: 100, side: 'above' }],
       triggerMode: mode,
       priority: 'important',
       cooldownMinutes: 0,
@@ -42,22 +39,6 @@ const setup = async (logic: 'ANY' | 'ALL' = 'ANY', mode = 'on-enter', event = fa
     if (!result.ok) throw new Error(JSON.stringify(result.error));
     return result.data;
   };
-  if (event)
-    await ctx.repos.stockEvent.save({
-      id: 'review-event',
-      stockId: '600519.SH',
-      kind: 'earnings',
-      title: '测试财报',
-      occursAt: new Date('2026-07-29T16:00:00Z'),
-      allDay: true,
-      importance: 'important',
-      status: 'scheduled',
-      source: 'manual',
-      stale: false,
-      remindBeforeDays: [],
-      createdAt: now,
-      updatedAt: now,
-    });
   return { ctx, prices, run, advance };
 };
 
@@ -100,7 +81,7 @@ describe('预警可靠性', () => {
     const { ctx, prices, run, advance } = await setup();
     await run();
     prices['600519.SH'] = 110;
-    const manager = ctx.notification;
+    const manager = ctx.adapters.notification;
     if (!manager) throw new Error('missing fixture manager');
     const send = manager.send.bind(manager);
     manager.send = async (input) => {
@@ -164,38 +145,22 @@ describe('预警可靠性', () => {
     expect(await ctx.repos.watchTrigger.listRecent({})).toHaveLength(1);
   });
 
-  it('工具执行期间丢失租约时停止提交与发送', async () => {
-    const { ctx, prices, run, advance } = await setup();
-    await run();
-    prices['600519.SH'] = 110;
-    const batch = ctx.adapters.market.batchQuote.bind(ctx.adapters.market);
-    ctx.adapters.market.batchQuote = async (ids) => {
-      const result = await batch(ids);
-      advance(121_000);
-      await ctx.repos.watchTrigger.acquireExecution(
-        'new-owner',
-        ctx.clock(),
-        new Date(ctx.clock().getTime() + 120_000),
-      );
-      return result;
-    };
-    expect(await intradayWatchWorkflow.run({ notify: true }, ctx)).toMatchObject({ ok: false });
-    expect(await ctx.repos.notification.listRecent({})).toEqual([]);
-    expect(await ctx.repos.watchTrigger.listRecent({})).toEqual([]);
-    expect(
-      await ctx.repos.watchTrigger.acquireExecution(
-        'other-owner',
-        ctx.clock(),
-        new Date(ctx.clock().getTime() + 120_000),
-      ),
-    ).toBe(false);
+  it('进程内互斥拒绝同一时刻的第二轮执行', async () => {
+    const { ctx } = await setup();
+    const concurrent = await Promise.all([
+      intradayWatchWorkflow.run({ notify: true }, ctx),
+      intradayWatchWorkflow.run({ notify: true }, ctx),
+    ]);
+    expect(concurrent.filter((result) => result.ok)).toHaveLength(1);
+    const rejected = concurrent.find((result) => !result.ok);
+    expect(rejected).toMatchObject({ error: { kind: 'internal' } });
   });
 
   it('失败后按退避重试原触发，成功后不再重试', async () => {
     const { ctx, prices, run } = await setup();
     await run();
     prices['600519.SH'] = 110;
-    const manager = ctx.notification;
+    const manager = ctx.adapters.notification;
     if (!manager) throw new Error('missing fixture notification manager');
     const send = manager.send.bind(manager);
     manager.send = async (input) => {
@@ -215,69 +180,5 @@ describe('预警可靠性', () => {
     expect(retry.delivered).toBe(1);
     expect(retry.triggers[0]?.id).toBe(failed.triggers[0]?.id);
     expect((await run()).notified).toBe(0);
-  });
-
-  it('事件试跑不消耗去重，正式通知走飞书', async () => {
-    const { ctx } = await setup('ANY', 'on-enter', true);
-    expect(await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx)).toMatchObject({
-      ok: true,
-      data: { triggered: 1, notified: 0 },
-    });
-    expect(await ctx.repos.watchTrigger.listRecent({})).toEqual([]);
-    expect(await evaluateEventRulesWorkflow.run({}, ctx)).toMatchObject({
-      ok: true,
-      data: { triggered: 1, notified: 1 },
-    });
-    expect((await ctx.repos.notification.listRecent({}))[0]?.channel).toBe('feishu');
-  });
-
-  it.each(['suppressed', 'failed'] as const)(
-    '事件投递 %s 保留真实送达状态及通知关联',
-    async (delivery) => {
-      const { ctx, advance } = await setup('ANY', 'on-enter', true);
-      const manager = ctx.notification;
-      if (!manager) throw new Error('missing manager');
-      const send = manager.send.bind(manager);
-      manager.send = async (input) => {
-        const result = await send(input);
-        return {
-          notification: { ...NotificationSchema.parse(result.notification), result: delivery },
-        };
-      };
-      expect(await evaluateEventRulesWorkflow.run({}, ctx)).toMatchObject({
-        ok: true,
-        data: { notified: 0 },
-      });
-      const trigger = (await ctx.repos.watchTrigger.listRecent({}))[0];
-      expect(trigger).toMatchObject({
-        deliveryStatus: delivery === 'failed' ? 'failed' : 'fallback-log',
-      });
-      expect(trigger?.notificationId).toBeDefined();
-      manager.send = send;
-      advance();
-      expect(await evaluateEventRulesWorkflow.run({}, ctx)).toMatchObject({
-        ok: true,
-        data: { triggered: 0, notified: delivery === 'failed' ? 1 : 0 },
-      });
-    },
-  );
-
-  it('盘中循环接手事件失败投递，不需要等下一天的事件 cron', async () => {
-    const { ctx, run } = await setup('ANY', 'on-enter', true);
-    const manager = ctx.notification;
-    if (!manager) throw new Error('missing manager');
-    const send = manager.send.bind(manager);
-    manager.send = async (input) => {
-      const result = await send(input);
-      return {
-        notification: { ...NotificationSchema.parse(result.notification), result: 'failed' },
-      };
-    };
-    await evaluateEventRulesWorkflow.run({}, ctx);
-    const eventTrigger = (await ctx.repos.watchTrigger.listRecent({}))[0];
-    manager.send = send;
-    const retry = await run();
-    expect(retry.delivered).toBe(1);
-    expect(retry.triggers[0]?.id).toBe(eventTrigger?.id);
   });
 });

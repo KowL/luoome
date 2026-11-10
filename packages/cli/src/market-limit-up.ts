@@ -69,10 +69,10 @@ export const cmdMarketLimitUp = async (opts: CmdMarketLimitUpOptions): Promise<n
 
   const handle = await createCliContext();
   try {
-    if (handle.ctx.limitUpLadder === undefined) {
+    if (handle.ctx.adapters.marketIntel?.limitUpLadder === undefined) {
       throw new Error('limit-up-ladder manager 未注入');
     }
-    const r = await handle.ctx.limitUpLadder.fetchLadder(query);
+    const r = await handle.ctx.adapters.marketIntel?.limitUpLadder.fetchLadder(query);
     if (!r.ok || r.data === undefined) {
       throw new Error(`limit-up-ladder failed: ${r.error?.message ?? 'unknown error'}`);
     }

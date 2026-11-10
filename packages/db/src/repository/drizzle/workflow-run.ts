@@ -5,7 +5,7 @@ import {
   type WorkflowRun,
   type WorkflowRunRepository,
 } from '@luoome/core';
-import { and, desc, eq, gte, inArray, lt, lte, or, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, workflowRuns } from '../../schema/index.js';
@@ -46,61 +46,6 @@ const toRow = (run: WorkflowRun): typeof workflowRuns.$inferInsert => ({
 export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
-  async execution(input: Parameters<WorkflowRunRepository['execution']>[0]): Promise<boolean> {
-    const now = input.now.getTime();
-    if (input.action === 'acquire') {
-      const row = toRow({
-        id: input.id,
-        workflowName: input.workflowName,
-        mode: 'scheduled',
-        status: 'running',
-        startedAt: input.now,
-        providerStatuses: [],
-        inputSummary: {
-          claimToken: input.owner,
-          executionLeaseUntilMs: input.leaseUntil.getTime(),
-          heartbeatAtMs: now,
-        },
-      });
-      const acquired = this.db
-        .insert(workflowRuns)
-        .values(row)
-        .onConflictDoUpdate({
-          target: workflowRuns.id,
-          set: row,
-          setWhere: sql`(${workflowRuns.status} = 'running' AND json_extract(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs') <= ${now})
-          OR (${workflowRuns.status} != 'running' AND json_extract(${workflowRuns.outputSummary}, '$.nextRunAtMs') <= ${now})`,
-        })
-        .returning({ id: workflowRuns.id })
-        .get();
-      return acquired !== undefined;
-    }
-    const updated = this.db
-      .update(workflowRuns)
-      .set(
-        input.action === 'renew'
-          ? {
-              inputSummary: sql`json_set(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs', ${input.leaseUntil.getTime()}, '$.heartbeatAtMs', ${now})`,
-            }
-          : {
-              status: 'succeeded',
-              finishedAt: input.now,
-              outputSummary: { ...input.output, nextRunAtMs: input.nextRunAt.getTime() },
-            },
-      )
-      .where(
-        and(
-          eq(workflowRuns.id, input.id),
-          eq(workflowRuns.status, 'running'),
-          sql`json_extract(${workflowRuns.inputSummary}, '$.claimToken') = ${input.owner}`,
-          sql`json_extract(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs') > ${now}`,
-        ),
-      )
-      .returning({ id: workflowRuns.id })
-      .get();
-    return updated !== undefined;
-  }
-
   async save(run: WorkflowRun): Promise<void> {
     assertWorkflowRunInvariants(run);
     const row = toRow(run);
@@ -112,61 +57,6 @@ export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
         set: row,
       })
       .run();
-  }
-
-  async claim(
-    run: WorkflowRun,
-    retry?: { readonly staleRunningBefore: Date; readonly failedRetryBefore: Date },
-  ): Promise<boolean> {
-    assertWorkflowRunInvariants(run);
-    if (run.status !== 'running') return false;
-    const inserted = this.db
-      .insert(workflowRuns)
-      .values(toRow(run))
-      .onConflictDoNothing()
-      .returning({ id: workflowRuns.id })
-      .get();
-    if (inserted !== undefined) return true;
-    if (retry === undefined) return false;
-    const reclaimed = this.db
-      .update(workflowRuns)
-      .set(toRow(run))
-      .where(
-        and(
-          eq(workflowRuns.id, run.id),
-          or(
-            and(
-              eq(workflowRuns.status, 'running'),
-              lt(workflowRuns.startedAt, retry.staleRunningBefore),
-            ),
-            and(
-              eq(workflowRuns.status, 'failed'),
-              lt(workflowRuns.finishedAt, retry.failedRetryBefore),
-            ),
-          ),
-        ),
-      )
-      .returning({ id: workflowRuns.id })
-      .get();
-    return reclaimed !== undefined;
-  }
-
-  async finishClaim(run: WorkflowRun, claimToken: string): Promise<boolean> {
-    assertWorkflowRunInvariants(run);
-    if (run.status === 'running' || run.inputSummary?.claimToken !== claimToken) return false;
-    const updated = this.db
-      .update(workflowRuns)
-      .set(toRow(run))
-      .where(
-        and(
-          eq(workflowRuns.id, run.id),
-          eq(workflowRuns.status, 'running'),
-          sql`json_extract(${workflowRuns.inputSummary}, '$.claimToken') = ${claimToken}`,
-        ),
-      )
-      .returning({ id: workflowRuns.id })
-      .get();
-    return updated !== undefined;
   }
 
   async findById(id: string): Promise<WorkflowRun | null> {
@@ -195,21 +85,6 @@ export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
       .where(where)
       .orderBy(desc(workflowRuns.startedAt))
       .limit(opts.limit ?? 50)
-      .all()
-      .map(toWorkflowRun);
-  }
-
-  async listAccountPlanBatches(date: string): Promise<readonly WorkflowRun[]> {
-    return this.db
-      .select()
-      .from(workflowRuns)
-      .where(
-        and(
-          eq(workflowRuns.workflowName, 'account-plan-batch'),
-          sql`json_extract(${workflowRuns.inputSummary}, '$.date') = ${date}`,
-        ),
-      )
-      .orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.id))
       .all()
       .map(toWorkflowRun);
   }

@@ -12,8 +12,8 @@ import {
 } from '@luoome/adapters/testing';
 import type {
   Advice,
-  AgentRuntimeLike,
   AShareSentimentManagerLike,
+  DecisionReview,
   DragonTigerManagerLike,
   LimitUpLadderManagerLike,
   Logger,
@@ -23,11 +23,12 @@ import type {
   SectorQuoteManagerLike,
   StockUniverseManagerLike,
   ToolContext,
+  ToolResult,
 } from '@luoome/core';
-import { createInMemoryRepos, seedData } from '@luoome/db/memory';
+import { createMemoryRepositories, seedData } from '@luoome/db/memory';
+import { saveDecisionReviewTool } from '../tools/decision-review.js';
 
 export interface BuildTestContextOptions {
-  readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
@@ -59,7 +60,7 @@ export const buildTestContext = async (
 ): Promise<ToolContext> => {
   const businessClock = opts.clock ?? defaultBusinessClock;
   const marketClock = opts.clock ?? fixedTestClock;
-  const repos = createInMemoryRepos();
+  const repos = createMemoryRepositories();
   await seedData(repos, {
     accounts: TEST_ACCOUNTS,
     stocks: TEST_STOCKS,
@@ -74,6 +75,14 @@ export const buildTestContext = async (
     await seedData(repos, { advices });
   }
 
+  const marketIntel = {
+    ...(opts.limitUpLadder === undefined ? {} : { limitUpLadder: opts.limitUpLadder }),
+    ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
+    ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
+    ...(opts.news === undefined ? {} : { news: opts.news }),
+    ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
+    ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
+  };
   const ctx: ToolContext = {
     repos,
     adapters: {
@@ -83,23 +92,15 @@ export const buildTestContext = async (
           ? {}
           : { timestampSource: opts.marketTimestampSource }),
       }),
-      ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
       llm: new FakeLLMAdapter(),
+      ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
+      notification: createTestNotificationManager(repos),
+      ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
     },
-    notification: createTestNotificationManager(repos),
     user: { id: 'test-user', defaultAccountId: TEST_ACCOUNT.id },
     clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
-    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
-    ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
-    ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
-    ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
-    ...(opts.news === undefined ? {} : { news: opts.news }),
-    ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
   };
-  if (opts.limitUpLadder !== undefined) {
-    return { ...ctx, limitUpLadder: opts.limitUpLadder };
-  }
   return ctx;
 };
 
@@ -180,3 +181,38 @@ const createTestNotificationManager = (repos: RepositoryRegistry) => ({
     return { notification };
   },
 });
+
+/** 测试夹具：AdviceOutcome 现由 save_decision_review 的 content.adviceFeedback 表达。 */
+export const recordAdviceOutcomeForTest = {
+  execute: async (
+    input: {
+      readonly adviceId: string;
+      readonly accountId?: string;
+      readonly outcome: 'followed' | 'partially_followed' | 'ignored';
+      readonly tradeIds?: readonly string[];
+      readonly pnl?: number;
+      readonly benchmarkPnl?: number;
+      readonly holdingHours?: number;
+      readonly notes?: string;
+    },
+    ctx: ToolContext,
+  ): Promise<ToolResult<{ review: DecisionReview }>> =>
+    saveDecisionReviewTool.execute(
+      {
+        ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
+        subject: { kind: 'advice', id: input.adviceId },
+        content: {
+          tradeIds: [...(input.tradeIds ?? [])],
+          adviceFeedback: {
+            outcome: input.outcome,
+            ...(input.pnl === undefined ? {} : { pnl: input.pnl }),
+            ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: input.benchmarkPnl }),
+            ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),
+          },
+          lessonTags: [],
+          note: input.notes ?? null,
+        },
+      },
+      ctx,
+    ),
+};

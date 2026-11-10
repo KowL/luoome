@@ -1,160 +1,169 @@
-import { money, quantity, type Trade } from '@luoome/core';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import {
-  getDecisionReviewContextTool,
-  getDecisionWriteReceiptTool,
-  saveDecisionReviewTool,
-} from './decision-review.js';
+import { listDecisionReviewsTool, saveDecisionReviewTool } from './decision-review.js';
 
-describe('decision review tools', () => {
-  it('在仓储筛选最新候选成交，并保留窗口外已关联成交', async () => {
+const adviceSubject = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
+  const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+  if (!advice) throw new Error('advice fixture missing');
+  return { kind: 'advice' as const, id: advice.id };
+};
+
+describe('save_decision_review', () => {
+  it('upserts one review per subject and keeps the original creation time', async () => {
     const ctx = await buildTestContext();
-    const advice = (
-      await ctx.repos.advice.query({ subjectKind: 'stock', includeExpired: true, limit: 1 })
-    )[0];
-    if (!advice) throw new Error('advice fixture missing');
-    const accountId = ctx.user.defaultAccountId;
-    const subject = { kind: 'advice', id: advice.id };
-    const makeTrade = (id: string, offset: number, overrides: Partial<Trade> = {}): Trade => ({
-      id,
-      accountId,
-      stockId: advice.subjectId,
-      side: 'buy',
-      quantity: quantity(100),
-      price: money(10),
-      fee: money(0),
-      executedAt: new Date(advice.createdAt.getTime() + offset),
-      createdAt: ctx.clock(),
-      source: 'manual',
-      ...overrides,
-    });
-    for (let i = 0; i < 25; i++)
-      await ctx.repos.trade.save(makeTrade(`candidate-${String(i).padStart(2, '0')}`, i));
-    await ctx.repos.trade.save(makeTrade('before-source', -1));
-    await ctx.repos.trade.save(makeTrade('other-stock', 30, { stockId: 'other-stock' }));
-    await ctx.repos.trade.save(makeTrade('other-account', 30, { accountId: 'other-account' }));
-    const query = vi.spyOn(ctx.repos.trade, 'listByAccount');
-    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(preview.ok).toBe(true);
-    if (!preview.ok || preview.data.context === null) return;
-    expect(query).toHaveBeenCalledWith(accountId, {
-      stockId: advice.subjectId,
-      executedAtFrom: advice.createdAt,
-      order: 'desc',
-      limit: 20,
-    });
-    expect(preview.data.candidateTrades.map((trade) => trade.id)).toEqual(
-      Array.from({ length: 20 }, (_, i) => `candidate-${String(24 - i).padStart(2, '0')}`),
+    const subject = await adviceSubject(ctx);
+    const first = await saveDecisionReviewTool.execute(
+      {
+        subject,
+        content: {
+          tradeIds: [],
+          adviceFeedback: { outcome: 'followed', pnl: 12.5 },
+          lessonTags: ['按计划'],
+          note: '首次复盘',
+        },
+      },
+      ctx,
     );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.review.accountId).toBe(ctx.user.defaultAccountId);
+    expect(first.data.review.subject).toEqual(subject);
+    expect(first.data.review.content.lessonTags).toEqual(['按计划']);
+    expect(first.data.review.content.adviceFeedback).toEqual({ outcome: 'followed', pnl: 12.5 });
+
+    const second = await saveDecisionReviewTool.execute(
+      {
+        subject,
+        content: {
+          tradeIds: [],
+          adviceFeedback: null,
+          lessonTags: ['按计划', '复盘再改'],
+          note: null,
+        },
+      },
+      ctx,
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.review.id).toBe(first.data.review.id);
+    expect(second.data.review.createdAt.toISOString()).toBe(
+      first.data.review.createdAt.toISOString(),
+    );
+    expect(second.data.review.content.note).toBeNull();
+    expect(second.data.review.content.lessonTags).toEqual(['按计划', '复盘再改']);
+
+    const list = await listDecisionReviewsTool.execute(
+      { subjectKind: 'advice', subjectId: subject.id },
+      ctx,
+    );
+    expect(list.ok).toBe(true);
+    if (!list.ok) return;
+    expect(list.data.records).toHaveLength(1);
+    expect(list.data.records[0]?.content.note).toBeNull();
+  });
+
+  it('rejects empty content, dangling subjects and dangling trade links', async () => {
+    const ctx = await buildTestContext();
+    const subject = await adviceSubject(ctx);
+    const empty = await saveDecisionReviewTool.execute(
+      {
+        subject,
+        content: { tradeIds: [], adviceFeedback: null, lessonTags: [], note: null },
+      },
+      ctx,
+    );
+    expect(empty.ok).toBe(false);
+    if (empty.ok) return;
+    expect(empty.error.kind).toBe('invalid_input');
+
+    const missing = await saveDecisionReviewTool.execute(
+      {
+        subject: { kind: 'advice', id: 'missing-advice' },
+        content: { tradeIds: [], adviceFeedback: null, lessonTags: [], note: '复盘' },
+      },
+      ctx,
+    );
+    expect(missing.ok).toBe(false);
+    if (missing.ok) return;
+    expect(missing.error.kind).toBe('not_found');
+
+    const dangling = await saveDecisionReviewTool.execute(
+      {
+        subject,
+        content: {
+          tradeIds: ['missing-trade'],
+          adviceFeedback: null,
+          lessonTags: [],
+          note: '复盘',
+        },
+      },
+      ctx,
+    );
+    expect(dangling.ok).toBe(false);
+    if (dangling.ok) return;
+    expect(dangling.error.kind).toBe('not_found');
+  });
+
+  it('only accepts advice feedback on advice reviews', async () => {
+    const ctx = await buildTestContext();
+    const trades = await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId);
+    const trade = trades[0];
+    if (trade === undefined) throw new Error('trade fixture missing');
     const saved = await saveDecisionReviewTool.execute(
       {
-        requestId: crypto.randomUUID(),
-        subject,
-        contextHash: preview.data.context.contextHash,
-        expectedRevision: 0,
+        subject: { kind: 'trade', id: trade.id },
         content: {
-          tradeIds: ['candidate-00', 'candidate-24'],
-          adviceFeedback: null,
-          triggerFeedback: null,
-          note: '',
+          tradeIds: [trade.id],
+          adviceFeedback: { outcome: 'ignored' },
+          lessonTags: [],
+          note: '成交复盘',
         },
       },
       ctx,
     );
-    expect(saved.ok).toBe(true);
-    const linked = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(linked.ok).toBe(true);
-    if (!linked.ok) return;
-    expect(linked.data.candidateTrades.map((trade) => trade.id)).toEqual([
-      ...preview.data.candidateTrades.map((trade) => trade.id),
-      'candidate-00',
-    ]);
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.error.kind).toBe('invalid_input');
   });
+});
 
-  it('saves an account revision, replays a request, and rejects stale edits', async () => {
+describe('list_decision_reviews', () => {
+  it('returns newest updated reviews first and paginates with a filter-bound cursor', async () => {
     const ctx = await buildTestContext();
-    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0]!;
-    const subject = { kind: 'advice', id: advice.id };
-    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(preview.ok).toBe(true);
-    if (!preview.ok || preview.data.context === null) return;
-    const input = {
-      requestId: crypto.randomUUID(),
-      subject,
-      contextHash: preview.data.context.contextHash,
-      expectedRevision: 0,
-      content: {
-        tradeIds: [],
-        adviceFeedback: { outcome: 'partially_followed' },
-        triggerFeedback: null,
-        note: '等待结算',
-      },
-    };
-    const first = await saveDecisionReviewTool.execute(input, ctx);
-    expect(first.ok).toBe(true);
-    const repeated = await saveDecisionReviewTool.execute(input, ctx);
-    expect(repeated.ok && repeated.data.replayed).toBe(true);
-    const stale = await saveDecisionReviewTool.execute(
-      {
-        ...input,
-        requestId: crypto.randomUUID(),
-        content: { ...input.content, note: '另一个标签页' },
-      },
+    const advices = await ctx.repos.advice.query({ includeExpired: true, limit: 2 });
+    const [first, second] = advices;
+    if (first === undefined || second === undefined) throw new Error('advice fixture missing');
+    for (const advice of [first, second]) {
+      const saved = await saveDecisionReviewTool.execute(
+        {
+          subject: { kind: 'advice', id: advice.id },
+          content: { tradeIds: [], adviceFeedback: null, lessonTags: [], note: advice.id },
+        },
+        ctx,
+      );
+      expect(saved.ok).toBe(true);
+    }
+    const page = await listDecisionReviewsTool.execute({ limit: 1 }, ctx);
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    expect(page.data.records).toHaveLength(1);
+    expect(page.data.nextCursor).not.toBeNull();
+    const next = await listDecisionReviewsTool.execute(
+      { limit: 1, cursor: page.data.nextCursor ?? '' },
       ctx,
     );
-    expect(stale.ok).toBe(false);
-    if (!stale.ok) expect(stale.error.kind).toBe('invariant_violation');
-    const receipt = await getDecisionWriteReceiptTool.execute({ requestId: input.requestId }, ctx);
-    expect(receipt.ok).toBe(true);
-  });
+    expect(next.ok).toBe(true);
+    if (!next.ok) return;
+    expect(next.data.records).toHaveLength(1);
+    expect(next.data.records[0]?.id).not.toBe(page.data.records[0]?.id);
+    expect(next.data.nextCursor).toBeNull();
 
-  it('只列出 Advice 持久证据指向的信号观察，不按同股拼接', async () => {
-    const ctx = await buildTestContext();
-    const advice = (
-      await ctx.repos.advice.query({ subjectKind: 'stock', includeExpired: true, limit: 50 })
-    )[0];
-    if (!advice) throw new Error('advice fixture missing');
-    const observation = {
-      id: 'explicit-observation',
-      sourceKind: 'strategy-signal' as const,
-      sourceId: 'explicit-signal',
-      stockId: advice.subjectId,
-      baselinePrice: 100,
-      baselineAt: advice.createdAt,
-      horizon: 't1' as const,
-      benchmarkStatus: 'unavailable' as const,
-      status: 'pending' as const,
-      provenance: {
-        provider: 'fixture',
-        observedAt: advice.createdAt,
-        fetchedAt: advice.createdAt,
-        freshness: 'unknown' as const,
-      },
-    };
-    await ctx.repos.signalObservation.save(observation);
-    const subject = { kind: 'advice' as const, id: advice.id };
-    const unlinked = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(unlinked.ok && unlinked.data.observations).toEqual([]);
-    await ctx.repos.advice.save({
-      ...advice,
-      basedOn: {
-        ...advice.basedOn,
-        strategy: {
-          strategyId: 'strategy-explicit',
-          strategyVersionId: 'version-explicit',
-          runId: 'run-explicit',
-          stockId: advice.subjectId,
-          resultEvidence: [],
-          signalIds: ['explicit-signal'],
-          observationIds: ['explicit-observation'],
-          recommendationTrigger: 'run',
-        },
-      },
-    });
-    const linked = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(linked.ok && linked.data.observations.map((item) => item.id)).toEqual([
-      'explicit-observation',
-    ]);
+    const otherFilter = await listDecisionReviewsTool.execute(
+      { limit: 1, cursor: page.data.nextCursor ?? '', stockId: '600519.SH' },
+      ctx,
+    );
+    expect(otherFilter.ok).toBe(false);
+    if (otherFilter.ok) return;
+    expect(otherFilter.error.kind).toBe('invalid_input');
   });
 });

@@ -6,7 +6,6 @@ import {
   beginWatchDeliveryTool,
   commitWatchEvaluationTool,
   listWatchDeliveryRetriesTool,
-  watchExecutionTool,
 } from './workflow-operations.js';
 
 const T0 = new Date('2026-07-21T02:00:00.000Z');
@@ -30,46 +29,33 @@ const triggerInput = () => ({
 });
 
 describe('save_watch_trigger', () => {
-  it('预警租约和投递工具不暴露到公共 registry，边界拒绝无效 owner', async () => {
+  it('内部投递工具不暴露到公共 registry', async () => {
     const names = new Set(toolRegistry.all().map((tool) => tool.name));
     for (const tool of [
-      watchExecutionTool,
       commitWatchEvaluationTool,
       beginWatchDeliveryTool,
       listWatchDeliveryRetriesTool,
     ]) {
       expect(names.has(tool.name)).toBe(false);
     }
-    const ctx = await buildTestContext();
-    expect(await watchExecutionTool.execute({ action: 'acquire', owner: '' }, ctx)).toMatchObject({
-      ok: false,
-      error: { kind: 'invalid_input' },
-    });
   });
 
-  it('未持有租约不能提交任何预警触发', async () => {
+  it('提交预警触发不再需要数据库租约', async () => {
     const ctx = await buildTestContext();
     expect(
       await commitWatchEvaluationTool.execute(
         {
-          owner: 'not-owner',
           triggers: [triggerInput()],
           states: [],
         },
         ctx,
       ),
-    ).toMatchObject({ ok: false, error: { kind: 'lease_lost_before_commit' } });
-    expect(await ctx.repos.watchTrigger.listRecent({})).toEqual([]);
+    ).toMatchObject({ ok: true, data: { saved: 1 } });
+    expect(await ctx.repos.watchTrigger.findById('t-1')).toMatchObject({ id: 't-1' });
   });
 
   it('发布复查丢弃的触发持久化，但不生成事后观察样本', async () => {
     const ctx = await buildTestContext();
-    expect(
-      await watchExecutionTool.execute({ action: 'acquire', owner: 'audit-owner' }, ctx),
-    ).toMatchObject({
-      ok: true,
-      data: { acquired: true },
-    });
     const audit = {
       ...triggerInput(),
       id: 'expired-audit',
@@ -78,7 +64,7 @@ describe('save_watch_trigger', () => {
       evalSnapshot: { publicationReason: '超过 10 分钟' },
     };
     const result = await commitWatchEvaluationTool.execute(
-      { owner: 'audit-owner', triggers: [], auditTriggers: [audit], states: [] },
+      { triggers: [], auditTriggers: [audit], states: [] },
       ctx,
     );
     expect(result).toMatchObject({ ok: true, data: { saved: 1 } });

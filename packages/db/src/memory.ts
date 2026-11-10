@@ -1,8 +1,16 @@
-// @luoome/db 的 driver-free 子路径入口（`@luoome/db/memory`）。
+// @luoome/db 的子路径入口（`@luoome/db/memory`）。
 //
-// 桶导出（index.ts）传递引用 client.ts（bun:sqlite driver），只能在 Bun 运行时
-// 加载；node 运行的 vitest 无法解析 'bun:sqlite'。本入口只导出不依赖 driver 的
-// 公共 API（in-memory repos + seedData），供纯内存测试组装路径使用。
+// 内存 Repository 已退役：测试与导入流程统一使用 bun:sqlite `:memory:` + Drizzle
+// 实现，不再维护第二套手写 JS Map 语义。node 运行时（vitest）没有 bun:sqlite，
+// 根目录 vitest.config.ts 把它 alias 到 packages/db/src/testing/node-sqlite.ts，
+// 因此本入口在 Bun 与 node 测试进程下都可用。
 
-export * from './repository/memory/index.js';
-export * from './seed.js';
+import type { RepositoryRegistry } from '@luoome/core';
+
+import { createDrizzleRepos } from './client.js';
+
+export { type SeedData, seedData } from './seed.js';
+
+/** 每次调用创建独立的 :memory: 数据库（表结构由 ensureSchema 建好）。 */
+export const createMemoryRepositories = (): RepositoryRegistry =>
+  createDrizzleRepos(':memory:').repos;

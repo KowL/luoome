@@ -1,5 +1,4 @@
 import type { Logger } from '@luoome/core';
-import { AISDKAgentRuntime } from './agent-runtime.js';
 import { AISDKAdapter } from './ai-sdk-adapter.js';
 import { LLMManager } from './manager.js';
 import { loadAIModelCatalog } from './model-catalog.js';
@@ -7,7 +6,6 @@ import type { LLMAdapter } from './types.js';
 
 export interface AIStack {
   readonly llm: LLMAdapter;
-  readonly agent: AISDKAgentRuntime;
 }
 
 export const createAIStackFromEnv = (
@@ -29,6 +27,5 @@ export const createAIStackFromEnv = (
       ...(options.fallback === undefined ? {} : { fallback: options.fallback }),
       adapter: new AISDKAdapter(catalog.resolve('generation')),
     }),
-    agent: new AISDKAgentRuntime(catalog.resolve('agent'), { logger: options.logger }),
   };
 };

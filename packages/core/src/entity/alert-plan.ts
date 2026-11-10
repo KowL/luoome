@@ -4,7 +4,6 @@ import { InvariantError } from '../error/index.js';
 import {
   AlertPrioritySchema,
   CostThresholdRuleSchema,
-  EventDateRuleSchema,
   PlanLogicSchema,
   PriceChangeRuleSchema,
   PriceLevelRuleSchema,
@@ -30,7 +29,6 @@ export const AlertRuleSchema = z.discriminatedUnion('kind', [
   CostThresholdRuleSchema.safeExtend({ id: z.string().min(1) }),
   PriceChangeRuleSchema.extend({ id: z.string().min(1) }),
   PriceLevelRuleSchema.extend({ id: z.string().min(1) }),
-  EventDateRuleSchema.extend({ id: z.string().min(1) }),
 ]);
 export type AlertRule = z.infer<typeof AlertRuleSchema>;
 

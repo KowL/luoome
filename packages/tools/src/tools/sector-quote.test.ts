@@ -39,8 +39,7 @@ describe('fetch_sector_quotes tool', () => {
   const makeCtx = (manager: SectorQuoteManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      sectorQuote: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { sectorQuote: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },

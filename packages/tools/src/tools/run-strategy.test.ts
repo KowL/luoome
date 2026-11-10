@@ -15,12 +15,9 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
-import { createStrategyObservationCandidatesTool } from './create-strategy-observation-candidates.js';
-import { prepareStrategyDataTool } from './prepare-strategy-data.js';
 import { runStrategyTool, trialStrategyTool } from './run-strategy.js';
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy DSL placeholder fixture.
-const CLOSE_INDICATOR = '${indicators.close}';
 
 const seedStrategy = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
@@ -84,68 +81,6 @@ const seedStrategy = async (
     updatedAt: now,
   };
   await ctx.repos.strategy.create(strategy);
-  await ctx.repos.strategy.createVersion(version);
-};
-
-const seedDailyBarStrategy = async (
-  ctx: Awaited<ReturnType<typeof buildTestContext>>,
-): Promise<void> => {
-  const now = new Date('2026-07-28T09:00:00Z');
-  const definition: StrategyDslV1 = {
-    schemaVersion: 1,
-    metadata: {},
-    universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
-    selection: {
-      logic: 'all',
-      rules: [
-        {
-          id: 'positive-close',
-          name: '收盘价有效',
-          when: `${CLOSE_INDICATOR} > 0`,
-          evidence: [`收盘价=${CLOSE_INDICATOR}`],
-        },
-      ],
-    },
-    scoring: {
-      method: 'weighted-sum',
-      components: [{ ruleId: 'positive-close', score: '50', weight: 1 }],
-    },
-    signals: {
-      entry: [
-        {
-          id: 'entry',
-          name: '日线研究信号',
-          when: `${CLOSE_INDICATOR} > 0`,
-          score: '60',
-          direction: 'bullish',
-          evidence: [`收盘价=${CLOSE_INDICATOR}`],
-        },
-      ],
-      exit: [],
-      risk: [],
-    },
-  };
-  const version: StrategyVersion = {
-    id: 'daily-bar-strategy-v1',
-    strategyId: 'daily-bar-strategy',
-    version: 1,
-    definition,
-    definitionHash: strategyDefinitionHash(definition),
-    validationStatus: 'valid',
-    validationErrors: [],
-    publishedAt: now,
-    createdAt: now,
-  };
-  await ctx.repos.strategy.create({
-    id: 'daily-bar-strategy',
-    name: '纯日线策略',
-    description: '测试纯日线策略',
-    owner: 'user',
-    status: 'active',
-    currentVersionId: version.id,
-    createdAt: now,
-    updatedAt: now,
-  });
   await ctx.repos.strategy.createVersion(version);
 };
 
@@ -567,7 +502,7 @@ describe('run_strategy', () => {
     });
   });
 
-  it('scheduled run reads a checkpoint backed by a reused fresh projection', async () => {
+  it('scheduled run reads persisted local daily bars instead of a checkpoint copy', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });
     await seedTestStockUniverse(base, { limit: 1, observedAt: now });
@@ -585,89 +520,18 @@ describe('run_strategy', () => {
         source: 'local-only',
       },
     ]);
-    const prepared = await prepareStrategyDataTool.execute(
-      {
-        strategyId: 'scan-strategy',
-        asOf: now,
-        stockIds: ['600519.SH'],
-        cachePolicy: 'reuse-fresh',
-      },
-      base,
-    );
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
 
     const result = await runStrategyTool.execute(
-      {
-        strategyId: 'scan-strategy',
-        mode: 'scheduled',
-        dataCheckpointId: prepared.data.checkpoint.id,
-      },
+      { strategyId: 'scan-strategy', mode: 'scheduled' },
       base,
     );
 
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     expect(result.data.results[0]?.ruleEvaluations[0]?.status).toBe('matched');
-    expect(result.data.run.publication?.status).toBe('published');
-  });
-
-  it('scheduled run dataAsOf ignores stale checkpoint members', async () => {
-    const now = new Date('2026-08-12T09:00:00.000Z');
-    const freshDate = new Date('2026-08-12T00:00:00.000Z');
-    const staleDate = new Date('2026-08-05T00:00:00.000Z');
-    const base = await buildTestContext({ clock: () => now });
-    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
-    await seedStrategy(base);
-    const ctx = {
-      ...base,
-      adapters: {
-        ...base.adapters,
-        market: {
-          ...base.adapters.market,
-          fetchDailyBars: (stockId: string) =>
-            Promise.resolve([
-              {
-                stockId,
-                date: stockId === '600519.SH' ? freshDate : staleDate,
-                open: money(10),
-                high: money(11),
-                low: money(9),
-                close: money(10),
-                volume: 1_000_000,
-                adjustment: 'qfq' as const,
-                source: 'checkpoint-fixture',
-              },
-            ]),
-        },
-      },
-    };
-    const prepared = await prepareStrategyDataTool.execute(
-      { strategyId: 'scan-strategy', asOf: now, maxStalenessTradingDays: 1 },
-      ctx,
-    );
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
-
-    const result = await runStrategyTool.execute(
-      {
-        strategyId: 'scan-strategy',
-        mode: 'scheduled',
-        dataCheckpointId: prepared.data.checkpoint.id,
-        acceptancePolicy: {
-          policyVersion: 'strategy-run-acceptance-v1',
-          minEvaluatedRatio: 0.5,
-          maxFailedRatio: 0.5,
-          maxIncompleteRatio: 0.5,
-        },
-      },
-      ctx,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.run.dataAsOf).toEqual(freshDate);
-    expect(result.data.run.providerCoverage?.[0]?.dataAsOf).toEqual(freshDate);
+    expect(result.data.run.providerStatuses.map((status) => status.provider)).toEqual([
+      'local:daily-bars',
+    ]);
   });
 
   it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {
@@ -911,230 +775,6 @@ describe('run_strategy', () => {
     expect(result.data.persisted).toBe(false);
     expect(await ctx.repos.strategyRun.findRunById(result.data.run.id)).toBeNull();
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
-  });
-
-  it('checks the fence with a fresh clock value immediately before commit', async () => {
-    let nowMs = new Date('2026-08-12T09:00:00.000Z').getTime();
-    const base = await buildTestContext({ clock: () => new Date(nowMs++) });
-    await seedTestStockUniverse(base, { limit: 1, observedAt: new Date(nowMs - 1) });
-    await seedStrategy(base);
-    const commitTimes: Date[] = [];
-    const strategyRun = new Proxy(base.repos.strategyRun, {
-      get(target, property, receiver) {
-        if (property === 'commitRunWithFence') {
-          return async (input: Parameters<typeof target.commitRunWithFence>[0]) => {
-            commitTimes.push(input.now);
-            return target.commitRunWithFence(input);
-          };
-        }
-        const value = Reflect.get(target, property, receiver);
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-    const ctx = { ...base, repos: { ...base.repos, strategyRun } };
-
-    const result = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(commitTimes[0]?.getTime()).toBeGreaterThan(result.data.run.finishedAt?.getTime() ?? 0);
-  });
-
-  it.each(['scheduled', 'replay'] as const)(
-    '%s observation creation preserves signal baseline and enforces session scope',
-    async (mode) => {
-      const now = new Date('2026-08-12T09:00:00.000Z');
-      const base = await buildTestContext({ clock: () => now });
-      await seedTestStockUniverse(base, { limit: 1, observedAt: now });
-      await seedStrategy(base);
-      const checkpointBar: DailyBar = {
-        stockId: '600519.SH',
-        date: new Date('2026-08-12T00:00:00.000Z'),
-        open: money(10),
-        high: money(11),
-        low: money(9),
-        close: money(10),
-        volume: 1_000_000,
-        adjustment: 'qfq',
-        source: 'checkpoint-fixture',
-      };
-      const ctx = {
-        ...base,
-        adapters: {
-          ...base.adapters,
-          market: {
-            ...base.adapters.market,
-            fetchDailyBars: () => Promise.resolve([checkpointBar]),
-          },
-        },
-      };
-      const prepared = await prepareStrategyDataTool.execute({ strategyId: 'scan-strategy' }, ctx);
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) return;
-
-      if (mode === 'scheduled') {
-        await ctx.repos.dailyBar.saveMany([{ ...checkpointBar, close: money(99) }]);
-      }
-      const result = await runStrategyTool.execute(
-        {
-          strategyId: 'scan-strategy',
-          mode,
-          ...(mode === 'replay' ? { asOf: now } : {}),
-          dataCheckpointId: prepared.data.checkpoint.id,
-        },
-        ctx,
-      );
-
-      expect(result).toMatchObject({ ok: true });
-      if (!result.ok) return;
-      expect(result.data.signals[0]?.evaluationSnapshot.baseline).toMatchObject({ price: 10 });
-      let evaluationSessionId: string | undefined;
-      if (mode === 'replay') {
-        const denied = await createStrategyObservationCandidatesTool.execute(
-          { runId: result.data.run.id },
-          ctx,
-        );
-        expect(denied).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
-        evaluationSessionId = 'observation-session';
-        await ctx.repos.strategyEvaluation.saveSession({
-          id: evaluationSessionId,
-          strategyId: 'scan-strategy',
-          strategyVersionId: 'scan-strategy-v1',
-          from: now,
-          to: now,
-          status: 'complete',
-          definitionHash: result.data.run.inputSnapshot.definitionHash as string,
-          createdAt: now,
-        });
-        expect(
-          await createStrategyObservationCandidatesTool.execute(
-            { runId: result.data.run.id, evaluationSessionId },
-            ctx,
-          ),
-        ).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
-        await ctx.repos.strategyEvaluation.saveDay({
-          sessionId: evaluationSessionId,
-          dataAsOf: result.data.run.dataAsOf,
-          status: 'complete',
-          vintageStatus: 'available',
-          runId: result.data.run.id,
-        });
-      }
-      const candidates = await createStrategyObservationCandidatesTool.execute(
-        {
-          runId: result.data.run.id,
-          ...(evaluationSessionId === undefined ? {} : { evaluationSessionId }),
-        },
-        ctx,
-      );
-      expect(candidates).toMatchObject({
-        ok: true,
-        data: {
-          baselines: {
-            available: 1,
-            unavailable: 0,
-            providers: { 'checkpoint-fixture': 1 },
-          },
-          horizons: {
-            t1: { created: 1, skipped: 0 },
-            t5: { created: 1, skipped: 0 },
-          },
-        },
-      });
-      expect(result.data.run.inputSnapshot).toMatchObject({
-        dataCheckpoint: {
-          id: prepared.data.checkpoint.id,
-          checksum: prepared.data.checkpoint.dataChecksum,
-        },
-      });
-    },
-  );
-
-  it('scheduled daily-bar-only signals preserve the checkpoint close as observation baseline', async () => {
-    const now = new Date('2026-08-12T09:00:00.000Z');
-    const base = await buildTestContext({ clock: () => now });
-    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
-    await seedDailyBarStrategy(base);
-    const checkpointBar: DailyBar = {
-      stockId: '600519.SH',
-      date: new Date('2026-08-12T00:00:00.000Z'),
-      open: money(10),
-      high: money(11),
-      low: money(9),
-      close: money(10),
-      volume: 1_000_000,
-      adjustment: 'qfq',
-      source: 'checkpoint-fixture',
-    };
-    const ctx = {
-      ...base,
-      adapters: {
-        ...base.adapters,
-        market: {
-          ...base.adapters.market,
-          fetchDailyBars: () => Promise.resolve([checkpointBar]),
-        },
-      },
-    };
-    const prepared = await prepareStrategyDataTool.execute(
-      { strategyId: 'daily-bar-strategy' },
-      ctx,
-    );
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
-
-    const result = await runStrategyTool.execute(
-      {
-        strategyId: 'daily-bar-strategy',
-        mode: 'scheduled',
-        dataCheckpointId: prepared.data.checkpoint.id,
-      },
-      ctx,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.signals[0]?.evaluationSnapshot.baseline).toEqual({
-      price: 10,
-      at: checkpointBar.date,
-      provider: checkpointBar.source,
-    });
-    let observationQueryLimit: number | undefined;
-    const observationRepo = ctx.repos.signalObservation;
-    const candidates = await createStrategyObservationCandidatesTool.execute(
-      { runId: result.data.run.id },
-      {
-        ...ctx,
-        repos: {
-          ...ctx.repos,
-          signalObservation: {
-            save: (observation) => observationRepo.save(observation),
-            findById: (id) => observationRepo.findById(id),
-            listBySources: (input) => observationRepo.listBySources(input),
-            list: (input) => {
-              observationQueryLimit = input?.limit;
-              return observationRepo.list(input);
-            },
-            removeBySources: (sourceKind, sourceIds) =>
-              observationRepo.removeBySources(sourceKind, sourceIds),
-          },
-        },
-      },
-    );
-    expect(observationQueryLimit).toBe(3);
-    expect(candidates).toMatchObject({
-      ok: true,
-      data: {
-        baselines: {
-          available: 1,
-          unavailable: 0,
-          providers: { 'checkpoint-fixture': 1 },
-        },
-      },
-    });
   });
 
   it('allows a validated unpublished version only for persist=false trial', async () => {

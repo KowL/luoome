@@ -50,10 +50,10 @@ export const getAShareSentimentTool = defineTool({
   input: GetAShareSentimentInput,
   output: GetAShareSentimentOutput,
   handler: async (input, ctx) => {
-    if (ctx.ashareSentiment === undefined) {
+    if (ctx.adapters.marketIntel?.ashareSentiment === undefined) {
       return errInvalidInput('get_ashare_sentiment 需要注入 A 股情绪 manager');
     }
-    const result = await ctx.ashareSentiment.fetch({
+    const result = await ctx.adapters.marketIntel?.ashareSentiment.fetch({
       date: input.date,
       coverage: 'CN_A_SHARES_SH_SZ',
     });

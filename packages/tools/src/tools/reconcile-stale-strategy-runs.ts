@@ -40,7 +40,7 @@ const snapshotMeta = (
 
 export const reconcileStaleStrategyRunsTool = defineTool({
   name: 'reconcile_stale_strategy_runs',
-  description: '收敛失去有效 lease 的 stale running StrategyRun；不覆盖仍持有 lease 的 owner',
+  description: '收敛 startedAt 超时的 stale running StrategyRun；单进程以内存互斥防重入',
   sideEffect: 'write',
   input: ReconcileStaleStrategyRunsInput,
   output: ReconcileStaleStrategyRunsOutput,
@@ -52,19 +52,6 @@ export const reconcileStaleStrategyRunsTool = defineTool({
     const runIds: string[] = [];
     for (const run of running) {
       if (run.startedAt > cutoff) {
-        skipped += 1;
-        continue;
-      }
-      const owner = `stale-reconciler:${globalThis.crypto.randomUUID()}`;
-      const token = await ctx.repos.strategyRun.acquireRunLeaseToken({
-        strategyId: run.strategyId,
-        strategyVersionId: run.strategyVersionId,
-        owner,
-        runId: run.id,
-        now,
-        leaseUntil: new Date(now.getTime() + 60_000),
-      });
-      if (token === null) {
         skipped += 1;
         continue;
       }
@@ -110,19 +97,8 @@ export const reconcileStaleStrategyRunsTool = defineTool({
         }),
         error: 'stale_strategy_run_reconciled',
       });
-      const committed = await ctx.repos.strategyRun.commitRunWithFence({
-        token,
-        now,
-        bundle: { run: failed, results: [], signals: [] },
-      });
-      if (committed === 'committed') runIds.push(run.id);
-      else skipped += 1;
-      await ctx.repos.strategyRun.releaseRunLease({
-        strategyId: run.strategyId,
-        strategyVersionId: run.strategyVersionId,
-        owner,
-        fence: token.fence,
-      });
+      await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
+      runIds.push(run.id);
     }
     return {
       scanned: running.length,

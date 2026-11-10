@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type {
   Report,
@@ -198,28 +198,43 @@ export const executeReportWorkflow = async (
     return { ok: false, error: { kind: 'internal', cause: message } };
   }
 
-  let decisionReviewSnapshot: Report['decisionReviewSnapshot'];
+  let decisionReviewFingerprint: Report['decisionReviewFingerprint'];
   if (
     input.scope.kind === 'account' &&
     (input.kind === 'closing' || input.kind === 'weekly') &&
     input.template !== 'closing-historical-gap-v1'
   ) {
-    const snapshot = await ctx.tools.get_decision_review_snapshot.execute({
-      accountId: input.scope.accountId,
-      periodStart: input.periodStart,
-      periodEnd: input.periodEnd,
-    });
-    if (!snapshot.ok) return snapshot;
-    decisionReviewSnapshot = snapshot.data.snapshot;
     const since = new Date(`${input.periodStart}T00:00:00.000+08:00`);
     const until = new Date(`${input.periodEnd}T23:59:59.999+08:00`);
-    const review = await ctx.tools.get_decision_loop_review.execute({
-      accountId: input.scope.accountId,
-      since,
-      until,
-      limit: 1000,
-    });
-    const evidenceId = `decision-review:${decisionReviewSnapshot.inputFingerprint}`;
+    const [review, records] = await Promise.all([
+      ctx.tools.get_decision_loop_review.execute({
+        accountId: input.scope.accountId,
+        since,
+        until,
+        limit: 1000,
+      }),
+      ctx.tools.list_decision_reviews.execute({
+        accountId: input.scope.accountId,
+        since,
+        until,
+        limit: 200,
+      }),
+    ]);
+    if (!records.ok) return records;
+    decisionReviewFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify(
+          records.data.records.map((record) => ({
+            id: record.id,
+            subject: record.subject,
+            stockId: record.stockId,
+            content: record.content,
+            updatedAt: record.updatedAt.toISOString(),
+          })),
+        ),
+      )
+      .digest('hex');
+    const evidenceId = `decision-review:${decisionReviewFingerprint}`;
     pieces = [
       ...pieces,
       {
@@ -248,11 +263,6 @@ export const executeReportWorkflow = async (
                       key: 'pendingAdvice',
                       label: '待核对建议',
                       value: review.data.advice.pending,
-                    },
-                    {
-                      key: 'triggerFeedback',
-                      label: '提醒反馈',
-                      value: review.data.decisionRecords.triggerFeedbackCount,
                     },
                   ],
                 },
@@ -335,7 +345,7 @@ export const executeReportWorkflow = async (
     missingDimensions,
     deliveryStatus: 'not-requested',
     notificationPolicy: 'eligible',
-    ...(decisionReviewSnapshot === undefined ? {} : { decisionReviewSnapshot }),
+    ...(decisionReviewFingerprint === undefined ? {} : { decisionReviewFingerprint }),
     workflowRunId,
     createdAt: generatedAt,
     updatedAt: generatedAt,
@@ -372,8 +382,7 @@ export const executeReportWorkflow = async (
   const reviewChangedWeeklySupplement =
     input.kind === 'weekly' &&
     previousReport !== undefined &&
-    previousReport.decisionReviewSnapshot?.inputFingerprint !==
-      report.decisionReviewSnapshot?.inputFingerprint;
+    previousReport.decisionReviewFingerprint !== report.decisionReviewFingerprint;
   const reportToSave: Report = reviewChangedWeeklySupplement
     ? { ...report, notificationPolicy: 'never' }
     : report;

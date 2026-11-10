@@ -17,7 +17,6 @@ import {
   readStrategyRunSnapshot,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
-  type StrategyLeaseToken,
   StrategyResultSchema,
   type StrategyRunInputSnapshotV3,
   StrategyRunSchema,
@@ -28,23 +27,16 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import {
-  defineTool,
-  errInvalidInput,
-  errLeaseLostBeforeCommit,
-  errNotFound,
-} from '../define-tool.js';
+import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
 import {
-  createCheckpointStrategyEvaluationDataAdapter,
   createLiveStrategyEvaluationDataAdapter,
+  createLocalStrategyEvaluationDataAdapter,
   type StrategyEvaluationDataRequest,
 } from '../internal/strategy-evaluation-data.js';
 import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
 
 const EVALUATION_CONCURRENCY = 8;
-const RUN_LEASE_MS = 15 * 60 * 1000;
-const RUN_HEARTBEAT_MS = 5 * 60 * 1000;
 
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
@@ -55,7 +47,6 @@ export const RunStrategyInput = z.object({
   universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
   revisionCutoff: z.coerce.date().optional(),
-  dataCheckpointId: z.string().min(1).optional(),
   evaluationSessionId: z.string().min(1).optional(),
   /** provider/CPU 受限并发；始终有上限，避免全市场扫描打爆上游。 */
   concurrency: z.number().int().min(1).max(64).default(EVALUATION_CONCURRENCY),
@@ -133,9 +124,6 @@ export const runStrategyTool = defineTool({
     if (input.mode === 'scheduled' && !input.persist) {
       return errInvalidInput('mode=scheduled 必须 persist=true');
     }
-    if (input.mode === 'scheduled' && input.dataCheckpointId === undefined) {
-      return errInvalidInput('mode=scheduled 必须带 dataCheckpointId');
-    }
     if (input.mode === 'replay' && input.asOf === undefined) {
       return errInvalidInput('mode=replay 时 asOf 必填');
     }
@@ -162,7 +150,6 @@ export const runStrategyTool = defineTool({
     );
     if ('ok' in resolved) return resolved;
     const version = resolved;
-    const leaseOwner = `run-strategy:${globalThis.crypto.randomUUID()}`;
     const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
     const scope = deriveStrategyRunScope({
       mode: input.mode,
@@ -171,44 +158,11 @@ export const runStrategyTool = defineTool({
     const universeKind = deriveStrategyRunUniverseKind({
       hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
     });
-    let leaseToken: StrategyLeaseToken | null = null;
-    let leaseLost = false;
-    if (input.persist) {
-      const leaseStartedAt = ctx.clock();
-      leaseToken = await ctx.repos.strategyRun.acquireRunLeaseToken({
-        strategyId: input.strategyId,
-        strategyVersionId: version.id,
-        owner: leaseOwner,
-        runId,
-        now: leaseStartedAt,
-        leaseUntil: new Date(leaseStartedAt.getTime() + RUN_LEASE_MS),
-      });
-      if (leaseToken === null) return errInvalidInput('同一 StrategyVersion 已有正式运行执行中');
-    }
     let startedRun: z.infer<typeof StrategyRunSchema> | undefined;
     let candidateIds: string[] = [];
     let dataAsOf = ctx.clock();
-    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let requestedBy: StrategyRunInputSnapshotV3['requestedBy'] = 'manual';
     try {
-      if (input.persist && leaseToken !== null) {
-        heartbeatTimer = setInterval(() => {
-          const token = leaseToken;
-          if (token === null || leaseLost) return;
-          void ctx.repos.strategyRun
-            .renewRunLease({
-              token,
-              now: ctx.clock(),
-              leaseUntil: new Date(ctx.clock().getTime() + RUN_LEASE_MS),
-            })
-            .then((renewed) => {
-              if (!renewed) leaseLost = true;
-            })
-            .catch(() => {
-              leaseLost = true;
-            });
-        }, RUN_HEARTBEAT_MS);
-      }
       const definition = version.definition;
       const references = inspectStrategyDefinitionReferences(definition);
       if (references.validationErrors.length > 0) {
@@ -294,93 +248,12 @@ export const runStrategyTool = defineTool({
                 .update(JSON.stringify(universeMemberIds))
                 .digest('hex'),
             };
-      const dataCheckpoint =
-        input.dataCheckpointId === undefined
-          ? undefined
-          : await ctx.repos.strategyDataCheckpoint.findById(input.dataCheckpointId);
-      if (input.dataCheckpointId !== undefined && dataCheckpoint === null) {
-        return errNotFound('StrategyDataCheckpoint', input.dataCheckpointId);
-      }
-      const usableDataCheckpoint = dataCheckpoint ?? undefined;
-      const checkpointMembers =
-        usableDataCheckpoint === undefined
-          ? []
-          : await ctx.repos.strategyDataCheckpoint.listMembers(usableDataCheckpoint.id);
-      if (input.mode === 'scheduled' && usableDataCheckpoint === undefined) {
-        return errInvalidInput('scheduled StrategyRun 的 data checkpoint 不可用');
-      }
-      if (input.mode === 'scheduled' && usableDataCheckpoint !== undefined) {
-        const policy = input.acceptancePolicy ?? DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY;
-        const availableRatio =
-          usableDataCheckpoint.requestedCount === 0
-            ? 0
-            : usableDataCheckpoint.availableCount / usableDataCheckpoint.requestedCount;
-        if (
-          (usableDataCheckpoint.status !== 'complete' &&
-            usableDataCheckpoint.status !== 'partial') ||
-          availableRatio < policy.minEvaluatedRatio
-        ) {
-          return errInvalidInput(
-            `data-checkpoint-below-min: ${usableDataCheckpoint.availableCount}/${usableDataCheckpoint.requestedCount}`,
-          );
-        }
-      }
-      if (
-        input.mode === 'scheduled' &&
-        input.asOf === undefined &&
-        usableDataCheckpoint !== undefined
-      ) {
-        // scheduled 的时点由 immutable checkpoint 决定；不能用运行开始时刻冒充输入新鲜度。
-        dataAsOf = usableDataCheckpoint.dataAsOf;
-      }
-      if (
-        usableDataCheckpoint !== undefined &&
-        usableDataCheckpoint.dataAsOf.getTime() > dataAsOf.getTime()
-      ) {
-        return errInvalidInput('dataCheckpoint.dataAsOf 不能晚于 StrategyRun.dataAsOf');
-      }
-      if (
-        (input.mode === 'scheduled' || input.mode === 'replay') &&
-        successfulSync !== null &&
-        usableDataCheckpoint !== undefined &&
-        usableDataCheckpoint.universeSyncId !== successfulSync.id
-      ) {
-        return errInvalidInput(
-          `${input.mode} StrategyRun 的 data checkpoint 必须来自同一 PIT universe sync`,
-        );
-      }
-      if (
-        (input.mode === 'scheduled' || input.mode === 'replay') &&
-        usableDataCheckpoint !== undefined &&
-        usableDataCheckpoint.memberChecksum !==
-          createHash('sha256').update(JSON.stringify(universeMemberIds)).digest('hex')
-      ) {
-        return errInvalidInput(`${input.mode} StrategyRun 的 data checkpoint 成员集合不匹配`);
-      }
-      if (
-        (input.mode === 'scheduled' || input.mode === 'replay') &&
-        usableDataCheckpoint !== undefined
-      ) {
-        const observedTimes = checkpointMembers.flatMap((member) =>
-          candidateIds.includes(member.stockId) &&
-          member.status === 'available' &&
-          member.latestBarDate !== undefined
-            ? [member.latestBarDate.getTime()]
-            : [],
-        );
-        const oldestObserved = Math.min(...observedTimes);
-        if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
-      }
-      const evaluationRevisionCutoff =
-        input.mode === 'replay' ? input.revisionCutoff : usableDataCheckpoint?.startedAt;
+      const evaluationRevisionCutoff = input.mode === 'replay' ? input.revisionCutoff : undefined;
       const evaluationData =
         input.mode === 'scan'
           ? createLiveStrategyEvaluationDataAdapter(ctx)
-          : createCheckpointStrategyEvaluationDataAdapter({
+          : createLocalStrategyEvaluationDataAdapter({
               ctx,
-              mode: input.mode,
-              members: checkpointMembers,
-              ...(usableDataCheckpoint === undefined ? {} : { checkpoint: usableDataCheckpoint }),
               ...(evaluationRevisionCutoff === undefined
                 ? {}
                 : { revisionCutoff: evaluationRevisionCutoff }),
@@ -415,10 +288,10 @@ export const runStrategyTool = defineTool({
               error: error instanceof Error ? error.message : String(error),
             });
           }
-        } else if (ctx.limitUpLadder === undefined) {
+        } else if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
           limitUpLadderErrorKind = 'manager_unavailable';
         } else {
-          const ladder = await ctx.limitUpLadder.fetchLadder({
+          const ladder = await ctx.adapters.marketIntel?.limitUpLadder.fetchLadder({
             date: dateInShanghai(dataAsOf),
             source: 'eastmoney',
             days: 15,
@@ -527,15 +400,6 @@ export const runStrategyTool = defineTool({
           stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
           requestedBy,
           universeCheckpoint,
-          ...(usableDataCheckpoint === undefined
-            ? {}
-            : {
-                dataCheckpoint: {
-                  id: usableDataCheckpoint.id,
-                  dataAsOf: usableDataCheckpoint.dataAsOf,
-                  checksum: usableDataCheckpoint.dataChecksum,
-                },
-              }),
           acceptancePolicyVersion:
             input.acceptancePolicy?.policyVersion ??
             DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY.policyVersion,
@@ -557,10 +421,8 @@ export const runStrategyTool = defineTool({
         needsQuote,
         needsDailyBars,
         concurrency: input.concurrency,
-        shouldContinue: () => !leaseLost,
       };
       const evaluationBatch = await evaluationData.load(evaluationRequest);
-      if (leaseLost) return errLeaseLostBeforeCommit();
       const failures = evaluationBatch.failures;
       const preparedStocks = evaluationBatch.prepared;
       const metaByStock = needsDerivedMeta
@@ -595,7 +457,6 @@ export const runStrategyTool = defineTool({
         });
       });
       const ranked = assignStableStrategyRanks(successful, definition);
-      if (leaseLost) return errLeaseLostBeforeCommit();
       const results = ranked.map((item) => item.result);
       const rawSignals = ranked.flatMap((item) => item.signals);
       const priorRuns = (
@@ -704,7 +565,7 @@ export const runStrategyTool = defineTool({
                   provider:
                     input.mode === 'replay'
                       ? 'historical:limit-up-ladder'
-                      : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                      : (ctx.adapters.marketIntel?.limitUpLadder?.name ?? 'limit-up-ladder'),
                   ok: limitUpLadderProviderOk,
                   ...(limitUpLadderErrorKind === undefined
                     ? {}
@@ -722,7 +583,7 @@ export const runStrategyTool = defineTool({
                   provider:
                     input.mode === 'replay'
                       ? 'historical:limit-up-ladder'
-                      : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                      : (ctx.adapters.marketIntel?.limitUpLadder?.name ?? 'limit-up-ladder'),
                   requested: candidateIds.length,
                   succeeded: limitUpLadderProviderOk ? candidateIds.length : 0,
                   failed: 0,
@@ -757,18 +618,11 @@ export const runStrategyTool = defineTool({
         ...(error === undefined ? {} : { error }),
       });
       if (input.persist) {
-        if (leaseLost || leaseToken === null) return errLeaseLostBeforeCommit();
-        const committed = await ctx.repos.strategyRun.commitRunWithFence({
-          token: leaseToken,
-          now: ctx.clock(),
-          bundle: { run, results, signals },
-        });
-        if (committed === 'lease-lost') return errLeaseLostBeforeCommit();
+        await ctx.repos.strategyRun.commitRun({ run, results, signals });
       }
       return { run, results, signals, persisted: input.persist };
     } catch (runError) {
-      if (input.persist && leaseLost) return errLeaseLostBeforeCommit();
-      if (input.persist && startedRun !== undefined && !leaseLost && leaseToken !== null) {
+      if (input.persist && startedRun !== undefined) {
         const stored = await ctx.repos.strategyRun.findRunById(startedRun.id);
         if (stored?.status === 'running') {
           const finishedAt = ctx.clock();
@@ -808,28 +662,10 @@ export const runStrategyTool = defineTool({
             publication,
             error: runError instanceof Error ? runError.message : String(runError),
           });
-          const committed = await ctx.repos.strategyRun.commitRunWithFence({
-            token: leaseToken,
-            now: ctx.clock(),
-            bundle: { run: failed, results: [], signals: [] },
-          });
-          if (committed === 'lease-lost') {
-            leaseLost = true;
-            return errLeaseLostBeforeCommit();
-          }
+          await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
         }
       }
       throw runError;
-    } finally {
-      if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
-      if (input.persist) {
-        await ctx.repos.strategyRun.releaseRunLease({
-          strategyId: input.strategyId,
-          strategyVersionId: version.id,
-          owner: leaseOwner,
-          ...(leaseToken === null ? {} : { fence: leaseToken.fence }),
-        });
-      }
     }
   },
 });

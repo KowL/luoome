@@ -13,17 +13,12 @@ import {
   type AgentScenario,
   APPROVED_EXTERNAL_TOOLS,
   addTradeTool,
-  recordDecisionTradeTool,
   settleChatDraftTool,
   toolRegistry,
 } from '@luoome/tools';
 import { z } from 'zod';
 
-const privilegedToolNames = new Set([
-  addTradeTool.name,
-  recordDecisionTradeTool.name,
-  settleChatDraftTool.name,
-]);
+const privilegedToolNames = new Set([addTradeTool.name, settleChatDraftTool.name]);
 
 export interface GatewayBoundTool {
   readonly declaration: ToolManifestEntry;

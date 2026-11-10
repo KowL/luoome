@@ -6,6 +6,7 @@ import {
   MoneySchema,
   QuoteSchema,
   type ReportSchema,
+  researchDocumentDate,
   TechnicalIndicatorsSchema,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -317,8 +318,8 @@ export const getStockMarketViewTool = defineTool({
     const outCandles = aggregateCandles(candles, input.granularity);
     const lastCandleDate = outCandles.at(-1)?.date ?? null;
 
-    const [trades, advices, triggers, signals, reports, researchLinks, limitUp] = await Promise.all(
-      [
+    const [trades, advices, triggers, signals, reports, researchDocuments, limitUp] =
+      await Promise.all([
         ctx.user.defaultAccountId === ''
           ? Promise.resolve([])
           : ctx.repos.trade
@@ -351,13 +352,12 @@ export const getStockMarketViewTool = defineTool({
             : { scopeKey: `account:${ctx.user.defaultAccountId}` }),
           limit: 200,
         }),
-        ctx.repos.researchIndex.listSubjectLinks({
-          subjectKind: 'stock',
-          subjectKey: stock.id,
+        ctx.repos.researchIndex.listDocuments({
+          stockCode: stock.code,
+          limit: 100,
         }),
         loadStockLimitUpFacts(stock.id, stock.code, input.date ?? currentLimitUpDate(ctx), ctx),
-      ],
-    );
+      ]);
     const markers = [
       ...trades.map((trade) => ({
         date: factDateKey(trade.executedAt),
@@ -418,20 +418,16 @@ export const getStockMarketViewTool = defineTool({
           tone: 'fact' as const,
           at: new Date(`${report.periodEnd}T00:00:00.000Z`),
         })),
-      ...researchLinks
-        .filter(
-          (link) =>
-            (link.ownerKind === 'topic' || link.ownerKind === 'document') &&
-            markerInRange(now, start, end),
-        )
-        .map((link) => ({
-          date: factDateKey(now),
+      ...researchDocuments
+        .filter((document) => markerInRange(researchDocumentDate(document), start, end))
+        .map((document) => ({
+          date: factDateKey(researchDocumentDate(document)),
           factKind: 'research' as const,
-          factId: link.ownerId,
-          title: `研究关联（${link.relation}）`,
+          factId: document.id,
+          title: `研究笔记：${document.title}`,
           href: `#research?stockId=${encodeURIComponent(stock.id)}`,
           tone: 'fact' as const,
-          at: now,
+          at: researchDocumentDate(document),
         })),
       ...limitUp.recent
         .filter((item) => markerInRange(new Date(`${item.date}T00:00:00.000Z`), start, end))

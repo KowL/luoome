@@ -28,12 +28,12 @@ export const limitUpLadderTool = defineTool({
   input: LimitUpLadderInput,
   output: LimitUpLadderOutput,
   handler: async (input, ctx) => {
-    if (ctx.limitUpLadder === undefined) {
+    if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
       return errInvalidInput(
-        'limit_up_ladder tool 需要 ctx.limitUpLadder 注入；当前 surface 未配置 limit-up-ladder manager',
+        'limit_up_ladder tool 需要 ctx.adapters.marketIntel?.limitUpLadder 注入；当前 surface 未配置 limit-up-ladder manager',
       );
     }
-    const r = await ctx.limitUpLadder.fetchLadder(input);
+    const r = await ctx.adapters.marketIntel?.limitUpLadder.fetchLadder(input);
     if (!r.ok || r.data === undefined) {
       // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
       const cause = r.error?.message ?? 'unknown error';
@@ -55,11 +55,13 @@ export const limitUpLadderCompareTool = defineTool({
   input: LimitUpLadderCompareInput,
   output: LimitUpLadderCompareOutput,
   handler: async (input, ctx) => {
-    if (ctx.limitUpLadder === undefined) {
-      return errInvalidInput('limit_up_ladder_compare tool 需要 ctx.limitUpLadder 注入');
+    if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
+      return errInvalidInput(
+        'limit_up_ladder_compare tool 需要 ctx.adapters.marketIntel?.limitUpLadder 注入',
+      );
     }
     const { date, prevDate, ...rest } = input;
-    const r = await ctx.limitUpLadder.compareLadder(date, prevDate, rest);
+    const r = await ctx.adapters.marketIntel?.limitUpLadder.compareLadder(date, prevDate, rest);
     if (!r.ok || r.data === undefined) {
       const cause = r.error?.message ?? 'unknown error';
       return errAdapterError('limit-up-ladder', cause, r.error?.recoverable ?? true);

@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import {
-  createCheckpointStrategyEvaluationDataAdapter,
   createLiveStrategyEvaluationDataAdapter,
+  createLocalStrategyEvaluationDataAdapter,
 } from './strategy-evaluation-data.js';
 
 const revision = (recordedAt: Date, close: number, source = 'fixture'): DailyBarRevision => ({
@@ -56,7 +56,7 @@ describe('StrategyEvaluationData adapters', () => {
     ]);
   });
 
-  it('checkpoint adapter reconstructs the point-in-time revision and never reads live market data', async () => {
+  it('local adapter reconstructs the point-in-time revision from persisted daily bars', async () => {
     const now = new Date('2026-08-12T07:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });
     const firstRecordedAt = new Date('2026-08-10T08:00:00.000Z');
@@ -65,10 +65,8 @@ describe('StrategyEvaluationData adapters', () => {
       revision(firstRecordedAt, 10, 'first-vintage'),
       revision(laterRecordedAt, 99, 'later-vintage'),
     ]);
-    const adapter = createCheckpointStrategyEvaluationDataAdapter({
+    const adapter = createLocalStrategyEvaluationDataAdapter({
       ctx,
-      mode: 'replay',
-      members: [],
       revisionCutoff: new Date('2026-08-10T12:00:00.000Z'),
     });
     const request = {
@@ -88,7 +86,7 @@ describe('StrategyEvaluationData adapters', () => {
     expect(batch.prepared[0]?.bars[0]?.close).toBe(money(10));
     expect(batch.prepared[0]?.quote?.close).toBe(money(10));
     expect(batch.prepared[0]?.quote?.source).toBe('first-vintage');
-    expect(audit.providerStatuses).toEqual([{ provider: 'local:daily-bars', ok: false }]);
+    expect(audit.providerStatuses).toEqual([{ provider: 'local:daily-bars', ok: true }]);
     expect(audit.providerCoverage).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ capability: 'quote', freshness: 'stale', succeeded: 1 }),

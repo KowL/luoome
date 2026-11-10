@@ -24,12 +24,12 @@ export const dragonTigerListTool = defineTool({
   input: DragonTigerListInput,
   output: DragonTigerListOutput,
   handler: async (input, ctx) => {
-    if (ctx.dragonTiger === undefined) {
+    if (ctx.adapters.marketIntel?.dragonTiger === undefined) {
       return errInvalidInput(
-        'dragon_tiger_list tool 需要 ctx.dragonTiger 注入；当前 surface 未配置 dragon-tiger manager',
+        'dragon_tiger_list tool 需要 ctx.adapters.marketIntel?.dragonTiger 注入；当前 surface 未配置 dragon-tiger manager',
       );
     }
-    const r = await ctx.dragonTiger.fetchList(input);
+    const r = await ctx.adapters.marketIntel?.dragonTiger.fetchList(input);
     if (!r.ok || r.data === undefined) {
       // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
       const cause = r.error?.message ?? 'unknown error';

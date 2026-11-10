@@ -1,12 +1,27 @@
-// vitest（node 运行时）配置：db 的 driver 相关测试依赖 bun:sqlite，
-// node 下无法解析，这里 exclude；这些测试改由 Bun 运行时执行：
-//   bun run test:db   （= bun test packages/db，含 driver + memory 全部 65 个）
-// 或直接 bun test（仓库根，Bun 自带 vitest 兼容层，209 个全量）。
-// 详见 package.json scripts 与 docs/archive/MVP-TASK.md §6 验收口径。
+// vitest（node 运行时）配置。
+//
+// 内存 Repository 退役后，`createInMemoryRepos` 与 :memory: SQLite 共用同一套
+// Drizzle 实现；node 运行时没有 bun:sqlite，这里把它 alias 到 node:sqlite 的最小
+// shim（packages/db/src/testing/node-sqlite.ts）。drizzle-orm 需要经 Vite 处理才能
+// 命中该 alias，因此强制 inline。
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
+const nodeSqliteShim = fileURLToPath(
+  new URL('./packages/db/src/testing/node-sqlite.ts', import.meta.url),
+);
+
 export default defineConfig({
+  resolve: {
+    alias: [{ find: /^bun:sqlite$/, replacement: nodeSqliteShim }],
+  },
   test: {
+    // drizzle-orm 需经 Vite 处理才能命中上面的 bun:sqlite alias。
+    server: {
+      deps: {
+        inline: [/drizzle-orm[\\/]bun-sqlite/],
+      },
+    },
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
@@ -14,6 +29,7 @@ export default defineConfig({
       '.claude/**',
       '.agents/**',
       '.tmp/**',
+      'packages/db/src/testing/**',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',

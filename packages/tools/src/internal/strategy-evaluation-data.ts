@@ -3,8 +3,6 @@ import {
   DailyBarSchema,
   type ProviderStatus,
   type Quote,
-  type StrategyDataCheckpoint,
-  type StrategyDataCheckpointMember,
   type StrategyProviderCoverage,
   type ToolContext,
 } from '@luoome/core';
@@ -240,22 +238,17 @@ export const createLiveStrategyEvaluationDataAdapter = (
   };
 };
 
-export interface CheckpointStrategyEvaluationDataOptions {
+export interface LocalStrategyEvaluationDataOptions {
   readonly ctx: ToolContext;
-  readonly mode: 'scheduled' | 'replay';
-  readonly checkpoint?: StrategyDataCheckpoint;
-  readonly members: readonly StrategyDataCheckpointMember[];
+  /** Replay 可限定 revision 记录时点；未提供时读取 asOf 之前最新本地日线。 */
   readonly revisionCutoff?: Date;
 }
 
-export const createCheckpointStrategyEvaluationDataAdapter = (
-  options: CheckpointStrategyEvaluationDataOptions,
+/** scheduled/replay 的本地落库日线读数：不读实时 quote，不依赖 checkpoint 拷贝表。 */
+export const createLocalStrategyEvaluationDataAdapter = (
+  options: LocalStrategyEvaluationDataOptions,
 ): StrategyEvaluationData => {
   const { ctx } = options;
-  const memberByStock = new Map(options.members.map((member) => [member.stockId, member] as const));
-  const dailyBarsCoverage = options.checkpoint?.providerStatuses.find(
-    (coverage) => coverage.capability === 'daily-bars',
-  );
 
   return {
     async preloadQuotes() {
@@ -267,15 +260,6 @@ export const createCheckpointStrategyEvaluationDataAdapter = (
         request.stockIds,
         request.concurrency,
         async (stockId) => {
-          if (options.mode === 'scheduled' && memberByStock.get(stockId)?.status !== 'available') {
-            return {
-              ok: false as const,
-              failure: {
-                stockId,
-                error: memberByStock.get(stockId)?.errorKind ?? 'stale_data',
-              },
-            };
-          }
           try {
             let bars: readonly DailyBar[] = [];
             if (request.needsDailyBars || request.needsQuote) {
@@ -349,68 +333,38 @@ export const createCheckpointStrategyEvaluationDataAdapter = (
     },
 
     audit(request, batch) {
-      const freshness =
-        options.mode === 'scheduled' ? (dailyBarsCoverage?.freshness ?? 'unavailable') : 'stale';
-      const dataAsOf =
-        options.mode === 'scheduled' ? dailyBarsCoverage?.dataAsOf : request.dataAsOf;
-      const unavailable = request.stockIds.filter(
-        (stockId) => memberByStock.get(stockId)?.status !== 'available',
-      );
-      const failed =
-        options.mode === 'scheduled'
-          ? request.stockIds.filter((stockId) => memberByStock.get(stockId)?.status === 'failed')
-              .length
-          : batch.failures.length;
-      const dailyBarsSucceeded =
-        options.mode === 'scheduled'
-          ? request.stockIds.length - unavailable.length
-          : batch.prepared.filter((item) => item.bars.length > 0).length;
-      const quoteSucceeded =
-        options.mode === 'scheduled'
-          ? request.stockIds.length - unavailable.length
-          : batch.prepared.filter((item) => item.quote !== undefined).length;
-      const missing =
-        options.mode === 'scheduled'
-          ? unavailable.length - failed
-          : batch.prepared.filter((item) => item.bars.length === 0).length;
-      const errorKinds = coverageErrorKinds(
-        batch.failures,
-        dailyBarsCoverage?.errorKinds,
-        options.checkpoint?.vintageStatus === 'unavailable',
-      );
-      const provider = options.mode === 'scheduled' ? 'checkpoint:daily-bars' : 'local:daily-bars';
+      const errorKinds = coverageErrorKinds(batch.failures);
+      const provider = 'local:daily-bars';
       const providerStatuses: ProviderStatus[] =
         request.needsQuote || request.needsDailyBars
-          ? [
-              {
-                provider,
-                ok: batch.failures.length === 0 && freshness === 'fresh',
-                ...(options.mode === 'scheduled' && dailyBarsCoverage?.latencyMs !== undefined
-                  ? { latencyMs: dailyBarsCoverage.latencyMs }
-                  : {}),
-              },
-            ]
+          ? [{ provider, ok: batch.failures.length === 0 }]
           : [];
       const commonCoverage = {
         provider,
         requested: request.stockIds.length,
-        failed,
-        missing,
+        failed: batch.failures.length,
+        missing: batch.prepared.filter((item) => item.bars.length === 0).length,
         fallbackUsed: false,
-        freshness,
-        ...(dataAsOf === undefined ? {} : { dataAsOf }),
+        freshness: 'stale' as const,
+        dataAsOf: request.dataAsOf,
         errorKinds,
       };
       const providerCoverage: StrategyProviderCoverage[] = [
         ...(request.needsQuote
-          ? [{ capability: 'quote' as const, ...commonCoverage, succeeded: quoteSucceeded }]
+          ? [
+              {
+                capability: 'quote' as const,
+                ...commonCoverage,
+                succeeded: batch.prepared.filter((item) => item.quote !== undefined).length,
+              },
+            ]
           : []),
         ...(request.needsDailyBars
           ? [
               {
                 capability: 'daily-bars' as const,
                 ...commonCoverage,
-                succeeded: dailyBarsSucceeded,
+                succeeded: batch.prepared.filter((item) => item.bars.length > 0).length,
               },
             ]
           : []),

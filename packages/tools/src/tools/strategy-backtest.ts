@@ -1,15 +1,19 @@
 import {
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
+  type DailyBar,
+  readStrategyRunSnapshot,
   runStrictBacktest,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
-  type StrategyEvaluationDay,
   type StrategyResult,
+  type StrategyRun,
   type StrictBacktestGateAudit,
   type StrictBacktestGateItem,
   type StrictBacktestMarketFact,
+  StrictBacktestMarketFactSchema,
   StrictBacktestRunSchema,
-  StrictBacktestSpecSchema,
+  type StrictBacktestSpecV2,
+  StrictBacktestSpecV2Schema,
   strategyRunUsesEvaluator,
   strictBacktestHash,
   strictBacktestSpecHash,
@@ -29,7 +33,9 @@ const BacktestCostsInput = z.object({
 
 export const CreateStrictStrategyBacktestInput = z.object({
   strategyId: z.string().min(1),
-  evaluationSessionId: z.string().min(1),
+  strategyVersionId: z.string().min(1),
+  from: z.coerce.date(),
+  to: z.coerce.date(),
   initialCash: z.number().positive().default(1_000_000),
   benchmarkStockId: z.string().min(1).default('000300.SH'),
   benchmarkDatasetVersion: z.string().min(1).default('000300.SH:qfq:daily:v1'),
@@ -79,28 +85,6 @@ const gateAudit = (
   assessedAt,
 });
 
-const latestFactsByStockDate = (
-  facts: readonly StrictBacktestMarketFact[],
-  cutoffByDate: ReadonlyMap<string, Date>,
-): Map<string, StrictBacktestMarketFact> => {
-  const result = new Map<string, StrictBacktestMarketFact>();
-  for (const fact of facts) {
-    const cutoff = cutoffByDate.get(fact.date.toISOString());
-    if (cutoff === undefined || fact.recordedAt > cutoff) continue;
-    const key = `${fact.stockId}\0${fact.date.toISOString()}`;
-    const existing = result.get(key);
-    if (
-      existing === undefined ||
-      fact.recordedAt > existing.recordedAt ||
-      (fact.recordedAt.getTime() === existing.recordedAt.getTime() &&
-        fact.contentHash > existing.contentHash)
-    ) {
-      result.set(key, fact);
-    }
-  }
-  return result;
-};
-
 export const orderStrictBacktestTargetStockIds = (results: readonly StrategyResult[]): string[] =>
   results
     .filter((result) => result.selected)
@@ -119,58 +103,84 @@ interface AssembledBacktest {
   readonly benchmarkFacts: readonly StrictBacktestMarketFact[];
 }
 
+const buildMarketFact = (bar: DailyBar, datasetVersion: string): StrictBacktestMarketFact => {
+  const contentHash = strictBacktestHash({
+    stockId: bar.stockId,
+    date: bar.date,
+    open: bar.open,
+    high: bar.high,
+    low: bar.low,
+    close: bar.close,
+    volume: bar.volume,
+    source: bar.source,
+  });
+  return StrictBacktestMarketFactSchema.parse({
+    stockId: bar.stockId,
+    date: bar.date,
+    rawOpen: bar.open,
+    rawHigh: bar.high,
+    rawLow: bar.low,
+    rawClose: bar.close,
+    sessionStatus: 'open',
+    buyAllowed: true,
+    sellAllowed: true,
+    buyRestriction: 'none',
+    sellRestriction: 'none',
+    // qfq 日线已把公司行动计入价格；不再依赖 strategy_backtest_market_facts 拷贝表。
+    corporateActionsStatus: 'complete',
+    corporateActions: [],
+    source: `${bar.source}:${datasetVersion}`,
+    recordedAt: bar.date,
+    contentHash,
+  });
+};
+
 const assembleBacktest = async (
-  spec: z.infer<typeof StrictBacktestSpecSchema>,
+  spec: StrictBacktestSpecV2,
   ctx: ToolContext,
 ): Promise<AssembledBacktest> => {
-  const session = await ctx.repos.strategyEvaluation.findSessionById(spec.evaluationSessionId);
-  if (session === null)
-    throw new Error(`StrategyEvaluationSession not found: ${spec.evaluationSessionId}`);
-  const days = [...(await ctx.repos.strategyEvaluation.listDays(session.id))].sort(
-    (left, right) => left.dataAsOf.getTime() - right.dataAsOf.getTime(),
+  const candidates = await ctx.repos.strategyRun.listRuns({
+    strategyId: spec.strategyId,
+    since: spec.from,
+    until: spec.to,
+    limit: 500,
+  });
+  const byDate = new Map<string, StrategyRun>();
+  for (const run of candidates) {
+    if (run.strategyVersionId !== spec.strategyVersionId) continue;
+    if (run.status !== 'complete' && run.status !== 'partial') continue;
+    const snapshot = readStrategyRunSnapshot(run.inputSnapshot);
+    if (snapshot.scope === 'evaluation' || snapshot.scope === undefined) continue;
+    const key = run.dataAsOf.toISOString();
+    const previous = byDate.get(key);
+    if (previous === undefined || run.startedAt.getTime() > previous.startedAt.getTime()) {
+      byDate.set(key, run);
+    }
+  }
+  const days = [...byDate.values()].sort(
+    (left, right) =>
+      left.dataAsOf.getTime() - right.dataAsOf.getTime() || left.id.localeCompare(right.id),
   );
-  const completeDays = days.filter((day) => day.status === 'complete');
-  const runs = new Map<string, Awaited<ReturnType<typeof ctx.repos.strategyRun.findRunById>>>();
+
   const resultsByDay = new Map<string, readonly StrategyResult[]>();
-  for (const day of completeDays) {
-    if (day.runId === undefined) continue;
-    const run = await ctx.repos.strategyRun.findRunById(day.runId);
-    runs.set(day.runId, run);
-    if (run !== null)
-      resultsByDay.set(
-        day.dataAsOf.toISOString(),
-        await ctx.repos.strategyRun.listResults(day.runId),
-      );
+  for (const day of days) {
+    resultsByDay.set(day.dataAsOf.toISOString(), await ctx.repos.strategyRun.listResults(day.id));
   }
 
-  const pitComplete =
-    session.status === 'complete' &&
+  const universeComplete =
     days.length >= 2 &&
-    days.every(
-      (day) =>
-        day.status === 'complete' && day.universeSyncId !== undefined && day.runId !== undefined,
-    );
-  const revisionComplete =
-    pitComplete &&
-    days.every(
-      (day) =>
-        day.vintageStatus === 'available' &&
-        day.dataCheckpointId !== undefined &&
-        day.revisionCutoff !== undefined,
-    );
-  const evaluatorComplete =
-    revisionComplete &&
     days.every((day) => {
-      const run = day.runId === undefined ? null : runs.get(day.runId);
-      return (
-        run !== null &&
-        run !== undefined &&
-        strategyRunUsesEvaluator(run.inputSnapshot, {
-          version: STRATEGY_EVALUATOR_VERSION,
-          codeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
-        })
-      );
+      const snapshot = readStrategyRunSnapshot(day.inputSnapshot);
+      return snapshot.universeKind === 'full' && snapshot.stockIds.length > 0;
     });
+  const evaluatorComplete =
+    days.length >= 2 &&
+    days.every((day) =>
+      strategyRunUsesEvaluator(day.inputSnapshot, {
+        version: STRATEGY_EVALUATOR_VERSION,
+        codeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
+      }),
+    );
 
   const executionDays = days.slice(1);
   const targets = executionDays.map((day, index) => {
@@ -185,91 +195,68 @@ const assembleBacktest = async (
     };
   });
   const targetStockIds = [...new Set(targets.flatMap((target) => target.stockIds))].sort();
-  const cutoffByDate = new Map(
-    executionDays.flatMap((day) =>
-      day.revisionCutoff === undefined
-        ? []
-        : ([[day.dataAsOf.toISOString(), day.revisionCutoff]] as const),
-    ),
-  );
-  const maxCutoff = [...cutoffByDate.values()].sort((a, b) => b.getTime() - a.getTime())[0];
-  const allMarketFacts = await ctx.repos.strategyBacktest.listMarketFacts({
-    stockIds: targetStockIds,
-    from: executionDays[0]?.dataAsOf ?? spec.from,
-    to: executionDays.at(-1)?.dataAsOf ?? spec.to,
-    ...(maxCutoff === undefined ? {} : { recordedAt: maxCutoff }),
-  });
-  const marketByKey = latestFactsByStockDate(allMarketFacts, cutoffByDate);
+
+  const barsByStock = new Map<string, readonly DailyBar[]>();
+  for (const stockId of targetStockIds) {
+    barsByStock.set(stockId, await ctx.repos.dailyBar.findInRange(stockId, spec.from, spec.to));
+  }
+  const latestBarOnOrBefore = (stockId: string, date: Date): DailyBar | undefined => {
+    const bars = barsByStock.get(stockId) ?? [];
+    let found: DailyBar | undefined;
+    for (const bar of bars) {
+      if (bar.date.getTime() <= date.getTime()) found = bar;
+    }
+    return found;
+  };
+
+  const marketFacts: StrictBacktestMarketFact[] = [];
+  for (const day of executionDays) {
+    for (const stockId of targetStockIds) {
+      const bar = latestBarOnOrBefore(stockId, day.dataAsOf);
+      if (bar !== undefined) marketFacts.push(buildMarketFact(bar, 'qfq:daily:v1'));
+    }
+  }
   const requiredMarketKeys = executionDays.flatMap((day) =>
     targetStockIds.map((stockId) => `${stockId}\0${day.dataAsOf.toISOString()}`),
   );
-  const marketFacts = requiredMarketKeys.flatMap((key) => {
-    const fact = marketByKey.get(key);
-    return fact === undefined ? [] : [fact];
-  });
-  const tradabilityComplete = requiredMarketKeys.every((key) => marketByKey.has(key));
-  const corporateActionsComplete =
-    tradabilityComplete && marketFacts.every((fact) => fact.corporateActionsStatus === 'complete');
+  const coveredMarketKeys = new Set(
+    marketFacts.map((fact) => `${fact.stockId}\0${fact.date.toISOString()}`),
+  );
+  const tradabilityComplete = requiredMarketKeys.every((key) => coveredMarketKeys.has(key));
 
+  const benchmarkBars = await ctx.repos.dailyBar.findInRange(
+    spec.benchmark.stockId,
+    spec.from,
+    spec.to,
+  );
   const benchmarkFacts: StrictBacktestMarketFact[] = [];
-  let benchmarkComplete = revisionComplete;
   for (const day of executionDays) {
-    const cutoff = day.revisionCutoff;
-    if (cutoff === undefined) {
-      benchmarkComplete = false;
-      continue;
+    const bar = benchmarkBars
+      .filter((candidate) => candidate.date.getTime() <= day.dataAsOf.getTime())
+      .at(-1);
+    if (bar !== undefined) {
+      benchmarkFacts.push(buildMarketFact(bar, spec.benchmark.datasetVersion));
     }
-    const revisions = await ctx.repos.dailyBar.listRevisions({
-      stockId: spec.benchmark.stockId,
-      from: day.dataAsOf,
-      to: day.dataAsOf,
-      recordedAt: cutoff,
-    });
-    const revision = revisions.at(-1);
-    if (revision === undefined) {
-      benchmarkComplete = false;
-      continue;
-    }
-    benchmarkFacts.push({
-      stockId: revision.stockId,
-      date: revision.date,
-      rawOpen: revision.open,
-      rawHigh: revision.high,
-      rawLow: revision.low,
-      rawClose: revision.close,
-      sessionStatus: 'open',
-      buyAllowed: true,
-      sellAllowed: true,
-      buyRestriction: 'none',
-      sellRestriction: 'none',
-      corporateActionsStatus: 'complete',
-      corporateActions: [],
-      source: `${revision.source}:${spec.benchmark.datasetVersion}`,
-      recordedAt: revision.recordedAt,
-      contentHash: revision.contentHash,
-    });
   }
-  if (benchmarkFacts.length !== executionDays.length) benchmarkComplete = false;
+  const benchmarkComplete = benchmarkFacts.length === executionDays.length;
 
   const items = [
     gate(
       'pit-universe',
-      pitComplete ? 'complete' : days.length === 0 ? 'unavailable' : 'partial',
-      pitComplete
-        ? 'PIT universe 与逐日运行完整'
-        : 'evaluation session/day 缺少完整 PIT universe 或终态 run',
-      days.flatMap((day) =>
-        day.universeSyncId === undefined ? [] : [`universe:${day.universeSyncId}`],
-      ),
+      universeComplete ? 'complete' : days.length === 0 ? 'unavailable' : 'partial',
+      universeComplete
+        ? 'StrategyRun 历史覆盖完整 PIT universe'
+        : '区间内缺少完整 PIT universe 的 operational StrategyRun',
+      days.map((day) => `strategy-run:${day.id}`),
     ),
     gate(
       'daily-bar-revisions',
-      revisionComplete ? 'complete' : completeDays.length === 0 ? 'unavailable' : 'partial',
-      revisionComplete
-        ? '逐日 revision vintage 与 cutoff 完整'
-        : '至少一个 evaluation day 的 DailyBar vintage/cutoff 不可用',
-      days.flatMap((day) =>
-        day.dataCheckpointId === undefined ? [] : [`checkpoint:${day.dataCheckpointId}`],
+      tradabilityComplete ? 'complete' : marketFacts.length === 0 ? 'unavailable' : 'partial',
+      tradabilityComplete
+        ? '本地 qfq 日线覆盖全部执行日与目标股票'
+        : '至少一个执行日缺少目标股票的本地 qfq 日线',
+      marketFacts.map(
+        (fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}:${fact.contentHash}`,
       ),
     ),
     gate('fees', 'complete', '费用模型与参数已固化进不可变 spec', [`fees:${spec.fees.model}`]),
@@ -286,55 +273,39 @@ const assembleBacktest = async (
             ? 'unavailable'
             : 'partial',
       tradabilityComplete
-        ? '所有潜在持仓在全部执行日都有 PIT 可交易性事实'
-        : '缺少停牌/涨跌停/退市可交易性事实',
+        ? '全部执行日具备 qfq 日线，按次日开盘成交'
+        : '缺少停牌/退市导致的日线缺口',
       marketFacts.map(
         (fact) => `market-fact:${fact.stockId}:${fact.date.toISOString()}:${fact.contentHash}`,
       ),
     ),
     gate(
       'corporate-actions',
-      corporateActionsComplete ? 'complete' : marketFacts.length === 0 ? 'unavailable' : 'partial',
-      corporateActionsComplete
-        ? '所有市场事实明确记录公司行动完整状态'
-        : '公司行动事实不可用或不完整',
-      marketFacts
-        .filter((fact) => fact.corporateActionsStatus === 'complete')
-        .map((fact) => `corporate-actions:${fact.stockId}:${fact.date.toISOString()}`),
+      marketFacts.length === 0 ? 'unavailable' : 'complete',
+      marketFacts.length === 0
+        ? '没有市场事实，无法确认公司行动处理'
+        : 'qfq 日线已包含公司行动调整，公式化回测不再单独叠加',
+      marketFacts.map((fact) => `corporate-actions:${fact.stockId}:${fact.date.toISOString()}`),
     ),
     gate(
       'benchmark',
       benchmarkComplete ? 'complete' : benchmarkFacts.length === 0 ? 'unavailable' : 'partial',
-      benchmarkComplete
-        ? '版本化 benchmark revisions 覆盖完整执行区间'
-        : 'benchmark revision/cutoff 覆盖不完整',
+      benchmarkComplete ? '本地 qfq benchmark 日线覆盖完整执行区间' : 'benchmark 日线覆盖不完整',
       benchmarkFacts.map((fact) => `benchmark:${fact.date.toISOString()}:${fact.contentHash}`),
     ),
     gate(
       'evaluator-code',
-      evaluatorComplete ? 'complete' : runs.size === 0 ? 'unavailable' : 'partial',
+      evaluatorComplete ? 'complete' : days.length === 0 ? 'unavailable' : 'partial',
       evaluatorComplete
-        ? '所有逐日运行绑定相同 evaluator version 与 code hash'
+        ? '全部历史运行绑定相同 evaluator version 与 code hash'
         : '历史运行缺少 evaluator code identity 或身份不一致',
-      [...runs.values()].flatMap((run) => (run === null ? [] : [`strategy-run:${run.id}`])),
+      days.map((day) => `strategy-run:${day.id}`),
     ),
   ] satisfies StrictBacktestGateItem[];
   const audit = gateAudit(items, ctx.clock());
   const inputFingerprint = strictBacktestHash({
     specHash: strictBacktestSpecHash(spec),
-    session: {
-      id: session.id,
-      definitionHash: session.definitionHash,
-      status: session.status,
-    },
-    days: days.map((day: StrategyEvaluationDay) => ({
-      dataAsOf: day.dataAsOf,
-      runId: day.runId,
-      universeSyncId: day.universeSyncId,
-      dataCheckpointId: day.dataCheckpointId,
-      revisionCutoff: day.revisionCutoff,
-      vintageStatus: day.vintageStatus,
-    })),
+    days: days.map((day) => ({ id: day.id, dataAsOf: day.dataAsOf })),
     targets,
     marketFacts: marketFacts.map((fact) => fact.contentHash),
     benchmarkFacts: benchmarkFacts.map((fact) => fact.contentHash),
@@ -350,18 +321,19 @@ export const createStrictStrategyBacktestTool = defineTool({
   input: CreateStrictStrategyBacktestInput,
   output: CreateStrictStrategyBacktestOutput,
   handler: async (input, ctx: ToolContext) => {
-    const session = await ctx.repos.strategyEvaluation.findSessionById(input.evaluationSessionId);
-    if (session === null)
-      return errNotFound('StrategyEvaluationSession', input.evaluationSessionId);
-    if (session.strategyId !== input.strategyId)
-      return errInvalidInput('evaluation session 不属于指定 Strategy');
-    const spec = StrictBacktestSpecSchema.parse({
-      schemaVersion: 1,
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy === null) return errNotFound('Strategy', input.strategyId);
+    const version = await ctx.repos.strategy.findVersionById(input.strategyVersionId);
+    if (version === null) return errNotFound('StrategyVersion', input.strategyVersionId);
+    if (version.strategyId !== strategy.id) {
+      return errInvalidInput('strategyVersionId 不属于指定 Strategy');
+    }
+    const spec = StrictBacktestSpecV2Schema.parse({
+      schemaVersion: 2,
       strategyId: input.strategyId,
-      strategyVersionId: session.strategyVersionId,
-      evaluationSessionId: session.id,
-      from: session.from,
-      to: session.to,
+      strategyVersionId: input.strategyVersionId,
+      from: input.from,
+      to: input.to,
       initialCash: input.initialCash,
       benchmark: { stockId: input.benchmarkStockId, datasetVersion: input.benchmarkDatasetVersion },
       execution: {
@@ -415,6 +387,9 @@ export const executeStrictStrategyBacktestTool = defineTool({
     const existing = await ctx.repos.strategyBacktest.findRunById(input.backtestRunId);
     if (existing === null) return errNotFound('StrictStrategyBacktest', input.backtestRunId);
     if (existing.status === 'complete' || existing.status === 'failed') return { run: existing };
+    if (existing.spec.schemaVersion === 1) {
+      return errInvalidInput('v1 strict backtest 已退役，只支持只读查询；请用 v2 重新创建');
+    }
     if (existing.gateAudit.status !== 'complete')
       return errInvalidInput('strict backtest facts gate 未完成');
     const assembled = await assembleBacktest(existing.spec, ctx);

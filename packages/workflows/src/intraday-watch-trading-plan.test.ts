@@ -1,8 +1,20 @@
-import { money, TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
+import { money, type ToolContext, TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
 import { addHoldingTool, getAccountFactsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
+import { intradayWatchWorkflow } from './intraday-watch.js';
+
+/**
+ * 合并后交易计划监控是 intraday-watch 的一步：测试仍以交易计划结果为 seam，
+ * 从统一输出中取 tradingPlanWatch 子结果。
+ */
+const runPlanWatch = async (input: Record<string, unknown>, ctx: ToolContext) => {
+  const result = await intradayWatchWorkflow.run(input, ctx);
+  if (!result.ok) return result;
+  const watch = result.data.tradingPlanWatch;
+  if (watch === undefined) throw new Error('merged intraday-watch missing tradingPlanWatch');
+  return { ok: true as const, data: watch };
+};
 
 const NOW = new Date('2026-07-17T06:00:00.000Z');
 /** fixtures 里的长期账户：无持仓、现金 50 万，适合作为「当前持仓」口径的测试账户。 */
@@ -103,10 +115,7 @@ describe('intraday trading plan watch', () => {
       return quotes;
     };
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('blocked');
@@ -123,10 +132,7 @@ describe('intraday trading plan watch', () => {
     ['休市日', new Date('2026-09-25T02:00:00.000Z')],
   ])('%s 不执行盘中监控', async (_label, at) => {
     const ctx = await buildPlanWatchContext({ clock: () => at });
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('blocked');
@@ -141,14 +147,14 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(ctx);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
     const originalCount = ctx.repos.watchTrigger.countAttemptedSince.bind(ctx.repos.watchTrigger);
+    let statsCalls = 0;
     ctx.repos.watchTrigger.countAttemptedSince = async (...args) => {
-      now = new Date('2026-07-17T07:00:00.000Z');
+      statsCalls += 1;
+      // 合并执行器先跑 AlertPlan 子管线；交易计划候选形成后的 stats 才模拟跨过收盘。
+      if (statsCalls === 2) now = new Date('2026-07-17T07:00:00.000Z');
       return originalCount(...args);
     };
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('partial');
@@ -179,13 +185,10 @@ describe('intraday trading plan watch', () => {
       }
       return started;
     };
-    const notification = ctx.notification;
+    const notification = ctx.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const send = vi.spyOn(notification, 'send');
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('partial');
@@ -206,10 +209,7 @@ describe('intraday trading plan watch', () => {
     expect(states[0]?.firstTriggeredAt).toBeUndefined();
 
     now = new Date('2026-07-20T01:30:01.000Z');
-    const nextSession = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const nextSession = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(nextSession.ok).toBe(true);
     if (!nextSession.ok) return;
     expect(nextSession.data.triggers).toMatchObject([{ deliveryStatus: 'sent' }]);
@@ -237,25 +237,25 @@ describe('intraday trading plan watch', () => {
         }
         return originalBegin(...args);
       };
-      const notification = base.notification;
+      const notification = base.adapters.notification;
       if (notification === undefined) throw new Error('test notification manager missing');
       let interruptSend = interruptedStatus === 'failed';
       const ctx = {
         ...base,
-        notification: {
-          send: async (input: Parameters<typeof notification.send>[0]) => {
-            if (interruptSend) {
-              interruptSend = false;
-              throw new Error('synthetic channel outage');
-            }
-            return notification.send(input);
+        adapters: {
+          ...base.adapters,
+          notification: {
+            send: async (input: Parameters<typeof notification.send>[0]) => {
+              if (interruptSend) {
+                interruptSend = false;
+                throw new Error('synthetic channel outage');
+              }
+              return notification.send(input);
+            },
           },
         },
       };
-      const first = await intradayTradingPlanWatchWorkflow.run(
-        { accountId: ACCOUNT_ID, notify: true },
-        ctx,
-      );
+      const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
       expect(first.ok).toBe(true);
       expect(
         (
@@ -264,10 +264,7 @@ describe('intraday trading plan watch', () => {
       ).toBe(interruptedStatus);
 
       now = new Date('2026-07-20T01:30:01.000Z');
-      const resumed = await intradayTradingPlanWatchWorkflow.run(
-        { accountId: ACCOUNT_ID, notify: true },
-        ctx,
-      );
+      const resumed = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
       expect(resumed.ok).toBe(true);
       if (!resumed.ok) return;
       expect(resumed.data.triggers).toMatchObject([{ deliveryStatus: 'sent' }]);
@@ -288,29 +285,26 @@ describe('intraday trading plan watch', () => {
     const base = await buildPlanWatchContext({ clock: () => now });
     const facts = await seedFacts(base);
     await base.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     let sends = 0;
     const ctx = {
       ...base,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sends += 1;
-          if (sends === 1) throw new Error('synthetic channel outage');
-          return notification.send(input);
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sends += 1;
+            if (sends === 1) throw new Error('synthetic channel outage');
+            return notification.send(input);
+          },
         },
       },
     };
-    const morning = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const morning = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(morning.ok).toBe(true);
     now = new Date('2026-07-17T05:00:01.000Z');
-    const afternoon = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const afternoon = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(afternoon.ok).toBe(true);
     if (!afternoon.ok) return;
     expect(afternoon.data.triggers).toMatchObject([{ deliveryStatus: 'sent' }]);
@@ -325,10 +319,7 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(ctx);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -345,10 +336,7 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(ctx);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.freshQuotes).toBe(0);
@@ -362,10 +350,7 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(ctx);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -385,7 +370,7 @@ describe('intraday trading plan watch', () => {
         fetchedAt: new Date(NOW.getTime() + 60_000),
       }),
     });
-    const result = await intradayTradingPlanWatchWorkflow.run(
+    const result = await runPlanWatch(
       { accountId: ACCOUNT_ID, notify: true },
       { ...base, adapters: { ...base.adapters, market } },
     );
@@ -401,10 +386,7 @@ describe('intraday trading plan watch', () => {
     const plan = makePlan(ACCOUNT_ID, facts.digest);
     await ctx.repos.tradingPlan.save(plan);
 
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.data.status).toBe('complete');
@@ -418,10 +400,7 @@ describe('intraday trading plan watch', () => {
     expect(
       await ctx.repos.watchTrigger.listRecent({ poolId: `trading-plan-watch:${ACCOUNT_ID}` }),
     ).toEqual([]);
-    const formal = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const formal = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(formal.ok && formal.data.triggers.length).toBe(1);
     if (formal.ok) {
       const trigger = formal.data.triggers[0];
@@ -436,10 +415,7 @@ describe('intraday trading plan watch', () => {
         deliveryCompletedAt: NOW,
       });
     }
-    const second = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const second = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(second.ok).toBe(true);
     if (second.ok) expect(second.data.triggers).toEqual([]);
   });
@@ -462,20 +438,14 @@ describe('intraday trading plan watch', () => {
       ...plan,
       entryConditions: [...plan.entryConditions, second],
     });
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(first.ok && first.data.triggers).toEqual([]);
     await ctx.repos.tradingPlan.save({
       ...plan,
       version: 2,
       entryConditions: [...plan.entryConditions, { ...second, value: 0 }],
     });
-    const next = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const next = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(next.ok && next.data.triggers.length).toBe(1);
     if (next.ok)
       expect(next.data.triggers[0]?.evalSnapshot.conditionIds).toEqual([
@@ -506,10 +476,7 @@ describe('intraday trading plan watch', () => {
         ],
       },
     });
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok && result.data.notified).toBe(0);
     // 未持仓的计划失效不是操作提醒：只留 not-requested 记录，也不伪装成卖出指令。
     expect(result.ok && result.data.triggers).toMatchObject([
@@ -565,10 +532,7 @@ describe('intraday trading plan watch', () => {
       exit: { ...unheld.exit, triggerConditions: [stop('600519.SH', 'stop-unheld')] },
     });
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(result.ok && result.data.triggers).toMatchObject([
       {
         stockId: '002594.SZ',
@@ -598,22 +562,22 @@ describe('intraday trading plan watch', () => {
     );
     let title = '';
     let content = '';
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const ctx = {
       ...base,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          title = input.payload.title;
-          content = input.payload.content;
-          return notification.send(input);
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            title = input.payload.title;
+            content = input.payload.content;
+            return notification.send(input);
+          },
         },
       },
     };
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(title).toBe('观察条件就绪 · 002594.SZ');
@@ -660,25 +624,16 @@ describe('intraday trading plan watch', () => {
       return quotes;
     };
 
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(first.ok && first.data.triggers[0]?.deliveryStatus).toBe('sent');
 
     price = 101;
-    const recovered = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const recovered = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(recovered.ok && recovered.data.triggers).toEqual([]);
 
     now = new Date(NOW.getTime() + 5 * 60_000);
     price = 100;
-    const again = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const again = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.data.triggers[0]?.deliveryStatus).toBe('suppressed-cooldown');
@@ -718,10 +673,7 @@ describe('intraday trading plan watch', () => {
           },
         ],
       });
-      const result = await intradayTradingPlanWatchWorkflow.run(
-        { accountId: ACCOUNT_ID, notify: false },
-        ctx,
-      );
+      const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
       expect(result.ok && result.data.triggers).toEqual([]);
       expect(result.ok && result.data.status).toBe('partial');
     }
@@ -732,10 +684,7 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(ctx, [{ stockId: '600519.SH', quantity: 100, avgCost: 10 }]);
     expect(facts.status).toBe('unavailable');
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('complete');
@@ -752,16 +701,13 @@ describe('intraday trading plan watch', () => {
     }));
     const facts = await seedFacts(ctx, holdings);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('complete');
     expect(result.data.freshQuotes).toBe(102);
     expect(result.data.triggers).toHaveLength(1);
-  });
+  }, 30_000);
 
   it('账户事实不可用（持仓缺合格行情）时暂停精确盘中监控', async () => {
     const ctx = await buildPlanWatchContext({ clock: () => NOW });
@@ -774,7 +720,7 @@ describe('intraday trading plan watch', () => {
     expect(facts.status).toBe('unavailable');
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
 
-    const result = await intradayTradingPlanWatchWorkflow.run({ accountId: ACCOUNT_ID }, ctx);
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('blocked');
@@ -813,7 +759,7 @@ describe('intraday trading plan watch', () => {
     const generate = vi.fn();
     let sends = 0;
     let content = '';
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const ctx = {
       ...base,
@@ -826,19 +772,16 @@ describe('intraday trading plan watch', () => {
             throw new Error('盘中通知不得等待 AI');
           },
         },
-      },
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sends += 1;
-          content = input.payload.content;
-          return notification.send(input);
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sends += 1;
+            content = input.payload.content;
+            return notification.send(input);
+          },
         },
       },
     };
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
@@ -887,21 +830,21 @@ describe('intraday trading plan watch', () => {
       return states;
     };
     let sends = 0;
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const ctx = {
       ...base,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sends += 1;
-          return notification.send(input);
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sends += 1;
+            return notification.send(input);
+          },
         },
       },
     };
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.status).toBe('partial');
@@ -929,10 +872,7 @@ describe('intraday trading plan watch', () => {
         createdAt: new Date(NOW.getTime() + 1000),
       }),
     );
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.triggers).toMatchObject([{ deliveryStatus: 'sent' }]);
@@ -945,8 +885,11 @@ describe('intraday trading plan watch', () => {
     await base.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
     const originalCount = base.repos.watchTrigger.countAttemptedSince.bind(base.repos.watchTrigger);
     let changed = false;
+    let statsCalls = 0;
     base.repos.watchTrigger.countAttemptedSince = async (...args) => {
-      if (!changed) {
+      statsCalls += 1;
+      // 合并执行器先跑 AlertPlan 子管线（一次 stats），交易计划子管线的 stats 才是候选形成后。
+      if (!changed && statsCalls === 2) {
         changed = true;
         const added = await addHoldingTool.execute(
           { accountId: ACCOUNT_ID, stockId: '600519.SH', quantity: 1, avgCost: 100 },
@@ -956,10 +899,7 @@ describe('intraday trading plan watch', () => {
       }
       return originalCount(...args);
     };
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      base,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, base);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(changed).toBe(true);
@@ -980,29 +920,26 @@ describe('intraday trading plan watch', () => {
     const base = await buildPlanWatchContext({ clock: () => now, advices: [] });
     const facts = await seedFacts(base);
     await base.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     let calls = 0;
     const ctx = {
       ...base,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          calls += 1;
-          if (calls === 1) throw new Error('synthetic channel outage');
-          return notification.send(input);
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            calls += 1;
+            if (calls === 1) throw new Error('synthetic channel outage');
+            return notification.send(input);
+          },
         },
       },
     };
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(first.ok).toBe(true);
     now = new Date(NOW.getTime() + 2 * 60_000);
-    const second = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const second = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(calls).toBe(2);
@@ -1019,13 +956,21 @@ describe('intraday trading plan watch', () => {
     const base = await buildPlanWatchContext({ clock: () => now, advices: [] });
     const facts = await seedFacts(base);
     await base.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const fetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
     let quoteFetches = 0;
+    const originalListPlans = base.repos.tradingPlan.list.bind(base.repos.tradingPlan);
+    let planPhase = false;
+    base.repos.tradingPlan.list = async (...args) => {
+      planPhase = true;
+      return originalListPlans(...args);
+    };
     const delayedMarket = Object.assign(Object.create(base.adapters.market), {
       fetchQuote: async (stockCode: string) => {
         const quote = await fetchQuote(stockCode);
+        // 只延迟交易计划阶段的首轮求值行情；AlertPlan 子管线先解析持仓行情不计入。
+        if (!planPhase || stockCode !== '002594.SZ') return quote;
         quoteFetches += 1;
         if (quoteFetches > 1) return quote;
         const observedAt = new Date(quote.observedAt.getTime() - 90_000);
@@ -1035,18 +980,18 @@ describe('intraday trading plan watch', () => {
     let sends = 0;
     const ctx = {
       ...base,
-      adapters: { ...base.adapters, market: delayedMarket },
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sends += 1;
-          throw new Error(`synthetic channel outage: ${input.channel}`);
+      adapters: {
+        ...base.adapters,
+        market: delayedMarket,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sends += 1;
+            throw new Error(`synthetic channel outage: ${input.channel}`);
+          },
         },
       },
     };
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(quoteFetches).toBeGreaterThanOrEqual(2);
@@ -1059,10 +1004,7 @@ describe('intraday trading plan watch', () => {
     expect(sends).toBe(1);
 
     now = new Date(NOW.getTime() + 9 * 60_000);
-    const retry = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      ctx,
-    );
+    const retry = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
     expect(retry.ok).toBe(true);
     if (!retry.ok) return;
     expect(retry.data.errors).toContain('002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号');
@@ -1086,14 +1028,22 @@ describe('intraday trading plan watch', () => {
     await base.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
     const fetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
     let quoteFetches = 0;
+    const originalListPlans = base.repos.tradingPlan.list.bind(base.repos.tradingPlan);
+    let planPhase = false;
+    base.repos.tradingPlan.list = async (...args) => {
+      planPhase = true;
+      return originalListPlans(...args);
+    };
     const market = Object.assign(Object.create(base.adapters.market), {
       fetchQuote: async (stockCode: string) => {
-        quoteFetches += 1;
-        if (quoteFetches === 2) now = new Date(NOW.getTime() + 11 * 60_000);
+        if (planPhase && stockCode === '002594.SZ') {
+          quoteFetches += 1;
+          if (quoteFetches === 2) now = new Date(NOW.getTime() + 11 * 60_000);
+        }
         return fetchQuote(stockCode);
       },
     });
-    const result = await intradayTradingPlanWatchWorkflow.run(
+    const result = await runPlanWatch(
       { accountId: ACCOUNT_ID, notify: true },
       { ...base, adapters: { ...base.adapters, market }, clock: () => now },
     );
@@ -1101,7 +1051,11 @@ describe('intraday trading plan watch', () => {
     if (!result.ok) return;
     expect(quoteFetches).toBeGreaterThanOrEqual(2);
     expect(result.data.errors).toContain('002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号');
-    expect(result.data.triggers).toEqual([]);
+    // 发布前超时的候选保留为 expired 审计事实，但不投递。
+    expect(result.data.triggers).toEqual([
+      expect.objectContaining({ deliveryStatus: 'expired', notified: false }),
+    ]);
+    expect(result.data.notified).toBe(0);
   });
 
   it('超过时限的未投递重试不阻断其它股票的新信号', async () => {
@@ -1111,25 +1065,25 @@ describe('intraday trading plan watch', () => {
     const facts = await seedFacts(base);
     await base.repos.tradingPlan.save(makePlan(accountId, facts.digest));
 
-    const notification = base.notification;
+    const notification = base.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     let calls = 0;
     const flakyCtx = {
       ...base,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          calls += 1;
-          if (calls === 1) throw new Error('synthetic channel outage');
-          return notification.send(input);
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            calls += 1;
+            if (calls === 1) throw new Error('synthetic channel outage');
+            return notification.send(input);
+          },
         },
       },
     };
 
     // 第一轮：边沿命中但渠道失败，触发以 failed 状态持久化，成为重试候选。
-    const first = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      flakyCtx,
-    );
+    const first = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, flakyCtx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.data.triggers[0]?.deliveryStatus).toBe('failed');
@@ -1137,10 +1091,7 @@ describe('intraday trading plan watch', () => {
     // 第三轮：另一只股票出现全新边沿；同轮里那条已超过 10 分钟的重试只能丢弃自己。
     now = new Date(NOW.getTime() + 12 * 60_000);
     await base.repos.tradingPlan.save(makePlan(accountId, facts.digest, '600519.SH'));
-    const third = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      base,
-    );
+    const third = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, base);
     expect(third.ok).toBe(true);
     if (!third.ok) return;
     expect(third.data.errors).toEqual(['002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号']);
@@ -1180,10 +1131,7 @@ describe('intraday trading plan watch', () => {
       }),
     );
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      base,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, base);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.errors).toEqual(['002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号']);
@@ -1217,10 +1165,7 @@ describe('intraday trading plan watch', () => {
       }),
     );
 
-    const result = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: true },
-      base,
-    );
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, base);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.errors).toContain(

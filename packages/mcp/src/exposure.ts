@@ -1,6 +1,6 @@
 import type { SideEffect } from '@luoome/core';
 
-// 内部 tool（record_watch_run / save_report / sync_watchlist_source / migration_* 等）
+// 内部 tool（save_report / sync_watchlist_source / migration_* 等）
 // 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 只需按 sideEffect 过滤，
 // 不再有按名字的排除清单。
 export const selectMcpTools = <

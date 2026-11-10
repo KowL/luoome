@@ -1,9 +1,6 @@
 import { isAshareTradingSession, type ToolContext, type ToolResult } from '@luoome/core';
 import { listAccountsTool } from '@luoome/tools';
-import {
-  type IntradayTradingPlanWatchOutputT,
-  intradayTradingPlanWatchWorkflow,
-} from '@luoome/workflows';
+import { type IntradayTradingPlanWatchOutputT, intradayWatchWorkflow } from '@luoome/workflows';
 
 export const INTRADAY_PLAN_SCHEDULER_INTERVAL_MS = 60_000;
 
@@ -30,7 +27,18 @@ export const startIntradayPlanScheduler = (
   }
   const runAccount =
     options.runAccount ??
-    ((accountId: string) => intradayTradingPlanWatchWorkflow.run({ accountId }, ctx));
+    (async (accountId: string) => {
+      const result = await intradayWatchWorkflow.run({ accountId }, ctx);
+      if (!result.ok) return result;
+      const watch = result.data.tradingPlanWatch;
+      if (watch === undefined) {
+        return {
+          ok: false as const,
+          error: { kind: 'internal' as const, cause: 'intraday-watch 未返回交易计划结果' },
+        };
+      }
+      return { ok: true as const, data: watch };
+    });
   let stopped = false;
   let running = false;
 

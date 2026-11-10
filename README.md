@@ -58,7 +58,7 @@ Web、CLI、TUI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`
 - **持仓建议**：每个持仓的继续持有 / 加仓 / 减仓 / 清仓建议
 - **市场观点**：每日大盘观点、行业轮动、热点板块
 - **风险预警**：跌破止损位、触发风控规则、异常波动
-- **账户决策与复盘**：从建议、交易计划版本或提醒回看当时依据，记录反馈、关联真实成交，并保留修订历史
+- **账户决策与复盘**：对建议、交易计划或成交记录复盘结论、教训标签与关联成交，单表覆盖更新
 - **confidence 校准**：按当前账户的明确反馈展示各信心桶的填报盈利占比与样本数，缺失盈亏不计为零
 
 每条建议都带：**决策 + 信心度 + 有效期 + 核心论点 + 支持证据 + 反证 + 风险点 + 免责声明**。
@@ -93,7 +93,6 @@ Web、CLI、TUI 和 MCP 共用下列单机环境变量：
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
-| `LUOOME_FUNDAMENTAL_PROVIDER` | 可选 | 默认不装配；仅显式设置 `mock` 才注入固定 PIT fixture，gate 永远为 `not-ready`，不代表真实数据可用 |
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
@@ -104,8 +103,6 @@ Web、CLI、TUI 和 MCP 共用下列单机环境变量：
 | `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
-| `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
-| `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：允许 write 类能力 |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：允许 external 类能力 |
@@ -179,10 +176,6 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 单机 CLI 的 `watch` 与 `workflow run` 能力也可由外部 cron 显式触发，每次 workflow 运行落一条 `WorkflowRun` 审计：
 
 ```cron
-# 事件同步：每交易日 08:30（财报 / 解禁 / 分红…，按 (provider, externalId) 幂等 upsert）
-30 8 * * 1-5  luoome workflow run sync-stock-events
-# event-date 求值：每交易日 08:50（同步之后；命中提醒窗口的事件推送）
-50 8 * * 1-5  luoome workflow run evaluate-event-rules
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
 # 盘后补齐信号 T+1/T+3/T+5 真实表现（未到期样本保持 pending）
@@ -193,12 +186,9 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 # 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
 0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
 # 可选 Research Vault Git 拉取：仅干净工作树 + fast-forward，先备份再重建索引
-# 0 */2 * * *  luoome workflow run sync-research-vault-remote --mode scheduled
 ```
 
-- `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
-- `evaluate-event-rules`：盘前一次，`intraday-watch` 不重新评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 走飞书，未配置时标记 `fallback-log`。
-- 预警试跑不写正式触发或改变边沿状态。盘中循环与事件任务共用执行租约；失败及中断投递由后续盘中循环或事件执行补偿，当日最多尝试三次，重试间隔 1 分钟、5 分钟，仍受每日额度限制。
+- 预警试跑不写正式触发或改变边沿状态。盘中循环持有执行租约；失败及中断投递由后续盘中循环补偿，当日最多尝试三次，重试间隔 1 分钟、5 分钟，仍受每日额度限制。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
 - 内置 `run-strategy-schedules`：每次 tick 原子抢占到期配置；非交易日或暂停策略跳过并推进，
   多实例与手工正式运行由租约防重。策略启用推荐政策后，完成运行会按评分、排名、每轮上限和冷却
@@ -209,7 +199,6 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 - 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
   `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。
-- 含 event-date 的方案建议单独建（event-date 不参与盘中 ANY/ALL 组合判定）。
 
 ## 状态
 

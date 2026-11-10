@@ -108,7 +108,6 @@ export const deleteStrategyTool = defineTool({
         cancelledBy: ctx.user.id,
       });
     }
-    await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
     await ctx.repos.strategyRun.removeByStrategyId(strategy.id);
     await ctx.repos.strategy.remove(strategy.id);
     return { deleted: true };
@@ -390,8 +389,8 @@ export const ArchiveStrategyOutput = z.object({ strategy: StrategySchema });
 /**
  * 归档为生命周期终态（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9.1）：
  * 只允许 paused 的用户 Strategy（active/draft 拒绝），builtin 拒绝，无自动恢复。
- * 归档同时移除其调度配置——claim_due_strategy_schedules 只按 schedule 到期抢占、
- * 不感知策略状态，不删配置会让 archived 策略每周被抢占再跳过。
+ * 归档同时清空 Strategy.scheduleCron——run-strategy-schedules 按 cron + lastScheduledAt 调度，
+ * 不清配置会让 archived 策略在内存调度里继续到期再跳过。
  */
 export const archiveStrategyTool = defineTool({
   name: 'archive_strategy',
@@ -408,7 +407,11 @@ export const archiveStrategyTool = defineTool({
       return errInvalidInput(`只有 paused 的 Strategy 可归档: ${strategy.id}`);
     }
     await ctx.repos.strategy.archive(strategy.id, ctx.clock());
-    await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
+    await ctx.repos.strategy.updateSchedule(
+      strategy.id,
+      { scheduleCron: null, lastScheduledAt: null },
+      ctx.clock(),
+    );
     const archived = await ctx.repos.strategy.findById(strategy.id);
     if (archived === null) return errNotFound('Strategy', strategy.id);
     return { strategy: archived };

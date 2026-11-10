@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 import { type Money, MoneySchema } from '../types/branded.js';
 import type { NotificationLevel } from './notification.js';
-import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
  * 盯盘触发 + 边沿状态 + AlertPlan 共享的规则 schema
@@ -23,8 +22,8 @@ export type WatchDirection = 'buy' | 'sell' | 'watch';
 export const WatchDirectionSchema = z.enum(['buy', 'sell', 'watch']);
 
 /**
- * 规则类型。'tactic' 仅为存量 watch_triggers 行的读兼容保留（旧池规则的
- * rule_kind 落库值），新规则不再产生。
+ * 规则类型。'tactic' 与 'event-date' 仅为存量 watch_triggers 行的读兼容保留
+ * （旧池规则 / 已下线事件规则求值的 rule_kind 落库值），新规则不再产生。
  */
 export type WatchRuleKind =
   | 'tactic'
@@ -120,25 +119,9 @@ export const PriceLevelRuleSchema = z.object({
   side: z.enum(['above', 'below']),
 });
 
-/**
- * 事件日期型（ruo 能力迁移 §3.5）：每日 workflow（evaluate-event-rules）求值，intraday-watch 跳过。
- * direction 固定 'watch'，priority 由事件 importance 映射（求值时覆盖）。
- */
-export const EventDateRuleSchema = z.object({
-  ...RuleBaseFields,
-  kind: z.literal('event-date'),
-  /** 关注的事件类型；缺省 = 全部。 */
-  eventKinds: z.array(StockEventKindSchema).optional(),
-  /** 最低重要性；缺省 normal（全部）。 */
-  minImportance: EventImportanceSchema.default('normal'),
-  /** 默认提醒窗口（天）；事件级 remindBeforeDays 非空时被覆盖。 */
-  daysBefore: z.array(z.number().int().min(0).max(90)).max(8).default([7, 3, 1]),
-});
-
 export type CostThresholdRule = z.infer<typeof CostThresholdRuleSchema>;
 export type PriceChangeRule = z.infer<typeof PriceChangeRuleSchema>;
 export type PriceLevelRule = z.infer<typeof PriceLevelRuleSchema>;
-export type EventDateRule = z.infer<typeof EventDateRuleSchema>;
 
 // ---------- WatchTrigger ----------
 
@@ -150,7 +133,7 @@ export const WatchTriggerSchema = z.object({
   ruleKind: WatchRuleKindSchema,
   /** 规则实例 id（与 alert_plan.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
   ruleId: z.string().min(1),
-  /** event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
+  /** 存量 event-date 触发关联的公司事件 id（新触发为空，仅读兼容）。 */
   eventId: z.string().optional(),
   direction: WatchDirectionSchema,
   /** 触发的具体类型（进入 / 恢复），默认 'triggered'。 */
@@ -159,7 +142,7 @@ export const WatchTriggerSchema = z.object({
   evidence: z.array(z.string().min(1)).min(1).max(16),
   /**
    * 触发时的实时行情快照（review fix：触发持久化保留 quote 便于复盘）。
-   * event-date 触发无实时行情，quote 可空。
+   * 存量 event-date 触发无实时行情，quote 可空。
    */
   quote: z
     .object({

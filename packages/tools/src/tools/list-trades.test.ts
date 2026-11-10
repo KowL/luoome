@@ -64,11 +64,10 @@ describe('list_trades', () => {
     expect(wrongFilter).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
     const trade = first.data.trades[0];
     if (!trade) throw new Error('trade fixture missing');
-    const { adviceId, researchHypothesisVersionId, strategyVersionId, ...baseTrade } = trade;
+    const { adviceId, strategyVersionId, ...baseTrade } = trade;
     await ctx.repos.trade.save({
       ...baseTrade,
       ...(adviceId ? { adviceId } : {}),
-      ...(researchHypothesisVersionId ? { researchHypothesisVersionId } : {}),
       ...(strategyVersionId ? { strategyVersionId } : {}),
       price: money(trade.price + 1),
     });

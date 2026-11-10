@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   type Account,
   type Advice,
@@ -10,13 +9,6 @@ import {
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type DailyBarRevision,
-  type FinancialFact,
-  FUNDAMENTAL_FACTOR_REGISTRY_HASH,
-  type FundamentalScoreResult,
-  type FundamentalScoreRun,
-  type FundamentalScoreVersion,
-  financialFactContentHash,
-  fundamentalScoreVersionDefinitionHash,
   type Holding,
   InvariantError,
   type LimitUpLadder,
@@ -31,28 +23,18 @@ import {
   type Report,
   type RepositoryRegistry,
   type ResearchDocumentIndex,
-  type ResearchHypothesisVersion,
-  type ResearchTopicIndex,
   reconcileCashBalance,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
   type Stock,
-  type StockEvent,
   type StockUniverseEntry,
   type Strategy,
-  type StrategyAutonomyAction,
-  type StrategyDataCheckpoint,
-  type StrategyDataCheckpointMember,
-  type StrategyEvaluationDay,
-  type StrategyEvaluationSession,
   type StrategyResult,
   type StrategyRun,
-  type StrategySchedule,
   type StrategySignal,
   type StrategyVersion,
   type StrategyWatchlistSubscription,
   type StrictBacktestGateAudit,
-  type StrictBacktestMarketFact,
   type StrictBacktestRun,
   type StrictBacktestSpec,
   stockCode,
@@ -64,7 +46,6 @@ import {
   type Watchlist,
   type WatchlistMemberSource,
   type WatchlistSyncRun,
-  type WatchRun,
   type WatchTrigger,
   type WorkflowRun,
 } from '@luoome/core';
@@ -89,110 +70,6 @@ const T2 = new Date('2026-07-03T01:00:00.000Z');
 const T3 = new Date('2026-07-04T01:00:00.000Z');
 const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
 const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
-
-const makeFundamentalScoreVersion = (
-  overrides: Partial<FundamentalScoreVersion> = {},
-): FundamentalScoreVersion => {
-  const draft = {
-    id: 'fundamental-score-v1',
-    version: 1,
-    registryVersion: 'fundamental-factor-registry-v1',
-    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
-    normalizationVersion: 'fundamental-normalization-v1' as const,
-    components: [
-      {
-        factorId: 'fundamental.profitability.roe',
-        weight: 1,
-        normalizer: 'market-percentile-v1' as const,
-      },
-    ],
-    missingPolicy: 'unknown' as const,
-    rounding: 'round-to-6-decimal' as const,
-    definitionHash: '0'.repeat(64),
-    status: 'published' as const,
-    createdAt: T0,
-    publishedAt: T1,
-    ...overrides,
-  } satisfies FundamentalScoreVersion;
-  return { ...draft, definitionHash: fundamentalScoreVersionDefinitionHash(draft) };
-};
-
-const makeFundamentalScoreRun = (
-  overrides: Partial<FundamentalScoreRun> = {},
-): FundamentalScoreRun =>
-  ({
-    id: 'score-run-1',
-    scoreVersionId: 'fundamental-score-v1',
-    scoreVersionHash: 'a'.repeat(64),
-    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
-    universeSyncId: 'universe-sync-1',
-    universeMemberChecksum: 'b'.repeat(64),
-    asOf: T2,
-    financialVintageKey: 'c'.repeat(64),
-    normalizerDenominatorHash: 'd'.repeat(64),
-    counts: { evaluated: 1, available: 1, missing: 0, excluded: 0 },
-    providerStatus: 'complete' as const,
-    evaluatorCodeIdentity: 'score-evaluator-test',
-    status: 'started' as const,
-    createdAt: T1,
-    ...overrides,
-  }) as FundamentalScoreRun;
-
-const makeFundamentalScoreResult = (
-  overrides: Partial<FundamentalScoreResult> = {},
-): FundamentalScoreResult =>
-  ({
-    scoreRunId: 'score-run-1',
-    stockId: '600519.SH',
-    status: 'available' as const,
-    score: 100,
-    rank: 1,
-    components: [
-      {
-        factorId: 'fundamental.profitability.roe',
-        rawValue: 20,
-        unit: 'percent-points' as const,
-        direction: 'higher' as const,
-        normalizedValue: 100,
-        contribution: 100,
-        sourceRevisionIds: ['fact-1'],
-      },
-    ],
-    dataAsOf: T2,
-    vintageKey: 'c'.repeat(64),
-    ...overrides,
-  }) as FundamentalScoreResult;
-
-const makeFinancialFact = (
-  id: string,
-  overrides: Partial<Omit<FinancialFact, 'contentHash'>> = {},
-): FinancialFact => {
-  const fact = {
-    id,
-    stockId: 'stk-1',
-    metricId: 'revenue',
-    periodType: 'annual' as const,
-    periodStart: new Date('2025-01-01T00:00:00.000Z'),
-    periodEnd: T1,
-    value: 100,
-    canonicalUnit: 'ratio' as const,
-    source: 'fixture',
-    sourceRecordId: `record-${id}`,
-    sourceRevision: 'r1',
-    publishedAt: T0,
-    revisionPublishedAt: T0,
-    recordedAt: T0,
-    status: 'reported' as const,
-    ...overrides,
-  } satisfies Omit<FinancialFact, 'contentHash'>;
-  return {
-    ...fact,
-    contentHash: financialFactContentHash({
-      ...fact,
-      contentHash: '0'.repeat(64),
-    } as FinancialFact),
-  };
-};
 
 const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadder => ({
   date: '2026-07-01',
@@ -471,31 +348,6 @@ export const makeStrategyVersion = (
   };
 };
 
-export const makeStrategySchedule = (
-  strategyId: string,
-  overrides: Partial<StrategySchedule> = {},
-): StrategySchedule => ({
-  id: `strategy-schedule:${strategyId}`,
-  strategyId,
-  cron: '0 18 * * 1-5',
-  timezone: 'Asia/Shanghai',
-  enabled: true,
-  recommendationPolicy: {
-    enabled: true,
-    minScore: 70,
-    maxRank: 10,
-    maxPerRun: 3,
-    cooldownHours: 72,
-    notify: false,
-    channel: 'log',
-    observationHorizons: ['t3', 't5'],
-  },
-  nextRunAt: T1,
-  createdAt: T0,
-  updatedAt: T0,
-  ...overrides,
-});
-
 const makeSignalObservation = (
   id: string,
   sourceId: string,
@@ -634,30 +486,6 @@ const makeStrategyWatchlistSubscription = (
   ...overrides,
 });
 
-const PAUSE_RULE_SNAPSHOT = {
-  sampleCount: 24,
-  benchmarkCoverage: 0.95,
-  avgExcessReturn: -0.01,
-  medianExcessReturn: -0.008,
-  thresholds: { minSampleCount: 20, minBenchmarkCoverage: 0.9, cooldownDays: 30 },
-};
-
-const makeStrategyAutonomyAction = (
-  id: string,
-  overrides: Partial<StrategyAutonomyAction> = {},
-): StrategyAutonomyAction => ({
-  id,
-  kind: 'propose-version',
-  status: 'drafted',
-  strategyId: 'strategy-1',
-  trigger: 'weekly-review',
-  factReferences: [],
-  attempts: 0,
-  createdAt: T1,
-  updatedAt: T1,
-  ...overrides,
-});
-
 export const makeNotification = (
   id: string,
   overrides: Partial<Notification> = {},
@@ -693,39 +521,6 @@ export const makeWatchTrigger = (
   ...overrides,
 });
 
-export const makeWatchRun = (id: string, overrides: Partial<WatchRun> = {}): WatchRun => ({
-  id,
-  mode: 'daemon',
-  status: 'succeeded',
-  startedAt: T1,
-  finishedAt: T2,
-  evaluatedPools: 1,
-  evaluatedStocks: 6,
-  triggered: 2,
-  notified: 1,
-  suppressedByCooldown: 1,
-  suppressedByDailyLimit: 0,
-  notifyFailed: 0,
-  ...overrides,
-});
-
-const makeResearchTopic = (
-  id: string,
-  overrides: Partial<ResearchTopicIndex> = {},
-): ResearchTopicIndex => ({
-  id: `topic_${id}`,
-  title: id,
-  kind: 'industry',
-  tags: [],
-  vaultId: 'vault-test',
-  relativePath: `Research/${id}.md`,
-  contentHash: 'a'.repeat(64),
-  fileModifiedAt: T1,
-  indexedAt: T1,
-  availability: 'available',
-  ...overrides,
-});
-
 const makeResearchDocument = (
   id: string,
   overrides: Partial<ResearchDocumentIndex> = {},
@@ -735,6 +530,7 @@ const makeResearchDocument = (
   kind: 'report',
   importedAt: T1,
   tags: [],
+  stockCodes: [],
   vaultId: 'vault-test',
   relativePath: `Research/${id}.md`,
   attachmentPaths: [],
@@ -745,40 +541,9 @@ const makeResearchDocument = (
   ...overrides,
 });
 
-const makeResearchHypothesisVersion = (
-  id: string,
-  overrides: Partial<ResearchHypothesisVersion> = {},
-): ResearchHypothesisVersion => ({
-  id: `hypothesis_${id}`,
-  topicId: 'topic_industry',
-  documentId: 'doc_thesis',
-  documentContentHash: 'b'.repeat(64),
-  version: 1,
-  status: 'active',
-  createdAt: T1,
-  ...overrides,
-});
-
-export const makeStockEvent = (id: string, overrides: Partial<StockEvent> = {}): StockEvent => ({
-  id,
-  stockId: 'stk-1',
-  kind: 'earnings',
-  title: `事件-${id}`,
-  occursAt: T2,
-  allDay: true,
-  importance: 'important',
-  status: 'scheduled',
-  source: 'manual',
-  stale: false,
-  remindBeforeDays: [],
-  createdAt: T1,
-  updatedAt: T1,
-  ...overrides,
-});
-
 export const makeWorkflowRun = (id: string, overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id,
-  workflowName: 'sync-stock-events',
+  workflowName: 'post-market-data',
   mode: 'scheduled',
   status: 'succeeded',
   startedAt: T1,
@@ -1499,7 +1264,6 @@ export const registerRepositoryContractTests = (
       it('决策归因字段可空且 memory/Drizzle 往返一致', async () => {
         const trade = makeTrade('t-attributed', {
           adviceId: 'advice-1',
-          researchHypothesisVersionId: 'hypothesis-1',
           strategyVersionId: 'strategy-v1',
         });
         await repos.trade.save(trade);
@@ -2580,332 +2344,11 @@ export const registerRepositoryContractTests = (
       });
     });
 
-    describe('StrategyScheduleRepository', () => {
-      it('save/find/list 往返且每个 Strategy 只允许一条配置', async () => {
-        const schedule = makeStrategySchedule('strategy-1');
-        await repos.strategySchedule.save(schedule);
-        expect(await repos.strategySchedule.findById(schedule.id)).toEqual(schedule);
-        expect(await repos.strategySchedule.findByStrategyId('strategy-1')).toEqual(schedule);
-        expect(await repos.strategySchedule.list({ enabledOnly: true })).toEqual([schedule]);
-        await expect(
-          repos.strategySchedule.save({ ...schedule, id: 'conflicting-schedule' }),
-        ).rejects.toThrow();
-      });
-
-      it('V2 recommendation policy 往返保留显式 schemaVersion 与账户预检配置', async () => {
-        const schedule = makeStrategySchedule('strategy-v2', {
-          recommendationPolicy: {
-            schemaVersion: 2,
-            enabled: true,
-            minScore: 70,
-            maxRank: 10,
-            maxPerRun: 3,
-            cooldownHours: 72,
-            notify: false,
-            channel: 'log',
-            observationHorizons: ['t3', 't5'],
-            portfolioPreflight: {
-              maxIndustryExposurePct: 35,
-              maxSinglePositionExposurePct: 20,
-              skipExistingHolding: true,
-              requireLiquidityFacts: true,
-              maxDataAgeTradingDays: 1,
-              rejectOnExitSignal: true,
-              rejectOnRiskSignal: true,
-            },
-          },
-        });
-        await repos.strategySchedule.save(schedule);
-        expect(await repos.strategySchedule.findById(schedule.id)).toEqual(schedule);
-      });
-
-      it('claimDue 原子抢占，只有 owner 可完成并推进 nextRunAt', async () => {
-        const schedule = makeStrategySchedule('strategy-1');
-        await repos.strategySchedule.save(schedule);
-        expect(
-          await repos.strategySchedule.claimDue({
-            now: T1,
-            owner: 'worker-1',
-            leaseUntil: T3,
-            limit: 10,
-          }),
-        ).toEqual([schedule]);
-        expect(
-          await repos.strategySchedule.claimDue({
-            now: T2,
-            owner: 'worker-2',
-            leaseUntil: T3,
-            limit: 10,
-          }),
-        ).toEqual([]);
-        await expect(
-          repos.strategySchedule.finishClaim({
-            id: schedule.id,
-            owner: 'worker-2',
-            nextRunAt: T3,
-            updatedAt: T2,
-          }),
-        ).rejects.toThrow(InvariantError);
-        await repos.strategySchedule.finishClaim({
-          id: schedule.id,
-          owner: 'worker-1',
-          nextRunAt: T3,
-          updatedAt: T2,
-          lastRunId: 'run-1',
-        });
-        expect(await repos.strategySchedule.findById(schedule.id)).toEqual({
-          ...schedule,
-          nextRunAt: T3,
-          updatedAt: T2,
-          lastRunId: 'run-1',
-        });
-      });
-
-      it('过期 lease 可被其他 owner 接管', async () => {
-        const schedule = makeStrategySchedule('strategy-1');
-        await repos.strategySchedule.save(schedule);
-        await repos.strategySchedule.claimDue({
-          now: T1,
-          owner: 'worker-1',
-          leaseUntil: T2,
-          limit: 1,
-        });
-        expect(
-          await repos.strategySchedule.claimDue({
-            now: T2,
-            owner: 'worker-2',
-            leaseUntil: T3,
-            limit: 1,
-          }),
-        ).toEqual([schedule]);
-      });
-
-      it('fake clock 三小时持续 heartbeat，release 后旧 claim 不能再次生效', async () => {
-        const schedule = makeStrategySchedule('strategy-heartbeat');
-        await repos.strategySchedule.save(schedule);
-        const claims = await repos.strategySchedule.claimDueWithFence({
-          now: T1,
-          owner: 'worker-heartbeat',
-          leaseUntil: new Date(T1.getTime() + 20 * 60_000),
-          limit: 1,
-        });
-        expect(claims).toHaveLength(1);
-        const token = claims[0]?.token;
-        expect(token).toBeDefined();
-        if (token === undefined) return;
-
-        let now = T1;
-        for (let minutes = 5; minutes <= 180; minutes += 5) {
-          now = new Date(T1.getTime() + minutes * 60_000);
-          expect(
-            await repos.strategySchedule.renewClaim({
-              id: token.scheduleId,
-              owner: token.owner,
-              fence: token.fence,
-              now,
-              leaseUntil: new Date(now.getTime() + 20 * 60_000),
-            }),
-          ).toBe(true);
-        }
-
-        expect(
-          await repos.strategySchedule.renewClaim({
-            id: token.scheduleId,
-            owner: token.owner,
-            fence: token.fence,
-            now: new Date(now.getTime() + 20 * 60_000),
-            leaseUntil: new Date(now.getTime() + 40 * 60_000),
-          }),
-        ).toBe(false);
-
-        const nextRunAt = new Date(now.getTime() + 24 * 60 * 60_000);
-        await repos.strategySchedule.finishClaim({
-          id: token.scheduleId,
-          owner: token.owner,
-          fence: token.fence,
-          nextRunAt,
-          updatedAt: now,
-        });
-        await expect(
-          repos.strategySchedule.finishClaim({
-            id: token.scheduleId,
-            owner: token.owner,
-            fence: token.fence,
-            nextRunAt,
-            updatedAt: now,
-          }),
-        ).rejects.toThrow(InvariantError);
-        expect(
-          await repos.strategySchedule.renewClaim({
-            id: token.scheduleId,
-            owner: token.owner,
-            fence: token.fence,
-            now,
-            leaseUntil: new Date(now.getTime() + 20 * 60_000),
-          }),
-        ).toBe(false);
-      });
-
-      it('removeByStrategyId 删除配置及其 lease', async () => {
-        const schedule = makeStrategySchedule('strategy-remove');
-        await repos.strategySchedule.save(schedule);
-        await repos.strategySchedule.claimDue({
-          now: T1,
-          owner: 'worker-1',
-          leaseUntil: T3,
-          limit: 1,
-        });
-        await repos.strategySchedule.removeByStrategyId('strategy-remove');
-        expect(await repos.strategySchedule.findByStrategyId('strategy-remove')).toBeNull();
-      });
-    });
-
     describe('StrategyRunRepository', () => {
       beforeEach(async () => {
         await repos.strategy.create(makeStrategy('strategy-1'));
         await repos.strategy.createVersion(makeStrategyVersion('strategy-1'));
         await repos.strategy.activateVersion('strategy-1', 'strategy-1-v1', T1);
-      });
-
-      it('fake clock 三小时持续 run heartbeat，fenced commit 只允许一次', async () => {
-        const running = makeStrategyRun('run-heartbeat', {
-          status: 'running',
-          finishedAt: undefined,
-          summary: undefined,
-          publication: undefined,
-        });
-        await repos.strategyRun.saveStartedRun(running);
-        const token = await repos.strategyRun.acquireRunLeaseToken({
-          strategyId: running.strategyId,
-          strategyVersionId: running.strategyVersionId,
-          owner: 'worker-heartbeat',
-          runId: running.id,
-          now: T1,
-          leaseUntil: new Date(T1.getTime() + 20 * 60_000),
-        });
-        expect(token).not.toBeNull();
-        if (token === null) return;
-
-        let now = T1;
-        for (let minutes = 5; minutes <= 180; minutes += 5) {
-          now = new Date(T1.getTime() + minutes * 60_000);
-          expect(
-            await repos.strategyRun.renewRunLease({
-              token,
-              now,
-              leaseUntil: new Date(now.getTime() + 20 * 60_000),
-            }),
-          ).toBe(true);
-        }
-        expect(
-          await repos.strategyRun.renewRunLease({
-            token,
-            now: new Date(now.getTime() + 20 * 60_000),
-            leaseUntil: new Date(now.getTime() + 40 * 60_000),
-          }),
-        ).toBe(false);
-
-        const terminal = makeStrategyRun(running.id, {
-          status: 'complete',
-          startedAt: running.startedAt,
-          finishedAt: now,
-        });
-        expect(
-          await repos.strategyRun.commitRunWithFence({
-            token,
-            now,
-            bundle: { run: terminal, results: [], signals: [] },
-          }),
-        ).toBe('committed');
-        expect(
-          await repos.strategyRun.commitRunWithFence({
-            token,
-            now,
-            bundle: { run: terminal, results: [], signals: [] },
-          }),
-        ).toBe('lease-lost');
-        await repos.strategyRun.releaseRunLease({
-          strategyId: token.strategyId,
-          strategyVersionId: token.strategyVersionId,
-          owner: token.owner,
-          fence: token.fence,
-        });
-        await repos.strategyRun.releaseRunLease({
-          strategyId: token.strategyId,
-          strategyVersionId: token.strategyVersionId,
-          owner: token.owner,
-          fence: token.fence,
-        });
-      });
-
-      it('fenced commit 不允许在缺失 started run 时直接插入终态', async () => {
-        const run = makeStrategyRun('run-fenced-missing');
-        const token = await repos.strategyRun.acquireRunLeaseToken({
-          strategyId: 'strategy-1',
-          strategyVersionId: 'strategy-1-v1',
-          owner: 'worker-1',
-          runId: run.id,
-          now: T1,
-          leaseUntil: FAR_FUTURE,
-        });
-        expect(token).not.toBeNull();
-        if (token === null) return;
-        expect(
-          await repos.strategyRun.commitRunWithFence({
-            token,
-            now: T2,
-            bundle: { run, results: [], signals: [] },
-          }),
-        ).toBe('lease-lost');
-        expect(await repos.strategyRun.findRunById(run.id)).toBeNull();
-      });
-
-      it('旧 owner 失租后不能提交，接管 owner 以更大 fence 只能提交一次', async () => {
-        const run = makeStrategyRun('run-fence-handoff', {
-          status: 'running',
-          finishedAt: undefined,
-          publication: undefined,
-        });
-        await repos.strategyRun.saveStartedRun(run);
-        const ownerA = await repos.strategyRun.acquireRunLeaseToken({
-          strategyId: run.strategyId,
-          strategyVersionId: run.strategyVersionId,
-          owner: 'owner-a',
-          runId: run.id,
-          now: T1,
-          leaseUntil: T2,
-        });
-        expect(ownerA).not.toBeNull();
-        const ownerB = await repos.strategyRun.acquireRunLeaseToken({
-          strategyId: run.strategyId,
-          strategyVersionId: run.strategyVersionId,
-          owner: 'owner-b',
-          runId: run.id,
-          now: T2,
-          leaseUntil: T3,
-        });
-        expect(ownerB).not.toBeNull();
-        if (ownerA === null || ownerB === null) return;
-        expect(ownerB.fence).toBeGreaterThan(ownerA.fence);
-        const terminal = makeStrategyRun(run.id, {
-          finishedAt: T3,
-          status: 'complete',
-        });
-        expect(
-          await repos.strategyRun.commitRunWithFence({
-            token: ownerB,
-            now: T2,
-            bundle: { run: terminal, results: [], signals: [] },
-          }),
-        ).toBe('committed');
-        expect(
-          await repos.strategyRun.commitRunWithFence({
-            token: ownerA,
-            now: T2,
-            bundle: { run: terminal, results: [], signals: [] },
-          }),
-        ).toBe('lease-lost');
-        expect(await repos.strategyRun.findRunById(run.id)).toMatchObject({ status: 'complete' });
       });
 
       it('run 往返和过滤排序一致', async () => {
@@ -3318,16 +2761,8 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.findRunById(invalidRun.id)).toBeNull();
       });
 
-      it('removeByStrategyId 删除运行、结果、信号和 lease', async () => {
+      it('removeByStrategyId 删除运行、结果、信号', async () => {
         const run = makeStrategyRun('run-remove');
-        const lease = await repos.strategyRun.acquireRunLeaseToken({
-          strategyId: 'strategy-1',
-          strategyVersionId: 'strategy-1-v1',
-          owner: 'worker-1',
-          now: T1,
-          leaseUntil: T3,
-        });
-        expect(lease).not.toBeNull();
         await repos.strategyRun.commitRun({
           run,
           results: [makeStrategyResult(run.id, '600519.SH')],
@@ -3337,15 +2772,6 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.findRunById(run.id)).toBeNull();
         expect(await repos.strategyRun.listResults(run.id)).toEqual([]);
         expect(await repos.strategyRun.signalsByStrategy('strategy-1')).toEqual([]);
-        expect(
-          await repos.strategyRun.acquireRunLeaseToken({
-            strategyId: 'strategy-1',
-            strategyVersionId: 'strategy-1-v1',
-            owner: 'worker-2',
-            now: T2,
-            leaseUntil: T3,
-          }),
-        ).not.toBeNull();
       });
     });
 
@@ -3411,198 +2837,6 @@ export const registerRepositoryContractTests = (
             makeStrategyWatchlistSubscription('bad-cancel', {
               status: 'cancelled',
               updatedAt: T2,
-            }),
-          ),
-        ).rejects.toThrow(InvariantError);
-      });
-    });
-
-    describe('StrategyAutonomyActionRepository', () => {
-      it('save/findById 往返一致；list 支持过滤、since 与 limit，按 createdAt 倒序', async () => {
-        const propose = makeStrategyAutonomyAction('action-propose');
-        const pause = makeStrategyAutonomyAction('action-pause', {
-          kind: 'pause',
-          status: 'executed',
-          strategyId: 'strategy-2',
-          ruleSnapshot: PAUSE_RULE_SNAPSHOT,
-          createdAt: T2,
-          updatedAt: T2,
-          completedAt: T2,
-        });
-        const published = makeStrategyAutonomyAction('action-publish', {
-          kind: 'publish-version',
-          status: 'published',
-          strategyVersionId: 'strategy-1-v2',
-          ruleSnapshot: { gate: 'eligible' },
-          createdAt: T3,
-          updatedAt: T3,
-          completedAt: T3,
-        });
-        await repos.strategyAutonomyAction.save(propose);
-        await repos.strategyAutonomyAction.save(pause);
-        await repos.strategyAutonomyAction.save(published);
-        expect(await repos.strategyAutonomyAction.findById('action-propose')).toEqual(propose);
-        expect(await repos.strategyAutonomyAction.findById('missing')).toBeNull();
-        expect((await repos.strategyAutonomyAction.list()).map((action) => action.id)).toEqual([
-          'action-publish',
-          'action-pause',
-          'action-propose',
-        ]);
-        expect(
-          (await repos.strategyAutonomyAction.list({ strategyId: 'strategy-2' })).map(
-            (action) => action.id,
-          ),
-        ).toEqual(['action-pause']);
-        expect(
-          (await repos.strategyAutonomyAction.list({ kind: 'publish-version' })).map(
-            (action) => action.id,
-          ),
-        ).toEqual(['action-publish']);
-        expect(
-          (await repos.strategyAutonomyAction.list({ status: 'drafted' })).map(
-            (action) => action.id,
-          ),
-        ).toEqual(['action-propose']);
-        expect(
-          (await repos.strategyAutonomyAction.list({ since: T2 })).map((action) => action.id),
-        ).toEqual(['action-publish', 'action-pause']);
-        expect(
-          (await repos.strategyAutonomyAction.list({ limit: 2 })).map((action) => action.id),
-        ).toEqual(['action-publish', 'action-pause']);
-      });
-
-      it('save 同 id 为 upsert；ruleSnapshot/aiNarrative/attempts 完整往返', async () => {
-        await repos.strategyAutonomyAction.save(makeStrategyAutonomyAction('action-1'));
-        const updated = makeStrategyAutonomyAction('action-1', {
-          strategyVersionId: 'strategy-1-v2',
-          evaluationSessionId: 'session-1',
-          status: 'validating',
-          ruleSnapshot: { gate: 'pending' },
-          aiNarrative: '提议提高动量阈值',
-          factReferences: ['fact-1'],
-          attempts: 1,
-          lastError: 'publish timeout',
-          updatedAt: T2,
-        });
-        await repos.strategyAutonomyAction.save(updated);
-        expect(await repos.strategyAutonomyAction.findById('action-1')).toEqual(updated);
-        expect(await repos.strategyAutonomyAction.list()).toHaveLength(1);
-      });
-
-      it('updateStatus 按 expectedStatus 乐观转移并携带补丁字段', async () => {
-        await repos.strategyAutonomyAction.save(
-          makeStrategyAutonomyAction('action-1', { strategyVersionId: 'strategy-1-v2' }),
-        );
-        const validating = await repos.strategyAutonomyAction.updateStatus({
-          id: 'action-1',
-          expectedStatus: 'drafted',
-          status: 'validating',
-          updatedAt: T2,
-        });
-        expect(validating).toMatchObject({ id: 'action-1', status: 'validating' });
-        // 状态漂移：再次以 drafted 为预期转移返回 null，且不改变已落库状态
-        expect(
-          await repos.strategyAutonomyAction.updateStatus({
-            id: 'action-1',
-            expectedStatus: 'drafted',
-            status: 'failed',
-            updatedAt: T3,
-            completedAt: T3,
-            lastError: 'concurrent',
-          }),
-        ).toBeNull();
-        expect((await repos.strategyAutonomyAction.findById('action-1'))?.status).toBe(
-          'validating',
-        );
-        expect(
-          await repos.strategyAutonomyAction.updateStatus({
-            id: 'missing',
-            expectedStatus: 'drafted',
-            status: 'validating',
-            updatedAt: T3,
-          }),
-        ).toBeNull();
-        const eligible = await repos.strategyAutonomyAction.updateStatus({
-          id: 'action-1',
-          expectedStatus: 'validating',
-          status: 'eligible',
-          updatedAt: T3,
-          attempts: 2,
-        });
-        expect(eligible).toMatchObject({ status: 'eligible', attempts: 2 });
-        const published = await repos.strategyAutonomyAction.updateStatus({
-          id: 'action-1',
-          expectedStatus: 'eligible',
-          status: 'published',
-          updatedAt: T3,
-          completedAt: T3,
-        });
-        expect(published).toMatchObject({ status: 'published', completedAt: T3 });
-        expect(await repos.strategyAutonomyAction.findById('action-1')).toEqual(published);
-      });
-
-      it('updateStatus 拒绝状态机外的转移与违反不变量的补丁', async () => {
-        await repos.strategyAutonomyAction.save(
-          makeStrategyAutonomyAction('action-1', { strategyVersionId: 'strategy-1-v2' }),
-        );
-        await expect(
-          repos.strategyAutonomyAction.updateStatus({
-            id: 'action-1',
-            expectedStatus: 'drafted',
-            status: 'published',
-            updatedAt: T2,
-            completedAt: T2,
-          }),
-        ).rejects.toThrow(InvariantError);
-        // 非终态转移携带 completedAt 违反不变量
-        await expect(
-          repos.strategyAutonomyAction.updateStatus({
-            id: 'action-1',
-            expectedStatus: 'drafted',
-            status: 'validating',
-            updatedAt: T2,
-            completedAt: T2,
-          }),
-        ).rejects.toThrow(InvariantError);
-        expect((await repos.strategyAutonomyAction.findById('action-1'))?.status).toBe('drafted');
-      });
-
-      it('违反不变量时拒绝落库（pause 缺指标阈值 / 非终态带 completedAt）', async () => {
-        await expect(
-          repos.strategyAutonomyAction.save(
-            makeStrategyAutonomyAction('bad-pause', {
-              kind: 'pause',
-              status: 'executed',
-              ruleSnapshot: { conclusion: 'underperform' },
-              completedAt: T2,
-            }),
-          ),
-        ).rejects.toThrow(InvariantError);
-        await expect(
-          repos.strategyAutonomyAction.save(
-            makeStrategyAutonomyAction('bad-completed', { completedAt: T2 }),
-          ),
-        ).rejects.toThrow(InvariantError);
-      });
-
-      it('publish-version 的 strategyVersionId 在动作创建后不可变', async () => {
-        await repos.strategyAutonomyAction.save(
-          makeStrategyAutonomyAction('action-publish', {
-            kind: 'publish-version',
-            status: 'published',
-            strategyVersionId: 'strategy-1-v2',
-            ruleSnapshot: { gate: 'eligible' },
-            completedAt: T2,
-          }),
-        );
-        await expect(
-          repos.strategyAutonomyAction.save(
-            makeStrategyAutonomyAction('action-publish', {
-              kind: 'publish-version',
-              status: 'published',
-              strategyVersionId: 'strategy-1-v3',
-              ruleSnapshot: { gate: 'eligible' },
-              completedAt: T2,
             }),
           ),
         ).rejects.toThrow(InvariantError);
@@ -4162,8 +3396,7 @@ export const registerRepositoryContractTests = (
         expect(filtered.triggers[0]?.id).toBe('old-match');
       }, 20000);
 
-      it('求值提交同时保存触发和边沿，失效 owner 无法覆盖', async () => {
-        await repos.watchTrigger.acquireExecution('owner', T0, T2);
+      it('求值提交同时保存触发和边沿', async () => {
         const state = {
           poolId: 'pool-1',
           stockId: '002594.SZ',
@@ -4172,7 +3405,6 @@ export const registerRepositoryContractTests = (
           lastEvaluatedAt: T1,
         };
         const input = {
-          owner: 'owner',
           now: T1,
           triggers: [makeWatchTrigger('atomic')],
           auditTriggers: [
@@ -4184,32 +3416,18 @@ export const registerRepositoryContractTests = (
           ],
           states: [state],
         };
-        expect(await repos.watchTrigger.commitEvaluation(input)).toBe(true);
+        await repos.watchTrigger.commitEvaluation(input);
         expect(await repos.watchTrigger.findById('atomic')).toMatchObject({ id: 'atomic' });
         expect(await repos.watchTrigger.findById('expired-audit')).toMatchObject({
           deliveryStatus: 'expired',
           evalSnapshot: { publicationReason: '超过 10 分钟' },
         });
         expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
-        expect(
-          await repos.watchTrigger.commitEvaluation({
-            ...input,
-            owner: 'stale-owner',
-            triggers: [makeWatchTrigger('rejected')],
-            auditTriggers: [makeWatchTrigger('rejected-audit', { deliveryStatus: 'expired' })],
-            states: [{ ...state, active: false }],
-          }),
-        ).toBe(false);
-        expect(await repos.watchTrigger.findById('rejected')).toBeNull();
-        expect(await repos.watchTrigger.findById('rejected-audit')).toBeNull();
-        expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
       });
 
       it('批次中一条非法触发不会留下部分触发或边沿', async () => {
-        await repos.watchTrigger.acquireExecution('owner', T0, T2);
         await expect(
           repos.watchTrigger.commitEvaluation({
-            owner: 'owner',
             now: T1,
             triggers: [makeWatchTrigger('valid'), makeWatchTrigger('invalid', { evidence: [] })],
             states: [
@@ -4228,7 +3446,6 @@ export const registerRepositoryContractTests = (
       });
 
       it('闭市时原子作废待发送触发并释放边沿，保留已记录的投递尝试', async () => {
-        await repos.watchTrigger.acquireExecution('owner', T0, T3);
         const state = {
           poolId: 'pool-1',
           stockId: '002594.SZ',
@@ -4238,24 +3455,20 @@ export const registerRepositoryContractTests = (
           lastEvaluatedAt: T1,
         };
         await repos.watchTrigger.commitEvaluation({
-          owner: 'owner',
           now: T1,
           triggers: [makeWatchTrigger('session-pending', { deliveryStatus: 'pending' })],
           states: [state],
         });
         await repos.watchTrigger.beginDelivery(['session-pending'], T1);
-        expect(
-          await repos.watchTrigger.commitEvaluation({
-            owner: 'owner',
-            now: T2,
-            triggers: [],
-            states: [{ ...state, active: false, firstTriggeredAt: undefined }],
-            invalidatePending: {
-              triggerIds: ['session-pending'],
-              reason: '闭市后不再发送',
-            },
-          }),
-        ).toBe(true);
+        await repos.watchTrigger.commitEvaluation({
+          now: T2,
+          triggers: [],
+          states: [{ ...state, active: false, firstTriggeredAt: undefined }],
+          invalidatePending: {
+            triggerIds: ['session-pending'],
+            reason: '闭市后不再发送',
+          },
+        });
         expect(await repos.watchTrigger.findById('session-pending')).toMatchObject({
           deliveryStatus: 'invalidated',
           deliveryAttempts: 1,
@@ -4269,19 +3482,6 @@ export const registerRepositoryContractTests = (
         const states = await repos.watchRuleState.listByPool('pool-1');
         expect(states).toMatchObject([{ active: false }]);
         expect(states[0]?.firstTriggeredAt).toBeUndefined();
-      });
-
-      it('执行租约互斥，过期接管后旧 owner 不能续租或释放新租约', async () => {
-        expect(await repos.watchTrigger.acquireExecution('a', T0, T1)).toBe(true);
-        expect(await repos.watchTrigger.acquireExecution('b', T0, T1)).toBe(false);
-        expect(await repos.watchTrigger.renewExecution('a', T0, T2)).toBe(true);
-        expect(await repos.watchTrigger.acquireExecution('b', T1, T3)).toBe(false);
-        expect(await repos.watchTrigger.acquireExecution('b', T2, T3)).toBe(true);
-        expect(await repos.watchTrigger.renewExecution('a', T2, FAR_FUTURE)).toBe(false);
-        await repos.watchTrigger.releaseExecution('a');
-        expect(await repos.watchTrigger.acquireExecution('c', T2, T3)).toBe(false);
-        await repos.watchTrigger.releaseExecution('b');
-        expect(await repos.watchTrigger.acquireExecution('c', T2, T3)).toBe(true);
       });
 
       it('投递前记录尝试，pending 和重试也占每日额度，回写不重复计数', async () => {
@@ -4507,818 +3707,134 @@ export const registerRepositoryContractTests = (
       });
     });
 
-    describe('WatchRunRepository', () => {
-      it('区分历史未记录与无法求值、仅日志的健康指标，更新保持一致', async () => {
-        const old = makeWatchRun('run-health');
-        await repos.watchRun.save(old);
-        expect(await repos.watchRun.findById(old.id)).toEqual(old);
-        const current = { ...old, delivered: 0, unknownRules: 3 };
-        await repos.watchRun.save(current);
-        expect(await repos.watchRun.findById(old.id)).toEqual(current);
-      });
-
-      it('running → succeeded upsert，latest/listRecent 按 startedAt 倒序', async () => {
-        await repos.watchRun.save(
-          makeWatchRun('run-1', {
-            status: 'running',
-            startedAt: T1,
-            finishedAt: null,
-            evaluatedPools: 0,
-            evaluatedStocks: 0,
-            triggered: 0,
-            notified: 0,
-            suppressedByCooldown: 0,
-          }),
-        );
-        await repos.watchRun.save(makeWatchRun('run-1', { startedAt: T1, finishedAt: T2 }));
-        await repos.watchRun.save(
-          makeWatchRun('run-2', {
-            startedAt: T3,
-            finishedAt: T3,
-            triggered: 0,
-            notified: 0,
-            suppressedByCooldown: 0,
-          }),
-        );
-
-        expect((await repos.watchRun.findById('run-1'))?.status).toBe('succeeded');
-        expect((await repos.watchRun.latest())?.id).toBe('run-2');
-        expect((await repos.watchRun.listRecent(2)).map((run) => run.id)).toEqual([
-          'run-2',
-          'run-1',
-        ]);
-      });
-
-      it('failed 缺 error 时拒绝', async () => {
-        await expect(
-          repos.watchRun.save(makeWatchRun('run-bad', { status: 'failed', error: undefined })),
-        ).rejects.toThrow();
-      });
-    });
-
     describe('ResearchIndexRepository', () => {
-      it('upsert 后按 topic、subject 和正文搜索，并投影关联股票', async () => {
-        await repos.researchIndex.applyIndexBatch({
+      it('document-only upsert 后按 kind/tags/stockCode 与正文搜索', async () => {
+        const summary = await repos.researchIndex.applyIndexBatch({
           vaultId: 'vault-test',
           completeness: 'complete',
-          topics: [makeResearchTopic('industry')],
-          documents: [makeResearchDocument('report')],
-          topicDocuments: [
-            {
-              topicId: 'topic_industry',
-              documentId: 'doc_report',
-              relation: 'supporting',
-            },
+          documents: [
+            makeResearchDocument('report', {
+              title: '库存周期见底',
+              tags: ['周期'],
+              stockCodes: ['600519.SH'],
+              excerpt: '渠道库存下降',
+            }),
+            makeResearchDocument('article', {
+              kind: 'article',
+              title: '行业跟踪',
+              stockCodes: ['000858.SZ'],
+              contentHash: 'c'.repeat(64),
+            }),
           ],
-          subjectLinks: [
-            {
-              ownerKind: 'topic',
-              ownerId: 'topic_industry',
-              subjectKind: 'stock',
-              subjectKey: '600519.SH',
-              relation: 'primary',
-            },
-            {
-              ownerKind: 'document',
-              ownerId: 'doc_report',
-              subjectKind: 'stock',
-              subjectKey: '000001.SZ',
-              relation: 'related',
-            },
-          ],
-          chunks: [
-            {
-              documentId: 'doc_report',
-              ordinal: 0,
-              headingPath: '摘要',
-              contentHash: 'b'.repeat(64),
-              body: '库存周期改善',
-            },
-          ],
-          seenTopicIds: new Set(['topic_industry']),
-          seenDocumentIds: new Set(['doc_report']),
-          indexedAt: T1,
-        });
-
-        expect(await repos.researchIndex.listTopics({ subject: 'stock:600519.SH' })).toHaveLength(
-          1,
-        );
-        expect(
-          await repos.researchIndex.listSubjectLinks({
-            ownerKind: 'topic',
-            ownerId: 'topic_industry',
-          }),
-        ).toEqual([
-          {
-            ownerKind: 'topic',
-            ownerId: 'topic_industry',
-            subjectKind: 'stock',
-            subjectKey: '600519.SH',
-            relation: 'primary',
-          },
-        ]);
-        expect(await repos.researchIndex.listTopicDocuments('topic_industry')).toEqual([
-          { topicId: 'topic_industry', documentId: 'doc_report', relation: 'supporting' },
-        ]);
-        expect(
-          await repos.researchIndex.listSubjectLinks({
-            ownerKind: 'document',
-            ownerId: 'doc_report',
-          }),
-        ).toEqual([
-          {
-            ownerKind: 'document',
-            ownerId: 'doc_report',
-            subjectKind: 'stock',
-            subjectKey: '000001.SZ',
-            relation: 'related',
-          },
-        ]);
-        expect(await repos.researchIndex.listDocuments({ topicId: 'topic_industry' })).toHaveLength(
-          1,
-        );
-        expect(await repos.researchIndex.searchDocuments({ text: '库存' })).toHaveLength(1);
-        expect(await repos.researchIndex.listStockSubjectKeys()).toEqual([
-          '000001.SZ',
-          '600519.SH',
-        ]);
-      });
-
-      it('只在完整扫描中把未见条目标记为 missing', async () => {
-        await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'complete',
-          topics: [makeResearchTopic('industry')],
-          documents: [],
-          topicDocuments: [],
-          subjectLinks: [],
-          chunks: [],
-          seenTopicIds: new Set(['topic_industry']),
-          seenDocumentIds: new Set(),
-          indexedAt: T1,
-        });
-        await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'partial',
-          topics: [],
-          documents: [],
-          topicDocuments: [],
-          subjectLinks: [],
-          chunks: [],
-          seenTopicIds: new Set(),
-          seenDocumentIds: new Set(),
+          contents: { doc_report: '经销商库存连续三个月下降，价格企稳。' },
+          seenDocumentIds: new Set(['doc_report', 'doc_article']),
           indexedAt: T2,
         });
-        expect((await repos.researchIndex.findTopic('topic_industry'))?.availability).toBe(
-          'available',
-        );
+        expect(summary).toMatchObject({ added: 2, updated: 0, unchanged: 0, missing: 0 });
+        expect(repos.researchIndex.searchCapability()).toBe('fts');
+        expect((await repos.researchIndex.findDocument('doc_report'))?.stockCodes).toEqual([
+          '600519.SH',
+        ]);
+        expect(await repos.researchIndex.listStockCodes()).toEqual(['000858.SZ', '600519.SH']);
+
+        const all = await repos.researchIndex.listDocuments({});
+        expect(all.map((document) => document.id)).toEqual(['doc_article', 'doc_report']);
+        expect(
+          (await repos.researchIndex.listDocuments({ kind: 'article' })).map(
+            (document) => document.id,
+          ),
+        ).toEqual(['doc_article']);
+        expect(
+          (await repos.researchIndex.listDocuments({ stockCode: '600519.SH' })).map(
+            (document) => document.id,
+          ),
+        ).toEqual(['doc_report']);
+        expect(
+          (await repos.researchIndex.listDocuments({ tags: ['周期'] })).map(
+            (document) => document.id,
+          ),
+        ).toEqual(['doc_report']);
+
+        const hits = await repos.researchIndex.searchDocuments({ text: '库存' });
+        expect(hits.map((hit) => hit.document.id)).toEqual(['doc_report']);
+        expect(hits[0]?.snippet).toContain('库存');
+        expect(
+          (await repos.researchIndex.searchDocuments({ text: '库存', stockCode: '000858.SZ' })).map(
+            (hit) => hit.document.id,
+          ),
+        ).toEqual([]);
+        expect(await repos.researchIndex.searchDocuments({ text: '   ' })).toEqual([]);
+      });
+
+      it('完整扫描把未出现文档标记 missing、移出搜索并可保留股票代码索引', async () => {
         await repos.researchIndex.applyIndexBatch({
           vaultId: 'vault-test',
           completeness: 'complete',
-          topics: [],
-          documents: [],
-          topicDocuments: [],
-          subjectLinks: [],
-          chunks: [],
-          seenTopicIds: new Set(),
-          seenDocumentIds: new Set(),
-          indexedAt: T3,
-        });
-        expect((await repos.researchIndex.findTopic('topic_industry'))?.availability).toBe(
-          'missing',
-        );
-      });
-
-      it('embedding 投影按模型 identity 增量重建并在 chunk hash 变化后失效', async () => {
-        const identity = {
-          provider: 'test',
-          model: 'embed-v1',
-          dimensions: 3,
-          version: '2026-08-15',
-        } as const;
-        const document = makeResearchDocument('report');
-        const apply = async (contentHash: string, body: string) =>
-          repos.researchIndex.applyIndexBatch({
-            vaultId: 'vault-test',
-            completeness: 'partial',
-            topics: [],
-            documents: [{ ...document, contentHash }],
-            topicDocuments: [],
-            subjectLinks: [],
-            chunks: [
-              { documentId: document.id, ordinal: 0, headingPath: '摘要', contentHash, body },
-            ],
-            seenTopicIds: new Set(),
-            seenDocumentIds: new Set([document.id]),
-            indexedAt: T1,
-          });
-
-        await apply('b'.repeat(64), '现金流改善');
-        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toHaveLength(1);
-        await repos.researchEmbedding.saveMany([
-          {
-            documentId: document.id,
-            ordinal: 0,
-            contentHash: 'b'.repeat(64),
-            identity,
-            vector: [1, 0, 0],
-            embeddedAt: T1,
-          },
-        ]);
-        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
-          status: 'ready',
-          expectedChunks: 1,
-          embeddedChunks: 1,
-          staleChunks: 0,
-        });
-        expect(
-          await repos.researchEmbedding.searchSimilar({
-            identity,
-            vector: [1, 0, 0],
-            limit: 5,
-          }),
-        ).toMatchObject([{ document: { id: document.id }, ordinal: 0 }]);
-
-        await apply('c'.repeat(64), '现金流恶化');
-        expect(await repos.researchEmbedding.inspect(identity, T2)).toMatchObject({
-          status: 'stale',
-          embeddedChunks: 0,
-          staleChunks: 1,
-        });
-        expect(await repos.researchEmbedding.deleteInvalid(identity)).toBe(1);
-        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toMatchObject([
-          { documentId: document.id, contentHash: 'c'.repeat(64) },
-        ]);
-      });
-
-      it('embedding 公开写入口按 Core schema 原子拒绝非法向量和状态', async () => {
-        const identity = {
-          provider: 'test',
-          model: 'embed-atomic',
-          dimensions: 3,
-          version: 'v1',
-        } as const;
-        const document = makeResearchDocument('atomic');
-        await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'partial',
-          topics: [],
-          documents: [document],
-          topicDocuments: [],
-          subjectLinks: [],
-          chunks: [
-            {
-              documentId: document.id,
-              ordinal: 0,
-              headingPath: '支持',
-              contentHash: document.contentHash,
-              body: '合法 chunk',
-            },
-            {
-              documentId: document.id,
-              ordinal: 1,
-              headingPath: '反证',
-              contentHash: document.contentHash,
-              body: '非法向量不应留下部分投影',
-            },
-          ],
-          seenTopicIds: new Set(),
-          seenDocumentIds: new Set([document.id]),
+          documents: [makeResearchDocument('keep'), makeResearchDocument('drop')],
+          contents: { doc_keep: 'Searchable body', doc_drop: 'will be removed' },
+          seenDocumentIds: new Set(['doc_keep', 'doc_drop']),
           indexedAt: T1,
         });
-        const base = {
-          documentId: document.id,
-          contentHash: document.contentHash,
-          identity,
-          embeddedAt: T1,
-        };
-
-        await expect(
-          repos.researchEmbedding.saveMany([
-            { ...base, ordinal: 0, vector: [1, 0, 0] },
-            { ...base, ordinal: 1, vector: [0, 1] },
-          ]),
-        ).rejects.toThrow();
-        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
-          embeddedChunks: 0,
-          staleChunks: 2,
+        const summary = await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'complete',
+          documents: [makeResearchDocument('keep')],
+          contents: { doc_keep: 'Searchable body' },
+          seenDocumentIds: new Set(['doc_keep']),
+          indexedAt: T2,
         });
-
-        await expect(
-          repos.researchEmbedding.saveMany([{ ...base, ordinal: 0, vector: [1, Number.NaN, 0] }]),
-        ).rejects.toThrow();
-        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
-          embeddedChunks: 0,
-          staleChunks: 2,
-        });
-
-        await expect(
-          repos.researchEmbedding.saveState({
-            identity,
-            status: 'partial',
-            expectedChunks: -1,
-            embeddedChunks: 0,
-            staleChunks: 0,
-            updatedAt: T1,
-          }),
-        ).rejects.toThrow();
-        expect(await repos.researchEmbedding.findState(identity)).toBeNull();
+        expect(summary).toMatchObject({ unchanged: 1, missing: 1 });
+        expect((await repos.researchIndex.findDocument('doc_drop'))?.availability).toBe('missing');
+        expect(
+          (await repos.researchIndex.searchDocuments({ text: 'Searchable' })).map(
+            (hit) => hit.document.id,
+          ),
+        ).toEqual(['doc_keep']);
+        expect(await repos.researchIndex.listStockCodes()).toEqual([]);
       });
 
-      it('embedding kind/topic/subject 过滤与 ResearchIndex 完整 subject 语义一致', async () => {
-        const identity = {
-          provider: 'test',
-          model: 'embed-filter',
-          dimensions: 3,
-          version: 'v1',
-        } as const;
-        const documents = [
-          makeResearchDocument('filter-a', { kind: 'report', contentHash: '1'.repeat(64) }),
-          makeResearchDocument('filter-b', { kind: 'article', contentHash: '2'.repeat(64) }),
-          makeResearchDocument('filter-c', { kind: 'analysis', contentHash: '3'.repeat(64) }),
-        ];
+      it('报告 invalid/conflict 计数且不改写既有文档', async () => {
         await repos.researchIndex.applyIndexBatch({
           vaultId: 'vault-test',
-          completeness: 'partial',
-          topics: [makeResearchTopic('filter-a'), makeResearchTopic('filter-b')],
-          documents,
-          topicDocuments: [
-            { topicId: 'topic_filter-a', documentId: 'doc_filter-a', relation: 'supporting' },
-            { topicId: 'topic_filter-b', documentId: 'doc_filter-b', relation: 'supporting' },
-            {
-              topicId: 'topic_filter-a',
-              documentId: 'doc_filter-c',
-              relation: 'counter-evidence',
-            },
+          completeness: 'complete',
+          documents: [
+            makeResearchDocument('valid'),
+            makeResearchDocument('bad', {
+              contentHash: 'd'.repeat(64),
+              availability: 'invalid',
+            }),
+            makeResearchDocument('clash', {
+              contentHash: 'e'.repeat(64),
+              availability: 'conflict',
+            }),
           ],
-          subjectLinks: [
-            {
-              ownerKind: 'document',
-              ownerId: 'doc_filter-a',
-              subjectKind: 'stock',
-              subjectKey: '600519.SH',
-              relation: 'related',
-            },
-            {
-              ownerKind: 'document',
-              ownerId: 'doc_filter-b',
-              subjectKind: 'stock',
-              subjectKey: '600519.SH',
-              relation: 'related',
-            },
-            {
-              ownerKind: 'document',
-              ownerId: 'doc_filter-c',
-              subjectKind: 'industry',
-              subjectKey: '白酒',
-              relation: 'related',
-            },
-          ],
-          chunks: documents.map((document) => ({
-            documentId: document.id,
-            ordinal: 0,
-            headingPath: '摘要',
-            contentHash: document.contentHash,
-            body: document.title,
-          })),
-          seenTopicIds: new Set(['topic_filter-a', 'topic_filter-b']),
-          seenDocumentIds: new Set(documents.map((document) => document.id)),
+          contents: { doc_valid: '正常正文' },
+          seenDocumentIds: new Set(['doc_valid', 'doc_bad', 'doc_clash']),
           indexedAt: T1,
         });
-        await repos.researchEmbedding.saveMany(
-          documents.map((document, index) => ({
-            documentId: document.id,
-            ordinal: 0,
-            contentHash: document.contentHash,
-            identity,
-            vector: [1, index / 10, 0],
-            embeddedAt: T1,
-          })),
-        );
-        const ids = async (
-          filters: Omit<
-            Parameters<typeof repos.researchEmbedding.searchSimilar>[0],
-            'identity' | 'vector' | 'limit'
-          >,
-        ) =>
-          (
-            await repos.researchEmbedding.searchSimilar({
-              identity,
-              vector: [1, 0, 0],
-              limit: 10,
-              ...filters,
-            })
-          )
-            .map((hit) => hit.document.id)
-            .sort();
-
-        expect(await ids({ kind: 'report' })).toEqual(['doc_filter-a']);
-        expect(await ids({ topicId: 'topic_filter-a' })).toEqual(['doc_filter-a', 'doc_filter-c']);
-        expect(await ids({ subject: 'stock:600519.SH' })).toEqual(['doc_filter-a', 'doc_filter-b']);
-        expect(await ids({ subject: '600519.SH' })).toEqual([]);
-        expect(
-          await ids({ topicId: 'topic_filter-a', kind: 'report', subject: 'stock:600519.SH' }),
-        ).toEqual(['doc_filter-a']);
-      });
-    });
-
-    describe('ResearchHypothesisVersionRepository', () => {
-      it('create + list/find 往返，并原子 supersede 旧 active 版本', async () => {
-        const first = makeResearchHypothesisVersion('one');
-        await repos.researchHypothesisVersion.create(first);
-        expect(await repos.researchHypothesisVersion.findById(first.id)).toEqual(first);
-
-        const second = makeResearchHypothesisVersion('two', {
-          version: 2,
-          supersedesId: first.id,
-          documentId: 'doc_thesis-2',
-          createdAt: T2,
-        });
-        await repos.researchHypothesisVersion.create(second);
-        expect(await repos.researchHypothesisVersion.findById(first.id)).toMatchObject({
-          status: 'superseded',
-        });
-        expect(await repos.researchHypothesisVersion.findById(second.id)).toEqual(second);
-        expect(
-          (await repos.researchHypothesisVersion.list({ topicId: 'topic_industry' })).map(
-            (item) => item.id,
-          ),
-        ).toEqual([second.id, first.id]);
-        expect(
-          await repos.researchHypothesisVersion.list({
-            topicId: 'topic_industry',
-            status: 'active',
-          }),
-        ).toEqual([second]);
-      });
-
-      it('拒绝重复版本、非 active 创建和断开的版本链', async () => {
-        await repos.researchHypothesisVersion.create(makeResearchHypothesisVersion('one'));
-        await expect(
-          repos.researchHypothesisVersion.create(
-            makeResearchHypothesisVersion('duplicate', { version: 1 }),
-          ),
-        ).rejects.toThrow();
-        await expect(
-          repos.researchHypothesisVersion.create(
-            makeResearchHypothesisVersion('bad-status', { status: 'archived' }),
-          ),
-        ).rejects.toThrow();
-        await expect(
-          repos.researchHypothesisVersion.create(
-            makeResearchHypothesisVersion('bad-chain', {
-              version: 2,
-              supersedesId: 'hypothesis_missing',
+        const summary = await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          documents: [
+            makeResearchDocument('valid', {
+              title: '更新标题',
+              contentHash: 'f'.repeat(64),
             }),
-          ),
-        ).rejects.toThrow();
-      });
-    });
-
-    describe('FinancialFactRepository', () => {
-      it('append-only：重复 revision 幂等，冲突 id 不覆盖旧事实', async () => {
-        const first = makeFinancialFact('fact-1');
-        await repos.financialFact.appendMany([first, first]);
-        expect(
-          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], metricIds: ['revenue'] }),
-        ).toEqual([first]);
-
-        const later = makeFinancialFact('fact-2', {
-          value: 110,
-          sourceRecordId: 'record-fact-1',
-          sourceRevision: 'r2',
-          publishedAt: T2,
-          revisionPublishedAt: T2,
-          recordedAt: T2,
-          supersedesId: first.id,
+          ],
+          contents: { doc_valid: '正常正文' },
+          seenDocumentIds: new Set(['doc_valid']),
+          indexedAt: T2,
         });
-        await repos.financialFact.appendMany([later]);
-        await expect(
-          repos.financialFact.appendMany([makeFinancialFact(first.id, { value: 999 })]),
-        ).rejects.toThrow(InvariantError);
-        expect(
-          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map(
-            (item) => item.value,
-          ),
-        ).toEqual([100, 110]);
-      });
-
-      it('批量 append 遇到后续 id 冲突时整体回滚，不留下前置插入', async () => {
-        const existing = makeFinancialFact('fact-existing');
-        await repos.financialFact.appendMany([existing]);
-        const first = makeFinancialFact('fact-before-conflict', { value: 101 });
-        const conflict = makeFinancialFact(existing.id, { value: 999 });
-        await expect(repos.financialFact.appendMany([first, conflict])).rejects.toThrow(
-          InvariantError,
+        expect(summary).toMatchObject({ added: 0, updated: 1, invalid: 0, conflicts: 0 });
+        expect((await repos.researchIndex.findDocument('doc_valid'))?.title).toBe('更新标题');
+        expect((await repos.researchIndex.findDocument('doc_bad'))?.availability).toBe('invalid');
+        expect((await repos.researchIndex.findDocument('doc_clash'))?.availability).toBe(
+          'conflict',
         );
-        expect(
-          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
-        ).toEqual([existing.id]);
-      });
-
-      it('appendMany 拒绝断链、跨实体和非较早 supersedes revision，并支持同批较早目标', async () => {
-        const target = makeFinancialFact('fact-target');
-        await repos.financialFact.appendMany([target]);
-        await expect(
-          repos.financialFact.appendMany([
-            makeFinancialFact('fact-missing-target', {
-              supersedesId: 'revision-missing',
-              sourceRevision: 'r2',
-              publishedAt: T2,
-              revisionPublishedAt: T2,
-              recordedAt: T2,
-            }),
-          ]),
-        ).rejects.toThrow(InvariantError);
-        await expect(
-          repos.financialFact.appendMany([
-            makeFinancialFact('fact-cross-stock', {
-              stockId: 'stk-2',
-              supersedesId: target.id,
-              sourceRevision: 'r2',
-              publishedAt: T2,
-              revisionPublishedAt: T2,
-              recordedAt: T2,
-            }),
-          ]),
-        ).rejects.toThrow(InvariantError);
-        await expect(
-          repos.financialFact.appendMany([
-            makeFinancialFact('fact-not-later', {
-              supersedesId: target.id,
-              sourceRevision: 'r2',
-              publishedAt: T0,
-              revisionPublishedAt: T0,
-              recordedAt: T0,
-            }),
-          ]),
-        ).rejects.toThrow(InvariantError);
-        expect(await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).toEqual([target]);
-
-        const batchTarget = makeFinancialFact('fact-batch-target');
-        const batchChild = makeFinancialFact('fact-batch-child', {
-          sourceRevision: 'r2',
-          publishedAt: T2,
-          revisionPublishedAt: T2,
-          recordedAt: T2,
-          supersedesId: batchTarget.id,
-        });
-        await repos.financialFact.appendMany([batchTarget, batchChild]);
-        expect(
-          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
-        ).toEqual([target.id, batchTarget.id, batchChild.id]);
-      });
-
-      it('日期边界、空集合和大 stock 查询保持稳定排序', async () => {
-        const other = makeFinancialFact('fact-3', {
-          stockId: 'stk-2',
-          metricId: 'margin',
-          periodEnd: T2,
-          periodStart: new Date('2025-01-01T00:00:00.000Z'),
-          value: 0.2,
-        });
-        await repos.financialFact.appendMany([other, makeFinancialFact('fact-1')]);
-        expect(await repos.financialFact.listRevisions({ stockIds: [] })).toEqual([]);
-        expect(
-          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], from: T1, to: T1 }),
-        ).toHaveLength(1);
-        expect(
-          (
-            await repos.financialFact.listRevisions({
-              stockIds: ['stk-2', 'stk-1'],
-              metricIds: ['margin', 'revenue'],
-            })
-          ).map((item) => `${item.stockId}:${item.metricId}`),
-        ).toEqual(['stk-1:revenue', 'stk-2:margin']);
-        const stockIds = Array.from({ length: 401 }, (_, index) => `bulk-${index}`);
-        expect(
-          await repos.financialFact.listRevisions({ stockIds: [...stockIds, 'stk-1'] }),
-        ).toEqual([makeFinancialFact('fact-1')]);
-        const metricIds = Array.from({ length: 401 }, (_, index) => `metric-${index}`);
-        metricIds[200] = 'revenue';
-        expect(
-          await repos.financialFact.listRevisions({
-            stockIds: ['stk-1'],
-            metricIds,
-          }),
-        ).toEqual([makeFinancialFact('fact-1')]);
-      });
-
-      it('resolveVintage 委托 strict PIT resolver，不回退撤回 revision', async () => {
-        const first = makeFinancialFact('fact-1');
-        const retracted = makeFinancialFact('fact-2', {
-          sourceRecordId: 'record-fact-1',
-          sourceRevision: 'r2',
-          publishedAt: T2,
-          revisionPublishedAt: T2,
-          recordedAt: T2,
-          status: 'retracted',
-          supersedesId: first.id,
-        });
-        await repos.financialFact.appendMany([first, retracted]);
-        const vintage = await repos.financialFact.resolveVintage({
-          stockIds: ['stk-1'],
-          metricIds: ['revenue'],
-          asOf: T2,
-          policy: 'strict-pit-v1',
-        });
-        expect(vintage.facts).toEqual([]);
-        expect(vintage.missing).toEqual([
-          {
-            stockId: 'stk-1',
-            metricId: 'revenue',
-            periodEnd: T1,
-            reason: 'retracted',
-            revisionIds: [retracted.id],
-          },
-        ]);
-        expect(vintage.coverage).toEqual({
-          requested: 1,
-          available: 0,
-          missing: 1,
-          retracted: 1,
-        });
-      });
-
-      it('读写对象不暴露可变引用', async () => {
-        const fact = makeFinancialFact('fact-copy');
-        await repos.financialFact.appendMany([fact]);
-        const got = (await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0];
-        expect(got).toEqual(fact);
-        got?.periodEnd.setUTCDate(1);
-        expect((await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0]).toEqual(
-          fact,
-        );
-      });
-    });
-
-    describe('StockEventRepository', () => {
-      it('upsertByExternal 幂等：同 (provider, externalId) 更新不重复插入', async () => {
-        const first = makeStockEvent('e1', {
-          source: 'external',
-          provider: 'p',
-          externalId: 'x1',
-          title: '一季报',
-        });
-        expect(await repos.stockEvent.upsertByExternal(first)).toBe('inserted');
-        const second = makeStockEvent('e2', {
-          source: 'external',
-          provider: 'p',
-          externalId: 'x1',
-          title: '一季报（改期）',
-          occursAt: T3,
-        });
-        expect(await repos.stockEvent.upsertByExternal(second)).toBe('updated');
-        const all = await repos.stockEvent.list({ stockId: 'stk-1' });
-        expect(all.length).toBe(1);
-        expect(all[0]?.title).toBe('一季报（改期）');
-        expect(all[0]?.occursAt.getTime()).toBe(T3.getTime());
-      });
-
-      it('listUpcoming 过滤 status/window/kinds/minImportance', async () => {
-        await repos.stockEvent.save(
-          makeStockEvent('u1', { occursAt: T2, importance: 'normal', kind: 'earnings' }),
-        );
-        await repos.stockEvent.save(
-          makeStockEvent('u2', { occursAt: T3, importance: 'urgent', kind: 'unlock' }),
-        );
-        await repos.stockEvent.save(
-          makeStockEvent('u3', { occursAt: T2, status: 'cancelled', importance: 'urgent' }),
-        );
-        const win = await repos.stockEvent.listUpcoming('stk-1', T1, T3, {
-          minImportance: 'important',
-        });
-        expect(win.map((e) => e.id)).toEqual(['u2']);
-        const byKind = await repos.stockEvent.listUpcoming('stk-1', T1, T3, {
-          kinds: ['earnings'],
-        });
-        expect(byKind.map((e) => e.id)).toEqual(['u1']);
-      });
-
-      it('markStaleByProvider 标记该源全部事件为 stale', async () => {
-        await repos.stockEvent.save(
-          makeStockEvent('s1', { source: 'external', provider: 'p', externalId: 'a' }),
-        );
-        await repos.stockEvent.save(
-          makeStockEvent('s2', { source: 'external', provider: 'q', externalId: 'b' }),
-        );
-        expect(await repos.stockEvent.markStaleByProvider('p')).toBe(1);
-        expect((await repos.stockEvent.findById('s1'))?.stale).toBe(true);
-        expect((await repos.stockEvent.findById('s2'))?.stale).toBe(false);
-      });
-
-      it('external 事件缺 provider/externalId 时拒绝', async () => {
-        await expect(
-          repos.stockEvent.save(makeStockEvent('bad', { source: 'external' })),
-        ).rejects.toThrow();
       });
     });
 
     describe('WorkflowRunRepository', () => {
-      it('执行槽 heartbeat 延期、未释放崩溃接管、旧 token 拒绝、结束后按分钟等待', async () => {
-        const start = new Date('2026-10-15T10:00:00Z');
-        const call = (action: 'acquire' | 'renew' | 'release', owner: string, seconds: number) => {
-          const now = new Date(start.getTime() + seconds * 1000);
-          return repos.workflowRun.execution({
-            id: 'strategy-execution',
-            workflowName: 'run-strategy-schedules',
-            action,
-            owner,
-            now,
-            leaseUntil: new Date(now.getTime() + 120_000),
-            nextRunAt: new Date(start.getTime() + 360_000),
-          });
-        };
-        expect(await call('acquire', 'old-token', 0)).toBe(true);
-        expect(await call('acquire', 'other-token', 1)).toBe(false);
-        expect(await call('renew', 'old-token', 90)).toBe(true);
-        expect(await call('acquire', 'new-token', 121)).toBe(false);
-        expect(await call('acquire', 'new-token', 210)).toBe(true);
-        expect(await call('renew', 'old-token', 211)).toBe(false);
-        expect(await call('release', 'old-token', 211)).toBe(false);
-        expect(await call('release', 'new-token', 211)).toBe(true);
-        expect(await call('acquire', 'next-token', 359)).toBe(false);
-        expect(await call('acquire', 'next-token', 360)).toBe(true);
-        expect(await call('release', 'next-token', 480)).toBe(false);
-      });
-
-      it('固定批次跨执行者只领取一次，结束时校验领取令牌', async () => {
-        const running = makeWorkflowRun('batch-once', {
-          workflowName: 'account-plan-batch',
-          status: 'running',
-          startedAt: T1,
-          finishedAt: undefined,
-          inputSummary: { accountId: 'account-1', date: '2026-01-01', claimToken: 'owner-1' },
-        });
-        const claims = await Promise.all([
-          repos.workflowRun.claim(running),
-          repos.workflowRun.claim({
-            ...running,
-            inputSummary: { ...running.inputSummary, claimToken: 'owner-2' },
-          }),
-        ]);
-        expect(claims.filter(Boolean)).toHaveLength(1);
-        const terminal = {
-          ...running,
-          status: 'succeeded' as const,
-          finishedAt: T2,
-          outputSummary: { status: 'complete' },
-        };
-        expect(await repos.workflowRun.finishClaim(terminal, 'owner-2')).toBe(false);
-        expect(await repos.workflowRun.finishClaim(terminal, 'owner-1')).toBe(true);
-        expect(await repos.workflowRun.finishClaim(terminal, 'owner-1')).toBe(false);
-        expect(await repos.workflowRun.claim(running)).toBe(false);
-        expect((await repos.workflowRun.findById('batch-once'))?.status).toBe('succeeded');
-      });
-
-      it('超时批次可重领，旧执行者不能覆盖新结果', async () => {
-        const first = makeWorkflowRun('batch-retry', {
-          workflowName: 'account-plan-batch',
-          status: 'running',
-          startedAt: T1,
-          finishedAt: undefined,
-          inputSummary: { claimToken: 'old' },
-        });
-        expect(await repos.workflowRun.claim(first)).toBe(true);
-        const second = { ...first, startedAt: T2, inputSummary: { claimToken: 'new' } };
-        expect(
-          await repos.workflowRun.claim(second, {
-            staleRunningBefore: T2,
-            failedRetryBefore: T2,
-          }),
-        ).toBe(true);
-        expect(
-          await repos.workflowRun.finishClaim(
-            { ...first, status: 'succeeded', finishedAt: T2 },
-            'old',
-          ),
-        ).toBe(false);
-        expect(
-          await repos.workflowRun.finishClaim(
-            { ...second, status: 'succeeded', finishedAt: T3 },
-            'new',
-          ),
-        ).toBe(true);
-        expect((await repos.workflowRun.findById('batch-retry'))?.inputSummary?.claimToken).toBe(
-          'new',
-        );
-
-        const failedStart = { ...first, id: 'batch-failed' };
-        expect(await repos.workflowRun.claim(failedStart)).toBe(true);
-        expect(
-          await repos.workflowRun.finishClaim(
-            { ...failedStart, status: 'failed', finishedAt: T2, error: 'provider unavailable' },
-            'old',
-          ),
-        ).toBe(true);
-        expect(
-          await repos.workflowRun.claim(
-            { ...second, id: 'batch-failed', startedAt: T3 },
-            { staleRunningBefore: T3, failedRetryBefore: T3 },
-          ),
-        ).toBe(true);
-      });
-
       it('running → succeeded upsert；listRecent 按 startedAt 倒序 + 过滤', async () => {
         await repos.workflowRun.save(
           makeWorkflowRun('w1', { status: 'running', startedAt: T1, finishedAt: undefined }),
@@ -5326,7 +3842,7 @@ export const registerRepositoryContractTests = (
         await repos.workflowRun.save(makeWorkflowRun('w1', { startedAt: T1, finishedAt: T2 }));
         await repos.workflowRun.save(
           makeWorkflowRun('w2', {
-            workflowName: 'evaluate-event-rules',
+            workflowName: 'closing-report',
             startedAt: T3,
             finishedAt: T3,
             status: 'partial',
@@ -5335,29 +3851,8 @@ export const registerRepositoryContractTests = (
         expect((await repos.workflowRun.findById('w1'))?.status).toBe('succeeded');
         const recent = await repos.workflowRun.listRecent();
         expect(recent.map((r) => r.id)).toEqual(['w2', 'w1']);
-        const byName = await repos.workflowRun.listRecent({ workflowName: 'sync-stock-events' });
+        const byName = await repos.workflowRun.listRecent({ workflowName: 'post-market-data' });
         expect(byName.map((r) => r.id)).toEqual(['w1']);
-      });
-
-      it('账户计划批次按输入交易日完整查询，包含隔日重试且排除其它工作流', async () => {
-        for (const [id, workflowName, date, startedAt] of [
-          ['batch-old', 'account-plan-batch', '2026-09-24', T1],
-          ['batch-retry-next-day', 'account-plan-batch', '2026-09-24', T3],
-          ['batch-other-day', 'account-plan-batch', '2026-09-25', T2],
-          ['other-workflow', 'closing-report', '2026-09-24', T2],
-        ] as const) {
-          await repos.workflowRun.save(
-            makeWorkflowRun(id, {
-              workflowName,
-              inputSummary: { date },
-              startedAt,
-              finishedAt: T3,
-            }),
-          );
-        }
-        expect(
-          (await repos.workflowRun.listAccountPlanBatches('2026-09-24')).map((run) => run.id),
-        ).toEqual(['batch-retry-next-day', 'batch-old']);
       });
 
       it('strategy-daily-cycle 先按归属和 dataAsOf 过滤，再应用 limit/offset', async () => {
@@ -5714,104 +4209,6 @@ export const registerRepositoryContractTests = (
       });
     });
 
-    describe('StrategyDataCheckpointRepository / StrategyEvaluationRepository', () => {
-      it('checkpoint 必须先 start 再 commit，并按 PIT 查找可复用输入', async () => {
-        const checkpoint: StrategyDataCheckpoint = {
-          id: 'checkpoint-1',
-          coverage: 'CN_A_SHARES_SH_SZ',
-          dataAsOf: T2,
-          status: 'running',
-          vintageStatus: 'not-applicable',
-          universeSyncId: 'sync-1',
-          requestedCount: 2,
-          availableCount: 0,
-          failedCount: 0,
-          memberChecksum: 'members',
-          dataChecksum: 'pending',
-          providerStatuses: [],
-          startedAt: T2,
-        };
-        const members: StrategyDataCheckpointMember[] = [
-          {
-            checkpointId: checkpoint.id,
-            stockId: '600519.SH',
-            status: 'available',
-            barCount: 100,
-            provider: 'fixture',
-          },
-          {
-            checkpointId: checkpoint.id,
-            stockId: '002594.SZ',
-            status: 'missing',
-            barCount: 0,
-            provider: 'fixture',
-          },
-        ];
-        await expect(
-          repos.strategyDataCheckpoint.commit({
-            checkpoint: { ...checkpoint, status: 'complete', finishedAt: T3 },
-            members,
-          }),
-        ).rejects.toThrow();
-        await repos.strategyDataCheckpoint.saveStarted(checkpoint);
-        await repos.strategyDataCheckpoint.commit({
-          checkpoint: { ...checkpoint, status: 'partial', finishedAt: T3, availableCount: 1 },
-          members,
-        });
-        expect(await repos.strategyDataCheckpoint.listMembers(checkpoint.id)).toEqual(
-          [...members].sort((left, right) => left.stockId.localeCompare(right.stockId)),
-        );
-        expect(
-          await repos.strategyDataCheckpoint.latestUsableAtOrBefore({
-            coverage: checkpoint.coverage,
-            asOf: T3,
-            universeSyncId: checkpoint.universeSyncId,
-          }),
-        ).toMatchObject({ id: checkpoint.id, status: 'partial' });
-      });
-
-      it('evaluation session/day 支持失败日重试并按日期查询', async () => {
-        const session: StrategyEvaluationSession = {
-          id: 'evaluation-1',
-          strategyId: 'strategy-1',
-          strategyVersionId: 'strategy-1-v1',
-          from: T1,
-          to: T3,
-          status: 'running',
-          definitionHash: 'a'.repeat(64),
-          createdAt: T1,
-          stockIds: ['600519.SH'],
-          stockIdChecksum: createHash('sha256')
-            .update(JSON.stringify(['600519.SH']))
-            .digest('hex'),
-        };
-        const day: StrategyEvaluationDay = {
-          sessionId: session.id,
-          dataAsOf: T2,
-          status: 'failed',
-          error: 'provider_error',
-        };
-        await repos.strategyEvaluation.saveSession(session);
-        await repos.strategyEvaluation.saveDay(day);
-        await repos.strategyEvaluation.saveDay({
-          ...day,
-          status: 'complete',
-          runId: 'run-1',
-          dataCheckpointId: 'checkpoint-1',
-          vintageStatus: 'available',
-        });
-        expect(await repos.strategyEvaluation.findSessionById(session.id)).toEqual(session);
-        expect(
-          await repos.strategyEvaluation.findDay({ sessionId: session.id, dataAsOf: T2 }),
-        ).toMatchObject({
-          status: 'complete',
-          runId: 'run-1',
-          vintageStatus: 'available',
-        });
-        expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
-      });
-    });
-
     describe('StrategyBacktestRepository', () => {
       const spec: StrictBacktestSpec = {
         schemaVersion: 1,
@@ -5884,44 +4281,6 @@ export const registerRepositoryContractTests = (
           }),
         ).rejects.toThrow('immutable identity');
       });
-
-      it('PIT 市场事实按股票、日期和 recordedAt cutoff 查询', async () => {
-        const fact: StrictBacktestMarketFact = {
-          stockId: '600519.SH',
-          date: T2,
-          rawOpen: 100,
-          rawHigh: 110,
-          rawLow: 95,
-          rawClose: 105,
-          sessionStatus: 'open',
-          buyAllowed: true,
-          sellAllowed: true,
-          buyRestriction: 'none',
-          sellRestriction: 'none',
-          corporateActionsStatus: 'complete',
-          corporateActions: [],
-          source: 'fixture',
-          recordedAt: T3,
-          contentHash: 'b'.repeat(64),
-        };
-        await repos.strategyBacktest.saveMarketFacts([fact]);
-        expect(
-          await repos.strategyBacktest.listMarketFacts({
-            stockIds: [fact.stockId],
-            from: T1,
-            to: T3,
-            recordedAt: T2,
-          }),
-        ).toEqual([]);
-        expect(
-          await repos.strategyBacktest.listMarketFacts({
-            stockIds: [fact.stockId],
-            from: T1,
-            to: T3,
-            recordedAt: T3,
-          }),
-        ).toEqual([fact]);
-      });
     });
 
     describe('LimitUpLadderSnapshotRepository', () => {
@@ -5958,133 +4317,6 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
-      });
-    });
-
-    describe('FundamentalScoreVersionRepository', () => {
-      it('保存定义快照、重复 identity 幂等并隔离可变引用', async () => {
-        const version = makeFundamentalScoreVersion();
-        await repos.fundamentalScoreVersion.save(version);
-        await repos.fundamentalScoreVersion.save(structuredClone(version));
-        const got = await repos.fundamentalScoreVersion.findById(version.id);
-        expect(got).toEqual(version);
-        if (got === null) throw new Error('missing score version');
-        const gotComponent = got.components[0];
-        if (gotComponent === undefined) throw new Error('missing score component');
-        (gotComponent as { weight: number }).weight = 0.5;
-        got.createdAt.setTime(0);
-        expect(await repos.fundamentalScoreVersion.findById(version.id)).toEqual(version);
-        expect(
-          (await repos.fundamentalScoreVersion.list({ status: 'published' })).map(
-            (item) => item.id,
-          ),
-        ).toEqual([version.id]);
-      });
-
-      it('draft 可一次发布再退役，已发布/退役定义与发布时间不可覆盖', async () => {
-        const draft = makeFundamentalScoreVersion({
-          id: 'fundamental-score-lifecycle',
-          status: 'draft',
-          publishedAt: undefined,
-        });
-        await repos.fundamentalScoreVersion.save(draft);
-        const published = { ...draft, status: 'published' as const, publishedAt: T1 };
-        await repos.fundamentalScoreVersion.save(published);
-        const retired = { ...published, status: 'retired' as const };
-        await repos.fundamentalScoreVersion.save(retired);
-        expect(await repos.fundamentalScoreVersion.findById(retired.id)).toEqual(retired);
-        await expect(
-          repos.fundamentalScoreVersion.save({ ...retired, publishedAt: T2 }),
-        ).rejects.toThrow(InvariantError);
-        const retiredComponent = retired.components[0];
-        if (retiredComponent === undefined) throw new Error('missing score component');
-        await expect(
-          repos.fundamentalScoreVersion.save({
-            ...retired,
-            components: [{ ...retiredComponent, normalizer: 'industry-percentile-v1' as const }],
-          }),
-        ).rejects.toThrow(InvariantError);
-      });
-    });
-
-    describe('FundamentalScoreRunRepository', () => {
-      it('started 后原子 commit results，重复相同提交幂等且读结果隔离', async () => {
-        const started = makeFundamentalScoreRun();
-        await repos.fundamentalScoreRun.saveStarted(started);
-        await expect(
-          repos.fundamentalScoreRun.commit({ run: started, results: [] }),
-        ).rejects.toThrow(InvariantError);
-        const committed = { ...started, status: 'committed' as const, committedAt: T3 };
-        const result = makeFundamentalScoreResult();
-        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
-        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
-        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(committed);
-        const results = await repos.fundamentalScoreRun.listResults(started.id);
-        expect(results).toEqual([result]);
-        const resultComponent = results[0]?.components[0];
-        if (resultComponent === undefined) throw new Error('missing result component');
-        (resultComponent as { rawValue: number }).rawValue = 999;
-        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([result]);
-        expect((await repos.fundamentalScoreRun.list()).map((run) => run.id)).toEqual([started.id]);
-      });
-
-      it('unavailable/failed 终态保留 terminalReason 但不暴露 results，终态冲突拒绝', async () => {
-        const started = makeFundamentalScoreRun({ id: 'score-run-unavailable' });
-        await repos.fundamentalScoreRun.saveStarted(started);
-        const unavailable = {
-          ...started,
-          status: 'unavailable' as const,
-          committedAt: T3,
-          terminalReason: {
-            code: 'provider-unavailable',
-            message: 'fixture provider unavailable',
-            observedAt: T2,
-          },
-        };
-        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
-        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
-        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(unavailable);
-        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([]);
-        await expect(
-          repos.fundamentalScoreRun.commit({
-            run: {
-              ...unavailable,
-              terminalReason: { ...unavailable.terminalReason, message: 'changed' },
-            },
-            results: [],
-          }),
-        ).rejects.toThrow(InvariantError);
-      });
-
-      it('未先 started、非 committed 带 results 或 committed 结果不完整时拒绝', async () => {
-        const committed = {
-          ...makeFundamentalScoreRun({ id: 'score-run-unknown' }),
-          status: 'committed' as const,
-          committedAt: T3,
-        };
-        await expect(
-          repos.fundamentalScoreRun.commit({
-            run: committed,
-            results: [makeFundamentalScoreResult({ scoreRunId: committed.id })],
-          }),
-        ).rejects.toThrow(InvariantError);
-        const started = makeFundamentalScoreRun({ id: 'score-run-invalid' });
-        await repos.fundamentalScoreRun.saveStarted(started);
-        await expect(
-          repos.fundamentalScoreRun.commit({
-            run: {
-              ...started,
-              status: 'failed' as const,
-              committedAt: T3,
-              terminalReason: {
-                code: 'evaluator-error',
-                message: 'failed',
-                observedAt: T2,
-              },
-            },
-            results: [makeFundamentalScoreResult({ scoreRunId: started.id })],
-          }),
-        ).rejects.toThrow(InvariantError);
       });
     });
 

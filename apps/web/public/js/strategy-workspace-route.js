@@ -1,16 +1,7 @@
-export const STRATEGY_TABS = new Set([
-  'overview',
-  'experiment',
-  'pool',
-  'runs',
-  'insights',
-  'cycle',
-  'settings',
-]);
+export const STRATEGY_TABS = new Set(['overview', 'pool', 'runs', 'insights', 'cycle', 'settings']);
 
 export const TAB_LABELS = {
   overview: '概览',
-  experiment: '实验',
   pool: '股票池',
   runs: '执行记录',
   insights: 'AI 洞察',
@@ -24,7 +15,7 @@ export const TAB_LABELS = {
  * 收深只影响导航呈现：parseStrategyHash/renderTabContent 不变，直接 URL 仍可进入。
  */
 export const BASIC_TABS = ['overview', 'pool', 'runs', 'settings'];
-export const ADVANCED_TABS = ['experiment', 'insights', 'cycle'];
+export const ADVANCED_TABS = ['insights', 'cycle'];
 
 export const parseStrategyHash = (hash) => {
   const raw = String(hash ?? '').replace(/^#/, '');

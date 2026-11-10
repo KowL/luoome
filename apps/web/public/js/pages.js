@@ -3,7 +3,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi, getAccountId, randomRequestId } from './api.js';
+import { callApi, getAccountId } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import {
   openCloseConfirm,
@@ -162,7 +162,7 @@ const preserveFocus = (container, update) => {
 
 let boardSortState = { key: null, order: 'desc' };
 let holdingsSortState = { key: null, order: 'desc' };
-let researchRemoteSyncController = null;
+const researchRemoteSyncController = null;
 
 /* ============ dashboard ============ */
 
@@ -301,16 +301,19 @@ const boardStats = (items) => ({
 });
 
 /**
- * 盯盘最近一轮评估摘要；渠道受理数由 Web API 从 WatchRun 的历史字段投影。
+ * 盯盘最近一轮评估摘要；运行事实统一来自 workflow_runs（intraday-watch）。
  * 一轮没有任何可评估标的时只报这一件事，不铺 5 个 0（状态由状态行单独呈现）。
  */
 const watchRunSummaryText = (latest) => {
-  if (latest === null) return '跑一轮后显示评估指标';
-  if (latest.evaluatedPools === 0 && latest.evaluatedStocks === 0)
+  if (latest === null || latest === undefined) return '跑一轮后显示评估指标';
+  const summary = latest.outputSummary ?? latest;
+  const evaluatedPlans = summary.evaluatedPlans ?? summary.evaluatedPools ?? 0;
+  const evaluatedStocks = summary.evaluatedStocks ?? 0;
+  if (evaluatedPlans === 0 && evaluatedStocks === 0)
     return '最近一轮没有可评估的标的 · 运行心跳已记录';
   return (
-    `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
-    `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 渠道受理 ${latest.channelAccepted ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`
+    `评估 ${evaluatedPlans} 个方案 / ${evaluatedStocks} 只股票 · ` +
+    `触发 ${summary.triggered ?? 0} · 尝试通知 ${summary.notified ?? 0} · 渠道受理 ${summary.delivered ?? summary.channelAccepted ?? '未记录'} · 无法求值 ${summary.unknownRules ?? '未记录'}`
   );
 };
 
@@ -2225,71 +2228,6 @@ const deleteReport = async (reportId, setStatus) => {
   await renderReports(setStatus);
 };
 
-const reportReviewRefreshButton = (report, accountId, status, setStatus, onSaved) => {
-  if (report.kind === 'closing') return null;
-  const pendingKey = `luoome.reportReviewPending:${accountId}:${report.id}`;
-  let pending;
-  try {
-    pending = JSON.parse(sessionStorage.getItem(pendingKey) ?? 'null');
-  } catch {
-    pending = null;
-  }
-  if (!status.canRefresh && !pending) return null;
-  let uncertain = pending !== null;
-  const refresh = el(
-    'button',
-    'btn btn-outline btn-sm',
-    pending ? '重试上次复盘补充' : '生成复盘补充版',
-  );
-  refresh.type = 'button';
-  refresh.addEventListener('click', async () => {
-    if (refresh.disabled) return;
-    if (getAccountId() !== accountId) return setStatus('账户已切换，请切回原账户。', true);
-    const input = pending ?? {
-      requestId: randomRequestId(),
-      expectedLatestReportId: status.latestReportId,
-    };
-    try {
-      sessionStorage.setItem(pendingKey, JSON.stringify(input));
-    } catch {
-      return setStatus('浏览器无法保存未决请求，请开启此标签页的会话存储后重试。', true);
-    }
-    pending = input;
-    refresh.disabled = true;
-    const result = await callApi(`/api/reports/${report.id}/decision-review-refresh`, {
-      method: 'POST',
-      headers: { 'x-luoome-account-id': accountId },
-      body: JSON.stringify(input),
-    });
-    refresh.disabled = false;
-    if (getAccountId() !== accountId) return;
-    if (!result.ok) {
-      if (
-        !uncertain &&
-        ['invalid_input', 'not_found', 'invariant_violation'].includes(result.error?.kind)
-      ) {
-        sessionStorage.removeItem(pendingKey);
-        pending = null;
-        refresh.disabled = true;
-        return setStatus(
-          `未生成复盘补充版：${toolErrorText(result.error)}。请重新选择最新报告。`,
-          true,
-        );
-      }
-      uncertain = true;
-      refresh.textContent = '重试上次复盘补充';
-      return setStatus(
-        `复盘补充结果未确认：${toolErrorText(result.error)}。请用同一按钮重试。`,
-        true,
-      );
-    }
-    sessionStorage.removeItem(pendingKey);
-    pending = null;
-    await onSaved(result.data.report.id);
-  });
-  return refresh;
-};
-
 const loadReportDetail = async (reportId, setStatus) => {
   selectedReportId = reportId;
   const accountId = getAccountId();
@@ -2327,31 +2265,6 @@ const loadReportDetail = async (reportId, setStatus) => {
   });
 
   const reportActions = [reportStatusBadge(report.status), markdown, plain, remove];
-  if (
-    report.scope.kind === 'account' &&
-    report.scope.accountId === accountId &&
-    (report.kind === 'closing' || report.kind === 'weekly')
-  ) {
-    const status = await callApi(`/api/reports/${report.id}/decision-review-status`, {
-      headers: { 'x-luoome-account-id': accountId },
-    });
-    if (accountId !== getAccountId() || selectedReportId !== reportId) return;
-    if (status.ok) {
-      const refresh = reportReviewRefreshButton(
-        report,
-        accountId,
-        status.data,
-        setStatus,
-        async (id) => {
-          await renderReports(setStatus);
-          await loadReportDetail(id, setStatus);
-        },
-      );
-      if (refresh) reportActions.push(refresh);
-    }
-    if (status.ok && status.data.snapshotMissing)
-      reportActions.push(el('span', 'muted', '此报告未包含账户决策记录'));
-  }
   mount(detail, reportSheetNodes(report, reportActions));
   document.querySelectorAll('.report-history-item').forEach((node) => {
     node.classList.toggle('active', node.dataset.reportId === reportId);
@@ -3260,35 +3173,9 @@ const renderResearch = async (setStatus) => {
   const syncButton = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-sync-btn')
   );
-  const remoteSyncButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-remote-sync-btn')
-  );
-  const remoteCancelButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-remote-cancel-btn')
-  );
-  const remoteSyncStatus = document.getElementById('research-remote-sync-status');
-  const createTopicButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-create-topic-btn')
-  );
-  const importDocumentButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-import-document-btn')
-  );
-  const importRemoteButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-import-remote-btn')
-  );
   const indexStatus = document.getElementById('research-index-status');
-  const embeddingStatus = document.getElementById('research-embedding-status');
-  const hybridSearch = /** @type {HTMLInputElement | null} */ (
-    document.getElementById('research-hybrid-search')
-  );
-  const embeddingRebuildButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-embedding-rebuild-btn')
-  );
-  const embeddingEvaluateButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-embedding-evaluate-btn')
-  );
-  const inbox = document.getElementById('research-inbox');
   const writeStatus = document.getElementById('research-write-status');
+  const inbox = document.getElementById('research-inbox');
   if (
     input === null ||
     button === null ||
@@ -3305,44 +3192,140 @@ const renderResearch = async (setStatus) => {
     vaultSettingsStatus.className = `card-meta ${kind}`.trim();
   };
 
-  const paintEmbeddingStatus = (data) => {
-    if (embeddingStatus === null) return;
-    if (!data?.configured) {
-      embeddingStatus.textContent =
-        '语义索引：未启用；FTS5/metadata 仍是确定性基线，正文不会外发。';
-      return;
-    }
-    const model = data.models?.find((item) => item.name === data.defaultModel) ?? data.models?.[0];
-    if (!model) {
-      embeddingStatus.textContent = '语义索引：已启用但没有可用模型。';
-      return;
-    }
-    const state = model.state;
-    embeddingStatus.textContent = `语义索引：${model.name} · ${state.status} · ${state.embeddedChunks}/${state.expectedChunks} chunks · ${model.identity.dimensions} 维 · ${model.identity.version}`;
+  const setWriteStatus = (message) => {
+    if (writeStatus === null) return;
+    writeStatus.textContent = message;
+    writeStatus.hidden = message.length === 0;
   };
 
-  const loadEmbeddingStatus = async () => {
-    const response = await callApi('/api/research/embeddings/status');
-    if (response.ok) paintEmbeddingStatus(response.data);
+  const paintStatus = (status) => {
+    if (indexStatus === null || status === undefined) return;
+    const capability = status.searchCapability === 'fts' ? 'FTS5' : 'metadata';
+    indexStatus.textContent = `索引状态：${status.freshness ?? '--'} · 检索 ${capability}${status.diagnostic ? ` · ${status.diagnostic}` : ''}`;
   };
 
-  const loadVaultSettings = async () => {
-    if (vaultForm === null) return;
-    const response = await callApi('/api/settings/research-vault');
+  const renderRows = (rows, emptyText, onOpen) => {
+    if (rows.length === 0) {
+      mount(results, el('p', 'muted', emptyText));
+      return;
+    }
+    mount(
+      results,
+      el(
+        'div',
+        'research-results',
+        rows
+          .map((row) =>
+            el('button', 'research-result', [
+              el('strong', null, row.title ?? row.id),
+              el(
+                'span',
+                'card-meta',
+                `${row.kind ?? '--'} · ${row.excerpt ?? row.snippet ?? ''}`.slice(0, 200),
+              ),
+            ]),
+          )
+          .map((node, index) => {
+            node.type = 'button';
+            node.addEventListener('click', () => void onOpen(rows[index]));
+            return node;
+          }),
+      ),
+    );
+  };
+
+  const openDocument = async (row) => {
+    const response = await callApi(
+      `/api/research/documents/${encodeURIComponent(row.id)}?content=1`,
+    );
     if (!response.ok) {
-      setVaultSettingsStatus(response.error?.cause ?? 'Vault 设置不可用', 'error');
+      mount(detail, el('p', 'muted', `读取失败：${response.error?.message ?? '未知错误'}`));
+      detail.hidden = false;
+      return;
+    }
+    const document = response.data.document;
+    const content = response.data.content ?? document.excerpt ?? '（无正文）';
+    const lines = [
+      el('div', 'card-header', [
+        el('h2', null, document.title ?? document.id),
+        el('span', 'card-meta', `${document.kind ?? '--'} · ${document.relativePath ?? ''}`),
+      ]),
+      el(
+        'p',
+        'card-meta',
+        `标签：${(document.tags ?? []).join(' / ') || '--'} · 股票：${(document.stockCodes ?? []).join(' / ') || '--'}`,
+      ),
+      el('pre', 'research-content', content.slice(0, 20000)),
+    ];
+    if (typeof document.obsidianUri === 'string') {
+      lines.push(
+        el('a', 'btn btn-outline btn-sm', '在 Obsidian 打开', { href: document.obsidianUri }),
+      );
+    }
+    mount(detail, el('article', 'card', lines));
+    detail.hidden = false;
+  };
+
+  let searchSeq = 0;
+  const loadDocuments = async () => {
+    const query = input.value.trim();
+    const kind = kindFilter.value;
+    const seq = ++searchSeq;
+    setWriteStatus('读取研究笔记索引…');
+    const response = query
+      ? await callApi(
+          `/api/research/search?q=${encodeURIComponent(query)}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
+        )
+      : await callApi(
+          `/api/research/documents?limit=50${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
+        );
+    if (seq !== searchSeq) return;
+    if (!response.ok) {
+      setWriteStatus(`读取失败：${response.error?.message ?? '未知错误'}`);
+      renderRows([], '读取失败，稍后刷新。', openDocument);
       return;
     }
     const data = response.data;
-    const setValue = (id, value) => {
-      const field = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
-      if (field !== null) field.value = String(value ?? '');
-    };
+    paintStatus(data.indexStatus);
+    if (query) {
+      const hits = Array.isArray(data.hits)
+        ? data.hits.map((hit) => ({ ...hit.document, snippet: hit.snippet }))
+        : [];
+      setWriteStatus(
+        hits.length === 0
+          ? data.capability === 'metadata'
+            ? '没有命中；当前 FTS5 不可用，仅按元数据检索。'
+            : '没有命中。'
+          : `命中 ${hits.length} 篇（${data.capability === 'fts' ? 'FTS5' : 'metadata 降级'}）。`,
+      );
+      renderRows(hits, '没有命中。', openDocument);
+      return;
+    }
+    const documents = Array.isArray(data.documents) ? data.documents : [];
+    setWriteStatus(
+      documents.length === 0
+        ? '索引为空，先配置 Vault 并手动同步。'
+        : `共 ${documents.length} 篇研究笔记。`,
+    );
+    renderRows(documents, '索引为空，先配置 Vault 并手动同步。', openDocument);
+  };
+
+  const setValue = (id, value) => {
+    const field = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+    if (field !== null && value !== undefined && value !== null) field.value = String(value);
+  };
+
+  const loadVaultSettings = async () => {
+    const response = await callApi('/api/settings/research-vault');
+    if (!response.ok) {
+      setVaultSettingsStatus(`Vault 设置读取失败：${response.error?.message ?? '未知错误'}`);
+      return;
+    }
+    const data = response.data;
     const vaultPathField = /** @type {HTMLInputElement | null} */ (
       document.getElementById('research-vault-path')
     );
     if (vaultPathField !== null) {
-      vaultPathField.value = '';
       vaultPathField.required = !data.configured;
       vaultPathField.placeholder = data.configured
         ? `已连接 ${data.vaultName ?? 'Vault'}；留空保持当前路径`
@@ -3365,701 +3348,71 @@ const renderResearch = async (setStatus) => {
     setVaultSettingsStatus(data.configError ?? (data.configured ? '配置已加载' : '填写路径后保存'));
   };
 
-  const loadRemoteSyncStatus = async (preserveMessage = false) => {
-    if (remoteSyncButton === null || remoteSyncStatus === null) return;
-    const response = await callApi('/api/research/remote-sync/status');
-    const configured = response.ok && response.data.configured === true;
-    remoteSyncButton.disabled = !configured || researchRemoteSyncController !== null;
-    if (!preserveMessage || !configured) {
-      remoteSyncStatus.textContent = configured
-        ? '远端同步：Git 已显式启用'
-        : '远端同步：未启用（需设置 LUOOME_RESEARCH_REMOTE_SYNC=git）';
-    }
-  };
-
-  const runRemoteSync = async () => {
-    if (remoteSyncButton === null || remoteCancelButton === null || remoteSyncStatus === null)
-      return;
-    const controller = new AbortController();
-    researchRemoteSyncController = controller;
-    remoteSyncButton.disabled = true;
-    remoteCancelButton.hidden = false;
-    remoteSyncStatus.textContent = '正在检查工作树、拉取远端并重建索引…';
-    try {
-      const response = await callApi('/api/research/remote-sync', {
-        method: 'POST',
-        body: JSON.stringify({ timeoutMs: 60_000 }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        remoteSyncStatus.textContent = `远端同步停止：${response.error?.cause ?? response.error?.message ?? response.error?.kind}`;
-        return;
-      }
-      const index = response.data.index;
-      remoteSyncStatus.textContent =
-        response.data.status === 'succeeded'
-          ? `远端同步完成：${response.data.git.status}${index ? `，扫描 ${index.scanned} 个文件` : ''}`
-          : `远端已更新，索引部分完成：${response.data.diagnostic ?? '请检查运行记录'}`;
-      await load();
-    } catch (error) {
-      remoteSyncStatus.textContent = controller.signal.aborted
-        ? '远端同步取消请求已发送；若已进入本地 fast-forward，将完成该原子步骤后停止'
-        : `远端同步失败：${error instanceof Error ? error.message : String(error)}`;
-    } finally {
-      if (researchRemoteSyncController === controller) researchRemoteSyncController = null;
-      remoteCancelButton.hidden = true;
-      await loadRemoteSyncStatus(true);
-    }
-  };
-
-  const saveVaultSettings = async () => {
-    if (vaultForm === null || vaultSaveButton === null) return;
-    const value = (id) =>
-      /** @type {HTMLInputElement} */ (document.getElementById(id)).value.trim();
-    const input = {
-      vaultPath: value('research-vault-path'),
-      researchRoot: value('research-vault-root'),
-      managedRoot: value('research-vault-managed-root'),
-      vaultId: value('research-vault-id'),
-      maxTextMb: Number(value('research-vault-max-text')),
-      maxAttachmentMb: Number(value('research-vault-max-attachment')),
-    };
-    vaultSaveButton.disabled = true;
-    setVaultSettingsStatus('正在验证路径并保存…');
-    try {
-      const saved = await callApi('/api/settings/research-vault', {
-        method: 'POST',
-        body: JSON.stringify(input),
-      });
-      if (!saved.ok) {
-        setVaultSettingsStatus(saved.error?.message ?? saved.error?.cause ?? '保存失败', 'error');
-        return;
-      }
-      setVaultSettingsStatus('配置已生效，正在建立索引…');
-      const synced = await callApi('/api/tools/sync_research_vault/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { mode: 'manual' } }),
-      });
-      if (!synced.ok) {
-        await loadVaultSettings();
-        setVaultSettingsStatus(
-          `配置已保存；同步失败：${synced.error?.message ?? synced.error?.cause ?? synced.error?.kind}`,
-          'error',
-        );
-        return;
-      }
-      await loadVaultSettings();
-      await load();
-      setVaultSettingsStatus(
-        `已保存并同步：扫描 ${synced.data.scanned} 个 Markdown 文件`,
-        'success',
-      );
-    } finally {
-      vaultSaveButton.disabled = false;
-    }
-  };
-
-  const paintIndexStatus = (status) => {
-    if (indexStatus === null) return;
-    if (!status) {
-      indexStatus.textContent = '索引状态：--';
-      return;
-    }
-    const last = status.lastSyncAt ? ` · ${fmtDateTime(status.lastSyncAt)}` : '';
-    indexStatus.textContent = `索引状态：${status.freshness}${last}${status.diagnostic ? ` · ${status.diagnostic}` : ''}`;
-    indexStatus.className = `card-meta research-index-${status.freshness}`;
-  };
-
-  const paintInbox = (topics, documents) => {
-    if (inbox === null) return;
-    const rows = [
-      ...topics.filter((row) => row.availability !== 'available'),
-      ...documents.filter((row) => row.availability !== 'available'),
-    ];
-    mount(
-      inbox,
-      rows.length === 0
-        ? el('span', 'muted', 'Inbox：暂无缺失、无效或冲突资料')
-        : el('span', 'warning', `Inbox：${rows.length} 条资料需要处理`),
-    );
-  };
-
-  const splitCsv = (value) =>
-    value
-      .split(/[，,\n]/u)
-      .map((item) => item.trim())
-      .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index);
-
-  const writeResearch = async (button, toolName, input, label) => {
-    if (button !== null) button.disabled = true;
-    if (writeStatus !== null) {
-      writeStatus.className = 'research-write-status';
-      writeStatus.textContent = `正在写入 ${label}…`;
-    }
-    try {
-      const response = await callApi(`/api/tools/${toolName}/call`, {
-        method: 'POST',
-        body: JSON.stringify({ input }),
-      });
-      if (!response.ok) {
-        if (writeStatus !== null) {
-          writeStatus.className = 'research-write-status error';
-          writeStatus.textContent = toolErrorText(response.error, '写入失败');
-        }
-        return;
-      }
-      const data = response.data;
-      const syncLabel = data?.indexed === true ? '已写入并完成索引' : '已写入，索引待同步';
-      if (writeStatus !== null) {
-        writeStatus.className = 'research-write-status success';
-        writeStatus.textContent = `${syncLabel}：${data?.relativePath ?? label}`;
-      }
-      await load();
-    } catch (error) {
-      if (writeStatus !== null) {
-        writeStatus.className = 'research-write-status error';
-        writeStatus.textContent = error instanceof Error ? error.message : String(error);
-      }
-    } finally {
-      if (button !== null) button.disabled = false;
-    }
-  };
-
-  const confirmResearchWrite = (button, toolName, input, label, preview) => {
-    openConfirmModal({
-      title: '确认写入 managed Vault',
-      message: `${preview}\n\n写入后会触发一次索引同步；只有点击“确认写入”才会修改本地文件。`,
-      confirmLabel: '确认写入',
-      onConfirm: () => void writeResearch(button, toolName, input, label),
-    });
-  };
-
-  const openCreateTopic = async () => {
-    const values = await promptDialog({
-      title: '新建研究主题',
-      note: '第一步填写元数据；下一步会展示预览并等待确认。',
-      fields: [
-        { key: 'title', label: '标题', placeholder: '例如：AI 服务器产业链' },
-        {
-          key: 'kind',
-          label: '类型',
-          value: 'theme',
-          options: [
-            { value: 'company', label: '公司' },
-            { value: 'industry', label: '产业' },
-            { value: 'event', label: '事件' },
-            { value: 'theme', label: '主题' },
-            { value: 'macro', label: '宏观' },
-            { value: 'custom', label: '自定义' },
-          ],
-        },
-        { key: 'summary', label: '摘要', placeholder: '可选' },
-        { key: 'subjects', label: '对象（逗号分隔）', placeholder: 'stock:600519.SH' },
-        { key: 'tags', label: '标签（逗号分隔）', placeholder: 'AI, 算力' },
-      ],
-      confirmLabel: '生成预览',
-    });
-    if (values === null || values.title.length === 0) return;
-    const input = {
-      title: values.title,
-      kind: values.kind,
-      ...(values.summary.length > 0 ? { summary: values.summary } : {}),
-      subjects: splitCsv(values.subjects),
-      tags: splitCsv(values.tags),
-    };
-    confirmResearchWrite(
-      createTopicButton,
-      'create_research_topic',
-      input,
-      `主题「${values.title}」`,
-      `标题：${values.title}\n类型：${values.kind}\n摘要：${values.summary || '—'}\n对象：${input.subjects.join('、') || '—'}\n标签：${input.tags.join('、') || '—'}`,
-    );
-  };
-
-  const openImportDocument = async () => {
-    const values = await promptDialog({
-      title: '导入本地研究资料',
-      note: '只接受你明确提供的 Markdown/TXT；内容会以 untrusted 研究资料保存，不自动生成 Advice。',
-      fields: [
-        { key: 'title', label: '标题', placeholder: '资料标题' },
-        {
-          key: 'kind',
-          label: '类型',
-          value: 'article',
-          options: [
-            { value: 'report', label: '研报' },
-            { value: 'article', label: '文章' },
-            { value: 'filing', label: '公告/财报' },
-            { value: 'transcript', label: '纪要/逐字稿' },
-            { value: 'note', label: '笔记' },
-            { value: 'thesis', label: 'Thesis' },
-            { value: 'analysis', label: '分析' },
-            { value: 'timeline-update', label: '时间线更新' },
-          ],
-        },
-        {
-          key: 'format',
-          label: '格式',
-          value: 'markdown',
-          options: [
-            { value: 'markdown', label: 'Markdown' },
-            { value: 'text', label: '纯文本' },
-          ],
-        },
-        {
-          key: 'body',
-          label: '正文',
-          multiline: true,
-          rows: 10,
-          placeholder: '粘贴 Markdown 或 TXT 正文',
-        },
-        { key: 'sourceUrl', label: '来源 URL', placeholder: '可选' },
-        { key: 'topicIds', label: '主题 ID（逗号分隔）', placeholder: 'topic_...' },
-        { key: 'subjects', label: '对象（逗号分隔）', placeholder: 'stock:600519.SH' },
-        { key: 'tags', label: '标签（逗号分隔）', placeholder: '财报, 风险' },
-      ],
-      confirmLabel: '生成预览',
-    });
-    if (values === null || values.title.length === 0 || values.body.length === 0) return;
-    const input = {
-      title: values.title,
-      kind: values.kind,
-      format: values.format,
-      body: values.body,
-      ...(values.sourceUrl.length > 0 ? { sourceUrl: values.sourceUrl } : {}),
-      topicIds: splitCsv(values.topicIds),
-      subjects: splitCsv(values.subjects),
-      tags: splitCsv(values.tags),
-    };
-    const excerpt = values.body.length > 500 ? `${values.body.slice(0, 500)}…` : values.body;
-    confirmResearchWrite(
-      importDocumentButton,
-      'import_local_research_document',
-      input,
-      `资料「${values.title}」`,
-      `标题：${values.title}\n类型：${values.kind} · ${values.format}\n主题：${input.topicIds.join('、') || '—'}\n正文预览：\n${excerpt}`,
-    );
-  };
-
-  const openImportRemote = async () => {
-    const values = await promptDialog({
-      title: '导入远程研究资料',
-      note: '会经过 SSRF、重定向、媒体类型、大小和超时限制；远程内容始终标记为 untrusted。',
-      fields: [
-        { key: 'url', label: 'URL', placeholder: 'https://example.com/report.html' },
-        { key: 'title', label: '标题', placeholder: '留空则使用网页 title 或 URL 路径' },
-        {
-          key: 'kind',
-          label: '类型',
-          value: 'article',
-          options: [
-            { value: 'report', label: '研报' },
-            { value: 'article', label: '文章' },
-            { value: 'filing', label: '公告/财报' },
-            { value: 'transcript', label: '纪要/逐字稿' },
-            { value: 'note', label: '笔记' },
-            { value: 'thesis', label: 'Thesis' },
-            { value: 'analysis', label: '分析' },
-            { value: 'timeline-update', label: '时间线更新' },
-          ],
-        },
-        { key: 'topicIds', label: '主题 ID（逗号分隔）', placeholder: 'topic_...' },
-        { key: 'subjects', label: '对象（逗号分隔）', placeholder: 'stock:600519.SH' },
-        { key: 'tags', label: '标签（逗号分隔）', placeholder: '来源, 外部' },
-      ],
-      confirmLabel: '生成预览',
-    });
-    if (values === null || values.url.length === 0) return;
-    const input = {
-      url: values.url,
-      ...(values.title.length > 0 ? { title: values.title } : {}),
-      kind: values.kind,
-      topicIds: splitCsv(values.topicIds),
-      subjects: splitCsv(values.subjects),
-      tags: splitCsv(values.tags),
-    };
-    confirmResearchWrite(
-      importRemoteButton,
-      'import_remote_research_document',
-      input,
-      `远程资料「${values.title || values.url}」`,
-      `URL：${values.url}\n类型：${values.kind}\n主题：${input.topicIds.join('、') || '—'}\n对象：${input.subjects.join('、') || '—'}\n远程内容会保存原件并进行安全正文抽取。`,
-    );
-  };
-
-  const timelineKindLabel = (kind) =>
-    ({
-      topic: '主题',
-      document: '资料',
-      'stock-event': '事件',
-      'strategy-signal': '策略信号',
-      'watch-trigger': '预警触发',
-      advice: 'Advice',
-      trade: '交易',
-      'limit-up': '涨停',
-    })[kind] ?? kind;
-
-  const researchTimeline = (timeline) => {
-    if (!Array.isArray(timeline) || timeline.length === 0) return null;
-    return el('section', 'research-topic-timeline mt-2', [
-      el('h3', null, '类型化时间线'),
-      el(
-        'ul',
-        'research-timeline-list',
-        timeline
-          .slice(0, 30)
-          .map((item) =>
-            el('li', null, [
-              el('span', 'timeline-date', fmtDateTime(item.occurredAt)),
-              el('span', 'timeline-badge', timelineKindLabel(item.kind)),
-              el('span', null, [
-                el('strong', null, item.title),
-                item.summary ? el('small', 'muted', item.summary) : null,
-              ]),
-            ]),
-          ),
-      ),
-    ]);
-  };
-
-  const researchLimitUp = (facts) => {
-    if (facts === undefined || facts === null) return null;
-    if (facts.status === 'unavailable') {
-      return el('p', 'muted mt-2', '近期涨停天梯不可用；未将不可用伪装成空结果。');
-    }
-    const coveredDays = Math.max(0, 30 - (facts.missingDates?.length ?? 0));
-    return el('section', 'research-topic-timeline mt-2', [
-      el(
-        'h3',
-        null,
-        facts.status === 'partial'
-          ? `近期涨停天梯（部分覆盖 ${coveredDays}/30 日）`
-          : '近期涨停天梯',
-      ),
-      facts.status === 'partial'
-        ? el('p', 'muted', '仅展示已保存的 PIT 快照；缺失日期未用当前接口回填。')
-        : null,
-      facts.recent?.length
-        ? el(
-            'ul',
-            'research-timeline-list',
-            facts.recent
-              .slice(0, 30)
-              .map((item) =>
-                el('li', null, [
-                  el('span', 'timeline-date', item.date),
-                  el('span', 'timeline-badge', `${item.ladderLevel} 连板`),
-                  el('span', null, item.reason === '--' ? '原因暂缺' : item.reason),
-                ]),
-              ),
-          )
-        : el('p', 'muted', '可获得范围内暂无涨停记录'),
-    ]);
-  };
-
-  const researchProfile = (profile) => {
-    if (profile === undefined || profile === null) return null;
-    const statusLabel =
-      profile.status === 'complete'
-        ? '事实完整'
-        : profile.status === 'partial'
-          ? '部分可用'
-          : '不可用';
-    const coverage = profile.coverage ?? {};
-    return el('section', 'card research-stock-profile mt-2', [
-      el('div', 'card-header', [
-        el('div', null, [el('h3', null, '股票研究 Profile'), stockIdentityLink(profile.stock)]),
-        el(
-          'span',
-          `badge ${profile.status === 'complete' ? 'badge-ok' : 'badge-warn'}`,
-          statusLabel,
-        ),
-      ]),
-      el(
-        'p',
-        'muted',
-        `Topic ${coverage.topics ?? 0} · 资料 ${coverage.documents ?? 0} · 事件 ${coverage.events ?? 0} · 策略信号 ${coverage.strategySignals ?? 0} · 触发 ${coverage.watchTriggers ?? 0}`,
-      ),
-      profile.factsAsOf ? el('p', 'muted', `事实截止：${fmtDateTime(profile.factsAsOf)}`) : null,
-      topicSection(
-        '支持证据',
-        (profile.evidence ?? []).slice(0, 8).map((item) => item.summary),
-      ),
-      topicSection(
-        '反证',
-        (profile.counterEvidence ?? []).slice(0, 8).map((item) => item.summary),
-      ),
-      topicSection('Unavailable / 待补证', profile.unknowns),
-      el('p', 'muted', (profile.limitations ?? []).join(' ')),
-    ]);
-  };
-
-  const topicSection = (title, items) =>
-    Array.isArray(items) && items.length > 0
-      ? el('section', 'card-summary-events mt-2', [
-          el('h3', null, title),
-          el(
-            'ul',
-            null,
-            items.slice(0, 20).map((item) => el('li', null, item)),
-          ),
-        ])
-      : null;
-
-  const showDocument = async (documentId) => {
-    setStatus('加载研究资料…');
-    const response = await callApi(
-      `/api/research/documents/${encodeURIComponent(documentId)}?content=1`,
-    );
-    if (!response.ok) {
-      mount(detail, el('p', 'error', response.error?.message ?? '研究资料不可用'));
-      detail.hidden = false;
-      return;
-    }
-    const row = response.data.document;
-    paintIndexStatus(response.data.indexStatus);
-    const children = [
-      el('h2', null, row.title),
-      el('p', 'muted', `${row.kind} · ${row.availability}`),
-      response.data.content ? el('pre', 'research-document-content', response.data.content) : null,
-      researchObsidianLink(response.data.obsidianUri),
-    ];
-    if (response.data.truncated) children.push(el('p', 'muted', '正文已按安全窗口截断'));
-    mount(detail, children);
-    detail.hidden = false;
-    setStatus(`已加载 ${row.title}`);
-  };
-
-  const showTopic = async (topicId) => {
-    setStatus('加载研究主题…');
-    const response = await callApi(`/api/research/topics/${encodeURIComponent(topicId)}`);
-    if (!response.ok) {
-      mount(detail, el('p', 'error', response.error?.message ?? '研究主题不可用'));
-      detail.hidden = false;
-      return;
-    }
-    const topic = response.data.topic;
-    paintIndexStatus(response.data.indexStatus);
-    const relationByDocument = new Map(
-      (response.data.documentRelations ?? []).map((relation) => [
-        relation.documentId,
-        relation.relation,
-      ]),
-    );
-    mount(detail, [
-      el('h2', null, topic.title),
-      el('p', 'muted', `${topic.kind} · ${topic.availability}`),
-      topic.summary ? el('p', null, topic.summary) : null,
-      response.data.subjects?.length
-        ? el(
-            'p',
-            'muted',
-            `显式对象：${response.data.subjects
-              .map((subject) => `${subject.subjectKind}:${subject.subjectKey}`)
-              .join('、')}`,
-          )
-        : null,
-      response.data.currentThesis
-        ? el('section', 'card-summary-thesis mt-2', [
-            el('h3', null, '当前 Thesis'),
-            el('p', null, response.data.currentThesis.excerpt ?? response.data.currentThesis.title),
-          ])
-        : null,
-      topicSection('支持证据', response.data.sections?.evidence),
-      topicSection('反证与风险', response.data.sections?.counterEvidence),
-      topicSection('待验证问题', response.data.sections?.unresolved),
-      researchObsidianLink(response.data.obsidianUri),
-      el(
-        'div',
-        'research-results-list mt-2',
-        response.data.documents.map((document) =>
-          el('div', null, [
-            researchResultCard(
-              document,
-              relationByDocument.get(document.id) ?? 'document',
-              () => void showDocument(document.id),
-            ),
-            relationByDocument.has(document.id)
-              ? el('small', 'muted', `关系：${relationByDocument.get(document.id)}`)
-              : null,
-          ]),
-        ),
-      ),
-      researchTimeline(response.data.timeline),
-    ]);
-    detail.hidden = false;
-    setStatus(`已加载 ${topic.title}`);
-  };
-
-  const paint = (
-    topics,
-    documents,
-    status,
-    timeline = [],
-    limitUp = undefined,
-    profile = undefined,
-  ) => {
-    paintIndexStatus(status);
-    paintInbox(topics, documents);
-    const cards = [
-      ...topics.map((topic) => researchResultCard(topic, 'topic', () => void showTopic(topic.id))),
-      ...documents.map((document) =>
-        researchResultCard(document, 'document', () => void showDocument(document.id)),
-      ),
-      researchProfile(profile),
-      researchTimeline(timeline),
-      researchLimitUp(limitUp),
-    ];
-    const visibleCards = cards.filter(Boolean);
-    mount(
-      results,
-      visibleCards.length === 0
-        ? el('p', 'muted', '暂无研究资料；请先同步 Vault')
-        : el('div', 'research-results-list', visibleCards),
-    );
-    detail.hidden = true;
-    setStatus(`${topics.length + documents.length} 条研究结果`);
-  };
-
-  const load = async () => {
-    const query = input.value.trim();
-    setStatus(query ? `搜索 ${query}…` : '加载研究主题…');
-    if (query) {
-      const useHybrid = hybridSearch?.checked === true;
-      const response = useHybrid
-        ? await callApi('/api/research/search/hybrid', {
-            method: 'POST',
-            body: JSON.stringify({ text: query, limit: 50 }),
-          })
-        : await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
-      if (!response.ok) {
-        mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
-        return;
-      }
-      if (useHybrid && embeddingStatus !== null) {
-        const embedding = response.data.embedding;
-        embeddingStatus.textContent = `语义检索：${response.data.capability} · ${response.data.complete ? '完整' : '不完整'}${embedding?.diagnostic ? ` · ${embedding.diagnostic}` : ''}`;
-      }
-      paint(
-        [],
-        (response.data.hits ?? []).map((hit) => hit.document),
-        useHybrid ? undefined : response.data.indexStatus,
-      );
-      return;
-    }
-    const kind = kindFilter.value;
-    const response = await callApi(
-      `/api/research/topics${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
-    );
-    if (!response.ok) {
-      mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
-      return;
-    }
-    paint(response.data.topics ?? [], [], response.data.indexStatus);
-  };
-
-  if (button.dataset.bound !== 'vault') {
-    button.dataset.bound = 'vault';
-    button.addEventListener('click', () => void load());
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') void load();
-    });
-    kindFilter.addEventListener('change', () => void load());
-    syncButton.addEventListener('click', async () => {
-      syncButton.disabled = true;
-      setStatus('同步 Vault…');
-      const response = await callApi('/api/tools/sync_research_vault/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { mode: 'manual' } }),
-      });
-      syncButton.disabled = false;
-      if (!response.ok) {
-        setStatus(response.error?.message ?? 'Vault 同步失败');
-        return;
-      }
-      setStatus(`Vault 同步完成：扫描 ${response.data.scanned} 个文件`);
-      await load();
-    });
-    embeddingRebuildButton?.addEventListener('click', async () => {
-      embeddingRebuildButton.disabled = true;
-      setStatus('增量重建语义索引；私人正文将发送给已配置的外部 embedding 模型…');
-      const response = await callApi('/api/research/embeddings/rebuild', {
-        method: 'POST',
-        body: JSON.stringify({ maxChunks: 200 }),
-      });
-      embeddingRebuildButton.disabled = false;
-      if (!response.ok) {
-        setStatus(toolErrorText(response.error, '语义索引重建失败'));
-        return;
-      }
-      setStatus(
-        `语义索引处理 ${response.data.processed} chunks；覆盖 ${response.data.state.embeddedChunks}/${response.data.state.expectedChunks}`,
-      );
-      await loadEmbeddingStatus();
-    });
-    embeddingEvaluateButton?.addEventListener('click', async () => {
-      embeddingEvaluateButton.disabled = true;
-      setStatus('运行固定评测集；仅发送版本内置的公开评测文本…');
-      const response = await callApi('/api/research/embeddings/evaluate', {
-        method: 'POST',
-        body: JSON.stringify({ topK: 3 }),
-      });
-      embeddingEvaluateButton.disabled = false;
-      if (!response.ok) {
-        setStatus(toolErrorText(response.error, '跨模型评测失败'));
-        return;
-      }
-      const summary = response.data.results
-        .map((result) =>
-          result.status === 'failed'
-            ? `${result.model}: 失败（${result.diagnostic ?? 'provider unavailable'}）`
-            : `${result.model}: R@3 ${result.recallAtK.toFixed(2)}, MRR ${result.meanReciprocalRank.toFixed(2)}, ${result.latencyMs.toFixed(0)}ms${result.estimatedCostUsd === undefined ? '' : `, $${result.estimatedCostUsd.toFixed(6)}`}`,
-        )
-        .join('；');
-      setStatus(summary || '没有已配置模型可评测');
-    });
-    remoteSyncButton?.addEventListener('click', () => {
-      openConfirmModal({
-        title: '确认从 Git 远端拉取 Research Vault',
-        message:
-          '只允许干净工作树上的 fast-forward。执行前会创建本地 Git bundle 备份；冲突或分叉将停止，不会自动 commit、push、reset、rebase 或选边。\n\n请确认远端仓库为私有仓库，且凭证由本机 Git 凭证管理器提供。',
-        confirmLabel: '确认拉取并重建索引',
-        onConfirm: () => void runRemoteSync(),
-      });
-    });
-    remoteCancelButton?.addEventListener('click', () => researchRemoteSyncController?.abort());
-    createTopicButton?.addEventListener('click', () => void openCreateTopic());
-    importDocumentButton?.addEventListener('click', () => void openImportDocument());
-    importRemoteButton?.addEventListener('click', () => void openImportRemote());
-    vaultForm?.addEventListener('submit', (event) => {
+  if (vaultForm !== null) {
+    vaultForm.onsubmit = async (event) => {
       event.preventDefault();
-      void saveVaultSettings();
-    });
+      const values = new FormData(vaultForm);
+      if (vaultSaveButton !== null) vaultSaveButton.disabled = true;
+      try {
+        const saved = await callApi('/api/settings/research-vault', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(Object.fromEntries(values.entries())),
+        });
+        if (!saved.ok) {
+          setVaultSettingsStatus(`保存失败：${saved.error?.message ?? '未知错误'}`, 'error');
+          return;
+        }
+        setVaultSettingsStatus('配置已保存；正在重建索引…');
+        await loadVaultSettings();
+        const sync = await callApi('/api/tools/sync_research_vault/call', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'manual' }),
+        });
+        showSyncResult(sync);
+        await loadDocuments();
+      } finally {
+        if (vaultSaveButton !== null) vaultSaveButton.disabled = false;
+      }
+    };
   }
 
-  await loadVaultSettings();
-  await loadEmbeddingStatus();
-  await loadRemoteSyncStatus();
-
-  const stockId = routeStockId();
-  if (stockId !== null) {
-    setStatus(`加载 ${stockId} 的显式研究关联…`);
-    const response = await callApi(`/api/research/stocks/${encodeURIComponent(stockId)}`);
-    if (!response.ok) {
-      mount(results, el('p', 'error', response.error?.message ?? '股票研究投影不可用'));
+  const showSyncResult = (sync) => {
+    if (!sync.ok) {
+      setWriteStatus(`同步失败：${sync.error?.message ?? '未知错误'}`);
       return;
     }
-    paint(
-      response.data.topics ?? [],
-      response.data.documents ?? [],
-      response.data.indexStatus,
-      response.data.timeline ?? [],
-      response.data.limitUp,
-      response.data.profile,
+    const data = sync.data ?? {};
+    setWriteStatus(
+      `同步完成：新增 ${data.added ?? 0} 篇，更新 ${data.updated ?? 0} 篇，缺失 ${data.missing ?? 0}，冲突 ${data.conflicts ?? 0}（${data.status ?? '--'}）。`,
     );
-    return;
-  }
-  await load();
+  };
+
+  button.addEventListener('click', () => void loadDocuments());
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void loadDocuments();
+  });
+  kindFilter.addEventListener('change', () => void loadDocuments());
+  syncButton.addEventListener('click', async () => {
+    syncButton.disabled = true;
+    setWriteStatus('正在扫描 Vault 并重建索引…');
+    try {
+      showSyncResult(
+        await callApi('/api/tools/sync_research_vault/call', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'manual' }),
+        }),
+      );
+    } finally {
+      syncButton.disabled = false;
+    }
+    await loadDocuments();
+  });
+  if (inbox !== null) inbox.replaceChildren();
+  await loadVaultSettings();
+  await loadDocuments();
 };
 
 const researchObsidianLink = (uri) => {
@@ -4111,7 +3464,6 @@ export {
   renderWorkflowRuns,
   reportDeliveryLabel,
   reportEntityHref,
-  reportReviewRefreshButton,
   reportSheetNodes,
   resetAdviceDeleteMode,
   routeAdviceId,

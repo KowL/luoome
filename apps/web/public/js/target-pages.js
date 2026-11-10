@@ -49,7 +49,8 @@ const RULE_KIND_LABELS = {
   'price-change': '涨跌幅度',
   'cost-threshold': '成本阈值',
   'strategy-signal': '策略信号',
-  'event-date': '事件日期',
+  // 存量读兼容：已下线的事件规则触发仍展示原语义
+  'event-date': '旧事件规则',
   tactic: '旧规则',
 };
 
@@ -66,7 +67,7 @@ const DELIVERY_LABELS = {
   invalidated: '发布前已失效',
 };
 
-/** 交易计划监控的触发池前缀（intraday-trading-plan-watch）。 */
+/** 交易计划监控的触发池前缀（intraday-watch 的交易计划子管线）。 */
 export const TRADING_PLAN_POOL_PREFIX = 'trading-plan-watch:';
 
 export const triggerSourceLabel = (trigger, { alertPlanNames = {}, tradingPlanAccountId } = {}) => {

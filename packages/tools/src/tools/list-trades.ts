@@ -10,7 +10,6 @@ export const ListTradesInput = z.object({
   stockId: z.string().min(1).optional(),
   side: TradeSideSchema.optional(),
   adviceId: z.string().min(1).optional(),
-  researchHypothesisVersionId: z.string().min(1).optional(),
   strategyVersionId: z.string().min(1).optional(),
   /** 按 executedAt 过滤（闭区间）。 */
   since: z.coerce.date().optional(),
@@ -49,7 +48,6 @@ export const listTradesTool = defineTool({
           stockId: input.stockId,
           side: input.side,
           adviceId: input.adviceId,
-          researchHypothesisVersionId: input.researchHypothesisVersionId,
           strategyVersionId: input.strategyVersionId,
           since: input.since?.toISOString(),
           until: input.until?.toISOString(),
@@ -92,11 +90,6 @@ export const listTradesTool = defineTool({
       .filter((trade) => input.stockId === undefined || trade.stockId === input.stockId)
       .filter((trade) => input.side === undefined || trade.side === input.side)
       .filter((trade) => input.adviceId === undefined || trade.adviceId === input.adviceId)
-      .filter(
-        (trade) =>
-          input.researchHypothesisVersionId === undefined ||
-          trade.researchHypothesisVersionId === input.researchHypothesisVersionId,
-      )
       .filter(
         (trade) =>
           input.strategyVersionId === undefined ||

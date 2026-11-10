@@ -15,16 +15,12 @@ import {
   createAShareSentimentManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
-  createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
-  createResearchEmbeddingAdapterFromEnv,
-  createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
-  createResearchVaultGitSyncAdapterFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
@@ -87,7 +83,6 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     logger,
     sources,
   });
-  const fundamentalData = createFundamentalDataAdapterFromEnv(process.env);
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
   try {
     ai = createAIStackFromEnv(process.env, { logger });
@@ -132,31 +127,33 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   } catch {
     logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
   }
-  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
-  try {
-    researchEmbedding = createResearchEmbeddingAdapterFromEnv(process.env);
-  } catch {
-    logger.warn('Research embedding 配置无效；CLI 将以 capability 未挂载状态继续');
-  }
-  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
-  try {
-    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(process.env, {
-      backupRoot: join(home, 'backups', 'research-vault'),
-    });
-  } catch {
-    logger.warn('Research Vault 远端同步配置无效；CLI 将以未挂载状态继续');
-  }
+  const ashareSentiment = createAShareSentimentManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    market,
+    sources,
+  });
+  const marketIntel = {
+    ...(limitUpLadder === undefined ? {} : { limitUpLadder }),
+    ...(dragonTiger === undefined ? {} : { dragonTiger }),
+    ...(northboundFlow === undefined ? {} : { northboundFlow }),
+    ...(news === undefined ? {} : { news }),
+    ...(sectorQuote === undefined ? {} : { sectorQuote }),
+    ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
+  };
   const ctx = buildContext({
     repos,
     adapters: {
       market,
+      llm: ai?.llm ?? unavailableLLM,
       stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         clock: now,
         logger,
       }),
-      llm: ai?.llm ?? unavailableLLM,
+      notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
+      ...(researchVault ? { researchVault } : {}),
+      ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
     },
-    ...(ai === undefined ? {} : { agent: ai.agent }),
     portfolioBenchmark: {
       stockId:
         process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||
@@ -168,23 +165,6 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     logger,
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'cli',
-    limitUpLadder,
-    dragonTiger,
-    northboundFlow,
-    news,
-    sectorQuote,
-    ashareSentiment: createAShareSentimentManagerFromEnv(process.env, {
-      clock: now,
-      logger,
-      market,
-      sources,
-    }),
-    ...(researchVault ? { researchVault } : {}),
-    ...(researchEmbedding ? { researchEmbedding } : {}),
-    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
-    ...(fundamentalData === undefined ? {} : { fundamentalData }),
-    researchRemote: createResearchRemoteDocumentAdapter(),
-    notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });
 
   return { ctx, dbPath, close };

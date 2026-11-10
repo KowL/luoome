@@ -34,7 +34,6 @@ export const assertTradeInvariants = (t: Trade): void => {
   }
   for (const [field, value] of [
     ['adviceId', t.adviceId],
-    ['researchHypothesisVersionId', t.researchHypothesisVersionId],
     ['strategyVersionId', t.strategyVersionId],
   ] as const) {
     if (value !== undefined && value.length === 0) {

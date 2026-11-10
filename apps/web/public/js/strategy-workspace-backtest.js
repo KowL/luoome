@@ -1,8 +1,6 @@
-import { buildStrategyHash } from './strategy-workspace-route.js';
 import {
   badge,
   callApi,
-  closeModal,
   confirmDialog,
   createFeatureCache,
   DATA_HEALTH,
@@ -19,30 +17,6 @@ import {
 
 const featureCache = createFeatureCache();
 export const invalidateBacktestCache = () => featureCache.clear();
-
-export const parseBacktestStockIds = (value) => {
-  const stockIds = [
-    ...new Set(
-      String(value ?? '')
-        .split(/[\s,，;；]+/)
-        .map((stockId) => stockId.trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  ];
-  return stockIds.length === 0 ? undefined : stockIds;
-};
-
-const BACKTEST_STATUS = {
-  complete: ['完成', 'badge-active'],
-  partial: ['部分完成', 'badge-important'],
-  failed: ['失败', 'badge-pos'],
-};
-
-const VINTAGE_STATUS = {
-  available: ['版本可用', 'badge-active'],
-  unavailable: ['版本不可用', 'badge-important'],
-  'not-applicable': ['不适用', 'badge-neutral'],
-};
 
 const STRICT_GATE_STATUS = {
   complete: ['完整', 'badge-active'],
@@ -156,10 +130,14 @@ export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
 };
 
 const openStrictBacktestDialog = async (strategy, setStatus) => {
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - 30);
   const values = await promptDialog({
     title: `严格回测 · ${strategy.name}`,
     fields: [
-      { key: 'evaluationSessionId', label: '历史评估 session ID', value: '' },
+      { key: 'from', label: '开始日期（YYYY-MM-DD）', value: from.toISOString().slice(0, 10) },
+      { key: 'to', label: '结束日期（YYYY-MM-DD）', value: to.toISOString().slice(0, 10) },
       { key: 'initialCash', label: '初始资金', value: '1000000' },
       { key: 'commissionBps', label: '佣金（bps）', value: '3' },
       { key: 'minimumCommission', label: '最低佣金', value: '5' },
@@ -168,13 +146,16 @@ const openStrictBacktestDialog = async (strategy, setStatus) => {
       { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
     ],
     confirmLabel: '创建严格回测',
-    note: '必须提供已完成的历史评估 session。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
+    note: '基于该策略版本在所选区间内的历史运行逐日装配。任一 PIT、日线、费用、滑点、可交易性、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
   });
   if (values === null) return;
+  if (typeof strategy.currentVersionId !== 'string') return;
   await runStrictStrategyBacktest(
     strategy,
     {
-      evaluationSessionId: values.evaluationSessionId,
+      strategyVersionId: strategy.currentVersionId,
+      from: values.from,
+      to: values.to,
       initialCash: Number(values.initialCash),
       costs: {
         commissionBps: Number(values.commissionBps),
@@ -183,207 +164,6 @@ const openStrictBacktestDialog = async (strategy, setStatus) => {
         buySlippageBps: Number(values.buySlippageBps),
         sellSlippageBps: Number(values.sellSlippageBps),
       },
-    },
-    setStatus,
-  );
-};
-
-export const buildBacktestResultContent = (data, strategyId = '', sessionId) => {
-  const summary = data.summary;
-  const evaluationSessionId = sessionId ?? data.sessionId ?? data.session?.id;
-  const evaluationButton = el('button', 'btn btn-outline btn-sm', '查看历史评估记录');
-  evaluationButton.type = 'button';
-  const evaluationHash = buildStrategyHash({
-    strategyId,
-    tab: 'runs',
-    scope: 'evaluation',
-  });
-  evaluationButton.addEventListener('click', () => {
-    window.location.hash = evaluationHash;
-    closeModal();
-  });
-  const rows = (data.days ?? []).map((day) =>
-    el('tr', null, [
-      el('td', 'mono', String(day.dataAsOf).slice(0, 10)),
-      el('td', null, badge(BACKTEST_STATUS[day.status], day.status)),
-      el('td', null, badge(VINTAGE_STATUS[day.vintageStatus], day.vintageStatus)),
-      el('td', 'num mono', day.evaluatedCount ?? '--'),
-      el('td', 'num mono', day.selectedCount ?? '--'),
-      el('td', 'num mono', day.signalCount ?? '--'),
-      el('td', 'num mono', day.failedCount ?? '--'),
-      el('td', 'muted', day.error ?? ''),
-    ]),
-  );
-  return el('div', 'strategy-backtest-result', [
-    el('div', 'strategy-summary-grid', [
-      metric(
-        '交易日',
-        summary.tradingDays,
-        `完成 ${summary.completedDays} · 失败 ${summary.failedDays}`,
-      ),
-      metric('累计求值', summary.evaluatedCount),
-      metric('累计入选', summary.selectedCount),
-      metric('累计信号', summary.signalCount),
-    ]),
-    ...(strategyId.length === 0 ? [] : [el('div', 'modal-actions', evaluationButton)]),
-    el(
-      'p',
-      'status warning',
-      '这是按历史时点逐日重放的策略模拟，只统计规则命中与信号；不含收益、费用、滑点和可交易性模拟，不构成投资建议。',
-    ),
-    ...(rows.length === 0
-      ? [el('p', 'placeholder', '所选区间没有交易日。')]
-      : [
-          el('div', 'table-wrap', [
-            el('table', 'table', [
-              el(
-                'thead',
-                null,
-                el(
-                  'tr',
-                  null,
-                  ['日期', '状态', '历史数据', '求值', '入选', '信号', '失败', '说明'].map(
-                    (label) => el('th', null, label),
-                  ),
-                ),
-              ),
-              el('tbody', null, rows),
-            ]),
-          ]),
-        ]),
-    ...(evaluationSessionId === undefined
-      ? []
-      : [el('p', 'mono muted', `Evaluation session ${evaluationSessionId}`)]),
-  ]);
-};
-
-const buildBacktestProgressContent = (data, strategyId, sessionId, setStatus) => {
-  const summary = data.summary ?? {
-    tradingDays: 0,
-    completedDays: 0,
-    failedDays: 0,
-    selectedCount: 0,
-  };
-  const cancel = el('button', 'btn btn-danger btn-sm', '取消历史评估');
-  cancel.type = 'button';
-  cancel.addEventListener('click', async () => {
-    cancel.disabled = true;
-    const result = await post(
-      `/api/strategies/${encodeURIComponent(strategyId)}/backtests/${encodeURIComponent(sessionId)}/cancel`,
-      {},
-    );
-    setStatus(result.ok ? '已请求取消历史评估，已完成日期会保留' : errorText(result), !result.ok);
-  });
-  return el('div', 'strategy-backtest-progress', [
-    el(
-      'p',
-      null,
-      `已完成 ${summary.completedDays ?? 0}/${summary.tradingDays ?? 0} 个交易日，失败 ${summary.failedDays ?? 0}，累计入选 ${summary.selectedCount ?? 0}`,
-    ),
-    el('p', 'muted', '任务在后台运行，页面会按日期刷新进度；历史评估不会替换当前生产股票池。'),
-    el('div', 'modal-actions', [cancel]),
-  ]);
-};
-
-export const runStrategyBacktest = async (strategy, input, setStatus) => {
-  setStatus('正在逐交易日运行历史模拟…');
-  const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/backtests`, input);
-  if (!result.ok) {
-    setStatus(errorText(result), true);
-    return result;
-  }
-  let completed = result.data?.summary === undefined ? undefined : result.data;
-  const sessionId = result.data?.sessionId ?? result.data?.session?.id;
-  if (completed === undefined && typeof sessionId === 'string') {
-    openModal(
-      `模拟回测（历史回放）· ${strategy.name}`,
-      buildBacktestProgressContent(result.data, strategy.id, sessionId, setStatus),
-    );
-    for (let attempt = 0; attempt < 360; attempt += 1) {
-      const snapshot = await callApi(
-        `/api/strategies/${encodeURIComponent(strategy.id)}/backtests/${encodeURIComponent(sessionId)}`,
-      );
-      if (!snapshot.ok) {
-        setStatus(errorText(snapshot), true);
-        return snapshot;
-      }
-      const data = snapshot.data;
-      const summary = data.summary ?? {};
-      setStatus(
-        `历史评估进度：${summary.completedDays ?? 0}/${summary.tradingDays ?? 0} 个交易日，已入选 ${summary.selectedCount ?? 0}`,
-      );
-      if (data.status !== 'running' && data.session?.status !== 'running') {
-        completed = data;
-        break;
-      }
-      openModal(
-        `模拟回测（历史回放）· ${strategy.name}`,
-        buildBacktestProgressContent(data, strategy.id, sessionId, setStatus),
-      );
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-  if (completed === undefined) {
-    setStatus('历史评估仍在后台运行，可在执行记录中查看进度', false);
-    return result;
-  }
-  featureCache.clear();
-  openModal(
-    `模拟回测（历史回放）· ${strategy.name}`,
-    buildBacktestResultContent(completed, strategy.id, sessionId),
-  );
-  const completionLabel =
-    completed.status === 'complete'
-      ? '历史模拟完成'
-      : completed.status === 'partial'
-        ? '历史模拟部分完成'
-        : '历史模拟失败或已取消';
-  setStatus(
-    `${completionLabel}：${completed.summary.completedDays}/${completed.summary.tradingDays} 个交易日，累计入选 ${completed.summary.selectedCount}，信号 ${completed.summary.signalCount}`,
-    completed.status !== 'complete',
-  );
-  return { ...result, data: completed };
-};
-
-const localDateText = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const openBacktestDialog = async (strategy, setStatus) => {
-  const to = new Date();
-  const from = new Date(to);
-  from.setDate(from.getDate() - 30);
-  const values = await promptDialog({
-    title: `模拟回测（历史回放）· ${strategy.name}`,
-    fields: [
-      { key: 'from', label: '开始日期（YYYY-MM-DD）', value: localDateText(from) },
-      { key: 'to', label: '结束日期（YYYY-MM-DD）', value: localDateText(to) },
-      {
-        key: 'stockIds',
-        label: '股票代码（可选，逗号或换行分隔）',
-        value: '',
-        multiline: true,
-        rows: 4,
-      },
-    ],
-    confirmLabel: '开始模拟',
-    note: '最长 31 个自然日；留空将按历史时点全市场运行，可能耗时。结果保存为历史评估，不会替换当前股票池。',
-  });
-  if (values === null) return;
-  const stockIds = parseBacktestStockIds(values.stockIds);
-  if (stockIds !== undefined && stockIds.length > 500) {
-    setStatus('模拟范围最多包含 500 只股票', true);
-    return;
-  }
-  await runStrategyBacktest(
-    strategy,
-    {
-      from: values.from,
-      to: values.to,
-      ...(stockIds === undefined ? {} : { stockIds }),
     },
     setStatus,
   );
@@ -444,16 +224,13 @@ export const renderStrategyActions = (workspace, setStatus, refresh) => {
       'click',
       () => void openStrictBacktestDialog(strategy, setStatus),
     );
-    const backtest = el('button', 'btn btn-outline btn-sm', '模拟回测');
-    backtest.type = 'button';
-    backtest.addEventListener('click', () => void openBacktestDialog(strategy, setStatus));
     const sample = el('button', 'btn btn-outline btn-sm', '样本试跑');
     sample.type = 'button';
     sample.addEventListener('click', () => void runAction(strategy, false, setStatus, refresh));
     const formal = el('button', 'btn btn-primary btn-sm', '正式运行');
     formal.type = 'button';
     formal.addEventListener('click', () => void runAction(strategy, true, setStatus, refresh));
-    headerActions.append(strictBacktest, backtest, sample, formal);
+    headerActions.append(strictBacktest, sample, formal);
   }
   return headerActions;
 };

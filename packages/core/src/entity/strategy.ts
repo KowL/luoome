@@ -18,6 +18,10 @@ export const StrategySchema = z.object({
   owner: StrategyOwnerSchema,
   status: StrategyStatusSchema,
   currentVersionId: z.string().min(1).optional(),
+  /** 自动运行 cron 表达式；缺省表示未启用调度。 */
+  scheduleCron: z.string().min(1).optional(),
+  /** 最近一次调度运行时间；用于计算下一次到期。 */
+  lastScheduledAt: z.coerce.date().optional(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });

@@ -108,9 +108,6 @@ const resetChatIdentity = () => {
 const TOOL_LABELS = {
   fetch_quote: '读取行情',
   web_fetch: '读取网页',
-  research_investment_directions: '参与方向研究',
-  save_investment_consensus: '保存参与共识',
-  set_investment_tracking: '调整方向跟踪',
   create_account: '创建账户',
   add_holding: '登记持仓',
   update_holding: '更新持仓',
@@ -132,7 +129,7 @@ const TOOL_LABELS = {
   create_alert_plan: '创建 AlertPlan',
   update_alert_plan: '更新 AlertPlan',
   delete_alert_plan: '删除 AlertPlan',
-  create_research_topic: '创建研究主题',
+  create_research_document: '创建研究笔记',
   analyze_stock: '分析个股',
   analyze_position: '分析持仓',
   market_outlook: '市场观点',
@@ -195,23 +192,6 @@ const settlementText = (settlement) => {
     return '执行中；若页面或进程曾中断，请核对实际账本后可取消该草案';
   if (settlement.status === 'succeeded') {
     const data = settlement.result?.ok ? settlement.result.data : null;
-    if (settlement.tool === 'research_investment_directions' && data?.research) {
-      const research = data.research;
-      if (research.status === 'complete') return '方向研究已完成；保存共识与开启跟踪需分别确认。';
-      return `${research.status === 'unavailable' ? '事实不足，未生成方向' : '研究未完成，未生成可用方向'}。${research.limitations.at(-1) ?? '请核对数据与模型状态后重新研究。'}`;
-    }
-    if (settlement.tool === 'save_investment_consensus' && data?.consensus)
-      return data.consensus.status === 'revoked'
-        ? `共识 v${data.consensus.version} 已撤销。`
-        : `共识 v${data.consensus.version} 已保存；方向跟踪需另行确认。`;
-    if (settlement.tool === 'set_investment_tracking' && data?.tracking)
-      return {
-        starting: '跟踪启动尚未完成，请核对实际状态。',
-        tracking: '候选同步已连接；后台运行与手机送达仍需核对。',
-        partial: '候选同步部分可用，请核对未连接方向及调度状态。',
-        failed: '方向跟踪启动失败，已保存的共识仍保留。',
-        paused: '方向新候选同步已暂停；持仓风险监控不受此操作影响。',
-      }[data.tracking.status];
     return `${toolLabel(settlement.tool)}执行成功`;
   }
   const reason = resultErrorText(settlement.result, '未知错误');
@@ -330,13 +310,6 @@ const draftCard = (draft) => {
   }
   if (draft.settlement !== undefined) {
     const data = draft.settlement.result?.ok ? draft.settlement.result.data : null;
-    const incomplete =
-      (draft.tool === 'research_investment_directions' &&
-        data?.research &&
-        data.research.status !== 'complete') ||
-      (draft.tool === 'set_investment_tracking' &&
-        data?.tracking &&
-        ['starting', 'partial', 'failed'].includes(data.tracking.status));
     card.append(
       el(
         'p',

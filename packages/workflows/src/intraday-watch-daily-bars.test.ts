@@ -158,18 +158,21 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
       lastEvaluatedAt: T0,
     });
     const sent: { title: string; content: string; level: string }[] = [];
-    const notification = ctx.notification;
+    const notification = ctx.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const patched = {
       ...ctx,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sent.push({
-            title: input.payload.title,
-            content: input.payload.content,
-            level: input.payload.level,
-          });
-          return notification.send(input);
+      adapters: {
+        ...ctx.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sent.push({
+              title: input.payload.title,
+              content: input.payload.content,
+              level: input.payload.level,
+            });
+            return notification.send(input);
+          },
         },
       },
     };

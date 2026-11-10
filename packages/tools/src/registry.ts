@@ -3,9 +3,7 @@ import { z } from 'zod';
 import type { Tool } from './define-tool.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
 import { addHoldingTool } from './tools/add-holding.js';
-import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
-import { agentRunTool } from './tools/agent-run.js';
 import {
   createAlertPlanTool,
   deleteAlertPlanTool,
@@ -27,33 +25,20 @@ import {
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
-import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
-import {
-  getDecisionReviewContextTool,
-  getDecisionWriteReceiptTool,
-  listDecisionReviewsTool,
-  saveDecisionReviewTool,
-} from './tools/decision-review.js';
+import { listDecisionReviewsTool, saveDecisionReviewTool } from './tools/decision-review.js';
 import { deleteAdviceTool } from './tools/delete-advice.js';
 import { deleteReportTool } from './tools/delete-report.js';
-import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
-import { getFinancialFactsTool, syncFinancialFactsTool } from './tools/financial-facts.js';
-import { getFundamentalScoreTool, runFundamentalScoreTool } from './tools/fundamental-score.js';
-import { generateStrategyRecommendationsTool } from './tools/generate-strategy-recommendations.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
-import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
-import { getDecisionReviewSnapshotTool } from './tools/get-decision-review-snapshot.js';
 import { getHoldingTool } from './tools/get-holding.js';
-import { getIntradayDeliveryAuditTool } from './tools/get-intraday-delivery-audit.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
@@ -61,21 +46,12 @@ import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
-import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
-import {
-  getInvestmentCandidatesTool,
-  getInvestmentWorkspaceTool,
-  researchInvestmentDirectionsTool,
-  saveInvestmentConsensusTool,
-  setInvestmentTrackingTool,
-} from './tools/investment-workspace.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listReportsTool } from './tools/list-reports.js';
-import { listStockEventsTool } from './tools/list-stock-events.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
@@ -89,38 +65,13 @@ import {
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
 } from './tools/portfolio-performance.js';
-import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
-import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
-import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
-import { refreshDecisionReviewReportTool } from './tools/refresh-decision-review-report.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
-  evaluateResearchEmbeddingsTool,
-  getResearchEmbeddingStatusTool,
-  rebuildResearchEmbeddingsTool,
-  searchResearchDocumentsHybridTool,
-} from './tools/research-embedding.js';
-import {
-  createResearchHypothesisVersionTool,
-  listResearchHypothesisVersionsTool,
-} from './tools/research-hypothesis.js';
-import {
-  archiveResearchTopicTool,
-  buildResearchBriefTool,
   createResearchDocumentTool,
-  createResearchTopicTool,
   getResearchDocumentTool,
-  getResearchTopicTool,
-  getStockResearchViewTool,
-  importLocalResearchDocumentTool,
-  importRemoteResearchDocumentTool,
-  linkResearchDocumentTool,
   listResearchDocumentsTool,
-  listResearchTopicsTool,
   searchResearchDocumentsTool,
-  syncResearchVaultTool,
 } from './tools/research-vault.js';
-import { getResearchVaultRemoteSyncStatusTool } from './tools/research-vault-git-sync.js';
 import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
@@ -132,11 +83,6 @@ import {
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
 import {
-  confirmStrategyAutonomyActionTool,
-  listStrategyAutonomyActionsTool,
-  rejectStrategyAutonomyActionTool,
-} from './tools/strategy-autonomy-action.js';
-import {
   createStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
@@ -146,20 +92,7 @@ import {
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
 } from './tools/strategy-definition.js';
-import {
-  cancelStrategyEvaluationSessionTool,
-  finishStrategyEvaluationSessionTool,
-  getStrategyEvaluationSessionTool,
-  getStrategyPitUniverseTool,
-  listStrategyEvaluationDaysTool,
-  recordStrategyEvaluationDayTool,
-  resumeStrategyEvaluationSessionTool,
-  startStrategyEvaluationSessionTool,
-} from './tools/strategy-evaluation.js';
-import {
-  getStrategyDslCatalogTool,
-  getStrategyExperimentContextTool,
-} from './tools/strategy-experiment.js';
+import { getStrategyDslCatalogTool } from './tools/strategy-experiment.js';
 import {
   generateStrategyInsightTool,
   getStrategyInsightFactsTool,
@@ -177,11 +110,6 @@ import {
   validateStrategyVersionTool,
 } from './tools/strategy-lifecycle.js';
 import {
-  exportStrategyManifestTool,
-  importStrategyManifestTool,
-  validateStrategyManifestTool,
-} from './tools/strategy-manifest.js';
-import {
   compareStrategyRunsTool,
   getStrategyRunTool,
   getStrategyWorkspaceTool,
@@ -190,22 +118,12 @@ import {
   strategySignalsByStockTool,
 } from './tools/strategy-query.js';
 import {
-  assessAdaptivePersonalityTool,
-  runLocalSelectorResearchTool,
-} from './tools/strategy-research.js';
-import {
-  getStrategyScheduleTool,
-  renewStrategyScheduleClaimTool,
-  setStrategyScheduleTool,
-} from './tools/strategy-schedule.js';
-import {
   listStrategyWatchlistSubscriptionsTool,
   subscribeStrategyToWatchlistTool,
   unsubscribeStrategyFromWatchlistTool,
 } from './tools/strategy-watchlist-subscription.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
-import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
 import {
   evaluateTradingPlanBudgetTool,
@@ -215,7 +133,6 @@ import {
 } from './tools/trading-plan.js';
 import { updateAccountTool } from './tools/update-account.js';
 import { updateHoldingTool } from './tools/update-holding.js';
-import { updateStockEventTool } from './tools/update-stock-event.js';
 import {
   addWatchlistMembersTool,
   addWatchlistMemberTool,
@@ -339,7 +256,6 @@ export const toolRegistry: Registry = createRegistry([
   renameChatSessionTool,
   deleteChatSessionTool,
   appendChatMessageTool,
-  agentRunTool,
   listAccountsTool,
   createAccountTool,
   updateAccountTool,
@@ -353,17 +269,9 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
   getDecisionLoopReviewTool,
-  getDecisionReviewSnapshotTool,
-  refreshDecisionReviewReportTool,
-  getDecisionReviewContextTool,
   listDecisionReviewsTool,
-  getDecisionWriteReceiptTool,
   saveDecisionReviewTool,
-  recordDecisionTradeTool,
   getStrategyDecisionCyclesTool,
-  getStrategyRecommendationPreflightHistoryTool,
-  getFinancialFactsTool,
-  getFundamentalScoreTool,
   getWatchStatusTool,
   analyzeStockTool,
   analyzeStrategyCandidateTool,
@@ -379,8 +287,6 @@ export const toolRegistry: Registry = createRegistry([
   getStockMinuteBarsTool,
   syncQuotesTool,
   syncDailyBarsTool,
-  syncFinancialFactsTool,
-  runFundamentalScoreTool,
   getPreviousClosesTool,
   searchStocksTool,
   computeIndicatorsTool,
@@ -392,33 +298,20 @@ export const toolRegistry: Registry = createRegistry([
   createStrategyVersionTool,
   compareStrategyDefinitionsTool,
   getStrategyDslCatalogTool,
-  getStrategyExperimentContextTool,
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
   validateStrategyVersionTool,
-  exportStrategyManifestTool,
-  validateStrategyManifestTool,
-  importStrategyManifestTool,
   publishStrategyVersionTool,
   pauseStrategyTool,
   resumeStrategyTool,
   archiveStrategyTool,
   runStrategyTool,
   trialStrategyTool,
-  prepareStrategyDataTool,
   createPortfolioCashFlowTool,
   createPortfolioCorporateActionTool,
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
   auditPortfolioPerformanceSnapshotsTool,
-  getStrategyPitUniverseTool,
-  getStrategyEvaluationSessionTool,
-  listStrategyEvaluationDaysTool,
-  startStrategyEvaluationSessionTool,
-  recordStrategyEvaluationDayTool,
-  finishStrategyEvaluationSessionTool,
-  resumeStrategyEvaluationSessionTool,
-  cancelStrategyEvaluationSessionTool,
   createStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
@@ -427,24 +320,14 @@ export const toolRegistry: Registry = createRegistry([
   listStrategyResultViewsTool,
   getStrategyWorkspaceTool,
   compareStrategyRunsTool,
-  runLocalSelectorResearchTool,
-  assessAdaptivePersonalityTool,
   strategySignalsByStockTool,
   listPendingStrategyObservationsTool,
   completeStrategyObservationsTool,
   getSignalObservationStatsTool,
-  createStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
   generateStrategyInsightTool,
   // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列写入口；
   // 创建/转移为 workflow-only，不进公共 registry）
-  listStrategyAutonomyActionsTool,
-  confirmStrategyAutonomyActionTool,
-  rejectStrategyAutonomyActionTool,
-  generateStrategyRecommendationsTool,
-  getStrategyScheduleTool,
-  setStrategyScheduleTool,
-  renewStrategyScheduleClaimTool,
   listWatchlistsTool,
   getWatchlistTool,
   createWatchlistTool,
@@ -462,14 +345,8 @@ export const toolRegistry: Registry = createRegistry([
   createAlertPlanTool,
   updateAlertPlanTool,
   deleteAlertPlanTool,
-  recordAdviceOutcomeTool,
   sendNotificationTool,
   marketOutlookTool,
-  researchInvestmentDirectionsTool,
-  getInvestmentWorkspaceTool,
-  saveInvestmentConsensusTool,
-  setInvestmentTrackingTool,
-  getInvestmentCandidatesTool,
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
   limitUpLadderTool,
   limitUpLadderCompareTool,
@@ -487,37 +364,13 @@ export const toolRegistry: Registry = createRegistry([
   updateHoldingTool,
   closeHoldingTool,
   listWatchTriggersTool,
-  getIntradayDeliveryAuditTool,
-  getClosingBatchAuditTool,
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
-  // ruo 迁移 Phase 1：研究档案 + 公司事件 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
-  listStockEventsTool,
-  addStockEventTool,
-  updateStockEventTool,
-  listResearchTopicsTool,
-  createResearchHypothesisVersionTool,
-  listResearchHypothesisVersionsTool,
-  getResearchTopicTool,
-  createResearchTopicTool,
+  // ruo 迁移 Phase 1：研究档案 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
   createResearchDocumentTool,
-  importLocalResearchDocumentTool,
-  importRemoteResearchDocumentTool,
-  linkResearchDocumentTool,
-  archiveResearchTopicTool,
-  buildResearchBriefTool,
   listResearchDocumentsTool,
   getResearchDocumentTool,
   searchResearchDocumentsTool,
-  getResearchEmbeddingStatusTool,
-  searchResearchDocumentsHybridTool,
-  rebuildResearchEmbeddingsTool,
-  evaluateResearchEmbeddingsTool,
-  getStockResearchViewTool,
-  getResearchVaultRemoteSyncStatusTool,
-  syncResearchVaultTool,
-  deleteStockEventTool,
-  syncStockEventsTool,
   syncStockUniverseTool,
   getMarketDataStatusTool,
   getAShareSentimentTool,

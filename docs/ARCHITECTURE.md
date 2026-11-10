@@ -77,7 +77,7 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflows 只依赖 core 接口，不耦合 Drizzle。
 
 好处：
-- 测试用 in-memory mock repo，不依赖真实数据库
+- 测试用 SQLite `:memory:` 库（同一套 Drizzle 实现），不依赖磁盘数据库
 - 将来换 DuckDB / Postgres 不动业务层
 
 ### 2.6 副作用分级 + Advisor 边界
@@ -97,7 +97,7 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
 
-Research 检索以 SQLite FTS5 为确定性基线。可选 embedding adapter 通过 `ToolContext.researchEmbedding` 注入；Tool 只面向 core 的稳定接口，不读取 provider 配置。embedding 投影属于 db 中可重建读模型，由独立 `ResearchEmbeddingRepository` 的 Drizzle/in-memory 双实现维护，并按 `provider + model + dimensions + version + chunk contentHash` 隔离和失效。混合检索、增量重建和固定跨模型评测均通过 Tool 暴露，Web/Agent 不复制融合或指标逻辑。
+研究笔记检索以 SQLite FTS5 为确定性基线：`research_document_index` 单表保存文档元数据（标题、excerpt、标签、显式 stockCodes、本地 Markdown 路径与来源/校验字段），`research_document_fts` 是按 document 粒度的可重建 FTS5 投影，正文来自同步时读取的本地 Markdown。没有 topic / hypothesis / subject-link / chunk / embedding / git-sync 表，也没有 embedding adapter；检索接口固定在 `ResearchIndexRepository`，Web/Agent 不复制检索逻辑。
 
 **advice ≠ trade**：advice 永远不能直接触发 trade。trade 永远是 human-in-the-loop。
 
@@ -453,26 +453,29 @@ EastmoneySource 实例，无关 manager 的缓存不清空。
 
 LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/TUI/Web/MCP 四个
 composition root 均调用 `createAIStackFromEnv`，一次加载
-`$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），并把同一模型目录解析出的
-`generation`、`agent` profile 分别注入 `LLMAdapterLike` 与
-`AgentRuntimeLike`。provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；
-core 只保留 SDK 无关的端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
+`$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），把 `generation` profile
+解析为 `LLMAdapterLike` 注入 `ctx.adapters.llm`。`agent` profile 仍是 Agent 模型的
+配置来源（Web 设置页读写），供 DSH Chat runtime 消费，不再注入 `ToolContext`。
+provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；core 只保留 SDK 无关的
+端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
 
 Web 额外提供受同源 Origin 保护的 `/api/settings/ai`：
 GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥；POST 原子写入
 模型目录与权限为 `0600` 的 `$LUOOME_HOME/.env`，随后替换
-`ctxRef.current.adapters.llm` / `agent`，使新配置在当前进程立即生效。模型未配置或
+`ctxRef.current.adapters.llm`，使新配置在当前进程立即生效。模型未配置或
 配置损坏时 Web 使用 `ai-unconfigured` 占位端口启动，允许用户从设置页修复；其它
 surface 仍保持启动期快速失败。
 
-Web 对话默认复用同一个 `AISDKAgentRuntime`，由 adapters 内部
-`ToolLoopAgent.stream()` + `createAgentUIStreamResponse()` 生成 AI SDK UI Message
-SSE；Web 只提供从 registry 派生的显式工具白名单并消费标准 Web `Response`，core
-不依赖 AI SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
+旧版自研 AI SDK `ToolLoopAgent` agent loop 与 `agent_run` tool 已删除，不保留回退运行时。
+Web 对话只经 `ChatStreamRuntime` 端口；生产 Web 对话待 M3 按
+[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 接入受控内嵌
+DSH Runtime，当前仅在注入 `chatStreamRuntime` 的测试与集成夹具路径可用（未注入时
+`POST /api/chat` 返回 503「AI 模型尚未配置」）。Web 只提供从 registry 派生的显式工具白名单
+并消费标准 Web `Response`，core 不依赖任何 Agent SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
 Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage` 及
-`ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
+`ChatRepository` 位于 core，Drizzle repository 位于 db（测试跑 `:memory:`）；Web 会话端点经
 tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 user message，
-服务端加载最近 20 条消息并在 AI SDK `onFinish` 后保存 assistant UI message parts。
+服务端加载最近 20 条消息并在 runtime 的 `onFinish` 后保存 assistant UI message parts。
 已完成的工具结果和 step 边界保留到下一轮。草案确认使用
 `POST /api/chat/sessions/:id/drafts/:messageId/:toolCallId` → `settle_chat_draft`，仅执行
 服务端存储的输入；repository 通过原子认领和 parts 比较更新保存每项执行状态，重复请求不重复写入。
@@ -480,7 +483,7 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
-另有显式启用的 DSH Chat 路径：Bun Web → 独立 Node Host → DSH/Cordis。
+DSH Chat 路径（当前唯一 Web 对话运行时）：Bun Web → 独立 Node Host → DSH/Cordis。
 `packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
 业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
 官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。此接入不使用 MCP，也不加载 DSH Web UI。
@@ -512,7 +515,6 @@ interface ToolContext {
     market: MarketDataAdapterLike;
     llm: LLMAdapterLike;
   };
-  agent?: AgentRuntimeLike;
   limitUpLadder?: LimitUpLadderManagerLike;
   dragonTiger?: DragonTigerManagerLike;
   northboundFlow?: NorthboundFlowManagerLike;
@@ -524,9 +526,9 @@ interface ToolContext {
 }
 ```
 
-`ctx` 是唯一被允许注入依赖的方式。`AgentRuntimeLike` 是 SDK 无关投影；AI SDK 的
-`LanguageModel` / `ToolLoopAgent` 类型只存在于 adapters。`agent_run` 从 registry
-构造显式只读能力白名单，不能绕过 tool 契约直接访问 repository 或 adapter。
+`ctx` 是唯一被允许注入依赖的方式。多步 Agent 推理不属于 `ToolContext`：Web 对话由
+DSH Chat runtime 在 tools 之外编排，只经显式白名单调用 tool，不能绕过 tool 契约直接访问
+repository 或 adapter；core 不定义任何 agent loop 类型。
 `limitUpLadder` 等非行情 manager 是日级批量快照端口，保持为顶层可选字段，
 不混入逐标的实时行情 Gateway；各 manager 的必填 `status()` 是统一观测端口，
 直接委托各自 registry 的进程内健康观测（见 §4.7）。
@@ -571,7 +573,7 @@ ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），�
 重复运行复用原报告；底层 version 与前驱字段保留以读取历史报告和周报修订。周期查询返回
 最新版，列表先按周期收敛再应用状态和条数筛选，历史版本仍可按 ID 或指定 version 读取。正文只允许受限
 section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺失时必须为
-`partial` 并保存原因。`ReportRepository` 同时提供 in-memory 与 Drizzle 实现；
+`partial` 并保存原因。`ReportRepository` 提供 Drizzle 实现（测试跑 `:memory:`）；
 `get_report` / `list_reports` / `render_report` 为 read，`save_report` /
 `set_report_delivery_status` 为 write。Web 报告历史、详情和导出统一调用这些 tool，
 不复制 partial 判定或 renderer。详细设计见
@@ -709,7 +711,7 @@ export interface AdviceDataSnapshot {
   readonly dataAsOf: Date;               // 数据截止时间
 }
 
-// 建议结果的兼容输出；当前账户反馈由 DecisionReviewRevision 投影
+// 建议结果的兼容输出；当前账户反馈由 DecisionReview.content.adviceFeedback 投影
 export interface AdviceOutcome {
   readonly adviceId: string;
   readonly outcome: 'followed' | 'partially_followed' | 'ignored';
@@ -761,9 +763,6 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 | `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
-| `run_local_selector_research` | PIT StockUniverse + batch qfq DailyBar revisions + versioned params | deterministic cross-sectional score/evidence/unavailable（read-only research） |
-| `assess_adaptive_personality` | StrategyVersion + isolated evaluation sessions + observations/benchmark | versioned credibility gate；insufficient evidence is unavailable（never publishes） |
-| `get_stock_research_view` | explicit ResearchTopic/Document links + structured facts | stock research profile with evidence/counter-evidence/unknown（not probability/Advice） |
 | `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
 | `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
 | `analyze_strategy_candidate` | selected StrategyResult + signals + observations | 可追溯 **Advice** |
@@ -831,45 +830,30 @@ LLM 推理部分用 schema-constrained decoding（OpenAI structured outputs / An
 
 ### 6.4 复盘层
 
-`DecisionReview` 是账户决策记录的权威实体，以账户和明确来源唯一；来源为 Advice、
-TradingPlanVersion 或 WatchTrigger。`context` 在首次保存时冻结，来源删除后继续可读。
-`DecisionReviewRevision` 追加保存完整内容、成交事实指纹与全局序列；当前关联表是最新修订的投影。
-旧 `AdviceOutcome` 和 Trigger feedback 的无账户数据不再直接供当前统计使用，兼容读写 tool
-通过当前账户的复盘修订投影结果。启动迁移仅接收可验证的旧 `Trade.adviceId` 显式关联，
-既有记录不被覆盖，也不据此生成 followed 反馈。
+`DecisionReview` 是账户决策记录的权威实体，单表保存：`(account_id, subject_kind, subject_id)`
+唯一，`subject_kind` 为 `advice | trading-plan | trade`，`content_json` 内联复盘结论（`note`）、
+教训标签（`lessonTags`）、关联成交（`tradeIds`）与 Advice 结果反馈（`adviceFeedback`）。
+再次保存同一对象是 upsert：保留原 `id` 与 `created_at`，整体替换内容并更新 `updated_at`；
+不保留修订历史、依据快照或写回执，避免版本链与幂等回执协议。
 
-`get_decision_review_context` 返回冻结依据、当前及历史修订、显式后续观察、关联成交状态与账本资格。
-只有沿来源身份校验过的 SignalObservation 能作为后续事实，不按同股或相近日期推断证据链。
-`save_decision_review` 校验 contextHash 和 expectedRevision 后追加修订；
-`record_decision_trade` 登记系统外已完成但尚未入账的成交，事务内同时保存 Trade、Holding、
-Account.cashBalance、所选来源修订和请求回执。该路径只允许对账可用账本的顺序追加，
-不调用券商，sideEffect 为 trade，MCP 永不暴露。
+`save_decision_review` 校验复盘对象存在且属于当前账户，关联成交必须属于该账户并与对象同股；
+建议结果只允许出现在 Advice 复盘上。`list_decision_reviews` 按 `updated_at` 倒序，
+`[since, until)` 半开窗口，游标绑定账户与筛选条件。
+`get_advice_stats`、`get_confidence_calibration` 与 `get_decision_loop_review` 从单表
+`adviceFeedback` 投影 AdviceOutcome；未记录、未填盈亏与明确零盈亏分别处理，不把未知盈亏写成 0。
 
-写请求由 `accountId + requestId` 标识：同键同内容返回已保存回执，同键异内容拒绝；
-账本、来源或修订已变化时要求刷新确认，任一提交失败不得留下部分成交或关联。
-Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源校验，并将请求绑定到当前账户。
-页面在发送前保存未决请求，恢复时校验原账户并查询回执或复用原请求，避免丢失响应后重复入账。
-导出包含修订、关联与回执；合并导入在事务中校验跨账户关系和不可变内容冲突，失败全量回滚。
+盯盘提醒反馈直接写 `watch_triggers.feedback / feedback_at`（`set_watch_trigger_feedback`），
+不再经由复盘表。录入系统外成交统一走 `add_trade`，不再提供复盘专用成交包装器。
 
-`list_decision_reviews` 支持 `source`（依据发生时间）与 `recorded`（修订记录时间）两种口径，
-时间窗口为 `[since, until)`。游标绑定账户、筛选条件与修订水位；`recorded` 返回窗口内的修订活动，
-不能被解释为当时生成的依据。复盘列表在首页最多扫描 10001 条计算 total/coverage，并将统计
-快照随游标沿用；旧游标缺少快照时补算一次。超过 10000 条时仍返回 total=null、partial 与 truncated。
-成交选择分页绑定事实快照，事实变动时要求重新读取。
-
-`get_advice_stats`、`get_confidence_calibration` 与 `get_decision_loop_review` 使用账户口径，
-输出 schemaVersion 2。统计包含已过期建议；通用股票建议只有被本账户明确记录后才进入该账户样本。
-`feedbackCount / withOutcome` 表示明确反馈数，`followedWithPnl` 表示 followed 且明确填写盈亏的样本数；
-`hitRate` 是该样本中 pnl > 0 的比例，无样本时为 null。未记录、未填盈亏与明确零盈亏分别处理，
-不汇总可能重复关联的主观盈亏；`pnlWhenFollowed / pnlWhenIgnored / avgPnl` 保持 null。
-这些指标是填报样本的描述，不是交易收益率、收益承诺或 confidence 对应的成功概率。
-
-账户收盘/周报以 `decisionReviewSnapshot` 保存窗口、修订水位、修订身份与当前成交事实指纹。
-`refresh_decision_review_report` 只消费本地事实，在校验最新报告、修订水位与成交指纹后原子追加
-周报不可变版本和幂等回执，原报告及其其它章节保留；收盘报告拒绝追加复盘补充版。
-周报复盘补充版的 `notificationPolicy=never`
-同时由 workflow、tool 与 repository 的投递路径约束，不能认领、重试或改写成可投递状态。
+账户收盘/周报以 `decisionReviewFingerprint` 保存窗口内复盘输入的指纹；周报补充版在该指纹
+变化时以 `notificationPolicy=never` 保存，且不能认领、重试或改写成可投递状态。
 正常主报告及研究补充版保持原通知政策；周报事实未变时复用原报告，原失败投递仍可按原政策重试。
+
+导出导入按单表 `decision_reviews` 校验成交归属，失败全量回滚。
+
+启动迁移：旧库的 `decision_reviews` 缺少 `content_json` 时，建新表并复制 advice /
+trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `trading-plan`），
+再把旧表重命名为 `decision_reviews_legacy` 保留数据；旧附属表不再创建也不要求删除。
 
 ### 6.5 Advice 有效期限
 
@@ -977,7 +961,7 @@ type ToolError =
   不伪造不存在的市场事件。`get_intraday_delivery_audit` 按账户与上海自然日读取完整触发集合，
   将渠道受理的 10 分钟内、超时、时点不可核验与未受理状态分别计数；P95 只对时点可核验的
   渠道受理样本计算，同时展示全部候选分母，不把渠道受理当作设备送达。
-- 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
+- 预警执行：`intraday-watch` 使用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。所有优先级都进入投递：normal 与 urgent 同样受冷却
   和每日上限约束，优先级只决定消息 level 与标题前缀；`notifyOnRecovery` 未开启的 recovered 与试跑
   仍为 `not-requested`。`commit_watch_evaluation` 在同一事务校验 owner
@@ -990,7 +974,7 @@ type ToolError =
   `render_report(format=notification)` 从结构化报告生成有长度预算的移动摘要，不截取完整 Markdown；
   `markdown/plain-text` 继续保留完整证据。列表可保存 `notificationSummary` 作为生成时的阅读投影，
   旧报告缺少该字段时仅提供核对入口，不从长文本猜测交易结论。飞书适配器只在卡头展示标题。
-  通知板块采用显式允许列表，仅包含市场、策略研究、预警和事件；账户估值/仓位/交易计划、交易归因、
+  通知板块采用显式允许列表，仅包含市场、策略研究、预警；账户估值/仓位/交易计划、交易归因、
   个人行为与混合数据质量板块留在完整报告，私有板块缺口不参与通知告警。存量建议摘要去除目标仓位行。
   正文空指标聚合说明，全空表格列省略，诊断缺口去重后集中展示；结构化快照保留原始 null 和缺失原因。
   单日账户绩效向前取一个交易日作为收益基点；未配置基准不输出空指标，多账户 TWR/回撤不做算术聚合。

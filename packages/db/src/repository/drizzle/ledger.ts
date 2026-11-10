@@ -166,7 +166,6 @@ export class DrizzleLedgerRepository implements LedgerRepository {
       executedAt: trade.executedAt,
       source: trade.source,
       adviceId: trade.adviceId ?? null,
-      researchHypothesisVersionId: trade.researchHypothesisVersionId ?? null,
       strategyVersionId: trade.strategyVersionId ?? null,
       createdAt: trade.createdAt,
     };

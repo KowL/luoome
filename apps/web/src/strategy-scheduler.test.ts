@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
-import { type RunStrategySchedulesOutputT, strategyDailyCycleWorkflow } from '@luoome/workflows';
+import { type RunStrategySchedulesOutputT, runStrategySchedulesWorkflow } from '@luoome/workflows';
 
 import { startStrategyScheduler, strategySchedulerTuningFromEnv } from './strategy-scheduler.js';
 
@@ -110,21 +110,24 @@ describe('strategy scheduler', () => {
     const base = await buildTestContext({ clock: () => now });
     const ctx: ToolContext = {
       ...base,
-      notification: {
-        send: async (input) => {
-          const notification = {
-            id: input.id ?? 'missing-report-id',
-            channel: input.channel,
-            payload: input.payload,
-            result: channelFailed ? ('failed' as const) : ('success' as const),
-            sentAt: now,
-          };
-          await base.repos.notification.save(notification);
-          return { notification };
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input) => {
+            const notification = {
+              id: input.id ?? 'missing-report-id',
+              channel: input.channel,
+              payload: input.payload,
+              result: channelFailed ? ('failed' as const) : ('success' as const),
+              sentAt: now,
+            };
+            await base.repos.notification.save(notification);
+            return { notification };
+          },
         },
       },
     };
-    const initial = await strategyDailyCycleWorkflow.run({}, ctx);
+    const initial = await runStrategySchedulesWorkflow.run({}, ctx);
     expect(initial.ok).toBe(true);
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(3);

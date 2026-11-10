@@ -40,7 +40,7 @@ workflows ──► tools ──► core
 - Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
 - Workflow 只通过 `ctx.tools.*` 编排能力，不直接绕过 tool 调 repository 或 adapter。
-- 新 repository 必须同时提供 drizzle 与 in-memory 实现，并复用 contract tests 验证一致性。
+- 新 repository 只需提供 Drizzle 实现；contract tests 直接对 `createDrizzleRepos(':memory:')` 跑一遍（测试内存库就是 SQLite `:memory:`）。
 - Drizzle schema 与 `ensureSchema` 的 SQLite DDL 必须同步；存量库变更要保持启动迁移幂等。
 
 ## 实现约定
@@ -68,7 +68,7 @@ workflows ──► tools ──► core
 | 命令 | 范围 |
 |---|---|
 | `bun run test` | Vitest 的 Node 兼容测试；排除项见 `vitest.config.ts` |
-| `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
+| `bun run test:db` | Bun 运行时的 db、schema 与 SQLite 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上述全部测试 |
 | `bun run typecheck` | 所有 workspace 的 TypeScript 检查 |
@@ -83,7 +83,7 @@ workflows ──► tools ──► core
 ## 变更同步清单
 
 - **Core entity**：schema、类型、不变量、导出和测试同步。
-- **Repository**：接口、drizzle、memory、registry 接线和 contract tests 同步。
+- **Repository**：接口、drizzle、registry 接线和 contract tests 同步。
 - **Tool**：schema、实现、桶导出、registry、sideEffect、测试以及 Skill 的能力分类同步。
 - **Workflow**：`WorkflowToolMap`、实现、导出、CLI 发现和测试同步。
 - **API/Web**：服务端契约、前端调用、鉴权/Origin 行为、测试和浏览器验收同步。

@@ -78,17 +78,14 @@ describe('Gateway callable manifest', () => {
     );
   });
 
-  it.each([
-    'settle_chat_draft',
-    'add_trade',
-    'ensure_default_account',
-    'get_stock_market_view',
-    'agent_run',
-  ])('does not expose %s even when its name is supplied', (name) => {
-    expect(() =>
-      buildGatewayCallableManifest([callable(name)], AGENT_SCENARIOS.research),
-    ).toThrow();
-  });
+  it.each(['settle_chat_draft', 'add_trade', 'ensure_default_account', 'get_stock_market_view'])(
+    'does not expose %s even when its name is supplied',
+    (name) => {
+      expect(() =>
+        buildGatewayCallableManifest([callable(name)], AGENT_SCENARIOS.research),
+      ).toThrow();
+    },
+  );
 
   it('rejects duplicate business/native names and narrowing to another scenario', () => {
     expect(() =>

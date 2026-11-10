@@ -55,7 +55,7 @@ luoome/
 ├── packages/
 │   ├── core/          领域类型（Account/Holding/Trade/Stock/Advice/...）+ 不变量
 │   │                  纯类型 + 函数，零 IO。branded types 都在这。
-│   ├── db/            Drizzle schema + 双实现 repo（drizzle + in-memory）
+│   ├── db/            Drizzle schema + repository 实现（测试用 :memory: SQLite）
 │   │                  依赖 bun:sqlite；只能由 Bun 运行时 import。
 │   ├── adapters/      外部依赖适配
 │   │   ├── market/    Eastmoney / Sina / Tencent 行情
@@ -112,7 +112,7 @@ workflows ──► tools ──► core
 |---|---|
 | `bun run typecheck` | 全 monorepo 跑 `tsc --noEmit` |
 | `bun test` | Node 兼容的 Vitest 测试 |
-| `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
+| `bun run test:db` | Bun 运行时的 db、schema 与 SQLite 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
 | `bun run lint` | Biome lint + format 检查 |
@@ -217,7 +217,7 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 
 `bun run test:db` 跑 bun test，专覆盖：
 
-- `packages/db` 的 **合约测试**（contract-tests.ts）—— 同一套测试对 drizzle + in-memory 两个 repo 各跑一遍，确保行为一致
+- `packages/db` 的 **合约测试**（contract-tests.ts）—— 对 `createDrizzleRepos(':memory:')` 跑一遍（内存库即 SQLite `:memory:`）
 
 TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
 
@@ -236,7 +236,7 @@ TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
 - 命名 `<name>.test.ts`，放源文件旁
 - 单测聚焦一个断言；多个 case 用 `it.each` 拆
 - 工具函数 / 不可变数据用 `expect(x).toBe(y)`；对象 / 数组用 `toEqual`
-- Drizzle 测试用 in-memory repo 加速；合约测试必须 drizzle + memory 都跑
+- 测试用 `:memory:` SQLite 加速（node 侧由 vitest alias 映射到 node:sqlite shim）；合约测试跑一遍即可
 
 ## PR 流程
 
@@ -336,7 +336,7 @@ toolRegistry.register(myTool);
 
 1. 在 `packages/tools/src/tools/my-tool.test.ts` 写至少 3 个测试：happy / invalid_input / not_found 或 adapter_error
 2. 在 `packages/core/src/entity/invariants.ts` 加 entity 不变量（如果是新 entity）
-3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle + memory 各实现
+3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle 实现（测试走 :memory:）
 4. 如果改 core：在 `packages/workflows/src/define-workflow.ts` 的 `WorkflowToolMap` 同步加 accessor
 5. 如果外部 Agent 的能力选择、调用顺序或安全边界变化，同步 `skills/luoome/` 对应 reference
 6. CLI `tools list` 应能见到（不需要额外改动，registry 自动）

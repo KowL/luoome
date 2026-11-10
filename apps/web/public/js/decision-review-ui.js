@@ -1,4 +1,4 @@
-import { callApi, getAccountId, getSessionEpoch, randomRequestId } from './api.js';
+import { callApi, getAccountId, getSessionEpoch } from './api.js';
 import {
   actionsRow,
   fieldWrap,
@@ -10,535 +10,210 @@ import {
 import { closeModal, openModal } from './modal.js';
 import { el, fmtDateTime, toolErrorText } from './ui.js';
 
-const PENDING_KEY = 'luoome.decisionPending';
-const pendingKey = () => {
-  const accountId = getAccountId();
-  return accountId ? `${PENDING_KEY}:${accountId}` : PENDING_KEY;
-};
-let volatilePending = null;
-let pendingBusy = false;
-let redrawPending = () => {};
-const rejectedKinds = new Set([
-  'invalid_input',
-  'not_found',
-  'invariant_violation',
-  'permission_denied',
-]);
 const subjectLabel = {
   advice: 'Advice',
-  'trading-plan-version': '交易计划版本',
-  'watch-trigger': '盯盘提醒',
+  'trading-plan': '交易计划',
+  trade: '成交',
 };
-const emptyContent = () => ({
-  tradeIds: [],
-  adviceFeedback: null,
-  triggerFeedback: null,
-  note: null,
-});
-const pendingRead = () => {
-  try {
-    return JSON.parse(sessionStorage.getItem(pendingKey()) ?? 'null') ?? volatilePending;
-  } catch {
-    return volatilePending;
-  }
-};
-const pendingWrite = (value) => {
-  volatilePending = value;
-  try {
-    sessionStorage.setItem(pendingKey(), JSON.stringify(value));
-    return true;
-  } catch {
-    volatilePending = null;
-    return false;
-  }
-};
-const pendingClear = () => {
-  volatilePending = null;
-  try {
-    sessionStorage.removeItem(pendingKey());
-  } catch {
-    /* 无可清理 */
-  }
-};
-globalThis.document?.addEventListener?.('luoome:identity-cleared', () => {
-  volatilePending = null;
-  pendingBusy = false;
-  redrawPending = () => {};
-  closeModal();
-});
-const shanghaiLocalNow = () => {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    })
-      .formatToParts(new Date())
-      .map(({ type, value }) => [type, value]),
-  );
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+const feedbackOptions = [
+  ['handled', '已处理'],
+  ['useful', '有用'],
+  ['useless', '无用'],
+  ['ignored', '忽略'],
+];
+const splitList = (value) =>
+  String(value ?? '')
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+/** 前端仍沿用「计划版本」对象；复盘单表把交易计划统一记为 subject.kind='trading-plan'。 */
+const normalizeSubject = (subject) =>
+  subject.kind === 'trading-plan-version' ? { kind: 'trading-plan', id: subject.id } : subject;
+
+const currentLine = (current) => {
+  if (current === null) return '尚未记录复盘。';
+  const bits = [`最近更新 ${fmtDateTime(current.updatedAt)}`];
+  const tags = current.content.lessonTags ?? [];
+  if (tags.length > 0) bits.push(`标签：${tags.join('、')}`);
+  const trades = current.content.tradeIds ?? [];
+  if (trades.length > 0) bits.push(`关联成交：${trades.join('、')}`);
+  return bits.join(' · ');
 };
 
-const sourceSummary = (source) => {
-  if (!source) return '原始来源已删除；以下内容来自首次记录时保存的快照。';
-  const bits = [
-    source.reasoning?.premise,
-    source.explanation?.summary,
-    source.reason,
-    source.action ? `计划动作：${source.action}` : null,
-    source.evidence?.length ? `证据：${source.evidence.join('；')}` : null,
-    source.reasoning?.counterEvidence?.length
-      ? `反证：${source.reasoning.counterEvidence.join('；')}`
-      : null,
-    source.risks?.length ? `风险：${source.risks.join('；')}` : null,
-    source.disclaimers?.length ? `免责声明：${source.disclaimers.join('；')}` : null,
-  ].filter(Boolean);
-  return bits.join('\n') || '原始依据已保存，可展开查看完整快照。';
+const contentSummary = (current) => {
+  if (current === null) return null;
+  const rows = [];
+  if (current.content.note !== null && current.content.note !== undefined)
+    rows.push(el('p', 'review-source-summary', current.content.note));
+  const feedback = current.content.adviceFeedback;
+  if (feedback !== null && feedback !== undefined) {
+    const bits = [`建议结果：${feedback.outcome}`];
+    if (feedback.pnl !== undefined) bits.push(`盈亏：${feedback.pnl}`);
+    if (feedback.holdingHours !== undefined) bits.push(`持仓小时：${feedback.holdingHours}`);
+    rows.push(el('p', 'muted', bits.join(' · ')));
+  }
+  return rows.length === 0 ? null : el('div', 'decision-review-summary', rows);
 };
 
-const labelCheckbox = (text, checked) => {
-  const label = el('label', 'field');
-  const checkbox = makeInput(undefined, { type: 'checkbox' });
-  checkbox.checked = checked;
-  label.append(checkbox, el('span', null, text));
-  return { label, checkbox };
+const setBusy = (button, busy) => {
+  button.disabled = busy;
 };
 
-export const openDecisionReview = async (subject, { onSaved = async () => {}, revision } = {}) => {
+const openDecisionReview = async (rawSubject, { onSaved = async () => {} } = {}) => {
+  const subject = normalizeSubject(rawSubject);
   const accountAtOpen = getAccountId();
   const epochAtOpen = getSessionEpoch();
   const isCurrent = () => getAccountId() === accountAtOpen && getSessionEpoch() === epochAtOpen;
-  const query = new URLSearchParams({ subjectKind: subject.kind, subjectId: subject.id });
-  if (revision !== undefined) query.set('revision', String(revision));
-  const response = await callApi(`/api/decision-reviews/context?${query}`, {
+
+  if (rawSubject.kind === 'watch-trigger') {
+    openTriggerFeedback(rawSubject, { onSaved, isCurrent });
+    return;
+  }
+
+  const body = el('div', 'decision-review-modal');
+  openModal(`决策与复盘 · ${subjectLabel[subject.kind] ?? subject.kind}`, body);
+  body.append(
+    el('p', 'muted', `账户：${accountAtOpen || '未选择'} · 对象：${subject.kind} / ${subject.id}`),
+  );
+  const status = el('p', 'muted', '正在读取最近复盘…');
+  body.append(status);
+
+  const query = new URLSearchParams({
+    subjectKind: subject.kind,
+    subjectId: subject.id,
+    limit: '1',
+  });
+  const loaded = await callApi(`/api/decision-reviews?${query}`, {
     headers: { 'x-luoome-account-id': accountAtOpen },
   });
   if (!isCurrent()) return;
-  if (!response.ok) {
-    openModal('决策与复盘', el('p', 'status error', toolErrorText(response.error)));
+  if (!loaded.ok) {
+    status.textContent = toolErrorText(loaded.error, '读取复盘失败');
     return;
   }
-  const context = response.data;
-  const old = context.selected?.revision.content ?? emptyContent();
-  const body = el('div', 'decision-review-modal');
-  const error = el('p', 'status error');
-  error.hidden = true;
-  const showError = (message) => {
-    error.textContent = message;
-    error.hidden = false;
-  };
-  body.append(
-    el(
-      'p',
-      'muted',
-      `账户：${context.accountId} · ${subjectLabel[subject.kind]} · 股票：${context.stockId ?? '组合'} · 依据生成：${context.sourceOccurredAt ? fmtDateTime(context.sourceOccurredAt) : '未知'}`,
-    ),
-  );
-  if (context.sourceStatus === 'unavailable')
-    body.append(el('p', 'status warning', '原来源已删除；可查看冻结快照和修改记录。'));
-  if (context.validUntil && new Date(context.validUntil) <= new Date())
-    body.append(
-      el('p', 'status warning', '历史依据当前已过期；关联真实成交仍会保留“发生时已过期”状态。'),
-    );
-  const source = context.context?.source;
-  body.append(el('h3', null, '当时依据'), el('p', 'review-source-summary', sourceSummary(source)));
-  const raw = el('details', null, [
-    el('summary', null, '查看原始快照'),
-    el('pre', 'mono', JSON.stringify(source ?? {}, null, 2)),
-  ]);
-  body.append(raw);
-  const observationBox = el('div', 'decision-observations');
-  observationBox.append(el('h3', null, '来源明确关联的观察'));
-  if (context.observationStatus === 'unavailable')
-    observationBox.append(el('p', 'muted', '没有可核验的明确观察来源；不按同股同日推断收益。'));
-  else
-    for (const observation of context.observations)
-      observationBox.append(
-        el(
-          'p',
-          'muted',
-          `${observation.horizon.toUpperCase()} · ${observation.status} · ${observation.id}`,
-        ),
-      );
-  body.append(observationBox);
+  const current = loaded.data.records?.[0] ?? null;
+  status.textContent = currentLine(current);
+  const summary = contentSummary(current);
+  if (summary !== null) body.append(summary);
 
-  const feedback =
-    subject.kind === 'advice'
-      ? makeSelect(undefined, [
-          ['', '尚未记录'],
-          ['followed', '跟随'],
-          ['partially_followed', '部分跟随'],
-          ['ignored', '忽略'],
-        ])
-      : subject.kind === 'watch-trigger'
-        ? makeSelect(undefined, [
-            ['', '尚未记录'],
-            ['handled', '已处理'],
-            ['useful', '有用'],
-            ['useless', '无用'],
-            ['ignored', '忽略'],
-          ])
-        : null;
-  if (feedback !== null) {
-    feedback.value =
-      subject.kind === 'advice' ? (old.adviceFeedback?.outcome ?? '') : (old.triggerFeedback ?? '');
-    body.append(fieldWrap('我的反馈（由我明确选择）', feedback));
-  }
-  const note = makeTextarea(undefined, {
-    rows: 3,
-    value: old.note ?? '',
-    placeholder: '我当时怎样判断、后来有什么变化',
+  const note = makeTextarea('decision-review-note', {
+    rows: 4,
+    value: current?.content.note ?? '',
+    placeholder: '复盘结论：这次判断、执行与结果分别验证了什么？',
   });
-  body.append(fieldWrap('我的备注', note));
-  const pnl =
-    subject.kind === 'advice'
-      ? makeNumberInput(undefined, {
-          value: old.adviceFeedback?.pnl,
-          step: '0.01',
-          placeholder: '未知或未平仓时留空',
-        })
-      : null;
-  if (pnl !== null) body.append(fieldWrap('用户填报盈亏（留空表示未知）', pnl));
-
-  body.append(el('h3', null, '实际成交'));
-  const selectedIds = new Set(old.tradeIds);
-  const trades = new Map([...context.candidateTrades.map((trade) => [trade.id, trade])]);
-  for (const id of selectedIds) if (!trades.has(id)) trades.set(id, null);
-  const choices = new Map();
-  const choiceBox = el('div', 'decision-trade-choices');
-  const appendTradeChoice = (id, trade) => {
-    if (choices.has(id)) return;
-    const caption = trade
-      ? `${fmtDateTime(trade.executedAt)} · ${trade.side === 'buy' ? '买' : '卖'} ${trade.quantity} 股 × ${trade.price} · ${id}`
-      : `关联成交 ${id}（当前选择器范围外或已缺失）`;
-    const item = labelCheckbox(caption, selectedIds.has(id));
-    if (trade === null) item.checkbox.disabled = true;
-    choices.set(id, item.checkbox);
-    choiceBox.append(item.label);
-  };
-  for (const [id, trade] of trades) appendTradeChoice(id, trade);
-  if (trades.size === 0)
-    choiceBox.append(
-      el(
-        'p',
-        'placeholder',
-        '当前范围未找到已有成交，可调整流水查询范围；这不证明实际成交尚未登记。',
-      ),
-    );
-  body.append(choiceBox);
-  const changeNote = makeInput(undefined, { placeholder: '解除关联或更正盈亏时必填' });
-  body.append(fieldWrap('更正原因', changeNote));
-  body.append(
-    el('p', 'muted', '选择已有成交只建立明确关联，不改变现金或持仓。提醒反馈不等于成交。'),
-  );
-  body.append(error);
-
-  const accountRequest = (path, init = {}) =>
-    callApi(path, {
-      ...init,
-      headers: { ...init.headers, 'x-luoome-account-id': accountAtOpen },
-    });
-  if (context.stockId !== null) {
-    const moreTrades = el('button', 'btn btn-outline btn-sm', '查看更多已有成交');
-    moreTrades.type = 'button';
-    let nextCursor = null;
-    let asOf = null;
-    moreTrades.addEventListener('click', async () => {
-      if (!isCurrent()) return showError('账户已切换，请重新打开。');
-      const query = new URLSearchParams({ stockId: context.stockId, limit: '50' });
-      if (context.sourceOccurredAt) query.set('since', context.sourceOccurredAt);
-      if (nextCursor) query.set('cursor', nextCursor);
-      if (asOf) query.set('asOf', asOf);
-      moreTrades.disabled = true;
-      const result = await accountRequest(`/api/trades?${query}`);
-      moreTrades.disabled = false;
-      if (!isCurrent()) return;
-      if (!result.ok) return showError(`${toolErrorText(result.error)}。请刷新选择器。`);
-      asOf = result.data.asOf;
-      for (const trade of result.data.trades) appendTradeChoice(trade.id, trade);
-      nextCursor = result.data.nextCursor;
-      if (!nextCursor) moreTrades.remove();
-    });
-    choiceBox.after(moreTrades);
-  }
-  const pendingPanel = el('div', 'decision-pending-panel');
-  const setPendingBusy = (busy) => {
-    if (!isCurrent()) return;
-    pendingBusy = busy;
-    redrawPending();
-  };
-  const sendPending = async (pending, canConfirmRejection) => {
-    if (!isCurrent())
-      return { ok: false, error: { kind: 'permission_denied', required: 'auth:session' } };
-    setPendingBusy(true);
-    // Persist uncertainty before sending so reloading cannot discard an in-flight write.
-    if (!pendingWrite({ ...pending, outcome: 'unknown' })) {
-      setPendingBusy(false);
-      return { ok: false, error: { kind: 'internal', cause: '无法保存未决请求' } };
-    }
-    const path =
-      pending.command === 'record_decision_trade'
-        ? '/api/decision-trades'
-        : '/api/decision-reviews';
-    const result = await accountRequest(path, {
-      method: 'POST',
-      body: JSON.stringify(pending.input),
-    });
-    // A response from a prior login cannot rewrite the current user's pending request.
-    if (!isCurrent()) return result;
-    if (!result.ok && canConfirmRejection && rejectedKinds.has(result.error?.kind))
-      pendingWrite({ ...pending, outcome: 'rejected' });
-    setPendingBusy(false);
-    return result;
-  };
-  const showPending = () => {
-    const pending = pendingRead();
-    pendingPanel.replaceChildren();
-    if (!pending || pending.accountId !== accountAtOpen) return;
-    pendingPanel.append(
-      el(
-        'p',
-        'status warning',
-        pending.outcome === 'rejected'
-          ? '上次提交已被拒绝。可确认尚未提交后重新加载，再修改内容提交。'
-          : '上次提交结果尚未确认。请先查询回执，必要时复用同一请求；暂不能创建新提交。',
-      ),
-    );
-    const queryReceipt = el('button', 'btn btn-outline btn-sm', '查询上次未决提交');
-    queryReceipt.type = 'button';
-    const retry = el('button', 'btn btn-outline btn-sm', '复用原请求重试');
-    retry.type = 'button';
-    queryReceipt.disabled = pendingBusy;
-    retry.disabled = pendingBusy;
-    queryReceipt.addEventListener('click', async () => {
-      if (pendingBusy) return;
-      if (!isCurrent() || getAccountId() !== pending.accountId)
-        return showError('账户已切换，请切回原账户。');
-      setPendingBusy(true);
-      const receipt = await accountRequest(`/api/decision-writes/${pending.input.requestId}`);
-      setPendingBusy(false);
-      if (!isCurrent() || getAccountId() !== pending.accountId) return;
-      if (receipt.ok) {
-        pendingClear();
-        await saved();
-        return;
-      }
-      showError(
-        receipt.error?.kind === 'not_found'
-          ? '尚无成功回执。请核对交易流水；如需重试，必须复用原请求。'
-          : toolErrorText(receipt.error),
-      );
-    });
-    retry.addEventListener('click', async () => {
-      if (pendingBusy) return;
-      if (!isCurrent() || getAccountId() !== pending.accountId)
-        return showError('账户已切换，请切回原账户。');
-      const result = await sendPending(pending, pending.outcome === 'rejected');
-      if (!isCurrent() || getAccountId() !== pending.accountId) return;
-      if (!result.ok) return showError(toolErrorText(result.error));
-      pendingClear();
-      await saved();
-    });
-    pendingPanel.append(queryReceipt, retry);
-    if (pending.outcome === 'rejected') {
-      const reload = el('button', 'btn btn-outline btn-sm', '确认未提交并重新加载');
-      reload.type = 'button';
-      reload.disabled = pendingBusy;
-      reload.addEventListener('click', async () => {
-        if (pendingBusy) return;
-        if (!isCurrent() || getAccountId() !== pending.accountId)
-          return showError('账户已切换，请切回原账户。');
-        setPendingBusy(true);
-        const receipt = await accountRequest(`/api/decision-writes/${pending.input.requestId}`);
-        setPendingBusy(false);
-        if (!isCurrent() || getAccountId() !== pending.accountId) return;
-        if (receipt.ok) {
-          pendingClear();
-          await saved();
-        } else if (receipt.error?.kind === 'not_found') {
-          pendingClear();
-          await openDecisionReview(subject, { onSaved });
-        } else showError(toolErrorText(receipt.error));
-      });
-      pendingPanel.append(reload);
-    }
-  };
-  redrawPending = showPending;
-  const saved = async () => {
-    if (isCurrent()) {
-      closeModal();
-      await onSaved();
-    }
-  };
-  const saveActions = actionsRow('保存复盘', {
-    onConfirm: async (button) => {
-      if (!isCurrent()) return showError('账户已切换，请重新打开。');
-      if (pendingRead()) return showError('仍有未决请求，请先查询回执或复用原请求。');
-      if (
-        context.selectedRevision !== null &&
-        context.selectedRevision !== context.current?.review.currentRevision
-      )
-        return showError('当前查看历史修订，请先切回最新版本再编辑。');
-      const tradeIds = [...choices.entries()]
-        .filter(([, box]) => box.checked)
-        .map(([id]) => id)
-        .sort();
-      const pnlRaw = pnl?.value.trim() ?? '';
-      const pnlValue = pnlRaw ? Number(pnlRaw) : undefined;
-      if (pnlRaw && !Number.isFinite(pnlValue)) return showError('盈亏必须是有效数字。');
-      const content = {
-        tradeIds,
-        adviceFeedback:
-          subject.kind === 'advice' && feedback.value
-            ? { outcome: feedback.value, ...(pnlValue === undefined ? {} : { pnl: pnlValue }) }
-            : null,
-        triggerFeedback: subject.kind === 'watch-trigger' && feedback.value ? feedback.value : null,
-        note: note.value.trim() || null,
-      };
-      const input = {
-        requestId: randomRequestId(),
-        subject,
-        contextHash: context.context?.contextHash,
-        expectedRevision: context.current?.review.currentRevision ?? 0,
-        content,
-        changeNote: changeNote.value.trim() || null,
-      };
-      if (!pendingWrite({ accountId: accountAtOpen, command: 'save_decision_review', input }))
-        return showError('浏览器无法保存未决请求，请开启此标签页的会话存储后重试。');
-      button.disabled = true;
-      showPending();
-      const result = await sendPending(pendingRead(), true);
-      button.disabled = false;
-      if (!isCurrent()) return;
-      if (!result.ok)
-        return showError(
-          `${toolErrorText(result.error)}。草稿已保留；冲突时请刷新上下文后重新确认。`,
-        );
-      pendingClear();
-      await saved();
-    },
+  const tags = makeInput('decision-review-tags', {
+    value: (current?.content.lessonTags ?? []).join(','),
+    placeholder: '教训标签，逗号分隔',
   });
-  body.append(saveActions);
+  const tradeIds = makeInput('decision-review-trades', {
+    value: (current?.content.tradeIds ?? []).join(','),
+    placeholder: '关联成交 id，逗号分隔',
+  });
+  body.append(
+    fieldWrap('复盘结论', note),
+    fieldWrap('教训标签', tags),
+    fieldWrap('关联成交', tradeIds),
+  );
 
-  if (context.stockId !== null) {
-    const form = el('details', null, el('summary', null, '登记尚未入账的实际成交'));
-    form.append(
-      el(
-        'p',
-        'muted',
-        '仅登记已在系统外发生、且未通过交易或持仓调整入账的成交。相似成交不会自动合并；如不确定，请先核对流水。',
-      ),
-    );
-    const side = makeSelect(undefined, [
-      ['buy', '买入'],
-      ['sell', '卖出'],
+  const feedback = current?.content.adviceFeedback ?? null;
+  let outcome = null;
+  let pnl = null;
+  if (subject.kind === 'advice') {
+    outcome = makeSelect('decision-review-outcome', [
+      ['', '不填写'],
+      ['followed', '跟随'],
+      ['partially_followed', '部分跟随'],
+      ['ignored', '忽略'],
     ]);
-    const quantity = makeNumberInput(undefined, { min: 1, step: 1 });
-    const price = makeNumberInput(undefined, { min: 0.01, step: 0.01 });
-    const fee = makeNumberInput(undefined, { min: 0, step: 0.01, value: 0 });
-    const executedAt = makeInput(undefined, { type: 'datetime-local', value: shanghaiLocalNow() });
-    const confirm = labelCheckbox('我确认这笔成交尚未登记，也未通过持仓调整体现', false);
-    form.append(
-      fieldWrap('方向', side),
-      fieldWrap('数量（股）', quantity),
-      fieldWrap('实际成交价', price),
-      fieldWrap('费用（仅记录，不从现金余额重复扣除）', fee),
-      fieldWrap('成交时间（上海时间）', executedAt),
-      confirm.label,
-    );
-    const register = el('button', 'btn btn-primary', '确认登记并关联此依据');
-    register.type = 'button';
-    register.addEventListener('click', async () => {
-      if (!isCurrent()) return showError('账户已切换，请重新打开。');
-      const amount = Number(quantity.value);
-      const actualPrice = Number(price.value);
-      const actualFee = Number(fee.value);
-      if (
-        !Number.isInteger(amount) ||
-        amount <= 0 ||
-        !Number.isFinite(actualPrice) ||
-        actualPrice <= 0 ||
-        !Number.isFinite(actualFee) ||
-        actualFee < 0 ||
-        !executedAt.value ||
-        !confirm.checkbox.checked
-      )
-        return showError('请填写有效的实际成交，并勾选尚未登记确认。');
-      if (pendingRead()) return showError('仍有未决请求，请先查询回执或复用原请求。');
-      if (context.ledgerState?.appendEligibility !== 'eligible')
-        return showError(
-          `账本暂不可顺序追加：${context.ledgerState?.reasons.join('；') ?? '状态缺失'}`,
-        );
-      const input = {
-        requestId: randomRequestId(),
-        expectedLedgerStateHash: context.ledgerState.hash,
-        confirmedNotRecorded: true,
-        stockId: context.stockId,
-        side: side.value,
-        quantity: amount,
-        price: actualPrice,
-        fee: actualFee,
-        executedAt: new Date(`${executedAt.value}+08:00`).toISOString(),
-        sources: [
-          {
-            subject,
-            contextHash: context.context.contextHash,
-            expectedRevision: context.current?.review.currentRevision ?? 0,
-          },
-        ],
-      };
-      if (!pendingWrite({ accountId: accountAtOpen, command: 'record_decision_trade', input }))
-        return showError('浏览器无法保存未决请求，请开启此标签页的会话存储后重试。');
-      register.disabled = true;
-      showPending();
-      const result = await sendPending(pendingRead(), true);
-      register.disabled = false;
-      if (!isCurrent()) return;
-      if (!result.ok)
-        return showError(
-          `${toolErrorText(result.error)}。请先查同键回执或刷新账本，不要生成新请求重复登记。`,
-        );
-      pendingClear();
-      await saved();
+    outcome.value = feedback?.outcome ?? '';
+    pnl = makeNumberInput('decision-review-pnl', {
+      value: feedback?.pnl,
+      step: '0.01',
+      placeholder: '实际盈亏（未知留空）',
     });
-    form.append(register);
-    body.append(form);
+    body.append(fieldWrap('建议结果', outcome), fieldWrap('实际盈亏', pnl));
   }
 
-  body.append(el('h3', null, '修改记录'));
-  if (context.revisions.length === 0) body.append(el('p', 'placeholder', '尚未记录。'));
-  else
-    for (const item of context.revisions) {
-      const button = el(
-        'button',
-        'btn btn-outline btn-sm',
-        `v${item.revision} · ${fmtDateTime(item.recordedAt)}${item.changeNote ? ` · ${item.changeNote}` : ''}`,
-      );
-      button.type = 'button';
-      button.addEventListener(
-        'click',
-        () => void openDecisionReview(subject, { onSaved, revision: item.revision }),
-      );
-      body.append(button);
-    }
-  if (
-    context.selectedRevision !== null &&
-    context.selectedRevision !== context.current?.review.currentRevision
-  ) {
-    body.append(
-      el(
-        'p',
-        'status warning',
-        `正在查看历史版本 v${context.selectedRevision}，编辑请打开最新版本。`,
-      ),
-    );
-  }
-  showPending();
-  body.prepend(pendingPanel);
-  openModal(`决策与复盘 · ${subjectLabel[subject.kind]}`, body);
+  const message = el('p', 'muted', '');
+  body.append(message);
+  body.append(
+    actionsRow('保存复盘', {
+      onConfirm: async (button) => {
+        if (!isCurrent()) return;
+        const chosenOutcome = subject.kind === 'advice' ? outcome.value : '';
+        const pnlText = subject.kind === 'advice' ? String(pnl.value ?? '').trim() : '';
+        const content = {
+          tradeIds: splitList(tradeIds.value),
+          adviceFeedback:
+            chosenOutcome === ''
+              ? null
+              : {
+                  outcome: chosenOutcome,
+                  ...(pnlText === '' || !Number.isFinite(Number(pnlText))
+                    ? {}
+                    : { pnl: Number(pnlText) }),
+                },
+          lessonTags: splitList(tags.value),
+          note: String(note.value ?? '').trim() === '' ? null : String(note.value).trim(),
+        };
+        if (
+          content.tradeIds.length === 0 &&
+          content.adviceFeedback === null &&
+          content.lessonTags.length === 0 &&
+          content.note === null
+        ) {
+          message.textContent = '复盘内容不能全部为空';
+          return;
+        }
+        setBusy(button, true);
+        const result = await callApi('/api/decision-reviews', {
+          method: 'POST',
+          headers: { 'x-luoome-account-id': accountAtOpen },
+          body: JSON.stringify({ subject, content }),
+        });
+        setBusy(button, false);
+        if (!isCurrent()) return;
+        if (!result.ok) {
+          message.textContent = toolErrorText(result.error, '保存复盘失败');
+          return;
+        }
+        closeModal();
+        await onSaved();
+      },
+    }),
+  );
 };
+
+const openTriggerFeedback = (trigger, { onSaved, isCurrent }) => {
+  const body = el('div', 'decision-review-modal');
+  openModal('盯盘提醒反馈', body);
+  body.append(el('p', 'muted', `反馈只记录你是否处理过这条提醒，不代表已成交或已下单。`));
+  const select = makeSelect('watch-trigger-feedback', feedbackOptions);
+  select.value = feedbackOptions[0][0];
+  body.append(fieldWrap('处理结果', select));
+  const message = el('p', 'muted', '');
+  body.append(message);
+  body.append(
+    actionsRow('保存反馈', {
+      onConfirm: async (button) => {
+        if (!isCurrent()) return;
+        setBusy(button, true);
+        const result = await callApi(`/api/watch/triggers/${trigger.id}/feedback`, {
+          method: 'POST',
+          body: JSON.stringify({ feedback: select.value }),
+        });
+        setBusy(button, false);
+        if (!isCurrent()) return;
+        if (!result.ok) {
+          message.textContent = toolErrorText(result.error, '保存反馈失败');
+          return;
+        }
+        closeModal();
+        await onSaved();
+      },
+    }),
+  );
+};
+
+export { openDecisionReview };

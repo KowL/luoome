@@ -11,8 +11,7 @@ import {
   type ReportBlock,
   ReportSchema,
   AccountReportScopeSchema as ReportScopeSchema,
-  StrategyRecommendationBatchSummarySchema,
-  type StrategySchedule,
+  type Strategy,
   type ToolResult,
   type TradingPlan,
   type TradingPlanMonitoring,
@@ -21,7 +20,6 @@ import {
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
-import { currentStrategyFingerprint, getAccountPlanBatchStatus } from './account-plan-batch.js';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
 import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 import {
@@ -40,7 +38,8 @@ export const ClosingReportInput = z.object({
   scope: ReportScopeSchema.default({ kind: 'all-accounts' }),
   notify: z.boolean().optional(),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
-  planBatchStatus: z.enum(['complete', 'partial', 'blocked']).optional(),
+  // 计划批次能力已随 S3.3 删除；显式拒绝旧字段，避免请求体伪造"批次完成"提前出报。
+  planBatchStatus: z.never().optional(),
 });
 
 export const ClosingReportOutput = z.object({
@@ -52,15 +51,6 @@ export const ClosingReportOutput = z.object({
 
 type ClosingInput = z.output<typeof ClosingReportInput>;
 type ClosingOutput = z.output<typeof ClosingReportOutput>;
-
-const nextTradingDay = (date: string): string => {
-  const current = shanghaiDate(date);
-  for (let offset = 1; offset <= 15; offset++) {
-    const candidate = new Date(current.getTime() + offset * DAY_MS);
-    if (!isWeekend(candidate) && !isHoliday(candidate)) return dateInShanghai(candidate);
-  }
-  throw new Error(`无法解析 ${date} 的下一 A 股交易日`);
-};
 
 const adviceCalibrationSection = async (
   date: string,
@@ -261,9 +251,7 @@ const planReviewAudit = async (
   ctx: WorkflowContext,
 ): Promise<PlanReviewAudit> => {
   const result = await ctx.tools.list_workflow_runs.execute({
-    workflowName: 'trading-plan-daily-cycle',
     since,
-    includeWatch: false,
     limit: 200,
   });
   if (!result.ok)
@@ -276,25 +264,16 @@ const planReviewAudit = async (
       },
     };
   const reviews: PlanReviewAudit['reviews'] = [];
-  let invalid = false;
   for (const run of result.data.runs) {
     if (run.startedAt > until) continue;
+    // 计划复核审计只认显式记录了 reviews 明细的运行；其它 workflow 运行不属于本审计。
+    if (!Array.isArray(run.summary?.reviews)) continue;
     const accountId = run.inputSummary?.accountId;
-    if (typeof accountId !== 'string') {
-      invalid = true;
-      continue;
-    }
+    if (typeof accountId !== 'string') continue;
     if (scope.kind === 'account' && accountId !== scope.accountId) continue;
-    if (!Array.isArray(run.summary?.reviews)) {
-      invalid = true;
-      continue;
-    }
     for (const value of run.summary.reviews) {
       const parsed = TradingPlanReviewSchema.safeParse(value);
-      if (!parsed.success) {
-        invalid = true;
-        continue;
-      }
+      if (!parsed.success) continue;
       if (parsed.data.reviewedAt < since || parsed.data.reviewedAt > until) continue;
       reviews.push({ ...parsed.data, accountId });
     }
@@ -304,14 +283,7 @@ const planReviewAudit = async (
     available: true,
     ...(result.data.runs.length >= 200
       ? { issue: { reason: '计划复核审计达到 200 条读取上限，统计可能不完整', errorKind: 'limit' } }
-      : invalid
-        ? {
-            issue: {
-              reason: '部分计划复核审计缺少账户或明细，统计可能不完整',
-              errorKind: 'incomplete-audit',
-            },
-          }
-        : {}),
+      : {}),
   };
 };
 
@@ -614,57 +586,6 @@ const adviceExpirySection = async (
   };
 };
 
-const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) => {
-  const nextDate = nextTradingDay(date);
-  const from = new Date(`${nextDate}T00:00:00+08:00`);
-  const to = new Date(from.getTime() + DAY_MS - 1);
-  const result = await ctx.tools.list_stock_events.execute({
-    from,
-    to,
-    status: 'scheduled',
-    importance: 'important',
-    limit: 500,
-  });
-  if (!result.ok) {
-    return unavailableSection(
-      'next-events',
-      '下一交易日事件',
-      true,
-      now,
-      'stock-events',
-      result.error.kind,
-    );
-  }
-  const stale = result.data.events.filter((event) => event.stale);
-  const evidence = [localEvidence('next-events:0', 'next-events', now, 'local/stock-events')];
-  return {
-    evidence,
-    section: {
-      key: 'next-events',
-      title: '下一交易日事件',
-      required: true,
-      status: stale.length === 0 ? ('complete' as const) : ('partial' as const),
-      dataAsOf: now,
-      blocks: [
-        {
-          kind: 'list' as const,
-          items: result.data.events.map((event) => ({
-            title: event.title,
-            detail: event.stockId,
-            entityKind: 'stock-event' as const,
-            entityId: event.id,
-          })),
-        },
-      ],
-      evidenceIds: evidence.map((item) => item.id),
-      missingDimensions:
-        stale.length === 0
-          ? []
-          : [missing('next-events.freshness', `${stale.length} 条事件已标记 stale`, 'stale')],
-    },
-  };
-};
-
 const STRATEGY_ADVICE_SOURCE_TOOL = 'analyze_strategy_candidate';
 
 const adviceDecisionLabel = (decision: string): string => {
@@ -684,19 +605,16 @@ const adviceDecisionLabel = (decision: string): string => {
   }
 };
 
-export const scheduledRunExpectedAt = (
-  schedule: StrategySchedule,
-  date: string,
-): Date | undefined => {
-  if (!schedule.enabled) return undefined;
+export const scheduledRunExpectedAt = (strategy: Strategy, date: string): Date | undefined => {
+  if (strategy.scheduleCron === undefined) return undefined;
   const dayStart = new Date(`${date}T00:00:00+08:00`);
   if (isWeekend(dayStart) || isHoliday(dayStart)) return undefined;
   const expectedAt = nextCronOccurrence(
-    schedule.cron,
-    schedule.timezone,
+    strategy.scheduleCron,
+    'Asia/Shanghai',
     new Date(dayStart.getTime() - 60_000),
   );
-  return dateInShanghai(expectedAt) === date && expectedAt >= schedule.createdAt
+  return dateInShanghai(expectedAt) === date && expectedAt >= strategy.createdAt
     ? expectedAt
     : undefined;
 };
@@ -708,46 +626,27 @@ export const closingReportStrategiesReady = async (
 ): Promise<boolean> => {
   const strategies = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
   if (!strategies.ok) return false;
-  const schedules = await Promise.all(
-    strategies.data.strategies.map((strategy) =>
-      ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id }),
-    ),
-  );
-  if (schedules.some((result) => !result.ok)) return false;
-  const expected = strategies.data.strategies.flatMap((strategy, index) => {
-    const schedule = schedules[index];
-    if (!schedule?.ok || schedule.data.schedule === null) return [];
-    const expectedAt = scheduledRunExpectedAt(schedule.data.schedule, date);
-    return expectedAt === undefined
-      ? []
-      : [{ strategyId: strategy.id, expectedAt, schedule: schedule.data.schedule }];
+  const expected = strategies.data.strategies.flatMap((strategy) => {
+    const expectedAt = scheduledRunExpectedAt(strategy, date);
+    return expectedAt === undefined ? [] : [{ strategyId: strategy.id, expectedAt }];
   });
   if (expected.length === 0) return now >= new Date(`${date}T18:00:00+08:00`);
-  if (
-    expected.some(
-      (item) =>
-        item.expectedAt > now ||
-        item.schedule.nextRunAt === undefined ||
-        item.schedule.nextRunAt <= now ||
-        item.schedule.lastRunId === undefined,
-    )
-  )
-    return false;
+  if (expected.some((item) => item.expectedAt > now)) return false;
   const since = new Date(`${date}T00:00:00+08:00`);
   const runs = await ctx.tools.list_strategy_runs.execute({
     scope: 'operational',
     publication: 'published',
     since,
-    until: new Date(since.getTime() + 24 * 60 * 60_000 - 1),
+    until: new Date(since.getTime() + DAY_MS - 1),
     limit: 500,
   });
   if (!runs.ok || runs.data.runs.length === 500) return false;
   const published = new Set(
-    runs.data.runs.filter((run) => dateInShanghai(run.startedAt) === date).map((run) => run.id),
+    runs.data.runs
+      .filter((run) => run.mode === 'scheduled' && dateInShanghai(run.startedAt) === date)
+      .map((run) => run.strategyId),
   );
-  return expected.every(
-    (item) => item.schedule.lastRunId !== undefined && published.has(item.schedule.lastRunId),
-  );
+  return expected.every((item) => published.has(item.strategyId));
 };
 
 /**
@@ -762,7 +661,7 @@ const strategyActionsSection = async (
   scope: ClosingInput['scope'],
 ): Promise<ReportSectionPiece> => {
   const dayStart = new Date(`${date}T00:00:00+08:00`);
-  const [strategies, runs, advices, batches] = await Promise.all([
+  const [strategies, runs, advices] = await Promise.all([
     ctx.tools.list_strategies.execute({ filter: { status: 'active' } }),
     ctx.tools.list_strategy_runs.execute({
       scope: 'operational',
@@ -776,12 +675,6 @@ const strategyActionsSection = async (
       until: new Date(dayStart.getTime() + DAY_MS - 1),
       includeExpired: true,
       limit: 500,
-    }),
-    ctx.tools.list_workflow_runs.execute({
-      workflowName: 'strategy-recommendations',
-      since: dayStart,
-      limit: 200,
-      includeWatch: false,
     }),
   ]);
   if (!strategies.ok) {
@@ -832,41 +725,15 @@ const strategyActionsSection = async (
     const value = run?.summary?.[key];
     return typeof value === 'number' ? value : null;
   };
-  const batchByRun = new Map<string, z.infer<typeof StrategyRecommendationBatchSummarySchema>>();
   const gaps = [];
-  if (!batches.ok)
-    gaps.push(
-      missing('strategy-actions.analysis-status', '建议批次审计不可用', batches.error.kind),
-    );
-  else
-    for (const batch of batches.data.runs) {
-      if (dateInShanghai(batch.startedAt) !== date) continue;
-      const parsed = StrategyRecommendationBatchSummarySchema.safeParse(batch.summary);
-      if (parsed.success && !batchByRun.has(parsed.data.runId))
-        batchByRun.set(parsed.data.runId, parsed.data);
-    }
   const analysisByStrategy = new Map<string, string>();
   const pendingItems: { title: string; detail: string; entityKind: 'stock'; entityId: string }[] =
     [];
   for (const strategy of strategies.data.strategies) {
     const run = latestRunByStrategy.get(strategy.id);
     if (run === undefined) {
-      const schedule = await ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id });
-      const expectedAt = schedule.ok
-        ? schedule.data.schedule === null
-          ? undefined
-          : scheduledRunExpectedAt(schedule.data.schedule, date)
-        : undefined;
-      if (!schedule.ok) {
-        analysisByStrategy.set(strategy.id, '调度状态不可用');
-        gaps.push(
-          missing(
-            `strategy-actions.run.${strategy.id}`,
-            '无法判断预期策略是否完成',
-            schedule.error.kind,
-          ),
-        );
-      } else if (expectedAt !== undefined) {
+      const expectedAt = scheduledRunExpectedAt(strategy, date);
+      if (expectedAt !== undefined) {
         const pending = expectedAt > now;
         analysisByStrategy.set(strategy.id, pending ? '今日正式运行待开始' : '今日正式运行未完成');
         gaps.push(
@@ -879,54 +746,27 @@ const strategyActionsSection = async (
       } else {
         analysisByStrategy.set(
           strategy.id,
-          schedule.data.schedule?.enabled === true
-            ? '今日尚无预期正式运行'
-            : '今日未运行；自动调度未开启',
+          strategy.scheduleCron === undefined
+            ? '今日未运行；自动调度未开启'
+            : '今日尚无预期正式运行',
         );
       }
       continue;
     }
-    const batch = batchByRun.get(run.id);
     const adviceCount = dayAdvices.filter(
       (advice) => advice.basedOn.strategy?.strategyId === strategy.id,
     ).length;
-    if (batch !== undefined) {
-      const skipped = batch.preflight?.skipped ?? batch.skippedCooldown;
-      const unavailable = batch.preflight?.unavailable ?? 0;
-      analysisByStrategy.set(
-        strategy.id,
-        [
-          `最近批次生成 ${batch.adviceCount} 条`,
-          ...(skipped > 0 ? [`预检跳过 ${skipped} 条`] : []),
-          ...(unavailable > 0 ? [`数据待补齐 ${unavailable} 条`] : []),
-          ...(batch.generationFailed > 0 ? [`生成失败 ${batch.generationFailed} 条`] : []),
-        ].join('；'),
-      );
-      if (batch.generationFailed > 0 || unavailable > 0)
-        gaps.push(
-          missing(
-            `strategy-actions.analysis.${strategy.id}`,
-            `${batch.generationFailed} 条生成失败，${unavailable} 条数据不可用`,
-            'analysis-incomplete',
-          ),
-        );
-    } else if (adviceCount > 0) {
-      analysisByStrategy.set(strategy.id, `已有 ${adviceCount} 条建议；无批次审计`);
+    if (adviceCount > 0) {
+      analysisByStrategy.set(strategy.id, `已有 ${adviceCount} 条建议`);
     } else {
-      const schedule = await ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id });
-      const enabled = schedule.ok && schedule.data.schedule?.recommendationPolicy?.enabled === true;
-      analysisByStrategy.set(
-        strategy.id,
-        enabled ? '尚未分析完成' : schedule.ok ? '自动分析未开启；候选未分析' : '分析配置不可用',
+      analysisByStrategy.set(strategy.id, '正式运行已发布；候选尚未分析');
+      gaps.push(
+        missing(
+          `strategy-actions.analysis.${strategy.id}`,
+          '存在正式运行，尚无分析结果',
+          'analysis-unavailable',
+        ),
       );
-      if (enabled || !schedule.ok)
-        gaps.push(
-          missing(
-            `strategy-actions.analysis.${strategy.id}`,
-            enabled ? '存在正式运行，尚无分析结果' : '分析配置不可用',
-            'analysis-unavailable',
-          ),
-        );
     }
     const detail = await ctx.tools.get_strategy_run.execute({ runId: run.id });
     if (!detail.ok) {
@@ -944,10 +784,9 @@ const strategyActionsSection = async (
         )
       )
         continue;
-      const preflight = batch?.preflight?.details.find((item) => item.stockId === result.stockId);
       pendingItems.push({
         title: named.get(result.stockId) ?? result.stockId,
-        detail: `${strategy.name} · ${preflight?.status === 'skipped' ? `预检跳过：${preflight.reasons.map((reason) => reason.code).join('、')}` : preflight?.status === 'unavailable' ? '数据不可用，未分析' : '未分析或分析未完成'} · 规则分 ${result.score ?? '未知'}`,
+        detail: `${strategy.name} · 未分析或分析未完成 · 规则分 ${result.score ?? '未知'}`,
         entityKind: 'stock',
         entityId: result.stockId,
       });
@@ -1121,7 +960,6 @@ const tradingPlansSection = async (
   now: Date,
   ctx: WorkflowContext,
   audit: PlanReviewAudit,
-  planBatchStatus?: ClosingInput['planBatchStatus'],
 ): Promise<ReportSectionPiece> => {
   const since = new Date(`${date}T00:00:00+08:00`);
   const until = new Date(Math.min(now.getTime(), since.getTime() + DAY_MS - 1));
@@ -1215,17 +1053,6 @@ const tradingPlansSection = async (
       : []),
   ];
   const missingDimensions = [
-    ...(planBatchStatus === undefined || planBatchStatus === 'complete'
-      ? []
-      : [
-          missing(
-            'trading-plans.daily-cycle',
-            planBatchStatus === 'blocked'
-              ? '账户持仓与候选计划批次未完成'
-              : '账户持仓与候选计划批次部分完成',
-            planBatchStatus === 'blocked' ? 'plan-batch-blocked' : 'plan-batch-partial',
-          ),
-        ]),
     ...(pendingDrafts.size === 0
       ? []
       : [
@@ -1418,51 +1245,6 @@ const runClosingReport = async (
       error: { kind: 'invalid_input', message: `${date} 不是 A 股交易日`, issues: [] },
     };
   }
-  if (date === dateInShanghai(ctx.clock()) && input.planBatchStatus === undefined) {
-    const existing = await ctx.tools.get_report.execute({
-      kind: 'closing',
-      scope: input.scope,
-      periodEnd: date,
-    });
-    if (!existing.ok && existing.error.kind !== 'not_found') return existing;
-    if (!existing.ok) {
-      let ready = await closingReportStrategiesReady(date, ctx.clock(), ctx);
-      if (ready) {
-        const fingerprint = await currentStrategyFingerprint(date, ctx);
-        let accountIds: string[];
-        if (input.scope.kind === 'account') accountIds = [input.scope.accountId];
-        else {
-          const accounts = await ctx.tools.list_accounts.execute({});
-          if (!accounts.ok) return accounts;
-          accountIds = accounts.data.accounts.map((account) => account.id);
-        }
-        for (const accountId of accountIds) {
-          const facts = await ctx.tools.get_account_facts.execute({ accountId });
-          if (!facts.ok) return facts;
-          const status = await getAccountPlanBatchStatus(
-            accountId,
-            date,
-            fingerprint,
-            facts.data.facts.digest,
-            ctx,
-          );
-          if (status === 'blocked') {
-            ready = false;
-            break;
-          }
-        }
-      }
-      if (!ready)
-        return {
-          ok: false,
-          error: {
-            kind: 'invalid_input',
-            message: '当日策略或账户交易计划尚未完成，完成后再统一生成收盘复盘',
-            issues: [],
-          },
-        };
-    }
-  }
   const result = await executeReportWorkflow(
     {
       workflowName: 'closing-report',
@@ -1496,29 +1278,20 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [
-          performance,
-          triggers,
-          adviceExpiry,
-          strategyActions,
-          plans,
-          priorDay,
-          nextEvents,
-          calibration,
-        ] = await Promise.all([
-          accountPerformance(input, generatedAt, ctx),
-          triggersSection(date, generatedAt, ctx, input.scope),
-          adviceExpirySection(date, generatedAt, ctx, input.scope),
-          strategyActionsSection(date, generatedAt, ctx, input.scope),
-          tradingPlansSection(date, input.scope, generatedAt, ctx, audit, input.planBatchStatus),
-          input.scope.kind === 'account'
-            ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx, audit)
-            : Promise.resolve(null),
-          nextEventsSection(date, generatedAt, ctx),
-          input.scope.kind === 'account'
-            ? adviceCalibrationSection(date, input.scope.accountId, generatedAt, ctx)
-            : Promise.resolve(null),
-        ]);
+        const [performance, triggers, adviceExpiry, strategyActions, plans, priorDay, calibration] =
+          await Promise.all([
+            accountPerformance(input, generatedAt, ctx),
+            triggersSection(date, generatedAt, ctx, input.scope),
+            adviceExpirySection(date, generatedAt, ctx, input.scope),
+            strategyActionsSection(date, generatedAt, ctx, input.scope),
+            tradingPlansSection(date, input.scope, generatedAt, ctx, audit),
+            input.scope.kind === 'account'
+              ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx, audit)
+              : Promise.resolve(null),
+            input.scope.kind === 'account'
+              ? adviceCalibrationSection(date, input.scope.accountId, generatedAt, ctx)
+              : Promise.resolve(null),
+          ]);
         return [
           market,
           performance,
@@ -1527,7 +1300,6 @@ const runClosingReport = async (
           strategyActions,
           plans,
           ...(priorDay === null ? [] : [priorDay]),
-          nextEvents,
           ...(calibration === null ? [] : [calibration]),
         ];
       },

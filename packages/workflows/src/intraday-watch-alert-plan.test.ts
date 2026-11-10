@@ -169,7 +169,10 @@ describe('intraday-watch target model', () => {
     if (!result.ok) return;
     expect(result.data.triggers).toEqual([]);
     expect(result.data.unknownRules).toBe(1);
-    expect(await base.repos.watchRun.latest()).toMatchObject({ unknownRules: 1, delivered: 0 });
+    expect(
+      (await base.repos.workflowRun.listRecent({ workflowName: 'intraday-watch', limit: 1 }))[0]
+        ?.outputSummary,
+    ).toMatchObject({ unknownRules: 1, delivered: 0 });
   });
 
   it('logic=ALL 时一条规则为 false 即使另一条 unknown 也产生恢复 Trigger', async () => {
@@ -322,25 +325,28 @@ describe('intraday-watch target model', () => {
       const marketCtx = withFixedQuoteAdapter(base, { '600519.SH': 90 });
       const ctx = {
         ...marketCtx,
-        notification: {
-          send: async (input: {
-            channel: 'feishu' | 'log';
-            payload: {
-              title: string;
-              content: string;
-              level: 'info' | 'warn' | 'error' | 'success';
-            };
-          }) => {
-            const notification = {
-              id: 'fixture-delivery',
-              channel: input.channel,
-              payload: input.payload,
-              result: deliveryResult,
-              sentAt: now,
-              ...(deliveryResult === 'failed' ? { errorMessage: 'fixture failure' } : {}),
-            };
-            await base.repos.notification.save(notification);
-            return { notification };
+        adapters: {
+          ...marketCtx.adapters,
+          notification: {
+            send: async (input: {
+              channel: 'feishu' | 'log';
+              payload: {
+                title: string;
+                content: string;
+                level: 'info' | 'warn' | 'error' | 'success';
+              };
+            }) => {
+              const notification = {
+                id: 'fixture-delivery',
+                channel: input.channel,
+                payload: input.payload,
+                result: deliveryResult,
+                sentAt: now,
+                ...(deliveryResult === 'failed' ? { errorMessage: 'fixture failure' } : {}),
+              };
+              await base.repos.notification.save(notification);
+              return { notification };
+            },
           },
         },
       };
@@ -361,7 +367,10 @@ describe('intraday-watch target model', () => {
       if (!result.ok) return;
       expect(result.data.triggers).toHaveLength(1);
       expect(result.data.delivered).toBe(deliveryResult === 'success' ? 1 : 0);
-      expect(await base.repos.watchRun.latest()).toMatchObject({
+      expect(
+        (await base.repos.workflowRun.listRecent({ workflowName: 'intraday-watch', limit: 1 }))[0]
+          ?.outputSummary,
+      ).toMatchObject({
         notified: 1,
         delivered: deliveryResult === 'success' ? 1 : 0,
       });

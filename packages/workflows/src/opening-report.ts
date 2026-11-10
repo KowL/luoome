@@ -266,62 +266,6 @@ const attachLadderFacts = async (
   };
 };
 
-const eventsSection = async (
-  date: string,
-  now: Date,
-  ctx: WorkflowContext,
-): Promise<{ section: ReportSection; evidence: ReportEvidence[] }> => {
-  const from = new Date(`${date}T00:00:00+08:00`);
-  const to = new Date(from.getTime() + 8 * DAY_MS - 1);
-  const result = await ctx.tools.list_stock_events.execute({
-    from,
-    to,
-    status: 'scheduled',
-    importance: 'important',
-    limit: 500,
-  });
-  if (!result.ok) {
-    return unavailableSection(
-      'upcoming-events',
-      '未来重要事件',
-      true,
-      now,
-      'stock-events',
-      result.error.kind,
-    );
-  }
-  const evidence = [
-    localEvidence('upcoming-events:0', 'upcoming-events', now, 'local/stock-events'),
-  ];
-  const stale = result.data.events.filter((event) => event.stale);
-  return {
-    evidence,
-    section: {
-      key: 'upcoming-events',
-      title: '未来重要事件',
-      required: true,
-      status: stale.length === 0 ? 'complete' : 'partial',
-      dataAsOf: now,
-      blocks: [
-        {
-          kind: 'list',
-          items: result.data.events.map((event) => ({
-            title: event.title,
-            detail: `${event.stockId} · ${dateInShanghai(event.occursAt)}`,
-            entityKind: 'stock-event' as const,
-            entityId: event.id,
-          })),
-        },
-      ],
-      evidenceIds: evidence.map((item) => item.id),
-      missingDimensions:
-        stale.length === 0
-          ? []
-          : [missing('upcoming-events.freshness', `${stale.length} 条事件已标记 stale`, 'stale')],
-    },
-  };
-};
-
 export const portfolioSection = async (
   scope: ReportScope,
   now: Date,
@@ -694,14 +638,13 @@ const runOpeningReport = async (
               'ashare-sentiment',
               sentimentResult.error.kind,
             );
-        const [market, events, portfolio, plans, watchlists] = await Promise.all([
+        const [market, portfolio, plans, watchlists] = await Promise.all([
           attachLadderFacts(marketBase, marketDate, generatedAt, ctx),
-          eventsSection(date, generatedAt, ctx),
           portfolioSection(input.scope, generatedAt, ctx, input.date),
           alertPlansSection(generatedAt, ctx),
           watchlistsSection(generatedAt, ctx),
         ]);
-        return [market, events, portfolio, plans, watchlists, researchSection(generatedAt)];
+        return [market, portfolio, plans, watchlists, researchSection(generatedAt)];
       },
     },
     ctx,

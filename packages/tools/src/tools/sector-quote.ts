@@ -24,12 +24,12 @@ export const fetchSectorQuotesTool = defineTool({
   input: FetchSectorQuotesInput,
   output: FetchSectorQuotesOutput,
   handler: async (input, ctx) => {
-    if (ctx.sectorQuote === undefined) {
+    if (ctx.adapters.marketIntel?.sectorQuote === undefined) {
       return errInvalidInput(
-        'fetch_sector_quotes tool 需要 ctx.sectorQuote 注入；当前 surface 未配置 sector-quote manager',
+        'fetch_sector_quotes tool 需要 ctx.adapters.marketIntel?.sectorQuote 注入；当前 surface 未配置 sector-quote manager',
       );
     }
-    const r = await ctx.sectorQuote.fetchList(input);
+    const r = await ctx.adapters.marketIntel?.sectorQuote.fetchList(input);
     if (!r.ok || r.data === undefined) {
       // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
       const cause = r.error?.message ?? 'unknown error';

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { setAccountId } from './api.js';
 
 const originals = new Map(
-  ['Node', 'document', 'localStorage', 'sessionStorage', 'fetch'].map((key) => [
+  ['Node', 'document', 'localStorage', 'fetch'].map((key) => [
     key,
     Object.getOwnPropertyDescriptor(globalThis, key),
   ]),
@@ -47,42 +47,26 @@ const storage = () => {
     removeItem: (key) => values.delete(key),
   };
 };
-const pendingKey = 'luoome.decisionPending';
 const subject = { kind: 'advice', id: 'advice-1' };
-const refusal = (kind = 'invariant_violation') => ({
-  ok: false,
-  error: { kind, message: '账本已变化，请刷新', entity: 'DecisionWriteReceipt' },
-});
 let body;
 let requests;
 let respond;
 let openDecisionReview;
-let revision;
 let caseId = 0;
-const button = (text) =>
+const nodeByText = (text) =>
   allNodes(body).find((node) => node.tagName === 'button' && node.textContent === text);
+const nodeById = (id) => allNodes(body).find((node) => node.id === id);
+const texts = () =>
+  allNodes(body)
+    .map((node) => node.textContent)
+    .filter((value) => value !== '');
 const settle = async () => {
-  for (let n = 0; n < 12; n++) await Promise.resolve();
+  for (let n = 0; n < 20; n++) await Promise.resolve();
 };
 const click = async (text) => {
-  button(text).click();
+  nodeByText(text).click();
   await settle();
 };
-const pending = (accountId = 'account-a') =>
-  JSON.parse(sessionStorage.getItem(`${pendingKey}:${accountId}`));
-const context = () => ({
-  accountId: 'account-a',
-  stockId: null,
-  sourceOccurredAt: '2026-09-30T01:00:00Z',
-  context: { contextHash: 'context-hash', source: {} },
-  selected: null,
-  selectedRevision: null,
-  current: revision ? { review: { currentRevision: revision } } : null,
-  candidateTrades: [],
-  revisions: [],
-  observations: [],
-  observationStatus: 'unavailable',
-});
 
 beforeEach(async () => {
   body = new TestNode('div');
@@ -92,30 +76,34 @@ beforeEach(async () => {
     ['#modal-overlay', new TestNode('div')],
   ]);
   install('Node', TestNode);
-  const events = new EventTarget();
   install('document', {
-    addEventListener: events.addEventListener.bind(events),
-    dispatchEvent: events.dispatchEvent.bind(events),
+    addEventListener() {},
+    dispatchEvent() {},
     createElement: (tag) => new TestNode(tag),
     createTextNode: (text) => Object.assign(new TestNode(), { textContent: text }),
     querySelector: (selector) => nodes.get(selector) ?? null,
   });
   install('localStorage', storage());
-  install('sessionStorage', storage());
   localStorage.setItem('luoome.accountId', 'account-a');
   requests = [];
-  revision = 0;
-  respond = () => refusal();
+  respond = () => ({ ok: true, data: { review: {} } });
   install('fetch', async (path, init) => {
-    const request = {
+    const headers = init.headers ?? {};
+    const headerValue =
+      typeof headers.get === 'function'
+        ? headers.get('x-luoome-account-id')
+        : headers['x-luoome-account-id'];
+    requests.push({
       path,
-      accountId: init.headers.get('x-luoome-account-id'),
+      accountId: headerValue,
       input: init.body ? JSON.parse(init.body) : null,
-    };
-    requests.push(request);
-    if (path.startsWith('/api/decision-reviews/context'))
-      return Response.json({ ok: true, data: context() });
-    return Response.json(await respond(request));
+    });
+    if (path.startsWith('/api/decision-reviews?'))
+      return Response.json({
+        ok: true,
+        data: { accountId: 'account-a', records: [], nextCursor: null },
+      });
+    return Response.json(respond());
   });
   ({ openDecisionReview } = await import(`./decision-review-ui.js?case=${caseId++}`));
 });
@@ -126,157 +114,88 @@ afterEach(() => {
   }
 });
 
-describe('决策复盘未决请求恢复', () => {
-  it('切换账户后旧写入响应不能把未决请求写进新账户存储', async () => {
-    setAccountId('account-a');
-    let complete;
-    respond = () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      });
-    await openDecisionReview(subject);
-    await click('保存复盘');
-    const keyA = `${pendingKey}:account-a`;
-    const requestA = JSON.parse(sessionStorage.getItem(keyA));
-    expect(requestA.outcome).toBe('unknown');
-    setAccountId('account-b');
-    complete(refusal());
-    await settle();
-    expect(sessionStorage.getItem(`${pendingKey}:account-b`)).toBeNull();
-    expect(JSON.parse(sessionStorage.getItem(keyA))).toEqual(requestA);
-  });
-
-  it('切出再切回同一账户后旧回执不能修改新会话或执行保存回调', async () => {
+describe('决策复盘单表弹窗', () => {
+  it('按 subject 读取最近复盘并提交单表 save_decision_review 语义', async () => {
     setAccountId('account-a');
     let saved = 0;
-    let complete;
-    respond = () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      });
-    await openDecisionReview(subject, {
-      onSaved: () => {
-        saved++;
+    await openDecisionReview(subject, { onSaved: async () => (saved += 1) });
+    expect(requests[0]?.path).toContain('subjectKind=advice');
+    expect(requests[0]?.path).toContain('subjectId=advice-1');
+    expect(requests[0]?.accountId).toBe('account-a');
+
+    nodeById('decision-review-note').value = '复盘结论';
+    nodeById('decision-review-tags').value = '按计划, 追高';
+    nodeById('decision-review-trades').value = 'trade-1,trade-2';
+    await click('保存复盘');
+    const save = requests.find((request) => request.path === '/api/decision-reviews');
+    expect(save?.input).toEqual({
+      subject,
+      content: {
+        tradeIds: ['trade-1', 'trade-2'],
+        adviceFeedback: null,
+        lessonTags: ['按计划', '追高'],
+        note: '复盘结论',
       },
     });
-    await click('保存复盘');
-    const key = `${pendingKey}:account-a`;
-    const original = sessionStorage.getItem(key);
-    setAccountId('account-b');
-    setAccountId('account-a');
-    complete({ ok: true, data: {} });
-    await settle();
-    expect(sessionStorage.getItem(key)).toBe(original);
-    expect(saved).toBe(0);
-  });
-
-  it('原子拒绝后核对回执，重新读取修订并允许新请求', async () => {
-    await openDecisionReview(subject);
-    await click('保存复盘');
-    const first = pending();
-    expect(first.outcome).toBe('rejected');
-    revision = 2;
-    respond = (request) => (request.input ? { ok: true, data: {} } : refusal('not_found'));
-    await click('确认未提交并重新加载');
-    expect(pending()).toBeNull();
-    await click('保存复盘');
-    const writes = requests.filter((request) => request.input);
-    expect(writes).toHaveLength(2);
-    expect(writes[1].input.requestId).not.toBe(first.input.requestId);
-    expect(writes[1].input.expectedRevision).toBe(2);
-    expect(requests.every((request) => request.accountId === 'account-a')).toBe(true);
-  });
-
-  it.each(['invalid_input', 'not_found', 'permission_denied'])(
-    '%s 明确拒绝也可核对后恢复',
-    async (kind) => {
-      respond = () => refusal(kind);
-      await openDecisionReview(subject);
-      await click('保存复盘');
-      expect(pending().outcome).toBe('rejected');
-      expect(button('确认未提交并重新加载')).toBeDefined();
-    },
-  );
-
-  it('响应丢失后 not_found 回执不足以释放请求，重试保持原键和内容', async () => {
-    respond = () => {
-      throw new TypeError('response lost');
-    };
-    await openDecisionReview(subject);
-    await click('保存复盘');
-    const first = pending();
-    expect(first.outcome).toBe('unknown');
-    expect(button('确认未提交并重新加载')).toBeUndefined();
-    respond = (request) => refusal(request.input ? 'invariant_violation' : 'not_found');
-    await click('查询上次未决提交');
-    await click('复用原请求重试');
-    expect(pending().input).toEqual(first.input);
-    expect(pending().outcome).toBe('unknown');
-    expect(button('确认未提交并重新加载')).toBeUndefined();
-    await click('保存复盘');
-    expect(requests.filter((request) => request.input)).toHaveLength(2);
-  });
-
-  it('写入和重试期间禁用并阻止并发查询与重试', async () => {
-    let complete;
-    respond = () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      });
-    await openDecisionReview(subject);
-    await click('保存复盘');
-    expect(button('复用原请求重试').disabled).toBe(true);
-    expect(button('查询上次未决提交').disabled).toBe(true);
-    await click('复用原请求重试');
-    expect(requests.filter((request) => request.input)).toHaveLength(1);
-    complete(refusal());
-    await settle();
-    await click('复用原请求重试');
-    expect(button('复用原请求重试').disabled).toBe(true);
-    await click('复用原请求重试');
-    expect(requests.filter((request) => request.input)).toHaveLength(2);
-    complete({ ok: true, data: {} });
-    await settle();
-    expect(pending()).toBeNull();
-  });
-
-  it('账户切换阻止恢复、查询和重试，异步回执也不能清除原账户请求', async () => {
-    await openDecisionReview(subject);
-    await click('保存复盘');
-    const first = pending();
-    localStorage.setItem('luoome.accountId', 'account-b');
-    const count = requests.length;
-    await click('确认未提交并重新加载');
-    await click('查询上次未决提交');
-    await click('复用原请求重试');
-    expect(requests).toHaveLength(count);
-    localStorage.setItem('luoome.accountId', 'account-a');
-    let complete;
-    respond = () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      });
-    await click('确认未提交并重新加载');
-    localStorage.setItem('luoome.accountId', 'account-b');
-    complete(refusal('not_found'));
-    await settle();
-    expect(pending().input).toEqual(first.input);
-  });
-
-  it('恢复核对若发现成功回执则收敛为成功，查询失败则保留原请求', async () => {
-    let saved = 0;
-    await openDecisionReview(subject, {
-      onSaved: () => {
-        saved++;
-      },
-    });
-    await click('保存复盘');
-    respond = () => refusal('internal');
-    await click('确认未提交并重新加载');
-    expect(pending()).not.toBeNull();
-    respond = () => ({ ok: true, data: {} });
-    await click('确认未提交并重新加载');
-    expect(pending()).toBeNull();
     expect(saved).toBe(1);
+  });
+
+  it('advice 反馈随复盘一起保存，盈亏未知不写成 0', async () => {
+    setAccountId('account-a');
+    await openDecisionReview(subject);
+    nodeById('decision-review-note').value = '按建议执行';
+    nodeById('decision-review-outcome').value = 'partially_followed';
+    await click('保存复盘');
+    const save = requests.find((request) => request.path === '/api/decision-reviews');
+    expect(save?.input).toEqual({
+      subject,
+      content: {
+        tradeIds: [],
+        adviceFeedback: { outcome: 'partially_followed' },
+        lessonTags: [],
+        note: '按建议执行',
+      },
+    });
+  });
+
+  it('空内容只提示本地校验错误，不提交写入', async () => {
+    setAccountId('account-a');
+    await openDecisionReview(subject);
+    await click('保存复盘');
+    expect(requests.some((request) => request.path === '/api/decision-reviews')).toBe(false);
+    expect(texts()).toContain('复盘内容不能全部为空');
+  });
+
+  it('保存失败展示 ToolError，不触发 onSaved', async () => {
+    setAccountId('account-a');
+    respond = () => ({ ok: false, error: { kind: 'invalid_input', message: '关联成交不可用' } });
+    let saved = 0;
+    await openDecisionReview(subject, { onSaved: async () => (saved += 1) });
+    nodeById('decision-review-note').value = '复盘结论';
+    await click('保存复盘');
+    expect(saved).toBe(0);
+    expect(texts().some((text) => text.includes('关联成交不可用'))).toBe(true);
+  });
+
+  it('交易计划版本映射为单表 trading-plan 对象', async () => {
+    setAccountId('account-a');
+    await openDecisionReview({ kind: 'trading-plan-version', id: 'plan-v1' });
+    expect(requests[0]?.path).toContain('subjectKind=trading-plan');
+    expect(requests[0]?.path).toContain('subjectId=plan-v1');
+    nodeById('decision-review-note').value = '计划执行复盘';
+    await click('保存复盘');
+    const save = requests.find((request) => request.path === '/api/decision-reviews');
+    expect(save?.input).toMatchObject({
+      subject: { kind: 'trading-plan', id: 'plan-v1' },
+    });
+  });
+
+  it('盯盘提醒改为原生反馈，不再写复盘修订', async () => {
+    setAccountId('account-a');
+    await openDecisionReview({ kind: 'watch-trigger', id: 'trigger-1' });
+    expect(requests).toHaveLength(0);
+    await click('保存反馈');
+    expect(requests[0]?.path).toBe('/api/watch/triggers/trigger-1/feedback');
+    expect(requests[0]?.input).toEqual({ feedback: 'handled' });
   });
 });

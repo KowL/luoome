@@ -133,7 +133,6 @@ describe('assertTradeInvariants', () => {
       assertTradeInvariants({
         ...validTrade(),
         adviceId: 'advice-1',
-        researchHypothesisVersionId: 'hypothesis-1',
         strategyVersionId: 'strategy-v1',
       }),
     ).not.toThrow();

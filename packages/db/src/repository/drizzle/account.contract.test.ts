@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { createDefaultAccount, money } from '@luoome/core';
 import { createDrizzleRepos } from '../../client.js';
-import { createInMemoryRepos } from '../memory/index.js';
 
-for (const mode of ['memory', 'drizzle'] as const) {
+for (const mode of ['drizzle'] as const) {
   describe(`AccountRepository [${mode}]`, () => {
     it('atomically ensures one default and preserves an existing nondefault id and ledger', async () => {
-      const handle = mode === 'drizzle' ? createDrizzleRepos(':memory:') : null;
-      const repos = handle?.repos ?? createInMemoryRepos();
+      const handle = createDrizzleRepos(':memory:');
+      const repos = handle.repos;
       try {
         const candidate = createDefaultAccount(new Date('2026-10-11T01:00:00Z'));
         const existing = {
@@ -24,13 +23,13 @@ for (const mode of ['memory', 'drizzle'] as const) {
         expect(results).toEqual(Array.from({ length: 10 }, () => existing));
         expect(await repos.account.list()).toEqual([existing]);
       } finally {
-        handle?.close();
+        handle.close();
       }
     });
 
     it('creates once from an empty store and refuses multiple accounts without modifying any', async () => {
-      const handle = mode === 'drizzle' ? createDrizzleRepos(':memory:') : null;
-      const repos = handle?.repos ?? createInMemoryRepos();
+      const handle = createDrizzleRepos(':memory:');
+      const repos = handle.repos;
       try {
         const candidate = createDefaultAccount(new Date('2026-10-11T01:00:00Z'));
         const results = await Promise.all(
@@ -45,13 +44,13 @@ for (const mode of ['memory', 'drizzle'] as const) {
         );
         expect(await repos.account.list()).toEqual(before);
       } finally {
-        handle?.close();
+        handle.close();
       }
     });
 
     it('renames without overwriting financial changes made after the caller read the account', async () => {
-      const handle = mode === 'drizzle' ? createDrizzleRepos(':memory:') : null;
-      const repos = handle?.repos ?? createInMemoryRepos();
+      const handle = createDrizzleRepos(':memory:');
+      const repos = handle.repos;
       try {
         const original = createDefaultAccount(new Date('2026-10-11T01:00:00Z'));
         await repos.account.save(original);
@@ -63,7 +62,7 @@ for (const mode of ['memory', 'drizzle'] as const) {
         });
         expect(await repos.account.updateName('absent', '不存在')).toBeNull();
       } finally {
-        handle?.close();
+        handle.close();
       }
     });
   });

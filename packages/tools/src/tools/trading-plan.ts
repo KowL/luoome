@@ -23,10 +23,7 @@ import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { deriveAccountFacts } from './account-facts.js';
 
 const latestReviews = async (ctx: ToolContext, accountId: string) => {
-  const runs = await ctx.repos.workflowRun.listRecent({
-    workflowName: 'trading-plan-daily-cycle',
-    limit: 200,
-  });
+  const runs = await ctx.repos.workflowRun.listRecent({ limit: 200 });
   const reviews = new Map<string, TradingPlanReview>();
   for (const run of runs) {
     if (run.inputSummary?.accountId !== accountId || !Array.isArray(run.outputSummary?.reviews))

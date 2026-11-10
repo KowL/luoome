@@ -1,9 +1,4 @@
-import {
-  type UnifiedRun,
-  WorkflowRunStatusSchema,
-  watchRunToUnified,
-  workflowRunToUnified,
-} from '@luoome/core';
+import { type UnifiedRun, WorkflowRunStatusSchema, workflowRunToUnified } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -25,8 +20,6 @@ export const ListWorkflowRunsInput = z.object({
   status: WorkflowRunStatusSchema.optional(),
   since: z.coerce.date().optional(),
   limit: z.number().int().positive().max(200).default(50),
-  /** 合并 WatchRun（intraday-watch）视图，默认 true。 */
-  includeWatch: z.boolean().default(true),
 });
 
 export const ListWorkflowRunsOutput = z.object({
@@ -35,7 +28,7 @@ export const ListWorkflowRunsOutput = z.object({
 
 /**
  * list_workflow_runs（ruo 迁移 §3.4 / §7.3，read）。
- * 默认返回 WorkflowRun + WatchRun 合并的统一视图（UnifiedRun），按 startedAt 倒序。
+ * 返回 WorkflowRun 统一视图（UnifiedRun），按 startedAt 倒序；intraday-watch 同样记录在此。
  */
 export const listWorkflowRunsTool = defineTool({
   name: 'list_workflow_runs',
@@ -50,22 +43,9 @@ export const listWorkflowRunsTool = defineTool({
       ...(input.since !== undefined ? { since: input.since } : {}),
       limit: input.limit,
     });
-    const runs: UnifiedRun[] = workflowRuns.map(workflowRunToUnified);
-
-    const wantWatch =
-      input.includeWatch &&
-      (input.workflowName === undefined || input.workflowName === 'intraday-watch');
-    if (wantWatch) {
-      const watchRuns = await ctx.repos.watchRun.listRecent(input.limit);
-      for (const wr of watchRuns) {
-        const u = watchRunToUnified(wr);
-        if (input.since !== undefined && u.startedAt.getTime() < input.since.getTime()) continue;
-        if (input.status !== undefined && u.status !== input.status) continue;
-        runs.push(u);
-      }
-    }
-
-    runs.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+    const runs: UnifiedRun[] = workflowRuns
+      .map(workflowRunToUnified)
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
     return { runs: runs.slice(0, input.limit) };
   },
 });

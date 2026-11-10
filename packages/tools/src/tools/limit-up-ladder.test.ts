@@ -32,8 +32,7 @@ describe('limit_up_ladder tool', () => {
   const makeCtx = (manager: LimitUpLadderManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      limitUpLadder: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { limitUpLadder: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
@@ -95,8 +94,7 @@ describe('limit_up_ladder_compare tool', () => {
   const makeCtx = (manager: LimitUpLadderManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      limitUpLadder: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { limitUpLadder: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },

@@ -290,63 +290,6 @@ const alertFeedbackSection = async (
   };
 };
 
-const nextWeekEventsSection = async (
-  periodEnd: string,
-  now: Date,
-  ctx: WorkflowContext,
-): Promise<ReportSectionPiece> => {
-  let from = new Date(shanghaiDate(periodEnd).getTime() + DAY_MS);
-  while (isWeekend(from) || isHoliday(from)) from = new Date(from.getTime() + DAY_MS);
-  const to = new Date(from.getTime() + 7 * DAY_MS - 1);
-  const result = await ctx.tools.list_stock_events.execute({
-    from,
-    to,
-    status: 'scheduled',
-    importance: 'important',
-    limit: 500,
-  });
-  if (!result.ok) {
-    return unavailableSection(
-      'next-week-events',
-      '下周重要事件',
-      true,
-      now,
-      'stock-events',
-      result.error.kind,
-    );
-  }
-  const stale = result.data.events.filter((event) => event.stale);
-  const evidence = [
-    localEvidence('next-week-events:0', 'next-week-events', now, 'local/stock-events'),
-  ];
-  return {
-    evidence,
-    section: {
-      key: 'next-week-events',
-      title: '下周重要事件',
-      required: true,
-      status: stale.length === 0 ? 'complete' : 'partial',
-      dataAsOf: now,
-      blocks: [
-        {
-          kind: 'list',
-          items: result.data.events.map((event) => ({
-            title: event.title,
-            detail: `${event.stockId} · ${dateInShanghai(event.occursAt)}`,
-            entityKind: 'stock-event' as const,
-            entityId: event.id,
-          })),
-        },
-      ],
-      evidenceIds: evidence.map((item) => item.id),
-      missingDimensions:
-        stale.length === 0
-          ? []
-          : [missing('next-week-events.freshness', `${stale.length} 条事件已标记 stale`, 'stale')],
-    },
-  };
-};
-
 const signalObservationWeekSection = async (
   periodStart: string,
   periodEnd: string,
@@ -631,105 +574,6 @@ const strategyReviewWeekSection = async (
       ],
       evidenceIds: evidence.map((item) => item.id),
       missingDimensions,
-    },
-  };
-};
-
-const AUTONOMY_KIND_LABELS: Record<string, string> = {
-  pause: '自动暂停',
-  archive: '自动归档',
-  'propose-version': '提议版本',
-  'publish-version': '发布版本',
-};
-
-const autonomySnapshotSummary = (action: {
-  readonly ruleSnapshot?: Record<string, unknown> | undefined;
-}): string => {
-  const snapshot = action.ruleSnapshot;
-  if (snapshot === undefined) return '';
-  const sampleCount = snapshot.sampleCount;
-  const benchmarkCoverage = snapshot.benchmarkCoverage;
-  const avgExcessReturn = snapshot.avgExcessReturn;
-  const medianExcessReturn = snapshot.medianExcessReturn;
-  const publishedVersion = snapshot.publishedVersion;
-  const parts: string[] = [];
-  if (typeof sampleCount === 'number') parts.push(`完整样本 ${sampleCount}`);
-  if (typeof benchmarkCoverage === 'number') {
-    parts.push(`基准覆盖 ${(benchmarkCoverage * 100).toFixed(1)}%`);
-  }
-  if (typeof avgExcessReturn === 'number') {
-    parts.push(`平均超额 ${(avgExcessReturn * 100).toFixed(2)}%`);
-  }
-  if (typeof medianExcessReturn === 'number') {
-    parts.push(`中位超额 ${(medianExcessReturn * 100).toFixed(2)}%`);
-  }
-  if (typeof publishedVersion === 'number') parts.push(`发布 v${publishedVersion}`);
-  return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
-};
-
-/**
- * 「AI 管理动作」（DDD strategy-ai-lifecycle §4，M2-S1）：本周 StrategyAutonomyAction
- * 的事实列表。detail 只读 ruleSnapshot 的确定性指标，不引用 aiNarrative 做判定式表述。
- */
-const strategyAutonomyActionsWeekSection = async (
-  periodStart: string,
-  now: Date,
-  ctx: WorkflowContext,
-): Promise<ReportSectionPiece> => {
-  // until 用 now（周报生成时刻）而非 periodEnd：自治动作在周日生成，晚于回溯到
-  // 上周五的 periodEnd，若用 periodEnd 作上界会把「本周动作」全部排除。
-  const result = await ctx.tools.list_strategy_autonomy_actions.execute({
-    since: new Date(`${periodStart}T00:00:00+08:00`),
-    until: now,
-    limit: 500,
-  });
-  if (!result.ok) {
-    return unavailableSection(
-      'strategy-autonomy-actions',
-      'AI 管理动作',
-      false,
-      now,
-      'strategy-autonomy-actions',
-      result.error.kind,
-    );
-  }
-  const evidence = [
-    localEvidence(
-      'strategy-autonomy-actions:0',
-      'strategy-autonomy-actions',
-      now,
-      'tool:list_strategy_autonomy_actions',
-    ),
-  ];
-  return {
-    evidence,
-    section: {
-      key: 'strategy-autonomy-actions',
-      title: 'AI 管理动作',
-      required: false,
-      status: 'complete',
-      dataAsOf: now,
-      blocks: [
-        {
-          kind: 'list',
-          items: result.data.actions.map((action) => ({
-            title: `${AUTONOMY_KIND_LABELS[action.kind] ?? action.kind} · ${action.status}`,
-            detail: `${action.strategyId}${autonomySnapshotSummary(action)}`,
-            entityKind: 'strategy' as const,
-            entityId: action.strategyId,
-          })),
-        },
-        {
-          kind: 'text',
-          tone: 'factual',
-          text:
-            result.data.total === 0
-              ? '本周没有 AI 管理动作。'
-              : '以上为确定性规则触发并落库的管理动作；AI 解释文本不参与任何状态判定。',
-        },
-      ],
-      evidenceIds: evidence.map((item) => item.id),
-      missingDimensions: [],
     },
   };
 };
@@ -1086,11 +930,6 @@ const tradeAttributionWeekSection = (
           (total, entry) => total + (entry.review?.trades.attributionCounts.advice ?? 0),
           0,
         ),
-        researchHypothesisVersion: data.entries.reduce(
-          (total, entry) =>
-            total + (entry.review?.trades.attributionCounts.researchHypothesisVersion ?? 0),
-          0,
-        ),
         strategyVersion: data.entries.reduce(
           (total, entry) => total + (entry.review?.trades.attributionCounts.strategyVersion ?? 0),
           0,
@@ -1106,12 +945,7 @@ const tradeAttributionWeekSection = (
   const unattributedRows = data.entries
     .flatMap((entry) =>
       (entry.trades?.trades ?? [])
-        .filter(
-          (trade) =>
-            trade.adviceId === undefined &&
-            trade.researchHypothesisVersionId === undefined &&
-            trade.strategyVersionId === undefined,
-        )
+        .filter((trade) => trade.adviceId === undefined && trade.strategyVersionId === undefined)
         .map((trade) => ({ accountId: entry.accountId, trade })),
     )
     .slice(0, 10);
@@ -1128,7 +962,7 @@ const tradeAttributionWeekSection = (
     missingDimensions.push(missing('trade-attribution.samples', '当前窗口没有交易事实', 'no_data'));
   }
   const limitations = [
-    '关联统计只读取 Trade 上显式保存的 Advice、ResearchHypothesisVersion 或 StrategyVersion；无关联不是失败，也不从行情或 Advice 反推关联。',
+    '关联统计只读取 Trade 上显式保存的 Advice 或 StrategyVersion；无关联不是失败，也不从行情或 Advice 反推关联。',
     '未关联交易列表最多展示 10 条摘要，不包含完整账本。',
   ];
   if (!tradeRowsComplete && data.accountIds.length > 0) {
@@ -1168,11 +1002,6 @@ const tradeAttributionWeekSection = (
               key: 'adviceAttributions',
               label: 'Advice 归因数',
               value: attributionCounts?.advice ?? null,
-            },
-            {
-              key: 'researchHypothesisAttributions',
-              label: '研究假设归因数',
-              value: attributionCounts?.researchHypothesisVersion ?? null,
             },
             {
               key: 'strategyAttributions',
@@ -1593,9 +1422,7 @@ const runWeeklyReport = async (
           alerts,
           signalOutcomes,
           strategyReview,
-          autonomyActions,
           adviceOutcomes,
-          events,
           decisionLoopData,
         ] = await Promise.all([
           marketWeekSection(dates, generatedAt, ctx),
@@ -1603,9 +1430,7 @@ const runWeeklyReport = async (
           alertFeedbackSection(input.scope, periodStart, periodEnd, generatedAt, ctx),
           signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
           strategyReviewWeekSection(periodStart, periodEnd, generatedAt, ctx),
-          strategyAutonomyActionsWeekSection(periodStart, generatedAt, ctx),
           adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
-          nextWeekEventsSection(periodEnd, generatedAt, ctx),
           loadDecisionLoopScope(input, periodStart, periodEnd, ctx),
         ]);
         const tradeAttribution = tradeAttributionWeekSection(decisionLoopData, generatedAt);
@@ -1637,13 +1462,11 @@ const runWeeklyReport = async (
           alerts,
           signalOutcomes,
           strategyReview,
-          autonomyActions,
           adviceOutcomes,
           tradeAttribution,
           behaviorPatterns,
           dataQuality,
           researchChanges,
-          events,
         ];
       },
     },

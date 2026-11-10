@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
+import {
+  buildTestContext,
+  recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
+} from '../testing/context.js';
 import { getConfidenceCalibrationTool } from './get-confidence-calibration.js';
-import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const accountEvidence = (stockId: string, accountId: string) => ({
   strategyId: 'calibration-strategy',

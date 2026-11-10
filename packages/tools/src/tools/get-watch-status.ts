@@ -1,4 +1,4 @@
-import { WatchRunSchema } from '@luoome/core';
+import { WorkflowRunSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -11,20 +11,23 @@ export const GetWatchStatusInput = z.object({
 
 export const GetWatchStatusOutput = z.object({
   state: WatchHealthStateSchema,
-  latest: WatchRunSchema.nullable(),
+  latest: WorkflowRunSchema.nullable(),
   staleAfterSeconds: z.number().int().positive(),
 });
 
 export const getWatchStatusTool = defineTool({
   name: 'get_watch_status',
-  description: '查询 watch 最近运行与健康状态（无触发时也有心跳）',
+  description: '查询 watch 最近运行与健康状态（intraday-watch 心跳记录在 workflow_runs）',
   sideEffect: 'read',
   input: GetWatchStatusInput,
   output: GetWatchStatusOutput,
   handler: async (input, ctx) => {
     const staleAfterSeconds = Math.max(input.expectedIntervalSeconds * 3, 180);
-    const latest = await ctx.repos.watchRun.latest();
-    if (latest === null) return { state: 'never' as const, latest: null, staleAfterSeconds };
+    const [latest] = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'intraday-watch',
+      limit: 1,
+    });
+    if (latest === undefined) return { state: 'never' as const, latest: null, staleAfterSeconds };
     if (latest.status === 'failed') {
       return { state: 'failed' as const, latest, staleAfterSeconds };
     }

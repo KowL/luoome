@@ -41,9 +41,6 @@ const asRecord = (value: unknown): ParsedInput =>
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-const knownness = (raw: ParsedInput, key: string): DraftDisplayField['value'] =>
-  key in raw ? '已知' : '未知';
-
 /**
  * source 判定：出现在模型原始 input 中的字段标 'user'；schema 校验补全（raw 中缺失）
  * 的标 'default'；'inferred' 只留给 summarizer 能明确推断的字段。
@@ -83,49 +80,6 @@ const CASH_FLOW_LABELS: Readonly<Record<PortfolioCashFlowKind, string>> = {
 };
 
 const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
-  research_investment_directions: (raw, parsed) => ({
-    targetObject: '参与方向研究（使用模型）',
-    fields: [
-      field(raw, parsed, 'question', '研究问题'),
-      field(
-        raw,
-        parsed,
-        'strategyIds',
-        '比较范围',
-        parsed.strategyIds ?? '合格策略或实际市场事实（无预设策略也可研究）',
-      ),
-    ],
-    unsupported: [
-      '按市场事实或明确选择的已发布策略研究方向；不代表全市场个股筛选。没有策略映射的市场方向只讨论与保存，不能开启个股跟踪。',
-    ],
-    ambiguous: ['研究结果仅用于讨论；不保存共识、开启持续付费研究或通知。'],
-  }),
-  save_investment_consensus: (raw, parsed) => ({
-    targetObject: '参与方向共识（仅未来研究）',
-    fields: [
-      field(raw, parsed, 'expectedVersion', '基于共识版本'),
-      field(raw, parsed, 'changes', '明确修改范围'),
-      field(raw, parsed, 'source', '用户原意与讨论来源'),
-      field(raw, parsed, 'reviewAt', '复核时间'),
-      field(raw, parsed, 'validUntil', '有效期'),
-    ],
-    unsupported: ['不调整已有持仓、逐股计划或持仓风险跟踪，不代表买入或成交。'],
-    ambiguous: ['修订会暂停本功能旧方向的新候选同步；重新开启跟踪需要单独确认。省略字段保留旧值。'],
-  }),
-  set_investment_tracking: (raw, parsed) => ({
-    targetObject: parsed.action === 'pause' ? '暂停方向新候选同步' : '连接方向候选跟踪',
-    fields: [
-      field(raw, parsed, 'expectedVersion', '确认的共识版本'),
-      field(raw, parsed, 'action', '操作'),
-      ...(parsed.recoverAttemptId === undefined
-        ? []
-        : [field(raw, parsed, 'recoverAttemptId', '核对后暂停的中断尝试')]),
-    ],
-    unsupported: [
-      '只操作方向专用关注列表与策略订阅；不自动开启策略调度、付费研究或通知渠道，不修改持仓风险计划。',
-    ],
-    ambiguous: ['保存订阅不等于后台正在执行；按实际返回状态核对未启动、部分失败与恢复结果。'],
-  }),
   create_account: (raw, parsed) => {
     const input = parsed as z.infer<typeof CreateAccountInput>;
     return {
@@ -293,50 +247,45 @@ const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
       ),
     ],
   }),
-  create_research_topic: (raw, parsed) => ({
-    targetObject: `研究主题「${text(parsed.title)}」`,
-    fields: [
-      field(raw, parsed, 'title', '标题'),
-      field(raw, parsed, 'kind', '类型'),
-      ...(parsed.summary !== undefined ? [field(raw, parsed, 'summary', '摘要')] : []),
-      field(raw, parsed, 'tags', '标签'),
-    ],
-  }),
-  create_research_hypothesis_version: (raw, parsed) => ({
-    targetObject: `研究假设版本「${text(parsed.topicId)}」`,
-    fields: [
-      field(raw, parsed, 'topicId', 'Topic'),
-      field(raw, parsed, 'documentId', 'Document'),
-      field(raw, parsed, 'documentContentHash', '内容 Hash'),
-      field(raw, parsed, 'summary', '摘要'),
-    ],
-  }),
-  record_advice_outcome: (raw, parsed) => ({
-    targetObject: `Advice 结果「${text(parsed.adviceId)}」`,
-    fields: [
-      field(raw, parsed, 'adviceId', 'Advice'),
-      field(raw, parsed, 'outcome', '结果'),
-      field(raw, parsed, 'tradeIds', '交易 IDs'),
-      {
-        name: '盈亏已知性',
-        value: knownness(raw, 'pnl'),
-        source: 'pnl' in raw ? ('user' as const) : ('default' as const),
-      },
-      field(raw, parsed, 'pnl', '实际盈亏'),
-      {
-        name: '基准盈亏已知性',
-        value: knownness(raw, 'benchmarkPnl'),
-        source: 'benchmarkPnl' in raw ? ('user' as const) : ('default' as const),
-      },
-      ...(parsed.benchmarkPnl === undefined
-        ? []
-        : [field(raw, parsed, 'benchmarkPnl', '基准盈亏')]),
-      ...(parsed.holdingHours === undefined
-        ? []
-        : [field(raw, parsed, 'holdingHours', '持有时长（小时）')]),
-      ...(parsed.notes === undefined ? [] : [field(raw, parsed, 'notes', '复盘备注')]),
-    ],
-  }),
+  save_decision_review: (raw, parsed) => {
+    const subject = asRecord(parsed.subject);
+    const content = asRecord(parsed.content);
+    const rawContent = asRecord(raw.content);
+    const subjectText = `${text(subject.kind)} ${text(subject.id)}`;
+    return {
+      targetObject: `决策复盘「${subjectText}」`,
+      fields: [
+        { name: '复盘对象', value: subjectText, source: 'subject' in raw ? 'user' : 'default' },
+        ...(content.lessonTags === undefined
+          ? []
+          : [
+              {
+                name: '教训标签',
+                value: content.lessonTags,
+                source: 'lessonTags' in rawContent ? ('user' as const) : ('default' as const),
+              },
+            ]),
+        ...(content.note === undefined || content.note === null
+          ? []
+          : [
+              {
+                name: '复盘结论',
+                value: content.note,
+                source: 'note' in rawContent ? ('user' as const) : ('default' as const),
+              },
+            ]),
+        ...(content.tradeIds === undefined
+          ? []
+          : [
+              {
+                name: '关联成交',
+                value: content.tradeIds,
+                source: 'tradeIds' in rawContent ? ('user' as const) : ('default' as const),
+              },
+            ]),
+      ],
+    };
+  },
   analyze_stock: (raw, parsed) => ({
     targetObject: `个股 Advice（${text(parsed.stockId)}）`,
     fields: [

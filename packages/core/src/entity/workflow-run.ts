@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
-import type { WatchRun } from './watch-run.js';
-
 /**
  * Workflow 运行审计（ruo 能力迁移 Phase 1C，docs/ddd/ruo-feature-migration-detailed-design.md §3.4）。
  *
@@ -36,7 +34,7 @@ export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 
 export const WorkflowRunSchema = z.object({
   id: z.string().min(1),
-  /** 'sync-stock-events' | 'evaluate-event-rules' | 'refresh-groups' | ... */
+  /** 'post-market-data' | 'daily-advice' | 'closing-report' | ... */
   workflowName: z.string().min(1),
   mode: WorkflowRunModeSchema,
   status: WorkflowRunStatusSchema,
@@ -65,10 +63,6 @@ export const assertWorkflowRunInvariants = (run: WorkflowRun): void => {
   }
 };
 
-/**
- * WatchRun / WorkflowRun 统一读模型（docs/.../§3.4）。
- * list_workflow_runs 默认返回两者合并视图，供仪表盘 / 设置页消费。
- */
 export interface UnifiedRun {
   source: 'watch' | 'workflow';
   /** watch → 'intraday-watch'。 */
@@ -94,38 +88,3 @@ export const workflowRunToUnified = (run: WorkflowRun): UnifiedRun => ({
   ...(run.outputSummary !== undefined ? { summary: run.outputSummary } : {}),
   ...(run.error !== undefined ? { error: run.error } : {}),
 });
-
-/**
- * WatchRun → UnifiedRun。
- * WatchRun 只有 succeeded / failed / running 三态；notifyFailed>0 的 succeeded 映射为 partial
- * （§14 开放问题 4：按现有枚举定稿，用 notifyFailed 派生 partial）。
- */
-export const watchRunToUnified = (run: WatchRun): UnifiedRun => {
-  const status: UnifiedRun['status'] =
-    run.status === 'succeeded' &&
-    (run.notifyFailed > 0 ||
-      (run.unknownRules ?? 0) > 0 ||
-      (run.delivered !== undefined && run.delivered < run.notified))
-      ? 'partial'
-      : run.status;
-  return {
-    source: 'watch',
-    name: 'intraday-watch',
-    mode: run.mode,
-    status,
-    startedAt: run.startedAt,
-    ...(run.finishedAt !== null ? { finishedAt: run.finishedAt } : {}),
-    summary: {
-      evaluatedPools: run.evaluatedPools,
-      evaluatedStocks: run.evaluatedStocks,
-      triggered: run.triggered,
-      notified: run.notified,
-      suppressedByCooldown: run.suppressedByCooldown,
-      suppressedByDailyLimit: run.suppressedByDailyLimit,
-      notifyFailed: run.notifyFailed,
-      ...(run.delivered === undefined ? {} : { delivered: run.delivered }),
-      ...(run.unknownRules === undefined ? {} : { unknownRules: run.unknownRules }),
-    },
-    ...(run.error !== undefined ? { error: run.error } : {}),
-  };
-};

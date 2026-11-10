@@ -1,12 +1,27 @@
-import type { MarketSourceStatus, SourceStatus } from '@luoome/core';
+import type { MarketSourceStatus, SourceStatus, ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 import { computeMarketSession } from '../internal/market-view.js';
-import { computeRelevantStockIds } from './sync-stock-events.js';
 
 /** 新鲜度阈值：最新快照超过 15 分钟视为 stale（Phase 1 简化，不区分盘中/盘后）。 */
 const STALE_AFTER_MS = 15 * 60 * 1000;
+
+/** 关注范围 = 未平仓持仓 ∪ enabled Watchlist 当前成员（去重）。 */
+const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[]> => {
+  const set = new Set<string>();
+  for (const account of await ctx.repos.account.list()) {
+    for (const holding of await ctx.repos.holding.listByAccount(account.id)) {
+      if (holding.closedAt === null) set.add(holding.stockId);
+    }
+  }
+  for (const watchlist of await ctx.repos.watchlist.list({ enabledOnly: true })) {
+    for (const member of await ctx.repos.watchlistMember.listMembers(watchlist.id)) {
+      set.add(member.stockId);
+    }
+  }
+  return [...set];
+};
 
 export const ProviderFreshnessSchema = z.object({
   provider: z.string(),
@@ -101,11 +116,11 @@ export const getMarketDataStatusTool = defineTool({
     );
     // 非行情域 inventory 由各 manager 的 registry 观测提供（§6.4）；未装配的可选端口不产生对应 dataset
     const nonMarketInventory: readonly SourceStatus[] = [
-      ctx.limitUpLadder?.status(),
-      ctx.dragonTiger?.status(),
-      ctx.ashareSentiment?.status(),
-      ctx.northboundFlow?.status(),
-      ctx.news?.status(),
+      ctx.adapters.marketIntel?.limitUpLadder?.status(),
+      ctx.adapters.marketIntel?.dragonTiger?.status(),
+      ctx.adapters.marketIntel?.ashareSentiment?.status(),
+      ctx.adapters.marketIntel?.northboundFlow?.status(),
+      ctx.adapters.marketIntel?.news?.status(),
     ].flatMap((status) => status ?? []);
     const inventory: readonly SourceStatus[] = [
       ...marketInventory,
@@ -148,9 +163,17 @@ export const getMarketDataStatusTool = defineTool({
     });
 
     // watch 健康
-    const latestRun = await ctx.repos.watchRun.latest();
+    // watch 健康（intraday-watch 运行事实统一记录在 workflow_runs）
+    const [latestRun] = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'intraday-watch',
+      limit: 1,
+    });
+    const summaryNumber = (key: string): number | undefined => {
+      const value = latestRun?.outputSummary?.[key];
+      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    };
     const watchHealth =
-      latestRun === null
+      latestRun === undefined
         ? { state: 'never' as const }
         : {
             state:
@@ -160,8 +183,12 @@ export const getMarketDataStatusTool = defineTool({
                   ? ('running' as const)
                   : ('healthy' as const),
             latestRunAt: latestRun.finishedAt ?? latestRun.startedAt,
-            triggered: latestRun.triggered,
-            notifyFailed: latestRun.notifyFailed,
+            ...(summaryNumber('triggered') === undefined
+              ? {}
+              : { triggered: summaryNumber('triggered') }),
+            ...(summaryNumber('notifyFailed') === undefined
+              ? {}
+              : { notifyFailed: summaryNumber('notifyFailed') }),
           };
 
     const watchlistStale: Array<{ watchlistId: string; name: string }> = [];

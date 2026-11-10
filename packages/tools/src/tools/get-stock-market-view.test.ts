@@ -519,7 +519,13 @@ describe('tool/get_stock_market_view', () => {
       warnings: [],
       asOf: new Date('2026-07-20T07:00:00.000Z'),
     });
-    const ctx = { ...base, limitUpLadder: manager };
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        marketIntel: { ...base.adapters.marketIntel, limitUpLadder: manager },
+      },
+    };
     const res = await callView(ctx, {});
     expect(res.ok).toBe(true);
     if (!res.ok) return;

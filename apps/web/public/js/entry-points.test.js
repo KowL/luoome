@@ -155,15 +155,14 @@ describe('策略工作台高级 tab 收深', () => {
   const route = read('./strategy-workspace-route.js');
   const workspace = read('./strategy-workspace.js');
 
-  it('路由文件声明基础 / 高级 tab 分组（实验、AI 洞察、闭环收深）', () => {
+  it('路由文件声明基础 / 高级 tab 分组（AI 洞察、闭环收深）', () => {
     expect(route).toContain("export const BASIC_TABS = ['overview', 'pool', 'runs', 'settings']");
-    expect(route).toContain("export const ADVANCED_TABS = ['experiment', 'insights', 'cycle']");
+    expect(route).toContain("export const ADVANCED_TABS = ['insights', 'cycle']");
   });
 
   it('tab 条基础按钮 + 「高级」折叠分组；高级 tab 的渲染分发保持直连', () => {
     expect(workspace).toContain('strategy-tabs-advanced');
     expect(workspace).toContain('ADVANCED_TABS.includes(state.tab)');
-    expect(workspace).toContain("state.tab === 'experiment'");
     expect(workspace).toContain("state.tab === 'insights'");
     expect(workspace).toContain("state.tab === 'cycle'");
   });
@@ -193,31 +192,31 @@ describe('数据导出导入入口', () => {
   });
 });
 
-describe('研究 managed 写入入口', () => {
-  it('提供创建主题、导入资料和写入状态容器', () => {
+describe('研究笔记入口', () => {
+  it('提供 Vault 设置、手动同步与检索容器', () => {
     expect(html).toContain('id="research-vault-settings-form"');
     expect(html).toContain('id="research-vault-path"');
     expect(html).toContain('id="research-vault-save-btn"');
-    expect(html).toContain('id="research-create-topic-btn"');
-    expect(html).toContain('id="research-import-document-btn"');
-    expect(html).toContain('id="research-import-remote-btn"');
+    expect(html).toContain('id="research-sync-btn"');
+    expect(html).toContain('id="research-kind-filter"');
+    expect(html).toContain('id="research-index-status"');
     expect(html).toContain('id="research-write-status"');
-    expect(html).toContain('id="research-hybrid-search"');
-    expect(html).toContain('id="research-embedding-status"');
-    expect(html).toContain('id="research-embedding-rebuild-btn"');
-    expect(html).toContain('id="research-embedding-evaluate-btn"');
+    expect(html).toContain('id="research-search-results"');
+    expect(html).toContain('id="research-detail"');
+    expect(html).not.toContain('research-remote-sync-btn');
+    expect(html).not.toContain('research-embedding-rebuild-btn');
+    expect(html).not.toContain('research-hybrid-search');
   });
 
-  it('页面写入经过预览确认和统一 tool call', () => {
-    expect(read('./pages.js')).toContain('确认写入 managed Vault');
-    expect(read('./pages.js')).toContain('/api/tools/${' + 'toolName}/call');
-    expect(read('./pages.js')).toContain('import_local_research_document');
-    expect(read('./pages.js')).toContain('import_remote_research_document');
-    expect(read('./pages.js')).toContain('/api/settings/research-vault');
-    expect(read('./pages.js')).toContain('/api/research/search/hybrid');
-    expect(read('./pages.js')).toContain('/api/research/embeddings/rebuild');
-    expect(read('./pages.js')).toContain('/api/research/embeddings/evaluate');
-    expect(read('./pages.js')).toContain("result.status === 'failed'");
+  it('页面只保留同步与 document 检索调用', () => {
+    const pages = read('./pages.js');
+    expect(pages).toContain('/api/settings/research-vault');
+    expect(pages).toContain('/api/tools/sync_research_vault/call');
+    expect(pages).toContain('/api/research/search?q=');
+    expect(pages).toContain('/api/research/documents');
+    expect(pages).not.toContain('/api/research/search/hybrid');
+    expect(pages).not.toContain('/api/research/embeddings/');
+    expect(pages).not.toContain('import_remote_research_document');
   });
 });
 

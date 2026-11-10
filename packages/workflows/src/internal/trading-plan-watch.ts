@@ -19,8 +19,8 @@ import {
   WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
-import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
-import { type WatchWorkflowContext, watchExecutionStep } from './internal/watch-execution.js';
+
+import type { WorkflowContext } from '../define-workflow.js';
 
 export const IntradayTradingPlanWatchInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -541,9 +541,9 @@ const validatePublication = async (
   return { ok: true, candidates: validated, rejected, dropped };
 };
 
-const run = async (
+export const evaluateTradingPlanWatch = async (
   input: IntradayTradingPlanWatchInputT,
-  ctx: WatchWorkflowContext,
+  ctx: WorkflowContext,
 ): Promise<IntradayTradingPlanWatchOutputT> => {
   const accountId = input.accountId ?? ctx.user.defaultAccountId;
   const now = ctx.clock();
@@ -810,7 +810,6 @@ const run = async (
   }
   if (rearmed.size > 0) {
     const reset = await ctx.tools.commit_watch_evaluation.execute({
-      owner: ctx.watchExecutionOwner,
       triggers: [],
       states: [...rearmed.values()],
       ...(interruptedPendingIds.length === 0
@@ -977,7 +976,6 @@ const run = async (
     poolAttempted += 1;
     return { ...trigger, deliveryStatus: 'pending' as const };
   });
-  const owner = ctx.watchExecutionOwner;
   let finalTriggers = deliveryTriggers;
   const publicationFailure = async (
     reason: string,
@@ -999,7 +997,6 @@ const run = async (
     const committed =
       input.notify && auditTriggers.length > 0
         ? await ctx.tools.commit_watch_evaluation.execute({
-            owner,
             triggers: [],
             auditTriggers,
             states: [],
@@ -1059,7 +1056,6 @@ const run = async (
   finalTriggers = [...acceptedTriggers, ...publication.rejected, ...recordedTriggers];
   const committed = input.notify
     ? await ctx.tools.commit_watch_evaluation.execute({
-        owner,
         triggers: acceptedTriggers,
         auditTriggers: [...publication.rejected, ...recordedTriggers],
         states: nextStates.filter(
@@ -1104,7 +1100,6 @@ const run = async (
       const pendingKeys = new Set(pending.map((trigger) => `${trigger.stockId}:${trigger.ruleId}`));
       const reason = '非交易时段，未发送剩余盘中行动信号';
       const update = await ctx.tools.commit_watch_evaluation.execute({
-        owner,
         triggers: [],
         states: nextStates
           .filter((state) => pendingKeys.has(`${state.stockId}:${state.ruleId}`))
@@ -1210,15 +1205,3 @@ const run = async (
     errors,
   };
 };
-
-export const intradayTradingPlanWatchWorkflow = defineWorkflow<
-  IntradayTradingPlanWatchInputT,
-  IntradayTradingPlanWatchOutputT
->({
-  name: 'intraday-trading-plan-watch',
-  description: '按新鲜行情求值当前有效交易计划，合并入场条件、优先提示风险并投递可追溯信号',
-  input: IntradayTradingPlanWatchInput,
-  steps: [
-    watchExecutionStep([(previous, ctx) => run(previous as IntradayTradingPlanWatchInputT, ctx)]),
-  ],
-});

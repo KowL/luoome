@@ -96,46 +96,13 @@ AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5 事后观察。AI 只解释事
 fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
 时间、缺失率和小样本限制必须保留。
 
-### FinancialFact / FundamentalScore
+### 参与方向研究（Report + Watchlist）
 
-`FinancialFact` 是带报告期间、首次披露时间、revision 披露时间与本地记录时间的 append-only 财务事实；
-strict PIT 只读取截止 `asOf` 已公开且已被本地记录的 revision，撤回后不得回退旧值。`FundamentalScore`
-由版本化因子 registry、固定单位/方向、同一 vintage 横截面与最小样本门槛确定性计算，是 0～100 的规则分，
-不是概率、Advice 或交易授权。当前 P3-0～P3-2 已完成 Core、mock revision 装配、score version/run/result
-双仓储与确定性评分 Tool；`persist=false` 不写库，unavailable run 不保存可消费结果。mock 必须显式启用，
-评分与查询始终披露 `providerKind=mock`、`gate=not-ready`，且尚未接入 Strategy DSL。没有通过真实财务 revision 门禁前，不得用当前行情、
-股票目录行业、测试 fixture 或抓取时间替代生产 PIT 财务事实，也不得开放生产评分入口。
-
-### 参与方向与共识（InvestmentWorkspace）
-
-参与方向是有来源、明确覆盖范围和事实时间的研究提案；新用户不需要先配置 Strategy。
-`strategy-selection` 引用真实 published StrategyRun 与规则，保留确切策略/版本/运行身份；
-无合格预设策略时，`market-participation` 可引用市场广度、A股指数、封板/炸板情绪及供应商
-事件池行业分布的不可变快照，不编造 strategyId/runId。最多比较三个方向，不以有限股票样本或
-事件池推断全市场，不把池内行业计数当成完整板块行情或个股主题映射。缺公告/新闻不造催化。
-缺少合格事实时返回 unavailable，模型或引用失败返回 failed 并保留问题与实际事实。
-
-策略证据在下一交易日上海时间 16:30 到期；市场盘中事实在 observedAt 后20分钟或15:00（较早者）
-到期，收盘事实至下一交易日09:30。来源 unknown/stale、未来或跨日不作为依据；fetchedAt
-不刷新事实时间。IndexQuote 可显式提供 observedAt/fetchedAt/timestampSource；旧 Tencent 上游 ts
-可核验使用，旧 Eastmoney 的抓取时间 ts 不作为市场研究事实时间。真实供应商覆盖与质量另验。
-
-InvestmentConsensus 按用户与账户追加不可变版本，保存主次/回避方向、用户理由、系统反对、
-明确约束、近期意愿、讨论文本快照、复核与有效期。并发确认比较 expectedVersion，旧版本必须
-刷新后重新确认。省略的修改字段保留旧值，删除聊天不撤销共识；近期意愿过复核时间不继续作为
-当前授权。方向始终 research-only，用户坚持也不会把数据或账户硬约束变为可执行。
-
-市场方向可以确认并跨日保留共识，但没有真实策略与股票候选映射时不能开启个股跟踪；
-trackingEligibility 显式说明映射缺口，混合共识仅连接已映射策略并列出 unmappedDirections。
-确认方向不会自动创建或发布 Strategy，也不生成第二套逐股仓位与退出规则。
-共识保存与 InvestmentTracking 的 starting / tracking / partial / failed / paused 分开。
-跟踪只连接专用 Watchlist、Strategy 订阅与已有发布运行；不开启新的付费研究、自动调度或通知。
-方向订阅绑定确切共识和 Strategy 版本；换版、共识/意愿复核到期或暂停新机会时，不再同步新候选。
-共识修订暂停本功能旧方向的候选同步，重新开启需独立确认；它不修改已有持仓、TradingPlan
-或持仓风险提醒。失败可用新请求重试并复用专用列表；starting 表示仍在执行或执行结果待核对，
-不能盲重试。没有启用策略调度时即使候选已同步也标 partial；tracking 只表示接线完成，后台
-实际执行和投递仍以既有运行审计为准。个股研究通过 analyze_strategy_candidate，计划与预算
-继续复用 Advice / TradingPlan；同股多方向合并来源，不重复创建仓位规则。
+参与方向不再有独立持久化模型：研究结论以 `Report` 保存（报告支持市场展望类内容），关注的候选
+标的直接加入 `Watchlist`；没有 consensus / tracking 表、版本链或专属 Tool。方向研究提案仍须有
+来源、明确覆盖范围与事实时间，保留正反证据、风险、未知项与有效期；没有真实 Strategy 与股票
+候选映射时不能开启个股跟踪，也不能把有限样本推断成全市场结论。方向研究不自动创建 Advice
+或 Trade，也不修改已有持仓、TradingPlan 或持仓风险提醒。
 
 ### Watchlist
 
@@ -162,31 +129,29 @@ StrategySignal，不临时运行全市场 Strategy。
 
 ### 决策与复盘（DecisionReview）
 
-回答“这个账户面对哪份当时依据，用户实际记录了什么，后来有哪些可核对事实”。记录以
-`accountId + subject.kind + subject.id` 唯一，来源限定为 Advice、确切的 TradingPlan 版本或
-WatchTrigger。首次保存冻结来源快照；后续内容以不可变 DecisionReviewRevision 追加，保留修订时间、
-说明和显式成交关联。来源删除后仍可回看冻结快照。来源发生时间与用户记录时间是两种独立查询口径。
+回答“这个账户对哪次建议、计划或成交复盘了什么”。单表记录以
+`accountId + subject.kind + subject.id` 唯一，`subject.kind` 限定为 Advice、TradingPlan 或 Trade；
+`content_json` 内联复盘结论、教训标签、显式关联成交与 Advice 结果反馈。同一对象再次保存是
+覆盖更新：保留首次创建时间与记录 id，更新内容和修改时间；不保留修订历史、依据快照或写回执。
 
 用户反馈、成交事实与市场事后观察分别表达：关联成交不推断“采纳”，标记采纳也不伪造成交；
 盈亏未知保持缺失，0 仅表示用户明确填报的零盈亏。SignalObservation 只沿显式来源链展示，
 不按同股或相近时间拼接证据。建议统计与 confidence 校准只消费当前账户的明确反馈；
 填报盈利占比的分母是明确 followed 且填写盈亏的样本，不代表账户收益率或未来成功概率。
 
-登记已在系统外完成且尚未入账的成交时，成交、持仓、现金、所选来源的复盘修订与请求回执在
-同一事务提交；任一校验失败全部回滚。提交前校验账户、账本指纹、来源快照和修订版本，
-只接受对账可用账本的顺序追加。相同账户下的同一 requestId 只能对应同一请求内容，重试返回原回执。
-这条路径属于 trade 能力，不通过 MCP 暴露，也不调用券商下单。
+盯盘提醒反馈直接记录在 WatchTrigger 上，不写复盘表。录入已在系统外完成的成交统一走
+`add_trade`，不再提供复盘专用成交入口；复盘只保存成交引用，不改变账户现金或持仓。
 
 旧无账户归属的 AdviceOutcome 和 Trigger feedback 只保留历史数据，不进入账户统计。
 启动迁移仅将能校验账户、股票与时间关系的旧 `Trade.adviceId` 显式链接转成复盘关联，
-不补造用户反馈；迁移可重复执行，不覆盖已存在的复盘记录。
+不补造用户反馈；旧四表版本链的最新修订会复制为单表记录，旧表保留但不再读取。
 
 ### 个性化报告（Report）
 
 回答“某个周期发生了什么、哪些数据不可用、应去哪里继续研究”。报告保存结构化事实、数据
 截止时间、来源状态与缺失原因；Markdown 只是派生展示。报告不会自动生成 Advice 或触发交易。
 
-账户收盘报告与周报固定窗口内的复盘修订水位、修订身份和成交事实指纹。收盘复盘等待当日
+账户收盘报告与周报记录窗口内复盘输入指纹（`decisionReviewFingerprint`）。收盘复盘等待当日
 预期策略与该账户交易计划批次完成后统一生成，同一日期、同一范围只生成一份；重复生成和投递重试
 复用原报告，后到的数据不追加版本或改写正文。18:00 未完成的任务继续等待，不提前发布缺口版。
 周报支持根据后补或更正的本地事实生成不可变复盘补充版，保留原报告及其它章节；同一请求重试
@@ -283,14 +248,16 @@ D 未收盘封板。所需 raw OHLC、涨停价、交易日或前序窗口缺失
 schema、发布时间、revision 与真实凭据验收的数据源，因此这些字段不进入 Strategy registry；
 AShareSentiment 的近期炸板池不得倒灌历史 PIT。
 
-### ResearchTopic / ResearchDocument
+### ResearchDocument（研究笔记）
 
-研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
+研究资料统一为轻量 `ResearchDocument` 索引：`research_document_index` 保存标题、摘要 excerpt、标签、
+显式关联股票代码（`stock_codes` JSON）与本地 Markdown 路径、来源/校验字段；`research_document_fts`
+是按 document 粒度的可重建 FTS5 投影。正文权威来源是本地 Obsidian Vault，SQLite 不保存分块、向量、
+Topic/Hypothesis 版本链或同步审计；同步流程与 Git 远端拉取不再是研究域的持久化概念。
 
-股票研究 Profile 是上述显式链接的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
-evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式链接时不得按
-行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
-版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
+股票研究 Profile 是该索引的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
+evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式 `stockCodes`
+时不得按行业或当前股票池推断研究结论。研究资料与策略事实均不自动创建 Advice 或 Trade。
 
 ### 数据源观测（SourceObservation）
 

@@ -10,7 +10,6 @@ import {
   createAIStackFromEnv,
   createFileAuditLogger,
   createMarketAdapterFromEnv,
-  createResearchRemoteDocumentAdapter,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import {
@@ -61,7 +60,6 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
       }),
       llm: ai.llm,
     },
-    agent: ai.agent,
     portfolioBenchmark: {
       stockId:
         process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||
@@ -72,7 +70,6 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
     logger,
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'tui',
-    researchRemote: createResearchRemoteDocumentAdapter(),
   });
   return { ctx, close: handle.close };
 };

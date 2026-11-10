@@ -32,8 +32,7 @@ describe('fetch_news tool', () => {
   const makeCtx = (manager: NewsManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      news: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { news: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },

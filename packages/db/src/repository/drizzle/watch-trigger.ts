@@ -13,7 +13,6 @@ import {
   desc,
   eq,
   getTableColumns,
-  gt,
   gte,
   inArray,
   isNull,
@@ -24,13 +23,7 @@ import {
 } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import {
-  decisionReviewRevisions,
-  decisionReviews,
-  type Schema,
-  watchExecutionLease,
-  watchTriggers,
-} from '../../schema/index.js';
+import { type Schema, watchTriggers } from '../../schema/index.js';
 import { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 
 // drizzle inArray 对 narrow text 列 + 联合字符串入参的泛型不匹配；改用 or(eq,...) 等价（语义不变）。
@@ -100,19 +93,11 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
 
   async commitEvaluation(
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
-  ): Promise<boolean> {
+  ): Promise<void> {
     for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
     for (const trigger of input.auditTriggers ?? []) assertWatchTriggerInvariants(trigger);
     for (const state of input.states) WatchRuleStateSchema.parse(state);
-    return this.db.transaction((tx) => {
-      const lease = tx
-        .select()
-        .from(watchExecutionLease)
-        .where(
-          and(eq(watchExecutionLease.owner, input.owner), gt(watchExecutionLease.until, input.now)),
-        )
-        .get();
-      if (!lease) return false;
+    this.db.transaction((tx) => {
       for (const id of input.invalidatePending?.triggerIds ?? []) {
         const row = tx.select().from(watchTriggers).where(eq(watchTriggers.id, id)).get();
         if (row?.deliveryStatus !== 'pending')
@@ -136,60 +121,12 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       for (const trigger of input.triggers) triggers.put(trigger);
       for (const trigger of input.auditTriggers ?? []) triggers.put(trigger);
       for (const state of input.states) states.put(state);
-      return true;
     });
   }
 
-  async acquireExecution(owner: string, now: Date, until: Date): Promise<boolean> {
-    return (
-      this.db
-        .insert(watchExecutionLease)
-        .values({ id: 'watch', owner, until })
-        .onConflictDoUpdate({
-          target: watchExecutionLease.id,
-          set: { owner, until },
-          setWhere: lte(watchExecutionLease.until, now),
-        })
-        .returning()
-        .all().length === 1
-    );
-  }
-
-  async renewExecution(owner: string, now: Date, until: Date): Promise<boolean> {
-    return (
-      this.db
-        .update(watchExecutionLease)
-        .set({ until })
-        .where(
-          and(
-            eq(watchExecutionLease.id, 'watch'),
-            eq(watchExecutionLease.owner, owner),
-            gt(watchExecutionLease.until, now),
-          ),
-        )
-        .returning()
-        .all().length === 1
-    );
-  }
-
-  async releaseExecution(owner: string): Promise<void> {
-    this.db.delete(watchExecutionLease).where(eq(watchExecutionLease.owner, owner)).run();
-  }
-
-  ownsExecution(owner: string, now: Date): boolean {
-    return (
-      this.db
-        .select()
-        .from(watchExecutionLease)
-        .where(and(eq(watchExecutionLease.owner, owner), gt(watchExecutionLease.until, now)))
-        .get() !== undefined
-    );
-  }
-
-  async beginDelivery(ids: readonly string[], at: Date, owner?: string): Promise<boolean> {
+  async beginDelivery(ids: readonly string[], at: Date): Promise<boolean> {
     return this.db.transaction(
       () => {
-        if (owner !== undefined && !this.ownsExecution(owner, at)) return false;
         if (ids.length === 0) return true;
         this.db
           .update(watchTriggers)
@@ -311,17 +248,6 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
 
   async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
     const conditions: SQL[] = [];
-    const accountFeedback =
-      input.accountId === undefined
-        ? null
-        : sql<string | null>`(
-      SELECT json_extract(r.content_json, '$.triggerFeedback')
-      FROM decision_reviews d JOIN decision_review_revisions r
-        ON r.review_id = d.id AND r.revision = d.current_revision
-      WHERE d.account_id = ${input.accountId} AND d.subject_kind = 'watch-trigger'
-        AND d.subject_id = ${watchTriggers.id}
-      LIMIT 1
-    )`;
     if (input.alertPlanId !== undefined)
       conditions.push(
         sql`coalesce(${watchTriggers.alertPlanId}, ${watchTriggers.poolId}) = ${input.alertPlanId}`,
@@ -340,13 +266,9 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     }
     if (input.feedback !== undefined)
       conditions.push(
-        accountFeedback === null
-          ? input.feedback === 'unreviewed'
-            ? isNull(watchTriggers.feedback)
-            : eq(watchTriggers.feedback, input.feedback)
-          : input.feedback === 'unreviewed'
-            ? sql`${accountFeedback} IS NULL`
-            : sql`${accountFeedback} = ${input.feedback}`,
+        input.feedback === 'unreviewed'
+          ? isNull(watchTriggers.feedback)
+          : eq(watchTriggers.feedback, input.feedback),
       );
     if (input.deliveryStatus !== undefined)
       conditions.push(inDeliveryStatuses(input.deliveryStatus));
@@ -372,7 +294,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         .limit(input.limit)
         .offset(input.offset)
         .all()
-        .map((row) => this.projectAccountFeedback(tx, row, input.accountId));
+        .map(toWatchTrigger);
       let summary: WatchTriggerSummary | undefined;
       if (input.includeSummary) {
         const distribution = (
@@ -418,53 +340,18 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         summary = {
           priorityCounts: distribution(watchTriggers.priority),
           deliveryStatusCounts: distribution(watchTriggers.deliveryStatus),
-          feedbackCounts: distribution(accountFeedback ?? watchTriggers.feedback),
+          feedbackCounts: distribution(watchTriggers.feedback),
           stocks: stocks.map((row) => ({
             stockId: row.stockId,
             count: row.stockCount,
             maxPriority:
               row.priorityRank === 0 ? 'urgent' : row.priorityRank === 1 ? 'important' : 'normal',
-            latest: this.projectAccountFeedback(tx, row, input.accountId),
+            latest: toWatchTrigger(row),
           })),
         };
       }
       return { total, triggers, ...(summary === undefined ? {} : { summary }) };
     });
-  }
-
-  private projectAccountFeedback(
-    tx: Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0],
-    row: typeof watchTriggers.$inferSelect,
-    accountId?: string,
-  ): WatchTrigger {
-    const trigger = toWatchTrigger(row);
-    if (accountId === undefined) return trigger;
-    const found = tx
-      .select({
-        content: decisionReviewRevisions.content,
-        recordedAt: decisionReviewRevisions.recordedAt,
-      })
-      .from(decisionReviews)
-      .innerJoin(
-        decisionReviewRevisions,
-        and(
-          eq(decisionReviewRevisions.reviewId, decisionReviews.id),
-          eq(decisionReviewRevisions.revision, decisionReviews.currentRevision),
-        ),
-      )
-      .where(
-        and(
-          eq(decisionReviews.accountId, accountId),
-          eq(decisionReviews.subjectKind, 'watch-trigger'),
-          eq(decisionReviews.subjectId, row.id),
-        ),
-      )
-      .get();
-    const { feedback: _old, feedbackAt: _oldAt, ...base } = trigger;
-    const feedback = found?.content.triggerFeedback;
-    return feedback === undefined || feedback === null
-      ? base
-      : { ...base, feedback, feedbackAt: found!.recordedAt };
   }
 
   async listRecent(
@@ -521,15 +408,9 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     status: DeliveryStatus,
     notificationId?: string,
     completedAt?: Date,
-    owner?: string,
   ): Promise<boolean> {
     return this.db.transaction(
       () => {
-        if (
-          owner !== undefined &&
-          (completedAt === undefined || !this.ownsExecution(owner, completedAt))
-        )
-          return false;
         if (ids.length === 0) return true;
         const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
         this.db

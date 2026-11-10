@@ -193,6 +193,21 @@ export const DailyBarSchema = z.object({
   source: z.string().min(1),
 });
 
+/** 日线修订（原始 source 值，不做 qfq 调整）；复盘历史 PIT 用。 */
+export const DailyBarRevisionSchema = z.object({
+  stockId: z.string().min(1),
+  date: z.coerce.date(),
+  contentHash: z.string().min(1),
+  open: z.number().finite(),
+  high: z.number().finite(),
+  low: z.number().finite(),
+  close: z.number().finite(),
+  volume: z.number().nonnegative(),
+  source: z.string().min(1),
+  recordedAt: z.coerce.date(),
+});
+export type DailyBarRevision = z.infer<typeof DailyBarRevisionSchema>;
+
 export const DateRangeSchema = z.object({
   start: z.coerce.date(),
   end: z.coerce.date(),

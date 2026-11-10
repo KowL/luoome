@@ -6,7 +6,6 @@ import {
   InvariantError,
   normalizeLegacyStrategyRun,
   type Strategy,
-  type StrategyLeaseToken,
   type StrategyRepository,
   type StrategyResult,
   type StrategyRun,
@@ -16,14 +15,13 @@ import {
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
   type Schema,
   strategies,
   strategyResults,
-  strategyRunLeases,
   strategyRuns,
   strategySignals,
   strategyVersions,
@@ -61,6 +59,24 @@ const legacyPublishedRunCondition = () =>
     sql`coalesce(json_extract(${strategyRuns.summary}, '$.schemaVersion'), 0) <> 4`,
   );
 
+/**
+ * 存量 run 的 publication 由 `normalizeLegacyStrategyRun` 读取时推断：replay/backtest 视为
+ * non-publishing，其余 complete/partial 视为 published。SQL 过滤必须带上同样的 legacy
+ * 分支，否则按 publication 过滤会把存量行整体丢掉（memory 实现读取后归一化再过滤）。
+ */
+const legacyPublicationCondition = (status: NonNullable<StrategyRun['publication']>['status']) => {
+  if (status === 'published') {
+    return and(
+      legacyPublishedRunCondition(),
+      notInArray(strategyRuns.mode, ['replay', 'backtest']),
+    );
+  }
+  if (status === 'non-publishing') {
+    return and(legacyPublishedRunCondition(), inArray(strategyRuns.mode, ['replay', 'backtest']));
+  }
+  return undefined;
+};
+
 const toStrategy = (row: StrategyRow): Strategy => ({
   id: row.id,
   name: row.name,
@@ -68,6 +84,8 @@ const toStrategy = (row: StrategyRow): Strategy => ({
   owner: row.owner,
   status: row.status,
   ...(row.currentVersionId === null ? {} : { currentVersionId: row.currentVersionId }),
+  ...(row.scheduleCron === null ? {} : { scheduleCron: row.scheduleCron }),
+  ...(row.lastScheduledAt === null ? {} : { lastScheduledAt: row.lastScheduledAt }),
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -166,6 +184,8 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         owner: strategy.owner,
         status: strategy.status,
         currentVersionId: strategy.currentVersionId ?? null,
+        scheduleCron: strategy.scheduleCron ?? null,
+        lastScheduledAt: strategy.lastScheduledAt ?? null,
         createdAt: strategy.createdAt,
         updatedAt: strategy.updatedAt,
       })
@@ -177,6 +197,30 @@ export class DrizzleStrategyRepository implements StrategyRepository {
       tx.delete(strategyVersions).where(eq(strategyVersions.strategyId, strategyId)).run();
       tx.delete(strategies).where(eq(strategies.id, strategyId)).run();
     });
+  }
+
+  async updateSchedule(
+    strategyId: string,
+    schedule: {
+      readonly scheduleCron?: string | null;
+      readonly lastScheduledAt?: Date | null;
+    },
+    at: Date,
+  ): Promise<void> {
+    if ((await this.findById(strategyId)) === null) {
+      throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+    }
+    this.db
+      .update(strategies)
+      .set({
+        ...(schedule.scheduleCron === undefined ? {} : { scheduleCron: schedule.scheduleCron }),
+        ...(schedule.lastScheduledAt === undefined
+          ? {}
+          : { lastScheduledAt: schedule.lastScheduledAt }),
+        updatedAt: at,
+      })
+      .where(eq(strategies.id, strategyId))
+      .run();
   }
 
   async findById(id: string): Promise<Strategy | null> {
@@ -397,151 +441,6 @@ export class DrizzleStrategyRepository implements StrategyRepository {
 export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
-  async acquireRunLeaseToken(input: {
-    readonly strategyId: string;
-    readonly strategyVersionId: string;
-    readonly owner: string;
-    readonly runId?: string;
-    readonly now: Date;
-    readonly leaseUntil: Date;
-  }): Promise<StrategyLeaseToken | null> {
-    const result = this.db.run(sql`
-      INSERT INTO strategy_run_leases
-        (strategy_id, strategy_version_id, owner, lease_until, fence, heartbeat_at)
-      VALUES (
-        ${input.strategyId}, ${input.strategyVersionId}, ${input.owner},
-        ${input.leaseUntil.getTime()}, 1, ${input.now.getTime()}
-      )
-      ON CONFLICT (strategy_id, strategy_version_id) DO UPDATE SET
-        owner = excluded.owner,
-        lease_until = excluded.lease_until,
-        fence = strategy_run_leases.fence + 1,
-        heartbeat_at = excluded.heartbeat_at
-      WHERE strategy_run_leases.lease_until <= ${input.now.getTime()}
-    `);
-    const changed =
-      typeof result === 'object' &&
-      result !== null &&
-      'changes' in result &&
-      Number((result as { readonly changes: unknown }).changes) === 1;
-    if (!changed) return null;
-    const row = this.db
-      .select()
-      .from(strategyRunLeases)
-      .where(
-        and(
-          eq(strategyRunLeases.strategyId, input.strategyId),
-          eq(strategyRunLeases.strategyVersionId, input.strategyVersionId),
-        ),
-      )
-      .get();
-    if (row === undefined) return null;
-    return {
-      strategyId: input.strategyId,
-      strategyVersionId: input.strategyVersionId,
-      owner: row.owner,
-      fence: row.fence,
-      leaseUntil: row.leaseUntil,
-      ...(input.runId === undefined ? {} : { runId: input.runId }),
-    };
-  }
-
-  async renewRunLease(input: {
-    readonly token: StrategyLeaseToken;
-    readonly now: Date;
-    readonly leaseUntil: Date;
-  }): Promise<boolean> {
-    const result = this.db.run(sql`
-      UPDATE strategy_run_leases
-      SET lease_until = ${input.leaseUntil.getTime()}, heartbeat_at = ${input.now.getTime()}
-      WHERE strategy_id = ${input.token.strategyId}
-        AND strategy_version_id = ${input.token.strategyVersionId}
-        AND owner = ${input.token.owner}
-        AND fence = ${input.token.fence}
-        AND lease_until > ${input.now.getTime()}
-    `);
-    return (
-      typeof result === 'object' &&
-      result !== null &&
-      'changes' in result &&
-      Number((result as { readonly changes: unknown }).changes) === 1
-    );
-  }
-
-  async releaseRunLease(input: {
-    readonly strategyId: string;
-    readonly strategyVersionId: string;
-    readonly owner: string;
-    readonly fence?: number;
-  }): Promise<void> {
-    this.db.run(
-      input.fence === undefined
-        ? sql`
-          DELETE FROM strategy_run_leases
-          WHERE strategy_id = ${input.strategyId}
-            AND strategy_version_id = ${input.strategyVersionId}
-            AND owner = ${input.owner}
-        `
-        : sql`
-          DELETE FROM strategy_run_leases
-          WHERE strategy_id = ${input.strategyId}
-            AND strategy_version_id = ${input.strategyVersionId}
-            AND owner = ${input.owner}
-            AND fence = ${input.fence}
-        `,
-    );
-  }
-
-  async commitRunWithFence(input: {
-    readonly token: StrategyLeaseToken;
-    readonly now: Date;
-    readonly bundle: StrategyRunBundle;
-  }): Promise<'committed' | 'lease-lost'> {
-    assertStrategyRunBundleInvariants(input.bundle);
-    if (input.token.runId !== undefined && input.token.runId !== input.bundle.run.id) {
-      return 'lease-lost';
-    }
-    return this.db.transaction((tx) => {
-      const lease = tx
-        .select()
-        .from(strategyRunLeases)
-        .where(
-          and(
-            eq(strategyRunLeases.strategyId, input.token.strategyId),
-            eq(strategyRunLeases.strategyVersionId, input.token.strategyVersionId),
-            eq(strategyRunLeases.owner, input.token.owner),
-            eq(strategyRunLeases.fence, input.token.fence),
-            sql`${strategyRunLeases.leaseUntil} > ${input.now.getTime()}`,
-          ),
-        )
-        .get();
-      if (lease === undefined) return 'lease-lost';
-      if (
-        input.bundle.run.strategyId !== input.token.strategyId ||
-        input.bundle.run.strategyVersionId !== input.token.strategyVersionId
-      ) {
-        return 'lease-lost';
-      }
-      const existingRun = tx
-        .select()
-        .from(strategyRuns)
-        .where(eq(strategyRuns.id, input.bundle.run.id))
-        .get();
-      if (
-        existingRun === undefined ||
-        existingRun.status !== 'running' ||
-        input.bundle.run.status === 'running' ||
-        existingRun.strategyId !== input.bundle.run.strategyId ||
-        existingRun.strategyVersionId !== input.bundle.run.strategyVersionId ||
-        existingRun.startedAt.getTime() !== input.bundle.run.startedAt.getTime()
-      ) {
-        return 'lease-lost';
-      }
-      this.commitRunInTransaction(tx, input.bundle);
-      return 'committed';
-    });
-  }
-
   async removeByStrategyId(strategyId: string): Promise<void> {
     this.db.transaction((tx) => {
       const runIds = tx
@@ -555,7 +454,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       }
       tx.delete(strategySignals).where(eq(strategySignals.strategyId, strategyId)).run();
       tx.delete(strategyRuns).where(eq(strategyRuns.strategyId, strategyId)).run();
-      tx.delete(strategyRunLeases).where(eq(strategyRunLeases.strategyId, strategyId)).run();
     });
   }
 
@@ -582,7 +480,12 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     if (filter.status !== undefined) conditions.push(eq(strategyRuns.status, filter.status));
     if (filter.scope !== undefined) conditions.push(eq(strategyRuns.scope, filter.scope));
     if (filter.publication !== undefined) {
-      conditions.push(eq(strategyRuns.publicationStatus, filter.publication));
+      const legacy = legacyPublicationCondition(filter.publication);
+      conditions.push(
+        legacy === undefined
+          ? eq(strategyRuns.publicationStatus, filter.publication)
+          : or(eq(strategyRuns.publicationStatus, filter.publication), legacy),
+      );
     }
     if (filter.since !== undefined) conditions.push(gte(strategyRuns.startedAt, filter.since));
     if (filter.until !== undefined) conditions.push(lte(strategyRuns.startedAt, filter.until));

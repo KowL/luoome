@@ -1,8 +1,6 @@
 import {
   assertStrategyWatchlistSubscriptionInvariants,
   getStrategyRunDataHealth,
-  investmentResearchEnabled,
-  isInvestmentEvidenceCurrent,
   isPublishableOperationalRun,
   type StrategyWatchlistSubscription,
   StrategyWatchlistSubscriptionSchema,
@@ -261,38 +259,17 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
       }));
     const items: z.infer<typeof StrategyWatchlistSyncItemSchema>[] = [];
     for (const subscription of subscriptions) {
-      const binding = subscription.investmentBinding;
-      if (binding !== undefined) {
-        const consensus = (
-          await ctx.repos.investmentWorkspace.listConsensus({
-            ownerUserId: binding.ownerUserId,
-            accountId: binding.accountId,
-            limit: 1,
-          })
-        )[0];
-        const strategy = await ctx.repos.strategy.findById(input.strategyId);
-        if (
-          binding.ownerUserId !== ctx.user.id ||
-          binding.accountId !== ctx.user.defaultAccountId ||
-          consensus === undefined ||
-          consensus.id !== binding.consensusId ||
-          consensus.version !== binding.consensusVersion ||
-          !investmentResearchEnabled(consensus, ctx.clock()) ||
-          !isInvestmentEvidenceCurrent(run.dataAsOf, ctx.clock()) ||
-          strategy?.status !== 'active' ||
-          strategy.currentVersionId !== binding.strategyVersionId ||
-          run.strategyVersionId !== binding.strategyVersionId
-        ) {
-          items.push({
-            subscription,
-            status: 'skipped',
-            entered: 0,
-            exited: 0,
-            unchanged: 0,
-            error: '方向共识授权已暂停、过期、需复核或版本已改变；不再补入新候选。',
-          });
-          continue;
-        }
+      if (subscription.investmentBinding !== undefined) {
+        items.push({
+          subscription,
+          status: 'skipped',
+          entered: 0,
+          exited: 0,
+          unchanged: 0,
+          error:
+            '该订阅绑定的方向共识授权已随 InvestmentWorkspace 退役；请创建不带 binding 的新订阅。',
+        });
+        continue;
       }
       const synced = await ctx.repos.watchlist.findById(subscription.watchlistId);
       if (synced === null) {

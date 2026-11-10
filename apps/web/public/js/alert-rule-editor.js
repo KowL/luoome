@@ -1,5 +1,5 @@
 import { randomRequestId } from './api.js';
-import { fieldWrap, makeInput, makeNumberInput, makeSelect, makeTextarea } from './form-kit.js';
+import { fieldWrap, makeNumberInput, makeSelect, makeTextarea } from './form-kit.js';
 import { el } from './ui.js';
 
 export const ALERT_RULE_TYPES = [
@@ -7,15 +7,6 @@ export const ALERT_RULE_TYPES = [
   ['price-change', '日内涨跌幅'],
   ['cost-threshold', '持仓止盈 / 止损'],
   ['strategy-signal', '策略信号'],
-  ['event-date', '事件日期提醒'],
-];
-const EVENT_KINDS = [
-  ['earnings', '财报'],
-  ['unlock', '解禁'],
-  ['dividend', '分红'],
-  ['shareholder-meeting', '股东大会'],
-  ['announcement', '公告'],
-  ['manual', '手工事件'],
 ];
 const PRIORITIES = [
   ['normal', '普通'],
@@ -29,7 +20,6 @@ export const newAlertRule = (kind, id = `rule-${randomRequestId()}`) => {
     'price-change': { pct: 0.05, direction: 'any' },
     'cost-threshold': { stopLossPct: 0.05 },
     'strategy-signal': { strategyId: '', minScore: 60 },
-    'event-date': { daysBefore: [7, 3, 1], minImportance: 'normal' },
   };
   return { id, kind, ...defaults[kind] };
 };
@@ -60,16 +50,6 @@ export const alertNumber = (
     throw new Error(`${label}超出范围${integer ? '，请填写整数' : ''}`);
   }
   return value;
-};
-
-export const parseAlertDays = (raw) => {
-  const values = String(raw)
-    .split(/[，,、\s]+/)
-    .filter(Boolean);
-  if (values.length > 8) throw new Error('提醒日期最多填写 8 个');
-  return [
-    ...new Set(values.map((value) => alertNumber(value, '提前天数', { max: 90, integer: true }))),
-  ];
 };
 
 export const validateAlertRules = (rules) => {
@@ -214,38 +194,6 @@ export const createAlertRulesEditor = (initial, { strategies = [] } = {}) => {
         );
         if (original.ruleId)
           fields.append(el('p', 'hint', '已保留指定信号规则过滤；如需修改，可使用高级 JSON。'));
-      } else if (original.kind === 'event-date') {
-        select('minImportance', '最低事件重要性', PRIORITIES);
-        const days = makeInput(undefined, { value: (original.daysBefore ?? [7, 3, 1]).join('、') });
-        addField(
-          '提前提醒天数',
-          days,
-          () => parseAlertDays(days.value),
-          'daysBefore',
-          '用逗号分隔；0 表示事件当天，最多 8 个，范围 0～90 天。',
-        );
-        const checks = EVENT_KINDS.map(([kind, label]) => {
-          const control = makeInput(undefined, { type: 'checkbox' });
-          control.checked = original.eventKinds?.includes(kind) ?? false;
-          return { kind, control, node: el('label', 'alert-event-option', [control, label]) };
-        });
-        fields.append(
-          fieldWrap(
-            '事件类型',
-            el(
-              'div',
-              'alert-event-options',
-              checks.map((item) => item.node),
-            ),
-            '不勾选表示全部类型。',
-          ),
-        );
-        readers.push((rule) => {
-          const selected = checks.filter((item) => item.control.checked).map((item) => item.kind);
-          if (selected.length > 0) rule.eventKinds = selected;
-          else if (original.eventKinds?.length === 0) rule.eventKinds = [];
-          else delete rule.eventKinds;
-        });
       }
       select('priority', '规则优先级', [['', '使用默认'], ...PRIORITIES], true);
       readCards.push(() => {

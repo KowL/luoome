@@ -17,7 +17,6 @@ describe('agent 场景目录', () => {
 
   it('每个场景的 readToolNames 全部已注册且 sideEffect 合法（read 或批准的 external）', () => {
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
-      expect(scenario.readToolNames).not.toContain('agent_run');
       for (const name of scenario.readToolNames) {
         const registered = toolRegistry.get(name);
         expect(registered, `${scenario.id}: ${name} 未注册`).toBeDefined();
@@ -29,16 +28,25 @@ describe('agent 场景目录', () => {
     }
   });
 
+  it('已退役的旧版 agent loop 与历史 tool 不再注册，白名单不含它们', () => {
+    for (const name of ['agent_run', 'list_tactics', 'list_stock_groups', 'list_stock_pools']) {
+      expect(toolRegistry.get(name), name).toBeUndefined();
+      for (const scenario of Object.values(AGENT_SCENARIOS)) {
+        expect(scenario.readToolNames, `${scenario.id}: ${name}`).not.toContain(name);
+      }
+    }
+    for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      for (const name of scenario.readToolNames) {
+        expect(toolRegistry.get(name), `${scenario.id}: ${name} 未注册`).toBeDefined();
+      }
+    }
+  });
+
   it('草案清单全部已注册、kind 合法；Phase 2 草案按场景收窄', () => {
-    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(33);
-    expect(AGENT_DRAFT_TOOL_KINDS.research_investment_directions).toBe('research');
-    expect(AGENT_DRAFT_TOOL_KINDS.save_investment_consensus).toBe('research');
-    expect(AGENT_DRAFT_TOOL_KINDS.set_investment_tracking).toBe('watchlist');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.market_outlook).toBe('advice');
-    expect(AGENT_DRAFT_TOOL_KINDS.record_advice_outcome).toBe('review');
-    expect(AGENT_DRAFT_TOOL_KINDS.create_research_hypothesis_version).toBe('research');
+    expect(AGENT_DRAFT_TOOL_KINDS.save_decision_review).toBe('review');
     expect(AGENT_DRAFT_TOOL_KINDS.trial_strategy).toBe('strategy');
     for (const [name, kind] of Object.entries(AGENT_DRAFT_TOOL_KINDS)) {
       const registered = toolRegistry.get(name);
@@ -48,16 +56,15 @@ describe('agent 场景目录', () => {
       }
     }
     expect(AGENT_SCENARIOS.general.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
-    expect(AGENT_SCENARIOS.review.draftToolKinds.record_advice_outcome).toBe('review');
+    expect(AGENT_SCENARIOS.review.draftToolKinds.save_decision_review).toBe('review');
     expect(AGENT_SCENARIOS.review.draftToolKinds).not.toHaveProperty(
       'create_research_hypothesis_version',
     );
-    expect(AGENT_SCENARIOS.research.draftToolKinds.create_research_hypothesis_version).toBe(
-      'research',
-    );
-    expect(AGENT_SCENARIOS.research.draftToolKinds).not.toHaveProperty('record_advice_outcome');
+    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(27);
+    expect(AGENT_SCENARIOS.research.draftToolKinds.create_research_document).toBe('research');
+    expect(AGENT_SCENARIOS.research.draftToolKinds).not.toHaveProperty('save_decision_review');
     for (const id of ['portfolio', 'watch'] as const) {
-      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty('record_advice_outcome');
+      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty('save_decision_review');
       expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty(
         'create_research_hypothesis_version',
       );
@@ -112,7 +119,7 @@ describe('agent 场景目录', () => {
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_signal_observation_stats');
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_strategy_reliability_summary');
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('compare_strategy_definitions');
-    expect(AGENT_SCENARIOS.research.readToolNames).toContain('get_stock_research_view');
+    expect(AGENT_SCENARIOS.research.readToolNames).toContain('search_research_documents');
     expect(AGENT_SCENARIOS.research.readToolNames).toContain('compare_strategy_definitions');
     expect(AGENT_SCENARIOS.watch.readToolNames).toContain('get_watch_status');
     expect(AGENT_SCENARIOS.general.readToolNames).toContain('get_signal_observation_stats');

@@ -17,9 +17,6 @@ const fromRow = (row: TradeRow): Trade => ({
   executedAt: row.executedAt,
   source: row.source,
   ...(row.adviceId === null ? {} : { adviceId: row.adviceId }),
-  ...(row.researchHypothesisVersionId === null
-    ? {}
-    : { researchHypothesisVersionId: row.researchHypothesisVersionId }),
   ...(row.strategyVersionId === null ? {} : { strategyVersionId: row.strategyVersionId }),
   createdAt: row.createdAt,
 });
@@ -41,7 +38,6 @@ export class DrizzleTradeRepository implements TradeRepository {
       executedAt: trade.executedAt,
       source: trade.source,
       adviceId: trade.adviceId ?? null,
-      researchHypothesisVersionId: trade.researchHypothesisVersionId ?? null,
       strategyVersionId: trade.strategyVersionId ?? null,
       createdAt: trade.createdAt,
     };

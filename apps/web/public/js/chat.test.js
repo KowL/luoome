@@ -116,43 +116,6 @@ const draftsIn = (entries) =>
   entries.filter((entry) => entry.type === 'drafts').flatMap((entry) => entry.drafts);
 
 describe('草案确认闭环', () => {
-  it.each([
-    ['unavailable', '事实不足，未生成方向'],
-    ['failed', '研究未完成，未生成可用方向'],
-  ])('研究记录保存成功但 %s 时，不把写入成功显示为研究成功', (status, text) => {
-    const result = settlementText({
-      tool: 'research_investment_directions',
-      status: 'succeeded',
-      result: { ok: true, data: { research: { status, limitations: ['实际证据未满足要求'] } } },
-    });
-    expect(result).toContain(text);
-    expect(result).toContain('实际证据未满足要求');
-    expect(result).not.toContain('执行成功');
-  });
-
-  it('共识保存、部分跟踪和跟踪失败分别展示，不宣称已经开始盯盘或送达', () => {
-    const settlement = (tool, data) =>
-      settlementText({
-        tool,
-        status: 'succeeded',
-        result: { ok: true, data },
-      });
-    expect(
-      settlement('save_investment_consensus', {
-        consensus: { version: 2, status: 'confirmed' },
-      }),
-    ).toContain('共识 v2 已保存；方向跟踪需另行确认');
-    expect(settlement('set_investment_tracking', { tracking: { status: 'partial' } })).toContain(
-      '候选同步部分可用',
-    );
-    expect(settlement('set_investment_tracking', { tracking: { status: 'failed' } })).toContain(
-      '方向跟踪启动失败',
-    );
-    expect(settlement('set_investment_tracking', { tracking: { status: 'tracking' } })).toContain(
-      '后台运行与手机送达仍需核对',
-    );
-  });
-
   it('按消息与调用标识分别恢复状态，同名工具的其他草案仍待确认', () => {
     const result = { ok: true, data: { watchlist: { id: 'watchlist-real' } } };
     const settlement = {

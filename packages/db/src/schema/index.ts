@@ -8,13 +8,9 @@ import type {
   AlertPlan,
   ChatMessagePart,
   DecisionReviewContent,
-  DecisionReviewContext,
+  DecisionReviewSubjectKind,
   DeliveryStatus,
   Exchange,
-  FinancialFact,
-  FundamentalScoreResult,
-  FundamentalScoreRun,
-  FundamentalScoreVersion,
   LimitUpLadder,
   LimitUpLadderSource,
   ListingStatus,
@@ -30,30 +26,17 @@ import type {
   ProviderStatus,
   Quantity,
   Report,
-  ResearchEmbeddingIndexState,
-  ResearchEmbeddingModelIdentity,
-  ResearchHypothesisVersion,
-  ResearchTopicIndex,
-  ResearchVaultSyncRun,
   SignalObservation,
   StockCode,
-  StockEvent,
   Strategy,
-  StrategyAutonomyAction,
-  StrategyDataCheckpoint,
-  StrategyDataCheckpointMember,
-  StrategyEvaluationDay,
-  StrategyEvaluationSession,
   StrategyEvaluatorIdentity,
   StrategyResult,
   StrategyRun,
   StrategyRunPublication,
-  StrategySchedule,
   StrategySignal,
   StrategyVersion,
   StrategyWatchlistSubscription,
   StrictBacktestGateAudit,
-  StrictBacktestMarketFact,
   StrictBacktestMetrics,
   StrictBacktestRun,
   StrictBacktestSpec,
@@ -64,7 +47,6 @@ import type {
   WatchlistMember,
   WatchlistMemberSource,
   WatchlistSyncRun,
-  WatchRun,
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
@@ -120,16 +102,12 @@ export const decisionReviews = sqliteTable(
   {
     id: text('id').primaryKey(),
     accountId: text('account_id').notNull(),
-    subjectKind: text('subject_kind')
-      .$type<'advice' | 'trading-plan-version' | 'watch-trigger'>()
-      .notNull(),
+    subjectKind: text('subject_kind').$type<DecisionReviewSubjectKind>().notNull(),
     subjectId: text('subject_id').notNull(),
     stockId: text('stock_id'),
-    sourceOccurredAt: integer('source_occurred_at', { mode: 'timestamp_ms' }).notNull(),
-    context: text('context_json', { mode: 'json' }).$type<DecisionReviewContext>().notNull(),
-    contextHash: text('context_hash').notNull(),
-    currentRevision: integer('current_revision').notNull(),
+    content: text('content_json', { mode: 'json' }).$type<DecisionReviewContent>().notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
     subjectUnique: uniqueIndex('decision_reviews_account_subject_unique').on(
@@ -137,68 +115,8 @@ export const decisionReviews = sqliteTable(
       t.subjectKind,
       t.subjectId,
     ),
-    accountTimeIdx: index('decision_reviews_account_time_idx').on(
-      t.accountId,
-      t.sourceOccurredAt,
-      t.id,
-    ),
+    accountTimeIdx: index('decision_reviews_account_time_idx').on(t.accountId, t.updatedAt, t.id),
   }),
-);
-
-export const decisionReviewRevisions = sqliteTable(
-  'decision_review_revisions',
-  {
-    sequence: integer('sequence').primaryKey({ autoIncrement: true }),
-    reviewId: text('review_id').notNull(),
-    revision: integer('revision').notNull(),
-    content: text('content_json', { mode: 'json' }).$type<DecisionReviewContent>().notNull(),
-    contentHash: text('content_hash').notNull(),
-    tradeFactHashes: text('trade_fact_hashes_json', { mode: 'json' })
-      .$type<Record<string, string>>()
-      .notNull(),
-    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
-    changeNote: text('change_note'),
-  },
-  (t) => ({
-    revisionUnique: uniqueIndex('decision_review_revisions_review_version_unique').on(
-      t.reviewId,
-      t.revision,
-    ),
-    reviewSequenceIdx: index('decision_review_revisions_review_sequence_idx').on(
-      t.reviewId,
-      t.sequence,
-    ),
-  }),
-);
-
-export const decisionReviewTradeLinks = sqliteTable(
-  'decision_review_trade_links',
-  {
-    reviewId: text('review_id').notNull(),
-    accountId: text('account_id').notNull(),
-    tradeId: text('trade_id').notNull(),
-    revision: integer('revision').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.reviewId, t.tradeId] }),
-    accountTradeIdx: index('decision_review_trade_links_account_trade_idx').on(
-      t.accountId,
-      t.tradeId,
-    ),
-  }),
-);
-
-export const decisionWriteReceipts = sqliteTable(
-  'decision_write_receipts',
-  {
-    accountId: text('account_id').notNull(),
-    requestId: text('request_id').notNull(),
-    command: text('command').notNull(),
-    requestHash: text('request_hash').notNull(),
-    result: text('result_json', { mode: 'json' }).$type<unknown>().notNull(),
-    committedAt: integer('committed_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({ pk: primaryKey({ columns: [t.accountId, t.requestId] }) }),
 );
 
 export const stocks = sqliteTable(
@@ -340,7 +258,6 @@ export const trades = sqliteTable('trades', {
   executedAt: integer('executed_at', { mode: 'timestamp_ms' }).notNull(),
   source: text('source').$type<TradeSource>().notNull(),
   adviceId: text('advice_id'),
-  researchHypothesisVersionId: text('research_hypothesis_version_id'),
   strategyVersionId: text('strategy_version_id'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
@@ -604,141 +521,6 @@ export const dailyBarRevisions = sqliteTable(
   }),
 );
 
-/**
- * Phase 3 P3-1：append-only 基本面事实修订；同一 logical revision + content hash 幂等，
- * 但不得按 (stock, metric, period) 覆盖旧事实。
- */
-export const financialFactRevisions = sqliteTable(
-  'financial_fact_revisions',
-  {
-    id: text('id').primaryKey(),
-    stockId: text('stock_id').notNull(),
-    metricId: text('metric_id').notNull(),
-    periodType: text('period_type').$type<FinancialFact['periodType']>().notNull(),
-    periodStart: integer('period_start', { mode: 'timestamp_ms' }),
-    periodEnd: integer('period_end', { mode: 'timestamp_ms' }).notNull(),
-    value: real('value').notNull(),
-    canonicalUnit: text('canonical_unit').$type<FinancialFact['canonicalUnit']>().notNull(),
-    currency: text('currency').$type<NonNullable<FinancialFact['currency']>>(),
-    rawValue: real('raw_value'),
-    rawUnit: text('raw_unit'),
-    source: text('source').notNull(),
-    sourceRecordId: text('source_record_id').notNull(),
-    sourceRevision: text('source_revision').notNull(),
-    publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
-    revisionPublishedAt: integer('revision_published_at', { mode: 'timestamp_ms' }).notNull(),
-    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
-    status: text('status').$type<FinancialFact['status']>().notNull(),
-    supersedesId: text('supersedes_id'),
-    industryKey: text('industry_key'),
-    contentHash: text('content_hash').notNull(),
-  },
-  (t) => ({
-    logicalRevisionHashUnique: uniqueIndex('financial_fact_revisions_logical_hash_unique').on(
-      t.source,
-      t.sourceRecordId,
-      t.sourceRevision,
-      t.contentHash,
-    ),
-    pitLookupIdx: index('financial_fact_revisions_pit_lookup_idx').on(
-      t.stockId,
-      t.metricId,
-      t.periodEnd,
-      t.revisionPublishedAt,
-      t.recordedAt,
-    ),
-    recordedAtIdx: index('financial_fact_revisions_recorded_at_idx').on(t.recordedAt),
-  }),
-);
-
-/** P3-2：不可变的基本面评分定义快照。draft 可完成一次发布/退役状态迁移；已发布/退役后不可覆盖。 */
-export const fundamentalScoreVersions = sqliteTable(
-  'fundamental_score_versions',
-  {
-    id: text('id').primaryKey(),
-    version: integer('version').notNull(),
-    registryVersion: text('registry_version').notNull(),
-    registryHash: text('registry_hash').notNull(),
-    normalizationVersion: text('normalization_version').notNull(),
-    components: text('components_json', { mode: 'json' })
-      .$type<FundamentalScoreVersion['components']>()
-      .notNull(),
-    missingPolicy: text('missing_policy').notNull(),
-    rounding: text('rounding').notNull(),
-    definitionHash: text('definition_hash').notNull(),
-    status: text('status').$type<FundamentalScoreVersion['status']>().notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
-  },
-  (t) => ({
-    definitionHashUnique: uniqueIndex('fundamental_score_versions_definition_hash_unique').on(
-      t.definitionHash,
-    ),
-    statusVersionIdx: index('fundamental_score_versions_status_version_idx').on(
-      t.status,
-      t.version,
-    ),
-  }),
-);
-
-/** P3-2：一次确定性评分运行的不可变生命周期事实。 */
-export const fundamentalScoreRuns = sqliteTable(
-  'fundamental_score_runs',
-  {
-    id: text('id').primaryKey(),
-    scoreVersionId: text('score_version_id').notNull(),
-    scoreVersionHash: text('score_version_hash').notNull(),
-    registryHash: text('registry_hash').notNull(),
-    universeSyncId: text('universe_sync_id').notNull(),
-    universeMemberChecksum: text('universe_member_checksum').notNull(),
-    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
-    financialVintageKey: text('financial_vintage_key').notNull(),
-    normalizerDenominatorHash: text('normalizer_denominator_hash').notNull(),
-    counts: text('counts_json', { mode: 'json' }).$type<FundamentalScoreRun['counts']>().notNull(),
-    providerStatus: text('provider_status')
-      .$type<FundamentalScoreRun['providerStatus']>()
-      .notNull(),
-    evaluatorCodeIdentity: text('evaluator_code_identity').notNull(),
-    status: text('status').$type<FundamentalScoreRun['status']>().notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    committedAt: integer('committed_at', { mode: 'timestamp_ms' }),
-    terminalReason: text('terminal_reason_json', { mode: 'json' }).$type<NonNullable<
-      FundamentalScoreRun['terminalReason']
-    > | null>(),
-  },
-  (t) => ({
-    scoreVersionAsOfIdx: index('fundamental_score_runs_score_version_as_of_idx').on(
-      t.scoreVersionId,
-      t.asOf,
-    ),
-    statusCreatedIdx: index('fundamental_score_runs_status_created_idx').on(t.status, t.createdAt),
-  }),
-);
-
-/** P3-2：每个 run/stock 一行；只有 committed run 的结果可消费。 */
-export const fundamentalScoreResults = sqliteTable(
-  'fundamental_score_results',
-  {
-    scoreRunId: text('score_run_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    status: text('status').$type<FundamentalScoreResult['status']>().notNull(),
-    score: real('score'),
-    rank: integer('rank'),
-    components: text('components_json', { mode: 'json' })
-      .$type<FundamentalScoreResult['components']>()
-      .notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
-    vintageKey: text('vintage_key').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.scoreRunId, t.stockId],
-      name: 'fundamental_score_results_pk',
-    }),
-    runRankIdx: index('fundamental_score_results_run_rank_idx').on(t.scoreRunId, t.rank),
-  }),
-);
-
 export const strategies = sqliteTable(
   'strategies',
   {
@@ -748,6 +530,10 @@ export const strategies = sqliteTable(
     owner: text('owner').$type<Strategy['owner']>().notNull(),
     status: text('status').$type<Strategy['status']>().notNull(),
     currentVersionId: text('current_version_id'),
+    /** 自动运行 cron；NULL 表示未启用调度。 */
+    scheduleCron: text('schedule_cron'),
+    /** 最近一次调度运行时间。 */
+    lastScheduledAt: integer('last_scheduled_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
@@ -839,55 +625,6 @@ export const strategyRuns = sqliteTable(
   }),
 );
 
-export const strategySchedules = sqliteTable(
-  'strategy_schedules',
-  {
-    id: text('id').primaryKey(),
-    strategyId: text('strategy_id').notNull(),
-    cron: text('cron').notNull(),
-    timezone: text('timezone').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
-    acceptancePolicy: text('acceptance_policy_json', { mode: 'json' }).$type<
-      StrategySchedule['acceptancePolicy']
-    >(),
-    recommendationPolicy: text('recommendation_policy_json', { mode: 'json' }).$type<
-      StrategySchedule['recommendationPolicy']
-    >(),
-    nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }),
-    lastRunId: text('last_run_id'),
-    leaseOwner: text('lease_owner'),
-    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
-    leaseFence: integer('lease_fence').notNull().default(0),
-    leaseHeartbeatAt: integer('lease_heartbeat_at', { mode: 'timestamp_ms' }),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (table) => ({
-    strategyUnique: uniqueIndex('strategy_schedules_strategy_unique').on(table.strategyId),
-    dueIdx: index('strategy_schedules_due_idx').on(table.enabled, table.nextRunAt),
-    leaseIdx: index('strategy_schedules_lease_idx').on(table.leaseUntil),
-  }),
-);
-
-export const strategyRunLeases = sqliteTable(
-  'strategy_run_leases',
-  {
-    strategyId: text('strategy_id').notNull(),
-    strategyVersionId: text('strategy_version_id').notNull(),
-    owner: text('owner').notNull(),
-    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }).notNull(),
-    fence: integer('fence').notNull().default(0),
-    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp_ms' }).notNull().default(sql`0`),
-  },
-  (table) => ({
-    pk: primaryKey({
-      columns: [table.strategyId, table.strategyVersionId],
-      name: 'strategy_run_leases_pk',
-    }),
-    untilIdx: index('strategy_run_leases_until_idx').on(table.leaseUntil),
-  }),
-);
-
 export const strategyResults = sqliteTable(
   'strategy_results',
   {
@@ -938,115 +675,12 @@ export const strategySignals = sqliteTable(
   }),
 );
 
-export const strategyDataCheckpoints = sqliteTable(
-  'strategy_data_checkpoints',
-  {
-    id: text('id').primaryKey(),
-    coverage: text('coverage').notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
-    status: text('status').$type<StrategyDataCheckpoint['status']>().notNull(),
-    vintageStatus: text('vintage_status')
-      .$type<StrategyDataCheckpoint['vintageStatus']>()
-      .notNull()
-      .default('not-applicable'),
-    universeSyncId: text('universe_sync_id').notNull(),
-    requestedCount: integer('requested_count').notNull(),
-    availableCount: integer('available_count').notNull(),
-    failedCount: integer('failed_count').notNull(),
-    memberChecksum: text('member_checksum').notNull(),
-    dataChecksum: text('data_checksum').notNull(),
-    providerStatuses: text('provider_statuses_json', { mode: 'json' })
-      .$type<StrategyDataCheckpoint['providerStatuses']>()
-      .notNull(),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-  },
-  (t) => ({
-    lookupIdx: index('strategy_data_checkpoints_lookup_idx').on(
-      t.coverage,
-      t.universeSyncId,
-      t.dataAsOf,
-    ),
-  }),
-);
-
-export const strategyDataCheckpointMembers = sqliteTable(
-  'strategy_data_checkpoint_members',
-  {
-    checkpointId: text('checkpoint_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    status: text('status').$type<StrategyDataCheckpointMember['status']>().notNull(),
-    latestBarDate: integer('latest_bar_date', { mode: 'timestamp_ms' }),
-    barCount: integer('bar_count').notNull(),
-    provider: text('provider'),
-    errorKind: text('error_kind'),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.checkpointId, t.stockId],
-      name: 'strategy_data_checkpoint_members_pk',
-    }),
-    statusIdx: index('strategy_data_checkpoint_members_status_idx').on(t.checkpointId, t.status),
-  }),
-);
-
-export const strategyEvaluationSessions = sqliteTable(
-  'strategy_evaluation_sessions',
-  {
-    id: text('id').primaryKey(),
-    strategyId: text('strategy_id').notNull(),
-    strategyVersionId: text('strategy_version_id').notNull(),
-    from: integer('from_at', { mode: 'timestamp_ms' }).notNull(),
-    to: integer('to_at', { mode: 'timestamp_ms' }).notNull(),
-    status: text('status').$type<StrategyEvaluationSession['status']>().notNull(),
-    definitionHash: text('definition_hash').notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    stockIds: text('stock_ids_json', { mode: 'json' }).$type<
-      StrategyEvaluationSession['stockIds']
-    >(),
-    stockIdChecksum: text('stock_id_checksum'),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-    error: text('error'),
-  },
-  (t) => ({
-    strategyCreatedIdx: index('strategy_evaluation_sessions_strategy_created_idx').on(
-      t.strategyId,
-      t.createdAt,
-    ),
-  }),
-);
-
-export const strategyEvaluationDays = sqliteTable(
-  'strategy_evaluation_days',
-  {
-    sessionId: text('session_id').notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
-    runId: text('run_id'),
-    universeSyncId: text('universe_sync_id'),
-    dataCheckpointId: text('data_checkpoint_id'),
-    revisionCutoff: integer('revision_cutoff', { mode: 'timestamp_ms' }),
-    vintageStatus:
-      text('vintage_status').$type<NonNullable<StrategyEvaluationDay['vintageStatus']>>(),
-    status: text('status').$type<StrategyEvaluationDay['status']>().notNull(),
-    evaluatedCount: integer('evaluated_count'),
-    selectedCount: integer('selected_count'),
-    signalCount: integer('signal_count'),
-    failedCount: integer('failed_count'),
-    error: text('error'),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.sessionId, t.dataAsOf], name: 'strategy_evaluation_days_pk' }),
-    statusIdx: index('strategy_evaluation_days_status_idx').on(t.sessionId, t.status),
-  }),
-);
-
 export const strategyBacktestRuns = sqliteTable(
   'strategy_backtest_runs',
   {
     id: text('id').primaryKey(),
     strategyId: text('strategy_id').notNull(),
     strategyVersionId: text('strategy_version_id').notNull(),
-    evaluationSessionId: text('evaluation_session_id').notNull(),
     status: text('status').$type<StrictBacktestRun['status']>().notNull(),
     resultAvailability: text('result_availability')
       .$type<StrictBacktestRun['resultAvailability']>()
@@ -1067,65 +701,6 @@ export const strategyBacktestRuns = sqliteTable(
   (t) => ({
     strategyCreatedIdx: index('strategy_backtest_runs_strategy_created_idx').on(
       t.strategyId,
-      t.createdAt,
-    ),
-    sessionIdx: index('strategy_backtest_runs_session_idx').on(t.evaluationSessionId),
-  }),
-);
-
-export const strategyBacktestMarketFacts = sqliteTable(
-  'strategy_backtest_market_facts',
-  {
-    stockId: text('stock_id').notNull(),
-    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
-    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
-    contentHash: text('content_hash').notNull(),
-    fact: text('fact_json', { mode: 'json' }).$type<StrictBacktestMarketFact>().notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
-      name: 'strategy_backtest_market_facts_pk',
-    }),
-    lookupIdx: index('strategy_backtest_market_facts_lookup_idx').on(
-      t.stockId,
-      t.date,
-      t.recordedAt,
-    ),
-  }),
-);
-
-/** M2-S0：Strategy 自主管理动作审计；DDL 与 client.ts ensureSchema 同步。 */
-export const strategyAutonomyActions = sqliteTable(
-  'strategy_autonomy_actions',
-  {
-    id: text('id').primaryKey(),
-    kind: text('kind').$type<StrategyAutonomyAction['kind']>().notNull(),
-    status: text('status').$type<StrategyAutonomyAction['status']>().notNull(),
-    strategyId: text('strategy_id').notNull(),
-    strategyVersionId: text('strategy_version_id'),
-    evaluationSessionId: text('evaluation_session_id'),
-    trigger: text('trigger').$type<StrategyAutonomyAction['trigger']>().notNull(),
-    ruleSnapshot: text('rule_snapshot_json', { mode: 'json' }).$type<
-      StrategyAutonomyAction['ruleSnapshot'] | null
-    >(),
-    aiNarrative: text('ai_narrative'),
-    factReferences: text('fact_references_json', { mode: 'json' })
-      .$type<readonly string[]>()
-      .notNull(),
-    attempts: integer('attempts').notNull().default(0),
-    lastError: text('last_error'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
-  },
-  (t) => ({
-    strategyCreatedIdx: index('strategy_autonomy_actions_strategy_created_idx').on(
-      t.strategyId,
-      t.createdAt,
-    ),
-    statusCreatedIdx: index('strategy_autonomy_actions_status_created_idx').on(
-      t.status,
       t.createdAt,
     ),
   }),
@@ -1379,12 +954,6 @@ export const membershipSnapshots = sqliteTable(
  * - ruleKind 保留（展示 + 旧查询）；ALL 组合触发的 ruleKind 取组合中优先级最高的 kind，
  *   ruleId 固定为 'composite'。
  */
-export const watchExecutionLease = sqliteTable('watch_execution_lease', {
-  id: text('id').primaryKey(),
-  owner: text('owner').notNull(),
-  until: integer('until', { mode: 'timestamp_ms' }).notNull(),
-});
-
 export const watchTriggers = sqliteTable(
   'watch_triggers',
   {
@@ -1417,7 +986,7 @@ export const watchTriggers = sqliteTable(
     /** 用户反馈（handled / useful / useless / ignored），由 set_watch_trigger_feedback 写入。 */
     feedback: text('feedback'),
     feedbackAt: integer('feedback_at', { mode: 'timestamp_ms' }),
-    /** ruo 迁移：event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
+    /** 存量 event-date 触发关联的公司事件 id（新触发为空，仅读兼容）。 */
     eventId: text('event_id'),
     deliveryAttempts: integer('delivery_attempts'),
     lastDeliveryAttemptAt: integer('last_delivery_attempt_at', { mode: 'timestamp_ms' }),
@@ -1439,7 +1008,7 @@ export const watchTriggers = sqliteTable(
     ),
     /** listByPool 按时间倒序走这条。 */
     poolTsIdx: index('watch_triggers_pool_ts_idx').on(t.poolId, t.createdAt),
-    /** event-date 去重 / 按事件过滤走这条。 */
+    /** 存量 event-date 触发的按事件过滤走这条。 */
     poolStockRuleEventIdx: index('watch_triggers_pool_stock_rule_event_idx').on(
       t.poolId,
       t.stockId,
@@ -1475,56 +1044,6 @@ export const watchRuleStates = sqliteTable(
   }),
 );
 
-/** 每轮 watch 心跳/结果；无 trigger 时也写，支撑运行健康度。 */
-export const watchRuns = sqliteTable(
-  'watch_runs',
-  {
-    id: text('id').primaryKey(),
-    mode: text('mode').$type<WatchRun['mode']>().notNull(),
-    status: text('status').$type<WatchRun['status']>().notNull(),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-    evaluatedPools: integer('evaluated_pools').notNull(),
-    evaluatedStocks: integer('evaluated_stocks').notNull(),
-    triggered: integer('triggered').notNull(),
-    notified: integer('notified').notNull(),
-    suppressedByCooldown: integer('suppressed_by_cooldown').notNull(),
-    error: text('error'),
-    /** v0.7 策略预警：方案 / 全局每日上限命中导致被抑制的条数。 */
-    suppressedByDailyLimit: integer('suppressed_by_daily_limit').notNull(),
-    /** v0.7 策略预警：发送失败条数（面板告警）。 */
-    notifyFailed: integer('notify_failed').notNull(),
-    delivered: integer('delivered'),
-    unknownRules: integer('unknown_rules'),
-  },
-  (t) => ({
-    startedAtIdx: index('watch_runs_started_at_idx').on(t.startedAt),
-  }),
-);
-
-export const researchTopicIndex = sqliteTable(
-  'research_topic_index',
-  {
-    id: text('id').primaryKey(),
-    title: text('title').notNull(),
-    kind: text('kind').$type<ResearchTopicIndex['kind']>().notNull(),
-    summary: text('summary'),
-    tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(),
-    vaultId: text('vault_id').notNull(),
-    relativePath: text('relative_path').notNull(),
-    contentHash: text('content_hash').notNull(),
-    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
-    fileModifiedAt: integer('file_modified_at', { mode: 'timestamp_ms' }).notNull(),
-    indexedAt: integer('indexed_at', { mode: 'timestamp_ms' }).notNull(),
-    availability: text('availability').notNull(),
-    diagnostic: text('diagnostic'),
-  },
-  (t) => ({
-    pathUnique: uniqueIndex('research_topic_index_vault_path_unique').on(t.vaultId, t.relativePath),
-    kindArchiveIdx: index('research_topic_index_kind_archive_idx').on(t.kind, t.archivedAt),
-  }),
-);
-
 export const researchDocumentIndex = sqliteTable(
   'research_document_index',
   {
@@ -1538,6 +1057,10 @@ export const researchDocumentIndex = sqliteTable(
     observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
     importedAt: integer('imported_at', { mode: 'timestamp_ms' }).notNull(),
     tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    stockCodes: text('stock_codes', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull()
+      .default([]),
     vaultId: text('vault_id').notNull(),
     relativePath: text('relative_path').notNull(),
     attachmentPaths: text('attachment_paths', { mode: 'json' })
@@ -1559,192 +1082,17 @@ export const researchDocumentIndex = sqliteTable(
     observedIdx: index('research_document_index_observed_idx').on(t.observedAt),
   }),
 );
-export const researchHypothesisVersions = sqliteTable(
-  'research_hypothesis_versions',
-  {
-    id: text('id').primaryKey(),
-    topicId: text('topic_id').notNull(),
-    documentId: text('document_id').notNull(),
-    documentContentHash: text('document_content_hash').notNull(),
-    version: integer('version').notNull(),
-    status: text('status').$type<ResearchHypothesisVersion['status']>().notNull(),
-    supersedesId: text('supersedes_id'),
-    summary: text('summary'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    topicVersionUnique: uniqueIndex('research_hypothesis_versions_topic_version_unique').on(
-      t.topicId,
-      t.version,
-    ),
-    topicStatusIdx: index('research_hypothesis_versions_topic_status_idx').on(t.topicId, t.status),
-    activeUnique: uniqueIndex('research_hypothesis_versions_active_unique')
-      .on(t.topicId)
-      .where(sql`status = 'active'`),
-  }),
-);
-export const researchTopicDocuments = sqliteTable(
-  'research_topic_documents',
-  {
-    topicId: text('topic_id').notNull(),
-    documentId: text('document_id').notNull(),
-    relation: text('relation').notNull(),
-    sortOrder: integer('sort_order'),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.topicId, t.documentId, t.relation],
-      name: 'research_topic_documents_pk',
-    }),
-    docIdx: index('research_topic_documents_document_idx').on(t.documentId),
-  }),
-);
-export const researchSubjectLinks = sqliteTable(
-  'research_subject_links',
-  {
-    ownerKind: text('owner_kind').notNull(),
-    ownerId: text('owner_id').notNull(),
-    subjectKind: text('subject_kind').notNull(),
-    subjectKey: text('subject_key').notNull(),
-    relation: text('relation').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.ownerKind, t.ownerId, t.subjectKind, t.subjectKey, t.relation],
-      name: 'research_subject_links_pk',
-    }),
-    subjectIdx: index('research_subject_links_subject_idx').on(
-      t.subjectKind,
-      t.subjectKey,
-      t.ownerKind,
-    ),
-  }),
-);
-export const researchDocumentChunks = sqliteTable(
-  'research_document_chunks',
-  {
-    documentId: text('document_id').notNull(),
-    ordinal: integer('ordinal').notNull(),
-    headingPath: text('heading_path').notNull(),
-    contentHash: text('content_hash').notNull(),
-    body: text('body').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.documentId, t.ordinal], name: 'research_document_chunks_pk' }),
-  }),
-);
 // FTS5 virtual table is created by ensureSchema; this declaration only supplies
 // Drizzle's typed query surface and does not create a second ordinary table.
 export const researchDocumentFts = sqliteTable('research_document_fts', {
   documentId: text('document_id').notNull(),
-  ordinal: integer('ordinal').notNull(),
   contentHash: text('content_hash').notNull(),
   title: text('title').notNull(),
-  headingPath: text('heading_path').notNull(),
+  tags: text('tags').notNull(),
+  relativePath: text('relative_path').notNull(),
+  excerpt: text('excerpt').notNull(),
   body: text('body').notNull(),
 });
-export const researchChunkEmbeddings = sqliteTable(
-  'research_chunk_embeddings',
-  {
-    documentId: text('document_id').notNull(),
-    ordinal: integer('ordinal').notNull(),
-    contentHash: text('content_hash').notNull(),
-    identityKey: text('identity_key').notNull(),
-    provider: text('provider').notNull(),
-    model: text('model').notNull(),
-    dimensions: integer('dimensions').notNull(),
-    version: text('version').notNull(),
-    vector: text('vector_json', { mode: 'json' }).$type<readonly number[]>().notNull(),
-    embeddedAt: integer('embedded_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({
-      columns: [t.identityKey, t.documentId, t.ordinal],
-      name: 'research_chunk_embeddings_pk',
-    }),
-    identityIdx: index('research_chunk_embeddings_identity_idx').on(t.identityKey),
-  }),
-);
-export const researchEmbeddingIndexStates = sqliteTable('research_embedding_index_states', {
-  identityKey: text('identity_key').primaryKey(),
-  provider: text('provider').$type<ResearchEmbeddingModelIdentity['provider']>().notNull(),
-  model: text('model').$type<ResearchEmbeddingModelIdentity['model']>().notNull(),
-  dimensions: integer('dimensions').notNull(),
-  version: text('version').$type<ResearchEmbeddingModelIdentity['version']>().notNull(),
-  status: text('status').$type<ResearchEmbeddingIndexState['status']>().notNull(),
-  expectedChunks: integer('expected_chunks').notNull(),
-  embeddedChunks: integer('embedded_chunks').notNull(),
-  staleChunks: integer('stale_chunks').notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-  diagnostic: text('diagnostic'),
-});
-export const researchVaultSyncRuns = sqliteTable(
-  'research_vault_sync_runs',
-  {
-    id: text('id').primaryKey(),
-    vaultId: text('vault_id').notNull(),
-    mode: text('mode').$type<ResearchVaultSyncRun['mode']>().notNull(),
-    status: text('status').$type<ResearchVaultSyncRun['status']>().notNull(),
-    scanned: integer('scanned').notNull(),
-    added: integer('added').notNull(),
-    updated: integer('updated').notNull(),
-    unchanged: integer('unchanged').notNull(),
-    missing: integer('missing').notNull(),
-    invalid: integer('invalid').notNull(),
-    conflicts: integer('conflicts').notNull(),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-    error: text('error'),
-  },
-  (t) => ({
-    vaultStartedIdx: index('research_vault_sync_runs_vault_started_idx').on(t.vaultId, t.startedAt),
-  }),
-);
-
-/**
- * 公司事件（ruo 迁移 Phase 1B，docs/.../§3.2）。
- * (provider, external_id) 唯一（manual 行两列为 NULL，SQLite 唯一索引放行多 NULL）。
- * remindBeforeDays 走 text + mode 'json'（数字数组）。
- */
-export const stockEvents = sqliteTable(
-  'stock_events',
-  {
-    id: text('id').primaryKey(),
-    stockId: text('stock_id').notNull(),
-    kind: text('kind').$type<StockEvent['kind']>().notNull(),
-    title: text('title').notNull(),
-    description: text('description'),
-    occursAt: integer('occurs_at', { mode: 'timestamp_ms' }).notNull(),
-    allDay: integer('all_day', { mode: 'boolean' }).notNull(),
-    importance: text('importance').$type<StockEvent['importance']>().notNull(),
-    status: text('status').$type<StockEvent['status']>().notNull(),
-    source: text('source').$type<StockEvent['source']>().notNull(),
-    provider: text('provider'),
-    externalId: text('external_id'),
-    sourceUrl: text('source_url'),
-    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
-    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }),
-    stale: integer('stale', { mode: 'boolean' }).notNull(),
-    remindBeforeDays: text('remind_before_days', { mode: 'json' })
-      .$type<readonly number[]>()
-      .notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    providerExternalUnique: uniqueIndex('stock_events_provider_external_unique').on(
-      t.provider,
-      t.externalId,
-    ),
-    stockOccursIdx: index('stock_events_stock_occurs_idx').on(t.stockId, t.occursAt),
-    occursStatusIdx: index('stock_events_occurs_status_idx').on(t.occursAt, t.status),
-    stockKindOccursIdx: index('stock_events_stock_kind_occurs_idx').on(
-      t.stockId,
-      t.kind,
-      t.occursAt,
-    ),
-  }),
-);
 
 /**
  * Workflow 运行审计（ruo 迁移 Phase 1C，docs/.../§3.4）。
@@ -1797,9 +1145,7 @@ export const reports = sqliteTable(
     watchlistFactsSnapshot: text('watchlist_facts_snapshot', { mode: 'json' }).$type<
       Report['watchlistFactsSnapshot']
     >(),
-    decisionReviewSnapshot: text('decision_review_snapshot', { mode: 'json' }).$type<
-      Report['decisionReviewSnapshot']
-    >(),
+    decisionReviewFingerprint: text('decision_review_fingerprint'),
     deliveryAttemptId: text('delivery_attempt_id'),
     workflowRunId: text('workflow_run_id').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -1874,71 +1220,10 @@ export const chatMessages = sqliteTable(
   }),
 );
 
-export const investmentResearch = sqliteTable(
-  'investment_research',
-  {
-    id: text('id').primaryKey(),
-    ownerUserId: text('owner_user_id').notNull(),
-    accountId: text('account_id').notNull(),
-    requestId: text('request_id').notNull(),
-    requestHash: text('request_hash').notNull(),
-    payloadJson: text('payload_json').notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => [
-    uniqueIndex('investment_research_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
-    index('investment_research_owner_time_idx').on(t.ownerUserId, t.accountId, t.createdAt),
-  ],
-);
-
-export const investmentConsensus = sqliteTable(
-  'investment_consensus',
-  {
-    id: text('id').primaryKey(),
-    ownerUserId: text('owner_user_id').notNull(),
-    accountId: text('account_id').notNull(),
-    version: integer('version').notNull(),
-    requestId: text('request_id').notNull(),
-    requestHash: text('request_hash').notNull(),
-    payloadJson: text('payload_json').notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => [
-    uniqueIndex('investment_consensus_version_unique').on(t.ownerUserId, t.accountId, t.version),
-    uniqueIndex('investment_consensus_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
-  ],
-);
-
-export const investmentTracking = sqliteTable(
-  'investment_tracking',
-  {
-    id: text('id').primaryKey(),
-    ownerUserId: text('owner_user_id').notNull(),
-    accountId: text('account_id').notNull(),
-    requestId: text('request_id').notNull(),
-    requestHash: text('request_hash').notNull(),
-    status: text('status').notNull(),
-    payloadJson: text('payload_json').notNull(),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => [
-    uniqueIndex('investment_tracking_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
-    uniqueIndex('investment_tracking_starting_unique')
-      .on(t.ownerUserId, t.accountId)
-      .where(sql`status = 'starting'`),
-  ],
-);
-
 export const schema = {
-  investmentResearch,
-  investmentConsensus,
-  investmentTracking,
   schemaMigrations,
   accounts,
   decisionReviews,
-  decisionReviewRevisions,
-  decisionReviewTradeLinks,
-  decisionWriteReceipts,
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
@@ -1956,24 +1241,12 @@ export const schema = {
   dailyBars,
   minuteBars,
   dailyBarRevisions,
-  financialFactRevisions,
-  fundamentalScoreVersions,
-  fundamentalScoreRuns,
-  fundamentalScoreResults,
   strategies,
   strategyVersions,
   strategyRuns,
-  strategySchedules,
-  strategyRunLeases,
   strategyResults,
   strategySignals,
-  strategyDataCheckpoints,
-  strategyDataCheckpointMembers,
-  strategyEvaluationSessions,
-  strategyEvaluationDays,
   strategyBacktestRuns,
-  strategyBacktestMarketFacts,
-  strategyAutonomyActions,
   signalObservations,
   notifications,
   // v0.6 起
@@ -1981,24 +1254,14 @@ export const schema = {
   watchTriggers,
   // v0.7 起：边沿状态机
   watchRuleStates,
-  watchRuns,
   watchlists,
   watchlistMembers,
   watchlistMemberSources,
   watchlistSyncRuns,
   membershipSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
-  researchTopicIndex,
   researchDocumentIndex,
-  researchHypothesisVersions,
-  researchTopicDocuments,
-  researchSubjectLinks,
-  researchDocumentChunks,
   researchDocumentFts,
-  researchChunkEmbeddings,
-  researchEmbeddingIndexStates,
-  researchVaultSyncRuns,
-  stockEvents,
   workflowRuns,
   reports,
   tradingPlans,

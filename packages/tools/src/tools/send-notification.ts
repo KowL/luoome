@@ -68,14 +68,14 @@ export const sendNotificationTool = defineTool({
         },
       };
     }
-    const manager = ctx.notification;
+    const manager = ctx.adapters.notification;
     if (manager === undefined) {
       return {
         ok: false as const,
         error: {
           kind: 'internal' as const,
           cause:
-            'send_notification: ToolContext.notification 未注入 NotificationManager（请检查装配）',
+            'send_notification: ctx.adapters.notification 未注入 NotificationManager（请检查装配）',
         },
       };
     }

@@ -3,9 +3,11 @@ import { type Advice, type AdviceRepository, STANDARD_DISCLAIMERS } from '@luoom
 import { describe, expect, it } from 'vitest';
 
 import { buildContext } from '../context.js';
-import { buildTestContext } from '../testing/context.js';
+import {
+  buildTestContext,
+  recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
+} from '../testing/context.js';
 import { getAdviceStatsTool } from './get-advice-stats.js';
-import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const makeAdvice = (id: string, decision: Advice['decision'], confidence: number): Advice => ({
   id,

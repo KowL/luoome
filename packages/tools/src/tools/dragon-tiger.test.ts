@@ -41,8 +41,7 @@ describe('dragon_tiger_list tool', () => {
   const makeCtx = (manager: DragonTigerManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      dragonTiger: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { dragonTiger: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },

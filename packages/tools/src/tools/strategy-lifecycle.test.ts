@@ -13,7 +13,6 @@ import {
   resumeStrategyTool,
   validateStrategyVersionTool,
 } from './strategy-lifecycle.js';
-import { setStrategyScheduleTool } from './strategy-schedule.js';
 
 const validDefinition = (): StrategyDslV1 => ({
   schemaVersion: 1,
@@ -311,7 +310,11 @@ describe('Strategy lifecycle tools', () => {
     if (!version.ok) return;
     await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
     await publishStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
-    await setStrategyScheduleTool.execute({ strategyId: 'delete-me', cron: '0 18 * * 1-5' }, ctx);
+    await ctx.repos.strategy.updateSchedule(
+      'delete-me',
+      { scheduleCron: '0 18 * * 1-5' },
+      ctx.clock(),
+    );
     const run = await runStrategyTool.execute(
       { strategyId: 'delete-me', stockIds: ['600519.SH'], persist: true },
       ctx,
@@ -324,7 +327,6 @@ describe('Strategy lifecycle tools', () => {
     expect(deleted).toEqual({ ok: true, data: { deleted: true } });
     expect(await ctx.repos.strategy.findById('delete-me')).toBeNull();
     expect(await ctx.repos.strategy.listVersions('delete-me')).toEqual([]);
-    expect(await ctx.repos.strategySchedule.findByStrategyId('delete-me')).toBeNull();
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'delete-me' })).toEqual([]);
     expect(await ctx.repos.strategyRun.signalsByStrategy('delete-me')).toEqual([]);
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
@@ -381,7 +383,11 @@ describe('Strategy lifecycle tools', () => {
     if (!version.ok) return;
     await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
     await publishStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
-    await setStrategyScheduleTool.execute({ strategyId: 'archive-me', cron: '0 18 * * 1-5' }, ctx);
+    await ctx.repos.strategy.updateSchedule(
+      'archive-me',
+      { scheduleCron: '0 18 * * 1-5' },
+      ctx.clock(),
+    );
     // active 不可归档
     const activeArchive = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
     expect(activeArchive).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
@@ -394,7 +400,7 @@ describe('Strategy lifecycle tools', () => {
     // 归档为终态：重复归档拒绝，调度配置已被移除（归档后不再被 claim）
     const again = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
     expect(again).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
-    expect(await ctx.repos.strategySchedule.findByStrategyId('archive-me')).toBeNull();
+    expect((await ctx.repos.strategy.findById('archive-me'))?.scheduleCron).toBeUndefined();
 
     const missing = await archiveStrategyTool.execute({ strategyId: 'missing' }, ctx);
     expect(missing).toMatchObject({ ok: false, error: { kind: 'not_found' } });

@@ -1,5 +1,5 @@
 // Agent 场景目录：四类场景 + general 的 prompt 覆写与工具白名单单一事实来源。
-// Web chat 与 agent_run 都从这里取配置（设计：docs/ddd/agent-collaboration-phase0-1-detailed-design.md §3）。
+// Web chat（DSH runtime）从这里取配置（设计：docs/ddd/agent-collaboration-phase0-1-detailed-design.md §3）。
 
 import { z } from 'zod';
 
@@ -45,8 +45,7 @@ export interface AgentScenario {
 }
 
 /**
- * chat 与 agent_run 共享的基础规则；入口特有语义（chat 的草案处理记录前缀 /
- * agent_run 的结构化输出字段）由各自入口在此之后追加。
+ * Web chat 的基础规则；入口特有语义（草案处理记录前缀等）由 chat 入口追加。
  */
 export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 
@@ -68,17 +67,15 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明，不能把推测表达为确定事实。
 - 复杂投资问题按五段输出：结论摘要 → 关键事实与数据时间 → 支持证据与反证 → 风险与未知项 → 可选下一步。
-- 讨论参与方向前先读 get_investment_workspace，跨日沿用结构化确认记录；研究方向调用 research_investment_directions 的待确认草案，不能用 market_outlook 的有限样本冒充全市场。
-- 新用户不需要先配置策略。没有合格预设策略时，方向研究可基于带来源、覆盖与事实时间的市场广度、A股指数和情绪；缺新闻/公告不造催化。market-participation 方向可以讨论和确认，但没有真实策略/候选映射就不能开启个股跟踪；使用 trackingEligibility 及 unmappedDirections 说明原因，不自动创建策略。
-- 方向确认与跟踪分开：save_investment_consensus 和 set_investment_tracking 只生成草案。方向仅供研究；保留用户坚持的理由和系统反对。修订会暂停本功能旧方向的新候选同步，不调整已有持仓风险计划。没有真实成交不创建成交记录。
-- 使用 get_investment_candidates 取得真实候选与既有研究入口；同股多方向合并。策略版本变化、过期、研究失败或没有配置调度必须如实说明，不能把订阅、保存或模型文案当作后台已执行。
+- 讨论研究背景时先读 list_research_documents / get_research_document / search_research_documents；研究笔记只作为可追溯资料，不能把检索命中当作结论或全市场证据。
+- 新用户不需要先配置策略。没有合格预设策略时，market_outlook 只能基于带来源、覆盖与事实时间的市场广度、A股指数和情绪回答；缺新闻/公告不造催化，也不能用有限样本冒充全市场。
+- 研究笔记写入只生成 create_research_document 的待确认草案；用户确认前不得写 Vault，也不得把同步状态、订阅或模型文案当作后台已执行。
+- 任何方向讨论都不是买卖决定；没有真实成交不创建成交记录。
 - 数据健康异常或工具失败时，回答必须说明受影响维度与对结论的影响，不得生成伪完整答案。
 - 使用中文简洁回答。`;
 
 /** 四类场景与 general 共享的只读基线（设计 §3.1）。 */
 const SHARED_READ_BASELINE = [
-  'get_investment_workspace',
-  'get_investment_candidates',
   'search_stocks',
   'fetch_quote',
   'batch_quote',
@@ -98,18 +95,14 @@ const SHARED_READ_BASELINE = [
   'list_alert_plans',
   'list_watch_triggers',
   'get_advice',
-  'list_research_topics',
-  'get_research_topic',
   'list_research_documents',
   'get_research_document',
+  'search_research_documents',
   'get_market_data_status',
 ] as const;
 
 /** 全部可进入 Agent 确认面板的草案工具；场景会进一步收窄 Phase 2 工具。 */
 export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = {
-  research_investment_directions: 'research',
-  save_investment_consensus: 'research',
-  set_investment_tracking: 'watchlist',
   create_account: 'portfolio',
   add_holding: 'portfolio',
   update_holding: 'portfolio',
@@ -132,11 +125,8 @@ export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = 
   create_alert_plan: 'alert-plan',
   update_alert_plan: 'alert-plan',
   delete_alert_plan: 'alert-plan',
-  create_research_topic: 'research',
   create_research_document: 'research',
-  link_research_document: 'research',
-  create_research_hypothesis_version: 'research',
-  record_advice_outcome: 'review',
+  save_decision_review: 'review',
   analyze_stock: 'advice',
   analyze_position: 'advice',
   market_outlook: 'advice',
@@ -156,23 +146,13 @@ const PORTFOLIO_DRAFT_TOOLS = Object.entries(AGENT_DRAFT_TOOL_KINDS)
   .map(([name]) => name);
 
 /** 账本草案限持仓与通用场景；复盘与研究另按各自范围开放草案。 */
-const REVIEW_DRAFT_TOOL_KINDS = withoutDraftTools(
-  'create_research_hypothesis_version',
-  ...PORTFOLIO_DRAFT_TOOLS,
-);
+const REVIEW_DRAFT_TOOL_KINDS = withoutDraftTools(...PORTFOLIO_DRAFT_TOOLS);
 const RESEARCH_DRAFT_TOOL_KINDS = withoutDraftTools(
-  'record_advice_outcome',
+  'save_decision_review',
   ...PORTFOLIO_DRAFT_TOOLS,
 );
-const PORTFOLIO_DRAFT_TOOL_KINDS = withoutDraftTools(
-  'record_advice_outcome',
-  'create_research_hypothesis_version',
-);
-const WATCH_DRAFT_TOOL_KINDS = withoutDraftTools(
-  'record_advice_outcome',
-  'create_research_hypothesis_version',
-  ...PORTFOLIO_DRAFT_TOOLS,
-);
+const PORTFOLIO_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review');
+const WATCH_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review', ...PORTFOLIO_DRAFT_TOOLS);
 
 const scenario = (
   id: AgentScenarioId,
@@ -189,21 +169,11 @@ const scenario = (
 });
 
 const RESEARCH_READS = [
-  'get_stock_research_view',
-  'build_research_brief',
-  'search_research_documents',
-  'search_research_documents_hybrid',
-  'list_stock_events',
   'compare_strategy_definitions',
   'get_strategy_reliability_summary',
 ] as const;
 
-const PORTFOLIO_READS = [
-  'get_account_performance',
-  'list_trades',
-  'get_advice_stats',
-  'list_stock_events',
-] as const;
+const PORTFOLIO_READS = ['get_account_performance', 'list_trades', 'get_advice_stats'] as const;
 
 const WATCH_READS = [
   'list_watchlist_changes',
@@ -230,18 +200,11 @@ const GENERAL_READS = [
   ...SHARED_READ_BASELINE,
   'list_strategy_runs',
   'get_strategy_run',
-  'run_local_selector_research',
-  'assess_adaptive_personality',
   'list_watchlist_changes',
   'get_advice_stats',
   'get_decision_loop_review',
   'get_signal_observation_stats',
   'list_trades',
-  'search_research_documents',
-  'get_research_embedding_status',
-  'search_research_documents_hybrid',
-  'build_research_brief',
-  'get_stock_research_view',
 ] as const;
 
 export const AGENT_SCENARIOS: Readonly<Record<AgentScenarioId, AgentScenario>> = {

@@ -1,7 +1,6 @@
 import { dateInShanghai, isHoliday, isWeekend } from '@luoome/core';
 import { z } from 'zod';
 
-import { currentStrategyFingerprint, getAccountPlanBatchStatus } from './account-plan-batch.js';
 import { closingReportStrategiesReady, closingReportWorkflow } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
@@ -35,8 +34,6 @@ const run: WorkflowStep = async (previous, ctx) => {
   if (now < planStart || isWeekend(cutoff) || isHoliday(cutoff)) return { date, created, failed };
   const accounts = await ctx.tools.list_accounts.execute({});
   if (!accounts.ok) return accounts;
-  const fingerprint =
-    date === dateInShanghai(now) ? await currentStrategyFingerprint(date, ctx) : null;
   const strategiesReady =
     date !== dateInShanghai(now) || (await closingReportStrategiesReady(date, now, ctx));
   const outcomes: Array<'created' | 'failed' | 'existing'> = [];
@@ -142,22 +139,7 @@ const run: WorkflowStep = async (previous, ctx) => {
           'report' in recovered ? (recovered.created ? 'created' : 'existing') : 'failed';
         continue;
       }
-      const facts = await ctx.tools.get_account_facts.execute({ accountId: account.id });
-      const planBatchStatus = await getAccountPlanBatchStatus(
-        account.id,
-        date,
-        fingerprint,
-        facts.ok ? facts.data.facts.digest : null,
-        ctx,
-      );
-      if (planBatchStatus === 'blocked') {
-        outcomes[index] = 'existing';
-        continue;
-      }
-      const report = await closingReportWorkflow.run(
-        { date, scope, mode: 'scheduled', planBatchStatus },
-        ctx,
-      );
+      const report = await closingReportWorkflow.run({ date, scope, mode: 'scheduled' }, ctx);
       outcomes[index] = report.ok ? (report.data.created ? 'created' : 'existing') : 'failed';
     }
   };

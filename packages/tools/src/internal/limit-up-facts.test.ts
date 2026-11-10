@@ -32,7 +32,7 @@ const snapshotFor = (date: string, asOf = new Date(`${date}T08:30:00.000Z`)): Li
 const contextFor = (input: {
   readonly now: Date;
   readonly findByDate: (date: string) => Promise<LimitUpLadder | null>;
-  readonly fetchLadder?: ToolContext['limitUpLadder'];
+  readonly fetchLadder?: NonNullable<ToolContext['adapters']['marketIntel']>['limitUpLadder'];
 }): ToolContext =>
   ({
     clock: () => input.now,
@@ -41,7 +41,9 @@ const contextFor = (input: {
         findByDate: ({ date }: { date: string }) => input.findByDate(date),
       },
     },
-    ...(input.fetchLadder === undefined ? {} : { limitUpLadder: input.fetchLadder }),
+    ...(input.fetchLadder === undefined
+      ? {}
+      : { adapters: { marketIntel: { limitUpLadder: input.fetchLadder } } }),
   }) as unknown as ToolContext;
 
 describe('loadStockLimitUpFacts', () => {

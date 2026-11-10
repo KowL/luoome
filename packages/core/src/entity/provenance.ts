@@ -4,7 +4,6 @@ import { z } from 'zod';
  * 数据溯源值对象（ruo 能力迁移 Phase 1，PRD 决策 13 / 详设 §3.3）。
  *
  * 描述「这条数据从哪来、对应什么时间、是否新鲜」。Phase 1 嵌入点：
- * - StockEvent（展开为列：provider / observedAt / fetchedAt / stale）
  * - 行情状态读模型（get_market_data_status）
  *
  * Quote 自 Phase 3 起直接携带 observedAt / fetchedAt / timestampSource；

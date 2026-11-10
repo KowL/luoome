@@ -14,34 +14,12 @@ import {
   makeReport,
   makeTrade,
   makeTradingPlan,
-  makeWatchRun,
   makeWatchTrigger,
 } from './repository/contract-tests.js';
 import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
-  it('不同数据库连接也不能同时取得预警租约', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'luoome-watch-lease-'));
-    const first = createDrizzleRepos(join(directory, 'test.sqlite'));
-    const second = createDrizzleRepos(join(directory, 'test.sqlite'));
-    try {
-      const now = new Date('2026-07-27T02:00:00Z');
-      const until = new Date(now.getTime() + 120_000);
-      const claims = await Promise.all([
-        first.repos.watchTrigger.acquireExecution('first', now, until),
-        second.repos.watchTrigger.acquireExecution('second', now, until),
-      ]);
-      expect(claims.filter(Boolean)).toHaveLength(1);
-      await first.repos.watchTrigger.releaseExecution('first');
-      expect(await second.repos.watchTrigger.acquireExecution('second', now, until)).toBe(true);
-    } finally {
-      first.close();
-      second.close();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it('预警投递迁移保留旧数据并可重复执行', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {
@@ -285,54 +263,101 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('ResearchIndex 使用 FTS5 搜索并返回可审计 chunk ordinal', async () => {
+  it('ResearchIndex 以 document 粒度写入 FTS5，并可降级 metadata 检索', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {
       const now = new Date('2026-08-01T00:00:00.000Z');
       await handle.repos.researchIndex.applyIndexBatch({
         vaultId: 'vault-fts',
         completeness: 'complete',
-        topics: [],
         documents: [
           {
             id: 'doc_fts',
             title: 'Revenue report',
             kind: 'report',
             importedAt: now,
-            tags: [],
+            tags: ['earnings'],
+            stockCodes: ['600519.SH'],
             vaultId: 'vault-fts',
             relativePath: 'Research/revenue.md',
             attachmentPaths: [],
             contentHash: 'a'.repeat(64),
+            excerpt: 'Revenue growth',
             fileModifiedAt: now,
             indexedAt: now,
             availability: 'available',
           },
         ],
-        topicDocuments: [],
-        subjectLinks: [],
-        chunks: [
-          {
-            documentId: 'doc_fts',
-            ordinal: 3,
-            headingPath: 'Revenue',
-            contentHash: 'a'.repeat(64),
-            body: 'Revenue growth remains strong',
-          },
-        ],
-        seenTopicIds: new Set(),
+        contents: { doc_fts: 'Revenue growth remains strong' },
         seenDocumentIds: new Set(['doc_fts']),
         indexedAt: now,
       });
       expect(handle.repos.researchIndex.searchCapability()).toBe('fts');
       const hits = await handle.repos.researchIndex.searchDocuments({ text: 'Revenue' });
-      expect(hits[0]).toMatchObject({ document: { id: 'doc_fts' }, ordinal: 3 });
+      expect(hits[0]).toMatchObject({ document: { id: 'doc_fts' } });
+      expect(hits[0]?.snippet).toContain('Revenue');
+      expect(await handle.repos.researchIndex.listStockCodes()).toEqual(['600519.SH']);
       handle.db.run(sql`DROP TABLE research_document_fts`);
       const fallback = await handle.repos.researchIndex.searchDocuments({ text: 'Revenue' });
-      expect(fallback[0]).toMatchObject({ document: { id: 'doc_fts' }, ordinal: 3 });
+      expect(fallback[0]).toMatchObject({ document: { id: 'doc_fts' } });
       expect(handle.repos.researchIndex.searchCapability()).toBe('metadata');
     } finally {
       handle.close();
+    }
+  });
+
+  it('旧 chunk 行 FTS 投影在启动时重建为 document 行且不丢权威文档', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-research-fts-'));
+    const dbPath = join(directory, 'research.sqlite');
+    try {
+      const first = createDrizzleRepos(dbPath);
+      const now = new Date('2026-08-01T00:00:00.000Z');
+      await first.repos.researchIndex.applyIndexBatch({
+        vaultId: 'vault-legacy',
+        completeness: 'complete',
+        documents: [
+          {
+            id: 'doc_legacy',
+            title: '渠道库存',
+            kind: 'note',
+            importedAt: now,
+            tags: [],
+            stockCodes: [],
+            vaultId: 'vault-legacy',
+            relativePath: 'Research/legacy.md',
+            attachmentPaths: [],
+            contentHash: 'b'.repeat(64),
+            fileModifiedAt: now,
+            indexedAt: now,
+            availability: 'available',
+          },
+        ],
+        contents: { doc_legacy: '旧正文' },
+        seenDocumentIds: new Set(['doc_legacy']),
+        indexedAt: now,
+      });
+      first.db.run(sql`DROP TABLE research_document_fts`);
+      first.db.run(
+        sql`CREATE VIRTUAL TABLE research_document_fts USING fts5(document_id UNINDEXED, ordinal UNINDEXED, content_hash UNINDEXED, title, heading_path, body, tokenize='unicode61')`,
+      );
+      first.close();
+
+      const reopened = createDrizzleRepos(dbPath);
+      try {
+        const columns = reopened.db
+          .all<{ name: string }>(sql`PRAGMA table_info(research_document_fts)`)
+          .map((column) => column.name);
+        expect(columns).toContain('relative_path');
+        expect(columns).not.toContain('ordinal');
+        expect(await reopened.repos.researchIndex.findDocument('doc_legacy')).toMatchObject({
+          title: '渠道库存',
+          availability: 'available',
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -464,28 +489,6 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('旧 WatchRun 幂等补齐健康指标，历史缺省保持未知', async () => {
-    const handle = createDrizzleRepos(':memory:');
-    try {
-      await handle.repos.watchRun.save(makeWatchRun('old-watch'));
-      handle.db.run(sql`ALTER TABLE watch_runs DROP COLUMN delivered`);
-      handle.db.run(sql`ALTER TABLE watch_runs DROP COLUMN unknown_rules`);
-      ensureSchema(handle.db);
-      ensureSchema(handle.db);
-      const old = await handle.repos.watchRun.findById('old-watch');
-      expect(old).toEqual(makeWatchRun('old-watch'));
-      await handle.repos.watchRun.save(
-        makeWatchRun('old-watch', { delivered: 0, unknownRules: 2 }),
-      );
-      expect(await handle.repos.watchRun.findById('old-watch')).toMatchObject({
-        delivered: 0,
-        unknownRules: 2,
-      });
-    } finally {
-      handle.close();
-    }
-  });
-
   it('Drizzle schema 与 ensureSchema 的实际 SQLite 列和索引保持一致', () => {
     const handle = createDrizzleRepos(':memory:');
     try {
@@ -496,7 +499,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
           typeof value === 'object' &&
           (value as Record<PropertyKey, unknown>)[drizzleTableMarker] === true,
       );
-      expect(tables.length).toBeGreaterThanOrEqual(50);
+      expect(tables.length).toBeGreaterThanOrEqual(40);
       for (const [exportName, table] of tables) {
         const config = getTableConfig(table as Parameters<typeof getTableConfig>[0]);
         const quotedTable = JSON.stringify(config.name);
@@ -521,26 +524,21 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('P3-2 score tables/terminal reason 迁移幂等并保留设计索引', () => {
+  it('已退役的 fundamental 管线表不再由启动迁移创建', () => {
     const handle = createDrizzleRepos(':memory:');
     try {
       ensureSchema(handle.db);
-      const runColumns = handle.db
-        .all<{ name: string }>(sql`PRAGMA table_info(fundamental_score_runs)`)
+      const names = handle.db
+        .all<{ name: string }>(
+          sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+            'financial_fact_revisions',
+            'fundamental_score_versions',
+            'fundamental_score_runs',
+            'fundamental_score_results'
+          )`,
+        )
         .map((row) => row.name);
-      expect(runColumns).toContain('terminal_reason_json');
-      const versionIndexes = handle.db
-        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_versions)`)
-        .map((row) => row.name);
-      const runIndexes = handle.db
-        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_runs)`)
-        .map((row) => row.name);
-      const resultIndexes = handle.db
-        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_results)`)
-        .map((row) => row.name);
-      expect(versionIndexes).toContain('fundamental_score_versions_definition_hash_unique');
-      expect(runIndexes).toContain('fundamental_score_runs_score_version_as_of_idx');
-      expect(resultIndexes).toContain('fundamental_score_results_run_rank_idx');
+      expect(names).toEqual([]);
     } finally {
       handle.close();
     }

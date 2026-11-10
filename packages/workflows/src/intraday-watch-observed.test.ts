@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { runIntradayWatchObserved } from './intraday-watch.js';
 
 describe('runIntradayWatchObserved', () => {
-  it('零触发的成功轮次也写入 WatchRun 心跳', async () => {
+  it('零触发的成功轮次也写入 workflow_runs 心跳', async () => {
     const ctx = await buildTestContext({
       clock: () => new Date('2026-07-23T02:00:00.000Z'),
     });
@@ -12,20 +12,25 @@ describe('runIntradayWatchObserved', () => {
     const result = await runIntradayWatchObserved({ notify: false }, ctx, 'once');
 
     expect(result.ok).toBe(true);
-    const latest = await ctx.repos.watchRun.latest();
+    const latest = (
+      await ctx.repos.workflowRun.listRecent({ workflowName: 'intraday-watch', limit: 1 })
+    )[0];
     expect(latest).toMatchObject({
-      mode: 'once',
+      workflowName: 'intraday-watch',
+      mode: 'manual',
       status: 'succeeded',
-      evaluatedPools: 0,
-      evaluatedStocks: 0,
-      triggered: 0,
-      notified: 0,
-      suppressedByCooldown: 0,
+      outputSummary: {
+        evaluatedPlans: 0,
+        evaluatedStocks: 0,
+        triggered: 0,
+        notified: 0,
+        suppressedByCooldown: 0,
+      },
     });
-    expect(latest?.finishedAt).not.toBeNull();
+    expect(latest?.finishedAt).toBeDefined();
   });
 
-  it('running 心跳符合 WatchRunSchema，不静默写库失败', async () => {
+  it('running 心跳符合 WorkflowRunSchema，不静默写库失败', async () => {
     const warnings: string[] = [];
     const noop = (): void => {};
     const ctx = await buildTestContext({
@@ -42,7 +47,7 @@ describe('runIntradayWatchObserved', () => {
 
     expect(result.ok).toBe(true);
     expect(warnings.filter((message) => message.includes('心跳'))).toEqual([]);
-    const runs = await ctx.repos.watchRun.listRecent();
+    const runs = await ctx.repos.workflowRun.listRecent({ workflowName: 'intraday-watch' });
     expect(runs).toHaveLength(1);
     expect(runs[0]?.status).toBe('succeeded');
   });
@@ -58,7 +63,9 @@ describe('runIntradayWatchObserved', () => {
     );
 
     expect(result.ok).toBe(false);
-    const latest = await ctx.repos.watchRun.latest();
+    const latest = (
+      await ctx.repos.workflowRun.listRecent({ workflowName: 'intraday-watch', limit: 1 })
+    )[0];
     expect(latest?.status).toBe('failed');
     expect(latest?.error).toContain('invalid_input');
   });

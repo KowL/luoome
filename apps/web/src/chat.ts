@@ -92,7 +92,6 @@ interface ChatContextSummary {
   }[];
   readonly alertPlans: readonly { readonly id: string; readonly name: string }[];
   readonly holdingStockIds: readonly string[];
-  readonly investment?: Record<string, unknown>;
   /** 数据健康降级摘要；全部正常时缺省，不占上下文 token。 */
   readonly dataHealth?: { readonly degraded: true; readonly issues: readonly string[] };
 }
@@ -189,7 +188,6 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     }
     return issues.length === 0 ? undefined : { degraded: true as const, issues };
   }, undefined);
-  const investment = await safe(() => executeRead('get_investment_workspace', {}), undefined);
 
   return {
     account,
@@ -197,7 +195,6 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     strategies,
     alertPlans,
     holdingStockIds,
-    ...(investment === undefined ? {} : { investment }),
     ...(dataHealth === undefined ? {} : { dataHealth }),
   };
 };

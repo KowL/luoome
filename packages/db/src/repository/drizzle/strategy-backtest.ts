@@ -1,19 +1,13 @@
 import {
   InvariantError,
   type StrategyBacktestRepository,
-  type StrictBacktestMarketFact,
-  StrictBacktestMarketFactSchema,
   type StrictBacktestRun,
   StrictBacktestRunSchema,
 } from '@luoome/core';
-import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import {
-  type Schema,
-  strategyBacktestMarketFacts,
-  strategyBacktestRuns,
-} from '../../schema/index.js';
+import { type Schema, strategyBacktestRuns } from '../../schema/index.js';
 
 type RunRow = typeof strategyBacktestRuns.$inferSelect;
 
@@ -77,7 +71,6 @@ export class DrizzleStrategyBacktestRepository implements StrategyBacktestReposi
           id: parsed.id,
           strategyId: parsed.spec.strategyId,
           strategyVersionId: parsed.spec.strategyVersionId,
-          evaluationSessionId: parsed.spec.evaluationSessionId,
           status: parsed.status,
           resultAvailability: parsed.resultAvailability,
           spec: parsed.spec,
@@ -131,52 +124,5 @@ export class DrizzleStrategyBacktestRepository implements StrategyBacktestReposi
       .limit(input?.limit ?? 50)
       .all()
       .map(toRun);
-  }
-
-  async saveMarketFacts(facts: readonly StrictBacktestMarketFact[]): Promise<void> {
-    if (facts.length === 0) return;
-    const parsed = facts.map((fact) => StrictBacktestMarketFactSchema.parse(fact));
-    this.db
-      .insert(strategyBacktestMarketFacts)
-      .values(
-        parsed.map((fact) => ({
-          stockId: fact.stockId,
-          date: fact.date,
-          recordedAt: fact.recordedAt,
-          contentHash: fact.contentHash,
-          fact,
-        })),
-      )
-      .onConflictDoNothing()
-      .run();
-  }
-
-  async listMarketFacts(input: {
-    readonly stockIds: readonly string[];
-    readonly from: Date;
-    readonly to: Date;
-    readonly recordedAt?: Date;
-  }): Promise<readonly StrictBacktestMarketFact[]> {
-    if (input.stockIds.length === 0) return [];
-    const conditions = [
-      inArray(strategyBacktestMarketFacts.stockId, [...input.stockIds]),
-      gte(strategyBacktestMarketFacts.date, input.from),
-      lte(strategyBacktestMarketFacts.date, input.to),
-    ];
-    if (input.recordedAt !== undefined) {
-      conditions.push(lte(strategyBacktestMarketFacts.recordedAt, input.recordedAt));
-    }
-    return this.db
-      .select()
-      .from(strategyBacktestMarketFacts)
-      .where(and(...conditions))
-      .orderBy(
-        strategyBacktestMarketFacts.date,
-        strategyBacktestMarketFacts.stockId,
-        strategyBacktestMarketFacts.recordedAt,
-        strategyBacktestMarketFacts.contentHash,
-      )
-      .all()
-      .map((row) => StrictBacktestMarketFactSchema.parse(row.fact));
   }
 }

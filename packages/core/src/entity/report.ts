@@ -132,20 +132,6 @@ export const ReportSectionSchema = z.object({
 });
 export type ReportSection = z.infer<typeof ReportSectionSchema>;
 
-export const DecisionReviewReportSnapshotSchema = z.object({
-  schemaVersion: z.literal(1),
-  accountId: z.string().min(1),
-  periodStart: z.string().date(),
-  periodEnd: z.string().date(),
-  throughSequence: z.number().int().nonnegative(),
-  revisionIds: z.array(
-    z.object({ reviewId: z.string().min(1), revision: z.number().int().positive() }),
-  ),
-  tradeFactHashes: z.record(z.string(), z.string()),
-  inputFingerprint: z.string().length(64),
-});
-export type DecisionReviewReportSnapshot = z.infer<typeof DecisionReviewReportSnapshotSchema>;
-
 export const WatchlistFactsSnapshotSchema = z.object({
   schemaVersion: z.literal(1),
   watchlistRevision: z.string().regex(/^[a-f0-9]{64}$/),
@@ -173,7 +159,8 @@ export const ReportSchema = z.object({
   missingDimensions: z.array(ReportMissingDimensionSchema).default([]),
   deliveryStatus: DeliveryStatusSchema.default('not-requested'),
   notificationPolicy: z.enum(['eligible', 'never']).optional(),
-  decisionReviewSnapshot: DecisionReviewReportSnapshotSchema.optional(),
+  /** 报告窗口内决策复盘的输入指纹；变化时补充版不额外通知。 */
+  decisionReviewFingerprint: z.string().length(64).optional(),
   watchlistFactsSnapshot: WatchlistFactsSnapshotSchema.optional(),
   workflowRunId: z.string().min(1),
   createdAt: z.coerce.date(),
@@ -227,14 +214,8 @@ export const assertReportInvariants = (report: Report): void => {
     report.notificationPolicy !== 'never'
   )
     throw new InvariantError('updated watchlist facts report must never notify');
-  if (
-    report.decisionReviewSnapshot !== undefined &&
-    (report.scope.kind !== 'account' ||
-      report.scope.accountId !== report.decisionReviewSnapshot.accountId ||
-      report.periodStart !== report.decisionReviewSnapshot.periodStart ||
-      report.periodEnd !== report.decisionReviewSnapshot.periodEnd)
-  )
-    throw new InvariantError('decision review snapshot scope/window mismatch');
+  if (report.decisionReviewFingerprint !== undefined && report.scope.kind !== 'account')
+    throw new InvariantError('decision review fingerprint requires account scope');
   if (report.notificationPolicy === 'never' && report.deliveryStatus !== 'not-requested') {
     throw new InvariantError('never report cannot enter delivery');
   }

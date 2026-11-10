@@ -88,10 +88,10 @@ export const loadStockLimitUpFacts = async (
     const results = await Promise.all(
       batch.map(async (date) => {
         if (anchorDate === currentDate && date === currentDate) {
-          if (ctx.limitUpLadder === undefined) {
+          if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
             return { date, snapshot: null, warning: 'current-manager-unavailable' };
           }
-          const result = await ctx.limitUpLadder.fetchLadder({
+          const result = await ctx.adapters.marketIntel?.limitUpLadder.fetchLadder({
             date,
             source: 'eastmoney',
             days: 30,

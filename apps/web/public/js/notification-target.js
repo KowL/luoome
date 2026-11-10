@@ -115,13 +115,9 @@ export const renderNotificationTarget = async () => {
             '请比较触发当时与当前计划的区别，保留风险、反证、有效期和未知项。',
           ),
       ),
-      button('登记 / 关联实际成交', () => void openDecisionReview(subject)),
+      button('记录提醒反馈', () => void openDecisionReview(subject)),
     ]),
-    el(
-      'p',
-      'workspace-caption',
-      '尚未记录的实际行动保持未知。渠道受理不能证明手机已送达或用户已交易。',
-    ),
+    el('p', 'workspace-caption', '提醒反馈只记录你是否处理过这条提醒，不代表已成交或已下单。'),
   );
   host.scrollIntoView({ block: 'start', behavior: 'instant' });
 };

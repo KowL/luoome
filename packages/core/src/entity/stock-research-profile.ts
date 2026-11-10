@@ -1,14 +1,7 @@
 import { z } from 'zod';
 
 export const StockResearchProfileFactSchema = z.object({
-  kind: z.enum([
-    'topic',
-    'document',
-    'stock-event',
-    'strategy-signal',
-    'watch-trigger',
-    'limit-up',
-  ]),
+  kind: z.enum(['topic', 'document', 'strategy-signal', 'watch-trigger', 'limit-up']),
   id: z.string().min(1),
   summary: z.string().min(1).max(500),
   occurredAt: z.coerce.date().optional(),
@@ -28,7 +21,6 @@ export const StockResearchProfileSchema = z.object({
   coverage: z.object({
     topics: z.number().int().nonnegative(),
     documents: z.number().int().nonnegative(),
-    events: z.number().int().nonnegative(),
     strategySignals: z.number().int().nonnegative(),
     watchTriggers: z.number().int().nonnegative(),
   }),

@@ -3,34 +3,22 @@ import { describe, expect, it } from 'vitest';
 import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
 describe('MCP sideEffect 暴露门控', () => {
-  it('agent_run 默认不暴露，仅在 external 显式开启后可见', () => {
-    const agentRun = toolRegistry.get('agent_run');
-    expect(agentRun?.sideEffect).toBe('external');
+  it('external 类 tool 仅在 LUOOME_EXPOSE_EXTERNAL 显式开启后暴露', () => {
+    expect(toolRegistry.get('agent_run')).toBeUndefined();
+    const quote = toolRegistry.get('fetch_quote');
+    expect(quote?.sideEffect).toBe('external');
 
     const defaults = resolveAllowedSideEffects({});
     expect(defaults.has('external')).toBe(false);
-    expect(defaults.has(agentRun?.sideEffect ?? 'external')).toBe(false);
+    expect(selectMcpTools(toolRegistry.all(), defaults).map((tool) => tool.name)).not.toContain(
+      'fetch_quote',
+    );
 
     const optedIn = resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' });
     expect(optedIn.has('external')).toBe(true);
-    expect(optedIn.has(agentRun?.sideEffect ?? 'external')).toBe(true);
-  });
-
-  it('远程研究导入同时要求 write 与 external', () => {
-    const externalOnly = selectMcpTools(
-      toolRegistry.all(),
-      resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' }),
+    expect(selectMcpTools(toolRegistry.all(), optedIn).map((tool) => tool.name)).toContain(
+      'fetch_quote',
     );
-    expect(externalOnly.map((tool) => tool.name)).not.toContain('import_remote_research_document');
-
-    const both = selectMcpTools(
-      toolRegistry.all(),
-      resolveAllowedSideEffects({
-        LUOOME_EXPOSE_WRITE: 'true',
-        LUOOME_EXPOSE_EXTERNAL: 'true',
-      }),
-    );
-    expect(both.map((tool) => tool.name)).toContain('import_remote_research_document');
   });
 
   it('Strategy 持久化外部 tools 必须同时开启 write 与 external，草案/trial 仅需 external', () => {
@@ -40,7 +28,6 @@ describe('MCP sideEffect 暴露门控', () => {
     );
     const externalOnlyNames = externalOnly.map((tool) => tool.name);
     expect(externalOnlyNames).not.toContain('run_strategy');
-    expect(externalOnlyNames).not.toContain('prepare_strategy_data');
     expect(externalOnlyNames).toContain('trial_strategy');
     expect(externalOnlyNames).toContain('propose_strategy_version_draft');
     expect(externalOnlyNames).toContain('trial_strategy_version');
@@ -54,7 +41,6 @@ describe('MCP sideEffect 暴露门控', () => {
     );
     const bothNames = both.map((tool) => tool.name);
     expect(bothNames).toContain('run_strategy');
-    expect(bothNames).toContain('prepare_strategy_data');
     expect(bothNames).toContain('trial_strategy');
   });
 
@@ -88,7 +74,6 @@ describe('MCP sideEffect 暴露门控', () => {
     for (const internalName of [
       'sync_watchlist_source',
       'sync_strategy_watchlist_subscriptions',
-      'record_watch_run',
       'record_workflow_run',
       'save_report',
       'save_watch_trigger',

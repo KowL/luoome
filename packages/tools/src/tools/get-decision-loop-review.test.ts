@@ -1,10 +1,11 @@
 import { TEST_ACCOUNT, TEST_ACCOUNT_LONGTERM, TEST_TRADES } from '@luoome/adapters/testing';
 import type { Trade } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
+import {
+  buildTestContext,
+  recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
+} from '../testing/context.js';
 import { getDecisionLoopReviewTool } from './get-decision-loop-review.js';
-import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const NOW = new Date('2026-08-01T00:00:00.000Z');
 
@@ -51,7 +52,7 @@ const pendingObservation = {
 };
 
 describe('get_decision_loop_review', () => {
-  it('按账户/股票聚合 Advice、Trade 归因、SignalObservation 与研究假设证据', async () => {
+  it('按账户/股票聚合 Advice、Trade 归因与 SignalObservation 证据', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     const advice = (
       await ctx.repos.advice.query({
@@ -72,7 +73,6 @@ describe('get_decision_loop_review', () => {
     await ctx.repos.trade.save({
       ...(TEST_TRADES[0] as Trade),
       adviceId: advice.id,
-      researchHypothesisVersionId: 'hypothesis_review',
       strategyVersionId: 'review-strategy-v1',
     });
     const outcome = await recordAdviceOutcomeTool.execute(
@@ -86,16 +86,6 @@ describe('get_decision_loop_review', () => {
       ctx,
     );
     expect(outcome).toEqual(expect.objectContaining({ ok: true }));
-    await ctx.repos.researchHypothesisVersion.create({
-      id: 'hypothesis_review',
-      topicId: 'topic_review',
-      documentId: 'doc_review',
-      documentContentHash: 'a'.repeat(64),
-      version: 1,
-      status: 'active',
-      summary: '测试研究假设',
-      createdAt: NOW,
-    });
     await ctx.repos.signalObservation.save(completeObservation);
     await ctx.repos.signalObservation.save(pendingObservation);
 
@@ -115,7 +105,7 @@ describe('get_decision_loop_review', () => {
     });
     expect(result.data.trades).toMatchObject({
       total: 2,
-      attributionCounts: { advice: 1, researchHypothesisVersion: 1, strategyVersion: 1 },
+      attributionCounts: { advice: 1, strategyVersion: 1 },
       unattributed: 1,
     });
     expect(result.data.signalObservations).toMatchObject({
@@ -125,16 +115,6 @@ describe('get_decision_loop_review', () => {
       unavailable: 0,
       sampleUnit: 'stock-day-horizon',
     });
-    expect(result.data.researchHypothesisVersions).toMatchObject([
-      {
-        id: 'hypothesis_review',
-        topicId: 'topic_review',
-        documentId: 'doc_review',
-        version: 1,
-        status: 'active',
-        summary: '测试研究假设',
-      },
-    ]);
     expect(result.data.evidenceIds).toEqual(
       expect.arrayContaining([
         advice.id,
@@ -142,7 +122,6 @@ describe('get_decision_loop_review', () => {
         'test-trade-0002',
         'review-observation-complete',
         'review-observation-pending',
-        'hypothesis_review',
       ]),
     );
     expect(result.data.dataAsOf).toEqual(NOW);

@@ -7,7 +7,7 @@ import { analyzePositionTool } from './analyze-position.js';
 import { listTradesTool } from './list-trades.js';
 
 describe('add_trade', () => {
-  it('接受显式 Advice / ResearchHypothesisVersion / StrategyVersion 归因并可按归因查询', async () => {
+  it('接受显式 Advice / StrategyVersion 归因并可按归因查询', async () => {
     const now = new Date('2026-08-01T00:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });
     const advice = (
@@ -19,15 +19,6 @@ describe('add_trade', () => {
     )[0];
     if (advice === undefined) throw new Error('test advice missing');
 
-    await ctx.repos.researchHypothesisVersion.create({
-      id: 'hypothesis_trade-test',
-      topicId: 'topic_trade-test',
-      documentId: 'doc_trade-test',
-      documentContentHash: 'a'.repeat(64),
-      version: 1,
-      status: 'active',
-      createdAt: now,
-    });
     const definition: StrategyDslV1 = {
       schemaVersion: 1,
       metadata: { horizon: 'short' },
@@ -68,7 +59,6 @@ describe('add_trade', () => {
         quantity: 100,
         price: 106,
         adviceId: advice.id,
-        researchHypothesisVersionId: 'hypothesis_trade-test',
         strategyVersionId: strategyVersion.id,
       },
       ctx,
@@ -77,7 +67,6 @@ describe('add_trade', () => {
     if (!result.ok) return;
     expect(result.data.trade).toMatchObject({
       adviceId: advice.id,
-      researchHypothesisVersionId: 'hypothesis_trade-test',
       strategyVersionId: strategyVersion.id,
     });
 
@@ -87,7 +76,7 @@ describe('add_trade', () => {
     expect(listed.data.trades.map((trade) => trade.id)).toContain(result.data.trade.id);
   });
 
-  it('拒绝 Advice 股票不一致、缺失假设版本和未发布 StrategyVersion', async () => {
+  it('拒绝 Advice 股票不一致和未发布 StrategyVersion', async () => {
     const now = new Date('2026-08-01T00:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });
     const wrongAdvice = (
@@ -110,18 +99,6 @@ describe('add_trade', () => {
       ctx,
     );
     expect(mismatched).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
-
-    const missingHypothesis = await addTradeTool.execute(
-      {
-        stockId: '002594.SZ',
-        side: 'buy',
-        quantity: 100,
-        price: 106,
-        researchHypothesisVersionId: 'hypothesis_missing',
-      },
-      ctx,
-    );
-    expect(missingHypothesis).toMatchObject({ ok: false, error: { kind: 'not_found' } });
 
     const definition: StrategyDslV1 = {
       schemaVersion: 1,

@@ -42,19 +42,10 @@ if (env.LUOOME_EXPOSE_TRADE === 'true') {
 
 这条规则**无法通过配置绕过**。代码层硬卡。
 
-Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。本地 Web 的人工成交
-录入可经专用路由暴露，但必须同时满足以下条件：
-
-- 只登记用户在系统外已经完成的成交；不得下单、撤单、调用券商执行接口或触发外部资金动作。
-- 路由固定绑定经过审查的记账工具，不接受任意工具名，也不进入 MCP 或模型可调用工具表。
-- 要求显式 write opt-in、同源校验（请求提供 Origin 时）、当前账户绑定，以及用户明确确认该成交尚未入账。
-- 校验成交输入、来源与账本指纹及预期修订；成交、持仓、现金、复盘与请求回执原子提交，
-  以请求 ID 保证重试幂等。
-
-`POST /api/decision-trades` 绑定 `record_decision_trade`，是上述例外。保留其 `trade`
-分类，是因为登记成交会联动现金与持仓，风险高于普通状态写入；该分类不意味着工具必然下单。
-专用路由的 write 授权仅适用于上述人工记账边界，不是把 `trade` 统一降为 `write`，也不受
-`LUOOME_EXPOSE_TRADE` 开关放行。任何新增专用路由都须逐项满足这些条件。
+Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。当前 registry 不再注册
+`trade` 副作用工具；人工成交统一走 `add_trade`（`write`），它只登记用户在系统外已经完成的
+成交，不得下单、撤单、调用券商执行接口或触发外部资金动作。成交、持仓与现金在同一事务内
+提交，账本未对齐或余额/可卖数量不足时整体拒绝，不留下部分写入。
 
 研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
 
@@ -163,16 +154,16 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 保持停用并记录原因。`luoome start` 的长驻账户计划与 AlertPlan 盯盘循环也受此双闸口约束。
 不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
 
-## 内置 agent loop
+## Web 对话运行时
 
-`agent_run` 分类为 `external`，默认不通过 MCP 暴露。其运行时能力由 tools 包的显式白名单构造：
+Web 对话只经 DSH Chat runtime（`ChatStreamRuntime` 端口）执行；旧版自研 AI SDK agent loop 与
+`agent_run` tool 已退役，不保留回退运行时。
 
-- 仅允许逐项批准的 `read` 与 `external` tool；`write`、`advice`、`trade` 均不可达。
-- `trade` 永不进入 agent 工具表，建议或盯盘结果不能触发自动下单。
-- 写入意图只能作为待确认 `drafts` 返回；草案会再次按目标 write tool 的输入 schema 校验，`agent_run` 自身不执行草案。
-- `usedTools` 与 `trace` 从实际 tool 调用派生，不接受模型自报；模型最终输出必须通过本地 Zod 校验。
-- 用户输入和 tool 输出均视为不可信内容；system instructions 明确禁止把其中的文本当作新指令。
-- 循环同时受最大步数、累计 token 软预算和总超时限制。
+- runtime 只能调用 Web 本轮从 registry 派生的显式白名单 tool；`write`、`advice`、`trade` 均不可达。
+- `trade` 永不进入 Agent 工具表，建议或盯盘结果不能触发自动下单。
+- 写入意图只能作为待确认草案返回；草案会再次按目标 write tool 的输入 schema 校验，runtime 自身不执行草案。
+- 用户输入、历史消息与 tool 输出均视为不可信内容。
+- 运行受总超时、并发会话上限与显式开启的 write + external 闸口约束。
 
 ## 传输安全
 
@@ -241,7 +232,7 @@ Web 对话和草案确认要求 write + external 双 opt-in 和同源 Origin。�
 executing 状态不自动重试，需先核对实际业务数据；核对后可显式取消该草案（终态，不会补执行）。
 模型下一轮读取真实 ToolResult，用户伪造的文本处理记录不能作为成功凭据。
 
-`add_trade` 与 `record_decision_trade` 属于 trade 类工具，永不通过 MCP 暴露；`confirm: true` 不能绕过这一边界。设置 `LUOOME_EXPOSE_TRADE=true` 会触发 MCP 启动硬卡。Web 的实际成交录入只登记用户已在系统外完成的成交，要求 write opt-in、同源校验、当前账户绑定与明确的尚未入账确认，不调用券商下单。
+`add_trade` 是登记人工成交的 write 工具，`confirm: true` 不能绕过 write opt-in 与同源校验；它只登记用户已在系统外完成的成交，不调用券商下单。设置 `LUOOME_EXPOSE_TRADE=true` 仍会触发 MCP 启动硬卡。
 
 ## 数据完整性
 

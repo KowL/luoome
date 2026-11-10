@@ -1,9 +1,5 @@
 import { invalidateBacktestCache, renderStrategyActions } from './strategy-workspace-backtest.js';
 import { invalidateCycleCache, renderDecisionCycles } from './strategy-workspace-cycle.js';
-import {
-  invalidateExperimentCache,
-  renderStrategyExperiment,
-} from './strategy-workspace-experiment.js';
 import { invalidateInsightsCache, renderInsights } from './strategy-workspace-insights.js';
 import {
   invalidateOverviewCache,
@@ -36,7 +32,6 @@ const featureCache = createFeatureCache();
 const { cachedGet } = featureCache;
 const invalidateFeatures = [
   invalidateOverviewCache,
-  invalidateExperimentCache,
   invalidateRunsCache,
   invalidateInsightsCache,
   invalidateCycleCache,
@@ -56,7 +51,6 @@ const navigate = (state, patch) => {
 const renderTabContent = async (workspace, state, setStatus, refresh) => {
   const strategyId = workspace.strategy.id;
   if (state.tab === 'overview') return renderOverview(workspace, state);
-  if (state.tab === 'experiment') return renderStrategyExperiment(strategyId, setStatus, refresh);
   if (state.tab === 'pool') return renderPool(strategyId, setStatus);
   if (state.tab === 'runs') return renderRuns(strategyId, state.scope ?? 'operational');
   if (state.tab === 'insights')

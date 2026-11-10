@@ -8,10 +8,11 @@ import {
   strategyDefinitionHash,
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
+import {
+  buildTestContext,
+  recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
+} from '../testing/context.js';
 import { getStrategyDecisionCyclesTool } from './get-strategy-decision-cycles.js';
-import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const NOW = new Date('2026-08-08T10:00:00.000Z');
 const STRATEGY_ID = 'cycle-strategy';

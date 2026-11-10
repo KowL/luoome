@@ -6,7 +6,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errLeaseLostBeforeCommit } from '../define-tool.js';
+import { defineTool } from '../define-tool.js';
 import {
   observationsForWatchTrigger,
   saveObservationCandidates,
@@ -15,7 +15,6 @@ import {
 /** Workflow-only repository primitives; never added to the public registry. */
 
 export const CommitWatchEvaluationInput = z.object({
-  owner: z.string().min(1),
   triggers: z.array(WatchTriggerSchema),
   auditTriggers: z.array(WatchTriggerSchema).default([]),
   states: z.array(WatchRuleStateSchema),
@@ -29,26 +28,18 @@ export const CommitWatchEvaluationOutput = z.object({
 });
 export const commitWatchEvaluationTool = defineTool({
   name: 'commit_watch_evaluation',
-  description: 'workflow-only：在租约保护下原子提交预警触发与边沿状态',
+  description: 'workflow-only：原子提交预警触发与边沿状态',
   sideEffect: 'write',
   input: CommitWatchEvaluationInput,
   output: CommitWatchEvaluationOutput,
   handler: async (input, ctx) => {
     const now = ctx.clock();
     const { invalidatePending, ...evaluation } = input;
-    const committed = await ctx.repos.watchTrigger.commitEvaluation({
+    await ctx.repos.watchTrigger.commitEvaluation({
       ...evaluation,
       now,
       ...(invalidatePending === undefined ? {} : { invalidatePending }),
     });
-    if (!committed)
-      return {
-        ok: false as const,
-        error: {
-          kind: 'lease_lost_before_commit' as const,
-          message: '预警执行租约已失效，未提交求值结果',
-        },
-      };
     await saveObservationCandidates(
       input.triggers.flatMap((trigger) =>
         observationsForWatchTrigger(trigger, {
@@ -70,34 +61,8 @@ export const commitWatchEvaluationTool = defineTool({
   },
 });
 
-export const WatchExecutionInput = z.object({
-  action: z.enum(['acquire', 'renew', 'release']),
-  owner: z.string().min(1),
-});
-export const WatchExecutionOutput = z.object({ acquired: z.boolean() });
-export const watchExecutionTool = defineTool({
-  name: 'watch_execution',
-  description: 'workflow-only：取得、续期或释放预警执行租约',
-  sideEffect: 'write',
-  input: WatchExecutionInput,
-  output: WatchExecutionOutput,
-  handler: async ({ action, owner }, ctx) => {
-    const now = ctx.clock();
-    const until = new Date(now.getTime() + 120_000);
-    if (action === 'release') {
-      await ctx.repos.watchTrigger.releaseExecution(owner);
-      return { acquired: false };
-    }
-    const acquired = await (action === 'acquire'
-      ? ctx.repos.watchTrigger.acquireExecution(owner, now, until)
-      : ctx.repos.watchTrigger.renewExecution(owner, now, until));
-    return { acquired };
-  },
-});
-
 export const BeginWatchDeliveryInput = z.object({
   triggerIds: z.array(z.string().min(1)).min(1),
-  owner: z.string().min(1).optional(),
 });
 export const BeginWatchDeliveryOutput = z.object({ started: z.number().int().nonnegative() });
 export const beginWatchDeliveryTool = defineTool({
@@ -106,9 +71,8 @@ export const beginWatchDeliveryTool = defineTool({
   sideEffect: 'write',
   input: BeginWatchDeliveryInput,
   output: BeginWatchDeliveryOutput,
-  handler: async ({ triggerIds, owner }, ctx) => {
-    if (!(await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), owner)))
-      return errLeaseLostBeforeCommit();
+  handler: async ({ triggerIds }, ctx) => {
+    await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock());
     return { started: triggerIds.length };
   },
 });
@@ -182,7 +146,6 @@ export const SetWatchTriggerDeliveryStatusInput = z.object({
   triggerIds: z.array(z.string().min(1)).min(1),
   status: DeliveryStatusSchema,
   notificationId: z.string().min(1).optional(),
-  owner: z.string().min(1).optional(),
 });
 export const SetWatchTriggerDeliveryStatusOutput = z.object({
   triggerIds: z.array(z.string().min(1)),
@@ -197,14 +160,12 @@ export const setWatchTriggerDeliveryStatusTool = defineTool({
   output: SetWatchTriggerDeliveryStatusOutput,
   handler: async (input, ctx) => {
     const completedAt = ctx.clock();
-    const saved = await ctx.repos.watchTrigger.setDeliveryStatus(
+    await ctx.repos.watchTrigger.setDeliveryStatus(
       input.triggerIds,
       input.status as DeliveryStatus,
       input.notificationId,
       completedAt,
-      input.owner,
     );
-    if (!saved) return errLeaseLostBeforeCommit();
     return { triggerIds: [...input.triggerIds], status: input.status, completedAt };
   },
 });

@@ -480,14 +480,17 @@ describe('intraday-watch cost-threshold 规则', () => {
       lastEvaluatedAt: T0,
     });
     const sent: { level: string; content: string }[] = [];
-    const notification = ctx.notification;
+    const notification = ctx.adapters.notification;
     if (notification === undefined) throw new Error('test notification manager missing');
     const patched = {
       ...ctx,
-      notification: {
-        send: async (input: Parameters<typeof notification.send>[0]) => {
-          sent.push({ level: input.payload.level, content: input.payload.content });
-          return notification.send(input);
+      adapters: {
+        ...ctx.adapters,
+        notification: {
+          send: async (input: Parameters<typeof notification.send>[0]) => {
+            sent.push({ level: input.payload.level, content: input.payload.content });
+            return notification.send(input);
+          },
         },
       },
     };

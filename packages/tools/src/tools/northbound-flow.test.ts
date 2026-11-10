@@ -44,8 +44,7 @@ describe('northbound_flow tool', () => {
   const makeCtx = (manager: NorthboundFlowManagerLike | undefined) =>
     ({
       repos: {} as never,
-      adapters: { market: {} as never, llm: {} as never },
-      northboundFlow: manager,
+      adapters: { market: {} as never, llm: {} as never, marketIntel: { northboundFlow: manager } },
       user: { id: 'u1', defaultAccountId: 'a1' },
       clock: () => new Date(),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },

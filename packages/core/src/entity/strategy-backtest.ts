@@ -85,7 +85,8 @@ export const StrictBacktestGateAuditSchema = z
   });
 export type StrictBacktestGateAudit = z.infer<typeof StrictBacktestGateAuditSchema>;
 
-export const StrictBacktestSpecSchema = z
+/** v1 历史 spec：绑定已退役的逐日评估会话，只用于存量 run 的只读查询。 */
+export const StrictBacktestSpecV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     strategyId: z.string().min(1),
@@ -120,6 +121,49 @@ export const StrictBacktestSpecSchema = z
       ctx.addIssue({ code: 'custom', path: ['from'], message: 'backtest from 不能晚于 to' });
     }
   });
+export type StrictBacktestSpecV1 = z.infer<typeof StrictBacktestSpecV1Schema>;
+
+/** v2 spec：直接以 Strategy 版本与运行区间组装，不再依赖逐日评估会话。 */
+export const StrictBacktestSpecV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    strategyId: z.string().min(1),
+    strategyVersionId: z.string().min(1),
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+    initialCash: z.number().positive().finite(),
+    benchmark: z.object({
+      stockId: z.string().min(1),
+      datasetVersion: z.string().min(1),
+    }),
+    execution: z.object({
+      model: z.literal('next-open-full-rebalance-equal-weight-v1'),
+      lotSize: z.number().int().positive().default(100),
+      maxPositions: z.number().int().min(1).max(100).default(20),
+    }),
+    fees: z.object({
+      model: z.literal('ashare-fees-v1'),
+      commissionBps: z.number().nonnegative().max(100),
+      minimumCommission: z.number().nonnegative().finite(),
+      sellStampDutyBps: z.number().nonnegative().max(100),
+    }),
+    slippage: z.object({
+      model: z.literal('fixed-bps-at-open-v1'),
+      buyBps: z.number().nonnegative().max(500),
+      sellBps: z.number().nonnegative().max(500),
+    }),
+  })
+  .superRefine((spec, ctx) => {
+    if (spec.from > spec.to) {
+      ctx.addIssue({ code: 'custom', path: ['from'], message: 'backtest from 不能晚于 to' });
+    }
+  });
+export type StrictBacktestSpecV2 = z.infer<typeof StrictBacktestSpecV2Schema>;
+
+export const StrictBacktestSpecSchema = z.discriminatedUnion('schemaVersion', [
+  StrictBacktestSpecV2Schema,
+  StrictBacktestSpecV1Schema,
+]);
 export type StrictBacktestSpec = z.infer<typeof StrictBacktestSpecSchema>;
 
 export const StrictBacktestCorporateActionSchema = z.discriminatedUnion('kind', [

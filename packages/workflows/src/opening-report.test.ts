@@ -148,7 +148,6 @@ describe('opening-report workflow', () => {
     });
     expect(first.data.report.sections.map((section) => section.key)).toEqual([
       'market-pulse',
-      'upcoming-events',
       'overnight-portfolio',
       'alert-plans',
       'watchlist-health',
@@ -332,20 +331,23 @@ describe('opening-report workflow', () => {
       });
       const ctx = {
         ...base,
-        notification: {
-          send: async (input: {
-            channel: 'feishu' | 'log';
-            payload: { title: string; content: string; level: string };
-          }) => ({
-            notification: {
-              id: 'failed-report-notification',
-              channel: input.channel,
-              payload: input.payload,
-              result: notificationResult,
-              errorMessage: 'fixture delivery failure',
-              sentAt: generatedAt,
-            },
-          }),
+        adapters: {
+          ...base.adapters,
+          notification: {
+            send: async (input: {
+              channel: 'feishu' | 'log';
+              payload: { title: string; content: string; level: string };
+            }) => ({
+              notification: {
+                id: 'failed-report-notification',
+                channel: input.channel,
+                payload: input.payload,
+                result: notificationResult,
+                errorMessage: 'fixture delivery failure',
+                sentAt: generatedAt,
+              },
+            }),
+          },
         },
       };
 

@@ -4,8 +4,6 @@ import {
   type Advice,
   aggregateSignalObservationStats,
   deduplicateSignalObservations,
-  type ResearchHypothesisVersion,
-  ResearchHypothesisVersionStatusSchema,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
   type Trade,
@@ -56,7 +54,6 @@ const TradeAttributionSchema = z.object({
   total: z.number().int().nonnegative(),
   attributionCounts: z.object({
     advice: z.number().int().nonnegative(),
-    researchHypothesisVersion: z.number().int().nonnegative(),
     strategyVersion: z.number().int().nonnegative(),
   }),
   /** 没有任何一类显式依据的交易；缺一类依据但有其它依据不计入此数。 */
@@ -96,18 +93,6 @@ const SignalReviewSchema = z.object({
   stats: z.array(SignalStatsSchema),
 });
 
-const ResearchHypothesisSummarySchema = z.object({
-  id: z.string().min(1),
-  topicId: z.string().min(1),
-  documentId: z.string().min(1),
-  documentContentHash: z.string().min(1),
-  version: z.number().int().positive(),
-  status: ResearchHypothesisVersionStatusSchema,
-  supersedesId: z.string().min(1).optional(),
-  summary: z.string().min(1).optional(),
-  createdAt: z.coerce.date(),
-});
-
 export const GetDecisionLoopReviewOutput = z.object({
   schemaVersion: z.literal(2),
   accountId: z.string().min(1),
@@ -124,12 +109,10 @@ export const GetDecisionLoopReviewOutput = z.object({
   decisionRecords: z.object({
     total: z.number().int().nonnegative(),
     linkedTrades: z.number().int().nonnegative(),
-    triggerFeedbackCount: z.number().int().nonnegative(),
     planRecordCount: z.number().int().nonnegative(),
   }),
   trades: TradeAttributionSchema,
   signalObservations: SignalReviewSchema,
-  researchHypothesisVersions: z.array(ResearchHypothesisSummarySchema),
   evidenceIds: z.array(z.string().min(1)),
   unknowns: z.array(z.string().min(1)),
   limitations: z.array(z.string().min(1)),
@@ -175,18 +158,6 @@ const adviceBelongsToScope = (
     advice.subjectId === accountId
   );
 };
-
-const summaryOf = (version: ResearchHypothesisVersion) => ({
-  id: version.id,
-  topicId: version.topicId,
-  documentId: version.documentId,
-  documentContentHash: version.documentContentHash,
-  version: version.version,
-  status: version.status,
-  ...(version.supersedesId === undefined ? {} : { supersedesId: version.supersedesId }),
-  ...(version.summary === undefined ? {} : { summary: version.summary }),
-  createdAt: version.createdAt,
-});
 
 const buildSignalReview = (observations: readonly SignalObservation[]) => {
   const sampled = deduplicateSignalObservations(observations);
@@ -252,16 +223,14 @@ export const getDecisionLoopReviewTool = defineTool({
     const outcomeByAdvice = await accountAdviceOutcomes(ctx, accountId);
     const selectedSharedAdviceIds = new Set(
       allReviews
-        .filter(({ review }) => review.subject.kind === 'advice')
-        .map(({ review }) => review.subject.id),
+        .filter((review) => review.subject.kind === 'advice')
+        .map((review) => review.subject.id),
     );
-    const currentLinkedTradeIds = new Set(
-      allReviews.flatMap(({ revision }) => revision.content.tradeIds),
-    );
+    const currentLinkedTradeIds = new Set(allReviews.flatMap((review) => review.content.tradeIds));
     const linkedAdviceTradeIds = new Set(
       allReviews
-        .filter(({ review }) => review.subject.kind === 'advice')
-        .flatMap(({ revision }) => revision.content.tradeIds),
+        .filter((review) => review.subject.kind === 'advice')
+        .flatMap((review) => review.content.tradeIds),
     );
 
     const accountStockIds = stockIdsForAccount(allAccountTrades, holdings);
@@ -304,36 +273,11 @@ export const getDecisionLoopReviewTool = defineTool({
 
     const attributionCounts = {
       advice: trades.filter((trade) => linkedAdviceTradeIds.has(trade.id)).length,
-      researchHypothesisVersion: trades.filter(
-        (trade) => trade.researchHypothesisVersionId !== undefined,
-      ).length,
       strategyVersion: trades.filter((trade) => trade.strategyVersionId !== undefined).length,
     };
     const unattributed = trades.filter(
-      (trade) =>
-        !currentLinkedTradeIds.has(trade.id) &&
-        trade.researchHypothesisVersionId === undefined &&
-        trade.strategyVersionId === undefined,
+      (trade) => !currentLinkedTradeIds.has(trade.id) && trade.strategyVersionId === undefined,
     ).length;
-
-    const hypothesisIds = [
-      ...new Set(
-        trades.flatMap((trade) =>
-          trade.researchHypothesisVersionId === undefined
-            ? []
-            : [trade.researchHypothesisVersionId],
-        ),
-      ),
-    ];
-    const hypothesisResults = await Promise.all(
-      hypothesisIds.map(async (id) => ({
-        id,
-        version: await ctx.repos.researchHypothesisVersion.findById(id),
-      })),
-    );
-    const researchHypothesisVersions = hypothesisResults
-      .flatMap(({ version }) => (version === null ? [] : [summaryOf(version)]))
-      .sort((left, right) => right.version - left.version || left.id.localeCompare(right.id));
 
     const referencedAdviceIds = [...selectedSharedAdviceIds];
     const referencedStrategyVersionIds = [
@@ -364,9 +308,6 @@ export const getDecisionLoopReviewTool = defineTool({
     if (observations.length === 0) {
       unknowns.push('当前账户/股票范围没有 SignalObservation，无法判断信号后续表现。');
     }
-    for (const { id, version } of hypothesisResults) {
-      if (version === null) unknowns.push(`Trade 引用的 ResearchHypothesisVersion 不可用：${id}。`);
-    }
     for (const { id, value } of referencedAdvices) {
       if (value === null) unknowns.push(`Trade 引用的 Advice 不可用：${id}。`);
     }
@@ -394,7 +335,6 @@ export const getDecisionLoopReviewTool = defineTool({
         ...advices.map((advice) => advice.id),
         ...trades.map((trade) => trade.id),
         ...observations.map((observation) => observation.id),
-        ...hypothesisIds,
         ...referencedAdviceIds,
         ...referencedStrategyVersionIds,
       ]),
@@ -422,13 +362,8 @@ export const getDecisionLoopReviewTool = defineTool({
       decisionRecords: {
         total: allReviews.length,
         linkedTrades: trades.filter((trade) => currentLinkedTradeIds.has(trade.id)).length,
-        triggerFeedbackCount: allReviews.filter(
-          ({ review, revision }) =>
-            review.subject.kind === 'watch-trigger' && revision.content.triggerFeedback !== null,
-        ).length,
-        planRecordCount: allReviews.filter(
-          ({ review }) => review.subject.kind === 'trading-plan-version',
-        ).length,
+        planRecordCount: allReviews.filter((review) => review.subject.kind === 'trading-plan')
+          .length,
       },
       trades: {
         total: trades.length,
@@ -436,7 +371,6 @@ export const getDecisionLoopReviewTool = defineTool({
         unattributed,
       },
       signalObservations: signalReview,
-      researchHypothesisVersions,
       evidenceIds,
       unknowns,
       limitations,

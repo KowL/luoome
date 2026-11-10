@@ -501,17 +501,22 @@ const cmdAdviceOutcome = async (
   const notes = flagString(flags, 'notes');
   const handle = await createCliContext();
   try {
-    const tool = toolRegistry.get('record_advice_outcome');
-    if (tool === undefined) throw unknownToolError('record_advice_outcome');
+    const tool = toolRegistry.get('save_decision_review');
+    if (tool === undefined) throw unknownToolError('save_decision_review');
     const res = await tool.execute(
       {
-        adviceId,
-        outcome,
-        tradeIds,
-        ...(pnl !== undefined ? { pnl } : {}),
-        ...(benchmarkPnl !== undefined ? { benchmarkPnl } : {}),
-        ...(holdingHours !== undefined ? { holdingHours } : {}),
-        ...(notes !== undefined ? { notes } : {}),
+        subject: { kind: 'advice', id: adviceId },
+        content: {
+          tradeIds,
+          adviceFeedback: {
+            outcome,
+            ...(pnl !== undefined ? { pnl } : {}),
+            ...(benchmarkPnl !== undefined ? { benchmarkPnl } : {}),
+            ...(holdingHours !== undefined ? { holdingHours } : {}),
+          },
+          lessonTags: [],
+          note: notes ?? null,
+        },
       },
       handle.ctx,
     );
@@ -558,7 +563,6 @@ const cmdWatch = async (
   _rest: readonly string[],
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
-  runTradingPlans = false,
 ): Promise<number> => {
   const intervalRaw = flagString(flags, 'interval') ?? '60';
   const intervalSec = parsePositiveInt(intervalRaw, 'interval');
@@ -573,13 +577,7 @@ const cmdWatch = async (
   const notify = !flags.has('no-notify');
 
   // 延迟 import：workflow 包包含 LLM / context 等较重依赖
-  const { intradayTradingPlanWatchWorkflow, runIntradayWatchObserved } = await import(
-    '@luoome/workflows'
-  );
-  const planWorkflow = runTradingPlans ? intradayTradingPlanWatchWorkflow : undefined;
-  const listAccountsTool = runTradingPlans
-    ? (await import('@luoome/tools')).listAccountsTool
-    : undefined;
+  const { runIntradayWatchObserved } = await import('@luoome/workflows');
   const { clampInterval, formatTriggersForLog, isTradingHours, nextRunDelayMs } = await import(
     './watch.js'
   );
@@ -651,22 +649,6 @@ const cmdWatch = async (
     }
     firstIteration = false;
     if (!json) console.warn(`[${now.toISOString()}] 跑一轮…`);
-    if (planWorkflow !== undefined && listAccountsTool !== undefined) {
-      const accounts = await listAccountsTool.execute({}, ctx);
-      if (!accounts.ok) {
-        console.error(`盘中计划列出账户失败: ${accounts.error.kind}`);
-      } else {
-        for (const account of accounts.data.accounts) {
-          if (stopping || !isTradingHours(new Date())) break;
-          const planResult = await planWorkflow.run({ accountId: account.id }, ctx);
-          if (!planResult.ok || planResult.data.status !== 'complete') {
-            console.error(
-              `盘中计划账户监控未完成: ${account.id} / ${planResult.ok ? planResult.data.status : planResult.error.kind}`,
-            );
-          }
-        }
-      }
-    }
     const r = await runIntradayWatchObserved(
       {
         ...(alertPlanIds !== undefined ? { alertPlanIds } : {}),
@@ -726,24 +708,15 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / trading-plan-daily-cycle / replay-strategy-range / strategy-recommendations / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / sync-research-vault-remote / risk-report / daily-review / intraday-watch / intraday-trading-plan-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report / strategy-autonomy-weekly）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
-  const abortController = name === 'sync-research-vault-remote' ? new AbortController() : undefined;
-  const handleSigint = (): void => abortController?.abort();
-  if (abortController !== undefined) process.once('SIGINT', handleSigint);
   try {
-    const res = await wf.run(
-      input,
-      abortController === undefined
-        ? handle.ctx
-        : { ...handle.ctx, abortSignal: abortController.signal },
-    );
+    const res = await wf.run(input, handle.ctx);
     console.log(JSON.stringify(res, null, 2));
     return res.ok ? 0 : 1;
   } finally {
-    if (abortController !== undefined) process.off('SIGINT', handleSigint);
     handle.close();
   }
 };
@@ -876,7 +849,7 @@ const cmdStart = async (
   }
 
   try {
-    return await cmdWatch([], flags, json, true);
+    return await cmdWatch([], flags, json);
   } finally {
     await server.stop(true);
   }

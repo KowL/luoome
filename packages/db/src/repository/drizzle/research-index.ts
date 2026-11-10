@@ -6,39 +6,20 @@ import type {
   ResearchSearchCapability,
   ResearchSearchHit,
   ResearchSearchQuery,
-  ResearchSubjectLink,
-  ResearchTopicDocument,
-  ResearchTopicIndex,
-  ResearchTopicQuery,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, inArray, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm';
 
 import type { DrizzleDb } from '../../client.js';
-import {
-  researchDocumentChunks,
-  researchDocumentFts,
-  researchDocumentIndex,
-  researchSubjectLinks,
-  researchTopicDocuments,
-  researchTopicIndex,
-} from '../../schema/index.js';
-
-const topicFrom = (row: typeof researchTopicIndex.$inferSelect): ResearchTopicIndex => ({
-  ...row,
-  tags: [...(row.tags ?? [])],
-  archivedAt: row.archivedAt ?? undefined,
-  summary: row.summary ?? undefined,
-  diagnostic: row.diagnostic ?? undefined,
-  availability: row.availability as ResearchTopicIndex['availability'],
-});
+import { researchDocumentFts, researchDocumentIndex } from '../../schema/index.js';
 
 const documentFrom = (row: typeof researchDocumentIndex.$inferSelect): ResearchDocumentIndex => ({
   ...row,
   tags: [...(row.tags ?? [])],
+  stockCodes: [...(row.stockCodes ?? [])],
   attachmentPaths: [...(row.attachmentPaths ?? [])],
   author: row.author ?? undefined,
   sourceUrl: row.sourceUrl ?? undefined,
-  sourceStatus: row.sourceStatus as ResearchDocumentIndex['sourceStatus'],
+  sourceStatus: (row.sourceStatus ?? undefined) as ResearchDocumentIndex['sourceStatus'],
   publishedAt: row.publishedAt ?? undefined,
   observedAt: row.observedAt ?? undefined,
   excerpt: row.excerpt ?? undefined,
@@ -47,19 +28,12 @@ const documentFrom = (row: typeof researchDocumentIndex.$inferSelect): ResearchD
   availability: row.availability as ResearchDocumentIndex['availability'],
 });
 
-const topicRow = (topic: ResearchTopicIndex): typeof researchTopicIndex.$inferInsert => ({
-  ...topic,
-  tags: [...topic.tags],
-  archivedAt: topic.archivedAt ?? null,
-  summary: topic.summary ?? null,
-  diagnostic: topic.diagnostic ?? null,
-});
-
 const documentRow = (
   document: ResearchDocumentIndex,
 ): typeof researchDocumentIndex.$inferInsert => ({
   ...document,
   tags: [...document.tags],
+  stockCodes: [...(document.stockCodes ?? [])],
   attachmentPaths: [...document.attachmentPaths],
   author: document.author ?? null,
   sourceUrl: document.sourceUrl ?? null,
@@ -70,12 +44,30 @@ const documentRow = (
   diagnostic: document.diagnostic ?? null,
 });
 
+const ftsRow = (
+  document: ResearchDocumentIndex,
+  body: string,
+): typeof researchDocumentFts.$inferInsert => ({
+  documentId: document.id,
+  contentHash: document.contentHash,
+  title: document.title,
+  tags: document.tags.join(' '),
+  relativePath: document.relativePath,
+  excerpt: document.excerpt ?? '',
+  body,
+});
+
+/**
+ * 研究笔记索引：`research_document_index` 权威单表 + `research_document_fts` 派生投影。
+ *
+ * FTS 行按 document 粒度保存 title/tags/relativePath/excerpt 与本地 Markdown 正文；
+ * 不再有 chunk/embedding/topic/hypothesis/subject-link 表。
+ */
 export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
   private ftsAvailable: boolean;
 
   constructor(private readonly db: DrizzleDb) {
     this.ftsAvailable = this.detectFts();
-    if (this.ftsAvailable) this.rebuildFts();
   }
 
   searchCapability(): ResearchSearchCapability {
@@ -95,30 +87,6 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
     }
   }
 
-  private rebuildFts(): void {
-    try {
-      this.db.delete(researchDocumentFts).run();
-      const rows = this.db
-        .select({
-          documentId: researchDocumentChunks.documentId,
-          ordinal: researchDocumentChunks.ordinal,
-          contentHash: researchDocumentChunks.contentHash,
-          title: researchDocumentIndex.title,
-          headingPath: researchDocumentChunks.headingPath,
-          body: researchDocumentChunks.body,
-        })
-        .from(researchDocumentChunks)
-        .innerJoin(
-          researchDocumentIndex,
-          eq(researchDocumentIndex.id, researchDocumentChunks.documentId),
-        )
-        .all();
-      if (rows.length > 0) this.db.insert(researchDocumentFts).values(rows).run();
-    } catch {
-      this.ftsAvailable = false;
-    }
-  }
-
   async applyIndexBatch(
     input: Parameters<ResearchIndexRepository['applyIndexBatch']>[0],
   ): Promise<ResearchIndexApplySummary> {
@@ -127,20 +95,6 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
     let unchanged = 0;
     let missing = 0;
     this.db.transaction((tx) => {
-      for (const topic of input.topics) {
-        const old = tx
-          .select({ hash: researchTopicIndex.contentHash, path: researchTopicIndex.relativePath })
-          .from(researchTopicIndex)
-          .where(eq(researchTopicIndex.id, topic.id))
-          .get();
-        if (!old) added++;
-        else if (old.hash === topic.contentHash && old.path === topic.relativePath) unchanged++;
-        else updated++;
-        tx.insert(researchTopicIndex)
-          .values(topicRow(topic))
-          .onConflictDoUpdate({ target: researchTopicIndex.id, set: topicRow(topic) })
-          .run();
-      }
       for (const document of input.documents) {
         const old = tx
           .select({
@@ -150,7 +104,7 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
           .from(researchDocumentIndex)
           .where(eq(researchDocumentIndex.id, document.id))
           .get();
-        if (!old) added++;
+        if (old === undefined) added++;
         else if (old.hash === document.contentHash && old.path === document.relativePath)
           unchanged++;
         else updated++;
@@ -162,98 +116,34 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
           })
           .run();
       }
-      if (input.completeness === 'complete') {
-        for (const row of tx
-          .select()
-          .from(researchTopicIndex)
-          .where(eq(researchTopicIndex.vaultId, input.vaultId))
-          .all()) {
-          if (!input.seenTopicIds.has(row.id) && row.availability !== 'missing') {
-            tx.update(researchTopicIndex)
-              .set({
-                availability: 'missing',
-                diagnostic: '文件未在最近一次完整扫描中出现',
-              })
-              .where(eq(researchTopicIndex.id, row.id))
-              .run();
-            missing++;
+      const markMissing = (row: {
+        id: string;
+        availability: string;
+        diagnostic: string | null;
+      }) => {
+        if (row.availability === 'missing') return;
+        tx.update(researchDocumentIndex)
+          .set({ availability: 'missing', diagnostic: '文件未在最近一次完整扫描中出现' })
+          .where(eq(researchDocumentIndex.id, row.id))
+          .run();
+        if (this.ftsAvailable) {
+          try {
+            tx.delete(researchDocumentFts).where(eq(researchDocumentFts.documentId, row.id)).run();
+          } catch {
+            this.ftsAvailable = false;
           }
         }
+        missing++;
+      };
+      if (input.completeness === 'complete') {
+        const present = new Set(input.documents.map((document) => document.id));
         for (const row of tx
           .select()
           .from(researchDocumentIndex)
           .where(eq(researchDocumentIndex.vaultId, input.vaultId))
           .all()) {
-          if (!input.seenDocumentIds.has(row.id) && row.availability !== 'missing') {
-            tx.update(researchDocumentIndex)
-              .set({
-                availability: 'missing',
-                diagnostic: '文件未在最近一次完整扫描中出现',
-              })
-              .where(eq(researchDocumentIndex.id, row.id))
-              .run();
-            missing++;
-          }
+          if (!input.seenDocumentIds.has(row.id) && !present.has(row.id)) markMissing(row);
         }
-      }
-      for (const topic of input.topics) {
-        tx.delete(researchSubjectLinks)
-          .where(
-            and(
-              eq(researchSubjectLinks.ownerKind, 'topic'),
-              eq(researchSubjectLinks.ownerId, topic.id),
-            ),
-          )
-          .run();
-      }
-      for (const document of input.documents) {
-        tx.delete(researchSubjectLinks)
-          .where(
-            and(
-              eq(researchSubjectLinks.ownerKind, 'document'),
-              eq(researchSubjectLinks.ownerId, document.id),
-            ),
-          )
-          .run();
-        tx.delete(researchTopicDocuments)
-          .where(eq(researchTopicDocuments.documentId, document.id))
-          .run();
-        tx.delete(researchDocumentChunks)
-          .where(eq(researchDocumentChunks.documentId, document.id))
-          .run();
-      }
-      if (input.subjectLinks.length > 0) {
-        tx.insert(researchSubjectLinks)
-          .values([...input.subjectLinks])
-          .onConflictDoNothing()
-          .run();
-      }
-      if (input.topicDocuments.length > 0) {
-        tx.insert(researchTopicDocuments)
-          .values(
-            input.topicDocuments.map((relation) => ({
-              topicId: relation.topicId,
-              documentId: relation.documentId,
-              relation: relation.relation,
-              sortOrder: relation.order ?? null,
-            })),
-          )
-          .onConflictDoNothing()
-          .run();
-      }
-      if (input.chunks.length > 0) {
-        tx.insert(researchDocumentChunks)
-          .values(
-            input.chunks.map((chunk) => ({
-              documentId: chunk.documentId,
-              ordinal: chunk.ordinal,
-              headingPath: chunk.headingPath,
-              contentHash: chunk.contentHash,
-              body: chunk.body,
-            })),
-          )
-          .onConflictDoNothing()
-          .run();
       }
       if (this.ftsAvailable) {
         try {
@@ -261,19 +151,10 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
             tx.delete(researchDocumentFts)
               .where(eq(researchDocumentFts.documentId, document.id))
               .run();
+            if (document.availability !== 'available') continue;
+            const body = input.contents?.[document.id] ?? document.excerpt ?? '';
+            tx.insert(researchDocumentFts).values(ftsRow(document, body)).run();
           }
-          const ftsRows = input.chunks.map((chunk) => {
-            const document = input.documents.find((item) => item.id === chunk.documentId);
-            return {
-              documentId: chunk.documentId,
-              ordinal: chunk.ordinal,
-              contentHash: chunk.contentHash,
-              title: document?.title ?? '',
-              headingPath: chunk.headingPath,
-              body: chunk.body,
-            };
-          });
-          if (ftsRows.length > 0) tx.insert(researchDocumentFts).values(ftsRows).run();
         } catch {
           this.ftsAvailable = false;
         }
@@ -284,22 +165,9 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
       updated,
       unchanged,
       missing,
-      invalid: [...input.topics, ...input.documents].filter(
-        (entry) => entry.availability === 'invalid',
-      ).length,
-      conflicts: [...input.topics, ...input.documents].filter(
-        (entry) => entry.availability === 'conflict',
-      ).length,
+      invalid: input.documents.filter((document) => document.availability === 'invalid').length,
+      conflicts: input.documents.filter((document) => document.availability === 'conflict').length,
     };
-  }
-
-  async findTopic(id: string): Promise<ResearchTopicIndex | null> {
-    const row = this.db
-      .select()
-      .from(researchTopicIndex)
-      .where(eq(researchTopicIndex.id, id))
-      .get();
-    return row ? topicFrom(row) : null;
   }
 
   async findDocument(id: string): Promise<ResearchDocumentIndex | null> {
@@ -308,43 +176,7 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
       .from(researchDocumentIndex)
       .where(eq(researchDocumentIndex.id, id))
       .get();
-    return row ? documentFrom(row) : null;
-  }
-
-  async listTopics(query: ResearchTopicQuery): Promise<readonly ResearchTopicIndex[]> {
-    return this.db
-      .select()
-      .from(researchTopicIndex)
-      .where(
-        and(
-          query.kind ? eq(researchTopicIndex.kind, query.kind) : undefined,
-          query.availability ? eq(researchTopicIndex.availability, query.availability) : undefined,
-          query.includeArchived ? undefined : sql`${researchTopicIndex.archivedAt} IS NULL`,
-        ),
-      )
-      .orderBy(desc(researchTopicIndex.indexedAt), asc(researchTopicIndex.id))
-      .all()
-      .map(topicFrom)
-      .filter(
-        (topic) =>
-          !query.subject ||
-          this.db
-            .select()
-            .from(researchSubjectLinks)
-            .where(
-              and(
-                eq(researchSubjectLinks.ownerKind, 'topic'),
-                eq(researchSubjectLinks.ownerId, topic.id),
-                eq(
-                  sql`(${researchSubjectLinks.subjectKind} || ':' || ${researchSubjectLinks.subjectKey})`,
-                  query.subject,
-                ),
-              ),
-            )
-            .get() !== undefined,
-      )
-      .filter((topic) => !query.tags?.length || query.tags.every((tag) => topic.tags.includes(tag)))
-      .slice(0, query.limit ?? 50);
+    return row === undefined ? null : documentFrom(row);
   }
 
   async listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]> {
@@ -372,39 +204,11 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
       .all()
       .map(documentFrom)
       .filter(
-        (document) =>
-          !query.topicId ||
-          this.db
-            .select()
-            .from(researchTopicDocuments)
-            .where(
-              and(
-                eq(researchTopicDocuments.topicId, query.topicId),
-                eq(researchTopicDocuments.documentId, document.id),
-              ),
-            )
-            .get() !== undefined,
-      )
-      .filter(
-        (document) =>
-          !query.subject ||
-          this.db
-            .select()
-            .from(researchSubjectLinks)
-            .where(
-              and(
-                eq(researchSubjectLinks.ownerKind, 'document'),
-                eq(researchSubjectLinks.ownerId, document.id),
-                eq(
-                  sql`(${researchSubjectLinks.subjectKind} || ':' || ${researchSubjectLinks.subjectKey})`,
-                  query.subject,
-                ),
-              ),
-            )
-            .get() !== undefined,
-      )
-      .filter(
         (document) => !query.tags?.length || query.tags.every((tag) => document.tags.includes(tag)),
+      )
+      .filter(
+        (document) =>
+          query.stockCode === undefined || document.stockCodes.includes(query.stockCode),
       )
       .slice(0, query.limit ?? 50);
   }
@@ -412,17 +216,14 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
   async searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]> {
     const searchText = query.text.trim();
     if (searchText.length === 0) return [];
-    const allowed = new Set(
-      (
-        await this.listDocuments({
-          ...(query.topicId ? { topicId: query.topicId } : {}),
-          ...(query.subject ? { subject: query.subject } : {}),
-          ...(query.kind ? { kind: query.kind } : {}),
-          limit: 10_000,
-        })
-      ).map((document) => document.id),
-    );
-    if (allowed.size === 0) return [];
+    const allowed = (
+      await this.listDocuments({
+        ...(query.kind ? { kind: query.kind } : {}),
+        ...(query.stockCode ? { stockCode: query.stockCode } : {}),
+        limit: 10_000,
+      })
+    ).filter((document) => document.availability !== 'missing');
+    if (allowed.length === 0) return [];
     if (this.ftsAvailable) {
       const match = searchText
         .split(/\s+/u)
@@ -433,10 +234,8 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
         const rows = this.db
           .select({
             document: researchDocumentIndex,
-            ordinal: researchDocumentFts.ordinal,
-            headingPath: researchDocumentFts.headingPath,
             body: researchDocumentFts.body,
-            snippet: sql<string>`snippet(${researchDocumentFts}, 5, '<mark>', '</mark>', '…', 20)`,
+            snippet: sql<string>`snippet(${researchDocumentFts}, 6, '<mark>', '</mark>', '…', 20)`,
             score: sql<number>`bm25(${researchDocumentFts})`,
           })
           .from(researchDocumentFts)
@@ -444,128 +243,54 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
             researchDocumentIndex,
             eq(researchDocumentIndex.id, researchDocumentFts.documentId),
           )
-          .where(
-            and(
-              inArray(researchDocumentIndex.id, [...allowed]),
-              sql`${researchDocumentFts} MATCH ${match}`,
-            ),
-          )
+          .where(sql`${researchDocumentFts} MATCH ${match}`)
           .orderBy(sql`bm25(${researchDocumentFts})`)
           .limit((query.limit ?? 50) * 5)
           .all();
+        const allowedIds = new Set(allowed.map((document) => document.id));
         const hits: ResearchSearchHit[] = [];
-        const seen = new Set<string>();
         for (const row of rows) {
-          if (seen.has(row.document.id)) continue;
-          seen.add(row.document.id);
+          if (!allowedIds.has(row.document.id)) continue;
           hits.push({
             document: documentFrom(row.document),
-            ordinal: row.ordinal,
-            headingPath: row.headingPath,
             snippet: row.snippet || row.body.slice(0, 500),
             score: row.score,
           });
           if (hits.length >= (query.limit ?? 50)) break;
         }
-        // unicode61 在部分 CJK 文本上不会产生可匹配的词元；此时用 metadata
-        // 子串搜索兜底，避免把“FTS 可用但 tokenizer 不适配”误报成正常零结果。
+        // tokenizer 在部分 CJK 文本上不产生可匹配词元；用 metadata 子串搜索兜底。
         if (hits.length > 0) return hits;
       } catch {
         this.ftsAvailable = false;
       }
     }
-    return this.db
-      .select({
-        document: researchDocumentIndex,
-        ordinal: researchDocumentChunks.ordinal,
-        headingPath: researchDocumentChunks.headingPath,
-        body: researchDocumentChunks.body,
-      })
-      .from(researchDocumentChunks)
-      .innerJoin(
-        researchDocumentIndex,
-        eq(researchDocumentIndex.id, researchDocumentChunks.documentId),
+    return allowed
+      .filter(
+        (document) =>
+          document.title.includes(searchText) ||
+          (document.excerpt ?? '').includes(searchText) ||
+          document.relativePath.includes(searchText),
       )
-      .where(
-        and(
-          inArray(researchDocumentIndex.id, [...allowed]),
-          or(
-            like(researchDocumentChunks.body, `%${searchText}%`),
-            like(researchDocumentIndex.title, `%${searchText}%`),
-          ),
-        ),
-      )
-      .limit(query.limit ?? 50)
-      .all()
-      .map((row) => ({
-        document: documentFrom(row.document),
-        ordinal: row.ordinal,
-        headingPath: row.headingPath,
-        snippet: row.body.slice(0, 500),
-        score: 1,
-      }));
+      .slice(0, query.limit ?? 50)
+      .map((document) => {
+        const index = document.excerpt ?? document.title;
+        return {
+          document,
+          snippet: index.length > 500 ? `${index.slice(0, 500)}…` : index,
+          score: 1,
+        };
+      });
   }
 
-  async listChunks(input: { readonly documentIds?: readonly string[] } = {}) {
-    if (input.documentIds?.length === 0) return [];
-    return this.db
-      .select()
-      .from(researchDocumentChunks)
-      .where(
-        input.documentIds === undefined
-          ? undefined
-          : inArray(researchDocumentChunks.documentId, [...input.documentIds]),
-      )
-      .orderBy(asc(researchDocumentChunks.documentId), asc(researchDocumentChunks.ordinal))
-      .all();
-  }
-
-  async listStockSubjectKeys(): Promise<readonly string[]> {
-    return this.db
-      .selectDistinct({ subjectKey: researchSubjectLinks.subjectKey })
-      .from(researchSubjectLinks)
-      .where(eq(researchSubjectLinks.subjectKind, 'stock'))
-      .orderBy(asc(researchSubjectLinks.subjectKey))
-      .all()
-      .map((row) => row.subjectKey);
-  }
-
-  async listSubjectLinks(
-    input: Parameters<ResearchIndexRepository['listSubjectLinks']>[0] = {},
-  ): Promise<readonly ResearchSubjectLink[]> {
-    const rows = this.db
-      .select()
-      .from(researchSubjectLinks)
-      .where(
-        and(
-          input.ownerKind ? eq(researchSubjectLinks.ownerKind, input.ownerKind) : undefined,
-          input.ownerId ? eq(researchSubjectLinks.ownerId, input.ownerId) : undefined,
-          input.subjectKind ? eq(researchSubjectLinks.subjectKind, input.subjectKind) : undefined,
-          input.subjectKey ? eq(researchSubjectLinks.subjectKey, input.subjectKey) : undefined,
-        ),
-      )
-      .all();
-    return rows.map((row) => ({
-      ownerKind: row.ownerKind as ResearchSubjectLink['ownerKind'],
-      ownerId: row.ownerId,
-      subjectKind: row.subjectKind as ResearchSubjectLink['subjectKind'],
-      subjectKey: row.subjectKey,
-      relation: row.relation as ResearchSubjectLink['relation'],
-    }));
-  }
-
-  async listTopicDocuments(topicId: string): Promise<readonly ResearchTopicDocument[]> {
-    return this.db
-      .select()
-      .from(researchTopicDocuments)
-      .where(eq(researchTopicDocuments.topicId, topicId))
-      .orderBy(asc(researchTopicDocuments.sortOrder), asc(researchTopicDocuments.documentId))
-      .all()
-      .map((row) => ({
-        topicId: row.topicId,
-        documentId: row.documentId,
-        relation: row.relation as ResearchTopicDocument['relation'],
-        ...(row.sortOrder === null ? {} : { order: row.sortOrder }),
-      }));
+  async listStockCodes(): Promise<readonly string[]> {
+    return [
+      ...new Set(
+        this.db
+          .select()
+          .from(researchDocumentIndex)
+          .all()
+          .flatMap((row) => row.stockCodes ?? []),
+      ),
+    ].sort();
   }
 }

@@ -29,8 +29,6 @@ export const AddTradeInput = z.object({
   accountId: z.string().min(1).optional(),
   /** 可选 Advice 依据；必须与 stock/position 事实一致。 */
   adviceId: z.string().min(1).optional(),
-  /** 可选研究假设版本依据；只接受 active 版本。 */
-  researchHypothesisVersionId: z.string().min(1).optional(),
   /** 可选 Strategy 来源；只接受已发布版本。 */
   strategyVersionId: z.string().min(1).optional(),
 });
@@ -81,18 +79,6 @@ export const addTradeTool = defineTool({
       }
     }
 
-    if (input.researchHypothesisVersionId !== undefined) {
-      const hypothesis = await ctx.repos.researchHypothesisVersion.findById(
-        input.researchHypothesisVersionId,
-      );
-      if (hypothesis === null) {
-        return errNotFound('ResearchHypothesisVersion', input.researchHypothesisVersionId);
-      }
-      if (hypothesis.status !== 'active') {
-        return errInvalidInput('Trade.researchHypothesisVersionId 必须指向 active 版本');
-      }
-    }
-
     if (input.strategyVersionId !== undefined) {
       const strategyVersion = await ctx.repos.strategy.findVersionById(input.strategyVersionId);
       if (strategyVersion === null) {
@@ -117,9 +103,6 @@ export const addTradeTool = defineTool({
       executedAt,
       source: 'manual',
       ...(input.adviceId === undefined ? {} : { adviceId: input.adviceId }),
-      ...(input.researchHypothesisVersionId === undefined
-        ? {}
-        : { researchHypothesisVersionId: input.researchHypothesisVersionId }),
       ...(input.strategyVersionId === undefined
         ? {}
         : { strategyVersionId: input.strategyVersionId }),

@@ -25,12 +25,12 @@ export const northboundFlowTool = defineTool({
   input: NorthboundFlowInput,
   output: NorthboundFlowOutput,
   handler: async (input, ctx) => {
-    if (ctx.northboundFlow === undefined) {
+    if (ctx.adapters.marketIntel?.northboundFlow === undefined) {
       return errInvalidInput(
-        'northbound_flow tool 需要 ctx.northboundFlow 注入；当前 surface 未配置 northbound-flow manager',
+        'northbound_flow tool 需要 ctx.adapters.marketIntel?.northboundFlow 注入；当前 surface 未配置 northbound-flow manager',
       );
     }
-    const r = await ctx.northboundFlow.fetchSeries(input);
+    const r = await ctx.adapters.marketIntel?.northboundFlow.fetchSeries(input);
     if (!r.ok || r.data === undefined) {
       // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
       const cause = r.error?.message ?? 'unknown error';

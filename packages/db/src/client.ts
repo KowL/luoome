@@ -16,12 +16,7 @@ import {
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
   DrizzleDecisionReviewRepository,
-  DrizzleDecisionTradeRepository,
-  DrizzleFinancialFactRepository,
-  DrizzleFundamentalScoreRunRepository,
-  DrizzleFundamentalScoreVersionRepository,
   DrizzleHoldingRepository,
-  DrizzleInvestmentWorkspaceRepository,
   DrizzleLedgerRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMinuteBarRepository,
@@ -31,28 +26,19 @@ import {
   DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
   DrizzleReportRepository,
-  DrizzleResearchEmbeddingRepository,
-  DrizzleResearchHypothesisVersionRepository,
   DrizzleResearchIndexRepository,
-  DrizzleResearchVaultSyncRunRepository,
   DrizzleSignalObservationRepository,
-  DrizzleStockEventRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
-  DrizzleStrategyAutonomyActionRepository,
   DrizzleStrategyBacktestRepository,
-  DrizzleStrategyDataCheckpointRepository,
-  DrizzleStrategyEvaluationRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
-  DrizzleStrategyScheduleRepository,
   DrizzleStrategyWatchlistSubscriptionRepository,
   DrizzleTradeRepository,
   DrizzleTradingPlanRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
   DrizzleWatchRuleStateRepository,
-  DrizzleWatchRunRepository,
   DrizzleWatchTriggerRepository,
   DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
@@ -77,92 +63,103 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * （列名 / 类型 / 可空 / 唯一约束），可重复执行（幂等）。
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
+/**
+ * 四表版本链 → 单表迁移（S3.2）。
+ *
+ * 旧库的 decision_reviews 是“主体表 + revisions/link/receipt 附属表”形态；新形态把
+ * 最新修订内容内联到 content_json。旧库检测到缺少 content_json 时：
+ * 1) 建新表并尽量把 advice/trading-plan 复盘的最新修订内容搬过来；
+ * 2) 把旧表重命名为 decision_reviews_legacy 保留原数据（不 DROP）；
+ * 3) 其余旧附属表原样保留，启动时不再创建。
+ *
+ * 迁移是否发生由表结构决定，可重复执行；新库直接跳过。
+ */
+const migrateDecisionReviewsToSingleTable = (db: DrizzleDb): void => {
+  const table = db.all<{ name: string }>(
+    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_reviews'`,
+  );
+  if (table.length === 0) return;
+  const columns = db.all<{ name: string }>(sql`PRAGMA table_info(decision_reviews)`);
+  if (columns.some((column) => column.name === 'content_json')) return;
+  // 旧表名不写死：迭代遗留表时避免把旧 schema 名字固化回代码。
+  const legacyRevisionTable = db
+    .all<{ name: string }>(
+      sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'decision_review_%'`,
+    )
+    .map((row) => row.name)
+    .find((name) => name.endsWith('_revisions'));
+  db.transaction(
+    (tx) => {
+      tx.run(sql`CREATE TABLE decision_reviews_v2 (
+        id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL, stock_id TEXT, content_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      // 旧内容 JSON 总带 triggerFeedback 键；新内容 schema 已移除该字段，迁移时剥掉。
+      const contentSelect =
+        legacyRevisionTable === undefined
+          ? sql`'{"tradeIds":[],"adviceFeedback":null,"lessonTags":[],"note":null}'`
+          : sql`json_remove(
+              COALESCE(rev.content_json, '{"tradeIds":[],"adviceFeedback":null,"note":null}'),
+              '$.triggerFeedback'
+            )`;
+      const revisionJoin =
+        legacyRevisionTable === undefined
+          ? sql``
+          : sql` LEFT JOIN ${sql.raw(legacyRevisionTable)} rev ON rev.review_id = r.id AND rev.revision = r.current_revision`;
+      tx.run(sql`INSERT INTO decision_reviews_v2
+          (id, account_id, subject_kind, subject_id, stock_id, content_json, created_at, updated_at)
+        SELECT r.id, r.account_id,
+          CASE r.subject_kind WHEN 'trading-plan-version' THEN 'trading-plan' ELSE r.subject_kind END,
+          r.subject_id, r.stock_id, ${contentSelect}, r.created_at,
+          ${legacyRevisionTable === undefined ? sql`r.created_at` : sql`COALESCE(rev.recorded_at, r.created_at)`}
+        FROM decision_reviews r${revisionJoin}
+        WHERE r.subject_kind IN ('advice', 'trading-plan-version')`);
+      tx.run(sql`ALTER TABLE decision_reviews RENAME TO decision_reviews_legacy`);
+      tx.run(sql`ALTER TABLE decision_reviews_v2 RENAME TO decision_reviews`);
+      // 旧索引随表重命名保留在 legacy 表上；重建新表索引前先释放同名索引。
+      tx.run(sql`DROP INDEX IF EXISTS decision_reviews_account_subject_unique`);
+      tx.run(sql`DROP INDEX IF EXISTS decision_reviews_account_time_idx`);
+    },
+    { behavior: 'immediate' },
+  );
+};
+
+/**
+ * FTS5 投影从「chunk 行」收敛为「document 行」（S3.1a）。
+ *
+ * FTS 是可重建投影：旧库检测到缺少 relative_path 列时直接 DROP 后按新结构重建，
+ * 下次索引同步会自动回填；权威文档表 research_document_index 不受影响。
+ */
+const migrateResearchDocumentFtsToDocumentRows = (db: DrizzleDb): void => {
+  const columns = db.all<{ name: string }>(sql`PRAGMA table_info(research_document_fts)`);
+  if (columns.length === 0) return;
+  if (columns.some((column) => column.name === 'relative_path')) return;
+  db.run(sql`DROP TABLE research_document_fts`);
+};
+
 export const ensureSchema = (db: DrizzleDb): void => {
-  db.run(sql`CREATE TABLE IF NOT EXISTS investment_research (
-    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL,
-    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
-  )`);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_research_request_unique ON investment_research (owner_user_id, account_id, request_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS investment_research_owner_time_idx ON investment_research (owner_user_id, account_id, created_at)`,
-  );
-  db.run(sql`CREATE TABLE IF NOT EXISTS investment_consensus (
-    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL, version INTEGER NOT NULL,
-    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
-  )`);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_consensus_version_unique ON investment_consensus (owner_user_id, account_id, version)`,
-  );
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_consensus_request_unique ON investment_consensus (owner_user_id, account_id, request_id)`,
-  );
-  db.run(sql`CREATE TABLE IF NOT EXISTS investment_tracking (
-    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL,
-    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, started_at INTEGER NOT NULL
-  )`);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_tracking_request_unique ON investment_tracking (owner_user_id, account_id, request_id)`,
-  );
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_tracking_starting_unique ON investment_tracking (owner_user_id, account_id) WHERE status = 'starting'`,
-  );
+  migrateDecisionReviewsToSingleTable(db);
+  migrateResearchDocumentFtsToDocumentRows(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
     id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
-    subject_id TEXT NOT NULL, stock_id TEXT, source_occurred_at INTEGER NOT NULL,
-    context_json TEXT NOT NULL, context_hash TEXT NOT NULL,
-    current_revision INTEGER NOT NULL, created_at INTEGER NOT NULL
+    subject_id TEXT NOT NULL, stock_id TEXT, content_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   )`);
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS decision_reviews_account_subject_unique ON decision_reviews (account_id, subject_kind, subject_id)`,
   );
   db.run(
-    sql`CREATE INDEX IF NOT EXISTS decision_reviews_account_time_idx ON decision_reviews (account_id, source_occurred_at, id)`,
-  );
-  db.run(sql`CREATE TABLE IF NOT EXISTS decision_review_revisions (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL,
-    revision INTEGER NOT NULL, content_json TEXT NOT NULL,
-    content_hash TEXT NOT NULL, trade_fact_hashes_json TEXT NOT NULL,
-    recorded_at INTEGER NOT NULL, change_note TEXT
-  )`);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS decision_review_revisions_review_version_unique ON decision_review_revisions (review_id, revision)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS decision_review_revisions_review_sequence_idx ON decision_review_revisions (review_id, sequence)`,
-  );
-  db.run(sql`CREATE TABLE IF NOT EXISTS decision_review_trade_links (
-    review_id TEXT NOT NULL, account_id TEXT NOT NULL, trade_id TEXT NOT NULL,
-    revision INTEGER NOT NULL, PRIMARY KEY (review_id, trade_id)
-  )`);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS decision_review_trade_links_account_trade_idx ON decision_review_trade_links (account_id, trade_id)`,
-  );
-  db.run(sql`CREATE TABLE IF NOT EXISTS decision_write_receipts (
-    account_id TEXT NOT NULL, request_id TEXT NOT NULL, command TEXT NOT NULL,
-    request_hash TEXT NOT NULL, result_json TEXT NOT NULL, committed_at INTEGER NOT NULL,
-    PRIMARY KEY (account_id, request_id)
-  )`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS research_topic_index (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT, tags TEXT NOT NULL,
-      vault_id TEXT NOT NULL, relative_path TEXT NOT NULL, content_hash TEXT NOT NULL, archived_at INTEGER,
-      file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL, availability TEXT NOT NULL, diagnostic TEXT
-    )
-  `);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_topic_index_vault_path_unique ON research_topic_index (vault_id, relative_path)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_topic_index_kind_archive_idx ON research_topic_index (kind, archived_at)`,
+    sql`CREATE INDEX IF NOT EXISTS decision_reviews_account_time_idx ON decision_reviews (account_id, updated_at, id)`,
   );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS research_document_index (
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, source_url TEXT, source_status TEXT,
-      published_at INTEGER, observed_at INTEGER, imported_at INTEGER NOT NULL, tags TEXT NOT NULL, vault_id TEXT NOT NULL,
-      relative_path TEXT NOT NULL, attachment_paths TEXT NOT NULL, content_hash TEXT NOT NULL, excerpt TEXT,
-      file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL, availability TEXT NOT NULL, diagnostic TEXT
+      published_at INTEGER, observed_at INTEGER, imported_at INTEGER NOT NULL, tags TEXT NOT NULL,
+      stock_codes TEXT NOT NULL DEFAULT '[]',
+      vault_id TEXT NOT NULL, relative_path TEXT NOT NULL, attachment_paths TEXT NOT NULL,
+      content_hash TEXT NOT NULL, excerpt TEXT, file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL,
+      availability TEXT NOT NULL, diagnostic TEXT
     )
   `);
   db.run(
@@ -174,63 +171,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS research_document_index_observed_idx ON research_document_index (observed_at)`,
   );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_hypothesis_versions (
-      id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, document_id TEXT NOT NULL,
-      document_content_hash TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
-      supersedes_id TEXT, summary TEXT, created_at INTEGER NOT NULL
-    )`,
-  );
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_hypothesis_versions_topic_version_unique
-      ON research_hypothesis_versions (topic_id, version)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_hypothesis_versions_topic_status_idx
-      ON research_hypothesis_versions (topic_id, status)`,
-  );
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_hypothesis_versions_active_unique
-      ON research_hypothesis_versions (topic_id) WHERE status = 'active'`,
-  );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_topic_documents (topic_id TEXT NOT NULL, document_id TEXT NOT NULL, relation TEXT NOT NULL, sort_order INTEGER, PRIMARY KEY (topic_id, document_id, relation))`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_topic_documents_document_idx ON research_topic_documents (document_id)`,
-  );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_subject_links (owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, subject_kind TEXT NOT NULL, subject_key TEXT NOT NULL, relation TEXT NOT NULL, PRIMARY KEY (owner_kind, owner_id, subject_kind, subject_key, relation))`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_subject_links_subject_idx ON research_subject_links (subject_kind, subject_key, owner_kind)`,
-  );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_document_chunks (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, heading_path TEXT NOT NULL, content_hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (document_id, ordinal))`,
-  );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_chunk_embeddings (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, content_hash TEXT NOT NULL, identity_key TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, vector_json TEXT NOT NULL, embedded_at INTEGER NOT NULL, PRIMARY KEY (identity_key, document_id, ordinal))`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_chunk_embeddings_identity_idx ON research_chunk_embeddings (identity_key)`,
-  );
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_embedding_index_states (identity_key TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, expected_chunks INTEGER NOT NULL, embedded_chunks INTEGER NOT NULL, stale_chunks INTEGER NOT NULL, updated_at INTEGER NOT NULL, diagnostic TEXT)`,
-  );
+  ensureColumn(db, 'research_document_index', 'stock_codes', "TEXT NOT NULL DEFAULT '[]'");
   // FTS5 是可重建投影，不是权威业务表；旧 SQLite/构建不支持时保留 metadata 降级。
   try {
     db.run(
-      sql`CREATE VIRTUAL TABLE IF NOT EXISTS research_document_fts USING fts5(document_id UNINDEXED, ordinal UNINDEXED, content_hash UNINDEXED, title, heading_path, body, tokenize='unicode61')`,
+      sql`CREATE VIRTUAL TABLE IF NOT EXISTS research_document_fts USING fts5(document_id UNINDEXED, content_hash UNINDEXED, title, tags, relative_path, excerpt, body, tokenize='unicode61')`,
     );
   } catch {
     // searchCapability() 会检测到虚表不可用并返回 metadata。
   }
-  db.run(
-    sql`CREATE TABLE IF NOT EXISTS research_vault_sync_runs (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, scanned INTEGER NOT NULL, added INTEGER NOT NULL, updated INTEGER NOT NULL, unchanged INTEGER NOT NULL, missing INTEGER NOT NULL, invalid INTEGER NOT NULL, conflicts INTEGER NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER, error TEXT)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_vault_sync_runs_vault_started_idx ON research_vault_sync_runs (vault_id, started_at)`,
-  );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -429,13 +378,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
       executed_at INTEGER NOT NULL,
       source TEXT NOT NULL,
       advice_id TEXT,
-      research_hypothesis_version_id TEXT,
-      strategy_version_id TEXT,
+        strategy_version_id TEXT,
       created_at INTEGER NOT NULL
     )
   `);
   ensureColumn(db, 'trades', 'advice_id', 'TEXT');
-  ensureColumn(db, 'trades', 'research_hypothesis_version_id', 'TEXT');
   ensureColumn(db, 'trades', 'strategy_version_id', 'TEXT');
   db.run(sql`
     CREATE TABLE IF NOT EXISTS portfolio_cash_flows (
@@ -646,113 +593,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON daily_bar_revisions (stock_id, date, recorded_at)
   `);
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS financial_fact_revisions (
-      id TEXT PRIMARY KEY,
-      stock_id TEXT NOT NULL,
-      metric_id TEXT NOT NULL,
-      period_type TEXT NOT NULL,
-      period_start INTEGER,
-      period_end INTEGER NOT NULL,
-      value REAL NOT NULL,
-      canonical_unit TEXT NOT NULL,
-      currency TEXT,
-      raw_value REAL,
-      raw_unit TEXT,
-      source TEXT NOT NULL,
-      source_record_id TEXT NOT NULL,
-      source_revision TEXT NOT NULL,
-      published_at INTEGER NOT NULL,
-      revision_published_at INTEGER NOT NULL,
-      recorded_at INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      supersedes_id TEXT,
-      industry_key TEXT,
-      content_hash TEXT NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS financial_fact_revisions_logical_hash_unique
-    ON financial_fact_revisions (source, source_record_id, source_revision, content_hash)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS financial_fact_revisions_pit_lookup_idx
-    ON financial_fact_revisions (stock_id, metric_id, period_end, revision_published_at, recorded_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS financial_fact_revisions_recorded_at_idx
-    ON financial_fact_revisions (recorded_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS fundamental_score_versions (
-      id TEXT PRIMARY KEY,
-      version INTEGER NOT NULL,
-      registry_version TEXT NOT NULL,
-      registry_hash TEXT NOT NULL,
-      normalization_version TEXT NOT NULL,
-      components_json TEXT NOT NULL,
-      missing_policy TEXT NOT NULL,
-      rounding TEXT NOT NULL,
-      definition_hash TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      published_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS fundamental_score_versions_definition_hash_unique
-    ON fundamental_score_versions (definition_hash)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS fundamental_score_versions_status_version_idx
-    ON fundamental_score_versions (status, version)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS fundamental_score_runs (
-      id TEXT PRIMARY KEY,
-      score_version_id TEXT NOT NULL,
-      score_version_hash TEXT NOT NULL,
-      registry_hash TEXT NOT NULL,
-      universe_sync_id TEXT NOT NULL,
-      universe_member_checksum TEXT NOT NULL,
-      as_of INTEGER NOT NULL,
-      financial_vintage_key TEXT NOT NULL,
-      normalizer_denominator_hash TEXT NOT NULL,
-      counts_json TEXT NOT NULL,
-      provider_status TEXT NOT NULL,
-      evaluator_code_identity TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      committed_at INTEGER,
-      terminal_reason_json TEXT
-    )
-  `);
-  ensureColumn(db, 'fundamental_score_runs', 'terminal_reason_json', 'TEXT');
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS fundamental_score_runs_score_version_as_of_idx
-    ON fundamental_score_runs (score_version_id, as_of)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS fundamental_score_runs_status_created_idx
-    ON fundamental_score_runs (status, created_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS fundamental_score_results (
-      score_run_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      score REAL,
-      rank INTEGER,
-      components_json TEXT NOT NULL,
-      data_as_of INTEGER NOT NULL,
-      vintage_key TEXT NOT NULL,
-      CONSTRAINT fundamental_score_results_pk PRIMARY KEY (score_run_id, stock_id)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS fundamental_score_results_run_rank_idx
-    ON fundamental_score_results (score_run_id, rank)
-  `);
-  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategies (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -760,10 +600,14 @@ export const ensureSchema = (db: DrizzleDb): void => {
       owner TEXT NOT NULL,
       status TEXT NOT NULL,
       current_version_id TEXT,
+      schedule_cron TEXT,
+      last_scheduled_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
   `);
+  ensureColumn(db, 'strategies', 'schedule_cron', 'TEXT');
+  ensureColumn(db, 'strategies', 'last_scheduled_at', 'INTEGER');
   db.run(sql`CREATE INDEX IF NOT EXISTS strategies_status_idx ON strategies (status)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS strategies_owner_idx ON strategies (owner)`);
   db.run(sql`
@@ -849,61 +693,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS strategy_runs_published_current_idx ON strategy_runs (strategy_id, scope, publication_status, status, started_at)`,
   );
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_schedules (
-      id TEXT PRIMARY KEY,
-      strategy_id TEXT NOT NULL,
-      cron TEXT NOT NULL,
-      timezone TEXT NOT NULL,
-      enabled INTEGER NOT NULL,
-      acceptance_policy_json TEXT,
-      recommendation_policy_json TEXT,
-      next_run_at INTEGER,
-      last_run_id TEXT,
-      lease_owner TEXT,
-      lease_until INTEGER,
-      lease_fence INTEGER NOT NULL DEFAULT 0,
-      lease_heartbeat_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  const strategyScheduleColumns = new Set(
-    db.all<{ name: string }>(sql`PRAGMA table_info(strategy_schedules)`).map((row) => row.name),
-  );
-  if (!strategyScheduleColumns.has('recommendation_policy_json')) {
-    db.run(sql`ALTER TABLE strategy_schedules ADD COLUMN recommendation_policy_json TEXT`);
-  }
-  if (!strategyScheduleColumns.has('acceptance_policy_json')) {
-    db.run(sql`ALTER TABLE strategy_schedules ADD COLUMN acceptance_policy_json TEXT`);
-  }
-  ensureColumn(db, 'strategy_schedules', 'lease_fence', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'strategy_schedules', 'lease_heartbeat_at', 'INTEGER');
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS strategy_schedules_strategy_unique ON strategy_schedules (strategy_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_schedules_due_idx ON strategy_schedules (enabled, next_run_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_schedules_lease_idx ON strategy_schedules (lease_until)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_run_leases (
-      strategy_id TEXT NOT NULL,
-      strategy_version_id TEXT NOT NULL,
-      owner TEXT NOT NULL,
-      lease_until INTEGER NOT NULL,
-      fence INTEGER NOT NULL DEFAULT 0,
-      heartbeat_at INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (strategy_id, strategy_version_id)
-    )
-  `);
-  ensureColumn(db, 'strategy_run_leases', 'fence', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'strategy_run_leases', 'heartbeat_at', 'INTEGER NOT NULL DEFAULT 0');
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_run_leases_until_idx ON strategy_run_leases (lease_until)`,
-  );
-  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_results (
       run_id TEXT NOT NULL,
       stock_id TEXT NOT NULL,
@@ -950,73 +739,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`,
   );
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_data_checkpoints (
-      id TEXT PRIMARY KEY, coverage TEXT NOT NULL, data_as_of INTEGER NOT NULL,
-      status TEXT NOT NULL, vintage_status TEXT NOT NULL DEFAULT 'not-applicable', universe_sync_id TEXT NOT NULL,
-      requested_count INTEGER NOT NULL, available_count INTEGER NOT NULL,
-      failed_count INTEGER NOT NULL, member_checksum TEXT NOT NULL,
-      data_checksum TEXT NOT NULL, provider_statuses_json TEXT NOT NULL,
-      started_at INTEGER NOT NULL, finished_at INTEGER
-    )
-  `);
-  ensureColumn(
-    db,
-    'strategy_data_checkpoints',
-    'vintage_status',
-    "TEXT NOT NULL DEFAULT 'not-applicable'",
-  );
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_data_checkpoints_lookup_idx
-    ON strategy_data_checkpoints (coverage, universe_sync_id, data_as_of)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_data_checkpoint_members (
-      checkpoint_id TEXT NOT NULL, stock_id TEXT NOT NULL, status TEXT NOT NULL,
-      latest_bar_date INTEGER, bar_count INTEGER NOT NULL, provider TEXT, error_kind TEXT,
-      PRIMARY KEY (checkpoint_id, stock_id)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_data_checkpoint_members_status_idx
-    ON strategy_data_checkpoint_members (checkpoint_id, status)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_evaluation_sessions (
-      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
-      from_at INTEGER NOT NULL, to_at INTEGER NOT NULL, status TEXT NOT NULL,
-      definition_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
-      stock_ids_json TEXT, stock_id_checksum TEXT, finished_at INTEGER, error TEXT
-    )
-  `);
-  ensureColumn(db, 'strategy_evaluation_sessions', 'stock_ids_json', 'TEXT');
-  ensureColumn(db, 'strategy_evaluation_sessions', 'stock_id_checksum', 'TEXT');
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_evaluation_sessions_strategy_created_idx
-    ON strategy_evaluation_sessions (strategy_id, created_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_evaluation_days (
-      session_id TEXT NOT NULL, data_as_of INTEGER NOT NULL, run_id TEXT,
-      universe_sync_id TEXT, data_checkpoint_id TEXT, revision_cutoff INTEGER,
-      vintage_status TEXT, status TEXT NOT NULL,
-      evaluated_count INTEGER, selected_count INTEGER, signal_count INTEGER, failed_count INTEGER,
-      error TEXT,
-      PRIMARY KEY (session_id, data_as_of)
-    )
-  `);
-  ensureColumn(db, 'strategy_evaluation_days', 'vintage_status', 'TEXT');
-  ensureColumn(db, 'strategy_evaluation_days', 'evaluated_count', 'INTEGER');
-  ensureColumn(db, 'strategy_evaluation_days', 'selected_count', 'INTEGER');
-  ensureColumn(db, 'strategy_evaluation_days', 'signal_count', 'INTEGER');
-  ensureColumn(db, 'strategy_evaluation_days', 'failed_count', 'INTEGER');
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_evaluation_days_status_idx
-    ON strategy_evaluation_days (session_id, status)
-  `);
-  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
       id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
-      evaluation_session_id TEXT NOT NULL, status TEXT NOT NULL,
+      status TEXT NOT NULL,
       result_availability TEXT NOT NULL, spec_json TEXT NOT NULL, spec_hash TEXT NOT NULL,
       input_fingerprint TEXT NOT NULL, evaluator_json TEXT NOT NULL,
       gate_audit_json TEXT NOT NULL, metrics_json TEXT, error TEXT,
@@ -1027,40 +752,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS strategy_backtest_runs_strategy_created_idx
     ON strategy_backtest_runs (strategy_id, created_at)
   `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_session_idx
-    ON strategy_backtest_runs (evaluation_session_id)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_backtest_market_facts (
-      stock_id TEXT NOT NULL, date INTEGER NOT NULL, recorded_at INTEGER NOT NULL,
-      content_hash TEXT NOT NULL, fact_json TEXT NOT NULL,
-      PRIMARY KEY (stock_id, date, recorded_at, content_hash)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_backtest_market_facts_lookup_idx
-    ON strategy_backtest_market_facts (stock_id, date, recorded_at)
-  `);
-  // M2-S0：Strategy 自主管理动作审计（DDD strategy-ai-lifecycle §2/§4）。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_autonomy_actions (
-      id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
-      strategy_id TEXT NOT NULL, strategy_version_id TEXT, evaluation_session_id TEXT,
-      trigger TEXT NOT NULL, rule_snapshot_json TEXT, ai_narrative TEXT,
-      fact_references_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      completed_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_autonomy_actions_strategy_created_idx
-    ON strategy_autonomy_actions (strategy_id, created_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_autonomy_actions_status_created_idx
-    ON strategy_autonomy_actions (status, created_at)
-  `);
+  const backtestColumns = new Set(
+    db.all<{ name: string }>(sql`PRAGMA table_info(strategy_backtest_runs)`).map((row) => row.name),
+  );
+  if (backtestColumns.has('evaluation_session_id')) {
+    db.run(sql`DROP INDEX IF EXISTS strategy_backtest_runs_session_idx`);
+    db.run(sql`ALTER TABLE strategy_backtest_runs DROP COLUMN evaluation_session_id`);
+  }
   db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
@@ -1094,11 +792,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   // v0.6 起：盯盘触发。v0.7 增 rule_id / trigger_type / priority / delivery_status /
   // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
   // （§3.4 / §3.7）。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watch_execution_lease (
-      id TEXT PRIMARY KEY, owner TEXT NOT NULL, until INTEGER NOT NULL
-    )
-  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_triggers (
       id TEXT PRIMARY KEY,
@@ -1175,28 +868,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`);
   migrateAlertPlanReferenceColumns(db);
-  // v0.6 起：每轮 watch 心跳。v0.7 增 suppressed_by_daily_limit / notify_failed（§3.6）。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watch_runs (
-      id TEXT PRIMARY KEY,
-      mode TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      finished_at INTEGER,
-      evaluated_pools INTEGER NOT NULL,
-      evaluated_stocks INTEGER NOT NULL,
-      triggered INTEGER NOT NULL,
-      notified INTEGER NOT NULL,
-      suppressed_by_cooldown INTEGER NOT NULL,
-      error TEXT,
-      suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0,
-      notify_failed INTEGER NOT NULL DEFAULT 0,
-      delivered INTEGER,
-      unknown_rules INTEGER
-    )
-  `);
-  migrateStrategyAlertRunColumns(db);
-  db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlists (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL,
@@ -1301,42 +972,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS membership_snapshots_run_change_idx
     ON membership_snapshots (sync_run_id, change)
   `);
-  // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：公司事件 + workflow 审计
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_events (
-      id TEXT PRIMARY KEY,
-      stock_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      title TEXT NOT NULL,
-      description TEXT,
-      occurs_at INTEGER NOT NULL,
-      all_day INTEGER NOT NULL,
-      importance TEXT NOT NULL,
-      status TEXT NOT NULL,
-      source TEXT NOT NULL,
-      provider TEXT,
-      external_id TEXT,
-      source_url TEXT,
-      observed_at INTEGER,
-      fetched_at INTEGER,
-      stale INTEGER NOT NULL,
-      remind_before_days TEXT NOT NULL DEFAULT '[]',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS stock_events_provider_external_unique ON stock_events (provider, external_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS stock_events_stock_occurs_idx ON stock_events (stock_id, occurs_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS stock_events_occurs_status_idx ON stock_events (occurs_at, status)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS stock_events_stock_kind_occurs_idx ON stock_events (stock_id, kind, occurs_at)`,
-  );
+  // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：workflow 审计
   db.run(sql`
     CREATE TABLE IF NOT EXISTS workflow_runs (
       id TEXT PRIMARY KEY,
@@ -1375,7 +1011,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       delivery_status TEXT NOT NULL DEFAULT 'not-requested',
       notification_policy TEXT,
       watchlist_facts_snapshot TEXT,
-      decision_review_snapshot TEXT,
+      decision_review_fingerprint TEXT,
       delivery_attempt_id TEXT,
       workflow_run_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -1386,12 +1022,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   ensureColumn(db, 'reports', 'supersedes_report_id', 'TEXT');
   ensureColumn(db, 'reports', 'delivery_attempt_id', 'TEXT');
   ensureColumn(db, 'reports', 'notification_policy', 'TEXT');
-  ensureColumn(db, 'reports', 'decision_review_snapshot', 'TEXT');
   ensureColumn(db, 'reports', 'watchlist_facts_snapshot', 'TEXT');
-  db.run(sql`CREATE TABLE IF NOT EXISTS report_refresh_receipts (
-    account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
-    report_id TEXT NOT NULL, PRIMARY KEY (account_id, request_id)
-  )`);
+  ensureColumn(db, 'reports', 'decision_review_fingerprint', 'TEXT');
   db.run(sql`DROP INDEX IF EXISTS reports_period_unique`);
   db.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS reports_period_version_unique
@@ -1434,7 +1066,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateLegacyTradingPlans(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
   migrateLegacyBuiltinStrategyOwners(db);
-  migrateLegacyDecisionTradeLinks(db);
+  migrateLegacyAdviceTradeLinksToReviews(db);
 };
 
 /**
@@ -1675,7 +1307,7 @@ const migrateAlertPlanReferenceColumns = (db: DrizzleDb): void => {
 /**
  * ruo 迁移列补齐（docs/ddd/ruo-feature-migration-detailed-design.md §3.6）：
  * - watch_triggers 补 event_id 列（ALTER ADD，幂等）
- * - 放宽 quote_close / quote_ts 的 NOT NULL（event-date 触发无实时行情）：
+ * - 放宽 quote_close / quote_ts 的 NOT NULL（存量 event-date 触发无实时行情）：
  *   SQLite 不支持改列约束 → 表重建（仅当检测到旧约束时执行；索引由外层 CREATE INDEX 重建）
  */
 const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
@@ -1746,23 +1378,6 @@ const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
     tx.run(sql`DROP TABLE watch_triggers`);
     tx.run(sql`ALTER TABLE watch_triggers_mig RENAME TO watch_triggers`);
   });
-};
-
-/**
- * v0.7 策略预警列补齐：watch_runs 增 2 列。
- */
-const migrateStrategyAlertRunColumns = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(watch_runs)`);
-  const have = new Set(cols.map((c) => c.name));
-  if (!have.has('suppressed_by_daily_limit'))
-    db.run(
-      sql`ALTER TABLE watch_runs ADD COLUMN suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0`,
-    );
-  if (!have.has('notify_failed'))
-    db.run(sql`ALTER TABLE watch_runs ADD COLUMN notify_failed INTEGER NOT NULL DEFAULT 0`);
-  if (!have.has('delivered')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN delivered INTEGER`);
-  if (!have.has('unknown_rules'))
-    db.run(sql`ALTER TABLE watch_runs ADD COLUMN unknown_rules INTEGER`);
 };
 
 /**
@@ -1890,7 +1505,7 @@ const migrateLegacyTradingPlans = (db: DrizzleDb): void => {
   );
 };
 
-const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
+const migrateLegacyAdviceTradeLinksToReviews = (db: DrizzleDb): void => {
   const migrationId = 'mvp3-legacy-explicit-trade-links-v1';
   const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   db.transaction(
@@ -1906,8 +1521,6 @@ const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
           accountId: string;
           adviceId: string;
           stockId: string | null;
-          occurredAt: Date;
-          source: Record<string, unknown>;
           tradeRows: (typeof schema.trades.$inferSelect)[];
         }
       >();
@@ -1969,8 +1582,6 @@ const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
             accountId: trade.accountId,
             adviceId: trade.adviceId,
             stockId,
-            occurredAt: advice.createdAt,
-            source: JSON.parse(JSON.stringify(advice)),
             tradeRows: [trade],
           });
       }
@@ -1995,16 +1606,6 @@ const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
         const subject = { kind: 'advice' as const, id: group.adviceId };
         const id = hash([group.accountId, subject.kind, subject.id]);
         const capturedAt = new Date();
-        const context = {
-          schemaVersion: 1 as const,
-          capturedAt,
-          sourceDataAsOf: null,
-          captureOrigin: 'legacy-explicit-link' as const,
-          source: group.source,
-          contextHash: hash({ subject, source: group.source }),
-        };
-        const tradeIds = group.tradeRows.map((row) => row.id).sort();
-        const content = { tradeIds, adviceFeedback: null, triggerFeedback: null, note: null };
         tx.insert(schema.decisionReviews)
           .values({
             id,
@@ -2012,33 +1613,16 @@ const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
             subjectKind: 'advice',
             subjectId: group.adviceId,
             stockId: group.stockId,
-            sourceOccurredAt: group.occurredAt,
-            context,
-            contextHash: context.contextHash,
-            currentRevision: 1,
+            content: {
+              tradeIds: group.tradeRows.map((row) => row.id).sort(),
+              adviceFeedback: null,
+              lessonTags: [],
+              note: null,
+            },
             createdAt: capturedAt,
+            updatedAt: capturedAt,
           })
           .run();
-        tx.insert(schema.decisionReviewRevisions)
-          .values({
-            reviewId: id,
-            revision: 1,
-            content,
-            contentHash: hash(content),
-            tradeFactHashes: Object.fromEntries(group.tradeRows.map((row) => [row.id, hash(row)])),
-            recordedAt: capturedAt,
-            changeNote: null,
-          })
-          .run();
-        for (const tradeId of tradeIds)
-          tx.insert(schema.decisionReviewTradeLinks)
-            .values({
-              reviewId: id,
-              accountId: group.accountId,
-              tradeId,
-              revision: 1,
-            })
-            .run();
         created++;
       }
       if (priorMigration === undefined || created > 0) {
@@ -2112,11 +1696,9 @@ export const createDrizzleRepos = (
   }
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
-    investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),
-    decisionTrade: new DrizzleDecisionTradeRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
@@ -2130,19 +1712,12 @@ export const createDrizzleRepos = (
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
-    financialFact: new DrizzleFinancialFactRepository(db),
-    fundamentalScoreVersion: new DrizzleFundamentalScoreVersionRepository(db),
-    fundamentalScoreRun: new DrizzleFundamentalScoreRunRepository(db),
     minuteBar: new DrizzleMinuteBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),
-    strategySchedule: new DrizzleStrategyScheduleRepository(db),
-    strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
-    strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
     strategyBacktest: new DrizzleStrategyBacktestRepository(db),
     strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
-    strategyAutonomyAction: new DrizzleStrategyAutonomyActionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),
@@ -2151,13 +1726,8 @@ export const createDrizzleRepos = (
     watchTrigger: new DrizzleWatchTriggerRepository(db),
     // v0.7 起：边沿状态机
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
-    watchRun: new DrizzleWatchRunRepository(db),
     // ruo 迁移起
     researchIndex,
-    researchEmbedding: new DrizzleResearchEmbeddingRepository(db, researchIndex),
-    researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
-    researchHypothesisVersion: new DrizzleResearchHypothesisVersionRepository(db),
-    stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),
   };

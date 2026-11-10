@@ -7,12 +7,11 @@ import {
   strategyDefinitionHash,
   type ToolContext,
 } from '@luoome/core';
+import { saveDecisionReviewTool } from '@luoome/tools';
 import {
-  getDecisionReviewContextTool,
-  recordAdviceOutcomeTool,
-  saveDecisionReviewTool,
-} from '@luoome/tools';
-import { buildTestContext } from '@luoome/tools/testing';
+  buildTestContext,
+  recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
+} from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { weeklyReportWorkflow } from './weekly-report.js';
@@ -311,13 +310,11 @@ describe('weekly-report workflow', () => {
       'alert-feedback',
       'signal-outcomes',
       'strategy-review',
-      'strategy-autonomy-actions',
       'advice-outcomes',
       'trade-attribution',
       'behavior-patterns',
       'data-quality',
       'research-changes',
-      'next-week-events',
     ]);
     const marketWeek = result.data.report.sections.find((section) => section.key === 'market-week');
     const table = marketWeek?.blocks.find((block) => block.kind === 'table');
@@ -480,8 +477,8 @@ describe('weekly-report workflow', () => {
     expect(metrics?.kind === 'metrics' ? metrics.items : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'triggered', value: 502 }),
-        expect.objectContaining({ key: 'feedbackCount', value: 0 }),
-        expect.objectContaining({ key: 'usefulRate', value: null }),
+        expect.objectContaining({ key: 'feedbackCount', value: 2 }),
+        expect.objectContaining({ key: 'usefulRate', value: 1 }),
         expect.objectContaining({ key: 'deliveryFailed', label: '渠道投递失败', value: 1 }),
       ]),
     );
@@ -503,11 +500,13 @@ describe('weekly-report workflow', () => {
     expect(accountMetrics?.kind === 'metrics' ? accountMetrics.items : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'triggered', value: 1 }),
-        expect.objectContaining({ key: 'feedbackCount', value: 0 }),
+        expect.objectContaining({ key: 'feedbackCount', value: 1 }),
         expect.objectContaining({ key: 'deliveryFailed', value: 0 }),
       ]),
     );
-    expect(JSON.stringify(accountSection)).toContain('全局关注预警不并入账户反馈率');
+    expect(JSON.stringify(accountSection)).toContain(
+      '未标记账户归属的全局关注预警不并入账户反馈率',
+    );
   });
 
   it('将 signal observation 和 Advice outcome 以描述性统计写入周报', async () => {
@@ -811,91 +810,27 @@ describe('weekly-report workflow', () => {
     expect(broken.data.report.status).toBe(control.data.report.status);
   });
 
-  it('AI 管理动作 section 列出本周动作与指标摘要，插在策略复盘之后', async () => {
-    const ctx = await buildTestContext({ clock: () => now });
-    const createdAt = new Date('2026-07-29T02:00:00.000Z');
-    await ctx.repos.strategyAutonomyAction.save({
-      id: 'weekly-autonomy-pause-1',
-      kind: 'pause',
-      status: 'executed',
-      strategyId: 'weekly-autonomy-strategy',
-      trigger: 'weekly-review',
-      ruleSnapshot: {
-        sampleCount: 25,
-        benchmarkCoverage: 0.96,
-        avgExcessReturn: -0.012,
-        medianExcessReturn: -0.008,
-        thresholds: { minSampleCount: 20, minBenchmarkCoverage: 0.9 },
-      },
-      factReferences: [],
-      attempts: 0,
-      createdAt,
-      updatedAt: createdAt,
-      completedAt: createdAt,
-    });
-
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const keys = result.data.report.sections.map((item) => item.key);
-    expect(keys.indexOf('strategy-autonomy-actions')).toBe(keys.indexOf('strategy-review') + 1);
-    const section = result.data.report.sections.find(
-      (item) => item.key === 'strategy-autonomy-actions',
-    );
-    expect(section).toMatchObject({
-      title: 'AI 管理动作',
-      required: false,
-      status: 'complete',
-    });
-    const list = section?.blocks.find((block) => block.kind === 'list');
-    const items = list?.kind === 'list' ? list.items : [];
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      entityKind: 'strategy',
-      entityId: 'weekly-autonomy-strategy',
-    });
-    expect(items[0]?.title).toContain('自动暂停');
-    expect(items[0]?.detail).toContain('weekly-autonomy-strategy');
-    expect(items[0]?.detail).toContain('完整样本 25');
-    expect(items[0]?.detail).toContain('平均超额 -1.20%');
-  });
-
-  it('本周无动作时 AI 管理动作 section 输出 factual 空态文本', async () => {
-    const ctx = await buildTestContext({ clock: () => now });
-
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const section = result.data.report.sections.find(
-      (item) => item.key === 'strategy-autonomy-actions',
-    );
-    expect(section).toMatchObject({ required: false, status: 'complete' });
-    const list = section?.blocks.find((block) => block.kind === 'list');
-    expect(list?.kind === 'list' ? list.items : []).toHaveLength(0);
-    const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('本周没有 AI 管理动作');
-  });
-
   it('原周报投递失败后复用原版重试，内容补充版禁止投递', async () => {
     let current = now;
     let sends = 0;
     const base = await buildTestContext({ clock: () => current });
     const ctx: ToolContext = {
       ...base,
-      notification: {
-        send: async (input) => {
-          sends += 1;
-          const notification = {
-            id: input.id ?? `weekly-notification-${sends}`,
-            channel: input.channel,
-            payload: input.payload,
-            result: sends === 1 ? ('failed' as const) : ('success' as const),
-            sentAt: current,
-          };
-          await base.repos.notification.save(notification);
-          return { notification };
+      adapters: {
+        ...base.adapters,
+        notification: {
+          send: async (input) => {
+            sends += 1;
+            const notification = {
+              id: input.id ?? `weekly-notification-${sends}`,
+              channel: input.channel,
+              payload: input.payload,
+              result: sends === 1 ? ('failed' as const) : ('success' as const),
+              sentAt: current,
+            };
+            await base.repos.notification.save(notification);
+            return { notification };
+          },
         },
       },
     };
@@ -957,19 +892,13 @@ describe('weekly-report workflow', () => {
     const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
     if (!advice) throw new Error('advice fixture missing');
     const subject = { kind: 'advice' as const, id: advice.id };
-    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
-    expect(preview.ok).toBe(true);
-    if (!preview.ok || preview.data.context === null) return;
     const saved = await saveDecisionReviewTool.execute(
       {
-        requestId: crypto.randomUUID(),
         subject,
-        contextHash: preview.data.context.contextHash,
-        expectedRevision: 0,
         content: {
           tradeIds: [],
           adviceFeedback: { outcome: 'ignored' },
-          triggerFeedback: null,
+          lessonTags: [],
           note: '本周复盘',
         },
       },

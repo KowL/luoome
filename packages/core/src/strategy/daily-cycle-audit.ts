@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import type { WorkflowRun, WorkflowRunStatus } from '../entity/workflow-run.js';
-import { StrategyRecommendationPreflightSummarySchema } from './recommendation-preflight.js';
 
 export const STRATEGY_DAILY_CYCLE_AUDIT_SCHEMA_VERSION = 1 as const;
 export const STRATEGY_DAILY_CYCLE_WORKFLOW_NAME = 'strategy-daily-cycle' as const;
@@ -118,7 +117,6 @@ export const StrategyDailyCycleAuditOutputSummarySchema = z.object({
   watchlistSync: StrategyDailyCycleWatchlistSyncSchema.optional(),
   adviceCount: z.number().int().nonnegative().optional(),
   notificationFailed: z.number().int().nonnegative().optional(),
-  preflight: StrategyRecommendationPreflightSummarySchema.optional(),
   leaseRenewals: z.number().int().nonnegative(),
   checkpoint: StrategyDailyCycleCheckpointSchema.optional(),
   dataPreparationPerformance: z.record(z.string(), z.unknown()).optional(),
@@ -134,14 +132,6 @@ export type StrategyDailyCycleAuditOutputSummary = z.output<
 const StrategyDailyCycleCheckpointProjectionSchema = StrategyDailyCycleCheckpointSchema.partial();
 const StrategyDailyCycleObservationsProjectionSchema =
   StrategyDailyCycleObservationsSchema.partial();
-
-export type StrategyDailyCycleAuditPreflight =
-  | {
-      readonly state: 'available';
-      readonly snapshot: z.output<typeof StrategyRecommendationPreflightSummarySchema>;
-    }
-  | { readonly state: 'missing' }
-  | { readonly state: 'corrupt' };
 
 export interface StrategyDailyCycleAudit {
   readonly run: WorkflowRun;
@@ -163,7 +153,6 @@ export interface StrategyDailyCycleAudit {
   readonly checkpoint?: z.output<typeof StrategyDailyCycleCheckpointProjectionSchema>;
   readonly observations?: z.output<typeof StrategyDailyCycleObservationsProjectionSchema>;
   readonly phaseTimings: readonly z.output<typeof StrategyDailyCyclePhaseTimingProjectionSchema>[];
-  readonly preflight: StrategyDailyCycleAuditPreflight;
 }
 
 export interface StrategyDailyCycleAuditQuery {
@@ -259,14 +248,6 @@ export const decodeStrategyDailyCycleAudit = (
     StrategyDailyCycleObservationsProjectionSchema,
     outputSummary?.observations,
   );
-  const rawPreflight = outputSummary?.preflight;
-  const parsedPreflight = StrategyRecommendationPreflightSummarySchema.safeParse(rawPreflight);
-  const preflight: StrategyDailyCycleAuditPreflight =
-    rawPreflight === undefined
-      ? { state: 'missing' }
-      : parsedPreflight.success
-        ? { state: 'available', snapshot: parsedPreflight.data }
-        : { state: 'corrupt' };
   return {
     run,
     ...auditFormat(inputSummary, outputSummary),
@@ -292,7 +273,6 @@ export const decodeStrategyDailyCycleAudit = (
         z.array(StrategyDailyCyclePhaseTimingProjectionSchema),
         outputSummary?.phaseTimings,
       ) ?? [],
-    preflight,
   };
 };
 

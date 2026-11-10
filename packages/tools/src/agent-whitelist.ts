@@ -5,7 +5,6 @@ export const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   'fetch_quote',
   'batch_quote',
   'get_account_performance',
-  'search_research_documents_hybrid',
 ]);
 
 export const buildAgentCallableTools = (

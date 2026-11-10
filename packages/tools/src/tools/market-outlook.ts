@@ -44,11 +44,11 @@ export const MarketOutlookOutput = z.object({
 const loadLadderSnapshot = async (
   ctx: ToolContext,
 ): Promise<z.infer<typeof MarketOutlookOutput>['ladder']> => {
-  if (ctx.limitUpLadder === undefined) {
+  if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
     return { status: 'unavailable', warnings: ['limit-up-ladder-manager-unavailable'] };
   }
   const date = dateInShanghai(ctx.clock());
-  const result = await ctx.limitUpLadder.fetchLadder({
+  const result = await ctx.adapters.marketIntel?.limitUpLadder.fetchLadder({
     date,
     source: 'eastmoney',
     days: 15,

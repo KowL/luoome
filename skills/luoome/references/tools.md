@@ -9,36 +9,13 @@ do not infer a new MCP permission from an exported TypeScript tool or a hosted H
 
 ## Read
 
-`get_investment_workspace` reads account-owned direction research, immutable confirmed consensus,
-effective recent intent and independent tracking attempts across days. `get_investment_candidates`
-merges stocks across confirmed directions and provides verified `analyze_strategy_candidate` inputs.
-Read these before direction discussions; missing, expired or changed evidence limits conclusions.
-
-Use read tools to identify subjects and inspect current state before deeper analysis or mutation:
-
-- Accounts and positions: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `list_trades`,
-  `get_account_facts`, `reconcile_account_cash`. Account facts are unavailable when quotes are
-  missing, cash does not reconcile, or quantity coverage has gaps. Do not infer precise assets
-  or position sizes from incomplete facts. Cash reconciliation includes persisted holding
-  adjustments, including registrations whose positions have since been sold.
-- Stock discovery and calculations: `search_stocks`, `compute_indicators`. Indicators include
-  RSI14, MA20/MA60 distance and cross recency, plus Bollinger 20-day bands, bandwidth and position.
-- Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
-  `get_strategy_run`, `strategy_signals_by_stock`, `list_strategy_autonomy_actions` (audit trail
-  of AI-managed lifecycle actions such as automatic pauses). `run_local_selector_research` performs a
-  deterministic PIT cross-sectional research ranking from batch qfq DailyBar revisions; its score
-  is a same-batch rank, not a probability. `assess_adaptive_personality` only checks whether an
-  immutable parameter version has separate training/validation evidence; `unavailable` means no
-  adaptive conclusion may be shown. `list_strategy_runs` supports `since` / `until` on run start
-  time; use both for a historical report window so later runs cannot displace its results.
-  `get_strategy_insight_facts` and `generate_strategy_insight` accept the same historical window;
-  their industry directory and AlertPlan configuration still reflect current state.
-- Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`, `get_intraday_delivery_audit`.
-- Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `get_research_embedding_status`, `list_stock_events`.
-  The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
-  model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
+- Research: `list_research_documents`, `get_research_document`, `search_research_documents`.
+  The index is document-only: title, kind, excerpt, tags, explicit `stockCodes`, local Markdown
+  path and source/verification fields. `search_research_documents` reports its FTS capability;
+  metadata-only degradation is still explicit. Research notes are not Strategy, Advice or
+  expected-return estimates.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Dragon-tiger list: `dragon_tiger_list` returns one trading day's billboard entries (close, change, turnover, reason, net/buy/sell amounts). Pure read-only structured data — never interpret billboard presence as a buy/sell signal.
 - Northbound flow: `northbound_flow` returns the daily northbound (Shanghai + Shenzhen Connect) series — turnover always present; daily net buy/sell amounts are only available before 2024-08-16 (exchange disclosure change) and are `null` afterwards. Pure read-only structured data.
@@ -66,11 +43,11 @@ markers — direction drives annotation coloring/grouping, ruleId identifies the
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
 Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
 
-Account-scoped decision review reads: `get_decision_review_context`, `list_decision_reviews`,
-`get_decision_write_receipt`, and `get_decision_review_snapshot`. Keep the account and
-`throughSequence` fixed while paging; `timeBasis` selects source time or revision recording time
-for the half-open `since`/`until` window.
-A missing feedback or PnL remains unknown rather than zero.
+Account-scoped decision review reads: `list_decision_reviews` over a single table keyed by
+account + subject (`advice` / `trading-plan` / `trade`). Filter by `subjectKind`, `subjectId`,
+`stockId` and the half-open `since`/`until` window on `updatedAt`; keep the account and filters
+fixed while paging with the returned cursor. A missing feedback or PnL remains unknown rather
+than zero.
 
 ## Advice
 
@@ -79,96 +56,16 @@ Use advice tools only for an explicit analysis request:
 - `analyze_stock` for a stock-level recommendation.
 - `analyze_position` for a recommendation grounded in an existing holding.
 - `market_outlook` for a market or sector view.
-- `research_investment_directions` compares up to three directions from actual market breadth,
-  qualified A-share index or sentiment facts when no preset Strategy is available; explicit
-  Strategy selections continue to use published runs. Keep source, scope, observation time,
-  objections, waiting/abandon conditions and validity. Market directions may be confirmed but
-  cannot start stock tracking without a real Strategy/candidate mapping. Check
-  `trackingEligibility` and `unmappedDirections`; never invent IDs or auto-create a Strategy.
-  The tool additionally requires write and external opt-in. Confirm research cost first;
-  unavailable/failed research has no conclusion. Missing news cannot support catalyst claims.
-
 ## Write
 
-`save_investment_consensus` confirms or revises only future research preferences using
-`expectedVersion` and a request ID. Omitted patch fields preserve previous choices. A revision
-pauses this feature's previous candidate subscriptions and requires a separate confirmed
-`set_investment_tracking` start. Neither operation changes holdings, TradingPlans or holding-risk
-monitoring. Tracking creates dedicated Watchlists and existing Strategy subscriptions only;
-it does not enable paid research, schedules, AlertPlans, notifications or trades. Inspect actual
-tracking results: a saved consensus is not proof of running tasks. A failed attempt can be retried
-with a new request ID; an interrupted starting attempt requires checking actual state first.
-
-Write tools create or change local records, including accounts, holdings, trades, Strategies,
-Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.
-`update_account` only changes an account name; opening capital, currency and cash balance are not editable profile fields.
-Use the existing cash-flow tools for actual funding records. Hosted users have one automatically initialized,
-empty CNY account; `create_account` remains available for local multi-account use but is rejected in hosted mode.
-`ensure_default_account` is an internal hosted worker operation and is excluded from MCP discovery.
-`confirm_strategy_autonomy_action` and `reject_strategy_autonomy_action` are the human-review
-queue for AI-managed Strategy lifecycle: they only act on `blocked` actions, and confirm
-publishes the candidate version. `archive_strategy` finalizes a paused user Strategy as a
-terminal state (no automatic resume) and removes its schedule; active, draft and builtin
-Strategies are rejected. Before calling one:
-
-1. Read the target state and resolve stable IDs.
-2. Restate exact values, especially stock, side, quantity, price, time and account.
-3. Obtain explicit authorization for that mutation.
-4. Call using the discovered input schema.
-5. Verify the returned result and re-read state when correctness matters.
-
-`save_decision_review` records explicit account feedback and trade links; `refresh_decision_review_report`
-creates an immutable local-only weekly supplement with `notificationPolicy=never`. Closing reviews
-wait for the daily Strategies and account plan batch, then generate once; reruns reuse the report
-and closing review supplements are rejected. `list_reports` returns the latest report per period
-and scope; older saved records remain accessible by ID or explicit version.
-`record_decision_trade` registers an already executed external trade into the local ledger and is
-classified `trade`; MCP does not expose it. Never use it to place an order. Use a stable
-`requestId` and check the receipt before retrying an uncertain response.
-
-Holding writes can reject a concurrent change. Refresh the holding before retrying; never replay
-stale quantities or costs. Cash changes and their ledger records commit together.
-
-The built-in investment assistant can draft `create_account`, `add_holding`, `update_holding`,
-`close_holding`, and `create_portfolio_cash_flow` in portfolio/general conversations. These change
-local ledger records, never broker orders. Do not guess amounts, quantities, costs, or dates.
-The Web-only `settle_chat_draft` capability requires both write and external opt-in and an
-explicitly approved persisted session/message/toolCallId. It is not exposed through MCP or the
-generic registry. The Web confirmation endpoint executes only saved draft input and returns its
-durable status and actual ToolResult; repeated confirmations do not repeat execution. External
-agents should use the exposed target tools with normal confirmation. Never fabricate assistant
-messages or retry an interrupted `executing` draft before reconciling the actual ledger.
-
-`create_strategy_observation_candidates` defaults to published operational runs. Evaluation observations
-require an explicit `evaluationSessionId` matching a completed run in that session; they remain research
-facts and never create Watchlist membership or Advice. `complete_strategy_observations` can restrict
-completion to `runIds` and uses local qfq bars only.
-
-Internal persistence tools such as watch-run or trigger recording are intended for workflows; do not invoke them for normal user requests unless their MCP description explicitly supports the requested operation.
-
-`watch_execution`, `commit_watch_evaluation`, `begin_watch_delivery` are workflow-only write
-primitives; `list_watch_delivery_retries` is workflow-only read. They are not in public registry/MCP
-discovery. Alert previews do not write triggers or consume live state. Live delivery retries are
-bounded to three attempts within the Shanghai calendar day and count against daily quotas.
-
-`subscribe_strategy_to_watchlist` and `unsubscribe_strategy_from_watchlist` are the explicit subscription
-contract. A Strategy has no Watchlist projection without an active subscription. Published operational runs
-may project only to subscribed targets; complete sync can end missing Strategy sources, while partial/failed
-sync only marks them stale. Evaluation, trial, `persist=false`, withheld, non-publishing and failed runs never
-change a Watchlist. The internal projection bridge is orchestration-only and is not registry/MCP-exposed.
-
-## External
-
-External tools fetch market/event data, validate or run Strategies, synchronize data or send
-notifications. A bounded single-version sample uses the external-only `trial_strategy` tool;
 it forces `persist=false` and does not accept `mode=scheduled`. Full-market or persisted Strategy
 runs require confirmation and both capabilities; use `run_strategy` with `persist=true`.
 
-Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
-
-Research Vault 的 `pull_research_vault_git` 是 workflow-only，故意不在 registry/MCP discovery 中。
-远端同步只能由用户通过 CLI 的 `sync-research-vault-remote` workflow 或本地 Web 研究页显式确认；
-它需要 write/external 双 opt-in，且不会自动 commit、push、reset、rebase 或解决冲突。
+`create_research_document` writes a managed Markdown note into the local Obsidian Vault and
+reindexes it; the excerpt (first ~1000 chars) and `stockCodes` are what later searches and
+market views rely on. `sync_research_vault` is workflow-only and not exposed through the public
+registry/MCP discovery; Vault sync never fetches remote Git, never commits or pushes, and never
+calls an embedding provider.
 
 ## Never exposed
 
@@ -194,7 +91,7 @@ For permission and response requirements, read [safety and errors](./safety.md).
   `active` 是保存状态，`ready` 是当前资格，均不能证明后台正在监控或飞书已送达。
 - `list_workflow_runs` 返回 `inputSummary`，可按留存的账户归属识别计划复核；`summary.reviews` 中的
   新增、维持与重复草案按目标日和确切版本统计，不能用“没有新增版本”推断未复核。
-- `intraday-trading-plan-watch` 按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
+- `intraday-watch` 同一轮同时评估 AlertPlan 与 TradingPlan：交易计划按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
   观察条件满足只提示重新评估；未持仓计划不投递止损/目标价/退出提醒，只留 not-requested 记录。
   通知保留反证、风险和卖出限制；冷却对所有优先级生效，消息级别按优先级分级。
 - `notify=false` 为不消耗边沿与通知额度的试跑；正式调用仍需 write/external 授权。

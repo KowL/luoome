@@ -155,28 +155,31 @@ describe('tool/sync_daily_bars', () => {
     expect(calls).not.toContain('601318.SH');
   });
 
-  it('relevant 范围纳入显式关联研究 Topic 或 Document 的股票', async () => {
+  it('relevant 范围纳入研究笔记显式 stockCodes 的股票', async () => {
     const calls: string[] = [];
     const now = new Date('2026-07-28T08:30:00.000Z');
     const base = await buildTestContext({ clock: () => now });
     await base.repos.researchIndex.applyIndexBatch({
       vaultId: 'vault-test',
       completeness: 'complete',
-      topics: [],
-      documents: [],
-      topicDocuments: [],
-      subjectLinks: [
+      documents: [
         {
-          ownerKind: 'topic',
-          ownerId: 'topic_industry',
-          subjectKind: 'stock',
-          subjectKey: '600519.SH',
-          relation: 'related',
+          id: 'doc_industry',
+          kind: 'note',
+          title: '白酒行业跟踪',
+          importedAt: now,
+          tags: [],
+          stockCodes: ['600519.SH'],
+          vaultId: 'vault-test',
+          relativePath: 'Research/doc_industry.md',
+          attachmentPaths: [],
+          contentHash: 'a'.repeat(64),
+          fileModifiedAt: now,
+          indexedAt: now,
+          availability: 'available',
         },
       ],
-      chunks: [],
-      seenTopicIds: new Set(),
-      seenDocumentIds: new Set(),
+      seenDocumentIds: new Set(['doc_industry']),
       indexedAt: now,
     });
     const market: MarketDataAdapterLike = {

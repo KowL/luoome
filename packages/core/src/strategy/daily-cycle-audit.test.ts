@@ -79,16 +79,8 @@ describe('StrategyDailyCycleAuditModule', () => {
       cycleStatus: 'partial',
       publication: 'published',
       phaseTimings: [],
-      preflight: { state: 'missing' },
     });
     expect(decoded?.checkpoint).toBeUndefined();
     expect(decoded === undefined ? false : isHistoricalStrategyDailyCycleAudit(decoded)).toBe(true);
-  });
-
-  it('区分缺失和损坏的 preflight 快照', () => {
-    expect(
-      decodeStrategyDailyCycleAudit(run({ outputSummary: { preflight: { total: 1 } } }))?.preflight,
-    ).toEqual({ state: 'corrupt' });
-    expect(decodeStrategyDailyCycleAudit(run())?.preflight).toEqual({ state: 'missing' });
   });
 });

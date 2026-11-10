@@ -4,12 +4,11 @@ import {
   closingReportCutoffWorkflow,
   previousTradingDay,
   type RunStrategySchedulesOutputT,
-  type StrategyDailyCycleOutputT,
-  strategyDailyCycleWorkflow,
+  runStrategySchedulesWorkflow,
 } from '@luoome/workflows';
 
 export const STRATEGY_SCHEDULER_INTERVAL_MS = 60_000;
-/** 单次 tick 领取同一生产日的全部到期 schedule，避免过早生成共享计划/报告。 */
+/** 单次 tick 处理同一生产日的全部到期 Strategy（进程内互斥）。 */
 export const STRATEGY_SCHEDULER_BATCH_LIMIT = 100;
 
 export interface StrategySchedulerTuning {
@@ -69,11 +68,11 @@ export interface StartStrategySchedulerOptions {
   readonly startImmediately?: boolean;
   readonly owner?: string;
   readonly tuning?: StrategySchedulerTuning;
-  readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT | StrategyDailyCycleOutputT>>;
+  readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT>>;
   readonly runCutoff?: () => Promise<ToolResult<ClosingReportCutoffOutputT>>;
 }
 
-/** Web/luoome start 进程内的策略调度 tick；跨进程防重仍由 StrategySchedule lease 保证。 */
+/** Web/luoome start 进程内的策略调度 tick；同进程防重由 workflow 内 Set 保证。 */
 export const startStrategyScheduler = (
   ctx: ToolContext,
   options: StartStrategySchedulerOptions = {},
@@ -82,13 +81,12 @@ export const startStrategyScheduler = (
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw new Error(`策略调度间隔必须为正数: ${intervalMs}`);
   }
-  const owner = options.owner ?? `luoome:${process.pid}:${globalThis.crypto.randomUUID()}`;
   const tuning = options.tuning ?? strategySchedulerTuningFromEnv();
   const run =
     options.run ??
     (() =>
-      strategyDailyCycleWorkflow.run(
-        { owner, limit: STRATEGY_SCHEDULER_BATCH_LIMIT, ...tuning },
+      runStrategySchedulesWorkflow.run(
+        { limit: STRATEGY_SCHEDULER_BATCH_LIMIT, concurrency: tuning.concurrency },
         ctx,
       ));
   const runCutoff =
@@ -135,17 +133,11 @@ export const startStrategyScheduler = (
         return;
       }
       if (result.data.items.length > 0) {
-        const summary =
-          'complete' in result.data
-            ? {
-                ran: result.data.complete,
-                partial: result.data.partial,
-                skipped: result.data.skipped,
-                failed: result.data.failed,
-              }
-            : result.data;
         ctx.logger.info('策略调度 tick 完成', {
-          ...summary,
+          ran: result.data.ran,
+          partial: result.data.partial,
+          skipped: result.data.skipped,
+          failed: result.data.failed,
         });
       }
     } catch (error) {
