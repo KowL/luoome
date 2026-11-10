@@ -1,6 +1,6 @@
 # LUOOME 领域收敛、去冗余与架构减负详细设计
 
-> **状态**：执行中（2026-11-10）。S1.1/S1.2/S1.3、S2.1/S2.2/S2.3、S3.1/S3.2/S3.3 已落地并通过全量门禁（typecheck / test / test:db / test:web / lint 绿）；S4（34 Tool 收敛、Web 路由拆分）待执行，实施方案已产出只读映射规格（§5.2 34 名单 ↔ 现有 122 Tool、119 条 Web 路由迁移方式）。
+> **状态**：已执行（2026-11-10）。S1.1–S1.3、S2.1–S2.3、S3.1–S3.3、S4 全部落地并通过门禁（typecheck / lint / test / test:db / test:web 绿；仅既有 flaky DSH 集成用例在全量并发下超时、隔离通过）。结果：表 73→38、注册 Tool 152→34、`apps/web/src/server.ts` 3,040→399 行、手写 memory Repository 31→0。未完成项：`signal_observations` 并入 `strategy_signals`（§6 剩余）、workflow 26→12 的进一步合并、`daily_bar_revisions` 保留（strict backtest v2/replay 的 PIT 依赖，与 §6 结论不同）。
 > **日期**：2026-11-10
 > **前置文档**：[AI Investment OS + DSH 转型详细设计](./luoome-dsh-transformation-detailed-design.md)
 > **目标**：在完成 M1（移除多租户 `hosted` 体系，净删 45,285 行代码）的基础上，对单机版代码库进行深度的**领域去重、超前功能裁剪、基础设施减负与 Agent Tool 收敛**，将系统从“堆叠了 7 个历史阶段概念的膨胀单体”收敛为“围绕 DeepSeek Harness 的精悍投研内核”。
