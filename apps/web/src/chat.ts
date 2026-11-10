@@ -16,6 +16,7 @@ import {
   toolRegistry,
 } from '@luoome/tools';
 import { z } from 'zod';
+import { appServiceTool } from './http/app-service.js';
 import {
   DiscussionSubjectSchema,
   type ResolvedDiscussionSubject,
@@ -115,7 +116,7 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     return { id: account.id, name: account.name };
   }, null);
   const executeRead = async (name: string, input: unknown): Promise<Record<string, unknown>> => {
-    const tool = toolRegistry.get(name);
+    const tool = toolRegistry.get(name) ?? appServiceTool(name);
     if (tool === undefined) throw new Error(`chat 上下文 tool 未注册: ${name}`);
     const result = await tool.execute(input, ctx);
     if (!result.ok) throw new Error(`${name}: ${result.error.kind}`);
@@ -334,8 +335,9 @@ const createChatStreamResponseImpl = async (
   }
   const lastUser = messages.at(-1);
   if (lastUser === undefined) return invalidRequest('缺少 user 消息');
-  const appendTool = toolRegistry.get('append_chat_message');
-  const getTool = toolRegistry.get('get_chat_session');
+  const appendTool =
+    toolRegistry.get('append_chat_message') ?? appServiceTool('append_chat_message');
+  const getTool = toolRegistry.get('get_chat_session') ?? appServiceTool('get_chat_session');
   if (appendTool === undefined || getTool === undefined)
     throw new Error('chat session tools 未注册');
   const previous = await getTool.execute(

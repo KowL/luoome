@@ -2,104 +2,82 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
-Hosted capabilities are private: platform auth/subscription/usage/payment/notification/privacy/recovery tools,
-Tenant durable execution and personal import/facts/conditions/feedback tools require trusted hosted identity.
-They are not part of this MCP inventory. Local read/write/advice/external classifications below remain unchanged;
-do not infer a new MCP permission from an exported TypeScript tool or a hosted HTTP route.
+The public Agent surface is the **34 core Agent Tools** (design §5.2). Pure UI CRUD
+(account rename, cash reconciliation, member drag-sort, chat sessions, report rendering,
+strategy lifecycle, observation stats …) is an Application Service behind Web/CLI and is not
+an MCP tool. Do not infer a new MCP permission from an exported TypeScript function or a
+Web HTTP route.
 
 ## Read
 
-  `list_strategy_watchlist_subscriptions`.
-  `list_alert_plans`, `list_watch_triggers`, `get_watch_status`, `get_intraday_delivery_audit`.
-- Research: `list_research_documents`, `get_research_document`, `search_research_documents`.
-  The index is document-only: title, kind, excerpt, tags, explicit `stockCodes`, local Markdown
-  path and source/verification fields. `search_research_documents` reports its FTS capability;
-  metadata-only degradation is still explicit. Research notes are not Strategy, Advice or
-  expected-return estimates.
-- Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
-- Dragon-tiger list: `dragon_tiger_list` returns one trading day's billboard entries (close, change, turnover, reason, net/buy/sell amounts). Pure read-only structured data — never interpret billboard presence as a buy/sell signal.
-- Northbound flow: `northbound_flow` returns the daily northbound (Shanghai + Shenzhen Connect) series — turnover always present; daily net buy/sell amounts are only available before 2024-08-16 (exchange disclosure change) and are `null` afterwards. Pure read-only structured data.
-- Financial news: `fetch_news` returns paged eastmoney or 10jqka headline streams (title, summary, inferred category, media source, publish time, url). Use `source` to select a stream and `page` for pagination. Category is a title-keyword heuristic, not an upstream fact. Pure read-only.
-- Sector quotes: `fetch_sector_quotes` returns eastmoney industry-sector realtime snapshots (code, name, price, changePct, amount, up/down counts, leading stock), sortable by changePct (default) or amount. Pure read-only structured data — never interpret sector strength as a buy/sell signal.
-- Health and audit: `get_market_data_status`, `list_workflow_runs`, `get_closing_batch_audit`,
-  advice statistics and calibration tools. Closing batch audit reads each account's batch runs,
-  main report, supplements and notification state for one trading day.
+Market and盘面资讯:
 
-Market View Phase 4: `get_stock_minute_bars` returns independent OHLCV MinuteBar facts for the
-current session when a configured provider has `minute-bars` capability. It reports partial gaps,
-stale local fallback, or unavailable explicitly; historical dates are limited to retained local
-data and are never synthesized from `PriceSnapshot` or cumulative `IntradayMinute` rows.
+- `search_stocks` — code / name / pinyin search of the local stock directory.
+- `get_stock_market_view` — one call for quote + candles + MA/MACD/RSI summary and chart
+  `markers` pinned to trading days. Under weekly/monthly `granularity` anchor markers on
+  `barDate ?? date`; `direction`/`ruleId` exist only on strategy-signal markers.
+- `fetch_quote` — single or batch (`stockId` or `stockIds`) realtime quote; writes
+  quote_snapshot and falls back to the latest local snapshot.
+- `fetch_index_quotes` — core index (上证/深证/创业板/科创50) realtime quotes.
+- `fetch_sector_quotes` — industry/concept sector ranking with leading stock.
+- `compute_indicators` — daily/intraday MA/EMA/MACD/RSI/KDJ/BOLL/ATR.
+- `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
+- `dragon_tiger_list` — one trading day's billboard entries (net/buy/sell, reason).
+- `northbound_flow` — daily northbound series; net buy/sell is `null` after 2024-08-16.
+- `fetch_news` — market news stream; `includeSentiment=true` also returns the A-share
+  sentiment snapshot (`sentiment`) in the same call.
 
-Market View chart contract: `get_stock_market_view` returns quote, candles, indicators and
-`markers` — chart facts pinned to trading days (trade / advice / watch-trigger / strategy-signal /
-report / research / limit-up). Marker field rules:
-`date` is always the day-level fact date; under weekly/monthly `granularity` the server adds
-`barDate` pointing at the last bar of the aggregation bucket, so chart annotations must anchor on
-`barDate ?? date` (a marker whose whole bucket is suspended gets no `barDate`).
-`direction` (`bullish` / `bearish` / `neutral`) and `ruleId` are present only on strategy-signal
-markers — direction drives annotation coloring/grouping, ruleId identifies the triggering rule
-(for example to collapse consecutive same-rule signals). Treat both as absent for other fact kinds.
+Stock pools, strategies and portfolio:
 
-Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
-Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
-
-Account-scoped decision review reads: `list_decision_reviews` over a single table keyed by
-account + subject (`advice` / `trading-plan` / `trade`). Filter by `subjectKind`, `subjectId`,
-`stockId` and the half-open `since`/`until` window on `updatedAt`; keep the account and filters
-fixed while paging with the returned cursor. A missing feedback or PnL remains unknown rather
-than zero.
+- `list_watchlists` / `get_watchlist` — pools, members and recent changes.
+- `list_strategies` / `get_strategy` — Strategy and its immutable version history.
+- `get_strategy_signals` — StrategySignals for a stock plus T+1/5/20 observation stats
+  (descriptive; signal ≠ Advice and ≠ trade).
+- `get_account_overview` — account + holdings + account facts in one call; use it instead
+  of stitching `get_account` / `list_holdings` / `get_account_facts`.
+- `get_account_performance` — NAV curve, TWR, drawdown and attribution.
+- `list_trades` — account trade history.
+- `get_advice` — advice history with outcomes; `includeDecisionReviews=true` also returns
+  decision reviews for the same account/subject.
+- `search_research_documents` — FTS5 search over local research notes; reports
+  `capability: 'fts' | 'metadata'` so metadata-only degradation is explicit.
+- `list_watch_plans` — active TradingPlans + AlertPlans + recent triggers.
 
 ## Advice
 
 Use advice tools only for an explicit analysis request:
 
-- `analyze_stock` for a stock-level recommendation.
-- `analyze_position` for a recommendation grounded in an existing holding.
-- `market_outlook` for a market or sector view.
+- `analyze_stock` — stock analysis (`scope: 'stock'`), market/sector outlook
+  (`scope: 'market'`) or Strategy-candidate analysis (`scope: 'strategy-candidate'`).
+  All modes persist a structured Advice with evidence, counter-evidence, risks and validity.
+- `analyze_position` — position-grounded advice using current cost/size.
+
+Advice is never a trade and never auto-executes.
+
 ## Write
 
-it forces `persist=false` and does not accept `mode=scheduled`. Full-market or persisted Strategy
-runs require confirmation and both capabilities; use `run_strategy` with `persist=true`.
+- `create_watchlist` / `update_watchlist_members` — create a pool; add/update/remove members
+  (stage, priority) in one validated batch.
+- `save_strategy_version` — `create-strategy` | `save-version` | `validate` | `publish`.
+- `run_strategy` — run a published version over a stock scope; `persist=true` for a formal
+  run, `trial` for dry-run.
+- `run_strategy_backtest` — `run` (create + execute) | `execute` | `get` | `list`; returns
+  return/win-rate/drawdown metrics.
+- `update_holding` — `mode=update` correct quantity/cost, `mode=open` open a holding,
+  `mode=close` close it.
+- `save_research_document` — `target=note` writes a managed Markdown note into the local
+  Vault and reindexes it (excerpt ~1000 chars + stockCodes); `target=report` saves a deep
+  report. Vault sync never fetches remote Git or calls an embedding provider.
+- `save_decision_review` — record a post-hoc review on an advice/plan/trade.
+- `save_trading_plan` — immutable per-stock TradingPlan version with budget checks.
+- `save_alert_plan` — create (no `alertPlanId`) or update an AlertPlan.
 
-`create_research_document` writes a managed Markdown note into the local Obsidian Vault and
-reindexes it; the excerpt (first ~1000 chars) and `stockCodes` are what later searches and
-market views rely on. `sync_research_vault` is workflow-only and not exposed through the public
-registry/MCP discovery; Vault sync never fetches remote Git, never commits or pushes, and never
-calls an embedding provider.
+`add_trade` is intentionally **not** an MCP tool: real trade records are entered by the
+user in the local CLI/Web. It is declared `write` for the Web gate and additionally listed
+in the MCP denylist, and the `LUOOME_EXPOSE_TRADE=true` startup guard remains in force.
 
 ## Never exposed
 
 Real order placement and cancellation are outside the luoome MCP surface. Do not search for a workaround, call a broker directly, reinterpret a write tool as an order, or claim an Advice was executed.
 
 For permission and response requirements, read [safety and errors](./safety.md).
-
-
-`get_watchlist` accepts optional `accountId` for a scoped view: portfolio sources from other accounts are omitted, while independent manual/strategy sources remain. Omitting it keeps the shared workspace view. `list_watch_triggers` adds `stockName` when the local stock directory can resolve it; missing names must not be inferred from codes. Both remain read-only tools.
-
-`list_watch_triggers` filters in the repository before pagination and returns an exact `total`. Use `offset` (default 0) and `limit` to page; `priority`, `feedback` (including `unreviewed`), `deliveryStatus`, and `triggerType` are supported. For browsing a fixed time window, keep `since` and `until` unchanged across pages. It no longer scans only the latest 10,000 records. Set `includeSummary: true` to also receive priority, delivery and feedback counts and per-stock counts, highest priority and latest event across the entire filtered window, independently of pagination. Summary is omitted by default. Use `orderBy: "priority"` to sort urgent, important, then normal before pagination; within a priority, newer events come first with descending ID as a tie-breaker. The default `orderBy: "recent"` preserves chronological browsing. Summary latest events always follow time order.
-
-### 交易计划与盘中通知
-
-- `get_intraday_delivery_audit` 按账户、上海自然日统计全部持久化盘中行动候选，不受触发历史分页限制；
-  分开返回渠道受理是否在 10 分钟内、超时、失败/抑制等终态及缺失源时间。渠道受理不等于设备送达。
-- `list_trading_plans` 可传 `includeMonitoring=true`，读取每个版本的监控资格、阻塞原因与下一步；
-  同时返回服务端选择的当前版本 `views` 和实际截止时间 `monitoring.expiresAt`；
-  `lastReviewedAt` / `nextReviewAt` 结合复核审计呈现最近与下次复核时间，不修改原版本期限。
-  `currentOnly=true` 按账户、股票计划聚合后应用 `limit`，保留主版本与最新修订草案。
-  `get_trading_plan` 返回不可变原始计划与当前监控资格。草案最多两个交易日，重复生成不续命。
-  `createdSince` / `createdUntil` 按版本创建时间筛选，先过滤再应用 `limit`，可用于交易日复盘；
-  `active` 是保存状态，`ready` 是当前资格，均不能证明后台正在监控或飞书已送达。
-- `list_workflow_runs` 返回 `inputSummary`，可按留存的账户归属识别计划复核；`summary.reviews` 中的
-  新增、维持与重复草案按目标日和确切版本统计，不能用“没有新增版本”推断未复核。
-- `intraday-watch` 同一轮同时评估 AlertPlan 与 TradingPlan：交易计划按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
-  观察条件满足只提示重新评估；未持仓计划不投递止损/目标价/退出提醒，只留 not-requested 记录。
-  通知保留反证、风险和卖出限制；冷却对所有优先级生效，消息级别按优先级分级。
-- `notify=false` 为不消耗边沿与通知额度的试跑；正式调用仍需 write/external 授权。
-  Workflow 输出已移除 `reviewedPlans`，后续计划版本由盘后批次或用户主动复核产生。
-
-### 飞书摘要
-
-`render_report` 支持 `format=notification`，输出有长度预算的移动通知摘要；完整内容仍用
-`markdown` / `plain-text`。摘要仅允许市场、策略研究、预警和事件板块，不包含账户估值、持仓仓位、交易计划、
-交易归因及个人复盘，也不披露其数据缺口；隐藏内部 ID、原始证据和宽表格，保留研究风险及有效期。
-策略推荐将同一批次的规则兜底合并为「分析未完成」通知，不能把它当作 AI 推荐或交易依据。

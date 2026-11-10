@@ -86,11 +86,11 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 
 | 等级 | 含义 | 例子 | 默认暴露给 MCP |
 |---|---|---|---|
-| `read` | 只读本地 | `list_holdings`, `get_advice` | ✅ |
-| `write` | 写本地状态 | `add_holding` | ⚠️ 可配置 |
-| `external` | 调用第三方 | `fetch_quote`, `send_notification` | ⚠️ 可配置 |
-| `advice` | 生成建议（含 LLM 推理） | `analyze_stock`, `daily_advice` | ✅ |
-| `trade` | 触发真实资金动作 | `place_order` | ❌ 永不 |
+| `read` | 只读本地 | `get_account_overview`, `list_watch_plans`, `get_advice` | ✅ |
+| `write` | 写本地状态 | `update_holding`, `save_trading_plan` | ⚠️ 可配置 |
+| `external` | 调用第三方 | `fetch_quote`, `fetch_news`, `get_stock_market_view` | ⚠️ 可配置 |
+| `advice` | 生成建议（含 LLM 推理） | `analyze_stock`, `analyze_position` | ✅ |
+| `trade` | 触发真实资金动作 | 无（`add_trade` 以 `write` 声明 + MCP name denylist 拦截） | ❌ 永不 |
 
 **新增 `advice` 等级**：advice tool 本质是只读 + LLM 推理，但产出有"建议"性质，需要独立标记。它有自己特殊的安全约束（详见 §11）。
 
@@ -304,7 +304,7 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
   多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行。若调度
   启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
 - `strategy-recommendations` 从指定持久化 StrategyRun 的 selected 结果按评分、排名、每轮上限和
-  冷却政策筛选，通过 `analyze_strategy_candidate` 生成 Advice，并可经 notification tool 投递；
+  冷却政策筛选，通过 `analyze_stock`（`scope='strategy-candidate'`）生成 Advice，并可经 notification tool 投递；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
   SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
   股票调用 `strategy-recommendations`。
@@ -759,15 +759,14 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 
 | 工具 | 输入 | 输出 |
 |---|---|---|
-| `compute_pnl` | holdings + quotes | PnL breakdown |
-| `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
-| `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
-| `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
-| `analyze_strategy_candidate` | selected StrategyResult + signals + observations | 可追溯 **Advice** |
-| `sync_watchlist_source` | source candidates | membership diff + sync audit |
-| `analyze_stock` | stock + 上下文 | **Advice[]**（buy/sell/hold/...） |
+| `run_strategy_backtest` | StrategyVersion + 区间 | 回测收益 / 胜率 / 最大回撤 |
+| `get_strategy_signals` | 股票 + 时间窗 | StrategySignal + T+1/5/20 观察统计 |
+| `analyze_stock` | stock / market / strategy-candidate + 上下文 | **Advice**（evidence + counter-evidence + risks） |
+
+纯投顾计算（PnL / 风险指标）与 Watchlist source 同步是 Application Service 或 repo 读模型，
+不再注册为 Agent Tool（设计 §5.1）。
 
 ### 6.3 建议层
 
@@ -868,21 +867,43 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ## 7. Tool 系统
 
-### 7.1 副作用分级（重申）
+### 7.1 公共 Agent Tool 面 = 34 个核心 Agent Tool
+
+`toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
+
+- 行情与盘面资讯（10）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
+  `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
+  `dragon_tiger_list`、`northbound_flow`、`fetch_news`
+- 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
+- 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
+  `run_strategy_backtest`、`get_strategy_signals`
+- 账户与持仓（5）：`get_account_overview`、`get_account_performance`、`list_trades`、`add_trade`、
+  `update_holding`
+- 研究、建议与报告（6）：`analyze_stock`、`analyze_position`、`get_advice`、
+  `search_research_documents`、`save_research_document`、`save_decision_review`
+- 交易计划与盯盘预警（3）：`list_watch_plans`、`save_trading_plan`、`save_alert_plan`
+
+账户改名、现金对账、聊天会话、报告渲染、策略生命周期、观察统计等纯 UI CRUD 是
+**Application Service**：仅供 Web/CLI 直接调用，不进入 `toolRegistry`/MCP discovery。
+
+### 7.2 副作用分级（重申）
 
 | 等级 | tool 例 | MCP 默认 | Web 默认 | CLI/TUI 默认 |
 |---|---|---|---|---|
-| `read` | `list_holdings`, `get_quote`, `get_advice` | ✅ | ✅ | ✅ |
-| `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `external` | `fetch_quote`, `send_notify` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `advice` | `analyze_stock`, `daily_advice` | ✅ | ✅ | ✅ |
-| `trade` | `place_order` | ❌ | ❌ | ⚠️ opt-in |
+| `read` | `get_account_overview`, `list_watch_plans`, `get_advice` | ✅ | ✅ | ✅ |
+| `write` | `update_holding`, `save_trading_plan`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
+| `external` | `fetch_quote`, `fetch_news`, `get_stock_market_view` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
+| `advice` | `analyze_stock`, `analyze_position` | ✅ | ✅ | ✅ |
+| `trade` | 无（真实成交记录只在用户本地 CLI/Web 录入） | ❌ | ❌ | ❌ |
 
-### 7.2 Schema 推导
+`add_trade` 以 `write` 声明以复用 Web 写入门，同时在 MCP 暴露层加入 name denylist（永不暴露）；
+`LUOOME_EXPOSE_TRADE=true` 启动硬卡保留。
+
+### 7.3 Schema 推导
 
 同 §2.3，Zod → TS + MCP + OpenAI。
 
-### 7.3 错误模型
+### 7.4 错误模型
 
 ```ts
 type ToolResult<T> =
@@ -901,7 +922,7 @@ type ToolError =
 
 **Tool 永不抛异常**，永远返回 `Result`。Workflow 层根据 error.kind 决定重试 / 跳过 / 终止。
 
-### 7.4 测试要求
+### 7.5 测试要求
 
 每个 tool 必须有：
 - 单元测试：mock ctx，正常路径 + 错误路径
@@ -930,7 +951,7 @@ type ToolError =
   抓取完成不晚于判断时点且事件距判断不超过 120 秒。盘外实时报价仍须有上游时间；规范日线的收盘价
   按既有交易日口径使用。缺合格行情时，最近报价只保留参考估值和限制说明，账户事实为 `unavailable`，
   `totalAssets` / `stockMarketValue` 为 `null`，不能借参考价激活其它股票的精确预算或行动计划。
-  候选（`analyze_strategy_candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
+  候选（`analyze_stock` scope=`strategy-candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
   缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
   生效计划按 horizon 的最长持有交易日独立设置硬期限，来源 Advice 在构建时必须有效；
   草案最多两个交易日，连续草案继承截止时间，重复或已过期且仍受阻的草案不新增版本。
@@ -1038,6 +1059,9 @@ luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**
 | MCP | stdio server | 白名单（read + advice 默认） |
 
 Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
+服务端结构（S4.2）：`apps/web/src/server.ts` 只做 Hono 实例、ctx/依赖注入、同源静态资源与进程启动；
+领域路由按 `routes/{market,portfolio,watchlist-alert,strategy,research,chat,settings,dashboard,tool-gateway}.ts`
+注册，共享 HTTP helper 在 `http/`，路由模块只通过显式 `WebRouteDeps` 依赖 server 内部闭包，禁止循环 import。
 
 ## 11. 数据流示例
 

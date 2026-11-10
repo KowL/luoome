@@ -9,11 +9,11 @@ describe('tool/fetch_quote', () => {
     const res = await fetchQuoteTool.execute({ stockId: '002594.SZ' }, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.data.quote.stockId).toBe('002594.SZ');
-    expect(res.data.quote.source).toBe('test');
+    expect(res.data.quote?.stockId).toBe('002594.SZ');
+    expect(res.data.quote?.source).toBe('test');
     // 写库后能查到
     const latest = await ctx.repos.quote.latestByStock('002594.SZ');
-    expect(latest?.close).toBe(res.data.quote.close);
+    expect(latest?.close).toBe(res.data.quote?.close);
   });
 
   it('正常路径：纯代码也能命中 fixture', async () => {
@@ -55,8 +55,8 @@ describe('tool/fetch_quote', () => {
     );
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.data.quote.close).toBe(100.5);
-    expect(res.data.quote.source).toBe('cached');
+    expect(res.data.quote?.close).toBe(100.5);
+    expect(res.data.quote?.source).toBe('cached');
   });
 
   it('错误路径：stock 不存在 → not_found', async () => {
@@ -73,5 +73,17 @@ describe('tool/fetch_quote', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_input');
+  });
+
+  it('批量：stockIds 一次拉取多只，返回 quotes 与 unresolved', async () => {
+    const ctx = await buildTestContext();
+    const res = await fetchQuoteTool.execute({ stockIds: ['002594.SZ', '600519.SH', 'NOPE'] }, ctx);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.quotes?.map((quote) => quote.stockId).sort()).toEqual([
+      '002594.SZ',
+      '600519.SH',
+    ]);
+    expect(res.data.unresolved).toEqual(['NOPE']);
   });
 });

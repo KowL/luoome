@@ -1,7 +1,9 @@
 import {
   type PortfolioCashFlow,
+  type PortfolioCashFlowKind,
   type PortfolioCashFlowRepository,
   PortfolioCashFlowSchema,
+  type PortfolioCashFlowSource,
   type PortfolioCorporateAction,
   type PortfolioCorporateActionRepository,
   PortfolioCorporateActionSchema,
@@ -9,51 +11,69 @@ import {
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { portfolioCashFlows, portfolioCorporateActions, type Schema } from '../../schema/index.js';
+import { accountLedgerEntries, type Schema } from '../../schema/index.js';
 
-const parseCashFlow = (row: typeof portfolioCashFlows.$inferSelect): PortfolioCashFlow =>
-  (() => {
-    const { stockId, note, ...base } = row;
-    return PortfolioCashFlowSchema.parse({
-      ...base,
-      ...(stockId === null ? {} : { stockId }),
-      ...(note === null ? {} : { note }),
-    });
-  })();
+type LedgerRow = typeof accountLedgerEntries.$inferSelect;
 
-const parseCorporateAction = (
-  row: typeof portfolioCorporateActions.$inferSelect,
-): PortfolioCorporateAction =>
-  (() => {
-    const { ratio, cashPerShare, note, ...base } = row;
-    return PortfolioCorporateActionSchema.parse({
-      ...base,
-      ...(ratio === null ? {} : { ratio }),
-      ...(cashPerShare === null ? {} : { cashPerShare }),
-      ...(note === null ? {} : { note }),
-    });
-  })();
+const parseCashFlow = (row: LedgerRow): PortfolioCashFlow =>
+  PortfolioCashFlowSchema.parse({
+    id: row.id,
+    accountId: row.accountId,
+    occurredAt: row.occurredAt,
+    kind: row.flowKind as PortfolioCashFlowKind,
+    amount: row.amount,
+    currency: row.currency,
+    ...(row.stockId === null ? {} : { stockId: row.stockId }),
+    source: row.source as PortfolioCashFlowSource,
+    ...(row.note === null ? {} : { note: row.note }),
+    createdAt: row.createdAt ?? row.occurredAt,
+  });
 
+const parseCorporateAction = (row: LedgerRow): PortfolioCorporateAction =>
+  PortfolioCorporateActionSchema.parse({
+    id: row.id,
+    accountId: row.accountId,
+    stockId: row.stockId,
+    occurredAt: row.occurredAt,
+    kind: row.actionKind,
+    ...(row.ratio === null ? {} : { ratio: row.ratio }),
+    ...(row.cashPerShare === null ? {} : { cashPerShare: row.cashPerShare }),
+    source: row.source as PortfolioCashFlowSource,
+    ...(row.note === null ? {} : { note: row.note }),
+    createdAt: row.createdAt ?? row.occurredAt,
+  });
+
+/** 资金流水与公司行动都是 account_ledger_entries 的投影（§6 单表合并）。 */
 export class DrizzlePortfolioCashFlowRepository implements PortfolioCashFlowRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
   async save(flow: PortfolioCashFlow): Promise<void> {
     const parsed = PortfolioCashFlowSchema.parse(flow);
+    const row = {
+      id: parsed.id,
+      accountId: parsed.accountId,
+      entryKind: 'cash-flow',
+      occurredAt: parsed.occurredAt,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      stockId: parsed.stockId ?? null,
+      flowKind: parsed.kind,
+      source: parsed.source,
+      note: parsed.note ?? null,
+      createdAt: parsed.createdAt,
+    };
     this.db
-      .insert(portfolioCashFlows)
-      .values({ ...parsed, stockId: parsed.stockId ?? null, note: parsed.note ?? null })
-      .onConflictDoUpdate({
-        target: portfolioCashFlows.id,
-        set: { ...parsed, stockId: parsed.stockId ?? null, note: parsed.note ?? null },
-      })
+      .insert(accountLedgerEntries)
+      .values(row)
+      .onConflictDoUpdate({ target: accountLedgerEntries.id, set: row })
       .run();
   }
 
   async findById(id: string): Promise<PortfolioCashFlow | null> {
     const row = this.db
       .select()
-      .from(portfolioCashFlows)
-      .where(eq(portfolioCashFlows.id, id))
+      .from(accountLedgerEntries)
+      .where(and(eq(accountLedgerEntries.id, id), eq(accountLedgerEntries.entryKind, 'cash-flow')))
       .get();
     return row === undefined ? null : parseCashFlow(row);
   }
@@ -61,21 +81,22 @@ export class DrizzlePortfolioCashFlowRepository implements PortfolioCashFlowRepo
   async listByAccount(accountId: string, from?: Date, to?: Date): Promise<PortfolioCashFlow[]> {
     return this.db
       .select()
-      .from(portfolioCashFlows)
+      .from(accountLedgerEntries)
       .where(
         and(
-          eq(portfolioCashFlows.accountId, accountId),
-          from === undefined ? undefined : gte(portfolioCashFlows.occurredAt, from),
-          to === undefined ? undefined : lte(portfolioCashFlows.occurredAt, to),
+          eq(accountLedgerEntries.accountId, accountId),
+          eq(accountLedgerEntries.entryKind, 'cash-flow'),
+          from === undefined ? undefined : gte(accountLedgerEntries.occurredAt, from),
+          to === undefined ? undefined : lte(accountLedgerEntries.occurredAt, to),
         ),
       )
-      .orderBy(asc(portfolioCashFlows.occurredAt), asc(portfolioCashFlows.id))
+      .orderBy(asc(accountLedgerEntries.occurredAt), asc(accountLedgerEntries.id))
       .all()
       .map(parseCashFlow);
   }
 
   async remove(id: string): Promise<void> {
-    this.db.delete(portfolioCashFlows).where(eq(portfolioCashFlows.id, id)).run();
+    this.db.delete(accountLedgerEntries).where(eq(accountLedgerEntries.id, id)).run();
   }
 }
 
@@ -86,31 +107,36 @@ export class DrizzlePortfolioCorporateActionRepository
 
   async save(action: PortfolioCorporateAction): Promise<void> {
     const parsed = PortfolioCorporateActionSchema.parse(action);
+    const row = {
+      id: parsed.id,
+      accountId: parsed.accountId,
+      entryKind: 'corporate-action',
+      occurredAt: parsed.occurredAt,
+      stockId: parsed.stockId,
+      actionKind: parsed.kind,
+      ratio: parsed.ratio ?? null,
+      cashPerShare: parsed.cashPerShare ?? null,
+      source: parsed.source,
+      note: parsed.note ?? null,
+      createdAt: parsed.createdAt,
+    };
     this.db
-      .insert(portfolioCorporateActions)
-      .values({
-        ...parsed,
-        ratio: parsed.ratio ?? null,
-        cashPerShare: parsed.cashPerShare ?? null,
-        note: parsed.note ?? null,
-      })
-      .onConflictDoUpdate({
-        target: portfolioCorporateActions.id,
-        set: {
-          ...parsed,
-          ratio: parsed.ratio ?? null,
-          cashPerShare: parsed.cashPerShare ?? null,
-          note: parsed.note ?? null,
-        },
-      })
+      .insert(accountLedgerEntries)
+      .values(row)
+      .onConflictDoUpdate({ target: accountLedgerEntries.id, set: row })
       .run();
   }
 
   async findById(id: string): Promise<PortfolioCorporateAction | null> {
     const row = this.db
       .select()
-      .from(portfolioCorporateActions)
-      .where(eq(portfolioCorporateActions.id, id))
+      .from(accountLedgerEntries)
+      .where(
+        and(
+          eq(accountLedgerEntries.id, id),
+          eq(accountLedgerEntries.entryKind, 'corporate-action'),
+        ),
+      )
       .get();
     return row === undefined ? null : parseCorporateAction(row);
   }
@@ -122,20 +148,21 @@ export class DrizzlePortfolioCorporateActionRepository
   ): Promise<PortfolioCorporateAction[]> {
     return this.db
       .select()
-      .from(portfolioCorporateActions)
+      .from(accountLedgerEntries)
       .where(
         and(
-          eq(portfolioCorporateActions.accountId, accountId),
-          from === undefined ? undefined : gte(portfolioCorporateActions.occurredAt, from),
-          to === undefined ? undefined : lte(portfolioCorporateActions.occurredAt, to),
+          eq(accountLedgerEntries.accountId, accountId),
+          eq(accountLedgerEntries.entryKind, 'corporate-action'),
+          from === undefined ? undefined : gte(accountLedgerEntries.occurredAt, from),
+          to === undefined ? undefined : lte(accountLedgerEntries.occurredAt, to),
         ),
       )
-      .orderBy(asc(portfolioCorporateActions.occurredAt), asc(portfolioCorporateActions.id))
+      .orderBy(asc(accountLedgerEntries.occurredAt), asc(accountLedgerEntries.id))
       .all()
       .map(parseCorporateAction);
   }
 
   async remove(id: string): Promise<void> {
-    this.db.delete(portfolioCorporateActions).where(eq(portfolioCorporateActions.id, id)).run();
+    this.db.delete(accountLedgerEntries).where(eq(accountLedgerEntries.id, id)).run();
   }
 }

@@ -1,8 +1,10 @@
 import type { SideEffect } from '@luoome/core';
 
 // 内部 tool（save_report / sync_watchlist_source / migration_* 等）
-// 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 只需按 sideEffect 过滤，
-// 不再有按名字的排除清单。
+// 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 按 sideEffect 过滤。
+// add_trade 虽以 write 声明（Web/CLI 走统一写入门），但按 AGENTS.md 硬约束
+// 永不通过 MCP 暴露，因此保留最小名字 denylist。
+const MCP_HIDDEN_TOOL_NAMES: ReadonlySet<string> = new Set(['add_trade']);
 export const selectMcpTools = <
   T extends {
     readonly name: string;
@@ -13,10 +15,12 @@ export const selectMcpTools = <
   tools: readonly T[],
   allowedSideEffects: ReadonlySet<SideEffect>,
 ): readonly T[] =>
-  tools.filter((tool) =>
-    (tool.requiredCapabilities ?? [tool.sideEffect]).every((capability) =>
-      allowedSideEffects.has(capability),
-    ),
+  tools.filter(
+    (tool) =>
+      !MCP_HIDDEN_TOOL_NAMES.has(tool.name) &&
+      (tool.requiredCapabilities ?? [tool.sideEffect]).every((capability) =>
+        allowedSideEffects.has(capability),
+      ),
   );
 
 /**

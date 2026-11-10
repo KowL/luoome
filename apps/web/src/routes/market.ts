@@ -1,0 +1,290 @@
+import type { Context, Hono } from 'hono';
+import { jsonResult } from '../http/result.js';
+import type { WebRouteDeps } from './types.js';
+
+export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
+  const { callTool, invokeTool, invokeIndexQuotes, requireMutationCapabilities, serveFile } = deps;
+
+  const intQuery = (raw: string | undefined, fallback: number, min: number): number => {
+    if (raw === undefined || raw.trim() === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < min) return fallback;
+    return n;
+  };
+
+  const enumQuery = <T extends string>(
+    raw: string | undefined,
+    fallback: T,
+    allowed: readonly T[],
+  ): T => {
+    if (raw === undefined) return fallback;
+    return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
+  };
+
+  /** 连板天梯 / 对比共用 query 解析；compare 的校验顺序保持先 date 后 prevDate。 */
+  const parseLimitUpQuery = (
+    c: Context,
+    { requirePrevDate }: { requirePrevDate: boolean },
+  ): { input: Record<string, unknown> } | { response: Response } => {
+    const date = c.req.query('date');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return {
+        response: jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: 'date 必填且为 YYYY-MM-DD',
+            issues: [],
+          },
+        }),
+      };
+    }
+    const input: Record<string, unknown> = { date };
+    if (requirePrevDate) {
+      const prevDate = c.req.query('prevDate');
+      if (typeof prevDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(prevDate)) {
+        return {
+          response: jsonResult({
+            ok: false,
+            error: { kind: 'invalid_input', message: 'prevDate 必填且为 YYYY-MM-DD', issues: [] },
+          }),
+        };
+      }
+      input.prevDate = prevDate;
+    }
+    input.days = intQuery(c.req.query('days'), 15, 1);
+    input.source = enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']);
+    input.includeStar = c.req.query('includeStar') === 'true';
+    input.includeBse = c.req.query('includeBse') === 'true';
+    input.includeST = c.req.query('includeST') === 'true';
+    input.includeUncategorized = c.req.query('includeUncategorized') === 'true';
+    return { input };
+  };
+
+  /**
+   * 连板天梯（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §11）。
+   *
+   * 参数：
+   *   date (必填) YYYY-MM-DD
+   *   days, includeStar, includeBse, includeST, includeUncategorized (可选)
+   *
+   * 缓存：Manager 自带 LRU + 分时段 TTL;web 层不再加二级。
+   * 上游不可达：tool 返回 internal；web 包成 HTTP 502。
+   */
+  app.get('/api/market/limit-up', async (c) => {
+    const parsed = parseLimitUpQuery(c, { requirePrevDate: false });
+    if ('response' in parsed) return parsed.response;
+    const r = await invokeTool('limit_up_ladder', parsed.input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 连板天梯对比（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §8.2）。
+   * 用 limit_up_ladder_compare tool，复用同一 cache。
+   */
+  app.get('/api/market/limit-up/compare', async (c) => {
+    const parsed = parseLimitUpQuery(c, { requirePrevDate: true });
+    if ('response' in parsed) return parsed.response;
+    const r = await invokeTool('limit_up_ladder_compare', parsed.input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // HTML route for SPA shell
+  app.get('/market/limit-up', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  /**
+   * 行业板块行情（fetch_sector_quotes tool；实时快照，无缓存）。
+   *
+   * 参数：
+   *   sort (可选) changePct | amount，默认 changePct
+   *   limit (可选) 1-200，默认 50；all=true 时按上游 total 加载完整集合
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/market/sectors', async (c) => {
+    const input: Record<string, unknown> = {};
+    const sort = c.req.query('sort');
+    if (sort !== undefined) input.sort = sort;
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const all = c.req.query('all');
+    if (all !== undefined) input.all = all === 'true';
+    const r = await invokeTool('fetch_sector_quotes', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // HTML route for SPA shell
+  app.get('/market/sectors', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  /**
+   * 财经要闻（fetch_news tool；7×24 滚动流，无缓存）。
+   *
+   * 参数：
+   *   limit (可选) 1-100，默认 30
+   *   page (可选) 从 1 开始，默认 1
+   *   category / keyword (可选) 透传 tool
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/news', async (c) => {
+    const input: Record<string, unknown> = {};
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const page = c.req.query('page');
+    if (page !== undefined) input.page = Number.parseInt(page, 10);
+    const category = c.req.query('category');
+    if (category !== undefined) input.category = category;
+    const keyword = c.req.query('keyword');
+    if (keyword !== undefined) input.keyword = keyword;
+    const source = c.req.query('source');
+    if (source !== undefined) input.source = source;
+    const r = await invokeTool('fetch_news', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 龙虎榜（dragon_tiger_list tool；Manager 自带缓存与节假日历）。
+   *
+   * 参数：
+   *   date (可选) YYYY-MM-DD；缺省时 manager 自动回溯最近交易日
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/dragon-tiger', async (c) => {
+    const input: Record<string, unknown> = {};
+    const date = c.req.query('date');
+    if (date !== undefined) input.date = date;
+    const r = await invokeTool('dragon_tiger_list', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
+  app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
+
+  // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
+  // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
+  app.get('/api/market/indices', async () => {
+    const indexQuotes = await invokeIndexQuotes();
+    if (indexQuotes.ok) return jsonResult({ ok: true, data: indexQuotes.data });
+    return jsonResult({ ok: true, data: { indices: [] } });
+  });
+
+  /**
+   * 指数当日分时（fetch_intraday_minutes tool；tencent 分钟端点仅沪深，恒指不支持）。
+   *
+   * 参数：code (必填) 指数代码，白名单见 INDEX_INTRADAY_STOCK_IDS
+   * 降级：数据源不支持 → { ok: true, data: { supported: false, points: [] } }（200）；
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  const INDEX_INTRADAY_STOCK_IDS: Readonly<Record<string, string>> = {
+    '000001': '000001.SH', // 上证指数
+    '399001': '399001.SZ', // 深证成指
+    '399006': '399006.SZ', // 创业板指
+    '000300': '000300.SH', // 沪深300
+    '000688': '000688.SH', // 科创50
+  };
+  app.get('/api/market/indices/intraday', async (c) => {
+    const code = c.req.query('code') ?? '';
+    const stockId = INDEX_INTRADAY_STOCK_IDS[code];
+    if (stockId === undefined) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: `不支持的指数 code: ${code === '' ? '(空)' : code}（可选 ${Object.keys(INDEX_INTRADAY_STOCK_IDS).join('/')}）`,
+          issues: [],
+        },
+      });
+    }
+    const r = await invokeTool('fetch_intraday_minutes', { stockId });
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // S4.1b：App Service 直执行（非 34 tool 不再经通用 /api/tools/:name/call）。
+  app.get('/api/market/sentiment', (c) => {
+    const date = c.req.query('date');
+    return callTool('get_ashare_sentiment', {
+      ...(date === undefined ? {} : { date }),
+      includeIndexes: c.req.query('includeIndexes') === 'true',
+    });
+  });
+
+  app.post('/api/market/sync/universe', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    return callTool('sync_stock_universe', {});
+  });
+
+  app.post('/api/market/sync/daily-bars', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    return callTool('sync_daily_bars', {});
+  });
+
+  app.get('/api/stocks/:id/minute-bars', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external', 'write']);
+    if (denied !== null) return jsonResult(denied);
+    const date = c.req.query('date');
+    const interval = c.req.query('interval');
+    const r = await invokeTool('get_stock_minute_bars', {
+      stockId: c.req.param('id'),
+      ...(interval === undefined ? {} : { interval }),
+      ...(date === undefined ? {} : { date }),
+    });
+    return jsonResult(r);
+  });
+
+  app.get('/api/stocks/search', async (c) => {
+    const q = c.req.query('q');
+    const limitRaw = c.req.query('limit');
+    // 契约：default 20、max 50（防御性上限，避免 agent 误传超大值把上游拖垮）。
+    const limit = limitRaw === undefined ? 20 : Math.max(1, Math.min(50, Number(limitRaw) || 20));
+    if (typeof q !== 'string' || q.trim().length === 0) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '缺少搜索参数 q',
+          issues: [],
+        },
+      });
+    }
+
+    return jsonResult(await invokeTool('search_stocks', { query: q.trim(), limit }));
+  });
+};

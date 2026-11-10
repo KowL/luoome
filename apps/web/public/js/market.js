@@ -398,17 +398,12 @@ const bindChartTabs = () => {
 const loadIntradayView = async () => {
   if (state.stockId === null) return;
   const requestId = state.minuteTracker.next();
-  const r = await callApi('/api/tools/get_stock_minute_bars/call', {
-    method: 'POST',
-    body: JSON.stringify({
-      input: {
-        stockId: state.stockId,
-        interval: state.minuteInterval,
-        ...(state.date === null ? {} : { date: state.date }),
-      },
-    }),
-    timeoutMs: 30_000,
-  });
+  const minuteQuery = new URLSearchParams({ interval: state.minuteInterval });
+  if (state.date !== null) minuteQuery.set('date', state.date);
+  const r = await callApi(
+    `/api/stocks/${encodeURIComponent(state.stockId)}/minute-bars?${minuteQuery.toString()}`,
+    { timeoutMs: 30_000 },
+  );
   if (!state.minuteTracker.isCurrent(requestId)) return;
   state.minuteData =
     r.ok && r.data !== undefined

@@ -652,9 +652,10 @@ export interface WatchlistMemberRepository {
       readonly source: WatchlistMemberSource;
     }[],
   ): Promise<void>;
+  /** §6：同步运行改记 workflow_runs（workflowName='watchlist-sync'），此处是读模型 façade。 */
   saveSyncRun(run: WatchlistSyncRun): Promise<void>;
-  saveSnapshots(rows: readonly MembershipSnapshot[]): Promise<void>;
   listSyncRuns(watchlistId: string, limit?: number): Promise<readonly WatchlistSyncRun[]>;
+  /** §6：变更明细存于 workflow_runs.outputSummary.changes，此处按 run id 还原（只读）。 */
   listSnapshots(syncRunId: string): Promise<readonly MembershipSnapshot[]>;
   commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun>;
 }

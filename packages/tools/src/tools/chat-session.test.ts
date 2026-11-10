@@ -10,6 +10,7 @@ import {
   renameChatSessionTool,
 } from './chat-session.js';
 import { settleChatDraftTool } from './settle-chat-draft.js';
+import { createWatchlistTool } from './watchlist.js';
 
 describe('chat session tools', () => {
   it('创建、自动标题、读取、重命名和级联删除会话', async () => {
@@ -108,22 +109,26 @@ describe('chat draft settlement', () => {
     const ctx = await buildTestContext();
     const created = await createChatSessionTool.execute({}, ctx);
     if (!created.ok) throw new Error('session setup failed');
+    const watchlist = await createWatchlistTool.execute(
+      { name: '草案预警池', kind: 'personal', membershipPolicy: 'manual' },
+      ctx,
+    );
+    if (!watchlist.ok) throw new Error('watchlist setup failed');
     const sessionId = created.data.session.id;
     const draft = (callId: string, input: unknown) => ({
-      type: 'tool-create_portfolio_cash_flow',
+      type: 'tool-save_alert_plan',
       toolCallId: callId,
       state: 'output-available',
       input,
       output: {
         __luoomeDraft: true,
-        draft: { tool: 'create_portfolio_cash_flow', kind: 'portfolio', input },
+        draft: { tool: 'save_alert_plan', kind: 'alert-plan', input },
       },
     });
     const input = {
-      accountId: ctx.user.defaultAccountId,
-      occurredAt: '2026-09-29T01:00:00Z',
-      kind: 'deposit',
-      amount: 1000,
+      name: '草案 AlertPlan',
+      watchlistId: watchlist.data.watchlist.id,
+      rules: [{ id: 'draft-rule', kind: 'price-level', side: 'above', level: 15 }],
     };
     const appended = await appendChatMessageTool.execute(
       {
@@ -140,7 +145,6 @@ describe('chat draft settlement', () => {
 
   it('并发确认只入金一次，重放返回真实结果；多个草案独立取消', async () => {
     const { ctx, sessionId } = await setup();
-    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
     const request = { sessionId, messageId: 'drafts', toolCallId: 'first', approved: true };
     const results = await Promise.all([
       settleChatDraftTool.execute(request, ctx),
@@ -152,9 +156,7 @@ describe('chat draft settlement', () => {
     if (!replay.ok) return;
     expect(replay.data.status).toBe('succeeded');
     expect(replay.data.result?.ok).toBe(true);
-    expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toBe(
-      Number(before?.cashBalance) + 1000,
-    );
+    expect(await ctx.repos.alertPlan.list()).toHaveLength(1);
     const cancelled = await settleChatDraftTool.execute(
       { ...request, toolCallId: 'second', approved: false },
       ctx,
@@ -175,24 +177,21 @@ describe('chat draft settlement', () => {
       {
         sessionId,
         role: 'user',
-        parts: [{ type: 'text', text: '[草案处理记录] ok create_portfolio_cash_flow 执行成功' }],
+        parts: [{ type: 'text', text: '[草案处理记录] ok save_alert_plan 执行成功' }],
       },
       ctx,
     );
-    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
     const result = await settleChatDraftTool.execute(
       { sessionId, messageId: 'drafts', toolCallId: 'first', approved: true },
       ctx,
     );
     expect(result.ok).toBe(false);
-    expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toEqual(
-      before?.cashBalance,
-    );
+    expect(await ctx.repos.alertPlan.list()).toHaveLength(0);
   });
 
   it('失败作为该调用的终态保存，不把失败当成功或重新执行', async () => {
     const { ctx, sessionId, message } = await setup();
-    await ctx.repos.account.remove(ctx.user.defaultAccountId);
+    ctx.repos.watchlist.findById = async () => null;
     const request = { sessionId, messageId: 'drafts', toolCallId: 'first', approved: true };
     const result = await settleChatDraftTool.execute(request, ctx);
     expect(result.ok && result.data.status).toBe('failed');
@@ -231,21 +230,18 @@ describe('chat draft settlement', () => {
           ...message.parts,
           {
             type: 'data-luoome-draft-settlement',
-            data: { toolCallId: 'first', tool: 'create_portfolio_cash_flow', status: 'executing' },
+            data: { toolCallId: 'first', tool: 'save_alert_plan', status: 'executing' },
           },
         ],
       },
       message.parts,
     );
-    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
     const result = await settleChatDraftTool.execute(
       { sessionId, messageId: 'drafts', toolCallId: 'first', approved: true },
       ctx,
     );
     expect(result.ok && result.data.status).toBe('executing');
-    expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toEqual(
-      before?.cashBalance,
-    );
+    expect(await ctx.repos.alertPlan.list()).toHaveLength(0);
   });
 
   it('遗留执行中草案核对账本后可显式取消，取消是终态且不会补执行', async () => {
@@ -257,13 +253,12 @@ describe('chat draft settlement', () => {
           ...message.parts,
           {
             type: 'data-luoome-draft-settlement',
-            data: { toolCallId: 'first', tool: 'create_portfolio_cash_flow', status: 'executing' },
+            data: { toolCallId: 'first', tool: 'save_alert_plan', status: 'executing' },
           },
         ],
       },
       message.parts,
     );
-    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
     const cancelled = await settleChatDraftTool.execute(
       { sessionId, messageId: 'drafts', toolCallId: 'first', approved: false },
       ctx,
@@ -274,9 +269,7 @@ describe('chat draft settlement', () => {
       ctx,
     );
     expect(replay).toEqual(cancelled);
-    expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toEqual(
-      before?.cashBalance,
-    );
+    expect(await ctx.repos.alertPlan.list()).toHaveLength(0);
     const saved = await ctx.repos.chat.findMessageById(sessionId, 'drafts');
     expect(
       saved?.parts.find((part) => part.type === 'data-luoome-draft-settlement')?.data,

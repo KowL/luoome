@@ -310,7 +310,7 @@ describe('持仓页汇总卡片', () => {
     const pages = read('./pages.js');
     expect(pages).toContain("$('#holdings-stat-total-value')");
     expect(pages).toContain("$('#holdings-stat-count')");
-    expect(pages).toContain('/api/tools/get_account/call');
+    expect(pages).toContain("callApi('/api/account')");
   });
 });
 
@@ -561,8 +561,8 @@ describe('龙虎榜页面入口', () => {
   });
 
   it('服务端暴露 GET /api/dragon-tiger（dragon_tiger_list tool）', () => {
-    const serverTs = read('../../src/server.ts');
-    expect(serverTs).toContain("app.get('/api/dragon-tiger'");
-    expect(serverTs).toContain("invokeTool('dragon_tiger_list'");
+    const marketRoutes = read('../../src/routes/market.ts');
+    expect(marketRoutes).toContain("app.get('/api/dragon-tiger'");
+    expect(marketRoutes).toContain("invokeTool('dragon_tiger_list'");
   });
 });

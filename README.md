@@ -3,7 +3,7 @@
 > **织机 + 罗网 — 汇聚网罗有价值的信息数据，在面对变化的市场时提供准确的建议。**
 
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
-Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，并把多源数据织成可追溯事实。
+Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent Tool 通过 MCP / DSH 暴露，其余纯 UI CRUD 由 Web/CLI 直接调用 Application Service；所有数据织成可追溯事实。
 
 - 作为 **TUI** 在终端盯盘、看建议
 - 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
@@ -25,7 +25,7 @@ Web、CLI、TUI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`
 ## 设计原则
 
 - **Advisor-first**：每一份数据最终都服务于"可执行的投资建议"，不是堆数据。
-- **Agent-first**：所有能力都是 tool，没有"只能人用、agent 用不了"的功能。
+- **Agent-first**：投研分析能力收敛为 34 个粗粒度 Agent Tool（行情/策略/账户/建议/计划），纯 UI CRUD 属于 Application Service，不给 LLM 伪造工具面。
 - **数据自持**：SQLite 保存在本机 `$LUOOME_HOME/luoome.db`，不经过任何云服务。
 - **Schema-driven**：Zod schema 是 tool I/O 的事实来源，自动生成 TypeScript 类型、MCP tool 定义、OpenAI function calling schema。
 - **Workflow ≠ Tool**：tool 是原子能力，workflow 是组合；workflow 内置编排，tool 暴露给上层 agent。
@@ -71,7 +71,7 @@ Bun workspace monorepo：
 packages/
   core/        纯领域类型 + 不变量（无 IO）
   db/          Drizzle schema + repository 实现
-  tools/       Tool 注册表 + Zod → TS/MCP/OpenAI 自动生成
+  tools/       34 个核心 Agent Tool 注册表 + Zod → TS/MCP/OpenAI 自动生成
   adapters/    行情 / LLM / 通知 / 券商 等外部依赖适配
   workflows/   内置编排：review / scan / diagnose / advise
   mcp/         MCP server，把 tool registry 暴露给外部

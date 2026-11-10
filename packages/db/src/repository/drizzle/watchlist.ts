@@ -14,23 +14,21 @@ import {
   type WatchlistSyncCommit,
   type WatchlistSyncRun,
 } from '@luoome/core';
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
-  membershipSnapshots,
   type Schema,
   watchlistMemberSources,
   watchlistMembers,
-  watchlistSyncRuns,
   watchlists,
+  workflowRuns,
 } from '../../schema/index.js';
 
 type WatchlistRow = typeof watchlists.$inferSelect;
 type MemberRow = typeof watchlistMembers.$inferSelect;
 type SourceRow = typeof watchlistMemberSources.$inferSelect;
-type RunRow = typeof watchlistSyncRuns.$inferSelect;
-type SnapshotRow = typeof membershipSnapshots.$inferSelect;
+type WorkflowRunRow = typeof workflowRuns.$inferSelect;
 
 const toWatchlist = (row: WatchlistRow): Watchlist => ({
   id: row.id,
@@ -74,35 +72,92 @@ const toSource = (row: SourceRow): WatchlistMemberSource => ({
   ...(row.validUntil === null ? {} : { validUntil: row.validUntil }),
 });
 
-const toRun = (row: RunRow): WatchlistSyncRun => ({
-  id: row.id,
-  watchlistId: row.watchlistId,
-  sourceKind: row.sourceKind,
-  sourceKey: row.sourceKey,
-  ...(row.producerRunId === null ? {} : { producerRunId: row.producerRunId }),
-  status: row.status,
-  ...(row.dataAsOf === null ? {} : { dataAsOf: row.dataAsOf }),
-  startedAt: row.startedAt,
-  ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
-  enteredCount: row.enteredCount,
-  exitedCount: row.exitedCount,
-  unchangedCount: row.unchangedCount,
-  missingDimensions: [...row.missingDimensions],
-  ...(row.error === null ? {} : { error: row.error }),
+/** §6：watchlist 同步运行记入 workflow_runs（workflowName='watchlist-sync'），此处是读模型 façade。 */
+const WATCHLIST_SYNC_WORKFLOW = 'watchlist-sync';
+
+type StoredSyncChange = {
+  readonly stockId: string;
+  readonly change: MembershipSnapshot['change'];
+  readonly reason: string;
+  readonly score?: number;
+  readonly rank?: number;
+  readonly evidence: readonly string[];
+  readonly dataAsOf?: string;
+};
+
+const toWorkflowRunValues = (
+  run: WatchlistSyncRun,
+  changes?: readonly StoredSyncChange[],
+): typeof workflowRuns.$inferInsert => ({
+  id: run.id,
+  workflowName: WATCHLIST_SYNC_WORKFLOW,
+  mode: 'manual',
+  status:
+    run.status === 'complete'
+      ? 'succeeded'
+      : run.status === 'running'
+        ? 'running'
+        : run.status === 'partial'
+          ? 'partial'
+          : 'failed',
+  startedAt: run.startedAt,
+  ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+  inputSummary: {
+    watchlistId: run.watchlistId,
+    sourceKind: run.sourceKind,
+    sourceKey: run.sourceKey,
+    ...(run.producerRunId === undefined ? {} : { producerRunId: run.producerRunId }),
+    ...(run.dataAsOf === undefined ? {} : { dataAsOf: run.dataAsOf.toISOString() }),
+  },
+  outputSummary: {
+    status: run.status,
+    enteredCount: run.enteredCount,
+    exitedCount: run.exitedCount,
+    unchangedCount: run.unchangedCount,
+    missingDimensions: [...run.missingDimensions],
+    ...(changes === undefined ? {} : { changes: [...changes] }),
+  },
+  providerStatuses: [],
+  ...(run.error === undefined ? {} : { error: run.error }),
 });
 
-const toSnapshot = (row: SnapshotRow): MembershipSnapshot => ({
-  id: row.id,
-  syncRunId: row.syncRunId,
-  stockId: row.stockId,
-  selected: row.selected,
-  change: row.change,
-  reason: row.reason,
-  ...(row.score === null ? {} : { score: row.score }),
-  ...(row.rank === null ? {} : { rank: row.rank }),
-  evidence: [...row.evidence],
-  ...(row.dataAsOf === null ? {} : { dataAsOf: row.dataAsOf }),
-});
+const toSyncRun = (row: WorkflowRunRow): WatchlistSyncRun => {
+  const input = (row.inputSummary ?? {}) as Readonly<Record<string, unknown>>;
+  const output = (row.outputSummary ?? {}) as Readonly<Record<string, unknown>>;
+  const status =
+    output.status === 'running' ||
+    output.status === 'complete' ||
+    output.status === 'partial' ||
+    output.status === 'failed'
+      ? (output.status as WatchlistSyncRun['status'])
+      : row.status === 'succeeded'
+        ? 'complete'
+        : row.status === 'partial'
+          ? 'partial'
+          : row.status === 'running'
+            ? 'running'
+            : 'failed';
+  return {
+    id: row.id,
+    watchlistId: typeof input.watchlistId === 'string' ? input.watchlistId : '',
+    sourceKind: (typeof input.sourceKind === 'string'
+      ? input.sourceKind
+      : 'import') as WatchlistSyncRun['sourceKind'],
+    sourceKey: typeof input.sourceKey === 'string' ? input.sourceKey : '',
+    ...(typeof input.producerRunId === 'string' ? { producerRunId: input.producerRunId } : {}),
+    status,
+    ...(typeof input.dataAsOf === 'string' ? { dataAsOf: new Date(input.dataAsOf) } : {}),
+    startedAt: row.startedAt,
+    ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
+    enteredCount: typeof output.enteredCount === 'number' ? output.enteredCount : 0,
+    exitedCount: typeof output.exitedCount === 'number' ? output.exitedCount : 0,
+    unchangedCount: typeof output.unchangedCount === 'number' ? output.unchangedCount : 0,
+    missingDimensions: Array.isArray(output.missingDimensions)
+      ? (output.missingDimensions as WatchlistSyncRun['missingDimensions'])
+      : [],
+    ...(row.error === null ? {} : { error: row.error }),
+  };
+};
 
 const memberValues = (member: WatchlistMember) => ({
   id: member.id,
@@ -133,36 +188,6 @@ const sourceValues = (source: WatchlistMemberSource) => ({
   dataAsOf: source.dataAsOf ?? null,
   validFrom: source.validFrom,
   validUntil: source.validUntil ?? null,
-});
-
-const runValues = (run: WatchlistSyncRun) => ({
-  id: run.id,
-  watchlistId: run.watchlistId,
-  sourceKind: run.sourceKind,
-  sourceKey: run.sourceKey,
-  producerRunId: run.producerRunId ?? null,
-  status: run.status,
-  dataAsOf: run.dataAsOf ?? null,
-  startedAt: run.startedAt,
-  finishedAt: run.finishedAt ?? null,
-  enteredCount: run.enteredCount,
-  exitedCount: run.exitedCount,
-  unchangedCount: run.unchangedCount,
-  missingDimensions: [...run.missingDimensions],
-  error: run.error ?? null,
-});
-
-const snapshotValues = (snapshot: MembershipSnapshot) => ({
-  id: snapshot.id,
-  syncRunId: snapshot.syncRunId,
-  stockId: snapshot.stockId,
-  selected: snapshot.selected,
-  change: snapshot.change,
-  reason: snapshot.reason,
-  score: snapshot.score ?? null,
-  rank: snapshot.rank ?? null,
-  evidence: [...snapshot.evidence],
-  dataAsOf: snapshot.dataAsOf ?? null,
 });
 
 export class DrizzleWatchlistRepository implements WatchlistRepository {
@@ -426,56 +451,58 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
     ) {
       throw new InvariantError(`Watchlist 不存在: ${run.watchlistId}`);
     }
+    const values = toWorkflowRunValues(run);
     this.db
-      .insert(watchlistSyncRuns)
-      .values(runValues(run))
-      .onConflictDoUpdate({ target: watchlistSyncRuns.id, set: runValues(run) })
+      .insert(workflowRuns)
+      .values(values)
+      .onConflictDoUpdate({ target: workflowRuns.id, set: values })
       .run();
-  }
-
-  async saveSnapshots(rows: readonly MembershipSnapshot[]): Promise<void> {
-    for (const row of rows) {
-      MembershipSnapshotSchema.parse(row);
-      if (
-        this.db
-          .select()
-          .from(watchlistSyncRuns)
-          .where(eq(watchlistSyncRuns.id, row.syncRunId))
-          .get() === undefined
-      ) {
-        throw new InvariantError(`WatchlistSyncRun 不存在: ${row.syncRunId}`);
-      }
-      const values = snapshotValues(row);
-      this.db
-        .insert(membershipSnapshots)
-        .values(values)
-        .onConflictDoUpdate({
-          target: [membershipSnapshots.syncRunId, membershipSnapshots.stockId],
-          set: values,
-        })
-        .run();
-    }
   }
 
   async listSyncRuns(watchlistId: string, limit = 50): Promise<readonly WatchlistSyncRun[]> {
     return this.db
       .select()
-      .from(watchlistSyncRuns)
-      .where(eq(watchlistSyncRuns.watchlistId, watchlistId))
-      .orderBy(desc(watchlistSyncRuns.startedAt), desc(watchlistSyncRuns.id))
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.workflowName, WATCHLIST_SYNC_WORKFLOW),
+          sql`json_extract(${workflowRuns.inputSummary}, '$.watchlistId') = ${watchlistId}`,
+        ),
+      )
+      .orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.id))
       .limit(limit)
       .all()
-      .map(toRun);
+      .map(toSyncRun);
   }
 
   async listSnapshots(syncRunId: string): Promise<readonly MembershipSnapshot[]> {
-    return this.db
-      .select()
-      .from(membershipSnapshots)
-      .where(eq(membershipSnapshots.syncRunId, syncRunId))
-      .orderBy(asc(membershipSnapshots.stockId))
-      .all()
-      .map(toSnapshot);
+    const row = this.db
+      .select({ outputSummary: workflowRuns.outputSummary })
+      .from(workflowRuns)
+      .where(
+        and(eq(workflowRuns.workflowName, WATCHLIST_SYNC_WORKFLOW), eq(workflowRuns.id, syncRunId)),
+      )
+      .get();
+    const output = (row?.outputSummary ?? {}) as Readonly<Record<string, unknown>>;
+    const changes = Array.isArray(output.changes)
+      ? (output.changes as readonly StoredSyncChange[])
+      : [];
+    return changes
+      .map((change) =>
+        MembershipSnapshotSchema.parse({
+          id: `${syncRunId}:${change.stockId}`,
+          syncRunId,
+          stockId: change.stockId,
+          selected: change.change !== 'exited',
+          change: change.change,
+          reason: change.reason,
+          ...(change.score === undefined ? {} : { score: change.score }),
+          ...(change.rank === undefined ? {} : { rank: change.rank }),
+          evidence: [...change.evidence],
+          ...(change.dataAsOf === undefined ? {} : { dataAsOf: new Date(change.dataAsOf) }),
+        }),
+      )
+      .sort((left, right) => left.stockId.localeCompare(right.stockId));
   }
 
   async commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun> {
@@ -499,16 +526,17 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
       if (input.run.producerRunId !== undefined) {
         const existingRun = tx
           .select()
-          .from(watchlistSyncRuns)
+          .from(workflowRuns)
           .where(
             and(
-              eq(watchlistSyncRuns.watchlistId, input.run.watchlistId),
-              eq(watchlistSyncRuns.sourceKey, input.run.sourceKey),
-              eq(watchlistSyncRuns.producerRunId, input.run.producerRunId),
+              eq(workflowRuns.workflowName, WATCHLIST_SYNC_WORKFLOW),
+              sql`json_extract(${workflowRuns.inputSummary}, '$.watchlistId') = ${input.run.watchlistId}`,
+              sql`json_extract(${workflowRuns.inputSummary}, '$.sourceKey') = ${input.run.sourceKey}`,
+              sql`json_extract(${workflowRuns.inputSummary}, '$.producerRunId') = ${input.run.producerRunId}`,
             ),
           )
           .get();
-        if (existingRun !== undefined) return toRun(existingRun);
+        if (existingRun !== undefined) return toSyncRun(existingRun);
       }
       const memberRows = tx
         .select()
@@ -539,7 +567,7 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
         }),
       );
       const now = input.run.finishedAt as Date;
-      const snapshots: MembershipSnapshot[] = [];
+      const changes: StoredSyncChange[] = [];
       let entered = 0;
       let unchanged = 0;
       let exited = 0;
@@ -634,17 +662,16 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
           .values(sourceValues(source))
           .onConflictDoUpdate({ target: watchlistMemberSources.id, set: sourceValues(source) })
           .run();
-        snapshots.push({
-          id: `${input.run.id}:${candidate.stockId}`,
-          syncRunId: input.run.id,
+        changes.push({
           stockId: candidate.stockId,
-          selected: true,
           change,
           reason: candidate.reason,
           ...(candidate.score === undefined ? {} : { score: candidate.score }),
           ...(candidate.rank === undefined ? {} : { rank: candidate.rank }),
-          evidence: candidate.evidence,
-          ...(candidate.dataAsOf === undefined ? {} : { dataAsOf: candidate.dataAsOf }),
+          evidence: [...candidate.evidence],
+          ...(candidate.dataAsOf === undefined
+            ? {}
+            : { dataAsOf: candidate.dataAsOf.toISOString() }),
         });
         if (change === 'entered') entered += 1;
         else unchanged += 1;
@@ -659,15 +686,14 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
             .set({ status: 'ended', validUntil: now })
             .where(eq(watchlistMemberSources.id, source.id))
             .run();
-          snapshots.push({
-            id: `${input.run.id}:${member.stockId}`,
-            syncRunId: input.run.id,
+          changes.push({
             stockId: member.stockId,
-            selected: false,
             change: 'exited',
             reason: '来源完整同步未再入选',
             evidence: [],
-            ...(input.run.dataAsOf === undefined ? {} : { dataAsOf: input.run.dataAsOf }),
+            ...(input.run.dataAsOf === undefined
+              ? {}
+              : { dataAsOf: input.run.dataAsOf.toISOString() }),
           });
           exited += 1;
           const other = tx
@@ -696,20 +722,11 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
         unchangedCount: unchanged,
       };
       assertWatchlistSyncRunInvariants(run);
-      tx.insert(watchlistSyncRuns)
-        .values(runValues(run))
-        .onConflictDoUpdate({ target: watchlistSyncRuns.id, set: runValues(run) })
+      const runValues = toWorkflowRunValues(run, changes);
+      tx.insert(workflowRuns)
+        .values(runValues)
+        .onConflictDoUpdate({ target: workflowRuns.id, set: runValues })
         .run();
-      for (const snapshot of snapshots) {
-        MembershipSnapshotSchema.parse(snapshot);
-        tx.insert(membershipSnapshots)
-          .values(snapshotValues(snapshot))
-          .onConflictDoUpdate({
-            target: [membershipSnapshots.syncRunId, membershipSnapshots.stockId],
-            set: snapshotValues(snapshot),
-          })
-          .run();
-      }
       return run;
     });
   }

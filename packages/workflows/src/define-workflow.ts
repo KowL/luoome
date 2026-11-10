@@ -173,6 +173,7 @@ import type {
   ValidateStrategyVersionInput,
   ValidateStrategyVersionOutput,
 } from '@luoome/tools';
+import * as toolExports from '@luoome/tools';
 import {
   beginWatchDeliveryTool,
   commitWatchEvaluationTool,
@@ -506,6 +507,18 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     { readonly execute: (input: unknown) => Promise<ToolResult<unknown>> }
   > = {};
   for (const tool of toolRegistry.all()) {
+    accessors[tool.name] = { execute: (input) => tool.execute(input, ctx) };
+  }
+  // 34 之外的 App Service tool 不再进 registry，但 workflow 仍可直接执行它们。
+  for (const value of Object.values(toolExports)) {
+    if (typeof value !== 'object' || value === null) continue;
+    if (!('name' in value) || !('execute' in value)) continue;
+    const tool = value as {
+      readonly name: string;
+      execute: (input: unknown, context: ToolContext) => Promise<ToolResult<unknown>>;
+    };
+    if (typeof tool.name !== 'string' || typeof tool.execute !== 'function') continue;
+    if (accessors[tool.name] !== undefined) continue;
     accessors[tool.name] = { execute: (input) => tool.execute(input, ctx) };
   }
   accessors[syncWatchlistSourceTool.name] = {

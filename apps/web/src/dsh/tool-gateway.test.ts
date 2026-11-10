@@ -289,7 +289,7 @@ describe('ToolGateway', () => {
     const fixture = setup({
       tools: [
         {
-          name: 'get_account',
+          name: 'get_account_overview',
           description: 'account fixture',
           inputSchema: z.object({ accountId: z.string() }),
           execute: async () => {
@@ -301,7 +301,7 @@ describe('ToolGateway', () => {
     expect(
       await fixture.gateway.execute(fixture.caller, {
         ...fixture.call,
-        toolName: 'get_account',
+        toolName: 'get_account_overview',
         input: { accountId: 'other-account' },
       }),
     ).toMatchObject({ error: { code: 'permission_denied' } });

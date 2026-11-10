@@ -1489,8 +1489,8 @@ export const renderAlerts = async (setStatus) => {
       : callApi(
           '/api/trading-plans?activeOnly=false&currentOnly=true&includeMonitoring=true&limit=200',
         ),
-    accountId === '' ? null : post('/api/tools/get_account_facts/call', {}),
-    accountId === '' ? null : post('/api/tools/reconcile_account_cash/call', {}),
+    accountId === '' ? null : callApi('/api/account/facts'),
+    accountId === '' ? null : post('/api/account/cash-reconcile', {}),
     accountId === '' || auditRoot === null
       ? null
       : callApi(`/api/watch/delivery-audit?date=${encodeURIComponent(auditDate)}`),

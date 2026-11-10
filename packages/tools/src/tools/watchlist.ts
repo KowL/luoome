@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 
 const WatchlistSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/);
-const WatchlistMemberViewSchema = z.object({
+export const WatchlistMemberViewSchema = z.object({
   member: WatchlistMemberSchema,
   sources: z.array(WatchlistMemberSourceSchema),
 });
@@ -600,6 +600,7 @@ export const ListWatchlistChangesInput = z.object({
 });
 export const ListWatchlistChangesOutput = z.object({
   watchlist: WatchlistSchema,
+  /** §6：snapshot 表已删，变更明细从 workflow_runs 读模型还原，输出形状保持不变。 */
   runs: z.array(
     z.object({
       run: WatchlistSyncRunSchema,

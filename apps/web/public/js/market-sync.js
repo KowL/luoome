@@ -121,9 +121,13 @@ const renderMarketSyncStatus = async () => {
 const runSync = async (toolName, input, label) => {
   setBusy(true);
   setMessage(`${label}进行中（可能需要几分钟）…`);
-  const r = await callApi(`/api/tools/${toolName}/call`, {
+  const endpoint =
+    toolName === 'sync_stock_universe'
+      ? '/api/market/sync/universe'
+      : '/api/market/sync/daily-bars';
+  const r = await callApi(endpoint, {
     method: 'POST',
-    body: JSON.stringify({ input }),
+    body: JSON.stringify(input),
     timeoutMs: 300_000,
   });
   setBusy(false);

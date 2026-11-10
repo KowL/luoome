@@ -1,397 +1,296 @@
 import { describe, expect, it } from 'vitest';
 
-import { createRegistry, toolRegistry } from './registry.js';
+import { toolRegistry } from './registry.js';
 
-// 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
+/** S4.1c：公共 Agent Tool 面 = 34 个核心 Agent Tool（设计 §5.2）。 */
 const EXPECTED_TOOL_NAMES = [
-  // v0.1
-  'list_accounts',
-  'create_account',
-  'update_account',
-  'get_account',
-  'get_account_facts',
-  'reconcile_account_cash',
-  'list_holdings',
-  'get_holding',
-  'list_trades',
-  'get_advice',
-  'get_advice_stats',
-  'get_trading_plan',
-  'list_trading_plans',
-  'evaluate_trading_plan_budget',
-  'get_decision_loop_review',
-  'get_strategy_decision_cycles',
-  'analyze_stock',
-  'analyze_strategy_candidate',
-  'analyze_position',
-  // v0.2 新增
-  'fetch_quote',
-  'batch_quote',
-  'fetch_index_quotes',
-  'fetch_intraday_minutes',
-  'get_stock_minute_bars',
-  'sync_quotes',
-  'sync_daily_bars',
-  'get_previous_closes',
+  // 1. 行情与盘面资讯（10）
   'search_stocks',
+  'get_stock_market_view',
+  'fetch_quote',
+  'fetch_index_quotes',
+  'fetch_sector_quotes',
   'compute_indicators',
-  // Strategy + 统一 Watchlist W2
-  'list_strategies',
-  'get_strategy',
-  'create_strategy',
-  'delete_strategy',
-  'create_strategy_version',
-  'compare_strategy_definitions',
-  'get_strategy_dsl_catalog',
-  'propose_strategy_version_draft',
-  'trial_strategy_version',
-  'trial_strategy',
-  'validate_strategy_version',
-  'publish_strategy_version',
-  'pause_strategy',
-  'resume_strategy',
-  'archive_strategy',
-  'run_strategy',
-  'create_strict_strategy_backtest',
-  'get_strict_strategy_backtest',
-  'list_strict_strategy_backtests',
-  'list_strategy_runs',
-  'get_strategy_run',
-  'get_strategy_workspace',
-  'list_strategy_result_views',
-  'compare_strategy_runs',
-  'strategy_signals_by_stock',
-  // Strategy Phase B：调度、真实表现补全与事实型 AI 洞察
-  'list_pending_strategy_observations',
-  'complete_strategy_observations',
-  'get_signal_observation_stats',
-  'get_strategy_insight_facts',
-  'generate_strategy_insight',
-  // Strategy + 统一 Watchlist W3
+  'limit_up_ladder',
+  'dragon_tiger_list',
+  'northbound_flow',
+  'fetch_news',
+  // 2. 股票池（4）
   'list_watchlists',
   'get_watchlist',
   'create_watchlist',
-  'update_watchlist',
-  'archive_watchlist',
-  'add_watchlist_member',
-  'add_watchlist_members',
-  'update_watchlist_member',
-  'archive_watchlist_member',
-  'list_watchlist_changes',
-  'list_strategy_watchlist_subscriptions',
-  'subscribe_strategy_to_watchlist',
-  'unsubscribe_strategy_from_watchlist',
-  // Strategy + 统一 Watchlist W4
-  'list_alert_plans',
-  'create_alert_plan',
-  'update_alert_plan',
-  'delete_alert_plan',
-  'delete_advice',
-  'send_notification',
-  'market_outlook',
-  // v0.5 新增
-  'add_trade',
-  'add_holding',
-  'update_holding',
-  'close_holding',
-  'save_trading_plan',
-  // v0.5 W4：confidence 自校准
-  'get_confidence_calibration',
-  'list_watch_triggers',
-  'get_watch_status',
-  // v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.2）新增
-  'set_watch_trigger_feedback',
-  // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
-  'create_research_document',
-  'list_research_documents',
-  'get_research_document',
-  'search_research_documents',
-  'sync_stock_universe',
-  'get_market_data_status',
-  'get_ashare_sentiment',
-  'list_workflow_runs',
-  'get_strategy_reliability_summary',
-  // Vibe A 股报告迁移 Phase 1
-  'get_report',
-  'list_reports',
-  'render_report',
-  'delete_report',
-  // Phase 1：连板天梯
-  'limit_up_ladder',
-  'limit_up_ladder_compare',
-  // 龙虎榜（只读）
-  'dragon_tiger_list',
-  // 北向资金历史流（只读）
-  'northbound_flow',
-  // 财经要闻（只读）
-  'fetch_news',
-  // 行业板块行情（只读）
-  'fetch_sector_quotes',
-  // 持久化 AI 对话会话
-  'create_chat_session',
-  'list_chat_sessions',
-  'get_chat_session',
-  'rename_chat_session',
-  'delete_chat_session',
-  'append_chat_message',
-  // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
-  'get_stock_market_view',
-  'get_stock_universe_status',
-  // v0.10 账户绩效与组合归因
-  'create_portfolio_cash_flow',
-  'create_portfolio_corporate_action',
+  'update_watchlist_members',
+  // 3. 策略与回测（6）
+  'list_strategies',
+  'get_strategy',
+  'save_strategy_version',
+  'run_strategy',
+  'run_strategy_backtest',
+  'get_strategy_signals',
+  // 4. 账户与持仓组合（5）
+  'get_account_overview',
   'get_account_performance',
-  'list_account_performance_snapshots',
-  'audit_account_performance_snapshots',
-  // MVP3 账户级决策与复盘
-  'list_decision_reviews',
+  'list_trades',
+  'add_trade',
+  'update_holding',
+  // 5. 研究、建议与报告（6）
+  'analyze_stock',
+  'analyze_position',
+  'get_advice',
+  'search_research_documents',
+  'save_research_document',
   'save_decision_review',
+  // 6. 交易计划与盯盘预警（3）
+  'list_watch_plans',
+  'save_trading_plan',
+  'save_alert_plan',
 ] as const;
 
-describe('toolRegistry', () => {
-  it(`注册全部 ${EXPECTED_TOOL_NAMES.length} 个 tool`, () => {
+/** 已从公共注册表移除、保留为 Application Service / 内部 tool 的旧名。 */
+const RETIRED_TOOL_NAMES = [
+  'add_holding',
+  'add_watchlist_member',
+  'add_watchlist_members',
+  'analyze_strategy_candidate',
+  'append_chat_message',
+  'archive_strategy',
+  'archive_watchlist',
+  'archive_watchlist_member',
+  'audit_portfolio_performance_snapshots',
+  'batch_quote',
+  'close_holding',
+  'compare_strategy_definitions',
+  'compare_strategy_runs',
+  'complete_strategy_observations',
+  'create_account',
+  'create_alert_plan',
+  'create_chat_session',
+  'create_portfolio_cash_flow',
+  'create_portfolio_corporate_action',
+  'create_research_document',
+  'create_strategy',
+  'create_strategy_version',
+  'create_strict_strategy_backtest',
+  'delete_advice',
+  'delete_alert_plan',
+  'delete_chat_session',
+  'delete_report',
+  'delete_strategy',
+  'evaluate_trading_plan_budget',
+  'fetch_intraday_minutes',
+  'generate_strategy_insight',
+  'get_ashare_sentiment',
+  'get_account',
+  'get_account_facts',
+  'get_advice_stats',
+  'get_chat_session',
+  'get_confidence_calibration',
+  'get_decision_loop_review',
+  'get_holding',
+  'get_market_data_status',
+  'get_previous_closes',
+  'get_report',
+  'get_research_document',
+  'get_signal_observation_stats',
+  'get_stock_minute_bars',
+  'get_stock_universe_status',
+  'get_strategy_decision_cycles',
+  'get_strategy_dsl_catalog',
+  'get_strategy_insight_facts',
+  'get_strategy_reliability_summary',
+  'get_strategy_run',
+  'get_strategy_workspace',
+  'get_strict_strategy_backtest',
+  'get_trading_plan',
+  'get_watch_status',
+  'limit_up_ladder_compare',
+  'list_accounts',
+  'list_alert_plans',
+  'list_chat_sessions',
+  'list_decision_reviews',
+  'list_holdings',
+  'list_pending_strategy_observations',
+  'list_portfolio_performance_snapshots',
+  'list_reports',
+  'list_research_documents',
+  'list_strategy_result_views',
+  'list_strategy_runs',
+  'list_strategy_watchlist_subscriptions',
+  'list_strict_strategy_backtests',
+  'list_trading_plans',
+  'list_watch_triggers',
+  'list_watchlist_changes',
+  'list_workflow_runs',
+  'market_outlook',
+  'pause_strategy',
+  'propose_strategy_version_draft',
+  'publish_strategy_version',
+  'reconcile_account_cash',
+  'rename_chat_session',
+  'render_report',
+  'resume_strategy',
+  'send_notification',
+  'set_watch_trigger_feedback',
+  'strategy_signals_by_stock',
+  'subscribe_strategy_to_watchlist',
+  'sync_daily_bars',
+  'sync_quotes',
+  'sync_stock_universe',
+  'trial_strategy',
+  'trial_strategy_version',
+  'unsubscribe_strategy_from_watchlist',
+  'update_account',
+  'update_alert_plan',
+  'update_watchlist',
+  'update_watchlist_member',
+  'validate_strategy_version',
+] as const;
+
+describe('toolRegistry（34 核心 Agent Tool）', () => {
+  it(`恰好注册 ${EXPECTED_TOOL_NAMES.length} 个 tool，名字与设计 §5.2 一致`, () => {
     const all = toolRegistry.all();
+    expect(all).toHaveLength(34);
     expect(all).toHaveLength(EXPECTED_TOOL_NAMES.length);
-    expect(all.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
+    expect(all.map((tool) => tool.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
+    expect(new Set(all.map((tool) => tool.name)).size).toBe(34);
   });
 
   it('get(name) 命中 / 未命中', () => {
     expect(toolRegistry.get('analyze_stock')?.sideEffect).toBe('advice');
     expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
     expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('add_trade')?.sideEffect).toBe('write');
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 
-  it('get_stock_minute_bars 声明 external + write 组合能力', () => {
-    expect(toolRegistry.get('get_stock_minute_bars')?.requiredCapabilities).toEqual([
-      'external',
-      'write',
-    ]);
-  });
-
-  it('已退役的 fundamental 管线 tool 不再注册', () => {
-    for (const name of [
-      'get_financial_facts',
-      'sync_financial_facts',
-      'get_fundamental_score',
-      'run_fundamental_score',
-    ]) {
+  it('已移出公共注册表的 96 个旧 tool 不再注册（保留为 Application Service）', () => {
+    for (const name of RETIRED_TOOL_NAMES) {
       expect(toolRegistry.get(name), name).toBeUndefined();
     }
+    expect(RETIRED_TOOL_NAMES.length).toBe(96);
+    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(130);
   });
 
-  it('已退役的研究域泡沫 tool 不再注册', () => {
+  it('legacy、内部 commit/sync/migration tool 不进入公共 registry', () => {
     for (const name of [
-      'get_research_embedding_status',
-      'rebuild_research_embeddings',
-      'search_research_documents_hybrid',
-      'evaluate_research_embeddings',
-      'create_research_hypothesis_version',
-      'list_research_hypothesis_versions',
-      'get_research_vault_remote_sync_status',
-      'list_research_topics',
-      'get_research_topic',
-      'build_research_brief',
-      'get_stock_research_view',
-      'sync_research_vault',
-      'create_research_topic',
-      'import_local_research_document',
-      'import_remote_research_document',
-      'link_research_document',
-      'archive_research_topic',
-      'research_investment_directions',
-      'get_investment_workspace',
-      'save_investment_consensus',
-      'set_investment_tracking',
-      'get_investment_candidates',
-    ]) {
-      expect(toolRegistry.get(name), name).toBeUndefined();
-    }
-  });
-
-  it('已退役的 Strategy 泡沫 tool 不再注册', () => {
-    for (const name of [
-      'get_strategy_pit_universe',
-      'get_strategy_evaluation_session',
-      'list_strategy_evaluation_days',
-      'start_strategy_evaluation_session',
-      'record_strategy_evaluation_day',
-      'finish_strategy_evaluation_session',
-      'resume_strategy_evaluation_session',
-      'cancel_strategy_evaluation_session',
-      'export_strategy_manifest',
-      'validate_strategy_manifest',
-      'import_strategy_manifest',
-      'list_strategy_autonomy_actions',
-      'confirm_strategy_autonomy_action',
-      'reject_strategy_autonomy_action',
-      'get_strategy_schedule',
-      'set_strategy_schedule',
-      'renew_strategy_schedule_claim',
-      'prepare_strategy_data',
-      'get_strategy_recommendation_preflight_history',
-      'generate_strategy_recommendations',
-      'run_local_selector_research',
-      'assess_adaptive_personality',
-      'create_strategy_observation_candidates',
-      'get_strategy_experiment_context',
-    ]) {
-      expect(toolRegistry.get(name), name).toBeUndefined();
-    }
-  });
-
-  it('Strategy 持久化外部 tools 要求 external + write，单版本与 paired trial 保持 external-only', () => {
-    for (const name of ['run_strategy']) {
-      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external', 'write']);
-    }
-    for (const name of [
-      'propose_strategy_version_draft',
-      'trial_strategy',
-      'trial_strategy_version',
-    ]) {
-      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external']);
-    }
-  });
-
-  it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
-    const names = toolRegistry.all().map((tool) => tool.name);
-    expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
-    for (const hidden of [
-      'sync_watchlist_source',
-      'sync_strategy_watchlist_subscriptions',
-      'pull_research_vault_git',
-      'record_workflow_run',
-      'save_report',
-      'save_watch_trigger',
-      'set_report_delivery_status',
-      'create_strategy_autonomy_action',
-      'transition_strategy_autonomy_action',
-      'generate_strategy_version_proposal',
+      'agent_run',
       'list_tactics',
       'get_tactic',
       'run_tactic',
       'list_stock_groups',
       'get_stock_group',
       'list_stock_pools',
-      'list_watch_plans',
+      'sync_watchlist_source',
+      'sync_strategy_watchlist_subscriptions',
+      'record_workflow_run',
+      'save_watch_trigger',
+      'generate_strategy_version_proposal',
+      'prepare_strategy_data',
+      'run_local_selector_research',
+      'assess_adaptive_personality',
     ]) {
-      expect(names).not.toContain(hidden);
+      expect(toolRegistry.get(name), name).toBeUndefined();
     }
+  });
+
+  it('sideEffect 分组与最终分类一致：read / external / advice / write', () => {
+    const sideEffects = new Set(toolRegistry.all().map((tool) => tool.sideEffect));
+    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'write']);
+
+    const namesOf = (sideEffect: string): string[] =>
+      toolRegistry
+        .all()
+        .filter((tool) => tool.sideEffect === sideEffect)
+        .map((tool) => tool.name)
+        .sort();
+
+    expect(namesOf('read')).toEqual([
+      'compute_indicators',
+      'dragon_tiger_list',
+      'get_account_overview',
+      'get_advice',
+      'get_strategy',
+      'get_strategy_signals',
+      'get_watchlist',
+      'limit_up_ladder',
+      'list_strategies',
+      'list_trades',
+      'list_watch_plans',
+      'list_watchlists',
+      'northbound_flow',
+      'search_research_documents',
+      'search_stocks',
+    ]);
+    expect(namesOf('external')).toEqual([
+      'fetch_index_quotes',
+      'fetch_news',
+      'fetch_quote',
+      'fetch_sector_quotes',
+      'get_account_performance',
+      'get_stock_market_view',
+      'run_strategy',
+    ]);
+    expect(namesOf('advice')).toEqual(['analyze_position', 'analyze_stock']);
+    expect(namesOf('write')).toEqual([
+      'add_trade',
+      'create_watchlist',
+      'run_strategy_backtest',
+      'save_alert_plan',
+      'save_decision_review',
+      'save_research_document',
+      'save_strategy_version',
+      'save_trading_plan',
+      'update_holding',
+      'update_watchlist_members',
+    ]);
+  });
+
+  it('add_trade 以 write 声明并由 MCP name denylist 拦截（trade 副作用永不暴露）', () => {
+    // §5.2 把 add_trade 标为 trade；Web 统一写入门只放行 read/advice/write，
+    // 因此以 write 声明并由 MCP 层 denylist + LUOOME_EXPOSE_TRADE 硬卡保证永不通过 MCP 暴露。
+    expect(toolRegistry.get('add_trade')?.sideEffect).toBe('write');
     expect(
       toolRegistry
         .all()
         .filter((tool) => tool.sideEffect === 'trade')
         .map((tool) => tool.name),
     ).toEqual([]);
+    expect(toolRegistry.get('list_trades')?.sideEffect).toBe('read');
   });
 
-  it('AUDIT：成交登记明确声明 trade 副作用', () => {
-    const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
-    // v0.2 末态：read / write / external / advice / trade
-    // 当前注册表：read / advice / external
-    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'write']);
-    const adviceTools = toolRegistry
-      .all()
-      .filter((t) => t.sideEffect === 'advice')
-      .map((t) => t.name)
-      .sort();
-    expect(adviceTools).toEqual([
-      'analyze_position',
-      'analyze_stock',
-      'analyze_strategy_candidate',
-      'market_outlook',
-    ]);
-    const externalTools = toolRegistry
-      .all()
-      .filter((t) => t.sideEffect === 'external')
-      .map((t) => t.name)
-      .sort();
-    expect(externalTools).toEqual([
-      'batch_quote',
-      'fetch_index_quotes',
-      'fetch_intraday_minutes',
-      'fetch_quote',
-      'generate_strategy_insight',
-      'get_account_performance',
-      'get_ashare_sentiment',
-      'get_stock_market_view',
-      'get_stock_minute_bars',
-      'list_strategy_result_views',
-      'propose_strategy_version_draft',
-      'run_strategy',
-      'send_notification',
-      'sync_daily_bars',
-      'sync_quotes',
-      'sync_stock_universe',
-      'trial_strategy',
-      'trial_strategy_version',
-    ]);
-    const writeTools = toolRegistry
-      .all()
-      .filter((t) => t.sideEffect === 'write')
-      .map((t) => t.name)
-      .sort();
-    expect(writeTools).toEqual([
-      'add_holding',
-      'add_trade',
-      'add_watchlist_member',
-      'add_watchlist_members',
-      'append_chat_message',
-      'archive_strategy',
-      'archive_watchlist',
-      'archive_watchlist_member',
-      'close_holding',
-      'complete_strategy_observations',
-      'create_account',
-      'create_alert_plan',
-      'create_chat_session',
-      'create_portfolio_cash_flow',
-      'create_portfolio_corporate_action',
-      'create_research_document',
-      'create_strategy',
-      'create_strategy_version',
-      'create_strict_strategy_backtest',
-      'create_watchlist',
-      'delete_advice',
-      'delete_alert_plan',
-      'delete_chat_session',
-      'delete_report',
-      'delete_strategy',
-      'pause_strategy',
-      'publish_strategy_version',
-      'rename_chat_session',
-      'resume_strategy',
-      'save_decision_review',
-      'save_trading_plan',
-      'set_watch_trigger_feedback',
-      'subscribe_strategy_to_watchlist',
-      'unsubscribe_strategy_from_watchlist',
-      'update_account',
-      'update_alert_plan',
-      'update_holding',
-      'update_watchlist',
-      'update_watchlist_member',
-      'validate_strategy_version',
-    ]);
+  it('关键 Tool 的 requiredCapabilities 与真实副作用一致', () => {
+    expect(toolRegistry.get('analyze_stock')?.requiredCapabilities).toEqual(['advice']);
+    expect(toolRegistry.get('analyze_position')?.requiredCapabilities).toEqual(['advice']);
+    expect(toolRegistry.get('run_strategy')?.requiredCapabilities).toEqual(['external', 'write']);
+    expect(toolRegistry.get('fetch_news')?.requiredCapabilities).toEqual(['external']);
+    expect(toolRegistry.get('fetch_sector_quotes')?.requiredCapabilities).toEqual(['external']);
+    expect(toolRegistry.get('get_stock_market_view')?.requiredCapabilities).toEqual(['external']);
+    expect(toolRegistry.get('add_trade')?.requiredCapabilities).toEqual(['write']);
+    expect(toolRegistry.get('save_research_document')?.requiredCapabilities).toEqual(['write']);
+    expect(toolRegistry.get('run_strategy_backtest')?.requiredCapabilities).toEqual(['write']);
   });
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {
     const mcp = toolRegistry.toMCP();
-    expect(mcp).toHaveLength(EXPECTED_TOOL_NAMES.length);
+    expect(mcp).toHaveLength(34);
     for (const descriptor of mcp) {
       expect(descriptor.name.length).toBeGreaterThan(0);
       expect(descriptor.description.length).toBeGreaterThan(0);
       expect(descriptor.inputSchema.type).toBe('object');
     }
-    const getAccount = mcp.find((d) => d.name === 'get_account');
-    expect(getAccount).toBeDefined();
-    const properties = getAccount?.inputSchema.properties as Record<string, unknown>;
+    const account = mcp.find((descriptor) => descriptor.name === 'get_account_overview');
+    expect(account).toBeDefined();
+    const properties = account?.inputSchema.properties as Record<string, unknown>;
     expect(Object.keys(properties)).toContain('accountId');
+    const strategy = mcp.find((descriptor) => descriptor.name === 'save_strategy_version');
+    expect(strategy).toBeDefined();
+    const strategyProps = strategy?.inputSchema.properties as Record<string, unknown>;
+    expect(Object.keys(strategyProps)).toContain('action');
   });
 
   it('toOpenAI()：function calling 格式', () => {
     const openai = toolRegistry.toOpenAI();
-    expect(openai).toHaveLength(EXPECTED_TOOL_NAMES.length);
+    expect(openai).toHaveLength(34);
     for (const descriptor of openai) {
       expect(descriptor.type).toBe('function');
       expect(descriptor.function.name.length).toBeGreaterThan(0);
@@ -400,18 +299,21 @@ describe('toolRegistry', () => {
     }
   });
 
-  it('toTypeScript()：包含全部 tool 名与声明骨架', () => {
-    const dts = toolRegistry.toTypeScript();
-    expect(dts).toContain('export type LuoomeToolName');
-    expect(dts).toContain('export declare const luoomeToolMeta');
+  it('toTypeScript()：包含全部 34 个 tool 名与声明骨架', () => {
+    const text = toolRegistry.toTypeScript();
+    expect(text).toContain('共 34 个 tool');
+    expect(text).toContain('export type LuoomeToolName =');
+    expect(text).toContain('export declare const luoomeToolMeta:');
     for (const name of EXPECTED_TOOL_NAMES) {
-      expect(dts).toContain(`'${name}'`);
+      expect(text, name).toContain(`'${name}'`);
     }
   });
 
-  it('createRegistry 重名 → 抛错（装配期防御）', () => {
-    const [first] = toolRegistry.all();
-    if (first === undefined) throw new Error('registry is empty');
-    expect(() => createRegistry([first, first])).toThrow(/duplicate tool name/);
+  it('createRegistry 重名 → 抛错（装配期防御）', async () => {
+    const { createRegistry } = await import('./registry.js');
+    const tool = toolRegistry.get('get_advice');
+    expect(tool).toBeDefined();
+    if (tool === undefined) return;
+    expect(() => createRegistry([tool, tool])).toThrow(/重复|duplicate/i);
   });
 });

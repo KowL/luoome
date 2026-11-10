@@ -86,10 +86,9 @@ const themesSection = (themes) => {
 const renderMarketSentiment = async () => {
   const container = $('#market-sentiment');
   if (container === null) return;
-  const r = await callApi('/api/tools/get_ashare_sentiment/call', {
-    method: 'POST',
-    body: JSON.stringify({ input: { date: shanghaiToday(), includeIndexes: false } }),
-  });
+  const r = await callApi(
+    `/api/market/sentiment?date=${encodeURIComponent(shanghaiToday())}&includeIndexes=false`,
+  );
   // 等待期间用户已选股 / 离开空态：不覆盖当前画面
   if ($('#market-empty')?.hidden !== false) return;
   if (!r.ok || r.data?.snapshot === undefined) {

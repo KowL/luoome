@@ -499,7 +499,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
           typeof value === 'object' &&
           (value as Record<PropertyKey, unknown>)[drizzleTableMarker] === true,
       );
-      expect(tables.length).toBeGreaterThanOrEqual(40);
+      expect(tables.length).toBeGreaterThanOrEqual(38);
       for (const [exportName, table] of tables) {
         const config = getTableConfig(table as Parameters<typeof getTableConfig>[0]);
         const quotedTable = JSON.stringify(config.name);
@@ -524,7 +524,45 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('已退役的 fundamental 管线表不再由启动迁移创建', () => {
+  it('存量 strategy_results 幂等搬入 strategy_runs.results_json，旧表保留不 DROP', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`CREATE TABLE IF NOT EXISTS strategy_results (
+        run_id TEXT NOT NULL, stock_id TEXT NOT NULL, selected INTEGER NOT NULL,
+        score REAL, rank INTEGER, rule_evaluations_json TEXT NOT NULL,
+        evidence_json TEXT NOT NULL, data_as_of INTEGER NOT NULL,
+        PRIMARY KEY (run_id, stock_id)
+      )`);
+      handle.db.run(sql`INSERT INTO strategy_runs (
+        id, strategy_id, strategy_version_id, mode, coverage, data_as_of, started_at,
+        finished_at, status, scope, input_snapshot_json, provider_statuses_json, summary_json
+      ) VALUES (
+        'legacy-results-run', 'legacy-strategy', 'legacy-v1', 'scan', 'CN_A_SHARES_SH_SZ',
+        1782748800000, 1782748800000, 1782748800000, 'complete', 'operational',
+        '{"schemaVersion":2,"strategyVersionId":"legacy-v1","definitionHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evaluatorVersion":"test","coverage":"CN_A_SHARES_SH_SZ","stockIds":["600519.SH"],"stockIdChecksum":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestedBy":"manual"}',
+        '[]', NULL
+      )`);
+      handle.db.run(sql`INSERT INTO strategy_results VALUES (
+        'legacy-results-run', '600519.SH', 1, 50, 1,
+        '[{"ruleId":"rule-1","status":"matched","value":true,"evidence":["legacy"]}]',
+        '["legacy"]', 1782748800000
+      )`);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      expect(
+        handle.db.get(sql`SELECT name FROM sqlite_master WHERE name='strategy_results'`),
+      ).toBeDefined();
+      const results = await handle.repos.strategyRun.listResults('legacy-results-run');
+      expect(results).toMatchObject([
+        { runId: 'legacy-results-run', stockId: '600519.SH', selected: true, score: 50, rank: 1 },
+      ]);
+      expect(results[0]?.ruleEvaluations).toHaveLength(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('已退役的 fundamental 管线表与三段账本旧表不再由启动迁移创建', () => {
     const handle = createDrizzleRepos(':memory:');
     try {
       ensureSchema(handle.db);
@@ -534,7 +572,14 @@ describe('createDrizzleRepos / ensureSchema', () => {
             'financial_fact_revisions',
             'fundamental_score_versions',
             'fundamental_score_runs',
-            'fundamental_score_results'
+            'fundamental_score_results',
+            'holding_cash_adjustments',
+            'portfolio_cash_flows',
+            'portfolio_corporate_actions',
+            'strategy_results',
+            'stock_universe_snapshot_members',
+            'watchlist_sync_runs',
+            'membership_snapshots'
           )`,
         )
         .map((row) => row.name);
@@ -827,7 +872,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
         makeHolding('manual', { quantity: 100, availableQuantity: 100, avgCost: money(10) }),
       );
       handle.db.run(sql`ALTER TABLE accounts DROP COLUMN cash_balance`);
-      handle.db.run(sql`DROP TABLE holding_cash_adjustments`);
+      handle.db.run(sql`DROP TABLE account_ledger_entries`);
       handle.db.run(
         sql`CREATE TRIGGER reject_migration BEFORE UPDATE ON accounts BEGIN SELECT RAISE(ABORT, 'test migration failure'); END`,
       );
@@ -835,9 +880,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
       expect(
         handle.db.all<{ name: string }>(sql`PRAGMA table_info(accounts)`).map((row) => row.name),
       ).not.toContain('cash_balance');
-      expect(
-        handle.db.get(sql`SELECT name FROM sqlite_master WHERE name='holding_cash_adjustments'`),
-      ).toBeUndefined();
+      expect(await handle.repos.ledger.listHoldingAdjustments('acc-1')).toHaveLength(0);
       handle.db.run(sql`DROP TRIGGER reject_migration`);
       ensureSchema(handle.db);
       expect((await handle.repos.account.findById('acc-1'))?.cashBalance).toBe(99000);

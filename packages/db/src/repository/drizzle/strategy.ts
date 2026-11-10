@@ -8,6 +8,7 @@ import {
   type Strategy,
   type StrategyRepository,
   type StrategyResult,
+  StrategyResultSchema,
   type StrategyRun,
   type StrategyRunBundle,
   type StrategyRunRepository,
@@ -21,7 +22,6 @@ import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import {
   type Schema,
   strategies,
-  strategyResults,
   strategyRuns,
   strategySignals,
   strategyVersions,
@@ -30,7 +30,6 @@ import {
 type StrategyRow = typeof strategies.$inferSelect;
 type VersionRow = typeof strategyVersions.$inferSelect;
 type RunRow = typeof strategyRuns.$inferSelect;
-type ResultRow = typeof strategyResults.$inferSelect;
 type SignalRow = typeof strategySignals.$inferSelect;
 type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
 
@@ -134,24 +133,39 @@ const toRun = (row: RunRow): StrategyRun =>
     }),
   );
 
-const toResult = (row: ResultRow): StrategyResult => {
-  const stored = Array.isArray(row.ruleEvaluations)
-    ? { ruleEvaluations: row.ruleEvaluations }
-    : row.ruleEvaluations;
-  return {
-    runId: row.runId,
-    stockId: row.stockId,
-    selected: row.selected,
-    ...(row.score === null ? {} : { score: row.score }),
-    ...(row.rank === null ? {} : { rank: row.rank }),
-    ruleEvaluations: [...stored.ruleEvaluations],
-    ...(stored.scoringBreakdown === undefined
-      ? {}
-      : { scoringBreakdown: [...stored.scoringBreakdown] }),
-    evidence: [...row.evidence],
-    dataAsOf: row.dataAsOf,
-  };
-};
+/** §6：逐股明细存于 strategy_runs.results_json；读取时恢复为 StrategyResult。 */
+const toStoredResult = (result: StrategyResult): Readonly<Record<string, unknown>> => ({
+  runId: result.runId,
+  stockId: result.stockId,
+  selected: result.selected,
+  ...(result.score === undefined ? {} : { score: result.score }),
+  ...(result.rank === undefined ? {} : { rank: result.rank }),
+  ruleEvaluations: [...result.ruleEvaluations],
+  ...(result.scoringBreakdown === undefined
+    ? {}
+    : { scoringBreakdown: [...result.scoringBreakdown] }),
+  evidence: [...result.evidence],
+  dataAsOf: result.dataAsOf,
+});
+
+const sortResults = (results: readonly StrategyResult[]): StrategyResult[] =>
+  [...results].sort(
+    (left, right) =>
+      (left.rank === undefined ? 1 : 0) - (right.rank === undefined ? 1 : 0) ||
+      (left.rank ?? 0) - (right.rank ?? 0) ||
+      left.stockId.localeCompare(right.stockId),
+  );
+
+const parseStoredResults = (
+  runId: string,
+  stored: readonly Readonly<Record<string, unknown>>[] | null | undefined,
+): StrategyResult[] =>
+  sortResults(
+    (stored ?? []).flatMap((raw) => {
+      const parsed = StrategyResultSchema.safeParse({ ...raw, runId });
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
 
 const toSignal = (row: SignalRow): StrategySignal => ({
   id: row.id,
@@ -443,15 +457,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
 
   async removeByStrategyId(strategyId: string): Promise<void> {
     this.db.transaction((tx) => {
-      const runIds = tx
-        .select({ id: strategyRuns.id })
-        .from(strategyRuns)
-        .where(eq(strategyRuns.strategyId, strategyId))
-        .all()
-        .map((row) => row.id);
-      if (runIds.length > 0) {
-        tx.delete(strategyResults).where(inArray(strategyResults.runId, runIds)).run();
-      }
       tx.delete(strategySignals).where(eq(strategySignals.strategyId, strategyId)).run();
       tx.delete(strategyRuns).where(eq(strategyRuns.strategyId, strategyId)).run();
     });
@@ -542,39 +547,23 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   }
 
   async listResults(runId: string): Promise<readonly StrategyResult[]> {
-    return (
-      this.db
-        .select()
-        .from(strategyResults)
-        .where(eq(strategyResults.runId, runId))
-        // rank 为 NULL 的无排名结果排最后（与 memory 实现一致）。
-        .orderBy(
-          sql`${strategyResults.rank} IS NULL`,
-          asc(strategyResults.rank),
-          asc(strategyResults.stockId),
-        )
-        .all()
-        .map(toResult)
-    );
+    const row = this.db
+      .select({ resultsJson: strategyRuns.resultsJson })
+      .from(strategyRuns)
+      .where(eq(strategyRuns.id, runId))
+      .get();
+    return row === undefined ? [] : parseStoredResults(runId, row.resultsJson);
   }
 
   async listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
     if (runIds.length === 0) return [];
-    return (
-      this.db
-        .select()
-        .from(strategyResults)
-        .where(inArray(strategyResults.runId, [...runIds]))
-        // rank 为 NULL 的无排名结果排最后（与 listResults 一致）。
-        .orderBy(
-          asc(strategyResults.runId),
-          sql`${strategyResults.rank} IS NULL`,
-          asc(strategyResults.rank),
-          asc(strategyResults.stockId),
-        )
-        .all()
-        .map(toResult)
-    );
+    return this.db
+      .select({ id: strategyRuns.id, resultsJson: strategyRuns.resultsJson })
+      .from(strategyRuns)
+      .where(inArray(strategyRuns.id, [...runIds]))
+      .orderBy(asc(strategyRuns.id))
+      .all()
+      .flatMap((row) => parseStoredResults(row.id, row.resultsJson));
   }
 
   async signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]> {
@@ -698,6 +687,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       providerStatuses: [...bundle.run.providerStatuses],
       providerCoverage: bundle.run.providerCoverage ?? null,
       summary: bundle.run.summary ?? null,
+      resultsJson: bundle.results.map(toStoredResult),
       publication: bundle.run.publication ?? null,
       publicationStatus: bundle.run.publication?.status ?? null,
       error: bundle.run.error ?? null,
@@ -729,26 +719,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
       }
       tx.update(strategyRuns).set(runValues).where(eq(strategyRuns.id, bundle.run.id)).run();
-    }
-    for (const result of bundle.results) {
-      tx.insert(strategyResults)
-        .values({
-          runId: result.runId,
-          stockId: result.stockId,
-          selected: result.selected,
-          score: result.score ?? null,
-          rank: result.rank ?? null,
-          ruleEvaluations:
-            result.scoringBreakdown === undefined
-              ? [...result.ruleEvaluations]
-              : {
-                  ruleEvaluations: [...result.ruleEvaluations],
-                  scoringBreakdown: [...result.scoringBreakdown],
-                },
-          evidence: [...result.evidence],
-          dataAsOf: result.dataAsOf,
-        })
-        .run();
     }
     for (const signal of bundle.signals) {
       tx.insert(strategySignals)

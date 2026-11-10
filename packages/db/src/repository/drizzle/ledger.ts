@@ -14,15 +14,15 @@ import {
   InvariantError,
   type LedgerRepository,
   type Money,
+  money,
   PortfolioCashFlowSchema,
 } from '@luoome/core';
 import { and, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import {
+  accountLedgerEntries,
   accounts,
-  holdingCashAdjustments,
   holdings,
-  portfolioCashFlows,
   type Schema,
   trades,
 } from '../../schema/index.js';
@@ -63,16 +63,18 @@ export class DrizzleLedgerRepository implements LedgerRepository {
         const amount = cashImpactOfHoldingChange(input.previousHolding, input.holding);
         this.updateCash(tx, input.holding.accountId, amount);
         this.saveHolding(tx, input.holding);
-        tx.insert(holdingCashAdjustments)
+        tx.insert(accountLedgerEntries)
           .values({
             id: crypto.randomUUID(),
             accountId: input.holding.accountId,
+            entryKind: 'holding-adjustment',
             holdingId: input.holding.id,
             stockId: input.holding.stockId,
             amount,
             quantityDelta:
               activeHoldingQuantity(input.holding) - activeHoldingQuantity(input.previousHolding),
             occurredAt: input.occurredAt,
+            createdAt: input.occurredAt,
           })
           .run();
       },
@@ -84,15 +86,29 @@ export class DrizzleLedgerRepository implements LedgerRepository {
     const flow = PortfolioCashFlowSchema.parse(input.flow);
     this.db.transaction(
       (tx) => {
-        if (tx.select().from(portfolioCashFlows).where(eq(portfolioCashFlows.id, flow.id)).get()) {
+        if (
+          tx.select().from(accountLedgerEntries).where(eq(accountLedgerEntries.id, flow.id)).get()
+        ) {
           throw new InvariantError('资金流水已记录，不能重复结算现金');
         }
         const account = this.account(tx, flow.accountId);
         if (account.currency !== flow.currency)
           throw new InvariantError('资金流水币种与账户不一致');
         this.updateCash(tx, flow.accountId, cashImpactOfCashFlow(flow));
-        tx.insert(portfolioCashFlows)
-          .values({ ...flow, stockId: flow.stockId ?? null, note: flow.note ?? null })
+        tx.insert(accountLedgerEntries)
+          .values({
+            id: flow.id,
+            accountId: flow.accountId,
+            entryKind: 'cash-flow',
+            occurredAt: flow.occurredAt,
+            amount: flow.amount,
+            currency: flow.currency,
+            stockId: flow.stockId ?? null,
+            flowKind: flow.kind,
+            source: flow.source,
+            note: flow.note ?? null,
+            createdAt: flow.createdAt,
+          })
           .run();
       },
       { behavior: 'immediate' },
@@ -102,9 +118,23 @@ export class DrizzleLedgerRepository implements LedgerRepository {
   async listHoldingAdjustments(accountId: string): Promise<readonly HoldingCashAdjustment[]> {
     return this.db
       .select()
-      .from(holdingCashAdjustments)
-      .where(eq(holdingCashAdjustments.accountId, accountId))
-      .all();
+      .from(accountLedgerEntries)
+      .where(
+        and(
+          eq(accountLedgerEntries.accountId, accountId),
+          eq(accountLedgerEntries.entryKind, 'holding-adjustment'),
+        ),
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        accountId: row.accountId,
+        holdingId: row.holdingId ?? '',
+        stockId: row.stockId ?? '',
+        amount: money(row.amount ?? 0),
+        quantityDelta: row.quantityDelta ?? 0,
+        occurredAt: row.occurredAt,
+      }));
   }
 
   private account(tx: DrizzleTransaction, accountId: string): Account {

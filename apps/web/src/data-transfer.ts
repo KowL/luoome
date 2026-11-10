@@ -23,7 +23,6 @@ import {
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
-  assertWatchlistSyncRunInvariants,
   assertWatchTriggerInvariants,
   assertWorkflowRunInvariants,
   ChatMessageSchema,
@@ -34,7 +33,6 @@ import {
   HoldingCashAdjustmentSchema,
   HoldingSchema,
   LimitUpLadderSchema,
-  MembershipSnapshotSchema,
   NotificationSchema,
   PortfolioCashFlowSchema,
   PortfolioCorporateActionSchema,
@@ -43,7 +41,6 @@ import {
   ResearchDocumentIndexSchema,
   SignalObservationSchema,
   StockSchema,
-  StrategyResultSchema,
   StrategyRunSchema,
   StrategySchema,
   StrategySignalSchema,
@@ -55,7 +52,6 @@ import {
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
   WatchlistSchema,
-  WatchlistSyncRunSchema,
   WatchRuleStateSchema,
   WatchTriggerSchema,
   WorkflowRunSchema,
@@ -76,21 +72,12 @@ export const DATA_TRANSFER_CATEGORIES = [
 export type DataTransferCategory = (typeof DATA_TRANSFER_CATEGORIES)[number];
 
 const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>> = {
-  portfolio: [
-    'accounts',
-    'stocks',
-    'holdings',
-    'trades',
-    'portfolio_cash_flows',
-    'holding_cash_adjustments',
-    'portfolio_corporate_actions',
-  ],
+  portfolio: ['accounts', 'stocks', 'holdings', 'trades', 'account_ledger_entries'],
   strategies: [
     'stocks',
     'strategies',
     'strategy_versions',
     'strategy_runs',
-    'strategy_results',
     'strategy_signals',
     'strategy_watchlist_subscriptions',
   ],
@@ -100,8 +87,6 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'strategy_watchlist_subscriptions',
     'watchlist_members',
     'watchlist_member_sources',
-    'watchlist_sync_runs',
-    'membership_snapshots',
     'alert_plans',
     'watch_triggers',
     'watch_rule_states',
@@ -294,6 +279,68 @@ const decisionReviewStorageSchema = z.object({
   created_at: z.number().int(),
   updated_at: z.number().int(),
 });
+const accountLedgerEntryRowSchema = z.object({
+  id: z.string().min(1),
+  accountId: z.string().min(1),
+  entryKind: z.enum(['holding-adjustment', 'cash-flow', 'corporate-action']),
+  occurredAt: z.coerce.date(),
+  amount: z.number().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  holdingId: z.string().nullable().optional(),
+  stockId: z.string().nullable().optional(),
+  quantityDelta: z.number().int().nullable().optional(),
+  flowKind: z.string().nullable().optional(),
+  actionKind: z.string().nullable().optional(),
+  ratio: z.number().nullable().optional(),
+  cashPerShare: z.number().nullable().optional(),
+  source: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  createdAt: z.coerce.date().nullable().optional(),
+});
+const validateAccountLedgerEntryRow: DomainValidator = (row) => {
+  const parsed = accountLedgerEntryRowSchema.parse(decodeStorageRow(row));
+  const createdAt = parsed.createdAt ?? parsed.occurredAt;
+  if (parsed.entryKind === 'holding-adjustment') {
+    HoldingCashAdjustmentSchema.parse({
+      id: parsed.id,
+      accountId: parsed.accountId,
+      holdingId: parsed.holdingId,
+      stockId: parsed.stockId,
+      amount: parsed.amount,
+      quantityDelta: parsed.quantityDelta,
+      occurredAt: parsed.occurredAt,
+    });
+    return;
+  }
+  if (parsed.entryKind === 'cash-flow') {
+    PortfolioCashFlowSchema.parse({
+      id: parsed.id,
+      accountId: parsed.accountId,
+      occurredAt: parsed.occurredAt,
+      kind: parsed.flowKind,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      ...(parsed.stockId == null ? {} : { stockId: parsed.stockId }),
+      source: parsed.source,
+      ...(parsed.note == null ? {} : { note: parsed.note }),
+      createdAt,
+    });
+    return;
+  }
+  PortfolioCorporateActionSchema.parse({
+    id: parsed.id,
+    accountId: parsed.accountId,
+    stockId: parsed.stockId,
+    occurredAt: parsed.occurredAt,
+    kind: parsed.actionKind,
+    ...(parsed.ratio == null ? {} : { ratio: parsed.ratio }),
+    ...(parsed.cashPerShare == null ? {} : { cashPerShare: parsed.cashPerShare }),
+    source: parsed.source,
+    ...(parsed.note == null ? {} : { note: parsed.note }),
+    createdAt,
+  });
+};
+
 const validateDecisionReviewStorageRow: DomainValidator = (row) => {
   const parsed = decisionReviewStorageSchema.parse(row);
   DecisionReviewSchema.parse({
@@ -314,15 +361,13 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
     return { ...omitNulls(row), closedAt: row.closedAt };
   }),
   trades: domainValidator(TradeSchema, assertTradeInvariants),
-  portfolio_cash_flows: domainValidator(PortfolioCashFlowSchema),
-  holding_cash_adjustments: domainValidator(HoldingCashAdjustmentSchema),
-  portfolio_corporate_actions: domainValidator(PortfolioCorporateActionSchema),
+  account_ledger_entries: validateAccountLedgerEntryRow,
+
   strategies: domainValidator(StrategySchema, assertStrategyInvariants),
   strategy_versions: domainValidator(StrategyVersionSchema, (value) =>
     assertStrategyVersionInvariants(value, 'migration'),
   ),
   strategy_runs: domainValidator(StrategyRunSchema, assertStrategyRunInvariants),
-  strategy_results: domainValidator(StrategyResultSchema),
   strategy_signals: domainValidator(StrategySignalSchema),
   strategy_watchlist_subscriptions: domainValidator(
     StrategyWatchlistSubscriptionSchema,
@@ -334,8 +379,6 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
     WatchlistMemberSourceSchema,
     assertWatchlistMemberSourceInvariants,
   ),
-  watchlist_sync_runs: domainValidator(WatchlistSyncRunSchema, assertWatchlistSyncRunInvariants),
-  membership_snapshots: domainValidator(MembershipSnapshotSchema),
   alert_plans: domainValidator(AlertPlanSchema, assertAlertPlanInvariants),
   watch_triggers: domainValidator(WatchTriggerSchema, assertWatchTriggerInvariants, (row) => {
     const normalized = omitNulls(row);

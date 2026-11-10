@@ -21,22 +21,57 @@ import {
 } from '../internal/build-advice.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
 import { resolveQuote } from '../internal/resolve-quotes.js';
+import { analyzeStrategyCandidateTool } from './analyze-strategy-candidate.js';
+import { MarketOutlookOutput, marketOutlookTool } from './market-outlook.js';
 
 const DAY_MS = 86_400_000;
 /** 拉日线的回看窗口。 */
 const BARS_LOOKBACK_DAYS = 120;
 
-export const AnalyzeStockInput = z.object({
-  /** Stock.id（如 '002594.SZ'）或纯代码（如 '002594'）。 */
-  stockId: z.string().min(1),
-  /** 附加备注（会进入 LLM 上下文，可选）。 */
-  notes: z.string().max(2000).optional(),
-});
+export const AnalyzeStockInput = z
+  .object({
+    /** scope=stock / strategy-candidate 时必填；Stock.id 或纯代码。 */
+    stockId: z.string().min(1).optional(),
+    /** 附加备注（会进入 LLM 上下文，可选）。 */
+    notes: z.string().max(2000).optional(),
+    /** stock=个股深度分析；market=市场/板块展望（合并 market_outlook）；strategy-candidate=策略候选分析。 */
+    scope: z.enum(['stock', 'market', 'strategy-candidate']).default('stock'),
+    theme: z.string().max(50).optional(),
+    watchlistIds: z.array(z.string().min(1)).max(50).optional(),
+    strategyId: z.string().min(1).optional(),
+    runId: z.string().min(1).optional(),
+    recommendationTrigger: z
+      .enum(['run', 'intraday-price', 'intraday-signal', 'manual'])
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.scope === 'stock' && input.stockId === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['stockId'], message: 'scope=stock 需要 stockId' });
+    }
+    if (input.scope === 'strategy-candidate') {
+      for (const [field, value] of [
+        ['strategyId', input.strategyId],
+        ['runId', input.runId],
+        ['stockId', input.stockId],
+      ] as const) {
+        if (value === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: 'scope=strategy-candidate 需要 strategyId/runId/stockId',
+          });
+        }
+      }
+    }
+  });
 
-export const AnalyzeStockOutput = z.object({
-  advice: AdviceSchema,
-  evidence: AdviceDataSnapshotSchema,
-});
+export const AnalyzeStockOutput = z.union([
+  z.object({
+    advice: AdviceSchema,
+    evidence: AdviceDataSnapshotSchema,
+  }),
+  MarketOutlookOutput,
+]);
 
 const resolveStock = async (input: string, ctx: ToolContext): Promise<Stock | null> => {
   const byId = await ctx.repos.stock.findById(input);
@@ -51,8 +86,35 @@ export const analyzeStockTool = defineTool({
   input: AnalyzeStockInput,
   output: AnalyzeStockOutput,
   handler: async (input, ctx) => {
-    const stock = await resolveStock(input.stockId, ctx);
-    if (stock === null) return errNotFound('Stock', input.stockId);
+    if (input.scope === 'market') {
+      const result = await marketOutlookTool.execute(
+        {
+          ...(input.theme === undefined ? {} : { theme: input.theme }),
+          ...(input.watchlistIds === undefined ? {} : { watchlistIds: input.watchlistIds }),
+          ...(input.notes === undefined ? {} : { notes: input.notes }),
+        },
+        ctx,
+      );
+      if (!result.ok) return result;
+      return result.data;
+    }
+    if (input.scope === 'strategy-candidate') {
+      const result = await analyzeStrategyCandidateTool.execute(
+        {
+          strategyId: input.strategyId as string,
+          runId: input.runId as string,
+          stockId: input.stockId as string,
+          ...(input.recommendationTrigger === undefined
+            ? {}
+            : { recommendationTrigger: input.recommendationTrigger }),
+        },
+        ctx,
+      );
+      if (!result.ok) return result;
+      return result.data;
+    }
+    const stock = await resolveStock(input.stockId as string, ctx);
+    if (stock === null) return errNotFound('Stock', input.stockId as string);
 
     // ARCHITECTURE §6.3：拉行情 + 指标 → 持仓上下文 → LLM 推理 → 组装 → 校验 → 持久化。
     // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。

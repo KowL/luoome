@@ -1,150 +1,37 @@
 import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
-import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
-import { addHoldingTool } from './tools/add-holding.js';
 import { addTradeTool } from './tools/add-trade.js';
-import {
-  createAlertPlanTool,
-  deleteAlertPlanTool,
-  listAlertPlansTool,
-  updateAlertPlanTool,
-} from './tools/alert-plan.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
-import { analyzeStrategyCandidateTool } from './tools/analyze-strategy-candidate.js';
-import { batchQuoteTool } from './tools/batch-quote.js';
-import {
-  appendChatMessageTool,
-  createChatSessionTool,
-  deleteChatSessionTool,
-  getChatSessionTool,
-  listChatSessionsTool,
-  renameChatSessionTool,
-} from './tools/chat-session.js';
-import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
-import { createAccountTool } from './tools/create-account.js';
-import { listDecisionReviewsTool, saveDecisionReviewTool } from './tools/decision-review.js';
-import { deleteAdviceTool } from './tools/delete-advice.js';
-import { deleteReportTool } from './tools/delete-report.js';
+import { saveDecisionReviewTool } from './tools/decision-review.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
-import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
-import { getAccountTool } from './tools/get-account.js';
+import { getAccountOverviewTool } from './tools/get-account-overview.js';
 import { getAdviceTool } from './tools/get-advice.js';
-import { getAdviceStatsTool } from './tools/get-advice-stats.js';
-import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
-import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
-import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
-import { getHoldingTool } from './tools/get-holding.js';
-import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
-import { getPreviousClosesTool } from './tools/get-previous-closes.js';
-import { getReportTool } from './tools/get-report.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
-import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
-import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
-import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
-import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
-import { getWatchStatusTool } from './tools/get-watch-status.js';
-import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
-import { listAccountsTool } from './tools/list-accounts.js';
-import { listHoldingsTool } from './tools/list-holdings.js';
-import { listReportsTool } from './tools/list-reports.js';
+import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
+import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
-import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
-import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
-import { marketOutlookTool } from './tools/market-outlook.js';
+import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
-import {
-  auditPortfolioPerformanceSnapshotsTool,
-  createPortfolioCashFlowTool,
-  createPortfolioCorporateActionTool,
-  getAccountPerformanceTool,
-  listPortfolioPerformanceSnapshotsTool,
-} from './tools/portfolio-performance.js';
-import { renderReportTool } from './tools/render-report.js';
-import {
-  createResearchDocumentTool,
-  getResearchDocumentTool,
-  listResearchDocumentsTool,
-  searchResearchDocumentsTool,
-} from './tools/research-vault.js';
-import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
+import { getAccountPerformanceTool } from './tools/portfolio-performance.js';
+import { searchResearchDocumentsTool } from './tools/research-vault.js';
+import { runStrategyTool } from './tools/run-strategy.js';
+import { runStrategyBacktestTool } from './tools/run-strategy-backtest.js';
+import { saveAlertPlanTool } from './tools/save-alert-plan.js';
+import { saveResearchDocumentTool } from './tools/save-research-document.js';
+import { saveStrategyVersionTool } from './tools/save-strategy-version.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
-import { sendNotificationTool } from './tools/send-notification.js';
-import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
-import {
-  completeStrategyObservationsTool,
-  getSignalObservationStatsTool,
-  listPendingStrategyObservationsTool,
-} from './tools/signal-observation.js';
-import {
-  createStrictStrategyBacktestTool,
-  getStrictStrategyBacktestTool,
-  listStrictStrategyBacktestsTool,
-} from './tools/strategy-backtest.js';
-import {
-  compareStrategyDefinitionsTool,
-  proposeStrategyVersionDraftTool,
-  trialStrategyVersionTool,
-} from './tools/strategy-definition.js';
-import { getStrategyDslCatalogTool } from './tools/strategy-experiment.js';
-import {
-  generateStrategyInsightTool,
-  getStrategyInsightFactsTool,
-} from './tools/strategy-insight.js';
-import {
-  archiveStrategyTool,
-  createStrategyTool,
-  createStrategyVersionTool,
-  deleteStrategyTool,
-  getStrategyTool,
-  listStrategiesTool,
-  pauseStrategyTool,
-  publishStrategyVersionTool,
-  resumeStrategyTool,
-  validateStrategyVersionTool,
-} from './tools/strategy-lifecycle.js';
-import {
-  compareStrategyRunsTool,
-  getStrategyRunTool,
-  getStrategyWorkspaceTool,
-  listStrategyResultViewsTool,
-  listStrategyRunsTool,
-  strategySignalsByStockTool,
-} from './tools/strategy-query.js';
-import {
-  listStrategyWatchlistSubscriptionsTool,
-  subscribeStrategyToWatchlistTool,
-  unsubscribeStrategyFromWatchlistTool,
-} from './tools/strategy-watchlist-subscription.js';
-import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
-import { syncQuotesTool } from './tools/sync-quotes.js';
-import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
-import {
-  evaluateTradingPlanBudgetTool,
-  getTradingPlanTool,
-  listTradingPlansTool,
-  saveTradingPlanTool,
-} from './tools/trading-plan.js';
-import { updateAccountTool } from './tools/update-account.js';
+import { getStrategyTool, listStrategiesTool } from './tools/strategy-lifecycle.js';
+import { saveTradingPlanTool } from './tools/trading-plan.js';
 import { updateHoldingTool } from './tools/update-holding.js';
-import {
-  addWatchlistMembersTool,
-  addWatchlistMemberTool,
-  archiveWatchlistMemberTool,
-  archiveWatchlistTool,
-  createWatchlistTool,
-  getWatchlistTool,
-  listWatchlistChangesTool,
-  listWatchlistsTool,
-  updateWatchlistMemberTool,
-  updateWatchlistTool,
-} from './tools/watchlist.js';
+import { updateWatchlistMembersTool } from './tools/update-watchlist-members.js';
+import { createWatchlistTool, getWatchlistTool, listWatchlistsTool } from './tools/watchlist.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -250,138 +137,51 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 
 /** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
-  listChatSessionsTool,
-  getChatSessionTool,
-  createChatSessionTool,
-  renameChatSessionTool,
-  deleteChatSessionTool,
-  appendChatMessageTool,
-  listAccountsTool,
-  createAccountTool,
-  updateAccountTool,
-  getAccountTool,
-  getAccountFactsTool,
-  reconcileAccountCashTool,
-  listHoldingsTool,
+  getAccountOverviewTool,
   listTradesTool,
-  getHoldingTool,
   getAdviceTool,
-  getAdviceStatsTool,
-  getConfidenceCalibrationTool,
-  getDecisionLoopReviewTool,
-  listDecisionReviewsTool,
   saveDecisionReviewTool,
-  getStrategyDecisionCyclesTool,
-  getWatchStatusTool,
   analyzeStockTool,
-  analyzeStrategyCandidateTool,
   analyzePositionTool,
   saveTradingPlanTool,
-  getTradingPlanTool,
-  listTradingPlansTool,
-  evaluateTradingPlanBudgetTool,
   fetchQuoteTool,
-  batchQuoteTool,
   fetchIndexQuotesTool,
-  fetchIntradayMinutesTool,
-  getStockMinuteBarsTool,
-  syncQuotesTool,
-  syncDailyBarsTool,
-  getPreviousClosesTool,
   searchStocksTool,
   computeIndicatorsTool,
   // Strategy / Watchlist / AlertPlan 是唯一公开研究与盯盘模型。
   listStrategiesTool,
   getStrategyTool,
-  createStrategyTool,
-  deleteStrategyTool,
-  createStrategyVersionTool,
-  compareStrategyDefinitionsTool,
-  getStrategyDslCatalogTool,
-  proposeStrategyVersionDraftTool,
-  trialStrategyVersionTool,
-  validateStrategyVersionTool,
-  publishStrategyVersionTool,
-  pauseStrategyTool,
-  resumeStrategyTool,
-  archiveStrategyTool,
+  saveStrategyVersionTool,
   runStrategyTool,
-  trialStrategyTool,
-  createPortfolioCashFlowTool,
-  createPortfolioCorporateActionTool,
   getAccountPerformanceTool,
-  listPortfolioPerformanceSnapshotsTool,
-  auditPortfolioPerformanceSnapshotsTool,
-  createStrictStrategyBacktestTool,
-  getStrictStrategyBacktestTool,
-  listStrictStrategyBacktestsTool,
-  listStrategyRunsTool,
-  getStrategyRunTool,
-  listStrategyResultViewsTool,
-  getStrategyWorkspaceTool,
-  compareStrategyRunsTool,
-  strategySignalsByStockTool,
-  listPendingStrategyObservationsTool,
-  completeStrategyObservationsTool,
-  getSignalObservationStatsTool,
-  getStrategyInsightFactsTool,
-  generateStrategyInsightTool,
+  runStrategyBacktestTool,
+  getStrategySignalsTool,
   // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列写入口；
   // 创建/转移为 workflow-only，不进公共 registry）
   listWatchlistsTool,
   getWatchlistTool,
   createWatchlistTool,
-  updateWatchlistTool,
-  archiveWatchlistTool,
-  addWatchlistMemberTool,
-  addWatchlistMembersTool,
-  updateWatchlistMemberTool,
-  archiveWatchlistMemberTool,
-  listWatchlistChangesTool,
-  listStrategyWatchlistSubscriptionsTool,
-  subscribeStrategyToWatchlistTool,
-  unsubscribeStrategyFromWatchlistTool,
-  listAlertPlansTool,
-  createAlertPlanTool,
-  updateAlertPlanTool,
-  deleteAlertPlanTool,
-  sendNotificationTool,
-  marketOutlookTool,
+  updateWatchlistMembersTool,
+  listWatchPlansTool,
+  saveAlertPlanTool,
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
   limitUpLadderTool,
-  limitUpLadderCompareTool,
   // 龙虎榜（只读；东方财富数据中心公开报表）
   dragonTigerListTool,
   // 北向资金历史流（只读；东方财富数据中心公开报表）
   northboundFlowTool,
   // 财经要闻（只读；东方财富公开新闻 API）
   fetchNewsTool,
+  // 研究笔记保存（合并 create_research_document + save_report）
+  saveResearchDocumentTool,
   // 行业板块行情（只读；东方财富 push2 板块列表公开 API）
   fetchSectorQuotesTool,
   // v0.5 新增：持仓 / 交易录入（write）
   addTradeTool,
-  addHoldingTool,
   updateHoldingTool,
-  closeHoldingTool,
-  listWatchTriggersTool,
   // v0.7 策略预警：触发反馈（write）
-  setWatchTriggerFeedbackTool,
   // ruo 迁移 Phase 1：研究档案 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
-  createResearchDocumentTool,
-  listResearchDocumentsTool,
-  getResearchDocumentTool,
   searchResearchDocumentsTool,
-  syncStockUniverseTool,
-  getMarketDataStatusTool,
-  getAShareSentimentTool,
-  listWorkflowRunsTool,
-  getStrategyReliabilitySummaryTool,
-  getReportTool,
-  listReportsTool,
-  renderReportTool,
-  deleteReportTool,
-  deleteAdviceTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
-  getStockUniverseStatusTool,
 ]);

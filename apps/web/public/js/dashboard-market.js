@@ -95,11 +95,10 @@ const fetchSentimentSnapshot = async (epoch) => {
   let day = firstProbeDay();
   for (let i = 0; i < 7; i += 1) {
     // 循环内逐日探测，必须串行（后一天依赖前一天结果）
-    const r = await callApi('/api/tools/get_ashare_sentiment/call', {
-      method: 'POST',
-      timeoutMs: 15000,
-      body: JSON.stringify({ input: { date: day, includeIndexes: false } }),
-    });
+    const r = await callApi(
+      `/api/market/sentiment?date=${encodeURIComponent(day)}&includeIndexes=false`,
+      { timeoutMs: 15000 },
+    );
     if (!marketCurrent(epoch)) return null;
     if (r.ok && r.data?.snapshot !== undefined) return r.data.snapshot;
     if (r.error?.kind !== 'invalid_input') return null;

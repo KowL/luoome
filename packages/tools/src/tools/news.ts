@@ -1,6 +1,13 @@
-import { FetchNewsQuerySchema, NewsListSchema } from '@luoome/core';
+import {
+  AShareSentimentSnapshotSchema,
+  dateInShanghai,
+  FetchNewsQuerySchema,
+  NewsListSchema,
+} from '@luoome/core';
+import { z } from 'zod';
 
 import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js';
+import { getAShareSentimentTool } from './get-ashare-sentiment.js';
 
 /**
  * 财经要闻工具（只读）。
@@ -11,8 +18,16 @@ import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js'
  *   空列表 → 正常返回（warnings=["empty-list"]）
  */
 
-export const FetchNewsInput = FetchNewsQuerySchema;
-export const FetchNewsOutput = NewsListSchema;
+export const FetchNewsInput = FetchNewsQuerySchema.extend({
+  /** 聚合 A 股情绪快照（原 get_ashare_sentiment）。 */
+  includeSentiment: z.boolean().default(false),
+  sentimentDate: z.string().date().optional(),
+});
+
+export const FetchNewsOutput = z.object({
+  ...NewsListSchema.shape,
+  sentiment: AShareSentimentSnapshotSchema.optional(),
+});
 
 export const fetchNewsTool = defineTool({
   name: 'fetch_news',
@@ -20,7 +35,7 @@ export const fetchNewsTool = defineTool({
     '分页拉取东方财富或同花顺财经要闻流：id/标题/摘要/分类/来源媒体/发布时间/原文链接，按发布时间倒序。' +
     '可选 category（宏观/市场/行业/公司/监管/海外/商品/资金/政策，标题关键词推断）与 keyword（标题/摘要包含）过滤，' +
     'source 选择数据源，page 从 1 开始，limit 默认 30 上限 100。空 items + warnings=["empty-list"] 表示无匹配。',
-  sideEffect: 'read',
+  sideEffect: 'external',
   input: FetchNewsInput,
   output: FetchNewsOutput,
   handler: async (input, ctx) => {
@@ -29,13 +44,22 @@ export const fetchNewsTool = defineTool({
         'fetch_news tool 需要 ctx.adapters.marketIntel?.news 注入；当前 surface 未配置 news manager',
       );
     }
-    const r = await ctx.adapters.marketIntel?.news.fetchNews(input);
+    const { includeSentiment: _includeSentiment, sentimentDate: _sentimentDate, ...query } = input;
+    const r = await ctx.adapters.marketIntel?.news.fetchNews(query);
     if (!r.ok || r.data === undefined) {
       // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
       const cause = r.error?.message ?? 'unknown error';
       return errAdapterError('news', cause, r.error?.recoverable ?? true);
     }
-    return r.data;
+    const output: z.infer<typeof FetchNewsOutput> = { ...r.data };
+    if (input.includeSentiment) {
+      const sentiment = await getAShareSentimentTool.execute(
+        { date: input.sentimentDate ?? dateInShanghai(ctx.clock()) },
+        ctx,
+      );
+      if (sentiment.ok) output.sentiment = sentiment.data.snapshot;
+    }
+    return output;
   },
 });
 

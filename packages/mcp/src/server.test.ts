@@ -2,7 +2,10 @@ import { toolRegistry } from '@luoome/tools';
 import { describe, expect, it } from 'vitest';
 import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
-describe('MCP sideEffect 暴露门控', () => {
+const namesOf = (tools: readonly { readonly name: string }[]): string[] =>
+  tools.map((tool) => tool.name);
+
+describe('MCP sideEffect 暴露门控（34 核心 Agent Tool）', () => {
   it('external 类 tool 仅在 LUOOME_EXPOSE_EXTERNAL 显式开启后暴露', () => {
     expect(toolRegistry.get('agent_run')).toBeUndefined();
     const quote = toolRegistry.get('fetch_quote');
@@ -10,38 +13,62 @@ describe('MCP sideEffect 暴露门控', () => {
 
     const defaults = resolveAllowedSideEffects({});
     expect(defaults.has('external')).toBe(false);
-    expect(selectMcpTools(toolRegistry.all(), defaults).map((tool) => tool.name)).not.toContain(
-      'fetch_quote',
-    );
+    expect(namesOf(selectMcpTools(toolRegistry.all(), defaults))).not.toContain('fetch_quote');
+    expect(namesOf(selectMcpTools(toolRegistry.all(), defaults))).toContain('search_stocks');
 
     const optedIn = resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' });
     expect(optedIn.has('external')).toBe(true);
-    expect(selectMcpTools(toolRegistry.all(), optedIn).map((tool) => tool.name)).toContain(
-      'fetch_quote',
-    );
+    expect(namesOf(selectMcpTools(toolRegistry.all(), optedIn))).toContain('fetch_quote');
   });
 
-  it('Strategy 持久化外部 tools 必须同时开启 write 与 external，草案/trial 仅需 external', () => {
-    const externalOnly = selectMcpTools(
-      toolRegistry.all(),
-      resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' }),
+  it('写/外部组合能力需同时 opt-in；write-only 工具在 write 开启后暴露', () => {
+    const externalOnly = namesOf(
+      selectMcpTools(
+        toolRegistry.all(),
+        resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' }),
+      ),
     );
-    const externalOnlyNames = externalOnly.map((tool) => tool.name);
-    expect(externalOnlyNames).not.toContain('run_strategy');
-    expect(externalOnlyNames).toContain('trial_strategy');
-    expect(externalOnlyNames).toContain('propose_strategy_version_draft');
-    expect(externalOnlyNames).toContain('trial_strategy_version');
+    expect(externalOnly).not.toContain('run_strategy');
+    expect(externalOnly).not.toContain('save_strategy_version');
+    expect(externalOnly).not.toContain('run_strategy_backtest');
+    expect(externalOnly).toContain('fetch_quote');
 
-    const both = selectMcpTools(
-      toolRegistry.all(),
-      resolveAllowedSideEffects({
-        LUOOME_EXPOSE_WRITE: 'true',
-        LUOOME_EXPOSE_EXTERNAL: 'true',
-      }),
+    const writeOnly = namesOf(
+      selectMcpTools(
+        toolRegistry.all(),
+        resolveAllowedSideEffects({ LUOOME_EXPOSE_WRITE: 'true' }),
+      ),
     );
-    const bothNames = both.map((tool) => tool.name);
-    expect(bothNames).toContain('run_strategy');
-    expect(bothNames).toContain('trial_strategy');
+    expect(writeOnly).toContain('save_strategy_version');
+    expect(writeOnly).toContain('run_strategy_backtest');
+    expect(writeOnly).toContain('update_watchlist_members');
+    expect(writeOnly).not.toContain('run_strategy');
+
+    const both = namesOf(
+      selectMcpTools(
+        toolRegistry.all(),
+        resolveAllowedSideEffects({
+          LUOOME_EXPOSE_WRITE: 'true',
+          LUOOME_EXPOSE_EXTERNAL: 'true',
+        }),
+      ),
+    );
+    expect(both).toContain('run_strategy');
+    expect(both).toContain('save_research_document');
+  });
+
+  it('add_trade 即使开启 write/external 也不通过 MCP 暴露', () => {
+    const names = namesOf(
+      selectMcpTools(
+        toolRegistry.all(),
+        resolveAllowedSideEffects({
+          LUOOME_EXPOSE_WRITE: 'true',
+          LUOOME_EXPOSE_EXTERNAL: 'true',
+        }),
+      ),
+    );
+    expect(names).not.toContain('add_trade');
+    expect(names).toContain('list_trades');
   });
 
   it('trade 硬卡不能由环境变量开启', () => {
@@ -50,16 +77,17 @@ describe('MCP sideEffect 暴露门控', () => {
     );
   });
 
-  it('默认发现新 read，write/external 需 opt-in，内部 commit/sync/migration 永不暴露', () => {
+  it('默认发现 34 中的 read/advice，write/external 需 opt-in，旧 App Service 名永不暴露', () => {
     const defaults = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}));
-    const defaultNames = defaults.map((tool) => tool.name);
+    const defaultNames = namesOf(defaults);
     expect(defaultNames).toContain('list_strategies');
     expect(defaultNames).toContain('list_watchlists');
-    expect(defaultNames).toContain('list_alert_plans');
-    expect(defaultNames).toContain('list_strategy_watchlist_subscriptions');
-    expect(defaultNames).not.toContain('create_strategy');
-    expect(defaultNames).not.toContain('subscribe_strategy_to_watchlist');
+    expect(defaultNames).toContain('get_account_overview');
+    expect(defaultNames).toContain('list_watch_plans');
+    expect(defaultNames).toContain('search_research_documents');
+    expect(defaultNames).not.toContain('save_strategy_version');
     expect(defaultNames).not.toContain('run_strategy');
+    expect(defaultNames).not.toContain('fetch_news');
 
     const optedIn = selectMcpTools(
       toolRegistry.all(),
@@ -68,20 +96,25 @@ describe('MCP sideEffect 暴露门控', () => {
         LUOOME_EXPOSE_EXTERNAL: 'true',
       }),
     );
-    const optedInNames = optedIn.map((tool) => tool.name);
-    expect(optedInNames).toContain('create_strategy');
+    const optedInNames = namesOf(optedIn);
+    expect(optedInNames).toContain('save_strategy_version');
     expect(optedInNames).toContain('run_strategy');
-    for (const internalName of [
+    for (const retired of [
+      'list_holdings',
+      'create_account',
+      'create_strategy',
+      'trial_strategy',
+      'propose_strategy_version_draft',
+      'list_alert_plans',
+      'list_trading_plans',
       'sync_watchlist_source',
-      'sync_strategy_watchlist_subscriptions',
-      'record_workflow_run',
       'save_report',
-      'save_watch_trigger',
-      'set_report_delivery_status',
+      'record_workflow_run',
     ]) {
-      expect(optedInNames).not.toContain(internalName);
+      expect(optedInNames, retired).not.toContain(retired);
     }
     expect(optedInNames.some((name) => name.startsWith('migration_'))).toBe(false);
     expect(optedIn.some((tool) => tool.sideEffect === 'trade')).toBe(false);
+    expect(optedIn.length).toBeLessThanOrEqual(toolRegistry.all().length);
   });
 });

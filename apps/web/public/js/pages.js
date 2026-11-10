@@ -1239,10 +1239,7 @@ const renderHoldings = async (setStatus) => {
   const [r, tradesResult, accountResult] = await Promise.all([
     callApi('/api/holdings'),
     callApi('/api/trades?limit=50'),
-    callApi('/api/tools/get_account/call', {
-      method: 'POST',
-      body: JSON.stringify({ input: {} }),
-    }),
+    callApi('/api/account'),
   ]);
   $('#holdings-stat-cash-balance').textContent = accountResult.ok
     ? fmtNum(accountResult.data.account.cashBalance)
@@ -2903,9 +2900,9 @@ const bindSettingsActions = () => {
         return;
       }
       createBtn.disabled = true;
-      const created = await callApi('/api/tools/create_account/call', {
+      const created = await callApi('/api/accounts', {
         method: 'POST',
-        body: JSON.stringify({ input: { name, currency, initialCapital } }),
+        body: JSON.stringify({ name, currency, initialCapital }),
       });
       if (!created.ok) {
         createBtn.disabled = false;

@@ -15,13 +15,10 @@ import type {
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
-  MembershipSnapshot,
   MinuteBarCompleteness,
   MinuteBarInterval,
   Money,
   Notification,
-  PortfolioCashFlow,
-  PortfolioCorporateAction,
   PortfolioPerformanceSnapshot,
   ProviderStatus,
   Quantity,
@@ -30,7 +27,6 @@ import type {
   StockCode,
   Strategy,
   StrategyEvaluatorIdentity,
-  StrategyResult,
   StrategyRun,
   StrategyRunPublication,
   StrategySignal,
@@ -46,7 +42,6 @@ import type {
   Watchlist,
   WatchlistMember,
   WatchlistMemberSource,
-  WatchlistSyncRun,
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
@@ -60,10 +55,6 @@ import {
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
-
-type StrategyResultEvaluationJson =
-  | StrategyResult['ruleEvaluations']
-  | Pick<StrategyResult, 'ruleEvaluations' | 'scoringBreakdown'>;
 
 /** 跨多表数据迁移登记；迁移逻辑由 repository-free runner 执行。 */
 export const schemaMigrations = sqliteTable('schema_migrations', {
@@ -197,19 +188,6 @@ export const stockUniverseSyncRuns = sqliteTable(
   }),
 );
 
-/** immutable PIT membership projection for each successful universe sync. */
-export const stockUniverseSnapshotMembers = sqliteTable(
-  'stock_universe_snapshot_members',
-  {
-    syncId: text('sync_id').notNull(),
-    stockId: text('stock_id').notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.syncId, t.stockId], name: 'stock_universe_snapshot_members_pk' }),
-    stockIdx: index('stock_universe_snapshot_members_stock_idx').on(t.stockId),
-  }),
-);
-
 /** Real provider 的按交易日天梯快照；replay 只读取此 PIT 表，不读取当前 manager。 */
 export const limitUpLadderSnapshots = sqliteTable(
   'limit_up_ladder_snapshots',
@@ -262,61 +240,46 @@ export const trades = sqliteTable('trades', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
-export const holdingCashAdjustments = sqliteTable('holding_cash_adjustments', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull(),
-  holdingId: text('holding_id').notNull(),
-  stockId: text('stock_id').notNull(),
-  amount: real('amount').$type<Money>().notNull(),
-  quantityDelta: integer('quantity_delta').notNull(),
-  occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
-});
-
-export const portfolioCashFlows = sqliteTable(
-  'portfolio_cash_flows',
+/**
+ * 账户资金与权益流水（§6：holding_cash_adjustments + portfolio_cash_flows +
+ * portfolio_corporate_actions 合并为单表，entry_kind 区分事实类型）。
+ * 旧表不再创建；存量库由启动迁移把数据搬入本表，旧表保留不 DROP。
+ */
+export const accountLedgerEntries = sqliteTable(
+  'account_ledger_entries',
   {
     id: text('id').primaryKey(),
     accountId: text('account_id').notNull(),
+    /** 'holding-adjustment' | 'cash-flow' | 'corporate-action' */
+    entryKind: text('entry_kind').notNull(),
     occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
-    kind: text('kind').$type<PortfolioCashFlow['kind']>().notNull(),
-    amount: real('amount').notNull(),
-    currency: text('currency').notNull(),
+    /** holding-adjustment 与 cash-flow 的金额；corporate-action 为空。 */
+    amount: real('amount'),
+    /** cash-flow 币种；其它类型为空。 */
+    currency: text('currency'),
+    holdingId: text('holding_id'),
     stockId: text('stock_id'),
-    source: text('source').$type<PortfolioCashFlow['source']>().notNull(),
-    note: text('note'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    accountOccurredIdx: index('portfolio_cash_flows_account_occurred_idx').on(
-      t.accountId,
-      t.occurredAt,
-    ),
-  }),
-);
-
-export const portfolioCorporateActions = sqliteTable(
-  'portfolio_corporate_actions',
-  {
-    id: text('id').primaryKey(),
-    accountId: text('account_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
-    kind: text('kind').$type<PortfolioCorporateAction['kind']>().notNull(),
+    quantityDelta: integer('quantity_delta'),
+    /** cash-flow 类型：deposit/withdrawal/... */
+    flowKind: text('flow_kind'),
+    /** corporate-action 类型：split/bonus/dividend */
+    actionKind: text('action_kind'),
     ratio: real('ratio'),
     cashPerShare: real('cash_per_share'),
-    source: text('source').$type<PortfolioCorporateAction['source']>().notNull(),
+    source: text('source'),
     note: text('note'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
-    accountOccurredIdx: index('portfolio_corporate_actions_account_occurred_idx').on(
+    accountOccurredIdx: index('account_ledger_entries_account_occurred_idx').on(
       t.accountId,
       t.occurredAt,
     ),
-    stockOccurredIdx: index('portfolio_corporate_actions_stock_occurred_idx').on(
+    stockOccurredIdx: index('account_ledger_entries_stock_occurred_idx').on(
       t.stockId,
       t.occurredAt,
     ),
+    kindIdx: index('account_ledger_entries_kind_idx').on(t.entryKind),
   }),
 );
 
@@ -605,6 +568,10 @@ export const strategyRuns = sqliteTable(
       NonNullable<StrategyRun['providerCoverage']>
     >(),
     summary: text('summary_json', { mode: 'json' }).$type<StrategyRun['summary']>(),
+    /** §6：strategy_results 并入 strategy_runs.results_json（逐股明细）。 */
+    resultsJson: text('results_json', { mode: 'json' }).$type<
+      readonly Readonly<Record<string, unknown>>[]
+    >(),
     publication: text('publication_json', { mode: 'json' }).$type<StrategyRunPublication>(),
     publicationStatus: text('publication_status').$type<StrategyRunPublication['status']>(),
     error: text('error'),
@@ -622,26 +589,6 @@ export const strategyRuns = sqliteTable(
       table.status,
       table.startedAt,
     ),
-  }),
-);
-
-export const strategyResults = sqliteTable(
-  'strategy_results',
-  {
-    runId: text('run_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    selected: integer('selected', { mode: 'boolean' }).notNull(),
-    score: real('score'),
-    rank: integer('rank'),
-    ruleEvaluations: text('rule_evaluations_json', { mode: 'json' })
-      .$type<StrategyResultEvaluationJson>()
-      .notNull(),
-    evidence: text('evidence_json', { mode: 'json' }).$type<StrategyResult['evidence']>().notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.runId, table.stockId], name: 'strategy_results_pk' }),
-    runRankIdx: index('strategy_results_run_rank_idx').on(table.runId, table.rank),
   }),
 );
 
@@ -891,58 +838,6 @@ export const watchlistMemberSources = sqliteTable(
     currentUnique: uniqueIndex('watchlist_sources_current_unique')
       .on(t.memberId, t.sourceKey)
       .where(sql`status <> 'ended'`),
-  }),
-);
-
-export const watchlistSyncRuns = sqliteTable(
-  'watchlist_sync_runs',
-  {
-    id: text('id').primaryKey(),
-    watchlistId: text('watchlist_id').notNull(),
-    sourceKind: text('source_kind').$type<WatchlistSyncRun['sourceKind']>().notNull(),
-    sourceKey: text('source_key').notNull(),
-    producerRunId: text('producer_run_id'),
-    status: text('status').$type<WatchlistSyncRun['status']>().notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-    enteredCount: integer('entered_count').notNull(),
-    exitedCount: integer('exited_count').notNull(),
-    unchangedCount: integer('unchanged_count').notNull(),
-    missingDimensions: text('missing_dimensions_json', { mode: 'json' })
-      .$type<WatchlistSyncRun['missingDimensions']>()
-      .notNull(),
-    error: text('error'),
-  },
-  (t) => ({
-    watchlistStartedIdx: index('watchlist_sync_runs_watchlist_started_idx').on(
-      t.watchlistId,
-      t.startedAt,
-    ),
-    producerIdx: index('watchlist_sync_runs_producer_idx').on(t.producerRunId),
-    producerSourceUnique: uniqueIndex('watchlist_sync_runs_producer_source_unique')
-      .on(t.watchlistId, t.sourceKey, t.producerRunId)
-      .where(sql`producer_run_id IS NOT NULL`),
-  }),
-);
-
-export const membershipSnapshots = sqliteTable(
-  'membership_snapshots',
-  {
-    id: text('id').primaryKey(),
-    syncRunId: text('sync_run_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    selected: integer('selected', { mode: 'boolean' }).notNull(),
-    change: text('change').$type<MembershipSnapshot['change']>().notNull(),
-    reason: text('reason').notNull(),
-    score: real('score'),
-    rank: integer('rank'),
-    evidence: text('evidence_json', { mode: 'json' }).$type<readonly string[]>().notNull(),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
-  },
-  (t) => ({
-    runStockUnique: uniqueIndex('membership_snapshots_run_stock_unique').on(t.syncRunId, t.stockId),
-    runChangeIdx: index('membership_snapshots_run_change_idx').on(t.syncRunId, t.change),
   }),
 );
 
@@ -1227,13 +1122,10 @@ export const schema = {
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
-  stockUniverseSnapshotMembers,
   limitUpLadderSnapshots,
   holdings,
   trades,
-  portfolioCashFlows,
-  holdingCashAdjustments,
-  portfolioCorporateActions,
+  accountLedgerEntries,
   portfolioPerformanceSnapshots,
   advices,
   adviceOutcomes,
@@ -1244,7 +1136,6 @@ export const schema = {
   strategies,
   strategyVersions,
   strategyRuns,
-  strategyResults,
   strategySignals,
   strategyBacktestRuns,
   signalObservations,
@@ -1257,8 +1148,6 @@ export const schema = {
   watchlists,
   watchlistMembers,
   watchlistMemberSources,
-  watchlistSyncRuns,
-  membershipSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
   researchDocumentIndex,
   researchDocumentFts,

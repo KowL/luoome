@@ -5,6 +5,7 @@
 
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
+import { resolveTool } from './app-service.js';
 
 import { createCliContext } from './context.js';
 import { isDaemonized, respawnDetached } from './daemon.js';
@@ -222,7 +223,7 @@ const cmdToolsCall = async (
   json: boolean,
   requiredInput: Readonly<Record<string, unknown>> = {},
 ): Promise<number> => {
-  const tool = toolRegistry.get(name);
+  const tool = resolveTool(name);
   if (tool === undefined) throw unknownToolError(name);
 
   const rawInput = flagString(flags, 'input') ?? '{}';
@@ -341,7 +342,7 @@ const cmdAdviceList = async (
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
 ): Promise<number> => {
-  const tool = toolRegistry.get('get_advice');
+  const tool = resolveTool('get_advice');
   if (tool === undefined) throw unknownToolError('get_advice');
 
   const input: Record<string, unknown> = { includeExpired: flags.has('include-expired') };
@@ -416,7 +417,7 @@ const cmdAdviceStats = async (
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
 ): Promise<number> => {
-  const tool = toolRegistry.get('get_advice_stats');
+  const tool = resolveTool('get_advice_stats');
   if (tool === undefined) throw unknownToolError('get_advice_stats');
 
   const input: Record<string, unknown> = {};
@@ -501,7 +502,7 @@ const cmdAdviceOutcome = async (
   const notes = flagString(flags, 'notes');
   const handle = await createCliContext();
   try {
-    const tool = toolRegistry.get('save_decision_review');
+    const tool = resolveTool('save_decision_review');
     if (tool === undefined) throw unknownToolError('save_decision_review');
     const res = await tool.execute(
       {

@@ -394,8 +394,8 @@ export const openCloseConfirm = (holding) => {
         void submitTool(
           btn,
           errorNode,
-          'close_holding',
-          { holdingId: holding.id },
+          'update_holding',
+          { mode: 'close', holdingId: holding.id },
           `已平仓 ${holding.stockId}`,
         );
       },

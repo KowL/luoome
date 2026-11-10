@@ -3,6 +3,7 @@ import {
   type AdviceQuery,
   AdviceSchema,
   AdviceSubjectKindSchema,
+  DecisionReviewSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -11,6 +12,7 @@ import {
   accountAdviceOutcomes,
   attachAccountAdviceOutcomes,
 } from '../internal/account-advice-outcomes.js';
+import { listDecisionReviewsTool } from './decision-review.js';
 
 export const GetAdviceInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -25,11 +27,15 @@ export const GetAdviceInput = z.object({
   /** 默认 false：已过期 advice（validUntil <= now）不返回（ARCHITECTURE §6.5）。 */
   includeExpired: z.boolean().default(false),
   limit: z.number().int().positive().max(500).default(50),
+  /** 同时附带该标的的决策复盘记录（合并原 list_decision_reviews）。 */
+  includeDecisionReviews: z.boolean().default(false),
+  decisionReviewLimit: z.number().int().positive().max(200).default(20),
 });
 
 export const GetAdviceOutput = z.object({
   advices: z.array(AdviceSchema),
   total: z.number().int().nonnegative(),
+  decisionReviews: z.array(DecisionReviewSchema).optional(),
 });
 
 export const getAdviceTool = defineTool({
@@ -56,6 +62,21 @@ export const getAdviceTool = defineTool({
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
     const advices = attachAccountAdviceOutcomes(raw, outcomes);
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
-    return { advices: z.array(AdviceSchema).parse(advices), total: advices.length };
+    const output: z.infer<typeof GetAdviceOutput> = {
+      advices: z.array(AdviceSchema).parse(advices),
+      total: advices.length,
+    };
+    if (input.includeDecisionReviews) {
+      const reviews = await listDecisionReviewsTool.execute(
+        {
+          accountId,
+          subjectKind: 'advice',
+          limit: input.decisionReviewLimit,
+        },
+        ctx,
+      );
+      if (reviews.ok) output.decisionReviews = [...reviews.data.records];
+    }
+    return output;
   },
 });

@@ -78,7 +78,7 @@ describe('Gateway callable manifest', () => {
     );
   });
 
-  it.each(['settle_chat_draft', 'add_trade', 'ensure_default_account', 'get_stock_market_view'])(
+  it.each(['settle_chat_draft', 'add_trade', 'ensure_default_account'])(
     'does not expose %s even when its name is supplied',
     (name) => {
       expect(() =>

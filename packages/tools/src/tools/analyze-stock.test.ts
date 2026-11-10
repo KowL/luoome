@@ -1,4 +1,4 @@
-import { STANDARD_DISCLAIMERS } from '@luoome/core';
+import { type Advice, type AdviceDataSnapshot, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -11,7 +11,10 @@ describe('analyze_stock', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const { advice, evidence } = result.data;
+    const { advice, evidence } = result.data as {
+      advice: Advice;
+      evidence: AdviceDataSnapshot;
+    };
     expect(advice.subjectKind).toBe('stock');
     expect(advice.subjectId).toBe('002594.SZ');
     expect(advice.sourceTool).toBe('analyze_stock');
@@ -66,7 +69,10 @@ describe('analyze_stock', () => {
     const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const { advice, evidence } = result.data;
+    const { advice, evidence } = result.data as {
+      advice: Advice;
+      evidence: AdviceDataSnapshot;
+    };
     const text = [
       advice.reasoning.premise,
       ...advice.reasoning.evidence,

@@ -13,7 +13,13 @@ import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/test
 import type { AgentCallableTool, Money, SourceStatus, ToolContext } from '@luoome/core';
 import { TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
+import {
+  addWatchlistMembersTool,
+  addWatchlistMemberTool,
+  createAlertPlanTool,
+  saveReportTool,
+  saveWatchTriggerTool,
+} from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
@@ -511,7 +517,7 @@ describe('MVP2 账户事实与交易计划 API', () => {
       exposeExternal: true,
     });
     const facts = await localApp.fetch(
-      new Request('http://test/api/tools/get_account_facts/call', {
+      new Request('http://test/api/account/facts', {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: 'http://test' },
         body: JSON.stringify({ input: {} }),
@@ -521,7 +527,7 @@ describe('MVP2 账户事实与交易计划 API', () => {
     expect((await facts.json()) as { ok: boolean }).toMatchObject({ ok: true });
 
     const reconcile = await localApp.fetch(
-      new Request('http://test/api/tools/reconcile_account_cash/call', {
+      new Request('http://test/api/account/cash-reconcile', {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: 'http://test' },
         body: JSON.stringify({ input: {} }),
@@ -1457,10 +1463,9 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       new Request(`http://test/api/strategies/${strategyId}/watchlists`),
     );
     expect(await active.json()).toMatchObject({ ok: true, data: { subscriptions: [] } });
-    const history = await callTool('list_strategy_watchlist_subscriptions', {
-      strategyId,
-      status: 'cancelled',
-    });
+    const history = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists?status=cancelled`),
+    );
     expect(await history.json()).toMatchObject({
       ok: true,
       data: { subscriptions: [{ strategyId, watchlistId, status: 'cancelled' }] },
@@ -2150,13 +2155,7 @@ describe('web tool 闸口：能力开关', () => {
     );
     expect(write.status).toBe(200);
 
-    const read = await tokenlessApp.fetch(
-      new Request('http://test/api/tools/list_holdings/call', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ input: {} }),
-      }),
-    );
+    const read = await tokenlessApp.fetch(new Request('http://test/api/holdings'));
     expect(read.status).toBe(200);
   });
 
@@ -2195,12 +2194,18 @@ describe('web tool 闸口：能力开关', () => {
   });
 
   it('create_account → 200 且可切换为空持仓账户', async () => {
-    const created = await callTool('create_account', {
-      id: 'web-real-account',
-      name: 'Web 真实账户',
-      currency: 'CNY',
-      initialCapital: 100_000,
-    });
+    const created = await app.fetch(
+      new Request('http://test/api/accounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'web-real-account',
+          name: 'Web 真实账户',
+          currency: 'CNY',
+          initialCapital: 100_000,
+        }),
+      }),
+    );
     expect(created.status).toBe(200);
     const selected = await app.fetch(
       new Request('http://test/api/account/select', {
@@ -2234,12 +2239,18 @@ describe('web tool 闸口：能力开关', () => {
 
   it('浏览器账户 header 使用 request-scoped 上下文，不串扰并发 tab', async () => {
     const accountId = `web-scoped-${globalThis.crypto.randomUUID()}`;
-    const created = await callTool('create_account', {
-      id: accountId,
-      name: 'Web request scoped account',
-      currency: 'CNY',
-      initialCapital: 50_000,
-    });
+    const created = await app.fetch(
+      new Request('http://test/api/accounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: accountId,
+          name: 'Web request scoped account',
+          currency: 'CNY',
+          initialCapital: 50_000,
+        }),
+      }),
+    );
     expect(created.status).toBe(200);
 
     const [first, second] = await Promise.all([
@@ -2301,7 +2312,7 @@ describe('web tool 闸口：能力开关', () => {
     expect(u.status).toBe(200);
     expect((await json(u)).ok).toBe(true);
 
-    const c = await callTool('close_holding', { holdingId: id });
+    const c = await callTool('update_holding', { mode: 'close', holdingId: id });
     expect(c.status).toBe(200);
     expect((await json(c)).ok).toBe(true);
 
@@ -2311,6 +2322,16 @@ describe('web tool 闸口：能力开关', () => {
       data: { holdings: Array<{ holding: { id: string } }> };
     };
     expect(afterBody.data.holdings.some((h) => h.holding.id === id)).toBe(false);
+  });
+});
+
+describe('web tool 闸口：34 Agent Tool 白名单', () => {
+  it('通用 tool 路由只放行 34 个 Agent Tool，App Service 旧名返回 not_found', async () => {
+    const legacy = await callTool('list_holdings', {});
+    expect(legacy.status).toBe(404);
+    expect(await json(legacy)).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+    const allowed = await callTool('get_advice', { limit: 1 });
+    expect(allowed.status).toBe(200);
   });
 });
 
@@ -2423,7 +2444,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
         body: JSON.stringify({ input: {} }),
       }),
     );
-    expect(draft.status).toBe(400);
+    expect(draft.status).toBe(404);
     const trial = await externalOnly.fetch(
       new Request('http://test/api/tools/trial_strategy_version/call', {
         method: 'POST',
@@ -2431,7 +2452,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
         body: JSON.stringify({ input: {} }),
       }),
     );
-    expect(trial.status).toBe(400);
+    expect(trial.status).toBe(404);
   });
 
   it('已退役的 agent_run 不再通过 web tool 路由暴露', async () => {
@@ -2454,7 +2475,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
   });
 
   it('fetch_intraday_minutes（白名单）→ 200（不支持时 supported:false 合法降级）', async () => {
-    const r = await callTool('fetch_intraday_minutes', { stockId: '002594.SZ' });
+    const r = await app.fetch(new Request('http://test/api/market/indices/intraday?code=000001'));
     expect(r.status).toBe(200);
     const body = (await json(r)) as { ok: boolean; data?: { supported: boolean } };
     expect(body.ok).toBe(true);
@@ -2462,7 +2483,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
   });
 
   it('get_stock_minute_bars（白名单）→ 200（不支持时 unavailable 合法降级）', async () => {
-    const r = await callTool('get_stock_minute_bars', { stockId: '002594.SZ' });
+    const r = await app.fetch(new Request('http://test/api/stocks/002594.SZ/minute-bars'));
     expect(r.status).toBe(200);
     const body = (await json(r)) as { ok: boolean; data?: { status: string } };
     expect(body.ok).toBe(true);
@@ -2470,12 +2491,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
   });
 
   it('get_stock_minute_bars 同时要求 external + write 能力', async () => {
-    const request = () =>
-      new Request('http://test/api/tools/get_stock_minute_bars/call', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
-      });
+    const request = () => new Request('http://test/api/stocks/002594.SZ/minute-bars');
 
     const externalOnly = createWebApp(await buildTestContext(), {
       exposeExternal: true,
@@ -2523,8 +2539,8 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     }
   });
 
-  it('batch_quote（白名单）→ 200', async () => {
-    const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
+  it('fetch_quote 批量（白名单）→ 200', async () => {
+    const r = await callTool('fetch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);
     expect((await json(r)).ok).toBe(true);
   });
@@ -2587,12 +2603,12 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.error?.kind).toBe('adapter_error');
   });
 
-  it('sync_quotes / send_notification（external 非白名单）→ 403', async () => {
+  it('sync_quotes / send_notification（34 外 App Service）→ 404', async () => {
     for (const name of ['sync_quotes', 'send_notification']) {
       const r = await callTool(name, {});
-      expect(r.status).toBe(403);
+      expect(r.status).toBe(404);
       const body = (await json(r)) as { ok: boolean; error?: { kind: string } };
-      expect(body.error?.kind).toBe('permission_denied');
+      expect(body.error?.kind).toBe('not_found');
     }
   });
 
@@ -2980,16 +2996,17 @@ describe('/api/chat：对话助手', () => {
       sessionId: 'draft-tool',
       messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建 Strategy' }] }],
     });
-    const draftTool = captured?.tools.find((item) => item.name === 'create_strategy');
+    const draftTool = captured?.tools.find((item) => item.name === 'save_strategy_version');
     const result = await draftTool?.execute({
-      id: 'chat-draft-strategy',
+      action: 'create-strategy',
+      strategyId: 'chat-draft-strategy',
       name: '对话草案 Strategy',
       description: '仅用于验证目标模型草案',
     });
     expect(result?.ok).toBe(true);
     expect(result?.output).toMatchObject({
       __luoomeDraft: true,
-      draft: { kind: 'strategy', tool: 'create_strategy' },
+      draft: { kind: 'strategy', tool: 'save_strategy_version' },
     });
     expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
   });
@@ -3063,10 +3080,10 @@ describe('/api/chat：对话助手', () => {
       messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '查持仓' }] }],
     });
     const names = captured?.tools.map((item) => item.name) ?? [];
-    expect(names).toContain('list_holdings');
+    expect(names).toContain('get_account_overview');
     expect(names).toContain('list_strategies');
     expect(names).toContain('list_watchlists');
-    expect(names).toContain('list_alert_plans');
+    expect(names).toContain('list_watch_plans');
     expect(names).not.toContain('list_tactics');
     expect(names).not.toContain('list_stock_groups');
     expect(names).not.toContain('list_stock_pools');
@@ -3111,7 +3128,7 @@ describe('/api/chat：对话助手', () => {
     const names = captured?.tools.map((item) => item.name) ?? [];
     expect(names).toContain('get_account_performance');
     expect(names).toContain('list_trades');
-    expect(names).toContain('get_market_data_status');
+    expect(names).toContain('list_watch_plans');
     expect(names).not.toContain('run_local_selector_research');
     expect(names).not.toContain('get_confidence_calibration');
     expect(captured?.instructions).toContain('持仓与风险');
@@ -3123,10 +3140,10 @@ describe('/api/chat：对话助手', () => {
     });
     const generalNames = captured?.tools.map((item) => item.name) ?? [];
     expect(generalNames).not.toContain('run_local_selector_research');
-    expect(generalNames).toContain('get_market_data_status');
+    expect(generalNames).toContain('fetch_news');
     expect(generalNames).toContain('save_decision_review');
-    expect(generalNames).toContain('create_research_document');
-    expect(generalNames).not.toContain('get_account_performance');
+    expect(generalNames).toContain('save_research_document');
+    expect(generalNames).not.toContain('add_trade');
   });
 
   it('数据健康正常时不注入 dataHealth，降级时注入问题项摘要', async () => {
@@ -3313,15 +3330,16 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
       ).status,
     ).toBe(200);
     expect(
-      (
-        await callTool('create_alert_plan', {
+      await createAlertPlanTool.execute(
+        {
           id: alertPlanId,
           name: '反馈 AlertPlan',
           watchlistId,
           rules: [{ id: 'feedback-rule', kind: 'price-level', side: 'above', level: 15 }],
-        })
-      ).status,
-    ).toBe(200);
+        },
+        appCtx,
+      ),
+    ).toMatchObject({ ok: true });
     const saved = await saveWatchTriggerTool.execute(
       {
         id: 'fb-test',
@@ -4105,7 +4123,9 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
       ['board-wl-c', '688981.SH'],
       ['board-wl-off', '600900.SH'],
     ] as const) {
-      expect((await callTool('add_watchlist_member', { watchlistId, stockId })).status).toBe(200);
+      expect(await addWatchlistMemberTool.execute({ watchlistId, stockId }, appCtx)).toMatchObject({
+        ok: true,
+      });
     }
     for (const [id, watchlistId, enabled] of [
       ['board-plan-a', 'board-wl-a', true],
@@ -4114,16 +4134,17 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
       ['board-plan-wl-off', 'board-wl-off', true],
     ] as const) {
       expect(
-        (
-          await callTool('create_alert_plan', {
+        await createAlertPlanTool.execute(
+          {
             id,
             name: `方案 ${id}`,
             watchlistId,
             rules: BOARD_RULES,
             enabled,
-          })
-        ).status,
-      ).toBe(200);
+          },
+          appCtx,
+        ),
+      ).toMatchObject({ ok: true });
     }
 
     const r = await app.fetch(new Request('http://test/api/dashboard'));
@@ -4463,14 +4484,21 @@ describe('dashboard 数据覆盖与失败状态', () => {
       });
       members.push({ stockId: id });
     }
-    await invoke('add_watchlist_members', { watchlistId: 'coverage-watchlist', members });
-    await invoke('create_alert_plan', {
-      id: 'coverage-plan',
-      name: '覆盖测试',
-      watchlistId: 'coverage-watchlist',
-      rules: [{ id: 'rule', kind: 'price-level', side: 'above', level: 15 }],
-      enabled: true,
-    });
+    expect(
+      await addWatchlistMembersTool.execute({ watchlistId: 'coverage-watchlist', members }, ctx),
+    ).toMatchObject({ ok: true });
+    expect(
+      await createAlertPlanTool.execute(
+        {
+          id: 'coverage-plan',
+          name: '覆盖测试',
+          watchlistId: 'coverage-watchlist',
+          rules: [{ id: 'rule', kind: 'price-level', side: 'above', level: 15 }],
+          enabled: true,
+        },
+        ctx,
+      ),
+    ).toMatchObject({ ok: true });
     const body = (await (
       await localApp.fetch(new Request('http://test/api/dashboard'))
     ).json()) as CoverageBody;
@@ -4637,11 +4665,11 @@ describe('AI 投资助手确认闭环', () => {
       createdAt: now,
       updatedAt: now,
     });
+    const trade = (await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId))[0];
+    if (trade === undefined) throw new Error('trade fixture missing');
     const input = {
-      accountId: ctx.user.defaultAccountId,
-      occurredAt: now.toISOString(),
-      kind: 'deposit',
-      amount: 1000,
+      subject: { kind: 'trade', id: trade.id },
+      content: { tradeIds: [trade.id], adviceFeedback: null, lessonTags: [], note: '确认草案' },
     };
     await ctx.repos.chat.saveMessage({
       id: 'approval-message',
@@ -4651,13 +4679,13 @@ describe('AI 投资助手确认闭环', () => {
       parts: [
         { type: 'step-start' },
         {
-          type: 'tool-create_portfolio_cash_flow',
+          type: 'tool-save_decision_review',
           toolCallId: 'approval-call',
           state: 'output-available',
           input,
           output: {
             __luoomeDraft: true,
-            draft: { tool: 'create_portfolio_cash_flow', kind: 'portfolio', input },
+            draft: { tool: 'save_decision_review', kind: 'review', input },
           },
         },
       ],
@@ -4675,20 +4703,19 @@ describe('AI 投资助手确认闭环', () => {
 
   it('确认只执行保存的输入，重建 Web app 后仍然幂等', async () => {
     const { ctx, local, request } = await setup();
-    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
     expect((await local.fetch(request({ approved: true, input: { amount: 9000 } }))).status).toBe(
       400,
     );
     const first = await (await local.fetch(request())).json();
     expect(first).toMatchObject({
       ok: true,
-      data: { status: 'succeeded', result: { ok: true, data: { flow: { amount: 1000 } } } },
+      data: { status: 'succeeded', result: { ok: true } },
     });
     const restarted = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
     expect(await (await restarted.fetch(request())).json()).toEqual(first);
-    expect(Number((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance)).toBe(
-      Number(before?.cashBalance) + 1000,
-    );
+    expect(
+      await ctx.repos.decisionReview.list({ accountId: ctx.user.defaultAccountId }),
+    ).toHaveLength(1);
   });
 
   it('确认与对话都要求 write + external、同源 Origin 和会话账户', async () => {
@@ -4755,7 +4782,7 @@ describe('AI 投资助手确认闭环', () => {
           body: JSON.stringify({ input }),
         }),
       );
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(404);
     }
   });
 
@@ -4792,12 +4819,9 @@ describe('AI 投资助手确认闭环', () => {
       parts: [
         { type: 'step-start' },
         {
-          type: 'tool-create_portfolio_cash_flow',
+          type: 'tool-save_decision_review',
           toolCallId: 'approval-call',
-          output: {
-            draftStatus: 'succeeded',
-            result: { ok: true, data: { flow: { amount: 1000 } } },
-          },
+          output: { draftStatus: 'succeeded', result: { ok: true } },
         },
       ],
     });

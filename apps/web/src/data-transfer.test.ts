@@ -249,7 +249,7 @@ describe('data transfer', () => {
     });
     source.close();
     const archive = exportDataArchive(sourcePath, ['portfolio']);
-    expect(archive.tables.holding_cash_adjustments).toHaveLength(2);
+    expect(archive.tables.account_ledger_entries).toHaveLength(2);
     const targetPath = databasePath();
     createDrizzleRepos(targetPath).close();
     importDataArchive(targetPath, archive);

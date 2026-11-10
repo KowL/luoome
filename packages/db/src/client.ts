@@ -4,10 +4,11 @@ import {
   ledgerCoverage,
   migrateLegacyTradingPlan,
   money,
+  PortfolioCashFlowSchema,
   type RepositoryRegistry,
   recomputeCashFromLedger,
 } from '@luoome/core';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
@@ -317,16 +318,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON stock_universe_sync_runs (source, coverage, finished_at)
   `);
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_universe_snapshot_members (
-      sync_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      PRIMARY KEY (sync_id, stock_id)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS stock_universe_snapshot_members_stock_idx
-    ON stock_universe_snapshot_members (stock_id)
-  `);
-  db.run(sql`
     CREATE TABLE IF NOT EXISTS limit_up_ladder_snapshots (
       date TEXT NOT NULL,
       source TEXT NOT NULL,
@@ -341,14 +332,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS limit_up_ladder_snapshots_source_date_idx
     ON limit_up_ladder_snapshots (source, date)
-  `);
-  // 存量库没有 immutable member projection 时，只能从最后一次 active membership
-  // 回填一个兼容快照；新 sync 会在 applySnapshot 事务内写入精确成员集合。
-  db.run(sql`
-    INSERT OR IGNORE INTO stock_universe_snapshot_members (sync_id, stock_id)
-    SELECT last_sync_id, stock_id
-    FROM stock_universe_memberships
-    WHERE state = 'active' AND last_sync_id IS NOT NULL
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
@@ -384,45 +367,39 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   ensureColumn(db, 'trades', 'advice_id', 'TEXT');
   ensureColumn(db, 'trades', 'strategy_version_id', 'TEXT');
+  // §6：holding_cash_adjustments + portfolio_cash_flows + portfolio_corporate_actions
+  // 合并为 account_ledger_entries（entry_kind 区分事实类型）；旧表不再创建、不 DROP。
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS portfolio_cash_flows (
+    CREATE TABLE IF NOT EXISTS account_ledger_entries (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL,
+      entry_kind TEXT NOT NULL,
       occurred_at INTEGER NOT NULL,
-      kind TEXT NOT NULL,
-      amount REAL NOT NULL,
-      currency TEXT NOT NULL,
+      amount REAL,
+      currency TEXT,
+      holding_id TEXT,
       stock_id TEXT,
-      source TEXT NOT NULL,
-      note TEXT,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS portfolio_cash_flows_account_occurred_idx
-    ON portfolio_cash_flows (account_id, occurred_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS portfolio_corporate_actions (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      occurred_at INTEGER NOT NULL,
-      kind TEXT NOT NULL,
+      quantity_delta INTEGER,
+      flow_kind TEXT,
+      action_kind TEXT,
       ratio REAL,
       cash_per_share REAL,
-      source TEXT NOT NULL,
+      source TEXT,
       note TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER
     )
   `);
   db.run(sql`
-    CREATE INDEX IF NOT EXISTS portfolio_corporate_actions_account_occurred_idx
-    ON portfolio_corporate_actions (account_id, occurred_at)
+    CREATE INDEX IF NOT EXISTS account_ledger_entries_account_occurred_idx
+    ON account_ledger_entries (account_id, occurred_at)
   `);
   db.run(sql`
-    CREATE INDEX IF NOT EXISTS portfolio_corporate_actions_stock_occurred_idx
-    ON portfolio_corporate_actions (stock_id, occurred_at)
+    CREATE INDEX IF NOT EXISTS account_ledger_entries_stock_occurred_idx
+    ON account_ledger_entries (stock_id, occurred_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS account_ledger_entries_kind_idx
+    ON account_ledger_entries (entry_kind)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS portfolio_performance_snapshots (
@@ -651,6 +628,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       provider_statuses_json TEXT NOT NULL,
       provider_coverage_json TEXT,
       summary_json TEXT,
+      results_json TEXT,
       publication_json TEXT,
       publication_status TEXT,
       error TEXT
@@ -658,6 +636,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   ensureColumn(db, 'strategy_runs', 'scope', "TEXT NOT NULL DEFAULT 'operational'");
   ensureColumn(db, 'strategy_runs', 'provider_coverage_json', 'TEXT');
+  ensureColumn(db, 'strategy_runs', 'results_json', 'TEXT');
   ensureColumn(db, 'strategy_runs', 'publication_json', 'TEXT');
   ensureColumn(db, 'strategy_runs', 'publication_status', 'TEXT');
   db.run(sql`
@@ -691,22 +670,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_runs_published_current_idx ON strategy_runs (strategy_id, scope, publication_status, status, started_at)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_results (
-      run_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      selected INTEGER NOT NULL,
-      score REAL,
-      rank INTEGER,
-      rule_evaluations_json TEXT NOT NULL,
-      evidence_json TEXT NOT NULL,
-      data_as_of INTEGER NOT NULL,
-      PRIMARY KEY (run_id, stock_id)
-    )
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_results_run_rank_idx ON strategy_results (run_id, rank)`,
   );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_signals (
@@ -935,43 +898,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sources_current_unique
     ON watchlist_member_sources (member_id, source_key) WHERE status <> 'ended'
   `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watchlist_sync_runs (
-      id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, source_kind TEXT NOT NULL,
-      source_key TEXT NOT NULL, producer_run_id TEXT, status TEXT NOT NULL, data_as_of INTEGER,
-      started_at INTEGER NOT NULL, finished_at INTEGER, entered_count INTEGER NOT NULL,
-      exited_count INTEGER NOT NULL, unchanged_count INTEGER NOT NULL,
-      missing_dimensions_json TEXT NOT NULL, error TEXT
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS watchlist_sync_runs_watchlist_started_idx
-    ON watchlist_sync_runs (watchlist_id, started_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS watchlist_sync_runs_producer_idx
-    ON watchlist_sync_runs (producer_run_id)
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sync_runs_producer_source_unique
-    ON watchlist_sync_runs (watchlist_id, source_key, producer_run_id)
-    WHERE producer_run_id IS NOT NULL
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS membership_snapshots (
-      id TEXT PRIMARY KEY, sync_run_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      selected INTEGER NOT NULL, change TEXT NOT NULL, reason TEXT NOT NULL,
-      score REAL, rank INTEGER, evidence_json TEXT NOT NULL, data_as_of INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS membership_snapshots_run_stock_unique
-    ON membership_snapshots (sync_run_id, stock_id)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS membership_snapshots_run_change_idx
-    ON membership_snapshots (sync_run_id, change)
-  `);
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：workflow 审计
   db.run(sql`
     CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -1062,6 +988,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
+  migrateLegacyLedgerEntries(db);
+  migrateLegacyStrategyResults(db);
   migrateAccountCashBalance(db);
   migrateLegacyTradingPlans(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
@@ -1404,6 +1332,44 @@ const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
   }
 };
 
+/**
+ * §6 存量迁移：把三张旧账本表的数据搬入 account_ledger_entries。
+ * 幂等（INSERT OR IGNORE + 旧表存在性检查）；旧表保留不 DROP。
+ */
+const migrateLegacyLedgerEntries = (db: DrizzleDb): void => {
+  const tableExists = (name: string): boolean =>
+    db.get(sql`SELECT name FROM sqlite_master WHERE type='table' AND name=${name}`) !== undefined;
+  db.transaction(
+    (tx) => {
+      if (tableExists('holding_cash_adjustments')) {
+        tx.run(sql`
+          INSERT OR IGNORE INTO account_ledger_entries
+            (id, account_id, entry_kind, occurred_at, amount, holding_id, stock_id, quantity_delta, created_at)
+          SELECT id, account_id, 'holding-adjustment', occurred_at, amount, holding_id, stock_id, quantity_delta, occurred_at
+          FROM holding_cash_adjustments
+        `);
+      }
+      if (tableExists('portfolio_cash_flows')) {
+        tx.run(sql`
+          INSERT OR IGNORE INTO account_ledger_entries
+            (id, account_id, entry_kind, occurred_at, amount, currency, stock_id, flow_kind, source, note, created_at)
+          SELECT id, account_id, 'cash-flow', occurred_at, amount, currency, stock_id, kind, source, note, created_at
+          FROM portfolio_cash_flows
+        `);
+      }
+      if (tableExists('portfolio_corporate_actions')) {
+        tx.run(sql`
+          INSERT OR IGNORE INTO account_ledger_entries
+            (id, account_id, entry_kind, occurred_at, stock_id, action_kind, ratio, cash_per_share, source, note, created_at)
+          SELECT id, account_id, 'corporate-action', occurred_at, stock_id, kind, ratio, cash_per_share, source, note, created_at
+          FROM portfolio_corporate_actions
+        `);
+      }
+    },
+    { behavior: 'immediate' },
+  );
+};
+
 /** 迁移检查、建表、历史调整和余额回填必须一起提交，避免中断后留下半迁移。 */
 const migrateAccountCashBalance = (db: DrizzleDb): void => {
   db.transaction(
@@ -1412,14 +1378,18 @@ const migrateAccountCashBalance = (db: DrizzleDb): void => {
       const hadCash = cols.some((column) => column.name === 'cash_balance');
       const hadAdjustments =
         tx.get(
-          sql`SELECT name FROM sqlite_master WHERE type='table' AND name='holding_cash_adjustments'`,
+          sql`SELECT name FROM sqlite_master WHERE type='table' AND name='account_ledger_entries'`,
+        ) !== undefined &&
+        tx.get(
+          sql`SELECT 1 AS present FROM account_ledger_entries WHERE entry_kind='holding-adjustment' LIMIT 1`,
         ) !== undefined;
       if (!hadCash)
         tx.run(sql`ALTER TABLE accounts ADD COLUMN cash_balance REAL NOT NULL DEFAULT 0`);
-      tx.run(sql`CREATE TABLE IF NOT EXISTS holding_cash_adjustments (
-      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, holding_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL, amount REAL NOT NULL, quantity_delta INTEGER NOT NULL,
-      occurred_at INTEGER NOT NULL
+      tx.run(sql`CREATE TABLE IF NOT EXISTS account_ledger_entries (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, entry_kind TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL, amount REAL, currency TEXT, holding_id TEXT,
+      stock_id TEXT, quantity_delta INTEGER, flow_kind TEXT, action_kind TEXT,
+      ratio REAL, cash_per_share REAL, source TEXT, note TEXT, created_at INTEGER
     )`);
       for (const account of tx.select().from(schema.accounts).all()) {
         const needsCash = !hadCash || account.cashBalance === null;
@@ -1434,11 +1404,34 @@ const migrateAccountCashBalance = (db: DrizzleDb): void => {
           .from(schema.trades)
           .where(eq(schema.trades.accountId, account.id))
           .all();
-        let holdingAdjustments = tx
-          .select()
-          .from(schema.holdingCashAdjustments)
-          .where(eq(schema.holdingCashAdjustments.accountId, account.id))
-          .all();
+        const adjustmentRows = (): ReadonlyArray<{
+          readonly id: string;
+          readonly accountId: string;
+          readonly holdingId: string | null;
+          readonly stockId: string | null;
+          readonly amount: number | null;
+          readonly quantityDelta: number | null;
+          readonly occurredAt: Date;
+        }> =>
+          tx
+            .select()
+            .from(schema.accountLedgerEntries)
+            .where(
+              and(
+                eq(schema.accountLedgerEntries.accountId, account.id),
+                eq(schema.accountLedgerEntries.entryKind, 'holding-adjustment'),
+              ),
+            )
+            .all();
+        let holdingAdjustments = adjustmentRows().map((row) => ({
+          id: row.id,
+          accountId: row.accountId,
+          holdingId: row.holdingId ?? '',
+          stockId: row.stockId ?? '',
+          amount: money(row.amount ?? 0),
+          quantityDelta: row.quantityDelta ?? 0,
+          occurredAt: row.occurredAt,
+        }));
         // 只能恢复当前未被交易覆盖的持仓成本；无法恢复的历史缺口仍由对账显式报告。
         const gaps = ledgerCoverage({ holdings, trades, holdingAdjustments });
         for (const gap of gaps) {
@@ -1447,29 +1440,55 @@ const migrateAccountCashBalance = (db: DrizzleDb): void => {
             (item) => item.stockId === gap.stockId && item.closedAt === null,
           );
           if (holding === undefined) continue;
-          tx.insert(schema.holdingCashAdjustments)
+          tx.insert(schema.accountLedgerEntries)
             .values({
               id: `legacy-holding:${holding.id}`,
               accountId: account.id,
+              entryKind: 'holding-adjustment',
               holdingId: holding.id,
               stockId: holding.stockId,
               amount: money(-gap.uncoveredQuantity * holding.avgCost),
               quantityDelta: gap.uncoveredQuantity,
               occurredAt: holding.openedAt,
+              createdAt: holding.openedAt,
             })
             .run();
         }
         if (needsCash) {
-          holdingAdjustments = tx
-            .select()
-            .from(schema.holdingCashAdjustments)
-            .where(eq(schema.holdingCashAdjustments.accountId, account.id))
-            .all();
+          holdingAdjustments = adjustmentRows().map((row) => ({
+            id: row.id,
+            accountId: row.accountId,
+            holdingId: row.holdingId ?? '',
+            stockId: row.stockId ?? '',
+            amount: money(row.amount ?? 0),
+            quantityDelta: row.quantityDelta ?? 0,
+            occurredAt: row.occurredAt,
+          }));
           const cashFlows = tx
             .select()
-            .from(schema.portfolioCashFlows)
-            .where(eq(schema.portfolioCashFlows.accountId, account.id))
-            .all();
+            .from(schema.accountLedgerEntries)
+            .where(
+              and(
+                eq(schema.accountLedgerEntries.accountId, account.id),
+                eq(schema.accountLedgerEntries.entryKind, 'cash-flow'),
+              ),
+            )
+            .all()
+            .flatMap((row) => {
+              const parsed = PortfolioCashFlowSchema.safeParse({
+                id: row.id,
+                accountId: row.accountId,
+                occurredAt: row.occurredAt,
+                kind: row.flowKind,
+                amount: row.amount,
+                currency: row.currency,
+                ...(row.stockId === null ? {} : { stockId: row.stockId }),
+                source: row.source,
+                ...(row.note === null ? {} : { note: row.note }),
+                createdAt: row.createdAt ?? row.occurredAt,
+              });
+              return parsed.success ? [parsed.data] : [];
+            });
           const cashBalance = recomputeCashFromLedger({
             account,
             holdings,
@@ -1487,6 +1506,61 @@ const migrateAccountCashBalance = (db: DrizzleDb): void => {
     },
     { behavior: 'immediate' },
   );
+};
+
+/**
+ * §6 存量迁移：把 strategy_results 逐股明细搬入 strategy_runs.results_json
+ * （仅在 results_json 为空时写入，幂等；旧表保留不 DROP）。
+ */
+const migrateLegacyStrategyResults = (db: DrizzleDb): void => {
+  const exists =
+    db.get(sql`SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_results'`) !==
+    undefined;
+  if (!exists) return;
+  const runIds = db
+    .all<{ run_id: string }>(sql`SELECT DISTINCT run_id FROM strategy_results`)
+    .map((row) => row.run_id);
+  for (const runId of runIds) {
+    const rows = db.all<{
+      run_id: string;
+      stock_id: string;
+      selected: number;
+      score: number | null;
+      rank: number | null;
+      rule_evaluations_json: string;
+      evidence_json: string;
+      data_as_of: number;
+    }>(
+      sql`SELECT run_id, stock_id, selected, score, rank, rule_evaluations_json, evidence_json, data_as_of
+          FROM strategy_results WHERE run_id = ${runId}
+          ORDER BY CASE WHEN rank IS NULL THEN 1 ELSE 0 END, rank, stock_id`,
+    );
+    if (rows.length === 0) continue;
+    const results = rows.map((row) => {
+      const stored = JSON.parse(row.rule_evaluations_json) as unknown;
+      const evaluation: { ruleEvaluations: unknown[]; scoringBreakdown?: unknown[] } =
+        Array.isArray(stored)
+          ? { ruleEvaluations: stored }
+          : (stored as { ruleEvaluations: unknown[]; scoringBreakdown?: unknown[] });
+      return {
+        runId: row.run_id,
+        stockId: row.stock_id,
+        selected: row.selected !== 0,
+        ...(row.score === null ? {} : { score: row.score }),
+        ...(row.rank === null ? {} : { rank: row.rank }),
+        ruleEvaluations: evaluation.ruleEvaluations,
+        ...(evaluation.scoringBreakdown === undefined
+          ? {}
+          : { scoringBreakdown: evaluation.scoringBreakdown }),
+        evidence: JSON.parse(row.evidence_json) as unknown[],
+        dataAsOf: new Date(row.data_as_of).toISOString(),
+      };
+    });
+    db.run(
+      sql`UPDATE strategy_runs SET results_json = ${JSON.stringify(results)}
+          WHERE id = ${runId} AND (results_json IS NULL OR results_json = 'null')`,
+    );
+  }
 };
 
 const migrateLegacyTradingPlans = (db: DrizzleDb): void => {

@@ -57,18 +57,34 @@ describe('drizzle AdviceRepository 读兼容', () => {
 });
 
 describe('drizzle StrategyResult 读兼容', () => {
-  it('存量 rule_evaluations_json 数组无 breakdown 时仍可读取', async () => {
+  it('逐股明细存于 strategy_runs.results_json，数组无 breakdown 时仍可读取', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {
       const ruleEvaluations = [
         { ruleId: 'rule-1', status: 'matched', value: true, evidence: ['legacy'] },
       ];
       handle.db.run(sql`
-        INSERT INTO strategy_results (
-          run_id, stock_id, selected, score, rank, rule_evaluations_json, evidence_json, data_as_of
+        INSERT INTO strategy_runs (
+          id, strategy_id, strategy_version_id, mode, coverage, data_as_of, started_at,
+          finished_at, status, scope, input_snapshot_json, provider_statuses_json,
+          results_json
         ) VALUES (
-          'legacy-result-run', '600519.SH', 1, 50, 1,
-          ${JSON.stringify(ruleEvaluations)}, ${JSON.stringify(['legacy'])}, 1782748800000
+          'legacy-result-run', 'legacy-strategy', 'legacy-v1', 'scan', 'CN_A_SHARES_SH_SZ',
+          1782748800000, 1782748800000, 1782748800000, 'complete', 'operational',
+          '{"schemaVersion":2,"strategyVersionId":"legacy-v1","definitionHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evaluatorVersion":"test","coverage":"CN_A_SHARES_SH_SZ","stockIds":["600519.SH"],"stockIdChecksum":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestedBy":"manual"}',
+          '[]',
+          ${JSON.stringify([
+            {
+              runId: 'legacy-result-run',
+              stockId: '600519.SH',
+              selected: true,
+              score: 50,
+              rank: 1,
+              ruleEvaluations,
+              evidence: ['legacy'],
+              dataAsOf: new Date(1782748800000).toISOString(),
+            },
+          ])}
         )
       `);
 
@@ -81,6 +97,11 @@ describe('drizzle StrategyResult 读兼容', () => {
         ruleEvaluations,
       });
       expect(results[0]).not.toHaveProperty('scoringBreakdown');
+      expect(
+        handle.db.get(
+          sql`SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_results'`,
+        ),
+      ).toBeUndefined();
     } finally {
       handle.close();
     }

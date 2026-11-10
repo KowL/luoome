@@ -6,14 +6,13 @@ import {
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
 } from '@luoome/core';
-import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lte, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
   type Schema,
   stocks,
   stockUniverseMemberships,
-  stockUniverseSnapshotMembers,
   stockUniverseSyncRuns,
 } from '../../schema/index.js';
 
@@ -160,10 +159,6 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             },
           })
           .run();
-        tx.insert(stockUniverseSnapshotMembers)
-          .values({ syncId: input.syncId, stockId })
-          .onConflictDoNothing()
-          .run();
       }
 
       let markedMissing = 0;
@@ -293,11 +288,31 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
   }
 
   async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
+    // §6：快照成员不再复制成表；按 first_seen_at / missing_since 还原该 sync observedAt 的 PIT 成员：
+    // 首次出现不晚于观察时点，且（未标记 missing 或 missing 发生在观察时点之后）。
+    const run = this.db
+      .select()
+      .from(stockUniverseSyncRuns)
+      .where(eq(stockUniverseSyncRuns.id, syncId))
+      .get();
+    if (run === undefined) return [];
+    const asOf = run.observedAt ?? run.finishedAt;
+    if (asOf === null) return [];
     return this.db
       .select({ stock: stocks })
-      .from(stockUniverseSnapshotMembers)
-      .innerJoin(stocks, eq(stocks.id, stockUniverseSnapshotMembers.stockId))
-      .where(eq(stockUniverseSnapshotMembers.syncId, syncId))
+      .from(stockUniverseMemberships)
+      .innerJoin(stocks, eq(stocks.id, stockUniverseMemberships.stockId))
+      .where(
+        and(
+          eq(stockUniverseMemberships.source, run.source),
+          eq(stockUniverseMemberships.coverage, run.coverage),
+          lte(stockUniverseMemberships.firstSeenAt, asOf),
+          or(
+            isNull(stockUniverseMemberships.missingSince),
+            gt(stockUniverseMemberships.missingSince, asOf),
+          ),
+        ),
+      )
       .orderBy(asc(stocks.id))
       .all()
       .map(({ stock: row }) => ({

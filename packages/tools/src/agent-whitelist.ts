@@ -4,7 +4,11 @@ import type { Registry } from './registry.js';
 export const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   'fetch_quote',
   'batch_quote',
+  'fetch_index_quotes',
+  'fetch_sector_quotes',
+  'fetch_news',
   'get_account_performance',
+  'get_stock_market_view',
 ]);
 
 export const buildAgentCallableTools = (
