@@ -52,6 +52,7 @@ coverage/
 # Misc
 *.tgz
 .cache/
+.tmp/
 
 .playwright-cli/
 .learnings/
