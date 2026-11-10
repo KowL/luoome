@@ -45,6 +45,7 @@
 |---|---|
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与单机多账户边界；首批已通过受控开发验收，后续能力按设计验证 |
 | [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
+| [领域收敛、去冗余与架构减负详细设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md) | 73 表收敛至 38 表、152 Tools 收敛至 34 核心 Agent Tools、移除手写内存库与超前空转模块的详细设计与分阶段计划 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
@@ -102,11 +103,11 @@
 
 - [个人订阅托管版详细设计（已退役）](./archive/hosted-personal-subscription-detailed-design.md)
 - [个人订阅托管版开发改造计划（已退役）](./archive/hosted-personal-subscription-development-plan.md)
-- [个人订阅托管版运行与恢复（已退役）](./archive/hosted-personal-subscription-runbook.md)
-- [个人订阅托管产品设计（已退役）](./archive/hosted-subscription-product-design.md)
-- [Hosted Facts v1 MVP（已退役）](./archive/hosted-facts-v1-mvp.md)
-- [Hosted Facts v1 技术设计（已退役）](./archive/hosted-facts-v1-technical-design.md)
-- [Hosted Facts v1 开发计划（已退役）](./archive/hosted-facts-v1-development-plan.md)
+- [个人订阅托管版运行与恢复（已退役）](./archive/hosted-personal-subscription.md)
+- [Hosted 每日自动服务产品需求（已退役）](./archive/hosted-daily-auto-service-v1.md)
+- [管理后台控制台产品需求（已退役）](./archive/admin-console-v1.md)
+- [支付渠道调研（已退役）](./archive/payment-channel-research.md)
+- [订阅定价产品需求（已退役）](./archive/subscription-pricing-v1.md)
 - [个人订阅托管版隔离验收](./archive/hosted-personal-subscription-fixture-acceptance.md) — 工程测试、浏览器、100 Tenant fixture 压测与尚未通过的真实渠道门禁
 
 - [v0.1 实施计划](./archive/plan.md)
