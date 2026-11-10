@@ -106,7 +106,7 @@ await setup.waitFor(() => frame().includes('confidence 校准') && frame().inclu
 const cal = frame();
 assert(cal.includes('confidence 校准'), '[c] 弹层标题应为「confidence 校准」');
 assert(cal.includes('总条数'), '[c] 弹层应包含总条数');
-assert(cal.includes('整体命中率'), '[c] 弹层应包含整体命中率');
+assert(cal.includes('填报盈利占比'), '[c] 弹层应包含填报盈利占比');
 assert(cal.includes('信心桶'), '[c] 弹层应包含信心桶表头');
 process.stderr.write('smoke: [c] confidence 校准弹层 OK\n');
 setup.mockInput.pressEscape();

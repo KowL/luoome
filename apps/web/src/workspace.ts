@@ -7,6 +7,7 @@ import {
   toolRegistry,
 } from '@luoome/tools';
 import { z } from 'zod';
+import { appServiceTool } from './http/app-service.js';
 
 export const DiscussionSubjectSchema = z.discriminatedUnion('kind', [
   z
@@ -28,7 +29,7 @@ export const workspaceRead = async (
   input: unknown,
   ctx: ToolContext,
 ): Promise<ToolResult<Record<string, unknown>>> => {
-  const tool = toolRegistry.get(name);
+  const tool = toolRegistry.get(name) ?? appServiceTool(name);
   if (tool === undefined)
     return { ok: false, error: { kind: 'not_found', entity: 'Tool', id: name } };
   return (await tool.execute(input, ctx)) as ToolResult<Record<string, unknown>>;

@@ -46,23 +46,6 @@ const asRecord = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
-/** tools/call 的 result → 解析 content[0].text 的 JSON；isError 直接抛错。 */
-const parseToolResultText = (result: unknown): Record<string, unknown> => {
-  const r = asRecord(result);
-  if (r.isError === true) {
-    throw new Error(`tool returned isError: ${JSON.stringify(r.content)}`);
-  }
-  const content = r.content;
-  if (!Array.isArray(content) || content.length === 0) {
-    throw new Error('tools/call result missing content');
-  }
-  const first = asRecord(content[0]);
-  if (typeof first.text !== 'string') {
-    throw new Error('tools/call content[0].text is not a string');
-  }
-  return asRecord(JSON.parse(first.text));
-};
-
 // ---------- 最小 MCP stdio 客户端（NDJSON 帧） ----------
 
 type ServerProc = Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
@@ -91,7 +74,15 @@ class McpStdioClient {
     const effectiveHome = home ?? mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
     const proc = Bun.spawn([process.execPath, indexPath], {
       cwd: repoRoot,
-      env: { ...process.env, LUOOME_HOME: effectiveHome, ...extraEnv },
+      env: {
+        ...process.env,
+        LUOOME_HOME: effectiveHome,
+        LUOOME_EXPOSE_WRITE: 'false',
+        LUOOME_EXPOSE_EXTERNAL: 'false',
+        LUOOME_EXPOSE_RESEARCH: 'false',
+        LUOOME_EXPOSE_TRADE: 'false',
+        ...extraEnv,
+      },
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -245,23 +236,18 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
     `tools/list 默认暴露面符合 selection policy（实际 ${actualNames.length}，预期 ${expectedNames.length}）`,
   );
   check(
-    actualNames.includes('list_holdings') && actualNames.includes('analyze_stock'),
-    'tools/list 含 list_holdings 与 analyze_stock',
+    actualNames.includes('get_account_overview') && actualNames.includes('analyze_stock'),
+    'tools/list 含 get_account_overview 与 analyze_stock',
   );
 
   if (!full) return;
 
-  const accountsOut = parseToolResultText(
-    await client.request('tools/call', { name: 'list_accounts', arguments: {} }),
-  );
-  const accounts = Array.isArray(accountsOut.accounts) ? accountsOut.accounts : [];
-  check(accounts.length === 0, 'tools/call list_accounts 在独立空库返回空事实（不注入样例账户）');
-  const holdingsResult = asRecord(
-    await client.request('tools/call', { name: 'list_holdings', arguments: {} }),
+  const overviewResult = asRecord(
+    await client.request('tools/call', { name: 'get_account_overview', arguments: {} }),
   );
   check(
-    holdingsResult.isError === true && JSON.stringify(holdingsResult.content).includes('not_found'),
-    '空库 list_holdings 明确返回 Account not_found',
+    overviewResult.isError === true && JSON.stringify(overviewResult.content).includes('not_found'),
+    '空库 get_account_overview 明确返回 Account not_found（不注入样例账户）',
   );
 
   const analyzeResult = asRecord(

@@ -19,8 +19,13 @@ import {
   GetAdviceOutput,
   GetAdviceStatsOutput,
   GetConfidenceCalibrationOutput,
+  getAdviceStatsTool,
+  getConfidenceCalibrationTool,
   ListAccountsOutput,
   ListHoldingsOutput,
+  listAccountsTool,
+  listHoldingsTool,
+  type Tool,
   toolRegistry,
 } from '@luoome/tools';
 import {
@@ -167,8 +172,15 @@ interface LineSpec {
 const describeError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const appServiceTools = new Map<string, Tool>([
+  [listAccountsTool.name, listAccountsTool],
+  [listHoldingsTool.name, listHoldingsTool],
+  [getAdviceStatsTool.name, getAdviceStatsTool],
+  [getConfidenceCalibrationTool.name, getConfidenceCalibrationTool],
+]);
+
 const callTool = async (name: string, input: unknown, ctx: ToolContext): Promise<unknown> => {
-  const tool = toolRegistry.get(name);
+  const tool = toolRegistry.get(name) ?? appServiceTools.get(name);
   if (tool === undefined) throw new Error(`tool "${name}" 未注册`);
   const result = await tool.execute(input, ctx);
   if (!result.ok) throw new Error(`${name} 失败: ${JSON.stringify(result.error)}`);
