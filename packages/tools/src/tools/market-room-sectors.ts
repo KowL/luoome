@@ -3,6 +3,7 @@ import {
   buildSectorIntradayRanking,
   dateInShanghai,
   type LimitUpLadder,
+  ladderOfSample,
   type MarketSnapshotBatch,
   marketRoomEmptyReason,
   SectorIntradayRankingSchema,
@@ -63,16 +64,33 @@ const emptyRanking = (input: {
   }),
 });
 
+/**
+ * 天梯事实：最新模式沿用当日快照；回放只用锚点批次时点及之前的天梯样本，
+ * 不拿之后才采集的那一份冒充当时状态。
+ */
 const readLimitUp = async (
   ctx: ToolContext,
-  tradingDate: string,
+  anchor: MarketSnapshotBatch,
+  asOf: Date | undefined,
 ): Promise<{ readonly ladder: LimitUpLadder | null; readonly error: string | null }> => {
   try {
-    const ladder = await ctx.repos.limitUpLadderSnapshot.findByDate({
-      date: tradingDate,
+    if (asOf === undefined) {
+      const ladder = await ctx.repos.limitUpLadderSnapshot.findByDate({
+        date: anchor.tradingDate,
+        source: LIMIT_UP_SOURCE,
+      });
+      return { ladder, error: null };
+    }
+    const sample = await ctx.repos.limitUpLadderSample.findAtOrBefore({
+      tradingDate: anchor.tradingDate,
       source: LIMIT_UP_SOURCE,
+      sampledAt: anchor.sampledAt,
     });
-    return { ladder, error: null };
+    const aligned =
+      sample !== null && sample.sampledAt.getTime() === anchor.sampledAt.getTime()
+        ? ladderOfSample(sample)
+        : null;
+    return { ladder: aligned, error: null };
   } catch (error) {
     return { ladder: null, error: error instanceof Error ? error.message : String(error) };
   }
@@ -122,7 +140,7 @@ const resolveWindowStarts = async (
 export const getMarketRoomSectorsTool = defineTool({
   name: 'get_market_room_sectors',
   description:
-    '读取板块盘中榜：行业 / 概念可切换，同一张榜给出日涨幅（相对前收的等权均值）与近 5 / 15 分钟窗口涨幅（窗口两端价格），可按三种口径分别排序；每行带上涨 / 下跌 / 平家数、有效成分与缺失成分数、封板数与窗口成交占比及口径说明，缺失一律标注不补零；只读不采集',
+    '读取板块盘中榜：行业 / 概念可切换，同一张榜给出日涨幅（相对前收的等权均值）与近 5 / 15 分钟窗口涨幅（窗口两端价格），可按三种口径分别排序；给定 at 时只读该时点及之前批次，并按当时生效的目录与成分计算；每行带上涨 / 下跌 / 平家数、有效成分与缺失成分数、封板数与窗口成交占比及口径说明，缺失一律标注不补零；只读不采集',
   sideEffect: 'read',
   input: GetMarketRoomSectorsInput,
   output: GetMarketRoomSectorsOutput,
@@ -134,19 +152,24 @@ export const getMarketRoomSectorsTool = defineTool({
     }
     const { anchor } = anchorResult;
 
-    const sectors = await ctx.repos.sectorCatalog.listSectors({ kinds: [input.kind] });
+    const sectors =
+      input.at === undefined
+        ? await ctx.repos.sectorCatalog.listSectors({ kinds: [input.kind] })
+        : await ctx.repos.sectorCatalog.listSectorsAsOf({ kinds: [input.kind], at: input.at });
     if (sectors.length === 0) {
       return emptyRanking({ ...base, reason: 'no_sector_catalog', latest: anchor });
     }
-    const members = await ctx.repos.sectorCatalog.listBySectors({
-      sectorIds: sectors.map((sector) => sector.id),
-    });
+    const sectorIds = sectors.map((sector) => sector.id);
+    const members =
+      input.at === undefined
+        ? await ctx.repos.sectorCatalog.listBySectors({ sectorIds })
+        : await ctx.repos.sectorCatalog.listBySectorsAsOf({ sectorIds, at: input.at });
     if (members.length === 0) {
       return emptyRanking({ ...base, reason: 'no_members', latest: anchor });
     }
 
     const windowStarts = await resolveWindowStarts(ctx, anchor);
-    const limitUp = await readLimitUp(ctx, anchor.tradingDate);
+    const limitUp = await readLimitUp(ctx, anchor, input.at);
     return {
       ranking: buildSectorIntradayRanking({
         kind: input.kind,

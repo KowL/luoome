@@ -82,6 +82,7 @@ export class DrizzleMarketRoomEventRepository implements MarketRoomEventReposito
       readonly sectorId?: string;
       readonly from?: Date;
       readonly to?: Date;
+      readonly knownAt?: Date;
       readonly order?: 'asc' | 'desc';
       readonly limit?: number;
     } = {},
@@ -96,6 +97,9 @@ export class DrizzleMarketRoomEventRepository implements MarketRoomEventReposito
     }
     if (input.from !== undefined) conditions.push(gte(marketRoomEvents.sampledAt, input.from));
     if (input.to !== undefined) conditions.push(lte(marketRoomEvents.sampledAt, input.to));
+    if (input.knownAt !== undefined) {
+      conditions.push(lte(marketRoomEvents.recordedAt, input.knownAt));
+    }
 
     const direction = input.order === 'desc' ? desc : asc;
     const query = this.db

@@ -113,7 +113,7 @@ const resolveWindowStarts = async (
 export const getMarketRoomAmountDistributionTool = defineTool({
   name: 'get_market_room_amount_distribution',
   description:
-    '读取成交分布：按 5 / 15 分钟窗口给出行业或概念板块的窗口成交占比（成分累计成交额增量 ÷ 同期全市场去重增量）、较上一窗口的百分点环比与 CR3 集中度；每行带有效成分 / 缺失 / 停牌退市计数与口径说明，分母无效、窗口缺样本、跨午休或批次不完整时一律返回 null + 原因，绝不补零；概念成分可重叠，占比不可加总；只读不采集',
+    '读取成交分布：给定 at 时只读该时点及之前批次并按当时生效的成分计算；按 5 / 15 分钟窗口给出行业或概念板块的窗口成交占比（成分累计成交额增量 ÷ 同期全市场去重增量）、较上一窗口的百分点环比与 CR3 集中度；每行带有效成分 / 缺失 / 停牌退市计数与口径说明，分母无效、窗口缺样本、跨午休或批次不完整时一律返回 null + 原因，绝不补零；概念成分可重叠，占比不可加总；只读不采集',
   sideEffect: 'read',
   input: GetMarketRoomAmountDistributionInput,
   output: GetMarketRoomAmountDistributionOutput,
@@ -129,13 +129,18 @@ export const getMarketRoomAmountDistributionTool = defineTool({
     }
     const { anchor } = anchorResult;
 
-    const sectors = await ctx.repos.sectorCatalog.listSectors({ kinds: [input.kind] });
+    const sectors =
+      input.at === undefined
+        ? await ctx.repos.sectorCatalog.listSectors({ kinds: [input.kind] })
+        : await ctx.repos.sectorCatalog.listSectorsAsOf({ kinds: [input.kind], at: input.at });
     if (sectors.length === 0) {
       return emptyDistribution({ ...base, reason: 'no_sector_catalog', latest: anchor });
     }
-    const members = await ctx.repos.sectorCatalog.listBySectors({
-      sectorIds: sectors.map((sector) => sector.id),
-    });
+    const sectorIds = sectors.map((sector) => sector.id);
+    const members =
+      input.at === undefined
+        ? await ctx.repos.sectorCatalog.listBySectors({ sectorIds })
+        : await ctx.repos.sectorCatalog.listBySectorsAsOf({ sectorIds, at: input.at });
     if (members.length === 0) {
       return emptyDistribution({ ...base, reason: 'no_members', latest: anchor });
     }

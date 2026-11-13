@@ -237,10 +237,18 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   });
 
   /**
-   * 作战室总览（ticket #36）：只读最近已发布批次 + 既有情绪 / 指数契约。
+   * 作战室总览（ticket #36 / #43）：只读已发布批次 + 既有情绪 / 指数契约。
+   *
+   * 参数：
+   *   at (可选) ISO 时间；回放时取该时点及之前最近的已发布批次，只返回当时已知的内容，
+   *            且不读取实时指数与情绪（缺失照常标注）
+   *
    * 刷新只读，不触发采集；各维度独立标注完整性与缺失原因。
    */
-  app.get('/api/market/room/overview', () => callTool('get_market_room_overview', {}));
+  app.get('/api/market/room/overview', (c) => {
+    const at = c.req.query('at');
+    return callTool('get_market_room_overview', at === undefined || at.trim() === '' ? {} : { at });
+  });
 
   /**
    * 作战室板块盘中榜（ticket #38）：行业 / 概念可切换，日涨幅与 5 / 15 分钟窗口涨幅分别排序。
@@ -355,8 +363,9 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    * 作战室盘中事件（ticket #42）：扩散 / 分化 / 换位，按检测时点升序返回。
    *
    * 参数：
-   *   date (可选) 交易日 YYYY-MM-DD；缺省取最近事件的交易日
+   *   date (可选) 交易日 YYYY-MM-DD；缺省取已知时点 / 最近事件的交易日
    *   from / to (可选) 检测时点 ISO 范围（含端点）
+   *   knownAt (可选) 已知时点 ISO；回放只返回该时点之前已记录的事件
    *   kind (可选) diffusion | divergence | rotation
    *   sectorId (可选) 板块内部标识
    *
@@ -364,7 +373,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    */
   app.get('/api/market/room/events', async (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['date', 'from', 'to', 'kind', 'sectorId'] as const) {
+    for (const key of ['date', 'from', 'to', 'knownAt', 'kind', 'sectorId'] as const) {
       const value = c.req.query(key);
       if (value !== undefined && value.trim() !== '') input[key] = value;
     }

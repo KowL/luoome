@@ -306,6 +306,64 @@ describe('get_market_room_sectors', () => {
     expect(beforeOpen.emptyReason).toBe('no_batch');
   });
 
+  it('回放使用当时生效的成分：之后才纳入的股票不计入该时点的排名分母', async () => {
+    const { ctx } = await contextAt();
+    await seedCatalog(ctx.repos);
+    const lateMember = FOLLOWERS[1] as string;
+    await ctx.repos.sectorCatalog.applySync({
+      syncId: 'sector-catalog-late',
+      source: 'fuyao',
+      appliedAt: at('10:20'),
+      status: 'succeeded',
+      catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY, OVERLAP_CONCEPT],
+      catalogKinds: ['industry', 'concept'],
+      observations: [
+        ...LEADERS.map((stockId, index) =>
+          observation(
+            stockId,
+            index === 0 ? [LEADER_INDUSTRY, OVERLAP_CONCEPT] : [LEADER_INDUSTRY],
+          ),
+        ),
+        ...FOLLOWERS.map((stockId, index) =>
+          observation(
+            stockId,
+            index === 0 ? [FOLLOWER_INDUSTRY, OVERLAP_CONCEPT] : [FOLLOWER_INDUSTRY],
+          ),
+        ),
+        observation(lateMember, [LEADER_INDUSTRY]),
+      ],
+      stockStatuses: [],
+      failures: [],
+    });
+    await ctx.repos.marketSnapshotBatch.publish(batchOf('10:10', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(batchOf('10:15', marketDayItems(2)));
+
+    const historical = await execute(ctx, {
+      kind: 'industry',
+      sort: 'day',
+      window: 'w5',
+      at: at('10:15'),
+    });
+    const leadersBefore = historical.rows.find((row) => row.name === '领涨组');
+    expect(leadersBefore?.day.memberCount).toBe(LEADERS.length);
+    expect(leadersBefore?.day.value).toBeCloseTo(dayMean(marketDayItems(2), LEADERS), 4);
+
+    const atAdmission = await execute(ctx, {
+      kind: 'industry',
+      sort: 'day',
+      window: 'w5',
+      at: at('10:25'),
+    });
+    const leadersAfter = atAdmission.rows.find((row) => row.name === '领涨组');
+    expect(leadersAfter?.day.memberCount).toBe(LEADERS.length + 1);
+    expect(leadersAfter?.day.sampleCount).toBe(LEADERS.length + 1);
+
+    const latest = await execute(ctx, { kind: 'industry', sort: 'day', window: 'w5' });
+    expect(latest.rows.find((row) => row.name === '领涨组')?.day.memberCount).toBe(
+      LEADERS.length + 1,
+    );
+  });
+
   it('没有天梯快照时封板数为 null + 原因，不写 0', async () => {
     const { ctx } = await contextAt();
     await seedCatalog(ctx.repos);

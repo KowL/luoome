@@ -5258,6 +5258,7 @@ type RoomOverviewBody = {
     overview: {
       state: 'ready' | 'empty';
       emptyReason?: string;
+      asOf?: string | null;
       tradingDate: string;
       latestBatch: { tradingDate: string; sampledAt: string } | null;
       coverage: {
@@ -5463,6 +5464,96 @@ describe('Web 作战室总览 API', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(await response.text()).toContain('id="route-market-room"');
+  });
+});
+
+/** 作战室总览回放（ticket #43）：at 只读该时点及之前最近的批次，且不读实时数据源。 */
+describe('Web 作战室总览回放 API', () => {
+  it('at 只读该时点及之前最近的批次，不触发采集、不读实时指数与情绪', async () => {
+    let now = marketRoomClock('10:16:00');
+    let sentimentCalls = 0;
+    const base = roomSentimentManager();
+    const countingManager: AShareSentimentManagerLike = {
+      status: () => [],
+      fetch: async (input) => {
+        sentimentCalls += 1;
+        return base.fetch(input);
+      },
+    };
+    const {
+      app: web,
+      adapter,
+      ctx,
+    } = await marketRoomApp(() => new Date(now.getTime()), {
+      sentiment: countingManager,
+    });
+
+    await web.fetch(new Request('http://test/api/market/room/collect', { method: 'POST' }));
+    now = marketRoomClock('10:31:00');
+    await web.fetch(new Request('http://test/api/market/room/collect', { method: 'POST' }));
+    expect(adapter.envelopeCalls).toBe(2);
+
+    const sentimentBefore = sentimentCalls;
+    const eventsBefore = await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' });
+
+    const response = await web.fetch(
+      new Request(
+        `http://test/api/market/room/overview?at=${encodeURIComponent('2026-09-28T10:16:00+08:00')}`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as RoomOverviewBody;
+    const overview = body.data?.overview;
+    expect(overview?.state).toBe('ready');
+    expect(overview?.asOf).toBe('2026-09-28T02:16:00.000Z');
+    expect(overview?.latestBatch?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(overview?.coverage.value?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(overview?.breadth.value?.sampleCount).toBe(marketDayItems(1).length);
+    expect(overview?.indexes.status).toBe('unavailable');
+    expect(overview?.indexes.warnings.join(' ')).toContain('replay');
+    expect(adapter.envelopeCalls).toBe(2);
+    expect(sentimentCalls).toBe(sentimentBefore);
+    expect(await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' })).toEqual(
+      eventsBefore,
+    );
+
+    // 重复读取仍是只读：不新增采集、不新增事件。
+    await web.fetch(
+      new Request(
+        `http://test/api/market/room/overview?at=${encodeURIComponent('2026-09-28T10:16:00+08:00')}`,
+      ),
+    );
+    expect(adapter.envelopeCalls).toBe(2);
+    expect(await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' })).toEqual(
+      eventsBefore,
+    );
+  });
+
+  it('at 早于最早批次时返回明确空态，不伪造该时点的数据', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, adapter } = await marketRoomApp(() => new Date(now.getTime()), {
+      sentiment: roomSentimentManager(),
+    });
+    await web.fetch(new Request('http://test/api/market/room/collect', { method: 'POST' }));
+    expect(adapter.envelopeCalls).toBe(1);
+
+    const response = await web.fetch(
+      new Request(
+        `http://test/api/market/room/overview?at=${encodeURIComponent('2026-09-28T09:00:00+08:00')}`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    const overview = ((await response.json()) as RoomOverviewBody).data?.overview;
+    expect(overview).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      asOf: '2026-09-28T01:00:00.000Z',
+      tradingDate: '2026-09-28',
+      latestBatch: null,
+    });
+    expect(overview?.breadth.value).toBeUndefined();
+    expect(overview?.amount.value).toBeUndefined();
+    expect(adapter.envelopeCalls).toBe(1);
   });
 });
 
@@ -6465,6 +6556,7 @@ interface RoomEventsBody {
         to: string | null;
         kind: string | null;
         sectorId: string | null;
+        knownAt: string | null;
       };
       counts: { total: number; diffusion: number; divergence: number; rotation: number };
       events: {
@@ -6552,6 +6644,7 @@ describe('Web 作战室盘中事件 API', () => {
       to: null,
       kind: null,
       sectorId: null,
+      knownAt: null,
     });
     expect(view?.counts).toEqual({ total: 1, diffusion: 0, divergence: 0, rotation: 1 });
     const event = view?.events[0];
@@ -6627,5 +6720,63 @@ describe('Web 作战室盘中事件 API', () => {
     expect(noData.body.data?.view.state).toBe('empty');
     expect(noData.body.data?.view.emptyReason).toBe('no_batch');
     expect(noData.body.data?.view.tradingDate).toBeNull();
+  });
+
+  it('knownAt 截断：之后才记录的事件不出现在更早的回放里，读取不采集也不写事件', async () => {
+    let now = marketRoomClock('09:35:00');
+    const { app: web, adapter, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedEventSectors(ctx);
+    for (const time of EVENT_POINTS.slice(0, 4)) {
+      now = marketRoomClock(`${time}:00`);
+      await collectAt(web, time);
+    }
+    // 14:15 的扫描写入失败，14:50 补写：事件检测时点是 14:15，记录时点是 14:50。
+    const repo = ctx.repos.marketRoomEvent as unknown as {
+      save: (event: unknown) => Promise<unknown>;
+    };
+    const originalSave = repo.save;
+    repo.save = async () => {
+      throw new Error('disk full');
+    };
+    try {
+      now = marketRoomClock('14:15:00');
+      await collectAt(web, '14:15');
+    } finally {
+      repo.save = originalSave;
+    }
+    now = marketRoomClock('14:50:00');
+    await collectAt(web, '14:50');
+
+    const stored = await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' });
+    expect(stored).toHaveLength(1);
+    const event = stored[0];
+    if (event === undefined) throw new Error('missing rotation event');
+    expect(event.sampledAt.toISOString()).toBe('2026-09-28T06:15:00.000Z');
+    expect(event.recordedAt.toISOString()).toBe('2026-09-28T06:50:00.000Z');
+
+    const callsBefore = adapter.envelopeCalls;
+    const early = await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}`,
+    );
+    expect(early.status).toBe(200);
+    expect(early.body.data?.view.state).toBe('empty');
+    expect(early.body.data?.view.emptyReason).toBe('no_events');
+    expect(early.body.data?.view.filters.knownAt).toBe('2026-09-28T06:15:00.000Z');
+    expect(early.body.data?.view.events).toEqual([]);
+
+    const known = await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T14:50:00+08:00')}`,
+    );
+    expect(known.body.data?.view.state).toBe('ready');
+    expect(known.body.data?.view.events.map((item) => item.id)).toEqual([event.id]);
+    expect(known.body.data?.view.filters.knownAt).toBe('2026-09-28T06:50:00.000Z');
+
+    // 回放只读：反复读取不触发采集，也不产生新事件。
+    await readRoomEvents(web, `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}`);
+    await readRoomEvents(web, `?knownAt=${encodeURIComponent('2026-09-28T14:50:00+08:00')}`);
+    expect(adapter.envelopeCalls).toBe(callsBefore);
+    expect(await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' })).toHaveLength(1);
   });
 });

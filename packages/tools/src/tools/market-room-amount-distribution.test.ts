@@ -170,6 +170,48 @@ describe('get_market_room_amount_distribution', () => {
     expect(distribution.notes.join(' ')).toContain('不可加总');
   });
 
+  it('回放按当时生效的成分计算占比，之后才纳入的股票不进该时点的分母', async () => {
+    const { ctx } = await contextAt();
+    await seedCatalog(ctx.repos);
+    await publishPoint(ctx, 1, '10:05');
+    await publishPoint(ctx, 2, '10:10');
+    await publishPoint(ctx, 3, '10:15');
+    const lateMember = FOLLOWERS[0] as string;
+    await ctx.repos.sectorCatalog.applySync({
+      syncId: 'amount-sector-catalog-late',
+      source: 'fuyao',
+      appliedAt: at('10:20'),
+      status: 'succeeded',
+      catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY, OTHER_INDUSTRY],
+      catalogKinds: ['industry'],
+      observations: [
+        ...LEADERS.map((stockId) => observation(stockId, [LEADER_INDUSTRY])),
+        ...FOLLOWERS.map((stockId) => observation(stockId, [FOLLOWER_INDUSTRY])),
+        ...OTHERS.map((stockId) => observation(stockId, [OTHER_INDUSTRY])),
+        observation(lateMember, [LEADER_INDUSTRY, FOLLOWER_INDUSTRY]),
+      ],
+      stockStatuses: [],
+      failures: [],
+    });
+
+    const historical = await execute(ctx, { kind: 'industry', window: 'w5', at: at('10:15') });
+    expect(historical.anchor?.sampledAt).toEqual(at('10:15'));
+    expect(historical.rows.find((row) => row.name === '领涨组')?.share.memberCount).toBe(
+      LEADERS.length,
+    );
+
+    const atAdmission = await execute(ctx, { kind: 'industry', window: 'w5', at: at('10:25') });
+    expect(atAdmission.anchor?.sampledAt).toEqual(at('10:15'));
+    expect(atAdmission.rows.find((row) => row.name === '领涨组')?.share.memberCount).toBe(
+      LEADERS.length + 1,
+    );
+
+    const latest = await execute(ctx, { kind: 'industry', window: 'w5' });
+    expect(latest.rows.find((row) => row.name === '领涨组')?.share.memberCount).toBe(
+      LEADERS.length + 1,
+    );
+  });
+
   it('概念与行业共用成分：各自按自身成分独立计算，不把占比加总', async () => {
     const { ctx } = await contextAt();
     await ctx.repos.sectorCatalog.applySync({

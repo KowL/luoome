@@ -1615,6 +1615,194 @@ export const registerRepositoryContractTests = (
           ).map((member) => `${member.stockId}:${member.state}`),
         ).toEqual(['000858.SZ:active', '600519.SH:missing']);
       });
+      it('时点查询：目录与成分按 firstSeenAt / 退出时点截断，不拿今天的目录和成分顶替历史', async () => {
+        const t = (time: string): Date => new Date(`2026-11-02T${time}:00+08:00`);
+        const syncAt = (
+          syncId: string,
+          appliedAt: Date,
+          overrides: Partial<SectorSyncApplyInput>,
+        ) => repos.sectorCatalog.applySync(syncInput({ syncId, appliedAt, ...overrides }));
+
+        await syncAt('sector-asof-1', t('09:00'), {
+          catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            { stockId: '000858.SZ', sectors: [concept('886042.TI', '白酒概念')] },
+          ],
+        });
+        await syncAt('sector-asof-2', t('10:20'), {
+          catalog: [
+            industry('881273.TI', '白酒'),
+            concept('886042.TI', '白酒概念'),
+            industry('881101.TI', '种植业'),
+          ],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            {
+              stockId: '000858.SZ',
+              sectors: [concept('886042.TI', '白酒概念'), industry('881273.TI', '白酒')],
+            },
+            { stockId: '600000.SH', sectors: [industry('881101.TI', '种植业')] },
+          ],
+        });
+        await syncAt('sector-asof-3', t('10:40'), {
+          catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            {
+              stockId: '000858.SZ',
+              sectors: [concept('886042.TI', '白酒概念'), industry('881273.TI', '白酒')],
+            },
+            { stockId: '600000.SH', sectors: [industry('881273.TI', '白酒')] },
+          ],
+        });
+        await syncAt('sector-asof-4', t('11:20'), {
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            { stockId: '000858.SZ', sectors: [] },
+            { stockId: '600000.SH', sectors: [industry('881273.TI', '白酒')] },
+          ],
+        });
+
+        const ids = Object.fromEntries(
+          (await repos.sectorCatalog.listSectors({ state: 'all' })).map((sector) => [
+            sector.vendorCode,
+            sector.id,
+          ]),
+        );
+        const liquor = ids['881273.TI'] as string;
+        const planting = ids['881101.TI'] as string;
+
+        // 首次同步前没有任何可用目录 / 成分。
+        expect(await repos.sectorCatalog.listSectorsAsOf({ at: t('08:00') })).toEqual([]);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [liquor], at: t('08:00') }),
+        ).toEqual([]);
+
+        // 10:15：种植业与 600000.SH 尚未收录，000858.SZ 尚未纳入白酒。
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:15') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881273.TI']);
+        const beforeSecond = await repos.sectorCatalog.listBySectorsAsOf({
+          sectorIds: [liquor],
+          at: t('10:15'),
+        });
+        expect(beforeSecond.map((member) => member.stockId)).toEqual(['600519.SH']);
+        expect(beforeSecond.every((member) => member.state === 'active')).toBe(true);
+        expect(beforeSecond.every((member) => member.missingSince === null)).toBe(true);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:15') }),
+        ).toEqual([]);
+
+        // 10:30：种植业已收录、000858.SZ 已纳入白酒。
+        const afterSecond = await repos.sectorCatalog.listBySectorsAsOf({
+          sectorIds: [liquor],
+          at: t('10:30'),
+        });
+        expect(afterSecond.map((member) => member.stockId)).toEqual(['000858.SZ', '600519.SH']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:30') })
+          ).map((member) => member.stockId),
+        ).toEqual(['600000.SH']);
+
+        // 10:40 种植业下线、600000.SH 转入白酒：10:35 仍应看到旧目录与旧成分。
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:35') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881101.TI', '881273.TI']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:35') })
+          ).map((member) => member.stockId),
+        ).toEqual(['600000.SH']);
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:45') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881273.TI']);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:45') }),
+        ).toEqual([]);
+
+        // 11:20 000858.SZ 退出全部题材：11:10 仍可见，11:30 不再可见。
+        expect(
+          (
+            await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('11:10') })
+          ).map((view) => view.vendorCode),
+        ).toEqual(['886042.TI', '881273.TI']);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('11:30') }),
+        ).toEqual([]);
+        expect(await repos.sectorCatalog.listByStockAsOf({ stockIds: [], at: t('11:30') })).toEqual(
+          [],
+        );
+      });
+
+      it('按股票反查时点归属，口径与按板块反查一致，并可限定分类', async () => {
+        const t = (time: string): Date => new Date(`2026-11-02T${time}:00+08:00`);
+        await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-asof-stock-1', appliedAt: t('09:00') }),
+        );
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-asof-stock-2',
+            appliedAt: t('10:20'),
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒')],
+              },
+            ],
+          }),
+        );
+
+        const before = await repos.sectorCatalog.listByStockAsOf({
+          stockIds: ['600519.SH'],
+          at: t('10:15'),
+        });
+        expect(before.map((view) => `${view.vendorCode}:${view.state}`)).toEqual([
+          '886042.TI:active',
+          '881273.TI:active',
+        ]);
+        expect(before[0]).toMatchObject({
+          kind: 'concept',
+          sectorState: 'active',
+          missingSince: null,
+          firstSeenAt: t('09:00'),
+        });
+
+        const after = await repos.sectorCatalog.listByStockAsOf({
+          stockIds: ['600519.SH'],
+          at: t('10:30'),
+        });
+        expect(after.map((view) => view.vendorCode)).toEqual(['881273.TI']);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({
+            stockIds: ['600519.SH'],
+            kinds: ['concept'],
+            at: t('10:30'),
+          }),
+        ).toEqual([]);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('09:30') }),
+        ).toHaveLength(2);
+      });
     });
 
     describe('HoldingRepository', () => {

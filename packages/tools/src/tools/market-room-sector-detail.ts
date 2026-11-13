@@ -3,6 +3,7 @@ import {
   buildSectorDetailEmpty,
   dateInShanghai,
   type LimitUpLadder,
+  ladderOfSample,
   type MarketSnapshotBatch,
   marketRoomEmptyReason,
   type SectorCatalogEntry,
@@ -70,23 +71,46 @@ const resolveAnchor = async (ctx: ToolContext, at: Date | undefined): Promise<An
   return { kind: 'ready', anchor };
 };
 
+/**
+ * 天梯事实：最新模式沿用当日快照；回放只用锚点批次时点及之前的天梯样本，
+ * 不拿之后才采集的那一份冒充当时状态。
+ */
 const readLimitUp = async (
   ctx: ToolContext,
-  tradingDate: string,
+  anchor: MarketSnapshotBatch,
+  asOf: Date | undefined,
 ): Promise<{ readonly ladder: LimitUpLadder | null; readonly error: string | null }> => {
   try {
-    const ladder = await ctx.repos.limitUpLadderSnapshot.findByDate({
-      date: tradingDate,
+    if (asOf === undefined) {
+      const ladder = await ctx.repos.limitUpLadderSnapshot.findByDate({
+        date: anchor.tradingDate,
+        source: LIMIT_UP_SOURCE,
+      });
+      return { ladder, error: null };
+    }
+    const sample = await ctx.repos.limitUpLadderSample.findAtOrBefore({
+      tradingDate: anchor.tradingDate,
       source: LIMIT_UP_SOURCE,
+      sampledAt: anchor.sampledAt,
     });
-    return { ladder, error: null };
+    const aligned =
+      sample !== null && sample.sampledAt.getTime() === anchor.sampledAt.getTime()
+        ? ladderOfSample(sample)
+        : null;
+    return { ladder: aligned, error: null };
   } catch (error) {
     return { ladder: null, error: error instanceof Error ? error.message : String(error) };
   }
 };
 
-const listActiveSectors = (ctx: ToolContext): Promise<readonly SectorCatalogEntry[]> =>
-  ctx.repos.sectorCatalog.listSectors({ state: 'active' });
+/** 目录：最新模式读当前 active；回放读该时点生效的目录，不拿今天的板块顶替。 */
+const listActiveSectors = (
+  ctx: ToolContext,
+  asOf: Date | undefined,
+): Promise<readonly SectorCatalogEntry[]> =>
+  asOf === undefined
+    ? ctx.repos.sectorCatalog.listSectors({ state: 'active' })
+    : ctx.repos.sectorCatalog.listSectorsAsOf({ at: asOf });
 
 const activeMembersBySector = (
   memberships: readonly StockSectorMembership[],
@@ -117,7 +141,7 @@ const windowStartsFrom = (
 export const getMarketRoomSectorDetailTool = defineTool({
   name: 'get_market_room_sector_detail',
   description:
-    '读取单个板块的盘中详情：按批次时点的成分等权合成走势（归一化到首个样本=100，method 显式标注、不用大盘指数冒充）、独立于指数的成分上涨比例、日涨幅与窗口涨幅、窗口成交占比、封板数、成分明细（日涨幅 / 窗口涨幅 / 窗口成交额增量占比 / 封板 / 停牌状态），以及多个对照板块的并列走势与领先顺序变化时点；缺失样本与口径差异逐项标注；只读不采集',
+    '读取单个板块的盘中详情（给定 at 时只读该时点及之前批次，走势 / 成分 / 封板数都按当时生效的信息计算）：按批次时点的成分等权合成走势（归一化到首个样本=100，method 显式标注、不用大盘指数冒充）、独立于指数的成分上涨比例、日涨幅与窗口涨幅、窗口成交占比、封板数、成分明细（日涨幅 / 窗口涨幅 / 窗口成交额增量占比 / 封板 / 停牌状态），以及多个对照板块的并列走势与领先顺序变化时点；缺失样本与口径差异逐项标注；只读不采集',
   sideEffect: 'read',
   input: GetMarketRoomSectorDetailInput,
   output: GetMarketRoomSectorDetailOutput,
@@ -126,7 +150,9 @@ export const getMarketRoomSectorDetailTool = defineTool({
     const anchorResult = await resolveAnchor(ctx, input.at);
     if (anchorResult.kind === 'empty') {
       // 空态仍尽量带上板块身份，便于页面显示「哪个板块暂无数据」。
-      const sectors = await listActiveSectors(ctx).catch(() => [] as SectorCatalogEntry[]);
+      const sectors = await listActiveSectors(ctx, input.at).catch(
+        () => [] as SectorCatalogEntry[],
+      );
       const sector = sectors.find((entry) => entry.id === input.sectorId) ?? null;
       return {
         detail: buildSectorDetailEmpty({
@@ -138,7 +164,7 @@ export const getMarketRoomSectorDetailTool = defineTool({
       };
     }
     const { anchor } = anchorResult;
-    const sectors = await listActiveSectors(ctx);
+    const sectors = await listActiveSectors(ctx, input.at);
     if (sectors.length === 0) {
       return {
         detail: buildSectorDetailEmpty({
@@ -173,9 +199,14 @@ export const getMarketRoomSectorDetailTool = defineTool({
       else comparisons.push(comparison);
     }
 
-    const memberships = await ctx.repos.sectorCatalog.listBySectors({
-      sectorIds: [sector.id, ...comparisons.map((entry) => entry.id)],
-    });
+    const detailSectorIds = [sector.id, ...comparisons.map((entry) => entry.id)];
+    const memberships =
+      input.at === undefined
+        ? await ctx.repos.sectorCatalog.listBySectors({ sectorIds: detailSectorIds })
+        : await ctx.repos.sectorCatalog.listBySectorsAsOf({
+            sectorIds: detailSectorIds,
+            at: input.at,
+          });
     const membersBySector = activeMembersBySector(memberships);
     if ((membersBySector.get(sector.id) ?? []).length === 0) {
       return {
@@ -196,7 +227,7 @@ export const getMarketRoomSectorDetailTool = defineTool({
       (batch) => batch.sampledAt.getTime() <= anchor.sampledAt.getTime(),
     );
     const windowStarts = windowStartsFrom(batches.length === 0 ? [anchor] : batches, anchor);
-    const limitUp = await readLimitUp(ctx, anchor.tradingDate);
+    const limitUp = await readLimitUp(ctx, anchor, input.at);
     return {
       detail: buildSectorDetail({
         sector,

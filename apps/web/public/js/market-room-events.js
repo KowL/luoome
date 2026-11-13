@@ -12,6 +12,13 @@
 'use strict';
 
 import { callApi } from './api.js';
+import {
+  replayAtFromHash,
+  replayClockLabel,
+  replayEmptyNotice,
+  replayHashSuffix,
+  replayParam,
+} from './market-room-replay.js';
 import { el } from './ui.js';
 
 const EVENT_KIND_LABELS = { diffusion: '扩散', divergence: '分化', rotation: '换位' };
@@ -240,9 +247,12 @@ const sortEventsDesc = (events) => {
   });
 };
 
-/** 空态文案；ready 返回 null。 */
-const eventsEmptyText = (view) => {
+/** 空态文案；ready 返回 null。回放没有已知事件时说明按当时已知截断。 */
+const eventsEmptyText = (view, at = null) => {
   if (view?.state !== 'empty') return null;
+  if (view.emptyReason === 'no_events' && at !== null && at !== undefined) {
+    return `回放时点 ${replayClockLabel(at)} 之前没有已记录的事件`;
+  }
   return EMPTY_TEXTS[view.emptyReason] ?? '暂无盘中事件';
 };
 
@@ -254,17 +264,35 @@ const eventsMetaText = (view) => {
   return `交易日 ${view.tradingDate} · 共 ${counts.total ?? 0} 条（扩散 ${counts.diffusion ?? 0} / 分化 ${counts.divergence ?? 0} / 换位 ${counts.rotation ?? 0}）· 按时间倒序`;
 };
 
-/** hash 里的选中事件（#market-room?tab=events&event=<id>）。 */
+/**
+ * hash 里的选中事件与回放时点（#market-room?tab=events&event=<id>&at=<iso>）。
+ * at 与其它三个视图共用同一个值：点事件时设为该事件的检测时点。
+ */
 const eventsParamsFromHash = (hash = window.location.hash) => {
   const params = new URLSearchParams(String(hash ?? '').split('?')[1] ?? '');
   const eventId = params.get('event');
-  return { eventId: eventId !== null && eventId.length > 0 ? eventId : null };
+  return {
+    eventId: eventId !== null && eventId.length > 0 ? eventId : null,
+    at: replayAtFromHash(hash),
+  };
 };
 
-const eventsHash = ({ eventId }) =>
-  eventId === null || eventId === undefined
-    ? 'market-room?tab=events'
-    : `market-room?tab=events&event=${encodeURIComponent(eventId)}`;
+const eventsHash = ({ eventId, at = null }) => {
+  const selected =
+    eventId === null || eventId === undefined
+      ? 'market-room?tab=events'
+      : `market-room?tab=events&event=${encodeURIComponent(eventId)}`;
+  return `${selected}${replayHashSuffix(at)}`;
+};
+
+/**
+ * 事件请求路径（纯函数）：回放时只带 knownAt（信息可见时点），
+ * 由服务端只返回该时点之前已记录的事件；最新模式不附带任何时点参数。
+ */
+const eventsQuery = ({ at = null } = {}) => {
+  const knownAt = replayParam(at);
+  return knownAt === null ? '' : `?knownAt=${encodeURIComponent(knownAt)}`;
+};
 
 /* ---- DOM 渲染 ---- */
 
@@ -310,8 +338,8 @@ const evidenceNode = (event) => {
   ]);
 };
 
-const eventNode = (event, selectedEventId) => {
-  const selected = selectedEventId === event.id;
+const eventNode = (event, params) => {
+  const selected = params.eventId === event.id;
   const button = el(
     'button',
     `room-event-row room-event-${event.kind}${selected ? ' selected' : ''}`,
@@ -332,7 +360,11 @@ const eventNode = (event, selectedEventId) => {
   button.setAttribute('aria-pressed', String(selected));
   button.setAttribute('aria-expanded', String(selected));
   button.addEventListener('click', () => {
-    window.location.hash = eventsHash({ eventId: selected ? null : event.id });
+    // 选中事件即把统一时间轴切到该事件的检测时点；取消选中保留当前时点。
+    window.location.hash = eventsHash({
+      eventId: selected ? null : event.id,
+      at: selected ? params.at : event.sampledAt,
+    });
   });
   return el('li', `room-event-item${selected ? ' selected' : ''}`, [
     button,
@@ -348,11 +380,12 @@ const renderEventsPane = (view, params = eventsParamsFromHash()) => {
       el('p', '', '读取事件流失败，稍后会自动重试。'),
     ]);
   }
-  const empty = eventsEmptyText(view);
+  const replayNotice = view?.emptyReason === 'no_batch' ? replayEmptyNotice(params.at) : null;
+  const empty = eventsEmptyText(view, params.at);
   if (empty !== null) {
     return el('div', 'card room-empty room-events', [
-      el('h2', '', '盘中事件'),
-      el('p', '', empty),
+      el('h2', '', replayNotice === null ? '盘中事件' : '该时点不可回放'),
+      el('p', '', replayNotice ?? empty),
       el(
         'p',
         'room-caption',
@@ -369,7 +402,7 @@ const renderEventsPane = (view, params = eventsParamsFromHash()) => {
     el(
       'ul',
       'room-events-list',
-      events.map((event) => eventNode(event, params.eventId)),
+      events.map((event) => eventNode(event, params)),
     ),
     el('details', 'room-detail-notes', [
       el('summary', '', `口径与事件说明（${(view.notes ?? []).length} 条）`),
@@ -383,8 +416,10 @@ const renderEventsPane = (view, params = eventsParamsFromHash()) => {
 };
 
 /** 读取盘中事件；失败返回 null，由调用方保留上次结果或写空态。 */
-const fetchRoomEvents = async () => {
-  const result = await callApi('/api/market/room/events', { timeoutMs: 15_000 });
+const fetchRoomEvents = async (params = eventsParamsFromHash()) => {
+  const result = await callApi(`/api/market/room/events${eventsQuery(params)}`, {
+    timeoutMs: 15_000,
+  });
   return result.ok ? (result.data?.view ?? null) : null;
 };
 
@@ -400,6 +435,7 @@ export {
   eventsHash,
   eventsMetaText,
   eventsParamsFromHash,
+  eventsQuery,
   fetchRoomEvents,
   renderEventsPane,
   rotationLeadLines,

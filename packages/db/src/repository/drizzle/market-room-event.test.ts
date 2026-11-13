@@ -200,6 +200,34 @@ describe('market room event 持久化', () => {
     }
   });
 
+  it('回放按 knownAt 截断：更晚才记录的事件不出现在更早的查询里', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    const repos = handle.repos;
+    try {
+      const early = eventOf({ sectorId: 'sector-a', sampledAt: '09:45', recordedAt: '09:46' });
+      const backfilled = eventOf({
+        sectorId: 'sector-b',
+        kind: 'rotation',
+        sampledAt: '09:45',
+        recordedAt: '10:30',
+      });
+      for (const event of [early, backfilled]) {
+        await repos.marketRoomEvent.save(event);
+      }
+
+      expect(
+        (await repos.marketRoomEvent.list({ knownAt: at('10:15') })).map((item) => item.id),
+      ).toEqual([early.id]);
+      expect(
+        (await repos.marketRoomEvent.list({ knownAt: at('10:30') })).map((item) => item.id),
+      ).toEqual([early.id, backfilled.id]);
+      expect(await repos.marketRoomEvent.list({ knownAt: at('09:00') })).toEqual([]);
+      expect(await repos.marketRoomEvent.list()).toHaveLength(2);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('按交易日 / 种类 / 板块 / 时点范围过滤，并按检测时点排序', async () => {
     const handle = createDrizzleRepos(':memory:');
     const repos = handle.repos;

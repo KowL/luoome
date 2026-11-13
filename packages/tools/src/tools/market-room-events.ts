@@ -112,6 +112,11 @@ export const ListMarketRoomEventsInput = z.object({
   from: z.coerce.date().optional(),
   /** 检测时点上界（含）。 */
   to: z.coerce.date().optional(),
+  /**
+   * 已知时点：只返回该时点之前已记录（recordedAt <= knownAt）的事件。
+   * 回放时用于截断「之后才扫描出来」的事件；缺省读全部已记录事件。
+   */
+  knownAt: z.coerce.date().optional(),
   kind: MarketRoomEventKindSchema.optional(),
   sectorId: z.string().trim().min(1).optional(),
 });
@@ -140,6 +145,7 @@ const resolveTradingDate = async (
   input: ListMarketRoomEventsInputT,
 ): Promise<string | null> => {
   if (input.date !== undefined) return input.date;
+  if (input.knownAt !== undefined) return dateInShanghai(input.knownAt);
   if (input.from !== undefined) return dateInShanghai(input.from);
   if (input.to !== undefined) return dateInShanghai(input.to);
   const latestBatch = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
@@ -152,7 +158,7 @@ const resolveTradingDate = async (
 export const listMarketRoomEventsTool = defineTool({
   name: 'list_market_room_events',
   description:
-    '读取盘中事件流：扩散（上涨面在 N 个样本内提升、窗口为正、成交占比不降）、分化（日涨幅仍靠前但上涨面回落、窗口转负）、换位（领先板块变化且新领先者连续样本窗口跑赢旧领先者，滞回避免单次抖动）；每个事件带扫描当时的阈值与证据（板块榜单、上涨面、窗口涨幅、成交占比、天梯封板/涨停原因、已知成分、异动关键词），按检测时点升序返回；可按交易日 / 时段 / 种类 / 板块过滤；只读不采集',
+    '读取盘中事件流：扩散（上涨面在 N 个样本内提升、窗口为正、成交占比不降）、分化（日涨幅仍靠前但上涨面回落、窗口转负）、换位（领先板块变化且新领先者连续样本窗口跑赢旧领先者，滞回避免单次抖动）；每个事件带扫描当时的阈值与证据（板块榜单、上涨面、窗口涨幅、成交占比、天梯封板/涨停原因、已知成分、异动关键词），按检测时点升序返回；可按交易日 / 时段 / 种类 / 板块过滤；给定 knownAt 时只返回该时点之前已记录的事件（回放按当时已知截断，之后扫描出来的事件不出现）；只读不采集',
   sideEffect: 'read',
   input: ListMarketRoomEventsInput,
   output: ListMarketRoomEventsOutput,
@@ -167,6 +173,7 @@ export const listMarketRoomEventsTool = defineTool({
       to: input.to ?? null,
       kind: input.kind ?? null,
       sectorId: input.sectorId ?? null,
+      knownAt: input.knownAt ?? null,
     };
     if (tradingDate === null) {
       return { view: viewOf({ tradingDate: null, events: [], filters, emptyReason: 'no_batch' }) };
@@ -184,6 +191,7 @@ export const listMarketRoomEventsTool = defineTool({
       ...(input.sectorId === undefined ? {} : { sectorId: input.sectorId }),
       ...(input.from === undefined ? {} : { from: input.from }),
       ...(input.to === undefined ? {} : { to: input.to }),
+      ...(input.knownAt === undefined ? {} : { knownAt: input.knownAt }),
     });
     if (events.length === 0) {
       return { view: viewOf({ tradingDate, events: [], filters, emptyReason: 'no_events' }) };

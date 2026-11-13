@@ -176,13 +176,15 @@ describe('板块详情深链接与请求参数', () => {
     expect(sectorDetailParamsFromHash('#market-room?tab=sectors')).toEqual({
       sectorId: null,
       compareSectorIds: [],
+      at: null,
     });
     expect(
       sectorDetailParamsFromHash('#market-room?tab=sectors&sector=a&compare=b,c,b,a,d,e'),
-    ).toEqual({ sectorId: 'a', compareSectorIds: ['b', 'c', 'd'] });
+    ).toEqual({ sectorId: 'a', compareSectorIds: ['b', 'c', 'd'], at: null });
     expect(sectorDetailParamsFromHash('#market-room?tab=sectors&sector=%20')).toEqual({
       sectorId: null,
       compareSectorIds: [],
+      at: null,
     });
   });
 
@@ -453,5 +455,29 @@ describe('板块详情入口结构', () => {
   it('服务端暴露只读板块详情 API', () => {
     expect(marketRoutes).toContain("app.get('/api/market/room/sector-detail'");
     expect(marketRoutes).toContain("invokeTool('get_market_room_sector_detail'");
+  });
+});
+
+describe('回放（ticket #43）', () => {
+  const at = new Date('2026-09-28T10:15:00+08:00');
+
+  it('板块详情深链接保留同一个 at，避免下钻回到最新', () => {
+    const params = {
+      kind: 'industry',
+      sort: 'day',
+      window: 'w15',
+      sectorId: 'a',
+      compareSectorIds: ['b'],
+      at,
+    };
+    const hash = sectorDetailHash(params);
+    expect(hash).toContain('sector=a');
+    expect(hash).toContain('compare=b');
+    expect(hash).toContain('at=2026-09-28T02%3A15%3A00.000Z');
+    expect(sectorDetailParamsFromHash(`#${hash}`)).toEqual({
+      sectorId: 'a',
+      compareSectorIds: ['b'],
+      at,
+    });
   });
 });

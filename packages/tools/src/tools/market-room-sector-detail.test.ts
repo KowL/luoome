@@ -266,6 +266,62 @@ describe('get_market_room_sector_detail', () => {
     expect(detail.coverage.batchCount).toBe(3);
   });
 
+  it('回放按当时生效的成分：之后才纳入的成员不出现在该时点的详情里', async () => {
+    const { ctx } = await contextAt();
+    await seedCatalog(ctx.repos);
+    await ctx.repos.marketSnapshotBatch.publish(batchOf('10:10', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(batchOf('10:15', marketDayItems(2)));
+    const leaders = await sectorIdOf(ctx, '领涨组');
+    const lateMember = FOLLOWERS[1] as string;
+    await ctx.repos.sectorCatalog.applySync({
+      syncId: 'sector-detail-catalog-late',
+      source: 'fuyao',
+      appliedAt: at('10:20'),
+      status: 'succeeded',
+      catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY, OVERLAP_CONCEPT],
+      catalogKinds: ['industry', 'concept'],
+      observations: [
+        ...LEADERS.map((stockId, index) =>
+          observation(
+            stockId,
+            index === 0 ? [LEADER_INDUSTRY, OVERLAP_CONCEPT] : [LEADER_INDUSTRY],
+          ),
+        ),
+        ...FOLLOWERS.map((stockId, index) =>
+          observation(
+            stockId,
+            index === 0 ? [FOLLOWER_INDUSTRY, OVERLAP_CONCEPT] : [FOLLOWER_INDUSTRY],
+          ),
+        ),
+        observation(lateMember, [LEADER_INDUSTRY]),
+      ],
+      stockStatuses: [],
+      failures: [],
+    });
+
+    const historical = await execute(ctx, {
+      sectorId: leaders,
+      at: at('10:15'),
+      window: 'w5',
+    });
+    expect(historical.coverage.memberCount).toBe(LEADERS.length);
+    expect([...historical.members.map((member) => member.stockId)].sort()).toEqual(
+      [...LEADERS].sort(),
+    );
+    expect(historical.members.some((member) => member.stockId === lateMember)).toBe(false);
+
+    const atAdmission = await execute(ctx, {
+      sectorId: leaders,
+      at: at('10:25'),
+      window: 'w5',
+    });
+    expect(atAdmission.coverage.memberCount).toBe(LEADERS.length + 1);
+    expect(atAdmission.members.map((member) => member.stockId)).toContain(lateMember);
+
+    const latest = await execute(ctx, { sectorId: leaders, window: 'w5' });
+    expect(latest.coverage.memberCount).toBe(LEADERS.length + 1);
+  });
+
   it('窗口两端批次齐全时给出成分窗口涨幅与成交额增量占比，封板数来自天梯', async () => {
     const { ctx } = await contextAt();
     await seedCatalog(ctx.repos);

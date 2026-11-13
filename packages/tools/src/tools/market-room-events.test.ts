@@ -286,6 +286,55 @@ describe('scan-on-publish：扩散 / 分化 / 换位事件', () => {
     expect(events[0]?.recordedAt).toEqual(at('14:50'));
   });
 
+  it('回放按 knownAt 截断：之后才记录的事件不出现在更早的事件列表里', async () => {
+    const h = await harness();
+    await runPoints(h, MARKET_DAY_POINTS.slice(0, 4));
+    const repo = h.ctx.repos.marketRoomEvent as unknown as {
+      save: (event: unknown) => Promise<unknown>;
+    };
+    const originalSave = repo.save;
+    repo.save = async () => {
+      throw new Error('disk full');
+    };
+    try {
+      h.setNow(at('14:15'));
+      const failed = await collect(h.ctx);
+      expect(failed.ok).toBe(true);
+    } finally {
+      repo.save = originalSave;
+    }
+    h.setNow(at('14:50'));
+    const recovered = await collect(h.ctx);
+    expect(recovered.ok).toBe(true);
+
+    const events = await eventsOf(h.ctx);
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error('missing rotation event');
+    // 事件检测样本是 14:15，但 14:50 才补写：更早的已知时点不得看到它。
+    expect(event.sampledAt).toEqual(at('14:15'));
+    expect(event.recordedAt).toEqual(at('14:50'));
+
+    const beforeKnown = await eventsView(h.ctx, { knownAt: at('14:15') });
+    expect(beforeKnown.state).toBe('empty');
+    expect(beforeKnown.emptyReason).toBe('no_events');
+    expect(beforeKnown.filters.knownAt).toEqual(at('14:15'));
+    expect(beforeKnown.events).toEqual([]);
+
+    const atKnown = await eventsView(h.ctx, { knownAt: at('14:50') });
+    expect(atKnown.state).toBe('ready');
+    expect(atKnown.events.map((item) => item.id)).toEqual([event.id]);
+    expect(atKnown.notes.join(' ')).toContain('knownAt');
+
+    // 回放读取不触发采集，也不写入新事件。
+    const callsBefore = h.adapter.envelopeCalls;
+    const countBefore = (await eventsOf(h.ctx)).length;
+    await eventsView(h.ctx, { knownAt: at('14:15') });
+    await eventsView(h.ctx, { knownAt: at('14:50') });
+    expect(h.adapter.envelopeCalls).toBe(callsBefore);
+    expect((await eventsOf(h.ctx)).length).toBe(countBefore);
+  });
+
   it('目录读取失败只返回扫描 warning，不抛异常', async () => {
     const h = await harness();
     h.setNow(at('09:35'));
@@ -319,7 +368,14 @@ describe('list_market_room_events', () => {
     const all = await eventsView(h.ctx, {});
     expect(all.state).toBe('ready');
     expect(all.tradingDate).toBe(TRADING_DATE);
-    expect(all.filters).toEqual({ date: null, from: null, to: null, kind: null, sectorId: null });
+    expect(all.filters).toEqual({
+      date: null,
+      from: null,
+      to: null,
+      kind: null,
+      sectorId: null,
+      knownAt: null,
+    });
     expect(all.counts).toEqual({ total: 1, diffusion: 0, divergence: 0, rotation: 1 });
     expect(all.events.map((item) => item.id)).toEqual([event.id]);
     expect(all.notes.length).toBeGreaterThan(0);

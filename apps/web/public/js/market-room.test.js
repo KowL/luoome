@@ -11,6 +11,7 @@ import {
   divergenceText,
   emptyStateText,
   overviewMetaText,
+  roomHash,
   roomTabFromHash,
   sectorBreadthText,
   sectorDetailFacts,
@@ -268,7 +269,7 @@ describe('作战室页面入口结构', () => {
 
   it('服务端暴露只读总览 / 板块榜 API 与 /market/room 页面路由', () => {
     expect(marketRoutes).toContain("app.get('/api/market/room/overview'");
-    expect(marketRoutes).toContain("callTool('get_market_room_overview', {})");
+    expect(marketRoutes).toContain('get_market_room_overview');
     expect(marketRoutes).toContain("app.get('/api/market/room/sectors'");
     expect(marketRoutes).toContain("invokeTool('get_market_room_sectors'");
     expect(marketRoutes).toContain("app.get('/market/room'");
@@ -372,6 +373,7 @@ describe('板块追踪深链接与请求参数', () => {
       kind: 'industry',
       sort: 'day',
       window: 'w15',
+      at: null,
     });
     expect(
       sectorParamsFromHash('#market-room?tab=sectors&kind=concept&sort=window5&window=w5'),
@@ -379,11 +381,13 @@ describe('板块追踪深链接与请求参数', () => {
       kind: 'concept',
       sort: 'window5',
       window: 'w5',
+      at: null,
     });
     expect(sectorParamsFromHash('#market-room?tab=sectors&kind=futures&sort=amount')).toEqual({
       kind: 'industry',
       sort: 'day',
       window: 'w15',
+      at: null,
     });
   });
 
@@ -528,5 +532,41 @@ describe('板块展开明细与口径说明', () => {
       ),
     ).toContain('非交易日');
     expect(sectorMetaText(null)).toContain('刷新失败');
+  });
+});
+
+describe('统一时间轴（ticket #43）', () => {
+  const at = new Date('2026-09-28T10:15:00+08:00');
+
+  it('板块追踪参数 / 请求 / 深链接共用同一个 at', () => {
+    const params = sectorParamsFromHash(
+      '#market-room?tab=sectors&kind=concept&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+    expect(params.at).toEqual(at);
+    expect(sectorQuery(params)).toBe(
+      '?kind=concept&sort=day&window=w15&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+    const hash = sectorHash(params);
+    expect(hash).toContain('at=2026-09-28T02%3A15%3A00.000Z');
+    expect(sectorParamsFromHash(`#${hash}`).at).toEqual(at);
+  });
+
+  it('四个视图切换保留同一个时点，最新模式不附加 at', () => {
+    expect(roomHash('turnover', at)).toBe(
+      'market-room?tab=turnover&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+    expect(roomHash('events')).toBe('market-room?tab=events');
+  });
+
+  it('页面读取总览时带上 at，回放条与「回到最新」已接线', () => {
+    const room = read('./market-room.js');
+    expect(room).toContain('replayQueryPrefix(at)');
+    expect(room).toContain('renderReplayBar');
+    expect(room).toContain('hashWithoutReplayAt');
+    expect(room).toContain('fetchOverview(at)');
+    expect(room).toContain('roomHash(tab, replayAtFromHash())');
+    const marketRoutes = read('../../src/routes/market.ts');
+    expect(marketRoutes).toContain("c.req.query('at')");
+    expect(marketRoutes).toContain("'knownAt'");
   });
 });

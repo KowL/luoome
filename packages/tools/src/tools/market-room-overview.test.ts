@@ -6,6 +6,7 @@ import {
 import {
   type AShareSentimentManagerLike,
   type AShareSentimentSnapshot,
+  buildLimitUpLadderSample,
   buildMarketSnapshotBatch,
   type IndexQuote,
   type MarketSnapshotItem,
@@ -243,6 +244,143 @@ describe('get_market_room_overview', () => {
     expect(overview.indexes.status).toBe('complete');
     expect(overview.indexes.value?.values.length).toBeGreaterThan(0);
     // 页面读取只消费已发布批次：不触发新的采集。
+    expect(adapter.envelopeCalls).toBe(0);
+  });
+
+  it('给定 at 只读该时点及之前最近的批次，不读实时指数与情绪，封板数取当时天梯样本', async () => {
+    let sentimentCalls = 0;
+    const base = sentimentManager();
+    const manager: AShareSentimentManagerLike = {
+      status: () => [],
+      fetch: async (input) => {
+        sentimentCalls += 1;
+        return base.fetch(input);
+      },
+    };
+    const { ctx, adapter } = await contextAt(() => new Date(NOW.getTime()), manager);
+    await ctx.repos.marketSnapshotBatch.publish(
+      batchOf('2026-09-24T10:15:00+08:00', [
+        item('600000', { changePct: 0.5, amount: 50 }),
+        item('600001', { changePct: -0.5, amount: 30 }),
+      ]),
+    );
+    await ctx.repos.marketSnapshotBatch.publish(
+      batchOf('2026-09-28T10:10:00+08:00', [
+        item('600000', { changePct: 1, amount: 40 }),
+        item('600001', { changePct: -1, amount: 20 }),
+      ]),
+    );
+    const anchor = await ctx.repos.marketSnapshotBatch.publish(
+      batchOf('2026-09-28T10:15:00+08:00', [
+        item('600000', { changePct: 2, amount: 60 }),
+        item('600001', { changePct: -1, amount: 40 }),
+      ]),
+    );
+    await ctx.repos.marketSnapshotBatch.publish(
+      batchOf('2026-09-28T10:30:00+08:00', [
+        item('600000', { changePct: 3, amount: 90 }),
+        item('600001', { changePct: -2, amount: 70 }),
+      ]),
+    );
+    await ctx.repos.limitUpLadderSample.save(
+      buildLimitUpLadderSample({
+        sampledAt: new Date('2026-09-28T10:15:00+08:00'),
+        ladder: {
+          date: TRADING_DATE,
+          total: 1,
+          maxLevel: 5,
+          source: 'eastmoney',
+          levels: [
+            {
+              level: 5,
+              name: '5 连板',
+              count: 1,
+              stocks: [
+                {
+                  code: '600000',
+                  name: '股票600000',
+                  industry: '银行',
+                  ladderLevel: 5,
+                  uncategorized: false,
+                  firstTime: '09:35:00',
+                  finalTime: '09:35:00',
+                  reason: 'fixture',
+                  price: 11,
+                  rawClose: 11,
+                  corrected: false,
+                  changePct: 0.1,
+                  limitUpDate: TRADING_DATE,
+                  board: 'main_board' as const,
+                },
+              ],
+            },
+          ],
+          warnings: [],
+          asOf: new Date('2026-09-28T10:15:00+08:00'),
+        },
+      }),
+    );
+
+    const result = await getMarketRoomOverviewTool.execute(
+      { at: new Date('2026-09-28T10:17:00+08:00') },
+      { ...ctx, adapters: { ...ctx.adapters, market: adapter } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const overview = result.data.overview;
+    expect(overview.state).toBe('ready');
+    expect(overview.asOf).toEqual(new Date('2026-09-28T10:17:00+08:00'));
+    expect(overview.tradingDate).toBe(TRADING_DATE);
+    expect(overview.latestBatch?.sampledAt).toEqual(anchor.batch.sampledAt);
+    expect(overview.coverage.value?.sampledAt).toEqual(anchor.batch.sampledAt);
+    expect(overview.breadth.value).toMatchObject({ sampleCount: 2, medianChangePct: 0.5 });
+    expect(overview.amount.value).toMatchObject({
+      currentAmount: 100,
+      comparison: { previousTradingDate: '2026-09-24', previousAmount: 80 },
+    });
+    expect(overview.limitUp).toMatchObject({
+      status: 'partial',
+      value: { sealedCount: 1, brokenCount: null, maxLadderLevel: 5 },
+    });
+    expect(overview.indexes.status).toBe('unavailable');
+    expect(overview.indexes.warnings.join(' ')).toContain('replay');
+    // 回放不读实时数据源：不采集、不拉指数、不拉情绪。
+    expect(adapter.envelopeCalls).toBe(0);
+    expect(sentimentCalls).toBe(0);
+  });
+
+  it('at 早于最早已发布批次时给明确空态，不伪造该时点的数据', async () => {
+    const { ctx, adapter } = await contextAt(() => new Date(NOW.getTime()), sentimentManager());
+    await ctx.repos.marketSnapshotBatch.publish(
+      batchOf('2026-09-28T10:15:00+08:00', [item('600000', { changePct: 2, amount: 60 })]),
+    );
+
+    const result = await getMarketRoomOverviewTool.execute(
+      { at: new Date('2026-09-28T09:00:00+08:00') },
+      { ...ctx, adapters: { ...ctx.adapters, market: adapter } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const overview = result.data.overview;
+    expect(overview).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      asOf: new Date('2026-09-28T09:00:00+08:00'),
+      tradingDate: TRADING_DATE,
+      latestBatch: null,
+    });
+    for (const dimension of [
+      overview.coverage,
+      overview.breadth,
+      overview.amount,
+      overview.limitUp,
+      overview.indexes,
+    ]) {
+      expect(dimension.status).toBe('unavailable');
+      expect(dimension.value).toBeUndefined();
+    }
     expect(adapter.envelopeCalls).toBe(0);
   });
 

@@ -120,16 +120,19 @@ describe('成交分布深链接与请求参数', () => {
     expect(amountParamsFromHash('#market-room?tab=turnover')).toEqual({
       kind: 'industry',
       window: 'w15',
+      at: null,
     });
     expect(amountParamsFromHash('#market-room?tab=turnover&kind=concept&window=w5')).toEqual({
       kind: 'concept',
       window: 'w5',
+      at: null,
     });
     expect(amountParamsFromHash('#market-room?tab=turnover&kind=futures&window=w1')).toEqual({
       kind: 'industry',
       window: 'w15',
+      at: null,
     });
-    expect(amountParamsFromHash('')).toEqual({ kind: 'industry', window: 'w15' });
+    expect(amountParamsFromHash('')).toEqual({ kind: 'industry', window: 'w15', at: null });
   });
 
   it('请求路径与深链接互相对应，口径显式带在 URL 上', () => {
@@ -317,5 +320,25 @@ describe('成交分布页面入口结构', () => {
   it('服务端暴露只读成交分布 API', () => {
     expect(marketRoutes).toContain("app.get('/api/market/room/amount-distribution'");
     expect(marketRoutes).toContain("invokeTool('get_market_room_amount_distribution'");
+  });
+});
+
+describe('回放（ticket #43）', () => {
+  const at = new Date('2026-09-28T10:15:00+08:00');
+
+  it('成交分布请求与深链接带同一个 at', () => {
+    const params = amountParamsFromHash(
+      '#market-room?tab=turnover&kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+    expect(params.at).toEqual(at);
+    expect(amountQuery(params)).toBe('?kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z');
+    expect(amountHash(params)).toBe(
+      'market-room?tab=turnover&kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+  });
+
+  it('回放时点没有批次时给出不可回放原因', () => {
+    const source = read('./market-room-amount.js');
+    expect(source).toContain('replayEmptyNotice(params.at)');
   });
 });
