@@ -54,7 +54,7 @@ const start = async (
       ? {
           collect: async () => {
             calls += 1;
-            return { ok: true as const, data: { created: true, batch } };
+            return { ok: true as const, data: { created: true, batch, warnings: [] } };
           },
         }
       : {}),
