@@ -357,7 +357,7 @@ const coverageCard = (coverage) => {
         ];
   return el('div', 'card room-card', [
     el('div', 'card-header', [
-      el('div', [el('h2', '', '数据时点与覆盖'), el('div', 'card-meta', '最近已发布批次')]),
+      el('div', null, [el('h2', '', '数据时点与覆盖'), el('div', 'card-meta', '最近已发布批次')]),
       statusBadge(coverage.status),
     ]),
     ...body,
@@ -408,7 +408,7 @@ const breadthCard = (overview) => {
   }
   return el('div', 'card room-card', [
     el('div', 'card-header', [
-      el('div', [
+      el('div', null, [
         el('h2', '', '指数与个股宽度'),
         el('div', 'card-meta', '指数为实时行情 · 宽度与中位数来自批次样本'),
       ]),
@@ -435,7 +435,7 @@ const amountCard = (amount) => {
         ];
   return el('div', 'card room-card', [
     el('div', 'card-header', [
-      el('div', [
+      el('div', null, [
         el('h2', '', '成交额与昨日同时点'),
         el('div', 'card-meta', '对比基准为上一交易日同一时刻的已发布批次'),
       ]),
@@ -450,7 +450,10 @@ const limitUpCard = (limitUp) => {
   const value = limitUp.value;
   return el('div', 'card room-card', [
     el('div', 'card-header', [
-      el('div', [el('h2', '', '短线情绪'), el('div', 'card-meta', '复用 A 股情绪契约，不重算')]),
+      el('div', null, [
+        el('h2', '', '短线情绪'),
+        el('div', 'card-meta', '复用 A 股情绪契约，不重算'),
+      ]),
       statusBadge(limitUp.status),
     ]),
     value === undefined
@@ -632,7 +635,7 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
   return el('div', 'room-sectors', [
     el('div', 'card room-card', [
       el('div', 'card-header', [
-        el('div', [
+        el('div', null, [
           el('h2', '', '板块盘中榜'),
           el(
             'div',
@@ -652,7 +655,7 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
     ]),
     el('div', 'card room-card', [
       el('div', 'card-header', [
-        el('div', [
+        el('div', null, [
           el('h2', '', '口径说明'),
           el('div', 'card-meta', '概念成分可重叠，占比不可加总'),
         ]),
@@ -758,7 +761,7 @@ const ensureShell = (section) => {
   tabs.setAttribute('aria-label', '作战室视图');
   mount(section, [
     el('div', 'route-header room-head', [
-      el('div', [
+      el('div', null, [
         el('span', 'section-kicker', 'MARKET ROOM'),
         el('h1', '', '作战室'),
         el('div', 'route-meta', '全市场盘中总览 · 只读已发布批次'),
