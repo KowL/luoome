@@ -12,6 +12,7 @@ import {
   type Holding,
   InvariantError,
   type LimitUpLadder,
+  type MarketSnapshotBatch,
   type MinuteBar,
   money,
   type Notification,
@@ -103,6 +104,48 @@ const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadde
   ],
   warnings: [],
   asOf: T1,
+  ...overrides,
+});
+
+const makeMarketSnapshotBatch = (
+  overrides: Partial<MarketSnapshotBatch> = {},
+): MarketSnapshotBatch => ({
+  id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+  coverage: 'CN_A_SHARES_SH_SZ',
+  tradingDate: '2026-09-28',
+  sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+  source: 'eastmoney',
+  fetchedAt: new Date('2026-09-28T02:16:02.000Z'),
+  observedAt: new Date('2026-09-28T02:16:00.000Z'),
+  dataAsOf: new Date('2026-09-28T02:16:00.000Z'),
+  completeness: {
+    expectedCount: 2,
+    receivedCount: 2,
+    missingCount: 0,
+    duplicateCount: 0,
+    complete: true,
+  },
+  gaps: [],
+  items: [
+    {
+      id: '600519.SH',
+      code: '600519',
+      exchange: 'SH',
+      name: '贵州茅台',
+      close: 1500,
+      changePct: 1.2,
+      amount: 3_000_000_000,
+    },
+    {
+      id: '000001.SZ',
+      code: '000001',
+      exchange: 'SZ',
+      name: '平安银行',
+      close: 11.2,
+      changePct: -0.4,
+      amount: 1_200_000_000,
+    },
+  ],
   ...overrides,
 });
 
@@ -4301,6 +4344,59 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
+      });
+    });
+
+    describe('MarketSnapshotBatchRepository', () => {
+      it('发布后按 id 与最近批次读取完整快照', async () => {
+        const batch = makeMarketSnapshotBatch();
+        const published = await repos.marketSnapshotBatch.publish(batch);
+        expect(published).toEqual({ created: true, batch });
+        expect(await repos.marketSnapshotBatch.findById(batch.id)).toEqual(batch);
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(batch);
+        expect(
+          await repos.marketSnapshotBatch.findLatest({ coverage: 'CN_A_SHARES_SH_SZ' }),
+        ).toEqual(batch);
+      });
+
+      it('同一批次重试保留首次发布内容，不产生第二份', async () => {
+        const first = makeMarketSnapshotBatch();
+        await repos.marketSnapshotBatch.publish(first);
+        const changed = makeMarketSnapshotBatch({
+          fetchedAt: new Date('2026-09-28T02:18:30.000Z'),
+          source: 'tencent',
+          items: [first.items[0] as NonNullable<(typeof first.items)[0]>],
+          completeness: {
+            expectedCount: 2,
+            receivedCount: 1,
+            missingCount: 1,
+            duplicateCount: 0,
+            complete: false,
+          },
+          gaps: ['missing_items: 期望 2 只，实收 1 只，缺 1 只'],
+        });
+        await expect(repos.marketSnapshotBatch.publish(changed)).resolves.toEqual({
+          created: false,
+          batch: first,
+        });
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(first);
+      });
+
+      it('不同采样时点分别发布，最近批次按采样时点倒序', async () => {
+        const earlier = makeMarketSnapshotBatch();
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:20:00.000Z',
+          sampledAt: new Date('2026-09-28T02:20:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:21:01.000Z'),
+          source: 'tencent',
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(later);
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(later);
+        expect(await repos.marketSnapshotBatch.findById(earlier.id)).toEqual(earlier);
+        expect(
+          await repos.marketSnapshotBatch.findLatest({ coverage: 'CN_A_SHARES_BJ' }),
+        ).toBeNull();
       });
     });
 

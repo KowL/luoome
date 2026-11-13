@@ -162,6 +162,7 @@ interface EastmoneyClistItem {
   readonly f14?: string; // 名称
   readonly f2?: number | string; // 最新价（fltt=2 后为 float 元；'-' 表示无报价）
   readonly f3?: number | string; // 涨跌幅%
+  readonly f6?: number | string; // 成交额（元）
 }
 
 interface EastmoneyClistResponse {
@@ -175,7 +176,8 @@ interface EastmoneyClistResponse {
 /**
  * clist 响应 → 全市场快照条目（纯函数，便于测试）。
  * 本接口 fs 限定沪深 A 股，marketId 只应出现 1/0；其它值（B 股等漏网）丢弃。
- * f2 缺失 / '-' / 非正（停牌）不丢弃条目，仅省略 close/changePct。
+ * f2 缺失 / '-' / 非正（停牌）不丢弃条目，仅省略 close/changePct；
+ * f6 成交额缺失 / 非法时省略 amount，不写 0、不推断。
  */
 export const parseEastmoneyClist = (json: EastmoneyClistResponse): MarketSnapshotItem[] => {
   if (json.rc !== 0) {
@@ -189,6 +191,7 @@ export const parseEastmoneyClist = (json: EastmoneyClistResponse): MarketSnapsho
     if (exchange === undefined) continue;
     const close = typeof item.f2 === 'number' && item.f2 > 0 ? item.f2 : undefined;
     const changePct = typeof item.f3 === 'number' ? item.f3 : undefined;
+    const amount = typeof item.f6 === 'number' && item.f6 >= 0 ? item.f6 : undefined;
     result.push({
       id: `${item.f12}.${exchange}`,
       code: item.f12,
@@ -196,6 +199,7 @@ export const parseEastmoneyClist = (json: EastmoneyClistResponse): MarketSnapsho
       name: item.f14,
       ...(close !== undefined ? { close } : {}),
       ...(changePct !== undefined ? { changePct } : {}),
+      ...(amount !== undefined ? { amount } : {}),
     });
   }
   return result;
@@ -270,7 +274,7 @@ const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
  * fid=f3 = 按涨跌幅降序；若 AI 来源只取前 N 条，会产生强势股抽样偏置。
  */
 const CLIST_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
-const CLIST_FIELDS = 'f12,f13,f14,f2,f3';
+const CLIST_FIELDS = 'f12,f13,f14,f2,f3,f6';
 const CLIST_PAGE_SIZE = 500;
 const TRENDS_FIELDS1 = 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11';
 const TRENDS_FIELDS2 = 'f51,f52,f53,f54,f55,f56,f57,f58';

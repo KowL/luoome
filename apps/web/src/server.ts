@@ -19,6 +19,7 @@ import { FeishuSettingsStore } from './feishu-settings.js';
 import { appServiceTool } from './http/app-service.js';
 import { jsonResult, notFound, parseJsonObject, permissionDenied } from './http/result.js';
 import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
+import { startMarketBatchScheduler } from './market-batch-scheduler.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
@@ -376,11 +377,17 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
   });
-  const schedulers = [
+  const schedulers: Array<{ readonly stop: () => void }> = [
     startStrategyScheduler(ctx, { startImmediately: false }),
     startIntradayPlanScheduler(ctx, { startImmediately: false }),
     startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
   ];
+  // 盘中批次采集访问外部行情并写本地快照：只有 write + external 同时显式开启才启动。
+  const backgroundExternalEnabled =
+    process.env.LUOOME_EXPOSE_WRITE === 'true' && process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
+  if (backgroundExternalEnabled) {
+    schedulers.push(startMarketBatchScheduler(ctx, { startImmediately: false, enabled: true }));
+  }
   const host = options.host ?? '127.0.0.1';
   const server = Bun.serve({
     port: options.port,

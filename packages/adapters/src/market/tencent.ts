@@ -568,6 +568,9 @@ export class TencentAdapter {
         const fields = raw.split('~');
         const close = positiveNumber(fields[3]);
         const changePct = finiteNumber(fields[32]);
+        const amountWan = finiteNumber(fields[37]);
+        const amount =
+          amountWan === undefined || amountWan < 0 ? undefined : amountYuanFromWan(amountWan);
         const observedAt = parseTencentSnapshotTime(fields[30]);
         if (
           observedAt !== undefined &&
@@ -583,6 +586,7 @@ export class TencentAdapter {
           name: entry.name,
           ...(close === undefined ? {} : { close }),
           ...(changePct === undefined ? {} : { changePct }),
+          ...(amount === undefined ? {} : { amount }),
         });
       }
     }
@@ -742,6 +746,9 @@ const finiteNumber = (value: string | undefined): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+/** qt 成交额单位为万元；A 股统一换算成元（保留两位小数）。 */
+const amountYuanFromWan = (value: number): number => Math.round(value * 1_000_000) / 100;
+
 const parseTencentSnapshotTime = (value: string | undefined): Date | undefined => {
   if (value === undefined) return undefined;
   const compact = /^\d{14}$/.test(value)
@@ -826,7 +833,7 @@ const buildTencentQuote = (
     close: money(close),
     volume: volume * (isHongKong ? 1 : 100),
     ...(amount !== undefined && amount >= 0
-      ? { amount: isHongKong ? amount : Math.round(amount * 1_000_000) / 100 }
+      ? { amount: isHongKong ? amount : amountYuanFromWan(amount) }
       : {}),
     ...(prevClose === undefined ? {} : { prevClose: money(prevClose) }),
     ...(turnover !== undefined && turnover >= 0 ? { turnoverRatePct: turnover } : {}),

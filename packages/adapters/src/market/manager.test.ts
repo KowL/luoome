@@ -846,6 +846,34 @@ describe('market/manager fetchMarketSnapshot', () => {
     expect(fallback.envelopeCallCount).toBe(1);
   });
 
+  it('allowPartial=true → 返回不完整信封供批次发布，且不污染严格读取缓存', async () => {
+    const primary = new SnapshotSource('p');
+    const partial: MarketSnapshot = {
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: 'p',
+      fetchedAt: new Date('2026-08-14T08:00:00.000Z'),
+      items: SNAPSHOT,
+      completeness: {
+        expectedCount: 2,
+        receivedCount: 1,
+        missingCount: 1,
+        duplicateCount: 0,
+        complete: false,
+      },
+    };
+    primary.fetchMarketSnapshotEnvelope = async () => {
+      primary.envelopeCallCount += 1;
+      return partial;
+    };
+    const mgr = createTestMarketDataManager({ primary, logger: silentLogger });
+    const tolerant = await mgr.fetchMarketSnapshotEnvelope({ allowPartial: true });
+    expect(tolerant).toEqual(partial);
+    expect(primary.envelopeCallCount).toBe(1);
+    // 不完整信封不写缓存：严格读取仍需重新取数并拒绝不完整结果。
+    await expect(mgr.fetchMarketSnapshotEnvelope()).rejects.toThrow('partial_data');
+    expect(primary.envelopeCallCount).toBe(2);
+  });
+
   it('没有任何源实现 → 明确抛错（调用方降级本地股票库）', async () => {
     const mgr = createTestMarketDataManager({
       primary: new StubPrimary(),

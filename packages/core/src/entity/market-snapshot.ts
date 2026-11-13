@@ -10,6 +10,8 @@ export const MarketSnapshotItemSchema = z.object({
   name: z.string().min(1),
   close: z.number().positive().optional(),
   changePct: z.number().finite().optional(),
+  /** 当日累计成交额（元，上游原值）；上游缺字段时省略，不写 0、不推断。 */
+  amount: z.number().nonnegative().optional(),
 });
 export type MarketSnapshotItem = z.infer<typeof MarketSnapshotItemSchema>;
 

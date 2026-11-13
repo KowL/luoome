@@ -660,6 +660,7 @@ Note             笔记（标题、内容、标签、来源）
 Config           KV 配置（user/account/global scope）
 LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）；实时 manager + PIT snapshot repository
 LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
+MarketSnapshotBatch 盘中全市场不可变批次（coverage, sampledAt, source, 行情/抓取时间, completeness, gaps, items）；按采样时点去重发布
 Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
 ```
@@ -867,13 +868,14 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ## 7. Tool 系统
 
-### 7.1 公共 Agent Tool 面 = 35 个核心 Agent Tool
+### 7.1 公共 Agent Tool 面 = 37 个核心 Agent Tool
 
 `toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
 
-- 行情与盘面资讯（11）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
+- 行情与盘面资讯（13）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
   `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
-  `dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`
+  `dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`、
+  `collect_market_snapshot`、`get_market_snapshot_batch`
 - 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
 - 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
   `run_strategy_backtest`、`get_strategy_signals`

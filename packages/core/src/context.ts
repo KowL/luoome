@@ -43,7 +43,10 @@ export interface MarketDataAdapterLike {
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
   /** 带来源、时间和分页完整性信封的全市场快照；不支持时以 unsupported_capability 拒绝。 */
-  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
+  fetchMarketSnapshotEnvelope?(options?: {
+    /** true 时不把不完整信封当失败；批次发布需要照常落库并标注缺口。 */
+    readonly allowPartial?: boolean;
+  }): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
   /** 主动探测指定源的各 capability（设置页「测试」按钮）；直接执行 registry handle，不经过路由 / 缓存 / 限速。 */
@@ -303,7 +306,6 @@ export interface DragonTigerFlowManagerLike {
   /** 进程内源健康观测（registry.describe()）。 */
   status(): readonly SourceStatus[];
 }
-
 
 /**
  * 北向资金历史流 manager 投影。

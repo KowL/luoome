@@ -6,8 +6,8 @@ import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { saveDecisionReviewTool } from './tools/decision-review.js';
-import { dragonTigerFlowTool } from './tools/dragon-tiger-flow.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
+import { dragonTigerFlowTool } from './tools/dragon-tiger-flow.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountOverviewTool } from './tools/get-account-overview.js';
@@ -17,6 +17,10 @@ import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
 import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
+import {
+  collectMarketSnapshotTool,
+  getMarketSnapshotBatchTool,
+} from './tools/market-snapshot-batch.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
 import { getAccountPerformanceTool } from './tools/portfolio-performance.js';
@@ -187,4 +191,7 @@ export const toolRegistry: Registry = createRegistry([
   searchResearchDocumentsTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
+  // 盘中全市场批次（ticket #35）：采集发布（external+write）与只读最近批次
+  collectMarketSnapshotTool,
+  getMarketSnapshotBatchTool,
 ]);

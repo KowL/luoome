@@ -1,7 +1,9 @@
 import {
   type DailyBar,
   type DateRange,
+  type MarketSnapshot,
   type MarketSnapshotItem,
+  MarketSnapshotSchema,
   type MarketSourceStatus,
   type MinuteBar,
   money,
@@ -146,6 +148,24 @@ export class FakeMarketAdapter implements MarketDataAdapter {
         close: this.basePriceFor(s.id),
       })),
     );
+  }
+
+  /** 测试信封：与 fetchMarketSnapshot 同集合，全部实收即为完整。 */
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    const items = await this.fetchMarketSnapshot();
+    return MarketSnapshotSchema.parse({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: this.name,
+      fetchedAt: this.clock(),
+      items: [...items],
+      completeness: {
+        expectedCount: items.length,
+        receivedCount: items.length,
+        missingCount: 0,
+        duplicateCount: 0,
+        complete: items.length > 0,
+      },
+    });
   }
 
   fetchIndexQuotes(): Promise<never> {

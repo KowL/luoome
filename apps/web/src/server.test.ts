@@ -4985,3 +4985,159 @@ describe('AI 投资助手确认闭环', () => {
     expect(selected[0]?.id).not.toBe(original[1]?.id);
   });
 });
+
+import { MarketDayFixtureAdapter } from '@luoome/adapters/testing';
+/**
+ * 盘中全市场批次 Web API（ticket #35）。
+ * 用六个模拟时点的交易日夹具驱动可控时钟：POST 采集发布，GET 只读最近批次。
+ */
+import type { MarketSnapshot } from '@luoome/core';
+
+class FailingMarketSnapshotAdapter extends MarketDayFixtureAdapter {
+  override fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    return Promise.reject(new Error('upstream down'));
+  }
+}
+
+const marketRoomApp = async (
+  clock: () => Date,
+  options: { readonly expose?: boolean; readonly failing?: boolean } = {},
+): Promise<{ readonly app: Hono; readonly adapter: MarketDayFixtureAdapter }> => {
+  const ctx = await buildTestContext({ clock });
+  const adapter: MarketDayFixtureAdapter = options.failing
+    ? new FailingMarketSnapshotAdapter({ clock })
+    : new MarketDayFixtureAdapter({ clock });
+  const web = createWebApp(
+    { ...ctx, adapters: { ...ctx.adapters, market: adapter } },
+    options.expose === false ? {} : { exposeWrite: true, exposeExternal: true },
+  );
+  return { app: web, adapter };
+};
+
+const marketRoomClock = (time: string): Date => new Date(`2026-09-28T${time}+08:00`);
+
+describe('Web 盘中全市场批次 API', () => {
+  it('可控时钟下驱动一次采集，读取入口返回同一批次且刷新不重复采集', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, adapter } = await marketRoomApp(() => new Date(now.getTime()));
+
+    const before = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    expect(before.status).toBe(200);
+    const beforeBody = (await before.json()) as {
+      ok: boolean;
+      data?: { batch: unknown };
+    };
+    expect(beforeBody.ok).toBe(true);
+    expect(beforeBody.data?.batch).toBeNull();
+
+    const collected = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    expect(collected.status).toBe(200);
+    const collectedBody = (await collected.json()) as {
+      ok: boolean;
+      data?: {
+        created: boolean;
+        batch: {
+          id: string;
+          source: string;
+          tradingDate: string;
+          sampledAt: string;
+          completeness: { complete: boolean; receivedCount: number };
+          gaps: string[];
+          items: Array<{ amount?: number }>;
+        };
+      };
+    };
+    expect(collectedBody.ok).toBe(true);
+    const batch = collectedBody.data?.batch;
+    expect(collectedBody.data?.created).toBe(true);
+    expect(batch).toMatchObject({
+      id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+      source: 'market-day-fixture',
+      tradingDate: '2026-09-28',
+      sampledAt: '2026-09-28T02:15:00.000Z',
+      completeness: { complete: true, receivedCount: 10 },
+      gaps: [],
+    });
+    expect(batch?.items.every((item) => (item.amount ?? 0) > 0)).toBe(true);
+
+    const firstRead = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    const secondRead = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    const firstBody = (await firstRead.json()) as { data?: { batch?: { id: string } } };
+    const secondBody = (await secondRead.json()) as { data?: { batch?: { id: string } } };
+    expect(firstBody.data?.batch?.id).toBe(batch?.id);
+    expect(secondBody.data?.batch?.id).toBe(batch?.id);
+    expect(adapter.envelopeCalls).toBe(1);
+  });
+
+  it('同一采样时点重试不产生第二份发布', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, adapter } = await marketRoomApp(() => new Date(now.getTime()));
+    const first = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    const second = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    const firstBody = (await first.json()) as {
+      data?: { created: boolean; batch: { fetchedAt: string } };
+    };
+    const secondBody = (await second.json()) as {
+      data?: { created: boolean; batch: { fetchedAt: string } };
+    };
+    expect(firstBody.data?.created).toBe(true);
+    expect(secondBody.data?.created).toBe(false);
+    expect(secondBody.data?.batch).toEqual(firstBody.data?.batch);
+    expect(adapter.envelopeCalls).toBe(1);
+  });
+
+  it('进入下一个采样时点后发布新批次，读取端只返回最近一个批次', async () => {
+    let now = marketRoomClock('10:16:00');
+    const { app: web } = await marketRoomApp(() => new Date(now.getTime()));
+    const first = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    const firstBody = (await first.json()) as { data?: { batch?: { id: string } } };
+    now = marketRoomClock('10:21:00');
+    const second = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    const secondBody = (await second.json()) as { data?: { batch?: { id: string } } };
+    expect(secondBody.data?.batch?.id).not.toBe(firstBody.data?.batch?.id);
+    const read = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    const readBody = (await read.json()) as { data?: { batch?: { id: string } } };
+    expect(readBody.data?.batch?.id).toBe(secondBody.data?.batch?.id);
+  });
+
+  it('采集失败按既有错误模型返回，不产生空批次', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web } = await marketRoomApp(() => new Date(now.getTime()), { failing: true });
+    const collected = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    expect(collected.status).toBe(502);
+    const body = (await collected.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('adapter_error');
+    const read = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    const readBody = (await read.json()) as { data?: { batch: unknown } };
+    expect(readBody.data?.batch).toBeNull();
+  });
+
+  it('未开启 write + external 时拒绝采集，读取入口仍可用', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, adapter } = await marketRoomApp(() => new Date(now.getTime()), {
+      expose: false,
+    });
+    const collected = await web.fetch(
+      new Request('http://test/api/market/room/collect', { method: 'POST' }),
+    );
+    expect(collected.status).toBe(403);
+    const body = (await collected.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.error?.kind).toBe('permission_denied');
+    expect(adapter.envelopeCalls).toBe(0);
+    const read = await web.fetch(new Request('http://test/api/market/room/snapshot'));
+    expect(read.status).toBe(200);
+  });
+});
