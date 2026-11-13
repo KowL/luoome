@@ -188,6 +188,12 @@ const buildCtx = async (
 const savedLadder = (ctx: ToolContext): Promise<LimitUpLadder | null> =>
   ctx.repos.limitUpLadderSnapshot.findByDate({ date: '2026-09-28', source: 'eastmoney' });
 
+const savedSamples = (ctx: ToolContext) =>
+  ctx.repos.limitUpLadderSample.listByTradingDate({
+    tradingDate: '2026-09-28',
+    source: 'eastmoney',
+  });
+
 const collect = (ctx: ToolContext) => collectMarketSnapshotTool.execute({}, ctx);
 const readLatest = (ctx: ToolContext) => getMarketSnapshotBatchTool.execute({}, ctx);
 
@@ -241,6 +247,55 @@ describe('tool/collect_market_snapshot', () => {
     expect(result.data.created).toBe(true);
     expect(result.data.warnings).toEqual([]);
     expect(ladder.calls).toBe(1);
+    expect(await savedLadder(ctx)).toEqual(ladderFixture());
+    // #41：同一批天梯事实按批次采样时点另存一份，供开板 / 换位时间线复算。
+    expect(await savedSamples(ctx)).toEqual([
+      expect.objectContaining({
+        tradingDate: '2026-09-28',
+        source: 'eastmoney',
+        sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+        total: 1,
+        maxLevel: 1,
+      }),
+    ]);
+  });
+
+  it('每个新批次按采样时点保存一份天梯事实，同日多份按时间升序', async () => {
+    const market = new StubMarketAdapter(async () => makeEnvelope());
+    const ladder = new StubLadderManager({ ok: true, data: ladderFixture() });
+    const ctx = await buildCtx(market, NOW, ladder);
+    await collect(ctx);
+    const laterBase = await buildCtx(market, new Date('2026-09-28T10:20:30+08:00'), ladder);
+    const later = { ...laterBase, repos: ctx.repos };
+    await collect(later);
+    const samples = await savedSamples(ctx);
+    expect(samples.map((sample) => sample.sampledAt)).toEqual([
+      new Date('2026-09-28T02:15:00.000Z'),
+      new Date('2026-09-28T02:20:00.000Z'),
+    ]);
+    expect(ladder.calls).toBe(2);
+  });
+
+  it('天梯样本写入失败不阻塞批次发布，只带 warning', async () => {
+    const market = new StubMarketAdapter(async () => makeEnvelope());
+    const ladder = new StubLadderManager({ ok: true, data: ladderFixture() });
+    const ctx = await buildCtx(market, NOW, ladder);
+    const original = ctx.repos.limitUpLadderSample;
+    Object.defineProperty(ctx.repos, 'limitUpLadderSample', {
+      value: {
+        ...original,
+        save: () => Promise.reject(new Error('sample store down')),
+      },
+      configurable: true,
+    });
+    const result = await collect(ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.created).toBe(true);
+    expect(result.data.warnings).toEqual(['limit_up_ladder_sample_failed: sample store down']);
+    // 批次与当日天梯快照仍然保存。
+    const latest = await readLatest(ctx);
+    expect(latest.ok && latest.data.batch?.id).toBe(result.data.batch.id);
     expect(await savedLadder(ctx)).toEqual(ladderFixture());
   });
 
@@ -307,6 +362,7 @@ describe('tool/collect_market_snapshot', () => {
     expect(result.data.warnings).toEqual([]);
     expect(ladder.calls).toBe(0);
     expect(await savedLadder(ctx)).toBeNull();
+    expect(await savedSamples(ctx)).toEqual([]);
   });
 
   it('下一个采样时点是新批次，读取端返回最近的已发布批次', async () => {

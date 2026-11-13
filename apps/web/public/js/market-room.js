@@ -21,6 +21,7 @@ import {
   amountQuery,
   renderAmountPane,
 } from './market-room-amount.js';
+import { fetchCoreStocks, renderCoreStocksPane } from './market-room-roles.js';
 import {
   fetchSectorDetail,
   renderSectorDetailPane,
@@ -726,16 +727,18 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
   renderSectors(section, current, params);
   if (ranking === null) setStatus?.('板块盘中榜刷新失败，保留上次成功结果', true);
   if (detailParams.sectorId === null) return;
-  const detail = await fetchSectorDetail({
-    sectorId: detailParams.sectorId,
-    compareSectorIds: detailParams.compareSectorIds,
-    window: params.window,
-  });
+  const [detail, core] = await Promise.all([
+    fetchSectorDetail({
+      sectorId: detailParams.sectorId,
+      compareSectorIds: detailParams.compareSectorIds,
+      window: params.window,
+    }),
+    fetchCoreStocks({ sectorId: detailParams.sectorId }),
+  ]);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   const slot = roomSection()?.querySelector('.room-sector-detail-slot');
   if (slot === null || slot === undefined) return;
-  mount(
-    slot,
+  mount(slot, [
     renderSectorDetailPane(detail, {
       ranking: current,
       params: detailParams,
@@ -750,7 +753,8 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
         window.location.hash = sectorHash(params);
       },
     }),
-  );
+    renderCoreStocksPane(core),
+  ]);
 };
 
 /* ---- 成交分布（ticket #40） ---- */

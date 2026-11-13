@@ -7,6 +7,10 @@ import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-r
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type {
+  LimitUpLadderSample,
+  LimitUpLadderSamplePublishResult,
+} from '../entity/limit-up-ladder-sample.js';
+import type {
   MarketSnapshotBatch,
   MarketSnapshotBatchPublishResult,
 } from '../entity/market-snapshot-batch.js';
@@ -194,6 +198,26 @@ export interface LimitUpLadderSnapshotRepository {
     readonly date: string;
     readonly source: LimitUpLadderSource;
   }): Promise<LimitUpLadder | null>;
+}
+
+/**
+ * 按采样时点保存的天梯事实（ticket #41）：同一天可有多份，用于还原开板 / 换位时间线。
+ * 同 (tradingDate, source, sampledAt) 幂等，保留首次写入内容。
+ */
+export interface LimitUpLadderSampleRepository {
+  save(sample: LimitUpLadderSample): Promise<LimitUpLadderSamplePublishResult>;
+  findById(id: string): Promise<LimitUpLadderSample | null>;
+  /** 指定交易日、某时点及之前最近的样本；不跨交易日取值。 */
+  findAtOrBefore(input: {
+    readonly tradingDate: string;
+    readonly source: LimitUpLadderSource;
+    readonly sampledAt: Date;
+  }): Promise<LimitUpLadderSample | null>;
+  /** 指定交易日全部样本，按 sampledAt 升序；没有样本时返回空数组。 */
+  listByTradingDate(input: {
+    readonly tradingDate: string;
+    readonly source: LimitUpLadderSource;
+  }): Promise<LimitUpLadderSample[]>;
 }
 
 /** 盘中全市场批次：按采样时点不可变发布，重复发布同一批次不产生第二份。 */
@@ -468,6 +492,8 @@ export interface RepositoryRegistry {
   readonly sectorCatalog: SectorCatalogRepository;
   /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
+  /** 按采样时点保存的天梯事实（开板 / 换位时间线用）。 */
+  readonly limitUpLadderSample: LimitUpLadderSampleRepository;
   /** 盘中全市场快照批次（不可变、按采样时点去重）。 */
   readonly marketSnapshotBatch: MarketSnapshotBatchRepository;
   readonly holding: HoldingRepository;

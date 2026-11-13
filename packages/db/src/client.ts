@@ -19,6 +19,7 @@ import {
   DrizzleDecisionReviewRepository,
   DrizzleHoldingRepository,
   DrizzleLedgerRepository,
+  DrizzleLimitUpLadderSampleRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMarketSnapshotBatchRepository,
   DrizzleMinuteBarRepository,
@@ -418,6 +419,23 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS limit_up_ladder_snapshots_source_date_idx
     ON limit_up_ladder_snapshots (source, date)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS limit_up_ladder_samples (
+      id TEXT PRIMARY KEY,
+      trading_date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      max_level INTEGER NOT NULL,
+      levels_json TEXT NOT NULL,
+      warnings_json TEXT NOT NULL,
+      as_of INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS limit_up_ladder_samples_source_date_sampled_idx
+    ON limit_up_ladder_samples (source, trading_date, sampled_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS market_snapshot_batches (
@@ -1882,6 +1900,7 @@ export const createDrizzleRepos = (
     stockUniverse: new DrizzleStockUniverseRepository(db),
     sectorCatalog: new DrizzleSectorCatalogRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
+    limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db),
     marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),

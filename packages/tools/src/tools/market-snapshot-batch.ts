@@ -1,4 +1,5 @@
 import {
+  buildLimitUpLadderSample,
   buildMarketSnapshotBatch,
   isAshareTradingSession,
   LimitUpLadderQuerySchema,
@@ -18,7 +19,8 @@ import { defineTool, errAdapterError } from '../define-tool.js';
  * - `collect_market_snapshot` 一次采集发布一个不可变批次；同采样时点重试复用已发布内容，
  *   不重复采集、不产生第二份；
  * - 采集失败按既有 `adapter_error` 返回，不写空批次、不把失败写成零值；
- * - 发布新批次后，在交易时段内顺带刷新当日连板天梯快照；天梯失败只进 warnings，
+ * - 发布新批次后，在交易时段内顺带刷新当日连板天梯快照，并按批次采样时点保存一份
+ *   天梯事实（ticket #41，开板 / 换位时间线的数据基础）；天梯或样本写入失败只进 warnings，
  *   不回滚已发布批次，也不把失败吞成成功；
  * - `get_market_snapshot_batch` 只读最近已发布批次，刷新与跨页读取不触发采集。
  */
@@ -27,11 +29,13 @@ const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
 
 /**
  * 当日连板天梯快照是 #38 板块封板数的数据来源；盘中只在交易时段写入，
- * 同一天同一来源按既有主键（date+source）覆盖为最新，不新增历史版本。
+ * 同一天同一来源按既有主键（date+source）覆盖为最新。同时按批次采样时点另存一份
+ * 不可变天梯事实，供 #41 还原开板 / 换位时间线（失败只提示，不影响批次）。
  */
 const refreshLimitUpLadder = async (
   ctx: ToolContext,
   tradingDate: string,
+  sampledAt: Date,
 ): Promise<readonly string[]> => {
   if (!isAshareTradingSession(ctx.clock())) return [];
   const manager = ctx.adapters.marketIntel?.limitUpLadder;
@@ -45,6 +49,14 @@ const refreshLimitUpLadder = async (
       return [`limit_up_ladder_refresh_failed: ${cause}`];
     }
     await ctx.repos.limitUpLadderSnapshot.save(result.data);
+    try {
+      await ctx.repos.limitUpLadderSample.save(
+        buildLimitUpLadderSample({ ladder: result.data, sampledAt }),
+      );
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      return [`limit_up_ladder_sample_failed: ${cause}`];
+    }
     return [];
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
@@ -105,7 +117,11 @@ export const collectMarketSnapshotTool = defineTool({
     const published = await ctx.repos.marketSnapshotBatch.publish(
       buildMarketSnapshotBatch({ snapshot, sampledAt }),
     );
-    const warnings = await refreshLimitUpLadder(ctx, published.batch.tradingDate);
+    const warnings = await refreshLimitUpLadder(
+      ctx,
+      published.batch.tradingDate,
+      published.batch.sampledAt,
+    );
     return { created: published.created, batch: published.batch, warnings: [...warnings] };
   },
 });

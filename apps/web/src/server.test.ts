@@ -18,7 +18,7 @@ import type {
   SourceStatus,
   ToolContext,
 } from '@luoome/core';
-import { TradingPlanSchema } from '@luoome/core';
+import { buildLimitUpLadderSample, TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import {
   addWatchlistMembersTool,
@@ -6198,5 +6198,251 @@ describe('Web 作战室板块详情 API', () => {
     );
     expect(tooManyComparisons.status).toBe(400);
     expect(tooManyComparisons.body.error?.kind).toBe('invalid_input');
+  });
+});
+
+/**
+ * 作战室核心股 Web API（ticket #41）：三个角色、入选证据、换位时间线与从核心股反查题材。
+ */
+interface RoomCoreStocksBody {
+  ok: boolean;
+  error?: { kind: string; message?: string };
+  data?: {
+    coreStocks: {
+      state: 'ready' | 'empty';
+      emptyReason?: string;
+      sector: { sectorId: string; name: string } | null;
+      tradingDate: string | null;
+      anchor: { sampledAt: string } | null;
+      window: string;
+      roles: Record<
+        'ignition' | 'turnover' | 'height',
+        {
+          status: string;
+          holders: { stockId: string; code: string; evidence: unknown[] }[];
+          reason: string | null;
+          warnings: string[];
+        }
+      >;
+      timeline: {
+        sampledAt: string;
+        kind: string;
+        roleKind: string | null;
+        from: { code: string }[];
+        to: { code: string }[];
+        basis: string;
+      }[];
+      lookups: {
+        stockId: string;
+        code: string;
+        themeCount: number;
+        roleThemeCount: number;
+        pullsMultipleThemes: boolean;
+        themes: {
+          name: string;
+          roleKinds: string[];
+          peerCount: number;
+          peers: { code: string; dayChangePct: number | null }[];
+        }[];
+      }[];
+      coverage: {
+        batchCount: number;
+        ladderSampleCount: number;
+        ladderMissingCount: number;
+        timelineEventCount: number;
+        lookupCount: number;
+      };
+      notes: string[];
+    };
+  };
+}
+
+const readRoomCoreStocks = async (
+  web: Hono,
+  query: string,
+): Promise<{ readonly status: number; readonly body: RoomCoreStocksBody }> => {
+  const response = await web.fetch(new Request(`http://test/api/market/room/core-stocks${query}`));
+  return { status: response.status, body: (await response.json()) as RoomCoreStocksBody };
+};
+
+interface LadderSeed {
+  readonly code: string;
+  readonly level: number;
+  readonly firstTime: string;
+}
+
+const roomLadderSample = (time: string, seed: readonly LadderSeed[]) => {
+  const entries = seed.map((entry) => ({
+    code: entry.code,
+    name: entry.code,
+    industry: 'fixture',
+    ladderLevel: entry.level,
+    uncategorized: false,
+    firstTime: entry.firstTime,
+    finalTime: entry.firstTime,
+    reason: 'fixture',
+    price: 11,
+    rawClose: 11,
+    corrected: false,
+    changePct: 0.1,
+    limitUpDate: '2026-09-28',
+    board: 'main_board' as const,
+  }));
+  const levels = [...new Set(entries.map((entry) => entry.ladderLevel))]
+    .sort((left, right) => right - left)
+    .map((level) => {
+      const stocks = entries.filter((entry) => entry.ladderLevel === level);
+      return { level, name: level === 1 ? '首板' : `${level} 连板`, count: stocks.length, stocks };
+    });
+  return buildLimitUpLadderSample({
+    sampledAt: marketRoomClock(time),
+    ladder: {
+      date: '2026-09-28',
+      total: entries.length,
+      maxLevel: levels[0]?.level ?? 0,
+      source: 'eastmoney',
+      levels,
+      warnings: [],
+      asOf: marketRoomClock(time),
+    },
+  });
+};
+
+const CORE_POINTS = ['09:35', '10:15', '11:00', '13:15', '14:15', '14:50'] as const;
+
+const coreLadderSamples = (): ReturnType<typeof roomLadderSample>[] =>
+  CORE_POINTS.map((time) =>
+    roomLadderSample(
+      time,
+      time === '09:35' || time === '10:15'
+        ? [
+            { code: '600519', level: 2, firstTime: '09:31:00' },
+            { code: '300750', level: 1, firstTime: '09:45:00' },
+          ]
+        : time === '11:00'
+          ? [{ code: '600519', level: 2, firstTime: '09:31:00' }]
+          : [{ code: '600036', level: 1, firstTime: '13:05:00' }],
+    ),
+  );
+
+const seedCoreStocks = async (ctx: ToolContext): Promise<void> => {
+  await seedRoomSectors(ctx);
+  for (const [index, time] of CORE_POINTS.entries()) {
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch(time, marketDayItems(index)));
+  }
+  for (const sample of coreLadderSamples()) await ctx.repos.limitUpLadderSample.save(sample);
+};
+
+describe('Web 作战室核心股 API', () => {
+  it('返回三个核心角色、证据、换位时间线与反查题材，读取不触发采集', async () => {
+    const now = marketRoomClock('14:50:00');
+    const { app: web, ctx, adapter } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedCoreStocks(ctx);
+    const ids = await roomSectorIds(ctx);
+
+    const { status, body } = await readRoomCoreStocks(
+      web,
+      `?sectorId=${encodeURIComponent(ids.get('重叠概念') ?? '')}`,
+    );
+
+    expect(status).toBe(200);
+    const core = body.data?.coreStocks;
+    expect(core?.state).toBe('ready');
+    expect(core?.sector?.name).toBe('重叠概念');
+    expect(core?.anchor?.sampledAt).toBe('2026-09-28T06:50:00.000Z');
+    expect(core?.window).toBe('w15');
+    expect(core?.roles.ignition.status).toBe('assigned');
+    expect(core?.roles.ignition.holders[0]?.code).toBe('600519');
+    expect(core?.roles.turnover.status).toBe('assigned');
+    expect(core?.roles.turnover.holders[0]?.code).toBe('600036');
+    expect(core?.roles.height.holders[0]?.code).toBe('600036');
+    for (const kind of ['ignition', 'turnover', 'height'] as const) {
+      for (const holder of core?.roles[kind].holders ?? []) {
+        expect(holder.evidence.length).toBeGreaterThan(0);
+      }
+    }
+
+    const kinds = (core?.timeline ?? []).map((event) => `${event.kind}:${event.roleKind ?? '-'}`);
+    expect(kinds).toContain('appear:height');
+    expect(kinds).toContain('appear:ignition');
+    expect(kinds).toContain('rotate:height');
+    expect(kinds).toContain('open_board:-');
+    const rotate = core?.timeline.find(
+      (event) => event.kind === 'rotate' && event.roleKind === 'height',
+    );
+    expect(rotate?.sampledAt).toBe('2026-09-28T05:15:00.000Z');
+    expect(rotate?.from[0]?.code).toBe('600519');
+    expect(rotate?.to[0]?.code).toBe('600036');
+
+    const follower = core?.lookups.find((lookup) => lookup.stockId === '600036.SH');
+    expect(follower?.themeCount).toBe(2);
+    expect(follower?.roleThemeCount).toBeGreaterThanOrEqual(2);
+    expect(follower?.pullsMultipleThemes).toBe(true);
+    const conceptTheme = follower?.themes.find((theme) => theme.name === '重叠概念');
+    expect(conceptTheme?.roleKinds).toEqual(expect.arrayContaining(['turnover', 'height']));
+    expect(conceptTheme?.peerCount).toBe(1);
+    expect(conceptTheme?.peers[0]?.code).toBe('600519');
+    expect(adapter.envelopeCalls).toBe(0);
+  });
+
+  it('at 截断到该时点及之前的事实，kind 只筛选反查范围', async () => {
+    const now = marketRoomClock('14:50:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedCoreStocks(ctx);
+    const ids = await roomSectorIds(ctx);
+    const target = encodeURIComponent(ids.get('重叠概念') ?? '');
+
+    const historical = await readRoomCoreStocks(
+      web,
+      `?sectorId=${target}&at=${encodeURIComponent('2026-09-28T10:15:00+08:00')}`,
+    );
+    expect(historical.body.data?.coreStocks.anchor?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(historical.body.data?.coreStocks.roles.height.holders[0]?.code).toBe('600519');
+    expect(historical.body.data?.coreStocks.timeline.some((event) => event.kind === 'rotate')).toBe(
+      false,
+    );
+    expect(
+      historical.body.data?.coreStocks.timeline.every(
+        (event) => event.sampledAt <= '2026-09-28T02:15:00.000Z',
+      ),
+    ).toBe(true);
+
+    const onlyHeight = await readRoomCoreStocks(web, `?sectorId=${target}&kind=height`);
+    expect(onlyHeight.body.data?.coreStocks.roles.height.holders[0]?.code).toBe('600036');
+    expect(onlyHeight.body.data?.coreStocks.lookups.map((lookup) => lookup.stockId)).toEqual([
+      '600036.SH',
+    ]);
+  });
+
+  it('空态与参数校验沿用既有 market 错误模型', async () => {
+    const now = marketRoomClock('14:50:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+
+    const noBatch = await readRoomCoreStocks(web, '?sectorId=anything');
+    expect(noBatch.status).toBe(200);
+    expect(noBatch.body.data?.coreStocks).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      timeline: [],
+      lookups: [],
+    });
+    expect(noBatch.body.data?.coreStocks.roles.ignition.status).toBe('unavailable');
+
+    await seedRoomSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('14:50', marketDayItems(5)));
+    const notFound = await readRoomCoreStocks(web, '?sectorId=missing-sector');
+    expect(notFound.body.data?.coreStocks).toMatchObject({
+      state: 'empty',
+      emptyReason: 'sector_not_found',
+      sector: null,
+    });
+
+    const missingId = await readRoomCoreStocks(web, '');
+    expect(missingId.status).toBe(400);
+    expect(missingId.body.error?.kind).toBe('invalid_input');
+
+    const invalidKind = await readRoomCoreStocks(web, '?sectorId=anything&kind=futures');
+    expect(invalidKind.status).toBe(400);
+    expect(invalidKind.body.error?.kind).toBe('invalid_input');
   });
 });

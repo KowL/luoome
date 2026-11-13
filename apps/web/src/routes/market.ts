@@ -325,6 +325,32 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
+  /**
+   * 作战室核心股（ticket #41）：三个核心角色、入选证据与换位时间线。
+   *
+   * 参数：
+   *   sectorId (必填) 板块内部标识
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次
+   *   kind (可选) ignition | turnover | height；只筛选从核心股反查的题材范围
+   *
+   * 只读；证据不足时角色为空或并列，不补零；参数不合法按既有模型返回
+   * invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/core-stocks', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['sectorId', 'kind', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_core_stocks', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   // 作战室页面（总览 / 板块追踪 / 成交分布三视图，SPA shell）
   app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
 

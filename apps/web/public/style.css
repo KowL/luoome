@@ -10910,9 +10910,186 @@ body > .modal {
   margin-top: var(--space-2);
 }
 
+/* ---- 作战室核心股角色与时间线（ticket #41） ---- */
+
+.room-core-stocks {
+  margin-top: var(--space-4);
+}
+
+.room-roles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.room-role-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--panel-alt);
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+
+.room-role-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.room-role-label {
+  font-weight: var(--weight-semibold);
+}
+
+.room-role-holder {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.room-role-holder-link {
+  font-weight: var(--weight-semibold);
+}
+
+.room-role-evidence {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.room-role-evidence li {
+  overflow-wrap: anywhere;
+}
+
+.room-role-reason {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
+}
+
+.room-core-timeline {
+  margin-bottom: var(--space-4);
+}
+
+.room-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.room-timeline-item {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--accent);
+  background: var(--panel-alt);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.room-timeline-sample_missing {
+  border-left-color: var(--warning);
+}
+
+.room-timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.room-timeline-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+
+.room-timeline-kind {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: var(--text-xs);
+}
+
+.room-timeline-text {
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+
+.room-lookup-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.room-lookup {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.room-lookup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.room-lookup-link {
+  font-weight: var(--weight-semibold);
+}
+
+.room-lookup-multiple {
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.room-lookup-themes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.room-lookup-theme {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel-alt);
+}
+
+.room-lookup-theme-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.room-lookup-theme-name {
+  font-weight: var(--weight-semibold);
+}
+
+.room-lookup-peers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 @media (max-width: 640px) {
   .room-detail-legend {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .room-roles {
+    grid-template-columns: 1fr;
   }
 }
