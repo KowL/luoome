@@ -13,6 +13,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { stockHref } from './market-room-return.js';
 import { formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
@@ -125,8 +126,8 @@ const coreStocksMetaText = (core) => {
   return `${sector?.name ?? '--'} · ${kind} ${sector?.vendorCode ?? ''} · 数据时点 ${fmtClock(core.anchor?.sampledAt)} · 天梯样本 ${coverage.ladderSampleCount ?? 0}/${coverage.batchCount ?? 0} · 时间线 ${coverage.timelineEventCount ?? 0} 条`;
 };
 
-/** 角色卡模型：状态、持有人、入库证据、缺失原因与口径。 */
-const roleCards = (core) => {
+/** 角色卡模型：状态、持有人、入库证据、缺失原因与口径；returnTo 保留作战室现场。 */
+const roleCards = (core, returnTo = null) => {
   if (core === undefined || core === null || core.state !== 'ready') return [];
   return ROLE_KINDS.map((kind) => {
     const role = core.roles?.[kind];
@@ -135,7 +136,7 @@ const roleCards = (core) => {
       stockId: holder.stockId,
       code: holder.code,
       name: holder.name ?? null,
-      href: `#market?stockId=${encodeURIComponent(holder.stockId)}&range=3m`,
+      href: stockHref(holder.stockId, returnTo),
       evidence: (holder.evidence ?? []).map(evidenceText).filter((line) => line !== null),
     }));
     return {
@@ -178,13 +179,13 @@ const timelineLines = (core) => {
 };
 
 /** 从核心股反查题材：所属题材 + 该股角色 + 其他成员同期表现。 */
-const lookupCards = (core) => {
+const lookupCards = (core, returnTo = null) => {
   if (core === undefined || core === null || core.state !== 'ready') return [];
   return (core.lookups ?? []).map((lookup) => ({
     stockId: lookup.stockId,
     code: lookup.code,
     name: lookup.name ?? null,
-    href: `#market?stockId=${encodeURIComponent(lookup.stockId)}&range=3m`,
+    href: stockHref(lookup.stockId, returnTo),
     multiple: lookup.pullsMultipleThemes === true,
     summary: `${lookup.themeCount} 个题材 · ${lookup.roleThemeCount} 个占用核心角色${lookup.pullsMultipleThemes ? ' · 同一只股票拉动多个题材' : ''}`,
     themes: (lookup.themes ?? []).map((theme) => ({
@@ -319,7 +320,7 @@ const lookupNode = (card) => {
 };
 
 /** 核心股区块：三个角色 + 时间线 + 从核心股反查题材。 */
-const renderCoreStocksPane = (core) => {
+const renderCoreStocksPane = (core, { returnTo = null } = {}) => {
   if (core === undefined || core === null) {
     return el('div', 'card room-empty room-core-stocks', [
       el('h2', '', '核心股暂不可用'),
@@ -334,9 +335,9 @@ const renderCoreStocksPane = (core) => {
       el('p', 'room-caption', '页面只读已发布批次；没有样本时不推算角色。'),
     ]);
   }
-  const cards = roleCards(core);
+  const cards = roleCards(core, returnTo);
   const timeline = timelineLines(core);
-  const lookups = lookupCards(core);
+  const lookups = lookupCards(core, returnTo);
   return el('div', 'card room-card room-core-stocks', [
     el('div', 'card-header', [
       el('div', null, [

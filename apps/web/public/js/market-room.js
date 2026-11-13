@@ -760,10 +760,28 @@ const fetchSectors = async (params) => {
   return result.ok ? (result.data?.ranking ?? null) : null;
 };
 
-const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash()) => {
+/** 小屏上板块详情在榜单之后：进入 / 返回时把详情滚进视口，避免用户以为没打开。 */
+const NARROW_VIEWPORT = '(max-width: 768px)';
+
+const isNarrowViewport = () =>
+  typeof window.matchMedia === 'function' && window.matchMedia(NARROW_VIEWPORT).matches;
+
+const focusSectorDetail = (slot) => {
+  if (!isNarrowViewport() || slot.querySelector('.room-sector-detail') === null) return;
+  slot.scrollIntoView({ block: 'start' });
+};
+
+const refreshSectors = async (
+  epoch,
+  setStatus,
+  params = sectorParamsFromHash(),
+  { focusDetail = false } = {},
+) => {
   const section = roomSection();
   if (section === null) return;
   const detailParams = sectorDetailParamsFromHash();
+  // 进个股页的返回现场：取本次渲染对应的作战室 hash（含 at / 分类 / 排序 / 窗口 / 选中板块）。
+  const returnTo = window.location.hash.replace(/^#/, '');
   const ranking = await fetchSectors(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   const cacheKey = replayCacheKey(params.at);
@@ -796,6 +814,7 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
     renderSectorDetailPane(detail, {
       ranking: current,
       params: detailParams,
+      returnTo,
       onToggleCompare: (sectorId) => {
         window.location.hash = sectorDetailHash({
           ...params,
@@ -807,8 +826,9 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
         window.location.hash = sectorHash(params);
       },
     }),
-    renderCoreStocksPane(core),
+    renderCoreStocksPane(core, { returnTo }),
   ]);
+  if (focusDetail) focusSectorDetail(slot);
 };
 
 /* ---- 成交分布（ticket #40） ---- */
@@ -1013,7 +1033,9 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   if (tab === 'overview') {
     await refreshOverview(epoch, setStatus, at);
   } else if (tab === 'sectors') {
-    await refreshSectors(epoch, setStatus, sectorParamsFromHash());
+    await refreshSectors(epoch, setStatus, sectorParamsFromHash(), {
+      focusDetail: isNarrowViewport() && sectorDetailParamsFromHash().sectorId !== null,
+    });
   } else if (tab === 'turnover') {
     await refreshAmount(epoch, setStatus, amountParamsFromHash());
   } else {
