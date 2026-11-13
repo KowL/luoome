@@ -7,22 +7,25 @@
  * - 非交易日 / 盘前 / 无批次有明确空态，不把上一交易日数据当作当日盘面；
  * - 板块追踪：行业 / 概念切换，同一张表同时给日涨幅与近 5 / 15 分钟窗口涨幅，
  *   三种口径分别排序；点开一行看上涨家数、有效成分、封板数与成交占比及口径说明；
- * - 成交分布由后续票接入，当前只给空态占位。
+ * - 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 交给 market-room-amount.js，
+ *   本文件只负责按 tab 取数与挂载。
  */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
 import { callApi } from './api.js';
+import {
+  amountMetaText,
+  amountParamsFromHash,
+  amountQuery,
+  renderAmountPane,
+} from './market-room-amount.js';
 import { formatAmount } from './market-shared.js';
 import { $, el, mount, sortableHeader } from './ui.js';
 
 const ROOM_TABS = ['overview', 'sectors', 'turnover'];
 const ROOM_TAB_LABELS = { overview: '总览', sectors: '板块追踪', turnover: '成交分布' };
-
-const ROOM_TAB_PLACEHOLDERS = {
-  turnover: '成交分布视图尚未接入数据：将展示窗口成交占比与较上一窗口的变化。',
-};
 
 const SECTOR_KINDS = ['industry', 'concept'];
 const SECTOR_KIND_LABELS = { industry: '行业', concept: '概念' };
@@ -64,6 +67,7 @@ let roomTimer = null;
 /** 板块追踪的本地交互状态（展开行只重绘，不重新请求）。 */
 const roomSectorState = { kind: 'industry', sort: 'day', window: 'w15', expanded: null };
 let roomSectorRanking = null;
+let roomAmountDistribution = null;
 
 const roomSection = () => $('#route-market-room');
 
@@ -704,6 +708,34 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
   if (ranking === null) setStatus?.('板块盘中榜刷新失败，保留上次成功结果', true);
 };
 
+/* ---- 成交分布（ticket #40） ---- */
+
+const renderAmount = (section, distribution, params) => {
+  const pane = section.querySelector('.room-pane');
+  if (pane === null) return;
+  mount(pane, renderAmountPane(distribution, params));
+  setMeta(section, amountMetaText(distribution));
+};
+
+const fetchAmount = async (params) => {
+  const result = await callApi(`/api/market/room/amount-distribution${amountQuery(params)}`, {
+    timeoutMs: 15_000,
+  });
+  return result.ok ? (result.data?.distribution ?? null) : null;
+};
+
+const refreshAmount = async (epoch, setStatus, params = amountParamsFromHash()) => {
+  const section = roomSection();
+  if (section === null) return;
+  const distribution = await fetchAmount(params);
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  if (distribution !== null) roomAmountDistribution = distribution;
+  // 刷新失败时只在同一分类下复用上次结果，避免把行业数据画在概念切换后。
+  const fallback = roomAmountDistribution?.kind === params.kind ? roomAmountDistribution : null;
+  renderAmount(section, distribution ?? fallback, params);
+  if (distribution === null) setStatus?.('成交分布刷新失败，保留上次成功结果', true);
+};
+
 /* ---- 页面挂载与刷新 ---- */
 
 const ensureShell = (section) => {
@@ -749,19 +781,6 @@ const syncTabs = (section, tab) => {
 const setMeta = (section, text) => {
   const meta = section.querySelector('.room-meta');
   if (meta !== null) meta.textContent = text;
-};
-
-const renderPlaceholder = (section, tab) => {
-  const pane = section.querySelector('.room-pane');
-  if (pane === null) return;
-  mount(pane, [
-    el('div', 'card room-empty', [
-      el('h2', '', ROOM_TAB_LABELS[tab] ?? '视图'),
-      el('p', '', ROOM_TAB_PLACEHOLDERS[tab] ?? '该视图尚未接入数据。'),
-      el('p', 'room-caption', '总览已可用；该视图接入后会沿用同一批次与时间点。'),
-    ]),
-  ]);
-  setMeta(section, `${ROOM_TAB_LABELS[tab]} · 尚未接入数据`);
 };
 
 const renderOverview = (section, overview) => {
@@ -811,10 +830,11 @@ const startTimer = (setStatus) => {
     const tab = roomTabFromHash();
     if (tab === 'overview') void refreshOverview(roomEpoch, setStatus);
     else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
+    else void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
   }, REFRESH_MS);
 };
 
-/** 进入作战室：渲染外壳 + 当前 tab；总览与板块追踪才读数据，占位视图不请求。 */
+/** 进入作战室：渲染外壳 + 当前 tab；三个视图各自读已发布批次。 */
 const renderMarketRoom = async (setStatus = () => {}) => {
   const section = roomSection();
   if (section === null) return;
@@ -828,9 +848,7 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   } else if (tab === 'sectors') {
     await refreshSectors(epoch, setStatus, sectorParamsFromHash());
   } else {
-    stopTimer();
-    renderPlaceholder(section, tab);
-    return;
+    await refreshAmount(epoch, setStatus, amountParamsFromHash());
   }
   if (epoch !== roomEpoch) return;
   startTimer(setStatus);

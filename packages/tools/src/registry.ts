@@ -17,6 +17,7 @@ import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
 import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
+import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
 import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
 import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
 import {
@@ -200,4 +201,6 @@ export const toolRegistry: Registry = createRegistry([
   getMarketRoomOverviewTool,
   // 板块盘中榜（ticket #38）：只读批次 + 目录成分 + 当日天梯
   getMarketRoomSectorsTool,
+  // 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 集中度
+  getMarketRoomAmountDistributionTool,
 ]);
