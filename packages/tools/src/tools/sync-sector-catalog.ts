@@ -54,6 +54,8 @@ export const syncSectorCatalogTool = defineTool({
     '盘前同步扶摇行业与概念目录及当前成分：目录新增/改名/下线记变更，成分多对多保存首次观测时间与来源；' +
     '部分请求失败时未观测股票保持原状，不集体退出。',
   sideEffect: 'external',
+  // 访问外部目录并写本地事实链：Web / MCP 必须同时开启 external 与 write 才能调用。
+  requiredCapabilities: ['external', 'write'],
   input: SyncSectorCatalogInput,
   output: SyncSectorCatalogOutput,
   handler: async (input, ctx) => {

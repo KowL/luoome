@@ -2,21 +2,23 @@ import {
   buildMarketRoomCoreStocks,
   buildMarketRoomCoreStocksEmpty,
   CoreRoleKindSchema,
-  dateInShanghai,
   type LimitUpLadderSample,
   MarketRoomCoreStocksSchema,
-  type MarketSnapshotBatch,
-  marketRoomEmptyReason,
   type SectorCatalogEntry,
   type SectorWindowKey,
   type StockSectorMembership,
   type StockSectorMembershipView,
-  sectorWindowTarget,
   type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  MARKET_ROOM_COVERAGE,
+  MARKET_ROOM_LIMIT_UP_SOURCE,
+  marketRoomWindowStartsFromBatches,
+  resolveMarketRoomAnchor,
+} from '../internal/market-room-anchor.js';
 
 /**
  * 核心股角色与换位时间线（ticket #41）。
@@ -29,8 +31,6 @@ import { defineTool } from '../define-tool.js';
  * - `kind` 只筛选反查范围（启动先锋 / 成交核心 / 高度标），不影响角色计算本身。
  */
 
-const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
-const LIMIT_UP_SOURCE = 'eastmoney';
 const CORE_STOCKS_WINDOW: SectorWindowKey = 'w15';
 
 export const GetMarketRoomCoreStocksInput = z.object({
@@ -46,41 +46,6 @@ export const GetMarketRoomCoreStocksOutput = z.object({
 });
 export type GetMarketRoomCoreStocksOutputT = z.infer<typeof GetMarketRoomCoreStocksOutput>;
 
-type AnchorResult =
-  | {
-      readonly kind: 'empty';
-      readonly reason: Parameters<typeof buildMarketRoomCoreStocksEmpty>[0]['reason'];
-      readonly latest: MarketSnapshotBatch | null;
-    }
-  | { readonly kind: 'ready'; readonly anchor: MarketSnapshotBatch };
-
-const resolveAnchor = async (ctx: ToolContext, at: Date | undefined): Promise<AnchorResult> => {
-  if (at === undefined) {
-    const latest = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
-    if (latest === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-    const reason = marketRoomEmptyReason(ctx.clock(), latest);
-    if (reason !== null) return { kind: 'empty', reason, latest };
-    return { kind: 'ready', anchor: latest };
-  }
-  const anchor = await ctx.repos.marketSnapshotBatch.findAtOrBefore({
-    coverage: COVERAGE,
-    tradingDate: dateInShanghai(at),
-    sampledAt: at,
-  });
-  if (anchor === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-  return { kind: 'ready', anchor };
-};
-
-const windowStartOf = (
-  batches: readonly MarketSnapshotBatch[],
-  anchor: MarketSnapshotBatch,
-): MarketSnapshotBatch | null => {
-  const target = sectorWindowTarget(anchor.sampledAt, CORE_STOCKS_WINDOW);
-  return (
-    [...batches].reverse().find((batch) => batch.sampledAt.getTime() <= target.getTime()) ?? null
-  );
-};
-
 const readLadderSamples = async (
   ctx: ToolContext,
   tradingDate: string,
@@ -88,7 +53,7 @@ const readLadderSamples = async (
   try {
     const samples = await ctx.repos.limitUpLadderSample.listByTradingDate({
       tradingDate,
-      source: LIMIT_UP_SOURCE,
+      source: MARKET_ROOM_LIMIT_UP_SOURCE,
     });
     return { samples, error: null };
   } catch (error) {
@@ -157,7 +122,7 @@ export const getMarketRoomCoreStocksTool = defineTool({
   input: GetMarketRoomCoreStocksInput,
   output: GetMarketRoomCoreStocksOutput,
   handler: async (input, ctx) => {
-    const anchorResult = await resolveAnchor(ctx, input.at);
+    const anchorResult = await resolveMarketRoomAnchor(ctx, input.at);
     const sectors = await (input.at === undefined
       ? ctx.repos.sectorCatalog.listSectors({ state: 'active' })
       : ctx.repos.sectorCatalog.listSectorsAsOf({ at: input.at })
@@ -213,7 +178,7 @@ export const getMarketRoomCoreStocksTool = defineTool({
     }
 
     const dayBatches = await ctx.repos.marketSnapshotBatch.listByTradingDate({
-      coverage: COVERAGE,
+      coverage: MARKET_ROOM_COVERAGE,
       tradingDate: anchor.tradingDate,
     });
     const batches = dayBatches.filter(
@@ -225,7 +190,9 @@ export const getMarketRoomCoreStocksTool = defineTool({
     const ladderSamples = ladder.samples.filter(
       (sample) => sample.sampledAt.getTime() <= anchor.sampledAt.getTime(),
     );
-    const windowStart = windowStartOf(effectiveBatches, anchor);
+    const windowStart = marketRoomWindowStartsFromBatches(effectiveBatches, anchor)[
+      CORE_STOCKS_WINDOW
+    ];
 
     const baseInput = {
       sector,

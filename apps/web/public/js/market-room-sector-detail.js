@@ -15,7 +15,7 @@
 import { callApi } from './api.js';
 import { replayAtFromHash, replayEmptyNotice, replayHashSuffix } from './market-room-replay.js';
 import { stockHref } from './market-room-return.js';
-import { formatAmount } from './market-shared.js';
+import { formatClock as fmtClock, formatPct as fmtPct, formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
 const COMPARE_LIMIT = 3;
@@ -40,28 +40,10 @@ const MEMBER_STATUS_LABELS = {
   unknown: '状态未知',
 };
 
-const fmtPct = (value, signed = false) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const sign = signed && value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
-};
-
 /** 成交额增量可正可负；formatAmount 只处理非负值，负号由这里补上。 */
 const formatDeltaAmount = (value) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return value < 0 ? `-${formatAmount(Math.abs(value))}` : formatAmount(value);
-};
-
-const fmtClock = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 };
 
 const hashParams = (hash = window.location.hash) =>

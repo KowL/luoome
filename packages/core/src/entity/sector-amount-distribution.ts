@@ -50,7 +50,7 @@ export const SECTOR_AMOUNT_CR3_MIN_SECTORS = 3;
 export const SECTOR_AMOUNT_CONCENTRATION_METHOD = 'CR3 = 前 3 名板块窗口成交占比之和（百分点）';
 
 export const SECTOR_AMOUNT_CONCENTRATION_DEFINITION =
-  'CR3 = 本窗口成交占比排名前 3 的板块占比之和（百分点）。每个板块的占比按自身成分与同期全市场去重增量独立计算；概念间成分可重叠，占比不可加总为市场总量，CR3 也可能重复计入同一批股票，只作「成交是否集中在少数方向」的指示值；有可用占比的板块不足 3 个时缺失。';
+  'CR3 = 本窗口成交占比排名前 3 的板块占比之和（百分点）。每个板块的占比按自身成分与同期全市场去重增量独立计算；概念间成分可重叠，占比不可加总为市场总量，前 3 名概念共享成分时 CR3 缺失并给出原因，不把同一批股票重复计入；行业按不重叠成分计算，只作「成交是否集中在少数方向」的指示值。有可用占比的板块不足 3 个时缺失。';
 
 export const SECTOR_AMOUNT_DELTA_METHOD =
   '环比 = 本窗口成交占比 − 上一窗口成交占比（百分点，pp）；上一窗口占比使用上一窗口自己的全市场去重成交额增量作分母';
@@ -134,7 +134,7 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 const DISTRIBUTION_NOTES: readonly string[] = [
   '窗口成交占比 = 板块 active 成分累计成交额增量之和 ÷ 同期全市场去重成交额增量；同一股票只在窗口两端批次都出现且都有成交额时计入分母。',
   '环比以百分点（pp）表示：本窗口占比 − 上一窗口占比；上一窗口占比用上一窗口自己的全市场去重成交额增量作分母。',
-  '概念间成分可重叠，各板块占比不可加总为市场总量；CR3 只作「成交是否集中在少数方向」的指示值，不等于市场集中度。',
+  '概念间成分可重叠，各板块占比不可加总为市场总量；前 3 名概念共享成分时 CR3 缺失并给出原因，不重复计入同一批股票；行业 CR3 只作「成交是否集中在少数方向」的指示值，不等于市场集中度。',
   '停牌 / 退市成分从占比中排除，但不算缺失、也不计作零成交；漏采（批次缺条目、缺成交额）标注为缺失样本，同样不补零。',
   '分母无效（全市场增量不为正、分母覆盖不全、批次不完整）、窗口缺样本、跨午休 / 跨日 / 盘前盘后不可比时，占比与环比一律缺失并给出原因。',
 ];
@@ -188,9 +188,37 @@ export const buildSectorAmountDelta = (
   };
 };
 
+/**
+ * 前 3 名概念之间的共享成分：概念是重叠集合，占比相加会把同一批股票重复计入，
+ * 因此有交集时不产出 CR3，只给出交集明细作为缺失原因。
+ */
+const sharedConstituents = (
+  top: readonly { readonly sectorId: string; readonly name: string }[],
+  memberIdsBySector: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly string[] => {
+  const pairs: string[] = [];
+  for (let leftIndex = 0; leftIndex < top.length; leftIndex += 1) {
+    const left = top[leftIndex];
+    if (left === undefined) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < top.length; rightIndex += 1) {
+      const right = top[rightIndex];
+      if (right === undefined) continue;
+      const leftMembers = memberIdsBySector.get(left.sectorId) ?? new Set<string>();
+      const rightMembers = memberIdsBySector.get(right.sectorId) ?? new Set<string>();
+      const shared = [...leftMembers].filter((stockId) => rightMembers.has(stockId)).sort();
+      if (shared.length > 0) {
+        pairs.push(`${left.name} ↔ ${right.name}: ${shared.join(' / ')}`);
+      }
+    }
+  }
+  return pairs;
+};
+
 const buildConcentration = (input: {
+  readonly kind: SectorKind;
   readonly rows: readonly SectorAmountDistributionRow[];
   readonly turnover: SectorTurnoverWindow;
+  readonly memberIdsBySector: ReadonlyMap<string, ReadonlySet<string>>;
 }): SectorAmountConcentration => {
   const valid = input.rows.filter((row) => row.share.value !== null);
   const base = {
@@ -224,6 +252,19 @@ const buildConcentration = (input: {
     if (top.length === SECTOR_AMOUNT_CR3_MIN_SECTORS) break;
     if (row.share.value === null) continue;
     top.push({ sectorId: row.sectorId, name: row.name, share: row.share.value });
+  }
+  if (input.kind === 'concept') {
+    const shared = sharedConstituents(top, input.memberIdsBySector);
+    if (shared.length > 0) {
+      return {
+        ...base,
+        value: null,
+        status: 'unavailable',
+        reason: `concentration_overlapping_constituents: 前 3 名概念共享成分（${shared.join('；')}），占比不可加总，CR3 缺失`,
+        top: [],
+        warnings: [],
+      };
+    }
   }
   const value = round2(top.reduce((sum, entry) => sum + entry.share, 0));
   const warnings =
@@ -317,11 +358,15 @@ export const buildSectorAmountDistribution = (
         });
 
   const membersBySector = new Map<string, StockSectorMembership[]>();
+  const memberIdsBySector = new Map<string, Set<string>>();
   for (const membership of input.members) {
     if (membership.state !== 'active') continue;
     const list = membersBySector.get(membership.sectorId) ?? [];
     list.push(membership);
     membersBySector.set(membership.sectorId, list);
+    const ids = memberIdsBySector.get(membership.sectorId) ?? new Set<string>();
+    ids.add(membership.stockId);
+    memberIdsBySector.set(membership.sectorId, ids);
   }
 
   const catalog = input.sectors.filter(
@@ -375,7 +420,12 @@ export const buildSectorAmountDistribution = (
     anchor: sectorRankingAnchorSummary(input.anchor),
     windows: { current: currentWindow, previous: previousWindow },
     turnover: { current: currentTurnover, previous: previousTurnover },
-    concentration: buildConcentration({ rows: ranked, turnover: currentTurnover }),
+    concentration: buildConcentration({
+      kind: input.kind,
+      rows: ranked,
+      turnover: currentTurnover,
+      memberIdsBySector,
+    }),
     coverage: {
       sectorCount: catalog.length,
       rowCount: ranked.length,

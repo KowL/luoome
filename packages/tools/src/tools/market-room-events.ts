@@ -16,6 +16,10 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput } from '../define-tool.js';
+import {
+  MARKET_ROOM_COVERAGE,
+  MARKET_ROOM_LIMIT_UP_SOURCE,
+} from '../internal/market-room-anchor.js';
 
 /**
  * 盘中事件流（ticket #42）：扩散 / 分化 / 换位。
@@ -26,8 +30,6 @@ import { defineTool, errInvalidInput } from '../define-tool.js';
  * - 只读查询按交易日 + 可选时段 / 种类 / 板块过滤，事件按检测时点升序返回。
  */
 
-const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
-const LIMIT_UP_SOURCE = 'eastmoney';
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期必须为 YYYY-MM-DD');
 
 const readLadderSamples = async (
@@ -37,7 +39,7 @@ const readLadderSamples = async (
   try {
     const samples = await ctx.repos.limitUpLadderSample.listByTradingDate({
       tradingDate,
-      source: LIMIT_UP_SOURCE,
+      source: MARKET_ROOM_LIMIT_UP_SOURCE,
     });
     return { samples, error: null };
   } catch (error) {
@@ -56,7 +58,7 @@ export const scanMarketRoomEvents = async (
   const warnings: string[] = [];
   try {
     const batches = await ctx.repos.marketSnapshotBatch.listByTradingDate({
-      coverage: COVERAGE,
+      coverage: MARKET_ROOM_COVERAGE,
       tradingDate,
     });
     if (batches.length === 0) return warnings;
@@ -179,7 +181,9 @@ const resolveTradingDate = async (
   if (input.knownAt !== undefined) return dateInShanghai(input.knownAt);
   if (input.from !== undefined) return dateInShanghai(input.from);
   if (input.to !== undefined) return dateInShanghai(input.to);
-  const latestBatch = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
+  const latestBatch = await ctx.repos.marketSnapshotBatch.findLatest({
+    coverage: MARKET_ROOM_COVERAGE,
+  });
   if (latestBatch !== null) return latestBatch.tradingDate;
   const latest = await ctx.repos.marketRoomEvent.list({ order: 'desc', limit: 1 });
   const latestEvent = latest[0];
@@ -210,7 +214,7 @@ export const listMarketRoomEventsTool = defineTool({
       return { view: viewOf({ tradingDate: null, events: [], filters, emptyReason: 'no_batch' }) };
     }
     const batches = await ctx.repos.marketSnapshotBatch.listByTradingDate({
-      coverage: COVERAGE,
+      coverage: MARKET_ROOM_COVERAGE,
       tradingDate,
     });
     if (batches.length === 0) {

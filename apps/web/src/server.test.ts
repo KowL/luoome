@@ -26,6 +26,7 @@ import {
   createAlertPlanTool,
   saveReportTool,
   saveWatchTriggerTool,
+  toolRegistry,
 } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
@@ -34,6 +35,7 @@ import type { Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
+import { WEB_AGENT_TOOL_NAMES } from './http/exposure.js';
 import { MarketSettingsStore } from './market-settings.js';
 import {
   buildWebContext,
@@ -2332,13 +2334,65 @@ describe('web tool 闸口：能力开关', () => {
   });
 });
 
-describe('web tool 闸口：34 Agent Tool 白名单', () => {
-  it('通用 tool 路由只放行 34 个 Agent Tool，App Service 旧名返回 not_found', async () => {
+describe('web tool 闸口：45 Agent Tool 白名单', () => {
+  it('通用 tool 路由只放行 45 个 Agent Tool，App Service 旧名返回 not_found', async () => {
     const legacy = await callTool('list_holdings', {});
     expect(legacy.status).toBe(404);
     expect(await json(legacy)).toMatchObject({ ok: false, error: { kind: 'not_found' } });
     const allowed = await callTool('get_advice', { limit: 1 });
     expect(allowed.status).toBe(200);
+  });
+
+  it('白名单与 toolRegistry 逐项一致，新增 tool 不会静默 404', () => {
+    expect([...WEB_AGENT_TOOL_NAMES].sort()).toEqual(
+      toolRegistry
+        .all()
+        .map((tool) => tool.name)
+        .sort(),
+    );
+  });
+
+  it('新 read tool 可经通用路由调用；写 / 外部 tool 仍受 capability 门槛约束', async () => {
+    const read = await callTool('get_stock_sector_memberships', { stockIds: ['600519.SH'] });
+    expect(read.status).toBe(200);
+    expect(await json(read)).toMatchObject({ ok: true, data: { warnings: ['empty-list'] } });
+
+    const guarded = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    for (const name of ['sync_sector_catalog', 'collect_market_snapshot']) {
+      const denied = await guarded.fetch(
+        new Request(`http://test/api/tools/${name}/call`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ input: {} }),
+        }),
+      );
+      expect(denied.status, name).toBe(403);
+      expect(await json(denied), name).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+    }
+
+    // 只开一半能力仍然拒绝：sync_sector_catalog / collect_market_snapshot 同时要求 write + external。
+    for (const options of [
+      { exposeWrite: true, exposeExternal: false },
+      { exposeWrite: false, exposeExternal: true },
+    ]) {
+      const half = createWebApp(await buildTestContext(), options);
+      for (const name of ['sync_sector_catalog', 'collect_market_snapshot']) {
+        const denied = await half.fetch(
+          new Request(`http://test/api/tools/${name}/call`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ input: {} }),
+          }),
+        );
+        expect(denied.status, `${name} ${JSON.stringify(options)}`).toBe(403);
+      }
+    }
   });
 });
 
@@ -2610,7 +2664,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.error?.kind).toBe('adapter_error');
   });
 
-  it('sync_quotes / send_notification（34 外 App Service）→ 404', async () => {
+  it('sync_quotes / send_notification（45 外 App Service）→ 404', async () => {
     for (const name of ['sync_quotes', 'send_notification']) {
       const r = await callTool(name, {});
       expect(r.status).toBe(404);

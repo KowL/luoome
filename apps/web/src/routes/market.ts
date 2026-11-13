@@ -443,7 +443,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
-  // S4.1b：App Service 直执行（非 34 tool 不再经通用 /api/tools/:name/call）。
+  // S4.1b：App Service 直执行（非 45 个 Agent Tool 不再经通用 /api/tools/:name/call）。
   app.get('/api/market/sentiment', (c) => {
     const date = c.req.query('date');
     return callTool('get_ashare_sentiment', {

@@ -50,6 +50,13 @@ const LIGHTWEIGHT_CHARTS_FILE = join(
   'lightweight-charts.standalone.production.mjs',
 );
 
+/**
+ * 副作用能力开关：显式 options 优先，未提供时才读取环境变量。
+ * Web 路由与进程内调度器共用同一解析，避免「路由已开、调度器仍看环境变量」的分叉。
+ */
+const resolveExpose = (value: boolean | undefined, envName: string): boolean =>
+  value ?? process.env[envName] === 'true';
+
 export interface CreateWebAppOptions {
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
@@ -112,8 +119,8 @@ export const createWebApp = (
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
     current: options.chatStreamRuntime,
   };
-  const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
-  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
+  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
+  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const sharedSources = options.sources;
@@ -339,6 +346,10 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 本地 SQLite 数据库路径；缺省 $LUOOME_HOME/luoome.db。 */
   readonly dbPath?: string;
+  /** write 能力开关；缺省读取 LUOOME_EXPOSE_WRITE。 */
+  readonly exposeWrite?: boolean;
+  /** external 能力开关；缺省读取 LUOOME_EXPOSE_EXTERNAL。 */
+  readonly exposeExternal?: boolean;
 }
 
 export interface WebServerHandle {
@@ -369,7 +380,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ...feishuSettingsStore.runtimeEnv(),
   };
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
+  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
+  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const app = createWebApp(ctx, {
+    exposeWrite,
+    exposeExternal,
     aiSettingsStore,
     marketSettingsStore,
     sources,
@@ -383,9 +398,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
   ];
   // 盘中批次采集访问外部行情并写本地快照：只有 write + external 同时显式开启才启动。
-  const backgroundExternalEnabled =
-    process.env.LUOOME_EXPOSE_WRITE === 'true' && process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
-  if (backgroundExternalEnabled) {
+  if (exposeWrite && exposeExternal) {
     schedulers.push(startMarketBatchScheduler(ctx, { startImmediately: false, enabled: true }));
   }
   const host = options.host ?? '127.0.0.1';

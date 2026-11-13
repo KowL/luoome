@@ -1,9 +1,7 @@
 import {
   buildSectorAmountDistribution,
   buildSectorAmountDistributionEmpty,
-  dateInShanghai,
   type MarketSnapshotBatch,
-  marketRoomEmptyReason,
   type SectorAmountDistribution,
   SectorAmountDistributionSchema,
   type SectorKind,
@@ -11,12 +9,14 @@ import {
   type SectorRankingEmptyReason,
   type SectorWindowKey,
   SectorWindowKeySchema,
-  sectorWindowTarget,
-  type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  resolveMarketRoomAnchor,
+  resolveMarketRoomWindowChain,
+} from '../internal/market-room-anchor.js';
 
 /**
  * 成交分布（ticket #40）：按 5 / 15 分钟窗口给出各板块成交占比、较上一窗口的百分点变化
@@ -27,8 +27,6 @@ import { defineTool } from '../define-tool.js';
  * - 给定 `at` 取该时点及之前最近的批次（历史回放入口），缺省读最近一个已发布批次；
  * - 分母无效、窗口缺样本、跨午休、批次不完整一律按缺失返回，不写 0。
  */
-
-const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
 
 export const GetMarketRoomAmountDistributionInput = z.object({
   kind: SectorKindSchema.default('industry'),
@@ -60,56 +58,6 @@ const emptyDistribution = (input: {
   }),
 });
 
-const resolveAnchor = async (
-  ctx: ToolContext,
-  at: Date | undefined,
-): Promise<
-  | {
-      readonly kind: 'empty';
-      readonly reason: SectorRankingEmptyReason;
-      readonly latest: MarketSnapshotBatch | null;
-    }
-  | { readonly kind: 'ready'; readonly anchor: MarketSnapshotBatch }
-> => {
-  if (at === undefined) {
-    const latest = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
-    if (latest === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-    // 未指定时点时沿用总览的空态口径：非交易日 / 盘前 / 当日无批次都不拿旧批次当当日盘面。
-    const reason = marketRoomEmptyReason(ctx.clock(), latest);
-    if (reason !== null) return { kind: 'empty', reason, latest };
-    return { kind: 'ready', anchor: latest };
-  }
-  const anchor = await ctx.repos.marketSnapshotBatch.findAtOrBefore({
-    coverage: COVERAGE,
-    tradingDate: dateInShanghai(at),
-    sampledAt: at,
-  });
-  if (anchor === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-  return { kind: 'ready', anchor };
-};
-
-/** 当前窗口起点 = 锚点 − 窗口分钟；上一窗口起点再往前一个窗口。 */
-const resolveWindowStarts = async (
-  ctx: ToolContext,
-  anchor: MarketSnapshotBatch,
-  window: SectorWindowKey,
-): Promise<{
-  readonly currentStart: MarketSnapshotBatch | null;
-  readonly previousStart: MarketSnapshotBatch | null;
-}> => {
-  const read = (target: Date): Promise<MarketSnapshotBatch | null> =>
-    ctx.repos.marketSnapshotBatch.findAtOrBefore({
-      coverage: COVERAGE,
-      tradingDate: anchor.tradingDate,
-      sampledAt: target,
-    });
-  const currentTarget = sectorWindowTarget(anchor.sampledAt, window);
-  return {
-    currentStart: await read(currentTarget),
-    previousStart: await read(sectorWindowTarget(currentTarget, window)),
-  };
-};
-
 export const getMarketRoomAmountDistributionTool = defineTool({
   name: 'get_market_room_amount_distribution',
   description:
@@ -119,7 +67,7 @@ export const getMarketRoomAmountDistributionTool = defineTool({
   output: GetMarketRoomAmountDistributionOutput,
   handler: async (input, ctx) => {
     const base = { kind: input.kind, window: input.window };
-    const anchorResult = await resolveAnchor(ctx, input.at);
+    const anchorResult = await resolveMarketRoomAnchor(ctx, input.at);
     if (anchorResult.kind === 'empty') {
       return emptyDistribution({
         ...base,
@@ -145,7 +93,11 @@ export const getMarketRoomAmountDistributionTool = defineTool({
       return emptyDistribution({ ...base, reason: 'no_members', latest: anchor });
     }
 
-    const { currentStart, previousStart } = await resolveWindowStarts(ctx, anchor, input.window);
+    const { currentStart, previousStart } = await resolveMarketRoomWindowChain(
+      ctx,
+      anchor,
+      input.window,
+    );
     const distribution: SectorAmountDistribution = buildSectorAmountDistribution({
       kind: input.kind,
       window: input.window,

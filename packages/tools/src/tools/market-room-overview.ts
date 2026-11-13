@@ -16,6 +16,10 @@ import {
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  MARKET_ROOM_COVERAGE,
+  MARKET_ROOM_LIMIT_UP_SOURCE,
+} from '../internal/market-room-anchor.js';
 
 /**
  * 作战室总览（ticket #36）：只读最近一个已发布批次，按维度组合既有事实。
@@ -25,10 +29,6 @@ import { defineTool } from '../define-tool.js';
  * - 封板 / 炸板 / 最高连板复用既有 A 股情绪契约，不在此重算；
  * - 每个维度独立降级：任一维度失败只影响该维度，不整体报错、不写 0。
  */
-
-const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
-/** 天梯样本来源与 `limit_up_ladder` tool 的默认源一致。 */
-const LIMIT_UP_SOURCE = 'eastmoney';
 
 export const GetMarketRoomOverviewInput = z.object({
   /** 回放时点：给定则只读该时点及之前最近的已发布批次，缺省读最近批次。 */
@@ -51,7 +51,9 @@ export const getMarketRoomOverviewTool = defineTool({
   handler: async (input, ctx) => {
     const now = ctx.clock();
     if (input.at !== undefined) return replayOverview(input.at, ctx);
-    const latest = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
+    const latest = await ctx.repos.marketSnapshotBatch.findLatest({
+      coverage: MARKET_ROOM_COVERAGE,
+    });
     if (latest === null) {
       return { overview: buildMarketRoomEmptyOverview({ now, latest: null, reason: 'no_batch' }) };
     }
@@ -62,13 +64,13 @@ export const getMarketRoomOverviewTool = defineTool({
 
     const target = marketRoomCompareTarget(latest.sampledAt);
     const previous = await ctx.repos.marketSnapshotBatch.findNearestAt({
-      coverage: COVERAGE,
+      coverage: MARKET_ROOM_COVERAGE,
       tradingDate: target.tradingDate,
       sampledAt: target.sampledAt,
       toleranceMs: MARKET_ROOM_COMPARE_TOLERANCE_MS,
     });
     const quotes = await readIndexQuotes(ctx);
-    const limitUp = await readLimitUp(ctx, latest.tradingDate);
+    const limitUp = await readSentimentLimitUp(ctx, latest.tradingDate);
     return {
       overview: buildMarketRoomOverview({
         now,
@@ -89,7 +91,7 @@ export const getMarketRoomOverviewTool = defineTool({
  */
 const replayOverview = async (at: Date, ctx: ToolContext) => {
   const anchor = await ctx.repos.marketSnapshotBatch.findAtOrBefore({
-    coverage: COVERAGE,
+    coverage: MARKET_ROOM_COVERAGE,
     tradingDate: dateInShanghai(at),
     sampledAt: at,
   });
@@ -105,7 +107,7 @@ const replayOverview = async (at: Date, ctx: ToolContext) => {
   }
   const target = marketRoomCompareTarget(anchor.sampledAt);
   const previous = await ctx.repos.marketSnapshotBatch.findNearestAt({
-    coverage: COVERAGE,
+    coverage: MARKET_ROOM_COVERAGE,
     tradingDate: target.tradingDate,
     sampledAt: target.sampledAt,
     toleranceMs: MARKET_ROOM_COMPARE_TOLERANCE_MS,
@@ -129,7 +131,7 @@ const readLadderSampleAt = async (
   try {
     const sample = await ctx.repos.limitUpLadderSample.findAtOrBefore({
       tradingDate: anchor.tradingDate,
-      source: LIMIT_UP_SOURCE,
+      source: MARKET_ROOM_LIMIT_UP_SOURCE,
       sampledAt: anchor.sampledAt,
     });
     return sample !== null && sample.sampledAt.getTime() === anchor.sampledAt.getTime()
@@ -150,7 +152,7 @@ const readIndexQuotes = async (
   }
 };
 
-const readLimitUp = async (
+const readSentimentLimitUp = async (
   ctx: ToolContext,
   date: string,
 ): Promise<{
@@ -162,7 +164,7 @@ const readLimitUp = async (
     return { dimension: null, error: 'A 股情绪 manager 未注入' };
   }
   try {
-    const result = await manager.fetch({ date, coverage: COVERAGE });
+    const result = await manager.fetch({ date, coverage: MARKET_ROOM_COVERAGE });
     if (!result.ok) return { dimension: null, error: result.error.message };
     return { dimension: result.data.limitUp, error: null };
   } catch (error) {

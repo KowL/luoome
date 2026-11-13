@@ -663,7 +663,20 @@ LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / fir
 MarketSnapshotBatch 盘中全市场不可变批次（coverage, sampledAt, source, 行情/抓取时间, completeness, gaps, items）；按采样时点去重发布
 Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
+SectorCatalogEntry      行业 / 概念目录条目（内部 id、kind、source、vendorCode、name、firstSeenAt、lastSeenAt、retiredAt）；内部标识不复用供应商代码
+SectorMembership        板块成分多对多事实（core 的 `StockSectorMembership`；(sectorId, stockId) 主键、state、memberStatus、firstSeenAt、lastSeenAt、missingSince、lastSyncId）；成分消失只标 missing，不物理删除
+SectorChangeEvent       目录 / 成分变更追加记录（自增 seq 主键、kind、sectorId、stockId?、occurredAt、syncId、previousValue / nextValue）；append-only，不回写历史
+SectorSyncRun           一次同步的审计与幂等凭据（syncId 主键、source、succeeded / partial、appliedAt、观察与增删计数、failures）；同 id 重放返回原摘要，不重复落事实
+LimitUpLadderSample     按采样时点保存的连板天梯事实（`tradingDate|source|sampledAt` 主键、levels、warnings、asOf）；与盘中批次时点对齐，同采样时点幂等且保留首次写入内容
+MarketRoomEvent         盘中扩散 / 分化 / 换位事件（`tradingDate|kind|sectorId|sampledAt` 主键、(tradingDate, kind, sectorId, sampledAt) 唯一、thresholds、evidence、verification、recordedAt）；重复扫描只落一条，阈值与证据保存扫描当时的口径
 ```
+
+目录与成分来源是扶摇（同花顺金融数据 API）的行业 / 概念目录与按股反查，经
+`sync_sector_catalog`（`external + write`）原子写入；目录条目 `retired`、成分 `missing`
+都是状态变化而非删除，变更进 `SectorChangeEvent`，一次同步对应一条 `SectorSyncRun`。
+`LimitUpLadderSample` 来自东方财富连板天梯（与 `limit_up_ladder` 默认源一致），由
+`collect_market_snapshot` 在发布批次时按同一采样时点写入；`MarketRoomEvent` 是本地派生事实，
+只使用已发布批次、目录成分与对齐的天梯样本，不引入新的外部来源。
 
 账户记账通过 `LedgerRepository` 原子更新账户与交易/持仓/流水：Drizzle 在 IMMEDIATE 事务内读取现金、
 计算增减并校验余额；内存实现串行提交。持仓写入携带读取时的旧持仓，在事务内检查冲突，
@@ -868,16 +881,17 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ## 7. Tool 系统
 
-### 7.1 公共 Agent Tool 面 = 43 个核心 Agent Tool
+### 7.1 公共 Agent Tool 面 = 45 个核心 Agent Tool
 
 `toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
 
-- 行情与盘面资讯（19）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
+- 行情与盘面资讯（21）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
   `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
   `dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`、
   `collect_market_snapshot`、`get_market_snapshot_batch`、`get_market_room_overview`、
   `get_market_room_sectors`、`get_market_room_amount_distribution`、
-  `get_market_room_sector_detail`、`get_market_room_core_stocks`、`list_market_room_events`
+  `get_market_room_sector_detail`、`get_market_room_core_stocks`、`list_market_room_events`、
+  `get_stock_sector_memberships`、`sync_sector_catalog`
 - 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
 - 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
   `run_strategy_backtest`、`get_strategy_signals`

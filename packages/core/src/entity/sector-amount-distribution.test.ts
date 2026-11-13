@@ -293,6 +293,67 @@ describe('窗口成交占比与环比', () => {
     expect(result.concentration.reason).toContain('concentration_insufficient_sectors');
     expect(result.concentration.top).toEqual([]);
   });
+
+  it('前 3 名概念共享成分时 CR3 缺失并写出重叠明细，不把同一批股票重复计入', () => {
+    const result = distribution({
+      kind: 'concept',
+      sectors: [
+        sector('sec-ca', '886101.TI', '概念甲', 'concept'),
+        sector('sec-cb', '886102.TI', '概念乙', 'concept'),
+        sector('sec-cc', '886103.TI', '概念丙', 'concept'),
+      ],
+      members: [
+        member('sec-ca', '600000.SH'),
+        member('sec-ca', '600001.SH'),
+        member('sec-cb', '600001.SH'),
+        member('sec-cb', '600002.SH'),
+        member('sec-cc', '600003.SH'),
+        member('sec-cc', '600004.SH'),
+      ],
+    });
+
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows.every((row) => row.share.value !== null)).toBe(true);
+    expect(result.concentration.status).toBe('unavailable');
+    expect(result.concentration.value).toBeNull();
+    expect(result.concentration.top).toEqual([]);
+    expect(result.concentration.reason).toContain('concentration_overlapping_constituents');
+    expect(result.concentration.reason).toContain('概念乙 ↔ 概念甲');
+    expect(result.concentration.reason).toContain('600001.SH');
+    expect(result.concentration.sectorCount).toBe(3);
+  });
+
+  it('前 3 名概念成分完全不相交时仍能算出 CR3', () => {
+    const result = distribution({
+      kind: 'concept',
+      sectors: [
+        sector('sec-da', '886201.TI', '概念丁', 'concept'),
+        sector('sec-db', '886202.TI', '概念戊', 'concept'),
+        sector('sec-dc', '886203.TI', '概念己', 'concept'),
+      ],
+      members: [
+        member('sec-da', '600000.SH'),
+        member('sec-da', '600001.SH'),
+        member('sec-da', '600002.SH'),
+        member('sec-db', '600003.SH'),
+        member('sec-db', '600004.SH'),
+        member('sec-db', '600005.SH'),
+        member('sec-dc', '600006.SH'),
+        member('sec-dc', '600007.SH'),
+        member('sec-dc', '600008.SH'),
+      ],
+    });
+
+    expect(result.concentration.status).toBe('complete');
+    expect(result.concentration.value).toBeCloseTo(70.75, 2);
+    expect(result.concentration.top.map((entry) => entry.name)).toEqual([
+      '概念己',
+      '概念丁',
+      '概念戊',
+    ]);
+    expect(result.concentration.reason).toBeNull();
+    expect(result.concentration.warnings).toEqual([]);
+  });
 });
 
 describe('缺失与不可比：一律 null + 原因，不补零', () => {
