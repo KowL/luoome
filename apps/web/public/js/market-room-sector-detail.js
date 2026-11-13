@@ -44,6 +44,12 @@ const fmtPct = (value, signed = false) => {
   return `${sign}${value.toFixed(2)}%`;
 };
 
+/** 成交额增量可正可负；formatAmount 只处理非负值，负号由这里补上。 */
+const formatDeltaAmount = (value) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value < 0 ? `-${formatAmount(Math.abs(value))}` : formatAmount(value);
+};
+
 const fmtClock = (value) => {
   if (value === null || value === undefined) return '--';
   const date = new Date(value);
@@ -397,10 +403,7 @@ const memberRowCells = (member) => {
     name: member.name ?? null,
     day: fmtPct(member.dayChangePct, true),
     window: fmtPct(member.windowChangePct, true),
-    amount:
-      member.windowAmountDelta === null || member.windowAmountDelta === undefined
-        ? null
-        : formatAmount(member.windowAmountDelta),
+    amount: formatDeltaAmount(member.windowAmountDelta),
     share,
     sealed:
       member.sealed === null || member.sealed === undefined

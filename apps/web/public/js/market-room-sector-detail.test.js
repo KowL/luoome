@@ -360,6 +360,12 @@ describe('成分明细与缺失样本', () => {
     expect(cells.day).not.toBe('0.00%');
   });
 
+  it('负的成交额增量保留负号并按亿 / 万格式化', () => {
+    const cells = memberRowCells(member({ windowAmountDelta: -150_000_000 }));
+    expect(cells.amount).toBe('-1.50亿');
+    expect(memberRowCells(member({ windowAmountDelta: 12_000 })).amount).toBe('1.20万');
+  });
+
   it('成分排序把缺失日涨幅排到最后，其余按日涨幅降序', () => {
     const sorted = sortedMembers(detailFixture());
     expect(sorted.map((entry) => entry.code)).toEqual(['600519', '000001', '600036']);
