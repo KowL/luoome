@@ -14,6 +14,7 @@ import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js'
 import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { navigateToStock, renderMarket, teardownMarket } from './market.js';
+import { renderMarketRoom, teardownMarketRoom } from './market-room.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
 import { sessionLabel } from './market-shared.js';
 import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
@@ -195,6 +196,7 @@ const bindTopbarStockSearch = () => {
 const ROUTES = [
   'dashboard',
   'indices',
+  'market-room',
   'market',
   'holdings',
   'strategies',
@@ -229,6 +231,8 @@ const showRoute = async (name) => {
   if (safe !== 'advice') resetAdviceDeleteMode();
   // 离开龙虎榜页时停止 60s 自动刷新定时器。
   if (safe !== 'dragon-tiger') teardownDragonTiger();
+  // 离开作战室时停止 60s 总览刷新。
+  if (safe !== 'market-room') teardownMarketRoom();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -268,6 +272,8 @@ const showRoute = async (name) => {
       await renderDragonTiger(setStatus);
     } else if (safe === 'sectors') {
       await renderSectors(setStatus);
+    } else if (safe === 'market-room') {
+      await renderMarketRoom(setStatus);
     } else if (safe === 'chat') {
       initChat();
       mountWorkspaceChatRoute();
@@ -290,6 +296,7 @@ const currentHash = () => {
   const path = window.location.pathname.replace(/^\/|\/$/g, '');
   if (path === 'watch' || path === 'groups') return 'alerts';
   if (path === 'tactics') return 'strategies';
+  if (path === 'market/room') return 'market-room';
   return ROUTES.includes(path) ? path : 'dashboard';
 };
 

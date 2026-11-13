@@ -6,7 +6,7 @@ import {
   type MarketSnapshotBatchRepository,
   MarketSnapshotBatchSchema,
 } from '@luoome/core';
-import { desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { marketSnapshotBatches, type Schema } from '../../schema/index.js';
@@ -82,6 +82,31 @@ export class DrizzleMarketSnapshotBatchRepository implements MarketSnapshotBatch
       input.coverage === undefined
         ? query.limit(1).get()
         : query.where(eq(marketSnapshotBatches.coverage, input.coverage)).limit(1).get();
+    return row === undefined ? null : toBatch(row);
+  }
+
+  async findNearestAt(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
+    readonly toleranceMs: number;
+  }): Promise<MarketSnapshotBatch | null> {
+    const distance = sql<number>`abs(${marketSnapshotBatches.sampledAt} - ${input.sampledAt.getTime()})`;
+    const row = this.db
+      .select()
+      .from(marketSnapshotBatches)
+      .where(
+        and(
+          eq(marketSnapshotBatches.tradingDate, input.tradingDate),
+          lte(distance, input.toleranceMs),
+          ...(input.coverage === undefined
+            ? []
+            : [eq(marketSnapshotBatches.coverage, input.coverage)]),
+        ),
+      )
+      .orderBy(asc(distance), desc(marketSnapshotBatches.sampledAt))
+      .limit(1)
+      .get();
     return row === undefined ? null : toBatch(row);
   }
 }

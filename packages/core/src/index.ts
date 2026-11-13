@@ -18,6 +18,7 @@ export * from './entity/invariants.js';
 export * from './entity/limit-up-ladder.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
+export * from './entity/market-room-overview.js';
 export * from './entity/market-snapshot.js';
 export * from './entity/market-snapshot-batch.js';
 export * from './entity/minute-bar.js';

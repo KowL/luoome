@@ -236,6 +236,15 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     return callTool('collect_market_snapshot', {});
   });
 
+  /**
+   * 作战室总览（ticket #36）：只读最近已发布批次 + 既有情绪 / 指数契约。
+   * 刷新只读，不触发采集；各维度独立标注完整性与缺失原因。
+   */
+  app.get('/api/market/room/overview', () => callTool('get_market_room_overview', {}));
+
+  // 作战室页面（总览 / 板块追踪 / 成交分布三视图，SPA shell）
+  app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
+
   // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
   // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
   app.get('/api/market/indices', async () => {

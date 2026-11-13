@@ -1,6 +1,7 @@
 import {
   type DailyBar,
   type DateRange,
+  type IndexQuote,
   type MarketSnapshot,
   type MarketSnapshotItem,
   MarketSnapshotSchema,
@@ -168,7 +169,8 @@ export class FakeMarketAdapter implements MarketDataAdapter {
     });
   }
 
-  fetchIndexQuotes(): Promise<never> {
+  /** 默认不支持指数行情；需要指数的夹具在子类覆盖。 */
+  fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 
