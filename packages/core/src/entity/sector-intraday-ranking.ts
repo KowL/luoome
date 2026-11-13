@@ -51,7 +51,7 @@ const DAY_METHOD =
   '日涨幅 = 板块 active 成分 changePct 等权均值（相对前收）；停牌 / 退市与缺涨幅成分剔除，不计作 0';
 const WINDOW_METHOD = (minutes: number): string =>
   `窗口涨幅 = 各成分窗口两端价格比值 - 1（${minutes} 分钟窗口），逐成分计算后等权；两端缺一的成分剔除，不复用日涨幅`;
-const TURNOVER_METHOD =
+export const SECTOR_TURNOVER_METHOD =
   '窗口成交占比 = 板块 active 成分累计成交额增量之和 ÷ 同期全市场去重成交额增量（同一股票在两个批次都出现才计入分母）';
 const LIMIT_UP_METHOD = '封板数 = 当日连板天梯中出现的板块 active 成分数；无天梯快照时缺失，不写 0';
 
@@ -166,6 +166,20 @@ export const SectorIntradayRowSchema = z.object({
 });
 export type SectorIntradayRow = z.infer<typeof SectorIntradayRowSchema>;
 
+/** 锚点批次的覆盖摘要（盘中榜 / 成交分布共用）。 */
+export const SectorRankingAnchorSchema = z.object({
+  sampledAt: z.coerce.date(),
+  source: z.string().min(1),
+  tradingDate: dateString,
+  complete: z.boolean(),
+  expectedCount: z.number().int().nonnegative(),
+  receivedCount: z.number().int().nonnegative(),
+  missingCount: z.number().int().nonnegative(),
+  duplicateCount: z.number().int().nonnegative(),
+  gaps: z.array(z.string()),
+});
+export type SectorRankingAnchor = z.infer<typeof SectorRankingAnchorSchema>;
+
 export const SectorIntradayRankingSchema = z.object({
   state: z.enum(['ready', 'empty']),
   emptyReason: SectorRankingEmptyReasonSchema.optional(),
@@ -173,19 +187,7 @@ export const SectorIntradayRankingSchema = z.object({
   sort: SectorIntradaySortSchema,
   window: SectorWindowKeySchema,
   tradingDate: dateString.nullable(),
-  anchor: z
-    .object({
-      sampledAt: z.coerce.date(),
-      source: z.string().min(1),
-      tradingDate: dateString,
-      complete: z.boolean(),
-      expectedCount: z.number().int().nonnegative(),
-      receivedCount: z.number().int().nonnegative(),
-      missingCount: z.number().int().nonnegative(),
-      duplicateCount: z.number().int().nonnegative(),
-      gaps: z.array(z.string()),
-    })
-    .nullable(),
+  anchor: SectorRankingAnchorSchema.nullable(),
   windows: z.object({ w5: SectorWindowRefSchema, w15: SectorWindowRefSchema }),
   turnover: SectorTurnoverWindowSchema,
   limitUp: SectorLimitUpBlockSchema,
@@ -522,7 +524,7 @@ export const buildSectorTurnoverWindow = (input: {
     window: input.window,
     marketSampleCount: sampleCount,
     marketTotalCount: totalCount,
-    method: TURNOVER_METHOD,
+    method: SECTOR_TURNOVER_METHOD,
   };
   const invalid = (
     reason: string,
@@ -627,7 +629,7 @@ export const buildSectorTurnoverMetric = (input: {
     missingCount,
     nonTradableCount,
     numeratorAmount: sampleCount === 0 ? null : round2(numerator),
-    method: TURNOVER_METHOD,
+    method: SECTOR_TURNOVER_METHOD,
     warnings,
   };
 };
@@ -689,7 +691,7 @@ const buildSectorLimitUpMetric = (input: {
   return { value, status: 'complete', method: LIMIT_UP_METHOD, warnings: [] };
 };
 
-const anchorSummary = (batch: MarketSnapshotBatch): SectorIntradayRanking['anchor'] => ({
+export const sectorRankingAnchorSummary = (batch: MarketSnapshotBatch): SectorRankingAnchor => ({
   sampledAt: batch.sampledAt,
   source: batch.source,
   tradingDate: batch.tradingDate,
@@ -720,7 +722,7 @@ export interface SectorIntradayRankingInput {
   readonly limitUpError: string | null;
 }
 
-const EMPTY_REASON_TEXT: Readonly<Record<SectorRankingEmptyReason, string>> = {
+export const SECTOR_EMPTY_REASON_TEXT: Readonly<Record<SectorRankingEmptyReason, string>> = {
   no_batch: '尚无已发布的盘中批次',
   pre_open: '盘前尚无当日批次',
   non_trading_day: '非交易日，不展示当日盘面数据',
@@ -740,7 +742,7 @@ export const buildSectorIntradayEmptyRanking = (input: {
   if ((input.reason === 'no_batch') !== (input.latest === null)) {
     throw new InvariantError('板块榜空态原因与最近批次状态不一致');
   }
-  const reasonText = `${input.reason}: ${EMPTY_REASON_TEXT[input.reason]}`;
+  const reasonText = `${input.reason}: ${SECTOR_EMPTY_REASON_TEXT[input.reason]}`;
   const windowRef = (key: SectorWindowKey): SectorWindowRef => ({
     key,
     minutes: SECTOR_INTRADAY_WINDOWS[key],
@@ -758,7 +760,7 @@ export const buildSectorIntradayEmptyRanking = (input: {
     sort: input.sort,
     window: input.window,
     tradingDate: input.latest?.tradingDate ?? null,
-    anchor: input.latest === null ? null : anchorSummary(input.latest),
+    anchor: input.latest === null ? null : sectorRankingAnchorSummary(input.latest),
     windows: { w5: windowRef('w5'), w15: windowRef('w15') },
     turnover: {
       window: input.window,
@@ -767,7 +769,7 @@ export const buildSectorIntradayEmptyRanking = (input: {
       marketAmountDelta: null,
       marketSampleCount: 0,
       marketTotalCount: 0,
-      method: TURNOVER_METHOD,
+      method: SECTOR_TURNOVER_METHOD,
       warnings: [],
     },
     limitUp: {
@@ -897,7 +899,7 @@ export const buildSectorIntradayRanking = (
     sort: input.sort,
     window: input.window,
     tradingDate: input.anchor.tradingDate,
-    anchor: anchorSummary(input.anchor),
+    anchor: sectorRankingAnchorSummary(input.anchor),
     windows,
     turnover: turnoverBlock,
     limitUp: limitUpBlock,

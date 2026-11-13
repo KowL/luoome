@@ -5719,3 +5719,237 @@ describe('Web 作战室板块盘中榜 API', () => {
     expect(invalid.body.error?.kind).toBe('invalid_input');
   });
 });
+
+/**
+ * 作战室成交分布 Web API（ticket #40）：窗口成交占比、百分点环比与 CR3 集中度。
+ */
+const AMOUNT_LEADER = roomSectorObservation('industry', '881101.TI', '领涨方向');
+const AMOUNT_FOLLOWER = roomSectorObservation('industry', '881102.TI', '接力方向');
+const AMOUNT_OTHER = roomSectorObservation('industry', '881103.TI', '其余方向');
+const AMOUNT_CONCEPT = roomSectorObservation('concept', '886101.TI', '重叠概念');
+
+const amountLeadIds = marketDayItems(0).map((entry) => entry.id);
+const amountGroups = [
+  amountLeadIds.slice(0, 3),
+  amountLeadIds.slice(3, 6),
+  amountLeadIds.slice(6, 9),
+];
+
+const seedRoomAmountSectors = async (ctx: ToolContext): Promise<void> => {
+  const [leaderIds, followerIds, otherIds] = amountGroups;
+  await ctx.repos.sectorCatalog.applySync({
+    syncId: 'room-amount-catalog',
+    source: 'fuyao',
+    appliedAt: marketRoomClock('09:00'),
+    status: 'succeeded',
+    catalog: [AMOUNT_LEADER, AMOUNT_FOLLOWER, AMOUNT_OTHER, AMOUNT_CONCEPT],
+    catalogKinds: ['industry', 'concept'],
+    observations: [
+      ...(leaderIds ?? []).map((stockId, index) => ({
+        stockId,
+        sectors: index === 0 ? [AMOUNT_LEADER, AMOUNT_CONCEPT] : [AMOUNT_LEADER],
+      })),
+      ...(followerIds ?? []).map((stockId) => ({ stockId, sectors: [AMOUNT_FOLLOWER] })),
+      ...(otherIds ?? []).map((stockId) => ({ stockId, sectors: [AMOUNT_OTHER] })),
+    ],
+    stockStatuses: [],
+    failures: [],
+  });
+};
+
+type RoomAmountBody = {
+  ok: boolean;
+  error?: { kind: string; message?: string };
+  data?: {
+    distribution: {
+      state: 'ready' | 'empty';
+      emptyReason?: string;
+      kind: 'industry' | 'concept';
+      window: string;
+      tradingDate: string | null;
+      anchor: { sampledAt: string } | null;
+      windows: {
+        current: { status: string; startSampledAt: string | null; reason: string | null };
+        previous: { status: string; startSampledAt: string | null; reason: string | null };
+      };
+      turnover: {
+        current: { status: string; reason: string | null; marketAmountDelta: number | null };
+        previous: { status: string; reason: string | null; marketAmountDelta: number | null };
+      };
+      concentration: {
+        basis: string;
+        definition: string;
+        value: number | null;
+        status: string;
+        reason: string | null;
+        sectorCount: number;
+        top: Array<{ name: string; share: number }>;
+      };
+      coverage: { sectorCount: number; rowCount: number; omittedSectorCount: number };
+      rows: Array<{
+        name: string;
+        rank: number | null;
+        share: {
+          value: number | null;
+          status: string;
+          numeratorAmount: number | null;
+          sampleCount: number;
+          memberCount: number;
+          missingCount: number;
+          nonTradableCount: number;
+        };
+        previousShare: { value: number | null };
+        deltaPp: { value: number | null; status: string; reason: string | null };
+      }>;
+      notes: string[];
+    };
+  };
+};
+
+const readRoomAmount = async (
+  web: Hono,
+  query = '',
+): Promise<{ readonly status: number; readonly body: RoomAmountBody }> => {
+  const response = await web.fetch(
+    new Request(`http://test/api/market/room/amount-distribution${query}`),
+  );
+  return { status: response.status, body: (await response.json()) as RoomAmountBody };
+};
+
+describe('Web 作战室成交分布 API', () => {
+  it('尚无批次时返回 no_batch 空态，读取不触发采集且默认口径为行业 / 15 分钟', async () => {
+    const { app: web, adapter } = await marketRoomApp(() => marketRoomClock('10:16:00'));
+
+    const { status, body } = await readRoomAmount(web);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data?.distribution).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      kind: 'industry',
+      window: 'w15',
+      tradingDate: null,
+      anchor: null,
+      rows: [],
+    });
+    expect(body.data?.distribution.concentration.value).toBeNull();
+    expect(adapter.envelopeCalls).toBe(0);
+  });
+
+  it('5 分钟窗口返回占比、百分点环比与 CR3，口径说明写清重叠 / 停牌 / 漏采', async () => {
+    const { app: web, ctx, adapter } = await marketRoomApp(() => marketRoomClock('10:16:00'));
+    await seedRoomAmountSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:00', marketDayItems(0)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:05', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:10', marketDayItems(2)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(3)));
+
+    const { status, body } = await readRoomAmount(web, '?kind=industry&window=w5');
+    expect(status).toBe(200);
+    const distribution = body.data?.distribution;
+    expect(distribution?.state).toBe('ready');
+    expect(distribution?.anchor?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(distribution?.windows.current).toMatchObject({
+      status: 'complete',
+      startSampledAt: '2026-09-28T02:10:00.000Z',
+    });
+    expect(distribution?.windows.previous).toMatchObject({
+      status: 'complete',
+      startSampledAt: '2026-09-28T02:05:00.000Z',
+    });
+    expect(distribution?.turnover.current.status).toBe('complete');
+    expect(distribution?.turnover.current.marketAmountDelta).toBeGreaterThan(0);
+    expect(distribution?.turnover.previous.marketAmountDelta).toBeGreaterThan(0);
+
+    expect(distribution?.rows).toHaveLength(3);
+    for (const row of distribution?.rows ?? []) {
+      expect(row.share.value).toBeGreaterThan(0);
+      expect(row.share.value ?? 0).toBeLessThan(100);
+      expect(row.deltaPp.status).toBe('complete');
+      expect(row.deltaPp.value).not.toBeNull();
+    }
+    // 名次按当前窗口占比降序。
+    const shares = (distribution?.rows ?? []).map((row) => row.share.value ?? 0);
+    expect([...shares].sort((left, right) => right - left)).toEqual(shares);
+
+    expect(distribution?.concentration.basis).toBe('CR3');
+    expect(distribution?.concentration.status).toBe('complete');
+    expect(distribution?.concentration.definition).toContain('不可加总');
+    expect(distribution?.concentration.top).toHaveLength(3);
+    expect(distribution?.concentration.value ?? 0).toBeLessThanOrEqual(100);
+    expect(distribution?.notes.join(' ')).toContain('停牌');
+    expect(distribution?.notes.join(' ')).toContain('漏采');
+    expect(adapter.envelopeCalls).toBe(0);
+
+    // 概念只返回概念板块：一个成分，占比与行业不可相加；板块数不足 3 → CR3 缺失。
+    const concept = await readRoomAmount(web, '?kind=concept&window=w5');
+    expect(concept.body.data?.distribution.kind).toBe('concept');
+    expect(concept.body.data?.distribution.rows).toHaveLength(1);
+    expect(concept.body.data?.distribution.rows[0]?.share.memberCount).toBe(1);
+    expect(concept.body.data?.distribution.concentration.status).toBe('unavailable');
+    expect(concept.body.data?.distribution.concentration.reason).toContain(
+      'concentration_insufficient_sectors',
+    );
+  });
+
+  it('at 取该时点及之前最近的批次；窗口缺起点与跨午休按缺失返回原因', async () => {
+    const { app: web, ctx } = await marketRoomApp(() => marketRoomClock('10:16:00'));
+    await seedRoomAmountSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:00', marketDayItems(0)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:05', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:10', marketDayItems(2)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(3)));
+
+    const historical = await readRoomAmount(
+      web,
+      `?window=w5&at=${encodeURIComponent('2026-09-28T10:11:00+08:00')}`,
+    );
+    expect(historical.body.data?.distribution.anchor?.sampledAt).toBe('2026-09-28T02:10:00.000Z');
+    expect(historical.body.data?.distribution.windows.current.status).toBe('complete');
+    expect(historical.body.data?.distribution.windows.previous.status).toBe('complete');
+
+    const tooEarly = await readRoomAmount(
+      web,
+      `?window=w5&at=${encodeURIComponent('2026-09-28T10:01:00+08:00')}`,
+    );
+    expect(tooEarly.body.data?.distribution.anchor?.sampledAt).toBe('2026-09-28T02:00:00.000Z');
+    expect(tooEarly.body.data?.distribution.windows.current.status).toBe('unavailable');
+    expect(tooEarly.body.data?.distribution.windows.current.reason).toContain(
+      'window_start_missing',
+    );
+    expect(tooEarly.body.data?.distribution.rows.every((row) => row.share.value === null)).toBe(
+      true,
+    );
+    expect(tooEarly.body.data?.distribution.rows.every((row) => row.deltaPp.value === null)).toBe(
+      true,
+    );
+
+    const lunch = await marketRoomApp(() => marketRoomClock('13:16:00'));
+    await seedRoomAmountSectors(lunch.ctx);
+    await lunch.ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('11:00', marketDayItems(1)));
+    await lunch.ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('13:15', marketDayItems(2)));
+    const crossed = await readRoomAmount(lunch.app, '?window=w15');
+    expect(crossed.body.data?.distribution.windows.current.reason).toContain(
+      'window_crosses_lunch_break',
+    );
+    expect(crossed.body.data?.distribution.rows.every((row) => row.share.value === null)).toBe(
+      true,
+    );
+    expect(crossed.body.data?.distribution.concentration.status).toBe('unavailable');
+  });
+
+  it('参数不合法按 invalid_input 返回，目录未同步时给出明确空态', async () => {
+    const { app: web, ctx } = await marketRoomApp(() => marketRoomClock('10:16:00'));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(3)));
+
+    const noCatalog = await readRoomAmount(web, '?window=w15');
+    expect(noCatalog.body.data?.distribution.emptyReason).toBe('no_sector_catalog');
+    expect(noCatalog.body.data?.distribution.anchor?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+
+    const invalid = await readRoomAmount(web, '?kind=futures');
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.ok).toBe(false);
+    expect(invalid.body.error?.kind).toBe('invalid_input');
+  });
+});
