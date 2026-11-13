@@ -1,9 +1,12 @@
 import {
   buildMarketSnapshotBatch,
+  isAshareTradingSession,
+  LimitUpLadderQuerySchema,
   type MarketSnapshot,
   MarketSnapshotBatchSchema,
   marketSnapshotBatchId,
   marketSnapshotBatchSampledAt,
+  type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -15,10 +18,39 @@ import { defineTool, errAdapterError } from '../define-tool.js';
  * - `collect_market_snapshot` 一次采集发布一个不可变批次；同采样时点重试复用已发布内容，
  *   不重复采集、不产生第二份；
  * - 采集失败按既有 `adapter_error` 返回，不写空批次、不把失败写成零值；
+ * - 发布新批次后，在交易时段内顺带刷新当日连板天梯快照；天梯失败只进 warnings，
+ *   不回滚已发布批次，也不把失败吞成成功；
  * - `get_market_snapshot_batch` 只读最近已发布批次，刷新与跨页读取不触发采集。
  */
 
 const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
+
+/**
+ * 当日连板天梯快照是 #38 板块封板数的数据来源；盘中只在交易时段写入，
+ * 同一天同一来源按既有主键（date+source）覆盖为最新，不新增历史版本。
+ */
+const refreshLimitUpLadder = async (
+  ctx: ToolContext,
+  tradingDate: string,
+): Promise<readonly string[]> => {
+  if (!isAshareTradingSession(ctx.clock())) return [];
+  const manager = ctx.adapters.marketIntel?.limitUpLadder;
+  if (manager === undefined) {
+    return ['limit_up_ladder_unavailable: 连板天梯 manager 未配置，当日封板数可能缺失'];
+  }
+  try {
+    const result = await manager.fetchLadder(LimitUpLadderQuerySchema.parse({ date: tradingDate }));
+    if (!result.ok || result.data === undefined) {
+      const cause = result.error?.message ?? 'unknown error';
+      return [`limit_up_ladder_refresh_failed: ${cause}`];
+    }
+    await ctx.repos.limitUpLadderSnapshot.save(result.data);
+    return [];
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    return [`limit_up_ladder_refresh_failed: ${cause}`];
+  }
+};
 
 export const CollectMarketSnapshotInput = z.object({});
 
@@ -26,13 +58,15 @@ export const CollectMarketSnapshotOutput = z.object({
   /** true 表示本次请求发布了新批次；false 表示同批次重试复用了已发布内容。 */
   created: z.boolean(),
   batch: MarketSnapshotBatchSchema,
+  /** 批次已发布但附属动作未完成时的显式提示（如天梯刷新失败）；不改变批次有效性。 */
+  warnings: z.array(z.string()),
 });
 export type CollectMarketSnapshotOutputT = z.infer<typeof CollectMarketSnapshotOutput>;
 
 export const collectMarketSnapshotTool = defineTool({
   name: 'collect_market_snapshot',
   description:
-    '采集一次沪深全市场盘中快照并发布为不可变批次（来源、行情时间、抓取时间、覆盖与缺口）；同一批次重试复用已发布结果',
+    '采集一次沪深全市场盘中快照并发布为不可变批次（来源、行情时间、抓取时间、覆盖与缺口）；交易时段内同步刷新当日连板天梯快照，天梯失败只带 warning；同一批次重试复用已发布结果',
   sideEffect: 'external',
   requiredCapabilities: ['external', 'write'],
   input: CollectMarketSnapshotInput,
@@ -41,7 +75,7 @@ export const collectMarketSnapshotTool = defineTool({
     const sampledAt = marketSnapshotBatchSampledAt(ctx.clock());
     const batchId = marketSnapshotBatchId({ coverage: COVERAGE, sampledAt });
     const existing = await ctx.repos.marketSnapshotBatch.findById(batchId);
-    if (existing !== null) return { created: false, batch: existing };
+    if (existing !== null) return { created: false, batch: existing, warnings: [] };
 
     const market = ctx.adapters.market;
     if (market.fetchMarketSnapshotEnvelope === undefined) {
@@ -71,7 +105,8 @@ export const collectMarketSnapshotTool = defineTool({
     const published = await ctx.repos.marketSnapshotBatch.publish(
       buildMarketSnapshotBatch({ snapshot, sampledAt }),
     );
-    return { created: published.created, batch: published.batch };
+    const warnings = await refreshLimitUpLadder(ctx, published.batch.tradingDate);
+    return { created: published.created, batch: published.batch, warnings: [...warnings] };
   },
 });
 
