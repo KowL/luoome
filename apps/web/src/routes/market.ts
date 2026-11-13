@@ -222,6 +222,182 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
   app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
 
+  /**
+   * 盘中全市场批次（ticket #35）。
+   *
+   * GET 只读最近已发布批次：刷新与跨页读取都不触发采集；
+   * POST 手动驱动一次采集并发布，要求 write + external 显式开启（同源 Origin 校验）。
+   */
+  app.get('/api/market/room/snapshot', () => callTool('get_market_snapshot_batch', {}));
+
+  app.post('/api/market/room/collect', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    return callTool('collect_market_snapshot', {});
+  });
+
+  /**
+   * 作战室总览（ticket #36 / #43）：只读已发布批次 + 既有情绪 / 指数契约。
+   *
+   * 参数：
+   *   at (可选) ISO 时间；回放时取该时点及之前最近的已发布批次，只返回当时已知的内容，
+   *            且不读取实时指数与情绪（缺失照常标注）
+   *
+   * 刷新只读，不触发采集；各维度独立标注完整性与缺失原因。
+   */
+  app.get('/api/market/room/overview', (c) => {
+    const at = c.req.query('at');
+    return callTool('get_market_room_overview', at === undefined || at.trim() === '' ? {} : { at });
+  });
+
+  /**
+   * 作战室板块盘中榜（ticket #38）：行业 / 概念可切换，日涨幅与 5 / 15 分钟窗口涨幅分别排序。
+   *
+   * 参数：
+   *   kind (可选) industry | concept，默认 industry
+   *   sort (可选) day | window5 | window15，默认 day
+   *   window (可选) w5 | w15，选择成交占比使用的窗口，默认 w15
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次，缺省读最近批次
+   *
+   * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/sectors', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['kind', 'sort', 'window', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_sectors', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 作战室成交分布（ticket #40）：按 5 / 15 分钟窗口给出板块成交占比、百分点环比与 CR3。
+   *
+   * 参数：
+   *   kind (可选) industry | concept，默认 industry
+   *   window (可选) w5 | w15，默认 w15
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次，缺省读最近批次
+   *
+   * 只读；分母无效 / 窗口不可比按缺失返回，不补零；参数不合法按既有模型返回
+   * invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/amount-distribution', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['kind', 'window', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_amount_distribution', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 作战室板块详情（ticket #39）：走势、成分明细与多板块对照。
+   *
+   * 参数：
+   *   sectorId (必填) 板块内部标识
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次
+   *   window (可选) w5 | w15，窗口涨幅与成交占比口径，默认 w15
+   *   compare (可选) 逗号分隔或重复出现的对照板块标识
+   *
+   * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/sector-detail', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['sectorId', 'window', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const compare = (c.req.queries('compare') ?? [])
+      .flatMap((value) => value.split(','))
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (compare.length > 0) input.compareSectorIds = compare;
+    const r = await invokeTool('get_market_room_sector_detail', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 作战室核心股（ticket #41）：三个核心角色、入选证据与换位时间线。
+   *
+   * 参数：
+   *   sectorId (必填) 板块内部标识
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次
+   *   kind (可选) ignition | turnover | height；只筛选从核心股反查的题材范围
+   *
+   * 只读；证据不足时角色为空或并列，不补零；参数不合法按既有模型返回
+   * invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/core-stocks', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['sectorId', 'kind', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_core_stocks', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 作战室盘中事件（ticket #42）：扩散 / 分化 / 换位，按检测时点升序返回。
+   *
+   * 参数：
+   *   date (可选) 交易日 YYYY-MM-DD；缺省取已知时点 / 最近事件的交易日
+   *   from / to (可选) 检测时点 ISO 范围（含端点）
+   *   knownAt (可选) 已知时点 ISO；回放只返回该时点之前已记录的事件
+   *   includeEventId (可选) 回放里选中的事件 id；只额外放行这一条（检测时点不得晚于 knownAt）
+   *   kind (可选) diffusion | divergence | rotation
+   *   sectorId (可选) 板块内部标识
+   *
+   * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/events', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of [
+      'date',
+      'from',
+      'to',
+      'knownAt',
+      'includeEventId',
+      'kind',
+      'sectorId',
+    ] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('list_market_room_events', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // 作战室页面（总览 / 板块追踪 / 成交分布 / 盘中事件，SPA shell）
+  app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
+
   // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
   // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
   app.get('/api/market/indices', async () => {
@@ -267,7 +443,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
-  // S4.1b：App Service 直执行（非 34 tool 不再经通用 /api/tools/:name/call）。
+  // S4.1b：App Service 直执行（非 45 个 Agent Tool 不再经通用 /api/tools/:name/call）。
   app.get('/api/market/sentiment', (c) => {
     const date = c.req.query('date');
     return callTool('get_ashare_sentiment', {

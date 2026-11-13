@@ -4,6 +4,7 @@ import {
   type AdviceOutcome,
   type AlertPlan,
   buildAccountFacts,
+  buildLimitUpLadderSample,
   type ChatMessage,
   type ChatSession,
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
@@ -12,6 +13,8 @@ import {
   type Holding,
   InvariantError,
   type LimitUpLadder,
+  type LimitUpLadderSample,
+  type MarketSnapshotBatch,
   type MinuteBar,
   money,
   type Notification,
@@ -24,6 +27,9 @@ import {
   type RepositoryRegistry,
   type ResearchDocumentIndex,
   reconcileCashBalance,
+  type SectorCatalogObservation,
+  type SectorKind,
+  type SectorSyncApplyInput,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
   type Stock,
@@ -103,6 +109,48 @@ const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadde
   ],
   warnings: [],
   asOf: T1,
+  ...overrides,
+});
+
+const makeMarketSnapshotBatch = (
+  overrides: Partial<MarketSnapshotBatch> = {},
+): MarketSnapshotBatch => ({
+  id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+  coverage: 'CN_A_SHARES_SH_SZ',
+  tradingDate: '2026-09-28',
+  sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+  source: 'eastmoney',
+  fetchedAt: new Date('2026-09-28T02:16:02.000Z'),
+  observedAt: new Date('2026-09-28T02:16:00.000Z'),
+  dataAsOf: new Date('2026-09-28T02:16:00.000Z'),
+  completeness: {
+    expectedCount: 2,
+    receivedCount: 2,
+    missingCount: 0,
+    duplicateCount: 0,
+    complete: true,
+  },
+  gaps: [],
+  items: [
+    {
+      id: '600519.SH',
+      code: '600519',
+      exchange: 'SH',
+      name: '贵州茅台',
+      close: 1500,
+      changePct: 1.2,
+      amount: 3_000_000_000,
+    },
+    {
+      id: '000001.SZ',
+      code: '000001',
+      exchange: 'SZ',
+      name: '平安银行',
+      close: 11.2,
+      changePct: -0.4,
+      amount: 1_200_000_000,
+    },
+  ],
   ...overrides,
 });
 
@@ -1208,6 +1256,552 @@ export const registerRepositoryContractTests = (
             status: 'missing',
           }),
         ).toEqual([]);
+      });
+
+      it('listCurrentMembers 返回当前成员与聚合挂牌状态', async () => {
+        const apply = (syncId: string, entries: StockUniverseEntry[]) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: T1,
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt: T1,
+              complete: true,
+              reportedTotal: entries.length,
+              entries,
+            },
+          });
+        await apply('sync-members-1', [
+          {
+            stockId: '600519.SH',
+            code: stockCode('600519'),
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+          },
+          {
+            stockId: '002594.SZ',
+            code: stockCode('002594'),
+            exchange: 'SZ',
+            name: '比亚迪',
+            listingStatus: 'suspended',
+          },
+        ]);
+        const members = await repos.stockUniverse.listCurrentMembers({
+          coverage: 'CN_A_SHARES_SH_SZ',
+        });
+        expect(members.map((member) => `${member.stock.id}:${member.listingStatus}`)).toEqual([
+          '002594.SZ:suspended',
+          '600519.SH:listed',
+        ]);
+      });
+    });
+
+    describe('SectorCatalogRepository', () => {
+      const TS1 = new Date('2026-11-02T00:20:00.000Z');
+      const TS2 = new Date('2026-11-03T00:20:00.000Z');
+      const TS3 = new Date('2026-11-04T00:20:00.000Z');
+      const industry = (vendorCode: string, name: string): SectorCatalogObservation => ({
+        kind: 'industry',
+        vendorCode,
+        name,
+      });
+      const concept = (vendorCode: string, name: string): SectorCatalogObservation => ({
+        kind: 'concept',
+        vendorCode,
+        name,
+      });
+      const syncInput = (
+        overrides: Partial<SectorSyncApplyInput> & { readonly syncId: string },
+      ): SectorSyncApplyInput => ({
+        source: 'fuyao',
+        appliedAt: TS1,
+        status: 'succeeded',
+        catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+        catalogKinds: ['industry', 'concept'] satisfies SectorKind[],
+        observations: [
+          {
+            stockId: '600519.SH',
+            sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          },
+          {
+            stockId: '000858.SZ',
+            sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          },
+        ],
+        stockStatuses: [
+          { stockId: '600519.SH', status: 'listed' },
+          { stockId: '000858.SZ', status: 'suspended' },
+        ],
+        failures: [],
+        ...overrides,
+      });
+
+      it('首次同步建立目录与多对多成分，按股票反查含来源与时点', async () => {
+        const summary = await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-1' }));
+
+        expect(summary).toEqual({
+          observedSectors: 2,
+          createdSectors: 2,
+          renamedSectors: 0,
+          retiredSectors: 0,
+          observedStocks: 2,
+          createdMemberships: 4,
+          removedMemberships: 0,
+          reactivatedMemberships: 0,
+        });
+        const sectors = await repos.sectorCatalog.listSectors();
+        expect(sectors.map((sector) => `${sector.kind}:${sector.vendorCode}`)).toEqual([
+          'concept:886042.TI',
+          'industry:881273.TI',
+        ]);
+        // 内部标识与供应商编码分别标识，不互相顶替。
+        for (const sector of sectors) expect(sector.id).not.toBe(sector.vendorCode);
+
+        const views = await repos.sectorCatalog.listByStock({
+          stockIds: ['600519.SH'],
+          kinds: ['concept'],
+        });
+        expect(views).toHaveLength(1);
+        expect(views[0]).toMatchObject({
+          stockId: '600519.SH',
+          kind: 'concept',
+          vendorCode: '886042.TI',
+          name: '白酒概念',
+          source: 'fuyao',
+          state: 'active',
+          memberStatus: 'listed',
+          firstSeenAt: TS1,
+          lastSeenAt: TS1,
+          missingSince: null,
+        });
+        expect(
+          (await repos.sectorCatalog.listByStock({ stockIds: ['000858.SZ'] })).map(
+            (view) => view.memberStatus,
+          ),
+        ).toEqual(['suspended', 'suspended']);
+      });
+
+      it('同一 syncId 重放与重复执行都不产生重复关系或重复变更', async () => {
+        const input = syncInput({ syncId: 'sector-replay' });
+        const first = await repos.sectorCatalog.applySync(input);
+        const replay = await repos.sectorCatalog.applySync(input);
+        expect(replay).toEqual(first);
+
+        const repeat = await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-replay-2', appliedAt: TS2 }),
+        );
+        expect(repeat.createdMemberships).toBe(0);
+        expect(await repos.sectorCatalog.listByStock({ stockIds: ['600519.SH'] })).toHaveLength(2);
+        expect(
+          (await repos.sectorCatalog.listChanges({ stockId: '600519.SH' })).map(
+            (change) => change.kind,
+          ),
+        ).toEqual(['member-entered', 'member-entered']);
+        expect(
+          (await repos.sectorCatalog.listChanges()).filter(
+            (change) => change.kind === 'sector-created',
+          ),
+        ).toHaveLength(2);
+      });
+
+      it('目录改名与下线写变更记录，历史条目仍可读取', async () => {
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-history-1',
+            catalog: [industry('881101.TI', '种植业'), industry('881273.TI', '白酒')],
+            catalogKinds: ['industry'],
+            observations: [],
+          }),
+        );
+        const renamed = await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-history-2',
+            appliedAt: TS2,
+            catalog: [industry('881273.TI', '白酒Ⅱ')],
+            catalogKinds: ['industry'],
+            observations: [],
+          }),
+        );
+
+        expect(renamed.renamedSectors).toBe(1);
+        expect(renamed.retiredSectors).toBe(1);
+        const all = await repos.sectorCatalog.listSectors({ state: 'all' });
+        expect(all.map((sector) => `${sector.vendorCode}:${sector.name}:${sector.state}`)).toEqual([
+          '881101.TI:种植业:retired',
+          '881273.TI:白酒Ⅱ:active',
+        ]);
+        // 默认只返回当前有效目录；下线条目不覆盖历史。
+        expect(
+          (await repos.sectorCatalog.listSectors()).map((sector) => sector.vendorCode),
+        ).toEqual(['881273.TI']);
+
+        const renamedSector = all.find((sector) => sector.vendorCode === '881273.TI');
+        expect(renamedSector).toBeDefined();
+        if (renamedSector === undefined) return;
+        const renamedChanges = await repos.sectorCatalog.listChanges({
+          sectorId: renamedSector.id,
+        });
+        expect(renamedChanges.map((change) => change.kind)).toEqual([
+          'sector-created',
+          'sector-renamed',
+        ]);
+        expect(renamedChanges[1]).toMatchObject({
+          previousValue: '白酒',
+          nextValue: '白酒Ⅱ',
+          occurredAt: TS2,
+        });
+      });
+
+      it('部分响应失败时未观测股票与未成功分类保持原状', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-partial-1' }));
+
+        // concept 目录请求失败（catalogKinds 里没有 concept），且 000858.SZ 批次失败未被观测。
+        const partial = await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-partial-2',
+            appliedAt: TS2,
+            status: 'partial',
+            catalog: [industry('881273.TI', '白酒')],
+            catalogKinds: ['industry'],
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒')],
+              },
+            ],
+            failures: [
+              {
+                scope: 'catalog',
+                kind: 'concept',
+                message: 'fuyao upstream_error: concept catalog',
+              },
+              { scope: 'memberships', kind: null, message: 'fuyao network: batch 000858.SZ' },
+            ],
+          }),
+        );
+
+        expect(partial.removedMemberships).toBe(1);
+        expect(partial.retiredSectors).toBe(0);
+        // 000858.SZ 未被观测 → 两条成分都保持 active，只按目录状态更新为 suspended。
+        const unobserved = await repos.sectorCatalog.listByStock({ stockIds: ['000858.SZ'] });
+        expect(unobserved.map((view) => `${view.vendorCode}:${view.state}`)).toEqual([
+          '886042.TI:active',
+          '881273.TI:active',
+        ]);
+        expect(unobserved.every((view) => view.memberStatus === 'suspended')).toBe(true);
+        // concept 目录没有成功返回 → 不下线。
+        expect(
+          (await repos.sectorCatalog.listSectors({ kinds: ['concept'] })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI']);
+        // 被观测到的 600519.SH 少了一条概念关系 → 只退该条。
+        expect(
+          (
+            await repos.sectorCatalog.listByStock({
+              stockIds: ['600519.SH'],
+              includeMissing: true,
+            })
+          ).map((view) => `${view.vendorCode}:${view.state}`),
+        ).toEqual(['886042.TI:missing', '881273.TI:active']);
+      });
+
+      it('成分重新出现时恢复 active 并保留首次观测时间', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-rejoin-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-rejoin-2',
+            appliedAt: TS2,
+            catalog: [industry('881273.TI', '白酒')],
+            observations: [{ stockId: '600519.SH', sectors: [industry('881273.TI', '白酒')] }],
+          }),
+        );
+        const rejoined = await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-rejoin-3', appliedAt: TS3 }),
+        );
+
+        expect(rejoined.reactivatedMemberships).toBe(1);
+        const views = await repos.sectorCatalog.listByStock({ stockIds: ['600519.SH'] });
+        const conceptView = views.find((view) => view.vendorCode === '886042.TI');
+        expect(conceptView).toMatchObject({
+          state: 'active',
+          missingSince: null,
+          firstSeenAt: TS1,
+          lastSeenAt: TS3,
+        });
+        const changes = await repos.sectorCatalog.listChanges({ stockId: '600519.SH' });
+        expect(changes.map((change) => change.kind)).toEqual([
+          'member-entered',
+          'member-entered',
+          'member-left',
+          'member-rejoined',
+        ]);
+      });
+
+      it('按多个板块一次读取成分，默认只返回 active，缺省候选返回空数组', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-many-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-many-2',
+            appliedAt: TS2,
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+              },
+              {
+                stockId: '000858.SZ',
+                sectors: [concept('886042.TI', '白酒概念')],
+              },
+            ],
+          }),
+        );
+        const industrySector = (await repos.sectorCatalog.listSectors({ kinds: ['industry'] }))[0];
+        const conceptSector = (await repos.sectorCatalog.listSectors({ kinds: ['concept'] }))[0];
+        expect(industrySector).toBeDefined();
+        expect(conceptSector).toBeDefined();
+        if (industrySector === undefined || conceptSector === undefined) return;
+
+        const members = await repos.sectorCatalog.listBySectors({
+          sectorIds: [industrySector.id, conceptSector.id],
+        });
+        expect(members.map((member) => `${member.sectorId}:${member.stockId}`)).toEqual(
+          [
+            `${industrySector.id}:600519.SH`,
+            `${conceptSector.id}:000858.SZ`,
+            `${conceptSector.id}:600519.SH`,
+          ].sort(),
+        );
+        expect(
+          await repos.sectorCatalog.listBySectors({ sectorIds: [conceptSector.id] }),
+        ).toHaveLength(2);
+        expect(await repos.sectorCatalog.listBySectors({ sectorIds: [] })).toEqual([]);
+        expect(await repos.sectorCatalog.listBySectors({ sectorIds: ['missing-sector'] })).toEqual(
+          [],
+        );
+        expect(
+          await repos.sectorCatalog.listBySectors({
+            sectorIds: [industrySector.id, conceptSector.id],
+            includeMissing: true,
+          }),
+        ).toHaveLength(4);
+      });
+
+      it('按板块读取成分默认只返回 active，可显式包含已退出成员', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-by-sector-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-by-sector-2',
+            appliedAt: TS2,
+            observations: [{ stockId: '600519.SH', sectors: [] }],
+          }),
+        );
+        const conceptSector = (await repos.sectorCatalog.listSectors({ kinds: ['concept'] }))[0];
+        expect(conceptSector).toBeDefined();
+        if (conceptSector === undefined) return;
+        expect(
+          (await repos.sectorCatalog.listBySector({ sectorId: conceptSector.id })).map(
+            (member) => member.stockId,
+          ),
+        ).toEqual(['000858.SZ']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySector({
+              sectorId: conceptSector.id,
+              includeMissing: true,
+            })
+          ).map((member) => `${member.stockId}:${member.state}`),
+        ).toEqual(['000858.SZ:active', '600519.SH:missing']);
+      });
+      it('时点查询：目录与成分按 firstSeenAt / 退出时点截断，不拿今天的目录和成分顶替历史', async () => {
+        const t = (time: string): Date => new Date(`2026-11-02T${time}:00+08:00`);
+        const syncAt = (
+          syncId: string,
+          appliedAt: Date,
+          overrides: Partial<SectorSyncApplyInput>,
+        ) => repos.sectorCatalog.applySync(syncInput({ syncId, appliedAt, ...overrides }));
+
+        await syncAt('sector-asof-1', t('09:00'), {
+          catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            { stockId: '000858.SZ', sectors: [concept('886042.TI', '白酒概念')] },
+          ],
+        });
+        await syncAt('sector-asof-2', t('10:20'), {
+          catalog: [
+            industry('881273.TI', '白酒'),
+            concept('886042.TI', '白酒概念'),
+            industry('881101.TI', '种植业'),
+          ],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            {
+              stockId: '000858.SZ',
+              sectors: [concept('886042.TI', '白酒概念'), industry('881273.TI', '白酒')],
+            },
+            { stockId: '600000.SH', sectors: [industry('881101.TI', '种植业')] },
+          ],
+        });
+        await syncAt('sector-asof-3', t('10:40'), {
+          catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            {
+              stockId: '000858.SZ',
+              sectors: [concept('886042.TI', '白酒概念'), industry('881273.TI', '白酒')],
+            },
+            { stockId: '600000.SH', sectors: [industry('881273.TI', '白酒')] },
+          ],
+        });
+        await syncAt('sector-asof-4', t('11:20'), {
+          observations: [
+            {
+              stockId: '600519.SH',
+              sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+            },
+            { stockId: '000858.SZ', sectors: [] },
+            { stockId: '600000.SH', sectors: [industry('881273.TI', '白酒')] },
+          ],
+        });
+
+        const ids = Object.fromEntries(
+          (await repos.sectorCatalog.listSectors({ state: 'all' })).map((sector) => [
+            sector.vendorCode,
+            sector.id,
+          ]),
+        );
+        const liquor = ids['881273.TI'] as string;
+        const planting = ids['881101.TI'] as string;
+
+        // 首次同步前没有任何可用目录 / 成分。
+        expect(await repos.sectorCatalog.listSectorsAsOf({ at: t('08:00') })).toEqual([]);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [liquor], at: t('08:00') }),
+        ).toEqual([]);
+
+        // 10:15：种植业与 600000.SH 尚未收录，000858.SZ 尚未纳入白酒。
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:15') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881273.TI']);
+        const beforeSecond = await repos.sectorCatalog.listBySectorsAsOf({
+          sectorIds: [liquor],
+          at: t('10:15'),
+        });
+        expect(beforeSecond.map((member) => member.stockId)).toEqual(['600519.SH']);
+        expect(beforeSecond.every((member) => member.state === 'active')).toBe(true);
+        expect(beforeSecond.every((member) => member.missingSince === null)).toBe(true);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:15') }),
+        ).toEqual([]);
+
+        // 10:30：种植业已收录、000858.SZ 已纳入白酒。
+        const afterSecond = await repos.sectorCatalog.listBySectorsAsOf({
+          sectorIds: [liquor],
+          at: t('10:30'),
+        });
+        expect(afterSecond.map((member) => member.stockId)).toEqual(['000858.SZ', '600519.SH']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:30') })
+          ).map((member) => member.stockId),
+        ).toEqual(['600000.SH']);
+
+        // 10:40 种植业下线、600000.SH 转入白酒：10:35 仍应看到旧目录与旧成分。
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:35') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881101.TI', '881273.TI']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:35') })
+          ).map((member) => member.stockId),
+        ).toEqual(['600000.SH']);
+        expect(
+          (await repos.sectorCatalog.listSectorsAsOf({ at: t('10:45') })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI', '881273.TI']);
+        expect(
+          await repos.sectorCatalog.listBySectorsAsOf({ sectorIds: [planting], at: t('10:45') }),
+        ).toEqual([]);
+
+        // 11:20 000858.SZ 退出全部题材：11:10 仍可见，11:30 不再可见。
+        expect(
+          (
+            await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('11:10') })
+          ).map((view) => view.vendorCode),
+        ).toEqual(['886042.TI', '881273.TI']);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('11:30') }),
+        ).toEqual([]);
+        expect(await repos.sectorCatalog.listByStockAsOf({ stockIds: [], at: t('11:30') })).toEqual(
+          [],
+        );
+      });
+
+      it('按股票反查时点归属，口径与按板块反查一致，并可限定分类', async () => {
+        const t = (time: string): Date => new Date(`2026-11-02T${time}:00+08:00`);
+        await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-asof-stock-1', appliedAt: t('09:00') }),
+        );
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-asof-stock-2',
+            appliedAt: t('10:20'),
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒')],
+              },
+            ],
+          }),
+        );
+
+        const before = await repos.sectorCatalog.listByStockAsOf({
+          stockIds: ['600519.SH'],
+          at: t('10:15'),
+        });
+        expect(before.map((view) => `${view.vendorCode}:${view.state}`)).toEqual([
+          '886042.TI:active',
+          '881273.TI:active',
+        ]);
+        expect(before[0]).toMatchObject({
+          kind: 'concept',
+          sectorState: 'active',
+          missingSince: null,
+          firstSeenAt: t('09:00'),
+        });
+
+        const after = await repos.sectorCatalog.listByStockAsOf({
+          stockIds: ['600519.SH'],
+          at: t('10:30'),
+        });
+        expect(after.map((view) => view.vendorCode)).toEqual(['881273.TI']);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({
+            stockIds: ['600519.SH'],
+            kinds: ['concept'],
+            at: t('10:30'),
+          }),
+        ).toEqual([]);
+        expect(
+          await repos.sectorCatalog.listByStockAsOf({ stockIds: ['000858.SZ'], at: t('09:30') }),
+        ).toHaveLength(2);
       });
     });
 
@@ -4301,6 +4895,280 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
+      });
+    });
+
+    describe('LimitUpLadderSampleRepository', () => {
+      const sampleAt = (iso: string, overrides: Partial<LimitUpLadder> = {}): LimitUpLadderSample =>
+        buildLimitUpLadderSample({
+          sampledAt: new Date(iso),
+          ladder: makeLimitUpLadder({ asOf: new Date(iso), ...overrides }),
+        });
+
+      it('按采样时点保存多份天梯事实，可按交易日升序与 at-or-before 读取', async () => {
+        const first = sampleAt('2026-07-01T01:35:00.000Z');
+        const second = sampleAt('2026-07-01T02:00:00.000Z');
+        await repos.limitUpLadderSample.save(first);
+        await repos.limitUpLadderSample.save(second);
+
+        expect(await repos.limitUpLadderSample.findById(first.id)).toEqual(first);
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+          }),
+        ).toEqual([first, second]);
+        expect(
+          await repos.limitUpLadderSample.findAtOrBefore({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+            sampledAt: new Date('2026-07-01T01:50:00.000Z'),
+          }),
+        ).toEqual(first);
+        expect(
+          await repos.limitUpLadderSample.findAtOrBefore({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+            sampledAt: new Date('2026-07-01T01:30:00.000Z'),
+          }),
+        ).toBeNull();
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-02',
+            source: 'eastmoney',
+          }),
+        ).toEqual([]);
+      });
+
+      it('同一采样时点重试保留首次内容，不产生第二份', async () => {
+        const first = sampleAt('2026-07-01T01:35:00.000Z');
+        await repos.limitUpLadderSample.save(first);
+        const changed = sampleAt('2026-07-01T01:35:00.000Z', {
+          asOf: new Date('2026-07-01T01:36:00.000Z'),
+        });
+
+        await expect(repos.limitUpLadderSample.save(changed)).resolves.toEqual({
+          created: false,
+          sample: first,
+        });
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+          }),
+        ).toEqual([first]);
+      });
+    });
+
+    describe('MarketSnapshotBatchRepository', () => {
+      it('发布后按 id 与最近批次读取完整快照', async () => {
+        const batch = makeMarketSnapshotBatch();
+        const published = await repos.marketSnapshotBatch.publish(batch);
+        expect(published).toEqual({ created: true, batch });
+        expect(await repos.marketSnapshotBatch.findById(batch.id)).toEqual(batch);
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(batch);
+        expect(
+          await repos.marketSnapshotBatch.findLatest({ coverage: 'CN_A_SHARES_SH_SZ' }),
+        ).toEqual(batch);
+      });
+
+      it('同一批次重试保留首次发布内容，不产生第二份', async () => {
+        const first = makeMarketSnapshotBatch();
+        await repos.marketSnapshotBatch.publish(first);
+        const changed = makeMarketSnapshotBatch({
+          fetchedAt: new Date('2026-09-28T02:18:30.000Z'),
+          source: 'tencent',
+          items: [first.items[0] as NonNullable<(typeof first.items)[0]>],
+          completeness: {
+            expectedCount: 2,
+            receivedCount: 1,
+            missingCount: 1,
+            duplicateCount: 0,
+            complete: false,
+          },
+          gaps: ['missing_items: 期望 2 只，实收 1 只，缺 1 只'],
+        });
+        await expect(repos.marketSnapshotBatch.publish(changed)).resolves.toEqual({
+          created: false,
+          batch: first,
+        });
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(first);
+      });
+
+      it('不同采样时点分别发布，最近批次按采样时点倒序', async () => {
+        const earlier = makeMarketSnapshotBatch();
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:20:00.000Z',
+          sampledAt: new Date('2026-09-28T02:20:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:21:01.000Z'),
+          source: 'tencent',
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(later);
+        expect(await repos.marketSnapshotBatch.findLatest()).toEqual(later);
+        expect(await repos.marketSnapshotBatch.findById(earlier.id)).toEqual(earlier);
+        expect(
+          await repos.marketSnapshotBatch.findLatest({ coverage: 'CN_A_SHARES_BJ' }),
+        ).toBeNull();
+      });
+
+      it('按交易日与同时点容差查找对比批次，超出容差不拿相邻时点冒充', async () => {
+        const previous = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:15:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:15:00.000Z'),
+          fetchedAt: new Date('2026-09-24T02:16:01.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(previous);
+        await repos.marketSnapshotBatch.publish(makeMarketSnapshotBatch());
+
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:15:30.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toEqual(previous);
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:20:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-23',
+            sampledAt: new Date('2026-09-23T02:15:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            coverage: 'CN_A_SHARES_BJ',
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:15:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+      });
+
+      it('按交易日取某时点及之前最近的批次，不跨交易日也不含之后批次', async () => {
+        const earlier = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:10:00.000Z',
+          sampledAt: new Date('2026-09-28T02:10:00.000Z'),
+        });
+        const at = makeMarketSnapshotBatch();
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:20:00.000Z',
+          sampledAt: new Date('2026-09-28T02:20:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(at);
+        await repos.marketSnapshotBatch.publish(later);
+
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+          }),
+        ).resolves.toEqual(at);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:19:59.999Z'),
+          }),
+        ).resolves.toEqual(at);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:21:00.000Z'),
+          }),
+        ).resolves.toEqual(later);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:09:00.000Z'),
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            coverage: 'CN_A_SHARES_BJ',
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+          }),
+        ).resolves.toBeNull();
+      });
+
+      it('按交易日列出全部批次，按采样时点升序且不跨交易日', async () => {
+        const early = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:00:00.000Z',
+          sampledAt: new Date('2026-09-28T02:00:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:01:00.000Z'),
+        });
+        const middle = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:10:00.000Z',
+          sampledAt: new Date('2026-09-28T02:10:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:11:00.000Z'),
+        });
+        const previousDay = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-25T02:15:00.000Z',
+          tradingDate: '2026-09-25',
+          sampledAt: new Date('2026-09-25T02:15:00.000Z'),
+          fetchedAt: new Date('2026-09-25T02:16:00.000Z'),
+        });
+        const bj = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_BJ|2026-09-28T02:15:00.000Z',
+          coverage: 'CN_A_SHARES_BJ',
+          sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(early);
+        await repos.marketSnapshotBatch.publish(middle);
+        await repos.marketSnapshotBatch.publish(previousDay);
+        await repos.marketSnapshotBatch.publish(bj);
+
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({ tradingDate: '2026-09-28' }),
+        ).resolves.toEqual([early, middle, bj]);
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-28',
+          }),
+        ).resolves.toEqual([early, middle]);
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({ tradingDate: '2026-09-29' }),
+        ).resolves.toEqual([]);
+      });
+
+      it('容差内多个候选时取采样时点最近的一份', async () => {
+        const earlier = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:10:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:10:00.000Z'),
+        });
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:20:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:20:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(later);
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:16:00.000Z'),
+            toleranceMs: 5 * 60_000,
+          }),
+        ).resolves.toEqual(later);
       });
     });
 

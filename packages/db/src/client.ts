@@ -19,7 +19,10 @@ import {
   DrizzleDecisionReviewRepository,
   DrizzleHoldingRepository,
   DrizzleLedgerRepository,
+  DrizzleLimitUpLadderSampleRepository,
   DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMarketRoomEventRepository,
+  DrizzleMarketSnapshotBatchRepository,
   DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
   DrizzlePortfolioCashFlowRepository,
@@ -28,6 +31,7 @@ import {
   DrizzleQuoteRepository,
   DrizzleReportRepository,
   DrizzleResearchIndexRepository,
+  DrizzleSectorCatalogRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
@@ -318,6 +322,90 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON stock_universe_sync_runs (source, coverage, finished_at)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_catalog_entries (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      vendor_code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      state TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      retired_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS sector_catalog_entries_vendor_unique
+    ON sector_catalog_entries (source, kind, vendor_code)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_catalog_entries_kind_state_idx
+    ON sector_catalog_entries (kind, state)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_memberships (
+      sector_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      state TEXT NOT NULL,
+      member_status TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      missing_since INTEGER,
+      last_sync_id TEXT NOT NULL,
+      CONSTRAINT sector_memberships_pk PRIMARY KEY (sector_id, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_memberships_stock_state_idx
+    ON sector_memberships (stock_id, state)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_memberships_sector_state_idx
+    ON sector_memberships (sector_id, state)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_change_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      sector_id TEXT NOT NULL,
+      stock_id TEXT,
+      kind TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      sync_id TEXT NOT NULL,
+      previous_value TEXT,
+      next_value TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_change_events_sector_idx
+    ON sector_change_events (sector_id, seq)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_change_events_stock_idx
+    ON sector_change_events (stock_id, seq)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_sync_runs (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      applied_at INTEGER NOT NULL,
+      observed_sectors INTEGER NOT NULL DEFAULT 0,
+      created_sectors INTEGER NOT NULL DEFAULT 0,
+      renamed_sectors INTEGER NOT NULL DEFAULT 0,
+      retired_sectors INTEGER NOT NULL DEFAULT 0,
+      observed_stocks INTEGER NOT NULL DEFAULT 0,
+      created_memberships INTEGER NOT NULL DEFAULT 0,
+      removed_memberships INTEGER NOT NULL DEFAULT 0,
+      reactivated_memberships INTEGER NOT NULL DEFAULT 0,
+      failures_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_sync_runs_source_applied_idx
+    ON sector_sync_runs (source, applied_at)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS limit_up_ladder_snapshots (
       date TEXT NOT NULL,
       source TEXT NOT NULL,
@@ -332,6 +420,72 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS limit_up_ladder_snapshots_source_date_idx
     ON limit_up_ladder_snapshots (source, date)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS limit_up_ladder_samples (
+      id TEXT PRIMARY KEY,
+      trading_date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      max_level INTEGER NOT NULL,
+      levels_json TEXT NOT NULL,
+      warnings_json TEXT NOT NULL,
+      as_of INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS limit_up_ladder_samples_source_date_sampled_idx
+    ON limit_up_ladder_samples (source, trading_date, sampled_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS market_snapshot_batches (
+      id TEXT PRIMARY KEY,
+      coverage TEXT NOT NULL,
+      trading_date TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      observed_at INTEGER,
+      data_as_of INTEGER,
+      completeness_json TEXT NOT NULL,
+      gaps_json TEXT NOT NULL,
+      items_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_snapshot_batches_coverage_sampled_idx
+    ON market_snapshot_batches (coverage, sampled_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS market_room_events (
+      id TEXT PRIMARY KEY,
+      trading_date TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sector_id TEXT NOT NULL,
+      sector_kind TEXT NOT NULL,
+      vendor_code TEXT NOT NULL,
+      sector_name TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      previous_sampled_at INTEGER,
+      status TEXT NOT NULL,
+      thresholds_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      verification_json TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS market_room_events_identity_unique
+    ON market_room_events (trading_date, kind, sector_id, sampled_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_room_events_date_time_idx
+    ON market_room_events (trading_date, sampled_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_room_events_sector_time_idx
+    ON market_room_events (sector_id, sampled_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
@@ -1775,7 +1929,11 @@ export const createDrizzleRepos = (
     decisionReview: new DrizzleDecisionReviewRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
+    sectorCatalog: new DrizzleSectorCatalogRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
+    limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db),
+    marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db),
+    marketRoomEvent: new DrizzleMarketRoomEventRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),

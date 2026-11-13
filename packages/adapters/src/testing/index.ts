@@ -10,3 +10,4 @@ export * from './deterministic.js';
 export * from './fake-llm.js';
 export * from './fake-market.js';
 export * from './fixtures.js';
+export * from './market-day.js';

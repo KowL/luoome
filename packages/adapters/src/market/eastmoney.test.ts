@@ -387,20 +387,24 @@ describe('market/eastmoney', () => {
         data: {
           total: 4,
           diff: [
-            { f12: '600519', f13: 1, f14: '贵州茅台', f2: 1486.2, f3: 1.2 },
-            { f12: '000001', f13: 0, f14: '平安银行', f2: 11.5, f3: -0.5 },
+            { f12: '600519', f13: 1, f14: '贵州茅台', f2: 1486.2, f3: 1.2, f6: 5_200_000_000 },
+            { f12: '000001', f13: 0, f14: '平安银行', f2: 11.5, f3: -0.5, f6: 860_000_000 },
             { f12: '830799', f13: 0, f14: '北交所股', f2: 5, f3: 0 },
             { f12: '200002', f13: 2, f14: 'B股', f2: 3, f3: 0 },
-            { f12: '600000', f13: 1, f14: '浦发银行', f2: '-', f3: '-' },
+            { f12: '600000', f13: 1, f14: '浦发银行', f2: '-', f3: '-', f6: '-' },
           ],
         },
       });
       // f13=0 的北交所股在本接口 fs 范围外也不该出现，但 parse 只按 marketId 映射 → 保留；
       // f13=2（B 股）丢弃；f2='-' 保留但无 close。
       expect(items.map((i) => i.id)).toEqual(['600519.SH', '000001.SZ', '830799.SZ', '600000.SH']);
-      expect(items[0]).toMatchObject({ close: 1486.2, changePct: 1.2 });
+      expect(items[0]).toMatchObject({ close: 1486.2, changePct: 1.2, amount: 5_200_000_000 });
+      expect(items[1]).toMatchObject({ amount: 860_000_000 });
+      expect(items[2]?.amount).toBeUndefined();
       expect(items[3]?.close).toBeUndefined();
       expect(items[3]?.changePct).toBeUndefined();
+      expect(items[3]?.amount).toBeUndefined();
+      expect(items[3]).not.toHaveProperty('amount', 0);
     });
 
     it('rc != 0 → 抛 EastmoneyAdapterError', () => {
@@ -479,6 +483,50 @@ describe('market/eastmoney', () => {
       const items = await adapter.fetchMarketSnapshot();
       expect(requestedPages).toEqual([1]);
       expect(items.length).toBe(500);
+    });
+
+    it('上游短页（少于请求页大小）时继续翻页直到 total', async () => {
+      const requestedPages: number[] = [];
+      const adapter = new EastmoneySource({
+        fetchImpl: ((url: string) => {
+          const pn = Number(new URL(url).searchParams.get('pn'));
+          requestedPages.push(pn);
+          const from = (pn - 1) * 100;
+          const size = pn < 3 ? 100 : 50;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ rc: 0, data: { total: 250, diff: makePage(from, size) } }),
+              {
+                status: 200,
+              },
+            ),
+          );
+        }) as never,
+      });
+      const items = await adapter.fetchMarketSnapshot();
+      expect(requestedPages).toEqual([1, 2, 3]);
+      expect(items.length).toBe(250);
+    });
+
+    it('上游重复返回同一页时停止翻页，标记为不完整而不是死循环', async () => {
+      let calls = 0;
+      const adapter = new EastmoneySource({
+        fetchImpl: (() => {
+          calls += 1;
+          return Promise.resolve(
+            new Response(JSON.stringify({ rc: 0, data: { total: 5000, diff: makePage(0, 100) } }), {
+              status: 200,
+            }),
+          );
+        }) as never,
+      });
+      const snapshot = await adapter.fetchMarketSnapshotEnvelope();
+      expect(calls).toBe(2);
+      expect(snapshot.completeness).toMatchObject({
+        expectedCount: 5000,
+        receivedCount: 100,
+        complete: false,
+      });
     });
 
     it('任一页失败 → 抛结构化错误（不返回半拉子全集）', async () => {

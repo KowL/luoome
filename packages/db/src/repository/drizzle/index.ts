@@ -6,7 +6,10 @@ export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleDecisionReviewRepository } from './decision-review.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLedgerRepository } from './ledger.js';
+export { DrizzleLimitUpLadderSampleRepository } from './limit-up-ladder-sample.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { DrizzleMarketRoomEventRepository } from './market-room-event.js';
+export { DrizzleMarketSnapshotBatchRepository } from './market-snapshot-batch.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export {
@@ -17,6 +20,7 @@ export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-perfo
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';
+export { DrizzleSectorCatalogRepository } from './sector-catalog.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
 export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';

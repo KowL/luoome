@@ -1,7 +1,10 @@
 import {
   type DailyBar,
   type DateRange,
+  type IndexQuote,
+  type MarketSnapshot,
   type MarketSnapshotItem,
+  MarketSnapshotSchema,
   type MarketSourceStatus,
   type MinuteBar,
   money,
@@ -148,7 +151,26 @@ export class FakeMarketAdapter implements MarketDataAdapter {
     );
   }
 
-  fetchIndexQuotes(): Promise<never> {
+  /** 测试信封：与 fetchMarketSnapshot 同集合，全部实收即为完整。 */
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    const items = await this.fetchMarketSnapshot();
+    return MarketSnapshotSchema.parse({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: this.name,
+      fetchedAt: this.clock(),
+      items: [...items],
+      completeness: {
+        expectedCount: items.length,
+        receivedCount: items.length,
+        missingCount: 0,
+        duplicateCount: 0,
+        complete: items.length > 0,
+      },
+    });
+  }
+
+  /** 默认不支持指数行情；需要指数的夹具在子类覆盖。 */
+  fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 

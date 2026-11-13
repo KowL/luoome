@@ -12,9 +12,15 @@ import type {
   DeliveryStatus,
   Exchange,
   LimitUpLadder,
+  LimitUpLadderSample,
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
+  MarketRoomEvent,
+  MarketRoomEventKind,
+  MarketRoomEventStatus,
+  MarketSnapshotCompleteness,
+  MarketSnapshotItem,
   MinuteBarCompleteness,
   MinuteBarInterval,
   Money,
@@ -23,6 +29,13 @@ import type {
   ProviderStatus,
   Quantity,
   Report,
+  SectorCatalogState,
+  SectorChangeKind,
+  SectorKind,
+  SectorMemberStatus,
+  SectorMembershipState,
+  SectorSyncFailure,
+  SectorSyncStatus,
   SignalObservation,
   StockCode,
   Strategy,
@@ -188,6 +201,96 @@ export const stockUniverseSyncRuns = sqliteTable(
   }),
 );
 
+/**
+ * 行业 / 概念目录。内部 id 是本地生成的不透明标识，vendor_code 只用于外部请求与溯源；
+ * (source, kind, vendor_code) 唯一，重复同步只会更新观测时间而不会产生新身份。
+ */
+export const sectorCatalogEntries = sqliteTable(
+  'sector_catalog_entries',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<SectorKind>().notNull(),
+    source: text('source').notNull(),
+    vendorCode: text('vendor_code').notNull(),
+    name: text('name').notNull(),
+    state: text('state').$type<SectorCatalogState>().notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    retiredAt: integer('retired_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    vendorUnique: uniqueIndex('sector_catalog_entries_vendor_unique').on(
+      t.source,
+      t.kind,
+      t.vendorCode,
+    ),
+    kindStateIdx: index('sector_catalog_entries_kind_state_idx').on(t.kind, t.state),
+  }),
+);
+
+/** 成分多对多；成员消失只标记 missing，不删除关系与首次观测时间。 */
+export const sectorMemberships = sqliteTable(
+  'sector_memberships',
+  {
+    sectorId: text('sector_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    source: text('source').notNull(),
+    state: text('state').$type<SectorMembershipState>().notNull(),
+    memberStatus: text('member_status').$type<SectorMemberStatus>().notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    missingSince: integer('missing_since', { mode: 'timestamp_ms' }),
+    lastSyncId: text('last_sync_id').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sectorId, t.stockId], name: 'sector_memberships_pk' }),
+    stockStateIdx: index('sector_memberships_stock_state_idx').on(t.stockId, t.state),
+    sectorStateIdx: index('sector_memberships_sector_state_idx').on(t.sectorId, t.state),
+  }),
+);
+
+/** 目录与成分变更 append-only；不覆盖历史，也不因再次观测相同事实而重复写入。 */
+export const sectorChangeEvents = sqliteTable(
+  'sector_change_events',
+  {
+    seq: integer('seq').primaryKey({ autoIncrement: true }),
+    sectorId: text('sector_id').notNull(),
+    stockId: text('stock_id'),
+    kind: text('kind').$type<SectorChangeKind>().notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    syncId: text('sync_id').notNull(),
+    previousValue: text('previous_value'),
+    nextValue: text('next_value'),
+  },
+  (t) => ({
+    sectorIdx: index('sector_change_events_sector_idx').on(t.sectorId, t.seq),
+    stockIdx: index('sector_change_events_stock_idx').on(t.stockId, t.seq),
+  }),
+);
+
+/** 一次同步的审计与幂等凭据；同一 id 重放返回原摘要。 */
+export const sectorSyncRuns = sqliteTable(
+  'sector_sync_runs',
+  {
+    id: text('id').primaryKey(),
+    source: text('source').notNull(),
+    status: text('status').$type<SectorSyncStatus>().notNull(),
+    appliedAt: integer('applied_at', { mode: 'timestamp_ms' }).notNull(),
+    observedSectors: integer('observed_sectors').notNull().default(0),
+    createdSectors: integer('created_sectors').notNull().default(0),
+    renamedSectors: integer('renamed_sectors').notNull().default(0),
+    retiredSectors: integer('retired_sectors').notNull().default(0),
+    observedStocks: integer('observed_stocks').notNull().default(0),
+    createdMemberships: integer('created_memberships').notNull().default(0),
+    removedMemberships: integer('removed_memberships').notNull().default(0),
+    reactivatedMemberships: integer('reactivated_memberships').notNull().default(0),
+    failures: text('failures_json', { mode: 'json' }).$type<SectorSyncFailure[]>().notNull(),
+  },
+  (t) => ({
+    sourceAppliedIdx: index('sector_sync_runs_source_applied_idx').on(t.source, t.appliedAt),
+  }),
+);
+
 /** Real provider 的按交易日天梯快照；replay 只读取此 PIT 表，不读取当前 manager。 */
 export const limitUpLadderSnapshots = sqliteTable(
   'limit_up_ladder_snapshots',
@@ -203,6 +306,103 @@ export const limitUpLadderSnapshots = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.date, t.source], name: 'limit_up_ladder_snapshots_pk' }),
     sourceDateIdx: index('limit_up_ladder_snapshots_source_date_idx').on(t.source, t.date),
+  }),
+);
+
+/**
+ * 按采样时点保存的天梯事实（ticket #41）：同一天可有多份，用于还原开板 / 换位时间线。
+ * sampledAt 对齐盘中批次间隔；同 (trading_date, source, sampled_at) 重试幂等。
+ */
+export const limitUpLadderSamples = sqliteTable(
+  'limit_up_ladder_samples',
+  {
+    id: text('id').primaryKey(),
+    tradingDate: text('trading_date').notNull(),
+    source: text('source').$type<LimitUpLadderSource>().notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    total: integer('total').notNull(),
+    maxLevel: integer('max_level').notNull(),
+    levels: text('levels_json', { mode: 'json' }).$type<LimitUpLadder['levels']>().notNull(),
+    warnings: text('warnings_json', { mode: 'json' })
+      .$type<LimitUpLadderSample['warnings']>()
+      .notNull(),
+    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    sourceDateSampledIdx: index('limit_up_ladder_samples_source_date_sampled_idx').on(
+      t.source,
+      t.tradingDate,
+      t.sampledAt,
+    ),
+  }),
+);
+
+/**
+ * 盘中全市场批次（ticket #35）：一次采集 = 一行不可变快照。
+ * id 由 coverage + 对齐后的 sampledAt 派生，主键冲突即“同批次重试”，保留首次发布内容。
+ */
+export const marketSnapshotBatches = sqliteTable(
+  'market_snapshot_batches',
+  {
+    id: text('id').primaryKey(),
+    coverage: text('coverage').$type<MarketCoverage>().notNull(),
+    tradingDate: text('trading_date').notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    source: text('source').notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    completeness: text('completeness_json', { mode: 'json' })
+      .$type<MarketSnapshotCompleteness>()
+      .notNull(),
+    gaps: text('gaps_json', { mode: 'json' }).$type<string[]>().notNull(),
+    items: text('items_json', { mode: 'json' }).$type<MarketSnapshotItem[]>().notNull(),
+  },
+  (t) => ({
+    coverageSampledIdx: index('market_snapshot_batches_coverage_sampled_idx').on(
+      t.coverage,
+      t.sampledAt,
+    ),
+  }),
+);
+
+/**
+ * 作战室盘中事件（ticket #42）：扩散 / 分化 / 换位按 (交易日, 种类, 板块, 检测时点) 幂等。
+ * thresholds 与 evidence 保存扫描当时的事实，后续阈值调整不回改历史事件。
+ */
+export const marketRoomEvents = sqliteTable(
+  'market_room_events',
+  {
+    id: text('id').primaryKey(),
+    tradingDate: text('trading_date').notNull(),
+    kind: text('kind').$type<MarketRoomEventKind>().notNull(),
+    sectorId: text('sector_id').notNull(),
+    sectorKind: text('sector_kind').$type<SectorKind>().notNull(),
+    vendorCode: text('vendor_code').notNull(),
+    sectorName: text('sector_name').notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    previousSampledAt: integer('previous_sampled_at', { mode: 'timestamp_ms' }),
+    status: text('status').$type<MarketRoomEventStatus>().notNull(),
+    thresholds: text('thresholds_json', { mode: 'json' })
+      .$type<MarketRoomEvent['thresholds']>()
+      .notNull(),
+    evidence: text('evidence_json', { mode: 'json' })
+      .$type<MarketRoomEvent['evidence']>()
+      .notNull(),
+    verification: text('verification_json', { mode: 'json' })
+      .$type<MarketRoomEvent['verification']>()
+      .notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    identityUnique: uniqueIndex('market_room_events_identity_unique').on(
+      t.tradingDate,
+      t.kind,
+      t.sectorId,
+      t.sampledAt,
+    ),
+    dateTimeIdx: index('market_room_events_date_time_idx').on(t.tradingDate, t.sampledAt),
+    sectorTimeIdx: index('market_room_events_sector_time_idx').on(t.sectorId, t.sampledAt),
   }),
 );
 
@@ -1122,7 +1322,14 @@ export const schema = {
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
+  sectorCatalogEntries,
+  sectorMemberships,
+  sectorChangeEvents,
+  sectorSyncRuns,
   limitUpLadderSnapshots,
+  limitUpLadderSamples,
+  marketSnapshotBatches,
+  marketRoomEvents,
   holdings,
   trades,
   accountLedgerEntries,

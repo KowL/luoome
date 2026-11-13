@@ -37,12 +37,14 @@ export default defineConfig({
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
+      'apps/web/src/server-background-scheduler.test.ts',
       'apps/web/src/workspace.test.ts',
       'apps/web/src/data-transfer.test.ts',
       // DSH Web includes Bun listeners and SQLite fixtures; test:web owns this slice.
       'apps/web/src/dsh/**/*.test.ts',
       'apps/web/src/strategy-scheduler.test.ts',
       'apps/web/src/intraday-plan-scheduler.test.ts',
+      'apps/web/src/market-batch-scheduler.test.ts',
       'apps/web/src/strategy-autonomy-scheduler.test.ts',
       'apps/web/src/portfolio-performance-scheduler.test.ts',
       'apps/web/public/js/**/*.test.js',

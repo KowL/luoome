@@ -14,6 +14,7 @@ import {
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
   createResearchVaultAdapterFromEnv,
+  createSectorCatalogFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
@@ -108,6 +109,7 @@ export const buildWebContext = async (
     sectorQuote: createSectorQuoteManagerFromEnv(env, { clock: now, logger: console }),
     ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
   };
+  const sectorCatalog = createSectorCatalogFromEnv(env, { clock: now, logger: console });
   return buildContext({
     repos: handle.repos,
     adapters: {
@@ -117,6 +119,7 @@ export const buildWebContext = async (
         clock: now,
         logger: console,
       }),
+      ...(sectorCatalog === undefined ? {} : { sectorCatalog }),
       notification: createNotificationManagerFromEnv(env, {
         repos: handle.repos,
         logger: console,

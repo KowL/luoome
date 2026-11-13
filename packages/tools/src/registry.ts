@@ -6,17 +6,28 @@ import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { saveDecisionReviewTool } from './tools/decision-review.js';
-import { dragonTigerFlowTool } from './tools/dragon-tiger-flow.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
+import { dragonTigerFlowTool } from './tools/dragon-tiger-flow.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountOverviewTool } from './tools/get-account-overview.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
+import { getStockSectorMembershipsTool } from './tools/get-stock-sector-memberships.js';
 import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
 import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
+import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
+import { getMarketRoomCoreStocksTool } from './tools/market-room-core-stocks.js';
+import { listMarketRoomEventsTool } from './tools/market-room-events.js';
+import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
+import { getMarketRoomSectorDetailTool } from './tools/market-room-sector-detail.js';
+import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
+import {
+  collectMarketSnapshotTool,
+  getMarketSnapshotBatchTool,
+} from './tools/market-snapshot-batch.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
 import { getAccountPerformanceTool } from './tools/portfolio-performance.js';
@@ -29,6 +40,7 @@ import { saveStrategyVersionTool } from './tools/save-strategy-version.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { getStrategyTool, listStrategiesTool } from './tools/strategy-lifecycle.js';
+import { syncSectorCatalogTool } from './tools/sync-sector-catalog.js';
 import { saveTradingPlanTool } from './tools/trading-plan.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateWatchlistMembersTool } from './tools/update-watchlist-members.js';
@@ -187,4 +199,19 @@ export const toolRegistry: Registry = createRegistry([
   searchResearchDocumentsTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
+  // 盘中全市场批次（ticket #35）：采集发布（external+write）与只读最近批次
+  collectMarketSnapshotTool,
+  getMarketSnapshotBatchTool,
+  // 作战室总览（ticket #36）：只读最近批次 + 既有情绪 / 指数契约
+  getMarketRoomOverviewTool,
+  // 板块盘中榜（ticket #38）：只读批次 + 目录成分 + 当日天梯
+  getMarketRoomSectorsTool,
+  // 板块目录与成分（扶摇）：按股反查（read）与盘前同步（external+write）
+  getStockSectorMembershipsTool,
+  syncSectorCatalogTool,
+  // 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 集中度
+  getMarketRoomAmountDistributionTool,
+  getMarketRoomCoreStocksTool,
+  getMarketRoomSectorDetailTool,
+  listMarketRoomEventsTool,
 ]);

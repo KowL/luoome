@@ -498,7 +498,9 @@ export class MarketDataManager implements MarketDataAdapter {
     });
   }
 
-  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+  async fetchMarketSnapshotEnvelope(
+    options: { readonly allowPartial?: boolean } = {},
+  ): Promise<MarketSnapshot> {
     return this.routeWithFallback({
       capability: 'market-snapshot-envelope',
       constraint: { coverage: 'CN_A_SHARES_SH_SZ' },
@@ -512,7 +514,7 @@ export class MarketDataManager implements MarketDataAdapter {
       },
       parse: (snapshot, source) => {
         assertMarketSnapshotInvariants(snapshot);
-        if (!snapshot.completeness.complete) {
+        if (!snapshot.completeness.complete && options.allowPartial !== true) {
           throw new Error(
             `partial_data: ${source} market snapshot missing ${snapshot.completeness.missingCount} items`,
           );
@@ -520,6 +522,8 @@ export class MarketDataManager implements MarketDataAdapter {
         return snapshot;
       },
       onSuccess: (snapshot) => {
+        // 不完整信封不写缓存：否则后续严格读取会命中未经完整性校验的快照。
+        if (!snapshot.completeness.complete) return;
         const at = this.clock().getTime();
         this.marketSnapshotEnvelopeCache = { at, snapshot };
         this.marketSnapshotCache = { at, items: snapshot.items };

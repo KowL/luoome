@@ -56,6 +56,7 @@
       <ul class="nav" role="navigation">
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>首页</span></a></li>
         <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
+        <li><a class="nav-item" href="#market-room" data-route="market-room"><span>作战室</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
         <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
@@ -247,6 +248,7 @@
 
       <!-- route: market（个股行情，docs/ddd/stock-market-view-detailed-design.md §11） -->
       <section id="route-market" class="route" data-route="market" hidden>
+        <div id="market-return" class="market-return" hidden></div>
         <div id="market-banner" class="status error" role="status" hidden></div>
         <div class="card" id="market-quote-card">
           <div class="market-quote-head">
@@ -806,6 +808,9 @@
 
       <!-- route: sectors -->
       <section id="route-sectors" class="route" data-route="sectors" hidden></section>
+
+      <!-- route: market-room（作战室：总览 / 板块追踪 / 成交分布 / 盘中事件，ticket #36 / #42） -->
+      <section id="route-market-room" class="route" data-route="market-room" hidden></section>
 
       <!-- route: settings -->
       <section id="route-settings" class="route" data-route="settings" hidden>

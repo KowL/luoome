@@ -6,6 +6,19 @@ import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
+import type {
+  LimitUpLadderSample,
+  LimitUpLadderSamplePublishResult,
+} from '../entity/limit-up-ladder-sample.js';
+import type {
+  MarketRoomEvent,
+  MarketRoomEventKind,
+  MarketRoomEventSaveResult,
+} from '../entity/market-room-events.js';
+import type {
+  MarketSnapshotBatch,
+  MarketSnapshotBatchPublishResult,
+} from '../entity/market-snapshot-batch.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type {
@@ -20,11 +33,22 @@ import type {
   ResearchDocumentIndex,
   ResearchDocumentKind,
 } from '../entity/research-vault.js';
+import type {
+  SectorCatalogEntry,
+  SectorCatalogState,
+  SectorChangeEvent,
+  SectorKind,
+  SectorSyncApplyInput,
+  SectorSyncApplySummary,
+  StockSectorMembership,
+  StockSectorMembershipView,
+} from '../entity/sector-catalog.js';
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type {
   MarketCoverage,
   StockUniverseApplySummary,
+  StockUniverseMember,
   StockUniverseSnapshot,
   StockUniverseSyncRun,
 } from '../entity/stock-universe.js';
@@ -130,12 +154,69 @@ export interface StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';
   }): Promise<readonly Stock[]>;
+  /** 当前目录成员及其聚合挂牌状态（停牌 / 退市用于标记状态，不删除身份）。 */
+  listCurrentMembers(input: {
+    readonly coverage: MarketCoverage;
+  }): Promise<readonly StockUniverseMember[]>;
   /** P2 PIT universe：只选择 observedAt 不晚于目标时点的成功快照。 */
   latestSnapshotAtOrBefore(input: {
     readonly coverage: MarketCoverage;
     readonly asOf: Date;
   }): Promise<StockUniverseSyncRun | null>;
   listSnapshotMembers(syncId: string): Promise<readonly Stock[]>;
+}
+
+/** 行业 / 概念目录与多对多成分；变更走 append-only 记录，不覆盖历史。 */
+export interface SectorCatalogRepository {
+  /** 一次同步原子提交：目录、成分、状态与变更记录；同 syncId 重放返回原摘要。 */
+  applySync(input: SectorSyncApplyInput): Promise<SectorSyncApplySummary>;
+  /** 按股票反查当前所属行业与概念，含来源与时点。 */
+  listByStock(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly SectorKind[];
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembershipView[]>;
+  /** 按板块读取成分；默认只返回 active 成分。 */
+  listBySector(input: {
+    readonly sectorId: string;
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembership[]>;
+  /** 一次读取多个板块的成分（榜单按 kind 批量取成分，避免逐板块查询）；默认只返回 active 成分。 */
+  listBySectors(input: {
+    readonly sectorIds: readonly string[];
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembership[]>;
+  listSectors(input?: {
+    readonly kinds?: readonly SectorKind[];
+    readonly state?: SectorCatalogState | 'all';
+  }): Promise<readonly SectorCatalogEntry[]>;
+  /**
+   * 某时点生效的目录条目：`firstSeenAt <= at` 且当时未退出（`retiredAt` 为空或晚于 at）。
+   * 回放用；返回的条目按「当时 active」投影（`retiredAt = null`），不拿今天的目录顶替。
+   */
+  listSectorsAsOf(input: {
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly SectorCatalogEntry[]>;
+  /**
+   * 某时点生效的成分：`firstSeenAt <= at` 且未在该时点前退出（`missingSince` 为空或晚于 at）。
+   * 回放用；返回的行按「当时 active」投影，不拿今天的成分顶替排名分母。
+   * `sectorIds` 由调用方按 `listSectorsAsOf` 的目录给出。
+   */
+  listBySectorsAsOf(input: {
+    readonly sectorIds: readonly string[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembership[]>;
+  /** 按股票反查某时点生效的题材归属；口径与 `listBySectorsAsOf` 一致。 */
+  listByStockAsOf(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembershipView[]>;
+  listChanges(input?: {
+    readonly sectorId?: string;
+    readonly stockId?: string;
+  }): Promise<readonly SectorChangeEvent[]>;
 }
 
 /** 已审计的按交易日涨停天梯 PIT 快照；replay 只允许读取此仓储。 */
@@ -145,6 +226,84 @@ export interface LimitUpLadderSnapshotRepository {
     readonly date: string;
     readonly source: LimitUpLadderSource;
   }): Promise<LimitUpLadder | null>;
+}
+
+/**
+ * 按采样时点保存的天梯事实（ticket #41）：同一天可有多份，用于还原开板 / 换位时间线。
+ * 同 (tradingDate, source, sampledAt) 幂等，保留首次写入内容。
+ */
+export interface LimitUpLadderSampleRepository {
+  save(sample: LimitUpLadderSample): Promise<LimitUpLadderSamplePublishResult>;
+  findById(id: string): Promise<LimitUpLadderSample | null>;
+  /** 指定交易日、某时点及之前最近的样本；不跨交易日取值。 */
+  findAtOrBefore(input: {
+    readonly tradingDate: string;
+    readonly source: LimitUpLadderSource;
+    readonly sampledAt: Date;
+  }): Promise<LimitUpLadderSample | null>;
+  /** 指定交易日全部样本，按 sampledAt 升序；没有样本时返回空数组。 */
+  listByTradingDate(input: {
+    readonly tradingDate: string;
+    readonly source: LimitUpLadderSource;
+  }): Promise<LimitUpLadderSample[]>;
+}
+
+/**
+ * 作战室盘中事件（ticket #42）：按 (交易日, 种类, 板块, 检测时点) 幂等。
+ * 重复扫描 / 重启 / 重试只保留首次写入；历史事件不因后续命名或阈值调整回改。
+ */
+export interface MarketRoomEventRepository {
+  /** 幂等保存；同一身份已存在时保留首次内容并返回 created=false。 */
+  save(event: MarketRoomEvent): Promise<MarketRoomEventSaveResult>;
+  findById(id: string): Promise<MarketRoomEvent | null>;
+  /** 按交易日 / 种类 / 板块 / 采样时点范围过滤，默认按检测时点升序。 */
+  list(input?: {
+    readonly tradingDate?: string;
+    readonly kind?: MarketRoomEventKind;
+    readonly sectorId?: string;
+    readonly from?: Date;
+    readonly to?: Date;
+    /** 只返回该时点之前已记录（`recordedAt <= knownAt`）的事件；回放按当时已知截断。 */
+    readonly knownAt?: Date;
+    readonly order?: 'asc' | 'desc';
+    readonly limit?: number;
+  }): Promise<MarketRoomEvent[]>;
+}
+
+/** 盘中全市场批次：按采样时点不可变发布，重复发布同一批次不产生第二份。 */
+export interface MarketSnapshotBatchRepository {
+  /** 幂等发布；同批次已存在时保留首次发布内容并返回 created=false。 */
+  publish(batch: MarketSnapshotBatch): Promise<MarketSnapshotBatchPublishResult>;
+  findById(id: string): Promise<MarketSnapshotBatch | null>;
+  /** 最近一个已发布批次（按采样时点倒序）。 */
+  findLatest(input?: { readonly coverage?: MarketCoverage }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日、指定采样时点容差内的最近批次（昨日同时点对比用）。
+   * 超出容差返回 null，不拿相邻时点的批次冒充同一时刻。
+   */
+  findNearestAt(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
+    readonly toleranceMs: number;
+  }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日、某个时点及之前最近的已发布批次（盘中榜锚点与窗口起点用）。
+   * 不跨交易日取值；该日没有更早批次时返回 null。
+   */
+  findAtOrBefore(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
+  }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日全部已发布批次，按采样时点升序（板块详情走势用）。
+   * 只返回该交易日；没有批次时返回空数组，不跨交易日补齐。
+   */
+  listByTradingDate(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+  }): Promise<MarketSnapshotBatch[]>;
 }
 
 export interface HoldingRepository {
@@ -379,8 +538,16 @@ export interface RepositoryRegistry {
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */
   readonly stockUniverse: StockUniverseRepository;
+  /** 行业 / 概念目录与多对多成分（盘前同步的事实链）。 */
+  readonly sectorCatalog: SectorCatalogRepository;
   /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
+  /** 按采样时点保存的天梯事实（开板 / 换位时间线用）。 */
+  readonly limitUpLadderSample: LimitUpLadderSampleRepository;
+  /** 盘中全市场快照批次（不可变、按采样时点去重）。 */
+  readonly marketSnapshotBatch: MarketSnapshotBatchRepository;
+  /** 作战室盘中事件（扩散 / 分化 / 换位，按身份幂等）。 */
+  readonly marketRoomEvent: MarketRoomEventRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly decisionReview: DecisionReviewRepository;

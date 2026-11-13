@@ -292,7 +292,13 @@ describe('market/tencent', () => {
       }),
     };
 
-    const snapshotLine = (exchange: string, code: string, close: string, changePct: string) => {
+    const snapshotLine = (
+      exchange: string,
+      code: string,
+      close: string,
+      changePct: string,
+      amountWan = '',
+    ) => {
       const fields = Array.from({ length: 33 }, () => '');
       fields[0] = exchange === 'sh' ? '1' : '51';
       fields[1] = 'ignored by directory';
@@ -304,6 +310,7 @@ describe('market/tencent', () => {
       fields[6] = '100';
       fields[30] = '20260813161452';
       fields[32] = changePct;
+      fields[37] = amountWan;
       return `v_${exchange}${code}="${fields.join('~')}";`;
     };
 
@@ -315,8 +322,8 @@ describe('market/tencent', () => {
         fetchImpl: ((url: string) => {
           urls.push(String(url));
           const body = String(url).includes('sh600519')
-            ? snapshotLine('sh', '600519', '1355.29', '0.92')
-            : snapshotLine('sz', '000001', '11.25', '0');
+            ? snapshotLine('sh', '600519', '1355.29', '0.92', '1234.56')
+            : snapshotLine('sz', '000001', '11.25', '0', '86');
           return Promise.resolve(new Response(body, { status: 200 }));
         }) as never,
       });
@@ -330,8 +337,13 @@ describe('market/tencent', () => {
         complete: true,
       });
       expect(snapshot.items).toEqual([
-        expect.objectContaining({ id: '600519.SH', close: 1355.29, changePct: 0.92 }),
-        expect.objectContaining({ id: '000001.SZ', close: 11.25, changePct: 0 }),
+        expect.objectContaining({
+          id: '600519.SH',
+          close: 1355.29,
+          changePct: 0.92,
+          amount: 12_345_600,
+        }),
+        expect.objectContaining({ id: '000001.SZ', close: 11.25, changePct: 0, amount: 860_000 }),
       ]);
       expect(urls).toHaveLength(2);
       expect(urls.every((url) => url.startsWith('https://qt.gtimg.cn/q='))).toBe(true);
@@ -352,6 +364,8 @@ describe('market/tencent', () => {
       });
       expect(snapshot.items).toHaveLength(1);
       expect(snapshot.items[0]).not.toHaveProperty('close', 0);
+      expect(snapshot.items[0]?.amount).toBeUndefined();
+      expect(snapshot.items[0]).not.toHaveProperty('amount', 0);
     });
   });
 

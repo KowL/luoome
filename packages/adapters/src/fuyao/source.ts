@@ -9,7 +9,12 @@ import type {
   MinuteBar,
   MinuteBarInterval,
   Quote,
+  SectorCatalogObservation,
+  SectorKind,
+  SectorStockObservationBatch,
+  SectorSyncFailure,
   StockSearchCandidate,
+  StockSectorObservation,
 } from '@luoome/core';
 import { assertMarketSnapshotInvariants, MarketSnapshotSchema, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
@@ -80,6 +85,39 @@ const TickerItemSchema = z.object({
   exchange: z.string().nullish(),
   asset_type: z.string().nullish(),
 });
+
+/** 同花顺指数目录行（/api/a-share-index/catalog/ths-index-list）。 */
+const ThsIndexItemSchema = z.object({
+  thscode: z.string().regex(/^\d{6}\.(TI|SH|SZ|BJ)$/),
+  name: z.string().min(1),
+});
+
+/** 个股反查行（/api/a-share-index/constituents/ths-index-list-by-stock）。 */
+const StockSectorGroupSchema = z.object({
+  thscode: z.string().min(1),
+  index_list: z
+    .array(
+      z.object({
+        thscode: z.string().regex(/^\d{6}\.(TI|SH|SZ|BJ)$/),
+        name: z.string().min(1),
+        type: z.string().min(1),
+      }),
+    )
+    .nullish(),
+});
+
+/** 扶摇 tag ↔ 内部 SectorKind。只取行业与概念；地域 / 特色暂不进入领域模型。 */
+const FUYAO_SECTOR_TAG: Readonly<Record<SectorKind, string>> = {
+  industry: 'industry',
+  concept: 'cn_concept',
+};
+const FUYAO_SECTOR_KIND: Readonly<Record<string, SectorKind>> = {
+  industry: 'industry',
+  cn_concept: 'concept',
+};
+
+/** 个股反查单次上限（上游文档：1–100 个代码）。 */
+const STOCK_SECTOR_BATCH_SIZE = 100;
 
 /** 历史窗口上限 10 年（上游超窗返回 1003；adapter 请求前拦截，口径一致）。 */
 const MAX_HISTORY_WINDOW_MS = 10 * 365 * 86_400_000;
@@ -361,6 +399,11 @@ export class FuyaoSource {
             parsed.price_change_ratio_pct != null && Number.isFinite(parsed.price_change_ratio_pct)
               ? parsed.price_change_ratio_pct
               : undefined;
+          // turnover 为元；缺失 / 非法时省略 amount，不写 0、不推断。
+          const amount =
+            parsed.turnover != null && Number.isFinite(parsed.turnover) && parsed.turnover >= 0
+              ? parsed.turnover
+              : undefined;
           items.push({
             id: parsed.thscode,
             code: parsed.ticker,
@@ -370,6 +413,7 @@ export class FuyaoSource {
             name: parsed.ticker,
             ...(close === undefined ? {} : { close }),
             ...(changePct === undefined ? {} : { changePct }),
+            ...(amount === undefined ? {} : { amount }),
           });
         }
         if (rows.length < MARKET_SNAPSHOT_PAGE_SIZE) break;
@@ -463,6 +507,113 @@ export class FuyaoSource {
     }
   }
 
+  /**
+   * 行业 / 概念目录（/api/a-share-index/catalog/ths-index-list，单 tag 全量、无分页）。
+   * 只返回供应商代码与名称；本地内部标识由 repository 生成，不在这里混用。
+   */
+  async fetchSectorCatalog(kind: SectorKind): Promise<readonly SectorCatalogObservation[]> {
+    try {
+      const { items } = await this.client.get('/api/a-share-index/catalog/ths-index-list', {
+        tag: FUYAO_SECTOR_TAG[kind],
+      });
+      const seen = new Set<string>();
+      const sectors: SectorCatalogObservation[] = [];
+      for (const row of items) {
+        const parsed = ThsIndexItemSchema.parse(row);
+        const vendorCode = parsed.thscode.trim().toUpperCase();
+        if (seen.has(vendorCode)) continue;
+        seen.add(vendorCode);
+        sectors.push({ kind, vendorCode, name: parsed.name.trim() });
+      }
+      this.logger.info('fuyao.fetchSectorCatalog ok', { kind, count: sectors.length });
+      return sectors;
+    } catch (error) {
+      const translated = translateFuyaoError(error);
+      this.logger.warn('fuyao.fetchSectorCatalog failed', {
+        kind,
+        errorKind: kindOf(translated),
+        error: translated.message,
+      });
+      throw translated;
+    }
+  }
+
+  /**
+   * 按股批量反查当前行业 / 概念归属（/api/a-share-index/constituents/ths-index-list-by-stock）。
+   * 上游单次最多 100 个代码，按批请求；某批失败只记录该批失败，其余批次照常返回，
+   * 避免一次部分失败让成员集体退出。响应里没有返回的股票不出现在 observations 中，
+   * 由调用方按“未观测”保留原状；返回空 index_list 的股票是“已观测且当前无匹配”。
+   */
+  async fetchStockSectors(stockIds: readonly string[]): Promise<SectorStockObservationBatch> {
+    const normalized: string[] = [];
+    const seenStocks = new Set<string>();
+    for (const code of stockIds) {
+      try {
+        const thscode = normalizeFuyaoThscode(code);
+        if (seenStocks.has(thscode)) continue;
+        seenStocks.add(thscode);
+        normalized.push(thscode);
+      } catch (error) {
+        this.logger.warn('fuyao.fetchStockSectors omitted', { code, error: errorMessage(error) });
+      }
+    }
+
+    const observations: StockSectorObservation[] = [];
+    const failures: SectorSyncFailure[] = [];
+    for (let offset = 0; offset < normalized.length; offset += STOCK_SECTOR_BATCH_SIZE) {
+      const batch = normalized.slice(offset, offset + STOCK_SECTOR_BATCH_SIZE);
+      try {
+        const { items } = await this.client.get(
+          '/api/a-share-index/constituents/ths-index-list-by-stock',
+          { thscode: batch.join(',') },
+        );
+        const requested = new Set(batch);
+        for (const item of items) {
+          let group: z.infer<typeof StockSectorGroupSchema>;
+          try {
+            group = StockSectorGroupSchema.parse(item);
+          } catch (error) {
+            this.logger.warn('fuyao.fetchStockSectors row omitted', {
+              error: errorMessage(error),
+            });
+            continue;
+          }
+          const stockId = group.thscode.trim().toUpperCase();
+          if (!requested.has(stockId)) continue;
+          const sectors: SectorCatalogObservation[] = [];
+          const seenSectors = new Set<string>();
+          for (const entry of group.index_list ?? []) {
+            const sectorKind = FUYAO_SECTOR_KIND[entry.type];
+            if (sectorKind === undefined) continue;
+            const vendorCode = entry.thscode.trim().toUpperCase();
+            const key = `${sectorKind}:${vendorCode}`;
+            if (seenSectors.has(key)) continue;
+            seenSectors.add(key);
+            sectors.push({ kind: sectorKind, vendorCode, name: entry.name.trim() });
+          }
+          observations.push({ stockId, sectors });
+        }
+      } catch (error) {
+        const translated = translateFuyaoError(error);
+        failures.push({
+          scope: 'memberships',
+          kind: null,
+          message: `${kindOf(translated)}: ${withoutUrl(translated.message)}`,
+        });
+        this.logger.warn('fuyao.fetchStockSectors batch failed', {
+          offset,
+          errorKind: kindOf(translated),
+          error: translated.message,
+        });
+      }
+    }
+    this.logger.info('fuyao.fetchStockSectors ok', {
+      observed: observations.length,
+      failedBatches: failures.length,
+    });
+    return { observations, failures };
+  }
+
   /** fuyao 无分钟线端点；不用日 K 冒充。 */
   fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]> {
     return Promise.reject(
@@ -539,3 +690,6 @@ const errorMessage = (error: unknown): string => {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
 };
+
+/** 同步摘要会把失败原因回传调用方；去掉请求 URL（只保留可读原因，避免整段查询串外泄）。 */
+const withoutUrl = (message: string): string => message.replace(/\surl=\S+/g, '');

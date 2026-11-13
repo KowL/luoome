@@ -22,6 +22,7 @@ import {
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
   createResearchVaultAdapterFromEnv,
+  createSectorCatalogFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
@@ -123,6 +124,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
   });
+  const sectorCatalog = createSectorCatalogFromEnv(process.env, { clock: now, logger });
   let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
   try {
     researchVault = createResearchVaultAdapterFromEnv(process.env);
@@ -153,6 +155,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
         clock: now,
         logger,
       }),
+      ...(sectorCatalog === undefined ? {} : { sectorCatalog }),
       notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
       ...(researchVault ? { researchVault } : {}),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),

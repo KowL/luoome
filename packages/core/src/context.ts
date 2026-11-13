@@ -12,6 +12,7 @@ import type { FetchNewsQuery, NewsList } from './entity/news.js';
 import type { NorthboundFlowQuery, NorthboundFlowSeries } from './entity/northbound-flow.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
+import type { SectorCatalogAdapterLike } from './entity/sector-catalog.js';
 import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
@@ -43,7 +44,10 @@ export interface MarketDataAdapterLike {
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
   /** 带来源、时间和分页完整性信封的全市场快照；不支持时以 unsupported_capability 拒绝。 */
-  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
+  fetchMarketSnapshotEnvelope?(options?: {
+    /** true 时不把不完整信封当失败；批次发布需要照常落库并标注缺口。 */
+    readonly allowPartial?: boolean;
+  }): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
   /** 主动探测指定源的各 capability（设置页「测试」按钮）；直接执行 registry handle，不经过路由 / 缓存 / 限速。 */
@@ -162,6 +166,8 @@ export interface ToolContextAdapters {
   readonly market: MarketDataAdapterLike;
   readonly llm: LLMAdapterLike;
   readonly stockUniverse?: StockUniverseManagerLike;
+  /** 行业 / 概念目录与成分同步用（扶摇同花顺指数目录）；未配置时同步 tool 明确失败。 */
+  readonly sectorCatalog?: SectorCatalogAdapterLike;
   /** send_notification tool 用；装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
   /** Research Vault 本地 Markdown 适配器（Obsidian 或目录实现）。 */
@@ -303,7 +309,6 @@ export interface DragonTigerFlowManagerLike {
   /** 进程内源健康观测（registry.describe()）。 */
   status(): readonly SourceStatus[];
 }
-
 
 /**
  * 北向资金历史流 manager 投影。

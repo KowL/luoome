@@ -2,7 +2,7 @@ import type { Tool } from '@luoome/tools';
 import * as tools from '@luoome/tools';
 
 /**
- * App Service 直执行表（S4.1b）：34 个 Agent Tool 之外的旧 tool 不再经 toolRegistry，
+ * App Service 直执行表（S4.1b）：45 个 Agent Tool 之外的旧 tool 不再经 toolRegistry，
  * 由 Web/CLI 消费面直接按名取对象执行（S4.1c 摘除 registry 注册后仍可用）。
  * 仅做名字 → 导出 tool 对象索引，不含 registry 语义。
  */
