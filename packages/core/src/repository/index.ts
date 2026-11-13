@@ -6,6 +6,10 @@ import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
+import type {
+  MarketSnapshotBatch,
+  MarketSnapshotBatchPublishResult,
+} from '../entity/market-snapshot-batch.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type {
@@ -145,6 +149,15 @@ export interface LimitUpLadderSnapshotRepository {
     readonly date: string;
     readonly source: LimitUpLadderSource;
   }): Promise<LimitUpLadder | null>;
+}
+
+/** 盘中全市场批次：按采样时点不可变发布，重复发布同一批次不产生第二份。 */
+export interface MarketSnapshotBatchRepository {
+  /** 幂等发布；同批次已存在时保留首次发布内容并返回 created=false。 */
+  publish(batch: MarketSnapshotBatch): Promise<MarketSnapshotBatchPublishResult>;
+  findById(id: string): Promise<MarketSnapshotBatch | null>;
+  /** 最近一个已发布批次（按采样时点倒序）。 */
+  findLatest(input?: { readonly coverage?: MarketCoverage }): Promise<MarketSnapshotBatch | null>;
 }
 
 export interface HoldingRepository {
@@ -381,6 +394,8 @@ export interface RepositoryRegistry {
   readonly stockUniverse: StockUniverseRepository;
   /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
+  /** 盘中全市场快照批次（不可变、按采样时点去重）。 */
+  readonly marketSnapshotBatch: MarketSnapshotBatchRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly decisionReview: DecisionReviewRepository;

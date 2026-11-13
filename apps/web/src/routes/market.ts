@@ -222,6 +222,20 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
   app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
 
+  /**
+   * 盘中全市场批次（ticket #35）。
+   *
+   * GET 只读最近已发布批次：刷新与跨页读取都不触发采集；
+   * POST 手动驱动一次采集并发布，要求 write + external 显式开启（同源 Origin 校验）。
+   */
+  app.get('/api/market/room/snapshot', () => callTool('get_market_snapshot_batch', {}));
+
+  app.post('/api/market/room/collect', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    return callTool('collect_market_snapshot', {});
+  });
+
   // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
   // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
   app.get('/api/market/indices', async () => {

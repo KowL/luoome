@@ -286,6 +286,21 @@ describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
     expect(snapshot.dataAsOf).toBeUndefined();
     expect(snapshot.items).toHaveLength(102);
     expect(snapshot.items.at(-2)?.changePct).toBe(-2.5);
+    expect(snapshot.items[0]?.amount).toBe(3937375200);
+  });
+
+  it('turnover 缺失或非法时省略 amount，不写 0', async () => {
+    const { source } = makeSource((async () =>
+      envelope([
+        snapshotRow('600519.SH', { turnover: null }),
+        snapshotRow('600036.SH', { turnover: -1 }),
+        snapshotRow('000001.SZ', { turnover: 860_000_000 }),
+      ])) as never);
+    const items = await source.fetchMarketSnapshot();
+    expect(items[0]?.amount).toBeUndefined();
+    expect(items[1]?.amount).toBeUndefined();
+    expect(items[2]?.amount).toBe(860_000_000);
+    expect(items[0]).not.toHaveProperty('amount', 0);
   });
 
   it('limit=100 分页，item.length < limit 时终止；BJ 过滤、id 去重、changePct 原值保留', async () => {

@@ -361,6 +361,11 @@ export class FuyaoSource {
             parsed.price_change_ratio_pct != null && Number.isFinite(parsed.price_change_ratio_pct)
               ? parsed.price_change_ratio_pct
               : undefined;
+          // turnover 为元；缺失 / 非法时省略 amount，不写 0、不推断。
+          const amount =
+            parsed.turnover != null && Number.isFinite(parsed.turnover) && parsed.turnover >= 0
+              ? parsed.turnover
+              : undefined;
           items.push({
             id: parsed.thscode,
             code: parsed.ticker,
@@ -370,6 +375,7 @@ export class FuyaoSource {
             name: parsed.ticker,
             ...(close === undefined ? {} : { close }),
             ...(changePct === undefined ? {} : { changePct }),
+            ...(amount === undefined ? {} : { amount }),
           });
         }
         if (rows.length < MARKET_SNAPSHOT_PAGE_SIZE) break;

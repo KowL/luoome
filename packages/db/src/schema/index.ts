@@ -15,6 +15,8 @@ import type {
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
+  MarketSnapshotCompleteness,
+  MarketSnapshotItem,
   MinuteBarCompleteness,
   MinuteBarInterval,
   Money,
@@ -203,6 +205,35 @@ export const limitUpLadderSnapshots = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.date, t.source], name: 'limit_up_ladder_snapshots_pk' }),
     sourceDateIdx: index('limit_up_ladder_snapshots_source_date_idx').on(t.source, t.date),
+  }),
+);
+
+/**
+ * 盘中全市场批次（ticket #35）：一次采集 = 一行不可变快照。
+ * id 由 coverage + 对齐后的 sampledAt 派生，主键冲突即“同批次重试”，保留首次发布内容。
+ */
+export const marketSnapshotBatches = sqliteTable(
+  'market_snapshot_batches',
+  {
+    id: text('id').primaryKey(),
+    coverage: text('coverage').$type<MarketCoverage>().notNull(),
+    tradingDate: text('trading_date').notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    source: text('source').notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    completeness: text('completeness_json', { mode: 'json' })
+      .$type<MarketSnapshotCompleteness>()
+      .notNull(),
+    gaps: text('gaps_json', { mode: 'json' }).$type<string[]>().notNull(),
+    items: text('items_json', { mode: 'json' }).$type<MarketSnapshotItem[]>().notNull(),
+  },
+  (t) => ({
+    coverageSampledIdx: index('market_snapshot_batches_coverage_sampled_idx').on(
+      t.coverage,
+      t.sampledAt,
+    ),
   }),
 );
 
@@ -1123,6 +1154,7 @@ export const schema = {
   stockUniverseMemberships,
   stockUniverseSyncRuns,
   limitUpLadderSnapshots,
+  marketSnapshotBatches,
   holdings,
   trades,
   accountLedgerEntries,

@@ -38,5 +38,8 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   readonly indexQuoteMode?: 'realtime' | 'delayed';
   /** 全市场快照 Gateway；具体来源由 capability registry 路由。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
-  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
+  /** allowPartial=true 时不把不完整信封当失败，供盘中批次照常发布并标注缺口。 */
+  fetchMarketSnapshotEnvelope?(options?: {
+    readonly allowPartial?: boolean;
+  }): Promise<MarketSnapshot>;
 }

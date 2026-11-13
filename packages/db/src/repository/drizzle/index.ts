@@ -7,6 +7,7 @@ export { DrizzleDecisionReviewRepository } from './decision-review.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLedgerRepository } from './ledger.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { DrizzleMarketSnapshotBatchRepository } from './market-snapshot-batch.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export {
