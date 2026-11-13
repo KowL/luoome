@@ -6446,3 +6446,186 @@ describe('Web 作战室核心股 API', () => {
     expect(invalidKind.body.error?.kind).toBe('invalid_input');
   });
 });
+
+/**
+ * 作战室盘中事件 Web API（ticket #42）：扩散 / 分化 / 换位。
+ * 六时点夹具 + 手工目录成分，事件由 POST 采集后的幂等扫描写入。
+ */
+interface RoomEventsBody {
+  ok: boolean;
+  error?: { kind: string; message?: string };
+  data?: {
+    view: {
+      state: 'ready' | 'empty';
+      emptyReason?: string;
+      tradingDate: string | null;
+      filters: {
+        date: string | null;
+        from: string | null;
+        to: string | null;
+        kind: string | null;
+        sectorId: string | null;
+      };
+      counts: { total: number; diffusion: number; divergence: number; rotation: number };
+      events: {
+        id: string;
+        kind: string;
+        sampledAt: string;
+        sector: { sectorId: string; name: string };
+        status: string;
+        thresholds: { kind: string };
+        evidence: {
+          ranking: { dayRank: number | null };
+          breadth: { advanceRatio: number | null };
+          ladder: { status: string };
+          rotation?: { from: { sector: { name: string } }; to: { sector: { name: string } } };
+        };
+        verification: { status: string };
+      }[];
+      notes: string[];
+    };
+  };
+}
+
+const readRoomEvents = async (
+  web: Hono,
+  query: string,
+): Promise<{ readonly status: number; readonly body: RoomEventsBody }> => {
+  const response = await web.fetch(new Request(`http://test/api/market/room/events${query}`));
+  return { status: response.status, body: (await response.json()) as RoomEventsBody };
+};
+
+const EVENT_POINTS = ['09:35', '10:15', '11:00', '13:15', '14:15', '14:50'] as const;
+
+const seedEventSectors = async (ctx: ToolContext): Promise<{ readonly followerId: string }> => {
+  const items = marketDayItems(0);
+  const leaders = items.slice(0, 3);
+  const followers = [5, 7, 9]
+    .map((index) => items[index])
+    .filter((item): item is MarketSnapshotItem => item !== undefined);
+  if (followers.length !== 3) throw new Error('夹具缺少接力组成分');
+  await ctx.repos.sectorCatalog.applySync({
+    syncId: 'room-event-catalog',
+    source: 'fuyao',
+    appliedAt: marketRoomClock('09:00'),
+    status: 'succeeded',
+    catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY],
+    catalogKinds: ['industry'],
+    observations: [
+      ...leaders.map((item) => ({ stockId: item.id, sectors: [LEADER_INDUSTRY] })),
+      ...followers.map((item) => ({ stockId: item.id, sectors: [FOLLOWER_INDUSTRY] })),
+    ],
+    stockStatuses: [],
+    failures: [],
+  });
+  const ids = await roomSectorIds(ctx);
+  const followerId = ids.get(FOLLOWER_INDUSTRY.name);
+  if (followerId === undefined) throw new Error('缺少接力组板块');
+  return { followerId };
+};
+
+const collectAt = async (web: Hono, time: string): Promise<void> => {
+  const response = await web.fetch(
+    new Request('http://test/api/market/room/collect', { method: 'POST' }),
+  );
+  expect(response.status, time).toBe(200);
+};
+
+describe('Web 作战室盘中事件 API', () => {
+  it('六时点采集后返回按时间排序的事件与可追溯证据，重试不重复', async () => {
+    let now = marketRoomClock('09:35:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedEventSectors(ctx);
+    for (const time of EVENT_POINTS) {
+      now = marketRoomClock(`${time}:00`);
+      await collectAt(web, time);
+    }
+
+    const { status, body } = await readRoomEvents(web, '');
+    expect(status).toBe(200);
+    const view = body.data?.view;
+    expect(view?.state).toBe('ready');
+    expect(view?.tradingDate).toBe('2026-09-28');
+    expect(view?.filters).toEqual({
+      date: null,
+      from: null,
+      to: null,
+      kind: null,
+      sectorId: null,
+    });
+    expect(view?.counts).toEqual({ total: 1, diffusion: 0, divergence: 0, rotation: 1 });
+    const event = view?.events[0];
+    expect(event?.kind).toBe('rotation');
+    expect(event?.sampledAt).toBe('2026-09-28T06:15:00.000Z');
+    expect(event?.sector.name).toBe('接力组');
+    expect(event?.thresholds.kind).toBe('rotation');
+    expect(event?.evidence.ranking.dayRank).toBe(1);
+    expect(event?.evidence.breadth.advanceRatio).toBe(100);
+    // 未注入连板天梯 manager：证据缺失写 unavailable，事件本身仍成立。
+    expect(event?.evidence.ladder.status).toBe('unavailable');
+    expect(event?.status).toBe('partial');
+    expect(event?.evidence.rotation?.from.sector.name).toBe('领涨组');
+    expect(event?.evidence.rotation?.to.sector.name).toBe('接力组');
+    expect(event?.verification.status).toBe('verified');
+    expect((view?.notes ?? []).length).toBeGreaterThan(0);
+
+    await collectAt(web, '14:50');
+    const after = await readRoomEvents(web, '');
+    expect(after.body.data?.view.counts.total).toBe(1);
+    expect(after.body.data?.view.events[0]?.id).toBe(event?.id);
+  });
+
+  it('按种类 / 板块 / 时段过滤；无批次与非法参数沿用既有错误模型', async () => {
+    let now = marketRoomClock('14:15:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    const { followerId } = await seedEventSectors(ctx);
+    for (const [index, time] of EVENT_POINTS.slice(0, 4).entries()) {
+      await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch(time, marketDayItems(index)));
+    }
+    now = marketRoomClock('14:15:00');
+    await collectAt(web, '14:15');
+
+    expect((await readRoomEvents(web, '?kind=rotation')).body.data?.view.counts.total).toBe(1);
+    const diffusion = await readRoomEvents(web, '?kind=diffusion');
+    expect(diffusion.body.data?.view.state).toBe('empty');
+    expect(diffusion.body.data?.view.emptyReason).toBe('no_events');
+    expect(
+      (await readRoomEvents(web, `?sectorId=${encodeURIComponent(followerId)}`)).body.data?.view
+        .counts.total,
+    ).toBe(1);
+    expect((await readRoomEvents(web, '?sectorId=missing')).body.data?.view.emptyReason).toBe(
+      'no_events',
+    );
+    expect(
+      (
+        await readRoomEvents(
+          web,
+          '?from=2026-09-28T14%3A00%3A00%2B08%3A00&to=2026-09-28T14%3A20%3A00%2B08%3A00',
+        )
+      ).body.data?.view.counts.total,
+    ).toBe(1);
+    const afterRange = await readRoomEvents(web, '?from=2026-09-28T14%3A20%3A00%2B08%3A00');
+    expect(afterRange.body.data?.view.emptyReason).toBe('no_events');
+
+    const noBatch = await readRoomEvents(web, '?date=2026-09-29');
+    expect(noBatch.status).toBe(200);
+    expect(noBatch.body.data?.view.emptyReason).toBe('no_batch');
+
+    const reversed = await readRoomEvents(
+      web,
+      '?from=2026-09-28T14%3A20%3A00%2B08%3A00&to=2026-09-28T14%3A10%3A00%2B08%3A00',
+    );
+    expect(reversed.status).toBe(400);
+    expect(reversed.body.error?.kind).toBe('invalid_input');
+
+    const badKind = await readRoomEvents(web, '?kind=futures');
+    expect(badKind.status).toBe(400);
+    expect(badKind.body.error?.kind).toBe('invalid_input');
+
+    const emptyApp = await marketRoomApp(() => marketRoomClock('14:50:00'));
+    const noData = await readRoomEvents(emptyApp.app, '');
+    expect(noData.body.data?.view.state).toBe('empty');
+    expect(noData.body.data?.view.emptyReason).toBe('no_batch');
+    expect(noData.body.data?.view.tradingDate).toBeNull();
+  });
+});

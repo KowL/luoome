@@ -20,6 +20,7 @@ export * from './entity/limit-up-ladder-sample.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
 export * from './entity/market-room-core-stocks.js';
+export * from './entity/market-room-events.js';
 export * from './entity/market-room-overview.js';
 export * from './entity/market-snapshot.js';
 export * from './entity/market-snapshot-batch.js';

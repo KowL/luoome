@@ -8,6 +8,7 @@ export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLedgerRepository } from './ledger.js';
 export { DrizzleLimitUpLadderSampleRepository } from './limit-up-ladder-sample.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { DrizzleMarketRoomEventRepository } from './market-room-event.js';
 export { DrizzleMarketSnapshotBatchRepository } from './market-snapshot-batch.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
