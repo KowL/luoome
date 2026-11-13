@@ -17,8 +17,6 @@ import { describe, expect, it } from 'vitest';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
 import { runStrategyTool, trialStrategyTool } from './run-strategy.js';
 
-// biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy DSL placeholder fixture.
-
 const seedStrategy = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
   emission?: StrategySignalEmission,

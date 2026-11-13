@@ -183,18 +183,6 @@ export const deriveBoard = (code: string): LimitUpBoard => {
  */
 export const isSTName = (name: string): boolean => /^(\*?ST)/.test(name);
 
-const BOARD_SENTINEL = 'unclassified';
-const TIME_MISSING = '--';
-const REASON_MISSING = '--';
-
-/** entry 缺字段哨兵：name → code；industry → 'unclassified'；time → null；reason → '--'。 */
-export const normalizeEntryMissingFields = (raw: LimitUpLadderEntry): LimitUpLadderEntry => ({
-  ...raw,
-  name: raw.name.trim().length > 0 ? raw.name : raw.code,
-  industry: raw.industry.trim().length > 0 ? raw.industry : BOARD_SENTINEL,
-  reason: raw.reason.trim().length > 0 ? raw.reason : REASON_MISSING,
-});
-
 /**
  * 过滤 + 去重：按 query 选项过滤股票（科创 / 北交所 / ST），同一 code 只保留 ladderLevel 最深的 entry。
  * 接受的 entries 假设已通过 Zod 校验。
@@ -390,10 +378,3 @@ export const assertLimitUpLadderInvariants = (h: LimitUpLadder, baseDate?: strin
     throw new InvariantError(`maxLevel (${h.maxLevel}) != levels[0].level (${expectedMax})`);
   }
 };
-
-// 暴露哨兵常量给 UI 与 CLI 模块使用，避免硬编码字符串散落多处
-export const LimitUpLadderSentinels = {
-  BOARD_UNCLASSIFIED: BOARD_SENTINEL,
-  TIME_MISSING,
-  REASON_MISSING,
-} as const;

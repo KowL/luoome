@@ -31,14 +31,13 @@
 
 ## 目标
 
-实现 v0.1：monorepo 骨架 + 领域层 + Drizzle + 8 个 tool（6 read + 2 advice）+ MCP stdio server + CLI + opentui TUI。
+实现 v0.1：monorepo 骨架 + 领域层 + Drizzle + 8 个 tool（6 read + 2 advice）+ MCP stdio server + CLI。
 所有数据 mock，LLM mock，不接任何真实外部服务。
 
 ## 技术栈（硬约束）
 
 - Bun + TypeScript strict（noUncheckedIndexedAccess / exactOptionalPropertyTypes）
 - SQLite + Drizzle ORM（不许用 Prisma / TypeORM）
-- opentui（不许用 Ink / Bubble Tea）
 - Zod 4.x（不许用 yup / valibot）
 - vitest（测试）
 - Biome（lint + format）
@@ -58,7 +57,6 @@ luoome/
     workflows/              v0.1 只放 1 个 demo workflow（daily-advice 骨架）
     mcp/                    stdio server
     cli/                    luoome 命令入口
-    tui/                    opentui app
 
 ## 交付（按 phase 顺序，不要跳）
 
@@ -85,11 +83,8 @@ stdio server，暴露 read + advice。`LUOOME_EXPOSE_TRADE=true` 启动失败。
 smoke test：client list tools + call list_holdings + analyze_stock。
 
 ### Phase 6 — CLI（1h）
-luoome 命令入口，子命令：tools list/inspect/call、advice list/stats、mcp serve、tui。
+luoome 命令入口，子命令：tools list/inspect/call、advice list/stats、mcp serve。
 `./bin/luoome --help` 输出正确。
-
-### Phase 7 — TUI（2-3h）
-opentui app，左持仓右建议，r 刷新 q 退出，顶部固定免责声明。
 
 ## 硬约束（不可违反）
 
@@ -110,7 +105,6 @@ opentui app，左持仓右建议，r 刷新 q 退出，顶部固定免责声明�
 - bun test 全绿
 - bun run typecheck 零错
 - bun run lint 零错
-- ./bin/luoome tui 在终端显示 mock 持仓 + 今日建议 + 顶部免责声明
 - ./bin/luoome mcp serve 启动后外部 client 能 list + call
 - ./bin/luoome tools list 输出所有 8 个 tool
 - ./bin/luoome advice list 显示 mock 建议
@@ -128,7 +122,7 @@ opentui app，左持仓右建议，r 刷新 q 退出，顶部固定免责声明�
 1. 文档之间有冲突（ARCHITECTURE 说 A，AGENTS 说 B）→ 问 user
 2. 某个 tool 的副作用分级不确定（read 还是 advice？）→ 问 user
 3. 发现某个设计决策文档没说 → 问 user，不要自己发明
-4. Phase 6/7 的 UI 细节 TUI 命令行格式没定 → 问 user
+4. Phase 6 的 UI 细节命令行格式没定 → 问 user
 5. 任何超过 v0.1 scope 的需求 → 明确告诉 user，不擅自扩 scope
 
 ## 完成后
@@ -146,7 +140,6 @@ opentui app，左持仓右建议，r 刷新 q 退出，顶部固定免责声明�
 
 ```txt
 cli ──┐
-tui ──┤
 mcp ──┼──► tools ──► core
 web ──┤        │
       │        ├──► db ──► core
@@ -167,7 +160,6 @@ web ──┤        │
 | `workflows` | `core`, `tools` |
 | `mcp` | `core`, `tools`, MCP SDK |
 | `cli` | `core`, `tools`, `mcp` (用于 `mcp serve` 子命令) |
-| `tui` | `core`, `tools`, `@opentui/core` |
 
 ### 2.2 Branded Types 详细规格
 
@@ -298,21 +290,6 @@ for (const tool of toolRegistry.all()) {
 await mcp.connect(new StdioServerTransport());
 ```
 
-### 2.7 TUI 布局草图
-
-```
-┌────────────────────────────────────────────────────────────┐
-├──────────────────────────┬─────────────────────────────────┤
-│ 持仓                      │ 今日建议                         │
-├──────────────────────────┼─────────────────────────────────┤
-│ 002594 比亚迪   96.18 -1.6│ 002594 比亚迪   HOLD  65% (short)│
-│ 002643 万润科技 15.31 -13 │ 002643 万润科技 SELL  78% (short)│
-│ ...                       │ ...                              │
-├──────────────────────────┴─────────────────────────────────┤
-│ [r] 刷新  [q] 退出  [d] 查看建议详情  [s] 复盘统计          │
-└────────────────────────────────────────────────────────────┘
-```
-
 ---
 
 ## 3. Workstreams — 如何分给多个并行 Agent
@@ -328,7 +305,7 @@ v0.1 适合拆为 5-6 个 workstream 并行推进。**Phase 1 必须先完成**�
 | **WS-C: DB Schema** | Phase 3a | WS-A, WS-B entity 类型 | Drizzle schema + migration | ✅ 与 WS-B 部分并行 |
 | **WS-D: DB Repo** | Phase 3b | WS-C | repository 实现 + in-memory | ❌ 需 WS-C |
 | **WS-E: Tools** | Phase 4 | WS-B, WS-D | 8 tools + tests | ❌ 需 WS-B + WS-D |
-| **WS-F: MCP + CLI + TUI** | Phase 5/6/7 | WS-E | mcp server + CLI + TUI | ❌ 需 WS-E |
+| **WS-F: MCP + CLI** | Phase 5/6 | WS-E | mcp server + CLI | ❌ 需 WS-E |
 
 ### 3.2 派单模板（每个 workstream 一份）
 
@@ -424,7 +401,6 @@ bun run typecheck                           # TS 零错
 bun run lint                                # Biome 零错
 # 特定 workstream 的额外验证：
 ./bin/luoome tools list                     # WS-F 验证
-./bin/luoome tui                            # WS-F 验证
 ```
 
 ---
@@ -438,9 +414,8 @@ agent 应当在以下情况**立即停下来问 user**，不要硬猜：
 3. **disclaimers 内容**：STANDARD_DISCLAIMERS 是否需要增减
 4. **Tool 命名**：tool name 是否符合 snake_case 约定
 5. **Mock 数据规模**：fixture 多少只股票 / 多少持仓合理
-6. **TUI 交互细节**：按键绑定 / 布局 / 颜色 scheme
-7. **任何超出 v0.1 scope 的需求**：包括但不限于真实数据源、真实 LLM、Web 入口
-8. **任何需要 user 提供 secret / API key 的需求**
+6. **任何超出 v0.1 scope 的需求**：包括但不限于真实数据源、真实 LLM、Web 入口
+7. **任何需要 user 提供 secret / API key 的需求**
 
 agent 应当**继续**的情况：
 
@@ -469,7 +444,6 @@ cd ~/project/luoome && bun run build        # 0 exit, dist generated
 ./bin/luoome advice stats                   # outputs mock stats
 ./bin/luoome mcp serve &                    # background
   # mcp client: list tools → 8 items, call analyze_stock → returns Advice with disclaimers
-./bin/luoome tui                            # shows mock holdings + advice + top disclaimer
 ```
 
 所有项通过 = v0.1 DONE。
@@ -485,7 +459,6 @@ agent 交付后，user 应当验证：
 - [ ] 副作用 5 级都有示例 tool（每个 sideEffect 至少 1 个）
 - [ ] advice tool 输出 100% 含 STANDARD_DISCLAIMERS 三条
 - [ ] `LUOOME_EXPOSE_TRADE=true luoome mcp serve` 启动失败
-- [ ] TUI 顶部固定免责声明可见
 - [ ] 每个 tool 有 ≥ 1 个 vitest 测试
 - [ ] commit history 用 conventional commits
 

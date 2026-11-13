@@ -128,8 +128,3 @@ export const assertDragonTigerListInvariants = (list: DragonTigerList, baseDate?
     }
   }
 };
-
-// 暴露哨兵常量给 surface 使用，避免硬编码字符串散落多处
-export const DragonTigerSentinels = {
-  REASON_MISSING: '--',
-} as const;

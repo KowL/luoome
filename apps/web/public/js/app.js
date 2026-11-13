@@ -259,7 +259,7 @@ const showRoute = async (name) => {
     else if (safe === 'alerts')
       await Promise.all([renderAlerts(setStatus), renderNotificationTarget()]);
     else if (safe === 'research') {
-      await renderResearch(setStatus);
+      await renderResearch();
     } else if (safe === 'advice') {
       await renderAdviceList(setStatus);
     } else if (safe === 'reports') {

@@ -1,4 +1,4 @@
-# luoome v0.1 实施计划（TUI + WEB）
+# luoome v0.1 实施计划（CLI + WEB）
 
 > 依据 ARCHITECTURE.md / AGENTS.md（仓库根）/ SECURITY.md / ROADMAP.md / MVP-TASK.md。
 > 用户要求：v0.1 范围 + 额外包含最小 Web 端（原 ROADMAP v0.4 的内容以 MVP 形态提前：Hono HTTP API + 同源静态仪表盘，不做完整 SPA 框架）。
@@ -15,8 +15,7 @@
 - `@luoome/db`：Drizzle schema + `createDrizzleRepos(dbPath)` + `createInMemoryRepos(seed?)` + `seedMockData(repos)`。
 - `@luoome/tools`：`defineTool`、`toolRegistry`（`all()/get(name)/toMCP()/toOpenAI()/toTypeScript()`）、`Tool` 类型（`execute(input) → Promise<ToolResult>`）、`buildMockContext()`、8 个 tool：`list_accounts, get_account, list_holdings, get_holding, get_advice, get_advice_stats`（read）+ `analyze_stock, analyze_position`（advice）。
 - `@luoome/mcp`：`startMcpServer()`，stdio，env 控制暴露面，`LUOOME_EXPOSE_TRADE=true` 必须启动失败。
-- `@luoome/cli`：`bin/luoome`，子命令 `tools list/inspect/call`、`advice list/stats`、`mcp serve`、`tui`、`web serve`、`--version/--help`。
-- `@luoome/tui`：opentui app，布局按 MVP-TASK §2.7。
+- `@luoome/cli`：`bin/luoome`，子命令 `tools list/inspect/call`、`advice list/stats`、`mcp serve`、`web serve`、`--version/--help`。
 - `@luoome/workflows`：`dailyAdviceWorkflow` 骨架（mock）。
 - `apps/web`：Hono server，端口 5173，`GET /` 仪表盘（持仓表 + 建议卡 + 顶部免责声明 + 刷新按钮）、`GET /api/holdings`、`GET /api/advice`、`GET /api/advice/stats`、`POST /api/tools/:name/call`（仅暴露 read+advice）。无构建步骤的原生 HTML/JS。
 
@@ -30,8 +29,7 @@
 | W2b | Adapters | `packages/adapters/src/**` | core |
 | W3 | Tools | `packages/tools/src/**` | core+db+adapters |
 | W4a | MCP | `packages/mcp/src/**` | tools |
-| W4b | CLI | `packages/cli/src/**` | tools（mcp/tui 懒加载） |
-| W4c | TUI | `packages/tui/src/**` | tools |
+| W4b | CLI | `packages/cli/src/**` | tools（mcp 懒加载） |
 | W4d | Web | `apps/web/**`（除 package.json/tsconfig） | tools |
 | W4e | Workflows | `packages/workflows/src/**` | tools |
 | W5 | Integration | 全部（修复 + 验收 + git 提交） | 全部 |
@@ -46,4 +44,4 @@
 
 ## 验收（W5 执行）
 
-`bun install` / `bun test` / `bun run typecheck` / `bun run lint` 全绿；`./bin/luoome tools list` 8 个 tool；`mcp serve` 外部 client 可 list+call；`LUOOME_EXPOSE_TRADE=true` 启动失败；`tui` 显示 mock 持仓+建议+免责声明；`web serve` 后 `localhost:5173` 仪表盘可见。
+`bun install` / `bun test` / `bun run typecheck` / `bun run lint` 全绿；`./bin/luoome tools list` 8 个 tool；`mcp serve` 外部 client 可 list+call；`LUOOME_EXPOSE_TRADE=true` 启动失败；`web serve` 后 `localhost:5173` 仪表盘可见。

@@ -954,7 +954,7 @@ export interface WatchTriggerRepository {
     readonly total: number;
     readonly summary?: WatchTriggerSummary;
   }>;
-  /** 最近触发（CLI / TUI / MCP 展示用）。 */
+  /** 最近触发（CLI / MCP 展示用）。 */
   listRecent(opts?: {
     readonly poolId?: string;
     readonly since?: Date;

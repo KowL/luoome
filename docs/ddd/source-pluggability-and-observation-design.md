@@ -108,7 +108,7 @@ invalid_payload | unsupported_market | unsupported_capability | unsupported_adju
 - core 新增通用 `SourceIdSchema`（小写字母/数字/连字符的非空标识），上述请求与结果的 source 字段改为该 schema。manager 必须把**实际成功的 `handle.source`**写入结果 provenance 和缓存 key，不能回写 query.source；这项兼容扩宽在第一刀完成，第二源接入时无需再改 core/tool；
 - 非交易日等 manager 本地早退没有成功 handle：为保持现有字段形状，结果 source 使用显式约束或配置顺序第一项，同时以 `warnings=['non-trading-day']` 明确该结果来自本地日历而非远端；早退不写 registry 观测。“实际成功 source”约束只适用于发生外部读取并返回数据的路径；
 - 实例共享：各 factory（含 market）的 deps 增加可选 `sources?: { eastmoney?: EastmoneySource }`；未注入时保持现状自行构造（存量测试与单域装配不受影响）；
-- web（`apps/web/src/server.ts:299` 与热更新路径 `:916`）、cli（`packages/cli/src/context.ts`）、mcp（`packages/mcp/src/context.ts`）三个组装根先建一次 `EastmoneySource` 再分发；tui 只装配 market，可选择走共享或不走。
+- web（`apps/web/src/server.ts:299` 与热更新路径 `:916`）、cli（`packages/cli/src/context.ts`）、mcp（`packages/mcp/src/context.ts`）三个组装根先建一次 `EastmoneySource` 再分发。
 
 ### 4.7 Web 热更新的实例生命周期
 
@@ -290,7 +290,7 @@ export class SourceRegistry<M extends CapabilityMap> {
 删除：
 - 六个旧 `EastmoneyXxxAdapter` 类及其重复传输代码；领域解析文件本身不删除，避免丢失 locality。
 
-不动：`MarketDataManager` 编排骨架、DB、tool 输出字段形状、TUI。
+不动：`MarketDataManager` 编排骨架、DB、tool 输出字段形状。
 
 ## 11. 评审焦点（供 Codex 评审时重点挑战）
 

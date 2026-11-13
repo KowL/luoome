@@ -6,7 +6,7 @@
  * - runWatchLoop（在 index.ts 内）负责 IO + 循环 + SIGINT
  */
 
-import { isAshareTradingSession, type Quote } from '@luoome/core';
+import { isAshareTradingSession } from '@luoome/core';
 
 import {
   BUILTIN_HOLIDAYS,
@@ -156,7 +156,3 @@ export const formatTriggersForLog = (
   }
   return lines.join('\n');
 };
-
-/** quote 简表（终端 debug）。 */
-export const formatQuoteForLog = (q: Quote): string =>
-  `${q.stockId} close=${q.close.toFixed(2)} ts=${q.ts.toISOString()}`;

@@ -90,7 +90,7 @@ Strategy
 ```mermaid
 flowchart LR
   Web["Web 原生 HTML/CSS/JS"] --> Api["Hono API"]
-  Cli["CLI / TUI / MCP / Agent"] --> Tools["Tools"]
+  Cli["CLI / MCP / Agent"] --> Tools["Tools"]
   Api --> Tools
   Workflow["Workflows"] --> Tools
   Tools --> Core["Core 领域与派生纯函数"]

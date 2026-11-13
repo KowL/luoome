@@ -17,15 +17,6 @@ export const makeInput = (id, { type = 'text', value = '', placeholder = '' } = 
   return input;
 };
 
-/** 复选框：checked 缺省为未选中，label 由调用方拼（各表单的 label 结构不同）。 */
-export const makeCheckbox = (id, checked = false) => {
-  const input = el('input');
-  if (id !== undefined) input.id = id;
-  input.type = 'checkbox';
-  input.checked = checked === true;
-  return input;
-};
-
 /** 数字输入：可带 min/max/step；value 为 undefined 时留空（表示未设置）。 */
 export const makeNumberInput = (id, { value, min, max, step, placeholder = '' } = {}) => {
   const input = el('input');

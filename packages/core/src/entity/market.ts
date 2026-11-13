@@ -23,7 +23,7 @@ export const MarketSchema = z.enum(['cn-a', 'cn-hk', 'us']);
 /** 顺序固定，遍历/日志时稳定。 */
 export const ALL_MARKETS: readonly Market[] = ['cn-a', 'cn-hk', 'us'] as const;
 
-/** Market → 默认人类可读标签（CLI / TUI / Web 展示用，i18n key 不在此处维护）。 */
+/** Market → 默认人类可读标签（CLI / Web 展示用，i18n key 不在此处维护）。 */
 export const MARKET_LABEL: Readonly<Record<Market, string>> = {
   'cn-a': 'A 股',
   'cn-hk': '港股',

@@ -136,7 +136,7 @@ const computeBuckets = (
  * 历史 advice 按 confidence 桶聚合（v0.5 W4 自校准）。
  * 直观含义：当 advice 的 confidence=80 但 hitRate 在 80-90 桶里只有 30%，
  * 说明该口径的 confidence 高估了真实可信度；事后可调 prompt 的校准系数或
- * 在 review 页 / TUI 弹层把「calibratedConfidence」建议给用户参考。
+ * 在 review 页把「calibratedConfidence」建议给用户参考。
  * 默认含已过期 advice（与 get_advice_stats 复盘口径一致）；不带 outcome
  * 的 advice 计入 total 但不计入 withOutcome / hitRate。
  */

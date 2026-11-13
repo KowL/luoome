@@ -35,11 +35,3 @@ export const resolveThroughExistingAncestor = (path: string): string => {
   }
   return resolve(realpathSync(ancestor), ...missingSegments);
 };
-
-export const resolveBackupRootOutsideVault = (vaultRoot: string, backupRoot: string): string => {
-  const resolved = resolveThroughExistingAncestor(backupRoot);
-  if (isPathWithin(vaultRoot, resolved)) {
-    throw new Error('backup root must be outside vault');
-  }
-  return resolved;
-};

@@ -19,9 +19,6 @@ import {
 } from '../internal/build-advice.js';
 import { resolveQuotes } from '../internal/resolve-quotes.js';
 
-const DAY_MS = 86_400_000;
-const DEFAULT_LOOKBACK_DAYS = 60;
-
 export const MarketOutlookInput = z.object({
   /** 关注板块 / 主题（如 '新能源' / 'AI'）；不填走全市场。 */
   theme: z.string().max(50).optional(),
@@ -188,7 +185,3 @@ export const marketOutlookTool = defineTool({
     return { advice, evaluatedStocks: quotes.length, ladder };
   },
 });
-
-// Note: default lookback kept as constant for caller symmetry; not used in v0.3 (we read current quote only).
-export const MARKET_OUTLOOK_DEFAULT_LOOKBACK_DAYS = DEFAULT_LOOKBACK_DAYS;
-export const _DAY_MS = DAY_MS;

@@ -12,14 +12,6 @@ import { $, el, fmtDateTime, mount } from './ui.js';
 let version = 0;
 let initialized = false;
 
-const section = (index, title, body) =>
-  el('section', 'workspace-section', [
-    el('div', 'workspace-section-title', [
-      el('div', null, [el('span', null, index), el('h2', null, title)]),
-    ]),
-    body,
-  ]);
-
 const card = (title, rows) => el('div', 'workspace-card', [el('h3', null, title), ...rows]);
 
 const row = (label, value) =>

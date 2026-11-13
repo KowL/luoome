@@ -10,9 +10,8 @@
 - `@luoome/adapters`：`MockMarketAdapter` + `MockLLMAdapter` + fixtures（20 股票 / 1 账户 / 6 持仓 / 9 交易）。
 - `@luoome/tools`：`defineTool` + `toolRegistry` + Zod → TS/MCP/OpenAI 自动推导 + 8 个 tool（6 read + 2 advice）。
 - `@luoome/mcp`：stdio server，env 控制暴露面（`LUOOME_EXPOSE_TRADE=true` 启动硬卡）。
-- `@luoome/cli`：`luoome` 入口 + 子命令 `tools list/inspect/call`、`advice list/stats`、`mcp serve`、`tui`、`web serve`、`sync-quotes`、`daily-advice`（占位）。
+- `@luoome/cli`：`luoome` 入口 + 子命令 `tools list/inspect/call`、`advice list/stats`、`mcp serve`、`web serve`、`sync-quotes`、`daily-advice`（占位）。
 - `@luoome/workflows`：`dailyAdviceWorkflow` 骨架（list_holdings → 并发 analyze_stock）。
-- `@luoome/tui`：opentui 仪表盘（持仓 | 建议 + 顶部免责声明）。
 - `apps/web`：Hono + 原生 HTML/JS 仪表盘（localhost:5173）。
 
 ## 1. 设计主线
@@ -147,12 +146,7 @@ DSL 引擎：用 `${...}` 取值 + 简单 `&&` / `||` / `>=` / `<=` 表达式求
 - 新子命令：`advice outcome --adviceId ... --outcome followed --pnl 123.45`（v0.3）、`tactic list/run`、`workflow run tactic-scan` / `daily-review` / `risk-report`、`sync-quotes`、`notify test`（v0.3）。
 - `luoome advice stats` 加 `--by tacticTag` / `--by decision`（v0.3）。
 
-### 3.8 tui 增量
-
-- v0.2：右侧「今日建议」面板加 1s 自动刷新（拉 `get_advice`）；左侧「持仓」加实时价 + 日内涨跌色。
-- v0.3：顶部加 tab：`持仓 / 战法 / 复盘`；新增「战法」面板（运行中信号 + LLM 精排 top 5）、「复盘」面板（outcome 回填 + 命中率）。
-
-### 3.9 apps/web 增量
+### 3.8 apps/web 增量
 
 - v0.2：仪表盘加「实时价」列 + 1s 轮询；建议卡片加来源标识（eastmoney / tencent / mock）。
 - v0.3：加 `/tactics` 路由（战法列表 + 运行 + 精排结果）、`/review` 路由（复盘 + outcome 回填表单）。
@@ -171,7 +165,7 @@ DSL 引擎：用 `${...}` 取值 + 简单 `&&` / `||` / `>=` / `<=` 表达式求
 | W2.D | adapters/llm 真实源（OpenAI-Compatible + Anthropic + Manager + fallback） | `packages/adapters/src/llm/**`（mocks/ 不动） | core | 1.5d |
 | W2.E | tools 新 5 个 + `analyze_stock` / `analyze_position` 切真实 LLM | `packages/tools/src/**` | C + D | 1d |
 | W2.F | workflow `sync-quotes` + `daily-advice` 升级 + 新 CLI 子命令 | `packages/workflows/src/**` + `packages/cli/src/**` | E | 1d |
-| W2.G | TUI / Web 实时刷新 | `packages/tui/src/**` + `apps/web/src/**` | E | 1d |
+| W2.G | Web 实时刷新 | `apps/web/src/**` | E | 1d |
 | W2.H | v0.2 验收 + 文档（ROADMAP / AGENTS 同步） + commit | 全部 | 全部 | 0.5d |
 
 ### v0.3 波次
@@ -184,7 +178,7 @@ DSL 引擎：用 `${...}` 取值 + 简单 `&&` / `||` / `>=` / `<=` 表达式求
 | W3.D | 飞书 Webhook adapter + NotificationManager + `send_notification` tool | `packages/adapters/src/notification/**` + `packages/tools/src/tools/send-notification.ts` | A | 1d |
 | W3.E | tools 新 9 个（tactics / signals / outcome / outlook） + `analyze_stock` 织入 tacticSignals | `packages/tools/src/**` | C + D | 1.5d |
 | W3.F | workflow `tactic-scan` / `risk-report` / `daily-review` + CLI 子命令 + `advice outcome` | `packages/workflows/src/**` + `packages/cli/src/**` | E | 1.5d |
-| W3.G | TUI / Web 战法 + 复盘页 | `packages/tui/src/**` + `apps/web/src/**` | E | 1.5d |
+| W3.G | Web 战法 + 复盘页 | `apps/web/src/**` | E | 1.5d |
 | W3.H | v0.3 验收 + 文档（ARCHITECTURE / AGENTS 同步 advice 复盘口径） + commit | 全部 | 全部 | 0.5d |
 
 总计约 14 人天（串行口径；并行可压到 ~7d，但依赖收敛后才有并行空间）。
@@ -198,7 +192,6 @@ DSL 引擎：用 `${...}` 取值 + 简单 `&&` / `||` / `>=` / `<=` 表达式求
 - 模拟 Eastmoney 5xx：mock adapter 测，`Manager` 自动切 Tencent；都失败 → logger.error + fallback MockMarketAdapter + advice 仍产出。
 - `cache hit ratio` 日志可见：`LUOOME_LOG=debug ./bin/luoome mcp serve` 跑 10 次同 stock `fetch_quote` → 至少 9 次命中。
 - `analyze_position` 输出持仓上下文化的 advice（reasoning.evidence 引用 `position.avgCost` 与现价差）。
-- TUI 1s 刷新不卡（手动按 `r` 触发 + 自动轮询）。
 - Web 仪表盘实时价轮询正常。
 
 ### v0.3 验收（W3.H 执行）
@@ -209,13 +202,12 @@ DSL 引擎：用 `${...}` 取值 + 简单 `&&` / `||` / `>=` / `<=` 表达式求
 - `./bin/luoome advice outcome --adviceId ... --outcome followed --pnl 100` 落库；`./bin/luoome advice stats --by decision` 输出按决策拆分；`hit rate` 与 confidence 相关性可计算（v0.3 仅做基础统计，不做相关性检验）。
 - 飞书 webhook：设 `LUOOME_FEISHU_WEBHOOK_URL=...`，`./bin/luoome notify test` 收到飞书消息。
 - `daily-review` workflow 产出 markdown 报告（CLI 输出文件路径 + 摘要）。
-- TUI 新增「战法」「复盘」tab 可用。
 - Web 新增 `/tactics` `/review` 路由可用。
 - 50 条 advice 自评（v0.3 起新增指标）：人工抽 10 条复盘，与 5 日后实际走势一致率 ≥ 50%（v0.3 验收门槛，v0.5 提到 60%）。
 
 ## 6. 硬约束（v0.2 + v0.3 全程不变）
 
-1. 依赖方向：`cli / tui / mcp / web ──► tools ──► core`，`tools ──► {db, adapters} ──► core`，`workflows ──► tools ──► core`。**禁止反向依赖**。
+1. 依赖方向：`cli / mcp / web ──► tools ──► core`，`tools ──► {db, adapters} ──► core`，`workflows ──► tools ──► core`。**禁止反向依赖**。
 2. 副作用 5 级 + `LUOOME_EXPOSE_TRADE=true` 启动硬卡（v0.1 已卡，v0.2 / v0.3 加 e2e 测试守住）。
 3. advice 必含 3 条 STANDARD_DISCLAIMERS（不变量，v0.1 已 assert）。
 4. advice tool handler 永不触发 trade tool（类型层 + 注释 + 单测兜底）。

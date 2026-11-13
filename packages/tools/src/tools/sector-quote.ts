@@ -38,8 +38,3 @@ export const fetchSectorQuotesTool = defineTool({
     return r.data;
   },
 });
-
-// 注册：`toolRegistry` 与 `WorkflowToolMap` 都需要补这一行。
-export const _SectorQuoteWorkflowToolMapEntries = {
-  fetch_sector_quotes: fetchSectorQuotesTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

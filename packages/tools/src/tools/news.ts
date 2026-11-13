@@ -62,8 +62,3 @@ export const fetchNewsTool = defineTool({
     return output;
   },
 });
-
-// 注册：`toolRegistry` 与 `WorkflowToolMap` 都需要补这一行。
-export const _NewsWorkflowToolMapEntries = {
-  fetch_news: fetchNewsTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

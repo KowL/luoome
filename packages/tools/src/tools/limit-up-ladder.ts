@@ -69,10 +69,3 @@ export const limitUpLadderCompareTool = defineTool({
     return r.data;
   },
 });
-
-// 注册：`toolRegistry` 与 `WorkflowToolMap` 都需要补这两行。
-// 见 docs/ddd/limit-up-ladder-detailed-design.md §7。
-export const _WorkflowToolMapEntries = {
-  limit_up_ladder: limitUpLadderTool,
-  limit_up_ladder_compare: limitUpLadderCompareTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

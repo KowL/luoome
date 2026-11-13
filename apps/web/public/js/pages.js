@@ -15,7 +15,7 @@ import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
-import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js';
+import { alertDialog, confirmDialog, openModal } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   triggerChannelTimingText,
@@ -162,7 +162,6 @@ const preserveFocus = (container, update) => {
 
 let boardSortState = { key: null, order: 'desc' };
 let holdingsSortState = { key: null, order: 'desc' };
-const researchRemoteSyncController = null;
 
 /* ============ dashboard ============ */
 
@@ -3147,7 +3146,7 @@ const renderWorkflowRuns = async (setStatus) => {
 };
 
 /** 研究页：主题浏览、全文搜索和显式股票投影。 */
-const renderResearch = async (setStatus) => {
+const renderResearch = async () => {
   const vaultForm = /** @type {HTMLFormElement | null} */ (
     document.getElementById('research-vault-settings-form')
   );
@@ -3410,26 +3409,6 @@ const renderResearch = async (setStatus) => {
   if (inbox !== null) inbox.replaceChildren();
   await loadVaultSettings();
   await loadDocuments();
-};
-
-const researchObsidianLink = (uri) => {
-  if (!uri) return null;
-  const link = el('a', 'btn btn-outline btn-sm', '在 Obsidian 中打开');
-  link.setAttribute('href', uri);
-  link.setAttribute('target', '_blank');
-  link.setAttribute('rel', 'noreferrer');
-  return link;
-};
-
-const researchResultCard = (row, kind, onOpen) => {
-  const open = el('button', 'btn btn-link', row.title);
-  open.setAttribute('type', 'button');
-  open.addEventListener('click', onOpen);
-  return el('article', 'card research-topic-card', [
-    open,
-    el('p', 'muted', `${kind} · ${row.kind} · ${row.availability}`),
-    row.excerpt || row.summary ? el('p', null, row.excerpt ?? row.summary) : null,
-  ]);
 };
 
 export {

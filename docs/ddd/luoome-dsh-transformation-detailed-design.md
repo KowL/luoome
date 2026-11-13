@@ -24,7 +24,7 @@
 flowchart TB
     subgraph Surfaces["交互入口层 (Surfaces)"]
         WEB_UI["Luoome Web SPA<br/>(看板 / 行情 / 策略工作台 / 持仓 / 复盘 / 研究 / AI 对话)"]
-        CLI_TUI["CLI / TUI<br/>(命令行与终端盯盘)"]
+        CLI["CLI<br/>(命令行)"]
         EXT_DSH["外部 DSH 客户端 (可选)<br/>(DSH Web + Skills)"]
     end
 
@@ -56,8 +56,8 @@ flowchart TB
     end
 
     WEB_UI --> HONO
-    CLI_TUI --> TOOLS
-     CLI_TUI --> WF
+    CLI --> TOOLS
+     CLI --> WF
     EXT_DSH -->|MCP stdio: read / queue| TOOLS
 
     HONO --> TOOLS
@@ -687,8 +687,7 @@ luoome/
 │   ├── mcp/                   # MCP 暴露层：stdio Server，支持 read / queue / write / external 暴露面与 allowlist/denylist
 │   ├── dsh-bridge/            # DSH 桥接协议与插件：跨进程 JSON Schema 协议 + Node Cordis 插件 (luoome-run-bridge)
 │   ├── ai-runtime/            # 模型运行时包（从 adapters/llm 抽离）：模型目录加载与 AI SDK 适配器（仅允许 apps/* 导入）
-│   ├── cli/                   # 命令行入口（luoome start / web serve / mcp serve / workflow run / tools list）
-│   └── tui/                   # 终端盯盘与交互界面 (opentui)
+│   └── cli/                   # 命令行入口（luoome start / web serve / mcp serve / workflow run / tools list）
 ├── apps/
 │   ├── web/                   # Hono Web 服务 + 同源 SPA + DSH ToolGateway / 会话绑定 / 实时事件投影 + 进程内可选调度器
 │   ├── worker/                # 单机后台 Worker（可选独立常驻进程）：消费 AnalysisJob 队列与执行定时 Workflow
@@ -703,7 +702,7 @@ luoome/
 ### 6.2 依赖方向与静态守卫（`scripts/check-layers.ts`）
 
 ```txt
-cli / tui / mcp ──────────────► tools ──► core
+cli / mcp ──────────────► tools ──► core
                                   │
                                   ├──► db ──► core
                                   └──► adapters ──► core

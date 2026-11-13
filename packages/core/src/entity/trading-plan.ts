@@ -441,9 +441,6 @@ export const selectTradingPlans = (
   return selected;
 };
 
-export const isRiskAction = (action: TradingPlanAction): boolean =>
-  action === 'reduce' || action === 'exit' || action === 'avoid';
-
 export const isMaterialTradingPlanChange = (previous: TradingPlan, next: TradingPlan): boolean => {
   const strings = (items: readonly string[]) => [...new Set(items)].sort();
   const conditions = (plan: TradingPlan, items: readonly TradingPlanCondition[]) =>

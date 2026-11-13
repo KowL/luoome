@@ -22,16 +22,6 @@ export type AgentDraftKind =
   | 'advice'
   | 'review';
 
-export const AgentDraftKindSchema = z.enum([
-  'strategy',
-  'watchlist',
-  'alert-plan',
-  'research',
-  'portfolio',
-  'advice',
-  'review',
-]);
-
 export interface AgentScenario {
   readonly id: AgentScenarioId;
   /** 追加在共享基础规则之后的场景指令 */

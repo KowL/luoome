@@ -5,11 +5,10 @@
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
 Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent Tool 通过 MCP / DSH 暴露，其余纯 UI CRUD 由 Web/CLI 直接调用 Application Service；所有数据织成可追溯事实。
 
-- 作为 **TUI** 在终端盯盘、看建议
 - 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
-Web、CLI、TUI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和单主用户多账户模型（`Account`）。
+Web、CLI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和单主用户多账户模型（`Account`）。
 无需邮箱注册、订阅或独立控制平面进程；后台自动任务（Strategy 日循环、账户计划盘后/盘中盯盘、收盘报告截止、账户绩效估值与策略自治）在 Web 进程开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 时内置运行。
 
 ## 名字
@@ -76,7 +75,6 @@ packages/
   workflows/   内置编排：review / scan / diagnose / advise
   mcp/         MCP server，把 tool registry 暴露给外部
   cli/         命令行入口
-  tui/         opentui 应用
 apps/
   web/         Hono + 同源静态仪表盘 + 单进程后台调度
   agent-runtime/ DeepSeek Harness (DSH) + Cordis 独立 Agent Host
@@ -87,7 +85,7 @@ homebrew/
 
 ## 环境变量
 
-Web、CLI、TUI 和 MCP 共用下列单机环境变量：
+Web、CLI 和 MCP 共用下列单机环境变量：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -133,14 +131,14 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。两者均通过
 OpenAI-compatible Chat Completions 接入。
 
-Web、CLI、TUI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
+Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
 | [docs/README.md](./docs/README.md) | **完整文档导航**：产品需求、技术设计、运维手册与历史归档 |
-| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
+| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
 | [skills/luoome/SKILL.md](./skills/luoome/SKILL.md) | 外部 Agent 接入：Skill 编排 + luoome MCP typed tools |
 | [AGENTS.md](./AGENTS.md) | 编码 Agent 开发规范：架构边界、实现约定、测试与安全规则 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |

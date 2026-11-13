@@ -45,7 +45,3 @@ export const limitUpMarketTool = defineTool({
     return buildLimitUpMarketView(r.data);
   },
 });
-
-export const _LimitUpMarketWorkflowToolMapEntries = {
-  limit_up_market: limitUpMarketTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

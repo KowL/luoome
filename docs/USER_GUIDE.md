@@ -4,7 +4,6 @@
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
-- 在**终端（TUI）**盯盘、看今日建议
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
 - 作为 **MCP server** 把全部能力暴露给 Claude Desktop / OpenClaw 等 AI agent
 - 通过**工作流**运行 Strategy、同步 Watchlist、盯盘与生成报告
@@ -16,14 +15,14 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 1. [安装](#1-安装)
 2. [第一次启动](#2-第一次启动)
 3. [CLI 速查](#3-cli-速查)
-4. [TUI 用法](#4-tui-用法)
-5. [Web 用法](#5-web-用法)
-6. [MCP 接入](#6-mcp-接入)
-7. [多账户切换](#7-多账户切换)
-8. [复盘与 confidence 校准](#8-复盘与-confidence-校准)
-9. [数据存储位置](#9-数据存储位置)
-10. [环境变量](#10-环境变量)
-11. [FAQ / 故障排查](#11-faq--故障排查)
+4. [Web 用法](#4-web-用法)
+5. [MCP 接入](#5-mcp-接入)
+6. [多账户切换](#6-多账户切换)
+7. [复盘与 confidence 校准](#7-复盘与-confidence-校准)
+8. [数据存储位置](#8-数据存储位置)
+9. [环境变量](#9-环境变量)
+10. [FAQ / 故障排查](#10-faq--故障排查)
+11. [更多阅读](#11-更多阅读)
 
 ---
 
@@ -91,7 +90,7 @@ luoome tools list | head
 luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建表；内置策略作为模板目录
 展示，不会写成 Strategy，也不会灌入账户、持仓、交易或建议。从模板创建的是独立用户策略，
 可以继续修改或删除。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
-Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
+Web（严格默认，见 §9 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
 
 ### 2.1 一键启动完整 MVP
 
@@ -125,15 +124,7 @@ luoome start
 
 策略新建与新版本草案共用规则构建器，可从模板开始，再调整股票范围、筛选规则、评分权重和入场/退出/风险信号。常用指标条件通过下拉框与数值配置，复杂条件保留为可编辑表达式。需要完整配置时可主动切换「JSON 高级」；无效 JSON 会阻止保存，修正后可切回表单。底层保存格式与发布流程不变。
 
-### 2.2 终端全屏
-
-```bash
-luoome tui
-```
-
-你应该看到顶部两行：免责声明横幅 + 当前账户名（如你创建时填写的账户名）；左栏持仓、右栏今日建议；底部快捷键栏。
-
-### 2.3 浏览器
+### 2.2 浏览器
 
 ```bash
 luoome web serve
@@ -199,7 +190,7 @@ luoome web serve
 
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
 
-### 2.4 MCP 模式
+### 2.3 MCP 模式
 
 ```bash
 luoome mcp serve    # stdio JSON-RPC
@@ -216,7 +207,6 @@ luoome mcp serve    # stdio JSON-RPC
 | 子命令 | 用途 |
 |---|---|
 | `luoome start [--port 5173] [--interval 60]` | 启动完整 MVP（Web + 长驻盯盘） |
-| `luoome tui` | 终端全屏应用（依赖 opentui） |
 | `luoome web serve [--port 5173]` | 仅启动 Web |
 | `luoome watch [--interval 60] [--alert-plan ID] [--once]` | 启动 AlertPlan 盯盘或执行单轮 |
 | `luoome strategy list|get|validate|run` | 查询、校验或运行 Strategy |
@@ -241,42 +231,15 @@ luoome mcp serve    # stdio JSON-RPC
 
 ---
 
-## 4. TUI 用法
-
-启动 `luoome tui` 后：
-
-### 4.1 顶部两行
-
-- 第 1 行：**STANDARD_DISCLAIMERS 前两条**——这是工具提示（不建议覆盖）。
-- 第 2 行：**当前账户名 + 币种 + 初始资金** + `[a] 切换` 提示。
-
-### 4.2 快捷键
-
-| 按键 | 行为 |
-|---|---|
-| `[q]` | 退出 |
-| `[r]` | 立即刷新（持仓 + 建议，绕过 5 s 自动刷新） |
-| `[d]` | 当前持仓详细建议（核心论点 / 支持 / 反证 / 风险 / 免责声明） |
-| `[s]` | **复盘统计**：命中率、跟单盈亏、按决策分解 |
-| `[c]` | **confidence 自校准**：每 10 一档，看到底 confidence 被高估还是低估 |
-| `[o]` | outcome 复盘：最近 20 条建议的状态（已回填 / 待回填） |
-| `[a]` | **账户切换**：j/k 上下移动 + Enter 选中 |
-| `[↑/↓]` 或 `[j/k]` | 滚动列表 / 弹层 / 账户光标（取决于当前激活视图） |
-| `[esc]` | 关闭弹层；二次按下等同 `[q]` |
-
-TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 repos。刷新周期 5 s 自动 + `[r]` 手动。
-
----
-
-## 5. Web 用法
+## 4. Web 用法
 
 `luoome start` 或 `luoome web serve` 启动后，浏览器访问 `http://127.0.0.1:5173`。
 
-### 5.1 写操作开关
+### 4.1 写操作开关
 
 Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 `X-Luoome-Account-Id` 随请求发送，服务端按请求隔离账户上下文，避免多个 tab 互相覆盖；这不是账户级鉴权。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=true`，外部调用仍需设置 `LUOOME_EXPOSE_EXTERNAL=true`；浏览器 mutation 保留同源 Origin 校验。
 
-### 5.2 核心页面
+### 4.2 核心页面
 
 | Tab | 内容 |
 |---|---|
@@ -335,7 +298,7 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 渠道受理和设备到达分别表达，未获回执时保持未知。
 详细契约见 [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
 
-### 5.3 顶栏与侧栏
+### 4.3 顶栏与侧栏
 
 顶栏（窄屏下两行）：左侧品牌，右侧依次是股票搜索、账户、时钟——搜索靠右与账户/时钟同簇，不居中。搜索支持代码与名称，候选可直接点击或 `↑`/`↓` + `Enter` 选中、`Esc` 清空；任意页面按 `⌘K`（Windows/Linux 为 `Ctrl K`）聚焦搜索，在非输入控件处按 `/` 也一样，输入框内不会抢键。时钟显示当前时间（窄屏去秒），鼠标悬停可看完整日期、时区与交易时段；时段徽标（交易中 / 午间休市 / 已收盘 / 盘前 / 非交易日）来自服务端 `get_market_data_status` 的交易时段，不在浏览器里重算交易日历，读取失败时仅隐藏徽标。主题皮肤入口在侧栏底部（窄屏时为导航条右侧的「◈ 主题」按钮），点击打开右侧皮肤抽屉。
 
@@ -343,7 +306,7 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 
 ---
 
-## 6. MCP 接入
+## 5. MCP 接入
 
 `luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认暴露：
 
@@ -359,18 +322,17 @@ opt-in 追加：
 
 ---
 
-## 7. 多账户切换
+## 6. 多账户切换
 
 账户不再内置。首次启动在 Web「设置」页创建；也可调用
 `create_account({ name, currency, initialCapital })`。所有账户均为 `kind: real`。
 
 切账户后：
 
-- **TUI**：持仓 / 建议全部按新账户重读。list_holdings 等读路径走 `ctx.user.defaultAccountId`。
 - **Web**：账户下拉切换会触发 `/api/account/select`，然后 reload 当前路由。
 - **CLI / MCP**：账户相关 tool 可通过 `accountId` 显式选账户，缺省使用当前上下文账户；MCP 不暴露 `add_trade`（成交登记仅本地 CLI / Web）。
 
-### 7.1 给新账户加仓（演示）
+### 6.1 给新账户加仓（演示）
 
 ```bash
 # 添加到「短线交易」账户
@@ -388,12 +350,12 @@ luoome tools call add_trade --input '{
 
 ---
 
-## 8. 复盘与 confidence 校准
+## 7. 复盘与 confidence 校准
 
 复盘将当时依据、用户明确记录的行动和后来观察放在当前账户下回看。切换账户后，反馈和统计随账户切换。
 建议采纳、实际成交和事后涨跌各自记录；系统不会从其中一项推断另外两项。
 
-### 8.1 记录与修改复盘
+### 7.1 记录与修改复盘
 
 先确认顶栏账户，再从建议、交易计划或成交详情打开「决策与复盘」。复盘以单表记录复盘结论、
 教训标签与显式关联成交，不再保留修订历史、当时依据快照或写回执。
@@ -413,7 +375,7 @@ MCP 在开启 write 能力后可用 `save_decision_review`。这些反馈入口�
 旧版本没有账户归属的反馈仍留在历史数据中，不会自动分摊到当前账户。启动迁移会把可验证的旧
 复盘最新修订复制为单表记录，旧表保留但不再读取；需要时由用户重新核对并记录。
 
-### 8.2 看 confidence 校准
+### 7.2 看 confidence 校准
 
 `get_confidence_calibration` 将当前账户的历史 Advice（包含已过期建议）按 confidence 分桶。
 通用股票建议在本账户明确记录后才纳入账户样本。CLI 可显式指定账户：
@@ -428,9 +390,9 @@ luoome tools call get_confidence_calibration --input '{"accountId":"你的账户
 
 这张表用于检查已填报样本与信心度之间的关系。样本量、未反馈记录和用户选择都会影响结果，
 它不等于账户收益率，也不能把某个 confidence 桶理解为未来成功概率。
-TUI 按 `[c]`，Web「复盘」页都可查看。
+Web「复盘」页可查看。
 
-### 8.3 报告中的复盘与后补
+### 7.3 报告中的复盘与后补
 
 账户收盘报告和周报会保存生成时使用的复盘修订与成交事实。收盘复盘生成后保持原始快照，
 后补记录可在「决策与复盘」中查看，不再追加补充报告。报告列表每个日期和范围只显示最新的一份，
@@ -448,7 +410,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 9. 数据存储位置
+## 8. 数据存储位置
 
 | 路径 | 内容 |
 |---|---|
@@ -461,7 +423,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 10. 环境变量
+## 9. 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -486,32 +448,28 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 
 ---
 
-## 11. FAQ / 故障排查
+## 10. FAQ / 故障排查
 
-### 11.1 `bun: command not found`
+### 10.1 `bun: command not found`
 
 按官网安装 Bun 或用 `npx bun`。
 
-### 11.2 Web 端打开是空白，console 报 `await is only valid in async functions`
+### 10.2 Web 端打开是空白，console 报 `await is only valid in async functions`
 
 检查 `apps/web/public/js/app.js` 与 `pages.js` 是否被浏览器当 ES module 解析——确认 `<script type="module">` 或 http 头 `content-type: text/javascript`。
 
-### 11.3 TUI 报「需要交互式终端」
-
-TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会触发。请改用 `luoome web serve` 或 tool/workflow CLI 走文件输出。
-
-### 11.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
+### 10.3 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
 
 `LUOOME_MARKET_PROVIDER=real` 按 `LUOOME_MARKET_SOURCES` 从左到右尝试已注册能力；默认顺序是
 Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，不生成价格。Sina 当前只提供
 沪深目录和 qfq 日线，不会伪装成实时快照或搜索来源；未覆盖的市场返回 not_supported。
 
-### 11.5 启动时报 AI 模型目录或 provider 密钥缺失
+### 10.4 启动时报 AI 模型目录或 provider 密钥缺失
 
 首次启动会自动生成 `$LUOOME_HOME/ai-models.json`，内置默认值与格式可参考仓库根目录的
 `ai-models.example.json`；也可以设置 `LUOOME_AI_CONFIG` 指向自定义配置文件。再设置当前
 profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
-或缺密钥都会在需要 AI 的调用处明确报错；CLI/TUI/MCP 可先以配置模式启动并使用不依赖 AI 的
+或缺密钥都会在需要 AI 的调用处明确报错；CLI/MCP 可先以配置模式启动并使用不依赖 AI 的
 行情、账户和审计能力，不会用 mock LLM 冒充真实推理。
 
 Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
@@ -522,20 +480,20 @@ Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
 配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入
 本地 `0600` 密钥文件，页面只显示“已配置”状态，不会读取或回显原值。
 
-### 11.6 `get_confidence_calibration` 没有盈利占比
+### 10.5 `get_confidence_calibration` 没有盈利占比
 
 先确认当前账户。只有该账户明确标记 followed 且填写盈亏的记录参与填报盈利占比；
 没有这类样本时返回 null、页面显示未知。按实际情况补充反馈，尚未确认的盈亏保持留空。
 
-### 11.7 切账户后持仓没变？
+### 10.6 切账户后持仓没变？
 
-Web 端确认当前路由已 reload（页面状态行的「账户已切换」提示）。TUI 按 `[r]` 也可强制刷新。如果仍然没变，说明该账户本来就没持仓——用 `add_trade` 灌一笔。
+Web 端确认当前路由已 reload（页面状态行的「账户已切换」提示）。如果仍然没变，说明该账户本来就没持仓——用 `add_trade` 灌一笔。
 
-### 11.8 Advice 看不到 / 全部过期
+### 10.7 Advice 看不到 / 全部过期
 
 `validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。`analyze_stock` 会自动重新生成。
 
-### 11.9 如何卸载？
+### 10.8 如何卸载？
 
 ```bash
 rm -rf ~/.luoome          # 删数据
@@ -544,7 +502,7 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ---
 
-## 12. 更多阅读
+## 11. 更多阅读
 
 DSH 插件版 AI 对话支持通过独立 Node Host 运行，默认对话仍使用内置 AI SDK。
 实验页面会提示每轮按已保存历史重建上下文；尚不支持执行中断恢复，历史超过实验窗口时需新建会话。

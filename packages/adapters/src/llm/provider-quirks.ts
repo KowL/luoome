@@ -5,11 +5,6 @@ export interface ProviderQuirks {
   readonly recoverMalformedText: boolean;
 }
 
-export const NO_PROVIDER_QUIRKS: ProviderQuirks = {
-  injectSchemaIntoSystem: false,
-  recoverMalformedText: false,
-};
-
 const JSON_OUTPUT_INSTRUCTION =
   '你必须只输出一个严格符合以下 JSON Schema 的 JSON 对象：' +
   '不要输出思考过程，不要输出 Markdown，不要代码围栏，不要任何解释文字。';

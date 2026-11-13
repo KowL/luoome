@@ -20,8 +20,8 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 
 | 等级 | 含义 | 默认暴露 |
 |---|---|---|
-| `read` | 只读本地 | ✅ MCP / Web / CLI / TUI |
-| `advice` | 生成建议（含 LLM 推理） | ✅ MCP / Web / CLI / TUI |
+| `read` | 只读本地 | ✅ MCP / Web / CLI |
+| `advice` | 生成建议（含 LLM 推理） | ✅ MCP / Web / CLI |
 | `write` | 写本地状态 | ⚠️ opt-in |
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
 | `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ MCP / 通用 Web 工具路由永不暴露 |
@@ -109,7 +109,7 @@ LLM 输出的 confidence 必须**经此校准后**展示给用户（避免 LLM �
 过期 advice 默认不再被主动返回。`validUntil` 到期后：
 
 - `get_advice` 不返回（除非 `includeExpired: true`）
-- TUI / Web 不显示
+- Web 不显示
 - 复盘时仍保留
 
 ### 输出反 prompt injection
@@ -256,7 +256,7 @@ advice 类也记录：
 Tool 的业务输入、业务输出和错误详情不写入 audit log；失败事件只保留 `errorKind`。
 
 当前实现（2026-08-14）：`defineTool` 对所有 `write` / `external` / `trade` / `advice` 调用记录
-成功、业务失败、输入校验失败和异常结果；CLI、MCP、TUI、Web 生产入口分别把日志写入
+成功、业务失败、输入校验失败和异常结果；CLI、MCP、Web 生产入口分别把日志写入
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
@@ -283,7 +283,7 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 
 ## Checklist（每个 release 前）
 
-2026-08-14 已用 MCP smoke、registry/invariant/TUI/Web 结构测试、错误脱敏回归和仓库密钥扫描复核，
+2026-08-14 已用 MCP smoke、registry/invariant/Web 结构测试、错误脱敏回归和仓库密钥扫描复核，
 以下清单全部通过；后续 release 若新增副作用或输出路径，必须重新执行同一组检查。
 
 - [x] `LUOOME_EXPOSE_TRADE` 强制 false 校验存在

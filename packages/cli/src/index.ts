@@ -1,6 +1,6 @@
 // @luoome/cli —— luoome 命令行入口（bin/luoome 转发到此，Bun 直跑 TS，无构建步骤）。
 // 手写极简 argv 解析，不引第三方 CLI 框架。
-// 子命令清单见 printHelp()；mcp / tui / web 为懒加载（对应包由 W4a/W4c/W4d 并行实现，
+// 子命令清单见 printHelp()；mcp / web 为懒加载（对应包由 W4a/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
@@ -528,7 +528,7 @@ const cmdAdviceOutcome = async (
   }
 };
 
-// ---------- 懒加载 surfaces（mcp / tui / web，由 W4a/W4c/W4d 并行实现） ----------
+// ---------- 懒加载 surfaces（mcp / web，由 W4a/W4d 并行实现） ----------
 
 const LAZY_HINT = '该 surface 包由并行 agent 实现；若持续失败请检查其导出契约与实现状态';
 
@@ -724,12 +724,6 @@ const cmdWorkflowRun = async (
 
 const cmdMcpServe = (): Promise<number> => runLazyEntry('@luoome/mcp', 'startMcpServer', []);
 
-/**
- * tui：W4c 实际导出 startTuiApp()（opentui app，布局 docs/archive/MVP-TASK.md §2.7，见 packages/tui/src/index.ts）。
- * W5 联调已核对导出名一致。
- */
-const cmdTui = (): Promise<number> => runLazyEntry('@luoome/tui', 'startTuiApp', []);
-
 const waitForTerminationSignal = (): Promise<void> =>
   new Promise<void>((resolve) => {
     const stop = (): void => {
@@ -891,7 +885,6 @@ Advice:
 
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
-  tui                          启动终端 TUI
   start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
                                一键启动完整 MVP（Web + 盘中盯盘）；默认后台运行，日志
                                追加到 $LUOOME_HOME/logs/luoome.log，--foreground 前台跑
@@ -981,8 +974,6 @@ const run = async (argv: readonly string[]): Promise<number> => {
     }
     throw new CliUsageError(`未知 workflow 子命令: "${sub ?? ''}"（支持 run）`);
   }
-
-  if (cmd === 'tui') return cmdTui();
 
   if (cmd === 'web') {
     if (sub === 'serve') return cmdWebServe(flags);

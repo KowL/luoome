@@ -494,9 +494,6 @@ export const isPublishableOperationalRun = (run: StrategyRun): boolean =>
       run.publication?.reasons.includes('legacy-publication') === true)) &&
   run.publication?.status === 'published';
 
-export const isEvaluationStrategyRun = (run: StrategyRun): boolean =>
-  run.scope === 'evaluation' || run.publication?.status === 'non-publishing';
-
 export const LegacyRuleEvaluationSchema = z.object({
   ruleId: z.string().min(1),
   status: z.enum(['matched', 'not-matched', 'unknown', 'error']),

@@ -10,12 +10,12 @@
 #   brew install luoome                       # 默认 HEAD
 #   brew install --HEAD luoome                # 等价语义，显式指定 HEAD
 #   brew install --branch <branch> luoome     # 装指定分支
-#   LUOOME_MARKET_PROVIDER=real luoome tui
+#   LUOOME_MARKET_PROVIDER=real luoome web serve
 #
 # tag 发布后会切到 stable 块（class LuoomeFormula < Formula + url + sha256）。
 
 class Luoome < Formula
-  desc "本地优先的个人投资 advisor agent（TUI / Web / MCP 三端）"
+  desc "本地优先的个人投资 advisor agent（Web / MCP / CLI）"
   homepage "https://github.com/KowL/luoome"
   url "https://github.com/KowL/luoome.git",
       using: GitProxy,

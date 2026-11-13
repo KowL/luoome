@@ -21,8 +21,8 @@ import {
   DrizzleDecisionReviewRepository,
   DrizzleHoldingRepository,
   DrizzleLedgerRepository,
-  DrizzleLimitUpLadderSampleRepository,
   DrizzleLimitUpBoardHistoryRepository,
+  DrizzleLimitUpLadderSampleRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMarketRoomEventRepository,
   DrizzleMarketSnapshotBatchRepository,
@@ -1500,7 +1500,7 @@ const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
  * 持久库。MVP（47857cc）把 AccountKind 收窄到 z.literal('real')，同时移除 web 启动 seed，
  * 但 ensureSchema 没有数据迁移——升级用户的 accounts 表残留 kind='mock' 行，触发
  * list_accounts output zod 校验失败 → defineTool 返回 internal（Web alert "激活失败"、
- * TUI 静默不刷新）。本迁移在每次 createDrizzleRepos 启动时把残留 kind='mock' 升级为
+ * 其它入口静默失败）。本迁移在每次 createDrizzleRepos 启动时把残留 kind='mock' 升级为
  * 'real'，幂等。
  */
 const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
@@ -2467,7 +2467,7 @@ export interface DrizzleReposHandle {
  *
  * @param dbPath SQLite 文件路径；传 ':memory:' 用内存库（测试）。
  *
- * 驱动为 Bun 内置 bun:sqlite（drizzle-orm/bun-sqlite），CLI/TUI/Web/MCP 均以
+ * 驱动为 Bun 内置 bun:sqlite（drizzle-orm/bun-sqlite），CLI/Web/MCP 均以
  * bun 启动时可直接加载；vitest 需跑在 Bun 运行时（`bun test` / `bun --bun run vitest`）。
  */
 export const createDrizzleRepos = (

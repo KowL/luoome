@@ -234,7 +234,7 @@ export interface ToolContext {
   readonly logger: Logger;
   /** write/external/advice/trade tool 的结构化审计 sink；测试上下文可省略。 */
   readonly auditLog?: AuditLoggerLike;
-  /** 审计事件的调用方标签，例如 cli / mcp / web / tui。 */
+  /** 审计事件的调用方标签，例如 cli / mcp / web。 */
   readonly auditCaller?: string;
   /** Surface 级取消信号；长外部操作只在安全取消点消费。 */
   readonly abortSignal?: AbortSignal;

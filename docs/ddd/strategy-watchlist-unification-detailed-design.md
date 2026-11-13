@@ -71,7 +71,7 @@ Watchlist
 依赖方向保持不变：
 
 ```text
-cli / tui / mcp / web ──► tools ──► core
+cli / mcp / web ──► tools ──► core
                           │
                           └─► db / adapters ──► core
 workflows ──► tools ──► core
@@ -86,7 +86,7 @@ workflows ──► tools ──► core
 | `tools` | 原子 CRUD、发布、运行、同步、查询；统一 Zod schema |
 | `workflows` | 批量运行 Strategy、同步 Watchlist、盘中提醒编排 |
 | `adapters` | 行情、LLM、通知；不感知 Strategy/Watchlist repository |
-| `web/cli/tui/mcp` | 消费 tools/workflows，不复制领域判断 |
+| `web/cli/mcp` | 消费 tools/workflows，不复制领域判断 |
 
 StrategyEvaluator 位于 core，只接受已经准备好的规范上下文，不拉数据、不持久化、不调用 LLM。
 StrategyRunner 的数据准备和结果持久化通过 tools/workflows 完成。

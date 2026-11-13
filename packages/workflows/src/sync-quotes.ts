@@ -7,7 +7,7 @@ import { defineOperation } from './define-workflow.js';
  *
  * 流程：syncQuotesTool.execute → 报告条数 + 时间戳 + 命中的 stockId 列表。
  * Workflow 存在意义：
- * 1. CLI / TUI 提供「一次性同步」入口，不必手动调 tool；
+ * 1. CLI 提供「一次性同步」入口，不必手动调 tool；
  * 2. 给后续 v0.3 接 send_notification（同步完成后推送高信心度建议）留挂载点。
  *
  * input.accountId 缺省走 ctx.user.defaultAccountId；走 tool 层后转译。

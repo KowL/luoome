@@ -12,7 +12,7 @@
 ## 1. 背景
 
 当前行情实现已经具备 Eastmoney、Tencent、Sina、Tushare 四个真实数据源，以及
-`MarketDataManager` 提供的缓存、限速和 fallback。CLI、TUI、MCP、Web 也统一通过
+`MarketDataManager` 提供的缓存、限速和 fallback。CLI、MCP、Web 也统一通过
 `createMarketAdapterFromEnv` 装配，依赖方向符合 `surface → tools → adapters/core`。
 
 但现有 seam 主要保证 TypeScript 形状兼容，没有完整保证行为可替换：
@@ -345,7 +345,7 @@ K 线与 qfq 因子接口；只注册 `daily-bars` 能力，不伪装成实时�
 ## 6. 目标架构
 
 ```text
-cli / tui / mcp / web
+cli / mcp / web
           │
           ▼
         tools

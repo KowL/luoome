@@ -4,7 +4,6 @@
 'use strict';
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 /**
  * 构造 DOM 节点。
@@ -420,7 +419,6 @@ const resultErrorText = (result, fallback) => toolErrorText(result?.error, fallb
 
 export {
   $,
-  $$,
   adviceCard,
   adviceSubjectLine,
   adviceSubjectModel,

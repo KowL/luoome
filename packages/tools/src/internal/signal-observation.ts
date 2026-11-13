@@ -2,7 +2,6 @@ import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   type DataProvenance,
   type SignalObservation,
-  type StrategySignal,
   signalObservationDueAt,
   signalObservationId,
   type WatchTrigger,
@@ -59,42 +58,6 @@ export const observationsForWatchTrigger = (
         trigger.quote.ts,
         provenance,
       );
-
-export interface StrategySignalBaseline {
-  readonly price: number;
-  readonly at: Date;
-  readonly provider: string;
-}
-
-export const observationsForStrategySignal = (
-  signal: StrategySignal,
-  baseline: StrategySignalBaseline | undefined,
-  fetchedAt: Date,
-): SignalObservation[] =>
-  baseline === undefined
-    ? horizons.map((horizon) => ({
-        id: signalObservationId('strategy-signal', signal.id, horizon),
-        sourceKind: 'strategy-signal' as const,
-        sourceId: signal.id,
-        stockId: signal.stockId,
-        horizon,
-        status: 'unavailable' as const,
-        benchmarkStatus: 'unavailable' as const,
-        provenance: {
-          provider: 'strategy-signal',
-          observedAt: signal.ts,
-          fetchedAt,
-          freshness: 'unavailable' as const,
-          errorKind: 'baseline_unavailable',
-        },
-        unavailableReason: '策略信号发生时没有可审计的价格基准',
-      }))
-    : pending('strategy-signal', signal.id, signal.stockId, baseline.price, baseline.at, {
-        provider: baseline.provider,
-        observedAt: baseline.at,
-        fetchedAt,
-        freshness: 'unknown',
-      });
 
 export const saveObservationCandidates = async (
   items: readonly SignalObservation[],

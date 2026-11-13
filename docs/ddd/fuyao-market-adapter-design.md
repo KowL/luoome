@@ -315,7 +315,7 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
 - `.env.example`（FUYAO 配置段 + `LUOOME_MARKET_SOURCES` 可选值注释）
 - `docs/README.md`（DDD 索引）
 
-不动：core 全部实体与端口、`MarketDataManager` / `MarketSourceRegistry`、DB schema、四个 surface 组装根、`testing/fake-market.ts`。
+不动：core 全部实体与端口、`MarketDataManager` / `MarketSourceRegistry`、DB schema、三个 surface 组装根、`testing/fake-market.ts`。
 
 ## 13. 验收原则
 

@@ -16,7 +16,7 @@ export interface BuildContextDependencies {
 
 export type BuildContextInput = BuildContextDependencies;
 
-/** Production composition root used by CLI, TUI, Web, and MCP surfaces. */
+/** Production composition root used by CLI, Web, and MCP surfaces. */
 export const buildContext = (input: BuildContextInput): ToolContext => {
   const user = input.user ?? { id: 'local-user', defaultAccountId: '' };
   return {

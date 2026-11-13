@@ -18,7 +18,7 @@
 **目标**：骨架 + 第一个垂直切片端到端跑通（advice 模型可用，mock 数据）。
 
 **产物**：
-- Bun workspace monorepo（`packages/core db tools adapters workflows mcp cli tui`）
+- Bun workspace monorepo（`packages/core db tools adapters workflows mcp cli`）
 - core 包：领域类型（Account / Holding / Trade / Stock / **Advice**）+ 不变量 + Money/Quantity/Percentage branded types
 - db 包：Drizzle schema + SQLite + in-memory repo（双实现）+ Advice 存储
 - tools 包：Tool registry + Zod → TS/MCP/OpenAI 自动推导 + 8 个最小工具：
@@ -26,11 +26,9 @@
   - advice: `analyze_stock`（mock LLM，输出结构化 Advice + disclaimers + validUntil）
 - mcp 包：stdio server，暴露 read + advice 类
 - cli 包：`luoome` 命令入口，至少 `tools list`, `tools call`, `advice list`, `advice stats`, `mcp serve`
-- tui 包：opentui 应用，`luoome tui` 显示持仓列表 + 今日建议（mock 数据）
 - 测试：vitest + 核心工具的单元测试 + advice 不变量测试 + mcp server smoke test
 
 **验收**：
-- ✅ `bun run tui` 在终端显示 mock 持仓表格 + mock 建议列表
 - ✅ `bun run mcp` 起 stdio server，client 能 list tools + call `analyze_stock` 拿 mock advice
 - ✅ `bun test` 全绿
 - ✅ README + ARCHITECTURE + AGENTS + ROADMAP + SECURITY 齐备且反映 advisor 定位
@@ -48,7 +46,7 @@
   - llm：OpenAICompatibleAdapter（覆盖 OpenAI / DeepSeek / Kimi / Moonshot / Zhipu）+ AnthropicAdapter + LLMManager（mock fallback + 重试 + 规则兜底）
 - tools 增量：fetch_quote / batch_quote / sync_quotes / search_stocks / compute_indicators
 - workflows 增量：syncQuotesWorkflow（CLI 子命令 `luoome workflow run sync-quotes`）
-- tui / web：5 秒自动刷新
+- web：5 秒自动刷新
 - 测试：343 pass（v0.1 173 → v0.2 +170）
 
 **实际验收**：
@@ -56,7 +54,7 @@
 - ✅ Eastmoney 失败自动切 Tencent；都失败走 mock + 30 分钟抑制窗口
 - ✅ LLMManager：mock / openai-compatible / anthropic 三 provider 路由；
   缺 key 自动降级 mock；schema parse 失败重试 + 规则 fallback
-- ✅ TUI / Web 5 秒自动刷新（不卡顿，setInterval + onDestroy clear）
+- ✅ Web 5 秒自动刷新（不卡顿，setInterval + onDestroy clear）
 - ✅ 缓存命中率日志可见（`QuoteCache.stats()` + `DailyBarCache.stats()`）
 - ✅ 13 个 tool 全部加载 + 2 个 workflow（sync-quotes / daily-advice）端到端跑通
 
@@ -82,12 +80,10 @@
 - workflows 增量：`tacticScanWorkflow` / `riskReportWorkflow` / `dailyReviewWorkflow`。
 - cli 增量：`advice outcome <id> --followed true|false --pnl N --notes "..."`
   + workflow 子命令（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）。
-- tui 增量：[t] 战法扫描弹层（list_tactics → run_tactic × N → score_signals 精排 top 10）+
-  [o] outcome 复盘弹层（近 20 条 advice + outcome 状态 + 回填指引）。
 - web 增量：hash 路由 `#dashboard` / `#tactics` / `#review` + 新 API
   `/api/tactics` / `/api/tactics/scan?topN=N` / `/api/review` /
   `/api/review/:id/outcome`（write opt-in via `LUOOME_EXPOSE_WRITE=true`）。
-- 测试：418 pass（v0.2 +0 / v0.3 contract-tests +19 + web / tui 增量维护现有用例）。
+- 测试：418 pass（v0.2 +0 / v0.3 contract-tests +19 + web 增量维护现有用例）。
 
 **实际验收**：
 - ✅ 5 个内置战法 + DSL 表达式求值单测覆盖。
@@ -96,7 +92,6 @@
 - ✅ `bash bin/luoome workflow run daily-review` 产出当日 advice 汇总 + 7 日 stats。
 - ✅ `bash bin/luoome advice outcome <id> --pnl 500` 落库；后续 `advice stats` 命中率随之更新。
 - ✅ 飞书 webhook adapter：env `LUOOME_FEISHU_WEBHOOK_URL` 缺失时降级 logger.info 不抛。
-- ✅ TUI smoke：首屏 + [d] 详情 + [esc] + [s] 统计 + [t] 战法 + [o] 复盘 6 项全过。
 - ✅ Web 三个新 API 在 `:5174` 端到端返回 ToolResult 形状。
 - ✅ `get_advice_stats` 按 decision 拆分（buy / sell / hold / watch / avoid）已 assert。
 - ✅ LUOOME_EXPOSE_TRADE=true 启动硬卡（v0.1 已卡，v0.3 加 web 测试守住）。
@@ -144,8 +139,8 @@
 
 **实际产物（截至 HEAD `1e9ea63`，commit 见 git log）**：
 
-- ✅ **真实行情接线（历史快照）**（commit `097f3a0`）：四个 surface（CLI / MCP / TUI / Web）统一经 `createMarketAdapterFromEnv` 装配；当时的 `LUOOME_MARKET_PROVIDER=real` 口径为 Eastmoney 主 → Tencent 备 → Mock 兜底。当前生产路径不提供 mock fallback，真实源失败按可审计错误返回；测试 fixture 与生产数据隔离。实测 `fetch_quote(source=eastmoney)` + `compute_indicators` 触发 Tencent fallback 81 根真实日线。
-- ✅ **真实 LLM 接线**：四端统一走 AI SDK Provider Registry 和模型 profile；缺目录、未知 provider 或缺密钥启动期报错；schema parse 失败重试 + 规则 fallback 由 Manager 承担。
+- ✅ **真实行情接线（历史快照）**（commit `097f3a0`）：三个 surface（CLI / MCP / Web）统一经 `createMarketAdapterFromEnv` 装配；当时的 `LUOOME_MARKET_PROVIDER=real` 口径为 Eastmoney 主 → Tencent 备 → Mock 兜底。当前生产路径不提供 mock fallback，真实源失败按可审计错误返回；测试 fixture 与生产数据隔离。实测 `fetch_quote(source=eastmoney)` + `compute_indicators` 触发 Tencent fallback 81 根真实日线。
+- ✅ **真实 LLM 接线**：三端统一走 AI SDK Provider Registry 和模型 profile；缺目录、未知 provider 或缺密钥启动期报错；schema parse 失败重试 + 规则 fallback 由 Manager 承担。
 - ✅ **持仓 / 交易录入**（commit `cbdfee7`）：Tool 数 22→26，write 1→5。
   - `add_trade`：录 Trade（source=manual） + 联动 Holding（新开 / 加仓加权均价 / 减仓 / 卖光自动 closedAt / 清仓重开复用旧 id）。
   - `add_holding`：无成交明细直录；同 (accountId, stockId) 防重 → invalid_input。
@@ -154,31 +149,31 @@
   - stock 行缺失自动补 stub（analyze_position 依赖 stock 存在）。
 - ✅ **成交量量纲统一**（commit `d089401`）：K 线 volume 一律 ×100 成股，与 `Quote.volume` 一致（`volMa5` / `volRatio5_20` 跨源可比）；`quote.ts` 注释钉死单位。
 - ✅ **buildMockContext 时间炸弹修复**（`097f3a0`）：业务时钟 `max(锚点, 真实时间)` / 行情时钟钉住锚点；`analyze_*` 新鲜 advice 不再被 repo `Date.now()` 过期过滤立刻隐藏。
-- ✅ **多账户切换 UI（侧栏账户选择器）**（commit `eb3675c`，v0.5.W3）：3 个 mock 账户（默认 / 长期持仓 / 短线交易）；5 个 seed site 切到 MOCK_ACCOUNTS；TUI [a] 弹层（j/k + Enter）+ accountBar 顶栏；Web 顶栏 `<select>` + POST `/api/account/select`（mutate ctxRef）+ localStorage 持久化。Tool 数 26 不变。
-- ✅ **advice confidence 自校准**（commit `1e9ea63`，v0.5.W4）：新 tool `get_confidence_calibration`（10 桶 0-9 / 10-19 / ... / 90-100 聚合 hitRate / avgPnl / avgConfidence）；TUI [c] 弹层 + Web /review 页加校准表；Tool 数 26 → 27。
-- ✅ **用户手册 + Homebrew formula**（commit 待落地，v0.5.W5）：新增 docs/USER_GUIDE.md（12 节：安装 / 首次启动 / CLI / TUI / Web / MCP / 多账户 / 复盘与校准 / 数据位置 / 环境变量 / FAQ / 更多阅读）和 homebrew/luoome.rb（HEAD-only formula：依赖 Bun，运行 bin/luoome shim 转 luoome mcp/tui/web/cli 入口；test 块校验 --version + tools list 含 27 tool）；README 顶部加 v0.5.0 状态节 + 文档表更新。
+- ✅ **多账户切换 UI（侧栏账户选择器）**（commit `eb3675c`，v0.5.W3）：3 个 mock 账户（默认 / 长期持仓 / 短线交易）；5 个 seed site 切到 MOCK_ACCOUNTS；Web 顶栏 `<select>` + POST `/api/account/select`（mutate ctxRef）+ localStorage 持久化。Tool 数 26 不变。
+- ✅ **advice confidence 自校准**（commit `1e9ea63`，v0.5.W4）：新 tool `get_confidence_calibration`（10 桶 0-9 / 10-19 / ... / 90-100 聚合 hitRate / avgPnl / avgConfidence）；Web /review 页加校准表；Tool 数 26 → 27。
+- ✅ **用户手册 + Homebrew formula**（commit 待落地，v0.5.W5）：新增 docs/USER_GUIDE.md（11 节：安装 / 首次启动 / CLI / Web / MCP / 多账户 / 复盘与校准 / 数据位置 / 环境变量 / FAQ / 更多阅读）和 homebrew/luoome.rb（HEAD-only formula：依赖 Bun，运行 bin/luoome shim 转 luoome mcp/web/cli 入口；test 块校验 --version + tools list 含 27 tool）；README 顶部加 v0.5.0 状态节 + 文档表更新。
 
 **实际验收**：
 - ✅ `LUOOME_MARKET_PROVIDER=real` 端到端：`fetch_quote 002594.SZ` → eastmoney 93.92 元；`batch_quote` 三股并发 OK；`compute_indicators` Eastmoney 日线失败自动切 Tencent（41 根日线）+ 13 个技术指标全产出。
 - ✅ `LUOOME_EXPOSE_WRITE=true` 端到端：4 个 write tool 实测闭环（加仓加权 / 超卖保护 / close / 重开复用 id / 重复 close 拒绝）。
-- ✅ 默认 mock 模式零回归：所有现有测试 + TUI smoke 仍全过。
+- ✅ 默认 mock 模式零回归：所有现有测试仍全过。
 - ⏳ A 股 + 港股 + 美股统一数据模型：仅 A 股真实数据；港股走 Eastmoney（已覆盖，但 stock_id 后缀 `HK`）；美股尚未接入（Yahoo / Alpha Vantage 留 v0.5.W2）。
 - ✅ confidence 校准接口本身提供「按桶聚合 → 系统 confidence 校准趋势」的可视化（替代原有抽象的相关性 > 0.3 验收口径）。
 - ✅ 用户手册 + Homebrew formula：docs/USER_GUIDE.md + homebrew/luoome.rb —— 贡献者与用户入门文档补齐
-- ✅ W3 + W4 + W5 落地后 TUI smoke 7/7、vitest 460/460、test:all 107/107 全绿。
+- ✅ W3 + W4 + W5 落地后 vitest 460/460、test:all 107/107 全绿。
 
 **8 个 commit 增量（含 W5）**
 
 | sha | 类型 | 主题 | 测试 +N |
 |---|---|---|---|
 | `097f3a0` | feat(market) | A 股真实行情接线 + Eastmoney/Tencent 实测修复 | — |
-| `d5f5917` | feat(llm) | 真实 LLM 接线（四端 LLMManager，默认 mock 零回归） | vitest +38 |
+| `d5f5917` | feat(llm) | 真实 LLM 接线（三端 LLMManager，默认 mock 零回归） | vitest +38 |
 | `cbdfee7` | feat(tools) | 持仓/交易录入 4 个 write tool | 22 个新测试 |
 | `d089401` | fix(market) | K 线成交量量纲统一为股（×100） | 测试断言同步 |
 | `8dbb03f` | docs | 同步 LLM 接线 + 持仓交易录入 + 量纲统一 | — |
 | `8f38246` | docs(roadmap) | v0.5 部分完成状态对齐 | — |
-| `eb3675c` | **feat(v0.5 W3)** | 多账户切换 — 3 mock 账户 + TUI 弹层 + Web 顶栏下拉 | 测试更新 1 |
-| `1e9ea63` | **feat(v0.5 W4)** | confidence 自校准 — get_confidence_calibration tool + TUI/Web 可视化 | vitest +4 |
+| `eb3675c` | **feat(v0.5 W3)** | 多账户切换 — 3 mock 账户 + Web 顶栏下拉 | 测试更新 1 |
+| `1e9ea63` | **feat(v0.5 W4)** | confidence 自校准 — get_confidence_calibration tool + Web 可视化 | vitest +4 |
 | `<W5>` | **docs(v0.5 W5)** | 用户手册 docs/USER_GUIDE.md + homebrew/luoome.rb + README 状态节 | — |
 
 ## v0.6 — 盘中盯盘 ✅（已完成）
@@ -251,7 +246,7 @@
    schema drift 契约（逐表列与显式索引）；剩余跨交易日 P50/P95/max 样本；
    本轮再补 schedule/data 有界运营参数、数据准备后/发布后/下游副作用前 fencing 复核、实际
    provider/baseline/fallback 与 T+1/T+3/T+5 审计字段，并提供可重复运维 Runbook；
-   非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、元数据审计和 Advice
+   非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/Web 三个生产入口，文件权限、元数据审计和 Advice
    prompt-injection 清理均有测试；Tool 的 input issues、InvariantError、handler 和 output schema
    错误出口统一脱敏；release checklist 已完成逐项复核，但不改变 S3 生产观测要求。
 3. **S2 历史评估作业化 ✅（真实区间边界已验收）**：Web 使用后台 evaluation session，提供日期级

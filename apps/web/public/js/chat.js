@@ -191,7 +191,6 @@ const settlementText = (settlement) => {
   if (settlement.status === 'executing')
     return '执行中；若页面或进程曾中断，请核对实际账本后可取消该草案';
   if (settlement.status === 'succeeded') {
-    const data = settlement.result?.ok ? settlement.result.data : null;
     return `${toolLabel(settlement.tool)}执行成功`;
   }
   const reason = resultErrorText(settlement.result, '未知错误');
@@ -309,7 +308,6 @@ const draftCard = (draft) => {
     card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
   }
   if (draft.settlement !== undefined) {
-    const data = draft.settlement.result?.ok ? draft.settlement.result.data : null;
     card.append(
       el(
         'p',

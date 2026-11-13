@@ -446,5 +446,3 @@ const parseSinaHqTime = (date: string | undefined, time: string | undefined): Da
   const local = new Date(parsed.getTime() + 8 * 3_600_000).toISOString().slice(0, 19);
   return local === `${date}T${time}` ? parsed : undefined;
 };
-
-export const sinaQfqFactorForDate = factorForDate;

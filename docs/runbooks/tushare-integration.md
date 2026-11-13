@@ -44,7 +44,7 @@ TUSHARE_TOKEN=replace-me-with-real-token
 
 1. `.env` 填入 `TUSHARE_TOKEN`；
 2. `LUOOME_MARKET_SOURCES` 的逗号列表中加入 `tushare`（位置决定优先级，可选值只有 `eastmoney,tencent,tushare`）；
-3. 重启 luoome（CLI / TUI / MCP / web 任一 surface 都经 `packages/adapters/src/market/factory.ts` 装配）。
+3. 重启 luoome（CLI / MCP / web 任一 surface 都经 `packages/adapters/src/market/factory.ts` 装配）。
 
 **快速失败语义**：`LUOOME_MARKET_SOURCES` 含 `tushare` 但 `TUSHARE_TOKEN` 缺失时，factory 在启动期抛 `Tushare 已启用，但 TUSHARE_TOKEN 未配置`，进程不会以“已启用但静默不可用”的状态运行。
 

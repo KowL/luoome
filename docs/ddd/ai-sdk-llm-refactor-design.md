@@ -18,7 +18,7 @@
 
 - 不改变 core 的 `LLMAdapterLike` / `LLMGenerateRequest` 业务端口；provider 配置从 core
   删除。8 个业务调用点不选择 provider 或 model。
-- 四个装配点（cli / tui / mcp / web）统一创建 `AIStack`，不各自解析模型环境变量。
+- 三个装配点（cli / mcp / web）统一创建 `AIStack`，不各自解析模型环境变量。
 - 不改 `LLMManager` 的 fallback 协议（重试一次 + 规则兜底）——这是领域逻辑，AI SDK 无法也不应接管。
 - 不实现跨轮会话持久化（conversation 表）、不引入 LangGraph、不改 chat v1 的 `/api/chat` 契约（属于 web-chat-v2 范畴）。
 - AI SDK 类型不透出 `packages/adapters`：core / tools / surface 不出现任何 `ai` 包的 import 或类型。
@@ -66,7 +66,7 @@ llm/
   types.ts              # 不动：LLMAdapter / LLMGenerateResult
   manager.ts            # 只编排 retry/fallback；构造器注入 adapter
   model-catalog.ts      # JSON schema + Provider Registry + profile 解析
-  stack.ts              # 四端共用的 composition factory
+  stack.ts              # 三端共用的 composition factory
   ai-sdk-adapter.ts     # 新增：AISDKAdapter implements LLMAdapter（generate 走 generateText）
   agent-runtime.ts      # Phase 2 新增：AISDKAgentRuntime implements AgentRuntimeLike
   provider-quirks.ts    # 新增：非标 provider 兼容层（§4.3）
@@ -162,7 +162,7 @@ export class AISDKAdapter implements LLMAdapter {
 
 ### 4.6 agent loop：`agent_run` tool
 
-AI SDK 实现位于 `packages/adapters/src/llm/agent-runtime.ts`；`packages/core` 只新增不含任何 AI SDK 类型的 `AgentRuntimeLike` / `AgentCallableTool` 投影，`ToolContext` 新增可选 `agent` 字段。四个 surface 用同一模型目录的 `agent` profile 构造 `AISDKAgentRuntime` 并注入。`packages/tools/src/tools/agent-run.ts` 只负责白名单、system instructions、ToolResult 映射和输出校验，不 import `ai`、不读 env。
+AI SDK 实现位于 `packages/adapters/src/llm/agent-runtime.ts`；`packages/core` 只新增不含任何 AI SDK 类型的 `AgentRuntimeLike` / `AgentCallableTool` 投影，`ToolContext` 新增可选 `agent` 字段。三个 surface 用同一模型目录的 `agent` profile 构造 `AISDKAgentRuntime` 并注入。`packages/tools/src/tools/agent-run.ts` 只负责白名单、system instructions、ToolResult 映射和输出校验，不 import `ai`、不读 env。
 
 ```ts
 // packages/adapters/src/llm/agent-runtime.ts（AI SDK 边界内）
@@ -241,14 +241,14 @@ AI SDK UI 分两层：框架 hooks（`useChat` 等，React/Vue/Svelte/Angular）
   `maxTotalTokens`、总超时。
 - provider quirks 显式声明，不再通过 base URL 或模型名猜测。
 
-四个 surface 通过 `createAIStackFromEnv` 只加载一次目录，普通生成与 Agent 共享
+三个 surface 通过 `createAIStackFromEnv` 只加载一次目录，普通生成与 Agent 共享
 Provider Registry。旧 `LUOOME_LLM_*` / `LUOOME_AGENT_*` 以及 core
 `LLMProviderConfig` 已删除，不提供兼容读取。
 
 Web 设置页是模型目录的主要用户入口：provider 切换会带出推荐模型与 endpoint，
 保存时由服务端校验并分别原子写入模型目录和 `0600` 密钥文件，再热替换当前
 `ToolContext` 的 LLM / Agent 实现。读取接口只暴露 `apiKeyConfigured`。JSON 示例
-保留给自动化部署、CLI/TUI/MCP 用户和高级手工配置，不再要求普通 Web 用户编辑 JSON。
+保留给自动化部署、CLI/MCP 用户和高级手工配置，不再要求普通 Web 用户编辑 JSON。
 
 ## 6. 关键风险与缓解
 
@@ -280,21 +280,21 @@ Web 设置页是模型目录的主要用户入口：provider 切换会带出推�
 
 - **Phase 0 — POC 验证（1–2 天）**：装依赖；验证 zod v4 兼容、Bun test/build、Anthropic `structuredOutputMode: 'auto'` 真实调用、MiniMax quirks 真实调用。任一失败回到本文档修订，不硬推。
 - **Phase 1 — adapter 替换（核心重构）**：新增 3 个实现文件 + 测试，改 manager.ts，删 4 个旧文件。验收：`bun run test` / `test:web` / `typecheck` / `lint` 全绿；8 个调用点零改动；单次 adapter generate 仅一次 HTTP 尝试；用真实 API key 各跑一次 `analyze_stock`（anthropic + 一个 openai-compatible 后端）。
-- **Phase 2 — agent_run**：core 新增 SDK 无关 `AgentRuntimeLike`，adapters 新增 `AISDKAgentRuntime`，四端注入，tools 新增 `agent_run` + 显式能力白名单 + 结构化 trace。验收：`ai` 依赖仍只存在于 adapters；CLI `luoome tools call agent_run` 跑通「查持仓 → 查行情 → 出结论」多步链路；MCP 未开启 external 时不可调用；trace 与实际调用一致。
+- **Phase 2 — agent_run**：core 新增 SDK 无关 `AgentRuntimeLike`，adapters 新增 `AISDKAgentRuntime`，三端注入，tools 新增 `agent_run` + 显式能力白名单 + 结构化 trace。验收：`ai` 依赖仍只存在于 adapters；CLI `luoome tools call agent_run` 跑通「查持仓 → 查行情 → 出结论」多步链路；MCP 未开启 external 时不可调用；trace 与实际调用一致。
 - **Phase 3 — chat v2 接入**：`/api/chat` 内部从 2-pass 切到 `agent_run`，并按 §4.7 迁移到 UI message stream 协议（SSE），draft-and-confirm 语义不变。独立设计稿，不在本文档范围。
 
 ### 9.1 实施结果（2026-07-26）
 
 - 实际锁定：`ai@6.0.235`、`@ai-sdk/anthropic@3.0.102`、`@ai-sdk/openai-compatible@2.0.62`；三者统一使用 LanguageModel V3。
 - Phase 1：两个裸 fetch adapter 已替换为 `AISDKAdapter`；Manager retry/fallback 契约、prompt 截断、超时、审计 raw 和 MiniMax quirks 均有回归测试。
-- Phase 2：`AgentRuntimeLike`、`AISDKAgentRuntime`、`agent_run`、显式白名单、四端装配与 Web/MCP external 门控已接入；trace 只返回输出结构摘要，不返回完整持仓或研究正文。
+- Phase 2：`AgentRuntimeLike`、`AISDKAgentRuntime`、`agent_run`、显式白名单、三端装配与 Web/MCP external 门控已接入；trace 只返回输出结构摘要，不返回完整持仓或研究正文。
 - 自动化验收：`bun run typecheck`、`bun run test:all`、`bun run build` 通过；LLM/Agent/MCP 专项测试通过。
 - 真实 smoke：已使用配置的 MiniMax OpenAI-compatible 端点验证结构化输出，以及“模型调用本地工具 → 最终结构化输出”的 agent loop；实际 trace 为 1 次 `health_check` 且记录 token usage。Anthropic 真实端点仍需在具备 Anthropic 凭据的部署环境执行同一 smoke。
 
 ## 10. 明确不做
 
-- Phase 1 不动 core、8 个调用点和四端装配；全阶段不动 `LLMManager` fallback 协议与 `FakeLLMAdapter`。Phase 2 只允许新增 SDK 无关的 agent runtime 投影与装配，不改变既有 LLM 接口。
-- 不使用框架 hooks（`useChat` / `useCompletion` / `useObject`）、`HarnessAgent`、`@ai-sdk/tui`，不引入任何前端框架；UI message stream **协议层**（`createUIMessageStreamResponse` / `toUIMessageStream` / `UIMessage` / `DefaultChatTransport`，均在 `ai` 核心包内，零新增依赖）在 Phase 3 采用，见 §4.7。
+- Phase 1 不动 core、8 个调用点和三端装配；全阶段不动 `LLMManager` fallback 协议与 `FakeLLMAdapter`。Phase 2 只允许新增 SDK 无关的 agent runtime 投影与装配，不改变既有 LLM 接口。
+- 不使用框架 hooks（`useChat` / `useCompletion` / `useObject`）、`HarnessAgent` 或任何前端框架；UI message stream **协议层**（`createUIMessageStreamResponse` / `toUIMessageStream` / `UIMessage` / `DefaultChatTransport`，均在 `ai` 核心包内，零新增依赖）在 Phase 3 采用，见 §4.7。
 - 不引入 `zod` 之外的 AI SDK 配套包（`@ai-sdk/react`、`@ai-sdk/rsc` 等）。
 - 不在 MCP 暴露 `agent_run` 之外的 agent 能力；`trade` 永不进 agent 工具表。
 

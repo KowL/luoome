@@ -66,8 +66,7 @@ luoome/
 │   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
 │   ├── workflows/     内置编排：12 个注册入口 + defineOperation 复用管线
 │   ├── mcp/           MCP stdio server（env 控制暴露面）
-│   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
-│   └── tui/           opentui 应用
+│   └── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 ├── apps/
 │   └── web/           Hono + 原生 HTML/JS 仪表盘（6 路由 + 设计系统）
 ├── docs/              项目文档（入口见 docs/README.md）
@@ -93,7 +92,7 @@ luoome/
 **包之间的依赖方向（硬约束，禁止反向）**
 
 ```txt
-cli / tui / mcp / web ──► tools ──► core
+cli / mcp / web ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -101,7 +100,7 @@ workflows ──► tools ──► core
 
 - `core` **绝对不能** import 任何其它包（保证纯领域类型）
 - `db` / `adapters` 可以依赖 `core`，不能依赖 `tools` / `workflows` / `cli` 等上层
-- `tools` 是所有 surface（CLI / TUI / MCP / Web）的唯一上游依赖
+- `tools` 是所有 surface（CLI / MCP / Web）的唯一上游依赖
 - 跨包合约变更先开 issue 讨论，不要悄悄改
 
 ## 日常命令
@@ -117,11 +116,9 @@ workflows ──► tools ──► core
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
-| `bun packages/tui/src/smoke.ts` | TUI headless smoke |
 | `bash bin/luoome --help` | CLI 帮助 |
 | `bash bin/luoome tools list --json` | 输出当前 registry tool 清单 |
 | `bash bin/luoome mcp serve` | 起 MCP stdio server |
-| `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
 | `bash bin/luoome workflow run strategy --input '{"job":"run"}'` | 跑已发布 Strategy |
 
@@ -219,18 +216,6 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 
 - `packages/db` 的 **合约测试**（contract-tests.ts）—— 对 `createDrizzleRepos(':memory:')` 跑一遍（内存库即 SQLite `:memory:`）
 
-TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
-
-1. 首屏布局（免责声明 / 持仓 / 建议 / 快捷键栏）
-2. `[d]` 详情弹层
-3. `[esc]` 关闭
-4. `[s]` 统计弹层
-5. `[t]` 战法扫描
-6. `[o]` outcome 复盘
-7. `[q]` 退出
-
-跑 smoke 需要 `bun`（依赖 `@opentui/core/testing`）。
-
 **写测试**
 
 - 命名 `<name>.test.ts`，放源文件旁
@@ -283,7 +268,7 @@ test(area): 测试
 perf(area): 性能
 ```
 
-`area` 通常是包名（`core / db / tools / adapters / workflows / mcp / cli / tui / web`）或主题（`v0.3 / repo / ci`）。
+`area` 通常是包名（`core / db / tools / adapters / workflows / mcp / cli / web`）或主题（`v0.3 / repo / ci`）。
 
 例子：
 
@@ -432,8 +417,8 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 **禁止反向依赖**：
 
 - `core` 不能 import 任何其它包
-- `db` / `adapters` 不能 import `tools` / `workflows` / `cli` / `tui` / `mcp` / `web`
-- `tools` 是上层（cli / tui / mcp / web / workflows）的唯一上游
+- `db` / `adapters` 不能 import `tools` / `workflows` / `cli` / `mcp` / `web`
+- `tools` 是上层（cli / mcp / web / workflows）的唯一上游
 - workflow 不能直接调 adapter / repo，必须通过 tool
 
 破例需在 PR 描述里显式说明 + reviewer 通过。CI 用 ESLint 风格 import 检查（v0.5 计划加）。
@@ -450,7 +435,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 | `tactic` | 加新战法 / 战法引擎改动 |
 | `adapter` | 加新数据源 |
 | `workflow` | 加新 workflow |
-| `tui` / `web` / `cli` / `mcp` | 表面层改动 |
+| `web` / `cli` / `mcp` | 表面层改动 |
 | `docs` | 文档 |
 | `good first issue` | 适合新手 |
 | `help wanted` | 求协助 |

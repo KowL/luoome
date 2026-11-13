@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { DailyBar, ToolContext } from '@luoome/core';
 
 export const mapWithConcurrency = async <T, R>(
@@ -56,19 +55,3 @@ export const fetchDailyBarsWithRetry = async (
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 };
-
-export const dailyBarContentHash = (
-  bar: Pick<DailyBar, 'open' | 'high' | 'low' | 'close' | 'volume' | 'source'>,
-): string =>
-  createHash('sha256')
-    .update(
-      JSON.stringify({
-        open: bar.open,
-        high: bar.high,
-        low: bar.low,
-        close: bar.close,
-        volume: bar.volume,
-        source: bar.source,
-      }),
-    )
-    .digest('hex');

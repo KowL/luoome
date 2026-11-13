@@ -38,8 +38,3 @@ export const dragonTigerFlowTool = defineTool({
     return r.data;
   },
 });
-
-// 注册：`toolRegistry` 与 `WorkflowToolMap` 都需要补这一行。
-export const _DragonTigerFlowWorkflowToolMapEntries = {
-  dragon_tiger_flow: dragonTigerFlowTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

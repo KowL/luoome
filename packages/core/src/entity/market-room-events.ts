@@ -31,12 +31,6 @@ export const MARKET_ROOM_EVENT_KINDS = ['diffusion', 'divergence', 'rotation'] a
 export const MarketRoomEventKindSchema = z.enum(MARKET_ROOM_EVENT_KINDS);
 export type MarketRoomEventKind = z.infer<typeof MarketRoomEventKindSchema>;
 
-export const MARKET_ROOM_EVENT_KIND_LABELS: Readonly<Record<MarketRoomEventKind, string>> = {
-  diffusion: '扩散',
-  divergence: '分化',
-  rotation: '换位',
-};
-
 /** 扫描最近样本数上限：只回看当日最近 N 个已发布批次，避免全交易日重算。 */
 export const MARKET_ROOM_EVENT_SCAN_SAMPLES = 24;
 /** 事件证据里列出的已知成分上限（按日涨幅降序）。 */

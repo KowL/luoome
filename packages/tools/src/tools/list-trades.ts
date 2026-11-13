@@ -106,14 +106,15 @@ export const listTradesTool = defineTool({
     const snapshotHash = createHash('sha256').update(JSON.stringify(filtered)).digest('hex');
     if (cursor !== null && snapshotHash !== cursor.snapshotHash)
       return errInvalidInput('成交事实已变化，请刷新选择器');
-    const visible =
-      cursor === null
-        ? filtered
-        : filtered.filter(
-            (trade) =>
-              trade.executedAt.toISOString() < cursor!.executedAt ||
-              (trade.executedAt.toISOString() === cursor!.executedAt && trade.id < cursor!.id),
-          );
+    let visible = filtered;
+    if (cursor !== null) {
+      const after = cursor;
+      visible = filtered.filter(
+        (trade) =>
+          trade.executedAt.toISOString() < after.executedAt ||
+          (trade.executedAt.toISOString() === after.executedAt && trade.id < after.id),
+      );
+    }
     const trades = visible.slice(0, input.limit);
     const last = trades.at(-1);
     const nextCursor =

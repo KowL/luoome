@@ -28,7 +28,7 @@
 ## 架构硬约束
 
 ```text
-cli / tui / mcp / web ──► tools ──► core
+cli / mcp / web ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core
@@ -36,7 +36,7 @@ workflows ──► tools ──► core
 
 - `packages/core` 是纯领域层，零 IO，不反向依赖其它包。
 - `db` 与 `adapters` 可依赖 `core`，不可依赖 `tools`、`workflows` 或 surface。
-- CLI、TUI、MCP、Web 统一通过 tools 使用业务能力，不复制领域逻辑。
+- CLI、MCP、Web 统一通过 tools 使用业务能力，不复制领域逻辑。
 - Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
 - Workflow 只通过 `ctx.tools.*` 编排能力，不直接绕过 tool 调 repository 或 adapter。

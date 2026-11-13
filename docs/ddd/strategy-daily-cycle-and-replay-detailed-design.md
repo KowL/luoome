@@ -89,7 +89,7 @@ adapter、leverage、locality。
 ### 3.2 分层保持不变
 
 ```text
-cli / tui / mcp / web ──► tools ──► core
+cli / mcp / web ──► tools ──► core
                           │
                           └─► { db, adapters } ──► core
 workflows ──► tools ──► core

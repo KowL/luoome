@@ -8,7 +8,7 @@
 
 ## 目标
 
-让用户在交易日的任一时刻通过 TUI / Web / CLI 看清 A 股今天的涨停梯队（最高多少板、龙头股是谁、每个层级有谁、它们的封板时间与涨停原因），同时让报告、StockGroup / WatchPlan、LLM 复盘链、未来的策略预警规则都能从同一个稳定 tool 读取结构化数据。
+让用户在交易日的任一时刻通过 Web / CLI 看清 A 股今天的涨停梯队（最高多少板、龙头股是谁、每个层级有谁、它们的封板时间与涨停原因），同时让报告、StockGroup / WatchPlan、LLM 复盘链、未来的策略预警规则都能从同一个稳定 tool 读取结构化数据。
 
 ## 已确认决策
 
@@ -21,7 +21,7 @@
 - **修正字段必须可追溯**：暴露修正后 `price`、原始 `rawClose`、`corrected` 三字段；不允许静默改写（PRD §5.6）。
 - **天梯不替其它模块承担职责**：StockGroup / WatchPlan、报告 LLM 输入、策略预警触发都各自有 tool，天梯只暴露只读快照，**不**为这些模块改变输出顺序或参与写入路径（PRD §4.6）。
 - **缓存策略分时段**：盘中 TTL 60s（与现有 quote 缓存一致）；收盘后 key 内嵌 `date`，只要还在同一日 + 同进程就持续命中，跨日自动失效；非交易日 / 盘前 `date ≠ today` 的请求同样长期命中（历史回看场景）。这避免了"缓存 1 小时还是 8 小时"的人为硬切（PRD §14 D3）。
-- **Web 不在 Phase 1**：避免 PRD §14 D4 的"两套数据来源并行"风险，先 TUI/CLI 单数据源跑稳。**Phase 2 起**：TUI/CLI 跑稳后接入 Web `apps/web/public/index.html + js/limit-up-ladder.js`，由 web 调 `/api/market/limit-up` 走同一 manager。
+- **Web 不在 Phase 1**：避免 PRD §14 D4 的"两套数据来源并行"风险，先 CLI 单数据源跑稳。**Phase 2 起**：CLI 跑稳后接入 Web `apps/web/public/index.html + js/limit-up-ladder.js`，由 web 调 `/api/market/limit-up` 走同一 manager。
 
 Phase 3 现已补齐统一事实投影：`market_outlook` 保存结构化天梯摘要，个股行情与研究视图返回可用历史和明确 unavailable 状态，行情 marker 与研究时间线复用同一日期/股票事实；报告链继续通过 `daily-review` 的 `limit_up_ladder_compare` 消费快照。历史不可获得时不回退成伪造的空记录。
 
@@ -41,9 +41,9 @@ anchor 是上海当天时允许当天读取实时 manager。输出显式携带 `
   `LimitUpLadderSnapshotRepository` 已提供 Drizzle/in-memory 双实现与契约测试。
 - `EastmoneyLimitUpLadderAdapter` 直连东方财富公开涨停池，`LimitUpLadderManager` 负责来源、超时、缓存、
   日期和错误语义；不接 hidden fallback 或 mock provider。
-- `limit_up_ladder` / `limit_up_ladder_compare` 已注册为只读 tool，并由 CLI、TUI、Web、报告 workflow
+- `limit_up_ladder` / `limit_up_ladder_compare` 已注册为只读 tool，并由 CLI、Web、报告 workflow
   统一调用；市场行情 manager 不承载天梯业务，两个能力保持语义隔离。
-- Web `/market/limit-up`、CLI `market limit-up`、TUI `L` 子视图以及个股行情/研究事实投影已接入；
+- Web `/market/limit-up`、CLI `market limit-up` 以及个股行情/研究事实投影已接入；
   `daily-review` / `opening-report` / `market_outlook` 消费同一结构化快照。
 - 天梯不可用时返回 `adapter_error`，非交易日和字段缺失通过空 levels/warnings 表达；不把失败伪造成昨天数据、
   空成功或交易建议。
@@ -441,13 +441,7 @@ interface AdapterRegistry {
 
 > **ruo 旧实现警告**：ruo 旧 adapter 直接 fetch 私有行情服务后做 TOP10 排序，并在 `watchlist.refreshTop10` 中混用「页面排序 / 决策排序」同一份数据 — 是 PRD §2.2 错误隔离的反模式。luoome 把这两类用途（页面展示 vs 算法输入）解耦到不同 tool，且 TOP10 排序本身被分到 watch plans / stock groups 的语义 — **不应再有任何模块绕过 `ctx.tools.limit_up_ladder` 直接读天梯上游数据（现为东方财富涨停池）**。
 
-### 10. TUI 接入（Phase 1，已实施；README §7.2）
-
-- 在 opentui 现有"市场"面板增加快捷键 `L` → 进入"涨停梯队"子视图。
-- 子视图组件 layout：与 Web 同构（§11），但每层只显示前 3 只，超出显示 `<N> 只未显示，Enter 展开`。
-- 数据来源：进入子视图时调 `limit_up_ladder` tool（Phase 1 直接 ctx，过渡期可走 mcp 转发）；按 `r` 键重跑。
-
-### 11. Web 接入（Phase 2，已实施；本节为布局参考）
+### 10. Web 接入（Phase 2，已实施；本节为布局参考）
 
 PRD §7.1 已经给出页面骨架，本文不再重复 ASCII 简图；Phase 2 实现时：
 
@@ -457,7 +451,7 @@ PRD §7.1 已经给出页面骨架，本文不再重复 ASCII 简图；Phase 2 �
 - 文案：`levels` 为空 + `warnings.includes('non-trading-day')` → "该日为非 A 股交易日"；`warnings.includes('empty-ladder')` → "今日数据暂未更新，最新可看日期为 <最新交易日>"；`warnings.includes('upstream-unavailable')`（manager 抛错转换） → "行情服务暂不可用，请稍后重试"。
 - corrected 角标：表格现价列右侧加灰色小角标"已修正"，hover 提示"`rawClose=<N>，按 8.58% 回推`"。
 
-### 12. CLI 接入（Phase 1，已实施；`packages/cli/src/market-limit-up.ts`）
+### 11. CLI 接入（Phase 1，已实施；`packages/cli/src/market-limit-up.ts`）
 
 ```text
 luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
@@ -465,11 +459,11 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
                        [--include-uncategorized] [--json]
 ```
 
-- 默认 `date` = Asia/Shanghai 今天；与 PRD §7.3 一致。
+- 默认 `date` = Asia/Shanghai 今天；与 PRD §7.2 一致。
 - `--json` 输出 tool schema 一致的 JSON；非 `--json` 走 ruo 兼容的终端表格（`market.ts:111-148` 风格但去除服务端日期兜底）。
 - 在 `packages/cli/src/index.ts` 注册 `market` 子命令并复用 `market-overview` 共享的 `parseTradingDate` helper（arch 现有 utility）。
 
-### 13. 与现有页面 / 工具的连接点
+### 12. 与现有页面 / 工具的连接点
 
 - **个股详情（v0.8 已有 `/stocks/:id`）**：事件区已接入近 30 个交易日涨停事实；历史不可获得时保持 unavailable。
 - **分组详情（动态分组如"涨停"）**：已接入同一 limit-up facts 投影；缺失时不伪造最高 level。
@@ -478,9 +472,9 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
   快照；历史 replay 从 `LimitUpLadderSnapshotRepository` 读取对应 PIT 天梯，缺失时保持 unknown。
   本文档不再单独跟踪旧 TOP10 刷新链。
 
-### 14. 调试与观测
+### 13. 调试与观测
 
-- **诊断命令**：`luoome market limit-up --json --date <YYYY-MM-DD>` 直接看 tool 返回；与 web 端响应字段一致便于核对 PRD §11.3 验收。
+- **诊断命令**：`luoome market limit-up --json --date <YYYY-MM-DD>` 直接看 tool 返回；与 web 端响应字段一致便于核对 PRD §11 验收。
 - **日志**：manager 层 `logger.warn` 记录 (a) 主源失败/重试；(b) rawClose 修正条目比例；(c) 节假日历判定结果；(d) cache hit/miss。
 - **埋点**（自建轻量计数，schema 思路与行情源观测一致）：
   - 缓存命中率（cache hit / 总请求）
@@ -505,20 +499,16 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
    - `packages/tools/src/registry.ts` 注册
    - `WorkflowToolMap` 补 2 行
    - 单元测试 `limit-up-ladder.test.ts`：mock manager，验证入参校验、错误映射、空 ladder 行为
-5. **TUI 子视图**
-   - 新增 `packages/tui/src/views/limit-up-ladder.ts`，主面板 `L` 快捷键绑定
-   - 写最小可视化 + `r` 键刷新
-   - 验证：起 TUI 跑 mock manager（`bun --filter '@luoome/tui'`)
-6. **CLI 命令**
+5. **CLI 命令**
    - `packages/cli/src/market-limit-up.ts` + `index.ts` 注册
    - 单元测试覆盖 `--date`、`--source`、`--json`、`非交易日空态`
    - smoke：`luoome market limit-up --date 2026-07-20 --json` 输出与 tool 完全一致
-7. **文档同步**
+6. **文档同步**
    - `ARCHITECTURE.md` §5.1 数据模型补充 `LimitUpLadder` / `LimitUpLadderEntry` 实体说明
    - `ARCHITECTURE.md` §8.1 列 Phase 1 不引入新 workflow，Phase 2 起 `daily-review` 改造
    - `docs/README.md` 在 DDD 表增加一行
    - `skills/luoome/references/tools.md` 补充 `limit_up_ladder` 与 `limit_up_ladder_compare` 在"市场数据"桶下
-8. **全量验证**
+7. **全量验证**
    - `bun run test` —— 包含新 vitest 文件
    - `bun run test:db` —— 不涉及新表，跳过也行；CI 跑一遍确认
    - `bun run test:web` —— Phase 1 无 Web 改动；Phase 2 起 加 `apps/web/src/server.test.ts` 的 limit-up 路由用例
@@ -532,7 +522,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
 > 3. **TOP10 / StockGroup 接入** —— Phase 2 调研发现 ruo 旧 `watchlist refreshTop10` 在 luoome v0.6+ 已被解构为 `StockGroup` + `WatchPlan` + `StockPool` 三层抽象（无对应单一排序函数）。ladder `code → level` 可作 formula / tactic resolver 输入信号，列入 Phase 3 与策略预警联动一并实现；本文档**不再跟踪 P2-E 单独工单**。
 > 4. **数据源迁移（私有行情服务 → eastmoney 涨停池）** —— 主源切换后：factory 不再读任何环境变量、不再有软失败 manager，始终装配真实 manager；enricher（`eastmoney-pool.ts`）删除；CLI / Web 的 `source` 只接受 `eastmoney`；上游不可达时 tool 返回 `adapter_error`，诊断文案改为检查到东方财富行情服务的网络连通性。
 
-### 14.4 2026-11 页面改版：涨停市场看板（同花顺）
+### 13.4 2026-11 页面改版：涨停市场看板（同花顺）
 
 Web `/market/limit-up` 不再渲染上面的单日表格，改为「涨停市场看板」：一次 `limit_up_market` tool 调用拿到
 
@@ -544,7 +534,7 @@ Web `/market/limit-up` 不再渲染上面的单日表格，改为「涨停市场
 `packages/adapters/src/fuyao/limit-up-market.ts`（三端点聚合）与 `limit-up-market/` manager/factory
 （单源 fuyao、`LUOOME_LIMIT_UP_MARKET_SOURCES`、60s 缓存、单维失败降级为 `null` + warning）。
 本文件的 eastmoney 天梯（`limit_up_ladder` / `limit_up_ladder_compare`、`/api/market/limit-up`）继续为
-TUI / CLI / 市场页「涨停天梯事实」块服务，两条数据链路互不替代：东财给「逐股单日天梯」，同花顺给
+CLI / 市场页「涨停天梯事实」块服务，两条数据链路互不替代：东财给「逐股单日天梯」，同花顺给
 「涨停池 + 统计 + 30 日矩阵」。
 
 ## 测试矩阵
@@ -556,7 +546,7 @@ TUI / CLI / 市场页「涨停天梯事实」块服务，两条数据链路互�
 | 单元（adapters/manager） | manager 空 ladder 不回退；修正规则 4 个分支；TTL 三段（盘中 60s、收盘后 Infinity、跨日 Infinity）；主源失败抛 adapter_error（无 fallback） |
 | 单元（tools） | 入参 schema 校验；error kind 映射；空 ladder 返回与 tool 协议一致；`WorkflowToolMap` 类型映射在 typecheck 通过 |
 | 单元（CLI） | `--date` 缺省、显式；`--json` schema 严格对齐；`--source` 非 eastmoney 报错 |
-| 集成（仓内） | CLI → tool → manager → eastmoney adapter 端到端 mock；TUI 组件加载不报错（`bun --filter '@luoome/tui'` 起 tsx 渲染单测） |
+| 集成（仓内） | CLI → tool → manager → eastmoney adapter 端到端 mock |
 | 集成（外部） | 到东方财富行情服务连通时跑 `luoome market limit-up --date <最近 A 股交易日>` 与 `curl 'https://push2ex.eastmoney.com/getTopicZTPool?...'` 对照；不可达时 tool 返回 `adapter_error` |
 | 不变量回归 | ARCHITECTURE §5.3 advice 全部不变量不受影响（天梯不产出 Advice）；adapter 调用不抛 raw exception，全部经 ToolError |
 

@@ -112,7 +112,7 @@ Tool capability 是静态契约，不根据 `persist` input 动态改变。通�
 - registry 暴露 `requiredCapabilities`；
 - Web 专用 route 和通用 Tool route 都检查所有 required capabilities；
 - MCP exposure 使用相同的 every-capability 语义；
-- CLI/TUI 在执行 mutation 前沿用确认和审计；
+- CLI 在执行 mutation 前沿用确认和审计；
 - advice/trade 硬隔离不变，trade 仍不进入 MCP。
 
 ## 6. Scoring Breakdown 领域契约

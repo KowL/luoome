@@ -65,7 +65,7 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 ### 2.4 Workflow ≠ Tool
 
 - **Tool**：原子能力，无编排。可独立测试，可独立暴露给上层 agent。
-- **Workflow**：组合多个 tool + 可选 LLM 推理。有顺序、有循环、有条件分支。Workflow **不作为 tool 暴露**给上层 agent（避免循环编排），但可被人手动触发（CLI/TUI/Web）。
+- **Workflow**：组合多个 tool + 可选 LLM 推理。有顺序、有循环、有条件分支。Workflow **不作为 tool 暴露**给上层 agent（避免循环编排），但可被人手动触发（CLI/Web）。
 
 例如：
 - `compute_pnl`（tool）= 纯计算
@@ -112,8 +112,7 @@ luoome/
 │   ├── adapters/       行情 / LLM / 通知 / 券商 适配
 │   ├── workflows/      内置编排：review / scan / diagnose / advise
 │   ├── mcp/            MCP server
-│   ├── cli/            命令行入口
-│   └── tui/            opentui 应用
+│   └── cli/            命令行入口
 └── apps/
     └── web/            Web 端（v0.4 起）
 ```
@@ -122,7 +121,6 @@ luoome/
 
 ```txt
 cli ──┐
-tui ──┤
 mcp ──┼──► tools ──► core
 web ──┤        │
       │        ├──► db ──► core
@@ -132,7 +130,7 @@ web ──┤        │
       └──► workflows ──► tools ──► core
 ```
 
-**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
+**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / web 的存在；adapters 不知道 workflows 的存在。
 
 ### DSH Agent Runtime 边界
 
@@ -426,7 +424,7 @@ market 的 sentiment manager。
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
 composition root 将 adapter 的实际能力绑定到 Registry；tool、workflow 和 surface 不改。
 
-surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
+surface 装配（v0.5 起）：CLI/Web/MCP 三个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
@@ -462,7 +460,7 @@ Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优�
 使路由在当前 Web 进程立即生效。只改来源顺序时复用进程级共享 SourceSet，不产生第二个
 EastmoneySource 实例，无关 manager 的缓存不清空。
 
-LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/TUI/Web/MCP 四个
+LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/Web/MCP 三个
 composition root 均调用 `createAIStackFromEnv`，一次加载
 `$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），把 `generation` profile
 解析为 `LLMAdapterLike` 注入 `ctx.adapters.llm`。`agent` profile 仍是 Agent 模型的
@@ -949,7 +947,7 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ### 7.2 副作用分级（重申）
 
-| 等级 | tool 例 | MCP 默认 | Web 默认 | CLI/TUI 默认 |
+| 等级 | tool 例 | MCP 默认 | Web 默认 | CLI 默认 |
 |---|---|---|---|---|
 | `read` | `get_account_overview`, `list_watch_plans`, `get_advice` | ✅ | ✅ | ✅ |
 | `write` | `update_holding`, `save_trading_plan`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
@@ -1117,7 +1115,6 @@ luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**
 | 消费者 | 入口 | 暴露范围 |
 |---|---|---|
 | CLI | `bin/luoome <cmd>` | 全量 |
-| TUI | opentui app | 全量（含交互） |
 | Web | Bun.serve HTTP | 全量（除 trade，需 2FA） |
 | MCP | stdio server | 白名单（read + advice 默认） |
 
@@ -1148,25 +1145,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 [Claude Desktop LLM]  整合生成自然语言答复（含免责声明）
 ```
 
-### 场景 B：TUI 看今日建议
-
-```txt
-[TUI 启动]
-   │
-   ▼
-[opentui] ───► ctx.workflows.daily_advice.execute({ accountId })
-                  │
-                  ├──► list_holdings
-                  ├──► batch_quote
-                  ├──► run_strategy (持仓范围)
-                  └──► analyze_stock ×N (并发)
-                  │
-                  ▼
-              [opentui 渲染建议面板：标的 / 决策 / 信心度 / 理由摘要]
-              [按 r 键：手动刷新重跑 workflow]
-```
-
-### 场景 C：cron 推送每日建议
+### 场景 B：cron 推送每日建议
 
 ```txt
 [launchd / cron] 每天 8:30
@@ -1207,7 +1186,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 1. 在 `tools/<name>.ts` 用 `defineTool` 定义
 2. 注册到 `toolRegistry`
 3. 加单元测试 + 集成测试
-4. 自动获得 MCP / OpenAI / OpenAPI / TUI / CLI / Web 暴露
+4. 自动获得 MCP / OpenAI / OpenAPI / CLI / Web 暴露
 
 ### 13.2 加新 advice workflow
 
@@ -1230,7 +1209,6 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 - ✅ Bun + TypeScript
 - ✅ SQLite + Drizzle
-- ✅ opentui
 - ✅ Zod 4.x
 - ✅ MCP stdio 主 + HTTP 后置
 - ✅ Monorepo from day 1

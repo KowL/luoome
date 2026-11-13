@@ -38,9 +38,3 @@ export const dragonTigerListTool = defineTool({
     return r.data;
   },
 });
-
-// 注册：`toolRegistry` 与 `WorkflowToolMap` 都需要补这一行。
-// （命名加前缀避免与 limit-up-ladder.ts 的同名标记在桶导出时冲突。）
-export const _DragonTigerWorkflowToolMapEntries = {
-  dragon_tiger_list: dragonTigerListTool,
-} as const satisfies Record<string, ReturnType<typeof defineTool>>;

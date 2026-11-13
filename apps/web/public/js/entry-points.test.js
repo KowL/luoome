@@ -499,9 +499,7 @@ describe('建议页删除', () => {
     expect(pages).toContain('toggleAdviceDeleteMode');
     expect(pages).toContain("$('#advice-batch-bar')");
     expect(pages).toContain('confirmDelete.disabled = selectedAdviceIds.size === 0');
-    expect(pages).toContain(
-      "import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js'",
-    );
+    expect(pages).toContain("import { alertDialog, confirmDialog, openModal } from './modal.js'");
     expect(pages).toContain("callApi('/api/advice/delete'");
   });
 

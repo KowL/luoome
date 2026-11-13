@@ -224,11 +224,6 @@ export const RawDailyBarSchema = z.object({
 });
 export type RawDailyBar = z.infer<typeof RawDailyBarSchema>;
 
-export const DateRangeSchema = z.object({
-  start: z.coerce.date(),
-  end: z.coerce.date(),
-});
-
 export const IntradayMinuteSchema = z.object({
   stockId: z.string().min(1),
   time: z.coerce.date(),

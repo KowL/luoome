@@ -287,7 +287,7 @@ StockPool   → AlertPlan
 
 ### 9.5 验收
 
-- 四个 surface 使用同一 tool contract。
+- 三个 surface 使用同一 tool contract。
 - UI 不出现三套平行概念。
 - 所有写操作确认和权限边界正确。
 - Web 自动测试与真实浏览器验收通过。

@@ -1,4 +1,4 @@
-import { StrategyDslV1Schema, StrategySchema, StrategyVersionSchema } from '@luoome/core';
+import { StrategyDslV1Schema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -139,8 +139,3 @@ export const saveStrategyVersionTool = defineTool({
     return { action: input.action, ...result.data };
   },
 });
-
-export const SaveStrategyVersionSchemas = {
-  Strategy: StrategySchema,
-  StrategyVersion: StrategyVersionSchema,
-};

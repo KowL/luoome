@@ -10,7 +10,7 @@
 
 2. ~~**apps/web 零测试 + 依赖声明缺失**~~ ✅ 已修（v0.8：`package.json` 补声明 `@luoome/adapters` / `@luoome/db`；新增 `server.test.ts` 闸口矩阵 9 例，`bun run test:web` 执行并纳入 `test:all`）
 
-3. ~~**MCP 与 CLI 时钟口径分叉**~~ ✅ 已修：`packages/mcp/src/context.ts` 与 CLI / TUI / Web 一样使用真实系统时钟；测试与运行时不再固定 2026-07-17 锚点。
+3. ~~**MCP 与 CLI 时钟口径分叉**~~ ✅ 已修：`packages/mcp/src/context.ts` 与 CLI / Web 一样使用真实系统时钟；测试与运行时不再固定 2026-07-17 锚点。
 
 4. ~~**tools 包桶导出漏 4 个 write tool**~~ ✅ 已修：`packages/tools/src/index.ts` 已导出
    `add-holding` / `add-trade` / `close-holding` / `update-holding`，包描述也改为运行时 registry/discovery 口径。
@@ -36,11 +36,10 @@
 ## P3 — 代码气味（不阻塞）
 
 10. `intraday-watch`：~~trigger id 用 `Math.random()`（不可复现）~~ ✅ 已改用 `crypto.randomUUID()`；~~昨收加载失败静默吞错~~ ✅ 保留可定位 warning；~~evidence 缺 prevClose 来源标注~~ ✅ `price-change` evidence 明确记录 `prevCloseSource=bar`。
-11. TUI `app.ts` 1007 行单文件；RESIZE handler 里 `overlay.height` 连续赋值两次（第一行死代码）；`CalibrationView` 类型定义在文件末尾却在中间使用。
-12. core：~~`V0_2_SUPPORTED_MARKETS` 命名陈旧~~ ✅ 已统一为当前语义的 `SUPPORTED_MARKETS`；~~`assertExpressionSafety` 抛普通 Error~~ ✅ 已修为可识别的 `DslEvalError`，并补回归测试。
-13. adapters：~~`package.json` 声明 `drizzle-orm` 依赖但 src 未使用~~ ✅ 已移除直接依赖；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；~~`workflows/package.json` description 仍写「v0.1 仅骨架」~~ ✅ 已更新为当前 workflow 范围。
-14. ~~`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型~~ ✅ 已统一直接使用 `WorkflowContext`。
-15. ~~**workflow 26→12 合并未完成**~~ ✅ 已收敛到 12 个注册入口（2026-11-13）：
+11. core：~~`V0_2_SUPPORTED_MARKETS` 命名陈旧~~ ✅ 已统一为当前语义的 `SUPPORTED_MARKETS`；~~`assertExpressionSafety` 抛普通 Error~~ ✅ 已修为可识别的 `DslEvalError`，并补回归测试。
+12. adapters：~~`package.json` 声明 `drizzle-orm` 依赖但 src 未使用~~ ✅ 已移除直接依赖；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；~~`workflows/package.json` description 仍写「v0.1 仅骨架」~~ ✅ 已更新为当前 workflow 范围。
+13. ~~`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型~~ ✅ 已统一直接使用 `WorkflowContext`。
+14. ~~**workflow 26→12 合并未完成**~~ ✅ 已收敛到 12 个注册入口（2026-11-13）：
    `report`、`strategy`、`sync-market` 三个多模式入口 + 9 个专用入口；其余管线改为
    `defineOperation`，由 `architecture.test.ts` 守住数量与审计名。
 16. ~~**`signal_observations` 归属未拍板**~~ ✅ 已拍板（2026-11-13）：保留独立表 + 自然键

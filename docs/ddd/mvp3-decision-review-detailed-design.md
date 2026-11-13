@@ -471,7 +471,7 @@ POST 复用 write capability + Origin/Fetch Metadata 校验；无 write 时 GET 
 统计契约显式升级：get_advice_stats / get_confidence_calibration 增加 accountId 和输出
 `schemaVersion=2`；比率与均值允许 null，并返回各自 denominator 与 unavailableReason。
 历史 pnlWhenFollowed/pnlWhenIgnored 跨记录累计字段在 V2 为 null，注明“不提供单条建议收益合计”，
-不把不同依据的填报简单相加。旧数字非空假设的 Web/TUI/CLI 消费者与 Zod schema 同批更新，
+不把不同依据的填报简单相加。旧数字非空假设的 Web/CLI 消费者与 Zod schema 同批更新，
 外部调用方通过 discovery 获取新 schema；不保留回退全局 outcome 的 V1 统计路径。
 若保留 hitRate 字段，其 V2 定义统一为“明确 followed 且填有 pnl 的样本中 pnl > 0 的比例”，
 桶内和整体使用同一分母，不以 confidence 阈值混入分子；页面称“填报盈利占比”，不是预测胜率。
@@ -594,7 +594,7 @@ links 可由已验证 revision 重建，但不能以重建为由丢掉历史或�
 | Strategy 运行闭环/洞察中读取 Advice.outcome 或 Trade.adviceId 的路径 | 使用当前明确关联；登记时原字段作为历史来源展示，不恢复已解除关联 |
 | daily-review / weekly-report / closing-report | 按账户调用新版读模型；报告存水位，私人明细不进入全账户通知 |
 | Web `/api/review`、trend、calibration、outcome、通用 Tool endpoint | 同一账户口径；业务统计移入 Tool，统一权限与 Origin |
-| CLI advice outcome / TUI outcome 与 stats / Agent 确认 | 账户、状态枚举、幂等请求、修订冲突说明 |
+| CLI advice outcome / stats / Agent 确认 | 账户、状态枚举、幂等请求、修订冲突说明 |
 | data-transfer / delete-advice / 删除账户相关路径 | 快照和历史不被级联误删；账户删除按既有显式流程处理其私人记录与回执，不留跨账户引用 |
 
 触发的运行态读取仍由 WatchTriggerRepository 负责；新增账户反馈筛选应在仓储查询中按当前 review
@@ -631,7 +631,7 @@ links 可由已验证 revision 重建，但不能以重建为由丢掉历史或�
 | D0：账户记录与来源 | 新模型/双仓储/迁移，旧全局反馈不进入个人统计 | core entity/repository/invariants；db schema/client 与双实现；相邻 contract tests |
 | D1：已有成交关联 | 一条来源 → 选择 Trade → 原子保存 → 回看修订，账本无变化 | tools 新 context/save/list/receipt；list-trades 分页；Web 共享详情组件与 review |
 | D2：新成交完整切片 | 登记未入账成交、明确来源、重试只扣一次现金 | core 纯持仓计算；ledger 双实现；record-decision-trade；holdings-actions |
-| D3：聚合与全部消费者 | 账户事实不串用，严格观察来源与覆盖分母一致 | get-advice/统计/校准/decision-loop；Strategy 相关消费；CLI/TUI/Agent；data-transfer |
+| D3：聚合与全部消费者 | 账户事实不串用，严格观察来源与覆盖分母一致 | get-advice/统计/校准/decision-loop；Strategy 相关消费；CLI/Agent；data-transfer |
 | D4：报告与端到端 | closing/weekly 不可变补充、无额外通知、完整浏览器验收 | Report schema/repo、report-runner、closing/weekly、投递/截止恢复、Web 报告导航 |
 
 D0～D3 的账户语义改造须成组发布，不能只开放新表单而让旧统计继续读取全局 outcome。

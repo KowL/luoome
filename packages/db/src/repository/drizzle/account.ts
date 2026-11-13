@@ -63,7 +63,7 @@ export class DrizzleAccountRepository implements AccountRepository {
     // v0.8 起：repo 边界做 AccountSchema.safeParse 校验（防御性）。
     // 历史教训：v0.5 → MVP 升级时 ensureSchema 没做 accounts 数据迁移，
     // 残留的 kind='mock' 行让 list_accounts output zod 校验失败 → defineTool
-    // 返回 internal → Web alert "激活失败"、TUI 静默死。把校验下沉到 repo 后，
+    // 返回 internal → Web alert "激活失败"、其它入口静默失败。把校验下沉到 repo 后，
     // 单条不合法行被跳过 + warn，不牵连全表 read（即便将来又收紧 schema 也不会
     // 再发生一炸全炸的事故）。strict invariants（assertAccountInvariants）
     // 是写路径，read 路径走 schema parse + warn 跳过。
