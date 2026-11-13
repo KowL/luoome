@@ -16,6 +16,7 @@ import {
   eventsMetaText,
   eventsParamsFromHash,
   eventsQuery,
+  recordedAfterReplay,
   renderEventsPane,
   rotationLeadLines,
   sortEventsDesc,
@@ -490,6 +491,33 @@ describe('回放（ticket #43）', () => {
     expect(hash).toContain('event=e1');
     expect(hash).toContain('at=2026-09-28T02%3A15%3A00.000Z');
     expect(eventsParamsFromHash(`#${hash}`)).toEqual({ eventId: 'e1', at });
+  });
+
+  it('选中事件用 includeEventId 钉住，其它事件仍按 knownAt 截断', () => {
+    const pinned = eventsQuery({
+      at,
+      eventId: '2026-09-28|rotation|sector-b|2026-09-28T06:15:00.000Z',
+    });
+    expect(pinned).toContain('knownAt=2026-09-28T02%3A15%3A00.000Z');
+    expect(pinned).toContain('includeEventId=');
+    expect(pinned).toContain(
+      encodeURIComponent('2026-09-28|rotation|sector-b|2026-09-28T06:15:00.000Z'),
+    );
+    // 最新模式不带任何时点 / 钉住参数。
+    expect(eventsQuery({ eventId: 'e1' })).toBe('');
+    expect(eventsQuery({ at, eventId: null })).toBe('?knownAt=2026-09-28T02%3A15%3A00.000Z');
+  });
+
+  it('晚于回放时点才记录的事件标注为「按选中保留」，不冒充当时已知', () => {
+    const late = { recordedAt: '2026-09-28T10:30:00+08:00' };
+    expect(recordedAfterReplay(late, at)).toBe(true);
+    expect(recordedAfterReplay(late, new Date('2026-09-28T10:30:00+08:00'))).toBe(false);
+    expect(recordedAfterReplay(late, null)).toBe(false);
+    expect(recordedAfterReplay({ recordedAt: null }, at)).toBe(false);
+    const source = read('./market-room-events.js');
+    expect(source).toContain('includeEventId');
+    expect(source).toContain('晚于时点记录');
+    expect(source).toContain('按选中事件保留');
   });
 
   it('点事件把 at 设为该事件的检测时点，让四个视图跟随', () => {

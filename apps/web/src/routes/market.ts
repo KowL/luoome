@@ -366,6 +366,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    *   date (可选) 交易日 YYYY-MM-DD；缺省取已知时点 / 最近事件的交易日
    *   from / to (可选) 检测时点 ISO 范围（含端点）
    *   knownAt (可选) 已知时点 ISO；回放只返回该时点之前已记录的事件
+   *   includeEventId (可选) 回放里选中的事件 id；只额外放行这一条（检测时点不得晚于 knownAt）
    *   kind (可选) diffusion | divergence | rotation
    *   sectorId (可选) 板块内部标识
    *
@@ -373,7 +374,15 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    */
   app.get('/api/market/room/events', async (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['date', 'from', 'to', 'knownAt', 'kind', 'sectorId'] as const) {
+    for (const key of [
+      'date',
+      'from',
+      'to',
+      'knownAt',
+      'includeEventId',
+      'kind',
+      'sectorId',
+    ] as const) {
       const value = c.req.query(key);
       if (value !== undefined && value.trim() !== '') input[key] = value;
     }

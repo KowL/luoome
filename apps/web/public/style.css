@@ -11179,6 +11179,16 @@ body > .modal {
   font-weight: var(--weight-semibold);
 }
 
+/* 回放中选中的事件可能晚于已知时点才记录：单独标注，不冒充当时已知。 */
+.room-event-pin {
+  padding: 1px 6px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .room-event-summary {
   flex: 1 1 260px;
   color: var(--muted);
