@@ -11218,3 +11218,184 @@ body > .modal {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- 移动端看盘路径（ticket #44）：返回入口、触控目标与窄屏表格 ---- */
+
+.market-return {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.market-return-link {
+  max-width: 100%;
+  min-height: 44px;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  /* 主要交互控件的触控高度不低于 44px（板块行 / 成分链接单独处理）。 */
+  .room-tabs .btn,
+  .room-kind-switch .btn,
+  .room-replay .btn,
+  .room-sector-detail .btn,
+  .room-detail-compare .btn,
+  .room-core-stocks .btn,
+  .room-event-row {
+    min-height: 44px;
+  }
+
+  .room-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .room-tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .room-tabs .btn {
+    flex: 0 0 auto;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .room-kind-switch {
+    width: 100%;
+  }
+
+  .room-kind-switch .btn {
+    flex: 1 1 0;
+  }
+
+  .room-replay {
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .room-replay-text {
+    flex: 1 1 auto;
+  }
+
+  .room-replay-sep {
+    display: none;
+  }
+
+  /* 窄屏表格横向滚动；板块名 / 成分列吸左，滚动时关键列不被遮住。 */
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  /* 吸左列贴着卡片内容边缘，滚动时不会在左侧漏出被盖住的数值。 */
+  .room-sectors .table-wrap,
+  .room-detail-members .table-wrap {
+    margin: 0;
+    padding: 0;
+  }
+
+  .room-sector-table {
+    min-width: 640px;
+  }
+
+  .room-detail-member-table {
+    min-width: 600px;
+  }
+
+  .room-sector-table th:nth-child(2),
+  .room-sector-table td:nth-child(2),
+  .room-detail-member-table th:nth-child(1),
+  .room-detail-member-table td:nth-child(1) {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--panel-solid);
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  .room-sector-table thead th:nth-child(2),
+  .room-detail-member-table thead th:nth-child(1) {
+    z-index: 3;
+  }
+
+  .room-sector-row {
+    height: 44px;
+  }
+
+  .room-sector-table .room-sector-name {
+    white-space: nowrap;
+  }
+
+  .room-sector-table th.sortable {
+    height: 44px;
+  }
+
+  .room-detail-notes summary {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .room-detail-member-table tbody tr {
+    height: 44px;
+  }
+
+  .room-member-link,
+  .room-role-holder-link,
+  .room-lookup-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  /* 核心股证据 / 事件证据在小屏保持可读字号与行距，长文本换行不截断。 */
+  .room-role-evidence {
+    font-size: var(--text-sm);
+    line-height: 1.65;
+  }
+
+  .room-fact .value {
+    overflow-wrap: anywhere;
+  }
+
+  .room-event-summary {
+    flex-basis: 100%;
+  }
+}
+
+.room-sector-detail-slot,
+.room-sector-detail,
+.room-event-item,
+.room-sector-row {
+  scroll-margin-top: calc(var(--topbar-h, 56px) + 12px);
+}
+
+@media (max-width: 480px) {
+  .room-tabs {
+    width: 100%;
+  }
+
+  .room-sector-detail > td {
+    padding: var(--space-3);
+  }
+
+  .room-detail-method,
+  .room-detail-breadth,
+  .room-detail-compare {
+    padding: var(--space-2);
+  }
+
+  .room-event-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .room-detail-legend-item {
+    width: 100%;
+  }
+}

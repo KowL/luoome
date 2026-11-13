@@ -20,6 +20,7 @@ import {
   renderQuoteHeader,
   resetQuoteHeader,
 } from './market-quote.js';
+import { appendReturnTo, returnLabel, returnToFromHash } from './market-room-return.js';
 import { renderMarketSentiment } from './market-sentiment.js';
 import {
   buildMarketHash,
@@ -81,6 +82,8 @@ const state = {
   range: '3m',
   date: null,
   granularity: 'day',
+  /** 从作战室进来时的现场 hash；切换周期 / 粒度继续携带，浏览器后退也能回到原时点。 */
+  returnTo: null,
   tracker: createRequestTracker(),
   data: null,
   chart: null,
@@ -147,6 +150,7 @@ const teardownMarket = () => {
   state.data = null;
   state.date = null;
   state.granularity = 'day';
+  state.returnTo = null;
   state.chartTab = 'kline';
   state.minuteInterval = '1m';
   state.minuteData = null;
@@ -227,7 +231,10 @@ const bindRangeSwitch = () => {
     if (target === null || state.stockId === null) return;
     const range = normalizeMarketRange(target.getAttribute('data-range'));
     if (range === state.range) return;
-    window.location.hash = buildMarketHash(state.stockId, range, state.date, state.granularity);
+    window.location.hash = appendReturnTo(
+      buildMarketHash(state.stockId, range, state.date, state.granularity),
+      state.returnTo,
+    );
   });
 };
 
@@ -382,7 +389,10 @@ const bindChartTabs = () => {
       state.chartTab = 'kline';
       destroyIntradayChart();
       paintChartTabs();
-      window.location.hash = buildMarketHash(state.stockId, state.range, state.date, tab);
+      window.location.hash = appendReturnTo(
+        buildMarketHash(state.stockId, state.range, state.date, tab),
+        state.returnTo,
+      );
       return;
     }
     state.chartTab = tab === 'intraday' ? 'intraday' : 'minute-k';
@@ -576,6 +586,22 @@ const loadMarketView = async () => {
   scheduleRefresh(requestId);
 };
 
+/** 从作战室进来的返回入口：原 hash 直接回放，返回后仍是同一个 at / 板块 / 排序。 */
+const renderMarketReturn = (returnTo) => {
+  const wrap = $('#market-return');
+  if (wrap === null) return;
+  if (returnTo === null) {
+    wrap.hidden = true;
+    wrap.replaceChildren();
+    return;
+  }
+  const link = el('a', 'btn btn-outline btn-sm market-return-link', `← ${returnLabel(returnTo)}`);
+  link.href = `#${returnTo}`;
+  link.dataset.returnTo = returnTo;
+  mount(wrap, link);
+  wrap.hidden = false;
+};
+
 /** 路由入口：app.js 在 #market（含深链接参数变化）时调用。 */
 const renderMarket = async (setStatus) => {
   bindRangeSwitch();
@@ -587,6 +613,9 @@ const renderMarket = async (setStatus) => {
   paintMarkerToggle();
   paintSubpaneSwitch();
   renderRecent();
+  const returnTo = returnToFromHash(window.location.hash);
+  state.returnTo = returnTo;
+  renderMarketReturn(returnTo);
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');
   const range = normalizeMarketRange(params.get('range'));

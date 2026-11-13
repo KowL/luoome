@@ -292,6 +292,16 @@ describe('角色卡与证据', () => {
     expect(cards[1]?.holders[0]?.evidence.length).toBe(2);
   });
 
+  it('进个股页时带 returnTo，返回仍停在原作战室现场', () => {
+    const returnTo = 'market-room?tab=sectors&sector=886001&at=2026-09-28T02%3A15%3A00.000Z';
+    const href = `#market?stockId=600519.SH&range=3m&returnTo=${encodeURIComponent(returnTo)}`;
+    const cards = roleCards(coreFixture(), returnTo);
+    expect(cards[0]?.holders[0]?.href).toBe(href);
+    expect(lookupCards(coreFixture(), returnTo)[0]?.href).toBe(
+      `#market?stockId=600036.SH&range=3m&returnTo=${encodeURIComponent(returnTo)}`,
+    );
+  });
+
   it('证据行包含时点、字段、数值、来源与说明', () => {
     const text = evidenceText(evidence());
     expect(text).toContain('09:35');

@@ -14,6 +14,7 @@
 
 import { callApi } from './api.js';
 import { replayAtFromHash, replayEmptyNotice, replayHashSuffix } from './market-room-replay.js';
+import { stockHref } from './market-room-return.js';
 import { formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
@@ -394,8 +395,8 @@ const detailNotes = (detail) => {
   return [...new Set(notes.filter((note) => typeof note === 'string' && note.length > 0))];
 };
 
-/** 成分行文案（纯函数）：缺失一律 null，由渲染层写「缺失」。 */
-const memberRowCells = (member) => {
+/** 成分行文案（纯函数）：缺失一律 null，由渲染层写「缺失」；returnTo 保留作战室现场。 */
+const memberRowCells = (member, returnTo = null) => {
   const share =
     member.windowAmountSharePct === null || member.windowAmountSharePct === undefined
       ? null
@@ -417,7 +418,7 @@ const memberRowCells = (member) => {
           : '未封',
     status: MEMBER_STATUS_LABELS[member.memberStatus] ?? member.memberStatus,
     inBatch: member.inBatch,
-    href: `#market?stockId=${encodeURIComponent(member.stockId)}&range=3m`,
+    href: stockHref(member.stockId, returnTo),
   };
 };
 
@@ -444,7 +445,7 @@ const detailCell = (text, className = 'num') => {
 
 const toneClass = (value) => (value > 0 ? 'pos' : value < 0 ? 'neg' : '');
 
-const memberTable = (detail) => {
+const memberTable = (detail, returnTo = null) => {
   const head = el('thead', '', [
     el('tr', '', [
       el('th', '', '成分'),
@@ -457,7 +458,7 @@ const memberTable = (detail) => {
     ]),
   ]);
   const rows = sortedMembers(detail).map((member) => {
-    const cells = memberRowCells(member);
+    const cells = memberRowCells(member, returnTo);
     const name = el('a', 'room-member-link', cells.name ?? cells.code);
     name.href = cells.href;
     name.title = `查看 ${member.stockId} 行情`;
@@ -529,7 +530,7 @@ const compareStrip = (ranking, detail, params, onToggleCompare) => {
 
 const renderSectorDetailPane = (
   detail,
-  { ranking = null, params, onToggleCompare = () => {}, onClose = () => {} } = {},
+  { ranking = null, params, returnTo = null, onToggleCompare = () => {}, onClose = () => {} } = {},
 ) => {
   const empty = sectorDetailEmptyText(detail);
   if (detail === null || detail === undefined) {
@@ -627,7 +628,7 @@ const renderSectorDetailPane = (
         'room-caption',
         `共 ${detail.members.length} 只 active 成分；封板状态来自当日连板天梯，缺失写「缺失」不写「未封」。`,
       ),
-      memberTable(detail),
+      memberTable(detail, returnTo),
     ]),
     missing.length > 0
       ? el('div', 'room-detail-missing-block', [

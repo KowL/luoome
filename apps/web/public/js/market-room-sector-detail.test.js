@@ -337,6 +337,10 @@ describe('成分明细与缺失样本', () => {
       inBatch: true,
       href: '#market?stockId=600519.SH&range=3m',
     });
+    const returnTo = 'market-room?tab=sectors&sector=a&at=2026-09-28T02%3A15%3A00.000Z';
+    expect(memberRowCells(member(), returnTo).href).toBe(
+      `#market?stockId=600519.SH&range=3m&returnTo=${encodeURIComponent(returnTo)}`,
+    );
   });
 
   it('停牌 / 缺批次 / 无天梯时全部写缺失而不是 0', () => {
@@ -449,7 +453,8 @@ describe('板块详情入口结构', () => {
     expect(detail).toContain('/api/market/room/sector-detail');
     expect(detail).not.toContain('/api/market/room/collect');
     expect(detail).toContain('成分等权合成走势（非板块指数）');
-    expect(detail).toContain('#market?stockId=');
+    expect(detail).toContain("from './market-room-return.js'");
+    expect(detail).toContain('stockHref(member.stockId, returnTo)');
   });
 
   it('服务端暴露只读板块详情 API', () => {

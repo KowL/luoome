@@ -558,6 +558,24 @@ describe('统一时间轴（ticket #43）', () => {
     expect(roomHash('events')).toBe('market-room?tab=events');
   });
 
+  it('移动端下钻保留现场：进个股页带 returnTo，返回后详情自动回到视口', () => {
+    const room = read('./market-room.js');
+    const detail = read('./market-room-sector-detail.js');
+    const market = read('./market.js');
+    const html = read('../../public/index.html');
+    const css = read('../../public/style.css');
+    expect(room).toContain("const returnTo = window.location.hash.replace(/^#/, '')");
+    expect(room).toContain('renderSectorDetailPane(detail, {');
+    expect(room).toContain('renderCoreStocksPane(core, { returnTo })');
+    expect(room).toContain('focusSectorDetail');
+    expect(detail).toContain('stockHref');
+    expect(market).toContain('renderMarketReturn');
+    expect(market).toContain('appendReturnTo(');
+    expect(html).toContain('id="market-return"');
+    expect(css).toContain('.room-sector-table th:nth-child(2)');
+    expect(css).toContain('min-height: 44px');
+  });
+
   it('页面读取总览时带上 at，回放条与「回到最新」已接线', () => {
     const room = read('./market-room.js');
     expect(room).toContain('replayQueryPrefix(at)');
