@@ -2,7 +2,7 @@ import { type StockUniverseManagerLike, stockCode } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { syncStockUniverseWorkflow } from './sync-stock-universe.js';
+import { syncStockUniverseOperation } from './sync-stock-universe.js';
 
 describe('workflow/sync-stock-universe', () => {
   it('只通过 sync_stock_universe tool 完成目录同步', async () => {
@@ -28,7 +28,7 @@ describe('workflow/sync-stock-universe', () => {
     };
     const ctx = await buildTestContext({ stockUniverse: manager });
 
-    const result = await syncStockUniverseWorkflow.run({ force: true }, ctx);
+    const result = await syncStockUniverseOperation.run({ force: true }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;

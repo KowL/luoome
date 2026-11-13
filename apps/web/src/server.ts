@@ -15,6 +15,7 @@ import { type Context, Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { buildWebContext, resolveDbPath, type WebSourceSet } from './context.js';
+import { createDshChatRuntimeFromStore } from './dsh/chat-runtime.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { appServiceTool } from './http/app-service.js';
 import { jsonResult, notFound, parseJsonObject, permissionDenied } from './http/result.js';
@@ -22,6 +23,7 @@ import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
 import { startMarketBatchScheduler } from './market-batch-scheduler.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
+import { startPostMarketScheduler } from './post-market-scheduler.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
@@ -79,7 +81,7 @@ export interface CreateWebAppOptions {
   /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
   readonly feishuSettingsStore?: FeishuSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
-  readonly chatStreamRuntime?: ChatStreamRuntime;
+  readonly chatStreamRuntime?: ChatStreamRuntime | undefined;
   /** 数据导出/导入所用 SQLite 文件；生产启动注入，未注入时端点返回 not_found。 */
   readonly dataTransferDbPath?: string;
 }
@@ -116,12 +118,12 @@ export const createWebApp = (
       localContext = context;
     },
   };
+  const aiSettingsStore = options.aiSettingsStore;
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
-    current: options.chatStreamRuntime,
+    current: options.chatStreamRuntime ?? createDshChatRuntimeFromStore(aiSettingsStore),
   };
   const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
   const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
-  const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const sharedSources = options.sources;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
@@ -382,6 +384,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
   const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
+  const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
   const app = createWebApp(ctx, {
     exposeWrite,
     exposeExternal,
@@ -391,15 +394,22 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     researchVaultSettingsStore,
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
+    ...(chatStreamRuntime === undefined ? {} : { chatStreamRuntime }),
   });
-  const schedulers: Array<{ readonly stop: () => void }> = [
-    startStrategyScheduler(ctx, { startImmediately: false }),
-    startIntradayPlanScheduler(ctx, { startImmediately: false }),
-    startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
-  ];
-  // 盘中批次采集访问外部行情并写本地快照：只有 write + external 同时显式开启才启动。
-  if (exposeWrite && exposeExternal) {
-    schedulers.push(startMarketBatchScheduler(ctx, { startImmediately: false, enabled: true }));
+  const schedulersEnabled = exposeWrite && exposeExternal;
+  const schedulers: Array<{ readonly stop: () => void }> = schedulersEnabled
+    ? [
+        startStrategyScheduler(ctx, { startImmediately: false }),
+        startIntradayPlanScheduler(ctx, { startImmediately: false }),
+        startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
+        startPostMarketScheduler(ctx, { startImmediately: false }),
+        startMarketBatchScheduler(ctx, { startImmediately: false, enabled: true }),
+      ]
+    : [];
+  if (!schedulersEnabled) {
+    console.warn(
+      '后台调度未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true',
+    );
   }
   const host = options.host ?? '127.0.0.1';
   const server = Bun.serve({

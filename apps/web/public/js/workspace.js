@@ -1,5 +1,12 @@
 import { callApi, getAccountId, getSessionEpoch } from './api.js';
 import { initChat, mountChatView } from './chat.js';
+import {
+  openTradingPlanDetailByVersionId,
+  planActionLabel,
+  planStatusBadgeClass,
+  planStatusLabel,
+  planVersionId,
+} from './trading-plan-panel.js';
 import { $, el, fmtDateTime, mount } from './ui.js';
 
 let version = 0;
@@ -56,18 +63,85 @@ const watchlistRows = (overview) => {
   });
 };
 
+const planActionBadgeClass = (action) => {
+  if (action === 'enter') return 'badge-buy';
+  if (action === 'observe') return 'badge-watch';
+  if (action === 'avoid') return 'badge-avoid';
+  if (action === 'reduce' || action === 'exit') return 'badge-sell';
+  return 'badge-neutral';
+};
+
+const planCard = (plan) => {
+  const stockName = plan.stockName ?? plan.stockId ?? '交易计划';
+  const stockCode = plan.stockId ?? '';
+  const actionLabel = planActionLabel(plan.action);
+  const actionCls = planActionBadgeClass(plan.action);
+  const statusLabel = planStatusLabel(plan.status);
+  const statusCls = planStatusBadgeClass(plan.status);
+
+  const header = el('div', 'workspace-card-header', [
+    el('div', 'workspace-card-title', [
+      el('span', 'stock-name', stockName),
+      stockCode && stockCode !== stockName ? el('span', 'stock-code', stockCode) : null,
+    ]),
+    el('div', 'workspace-card-badges', [
+      el('span', `badge ${actionCls}`, actionLabel),
+      el('span', `badge ${statusCls}`, statusLabel),
+    ]),
+  ]);
+
+  const metrics = [];
+  if (plan.action === 'enter') {
+    if (plan.entryPriceLow !== undefined && plan.entryPriceHigh !== undefined) {
+      metrics.push(row('入场区间', `${plan.entryPriceLow} ~ ${plan.entryPriceHigh} 元`));
+    }
+    if (plan.position?.targetPct !== undefined && plan.position.targetPct > 0) {
+      metrics.push(row('目标仓位', `${plan.position.targetPct}%`));
+    }
+  }
+  if (plan.exit?.stopLoss !== undefined || plan.exit?.takeProfit !== undefined) {
+    const stopLoss = plan.exit?.stopLoss ? `${plan.exit.stopLoss} 元` : '--';
+    const takeProfit = plan.exit?.takeProfit ? `${plan.exit.takeProfit} 元` : '--';
+    metrics.push(row('止损 / 止盈', `${stopLoss} / ${takeProfit}`));
+  }
+
+  const nextReview = plan.holding?.nextReviewAt ?? plan.reviewAt;
+  if (nextReview) {
+    metrics.push(row('下次复核', fmtDateTime(nextReview)));
+  } else if (plan.validUntil) {
+    metrics.push(row('有效期至', fmtDateTime(plan.validUntil)));
+  }
+
+  const summaryText =
+    plan.evidence?.[0]?.summary ??
+    (typeof plan.explanation?.supportingEvidenceIds?.[0] === 'string'
+      ? plan.explanation.supportingEvidenceIds[0]
+      : null);
+  const summaryNode = summaryText ? el('p', 'workspace-card-summary', summaryText) : null;
+
+  const footer = el('div', 'workspace-card-footer', [
+    el('span', 'muted', `版本 v${plan.version ?? 1}`),
+    el('span', 'action-link', '计划详情 ↗'),
+  ]);
+
+  const cardNode = el('div', 'workspace-card workspace-plan-card interactive', [
+    header,
+    ...metrics,
+    summaryNode,
+    footer,
+  ]);
+
+  cardNode.addEventListener('click', () => {
+    void openTradingPlanDetailByVersionId(planVersionId(plan));
+  });
+
+  return cardNode;
+};
+
 const planRows = (plans, views) => {
   const list = Array.isArray(plans) ? plans : Array.isArray(views) ? views : [];
-  if (list.length === 0) return [emptyCard('没有生效中的 TradingPlan。')];
-  return list
-    .slice(0, 5)
-    .map((plan) =>
-      card(plan.name ?? plan.title ?? 'TradingPlan', [
-        row('状态', plan.status ?? '--'),
-        row('版本', plan.version ?? plan.versionId ?? '--'),
-        row('复核', plan.reviewAt === undefined ? '--' : fmtDateTime(plan.reviewAt)),
-      ]),
-    );
+  if (list.length === 0) return [emptyCard('没有生效中的交易计划。')];
+  return list.slice(0, 6).map(planCard);
 };
 
 export const renderInvestmentWorkspace = async () => {
@@ -99,10 +173,7 @@ export const renderInvestmentWorkspace = async () => {
   );
   mount($('#workspace-consensus'), el('div'));
   const planData = plans.ok ? plans.data : null;
-  mount(
-    $('#workspace-plans'),
-    el('div', 'workspace-card-grid', planRows(planData?.plans, planData?.views)),
-  );
+  mount($('#workspace-plans'), planRows(planData?.plans, planData?.views));
   mount($('#workspace-tracking'), el('div'));
   mount($('#workspace-report'), el('div'));
   mount($('#workspace-account'), el('div'));

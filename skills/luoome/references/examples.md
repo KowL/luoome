@@ -51,13 +51,15 @@ User gives a stock, side, quantity, price and execution time:
 3. State sample size and missing outcomes; do not claim accuracy from incomplete records.
 4. If the user explicitly supplies an outcome to record, confirm the exact mutation before using the corresponding write tool.
 
-## Research notes and company events
+## Research notes
 
 1. Resolve the stock first.
-2. Read existing research notes or scheduled events with bounded date/status filters.
-3. When adding or revising a thesis/event, show the exact content and date before a write call.
-4. Preserve source/provenance and do not silently rewrite externally sourced event dates.
+2. Search existing research notes with bounded filters (`search_research_documents`).
+3. When saving a note, show the exact title, body and stock codes before the write call.
+4. Preserve the source URL and publication date; do not silently rewrite externally sourced facts.
 
 ## Workflows
 
-Built-in workflows are not general MCP tools. Use `list_workflow_runs` to inspect available audit data, but do not claim to have started a workflow through MCP unless a discovered tool explicitly provides that operation.
+Built-in workflows are not MCP tools. Workflow audit is available through the local CLI/Web,
+not through discovery; do not claim to have started a workflow through MCP unless a discovered
+tool explicitly provides that operation.

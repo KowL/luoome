@@ -32,7 +32,7 @@ export const registerToolGatewayRoutes = (app: Hono, deps: WebRouteDeps): void =
       }
       return jsonResult(notFound('Tool', name));
     }
-    // 通用 tool 路由只暴露 WEB_AGENT_TOOL_NAMES（= toolRegistry 的 45 个 Agent Tool）；其余实现改为专用 REST 路由/App Service。
+    // 通用 tool 路由只暴露 WEB_AGENT_TOOL_NAMES（= toolRegistry 的 47 个 Agent Tool）；其余实现改为专用 REST 路由/App Service。
     if (!WEB_AGENT_TOOL_NAMES.has(name)) {
       return jsonResult(notFound('Tool', name));
     }

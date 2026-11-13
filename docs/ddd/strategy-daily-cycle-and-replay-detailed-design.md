@@ -1,5 +1,7 @@
 # Strategy 日运行与历史评估可靠性详细设计
 
+> **2026-11-12 状态：可靠性机制已简化。** 持久 lease/heartbeat、`strategy_data_checkpoints`、`daily_bar_revisions` 与逐日评估会话已删除；日线按 `dataAsOf` 截断读取，调度用策略表字段 + 进程内互斥。
+
 > 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+5 仍按开发计划持续验收
 > 日期：2026-08-20
 > 2026-09-02 修订：evaluation scope 的 persist run 允许绑定未发布 valid 版本（operational 拒绝
@@ -784,7 +786,7 @@ run 终态后先显式同步 `000300.SH` qfq 日线，再补“所有已到期�
 同一 daily cycle 在 run 提交成功且 publication 为 `published` 后，通过
 `ctx.tools.sync_strategy_watchlist_subscriptions` 这个不进入公共 registry/MCP 的内部编排 tool 处理
 Strategy→Watchlist 订阅。该步骤使用 run 的
-`dataHealth` 决定 complete/partial：partial 只标 stale，failed/withheld/evaluation/非持久化运行不调用
+`dataHealth` 决定 complete/partial：complete 结束所有未入选来源；partial 只结束该 run 中已明确评估未入选的来源，其余标 stale；failed/withheld/evaluation/非持久化运行不调用
 source commit；无 active 订阅时跳过。它不创建 Advice、Notification、AlertPlan 或 Trade。
 
 ### 9.5 `strategy-replay-range`
@@ -1173,8 +1175,8 @@ UI 不提供“一键自动发布 v2”。定义 draft、试算、校验、发�
 建议新增：
 
 ```text
-luoome workflow run strategy-daily-cycle --strategy-id ...
-luoome workflow run strategy-replay-range --strategy-id ... --from ... --to ...
+luoome workflow run strategy --input '{"job":"daily","strategyId":"..."}'
+luoome workflow run replay-strategy-range --input '{"strategyId":"...","from":"...","to":"..."}'
 luoome strategy runs --scope operational|evaluation --publication published|withheld|non-publishing
 ```
 

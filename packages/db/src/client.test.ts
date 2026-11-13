@@ -562,6 +562,242 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('存量明文 results_json 压缩迁移幂等，且明细不丢', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`
+        INSERT INTO strategy_runs (
+          id, strategy_id, strategy_version_id, mode, coverage, data_as_of, started_at,
+          finished_at, status, scope, input_snapshot_json, provider_statuses_json, results_json
+        ) VALUES (
+          'legacy-plain-run', 'legacy-strategy', 'legacy-v1', 'scan', 'CN_A_SHARES_SH_SZ',
+          1782748800000, 1782748800000, 1782748800000, 'complete', 'operational',
+          '{"schemaVersion":2,"strategyVersionId":"legacy-v1","definitionHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evaluatorVersion":"test","coverage":"CN_A_SHARES_SH_SZ","stockIds":["600519.SH"],"stockIdChecksum":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestedBy":"manual"}',
+          '[]',
+          ${JSON.stringify([
+            {
+              runId: 'legacy-plain-run',
+              stockId: '600519.SH',
+              selected: true,
+              score: 50,
+              rank: 1,
+              ruleEvaluations: [
+                { ruleId: 'rule-1', status: 'matched', value: true, evidence: ['legacy'] },
+              ],
+              evidence: ['legacy'],
+              dataAsOf: new Date(1782748800000).toISOString(),
+            },
+          ])}
+        )
+      `);
+      // 模拟存量库：迁移标记尚未写入。
+      handle.db.run(sql`DELETE FROM schema_migrations WHERE id = 'strategy-run-results-zlib-v1'`);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const raw = handle.db.all<{ results_json: string }>(
+        sql`SELECT results_json FROM strategy_runs WHERE id = 'legacy-plain-run'`,
+      )[0];
+      expect(raw?.results_json.startsWith('zlib+base64:')).toBe(true);
+      const results = await handle.repos.strategyRun.listResults('legacy-plain-run');
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ stockId: '600519.SH', score: 50 });
+      expect(results[0]?.ruleEvaluations).toHaveLength(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('存量 strategy_signals 改为 64 位整数 id，并同步改写观察引用', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`DROP TABLE strategy_signals`);
+      handle.db.run(sql`CREATE TABLE strategy_signals (
+        id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
+        run_id TEXT NOT NULL, rule_id TEXT NOT NULL, stock_id TEXT NOT NULL, ts INTEGER NOT NULL,
+        score REAL NOT NULL, direction TEXT NOT NULL, evidence_json TEXT NOT NULL,
+        evaluation_snapshot_json TEXT NOT NULL
+      )`);
+      handle.db.run(sql`
+        CREATE UNIQUE INDEX strategy_signals_run_event_unique
+        ON strategy_signals (run_id, rule_id, stock_id, ts)
+      `);
+      const ts = 1782748800000;
+      const oldId = `strategy-run-legacy:entry:600519.SH:${new Date(ts).toISOString()}`;
+      handle.db.run(sql`INSERT INTO strategy_signals VALUES (
+        ${oldId}, 'legacy-strategy', 'legacy-v1', 'strategy-run-legacy', 'entry', '600519.SH',
+        ${ts}, 80, 'bullish', '["价格有效"]', '{"expression":"quote.close > 0","result":true}'
+      )`);
+      handle.db.run(sql`INSERT INTO signal_observations (
+        source_kind, source_id, stock_id, horizon, benchmark_status, status, provenance, attempt_count
+      ) VALUES (
+        'strategy-signal', ${oldId}, '600519.SH', 't1', 'unavailable', 'pending',
+        '{"provider":"fixture","observedAt":1782748800000,"fetchedAt":1782748800000,"freshness":"unknown"}',
+        0
+      )`);
+      handle.db.run(sql`DELETE FROM schema_migrations WHERE id = 'strategy-signal-int64-id-v1'`);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const signals = handle.db.all<{ id: string; evidence_json: string }>(
+        sql`SELECT id, evidence_json FROM strategy_signals`,
+      );
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.id).toMatch(/^\d{18,19}$/);
+      expect(signals[0]?.evidence_json.startsWith('zlib+base64:')).toBe(false);
+      expect(JSON.parse(signals[0]?.evidence_json ?? '[]')).toEqual(['价格有效']);
+
+      const decoded = await handle.repos.strategyRun.signalsByRun('strategy-run-legacy');
+      expect(decoded).toHaveLength(1);
+      expect(decoded[0]?.id).toBe(signals[0]?.id);
+      expect(decoded[0]?.evidence).toEqual(['价格有效']);
+      expect(decoded[0]?.evaluationSnapshot).toEqual({
+        expression: 'quote.close > 0',
+        result: true,
+      });
+
+      const observations = handle.db.all<{ source_id: string }>(
+        sql`SELECT source_id FROM signal_observations`,
+      );
+      expect(observations).toEqual([{ source_id: signals[0]?.id }]);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('存量 rowid 形态的 signal_observations 重建为 WITHOUT ROWID 并保留数据', () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`DROP TABLE signal_observations`);
+      handle.db.run(sql`CREATE TABLE signal_observations (
+        id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+        baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, close_price REAL, return_pct REAL,
+        max_favorable_excursion_pct REAL, max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
+        benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
+        unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
+        attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
+        next_attempt_at INTEGER, last_error_kind TEXT, vintage TEXT NOT NULL DEFAULT 'pit'
+      )`);
+      handle.db.run(sql`
+        CREATE INDEX signal_observations_source_idx
+        ON signal_observations (source_kind, source_id)
+      `);
+      handle.db.run(sql`INSERT INTO signal_observations (
+        id, source_kind, source_id, stock_id, horizon, benchmark_status, status, provenance,
+        attempt_count, vintage
+      ) VALUES (
+        'obs-1', 'strategy-signal', 'sig-1', '600519.SH', 't1', 'unavailable', 'pending',
+        '{"source":"local"}', 2, 'pit'
+      )`);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const ddl =
+        handle.db.all<{ sql: string }>(
+          sql`SELECT sql FROM sqlite_master WHERE type='table' AND name='signal_observations'`,
+        )[0]?.sql ?? '';
+      expect(ddl).toContain('WITHOUT ROWID');
+      expect(ddl).not.toContain('vintage');
+      expect(ddl).toContain('PRIMARY KEY (source_kind, source_id, horizon)');
+      expect(
+        handle.db.all<{ source_id: string; horizon: string; attempt_count: number }>(
+          sql`SELECT source_id, horizon, attempt_count FROM signal_observations`,
+        ),
+      ).toEqual([{ source_id: 'sig-1', horizon: 't1', attempt_count: 2 }]);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('存量 qfq 日线按累计因子还原为原始价，读取时再投影回 qfq', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      // 一根 qfq 收盘 11、因子 0.5 的存量行：还原后原始价应为 22。
+      handle.db.run(sql`
+        INSERT INTO daily_bars (
+          stock_id, date, open, high, low, close, volume, adj_factor, adjustment,
+          source_adj_factor, source
+        ) VALUES (
+          '600519.SH', 1782748800000, 10, 12, 9, 11, 1000, 1, 'qfq', 0.5, 'legacy'
+        )
+      `);
+      handle.db.run(sql`
+        INSERT INTO adjustment_factors (
+          stock_id, ex_date, factor, dividend_per_share, per_share_bonus,
+          allotment_ratio, allotment_price, source
+        ) VALUES ('600519.SH', 1790000000000, 0.5, 1, 0, 0, 0, 'fuyao')
+      `);
+      handle.db.run(sql`DELETE FROM schema_migrations WHERE id = 'daily-bars-raw-v1'`);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const raw = handle.db.all<{
+        close: number;
+        adjustment: string;
+        source_adj_factor: number | null;
+      }>(
+        sql`SELECT close, adjustment, source_adj_factor FROM daily_bars WHERE stock_id = '600519.SH'`,
+      )[0];
+      expect(raw?.adjustment).toBe('raw');
+      expect(raw?.source_adj_factor).toBeNull();
+      expect(raw?.close).toBeCloseTo(22, 6);
+
+      // 读边界投影回 qfq：22 × 0.5 = 11
+      const bars = await handle.repos.dailyBar.findInRange(
+        '600519.SH',
+        new Date(1782748800000),
+        new Date(1782748800000),
+      );
+      expect(bars[0]?.close).toBeCloseTo(11, 6);
+      expect(bars[0]?.adjustment).toBe('qfq');
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('无 source_adj_factor 的存量 qfq 行不冒充原始价，保持原值可读', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      // 旧 provider（fuyao/东财等）只给 qfq 价格，不带因子；无法精确还原。
+      handle.db.run(sql`
+        INSERT INTO daily_bars (
+          stock_id, date, open, high, low, close, volume, adj_factor, adjustment,
+          source_adj_factor, source
+        ) VALUES (
+          '600519.SH', 1782748800000, 10, 12, 9, 11, 1000, 1, 'qfq', NULL, 'fuyao'
+        )
+      `);
+      handle.db.run(sql`
+        INSERT INTO adjustment_factors (
+          stock_id, ex_date, factor, dividend_per_share, per_share_bonus,
+          allotment_ratio, allotment_price, source
+        ) VALUES ('600519.SH', 1790000000000, 0.5, 1, 0, 0, 0, 'fuyao')
+      `);
+      handle.db.run(sql`DELETE FROM schema_migrations WHERE id = 'daily-bars-raw-v1'`);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const stored = handle.db.all<{ close: number; adjustment: string }>(
+        sql`SELECT close, adjustment FROM daily_bars WHERE stock_id = '600519.SH'`,
+      )[0];
+      // 未除以未知因子：行仍是 qfq，投影也不会再次乘因子。
+      expect(stored).toEqual({ close: 11, adjustment: 'qfq' });
+      const bars = await handle.repos.dailyBar.findInRange(
+        '600519.SH',
+        new Date(1782748800000),
+        new Date(1782748800000),
+      );
+      expect(bars[0]?.close).toBeCloseTo(11, 6);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('已退役的 fundamental 管线表与三段账本旧表不再由启动迁移创建', () => {
     const handle = createDrizzleRepos(':memory:');
     try {
@@ -602,6 +838,62 @@ describe('createDrizzleRepos / ensureSchema', () => {
       ensureSchema(handle.db);
       expect(await handle.repos.strategy.findById('legacy-builtin')).toMatchObject({
         owner: 'user',
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('旧 strategy_schedules 表在启动迁移中幂等回填 schedule_cron 与 last_scheduled_at', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`
+        CREATE TABLE IF NOT EXISTS strategy_schedules (
+          id TEXT PRIMARY KEY,
+          strategy_id TEXT NOT NULL,
+          cron TEXT NOT NULL,
+          timezone TEXT NOT NULL,
+          enabled INTEGER NOT NULL,
+          next_run_at INTEGER,
+          last_run_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      handle.db.run(sql`
+        INSERT INTO strategies (
+          id, name, description, owner, status, current_version_id, created_at, updated_at
+        ) VALUES (
+          'test-strat-1', '测试策略1', '描述', 'user', 'active', 'v1', 1000, 1000
+        )
+      `);
+      handle.db.run(sql`
+        INSERT INTO strategy_runs (
+          id, strategy_id, strategy_version_id, mode, coverage, data_as_of, started_at, status, input_snapshot_json, provider_statuses_json
+        ) VALUES (
+          'run-123', 'test-strat-1', 'v1', 'scheduled', 'all', 1700000000000, 1700000001000, 'complete', '{}', '[]'
+        )
+      `);
+      handle.db.run(sql`
+        INSERT INTO strategy_schedules (
+          id, strategy_id, cron, timezone, enabled, next_run_at, last_run_id, created_at, updated_at
+        ) VALUES (
+          'sched-1', 'test-strat-1', '0 18 * * 1-5', 'Asia/Shanghai', 1, 1700000000000, 'run-123', 1000, 1000
+        )
+      `);
+      ensureSchema(handle.db);
+      const strat = await handle.repos.strategy.findById('test-strat-1');
+      expect(strat).toMatchObject({
+        scheduleCron: '0 18 * * 1-5',
+        lastScheduledAt: new Date(1700000001000),
+      });
+
+      // 再次执行，幂等
+      ensureSchema(handle.db);
+      const strat2 = await handle.repos.strategy.findById('test-strat-1');
+      expect(strat2).toMatchObject({
+        scheduleCron: '0 18 * * 1-5',
+        lastScheduledAt: new Date(1700000001000),
       });
     } finally {
       handle.close();

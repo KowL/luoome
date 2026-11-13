@@ -11,6 +11,7 @@ import type {
   DecisionReviewSubjectKind,
   DeliveryStatus,
   Exchange,
+  LimitUpBoardHistory,
   LimitUpLadder,
   LimitUpLadderSample,
   LimitUpLadderSource,
@@ -406,6 +407,38 @@ export const marketRoomEvents = sqliteTable(
   }),
 );
 
+/**
+ * 炸板/断板历史事实；`(trade_date, source, recorded_at)` 保留修订，读取取最新修订。
+ * `facts_json` 保存逐股票事实，缺失输入用 null 表达 unknown，不写 false/0。
+ */
+export const limitUpBoardHistory = sqliteTable(
+  'limit_up_board_history',
+  {
+    tradeDate: text('trade_date').notNull(),
+    source: text('source').notNull(),
+    status: text('status').$type<LimitUpBoardHistory['status']>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    vintage: text('vintage').$type<LimitUpBoardHistory['vintage']>().notNull(),
+    facts: text('facts_json', { mode: 'json' }).$type<LimitUpBoardHistory['facts']>().notNull(),
+    missingFields: text('missing_fields_json', { mode: 'json' })
+      .$type<LimitUpBoardHistory['missingFields']>()
+      .notNull(),
+    warnings: text('warnings_json', { mode: 'json' })
+      .$type<LimitUpBoardHistory['warnings']>()
+      .notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.tradeDate, t.source, t.recordedAt],
+      name: 'limit_up_board_history_pk',
+    }),
+    sourceDateIdx: index('limit_up_board_history_source_date_idx').on(t.source, t.tradeDate),
+  }),
+);
+
 export const holdings = sqliteTable(
   'holdings',
   {
@@ -661,26 +694,26 @@ export const minuteBars = sqliteTable(
   }),
 );
 
-export const dailyBarRevisions = sqliteTable(
-  'daily_bar_revisions',
+/**
+ * 除权除息因子（只增不改）。
+ *
+ * `factor = 除权价 / 前收盘`，前复权投影为 `qfq(t) = raw(t) × ∏{factor | exDate > t}`。
+ * 日线只存原始价，因子单独存，新分红不需要重写历史 K 线。
+ */
+export const adjustmentFactors = sqliteTable(
+  'adjustment_factors',
   {
     stockId: text('stock_id').notNull(),
-    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
-    contentHash: text('content_hash').notNull(),
-    open: real('open').notNull(),
-    high: real('high').notNull(),
-    low: real('low').notNull(),
-    close: real('close').notNull(),
-    volume: integer('volume').notNull(),
+    exDate: integer('ex_date', { mode: 'timestamp_ms' }).notNull(),
+    factor: real('factor').notNull(),
+    dividendPerShare: real('dividend_per_share').notNull(),
+    perShareBonus: real('per_share_bonus').notNull(),
+    allotmentRatio: real('allotment_ratio').notNull(),
+    allotmentPrice: real('allotment_price').notNull(),
     source: text('source').notNull(),
-    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
-    pk: primaryKey({
-      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
-      name: 'daily_bar_revisions_pk',
-    }),
-    lookupIdx: index('daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
+    pk: primaryKey({ columns: [t.stockId, t.exDate], name: 'adjustment_factors_pk' }),
   }),
 );
 
@@ -768,10 +801,13 @@ export const strategyRuns = sqliteTable(
       NonNullable<StrategyRun['providerCoverage']>
     >(),
     summary: text('summary_json', { mode: 'json' }).$type<StrategyRun['summary']>(),
-    /** §6：strategy_results 并入 strategy_runs.results_json（逐股明细）。 */
-    resultsJson: text('results_json', { mode: 'json' }).$type<
-      readonly Readonly<Record<string, unknown>>[]
-    >(),
+    /**
+     * §6：strategy_results 并入 strategy_runs.results_json（逐股明细）。
+     *
+     * 逐股 JSON 里同一规则表达式会被重放数千次，明文单行可达 20MB；写入前统一做
+     * zlib+base64（实测压缩比约 30x）。未压缩的存量行仍按明文 JSON 读取。
+     */
+    resultsJson: text('results_json'),
     publication: text('publication_json', { mode: 'json' }).$type<StrategyRunPublication>(),
     publicationStatus: text('publication_status').$type<StrategyRunPublication['status']>(),
     error: text('error'),
@@ -804,6 +840,10 @@ export const strategySignals = sqliteTable(
     ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
     score: real('score').notNull(),
     direction: text('direction').$type<StrategySignal['direction']>().notNull(),
+    /**
+     * 逐信号的证据与求值快照保持明文 JSON：单行只有 50–250 字节，gzip 头 + base64
+     * 反而比原文大（实测 82.7MB → 253.6MB）。压缩只对大块 JSON（如 runs.results_json）划算。
+     */
     evidence: text('evidence_json', { mode: 'json' }).$type<StrategySignal['evidence']>().notNull(),
     evaluationSnapshot: text('evaluation_snapshot_json', { mode: 'json' })
       .$type<StrategySignal['evaluationSnapshot']>()
@@ -853,10 +893,15 @@ export const strategyBacktestRuns = sqliteTable(
   }),
 );
 
+/**
+ * 信号事实观察。
+ *
+ * 主键是自然键 (source_kind, source_id, horizon)：id 由 `signalObservationId` 派生，
+ * 不再单独存列。长字符串 id 会在聚簇主键与每个二级索引里各存一份，4.7M 行实测约 1.9GB。
+ */
 export const signalObservations = sqliteTable(
   'signal_observations',
   {
-    id: text('id').primaryKey(),
     sourceKind: text('source_kind').$type<SignalObservation['sourceKind']>().notNull(),
     sourceId: text('source_id').notNull(),
     stockId: text('stock_id').notNull(),
@@ -884,8 +929,11 @@ export const signalObservations = sqliteTable(
     lastErrorKind: text('last_error_kind'),
   },
   (t) => ({
+    pk: primaryKey({
+      columns: [t.sourceKind, t.sourceId, t.horizon],
+      name: 'signal_observations_pk',
+    }),
     statusBaselineIdx: index('signal_observations_status_baseline_idx').on(t.status, t.baselineAt),
-    sourceIdx: index('signal_observations_source_idx').on(t.sourceKind, t.sourceId),
     dueIdx: index('signal_observations_due_idx').on(t.status, t.dueAt, t.nextAttemptAt),
   }),
 );
@@ -1330,6 +1378,7 @@ export const schema = {
   limitUpLadderSamples,
   marketSnapshotBatches,
   marketRoomEvents,
+  limitUpBoardHistory,
   holdings,
   trades,
   accountLedgerEntries,
@@ -1339,7 +1388,7 @@ export const schema = {
   priceSnapshots,
   dailyBars,
   minuteBars,
-  dailyBarRevisions,
+  adjustmentFactors,
   strategies,
   strategyVersions,
   strategyRuns,

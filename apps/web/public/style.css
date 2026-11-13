@@ -6226,7 +6226,7 @@ body > .modal {
 }
 
 /* ============================================================
- * 21. 涨停梯队
+ * 21. 涨停梯队（涨停市场看板）
  * ============================================================ */
 
 .ladder-controls {
@@ -6252,7 +6252,6 @@ body > .modal {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   padding: 7px 10px;
-  color-scheme: dark;
   transition:
     border-color var(--duration) var(--ease),
     box-shadow var(--duration) var(--ease);
@@ -6264,109 +6263,6 @@ body > .modal {
   box-shadow: 0 0 0 3px rgba(13, 158, 136, 0.12);
 }
 
-.ladder-summary .value.has-warning {
-  color: var(--warning);
-  font-size: var(--text-sm);
-  line-height: var(--leading-base);
-}
-
-.ladder-levels .level {
-  margin-bottom: var(--space-5);
-}
-
-/* 各层级是独立 <table>，列宽按内容自适应会导致跨层级错位；
- * fixed 布局 + 统一列宽保证所有层级表格列对齐（行业 / 原因列分剩余宽度）。 */
-.ladder-levels .table {
-  table-layout: fixed;
-}
-
-.ladder-levels .table th:nth-child(1) {
-  width: 96px;
-}
-
-.ladder-levels .table th:nth-child(2) {
-  width: 140px;
-}
-
-.ladder-levels .table th:nth-child(3) {
-  width: 90px;
-}
-
-.ladder-levels .table th:nth-child(4) {
-  width: 90px;
-}
-
-.ladder-levels .table th:nth-child(5) {
-  width: 110px;
-}
-
-.ladder-levels .table th:nth-child(6) {
-  width: 110px;
-}
-
-.level-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-  cursor: pointer;
-  user-select: none;
-}
-
-.level-head h3 {
-  margin: 0;
-  font-size: var(--text-lg);
-}
-
-.level-chevron {
-  font-size: var(--text-sm);
-  color: var(--muted);
-  transition: transform var(--duration) var(--ease);
-}
-
-.level-head:hover .level-chevron {
-  color: var(--ink);
-}
-
-.level.collapsed .level-chevron {
-  transform: rotate(-90deg);
-}
-
-.level.collapsed .level-head {
-  margin-bottom: 0;
-}
-
-.level.collapsed .table-wrap {
-  display: none;
-}
-
-.level-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  color: var(--pos);
-  background: rgba(224, 72, 79, 0.1);
-  border: 1px solid rgba(224, 72, 79, 0.4);
-}
-
-.level-count {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
-
-.corrected-mark {
-  color: var(--warning);
-  cursor: help;
-}
-
 .ladder-empty {
   padding: var(--space-6);
   border: 1px dashed var(--line-strong);
@@ -6375,21 +6271,589 @@ body > .modal {
   text-align: center;
 }
 
-.ladder-diff {
-  margin-top: var(--space-6);
+/* ---------- 看板头部 ---------- */
+
+.lum-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
 }
 
-.ladder-diff .eyebrow {
+.lum-hero-main .eyebrow {
   display: block;
-  margin-bottom: var(--space-3);
+  margin-bottom: 6px;
 }
 
-.ladder-diff .value.pos {
+.lum-title {
+  margin: 0 0 6px;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.01em;
+}
+
+.lum-subtitle {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+.lum-hero .ladder-controls {
+  margin-bottom: 0;
+}
+
+.lum-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.lum-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-alt-base);
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
+
+.lum-chip.warn {
+  border-color: rgba(217, 119, 6, 0.4);
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--warning);
+}
+
+.lum-chip-action {
+  cursor: pointer;
+  border-color: rgba(13, 158, 136, 0.35);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.lum-chip-action:hover {
+  border-color: var(--accent);
+}
+
+/* ---------- KPI ---------- */
+
+.lum-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.lum-kpi .value.pos {
   color: var(--pos);
 }
 
-.ladder-diff .value.neg {
+.lum-kpi .hint {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+}
+
+.lum-substats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5);
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+}
+
+.lum-substat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.lum-substat-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.lum-substat-value {
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.lum-panel {
+  margin-bottom: var(--space-4);
+}
+
+.lum-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.lum-split > .card {
+  margin-bottom: 0;
+}
+
+/* ---------- 连板矩阵 ---------- */
+
+.lum-matrix-wrap {
+  overflow-x: auto;
+  padding: 2px 0 var(--space-2);
+}
+
+.lum-matrix {
+  border-collapse: separate;
+  border-spacing: 2px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.lum-matrix th,
+.lum-matrix td {
+  padding: 0;
+}
+
+.lum-matrix-corner {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-width: 68px;
+  background: var(--panel-solid);
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.lum-matrix-band {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 68px;
+  padding-right: var(--space-2) !important;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.lum-matrix-date {
+  position: relative;
+  min-width: 26px;
+  padding-bottom: 2px !important;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.lum-matrix-date.is-selected {
+  color: var(--accent-strong);
+}
+
+/* 当日数据尚未生成（盘前）：列头弱化，避免把空档读成「0 家连板」 */
+.lum-matrix-date.is-no-data {
+  color: var(--muted-2);
+  opacity: 0.65;
+}
+
+.lum-matrix-date-label {
+  display: block;
+  white-space: nowrap;
+}
+
+.lum-matrix-date-weekday {
+  display: block;
+  color: var(--muted-2);
+  font-size: 9px;
+}
+
+.lum-matrix-date-btn {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.lum-matrix-cell {
+  width: 100%;
+  min-width: 24px;
+  height: 23px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color var(--duration) var(--ease);
+}
+
+.lum-matrix-cell.is-empty {
+  cursor: default;
+}
+
+.lum-matrix-cell:hover {
+  border-color: var(--line-strong);
+}
+
+.lum-matrix-cell.is-selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.lum-matrix-cell:focus-visible,
+.lum-matrix-date-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lum-readout {
+  min-height: 18px;
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+}
+
+.lum-delta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.lum-delta-title {
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lum-delta-item.pos {
+  color: var(--pos);
+}
+
+.lum-delta-item.neg {
   color: var(--neg);
+}
+
+/* ---------- 连板天梯分组 ---------- */
+
+.lum-bands {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(228px, 1fr));
+  gap: var(--space-3);
+}
+
+.lum-band {
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-alt-base);
+}
+
+.lum-band-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.lum-band-label {
+  color: var(--pos);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.lum-band-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.lum-band-rate {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--tea-soft);
+  color: var(--tea);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.lum-band-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lum-stock-chip {
+  padding-left: 8px;
+  border-left: 2px solid rgba(224, 72, 79, 0.35);
+}
+
+.lum-stock-link {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.lum-stock-meta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.lum-stock-meta.warn {
+  color: var(--warning);
+}
+
+.lum-band-more {
+  margin-top: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.lum-band-more:hover {
+  text-decoration: underline;
+}
+
+/* ---------- 涨停原因分布 ---------- */
+
+.lum-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.lum-reasons-meta {
+  margin: 0 0 2px;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.lum-reason {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 66px 52px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lum-reason-label {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lum-reason-label.is-other {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.lum-reason-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.lum-reason-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, rgba(224, 72, 79, 0.55), var(--pos));
+}
+
+.lum-reason-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+/* ---------- 涨停池明细 ---------- */
+
+.lum-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.lum-filter {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-alt-base);
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--duration) var(--ease),
+    color var(--duration) var(--ease);
+}
+
+.lum-filter:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.lum-filter.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.lum-table {
+  table-layout: fixed;
+  min-width: 760px;
+}
+
+.lum-table th:nth-child(1) {
+  width: 84px;
+}
+
+.lum-table th:nth-child(2) {
+  width: 130px;
+}
+
+.lum-table th:nth-child(3) {
+  width: 84px;
+}
+
+.lum-table th:nth-child(4) {
+  width: 84px;
+}
+
+.lum-table th:nth-child(5) {
+  width: 64px;
+}
+
+.lum-table th:nth-child(6) {
+  width: 84px;
+}
+
+.lum-table th:nth-child(7) {
+  width: 84px;
+}
+
+.lum-table th:nth-child(8) {
+  width: 104px;
+}
+
+.lum-reason-cell {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lum-tag {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--warning);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.lum-table-more {
+  margin-top: var(--space-3);
+}
+
+/* ---------- 空态 / 页脚 ---------- */
+
+.lum-notice {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.05);
+}
+
+.lum-notice-title {
+  margin: 0 0 6px;
+  font-size: var(--text-md);
+}
+
+.lum-notice-text {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+.lum-placeholder {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.lum-loading {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.lum-foot {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+}
+
+.lum-foot p {
+  margin: 0;
+}
+
+@media (max-width: 1080px) {
+  .lum-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .lum-hero {
+    flex-direction: column;
+  }
+
+  .lum-bands {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ---------- 龙虎榜（dragon-tiger 页） ---------- */
@@ -10389,9 +10853,109 @@ body > .modal {
 .workspace-section h2 { margin: 7px 0 0; font-size: 22px; font-weight: 550; letter-spacing: -.04em; }
 .workspace-section-title > a { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
 .workspace-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.workspace-card { background: var(--panel-solid); border: 1px solid var(--line); border-radius: 5px; padding: 22px; min-width: 0; }
-.workspace-card p { line-height: 1.8; }
-.workspace-card h3 { margin: 18px 0 12px; font-size: 18px; }
+.workspace-card {
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 6px);
+  padding: 16px 18px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.workspace-card.interactive {
+  cursor: pointer;
+}
+.workspace-card.interactive:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+.workspace-card p { line-height: 1.6; }
+.workspace-card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; color: var(--ink); }
+.workspace-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.workspace-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.workspace-card-title .stock-name {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.workspace-card-title .stock-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--muted);
+}
+.workspace-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.workspace-card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.6;
+}
+.workspace-card-row .muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+.workspace-card-row strong {
+  font-weight: 500;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, inherit);
+}
+.workspace-card-summary {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  background: var(--bg-sunken, rgba(255, 255, 255, 0.03));
+  border-left: 3px solid var(--accent, #0d9e88);
+  padding: 8px 10px;
+  border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
+  margin: 4px 0 2px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.workspace-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+.workspace-card-footer .action-link {
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 12px;
+}
+.workspace-card:hover .workspace-card-footer .action-link {
+  text-decoration: underline;
+}
 .workspace-card-top { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .workspace-card-index { font: 12px Menlo, monospace; color: var(--muted-2); }
 .workspace-price { font: 500 27px/1.3 "Iowan Old Style", Georgia, serif; letter-spacing: -.03em; margin: 20px 0 5px; }

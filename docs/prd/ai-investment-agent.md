@@ -1,5 +1,7 @@
 # AI 投资 Agent 协作体验 PRD
 
+> **2026-11-12 状态：部分裁撤。** 场景路由、公开计划、草案确认与部分失败体验仍适用；公司事件、研究主题与假设版本已删除，研究能力收敛为文档索引 + FTS5。
+
 > 状态：方向设计；当前实现以 AI SDK、Web chat 和 ResearchTopic/ResearchDocument 契约为准，具体阶段按开发计划推进
 > 日期：2026-07-29
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)

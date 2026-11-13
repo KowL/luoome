@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>交易作战室 · luoome</title>
+<style>
+:root{--ink:#192b30;--muted:#596e70;--line:#dce1dc;--bg:#f4f5f0;--paper:#fff;--teal:#11675c;--pale:#e4f0e9;--red:#ab4534;--green:#147862;--mono:"IBM Plex Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;--sans:"Instrument Sans","PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box} html{scroll-behavior:smooth;scroll-padding-top:72px}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}button,select{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid #d99e38;outline-offset:3px}button{touch-action:manipulation}button,select{border:0}button[disabled]{cursor:default;opacity:.5}button:hover:not(:disabled){filter:brightness(.96)}.mono,.metric strong,.numeric,.clock,.event-time,.rank,.fund-number{font-family:var(--mono);font-variant-numeric:tabular-nums}.pos{color:var(--red)}.neg{color:var(--green)}.sub{color:var(--muted)}[hidden]{display:none!important}
+header{background:#172a2d;color:#edf4ed;min-height:56px}.wrap{max-width:1540px;margin:auto;padding-inline:clamp(18px,3.5vw,60px)}.top{display:flex;align-items:center;gap:42px;min-height:56px}.brand{display:flex;align-items:center;gap:9px;font:700 24px/1 var(--sans);letter-spacing:-1.7px}.brand-mark{width:25px;height:24px;display:inline-flex;align-items:flex-end;gap:3px;transform:skewY(-15deg)}.brand-mark i{width:5px;height:11px;background:#c5e695}.brand-mark i:nth-child(2){height:18px}.brand-mark i:nth-child(3){height:23px}.top nav{display:flex;align-self:stretch;gap:22px}.top nav button{position:relative;white-space:nowrap;background:none;color:#bdcac8;font-size:13px;padding:0 2px}.top nav button[aria-current=page]{color:white;font-weight:650}.top nav button[aria-current=page]:after{content:"";position:absolute;bottom:0;left:0;right:0;height:3px;background:#bad997}.demo{margin-left:auto;font-size:12px;white-space:nowrap;display:flex;align-items:center;gap:7px;color:#d7dfce}.demo:before{content:"";width:7px;height:7px;background:#c0df96;border-radius:50%}
+main{padding-bottom:32px}.pagehead{display:flex;align-items:center;justify-content:space-between;padding:23px 0 18px;gap:16px}.pagehead h1{font-size:clamp(28px,2.6vw,41px);line-height:1.2;letter-spacing:-1.4px;margin:0 0 5px}.date{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px;flex-wrap:wrap}.date b{font-weight:600;color:#354e4b}.time-tools{display:flex;align-items:center;gap:12px}.clock{text-align:right;font-size:22px;font-weight:600;line-height:1.1}.clock small{display:block;font:11px/1.5 var(--sans);color:var(--muted);margin-top:4px}.btn,.seg button,.sorter{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:white;border:1px solid #cbd4cd;border-radius:6px;font-size:12px;font-weight:560;padding:7px 12px}.btn.primary{background:var(--ink);border-color:var(--ink);color:white}.icon{width:16px;height:16px;flex:none;display:inline-block;vertical-align:-3px}.replay{border:1px solid #a5bcb1;border-radius:8px;background:#eef4ec;margin:0 0 14px;padding:11px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}.replay strong{font-size:14px}.time-buttons{display:flex;gap:4px;flex-wrap:wrap}.time-buttons button{font:12px var(--mono);padding:6px 9px;border-radius:4px;background:transparent}.time-buttons button.active{background:#244e48;color:white}.replay .last{margin-left:auto}.btn.flat{background:transparent}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--paper);border:1px solid var(--line);border-radius:9px;overflow:hidden}.metric{padding:14px 18px;min-width:0;position:relative}.metric+.metric{border-left:1px solid var(--line)}.metric-label{font-size:12px;color:#536664;font-weight:600;display:flex;align-items:center;gap:7px}.metric-label .icon{width:15px;height:15px;color:#65807a}.metric strong{font-size:clamp(21px,2.05vw,32px);letter-spacing:-1.5px;line-height:1.17}.metric .value{display:flex;align-items:baseline;gap:7px;margin:6px 0 4px}.metric .unit{font-size:12px;color:var(--muted)}.metric .meta{font-size:11px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}.breadth-track{width:42px;height:5px;display:inline-flex;overflow:hidden;border-radius:2px;gap:2px}.breadth-track i:first-child{background:#be6655}.breadth-track i:last-child{flex:1;background:#58a593}
+.grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(295px,1fr);gap:15px;margin-top:15px;align-items:stretch}.panel{min-width:0;background:white;border:1px solid var(--line);border-radius:9px;overflow:hidden}.panelpad{padding:17px 20px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.title{display:flex;align-items:center;gap:9px;min-width:0}.title h2,h2{font-size:18px;line-height:1.35;letter-spacing:-.45px;margin:0}.head-ico{display:inline-flex;color:var(--teal)}.hint,.section-head small{font-size:11px;color:var(--muted)}.chart-panel{background:#192d31;color:#f3f7f2;border-color:#223c3d;padding:17px 20px 8px}.chart-panel h2{color:#f7f7f0}.chart-panel .head-ico{color:#c5dfae}.chart-panel .stamp{color:#a8bdb9;font-size:11px}.chart-sub{color:#adc1bd;font-size:12px;margin:3px 0 12px}.legend{display:flex;flex-wrap:wrap;gap:7px 18px;align-items:center}.legend button{background:transparent;padding:2px 0;color:#e8efec;display:inline-flex;align-items:center;gap:5px;font-size:12px}.legend b{font:600 12px var(--mono);margin-left:2px}.key{height:3px;width:14px;border-radius:2px;display:inline-block}.chart-wrap{margin-top:5px;line-height:0}.chart-wrap svg{width:100%;height:auto;display:block;max-height:213px}.linkbtn{display:inline-flex;align-items:center;gap:2px;background:none;padding:3px 0;color:var(--teal);font-size:12px;font-weight:600;white-space:nowrap}.events{padding:17px 18px 10px}.event-list{display:flex;flex-direction:column;margin:10px 0 0}.event{display:grid;grid-template-columns:43px 8px minmax(0,1fr) 12px;gap:7px;text-align:left;background:white;padding:9px 0 10px;border-bottom:1px solid #eaede8;width:100%;align-items:start}.event:last-child{border:0}.event-time{color:#627471;font-size:11px;padding-top:2px}.dot{width:7px;height:7px;border-radius:50%;margin-top:6px;display:inline-block}.event b{display:block;font-size:13px;line-height:1.4}.event small{display:block;font-size:11px;line-height:1.5;color:var(--muted);margin-top:3px}.arrow{color:#73918b;font:18px/1.2 var(--sans)}.seg{display:flex;background:#f0f2ec;border-radius:6px;padding:3px;gap:2px}.seg button{background:transparent;border:0;box-shadow:none;padding:4px 9px;color:#5d706b;font-size:12px;white-space:nowrap}.seg button[aria-pressed=true]{color:#174f45;background:white;box-shadow:0 1px 4px #1e332c22}.table-head{padding:15px 17px 12px}.table-meta{display:flex;justify-content:space-between;align-items:center;gap:5px;margin-top:10px}.sorter{background:#f8f9f6;font-size:11px;padding:4px 6px}.board{overflow-x:auto}.board table{width:100%;border-collapse:collapse;white-space:nowrap}.board th{text-align:right;background:#f5f6f2;font-size:11px;color:#62716b;padding:7px 9px;font-weight:500}.board th:first-child,.board td:first-child{text-align:left;padding-left:17px}.board td{border-top:1px solid #ecede9;text-align:right;padding:9px;font-size:12px}.board th:last-child,.board td:last-child{padding-right:16px}.board tr.selected td{background:#edf4eb}.board tr.selected td:first-child{box-shadow:3px 0 0 #447e66}.board tbody tr{cursor:pointer}.board tbody tr:hover td{background:#f4f7ef}.rank{font-size:11px;color:#798783;min-width:21px;display:inline-block}.tname{font-size:13px;font-weight:650}.rowbtn{background:none;padding:0;display:inline-flex;align-items:center;gap:4px}.chip{display:inline-flex;font-size:10px;font-weight:600;border-radius:4px;line-height:1.6;padding:1px 6px;white-space:nowrap;background:#e8ece8;color:#54645e}.chip.warm{background:#f8e6dc;color:#93432e}.chip.cool{background:#e1eee8;color:#2a6c58}.detail{padding:16px 18px}.detail-caption{font-size:11px;color:#5b726b}.detail-top{display:flex;align-items:center;justify-content:space-between;margin:7px 0}.detail-top h2{font-size:23px}.detail-stat{display:grid;grid-template-columns:repeat(3,1fr);border-block:1px solid var(--line);margin:11px 0 12px;padding:9px 0}.detail-stat small{display:block;color:var(--muted);font-size:11px}.detail-stat strong{font:600 16px/1.45 var(--mono)}.stock-head{display:flex;align-items:center;justify-content:space-between}.stock-head h3,h3{font-size:13px;margin:0}.stock{display:flex;align-items:center;width:100%;gap:7px;text-align:left;background:transparent;padding:9px 0;border-bottom:1px solid #edf0e9}.stock:last-child{border:0}.stock .role{font-size:10px;background:#f0f1e9;color:#59664e;border-radius:3px;padding:2px 5px}.stock .name{font-weight:600;font-size:13px}.stock .numeric{margin-left:auto;font-size:13px}.empty{color:var(--muted);font-size:13px}.lower{margin-bottom:6px}.focus-intro{margin:17px 0 -2px;display:flex;justify-content:space-between;align-items:center}.focus-intro p{margin:0;color:var(--muted);font-size:12px}.fund-page{margin-top:15px}.fund-row{display:grid;grid-template-columns:82px 1fr 65px 74px;gap:12px;align-items:center;width:100%;padding:11px 0;background:transparent;border-bottom:1px solid #ebeee9;text-align:left}.fund-row strong{font-size:13px}.fund-row:last-child{border:0}.bar{height:10px;background:#eef1ea;overflow:hidden;border-radius:2px}.bar i{display:block;background:#6e9d86;height:100%}.fund-number{text-align:right;font-size:12px}.fund-label{font-size:11px;color:var(--muted)}.fund-head{padding-bottom:6px}.footnote{font-size:11px;color:var(--muted);margin:11px 0 0}.footer{font-size:11px;color:#697973;display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:16px}.footer span:last-child{font-family:var(--mono)}
+dialog{padding:0;border:1px solid #cbd6cd;border-radius:12px;color:var(--ink);max-width:min(530px,calc(100vw - 28px));width:530px;box-shadow:0 22px 80px #14282745}dialog::backdrop{background:#14272b78}dialog .inner{padding:24px}.dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.xbtn{border:1px solid var(--line);background:white;border-radius:50%;width:30px;height:30px;font-size:18px;line-height:1}.dialog-title{display:flex;align-items:baseline;gap:10px}.dialog-title h2{font-size:25px}.evidence{background:#edf4ed;border-left:3px solid #6d937d;padding:12px 14px;margin:12px 0;font-size:13px}.history{display:grid;gap:0;max-height:38vh;overflow:auto}.histrow{display:grid;grid-template-columns:52px 65px 1fr;gap:8px;border-top:1px solid var(--line);padding:7px 0;font-size:12px}.history time{color:#5b6d68}.dialog-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px}.at-time{color:var(--muted);font-size:12px}
+@media(min-width:1450px){.metric{padding:17px 22px}.chart-panel,.events{padding-top:20px}.event{padding:11px 0}.board td{padding-block:11px}.panelpad,.detail{padding:20px 22px}}
+@media(max-width:950px){.grid{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:10px}.panelpad,.events,.detail,.chart-panel{padding-inline:13px}.board td,.board th{padding-inline:6px}.board .optional{display:none}.legend{gap:9px}.event{gap:4px;grid-template-columns:37px 7px minmax(0,1fr) 9px}.metric{padding:12px}.metric .meta{gap:4px}.top{gap:22px}}
+@media(max-width:720px){.top{gap:19px;min-height:50px}.top nav{gap:12px}.brand{font-size:20px}.brand-mark{scale:.85}.top nav button{font-size:12px}.demo{font-size:10px;gap:4px}.wrap{padding-inline:13px}.pagehead{padding:17px 0 13px}.pagehead h1{margin-bottom:3px}.time-tools{gap:7px}.clock{font-size:17px}.btn{padding:6px 8px}.metrics{grid-template-columns:1fr 1fr}.metric{padding:10px 12px}.metric:nth-child(3){border-left:0}.metric:nth-child(n+3){border-top:1px solid var(--line)}.grid{grid-template-columns:1fr}.chart-panel{padding:14px 11px 8px}.chart-wrap svg{min-height:116px}.event{padding:7px 0}.board .optional{display:table-cell}.replay{gap:7px}.time-buttons{order:2;width:100%;justify-content:space-between}.time-buttons button{padding-inline:6px}.focus-intro{align-items:start;gap:10px}.footer{align-items:flex-start}.footer span:last-child{white-space:nowrap}.detail{scroll-margin-top:10px}.fund-row{grid-template-columns:64px 1fr 53px 61px;gap:7px}}
+@media(max-width:430px){.board .optional{display:none}.top nav{gap:9px}.top{gap:10px}.demo{font-size:10px}.date{font-size:10px}.clock small{font-size:10px}.footer{display:block}.footer span{display:block}.event-list .event small{font-size:11px}.section-head h2{font-size:16px}.time-tools .btn{font-size:11px}.legend b{font-size:11px}.legend button{font-size:11px}.fund-number{font-size:11px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<header><div class="top wrap"><div class="brand" aria-label="luoome"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>luoome</div><nav aria-label="工作台"><button data-nav="overview" aria-current="page">市场总览</button><button data-nav="themes">板块追踪</button><button data-nav="funds">成交分布</button></nav><span class="demo">模拟数据</span></div></header>
+<main class="wrap">
+<section class="pagehead"><div><h1>交易作战室</h1><div class="date"><b>沪深 A 股</b><span>／</span><span>2026 年 11 月 12 日 · 星期四</span></div></div><div class="time-tools"><div class="clock"><span id="clock"></span><small id="time-label"></small></div><button class="btn primary" id="replay-toggle" aria-controls="replay" aria-expanded="false"></button></div></section>
+<section id="replay" class="replay" aria-label="盘中回放" hidden></section>
+<section class="metrics" id="metrics" aria-label="市场概况"></section>
+<div id="content"></div>
+<div class="footer"><span>模拟盘面与虚构个股，仅用于体验功能流转。</span><span>沪深 A 股 · 15 分钟采样</span></div>
+</main>
+<dialog id="dialog" aria-labelledby="dialog-title"><div class="inner" id="dialog-content"></div></dialog>
+<script>
+// Fictional session. Amounts are in 亿元, percentages in percentage points.
+const TIMES = ['09:45', '10:00', '10:15', '10:30', '10:45', '11:00'];
+
+function themeFrames(openRet, total, rows) {
+  return rows.map(([ret, up, share, sealed, stage], i) => {
+    const previousRet = i > 0 ? rows[i - 1][0] : openRet;
+    const m15 = ((100 + ret) / (100 + previousRet) - 1) * 100;
+    const shareDelta = i > 0 ? share - rows[i - 1][2] : 0;
+    return { ret, m15: +m15.toFixed(2), up, total, share, shareDelta: +shareDelta.toFixed(1), sealed, stage };
+  });
+}
+
+function coreStock(id, name, role, returns, amounts, evidence) {
+  return { id, name, role, returns, amounts, evidence };
+}
+
+const THEMES = [
+  {
+    id: 'robotics', name: '机器人', industry: '机械设备', color: '#ff936f',
+    frames: themeFrames(0.12, 48, [
+      [0.32, 21, 4.1, 1, '观察'], [0.53, 24, 4.5, 1, '观察'],
+      [1.14, 30, 5.9, 2, '启动'], [2.06, 35, 7.6, 3, '扩散'],
+      [2.85, 39, 9.4, 4, '扩散'], [3.68, 43, 11.6, 5, '扩散'],
+    ]),
+    stocks: [
+      coreStock('SIM-01', '棱虎机电', '启动先锋', [1.62, 2.38, 5.46, 10, 8.76, 10], [1.1, 2.5, 4.6, 7.8, 10.5, 13.2], [
+        '开盘后首先出现拉升，涨幅高于题材整体。', '涨幅扩大至 2.38%，同期上涨成员增至 24 只。',
+        '本轮上涨快于题材，已有 30 只成分股上涨。', '本时点观察到封板；题材内共有 3 只封板。',
+        '开板后回落至 +8.76%，其余成员的上涨面仍扩大。', '回封至 +10.00%，题材上涨家数继续增加。',
+      ]),
+      coreStock('SIM-02', '衡川精工', '成交核心', [0.86, 1.23, 2.67, 4.31, 5.76, 6.42], [2.4, 5.7, 9.9, 14.1, 19.8, 26.4], [
+        '首个窗口累计成交 2.4 亿，高于另外两只观察股。', '累计成交 5.7 亿，价格继续强于题材整体。',
+        '累计成交升至 9.9 亿，同时涨幅扩大。', '成交活跃，涨幅超过同期题材涨幅。',
+        '先锋开板时仍在抬升，累计成交 19.8 亿。', '累计成交 26.4 亿，三只观察股中居首。',
+      ]),
+      coreStock('SIM-03', '允衡传动', '高度标', [10, 10, 10, 10, 10, 10], [0.8, 1.3, 2.2, 3.7, 5.2, 6.4], [
+        '昨日两连板，本时点封在涨停价。', '封板持续，题材内出现更多上涨成员。',
+        '仍在涨停价，另有一只成分股封板。', '本时点仍封板，累计成交 3.7 亿。',
+        '仍处涨停价，题材内的封板股增至 4 只。', '延续昨日连板高度，本时点仍封板。',
+      ]),
+    ],
+  },
+  {
+    id: 'compute', name: '算力硬件', industry: '电子通信', color: '#68d5c7',
+    frames: themeFrames(0.46, 52, [
+      [1.58, 39, 10.8, 3, '启动'], [2.86, 46, 13.4, 5, '扩散'],
+      [3.29, 47, 13.9, 6, '强势'], [2.73, 39, 11.8, 5, '分化'],
+      [1.96, 32, 9.1, 3, '回落'], [1.25, 26, 7.2, 2, '回落'],
+    ]),
+    stocks: [
+      coreStock('SIM-04', '凌弧光联', '启动先锋', [4.36, 7.22, 10, 8.04, 6.27, 4.63], [2.1, 4.7, 8.4, 12.9, 16.2, 19.8], [
+        '涨幅领先题材整体，上涨成员已有 39 只。', '升至 +7.22%，题材上涨面继续扩大。',
+        '本时点观察到封板，题材内已有 6 只封板。', '开板后回落至 +8.04%。',
+        '涨幅收窄，题材成分上涨家数同步减少。', '较上午封板时回落，仍高于昨收。',
+      ]),
+      coreStock('SIM-05', '千穹数通', '成交核心', [2.3, 4.53, 5.61, 4.87, 3.54, 2.4], [3.4, 8.2, 14.4, 20.3, 24.8, 28.1], [
+        '累计成交 3.4 亿，涨幅领先题材。', '本窗口成交活跃，股价继续抬升。',
+        '累计成交 14.4 亿，走势强于题材。', '仍有较高成交，涨幅较上个时点收窄。',
+        '成交额继续增加，股价与题材一同回落。', '累计成交 28.1 亿，成交放大没有扭转涨幅收窄。',
+      ]),
+    ],
+  },
+  {
+    id: 'battery', name: '固态电池', industry: '电力设备', color: '#f2cc71',
+    frames: themeFrames(-0.05, 36, [
+      [-0.32, 12, 3.5, 0, '回落'], [-0.14, 15, 3.6, 0, '观察'],
+      [0.24, 18, 4.0, 0, '观察'], [0.72, 23, 4.9, 1, '启动'],
+      [1.47, 28, 6.2, 2, '扩散'], [2.38, 31, 7.7, 3, '扩散'],
+    ]),
+    stocks: [
+      coreStock('SIM-06', '栖野材料', '启动先锋', [0.35, 0.84, 1.6, 3.89, 6.03, 8.28], [0.8, 1.7, 2.9, 4.7, 7.3, 10.9], [
+        '题材整体微跌，个股小幅上涨。', '股价继续抬高，上涨成员增至 15 只。',
+        '题材翻红，个股涨幅达到 1.60%。', '股价明显拉升，题材出现首只封板股。',
+        '个股走高，题材内已有 28 只上涨。', '涨幅扩大至 8.28%，上涨家数继续增加。',
+      ]),
+      coreStock('SIM-07', '星铸能源', '成交核心', [-0.55, -0.12, 0.65, 1.92, 3.18, 4.56], [1.6, 3.1, 5.4, 8.2, 12.4, 17.7], [
+        '累计成交 1.6 亿，股价略低于昨收。', '跌幅收窄，累计成交 3.1 亿。',
+        '股价翻红，累计成交 5.4 亿。', '放量上涨，涨幅超过题材。',
+        '累计成交 12.4 亿，股价继续走高。', '累计成交 17.7 亿，成交活跃度保持靠前。',
+      ]),
+    ],
+  },
+  {
+    id: 'aviation', name: '低空经济', industry: '交通装备', color: '#8babe2',
+    frames: themeFrames(0.08, 42, [
+      [0.64, 24, 4.2, 1, '观察'], [1.23, 30, 4.9, 2, '启动'],
+      [1.72, 32, 5.4, 3, '扩散'], [1.44, 29, 4.8, 2, '分化'],
+      [1.11, 25, 4.2, 1, '分化'], [0.88, 22, 3.9, 1, '回落'],
+    ]),
+    stocks: [
+      coreStock('SIM-08', '旷羽航材', '启动先锋', [1.12, 2.37, 4.51, 4.07, 3.03, 2.34], [0.7, 1.5, 3, 4.9, 6.1, 7.5], [
+        '股价先于多数成分走高。', '升至 +2.37%，上涨成员增加。', '股价与上涨家数一同走高。',
+        '本窗口涨幅略有收窄。', '上涨家数降至 25 只，股价随题材回落。', '仍维持红盘，累计成交 7.5 亿。',
+      ]),
+      coreStock('SIM-09', '岚桥飞控', '成交核心', [0.7, 1.92, 2.79, 2.65, 1.98, 1.45], [1.4, 3.2, 5.7, 8.5, 10.3, 12.2], [
+        '累计成交 1.4 亿，走势略强于题材。', '成交增加，涨幅扩大。', '累计成交 5.7 亿，强于题材。',
+        '成交仍活跃，涨幅小幅收窄。', '股价向下回落，本窗口新增成交减少。', '累计成交 12.2 亿，涨幅收窄至 1.45%。',
+      ]),
+    ],
+  },
+  {
+    id: 'biotech', name: '创新药', industry: '医药生物', color: '#b39bc9',
+    frames: themeFrames(0.02, 55, [
+      [0.16, 27, 5.3, 1, '观察'], [0.38, 30, 5.6, 1, '观察'],
+      [0.19, 26, 5.0, 1, '分化'], [-0.24, 21, 4.6, 0, '分化'],
+      [-0.61, 17, 4.0, 0, '回落'], [-0.95, 14, 3.6, 0, '回落'],
+    ]),
+    stocks: [
+      coreStock('SIM-10', '桐澈医研', '启动先锋', [1.51, 2.1, 1.86, 1.28, 0.64, 0.2], [1, 1.9, 3.1, 4.3, 5.4, 6.3], [
+        '个股上涨，涨幅高于题材。', '股价进一步抬升，题材上涨家数增加。', '个股涨幅略有收窄。',
+        '题材转跌，个股仍高于昨收。', '涨幅收窄，上涨成分减少。', '股价接近昨收，仍高于题材平均表现。',
+      ]),
+      coreStock('SIM-11', '北栎生科', '成交核心', [0.6, 0.93, 0.55, -0.27, -0.82, -1.19], [1.5, 3.3, 5.8, 8.9, 11.4, 14.2], [
+        '累计成交 1.5 亿，微幅上涨。', '涨幅扩大，累计成交 3.3 亿。', '成交持续，涨幅有所收窄。',
+        '股价跌破昨收，题材同步转跌。', '成交继续增加，股价进一步走低。', '累计成交 14.2 亿，走势弱于题材。',
+      ]),
+    ],
+  },
+  {
+    id: 'shipping', name: '航运港口', industry: '交通运输', color: '#96ae91',
+    frames: themeFrames(-0.11, 28, [
+      [-0.54, 8, 2.9, 0, '回落'], [-0.87, 7, 2.6, 0, '回落'],
+      [-1.08, 6, 2.4, 0, '回落'], [-0.86, 8, 2.5, 0, '修复'],
+      [-0.52, 10, 2.8, 0, '修复'], [-0.18, 12, 3.0, 0, '修复'],
+    ]),
+    stocks: [
+      coreStock('SIM-12', '澄屿港务', '成交核心', [-0.63, -1.12, -1.49, -1.09, -0.62, -0.22], [1.1, 2.6, 4.1, 6.3, 8.5, 10.7], [
+        '股价低于昨收，累计成交 1.1 亿。', '跌幅扩大，题材上涨家数减少。', '股价下探，累计成交 4.1 亿。',
+        '跌幅收窄，累计成交 6.3 亿。', '个股与题材同步修复。', '累计成交 10.7 亿，股价已接近昨收。',
+      ]),
+      coreStock('SIM-13', '引潮海运', '相对强势', [0.18, 0.12, -0.12, 0.34, 0.78, 1.21], [0.6, 1.2, 2.2, 3.4, 4.9, 6.8], [
+        '题材整体下跌，个股仍为红盘。', '题材跌幅扩大，个股仍高于昨收。', '股价小幅下跌，跌幅小于题材。',
+        '股价翻红，题材跌幅收窄。', '股价继续抬升，上涨成员增加。', '股价高于昨收，涨幅领先题材。',
+      ]),
+    ],
+  },
+];
+
+const MARKET = [
+  {index: 3421.68, indexRet: 0.12, up: 2230, down: 2666, flat: 204, amount: 942, amountYoY: -2.1, sealed: 17, broken: 4, ladder: 4},
+  {index: 3429.88, indexRet: 0.36, up: 2647, down: 2271, flat: 182, amount: 1866, amountYoY: 1.8, sealed: 24, broken: 5, ladder: 4},
+  {index: 3433.98, indexRet: 0.48, up: 2819, down: 2117, flat: 164, amount: 2714, amountYoY: 4.3, sealed: 29, broken: 7, ladder: 5},
+  {index: 3427.15, indexRet: 0.28, up: 2512, down: 2412, flat: 176, amount: 3486, amountYoY: 5.6, sealed: 32, broken: 9, ladder: 5},
+  {index: 3430.91, indexRet: 0.39, up: 2746, down: 2195, flat: 159, amount: 4261, amountYoY: 7.4, sealed: 35, broken: 11, ladder: 5},
+  {index: 3437.06, indexRet: 0.57, up: 3128, down: 1827, flat: 145, amount: 5086, amountYoY: 8.9, sealed: 38, broken: 12, ladder: 5},
+];
+
+const EVENTS = [
+  {id:'ev01', frame:0, theme:'compute', title:'算力硬件率先走强', detail:'39 / 52 只成分上涨，窗口成交占比达到 10.8%。'},
+  {id:'ev02', frame:1, theme:'compute', title:'算力硬件上涨面扩大', detail:'上涨家数从 39 增至 46，封板股增至 5 只。'},
+  {id:'ev03', frame:2, theme:'robotics', title:'机器人出现接力迹象', detail:'30 / 48 只上涨，窗口成交占比从 4.5% 升至 5.9%。'},
+  {id:'ev04', frame:3, theme:'compute', title:'算力先锋开板', detail:'凌弧光联从涨停价回落至 +8.04%，题材上涨家数降至 39。'},
+  {id:'ev05', frame:3, theme:'robotics', title:'棱虎机电封板', detail:'机器人上涨家数增至 35 只，衡川精工累计成交 14.1 亿。'},
+  {id:'ev06', frame:4, theme:'battery', title:'固态电池同步扩散', detail:'28 / 36 只成分上涨，窗口成交占比升至 6.2%。'},
+  {id:'ev07', frame:5, theme:'robotics', title:'机器人扩散至 43 只', detail:'43 / 48 只上涨，5 只封板，窗口成交占比升至 11.6%。'},
+];
+
+// Reuse securities across the theme and industry views, but retain each
+// industry's own breadth, returns and window turnover.
+function industryStock(themeIndex, stockIndex) {
+  const stock = THEMES[themeIndex].stocks[stockIndex];
+  const evidence = stock.returns.map((ret, i) => {
+    const sign = ret > 0 ? '+' : '';
+    const signChange = i > 0 && ret < stock.returns[i - 1] ? '较上个时点走低' : '较上个时点抬升';
+    const movement = i === 0 ? '首个观察时点' : ret === stock.returns[i - 1] ? '与上个时点持平' : signChange;
+    return `${movement}，涨跌幅 ${sign}${ret.toFixed(2)}%，累计成交 ${stock.amounts[i].toFixed(1)} 亿。`;
+  });
+  return { ...stock, evidence };
+}
+
+const INDUSTRIES = [
+  {
+    id: 'machinery', name: '机械设备', industry: '行业', color: '#ff936f',
+    frames: themeFrames(0.04, 328, [
+      [0.18, 145, 8.2, 1, '观察'], [0.38, 163, 8.6, 2, '观察'],
+      [0.77, 182, 9.3, 3, '启动'], [1.16, 211, 10.1, 4, '扩散'],
+      [1.54, 237, 11.1, 6, '扩散'], [2.02, 258, 12.4, 7, '扩散'],
+    ]),
+    stocks: [industryStock(0, 0), industryStock(0, 1)],
+  },
+  {
+    id: 'electronics', name: '电子通信', industry: '行业', color: '#68d5c7',
+    frames: themeFrames(0.22, 390, [
+      [0.92, 246, 13.0, 4, '启动'], [1.85, 302, 15.8, 6, '扩散'],
+      [2.13, 318, 16.3, 8, '强势'], [1.76, 282, 14.9, 7, '分化'],
+      [1.28, 254, 13.2, 5, '回落'], [0.97, 225, 11.7, 4, '回落'],
+    ]),
+    stocks: [industryStock(1, 0), industryStock(1, 1)],
+  },
+  {
+    id: 'electrical', name: '电力设备', industry: '行业', color: '#f2cc71',
+    frames: themeFrames(-0.09, 260, [
+      [-0.27, 91, 7.5, 1, '回落'], [-0.09, 107, 7.6, 1, '修复'],
+      [0.12, 132, 7.9, 1, '观察'], [0.53, 151, 8.3, 2, '启动'],
+      [0.97, 177, 8.9, 3, '扩散'], [1.41, 196, 9.7, 4, '扩散'],
+    ]),
+    stocks: [industryStock(2, 0), industryStock(2, 1)],
+  },
+  {
+    id: 'pharma', name: '医药生物', industry: '行业', color: '#b39bc9',
+    frames: themeFrames(0.02, 341, [
+      [0.11, 163, 8.9, 2, '观察'], [0.29, 181, 9.2, 2, '观察'],
+      [0.07, 169, 8.8, 2, '分化'], [-0.16, 146, 8.2, 1, '分化'],
+      [-0.43, 119, 7.8, 1, '回落'], [-0.71, 106, 7.3, 1, '回落'],
+    ]),
+    stocks: [industryStock(4, 0), industryStock(4, 1)],
+  },
+];
+
+</script><script>
+function renderRotationChart(frame) {
+  const series = THEMES.slice(0, 3);
+  const left = 47;
+  const right = 684;
+  const top = 15;
+  const bottom = 153;
+  const stockReturns = series.flatMap(theme => theme.frames.slice(0, frame + 1).map(point => point.ret));
+  const minimum = Math.min(0, ...stockReturns);
+  const maximum = Math.max(1, ...stockReturns);
+  const roughStep = (maximum - minimum) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const tickStep = [1, 2, 2.5, 5, 10].find(step => step * magnitude >= roughStep) * magnitude;
+  const low = Math.floor(minimum / tickStep) * tickStep;
+  const high = Math.ceil(maximum / tickStep) * tickStep;
+  const x = index => left + (right - left) * index / (TIMES.length - 1);
+  const y = value => bottom - ((value - low) / (high - low)) * (bottom - top);
+  const format = (value, digits) => (value > 0 ? '+' : '') + value.toFixed(digits) + '%';
+  const parts = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 185" width="100%" style="display:block;height:auto" aria-label="三个题材截至' + TIMES[frame] + '的日内涨跌幅走势">',
+    '<defs><linearGradient id="room-chart-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="' + series[0].color + '" stop-opacity=".115"/><stop offset="100%" stop-color="' + series[0].color + '" stop-opacity="0"/></linearGradient></defs>',
+    '<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#a4b6b7" font-variant-numeric="tabular-nums">'
+  ];
+
+  for (let tick = low; tick <= high + tickStep / 2; tick += tickStep) {
+    const position = y(tick);
+    const zero = Math.abs(tick) < 0.0001;
+    const label = (tick > 0 ? '+' : '') + Number(tick.toFixed(2)) + '%';
+    parts.push('<line x1="' + left + '" x2="' + right + '" y1="' + position + '" y2="' + position + '" stroke="' + (zero ? '#638083' : '#405457') + '" stroke-opacity="' + (zero ? '.72' : '.64') + '"' + (zero ? '' : ' stroke-dasharray="2 5"') + '/>');
+    parts.push('<text x="' + (left - 8) + '" y="' + (position + 4) + '" text-anchor="end">' + label + '</text>');
+  }
+
+  TIMES.forEach((time, index) => {
+    const axisColor = index === frame ? '#edf3ed' : index < frame ? '#a4b6b7' : '#7d9293';
+    const position = x(index);
+    parts.push('<line x1="' + position + '" x2="' + position + '" y1="' + top + '" y2="' + bottom + '" stroke="#4a6061" stroke-opacity=".32" stroke-dasharray="2 6"/>');
+    parts.push('<text x="' + position + '" y="177" fill="' + axisColor + '" text-anchor="middle">' + time + '</text>');
+  });
+
+  const latestX = x(frame);
+  parts.push('<line x1="' + latestX + '" x2="' + latestX + '" y1="' + top + '" y2="' + (bottom + 3) + '" stroke="#b9c9c5" stroke-opacity=".52" stroke-dasharray="3 5"/>');
+  const seriesInfo = series.map(theme => {
+    const values = theme.frames.slice(0, frame + 1).map(point => point.ret);
+    return {theme, values, latest: values[frame], endY: y(values[frame])};
+  });
+  seriesInfo.forEach(({theme, values, latest, endY}, seriesIndex) => {
+    const trace = values.map((value, i) => (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ',' + y(value).toFixed(1)).join(' ');
+    if (seriesIndex === 0 && frame > 0) {
+      parts.push('<path d="' + trace + ' L' + latestX + ',' + y(0) + ' L' + left + ',' + y(0) + ' Z" fill="url(#room-chart-area)"/>');
+    }
+    parts.push('<path d="' + trace + '" fill="none" stroke="' + theme.color + '" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"><title>' + theme.name + ' 截至 ' + TIMES[frame] + ' ' + format(latest, 2) + '</title></path>');
+    parts.push('<circle cx="' + latestX + '" cy="' + endY + '" r="4.1" fill="' + theme.color + '" stroke="#15272b" stroke-width="1.6"/>');
+  });
+
+  if (frame === TIMES.length - 1) {
+    const labels = [...seriesInfo].sort((a, b) => a.endY - b.endY);
+    labels.forEach((item, i) => { item.labelY = i === 0 ? item.endY : Math.max(item.endY, labels[i - 1].labelY + 15); });
+    if (labels[labels.length - 1].labelY > bottom) {
+      labels[labels.length - 1].labelY = bottom;
+      for (let i = labels.length - 2; i >= 0; i--) labels[i].labelY = Math.min(labels[i].labelY, labels[i + 1].labelY - 15);
+    }
+    labels.forEach(({theme, latest, endY, labelY}) => {
+      parts.push('<path d="M' + (right + 5) + ',' + endY + ' L' + (right + 12) + ',' + labelY + '" fill="none" stroke="' + theme.color + '" stroke-opacity=".65"/>');
+      parts.push('<text x="' + (right + 15) + '" y="' + (labelY + 4) + '" fill="' + theme.color + '" font-size="12">' + format(latest, 2) + '</text>');
+    });
+  }
+
+  const hitWidth = (right - left) / (TIMES.length - 1);
+  TIMES.slice(0, frame + 1).forEach((time, index) => {
+    const start = Math.max(left, x(index) - hitWidth / 2);
+    const end = Math.min(right + 4, x(index) + hitWidth / 2);
+    parts.push('<rect data-chart-frame="' + index + '" x="' + start + '" y="' + top + '" width="' + (end - start) + '" height="' + (bottom - top + 28) + '" fill="transparent" style="cursor:pointer"><title>' + time + ' · 查看时点快照</title></rect>');
+  });
+  parts.push('</g></svg>');
+  return parts.join('');
+}
+
+</script><script>
+const allGroups = [...THEMES, ...INDUSTRIES];
+const state = { view: 'overview', frame: TIMES.length - 1, group: THEMES[0].id, scope: 'themes', sort: 'ret', replay: false };
+const money = value => value.toLocaleString('en-US', {maximumFractionDigits: 1});
+const signed = (value, digits = 2) => (value > 0 ? '+' : '') + value.toFixed(digits);
+const pct = value => signed(value) + '%';
+const tint = value => value > 0 ? 'pos' : value < 0 ? 'neg' : '';
+const dataGroup = id => allGroups.find(group => group.id === id);
+const activeGroup = () => dataGroup(state.group);
+const activeGroups = () => state.scope === 'themes' ? THEMES : INDUSTRIES;
+const scopeName = () => state.scope === 'themes' ? '题材' : '行业';
+const byId = id => document.getElementById(id);
+const icons = {
+ chart:'<path d="M3 18V5m0 13h18M6 14l4-5 4 3 6-7"/>',
+ breadth:'<path d="M4 18V9m5 9V5m5 13v-7m5 7V7"/>',
+ money:'<path d="M3 8h18M3 12h13M3 16h9"/>',
+ pulse:'<path d="M2 13h5l3-8 4 14 3-8 2 2h3"/>',
+ replay:'<path d="M4 11a8 8 0 1 1 1 6M4 5v6h6m2-4v5l3 2"/>',
+ list:'<path d="M3 6h2m3 0h13M3 12h2m3 0h13M3 18h2m3 0h13"/>',
+ back:'<path d="m14 5-7 7 7 7"/>',
+ arrow:'<path d="m8 5 7 7-7 7"/>'
+};
+function icon(name) {
+ return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+icons[name]+'</svg>';
+}
+function head(title, kind, extra='') {
+ return '<div class="section-head"><div class="title"><span class="head-ico">'+icon(kind)+'</span><h2>'+title+'</h2></div>'+extra+'</div>';
+}
+function chip(stage){
+ const tone=['扩散','强势','启动','走强'].includes(stage)?'warm':['回落','分化','走弱'].includes(stage)?'cool':'';
+ return '<span class="chip '+tone+'">'+stage+'</span>';
+}
+function metrics(){
+ const m=MARKET[state.frame];
+ const item=(label,i,value,meta)=>'<div class="metric"><div class="metric-label">'+icon(i)+label+'</div><div class="value">'+value+'</div><div class="meta">'+meta+'</div></div>';
+ byId('metrics').innerHTML=[
+  item('上证指数','chart','<strong>'+m.index.toLocaleString('en-US',{minimumFractionDigits:2})+'</strong><span class="numeric '+tint(m.indexRet)+'">'+pct(m.indexRet)+'</span>','沪市指数 · 较昨收'),
+  item('市场宽度','breadth','<strong>'+money(m.up)+'</strong><span class="unit">家上涨</span>','<span class="breadth-track" aria-hidden="true"><i style="width:'+100*m.up/(m.up+m.down)+'%"></i><i></i></span>跌 '+money(m.down)+' · 平 '+m.flat),
+  item('两市成交额','money','<strong>'+money(m.amount)+'</strong><span class="unit">亿元</span>','较昨日同时点 <span class="numeric '+tint(m.amountYoY)+'">'+signed(m.amountYoY,1)+'%</span>'),
+  item('涨停情绪','pulse','<strong>'+m.sealed+'</strong><span class="unit">家封板</span>','当前炸板 '+m.broken+' 家 · 最高 '+m.ladder+' 连板')
+ ].join('');
+}
+function replayBar(){
+ const el=byId('replay');
+ el.hidden=!state.replay;
+ byId('replay-toggle').setAttribute('aria-expanded', String(state.replay));
+ byId('replay-toggle').innerHTML=icon('replay')+(state.replay?'收起回放':'盘中回放');
+ if(!state.replay) return;
+ el.innerHTML='<strong>回放时点</strong><div class="time-buttons">'+TIMES.map((time,i)=>'<button class="'+(i===state.frame?'active':'')+'" aria-pressed="'+(i===state.frame)+'" data-time="'+i+'">'+time+'</button>').join('')+'</div><button class="btn last" data-latest>返回最新</button>';
+}
+function timelineEvents() {
+ return EVENTS.filter(event=>event.frame<=state.frame).slice().reverse();
+}
+function eventList(events){
+ return '<div class="event-list">'+events.map(event=>'<button class="event" data-event="'+event.id+'" title="查看事件发生时的板块"><time class="event-time">'+TIMES[event.frame]+'</time><i class="dot" style="background:'+dataGroup(event.theme).color+'"></i><span><b>'+event.title+'</b><small>'+event.detail+'</small></span><span class="arrow">›</span></button>').join('')+'</div>';
+}
+function chartPanel(){
+ return '<section class="panel chart-panel">'+head('题材轮动','chart','<span class="stamp mono">09:45 — '+TIMES[state.frame]+'</span>')+
+ '<p class="chart-sub">相对昨收涨跌幅 · 点击曲线上的时点回看盘面</p><div class="legend">'+THEMES.slice(0,3).map(group=>'<button data-open-group="'+group.id+'"><i class="key" style="background:'+group.color+'"></i>'+group.name+'</button>').join('')+'</div><div class="chart-wrap">'+renderRotationChart(state.frame)+'</div></section>';
+}
+function eventsPanel(){
+ return '<section class="panel events">'+head('盘中动态','pulse','<button class="linkbtn" data-events>全部动态 '+icon('arrow')+'</button>')+eventList(timelineEvents().slice(0,4))+'</section>';
+}
+function switcher(){
+ return '<div class="seg" aria-label="板块类型">'+[['themes','题材'],['industries','行业']].map(([id,name])=>'<button aria-pressed="'+(state.scope===id)+'" data-scope="'+id+'">'+name+'</button>').join('')+'</div>';
+}
+function ranking(){
+ const field=state.sort==='weak'?'m15':state.sort;
+ const sign=state.sort==='weak'?1:-1;
+ const ordered=activeGroups().slice().sort((a,b)=>sign*(a.frames[state.frame][field]-b.frames[state.frame][field]));
+ const sortOptions=[['ret','当日涨幅 ↓'],['m15','近 15 分钟转强 ↓'],['weak','近 15 分钟走弱 ↑'],['share','成交占比 ↓']].map(([id,label])=>'<option value="'+id+'"'+(state.sort===id?' selected':'')+'>'+label+'</option>').join('');
+ const rows=ordered.map((group,i)=>{
+  const f=group.frames[state.frame];
+  return '<tr data-row="'+group.id+'" class="'+(state.group===group.id?'selected':'')+'"><td><button class="rowbtn" data-group="'+group.id+'" aria-pressed="'+(state.group===group.id)+'"><span class="rank">'+String(i+1).padStart(2,'0')+'</span><span class="tname">'+group.name+'</span></button></td><td class="numeric '+tint(f.ret)+'">'+pct(f.ret)+'</td><td class="numeric '+tint(f.m15)+'">'+pct(f.m15)+'</td><td class="numeric">'+f.up+'/'+f.total+'</td><td class="optional numeric">'+f.share.toFixed(1)+'%</td><td>'+chip(f.stage)+'</td></tr>';
+ }).join('');
+ return '<section class="panel"><div class="table-head">'+head('板块强弱榜','list',switcher())+'<div class="table-meta"><small class="hint">'+activeGroups().length+' 个'+scopeName()+'样本 · 选择一行查看核心股</small><select id="sort" class="sorter" aria-label="榜单排序">'+sortOptions+'</select></div></div><div class="board"><table><thead><tr><th>'+scopeName()+'</th><th>日涨幅</th><th>近 15 分</th><th>上涨/有效</th><th class="optional">成交占比¹</th><th>状态</th></tr></thead><tbody>'+rows+'</tbody></table></div></section>';
+}
+function stats(items){
+ return '<div class="detail-stat">'+items.map(([label,value,cls])=>'<div><small>'+label+'</small><strong class="'+(cls||'')+'">'+value+'</strong></div>').join('')+'</div>';
+}
+function details(){
+ const g=activeGroup(),f=g.frames[state.frame];
+ const stockList=g.stocks.map(s=>'<button class="stock" data-stock="'+s.id+'"><span class="role">'+s.role+'</span><span class="name">'+s.name+'</span><span class="numeric '+tint(s.returns[state.frame])+'">'+pct(s.returns[state.frame])+'</span><span class="arrow">›</span></button>').join('');
+ return '<aside class="panel detail" id="detail" tabindex="-1"><div class="section-head"><span class="detail-caption">'+scopeName()+'详情</span><span class="at-time mono">'+TIMES[state.frame]+'</span></div><div class="detail-top"><h2>'+g.name+'</h2>'+chip(f.stage)+'</div>'+stats([['当日涨幅',pct(f.ret),tint(f.ret)],['上涨家数',f.up+' / '+f.total],['封板家数',f.sealed+' 家']])+'<div class="stock-head"><h3>核心观察股</h3><small class="hint">点击查看依据</small></div>'+stockList+'</aside>';
+}
+function trackingEvidence(){
+ const g=activeGroup(), f=g.frames[state.frame], previous=state.frame>0?g.frames[state.frame-1]:undefined;
+ const items=timelineEvents().filter(event=>event.theme===g.id);
+ const description=previous?'本窗口上涨 '+f.up+' 家，上一窗口 '+previous.up+' 家。成交占比从 '+previous.share.toFixed(1)+'% 变为 '+f.share.toFixed(1)+'%。':'首个采样窗口，上涨 '+f.up+' / '+f.total+' 家，成交占比 '+f.share.toFixed(1)+'%。';
+ return '<section class="panel panelpad lower" style="margin-top:15px">'+head(g.name+' · 当时依据','pulse')+'<p>'+description+'</p>'+(items.length?eventList(items.slice(0,3)):'<p class="footnote">截至 '+TIMES[state.frame]+'，该'+scopeName()+'没有已记录的独立事件。</p>')+'</section>';
+}
+function fundPanel(){
+ const ordered=activeGroups().slice().sort((a,b)=>b.frames[state.frame].share-a.frames[state.frame].share);
+ const peak=ordered[0].frames[state.frame].share;
+ const rows=ordered.map(g=>{
+  const f=g.frames[state.frame];
+  return '<button class="fund-row" data-group="'+g.id+'" aria-pressed="'+(g.id===state.group)+'"><strong>'+g.name+'</strong><span class="bar"><i style="width:'+f.share/peak*100+'%;background:'+(state.group===g.id?'#38735d':'#8aad98')+'"></i></span><span class="fund-number">'+f.share.toFixed(1)+'%</span><span class="fund-number '+(state.frame?tint(f.shareDelta):'')+'">'+(state.frame?signed(f.shareDelta,1):'—')+'</span></button>';
+ }).join('');
+ return '<section class="panel panelpad">'+head('成交集中在哪些方向','money',switcher())+'<p class="hint">最近 15 分钟，各'+scopeName()+'成交额占同期沪深 A 股成交额的比例。</p><div class="fund-row fund-head fund-label"><span>'+scopeName()+'</span><span>按窗口占比排序</span><span style="text-align:right">占比</span><span style="text-align:right">环比百分点</span></div>'+rows+'<p class="footnote">成交占比反映交易活跃度。'+(state.scope==='themes'?'同一只股票可属于多个题材，各题材占比可重叠。':'此处列出四个行业样本。')+'</p></section>';
+}
+function render(){
+ byId('clock').textContent=TIMES[state.frame];
+ byId('time-label').textContent=state.frame===TIMES.length-1?'最新模拟快照':'历史模拟快照';
+ document.querySelectorAll('[data-nav]').forEach(el=>el.setAttribute('aria-current',el.dataset.nav===state.view?'page':'false'));
+ replayBar();metrics();
+ const intro=state.view==='overview'?'':'<div class="focus-intro"><button class="linkbtn" data-nav="overview">'+icon('back')+' 市场总览</button><p>'+TIMES[state.frame]+' · '+(state.view==='funds'?'成交额按窗口统计':'板块与核心股按同一时点展示')+'</p></div>';
+ const upper=state.view==='overview'?'<div class="grid">'+chartPanel()+eventsPanel()+'</div>':'';
+ const content=state.view==='funds'?fundPanel():ranking();
+ const note=state.view==='funds'?'':'<p class="footnote">¹ 最近 15 分钟板块成交额占同期沪深 A 股成交额的比例。</p>';
+ byId('content').innerHTML=intro+upper+'<div class="grid lower">'+content+details()+'</div>'+note+(state.view==='themes'?trackingEvidence():'');
+}
+function changeGroup(id, mobileJump){
+ state.group=id;state.scope=THEMES.some(g=>g.id===id)?'themes':'industries';
+ render();
+ if(mobileJump && matchMedia('(max-width:720px)').matches) byId('detail').scrollIntoView({block:'start'});
+}
+function jumpToGroup(id){
+ state.view='themes';changeGroup(id,false);
+ window.scrollTo({top:0,behavior:'instant'});
+}
+function closeDialog(){byId('dialog').close();}
+function showDialog(contents){
+ byId('dialog-content').innerHTML=contents;
+ if(!byId('dialog').open) byId('dialog').showModal();
+}
+function modalHead(label){
+ return '<div class="dialog-head"><span class="detail-caption">'+label+'</span><button class="xbtn" data-dismiss autofocus aria-label="关闭">×</button></div>';
+}
+function stockDialog(id){
+ const g=activeGroup(), s=g.stocks.find(stock=>stock.id===id), i=state.frame;
+ const history=TIMES.slice(0,i+1).map((time,j)=>'<div class="histrow"><time class="mono">'+time+'</time><b class="numeric '+tint(s.returns[j])+'">'+pct(s.returns[j])+'</b><span>'+s.evidence[j]+'</span></div>').reverse().join('');
+ showDialog(modalHead(g.name+' ／ 核心股依据')+'<div class="dialog-title"><h2 id="dialog-title">'+s.name+'</h2><span class="chip">'+s.role+'</span></div><small class="hint">模拟标识 '+s.id+' · '+TIMES[i]+'</small>'+stats([['当日涨幅',pct(s.returns[i]),tint(s.returns[i])],['累计成交额',money(s.amounts[i])+' 亿'],['所属'+scopeName(),g.name]])+'<h3>当时依据</h3><p class="evidence">'+s.evidence[i]+'</p><h3 style="margin-bottom:8px">截至该时点的观察</h3><div class="history">'+history+'</div><div class="dialog-actions"><button class="btn" data-dismiss>返回'+g.name+'</button></div>');
+}
+function allEvents(){
+ showDialog(modalHead('盘中回放')+'<h2 id="dialog-title">截至 '+TIMES[state.frame]+' 的动态</h2><p class="hint">选择事件，查看它发生时的板块与核心股。</p>'+eventList(timelineEvents()));
+}
+document.addEventListener('click',e=>{
+ const target=e.target.closest('button,[data-chart-frame],tr[data-row]');
+ if(e.target===byId('dialog')){closeDialog();return;}
+ if(!target || target.disabled) return;
+ const d=target.dataset;
+ if(d.dismiss!==undefined){closeDialog();return;}
+ if(d.events!==undefined){allEvents();return;}
+ if(d.event!==undefined){
+  const event=EVENTS.find(item=>item.id===d.event);
+  if(byId('dialog').open) closeDialog();
+  state.frame=event.frame;state.replay=true;jumpToGroup(event.theme);return;
+ }
+ if(d.stock!==undefined){stockDialog(d.stock);return;}
+ if(d.nav!==undefined){state.view=d.nav;render();window.scrollTo({top:0,behavior:'instant'});return;}
+ if(d.openGroup!==undefined){jumpToGroup(d.openGroup);return;}
+ if(d.group!==undefined||d.row!==undefined){changeGroup(d.group||d.row,true);return;}
+ if(d.scope!==undefined){state.scope=d.scope;state.group=activeGroups()[0].id;render();return;}
+ if(target.id==='replay-toggle'){state.replay=!state.replay;render();return;}
+ if(d.latest!==undefined){state.frame=TIMES.length-1;state.replay=false;render();return;}
+ if(d.time!==undefined||d.chartFrame!==undefined){state.frame=Number(d.time??d.chartFrame);state.replay=true;render();}
+});
+document.addEventListener('change',e=>{if(e.target.id==='sort'){state.sort=e.target.value;render();byId('sort').focus();}});
+render();
+
+</script>
+</body></html>

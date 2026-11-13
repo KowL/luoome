@@ -168,50 +168,13 @@ luoome web serve
 
 **持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；MCP 暴露策略不受影响。
 
-**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 published operational run 会投影，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
+**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 published operational run 会投影；complete 结束所有未入选来源，partial 只结束已明确评估未入选的来源、其余标 stale，evaluation/trial/withheld/non-publishing/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
 **Strategy 模拟回测**：进入已发布且运行中的策略工作台，点击「模拟回测」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是历史回放模拟，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
 
-**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。默认搜索只使用本地 FTS5。勾选“语义扩展（外部）”后，查询文本会发送给显式配置的 embedding provider；“增量重建”还会发送私人 chunk 正文并要求 `external + write`。页面会显示模型 identity、覆盖状态与不完整诊断；未配置、provider 失败或覆盖不完整时稳定回退 FTS5，零命中不代表完整研究库无证据。固定评测只比较版本化判定集的 Recall@K/MRR/成本/延迟，不等同于生产质量结论。
+**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。搜索固定使用本地 FTS5，索引不可用或文档缺失时显式标记 `missing`/`invalid`，零命中不代表完整研究库无证据。
 
-Embedding 模型目录默认位于 `$LUOOME_HOME/research-embeddings.json`。下例不含密钥；`RESEARCH_EMBEDDING_API_KEY` 必须单独放在环境中。修改目录或开关后重启进程：
-
-```json
-{
-  "version": 1,
-  "defaultModel": "small",
-  "models": {
-    "small": {
-      "provider": "my-provider",
-      "baseURL": "https://provider.example/v1",
-      "apiKeyEnv": "RESEARCH_EMBEDDING_API_KEY",
-      "model": "embedding-small",
-      "dimensions": 1536,
-      "version": "2026-08",
-      "maxBatchSize": 64,
-      "inputCostPerMillionTokensUsd": 0.02
-    }
-  }
-}
-```
-
-同时设置 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true`；Web 语义查询还需 `LUOOME_EXPOSE_EXTERNAL=true`，增量重建另需 `LUOOME_EXPOSE_WRITE=true`。目录或密钥无效时其它 Research 能力继续启动，embedding 状态显示为未挂载。
-
-可选 Git 远端同步需把 Vault 本身配置为有 upstream 的 Git 工作树，并设置
-`LUOOME_RESEARCH_REMOTE_SYNC=git`、`LUOOME_EXPOSE_WRITE=true`、`LUOOME_EXPOSE_EXTERNAL=true`。
-研究页会显示“拉取远端并重建索引”，每次点击仍需确认。系统只接受完全干净工作树上的
-fast-forward，先在 `$LUOOME_HOME/backups/research-vault/` 创建权限为 `0600` 的 bundle，再通过既有
-索引流程重建；分叉、冲突、未完成 Git 操作、超时或取消都会停止。它绝不自动 commit、push、reset、
-rebase 或选边。远端应使用私有仓库，HTTPS 凭证放系统 credential helper，SSH 凭证放 SSH agent，
-不要写进 remote URL。
-
-恢复时先运行 `git bundle verify <bundle>`，再运行 `git clone <bundle> <新的恢复目录>` 检查备份；
-确认内容后人工复制所需文件或明确执行自己的 Git 恢复步骤。luoome 不会自动恢复或删除 bundle。
-CLI 可显式运行：
-
-```bash
-luoome workflow run sync-research-vault-remote --mode manual
-```
+2026-11-10 起，研究子域已收敛为单文档索引：Topic/Document 关系、研究假设版本、chunk 向量、embedding 语义检索和 Git 远端同步均已删除，对应的环境变量（`LUOOME_RESEARCH_EMBEDDING_*`、`LUOOME_RESEARCH_REMOTE_SYNC`）不再生效。已有 Vault 文件不受影响，直接重新同步即可。
 
 飞书报告采用手机摘要，只发送市场、策略研究、预警和事件信息；账户估值、持仓、仓位、逐账户交易计划、
 交易归因与个人行为复盘仅在应用内完整报告中查看，账户数据缺失也不会变成群通知中的告警。
@@ -271,8 +234,8 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome advice list [--since 7d] [--limit 50]` | 历史建议 |
 | `luoome advice stats [--since 30d]` | 准确率统计（命中率、跟单盈亏） |
 | `luoome advice outcome <id> --followed true --pnl 100` | 回填 advice 结果（write） |
-| `luoome sync-quotes` | 全量同步当前账户持仓行情（写库） |
-| `luoome daily-review [--since 7d]` | 触发 daily-review workflow，写入报告文件 |
+| `luoome workflow run sync-market --input '{"target":"quotes"}'` | 同步当前账户持仓行情（写库） |
+| `luoome workflow run report --input '{"kind":"daily-review"}'` | 运行每日复盘并写入报告文件 |
 
 `--since / --until` 接 ISO 时间或 `7d / 30d / 24h / 1y` 等相对量。详见 `luoome --help`。
 
@@ -322,12 +285,22 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 | **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果；设置页支持显式订阅/取消目标 Watchlist。 |
 | **Watchlist** | 统计卡片 + 分组列表股票区（全部 / 单列表 tab）+ 今日变化 + 待研究 + 已归档弹窗；支持用逗号、空格或换行批量添加成员，以及成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
-| **研究** | 配置本地 Obsidian Vault、同步索引、创建 Topic、导入本地正文或远程 URL。 |
+| **研究** | 配置本地 Obsidian Vault、同步索引、导入本地正文或远程 URL，并按 FTS5 检索文档。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 当前账户的明确反馈、成交归因、事后观察与 confidence 校准表；从建议进入「决策与复盘」。 |
 | **报告** | 查看与导出报告；收盘复盘统一生成一份，周报支持根据后补记录生成不可通知的复盘补充版。 |
 | **对话** | AI SDK 投资助手；查询账户、现金、持仓、计划与研究资料，确认后登记持仓/资金流水、管理关注列表与提醒，并继续解释执行结果。会话、动作和用量可回看。 |
 | **设置** | 数据源 / AI / 飞书通知 / 账户，以及可按分类选择的本地 JSON 数据导出与合并导入。 |
+
+**盘后数据同步**：交易日 16:00 后 Web 进程会自动运行 `post-market-data`：同步股票目录，并用 fuyao 全市场 Parquet dump 导入最近 10 个交易日的原始日线与全量复权因子。该调度与其他后台任务一样，要求同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`；缺少 `FUYAO_API_KEY` 时 dump 步骤失败，日线与策略数据会如实标为缺口而不是用旧快照补齐。
+
+从旧版本升级、或需要重建十年历史时，先手动跑一次全量（只需一次，之后每日增量）：
+
+```bash
+luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
+```
+
+原始日线落库后，前复权由 `adjustment_factors` 在读取时投影；没有因子来源的历史缓存会保持 qfq 原值读取，不会被当作原始价二次复权。核对目录与数据健康可用 `luoome tools call get_stock_universe_status --input '{}'`，运行记录在 Web「设置 → 数据源」与报告的数据说明中查看。
 
 个股详情不是侧栏 tab，从看盘、持仓、Watchlist、预警或顶栏搜索点击股票进入（深链接形如 `#market?stockId=002594.SZ&range=3m`）。打开后固定在顶部展示报价卡（名称与代码、价格与涨跌、今开 / 最高 / 最低 / 昨收、成交量额、换手与振幅、估值与股本），下方才是 K 线 / 分时图与关联事实。**打开详情或换股都会回到顶部报价卡**；只有切换区间（1M / 3M …）或粒度（日 K / 周 K / 分时）时保留当前滚动位置。切换左侧导航同样回到页面顶部，但页内自动刷新不会改变滚动位置。
 
@@ -470,7 +443,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 复盘补充版显示「按策略不通知」，不会额外发送通知，后续定时任务与投递重试也不能改变这一策略。
 正常主报告及原研究补充版仍遵循原有通知规则。生成复盘补充需要 write 能力，不要求开启外部调用。
 
-`luoome daily-review [--since 7d]` 仍运行独立的 daily-review workflow，写报告到 `~/.luoome/reports/`。
+`luoome workflow run report --input '{"kind":"daily-review"}'` 仍运行独立的 daily-review 管线，写报告到 `~/.luoome/reports/`。
 执行步骤见 [workflows 包](../packages/workflows/src/daily-review.ts)。
 
 ---
@@ -481,6 +454,7 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 |---|---|
 | `~/.luoome/luoome.db` | SQLite 主库（账户 / 持仓 / 行情 / Strategy / Watchlist / AlertPlan / Advice） |
 | `~/.luoome/reports/` | workflow 产物（日报 / 周报 / 诊断） |
+| `~/.luoome/market-dumps/` | fuyao 全市场 Parquet dump 的本地副本（原始日线 / 复权因子） |
 | `~/.luoome/luoome.log` | （如果开启 `LUOOME_LOG=info`） |
 
 覆盖路径：设置 `LUOOME_HOME=/path` 即可让 luoome 用别的根目录。
@@ -501,11 +475,8 @@ TUI 按 `[c]`，Web「复盘」页都可查看。
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |
-| `LUOOME_RESEARCH_EMBEDDING_ENABLED` | `false` | 显式挂载 Research embedding 外部 capability；默认仍为本地 FTS5 |
-| `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | embedding 模型目录路径；密钥由目录里的 `apiKeyEnv` 从环境读取 |
-| `LUOOME_RESEARCH_REMOTE_SYNC` | `false` | `git` 启用独立安全拉取 workflow；不配置则完全不装配 |
-| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行复盘、报告补充等本地写入端点 |
-| `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
+| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行复盘、报告补充等本地写入端点；后台调度需与 `LUOOME_EXPOSE_EXTERNAL` 同时开启 |
+| `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等）；后台调度需与 `LUOOME_EXPOSE_WRITE` 同时开启 |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web 设置页配置，缺失降级为 log channel |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |

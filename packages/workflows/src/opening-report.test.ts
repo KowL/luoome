@@ -9,7 +9,7 @@ import { getReportTool, listWorkflowRunsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { marketPulse, openingReportWorkflow } from './opening-report.js';
+import { marketPulse, openingReportOperation } from './opening-report.js';
 
 const generatedAt = new Date('2026-07-27T01:00:00.000Z');
 const marketAsOf = new Date('2026-07-24T07:00:00.000Z');
@@ -130,7 +130,7 @@ describe('opening-report workflow', () => {
       ashareSentiment: manager,
     });
 
-    const first = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const first = await openingReportOperation.run({ date: '2026-07-27', notify: false }, ctx);
 
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -176,7 +176,7 @@ describe('opening-report workflow', () => {
       },
     });
 
-    const rerun = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const rerun = await openingReportOperation.run({ date: '2026-07-27', notify: false }, ctx);
     expect(rerun.ok).toBe(true);
     if (!rerun.ok) return;
     expect(rerun.data.created).toBe(false);
@@ -193,7 +193,7 @@ describe('opening-report workflow', () => {
       ashareSentiment: manager,
     });
 
-    const result = await openingReportWorkflow.run({ date: '2026-07-27', mode: 'scheduled' }, ctx);
+    const result = await openingReportOperation.run({ date: '2026-07-27', mode: 'scheduled' }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -289,7 +289,7 @@ describe('opening-report workflow', () => {
       adapters: { ...base.adapters, market: marketAdapter },
     };
 
-    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await openingReportOperation.run({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -351,7 +351,7 @@ describe('opening-report workflow', () => {
         },
       };
 
-      const result = await openingReportWorkflow.run(
+      const result = await openingReportOperation.run(
         { date: '2026-07-27', mode: 'scheduled' },
         ctx,
       );

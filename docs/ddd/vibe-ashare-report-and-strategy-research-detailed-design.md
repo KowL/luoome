@@ -1,5 +1,7 @@
 # Vibe A 股市场报告与策略研究迁移详细设计
 
+> **2026-11-12 状态：部分裁撤。** 三类简报 workflow 与 A 股情绪证据保留；`local_selector` 研究、PIT revision 批量读取与因子研究工具已随收敛删除，下文对应章节仅作追溯。
+
 > 状态：**Phase 0～6 已完成；local_selector、adaptive_personality、stock_profile 已按本节收口；旧 Tactic/StockGroup/ResearchNote 仅作为迁移历史术语，当前实现以 Strategy/Watchlist/ResearchTopic 为准**
 >
 > 日期：2026-07-29

@@ -7,6 +7,11 @@ export interface StrategyMetaStockInput {
   readonly limitUpLadder?: {
     readonly ladderLevel: number;
   };
+  readonly limitUpBoard?: {
+    readonly isBroken: boolean | null;
+    readonly consecutiveBoard: number | null;
+    readonly isBoardBreak: boolean | null;
+  };
 }
 
 const sortedBars = (bars: readonly DailyBar[]): readonly DailyBar[] =>
@@ -84,6 +89,19 @@ export const deriveStrategyMetaByStock = (
             : {
                 limitUpLevel: stock.limitUpLadder.ladderLevel,
                 limitUpToday: true,
+              }),
+          ...(stock.limitUpBoard === undefined
+            ? {}
+            : {
+                ...(stock.limitUpBoard.isBroken === null
+                  ? {}
+                  : { isBroken: stock.limitUpBoard.isBroken }),
+                ...(stock.limitUpBoard.consecutiveBoard === null
+                  ? {}
+                  : { consecutiveBoard: stock.limitUpBoard.consecutiveBoard }),
+                ...(stock.limitUpBoard.isBoardBreak === null
+                  ? {}
+                  : { isBoardBreak: stock.limitUpBoard.isBoardBreak }),
               }),
         },
       ];

@@ -1,5 +1,5 @@
 import { TEST_ACCOUNT, TEST_ACCOUNT_LONGTERM, TEST_TRADES } from '@luoome/adapters/testing';
-import type { Trade } from '@luoome/core';
+import { signalObservationId, type Trade } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import {
   buildTestContext,
@@ -10,7 +10,7 @@ import { getDecisionLoopReviewTool } from './get-decision-loop-review.js';
 const NOW = new Date('2026-08-01T00:00:00.000Z');
 
 const completeObservation = {
-  id: 'review-observation-complete',
+  id: signalObservationId('strategy-signal', 'review-signal-complete', 't1'),
   sourceKind: 'strategy-signal' as const,
   sourceId: 'review-signal-complete',
   stockId: '002594.SZ',
@@ -34,7 +34,7 @@ const completeObservation = {
 };
 
 const pendingObservation = {
-  id: 'review-observation-pending',
+  id: signalObservationId('strategy-signal', 'review-signal-pending', 't3'),
   sourceKind: 'strategy-signal' as const,
   sourceId: 'review-signal-pending',
   stockId: '002594.SZ',
@@ -120,8 +120,8 @@ describe('get_decision_loop_review', () => {
         advice.id,
         'test-trade-0001',
         'test-trade-0002',
-        'review-observation-complete',
-        'review-observation-pending',
+        completeObservation.id,
+        pendingObservation.id,
       ]),
     );
     expect(result.data.dataAsOf).toEqual(NOW);

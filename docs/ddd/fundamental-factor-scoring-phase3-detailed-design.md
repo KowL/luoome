@@ -1,5 +1,7 @@
 # Phase 3 基本面 PIT 因子与横截面评分详细设计
 
+> **2026-11-12 状态：已裁撤。** 领域收敛 S2 已删除 `FinancialFact`/`FundamentalScore` 的 core、4 张表、4 个 Tool 与 mock adapter；本设计仅作追溯，不再排期。
+
 > 状态：P3-0 Core、P3-1 mock 装配与 P3-2 deterministic score engine 已实现；mock 只用于验证 revision/披露时点、双仓储、横截面评分和 Tool 契约，真实数据门禁仍为 `not-ready`，不能据此宣称 Phase 3 已完成。（2026-08-22）
 >
 > 上位约束：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、[Strategy DSL PRD](../prd/strategy-dsl.md)、[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)。

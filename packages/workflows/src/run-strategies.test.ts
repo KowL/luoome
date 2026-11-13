@@ -3,7 +3,7 @@ import { strategyDefinitionHash } from '@luoome/core';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { runStrategiesWorkflow } from './run-strategies.js';
+import { runStrategiesOperation } from './run-strategies.js';
 
 describe('run-strategies workflow', () => {
   it('continues after one Strategy failure and records each status', async () => {
@@ -44,7 +44,7 @@ describe('run-strategies workflow', () => {
     await ctx.repos.strategy.create(strategy);
     await ctx.repos.strategy.createVersion(version);
 
-    const result = await runStrategiesWorkflow.run(
+    const result = await runStrategiesOperation.run(
       {
         strategyIds: ['missing-strategy', strategy.id],
         stockIds: ['600519.SH'],
@@ -98,7 +98,7 @@ describe('run-strategies workflow', () => {
     });
     await ctx.repos.strategy.createVersion(version);
 
-    const result = await runStrategiesWorkflow.run(
+    const result = await runStrategiesOperation.run(
       {
         strategyIds: ['scheduled-strategy'],
         mode: 'scheduled',

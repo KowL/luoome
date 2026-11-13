@@ -279,7 +279,9 @@ export class NodeRuntimeHost {
           code: 'sdk-turn-end',
           reason: event.data.reason.kind,
         });
-        if (event.data.reason.kind !== 'completed') throw new Error('DSH turn did not complete');
+        if (event.data.reason.kind !== 'completed' && event.data.reason.kind !== 'max-tokens') {
+          throw new Error('DSH turn did not complete');
+        }
         completedTurn = true;
       }
       if (!completedTurn) throw new Error('DSH returned idle without a committed completed turn');

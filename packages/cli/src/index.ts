@@ -8,7 +8,7 @@ import { toolRegistry } from '@luoome/tools';
 import { resolveTool } from './app-service.js';
 
 import { createCliContext } from './context.js';
-import { isDaemonized, respawnDetached } from './daemon.js';
+import { isDaemonized, respawnDetached, startLogRotation } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
@@ -709,7 +709,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / sync-sector-catalog / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
+      `未知 workflow: "${name}"（支持 report / strategy / sync-market / sync-quotes / sync-stock-universe / sync-sector-catalog / closing-report-cutoff / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / sync-research-vault / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
@@ -797,7 +797,12 @@ const maybeDaemonize = (
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
 ): number | null => {
-  if (flags.has('foreground') || isDaemonized()) return null;
+  if (flags.has('foreground')) return null;
+  if (isDaemonized()) {
+    // 后台进程独占 luoome.log，轮转只在这里启动，避免前台命令装定时器。
+    startLogRotation();
+    return null;
+  }
   const { pid, logPath } = respawnDetached();
   if (json) {
     console.log(JSON.stringify({ pid, logPath }));
@@ -894,7 +899,7 @@ Surfaces:
                                按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
   web serve [--port 5173] [--host 127.0.0.1] [--foreground]
                                仅启动 Web 仪表盘；默认后台运行（同 start）
-  workflow run <name>          跑内置 workflow（含策略调度、统一交易计划、盘中监控、绩效快照与报告）
+  workflow run <name>          跑内置 workflow（report / strategy / sync-market 等 12 个入口）
   watch [--interval 60] [--alert-plan <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
                                 仅扫描启用的 AlertPlan 与其 Watchlist 成员

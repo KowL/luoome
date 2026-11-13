@@ -1,5 +1,7 @@
 # 研究主题与 Obsidian Vault 详细设计
 
+> **2026-11-12 状态：大部分裁撤。** 仅保留 `research_document_index` + FTS5、Vault 本地同步与 `save_research_document`；Topic/Document 关系、chunk、embedding、Git 远端同步均已删除，下文对应章节仅作追溯。
+
 > 状态：Phase A～G 已实施；Phase F 采用独立 Git-only 安全同步 workflow，Phase G 完成 embedding 检索/跨模型评测
 > 日期：2026-08-20
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索

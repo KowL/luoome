@@ -17,8 +17,8 @@ import { applyEnvEntries, parseEnvFile } from '@luoome/core';
 
 import { luoomeHome } from './paths.js';
 
-/** 项目根：packages/cli/src/env.ts → 上四级。 */
-const PROJECT_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+/** 项目根：packages/cli/src/env.ts → 上三级。 */
+const PROJECT_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 默认加载顺序：先用户级后项目级（项目级优先，因为只填未设置 key）。 */
 export const defaultEnvFiles = (): readonly string[] => [

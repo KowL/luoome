@@ -560,6 +560,19 @@ describe('龙虎榜页面入口', () => {
     expect(read('./sectors.js')).toContain('stockCodeLink(');
   });
 
+  it('涨停梯队走涨停市场看板端点（limit_up_market tool），空池 warning 显式展示', () => {
+    const ladderJs = read('./limit-up-ladder.js');
+    expect(ladderJs).toContain('/api/market/limit-up/market?date=');
+    expect(ladderJs).toContain("'empty-pool'");
+    expect(ladderJs).toContain("'ladder-unavailable'");
+  });
+
+  it('服务端暴露 GET /api/market/limit-up/market（limit_up_market tool）', () => {
+    const marketRoutes = read('../../src/routes/market.ts');
+    expect(marketRoutes).toContain("app.get('/api/market/limit-up/market'");
+    expect(marketRoutes).toContain("invokeTool('limit_up_market'");
+  });
+
   it('服务端暴露 GET /api/dragon-tiger（dragon_tiger_list tool）', () => {
     const marketRoutes = read('../../src/routes/market.ts');
     expect(marketRoutes).toContain("app.get('/api/dragon-tiger'");

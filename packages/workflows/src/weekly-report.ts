@@ -11,7 +11,7 @@ import {
 import type { GetDecisionLoopReviewOutput, ListTradesOutput } from '@luoome/tools';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { defineOperation, type WorkflowContext } from './define-workflow.js';
 import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 import {
   DAY_MS,
@@ -1475,7 +1475,7 @@ const runWeeklyReport = async (
   return 'ok' in result ? result : WeeklyReportOutput.parse(result);
 };
 
-export const weeklyReportWorkflow = defineWorkflow<WeeklyInput, WeeklyOutput>({
+export const weeklyReportOperation = defineOperation<WeeklyInput, WeeklyOutput>({
   name: 'weekly-report',
   description: '按本周真实交易日生成并幂等保存结构化周报',
   input: WeeklyReportInput,

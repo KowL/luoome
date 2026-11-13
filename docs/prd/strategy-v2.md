@@ -562,4 +562,4 @@ AlertPlan 继续消费持久化 StrategySignal：
 2. ranking-near-miss 默认展示 top 之后 20 条，调用方可在 1～100 内调整；
 3. StrategySignal 直接创建 SignalObservation，WatchTrigger 的观察链保持独立；
 4. V2 不交付默认自动 Strategy → Watchlist 同步；当前实现只允许通过显式持久订阅投影，且只有 complete
-   sync 可以结束缺失来源，partial/failed 只标 stale。
+   sync 可以结束缺失来源；partial 只结束已明确评估未入选的来源，其余标 stale；failed 不退出。

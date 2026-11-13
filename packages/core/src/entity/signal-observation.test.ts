@@ -6,8 +6,10 @@ import {
   ActiveSignalObservationHorizonSchema,
   assertSignalObservationInvariants,
   completeSignalObservationFromDailyBars,
+  parseSignalObservationId,
   SignalObservationHorizonSchema,
   SignalObservationSchema,
+  signalObservationId,
 } from './signal-observation.js';
 
 describe('SignalObservation', () => {
@@ -174,5 +176,41 @@ describe('SignalObservation', () => {
       benchmarkReturnPct: 0.02,
     });
     expect(completed.returnPct).toBeCloseTo(0.1);
+  });
+});
+
+describe('parseSignalObservationId', () => {
+  it('与 signalObservationId 往返一致，sourceId 可含冒号', () => {
+    const sourceId = 'strategy-run-1:entry:600519.SH:2026-08-10T10:00:15.918Z';
+    const id = signalObservationId('strategy-signal', sourceId, 't5');
+    expect(parseSignalObservationId(id)).toEqual({
+      sourceKind: 'strategy-signal',
+      sourceId,
+      horizon: 't5',
+    });
+    expect(
+      parseSignalObservationId(signalObservationId('watch-trigger', 'trigger-1', 't1')),
+    ).toEqual({ sourceKind: 'watch-trigger', sourceId: 'trigger-1', horizon: 't1' });
+  });
+
+  it('sourceId 自身以 :tN 结尾时仍按最后一段解析 horizon', () => {
+    const id = signalObservationId('strategy-signal', 'run-1:t1', 't3');
+    expect(parseSignalObservationId(id)).toEqual({
+      sourceKind: 'strategy-signal',
+      sourceId: 'run-1:t1',
+      horizon: 't3',
+    });
+  });
+
+  it('拒绝非规范 id', () => {
+    for (const id of [
+      'observation-1',
+      'signal-observation:unknown-kind:source-1:t1',
+      'signal-observation:strategy-signal:source-1:t9',
+      'signal-observation:strategy-signal::t1',
+      'signal-observation:strategy-signal:source-1',
+    ]) {
+      expect(parseSignalObservationId(id)).toBeNull();
+    }
   });
 });

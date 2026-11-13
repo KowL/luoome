@@ -16,9 +16,21 @@ import {
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import {
   type Schema,
   strategies,
@@ -26,6 +38,7 @@ import {
   strategySignals,
   strategyVersions,
 } from '../../schema/index.js';
+import { decodeJsonBlob, encodeJsonBlob } from './json-blob.js';
 
 type StrategyRow = typeof strategies.$inferSelect;
 type VersionRow = typeof strategyVersions.$inferSelect;
@@ -156,12 +169,20 @@ const sortResults = (results: readonly StrategyResult[]): StrategyResult[] =>
       left.stockId.localeCompare(right.stockId),
   );
 
-const parseStoredResults = (
-  runId: string,
-  stored: readonly Readonly<Record<string, unknown>>[] | null | undefined,
-): StrategyResult[] =>
+const encodeStoredResults = (results: readonly StrategyResult[]): string =>
+  encodeJsonBlob(results.map(toStoredResult));
+
+const decodeStoredResults = (
+  stored: string | null | undefined,
+): readonly Readonly<Record<string, unknown>>[] => {
+  if (stored === null || stored === undefined || stored.length === 0) return [];
+  const decoded = decodeJsonBlob(stored);
+  return Array.isArray(decoded) ? (decoded as readonly Readonly<Record<string, unknown>>[]) : [];
+};
+
+const parseStoredResults = (runId: string, stored: string | null | undefined): StrategyResult[] =>
   sortResults(
-    (stored ?? []).flatMap((raw) => {
+    decodeStoredResults(stored).flatMap((raw) => {
       const parsed = StrategyResultSchema.safeParse({ ...raw, runId });
       return parsed.success ? [parsed.data] : [];
     }),
@@ -462,6 +483,36 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     });
   }
 
+  async clearResults(
+    runIds: readonly string[],
+    options: { readonly dryRun?: boolean } = {},
+  ): Promise<number> {
+    if (runIds.length === 0) return 0;
+    let cleared = 0;
+    // 绑定参数按块提交，避免超出 SQLite 变量上限。
+    for (let index = 0; index < runIds.length; index += 500) {
+      const chunk = runIds.slice(index, index + 500);
+      const condition = and(inArray(strategyRuns.id, chunk), isNotNull(strategyRuns.resultsJson));
+      if (options.dryRun === true) {
+        const row = this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(strategyRuns)
+          .where(condition)
+          .get();
+        cleared += Number(row?.count ?? 0);
+        continue;
+      }
+      const result = this.db
+        .update(strategyRuns)
+        .set({ resultsJson: null })
+        .where(condition)
+        .returning({ id: strategyRuns.id })
+        .all();
+      cleared += result.length;
+    }
+    return cleared;
+  }
+
   async findRunById(id: string): Promise<StrategyRun | null> {
     const row = this.db.select().from(strategyRuns).where(eq(strategyRuns.id, id)).get();
     return row === undefined ? null : toRun(row);
@@ -687,7 +738,8 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       providerStatuses: [...bundle.run.providerStatuses],
       providerCoverage: bundle.run.providerCoverage ?? null,
       summary: bundle.run.summary ?? null,
-      resultsJson: bundle.results.map(toStoredResult),
+      // 无逐股明细的 run（失败/空池）保持 NULL，不写空数组的压缩壳。
+      resultsJson: bundle.results.length === 0 ? null : encodeStoredResults(bundle.results),
       publication: bundle.run.publication ?? null,
       publicationStatus: bundle.run.publication?.status ?? null,
       error: bundle.run.error ?? null,

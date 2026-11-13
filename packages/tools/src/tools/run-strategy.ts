@@ -46,7 +46,6 @@ export const RunStrategyInput = z.object({
   /** replay 的 PIT universe 可在交易日内固化，独立于交易日 key 的 dataAsOf。 */
   universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
-  revisionCutoff: z.coerce.date().optional(),
   evaluationSessionId: z.string().min(1).optional(),
   /** provider/CPU 受限并发；始终有上限，避免全市场扫描打爆上游。 */
   concurrency: z.number().int().min(1).max(64).default(EVALUATION_CONCURRENCY),
@@ -129,9 +128,6 @@ export const runStrategyTool = defineTool({
     }
     if (input.prefilter !== undefined && input.mode !== 'scan') {
       return errInvalidInput('prefilter 只允许用于 mode=scan 的 evaluation 运行');
-    }
-    if (input.mode !== 'replay' && input.revisionCutoff !== undefined) {
-      return errInvalidInput('revisionCutoff 只允许用于 mode=replay');
     }
     if (input.mode !== 'replay' && input.asOf !== undefined) {
       return errInvalidInput(
@@ -228,6 +224,7 @@ export const runStrategyTool = defineTool({
       const needsDailyBars = references.dataSources.includes('daily-bars');
       const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
       const needsLimitUpLadder = references.dataSources.includes('limit-up-ladder');
+      const needsLimitUpBoard = references.dataSources.includes('limit-up-board-history');
       const lookback = Math.max(1, references.requiredLookback);
       const universeMemberIds = [...new Set(requestedIds)].sort();
       const universeCheckpoint =
@@ -248,17 +245,22 @@ export const runStrategyTool = defineTool({
                 .update(JSON.stringify(universeMemberIds))
                 .digest('hex'),
             };
-      const evaluationRevisionCutoff = input.mode === 'replay' ? input.revisionCutoff : undefined;
       const evaluationData =
         input.mode === 'scan'
           ? createLiveStrategyEvaluationDataAdapter(ctx)
-          : createLocalStrategyEvaluationDataAdapter({
-              ctx,
-              ...(evaluationRevisionCutoff === undefined
-                ? {}
-                : { revisionCutoff: evaluationRevisionCutoff }),
-            });
+          : createLocalStrategyEvaluationDataAdapter({ ctx });
       let limitUpLadderByCode = new Map<string, { readonly ladderLevel: number }>();
+      let limitUpBoardByCode = new Map<
+        string,
+        {
+          readonly isBroken: boolean | null;
+          readonly consecutiveBoard: number | null;
+          readonly isBoardBreak: boolean | null;
+        }
+      >();
+      let limitUpBoardProviderOk = !needsLimitUpBoard;
+      let limitUpBoardDataAsOf: Date | undefined;
+      let limitUpBoardErrorKind: string | undefined;
       let limitUpLadderProviderOk = !needsLimitUpLadder;
       let limitUpLadderDataAsOf: Date | undefined;
       let limitUpLadderErrorKind: string | undefined;
@@ -321,6 +323,40 @@ export const runStrategyTool = defineTool({
           } else {
             limitUpLadderErrorKind = ladder.error?.kind ?? 'adapter_error';
           }
+        }
+      }
+
+      if (needsLimitUpBoard) {
+        try {
+          const history = await ctx.repos.limitUpBoardHistory.findByDate({
+            tradeDate: dateInShanghai(dataAsOf),
+            source: 'fuyao-limit-up',
+          });
+          if (history === null) {
+            limitUpBoardErrorKind = 'historical_board_history_unavailable';
+          } else {
+            limitUpBoardProviderOk = history.status !== 'unavailable';
+            limitUpBoardDataAsOf = history.dataAsOf;
+            limitUpBoardByCode = new Map(
+              history.facts.map((fact) => [
+                fact.stockId,
+                {
+                  isBroken: fact.isBroken,
+                  consecutiveBoard: fact.consecutiveBoard,
+                  isBoardBreak: fact.isBoardBreak,
+                },
+              ]),
+            );
+            if (history.status === 'partial') {
+              limitUpBoardErrorKind = 'board_history_partial';
+            }
+          }
+        } catch (error) {
+          limitUpBoardErrorKind = 'board_history_read_failed';
+          ctx.logger.warn('读取炸板/断板 PIT 事实失败', {
+            date: dateInShanghai(dataAsOf),
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
@@ -431,11 +467,13 @@ export const runStrategyTool = defineTool({
               const stock = activeById.get(item.stockId);
               const limitUpLadder =
                 stock === undefined ? undefined : limitUpLadderByCode.get(stock.code);
+              const limitUpBoard = limitUpBoardByCode.get(item.stockId);
               return {
                 stockId: item.stockId,
                 industry: stock?.industry,
                 bars: item.bars,
                 ...(limitUpLadder === undefined ? {} : { limitUpLadder }),
+                ...(limitUpBoard === undefined ? {} : { limitUpBoard }),
               };
             }),
           )
@@ -573,6 +611,17 @@ export const runStrategyTool = defineTool({
                 },
               ]
             : []),
+          ...(needsLimitUpBoard
+            ? [
+                {
+                  provider: 'historical:limit-up-board-history',
+                  ok: limitUpBoardProviderOk,
+                  ...(limitUpBoardErrorKind === undefined
+                    ? {}
+                    : { errorKind: limitUpBoardErrorKind }),
+                },
+              ]
+            : []),
         ],
         providerCoverage: [
           ...evaluationAudit.providerCoverage,
@@ -596,6 +645,22 @@ export const runStrategyTool = defineTool({
                     ? {}
                     : { dataAsOf: limitUpLadderDataAsOf }),
                   errorKinds: limitUpLadderErrorKind === undefined ? [] : [limitUpLadderErrorKind],
+                },
+              ]
+            : []),
+          ...(needsLimitUpBoard
+            ? [
+                {
+                  capability: 'limit-up-board-history' as const,
+                  provider: 'historical:limit-up-board-history',
+                  requested: candidateIds.length,
+                  succeeded: limitUpBoardProviderOk ? candidateIds.length : 0,
+                  failed: 0,
+                  missing: limitUpBoardProviderOk ? 0 : candidateIds.length,
+                  fallbackUsed: false,
+                  freshness: limitUpBoardProviderOk ? ('fresh' as const) : ('unavailable' as const),
+                  ...(limitUpBoardDataAsOf === undefined ? {} : { dataAsOf: limitUpBoardDataAsOf }),
+                  errorKinds: limitUpBoardErrorKind === undefined ? [] : [limitUpBoardErrorKind],
                 },
               ]
             : []),

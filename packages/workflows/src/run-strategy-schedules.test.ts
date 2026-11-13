@@ -9,7 +9,7 @@ import { money, strategyDefinitionHash } from '@luoome/core';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { runStrategySchedulesWorkflow } from './run-strategy-schedules.js';
+import { runStrategySchedulesOperation } from './run-strategy-schedules.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 const DAY_START = new Date('2026-08-10T00:00:00.000Z');
@@ -107,7 +107,7 @@ describe('run-strategy-schedules workflow', () => {
   it('运行到期策略、生成 scheduled StrategyRun 并推进 lastScheduledAt', async () => {
     const { ctx, strategyId } = await seedScheduled();
 
-    const result = await runStrategySchedulesWorkflow.run({}, ctx);
+    const result = await runStrategySchedulesOperation.run({}, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -120,7 +120,7 @@ describe('run-strategy-schedules workflow', () => {
     expect(await ctx.repos.strategy.findById(strategyId)).toMatchObject({
       lastScheduledAt: NOW,
     });
-    const second = await runStrategySchedulesWorkflow.run({}, ctx);
+    const second = await runStrategySchedulesOperation.run({}, ctx);
     expect(second).toEqual({
       ok: true,
       data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 },
@@ -130,7 +130,7 @@ describe('run-strategy-schedules workflow', () => {
   it('paused Strategy 不运行但会推进 lastScheduledAt，避免补跑风暴', async () => {
     const { ctx, strategyId } = await seedScheduled({ status: 'paused' });
 
-    const result = await runStrategySchedulesWorkflow.run({}, ctx);
+    const result = await runStrategySchedulesOperation.run({}, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -145,7 +145,7 @@ describe('run-strategy-schedules workflow', () => {
   it('未到 cron 时间的策略不运行，也不推进 lastScheduledAt', async () => {
     const { ctx, strategyId } = await seedScheduled({ cron: '0 19 * * 1-5' });
 
-    const result = await runStrategySchedulesWorkflow.run({}, ctx);
+    const result = await runStrategySchedulesOperation.run({}, ctx);
 
     expect(result).toEqual({
       ok: true,
@@ -160,8 +160,8 @@ describe('run-strategy-schedules workflow', () => {
   it('进程内互斥防止同一策略在并发 tick 中重复运行', async () => {
     const { ctx, strategyId } = await seedScheduled();
 
-    const first = await runStrategySchedulesWorkflow.run({}, ctx);
-    const concurrent = await runStrategySchedulesWorkflow.run({}, ctx);
+    const first = await runStrategySchedulesOperation.run({}, ctx);
+    const concurrent = await runStrategySchedulesOperation.run({}, ctx);
 
     expect(first.ok).toBe(true);
     expect(concurrent.ok).toBe(true);
@@ -171,7 +171,7 @@ describe('run-strategy-schedules workflow', () => {
   it('18:00 后即使没有到期策略也为每个账户发布收盘报告', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
 
-    const result = await runStrategySchedulesWorkflow.run({}, ctx);
+    const result = await runStrategySchedulesOperation.run({}, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -182,7 +182,7 @@ describe('run-strategy-schedules workflow', () => {
     expect(
       reports.map((report) => report.scope.kind === 'account' && report.scope.accountId).sort(),
     ).toEqual(accountIds);
-    const repeated = await runStrategySchedulesWorkflow.run({}, ctx);
+    const repeated = await runStrategySchedulesOperation.run({}, ctx);
     expect(repeated.ok).toBe(true);
     expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(accountIds.length);
   });
@@ -201,7 +201,7 @@ describe('run-strategy-schedules workflow', () => {
       },
     };
 
-    const result = await runStrategySchedulesWorkflow.run({}, failingCtx);
+    const result = await runStrategySchedulesOperation.run({}, failingCtx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -219,7 +219,7 @@ describe('run-strategy-schedules workflow', () => {
     if (account === undefined) throw new Error('account fixture missing');
     await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance + 100) });
 
-    const result = await runStrategySchedulesWorkflow.run({ deferReports: true }, ctx);
+    const result = await runStrategySchedulesOperation.run({ deferReports: true }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;

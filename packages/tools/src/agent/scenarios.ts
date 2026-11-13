@@ -161,7 +161,7 @@ export const AGENT_SCENARIOS: Readonly<Record<AgentScenarioId, AgentScenario>> =
   ),
   portfolio: scenario(
     'portfolio',
-    '场景：账户、持仓与风险。先用 get_account_overview 确认账户、现金与持仓，再用 get_account_performance 与 list_trades 核对收益与成交；账户事实不可用时不得输出精确仓位。持仓校准只生成 update_holding 待确认草案；计划不等于交易授权。',
+    '场景：账户、持仓与风险。优先调用 get_account_overview、get_account_performance 与 list_trades 一次性核对账户、现金、持仓、收益与成交，基于事实直接分析集中度风险并给出结论，避免发散拉取无关行情。账户事实不可用时不得输出精确仓位。持仓校准只生成 update_holding 待确认草案；计划不等于交易授权。',
     PORTFOLIO_READS,
     ['账户/现金', '持仓/成本', '行情', '集中度与绩效', '交易计划', '历史建议'],
     PORTFOLIO_DRAFT_TOOL_KINDS,

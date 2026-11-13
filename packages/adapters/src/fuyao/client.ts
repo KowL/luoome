@@ -62,15 +62,23 @@ export class FuyaoClient {
     path: string,
     params: Readonly<Record<string, string | number>>,
   ): Promise<FuyaoEnvelopeData> {
-    const query = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      query.set(key, String(value));
-    }
-    const url = `${this.config.baseUrl}${path}?${query.toString()}`;
+    return this.withRetry(buildUrl(this.config.baseUrl, path, params), parseFuyaoEnvelope);
+  }
+
+  /** GET 原始 JSON（不套 `data.item` 信封解析）；市场 dump 的下载链接接口用它。 */
+  async getRaw(
+    path: string,
+    params: Readonly<Record<string, string | number>> = {},
+  ): Promise<unknown> {
+    return this.withRetry(buildUrl(this.config.baseUrl, path, params), (raw) => raw);
+  }
+
+  /** 4001（限流）退避重试；其它错误直接抛出。 */
+  private async withRetry<T>(url: string, parse: (raw: unknown) => T): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.config.retries; attempt += 1) {
       try {
-        return await this.getOnce(url);
+        return parse(await this.requestOnce(url));
       } catch (error) {
         lastError = error;
         const rateLimited = error instanceof SourceExecutionError && error.kind === 'rate_limited';
@@ -81,7 +89,7 @@ export class FuyaoClient {
     throw lastError;
   }
 
-  private async getOnce(url: string): Promise<FuyaoEnvelopeData> {
+  private async requestOnce(url: string): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
     try {
@@ -106,7 +114,7 @@ export class FuyaoClient {
           error,
         );
       }
-      return parseFuyaoEnvelope(raw);
+      return raw;
     } catch (error) {
       if (error instanceof SourceExecutionError) throw error;
       throw new SourceExecutionError(
@@ -121,3 +129,14 @@ export class FuyaoClient {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildUrl = (
+  baseUrl: string,
+  path: string,
+  params: Readonly<Record<string, string | number>>,
+): string => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) query.set(key, String(value));
+  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  return `${baseUrl}${path}${suffix}`;
+};

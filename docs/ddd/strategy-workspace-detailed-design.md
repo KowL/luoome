@@ -1,5 +1,7 @@
 # 策略工作台（Strategy Workspace）详细设计
 
+> **2026-11-12 状态：部分裁撤。** 逐日评估会话状态机与表、可移植 manifest 已删除；`evaluationSessionId` 仍作为 run/signal 身份字段保留。持久租约、checkpoint 与 DailyBar revision 的描述失效；工作台 UI 与草案/试算/发布流程保留。
+
 > 状态：Phase A/B/C 已实施；Phase C 保持“草案—试算—校验—发布”逐步确认
 > 日期：2026-08-20
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)

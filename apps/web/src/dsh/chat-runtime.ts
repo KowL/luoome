@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolError } from '@luoome/core';
 import {
   type RuntimeBinding,
@@ -6,6 +8,7 @@ import {
   type ToolManifestEntry,
 } from '@luoome/dsh-bridge/protocol';
 import { HostConfigSchema } from '@luoome/dsh-bridge/runtime-config';
+import { AI_PROVIDER_PRESETS, type AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
 import { DshEventAdapter } from './event-adapter.js';
@@ -73,7 +76,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
       throw new ChatRuntimeRejection('DSH 开发实例容量已满，请稍后再试。', 503);
     const runId = execution.runId;
     const configRef = `development:${runId}`;
-    const duration = this.options.runTimeoutMs ?? 120_000;
+    const duration = this.options.runTimeoutMs ?? 180_000;
     const expiresAt = Date.now() + duration;
     const manifest = buildGatewayCallableManifest(
       request.tools,
@@ -173,7 +176,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
           toolTimeoutMs: 15_000,
           initializeTimeoutMs: 30_000,
           maxToolCalls: 32,
-          maxModelCalls: 8,
+          maxModelCalls: 32,
         },
         ...(this.options.native === undefined
           ? {}
@@ -339,3 +342,54 @@ export class DshChatRuntime implements ChatStreamRuntime {
     });
   }
 }
+
+/**
+ * 根据 AISettingsStore 持久化配置组装生产 Web 对话使用的 DshChatRuntime。
+ * 运行时缺少有效 Node.js 或模型配置时返回 undefined，保持安全降级。
+ */
+export const createDshChatRuntimeFromStore = (
+  store?: AISettingsStore,
+  envOverride?: Readonly<Record<string, string | undefined>>,
+): DshChatRuntime | undefined => {
+  if (store === undefined) return undefined;
+  const env = envOverride ?? store.runtimeEnv();
+  const nodeCandidates = [
+    env.LUOOME_DSH_NODE_PATH,
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    '/usr/bin/node',
+    typeof Bun !== 'undefined' ? (Bun.which('node') ?? undefined) : undefined,
+  ].filter((p): p is string => Boolean(p && isAbsolute(p) && existsSync(p)));
+  const nodePath = nodeCandidates[0];
+  if (nodePath === undefined) return undefined;
+
+  const hostEntry =
+    env.LUOOME_DSH_HOST_ENTRY ??
+    fileURLToPath(new URL('../../../agent-runtime/dist/index.js', import.meta.url));
+  if (!isAbsolute(hostEntry) || !existsSync(hostEntry)) return undefined;
+  const cwd = fileURLToPath(new URL('../../../../', import.meta.url));
+  if (!existsSync(cwd)) return undefined;
+
+  try {
+    const view = store.read();
+    if (!view.baseURL || !view.model) return undefined;
+    const preset = AI_PROVIDER_PRESETS.find((candidate) => candidate.id === view.provider);
+    const apiKey = preset ? env[preset.apiKeyEnv]?.trim() : undefined;
+    const endpoint = `${view.baseURL.replace(/\/+$/, '')}/chat/completions`;
+    return new DshChatRuntime({
+      development: true,
+      nodePath,
+      hostEntry,
+      cwd,
+      model: {
+        endpoint,
+        model: view.model,
+        maxTokens: Number(env.LUOOME_DSH_MAX_TOKENS) || 8192,
+        headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+        fetch: globalThis.fetch,
+      },
+    });
+  } catch {
+    return undefined;
+  }
+};

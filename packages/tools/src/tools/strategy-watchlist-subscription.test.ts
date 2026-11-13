@@ -273,6 +273,79 @@ describe('Strategy → Watchlist subscription tools', () => {
     );
   });
 
+  it('published partial run 只结束已明确评估未入选的来源，未评估成员保持 stale', async () => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    await seedStrategy(ctx);
+    await createWatchlistTool.execute(
+      { id: 'strategy-watch', name: '策略观察', kind: 'strategy', membershipPolicy: 'synced' },
+      ctx,
+    );
+    await subscribeStrategyToWatchlistTool.execute(
+      { strategyId: 'strategy-1', watchlistId: 'strategy-watch' },
+      ctx,
+    );
+    const completeRun = makeRun('run-complete');
+    await commitRun(ctx, completeRun, [
+      makeResult(completeRun.id, '600519.SH'),
+      makeResult(completeRun.id, '002594.SZ'),
+      makeResult(completeRun.id, '000858.SZ'),
+    ]);
+    await syncStrategyWatchlistSubscriptionsTool.execute(
+      { strategyId: 'strategy-1', producerRunId: completeRun.id },
+      ctx,
+    );
+
+    const partialRun = makeRun('run-partial', {
+      summary: {
+        schemaVersion: 4,
+        dataHealth: 'partial',
+        universeCount: 3,
+        evaluatedCount: 2,
+        selectedCount: 1,
+        signalCount: 0,
+        incompleteCount: 0,
+        failedCount: 1,
+        failureSamples: [{ stockId: '000858.SZ', error: '缺失数据' }],
+        acceptance: {
+          decision: 'accepted',
+          policy: {
+            policyVersion: 'strategy-run-acceptance-v1',
+            minEvaluatedRatio: 0,
+            maxFailedRatio: 1,
+            maxIncompleteRatio: 1,
+          },
+          metrics: { evaluatedRatio: 0.67, failedRatio: 0.33, incompleteRatio: 0 },
+          reasons: [],
+          assessedAt: T1,
+        },
+      },
+    });
+    await commitRun(ctx, partialRun, [
+      makeResult(partialRun.id, '600519.SH', true),
+      makeResult(partialRun.id, '002594.SZ', false),
+    ]);
+    const partial = await syncStrategyWatchlistSubscriptionsTool.execute(
+      { strategyId: 'strategy-1', producerRunId: partialRun.id },
+      ctx,
+    );
+    expect(partial).toMatchObject({
+      ok: true,
+      data: { status: 'partial', partial: 1, items: [{ entered: 0, exited: 1, unchanged: 1 }] },
+    });
+    expect(await ctx.repos.watchlistMember.findMember('strategy-watch', '002594.SZ')).toMatchObject(
+      { stage: 'archived' },
+    );
+    const unevaluated = await ctx.repos.watchlistMember.findMember('strategy-watch', '000858.SZ');
+    if (unevaluated === null) throw new Error('unevaluated member missing');
+    expect(unevaluated.stage).toBe('discovered');
+    expect(
+      await ctx.repos.watchlistMember.currentSource(unevaluated.id, 'strategy:strategy-1'),
+    ).toMatchObject({ status: 'stale' });
+    expect(await ctx.repos.watchlistMember.findMember('strategy-watch', '600519.SH')).toMatchObject(
+      { stage: 'discovered' },
+    );
+  });
+
   it('空 complete published run 才能结束全部 Strategy source', async () => {
     const ctx = await buildTestContext({ clock: () => T0 });
     await seedStrategy(ctx);

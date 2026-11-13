@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadProjectEnv } from './env.js';
+import { defaultEnvFiles, loadProjectEnv } from './env.js';
 
 describe('cli/env loadProjectEnv', () => {
   let dir: string;
@@ -53,5 +53,16 @@ describe('cli/env loadProjectEnv', () => {
     const target: Record<string, string | undefined> = {};
     loadProjectEnv([file], target);
     expect(target.OK).toBe('1');
+  });
+
+  it('defaultEnvFiles 解析的项目根包含 package.json', () => {
+    const files = defaultEnvFiles();
+    expect(files.length).toBe(2);
+    const projectEnv = files[1];
+    expect(projectEnv?.endsWith('.env')).toBe(true);
+    if (projectEnv === undefined) throw new Error('projectEnv missing');
+    // 项目根必须是指向 luoome 仓库根（存在 package.json）
+    const projectRoot = join(projectEnv, '..');
+    expect(existsSync(join(projectRoot, 'package.json'))).toBe(true);
   });
 });

@@ -2,11 +2,7 @@ import { DailyBarSchema, type ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
-import {
-  dailyBarContentHash,
-  fetchDailyBarsWithRetry,
-  mapWithConcurrency,
-} from '../internal/daily-bar-ingestion.js';
+import { fetchDailyBarsWithRetry, mapWithConcurrency } from '../internal/daily-bar-ingestion.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INITIAL_LOOKBACK_DAYS = 370;
@@ -136,20 +132,6 @@ export const syncDailyBarsTool = defineTool({
         ).map((bar) => DailyBarSchema.parse(bar));
         if (bars.length === 0) throw new Error('no_data: no qfq daily bars returned');
         await ctx.repos.dailyBar.saveMany(bars);
-        await ctx.repos.dailyBar.saveRevisions(
-          bars.map((bar) => ({
-            stockId: bar.stockId,
-            date: bar.date,
-            contentHash: dailyBarContentHash(bar),
-            open: bar.open,
-            high: bar.high,
-            low: bar.low,
-            close: bar.close,
-            volume: bar.volume,
-            source: bar.source,
-            recordedAt: now,
-          })),
-        );
         return {
           stockId,
           status: 'synced' as const,

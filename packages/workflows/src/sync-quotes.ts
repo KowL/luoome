@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { defineWorkflow } from './define-workflow.js';
+import { defineOperation } from './define-workflow.js';
 
 /**
  * sync-quotes workflow（v0.2 起，plan §3.5）。
@@ -29,7 +29,7 @@ export const SyncQuotesOutput = z.object({
 
 export type SyncQuotesOutputT = z.infer<typeof SyncQuotesOutput>;
 
-export const syncQuotesWorkflow = defineWorkflow<SyncQuotesInputT, SyncQuotesOutputT>({
+export const syncQuotesOperation = defineOperation<SyncQuotesInputT, SyncQuotesOutputT>({
   name: 'sync-quotes',
   description: '同步账户下所有活跃持仓的实时行情（写 quote_snapshot），返回条数与时间戳',
   input: SyncQuotesInput,

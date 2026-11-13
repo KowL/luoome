@@ -18,7 +18,7 @@ const StrategyDslCatalogFieldSchema = z.object({
   type: z.enum(['number', 'boolean', 'string']),
   unit: z.string().optional(),
   requiredLookback: z.number().int().nonnegative().optional(),
-  dataSource: z.enum(['quote', 'daily-bars', 'meta', 'limit-up-ladder']),
+  dataSource: z.enum(['quote', 'daily-bars', 'meta', 'limit-up-ladder', 'limit-up-board-history']),
   coverage: z.array(z.literal('CN_A_SHARES_SH_SZ')),
   operators: z.array(z.string().min(1)),
 });

@@ -4,7 +4,7 @@ import {
   closingReportCutoffWorkflow,
   previousTradingDay,
   type RunStrategySchedulesOutputT,
-  runStrategySchedulesWorkflow,
+  runStrategySchedulesOperation,
 } from '@luoome/workflows';
 
 export const STRATEGY_SCHEDULER_INTERVAL_MS = 60_000;
@@ -85,7 +85,7 @@ export const startStrategyScheduler = (
   const run =
     options.run ??
     (() =>
-      runStrategySchedulesWorkflow.run(
+      runStrategySchedulesOperation.run(
         { limit: STRATEGY_SCHEDULER_BATCH_LIMIT, concurrency: tuning.concurrency },
         ctx,
       ));

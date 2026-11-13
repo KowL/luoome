@@ -419,7 +419,7 @@ export const MembershipSnapshotSchema = z.object({
 });
 ```
 
-complete sync 才允许结束未入选的旧 source。partial/failed 永远不结束旧 source；受影响来源改 stale。
+complete sync 允许结束所有未入选的旧 source。partial sync 只允许结束 producer run 中已明确评估且未入选的旧 source；未评估/评估不确定的 source 改 stale。failed 不结束旧 source。
 
 ### 4.11 AlertPlan
 
@@ -829,9 +829,9 @@ interface SyncWatchlistSourceInput {
    - unchanged：更新当前 source 的 score/rank/evidence/dataAsOf。
    - exited：结束 source；若无其它 active/stale source 且用户未保留，归档 Member。
 6. partial/failed：
-   - 不处理 exited；
    - 现有 source 标 stale；
-   - partial 中确定成功的 candidate 可更新，但不得据缺失集合推导退出。
+   - partial 中确定成功的 candidate 可更新；已明确评估且未入选的 stock 结束 source，未评估/评估不确定的 stock 不得据缺失集合推导退出；
+   - failed 不处理 exited。
 7. 提交统计。
 
 空 complete candidates 只有在 producer 明确证明完整运行成功时才允许结束全部来源。StrategyRunner
@@ -892,7 +892,7 @@ interface StrategyWatchlistSubscription {
 2. `dataHealth=complete` 映射为 `sync_watchlist_source.status=complete`；`dataHealth=partial` 映射为
    `partial`。候选集合必须与该 run 的 `selected=true` facts 完全一致，并保留
    `strategyId/strategyVersionId/producerRunId/score/rank/evidence/dataAsOf` provenance。
-3. complete 才能结束本次缺失的 Strategy source；partial/failed 只标 stale，不根据缺失集合制造退出。
+3. complete 结束所有未入选的 Strategy source；partial 只结束该 run 中已明确评估（规则结果为 matched/not-matched）且未入选的 source，未评估/unknown/error 的来源只标 stale；failed 不结束来源。
    空 complete 只有在 published run 证明可信零命中时才结束全部该 source。
 4. 同一 `(watchlistId, sourceKey, producerRunId)` 重试返回已有 sync run，不重复制造成员/快照或结束来源。
 5. manual、AI、Portfolio 和其它 Strategy source 仍 active/stale 时，结束一个 Strategy source 不归档成员。
@@ -997,7 +997,7 @@ load enabled AlertPlans
 2. 过滤 schedule=after-market 的 currentVersion。
 3. 对每个 Strategy 调 `run_strategy`。
 4. run 持久化且是 published operational 时调用内部 subscription sync；没有 active 订阅时跳过。
-   `partial` 只记录 source partial/stale，不结束来源。
+   `partial` 记录 source partial/stale，并结束该 run 中已明确评估未入选的来源。
 5. 记录每项执行状态 complete/failed、dataHealth 和 providerStatuses；历史 partial 按完成读取。
 6. 不生成 Advice、不发送买卖结论。
 
@@ -1135,7 +1135,7 @@ drizzle + memory 共用：
 - Watchlist member 唯一。
 - StrategyWatchlistSubscription active 唯一、取消 tombstone 和策略删除时的显式取消。
 - 多 source 进入、更新、stale、结束、重新进入。
-- complete 空结果、partial/failed 不退出。
+- complete 空结果结束全部来源；partial 只退出已明确评估未入选的来源；failed 不退出。
 - sync commit 原子性。
 - published operational complete/partial/withheld/evaluation/failed/persist=false 的 Strategy sync 门禁、
   provenance、空 complete 和 producerRun 幂等。

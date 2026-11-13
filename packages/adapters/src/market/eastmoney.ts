@@ -612,18 +612,21 @@ const fetchEastmoneyIndexQuote = async (
     );
   }
   const d = json.data;
-  if (d.f43 === undefined || d.f43 <= 0) {
+  const close = asNumber(d.f43);
+  if (close === undefined || close <= 0) {
     throw new EastmoneyAdapterError(
       'no_data',
       `Eastmoney 指数快照缺价: secid=${secid} f43=${d.f43}`,
     );
   }
+  const change = asNumber(d.f169) ?? 0;
+  const changePct = asNumber(d.f170) ?? 0;
   return {
     code: d.f57 ?? secid.split('.')[1] ?? secid,
     name: d.f58 ?? secid,
-    close: money(d.f43),
-    change: d.f169 ?? 0,
-    changePct: d.f170 ?? 0,
+    close: money(close),
+    change,
+    changePct,
     ts: http.clock(),
     source: 'eastmoney',
   };

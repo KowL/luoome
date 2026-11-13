@@ -827,6 +827,7 @@ describe('run_strategy', () => {
           listBySources: observationRepo.listBySources.bind(observationRepo),
           list: observationRepo.list.bind(observationRepo),
           removeBySources: observationRepo.removeBySources.bind(observationRepo),
+          pruneSettledBefore: observationRepo.pruneSettledBefore.bind(observationRepo),
           save: () => Promise.reject(new Error('observation storage unavailable')),
         },
       },

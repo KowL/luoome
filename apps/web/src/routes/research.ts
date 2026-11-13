@@ -1,7 +1,7 @@
 import {
-  closingReportWorkflow,
-  openingReportWorkflow,
-  weeklyReportWorkflow,
+  closingReportOperation,
+  openingReportOperation,
+  weeklyReportOperation,
 } from '@luoome/workflows';
 import type { Hono } from 'hono';
 import { jsonResult, notFound } from '../http/result.js';
@@ -88,11 +88,11 @@ export const registerResearchRoutes = (app: Hono, deps: WebRouteDeps): void => {
     const kind = c.req.param('kind');
     const workflow =
       kind === 'opening'
-        ? openingReportWorkflow
+        ? openingReportOperation
         : kind === 'closing'
-          ? closingReportWorkflow
+          ? closingReportOperation
           : kind === 'weekly'
-            ? weeklyReportWorkflow
+            ? weeklyReportOperation
             : undefined;
     if (workflow === undefined) return jsonResult(notFound('ReportWorkflow', kind));
     let body: unknown;

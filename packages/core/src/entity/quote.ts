@@ -193,20 +193,36 @@ export const DailyBarSchema = z.object({
   source: z.string().min(1),
 });
 
-/** 日线修订（原始 source 值，不做 qfq 调整）；复盘历史 PIT 用。 */
-export const DailyBarRevisionSchema = z.object({
+/**
+ * 除权除息事件：`factor = 除权价 / 前收盘`（≤1）。
+ *
+ * 日线以原始价落库，前复权是读时投影：`qfq(t) = raw(t) × ∏{factor | exDate > t}`。
+ * 这样原始价是不变量，新分红只新增一行因子，不需要重写历史 K 线。
+ */
+export const AdjustmentFactorSchema = z.object({
+  stockId: z.string().min(1),
+  exDate: z.coerce.date(),
+  factor: z.number().positive().max(1),
+  dividendPerShare: z.number().finite().nonnegative(),
+  perShareBonus: z.number().finite().nonnegative(),
+  allotmentRatio: z.number().finite().nonnegative(),
+  allotmentPrice: z.number().finite().nonnegative(),
+  source: z.string().min(1),
+});
+export type AdjustmentFactor = z.infer<typeof AdjustmentFactorSchema>;
+
+/** 原始价日线（未复权）；市场 dump 导入的落库形态，不参与 qfq 投影。 */
+export const RawDailyBarSchema = z.object({
   stockId: z.string().min(1),
   date: z.coerce.date(),
-  contentHash: z.string().min(1),
-  open: z.number().finite(),
-  high: z.number().finite(),
-  low: z.number().finite(),
-  close: z.number().finite(),
+  open: z.number().finite().positive(),
+  high: z.number().finite().positive(),
+  low: z.number().finite().positive(),
+  close: z.number().finite().positive(),
   volume: z.number().nonnegative(),
   source: z.string().min(1),
-  recordedAt: z.coerce.date(),
 });
-export type DailyBarRevision = z.infer<typeof DailyBarRevisionSchema>;
+export type RawDailyBar = z.infer<typeof RawDailyBarSchema>;
 
 export const DateRangeSchema = z.object({
   start: z.coerce.date(),

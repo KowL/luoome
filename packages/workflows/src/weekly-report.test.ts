@@ -14,7 +14,7 @@ import {
 } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { weeklyReportWorkflow } from './weekly-report.js';
+import { weeklyReportOperation } from './weekly-report.js';
 
 const now = new Date('2026-07-31T11:00:00.000Z');
 
@@ -286,7 +286,7 @@ describe('weekly-report workflow', () => {
     };
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: manager });
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -469,7 +469,7 @@ describe('weekly-report workflow', () => {
       feedback: 'useful',
     });
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'alert-feedback');
@@ -483,7 +483,7 @@ describe('weekly-report workflow', () => {
       ]),
     );
 
-    const accountReport = await weeklyReportWorkflow.run(
+    const accountReport = await weeklyReportOperation.run(
       {
         periodEnd: '2026-07-31',
         scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
@@ -543,7 +543,7 @@ describe('weekly-report workflow', () => {
       ).ok,
     ).toBe(true);
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -621,7 +621,7 @@ describe('weekly-report workflow', () => {
         ctx,
       ),
     ).toEqual(expect.objectContaining({ ok: true }));
-    const result = await weeklyReportWorkflow.run(
+    const result = await weeklyReportOperation.run(
       {
         periodEnd: '2026-07-31',
         scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
@@ -654,7 +654,7 @@ describe('weekly-report workflow', () => {
     const ctx = await buildTestContext({ clock: () => now });
     await seedStrategyWithPublishedRun(ctx);
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -704,7 +704,7 @@ describe('weekly-report workflow', () => {
     const ctx = await buildTestContext({ clock: () => new Date('2026-08-03T10:00:00.000Z') });
     await seedStrategyWithPublishedRun(ctx);
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-24', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-24', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
@@ -719,7 +719,7 @@ describe('weekly-report workflow', () => {
     await seedStrategyWithPublishedRun(ctx);
     await ctx.repos.strategy.pause('weekly-strategy', new Date('2026-08-01T02:00:00.000Z'));
 
-    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
@@ -745,7 +745,7 @@ describe('weekly-report workflow', () => {
       },
     };
 
-    const result = await weeklyReportWorkflow.run(
+    const result = await weeklyReportOperation.run(
       { periodEnd: '2026-07-31', notify: false },
       failingCtx,
     );
@@ -766,7 +766,7 @@ describe('weekly-report workflow', () => {
 
   it('策略运行读取失败时策略复盘 section unavailable，且不改变整份报告状态', async () => {
     const controlCtx = await buildTestContext({ clock: () => now });
-    const control = await weeklyReportWorkflow.run(
+    const control = await weeklyReportOperation.run(
       { periodEnd: '2026-07-31', notify: false },
       controlCtx,
     );
@@ -787,7 +787,7 @@ describe('weekly-report workflow', () => {
       repos: { ...baseCtx.repos, strategyRun: failingRunRepo },
     };
 
-    const broken = await weeklyReportWorkflow.run(
+    const broken = await weeklyReportOperation.run(
       { periodEnd: '2026-07-31', notify: false },
       failingCtx,
     );
@@ -835,12 +835,12 @@ describe('weekly-report workflow', () => {
       },
     };
     const input = { periodEnd: '2026-07-31', notify: true };
-    const first = await weeklyReportWorkflow.run(input, ctx);
+    const first = await weeklyReportOperation.run(input, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.data.report.deliveryStatus).toBe('failed');
     current = new Date(now.getTime() + 16 * 60_000);
-    const retry = await weeklyReportWorkflow.run(input, ctx);
+    const retry = await weeklyReportOperation.run(input, ctx);
     expect(retry.ok).toBe(true);
     if (!retry.ok) return;
     expect(retry.data.report.id).toBe(first.data.report.id);
@@ -863,14 +863,14 @@ describe('weekly-report workflow', () => {
         failedRetryBefore: current,
       }),
     ).toBe(false);
-    await weeklyReportWorkflow.run(input, ctx);
+    await weeklyReportOperation.run(input, ctx);
     expect(sends).toBe(2);
   });
 
   it('同一事实重复生成周报复用原版本', async () => {
     const ctx = await buildTestContext({ clock: () => now });
-    const first = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
-    const second = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const first = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const second = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
@@ -886,7 +886,7 @@ describe('weekly-report workflow', () => {
       scope: { kind: 'account' as const, accountId: ctx.user.defaultAccountId },
       notify: true,
     };
-    const first = await weeklyReportWorkflow.run(input, ctx);
+    const first = await weeklyReportOperation.run(input, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
@@ -905,7 +905,7 @@ describe('weekly-report workflow', () => {
       ctx,
     );
     expect(saved.ok).toBe(true);
-    const second = await weeklyReportWorkflow.run(input, ctx);
+    const second = await weeklyReportOperation.run(input, ctx);
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.data.report.id).not.toBe(first.data.report.id);

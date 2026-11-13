@@ -1,3 +1,4 @@
+import { gzipSync } from 'node:zlib';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
@@ -102,6 +103,53 @@ describe('drizzle StrategyResult 读兼容', () => {
           sql`SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_results'`,
         ),
       ).toBeUndefined();
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('压缩存储的逐股明细可解压还原，且不再以明文 JSON 落盘', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const stored = [
+        {
+          runId: 'compressed-run',
+          stockId: '600519.SH',
+          selected: true,
+          score: 61,
+          rank: 1,
+          ruleEvaluations: [{ ruleId: 'rule-1', status: 'matched', value: true, evidence: ['x'] }],
+          evidence: ['compressed'],
+          dataAsOf: new Date(1782748800000).toISOString(),
+        },
+      ];
+      const compressed = `zlib+base64:${gzipSync(JSON.stringify(stored)).toString('base64')}`;
+      handle.db.run(sql`
+        INSERT INTO strategy_runs (
+          id, strategy_id, strategy_version_id, mode, coverage, data_as_of, started_at,
+          finished_at, status, scope, input_snapshot_json, provider_statuses_json,
+          results_json
+        ) VALUES (
+          'compressed-run', 'compressed-strategy', 'compressed-v1', 'scan', 'CN_A_SHARES_SH_SZ',
+          1782748800000, 1782748800000, 1782748800000, 'complete', 'operational',
+          '{"schemaVersion":2,"strategyVersionId":"compressed-v1","definitionHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evaluatorVersion":"test","coverage":"CN_A_SHARES_SH_SZ","stockIds":["600519.SH"],"stockIdChecksum":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestedBy":"manual"}',
+          '[]',
+          ${compressed}
+        )
+      `);
+
+      const results = await handle.repos.strategyRun.listResults('compressed-run');
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        stockId: '600519.SH',
+        score: 61,
+        evidence: ['compressed'],
+      });
+
+      const raw = handle.db.all<{ results_json: string }>(
+        sql`SELECT results_json FROM strategy_runs WHERE id='compressed-run'`,
+      );
+      expect(raw[0]?.results_json.startsWith('zlib+base64:')).toBe(true);
     } finally {
       handle.close();
     }

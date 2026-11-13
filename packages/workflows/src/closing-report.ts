@@ -20,7 +20,7 @@ import {
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
-import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { defineOperation, type WorkflowContext } from './define-workflow.js';
 import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 import {
   DAY_MS,
@@ -1309,7 +1309,7 @@ const runClosingReport = async (
   return 'ok' in result ? result : ClosingReportOutput.parse(result);
 };
 
-export const closingReportWorkflow = defineWorkflow<ClosingInput, ClosingOutput>({
+export const closingReportOperation = defineOperation<ClosingInput, ClosingOutput>({
   name: 'closing-report',
   description: '生成并幂等保存指定交易日的结构化收盘复盘',
   input: ClosingReportInput,

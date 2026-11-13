@@ -13,7 +13,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { defineOperation, type WorkflowContext } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
 
 export const OpeningReportInput = z.object({
@@ -652,7 +652,7 @@ const runOpeningReport = async (
   return 'ok' in result ? result : OpeningReportOutput.parse(result);
 };
 
-export const openingReportWorkflow = defineWorkflow<OpeningInput, OpeningOutput>({
+export const openingReportOperation = defineOperation<OpeningInput, OpeningOutput>({
   name: 'opening-report',
   description: '生成并幂等保存指定交易日的结构化开盘简报',
   input: OpeningReportInput,

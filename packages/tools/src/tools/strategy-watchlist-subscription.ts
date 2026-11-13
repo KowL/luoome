@@ -257,6 +257,22 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
         evidence: result.evidence,
         dataAsOf: result.dataAsOf,
       }));
+    // partial run 也能安全结束「已明确评估且未入选」的来源；只看 selection
+    // 规则，unknown/error 表示数据不足，不能据此制造退出。入选股票始终视为
+    // 已评估，避免信号规则缺数据时反向阻塞整个同步。
+    const evaluatedStockIds = new Set(
+      results
+        .filter((result) =>
+          result.ruleEvaluations
+            .filter((evaluation) => !('scope' in evaluation) || evaluation.scope === 'selection')
+            .every(
+              (evaluation) =>
+                evaluation.status === 'matched' || evaluation.status === 'not-matched',
+            ),
+        )
+        .map((result) => result.stockId),
+    );
+    for (const candidate of candidates) evaluatedStockIds.add(candidate.stockId);
     const items: z.infer<typeof StrategyWatchlistSyncItemSchema>[] = [];
     for (const subscription of subscriptions) {
       if (subscription.investmentBinding !== undefined) {
@@ -304,6 +320,7 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
           producerRunId: run.id,
           status: syncStatus,
           candidates,
+          evaluatedStockIds: [...evaluatedStockIds],
           dataAsOf: run.dataAsOf,
         },
         ctx,

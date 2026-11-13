@@ -5,6 +5,7 @@ import {
   type Strategy,
   type StrategyDslV1,
   type StrategyVersion,
+  signalObservationId,
   strategyDefinitionHash,
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
@@ -128,9 +129,12 @@ const provenance = {
   freshness: 'fresh' as const,
 };
 
+const observationId = (horizon: 't1' | 't3' | 't5'): string =>
+  signalObservationId('strategy-signal', 'cycle-signal-1', horizon);
+
 const seedFacts = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
   await ctx.repos.signalObservation.save({
-    id: 'cycle-observation-t1',
+    id: observationId('t1'),
     sourceKind: 'strategy-signal',
     sourceId: 'cycle-signal-1',
     stockId: STOCK_ID,
@@ -149,7 +153,7 @@ const seedFacts = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
     dueAt: new Date('2026-08-08T10:00:00.000Z'),
   });
   await ctx.repos.signalObservation.save({
-    id: 'cycle-observation-t3',
+    id: observationId('t3'),
     sourceKind: 'strategy-signal',
     sourceId: 'cycle-signal-1',
     stockId: STOCK_ID,
@@ -162,7 +166,7 @@ const seedFacts = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
     dueAt: new Date('2026-08-12T10:00:00.000Z'),
   });
   await ctx.repos.signalObservation.save({
-    id: 'cycle-observation-t5',
+    id: observationId('t5'),
     sourceKind: 'strategy-signal',
     sourceId: 'cycle-signal-1',
     stockId: STOCK_ID,
@@ -202,7 +206,7 @@ const seedAdviceAndTrades = async (ctx: Awaited<ReturnType<typeof buildTestConte
         rank: 1,
         resultEvidence: ['result-fact'],
         signalIds: ['cycle-signal-1'],
-        observationIds: ['cycle-observation-t1', 'cycle-observation-t3'],
+        observationIds: [observationId('t1'), observationId('t3')],
         recommendationTrigger: 'run',
       },
     },
@@ -285,7 +289,7 @@ describe('get_strategy_decision_cycles', () => {
       expect.arrayContaining([
         'result-fact',
         'cycle-signal-1',
-        'cycle-observation-t1',
+        observationId('t1'),
         'cycle-advice-1',
         'cycle-trade-explicit',
       ]),

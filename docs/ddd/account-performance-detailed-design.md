@@ -1,5 +1,7 @@
 # 账户绩效与组合归因详细设计
 
+> **2026-11-12 状态：存储已合并。** `portfolio_cash_flows`、`portfolio_corporate_actions`、`holding_cash_adjustments` 合并为 `account_ledger_entries`；快照、TWR 与归因逻辑保留。
+
 > 状态：竖向切片、盘后持续快照 workflow/scheduler、修订审计、周报区间指标、缺价语义与 Web
 > 审计入口与一年真实长区间 smoke 已实现（截至 2026-08-20）；跨交易日生产样本和大账户预算仍持续积累。
 > 本设计回答账户“实际表现如何、收益来自哪里、哪些指标因缺数据不可用”，不定义交易执行或调仓建议。

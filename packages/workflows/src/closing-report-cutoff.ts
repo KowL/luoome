@@ -1,7 +1,7 @@
 import { dateInShanghai, isHoliday, isWeekend } from '@luoome/core';
 import { z } from 'zod';
 
-import { closingReportStrategiesReady, closingReportWorkflow } from './closing-report.js';
+import { closingReportOperation, closingReportStrategiesReady } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
 import { unavailableSection } from './opening-report.js';
@@ -53,7 +53,7 @@ const run: WorkflowStep = async (previous, ctx) => {
         if (existing.data.report.deliveryStatus === 'sent') {
           outcomes[index] = 'existing';
         } else {
-          const retry = await closingReportWorkflow.run(
+          const retry = await closingReportOperation.run(
             { date, scope, mode: 'scheduled', notify: true },
             ctx,
           );
@@ -139,7 +139,7 @@ const run: WorkflowStep = async (previous, ctx) => {
           'report' in recovered ? (recovered.created ? 'created' : 'existing') : 'failed';
         continue;
       }
-      const report = await closingReportWorkflow.run({ date, scope, mode: 'scheduled' }, ctx);
+      const report = await closingReportOperation.run({ date, scope, mode: 'scheduled' }, ctx);
       outcomes[index] = report.ok ? (report.data.created ? 'created' : 'existing') : 'failed';
     }
   };

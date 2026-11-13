@@ -677,41 +677,49 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
         else unchanged += 1;
       }
 
-      if (input.run.status === 'complete') {
-        for (const row of currentRows) {
-          const source = toSource(row);
-          const member = membersById.get(source.memberId);
-          if (member === undefined || candidateMap.has(member.stockId)) continue;
-          tx.update(watchlistMemberSources)
-            .set({ status: 'ended', validUntil: now })
-            .where(eq(watchlistMemberSources.id, source.id))
+      // complete 结束所有未入选来源；partial 只结束 producer run 中已得到确定
+      // 选择结论的股票，未评估股票保持 stale，避免用缺失数据制造退出。
+      const evaluatedStockIds = new Set(input.evaluatedStockIds ?? []);
+      for (const row of currentRows) {
+        const source = toSource(row);
+        const member = membersById.get(source.memberId);
+        if (member === undefined || candidateMap.has(member.stockId)) continue;
+        if (
+          input.run.status !== 'complete' &&
+          !(input.run.status === 'partial' && evaluatedStockIds.has(member.stockId))
+        ) {
+          continue;
+        }
+        tx.update(watchlistMemberSources)
+          .set({ status: 'ended', validUntil: now })
+          .where(eq(watchlistMemberSources.id, source.id))
+          .run();
+        changes.push({
+          stockId: member.stockId,
+          change: 'exited',
+          reason:
+            input.run.status === 'complete' ? '来源完整同步未再入选' : '来源已确认评估未再入选',
+          evidence: [],
+          ...(input.run.dataAsOf === undefined
+            ? {}
+            : { dataAsOf: input.run.dataAsOf.toISOString() }),
+        });
+        exited += 1;
+        const other = tx
+          .select({ id: watchlistMemberSources.id })
+          .from(watchlistMemberSources)
+          .where(
+            and(
+              eq(watchlistMemberSources.memberId, member.id),
+              ne(watchlistMemberSources.status, 'ended'),
+            ),
+          )
+          .get();
+        if (other === undefined && member.stage === 'discovered') {
+          tx.update(watchlistMembers)
+            .set({ stage: 'archived', lastActivityAt: now, archivedAt: now })
+            .where(eq(watchlistMembers.id, member.id))
             .run();
-          changes.push({
-            stockId: member.stockId,
-            change: 'exited',
-            reason: '来源完整同步未再入选',
-            evidence: [],
-            ...(input.run.dataAsOf === undefined
-              ? {}
-              : { dataAsOf: input.run.dataAsOf.toISOString() }),
-          });
-          exited += 1;
-          const other = tx
-            .select({ id: watchlistMemberSources.id })
-            .from(watchlistMemberSources)
-            .where(
-              and(
-                eq(watchlistMemberSources.memberId, member.id),
-                ne(watchlistMemberSources.status, 'ended'),
-              ),
-            )
-            .get();
-          if (other === undefined && member.stage === 'discovered') {
-            tx.update(watchlistMembers)
-              .set({ stage: 'archived', lastActivityAt: now, archivedAt: now })
-              .where(eq(watchlistMembers.id, member.id))
-              .run();
-          }
         }
       }
 

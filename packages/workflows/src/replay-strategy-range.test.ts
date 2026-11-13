@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   money,
   type Strategy,
@@ -78,35 +77,6 @@ const seedReplayStrategy = async (
   await ctx.repos.strategy.createVersion(version);
 };
 
-const revisionFor = (close: number, date: Date, recordedAt: Date) => {
-  const input = {
-    stockId: STOCK_ID,
-    date,
-    open: money(close),
-    high: money(close + 1),
-    low: money(close - 1),
-    close: money(close),
-    volume: 1_000_000,
-    source: 'replay-fixture',
-  };
-  return {
-    ...input,
-    contentHash: createHash('sha256')
-      .update(
-        JSON.stringify({
-          open: input.open,
-          high: input.high,
-          low: input.low,
-          close: input.close,
-          volume: input.volume,
-          source: input.source,
-        }),
-      )
-      .digest('hex'),
-    recordedAt,
-  };
-};
-
 const replayContext = async (options: { readonly now?: Date; readonly observedAt?: Date } = {}) => {
   const now = options.now ?? new Date('2026-08-12T09:00:00.000Z');
   const ctx = await buildTestContext({ clock: () => now });
@@ -115,12 +85,24 @@ const replayContext = async (options: { readonly now?: Date; readonly observedAt
   return ctx;
 };
 
-const saveTradingDayRevision = async (
+const saveTradingDayBar = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
   dataAsOf: Date,
-  recordedAt: Date,
+  close = 10,
 ): Promise<void> => {
-  await ctx.repos.dailyBar.saveRevisions([revisionFor(10, dataAsOf, recordedAt)]);
+  await ctx.repos.dailyBar.saveMany([
+    {
+      stockId: STOCK_ID,
+      date: dataAsOf,
+      open: money(close),
+      high: money(close + 1),
+      low: money(close - 1),
+      close: money(close),
+      volume: 1_000_000,
+      adjustment: 'qfq',
+      source: 'replay-fixture',
+    },
+  ]);
 };
 
 describe('replay-strategy-range workflow', () => {
@@ -136,7 +118,7 @@ describe('replay-strategy-range workflow', () => {
   it('逐交易日 replay 并聚合当日运行事实', async () => {
     const ctx = await replayContext();
     for (const dataAsOf of [FROM, new Date('2026-07-28T00:00:00.000Z'), TO]) {
-      await saveTradingDayRevision(ctx, dataAsOf, new Date(dataAsOf.getTime() - 86_400_000));
+      await saveTradingDayBar(ctx, dataAsOf);
     }
 
     const result = await replayStrategyRangeWorkflow.run(
@@ -166,42 +148,11 @@ describe('replay-strategy-range workflow', () => {
     expect(result.data.days.every((day) => day.runId !== undefined)).toBe(true);
   });
 
-  it('不使用交易日内 revision cutoff 之后才记录的修订', async () => {
-    const asOf = new Date('2026-08-10T00:00:00.000Z');
-    const ctx = await replayContext();
-    // 修订在 asOf 之后才落库：PIT cutoff 读不到，不允许用未来修订伪装历史输入。
-    await saveTradingDayRevision(ctx, asOf, new Date('2026-08-11T00:00:00.000Z'));
-
-    const result = await replayStrategyRangeWorkflow.run(
-      {
-        strategyId: 'replay-strategy',
-        versionId: 'replay-strategy-v1',
-        from: asOf,
-        to: asOf,
-        stockIds: [STOCK_ID],
-      },
-      ctx,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    // revision cutoff 之后才落库的修订不可见：该交易日无 PIT 日线，
-    // 股票仍进入评估但不会被选中或产生信号（不使用未来修订伪造历史输入）。
-    expect(result.data.days[0]).toMatchObject({
-      status: 'complete',
-      evaluatedCount: 1,
-      selectedCount: 0,
-      signalCount: 0,
-      failedCount: 0,
-    });
-    expect(result.data.status).toBe('complete');
-  });
-
   it('PIT universe 使用交易日结束边界内的快照', async () => {
     const asOf = new Date('2026-08-10T00:00:00.000Z');
     // 快照发生在 asOf 当天盘中（UTC 15:00），交易日结束边界内仍应可见。
     const ctx = await replayContext({ observedAt: new Date('2026-08-10T15:00:00.000Z') });
-    await saveTradingDayRevision(ctx, asOf, new Date('2026-08-09T00:00:00.000Z'));
+    await saveTradingDayBar(ctx, asOf);
 
     const result = await replayStrategyRangeWorkflow.run(
       {
@@ -226,7 +177,7 @@ describe('replay-strategy-range workflow', () => {
   it('persist=false 时不落库运行事实也不返回 runId', async () => {
     const asOf = new Date('2026-08-10T00:00:00.000Z');
     const ctx = await replayContext();
-    await saveTradingDayRevision(ctx, asOf, new Date('2026-08-09T00:00:00.000Z'));
+    await saveTradingDayBar(ctx, asOf);
 
     const result = await replayStrategyRangeWorkflow.run(
       {

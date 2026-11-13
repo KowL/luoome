@@ -2,7 +2,7 @@ import type { SignalObservation } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { completeStrategyObservationsWorkflow } from './complete-strategy-observations.js';
+import { completeStrategyObservationsOperation } from './complete-strategy-observations.js';
 
 describe('complete-strategy-observations workflow', () => {
   it('先同步 qfq 日线，再完成到期 StrategySignal 观察', async () => {
@@ -27,7 +27,7 @@ describe('complete-strategy-observations workflow', () => {
       },
     };
     await ctx.repos.signalObservation.save(observation);
-    const result = await completeStrategyObservationsWorkflow.run({}, ctx);
+    const result = await completeStrategyObservationsOperation.run({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data).toMatchObject({
@@ -85,7 +85,7 @@ describe('complete-strategy-observations workflow', () => {
       },
     };
     await ctx.repos.signalObservation.save(observation);
-    const result = await completeStrategyObservationsWorkflow.run({}, ctx);
+    const result = await completeStrategyObservationsOperation.run({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data).toMatchObject({

@@ -21,7 +21,7 @@ import {
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { closingReportWorkflow } from './closing-report.js';
+import { closingReportOperation } from './closing-report.js';
 import { buildWorkflowTools } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
 
@@ -30,7 +30,7 @@ const marketAsOf = new Date('2026-07-27T07:00:00.000Z');
 const EMPTY_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 
 const generateClosingSnapshot = (input: Record<string, unknown>, ctx: ToolContext) =>
-  closingReportWorkflow.run(input, ctx);
+  closingReportOperation.run(input, ctx);
 
 const planFixture = (digest: string, overrides: Record<string, unknown> = {}) =>
   TradingPlanSchema.parse({

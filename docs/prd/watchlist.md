@@ -251,7 +251,7 @@ Source key: strategy:<strategyId>
 同步状态必须复用 `sync_watchlist_source` 的完整覆盖语义：
 
 - `complete` 才能按本次完整结果结束缺失的该 Strategy source；
-- `partial` 只更新当前命中来源并将既有来源标记为 `stale`，不按缺失集合退出；
+- `partial` 更新当前命中来源并将既有来源标记为 `stale`；只结束 producer run 中已明确评估且未入选的来源，不按缺失集合退出；
 - `failed` 不改变现有来源，只记录失败快照；不可用数据不会伪装成可信空结果；
 - 空的 `complete` 只有在完整覆盖且可信地确认零命中时，才可结束该 Strategy source；
 - 同一 `producerRunId` 重试必须幂等，不重复成员、快照或错误结束来源；
@@ -417,7 +417,7 @@ Strategy/AI source active
 active → active    刷新分数、排名和证据
 active → stale     同步失败，保留旧结果
 stale  → active    后续成功恢复
-active → ended     完整运行明确不再命中
+active → ended     完整运行或已明确评估后不再命中
 ended  → active    后续再次进入
 ```
 

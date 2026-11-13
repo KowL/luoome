@@ -30,34 +30,26 @@ StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservat
 SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，不再创建、补全、展示或作为
 验收等待条件。存量 `horizon=t20` 行只保留读取兼容，不进入当前统计、推荐和实验事实。
 
-> 可靠性实现（2026-08-14）：`complete` 继续只表达执行终态；acceptance 与
-> `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用
-> heartbeat + fencing token、checkpoint、观察补全和 facts-only 降级；replay/backtest/显式子集不发布。
+> 可靠性实现（2026-11-12）：`complete` 继续只表达执行终态；acceptance 与
+> `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用策略表上的
+> 调度字段加进程内互斥、本地日线（按 dataAsOf 截断）和观察补全，AI 不可用时 facts-only 降级；
+> replay/backtest/显式子集不发布。原 fencing lease、checkpoint 表与 DailyBar revision 已移除。
 > 跨日性能样本与真实运行记录继续作为运营观测，不设置固定交易日数量的完成门禁。详细契约见
 > [Strategy 日运行与历史评估详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
 
-AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计算由确定性规则引擎执行，AI 不介入。
-自动发布使用已有结果的历史验证区间，不强制等待提议后的 20 个交易日；历史样本门槛不等于等待期。
+AI 可以提议修改策略（`strategy_version_proposal`），但只能产出待确认草案；候选版本冻结后，
+历史匹配和收益计算由确定性规则引擎执行，AI 不介入。草案必须由用户显式校验、发布后才会运行。
 
 ### StrategySchedule
 
-回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
-cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
-definitionHash。调度 workflow 通过调度租约和正式运行租约防重；Web 进程在开启 `write + external` 时每分钟自动检查，单机工具也可显式执行。
-非交易日与暂停策略不运行。存量无 `schemaVersion` 的
-RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
-V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
-事实缺失时返回 unavailable，只有 eligible 候选才生成可追溯 Advice。配置的 T+n 观察完成时可再次生成阶段建议，
-并可选择日志或飞书通知。`maxPerRun` 限制进入 AI 分析的候选数（每个候选最多两次模型请求）；预检跳过、冷却或数据不可用的候选
-不占用名额，按排名继续检查后续候选。推荐批次记录尝试、生成失败、预检和投递结果；失败不回滚
-已提交的 StrategyRun。收盘报告区分未分析、未开启、预检跳过、数据不可用与生成失败，未分析
-不等于没有机会。个股策略分析独立校验行情时效，保留真实行情时间；新建议必须有反证和风险，
-买入价格计划满足 0 < 止损 < 买点 < 目标（按持久化价格精度校验），无效输出最多重试一次后失败。
-任何建议与通知都不会自动交易。
+回答“已发布策略何时自动运行”。2026-11-10 收敛后，调度不再是独立实体：标准 5 段 cron 与
+`lastScheduledAt` 直接存在 `strategies` 表上，修改调度不改变 `definitionHash`。`run-strategy-schedules`
+在 Web 进程开启 `write + external` 时每分钟检查到期策略，用进程内互斥防止同一 tick 重入；
+不再有持久调度租约或 `StrategyRecommendationPolicy`，同一 SQLite 只允许一个写进程。
+非交易日与暂停策略不运行。
 
-可靠性目标已落地为把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun
-审计的 daily cycle；租约使用 heartbeat + fencing token。外部观察 cron 只保留为幂等补偿任务，
-真实交易日的运行记录仍需持续积累，期间不扩大自动推荐或通知默认范围；样本数量不作为固定完成门禁。
+`strategy-daily-cycle` 按 run → observations → insight 的阶段推进，每阶段写入 WorkflowRun 审计；
+AI 洞察不可用时按 facts-only 降级并标 `partial`，不回滚已发布运行，也不自动生成 Advice、通知或交易。
 
 ### StrategyDailyCycleAudit
 
@@ -69,14 +61,15 @@ dataAsOf；无版本旧记录继续通过同一解码边界只读兼容。按 St
 ### StrategyEvaluationData
 
 回答“本次 StrategyRun 的逐股 quote / daily-bars 从哪个时点与来源取得，以及缺失如何审计”。
-实时 scan 使用 Live Adapter；scheduled/replay 使用 Checkpoint Adapter，只读取本地 checkpoint 或 PIT
-revision。两个实现共享同一 Interface，`run_strategy` 不再承载模式分支、重试或 provider coverage 计算。
+实时 scan 使用 Live Adapter；scheduled/replay 只读取本地已落库日线（原始价 + 因子投影），
+在查询时用 `dataAsOf` 截断，不维护 checkpoint 或 revision 表。两个实现共享同一 Interface，
+`run_strategy` 不再承载模式分支、重试或 provider coverage 计算。
 
 ### StrategyRunSnapshot
 
 StrategyRun 的不可变输入身份。当前写入 V3；V2 与任意旧对象只通过统一 Compatibility Module 读取。
-evaluator identity、requestedBy、evaluationSessionId、universe 和 data checkpoint 不得由各调用方直接
-探测原始 key，否则旧数据在不同 surface 会产生不一致语义。
+evaluator identity、requestedBy、universe 和 dataAsOf 不得由各调用方直接探测原始 key，
+否则旧数据在不同 surface 会产生不一致语义。逐日评估会话与 data checkpoint 已随收敛移除。
 
 ### StrategyObservationEvidence
 
@@ -242,11 +235,24 @@ AI 两次失败后由 LLM 适配器返回的规则兜底建议（`reasoning` 带
 交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
 情绪接口或 mock 推断历史事实。
 
-炸板固定指“当日原始最高价触及实际涨停价、但原始收盘价未封涨停”；开板后回封不算炸板。
-`consecutiveBoard(D)` 指 D 开盘前、截至上一交易日连续封板的交易日数量；断板指该值至少为 1 且
-D 未收盘封板。所需 raw OHLC、涨停价、交易日或前序窗口缺失时保持 unknown。当前没有通过
-schema、发布时间、revision 与真实凭据验收的数据源，因此这些字段不进入 Strategy registry；
-AShareSentiment 的近期炸板池不得倒灌历史 PIT。
+炸板固定指“当日触及涨停但收盘未封板”；开板后回封不算炸板。`consecutiveBoard(D)` 指 D 开盘前、
+截至上一交易日连续封板的交易日数量；断板指该值至少为 1 且 D 未收盘封板。
+
+2026-11-13 起由 fuyao 涨停池/炸板池提供：封板 = 当日涨停池成员；炸板 = 炸板池成员且未封板；
+`consecutiveBoard` 取上一交易日涨停池的 `continue_day_cnt`。事实写入 `limit_up_board_history`
+（`(trade_date, source, recorded_at)` 保留修订，`captured/backfill` 区分采集时点），Strategy 字段
+`meta.isBroken` / `meta.consecutiveBoard` / `meta.isBoardBreak` 只读该 PIT 仓储；缺失或 `partial`
+时保持 unknown，不写 `false` 或 `0`。该来源没有历史起点、revision 与历史发布时间契约，开板回封、
+ST/20cm、停牌与除权日样本仍待交叉验证；AShareSentiment 的近期炸板池不得倒灌历史 PIT。
+
+### LimitUpMarketSnapshot（涨停市场看板）
+
+单次 `limit_up_market` 取数得到的三维聚合事实：`pool`（所选交易日涨停池逐股明细）、`statistics`
+（同一交易日的封板率与页面档位晋级率）、`ladder`（接口固定的近 30 个交易日连板矩阵，**不随所选日期变化**）。
+三者口径独立：任一维度上游失败时为 `null` 并在 `warnings` 标记，不得用 0 或空数组冒充「无数据」。
+`pool.total` 是接口分页 total，`entries` 是实际拉到的条目；`sealMoney` / `maxSealMoney` 是上游当前值与峰值，
+不是推算值。KPI 由 core 的 `deriveLimitUpMarketMetrics` 派生（封板率来自 `statistics`，基数为触板家数；
+封单留存 = 当前封单额 ÷ 峰值封单额），涨停原因只按 `limit_up_reason` 原文聚合，不映射行业、不改写文案。
 
 ### ResearchDocument（研究笔记）
 
@@ -275,7 +281,7 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 - 首期全市场覆盖固定为沪深 A 股，不暗示港股、美股或北交所。
 - 股票目录完整快照通过校验后才原子提交；缺失只标记，不物理删除股票身份。
 - StrategyVersion 发布后不可修改；运行结果与信号必须引用确切版本和 dataAsOf。
-- Watchlist 的 complete sync 才能结束缺失来源；partial/failed 不退出成员。
+- Watchlist 的 complete sync 结束所有未入选来源；partial sync 只结束 producer run 中已明确评估且未入选的来源，未评估/评估不确定的来源标 stale；failed 不退出成员。
 - disabled Watchlist 不进入 AlertPlan 扫描；AlertPlan 不拥有成员。
 - 删除被 AlertPlan 引用的 Watchlist 必须拒绝。
 - portfolio 来源只暴露当前账户范围，不在通知中泄漏敏感数量。

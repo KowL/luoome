@@ -1,5 +1,7 @@
 # Strategy 日运行与评估可靠性开发计划
 
+> **2026-11-12 状态：大部分已执行、部分失效。** R0–R7 中 publication、daily cycle、规则语义、观察统计保留；fencing lease、checkpoint、revision 与逐日评估会话已随收敛删除，相关里程碑与运维步骤不再适用。
+
 > 状态：当前执行计划
 > 基线日期：2026-08-14；核心实现复核：2026-08-20
 > 适用范围：Strategy 的定时运行、当前股票池、SignalObservation、AI 洞察与历史评估

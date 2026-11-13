@@ -74,6 +74,8 @@ export const registerWatchlistAlertRoutes = (app: Hono, deps: WebRouteDeps): voi
         archivedAt?: unknown;
         firstAddedAt?: string | Date;
       };
+      /** get_watchlist 从本地股票目录补齐；缺失时为 undefined。 */
+      stockName?: string;
       sources: Array<{ kind: string; status: string; dataAsOf?: unknown }>;
     }
     interface OverviewRun {
@@ -210,7 +212,7 @@ export const registerWatchlistAlertRoutes = (app: Hono, deps: WebRouteDeps): voi
         todayEntered,
         todayExited,
       });
-      for (const { member, sources } of members) {
+      for (const { member, stockName, sources } of members) {
         if (member.stage === 'archived') {
           archivedMembers.push({
             watchlistId: watchlist.id,
@@ -221,7 +223,7 @@ export const registerWatchlistAlertRoutes = (app: Hono, deps: WebRouteDeps): voi
         }
         const entry = stocksById.get(member.stockId) ?? {
           stockId: member.stockId,
-          name: member.stockId,
+          name: stockName ?? member.stockId,
           quote: null,
           changePct: null,
           memberships: [],

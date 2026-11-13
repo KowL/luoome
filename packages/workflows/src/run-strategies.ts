@@ -1,7 +1,7 @@
 import { getStrategyRunDataHealth } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { defineOperation, type WorkflowStep } from './define-workflow.js';
 
 export const RunStrategiesInput = z.object({
   strategyIds: z.array(z.string().min(1)).optional(),
@@ -136,7 +136,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
   });
 };
 
-export const runStrategiesWorkflow = defineWorkflow<RunStrategiesInputT, RunStrategiesOutputT>({
+export const runStrategiesOperation = defineOperation<RunStrategiesInputT, RunStrategiesOutputT>({
   name: 'run-strategies',
   description: '顺序运行 active Strategies；单个失败不会阻塞其它 Strategy',
   input: RunStrategiesInput,

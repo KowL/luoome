@@ -91,17 +91,15 @@ const replay: WorkflowStep = async (previous, ctx) => {
       cursor = new Date(cursor.getTime() + DAY_MS);
       continue;
     }
-    // dataAsOf 是交易日 key（UTC 零点）；revision cutoff 取同日结束边界，
-    // 只使用该交易日内已记录的日线 revision，不读取之后才产生的修订。
-    const revisionCutoff = endOfDay(dataAsOf);
+    // dataAsOf 是交易日 key（UTC 零点）；日线是盘后同步的固定事实，
+    // 回放只按 dataAsOf 截断，不再依赖 revision 时点。
     const run = await ctx.tools.run_strategy.execute({
       strategyId: input.strategyId,
       ...(input.versionId === undefined ? {} : { versionId: input.versionId }),
       mode: 'replay',
       asOf: dataAsOf,
-      universeAsOf: revisionCutoff,
+      universeAsOf: endOfDay(dataAsOf),
       ...(stockIds === undefined ? {} : { stockIds }),
-      revisionCutoff,
       persist: input.persist,
     });
     if (!run.ok) {

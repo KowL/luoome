@@ -1,5 +1,7 @@
 # Strategy 生产可靠性运维手册
 
+> **2026-11-12 状态：部分失效。** fencing lease、行情 checkpoint 与 DailyBar revision 已从代码移除；调度改为策略表字段 + 进程内互斥，日线按 `dataAsOf` 截断。调度参数、T+1/T+3/T+5 观察与 provider 审计仍适用，涉及 fencing/checkpoint 的步骤不再执行。
+
 本手册用于持续复核 Strategy 日运行的 schedule/run fencing、行情 checkpoint、provider fallback、
 SignalObservation 基准价与 T+1/T+3/T+5 补全。它只读取或生成可审计事实，不把历史评估称为
 收益回测，也不扩大自动 Advice、通知或交易范围。

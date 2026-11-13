@@ -1,5 +1,7 @@
 # AI 投资决策闭环 Phase 2 完成计划
 
+> **2026-11-12 状态：部分裁撤。** P2-4 的 `ResearchHypothesisVersion` 已删除；P2-0～P2-3 的 Outcome/Trade/观察/周报链路保留。
+
 > 状态：P2-0～P2-5 代码、自动化测试和本地浏览器切片已完成；P2-5 全链路真实数据证据仍待积累，Phase 2 不标记为完全完成（2026-08-24）
 > 上位文档：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
 > 关联：[AI 投资 Agent 协作体验](../prd/ai-investment-agent.md)、[Agent 协作体验 Phase 0+1 详细设计](./agent-collaboration-phase0-1-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 严格回测详细设计](./strategy-strict-backtest-detailed-design.md)

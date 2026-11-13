@@ -1,5 +1,6 @@
 import {
   type Account,
+  type AdjustmentFactor,
   type Advice,
   type AdviceOutcome,
   type AlertPlan,
@@ -9,9 +10,9 @@ import {
   type ChatSession,
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
-  type DailyBarRevision,
   type Holding,
   InvariantError,
+  type LimitUpBoardHistory,
   type LimitUpLadder,
   type LimitUpLadderSample,
   type MarketSnapshotBatch,
@@ -43,6 +44,7 @@ import {
   type StrictBacktestGateAudit,
   type StrictBacktestRun,
   type StrictBacktestSpec,
+  signalObservationId,
   stockCode,
   strategyDefinitionHash,
   strictBacktestHash,
@@ -396,28 +398,32 @@ export const makeStrategyVersion = (
   };
 };
 
+/** id 由自然键派生（存储层不再单独存 id 列）。 */
 const makeSignalObservation = (
-  id: string,
   sourceId: string,
   overrides: Partial<SignalObservation> = {},
-): SignalObservation => ({
-  id,
-  sourceKind: 'strategy-signal',
-  sourceId,
-  stockId: '600519.SH',
-  baselinePrice: 10,
-  baselineAt: T1,
-  horizon: 't1',
-  benchmarkStatus: 'unavailable',
-  status: 'pending',
-  provenance: {
-    provider: 'fixture',
-    observedAt: T1,
-    fetchedAt: T1,
-    freshness: 'fresh',
-  },
-  ...overrides,
-});
+): SignalObservation => {
+  const sourceKind = overrides.sourceKind ?? 'strategy-signal';
+  const horizon = overrides.horizon ?? 't1';
+  return {
+    id: signalObservationId(sourceKind, sourceId, horizon),
+    sourceKind,
+    sourceId,
+    stockId: '600519.SH',
+    baselinePrice: 10,
+    baselineAt: T1,
+    horizon,
+    benchmarkStatus: 'unavailable',
+    status: 'pending',
+    provenance: {
+      provider: 'fixture',
+      observedAt: T1,
+      fetchedAt: T1,
+      freshness: 'fresh',
+    },
+    ...overrides,
+  };
+};
 
 export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun => {
   const run = {
@@ -2501,7 +2507,106 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('AdjustmentFactorRepository', () => {
+      const factor = (
+        stockId: string,
+        exDate: Date,
+        value: number,
+        source = 'fixture',
+      ): AdjustmentFactor => ({
+        stockId,
+        exDate,
+        factor: value,
+        dividendPerShare: 1,
+        perShareBonus: 0,
+        allotmentRatio: 0,
+        allotmentPrice: 0,
+        source,
+      });
+
+      it('saveMany 按 (stockId, exDate) upsert，listAfter 只取之后的事件', async () => {
+        await repos.adjustmentFactor.saveMany([factor('stk-1', T2, 0.9), factor('stk-1', T3, 0.8)]);
+        await repos.adjustmentFactor.saveMany([factor('stk-1', T2, 0.95, 'corrected')]);
+
+        const afterT1 = await repos.adjustmentFactor.listAfter('stk-1', T1);
+        expect(afterT1.map((item) => item.factor)).toEqual([0.95, 0.8]);
+        expect(afterT1[0]?.source).toBe('corrected');
+        expect(await repos.adjustmentFactor.listAfter('stk-1', T3)).toEqual([]);
+      });
+
+      it('listAfterForStocks 按股票分组且保持 exDate 升序', async () => {
+        await repos.adjustmentFactor.saveMany([
+          factor('stk-2', T2, 0.7),
+          factor('stk-1', T3, 0.6),
+          factor('stk-1', T2, 0.9),
+        ]);
+        const grouped = await repos.adjustmentFactor.listAfterForStocks(['stk-1', 'stk-2'], T1);
+        expect(grouped.get('stk-1')?.map((item) => item.factor)).toEqual([0.9, 0.6]);
+        expect(grouped.get('stk-2')?.map((item) => item.factor)).toEqual([0.7]);
+      });
+
+      it('removeByStock 只删指定股票', async () => {
+        await repos.adjustmentFactor.saveMany([factor('stk-1', T2, 0.9), factor('stk-2', T2, 0.8)]);
+        expect(await repos.adjustmentFactor.removeByStock('stk-1')).toBe(1);
+        expect(await repos.adjustmentFactor.listAfter('stk-1', T1)).toEqual([]);
+        expect(await repos.adjustmentFactor.listAfter('stk-2', T1)).toHaveLength(1);
+      });
+    });
+
     describe('DailyBarRepository', () => {
+      it('写入 qfq 按因子还原落库，读回仍是同一 qfq', async () => {
+        await repos.adjustmentFactor.saveMany([
+          {
+            stockId: 'stk-1',
+            exDate: T3,
+            factor: 0.5,
+            dividendPerShare: 1,
+            perShareBonus: 0,
+            allotmentRatio: 0,
+            allotmentPrice: 0,
+            source: 'fixture',
+          },
+        ]);
+        await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1, { close: money(11) })]);
+        const stored = await repos.dailyBar.findInRange('stk-1', T1, T1);
+        expect(stored[0]?.close).toBeCloseTo(11, 6);
+        expect(stored[0]?.adjustment).toBe('qfq');
+      });
+
+      it('因子表未初始化时 qfq 原值缓存，dump 原始价覆盖后才按因子投影', async () => {
+        await repos.dailyBar.saveMany([makeDailyBar('stk-2', T1, { close: money(11) })]);
+        const provisional = await repos.dailyBar.findInRange('stk-2', T1, T1);
+        expect(provisional[0]).toMatchObject({ close: 11, adjustment: 'qfq' });
+
+        await repos.adjustmentFactor.saveMany([
+          {
+            stockId: 'stk-2',
+            exDate: T3,
+            factor: 0.5,
+            dividendPerShare: 1,
+            perShareBonus: 0,
+            allotmentRatio: 0,
+            allotmentPrice: 0,
+            source: 'fixture',
+          },
+        ]);
+        await repos.dailyBar.saveRawMany([
+          {
+            stockId: 'stk-2',
+            date: T1,
+            open: money(22),
+            high: money(22),
+            low: money(22),
+            close: money(22),
+            volume: 1_000,
+            source: 'fuyao-dump',
+          },
+        ]);
+        const projected = await repos.dailyBar.findInRange('stk-2', T1, T1);
+        expect(projected[0]).toMatchObject({ close: 11, adjustment: 'qfq' });
+        expect(await repos.dailyBar.latestRawBefore('stk-2', T1)).toMatchObject({ close: 22 });
+      });
+
       it('saveMany + findInRange 按 date 升序返回', async () => {
         await repos.dailyBar.saveMany([
           makeDailyBar('stk-1', T1),
@@ -2614,97 +2719,6 @@ export const registerRepositoryContractTests = (
         expect(
           (await repos.dailyBar.findInRange('stk-1', T1, T3)).map((b) => b.date.getTime()),
         ).toEqual([T3.getTime()]);
-      });
-
-      it('DailyBar revision 按 recordedAt 保留历史版本并支持 PIT 查询', async () => {
-        const revision = (
-          recordedAt: Date,
-          close: number,
-          contentHash = `hash-${recordedAt.getTime()}-${close}`,
-        ): DailyBarRevision => ({
-          stockId: 'stk-1',
-          date: T1,
-          contentHash,
-          open: close - 1,
-          high: close + 1,
-          low: close - 2,
-          close,
-          volume: 100,
-          source: 'fixture',
-          recordedAt,
-        });
-        await repos.dailyBar.saveRevisions([revision(T2, 10), revision(T3, 11)]);
-        await repos.dailyBar.saveRevisions([{ ...revision(T2, 10), recordedAt: T3 }]);
-        expect(
-          (await repos.dailyBar.listRevisions({ stockId: 'stk-1', recordedAt: T2 })).map(
-            (item) => item.close,
-          ),
-        ).toEqual([10]);
-        expect(
-          (await repos.dailyBar.listRevisions({ stockId: 'stk-1' })).map((item) => item.close),
-        ).toEqual([10, 10, 11]);
-      });
-
-      it('DailyBar revision 可按多股票批量 PIT 查询并稳定排序', async () => {
-        const revision = (stockId: string, recordedAt: Date, close: number): DailyBarRevision => ({
-          stockId,
-          date: T1,
-          contentHash: `${stockId}-${recordedAt.getTime()}-${close}`,
-          open: close - 1,
-          high: close + 1,
-          low: close - 2,
-          close,
-          volume: 100,
-          source: 'fixture',
-          recordedAt,
-        });
-        await repos.dailyBar.saveRevisions([
-          revision('stk-2', T2, 20),
-          revision('stk-1', T2, 10),
-          revision('stk-1', T3, 11),
-        ]);
-        const got = await repos.dailyBar.listRevisionsForStocks({
-          stockIds: ['stk-2', 'stk-1'],
-          recordedAt: T2,
-        });
-        expect(got.map((item) => `${item.stockId}:${item.close}`)).toEqual([
-          'stk-1:10',
-          'stk-2:20',
-        ]);
-      });
-
-      it('DailyBar revision 保留 A → B → A 回退事件', async () => {
-        const revision = (
-          recordedAt: Date,
-          close: number,
-          contentHash: string,
-        ): DailyBarRevision => ({
-          stockId: 'stk-1',
-          date: T1,
-          contentHash,
-          open: close - 1,
-          high: close + 1,
-          low: close - 2,
-          close,
-          volume: 100,
-          source: 'fixture',
-          recordedAt,
-        });
-        await repos.dailyBar.saveRevisions([
-          revision(T1, 10, 'hash-a'),
-          revision(T2, 11, 'hash-b'),
-          revision(T3, 10, 'hash-a'),
-        ]);
-
-        const revisions = await repos.dailyBar.listRevisions({
-          stockId: 'stk-1',
-          recordedAt: T3,
-        });
-        expect(revisions.map((item) => [item.recordedAt, item.close])).toEqual([
-          [T1, 10],
-          [T2, 11],
-          [T3, 10],
-        ]);
       });
     });
 
@@ -3167,6 +3181,27 @@ export const registerRepositoryContractTests = (
         expect(results[1]?.score).toBe(90);
       });
 
+      it('clearResults 只清逐股明细，保留 run 与信号；dryRun 只统计', async () => {
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1'),
+          results: [makeStrategyResult('run-1', '600519.SH')],
+          signals: [makeStrategySignal('signal-1', '600519.SH')],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
+          results: [],
+          signals: [],
+        });
+
+        expect(await repos.strategyRun.clearResults(['run-1', 'run-2'], { dryRun: true })).toBe(1);
+        expect(await repos.strategyRun.listResults('run-1')).toHaveLength(1);
+
+        expect(await repos.strategyRun.clearResults(['run-1', 'run-2'])).toBe(1);
+        expect(await repos.strategyRun.listResults('run-1')).toEqual([]);
+        expect(await repos.strategyRun.findRunById('run-1')).not.toBeNull();
+        expect(await repos.strategyRun.signalsByRun('run-1')).toHaveLength(1);
+      });
+
       it('commitRun round-trip 保留可选 scoring breakdown', async () => {
         const scoringBreakdown: NonNullable<StrategyResult['scoringBreakdown']> = [
           {
@@ -3440,14 +3475,16 @@ export const registerRepositoryContractTests = (
     describe('SignalObservationRepository', () => {
       it('listBySources 不受通用 list 默认 limit 影响并按来源/周期过滤', async () => {
         const rows = Array.from({ length: 1_005 }, (_, index) =>
-          makeSignalObservation(`bulk-observation-${index}`, `bulk-signal-${index}`),
+          makeSignalObservation(`bulk-signal-${index}`),
         );
         for (const row of rows) await repos.signalObservation.save(row);
+        const t20Id = signalObservationId('strategy-signal', 'bulk-signal-0', 't20');
+        const watchId = signalObservationId('watch-trigger', 'bulk-signal-1', 't1');
         await repos.signalObservation.save(
-          makeSignalObservation('bulk-t20', 'bulk-signal-0', { horizon: 't20' }),
+          makeSignalObservation('bulk-signal-0', { horizon: 't20' }),
         );
         await repos.signalObservation.save(
-          makeSignalObservation('bulk-watch', 'bulk-signal-1', { sourceKind: 'watch-trigger' }),
+          makeSignalObservation('bulk-signal-1', { sourceKind: 'watch-trigger' }),
         );
 
         const listed = await repos.signalObservation.listBySources({
@@ -3456,16 +3493,41 @@ export const registerRepositoryContractTests = (
           horizons: ['t1'],
         });
         expect(listed).toHaveLength(rows.length);
-        expect(listed.some((row) => row.id === 'bulk-t20')).toBe(false);
-        expect(listed.some((row) => row.id === 'bulk-watch')).toBe(false);
+        expect(listed.some((row) => row.id === t20Id)).toBe(false);
+        expect(listed.some((row) => row.id === watchId)).toBe(false);
       });
 
       it('removeBySources 只删除指定来源的观察', async () => {
-        await repos.signalObservation.save(makeSignalObservation('observation-1', 'signal-1'));
-        await repos.signalObservation.save(makeSignalObservation('observation-2', 'signal-2'));
+        const first = makeSignalObservation('signal-1');
+        const second = makeSignalObservation('signal-2');
+        await repos.signalObservation.save(first);
+        await repos.signalObservation.save(second);
         await repos.signalObservation.removeBySources('strategy-signal', ['signal-1']);
-        expect(await repos.signalObservation.findById('observation-1')).toBeNull();
-        expect(await repos.signalObservation.findById('observation-2')).not.toBeNull();
+        expect(await repos.signalObservation.findById(first.id)).toBeNull();
+        expect(await repos.signalObservation.findById(second.id)).not.toBeNull();
+      });
+
+      it('pruneSettledBefore 只清过期终态观察，dryRun 只统计', async () => {
+        const oldSettled = makeSignalObservation('signal-old', {
+          status: 'unavailable',
+          unavailableReason: 'baseline_unavailable',
+        });
+        const oldPending = makeSignalObservation('signal-pending', { status: 'pending' });
+        const freshSettled = makeSignalObservation('signal-fresh', {
+          status: 'unavailable',
+          unavailableReason: 'baseline_unavailable',
+          baselineAt: T3,
+        });
+        for (const row of [oldSettled, oldPending, freshSettled]) {
+          await repos.signalObservation.save(row);
+        }
+        const cutoff = T2;
+        expect(await repos.signalObservation.pruneSettledBefore(cutoff, { dryRun: true })).toBe(1);
+        expect(await repos.signalObservation.findById(oldSettled.id)).not.toBeNull();
+        expect(await repos.signalObservation.pruneSettledBefore(cutoff)).toBe(1);
+        expect(await repos.signalObservation.findById(oldSettled.id)).toBeNull();
+        expect(await repos.signalObservation.findById(oldPending.id)).not.toBeNull();
+        expect(await repos.signalObservation.findById(freshSettled.id)).not.toBeNull();
       });
     });
 
@@ -5169,6 +5231,74 @@ export const registerRepositoryContractTests = (
             toleranceMs: 5 * 60_000,
           }),
         ).resolves.toEqual(later);
+      });
+    });
+
+    describe('LimitUpBoardHistoryRepository', () => {
+      const makeHistory = (overrides: Partial<LimitUpBoardHistory> = {}): LimitUpBoardHistory => ({
+        tradeDate: '2026-07-02',
+        source: 'fuyao',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        status: 'complete',
+        dataAsOf: T2,
+        publishedAt: T2,
+        fetchedAt: T2,
+        vintage: 'captured',
+        facts: [
+          {
+            stockId: '600000.SH',
+            isBroken: true,
+            consecutiveBoard: 2,
+            isBoardBreak: true,
+            missingFields: [],
+          },
+        ],
+        missingFields: [],
+        warnings: [],
+        recordedAt: T2,
+        ...overrides,
+      });
+
+      it('保存逐股事实并按最新修订读取；同交易日不同来源互不覆盖', async () => {
+        await repos.limitUpBoardHistory.save(makeHistory({ recordedAt: T1, vintage: 'backfill' }));
+        await repos.limitUpBoardHistory.save(makeHistory({ recordedAt: T2 }));
+        await repos.limitUpBoardHistory.save(makeHistory({ source: 'eastmoney', recordedAt: T3 }));
+        const latest = await repos.limitUpBoardHistory.findByDate({ tradeDate: '2026-07-02' });
+        expect(latest).toMatchObject({ source: 'eastmoney', recordedAt: T3 });
+        const fuyao = await repos.limitUpBoardHistory.findByDate({
+          tradeDate: '2026-07-02',
+          source: 'fuyao',
+        });
+        expect(fuyao).toMatchObject({ vintage: 'captured', recordedAt: T2 });
+        expect(latest?.facts[0]).toMatchObject({ stockId: '600000.SH', isBroken: true });
+        expect(
+          await repos.limitUpBoardHistory.findByDate({
+            tradeDate: '2026-07-02',
+            source: 'eastmoney',
+          }),
+        ).toMatchObject({ source: 'eastmoney' });
+      });
+
+      it('未知日期返回 null，partial 事实原样保留', async () => {
+        await repos.limitUpBoardHistory.save(
+          makeHistory({
+            status: 'partial',
+            missingFields: ['previous-sealed'],
+            facts: [
+              {
+                stockId: '000001.SZ',
+                isBroken: false,
+                consecutiveBoard: null,
+                isBoardBreak: null,
+                missingFields: ['previous-sealed'],
+              },
+            ],
+          }),
+        );
+        expect(await repos.limitUpBoardHistory.findByDate({ tradeDate: '2026-07-03' })).toBeNull();
+        const stored = await repos.limitUpBoardHistory.findByDate({ tradeDate: '2026-07-02' });
+        expect(stored?.status).toBe('partial');
+        expect(stored?.facts[0]?.consecutiveBoard).toBeNull();
       });
     });
 

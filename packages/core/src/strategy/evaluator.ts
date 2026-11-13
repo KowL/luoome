@@ -16,6 +16,7 @@ import {
   interpolate,
   resolveExpressionPath,
 } from './expression.js';
+import { nextStrategySignalId } from './signal-id.js';
 
 export interface StrategyEvaluationContext {
   readonly quote?: Quote | undefined;
@@ -257,7 +258,7 @@ const evaluateSignal = (
   return {
     evaluation,
     signal: {
-      id: `${input.runId}:${rule.id}:${input.stockId}:${input.ts.toISOString()}`,
+      id: nextStrategySignalId(),
       strategyId: input.strategyId,
       strategyVersionId: input.version.id,
       runId: input.runId,

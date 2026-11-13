@@ -1,5 +1,7 @@
 # Strategy AI 生命周期管理详细设计（M2）
 
+> **2026-11-12 状态：已裁撤。** S3 已删除 `StrategyAutonomyAction` 实体、周调度、自动晋级/暂停与 blocked 队列；AI 策略提议仅保留为 `strategy_version_proposal` 待确认草案。
+
 > 状态：已实施（2026-09-02，M2-S0～S4 全部交付，实施偏差见 §8；§9 回补同日交付，实施记录见 §9.3）
 > 上位 PRD：[策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) §6
 > 关联：[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、

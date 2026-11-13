@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
-import { type RunStrategySchedulesOutputT, runStrategySchedulesWorkflow } from '@luoome/workflows';
+import { type RunStrategySchedulesOutputT, runStrategySchedulesOperation } from '@luoome/workflows';
 
 import { startStrategyScheduler, strategySchedulerTuningFromEnv } from './strategy-scheduler.js';
 
@@ -127,7 +127,7 @@ describe('strategy scheduler', () => {
         },
       },
     };
-    const initial = await runStrategySchedulesWorkflow.run({}, ctx);
+    const initial = await runStrategySchedulesOperation.run({}, ctx);
     expect(initial.ok).toBe(true);
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(3);

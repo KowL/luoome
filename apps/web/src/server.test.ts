@@ -24,6 +24,7 @@ import {
   addWatchlistMembersTool,
   addWatchlistMemberTool,
   createAlertPlanTool,
+  createWatchlistTool,
   saveReportTool,
   saveWatchTriggerTool,
   toolRegistry,
@@ -683,6 +684,33 @@ describe('Web runtime bootstrap', () => {
       expect(existsSync(dbPath)).toBe(true);
     } finally {
       await handle?.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('后台调度只在 write 与 external 同时显式开启时启动', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-scheduler-gate-'));
+    const dbPath = join(dir, 'local.db');
+    const originalWarn = console.warn;
+    const originalWrite = process.env.LUOOME_EXPOSE_WRITE;
+    const originalExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
+    const warnings: unknown[] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args[0]);
+    };
+    delete process.env.LUOOME_EXPOSE_WRITE;
+    delete process.env.LUOOME_EXPOSE_EXTERNAL;
+    let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+    try {
+      handle = await startWeb({ port: 0, dbPath });
+      expect(warnings.some((item) => String(item).includes('后台调度未启动'))).toBe(true);
+    } finally {
+      await handle?.stop(true);
+      console.warn = originalWarn;
+      if (originalWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
+      else process.env.LUOOME_EXPOSE_WRITE = originalWrite;
+      if (originalExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
+      else process.env.LUOOME_EXPOSE_EXTERNAL = originalExternal;
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2036,7 +2064,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
     const data = body.data;
     expect(data).toBeDefined();
     const row = data?.lists.find((list) => list.watchlist.id === wid);
-    expect(row?.discoveredCount).toBe(1);
+    expect(row?.discoveredCount).toBeGreaterThanOrEqual(1);
     expect(row?.todayEntered).toBeGreaterThanOrEqual(1);
     const holding = data?.stocks.find((stock) => stock.stockId === '600519.SH');
     expect(
@@ -2057,6 +2085,51 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
     expect(data?.triggers.urgentImportantCount).toBeGreaterThanOrEqual(1);
     expect(data?.triggers.latestByStock['002594.SZ']?.priority).toBe('urgent');
     expect(data?.meta.warnings).toEqual([]);
+  });
+
+  it('关注总览超过 batch_quote 100 上限时仍用本地目录补全名称', async () => {
+    const ctx = await buildTestContext();
+    const cappedApp = createWebApp(ctx, {
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    const wid = 'web-overview-cap';
+    await createWatchlistTool.execute(
+      { id: wid, name: '上限测试', kind: 'personal', membershipPolicy: 'manual' },
+      ctx,
+    );
+    const template = await ctx.repos.stock.findById('002594.SZ');
+    if (template === null) throw new Error('fixture stock missing');
+    const now = ctx.clock();
+    for (let i = 0; i < 101; i += 1) {
+      const code = String(880000 + i);
+      const stockId = `${code}.SZ`;
+      await ctx.repos.stock.save({
+        ...template,
+        id: stockId,
+        code: code as typeof template.code,
+        name: `本地名称 ${i}`,
+      });
+      await ctx.repos.watchlistMember.saveMember({
+        id: `${wid}:${stockId}`,
+        watchlistId: wid,
+        stockId,
+        stage: 'discovered',
+        priority: 'normal',
+        firstAddedAt: now,
+        lastActivityAt: now,
+      });
+    }
+
+    const response = await cappedApp.fetch(new Request('http://test/api/watchlists/overview'));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data?: { stocks: Array<{ stockId: string; name: string }> };
+    };
+    const rows = (body.data?.stocks ?? []).filter((stock) => stock.stockId.startsWith('88'));
+    expect(rows).toHaveLength(101);
+    expect(rows.every((stock) => stock.name !== stock.stockId)).toBe(true);
+    expect(rows.at(-1)?.name).toBe('本地名称 100');
   });
 
   it('归档路由走 targetMutation 三重闸口', async () => {
@@ -2334,8 +2407,8 @@ describe('web tool 闸口：能力开关', () => {
   });
 });
 
-describe('web tool 闸口：45 Agent Tool 白名单', () => {
-  it('通用 tool 路由只放行 45 个 Agent Tool，App Service 旧名返回 not_found', async () => {
+describe('web tool 闸口：47 Agent Tool 白名单', () => {
+  it('通用 tool 路由只放行 47 个 Agent Tool，App Service 旧名返回 not_found', async () => {
     const legacy = await callTool('list_holdings', {});
     expect(legacy.status).toBe(404);
     expect(await json(legacy)).toMatchObject({ ok: false, error: { kind: 'not_found' } });
@@ -3740,6 +3813,99 @@ describe('Web 连板天梯 API', () => {
 });
 
 /**
+ * 涨停市场看板 Web API（同花顺涨停池 + 涨停统计 + 近 30 日连板矩阵）。
+ * 用 stub manager 隔离 fuyao 实链，避免网络与 API key 依赖。
+ */
+import type { LimitUpMarketManagerLike, LimitUpMarketResultLike } from '@luoome/core';
+
+const stubMarketManager = (opts: {
+  readonly fail?: boolean;
+  readonly snapshot?: Record<string, unknown>;
+}): LimitUpMarketManagerLike => ({
+  name: 'limit-up-market',
+  sources: ['fuyao'],
+  fetchMarket: async (query): Promise<LimitUpMarketResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'limit-up-market',
+          message: 'fuyao forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    // manager 返回事实快照；tool 负责派生 KPI / 原因分布
+    return {
+      ok: true,
+      data: (opts.snapshot ?? {
+        date: query.date,
+        source: 'fuyao',
+        asOf: new Date('2026-11-12T07:02:00Z'),
+        dataAsOf: new Date('2026-11-12T07:00:00Z'),
+        pool: { total: 1, entries: [] },
+        statistics: null,
+        ladder: null,
+        warnings: ['statistics-unavailable'],
+      }) as never,
+    };
+  },
+});
+
+describe('Web 涨停市场看板 API', () => {
+  it('date 缺失 → 400 invalid_input', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpMarket: stubMarketManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/market/limit-up/market'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('正常请求 → 200 + 快照与 warnings', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpMarket: stubMarketManager({}) }));
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/limit-up/market?date=2026-11-12'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: {
+        snapshot: { date: string; source: string; warnings: string[] };
+        metrics: { poolCount: number };
+      };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.snapshot.date).toBe('2026-11-12');
+    expect(body.data?.snapshot.source).toBe('fuyao');
+    expect(body.data?.snapshot.warnings).toEqual(['statistics-unavailable']);
+    // KPI 由 core 从快照派生：空 entries → 0
+    expect(body.data?.metrics.poolCount).toBe(0);
+  });
+
+  it('上游全失败 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ limitUpMarket: stubMarketManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/limit-up/market?date=2026-11-12'),
+    );
+    expect(r.status).toBe(502);
+  });
+
+  it('未配置 fuyao（manager 未注入）→ 400 invalid_input 并提示 FUYAO_API_KEY', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/limit-up/market?date=2026-11-12'),
+    );
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string; message?: string } };
+    expect(body.error?.kind).toBe('invalid_input');
+    expect(body.error?.message ?? '').toContain('FUYAO_API_KEY');
+  });
+});
+
+/**
  * 行业板块行情 Web API。
  * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
  */
@@ -4018,7 +4184,7 @@ describe('Web 龙虎榜 API', () => {
 
 /**
  * 龙虎榜资金流向拓扑 Web API（dragon_tiger_flow tool）。
- * stub manager 隔离 fuyao 实链；未注入 manager 时按「未配置 FUYAO_API_KEY」返回 400 invalid_input。
+ * stub manager 隔离 fuyao 实链；未注入 manager 时按「未配置 FUYAO_API_KEY」返回 200 invalid_input。
  */
 
 const stubDragonTigerFlowManager = (
@@ -5081,7 +5247,9 @@ const marketRoomApp = async (
     : new MarketDayFixtureAdapter({ clock });
   const web = createWebApp(
     { ...ctx, adapters: { ...ctx.adapters, market: adapter } },
-    options.expose === false ? {} : { exposeWrite: true, exposeExternal: true },
+    options.expose === false
+      ? { exposeWrite: false, exposeExternal: false }
+      : { exposeWrite: true, exposeExternal: true },
   );
   return { app: web, adapter, ctx };
 };

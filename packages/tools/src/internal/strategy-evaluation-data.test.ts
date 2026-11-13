@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { type DailyBarRevision, money } from '@luoome/core';
+import { type DailyBar, money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -8,17 +7,16 @@ import {
   createLocalStrategyEvaluationDataAdapter,
 } from './strategy-evaluation-data.js';
 
-const revision = (recordedAt: Date, close: number, source = 'fixture'): DailyBarRevision => ({
+const bar = (date: string, close: number, source = 'fixture'): DailyBar => ({
   stockId: '600519.SH',
-  date: new Date('2026-08-10T00:00:00.000Z'),
-  contentHash: createHash('sha256').update(`${recordedAt.toISOString()}:${close}`).digest('hex'),
+  date: new Date(`${date}T00:00:00.000Z`),
   open: money(10),
   high: money(12),
   low: money(9),
   close: money(close),
   volume: 1_000_000,
+  adjustment: 'qfq',
   source,
-  recordedAt,
 });
 
 describe('StrategyEvaluationData adapters', () => {
@@ -56,22 +54,17 @@ describe('StrategyEvaluationData adapters', () => {
     ]);
   });
 
-  it('local adapter reconstructs the point-in-time revision from persisted daily bars', async () => {
+  it('local adapter 取 dataAsOf 之前的最新本地日线', async () => {
     const now = new Date('2026-08-12T07:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });
-    const firstRecordedAt = new Date('2026-08-10T08:00:00.000Z');
-    const laterRecordedAt = new Date('2026-08-11T08:00:00.000Z');
-    await ctx.repos.dailyBar.saveRevisions([
-      revision(firstRecordedAt, 10, 'first-vintage'),
-      revision(laterRecordedAt, 99, 'later-vintage'),
+    await ctx.repos.dailyBar.saveMany([
+      bar('2026-08-09', 10, 'first'),
+      bar('2026-08-10', 12, 'later'),
     ]);
-    const adapter = createLocalStrategyEvaluationDataAdapter({
-      ctx,
-      revisionCutoff: new Date('2026-08-10T12:00:00.000Z'),
-    });
+    const adapter = createLocalStrategyEvaluationDataAdapter({ ctx });
     const request = {
       stockIds: ['600519.SH'],
-      dataAsOf: new Date('2026-08-10T23:59:59.000Z'),
+      dataAsOf: new Date('2026-08-09T23:59:59.000Z'),
       fetchedAt: now,
       lookback: 30,
       needsQuote: true,
@@ -83,9 +76,8 @@ describe('StrategyEvaluationData adapters', () => {
     const audit = adapter.audit(request, batch);
 
     expect(batch.failures).toEqual([]);
-    expect(batch.prepared[0]?.bars[0]?.close).toBe(money(10));
-    expect(batch.prepared[0]?.quote?.close).toBe(money(10));
-    expect(batch.prepared[0]?.quote?.source).toBe('first-vintage');
+    expect(batch.prepared[0]?.bars.at(-1)?.close).toBe(money(10));
+    expect(batch.prepared[0]?.quote?.source).toBe('first');
     expect(audit.providerStatuses).toEqual([{ provider: 'local:daily-bars', ok: true }]);
     expect(audit.providerCoverage).toEqual(
       expect.arrayContaining([

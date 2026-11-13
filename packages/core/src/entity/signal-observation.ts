@@ -69,11 +69,41 @@ export const STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID = '000300.SH';
 /** R7 benchmark 的可审计数据集版本：沪深 300、前复权、日线。 */
 export const STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION = '000300.SH:qfq:daily:v1';
 
+const SIGNAL_OBSERVATION_ID_PREFIX = 'signal-observation:';
+
 export const signalObservationId = (
   sourceKind: SignalObservationSourceKind,
   sourceId: string,
   horizon: SignalObservationHorizon,
-): string => `signal-observation:${sourceKind}:${sourceId}:${horizon}`;
+): string => `${SIGNAL_OBSERVATION_ID_PREFIX}${sourceKind}:${sourceId}:${horizon}`;
+
+/**
+ * 从 id 反解自然键（sourceKind / sourceId / horizon）。
+ *
+ * 存储层以自然键为主键（不再单独存 id），findById 依赖这个反解。sourceKind 与 horizon
+ * 都是封闭枚举，中间的 sourceId 允许含冒号，因此按首尾锚定解析是无歧义的。
+ * 不符合 `signalObservationId` 生成格式的 id 返回 null。
+ */
+export const parseSignalObservationId = (
+  id: string,
+): {
+  readonly sourceKind: SignalObservationSourceKind;
+  readonly sourceId: string;
+  readonly horizon: SignalObservationHorizon;
+} | null => {
+  if (!id.startsWith(SIGNAL_OBSERVATION_ID_PREFIX)) return null;
+  const rest = id.slice(SIGNAL_OBSERVATION_ID_PREFIX.length);
+  const match = /^(watch-trigger|strategy-signal|tactic-signal):(.*):(t1|t3|t5|t20)$/.exec(rest);
+  if (match === null) return null;
+  const [, sourceKind, sourceId, horizon] = match;
+  if (sourceKind === undefined || sourceId === undefined || horizon === undefined) return null;
+  if (sourceId.length === 0) return null;
+  return {
+    sourceKind: sourceKind as SignalObservationSourceKind,
+    sourceId,
+    horizon: horizon as SignalObservationHorizon,
+  };
+};
 
 /** 按可用交易日 session 估计 due；holiday calendar 之外的交易所临时安排仍由补偿任务兜底。 */
 export const signalObservationDueAt = (

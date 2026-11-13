@@ -296,13 +296,24 @@ export const dailyAdviceWorkflow = defineWorkflow({
 });
 ```
 
-Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
+Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（上面的
+`persist` 片段是 v0.1 历史示意，当前 advice 写入经专用 tool）。2026-11-13 起只有 12 个注册入口：
+
+- 多模式入口：`report`（opening/closing/weekly/daily-review）、`strategy`
+  （run/scheduled/daily/observations）、`sync-market`（quotes/universe/dump）；
+- 专用入口：`closing-report-cutoff`、`daily-advice`、`risk-report`、`replay-strategy-range`、
+  `sync-portfolio-watchlists`、`sync-research-vault`、`post-market-data`、`intraday-watch`、
+  `snapshot-account-performance`。
+
+报告、策略与行情同步的原管线改为 `defineOperation`（可复用步骤管线，不注册为 workflow）；
+审计名仍由各管线内部写入，合并不会改写历史 WorkflowRun 身份。数量由
+`packages/workflows/src/architecture.test.ts` 守住。
 
 策略 Phase B 使用三个相关 workflow：
 
-- `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
-  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行。若调度
-  启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
+- `run-strategy-schedules` 按 `strategies.schedule_cron`/`last_scheduled_at` 找出到期策略并调用
+  `run_strategy`；单进程用内存互斥防重，不再有持久租约表，因此同一数据库只允许一个写进程。
+  若调度启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
 - `strategy-recommendations` 从指定持久化 StrategyRun 的 selected 结果按评分、排名、每轮上限和
   冷却政策筛选，通过 `analyze_stock`（`scope='strategy-candidate'`）生成 Advice，并可经 notification tool 投递；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
@@ -340,7 +351,7 @@ ID 或周期版本可读；只有核心缺口补齐或计划行动条件变化�
 若进程在提交后、中断投递前退出，下一交易时段会核对该规则上一次触发；遗留 `pending`
 在同一租约内作废并释放边沿，`failed` 保留失败审计但也释放边沿，重新以当时的行情求值。
 失败投递仅在本次连续竞价时段内重试，午休或隔夜后的新信号不再与旧重试同时发送。
-盘后、盘中、绩效与自治后台调度均要求 write 和 external 同时显式开放。
+盘后、盘中、绩效与盘后数据 dump 等后台调度均要求 write 和 external 同时显式开放；Web 启动层未同时满足时不注册调度并记录原因。
 
 ### 4.7 Adapter（adapters 包）
 
@@ -566,7 +577,30 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 
 **迁移与兼容**：Strategy/Watchlist/AlertPlan 切换早已完成，只写目标表，不双写。
 一次性 migration decoder（`schema_migrations` runner 与 verify 命令）已随旧模型整体移除；
-ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），存量库的旧物理表不再维护。
+ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进 / 存储形态重建），存量库的旧物理表不再维护。
+
+**存储生命周期**：被替换的大表（`strategy_results`、`strategy_data_checkpoint*`）先做一次性搬迁，
+死数据已在 P0 人工清理；可回填的小配置表（`strategy_schedules`）保留一版供人工核对，不再写入。
+新增退役表按“搬迁后 DROP”处理，不长期双写；`daily_bar_revisions` 已直接在启动迁移中删除。
+逐股明细（`strategy_runs.results_json`）写入前统一 zlib+base64（同一规则表达式逐股重放，压缩比约 30x），
+读取侧兼容未压缩存量行。历史明细与终态观察的回收走 `prune_strategy_history`
+（默认 dryRun，只清逐股明细与过期观察，不删 run 元数据与信号）。
+
+**日线口径：原始价落库 + 因子投影**。`daily_bars` 只存**未复权** OHLCV（`adjustment='raw'`），
+除权除息事件单独存 `adjustment_factors`（`factor = 除权价 / 前收盘`，`(stock_id, ex_date)` 唯一）。
+前复权是读时投影：`qfq(t) = raw(t) × ∏{factor | exDate > t}`，由 `DrizzleDailyBarRepository`
+在 `findInRange` / `latestBefore` 里完成，`saveMany` 反向还原成原始价。领域层 `DailyBar` 仍是 qfq，
+调用方无感知。因子表尚未初始化、且 provider 未提供 `sourceAdjFactor` 时，qfq 行情按原值缓存
+（`adjustment='qfq'`）并原值读出，等 dump 的原始价覆盖同一交易日；这样不会把 qfq 当原始价、
+在因子到达后二次复权。这样原始价是不变量：新分红只新增一行因子，不用重写历史 K 线，也不会出现
+"各 provider 各自锚定"造成的接缝。`daily_bar_revisions` 因此废弃删除——日线固定、盘后同步，
+replay 直接按 `dataAsOf` 截断读取。
+
+**id 长度即存储成本**：`strategy_signals.id` 过去是 `${runId}:${ruleId}:${stockId}:${iso}`（约 100 字符），
+会被复制进 470 万行 `signal_observations.source_id` 和两张二级索引；现在改为 snowflake 布局的
+64 位整数（41 位毫秒 + 22 位序列，十进制字符串对外），18 字符。`signal_observations`、
+`adjustment_factors` 不存合成 id，主键直接是自然键。新增合成 id 时优先用
+`nextStrategySignalId()` 这类紧凑有序 id，不要再拼长字符串。
 
 **Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报；收盘报告按
 `(kind, scopeKey, periodStart, periodEnd)` 只生成一份不可变报告（新报告固定 version=1），
@@ -892,6 +926,13 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
   `get_market_room_sectors`、`get_market_room_amount_distribution`、
   `get_market_room_sector_detail`、`get_market_room_core_stocks`、`list_market_room_events`、
   `get_stock_sector_memberships`、`sync_sector_catalog`
+### 7.1 公共 Agent Tool 面 = 37 个核心 Agent Tool
+
+`toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
+
+- 行情与盘面资讯（12）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
+  `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
+  `limit_up_market`、`dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`
 - 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
 - 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
   `run_strategy_backtest`、`get_strategy_signals`
@@ -900,6 +941,8 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 - 研究、建议与报告（6）：`analyze_stock`、`analyze_position`、`get_advice`、
   `search_research_documents`、`save_research_document`、`save_decision_review`
 - 交易计划与盯盘预警（3）：`list_watch_plans`、`save_trading_plan`、`save_alert_plan`
+- 补充说明：`dragon_tiger_flow` 为概念级跨日净额轨迹，与 `limit_up_market` 一样需 `FUYAO_API_KEY`
+- 存储运维（1）：`prune_strategy_history`（默认 `dryRun=true`，只清逐股明细与过期观察）
 
 账户改名、现金对账、聊天会话、报告渲染、策略生命周期、观察统计等纯 UI CRUD 是
 **Application Service**：仅供 Web/CLI 直接调用，不进入 `toolRegistry`/MCP discovery。
@@ -958,7 +1001,9 @@ type ToolError =
 - `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
-- `post-market-data`：交易日盘后同步股票目录与相关股票 qfq 日线，目录或单股失败时保留成功项并返回 partial
+- `post-market-data`：交易日盘后同步股票目录，并用 fuyao 全市场 Parquet dump 同步**原始日线**
+  （最近 10 个交易日增量）与**复权因子**（全量事件）；任一步失败时保留成功项并返回 partial。
+  Web 进程内的 `post-market-scheduler` 在交易日 16:00 后自动触发一次（进程内按交易日去重）。
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
@@ -1021,7 +1066,7 @@ type ToolError =
   推荐 V1/V2 共用建议摘要，规则兜底按单批合并提示，仍保存逐股 Advice 和推荐批次审计。
 - **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
-  日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
+  日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表。炸板/断板另由 `post-market-data` 调 `sync_limit_up_board_history` 写入 `limit_up_board_history`（逐日、保留修订），Strategy 只读 PIT 事实（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
 
 ### 8.2 Workflow 与 tool 的边界
 

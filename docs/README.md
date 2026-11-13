@@ -29,7 +29,7 @@
 |---|---|
 | [AI 投资协作首页与移动端核心体验 PRD](./prd/ai-investment-workspace.md) | 已确认需求、核心旅程、手机交互、方向共识与记忆、跟踪记录、验收标准及实施切片 |
 | [MVP 2.0：AI 股票投研自动化工作流](./prd/mvp2-ai-stock-research-automation.md) | 盘后计划、账户报告、基于实时市场证据的确定性盘中提醒与仓位约束（2026-09-28 验收通过；后续决定以 CONTEXT.md 为准） |
-| [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
+| [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照、炸板/断板字段与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
 | [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |
 | [MVP3 决策与复盘产品计划](./prd/mvp3-product-plan.md) | 当时依据、用户实际行动与后来结果的账户级回看 |
@@ -37,7 +37,7 @@
 | [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
 | [策略工作台](./prd/strategy-v2.md) | Strategy 的执行记录、派生股票池/候选池、运行 Diff、真实信号观察与版本迭代 |
 | [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
-| [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | 报告中心（收盘行动清单、周报复盘）与 AI 策略生命周期管理（提议、门禁自动发布、自动暂停） |
+| [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | 报告中心保留；M2 的自动发布/自动暂停已裁撤（2026-11-10），AI 提议仅保留为待确认草案 |
 
 ## 技术设计（DDD）
 
@@ -47,9 +47,9 @@
 | [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
 | [领域收敛、去冗余与架构减负详细设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md) | 73 表收敛至 38 表、152 Tools 收敛至 34 核心 Agent Tools、移除手写内存库与超前空转模块的详细设计与分阶段计划 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
-| [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
+| [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | **已裁撤（2026-11-10）**：Topic/Document 关系、chunk、embedding、Git 同步均已删除；现仅保留文档索引 + FTS5 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
-| [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
+| [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | 涨停梯队快照、东方财富涨停池 adapter、缓存，以及 fuyao 炸板/断板 PIT 事实 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
 | [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tushare 当前会话能力、缺口/保留和 Web 状态 |
 | [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |
@@ -63,24 +63,24 @@
 | [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
 | [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md) | Strategy、Watchlist、AlertPlan 的领域模型、存储、迁移与跨端契约 |
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
-| [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
-| [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 现金流、公司行动、每日估值、TWR、回撤、benchmark、贡献归因与缺失语义 |
-| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
+| [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、daily cycle、AI 降级与 point-in-time replay；租约/checkpoint/revision 已简化 |
+| [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 每日估值、TWR、回撤、benchmark 与归因；现金流/公司行动已合并为 `account_ledger_entries` |
+| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope 与门禁求值保留；`daily_bar_revisions` 已删除，八项门禁真实数据验收不再排期 |
 | [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
-| [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘目标用户旅程、冻结契约、竖向切片、迁移/安全/测试、浏览器验收与外部数据门禁 |
-| [MVP3 决策与复盘详细设计](./ddd/mvp3-decision-review-detailed-design.md) | 账户记录、成交关联、幂等账本、聚合、报告补充与跨端验收 |
-| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | 财务事实 vintage、因子 registry、横截面评分、版本审计与真实数据门禁 |
-| [Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md) | 组合能力门禁、评分分解、DSL Catalog、实验上下文、人工晋级和 RecommendationPolicy V2 |
-| [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) | StrategyAutonomyAction 实体、自动暂停阈值、AI 提议/验证/晋级门自动发布编排 |
+| [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘旅程与切片；其中 ResearchHypothesisVersion 已裁撤，其余链路保留 |
+| [MVP3 决策与复盘详细设计](./ddd/mvp3-decision-review-detailed-design.md) | 账户记录、成交关联、幂等账本、聚合、报告补充与跨端验收（复盘已简化为单表） |
+| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | **已裁撤（2026-11-10）**：代码、表与 mock adapter 均已删除，仅作设计追溯 |
+| [Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md) | 评分分解、DSL Catalog、实验上下文与反馈；其中逐日评估会话与自动晋级已裁撤 |
+| [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) | **已裁撤（2026-11-10）**：自治审批实体与周调度已删除；AI 提议仅保留为待确认草案 |
 
 ## 当前开发计划
 
 | 文档 | 范围 |
 |---|---|
-| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围；开发使用 GPT-6.1 Sol / max |
+| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D07 已集成验收；D08–D10 已拆分但未派发（持久绑定、预算/灰度、社区插件与多 Agent） |
 | [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
-| [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
+| [luoome 开发计划](./development-plan.md) | 2026-11-12 收敛后基线（§2.0）、当前优先级、依赖与验收门槛；旧阶段仅作历史 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |
 

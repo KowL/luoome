@@ -16,8 +16,11 @@ import type {
   DecisionReview,
   DragonTigerFlowManagerLike,
   DragonTigerManagerLike,
+  LimitUpBoardAdapterLike,
   LimitUpLadderManagerLike,
+  LimitUpMarketManagerLike,
   Logger,
+  MarketDumpAdapterLike,
   NewsManagerLike,
   NorthboundFlowManagerLike,
   RepositoryRegistry,
@@ -37,6 +40,8 @@ export interface BuildTestContextOptions {
   readonly advices?: readonly Advice[];
   /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  /** 可选注入涨停市场看板 manager。 */
+  readonly limitUpMarket?: LimitUpMarketManagerLike;
   /** 可选注入龙虎榜 manager。 */
   readonly dragonTiger?: DragonTigerManagerLike;
   /** 可选注入龙虎榜资金流向拓扑 manager。 */
@@ -51,6 +56,8 @@ export interface BuildTestContextOptions {
   /** 可选注入行业 / 概念目录数据源（同步 tool 用）。 */
   readonly sectorCatalog?: SectorCatalogAdapterLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+  readonly marketDump?: MarketDumpAdapterLike;
+  readonly limitUpBoard?: LimitUpBoardAdapterLike;
 }
 
 const createSilentLogger = (): Logger => {
@@ -83,6 +90,7 @@ export const buildTestContext = async (
 
   const marketIntel = {
     ...(opts.limitUpLadder === undefined ? {} : { limitUpLadder: opts.limitUpLadder }),
+    ...(opts.limitUpMarket === undefined ? {} : { limitUpMarket: opts.limitUpMarket }),
     ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
     ...(opts.dragonTigerFlow === undefined ? {} : { dragonTigerFlow: opts.dragonTigerFlow }),
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
@@ -102,6 +110,8 @@ export const buildTestContext = async (
       llm: new FakeLLMAdapter(),
       ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
       ...(opts.sectorCatalog === undefined ? {} : { sectorCatalog: opts.sectorCatalog }),
+      ...(opts.marketDump === undefined ? {} : { marketDump: opts.marketDump }),
+      ...(opts.limitUpBoard === undefined ? {} : { limitUpBoard: opts.limitUpBoard }),
       notification: createTestNotificationManager(repos),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
     },

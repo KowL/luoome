@@ -117,6 +117,11 @@ export interface WatchlistSyncCommit {
   readonly candidates: readonly WatchlistSourceCandidate[];
   readonly sourceId?: string;
   readonly sourceVersionId?: string;
+  /**
+   * Partial sync 中已得到确定选择结论的股票集合。只有这些股票允许在
+   * partial run 里被结束来源；未评估/评估不确定的股票只标 stale。
+   */
+  readonly evaluatedStockIds?: readonly string[];
   /** archived Member 的恢复目标：自动来源默认 discovered；仅用户手工恢复可选 watching。 */
   readonly reviveStage?: 'discovered' | 'watching';
 }
@@ -173,7 +178,7 @@ export const assertWatchlistSyncRunInvariants = (run: WatchlistSyncRun): void =>
   if (run.status === 'failed' && run.error === undefined) {
     throw new InvariantError('failed WatchlistSyncRun 必须有 error');
   }
-  if (run.status !== 'complete' && run.exitedCount > 0) {
-    throw new InvariantError('只有 complete WatchlistSyncRun 可以产生 exited');
+  if (run.status === 'failed' && run.exitedCount > 0) {
+    throw new InvariantError('failed WatchlistSyncRun 不得产生 exited');
   }
 };

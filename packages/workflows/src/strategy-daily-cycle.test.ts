@@ -9,7 +9,7 @@ import { strategyDefinitionHash } from '@luoome/core';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
+import { strategyDailyCycleOperation } from './strategy-daily-cycle.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 const STOCK_ID = '600519.SH';
@@ -127,7 +127,7 @@ describe('strategy-daily-cycle workflow', () => {
   it('生产日运行发布 scheduled StrategyRun 并写入 v1 审计事实', async () => {
     const { ctx, strategyId } = await setup({ withSignal: true });
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -177,12 +177,12 @@ describe('strategy-daily-cycle workflow', () => {
   it('同一交易日重复 tick 只审计 skipped，不重复运行', async () => {
     const { ctx, strategyId } = await setup();
 
-    const first = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const first = await strategyDailyCycleOperation.run({ strategyId }, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.data.items[0]?.status).toBe('complete');
 
-    const second = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const second = await strategyDailyCycleOperation.run({ strategyId }, ctx);
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.data.items[0]).toMatchObject({
@@ -196,7 +196,7 @@ describe('strategy-daily-cycle workflow', () => {
     const saturday = new Date('2026-08-08T02:00:00.000Z');
     const { ctx, strategyId } = await setup({ now: saturday });
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -223,7 +223,7 @@ describe('strategy-daily-cycle workflow', () => {
       },
     };
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, failingCtx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, failingCtx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -238,7 +238,7 @@ describe('strategy-daily-cycle workflow', () => {
       excludeStockIds: [STOCK_ID],
     });
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -264,7 +264,7 @@ describe('strategy-daily-cycle workflow', () => {
       },
     };
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, failingLlmCtx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, failingLlmCtx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -283,7 +283,7 @@ describe('strategy-daily-cycle workflow', () => {
   it('非 active Strategy 直接调用日循环时返回 failed 且不产生运行事实', async () => {
     const { ctx, strategyId } = await setup({ status: 'paused' });
 
-    const result = await strategyDailyCycleWorkflow.run({ strategyId }, ctx);
+    const result = await strategyDailyCycleOperation.run({ strategyId }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;

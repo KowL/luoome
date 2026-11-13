@@ -1,5 +1,7 @@
 # AI 投资协作首页详细设计
 
+> **2026-11-12 状态：部分裁撤。** `InvestmentWorkspace` 方向/共识/跟踪三张表与专属 Tool 已删除，并入 `Report` + `Watchlist`；首页与对话契约仍适用。
+
 > 2026-10-16。依据：[PRD](../prd/ai-investment-workspace.md)、[任务与文件归属](../ai-investment-workspace-development-plan.md)。本文描述实现契约；真实供应商与真机验收单独记录，不由 fixture 代替。
 
 ## 首页信息流

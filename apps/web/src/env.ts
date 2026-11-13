@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 import { applyEnvEntries, parseEnvFile } from '@luoome/core';
 
-/** 项目根：apps/web/src/env.ts → 上四级。 */
-const PROJECT_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+/** 项目根：apps/web/src/env.ts → 上三级。 */
+const PROJECT_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 export const defaultEnvFiles = (): readonly string[] => [
   join(process.env.LUOOME_HOME ?? join(homedir(), '.luoome'), '.env'),

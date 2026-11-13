@@ -31,4 +31,37 @@ describe('deriveStrategyMetaByStock', () => {
     expect(withoutLadder).not.toHaveProperty('limitUpLevel');
     expect(withoutLadder).not.toHaveProperty('limitUpToday');
   });
+
+  it('炸板/断板事实写入 meta；unknown 字段不落默认值', () => {
+    const bars = Array.from({ length: 2 }, (_, index) => ({
+      stockId: '600519.SH',
+      date: new Date(Date.UTC(2026, 10, index + 10)),
+      open: money(10),
+      high: money(10),
+      low: money(10),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq' as const,
+      source: 'sina' as const,
+    }));
+    const known = deriveStrategyMetaByStock([
+      {
+        stockId: '600519.SH',
+        bars,
+        limitUpBoard: { isBroken: true, consecutiveBoard: 2, isBoardBreak: true },
+      },
+    ]).get('600519.SH');
+    expect(known).toMatchObject({ isBroken: true, consecutiveBoard: 2, isBoardBreak: true });
+
+    const unknown = deriveStrategyMetaByStock([
+      {
+        stockId: '600519.SH',
+        bars,
+        limitUpBoard: { isBroken: null, consecutiveBoard: null, isBoardBreak: null },
+      },
+    ]).get('600519.SH');
+    expect(unknown).not.toHaveProperty('isBroken');
+    expect(unknown).not.toHaveProperty('consecutiveBoard');
+    expect(unknown).not.toHaveProperty('isBoardBreak');
+  });
 });

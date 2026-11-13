@@ -58,6 +58,7 @@ describe('Watchlist tools', () => {
       stage: 'researching',
       priority: 'important',
     });
+    expect(detail.data.members[0]?.stockName).toBe('贵州茅台');
 
     const listed = await listWatchlistsTool.execute({}, ctx);
     expect(listed.ok).toBe(true);

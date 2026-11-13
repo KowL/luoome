@@ -22,6 +22,8 @@ import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 const WatchlistSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/);
 export const WatchlistMemberViewSchema = z.object({
   member: WatchlistMemberSchema,
+  /** 本地股票目录里的名称；目录缺失时省略，不阻塞成员读取。 */
+  stockName: z.string().min(1).optional(),
   sources: z.array(WatchlistMemberSourceSchema),
 });
 
@@ -127,14 +129,21 @@ export const getWatchlistTool = defineTool({
     });
     const rows = await Promise.all(
       members.map(async (member) => {
-        const sources = await ctx.repos.watchlistMember.listSources(member.id);
+        const [stock, sources] = await Promise.all([
+          ctx.repos.stock.findById(member.stockId),
+          ctx.repos.watchlistMember.listSources(member.id),
+        ]);
         const visibleSources =
           input.accountId === undefined
             ? sources
             : sources.filter(
                 (source) => source.kind !== 'portfolio' || source.sourceId === input.accountId,
               );
-        return { member, sources: visibleSources };
+        return {
+          member,
+          ...(stock === null ? {} : { stockName: stock.name }),
+          sources: [...visibleSources],
+        };
       }),
     );
     return {
@@ -145,7 +154,7 @@ export const getWatchlistTool = defineTool({
           : rows.filter(({ sources }) =>
               sources.some((source) => input.includeArchivedMembers || source.status !== 'ended'),
             ),
-      alertPlans: await ctx.repos.alertPlan.list({ watchlistId: watchlist.id }),
+      alertPlans: [...(await ctx.repos.alertPlan.list({ watchlistId: watchlist.id }))],
     };
   },
 });
@@ -473,6 +482,8 @@ export const SyncWatchlistSourceInput = z.object({
   producerRunId: z.string().min(1).optional(),
   status: z.enum(['complete', 'partial', 'failed']),
   candidates: z.array(WatchlistSourceCandidateSchema),
+  /** Partial sync 中已得到确定选择结论的股票；candidates 必须是其子集。 */
+  evaluatedStockIds: z.array(z.string().min(1)).optional(),
   dataAsOf: z.coerce.date().optional(),
   missingDimensions: z.array(ReportMissingDimensionSchema).default([]),
   error: z.string().min(1).optional(),
@@ -564,6 +575,17 @@ export const syncWatchlistSourceTool = defineTool({
         return errNotFound('Stock', candidate.stockId);
       }
     }
+    if (input.evaluatedStockIds !== undefined) {
+      const evaluated = new Set(input.evaluatedStockIds);
+      if (evaluated.size !== input.evaluatedStockIds.length) {
+        return errInvalidInput('evaluatedStockIds 必须唯一');
+      }
+      for (const candidate of input.candidates) {
+        if (!evaluated.has(candidate.stockId)) {
+          return errInvalidInput('candidates 必须是 evaluatedStockIds 的子集');
+        }
+      }
+    }
     const now = ctx.clock();
     const run = WatchlistSyncRunSchema.parse({
       id: `watchlist-sync-${globalThis.crypto.randomUUID()}`,
@@ -584,6 +606,9 @@ export const syncWatchlistSourceTool = defineTool({
     const committed = await ctx.repos.watchlistMember.commitWatchlistSync({
       run,
       candidates: input.candidates,
+      ...(input.evaluatedStockIds === undefined
+        ? {}
+        : { evaluatedStockIds: input.evaluatedStockIds }),
       ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }),
       ...(input.sourceVersionId === undefined ? {} : { sourceVersionId: input.sourceVersionId }),
     });

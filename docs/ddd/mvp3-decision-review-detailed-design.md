@@ -1,5 +1,7 @@
 # MVP3 决策与复盘详细设计
 
+> **2026-11-12 状态：实现已简化。** `DecisionReview` 收敛为单表，`decision_review_revisions`、`decision_review_trade_links`、`decision_write_receipts` 已删除；下文版本链/回执章节仅作追溯。
+
 > 状态：D0–D4 已完成本地实现与隔离验收；2026-10-04 收尾。初稿于 2026-09-30 编写。
 > 产品范围：[MVP3 产品计划](../prd/mvp3-product-plan.md)。首批实现手工登记或选择已有成交，
 > 未包含券商文件导入；验收未连接真实外部通知或生产投资数据。

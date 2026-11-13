@@ -15,8 +15,10 @@ export * from './entity/dragon-tiger-flow.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
+export * from './entity/limit-up-board-history.js';
 export * from './entity/limit-up-ladder.js';
 export * from './entity/limit-up-ladder-sample.js';
+export * from './entity/limit-up-market.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
 export * from './entity/market-room-core-stocks.js';
@@ -80,6 +82,7 @@ export * from './strategy/publication.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';
 export * from './strategy/run-snapshot.js';
+export * from './strategy/signal-id.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
 export * from './strategy-watchlist-policy.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）

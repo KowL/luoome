@@ -1,7 +1,9 @@
 import {
   assertSignalObservationInvariants,
+  parseSignalObservationId,
   type SignalObservation,
   type SignalObservationRepository,
+  signalObservationId,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
@@ -9,7 +11,8 @@ import { type Schema, signalObservations } from '../../schema/index.js';
 
 type Row = typeof signalObservations.$inferSelect;
 const toObservation = (row: Row): SignalObservation => ({
-  id: row.id,
+  // id 由自然键派生，存储层不再单独存列。
+  id: signalObservationId(row.sourceKind, row.sourceId, row.horizon),
   sourceKind: row.sourceKind,
   sourceId: row.sourceId,
   stockId: row.stockId,
@@ -40,8 +43,9 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
   async save(observation: SignalObservation): Promise<void> {
     assertSignalObservationInvariants(observation);
+    const { id: _derivedId, ...rest } = observation;
     const values = {
-      ...observation,
+      ...rest,
       baselinePrice: observation.baselinePrice ?? null,
       baselineAt: observation.baselineAt ?? null,
       closePrice: observation.closePrice ?? null,
@@ -60,14 +64,30 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
     this.db
       .insert(signalObservations)
       .values(values)
-      .onConflictDoUpdate({ target: signalObservations.id, set: values })
+      .onConflictDoUpdate({
+        target: [
+          signalObservations.sourceKind,
+          signalObservations.sourceId,
+          signalObservations.horizon,
+        ],
+        set: values,
+      })
       .run();
   }
+
   async findById(id: string): Promise<SignalObservation | null> {
+    const key = parseSignalObservationId(id);
+    if (key === null) return null;
     const row = this.db
       .select()
       .from(signalObservations)
-      .where(eq(signalObservations.id, id))
+      .where(
+        and(
+          eq(signalObservations.sourceKind, key.sourceKind),
+          eq(signalObservations.sourceId, key.sourceId),
+          eq(signalObservations.horizon, key.horizon),
+        ),
+      )
       .get();
     return row === undefined ? null : toObservation(row);
   }
@@ -88,7 +108,7 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
       .select()
       .from(signalObservations)
       .where(and(...conditions))
-      .orderBy(desc(signalObservations.baselineAt), desc(signalObservations.id))
+      .orderBy(desc(signalObservations.baselineAt), desc(signalObservations.sourceId))
       .all()
       .map(toObservation);
   }
@@ -157,5 +177,29 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
         ),
       )
       .run();
+  }
+
+  async pruneSettledBefore(
+    cutoff: Date,
+    options: { readonly dryRun?: boolean } = {},
+  ): Promise<number> {
+    const condition = and(
+      inArray(signalObservations.status, ['complete', 'unavailable']),
+      lte(signalObservations.baselineAt, cutoff),
+    );
+    if (options.dryRun === true) {
+      const row = this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(signalObservations)
+        .where(condition)
+        .get();
+      return Number(row?.count ?? 0);
+    }
+    const result = this.db
+      .delete(signalObservations)
+      .where(condition)
+      .returning({ sourceId: signalObservations.sourceId })
+      .all();
+    return result.length;
   }
 }

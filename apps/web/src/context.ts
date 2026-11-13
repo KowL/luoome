@@ -8,8 +8,11 @@ import {
   createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createLimitUpBoardAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
+  createLimitUpMarketManagerFromEnv,
   createMarketAdapterFromEnv,
+  createMarketDumpAdapterFromEnv,
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
@@ -89,6 +92,9 @@ export const buildWebContext = async (
     quoteCacheTtlMs: 10_000,
     sources,
   });
+  const marketDump = createMarketDumpAdapterFromEnv(env, { home: dirname(dbPath) });
+  const limitUpBoard = createLimitUpBoardAdapterFromEnv(env, { clock: now });
+  const limitUpMarket = createLimitUpMarketManagerFromEnv(env, { clock: now, logger: console });
   const ashareSentiment = createAShareSentimentManagerFromEnv(env, {
     clock: now,
     logger: console,
@@ -98,6 +104,7 @@ export const buildWebContext = async (
   const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(env, { clock: now, logger: console });
   const marketIntel = {
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console, sources }),
+    ...(limitUpMarket === undefined ? {} : { limitUpMarket }),
     dragonTiger: createDragonTigerManagerFromEnv(env, { clock: now, logger: console, sources }),
     ...(dragonTigerFlow === undefined ? {} : { dragonTigerFlow }),
     northboundFlow: createNorthboundFlowManagerFromEnv(env, {
@@ -113,6 +120,8 @@ export const buildWebContext = async (
   return buildContext({
     repos: handle.repos,
     adapters: {
+      ...(marketDump === undefined ? {} : { marketDump }),
+      ...(limitUpBoard === undefined ? {} : { limitUpBoard }),
       market,
       llm: ai?.llm ?? unavailableLLM,
       stockUniverse: createStockUniverseManagerFromEnv(env, {

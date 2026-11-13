@@ -25,8 +25,9 @@
    exposure policy 计算默认暴露集合，不再固定数量；新增 `bun run mcp:smoke` 与
    `bun --cwd packages/mcp run smoke` 入口，仍保留真实 stdio/SQLite 握手验收。
 8. **db DDL 与 Drizzle schema 双份手写**（部分收口）：`ensureSchema` 编程式 DDL 与
-   `schema/index.ts` 仍需手工同步，完整迁移生成仍待后续；已补 50 张表的启动契约测试，逐表
-   校验实际 SQLite 列和显式索引名称，schema drift 现在会在测试中直接失败。
+   `schema/index.ts` 仍需手工同步，完整迁移生成仍待后续；已补 39 张表的启动契约测试，逐表
+   校验实际 SQLite 列和显式索引名称，schema drift 现在会在测试中直接失败。2026-11-12 又新增了
+   存储形态重建（signal_observations / signal 主键 / results_json），这些迁移只有手写实现。
 9. **Web 暴露面仍需收敛**（部分收口）：浏览器账户选择已通过
    `X-Luoome-Account-Id` + request-scoped context 隔离不同 tab，不再依赖共享账户 mutate；无 header 的
    本地调用仍兼容默认账户。Web 仍不做账户级鉴权，监听非 localhost 时必须由部署侧提供网络隔离或
@@ -39,6 +40,15 @@
 12. core：~~`V0_2_SUPPORTED_MARKETS` 命名陈旧~~ ✅ 已统一为当前语义的 `SUPPORTED_MARKETS`；~~`assertExpressionSafety` 抛普通 Error~~ ✅ 已修为可识别的 `DslEvalError`，并补回归测试。
 13. adapters：~~`package.json` 声明 `drizzle-orm` 依赖但 src 未使用~~ ✅ 已移除直接依赖；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；~~`workflows/package.json` description 仍写「v0.1 仅骨架」~~ ✅ 已更新为当前 workflow 范围。
 14. ~~`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型~~ ✅ 已统一直接使用 `WorkflowContext`。
+15. ~~**workflow 26→12 合并未完成**~~ ✅ 已收敛到 12 个注册入口（2026-11-13）：
+   `report`、`strategy`、`sync-market` 三个多模式入口 + 9 个专用入口；其余管线改为
+   `defineOperation`，由 `architecture.test.ts` 守住数量与审计名。
+16. ~~**`signal_observations` 归属未拍板**~~ ✅ 已拍板（2026-11-13）：保留独立表 + 自然键
+   `(source_kind, source_id, horizon)`。`watch-trigger` 观察没有对应 `strategy_signals` 行，
+   合并会让观察无处存放；存储主因（长 id 与 source_id 复制）已由 64 位信号 id 和自然键主键消除。
+   决策记录见收敛设计 §6。
+17. **文档状态仍靠人工同步**：已裁撤能力的 DDD/PRD 目前用文首横幅标注，尚未移入 `archive/`；
+   下次整理文档时应连同 `docs/README.md` 导航一起归档，避免“已删除能力仍像现行设计”。
 
 ---
 

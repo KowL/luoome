@@ -1,5 +1,7 @@
 # AI 投资决策闭环产品总纲
 
+> **2026-11-12 状态：部分裁撤。** Phase 2 的研究假设版本、Phase 3 的基本面与可移植定义已删除；Advice → Trade → Outcome → Report 主链保留。
+
 > 状态：方向草案，待按阶段立项
 > 日期：2026-07-29
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)、[SECURITY.md](../SECURITY.md)

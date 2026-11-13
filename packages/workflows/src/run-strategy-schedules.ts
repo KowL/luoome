@@ -9,8 +9,8 @@ import { z } from 'zod';
 
 import { closingReportStrategiesReady } from './closing-report.js';
 import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
-import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
+import { defineOperation, type WorkflowStep } from './define-workflow.js';
+import { strategyDailyCycleOperation } from './strategy-daily-cycle.js';
 
 export const RunStrategySchedulesInput = z.object({
   limit: z.number().int().min(1).max(100).default(20),
@@ -89,7 +89,7 @@ const runDue: WorkflowStep = async (previous, ctx) => {
           reason: `Strategy 不是 active: ${strategy.id}`,
         });
       } else {
-        const cycle = await strategyDailyCycleWorkflow.run(
+        const cycle = await strategyDailyCycleOperation.run(
           {
             strategyId: strategy.id,
             concurrency: input.concurrency,
@@ -174,7 +174,7 @@ const runDue: WorkflowStep = async (previous, ctx) => {
   });
 };
 
-export const runStrategySchedulesWorkflow = defineWorkflow<
+export const runStrategySchedulesOperation = defineOperation<
   RunStrategySchedulesInputT,
   RunStrategySchedulesOutputT
 >({

@@ -1,5 +1,7 @@
 # Strategy 实验、晋级与反馈闭环详细设计
 
+> **2026-11-12 状态：部分裁撤。** 逐日评估会话状态机、自动晋级与 RecommendationPolicy 预检相关实体已删除；DSL Catalog、评分分解与实验上下文保留。
+
 > 状态：Wave A～Wave C 已实施；Wave D 开发中
 > 日期：2026-08-30
 > 2026-09-02 修订：`eligible-for-human-review` 的人工评审语义已被

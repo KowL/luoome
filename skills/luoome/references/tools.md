@@ -2,7 +2,7 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
-The public Agent surface is the **35 core Agent Tools** (design §5.2). Pure UI CRUD
+The public Agent surface is the **37 core Agent Tools** (design §5.2 + storage retention). Pure UI CRUD
 (account rename, cash reconciliation, member drag-sort, chat sessions, report rendering,
 strategy lifecycle, observation stats …) is an Application Service behind Web/CLI and is not
 an MCP tool. Do not infer a new MCP permission from an exported TypeScript function or a
@@ -22,6 +22,10 @@ Market and盘面资讯:
 - `fetch_sector_quotes` — industry/concept sector ranking with leading stock.
 - `compute_indicators` — daily/intraday MA/EMA/MACD/RSI/KDJ/BOLL/ATR.
 - `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
+- `limit_up_market` — one call for the limit-up dashboard: that day's limit-up pool (per-stock
+  seal amount, open times, raw limit-up reason), limit-up statistics (seal rate, opened count,
+  board tiers with promotion rates) and the fixed ~30-trading-day consecutive-board matrix.
+  The matrix window does not follow `date`; a missing dimension is `null` plus a warning token.
 - `dragon_tiger_list` — one trading day's billboard entries (net/buy/sell, reason).
 - `dragon_tiger_flow` — cross-day billboard concept flow: cumulative concept net trajectory,
   org/hot decomposition and top contributors. Requires `FUYAO_API_KEY` (同花顺 truth source).
@@ -33,7 +37,7 @@ Stock pools, strategies and portfolio:
 
 - `list_watchlists` / `get_watchlist` — pools, members and recent changes.
 - `list_strategies` / `get_strategy` — Strategy and its immutable version history.
-- `get_strategy_signals` — StrategySignals for a stock plus T+1/5/20 observation stats
+- `get_strategy_signals` — StrategySignals for a stock plus T+1/T+3/T+5 observation stats
   (descriptive; signal ≠ Advice and ≠ trade).
 - `get_account_overview` — account + holdings + account facts in one call; use it instead
   of stitching `get_account` / `list_holdings` / `get_account_facts`.
@@ -69,10 +73,13 @@ Advice is never a trade and never auto-executes.
   `mode=close` close it.
 - `save_research_document` — `target=note` writes a managed Markdown note into the local
   Vault and reindexes it (excerpt ~1000 chars + stockCodes); `target=report` saves a deep
-  report. Vault sync never fetches remote Git or calls an embedding provider.
+  report. Vault sync only reads local Markdown; remote Git sync and semantic search are not part of the current surface.
 - `save_decision_review` — record a post-hoc review on an advice/plan/trade.
 - `save_trading_plan` — immutable per-stock TradingPlan version with budget checks.
 - `save_alert_plan` — create (no `alertPlanId`) or update an AlertPlan.
+- `prune_strategy_history` — storage retention: clears per-stock run details outside the
+  keep window and expired settled signal observations. Defaults to `dryRun=true`; it never
+  deletes run metadata or StrategySignals.
 
 `add_trade` is intentionally **not** an MCP tool: real trade records are entered by the
 user in the local CLI/Web. It is declared `write` for the Web gate and additionally listed

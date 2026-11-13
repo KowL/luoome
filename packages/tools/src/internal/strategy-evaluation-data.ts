@@ -1,10 +1,9 @@
-import {
-  type DailyBar,
-  DailyBarSchema,
-  type ProviderStatus,
-  type Quote,
-  type StrategyProviderCoverage,
-  type ToolContext,
+import type {
+  DailyBar,
+  ProviderStatus,
+  Quote,
+  StrategyProviderCoverage,
+  ToolContext,
 } from '@luoome/core';
 
 const DAY_MS = 86_400_000;
@@ -240,11 +239,14 @@ export const createLiveStrategyEvaluationDataAdapter = (
 
 export interface LocalStrategyEvaluationDataOptions {
   readonly ctx: ToolContext;
-  /** Replay 可限定 revision 记录时点；未提供时读取 asOf 之前最新本地日线。 */
-  readonly revisionCutoff?: Date;
 }
 
-/** scheduled/replay 的本地落库日线读数：不读实时 quote，不依赖 checkpoint 拷贝表。 */
+/**
+ * scheduled/replay 的本地日线读数：不读实时 quote，不依赖 checkpoint 拷贝表。
+ *
+ * 日线是盘后同步的固定事实，replay 直接取 `dataAsOf` 之前的最新本地日线即可，
+ * 不再维护 revision 时点。
+ */
 export const createLocalStrategyEvaluationDataAdapter = (
   options: LocalStrategyEvaluationDataOptions,
 ): StrategyEvaluationData => {
@@ -263,48 +265,11 @@ export const createLocalStrategyEvaluationDataAdapter = (
           try {
             let bars: readonly DailyBar[] = [];
             if (request.needsDailyBars || request.needsQuote) {
-              if (options.revisionCutoff !== undefined) {
-                const revisions = await ctx.repos.dailyBar.listRevisions({
-                  stockId,
-                  to: request.dataAsOf,
-                  recordedAt: options.revisionCutoff,
-                });
-                const latestByDate = new Map<string, (typeof revisions)[number]>();
-                for (const revision of revisions) {
-                  const key = revision.date.toISOString();
-                  const previous = latestByDate.get(key);
-                  if (
-                    previous === undefined ||
-                    revision.recordedAt.getTime() > previous.recordedAt.getTime() ||
-                    (revision.recordedAt.getTime() === previous.recordedAt.getTime() &&
-                      revision.contentHash.localeCompare(previous.contentHash) > 0)
-                  ) {
-                    latestByDate.set(key, revision);
-                  }
-                }
-                bars = [...latestByDate.values()]
-                  .sort((left, right) => left.date.getTime() - right.date.getTime())
-                  .slice(-request.lookback)
-                  .map((revision) =>
-                    DailyBarSchema.parse({
-                      stockId: revision.stockId,
-                      date: revision.date,
-                      open: revision.open,
-                      high: revision.high,
-                      low: revision.low,
-                      close: revision.close,
-                      volume: revision.volume,
-                      adjustment: 'qfq',
-                      source: revision.source,
-                    }),
-                  );
-              } else {
-                bars = await ctx.repos.dailyBar.latestBefore(
-                  stockId,
-                  request.dataAsOf,
-                  request.lookback,
-                );
-              }
+              bars = await ctx.repos.dailyBar.latestBefore(
+                stockId,
+                request.dataAsOf,
+                request.lookback,
+              );
             }
             const latestBar = bars.at(-1);
             const quote =

@@ -82,6 +82,8 @@ import type {
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
   LimitUpLadderOutput,
+  LimitUpMarketInput,
+  LimitUpMarketOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListAlertPlansInput,
@@ -160,6 +162,10 @@ import type {
   StrategySignalsByStockOutput,
   SyncDailyBarsInput,
   SyncDailyBarsOutput,
+  SyncLimitUpBoardHistoryInput,
+  SyncLimitUpBoardHistoryOutput,
+  SyncMarketDumpInput,
+  SyncMarketDumpOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
   SyncResearchVaultInput,
@@ -299,6 +305,11 @@ export interface WorkflowToolMap {
   readonly batch_quote: ToolAccessor<typeof BatchQuoteInput, typeof BatchQuoteOutput>;
   readonly sync_quotes: ToolAccessor<typeof SyncQuotesInput, typeof SyncQuotesOutput>;
   readonly sync_daily_bars: ToolAccessor<typeof SyncDailyBarsInput, typeof SyncDailyBarsOutput>;
+  readonly sync_market_dump: ToolAccessor<typeof SyncMarketDumpInput, typeof SyncMarketDumpOutput>;
+  readonly sync_limit_up_board_history: ToolAccessor<
+    typeof SyncLimitUpBoardHistoryInput,
+    typeof SyncLimitUpBoardHistoryOutput
+  >;
   readonly get_previous_closes: ToolAccessor<
     typeof GetPreviousClosesInput,
     typeof GetPreviousClosesOutput
@@ -474,6 +485,8 @@ export interface WorkflowToolMap {
     typeof LimitUpLadderCompareInput,
     typeof LimitUpLadderCompareOutput
   >;
+  // 涨停市场看板（只读；涨停池 + 涨停统计 + 近 30 日连板矩阵）
+  readonly limit_up_market: ToolAccessor<typeof LimitUpMarketInput, typeof LimitUpMarketOutput>;
   // 龙虎榜（只读）
   readonly dragon_tiger_list: ToolAccessor<
     typeof DragonTigerListInput,
@@ -616,10 +629,13 @@ const issuesMessage = (issues: readonly { message: string }[]): string =>
   issues.map((issue) => issue.message).join('; ');
 
 /**
- * 极简 workflow 引擎（ARCHITECTURE §4.6 / §8）：顺序执行 steps，逐步传递输出。
- * steps 为空是装配期错误，直接抛错（不进 ToolResult 错误模型，同 createRegistry）。
+ * 可复用的 workflow 步骤管线（不注册为独立 workflow）。
+ *
+ * 多个入口共享同一管线时（报告/策略/行情同步），管线本身不再算一个 workflow；
+ * 由 `reportWorkflow`/`strategyWorkflow`/`syncMarketWorkflow` 这类入口按 kind/mode 分发。
+ * 审计名仍由管线内部显式写入，合并不会改写历史 WorkflowRun 身份。
  */
-export const defineWorkflow = <I, O>(definition: WorkflowDefinition<I>): Workflow<I, O> => {
+export const defineOperation = <I, O>(definition: WorkflowDefinition<I>): Workflow<I, O> => {
   const { name, description, input, steps } = definition;
   if (steps.length === 0) {
     throw new Error(`defineWorkflow: workflow "${name}" 至少需要一个 step`);
@@ -666,3 +682,7 @@ export const defineWorkflow = <I, O>(definition: WorkflowDefinition<I>): Workflo
 
   return { name, description, inputSchema: input, run };
 };
+
+/** 注册为独立 workflow 的入口；定义数由 workflow-architecture 测试守住（目标 12 个）。 */
+export const defineWorkflow = <I, O>(definition: WorkflowDefinition<I>): Workflow<I, O> =>
+  defineOperation<I, O>(definition);

@@ -92,13 +92,18 @@ export const registerChatRoutes = (app: Hono, deps: WebRouteDeps): void => {
     }
     const runtime = chatRuntimeRef.current;
     if (runtime === undefined) {
+      const llmName = contextForRequest().adapters.llm.name;
+      const cause =
+        llmName === 'ai-unconfigured'
+          ? 'AI 模型尚未配置，请前往设置页完成 LLM 设置'
+          : 'AI 对话运行时初始化失败，请检查是否已安装 Node.js 环境或配置 LUOOME_DSH_NODE_PATH';
       return new Response(
         JSON.stringify({
           ok: false,
           error: {
             kind: 'llm_error',
-            provider: contextForRequest().adapters.llm.name,
-            cause: 'AI 模型尚未配置，请前往设置页完成 LLM 设置',
+            provider: llmName,
+            cause,
             retryable: false,
           },
         }),

@@ -16,8 +16,10 @@ import {
   createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createLimitUpBoardAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createMarketDumpAdapterFromEnv,
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
@@ -80,6 +82,8 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const logger = createStderrLogger();
   // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
   const sources = { eastmoney: new EastmoneySource({ clock: now }) };
+  const marketDump = createMarketDumpAdapterFromEnv(process.env, { home, fetchImpl: fetch });
+  const limitUpBoard = createLimitUpBoardAdapterFromEnv(process.env, { clock: now });
   const market = createMarketAdapterFromEnv(process.env, {
     clock: now,
     logger,
@@ -159,6 +163,8 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
       notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
       ...(researchVault ? { researchVault } : {}),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
+      ...(marketDump === undefined ? {} : { marketDump }),
+      ...(limitUpBoard === undefined ? {} : { limitUpBoard }),
     },
     portfolioBenchmark: {
       stockId:

@@ -5,7 +5,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { defineOperation, type WorkflowStep } from './define-workflow.js';
 
 export const CompleteStrategyObservationsWorkflowInput = z.object({
   limit: z.number().int().min(1).max(5000).default(1000),
@@ -97,7 +97,7 @@ const complete: WorkflowStep = async (previous, ctx) => {
   });
 };
 
-export const completeStrategyObservationsWorkflow = defineWorkflow<
+export const completeStrategyObservationsOperation = defineOperation<
   CompleteStrategyObservationsWorkflowInputT,
   CompleteStrategyObservationsWorkflowOutputT
 >({

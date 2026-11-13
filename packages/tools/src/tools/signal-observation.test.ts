@@ -1,4 +1,4 @@
-import { money, type SignalObservation } from '@luoome/core';
+import { money, type SignalObservation, signalObservationId } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -29,30 +29,34 @@ const pending = (horizon: SignalObservation['horizon']): SignalObservation => ({
   },
 });
 
-const observed = (id: string, overrides: Partial<SignalObservation> = {}): SignalObservation => ({
-  id,
-  sourceKind: 'strategy-signal',
-  sourceId: `source-${id}`,
-  stockId: '600519.SH',
-  baselinePrice: 10,
-  baselineAt: BASELINE,
-  horizon: 't1',
-  closePrice: 11,
-  returnPct: 0.1,
-  maxFavorableExcursionPct: 0.2,
-  maxAdverseExcursionPct: -0.05,
-  benchmarkReturnPct: 0.02,
-  benchmarkStatus: 'complete',
-  status: 'complete',
-  provenance: {
-    provider: 'fixture',
+const observed = (name: string, overrides: Partial<SignalObservation> = {}): SignalObservation => {
+  const sourceKind = overrides.sourceKind ?? 'strategy-signal';
+  const horizon = overrides.horizon ?? 't1';
+  return {
+    id: signalObservationId(sourceKind, `source-${name}`, horizon),
+    sourceKind,
+    sourceId: `source-${name}`,
+    stockId: '600519.SH',
+    baselinePrice: 10,
+    baselineAt: BASELINE,
+    horizon,
+    closePrice: 11,
+    returnPct: 0.1,
+    maxFavorableExcursionPct: 0.2,
+    maxAdverseExcursionPct: -0.05,
+    benchmarkReturnPct: 0.02,
+    benchmarkStatus: 'complete',
+    status: 'complete',
+    provenance: {
+      provider: 'fixture',
+      observedAt: new Date('2026-08-04T08:00:00.000Z'),
+      fetchedAt: new Date('2026-08-04T09:00:00.000Z'),
+      freshness: 'fresh',
+    },
     observedAt: new Date('2026-08-04T08:00:00.000Z'),
-    fetchedAt: new Date('2026-08-04T09:00:00.000Z'),
-    freshness: 'fresh',
-  },
-  observedAt: new Date('2026-08-04T08:00:00.000Z'),
-  ...overrides,
-});
+    ...overrides,
+  };
+};
 
 describe('strategy signal observation tools', () => {
   it('列出 pending 并仅完成日线样本已足够的 horizon', async () => {
@@ -181,7 +185,10 @@ describe('strategy signal observation tools', () => {
       },
     });
     if (!result.ok) return;
-    expect(result.data.stats[0]?.observationIds).toEqual(['complete-1', 'pending-2']);
+    expect(result.data.stats[0]?.observationIds).toEqual([
+      signalObservationId('strategy-signal', 'source-complete-1', 't1'),
+      signalObservationId('strategy-signal', 'source-pending-2', 't1'),
+    ]);
     expect(result.data.limitations.join(' ')).toContain('描述性统计');
     expect(result.data.limitations.join(' ')).toContain('胜率承诺');
     expect(result.data.limitations.join(' ')).toContain('missingRate');

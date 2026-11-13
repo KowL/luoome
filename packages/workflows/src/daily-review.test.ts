@@ -2,7 +2,7 @@ import type { LimitUpLadder, LimitUpLadderDiff, LimitUpLadderManagerLike } from 
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { dailyReviewWorkflow } from './daily-review.js';
+import { dailyReviewOperation } from './daily-review.js';
 
 const mkLadderManager = (
   opts: { readonly fail?: boolean; readonly ladder?: LimitUpLadder } = {},
@@ -69,7 +69,7 @@ const mkLadderManager = (
 describe('daily-review workflow Phase 2 (含天梯)', () => {
   it('limitUpLadder 未注入 → ladder 为 null，summary 仍出', async () => {
     const ctx = await buildTestContext();
-    const r = await dailyReviewWorkflow.run({ timezoneOffsetHours: 8 }, ctx);
+    const r = await dailyReviewOperation.run({ timezoneOffsetHours: 8 }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.ladder).toBeNull();
@@ -80,7 +80,7 @@ describe('daily-review workflow Phase 2 (含天梯)', () => {
   it('manager 成功 → ladder 段包含 curr/prev/diff', async () => {
     const manager = mkLadderManager();
     const ctx = await buildTestContext({ limitUpLadder: manager });
-    const r = await dailyReviewWorkflow.run({ timezoneOffsetHours: 8 }, ctx);
+    const r = await dailyReviewOperation.run({ timezoneOffsetHours: 8 }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.ladder).not.toBeNull();
@@ -97,7 +97,7 @@ describe('daily-review workflow Phase 2 (含天梯)', () => {
   it('compareLadder 失败 → ladder 为 null', async () => {
     const manager = mkLadderManager({ fail: true });
     const ctx = await buildTestContext({ limitUpLadder: manager });
-    const r = await dailyReviewWorkflow.run({ timezoneOffsetHours: 8 }, ctx);
+    const r = await dailyReviewOperation.run({ timezoneOffsetHours: 8 }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.ladder).toBeNull();

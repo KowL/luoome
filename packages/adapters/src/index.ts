@@ -23,12 +23,20 @@ export * from './eastmoney/source.js';
 // fuyao（同花顺金融数据 API）行情源
 export * from './fuyao/client.js';
 export * from './fuyao/envelope.js';
+export * from './fuyao/limit-up.js';
+export * from './fuyao/limit-up-market.js';
+export * from './fuyao/market-dump.js';
 export * from './fuyao/source.js';
+// 全市场 Parquet dump（日 K / 复权因子）
+export * from './limit-up/factory.js';
 export * from './limit-up-ladder/eastmoney.js';
 export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';
 // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）
 export * from './limit-up-ladder/types.js';
+// 涨停市场看板（涨停池 + 涨停统计 + 近 30 日连板矩阵，同花顺）
+export * from './limit-up-market/factory.js';
+export * from './limit-up-market/manager.js';
 export * from './llm/ai-sdk-adapter.js';
 export * from './llm/manager.js';
 export * from './llm/model-catalog.js';
@@ -48,6 +56,8 @@ export * from './market/source-registry.js';
 export * from './market/tencent.js';
 export * from './market/tushare.js';
 export * from './market/types.js';
+export * from './market-dump/factory.js';
+export * from './market-dump/parquet.js';
 export * from './news/10jqka.js';
 // 财经要闻（东方财富公开新闻 API）
 export * from './news/eastmoney.js';

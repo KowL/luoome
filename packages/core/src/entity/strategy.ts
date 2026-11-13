@@ -268,7 +268,13 @@ export const StrategyRunPublicationSchema = z.object({
 export type StrategyRunPublication = z.infer<typeof StrategyRunPublicationSchema>;
 
 export const StrategyProviderCoverageSchema = z.object({
-  capability: z.enum(['quote', 'daily-bars', 'universe', 'limit-up-ladder']),
+  capability: z.enum([
+    'quote',
+    'daily-bars',
+    'universe',
+    'limit-up-ladder',
+    'limit-up-board-history',
+  ]),
   provider: z.string().min(1),
   requested: z.number().int().nonnegative(),
   succeeded: z.number().int().nonnegative(),

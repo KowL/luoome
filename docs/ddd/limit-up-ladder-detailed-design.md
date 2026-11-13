@@ -1,6 +1,6 @@
 # 连板天梯详细设计：A 股涨停梯队快照（tool + 缓存 + 端到端）
 
-> 状态：Phase 1/2/3 已实施；当前/正式日 Strategy DSL 与历史 PIT 天梯字段已实施；2026-08-15 已冻结炸板/断板语义并完成安全降级，数据源门禁未满足前不注册运行时字段
+> 状态：Phase 1/2/3 已实施；当前/正式日 Strategy DSL 与历史 PIT 天梯字段已实施；2026-08-15 冻结炸板/断板语义；2026-11-13 接入 fuyao 涨停池/炸板池，注册 `meta.isBroken` / `meta.consecutiveBoard` / `meta.isBoardBreak`（PIT-only）
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
 > 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
@@ -105,34 +105,33 @@ revision-preserving key 与 contract tests，schema 和 `ensureSchema` 同步。
 
 | 候选 | 已核实能力与发布时间 | 缺口 | 决策 |
 |---|---|---|---|
-| Eastmoney `getTopicZTPool` / `getTopicZBPool` | 2026-08-15 真实请求：2026-08-14 分别返回 63/19 条；炸板池有 `zttj.days/ct`、`ztp`、`zs`，抽样的 `zttj.ct` 与前一日封板高度一致 | 无正式 schema、历史保留、发布时间或 revision 契约；2026-07-24 对两个端点均静默返回 0，而 2026-07-27 又有数据，不能区分“无事件”和“超出滚动窗口” | 只用于当前/近期展示与情绪统计；拒绝作为炸板/断板历史 PIT 源 |
-| Tushare `daily` + `stk_limit` | 官方文档给出 raw OHLC；`daily` 交易日 15:00～16:00 入库；`stk_limit` 当日约 08:40 更新并给出 `up_limit`；可按上述确定性公式派生 | 本环境 `TUSHARE_TOKEN` 未配置，未完成真实权限、覆盖、异常日、复权/分价和跨日连续性 smoke；provider revision 契约仍需落实 | 首选候选，保持 pending；不得仅凭文档上线 |
-| Tushare `limit_list_ths` | 官方文档声明历史自 2023-11-01、约 16:00 更新，提供炸板池、`open_num`、`tag/status` 等字段 | 需 8000 积分，且仅限个人学习研究；本环境无 token，未验证权限、字段稳定性与自由文本状态映射 | 可作交叉校验源，不作为当前生产实现 |
+| Eastmoney `getTopicZTPool` / `getTopicZBPool` | 2026-08-15 真实请求：2026-08-14 分别返回 63/19 条；炸板池有 `zttj.days/ct`、`ztp`、`zs` | 无正式 schema、历史保留、发布时间或 revision 契约；存在静默返回 0 的窗口，不能区分“无事件”和“超出滚动窗口” | 只用于当前/近期展示与情绪统计；拒绝作为炸板/断板历史 PIT 源 |
+| Tushare `daily` + `stk_limit` | 官方文档给出 raw OHLC；可按冻结公式派生 | 本环境无 token，未验证权限、覆盖、复权/分价与跨日连续性；provider revision 契约未落实 | 保留为未来交叉校验源，不用于当前实现 |
+| Tushare `limit_list_ths` | 官方文档声明历史自 2023-11-01 | 需 8000 积分，字段稳定性未验证 | 交叉校验候选 |
+| fuyao 涨跌停数据（`/api/a-share/special-data/limit-up-pool`、`limit-break-pool`、`limit-up-ladder`） | 官方文档给出字段 schema、`date_ms` 查询、分页与统一信封；2026-11-13 真实凭据 smoke：2026-11-11 涨停池 84 条、炸板池 19 条 | 无历史起点、revision 与发布时间契约；`data.timestamp` 观测为**抓取时间**而非历史发布时刻；池成员是否包含“开板后回封”需样本交叉验证 | **已选为当前实现源**：只消费池成员关系与 `continue_day_cnt`；同日采集标 `captured`，历史查询一律 `backfill` |
 
-官方依据：[Tushare A 股日线](https://tushare.pro/document/1?doc_id=27)、
-[每日涨跌停价格](https://tushare.pro/document/2?doc_id=183)、
-[同花顺涨跌停榜单](https://tushare.pro/document/2?doc_id=355)。Eastmoney 端点没有找到可承担
-schema/发布时间/revision 契约的官方文档，真实响应只能作为一次观测证据，不能替代契约。
+官方依据：[fuyao 涨跌停与炸板数据](https://fuyao.aicubes.cn/docs/api-reference/limit-up-data/)。
 
-### 上线门禁与当前降级
+### 实现（2026-11-13）
 
-只有同时满足以下条件才进入 core/adapters/repository/tool/Strategy/UI 实现：
+- **Adapter**：`packages/adapters/src/fuyao/limit-up.ts` + `limit-up/factory.ts`，注入
+  `ToolContext.adapters.limitUpBoard`；按 `date_ms`（Asia/Shanghai 零点）与 `page/size` 拉全，
+  只保留 `.SH/.SZ`，北交所成员丢弃。
+- **存储**：`limit_up_board_history`，主键 `(trade_date, source, recorded_at)`，保留修订；
+  `facts_json` 逐股票保存 `isBroken` / `consecutiveBoard` / `isBoardBreak` / `missingFields`；
+  `vintage` 区分 `captured` 与 `backfill`。仓储在 `packages/db/src/repository/drizzle/limit-up-board-history.ts`。
+- **采集**：workflow-only tool `sync_limit_up_board_history`，由 `post-market-data` 在 dump 之后调用；
+  涨停池失败 → `unavailable` 不写事实，炸板池或前一日涨停池失败 → `partial` 且对应字段为 `null`。
+- **派生**：`deriveLimitUpBoardHistory`（core）只按池成员关系计算：封板 = 在涨停池；炸板 = 在炸板池且未封板；
+  断板 = 前一日连板高度 ≥ 1 且当日未封板。不使用涨跌幅阈值、qfq 日线或 `open_times`。
+- **Strategy**：字段 `meta.isBroken` / `meta.consecutiveBoard` / `meta.isBoardBreak` 已注册，
+  `dataSource='limit-up-board-history'`；`run_strategy` 按 `dataAsOf` 的上海日期读取 PIT 事实，
+  缺失或 `partial` 时字段保持未知，并按 `limit-up-board-history` capability 记录覆盖与 error kind。
+- **真实样本**：2026-11-13 00:20 用 fuyao 真实凭据补采 2026-11-11：涨停 84、炸板 19，
+  派生 176 条逐股事实、19 条炸板、76 条断板，`status=complete`、`vintage=backfill`。
 
-1. 明确的字段 schema、市场 coverage、历史起点/保留窗口、许可与发布时间；
-2. 用真实凭据完成至少封板、触板未封、开板回封、ST/20cm、停牌/无成交、除权日样本交叉验证；
-3. 原始未复权 OHLC 与涨停价可按分价精确关联，交易日窗口完整；
-4. captured/backfill/revision 规则可落库并通过 PIT replay 测试；
-5. provider partial、空响应、权限和字段漂移都能降级为 partial/unavailable。
-
-当前结论是门禁未满足，因此：
-
-- 不在 field registry 注册 `meta.isBroken`、`meta.consecutiveBoard` 或 `meta.isBoardBreak`；引用这些
-  路径仍按未知字段拒绝，不用默认值让 Strategy 误命中；
-- replay 继续只消费同交易日 PIT 天梯；个股历史只读 snapshot repository；
-- `AShareSentiment` 的近期炸板池不得反向填充天梯历史、Strategy meta 或 PIT repository；
-- UI 不新增炸板/断板列，避免把 rolling/current 观测展示为完整历史；
-- 后续首选实现是独立 `raw-daily + daily-limit` capability 与专用 revision repository，不扩宽 qfq
-  `DailyBar` 语义，也不把天梯转成 Advice、收益概率或交易信号。
+仍未关闭的验证项：开板回封、ST、20cm、停牌与除权日样本的交叉验证；fuyao 涨停池历史起点与保留窗口；
+池成员口径与“触板未封”的逐条对照；UI 尚未新增炸板/断板列。
 
 ## 设计
 
@@ -532,6 +531,21 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
 > 2. **daily-review workflow** —— `packages/workflows/src/daily-review.ts` 新 step `stepLadder` 拉天梯 + diff，输出 `DailyReviewOutput.ladder: <schema> | null`。
 > 3. **TOP10 / StockGroup 接入** —— Phase 2 调研发现 ruo 旧 `watchlist refreshTop10` 在 luoome v0.6+ 已被解构为 `StockGroup` + `WatchPlan` + `StockPool` 三层抽象（无对应单一排序函数）。ladder `code → level` 可作 formula / tactic resolver 输入信号，列入 Phase 3 与策略预警联动一并实现；本文档**不再跟踪 P2-E 单独工单**。
 > 4. **数据源迁移（私有行情服务 → eastmoney 涨停池）** —— 主源切换后：factory 不再读任何环境变量、不再有软失败 manager，始终装配真实 manager；enricher（`eastmoney-pool.ts`）删除；CLI / Web 的 `source` 只接受 `eastmoney`；上游不可达时 tool 返回 `adapter_error`，诊断文案改为检查到东方财富行情服务的网络连通性。
+
+### 14.4 2026-11 页面改版：涨停市场看板（同花顺）
+
+Web `/market/limit-up` 不再渲染上面的单日表格，改为「涨停市场看板」：一次 `limit_up_market` tool 调用拿到
+
+- `snapshot.pool` —— 所选交易日的涨停池逐股明细（封单额 / 峰值封单额 / 开板次数 / `limit_up_reason` 原文）
+- `snapshot.statistics` —— 同一交易日的封板率、开板家数、页面板位档位与晋级率
+- `snapshot.ladder` —— 接口固定的近 30 个交易日连板矩阵（2 板及以上 6 档）
+
+领域侧新增 `packages/core/src/entity/limit-up-market.ts`（事实快照 + `buildLimitUpMarketView` 派生 KPI 与原因分布）、
+`packages/adapters/src/fuyao/limit-up-market.ts`（三端点聚合）与 `limit-up-market/` manager/factory
+（单源 fuyao、`LUOOME_LIMIT_UP_MARKET_SOURCES`、60s 缓存、单维失败降级为 `null` + warning）。
+本文件的 eastmoney 天梯（`limit_up_ladder` / `limit_up_ladder_compare`、`/api/market/limit-up`）继续为
+TUI / CLI / 市场页「涨停天梯事实」块服务，两条数据链路互不替代：东财给「逐股单日天梯」，同花顺给
+「涨停池 + 统计 + 30 日矩阵」。
 
 ## 测试矩阵
 

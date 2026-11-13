@@ -56,6 +56,7 @@ export const WEB_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'fetch_sector_quotes',
   'compute_indicators',
   'limit_up_ladder',
+  'limit_up_market',
   'dragon_tiger_list',
   'dragon_tiger_flow',
   'northbound_flow',
@@ -75,6 +76,7 @@ export const WEB_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'get_watchlist',
   'create_watchlist',
   'update_watchlist_members',
+  'prune_strategy_history',
   // 策略与回测（6）
   'list_strategies',
   'get_strategy',

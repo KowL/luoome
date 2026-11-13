@@ -1,16 +1,13 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-20；Strategy 可靠性复核：2026-08-20；账户绩效持续快照复核：2026-08-20
-> MVP 2.0 执行复核：2026-09-25；当前优先级以 §2.10 为准，以上日期保留为历史验收基线。
+> 基线日期：2026-11-12（领域收敛与日线存储改造后）；历史验收基线保留 2026-08-20 / 2026-09-25。
+> 当前事实与开放项以 §2.0 为准；§2.1～§2.10 及 §3 以后多数段落是收敛前的阶段记录。
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
-> 2026-10-10 新增个人订阅托管方向的[开发改造计划](./hosted-personal-subscription-development-plan.md)
-> 与[详细设计](./ddd/hosted-personal-subscription-detailed-design.md)。2026-10-12 按用户纠偏修订为原 Web
-> 增量登录、支付订阅、用户隔离和唯一默认投资账户；原业务功能保留。旧 facts-only 验收不是本版整站验收。
-> [运行手册](./runbooks/hosted-personal-subscription.md)与[验收记录](./archive/hosted-personal-subscription-fixture-acceptance.md)
-> 列明边界；本页既有本地能力的验收记录不代表托管服务已对外开放。
+> 2026-10-10 立项的个人订阅托管方向已于 2026-11-10 随多租户体系整体退役：hosted 代码、计划、设计与
+> 运行手册均已删除，相关验收记录只保留在 `docs/archive/` 追溯，本文不再引用。
 
 ## 1. 目标与排序原则
 
@@ -25,6 +22,38 @@
 机械排期；先修正文档，再按本计划执行。
 
 ## 2. 当前基线
+
+### 2.0 2026-11-12 收敛后基线（先读这一节）
+
+2026-11-10 执行完[领域收敛与架构减负设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md)
+S1–S4；2026-11-12 工作树完成日线存储口径与调度闸口改造（尚未提交）。当前代码事实：
+
+- **规模**：39 张表、37 个注册 Agent Tool、`apps/web/src/server.ts` 414 行；手写 memory repository 已全部删除。
+- **已裁撤的领域**（旧计划中“已交付/候选”的描述不再成立）：`StockEvent` 公司事件子域、
+  `FundamentalScore`/`FinancialFact` 财务管线、Research Topic/Document 关系与 chunk/embedding/Git 同步、
+  `InvestmentWorkspace` 方向/共识/跟踪、Strategy 逐日评估状态机、`StrategyAutonomyAction` 自治审批、
+  可移植 manifest、分布式租约表、策略 data checkpoint、`daily_bar_revisions`。
+- **炸板/断板历史**：fuyao 涨停池/炸板池 → `limit_up_board_history`（captured/backfill 修订）→
+  `meta.isBroken` / `meta.consecutiveBoard` / `meta.isBoardBreak`，只读 PIT，缺失保持 unknown。
+- **保留的研究能力**：`research_document_index` + FTS5 的文档索引、Vault 同步、`save_research_document`、
+  `search_research_documents`；没有 topic / hypothesis / 向量检索。
+- **日线口径**：`daily_bars` 存原始价，除权除息事件存 `adjustment_factors`，qfq 是读时投影
+  `qfq(t) = raw(t) × ∏{factor | exDate > t}`。全市场数据由 fuyao Parquet dump
+  （`daily-k-10d` 增量 + 全量 `adjustment-factors`）盘后导入；因子表未初始化时 provider 的 qfq
+  行情按原值缓存，避免把 qfq 当原始价二次复权。
+- **存储治理**：`strategy_runs.results_json` 写入前 zlib+base64；信号 id 改为 64 位整数；
+  `signal_observations` 用自然键 `(source_kind, source_id, horizon)`；`prune_strategy_history`
+  默认 dryRun 清理历史逐股明细与终态观察。
+- **后台调度**：Web 进程内的策略、盘中、账户绩效与盘后 dump 调度统一要求
+  `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启，否则不启动并记录原因。
+
+workflow 已收敛到 12 个注册入口（`report` / `strategy` / `sync-market` 三个多模式入口 + 九个专用入口），
+其余复用管线改为 `defineOperation`，审计名保持不变。仍然开放的工程项只有 DSH D08–D10 与各能力的
+真实生产证据。
+`signal_observations` 已拍板保留独立表（自然键主键），不再并入 `strategy_signals`；理由见
+[收敛设计 §6 决策记录](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md#6-决策记录signal_observations-保留独立表2026-11-13)。
+本页 §2.6 P2-4、§2.7 Phase 3、§2.9 M2 和 §3.2 中的 lease/checkpoint/revision 描述均为收敛前历史，
+不再作为排期依据。
 
 ### 2.1 验证结果
 
@@ -151,6 +180,9 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 
 ### 2.3 实现状态矩阵
 
+> 2026-11-12：本表是收敛前快照（含 fencing lease、checkpoint、Research Vault Phase A–G 等已删除能力）。
+> 当前事实以 §2.0 为准，本表仅用于追溯当时的验收范围。
+
 | 领域 | 当前真实状态 | 主要缺口 |
 |---|---|---|
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
@@ -160,7 +192,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE、分组描述统计和真实历史 VaR 风险报告已落地；观察聚合统一按 `stock-day-horizon` 去重并可回溯代表性 observation id | benchmark 真实数据可用率、去重分布和跨 Tool/Web/AI 的真实样本稳定性仍需验证；历史评估仍不是严格收益回测 |
 | 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、盘后持续快照 workflow/scheduler、WorkflowRun 性能预算、输入修订追溯、逐日审计、Web/报告/Agent、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤与浏览器回归已落地 | 真实 provider 长区间、大账户生产规模和跨交易日连续调度证据 |
-| 连板天梯 | Phase 1～3 已完成；`meta.limitUpLevel`/`meta.limitUpToday` 已接入真实 manager，scan/scheduled 写入 PIT，replay 优先读取历史快照，缺失仍保持 unknown | 炸板/断板历史语义与跨交易日真实快照积累 |
+| 连板天梯 | Phase 1～3 已完成；`meta.limitUpLevel`/`meta.limitUpToday` 与炸板/断板 PIT 字段已接入，scan/scheduled 写入 PIT，replay 优先读取历史快照，缺失仍保持 unknown | 开板回封、ST/20cm 等真实样本交叉验证与跨交易日快照积累 |
 | Workflow 架构 | 生产 workflow 已通过 workflow-only tools 编排，并有静态边界测试 | 后续新增 workflow 继续遵守同一边界 |
 
 ### 2.4 文档冲突处理
@@ -190,14 +222,17 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 |---|---|---|
 | S3 生产观测 | 进行中，当前已有 2 个正式真实交易日样本 | 按真实交易日持续形成 schedule/lease/checkpoint/publication/观察/AI 降级审计；不设固定天数门禁 |
 | v0.10 更长历史与持续快照 | 基础切片可用，长区间仍受真实 PIT 数据积累限制 | 真实 PIT 日期持续沉淀后完成更长历史任务、断点幂等和快照审计 |
-| 连板天梯 → Strategy DSL 字段 | 当前/正式日与 PIT replay 已完成；无对应交易日快照时仍保持 unknown | 持续积累真实交易日快照，并获得可审计炸板/断板历史数据源 |
-| 炸板/断板历史语义 | 2026-08-15 已冻结定义、审计信封和数据源门禁；个股历史已收紧为仅读 PIT repository，字段仍未注册 | 用真实凭据完成 Tushare raw daily + daily limit（首选）覆盖/权限/revision smoke 后，再实现专用双 repository；不得用当前情绪接口推断历史天梯字段 |
+| 连板天梯 → Strategy DSL 字段 | 当前/正式日、炸板/断板与 PIT replay 已完成（fuyao 涨停池/炸板池）；无对应交易日事实时仍保持 unknown | 持续积累真实交易日快照与样本交叉验证 |
+| 炸板/断板历史语义 | 2026-11-13 已用 fuyao 涨停池/炸板池落地：`limit_up_board_history` 保留 captured/backfill 修订，`meta.isBroken`/`consecutiveBoard`/`isBoardBreak` 只读 PIT；真实 2026-11-11 样本完成 | 开板回封、ST/20cm、停牌与除权日样本交叉验证；fuyao 历史起点与池成员口径确认；不得用情绪接口推断历史 |
 | Web 账户级鉴权 | 未立项；当前只有 request-scoped 账户选择 | 独立安全/产品决策、认证模型、权限矩阵和端到端验收 |
 
 因此当前开发顺序不扩展横向产品能力：只收口可靠性、安全、测试、观测和文档，并持续积累真实
 provider 证据；禁止用 mock、当前快照或推断字段关闭上述门禁。
 
 ### 2.6 Phase 2：真实复盘闭环执行里程碑（2026-08-21）
+
+> 2026-11-12 状态：P2-4 的 `ResearchHypothesisVersion` 已随 S3 裁撤；P2-5 的端到端链路不再包含
+> “研究假设新版本”。其余里程碑（Outcome 回填、Trade 依据、观察统计、周报区块）保留。下表为历史记录。
 
 Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md)
 执行。2026-08-21 已完成 P2-0～P2-4 核心代码切片，并用临时真实 SQLite 走通 Web outcome 回填与刷新持久化；
@@ -218,6 +253,11 @@ Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase
 mock、当前快照或零值关闭验收。上位 PRD 的 Phase 2 状态保持不变，待主线程在代码和证据全部验收后更新。
 
 ### 2.7 总纲 Phase 3 状态与外部数据门禁（2026-08-21）
+
+> 2026-11-12 状态：本节整表已失效。基本面因子（`FinancialFact`/`FundamentalScore`）、可移植策略定义和
+> 严格回测门禁投入均已在 S2 裁撤，对应表、Tool 与设计文档已删除；`daily_bar_revisions` 也已删除，
+> 回放改为按 `dataAsOf` 截断读取。仅账户绩效保留，且三张现金流/公司行动表已合并为
+> `account_ledger_entries`。本节仅用于追溯当时门禁。
 
 Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下表中的“代码完成”不代表真实数据验收完成；
 任何指标只在对应门禁完整时发布，否则只能返回审计、样本和 `partial/unavailable`。
@@ -255,6 +295,10 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 - 不新增自动交易路径。
 
 ### 2.9 策略自动化与 AI 管理立项（2026-09-01）
+
+> 2026-11-12 状态：M1 报告中心保留；M2 的 `StrategyAutonomyAction` 实体、周调度、自动晋级/暂停与
+> blocked 人工队列已在 S3 整体裁撤。AI 策略提议（`strategy_version_proposal`）仍保留为待确认草案，
+> 不会自动发布或激活，也不再有“晋级门自动放行”。本节保留为立项记录。
 
 用户决策解除"冻结横向扩张"纪律，立项新方向：[策略自动化与 AI 管理 PRD](./prd/strategy-ai-managed-automation.md)。
 核心判断：当前痛点不是缺功能，而是"策略跑完没后续、结果需人工逐个分析、工作台复杂功能用不上"。
@@ -485,6 +529,10 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 
 ### 3.2 Strategy 可靠性实现复核
 
+> 2026-11-12 状态：本节 lease / checkpoint / revision / 逐日评估会话的描述已随 S2/S3 简化——
+> 持久租约与 checkpoint 表删除（改为策略表字段 + 内存互斥）、`daily_bar_revisions` 删除、
+> 评估会话状态机删除。R0–R7 的“下一验收动作”多数不再适用，仅作历史对照。
+
 | 原里程碑 | 当前代码状态 | 下一验收动作 |
 |---|---|---|
 | R0 publication | Summary V4、scope、publication 和 current 查询已落地；手工运行绕过 acceptance 的修正位于当前工作树 | 合入安全修复，验证低覆盖 manual/scheduled 均 withheld，evaluation 永不污染 current |
@@ -541,6 +589,9 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 不作为固定交易日数量的完成门禁。观察期间只允许扩大诊断和修复，不扩大自动推荐/通知默认范围。
 
 ### 3.4 v0.10：账户绩效与组合归因（持续快照代码链已完成）
+
+> 2026-11-12 状态：现金流、公司行动与持仓现金调整三张表已合并为 `account_ledger_entries`，
+> 快照 workflow 与 Tool 保留。下文的“双仓储/合约测试”指收敛前实现，现只有 Drizzle 实现。
 
 实现已按“契约与存储 → Tool → Report/Web/Agent”的竖向顺序完成首片；S3 观察期间只补审计与真实数据验收：
 
@@ -892,12 +943,15 @@ Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向�
 
 - 持久化 Strategy → Watchlist 显式订阅、取消和审计历史；
 - 只有 published operational run 可以投影，complete sync 才能结束缺失来源；
-- partial/failed 只标 stale，不制造全量退出；空 complete 只在完整且可信零命中时结束全部来源；
+- partial 只结束已明确评估未入选的来源、其余标 stale，不制造全量退出；failed 不退出；空 complete 只在完整且可信零命中时结束全部来源；
 - manual、AI、Portfolio 和其它 Strategy source 相互隔离；重复 producerRun 幂等；
 - Tool、Workflow、SQLite/in-memory repository、Web/API/UI 与测试已接线；不自动生成 Advice、通知、AlertPlan
   或 Trade。
 
 ### N4：基本面、资金流和 A 股短线事件雷达
+
+> 2026-11-12 状态：基本面因子与公司事件部分已随 S2 裁撤（表、Tool、adapter 均已删除），不再作为候选；
+> 若未来重新引入，必须先有真实财报/事件数据源，并重新立项与设计。资金流和短线事件雷达仍未立项。
 
 每类 Evidence Adapter 先定义：
 
@@ -909,8 +963,9 @@ Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向�
 
 ## 7. 明确暂缓或不做
 
-- **严格收益回测**：PIT universe、DailyBar revision replay 和 benchmark 事实已经具备基础能力，但
-  费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
+- **严格收益回测**：`strategy_backtest_runs` 与门禁求值仍保留，但不再投入新的八项门禁与真实历史数据
+  验收；`daily_bar_revisions` 已删除，历史切片按 `dataAsOf` 截断本地日线。门禁不完整时只输出求值与
+  缺口事实，不得把不完整结果表述为可复现收益。
 - **分钟行情**：Phase 4 已完成首个独立 MinuteBar 竖向切片（当前会话 Tushare + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
 - **Obsidian Headless 同步**：Phase F 已选择更小且本地可验收的 Git-only workflow；Headless
@@ -922,7 +977,7 @@ Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向�
 每个里程碑按以下顺序形成可独立合入的竖向 PR，不跨多个核心 schema 大爆炸修改：
 
 1. Core schema、不变量、纯函数和失败测试；
-2. repository interface、Drizzle/memory 双实现、SQLite DDL 与 contract tests；
+2. repository interface、Drizzle 实现、SQLite DDL 与 contract tests（测试用 `:memory:` SQLite，不再手写 memory 实现）；
 3. Tool schema、实现、registry、sideEffect 和 MCP/Agent 分类；
 4. Workflow 仅通过 `ctx.tools.*` 编排；
 5. Web/API/CLI/MCP/Skill 消费同一 Tool 契约；
@@ -936,7 +991,7 @@ Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向�
 ### 9.1 架构
 
 - core 零 IO，不依赖 db、tools、workflows 或 surface；
-- 新 repository 同时提供 Drizzle 和 memory 实现；
+- 新 repository 只实现 Drizzle 版本，contract tests 直接对 `createDrizzleRepos(':memory:')` 运行；
 - Drizzle schema 与 `ensureSchema` SQLite DDL 同步，迁移幂等；
 - Tool 使用 Zod 派生输入输出并始终返回 ToolResult；
 - Workflow 只通过 `ctx.tools.*`；
@@ -998,5 +1053,6 @@ M0～M6 已完成并退出当前排期。v0.9 完成必须同时满足：
 - 全市场数据准备和求值进入设计性能预算，所有阶段都有 WorkflowRun 审计。
 
 账户绩效 DDD、数据完整度规则、端到端场景和测试矩阵的首版已冻结并进入实现；剩余快照审计
-扩展需继续遵守同一契约。N2 Phase 0+1 已立项为 M7 并按切片交付；N2 Phase 2、N3 剩余范围
-与 N4 仍为候选方向，不与 v0.9/v0.10 并行扩张生产能力。
+扩展需继续遵守同一契约。N2 Phase 0+1 已立项为 M7 并按切片交付；N3 首个切片已交付，剩余为
+真实生产观测；N2 Phase 2 的研究假设版本已裁撤；N4 的基本面与公司事件部分已裁撤，资金流/短线
+事件雷达仍未立项。后续排期以 §2.0 为准，不再并行扩张已删除的领域。

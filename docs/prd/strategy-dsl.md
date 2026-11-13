@@ -424,7 +424,7 @@ published operational StrategyRun
 - 同一股票可被多个 Strategy 同时发现。
 - 策略不再命中时，只结束对应 strategy source。
 - 如果股票仍有手工、AI、持仓或其它策略来源，WatchlistMember 继续存在。
-- complete 才能按完整结果结束缺失来源；partial/failed 只标 stale，不按缺失集合退出。
+- complete 按完整结果结束缺失来源；partial 只结束已明确评估未入选的来源，其余标 stale，不按缺失集合退出；failed 不退出。
 - evaluation、trial、persist=false、withheld、non-publishing 和 failed run 不改变 Watchlist。
 - 用户可把策略候选提升为重点研究，而不改变 StrategyResult。
 

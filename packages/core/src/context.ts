@@ -6,6 +6,7 @@ import type {
   LimitUpLadderDiff,
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
+import type { LimitUpMarketQuery, LimitUpMarketSnapshot } from './entity/limit-up-market.js';
 import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
 import type { MinuteBar, MinuteBarInterval } from './entity/minute-bar.js';
 import type { FetchNewsQuery, NewsList } from './entity/news.js';
@@ -154,12 +155,54 @@ export interface NotificationManagerLike {
 
 export interface ToolContextMarketIntel {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  readonly limitUpMarket?: LimitUpMarketManagerLike;
   readonly dragonTiger?: DragonTigerManagerLike;
   readonly dragonTigerFlow?: DragonTigerFlowManagerLike;
   readonly northboundFlow?: NorthboundFlowManagerLike;
   readonly news?: NewsManagerLike;
   readonly sectorQuote?: SectorQuoteManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+}
+
+/** 市场 dump 类型（fuyao 全市场导出）。 */
+export type MarketDumpKind = 'daily-k' | 'daily-k-10d' | 'adjustment-factors';
+
+export interface MarketDumpArtifactLike {
+  readonly kind: MarketDumpKind;
+  readonly dumpId: string;
+  readonly localPath: string;
+  readonly bytes: number;
+}
+
+/** 全市场 Parquet dump 下载器；未配置 fuyao 时不注入。 */
+export interface MarketDumpAdapterLike {
+  download(kind: MarketDumpKind): Promise<MarketDumpArtifactLike>;
+}
+
+/** 涨停池一行；`continueDayCnt` 含当日，用于派生下一交易日的 consecutiveBoard。 */
+export interface LimitUpBoardPoolRowLike {
+  readonly stockId: string;
+  readonly continueDayCnt?: number | undefined;
+}
+
+export interface LimitUpBoardPoolResult {
+  readonly date: string;
+  readonly rows: readonly LimitUpBoardPoolRowLike[];
+  readonly publishedAt: Date;
+  readonly fetchedAt: Date;
+}
+
+export interface LimitUpBreakPoolResult {
+  readonly stockIds: readonly string[];
+  readonly publishedAt: Date;
+  readonly fetchedAt: Date;
+}
+
+/** 炸板/断板历史数据源（fuyao 涨跌停池）；未配置时不注入。 */
+export interface LimitUpBoardAdapterLike {
+  readonly name: string;
+  fetchLimitUpPool(date: string): Promise<LimitUpBoardPoolResult>;
+  fetchLimitBreakPool(date: string): Promise<LimitUpBreakPoolResult>;
 }
 
 export interface ToolContextAdapters {
@@ -174,6 +217,10 @@ export interface ToolContextAdapters {
   readonly researchVault?: ResearchVaultAdapterLike;
   /** 日级批量的市场情报 managers（连板天梯/龙虎榜/北向/要闻/板块/情绪）。 */
   readonly marketIntel?: ToolContextMarketIntel;
+  /** 全市场 dump 同步（fuyao）；未配置时不注入。 */
+  readonly marketDump?: MarketDumpAdapterLike;
+  /** 炸板/断板历史数据源（fuyao）；未配置时不注入。 */
+  readonly limitUpBoard?: LimitUpBoardAdapterLike;
 }
 
 export interface ToolContext {
@@ -260,6 +307,24 @@ export interface LimitUpLadderManagerLike {
   ): Promise<LimitUpLadderCompareResultLike>;
   /** 进程内源健康观测（registry.describe()）。 */
   status(): readonly SourceStatus[];
+}
+
+/** 涨停市场看板结果；部分维度失败仍返回 ok（对应维度为 null + warnings）。 */
+export interface LimitUpMarketResultLike {
+  readonly ok: boolean;
+  readonly data?: LimitUpMarketSnapshot;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'limit-up-market';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface LimitUpMarketManagerLike {
+  readonly name: 'limit-up-market';
+  readonly sources: readonly string[];
+  fetchMarket(query: LimitUpMarketQuery): Promise<LimitUpMarketResultLike>;
 }
 
 /**

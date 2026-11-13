@@ -104,6 +104,33 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   app.get('/market/limit-up', serveFile('index.html', 'text/html; charset=utf-8'));
 
   /**
+   * 涨停市场看板（同花顺：涨停池 + 涨停统计 + 近 30 日连板矩阵）。
+   *
+   * 与 `/api/market/limit-up` 的区别：那边是东方财富的单日连板天梯；这里是 fuyao 的三维聚合
+   * 读模型，天梯矩阵是接口固定的近 30 个交易日窗口，不随 date 变化。
+   *
+   * 参数：date (必填) YYYY-MM-DD
+   * 上游某维失败仍返回 200（该维 null + warnings）；三维全失败 / 未配置 FUYAO_API_KEY：
+   * 前者 502，后者 invalid_input 400。
+   */
+  app.get('/api/market/limit-up/market', async (c) => {
+    const date = c.req.query('date');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: 'date 必填且为 YYYY-MM-DD', issues: [] },
+      });
+    }
+    const r = await invokeTool('limit_up_market', { date });
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
    * 行业板块行情（fetch_sector_quotes tool；实时快照，无缓存）。
    *
    * 参数：
@@ -443,7 +470,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
-  // S4.1b：App Service 直执行（非 45 个 Agent Tool 不再经通用 /api/tools/:name/call）。
+  // S4.1b：App Service 直执行（非 47 个 Agent Tool 不再经通用 /api/tools/:name/call）。
   app.get('/api/market/sentiment', (c) => {
     const date = c.req.query('date');
     return callTool('get_ashare_sentiment', {

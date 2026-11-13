@@ -16,6 +16,7 @@ import {
   exportDataArchive,
   importDataArchive,
 } from '../data-transfer.js';
+import { createDshChatRuntimeFromStore } from '../dsh/chat-runtime.js';
 import { SaveFeishuSettingsSchema } from '../feishu-settings.js';
 import { jsonResult, notFound } from '../http/result.js';
 import {
@@ -38,6 +39,7 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     researchVaultSettingsStore,
     sharedSources,
     dataTransferDbPath,
+    chatRuntimeRef,
   } = deps;
 
   // ===== AI 模型设置 =====
@@ -435,6 +437,10 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
         ...ctxRef.current,
         adapters: { ...ctxRef.current.adapters, llm: ai.llm },
       };
+      chatRuntimeRef.current = createDshChatRuntimeFromStore(
+        aiSettingsStore,
+        aiSettingsStore.runtimeEnv(),
+      );
       return jsonResult({ ok: true, data: { ...saved, applied: true } });
     } catch (error) {
       if (error instanceof ZodError) {

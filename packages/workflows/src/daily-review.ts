@@ -2,7 +2,7 @@ import type { LimitUpLadder, LimitUpLadderDiff, ToolResult } from '@luoome/core'
 import { LimitUpLadderSourceSchema } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { defineOperation, type WorkflowStep } from './define-workflow.js';
 
 /**
  * daily-review（v0.3，plan-v0.2-v0.3 §3.5）：
@@ -200,7 +200,7 @@ const stepFinalize: WorkflowStep = async (prev, ctx) => {
   });
 };
 
-export const dailyReviewWorkflow = defineWorkflow<DailyReviewInputT, DailyReviewOutputT>({
+export const dailyReviewOperation = defineOperation<DailyReviewInputT, DailyReviewOutputT>({
   name: 'daily-review',
   description: '生成当日复盘（今日 advice 汇总 + 7 日准确率 + 涨停梯队快照 + vs 昨日 diff）',
   input: DailyReviewInput,

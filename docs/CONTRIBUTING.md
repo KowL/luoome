@@ -64,7 +64,7 @@ luoome/
 │   │   └── notification/  飞书 Webhook 等
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
 │   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
-│   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
+│   ├── workflows/     内置编排：12 个注册入口 + defineOperation 复用管线
 │   ├── mcp/           MCP stdio server（env 控制暴露面）
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
@@ -123,7 +123,7 @@ workflows ──► tools ──► core
 | `bash bin/luoome mcp serve` | 起 MCP stdio server |
 | `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
-| `bash bin/luoome workflow run run-strategies --input '{}'` | 跑已发布 Strategy |
+| `bash bin/luoome workflow run strategy --input '{"job":"run"}'` | 跑已发布 Strategy |
 
 **CI 三关必须全绿**：`typecheck` + `test:all` + `lint`。本地跑通再 push。
 
@@ -393,7 +393,10 @@ toolRegistry.register(myTool);
 
 ### 加一个新 workflow
 
-参考 `packages/workflows/src/run-strategies.ts`（最有代表性的聚合 workflow）：
+先判断是「注册入口」还是「复用管线」：报告/策略/行情同步这类同域多模式能力用
+`defineOperation` 组合进 `report` / `strategy` / `sync-market`，不新增注册入口；只有真正独立的
+领域编排才用 `defineWorkflow`，并同步 `architecture.test.ts` 的 12 入口清单与 CLI 帮助。
+参考 `packages/workflows/src/report.ts`（多模式入口）与 `run-strategies.ts`（管线）：
 
 ```ts
 // packages/workflows/src/my-workflow.ts
@@ -418,6 +421,9 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
   steps: [stepA, stepB],
 });
 ```
+
+复用管线则导出 `xxxOperation = defineOperation<...>({...})`，由入口按 `kind/job/target` 分发；
+审计名继续由管线内部显式写入。
 
 在 `packages/workflows/src/index.ts` 桶导出，CLI `luoome workflow run my-workflow --input '{}'` 自动可用。
 
@@ -462,19 +468,13 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 
 ---
 
-## 托管开发与验证
+## 托管开发与验证（已退役）
 
-托管改动遵循同一依赖方向，额外检查入口身份、私有 registry 和持久恢复协议。
-`bun --no-env-file run web`、`worker`、`ops` 分别启动 Web、独立 worker 与固定运维命令；
-环境与停止写者要求见[托管运行手册](./runbooks/hosted-personal-subscription.md)。
-platform Tools 与 Tenant 执行 Tools 不加入 generic/MCP/model discovery。
-新增能力需同时验证用户 HTTP、worker、间接 workflow 和拒绝路径，不能只测试业务 handler。
+2026-11-10 的多租户收敛已删除 hosted 体系（`apps/worker`、hosted providers、tenant 隔离与
+`runbooks/hosted-personal-subscription.md`）。本地单用户 + 单机多账户是唯一运行形态；
+不要再新增 hosted 入口、租户执行面或恢复协议。历史验收记录只保留在 `docs/archive/`。
 
-`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 和托管 Web 文件。
-真实进程 crash 用隔离临时目录和 fixture 验证，不使用个人数据。
-100 Tenant 压测入口为 `bun --no-env-file apps/worker/src/fixture-load.ts --fixture /absolute/output.json`，
-只构造模拟 provider 并清理临时库；指标不代表供应商额度或生产容量。
-UI 修改除自动测试外，实际启动并检查手机、双用户/双标签、到期与断线恢复，记录 fixture 边界。
+`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 和 Web server 文件。
 
 ## 致谢
 

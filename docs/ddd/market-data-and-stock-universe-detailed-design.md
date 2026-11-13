@@ -864,7 +864,7 @@ cron，不在 Web 启动时自动阻塞同步。
 
 ```cron
 # 交易日收盘后同步沪深 A 股目录
-20 16 * * 1-5  luoome workflow run sync-stock-universe
+20 16 * * 1-5  luoome workflow run sync-market --input '{"target":"universe"}'
 ```
 
 workflow 内先检查交易日；非交易日输出 succeeded + skipped，不访问 provider。

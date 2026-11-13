@@ -16,6 +16,7 @@ import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockSectorMembershipsTool } from './tools/get-stock-sector-memberships.js';
 import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
 import { limitUpLadderTool } from './tools/limit-up-ladder.js';
+import { limitUpMarketTool } from './tools/limit-up-market.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
@@ -31,6 +32,7 @@ import {
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
 import { getAccountPerformanceTool } from './tools/portfolio-performance.js';
+import { pruneStrategyHistoryTool } from './tools/prune-strategy-history.js';
 import { searchResearchDocumentsTool } from './tools/research-vault.js';
 import { runStrategyTool } from './tools/run-strategy.js';
 import { runStrategyBacktestTool } from './tools/run-strategy-backtest.js';
@@ -179,6 +181,8 @@ export const toolRegistry: Registry = createRegistry([
   saveAlertPlanTool,
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
   limitUpLadderTool,
+  // 涨停市场看板（只读；同花顺涨停池 + 涨停统计 + 近 30 日连板矩阵）
+  limitUpMarketTool,
   // 龙虎榜（只读；东方财富数据中心公开报表）
   dragonTigerListTool,
   // 龙虎榜资金流向拓扑（只读；同花顺龙虎榜跨交易日概念聚合）
@@ -214,4 +218,6 @@ export const toolRegistry: Registry = createRegistry([
   getMarketRoomCoreStocksTool,
   getMarketRoomSectorDetailTool,
   listMarketRoomEventsTool,
+  // 存储保留策略（write；默认 dryRun）：清理历史逐股明细与过期信号观察
+  pruneStrategyHistoryTool,
 ]);

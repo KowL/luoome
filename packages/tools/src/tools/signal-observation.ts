@@ -347,6 +347,12 @@ export const completeStrategyObservationsTool = defineTool({
   },
 });
 
+/**
+ * 本地日线长期补不齐时终止重试：否则历史 pending 会永久占住 due-first 队列头，
+ * 既拖慢每次回填，也让观察表只增不减。
+ */
+const SIGNAL_OBSERVATION_MAX_ATTEMPTS = 10;
+
 const withObservationRetry = (
   observation: SignalObservation,
   now: Date,
@@ -354,16 +360,28 @@ const withObservationRetry = (
 ): SignalObservation => {
   const attemptCount = (observation.attemptCount ?? 0) + 1;
   const delay = Math.min(60 * 60 * 1000, 60_000 * 2 ** Math.min(attemptCount - 1, 6));
+  const lastErrorKind =
+    error instanceof Error
+      ? error.message === 'insufficient_daily_bars'
+        ? error.message
+        : error.name
+      : 'daily_bar_error';
+  if (attemptCount >= SIGNAL_OBSERVATION_MAX_ATTEMPTS) {
+    const { nextAttemptAt: _dropped, ...rest } = observation;
+    return {
+      ...rest,
+      attemptCount,
+      lastAttemptAt: now,
+      lastErrorKind,
+      status: 'unavailable',
+      unavailableReason: `连续 ${attemptCount} 次无法用本地日线补齐（${lastErrorKind}）`,
+    };
+  }
   return {
     ...observation,
     attemptCount,
     lastAttemptAt: now,
     nextAttemptAt: new Date(now.getTime() + delay),
-    lastErrorKind:
-      error instanceof Error
-        ? error.message === 'insufficient_daily_bars'
-          ? error.message
-          : error.name
-        : 'daily_bar_error',
+    lastErrorKind,
   };
 };

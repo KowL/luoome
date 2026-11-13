@@ -5,6 +5,7 @@ import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
 import type { Holding } from '../entity/holding.js';
+import type { LimitUpBoardHistory } from '../entity/limit-up-board-history.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type {
   LimitUpLadderSample,
@@ -26,7 +27,7 @@ import type {
   PortfolioCorporateAction,
   PortfolioPerformanceSnapshot,
 } from '../entity/portfolio-performance.js';
-import type { DailyBar, DailyBarRevision, Quote } from '../entity/quote.js';
+import type { AdjustmentFactor, DailyBar, Quote, RawDailyBar } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type {
   ResearchAvailability,
@@ -306,6 +307,18 @@ export interface MarketSnapshotBatchRepository {
   }): Promise<MarketSnapshotBatch[]>;
 }
 
+/**
+ * 炸板/断板历史事实；按 `(tradeDate, source, recordedAt)` 保留修订，读取取最新修订。
+ * 只用真实涨停池/炸板池成员关系派生，不用 qfq 日线或涨跌幅阈值反推。
+ */
+export interface LimitUpBoardHistoryRepository {
+  save(history: LimitUpBoardHistory): Promise<void>;
+  findByDate(input: {
+    readonly tradeDate: string;
+    readonly source?: string;
+  }): Promise<LimitUpBoardHistory | null>;
+}
+
 export interface HoldingRepository {
   save(holding: Holding): Promise<void>;
   findById(id: string): Promise<Holding | null>;
@@ -412,6 +425,15 @@ export interface QuoteRepository {
  * daily_bars 表 (stockId, date) 复合主键 → 同日重复写入视为覆盖。
  * 行情 adapter 用它做 1 小时级缓存（避免每次 analyze 都打远端）。
  */
+/**
+ * 日线仓储：**落库是原始价，读写边界做前复权投影**。
+ *
+ * - `saveMany` 接收领域层的 qfq bar，按当时的累计因子还原成原始价落库；
+ * - `findInRange` / `latestBefore` 读出原始价后按因子投影回 qfq，返回的仍是 `DailyBar`
+ *   （`adjustment='qfq'`），调用方无需感知存储口径。
+ *
+ * 因子缺失时累计因子为 1，投影即恒等，因此没有事件的股票行为不变。
+ */
 export interface DailyBarRepository {
   saveMany(bars: readonly DailyBar[]): Promise<void>;
   /** 取区间内日线（按 date 升序）；无缓存时返回空数组，由 adapter 决定是否回源。 */
@@ -419,20 +441,23 @@ export interface DailyBarRepository {
   /** 取 ≤ to 的最近 N 根日线（按 date 降序取 N，再升序返回）。 */
   latestBefore(stockId: string, to: Date, count: number): Promise<DailyBar[]>;
   removeInRange(stockId: string, before: Date): Promise<number>;
-  saveRevisions(revisions: readonly DailyBarRevision[]): Promise<void>;
-  listRevisions(input: {
-    readonly stockId: string;
-    readonly from?: Date;
-    readonly to?: Date;
-    readonly recordedAt?: Date;
-  }): Promise<readonly DailyBarRevision[]>;
-  /** 横截面研究批量读取 PIT revision；实现内部负责 SQLite 参数分块并保持稳定排序。 */
-  listRevisionsForStocks(input: {
-    readonly stockIds: readonly string[];
-    readonly from?: Date;
-    readonly to?: Date;
-    readonly recordedAt?: Date;
-  }): Promise<readonly DailyBarRevision[]>;
+  /** 原始价批量 upsert（市场 dump 导入用）；不经过 qfq 投影。 */
+  saveRawMany(bars: readonly RawDailyBar[]): Promise<void>;
+  /** 取 ≤ to 的最近一根原始价日线；因子计算需要真实前收盘。 */
+  latestRawBefore(stockId: string, to: Date): Promise<RawDailyBar | null>;
+}
+
+/** 除权除息因子仓储；只增不改，按 (stockId, exDate) 唯一。 */
+export interface AdjustmentFactorRepository {
+  saveMany(factors: readonly AdjustmentFactor[]): Promise<void>;
+  /** 取 exDate > since 的因子，按 exDate 升序。 */
+  listAfter(stockId: string, since: Date): Promise<readonly AdjustmentFactor[]>;
+  /** 批量版本，供按股票循环的读取路径减少往返。 */
+  listAfterForStocks(
+    stockIds: readonly string[],
+    since: Date,
+  ): Promise<ReadonlyMap<string, readonly AdjustmentFactor[]>>;
+  removeByStock(stockId: string): Promise<number>;
 }
 
 /**
@@ -548,6 +573,8 @@ export interface RepositoryRegistry {
   readonly marketSnapshotBatch: MarketSnapshotBatchRepository;
   /** 作战室盘中事件（扩散 / 分化 / 换位，按身份幂等）。 */
   readonly marketRoomEvent: MarketRoomEventRepository;
+  /** 炸板/断板历史事实（逐日采集，保留修订）。 */
+  readonly limitUpBoardHistory: LimitUpBoardHistoryRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly decisionReview: DecisionReviewRepository;
@@ -562,6 +589,7 @@ export interface RepositoryRegistry {
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  readonly adjustmentFactor: AdjustmentFactorRepository;
   /** Market View Phase 4：独立 raw 分钟 OHLCV，默认保留 30 天。 */
   readonly minuteBar: MinuteBarRepository;
   /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
@@ -663,6 +691,12 @@ export interface SignalObservationRepository {
     sourceKind: SignalObservation['sourceKind'],
     sourceIds: readonly string[],
   ): Promise<void>;
+  /**
+   * 删除 baselineAt 早于 cutoff 的终态观察（complete / unavailable）。
+   *
+   * pending 不删：它们仍在回填队列里。返回受影响行数；dryRun 时只统计不删除。
+   */
+  pruneSettledBefore(cutoff: Date, options?: { readonly dryRun?: boolean }): Promise<number>;
 }
 
 export interface ChatRepository {
@@ -761,6 +795,14 @@ export interface StrategyRunRepository {
   saveStartedRun(run: StrategyRun): Promise<void>;
   /** 终态 run 与其 facts 原子提交；只允许新增终态或更新同一条 running。 */
   commitRun(bundle: StrategyRunBundle): Promise<void>;
+  /**
+   * 清空指定 run 的逐股明细，保留 run 元数据与信号。
+   *
+   * 逐股明细是「为什么没选中」的审计快照，占用随运行次数线性增长；保留策略只需保留
+   * 最近若干次与已发布运行，历史 run 仍可读但不再返回 results。返回实际（或 dryRun
+   * 下预计）清空的 run 数。
+   */
+  clearResults(runIds: readonly string[], options?: { readonly dryRun?: boolean }): Promise<number>;
   /** 删除指定 Strategy 的运行、结果、信号与正式运行租约。 */
   removeByStrategyId(strategyId: string): Promise<void>;
 }

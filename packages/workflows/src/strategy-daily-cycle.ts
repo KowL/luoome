@@ -7,7 +7,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { defineOperation, type WorkflowStep } from './define-workflow.js';
 
 export const StrategyDailyCycleInput = z.object({
   strategyId: z.string().min(1),
@@ -337,7 +337,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   });
 };
 
-export const strategyDailyCycleWorkflow = defineWorkflow<
+export const strategyDailyCycleOperation = defineOperation<
   StrategyDailyCycleInputT,
   StrategyDailyCycleOutputT
 >({

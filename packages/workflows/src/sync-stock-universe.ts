@@ -1,12 +1,12 @@
 import { SyncStockUniverseInput, SyncStockUniverseOutput } from '@luoome/tools';
 import type { z } from 'zod';
 
-import { defineWorkflow } from './define-workflow.js';
+import { defineOperation } from './define-workflow.js';
 
 export const SyncStockUniverseWorkflowInput = SyncStockUniverseInput;
 export type SyncStockUniverseWorkflowInputT = z.input<typeof SyncStockUniverseWorkflowInput>;
 
-export const syncStockUniverseWorkflow = defineWorkflow<
+export const syncStockUniverseOperation = defineOperation<
   z.output<typeof SyncStockUniverseInput>,
   z.output<typeof SyncStockUniverseOutput>
 >({

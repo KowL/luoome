@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import {
   ledgerCoverage,
   migrateLegacyTradingPlan,
@@ -12,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
+  DrizzleAdjustmentFactorRepository,
   DrizzleAdviceRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
@@ -20,6 +22,7 @@ import {
   DrizzleHoldingRepository,
   DrizzleLedgerRepository,
   DrizzleLimitUpLadderSampleRepository,
+  DrizzleLimitUpBoardHistoryRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMarketRoomEventRepository,
   DrizzleMarketSnapshotBatchRepository,
@@ -47,6 +50,7 @@ import {
   DrizzleWatchTriggerRepository,
   DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
+import { decodeJsonBlobToText } from './repository/drizzle/json-blob.js';
 import { type Schema, schema } from './schema/index.js';
 
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
@@ -195,14 +199,16 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS signal_observations (
-      id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, close_price REAL, return_pct REAL,
-      max_favorable_excursion_pct REAL, max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
+      source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL,
+      close_price REAL, return_pct REAL, max_favorable_excursion_pct REAL,
+      max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
       benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
       unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
       attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
-      next_attempt_at INTEGER, last_error_kind TEXT
-    )
+      next_attempt_at INTEGER, last_error_kind TEXT,
+      PRIMARY KEY (source_kind, source_id, horizon)
+    ) WITHOUT ROWID
   `);
   ensureColumn(db, 'signal_observations', 'due_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
@@ -211,9 +217,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   ensureColumn(db, 'signal_observations', 'last_error_kind', 'TEXT');
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS signal_observations_source_idx ON signal_observations (source_kind, source_id)`,
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_due_idx ON signal_observations (status, due_at, next_attempt_at)`,
@@ -488,6 +491,26 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON market_room_events (sector_id, sampled_at)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS limit_up_board_history (
+      trade_date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      data_as_of INTEGER NOT NULL,
+      published_at INTEGER NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      vintage TEXT NOT NULL,
+      facts_json TEXT NOT NULL,
+      missing_fields_json TEXT NOT NULL,
+      warnings_json TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      PRIMARY KEY (trade_date, source, recorded_at)
+    ) WITHOUT ROWID
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS limit_up_board_history_source_date_idx
+    ON limit_up_board_history (source, trade_date)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL,
@@ -712,16 +735,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS minute_bars_ended_idx ON minute_bars (ended_at)
   `);
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS daily_bar_revisions (
-      stock_id TEXT NOT NULL, date INTEGER NOT NULL, content_hash TEXT NOT NULL,
-      open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
-      volume INTEGER NOT NULL, source TEXT NOT NULL, recorded_at INTEGER NOT NULL,
-      PRIMARY KEY (stock_id, date, recorded_at, content_hash)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS daily_bar_revisions_lookup_idx
-    ON daily_bar_revisions (stock_id, date, recorded_at)
+    CREATE TABLE IF NOT EXISTS adjustment_factors (
+      stock_id TEXT NOT NULL, ex_date INTEGER NOT NULL, factor REAL NOT NULL,
+      dividend_per_share REAL NOT NULL, per_share_bonus REAL NOT NULL,
+      allotment_ratio REAL NOT NULL, allotment_price REAL NOT NULL, source TEXT NOT NULL,
+      PRIMARY KEY (stock_id, ex_date)
+    ) WITHOUT ROWID
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS strategies (
@@ -1149,6 +1168,17 @@ export const ensureSchema = (db: DrizzleDb): void => {
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
   migrateLegacyBuiltinStrategyOwners(db);
   migrateLegacyAdviceTradeLinksToReviews(db);
+  migrateLegacyStrategySchedules(db);
+  // 存储形态迁移：去掉 rowid 表与复合/TEXT 主键的重复存储。
+  migrateSignalObservationsStorage(db);
+  migrateDailyBarsToRaw(db);
+  dropLegacyDailyBarRevisions(db);
+  // 存量明文逐股明细压缩（一次性，按 schema_migrations 标记跳过）。
+  migrateCompressStrategyResults(db);
+  // 信号主键改 64 位整数 + 引用改写（一次性）。
+  migrateStrategySignalIds(db);
+  // 逐信号 JSON 的压缩是负收益，回退为明文（一次性）。
+  migrateStrategySignalJsonToPlain(db);
 };
 
 /**
@@ -1671,9 +1701,15 @@ const migrateLegacyStrategyResults = (db: DrizzleDb): void => {
     db.get(sql`SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_results'`) !==
     undefined;
   if (!exists) return;
+  const unmigrated = db.all<{ id: string }>(
+    sql`SELECT id FROM strategy_runs WHERE results_json IS NULL OR results_json = 'null'`,
+  );
+  if (unmigrated.length === 0) return;
+  const unmigratedIds = new Set(unmigrated.map((row) => row.id));
   const runIds = db
     .all<{ run_id: string }>(sql`SELECT DISTINCT run_id FROM strategy_results`)
-    .map((row) => row.run_id);
+    .map((row) => row.run_id)
+    .filter((id) => unmigratedIds.has(id));
   for (const runId of runIds) {
     const rows = db.all<{
       run_id: string;
@@ -1885,6 +1921,540 @@ const migrateLegacyBuiltinStrategyOwners = (db: DrizzleDb): void => {
   }
 };
 
+/**
+ * S2.3 存量迁移：将旧 strategy_schedules 表的 cron 与 last_scheduled_at 回填至 strategies 表。
+ * （仅在 schedule_cron 为 NULL 且 strategy_schedules 存在启用配置时写入，幂等；旧表保留不 DROP）。
+ */
+const migrateLegacyStrategySchedules = (db: DrizzleDb): void => {
+  const exists =
+    db.get(sql`SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_schedules'`) !==
+    undefined;
+  if (!exists) return;
+  const result = db.run(sql`
+    UPDATE strategies
+    SET schedule_cron = (
+      SELECT cron FROM strategy_schedules
+      WHERE strategy_schedules.strategy_id = strategies.id AND strategy_schedules.enabled = 1
+    ),
+    last_scheduled_at = COALESCE(
+      (
+        SELECT sr.started_at FROM strategy_schedules ss
+        JOIN strategy_runs sr ON sr.id = ss.last_run_id
+        WHERE ss.strategy_id = strategies.id AND ss.enabled = 1
+      ),
+      strategies.last_scheduled_at
+    )
+    WHERE schedule_cron IS NULL AND EXISTS (
+      SELECT 1 FROM strategy_schedules
+      WHERE strategy_schedules.strategy_id = strategies.id AND strategy_schedules.enabled = 1
+    )
+  `);
+  const changes =
+    typeof result === 'object' && result !== null && 'changes' in result
+      ? Number((result as { changes: unknown }).changes)
+      : 0;
+  if (changes > 0) {
+    console.warn(
+      `[migrate] strategies: 将 ${changes} 个旧 StrategySchedule 调度配置回填至 strategies 表`,
+    );
+  }
+};
+
+const tableDdl = (db: DrizzleDb, table: string): string | undefined =>
+  db.all<{ sql: string | null }>(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
+  )[0]?.sql ?? undefined;
+
+const tableColumnNames = (db: DrizzleDb, table: string): readonly string[] =>
+  db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`)).map((row) => row.name);
+
+/**
+ * signal_observations 存储形态迁移：改为自然键 (source_kind, source_id, horizon) 的
+ * WITHOUT ROWID 聚簇表。
+ *
+ * 旧形态把 `id = signal-observation:<kind>:<sourceId>:<horizon>` 存成 TEXT 主键，4.7M 行
+ * 下这串 100+ 字符的 id 会同时进入聚簇主键和每个二级索引；id 完全可由自然键派生，
+ * 因此重建时删列、删重复的 source_idx，读取侧用 parseSignalObservationId 还原。
+ * 顺带清掉已无代码引用的 vintage 列与索引。幂等：已是自然键聚簇表时直接返回。
+ */
+const migrateSignalObservationsStorage = (db: DrizzleDb): void => {
+  const ddl = tableDdl(db, 'signal_observations');
+  if (ddl === undefined) return;
+  const columns = tableColumnNames(db, 'signal_observations');
+  if (!columns.includes('id') && ddl.includes('WITHOUT ROWID')) return;
+  db.transaction((tx) => {
+    tx.run(sql`
+      CREATE TABLE signal_observations_rebuild (
+        source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+        baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL,
+        close_price REAL, return_pct REAL, max_favorable_excursion_pct REAL,
+        max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
+        benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
+        unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
+        attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
+        next_attempt_at INTEGER, last_error_kind TEXT,
+        PRIMARY KEY (source_kind, source_id, horizon)
+      ) WITHOUT ROWID
+    `);
+    // 自然键在旧库里唯一（id 由同一组字段派生）；OR REPLACE 只用于兜底异常数据。
+    tx.run(sql`
+      INSERT OR REPLACE INTO signal_observations_rebuild (
+        source_kind, source_id, horizon, stock_id, baseline_price, baseline_at,
+        close_price, return_pct, max_favorable_excursion_pct, max_adverse_excursion_pct,
+        benchmark_return_pct, benchmark_status, status, provenance, unavailable_reason,
+        observed_at, due_at, attempt_count, last_attempt_at, next_attempt_at, last_error_kind
+      )
+      SELECT
+        source_kind, source_id, horizon, stock_id, baseline_price, baseline_at,
+        close_price, return_pct, max_favorable_excursion_pct, max_adverse_excursion_pct,
+        benchmark_return_pct, benchmark_status, status, provenance, unavailable_reason,
+        observed_at, due_at, attempt_count, last_attempt_at, next_attempt_at, last_error_kind
+      FROM signal_observations
+    `);
+    tx.run(sql`DROP TABLE signal_observations`);
+    tx.run(sql`ALTER TABLE signal_observations_rebuild RENAME TO signal_observations`);
+    tx.run(
+      sql`CREATE INDEX signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
+    );
+    tx.run(
+      sql`CREATE INDEX signal_observations_due_idx ON signal_observations (status, due_at, next_attempt_at)`,
+    );
+  });
+  console.warn('[migrate] signal_observations: 重建为自然键 WITHOUT ROWID 聚簇表');
+};
+
+/**
+ * 日线口径迁移：daily_bars 从「前复权」改为「原始价 + 因子投影」。
+ *
+ * 只有带 `source_adj_factor` 的存量行能被精确还原（raw = qfq / factor）；其余行没有
+ * 写入时的累计因子，强行标记 raw 会把 qfq 当原始价、在因子到达后二次复权。这些行保留
+ * `adjustment='qfq'`，按原值读出，直到市场 dump 的原始价覆盖同一 (stockId, date)。
+ * 因子表为空时不动；完成后写标记，重复启动不再除。
+ */
+const migrateDailyBarsToRaw = (db: DrizzleDb): void => {
+  const migrationId = 'daily-bars-raw-v1';
+  const applied = db.all<{ id: string }>(
+    sql`SELECT id FROM schema_migrations WHERE id = ${migrationId}`,
+  )[0];
+  if (applied !== undefined) return;
+  const factors =
+    db.all<{ n: number }>(sql`SELECT COUNT(*) AS n FROM adjustment_factors`)[0]?.n ?? 0;
+  if (factors === 0) return;
+  let converted = 0;
+  db.transaction((tx) => {
+    converted =
+      tx.all<{ n: number }>(
+        sql`SELECT COUNT(*) AS n FROM daily_bars
+            WHERE source_adj_factor IS NOT NULL AND source_adj_factor > 0`,
+      )[0]?.n ?? 0;
+    tx.run(sql`
+      UPDATE daily_bars SET
+        open = open / source_adj_factor,
+        high = high / source_adj_factor,
+        low = low / source_adj_factor,
+        close = close / source_adj_factor,
+        adj_factor = 1,
+        source_adj_factor = NULL,
+        adjustment = 'raw'
+      WHERE source_adj_factor IS NOT NULL AND source_adj_factor > 0
+    `);
+    tx.run(sql`
+      INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+      VALUES (${migrationId}, ${Date.now()}, ${migrationId}, ${JSON.stringify({ converted })})
+      ON CONFLICT(id) DO NOTHING
+    `);
+  });
+  const provisional =
+    db.all<{ n: number }>(sql`SELECT COUNT(*) AS n FROM daily_bars WHERE adjustment <> 'raw'`)[0]
+      ?.n ?? 0;
+  console.warn(
+    `[migrate] daily_bars: ${converted} 行按 source_adj_factor 还原为原始价；` +
+      `${provisional} 行无因子来源，保留 qfq 原值读取`,
+  );
+};
+
+/** 日线固定、盘后同步，不再保留修订流水；旧库直接删表。 */
+const dropLegacyDailyBarRevisions = (db: DrizzleDb): void => {
+  const exists = db.all<{ name: string }>(
+    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'daily_bar_revisions'`,
+  )[0];
+  if (exists === undefined) return;
+  db.run(sql`DROP TABLE daily_bar_revisions`);
+  console.warn('[migrate] daily_bar_revisions: 已废弃并删除');
+};
+
+/**
+ * 逐股明细压缩迁移：V4 存量行的 results_json 是明文 JSON（单行可达 22MB）。
+ *
+ * 逐行改写而不是一次性读出，避免 8GB 级内存峰值；每行独立提交，中断后重跑会跳过
+ * 已压缩行（前缀判定），迁移完成才写 schema_migrations 标记。
+ */
+const STRATEGY_SIGNAL_ID_EPOCH_MS = Date.UTC(2025, 0, 1);
+const STRATEGY_SIGNAL_ID_SEQUENCE_BITS = 22;
+const STRATEGY_SIGNAL_ID_SEQUENCE = 2 ** STRATEGY_SIGNAL_ID_SEQUENCE_BITS;
+
+/**
+ * strategy_signals 主键从 100 字符拼接串改为 64 位整数（snowflake 布局，十进制字符串）。
+ *
+ * 旧 id 是 `${runId}:${ruleId}:${stockId}:${iso}`，会被复制进 signal_observations.source_id
+ * （470 万行）与两张二级索引；改成 19 字符整数后这三处一起缩小。同一迁移顺带把
+ * evidence_json / evaluation_snapshot_json 换成 zlib+base64，并改写引用旧 id 的
+ * signal_observations.source_id、advices.based_on、trading_plans.plan_json。
+ *
+ * 全流程单事务：失败整体回滚；完成后写 schema_migrations 标记。
+ */
+const migrateStrategySignalIds = (db: DrizzleDb): void => {
+  const migrationId = 'strategy-signal-int64-id-v1';
+  const applied = db.all<{ id: string }>(
+    sql`SELECT id FROM schema_migrations WHERE id = ${migrationId}`,
+  )[0];
+  if (applied !== undefined) return;
+  const total = db.all<{ n: number }>(sql`SELECT COUNT(*) AS n FROM strategy_signals`)[0]?.n ?? 0;
+  if (total === 0) {
+    db.run(sql`
+      INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+      VALUES (${migrationId}, ${Date.now()}, ${migrationId}, '{"rewritten":0}')
+      ON CONFLICT(id) DO NOTHING
+    `);
+    return;
+  }
+
+  db.transaction(
+    (tx) => {
+      // 1) 旧 id → 新 id：时间戳取信号自身的 ts，序号取同一毫秒内的稳定行号。
+      tx.run(sql`DROP TABLE IF EXISTS signal_id_map`);
+      tx.run(sql`
+        CREATE TEMP TABLE signal_id_map AS
+        SELECT id AS old_id,
+               CAST(
+                 (ts - ${STRATEGY_SIGNAL_ID_EPOCH_MS}) * ${STRATEGY_SIGNAL_ID_SEQUENCE} +
+                 (ROW_NUMBER() OVER (PARTITION BY ts ORDER BY rowid) - 1)
+                 AS TEXT
+               ) AS new_id
+        FROM strategy_signals
+      `);
+      tx.run(sql`CREATE UNIQUE INDEX signal_id_map_old_idx ON signal_id_map (old_id)`);
+
+      // 2) 重建 signals：换 id，并把两个 JSON 列压成 zlib+base64。
+      tx.run(sql`
+        CREATE TABLE strategy_signals_rebuild (
+          id TEXT PRIMARY KEY,
+          strategy_id TEXT NOT NULL,
+          strategy_version_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          rule_id TEXT NOT NULL,
+          stock_id TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          score REAL NOT NULL,
+          direction TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          evaluation_snapshot_json TEXT NOT NULL
+        )
+      `);
+      type RebuildRow = {
+        rid: number;
+        new_id: string;
+        strategy_id: string;
+        strategy_version_id: string;
+        run_id: string;
+        rule_id: string;
+        stock_id: string;
+        ts: number;
+        score: number;
+        direction: string;
+        evidence_json: string;
+        evaluation_snapshot_json: string;
+      };
+      const batchSize = 500;
+      let cursor = 0;
+      let rewritten = 0;
+      for (;;) {
+        const rows = tx.all<RebuildRow>(sql`
+          SELECT s.rowid AS rid, m.new_id, s.strategy_id, s.strategy_version_id, s.run_id,
+                 s.rule_id, s.stock_id, s.ts, s.score, s.direction,
+                 s.evidence_json, s.evaluation_snapshot_json
+          FROM strategy_signals s
+          JOIN signal_id_map m ON m.old_id = s.id
+          WHERE s.rowid > ${cursor}
+          ORDER BY s.rowid
+          LIMIT ${batchSize}
+        `);
+        if (rows.length === 0) break;
+        cursor = rows[rows.length - 1]?.rid ?? cursor;
+        const values = rows.map(
+          (row) => sql`(
+            ${row.new_id}, ${row.strategy_id}, ${row.strategy_version_id}, ${row.run_id},
+            ${row.rule_id}, ${row.stock_id}, ${row.ts}, ${row.score}, ${row.direction},
+            ${decodeJsonBlobToText(row.evidence_json)},
+            ${decodeJsonBlobToText(row.evaluation_snapshot_json)}
+          )`,
+        );
+        tx.run(sql`
+          INSERT INTO strategy_signals_rebuild (
+            id, strategy_id, strategy_version_id, run_id, rule_id, stock_id,
+            ts, score, direction, evidence_json, evaluation_snapshot_json
+          ) VALUES ${sql.join(values, sql`, `)}
+        `);
+        rewritten += rows.length;
+      }
+      tx.run(sql`DROP TABLE strategy_signals`);
+      tx.run(sql`ALTER TABLE strategy_signals_rebuild RENAME TO strategy_signals`);
+      tx.run(sql`
+        CREATE UNIQUE INDEX strategy_signals_run_event_unique
+        ON strategy_signals (run_id, rule_id, stock_id, ts)
+      `);
+      tx.run(sql`
+        CREATE INDEX strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)
+      `);
+      tx.run(sql`CREATE INDEX strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`);
+      tx.run(sql`CREATE INDEX strategy_signals_run_ts_idx ON strategy_signals (run_id, ts)`);
+
+      // 3) 观察表：source_id 跟着换（其余来源保持原值）。
+      tx.run(sql`
+        CREATE TABLE signal_observations_rebuild (
+          source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+          baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL,
+          close_price REAL, return_pct REAL, max_favorable_excursion_pct REAL,
+          max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
+          benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
+          unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
+          attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
+          next_attempt_at INTEGER, last_error_kind TEXT,
+          PRIMARY KEY (source_kind, source_id, horizon)
+        ) WITHOUT ROWID
+      `);
+      tx.run(sql`
+        INSERT INTO signal_observations_rebuild (
+          source_kind, source_id, stock_id, baseline_price, baseline_at, horizon,
+          close_price, return_pct, max_favorable_excursion_pct, max_adverse_excursion_pct,
+          benchmark_return_pct, benchmark_status, status, provenance, unavailable_reason,
+          observed_at, due_at, attempt_count, last_attempt_at, next_attempt_at, last_error_kind
+        )
+        SELECT o.source_kind,
+               COALESCE(m.new_id, o.source_id),
+               o.stock_id, o.baseline_price, o.baseline_at, o.horizon,
+               o.close_price, o.return_pct, o.max_favorable_excursion_pct,
+               o.max_adverse_excursion_pct, o.benchmark_return_pct, o.benchmark_status,
+               o.status, o.provenance, o.unavailable_reason, o.observed_at, o.due_at,
+               o.attempt_count, o.last_attempt_at, o.next_attempt_at, o.last_error_kind
+        FROM signal_observations o
+        LEFT JOIN signal_id_map m
+          ON o.source_kind = 'strategy-signal' AND m.old_id = o.source_id
+      `);
+      tx.run(sql`DROP TABLE signal_observations`);
+      tx.run(sql`ALTER TABLE signal_observations_rebuild RENAME TO signal_observations`);
+      tx.run(sql`
+        CREATE INDEX signal_observations_status_baseline_idx
+        ON signal_observations (status, baseline_at)
+      `);
+      tx.run(sql`
+        CREATE INDEX signal_observations_due_idx
+        ON signal_observations (status, due_at, next_attempt_at)
+      `);
+
+      // 4) 存量 JSON 里引用旧 signal id 的地方：递归替换成新 id。
+      const lookup = (value: string): string | undefined =>
+        tx.all<{ new_id: string }>(sql`SELECT new_id FROM signal_id_map WHERE old_id = ${value}`)[0]
+          ?.new_id;
+      const rewrite = (value: unknown): unknown => {
+        if (typeof value === 'string') {
+          if (value.length < 40 || !value.includes(':')) return value;
+          return lookup(value) ?? value;
+        }
+        if (Array.isArray(value)) return value.map((item) => rewrite(item));
+        if (value !== null && typeof value === 'object') {
+          return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+              key,
+              rewrite(item),
+            ]),
+          );
+        }
+        return value;
+      };
+      const adviceRows = tx.all<{ id: string; based_on: string }>(
+        sql`SELECT id, based_on FROM advices WHERE based_on LIKE '%strategy-run-%'`,
+      );
+      for (const row of adviceRows) {
+        tx.run(
+          sql`UPDATE advices SET based_on = ${JSON.stringify(rewrite(JSON.parse(row.based_on)))} WHERE id = ${row.id}`,
+        );
+      }
+      const planRows = tx.all<{ version_id: string; plan_json: string }>(
+        sql`SELECT version_id, plan_json FROM trading_plans WHERE plan_json LIKE '%strategy-run-%'`,
+      );
+      for (const row of planRows) {
+        tx.run(
+          sql`UPDATE trading_plans SET plan_json = ${JSON.stringify(rewrite(JSON.parse(row.plan_json)))} WHERE version_id = ${row.version_id}`,
+        );
+      }
+
+      tx.run(sql`DROP TABLE signal_id_map`);
+      tx.run(sql`
+        INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+        VALUES (${migrationId}, ${Date.now()}, ${migrationId}, ${JSON.stringify({
+          rewritten,
+          advices: adviceRows.length,
+          plans: planRows.length,
+        })})
+        ON CONFLICT(id) DO UPDATE SET
+          applied_at = excluded.applied_at,
+          details_json = excluded.details_json
+      `);
+      console.warn(
+        `[migrate] strategy_signals: ${rewritten} 条信号改用 64 位整数 id，并压缩 JSON 列`,
+      );
+    },
+    { behavior: 'immediate' },
+  );
+};
+
+/**
+ * 回退 strategy_signals 的 JSON 压缩：单行只有 50–250 字节，gzip 头 + base64 反而更大
+ * （实测 evidence 82.7MB → 253.6MB、snapshot 341.8MB → 368.6MB）。只保留 id 改造，
+ * 这两列恢复明文 JSON。幂等：没有压缩前缀的行时直接返回。
+ */
+const migrateStrategySignalJsonToPlain = (db: DrizzleDb): void => {
+  const migrationId = 'strategy-signal-json-plain-v1';
+  const applied = db.all<{ id: string }>(
+    sql`SELECT id FROM schema_migrations WHERE id = ${migrationId}`,
+  )[0];
+  if (applied !== undefined) return;
+  const compressed =
+    db.all<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM strategy_signals
+    WHERE evidence_json LIKE 'zlib+base64:%' OR evaluation_snapshot_json LIKE 'zlib+base64:%'
+  `)[0]?.n ?? 0;
+  if (compressed === 0) {
+    db.run(sql`
+      INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+      VALUES (${migrationId}, ${Date.now()}, ${migrationId}, '{"rewritten":0}')
+      ON CONFLICT(id) DO NOTHING
+    `);
+    return;
+  }
+  db.transaction(
+    (tx) => {
+      tx.run(sql`
+        CREATE TABLE strategy_signals_rebuild (
+          id TEXT PRIMARY KEY,
+          strategy_id TEXT NOT NULL,
+          strategy_version_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          rule_id TEXT NOT NULL,
+          stock_id TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          score REAL NOT NULL,
+          direction TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          evaluation_snapshot_json TEXT NOT NULL
+        )
+      `);
+      type RebuildRow = {
+        rid: number;
+        id: string;
+        strategy_id: string;
+        strategy_version_id: string;
+        run_id: string;
+        rule_id: string;
+        stock_id: string;
+        ts: number;
+        score: number;
+        direction: string;
+        evidence_json: string;
+        evaluation_snapshot_json: string;
+      };
+      let cursor = 0;
+      let rewritten = 0;
+      for (;;) {
+        const rows = tx.all<RebuildRow>(sql`
+          SELECT rowid AS rid, id, strategy_id, strategy_version_id, run_id, rule_id,
+                 stock_id, ts, score, direction, evidence_json, evaluation_snapshot_json
+          FROM strategy_signals
+          WHERE rowid > ${cursor}
+          ORDER BY rowid
+          LIMIT 500
+        `);
+        if (rows.length === 0) break;
+        cursor = rows[rows.length - 1]?.rid ?? cursor;
+        const values = rows.map(
+          (row) => sql`(
+            ${row.id}, ${row.strategy_id}, ${row.strategy_version_id}, ${row.run_id},
+            ${row.rule_id}, ${row.stock_id}, ${row.ts}, ${row.score}, ${row.direction},
+            ${decodeJsonBlobToText(row.evidence_json)},
+            ${decodeJsonBlobToText(row.evaluation_snapshot_json)}
+          )`,
+        );
+        tx.run(sql`
+          INSERT INTO strategy_signals_rebuild (
+            id, strategy_id, strategy_version_id, run_id, rule_id, stock_id,
+            ts, score, direction, evidence_json, evaluation_snapshot_json
+          ) VALUES ${sql.join(values, sql`, `)}
+        `);
+        rewritten += rows.length;
+      }
+      tx.run(sql`DROP TABLE strategy_signals`);
+      tx.run(sql`ALTER TABLE strategy_signals_rebuild RENAME TO strategy_signals`);
+      tx.run(sql`
+        CREATE UNIQUE INDEX strategy_signals_run_event_unique
+        ON strategy_signals (run_id, rule_id, stock_id, ts)
+      `);
+      tx.run(sql`
+        CREATE INDEX strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)
+      `);
+      tx.run(sql`CREATE INDEX strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`);
+      tx.run(sql`CREATE INDEX strategy_signals_run_ts_idx ON strategy_signals (run_id, ts)`);
+      tx.run(sql`
+        INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+        VALUES (${migrationId}, ${Date.now()}, ${migrationId}, ${JSON.stringify({ rewritten })})
+        ON CONFLICT(id) DO UPDATE SET
+          applied_at = excluded.applied_at,
+          details_json = excluded.details_json
+      `);
+      console.warn(`[migrate] strategy_signals: ${rewritten} 条信号 JSON 回退为明文`);
+    },
+    { behavior: 'immediate' },
+  );
+};
+
+const migrateCompressStrategyResults = (db: DrizzleDb): void => {
+  const migrationId = 'strategy-run-results-zlib-v1';
+  const applied = db.all<{ id: string }>(
+    sql`SELECT id FROM schema_migrations WHERE id = ${migrationId}`,
+  )[0];
+  if (applied !== undefined) return;
+  const pending = db.all<{ id: string }>(sql`
+    SELECT id FROM strategy_runs
+    WHERE results_json IS NOT NULL AND results_json NOT LIKE 'zlib+base64:%'
+  `);
+  let compressed = 0;
+  let skipped = 0;
+  for (const { id } of pending) {
+    const stored = db.all<{ results_json: string | null }>(
+      sql`SELECT results_json FROM strategy_runs WHERE id = ${id}`,
+    )[0]?.results_json;
+    if (stored === null || stored === undefined || stored.startsWith('zlib+base64:')) continue;
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      skipped += 1;
+      continue;
+    }
+    const encoded = `zlib+base64:${gzipSync(JSON.stringify(parsed), { level: 6 }).toString('base64')}`;
+    db.run(sql`UPDATE strategy_runs SET results_json = ${encoded} WHERE id = ${id}`);
+    compressed += 1;
+  }
+  db.run(sql`
+    INSERT INTO schema_migrations (id, applied_at, checksum, details_json)
+    VALUES (${migrationId}, ${Date.now()}, ${migrationId}, ${JSON.stringify({ compressed, skipped })})
+    ON CONFLICT(id) DO UPDATE SET
+      applied_at = excluded.applied_at,
+      details_json = excluded.details_json
+  `);
+  if (compressed > 0) {
+    console.warn(`[migrate] strategy_runs: 压缩 ${compressed} 条存量逐股明细`);
+  }
+};
+
 /** createDrizzleRepos 的返回句柄：repos + db + close()。 */
 export interface DrizzleReposHandle {
   readonly repos: RepositoryRegistry;
@@ -1934,6 +2504,7 @@ export const createDrizzleRepos = (
     limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db),
     marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db),
     marketRoomEvent: new DrizzleMarketRoomEventRepository(db),
+    limitUpBoardHistory: new DrizzleLimitUpBoardHistoryRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),
@@ -1944,6 +2515,7 @@ export const createDrizzleRepos = (
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
+    adjustmentFactor: new DrizzleAdjustmentFactorRepository(db),
     minuteBar: new DrizzleMinuteBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),

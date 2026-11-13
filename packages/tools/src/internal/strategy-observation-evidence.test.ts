@@ -1,4 +1,4 @@
-import type { SignalObservation, StrategySignal } from '@luoome/core';
+import { type SignalObservation, type StrategySignal, signalObservationId } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -52,10 +52,11 @@ const observation = (
 describe('StrategyObservationEvidence', () => {
   it('统一 active horizon、关联校验、stock-day-horizon 去重与 expected missing', async () => {
     const ctx = await buildTestContext();
-    const signals = [signal('signal-1'), signal('signal-2', '002594.SZ')];
+    const signals = [signal('signal-1'), signal('signal-2', '002594.SZ'), signal('signal-3')];
     await ctx.repos.signalObservation.save(observation('complete', 'signal-1'));
+    // 同一 stock-day-horizon 的重复样本只能来自不同 signal（自然键已禁止同源重复）。
     await ctx.repos.signalObservation.save(
-      observation('pending-duplicate', 'signal-1', {
+      observation('pending-duplicate', 'signal-3', {
         status: 'pending',
         closePrice: undefined,
         returnPct: undefined,
@@ -80,11 +81,12 @@ describe('StrategyObservationEvidence', () => {
       sourceLabel: 'test',
     });
 
-    expect(evidence.observations.map((item) => item.id)).toEqual(['complete']);
-    expect(evidence.sampledObservations.map((item) => item.id)).toEqual(['complete']);
+    const completeId = signalObservationId('strategy-signal', 'signal-1', 't1');
+    expect(evidence.observations.map((item) => item.id)).toEqual([completeId]);
+    expect(evidence.sampledObservations.map((item) => item.id)).toEqual([completeId]);
     expect(evidence.observationLinks).toEqual([
       expect.objectContaining({
-        observationId: 'complete',
+        observationId: completeId,
         signalId: 'signal-1',
         stockId: '600519.SH',
         horizon: 't1',
@@ -92,7 +94,7 @@ describe('StrategyObservationEvidence', () => {
     ]);
     expect(evidence.missingByHorizon).toEqual({ t1: 1, t3: 2, t5: 2 });
     expect(evidence.truncated).toBe(false);
-    expect(evidence.limitations.join(' ')).toContain('wrong-stock');
+    expect(evidence.limitations.join(' ')).toContain('300750.SZ');
     expect(evidence.limitations.join(' ')).toContain('T+20');
   });
 

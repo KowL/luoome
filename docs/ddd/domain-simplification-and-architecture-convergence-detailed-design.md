@@ -1,6 +1,6 @@
 # LUOOME 领域收敛、去冗余与架构减负详细设计
 
-> **状态**：已执行（2026-11-10）。S1.1–S1.3、S2.1–S2.3、S3.1–S3.3、S4 全部落地并通过门禁（typecheck / lint / test / test:db / test:web 绿；仅既有 flaky DSH 集成用例在全量并发下超时、隔离通过）。结果：表 73→38、注册 Tool 152→34、`apps/web/src/server.ts` 3,040→399 行、手写 memory Repository 31→0。未完成项：`signal_observations` 并入 `strategy_signals`（§6 剩余）、workflow 26→12 的进一步合并、`daily_bar_revisions` 保留（strict backtest v2/replay 的 PIT 依赖，与 §6 结论不同）。
+> **状态**：已执行（2026-11-10）。S1.1–S1.3、S2.1–S2.3、S3.1–S3.3、S4 全部落地并通过门禁（typecheck / lint / test / test:db / test:web 绿；仅既有 flaky DSH 集成用例在全量并发下超时、隔离通过）。结果：表 73→38、注册 Tool 152→34、`apps/web/src/server.ts` 3,040→399 行、手写 memory Repository 31→0。workflow 26→12 的合并已于 2026-11-13 完成（12 个注册入口，其余为 defineOperation 管线）；同日新增 `limit_up_board_history`（炸板/断板 PIT），表数 38→39。`signal_observations` 合并项已于 2026-11-13 拍板撤销（保留独立表 + 自然键，理由见 §6 决策记录）。`daily_bar_revisions` 原“保留”结论已于 2026-11-12 作废：表已删除，日线改为原始价 + `adjustment_factors` 读时投影，replay 按 `dataAsOf` 截断。
 > **日期**：2026-11-10
 > **前置文档**：[AI Investment OS + DSH 转型详细设计](./luoome-dsh-transformation-detailed-design.md)
 > **目标**：在完成 M1（移除多租户 `hosted` 体系，净删 45,285 行代码）的基础上，对单机版代码库进行深度的**领域去重、超前功能裁剪、基础设施减负与 Agent Tool 收敛**，将系统从“堆叠了 7 个历史阶段概念的膨胀单体”收敛为“围绕 DeepSeek Harness 的精悍投研内核”。
@@ -320,6 +320,20 @@ flowchart LR
 | **建议、报告与复盘（8 张 → 5 张）** | `advices`<br>`advice_outcomes`<br>`reports`<br>`decision_reviews`<br>` workflow_runs` | `decision_review_revisions`<br>`decision_review_trade_links`<br>`decision_write_receipts` | 简化 `DecisionReview` 为单表，移除 3 张重型版本链与幂等回执表（净减 3 张表） |
 | **研究知识库与工作台（13 张 → 2 张）** | `research_document_index`<br>`research_document_fts` | `investment_research`<br>`investment_consensus`<br>`investment_tracking`<br>`research_topic_index`<br>`research_hypothesis_versions`<br>`research_topic_documents`<br>`research_subject_links`<br>`research_document_chunks`<br>`research_chunk_embeddings`<br>`research_embedding_index_states`<br>`research_vault_sync_runs` | 移除 `InvestmentWorkspace` 3 张表（并入 `reports` + `watchlists`）；移除 `ResearchVault` 的手写分块向量表、假设版本链与 Git 同步表，仅保留文档索引与 SQLite FTS5 全文检索（净减 11 张表） |
 | **交易计划、盯盘与对话（10 张 → 8 张）** | `trading_plans`<br>`alert_plans`<br>`watch_triggers`<br>`watch_rule_states`<br>`notifications`<br>`chat_sessions`<br>`chat_messages` | `watch_execution_lease`<br>`watch_runs` | 单机盯盘无需数据库租约锁表；盯盘批次记录统一记入 `workflow_runs`（净减 2 张表） |
+
+#### §6 决策记录：`signal_observations` 保留独立表（2026-11-13）
+
+原表把 `signal_observations` 并入 `strategy_signals`，最终决定**不合并**：
+
+- 观察来源不止策略信号：`watch-trigger`（以及读兼容的 `tactic-signal`）没有对应的
+  `strategy_signals` 行，合并后这些观察要么丢失，要么需要在信号表里造空信号行。
+- 观察的自然键是 `(source_kind, source_id, horizon)`，一个信号最多产生 3 行；合并后
+  `strategy_signals` 需新增 7 个可空观察列，并让主键/唯一索引在“信号行”和“观察行”之间分叉。
+- 存储开销的主因是 100 字符信号 id 与 `source_id` 复制；这两项已通过 64 位整数信号 id、
+  自然键主键和 WITHOUT ROWID 消除，合并不再带来数量级收益。
+- 查询边界不同：信号按 run/strategy/stock 查，观察按 source/status/due 查，索引无法共用。
+
+因此保留独立表；只有未来 `watch-trigger` 观察下线且需要进一步压缩表数时，才重新评估。
 
 ---
 
