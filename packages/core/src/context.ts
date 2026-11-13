@@ -12,6 +12,7 @@ import type { FetchNewsQuery, NewsList } from './entity/news.js';
 import type { NorthboundFlowQuery, NorthboundFlowSeries } from './entity/northbound-flow.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
+import type { SectorCatalogAdapterLike } from './entity/sector-catalog.js';
 import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
@@ -162,6 +163,8 @@ export interface ToolContextAdapters {
   readonly market: MarketDataAdapterLike;
   readonly llm: LLMAdapterLike;
   readonly stockUniverse?: StockUniverseManagerLike;
+  /** 行业 / 概念目录与成分同步用（扶摇同花顺指数目录）；未配置时同步 tool 明确失败。 */
+  readonly sectorCatalog?: SectorCatalogAdapterLike;
   /** send_notification tool 用；装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
   /** Research Vault 本地 Markdown 适配器（Obsidian 或目录实现）。 */
@@ -303,7 +306,6 @@ export interface DragonTigerFlowManagerLike {
   /** 进程内源健康观测（registry.describe()）。 */
   status(): readonly SourceStatus[];
 }
-
 
 /**
  * 北向资金历史流 manager 投影。

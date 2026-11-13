@@ -28,6 +28,7 @@ import {
   DrizzleQuoteRepository,
   DrizzleReportRepository,
   DrizzleResearchIndexRepository,
+  DrizzleSectorCatalogRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
@@ -316,6 +317,90 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS stock_universe_sync_runs_source_coverage_finished_idx
     ON stock_universe_sync_runs (source, coverage, finished_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_catalog_entries (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      vendor_code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      state TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      retired_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS sector_catalog_entries_vendor_unique
+    ON sector_catalog_entries (source, kind, vendor_code)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_catalog_entries_kind_state_idx
+    ON sector_catalog_entries (kind, state)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_memberships (
+      sector_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      state TEXT NOT NULL,
+      member_status TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      missing_since INTEGER,
+      last_sync_id TEXT NOT NULL,
+      CONSTRAINT sector_memberships_pk PRIMARY KEY (sector_id, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_memberships_stock_state_idx
+    ON sector_memberships (stock_id, state)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_memberships_sector_state_idx
+    ON sector_memberships (sector_id, state)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_change_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      sector_id TEXT NOT NULL,
+      stock_id TEXT,
+      kind TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      sync_id TEXT NOT NULL,
+      previous_value TEXT,
+      next_value TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_change_events_sector_idx
+    ON sector_change_events (sector_id, seq)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_change_events_stock_idx
+    ON sector_change_events (stock_id, seq)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS sector_sync_runs (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      applied_at INTEGER NOT NULL,
+      observed_sectors INTEGER NOT NULL DEFAULT 0,
+      created_sectors INTEGER NOT NULL DEFAULT 0,
+      renamed_sectors INTEGER NOT NULL DEFAULT 0,
+      retired_sectors INTEGER NOT NULL DEFAULT 0,
+      observed_stocks INTEGER NOT NULL DEFAULT 0,
+      created_memberships INTEGER NOT NULL DEFAULT 0,
+      removed_memberships INTEGER NOT NULL DEFAULT 0,
+      reactivated_memberships INTEGER NOT NULL DEFAULT 0,
+      failures_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS sector_sync_runs_source_applied_idx
+    ON sector_sync_runs (source, applied_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS limit_up_ladder_snapshots (
@@ -1775,6 +1860,7 @@ export const createDrizzleRepos = (
     decisionReview: new DrizzleDecisionReviewRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
+    sectorCatalog: new DrizzleSectorCatalogRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),

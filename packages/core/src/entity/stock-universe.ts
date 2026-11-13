@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { StockCodeSchema } from '../types/branded.js';
+import type { Stock } from './stock.js';
 import { ExchangeSchema } from './stock.js';
 
 export const MarketCoverageSchema = z.enum([
@@ -84,6 +85,12 @@ export const StockUniverseSnapshotSchema = z
 export type StockUniverseSnapshot = z.infer<typeof StockUniverseSnapshotSchema>;
 
 export type StockUniverseMembershipState = 'active' | 'missing';
+
+/** 当前目录成员 + 聚合挂牌状态：停牌 / 退市只标注，不删除股票身份。 */
+export interface StockUniverseMember {
+  readonly stock: Stock;
+  readonly listingStatus: ListingStatus;
+}
 
 export interface StockUniverseSyncRun {
   readonly id: string;

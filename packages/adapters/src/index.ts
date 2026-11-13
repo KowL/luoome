@@ -62,6 +62,8 @@ export * from './northbound-flow/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
 export * from './research-vault/index.js';
+// 行业 / 概念目录与成分（扶摇同花顺指数目录）
+export * from './sector-catalog/factory.js';
 // 行业板块行情（东方财富 push2 板块列表公开 API）
 export * from './sector-quote/eastmoney.js';
 export * from './sector-quote/factory.js';

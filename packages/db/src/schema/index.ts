@@ -23,6 +23,13 @@ import type {
   ProviderStatus,
   Quantity,
   Report,
+  SectorCatalogState,
+  SectorChangeKind,
+  SectorKind,
+  SectorMemberStatus,
+  SectorMembershipState,
+  SectorSyncFailure,
+  SectorSyncStatus,
   SignalObservation,
   StockCode,
   Strategy,
@@ -185,6 +192,96 @@ export const stockUniverseSyncRuns = sqliteTable(
       t.coverage,
       t.finishedAt,
     ),
+  }),
+);
+
+/**
+ * 行业 / 概念目录。内部 id 是本地生成的不透明标识，vendor_code 只用于外部请求与溯源；
+ * (source, kind, vendor_code) 唯一，重复同步只会更新观测时间而不会产生新身份。
+ */
+export const sectorCatalogEntries = sqliteTable(
+  'sector_catalog_entries',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<SectorKind>().notNull(),
+    source: text('source').notNull(),
+    vendorCode: text('vendor_code').notNull(),
+    name: text('name').notNull(),
+    state: text('state').$type<SectorCatalogState>().notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    retiredAt: integer('retired_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    vendorUnique: uniqueIndex('sector_catalog_entries_vendor_unique').on(
+      t.source,
+      t.kind,
+      t.vendorCode,
+    ),
+    kindStateIdx: index('sector_catalog_entries_kind_state_idx').on(t.kind, t.state),
+  }),
+);
+
+/** 成分多对多；成员消失只标记 missing，不删除关系与首次观测时间。 */
+export const sectorMemberships = sqliteTable(
+  'sector_memberships',
+  {
+    sectorId: text('sector_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    source: text('source').notNull(),
+    state: text('state').$type<SectorMembershipState>().notNull(),
+    memberStatus: text('member_status').$type<SectorMemberStatus>().notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    missingSince: integer('missing_since', { mode: 'timestamp_ms' }),
+    lastSyncId: text('last_sync_id').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sectorId, t.stockId], name: 'sector_memberships_pk' }),
+    stockStateIdx: index('sector_memberships_stock_state_idx').on(t.stockId, t.state),
+    sectorStateIdx: index('sector_memberships_sector_state_idx').on(t.sectorId, t.state),
+  }),
+);
+
+/** 目录与成分变更 append-only；不覆盖历史，也不因再次观测相同事实而重复写入。 */
+export const sectorChangeEvents = sqliteTable(
+  'sector_change_events',
+  {
+    seq: integer('seq').primaryKey({ autoIncrement: true }),
+    sectorId: text('sector_id').notNull(),
+    stockId: text('stock_id'),
+    kind: text('kind').$type<SectorChangeKind>().notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    syncId: text('sync_id').notNull(),
+    previousValue: text('previous_value'),
+    nextValue: text('next_value'),
+  },
+  (t) => ({
+    sectorIdx: index('sector_change_events_sector_idx').on(t.sectorId, t.seq),
+    stockIdx: index('sector_change_events_stock_idx').on(t.stockId, t.seq),
+  }),
+);
+
+/** 一次同步的审计与幂等凭据；同一 id 重放返回原摘要。 */
+export const sectorSyncRuns = sqliteTable(
+  'sector_sync_runs',
+  {
+    id: text('id').primaryKey(),
+    source: text('source').notNull(),
+    status: text('status').$type<SectorSyncStatus>().notNull(),
+    appliedAt: integer('applied_at', { mode: 'timestamp_ms' }).notNull(),
+    observedSectors: integer('observed_sectors').notNull().default(0),
+    createdSectors: integer('created_sectors').notNull().default(0),
+    renamedSectors: integer('renamed_sectors').notNull().default(0),
+    retiredSectors: integer('retired_sectors').notNull().default(0),
+    observedStocks: integer('observed_stocks').notNull().default(0),
+    createdMemberships: integer('created_memberships').notNull().default(0),
+    removedMemberships: integer('removed_memberships').notNull().default(0),
+    reactivatedMemberships: integer('reactivated_memberships').notNull().default(0),
+    failures: text('failures_json', { mode: 'json' }).$type<SectorSyncFailure[]>().notNull(),
+  },
+  (t) => ({
+    sourceAppliedIdx: index('sector_sync_runs_source_applied_idx').on(t.source, t.appliedAt),
   }),
 );
 
@@ -1122,6 +1219,10 @@ export const schema = {
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
+  sectorCatalogEntries,
+  sectorMemberships,
+  sectorChangeEvents,
+  sectorSyncRuns,
   limitUpLadderSnapshots,
   holdings,
   trades,
