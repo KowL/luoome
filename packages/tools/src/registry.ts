@@ -19,6 +19,7 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
 import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
+import { getMarketRoomSectorDetailTool } from './tools/market-room-sector-detail.js';
 import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
 import {
   collectMarketSnapshotTool,
@@ -203,4 +204,5 @@ export const toolRegistry: Registry = createRegistry([
   getMarketRoomSectorsTool,
   // 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 集中度
   getMarketRoomAmountDistributionTool,
+  getMarketRoomSectorDetailTool,
 ]);

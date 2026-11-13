@@ -5806,6 +5806,75 @@ type RoomAmountBody = {
   };
 };
 
+/**
+ * 作战室板块详情 Web API（ticket #39）：走势、成分明细与多板块对照。
+ */
+type RoomSectorDetailBody = {
+  ok: boolean;
+  error?: { kind: string; message?: string };
+  data?: {
+    detail: {
+      state: 'ready' | 'empty';
+      emptyReason?: string;
+      sector: { name: string } | null;
+      anchor: { sampledAt: string } | null;
+      window: 'w5' | 'w15';
+      trend: {
+        method: string;
+        methodNote: string;
+        indexFallbackReason: string | null;
+        points: Array<{
+          sampledAt: string;
+          value: number | null;
+          sampleCount: number;
+          missingCount: number;
+          status: string;
+          warnings: string[];
+        }>;
+      } | null;
+      comparisons: Array<{ name: string; points: Array<{ value: number | null }> }>;
+      unresolvedSectorIds: string[];
+      breadth: {
+        advanceRatio: number | null;
+        advancing: number;
+        declining: number;
+        sampleCount: number;
+        memberCount: number;
+      } | null;
+      day: { value: number | null } | null;
+      windowMetric: { value: number | null } | null;
+      windows: { w5: { status: string; startSampledAt: string | null } };
+      turnover: { value: number | null; numeratorAmount: number | null } | null;
+      limitUp: { value: number | null } | null;
+      members: Array<{
+        stockId: string;
+        code: string;
+        name: string | null;
+        inBatch: boolean;
+        dayChangePct: number | null;
+        windowChangePct: number | null;
+        windowAmountSharePct: number | null;
+        sealed: boolean | null;
+        memberStatus: string;
+      }>;
+      leaderOrder: Array<{
+        sampledAt: string;
+        reordered: boolean;
+        entries: Array<{ name: string; rank: number }>;
+        missingSectorIds: string[];
+      }>;
+      coverage: {
+        batchCount: number;
+        trendPointCount: number;
+        memberCount: number;
+        comparisonCount: number;
+        unresolvedComparisonCount: number;
+      };
+      notes: string[];
+    };
+  };
+};
+
 const readRoomAmount = async (
   web: Hono,
   query = '',
@@ -5951,5 +6020,183 @@ describe('Web 作战室成交分布 API', () => {
     expect(invalid.status).toBe(400);
     expect(invalid.body.ok).toBe(false);
     expect(invalid.body.error?.kind).toBe('invalid_input');
+  });
+});
+
+const roomSectorIds = async (ctx: ToolContext): Promise<Map<string, string>> => {
+  const sectors = await ctx.repos.sectorCatalog.listSectors({ state: 'active' });
+  return new Map(sectors.map((sector) => [sector.name, sector.id]));
+};
+
+const readRoomSectorDetail = async (
+  web: Hono,
+  query: string,
+): Promise<{ readonly status: number; readonly body: RoomSectorDetailBody }> => {
+  const response = await web.fetch(
+    new Request(`http://test/api/market/room/sector-detail${query}`),
+  );
+  return { status: response.status, body: (await response.json()) as RoomSectorDetailBody };
+};
+
+describe('Web 作战室板块详情 API', () => {
+  it('返回走势、独立上涨比例、成分明细与对照序列，读取不触发采集', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, ctx, adapter } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedRoomSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:00', marketDayItems(0)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:10', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(2)));
+    await ctx.repos.limitUpLadderSnapshot.save(roomLadder(['600519', '600036']));
+    const ids = await roomSectorIds(ctx);
+
+    const { status, body } = await readRoomSectorDetail(
+      web,
+      `?sectorId=${encodeURIComponent(ids.get('领涨组') ?? '')}&window=w5&compare=${encodeURIComponent(ids.get('重叠概念') ?? '')}`,
+    );
+
+    expect(status).toBe(200);
+    const detail = body.data?.detail;
+    expect(detail?.state).toBe('ready');
+    expect(detail?.sector?.name).toBe('领涨组');
+    expect(detail?.anchor?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(detail?.trend).toMatchObject({
+      method: 'constituent_equal_weight',
+      points: [
+        { sampledAt: '2026-09-28T02:00:00.000Z', value: 100 },
+        { sampledAt: '2026-09-28T02:10:00.000Z' },
+        { sampledAt: '2026-09-28T02:15:00.000Z' },
+      ],
+    });
+    expect(detail?.trend?.indexFallbackReason).toContain('不用大盘指数冒充');
+    expect(detail?.breadth?.advanceRatio).not.toBeNull();
+    expect(detail?.breadth?.memberCount).toBe(3);
+    expect(detail?.windowMetric?.value).not.toBeNull();
+    expect(detail?.windows.w5).toMatchObject({
+      status: 'complete',
+      startSampledAt: '2026-09-28T02:10:00.000Z',
+    });
+    expect(detail?.turnover?.value).not.toBeNull();
+    expect(detail?.limitUp?.value).toBe(1);
+    expect(detail?.members).toHaveLength(3);
+    expect(detail?.members.filter((member) => member.sealed === true)).toHaveLength(1);
+    expect(detail?.members.every((member) => member.name !== null)).toBe(true);
+    expect(detail?.members.every((member) => member.windowChangePct !== null)).toBe(true);
+    expect(detail?.members.every((member) => member.windowAmountSharePct !== null)).toBe(true);
+    expect(detail?.comparisons.map((series) => series.name)).toEqual(['重叠概念']);
+    expect(detail?.coverage).toMatchObject({
+      batchCount: 3,
+      trendPointCount: 3,
+      memberCount: 3,
+      comparisonCount: 1,
+      unresolvedComparisonCount: 0,
+    });
+    expect(detail?.leaderOrder).toHaveLength(3);
+    expect(adapter.envelopeCalls).toBe(0);
+  });
+
+  it('at 取该时点及之前最近的批次；at 之后批次不出现在走势里', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedRoomSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:00', marketDayItems(0)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:10', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(2)));
+    const ids = await roomSectorIds(ctx);
+
+    const { status, body } = await readRoomSectorDetail(
+      web,
+      `?sectorId=${encodeURIComponent(ids.get('领涨组') ?? '')}&window=w5&at=${encodeURIComponent('2026-09-28T10:12:00+08:00')}`,
+    );
+
+    expect(status).toBe(200);
+    expect(body.data?.detail.anchor?.sampledAt).toBe('2026-09-28T02:10:00.000Z');
+    expect(body.data?.detail.trend?.points.map((point) => point.sampledAt)).toEqual([
+      '2026-09-28T02:00:00.000Z',
+      '2026-09-28T02:10:00.000Z',
+    ]);
+    expect(body.data?.detail.windows.w5.status).toBe('unavailable');
+    expect(body.data?.detail.windowMetric?.value).toBeNull();
+  });
+
+  it('缺样本批次让走势时点标 partial，成分缺价时涨幅为 null 且页面可下钻代码', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+    await seedRoomSectors(ctx);
+    const partialItems = marketDayItems(2).filter((entry) => entry.id !== roomLeadIds[0]);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:10', marketDayItems(1)));
+    await ctx.repos.marketSnapshotBatch.publish(
+      buildMarketSnapshotBatch({
+        sampledAt: marketRoomClock('10:15'),
+        snapshot: {
+          coverage: 'CN_A_SHARES_SH_SZ',
+          source: 'market-day-fixture',
+          fetchedAt: marketRoomClock('10:15'),
+          items: [...partialItems],
+          completeness: {
+            expectedCount: marketDayItems(2).length,
+            receivedCount: partialItems.length,
+            missingCount: 1,
+            duplicateCount: 0,
+            complete: false,
+          },
+        },
+      }),
+    );
+    const ids = await roomSectorIds(ctx);
+
+    const { body } = await readRoomSectorDetail(
+      web,
+      `?sectorId=${encodeURIComponent(ids.get('领涨组') ?? '')}&window=w5`,
+    );
+
+    const point = body.data?.detail.trend?.points.at(-1);
+    expect(point?.missingCount).toBe(1);
+    expect(point?.status).toBe('partial');
+    expect(point?.warnings.join(' ')).toContain('missing_trend_price');
+    const missing = body.data?.detail.members.find((member) => member.stockId === roomLeadIds[0]);
+    expect(missing).toMatchObject({ inBatch: false, name: null, dayChangePct: null });
+    expect(missing?.code).toBe((roomLeadIds[0] ?? '').split('.')[0] ?? '');
+    expect(body.data?.detail.members.filter((member) => member.inBatch)).toHaveLength(2);
+    expect(body.data?.detail.members.some((member) => member.name === null)).toBe(true);
+  });
+
+  it('空态与参数校验沿用既有 market 错误模型', async () => {
+    const now = marketRoomClock('10:16:00');
+    const { app: web, ctx } = await marketRoomApp(() => new Date(now.getTime()));
+
+    const noBatch = await readRoomSectorDetail(web, '?sectorId=anything&window=w15');
+    expect(noBatch.status).toBe(200);
+    expect(noBatch.body.data?.detail).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      trend: null,
+      members: [],
+    });
+
+    await seedRoomSectors(ctx);
+    await ctx.repos.marketSnapshotBatch.publish(roomSectorBatch('10:15', marketDayItems(2)));
+    const notFound = await readRoomSectorDetail(web, '?sectorId=missing-sector');
+    expect(notFound.status).toBe(200);
+    expect(notFound.body.data?.detail).toMatchObject({
+      state: 'empty',
+      emptyReason: 'sector_not_found',
+      sector: null,
+    });
+
+    const missingId = await readRoomSectorDetail(web, '');
+    expect(missingId.status).toBe(400);
+    expect(missingId.body.error?.kind).toBe('invalid_input');
+
+    const invalidWindow = await readRoomSectorDetail(web, '?sectorId=anything&window=w1');
+    expect(invalidWindow.status).toBe(400);
+    expect(invalidWindow.body.error?.kind).toBe('invalid_input');
+
+    const ids = await roomSectorIds(ctx);
+    const tooManyComparisons = await readRoomSectorDetail(
+      web,
+      `?sectorId=${encodeURIComponent(ids.get('领涨组') ?? '')}&compare=a,b,c,d,e,f`,
+    );
+    expect(tooManyComparisons.status).toBe(400);
+    expect(tooManyComparisons.body.error?.kind).toBe('invalid_input');
   });
 });

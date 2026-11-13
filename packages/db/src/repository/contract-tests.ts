@@ -4856,6 +4856,47 @@ export const registerRepositoryContractTests = (
         ).resolves.toBeNull();
       });
 
+      it('按交易日列出全部批次，按采样时点升序且不跨交易日', async () => {
+        const early = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:00:00.000Z',
+          sampledAt: new Date('2026-09-28T02:00:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:01:00.000Z'),
+        });
+        const middle = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:10:00.000Z',
+          sampledAt: new Date('2026-09-28T02:10:00.000Z'),
+          fetchedAt: new Date('2026-09-28T02:11:00.000Z'),
+        });
+        const previousDay = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-25T02:15:00.000Z',
+          tradingDate: '2026-09-25',
+          sampledAt: new Date('2026-09-25T02:15:00.000Z'),
+          fetchedAt: new Date('2026-09-25T02:16:00.000Z'),
+        });
+        const bj = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_BJ|2026-09-28T02:15:00.000Z',
+          coverage: 'CN_A_SHARES_BJ',
+          sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(early);
+        await repos.marketSnapshotBatch.publish(middle);
+        await repos.marketSnapshotBatch.publish(previousDay);
+        await repos.marketSnapshotBatch.publish(bj);
+
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({ tradingDate: '2026-09-28' }),
+        ).resolves.toEqual([early, middle, bj]);
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-28',
+          }),
+        ).resolves.toEqual([early, middle]);
+        await expect(
+          repos.marketSnapshotBatch.listByTradingDate({ tradingDate: '2026-09-29' }),
+        ).resolves.toEqual([]);
+      });
+
       it('容差内多个候选时取采样时点最近的一份', async () => {
         const earlier = makeMarketSnapshotBatch({
           id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:10:00.000Z',

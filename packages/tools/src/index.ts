@@ -58,6 +58,7 @@ export * from './tools/list-workflow-runs.js';
 export * from './tools/market-outlook.js';
 export * from './tools/market-room-amount-distribution.js';
 export * from './tools/market-room-overview.js';
+export * from './tools/market-room-sector-detail.js';
 export * from './tools/market-room-sectors.js';
 export * from './tools/market-snapshot-batch.js';
 export * from './tools/news.js';

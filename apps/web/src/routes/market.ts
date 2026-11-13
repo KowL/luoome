@@ -294,6 +294,37 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
+  /**
+   * 作战室板块详情（ticket #39）：走势、成分明细与多板块对照。
+   *
+   * 参数：
+   *   sectorId (必填) 板块内部标识
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次
+   *   window (可选) w5 | w15，窗口涨幅与成交占比口径，默认 w15
+   *   compare (可选) 逗号分隔或重复出现的对照板块标识
+   *
+   * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/sector-detail', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['sectorId', 'window', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const compare = (c.req.queries('compare') ?? [])
+      .flatMap((value) => value.split(','))
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (compare.length > 0) input.compareSectorIds = compare;
+    const r = await invokeTool('get_market_room_sector_detail', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   // 作战室页面（总览 / 板块追踪 / 成交分布三视图，SPA shell）
   app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
 
