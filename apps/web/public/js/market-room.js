@@ -14,6 +14,13 @@
 'use strict';
 
 import { callApi } from './api.js';
+import {
+  fetchSectorDetail,
+  renderSectorDetailPane,
+  sectorDetailHash,
+  sectorDetailParamsFromHash,
+  toggleCompareSelection,
+} from './market-room-sector-detail.js';
 import { formatAmount } from './market-shared.js';
 import { $, el, mount, sortableHeader } from './ui.js';
 
@@ -61,8 +68,7 @@ const REFRESH_MS = 60_000;
 
 let roomEpoch = 0;
 let roomTimer = null;
-/** 板块追踪的本地交互状态（展开行只重绘，不重新请求）。 */
-const roomSectorState = { kind: 'industry', sort: 'day', window: 'w15', expanded: null };
+/** 板块追踪最近一次成功的榜单，切换分类请求失败时只在同一分类下复用。 */
 let roomSectorRanking = null;
 
 const roomSection = () => $('#route-market-room');
@@ -537,7 +543,8 @@ const sectorDetailRow = (row, ranking) => {
 
 const sectorRowPair = (row, ranking, params) => {
   const cells = sectorRowCells(row);
-  const expanded = roomSectorState.expanded === row.sectorId;
+  const detailParams = sectorDetailParamsFromHash();
+  const expanded = detailParams.sectorId === row.sectorId;
   const rankCell = el('td', 'num muted', cells.rank);
   const nameCell = el('td', '', [
     el('span', 'room-sector-name', row.name),
@@ -566,9 +573,15 @@ const sectorRowPair = (row, ranking, params) => {
   main.tabIndex = 0;
   main.setAttribute('aria-expanded', String(expanded));
   const toggle = () => {
-    roomSectorState.expanded = expanded ? null : row.sectorId;
-    const pane = roomSection()?.querySelector('.room-pane');
-    if (pane !== null) mount(pane, renderSectorsPane(roomSectorRanking, params));
+    if (expanded) {
+      window.location.hash = sectorHash(params);
+      return;
+    }
+    window.location.hash = sectorDetailHash({
+      ...params,
+      sectorId: row.sectorId,
+      compareSectorIds: detailParams.compareSectorIds,
+    });
   };
   main.addEventListener('click', toggle);
   main.addEventListener('keydown', (event) => {
@@ -625,6 +638,10 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
     ]);
   }
   const sampledAt = ranking.anchor === null ? '--' : fmtClock(ranking.anchor.sampledAt);
+  const detailSlot =
+    sectorDetailParamsFromHash().sectorId === null
+      ? null
+      : el('div', 'room-sector-detail-slot', el('p', 'room-caption', '正在读取板块详情…'));
   return el('div', 'room-sectors', [
     el('div', 'card room-card', [
       el('div', 'card-header', [
@@ -646,6 +663,7 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
         `共 ${ranking.coverage.rowCount} 个板块（目录 ${ranking.coverage.sectorCount} 个，${ranking.coverage.omittedSectorCount} 个无 active 成分未列出）`,
       ),
     ]),
+    detailSlot,
     el('div', 'card room-card', [
       el('div', 'card-header', [
         el('div', [
@@ -691,17 +709,41 @@ const fetchSectors = async (params) => {
 const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash()) => {
   const section = roomSection();
   if (section === null) return;
-  if (roomSectorState.kind !== params.kind) roomSectorState.expanded = null;
-  roomSectorState.kind = params.kind;
-  roomSectorState.sort = params.sort;
-  roomSectorState.window = params.window;
+  const detailParams = sectorDetailParamsFromHash();
   const ranking = await fetchSectors(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   if (ranking !== null) roomSectorRanking = ranking;
   // 刷新失败时只在同一分类下复用上次结果，避免把行业数据画在概念切换后。
   const fallback = roomSectorRanking?.kind === params.kind ? roomSectorRanking : null;
-  renderSectors(section, ranking ?? fallback, params);
+  const current = ranking ?? fallback;
+  renderSectors(section, current, params);
   if (ranking === null) setStatus?.('板块盘中榜刷新失败，保留上次成功结果', true);
+  if (detailParams.sectorId === null) return;
+  const detail = await fetchSectorDetail({
+    sectorId: detailParams.sectorId,
+    compareSectorIds: detailParams.compareSectorIds,
+    window: params.window,
+  });
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  const slot = roomSection()?.querySelector('.room-sector-detail-slot');
+  if (slot === null || slot === undefined) return;
+  mount(
+    slot,
+    renderSectorDetailPane(detail, {
+      ranking: current,
+      params: detailParams,
+      onToggleCompare: (sectorId) => {
+        window.location.hash = sectorDetailHash({
+          ...params,
+          sectorId: detailParams.sectorId,
+          compareSectorIds: toggleCompareSelection(detailParams.compareSectorIds, sectorId),
+        });
+      },
+      onClose: () => {
+        window.location.hash = sectorHash(params);
+      },
+    }),
+  );
 };
 
 /* ---- 页面挂载与刷新 ---- */

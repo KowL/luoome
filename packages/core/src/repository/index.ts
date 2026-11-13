@@ -222,6 +222,14 @@ export interface MarketSnapshotBatchRepository {
     readonly tradingDate: string;
     readonly sampledAt: Date;
   }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日全部已发布批次，按采样时点升序（板块详情走势用）。
+   * 只返回该交易日；没有批次时返回空数组，不跨交易日补齐。
+   */
+  listByTradingDate(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+  }): Promise<MarketSnapshotBatch[]>;
 }
 
 export interface HoldingRepository {

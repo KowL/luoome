@@ -32,6 +32,7 @@ export * from './entity/report.js';
 export * from './entity/research-brief.js';
 export * from './entity/research-vault.js';
 export * from './entity/sector-catalog.js';
+export * from './entity/sector-detail.js';
 export * from './entity/sector-intraday-ranking.js';
 export * from './entity/sector-quote.js';
 export * from './entity/signal-observation.js';
