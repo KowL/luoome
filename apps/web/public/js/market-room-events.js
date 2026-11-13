@@ -102,7 +102,7 @@ const eventSummaryText = (event) => {
 };
 
 /** 事件证据的可核对事实。 */
-const eventDetailFacts = (event) => {
+const eventDetailFacts = (event, at = null) => {
   const evidence = event?.evidence ?? {};
   const breadth = evidence.breadth ?? {};
   const window = evidence.window ?? {};
@@ -134,6 +134,14 @@ const eventDetailFacts = (event) => {
       label: '检测时点',
       value: `${fmtClock(event?.sampledAt)} · 交易日 ${event?.tradingDate ?? '--'}`,
     },
+    ...(recordedAfterReplay(event, at)
+      ? [
+          {
+            label: '记录时点',
+            value: `${fmtClock(event?.recordedAt)}（晚于回放时点 ${fmtClock(at)}，按选中事件保留）`,
+          },
+        ]
+      : []),
     {
       label: '板块',
       value:
@@ -211,7 +219,7 @@ const rotationLeadLines = (event) => {
 };
 
 /** 口径与缺失说明：方法、警告、缺失原因与换位领先样本合并去重。 */
-const eventNotes = (event) => {
+const eventNotes = (event, at = null) => {
   const evidence = event?.evidence ?? {};
   const notes = [
     evidence.ranking?.method,
@@ -227,6 +235,11 @@ const eventNotes = (event) => {
     ...(evidence.turnover?.reason ? [evidence.turnover.reason] : []),
     ...(evidence.ladder?.reason ? [evidence.ladder.reason] : []),
     ...rotationLeadLines(event),
+    ...(recordedAfterReplay(event, at)
+      ? [
+          `该事件于 ${fmtClock(event?.recordedAt)} 才记录，晚于回放时点 ${fmtClock(at)}；仅因它是当前选中事件而保留，其它事件仍按已知时点截断。`,
+        ]
+      : []),
   ];
   return [...new Set(notes.filter((note) => typeof note === 'string' && note.length > 0))];
 };
@@ -286,12 +299,27 @@ const eventsHash = ({ eventId, at = null }) => {
 };
 
 /**
- * 事件请求路径（纯函数）：回放时只带 knownAt（信息可见时点），
- * 由服务端只返回该时点之前已记录的事件；最新模式不附带任何时点参数。
+ * 事件请求路径（纯函数）：回放时带 knownAt（信息可见时点），只返回该时点之前已记录的事件；
+ * 同时把选中事件作为 includeEventId 钉住——它可能晚于已知时点才记录，
+ * 但点开它就是要看它当时的证据，服务端仍拒绝对其它事件放宽截断。
  */
-const eventsQuery = ({ at = null } = {}) => {
+const eventsQuery = ({ at = null, eventId = null } = {}) => {
   const knownAt = replayParam(at);
-  return knownAt === null ? '' : `?knownAt=${encodeURIComponent(knownAt)}`;
+  if (knownAt === null) return '';
+  const params = new URLSearchParams({ knownAt });
+  if (eventId !== null && eventId !== undefined && eventId !== '') {
+    params.set('includeEventId', eventId);
+  }
+  return `?${params.toString()}`;
+};
+
+/** 事件是否晚于回放时点才记录（服务端按 includeEventId 保留，页面需标注）。 */
+const recordedAfterReplay = (event, at = null) => {
+  if (at === null || at === undefined) return false;
+  const recordedAt = new Date(event?.recordedAt ?? Number.NaN);
+  const replayAt = new Date(at);
+  if (Number.isNaN(recordedAt.getTime()) || Number.isNaN(replayAt.getTime())) return false;
+  return recordedAt.getTime() > replayAt.getTime();
 };
 
 /* ---- DOM 渲染 ---- */
@@ -314,12 +342,12 @@ const listBlock = (title, lines) =>
         ),
   ]);
 
-const evidenceNode = (event) => {
+const evidenceNode = (event, at = null) => {
   const members = eventMemberLines(event);
   const keywordText = eventKeywordText(event);
-  const notes = eventNotes(event);
+  const notes = eventNotes(event, at);
   return el('div', 'room-event-evidence', [
-    el('div', 'room-facts room-event-facts', eventDetailFacts(event).map(factNode)),
+    el('div', 'room-facts room-event-facts', eventDetailFacts(event, at).map(factNode)),
     listBlock('天梯样本（封板 / 涨停原因）', eventLadderLines(event)),
     el('div', 'room-event-block', [
       el('h4', '', '当日异动关键词'),
@@ -353,6 +381,7 @@ const eventNode = (event, params) => {
         `room-status room-status-${event.status === 'complete' ? 'complete' : 'partial'}`,
         EVENT_STATUS_LABELS[event.status] ?? event.status,
       ),
+      recordedAfterReplay(event, params.at) ? el('span', 'room-event-pin', '晚于时点记录') : null,
     ],
   );
   button.type = 'button';
@@ -368,7 +397,7 @@ const eventNode = (event, params) => {
   });
   return el('li', `room-event-item${selected ? ' selected' : ''}`, [
     button,
-    selected ? evidenceNode(event) : null,
+    selected ? evidenceNode(event, params.at) : null,
   ]);
 };
 
@@ -437,6 +466,7 @@ export {
   eventsParamsFromHash,
   eventsQuery,
   fetchRoomEvents,
+  recordedAfterReplay,
   renderEventsPane,
   rotationLeadLines,
   sortEventsDesc,

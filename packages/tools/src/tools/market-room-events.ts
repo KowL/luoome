@@ -117,6 +117,11 @@ export const ListMarketRoomEventsInput = z.object({
    * 回放时用于截断「之后才扫描出来」的事件；缺省读全部已记录事件。
    */
   knownAt: z.coerce.date().optional(),
+  /**
+   * 回放里选中的事件 id：只额外放行这一条（且要求其检测时点不晚于 knownAt），
+   * 不放松其它事件的 knownAt 截断。用于「点开的事件在切到其检测时点后仍可见」。
+   */
+  includeEventId: z.string().trim().min(1).optional(),
   kind: MarketRoomEventKindSchema.optional(),
   sectorId: z.string().trim().min(1).optional(),
 });
@@ -140,6 +145,32 @@ const viewOf = (input: {
     ...(input.emptyReason === undefined ? {} : { emptyReason: input.emptyReason }),
   });
 
+/**
+ * 回放钉住的事件：只额外放行「检测样本不晚于已知时点、但记录时点更晚」的那一条。
+ * 更晚检测样本的事件不会被提前放出，其它事件仍按 knownAt 截断。
+ */
+const readPinnedEvent = async (
+  ctx: ToolContext,
+  input: ListMarketRoomEventsInputT,
+  tradingDate: string,
+  events: readonly MarketRoomEvent[],
+): Promise<MarketRoomEvent | null> => {
+  if (input.includeEventId === undefined) return null;
+  if (events.some((event) => event.id === input.includeEventId)) return null;
+  try {
+    const event = await ctx.repos.marketRoomEvent.findById(input.includeEventId);
+    if (event === null || event.tradingDate !== tradingDate) return null;
+    if (input.knownAt !== undefined && event.sampledAt.getTime() > input.knownAt.getTime()) {
+      return null;
+    }
+    if (input.from !== undefined && event.sampledAt.getTime() < input.from.getTime()) return null;
+    if (input.to !== undefined && event.sampledAt.getTime() > input.to.getTime()) return null;
+    return event;
+  } catch {
+    return null;
+  }
+};
+
 const resolveTradingDate = async (
   ctx: ToolContext,
   input: ListMarketRoomEventsInputT,
@@ -158,7 +189,7 @@ const resolveTradingDate = async (
 export const listMarketRoomEventsTool = defineTool({
   name: 'list_market_room_events',
   description:
-    '读取盘中事件流：扩散（上涨面在 N 个样本内提升、窗口为正、成交占比不降）、分化（日涨幅仍靠前但上涨面回落、窗口转负）、换位（领先板块变化且新领先者连续样本窗口跑赢旧领先者，滞回避免单次抖动）；每个事件带扫描当时的阈值与证据（板块榜单、上涨面、窗口涨幅、成交占比、天梯封板/涨停原因、已知成分、异动关键词），按检测时点升序返回；可按交易日 / 时段 / 种类 / 板块过滤；给定 knownAt 时只返回该时点之前已记录的事件（回放按当时已知截断，之后扫描出来的事件不出现）；只读不采集',
+    '读取盘中事件流：扩散（上涨面在 N 个样本内提升、窗口为正、成交占比不降）、分化（日涨幅仍靠前但上涨面回落、窗口转负）、换位（领先板块变化且新领先者连续样本窗口跑赢旧领先者，滞回避免单次抖动）；每个事件带扫描当时的阈值与证据（板块榜单、上涨面、窗口涨幅、成交占比、天梯封板/涨停原因、已知成分、异动关键词），按检测时点升序返回；可按交易日 / 时段 / 种类 / 板块过滤；给定 knownAt 时只返回该时点之前已记录的事件（回放按当时已知截断，之后扫描出来的事件不出现）；includeEventId 只额外放行该条已选中事件（其检测时点不得晚于 knownAt），不放松其它截断；只读不采集',
   sideEffect: 'read',
   input: ListMarketRoomEventsInput,
   output: ListMarketRoomEventsOutput,
@@ -193,9 +224,11 @@ export const listMarketRoomEventsTool = defineTool({
       ...(input.to === undefined ? {} : { to: input.to }),
       ...(input.knownAt === undefined ? {} : { knownAt: input.knownAt }),
     });
-    if (events.length === 0) {
+    const pinned = await readPinnedEvent(ctx, input, tradingDate, events);
+    const visible = pinned === null ? events : [...events, pinned];
+    if (visible.length === 0) {
       return { view: viewOf({ tradingDate, events: [], filters, emptyReason: 'no_events' }) };
     }
-    return { view: viewOf({ tradingDate, events, filters }) };
+    return { view: viewOf({ tradingDate, events: visible, filters }) };
   },
 });

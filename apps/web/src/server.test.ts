@@ -6773,9 +6773,36 @@ describe('Web 作战室盘中事件 API', () => {
     expect(known.body.data?.view.events.map((item) => item.id)).toEqual([event.id]);
     expect(known.body.data?.view.filters.knownAt).toBe('2026-09-28T06:50:00.000Z');
 
+    // 选中事件被钉住：它晚于 knownAt 才记录，但点开时仍要可见，且只放行这一条。
+    const pinnedEarly = await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}&includeEventId=${encodeURIComponent(event.id)}`,
+    );
+    expect(pinnedEarly.status).toBe(200);
+    expect(pinnedEarly.body.data?.view.state).toBe('ready');
+    expect(pinnedEarly.body.data?.view.counts.total).toBe(1);
+    expect(pinnedEarly.body.data?.view.events.map((item) => item.id)).toEqual([event.id]);
+
+    // 检测时点晚于 knownAt 的事件即使被钉住也不提前出现；未钉住的查询仍为空。
+    const pinnedTooEarly = await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T13:15:00+08:00')}&includeEventId=${encodeURIComponent(event.id)}`,
+    );
+    expect(pinnedTooEarly.body.data?.view.state).toBe('empty');
+    expect(pinnedTooEarly.body.data?.view.emptyReason).toBe('no_events');
+    const pinnedMissing = await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}&includeEventId=missing-event`,
+    );
+    expect(pinnedMissing.body.data?.view.state).toBe('empty');
+
     // 回放只读：反复读取不触发采集，也不产生新事件。
     await readRoomEvents(web, `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}`);
     await readRoomEvents(web, `?knownAt=${encodeURIComponent('2026-09-28T14:50:00+08:00')}`);
+    await readRoomEvents(
+      web,
+      `?knownAt=${encodeURIComponent('2026-09-28T14:15:00+08:00')}&includeEventId=${encodeURIComponent(event.id)}`,
+    );
     expect(adapter.envelopeCalls).toBe(callsBefore);
     expect(await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' })).toHaveLength(1);
   });

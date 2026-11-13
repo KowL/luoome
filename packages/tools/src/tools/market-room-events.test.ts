@@ -10,6 +10,7 @@ import type {
   LimitUpLadderManagerLike,
   LimitUpLadderQuery,
   LimitUpLadderResultLike,
+  MarketRoomEvent,
   RepositoryRegistry,
   SectorCatalogObservation,
   SourceStatus,
@@ -20,6 +21,7 @@ import {
   buildMarketSnapshotBatch,
   MARKET_ROOM_EVENT_DEFAULT_RULES,
   MarketRoomEventSchema,
+  marketRoomEventId,
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
@@ -325,6 +327,77 @@ describe('scan-on-publish：扩散 / 分化 / 换位事件', () => {
     expect(atKnown.state).toBe('ready');
     expect(atKnown.events.map((item) => item.id)).toEqual([event.id]);
     expect(atKnown.notes.join(' ')).toContain('knownAt');
+
+    // 选中事件在 knownAt 早于其 recordedAt 时仍可见，且只额外放行这一条。
+    const pinned = await eventsView(h.ctx, {
+      knownAt: at('14:15'),
+      includeEventId: event.id,
+    });
+    expect(pinned.state).toBe('ready');
+    expect(pinned.events.map((item) => item.id)).toEqual([event.id]);
+    expect(pinned.counts.total).toBe(1);
+
+    // 已可见时不重复；不存在的 id 不改变结果。
+    expect(
+      (
+        await eventsView(h.ctx, {
+          knownAt: at('14:50'),
+          includeEventId: event.id,
+        })
+      ).events.map((item) => item.id),
+    ).toEqual([event.id]);
+    expect(
+      await eventsView(h.ctx, {
+        knownAt: at('14:15'),
+        includeEventId: 'missing-event',
+      }),
+    ).toMatchObject({ state: 'empty', emptyReason: 'no_events', events: [] });
+
+    // 检测时点晚于 knownAt 的事件即使被钉住也不能提前出现（行情时点截断不放松）。
+    expect(
+      await eventsView(h.ctx, {
+        knownAt: at('13:15'),
+        includeEventId: event.id,
+      }),
+    ).toMatchObject({ state: 'empty', emptyReason: 'no_events', events: [] });
+    // 未钉住的查询仍是空：其它事件的 knownAt 截断语义不变。
+    expect(await eventsView(h.ctx, { knownAt: at('14:15') })).toMatchObject({
+      state: 'empty',
+      events: [],
+    });
+
+    // 再加一条同样晚记录的事件：钉住一条只放行一条，另一条仍被 knownAt 截断。
+    const otherEvent: MarketRoomEvent = {
+      ...event,
+      id: marketRoomEventId({
+        tradingDate: event.tradingDate,
+        kind: 'diffusion',
+        sectorId: 'sector-other',
+        sampledAt: event.sampledAt,
+      }),
+      kind: 'diffusion',
+      sector: { ...event.sector, sectorId: 'sector-other', name: '其它题材' },
+      thresholds: MARKET_ROOM_EVENT_DEFAULT_RULES.diffusion,
+      evidence: { ...event.evidence, rotation: undefined },
+      recordedAt: at('14:50'),
+    };
+    const savedOther = await h.ctx.repos.marketRoomEvent.save(otherEvent);
+    expect(savedOther.created).toBe(true);
+
+    const pinnedOnlyOther = await eventsView(h.ctx, {
+      knownAt: at('14:15'),
+      includeEventId: otherEvent.id,
+    });
+    expect(pinnedOnlyOther.events.map((item) => item.id)).toEqual([otherEvent.id]);
+    expect(pinnedOnlyOther.counts.total).toBe(1);
+
+    const bothKnown = await eventsView(h.ctx, {
+      knownAt: at('14:50'),
+      includeEventId: otherEvent.id,
+    });
+    expect([...bothKnown.events.map((item) => item.id)].sort()).toEqual(
+      [event.id, otherEvent.id].sort(),
+    );
 
     // 回放读取不触发采集，也不写入新事件。
     const callsBefore = h.adapter.envelopeCalls;
