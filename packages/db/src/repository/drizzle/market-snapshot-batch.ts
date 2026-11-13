@@ -109,4 +109,27 @@ export class DrizzleMarketSnapshotBatchRepository implements MarketSnapshotBatch
       .get();
     return row === undefined ? null : toBatch(row);
   }
+
+  async findAtOrBefore(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
+  }): Promise<MarketSnapshotBatch | null> {
+    const row = this.db
+      .select()
+      .from(marketSnapshotBatches)
+      .where(
+        and(
+          eq(marketSnapshotBatches.tradingDate, input.tradingDate),
+          lte(marketSnapshotBatches.sampledAt, input.sampledAt),
+          ...(input.coverage === undefined
+            ? []
+            : [eq(marketSnapshotBatches.coverage, input.coverage)]),
+        ),
+      )
+      .orderBy(desc(marketSnapshotBatches.sampledAt), desc(marketSnapshotBatches.id))
+      .limit(1)
+      .get();
+    return row === undefined ? null : toBatch(row);
+  }
 }

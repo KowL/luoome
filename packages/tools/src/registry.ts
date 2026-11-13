@@ -18,6 +18,7 @@ import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
+import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
 import {
   collectMarketSnapshotTool,
   getMarketSnapshotBatchTool,
@@ -197,4 +198,6 @@ export const toolRegistry: Registry = createRegistry([
   getMarketSnapshotBatchTool,
   // 作战室总览（ticket #36）：只读最近批次 + 既有情绪 / 指数契约
   getMarketRoomOverviewTool,
+  // 板块盘中榜（ticket #38）：只读批次 + 目录成分 + 当日天梯
+  getMarketRoomSectorsTool,
 ]);
