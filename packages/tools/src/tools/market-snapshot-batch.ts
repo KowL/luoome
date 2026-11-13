@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errAdapterError } from '../define-tool.js';
+import { scanMarketRoomEvents } from './market-room-events.js';
 
 /**
  * 盘中全市场批次（ticket #35）。
@@ -22,6 +23,8 @@ import { defineTool, errAdapterError } from '../define-tool.js';
  * - 发布新批次后，在交易时段内顺带刷新当日连板天梯快照，并按批次采样时点保存一份
  *   天梯事实（ticket #41，开板 / 换位时间线的数据基础）；天梯或样本写入失败只进 warnings，
  *   不回滚已发布批次，也不把失败吞成成功；
+ * - 批次发布后扫描当日最近样本，幂等写入扩散 / 分化 / 换位事件（ticket #42）；
+ *   扫描失败同样只进 warnings；
  * - `get_market_snapshot_batch` 只读最近已发布批次，刷新与跨页读取不触发采集。
  */
 
@@ -122,7 +125,13 @@ export const collectMarketSnapshotTool = defineTool({
       published.batch.tradingDate,
       published.batch.sampledAt,
     );
-    return { created: published.created, batch: published.batch, warnings: [...warnings] };
+    // 事件扫描在批次发布之后：失败只进 warnings，不回滚批次、不阻塞采集。
+    const eventWarnings = await scanMarketRoomEvents(ctx, published.batch.tradingDate);
+    return {
+      created: published.created,
+      batch: published.batch,
+      warnings: [...warnings, ...eventWarnings],
+    };
   },
 });
 

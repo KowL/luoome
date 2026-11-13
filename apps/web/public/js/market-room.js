@@ -1,4 +1,4 @@
-/* apps/web/public/js/market-room.js —— 作战室页面（总览 / 板块追踪 / 成交分布）。
+/* apps/web/public/js/market-room.js —— 作战室页面（总览 / 板块追踪 / 成交分布 / 盘中事件）。
  *
  * 设计要点（ticket #36 / #38）：
  * - 只读：数据来自 GET /api/market/room/overview 与 GET /api/market/room/sectors，
@@ -8,7 +8,9 @@
  * - 板块追踪：行业 / 概念切换，同一张表同时给日涨幅与近 5 / 15 分钟窗口涨幅，
  *   三种口径分别排序；点开一行看上涨家数、有效成分、封板数与成交占比及口径说明；
  * - 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 交给 market-room-amount.js，
- *   本文件只负责按 tab 取数与挂载。
+ *   本文件只负责按 tab 取数与挂载；
+ * - 盘中事件（ticket #42）：扩散 / 分化 / 换位按时间倒序，交给 market-room-events.js；
+ *   本票只做展示与选中态，点事件切换三个视图的时点属于 #43。
  */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
@@ -21,6 +23,12 @@ import {
   amountQuery,
   renderAmountPane,
 } from './market-room-amount.js';
+import {
+  eventsMetaText,
+  eventsParamsFromHash,
+  fetchRoomEvents,
+  renderEventsPane,
+} from './market-room-events.js';
 import { fetchCoreStocks, renderCoreStocksPane } from './market-room-roles.js';
 import {
   fetchSectorDetail,
@@ -32,8 +40,13 @@ import {
 import { formatAmount } from './market-shared.js';
 import { $, el, mount, sortableHeader } from './ui.js';
 
-const ROOM_TABS = ['overview', 'sectors', 'turnover'];
-const ROOM_TAB_LABELS = { overview: '总览', sectors: '板块追踪', turnover: '成交分布' };
+const ROOM_TABS = ['overview', 'sectors', 'turnover', 'events'];
+const ROOM_TAB_LABELS = {
+  overview: '总览',
+  sectors: '板块追踪',
+  turnover: '成交分布',
+  events: '盘中事件',
+};
 
 const SECTOR_KINDS = ['industry', 'concept'];
 const SECTOR_KIND_LABELS = { industry: '行业', concept: '概念' };
@@ -75,6 +88,7 @@ let roomTimer = null;
 /** 板块追踪最近一次成功的榜单，切换分类请求失败时只在同一分类下复用。 */
 let roomSectorRanking = null;
 let roomAmountDistribution = null;
+let roomEventsView = null;
 
 const roomSection = () => $('#route-market-room');
 
@@ -785,6 +799,25 @@ const refreshAmount = async (epoch, setStatus, params = amountParamsFromHash()) 
   if (distribution === null) setStatus?.('成交分布刷新失败，保留上次成功结果', true);
 };
 
+/* ---- 盘中事件（ticket #42） ---- */
+
+const renderEvents = (section, view, params) => {
+  const pane = section.querySelector('.room-pane');
+  if (pane === null) return;
+  mount(pane, renderEventsPane(view, params));
+  setMeta(section, eventsMetaText(view));
+};
+
+const refreshEvents = async (epoch, setStatus, params = eventsParamsFromHash()) => {
+  const section = roomSection();
+  if (section === null) return;
+  const view = await fetchRoomEvents();
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  if (view !== null) roomEventsView = view;
+  renderEvents(section, view ?? roomEventsView, params);
+  if (view === null) setStatus?.('盘中事件刷新失败，保留上次成功结果', true);
+};
+
 /* ---- 页面挂载与刷新 ---- */
 
 const ensureShell = (section) => {
@@ -879,7 +912,8 @@ const startTimer = (setStatus) => {
     const tab = roomTabFromHash();
     if (tab === 'overview') void refreshOverview(roomEpoch, setStatus);
     else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
-    else void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
+    else if (tab === 'turnover') void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
+    else void refreshEvents(roomEpoch, setStatus, eventsParamsFromHash());
   }, REFRESH_MS);
 };
 
@@ -896,8 +930,10 @@ const renderMarketRoom = async (setStatus = () => {}) => {
     await refreshOverview(epoch, setStatus);
   } else if (tab === 'sectors') {
     await refreshSectors(epoch, setStatus, sectorParamsFromHash());
-  } else {
+  } else if (tab === 'turnover') {
     await refreshAmount(epoch, setStatus, amountParamsFromHash());
+  } else {
+    await refreshEvents(epoch, setStatus, eventsParamsFromHash());
   }
   if (epoch !== roomEpoch) return;
   startTimer(setStatus);

@@ -16,6 +16,9 @@ import type {
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
+  MarketRoomEvent,
+  MarketRoomEventKind,
+  MarketRoomEventStatus,
   MarketSnapshotCompleteness,
   MarketSnapshotItem,
   MinuteBarCompleteness,
@@ -360,6 +363,46 @@ export const marketSnapshotBatches = sqliteTable(
       t.coverage,
       t.sampledAt,
     ),
+  }),
+);
+
+/**
+ * 作战室盘中事件（ticket #42）：扩散 / 分化 / 换位按 (交易日, 种类, 板块, 检测时点) 幂等。
+ * thresholds 与 evidence 保存扫描当时的事实，后续阈值调整不回改历史事件。
+ */
+export const marketRoomEvents = sqliteTable(
+  'market_room_events',
+  {
+    id: text('id').primaryKey(),
+    tradingDate: text('trading_date').notNull(),
+    kind: text('kind').$type<MarketRoomEventKind>().notNull(),
+    sectorId: text('sector_id').notNull(),
+    sectorKind: text('sector_kind').$type<SectorKind>().notNull(),
+    vendorCode: text('vendor_code').notNull(),
+    sectorName: text('sector_name').notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    previousSampledAt: integer('previous_sampled_at', { mode: 'timestamp_ms' }),
+    status: text('status').$type<MarketRoomEventStatus>().notNull(),
+    thresholds: text('thresholds_json', { mode: 'json' })
+      .$type<MarketRoomEvent['thresholds']>()
+      .notNull(),
+    evidence: text('evidence_json', { mode: 'json' })
+      .$type<MarketRoomEvent['evidence']>()
+      .notNull(),
+    verification: text('verification_json', { mode: 'json' })
+      .$type<MarketRoomEvent['verification']>()
+      .notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    identityUnique: uniqueIndex('market_room_events_identity_unique').on(
+      t.tradingDate,
+      t.kind,
+      t.sectorId,
+      t.sampledAt,
+    ),
+    dateTimeIdx: index('market_room_events_date_time_idx').on(t.tradingDate, t.sampledAt),
+    sectorTimeIdx: index('market_room_events_sector_time_idx').on(t.sectorId, t.sampledAt),
   }),
 );
 
@@ -1286,6 +1329,7 @@ export const schema = {
   limitUpLadderSnapshots,
   limitUpLadderSamples,
   marketSnapshotBatches,
+  marketRoomEvents,
   holdings,
   trades,
   accountLedgerEntries,

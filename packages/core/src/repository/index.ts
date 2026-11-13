@@ -11,6 +11,11 @@ import type {
   LimitUpLadderSamplePublishResult,
 } from '../entity/limit-up-ladder-sample.js';
 import type {
+  MarketRoomEvent,
+  MarketRoomEventKind,
+  MarketRoomEventSaveResult,
+} from '../entity/market-room-events.js';
+import type {
   MarketSnapshotBatch,
   MarketSnapshotBatchPublishResult,
 } from '../entity/market-snapshot-batch.js';
@@ -218,6 +223,26 @@ export interface LimitUpLadderSampleRepository {
     readonly tradingDate: string;
     readonly source: LimitUpLadderSource;
   }): Promise<LimitUpLadderSample[]>;
+}
+
+/**
+ * 作战室盘中事件（ticket #42）：按 (交易日, 种类, 板块, 检测时点) 幂等。
+ * 重复扫描 / 重启 / 重试只保留首次写入；历史事件不因后续命名或阈值调整回改。
+ */
+export interface MarketRoomEventRepository {
+  /** 幂等保存；同一身份已存在时保留首次内容并返回 created=false。 */
+  save(event: MarketRoomEvent): Promise<MarketRoomEventSaveResult>;
+  findById(id: string): Promise<MarketRoomEvent | null>;
+  /** 按交易日 / 种类 / 板块 / 采样时点范围过滤，默认按检测时点升序。 */
+  list(input?: {
+    readonly tradingDate?: string;
+    readonly kind?: MarketRoomEventKind;
+    readonly sectorId?: string;
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly order?: 'asc' | 'desc';
+    readonly limit?: number;
+  }): Promise<MarketRoomEvent[]>;
 }
 
 /** 盘中全市场批次：按采样时点不可变发布，重复发布同一批次不产生第二份。 */
@@ -496,6 +521,8 @@ export interface RepositoryRegistry {
   readonly limitUpLadderSample: LimitUpLadderSampleRepository;
   /** 盘中全市场快照批次（不可变、按采样时点去重）。 */
   readonly marketSnapshotBatch: MarketSnapshotBatchRepository;
+  /** 作战室盘中事件（扩散 / 分化 / 换位，按身份幂等）。 */
+  readonly marketRoomEvent: MarketRoomEventRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly decisionReview: DecisionReviewRepository;

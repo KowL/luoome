@@ -21,6 +21,7 @@ import {
   DrizzleLedgerRepository,
   DrizzleLimitUpLadderSampleRepository,
   DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMarketRoomEventRepository,
   DrizzleMarketSnapshotBatchRepository,
   DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
@@ -455,6 +456,36 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS market_snapshot_batches_coverage_sampled_idx
     ON market_snapshot_batches (coverage, sampled_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS market_room_events (
+      id TEXT PRIMARY KEY,
+      trading_date TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sector_id TEXT NOT NULL,
+      sector_kind TEXT NOT NULL,
+      vendor_code TEXT NOT NULL,
+      sector_name TEXT NOT NULL,
+      sampled_at INTEGER NOT NULL,
+      previous_sampled_at INTEGER,
+      status TEXT NOT NULL,
+      thresholds_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      verification_json TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS market_room_events_identity_unique
+    ON market_room_events (trading_date, kind, sector_id, sampled_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_room_events_date_time_idx
+    ON market_room_events (trading_date, sampled_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS market_room_events_sector_time_idx
+    ON market_room_events (sector_id, sampled_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
@@ -1902,6 +1933,7 @@ export const createDrizzleRepos = (
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
     limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db),
     marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db),
+    marketRoomEvent: new DrizzleMarketRoomEventRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),

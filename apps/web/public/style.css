@@ -11083,6 +11083,97 @@ body > .modal {
   color: var(--muted);
 }
 
+/* ---- 作战室盘中事件（ticket #42） ---- */
+
+.room-events {
+  margin-top: var(--space-4);
+}
+
+.room-events-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.room-event-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.room-event-item.selected {
+  border-color: var(--accent);
+}
+
+.room-event-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-event-row:hover,
+.room-event-row.selected {
+  background: var(--panel-alt);
+}
+
+.room-event-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+
+.room-event-kind {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: var(--text-xs);
+}
+
+.room-event-diffusion .room-event-kind {
+  color: var(--accent);
+}
+
+.room-event-divergence .room-event-kind {
+  color: var(--warning);
+}
+
+.room-event-rotation .room-event-kind {
+  color: var(--pos, #e0484f);
+}
+
+.room-event-sector {
+  font-weight: var(--weight-semibold);
+}
+
+.room-event-summary {
+  flex: 1 1 260px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.room-event-evidence {
+  border-top: 1px solid var(--line);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+  background: var(--panel);
+}
+
+.room-event-block h4 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+}
+
 @media (max-width: 640px) {
   .room-detail-legend {
     flex-direction: column;

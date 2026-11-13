@@ -351,7 +351,33 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
-  // 作战室页面（总览 / 板块追踪 / 成交分布三视图，SPA shell）
+  /**
+   * 作战室盘中事件（ticket #42）：扩散 / 分化 / 换位，按检测时点升序返回。
+   *
+   * 参数：
+   *   date (可选) 交易日 YYYY-MM-DD；缺省取最近事件的交易日
+   *   from / to (可选) 检测时点 ISO 范围（含端点）
+   *   kind (可选) diffusion | divergence | rotation
+   *   sectorId (可选) 板块内部标识
+   *
+   * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/events', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['date', 'from', 'to', 'kind', 'sectorId'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('list_market_room_events', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // 作战室页面（总览 / 板块追踪 / 成交分布 / 盘中事件，SPA shell）
   app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
 
   // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），

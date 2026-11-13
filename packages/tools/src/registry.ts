@@ -19,6 +19,7 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
 import { getMarketRoomCoreStocksTool } from './tools/market-room-core-stocks.js';
+import { listMarketRoomEventsTool } from './tools/market-room-events.js';
 import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
 import { getMarketRoomSectorDetailTool } from './tools/market-room-sector-detail.js';
 import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
@@ -207,4 +208,5 @@ export const toolRegistry: Registry = createRegistry([
   getMarketRoomAmountDistributionTool,
   getMarketRoomCoreStocksTool,
   getMarketRoomSectorDetailTool,
+  listMarketRoomEventsTool,
 ]);
