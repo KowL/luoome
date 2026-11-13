@@ -1,9 +1,12 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   createStrategyDailyCycleAuditInputSummary,
   createStrategyDailyCycleAuditOutputSummary,
   dateInShanghai,
   isHoliday,
   isWeekend,
+  STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
+  STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -55,6 +58,79 @@ const errorText = (error: {
       : String(error.kind ?? 'unknown error');
 
 const dayKey = (value: Date): string => dateInShanghai(value);
+
+interface ObservationHorizonSummary {
+  created: number;
+  skipped: number;
+  scanned: number;
+  completed: number;
+  pending: number;
+}
+
+interface ObservationSummary {
+  created: number;
+  skipped: number;
+  scanned: number;
+  completed: number;
+  pending: number;
+  baselines: {
+    available: number;
+    unavailable: number;
+    providers: Record<string, number>;
+  };
+  byHorizon: Record<string, ObservationHorizonSummary>;
+}
+
+interface BenchmarkSyncSummary {
+  status: 'succeeded' | 'partial' | 'failed' | 'skipped';
+  dataVersion: string;
+  stockId: string;
+  barCount?: number;
+  source?: string;
+  reason?: string;
+}
+
+interface CandidateSummaryInput {
+  readonly created: number;
+  readonly skipped: number;
+  readonly baselines: {
+    readonly available: number;
+    readonly unavailable: number;
+    readonly providers: Record<string, number>;
+  };
+  readonly horizons: Record<string, { readonly created: number; readonly skipped: number }>;
+}
+
+const emptyHorizonSummary = (): ObservationHorizonSummary => ({
+  created: 0,
+  skipped: 0,
+  scanned: 0,
+  completed: 0,
+  pending: 0,
+});
+
+const summaryFromCandidates = (input: CandidateSummaryInput): ObservationSummary => {
+  const byHorizon: Record<string, ObservationHorizonSummary> = {};
+  for (const horizon of ACTIVE_SIGNAL_OBSERVATION_HORIZONS) {
+    const counts = input.horizons[horizon] ?? { created: 0, skipped: 0 };
+    byHorizon[horizon] = {
+      created: counts.created,
+      skipped: counts.skipped,
+      scanned: 0,
+      completed: 0,
+      pending: 0,
+    };
+  }
+  return {
+    created: input.created,
+    skipped: input.skipped,
+    scanned: 0,
+    completed: 0,
+    pending: 0,
+    baselines: input.baselines,
+    byHorizon,
+  };
+};
 
 const runCycle: WorkflowStep = async (previous, ctx) => {
   const input = previous as StrategyDailyCycleInputT;
@@ -150,6 +226,103 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         observedAt?: Date;
       }
     | undefined;
+  let observationSummary: ObservationSummary | undefined;
+  let benchmarkSync: BenchmarkSyncSummary | undefined;
+
+  const notePartial = (message: string): void => {
+    status = status === 'failed' ? 'failed' : 'partial';
+    reason = reason === undefined ? message : `${reason}；${message}`;
+  };
+
+  const observeRun = async (
+    targetRunId: string,
+  ): Promise<
+    | { readonly ok: false; readonly reason: string }
+    | {
+        readonly ok: true;
+        readonly summary: ObservationSummary;
+        readonly benchmarkSync?: BenchmarkSyncSummary;
+        readonly warnings: readonly string[];
+        readonly pending: number;
+      }
+  > => {
+    const candidates = await ctx.tools.create_strategy_observation_candidates.execute({
+      runId: targetRunId,
+    });
+    if (!candidates.ok) return { ok: false, reason: errorText(candidates.error) };
+    const summary = summaryFromCandidates(candidates.data);
+    if (candidates.data.status === 'skipped') {
+      return { ok: true, summary, warnings: [], pending: 0 };
+    }
+
+    const warnings: string[] = [];
+    let runBenchmarkSync: BenchmarkSyncSummary | undefined;
+    const benchmark = await ctx.tools.sync_daily_bars.execute({
+      scope: 'explicit',
+      stockIds: [STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID],
+      correctionWindowDays: 60,
+    });
+    if (!benchmark.ok) {
+      runBenchmarkSync = {
+        status: 'failed',
+        dataVersion: STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
+        stockId: STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+        reason: errorText(benchmark.error),
+      };
+      warnings.push(`benchmark 日线同步失败：${errorText(benchmark.error)}`);
+    } else {
+      const item = benchmark.data.items.find(
+        (candidate) => candidate.stockId === STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+      );
+      runBenchmarkSync = {
+        status: item?.status === 'synced' ? 'succeeded' : benchmark.data.status,
+        dataVersion: STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
+        stockId: STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+        ...(item?.status === 'synced'
+          ? { barCount: item.barCount, source: item.sources.join(',') }
+          : {}),
+        ...(item?.status === 'failed'
+          ? { reason: item.reason }
+          : item?.status === 'synced'
+            ? {}
+            : { reason: 'benchmark 日线不可用' }),
+      };
+      if (item?.status !== 'synced') {
+        warnings.push(
+          item?.status === 'failed' ? item.reason : 'benchmark 日线不可用，观察标记 unavailable',
+        );
+      }
+    }
+
+    const completed = await ctx.tools.complete_strategy_observations.execute({ limit: 1000 });
+    if (!completed.ok) {
+      warnings.push(`观察补全失败：${errorText(completed.error)}`);
+    } else {
+      summary.scanned = completed.data.scanned;
+      summary.completed = completed.data.completed;
+      summary.pending = completed.data.pending;
+      for (const horizon of ACTIVE_SIGNAL_OBSERVATION_HORIZONS) {
+        const current = summary.byHorizon[horizon] ?? emptyHorizonSummary();
+        const next = completed.data.byHorizon[horizon];
+        summary.byHorizon[horizon] =
+          next === undefined
+            ? current
+            : {
+                ...current,
+                scanned: next.scanned,
+                completed: next.completed,
+                pending: next.pending,
+              };
+      }
+    }
+    return {
+      ok: true,
+      summary,
+      ...(runBenchmarkSync === undefined ? {} : { benchmarkSync: runBenchmarkSync }),
+      warnings,
+      pending: summary.pending,
+    };
+  };
 
   // cron 可能比产品的「每交易日一次」契约更频繁：先查已持久化的正式运行事实，
   // 同一交易日重复 tick 只审计 skipped，不重复做外部数据工作。
@@ -168,6 +341,20 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     if (duplicate !== undefined) {
       status = 'skipped';
       reason = 'schedule-day-duplicate';
+      runId = duplicate.id;
+      // 上次可能已提交 run 却在创建观察前退出。这里只补创建；补全交给下一次正常
+      // cycle 的全局 sweep 或 complete-strategy-observations 补偿，避免每分钟打 provider。
+      if (duplicate.publication?.status === 'published' && !ctx.abortSignal?.aborted) {
+        beginPhase('observations');
+        const recovered = await ctx.tools.create_strategy_observation_candidates.execute({
+          runId: duplicate.id,
+        });
+        if (!recovered.ok) {
+          notePartial(`观察候选恢复失败：${errorText(recovered.error)}`);
+        } else if (recovered.data.created + recovered.data.skipped > 0) {
+          observationSummary = summaryFromCandidates(recovered.data);
+        }
+      }
     }
   }
 
@@ -248,6 +435,18 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           }
         }
         if (!ctx.abortSignal?.aborted) {
+          beginPhase('observations');
+          const observed = await observeRun(run.data.run.id);
+          if (!observed.ok) {
+            notePartial(`观察候选创建失败：${observed.reason}`);
+          } else {
+            observationSummary = observed.summary;
+            benchmarkSync = observed.benchmarkSync;
+            for (const warning of observed.warnings) notePartial(warning);
+            if (observed.pending > 0) notePartial('存在尚未完成的到期观察');
+          }
+        }
+        if (!ctx.abortSignal?.aborted) {
           beginPhase('insight');
           const insight = await ctx.tools.generate_strategy_insight.execute({
             strategyId: strategy.id,
@@ -302,6 +501,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         ...(insightProvider === undefined ? {} : { insightProvider }),
         ...(insightFacts === undefined ? {} : { insightFacts }),
         ...(watchlistSync === undefined ? {} : { watchlistSync }),
+        ...(observationSummary === undefined ? {} : { observations: observationSummary }),
+        ...(benchmarkSync === undefined ? {} : { benchmarkSync }),
         leaseRenewals: 0,
         ...(universeSync === undefined ? {} : { universeSync }),
         phaseTimings,
@@ -342,7 +543,7 @@ export const strategyDailyCycleOperation = defineOperation<
   StrategyDailyCycleOutputT
 >({
   name: 'strategy-daily-cycle',
-  description: '按 run→insight→finish 编排单个 Strategy 的盘后日循环',
+  description: '按 run→observations→insight→finish 编排单个 Strategy 的盘后日循环',
   input: StrategyDailyCycleInput,
   steps: [runCycle],
 });

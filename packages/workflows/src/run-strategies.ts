@@ -30,6 +30,15 @@ const RunStrategiesItemSchema = z.object({
       error: z.string().optional(),
     })
     .optional(),
+  observations: z
+    .object({
+      status: z.enum(['complete', 'skipped', 'failed']),
+      created: z.number().int().nonnegative().optional(),
+      skipped: z.number().int().nonnegative().optional(),
+      reason: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   error: z.string().optional(),
 });
 
@@ -117,6 +126,38 @@ const runAll: WorkflowStep = async (previous, ctx) => {
         };
       }
     }
+    let observations:
+      | {
+          status: 'complete' | 'skipped' | 'failed';
+          created?: number;
+          skipped?: number;
+          reason?: string;
+          error?: string;
+        }
+      | undefined;
+    if (result.data.persisted && result.data.run.status !== 'failed') {
+      const created = await ctx.tools.create_strategy_observation_candidates.execute({
+        runId: result.data.run.id,
+      });
+      if (created.ok) {
+        observations = {
+          status: created.data.status,
+          created: created.data.created,
+          skipped: created.data.skipped,
+          ...(created.data.reason === undefined ? {} : { reason: created.data.reason }),
+        };
+      } else {
+        observations = {
+          status: 'failed',
+          error:
+            'message' in created.error
+              ? created.error.message
+              : 'cause' in created.error
+                ? created.error.cause
+                : `${created.error.kind}`,
+        };
+      }
+    }
     items.push({
       strategyId,
       status: result.data.run.status === 'failed' ? 'failed' : 'complete',
@@ -125,6 +166,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
       selected: result.data.results.filter((candidate) => candidate.selected).length,
       signals: result.data.signals.length,
       ...(watchlistSync === undefined ? {} : { watchlistSync }),
+      ...(observations === undefined ? {} : { observations }),
       ...(result.data.run.error === undefined ? {} : { error: result.data.run.error }),
     });
   }

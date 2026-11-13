@@ -194,6 +194,8 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 - `complete-strategy-observations`：以信号基准后的第 N 根 qfq 日线补齐事实观察；日线不足时
   保持 `pending`，当前无指数日线时 benchmark 明确标记 unavailable；配置的 T+n 节点完成后可触发
   对应股票的阶段 Advice。也可手工运行 `strategy-recommendations`，输入策略、运行和推荐政策。
+  `strategy-daily-cycle` 在发布正式运行后会自动创建 T+1/T+3/T+5 候选并补全到期观察。
+- 历史缺口用 `luoome tools call backfill_strategy_observation_candidates --input '{"since":"2026-08-12T00:00:00+08:00","limit":100}'` 显式补建；只补候选、不自动补全，重复执行幂等，单次最多 500 个 run。
 - 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
   `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。

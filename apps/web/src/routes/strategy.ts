@@ -22,6 +22,7 @@ const StrictStrategyBacktestRequest = z.object({
 
 import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
 import {
+  createStrategyObservationCandidatesTool,
   createStrictStrategyBacktestTool,
   syncStrategyWatchlistSubscriptionsTool,
 } from '@luoome/tools';
@@ -226,6 +227,21 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
     ) {
       return jsonResult(run);
     }
+    const observed = await createStrategyObservationCandidatesTool.execute(
+      { runId: payload.run.id },
+      contextForRequest(),
+    );
+    const observations = observed.ok
+      ? observed.data
+      : {
+          status: 'failed',
+          error:
+            'message' in observed.error
+              ? observed.error.message
+              : 'cause' in observed.error
+                ? observed.error.cause
+                : observed.error.kind,
+        };
     const synced = await syncStrategyWatchlistSubscriptionsTool.execute(
       { strategyId: c.req.param('id'), producerRunId: payload.run.id },
       contextForRequest(),
@@ -234,6 +250,7 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
       ...run,
       data: {
         ...payload,
+        observations,
         watchlistSync: synced.ok
           ? synced.data
           : {

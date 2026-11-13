@@ -317,6 +317,13 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
   SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
   股票调用 `strategy-recommendations`。
+- `strategy-daily-cycle` 在 published operational run 提交后调用
+  `create_strategy_observation_candidates`，按 emitted signals 幂等创建 T+1/T+3/T+5 候选；
+  withheld / evaluation 运行不创建。随后同步 benchmark 日线并补全到期观察，失败只把周期标
+  partial，不回滚已发布运行。
+- 历史缺口由 `backfill_strategy_observation_candidates` 显式补建：按 `since`/`until`/`limit`
+  读取 published operational run，逐个调用创建器；只补候选，不同步 benchmark、不补全，
+  重复执行幂等。
 
 `luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
 检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron

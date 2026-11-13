@@ -55,7 +55,7 @@ const strategyDefinition = (
           {
             id: 'entry',
             name: '测试入场',
-            when: 'true',
+            when: 'quote.close > 0',
             score: '80',
             direction: 'bullish' as const,
             evidence: ['fixture'],
@@ -165,9 +165,31 @@ describe('strategy-daily-cycle workflow', () => {
         publication: 'published',
       },
     });
+    expect(audits[0]?.outputSummary).toMatchObject({
+      observations: {
+        created: 3,
+        skipped: 0,
+        scanned: 0,
+        completed: 0,
+        pending: 0,
+        baselines: { available: 1, unavailable: 0 },
+        byHorizon: {
+          t1: { created: 1, skipped: 0 },
+          t3: { created: 1, skipped: 0 },
+          t5: { created: 1, skipped: 0 },
+        },
+      },
+      benchmarkSync: { status: 'succeeded', stockId: '000300.SH' },
+    });
+    const observations = await ctx.repos.signalObservation.list({
+      sourceKind: 'strategy-signal',
+    });
+    expect(observations).toHaveLength(3);
+    expect(observations.every((observation) => observation.status === 'pending')).toBe(true);
     expect(audits[0]?.outputSummary?.phaseTimings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ phase: 'run' }),
+        expect.objectContaining({ phase: 'observations' }),
         expect.objectContaining({ phase: 'insight' }),
         expect.objectContaining({ phase: 'finish' }),
       ]),
@@ -190,6 +212,42 @@ describe('strategy-daily-cycle workflow', () => {
       reason: 'schedule-day-duplicate',
     });
     expect(await ctx.repos.strategyRun.listRuns({ strategyId })).toHaveLength(1);
+  });
+
+  it('同日重复 tick 时补建缺失的观察候选，不重复运行', async () => {
+    const { ctx, strategyId } = await setup({ withSignal: true });
+
+    const first = await strategyDailyCycleOperation.run({ strategyId }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const runId = first.data.items[0]?.runId;
+    expect(runId).toBeDefined();
+    const signals = await ctx.repos.strategyRun.signalsByRun(runId ?? '');
+    expect(signals).toHaveLength(1);
+    await ctx.repos.signalObservation.removeBySources(
+      'strategy-signal',
+      signals.map((signal) => signal.id),
+    );
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
+
+    const second = await strategyDailyCycleOperation.run({ strategyId }, ctx);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.items[0]).toMatchObject({
+      status: 'skipped',
+      reason: 'schedule-day-duplicate',
+    });
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId })).toHaveLength(1);
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toHaveLength(
+      3,
+    );
+    const audits = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'strategy-daily-cycle',
+    });
+    expect(audits[0]?.outputSummary).toMatchObject({
+      status: 'skipped',
+      observations: { created: 3, skipped: 0 },
+    });
   });
 
   it('周末不运行并推进下一次调度', async () => {
@@ -290,5 +348,32 @@ describe('strategy-daily-cycle workflow', () => {
     expect(result.data.items[0]).toMatchObject({ status: 'failed' });
     expect(result.data.items[0]?.reason).toContain('active');
     expect(await ctx.repos.strategyRun.listRuns({ strategyId })).toEqual([]);
+  });
+
+  it('观察候选写入失败时保留已发布 run，只把周期标 partial', async () => {
+    const { ctx, strategyId } = await setup({ withSignal: true });
+    const observationRepo = ctx.repos.signalObservation;
+    const failingRepo = Object.create(observationRepo) as typeof observationRepo;
+    failingRepo.save = async () => {
+      throw new Error('observation store unavailable');
+    };
+    const failingCtx: ToolContext = {
+      ...ctx,
+      repos: { ...ctx.repos, signalObservation: failingRepo },
+    };
+
+    const result = await strategyDailyCycleOperation.run({ strategyId }, failingCtx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]).toMatchObject({
+      status: 'partial',
+      reason: expect.stringContaining('观察候选创建失败'),
+    });
+    const runs = await failingCtx.repos.strategyRun.listRuns({ strategyId });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.publication?.status).toBe('published');
+    expect(
+      await failingCtx.repos.signalObservation.list({ sourceKind: 'strategy-signal' }),
+    ).toEqual([]);
   });
 });

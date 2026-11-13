@@ -116,4 +116,78 @@ describe('run-strategies workflow', () => {
       inputSnapshot: { schemaVersion: 3, requestedBy: 'scheduled' },
     });
   });
+
+  it('published full-universe run 创建观察候选并回传计数', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    const now = new Date('2026-07-28T09:00:00Z');
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'price',
+            name: '价格有效',
+            when: 'quote.close > 0',
+            evidence: ['价格有效'],
+          },
+        ],
+      },
+      signals: {
+        entry: [
+          {
+            id: 'entry',
+            name: '研究信号',
+            when: 'quote.close > 0',
+            score: '60',
+            direction: 'bullish',
+            evidence: ['仅供研究'],
+          },
+        ],
+        exit: [],
+        risk: [],
+      },
+    };
+    const version: StrategyVersion = {
+      id: 'observation-workflow-v1',
+      strategyId: 'observation-workflow',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    };
+    const strategy: Strategy = {
+      id: 'observation-workflow',
+      name: '观察工作流策略',
+      description: '观察候选工作流测试',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: version.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await ctx.repos.strategy.create(strategy);
+    await ctx.repos.strategy.createVersion(version);
+
+    const result = await runStrategiesOperation.run(
+      { strategyIds: [strategy.id], persist: true },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]).toMatchObject({
+      strategyId: strategy.id,
+      status: 'complete',
+      observations: { status: 'complete', created: 3, skipped: 0 },
+    });
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toHaveLength(
+      3,
+    );
+  });
 });

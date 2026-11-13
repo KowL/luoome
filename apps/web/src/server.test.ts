@@ -29,7 +29,7 @@ import {
   saveWatchTriggerTool,
   toolRegistry,
 } from '@luoome/tools';
-import { buildTestContext } from '@luoome/tools/testing';
+import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
 
@@ -1710,6 +1710,100 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
         limitations: expect.any(Array),
       },
     });
+  });
+
+  it('正式运行 published 后创建观察候选并回传计数', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    const web = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const request = (path: string, body: unknown): Request =>
+      new Request(`http://test${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify(body),
+      });
+    const strategyId = 'web-observation-strategy';
+    expect(
+      (
+        await web.fetch(
+          request('/api/strategies', {
+            id: strategyId,
+            name: 'Web Observation Strategy',
+            description: '验证观察候选创建',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const versionResponse = await web.fetch(
+      request(`/api/strategies/${strategyId}/versions`, {
+        definition: {
+          schemaVersion: 1,
+          metadata: {},
+          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+          selection: {
+            logic: 'all',
+            rules: [
+              {
+                id: 'price',
+                name: '价格有效',
+                when: 'quote.close > 0',
+                evidence: ['价格有效'],
+              },
+            ],
+          },
+          signals: {
+            entry: [
+              {
+                id: 'entry',
+                name: '研究信号',
+                when: 'quote.close > 0',
+                score: '60',
+                direction: 'bullish',
+                evidence: ['仅供研究'],
+              },
+            ],
+            exit: [],
+            risk: [],
+          },
+        },
+      }),
+    );
+    expect(versionResponse.status).toBe(200);
+    const versionBody = (await versionResponse.json()) as {
+      data?: { version?: { id: string } };
+    };
+    const versionId = versionBody.data?.version?.id;
+    expect(versionId).toBeString();
+    if (versionId === undefined) return;
+
+    expect(
+      (await web.fetch(request(`/api/strategies/${strategyId}/validate`, { versionId }))).status,
+    ).toBe(200);
+    expect(
+      (await web.fetch(request(`/api/strategies/${strategyId}/publish`, { versionId }))).status,
+    ).toBe(200);
+
+    const runResponse = await web.fetch(
+      request(`/api/strategies/${strategyId}/run`, { persist: true }),
+    );
+    expect(runResponse.status).toBe(200);
+    const runBody = (await runResponse.json()) as {
+      ok: boolean;
+      data?: {
+        run?: { publication?: { status?: string } };
+        observations?: { status?: string; created?: number; skipped?: number };
+      };
+    };
+    expect(runBody.data?.run?.publication?.status).toBe('published');
+    expect(runBody.data?.observations).toMatchObject({
+      status: 'complete',
+      created: 3,
+      skipped: 0,
+    });
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toHaveLength(
+      3,
+    );
   });
 
   it('策略工作台 pause/resume routes 复用生命周期 tool 并保留 mutation 防护', async () => {

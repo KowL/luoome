@@ -20,6 +20,8 @@ import type {
   ComputeIndicatorsOutput,
   CreateStrategyInput,
   CreateStrategyOutput,
+  CreateStrategyObservationCandidatesInput,
+  CreateStrategyObservationCandidatesOutput,
   CreateStrategyVersionInput,
   CreateStrategyVersionOutput,
   DragonTigerListInput,
@@ -358,6 +360,11 @@ export interface WorkflowToolMap {
   readonly create_strategy_version: ToolAccessor<
     typeof CreateStrategyVersionInput,
     typeof CreateStrategyVersionOutput
+  >;
+  /** workflow-only：published operational run 的观察候选投影。 */
+  readonly create_strategy_observation_candidates: ToolAccessor<
+    typeof CreateStrategyObservationCandidatesInput,
+    typeof CreateStrategyObservationCandidatesOutput
   >;
   readonly validate_strategy_version: ToolAccessor<
     typeof ValidateStrategyVersionInput,
