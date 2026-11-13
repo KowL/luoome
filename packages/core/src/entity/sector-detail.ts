@@ -739,9 +739,7 @@ export const buildSectorDetail = (input: SectorDetailInput): SectorDetail => {
   };
   // 窗口不可比时不拿「最近的更早批次」冒充窗口起点：窗口涨幅 / 增量一律缺失。
   const start =
-    windowRefs[input.window].status === 'unavailable'
-      ? null
-      : input.windowStarts[input.window];
+    windowRefs[input.window].status === 'unavailable' ? null : input.windowStarts[input.window];
   const startItems = itemMap(start);
   const day = buildSectorDayMetric({ members, items: anchorItems });
   const windowMetric = buildSectorWindowMetric({
