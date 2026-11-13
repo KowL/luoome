@@ -19,6 +19,7 @@ import {
   replayHashSuffix,
   replayParam,
 } from './market-room-replay.js';
+import { formatClock as fmtClock, formatPct as fmtPct } from './market-shared.js';
 import { el } from './ui.js';
 
 const EVENT_KIND_LABELS = { diffusion: '扩散', divergence: '分化', rotation: '换位' };
@@ -27,24 +28,6 @@ const SECTOR_KIND_LABELS = { industry: '行业', concept: '概念' };
 const EMPTY_TEXTS = {
   no_batch: '尚无已发布的盘中批次',
   no_events: '该交易日没有扩散 / 分化 / 换位事件',
-};
-
-const fmtClock = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
-
-const fmtPct = (value, signed = false) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const sign = signed && value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
 };
 
 const fmtPp = (value, signed = true) => {

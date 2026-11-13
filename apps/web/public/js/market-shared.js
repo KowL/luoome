@@ -96,6 +96,29 @@ const fetchedAtLabel = (value) => {
   return `行情获取于 ${date.toLocaleTimeString('zh-CN', { hour12: false })}`;
 };
 
+/**
+ * 涨跌幅 / 占比文案：非法或缺失值按调用方期望返回 `missing`。
+ * 作战室表格用 null 交给渲染层写「缺失」，总览等固定占位用 '--'，口径由调用点显式传入。
+ */
+const formatPct = (value, signed = false, missing = null) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return missing;
+  const sign = signed && value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+};
+
+/** 上海时钟 HH:mm；非法或缺失时间按调用方期望返回 `missing`（默认 '--'）。 */
+const formatClock = (value, missing = '--') => {
+  if (value === null || value === undefined) return missing;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return missing;
+  return date.toLocaleTimeString('zh-CN', {
+    hour12: false,
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 /** 成交量（股）→ 万 / 亿（§11.3）。 */
 const formatVolume = (volume) => {
   if (typeof volume !== 'number' || !Number.isFinite(volume)) return '--';
@@ -164,6 +187,8 @@ export {
   factKindLabel,
   fetchedAtLabel,
   formatAmount,
+  formatClock,
+  formatPct,
   formatVolume,
   normalizeMarketGranularity,
   normalizeMarketRange,

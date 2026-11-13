@@ -46,7 +46,7 @@ import {
   sectorDetailParamsFromHash,
   toggleCompareSelection,
 } from './market-room-sector-detail.js';
-import { formatAmount } from './market-shared.js';
+import { formatClock as fmtClock, formatAmount, formatPct } from './market-shared.js';
 import { $, el, mount, sortableHeader } from './ui.js';
 
 const ROOM_TABS = ['overview', 'sectors', 'turnover', 'events'];
@@ -146,24 +146,8 @@ const roomHash = (tab, at = null) => `market-room?tab=${tab}${replayHashSuffix(a
 const dimensionStatusLabel = (status) => DIMENSION_STATUS_LABELS[status] ?? '缺失';
 
 /** 百分比文案（百分数单位，与后端 changePct / deltaPct 一致）。 */
-const fmtPct = (value, signed = false) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '--';
-  const sign = signed && value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
-};
-
-/** 上海时钟 HH:mm；非法时间返回 '--'。 */
-const fmtClock = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
+/** 总览表格沿用 '--' 作为缺失占位；其它作战室视图传 null 交给渲染层写「缺失」。 */
+const fmtPctOrDash = (value, signed = false) => formatPct(value, signed, '--');
 
 const coverageLabel = (coverage) => COVERAGE_LABELS[coverage] ?? coverage ?? '--';
 
@@ -178,7 +162,7 @@ const breadthMedianText = (value) => {
   if (value === undefined || value === null) return null;
   return value.medianChangePct === null
     ? '个股涨幅中位数缺失'
-    : `个股涨幅中位数 ${fmtPct(value.medianChangePct, true)}`;
+    : `个股涨幅中位数 ${fmtPctOrDash(value.medianChangePct, true)}`;
 };
 
 /** 统计口径：样本数 / 期望数 / 参与分类 / 缺失数全部写出。 */
@@ -191,8 +175,8 @@ const breadthSampleText = (value) =>
 const divergenceText = (value) => {
   const divergence = value?.divergence;
   if (divergence === undefined || divergence === null) return null;
-  const benchmark = `${divergence.indexName} ${fmtPct(divergence.indexChangePct, true)}`;
-  const median = `中位数 ${fmtPct(divergence.medianChangePct, true)}`;
+  const benchmark = `${divergence.indexName} ${fmtPctOrDash(divergence.indexChangePct, true)}`;
+  const median = `中位数 ${fmtPctOrDash(divergence.medianChangePct, true)}`;
   return divergence.divergent
     ? `指数与多数个股背离：${benchmark} / ${median}`
     : `指数与多数个股同向：${benchmark} / ${median}`;
@@ -216,7 +200,7 @@ const amountSummary = (amount) => {
     verdict:
       comparison === undefined
         ? null
-        : `${VERDICT_LABELS[comparison.verdict] ?? comparison.verdict} ${fmtPct(comparison.deltaPct, true)}`,
+        : `${VERDICT_LABELS[comparison.verdict] ?? comparison.verdict} ${fmtPctOrDash(comparison.deltaPct, true)}`,
   };
 };
 
@@ -245,7 +229,7 @@ const sectorMissingText = (metric) => metric?.warnings?.[0] ?? '缺失';
 
 const sectorValueText = (metric) => {
   if (metric?.value === null || metric?.value === undefined) return null;
-  return fmtPct(metric.value, true);
+  return fmtPctOrDash(metric.value, true);
 };
 
 const sectorShareText = (turnover) => {
@@ -419,7 +403,7 @@ const indexRow = (indexes) => {
         el(
           'span',
           `value ${entry.changePct > 0 ? 'text-pos' : entry.changePct < 0 ? 'text-neg' : 'muted'}`,
-          fmtPct(entry.changePct, true),
+          fmtPctOrDash(entry.changePct, true),
         ),
       ]),
     ),

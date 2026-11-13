@@ -17,7 +17,7 @@ import {
   replayHashSuffix,
   replayQuerySuffix,
 } from './market-room-replay.js';
-import { formatAmount } from './market-shared.js';
+import { formatClock as fmtClock, formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
 const AMOUNT_KINDS = ['industry', 'concept'];
@@ -57,18 +57,6 @@ const amountQuery = (params) =>
 
 const amountHash = (params) =>
   `market-room?tab=turnover&kind=${params.kind}&window=${params.window}${replayHashSuffix(params.at)}`;
-
-const fmtClock = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
 
 const dimensionStatusLabel = (status) => DIMENSION_STATUS_LABELS[status] ?? '缺失';
 

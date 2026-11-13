@@ -13,6 +13,7 @@ import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountOverviewTool } from './tools/get-account-overview.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
+import { getStockSectorMembershipsTool } from './tools/get-stock-sector-memberships.js';
 import { getStrategySignalsTool } from './tools/get-strategy-signals.js';
 import { limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listTradesTool } from './tools/list-trades.js';
@@ -39,6 +40,7 @@ import { saveStrategyVersionTool } from './tools/save-strategy-version.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { getStrategyTool, listStrategiesTool } from './tools/strategy-lifecycle.js';
+import { syncSectorCatalogTool } from './tools/sync-sector-catalog.js';
 import { saveTradingPlanTool } from './tools/trading-plan.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateWatchlistMembersTool } from './tools/update-watchlist-members.js';
@@ -204,6 +206,9 @@ export const toolRegistry: Registry = createRegistry([
   getMarketRoomOverviewTool,
   // 板块盘中榜（ticket #38）：只读批次 + 目录成分 + 当日天梯
   getMarketRoomSectorsTool,
+  // 板块目录与成分（扶摇）：按股反查（read）与盘前同步（external+write）
+  getStockSectorMembershipsTool,
+  syncSectorCatalogTool,
   // 成交分布（ticket #40）：窗口占比、百分点环比与 CR3 集中度
   getMarketRoomAmountDistributionTool,
   getMarketRoomCoreStocksTool,

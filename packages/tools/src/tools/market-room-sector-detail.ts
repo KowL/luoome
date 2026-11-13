@@ -1,23 +1,21 @@
 import {
   buildSectorDetail,
   buildSectorDetailEmpty,
-  dateInShanghai,
-  type LimitUpLadder,
-  ladderOfSample,
-  type MarketSnapshotBatch,
-  marketRoomEmptyReason,
   type SectorCatalogEntry,
-  type SectorDetailEmptyReason,
   SectorDetailSchema,
-  type SectorWindowKey,
   SectorWindowKeySchema,
   type StockSectorMembership,
-  sectorWindowTarget,
   type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  MARKET_ROOM_COVERAGE,
+  marketRoomWindowStartsFromBatches,
+  readMarketRoomLimitUp,
+  resolveMarketRoomAnchor,
+} from '../internal/market-room-anchor.js';
 
 /**
  * 板块详情（ticket #39）：单板块走势 + 成分明细 + 多板块对照与领先顺序。
@@ -29,8 +27,6 @@ import { defineTool } from '../define-tool.js';
  * - 对照板块不存在时进入 unresolvedSectorIds，不伪造序列。
  */
 
-const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
-const LIMIT_UP_SOURCE = 'eastmoney';
 const MAX_COMPARISONS = 5;
 
 export const GetMarketRoomSectorDetailInput = z.object({
@@ -45,63 +41,6 @@ export const GetMarketRoomSectorDetailOutput = z.object({
   detail: SectorDetailSchema,
 });
 export type GetMarketRoomSectorDetailOutputT = z.infer<typeof GetMarketRoomSectorDetailOutput>;
-
-type AnchorResult =
-  | {
-      readonly kind: 'empty';
-      readonly reason: SectorDetailEmptyReason;
-      readonly latest: MarketSnapshotBatch | null;
-    }
-  | { readonly kind: 'ready'; readonly anchor: MarketSnapshotBatch };
-
-const resolveAnchor = async (ctx: ToolContext, at: Date | undefined): Promise<AnchorResult> => {
-  if (at === undefined) {
-    const latest = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
-    if (latest === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-    const reason = marketRoomEmptyReason(ctx.clock(), latest);
-    if (reason !== null) return { kind: 'empty', reason, latest };
-    return { kind: 'ready', anchor: latest };
-  }
-  const anchor = await ctx.repos.marketSnapshotBatch.findAtOrBefore({
-    coverage: COVERAGE,
-    tradingDate: dateInShanghai(at),
-    sampledAt: at,
-  });
-  if (anchor === null) return { kind: 'empty', reason: 'no_batch', latest: null };
-  return { kind: 'ready', anchor };
-};
-
-/**
- * 天梯事实：最新模式沿用当日快照；回放只用锚点批次时点及之前的天梯样本，
- * 不拿之后才采集的那一份冒充当时状态。
- */
-const readLimitUp = async (
-  ctx: ToolContext,
-  anchor: MarketSnapshotBatch,
-  asOf: Date | undefined,
-): Promise<{ readonly ladder: LimitUpLadder | null; readonly error: string | null }> => {
-  try {
-    if (asOf === undefined) {
-      const ladder = await ctx.repos.limitUpLadderSnapshot.findByDate({
-        date: anchor.tradingDate,
-        source: LIMIT_UP_SOURCE,
-      });
-      return { ladder, error: null };
-    }
-    const sample = await ctx.repos.limitUpLadderSample.findAtOrBefore({
-      tradingDate: anchor.tradingDate,
-      source: LIMIT_UP_SOURCE,
-      sampledAt: anchor.sampledAt,
-    });
-    const aligned =
-      sample !== null && sample.sampledAt.getTime() === anchor.sampledAt.getTime()
-        ? ladderOfSample(sample)
-        : null;
-    return { ladder: aligned, error: null };
-  } catch (error) {
-    return { ladder: null, error: error instanceof Error ? error.message : String(error) };
-  }
-};
 
 /** 目录：最新模式读当前 active；回放读该时点生效的目录，不拿今天的板块顶替。 */
 const listActiveSectors = (
@@ -125,19 +64,6 @@ const activeMembersBySector = (
   return map;
 };
 
-const windowStartsFrom = (
-  batches: readonly MarketSnapshotBatch[],
-  anchor: MarketSnapshotBatch,
-): Record<SectorWindowKey, MarketSnapshotBatch | null> => {
-  const find = (key: SectorWindowKey): MarketSnapshotBatch | null => {
-    const target = sectorWindowTarget(anchor.sampledAt, key);
-    return (
-      [...batches].reverse().find((batch) => batch.sampledAt.getTime() <= target.getTime()) ?? null
-    );
-  };
-  return { w5: find('w5'), w15: find('w15') };
-};
-
 export const getMarketRoomSectorDetailTool = defineTool({
   name: 'get_market_room_sector_detail',
   description:
@@ -147,7 +73,7 @@ export const getMarketRoomSectorDetailTool = defineTool({
   output: GetMarketRoomSectorDetailOutput,
   handler: async (input, ctx) => {
     const base = { window: input.window };
-    const anchorResult = await resolveAnchor(ctx, input.at);
+    const anchorResult = await resolveMarketRoomAnchor(ctx, input.at);
     if (anchorResult.kind === 'empty') {
       // 空态仍尽量带上板块身份，便于页面显示「哪个板块暂无数据」。
       const sectors = await listActiveSectors(ctx, input.at).catch(
@@ -220,14 +146,17 @@ export const getMarketRoomSectorDetailTool = defineTool({
     }
 
     const dayBatches = await ctx.repos.marketSnapshotBatch.listByTradingDate({
-      coverage: COVERAGE,
+      coverage: MARKET_ROOM_COVERAGE,
       tradingDate: anchor.tradingDate,
     });
     const batches = dayBatches.filter(
       (batch) => batch.sampledAt.getTime() <= anchor.sampledAt.getTime(),
     );
-    const windowStarts = windowStartsFrom(batches.length === 0 ? [anchor] : batches, anchor);
-    const limitUp = await readLimitUp(ctx, anchor, input.at);
+    const windowStarts = marketRoomWindowStartsFromBatches(
+      batches.length === 0 ? [anchor] : batches,
+      anchor,
+    );
+    const limitUp = await readMarketRoomLimitUp(ctx, anchor, input.at);
     return {
       detail: buildSectorDetail({
         sector,

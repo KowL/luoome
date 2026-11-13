@@ -14,7 +14,7 @@
 
 import { callApi } from './api.js';
 import { stockHref } from './market-room-return.js';
-import { formatAmount } from './market-shared.js';
+import { formatClock as fmtClock, formatPct as fmtPct, formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
 const ROLE_KINDS = ['ignition', 'turnover', 'height'];
@@ -51,24 +51,6 @@ const EMPTY_TEXTS = {
   no_sector_catalog: '行业 / 概念目录尚未同步',
   no_members: '该板块没有 active 成分',
   sector_not_found: '该板块不在当前目录中（可能已下架或目录尚未同步）',
-};
-
-const fmtClock = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
-
-const fmtPct = (value, signed = false) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const sign = signed && value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
 };
 
 const fmtValue = (field, value) => {
