@@ -485,6 +485,50 @@ describe('market/eastmoney', () => {
       expect(items.length).toBe(500);
     });
 
+    it('上游短页（少于请求页大小）时继续翻页直到 total', async () => {
+      const requestedPages: number[] = [];
+      const adapter = new EastmoneySource({
+        fetchImpl: ((url: string) => {
+          const pn = Number(new URL(url).searchParams.get('pn'));
+          requestedPages.push(pn);
+          const from = (pn - 1) * 100;
+          const size = pn < 3 ? 100 : 50;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ rc: 0, data: { total: 250, diff: makePage(from, size) } }),
+              {
+                status: 200,
+              },
+            ),
+          );
+        }) as never,
+      });
+      const items = await adapter.fetchMarketSnapshot();
+      expect(requestedPages).toEqual([1, 2, 3]);
+      expect(items.length).toBe(250);
+    });
+
+    it('上游重复返回同一页时停止翻页，标记为不完整而不是死循环', async () => {
+      let calls = 0;
+      const adapter = new EastmoneySource({
+        fetchImpl: (() => {
+          calls += 1;
+          return Promise.resolve(
+            new Response(JSON.stringify({ rc: 0, data: { total: 5000, diff: makePage(0, 100) } }), {
+              status: 200,
+            }),
+          );
+        }) as never,
+      });
+      const snapshot = await adapter.fetchMarketSnapshotEnvelope();
+      expect(calls).toBe(2);
+      expect(snapshot.completeness).toMatchObject({
+        expectedCount: 5000,
+        receivedCount: 100,
+        complete: false,
+      });
+    });
+
     it('任一页失败 → 抛结构化错误（不返回半拉子全集）', async () => {
       const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {

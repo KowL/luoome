@@ -276,6 +276,8 @@ const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
 const CLIST_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
 const CLIST_FIELDS = 'f12,f13,f14,f2,f3,f6';
 const CLIST_PAGE_SIZE = 500;
+/** 翻页上限：沪深 A 股约 5.6k 只，按实测单页 100 条也只需 60 页；超出视为上游异常。 */
+const CLIST_MAX_PAGES = 200;
 const TRENDS_FIELDS1 = 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11';
 const TRENDS_FIELDS2 = 'f51,f52,f53,f54,f55,f56,f57,f58';
 
@@ -764,7 +766,10 @@ export const fetchEastmoneyMarketSnapshot = async (
 
 /**
  * 全市场快照（沪深 A 股，分组刷新候选全集）：clist 分页拉取，一页 500 条，
- * 某页不足页大小或累计达到 total 时停止（全量约 11 页）。
+ * 累计达到 total 时停止（全量约 11 页）。
+ * 短页不视为末页：push2 对单页返回数有上限（实测请求 pz=500 只回 100 条），
+ * 只要 total 未达到就继续翻页，否则会把 100 条当成全市场。
+ * 某页一条都没新增时停止，避免上游重复返回同一页导致死循环。
  * 顺序翻页不并发：push2 并发齐发偶发整批拒绝（同 fetchEastmoneyIndexQuotes 实测）。
  * 任一页失败直接抛 EastmoneyAdapterError：返回半拉子全集会让分组刷新误算退出成员。
  */
@@ -772,19 +777,25 @@ export const fetchEastmoneyMarketSnapshotEnvelope = async (
   http: EastmoneyMarketRequest,
 ): Promise<MarketSnapshot> => {
   const items: MarketSnapshotItem[] = [];
+  const seenIds = new Set<string>();
   let expectedCount: number | undefined;
-  for (let page = 1; ; page++) {
+  for (let page = 1; page <= CLIST_MAX_PAGES; page++) {
     const url =
       `${BASE_CLIST_URL}?pn=${page}&pz=${CLIST_PAGE_SIZE}&po=1&np=1` +
       `&fltt=2&invt=2&fid=f3&fs=${encodeURIComponent(CLIST_FS)}&fields=${CLIST_FIELDS}`;
     const json = (await http.getJson(url)) as EastmoneyClistResponse;
     const pageItems = parseEastmoneyClist(json);
+    const freshCount = pageItems.filter((item) => !seenIds.has(item.id)).length;
+    for (const item of pageItems) seenIds.add(item.id);
     items.push(...pageItems);
     const total = json.data?.total;
     if (total !== undefined) expectedCount = total;
-    if (pageItems.length < CLIST_PAGE_SIZE || (total !== undefined && items.length >= total)) {
-      break;
+    if (freshCount === 0) break;
+    if (total !== undefined) {
+      if (items.length >= total) break;
+      continue;
     }
+    if (pageItems.length < CLIST_PAGE_SIZE) break;
   }
   const uniqueItems = [...new Map(items.map((item) => [item.id, item])).values()];
   const expected = expectedCount ?? uniqueItems.length;
