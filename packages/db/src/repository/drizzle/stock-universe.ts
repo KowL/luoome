@@ -2,6 +2,7 @@ import {
   type MarketCoverage,
   type Stock,
   type StockUniverseApplySummary,
+  type StockUniverseMember,
   type StockUniverseRepository,
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
@@ -230,13 +231,12 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';
   }): Promise<readonly Stock[]> {
-    const filters = [eq(stockUniverseMemberships.coverage, input.coverage)];
     const status = input.status ?? 'active';
     const rows = this.db
       .select({ stock: stocks, state: stockUniverseMemberships.state })
       .from(stockUniverseMemberships)
       .innerJoin(stocks, eq(stocks.id, stockUniverseMemberships.stockId))
-      .where(and(...filters))
+      .where(eq(stockUniverseMemberships.coverage, input.coverage))
       .orderBy(asc(stocks.id))
       .all();
 
@@ -265,6 +265,61 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
         return !states.has('active') && states.has('missing');
       })
       .map(({ stock }) => stock);
+  }
+
+  /**
+   * 当前成员 + 聚合挂牌状态：只要任一来源仍 active 就算在目录内；
+   * 状态取最“可信”的一个（listed > suspended > delisted > unknown）。
+   */
+  async listCurrentMembers(input: {
+    readonly coverage: MarketCoverage;
+  }): Promise<readonly StockUniverseMember[]> {
+    const rows = this.db
+      .select({
+        stock: stocks,
+        state: stockUniverseMemberships.state,
+        listingStatus: stockUniverseMemberships.listingStatus,
+      })
+      .from(stockUniverseMemberships)
+      .innerJoin(stocks, eq(stocks.id, stockUniverseMemberships.stockId))
+      .where(eq(stockUniverseMemberships.coverage, input.coverage))
+      .orderBy(asc(stocks.id))
+      .all();
+
+    const byId = new Map<
+      string,
+      { stock: Stock; active: boolean; statuses: Set<StockUniverseMember['listingStatus']> }
+    >();
+    for (const { stock: row, state, listingStatus } of rows) {
+      const current = byId.get(row.id);
+      const statuses = current?.statuses ?? new Set<StockUniverseMember['listingStatus']>();
+      statuses.add(listingStatus);
+      byId.set(row.id, {
+        stock:
+          current?.stock ??
+          ({
+            id: row.id,
+            code: row.code,
+            exchange: row.exchange,
+            name: row.name,
+            ...(row.industry === null ? {} : { industry: row.industry }),
+          } satisfies Stock),
+        active: (current?.active ?? false) || state === 'active',
+        statuses,
+      });
+    }
+    const byReliability: readonly StockUniverseMember['listingStatus'][] = [
+      'listed',
+      'suspended',
+      'delisted',
+      'unknown',
+    ];
+    return [...byId.values()]
+      .filter(({ active }) => active)
+      .map(({ stock, statuses }) => ({
+        stock,
+        listingStatus: byReliability.find((status) => statuses.has(status)) ?? 'unknown',
+      }));
   }
 
   async latestSnapshotAtOrBefore(input: {

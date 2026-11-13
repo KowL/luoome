@@ -21,6 +21,7 @@ import type {
   NewsManagerLike,
   NorthboundFlowManagerLike,
   RepositoryRegistry,
+  SectorCatalogAdapterLike,
   SectorQuoteManagerLike,
   StockUniverseManagerLike,
   ToolContext,
@@ -47,6 +48,8 @@ export interface BuildTestContextOptions {
   /** 可选注入行业板块行情 manager。 */
   readonly sectorQuote?: SectorQuoteManagerLike;
   readonly stockUniverse?: StockUniverseManagerLike;
+  /** 可选注入行业 / 概念目录数据源（同步 tool 用）。 */
+  readonly sectorCatalog?: SectorCatalogAdapterLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
 }
 
@@ -98,6 +101,7 @@ export const buildTestContext = async (
       }),
       llm: new FakeLLMAdapter(),
       ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
+      ...(opts.sectorCatalog === undefined ? {} : { sectorCatalog: opts.sectorCatalog }),
       notification: createTestNotificationManager(repos),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
     },

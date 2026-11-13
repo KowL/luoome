@@ -62,6 +62,8 @@ import type {
   GetResearchDocumentOutput,
   GetSignalObservationStatsInput,
   GetSignalObservationStatsOutput,
+  GetStockSectorMembershipsInput,
+  GetStockSectorMembershipsOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
   GetStrategyInput,
@@ -162,6 +164,8 @@ import type {
   SyncQuotesOutput,
   SyncResearchVaultInput,
   SyncResearchVaultOutput,
+  SyncSectorCatalogInput,
+  SyncSectorCatalogOutput,
   SyncStockUniverseInput,
   SyncStockUniverseOutput,
   SyncStrategyWatchlistSubscriptionsInput,
@@ -306,6 +310,14 @@ export interface WorkflowToolMap {
   readonly sync_stock_universe: ToolAccessor<
     typeof SyncStockUniverseInput,
     typeof SyncStockUniverseOutput
+  >;
+  readonly sync_sector_catalog: ToolAccessor<
+    typeof SyncSectorCatalogInput,
+    typeof SyncSectorCatalogOutput
+  >;
+  readonly get_stock_sector_memberships: ToolAccessor<
+    typeof GetStockSectorMembershipsInput,
+    typeof GetStockSectorMembershipsOutput
   >;
   readonly search_stocks: ToolAccessor<typeof SearchStocksInput, typeof SearchStocksOutput>;
   readonly compute_indicators: ToolAccessor<

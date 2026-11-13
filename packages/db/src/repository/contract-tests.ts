@@ -25,6 +25,9 @@ import {
   type RepositoryRegistry,
   type ResearchDocumentIndex,
   reconcileCashBalance,
+  type SectorCatalogObservation,
+  type SectorKind,
+  type SectorSyncApplyInput,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
   type Stock,
@@ -1251,6 +1254,315 @@ export const registerRepositoryContractTests = (
             status: 'missing',
           }),
         ).toEqual([]);
+      });
+
+      it('listCurrentMembers 返回当前成员与聚合挂牌状态', async () => {
+        const apply = (syncId: string, entries: StockUniverseEntry[]) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: T1,
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt: T1,
+              complete: true,
+              reportedTotal: entries.length,
+              entries,
+            },
+          });
+        await apply('sync-members-1', [
+          {
+            stockId: '600519.SH',
+            code: stockCode('600519'),
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+          },
+          {
+            stockId: '002594.SZ',
+            code: stockCode('002594'),
+            exchange: 'SZ',
+            name: '比亚迪',
+            listingStatus: 'suspended',
+          },
+        ]);
+        const members = await repos.stockUniverse.listCurrentMembers({
+          coverage: 'CN_A_SHARES_SH_SZ',
+        });
+        expect(members.map((member) => `${member.stock.id}:${member.listingStatus}`)).toEqual([
+          '002594.SZ:suspended',
+          '600519.SH:listed',
+        ]);
+      });
+    });
+
+    describe('SectorCatalogRepository', () => {
+      const TS1 = new Date('2026-11-02T00:20:00.000Z');
+      const TS2 = new Date('2026-11-03T00:20:00.000Z');
+      const TS3 = new Date('2026-11-04T00:20:00.000Z');
+      const industry = (vendorCode: string, name: string): SectorCatalogObservation => ({
+        kind: 'industry',
+        vendorCode,
+        name,
+      });
+      const concept = (vendorCode: string, name: string): SectorCatalogObservation => ({
+        kind: 'concept',
+        vendorCode,
+        name,
+      });
+      const syncInput = (
+        overrides: Partial<SectorSyncApplyInput> & { readonly syncId: string },
+      ): SectorSyncApplyInput => ({
+        source: 'fuyao',
+        appliedAt: TS1,
+        status: 'succeeded',
+        catalog: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+        catalogKinds: ['industry', 'concept'] satisfies SectorKind[],
+        observations: [
+          {
+            stockId: '600519.SH',
+            sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          },
+          {
+            stockId: '000858.SZ',
+            sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+          },
+        ],
+        stockStatuses: [
+          { stockId: '600519.SH', status: 'listed' },
+          { stockId: '000858.SZ', status: 'suspended' },
+        ],
+        failures: [],
+        ...overrides,
+      });
+
+      it('首次同步建立目录与多对多成分，按股票反查含来源与时点', async () => {
+        const summary = await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-1' }));
+
+        expect(summary).toEqual({
+          observedSectors: 2,
+          createdSectors: 2,
+          renamedSectors: 0,
+          retiredSectors: 0,
+          observedStocks: 2,
+          createdMemberships: 4,
+          removedMemberships: 0,
+          reactivatedMemberships: 0,
+        });
+        const sectors = await repos.sectorCatalog.listSectors();
+        expect(sectors.map((sector) => `${sector.kind}:${sector.vendorCode}`)).toEqual([
+          'concept:886042.TI',
+          'industry:881273.TI',
+        ]);
+        // 内部标识与供应商编码分别标识，不互相顶替。
+        for (const sector of sectors) expect(sector.id).not.toBe(sector.vendorCode);
+
+        const views = await repos.sectorCatalog.listByStock({
+          stockIds: ['600519.SH'],
+          kinds: ['concept'],
+        });
+        expect(views).toHaveLength(1);
+        expect(views[0]).toMatchObject({
+          stockId: '600519.SH',
+          kind: 'concept',
+          vendorCode: '886042.TI',
+          name: '白酒概念',
+          source: 'fuyao',
+          state: 'active',
+          memberStatus: 'listed',
+          firstSeenAt: TS1,
+          lastSeenAt: TS1,
+          missingSince: null,
+        });
+        expect(
+          (await repos.sectorCatalog.listByStock({ stockIds: ['000858.SZ'] })).map(
+            (view) => view.memberStatus,
+          ),
+        ).toEqual(['suspended', 'suspended']);
+      });
+
+      it('同一 syncId 重放与重复执行都不产生重复关系或重复变更', async () => {
+        const input = syncInput({ syncId: 'sector-replay' });
+        const first = await repos.sectorCatalog.applySync(input);
+        const replay = await repos.sectorCatalog.applySync(input);
+        expect(replay).toEqual(first);
+
+        const repeat = await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-replay-2', appliedAt: TS2 }),
+        );
+        expect(repeat.createdMemberships).toBe(0);
+        expect(await repos.sectorCatalog.listByStock({ stockIds: ['600519.SH'] })).toHaveLength(2);
+        expect(
+          (await repos.sectorCatalog.listChanges({ stockId: '600519.SH' })).map(
+            (change) => change.kind,
+          ),
+        ).toEqual(['member-entered', 'member-entered']);
+        expect(
+          (await repos.sectorCatalog.listChanges()).filter(
+            (change) => change.kind === 'sector-created',
+          ),
+        ).toHaveLength(2);
+      });
+
+      it('目录改名与下线写变更记录，历史条目仍可读取', async () => {
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-history-1',
+            catalog: [industry('881101.TI', '种植业'), industry('881273.TI', '白酒')],
+            catalogKinds: ['industry'],
+            observations: [],
+          }),
+        );
+        const renamed = await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-history-2',
+            appliedAt: TS2,
+            catalog: [industry('881273.TI', '白酒Ⅱ')],
+            catalogKinds: ['industry'],
+            observations: [],
+          }),
+        );
+
+        expect(renamed.renamedSectors).toBe(1);
+        expect(renamed.retiredSectors).toBe(1);
+        const all = await repos.sectorCatalog.listSectors({ state: 'all' });
+        expect(all.map((sector) => `${sector.vendorCode}:${sector.name}:${sector.state}`)).toEqual([
+          '881101.TI:种植业:retired',
+          '881273.TI:白酒Ⅱ:active',
+        ]);
+        // 默认只返回当前有效目录；下线条目不覆盖历史。
+        expect(
+          (await repos.sectorCatalog.listSectors()).map((sector) => sector.vendorCode),
+        ).toEqual(['881273.TI']);
+
+        const renamedSector = all.find((sector) => sector.vendorCode === '881273.TI');
+        expect(renamedSector).toBeDefined();
+        if (renamedSector === undefined) return;
+        const renamedChanges = await repos.sectorCatalog.listChanges({
+          sectorId: renamedSector.id,
+        });
+        expect(renamedChanges.map((change) => change.kind)).toEqual([
+          'sector-created',
+          'sector-renamed',
+        ]);
+        expect(renamedChanges[1]).toMatchObject({
+          previousValue: '白酒',
+          nextValue: '白酒Ⅱ',
+          occurredAt: TS2,
+        });
+      });
+
+      it('部分响应失败时未观测股票与未成功分类保持原状', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-partial-1' }));
+
+        // concept 目录请求失败（catalogKinds 里没有 concept），且 000858.SZ 批次失败未被观测。
+        const partial = await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-partial-2',
+            appliedAt: TS2,
+            status: 'partial',
+            catalog: [industry('881273.TI', '白酒')],
+            catalogKinds: ['industry'],
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒')],
+              },
+            ],
+            failures: [
+              {
+                scope: 'catalog',
+                kind: 'concept',
+                message: 'fuyao upstream_error: concept catalog',
+              },
+              { scope: 'memberships', kind: null, message: 'fuyao network: batch 000858.SZ' },
+            ],
+          }),
+        );
+
+        expect(partial.removedMemberships).toBe(1);
+        expect(partial.retiredSectors).toBe(0);
+        // 000858.SZ 未被观测 → 两条成分都保持 active，只按目录状态更新为 suspended。
+        const unobserved = await repos.sectorCatalog.listByStock({ stockIds: ['000858.SZ'] });
+        expect(unobserved.map((view) => `${view.vendorCode}:${view.state}`)).toEqual([
+          '886042.TI:active',
+          '881273.TI:active',
+        ]);
+        expect(unobserved.every((view) => view.memberStatus === 'suspended')).toBe(true);
+        // concept 目录没有成功返回 → 不下线。
+        expect(
+          (await repos.sectorCatalog.listSectors({ kinds: ['concept'] })).map(
+            (sector) => sector.vendorCode,
+          ),
+        ).toEqual(['886042.TI']);
+        // 被观测到的 600519.SH 少了一条概念关系 → 只退该条。
+        expect(
+          (
+            await repos.sectorCatalog.listByStock({
+              stockIds: ['600519.SH'],
+              includeMissing: true,
+            })
+          ).map((view) => `${view.vendorCode}:${view.state}`),
+        ).toEqual(['886042.TI:missing', '881273.TI:active']);
+      });
+
+      it('成分重新出现时恢复 active 并保留首次观测时间', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-rejoin-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-rejoin-2',
+            appliedAt: TS2,
+            catalog: [industry('881273.TI', '白酒')],
+            observations: [{ stockId: '600519.SH', sectors: [industry('881273.TI', '白酒')] }],
+          }),
+        );
+        const rejoined = await repos.sectorCatalog.applySync(
+          syncInput({ syncId: 'sector-rejoin-3', appliedAt: TS3 }),
+        );
+
+        expect(rejoined.reactivatedMemberships).toBe(1);
+        const views = await repos.sectorCatalog.listByStock({ stockIds: ['600519.SH'] });
+        const conceptView = views.find((view) => view.vendorCode === '886042.TI');
+        expect(conceptView).toMatchObject({
+          state: 'active',
+          missingSince: null,
+          firstSeenAt: TS1,
+          lastSeenAt: TS3,
+        });
+        const changes = await repos.sectorCatalog.listChanges({ stockId: '600519.SH' });
+        expect(changes.map((change) => change.kind)).toEqual([
+          'member-entered',
+          'member-entered',
+          'member-left',
+          'member-rejoined',
+        ]);
+      });
+
+      it('按板块读取成分默认只返回 active，可显式包含已退出成员', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-by-sector-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-by-sector-2',
+            appliedAt: TS2,
+            observations: [{ stockId: '600519.SH', sectors: [] }],
+          }),
+        );
+        const conceptSector = (await repos.sectorCatalog.listSectors({ kinds: ['concept'] }))[0];
+        expect(conceptSector).toBeDefined();
+        if (conceptSector === undefined) return;
+        expect(
+          (await repos.sectorCatalog.listBySector({ sectorId: conceptSector.id })).map(
+            (member) => member.stockId,
+          ),
+        ).toEqual(['000858.SZ']);
+        expect(
+          (
+            await repos.sectorCatalog.listBySector({
+              sectorId: conceptSector.id,
+              includeMissing: true,
+            })
+          ).map((member) => `${member.stockId}:${member.state}`),
+        ).toEqual(['000858.SZ:active', '600519.SH:missing']);
       });
     });
 

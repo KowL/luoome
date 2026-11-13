@@ -24,11 +24,22 @@ import type {
   ResearchDocumentIndex,
   ResearchDocumentKind,
 } from '../entity/research-vault.js';
+import type {
+  SectorCatalogEntry,
+  SectorCatalogState,
+  SectorChangeEvent,
+  SectorKind,
+  SectorSyncApplyInput,
+  SectorSyncApplySummary,
+  StockSectorMembership,
+  StockSectorMembershipView,
+} from '../entity/sector-catalog.js';
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type {
   MarketCoverage,
   StockUniverseApplySummary,
+  StockUniverseMember,
   StockUniverseSnapshot,
   StockUniverseSyncRun,
 } from '../entity/stock-universe.js';
@@ -134,12 +145,41 @@ export interface StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';
   }): Promise<readonly Stock[]>;
+  /** 当前目录成员及其聚合挂牌状态（停牌 / 退市用于标记状态，不删除身份）。 */
+  listCurrentMembers(input: {
+    readonly coverage: MarketCoverage;
+  }): Promise<readonly StockUniverseMember[]>;
   /** P2 PIT universe：只选择 observedAt 不晚于目标时点的成功快照。 */
   latestSnapshotAtOrBefore(input: {
     readonly coverage: MarketCoverage;
     readonly asOf: Date;
   }): Promise<StockUniverseSyncRun | null>;
   listSnapshotMembers(syncId: string): Promise<readonly Stock[]>;
+}
+
+/** 行业 / 概念目录与多对多成分；变更走 append-only 记录，不覆盖历史。 */
+export interface SectorCatalogRepository {
+  /** 一次同步原子提交：目录、成分、状态与变更记录；同 syncId 重放返回原摘要。 */
+  applySync(input: SectorSyncApplyInput): Promise<SectorSyncApplySummary>;
+  /** 按股票反查当前所属行业与概念，含来源与时点。 */
+  listByStock(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly SectorKind[];
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembershipView[]>;
+  /** 按板块读取成分；默认只返回 active 成分。 */
+  listBySector(input: {
+    readonly sectorId: string;
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembership[]>;
+  listSectors(input?: {
+    readonly kinds?: readonly SectorKind[];
+    readonly state?: SectorCatalogState | 'all';
+  }): Promise<readonly SectorCatalogEntry[]>;
+  listChanges(input?: {
+    readonly sectorId?: string;
+    readonly stockId?: string;
+  }): Promise<readonly SectorChangeEvent[]>;
 }
 
 /** 已审计的按交易日涨停天梯 PIT 快照；replay 只允许读取此仓储。 */
@@ -392,6 +432,8 @@ export interface RepositoryRegistry {
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */
   readonly stockUniverse: StockUniverseRepository;
+  /** 行业 / 概念目录与多对多成分（盘前同步的事实链）。 */
+  readonly sectorCatalog: SectorCatalogRepository;
   /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
   /** 盘中全市场快照批次（不可变、按采样时点去重）。 */

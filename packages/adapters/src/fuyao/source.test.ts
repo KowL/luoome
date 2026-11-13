@@ -389,6 +389,105 @@ describe('fuyao/FuyaoSource.fetchIndexQuotes', () => {
   });
 });
 
+describe('fuyao/FuyaoSource.fetchSectorCatalog', () => {
+  it('按 tag 拉取目录并映射为 kind + vendorCode', async () => {
+    const { source, calls } = makeSource((async (url: string) => {
+      expect(url).toContain('/api/a-share-index/catalog/ths-index-list?tag=industry');
+      return envelope([
+        { thscode: '881273.TI', name: '白酒' },
+        { thscode: '881101.TI', name: '种植业与林业' },
+      ]);
+    }) as never);
+
+    const sectors = await source.fetchSectorCatalog('industry');
+
+    expect(calls).toHaveLength(1);
+    expect(sectors).toEqual([
+      { kind: 'industry', vendorCode: '881273.TI', name: '白酒' },
+      { kind: 'industry', vendorCode: '881101.TI', name: '种植业与林业' },
+    ]);
+  });
+
+  it('概念使用 cn_concept tag；上游错误按既有词表抛出', async () => {
+    const { source, calls } = makeSource((async (url: string) => {
+      expect(url).toContain('tag=cn_concept');
+      return errorEnvelope(5001);
+    }) as never);
+
+    await expect(source.fetchSectorCatalog('concept')).rejects.toMatchObject({
+      kind: 'upstream_error',
+    });
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('fuyao/FuyaoSource.fetchStockSectors', () => {
+  const group = (
+    thscode: string,
+    indexList: Array<{ thscode: string; name: string; type: string }>,
+  ): Record<string, unknown> => ({ thscode, index_list: indexList });
+  const sector = (thscode: string, name: string, type: string) => ({ thscode, name, type });
+  const stockIds = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `${String(600000 + index)}.SH`);
+
+  it('按 100 只一批反查，只保留行业与概念，空列表也是有效观测', async () => {
+    const { source, calls } = makeSource((async (url: string) => {
+      const batch = (new URL(url).searchParams.get('thscode') ?? '').split(',');
+      expect(batch.length).toBeLessThanOrEqual(100);
+      return envelope(
+        batch.map((code) =>
+          code === '600000.SH'
+            ? group(code, [
+                sector('881273.TI', '白酒', 'industry'),
+                sector('886042.TI', '白酒概念', 'cn_concept'),
+                sector('883042.TI', '地域板块', 'region'),
+              ])
+            : group(code, []),
+        ),
+      );
+    }) as never);
+
+    const result = await source.fetchStockSectors(stockIds(101));
+
+    expect(calls).toHaveLength(2);
+    expect(result.failures).toEqual([]);
+    expect(result.observations).toHaveLength(101);
+    expect(result.observations.find((item) => item.stockId === '600000.SH')?.sectors).toEqual([
+      { kind: 'industry', vendorCode: '881273.TI', name: '白酒' },
+      { kind: 'concept', vendorCode: '886042.TI', name: '白酒概念' },
+    ]);
+    expect(result.observations.find((item) => item.stockId === '600001.SH')?.sectors).toEqual([]);
+  });
+
+  it('某批失败只记录该批失败，不抛错也不影响其它批次', async () => {
+    let call = 0;
+    const { source } = makeSource((async () => {
+      call += 1;
+      if (call === 2) return errorEnvelope(5001);
+      return envelope([group('600000.SH', [sector('881273.TI', '白酒', 'industry')])]);
+    }) as never);
+
+    const result = await source.fetchStockSectors(stockIds(101));
+
+    expect(result.observations.map((item) => item.stockId)).toEqual(['600000.SH']);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.scope).toBe('memberships');
+    expect(result.failures[0]?.message).toContain('upstream_error');
+    expect(result.failures[0]?.message).not.toContain('url=');
+  });
+
+  it('无法归一的代码只跳过，不伪造观测', async () => {
+    const { source, calls } = makeSource((async () => envelope([])) as never);
+
+    const result = await source.fetchStockSectors(['600519.SH', '430047.BJ']);
+
+    expect(result.observations).toEqual([]);
+    expect(result.failures).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('thscode=600519.SH');
+  });
+});
+
 describe('fuyao/FuyaoSource 不支持的能力', () => {
   it('fetchIntradayMinutes / fetchMinuteBars → unsupported_capability', async () => {
     const { source, calls } = makeSource((async () => envelope([])) as never);

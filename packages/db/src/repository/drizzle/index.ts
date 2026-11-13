@@ -18,6 +18,7 @@ export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-perfo
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';
+export { DrizzleSectorCatalogRepository } from './sector-catalog.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
 export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';

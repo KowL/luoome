@@ -709,7 +709,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / sync-sector-catalog / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
