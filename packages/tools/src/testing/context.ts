@@ -14,6 +14,7 @@ import type {
   Advice,
   AShareSentimentManagerLike,
   DecisionReview,
+  DragonTigerFlowManagerLike,
   DragonTigerManagerLike,
   LimitUpLadderManagerLike,
   Logger,
@@ -37,6 +38,8 @@ export interface BuildTestContextOptions {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   /** 可选注入龙虎榜 manager。 */
   readonly dragonTiger?: DragonTigerManagerLike;
+  /** 可选注入龙虎榜资金流向拓扑 manager。 */
+  readonly dragonTigerFlow?: DragonTigerFlowManagerLike;
   /** 可选注入北向资金历史流 manager。 */
   readonly northboundFlow?: NorthboundFlowManagerLike;
   /** 可选注入财经要闻 manager。 */
@@ -78,6 +81,7 @@ export const buildTestContext = async (
   const marketIntel = {
     ...(opts.limitUpLadder === undefined ? {} : { limitUpLadder: opts.limitUpLadder }),
     ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
+    ...(opts.dragonTigerFlow === undefined ? {} : { dragonTigerFlow: opts.dragonTigerFlow }),
     ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
     ...(opts.news === undefined ? {} : { news: opts.news }),
     ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),

@@ -12,6 +12,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { renderDragonTigerFlow, teardownDragonTigerFlow } from './dragon-tiger-flow.js';
 import { formatAmount } from './market-shared.js';
 import { closeModal, openModal } from './modal.js';
 import { stockCodeLink } from './stock-link.js';
@@ -23,6 +24,7 @@ let refreshTimer = null;
 let statusFn = null;
 let currentFilter = 'all';
 let latestList = null;
+let currentView = 'list';
 
 /* ---- 纯函数（dragon-tiger.test.js 直接单测） ---- */
 
@@ -325,12 +327,34 @@ const renderDatePicker = (current, setStatus) => {
   return input;
 };
 
-const renderDragonTiger = async (setStatus) => {
-  const root = $('#route-dragon-tiger');
-  if (root === null) return;
-  statusFn = setStatus;
+const renderViewTabs = () => {
+  const tabs = [
+    ['list', '当日榜单'],
+    ['flow', '资金流向拓扑'],
+  ];
+  const wrap = el('div', 'dragon-view-tabs');
+  wrap.setAttribute('role', 'tablist');
+  wrap.setAttribute('aria-label', '龙虎榜视图');
+  for (const [key, label] of tabs) {
+    const btn = el('button', `btn btn-sm${currentView === key ? ' active' : ''}`, label);
+    btn.type = 'button';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', currentView === key ? 'true' : 'false');
+    btn.addEventListener('click', () => {
+      if (currentView === key) return;
+      currentView = key;
+      if (key === 'list') teardownDragonTigerFlow();
+      void renderDragonTiger(statusFn ?? (() => {}));
+    });
+    wrap.append(btn);
+  }
+  return wrap;
+};
+
+/** 当日榜单视图（原有表格 + 筛选 + 详情弹窗）。 */
+const renderDragonTigerList = async (container, setStatus) => {
   const date = dateFromUrl();
-  if (latestList === null) mount(root, [el('p', 'muted', '加载中…')]);
+  mount(container, [el('p', 'muted', '加载中…')]);
   const r = await callApi(`/api/dragon-tiger?date=${encodeURIComponent(date)}`);
   if (!r.ok) {
     // callApi 不回传 HTTP status；server 把上游失败包成 error.kind='adapter_error'
@@ -339,10 +363,7 @@ const renderDragonTiger = async (setStatus) => {
     const detail =
       kind === 'upstream-unavailable' ? '请检查 luoome web 到东方财富行情服务的网络连通性。' : '';
     latestList = null;
-    mount(root, [
-      el('h2', '', '龙虎榜'),
-      el('p', 'error', `加载失败：${kind}（${detail}）`.trim()),
-    ]);
+    mount(container, [el('p', 'error', `加载失败：${kind}（${detail}）`.trim())]);
     setStatus(`加载龙虎榜失败：${kind}`, true);
     return;
   }
@@ -350,11 +371,11 @@ const renderDragonTiger = async (setStatus) => {
   const list = latestList;
   const warning = warningText(list.warnings);
   const refreshBtn = el('button', 'btn', '刷新');
+  refreshBtn.type = 'button';
   refreshBtn.addEventListener('click', () => void refresh());
   const rawEntries = list.entries ?? [];
   const entries = groupEntriesByStock(rawEntries);
-  mount(root, [
-    el('h2', '', `龙虎榜 · ${list.date}`),
+  mount(container, [
     el('div', 'ladder-controls dragon-controls', [
       el('label', '', '日期'),
       renderDatePicker(list.date, setStatus),
@@ -374,6 +395,32 @@ const renderDragonTiger = async (setStatus) => {
   setStatus(
     `龙虎榜 ${list.date} 加载完成（${entries.length} 只股票 / ${rawEntries.length} 条明细）`,
   );
+};
+
+/** 资金流向概览（h2 标题 + 视图 tab），视图内容挂到 .dragon-view。 */
+const renderDragonTiger = async (setStatus) => {
+  const root = $('#route-dragon-tiger');
+  if (root === null) return;
+  statusFn = setStatus;
+  const date = dateFromUrl();
+  mount(root, [
+    el('div', 'dragon-head', [
+      el('h2', '', currentView === 'flow' ? '龙虎榜 · 资金流向拓扑' : `龙虎榜 · ${date}`),
+      renderViewTabs(),
+    ]),
+    el('div', 'dragon-view'),
+  ]);
+  const container = $('.dragon-view', root);
+  if (container === null) return;
+  if (currentView === 'flow') {
+    await renderDragonTigerFlow(container, {
+      date,
+      setStatus,
+      onDateChange: (value) => dateToUrl(value),
+    });
+  } else {
+    await renderDragonTigerList(container, setStatus);
+  }
   if (refreshTimer !== null) clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
     if (document.visibilityState !== 'visible') return;
@@ -386,7 +433,9 @@ const teardownDragonTiger = () => {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
+  teardownDragonTigerFlow();
   statusFn = null;
+  currentView = 'list';
 };
 
 export {

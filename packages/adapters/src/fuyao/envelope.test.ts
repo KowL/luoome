@@ -43,6 +43,20 @@ describe('fuyao/envelope', () => {
     expect(parsed.items).toEqual([]);
   });
 
+  it('data 无 item（龙虎榜 board）→ items=[] 且保留 data 供端点自行解析', () => {
+    const parsed = parseFuyaoEnvelope(
+      okBody({ timestamp: 1794326400000, trade_date: '2026-11-11', stock_items: [] }),
+    );
+    expect(parsed.items).toEqual([]);
+    expect(parsed.data).toMatchObject({ trade_date: '2026-11-11', stock_items: [] });
+  });
+
+  it('item 形状同时透出 data 原样', () => {
+    const parsed = parseFuyaoEnvelope(okBody({ timestamp: 1, item: [{ a: 1 }], extra: 'x' }));
+    expect(parsed.items).toEqual([{ a: 1 }]);
+    expect(parsed.data.extra).toBe('x');
+  });
+
   it('code=0 且 data=null → no_data', () => {
     expect(kindOf(okBody(null))).toBe('no_data');
   });

@@ -6,6 +6,7 @@ import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { saveDecisionReviewTool } from './tools/decision-review.js';
+import { dragonTigerFlowTool } from './tools/dragon-tiger-flow.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
@@ -168,6 +169,8 @@ export const toolRegistry: Registry = createRegistry([
   limitUpLadderTool,
   // 龙虎榜（只读；东方财富数据中心公开报表）
   dragonTigerListTool,
+  // 龙虎榜资金流向拓扑（只读；同花顺龙虎榜跨交易日概念聚合）
+  dragonTigerFlowTool,
   // 北向资金历史流（只读；东方财富数据中心公开报表）
   northboundFlowTool,
   // 财经要闻（只读；东方财富公开新闻 API）

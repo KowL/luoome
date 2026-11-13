@@ -2,7 +2,7 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
-The public Agent surface is the **34 core Agent Tools** (design §5.2). Pure UI CRUD
+The public Agent surface is the **35 core Agent Tools** (design §5.2). Pure UI CRUD
 (account rename, cash reconciliation, member drag-sort, chat sessions, report rendering,
 strategy lifecycle, observation stats …) is an Application Service behind Web/CLI and is not
 an MCP tool. Do not infer a new MCP permission from an exported TypeScript function or a
@@ -23,6 +23,8 @@ Market and盘面资讯:
 - `compute_indicators` — daily/intraday MA/EMA/MACD/RSI/KDJ/BOLL/ATR.
 - `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
 - `dragon_tiger_list` — one trading day's billboard entries (net/buy/sell, reason).
+- `dragon_tiger_flow` — cross-day billboard concept flow: cumulative concept net trajectory,
+  org/hot decomposition and top contributors. Requires `FUYAO_API_KEY` (同花顺 truth source).
 - `northbound_flow` — daily northbound series; net buy/sell is `null` after 2024-08-16.
 - `fetch_news` — market news stream; `includeSentiment=true` also returns the A-share
   sentiment snapshot (`sentiment`) in the same call.

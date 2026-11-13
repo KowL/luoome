@@ -10,7 +10,14 @@ import { join } from 'node:path';
 
 import { EastmoneySource, NotificationManager } from '@luoome/adapters';
 import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
-import type { AgentCallableTool, Money, SourceStatus, ToolContext } from '@luoome/core';
+import type {
+  AgentCallableTool,
+  DragonTigerFlowManagerLike,
+  DragonTigerFlowResultLike,
+  Money,
+  SourceStatus,
+  ToolContext,
+} from '@luoome/core';
 import { TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import {
@@ -3952,6 +3959,115 @@ describe('Web 龙虎榜 API', () => {
     expect(r.status).toBe(200);
     const ct = r.headers.get('content-type') ?? '';
     expect(ct).toContain('text/html');
+  });
+});
+
+/**
+ * 龙虎榜资金流向拓扑 Web API（dragon_tiger_flow tool）。
+ * stub manager 隔离 fuyao 实链；未注入 manager 时按「未配置 FUYAO_API_KEY」返回 400 invalid_input。
+ */
+
+const stubDragonTigerFlowManager = (
+  opts: { readonly fail?: boolean } = {},
+): DragonTigerFlowManagerLike => ({
+  name: 'dragon-tiger-flow',
+  sources: ['fuyao'],
+  status: () => [],
+  fetchFlow: async (): Promise<DragonTigerFlowResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'dragon-tiger-flow',
+          message: 'fuyao forced fail',
+          recoverable: true,
+        },
+      };
+    }
+    return {
+      ok: true,
+      data: {
+        startDate: '2026-11-10',
+        endDate: '2026-11-11',
+        days: 2,
+        board: 'all',
+        rangeDays: 1,
+        source: 'fuyao',
+        tradingDates: ['2026-11-10', '2026-11-11'],
+        stats: {
+          stockCount: 2,
+          detailCount: 2,
+          buyAmount: 100,
+          sellAmount: 50,
+          netAmount: 50,
+          orgNetAmount: 20,
+          hotNetAmount: 10,
+          top5Concentration: 1,
+          conceptCount: 1,
+        },
+        concepts: [
+          {
+            name: '黄金',
+            series: [30, 50],
+            netAmount: 50,
+            orgNetAmount: 20,
+            hotNetAmount: 10,
+            otherNetAmount: 20,
+            stockCount: 2,
+            stocks: [],
+          },
+        ],
+        warnings: [],
+        asOf: new Date('2026-11-11T10:00:00Z'),
+      },
+    };
+  },
+});
+
+describe('Web 龙虎榜资金流向拓扑 API', () => {
+  it('正常请求 → 200 + 概念轨迹', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTigerFlow: stubDragonTigerFlowManager() }),
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/dragon-tiger/flow?date=2026-11-11&days=5&board=org'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { days: number; concepts: { name: string; netAmount: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.concepts[0]?.name).toBe('黄金');
+  });
+
+  it('days 非 5/10/20 → invalid_input (400)', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTigerFlow: stubDragonTigerFlowManager() }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger/flow?days=7'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error?: { kind: string } };
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('未配置 FUYAO_API_KEY（manager 缺失）→ invalid_input，提示去配置', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger/flow'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string; message: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+    expect(body.error?.message).toContain('FUYAO_API_KEY');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTigerFlow: stubDragonTigerFlowManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger/flow'));
+    expect(r.status).toBe(502);
   });
 });
 

@@ -9,6 +9,10 @@ export * from './audit/file.js';
 // 龙虎榜（东方财富数据中心公开报表）
 export * from './dragon-tiger/eastmoney.js';
 export * from './dragon-tiger/factory.js';
+// 龙虎榜资金流向拓扑（同花顺龙虎榜：概念 / 机构 / 游资字段）
+export * from './dragon-tiger/flow-factory.js';
+export * from './dragon-tiger/flow-manager.js';
+export * from './dragon-tiger/fuyao.js';
 export * from './dragon-tiger/manager.js';
 export * from './dragon-tiger/types.js';
 // Eastmoney 单一 source（HTTP 管道 + coercion + 全能力委托）

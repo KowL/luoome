@@ -1,5 +1,6 @@
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
+import type { DragonTigerFlow, DragonTigerFlowQuery } from './entity/dragon-tiger-flow.js';
 import type {
   LimitUpLadder,
   LimitUpLadderDiff,
@@ -150,6 +151,7 @@ export interface NotificationManagerLike {
 export interface ToolContextMarketIntel {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   readonly dragonTiger?: DragonTigerManagerLike;
+  readonly dragonTigerFlow?: DragonTigerFlowManagerLike;
   readonly northboundFlow?: NorthboundFlowManagerLike;
   readonly news?: NewsManagerLike;
   readonly sectorQuote?: SectorQuoteManagerLike;
@@ -277,6 +279,31 @@ export interface DragonTigerManagerLike {
   /** 进程内源健康观测（registry.describe()）。 */
   status(): readonly SourceStatus[];
 }
+
+/**
+ * 龙虎榜资金流向拓扑 manager 投影（跨交易日概念聚合；数据源为同花顺龙虎榜）。
+ * - core 不依赖 adapters；返回类型直接是 core 的 DragonTigerFlow（manager 内部已聚合）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface DragonTigerFlowResultLike {
+  readonly ok: boolean;
+  readonly data?: DragonTigerFlow;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'dragon-tiger-flow';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface DragonTigerFlowManagerLike {
+  readonly name: 'dragon-tiger-flow';
+  readonly sources: readonly string[];
+  fetchFlow(query: DragonTigerFlowQuery): Promise<DragonTigerFlowResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
 
 /**
  * 北向资金历史流 manager 投影。

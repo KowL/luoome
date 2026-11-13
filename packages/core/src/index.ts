@@ -11,6 +11,7 @@ export * from './entity/ashare-sentiment.js';
 export * from './entity/chat-session.js';
 export * from './entity/decision-review.js';
 export * from './entity/dragon-tiger.js';
+export * from './entity/dragon-tiger-flow.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';

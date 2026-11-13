@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
   createLimitUpLadderManagerFromEnv,
@@ -93,9 +94,11 @@ export const buildWebContext = async (
     market,
     sources,
   });
+  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(env, { clock: now, logger: console });
   const marketIntel = {
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console, sources }),
     dragonTiger: createDragonTigerManagerFromEnv(env, { clock: now, logger: console, sources }),
+    ...(dragonTigerFlow === undefined ? {} : { dragonTigerFlow }),
     northboundFlow: createNorthboundFlowManagerFromEnv(env, {
       clock: now,
       logger: console,

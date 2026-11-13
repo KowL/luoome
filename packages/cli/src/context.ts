@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
   createLimitUpLadderManagerFromEnv,
@@ -107,6 +108,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     logger,
     sources,
   });
+  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(process.env, { clock: now, logger });
   const northboundFlow = createNorthboundFlowManagerFromEnv(process.env, {
     clock: now,
     logger,
@@ -136,6 +138,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const marketIntel = {
     ...(limitUpLadder === undefined ? {} : { limitUpLadder }),
     ...(dragonTiger === undefined ? {} : { dragonTiger }),
+    ...(dragonTigerFlow === undefined ? {} : { dragonTigerFlow }),
     ...(northboundFlow === undefined ? {} : { northboundFlow }),
     ...(news === undefined ? {} : { news }),
     ...(sectorQuote === undefined ? {} : { sectorQuote }),

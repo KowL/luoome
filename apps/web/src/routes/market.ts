@@ -187,6 +187,38 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     });
   });
 
+  /**
+   * 龙虎榜资金流向拓扑（dragon_tiger_flow tool；同花顺龙虎榜的概念 / 机构 / 游资字段）。
+   *
+   * 参数：
+   *   date (可选) YYYY-MM-DD；缺省最近交易日，非交易日向前对齐并在 warnings 里标注
+   *   days (可选) 5 / 10 / 20，缺省 10
+   *   board (可选) all / org / hot，缺省 all
+   *   rangeDays (可选) 1 / 3，缺省 1（1 日榜与 3 日榜不可混算）
+   *
+   * 未配置 FUYAO_API_KEY：tool 返回 invalid_input → 200（前端提示去设置页配置）；
+   * 上游不可达：tool 返回 adapter_error → 502。缓存与并发由 manager 负责。
+   */
+  app.get('/api/dragon-tiger/flow', async (c) => {
+    const input: Record<string, unknown> = {};
+    const date = c.req.query('date');
+    if (date !== undefined) input.date = date;
+    const days = Number.parseInt(c.req.query('days') ?? '', 10);
+    if (Number.isFinite(days)) input.days = days;
+    const rangeDays = Number.parseInt(c.req.query('rangeDays') ?? '', 10);
+    if (Number.isFinite(rangeDays)) input.rangeDays = rangeDays;
+    const board = c.req.query('board');
+    if (board !== undefined) input.board = board;
+    const r = await invokeTool('dragon_tiger_flow', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
   app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
 

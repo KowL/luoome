@@ -867,13 +867,13 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ## 7. Tool 系统
 
-### 7.1 公共 Agent Tool 面 = 34 个核心 Agent Tool
+### 7.1 公共 Agent Tool 面 = 35 个核心 Agent Tool
 
 `toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
 
-- 行情与盘面资讯（10）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
+- 行情与盘面资讯（11）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
   `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
-  `dragon_tiger_list`、`northbound_flow`、`fetch_news`
+  `dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`
 - 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
 - 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
   `run_strategy_backtest`、`get_strategy_signals`

@@ -6569,6 +6569,341 @@ body > .modal {
   }
 }
 
+/* ---------- 龙虎榜 · 资金流向拓扑（dragon-tiger-flow.js） ---------- */
+
+.dragon-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.dragon-head h2 {
+  margin: 0;
+}
+
+.dragon-view-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.dragon-view-tabs .btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.dragon-view-tabs .btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.dragon-view {
+  margin-top: var(--space-4);
+}
+
+.dragon-flow {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.dragon-flow-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dragon-flow-control-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.dragon-flow-seg {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.dragon-flow-seg .btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dragon-flow-meta {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.dragon-flow-warning {
+  margin: 0;
+}
+
+.dragon-flow-summary {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
+.dragon-flow-summary .stat {
+  padding: 10px 12px;
+}
+
+.dragon-flow-summary .stat .value {
+  font-size: var(--text-lg);
+}
+
+.dragon-flow-summary .value.pos {
+  color: var(--pos);
+}
+
+.dragon-flow-summary .value.neg {
+  color: var(--neg);
+}
+
+.dragon-flow-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.72fr) minmax(300px, 1fr);
+  gap: var(--space-3);
+}
+
+.dragon-flow-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: var(--space-3);
+}
+
+.dragon-flow-panel {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-solid-base);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(28, 37, 54, 0.04));
+}
+
+.dragon-flow-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.dragon-flow-panel-head h3 {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dragon-flow-panel-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.dragon-flow-panel-sub {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.dragon-flow-canvas-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.dragon-flow-canvas {
+  display: block;
+  width: 100%;
+}
+
+.dragon-flow-ranks {
+  max-height: 336px;
+  overflow: auto;
+  margin: 0 calc(-1 * var(--space-3));
+  border-top: 1px solid var(--line);
+}
+
+.dragon-flow-rank {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dragon-flow-rank:hover {
+  background: var(--panel-hover-base);
+}
+
+.dragon-flow-rank.active,
+.dragon-flow-rank:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.dragon-flow-rank-dir {
+  font-size: var(--text-sm);
+}
+
+.dragon-flow-rank-dir.pos,
+.dragon-flow-rank-value.pos {
+  color: var(--pos);
+}
+
+.dragon-flow-rank-dir.neg,
+.dragon-flow-rank-value.neg {
+  color: var(--neg);
+}
+
+.dragon-flow-rank-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dragon-flow-rank-name {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dragon-flow-rank-sub {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dragon-flow-rank-bar {
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.dragon-flow-rank-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.dragon-flow-rank-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.dragon-flow-tooltip {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid-base);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(28, 37, 54, 0.14));
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.dragon-flow-tooltip.show {
+  opacity: 1;
+}
+
+.dragon-flow-tip-title {
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.dragon-flow-tip-value.pos {
+  color: var(--pos);
+}
+
+.dragon-flow-tip-value.neg {
+  color: var(--neg);
+}
+
+.dragon-flow-tip-sub {
+  color: var(--muted);
+}
+
+.dragon-flow-empty {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  padding: var(--space-5);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+
+.dragon-flow-empty h3 {
+  margin: 0;
+}
+
+.dragon-flow-empty p {
+  margin: 0;
+}
+
+.dragon-flow-footnote {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed, 1.7);
+  color: var(--muted);
+}
+
+@media (max-width: 1180px) {
+  .dragon-flow-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .dragon-flow-main,
+  .dragon-flow-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .dragon-flow-ranks {
+    max-height: 260px;
+  }
+}
+
+@media (max-width: 760px) {
+  .dragon-flow-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dragon-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 /* ---------- 板块热力（sectors 页） ---------- */
 
 .sector-heading {
