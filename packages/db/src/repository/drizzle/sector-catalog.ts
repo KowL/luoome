@@ -425,6 +425,22 @@ export class DrizzleSectorCatalogRepository implements SectorCatalogRepository {
       .map(toMembership);
   }
 
+  async listBySectors(input: {
+    readonly sectorIds: readonly string[];
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembership[]> {
+    if (input.sectorIds.length === 0) return [];
+    const filters: SQL[] = [inArray(sectorMemberships.sectorId, [...input.sectorIds])];
+    if (input.includeMissing !== true) filters.push(eq(sectorMemberships.state, 'active'));
+    return this.db
+      .select()
+      .from(sectorMemberships)
+      .where(and(...filters))
+      .orderBy(asc(sectorMemberships.sectorId), asc(sectorMemberships.stockId))
+      .all()
+      .map(toMembership);
+  }
+
   async listSectors(input?: {
     readonly kinds?: readonly SectorKind[];
     readonly state?: SectorCatalogState | 'all';

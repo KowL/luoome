@@ -1538,6 +1538,55 @@ export const registerRepositoryContractTests = (
         ]);
       });
 
+      it('按多个板块一次读取成分，默认只返回 active，缺省候选返回空数组', async () => {
+        await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-many-1' }));
+        await repos.sectorCatalog.applySync(
+          syncInput({
+            syncId: 'sector-many-2',
+            appliedAt: TS2,
+            observations: [
+              {
+                stockId: '600519.SH',
+                sectors: [industry('881273.TI', '白酒'), concept('886042.TI', '白酒概念')],
+              },
+              {
+                stockId: '000858.SZ',
+                sectors: [concept('886042.TI', '白酒概念')],
+              },
+            ],
+          }),
+        );
+        const industrySector = (await repos.sectorCatalog.listSectors({ kinds: ['industry'] }))[0];
+        const conceptSector = (await repos.sectorCatalog.listSectors({ kinds: ['concept'] }))[0];
+        expect(industrySector).toBeDefined();
+        expect(conceptSector).toBeDefined();
+        if (industrySector === undefined || conceptSector === undefined) return;
+
+        const members = await repos.sectorCatalog.listBySectors({
+          sectorIds: [industrySector.id, conceptSector.id],
+        });
+        expect(members.map((member) => `${member.sectorId}:${member.stockId}`)).toEqual(
+          [
+            `${industrySector.id}:600519.SH`,
+            `${conceptSector.id}:000858.SZ`,
+            `${conceptSector.id}:600519.SH`,
+          ].sort(),
+        );
+        expect(
+          await repos.sectorCatalog.listBySectors({ sectorIds: [conceptSector.id] }),
+        ).toHaveLength(2);
+        expect(await repos.sectorCatalog.listBySectors({ sectorIds: [] })).toEqual([]);
+        expect(await repos.sectorCatalog.listBySectors({ sectorIds: ['missing-sector'] })).toEqual(
+          [],
+        );
+        expect(
+          await repos.sectorCatalog.listBySectors({
+            sectorIds: [industrySector.id, conceptSector.id],
+            includeMissing: true,
+          }),
+        ).toHaveLength(4);
+      });
+
       it('按板块读取成分默认只返回 active，可显式包含已退出成员', async () => {
         await repos.sectorCatalog.applySync(syncInput({ syncId: 'sector-by-sector-1' }));
         await repos.sectorCatalog.applySync(
@@ -4749,6 +4798,60 @@ export const registerRepositoryContractTests = (
             tradingDate: '2026-09-24',
             sampledAt: new Date('2026-09-24T02:15:00.000Z'),
             toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+      });
+
+      it('按交易日取某时点及之前最近的批次，不跨交易日也不含之后批次', async () => {
+        const earlier = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:10:00.000Z',
+          sampledAt: new Date('2026-09-28T02:10:00.000Z'),
+        });
+        const at = makeMarketSnapshotBatch();
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:20:00.000Z',
+          sampledAt: new Date('2026-09-28T02:20:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(at);
+        await repos.marketSnapshotBatch.publish(later);
+
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+          }),
+        ).resolves.toEqual(at);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:19:59.999Z'),
+          }),
+        ).resolves.toEqual(at);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:21:00.000Z'),
+          }),
+        ).resolves.toEqual(later);
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:09:00.000Z'),
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findAtOrBefore({
+            coverage: 'CN_A_SHARES_BJ',
+            tradingDate: '2026-09-28',
+            sampledAt: new Date('2026-09-28T02:15:00.000Z'),
           }),
         ).resolves.toBeNull();
       });

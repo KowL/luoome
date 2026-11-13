@@ -1,11 +1,13 @@
 /* apps/web/public/js/market-room.js —— 作战室页面（总览 / 板块追踪 / 成交分布）。
  *
- * 设计要点（ticket #36）：
- * - 只读：数据来自 GET /api/market/room/overview（最近已发布批次 + 既有情绪 / 指数契约），
+ * 设计要点（ticket #36 / #38）：
+ * - 只读：数据来自 GET /api/market/room/overview 与 GET /api/market/room/sectors，
  *   刷新页面不触发采集；
  * - 每个维度独立展示完整性与缺失原因；缺数写「缺失」，不写 0，也不下放量 / 缩量结论；
  * - 非交易日 / 盘前 / 无批次有明确空态，不把上一交易日数据当作当日盘面；
- * - 板块追踪与成交分布由后续票接入，当前只给空态占位。
+ * - 板块追踪：行业 / 概念切换，同一张表同时给日涨幅与近 5 / 15 分钟窗口涨幅，
+ *   三种口径分别排序；点开一行看上涨家数、有效成分、封板数与成交占比及口径说明；
+ * - 成交分布由后续票接入，当前只给空态占位。
  */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
@@ -13,14 +15,29 @@
 
 import { callApi } from './api.js';
 import { formatAmount } from './market-shared.js';
-import { $, el, mount } from './ui.js';
+import { $, el, mount, sortableHeader } from './ui.js';
 
 const ROOM_TABS = ['overview', 'sectors', 'turnover'];
 const ROOM_TAB_LABELS = { overview: '总览', sectors: '板块追踪', turnover: '成交分布' };
 
 const ROOM_TAB_PLACEHOLDERS = {
-  sectors: '板块追踪视图尚未接入数据：将展示行业与概念的当日涨幅、窗口涨幅与上涨家数。',
   turnover: '成交分布视图尚未接入数据：将展示窗口成交占比与较上一窗口的变化。',
+};
+
+const SECTOR_KINDS = ['industry', 'concept'];
+const SECTOR_KIND_LABELS = { industry: '行业', concept: '概念' };
+const SECTOR_SORTS = ['day', 'window5', 'window15'];
+const SECTOR_SORT_LABELS = { day: '日涨幅', window5: '5 分钟', window15: '15 分钟' };
+const SECTOR_WINDOWS = ['w5', 'w15'];
+const SECTOR_WINDOW_LABELS = { w5: '5 分钟', w15: '15 分钟' };
+
+const SECTOR_EMPTY_TEXTS = {
+  no_batch: '尚无已发布的盘中批次',
+  pre_open: '盘前尚无当日批次，不展示盘前数据',
+  non_trading_day: '非交易日，不展示当日盘面数据',
+  no_today_batch: '今日尚无已发布批次',
+  no_sector_catalog: '行业 / 概念目录尚未同步',
+  no_members: '目录里没有带 active 成分的板块',
 };
 
 const DIMENSION_STATUS_LABELS = {
@@ -44,6 +61,9 @@ const REFRESH_MS = 60_000;
 
 let roomEpoch = 0;
 let roomTimer = null;
+/** 板块追踪的本地交互状态（展开行只重绘，不重新请求）。 */
+const roomSectorState = { kind: 'industry', sort: 'day', window: 'w15', expanded: null };
+let roomSectorRanking = null;
 
 const roomSection = () => $('#route-market-room');
 
@@ -52,6 +72,29 @@ const roomTabFromHash = (hash = window.location.hash) => {
   const tab = new URLSearchParams(String(hash ?? '').split('?')[1] ?? '').get('tab') ?? 'overview';
   return ROOM_TABS.includes(tab) ? tab : 'overview';
 };
+
+const pickParam = (params, key, allowed, fallback) => {
+  const value = params.get(key);
+  return value !== null && allowed.includes(value) ? value : fallback;
+};
+
+/** 板块追踪的深链接参数（#market-room?tab=sectors&kind=concept&sort=window5&window=w15）。 */
+const sectorParamsFromHash = (hash = window.location.hash) => {
+  const params = new URLSearchParams(String(hash ?? '').split('?')[1] ?? '');
+  return {
+    kind: pickParam(params, 'kind', SECTOR_KINDS, 'industry'),
+    sort: pickParam(params, 'sort', SECTOR_SORTS, 'day'),
+    window: pickParam(params, 'window', SECTOR_WINDOWS, 'w15'),
+  };
+};
+
+/** 板块榜请求路径（纯函数，便于单测）：口径全部显式带上，便于与服务端日志对照。 */
+const sectorQuery = (params) =>
+  `?kind=${encodeURIComponent(params.kind)}&sort=${encodeURIComponent(params.sort)}&window=${encodeURIComponent(params.window)}`;
+
+/** 板块追踪深链接：切换行业 / 概念或排序口径时只改 hash，由路由统一重绘。 */
+const sectorHash = (params) =>
+  `market-room?tab=sectors&kind=${params.kind}&sort=${params.sort}&window=${params.window}`;
 
 const dimensionStatusLabel = (status) => DIMENSION_STATUS_LABELS[status] ?? '缺失';
 
@@ -149,6 +192,126 @@ const overviewMetaText = (overview) => {
 };
 
 const missingReasonText = (dimension) => dimension?.warnings?.[0] ?? '该维度暂不可用';
+
+/** 板块榜的缺失原因：取第一条 warning，没有则写缺失。 */
+const sectorMissingText = (metric) => metric?.warnings?.[0] ?? '缺失';
+
+const sectorValueText = (metric) => {
+  if (metric?.value === null || metric?.value === undefined) return null;
+  return fmtPct(metric.value, true);
+};
+
+const sectorShareText = (turnover) => {
+  if (turnover?.value === null || turnover?.value === undefined) return null;
+  return `${turnover.value.toFixed(2)}%`;
+};
+
+const sectorBreadthText = (day) =>
+  day === undefined || day === null
+    ? null
+    : `上涨 ${day.advancing} · 下跌 ${day.declining} · 平 ${day.unchanged}`;
+
+/** 样本口径：有效成分（分母）/ 板块成分 / 缺失 / 停牌退市，全部写出来。 */
+const sectorSampleText = (metric) =>
+  metric === undefined || metric === null
+    ? null
+    : `有效 ${metric.sampleCount} / 成分 ${metric.memberCount} · 缺失 ${metric.missingCount} · 停牌退市 ${metric.nonTradableCount}`;
+
+/** 窗口两端与跨度；不可比时写明原因，不显示 0。 */
+const windowSpanText = (ref) => {
+  if (ref === undefined || ref === null) return '窗口缺失';
+  if (ref.status === 'unavailable') return `缺失：${ref.reason ?? '窗口不可比'}`;
+  const start = fmtClock(ref.startSampledAt);
+  const end = fmtClock(new Date(new Date(ref.startSampledAt).getTime() + (ref.spanMs ?? 0)));
+  const suffix = ref.status === 'partial' ? '（批次不完整）' : '';
+  return `${start} → ${end} · ${Math.round((ref.spanMs ?? 0) / 60_000)} 分钟${suffix}`;
+};
+
+/** 表格单元格文案（纯函数）：缺失一律 null，由渲染层写「缺失」。 */
+const sectorRowCells = (row) => ({
+  rank: row.rank === null || row.rank === undefined ? '—' : String(row.rank),
+  day: sectorValueText(row.day),
+  window5: sectorValueText(row.window5),
+  window15: sectorValueText(row.window15),
+  breadth: `上涨 ${row.day.advancing} / 有效 ${row.day.sampleCount}`,
+  breadthSub: `成分 ${row.day.memberCount} · 缺失 ${row.day.missingCount} · 停牌退市 ${row.day.nonTradableCount}`,
+  limitUp:
+    row.limitUp.value === null || row.limitUp.value === undefined ? null : `${row.limitUp.value}`,
+  turnover: sectorShareText(row.turnover),
+});
+
+/** 展开行的口径事实：每个数字都带分母 / 样本数说明。 */
+const sectorDetailFacts = (row, ranking) => {
+  const denominator = ranking?.turnover?.marketAmountDelta ?? null;
+  return [
+    { label: '日涨幅', value: sectorValueText(row.day) ?? '缺失' },
+    { label: '近 5 分钟', value: sectorValueText(row.window5) ?? '缺失' },
+    { label: '近 15 分钟', value: sectorValueText(row.window15) ?? '缺失' },
+    { label: '上涨 / 下跌 / 平', value: sectorBreadthText(row.day) ?? '缺失' },
+    { label: '有效成分（分母）', value: sectorSampleText(row.day) ?? '缺失' },
+    {
+      label: '封板数',
+      value:
+        row.limitUp.value === null || row.limitUp.value === undefined
+          ? '缺失'
+          : `${row.limitUp.value} 只`,
+    },
+    { label: '窗口成交占比', value: sectorShareText(row.turnover) ?? '缺失' },
+    {
+      label: '成分增量 / 全市场增量',
+      value:
+        row.turnover.numeratorAmount === null || denominator === null
+          ? '缺失'
+          : `${formatAmount(row.turnover.numeratorAmount)} / ${formatAmount(denominator)}`,
+    },
+    { label: '窗口起点（5 分钟）', value: windowSpanText(ranking?.windows?.w5) },
+    { label: '窗口起点（15 分钟）', value: windowSpanText(ranking?.windows?.w15) },
+  ];
+};
+
+/** 展开行的说明：口径、缺失原因与全局提示合并去重，便于核对「为什么是缺失」。 */
+const sectorDetailNotes = (row, ranking) => {
+  const notes = [
+    row.day.method,
+    row.window5.method,
+    row.turnover.method,
+    row.limitUp.method,
+    ...(ranking?.notes ?? []),
+    ...row.day.warnings,
+    ...row.window5.warnings,
+    ...row.window15.warnings,
+    ...row.turnover.warnings,
+    ...row.limitUp.warnings,
+    ...(ranking?.turnover?.reason === null || ranking?.turnover?.reason === undefined
+      ? []
+      : [ranking.turnover.reason]),
+    ...(ranking?.limitUp?.reason === null || ranking?.limitUp?.reason === undefined
+      ? []
+      : [ranking.limitUp.reason]),
+  ];
+  return [...new Set(notes.filter((note) => typeof note === 'string' && note.length > 0))];
+};
+
+/** 空态文案；ready 返回 null。 */
+const sectorEmptyText = (ranking) => {
+  if (ranking?.state !== 'empty') return null;
+  const base = SECTOR_EMPTY_TEXTS[ranking.emptyReason] ?? '暂无板块数据';
+  const anchor = ranking.anchor;
+  return anchor === null || anchor === undefined
+    ? base
+    : `${base} · 最近批次 ${anchor.tradingDate} ${fmtClock(anchor.sampledAt)}`;
+};
+
+/** 页头口径：分类 / 交易日 / 数据时点 / 排序口径 / 占比窗口。 */
+const sectorMetaText = (ranking) => {
+  if (ranking === undefined || ranking === null) return '板块追踪 · 刷新失败，保留上次成功结果';
+  if (ranking.state === 'empty') return `板块追踪 · ${sectorEmptyText(ranking)}`;
+  const kind = SECTOR_KIND_LABELS[ranking.kind] ?? ranking.kind;
+  const sort = SECTOR_SORT_LABELS[ranking.sort] ?? ranking.sort;
+  const windowLabel = SECTOR_WINDOW_LABELS[ranking.window] ?? ranking.window;
+  const sampledAt = ranking.anchor === null ? '--' : fmtClock(ranking.anchor.sampledAt);
+  return `${kind} · 交易日 ${ranking.tradingDate} · 数据时点 ${sampledAt} · 按${sort}排序 · 占比窗口 ${windowLabel}`;
+};
 
 /* ---- DOM 渲染 ---- */
 
@@ -314,6 +477,233 @@ const renderOverviewPane = (overview) => {
   ]);
 };
 
+/* ---- 板块追踪（ticket #38） ---- */
+
+const sectorSortHeader = (label, sortKey, params, onSort) =>
+  sortableHeader(label, sortKey, { key: params.sort, order: 'desc' }, onSort, 'num');
+
+const sectorOnSort = (params) => (sortKey) => {
+  if (!SECTOR_SORTS.includes(sortKey)) return;
+  window.location.hash = sectorHash({ ...params, sort: sortKey });
+};
+
+const sectorKindSwitch = (params) => {
+  const buttons = SECTOR_KINDS.map((kind) => {
+    const button = el('button', 'btn btn-outline btn-sm', SECTOR_KIND_LABELS[kind]);
+    button.type = 'button';
+    button.classList.toggle('active', params.kind === kind);
+    button.setAttribute('aria-pressed', String(params.kind === kind));
+    button.addEventListener('click', () => {
+      if (params.kind === kind) return;
+      window.location.hash = sectorHash({ ...params, kind });
+    });
+    return button;
+  });
+  const group = el('div', 'room-kind-switch', buttons);
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', '板块分类');
+  return group;
+};
+
+const missingCell = (metric, className = 'num') => {
+  const cell = el('td', `${className} room-missing`, '缺失');
+  cell.title = sectorMissingText(metric);
+  return cell;
+};
+
+const valueCell = (metric, className = 'num') => {
+  const text = sectorValueText(metric);
+  if (text === null) return missingCell(metric, className);
+  const tone = metric.value > 0 ? 'pos' : metric.value < 0 ? 'neg' : '';
+  return el('td', `${className} ${tone}`.trim(), text);
+};
+
+const sectorDetailRow = (row, ranking) => {
+  const facts = sectorDetailFacts(row, ranking).map((fact) =>
+    el('div', 'room-fact', [el('span', 'label', fact.label), el('span', 'value', fact.value)]),
+  );
+  const notes = sectorDetailNotes(row, ranking);
+  const cell = el('td', '', [
+    el('div', 'room-facts', facts),
+    el(
+      'ul',
+      'room-warnings',
+      notes.map((note) => el('li', '', note)),
+    ),
+  ]);
+  cell.colSpan = 8;
+  return el('tr', 'room-sector-detail', cell);
+};
+
+const sectorRowPair = (row, ranking, params) => {
+  const cells = sectorRowCells(row);
+  const expanded = roomSectorState.expanded === row.sectorId;
+  const rankCell = el('td', 'num muted', cells.rank);
+  const nameCell = el('td', '', [
+    el('span', 'room-sector-name', row.name),
+    el('span', 'cell-sub muted', `${SECTOR_KIND_LABELS[row.kind] ?? row.kind} · ${row.vendorCode}`),
+  ]);
+  const breadthCell = el('td', 'num', [
+    el('span', '', cells.breadth),
+    el('span', 'cell-sub muted', cells.breadthSub),
+  ]);
+  const limitUpCell =
+    cells.limitUp === null ? missingCell(row.limitUp) : el('td', 'num', cells.limitUp);
+  const turnoverCell =
+    cells.turnover === null ? missingCell(row.turnover) : el('td', 'num', cells.turnover);
+
+  const main = el('tr', `room-sector-row${expanded ? ' expanded' : ''}`, [
+    rankCell,
+    nameCell,
+    valueCell(row.day),
+    valueCell(row.window5),
+    valueCell(row.window15),
+    breadthCell,
+    limitUpCell,
+    turnoverCell,
+  ]);
+  main.dataset.sectorId = row.sectorId;
+  main.tabIndex = 0;
+  main.setAttribute('aria-expanded', String(expanded));
+  const toggle = () => {
+    roomSectorState.expanded = expanded ? null : row.sectorId;
+    const pane = roomSection()?.querySelector('.room-pane');
+    if (pane !== null) mount(pane, renderSectorsPane(roomSectorRanking, params));
+  };
+  main.addEventListener('click', toggle);
+  main.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    toggle();
+  });
+  return expanded ? [main, sectorDetailRow(row, ranking)] : [main];
+};
+
+const sectorTable = (ranking, params) => {
+  const head = el('thead', '', [
+    el('tr', '', [
+      el('th', '', '名次'),
+      el('th', '', '板块'),
+      sectorSortHeader('日涨幅', 'day', params, sectorOnSort(params)),
+      sectorSortHeader('近 5 分钟', 'window5', params, sectorOnSort(params)),
+      sectorSortHeader('近 15 分钟', 'window15', params, sectorOnSort(params)),
+      el('th', 'num', '上涨 / 有效'),
+      el('th', 'num', '封板'),
+      el('th', 'num', `成交占比（${SECTOR_WINDOW_LABELS[ranking.window] ?? ranking.window}）`),
+    ]),
+  ]);
+  const body = el(
+    'tbody',
+    '',
+    ranking.rows.flatMap((row) => sectorRowPair(row, ranking, params)),
+  );
+  const table = el('table', 'table room-sector-table', [head, body]);
+  const wrap = el('div', 'table-wrap', table);
+  return wrap;
+};
+
+const sectorWindowStrip = (ranking) =>
+  el('div', 'room-window-strip', [
+    el('span', 'label', '窗口'),
+    el('span', 'value mono', `5 分钟 ${windowSpanText(ranking.windows.w5)}`),
+    el('span', 'value mono', `15 分钟 ${windowSpanText(ranking.windows.w15)}`),
+  ]);
+
+const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
+  if (ranking === null || ranking === undefined) {
+    return el('div', 'card room-empty', [
+      el('h2', '', '板块榜暂不可用'),
+      el('p', '', '读取板块盘中榜失败，稍后会自动重试。'),
+    ]);
+  }
+  const empty = sectorEmptyText(ranking);
+  if (empty !== null) {
+    return el('div', 'card room-empty', [
+      el('h2', '', '板块榜尚未就绪'),
+      el('p', '', empty),
+      el('p', 'room-caption', '页面只读已发布批次；非交易日与盘前不展示上一交易日的当日盘面数据。'),
+    ]);
+  }
+  const sampledAt = ranking.anchor === null ? '--' : fmtClock(ranking.anchor.sampledAt);
+  return el('div', 'room-sectors', [
+    el('div', 'card room-card', [
+      el('div', 'card-header', [
+        el('div', [
+          el('h2', '', '板块盘中榜'),
+          el(
+            'div',
+            'card-meta',
+            `数据时点 ${sampledAt} · 排序 ${SECTOR_SORT_LABELS[ranking.sort] ?? ranking.sort} · 点表头切换口径`,
+          ),
+        ]),
+        sectorKindSwitch(params),
+      ]),
+      sectorWindowStrip(ranking),
+      sectorTable(ranking, params),
+      el(
+        'p',
+        'room-caption',
+        `共 ${ranking.coverage.rowCount} 个板块（目录 ${ranking.coverage.sectorCount} 个，${ranking.coverage.omittedSectorCount} 个无 active 成分未列出）`,
+      ),
+    ]),
+    el('div', 'card room-card', [
+      el('div', 'card-header', [
+        el('div', [
+          el('h2', '', '口径说明'),
+          el('div', 'card-meta', '概念成分可重叠，占比不可加总'),
+        ]),
+        el(
+          'span',
+          `room-status room-status-${ranking.turnover.status}`,
+          DIMENSION_STATUS_LABELS[ranking.turnover.status] ?? '缺失',
+        ),
+      ]),
+      ranking.turnover.reason === null
+        ? el(
+            'p',
+            'room-caption',
+            `全市场分母 ${formatAmount(ranking.turnover.marketAmountDelta ?? 0)}（去重 ${ranking.turnover.marketSampleCount} / ${ranking.turnover.marketTotalCount} 只）`,
+          )
+        : el('p', 'placeholder', ranking.turnover.reason),
+      el(
+        'ul',
+        'room-warnings',
+        ranking.notes.map((note) => el('li', '', note)),
+      ),
+    ]),
+  ]);
+};
+
+const renderSectors = (section, ranking, params) => {
+  const pane = section.querySelector('.room-pane');
+  if (pane === null) return;
+  mount(pane, renderSectorsPane(ranking, params));
+  setMeta(section, sectorMetaText(ranking));
+};
+
+const fetchSectors = async (params) => {
+  const result = await callApi(`/api/market/room/sectors${sectorQuery(params)}`, {
+    timeoutMs: 15_000,
+  });
+  return result.ok ? (result.data?.ranking ?? null) : null;
+};
+
+const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash()) => {
+  const section = roomSection();
+  if (section === null) return;
+  if (roomSectorState.kind !== params.kind) roomSectorState.expanded = null;
+  roomSectorState.kind = params.kind;
+  roomSectorState.sort = params.sort;
+  roomSectorState.window = params.window;
+  const ranking = await fetchSectors(params);
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  if (ranking !== null) roomSectorRanking = ranking;
+  // 刷新失败时只在同一分类下复用上次结果，避免把行业数据画在概念切换后。
+  const fallback = roomSectorRanking?.kind === params.kind ? roomSectorRanking : null;
+  renderSectors(section, ranking ?? fallback, params);
+  if (ranking === null) setStatus?.('板块盘中榜刷新失败，保留上次成功结果', true);
+};
+
 /* ---- 页面挂载与刷新 ---- */
 
 const ensureShell = (section) => {
@@ -418,12 +808,13 @@ const startTimer = (setStatus) => {
   roomTimer = setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     if (roomSection()?.hidden !== false) return;
-    if (roomTabFromHash() !== 'overview') return;
-    void refreshOverview(roomEpoch, setStatus);
+    const tab = roomTabFromHash();
+    if (tab === 'overview') void refreshOverview(roomEpoch, setStatus);
+    else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
   }, REFRESH_MS);
 };
 
-/** 进入作战室：渲染外壳 + 当前 tab；总览才读数据，占位视图不请求。 */
+/** 进入作战室：渲染外壳 + 当前 tab；总览与板块追踪才读数据，占位视图不请求。 */
 const renderMarketRoom = async (setStatus = () => {}) => {
   const section = roomSection();
   if (section === null) return;
@@ -432,12 +823,15 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   const tab = roomTabFromHash();
   ensureShell(section);
   syncTabs(section, tab);
-  if (tab !== 'overview') {
+  if (tab === 'overview') {
+    await refreshOverview(epoch, setStatus);
+  } else if (tab === 'sectors') {
+    await refreshSectors(epoch, setStatus, sectorParamsFromHash());
+  } else {
     stopTimer();
     renderPlaceholder(section, tab);
     return;
   }
-  await refreshOverview(epoch, setStatus);
   if (epoch !== roomEpoch) return;
   startTimer(setStatus);
 };
@@ -458,5 +852,16 @@ export {
   overviewMetaText,
   renderMarketRoom,
   roomTabFromHash,
+  sectorBreadthText,
+  sectorDetailFacts,
+  sectorDetailNotes,
+  sectorEmptyText,
+  sectorHash,
+  sectorMetaText,
+  sectorParamsFromHash,
+  sectorQuery,
+  sectorRowCells,
+  sectorSampleText,
   teardownMarketRoom,
+  windowSpanText,
 };

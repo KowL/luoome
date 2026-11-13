@@ -172,6 +172,11 @@ export interface SectorCatalogRepository {
     readonly sectorId: string;
     readonly includeMissing?: boolean;
   }): Promise<readonly StockSectorMembership[]>;
+  /** 一次读取多个板块的成分（榜单按 kind 批量取成分，避免逐板块查询）；默认只返回 active 成分。 */
+  listBySectors(input: {
+    readonly sectorIds: readonly string[];
+    readonly includeMissing?: boolean;
+  }): Promise<readonly StockSectorMembership[]>;
   listSectors(input?: {
     readonly kinds?: readonly SectorKind[];
     readonly state?: SectorCatalogState | 'all';
@@ -207,6 +212,15 @@ export interface MarketSnapshotBatchRepository {
     readonly tradingDate: string;
     readonly sampledAt: Date;
     readonly toleranceMs: number;
+  }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日、某个时点及之前最近的已发布批次（盘中榜锚点与窗口起点用）。
+   * 不跨交易日取值；该日没有更早批次时返回 null。
+   */
+  findAtOrBefore(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
   }): Promise<MarketSnapshotBatch | null>;
 }
 
