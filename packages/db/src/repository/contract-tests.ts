@@ -4,6 +4,7 @@ import {
   type AdviceOutcome,
   type AlertPlan,
   buildAccountFacts,
+  buildLimitUpLadderSample,
   type ChatMessage,
   type ChatSession,
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
@@ -12,6 +13,7 @@ import {
   type Holding,
   InvariantError,
   type LimitUpLadder,
+  type LimitUpLadderSample,
   type MarketSnapshotBatch,
   type MinuteBar,
   money,
@@ -4705,6 +4707,68 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
+      });
+    });
+
+    describe('LimitUpLadderSampleRepository', () => {
+      const sampleAt = (iso: string, overrides: Partial<LimitUpLadder> = {}): LimitUpLadderSample =>
+        buildLimitUpLadderSample({
+          sampledAt: new Date(iso),
+          ladder: makeLimitUpLadder({ asOf: new Date(iso), ...overrides }),
+        });
+
+      it('按采样时点保存多份天梯事实，可按交易日升序与 at-or-before 读取', async () => {
+        const first = sampleAt('2026-07-01T01:35:00.000Z');
+        const second = sampleAt('2026-07-01T02:00:00.000Z');
+        await repos.limitUpLadderSample.save(first);
+        await repos.limitUpLadderSample.save(second);
+
+        expect(await repos.limitUpLadderSample.findById(first.id)).toEqual(first);
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+          }),
+        ).toEqual([first, second]);
+        expect(
+          await repos.limitUpLadderSample.findAtOrBefore({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+            sampledAt: new Date('2026-07-01T01:50:00.000Z'),
+          }),
+        ).toEqual(first);
+        expect(
+          await repos.limitUpLadderSample.findAtOrBefore({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+            sampledAt: new Date('2026-07-01T01:30:00.000Z'),
+          }),
+        ).toBeNull();
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-02',
+            source: 'eastmoney',
+          }),
+        ).toEqual([]);
+      });
+
+      it('同一采样时点重试保留首次内容，不产生第二份', async () => {
+        const first = sampleAt('2026-07-01T01:35:00.000Z');
+        await repos.limitUpLadderSample.save(first);
+        const changed = sampleAt('2026-07-01T01:35:00.000Z', {
+          asOf: new Date('2026-07-01T01:36:00.000Z'),
+        });
+
+        await expect(repos.limitUpLadderSample.save(changed)).resolves.toEqual({
+          created: false,
+          sample: first,
+        });
+        expect(
+          await repos.limitUpLadderSample.listByTradingDate({
+            tradingDate: '2026-07-01',
+            source: 'eastmoney',
+          }),
+        ).toEqual([first]);
       });
     });
 

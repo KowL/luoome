@@ -542,7 +542,10 @@ const renderSectorDetailPane = (
     close.addEventListener('click', () => onClose());
     return el('div', 'card room-empty room-sector-detail', [
       el('div', 'card-header', [
-        el('div', [el('h2', '', detail.sector?.name ?? '板块详情'), el('div', 'card-meta', empty)]),
+        el('div', null, [
+          el('h2', '', detail.sector?.name ?? '板块详情'),
+          el('div', 'card-meta', empty),
+        ]),
         close,
       ]),
       el(
@@ -578,7 +581,7 @@ const renderSectorDetailPane = (
   const notes = detailNotes(detail);
   return el('div', 'card room-card room-sector-detail', [
     el('div', 'card-header', [
-      el('div', [
+      el('div', null, [
         el('h2', '', `板块详情 · ${detail.sector?.name ?? '--'}`),
         el('div', 'card-meta', detailMetaText(detail)),
       ]),

@@ -12,6 +12,7 @@ import type {
   DeliveryStatus,
   Exchange,
   LimitUpLadder,
+  LimitUpLadderSample,
   LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
@@ -302,6 +303,34 @@ export const limitUpLadderSnapshots = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.date, t.source], name: 'limit_up_ladder_snapshots_pk' }),
     sourceDateIdx: index('limit_up_ladder_snapshots_source_date_idx').on(t.source, t.date),
+  }),
+);
+
+/**
+ * 按采样时点保存的天梯事实（ticket #41）：同一天可有多份，用于还原开板 / 换位时间线。
+ * sampledAt 对齐盘中批次间隔；同 (trading_date, source, sampled_at) 重试幂等。
+ */
+export const limitUpLadderSamples = sqliteTable(
+  'limit_up_ladder_samples',
+  {
+    id: text('id').primaryKey(),
+    tradingDate: text('trading_date').notNull(),
+    source: text('source').$type<LimitUpLadderSource>().notNull(),
+    sampledAt: integer('sampled_at', { mode: 'timestamp_ms' }).notNull(),
+    total: integer('total').notNull(),
+    maxLevel: integer('max_level').notNull(),
+    levels: text('levels_json', { mode: 'json' }).$type<LimitUpLadder['levels']>().notNull(),
+    warnings: text('warnings_json', { mode: 'json' })
+      .$type<LimitUpLadderSample['warnings']>()
+      .notNull(),
+    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    sourceDateSampledIdx: index('limit_up_ladder_samples_source_date_sampled_idx').on(
+      t.source,
+      t.tradingDate,
+      t.sampledAt,
+    ),
   }),
 );
 
@@ -1255,6 +1284,7 @@ export const schema = {
   sectorChangeEvents,
   sectorSyncRuns,
   limitUpLadderSnapshots,
+  limitUpLadderSamples,
   marketSnapshotBatches,
   holdings,
   trades,
