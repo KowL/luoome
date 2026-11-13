@@ -2,9 +2,13 @@ import {
   type AShareSentimentSnapshot,
   buildMarketRoomEmptyOverview,
   buildMarketRoomOverview,
+  buildMarketRoomReplayOverview,
+  dateInShanghai,
   type IndexQuote,
+  type LimitUpLadderSample,
   MARKET_ROOM_COMPARE_TOLERANCE_MS,
   MarketRoomOverviewSchema,
+  type MarketSnapshotBatch,
   marketRoomCompareTarget,
   marketRoomEmptyReason,
   type ToolContext,
@@ -23,8 +27,13 @@ import { defineTool } from '../define-tool.js';
  */
 
 const COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
+/** 天梯样本来源与 `limit_up_ladder` tool 的默认源一致。 */
+const LIMIT_UP_SOURCE = 'eastmoney';
 
-export const GetMarketRoomOverviewInput = z.object({});
+export const GetMarketRoomOverviewInput = z.object({
+  /** 回放时点：给定则只读该时点及之前最近的已发布批次，缺省读最近批次。 */
+  at: z.coerce.date().optional(),
+});
 
 export const GetMarketRoomOverviewOutput = z.object({
   overview: MarketRoomOverviewSchema,
@@ -34,13 +43,14 @@ export type GetMarketRoomOverviewOutputT = z.infer<typeof GetMarketRoomOverviewO
 export const getMarketRoomOverviewTool = defineTool({
   name: 'get_market_room_overview',
   description:
-    '读取最近已发布沪深全市场批次的作战室总览：覆盖与更新时间、指数对照、涨跌平与个股涨幅中位数、累计成交额与昨日同时点对比、封板/炸板/最高连板；各维度独立标注完整性与缺失原因，只读不采集',
+    '读取沪深全市场已发布批次的作战室总览：覆盖与更新时间、指数对照、涨跌平与个股涨幅中位数、累计成交额与昨日同时点对比、封板/炸板/最高连板；给定 at 时取该时点及之前最近的已发布批次，只返回当时已知的内容（回放不读实时指数与情绪，指数与炸板数没有历史快照时标注缺失、不补零）；各维度独立标注完整性与缺失原因，只读不采集',
   sideEffect: 'external',
   requiredCapabilities: ['external'],
   input: GetMarketRoomOverviewInput,
   output: GetMarketRoomOverviewOutput,
-  handler: async (_input, ctx) => {
+  handler: async (input, ctx) => {
     const now = ctx.clock();
+    if (input.at !== undefined) return replayOverview(input.at, ctx);
     const latest = await ctx.repos.marketSnapshotBatch.findLatest({ coverage: COVERAGE });
     if (latest === null) {
       return { overview: buildMarketRoomEmptyOverview({ now, latest: null, reason: 'no_batch' }) };
@@ -72,6 +82,63 @@ export const getMarketRoomOverviewTool = defineTool({
     };
   },
 });
+
+/**
+ * 回放：行情只用该时点及之前最近的已发布批次，昨日同时点对比也只用当时已发布的批次；
+ * 不读实时指数与情绪，避免把之后才知道的信息带回更早时点。
+ */
+const replayOverview = async (at: Date, ctx: ToolContext) => {
+  const anchor = await ctx.repos.marketSnapshotBatch.findAtOrBefore({
+    coverage: COVERAGE,
+    tradingDate: dateInShanghai(at),
+    sampledAt: at,
+  });
+  if (anchor === null) {
+    return {
+      overview: buildMarketRoomEmptyOverview({
+        now: ctx.clock(),
+        latest: null,
+        reason: 'no_batch',
+        asOf: at,
+      }),
+    };
+  }
+  const target = marketRoomCompareTarget(anchor.sampledAt);
+  const previous = await ctx.repos.marketSnapshotBatch.findNearestAt({
+    coverage: COVERAGE,
+    tradingDate: target.tradingDate,
+    sampledAt: target.sampledAt,
+    toleranceMs: MARKET_ROOM_COMPARE_TOLERANCE_MS,
+  });
+  const limitUpSample = await readLadderSampleAt(ctx, anchor);
+  return {
+    overview: buildMarketRoomReplayOverview({
+      asOf: at,
+      anchor,
+      previous,
+      limitUpSample,
+    }),
+  };
+};
+
+/** 只用与锚点批次同一采样时点的天梯样本；时间不对齐时按缺失返回，不拿更早样本冒充。 */
+const readLadderSampleAt = async (
+  ctx: ToolContext,
+  anchor: MarketSnapshotBatch,
+): Promise<LimitUpLadderSample | null> => {
+  try {
+    const sample = await ctx.repos.limitUpLadderSample.findAtOrBefore({
+      tradingDate: anchor.tradingDate,
+      source: LIMIT_UP_SOURCE,
+      sampledAt: anchor.sampledAt,
+    });
+    return sample !== null && sample.sampledAt.getTime() === anchor.sampledAt.getTime()
+      ? sample
+      : null;
+  } catch {
+    return null;
+  }
+};
 
 const readIndexQuotes = async (
   ctx: ToolContext,

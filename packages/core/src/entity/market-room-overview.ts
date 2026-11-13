@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 import { dateInShanghai, isHoliday, isWeekend, previousTradingDate } from '../trading-calendar.js';
 import { type AShareSentimentSnapshot, EvidenceDimensionStatusSchema } from './ashare-sentiment.js';
+import type { LimitUpLadderSample } from './limit-up-ladder-sample.js';
 import type { MarketSnapshotBatch } from './market-snapshot-batch.js';
 import { type IndexQuote, IndexQuoteSchema } from './quote.js';
 import { MarketCoverageSchema } from './stock-universe.js';
@@ -122,7 +123,8 @@ export const MarketRoomLimitUpSchema = z.object({
   value: z
     .object({
       sealedCount: z.number().int().nonnegative(),
-      brokenCount: z.number().int().nonnegative(),
+      /** 炸板家数；回放没有历史炸板快照时为 null，不写 0。 */
+      brokenCount: z.number().int().nonnegative().nullable(),
       maxLadderLevel: z.number().int().nonnegative(),
     })
     .optional(),
@@ -144,9 +146,11 @@ export type MarketRoomIndexes = z.infer<typeof MarketRoomIndexesSchema>;
 export const MarketRoomOverviewSchema = z.object({
   state: z.enum(['ready', 'empty']),
   emptyReason: MarketRoomEmptyReasonSchema.optional(),
-  /** 今日（Asia/Shanghai）。 */
+  /** 回放请求的时点；最新模式为 null。 */
+  asOf: z.coerce.date().nullable(),
+  /** 本次读取的交易日：最新模式为今日，回放模式为 asOf 所在交易日。 */
   tradingDate: dateString,
-  /** 最近已发布批次的时间锚点；没有任何批次时为 null。 */
+  /** 本次读取的批次锚点：最新模式为最近已发布批次，回放模式为该时点及之前最近的批次。 */
   latestBatch: z.object({ tradingDate: dateString, sampledAt: z.coerce.date() }).nullable(),
   coverage: MarketRoomCoverageSchema,
   breadth: MarketRoomBreadthSchema,
@@ -461,6 +465,38 @@ export const buildMarketRoomIndexes = (input: {
   };
 };
 
+/**
+ * 回放概览的指数维度：本地没有按采样时点保存的指数序列，回放不读实时指数行情，
+ * 直接标缺失并给出原因，不拿当前指数冒充历史。
+ */
+export const buildMarketRoomReplayIndexes = (): MarketRoomIndexes => ({
+  status: 'unavailable',
+  warnings: ['index_quotes_replay_unavailable: 回放不读取实时指数行情，本地没有该时点的指数快照'],
+});
+
+/**
+ * 回放概览的情绪维度：只用该时点及之前最近的天梯样本；炸板家数没有历史快照，保持缺失。
+ */
+export const buildMarketRoomReplayLimitUp = (input: {
+  readonly sample: LimitUpLadderSample | null;
+}): MarketRoomLimitUp => {
+  if (input.sample === null) {
+    return {
+      status: 'unavailable',
+      warnings: ['limit_up_sample_missing: 该时点没有对齐的天梯采样事实，回放不读取实时情绪'],
+    };
+  }
+  return {
+    status: 'partial',
+    warnings: ['broken_count_unavailable: 回放只用天梯样本，炸板家数没有历史快照，不写 0'],
+    value: {
+      sealedCount: input.sample.total,
+      brokenCount: null,
+      maxLadderLevel: input.sample.maxLevel,
+    },
+  };
+};
+
 const EMPTY_REASON_TEXT: Readonly<Record<MarketRoomEmptyReason, string>> = {
   no_batch: '尚无已发布的盘中批次',
   pre_open: '盘前尚无当日批次',
@@ -473,19 +509,23 @@ const emptyDimension = (reason: MarketRoomEmptyReason) => ({
   warnings: [`${reason}: ${EMPTY_REASON_TEXT[reason]}`],
 });
 
-/** 空态概览：只保留「最近批次是什么时候」，五个维度全部 unavailable 并带同一原因。 */
+/** 空态概览：只保留「批次锚点是什么时候」，五个维度全部 unavailable 并带同一原因。 */
 export const buildMarketRoomEmptyOverview = (input: {
   readonly now: Date;
   readonly latest: MarketSnapshotBatch | null;
   readonly reason: MarketRoomEmptyReason;
+  /** 回放请求的时点；给定时不校验「当日」口径，交易日跟随该时点。 */
+  readonly asOf?: Date | null;
 }): MarketRoomOverview => {
-  if (marketRoomEmptyReason(input.now, input.latest) !== input.reason) {
+  const asOf = input.asOf ?? null;
+  if (asOf === null && marketRoomEmptyReason(input.now, input.latest) !== input.reason) {
     throw new InvariantError('market room 空态原因与批次状态不一致');
   }
   const parsed = MarketRoomOverviewSchema.parse({
     state: 'empty',
     emptyReason: input.reason,
-    tradingDate: dateInShanghai(input.now),
+    asOf,
+    tradingDate: dateInShanghai(asOf ?? input.now),
     latestBatch:
       input.latest === null
         ? null
@@ -519,6 +559,7 @@ export const buildMarketRoomOverview = (input: {
     indexes.value?.values.find((entry) => entry.code === MARKET_ROOM_BENCHMARK_INDEX_CODE) ?? null;
   const parsed = MarketRoomOverviewSchema.parse({
     state: 'ready',
+    asOf: null,
     tradingDate: dateInShanghai(input.now),
     latestBatch: {
       tradingDate: input.latest.tradingDate,
@@ -529,6 +570,34 @@ export const buildMarketRoomOverview = (input: {
     amount: buildMarketRoomAmount({ current: input.latest, previous: input.previous }),
     limitUp: buildMarketRoomLimitUp({ dimension: input.limitUp, error: input.limitUpError }),
     indexes,
+  });
+  assertMarketRoomOverviewInvariants(parsed);
+  return parsed;
+};
+
+/**
+ * 回放概览：行情截断到 asOf（锚点 = 该时点及之前最近的已发布批次），
+ * 信息可见性同样以 asOf 为界；指数与炸板家数没有按时点的快照时按缺失返回。
+ */
+export const buildMarketRoomReplayOverview = (input: {
+  readonly asOf: Date;
+  readonly anchor: MarketSnapshotBatch;
+  readonly previous: MarketSnapshotBatch | null;
+  readonly limitUpSample: LimitUpLadderSample | null;
+}): MarketRoomOverview => {
+  const parsed = MarketRoomOverviewSchema.parse({
+    state: 'ready',
+    asOf: input.asOf,
+    tradingDate: input.anchor.tradingDate,
+    latestBatch: {
+      tradingDate: input.anchor.tradingDate,
+      sampledAt: input.anchor.sampledAt,
+    },
+    coverage: buildMarketRoomCoverage(input.anchor),
+    breadth: buildMarketRoomBreadth({ batch: input.anchor }),
+    amount: buildMarketRoomAmount({ current: input.anchor, previous: input.previous }),
+    limitUp: buildMarketRoomReplayLimitUp({ sample: input.limitUpSample }),
+    indexes: buildMarketRoomReplayIndexes(),
   });
   assertMarketRoomOverviewInvariants(parsed);
   return parsed;

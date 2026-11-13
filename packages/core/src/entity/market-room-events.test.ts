@@ -7,6 +7,7 @@ import {
   buildMarketRoomEventsView,
   detectMarketRoomEvents,
   MARKET_ROOM_EVENT_DEFAULT_RULES,
+  MARKET_ROOM_EVENTS_REPLAY_NOTE,
   type MarketRoomEvent,
   type MarketRoomEventRuleOverrides,
   marketRoomEventId,
@@ -674,7 +675,14 @@ describe('盘中事件：证据与幂等候选', () => {
 });
 
 describe('盘中事件：只读视图', () => {
-  const filters = { date: null, from: null, to: null, kind: null, sectorId: null };
+  const filters = {
+    date: null,
+    from: null,
+    to: null,
+    kind: null,
+    sectorId: null,
+    knownAt: null,
+  };
 
   it('按检测时点与种类排序，并给出三类事件计数', () => {
     const events = [...scan(divergenceScenario), ...scan(diffusionScenario())];
@@ -685,6 +693,20 @@ describe('盘中事件：只读视图', () => {
     expect(view.counts).toEqual({ total: 2, diffusion: 1, divergence: 1, rotation: 0 });
     expect(view.events.map((event) => event.kind)).toEqual(['diffusion', 'divergence']);
     expect(view.notes.length).toBeGreaterThan(0);
+  });
+
+  it('回放视图在 filters 里带 knownAt，并追加「当时已知」截断说明', () => {
+    const events = scan(diffusionScenario());
+    const view = buildMarketRoomEventsView({
+      tradingDate: TRADING_DATE,
+      events,
+      filters: { ...filters, knownAt: at('14:55') },
+    });
+    expect(view.filters.knownAt).toEqual(at('14:55'));
+    expect(view.notes).toContain(MARKET_ROOM_EVENTS_REPLAY_NOTE);
+    expect(
+      buildMarketRoomEventsView({ tradingDate: TRADING_DATE, events, filters }).notes,
+    ).not.toContain(MARKET_ROOM_EVENTS_REPLAY_NOTE);
   });
 
   it('空视图必须给出原因，非空视图不得携带原因', () => {

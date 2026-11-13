@@ -190,6 +190,29 @@ export interface SectorCatalogRepository {
     readonly kinds?: readonly SectorKind[];
     readonly state?: SectorCatalogState | 'all';
   }): Promise<readonly SectorCatalogEntry[]>;
+  /**
+   * 某时点生效的目录条目：`firstSeenAt <= at` 且当时未退出（`retiredAt` 为空或晚于 at）。
+   * 回放用；返回的条目按「当时 active」投影（`retiredAt = null`），不拿今天的目录顶替。
+   */
+  listSectorsAsOf(input: {
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly SectorCatalogEntry[]>;
+  /**
+   * 某时点生效的成分：`firstSeenAt <= at` 且未在该时点前退出（`missingSince` 为空或晚于 at）。
+   * 回放用；返回的行按「当时 active」投影，不拿今天的成分顶替排名分母。
+   * `sectorIds` 由调用方按 `listSectorsAsOf` 的目录给出。
+   */
+  listBySectorsAsOf(input: {
+    readonly sectorIds: readonly string[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembership[]>;
+  /** 按股票反查某时点生效的题材归属；口径与 `listBySectorsAsOf` 一致。 */
+  listByStockAsOf(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembershipView[]>;
   listChanges(input?: {
     readonly sectorId?: string;
     readonly stockId?: string;
@@ -240,6 +263,8 @@ export interface MarketRoomEventRepository {
     readonly sectorId?: string;
     readonly from?: Date;
     readonly to?: Date;
+    /** 只返回该时点之前已记录（`recordedAt <= knownAt`）的事件；回放按当时已知截断。 */
+    readonly knownAt?: Date;
     readonly order?: 'asc' | 'desc';
     readonly limit?: number;
   }): Promise<MarketRoomEvent[]>;

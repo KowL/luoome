@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { money } from '../types/branded.js';
+import { buildLimitUpLadderSample } from './limit-up-ladder-sample.js';
 import {
   buildMarketRoomAmount,
   buildMarketRoomBreadth,
@@ -7,6 +8,8 @@ import {
   buildMarketRoomIndexes,
   buildMarketRoomLimitUp,
   buildMarketRoomOverview,
+  buildMarketRoomReplayLimitUp,
+  buildMarketRoomReplayOverview,
   MARKET_ROOM_COMPARE_TOLERANCE_MS,
   marketRoomCompareTarget,
   marketRoomEmptyReason,
@@ -485,5 +488,96 @@ describe('marketRoomEmptyReason / buildMarketRoomOverview', () => {
     expect(overview.amount.status).toBe('partial');
     expect(overview.indexes.status).toBe('unavailable');
     expect(overview.limitUp.status).toBe('unavailable');
+  });
+});
+
+describe('回放（asOf）', () => {
+  const at = (time: string): Date => new Date(`${TRADING_DATE}T${time}+08:00`);
+  const anchor = batchFor(
+    [item('600000', { changePct: 2, amount: 60 }), item('600001', { changePct: -1, amount: 40 })],
+    { sampledAt: '2026-09-28T10:15:00+08:00' },
+  );
+  const previous = batchFor(
+    [item('600000', { changePct: 1, amount: 50 }), item('600001', { changePct: -0.5, amount: 30 })],
+    { sampledAt: '2026-09-24T10:15:00+08:00' },
+  );
+  const sample = buildLimitUpLadderSample({
+    sampledAt: at('10:15'),
+    ladder: {
+      date: TRADING_DATE,
+      total: 18,
+      maxLevel: 5,
+      source: 'eastmoney',
+      levels: [],
+      warnings: [],
+      asOf: at('10:15'),
+    },
+  });
+
+  it('按锚点批次取宽度与量能，指数与炸板数没有历史快照时缺失且不写 0', () => {
+    const overview = buildMarketRoomReplayOverview({
+      asOf: at('10:17'),
+      anchor,
+      previous,
+      limitUpSample: sample,
+    });
+
+    expect(overview).toMatchObject({
+      state: 'ready',
+      asOf: at('10:17'),
+      tradingDate: TRADING_DATE,
+      latestBatch: { tradingDate: TRADING_DATE, sampledAt: anchor.sampledAt },
+    });
+    expect(overview.breadth.value?.medianChangePct).toBe(0.5);
+    expect(overview.amount.value?.comparison?.previousTradingDate).toBe('2026-09-24');
+    expect(overview.limitUp).toMatchObject({
+      status: 'partial',
+      value: { sealedCount: 18, brokenCount: null, maxLadderLevel: 5 },
+    });
+    expect(overview.limitUp.warnings.join(' ')).toContain('broken_count_unavailable');
+    expect(overview.indexes.status).toBe('unavailable');
+    expect(overview.indexes.value).toBeUndefined();
+    expect(overview.indexes.warnings.join(' ')).toContain('index_quotes_replay_unavailable');
+  });
+
+  it('没有天梯样本与昨日批次时按缺失返回，并给出原因', () => {
+    const overview = buildMarketRoomReplayOverview({
+      asOf: at('10:17'),
+      anchor,
+      previous: null,
+      limitUpSample: null,
+    });
+
+    expect(overview.limitUp.status).toBe('unavailable');
+    expect(overview.limitUp.value).toBeUndefined();
+    expect(overview.limitUp.warnings.join(' ')).toContain('limit_up_sample_missing');
+    expect(overview.amount.status).toBe('partial');
+    expect(overview.amount.warnings.join(' ')).toContain('missing_previous_batch');
+    expect(buildMarketRoomReplayLimitUp({ sample })).toMatchObject({
+      status: 'partial',
+      value: { sealedCount: 18, brokenCount: null, maxLadderLevel: 5 },
+    });
+    expect(buildMarketRoomReplayLimitUp({ sample: null })).toEqual(overview.limitUp);
+  });
+
+  it('早于最早可信样本的空态带 asOf，交易日跟随回放时点', () => {
+    const empty = buildMarketRoomEmptyOverview({
+      now: at('11:00'),
+      latest: null,
+      reason: 'no_batch',
+      asOf: at('09:00'),
+    });
+
+    expect(empty).toMatchObject({
+      state: 'empty',
+      emptyReason: 'no_batch',
+      asOf: at('09:00'),
+      tradingDate: TRADING_DATE,
+      latestBatch: null,
+    });
+    expect(empty.breadth.value).toBeUndefined();
+    expect(() =>
+      buildMarketRoomEmptyOverview({ now: at('09:00'), latest: anchor, reason: 'pre_open' }),
+    ).toThrow();
   });
 });

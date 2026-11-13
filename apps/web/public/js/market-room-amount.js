@@ -11,6 +11,12 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import {
+  replayAtFromHash,
+  replayEmptyNotice,
+  replayHashSuffix,
+  replayQuerySuffix,
+} from './market-room-replay.js';
 import { formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
@@ -35,21 +41,22 @@ const pickParam = (params, key, allowed, fallback) => {
   return value !== null && allowed.includes(value) ? value : fallback;
 };
 
-/** 成交分布深链接参数（#market-room?tab=turnover&kind=concept&window=w5）。 */
+/** 成交分布深链接参数（#market-room?tab=turnover&kind=concept&window=w5&at=...）。 */
 const amountParamsFromHash = (hash = window.location.hash) => {
   const params = new URLSearchParams(String(hash ?? '').split('?')[1] ?? '');
   return {
     kind: pickParam(params, 'kind', AMOUNT_KINDS, 'industry'),
     window: pickParam(params, 'window', AMOUNT_WINDOWS, 'w15'),
+    at: replayAtFromHash(hash),
   };
 };
 
-/** 请求路径（纯函数）：口径显式带在 URL 上，便于与服务端日志对照。 */
+/** 请求路径（纯函数）：口径与回放时点显式带在 URL 上，便于与服务端日志对照。 */
 const amountQuery = (params) =>
-  `?kind=${encodeURIComponent(params.kind)}&window=${encodeURIComponent(params.window)}`;
+  `?kind=${encodeURIComponent(params.kind)}&window=${encodeURIComponent(params.window)}${replayQuerySuffix(params.at)}`;
 
 const amountHash = (params) =>
-  `market-room?tab=turnover&kind=${params.kind}&window=${params.window}`;
+  `market-room?tab=turnover&kind=${params.kind}&window=${params.window}${replayHashSuffix(params.at)}`;
 
 const fmtClock = (value) => {
   if (value === null || value === undefined) return '--';
@@ -328,10 +335,16 @@ const renderAmountPane = (distribution, params = amountParamsFromHash()) => {
   }
   const empty = amountEmptyText(distribution);
   if (empty !== null) {
+    const replayNotice =
+      distribution?.emptyReason === 'no_batch' ? replayEmptyNotice(params.at) : null;
     return el('div', 'card room-empty', [
-      el('h2', '', '成交分布尚未就绪'),
-      el('p', '', empty),
-      el('p', 'room-caption', '页面只读已发布批次；非交易日与盘前不展示上一交易日的当日盘面数据。'),
+      el('h2', '', replayNotice === null ? '成交分布尚未就绪' : '该时点不可回放'),
+      el('p', '', replayNotice ?? empty),
+      el(
+        'p',
+        'room-caption',
+        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
+      ),
     ]);
   }
   const sampledAt = distribution.anchor === null ? '--' : fmtClock(distribution.anchor.sampledAt);

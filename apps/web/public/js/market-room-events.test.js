@@ -15,6 +15,7 @@ import {
   eventsHash,
   eventsMetaText,
   eventsParamsFromHash,
+  eventsQuery,
   renderEventsPane,
   rotationLeadLines,
   sortEventsDesc,
@@ -340,8 +341,8 @@ describe('排序、空态与页头', () => {
     const hash = eventsHash({ eventId });
     expect(hash).toContain('tab=events');
     expect(hash).toContain(encodeURIComponent(eventId));
-    expect(eventsParamsFromHash(`#${hash}`)).toEqual({ eventId });
-    expect(eventsParamsFromHash('#market-room?tab=events')).toEqual({ eventId: null });
+    expect(eventsParamsFromHash(`#${hash}`)).toEqual({ eventId, at: null });
+    expect(eventsParamsFromHash('#market-room?tab=events')).toEqual({ eventId: null, at: null });
     expect(eventsHash({ eventId: null })).toBe('market-room?tab=events');
   });
 });
@@ -476,5 +477,33 @@ describe('渲染结构', () => {
       const failed = renderEventsPane(null, { eventId: null });
       expect(failed.className).toContain('room-empty');
     });
+  });
+});
+
+describe('回放（ticket #43）', () => {
+  const at = new Date('2026-09-28T10:15:00+08:00');
+
+  it('事件请求只带 knownAt；hash 保留同一个 at', () => {
+    expect(eventsQuery({})).toBe('');
+    expect(eventsQuery({ at })).toBe('?knownAt=2026-09-28T02%3A15%3A00.000Z');
+    const hash = eventsHash({ eventId: 'e1', at });
+    expect(hash).toContain('event=e1');
+    expect(hash).toContain('at=2026-09-28T02%3A15%3A00.000Z');
+    expect(eventsParamsFromHash(`#${hash}`)).toEqual({ eventId: 'e1', at });
+  });
+
+  it('点事件把 at 设为该事件的检测时点，让四个视图跟随', () => {
+    const source = read('./market-room-events.js');
+    expect(source).toContain('event.sampledAt');
+    expect(source).toContain('eventsHash({');
+    expect(source).toContain('replayHashSuffix');
+    expect(source).toContain('eventsQuery(params)');
+  });
+
+  it('回放空态说明按当时已知截断，而不是没发生事件', () => {
+    const empty = { state: 'empty', emptyReason: 'no_events' };
+    expect(eventsEmptyText(empty, at)).toBe('回放时点 10:15 之前没有已记录的事件');
+    expect(eventsEmptyText(empty)).toBe('该交易日没有扩散 / 分化 / 换位事件');
+    expect(eventsEmptyText(empty, null)).toBe('该交易日没有扩散 / 分化 / 换位事件');
   });
 });

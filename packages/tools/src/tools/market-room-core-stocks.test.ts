@@ -250,6 +250,37 @@ describe('get_market_room_core_stocks', () => {
     expect(core.coverage.batchCount).toBe(2);
   });
 
+  it('at 之前未纳入的成分不参与该时点的角色复算与题材反查', async () => {
+    const { ctx } = await contextAt();
+    await seedCatalog(ctx.repos);
+    await seedBatches(ctx);
+    const target = await sectorId(ctx, '测试题材');
+    const lateMember = marketDayItems(0)[4]?.id;
+    if (lateMember === undefined) throw new Error('missing late member fixture');
+    await ctx.repos.sectorCatalog.applySync({
+      syncId: 'core-stocks-catalog-late',
+      source: 'fuyao',
+      appliedAt: at('14:00'),
+      status: 'succeeded',
+      catalog: [CORE_INDUSTRY, CORE_CONCEPT],
+      catalogKinds: ['industry', 'concept'],
+      observations: [
+        observation(LEAD_ID, [CORE_INDUSTRY, CORE_CONCEPT]),
+        observation(FOLLOWER_ID, [CORE_INDUSTRY, CORE_CONCEPT]),
+        observation(lateMember, [CORE_INDUSTRY]),
+      ],
+      stockStatuses: [],
+      failures: [],
+    });
+
+    const historical = await execute(ctx, { sectorId: target, at: at('10:15') });
+
+    expect(historical.roles.ignition.holders[0]?.code).toBe('600519');
+    expect(historical.roles.turnover.status).toBe('unavailable');
+    expect(historical.roles.height.holders[0]?.code).toBe('600519');
+    expect(historical.lookups.some((lookup) => lookup.stockId === lateMember)).toBe(false);
+  });
+
   it('kind 只筛选反查范围，不影响角色计算', async () => {
     const { ctx } = await contextAt();
     await seedCatalog(ctx.repos);

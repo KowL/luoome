@@ -13,7 +13,7 @@ import {
   type StockSectorMembershipView,
   StockSectorObservationSchema,
 } from '@luoome/core';
-import { and, asc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, or, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
@@ -458,6 +458,96 @@ export class DrizzleSectorCatalogRepository implements SectorCatalogRepository {
       .orderBy(asc(sectorCatalogEntries.kind), asc(sectorCatalogEntries.vendorCode))
       .all()
       .map(toEntry);
+  }
+
+  async listSectorsAsOf(input: {
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly SectorCatalogEntry[]> {
+    const filters: SQL[] = [
+      lte(sectorCatalogEntries.firstSeenAt, input.at),
+      or(
+        isNull(sectorCatalogEntries.retiredAt),
+        gt(sectorCatalogEntries.retiredAt, input.at),
+      ) as SQL,
+    ];
+    if (input.kinds !== undefined && input.kinds.length > 0) {
+      filters.push(inArray(sectorCatalogEntries.kind, [...input.kinds]));
+    }
+    return this.db
+      .select()
+      .from(sectorCatalogEntries)
+      .where(and(...filters))
+      .orderBy(asc(sectorCatalogEntries.kind), asc(sectorCatalogEntries.vendorCode))
+      .all()
+      .map((row) => ({ ...toEntry(row), state: 'active', retiredAt: null }));
+  }
+
+  async listBySectorsAsOf(input: {
+    readonly sectorIds: readonly string[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembership[]> {
+    if (input.sectorIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(sectorMemberships)
+      .where(
+        and(
+          inArray(sectorMemberships.sectorId, [...input.sectorIds]),
+          lte(sectorMemberships.firstSeenAt, input.at),
+          or(
+            isNull(sectorMemberships.missingSince),
+            gt(sectorMemberships.missingSince, input.at),
+          ) as SQL,
+        ),
+      )
+      .orderBy(asc(sectorMemberships.sectorId), asc(sectorMemberships.stockId))
+      .all()
+      .map((row) => ({ ...toMembership(row), state: 'active', missingSince: null }));
+  }
+
+  async listByStockAsOf(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly SectorKind[];
+    readonly at: Date;
+  }): Promise<readonly StockSectorMembershipView[]> {
+    if (input.stockIds.length === 0) return [];
+    const filters: SQL[] = [
+      inArray(sectorMemberships.stockId, [...input.stockIds]),
+      lte(sectorMemberships.firstSeenAt, input.at),
+      or(
+        isNull(sectorMemberships.missingSince),
+        gt(sectorMemberships.missingSince, input.at),
+      ) as SQL,
+      lte(sectorCatalogEntries.firstSeenAt, input.at),
+      or(
+        isNull(sectorCatalogEntries.retiredAt),
+        gt(sectorCatalogEntries.retiredAt, input.at),
+      ) as SQL,
+    ];
+    if (input.kinds !== undefined && input.kinds.length > 0) {
+      filters.push(inArray(sectorCatalogEntries.kind, [...input.kinds]));
+    }
+    return this.db
+      .select({ membership: sectorMemberships, sector: sectorCatalogEntries })
+      .from(sectorMemberships)
+      .innerJoin(sectorCatalogEntries, eq(sectorCatalogEntries.id, sectorMemberships.sectorId))
+      .where(and(...filters))
+      .orderBy(
+        asc(sectorMemberships.stockId),
+        asc(sectorCatalogEntries.kind),
+        asc(sectorCatalogEntries.vendorCode),
+      )
+      .all()
+      .map(({ membership, sector }) => ({
+        ...toMembership(membership),
+        state: 'active' as const,
+        missingSince: null,
+        kind: sector.kind,
+        vendorCode: sector.vendorCode,
+        name: sector.name,
+        sectorState: 'active' as const,
+      }));
   }
 
   async listChanges(input?: {

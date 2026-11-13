@@ -29,6 +29,15 @@ import {
   fetchRoomEvents,
   renderEventsPane,
 } from './market-room-events.js';
+import {
+  hashWithoutReplayAt,
+  replayAtFromHash,
+  replayBannerText,
+  replayEmptyNotice,
+  replayHashSuffix,
+  replayQueryPrefix,
+  replayQuerySuffix,
+} from './market-room-replay.js';
 import { fetchCoreStocks, renderCoreStocksPane } from './market-room-roles.js';
 import {
   fetchSectorDetail,
@@ -85,10 +94,19 @@ const REFRESH_MS = 60_000;
 
 let roomEpoch = 0;
 let roomTimer = null;
-/** 板块追踪最近一次成功的榜单，切换分类请求失败时只在同一分类下复用。 */
+/**
+ * 最近一次成功的视图数据；请求失败时只在「同一分类 + 同一回放时点」下复用，
+ * 避免把最新盘面画进历史回放。
+ */
 let roomSectorRanking = null;
+let roomSectorRankingKey = null;
 let roomAmountDistribution = null;
+let roomAmountDistributionKey = null;
 let roomEventsView = null;
+let roomEventsViewKey = null;
+
+/** 回放时点缓存键：null 表示最新模式；不同时点不共用缓存。 */
+const replayCacheKey = (at) => (at === null || at === undefined ? '' : new Date(at).toISOString());
 
 const roomSection = () => $('#route-market-room');
 
@@ -103,23 +121,27 @@ const pickParam = (params, key, allowed, fallback) => {
   return value !== null && allowed.includes(value) ? value : fallback;
 };
 
-/** 板块追踪的深链接参数（#market-room?tab=sectors&kind=concept&sort=window5&window=w15）。 */
+/** 板块追踪的深链接参数（#market-room?tab=sectors&kind=concept&sort=window5&window=w15&at=...）。 */
 const sectorParamsFromHash = (hash = window.location.hash) => {
   const params = new URLSearchParams(String(hash ?? '').split('?')[1] ?? '');
   return {
     kind: pickParam(params, 'kind', SECTOR_KINDS, 'industry'),
     sort: pickParam(params, 'sort', SECTOR_SORTS, 'day'),
     window: pickParam(params, 'window', SECTOR_WINDOWS, 'w15'),
+    at: replayAtFromHash(hash),
   };
 };
 
-/** 板块榜请求路径（纯函数，便于单测）：口径全部显式带上，便于与服务端日志对照。 */
+/** 板块榜请求路径（纯函数，便于单测）：口径与回放时点全部显式带上。 */
 const sectorQuery = (params) =>
-  `?kind=${encodeURIComponent(params.kind)}&sort=${encodeURIComponent(params.sort)}&window=${encodeURIComponent(params.window)}`;
+  `?kind=${encodeURIComponent(params.kind)}&sort=${encodeURIComponent(params.sort)}&window=${encodeURIComponent(params.window)}${replayQuerySuffix(params.at)}`;
 
-/** 板块追踪深链接：切换行业 / 概念或排序口径时只改 hash，由路由统一重绘。 */
+/** 板块追踪深链接：切换口径时只改 hash，保留统一时间轴的 at。 */
 const sectorHash = (params) =>
-  `market-room?tab=sectors&kind=${params.kind}&sort=${params.sort}&window=${params.window}`;
+  `market-room?tab=sectors&kind=${params.kind}&sort=${params.sort}&window=${params.window}${replayHashSuffix(params.at)}`;
+
+/** 视图切换：保留同一个回放时点，四个视图跟随同一个 at。 */
+const roomHash = (tab, at = null) => `market-room?tab=${tab}${replayHashSuffix(at)}`;
 
 const dimensionStatusLabel = (status) => DIMENSION_STATUS_LABELS[status] ?? '缺失';
 
@@ -481,20 +503,25 @@ const limitUpCard = (limitUp) => {
       ? el('p', 'placeholder', missingReasonText(limitUp))
       : el('div', 'room-facts', [
           fact('封板家数', `${value.sealedCount}`),
-          fact('当前炸板', `${value.brokenCount}`),
+          fact('当前炸板', value.brokenCount === null ? '缺失' : `${value.brokenCount}`),
           fact('最高连板', value.maxLadderLevel > 0 ? `${value.maxLadderLevel} 板` : '无连板'),
         ]),
     dimensionNote(limitUp),
   ]);
 };
 
-const renderOverviewPane = (overview) => {
+const renderOverviewPane = (overview, at = null) => {
   const empty = emptyStateText(overview);
   if (empty !== null) {
+    const replayNotice = overview?.emptyReason === 'no_batch' ? replayEmptyNotice(at) : null;
     return el('div', 'card room-empty', [
-      el('h2', '', '当日盘面尚未开始'),
-      el('p', '', empty),
-      el('p', 'room-caption', '页面只读已发布批次；非交易日与盘前不展示上一交易日的当日盘面数据。'),
+      el('h2', '', replayNotice === null ? '当日盘面尚未开始' : '该时点不可回放'),
+      el('p', '', replayNotice ?? empty),
+      el(
+        'p',
+        'room-caption',
+        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
+      ),
     ]);
   }
   return el('div', 'room-overview', [
@@ -653,10 +680,15 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
   }
   const empty = sectorEmptyText(ranking);
   if (empty !== null) {
+    const replayNotice = ranking?.emptyReason === 'no_batch' ? replayEmptyNotice(params.at) : null;
     return el('div', 'card room-empty', [
-      el('h2', '', '板块榜尚未就绪'),
-      el('p', '', empty),
-      el('p', 'room-caption', '页面只读已发布批次；非交易日与盘前不展示上一交易日的当日盘面数据。'),
+      el('h2', '', replayNotice === null ? '板块榜尚未就绪' : '该时点不可回放'),
+      el('p', '', replayNotice ?? empty),
+      el(
+        'p',
+        'room-caption',
+        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
+      ),
     ]);
   }
   const sampledAt = ranking.anchor === null ? '--' : fmtClock(ranking.anchor.sampledAt);
@@ -734,9 +766,16 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
   const detailParams = sectorDetailParamsFromHash();
   const ranking = await fetchSectors(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-  if (ranking !== null) roomSectorRanking = ranking;
-  // 刷新失败时只在同一分类下复用上次结果，避免把行业数据画在概念切换后。
-  const fallback = roomSectorRanking?.kind === params.kind ? roomSectorRanking : null;
+  const cacheKey = replayCacheKey(params.at);
+  if (ranking !== null) {
+    roomSectorRanking = ranking;
+    roomSectorRankingKey = cacheKey;
+  }
+  // 刷新失败时只在同一分类、同一回放时点下复用上次结果。
+  const fallback =
+    roomSectorRanking?.kind === params.kind && roomSectorRankingKey === cacheKey
+      ? roomSectorRanking
+      : null;
   const current = ranking ?? fallback;
   renderSectors(section, current, params);
   if (ranking === null) setStatus?.('板块盘中榜刷新失败，保留上次成功结果', true);
@@ -746,8 +785,9 @@ const refreshSectors = async (epoch, setStatus, params = sectorParamsFromHash())
       sectorId: detailParams.sectorId,
       compareSectorIds: detailParams.compareSectorIds,
       window: params.window,
+      at: params.at,
     }),
-    fetchCoreStocks({ sectorId: detailParams.sectorId }),
+    fetchCoreStocks({ sectorId: detailParams.sectorId, at: params.at }),
   ]);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   const slot = roomSection()?.querySelector('.room-sector-detail-slot');
@@ -792,9 +832,16 @@ const refreshAmount = async (epoch, setStatus, params = amountParamsFromHash()) 
   if (section === null) return;
   const distribution = await fetchAmount(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-  if (distribution !== null) roomAmountDistribution = distribution;
-  // 刷新失败时只在同一分类下复用上次结果，避免把行业数据画在概念切换后。
-  const fallback = roomAmountDistribution?.kind === params.kind ? roomAmountDistribution : null;
+  const cacheKey = replayCacheKey(params.at);
+  if (distribution !== null) {
+    roomAmountDistribution = distribution;
+    roomAmountDistributionKey = cacheKey;
+  }
+  // 刷新失败时只在同一分类、同一回放时点下复用上次结果。
+  const fallback =
+    roomAmountDistribution?.kind === params.kind && roomAmountDistributionKey === cacheKey
+      ? roomAmountDistribution
+      : null;
   renderAmount(section, distribution ?? fallback, params);
   if (distribution === null) setStatus?.('成交分布刷新失败，保留上次成功结果', true);
 };
@@ -811,10 +858,16 @@ const renderEvents = (section, view, params) => {
 const refreshEvents = async (epoch, setStatus, params = eventsParamsFromHash()) => {
   const section = roomSection();
   if (section === null) return;
-  const view = await fetchRoomEvents();
+  const view = await fetchRoomEvents(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-  if (view !== null) roomEventsView = view;
-  renderEvents(section, view ?? roomEventsView, params);
+  const cacheKey = replayCacheKey(params.at);
+  if (view !== null) {
+    roomEventsView = view;
+    roomEventsViewKey = cacheKey;
+  }
+  // 刷新失败时只在同一回放时点下复用上次结果：别把最新事件画进历史回放。
+  const fallback = roomEventsViewKey === cacheKey ? roomEventsView : null;
+  renderEvents(section, view ?? fallback, params);
   if (view === null) setStatus?.('盘中事件刷新失败，保留上次成功结果', true);
 };
 
@@ -831,7 +884,7 @@ const ensureShell = (section) => {
       button.dataset.roomTab = tab;
       button.setAttribute('role', 'tab');
       button.addEventListener('click', () => {
-        window.location.hash = `market-room?tab=${tab}`;
+        window.location.hash = roomHash(tab, replayAtFromHash());
       });
       return button;
     }),
@@ -848,8 +901,35 @@ const ensureShell = (section) => {
       tabs,
     ]),
     el('p', 'room-meta', '--'),
+    replayBar(),
     el('div', 'room-pane'),
   ]);
+};
+
+/** 顶部回放条：显示当前回放时点并可一键回到最新；最新模式隐藏。 */
+const replayBar = () => {
+  const bar = el('div', 'room-replay');
+  bar.hidden = true;
+  bar.setAttribute('role', 'status');
+  return bar;
+};
+
+const renderReplayBar = (section, at) => {
+  const bar = section.querySelector('.room-replay');
+  if (bar === null) return;
+  const text = replayBannerText(at);
+  if (text === null) {
+    bar.hidden = true;
+    bar.replaceChildren();
+    return;
+  }
+  const button = el('button', 'btn btn-outline btn-sm', '回到最新');
+  button.type = 'button';
+  button.addEventListener('click', () => {
+    window.location.hash = hashWithoutReplayAt();
+  });
+  mount(bar, [el('span', 'room-replay-text', text), el('span', 'room-replay-sep', '·'), button]);
+  bar.hidden = false;
 };
 
 const syncTabs = (section, tab) => {
@@ -865,22 +945,24 @@ const setMeta = (section, text) => {
   if (meta !== null) meta.textContent = text;
 };
 
-const renderOverview = (section, overview) => {
+const renderOverview = (section, overview, at = null) => {
   const pane = section.querySelector('.room-pane');
   if (pane === null) return;
-  mount(pane, renderOverviewPane(overview));
+  mount(pane, renderOverviewPane(overview, at));
   setMeta(section, overviewMetaText(overview));
 };
 
-const fetchOverview = async () => {
-  const result = await callApi('/api/market/room/overview', { timeoutMs: 15_000 });
+const fetchOverview = async (at = null) => {
+  const result = await callApi(`/api/market/room/overview${replayQueryPrefix(at)}`, {
+    timeoutMs: 15_000,
+  });
   return result.ok ? (result.data?.overview ?? null) : null;
 };
 
-const refreshOverview = async (epoch, setStatus) => {
+const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
   const section = roomSection();
   if (section === null) return;
-  const overview = await fetchOverview();
+  const overview = await fetchOverview(at);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   if (overview === null) {
     setMeta(section, '刷新失败，保留上次成功结果');
@@ -896,7 +978,7 @@ const refreshOverview = async (epoch, setStatus) => {
     setStatus?.('作战室总览刷新失败', true);
     return;
   }
-  renderOverview(section, overview);
+  renderOverview(section, overview, at);
 };
 
 const stopTimer = () => {
@@ -910,7 +992,7 @@ const startTimer = (setStatus) => {
     if (document.visibilityState !== 'visible') return;
     if (roomSection()?.hidden !== false) return;
     const tab = roomTabFromHash();
-    if (tab === 'overview') void refreshOverview(roomEpoch, setStatus);
+    if (tab === 'overview') void refreshOverview(roomEpoch, setStatus, replayAtFromHash());
     else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
     else if (tab === 'turnover') void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
     else void refreshEvents(roomEpoch, setStatus, eventsParamsFromHash());
@@ -924,10 +1006,12 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   roomEpoch += 1;
   const epoch = roomEpoch;
   const tab = roomTabFromHash();
+  const at = replayAtFromHash();
   ensureShell(section);
   syncTabs(section, tab);
+  renderReplayBar(section, at);
   if (tab === 'overview') {
-    await refreshOverview(epoch, setStatus);
+    await refreshOverview(epoch, setStatus, at);
   } else if (tab === 'sectors') {
     await refreshSectors(epoch, setStatus, sectorParamsFromHash());
   } else if (tab === 'turnover') {
@@ -954,6 +1038,7 @@ export {
   emptyStateText,
   overviewMetaText,
   renderMarketRoom,
+  roomHash,
   roomTabFromHash,
   sectorBreadthText,
   sectorDetailFacts,

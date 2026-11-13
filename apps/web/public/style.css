@@ -10514,6 +10514,30 @@ body > .modal {
   font-size: var(--text-sm);
 }
 
+/* 回放条（ticket #43）：回放中显示当前时点，并可一键回到最新。 */
+.room-replay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.room-replay-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.room-replay-sep {
+  color: var(--muted);
+}
+
 .room-overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

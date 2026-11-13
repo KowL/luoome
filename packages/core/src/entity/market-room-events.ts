@@ -1333,6 +1333,8 @@ export const MarketRoomEventsFiltersSchema = z.object({
   to: z.coerce.date().nullable(),
   kind: MarketRoomEventKindSchema.nullable(),
   sectorId: z.string().min(1).nullable(),
+  /** 回放时点：只返回该时点之前已记录的事件；null 表示最新模式。 */
+  knownAt: z.coerce.date().nullable(),
 });
 export type MarketRoomEventsFilters = z.infer<typeof MarketRoomEventsFiltersSchema>;
 
@@ -1360,6 +1362,9 @@ const EVENT_VIEW_NOTES: readonly string[] = [
   '未收录方向的「待核实」为二期，当前只产出已收录目录板块的 verified 事件。',
 ];
 
+export const MARKET_ROOM_EVENTS_REPLAY_NOTE =
+  '回放只返回已知时点（knownAt）之前已记录的事件：之后扫描出来的事件不会出现在更早的回放里。';
+
 export const buildMarketRoomEventsView = (input: {
   readonly tradingDate: string | null;
   readonly events: readonly MarketRoomEvent[];
@@ -1369,6 +1374,7 @@ export const buildMarketRoomEventsView = (input: {
     readonly to: Date | null;
     readonly kind: MarketRoomEventKind | null;
     readonly sectorId: string | null;
+    readonly knownAt: Date | null;
   };
   readonly emptyReason?: MarketRoomEventsEmptyReason;
 }): MarketRoomEventsView => {
@@ -1405,7 +1411,10 @@ export const buildMarketRoomEventsView = (input: {
       rotation: count('rotation'),
     },
     events,
-    notes: [...EVENT_VIEW_NOTES],
+    notes:
+      input.filters.knownAt === null
+        ? [...EVENT_VIEW_NOTES]
+        : [...EVENT_VIEW_NOTES, MARKET_ROOM_EVENTS_REPLAY_NOTE],
   });
 };
 

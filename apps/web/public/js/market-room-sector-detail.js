@@ -13,6 +13,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { replayAtFromHash, replayEmptyNotice, replayHashSuffix } from './market-room-replay.js';
 import { formatAmount } from './market-shared.js';
 import { el } from './ui.js';
 
@@ -65,7 +66,7 @@ const fmtClock = (value) => {
 const hashParams = (hash = window.location.hash) =>
   new URLSearchParams(String(hash ?? '').split('?')[1] ?? '');
 
-/** 板块详情的深链接参数：sector 缺失表示未选中；compare 逗号分隔且去重截断。 */
+/** 板块详情的深链接参数：sector 缺失表示未选中；compare 逗号分隔且去重截断；at 与榜单共用。 */
 const sectorDetailParamsFromHash = (hash = window.location.hash) => {
   const params = hashParams(hash);
   const sector = params.get('sector');
@@ -75,7 +76,7 @@ const sectorDetailParamsFromHash = (hash = window.location.hash) => {
   ]
     .filter((value) => value.length > 0 && value !== sectorId)
     .slice(0, COMPARE_LIMIT);
-  return { sectorId, compareSectorIds: compare };
+  return { sectorId, compareSectorIds: compare, at: replayAtFromHash(hash) };
 };
 
 /** 板块详情深链接：保留板块榜的 kind / sort / window，附带 sector 与 compare。 */
@@ -90,7 +91,8 @@ const sectorDetailHash = (params) => {
   if ((params.compareSectorIds ?? []).length > 0) {
     query.push(`compare=${encodeURIComponent([...params.compareSectorIds].join(','))}`);
   }
-  return `market-room?${query.join('&')}`;
+  const base = `market-room?${query.join('&')}`;
+  return `${base}${replayHashSuffix(params.at)}`;
 };
 
 /** 板块详情请求路径（纯函数）：口径与对照全部显式带上。 */
@@ -540,11 +542,12 @@ const renderSectorDetailPane = (
     const close = el('button', 'btn btn-outline btn-sm', '关闭详情');
     close.type = 'button';
     close.addEventListener('click', () => onClose());
+    const replayNotice = detail.emptyReason === 'no_batch' ? replayEmptyNotice(params?.at) : null;
     return el('div', 'card room-empty room-sector-detail', [
       el('div', 'card-header', [
         el('div', null, [
           el('h2', '', detail.sector?.name ?? '板块详情'),
-          el('div', 'card-meta', empty),
+          el('div', 'card-meta', replayNotice ?? empty),
         ]),
         close,
       ]),
