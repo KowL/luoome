@@ -4398,6 +4398,70 @@ export const registerRepositoryContractTests = (
           await repos.marketSnapshotBatch.findLatest({ coverage: 'CN_A_SHARES_BJ' }),
         ).toBeNull();
       });
+
+      it('按交易日与同时点容差查找对比批次，超出容差不拿相邻时点冒充', async () => {
+        const previous = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:15:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:15:00.000Z'),
+          fetchedAt: new Date('2026-09-24T02:16:01.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(previous);
+        await repos.marketSnapshotBatch.publish(makeMarketSnapshotBatch());
+
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:15:30.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toEqual(previous);
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:20:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-23',
+            sampledAt: new Date('2026-09-23T02:15:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            coverage: 'CN_A_SHARES_BJ',
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:15:00.000Z'),
+            toleranceMs: 60_000,
+          }),
+        ).resolves.toBeNull();
+      });
+
+      it('容差内多个候选时取采样时点最近的一份', async () => {
+        const earlier = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:10:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:10:00.000Z'),
+        });
+        const later = makeMarketSnapshotBatch({
+          id: 'CN_A_SHARES_SH_SZ|2026-09-24T02:20:00.000Z',
+          tradingDate: '2026-09-24',
+          sampledAt: new Date('2026-09-24T02:20:00.000Z'),
+        });
+        await repos.marketSnapshotBatch.publish(earlier);
+        await repos.marketSnapshotBatch.publish(later);
+        await expect(
+          repos.marketSnapshotBatch.findNearestAt({
+            tradingDate: '2026-09-24',
+            sampledAt: new Date('2026-09-24T02:16:00.000Z'),
+            toleranceMs: 5 * 60_000,
+          }),
+        ).resolves.toEqual(later);
+      });
     });
 
     describe('ChatRepository', () => {

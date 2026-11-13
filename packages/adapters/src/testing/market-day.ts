@@ -1,4 +1,10 @@
-import { type MarketSnapshot, type MarketSnapshotItem, MarketSnapshotSchema } from '@luoome/core';
+import {
+  type IndexQuote,
+  type MarketSnapshot,
+  type MarketSnapshotItem,
+  MarketSnapshotSchema,
+  money,
+} from '@luoome/core';
 
 import { FakeMarketAdapter } from './fake-market.js';
 import { TEST_STOCK_BASE_PRICES, TEST_STOCKS } from './fixtures.js';
@@ -122,6 +128,22 @@ export const marketDaySnapshot = (pointIndex: number): MarketSnapshot => {
   });
 };
 
+/** 演示指数：与 index-defs.js 的 4 个核心指数同码，涨跌幅按同一进度确定性派生。 */
+const INDEX_DAY_DEFS: readonly {
+  readonly code: string;
+  readonly name: string;
+  readonly base: number;
+}[] = [
+  { code: '000001', name: '上证指数', base: 3600 },
+  { code: '399001', name: '深证成指', base: 11200 },
+  { code: '399006', name: '创业板指', base: 2350 },
+  { code: '000300', name: '沪深300', base: 4250 },
+];
+
+/** 指数涨幅：早盘领先、随后回落，与个股中位数的扩散方向相反，便于验证背离展示。 */
+const indexChangePctFor = (index: number, pointIndex: number): number =>
+  round2(0.8 - 1.5 * pointProgress(pointIndex) + index * 0.12);
+
 /** 时钟对应的最近模拟时点；早于首个时点时拒绝，避免用未来数据冒充演示输入。 */
 export const marketDayPointFor = (at: Date): MarketDayPoint => {
   const pointValue = [...MARKET_DAY_POINTS]
@@ -157,5 +179,25 @@ export class MarketDayFixtureAdapter extends FakeMarketAdapter {
     const selected = marketDayPointFor(this.fixtureClock());
     const pointIndex = MARKET_DAY_POINTS.findIndex((candidate) => candidate.at === selected.at);
     return Promise.resolve(marketDaySnapshot(pointIndex));
+  }
+
+  override fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
+    const selected = marketDayPointFor(this.fixtureClock());
+    const pointIndex = MARKET_DAY_POINTS.findIndex((candidate) => candidate.at === selected.at);
+    return Promise.resolve(
+      INDEX_DAY_DEFS.map((definition, index) => {
+        const changePct = indexChangePctFor(index, pointIndex);
+        const close = round2(definition.base * (1 + changePct / 100));
+        return {
+          code: definition.code,
+          name: definition.name,
+          close: money(close),
+          change: round2(close - definition.base),
+          changePct,
+          ts: selected.at,
+          source: MARKET_DAY_SOURCE,
+        };
+      }),
+    );
   }
 }

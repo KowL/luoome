@@ -158,6 +158,16 @@ export interface MarketSnapshotBatchRepository {
   findById(id: string): Promise<MarketSnapshotBatch | null>;
   /** 最近一个已发布批次（按采样时点倒序）。 */
   findLatest(input?: { readonly coverage?: MarketCoverage }): Promise<MarketSnapshotBatch | null>;
+  /**
+   * 指定交易日、指定采样时点容差内的最近批次（昨日同时点对比用）。
+   * 超出容差返回 null，不拿相邻时点的批次冒充同一时刻。
+   */
+  findNearestAt(input: {
+    readonly coverage?: MarketCoverage;
+    readonly tradingDate: string;
+    readonly sampledAt: Date;
+    readonly toleranceMs: number;
+  }): Promise<MarketSnapshotBatch | null>;
 }
 
 export interface HoldingRepository {
