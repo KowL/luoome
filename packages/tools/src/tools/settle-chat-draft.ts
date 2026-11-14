@@ -2,7 +2,6 @@ import { CHAT_MESSAGE_PARTS_MAX, type ChatMessage, type ToolContext } from '@luo
 import { z } from 'zod';
 import { AGENT_DRAFT_TOOL_KINDS } from '../agent/scenarios.js';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
-import { toolRegistry } from '../registry.js';
 
 /** 旧版文本处理记录向后扫描的消息条数。 */
 const LEGACY_SETTLEMENT_SCAN_LIMIT = 500;
@@ -124,6 +123,8 @@ export const settleChatDraftTool = defineTool({
       return errInvalidInput(
         '该工具存在无法关联调用 ID 的旧版处理记录；请先核对实际数据，再重新生成草案',
       );
+    // The confirmation tool is itself catalogued; defer loading its registry until execution.
+    const { toolRegistry } = await import('../registry.js');
     const target = toolRegistry.get(draft.tool);
     if (
       target === undefined ||

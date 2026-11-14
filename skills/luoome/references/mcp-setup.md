@@ -47,8 +47,11 @@ Register `luoome mcp serve` as a stdio MCP server. Import this Skill separately 
 
 ## Permission boundary
 
-The server exposes `read` and `advice` by default.
+The server permits `read` and `advice` by default, and only discovers tools whose dependencies are ready. Without model or market configuration, local queries such as `list_watchlists`, `get_advice` and local-fallback `search_stocks` remain available. AI analysis requires model credentials and market capabilities. External market and news tools require `LUOOME_MARKET_PROVIDER=real`; Research Vault tools also require a mounted Vault and `LUOOME_EXPOSE_RESEARCH=true`. Readiness checks configuration and installed capabilities, not upstream network health.
 
+After configuring dependencies, restart the MCP process and rediscover tools. If a tool is absent, check its required dependencies and permissions before selecting another discovered capability.
+
+- `LUOOME_EXPOSE_READ=false` or `LUOOME_EXPOSE_ADVICE=false` disables that category.
 - `LUOOME_EXPOSE_WRITE=true` adds write tools.
 - `LUOOME_EXPOSE_EXTERNAL=true` adds tools that contact external services or persist fetched data.
 - `LUOOME_EXPOSE_TRADE=true` is forbidden and makes the MCP server fail at startup.
@@ -56,3 +59,10 @@ The server exposes `read` and `advice` by default.
 Only enable write/external capabilities when the user understands the side effects. The Skill must still request transaction-level confirmation before invoking them.
 
 After changing MCP configuration, restart the host and verify that its MCP tool discovery includes luoome tools. If discovery fails, run `luoome mcp serve` manually to inspect startup errors; do not bypass permission checks.
+
+
+## Outbound MCP services in Web Chat
+
+The built-in Web Agent can opt into separately configured readonly MCP services through its Bun Gateway.
+These run-local tools are not relayed by `luoome mcp serve` and do not extend this Skill's connected tool inventory.
+See the [user guide](../../../docs/USER_GUIDE.md#只读-mcp-服务供内置-agent-使用) for explicit service enablement, tool and scenario allowlists, and disablement.

@@ -1,317 +1,197 @@
-// @luoome/mcp —— MCP stdio smoke 测试（纯 bun 脚本，非 vitest）。
-//
-// 运行：LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=sina bun packages/mcp/src/smoke.ts
-//
-// 覆盖（spawn 真实 server 进程，MCP stdio JSON-RPC 握手）：
-//   1. initialize → tools/list：默认暴露面与 registry 的 read/advice 选择策略一致
-//   2. tools/call list_accounts / list_holdings：空库返回事实，不注入样例数据
-//   3. tools/call analyze_stock：空库明确返回 Stock not_found，不伪造 Advice
-//   4. 相同 LUOOME_HOME 二次 spawn：空库初始化幂等，重复启动安全
-//   5. LUOOME_EXPOSE_TRADE=true spawn：进程退出码非零（trade 永不暴露）
-//
-// 说明：子进程用 process.execPath（即当前 bun 二进制）启动，等价于
-// `bun packages/mcp/src/index.ts`；env 显式透传（含 PATH）。
-
-import { mkdtempSync, rmSync } from 'node:fs';
+// Real stdio client checks with a temporary database and offline upstream fixtures.
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import { toolRegistry } from '@luoome/tools';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
-
-const indexPath = fileURLToPath(new URL('./index.ts', import.meta.url));
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const REQUEST_TIMEOUT_MS = 10_000;
-
-// ---------- 最小断言 ----------
-
-let checks = 0;
-let failures = 0;
-const check = (cond: boolean, label: string): void => {
-  checks += 1;
-  if (cond) {
-    console.log(`ok ${checks} - ${label}`);
-  } else {
-    failures += 1;
-    console.error(`not ok ${checks} - ${label}`);
+const root = mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
+const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
+const fixture = join(root, 'network-fixture.ts');
+writeFileSync(
+  fixture,
+  `
+globalThis.fetch = async (input) => {
+  const url = String(input instanceof Request ? input.url : input);
+  if (!url.startsWith('https://np-listapi.eastmoney.com/comm/web/getNewsByColumns?')) {
+    throw new Error('Smoke test forbids unexpected network access');
   }
+  return Response.json({code: '1', data: {list: [{
+    code: 'mcp-fixture-news', title: 'MCP fixture news',
+    showTime: '2026-11-13 10:00:00', mediaName: 'fixture',
+    uniqueUrl: 'https://example.com/mcp-fixture'
+  }]}});
 };
+`,
+);
 
-const asRecord = (value: unknown): Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`expected object, got ${Array.isArray(value) ? 'array' : typeof value}`);
-  }
-  return value as Record<string, unknown>;
-};
-
-// ---------- 最小 MCP stdio 客户端（NDJSON 帧） ----------
-
-type ServerProc = Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
-
-interface PendingEntry {
-  readonly resolve: (value: unknown) => void;
-  readonly reject: (error: Error) => void;
-}
-
-class McpStdioClient {
-  private nextId = 1;
-  private buffer = '';
-  private stderrBuf = '';
-  private readonly pending = new Map<number, PendingEntry>();
-
-  private constructor(private readonly proc: ServerProc) {
-    void this.pumpStdout();
-    void this.pumpStderr();
-  }
-
-  /** spawn server 进程；LUOOME_HOME 指向独立临时目录（hermetic）。 */
-  static spawn(
-    extraEnv: Record<string, string>,
-    home?: string,
-  ): { client: McpStdioClient; home: string } {
-    const effectiveHome = home ?? mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
-    const proc = Bun.spawn([process.execPath, indexPath], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        LUOOME_HOME: effectiveHome,
-        LUOOME_EXPOSE_WRITE: 'false',
-        LUOOME_EXPOSE_EXTERNAL: 'false',
-        LUOOME_EXPOSE_RESEARCH: 'false',
-        LUOOME_EXPOSE_TRADE: 'false',
-        ...extraEnv,
-      },
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { client: new McpStdioClient(proc), home: effectiveHome };
-  }
-
-  get stderrText(): string {
-    return this.stderrBuf;
-  }
-
-  private async pumpStdout(): Promise<void> {
-    const decoder = new TextDecoder();
-    const reader = this.proc.stdout.getReader();
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        this.buffer += decoder.decode(value, { stream: true });
-        this.drainLines();
-      }
-    } catch {
-      // 流被 kill 打断，落入统一收尾。
-    } finally {
-      this.buffer += decoder.decode();
-      this.drainLines();
-      const stderr = this.stderrBuf.trim();
-      this.failAllPending(
-        new Error(stderr.length === 0 ? 'server stdout closed' : `server stdout closed: ${stderr}`),
-      );
-    }
-  }
-
-  private async pumpStderr(): Promise<void> {
-    const decoder = new TextDecoder();
-    const reader = this.proc.stderr.getReader();
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        this.stderrBuf += decoder.decode(value, { stream: true });
-      }
-    } catch {
-      // 同上。
-    }
-  }
-
-  private drainLines(): void {
-    for (;;) {
-      const idx = this.buffer.indexOf('\n');
-      if (idx < 0) return;
-      const line = this.buffer.slice(0, idx).trim();
-      this.buffer = this.buffer.slice(idx + 1);
-      if (line === '') continue;
-      let msg: { id?: unknown; result?: unknown; error?: unknown };
-      try {
-        msg = asRecord(JSON.parse(line));
-      } catch {
-        continue; // 非协议行忽略（不应发生：server 日志全走 stderr）
-      }
-      if (msg.id === undefined || (msg.result === undefined && msg.error === undefined)) continue;
-      const id = Number(msg.id);
-      const entry = this.pending.get(id);
-      if (entry === undefined) continue;
-      this.pending.delete(id);
-      if (msg.error !== undefined) {
-        entry.reject(new Error(`JSON-RPC error: ${JSON.stringify(msg.error)}`));
-      } else {
-        entry.resolve(msg.result);
-      }
-    }
-  }
-
-  private failAllPending(error: Error): void {
-    for (const entry of this.pending.values()) entry.reject(error);
-    this.pending.clear();
-  }
-
-  private async send(message: Record<string, unknown>): Promise<void> {
-    this.proc.stdin.write(`${JSON.stringify(message)}\n`);
-    await this.proc.stdin.flush();
-  }
-
-  async request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const id = this.nextId;
-    this.nextId += 1;
-    const resultPromise = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pending.delete(id)) {
-          reject(new Error(`request "${method}" timed out after ${REQUEST_TIMEOUT_MS}ms`));
-        }
-      }, REQUEST_TIMEOUT_MS);
-      timer.unref();
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-    });
-    await this.send({ jsonrpc: '2.0', id, method, params });
-    return resultPromise;
-  }
-
-  async notify(method: string): Promise<void> {
-    await this.send({ jsonrpc: '2.0', method });
-  }
-
-  async handshake(): Promise<void> {
-    const init = asRecord(
-      await this.request('initialize', {
-        protocolVersion: LATEST_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: 'luoome-mcp-smoke', version: '0.1.0' },
-      }),
-    );
-    check(typeof init.protocolVersion === 'string', 'initialize 返回 protocolVersion');
-    await this.notify('notifications/initialized');
-  }
-
-  async kill(): Promise<void> {
-    try {
-      this.proc.kill();
-    } catch {
-      // 已退出。
-    }
-    await this.proc.exited.catch(() => 0);
-  }
-}
-
-// ---------- 场景 ----------
-
-const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<void> => {
-  await client.handshake();
-
-  const listResult = asRecord(await client.request('tools/list', {}));
-  const tools = listResult.tools;
-  // 以运行时 registry + exposure policy 计算期望集合，避免新增 read/advice tool 后
-  // smoke 因历史固定数量失效；research tool 仍由 LUOOME_EXPOSE_RESEARCH 显式开启。
-  const expectedNames = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}))
-    .filter((tool) => !tool.name.includes('research'))
-    .map((tool) => tool.name);
-  const actualNames = Array.isArray(tools) ? tools.map((tool) => asRecord(tool).name) : [];
-  check(
-    actualNames.length === expectedNames.length &&
-      expectedNames.every((name) => actualNames.includes(name)),
-    `tools/list 默认暴露面符合 selection policy（实际 ${actualNames.length}，预期 ${expectedNames.length}）`,
-  );
-  check(
-    actualNames.includes('get_account_overview') && actualNames.includes('analyze_stock'),
-    'tools/list 含 get_account_overview 与 analyze_stock',
-  );
-
-  if (!full) return;
-
-  const overviewResult = asRecord(
-    await client.request('tools/call', { name: 'get_account_overview', arguments: {} }),
-  );
-  check(
-    overviewResult.isError === true && JSON.stringify(overviewResult.content).includes('not_found'),
-    '空库 get_account_overview 明确返回 Account not_found（不注入样例账户）',
-  );
-
-  const analyzeResult = asRecord(
-    await client.request('tools/call', {
-      name: 'analyze_stock',
-      arguments: { stockId: '002594.SZ' },
-    }),
-  );
-  check(
-    analyzeResult.isError === true &&
-      JSON.stringify(analyzeResult.content).includes('Stock') &&
-      JSON.stringify(analyzeResult.content).includes('not_found'),
-    '空库 analyze_stock 明确返回 Stock not_found（不注入样例股票）',
-  );
-};
-
-const main = async (): Promise<void> => {
-  // 场景 1-3：默认暴露面的完整握手与调用。
-  const { client, home } = McpStdioClient.spawn({});
-  try {
-    await toolsListAndCall(client, true);
-  } finally {
-    await client.kill();
-  }
-
-  // 场景 4：相同 LUOOME_HOME 二次启动（种子幂等 upsert，重复启动安全）。
-  const second = McpStdioClient.spawn({}, home);
-  try {
-    await toolsListAndCall(second.client, false);
-    check(true, '相同 LUOOME_HOME 二次启动握手 + tools/list 成功（空库初始化幂等）');
-  } finally {
-    await second.client.kill();
-    rmSync(home, { recursive: true, force: true });
-  }
-
-  // 场景 5：LUOOME_EXPOSE_TRADE=true → 启动失败，退出码非零。
-  const tradeHome = mkdtempSync(join(tmpdir(), 'luoome-mcp-trade-'));
-  const tradeProc = Bun.spawn([process.execPath, indexPath], {
-    cwd: repoRoot,
-    env: { ...process.env, LUOOME_HOME: tradeHome, LUOOME_EXPOSE_TRADE: 'true' },
-    stdin: 'ignore',
-    stdout: 'ignore',
+const connect = async (home: string, extraEnv: Record<string, string> = {}) => {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['--no-env-file', '--preload', fixture, entry],
+    cwd: root,
+    env: { PATH: process.env.PATH ?? '', LUOOME_HOME: home, ...extraEnv },
     stderr: 'pipe',
   });
-  const tradeStderr = await new Response(tradeProc.stderr).text();
-  const tradeExit = await tradeProc.exited;
-  check(tradeExit !== 0, `LUOOME_EXPOSE_TRADE=true 启动失败（退出码 ${tradeExit}，预期非零）`);
-  check(
-    tradeStderr.includes('LUOOME_EXPOSE_TRADE'),
-    'trade 硬卡的 stderr 输出含 LUOOME_EXPOSE_TRADE 说明',
-  );
-  rmSync(tradeHome, { recursive: true, force: true });
-
-  console.log(`\nsmoke: ${checks - failures}/${checks} checks passed`);
-  if (failures > 0) {
-    process.exit(1);
+  transport.stderr?.on('data', () => {});
+  const client = new Client({ name: 'luoome-smoke', version: '1.0.0' });
+  try {
+    await client.connect(transport);
+    return client;
+  } catch (error) {
+    await transport.close();
+    throw error;
   }
+};
+
+const names = async (client: Client) => (await client.listTools()).tools.map((tool) => tool.name);
+const data = (result: Awaited<ReturnType<Client['callTool']>>) => {
+  assert.ok(Array.isArray(result.content));
+  const text = result.content[0];
+  assert.equal(text?.type, 'text');
+  return JSON.parse(text.text as string);
 };
 
 try {
-  await main();
-} catch (error) {
-  console.error(
-    `smoke: fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+  const home = join(root, 'local');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const client = await connect(home);
+    try {
+      const tools = await names(client);
+      for (const name of ['list_watchlists', 'search_stocks', 'get_account_overview', 'get_advice'])
+        assert.ok(tools.includes(name), name);
+      for (const name of [
+        'fetch_quote',
+        'analyze_stock',
+        'compute_indicators',
+        'limit_up_ladder',
+        'fetch_news',
+        'search_research_documents',
+        'create_watchlist',
+        'add_trade',
+      ])
+        assert.ok(!tools.includes(name), name);
+      const watches = await client.callTool({ name: 'list_watchlists', arguments: {} });
+      assert.notEqual(watches.isError, true);
+      assert.deepEqual(data(watches), { items: [], total: 0 });
+      const search = await client.callTool({
+        name: 'search_stocks',
+        arguments: { query: 'fixture' },
+      });
+      assert.notEqual(search.isError, true);
+      assert.equal(data(search).source, 'local-history');
+      const account = await client.callTool({ name: 'get_account_overview', arguments: {} });
+      assert.equal(account.isError, true);
+      assert.equal(data(account).kind, 'not_found');
+      await assert.rejects(
+        client.callTool({ name: 'fetch_quote', arguments: {} }),
+        /not found or not exposed/,
+      );
+    } finally {
+      await client.close();
+    }
+  }
+  console.log('ok: no providers or credentials; local discovery/calls and restart');
+
+  const marketHome = join(root, 'market');
+  const config = {
+    LUOOME_MARKET_PROVIDER: 'real',
+    LUOOME_MARKET_SOURCES: 'sina',
+    LUOOME_NEWS_SOURCES: 'eastmoney',
+  };
+  const unauthorized = await connect(marketHome, config);
+  try {
+    assert.ok(!(await names(unauthorized)).includes('fetch_news'));
+  } finally {
+    await unauthorized.close();
+  }
+  const authorized = await connect(marketHome, {
+    ...config,
+    LUOOME_EXPOSE_EXTERNAL: 'true',
+    LUOOME_EXPOSE_WRITE: 'true',
+  });
+  try {
+    const tools = await names(authorized);
+    assert.ok(tools.includes('fetch_news'));
+    assert.ok(tools.includes('fetch_quote'));
+    assert.ok(!tools.includes('fetch_index_quotes'), 'Sina has no realtime index capability');
+    assert.ok(!tools.includes('analyze_stock'), 'no model credentials');
+    assert.ok(!tools.includes('limit_up_market'), 'no fuyao credentials');
+    assert.ok(!tools.includes('add_trade'));
+    const news = await authorized.callTool({ name: 'fetch_news', arguments: {} });
+    assert.notEqual(news.isError, true);
+    assert.equal(data(news).items[0].id, 'mcp-fixture-news');
+    const created = await authorized.callTool({
+      name: 'create_watchlist',
+      arguments: { name: 'smoke watchlist', kind: 'personal', membershipPolicy: 'manual' },
+    });
+    assert.notEqual(created.isError, true);
+    assert.equal(
+      data(await authorized.callTool({ name: 'list_watchlists', arguments: {} })).total,
+      1,
+    );
+  } finally {
+    await authorized.close();
+  }
+  console.log(
+    'ok: configured dependencies AND authorization; real news adapter with offline HTTP fixture',
   );
-  process.exit(1);
+
+  const model = await connect(join(root, 'model'), {
+    ...config,
+    MINIMAX_API_KEY: 'offline-fixture-only',
+  });
+  try {
+    assert.ok((await names(model)).includes('analyze_stock'));
+    const result = await model.callTool({
+      name: 'analyze_stock',
+      arguments: { stockId: 'missing' },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(data(result).kind, 'not_found');
+  } finally {
+    await model.close();
+  }
+  const localWriteHome = join(root, 'local-write');
+  const localWriter = await connect(localWriteHome, { LUOOME_EXPOSE_WRITE: 'true' });
+  try {
+    const result = await localWriter.callTool({
+      name: 'create_watchlist',
+      arguments: { name: 'local persisted', kind: 'personal', membershipPolicy: 'manual' },
+    });
+    assert.notEqual(result.isError, true);
+  } finally {
+    await localWriter.close();
+  }
+  const localReader = await connect(localWriteHome);
+  try {
+    const result = await localReader.callTool({ name: 'list_watchlists', arguments: {} });
+    assert.equal(data(result).items[0].watchlist.name, 'local persisted');
+    await assert.rejects(
+      localReader.callTool({
+        name: 'create_watchlist',
+        arguments: { name: 'denied', kind: 'personal', membershipPolicy: 'manual' },
+      }),
+      /not found or not exposed/,
+    );
+  } finally {
+    await localReader.close();
+  }
+  console.log('ok: model readiness and persisted local data without providers');
+
+  const denied = await connect(join(root, 'denied'), {
+    LUOOME_EXPOSE_READ: 'false',
+    LUOOME_EXPOSE_ADVICE: 'false',
+  });
+  try {
+    assert.deepEqual(await names(denied), []);
+  } finally {
+    await denied.close();
+  }
+  await assert.rejects(connect(join(root, 'trade'), { LUOOME_EXPOSE_TRADE: 'true' }));
+  console.log('ok: read/advice opt-out and trade startup hard gate');
+} finally {
+  rmSync(root, { recursive: true, force: true });
 }

@@ -7,12 +7,7 @@ description: Use when the user asks about their luoome portfolio, holdings, trad
 
 Use the connected luoome MCP server to query and maintain the user's local investment workspace. The Skill defines when and how to use luoome; MCP provides the typed tools and permission boundary.
 
-This Skill targets local mode. Hosted platform identity, subscriptions, jobs, payments, notifications, privacy
-and recovery tools use a private server/worker registry and are not exposed through MCP or model discovery.
-Email verification, password login and password changes are private Web identity operations; never request
-the user's login password or email verification code through MCP, or invoke these via generic tools.
-Do not attempt to reach them through generic calls or shell fallback. Hosted personal facts and feedback use
-the authenticated Web product; its production providers and release gates are separate from local MCP setup.
+This Skill targets the local single-user workspace with multiple accounts. Account creation and profile editing are available through the local Web/CLI. Use MCP discovery for callable capabilities.
 
 ## Before calling tools
 
@@ -26,14 +21,14 @@ the authenticated Web product; its production providers and release gates are se
 - Use **read** tools freely for scoped queries; prefer filters, limits and batch operations over full-table reads or loops.
 - Use **advice** tools only when the user asks for analysis or recommendations. Preserve uncertainty and all safety fields in the response.
 - Before a **write** or **external** call, restate the exact action and obtain explicit user confirmation unless the current message already unambiguously authorizes that exact action.
-- Never claim that a mutation succeeded until the tool returns `ok: true`; re-read important state after a successful write.
+- Treat an MCP call as successful only when it returns a normal result without `isError: true`; parse its text content as the returned data. MCP failures carry `isError: true` and serialized error details. Re-read important state after a successful write.
 - Never place, cancel or simulate a real order. luoome's MCP surface intentionally excludes trade execution.
 
 See [tool selection](./references/tools.md), [example workflows](./references/examples.md) and [safety and errors](./references/safety.md).
 
 ## Response rules
 
-- Account profile editing uses the write tool `update_account` for the name only; it does not change opening capital, currency or cash. Hosted mode supplies one default account and disallows creating additional accounts.
+- Resolve an account with the user when it is ambiguous, then use `get_account_overview` with its account ID. Direct account editing belongs to the local Web/CLI.
 - Separate observed data, system-calculated values and generated advice.
 - For Advice, report `decision`, `confidence`, `horizon`, premise, supporting evidence, counter-evidence, risks, disclaimers and `validUntil` when present.
 - Do not convert confidence into certainty or present luoome as a licensed investment adviser.

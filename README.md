@@ -96,6 +96,7 @@ Web、CLI 和 MCP 共用下列单机环境变量：
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
+| `LUOOME_MCP_CONFIG` | `$LUOOME_HOME/mcp-servers.json` | Web Agent 的受控只读 MCP 客户端配置；服务需显式启用、工具和场景白名单，见[接入说明](./docs/USER_GUIDE.md#只读-mcp-服务供内置-agent-使用) |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
 | `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径 |

@@ -1,9 +1,9 @@
 import { InvariantError } from '@luoome/core';
+import { catalogTools } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-
-import { defineWorkflow } from './define-workflow.js';
+import { buildWorkflowTools, defineWorkflow, type WorkflowToolMap } from './define-workflow.js';
 
 describe('defineWorkflow 引擎', () => {
   it('步骤顺序执行：每步收到上一步输出，末步输出即 workflow 输出', async () => {
@@ -150,5 +150,21 @@ describe('defineWorkflow 引擎', () => {
         steps: [],
       }),
     ).toThrow('至少需要一个 step');
+  });
+});
+
+describe('catalog-derived workflow accessors', () => {
+  it('binds the complete explicit inventory to the current context', async () => {
+    const ctx = await buildTestContext();
+    const tools = buildWorkflowTools(ctx);
+    expect(Object.keys(tools).sort()).toEqual(Object.keys(catalogTools).sort());
+    expect(await tools.list_watchlists.execute({})).toEqual(
+      await catalogTools.list_watchlists.execute({}, ctx),
+    );
+    expect(tools.record_workflow_run).toBeDefined();
+    expectTypeOf<Parameters<WorkflowToolMap['list_watchlists']['execute']>[0]>().toEqualTypeOf<{
+      kind?: 'personal' | 'strategy' | 'portfolio' | 'system' | undefined;
+      enabledOnly?: boolean | undefined;
+    }>();
   });
 });

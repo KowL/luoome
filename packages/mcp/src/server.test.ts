@@ -1,11 +1,16 @@
 import { toolRegistry } from '@luoome/tools';
 import { describe, expect, it } from 'vitest';
-import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
+import {
+  isMcpToolReady,
+  MCP_TOOL_DEPENDENCIES,
+  resolveAllowedSideEffects,
+  selectMcpTools,
+} from './exposure.js';
 
 const namesOf = (tools: readonly { readonly name: string }[]): string[] =>
   tools.map((tool) => tool.name);
 
-describe('MCP sideEffect 暴露门控（34 核心 Agent Tool）', () => {
+describe('MCP sideEffect 暴露门控', () => {
   it('external 类 tool 仅在 LUOOME_EXPOSE_EXTERNAL 显式开启后暴露', () => {
     expect(toolRegistry.get('agent_run')).toBeUndefined();
     const quote = toolRegistry.get('fetch_quote');
@@ -77,7 +82,7 @@ describe('MCP sideEffect 暴露门控（34 核心 Agent Tool）', () => {
     );
   });
 
-  it('默认发现 34 中的 read/advice，write/external 需 opt-in，旧 App Service 名永不暴露', () => {
+  it('默认允许 read/advice，write/external 需 opt-in，旧 App Service 名永不暴露', () => {
     const defaults = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}));
     const defaultNames = namesOf(defaults);
     expect(defaultNames).toContain('list_strategies');
@@ -116,5 +121,45 @@ describe('MCP sideEffect 暴露门控（34 核心 Agent Tool）', () => {
     expect(optedInNames.some((name) => name.startsWith('migration_'))).toBe(false);
     expect(optedIn.some((tool) => tool.sideEffect === 'trade')).toBe(false);
     expect(optedIn.length).toBeLessThanOrEqual(toolRegistry.all().length);
+  });
+});
+
+describe('MCP dependency readiness', () => {
+  it('every public tool has an explicitly reviewed dependency declaration', () => {
+    expect(Object.keys(MCP_TOOL_DEPENDENCIES).sort()).toEqual(namesOf(toolRegistry.all()).sort());
+    expect(isMcpToolReady('unknown_plugin', new Set())).toBe(false);
+  });
+
+  it('local queries stay ready without external dependencies', () => {
+    for (const name of ['list_watchlists', 'get_account_overview', 'search_stocks', 'get_advice']) {
+      expect(isMcpToolReady(name, new Set()), name).toBe(true);
+    }
+    for (const name of [
+      'analyze_stock',
+      'fetch_quote',
+      'fetch_news',
+      'limit_up_ladder',
+      'search_research_documents',
+    ]) {
+      expect(isMcpToolReady(name, new Set()), name).toBe(false);
+    }
+  });
+
+  it('requires all dependencies and authorization independently', () => {
+    expect(isMcpToolReady('analyze_stock', new Set(['llm']))).toBe(false);
+    expect(isMcpToolReady('analyze_stock', new Set(['market:quote', 'market:daily-bars']))).toBe(
+      false,
+    );
+    expect(
+      isMcpToolReady('analyze_stock', new Set(['llm', 'market:quote', 'market:daily-bars'])),
+    ).toBe(true);
+    expect(isMcpToolReady('fetch_news', new Set(['news']))).toBe(true);
+    expect(
+      namesOf(selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}))),
+    ).not.toContain('fetch_news');
+    expect(
+      resolveAllowedSideEffects({ LUOOME_EXPOSE_READ: 'false', LUOOME_EXPOSE_ADVICE: 'false' })
+        .size,
+    ).toBe(0);
   });
 });

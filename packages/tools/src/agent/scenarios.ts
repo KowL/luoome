@@ -2,6 +2,7 @@
 // Web chat（DSH runtime）从这里取配置（设计：docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §5.2）。
 
 import { z } from 'zod';
+import type { AgentToolName } from '../catalog.js';
 
 export const AgentScenarioIdSchema = z.enum([
   'research',
@@ -81,7 +82,7 @@ const SHARED_READ_BASELINE = [
   'get_advice',
   'search_research_documents',
   'list_watch_plans',
-] as const;
+] as const satisfies readonly AgentToolName[];
 
 /** 全部可进入 Agent 确认面板的草案工具（34 核心 Tool 的写入子集）。 */
 export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = {
@@ -96,7 +97,7 @@ export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = 
   save_decision_review: 'review',
   analyze_stock: 'advice',
   analyze_position: 'advice',
-};
+} satisfies Partial<Record<AgentToolName, AgentDraftKind>>;
 
 const withoutDraftTools = (
   ...excluded: readonly string[]

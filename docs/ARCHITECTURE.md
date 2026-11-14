@@ -247,21 +247,13 @@ export const listHoldingsTool = defineTool({
 ### 4.5 Tool Registry
 
 ```ts
-// tools/registry.ts
-export const toolRegistry = createRegistry([
-  listHoldingsTool,
-  getHoldingTool,
-  addHoldingTool,
-  analyzeStockTool,         // advice 类
-  getAdviceTool,            // advice 类
-  // ...
-]);
+// tools/registry.ts: derived from catalog.ts
+export const toolRegistry = createRegistry(agentTools);
+export const applicationToolRegistry = createRegistry(Object.values(catalogTools));
 
-// 自动产物：
 const tsTypes = toolRegistry.toTypeScript();
 const mcpTools = toolRegistry.toMCP();
 const openaiTools = toolRegistry.toOpenAI();
-const openApiSpec = toolRegistry.toOpenAPI();
 ```
 
 **一次定义，多处生效**。改一个 Zod schema，所有面自动同步。
@@ -502,7 +494,7 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 DSH Chat 路径（当前唯一 Web 对话运行时）：Bun Web → 独立 Node Host → DSH/Cordis。
 `packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
 业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
-官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。此接入不使用 MCP，也不加载 DSH Web UI。
+官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。Node Host 不加载 MCP 客户端或 DSH Web UI；受控外部 MCP 在 Bun Gateway 侧执行。
 DSH 模型请求通过独立鉴权的 Bun 代理转发 SSE 并读取尾部 usage，
 未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
 
@@ -920,37 +912,19 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ## 7. Tool 系统
 
-### 7.1 公共 Agent Tool 面 = 45 个核心 Agent Tool
+### 7.1 工具目录与公共 Agent 库存
 
-`toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
+`packages/tools/src/catalog.ts` 是工具库存的唯一显式定义：按实际工具名关联 tool 对象，
+声明是否属于公共 Agent 候选工具，以及公共工具所需的模型、行情 capability、资讯或 Vault
+依赖。Zod schema 与业务实现仍定义在各 tool 文件中。
 
-- 行情与盘面资讯（21）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
-  `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
-  `dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`、
-  `collect_market_snapshot`、`get_market_snapshot_batch`、`get_market_room_overview`、
-  `get_market_room_sectors`、`get_market_room_amount_distribution`、
-  `get_market_room_sector_detail`、`get_market_room_core_stocks`、`list_market_room_events`、
-  `get_stock_sector_memberships`、`sync_sector_catalog`
-### 7.1 公共 Agent Tool 面 = 37 个核心 Agent Tool
+- `toolRegistry` 从 `agent: true` 条目派生，供 MCP、OpenAI schema 和公共 Web 路由使用。
+- `applicationToolRegistry` 从完整目录派生，替代 CLI/Web 对包导出的运行时扫描；专用路由与调用方继续负责原有授权。
+- `WorkflowToolMap` 和已绑定上下文的执行访问器从同一目录派生，输入保留 Zod 默认值和可选字段语义，不再维护第二套 I/O 类型与内部工具数组。
+- Web 公共名字表和 MCP 必需依赖表自动派生。MCP 禁用规则、各入口权限与聊天场景白名单继续独立收窄；内部工具不进入公共 discovery。
 
-`toolRegistry` 只保留粗粒度、语义自包含的投研分析工具（设计 §5.2）：
-
-- 行情与盘面资讯（12）：`search_stocks`、`get_stock_market_view`、`fetch_quote`、
-  `fetch_index_quotes`、`fetch_sector_quotes`、`compute_indicators`、`limit_up_ladder`、
-  `limit_up_market`、`dragon_tiger_list`、`dragon_tiger_flow`、`northbound_flow`、`fetch_news`
-- 股票池（4）：`list_watchlists`、`get_watchlist`、`create_watchlist`、`update_watchlist_members`
-- 策略与回测（6）：`list_strategies`、`get_strategy`、`save_strategy_version`、`run_strategy`、
-  `run_strategy_backtest`、`get_strategy_signals`
-- 账户与持仓（5）：`get_account_overview`、`get_account_performance`、`list_trades`、`add_trade`、
-  `update_holding`
-- 研究、建议与报告（6）：`analyze_stock`、`analyze_position`、`get_advice`、
-  `search_research_documents`、`save_research_document`、`save_decision_review`
-- 交易计划与盯盘预警（3）：`list_watch_plans`、`save_trading_plan`、`save_alert_plan`
-- 补充说明：`dragon_tiger_flow` 为概念级跨日净额轨迹，与 `limit_up_market` 一样需 `FUYAO_API_KEY`
-- 存储运维（1）：`prune_strategy_history`（默认 `dryRun=true`，只清逐股明细与过期观察）
-
-账户改名、现金对账、聊天会话、报告渲染、策略生命周期、观察统计等纯 UI CRUD 是
-**Application Service**：仅供 Web/CLI 直接调用，不进入 `toolRegistry`/MCP discovery。
+目录契约测试校验工具名、对象唯一性和导出覆盖，既有公共库存测试保护暴露范围。
+Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schema；内部 ToolResult 与 MCP 文本内容的响应格式分别说明。
 
 ### 7.2 副作用分级（重申）
 
@@ -1100,22 +1074,37 @@ v0.3+：HTTP/SSE（远程、移动）。
 
 ### 9.2 暴露策略
 
-```ts
-const mcpServer = createMcpServer({
-  registry: toolRegistry,
-  exposure: {
-    allowSideEffects: ['read', 'advice'],  // 默认 read + advice 全部暴露
-    denySideEffects: ['trade'],             // trade 永远禁
-    tagFilter: ['finance', 'portfolio', 'advice'],
-  },
-});
-```
+MCP 的工具集合是公共 registry、授权策略、启动时依赖就绪状态的交集。
+`packages/tools/src/catalog.ts` 显式声明每个公共工具的必需依赖，MCP 从目录派生依赖表；
+库存一致性测试防止漏声明。行情依赖按 source registry 中已启用且配置就绪的 capability 判断，
+模型、资讯 manager 和 Vault 按实际装配状态判断；可本地回退的查询不强制要求外部源。
 
-read + advice 是默认暴露的（它们都是只读，不会破坏数据完整性）。write / external / trade 必须 opt-in。
+无模型或行情配置时仍可启动并查询本地数据。默认允许 read + advice；write / external
+必须显式 opt-in，read / advice 可分别通过 `LUOOME_EXPOSE_READ=false` /
+`LUOOME_EXPOSE_ADVICE=false` 关闭。trade 与人工成交登记 `add_trade` 永不通过 MCP 暴露；
+`LUOOME_EXPOSE_TRADE=true` 在任何 IO 前阻止启动。研究工具另受研究权限门控。
+发现与调用共用同一过滤结果，直接调用被隐藏工具也会被拒绝。修改配置后需要重启 MCP。
+依赖就绪不保证上游在线，运行时失败仍遵循 ToolResult 错误模型。
 
 ### 9.3 MCP tool 命名
 
 luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**三套统一**，避免翻译层。
+
+### 9.4 受控只读 MCP 客户端
+
+`adapters/mcp` 负责读取部署配置、真实 MCP stdio 握手/发现/调用、JSON Schema 校验和进程生命周期。
+`tools/external-mcp` 将已授权远端工具包装为 external ToolResult、统一输入校验与审计，不将动态工具
+写入静态业务 catalog。`apps/web` 每轮按场景加载这些受信 callable，派生带命名空间与来源的
+DSH manifest；Node Host 仍仅使用既有 Bun Gateway 代理。
+
+准入取服务显式启用、远端名字白名单、场景白名单及只读元数据的交集。发现与执行分别复核配置，
+调用前重新发现并比对完整声明，阻止 schema/注解漂移。Gateway 的授权回调也检查服务当前状态，
+包括同一 callId 的回执读取；停用后下一轮删除工具，旧调用失效。静态业务白名单、账户 scope、
+external opt-in、限次/超时与输出大小规则继续独立生效。
+
+首个只读实现 `packages/mcp/src/docs-server.ts` 只检索固定维护文档。配置格式与启停方法见
+[用户手册](./USER_GUIDE.md#只读-mcp-服务供内置-agent-使用)。客户端不自动安装代码，不继承完整
+主进程环境，也不把未知服务器能力当作只读保证；受信子进程不等于 OS 沙箱。
 
 ## 10. 多端消费
 

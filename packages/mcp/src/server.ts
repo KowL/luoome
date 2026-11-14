@@ -27,7 +27,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { createServerContext, type ServerContextHandle } from './context.js';
-import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
+import { isMcpToolReady, resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
 export { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
@@ -58,10 +58,16 @@ export const startMcpServer = async (
   const env = opts.env ?? process.env;
   const allowedSideEffects = resolveAllowedSideEffects(env);
 
-  const { ctx, close: closeCtx } = opts.context ?? (await createServerContext(env));
+  const {
+    ctx,
+    readyDependencies,
+    close: closeCtx,
+  } = opts.context ?? (await createServerContext(env));
 
   const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects).filter(
-    (tool) => env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research'),
+    (tool) =>
+      isMcpToolReady(tool.name, readyDependencies) &&
+      (env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research')),
   );
   // createRegistry(...).toMCP() 复用 tools 包的 JSON Schema 转换
   //（z.toJSONSchema(io:'input', unrepresentable:'any')），并顺带做重名检查。

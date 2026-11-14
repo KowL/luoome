@@ -1,4 +1,5 @@
 import type { SideEffect } from '@luoome/core';
+import { agentToolDependencies, type ToolDependency } from '@luoome/tools';
 
 // 内部 tool（save_report / sync_watchlist_source / migration_* 等）
 // 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 按 sideEffect 过滤。
@@ -36,8 +37,20 @@ export const resolveAllowedSideEffects = (
         '(AGENTS.md「副作用与权限」硬约束)。',
     );
   }
-  const allowed = new Set<SideEffect>(['read', 'advice']);
+  const allowed = new Set<SideEffect>();
+  if (env.LUOOME_EXPOSE_READ !== 'false') allowed.add('read');
+  if (env.LUOOME_EXPOSE_ADVICE !== 'false') allowed.add('advice');
   if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
   if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
   return allowed;
 };
+
+export type McpDependency = ToolDependency;
+export const MCP_TOOL_DEPENDENCIES: Readonly<Record<string, readonly McpDependency[]>> =
+  agentToolDependencies;
+
+export const isMcpToolReady = (
+  name: string,
+  readyDependencies: ReadonlySet<McpDependency>,
+): boolean =>
+  MCP_TOOL_DEPENDENCIES[name]?.every((dependency) => readyDependencies.has(dependency)) ?? false;

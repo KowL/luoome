@@ -30,17 +30,7 @@ When presenting Advice, preserve these fields when returned:
 
 ## ToolResult handling
 
-luoome tools return a success or failure envelope. Do not claim success from transport completion alone.
-
-```json
-{
-  "ok": false,
-  "error": {
-    "kind": "adapter_error",
-    "recoverable": true
-  }
-}
-```
+Inside luoome, tools use ToolResult envelopes. Over MCP, a successful call returns normal content with the serialized data directly; there is no `ok: true` wrapper. A tool failure returns `isError: true` with serialized error details in its text content. Unknown or hidden tool names produce MCP protocol errors. Do not infer business success from transport completion alone.
 
 Handle error kinds conservatively:
 

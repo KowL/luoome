@@ -289,5 +289,10 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
   };
 };
 
-export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =>
-  defineTypedTool(definition, (ctx: ToolContext) => ctx.user.id);
+export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.ZodType<O>>(
+  definition: ToolDefinition<I, O> & { readonly input: Input; readonly output: Output },
+): Tool<I, O> & { readonly inputSchema: Input; readonly outputSchema: Output } => ({
+  ...defineTypedTool(definition, (ctx: ToolContext) => ctx.user.id),
+  inputSchema: definition.input,
+  outputSchema: definition.output,
+});

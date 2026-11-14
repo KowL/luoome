@@ -3,7 +3,7 @@
 本目录固定首批 Node Host、原生 Cordis 业务代理与官方网页插件的开发组合。
 依赖版本和完整性见 [artifacts.json](./artifacts.json)，完整解析图由 [bun.lock](../../bun.lock) 固定。
 DSH `0.2.1-rc.2`、Cordis `4.0.5` 的安装产物已经在 Node `22.22.3` 加载验证。
-未修改或 fork 上游，不使用 MCP。
+未修改或 fork 上游。Node Profile 不加载 MCP；外部只读 MCP 由 Bun Gateway 侧的受控客户端执行，见[用户手册](../../docs/USER_GUIDE.md#只读-mcp-服务供内置-agent-使用)。
 
 ## 构建与验证
 

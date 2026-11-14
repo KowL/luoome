@@ -58,6 +58,7 @@ export * from './market/tushare.js';
 export * from './market/types.js';
 export * from './market-dump/factory.js';
 export * from './market-dump/parquet.js';
+export * from './mcp/client.js';
 export * from './news/10jqka.js';
 // 财经要闻（东方财富公开新闻 API）
 export * from './news/eastmoney.js';

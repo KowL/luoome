@@ -49,6 +49,7 @@
         "@ai-sdk/openai-compatible": "2.0.x",
         "@ai-sdk/provider": "3.0.x",
         "@luoome/core": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.29.0",
         "ai": "6.0.x",
         "apache-arrow": "21.2.0",
         "parquet-wasm": "0.9.0",
@@ -107,6 +108,7 @@
         "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
+        "zod": "^4.4.3",
       },
     },
     "packages/tools": {

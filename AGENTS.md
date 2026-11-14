@@ -15,7 +15,7 @@
 | 副作用、鉴权与投资建议边界 | [docs/SECURITY.md](./docs/SECURITY.md) |
 | 命令和测试入口 | [package.json](./package.json) |
 
-不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/registry.ts`、MCP discovery 和 `luoome tools list --json` 为准。
+不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/catalog.ts` 及其派生的 registry、MCP discovery 和 `luoome tools list --json` 为准。
 
 ## 开始修改前
 
@@ -84,8 +84,8 @@ workflows ──► tools ──► core
 
 - **Core entity**：schema、类型、不变量、导出和测试同步。
 - **Repository**：接口、drizzle、registry 接线和 contract tests 同步。
-- **Tool**：schema、实现、桶导出、registry、sideEffect、测试以及 Skill 的能力分类同步。
-- **Workflow**：`WorkflowToolMap`、实现、导出、CLI 发现和测试同步。
+- **Tool**：schema、实现、桶导出、catalog 的公开性与依赖声明、sideEffect、测试以及 Skill 的能力分类和示例同步。
+- **Workflow**：实现、导出、CLI 发现和测试同步；`WorkflowToolMap` 与执行映射从 catalog 派生，不手写第二套 I/O 映射。
 - **API/Web**：服务端契约、前端调用、鉴权/Origin 行为、测试和浏览器验收同步。
 - **文档**：按 `docs/README.md` 分类；当前行为写入维护文档，阶段快照归入 `docs/archive/`。
 

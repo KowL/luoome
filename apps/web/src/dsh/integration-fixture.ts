@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { FakeLLMAdapter, FakeMarketAdapter, TEST_STOCKS } from '@luoome/adapters/testing';
 import { money } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext } from '@luoome/tools';
+import { buildContext, discoverExternalMcpTools } from '@luoome/tools';
 import { createWebApp } from '../server.js';
 import { DshChatRuntime } from './chat-runtime.js';
 import { loadDshDevelopmentConfig } from './config.js';
@@ -17,6 +17,7 @@ export const FIXTURE_ORIGIN = 'http://127.0.0.1:5187';
 export const createDshIntegrationFixture = async (
   options: {
     readonly firstChunkGate?: Promise<void>;
+    readonly externalMcpConfig?: string;
     readonly failProvider?: boolean;
     readonly slowProvider?: boolean;
     readonly reuseProviderCallId?: boolean;
@@ -56,6 +57,8 @@ export const createDshIntegrationFixture = async (
     const continuation =
       userText.includes('解释确认') || userText.startsWith('请根据刚才草案的实际处理结果');
     const draft = !continuation && userText.includes('草案');
+    const external = userText.includes('MCP 文档');
+    const hasExternal = JSON.stringify(body.tools).includes('mcp_docs__search_docs');
     const slow = options.slowProvider || userText.includes('慢速');
     const failed = userText.includes('失败');
     if (failed) return Response.json({ error: { message: 'fixture-rejected' } }, { status: 401 });
@@ -79,11 +82,20 @@ export const createDshIntegrationFixture = async (
             }
             if (ordinal === 1 && options.firstChunkGate !== undefined) await options.firstChunkGate;
             else await Bun.sleep(120);
-            if (toolCount === 0 && !continuation) {
-              const name = draft ? 'create_watchlist' : 'fetch_quote';
-              const input = draft
-                ? { name: 'DSH 待确认观察清单', kind: 'personal', membershipPolicy: 'manual' }
-                : { stockId: '002594.SZ' };
+            if (external && !hasExternal) {
+              controller.enqueue(sse({ content: 'MCP 文档工具未启用。' }));
+              controller.enqueue(sse({}, 'stop'));
+            } else if (toolCount === 0 && !continuation) {
+              const name = external
+                ? 'mcp_docs__search_docs'
+                : draft
+                  ? 'create_watchlist'
+                  : 'fetch_quote';
+              const input = external
+                ? { query: 'Watchlist' }
+                : draft
+                  ? { name: 'DSH 待确认观察清单', kind: 'personal', membershipPolicy: 'manual' }
+                  : { stockId: '002594.SZ' };
               controller.enqueue(
                 sse(
                   {
@@ -99,7 +111,7 @@ export const createDshIntegrationFixture = async (
                   'tool_calls',
                 ),
               );
-            } else if (toolCount === 1 && !draft) {
+            } else if (toolCount === 1 && !draft && !external) {
               controller.enqueue(
                 sse(
                   {
@@ -121,11 +133,13 @@ export const createDshIntegrationFixture = async (
             } else {
               controller.enqueue(
                 sse({
-                  content: draft
-                    ? '草案已生成，确认前不会创建观察清单。'
-                    : continuation
-                      ? '已依据服务端真实确认回执继续解释，未再次执行写入。'
-                      : `行情已通过业务工具读取；网页证据来源 ${FIXTURE_WEB_URL}。这是受控模拟研究，不构成投资建议。`,
+                  content: external
+                    ? 'MCP 文档证据已核对完成。'
+                    : draft
+                      ? '草案已生成，确认前不会创建观察清单。'
+                      : continuation
+                        ? '已依据服务端真实确认回执继续解释，未再次执行写入。'
+                        : `行情已通过业务工具读取；网页证据来源 ${FIXTURE_WEB_URL}。这是受控模拟研究，不构成投资建议。`,
                 }),
               );
               controller.enqueue(sse({}, 'stop'));
@@ -171,8 +185,15 @@ export const createDshIntegrationFixture = async (
     createdAt: clock(),
   });
 
+  const externalMcpConfig = options.externalMcpConfig;
   const chatStreamRuntime = new DshChatRuntime({
     ...dsh,
+    ...(externalMcpConfig === undefined
+      ? {}
+      : {
+          externalMcp: (ctx, scenario) =>
+            discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
+        }),
     model: {
       endpoint: 'https://provider.example.test/v1/chat/completions',
       model: 'deepseek-chat',

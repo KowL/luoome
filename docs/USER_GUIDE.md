@@ -308,7 +308,15 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 
 ## 5. MCP 接入
 
-`luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认暴露：
+MCP 无需模型密钥或行情配置即可启动，提供关注列表、策略、历史建议、交易记录等本地查询；
+股票搜索可回退本地目录，账户概览使用已有的本地行情回退规则，缺失数据保持 unavailable。
+发现列表只包含同时通过权限检查与依赖就绪检查的工具：模型未就绪时隐藏 AI 分析工具；
+未设置 `LUOOME_MARKET_PROVIDER=real` 时隐藏必须依赖外部行情或资讯的工具；研究工具还要求
+已挂载 Research Vault 且显式开启研究权限。显式填写的非法行情配置仍会导致启动失败。
+就绪表示配置及所需能力已装配，不表示上游网络或数据始终可用；调用失败仍返回现有错误模型。
+修改配置后重启 MCP，重新执行工具发现。
+
+`luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认允许以下类别中依赖已就绪的工具：
 
 - **read** tools（list / search / get / compute）
 - **advice** tools（个股、持仓和市场观点分析）
@@ -318,7 +326,49 @@ opt-in 追加：
 - `LUOOME_EXPOSE_WRITE=true` → 追加账户、持仓、交易、研究、事件和反馈等 write tools
 - `LUOOME_EXPOSE_EXTERNAL=true` → 追加行情、同步、刷新和通知等 external tools
 
+`LUOOME_EXPOSE_READ=false` / `LUOOME_EXPOSE_ADVICE=false` 可分别关闭对应类别。
+
 `LUOOME_EXPOSE_TRADE=true` **永远硬卡**：MCP server 启动即抛错退出；advice × trade 隔离硬约束绝不通过 MCP 暴露。
+
+### 只读 MCP 服务（供内置 Agent 使用）
+
+Web Agent 可以通过 Bun 工具网关调用受控的本地 stdio MCP 服务。该客户端与上面的
+`luoome mcp serve` 服务端相互独立：外部服务只进入本轮内置 Agent 的工具表，不加入
+luoome 公共 MCP/CLI 库存。首个随仓库提供的服务是维护文档检索，只读取 README、CONTEXT、
+架构文档和用户手册；不读取账户、Vault、环境文件或任意用户路径。
+
+创建 `$LUOOME_HOME/mcp-servers.json`（也可用 `LUOOME_MCP_CONFIG` 指定其它路径），
+把下面两个绝对路径换成实际 Bun 和 luoome 仓库的位置：
+
+```json
+{
+  "version": 1,
+  "services": {
+    "docs": {
+      "enabled": true,
+      "command": "/absolute/path/to/bun",
+      "args": ["--no-env-file", "/absolute/path/to/luoome/packages/mcp/src/docs-server.ts"],
+      "tools": ["search_docs"],
+      "scenarios": ["research"]
+    }
+  }
+}
+```
+
+启动 Web 前启用 `LUOOME_EXPOSE_EXTERNAL=true`；对话仍遵守已有 write + external 双闸口，
+并需要已配置的对话模型。配置路径和环境开关的修改需重启 Web。服务的 `enabled`、`tools`
+和 `scenarios` 在每轮发现及每次调用时重新读取，可直接编辑文件生效。例如发送
+“研究 MCP 文档中的 Watchlist”，模型在 research 场景可发现 `mcp_docs__search_docs`。
+白名单是远端工具的原名；只有同时声明 `readOnlyHint=true`、`destructiveHint=false` 的工具
+能被接入。场景仍使用原有五类自动路由，新增服务不会扩大既有业务工具的权限。
+
+把 `enabled` 改为 `false`、清空 `tools` 或删除服务配置后，下一轮不再声明该工具，旧轮次
+持有的调用也会拒绝执行；已有历史记录保留为事实。已开始的只读调用在返回结果前再次检查授权。
+配置无效或服务发现失败时隐藏对应工具，不使用旧缓存。每次发现和调用结束都会关闭子进程。
+
+本阶段只支持受信的本地只读服务，不提供远程 HTTP、动态安装、密钥配置、写工具或通用文件访问。
+只读声明是服务元数据，不构成进程沙箱；启用前需核对本地可执行程序。调用通过既有 external
+权限和审计，只接收有大小上限的文本/结构化结果，远端内容作为不可信资料处理。
 
 ---
 

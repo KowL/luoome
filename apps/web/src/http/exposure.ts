@@ -1,4 +1,5 @@
 import type { SideEffect } from '@luoome/core';
+import { toolRegistry } from '@luoome/tools';
 
 /**
  * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read + advice。
@@ -42,63 +43,7 @@ export const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
   cancel_order: 'trade',
 };
 
-/**
- * Web 通用 tool 路由的 Agent Tool 名单：与 `toolRegistry`（ARCHITECTURE §7.1，45 个）逐项一致；
- * 名单只决定「这个 tool 是否走通用路由」，副作用仍由 EXPOSED_SIDE_EFFECTS、
- * WEB_ALLOWED_EXTERNAL 与 tool.requiredCapabilities 逐项门控。
- */
-export const WEB_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
-  // 行情与盘面资讯（21）
-  'search_stocks',
-  'get_stock_market_view',
-  'fetch_quote',
-  'fetch_index_quotes',
-  'fetch_sector_quotes',
-  'compute_indicators',
-  'limit_up_ladder',
-  'limit_up_market',
-  'dragon_tiger_list',
-  'dragon_tiger_flow',
-  'northbound_flow',
-  'fetch_news',
-  'collect_market_snapshot',
-  'get_market_snapshot_batch',
-  'get_market_room_overview',
-  'get_market_room_sectors',
-  'get_market_room_amount_distribution',
-  'get_market_room_sector_detail',
-  'get_market_room_core_stocks',
-  'list_market_room_events',
-  'get_stock_sector_memberships',
-  'sync_sector_catalog',
-  // 股票池（4）
-  'list_watchlists',
-  'get_watchlist',
-  'create_watchlist',
-  'update_watchlist_members',
-  'prune_strategy_history',
-  // 策略与回测（6）
-  'list_strategies',
-  'get_strategy',
-  'save_strategy_version',
-  'run_strategy',
-  'run_strategy_backtest',
-  'get_strategy_signals',
-  // 账户与持仓（5）
-  'get_account_overview',
-  'get_account_performance',
-  'list_trades',
-  'add_trade',
-  'update_holding',
-  // 研究、建议与报告（6）
-  'analyze_stock',
-  'analyze_position',
-  'get_advice',
-  'search_research_documents',
-  'save_research_document',
-  'save_decision_review',
-  // 交易计划与盯盘预警（3）
-  'list_watch_plans',
-  'save_trading_plan',
-  'save_alert_plan',
-]);
+// Inventory only; side effects, Origin and scene permissions are checked by their callers.
+export const WEB_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set(
+  toolRegistry.all().map((tool) => tool.name),
+);

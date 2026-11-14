@@ -310,21 +310,27 @@ export const myTool = defineTool({
 });
 ```
 
-然后在 `packages/tools/src/tools/index.ts` 桶导出 + 在 `packages/tools/src/registry.ts` 注册：
+在 `packages/tools/src/index.ts` 桶导出，并在 `packages/tools/src/catalog.ts` 增加唯一目录项：
 
 ```ts
 import { myTool } from './tools/my-tool.js';
-toolRegistry.register(myTool);
+// toolCatalog 内的条目；key 必须与 myTool.name 一致。
+my_tool: { tool: myTool, agent: true, dependencies: [] },
 ```
+
+`agent: true` 进入公共候选库存，并须声明必需依赖；`agent: false` 仅保留给 Application Service
+与 Workflow。公共 registry、CLI/Web 查询表、Web 公共工具名字表、MCP 依赖表及 Workflow
+访问器与 I/O 类型均从目录派生。目录成员身份不授予执行权限，各 surface 的 opt-in、Origin、
+禁止名单以及聊天场景的读/草案白名单继续独立检查；新增公共工具不会自动进入聊天场景。
 
 **必做**：
 
 1. 在 `packages/tools/src/tools/my-tool.test.ts` 写至少 3 个测试：happy / invalid_input / not_found 或 adapter_error
 2. 在 `packages/core/src/entity/invariants.ts` 加 entity 不变量（如果是新 entity）
 3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle 实现（测试走 :memory:）
-4. 如果改 core：在 `packages/workflows/src/define-workflow.ts` 的 `WorkflowToolMap` 同步加 accessor
+4. 运行目录契约测试；`WorkflowToolMap` 从 tool 的原始 Zod schema 派生，无需手写 accessor 或 I/O 映射
 5. 如果外部 Agent 的能力选择、调用顺序或安全边界变化，同步 `skills/luoome/` 对应 reference
-6. CLI `tools list` 应能见到（不需要额外改动，registry 自动）
+6. 公共工具应在 CLI `tools list` 可见；MCP 还需授权与依赖就绪。运行 `bun run mcp:smoke`，Skill 示例契约测试会校验文档里的 MCP 调用及参数
 
 ### 加一个新战法
 

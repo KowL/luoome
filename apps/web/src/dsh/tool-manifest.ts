@@ -13,6 +13,7 @@ import {
   type AgentScenario,
   APPROVED_EXTERNAL_TOOLS,
   addTradeTool,
+  type ExternalMcpCallable,
   settleChatDraftTool,
   toolRegistry,
 } from '@luoome/tools';
@@ -148,6 +149,7 @@ export const buildGatewayCallableManifest = (
   tools: readonly AgentCallableTool[],
   scenario: AgentScenario,
   nativeTools: readonly ToolManifestEntry[] = [],
+  externalTools: readonly ExternalMcpCallable[] = [],
 ): GatewayCallableManifest => {
   const callables = new Map<string, GatewayBoundTool>();
   for (const callable of tools) {
@@ -192,6 +194,35 @@ export const buildGatewayCallableManifest = (
       declaration,
       inputSchema,
       wireInputSchema,
+      execute: callable.execute.bind(callable),
+    });
+  }
+  for (const external of externalTools) {
+    const callable = external.callable;
+    if (
+      !callable.name.startsWith(`mcp_${external.service}__`) ||
+      callables.has(callable.name) ||
+      toolRegistry.get(callable.name) !== undefined ||
+      privilegedToolNames.has(callable.name) ||
+      !(callable.inputSchema instanceof z.ZodType)
+    )
+      throw new Error('Invalid external MCP tool');
+    const declaration: ToolManifestEntry = {
+      name: callable.name,
+      description: callable.description,
+      inputSchema: JsonObjectSchema.parse(external.inputSchema),
+      callMode: 'execute',
+      domain: 'external-mcp',
+      sourcePlugin: `mcp:${external.service}`,
+      executionLocation: 'bun-gateway',
+      sideEffect: 'external',
+      requiredCapabilities: ['external'],
+      costPolicy: 'free',
+    };
+    callables.set(callable.name, {
+      declaration,
+      inputSchema: callable.inputSchema,
+      wireInputSchema: callable.inputSchema,
       execute: callable.execute.bind(callable),
     });
   }

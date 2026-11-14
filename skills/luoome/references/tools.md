@@ -2,7 +2,7 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
-The public Agent surface is the **37 core Agent Tools** (design §5.2 + storage retention). Pure UI CRUD
+The public Agent inventory is derived from the typed tool catalog; discovery further filters permissions and ready dependencies. Pure UI CRUD
 (account rename, cash reconciliation, member drag-sort, chat sessions, report rendering,
 strategy lifecycle, observation stats …) is an Application Service behind Web/CLI and is not
 an MCP tool. Do not infer a new MCP permission from an exported TypeScript function or a
@@ -40,7 +40,7 @@ Stock pools, strategies and portfolio:
 - `get_strategy_signals` — StrategySignals for a stock plus T+1/T+3/T+5 observation stats
   (descriptive; signal ≠ Advice and ≠ trade).
 - `get_account_overview` — account + holdings + account facts in one call; use it instead
-  of stitching `get_account` / `list_holdings` / `get_account_facts`.
+  of stitching separate account, holding and cash queries.
 - `get_account_performance` — NAV curve, TWR, drawdown and attribution.
 - `list_trades` — account trade history.
 - `get_advice` — advice history with outcomes; `includeDecisionReviews=true` also returns
@@ -66,7 +66,7 @@ Advice is never a trade and never auto-executes.
   (stage, priority) in one validated batch.
 - `save_strategy_version` — `create-strategy` | `save-version` | `validate` | `publish`.
 - `run_strategy` — run a published version over a stock scope; `persist=true` for a formal
-  run, `trial` for dry-run.
+  run, `persist=false` with explicit `stockIds` for a trial.
 - `run_strategy_backtest` — `run` (create + execute) | `execute` | `get` | `list`; returns
   return/win-rate/drawdown metrics.
 - `update_holding` — `mode=update` correct quantity/cost, `mode=open` open a holding,

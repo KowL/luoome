@@ -1,65 +1,79 @@
 # Example workflows
 
-These are sequencing patterns, not fixed schemas. Always use the connected MCP descriptions for current parameters.
+These patterns use MCP tools/call payloads. Replace illustrative IDs with IDs from the user's workspace. Before calling, inspect current discovery: permissions and configured dependencies may hide a tool. Never substitute a shell call for a hidden tool.
 
 ## Portfolio PnL
 
-User asks for current portfolio profit and loss:
+Resolve the account with the user if ambiguous. Use `get_account_overview` for account, holdings and facts together:
 
-1. Resolve the intended account with `list_accounts` if it is ambiguous.
-2. Call `list_holdings` with the account scope; use its current valuation and PnL fields.
-3. If the user explicitly requests refreshed quotes, explain the external call and confirm before using quote-refresh/batch capabilities.
-4. Report valuation time, per-position results when useful, and the account total without inventing missing prices.
+```json
+{"name":"get_account_overview","arguments":{"accountId":"account-id"}}
+```
 
-## Record a trade
+Report valuation time, missing prices and the account total. For an explicitly authorized refresh, use discovered `fetch_quote` with the selected stock IDs, then read the overview again.
 
-User gives a stock, side, quantity, price and execution time:
+## Record a completed trade
 
-1. Use `search_stocks` to resolve the exact stock; ask the user to choose if multiple candidates remain.
-2. Resolve the account and inspect current holding state.
-3. Restate account, stock, side, quantity, price, fee and time; obtain explicit confirmation.
-4. Invoke `add_trade` using its discovered schema.
-5. Re-read the holding/trade record and report the persisted result.
+Direct the user to the local Web/CLI to record a completed trade. MCP does not expose this mutation. Once recorded, inspect its local history:
+
+```json
+{"name":"list_trades","arguments":{"accountId":"account-id","limit":20}}
+```
+
+A history record does not mean luoome placed an order.
 
 ## Run a Strategy sample
 
-1. Use `list_strategies` or `get_strategy` to identify a published Strategy and exact version.
-2. For an automatic sample, invoke `trial_strategy` with explicit `stockIds`; it is fixed to
-   `persist=false` and is not a scheduled run.
-3. A persisted or full-market run requires an explicit confirmation; use `run_strategy` with
-   `persist=true`.
-4. Explain that StrategyResult and StrategySignal are evidence, not an order or guaranteed outcome.
+Use `list_strategies` or `get_strategy` to resolve a published Strategy and version. A trial still requires the appropriate write/external permissions and authorization; run an explicit stock subset without persisting:
 
-## Analyze a stock
+```json
+{"name":"run_strategy","arguments":{"strategyId":"strategy-id","stockIds":["600000.SH"],"persist":false}}
+```
 
-1. Resolve the stock with `search_stocks`.
-2. Invoke `analyze_stock` once with the evidence options supported by its schema.
-3. Present premise, evidence and counter-evidence together.
-4. Include confidence, horizon, risks, disclaimers and expiry; do not turn `buy` into an execution instruction.
+For an explicitly authorized formal run:
 
-## Analyze current holdings
+```json
+{"name":"run_strategy","arguments":{"strategyId":"strategy-id","persist":true}}
+```
 
-1. Call `list_holdings` for the selected account.
-2. Narrow the target set with the user instead of blindly analyzing every position.
-3. Call `analyze_position` for each explicitly selected holding, using bounded concurrency if multiple calls are necessary.
-4. Sort or summarize only after preserving each Advice's risks and uncertainty.
+Report publication and data health from the returned run. StrategySignals are evidence, not Advice or orders.
+
+## Analyze a stock or holding
+
+Resolve stocks with `search_stocks`, then invoke `analyze_stock` for the requested analysis:
+
+```json
+{"name":"analyze_stock","arguments":{"stockId":"600000.SH"}}
+```
+
+For holdings, first use `get_account_overview`, narrow the target with the user, and use the returned holding ID:
+
+```json
+{"name":"analyze_position","arguments":{"holdingId":"holding-id"}}
+```
+
+Preserve premise, evidence, counter-evidence, confidence, horizon, risks, disclaimers and expiry. Missing model or market dependencies can hide these tools.
 
 ## Review advice quality
 
-1. Use advice history/statistics and confidence-calibration tools for the requested period.
-2. Distinguish generated Advice, user follow-through and observed outcome.
-3. State sample size and missing outcomes; do not claim accuracy from incomplete records.
-4. If the user explicitly supplies an outcome to record, confirm the exact mutation before using the corresponding write tool.
+Use `get_advice` to read persisted advice and optional decision reviews for the selected account:
+
+```json
+{"name":"get_advice","arguments":{"accountId":"account-id","includeDecisionReviews":true,"includeExpired":true,"limit":20}}
+```
+
+Distinguish generated Advice, user feedback and observed outcomes. State sample size and missing feedback. Dedicated calibration/statistics are available through local Web/CLI; do not invent an MCP statistics tool.
 
 ## Research notes
 
-1. Resolve the stock first.
-2. Search existing research notes with bounded filters (`search_research_documents`).
-3. When saving a note, show the exact title, body and stock codes before the write call.
-4. Preserve the source URL and publication date; do not silently rewrite externally sourced facts.
+Resolve the stock first and search existing notes with `search_research_documents`. For an authorized write, show the exact title, body and stock codes before calling `save_research_document`:
+
+```json
+{"name":"save_research_document","arguments":{"target":"note","note":{"title":"Research notes","kind":"note","body":"User-approved research text","stockCodes":["600000.SH"]}}}
+```
+
+The Vault must be configured and research access enabled. Preserve source URLs and publication dates when present.
 
 ## Workflows
 
-Built-in workflows are not MCP tools. Workflow audit is available through the local CLI/Web,
-not through discovery; do not claim to have started a workflow through MCP unless a discovered
-tool explicitly provides that operation.
+Built-in workflows and their audit views are available through the local CLI/Web. Only a discovered MCP tool can provide a callable operation; do not claim that an undiscovered workflow was started.

@@ -1,13 +1,15 @@
 import { existsSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ToolError } from '@luoome/core';
+import type { ToolContext, ToolError } from '@luoome/core';
 import {
   type RuntimeBinding,
   TerminalStatusSchema,
   type ToolManifestEntry,
 } from '@luoome/dsh-bridge/protocol';
 import { HostConfigSchema } from '@luoome/dsh-bridge/runtime-config';
+import { discoverExternalMcpTools, type ExternalMcpCallable } from '@luoome/tools';
 import { AI_PROVIDER_PRESETS, type AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
@@ -36,11 +38,16 @@ export interface DshChatRuntimeOptions {
     readonly fixtures: Readonly<Record<string, string>>;
   };
   readonly authorized?: () => Promise<boolean>;
+  readonly externalMcp?: (
+    context: ToolContext,
+    scenario: string,
+  ) => Promise<readonly ExternalMcpCallable[]>;
   readonly runTimeoutMs?: number;
   readonly maxActiveRuns?: number;
 }
 
 const activeConversations = new Set<string>();
+const preparingConversations = new Set<string>();
 const blockedConversations = new Set<string>();
 const encoder = new TextEncoder();
 const denied = (): ToolError => ({ kind: 'permission_denied', required: 'dsh:active-run' });
@@ -70,25 +77,38 @@ export class DshChatRuntime implements ChatStreamRuntime {
       throw new ChatRuntimeRejection('本实验不能截断已有上下文，请创建新会话并提供必要事实。');
     const { context: ctx, conversationId, scenario } = execution;
     const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, conversationId]);
-    if (activeConversations.has(key) || blockedConversations.has(key))
+    if (
+      activeConversations.has(key) ||
+      preparingConversations.has(key) ||
+      blockedConversations.has(key)
+    )
       throw new ChatRuntimeRejection('DSH 会话仍在执行或等待核对，请读取历史或创建新会话。');
-    if (activeConversations.size >= (this.options.maxActiveRuns ?? 2))
+    if (activeConversations.size + preparingConversations.size >= (this.options.maxActiveRuns ?? 2))
       throw new ChatRuntimeRejection('DSH 开发实例容量已满，请稍后再试。', 503);
     const runId = execution.runId;
     const configRef = `development:${runId}`;
     const duration = this.options.runTimeoutMs ?? 180_000;
     const expiresAt = Date.now() + duration;
-    const manifest = buildGatewayCallableManifest(
-      request.tools,
-      scenario,
-      this.options.native === undefined ? [] : [this.options.native.entry],
-    );
     const abort = new AbortController();
     const signal = AbortSignal.any([
       abort.signal,
       ...(request.abortSignal ? [request.abortSignal] : []),
       AbortSignal.timeout(duration),
     ]);
+    preparingConversations.add(key);
+    let externalTools: readonly ExternalMcpCallable[];
+    try {
+      externalTools =
+        (await this.options.externalMcp?.({ ...ctx, abortSignal: signal }, scenario.id)) ?? [];
+    } finally {
+      preparingConversations.delete(key);
+    }
+    const manifest = buildGatewayCallableManifest(
+      request.tools,
+      scenario,
+      this.options.native === undefined ? [] : [this.options.native.entry],
+      externalTools,
+    );
     let detached = false;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const emit = (part: UIStreamPart) => {
@@ -130,13 +150,15 @@ export class DshChatRuntime implements ChatStreamRuntime {
     let adapter: DshEventAdapter | undefined;
     let runtimeStopped = false;
     let startupTerminal: string | undefined;
-    const authorize: GatewayAuthorizer = async () => {
+    const authorize: GatewayAuthorizer = async ({ tool }) => {
       if (
         signal.aborted ||
         Date.now() >= expiresAt ||
         (this.options.authorized !== undefined && !(await this.options.authorized()))
       )
         return denied();
+      const external = externalTools.find((entry) => entry.callable.name === tool.name);
+      if (external && !(await external.authorized())) return denied();
       return null;
     };
     const proxy = createDshRunProxy({
@@ -381,6 +403,17 @@ export const createDshChatRuntimeFromStore = (
       nodePath,
       hostEntry,
       cwd,
+      ...(env.LUOOME_EXPOSE_EXTERNAL !== 'true'
+        ? {}
+        : {
+            externalMcp: (context: ToolContext, scenario: string) =>
+              discoverExternalMcpTools(
+                env.LUOOME_MCP_CONFIG ??
+                  join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'mcp-servers.json'),
+                context,
+                scenario,
+              ),
+          }),
       model: {
         endpoint,
         model: view.model,
