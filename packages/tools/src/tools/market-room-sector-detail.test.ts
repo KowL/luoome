@@ -151,9 +151,12 @@ const execute = async (ctx: ToolContext, input: Partial<GetMarketRoomSectorDetai
   return result.data.detail;
 };
 
-const publishMarketDay = async (ctx: ToolContext): Promise<void> => {
+const publishMarketDay = async (
+  ctx: ToolContext,
+  itemsAt: (pointIndex: number) => readonly MarketSnapshotItem[] = marketDayItems,
+): Promise<void> => {
   for (const [index, point] of MARKET_DAY_POINTS.entries()) {
-    const items = marketDayItems(index);
+    const items = itemsAt(index);
     await ctx.repos.marketSnapshotBatch.publish(
       buildMarketSnapshotBatch({
         sampledAt: point.at,
@@ -227,7 +230,18 @@ describe('get_market_room_sector_detail', () => {
   it('对照板块并列序列并标出领先顺序变化时点，未收录板块进入未解析清单', async () => {
     const { ctx } = await contextAt(() => MARKET_DAY_POINTS[5]?.at ?? NOW);
     await seedCatalog(ctx.repos);
-    await publishMarketDay(ctx);
+    // 通用夹具只有日涨幅接力；早盘额外抬升，才能在首样本归一化后形成真实交叉。
+    await publishMarketDay(ctx, (index) =>
+      marketDayItems(index).map((item) => {
+        if ((index !== 1 && index !== 2) || !LEADERS.includes(item.id)) return item;
+        return {
+          ...item,
+          close: Math.round(requireValue(item.close) * 1.03 * 100) / 100,
+          changePct:
+            Math.round(((1 + requireValue(item.changePct) / 100) * 1.03 - 1) * 10_000) / 100,
+        };
+      }),
+    );
     const leaders = await sectorIdOf(ctx, '领涨组');
     const followers = await sectorIdOf(ctx, '接力组');
     const overlap = await sectorIdOf(ctx, '重叠概念');
@@ -242,10 +256,44 @@ describe('get_market_room_sector_detail', () => {
     expect(detail.unresolvedSectorIds).toEqual(['missing-sector']);
     expect(detail.leaderOrder).toHaveLength(6);
     expect(detail.leaderOrder.some((point) => point.reordered)).toBe(true);
+    const early = requireValue(detail.leaderOrder[1]);
+    const handoff = requireValue(detail.leaderOrder[3]);
+    expect(early.entries.map((entry) => entry.name)).toEqual(['领涨组', '重叠概念', '接力组']);
+    expect(handoff.entries.map((entry) => entry.name)).toEqual(['接力组', '重叠概念', '领涨组']);
+    expect(handoff.reordered).toBe(true);
+    expect(handoff.previousOrder).toEqual([leaders, overlap, followers]);
+
     const last = detail.leaderOrder.at(-1);
     expect(last?.entries[0]?.name).toBe('接力组');
     expect(detail.notes.join(' ')).toContain('comparison_unresolved');
     expect(detail.notes.join(' ')).toContain('不产出事件');
+  });
+
+  it('日涨幅接力不等于归一化走势换位，接力组从首个可比较时点起始终领先时不误报交叉', async () => {
+    const { ctx } = await contextAt(() => MARKET_DAY_POINTS[5]?.at ?? NOW);
+    await seedCatalog(ctx.repos);
+    await publishMarketDay(ctx);
+    const leaders = await sectorIdOf(ctx, '领涨组');
+    const followers = await sectorIdOf(ctx, '接力组');
+    const detail = await execute(ctx, { sectorId: leaders, compareSectorIds: [followers] });
+    const dayChanges = (index: number, stockIds: readonly string[]) =>
+      marketDayItems(index)
+        .filter((item) => stockIds.includes(item.id))
+        .map((item) => requireValue(item.changePct));
+    expect(Math.min(...dayChanges(0, LEADERS))).toBeGreaterThan(
+      Math.max(...dayChanges(0, FOLLOWERS)),
+    );
+    expect(Math.max(...dayChanges(5, LEADERS))).toBeLessThan(Math.min(...dayChanges(5, FOLLOWERS)));
+    const leaderTrend = requireValue(detail.trend);
+    const followerTrend = requireValue(detail.comparisons[0]);
+    expect(leaderTrend.points[0]?.value).toBe(100);
+    expect(followerTrend.points[0]?.value).toBe(100);
+    for (let index = 1; index < MARKET_DAY_POINTS.length; index++) {
+      expect(requireValue(leaderTrend.points[index]?.value)).toBeLessThan(100);
+      expect(requireValue(followerTrend.points[index]?.value)).toBeGreaterThan(100);
+      expect(detail.leaderOrder[index]?.entries[0]?.sectorId).toBe(followers);
+    }
+    expect(detail.leaderOrder.slice(2).every((point) => !point.reordered)).toBe(true);
   });
 
   it('给定 at 只使用该时点及之前的批次，走势与领先顺序同步截断', async () => {
