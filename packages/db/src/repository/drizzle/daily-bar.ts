@@ -9,8 +9,8 @@ import {
 } from '@luoome/core';
 import { and, asc, desc, eq, gt, gte, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { adjustmentFactors, dailyBars, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type BarRow = typeof dailyBars.$inferSelect;
 
@@ -71,7 +71,10 @@ const toProvisionalBar = (row: BarRow): DailyBar =>
  * qfq 按当时因子还原成原始价，`findInRange`/`latestBefore` 再投影回 qfq。调用方只看到 qfq。
  */
 export class DrizzleDailyBarRepository implements DailyBarRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   private loadFactors(stockId: string, since: Date): AdjustmentFactor[] {
     return this.db
@@ -98,80 +101,82 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
   }
 
   async saveMany(bars: readonly DailyBar[]): Promise<void> {
-    if (bars.length === 0) return;
-    const parsed = bars.map((bar) => DailyBarSchema.parse(bar));
-    const byStock = new Map<string, DailyBar[]>();
-    for (const bar of parsed) {
-      const existing = byStock.get(bar.stockId);
-      if (existing === undefined) byStock.set(bar.stockId, [bar]);
-      else existing.push(bar);
-    }
-    const factorsInitialized = this.hasAnyFactor();
-    const rows: (typeof dailyBars.$inferInsert)[] = [];
-    for (const [stockId, stockBars] of byStock) {
-      const qfqBars = stockBars.filter((bar) => bar.sourceAdjFactor === undefined);
-      const earliest = Math.min(...qfqBars.map((bar) => bar.date.getTime()));
-      const factors = qfqBars.length === 0 ? [] : this.loadFactors(stockId, new Date(earliest));
-      for (const bar of stockBars) {
-        const toRaw = (factor: number) => ({
-          stockId: bar.stockId,
-          date: bar.date,
-          open: money(bar.open / factor),
-          high: money(bar.high / factor),
-          low: money(bar.low / factor),
-          close: money(bar.close / factor),
-          volume: bar.volume,
-          legacyAdjFactor: 1,
-          adjustment: 'raw' as const,
-          sourceAdjFactor: bar.sourceAdjFactor ?? null,
-          source: bar.source,
-        });
-        if (bar.sourceAdjFactor !== undefined) {
-          rows.push(toRaw(bar.sourceAdjFactor));
-          continue;
-        }
-        // 因子表未初始化时不能假设 cum=1：qfq 原值缓存，等 dump 的原始价覆盖。
-        if (!factorsInitialized) {
-          rows.push({
+    return this.writes.transaction(this.db, () => {
+      if (bars.length === 0) return;
+      const parsed = bars.map((bar) => DailyBarSchema.parse(bar));
+      const byStock = new Map<string, DailyBar[]>();
+      for (const bar of parsed) {
+        const existing = byStock.get(bar.stockId);
+        if (existing === undefined) byStock.set(bar.stockId, [bar]);
+        else existing.push(bar);
+      }
+      const factorsInitialized = this.hasAnyFactor();
+      const rows: (typeof dailyBars.$inferInsert)[] = [];
+      for (const [stockId, stockBars] of byStock) {
+        const qfqBars = stockBars.filter((bar) => bar.sourceAdjFactor === undefined);
+        const earliest = Math.min(...qfqBars.map((bar) => bar.date.getTime()));
+        const factors = qfqBars.length === 0 ? [] : this.loadFactors(stockId, new Date(earliest));
+        for (const bar of stockBars) {
+          const toRaw = (factor: number) => ({
             stockId: bar.stockId,
             date: bar.date,
-            open: money(bar.open),
-            high: money(bar.high),
-            low: money(bar.low),
-            close: money(bar.close),
+            open: money(bar.open / factor),
+            high: money(bar.high / factor),
+            low: money(bar.low / factor),
+            close: money(bar.close / factor),
             volume: bar.volume,
             legacyAdjFactor: 1,
-            adjustment: 'qfq',
-            sourceAdjFactor: null,
+            adjustment: 'raw' as const,
+            sourceAdjFactor: bar.sourceAdjFactor ?? null,
             source: bar.source,
           });
-          continue;
+          if (bar.sourceAdjFactor !== undefined) {
+            rows.push(toRaw(bar.sourceAdjFactor));
+            continue;
+          }
+          // 因子表未初始化时不能假设 cum=1：qfq 原值缓存，等 dump 的原始价覆盖。
+          if (!factorsInitialized) {
+            rows.push({
+              stockId: bar.stockId,
+              date: bar.date,
+              open: money(bar.open),
+              high: money(bar.high),
+              low: money(bar.low),
+              close: money(bar.close),
+              volume: bar.volume,
+              legacyAdjFactor: 1,
+              adjustment: 'qfq',
+              sourceAdjFactor: null,
+              source: bar.source,
+            });
+            continue;
+          }
+          rows.push(toRaw(cumulativeAdjustmentFactor(factors, bar.date)));
         }
-        rows.push(toRaw(cumulativeAdjustmentFactor(factors, bar.date)));
       }
-    }
-    // 批量 upsert：set 用 SQLite excluded.<column> 引用「本次 VALUES 里对应行的值」，
-    // 冲突时每个 (stockId, date) 各自更新自己的 OHLCV / source；按 500 行分块控制绑定参数。
-    for (let index = 0; index < rows.length; index += 500) {
-      this.db
-        .insert(dailyBars)
-        .values(rows.slice(index, index + 500))
-        .onConflictDoUpdate({
-          target: [dailyBars.stockId, dailyBars.date],
-          set: {
-            open: sql`excluded."open"`,
-            high: sql`excluded."high"`,
-            low: sql`excluded."low"`,
-            close: sql`excluded."close"`,
-            volume: sql`excluded."volume"`,
-            legacyAdjFactor: sql`excluded."adj_factor"`,
-            adjustment: sql`excluded."adjustment"`,
-            sourceAdjFactor: sql`excluded."source_adj_factor"`,
-            source: sql`excluded."source"`,
-          },
-        })
-        .run();
-    }
+      // 批量 upsert：set 用 SQLite excluded.<column> 引用「本次 VALUES 里对应行的值」，
+      // 冲突时每个 (stockId, date) 各自更新自己的 OHLCV / source；按 500 行分块控制绑定参数。
+      for (let index = 0; index < rows.length; index += 500) {
+        this.db
+          .insert(dailyBars)
+          .values(rows.slice(index, index + 500))
+          .onConflictDoUpdate({
+            target: [dailyBars.stockId, dailyBars.date],
+            set: {
+              open: sql`excluded."open"`,
+              high: sql`excluded."high"`,
+              low: sql`excluded."low"`,
+              close: sql`excluded."close"`,
+              volume: sql`excluded."volume"`,
+              legacyAdjFactor: sql`excluded."adj_factor"`,
+              adjustment: sql`excluded."adjustment"`,
+              sourceAdjFactor: sql`excluded."source_adj_factor"`,
+              source: sql`excluded."source"`,
+            },
+          })
+          .run();
+      }
+    });
   }
 
   async findInRange(stockId: string, from: Date, to: Date): Promise<DailyBar[]> {
@@ -214,44 +219,46 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
   }
 
   async saveRawMany(bars: readonly RawDailyBar[]): Promise<void> {
-    if (bars.length === 0) return;
-    const rows = bars.map((input) => {
-      const bar = RawDailyBarSchema.parse(input);
-      return {
-        stockId: bar.stockId,
-        date: bar.date,
-        open: money(bar.open),
-        high: money(bar.high),
-        low: money(bar.low),
-        close: money(bar.close),
-        volume: bar.volume,
-        legacyAdjFactor: 1,
-        adjustment: 'raw' as const,
-        sourceAdjFactor: null,
-        source: bar.source,
-      };
+    return this.writes.transaction(this.db, () => {
+      if (bars.length === 0) return;
+      const rows = bars.map((input) => {
+        const bar = RawDailyBarSchema.parse(input);
+        return {
+          stockId: bar.stockId,
+          date: bar.date,
+          open: money(bar.open),
+          high: money(bar.high),
+          low: money(bar.low),
+          close: money(bar.close),
+          volume: bar.volume,
+          legacyAdjFactor: 1,
+          adjustment: 'raw' as const,
+          sourceAdjFactor: null,
+          source: bar.source,
+        };
+      });
+      // 单条 INSERT 的绑定参数上限是 32766，按 500 行分块（500 × 11 列）。
+      for (let index = 0; index < rows.length; index += 500) {
+        this.db
+          .insert(dailyBars)
+          .values(rows.slice(index, index + 500))
+          .onConflictDoUpdate({
+            target: [dailyBars.stockId, dailyBars.date],
+            set: {
+              open: sql`excluded."open"`,
+              high: sql`excluded."high"`,
+              low: sql`excluded."low"`,
+              close: sql`excluded."close"`,
+              volume: sql`excluded."volume"`,
+              legacyAdjFactor: sql`excluded."adj_factor"`,
+              adjustment: sql`excluded."adjustment"`,
+              sourceAdjFactor: sql`excluded."source_adj_factor"`,
+              source: sql`excluded."source"`,
+            },
+          })
+          .run();
+      }
     });
-    // 单条 INSERT 的绑定参数上限是 32766，按 500 行分块（500 × 11 列）。
-    for (let index = 0; index < rows.length; index += 500) {
-      this.db
-        .insert(dailyBars)
-        .values(rows.slice(index, index + 500))
-        .onConflictDoUpdate({
-          target: [dailyBars.stockId, dailyBars.date],
-          set: {
-            open: sql`excluded."open"`,
-            high: sql`excluded."high"`,
-            low: sql`excluded."low"`,
-            close: sql`excluded."close"`,
-            volume: sql`excluded."volume"`,
-            legacyAdjFactor: sql`excluded."adj_factor"`,
-            adjustment: sql`excluded."adjustment"`,
-            sourceAdjFactor: sql`excluded."source_adj_factor"`,
-            source: sql`excluded."source"`,
-          },
-        })
-        .run();
-    }
   }
 
   async latestRawBefore(stockId: string, to: Date): Promise<RawDailyBar | null> {
@@ -283,15 +290,17 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
   }
 
   async removeInRange(stockId: string, before: Date): Promise<number> {
-    const beforeRows = this.db
-      .select({ stockId: dailyBars.stockId, date: dailyBars.date })
-      .from(dailyBars)
-      .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, before)))
-      .all();
-    this.db
-      .delete(dailyBars)
-      .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, before)))
-      .run();
-    return beforeRows.length;
+    return this.writes.transaction(this.db, () => {
+      const beforeRows = this.db
+        .select({ stockId: dailyBars.stockId, date: dailyBars.date })
+        .from(dailyBars)
+        .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, before)))
+        .all();
+      this.db
+        .delete(dailyBars)
+        .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, before)))
+        .run();
+      return beforeRows.length;
+    });
   }
 }

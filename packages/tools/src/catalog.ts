@@ -218,7 +218,7 @@ export type ToolOwner =
 
 type CatalogEntry = {
   readonly owner: ToolOwner;
-  readonly execution?: 'p1';
+  readonly execution?: 'p1' | 'p2';
   readonly optionalPlugins?: readonly import('@luoome/core').ManagedPluginId[];
   readonly modes?: Readonly<
     Record<string, { readonly data: readonly string[]; readonly conditional?: readonly string[] }>
@@ -289,7 +289,7 @@ export const toolCatalog = {
     owner: 'business.market-data',
     tool: computeIndicatorsTool,
     agent: true,
-    dependencies: ['market:daily-bars'],
+    dependencies: [],
   },
   list_strategies: {
     owner: 'shared-query',
@@ -438,6 +438,7 @@ export const toolCatalog = {
     dependencies: ['market:quote', 'market:daily-bars', 'market:intraday-minutes'],
   },
   collect_market_snapshot: {
+    execution: 'p2',
     owner: 'task.collect-market-snapshot',
     tool: collectMarketSnapshotTool,
     agent: true,
@@ -468,6 +469,7 @@ export const toolCatalog = {
     dependencies: [],
   },
   sync_sector_catalog: {
+    execution: 'p2',
     owner: 'task.sync-sector-catalog',
     tool: syncSectorCatalogTool,
     agent: true,
@@ -794,20 +796,32 @@ export const toolCatalog = {
     tool: subscribeStrategyToWatchlistTool,
     agent: false,
   },
-  sync_daily_bars: { owner: 'task.daily-bars-sync', tool: syncDailyBarsTool, agent: false },
+  sync_daily_bars: {
+    execution: 'p2',
+    owner: 'task.daily-bars-sync',
+    tool: syncDailyBarsTool,
+    agent: false,
+  },
   sync_limit_up_board_history: {
+    execution: 'p2',
     owner: 'task.sync-limit-up-board-history',
     tool: syncLimitUpBoardHistoryTool,
     agent: false,
   },
-  sync_market_dump: { owner: 'task.sync-market-dump', tool: syncMarketDumpTool, agent: false },
-  sync_quotes: { owner: 'task.sync-quotes', tool: syncQuotesTool, agent: false },
+  sync_market_dump: {
+    execution: 'p2',
+    owner: 'task.sync-market-dump',
+    tool: syncMarketDumpTool,
+    agent: false,
+  },
+  sync_quotes: { execution: 'p2', owner: 'task.sync-quotes', tool: syncQuotesTool, agent: false },
   sync_research_vault: {
     owner: 'task.sync-research-vault',
     tool: syncResearchVaultTool,
     agent: false,
   },
   sync_stock_universe: {
+    execution: 'p2',
     owner: 'task.sync-stock-universe',
     tool: syncStockUniverseTool,
     agent: false,

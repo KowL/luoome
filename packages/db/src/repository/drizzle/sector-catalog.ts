@@ -15,7 +15,6 @@ import {
 } from '@luoome/core';
 import { and, asc, eq, gt, inArray, isNull, lte, or, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import {
   type Schema,
   sectorCatalogEntries,
@@ -23,6 +22,7 @@ import {
   sectorMemberships,
   sectorSyncRuns,
 } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type SectorRow = typeof sectorCatalogEntries.$inferSelect;
 type MembershipRow = typeof sectorMemberships.$inferSelect;
@@ -77,7 +77,10 @@ const summaryFromRun = (row: SyncRunRow): SectorSyncApplySummary => ({
 });
 
 export class DrizzleSectorCatalogRepository implements SectorCatalogRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async applySync(input: SectorSyncApplyInput): Promise<SectorSyncApplySummary> {
     const replay = this.db
@@ -94,7 +97,7 @@ export class DrizzleSectorCatalogRepository implements SectorCatalogRepository {
       (status) => SectorStockStatusObservationSchema.parse(status),
     );
 
-    return this.db.transaction((tx) => {
+    return this.writes.transaction(this.db, (tx) => {
       const appliedAt = input.appliedAt;
       const statusByStock = new Map(stockStatuses.map(({ stockId, status }) => [stockId, status]));
       const previousRows = tx

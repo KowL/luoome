@@ -226,18 +226,27 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
         sharedSources?.eastmoney === undefined
           ? {}
           : { sources: { eastmoney: sharedSources.eastmoney } };
-      const market = createMarketAdapterFromEnv(candidateEnv, {
-        clock: ctxRef.current.clock,
-        logger: ctxRef.current.logger,
-        ...sharedDeps,
-      });
-      const ashareSentiment = createAShareSentimentManagerFromEnv(candidateEnv, {
-        clock: ctxRef.current.clock,
-        logger: ctxRef.current.logger,
-        market,
-        ...sharedDeps,
-      });
+      const providerRuntime = sharedSources?.providerRuntime;
+      const build = () => {
+        const market = createMarketAdapterFromEnv(candidateEnv, {
+          ...(providerRuntime === undefined ? {} : { providerRuntime }),
+          clock: ctxRef.current.clock,
+          logger: ctxRef.current.logger,
+          ...sharedDeps,
+        });
+        const ashareSentiment = createAShareSentimentManagerFromEnv(candidateEnv, {
+          ...(providerRuntime === undefined ? {} : { providerRuntime }),
+          clock: ctxRef.current.clock,
+          logger: ctxRef.current.logger,
+          market,
+          ...sharedDeps,
+        });
+        return { market, ashareSentiment };
+      };
+      const candidate = providerRuntime?.prepare(build) ?? { value: build(), activate() {} };
       const saved = marketSettingsStore.save(input);
+      candidate.activate();
+      const { market, ashareSentiment } = candidate.value;
       ctxRef.current = {
         ...ctxRef.current,
         adapters: {

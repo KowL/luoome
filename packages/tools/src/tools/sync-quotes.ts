@@ -24,6 +24,7 @@ export const syncQuotesTool = defineTool({
   name: 'sync_quotes',
   description: '同步账户下所有活跃持仓的实时行情并写 quote_snapshot',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: SyncQuotesInput,
   output: SyncQuotesOutput,
   handler: async (input, ctx) => {

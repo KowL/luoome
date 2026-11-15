@@ -43,6 +43,11 @@ export const startMarketBatchScheduler = (
 
   const tick = async (): Promise<void> => {
     if (stopped || running || !isMarketBatchSession(ctx.clock())) return;
+    if (
+      ctx.executionPolicy !== undefined &&
+      !ctx.executionPolicy.acquire('task.collect-market-snapshot').ok
+    )
+      return;
     running = true;
     try {
       const result = await collect();

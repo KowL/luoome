@@ -9,8 +9,8 @@ import {
 } from '@luoome/core';
 import { and, asc, desc, eq, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { limitUpLadderSamples, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type SampleRow = typeof limitUpLadderSamples.$inferSelect;
 
@@ -31,28 +31,33 @@ const toSample = (row: SampleRow): LimitUpLadderSample => {
 };
 
 export class DrizzleLimitUpLadderSampleRepository implements LimitUpLadderSampleRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(sample: LimitUpLadderSample): Promise<LimitUpLadderSamplePublishResult> {
     const parsed = LimitUpLadderSampleSchema.parse(sample);
     assertLimitUpLadderSampleInvariants(parsed);
     ladderOfSample(parsed);
-    const inserted = this.db
-      .insert(limitUpLadderSamples)
-      .values({
-        id: parsed.id,
-        tradingDate: parsed.tradingDate,
-        source: parsed.source,
-        sampledAt: parsed.sampledAt,
-        total: parsed.total,
-        maxLevel: parsed.maxLevel,
-        levels: parsed.levels,
-        warnings: parsed.warnings,
-        asOf: parsed.asOf,
-      })
-      .onConflictDoNothing({ target: limitUpLadderSamples.id })
-      .returning({ id: limitUpLadderSamples.id })
-      .all();
+    const inserted = this.writes.transaction(this.db, () =>
+      this.db
+        .insert(limitUpLadderSamples)
+        .values({
+          id: parsed.id,
+          tradingDate: parsed.tradingDate,
+          source: parsed.source,
+          sampledAt: parsed.sampledAt,
+          total: parsed.total,
+          maxLevel: parsed.maxLevel,
+          levels: parsed.levels,
+          warnings: parsed.warnings,
+          asOf: parsed.asOf,
+        })
+        .onConflictDoNothing({ target: limitUpLadderSamples.id })
+        .returning({ id: limitUpLadderSamples.id })
+        .all(),
+    );
     const saved = await this.findById(parsed.id);
     if (saved === null) {
       throw new Error('limit up ladder sample save did not produce a row');

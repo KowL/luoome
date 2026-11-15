@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-
 import type { Holiday, Logger, NorthboundFlowManagerLike } from '@luoome/core';
 import {
   BUILTIN_HOLIDAYS,
@@ -10,8 +9,8 @@ import {
   parseHolidayObject,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { EastmoneySource } from '../eastmoney/source.js';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { NorthboundFlowManager } from './manager.js';
 import type { NorthboundFlowCapabilityMap } from './types.js';
@@ -27,6 +26,8 @@ import type { NorthboundFlowCapabilityMap } from './types.js';
  */
 
 export interface CreateNorthboundFlowManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -59,6 +60,25 @@ export const createNorthboundFlowManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateNorthboundFlowManagerDeps,
 ): NorthboundFlowManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('northbound-flow', northboundFlowSourcesFromEnv(env), (active, guard) =>
+      buildCreateNorthboundFlowManagerFromEnv(
+        { ...env, LUOOME_NORTHBOUND_FLOW_SOURCES: active.join(',') },
+        {
+          ...deps,
+          guard,
+          fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
+        },
+      ),
+    );
+  return buildCreateNorthboundFlowManagerFromEnv(env, deps);
+};
+
+const buildCreateNorthboundFlowManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateNorthboundFlowManagerDeps,
+): NorthboundFlowManagerLike => {
   const clock = deps.clock ?? (() => new Date());
   const order = northboundFlowSourcesFromEnv(env);
   const eastmoney =
@@ -76,7 +96,7 @@ export const createNorthboundFlowManagerFromEnv = (
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
   });
-  const registry = new SourceRegistry<NorthboundFlowCapabilityMap>(bindings, clock);
+  const registry = new SourceRegistry<NorthboundFlowCapabilityMap>(bindings, clock, deps.guard);
 
   return new NorthboundFlowManager({
     registry,

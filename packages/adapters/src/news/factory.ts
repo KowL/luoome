@@ -1,7 +1,7 @@
 import type { Logger, NewsManagerLike } from '@luoome/core';
 import { z } from 'zod';
-
 import { EastmoneySource } from '../eastmoney/source.js';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { TenjqkaNewsSource } from './10jqka.js';
 import { NewsManager } from './manager.js';
@@ -18,6 +18,8 @@ import type { NewsCapabilityMap } from './types.js';
  */
 
 export interface CreateNewsManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -50,6 +52,21 @@ export const createNewsManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateNewsManagerDeps,
 ): NewsManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('news', newsSourcesFromEnv(env), (active, guard) =>
+      buildCreateNewsManagerFromEnv(
+        { ...env, LUOOME_NEWS_SOURCES: active.join(',') },
+        { ...deps, guard, fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl) },
+      ),
+    );
+  return buildCreateNewsManagerFromEnv(env, deps);
+};
+
+const buildCreateNewsManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateNewsManagerDeps,
+): NewsManagerLike => {
   const clock = deps.clock ?? (() => new Date());
   const order = newsSourcesFromEnv(env);
   const eastmoney =
@@ -70,7 +87,7 @@ export const createNewsManagerFromEnv = (
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
   });
-  const registry = new SourceRegistry<NewsCapabilityMap>(bindings, clock);
+  const registry = new SourceRegistry<NewsCapabilityMap>(bindings, clock, deps.guard);
 
   return new NewsManager({
     registry,

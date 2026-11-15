@@ -3,6 +3,7 @@ import {
   dateInShanghai,
   MinuteBarIntervalSchema,
   MinuteBarSchema,
+  PluginExecutionDenied,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -13,6 +14,7 @@ const RETENTION_DAYS = 30;
 
 const MinuteBarWarningSchema = z.enum([
   'unsupported-capability',
+  'task-disabled',
   'provider-error',
   'no-data',
   'local-fallback',
@@ -69,11 +71,31 @@ export const getStockMinuteBarsTool = defineTool({
     const warnings = new Set<z.infer<typeof MinuteBarWarningSchema>>();
     let remoteBars: Awaited<ReturnType<typeof ctx.adapters.market.fetchMinuteBars>> | null = null;
 
-    if (canFetchCurrent) {
+    const admission = ctx.executionPolicy?.acquire('task.minute-bars-sync');
+    const checkTask = () => {
+      if (
+        admission !== undefined &&
+        (!admission.ok || !ctx.executionPolicy?.valid(admission.permit))
+      )
+        throw new PluginExecutionDenied('plugin:task.minute-bars-sync');
+    };
+    if (canFetchCurrent && admission?.ok === false) warnings.add('task-disabled');
+    if (canFetchCurrent && admission?.ok !== false) {
       try {
-        remoteBars = await ctx.adapters.market.fetchMinuteBars(input.stockId, input.interval);
+        checkTask();
+        const fetchCurrent = () =>
+          ctx.adapters.market.fetchMinuteBars(input.stockId, input.interval);
+        remoteBars = await (ctx.dataScope === undefined
+          ? fetchCurrent()
+          : ctx.dataScope.run(
+              async () => fetchCurrent(),
+              checkTask,
+              JSON.stringify(['task.minute-bars-sync', admission]),
+            ));
+        checkTask();
         if (remoteBars.length === 0) warnings.add('no-data');
       } catch (error) {
+        remoteBars = null;
         const cause = error instanceof Error ? error.message : String(error);
         warnings.add(
           cause.includes('unsupported_capability') ? 'unsupported-capability' : 'provider-error',
@@ -84,7 +106,7 @@ export const getStockMinuteBarsTool = defineTool({
           error: cause,
         });
       }
-    } else {
+    } else if (!canFetchCurrent) {
       warnings.add('historical-provider-unavailable');
     }
 
@@ -93,18 +115,25 @@ export const getStockMinuteBarsTool = defineTool({
       if (input.date !== undefined && normalized.date !== input.date) {
         warnings.add('source-date-mismatch');
       } else if (normalized.bars.length > 0) {
-        await ctx.repos.minuteBar.saveMany(normalized.bars);
-        await ctx.repos.minuteBar.removeBefore(
-          new Date(ctx.clock().getTime() - RETENTION_DAYS * 86_400_000),
-        );
-        return buildOutput({
-          stockId: input.stockId,
-          interval: input.interval,
-          normalized,
-          retrieval: 'live',
-          today,
-          warnings,
-        });
+        try {
+          await ctx.repos.withWriteGuard(checkTask, async () => {
+            await ctx.repos.minuteBar.saveMany(normalized.bars);
+            await ctx.repos.minuteBar.removeBefore(
+              new Date(ctx.clock().getTime() - RETENTION_DAYS * 86_400_000),
+            );
+          });
+          return buildOutput({
+            stockId: input.stockId,
+            interval: input.interval,
+            normalized,
+            retrieval: 'live',
+            today,
+            warnings,
+          });
+        } catch (error) {
+          if (!(error instanceof PluginExecutionDenied)) throw error;
+          warnings.add('local-fallback');
+        }
       }
     }
 

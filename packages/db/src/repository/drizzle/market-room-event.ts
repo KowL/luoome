@@ -8,8 +8,8 @@ import {
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { marketRoomEvents, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type EventRow = typeof marketRoomEvents.$inferSelect;
 
@@ -37,32 +37,37 @@ const toEvent = (row: EventRow): MarketRoomEvent => {
 };
 
 export class DrizzleMarketRoomEventRepository implements MarketRoomEventRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(event: MarketRoomEvent): Promise<MarketRoomEventSaveResult> {
     const parsed = MarketRoomEventSchema.parse(event);
     assertMarketRoomEventInvariants(parsed);
-    const inserted = this.db
-      .insert(marketRoomEvents)
-      .values({
-        id: parsed.id,
-        tradingDate: parsed.tradingDate,
-        kind: parsed.kind,
-        sectorId: parsed.sector.sectorId,
-        sectorKind: parsed.sector.kind,
-        vendorCode: parsed.sector.vendorCode,
-        sectorName: parsed.sector.name,
-        sampledAt: parsed.sampledAt,
-        previousSampledAt: parsed.previousSampledAt,
-        status: parsed.status,
-        thresholds: parsed.thresholds,
-        evidence: parsed.evidence,
-        verification: parsed.verification,
-        recordedAt: parsed.recordedAt,
-      })
-      .onConflictDoNothing({ target: marketRoomEvents.id })
-      .returning({ id: marketRoomEvents.id })
-      .all();
+    const inserted = this.writes.transaction(this.db, () =>
+      this.db
+        .insert(marketRoomEvents)
+        .values({
+          id: parsed.id,
+          tradingDate: parsed.tradingDate,
+          kind: parsed.kind,
+          sectorId: parsed.sector.sectorId,
+          sectorKind: parsed.sector.kind,
+          vendorCode: parsed.sector.vendorCode,
+          sectorName: parsed.sector.name,
+          sampledAt: parsed.sampledAt,
+          previousSampledAt: parsed.previousSampledAt,
+          status: parsed.status,
+          thresholds: parsed.thresholds,
+          evidence: parsed.evidence,
+          verification: parsed.verification,
+          recordedAt: parsed.recordedAt,
+        })
+        .onConflictDoNothing({ target: marketRoomEvents.id })
+        .returning({ id: marketRoomEvents.id })
+        .all(),
+    );
     const saved = await this.findById(parsed.id);
     if (saved === null) {
       throw new Error('market room event save did not produce a row');

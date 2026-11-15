@@ -73,7 +73,11 @@ export const createTestPluginControl = (home: string) => {
   const store = new PluginConfigStore(join(home, 'plugins.json'));
   return {
     store,
-    initial: store.initialize(),
+    initial: (() => {
+      let config = store.initialize();
+      for (const id of TASK_PLUGIN_IDS) config = store.set(id, true, config);
+      return config;
+    })(),
     executionPolicy: createPluginExecutionPolicy(
       store,
       new Set(['read', 'advice', 'write', 'external']),
@@ -260,3 +264,5 @@ export const recordAdviceOutcomeForTest = {
 
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
+
+import { TASK_PLUGIN_IDS } from '@luoome/core';

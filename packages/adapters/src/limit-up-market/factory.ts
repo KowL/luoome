@@ -1,8 +1,8 @@
 import type { LimitUpMarketManagerLike, Logger } from '@luoome/core';
 import { z } from 'zod';
-
 import { FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { FuyaoLimitUpMarketSource } from '../fuyao/limit-up-market.js';
+import type { ProviderRuntime } from '../plugins/provider-runtime.js';
 import { LimitUpMarketManager } from './manager.js';
 
 /**
@@ -14,6 +14,7 @@ import { LimitUpMarketManager } from './manager.js';
  */
 
 export interface CreateLimitUpMarketManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -27,6 +28,21 @@ const SourcesSchema = z.tuple([z.literal('fuyao')], {
 });
 
 export const createLimitUpMarketManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateLimitUpMarketManagerDeps,
+): LimitUpMarketManagerLike | undefined => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('limit-up-market', ['fuyao'], () =>
+      buildCreateLimitUpMarketManagerFromEnv(env, {
+        ...deps,
+        fetchImpl: runtime.fetchFor('fuyao', deps.fetchImpl),
+      }),
+    );
+  return buildCreateLimitUpMarketManagerFromEnv(env, deps);
+};
+
+const buildCreateLimitUpMarketManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateLimitUpMarketManagerDeps,
 ): LimitUpMarketManagerLike | undefined => {

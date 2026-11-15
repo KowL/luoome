@@ -1,7 +1,38 @@
 import type { ToolResult } from './types/result.js';
 import type { SideEffect } from './types/side-effect.js';
 
-export type ManagedPluginId = 'strategy.ai-insight';
+export const SOURCE_PLUGIN_IDS = [
+  'source.eastmoney',
+  'source.tencent',
+  'source.sina',
+  'source.tushare',
+  'source.fuyao',
+  'source.10jqka',
+] as const;
+export const TASK_PLUGIN_IDS = [
+  'task.daily-bars-sync',
+  'task.sync-stock-universe',
+  'task.collect-market-snapshot',
+  'task.sync-quotes',
+  'task.sync-market-dump',
+  'task.sync-sector-catalog',
+  'task.sync-limit-up-board-history',
+  'task.minute-bars-sync',
+] as const;
+export const MANAGED_PLUGIN_IDS = [
+  'strategy.ai-insight',
+  ...SOURCE_PLUGIN_IDS,
+  ...TASK_PLUGIN_IDS,
+] as const;
+export type ManagedPluginId = (typeof MANAGED_PLUGIN_IDS)[number];
+export interface DataExecutionScopeLike {
+  run<T>(
+    operation: (validate: () => void) => Promise<T>,
+    check?: (dependency?: ManagedPluginId) => void,
+    key?: string,
+  ): Promise<T>;
+}
+
 export type PluginBlockReason = 'plugin_disabled' | 'dependency_not_ready' | 'activation_revoked';
 
 export interface PluginPermit {
@@ -21,9 +52,17 @@ export interface PluginPolicyLike {
 
 export interface ToolExecutionPolicyLike extends PluginPolicyLike {
   bind(): ToolExecutionPolicyLike;
+  scopeKey(name: string): string;
+  assertTool(name: string, dependency?: ManagedPluginId): void;
   authorizeTool(
     name: string,
     input: unknown,
     requiredCapabilities: readonly SideEffect[],
   ): ToolResult<never> | null;
+}
+
+export class PluginExecutionDenied extends Error {
+  constructor(readonly required: string) {
+    super('plugin execution denied');
+  }
 }

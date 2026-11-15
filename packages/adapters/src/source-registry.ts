@@ -1,4 +1,5 @@
 import type { SourceErrorKind, SourceId, SourceStatus } from '@luoome/core';
+import type { ProviderGuard } from './plugins/provider-runtime.js';
 
 import { sourceErrorKindOf } from './source-error.js';
 
@@ -37,6 +38,8 @@ export type AnyBinding<M extends CapabilityMap> = {
 }[keyof M & string];
 
 export interface SourceHandle<M extends CapabilityMap, C extends keyof M & string> {
+  readonly scopeKey?: string;
+  readonly assertCurrent?: () => void;
   readonly capability: C;
   readonly source: SourceId;
   readonly coverage: readonly string[];
@@ -56,6 +59,7 @@ export class SourceRegistry<M extends CapabilityMap> {
   constructor(
     private readonly bindings: readonly AnyBinding<M>[],
     private readonly clock: () => Date,
+    private readonly guard?: ProviderGuard,
   ) {
     const keys = new Set<string>();
     for (const binding of bindings) {
@@ -78,15 +82,20 @@ export class SourceRegistry<M extends CapabilityMap> {
       return [
         {
           capability,
+          ...(this.guard === undefined
+            ? {}
+            : { scopeKey: this.guard.key, assertCurrent: this.guard.check }),
           source: typed.source,
           coverage: typed.coverage,
           execute: async (input: M[C]['request']): Promise<M[C]['result']> => {
+            this.guard?.check();
             const key = keyOf(typed.source, capability);
             const observation = this.observations.get(key) ?? {};
             observation.lastAttemptAt = this.clock();
             this.observations.set(key, observation);
             try {
               const result = await typed.execute(input);
+              this.guard?.check();
               const observed = typed.observationOf(result, input);
               if (observed.outcome === 'success') {
                 observation.lastSuccessAt = this.clock();
@@ -99,6 +108,7 @@ export class SourceRegistry<M extends CapabilityMap> {
               // ignored：仅保留 lastAttemptAt，不动成功 / 错误 / 数据时间
               return result;
             } catch (error) {
+              this.guard?.check();
               observation.lastErrorKind = sourceErrorKindOf(error);
               throw error;
             }

@@ -118,3 +118,41 @@ describe('盘中全市场批次调度', () => {
     expect(calls()).toBe(1);
   });
 });
+
+it('disabled collection tasks skip ticks and can resume without affecting local facts', async () => {
+  let enabled = false;
+  const ctx = await buildTestContext({ clock: () => shanghai('10:15:00') });
+  const existing = ctx.executionPolicy;
+  if (existing === undefined) throw new Error('missing test policy');
+  const scoped = {
+    ...ctx,
+    executionPolicy: {
+      ...existing,
+      acquire: (id: Parameters<typeof existing.acquire>[0]) =>
+        id === 'task.collect-market-snapshot' && !enabled
+          ? { ok: false as const, reason: 'plugin_disabled' as const }
+          : existing.acquire(id),
+    },
+  };
+  let calls = 0;
+  const handle = startMarketBatchScheduler(scoped, {
+    enabled: true,
+    startImmediately: false,
+    collect: async () => {
+      calls++;
+      return { ok: true, data: { created: true, batch, warnings: [] } };
+    },
+  });
+  try {
+    await handle.tick();
+    expect(calls).toBe(0);
+    enabled = true;
+    await handle.tick();
+    expect(calls).toBe(1);
+    enabled = false;
+    await handle.tick();
+    expect(calls).toBe(1);
+  } finally {
+    handle.stop();
+  }
+});

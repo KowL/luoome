@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -29,6 +30,7 @@ export interface FuyaoMarketDumpAdapterOptions {
   /** 本地落盘目录（通常是 $LUOOME_HOME/market-dumps）。 */
   readonly dir: string;
   readonly fetchImpl?: typeof fetch;
+  readonly beforePublish?: () => void;
   readonly clock?: () => Date;
 }
 
@@ -110,8 +112,10 @@ export class FuyaoMarketDumpAdapter {
     if (bytes.byteLength === 0) {
       throw new SourceExecutionError('invalid_payload', `market-dump ${kind}: 下载内容为空`);
     }
+    this.options.beforePublish?.();
     mkdirSync(this.options.dir, { recursive: true });
-    const localPath = join(this.options.dir, `${ticket.dumpId}.parquet`);
+    // 多宿主可能同时下载同名 dump；隔离文件名，避免校验后的进程切换让旧文件覆盖新文件。
+    const localPath = join(this.options.dir, `${ticket.dumpId}.${randomUUID()}.parquet`);
     writeFileSync(localPath, bytes);
     return { kind, dumpId: ticket.dumpId, localPath, bytes: bytes.byteLength };
   }

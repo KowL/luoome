@@ -29,6 +29,7 @@ export const syncStockUniverseTool = defineTool({
   name: 'sync_stock_universe',
   description: '从外部数据源拉取完整股票目录快照，校验后原子写入本地数据库',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: SyncStockUniverseInput,
   output: SyncStockUniverseOutput,
   handler: async (input, ctx) => {

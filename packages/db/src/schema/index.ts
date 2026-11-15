@@ -70,6 +70,17 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
+/** 公共行情请求缓存、租约与提供者配额，不存账户数据。 */
+export const publicMarketEntries = sqliteTable(
+  'public_market_entries',
+  {
+    key: text('key').primaryKey(),
+    value: text('value').notNull(),
+    retainUntil: integer('retain_until').notNull(),
+  },
+  (table) => [index('public_market_entries_retention_idx').on(table.retainUntil)],
+);
+
 /** 跨多表数据迁移登记；迁移逻辑由 repository-free runner 执行。 */
 export const schemaMigrations = sqliteTable('schema_migrations', {
   id: text('id').primaryKey(),
@@ -1364,6 +1375,7 @@ export const chatMessages = sqliteTable(
 );
 
 export const schema = {
+  publicMarketEntries,
   schemaMigrations,
   accounts,
   decisionReviews,

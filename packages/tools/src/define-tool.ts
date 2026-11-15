@@ -2,6 +2,7 @@ import {
   type AuditLoggerLike,
   InvariantError,
   type Logger,
+  PluginExecutionDenied,
   type SideEffect,
   type ToolContext,
   type ToolError,
@@ -175,6 +176,10 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
   auditCaller: (ctx: C) => string,
   authorize?: (input: I, ctx: C) => Promise<ToolResult<never> | null> | ToolResult<never> | null,
   prepareContext?: (ctx: C) => C,
+  runHandler?: (
+    ctx: C,
+    operation: () => Promise<O | ToolResult<never>>,
+  ) => Promise<O | ToolResult<never>>,
 ): TypedTool<I, O, C> => {
   const { name, description, sideEffect, input, output, handler } = definition;
   const requiredCapabilities = [
@@ -197,18 +202,20 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
       writeAudit(ctx, name, sideEffect, result, auditCaller(ctx));
     const failure = async (error: unknown): Promise<ToolResult<O>> => {
       const result: ToolResult<O> =
-        error instanceof InvariantError
-          ? {
-              ok: false,
-              error: { kind: 'invariant_violation', message: redactErrorText(error.message) },
-            }
-          : {
-              ok: false,
-              error: {
-                kind: 'internal',
-                cause: `tool "${name}": ${redactErrorText(error instanceof Error ? error.message : String(error))}`,
-              },
-            };
+        error instanceof PluginExecutionDenied
+          ? { ok: false, error: { kind: 'permission_denied', required: error.required } }
+          : error instanceof InvariantError
+            ? {
+                ok: false,
+                error: { kind: 'invariant_violation', message: redactErrorText(error.message) },
+              }
+            : {
+                ok: false,
+                error: {
+                  kind: 'internal',
+                  cause: `tool "${name}": ${redactErrorText(error instanceof Error ? error.message : String(error))}`,
+                },
+              };
       await audit(result);
       return result;
     };
@@ -239,7 +246,11 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
     let result: O | ToolResult<never>;
     try {
       const denied = await authorize?.(parsed.data, ctx);
-      result = denied ?? (await handler(parsed.data, ctx));
+      result =
+        denied ??
+        (await (runHandler === undefined
+          ? handler(parsed.data, ctx)
+          : runHandler(ctx, async () => handler(parsed.data, ctx))));
     } catch (error) {
       return failure(error);
     }
@@ -304,6 +315,14 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
       ...ctx,
       ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
     }),
+    (ctx, operation) =>
+      ctx.dataScope === undefined
+        ? operation()
+        : ctx.dataScope.run(
+            (validate) => ctx.repos.withWriteGuard(validate, operation),
+            (dependency) => ctx.executionPolicy?.assertTool(definition.name, dependency),
+            ctx.executionPolicy?.scopeKey(definition.name),
+          ),
   );
   return {
     ...tool,

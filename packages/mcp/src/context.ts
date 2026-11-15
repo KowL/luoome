@@ -26,14 +26,16 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  MarketRequestCoordinator,
+  marketRequestConfigFromEnv,
   PluginConfigStore,
+  ProviderRuntime,
   resolvePluginConfigPath,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
   type Logger,
-  type MarketDataAdapterLike,
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
@@ -88,42 +90,53 @@ export const createServerContext = async (
     const unavailable = async (): Promise<never> => {
       throw new Error('MCP 外部依赖未配置');
     };
-    const localMarket: MarketDataAdapterLike = {
-      name: 'market-unconfigured',
-      fetchQuote: unavailable,
-      batchQuote: unavailable,
-      fetchDailyBars: unavailable,
-      searchStocks: unavailable,
-      fetchIndexQuotes: unavailable,
-      fetchIntradayMinutes: unavailable,
-      fetchMinuteBars: unavailable,
-      fetchMarketSnapshot: unavailable,
-      marketSourceStatus: () => [],
-    };
     const accounts = await handle.repos.account.list();
     const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
     const now = (): Date => new Date();
     const researchVault = createResearchVaultAdapterFromEnv(env);
+    const plugins = new PluginConfigStore(resolvePluginConfigPath(env));
+    const providerRuntime = new ProviderRuntime(
+      plugins,
+      new MarketRequestCoordinator(handle.repos.publicMarket, marketRequestConfigFromEnv(env), () =>
+        now().getTime(),
+      ),
+      env.LUOOME_EXPOSE_EXTERNAL === 'true',
+    );
     // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与 sentiment factory（§4.6）
-    const sources = { eastmoney: new EastmoneySource({ clock: now }) };
-    const market = env.LUOOME_MARKET_PROVIDER?.trim()
-      ? createMarketAdapterFromEnv(env, { clock: now, logger, sources })
-      : localMarket;
+    const sources = {
+      eastmoney: new EastmoneySource({
+        clock: now,
+        fetchImpl: providerRuntime.fetchFor('eastmoney'),
+      }),
+    };
+    const market = createMarketAdapterFromEnv(env, {
+      providerRuntime,
+      clock: now,
+      logger,
+      sources,
+    });
     for (const status of market.marketSourceStatus()) {
       if (status.capabilityEnabled && status.configurationReady) {
         readyDependencies.add(`market:${status.dataset}`);
       }
     }
-    const deps = { clock: now, logger, sources };
+    const deps = { clock: now, logger, sources, providerRuntime };
     const limitUpMarket =
-      market === localMarket ? undefined : createLimitUpMarketManagerFromEnv(env, deps);
+      env.LUOOME_MARKET_PROVIDER !== 'real'
+        ? undefined
+        : createLimitUpMarketManagerFromEnv(env, deps);
     const dragonTigerFlow =
-      market === localMarket ? undefined : createDragonTigerFlowManagerFromEnv(env, deps);
+      env.LUOOME_MARKET_PROVIDER !== 'real'
+        ? undefined
+        : createDragonTigerFlowManagerFromEnv(env, deps);
     const marketIntel: NonNullable<ToolContext['adapters']['marketIntel']> =
-      market === localMarket
+      env.LUOOME_MARKET_PROVIDER !== 'real'
         ? {}
         : {
-            ashareSentiment: createAShareSentimentManagerFromEnv(env, { ...deps, market }),
+            ashareSentiment: createAShareSentimentManagerFromEnv(env, {
+              ...deps,
+              market,
+            }),
             limitUpLadder: createLimitUpLadderManagerFromEnv(env, deps),
             ...(limitUpMarket === undefined ? {} : { limitUpMarket }),
             dragonTiger: createDragonTigerManagerFromEnv(env, deps),
@@ -137,14 +150,12 @@ export const createServerContext = async (
     }
     if (researchVault) readyDependencies.add('researchVault');
     const sectorCatalog =
-      market === localMarket ? undefined : createSectorCatalogFromEnv(env, deps);
+      env.LUOOME_MARKET_PROVIDER !== 'real' ? undefined : createSectorCatalogFromEnv(env, deps);
     if (sectorCatalog) readyDependencies.add('sectorCatalog');
     const ctx = buildContext({
       repos: handle.repos,
-      executionPolicy: createPluginExecutionPolicy(
-        new PluginConfigStore(resolvePluginConfigPath(env)),
-        pluginAllowedSideEffects(env),
-      ),
+      dataScope: providerRuntime,
+      executionPolicy: createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(env)),
       adapters: {
         market,
         llm: ai?.llm ?? {
@@ -152,10 +163,11 @@ export const createServerContext = async (
           configurationReady: false,
           generate: unavailable,
         },
-        ...(market === localMarket
+        ...(env.LUOOME_MARKET_PROVIDER !== 'real'
           ? {}
           : {
               stockUniverse: createStockUniverseManagerFromEnv(env, {
+                providerRuntime,
                 clock: now,
                 logger,
               }),
@@ -176,7 +188,22 @@ export const createServerContext = async (
       auditCaller: 'mcp',
     });
 
-    return { ctx, readyDependencies, close: handle.close };
+    return {
+      ctx,
+      get readyDependencies() {
+        const ready = new Set<McpDependency>(
+          [...readyDependencies].filter((id) => id === 'llm' || id === 'researchVault'),
+        );
+        for (const status of market.marketSourceStatus())
+          if (status.capabilityEnabled && status.configurationReady)
+            ready.add(`market:${status.dataset}`);
+        for (const key of Object.keys(marketIntel) as (keyof typeof marketIntel)[])
+          if (providerRuntime.ready(marketIntel[key])) ready.add(key);
+        if (providerRuntime.ready(sectorCatalog)) ready.add('sectorCatalog');
+        return ready;
+      },
+      close: handle.close,
+    };
   } catch (error) {
     handle.close();
     throw error;

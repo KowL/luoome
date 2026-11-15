@@ -51,7 +51,9 @@ import {
   DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
 import { decodeJsonBlobToText } from './repository/drizzle/json-blob.js';
+import { DrizzlePublicMarketStore } from './repository/drizzle/public-market.js';
 import { type Schema, schema } from './schema/index.js';
+import { RepositoryWriteScope } from './write-scope.js';
 
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
 export type DrizzleDb = BunSQLiteDatabase<Schema>;
@@ -148,6 +150,12 @@ const migrateResearchDocumentFtsToDocumentRows = (db: DrizzleDb): void => {
 };
 
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(
+    sql`CREATE TABLE IF NOT EXISTS public_market_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, retain_until INTEGER NOT NULL)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS public_market_entries_retention_idx ON public_market_entries (retain_until)`,
+  );
   migrateDecisionReviewsToSingleTable(db);
   migrateResearchDocumentFtsToDocumentRows(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
@@ -2493,18 +2501,21 @@ export const createDrizzleRepos = (
     throw error;
   }
   const researchIndex = new DrizzleResearchIndexRepository(db);
+  const writes = new RepositoryWriteScope();
   const repos: RepositoryRegistry = {
+    publicMarket: new DrizzlePublicMarketStore(db),
+    withWriteGuard: (check, operation) => writes.run(check, operation),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),
-    stock: new DrizzleStockRepository(db),
-    stockUniverse: new DrizzleStockUniverseRepository(db),
-    sectorCatalog: new DrizzleSectorCatalogRepository(db),
-    limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
-    limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db),
-    marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db),
-    marketRoomEvent: new DrizzleMarketRoomEventRepository(db),
-    limitUpBoardHistory: new DrizzleLimitUpBoardHistoryRepository(db),
+    stock: new DrizzleStockRepository(db, writes),
+    stockUniverse: new DrizzleStockUniverseRepository(db, writes),
+    sectorCatalog: new DrizzleSectorCatalogRepository(db, writes),
+    limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db, writes),
+    limitUpLadderSample: new DrizzleLimitUpLadderSampleRepository(db, writes),
+    marketSnapshotBatch: new DrizzleMarketSnapshotBatchRepository(db, writes),
+    marketRoomEvent: new DrizzleMarketRoomEventRepository(db, writes),
+    limitUpBoardHistory: new DrizzleLimitUpBoardHistoryRepository(db, writes),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),
@@ -2513,10 +2524,10 @@ export const createDrizzleRepos = (
     advice: new DrizzleAdviceRepository(db),
     tradingPlan: new DrizzleTradingPlanRepository(db),
     report: new DrizzleReportRepository(db),
-    quote: new DrizzleQuoteRepository(db),
-    dailyBar: new DrizzleDailyBarRepository(db),
-    adjustmentFactor: new DrizzleAdjustmentFactorRepository(db),
-    minuteBar: new DrizzleMinuteBarRepository(db),
+    quote: new DrizzleQuoteRepository(db, writes),
+    dailyBar: new DrizzleDailyBarRepository(db, writes),
+    adjustmentFactor: new DrizzleAdjustmentFactorRepository(db, writes),
+    minuteBar: new DrizzleMinuteBarRepository(db, writes),
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),

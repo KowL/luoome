@@ -9,13 +9,13 @@ import {
 } from '@luoome/core';
 import { and, asc, desc, eq, gt, isNull, lte, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import {
   type Schema,
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
 } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type SyncRunRow = typeof stockUniverseSyncRuns.$inferSelect;
 
@@ -46,7 +46,10 @@ const summaryFromRun = (run: SyncRunRow): StockUniverseApplySummary => ({
 });
 
 export class DrizzleStockUniverseRepository implements StockUniverseRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async applySnapshot(input: {
     readonly syncId: string;
@@ -61,7 +64,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
       .get();
     if (replay !== undefined) return summaryFromRun(replay);
 
-    return this.db.transaction((tx) => {
+    return this.writes.transaction(this.db, (tx) => {
       let createdStocks = 0;
       let updatedStocks = 0;
       let reactivated = 0;

@@ -91,6 +91,7 @@ export const syncDailyBarsTool = defineTool({
   name: 'sync_daily_bars',
   description: '为显式或相关股票同步规范前复权日线，逐股报告结果并保留成功项',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: SyncDailyBarsInput,
   output: SyncDailyBarsOutput,
   handler: async (input, ctx) => {
@@ -131,6 +132,7 @@ export const syncDailyBarsTool = defineTool({
           )
         ).map((bar) => DailyBarSchema.parse(bar));
         if (bars.length === 0) throw new Error('no_data: no qfq daily bars returned');
+        ctx.executionPolicy?.assertTool('sync_daily_bars');
         await ctx.repos.dailyBar.saveMany(bars);
         return {
           stockId,

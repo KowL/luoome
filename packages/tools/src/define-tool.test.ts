@@ -34,6 +34,8 @@ describe('defineTool execute 错误模型', () => {
     let seen: unknown;
     let calls = 0;
     const policy: ToolExecutionPolicyLike = {
+      assertTool: () => {},
+      scopeKey: () => '',
       bind: () => policy,
       acquire: () => ({ ok: false, reason: 'dependency_not_ready' }),
       valid: () => false,

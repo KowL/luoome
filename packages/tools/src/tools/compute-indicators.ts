@@ -6,7 +6,7 @@ import { computeSimpleIndicators } from '../internal/indicators.js';
 
 /**
  * compute_indicators（v0.2 起，read）。
- * 给定 stockId + dateRange 拉日线 → 算指标快照，不落库（与 analyze_stock 不同；
+ * 给定 stockId + dateRange 读本地日线 → 算指标快照，不落库（与 analyze_stock 不同；
  * analyze 会落库到 advice.basedOn.indicators）。包含趋势、交叉新鲜度与 Bollinger 研究指标。
  * range.lookbackDays 给默认值 120（与 v0.1 analyze-stock 一致）。
  */
@@ -29,7 +29,7 @@ export const ComputeIndicatorsOutput = z.object({
 
 export const computeIndicatorsTool = defineTool({
   name: 'compute_indicators',
-  description: '拉日线算技术指标快照（不落库）；stockId 支持纯代码',
+  description: '从本地日线算技术指标快照（不落库）；stockId 支持纯代码',
   sideEffect: 'read',
   input: ComputeIndicatorsInput,
   output: ComputeIndicatorsOutput,
@@ -39,10 +39,11 @@ export const computeIndicatorsTool = defineTool({
       (await ctx.repos.stock.findByCode(input.stockId.trim().toUpperCase()));
     if (stock === null) return errNotFound('Stock', input.stockId);
     const now = ctx.clock();
-    const bars = await ctx.adapters.market.fetchDailyBars(stock.id, {
-      start: new Date(now.getTime() - input.lookbackDays * DAY_MS),
-      end: now,
-    });
+    const bars = await ctx.repos.dailyBar.findInRange(
+      stock.id,
+      new Date(now.getTime() - input.lookbackDays * DAY_MS),
+      now,
+    );
     const indicators = computeSimpleIndicators(bars);
     return {
       stockId: stock.id,

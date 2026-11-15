@@ -5,6 +5,7 @@ export interface BuildContextDependencies {
   readonly repos: RepositoryRegistry;
   readonly adapters: ToolContext['adapters'];
   readonly executionPolicy?: ToolContext['executionPolicy'];
+  readonly dataScope?: ToolContext['dataScope'];
   readonly clock?: () => Date;
   readonly logger?: Logger;
   readonly auditLog?: ToolContext['auditLog'];
@@ -25,6 +26,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     repos: input.repos,
     adapters: input.adapters,
     user,
+    ...(input.dataScope === undefined ? {} : { dataScope: input.dataScope }),
     executionPolicy:
       input.executionPolicy ??
       createPluginExecutionPolicy(

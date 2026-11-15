@@ -7,8 +7,8 @@ import {
 } from '@luoome/core';
 import { and, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { minuteBars, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type MinuteBarRow = typeof minuteBars.$inferSelect;
 
@@ -35,47 +35,52 @@ const shanghaiDayRange = (date: Date): { readonly from: Date; readonly to: Date 
 };
 
 export class DrizzleMinuteBarRepository implements MinuteBarRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async saveMany(bars: readonly MinuteBar[]): Promise<void> {
-    if (bars.length === 0) return;
-    const rows = bars.map((bar) => {
-      const parsed = MinuteBarSchema.parse(bar);
-      return {
-        stockId: parsed.stockId,
-        interval: parsed.interval,
-        endedAt: parsed.endedAt,
-        open: parsed.open,
-        high: parsed.high,
-        low: parsed.low,
-        close: parsed.close,
-        volume: parsed.volume,
-        amount: parsed.amount,
-        adjustment: parsed.adjustment,
-        source: parsed.source,
-        fetchedAt: parsed.fetchedAt,
-        completeness: parsed.completeness,
-      };
+    return this.writes.transaction(this.db, () => {
+      if (bars.length === 0) return;
+      const rows = bars.map((bar) => {
+        const parsed = MinuteBarSchema.parse(bar);
+        return {
+          stockId: parsed.stockId,
+          interval: parsed.interval,
+          endedAt: parsed.endedAt,
+          open: parsed.open,
+          high: parsed.high,
+          low: parsed.low,
+          close: parsed.close,
+          volume: parsed.volume,
+          amount: parsed.amount,
+          adjustment: parsed.adjustment,
+          source: parsed.source,
+          fetchedAt: parsed.fetchedAt,
+          completeness: parsed.completeness,
+        };
+      });
+      this.db
+        .insert(minuteBars)
+        .values(rows)
+        .onConflictDoUpdate({
+          target: [minuteBars.stockId, minuteBars.interval, minuteBars.endedAt],
+          set: {
+            open: sql`excluded."open"`,
+            high: sql`excluded."high"`,
+            low: sql`excluded."low"`,
+            close: sql`excluded."close"`,
+            volume: sql`excluded."volume"`,
+            amount: sql`excluded."amount"`,
+            adjustment: sql`excluded."adjustment"`,
+            source: sql`excluded."source"`,
+            fetchedAt: sql`excluded."fetched_at"`,
+            completeness: sql`excluded."completeness"`,
+          },
+        })
+        .run();
     });
-    this.db
-      .insert(minuteBars)
-      .values(rows)
-      .onConflictDoUpdate({
-        target: [minuteBars.stockId, minuteBars.interval, minuteBars.endedAt],
-        set: {
-          open: sql`excluded."open"`,
-          high: sql`excluded."high"`,
-          low: sql`excluded."low"`,
-          close: sql`excluded."close"`,
-          volume: sql`excluded."volume"`,
-          amount: sql`excluded."amount"`,
-          adjustment: sql`excluded."adjustment"`,
-          source: sql`excluded."source"`,
-          fetchedAt: sql`excluded."fetched_at"`,
-          completeness: sql`excluded."completeness"`,
-        },
-      })
-      .run();
   }
 
   async findInRange(
@@ -114,12 +119,14 @@ export class DrizzleMinuteBarRepository implements MinuteBarRepository {
   }
 
   async removeBefore(before: Date): Promise<number> {
-    const rows = this.db
-      .select({ endedAt: minuteBars.endedAt })
-      .from(minuteBars)
-      .where(lt(minuteBars.endedAt, before))
-      .all();
-    this.db.delete(minuteBars).where(lt(minuteBars.endedAt, before)).run();
-    return rows.length;
+    return this.writes.transaction(this.db, () => {
+      const rows = this.db
+        .select({ endedAt: minuteBars.endedAt })
+        .from(minuteBars)
+        .where(lt(minuteBars.endedAt, before))
+        .all();
+      this.db.delete(minuteBars).where(lt(minuteBars.endedAt, before)).run();
+      return rows.length;
+    });
   }
 }

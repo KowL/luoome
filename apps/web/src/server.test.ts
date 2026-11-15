@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { EastmoneySource, NotificationManager } from '@luoome/adapters';
+import { EastmoneySource, NotificationManager, PluginConfigStore } from '@luoome/adapters';
 import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
   AgentCallableTool,
@@ -1246,6 +1246,8 @@ describe('行情源设置 API', () => {
   it('buildWebContext 把注入的共享 EastmoneySource 分发给 market 与非行情 factory', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-sources-'));
     try {
+      const plugins = new PluginConfigStore(join(dir, 'plugins.json'));
+      plugins.set('source.eastmoney', true, plugins.initialize());
       const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
       const eastmoney = new EastmoneySource({
         fetchImpl: sharedFetch as unknown as typeof fetch,

@@ -19,13 +19,19 @@ import type {
   PluginPermit,
   PluginPolicyLike,
 } from '@luoome/core';
+import { MANAGED_PLUGIN_IDS, SOURCE_PLUGIN_IDS, TASK_PLUGIN_IDS } from '@luoome/core';
 import { z } from 'zod';
 
 export const BUILTIN_PLUGINS = {
   'strategy.ai-insight': { kind: 'business', label: '策略 AI 洞察', baselineEnabled: true },
-} as const satisfies Record<ManagedPluginId, unknown>;
-
-const PluginIdSchema = z.enum(['strategy.ai-insight']);
+  ...Object.fromEntries(
+    SOURCE_PLUGIN_IDS.map((id) => [id, { kind: 'provider', label: id, baselineEnabled: false }]),
+  ),
+  ...Object.fromEntries(
+    TASK_PLUGIN_IDS.map((id) => [id, { kind: 'task', label: id, baselineEnabled: false }]),
+  ),
+} as Record<ManagedPluginId, { kind: string; label: string; baselineEnabled: boolean }>;
+const PluginIdSchema = z.enum(MANAGED_PLUGIN_IDS);
 const EntrySchema = z
   .object({ enabled: z.boolean(), epoch: z.number().int().positive().safe() })
   .strict();
@@ -100,12 +106,12 @@ export class PluginConfigStore implements PluginPolicyLike {
   baseline(): Readonly<
     Record<ManagedPluginId, { readonly enabled: boolean; readonly epoch: number }>
   > {
-    return {
-      'strategy.ai-insight': {
-        enabled: BUILTIN_PLUGINS['strategy.ai-insight'].baselineEnabled,
-        epoch: 1,
-      },
-    };
+    return Object.fromEntries(
+      MANAGED_PLUGIN_IDS.map((id) => [
+        id,
+        { enabled: BUILTIN_PLUGINS[id].baselineEnabled, epoch: 1 },
+      ]),
+    ) as Record<ManagedPluginId, { enabled: boolean; epoch: number }>;
   }
 
   initialize(): PluginConfig {
@@ -142,7 +148,7 @@ export class PluginConfigStore implements PluginPolicyLike {
         ...current,
         revision: current.revision + 1,
         entries: {
-          'strategy.ai-insight': { enabled: false, epoch: 1 },
+          ...Object.fromEntries(MANAGED_PLUGIN_IDS.map((id) => [id, { enabled: false, epoch: 1 }])),
           ...current.entries,
         },
       };

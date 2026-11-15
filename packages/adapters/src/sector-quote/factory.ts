@@ -1,5 +1,6 @@
 import type { Logger, SectorQuoteManagerLike } from '@luoome/core';
 import { z } from 'zod';
+import type { ProviderRuntime } from '../plugins/provider-runtime.js';
 
 import { EastmoneySectorQuoteAdapter } from './eastmoney.js';
 import { SectorQuoteManager } from './manager.js';
@@ -14,12 +15,28 @@ import { SectorQuoteManager } from './manager.js';
  */
 
 export interface CreateSectorQuoteManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
 }
 
 export const createSectorQuoteManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateSectorQuoteManagerDeps,
+): SectorQuoteManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('sector-quote', ['eastmoney'], () =>
+      buildCreateSectorQuoteManagerFromEnv(env, {
+        ...deps,
+        fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
+      }),
+    );
+  return buildCreateSectorQuoteManagerFromEnv(env, deps);
+};
+
+const buildCreateSectorQuoteManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateSectorQuoteManagerDeps,
 ): SectorQuoteManagerLike => {

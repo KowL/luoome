@@ -32,6 +32,7 @@ export const fetchDailyBarsWithRetry = async (
 ): Promise<DailyBar[]> => {
   let lastError: unknown;
   for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
+    ctx.executionPolicy?.assertTool('sync_daily_bars');
     if (ctx.abortSignal?.aborted) throw new Error('operation_cancelled');
     try {
       let timeout: ReturnType<typeof setTimeout> | undefined;

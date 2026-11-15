@@ -44,6 +44,7 @@ export const syncLimitUpBoardHistoryTool = defineTool({
   name: 'sync_limit_up_board_history',
   description: 'workflow-only：按 fuyao 涨停池/炸板池采集单日炸板与断板事实，写入 PIT 历史',
   sideEffect: 'write',
+  requiredCapabilities: ['external', 'write'],
   input: SyncLimitUpBoardHistoryInput,
   output: SyncLimitUpBoardHistoryOutput,
   handler: async (input, ctx: ToolContext) => {

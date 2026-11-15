@@ -1,5 +1,6 @@
 import type { Logger, StockUniverseManagerLike, StockUniverseSourceLike } from '@luoome/core';
 import { z } from 'zod';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 
 import { tushareConfigFromEnv } from '../tushare/client.js';
 import { EastmoneyStockUniverseAdapter } from './eastmoney.js';
@@ -32,6 +33,8 @@ export const stockUniverseSourceOrderFromEnv = (
 };
 
 export interface CreateStockUniverseManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -39,6 +42,28 @@ export interface CreateStockUniverseManagerDeps {
 }
 
 export const createStockUniverseManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateStockUniverseManagerDeps,
+): StockUniverseManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap(
+      'stock-universe',
+      deps.sourceOrder ?? stockUniverseSourceOrderFromEnv(env),
+      (active, guard) =>
+        buildCreateStockUniverseManagerFromEnv(
+          { ...env, LUOOME_STOCK_UNIVERSE_SOURCES: active.join(',') },
+          {
+            ...deps,
+            guard,
+            sourceOrder: active,
+          },
+        ),
+    );
+  return buildCreateStockUniverseManagerFromEnv(env, deps);
+};
+
+const buildCreateStockUniverseManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateStockUniverseManagerDeps,
 ): StockUniverseManagerLike => {
@@ -51,14 +76,20 @@ export const createStockUniverseManagerFromEnv = (
     ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
   };
   const sources: StockUniverseSourceLike[] = order.map((source) => {
+    const options = {
+      ...common,
+      ...(deps.providerRuntime === undefined
+        ? {}
+        : { fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl) }),
+    };
     switch (source) {
       case 'eastmoney':
-        return new EastmoneyStockUniverseAdapter(common);
+        return new EastmoneyStockUniverseAdapter(options);
       case 'sina':
-        return new SinaStockUniverseAdapter(common);
+        return new SinaStockUniverseAdapter(options);
       case 'tushare':
         return new TushareStockUniverseAdapter({
-          ...common,
+          ...options,
           config: tushareConfigFromEnv(env),
         });
       default:

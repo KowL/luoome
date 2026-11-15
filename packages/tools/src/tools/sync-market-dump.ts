@@ -51,6 +51,7 @@ export const syncMarketDumpTool = defineTool({
   description:
     'workflow-only：用 fuyao 全市场 dump 同步原始日线与复权因子（auto = 10 交易日增量 + 全量因子）',
   sideEffect: 'write',
+  requiredCapabilities: ['external', 'write'],
   input: SyncMarketDumpInput,
   output: SyncMarketDumpOutput,
   handler: async (input, ctx: ToolContext) => {
@@ -65,7 +66,9 @@ export const syncMarketDumpTool = defineTool({
     let factors = 0;
 
     for (const kind of kinds) {
+      ctx.executionPolicy?.assertTool('sync_market_dump');
       const artifact = await adapter.download(kind);
+      ctx.executionPolicy?.assertTool('sync_market_dump');
       let kindBars = 0;
       let kindFactors = 0;
 
@@ -116,6 +119,7 @@ export const syncMarketDumpTool = defineTool({
             source: DUMP_SOURCE,
           });
           if (batch.length >= BAR_BATCH_SIZE) {
+            ctx.executionPolicy?.assertTool('sync_market_dump');
             await ctx.repos.dailyBar.saveRawMany(batch);
             kindBars += batch.length;
             batch = [];

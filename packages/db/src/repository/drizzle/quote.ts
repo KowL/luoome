@@ -1,8 +1,8 @@
 import { type Quote, type QuoteRepository, QuoteSchema } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lte, max } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { priceSnapshots, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type QuoteRow = typeof priceSnapshots.$inferSelect;
 
@@ -38,39 +38,19 @@ const toQuote = (row: QuoteRow): Quote => ({
  * price_snapshots 的复合主键 (stockId, ts) → 同 ts 重复写入视为覆盖。
  */
 export class DrizzleQuoteRepository implements QuoteRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(quote: Quote): Promise<void> {
-    const parsed = QuoteSchema.parse(quote);
-    this.db
-      .insert(priceSnapshots)
-      .values({
-        stockId: parsed.stockId,
-        observedAt: parsed.observedAt,
-        fetchedAt: parsed.fetchedAt,
-        timestampSource: parsed.timestampSource,
-        open: parsed.open,
-        high: parsed.high,
-        low: parsed.low,
-        close: parsed.close,
-        volume: parsed.volume,
-        amount: parsed.amount ?? null,
-        turnoverRatePct: parsed.turnoverRatePct ?? null,
-        prevClose: parsed.prevClose ?? null,
-        totalShares: parsed.totalShares ?? null,
-        floatShares: parsed.floatShares ?? null,
-        totalMarketCap: parsed.totalMarketCap ?? null,
-        floatMarketCap: parsed.floatMarketCap ?? null,
-        peDynamic: parsed.peDynamic ?? null,
-        peTtm: parsed.peTtm ?? null,
-        peStatic: parsed.peStatic ?? null,
-        psTtm: parsed.psTtm ?? null,
-        pb: parsed.pb ?? null,
-        source: parsed.source,
-      })
-      .onConflictDoUpdate({
-        target: [priceSnapshots.stockId, priceSnapshots.observedAt, priceSnapshots.source],
-        set: {
+    return this.writes.transaction(this.db, () => {
+      const parsed = QuoteSchema.parse(quote);
+      this.db
+        .insert(priceSnapshots)
+        .values({
+          stockId: parsed.stockId,
+          observedAt: parsed.observedAt,
           fetchedAt: parsed.fetchedAt,
           timestampSource: parsed.timestampSource,
           open: parsed.open,
@@ -90,9 +70,34 @@ export class DrizzleQuoteRepository implements QuoteRepository {
           peStatic: parsed.peStatic ?? null,
           psTtm: parsed.psTtm ?? null,
           pb: parsed.pb ?? null,
-        },
-      })
-      .run();
+          source: parsed.source,
+        })
+        .onConflictDoUpdate({
+          target: [priceSnapshots.stockId, priceSnapshots.observedAt, priceSnapshots.source],
+          set: {
+            fetchedAt: parsed.fetchedAt,
+            timestampSource: parsed.timestampSource,
+            open: parsed.open,
+            high: parsed.high,
+            low: parsed.low,
+            close: parsed.close,
+            volume: parsed.volume,
+            amount: parsed.amount ?? null,
+            turnoverRatePct: parsed.turnoverRatePct ?? null,
+            prevClose: parsed.prevClose ?? null,
+            totalShares: parsed.totalShares ?? null,
+            floatShares: parsed.floatShares ?? null,
+            totalMarketCap: parsed.totalMarketCap ?? null,
+            floatMarketCap: parsed.floatMarketCap ?? null,
+            peDynamic: parsed.peDynamic ?? null,
+            peTtm: parsed.peTtm ?? null,
+            peStatic: parsed.peStatic ?? null,
+            psTtm: parsed.psTtm ?? null,
+            pb: parsed.pb ?? null,
+          },
+        })
+        .run();
+    });
   }
 
   async latestByStock(stockId: string, since?: Date): Promise<Quote | null> {
@@ -161,16 +166,18 @@ export class DrizzleQuoteRepository implements QuoteRepository {
   }
 
   async removeInRange(stockId: string, before: Date): Promise<number> {
-    // 先 count（drizzle bun-sqlite 的 .run() 不返回 changes；用 select count 兜底）
-    const beforeRows = this.db
-      .select({ stockId: priceSnapshots.stockId, observedAt: priceSnapshots.observedAt })
-      .from(priceSnapshots)
-      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
-      .all();
-    this.db
-      .delete(priceSnapshots)
-      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
-      .run();
-    return beforeRows.length;
+    return this.writes.transaction(this.db, () => {
+      // 先 count（drizzle bun-sqlite 的 .run() 不返回 changes；用 select count 兜底）
+      const beforeRows = this.db
+        .select({ stockId: priceSnapshots.stockId, observedAt: priceSnapshots.observedAt })
+        .from(priceSnapshots)
+        .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
+        .all();
+      this.db
+        .delete(priceSnapshots)
+        .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
+        .run();
+      return beforeRows.length;
+    });
   }
 }

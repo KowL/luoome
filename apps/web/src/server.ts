@@ -7,7 +7,6 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { EastmoneySource } from '@luoome/adapters';
 import type { ToolContext, ToolResult } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 import { type Context, Hono } from 'hono';
@@ -376,7 +375,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
   const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const dbPath = options.dbPath ?? resolveDbPath();
-  const sources: WebSourceSet = { eastmoney: new EastmoneySource({ clock: () => new Date() }) };
+  const sources: WebSourceSet = {};
   const aiSettingsStore = new AISettingsStore(process.env);
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);

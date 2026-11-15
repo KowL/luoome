@@ -6,45 +6,61 @@ import type {
   SideEffect,
   ToolExecutionPolicyLike,
 } from '@luoome/core';
+import { MANAGED_PLUGIN_IDS, PluginExecutionDenied } from '@luoome/core';
 import { toolCatalog } from './catalog.js';
 
-const managedPlugins = [
-  ...new Set(
-    Object.values(toolCatalog).flatMap((entry) =>
-      'optionalPlugins' in entry ? entry.optionalPlugins : [],
-    ),
-  ),
-];
-const controlledTools = new Set(
-  Object.entries(toolCatalog).flatMap(([name, entry]) =>
-    'execution' in entry && entry.execution === 'p1' ? [name] : [],
-  ),
+const controlledTools = new Map(
+  Object.entries(toolCatalog)
+    .filter(([, entry]) => 'execution' in entry)
+    .map(([name, entry]) => [name, entry]),
 );
-
 export const createPluginExecutionPolicy = (
   plugins: PluginPolicyLike,
   allowed: ReadonlySet<SideEffect>,
 ): ToolExecutionPolicyLike => {
   const scoped = (
     admissions?: ReadonlyMap<ManagedPluginId, PluginAdmission>,
-  ): ToolExecutionPolicyLike => ({
-    bind: () =>
-      admissions === undefined
-        ? scoped(new Map(managedPlugins.map((id) => [id, plugins.acquire(id)])))
-        : scoped(admissions),
-    acquire: (id) => admissions?.get(id) ?? plugins.acquire(id),
-    valid: (permit: PluginPermit) => plugins.valid(permit),
-    authorizeTool: (name, _input, required) => {
-      if (!controlledTools.has(name)) return null;
-      const missing = required.find((capability) => !allowed.has(capability));
-      return missing === undefined
-        ? null
-        : {
-            ok: false,
-            error: { kind: 'permission_denied', required: missing },
-          };
-    },
-  });
+  ): ToolExecutionPolicyLike => {
+    const admission = (id: ManagedPluginId) => admissions?.get(id) ?? plugins.acquire(id);
+    const assertTool = (name: string, dependency?: ManagedPluginId) => {
+      const owner = controlledTools.get(name)?.owner;
+      const ids = [
+        ...(owner?.startsWith('task.') ? [owner as ManagedPluginId] : []),
+        ...(dependency === undefined ? [] : [dependency]),
+      ];
+      for (const id of ids) {
+        const granted = admission(id);
+        if (!granted.ok || !plugins.valid(granted.permit))
+          throw new PluginExecutionDenied(`plugin:${id}`);
+      }
+    };
+    return {
+      bind: () =>
+        admissions === undefined
+          ? scoped(new Map(MANAGED_PLUGIN_IDS.map((id) => [id, plugins.acquire(id)])))
+          : scoped(admissions),
+      acquire: (id) => admissions?.get(id) ?? plugins.acquire(id),
+      valid: (permit: PluginPermit) => plugins.valid(permit),
+      scopeKey: (name) => {
+        const owner = controlledTools.get(name)?.owner;
+        return owner?.startsWith('task.')
+          ? JSON.stringify([owner, admission(owner as ManagedPluginId)])
+          : '';
+      },
+      assertTool,
+      authorizeTool: (name, _input, required) => {
+        if (!controlledTools.has(name)) return null;
+        assertTool(name);
+        const missing = required.find((capability) => !allowed.has(capability));
+        return missing === undefined
+          ? null
+          : {
+              ok: false,
+              error: { kind: 'permission_denied', required: missing },
+            };
+      },
+    };
+  };
   return scoped();
 };
 

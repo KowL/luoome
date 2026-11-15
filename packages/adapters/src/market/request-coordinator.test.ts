@@ -367,3 +367,42 @@ describe('public market request coordinator', () => {
     expect(single).toHaveBeenCalledTimes(3);
   });
 });
+
+it('each coalesced waiter checks its own activation before consuming another caller’s result', async () => {
+  const coordinator = new MarketRequestCoordinator(store(), config);
+  const started = deferred(),
+    release = deferred();
+  let permitted = true;
+  let calls = 0;
+  const execute = async () => {
+    calls++;
+    started.resolve();
+    await release.promise;
+    return quote('A');
+  };
+  const handle = {
+    source: 'eastmoney',
+    capability: 'quote' as const,
+    coverage: ['CN_A_SHARES_SH_SZ'] as const,
+    configurationReady: true,
+    scopeKey: 'shared-activation',
+    execute,
+  };
+  const owner = coordinator.execute(handle, { stockId: 'A' });
+  await started.promise;
+  const waiter = coordinator.execute(
+    {
+      ...handle,
+      assertCurrent: () => {
+        if (!permitted) throw new Error('waiter revoked');
+      },
+    },
+    { stockId: 'A' },
+  );
+  const rejected = expect(waiter).rejects.toThrow('waiter revoked');
+  permitted = false;
+  release.resolve();
+  expect((await owner).close).toBe(10);
+  await rejected;
+  expect(calls).toBe(1);
+});

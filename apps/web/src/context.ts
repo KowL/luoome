@@ -21,7 +21,10 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  MarketRequestCoordinator,
+  marketRequestConfigFromEnv,
   PluginConfigStore,
+  ProviderRuntime,
   resolvePluginConfigPath,
 } from '@luoome/adapters';
 import {
@@ -39,7 +42,8 @@ import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } f
  * 行情源热更新复用同一实例；其它域专属来源由对应 factory 管理。
  */
 export interface WebSourceSet {
-  readonly eastmoney?: EastmoneySource;
+  eastmoney?: EastmoneySource;
+  providerRuntime?: ProviderRuntime;
 }
 
 export const resolveDbPath = (): string => {
@@ -85,53 +89,98 @@ export const buildWebContext = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  const plugins = new PluginConfigStore(resolvePluginConfigPath(env));
+  const providerRuntime = new ProviderRuntime(
+    plugins,
+    new MarketRequestCoordinator(handle.repos.publicMarket, marketRequestConfigFromEnv(env), () =>
+      now().getTime(),
+    ),
+    env.LUOOME_EXPOSE_EXTERNAL === 'true',
+  );
   // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
-  const eastmoney = deps.sources?.eastmoney ?? new EastmoneySource({ clock: now });
+  const eastmoney =
+    deps.sources?.eastmoney ??
+    new EastmoneySource({ clock: now, fetchImpl: providerRuntime.fetchFor('eastmoney') });
   const sources = { eastmoney };
+  if (deps.sources !== undefined) {
+    deps.sources.eastmoney = eastmoney;
+    deps.sources.providerRuntime = providerRuntime;
+  }
   const market = createMarketAdapterFromEnv(env, {
+    providerRuntime,
     clock: now,
     logger: console,
     // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
     quoteCacheTtlMs: 10_000,
     sources,
   });
-  const marketDump = createMarketDumpAdapterFromEnv(env, { home: dirname(dbPath) });
-  const limitUpBoard = createLimitUpBoardAdapterFromEnv(env, { clock: now });
-  const limitUpMarket = createLimitUpMarketManagerFromEnv(env, { clock: now, logger: console });
+  const marketDump = createMarketDumpAdapterFromEnv(env, {
+    providerRuntime,
+    home: dirname(dbPath),
+  });
+  const limitUpBoard = createLimitUpBoardAdapterFromEnv(env, { providerRuntime, clock: now });
+  const limitUpMarket = createLimitUpMarketManagerFromEnv(env, {
+    providerRuntime,
+    clock: now,
+    logger: console,
+  });
   const ashareSentiment = createAShareSentimentManagerFromEnv(env, {
+    providerRuntime,
     clock: now,
     logger: console,
     market,
     sources,
   });
-  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(env, { clock: now, logger: console });
+  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(env, {
+    providerRuntime,
+    clock: now,
+    logger: console,
+  });
   const marketIntel = {
-    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console, sources }),
-    ...(limitUpMarket === undefined ? {} : { limitUpMarket }),
-    dragonTiger: createDragonTigerManagerFromEnv(env, { clock: now, logger: console, sources }),
-    ...(dragonTigerFlow === undefined ? {} : { dragonTigerFlow }),
-    northboundFlow: createNorthboundFlowManagerFromEnv(env, {
+    limitUpLadder: createLimitUpLadderManagerFromEnv(env, {
+      providerRuntime,
       clock: now,
       logger: console,
       sources,
     }),
-    news: createNewsManagerFromEnv(env, { clock: now, logger: console, sources }),
-    sectorQuote: createSectorQuoteManagerFromEnv(env, { clock: now, logger: console }),
+    ...(limitUpMarket === undefined ? {} : { limitUpMarket }),
+    dragonTiger: createDragonTigerManagerFromEnv(env, {
+      providerRuntime,
+      clock: now,
+      logger: console,
+      sources,
+    }),
+    ...(dragonTigerFlow === undefined ? {} : { dragonTigerFlow }),
+    northboundFlow: createNorthboundFlowManagerFromEnv(env, {
+      providerRuntime,
+      clock: now,
+      logger: console,
+      sources,
+    }),
+    news: createNewsManagerFromEnv(env, { providerRuntime, clock: now, logger: console, sources }),
+    sectorQuote: createSectorQuoteManagerFromEnv(env, {
+      providerRuntime,
+      clock: now,
+      logger: console,
+    }),
     ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
   };
-  const sectorCatalog = createSectorCatalogFromEnv(env, { clock: now, logger: console });
+  const sectorCatalog = createSectorCatalogFromEnv(env, {
+    providerRuntime,
+    clock: now,
+    logger: console,
+  });
   return buildContext({
     repos: handle.repos,
-    executionPolicy: createPluginExecutionPolicy(
-      new PluginConfigStore(resolvePluginConfigPath(env)),
-      pluginAllowedSideEffects(env),
-    ),
+    dataScope: providerRuntime,
+    executionPolicy: createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(env)),
     adapters: {
       ...(marketDump === undefined ? {} : { marketDump }),
       ...(limitUpBoard === undefined ? {} : { limitUpBoard }),
       market,
       llm: ai?.llm ?? unavailableLLM,
       stockUniverse: createStockUniverseManagerFromEnv(env, {
+        providerRuntime,
         clock: now,
         logger: console,
       }),

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { EastmoneySource } from '../eastmoney/source.js';
 import { fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { FuyaoSource } from '../fuyao/source.js';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import type { SourceResultObservation } from '../source-registry.js';
 import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
@@ -29,6 +30,8 @@ import { TushareMarketAdapter } from './tushare.js';
  */
 
 export interface CreateMarketAdapterDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   /** 业务时钟；缺省时使用系统时间。 */
   readonly clock?: () => Date;
   /** real 模式 Manager 的降级日志。 */
@@ -41,7 +44,7 @@ export interface CreateMarketAdapterDeps {
   readonly quoteCacheTtlMs?: number;
   /** 组装根共享的供应商实例；注入时对应分支复用而不自构（§4.6）。 */
   readonly sources?: { readonly eastmoney?: EastmoneySource; readonly fuyao?: FuyaoSource };
-  readonly requestCoordinator?: MarketRequestCoordinator;
+  readonly requestCoordinator?: MarketRequestCoordinator | undefined;
 }
 
 export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare', 'fuyao']);
@@ -74,23 +77,48 @@ export const createMarketAdapterFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateMarketAdapterDeps,
 ): MarketDataAdapterLike => {
+  const candidates =
+    deps.sourceOrder === undefined
+      ? marketSourceOrderFromEnv(env)
+      : MarketSourceOrderSchema.parse(deps.sourceOrder);
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap(
+      'market',
+      candidates,
+      (active, guard) =>
+        buildMarketAdapterFromEnv(env, {
+          ...deps,
+          sourceOrder: active,
+          guard,
+          requestCoordinator: deps.requestCoordinator ?? runtime.coordinator,
+        }),
+      candidates.includes('tencent') ? ['sina'] : [],
+    );
+  return buildMarketAdapterFromEnv(env, { ...deps, sourceOrder: candidates });
+};
+
+const buildMarketAdapterFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateMarketAdapterDeps,
+): MarketDataAdapterLike => {
   parseMarketProviderConfigFromEnv(env);
 
   const clockOpt = deps.clock === undefined ? {} : { clock: deps.clock };
 
   const sourceOptsFor = (source: MarketSourceId) => ({
     ...clockOpt,
-    ...(deps.requestCoordinator === undefined
-      ? deps.fetchImpl === undefined
-        ? {}
-        : { fetchImpl: deps.fetchImpl }
-      : { fetchImpl: deps.requestCoordinator.fetchFor(source, deps.fetchImpl) }),
+    ...(deps.providerRuntime !== undefined
+      ? { fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl) }
+      : deps.requestCoordinator === undefined
+        ? deps.fetchImpl === undefined
+          ? {}
+          : { fetchImpl: deps.fetchImpl }
+        : { fetchImpl: deps.requestCoordinator.fetchFor(source, deps.fetchImpl) }),
   });
 
   const sourceOrder =
-    deps.sourceOrder === undefined
-      ? marketSourceOrderFromEnv(env)
-      : MarketSourceOrderSchema.parse(deps.sourceOrder);
+    deps.sourceOrder === undefined ? marketSourceOrderFromEnv(env) : deps.sourceOrder;
   const bindings = sourceOrder.flatMap((source) => {
     const sourceOpts = sourceOptsFor(source);
     switch (source) {
@@ -119,7 +147,7 @@ export const createMarketAdapterFromEnv = (
     }
   });
   const clock = deps.clock ?? ((): Date => new Date());
-  const registry = new MarketSourceRegistry(bindings, clock, deps.requestCoordinator);
+  const registry = new MarketSourceRegistry(bindings, clock, deps.requestCoordinator, deps.guard);
 
   return new MarketDataManager({
     registry,

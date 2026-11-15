@@ -1,7 +1,7 @@
 import type { AShareSentimentManagerLike, Logger, MarketDataAdapterLike } from '@luoome/core';
 import { z } from 'zod';
-
 import { EastmoneySource } from '../eastmoney/source.js';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { AShareSentimentManager } from './manager.js';
 import type { AShareSentimentCapabilityMap, AShareSentimentRawPool } from './types.js';
@@ -16,6 +16,8 @@ import type { AShareSentimentCapabilityMap, AShareSentimentRawPool } from './typ
  */
 
 export interface CreateAShareSentimentManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -49,6 +51,25 @@ export const createAShareSentimentManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateAShareSentimentManagerDeps,
 ): AShareSentimentManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('ashare-sentiment', ashareSentimentSourcesFromEnv(env), (active, guard) =>
+      buildCreateAShareSentimentManagerFromEnv(
+        { ...env, LUOOME_ASHARE_SENTIMENT_SOURCES: active.join(',') },
+        {
+          ...deps,
+          guard,
+          fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
+        },
+      ),
+    );
+  return buildCreateAShareSentimentManagerFromEnv(env, deps);
+};
+
+const buildCreateAShareSentimentManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateAShareSentimentManagerDeps,
+): AShareSentimentManagerLike => {
   const clock = deps.clock ?? (() => new Date());
   const order = ashareSentimentSourcesFromEnv(env);
   const eastmoney =
@@ -66,7 +87,7 @@ export const createAShareSentimentManagerFromEnv = (
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
   });
-  const registry = new SourceRegistry<AShareSentimentCapabilityMap>(bindings, clock);
+  const registry = new SourceRegistry<AShareSentimentCapabilityMap>(bindings, clock, deps.guard);
 
   return new AShareSentimentManager({
     registry,

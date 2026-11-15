@@ -6,8 +6,8 @@ import {
 } from '@luoome/core';
 import { and, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { limitUpLadderSnapshots, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type SnapshotRow = typeof limitUpLadderSnapshots.$inferSelect;
 
@@ -23,32 +23,37 @@ const toSnapshot = (row: SnapshotRow): LimitUpLadder =>
   });
 
 export class DrizzleLimitUpLadderSnapshotRepository implements LimitUpLadderSnapshotRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(snapshot: LimitUpLadder): Promise<void> {
-    const parsed = LimitUpLadderSchema.parse(snapshot);
-    this.db
-      .insert(limitUpLadderSnapshots)
-      .values({
-        date: parsed.date,
-        source: parsed.source,
-        total: parsed.total,
-        maxLevel: parsed.maxLevel,
-        levels: parsed.levels,
-        warnings: parsed.warnings,
-        asOf: parsed.asOf,
-      })
-      .onConflictDoUpdate({
-        target: [limitUpLadderSnapshots.date, limitUpLadderSnapshots.source],
-        set: {
+    return this.writes.transaction(this.db, () => {
+      const parsed = LimitUpLadderSchema.parse(snapshot);
+      this.db
+        .insert(limitUpLadderSnapshots)
+        .values({
+          date: parsed.date,
+          source: parsed.source,
           total: parsed.total,
           maxLevel: parsed.maxLevel,
           levels: parsed.levels,
           warnings: parsed.warnings,
           asOf: parsed.asOf,
-        },
-      })
-      .run();
+        })
+        .onConflictDoUpdate({
+          target: [limitUpLadderSnapshots.date, limitUpLadderSnapshots.source],
+          set: {
+            total: parsed.total,
+            maxLevel: parsed.maxLevel,
+            levels: parsed.levels,
+            warnings: parsed.warnings,
+            asOf: parsed.asOf,
+          },
+        })
+        .run();
+    });
   }
 
   async findByDate(input: {

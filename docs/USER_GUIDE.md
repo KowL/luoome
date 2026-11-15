@@ -233,8 +233,8 @@ luoome mcp serve    # stdio JSON-RPC
 
 ### 策略 AI 插件控制（P1）
 
-当前只管理 `strategy.ai-insight`，不包含行情源、采集任务、策略执行或 Web 插件管理页。
-该开关只控制策略解释模型，聊天、个股分析等功能保持原来的配置。
+当前管理策略解释、行情提供者和采集任务。策略执行开关及 Web 插件管理页仍在后续阶段。
+`strategy.ai-insight` 只控制策略解释模型，聊天、个股分析等功能保持各自配置。
 
 ```bash
 luoome plugins status --json
@@ -264,7 +264,33 @@ LUOOME_EXPOSE_WRITE=true luoome plugins set strategy.ai-insight --enabled false 
 
 文件损坏需先核对并修复或备份移走，再显式初始化；重建配置生成新 incarnation，旧许可失效。
 存在 `plugins.json.lock` 时配置写入报 busy，已有合法配置仍可读；不要未经核验删除正在使用的锁。
-MCP 当前工具发现仍按启动状态，P1 没有新增公开 Tool 或动态发现；插件执行撤销在调用时复核。
+MCP 每次发现和调用都会复核当前提供者就绪状态及授权；停用源后不再暴露依赖该源且没有其它就绪来源的工具。纯本地 `compute_indicators` 保持可发现。
+
+### 提供者与采集任务控制（P2）
+
+新增提供者和采集任务默认 disabled；原有 P1 配置不自动启源，运行前先预览并应用 `plugins migrate`。
+初始化或迁移不会授予 write/external 权限。启用一个提供者还需要原有来源顺序包含它及相应凭证就绪；
+例如日线同步需要分别启用 `source.eastmoney` 和 `task.daily-bars-sync`，并在宿主启动时开启 write + external。
+
+```bash
+LUOOME_EXPOSE_WRITE=true luoome plugins set source.eastmoney --enabled true \
+  --expected-incarnation <最新UUID> --expected-revision <最新版本>
+# 重新读取 status 的版本，再提交下一项
+LUOOME_EXPOSE_WRITE=true luoome plugins set task.daily-bars-sync --enabled true \
+  --expected-incarnation <最新UUID> --expected-revision <最新版本>
+```
+
+支持的提供者为 Eastmoney、Tencent、Sina、Tushare、Fuyao、10jqka（ID 以 `plugins status` 为准）。
+采集任务覆盖日线、股票目录、全市场快照、持仓报价、市场 dump、板块目录、连板历史和分钟 OHLCV。
+关闭任务会阻止该任务的新入口及下一次外发/批次写入；其它消费者仍能使用已启用的提供者。
+分钟 OHLCV 任务关闭后只返回本地历史或显式缺失。盘中快照调度会跳过停用任务；调度资源的通用卸载属于后续阶段。
+
+关闭所有提供者和任务不会删除数据。账户、持仓、目录、本地日线指标及历史事实仍可查询；缺数据明确返回空或不可用。
+提供者在实际外发前再次校验，Tencent 全市场快照间接使用 Sina 时也需允许 Sina；不能靠其它来源的名称绕过停用。
+已发出的请求可继续占用上游资源，晚返回在发布前丢弃。关→开使用新 epoch，旧闭包不能恢复执行。
+缓存按提供者世代、任务许可和本进程路由隔离；配额及 cooldown 按稳定提供者身份存入共享 SQLite，不随启停重置。
+行情数据写入取得 SQLite 写锁后再次校验，再在无 await 的短事务内提交，防止等待锁的旧结果覆盖新数据。
+本进程行情设置重建会撤销旧路由；其它宿主的来源顺序/凭证变更仍需 reload 或重启，不把配置提交冒充全局已应用。
 
 ## 4. Web 用法
 

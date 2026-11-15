@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-
 import type { LimitUpLadderManagerLike, Logger } from '@luoome/core';
 import {
   BUILTIN_HOLIDAYS,
@@ -10,8 +9,8 @@ import {
   parseHolidayObject,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { EastmoneySource } from '../eastmoney/source.js';
+import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { LimitUpLadderManager } from './manager.js';
 import type { LimitUpLadderCapabilityMap } from './types.js';
@@ -27,6 +26,8 @@ import type { LimitUpLadderCapabilityMap } from './types.js';
  */
 
 export interface CreateLimitUpLadderManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
+  readonly guard?: ProviderGuard;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
@@ -59,6 +60,25 @@ export const createLimitUpLadderManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateLimitUpLadderManagerDeps,
 ): LimitUpLadderManagerLike => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('limit-up-ladder', limitUpLadderSourcesFromEnv(env), (active, guard) =>
+      buildCreateLimitUpLadderManagerFromEnv(
+        { ...env, LUOOME_LIMIT_UP_LADDER_SOURCES: active.join(',') },
+        {
+          ...deps,
+          guard,
+          fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
+        },
+      ),
+    );
+  return buildCreateLimitUpLadderManagerFromEnv(env, deps);
+};
+
+const buildCreateLimitUpLadderManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateLimitUpLadderManagerDeps,
+): LimitUpLadderManagerLike => {
   const clock = deps.clock ?? (() => new Date());
   const order = limitUpLadderSourcesFromEnv(env);
   const eastmoney = deps.sources?.eastmoney ?? new EastmoneySource({ clock, ...fetchOpt(deps) });
@@ -71,7 +91,7 @@ export const createLimitUpLadderManagerFromEnv = (
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
   });
-  const registry = new SourceRegistry<LimitUpLadderCapabilityMap>(bindings, clock);
+  const registry = new SourceRegistry<LimitUpLadderCapabilityMap>(bindings, clock, deps.guard);
 
   return new LimitUpLadderManager({
     registry,

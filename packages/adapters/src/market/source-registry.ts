@@ -13,6 +13,7 @@ import type {
   StockSearchCandidate,
 } from '@luoome/core';
 import { QuoteSchema } from '@luoome/core';
+import type { ProviderGuard } from '../plugins/provider-runtime.js';
 import {
   type AnyBinding,
   type SourceBinding,
@@ -144,8 +145,9 @@ export class MarketSourceRegistry {
     bindings: readonly AnyMarketCapabilityBinding[],
     clock: () => Date,
     private readonly coordinator?: MarketRequestCoordinator,
+    guard?: ProviderGuard,
   ) {
-    this.registry = new SourceRegistry(bindings, clock);
+    this.registry = new SourceRegistry(bindings, clock, guard);
   }
 
   sources<C extends MarketCapability>(

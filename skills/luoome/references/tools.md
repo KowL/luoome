@@ -20,7 +20,7 @@ Market and盘面资讯:
   quote_snapshot and falls back to the latest local snapshot.
 - `fetch_index_quotes` — core index (上证/深证/创业板/科创50) realtime quotes.
 - `fetch_sector_quotes` — industry/concept sector ranking with leading stock.
-- `compute_indicators` — daily/intraday MA/EMA/MACD/RSI/KDJ/BOLL/ATR.
+- `compute_indicators` — indicators from persisted local daily bars; no network or collection. Missing bars return empty indicators with `barsCount: 0`.
 - `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
 - `limit_up_market` — one call for the limit-up dashboard: that day's limit-up pool (per-stock
   seal amount, open times, raw limit-up reason), limit-up statistics (seal rate, opened count,

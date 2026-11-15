@@ -5,8 +5,8 @@ import {
 } from '@luoome/core';
 import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { adjustmentFactors, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type FactorRow = typeof adjustmentFactors.$inferSelect;
 
@@ -23,7 +23,10 @@ const toFactor = (row: FactorRow): AdjustmentFactor => ({
 
 /** 除权除息因子；(stockId, exDate) 唯一，重复导入覆盖同一事件。 */
 export class DrizzleAdjustmentFactorRepository implements AdjustmentFactorRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async saveMany(factors: readonly AdjustmentFactor[]): Promise<void> {
     if (factors.length === 0) return;
@@ -42,7 +45,7 @@ export class DrizzleAdjustmentFactorRepository implements AdjustmentFactorReposi
     });
     // 全量因子一次可达 3.5 万行；按 500 行分块，避免超过 SQLite 绑定参数上限。
     // 单事务提交：部分导入会让 qfq 缓存误判「因子已完整」，进而二次复权。
-    this.db.transaction((tx) => {
+    this.writes.transaction(this.db, (tx) => {
       for (let index = 0; index < rows.length; index += 500) {
         tx.insert(adjustmentFactors)
           .values(rows.slice(index, index + 500))
@@ -95,11 +98,13 @@ export class DrizzleAdjustmentFactorRepository implements AdjustmentFactorReposi
   }
 
   async removeByStock(stockId: string): Promise<number> {
-    const removed = this.db
-      .delete(adjustmentFactors)
-      .where(eq(adjustmentFactors.stockId, stockId))
-      .returning({ stockId: adjustmentFactors.stockId })
-      .all();
-    return removed.length;
+    return this.writes.transaction(this.db, () => {
+      const removed = this.db
+        .delete(adjustmentFactors)
+        .where(eq(adjustmentFactors.stockId, stockId))
+        .returning({ stockId: adjustmentFactors.stockId })
+        .all();
+      return removed.length;
+    });
   }
 }

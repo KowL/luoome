@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { deserialize, serialize } from 'node:v8';
 import {
+  PluginExecutionDenied,
   type PublicMarketStore,
   type Quote,
   QuoteSchema,
@@ -65,7 +66,7 @@ class SuppressedMarketRequest extends SourceExecutionError {
 
 class CoordinatedTransportError extends SourceExecutionError {}
 
-const providerOf = (input: Parameters<typeof fetch>[0], fallback: string): string => {
+export const marketProviderOf = (input: Parameters<typeof fetch>[0], fallback: string): string => {
   // Tencent 全市场快照还会读取新浪目录，不能只按 capability 的来源名称扣额。
   const host = new URL(input instanceof Request ? input.url : String(input)).hostname;
   for (const [source, domains] of [
@@ -134,8 +135,10 @@ export class MarketRequestCoordinator {
     kind?: SourceErrorKind,
     batchMissing = false,
     retryAt?: number,
+    check?: () => void,
   ): void {
     this.update(key, (entry, now) => {
+      check?.();
       if (entry.owner !== owner || (entry.leaseUntil ?? 0) <= now) return;
       delete entry.owner;
       delete entry.leaseUntil;
@@ -153,12 +156,16 @@ export class MarketRequestCoordinator {
     });
   }
 
-  private async wait(key: string): Promise<string> {
+  private async wait(key: string, check?: () => void): Promise<string> {
     const deadline = Date.now() + this.config.leaseMs;
     while (Date.now() < deadline) {
+      check?.();
       const entry = this.entry(key);
       const now = this.clock();
-      if (entry.payload !== undefined && (entry.expiresAt ?? 0) > now) return entry.payload;
+      if (entry.payload !== undefined && (entry.expiresAt ?? 0) > now) {
+        check?.();
+        return entry.payload;
+      }
       if ((entry.retryAt ?? 0) > now)
         throw new SourceExecutionError(
           entry.errorKind ?? 'upstream_error',
@@ -198,24 +205,30 @@ export class MarketRequestCoordinator {
     handle: MarketCapabilityHandle<C>,
     input: MarketCapabilityMap[C]['request'],
   ): Promise<MarketCapabilityMap[C]['result']> {
+    handle.assertCurrent?.();
     if (handle.capability === 'batch-quote') {
       return this.quotes(
         handle as MarketCapabilityHandle<'batch-quote'>,
         input as MarketCapabilityMap['batch-quote']['request'],
       ) as Promise<MarketCapabilityMap[C]['result']>;
     }
-    const key = this.key(handle.source, handle.capability, input);
+    const key = this.key(handle.source, handle.capability, input, handle.scopeKey);
     const owner = randomUUID();
     const claim = this.claim(key, owner, handle.capability === 'quote');
-    if (claim.kind === 'cached') return decode(claim.payload);
-    if (claim.kind === 'waiting') return decode(await this.wait(key));
+    if (claim.kind === 'cached') {
+      handle.assertCurrent?.();
+      return decode(claim.payload);
+    }
+    if (claim.kind === 'waiting') return decode(await this.wait(key, handle.assertCurrent));
     return this.own([key], owner, async () => {
       try {
         const result = await handle.execute(input);
+        handle.assertCurrent?.();
         const payload = encode(result);
-        this.finish(key, owner, payload);
+        this.finish(key, owner, payload, undefined, false, undefined, handle.assertCurrent);
         return decode(payload);
       } catch (error) {
+        handle.assertCurrent?.();
         this.blockFailure(handle.source, error);
         this.finish(
           key,
@@ -240,7 +253,8 @@ export class MarketRequestCoordinator {
     const quotes: Quote[] = [];
     let lastError: unknown;
     for (const id of new Set(input.stockIds)) {
-      const key = this.key(handle.source, 'quote', { stockId: id });
+      handle.assertCurrent?.();
+      const key = this.key(handle.source, 'quote', { stockId: id }, handle.scopeKey);
       try {
         const claim = this.claim(key, owner);
         if (claim.kind === 'cached') quotes.push(decode<Quote>(claim.payload));
@@ -257,6 +271,7 @@ export class MarketRequestCoordinator {
         async () => {
           try {
             const raw = await handle.execute({ stockIds: owned.map(({ id }) => id) });
+            handle.assertCurrent?.();
             const valid = raw.flatMap((quote) => {
               const result = QuoteSchema.safeParse(quote);
               return result.success ? [result.data] : [];
@@ -270,10 +285,13 @@ export class MarketRequestCoordinator {
                 quote === undefined ? undefined : encode(quote),
                 'no_data',
                 quote === undefined,
+                undefined,
+                handle.assertCurrent,
               );
               if (quote !== undefined) quotes.push(quote);
             }
           } catch (error) {
+            handle.assertCurrent?.();
             this.blockFailure(handle.source, error);
             for (const { key } of owned)
               this.finish(
@@ -291,13 +309,14 @@ export class MarketRequestCoordinator {
     await Promise.all(
       pending.map(async (key) => {
         try {
-          quotes.push(decode<Quote>(await this.wait(key)));
+          quotes.push(decode<Quote>(await this.wait(key, handle.assertCurrent)));
         } catch (error) {
           lastError = error;
         }
       }),
     );
     if (quotes.length === 0 && lastError !== undefined) throw lastError;
+    handle.assertCurrent?.();
     return quotes;
   }
 
@@ -305,10 +324,11 @@ export class MarketRequestCoordinator {
     source: string,
     capability: MarketCapability,
     input: MarketCapabilityMap[MarketCapability]['request'],
+    scopeKey?: string,
   ): string {
     const request =
       'stockId' in input ? { ...input, stockId: input.stockId.trim().toUpperCase() } : input;
-    return `request:${source}:${capability}:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`;
+    return `request:${source}:${scopeKey ?? 'legacy'}:${capability}:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`;
   }
 
   private provider<T>(source: string, change: (entry: ProviderEntry, now: number) => T): T {
@@ -347,7 +367,7 @@ export class MarketRequestCoordinator {
 
   fetchFor(source: string, fetchImpl: typeof fetch = fetch): typeof fetch {
     return (async (input, init) => {
-      const provider = providerOf(input, source);
+      const provider = marketProviderOf(input, source);
       const denied = this.provider(provider, (entry, now): SuppressedMarketRequest | undefined => {
         entry.attempts = entry.attempts.filter((at) => at > now - entry.windowMs);
         if (entry.blockedUntil > now)
@@ -377,7 +397,8 @@ export class MarketRequestCoordinator {
         }
         return response;
       } catch (error) {
-        if (error instanceof CoordinatedTransportError) throw error;
+        if (error instanceof CoordinatedTransportError || error instanceof PluginExecutionDenied)
+          throw error;
         const kind =
           error instanceof SourceExecutionError
             ? error.kind

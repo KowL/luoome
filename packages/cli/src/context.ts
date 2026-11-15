@@ -28,7 +28,10 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  MarketRequestCoordinator,
+  marketRequestConfigFromEnv,
   PluginConfigStore,
+  ProviderRuntime,
   resolvePluginConfigPath,
 } from '@luoome/adapters';
 import {
@@ -82,11 +85,32 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const accounts = await repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const logger = createStderrLogger();
+  const plugins = new PluginConfigStore(resolvePluginConfigPath(process.env));
+  const providerRuntime = new ProviderRuntime(
+    plugins,
+    new MarketRequestCoordinator(repos.publicMarket, marketRequestConfigFromEnv(process.env), () =>
+      now().getTime(),
+    ),
+    process.env.LUOOME_EXPOSE_EXTERNAL === 'true',
+  );
   // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
-  const sources = { eastmoney: new EastmoneySource({ clock: now }) };
-  const marketDump = createMarketDumpAdapterFromEnv(process.env, { home, fetchImpl: fetch });
-  const limitUpBoard = createLimitUpBoardAdapterFromEnv(process.env, { clock: now });
+  const sources = {
+    eastmoney: new EastmoneySource({
+      clock: now,
+      fetchImpl: providerRuntime.fetchFor('eastmoney'),
+    }),
+  };
+  const marketDump = createMarketDumpAdapterFromEnv(process.env, {
+    providerRuntime,
+    home,
+    fetchImpl: fetch,
+  });
+  const limitUpBoard = createLimitUpBoardAdapterFromEnv(process.env, {
+    providerRuntime,
+    clock: now,
+  });
   const market = createMarketAdapterFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     sources,
@@ -107,31 +131,44 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     },
   };
   const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     sources,
   });
   const dragonTiger = createDragonTigerManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     sources,
   });
-  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(process.env, { clock: now, logger });
+  const dragonTigerFlow = createDragonTigerFlowManagerFromEnv(process.env, {
+    providerRuntime,
+    clock: now,
+    logger,
+  });
   const northboundFlow = createNorthboundFlowManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     sources,
   });
   const news = createNewsManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     sources,
   });
   const sectorQuote = createSectorQuoteManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
   });
-  const sectorCatalog = createSectorCatalogFromEnv(process.env, { clock: now, logger });
+  const sectorCatalog = createSectorCatalogFromEnv(process.env, {
+    providerRuntime,
+    clock: now,
+    logger,
+  });
   let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
   try {
     researchVault = createResearchVaultAdapterFromEnv(process.env);
@@ -139,6 +176,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
   }
   const ashareSentiment = createAShareSentimentManagerFromEnv(process.env, {
+    providerRuntime,
     clock: now,
     logger,
     market,
@@ -155,14 +193,13 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   };
   const ctx = buildContext({
     repos,
-    executionPolicy: createPluginExecutionPolicy(
-      new PluginConfigStore(resolvePluginConfigPath(process.env)),
-      pluginAllowedSideEffects(process.env),
-    ),
+    dataScope: providerRuntime,
+    executionPolicy: createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(process.env)),
     adapters: {
       market,
       llm: ai?.llm ?? unavailableLLM,
       stockUniverse: createStockUniverseManagerFromEnv(process.env, {
+        providerRuntime,
         clock: now,
         logger,
       }),

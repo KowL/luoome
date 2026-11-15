@@ -4,6 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PluginConfigStore } from '@luoome/adapters';
+import { money, stockCode } from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -56,16 +59,43 @@ const data = (result: Awaited<ReturnType<Client['callTool']>>) => {
 
 try {
   const home = join(root, 'local');
+  new PluginConfigStore(join(home, 'plugins.json')).initialize();
+  const seed = createDrizzleRepos(join(home, 'luoome.db'));
+  await seed.repos.stock.save({
+    id: '000001.SZ',
+    code: stockCode('000001'),
+    exchange: 'SZ',
+    name: 'fixture local',
+  });
+  await seed.repos.dailyBar.saveMany([
+    {
+      stockId: '000001.SZ',
+      date: new Date(Date.now() - 86400000),
+      open: money(10),
+      high: money(10),
+      low: money(10),
+      close: money(10),
+      volume: 100,
+      adjustment: 'qfq',
+      source: 'offline-fixture',
+    },
+  ]);
+  seed.close();
   for (let attempt = 0; attempt < 2; attempt++) {
     const client = await connect(home);
     try {
       const tools = await names(client);
-      for (const name of ['list_watchlists', 'search_stocks', 'get_account_overview', 'get_advice'])
+      for (const name of [
+        'list_watchlists',
+        'search_stocks',
+        'get_account_overview',
+        'get_advice',
+        'compute_indicators',
+      ])
         assert.ok(tools.includes(name), name);
       for (const name of [
         'fetch_quote',
         'analyze_stock',
-        'compute_indicators',
         'limit_up_ladder',
         'fetch_news',
         'search_research_documents',
@@ -82,6 +112,14 @@ try {
       });
       assert.notEqual(search.isError, true);
       assert.equal(data(search).source, 'local-history');
+      assert.equal(data(search).stocks[0].id, '000001.SZ');
+      const indicators = await client.callTool({
+        name: 'compute_indicators',
+        arguments: { stockId: '000001.SZ' },
+      });
+      assert.notEqual(indicators.isError, true);
+      assert.equal(data(indicators).barsCount, 1);
+      assert.equal(data(indicators).indicators.close, 10);
       const account = await client.callTool({ name: 'get_account_overview', arguments: {} });
       assert.equal(account.isError, true);
       assert.equal(data(account).kind, 'not_found');
@@ -95,7 +133,13 @@ try {
   }
   console.log('ok: no providers or credentials; local discovery/calls and restart');
 
+  const enableSource = (home: string) => {
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    const config = store.initialize();
+    return store.set('source.eastmoney', true, store.set('source.sina', true, config));
+  };
   const marketHome = join(root, 'market');
+  enableSource(marketHome);
   const config = {
     LUOOME_MARKET_PROVIDER: 'real',
     LUOOME_MARKET_SOURCES: 'sina',
@@ -123,6 +167,17 @@ try {
     const news = await authorized.callTool({ name: 'fetch_news', arguments: {} });
     assert.notEqual(news.isError, true);
     assert.equal(data(news).items[0].id, 'mcp-fixture-news');
+    const store = new PluginConfigStore(join(marketHome, 'plugins.json'));
+    const current = store.read();
+    assert.ok(current.ok);
+    const off = store.set('source.eastmoney', false, current.config);
+    assert.ok(!(await names(authorized)).includes('fetch_news'));
+    await assert.rejects(
+      authorized.callTool({ name: 'fetch_news', arguments: {} }),
+      /not found or not exposed/,
+    );
+    store.set('source.eastmoney', true, off);
+    assert.ok((await names(authorized)).includes('fetch_news'));
     const created = await authorized.callTool({
       name: 'create_watchlist',
       arguments: { name: 'smoke watchlist', kind: 'personal', membershipPolicy: 'manual' },
@@ -139,6 +194,7 @@ try {
     'ok: configured dependencies AND authorization; real news adapter with offline HTTP fixture',
   );
 
+  enableSource(join(root, 'model'));
   const model = await connect(join(root, 'model'), {
     ...config,
     MINIMAX_API_KEY: 'offline-fixture-only',

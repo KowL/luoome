@@ -1,6 +1,6 @@
 import type { DragonTigerFlowManagerLike, Logger } from '@luoome/core';
-
 import { FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
+import type { ProviderRuntime } from '../plugins/provider-runtime.js';
 import { DragonTigerFlowManager } from './flow-manager.js';
 import { FuyaoDragonTigerFlowSource } from './fuyao.js';
 
@@ -13,6 +13,7 @@ import { FuyaoDragonTigerFlowSource } from './fuyao.js';
  */
 
 export interface CreateDragonTigerFlowManagerDeps {
+  readonly providerRuntime?: ProviderRuntime;
   readonly logger: Logger;
   readonly clock?: () => Date;
   /** 测试用：替换 fetch（不联网跑装配与解析）。 */
@@ -20,6 +21,21 @@ export interface CreateDragonTigerFlowManagerDeps {
 }
 
 export const createDragonTigerFlowManagerFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateDragonTigerFlowManagerDeps,
+): DragonTigerFlowManagerLike | undefined => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('dragon-tiger-flow', ['fuyao'], () =>
+      buildCreateDragonTigerFlowManagerFromEnv(env, {
+        ...deps,
+        fetchImpl: runtime.fetchFor('fuyao', deps.fetchImpl),
+      }),
+    );
+  return buildCreateDragonTigerFlowManagerFromEnv(env, deps);
+};
+
+const buildCreateDragonTigerFlowManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateDragonTigerFlowManagerDeps,
 ): DragonTigerFlowManagerLike | undefined => {

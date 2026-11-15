@@ -6,8 +6,8 @@ import {
 } from '@luoome/core';
 import { asc, eq, like, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { type Schema, stocks } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type StockRow = typeof stocks.$inferSelect;
 
@@ -24,21 +24,26 @@ const toStock = (row: StockRow): Stock => ({
 const sanitizeLikeQuery = (q: string): string => q.replace(/[%_]/g, '');
 
 export class DrizzleStockRepository implements StockRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(stock: Stock): Promise<void> {
-    assertStockInvariants(stock);
-    const row = {
-      id: stock.id,
-      code: stock.code,
-      exchange: stock.exchange,
-      name: stock.name,
-      industry: stock.industry ?? null,
-      nameSource: stock.name === stock.code ? ('stub' as const) : ('manual' as const),
-      nameUpdatedAt: null,
-      updatedAt: new Date(0),
-    };
-    this.db.insert(stocks).values(row).onConflictDoUpdate({ target: stocks.id, set: row }).run();
+    return this.writes.transaction(this.db, () => {
+      assertStockInvariants(stock);
+      const row = {
+        id: stock.id,
+        code: stock.code,
+        exchange: stock.exchange,
+        name: stock.name,
+        industry: stock.industry ?? null,
+        nameSource: stock.name === stock.code ? ('stub' as const) : ('manual' as const),
+        nameUpdatedAt: null,
+        updatedAt: new Date(0),
+      };
+      this.db.insert(stocks).values(row).onConflictDoUpdate({ target: stocks.id, set: row }).run();
+    });
   }
 
   async findById(id: string): Promise<Stock | null> {
@@ -78,6 +83,8 @@ export class DrizzleStockRepository implements StockRepository {
   }
 
   async remove(id: string): Promise<void> {
-    this.db.delete(stocks).where(eq(stocks.id, id)).run();
+    return this.writes.transaction(this.db, () => {
+      this.db.delete(stocks).where(eq(stocks.id, id)).run();
+    });
   }
 }

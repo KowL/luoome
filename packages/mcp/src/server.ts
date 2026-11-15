@@ -58,29 +58,36 @@ export const startMcpServer = async (
   const env = opts.env ?? process.env;
   const allowedSideEffects = resolveAllowedSideEffects(env);
 
-  const {
-    ctx,
-    readyDependencies,
-    close: closeCtx,
-  } = opts.context ?? (await createServerContext(env));
-
+  const context = opts.context ?? (await createServerContext(env));
+  const { ctx, close: closeCtx } = context;
   const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects).filter(
-    (tool) =>
-      isMcpToolReady(tool.name, readyDependencies) &&
-      (env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research')),
+    (tool) => env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research'),
   );
-  // createRegistry(...).toMCP() 复用 tools 包的 JSON Schema 转换
-  //（z.toJSONSchema(io:'input', unrepresentable:'any')），并顺带做重名检查。
   const descriptors = createRegistry(allowedTools).toMCP();
-  const byName = new Map(allowedTools.map((tool) => [tool.name, tool]));
-
+  const available = () => {
+    const ready = context.readyDependencies;
+    return allowedTools.filter((tool) => {
+      if (!isMcpToolReady(tool.name, ready)) return false;
+      try {
+        return (
+          (ctx.executionPolicy?.authorizeTool(tool.name, {}, tool.requiredCapabilities) ?? null) ===
+          null
+        );
+      } catch {
+        return false;
+      }
+    });
+  };
   const serverInfo = opts.serverInfo ?? { name: 'luoome', version: '0.9.0' };
   const server = new Server(serverInfo, { capabilities: { tools: { listChanged: false } } });
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: descriptors }));
+  server.setRequestHandler(ListToolsRequestSchema, () => {
+    const exposed = new Set(available().map((tool) => tool.name));
+    return { tools: descriptors.filter((tool) => exposed.has(tool.name)) };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const tool = byName.get(request.params.name);
+    const tool = available().find((tool) => tool.name === request.params.name);
     if (tool === undefined) {
       // 未注册 / 未暴露的 tool 属协议层错误（与 SDK 对未知 tool 的处理一致）。
       throw new McpError(
@@ -104,12 +111,14 @@ export const startMcpServer = async (
 
   ctx.logger.info('mcp server started', {
     transport: 'stdio',
-    exposedTools: allowedTools.map((tool) => tool.name),
+    exposedTools: available().map((tool) => tool.name),
   });
 
   return {
     server,
-    exposedToolNames: allowedTools.map((tool) => tool.name),
+    get exposedToolNames() {
+      return available().map((tool) => tool.name);
+    },
     close: async () => {
       await server.close();
       closeCtx();

@@ -1,7 +1,7 @@
 import type { Logger, SectorCatalogAdapterLike } from '@luoome/core';
-
 import { fuyaoConfigFromEnv } from '../fuyao/client.js';
 import { FuyaoSource } from '../fuyao/source.js';
+import type { ProviderRuntime } from '../plugins/provider-runtime.js';
 
 /**
  * 行业 / 概念目录与成分数据源装配。
@@ -10,12 +10,28 @@ import { FuyaoSource } from '../fuyao/source.js';
  * 同步 tool 明确失败而不是静默联网或返回空事实。
  */
 export interface CreateSectorCatalogDeps {
+  readonly providerRuntime?: ProviderRuntime;
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
 }
 
 export const createSectorCatalogFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  deps: CreateSectorCatalogDeps,
+): SectorCatalogAdapterLike | undefined => {
+  const runtime = deps.providerRuntime;
+  if (runtime !== undefined)
+    return runtime.wrap('sector-catalog', ['fuyao'], () =>
+      buildCreateSectorCatalogFromEnv(env, {
+        ...deps,
+        fetchImpl: runtime.fetchFor('fuyao', deps.fetchImpl),
+      }),
+    );
+  return buildCreateSectorCatalogFromEnv(env, deps);
+};
+
+const buildCreateSectorCatalogFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateSectorCatalogDeps,
 ): SectorCatalogAdapterLike | undefined => {

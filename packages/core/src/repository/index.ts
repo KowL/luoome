@@ -557,6 +557,8 @@ export interface ReportRepository {
 }
 
 export interface RepositoryRegistry {
+  readonly publicMarket: import('../public-market-store.js').PublicMarketStore;
+  withWriteGuard<T>(check: () => void, operation: () => Promise<T>): Promise<T>;
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;

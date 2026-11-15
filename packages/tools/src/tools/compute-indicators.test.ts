@@ -1,4 +1,4 @@
-import { type DailyBar, type MarketDataAdapterLike, money, type ToolContext } from '@luoome/core';
+import { type DailyBar, money, type ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 import { computeIndicatorsTool } from './compute-indicators.js';
@@ -17,17 +17,14 @@ const barsFromCloses = (stockId: string, closes: readonly number[]): DailyBar[] 
   }));
 
 const withDailyBars = async (closes: readonly number[]): Promise<ToolContext> => {
-  const base = await buildTestContext();
-  const market: MarketDataAdapterLike = {
-    ...base.adapters.market,
-    fetchDailyBars: async (stockId) => barsFromCloses(stockId, closes),
-  };
-  return { ...base, adapters: { ...base.adapters, market } };
+  const base = await buildTestContext({ clock: () => new Date('2026-04-01T00:00:00Z') });
+  await base.repos.dailyBar.saveMany(barsFromCloses('002594.SZ', closes));
+  return base;
 };
 
 describe('tool/compute_indicators', () => {
   it('正常路径：返回 indicators + barsCount + dataAsOf', async () => {
-    const ctx = await buildTestContext();
+    const ctx = await withDailyBars(Array.from({ length: 60 }, (_, i) => 10 + i));
     const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;

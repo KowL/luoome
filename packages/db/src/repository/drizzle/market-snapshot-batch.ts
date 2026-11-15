@@ -8,8 +8,8 @@ import {
 } from '@luoome/core';
 import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { marketSnapshotBatches, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type BatchRow = typeof marketSnapshotBatches.$inferSelect;
 
@@ -32,29 +32,34 @@ const toBatch = (row: BatchRow): MarketSnapshotBatch => {
 };
 
 export class DrizzleMarketSnapshotBatchRepository implements MarketSnapshotBatchRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async publish(batch: MarketSnapshotBatch): Promise<MarketSnapshotBatchPublishResult> {
     const parsed = MarketSnapshotBatchSchema.parse(batch);
     assertMarketSnapshotBatchInvariants(parsed);
-    const inserted = this.db
-      .insert(marketSnapshotBatches)
-      .values({
-        id: parsed.id,
-        coverage: parsed.coverage,
-        tradingDate: parsed.tradingDate,
-        sampledAt: parsed.sampledAt,
-        source: parsed.source,
-        fetchedAt: parsed.fetchedAt,
-        observedAt: parsed.observedAt ?? null,
-        dataAsOf: parsed.dataAsOf ?? null,
-        completeness: parsed.completeness,
-        gaps: [...parsed.gaps],
-        items: [...parsed.items],
-      })
-      .onConflictDoNothing({ target: marketSnapshotBatches.id })
-      .returning({ id: marketSnapshotBatches.id })
-      .all();
+    const inserted = this.writes.transaction(this.db, () =>
+      this.db
+        .insert(marketSnapshotBatches)
+        .values({
+          id: parsed.id,
+          coverage: parsed.coverage,
+          tradingDate: parsed.tradingDate,
+          sampledAt: parsed.sampledAt,
+          source: parsed.source,
+          fetchedAt: parsed.fetchedAt,
+          observedAt: parsed.observedAt ?? null,
+          dataAsOf: parsed.dataAsOf ?? null,
+          completeness: parsed.completeness,
+          gaps: [...parsed.gaps],
+          items: [...parsed.items],
+        })
+        .onConflictDoNothing({ target: marketSnapshotBatches.id })
+        .returning({ id: marketSnapshotBatches.id })
+        .all(),
+    );
     const saved = await this.findById(parsed.id);
     if (saved === null) {
       throw new Error('market snapshot batch publish did not produce a row');

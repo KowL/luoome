@@ -6,7 +6,7 @@ import { applicationToolRegistry, toolRegistry } from './registry.js';
 import type { ListWatchlistsInput } from './tools/watchlist.js';
 
 describe('typed tool catalog', () => {
-  it('preserves the P0 inventory, public input schemas, permissions and discovery baseline', () => {
+  it('records P2 permissions, local computation dependencies and discovery baseline', () => {
     const baseline = {
       tools: toolRegistry.toMCP(),
       policy: Object.entries(toolCatalog).map(([name, entry]) => [
@@ -18,8 +18,11 @@ describe('typed tool catalog', () => {
       ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      'fc62d8c2f52c7e96915854fdb4eafdd61075124f6bd9c90fd62e033f58f39d8c',
+      '87b0d48361a4b224d7f63297a3181d3af0bf7e6f87e2a706d5384d853b2ab6fd',
     );
+    expect(toolCatalog.compute_indicators.dependencies).toEqual([]);
+    expect(toolCatalog.sync_daily_bars.execution).toBe('p2');
+    expect(toolCatalog.sync_daily_bars.tool.requiredCapabilities).toEqual(['external', 'write']);
     for (const entry of Object.values(toolCatalog)) expect(entry.owner).toBeTruthy();
     expect(toolCatalog.get_strategy_insight_facts.owner).toBe('shared-query');
     expect(toolCatalog.generate_strategy_insight.owner).toBe('business.strategy-insight');
