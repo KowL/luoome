@@ -5,6 +5,13 @@ import type {
   StrategyProviderCoverage,
   ToolContext,
 } from '@luoome/core';
+import { PluginExecutionDenied } from '@luoome/core';
+
+export const assertStrategyExecution = (ctx: ToolContext): void => {
+  ctx.executionGuard?.();
+  ctx.executionPolicy?.assertTool('run_strategy');
+  if (ctx.abortSignal?.aborted) throw new PluginExecutionDenied('execution:cancelled');
+};
 
 const DAY_MS = 86_400_000;
 const BATCH_QUOTE_CHUNK_SIZE = 100;
@@ -121,9 +128,13 @@ export const createLiveStrategyEvaluationDataAdapter = (
       }
       // batchQuote 实现可能自行并发逐股请求；串行提交小批次，确保上游并发有界。
       const chunkResults = await mapWithConcurrency(chunks, 1, async (chunk) => {
+        assertStrategyExecution(ctx);
         try {
-          return await ctx.adapters.market.batchQuote(chunk);
+          const quotes = await ctx.adapters.market.batchQuote(chunk);
+          assertStrategyExecution(ctx);
+          return quotes;
         } catch (error) {
+          if (error instanceof PluginExecutionDenied) throw error;
           ctx.logger.warn(
             'run_strategy batch quote chunk failed; falling back to per-stock fetch',
             {
@@ -148,6 +159,7 @@ export const createLiveStrategyEvaluationDataAdapter = (
         request.stockIds,
         request.concurrency,
         async (stockId) => {
+          assertStrategyExecution(ctx);
           try {
             const bars = request.needsDailyBars
               ? await ctx.adapters.market.fetchDailyBars(stockId, {
@@ -157,9 +169,11 @@ export const createLiveStrategyEvaluationDataAdapter = (
                   end: request.dataAsOf,
                 })
               : [];
+            assertStrategyExecution(ctx);
             const quote = request.needsQuote
               ? (preloadedQuotes.get(stockId) ?? (await ctx.adapters.market.fetchQuote(stockId)))
               : undefined;
+            assertStrategyExecution(ctx);
             return {
               ok: true as const,
               data: {
@@ -169,6 +183,7 @@ export const createLiveStrategyEvaluationDataAdapter = (
               },
             };
           } catch (error) {
+            if (error instanceof PluginExecutionDenied) throw error;
             return {
               ok: false as const,
               failure: {
@@ -262,6 +277,7 @@ export const createLocalStrategyEvaluationDataAdapter = (
         request.stockIds,
         request.concurrency,
         async (stockId) => {
+          assertStrategyExecution(ctx);
           try {
             let bars: readonly DailyBar[] = [];
             if (request.needsDailyBars || request.needsQuote) {
@@ -274,6 +290,7 @@ export const createLocalStrategyEvaluationDataAdapter = (
             const latestBar = bars.at(-1);
             const quote =
               latestBar === undefined ? undefined : quoteFromDailyBar(latestBar, request.fetchedAt);
+            assertStrategyExecution(ctx);
             return {
               ok: true as const,
               data: {
@@ -283,6 +300,7 @@ export const createLocalStrategyEvaluationDataAdapter = (
               },
             };
           } catch (error) {
+            if (error instanceof PluginExecutionDenied) throw error;
             return {
               ok: false as const,
               failure: {

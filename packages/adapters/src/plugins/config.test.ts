@@ -111,3 +111,19 @@ describe('persistent plugin policy', () => {
     });
   });
 });
+
+it('migrates P2 without enabling strategy execution or automatic schedules and preserves existing permits', () => {
+  const store = setup();
+  const initial = store.initialize();
+  const enabled = store.set('source.eastmoney', true, initial);
+  const permit = store.acquire('source.eastmoney');
+  const entries = { ...enabled.entries };
+  delete entries['business.strategy-execution'];
+  delete entries['task.strategy-schedules'];
+  writeFileSync(store.path, JSON.stringify({ ...enabled, entries }));
+  const migrated = store.migrate(enabled);
+  expect(migrated.entries['business.strategy-execution']).toEqual({ enabled: false, epoch: 1 });
+  expect(migrated.entries['task.strategy-schedules']).toEqual({ enabled: false, epoch: 1 });
+  expect(migrated.entries['source.eastmoney']).toEqual(enabled.entries['source.eastmoney']);
+  expect(permit.ok && store.valid(permit.permit)).toBe(true);
+});

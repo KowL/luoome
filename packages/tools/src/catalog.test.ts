@@ -6,7 +6,7 @@ import { applicationToolRegistry, toolRegistry } from './registry.js';
 import type { ListWatchlistsInput } from './tools/watchlist.js';
 
 describe('typed tool catalog', () => {
-  it('records P2 permissions, local computation dependencies and discovery baseline', () => {
+  it('records P3 permissions, local computation dependencies and discovery baseline', () => {
     const baseline = {
       tools: toolRegistry.toMCP(),
       policy: Object.entries(toolCatalog).map(([name, entry]) => [
@@ -18,8 +18,11 @@ describe('typed tool catalog', () => {
       ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      '87b0d48361a4b224d7f63297a3181d3af0bf7e6f87e2a706d5384d853b2ab6fd',
+      '3696d0f00e2b74a10bb6df3e0d2989643d5758edaedfce7284d79447c0b461da',
     );
+    expect(toolCatalog.run_strategy.owner).toBe('business.strategy-execution');
+    expect(toolCatalog.run_strategy.execution).toBe('p3');
+    expect(toolCatalog.run_strategy.dependencies).toEqual([]);
     expect(toolCatalog.compute_indicators.dependencies).toEqual([]);
     expect(toolCatalog.sync_daily_bars.execution).toBe('p2');
     expect(toolCatalog.sync_daily_bars.tool.requiredCapabilities).toEqual(['external', 'write']);

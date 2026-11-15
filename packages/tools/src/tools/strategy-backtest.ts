@@ -20,8 +20,8 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { assertStrategyExecution } from '../internal/strategy-evaluation-data.js';
 
 const BacktestCostsInput = z.object({
   commissionBps: z.number().nonnegative().max(100),
@@ -147,6 +147,7 @@ const assembleBacktest = async (
   });
   const byDate = new Map<string, StrategyRun>();
   for (const run of candidates) {
+    assertStrategyExecution(ctx);
     if (run.strategyVersionId !== spec.strategyVersionId) continue;
     if (run.status !== 'complete' && run.status !== 'partial') continue;
     const snapshot = readStrategyRunSnapshot(run.inputSnapshot);
@@ -164,6 +165,7 @@ const assembleBacktest = async (
 
   const resultsByDay = new Map<string, readonly StrategyResult[]>();
   for (const day of days) {
+    assertStrategyExecution(ctx);
     resultsByDay.set(day.dataAsOf.toISOString(), await ctx.repos.strategyRun.listResults(day.id));
   }
 
@@ -198,6 +200,7 @@ const assembleBacktest = async (
 
   const barsByStock = new Map<string, readonly DailyBar[]>();
   for (const stockId of targetStockIds) {
+    assertStrategyExecution(ctx);
     barsByStock.set(stockId, await ctx.repos.dailyBar.findInRange(stockId, spec.from, spec.to));
   }
   const latestBarOnOrBefore = (stockId: string, date: Date): DailyBar | undefined => {
@@ -211,7 +214,9 @@ const assembleBacktest = async (
 
   const marketFacts: StrictBacktestMarketFact[] = [];
   for (const day of executionDays) {
+    assertStrategyExecution(ctx);
     for (const stockId of targetStockIds) {
+      assertStrategyExecution(ctx);
       const bar = latestBarOnOrBefore(stockId, day.dataAsOf);
       if (bar !== undefined) marketFacts.push(buildMarketFact(bar, 'qfq:daily:v1'));
     }
@@ -231,6 +236,7 @@ const assembleBacktest = async (
   );
   const benchmarkFacts: StrictBacktestMarketFact[] = [];
   for (const day of executionDays) {
+    assertStrategyExecution(ctx);
     const bar = benchmarkBars
       .filter((candidate) => candidate.date.getTime() <= day.dataAsOf.getTime())
       .at(-1);
@@ -353,6 +359,7 @@ export const createStrictStrategyBacktestTool = defineTool({
         sellBps: input.costs.sellSlippageBps,
       },
     });
+    assertStrategyExecution(ctx);
     const assembled = await assembleBacktest(spec, ctx);
     const specHash = strictBacktestSpecHash(spec);
     const id = `strict-backtest-${strictBacktestHash({ specHash, inputFingerprint: assembled.inputFingerprint }).slice(0, 32)}`;
@@ -372,6 +379,7 @@ export const createStrictStrategyBacktestTool = defineTool({
       createdAt: now,
       ...(runnable ? {} : { finishedAt: now }),
     });
+    assertStrategyExecution(ctx);
     await ctx.repos.strategyBacktest.saveRun(run);
     return { run };
   },
@@ -392,6 +400,7 @@ export const executeStrictStrategyBacktestTool = defineTool({
     }
     if (existing.gateAudit.status !== 'complete')
       return errInvalidInput('strict backtest facts gate 未完成');
+    assertStrategyExecution(ctx);
     const assembled = await assembleBacktest(existing.spec, ctx);
     if (assembled.inputFingerprint !== existing.inputFingerprint) {
       const failed = StrictBacktestRunSchema.parse({
@@ -408,6 +417,7 @@ export const executeStrictStrategyBacktestTool = defineTool({
       status: 'running',
       startedAt: ctx.clock(),
     });
+    assertStrategyExecution(ctx);
     await ctx.repos.strategyBacktest.saveRun(running);
     try {
       const metrics = runStrictBacktest({
@@ -423,6 +433,7 @@ export const executeStrictStrategyBacktestTool = defineTool({
         metrics,
         finishedAt: ctx.clock(),
       });
+      assertStrategyExecution(ctx);
       await ctx.repos.strategyBacktest.saveRun(complete);
       return { run: complete };
     } catch (error) {

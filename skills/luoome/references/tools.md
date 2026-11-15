@@ -90,3 +90,7 @@ in the MCP denylist, and the `LUOOME_EXPOSE_TRADE=true` startup guard remains in
 Real order placement and cancellation are outside the luoome MCP surface. Do not search for a workaround, call a broker directly, reinterpret a write tool as an order, or claim an Advice was executed.
 
 For permission and response requirements, read [safety and errors](./safety.md).
+
+Strategy execution requires the host to enable `business.strategy-execution`; automatic schedules additionally require `task.strategy-schedules`.
+Definitions/history remain readable when execution is disabled. `run_strategy_backtest` get/list remain queries; run/execute delegate to controlled targets.
+Scheduled/replay rule inputs may come entirely from persisted local data. Missing live/archived ladder inputs retain their existing availability and acceptance rules.

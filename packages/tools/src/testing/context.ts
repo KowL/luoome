@@ -75,7 +75,8 @@ export const createTestPluginControl = (home: string) => {
     store,
     initial: (() => {
       let config = store.initialize();
-      for (const id of TASK_PLUGIN_IDS) config = store.set(id, true, config);
+      for (const id of ['business.strategy-execution', ...TASK_PLUGIN_IDS] as const)
+        config = store.set(id, true, config);
       return config;
     })(),
     executionPolicy: createPluginExecutionPolicy(

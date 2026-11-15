@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PluginConfigStore } from '@luoome/adapters';
-import { money, stockCode } from '@luoome/core';
+import { money, stockCode, strategyDefinitionHash } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -132,6 +132,111 @@ try {
     }
   }
   console.log('ok: no providers or credentials; local discovery/calls and restart');
+  const strategySeed = createDrizzleRepos(join(home, 'luoome.db'));
+  const now = new Date();
+  const definition = {
+    schemaVersion: 1 as const,
+    metadata: {},
+    universe: { coverage: 'CN_A_SHARES_SH_SZ' as const, excludeStockIds: [] },
+    selection: {
+      logic: 'all' as const,
+      rules: [
+        {
+          id: 'positive',
+          name: 'fixture price',
+          when: 'quote.close > 0',
+          evidence: ['fixture only'],
+        },
+      ],
+    },
+    signals: { entry: [], exit: [], risk: [] },
+  };
+  await strategySeed.repos.strategy.create({
+    id: 'mcp-strategy',
+    name: 'MCP fixture strategy',
+    description: 'offline fixture',
+    owner: 'user',
+    status: 'active',
+    currentVersionId: 'mcp-strategy-v1',
+    createdAt: now,
+    updatedAt: now,
+  });
+  await strategySeed.repos.strategy.createVersion({
+    id: 'mcp-strategy-v1',
+    strategyId: 'mcp-strategy',
+    version: 1,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
+    validationStatus: 'valid',
+    validationErrors: [],
+    publishedAt: now,
+    createdAt: now,
+  });
+  await strategySeed.repos.stockUniverse.applySnapshot({
+    syncId: 'mcp-universe',
+    appliedAt: now,
+    snapshot: {
+      source: 'fixture',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      observedAt: now,
+      complete: true,
+      reportedTotal: 1,
+      entries: [
+        {
+          stockId: '000001.SZ',
+          code: stockCode('000001'),
+          exchange: 'SZ',
+          name: 'fixture local',
+          listingStatus: 'listed',
+        },
+      ],
+    },
+  });
+  strategySeed.close();
+  const strategyStore = new PluginConfigStore(join(home, 'plugins.json'));
+  const setExecution = (enabled: boolean) => {
+    const read = strategyStore.read();
+    assert.ok(read.ok);
+    strategyStore.set('business.strategy-execution', enabled, read.config);
+  };
+  setExecution(true);
+  const strategyClient = await connect(home, {
+    LUOOME_EXPOSE_EXTERNAL: 'true',
+    LUOOME_EXPOSE_WRITE: 'true',
+  });
+  try {
+    assert.ok((await names(strategyClient)).includes('run_strategy'));
+    const run = await strategyClient.callTool({
+      name: 'run_strategy',
+      arguments: { strategyId: 'mcp-strategy', mode: 'scheduled' },
+    });
+    assert.notEqual(run.isError, true);
+    assert.equal(data(run).run.status, 'complete');
+    assert.equal(data(run).results.length, 1);
+    setExecution(false);
+    assert.ok(!(await names(strategyClient)).includes('run_strategy'));
+    await assert.rejects(
+      strategyClient.callTool({
+        name: 'run_strategy',
+        arguments: { strategyId: 'mcp-strategy', mode: 'scheduled' },
+      }),
+      /not found or not exposed/,
+    );
+    const history = await strategyClient.callTool({
+      name: 'get_strategy',
+      arguments: { strategyId: 'mcp-strategy' },
+    });
+    assert.notEqual(history.isError, true);
+    assert.equal(data(history).strategy.id, 'mcp-strategy');
+    setExecution(true);
+    assert.ok((await names(strategyClient)).includes('run_strategy'));
+    setExecution(false);
+  } finally {
+    await strategyClient.close();
+  }
+  console.log(
+    'ok: controlled strategy execution uses local data; same-connection disable revokes discovery/calls and retains history',
+  );
 
   const enableSource = (home: string) => {
     const store = new PluginConfigStore(join(home, 'plugins.json'));

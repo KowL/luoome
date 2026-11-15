@@ -178,6 +178,7 @@ export const runStrategySchedulesOperation = defineOperation<
   RunStrategySchedulesInputT,
   RunStrategySchedulesOutputT
 >({
+  requiredPlugins: ['business.strategy-execution', 'task.strategy-schedules'],
   name: 'run-strategy-schedules',
   description: '按进程内互斥调度到期的 Strategy 并委托 strategy-daily-cycle 完成单周期闭环',
   input: RunStrategySchedulesInput,

@@ -59,7 +59,6 @@ export const strategySchedulerTuningFromEnv = (
 
 export interface StrategySchedulerHandle {
   readonly tick: () => Promise<void>;
-  readonly cutoffTick: () => Promise<void>;
   readonly stop: () => void;
 }
 
@@ -69,6 +68,7 @@ export interface StartStrategySchedulerOptions {
   readonly owner?: string;
   readonly tuning?: StrategySchedulerTuning;
   readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT>>;
+  readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
   readonly runCutoff?: () => Promise<ToolResult<ClosingReportCutoffOutputT>>;
 }
 
@@ -86,44 +86,17 @@ export const startStrategyScheduler = (
     options.run ??
     (() =>
       runStrategySchedulesOperation.run(
-        { limit: STRATEGY_SCHEDULER_BATCH_LIMIT, concurrency: tuning.concurrency },
+        {
+          limit: STRATEGY_SCHEDULER_BATCH_LIMIT,
+          concurrency: tuning.concurrency,
+          deferReports: true,
+        },
         ctx,
       ));
-  const runCutoff =
-    options.runCutoff ??
-    (async () => {
-      const priorDate = previousTradingDay(dateInShanghai(ctx.clock()));
-      const recovered = await closingReportCutoffWorkflow.run({ date: priorDate }, ctx);
-      if (!recovered.ok || recovered.data.failed.length > 0)
-        ctx.logger.error('前一交易日收盘报告补投失败', {
-          date: priorDate,
-          error: recovered.ok ? recovered.data.failed : recovered.error,
-        });
-      return closingReportCutoffWorkflow.run({}, ctx);
-    });
   let stopped = false;
   let running = false;
-  let cutoffRunning = false;
 
-  const cutoffTick = async (): Promise<void> => {
-    if (stopped || cutoffRunning) return;
-    cutoffRunning = true;
-    try {
-      const result = await runCutoff();
-      if (!result.ok || result.data.failed.length > 0)
-        ctx.logger.error('收盘报告截止 tick 失败', {
-          error: result.ok ? result.data.failed : result.error,
-        });
-    } catch (error) {
-      ctx.logger.error('收盘报告截止 tick 异常', {
-        cause: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      cutoffRunning = false;
-    }
-  };
-
-  const tick = async (): Promise<void> => {
+  const runTick = async (): Promise<void> => {
     if (stopped || running) return;
     running = true;
     try {
@@ -149,22 +122,73 @@ export const startStrategyScheduler = (
     }
   };
 
+  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
-  const cutoffTimer = setInterval(() => void cutoffTick(), intervalMs);
-  cutoffTimer.unref();
   if (options.startImmediately !== false) {
-    void cutoffTick();
     void tick();
   }
 
   return {
     tick,
-    cutoffTick,
     stop: () => {
       stopped = true;
       clearInterval(timer);
-      clearInterval(cutoffTimer);
+    },
+  };
+};
+
+export const startClosingReportScheduler = (
+  ctx: ToolContext,
+  options: Pick<
+    StartStrategySchedulerOptions,
+    'intervalMs' | 'startImmediately' | 'runCutoff'
+  > = {},
+): { tick(): Promise<void>; stop(): void } => {
+  const intervalMs = options.intervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0)
+    throw new Error('invalid closing report interval');
+  const runCutoff =
+    options.runCutoff ??
+    (async () => {
+      const priorDate = previousTradingDay(dateInShanghai(ctx.clock()));
+      const recovered = await closingReportCutoffWorkflow.run({ date: priorDate }, ctx);
+      if (!recovered.ok || recovered.data.failed.length > 0)
+        ctx.logger.error('前一交易日收盘报告补投失败', {
+          date: priorDate,
+          error: recovered.ok ? recovered.data.failed : recovered.error,
+        });
+      return closingReportCutoffWorkflow.run({}, ctx);
+    });
+  let stopped = false;
+  let cutoffRunning = false;
+
+  const tick = async (): Promise<void> => {
+    if (stopped || cutoffRunning) return;
+    cutoffRunning = true;
+    try {
+      const result = await runCutoff();
+      if (!result.ok || result.data.failed.length > 0)
+        ctx.logger.error('收盘报告截止 tick 失败', {
+          error: result.ok ? result.data.failed : result.error,
+        });
+    } catch (error) {
+      ctx.logger.error('收盘报告截止 tick 异常', {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      cutoffRunning = false;
+    }
+  };
+
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref();
+  if (options.startImmediately !== false) void tick();
+  return {
+    tick,
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
     },
   };
 };

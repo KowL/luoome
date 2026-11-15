@@ -9,6 +9,7 @@ import type {
 import { MANAGED_PLUGIN_IDS, PluginExecutionDenied } from '@luoome/core';
 import { toolCatalog } from './catalog.js';
 
+const managedOwners = new Set<string>(MANAGED_PLUGIN_IDS);
 const controlledTools = new Map(
   Object.entries(toolCatalog)
     .filter(([, entry]) => 'execution' in entry)
@@ -25,7 +26,7 @@ export const createPluginExecutionPolicy = (
     const assertTool = (name: string, dependency?: ManagedPluginId) => {
       const owner = controlledTools.get(name)?.owner;
       const ids = [
-        ...(owner?.startsWith('task.') ? [owner as ManagedPluginId] : []),
+        ...(owner !== undefined && managedOwners.has(owner) ? [owner as ManagedPluginId] : []),
         ...(dependency === undefined ? [] : [dependency]),
       ];
       for (const id of ids) {
@@ -43,15 +44,19 @@ export const createPluginExecutionPolicy = (
       valid: (permit: PluginPermit) => plugins.valid(permit),
       scopeKey: (name) => {
         const owner = controlledTools.get(name)?.owner;
-        return owner?.startsWith('task.')
+        return owner !== undefined && managedOwners.has(owner)
           ? JSON.stringify([owner, admission(owner as ManagedPluginId)])
           : '';
       },
       assertTool,
-      authorizeTool: (name, _input, required) => {
+      authorizeTool: (name, input, required) => {
         if (!controlledTools.has(name)) return null;
         assertTool(name);
-        const missing = required.find((capability) => !allowed.has(capability));
+        const capabilities =
+          name === 'run_strategy' && (input as { persist?: boolean }).persist === false
+            ? required.filter((cap) => cap !== 'write')
+            : required;
+        const missing = capabilities.find((capability) => !allowed.has(capability));
         return missing === undefined
           ? null
           : {

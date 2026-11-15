@@ -552,3 +552,55 @@ it('unconfigured models are not invoked and recovery cannot revive an old bound 
     error: { kind: 'permission_denied', required: 'execution-policy' },
   });
 });
+
+it('a retired parent execution discards late AI results while standalone insight remains independent', async () => {
+  const { store, initial } = pluginStore();
+  const enabled = store.set('business.strategy-execution', true, initial);
+  const base = await buildTestContext();
+  const policy = createPluginExecutionPolicy(
+    store,
+    new Set(['read', 'write', 'external', 'advice']),
+  );
+  const bound = policy.bind();
+  let release = () => {},
+    started = () => {},
+    calls = 0;
+  const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+  const ctx = {
+    ...base,
+    executionPolicy: policy,
+    adapters: {
+      ...base.adapters,
+      llm: {
+        name: 'paused',
+        generate: async <T>() => {
+          calls++;
+          started();
+          await gate;
+          return 'fixture' as T;
+        },
+      },
+    },
+  };
+  const port = createStrategyExplainer({
+    ...ctx,
+    executionGuard: () => bound.assertTool('run_strategy'),
+  });
+  const pending = port.generate({ system: 'fixture', data: {} });
+  const rejected = expect(pending).rejects.toThrow('plugin execution denied');
+  await entered;
+  const off = store.set('business.strategy-execution', false, enabled);
+  store.set('business.strategy-execution', true, off);
+  release();
+  await rejected;
+  expect(calls).toBe(1);
+  expect(await createStrategyExplainer(ctx).generate({ system: 'fixture', data: {} })).toEqual({
+    ok: true,
+    value: 'fixture',
+  });
+});

@@ -6,6 +6,7 @@ export const createStrategyExplainer = (ctx: ToolContext) => {
     reason: 'dependency_not_ready' as const,
   };
   const blocked = (): PluginBlockReason | undefined => {
+    ctx.executionGuard?.();
     if (!admission.ok) return admission.reason;
     if (!ctx.executionPolicy?.valid(admission.permit)) return 'activation_revoked';
     if (ctx.adapters.llm.configurationReady === false) return 'dependency_not_ready';

@@ -10,6 +10,7 @@ export const SOURCE_PLUGIN_IDS = [
   'source.10jqka',
 ] as const;
 export const TASK_PLUGIN_IDS = [
+  'task.strategy-schedules',
   'task.daily-bars-sync',
   'task.sync-stock-universe',
   'task.collect-market-snapshot',
@@ -21,6 +22,7 @@ export const TASK_PLUGIN_IDS = [
 ] as const;
 export const MANAGED_PLUGIN_IDS = [
   'strategy.ai-insight',
+  'business.strategy-execution',
   ...SOURCE_PLUGIN_IDS,
   ...TASK_PLUGIN_IDS,
 ] as const;

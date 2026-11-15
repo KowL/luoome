@@ -42,3 +42,10 @@ For user-facing luoome operation details, see the [user guide](../../docs/USER_G
 提供者和采集任务由宿主 CLI 的 `plugins status/init/migrate/set` 管理；source 与 task 分别显式启用，且仍需 write/external 授权。
 普通 Agent 不修改配置或偷偷启源。所有提供者关闭后仍可查询本地账户、历史与指标；混合工具返回明确的缺失或本地回退。
 MCP 发现按当前就绪来源变化；停用后重新发现工具，旧工具名不能绕过运行校验。
+
+### 策略执行控制
+
+新策略运行/试跑/回测由宿主的 `business.strategy-execution` 显式启用，自动调度另需 `task.strategy-schedules`；新增项默认关闭。
+`run_strategy` 按模式和规则引用选择资料：仅本地资料的 scheduled/replay 不依赖 live quote/bars；缺失 ladder/归档保留原 unavailable 与 acceptance 语义。
+停用后重新发现工具；旧草案或旧工具名不能恢复执行。历史读取、取消和已有回执查询继续可用，失败/未知结果不自动重放。
+插件启用不改变 write/external 授权、场景白名单或人工确认。个股分析等其它业务独立开关仍在后续切片。

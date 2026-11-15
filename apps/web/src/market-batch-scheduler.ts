@@ -19,6 +19,7 @@ export interface StartMarketBatchSchedulerOptions {
    * 未开启时返回空 handle，不注册定时器、不访问外部行情。
    */
   readonly enabled?: boolean;
+  readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
   readonly collect?: () => Promise<ToolResult<CollectMarketSnapshotOutputT>>;
 }
 
@@ -41,7 +42,7 @@ export const startMarketBatchScheduler = (
   let stopped = false;
   let running = false;
 
-  const tick = async (): Promise<void> => {
+  const runTick = async (): Promise<void> => {
     if (stopped || running || !isMarketBatchSession(ctx.clock())) return;
     if (
       ctx.executionPolicy !== undefined &&
@@ -63,6 +64,7 @@ export const startMarketBatchScheduler = (
     }
   };
 
+  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
   const timer = setInterval(() => void tick(), intervalMs);
   if (options.startImmediately !== false) void tick();
 

@@ -226,6 +226,7 @@ export interface ToolContextAdapters {
 }
 
 export interface ToolContext {
+  readonly executionGuard?: () => void;
   readonly executionPolicy?: ToolExecutionPolicyLike;
   readonly dataScope?: DataExecutionScopeLike;
   readonly repos: RepositoryRegistry;

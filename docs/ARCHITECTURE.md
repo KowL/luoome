@@ -926,10 +926,10 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 目录契约测试校验工具名、对象唯一性和导出覆盖，既有公共库存测试保护暴露范围。
 Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schema；内部 ToolResult 与 MCP 文本内容的响应格式分别说明。
 
-### 7.1.1 P0–P2 插件归属、提供者与采集控制
+### 7.1.1 P0–P3 插件归属与执行控制
 
 catalog 已为全部 Tool 标注唯一 owner，并为策略/分析组合补充模式依赖清点；这些归属不自动授予权限。
-`execution: 'p1' | 'p2'` 明确受控入口，未标入口仍沿用既有授权，并不代表所有业务已经可插拔。
+`execution: 'p1' | 'p2' | 'p3'` 明确受控入口，未标入口仍沿用既有授权，并不代表所有业务已经可插拔。
 公共库存、输入 schema 和权限由 catalog 契约测试保护；P2 将采集权限明确收紧为 write + external，指标计算改为本地日线依赖。
 
 `core/plugin-policy` 仅定义 SDK 无关的纯端口；`adapters/plugins/config` 负责受限大小的配置读取、
@@ -938,7 +938,7 @@ catalog 已为全部 Tool 标注唯一 owner，并为策略/分析组合补充�
 
 `defineTool.execute` 在错误收口内绑定执行 scope，基于 Zod 解析后的输入调用执行策略，再执行 handler；
 Workflow 在创建访问器时绑定 scope，所有 Tool 访问器仍由 catalog 派生。生产 CLI/Web/MCP 均注入策略，
-无策略的通用 buildContext 对 P1/P2 入口默认拒绝；显式 permissive 策略仅在 testing 子入口。
+无策略的通用 buildContext 对 P1/P2/P3 入口默认拒绝；显式 permissive 策略仅在 testing 子入口。
 
 策略查询和 `generate_strategy_insight` 组合入口常驻。可选解释 port 在模型请求前和返回后检查
 `config incarnation + epoch`；同次 facts-only 使用原窗口事实，不重新查询或扩大到其它账户。
@@ -955,7 +955,23 @@ Workflow 在创建访问器时绑定 scope，所有 Tool 访问器仍由 catalog
 采集 scope 把同步校验回调传给 repository；日线、报价、目录、快照、分钟线等写入取得 immediate 写锁后校验，持锁同步到提交。
 dump 文件按下载请求使用独立文件名，并在落盘前校验，防止同名上游文件在多宿主间互相覆盖。
 repo 不识别插件 ID 或实现，不在异步操作外包长事务。全关后本地查询和 `compute_indicators` 无网络依赖；混合入口保留既有权限并显式降级。
-采集任务门控在执行与 transport/持久化安全点生效，通用资源卸载、策略执行插件与管理 UI 留待后续阶段；报告 cutoff 未改变。
+采集任务门控在执行与 transport/持久化安全点生效；报告 cutoff 的事实与投递规则未改变。
+
+`business.strategy-execution` 纳管 `run_strategy`、非持久化试跑/版本对比、严格回测创建与执行。
+P3 owner 在原 catalog 中声明，普通定义维护与历史查询常驻；组合回测 get/list 不运行引擎，写分支委托受控 leaf tool。
+`run_strategy` 的发现不再要求 live quote/bars 同时就绪；按 scan/scheduled/replay 与规则引用决定实际依赖，既有权限和 acceptance 保留。
+Workflow 可声明 requiredPlugins，入场时捕获许可并通过 executionGuard 传入嵌套 Workflow/Tool；
+下一批/请求、规则求值与发布前重查；可选 AI 解释 port 同时校验父执行，丢弃退役父调用的晚响应。纯本地只读和 record_workflow_run 审计保持可用。
+策略运行/回测 repo 取得 immediate 写资格后校验 scope；唯有既存 running 的失败收尾可以在撤销后继续，
+该收尾仍校验不可变身份/状态迁移，且无结果/信号或回测 metrics，不允许撤销后创建新的运行或覆盖终态。
+
+Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner：自动策略调度依赖 task.strategy-schedules + 策略执行，
+盘中快照调度依赖 task.collect-market-snapshot。单个宿主控制 timer 每 250ms reconcile，业务 timer 只为有效 activation 创建。
+退役清除 timer、撤销旧 guard、发送 AbortSignal 并跟踪在途工作；旧任务未排空前不创建新一代资源，失败 teardown 不冒报卸载。
+退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
+策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
+Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
+个股分析等其它 P3 业务切片及 P4 管理页面仍待实施。
 后续阶段见[分层详细设计](./ddd/layered-capability-plugin-detailed-design.md)。
 
 ### 7.2 副作用分级（重申）

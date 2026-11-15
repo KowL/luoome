@@ -6,8 +6,8 @@ import {
 } from '@luoome/core';
 import { desc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { type Schema, strategyBacktestRuns } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type RunRow = typeof strategyBacktestRuns.$inferSelect;
 
@@ -45,59 +45,68 @@ const allowedTransition = (
   (from === 'running' && (to === 'complete' || to === 'failed'));
 
 export class DrizzleStrategyBacktestRepository implements StrategyBacktestRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async saveRun(run: StrictBacktestRun): Promise<void> {
     const parsed = StrictBacktestRunSchema.parse(run);
-    this.db.transaction((tx) => {
-      const row = tx
-        .select()
-        .from(strategyBacktestRuns)
-        .where(eq(strategyBacktestRuns.id, parsed.id))
-        .get();
-      if (row !== undefined) {
-        const existing = toRun(row);
-        if (immutableIdentity(existing) !== immutableIdentity(parsed)) {
-          throw new InvariantError('strict backtest immutable identity 不能修改');
+    this.db.transaction(
+      (tx) => {
+        const row = tx
+          .select()
+          .from(strategyBacktestRuns)
+          .where(eq(strategyBacktestRuns.id, parsed.id))
+          .get();
+        const finalizingFailure =
+          row?.status === 'running' && parsed.status === 'failed' && parsed.metrics === undefined;
+        if (!finalizingFailure) this.writes.validate();
+        if (row !== undefined) {
+          const existing = toRun(row);
+          if (immutableIdentity(existing) !== immutableIdentity(parsed)) {
+            throw new InvariantError('strict backtest immutable identity 不能修改');
+          }
+          if (!allowedTransition(existing.status, parsed.status)) {
+            throw new InvariantError(
+              `strict backtest 非法状态迁移: ${existing.status}->${parsed.status}`,
+            );
+          }
         }
-        if (!allowedTransition(existing.status, parsed.status)) {
-          throw new InvariantError(
-            `strict backtest 非法状态迁移: ${existing.status}->${parsed.status}`,
-          );
-        }
-      }
-      tx.insert(strategyBacktestRuns)
-        .values({
-          id: parsed.id,
-          strategyId: parsed.spec.strategyId,
-          strategyVersionId: parsed.spec.strategyVersionId,
-          status: parsed.status,
-          resultAvailability: parsed.resultAvailability,
-          spec: parsed.spec,
-          specHash: parsed.specHash,
-          inputFingerprint: parsed.inputFingerprint,
-          evaluator: parsed.evaluator,
-          gateAudit: parsed.gateAudit,
-          metrics: parsed.metrics ?? null,
-          error: parsed.error ?? null,
-          createdAt: parsed.createdAt,
-          startedAt: parsed.startedAt ?? null,
-          finishedAt: parsed.finishedAt ?? null,
-        })
-        .onConflictDoUpdate({
-          target: strategyBacktestRuns.id,
-          set: {
+        tx.insert(strategyBacktestRuns)
+          .values({
+            id: parsed.id,
+            strategyId: parsed.spec.strategyId,
+            strategyVersionId: parsed.spec.strategyVersionId,
             status: parsed.status,
             resultAvailability: parsed.resultAvailability,
+            spec: parsed.spec,
+            specHash: parsed.specHash,
+            inputFingerprint: parsed.inputFingerprint,
+            evaluator: parsed.evaluator,
             gateAudit: parsed.gateAudit,
             metrics: parsed.metrics ?? null,
             error: parsed.error ?? null,
+            createdAt: parsed.createdAt,
             startedAt: parsed.startedAt ?? null,
             finishedAt: parsed.finishedAt ?? null,
-          },
-        })
-        .run();
-    });
+          })
+          .onConflictDoUpdate({
+            target: strategyBacktestRuns.id,
+            set: {
+              status: parsed.status,
+              resultAvailability: parsed.resultAvailability,
+              gateAudit: parsed.gateAudit,
+              metrics: parsed.metrics ?? null,
+              error: parsed.error ?? null,
+              startedAt: parsed.startedAt ?? null,
+              finishedAt: parsed.finishedAt ?? null,
+            },
+          })
+          .run();
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async findRunById(id: string): Promise<StrictBacktestRun | null> {

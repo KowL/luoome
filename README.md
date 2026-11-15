@@ -141,6 +141,9 @@ Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也�
 
 行情提供者与采集任务也可分别启停；新增项默认关闭，已有配置先显式迁移，再分别启用 source 与 task。全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据；命令见[提供者与采集任务控制](./docs/USER_GUIDE.md#提供者与采集任务控制p2)。
 
+策略执行与自动调度也可分别启停：`business.strategy-execution` 管理新运行/试跑/回测，`task.strategy-schedules` 管理自动策略 timer。
+新增项默认关闭，历史查询与报告 cutoff/补投保留；启用和迁移步骤见[策略执行控制](./docs/USER_GUIDE.md#策略执行与自动调度控制p3)。
+
 ## 文档
 
 | 文档 | 用途 |

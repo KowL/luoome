@@ -218,7 +218,7 @@ export type ToolOwner =
 
 type CatalogEntry = {
   readonly owner: ToolOwner;
-  readonly execution?: 'p1' | 'p2';
+  readonly execution?: 'p1' | 'p2' | 'p3';
   readonly optionalPlugins?: readonly import('@luoome/core').ManagedPluginId[];
   readonly modes?: Readonly<
     Record<string, { readonly data: readonly string[]; readonly conditional?: readonly string[] }>
@@ -316,10 +316,11 @@ export const toolCatalog = {
         conditional: ['archive:limit-up-ladder', 'archive:limit-up-board'],
       },
     },
-    owner: 'business.strategy',
+    execution: 'p3',
+    owner: 'business.strategy-execution',
     tool: runStrategyTool,
     agent: true,
-    dependencies: ['market:quote', 'market:daily-bars'],
+    dependencies: [],
   },
   get_account_performance: {
     owner: 'business.portfolio',
@@ -580,7 +581,8 @@ export const toolCatalog = {
     agent: false,
   },
   create_strict_strategy_backtest: {
-    owner: 'business.strategy',
+    execution: 'p3',
+    owner: 'business.strategy-execution',
     tool: createStrictStrategyBacktestTool,
     agent: false,
   },
@@ -595,7 +597,8 @@ export const toolCatalog = {
     agent: false,
   },
   execute_strict_strategy_backtest: {
-    owner: 'business.strategy',
+    execution: 'p3',
+    owner: 'business.strategy-execution',
     tool: executeStrictStrategyBacktestTool,
     agent: false,
   },
@@ -836,9 +839,15 @@ export const toolCatalog = {
     tool: syncWatchlistSourceTool,
     agent: false,
   },
-  trial_strategy: { owner: 'business.strategy', tool: trialStrategyTool, agent: false },
+  trial_strategy: {
+    execution: 'p3',
+    owner: 'business.strategy-execution',
+    tool: trialStrategyTool,
+    agent: false,
+  },
   trial_strategy_version: {
-    owner: 'business.strategy',
+    execution: 'p3',
+    owner: 'business.strategy-execution',
     tool: trialStrategyVersionTool,
     agent: false,
   },

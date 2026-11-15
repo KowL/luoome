@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PluginConfigStore } from '@luoome/adapters';
 
 let marketBatchStarts = 0;
 
@@ -49,11 +50,17 @@ afterAll(() => {
 const startOnce = async (options: Parameters<typeof startWeb>[0]): Promise<number> => {
   const before = marketBatchStarts;
   const dir = mkdtempSync(join(tmpdir(), 'luoome-web-scheduler-'));
+  const store = new PluginConfigStore(join(dir, 'plugins.json'));
+  store.set('task.collect-market-snapshot', true, store.initialize());
+  const previousHome = process.env.LUOOME_HOME;
+  process.env.LUOOME_HOME = dir;
   const handle = await startWeb({ ...options, dbPath: join(dir, 'local.db') });
   try {
     return marketBatchStarts - before;
   } finally {
     await handle.stop(true);
+    if (previousHome === undefined) delete process.env.LUOOME_HOME;
+    else process.env.LUOOME_HOME = previousHome;
     rmSync(dir, { recursive: true, force: true });
   }
 };

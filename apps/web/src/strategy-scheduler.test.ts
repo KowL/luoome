@@ -3,7 +3,11 @@ import type { ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { type RunStrategySchedulesOutputT, runStrategySchedulesOperation } from '@luoome/workflows';
 
-import { startStrategyScheduler, strategySchedulerTuningFromEnv } from './strategy-scheduler.js';
+import {
+  startClosingReportScheduler,
+  startStrategyScheduler,
+  strategySchedulerTuningFromEnv,
+} from './strategy-scheduler.js';
 
 const emptyResult = (): RunStrategySchedulesOutputT => ({
   items: [],
@@ -91,13 +95,17 @@ describe('strategy scheduler', () => {
         new Promise((resolve) => {
           finish = () => resolve({ ok: true, data: emptyResult() });
         }),
+    });
+    const cutoff = startClosingReportScheduler(ctx, {
+      startImmediately: false,
       runCutoff: async () => {
         cutoffCalls += 1;
         return { ok: true, data: { date: '2026-08-10', created: [], failed: [] } };
       },
     });
     const active = scheduler.tick();
-    await scheduler.cutoffTick();
+    await cutoff.tick();
+    cutoff.stop();
     expect(cutoffCalls).toBe(1);
     finish?.();
     await active;
@@ -138,12 +146,11 @@ describe('strategy scheduler', () => {
 
     now = new Date('2026-08-11T02:00:00.000Z');
     channelFailed = false;
-    const scheduler = startStrategyScheduler(ctx, {
+    const scheduler = startClosingReportScheduler(ctx, {
       intervalMs: 60_000,
       startImmediately: false,
-      run: async () => ({ ok: true, data: emptyResult() }),
     });
-    await scheduler.cutoffTick();
+    await scheduler.tick();
     scheduler.stop();
 
     const recovered = await ctx.repos.report.list({ kind: 'closing' });

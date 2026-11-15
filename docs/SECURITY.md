@@ -305,11 +305,18 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 配置原子替换配合 writer lock 与 incarnation/revision 条件提交；正常启停增加受影响 epoch，
 灾难恢复使用新 incarnation。每次策略解释在发请求及发布结果前重查，旧 scope、重试与晚响应不能复活。
 已发送模型请求无法撤回费用；停用只阻止后续请求和失效解释发布，组合仍可返回已获准的原窗口事实。
-配置缺失或损坏不默认启用；通用生产上下文缺少 P1/P2 执行许可时拒绝受控入口。
+配置缺失或损坏不默认启用；通用生产上下文缺少 P1/P2/P3 执行许可时拒绝受控入口。
 source/task 初始与迁移新增项默认关闭，启用仍受宿主 write/external opt-in、凭证和场景白名单约束。
 受控行情 transport 在实际外发前识别供应商并复核许可，返回与持久化再校验 incarnation/epoch；间接使用的 Sina 同样受限。
 旧请求不跨新路由/任务世代共享缓存或合并，逐 waiter 检查自身许可；提供者配额不因开关或缓存世代重置。
 数据 repository 在取得 SQLite immediate 写锁后运行同步 guard，提交前不跨 await；已提交历史不会因关闭而删除。
+策略新运行/试跑/回测受 business.strategy-execution 控制，自动调度另需 task.strategy-schedules。
+新配置项默认关闭；插件启用不改变执行权限和 Agent 场景白名单。旧草案生成 callback 及最终确认各自复核目标许可，
+关→开不会恢复旧执行；已有回执读取和取消仍可用，不自动重放。
+运行/回测成功发布在 SQLite 写资格内校验。撤销后的特殊收尾仅限既有 running→failed、不可变身份一致、无新结果/信号/metrics，
+不能用失败收尾创建新运行或覆盖已完成事实。只读历史与独立运行审计继续保留。
+受控 timer 先撤销再卸载，在途未排空阻止新一代注册；有界排空超时/teardown 失败均不得谎报安全卸载。
+报告 cutoff/补投独立于策略调度，关闭策略不关闭报告资源。
 这不是任意第三方插件沙箱，也未把全部业务迁为插件。
 
 - Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装或 MCP。

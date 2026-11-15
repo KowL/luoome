@@ -23,6 +23,7 @@ import { MANAGED_PLUGIN_IDS, SOURCE_PLUGIN_IDS, TASK_PLUGIN_IDS } from '@luoome/
 import { z } from 'zod';
 
 export const BUILTIN_PLUGINS = {
+  'business.strategy-execution': { kind: 'business', label: '策略执行', baselineEnabled: false },
   'strategy.ai-insight': { kind: 'business', label: '策略 AI 洞察', baselineEnabled: true },
   ...Object.fromEntries(
     SOURCE_PLUGIN_IDS.map((id) => [id, { kind: 'provider', label: id, baselineEnabled: false }]),

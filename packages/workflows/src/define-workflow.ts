@@ -1,4 +1,10 @@
-import { InvariantError, type ToolContext, type ToolResult } from '@luoome/core';
+import {
+  InvariantError,
+  type ManagedPluginId,
+  PluginExecutionDenied,
+  type ToolContext,
+  type ToolResult,
+} from '@luoome/core';
 import { type CatalogToolMap, catalogTools } from '@luoome/tools';
 import type { z } from 'zod';
 
@@ -43,6 +49,7 @@ export type WorkflowStep = (prev: unknown, ctx: WorkflowContext) => Promise<unkn
 
 /** defineWorkflow 的输入定义（输出类型 O 由 defineWorkflow 的泛型承载，步骤间类型见 WorkflowStep）。 */
 export interface WorkflowDefinition<I> {
+  readonly requiredPlugins?: readonly ManagedPluginId[];
   readonly name: string;
   readonly description: string;
   /** 入参 zod schema；run 据此校验，非法输入 → invalid_input。 */
@@ -116,14 +123,34 @@ export const defineOperation = <I, O>(definition: WorkflowDefinition<I>): Workfl
         ? {}
         : { executionPolicy: toolCtx.executionPolicy.bind() }),
     };
-    const ctx: WorkflowContext = { ...bound, tools: buildWorkflowTools(bound) };
+    const permits = (definition.requiredPlugins ?? []).map(
+      (id) => [id, bound.executionPolicy?.acquire(id)] as const,
+    );
+    const check = () => {
+      toolCtx.executionGuard?.();
+      if (bound.abortSignal?.aborted && permits.length > 0)
+        throw new PluginExecutionDenied('execution:cancelled');
+      for (const [id, permit] of permits)
+        if (!permit?.ok || !bound.executionPolicy?.valid(permit.permit))
+          throw new PluginExecutionDenied(`plugin:${id}`);
+    };
+    const scoped = {
+      ...bound,
+      ...(permits.length === 0 && bound.executionGuard === undefined
+        ? {}
+        : { executionGuard: check }),
+    };
+    const ctx: WorkflowContext = { ...scoped, tools: buildWorkflowTools(scoped) };
 
     let current: unknown = parsed.data;
     for (const [index, step] of steps.entries()) {
       let value: unknown;
       try {
+        ctx.executionGuard?.();
         value = await step(current, ctx);
       } catch (error) {
+        if (error instanceof PluginExecutionDenied)
+          return { ok: false, error: { kind: 'permission_denied', required: error.required } };
         if (error instanceof InvariantError) {
           return { ok: false, error: { kind: 'invariant_violation', message: error.message } };
         }

@@ -30,6 +30,7 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
 import {
+  assertStrategyExecution,
   createLiveStrategyEvaluationDataAdapter,
   createLocalStrategyEvaluationDataAdapter,
   type StrategyEvaluationDataRequest,
@@ -144,6 +145,7 @@ export const runStrategyTool = defineTool({
       input.evaluationSessionId !== undefined,
       ctx,
     );
+    assertStrategyExecution(ctx);
     if ('ok' in resolved) return resolved;
     const version = resolved;
     const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
@@ -293,6 +295,7 @@ export const runStrategyTool = defineTool({
         } else if (ctx.adapters.marketIntel?.limitUpLadder === undefined) {
           limitUpLadderErrorKind = 'manager_unavailable';
         } else {
+          assertStrategyExecution(ctx);
           const ladder = await ctx.adapters.marketIntel?.limitUpLadder.fetchLadder({
             date: dateInShanghai(dataAsOf),
             source: 'eastmoney',
@@ -447,6 +450,7 @@ export const runStrategyTool = defineTool({
         providerStatuses: [],
         providerCoverage: [],
       });
+      assertStrategyExecution(ctx);
       if (input.persist) await ctx.repos.strategyRun.saveStartedRun(startedRun);
 
       const evaluationRequest: StrategyEvaluationDataRequest = {
@@ -457,8 +461,13 @@ export const runStrategyTool = defineTool({
         needsQuote,
         needsDailyBars,
         concurrency: input.concurrency,
+        shouldContinue: () => {
+          assertStrategyExecution(ctx);
+          return true;
+        },
       };
       const evaluationBatch = await evaluationData.load(evaluationRequest);
+      assertStrategyExecution(ctx);
       const failures = evaluationBatch.failures;
       const preparedStocks = evaluationBatch.prepared;
       const metaByStock = needsDerivedMeta
@@ -480,6 +489,7 @@ export const runStrategyTool = defineTool({
         : new Map<string, Readonly<Record<string, unknown>>>();
       const successful: StrategyStockEvaluation[] = preparedStocks.map((item) => {
         const itemDataAsOf = item.quote?.ts ?? item.bars.at(-1)?.date ?? dataAsOf;
+        assertStrategyExecution(ctx);
         return evaluateStrategyStock({
           strategyId: input.strategyId,
           version,
@@ -682,6 +692,7 @@ export const runStrategyTool = defineTool({
         publication,
         ...(error === undefined ? {} : { error }),
       });
+      assertStrategyExecution(ctx);
       if (input.persist) {
         await ctx.repos.strategyRun.commitRun({ run, results, signals });
       }

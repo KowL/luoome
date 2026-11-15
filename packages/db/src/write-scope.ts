@@ -9,13 +9,17 @@ export class RepositoryWriteScope {
     return this.checks.run([...(this.checks.getStore() ?? []), check], operation);
   }
 
+  validate(): void {
+    for (const check of this.checks.getStore() ?? []) check();
+  }
+
   transaction<T>(
     db: BunSQLiteDatabase<Schema>,
     operation: (tx: Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0]) => T,
   ): T {
     return db.transaction(
       (tx) => {
-        for (const check of this.checks.getStore() ?? []) check();
+        this.validate();
         return operation(tx);
       },
       { behavior: 'immediate' },

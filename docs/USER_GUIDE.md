@@ -233,7 +233,7 @@ luoome mcp serve    # stdio JSON-RPC
 
 ### 策略 AI 插件控制（P1）
 
-当前管理策略解释、行情提供者和采集任务。策略执行开关及 Web 插件管理页仍在后续阶段。
+当前管理策略解释、行情提供者、采集任务、策略执行和自动策略调度；Web 插件管理页仍在后续阶段。
 `strategy.ai-insight` 只控制策略解释模型，聊天、个股分析等功能保持各自配置。
 
 ```bash
@@ -283,7 +283,7 @@ LUOOME_EXPOSE_WRITE=true luoome plugins set task.daily-bars-sync --enabled true 
 支持的提供者为 Eastmoney、Tencent、Sina、Tushare、Fuyao、10jqka（ID 以 `plugins status` 为准）。
 采集任务覆盖日线、股票目录、全市场快照、持仓报价、市场 dump、板块目录、连板历史和分钟 OHLCV。
 关闭任务会阻止该任务的新入口及下一次外发/批次写入；其它消费者仍能使用已启用的提供者。
-分钟 OHLCV 任务关闭后只返回本地历史或显式缺失。盘中快照调度会跳过停用任务；调度资源的通用卸载属于后续阶段。
+分钟 OHLCV 任务关闭后只返回本地历史或显式缺失。盘中快照任务的实际定时器已纳入 P3 资源管理，关闭后卸载。
 
 关闭所有提供者和任务不会删除数据。账户、持仓、目录、本地日线指标及历史事实仍可查询；缺数据明确返回空或不可用。
 提供者在实际外发前再次校验，Tencent 全市场快照间接使用 Sina 时也需允许 Sina；不能靠其它来源的名称绕过停用。
@@ -291,6 +291,37 @@ LUOOME_EXPOSE_WRITE=true luoome plugins set task.daily-bars-sync --enabled true 
 缓存按提供者世代、任务许可和本进程路由隔离；配额及 cooldown 按稳定提供者身份存入共享 SQLite，不随启停重置。
 行情数据写入取得 SQLite 写锁后再次校验，再在无 await 的短事务内提交，防止等待锁的旧结果覆盖新数据。
 本进程行情设置重建会撤销旧路由；其它宿主的来源顺序/凭证变更仍需 reload 或重启，不把配置提交冒充全局已应用。
+
+### 策略执行与自动调度控制（P3）
+
+`business.strategy-execution` 控制新运行、试跑、版本对比试跑、创建及执行严格回测。
+`task.strategy-schedules` 只控制自动策略调度，并要求策略执行插件已启用；关闭自动调度仍可手动运行。
+两个新增项在初始化和迁移中均默认关闭。已有部署先预览并显式应用 `plugins migrate`，原 source/task 的开关与 epoch 保留。
+
+```bash
+# 每次操作前从 plugins status 读取最新 UUID 和版本
+LUOOME_EXPOSE_WRITE=true luoome plugins set business.strategy-execution --enabled true \
+  --expected-incarnation <最新UUID> --expected-revision <最新版本>
+LUOOME_EXPOSE_WRITE=true luoome plugins set task.strategy-schedules --enabled true \
+  --expected-incarnation <最新UUID> --expected-revision <最新版本>
+```
+
+关闭时使用相同命令和 `--enabled false`。写配置不授予业务执行权限：正式策略运行继续要求 write + external，
+不持久化的 `trial_strategy` 保留 external 权限，纯本地严格回测保留 write 权限；自动调度宿主仍需 write + external。
+策略定义、版本、历史运行、结果、信号和严格回测查询继续可用。组合 `run_strategy_backtest` 的 get/list 仍可查询，run/execute 分支会复核受控目标工具。
+
+scheduled/replay 按规则引用使用本地日线与股票目录，关闭 live 提供者不会阻断这些本地资料；
+scheduled 的当天梯队依赖、replay 的归档缺失和原有 coverage/acceptance 契约不变，不借停源切换为其它数据模式。
+插件关闭后，MCP 和下一轮 Agent 不再暴露 `run_strategy`；旧工具、旧草案回调和关→开前的执行 scope 均不能绕过。
+已有草案的新确认会被拒绝执行；取消草案、读取已保存的成功/失败回执仍可用，不自动重放。
+
+Web 宿主每 250ms 观察开关并卸载策略或盘中快照的实际定时器；执行本身在下一安全点立即重查许可。
+资源在途数量和排空状态由宿主内部跟踪；旧任务未排空时延迟新一代注册，重复设置同一状态不会重复注册。
+宿主退出最多等待 5 秒排空，超时如实报告未排空，不强行关闭共用数据库。
+报告 cutoff 与前一交易日报告补投有独立定时器，关闭策略执行/自动调度不会一起关闭它们。
+已开始的短事务按原子提交结束；撤销后的失败收尾只能终结已开始的运行，不能新增成功结果或信号。
+
+本切片没有新增插件 Web 管理页面，也未纳管个股分析、盯盘、通知及其它调度器的独立业务开关；这些继续按原授权运行。
 
 ## 4. Web 用法
 

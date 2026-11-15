@@ -1,3 +1,4 @@
+import { PluginTasks } from './plugin-tasks.js';
 // @luoome/web —— Web 服务组装根（docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §7.1）。
 // 本文件只保留：Hono 实例、ctx/依赖注入、同源静态资源、领域路由注册、进程启动与调度器。
 // 领域路由见 ./routes/*.ts；共享 HTTP helper 见 ./http/*.ts；ToolContext 组装见 ./context.ts。
@@ -39,7 +40,7 @@ import { registerStrategyRoutes } from './routes/strategy.js';
 import { registerToolGatewayRoutes } from './routes/tool-gateway.js';
 import type { WebRouteDeps } from './routes/types.js';
 import { registerWatchlistAlertRoutes } from './routes/watchlist-alert.js';
-import { startStrategyScheduler } from './strategy-scheduler.js';
+import { startClosingReportScheduler, startStrategyScheduler } from './strategy-scheduler.js';
 
 export type { WebSourceSet };
 export { buildWebContext, resolveDbPath };
@@ -405,13 +406,34 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ...(chatStreamRuntime === undefined ? {} : { chatStreamRuntime }),
   });
   const schedulersEnabled = exposeWrite && exposeExternal;
-  const schedulers: Array<{ readonly stop: () => void }> = schedulersEnabled
+  const tasks = schedulersEnabled
+    ? new PluginTasks(ctx, [
+        {
+          id: 'task.strategy-schedules',
+          requires: ['business.strategy-execution'],
+          start: (scope) =>
+            startStrategyScheduler(scope.ctx, {
+              startImmediately: false,
+              dispatch: (operation) => scope.run(operation),
+            }),
+        },
+        {
+          id: 'task.collect-market-snapshot',
+          start: (scope) =>
+            startMarketBatchScheduler(scope.ctx, {
+              enabled: true,
+              startImmediately: false,
+              dispatch: (operation) => scope.run(operation),
+            }),
+        },
+      ])
+    : undefined;
+  const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
     ? [
-        startStrategyScheduler(ctx, { startImmediately: false }),
+        startClosingReportScheduler(ctx, { startImmediately: false }),
         startIntradayPlanScheduler(ctx, { startImmediately: false }),
         startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
         startPostMarketScheduler(ctx, { startImmediately: false }),
-        startMarketBatchScheduler(ctx, { startImmediately: false, enabled: true }),
       ]
     : [];
   if (!schedulersEnabled) {
@@ -420,18 +442,27 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     );
   }
   const host = options.host ?? '127.0.0.1';
-  const server = Bun.serve({
-    port: options.port,
-    hostname: host,
-    fetch: app.fetch,
-    idleTimeout: WEB_SERVER_IDLE_TIMEOUT_SECONDS,
-  });
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      port: options.port,
+      hostname: host,
+      fetch: app.fetch,
+      idleTimeout: WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+    });
+  } catch (error) {
+    await tasks?.stop();
+    for (const scheduler of schedulers) await scheduler.stop();
+    throw error;
+  }
   const port = server.port ?? options.port;
   console.log(`luoome web listening on http://${host}:${port}`);
   return {
     port,
     stop: async (closeActiveConnections = false) => {
-      for (const scheduler of schedulers) scheduler.stop();
+      const drained = await tasks?.stop();
+      if (drained?.drained === false) ctx.logger.warn('插件任务尚未排空');
+      for (const scheduler of schedulers) await scheduler.stop();
       await server.stop(closeActiveConnections);
     },
   };

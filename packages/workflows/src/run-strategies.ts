@@ -179,6 +179,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
 };
 
 export const runStrategiesOperation = defineOperation<RunStrategiesInputT, RunStrategiesOutputT>({
+  requiredPlugins: ['business.strategy-execution'],
   name: 'run-strategies',
   description: '顺序运行 active Strategies；单个失败不会阻塞其它 Strategy',
   input: RunStrategiesInput,

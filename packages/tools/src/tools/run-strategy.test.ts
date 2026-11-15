@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PluginConfigStore, ProviderRuntime } from '@luoome/adapters';
 import {
   BUILTIN_STRATEGY_TEMPLATES,
   type DailyBar,
@@ -12,10 +16,13 @@ import {
   stockCode,
   strategyDefinitionHash,
 } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createPluginExecutionPolicy } from '../plugin-policy.js';
 
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
+import { appendChatMessageTool, createChatSessionTool } from './chat-session.js';
 import { runStrategyTool, trialStrategyTool } from './run-strategy.js';
+import { settleChatDraftTool } from './settle-chat-draft.js';
 
 const seedStrategy = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
@@ -1122,5 +1129,238 @@ describe('run_strategy', () => {
       signals.push(run.data.signals.length);
     }
     expect(signals).toEqual([1, 0, 0]);
+  });
+});
+
+describe('controlled strategy execution', () => {
+  const setup = async () => {
+    const home = mkdtempSync(join(tmpdir(), 'luoome-p3-execution-'));
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    store.initialize();
+    const set = (enabled: boolean) => {
+      const read = store.read();
+      if (!read.ok) throw new Error('missing');
+      store.set('business.strategy-execution', enabled, read.config);
+    };
+    const base = await buildTestContext({ clock: () => new Date('2026-08-14T09:00:00Z') });
+    const ctx = {
+      ...base,
+      executionPolicy: createPluginExecutionPolicy(
+        store,
+        new Set(['read', 'write', 'external', 'advice']),
+      ),
+      dataScope: new ProviderRuntime(store),
+    };
+    await seedStrategy(ctx);
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedReplayBars(ctx, [new Date('2026-08-14T00:00:00Z')]);
+    return { ctx, store, set, clean: () => rmSync(home, { recursive: true, force: true }) };
+  };
+  it('defaults closed, keeps history, and runs scheduled rules on local data with all providers and automatic tasks off', async () => {
+    const { ctx, set, clean } = await setup();
+    const fetch = vi.spyOn(ctx.adapters.market, 'fetchQuote');
+    try {
+      expect(
+        await runStrategyTool.execute({ strategyId: 'scan-strategy', mode: 'scheduled' }, ctx),
+      ).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
+      set(true);
+      const run = await runStrategyTool.execute(
+        { strategyId: 'scan-strategy', mode: 'scheduled' },
+        ctx,
+      );
+      expect(run).toMatchObject({
+        ok: true,
+        data: { run: { status: 'complete' }, persisted: true },
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      set(false);
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(1);
+      if (run.ok) expect(await ctx.repos.strategyRun.listResults(run.data.run.id)).toHaveLength(1);
+      expect(await trialStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx)).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+    } finally {
+      clean();
+    }
+  });
+  it('rejects an old bound tool after a complete off/on transition', async () => {
+    const { ctx, set, clean } = await setup();
+    try {
+      set(true);
+      const old = { ...ctx, executionPolicy: ctx.executionPolicy.bind() };
+      set(false);
+      set(true);
+      expect(
+        await runStrategyTool.execute({ strategyId: 'scan-strategy', mode: 'scheduled' }, old),
+      ).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
+    } finally {
+      clean();
+    }
+  });
+  it('rejects a paused old run, records only its failure, and preserves the newer published run', async () => {
+    const { ctx, set, clean } = await setup();
+    let release = () => {},
+      started = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const admitted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const original = ctx.repos.dailyBar.latestBefore.bind(ctx.repos.dailyBar);
+    let reads = 0;
+    vi.spyOn(ctx.repos.dailyBar, 'latestBefore').mockImplementation(async (...args) => {
+      const bars = await original(...args);
+      if (reads++ === 0) {
+        started();
+        await pending;
+      }
+      return bars;
+    });
+    try {
+      set(true);
+      const old = runStrategyTool.execute(
+        { strategyId: 'scan-strategy', mode: 'scheduled', concurrency: 1 },
+        ctx,
+      );
+      await admitted;
+      set(false);
+      set(true);
+      const current = await runStrategyTool.execute(
+        { strategyId: 'scan-strategy', mode: 'scheduled' },
+        ctx,
+      );
+      expect(current).toMatchObject({ ok: true, data: { run: { status: 'complete' } } });
+      release();
+      expect(await old).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+      const runs = await ctx.repos.strategyRun.listRuns();
+      expect(runs).toHaveLength(2);
+      expect(runs.filter((run) => run.status === 'running')).toHaveLength(0);
+      const failed = runs.find((run) => run.status === 'failed');
+      if (!failed) throw new Error('missing revoked run');
+      expect(await ctx.repos.strategyRun.listResults(failed.id)).toHaveLength(0);
+      expect(await ctx.repos.strategyRun.signalsByRun(failed.id)).toHaveLength(0);
+      if (current.ok)
+        expect(await ctx.repos.strategyRun.findRunById(current.data.run.id)).toEqual(
+          current.data.run,
+        );
+    } finally {
+      release();
+      clean();
+    }
+  });
+  it('old drafts cannot execute after disable, while completed receipts and cancellation remain usable', async () => {
+    const { ctx, set, clean } = await setup();
+    try {
+      set(true);
+      const created = await createChatSessionTool.execute({}, ctx);
+      if (!created.ok) throw new Error('session fixture');
+      const sessionId = created.data.session.id;
+      const input = { strategyId: 'scan-strategy', mode: 'scheduled' };
+      await appendChatMessageTool.execute(
+        {
+          sessionId,
+          messageId: 'drafts',
+          role: 'assistant',
+          parts: ['complete', 'pending', 'cancel'].map((toolCallId) => ({
+            type: 'tool-run_strategy',
+            toolCallId,
+            state: 'output-available',
+            input,
+            output: {
+              __luoomeDraft: true,
+              draft: { tool: 'run_strategy', kind: 'strategy', input },
+            },
+          })),
+        },
+        ctx,
+      );
+      const request = { sessionId, messageId: 'drafts', approved: true };
+      const completed = await settleChatDraftTool.execute(
+        { ...request, toolCallId: 'complete' },
+        ctx,
+      );
+      expect(completed).toMatchObject({ ok: true, data: { status: 'succeeded' } });
+      set(false);
+      expect(
+        await settleChatDraftTool.execute({ ...request, toolCallId: 'complete' }, ctx),
+      ).toEqual(JSON.parse(JSON.stringify(completed)));
+      const denied = await settleChatDraftTool.execute({ ...request, toolCallId: 'pending' }, ctx);
+      expect(denied).toMatchObject({
+        ok: true,
+        data: { status: 'failed', result: { ok: false, error: { kind: 'permission_denied' } } },
+      });
+      expect(
+        await settleChatDraftTool.execute(
+          { ...request, toolCallId: 'cancel', approved: false },
+          ctx,
+        ),
+      ).toMatchObject({ ok: true, data: { status: 'cancelled' } });
+      set(true);
+      expect(await settleChatDraftTool.execute({ ...request, toolCallId: 'pending' }, ctx)).toEqual(
+        denied,
+      );
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(1);
+    } finally {
+      clean();
+    }
+  });
+  it('stops the next scan batch and per-stock fallback when disabled during a quote request', async () => {
+    const { ctx, set, clean } = await setup();
+    let release = () => {},
+      started = () => {};
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      admitted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+    await seedTestStockUniverse(ctx, { syncId: 'two-stock-universe', limit: 2 });
+    const original = ctx.adapters.market.batchQuote.bind(ctx.adapters.market);
+    const fetch = vi.spyOn(ctx.adapters.market, 'batchQuote').mockImplementation(async (ids) => {
+      const quotes = await original(ids);
+      started();
+      await gate;
+      return quotes;
+    });
+    const fallback = vi.spyOn(ctx.adapters.market, 'fetchQuote');
+    try {
+      set(true);
+      const old = runStrategyTool.execute({ strategyId: 'scan-strategy', concurrency: 1 }, ctx);
+      await admitted;
+      // batch fake 已通过 fetchQuote 组装报价；计数从撤销的暂停点开始。
+      fallback.mockClear();
+      set(false);
+      release();
+      expect(await old).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
+    } finally {
+      release();
+      clean();
+    }
+  });
+  it('preserves the external-only nonpersistent trial permission', async () => {
+    const { ctx, store, set, clean } = await setup();
+    try {
+      set(true);
+      const trial = {
+        ...ctx,
+        executionPolicy: createPluginExecutionPolicy(store, new Set(['external'])),
+      };
+      expect(
+        await trialStrategyTool.execute(
+          { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+          trial,
+        ),
+      ).toMatchObject({ ok: true, data: { persisted: false } });
+      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
+    } finally {
+      clean();
+    }
   });
 });

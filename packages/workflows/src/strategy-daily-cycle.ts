@@ -549,6 +549,7 @@ export const strategyDailyCycleOperation = defineOperation<
   StrategyDailyCycleInputT,
   StrategyDailyCycleOutputT
 >({
+  requiredPlugins: ['business.strategy-execution'],
   name: 'strategy-daily-cycle',
   description: '按 run→observations→insight→finish 编排单个 Strategy 的盘后日循环',
   input: StrategyDailyCycleInput,

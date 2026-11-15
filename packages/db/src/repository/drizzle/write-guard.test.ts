@@ -111,3 +111,63 @@ describe('SQLite publication fences', () => {
     }
   });
 });
+
+it('strategy publication checks inside the write transaction and allows only failure finalization after revocation', async () => {
+  const { makeStrategy, makeStrategyVersion, makeStrategyRun } = await import(
+    '../contract-tests.js'
+  );
+  const root = mkdtempSync(join(tmpdir(), 'luoome-strategy-fence-'));
+  const path = join(root, 'db.sqlite');
+  const h = createDrizzleRepos(path),
+    probe = createDrizzleRepos(path);
+  probe.db.run(sql`PRAGMA busy_timeout = 0`);
+  try {
+    const version = makeStrategyVersion('strategy-1', 1, { publishedAt: new Date('2026-01-01') });
+    await h.repos.strategy.create(
+      makeStrategy('strategy-1', { status: 'active', currentVersionId: version.id }),
+    );
+    await h.repos.strategy.createVersion(version);
+    const running = makeStrategyRun('revoked-strategy-run', {
+      status: 'running',
+      finishedAt: undefined,
+      summary: undefined,
+    });
+    await h.repos.strategyRun.saveStartedRun(running);
+    const denied = () => {
+      expect(() => probe.db.run(sql`BEGIN IMMEDIATE`)).toThrow();
+      throw new Error('revoked');
+    };
+    await expect(
+      h.repos.withWriteGuard(denied, () =>
+        h.repos.strategyRun.commitRun({
+          run: makeStrategyRun(running.id, { startedAt: running.startedAt }),
+          results: [],
+          signals: [],
+        }),
+      ),
+    ).rejects.toThrow('revoked');
+    expect((await h.repos.strategyRun.findRunById(running.id))?.status).toBe('running');
+    await h.repos.withWriteGuard(denied, () =>
+      h.repos.strategyRun.commitRun({
+        run: makeStrategyRun(running.id, {
+          startedAt: running.startedAt,
+          status: 'failed',
+          error: 'revoked',
+        }),
+        results: [],
+        signals: [],
+      }),
+    );
+    expect((await h.repos.strategyRun.findRunById(running.id))?.status).toBe('failed');
+    await expect(
+      h.repos.withWriteGuard(denied, () =>
+        h.repos.strategyRun.saveStartedRun({ ...running, id: 'new-revoked' }),
+      ),
+    ).rejects.toThrow('revoked');
+    expect(await h.repos.strategyRun.findRunById('new-revoked')).toBeNull();
+  } finally {
+    h.close();
+    probe.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -3,6 +3,7 @@ import {
   type AgentCallableTool,
   type ChatMessage,
   ChatMessageSchema,
+  PluginExecutionDenied,
   type ToolContext,
 } from '@luoome/core';
 import {
@@ -201,58 +202,83 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
 };
 
 const buildChatTools = (ctx: ToolContext, scenario: AgentScenario): AgentCallableTool[] => {
+  ctx = {
+    ...ctx,
+    ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
+  };
   const reads = buildAgentCallableTools(toolRegistry, ctx, scenario.readToolNames);
 
-  const drafts = Object.entries(scenario.draftToolKinds).map(([name, kind]): AgentCallableTool => {
-    const registered = toolRegistry.get(name);
-    if (registered === undefined) throw new Error(`chat 草案白名单引用未注册 tool: ${name}`);
-    const draftNote =
-      kind === 'advice'
-        ? '这里只生成待确认草案，不会执行分析。'
-        : '这里只生成待确认草案，不会执行写入。';
-    return {
-      name,
-      description: `${registered.description}。${draftNote}`,
-      inputSchema: registered.inputSchema,
-      execute: async (input) => {
-        const parsed = registered.inputSchema.safeParse(input);
-        if (!parsed.success) {
+  const available = (name: string) => {
+    try {
+      ctx.executionPolicy?.assertTool(name);
+      return true;
+    } catch (error) {
+      if (error instanceof PluginExecutionDenied) return false;
+      throw error;
+    }
+  };
+  const drafts = Object.entries(scenario.draftToolKinds)
+    .filter(([name]) => available(name))
+    .map(([name, kind]): AgentCallableTool => {
+      const registered = toolRegistry.get(name);
+      if (registered === undefined) throw new Error(`chat 草案白名单引用未注册 tool: ${name}`);
+      const draftNote =
+        kind === 'advice'
+          ? '这里只生成待确认草案，不会执行分析。'
+          : '这里只生成待确认草案，不会执行写入。';
+      return {
+        name,
+        description: `${registered.description}。${draftNote}`,
+        inputSchema: registered.inputSchema,
+        execute: async (input) => {
+          try {
+            ctx.executionPolicy?.assertTool(name);
+          } catch (error) {
+            if (error instanceof PluginExecutionDenied)
+              return {
+                ok: false,
+                output: { error: { kind: 'permission_denied', required: error.required } },
+              };
+            throw error;
+          }
+          const parsed = registered.inputSchema.safeParse(input);
+          if (!parsed.success) {
+            return {
+              ok: false,
+              output: {
+                error: {
+                  kind: 'invalid_input',
+                  message: `${name} 草案校验失败`,
+                  issues: parsed.error.issues,
+                },
+              },
+            };
+          }
           return {
-            ok: false,
+            ok: true,
             output: {
-              error: {
-                kind: 'invalid_input',
-                message: `${name} 草案校验失败`,
-                issues: parsed.error.issues,
+              __luoomeDraft: true,
+              draft: {
+                kind,
+                tool: name,
+                input: parsed.data,
+                summary: registered.description,
+                display: await workspaceDraftDisplay(
+                  {
+                    tool: name,
+                    kind,
+                    input,
+                    parsed: parsed.data as Record<string, unknown>,
+                    description: registered.description,
+                  },
+                  ctx,
+                ),
               },
             },
           };
-        }
-        return {
-          ok: true,
-          output: {
-            __luoomeDraft: true,
-            draft: {
-              kind,
-              tool: name,
-              input: parsed.data,
-              summary: registered.description,
-              display: await workspaceDraftDisplay(
-                {
-                  tool: name,
-                  kind,
-                  input,
-                  parsed: parsed.data as Record<string, unknown>,
-                  description: registered.description,
-                },
-                ctx,
-              ),
-            },
-          },
-        };
-      },
-    };
-  });
+        },
+      };
+    });
 
   return [...reads, ...drafts];
 };

@@ -305,12 +305,17 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
   const tool = defineTypedTool(
     definition,
     (ctx: ToolContext) => ctx.user.id,
-    (input, ctx) =>
-      ctx.executionPolicy?.authorizeTool(
-        definition.name,
-        input,
-        definition.requiredCapabilities ?? [definition.sideEffect],
-      ) ?? null,
+    (input, ctx) => {
+      if (definition.sideEffect !== 'read' && definition.name !== 'record_workflow_run')
+        ctx.executionGuard?.();
+      return (
+        ctx.executionPolicy?.authorizeTool(
+          definition.name,
+          input,
+          definition.requiredCapabilities ?? [definition.sideEffect],
+        ) ?? null
+      );
+    },
     (ctx) => ({
       ...ctx,
       ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
@@ -320,7 +325,10 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
         ? operation()
         : ctx.dataScope.run(
             (validate) => ctx.repos.withWriteGuard(validate, operation),
-            (dependency) => ctx.executionPolicy?.assertTool(definition.name, dependency),
+            (dependency) => {
+              if (definition.name !== 'record_workflow_run') ctx.executionGuard?.();
+              ctx.executionPolicy?.assertTool(definition.name, dependency);
+            },
             ctx.executionPolicy?.scopeKey(definition.name),
           ),
   );
