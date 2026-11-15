@@ -16,6 +16,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { createStrategyExplainer } from '../internal/strategy-explainer.js';
 import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
 import { readStrategyRunTimeline } from '../internal/strategy-run-timeline.js';
 
@@ -657,6 +658,16 @@ export const GenerateStrategyInsightOutput = z.object({
   facts: StrategyInsightFactsSchema,
   insight: StrategyInsightNarrativeSchema,
   provider: z.string().min(1),
+  degradation: z
+    .object({
+      reason: z.enum([
+        'plugin_disabled',
+        'dependency_not_ready',
+        'activation_revoked',
+        'provider_failed',
+      ]),
+    })
+    .optional(),
 });
 
 const factsOnlyNarrative = (
@@ -692,6 +703,12 @@ export const generateStrategyInsightTool = defineTool({
   input: GenerateStrategyInsightInput,
   output: GenerateStrategyInsightOutput,
   handler: async (input, ctx) => {
+    if (ctx.executionPolicy === undefined)
+      return {
+        ok: false as const,
+        error: { kind: 'permission_denied' as const, required: 'execution-policy' },
+      };
+    const explainer = createStrategyExplainer(ctx);
     const facts = await collectStrategyInsightFacts(input.strategyId, input.windowDays, ctx, {
       scope: input.scope,
       ...(input.since === undefined ? {} : { since: input.since }),
@@ -707,9 +724,7 @@ export const generateStrategyInsightTool = defineTool({
     let lastError = 'AI 洞察生成失败';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const generated = await ctx.adapters.llm.generate<
-          z.infer<typeof StrategyInsightNarrativeSchema>
-        >({
+        const generated = await explainer.generate<z.infer<typeof StrategyInsightNarrativeSchema>>({
           system:
             attempt === 0
               ? 'strategy_insight。只能解释 data.facts 中的事实；每条 finding 必须引用存在的 fact id。不得给出买卖建议、收益承诺、概率预测或把事实观察称为回测。必须保留缺失数据与小样本限制。'
@@ -723,7 +738,14 @@ export const generateStrategyInsightTool = defineTool({
             ...(attempt === 0 ? {} : { repair: lastError }),
           },
         });
-        const parsed = StrategyInsightNarrativeSchema.safeParse(generated);
+        if (!generated.ok)
+          return {
+            facts,
+            insight: factsOnlyNarrative(facts),
+            provider: 'facts-only',
+            degradation: { reason: generated.reason },
+          };
+        const parsed = StrategyInsightNarrativeSchema.safeParse(generated.value);
         if (
           parsed.success &&
           parsed.data.findings.every((finding) => finding.factRefs.every((ref) => allowed.has(ref)))
@@ -739,6 +761,11 @@ export const generateStrategyInsightTool = defineTool({
       strategyId: input.strategyId,
       error: lastError,
     });
-    return { facts, insight: factsOnlyNarrative(facts), provider: 'facts-only' };
+    return {
+      facts,
+      insight: factsOnlyNarrative(facts),
+      provider: 'facts-only',
+      degradation: { reason: 'provider_failed' as const },
+    };
   },
 });

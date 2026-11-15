@@ -173,10 +173,8 @@ const writeAudit = async (
 export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
   definition: TypedToolDefinition<I, O, C>,
   auditCaller: (ctx: C) => string,
-  authorize?: (
-    input: unknown,
-    ctx: C,
-  ) => Promise<ToolResult<never> | null> | ToolResult<never> | null,
+  authorize?: (input: I, ctx: C) => Promise<ToolResult<never> | null> | ToolResult<never> | null,
+  prepareContext?: (ctx: C) => C,
 ): TypedTool<I, O, C> => {
   const { name, description, sideEffect, input, output, handler } = definition;
   const requiredCapabilities = [
@@ -216,6 +214,7 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
     };
     let parsed: ReturnType<typeof input.safeParse>;
     try {
+      ctx = prepareContext?.(ctx) ?? ctx;
       parsed = input.safeParse(rawInput);
     } catch (error) {
       return failure(error);
@@ -239,7 +238,7 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
 
     let result: O | ToolResult<never>;
     try {
-      const denied = await authorize?.(rawInput, ctx);
+      const denied = await authorize?.(parsed.data, ctx);
       result = denied ?? (await handler(parsed.data, ctx));
     } catch (error) {
       return failure(error);
@@ -291,8 +290,24 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
 
 export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.ZodType<O>>(
   definition: ToolDefinition<I, O> & { readonly input: Input; readonly output: Output },
-): Tool<I, O> & { readonly inputSchema: Input; readonly outputSchema: Output } => ({
-  ...defineTypedTool(definition, (ctx: ToolContext) => ctx.user.id),
-  inputSchema: definition.input,
-  outputSchema: definition.output,
-});
+): Tool<I, O> & { readonly inputSchema: Input; readonly outputSchema: Output } => {
+  const tool = defineTypedTool(
+    definition,
+    (ctx: ToolContext) => ctx.user.id,
+    (input, ctx) =>
+      ctx.executionPolicy?.authorizeTool(
+        definition.name,
+        input,
+        definition.requiredCapabilities ?? [definition.sideEffect],
+      ) ?? null,
+    (ctx) => ({
+      ...ctx,
+      ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
+    }),
+  );
+  return {
+    ...tool,
+    inputSchema: definition.input,
+    outputSchema: definition.output,
+  };
+};

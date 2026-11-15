@@ -5,6 +5,7 @@
 > 目标：将投资业务能力按域组织为插件，并复用成熟通用插件，通过组合形成不同 Agent 能力。
 > 配套：[详细研究与验证计划](../dsh-plugin-platform-research-plan.md)。
 > 实施：[开发任务与线程边界](../dsh-plugin-platform-development-plan.md)。
+> 后续分层方案：[共享数据底座与能力插件详细设计及实施计划](./layered-capability-plugin-detailed-design.md)（P0/P1 已实施；明确共享事实常驻、业务执行启停及各入口契约，保留本文已验证的 DSH 进程隔离与桥接）。
 > 约束依据：[领域语言](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)、[Web Chat](./web-chat-design.md)、[托管设计](./hosted-personal-subscription-detailed-design.md)。
 
 ## 1. 目标、范围与决策状态

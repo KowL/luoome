@@ -231,6 +231,41 @@ luoome mcp serve    # stdio JSON-RPC
 
 ---
 
+### 策略 AI 插件控制（P1）
+
+当前只管理 `strategy.ai-insight`，不包含行情源、采集任务、策略执行或 Web 插件管理页。
+该开关只控制策略解释模型，聊天、个股分析等功能保持原来的配置。
+
+```bash
+luoome plugins status --json
+luoome plugins init --dry-run
+LUOOME_EXPOSE_WRITE=true luoome plugins init --apply
+```
+
+初始化只创建 `$LUOOME_HOME/plugins.json`，不初始化数据库或连接模型/行情。
+首次基线保留原有策略解释选择（enabled），不是授予调用权限；实际模型调用仍需 external 授权和模型就绪。
+后续新增项默认关闭。普通启动不自动创建配置，配置缺失或无效时只返回 facts-only，不自动尝试模型。
+
+从 `status` 的 `configuration.config` 读取最新 incarnation 和 revision，条件停用：
+
+```bash
+LUOOME_EXPOSE_WRITE=true luoome plugins set strategy.ai-insight --enabled false \
+  --expected-incarnation <status返回的UUID> --expected-revision <当前版本>
+```
+
+重新启用使用 `--enabled true` 和最新版本。`plugins migrate` 默认只预览；显式应用需
+`--apply --expected-incarnation <uuid> --expected-revision <n>` 及 write 权限。`committed` 只表示
+配置提交成功；`status` 的 `runtime: not-started` 不代表另一个 Web/MCP 宿主或模型已就绪。
+
+停用后的下一受控调用点生效；旧 Workflow 和已开始的模型调用会复核持久世代，关后重开也不复活旧许可。
+已发送请求可能已产生费用；失效成功响应会被丢弃，不发起 repair 重试。日循环保留策略发布事实并标 partial，
+周报保留事实行，组合结果标 `provider: facts-only` 及降级原因。生成洞察的 external 权限不足仍拒绝，
+不能靠降级绕过；纯事实查询保持 read。
+
+文件损坏需先核对并修复或备份移走，再显式初始化；重建配置生成新 incarnation，旧许可失效。
+存在 `plugins.json.lock` 时配置写入报 busy，已有合法配置仍可读；不要未经核验删除正在使用的锁。
+MCP 当前工具发现仍按启动状态，P1 没有新增公开 Tool 或动态发现；插件执行撤销在调用时复核。
+
 ## 4. Web 用法
 
 `luoome start` 或 `luoome web serve` 启动后，浏览器访问 `http://127.0.0.1:5173`。

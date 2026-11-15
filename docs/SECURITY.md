@@ -300,6 +300,13 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 
 ## DSH 运行时安全边界
 
+策略 AI 的独立开关通过本地 CLI 控制 `plugins.json`，模型无权修改。初始化/迁移/修改需 write，
+但启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。
+配置原子替换配合 writer lock 与 incarnation/revision 条件提交；正常启停增加受影响 epoch，
+灾难恢复使用新 incarnation。每次策略解释在发请求及发布结果前重查，旧 scope、重试与晚响应不能复活。
+已发送模型请求无法撤回费用；停用只阻止后续请求和失效解释发布，组合仍可返回已获准的原窗口事实。
+配置缺失或损坏不默认启用；通用生产上下文缺少 P1 执行许可时拒绝受控入口。现阶段不宣称其它业务已被插件隔离。
+
 - Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装或 MCP。
 - 业务调用绑定服务端 `runId + ownerId + accountId + allowedTools`，经过本轮 callable 和最新授权；写操作只能产生待确认草案，不能通过直接 registry 执行变成写入。
 - 工具、模型、原生网页的内部接口各用独立 audience 凭证；模型输入不能指定执行身份，供应商密钥留在 Bun 主进程。

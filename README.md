@@ -89,7 +89,7 @@ Web、CLI 和 MCP 共用下列单机环境变量：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
+| `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`、`plugins.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
@@ -133,6 +133,11 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 OpenAI-compatible Chat Completions 接入。
 
 Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
+
+策略 AI 洞察已支持独立启停：使用 `luoome plugins init --dry-run` 查看迁移基线，显式初始化后通过
+带版本的 `plugins set` 管理 `strategy.ai-insight`。未初始化、配置损坏或停用时，日循环和周报仍保留
+确定性事实，不调用策略解释模型；不影响其它 AI 功能。写配置需 `LUOOME_EXPOSE_WRITE=true`，
+生成洞察仍需原 external 授权。完整命令与生效边界见[插件控制](./docs/USER_GUIDE.md#策略-ai-插件控制p1)。
 
 ## 文档
 

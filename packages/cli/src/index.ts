@@ -11,6 +11,7 @@ import { createCliContext } from './context.js';
 import { isDaemonized, respawnDetached, startLogRotation } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
+import { cmdPlugins } from './plugins.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
 const VERSION = '0.9.0';
@@ -20,6 +21,9 @@ const VERSION = '0.9.0';
 /** 需要跟值的 flag（`--key value` 或 `--key=value`）；其余 `--key` 视为 boolean 开关。 */
 const VALUE_FLAGS = new Set([
   'input',
+  'enabled',
+  'expected-incarnation',
+  'expected-revision',
   'since',
   'until',
   'date',
@@ -862,6 +866,13 @@ const printHelp = (): void => {
 
 用法: luoome <command> [options]
 
+插件控制（P1 仅策略 AI；管理不初始化数据库或模型）:
+  plugins status --json
+  plugins init --dry-run
+  plugins init --apply
+  plugins migrate [--apply --expected-incarnation <uuid> --expected-revision <n>]
+  plugins set <id> --enabled true|false --expected-incarnation <uuid> --expected-revision <n>
+
 全局:
   --version                      输出版本号
   --help, -h                     输出本帮助
@@ -939,6 +950,7 @@ const run = async (argv: readonly string[]): Promise<number> => {
     throw new CliUsageError(`未知 tools 子命令: "${sub ?? ''}"（支持 list / inspect / call）`);
   }
 
+  if (cmd === 'plugins') return cmdPlugins(sub, rest, flags);
   if (cmd === 'strategy') return cmdStrategy(sub, rest, flags, json);
   if (cmd === 'watchlist') return cmdWatchlist(sub, rest, flags, json);
   if (cmd === 'alert') return cmdAlert(sub, flags, json);

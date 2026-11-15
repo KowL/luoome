@@ -18,6 +18,7 @@ import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-qu
 import type { Exchange } from './entity/stock.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
+import type { ToolExecutionPolicyLike } from './plugin-policy.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type { ResearchVaultAdapterLike } from './research-vault.js';
 import type { SourceErrorKind, SourceStatus } from './source.js';
@@ -99,6 +100,7 @@ export interface LLMGenerateRequest {
 /** LLM 适配器的 core 侧投影。 */
 export interface LLMAdapterLike {
   readonly name: string;
+  readonly configurationReady?: boolean;
   generate<T = unknown>(request: LLMGenerateRequest): Promise<T>;
 }
 
@@ -224,6 +226,7 @@ export interface ToolContextAdapters {
 }
 
 export interface ToolContext {
+  readonly executionPolicy?: ToolExecutionPolicyLike;
   readonly repos: RepositoryRegistry;
   readonly adapters: ToolContextAdapters;
   readonly user: {

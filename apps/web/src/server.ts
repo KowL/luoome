@@ -373,6 +373,8 @@ export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
 /** 启动单机多账户 Web 服务及进程内业务调度器。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
+  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
+  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const dbPath = options.dbPath ?? resolveDbPath();
   const sources: WebSourceSet = { eastmoney: new EastmoneySource({ clock: () => new Date() }) };
   const aiSettingsStore = new AISettingsStore(process.env);
@@ -385,11 +387,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ...marketSettingsStore.runtimeEnv(),
     ...researchVaultSettingsStore.runtimeEnv(),
     ...feishuSettingsStore.runtimeEnv(),
+    LUOOME_EXPOSE_WRITE: String(exposeWrite),
+    LUOOME_EXPOSE_EXTERNAL: String(exposeExternal),
   };
   const mcpSettingsStore = new McpSettingsStore(runtimeEnv);
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
-  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
-  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
   const app = createWebApp(ctx, {
     exposeWrite,

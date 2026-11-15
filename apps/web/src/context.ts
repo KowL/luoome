@@ -21,6 +21,8 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  PluginConfigStore,
+  resolvePluginConfigPath,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -28,7 +30,7 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext } from '@luoome/tools';
+import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } from '@luoome/tools';
 
 /** 缺省数据库路径：$LUOOME_HOME/luoome.db（LUOOME_HOME 缺省 ~/.luoome）。 */
 /**
@@ -70,6 +72,7 @@ export const buildWebContext = async (
   }
   const unavailableLLM = {
     name: 'ai-unconfigured',
+    configurationReady: false,
     generate: async (): Promise<never> => {
       throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
     },
@@ -119,6 +122,10 @@ export const buildWebContext = async (
   const sectorCatalog = createSectorCatalogFromEnv(env, { clock: now, logger: console });
   return buildContext({
     repos: handle.repos,
+    executionPolicy: createPluginExecutionPolicy(
+      new PluginConfigStore(resolvePluginConfigPath(env)),
+      pluginAllowedSideEffects(env),
+    ),
     adapters: {
       ...(marketDump === undefined ? {} : { marketDump }),
       ...(limitUpBoard === undefined ? {} : { limitUpBoard }),

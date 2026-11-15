@@ -46,6 +46,11 @@ Handle error kinds conservatively:
 
 ## Context budget
 
+Strategy AI explanations can be disabled locally without deleting daily-cycle or weekly-report facts.
+A `facts-only` result is a deterministic summary, not completed AI analysis or new Advice.
+Keep degradation and missing-data limits visible. Plugin controls are local CLI operations, not MCP tools;
+never use another tool or data source to bypass a disabled capability or permission denial.
+
 - Apply filters, `limit`, `since` and `until` where supported.
 - List first to resolve IDs, then fetch only required details.
 - Prefer batch capabilities to repetitive calls, while respecting external-call confirmation.

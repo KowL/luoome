@@ -1,4 +1,9 @@
-import { type AuditLogEvent, InvariantError, type ToolContext } from '@luoome/core';
+import {
+  type AuditLogEvent,
+  InvariantError,
+  type ToolContext,
+  type ToolExecutionPolicyLike,
+} from '@luoome/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { defineTool, errNotFound } from './define-tool.js';
@@ -23,6 +28,50 @@ describe('defineTool execute 错误模型', () => {
   it('正常路径：input parse → handler → output parse → Ok(data)', async () => {
     const result = await doubleTool.execute({ n: 21 }, ctx);
     expect(result).toEqual({ ok: true, data: { doubled: 42 } });
+  });
+
+  it('authorizes normalized input before handlers and contains policy failures in ToolResult', async () => {
+    let seen: unknown;
+    let calls = 0;
+    const policy: ToolExecutionPolicyLike = {
+      bind: () => policy,
+      acquire: () => ({ ok: false, reason: 'dependency_not_ready' }),
+      valid: () => false,
+      authorizeTool: (_name, input) => {
+        seen = input;
+        return { ok: false, error: { kind: 'permission_denied', required: 'fixture' } };
+      },
+    };
+    const tool = defineTool({
+      name: 'normalized_policy',
+      description: 'fixture',
+      sideEffect: 'read',
+      input: z.object({ scope: z.string().default('stock'), n: z.coerce.number().default(2) }),
+      output: z.number(),
+      handler: () => {
+        calls++;
+        return 1;
+      },
+    });
+    expect(await tool.execute({ n: '3' }, { ...ctx, executionPolicy: policy })).toMatchObject({
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+    expect(seen).toEqual({ scope: 'stock', n: 3 });
+    expect(calls).toBe(0);
+    const failed = await tool.execute(
+      {},
+      {
+        ...ctx,
+        executionPolicy: {
+          ...policy,
+          bind: () => {
+            throw new Error('broken policy');
+          },
+        },
+      },
+    );
+    expect(failed).toMatchObject({ ok: false, error: { kind: 'internal' } });
   });
 
   it('input parse 失败 → invalid_input（带 issues），execute 不抛异常', async () => {

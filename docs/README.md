@@ -43,6 +43,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [共享数据底座与能力插件详细设计](./ddd/layered-capability-plugin-detailed-design.md) | P0/P1 已实施；共享底座、提供者/采集任务、业务插件的归属、依赖、启停、降级及联合评审取舍 |
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与单机多账户边界；首批已通过受控开发验收，后续能力按设计验证 |
 | [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
 | [领域收敛、去冗余与架构减负详细设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md) | 73 表收敛至 38 表、152 Tools 收敛至 34 核心 Agent Tools、移除手写内存库与超前空转模块的详细设计与分阶段计划 |
@@ -77,6 +78,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [能力插件分阶段实施计划](./ddd/layered-capability-plugin-detailed-design.md#13-分阶段实施计划) | P0 契约基线、P1 策略 AI 纵切已完成；P2 数据提供者/采集、P3 业务调度、P4 管理与全链验收待实施 |
 | [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D07 已集成验收；D08–D10 已拆分但未派发（持久绑定、预算/灰度、社区插件与多 Agent） |
 | [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |

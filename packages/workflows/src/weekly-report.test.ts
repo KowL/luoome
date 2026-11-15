@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   type AShareSentimentManagerLike,
   type AShareSentimentSnapshot,
@@ -10,6 +13,7 @@ import {
 import { saveDecisionReviewTool } from '@luoome/tools';
 import {
   buildTestContext,
+  createTestPluginControl,
   recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
 } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -914,4 +918,42 @@ describe('weekly-report workflow', () => {
     expect(second.data.notified).toBe(false);
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
   });
+});
+
+it('disabled strategy AI retains weekly strategy facts, evidence and report rows with zero model calls', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-weekly-plugins-'));
+  try {
+    const { store, initial, executionPolicy } = createTestPluginControl(root);
+    store.set('strategy.ai-insight', false, initial);
+    const base = await buildTestContext({ clock: () => now });
+    await seedStrategyWithPublishedRun(base);
+    let calls = 0;
+    const ctx: ToolContext = {
+      ...base,
+      executionPolicy,
+      adapters: {
+        ...base.adapters,
+        llm: {
+          name: 'counted',
+          generate: async () => {
+            calls++;
+            throw new Error('must not call disabled AI');
+          },
+        },
+      },
+    };
+    const result = await weeklyReportOperation.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((entry) => entry.key === 'strategy-review');
+    expect(section).toMatchObject({ status: 'complete', missingDimensions: [] });
+    const table = section?.blocks.find((block) => block.kind === 'table');
+    expect(table?.kind === 'table' ? table.rows : []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ strategy: '周复盘策略' })]),
+    );
+    expect(JSON.stringify(section)).toContain('事实摘要');
+    expect(calls).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

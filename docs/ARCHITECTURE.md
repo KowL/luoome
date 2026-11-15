@@ -926,6 +926,29 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 目录契约测试校验工具名、对象唯一性和导出覆盖，既有公共库存测试保护暴露范围。
 Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schema；内部 ToolResult 与 MCP 文本内容的响应格式分别说明。
 
+### 7.1.1 P0/P1 插件归属与策略 AI 控制
+
+catalog 已为全部 Tool 标注唯一 owner，并为策略/分析组合补充模式依赖清点；这些归属不自动授予权限。
+`execution: 'p1'` 明确本阶段受控入口，未标入口仍沿用既有授权，并不代表所有业务已经可插拔。
+公共库存、输入 schema、sideEffect、requiredCapabilities 和原发现依赖由 P0 基线契约测试保护。
+
+`core/plugin-policy` 仅定义 SDK 无关的纯端口；`adapters/plugins/config` 负责受限大小的配置读取、
+跨进程 writer lock、锁内 incarnation/revision CAS、0600 原子文件及持久 epoch。只有显式 init/migrate
+写配置，缺失/损坏时不默认启用。当前 schema 只接受 `strategy.ai-insight`，不提前接受尚未纳管的 provider/task 开关。
+
+`defineTool.execute` 在错误收口内绑定执行 scope，基于 Zod 解析后的输入调用执行策略，再执行 handler；
+Workflow 在创建访问器时绑定 scope，所有 Tool 访问器仍由 catalog 派生。生产 CLI/Web/MCP 均注入策略，
+无策略的通用 buildContext 对 P1 入口默认拒绝；显式 permissive 策略仅在 testing 子入口。
+
+策略查询和 `generate_strategy_insight` 组合入口常驻。可选解释 port 在模型请求前和返回后检查
+`config incarnation + epoch`；同次 facts-only 使用原窗口事实，不重新查询或扩大到其它账户。
+关闭后零新增解释请求，旧成功响应不发布，旧失败不 repair，关后重开也不能复活旧 Workflow/port。
+同一插件未变的配置 revision 更新不撤销执行。组合入口保留 external，纯事实入口保留 read，
+新增的可选 degradation 不改变既有输出字段。日循环与周报保持原 publication/报告事实语义。
+
+本切片无 timer、持久连接或异步 prepare，不新建空资源生命周期框架；共享行情、DB、策略调度与报告 cutoff 未迁移。
+后续阶段见[分层详细设计](./ddd/layered-capability-plugin-detailed-design.md)。
+
 ### 7.2 副作用分级（重申）
 
 | 等级 | tool 例 | MCP 默认 | Web 默认 | CLI 默认 |

@@ -9,6 +9,7 @@ export * from './catalog.js';
 export * from './context.js';
 export * from './define-tool.js';
 export * from './external-mcp.js';
+export * from './plugin-policy.js';
 export * from './registry.js';
 export * from './tools/account-facts.js';
 export * from './tools/add-holding.js';

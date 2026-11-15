@@ -1,8 +1,10 @@
 import type { Logger, RepositoryRegistry, ToolContext } from '@luoome/core';
+import { createPluginExecutionPolicy } from './plugin-policy.js';
 
 export interface BuildContextDependencies {
   readonly repos: RepositoryRegistry;
   readonly adapters: ToolContext['adapters'];
+  readonly executionPolicy?: ToolContext['executionPolicy'];
   readonly clock?: () => Date;
   readonly logger?: Logger;
   readonly auditLog?: ToolContext['auditLog'];
@@ -23,6 +25,15 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     repos: input.repos,
     adapters: input.adapters,
     user,
+    executionPolicy:
+      input.executionPolicy ??
+      createPluginExecutionPolicy(
+        {
+          acquire: () => ({ ok: false, reason: 'dependency_not_ready' }),
+          valid: () => false,
+        },
+        new Set(),
+      ),
     clock: input.clock ?? (() => new Date()),
     logger: input.logger ?? console,
     ...(input.auditLog === undefined ? {} : { auditLog: input.auditLog }),

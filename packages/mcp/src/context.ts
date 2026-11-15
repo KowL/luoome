@@ -26,6 +26,8 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  PluginConfigStore,
+  resolvePluginConfigPath,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -35,7 +37,7 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
-import { buildContext } from '@luoome/tools';
+import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } from '@luoome/tools';
 import type { McpDependency } from './exposure.js';
 
 /** createServerContext 的返回句柄：ctx + close()（进程退出时关闭 SQLite）。 */
@@ -139,9 +141,17 @@ export const createServerContext = async (
     if (sectorCatalog) readyDependencies.add('sectorCatalog');
     const ctx = buildContext({
       repos: handle.repos,
+      executionPolicy: createPluginExecutionPolicy(
+        new PluginConfigStore(resolvePluginConfigPath(env)),
+        pluginAllowedSideEffects(env),
+      ),
       adapters: {
         market,
-        llm: ai?.llm ?? { name: 'ai-unconfigured', generate: unavailable },
+        llm: ai?.llm ?? {
+          name: 'ai-unconfigured',
+          configurationReady: false,
+          generate: unavailable,
+        },
         ...(market === localMarket
           ? {}
           : {

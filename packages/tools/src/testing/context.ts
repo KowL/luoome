@@ -31,9 +31,11 @@ import type {
   ToolResult,
 } from '@luoome/core';
 import { createMemoryRepositories, seedData } from '@luoome/db/memory';
+import { createPluginExecutionPolicy } from '../plugin-policy.js';
 import { saveDecisionReviewTool } from '../tools/decision-review.js';
 
 export interface BuildTestContextOptions {
+  readonly executionPolicy?: ToolContext['executionPolicy'];
   readonly clock?: () => Date;
   readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
@@ -67,6 +69,18 @@ const createSilentLogger = (): Logger => {
 
 const defaultBusinessClock = (): Date => new Date(Math.max(DEFAULT_TEST_NOW.getTime(), Date.now()));
 
+export const createTestPluginControl = (home: string) => {
+  const store = new PluginConfigStore(join(home, 'plugins.json'));
+  return {
+    store,
+    initial: store.initialize(),
+    executionPolicy: createPluginExecutionPolicy(
+      store,
+      new Set(['read', 'advice', 'write', 'external']),
+    ),
+  };
+};
+
 /** Deterministic, in-memory context for automated tests only. */
 export const buildTestContext = async (
   opts: BuildTestContextOptions = {},
@@ -99,6 +113,15 @@ export const buildTestContext = async (
     ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
   };
   const ctx: ToolContext = {
+    executionPolicy:
+      opts.executionPolicy ??
+      createPluginExecutionPolicy(
+        {
+          acquire: (id) => ({ ok: true, permit: { id, incarnation: 'test-only', epoch: 1 } }),
+          valid: () => true,
+        },
+        new Set(['read', 'advice', 'write', 'external']),
+      ),
     repos,
     adapters: {
       market: new FakeMarketAdapter({
@@ -234,3 +257,6 @@ export const recordAdviceOutcomeForTest = {
       ctx,
     ),
 };
+
+import { join } from 'node:path';
+import { PluginConfigStore } from '@luoome/adapters';

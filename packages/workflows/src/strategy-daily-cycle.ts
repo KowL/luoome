@@ -456,7 +456,14 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           if (insight.ok) {
             insightProvider = insight.data.provider;
             insightFacts = insight.data.facts;
-            if (insight.data.provider === 'facts-only') status = 'partial';
+            if (insight.data.provider === 'facts-only') {
+              status = 'partial';
+              if (insight.data.degradation?.reason === 'plugin_disabled') {
+                notePartial('策略 AI 已停用，保留确定性事实');
+              } else if (insight.data.degradation?.reason === 'activation_revoked') {
+                notePartial('策略 AI 配置已变更，本次保留确定性事实');
+              }
+            }
           } else {
             status = 'partial';
             reason = errorText(insight.error);

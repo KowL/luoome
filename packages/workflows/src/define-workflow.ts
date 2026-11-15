@@ -17,13 +17,18 @@ export interface WorkflowContext extends ToolContext {
   readonly tools: WorkflowToolMap;
 }
 
-export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap =>
-  Object.fromEntries(
+export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
+  const bound = {
+    ...ctx,
+    ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
+  };
+  return Object.fromEntries(
     Object.entries(catalogTools).map(([name, tool]) => [
       name,
-      { execute: (input: unknown) => tool.execute(input, ctx) },
+      { execute: (input: unknown) => tool.execute(input, bound) },
     ]),
   ) as WorkflowToolMap;
+};
 
 /**
  * 工作流步骤：接收上一步输出（首步为已校验的 workflow 输入），返回下一步输入。
@@ -105,7 +110,13 @@ export const defineOperation = <I, O>(definition: WorkflowDefinition<I>): Workfl
       };
     }
 
-    const ctx: WorkflowContext = { ...toolCtx, tools: buildWorkflowTools(toolCtx) };
+    const bound = {
+      ...toolCtx,
+      ...(toolCtx.executionPolicy === undefined
+        ? {}
+        : { executionPolicy: toolCtx.executionPolicy.bind() }),
+    };
+    const ctx: WorkflowContext = { ...bound, tools: buildWorkflowTools(bound) };
 
     let current: unknown = parsed.data;
     for (const [index, step] of steps.entries()) {

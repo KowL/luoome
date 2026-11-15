@@ -504,7 +504,11 @@ const strategyReviewWeekSection = async (
     );
     const notes: string[] = [];
     if (insight.data.provider === 'facts-only') {
-      notes.push('AI 不可用，以下为确定性事实摘要');
+      notes.push(
+        insight.data.degradation?.reason === 'plugin_disabled'
+          ? '策略 AI 已停用，以下为确定性事实摘要'
+          : 'AI 不可用，以下为确定性事实摘要',
+      );
     }
     for (const observation of insight.data.facts.observations) {
       rows.push({

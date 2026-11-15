@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   StockUniverseManagerLike,
   Strategy,
@@ -6,8 +9,15 @@ import type {
   ToolContext,
 } from '@luoome/core';
 import { strategyDefinitionHash } from '@luoome/core';
-import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
+import {
+  buildTestContext,
+  createTestPluginControl,
+  seedTestDailyBars,
+  seedTestStockUniverse,
+} from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { buildWorkflowTools, defineWorkflow } from './define-workflow.js';
 
 import { strategyDailyCycleOperation } from './strategy-daily-cycle.js';
 
@@ -376,4 +386,118 @@ describe('strategy-daily-cycle workflow', () => {
       await failingCtx.repos.signalObservation.list({ sourceKind: 'strategy-signal' }),
     ).toEqual([]);
   });
+});
+
+it('disabled strategy AI preserves published daily facts and revokes old workflow bindings', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-cycle-plugins-'));
+  try {
+    const { store, initial, executionPolicy } = createTestPluginControl(root);
+    const base = await setup();
+    let calls = 0;
+    const ctx: ToolContext = {
+      ...base.ctx,
+      executionPolicy,
+      adapters: {
+        ...base.ctx.adapters,
+        llm: {
+          name: 'counted',
+          generate: async () => {
+            calls++;
+            throw new Error('must not call disabled AI');
+          },
+        },
+      },
+    };
+    const old = buildWorkflowTools(ctx);
+    const disabled = store.set('strategy.ai-insight', false, initial);
+    const result = await strategyDailyCycleOperation.run({ strategyId: base.strategyId }, ctx);
+    expect(result).toMatchObject({
+      ok: true,
+      data: { items: [{ status: 'partial', insightProvider: 'facts-only' }] },
+    });
+    const runs = await ctx.repos.strategyRun.listRuns({ strategyId: base.strategyId });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'complete', publication: { status: 'published' } });
+    const audits = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'strategy-daily-cycle',
+      limit: 10,
+    });
+    expect(JSON.stringify(audits)).toContain('insightFacts');
+    expect(JSON.stringify(audits)).toContain(base.strategyId);
+    store.set('strategy.ai-insight', true, disabled);
+    const stale = await old.generate_strategy_insight.execute({ strategyId: base.strategyId });
+    expect(stale).toMatchObject({
+      ok: true,
+      data: { provider: 'facts-only', degradation: { reason: 'activation_revoked' } },
+    });
+    expect(calls).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('nested workflows inherit the original activation instead of reacquiring after off/on', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-nested-plugins-'));
+  try {
+    const { store, initial, executionPolicy } = createTestPluginControl(root);
+    const base = await setup();
+    let calls = 0;
+    const ctx: ToolContext = {
+      ...base.ctx,
+      executionPolicy,
+      adapters: {
+        ...base.ctx.adapters,
+        llm: {
+          name: 'counted',
+          generate: async () => {
+            calls++;
+            throw new Error('old workflow must not acquire new AI grant');
+          },
+        },
+      },
+    };
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const parent = defineWorkflow({
+      name: 'nested-plugin-fixture',
+      description: 'fixture',
+      input: z.object({}),
+      steps: [
+        async () => {
+          entered();
+          await waiting;
+          return {};
+        },
+        async (_, nestedCtx) =>
+          strategyDailyCycleOperation.run({ strategyId: base.strategyId }, nestedCtx),
+      ],
+    });
+    const pending = parent.run({}, ctx);
+    await started;
+    const disabled = store.set('strategy.ai-insight', false, initial);
+    store.set('strategy.ai-insight', true, disabled);
+    release();
+    const result = await pending;
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        items: [
+          {
+            status: 'partial',
+            insightProvider: 'facts-only',
+            reason: expect.stringContaining('配置已变更'),
+          },
+        ],
+      },
+    });
+    expect(calls).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
