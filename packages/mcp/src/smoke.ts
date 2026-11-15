@@ -9,6 +9,7 @@ import { money, stockCode, strategyDefinitionHash } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const root = mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
 const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
@@ -204,7 +205,18 @@ try {
     LUOOME_EXPOSE_EXTERNAL: 'true',
     LUOOME_EXPOSE_WRITE: 'true',
   });
+  let changes = 0;
+  strategyClient.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    changes++;
+  });
+  const waitChange = async (previous: number) => {
+    const deadline = Date.now() + 5000;
+    while (changes <= previous && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(changes > previous, 'same connection receives tools/list_changed');
+  };
   try {
+    assert.equal(strategyClient.getServerCapabilities()?.tools?.listChanged, true);
     assert.ok((await names(strategyClient)).includes('run_strategy'));
     const run = await strategyClient.callTool({
       name: 'run_strategy',
@@ -213,7 +225,9 @@ try {
     assert.notEqual(run.isError, true);
     assert.equal(data(run).run.status, 'complete');
     assert.equal(data(run).results.length, 1);
+    const beforeDisable = changes;
     setExecution(false);
+    await waitChange(beforeDisable);
     assert.ok(!(await names(strategyClient)).includes('run_strategy'));
     await assert.rejects(
       strategyClient.callTool({
@@ -228,7 +242,9 @@ try {
     });
     assert.notEqual(history.isError, true);
     assert.equal(data(history).strategy.id, 'mcp-strategy');
+    const beforeEnable = changes;
     setExecution(true);
+    await waitChange(beforeEnable);
     assert.ok((await names(strategyClient)).includes('run_strategy'));
     setExecution(false);
   } finally {

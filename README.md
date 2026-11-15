@@ -144,6 +144,11 @@ Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也�
 策略执行与自动调度也可分别启停：`business.strategy-execution` 管理新运行/试跑/回测，`task.strategy-schedules` 管理自动策略 timer。
 新增项默认关闭，历史查询与报告 cutoff/补投保留；启用和迁移步骤见[策略执行控制](./docs/USER_GUIDE.md#策略执行与自动调度控制p3)。
 
+Web「设置 → 插件」可预览并显式初始化、迁移和启停上述内置能力，查看依赖、可能影响、
+当前 Web 宿主的门禁复核、运行与排空状态。预览不会自动启用依赖或访问上游；保存需要 write 和同源请求，
+不会授予 external。MCP 支持同连接工具列表变化通知，旧工具调用仍在执行处复核。
+操作与覆盖范围见[Web 插件管理](./docs/USER_GUIDE.md#web-插件管理p4)。
+
 ## 文档
 
 | 文档 | 用途 |

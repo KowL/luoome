@@ -6,6 +6,8 @@ import type { WebSourceSet } from '../context.js';
 import type { FeishuSettingsStore } from '../feishu-settings.js';
 import type { MarketSettingsStore } from '../market-settings.js';
 import type { McpSettingsStore } from '../mcp-settings.js';
+import type { PluginSettingsStore } from '../plugin-settings.js';
+import type { PluginTasks } from '../plugin-tasks.js';
 import type { ResearchVaultSettingsStore } from '../research-vault-settings.js';
 
 export type { WebSourceSet };
@@ -63,6 +65,8 @@ export interface WebRouteDeps {
   readonly exposeWrite: boolean;
   readonly exposeExternal: boolean;
   readonly chatRuntimeRef: { current: ChatStreamRuntime | undefined };
+  readonly pluginSettingsStore?: PluginSettingsStore;
+  readonly pluginTasks?: { current: Pick<PluginTasks, 'status' | 'reconcile'> | undefined };
   readonly aiSettingsStore?: AISettingsStore;
   readonly mcpSettingsStore?: McpSettingsStore;
   readonly marketSettingsStore?: MarketSettingsStore;

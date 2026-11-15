@@ -88,6 +88,74 @@ const input = {
   maxRetries: 2,
 } as const;
 
+it('observes outstanding source work after the parent returns and marks parent revocation as draining', async () => {
+  const { store, set } = await setup();
+  set('source.eastmoney', true);
+  const runtime = new ProviderRuntime(store);
+  const started = deferred(),
+    release = deferred();
+  const transport = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+    started.resolve();
+    await release.promise;
+    return new Response('late');
+  });
+  const port = runtime.wrap('market', ['eastmoney'], () => ({
+    read: async () =>
+      (await runtime.fetchFor('eastmoney', transport)('https://example.com/quote')).text(),
+  }));
+  let valid = true;
+  let late: Promise<string> | undefined;
+  await runtime.run(
+    async () => {
+      late = port.read();
+      await started.promise;
+    },
+    () => {
+      if (!valid) throw new Error('parent revoked');
+    },
+  );
+  expect(runtime.activity()).toEqual([{ id: 'source.eastmoney', inFlight: 1, revokedInFlight: 0 }]);
+  valid = false;
+  expect(runtime.activity()).toEqual([{ id: 'source.eastmoney', inFlight: 1, revokedInFlight: 1 }]);
+  expect(store.acquire('source.eastmoney').ok).toBe(true);
+  const rejected = expect(late).rejects.toThrow('parent revoked');
+  release.resolve();
+  await rejected;
+  expect(runtime.activity()).toEqual([]);
+});
+
+it('keeps credential-missing controlled sources unavailable while retaining a ready fallback', async () => {
+  const { store, set, source, bars } = await setup();
+  set('source.tushare', true);
+  const runtime = new ProviderRuntime(store);
+  const env = { LUOOME_MARKET_PROVIDER: 'real' };
+  const logger = (await buildTestContext()).logger;
+  const unavailable = createMarketAdapterFromEnv(env, {
+    logger,
+    providerRuntime: runtime,
+    sourceOrder: ['tushare'],
+  });
+  expect(runtime.ready(unavailable)).toBe(false);
+  await expect(unavailable.fetchQuote('002594.SZ')).rejects.toThrow('no ready data providers');
+  set('source.eastmoney', true);
+  vi.spyOn(source, 'fetchDailyBars').mockResolvedValue(bars(10));
+  const fallback = createMarketAdapterFromEnv(env, {
+    logger,
+    providerRuntime: runtime,
+    sourceOrder: ['tushare', 'eastmoney'],
+    sources: { eastmoney: source },
+  });
+  expect(runtime.ready(fallback)).toBe(true);
+  expect(
+    (
+      await fallback.fetchDailyBars('002594.SZ', {
+        start: new Date('2026-11-01'),
+        end: new Date('2026-11-12'),
+      })
+    )[0]?.close,
+  ).toBe(10);
+});
+
 describe('provider and ingestion task control', () => {
   it('starts closed, independently enables providers/tasks, and retains local reads with everything off', async () => {
     const { ctx, set, source, bars } = await setup();

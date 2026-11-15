@@ -1,3 +1,5 @@
+import { BUILTIN_PLUGINS } from '@luoome/adapters';
+import { PluginSettingsStore } from './plugin-settings.js';
 import { PluginTasks } from './plugin-tasks.js';
 // @luoome/web —— Web 服务组装根（docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §7.1）。
 // 本文件只保留：Hono 实例、ctx/依赖注入、同源静态资源、领域路由注册、进程启动与调度器。
@@ -70,6 +72,8 @@ export interface CreateWebAppOptions {
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
   readonly mcpSettingsStore?: McpSettingsStore;
+  readonly pluginSettingsStore?: PluginSettingsStore;
+  readonly pluginTasks?: { current: Pick<PluginTasks, 'status' | 'reconcile'> | undefined };
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
    * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
@@ -325,6 +329,10 @@ export const createWebApp = (
     exposeExternal,
     chatRuntimeRef,
     ...(aiSettingsStore === undefined ? {} : { aiSettingsStore }),
+    ...(options.pluginSettingsStore === undefined
+      ? {}
+      : { pluginSettingsStore: options.pluginSettingsStore }),
+    ...(options.pluginTasks === undefined ? {} : { pluginTasks: options.pluginTasks }),
     ...(options.mcpSettingsStore === undefined
       ? {}
       : { mcpSettingsStore: options.mcpSettingsStore }),
@@ -393,7 +401,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const mcpSettingsStore = new McpSettingsStore(runtimeEnv);
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
+  const pluginTasks = { current: undefined as PluginTasks | undefined };
+  const pluginSettingsStore = new PluginSettingsStore(runtimeEnv);
   const app = createWebApp(ctx, {
+    pluginSettingsStore,
+    pluginTasks,
     exposeWrite,
     exposeExternal,
     aiSettingsStore,
@@ -410,7 +422,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ? new PluginTasks(ctx, [
         {
           id: 'task.strategy-schedules',
-          requires: ['business.strategy-execution'],
+          requires: BUILTIN_PLUGINS['task.strategy-schedules'].requires,
           start: (scope) =>
             startStrategyScheduler(scope.ctx, {
               startImmediately: false,
@@ -428,6 +440,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
         },
       ])
     : undefined;
+  pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
     ? [
         startClosingReportScheduler(ctx, { startImmediately: false }),

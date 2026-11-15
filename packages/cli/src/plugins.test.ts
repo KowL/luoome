@@ -20,6 +20,14 @@ it('manages plugins without initializing DB/providers and requires write plus a 
   const output = vi.spyOn(console, 'log').mockImplementation(() => {});
   const flags = (entries: [string, string | boolean][] = []) => new Map(entries);
   expect(cmdPlugins('status', [], flags())).toBe(0);
+  const status = JSON.parse(String(output.mock.calls[0]?.[0]));
+  expect(status.definitions['task.strategy-schedules'].requires).toEqual([
+    'business.strategy-execution',
+  ]);
+  expect(status.contributions['business.strategy-execution']).toContainEqual(
+    expect.objectContaining({ name: 'run_strategy', effect: 'owned' }),
+  );
+  expect(status.runtime).toBe('not-started');
   expect(cmdPlugins('init', [], flags())).toBe(0);
   expect(cmdPlugins('init', [], flags([['apply', 'false']]))).toBe(1);
   expect(readdirSync(home)).toEqual([]);

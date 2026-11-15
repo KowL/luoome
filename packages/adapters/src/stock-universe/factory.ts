@@ -50,15 +50,20 @@ export const createStockUniverseManagerFromEnv = (
     return runtime.wrap(
       'stock-universe',
       deps.sourceOrder ?? stockUniverseSourceOrderFromEnv(env),
-      (active, guard) =>
-        buildCreateStockUniverseManagerFromEnv(
-          { ...env, LUOOME_STOCK_UNIVERSE_SOURCES: active.join(',') },
+      (active, guard) => {
+        const ready = active.filter(
+          (source) => source !== 'tushare' || Boolean(env.TUSHARE_TOKEN?.trim()),
+        );
+        if (ready.length === 0) return undefined;
+        return buildCreateStockUniverseManagerFromEnv(
+          { ...env, LUOOME_STOCK_UNIVERSE_SOURCES: ready.join(',') },
           {
             ...deps,
             guard,
-            sourceOrder: active,
+            sourceOrder: ready,
           },
-        ),
+        );
+      },
     );
   return buildCreateStockUniverseManagerFromEnv(env, deps);
 };

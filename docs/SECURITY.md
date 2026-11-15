@@ -300,7 +300,7 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 
 ## DSH 运行时安全边界
 
-策略 AI 的独立开关通过本地 CLI 控制 `plugins.json`，模型无权修改。初始化/迁移/修改需 write，
+内置能力开关通过本地 CLI 或 Web「设置 → 插件」控制 `plugins.json`，模型无权修改。初始化/迁移/修改需 write，
 但启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。
 配置原子替换配合 writer lock 与 incarnation/revision 条件提交；正常启停增加受影响 epoch，
 灾难恢复使用新 incarnation。每次策略解释在发请求及发布结果前重查，旧 scope、重试与晚响应不能复活。
@@ -318,6 +318,11 @@ source/task 初始与迁移新增项默认关闭，启用仍受宿主 write/exte
 受控 timer 先撤销再卸载，在途未排空阻止新一代注册；有界排空超时/teardown 失败均不得谎报安全卸载。
 报告 cutoff/补投独立于策略调度，关闭策略不关闭报告资源。
 这不是任意第三方插件沙箱，也未把全部业务迁为插件。
+
+插件 Web 管理仅接收可信内置 ID、布尔开关与条件版本，不接收可执行程序、脚本、路径或任意配置。
+读取/影响预览不向上游发请求，投影隐藏凭证及本地路径；预览与保存均保持同源/write 校验。
+配置成功提交不等于所有宿主已应用；资源失败、在途排空和超时按当前宿主事实呈现。
+同连接 MCP list_changed 仅通知重新发现，不构成调用许可，也不扩大 trade/研究或 Agent 场景权限。
 
 - Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装或 MCP。
 - 业务调用绑定服务端 `runId + ownerId + accountId + allowedTools`，经过本轮 callable 和最新授权；写操作只能产生待确认草案，不能通过直接 registry 执行变成写入。

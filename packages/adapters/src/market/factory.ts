@@ -86,13 +86,23 @@ export const createMarketAdapterFromEnv = (
     return runtime.wrap(
       'market',
       candidates,
-      (active, guard) =>
-        buildMarketAdapterFromEnv(env, {
-          ...deps,
-          sourceOrder: active,
-          guard,
-          requestCoordinator: deps.requestCoordinator ?? runtime.coordinator,
-        }),
+      (active, guard) => {
+        const ready = active.filter((source) =>
+          source === 'tushare'
+            ? Boolean(env.TUSHARE_TOKEN?.trim())
+            : source === 'fuyao'
+              ? Boolean(env.FUYAO_API_KEY?.trim())
+              : true,
+        );
+        return ready.length === 0
+          ? undefined
+          : buildMarketAdapterFromEnv(env, {
+              ...deps,
+              sourceOrder: ready,
+              guard,
+              requestCoordinator: deps.requestCoordinator ?? runtime.coordinator,
+            });
+      },
       candidates.includes('tencent') ? ['sina'] : [],
     );
   return buildMarketAdapterFromEnv(env, { ...deps, sourceOrder: candidates });

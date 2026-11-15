@@ -320,17 +320,26 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
       ...ctx,
       ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
     }),
-    (ctx, operation) =>
-      ctx.dataScope === undefined
-        ? operation()
-        : ctx.dataScope.run(
-            (validate) => ctx.repos.withWriteGuard(validate, operation),
-            (dependency) => {
-              if (definition.name !== 'record_workflow_run') ctx.executionGuard?.();
-              ctx.executionPolicy?.assertTool(definition.name, dependency);
-            },
-            ctx.executionPolicy?.scopeKey(definition.name),
-          ),
+    (ctx, operation) => {
+      const invoke = () =>
+        ctx.dataScope === undefined
+          ? operation()
+          : ctx.dataScope.run(
+              (validate) => ctx.repos.withWriteGuard(validate, operation),
+              (dependency) => {
+                if (definition.name !== 'record_workflow_run') ctx.executionGuard?.();
+                ctx.executionPolicy?.assertTool(definition.name, dependency);
+              },
+              ctx.executionPolicy?.scopeKey(definition.name),
+            );
+      return ctx.executionPolicy === undefined
+        ? invoke()
+        : ctx.executionPolicy.runTool(
+            definition.name,
+            invoke,
+            definition.name === 'record_workflow_run' ? undefined : ctx.executionGuard,
+          );
+    },
   );
   return {
     ...tool,

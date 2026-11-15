@@ -5,6 +5,7 @@ import {
   PluginConfigVersionSchema,
   resolvePluginConfigPath,
 } from '@luoome/adapters';
+import { pluginContributions } from '@luoome/tools';
 
 export const cmdPlugins = (
   sub: string | undefined,
@@ -16,7 +17,18 @@ export const cmdPlugins = (
   try {
     if (flags.has('apply') && flags.get('apply') !== true) throw new Error('invalid apply flag');
     if (sub === 'status') {
-      print({ configuration: store.read(), definitions: BUILTIN_PLUGINS, runtime: 'not-started' });
+      print({
+        configuration: store.read(),
+        definitions: BUILTIN_PLUGINS,
+        contributions: Object.fromEntries(
+          Object.keys(BUILTIN_PLUGINS).map((id) => [
+            id,
+            pluginContributions(id as keyof typeof BUILTIN_PLUGINS),
+          ]),
+        ),
+        providerImpact: '宿主路由尚未启动；来源影响请在 Web 设置查看',
+        runtime: 'not-started',
+      });
       return 0;
     }
     if (sub === 'init' && !flags.has('apply')) {

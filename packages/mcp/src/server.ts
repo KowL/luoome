@@ -79,7 +79,32 @@ export const startMcpServer = async (
     });
   };
   const serverInfo = opts.serverInfo ?? { name: 'luoome', version: '0.9.0' };
-  const server = new Server(serverInfo, { capabilities: { tools: { listChanged: false } } });
+  const server = new Server(serverInfo, { capabilities: { tools: { listChanged: true } } });
+  let observed = JSON.stringify(available().map((tool) => tool.name));
+  let notifying = false;
+  const monitor = setInterval(async () => {
+    if (notifying || server.getClientVersion() === undefined) return;
+    notifying = true;
+    try {
+      const next = JSON.stringify(available().map((tool) => tool.name));
+      if (next === observed) return;
+      await server.sendToolListChanged();
+      observed = next;
+    } catch {
+      // Discovery can retry after a transient runtime failure or reconnect.
+    } finally {
+      notifying = false;
+    }
+  }, 250);
+  monitor.unref();
+  let closed = false;
+  const cleanup = () => {
+    clearInterval(monitor);
+    if (closed) return;
+    closed = true;
+    closeCtx();
+  };
+  server.onclose = cleanup;
 
   server.setRequestHandler(ListToolsRequestSchema, () => {
     const exposed = new Set(available().map((tool) => tool.name));
@@ -107,7 +132,12 @@ export const startMcpServer = async (
     return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
   });
 
-  await server.connect(new StdioServerTransport());
+  try {
+    await server.connect(new StdioServerTransport());
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   ctx.logger.info('mcp server started', {
     transport: 'stdio',
@@ -121,7 +151,7 @@ export const startMcpServer = async (
     },
     close: async () => {
       await server.close();
-      closeCtx();
+      cleanup();
     },
   };
 };

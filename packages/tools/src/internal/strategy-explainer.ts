@@ -23,7 +23,10 @@ export const createStrategyExplainer = (ctx: ToolContext) => {
       if (reason !== undefined) return { ok: false, reason };
       let value: T;
       try {
-        value = await ctx.adapters.llm.generate<T>(request);
+        const invoke = () => ctx.adapters.llm.generate<T>(request);
+        value = await (ctx.executionPolicy === undefined
+          ? invoke()
+          : ctx.executionPolicy.runPlugin('strategy.ai-insight', invoke, ctx.executionGuard));
       } catch (error) {
         const revoked = blocked();
         if (revoked !== undefined) return { ok: false, reason: revoked };

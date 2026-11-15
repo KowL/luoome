@@ -4,6 +4,7 @@ import {
   type DataExecutionScopeLike,
   type ManagedPluginId,
   PluginExecutionDenied,
+  type PluginPermit,
 } from '@luoome/core';
 import { type MarketRequestCoordinator, marketProviderOf } from '../market/request-coordinator.js';
 import { SourceExecutionError } from '../source-error.js';
@@ -19,12 +20,40 @@ export interface ProviderGuard {
   check(): void;
 }
 
+interface SourceActivity {
+  permit: PluginPermit;
+  valid(): boolean;
+}
+
 export class ProviderRuntime implements DataExecutionScopeLike {
   private readonly scopes = new AsyncLocalStorage<{
+    references: number;
+    sources: Map<ManagedPluginId, SourceActivity>;
     checks: Set<() => void>;
     keys: Set<string>;
     permissions: Set<(dependency?: ManagedPluginId) => void>;
   }>();
+  private readonly activeSources = new Map<ManagedPluginId, Set<SourceActivity>>();
+  private readonly descriptions = new Map<
+    string,
+    { candidates: readonly string[]; dependencies: readonly string[]; ready: () => boolean }
+  >();
+  activity() {
+    return [...this.activeSources].map(([id, permits]) => ({
+      id,
+      inFlight: permits.size,
+      revokedInFlight: [...permits].filter((permit) => !permit.valid()).length,
+    }));
+  }
+  describe() {
+    return [...this.descriptions].map(([route, value]) => {
+      let ready = false;
+      try {
+        ready = value.ready();
+      } catch {}
+      return { route, candidates: value.candidates, dependencies: value.dependencies, ready };
+    });
+  }
   private readonly readiness = new WeakMap<object, () => boolean>();
 
   ready(port: object | undefined): boolean {
@@ -63,6 +92,8 @@ export class ProviderRuntime implements DataExecutionScopeLike {
     key?: string,
   ): Promise<T> {
     const scope = this.scopes.getStore() ?? {
+      references: 0,
+      sources: new Map<ManagedPluginId, SourceActivity>(),
       checks: new Set<() => void>(),
       keys: new Set<string>(),
       permissions: new Set<(dependency?: ManagedPluginId) => void>(),
@@ -73,7 +104,18 @@ export class ProviderRuntime implements DataExecutionScopeLike {
       for (const permission of scope.permissions) permission();
       for (const guard of scope.checks) guard();
     };
-    return this.scopes.run(scope, () => operation(validate));
+    scope.references++;
+    try {
+      return await this.scopes.run(scope, () => operation(validate));
+    } finally {
+      scope.references--;
+      if (scope.references === 0)
+        for (const [id, permit] of scope.sources) {
+          const active = this.activeSources.get(id);
+          active?.delete(permit);
+          if (active?.size === 0) this.activeSources.delete(id);
+        }
+    }
   }
 
   private track(check: () => void): void {
@@ -167,6 +209,12 @@ export class ProviderRuntime implements DataExecutionScopeLike {
       },
       publish: () => {
         this.routes.set(route, routeToken);
+        this.descriptions.set(route, {
+          candidates,
+          dependencies,
+          ready: () =>
+            (active?.sourceStamp === this.stamp(observed) ? active : current()).value !== undefined,
+        });
       },
     };
     if (this.staged === undefined) publication.publish();
@@ -231,6 +279,26 @@ export class ProviderRuntime implements DataExecutionScopeLike {
         if (!this.store.valid(admission.permit)) throw new RevokedDataExecution();
       };
       check();
+      const scope = this.scopes.getStore();
+      if (scope !== undefined && !scope.sources.has(admission.permit.id)) {
+        const permit = { ...admission.permit };
+        const record: SourceActivity = {
+          permit,
+          valid: () => {
+            try {
+              for (const permission of scope.permissions) permission();
+              for (const guard of scope.checks) guard();
+              return this.store.valid(permit);
+            } catch {
+              return false;
+            }
+          },
+        };
+        scope.sources.set(permit.id, record);
+        const active = this.activeSources.get(permit.id) ?? new Set<SourceActivity>();
+        active.add(record);
+        this.activeSources.set(permit.id, active);
+      }
       this.track(check);
       const send = ((request, requestInit) => {
         this.validateScope();

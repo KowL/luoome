@@ -971,7 +971,17 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
 策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
 Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
-个股分析等其它 P3 业务切片及 P4 管理页面仍待实施。
+P4 的 Web 管理面已接入上述内置能力；个股分析等其它 P3 业务切片仍待实施。
+`PluginSettingsStore` 只投影可信的内置元数据、catalog 派生贡献、当前路由及本宿主状态；
+不暴露文件路径、凭证或任意执行配置。GET/preview 不外发，initialize/migrate/set 严格校验输入，
+保存经既有同源/write 门禁以及 PluginConfigStore 的 incarnation/revision CAS。
+预览不自动启用依赖；提供者关联贡献标为可能影响，不能把某一候选源停用等同于所有工具不可用。
+内置 requires 同时供真实资源组装和管理投影使用，catalog 继续作为工具映射唯一来源。
+配置已提交与宿主应用分开返回：committedVersion、gateApplied、阻断项、活动计数和真实 task phase，
+均不宣称全局 applied。Tool policy 共享活动计数；策略可选模型独立跟踪，ProviderRuntime 在嵌套作用域全部退出前保留实际来源活动，
+父任务撤销也计入旧工作排空。查询状态不会清除卡住或卸载失败的资源。
+MCP 每次 list/call 使用实时可用表，并以无外发轮询发送同连接 list_changed；断连关闭观察器。
+CLI status 提供依赖/贡献且明确 runtime not-started，不为查看状态初始化业务上下文。
 后续阶段见[分层详细设计](./ddd/layered-capability-plugin-detailed-design.md)。
 
 ### 7.2 副作用分级（重申）

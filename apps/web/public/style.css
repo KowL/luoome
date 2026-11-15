@@ -10109,3 +10109,53 @@ body > .modal {
   .mcp-settings-grid { grid-template-columns: minmax(0, 1fr); }
   .mcp-service, .mcp-preview { padding: 18px; }
 }
+
+/* Plugin control follows the settings workbench, with status and intent kept separate. */
+#plugin-settings { min-width: 0; }
+#plugin-settings-status { margin: 18px 0; color: var(--muted); font-size: var(--text-sm); }
+#plugin-settings-status.error { color: var(--danger); }
+.plugin-summary { display: grid; grid-template-columns: repeat(3, 1fr); border-block: 1px solid var(--line); margin: 24px 0; padding: 20px 0; }
+.plugin-summary > div { display: flex; flex-direction: column; gap: 6px; padding: 0 20px; border-right: 1px solid var(--line); }
+.plugin-summary > div:first-child { padding-left: 0; }
+.plugin-summary > div:last-child { border: 0; }
+.plugin-summary strong { font-size: 26px; font-variant-numeric: tabular-nums; }
+.plugin-summary span { color: var(--muted); font-size: var(--text-sm); }
+.plugin-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr); gap: 24px; align-items: start; }
+.plugin-group { margin-bottom: 28px; }
+.plugin-group > h3 { font-size: var(--text-base); margin: 0 0 12px; }
+.plugin-card { padding: 18px; margin-bottom: 10px; min-width: 0; }
+.plugin-card-heading { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.plugin-card-heading h4 { margin: 0; font-size: var(--text-base); flex: 1; }
+.plugin-card-heading button { flex-shrink: 0; }
+.plugin-phase { font-size: var(--text-xs); border: 1px solid var(--line); padding: 3px 7px; border-radius: var(--radius-sm); color: var(--muted); }
+.plugin-phase-ready { color: var(--success); }
+.plugin-phase-draining, .plugin-phase-blocked, .plugin-blockers { color: var(--warning, #b7791f); }
+.plugin-phase-failed { color: var(--danger); }
+.plugin-runtime-detail, .plugin-dependencies, .plugin-blockers { font-size: var(--text-xs); line-height: 1.7; margin: 10px 0 0; }
+.plugin-runtime-detail, .plugin-dependencies { color: var(--muted); }
+.plugin-details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; font-size: var(--text-xs); }
+.plugin-details summary { cursor: pointer; color: var(--muted); }
+.plugin-details code, .plugin-preview code { overflow-wrap: anywhere; white-space: normal; }
+.plugin-details > code { display: block; margin-top: 10px; }
+.plugin-details ul, .plugin-preview ul { padding-left: 18px; line-height: 1.9; }
+.plugin-preview { padding: 22px; position: sticky; top: calc(var(--topbar-h) + 16px); min-width: 0; max-height: calc(100vh - var(--topbar-h) - 32px); overflow-y: auto; }
+.plugin-preview h3 { margin: 8px 0 18px; }
+.plugin-preview h4 { margin: 20px 0 8px; }
+.plugin-preview p, .plugin-preview li { font-size: var(--text-sm); }
+.plugin-preview-intent { font-weight: 600; border-left: 3px solid var(--accent); padding-left: 12px; }
+.plugin-preview-notes { border-top: 1px solid var(--line); padding-top: 16px; color: var(--muted); }
+#plugin-preview-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+.plugin-config-actions { margin-bottom: 24px; }
+.plugin-scope-note { font-size: var(--text-xs); line-height: 1.8; }
+@media (max-width: 900px) {
+  .plugin-layout { grid-template-columns: 1fr; }
+  .plugin-preview { position: static; max-height: none; grid-row: 1; }
+  .plugin-summary > div { padding-inline: 12px; }
+}
+@media (max-width: 480px) {
+  .plugin-card { padding: 14px; }
+  .plugin-card-heading h4 { flex-basis: 100%; }
+  .plugin-card-heading button { margin-left: auto; }
+  .plugin-summary strong { font-size: 22px; }
+  .plugin-summary span { font-size: 11px; }
+}

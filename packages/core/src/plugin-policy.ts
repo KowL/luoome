@@ -52,7 +52,15 @@ export interface PluginPolicyLike {
   valid(permit: PluginPermit): boolean;
 }
 
+export interface PluginActivity {
+  readonly id: ManagedPluginId;
+  readonly inFlight: number;
+  readonly revokedInFlight: number;
+}
 export interface ToolExecutionPolicyLike extends PluginPolicyLike {
+  activity(): readonly PluginActivity[];
+  runPlugin<T>(id: ManagedPluginId, operation: () => Promise<T>, guard?: () => void): Promise<T>;
+  runTool<T>(name: string, operation: () => Promise<T>, guard?: () => void): Promise<T>;
   bind(): ToolExecutionPolicyLike;
   scopeKey(name: string): string;
   assertTool(name: string, dependency?: ManagedPluginId): void;

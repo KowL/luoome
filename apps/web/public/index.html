@@ -821,6 +821,7 @@
         <nav class="settings-subnav" aria-label="设置分区">
           <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
           <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
+          <a href="#settings?tab=plugins" class="settings-subnav-item" data-settings-tab="plugins">插件</a>
           <a href="#settings?tab=mcp" class="settings-subnav-item" data-settings-tab="mcp">MCP 服务</a>
           <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
           <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
@@ -933,6 +934,25 @@
             </section>
           </div>
         </form>
+        <section id="plugin-settings" data-settings-pane="plugins" hidden aria-labelledby="plugin-title">
+          <div class="ai-settings-heading">
+            <div><span class="section-kicker">CAPABILITY CONTROL</span><h2 id="plugin-title">插件管理</h2><p>按职责启停能力，保留已经积累的事实。变更前预览影响，变更后观察当前宿主。</p></div>
+            <button id="plugin-reload" type="button" class="btn btn-outline btn-sm">重新加载</button>
+          </div>
+          <div id="plugin-settings-status" role="status" aria-live="polite">正在读取本地配置</div>
+          <div id="plugin-summary" class="plugin-summary"></div>
+          <div id="plugin-config-actions" class="plugin-config-actions"></div>
+          <div class="plugin-layout">
+            <div id="plugin-groups"></div>
+            <aside class="plugin-preview card" aria-labelledby="plugin-preview-title">
+              <span class="section-kicker">CHANGE REVIEW</span><h3 id="plugin-preview-title">变更影响</h3>
+              <div id="plugin-preview-content"><p class="muted">选择一项启停操作，先查看依赖与影响，再明确提交。</p></div>
+              <div id="plugin-preview-actions" hidden><button id="plugin-confirm" type="button" class="btn btn-primary">确认变更</button><button id="plugin-cancel" type="button" class="btn btn-outline">取消</button></div>
+            </aside>
+          </div>
+          <p class="muted plugin-scope-note">运行状态仅代表当前 Web 宿主。策略调度和盘中快照显示实际自动资源，其余项显示执行入口和相关在途调用。其它宿主在下一安全点复核配置，不代表已全局应用。</p>
+          <p class="muted plugin-scope-note">模型、域内来源顺序、凭证及 MCP 服务沿用各自设置。个股分析、盯盘、通知等未纳管业务仍按原授权运行。</p>
+        </section>
         <div id="mcp-settings" data-settings-pane="mcp" hidden>
           <div class="ai-settings-heading">
             <div>

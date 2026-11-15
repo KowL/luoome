@@ -40,6 +40,7 @@ import {
   runWatchOnce,
   toggleAdviceDeleteMode,
 } from './pages.js';
+import { initPluginSettings, renderPluginSettings } from './plugin-settings.js';
 import { createStockSearchBox } from './search-box.js';
 import { renderSectors } from './sectors.js';
 import {
@@ -303,7 +304,7 @@ const currentHash = () => {
 
 /* ============ 设置页二级菜单（#settings?tab=ai|market|mcp|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'mcp', 'notify', 'data', 'system'];
+const SETTINGS_TABS = ['ai', 'market', 'plugins', 'mcp', 'notify', 'data', 'system'];
 
 const settingsTab = (hash = window.location.hash) => {
   const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
@@ -329,6 +330,9 @@ const renderSettingsTab = async (setStatus, tab) => {
     await renderMarketSettings(setStatus);
     initMarketSync();
     await renderMarketSyncStatus();
+  } else if (tab === 'plugins') {
+    initPluginSettings(setStatus);
+    await renderPluginSettings();
   } else if (tab === 'mcp') {
     initMcpSettings(setStatus);
     await renderMcpSettings(setStatus);

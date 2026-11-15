@@ -39,9 +39,10 @@ For user-facing luoome operation details, see the [user guide](../../docs/USER_G
 ### 本地数据与提供者开关
 
 `compute_indicators` 只读本地日线；没有日线时返回空指标和 `barsCount: 0`，先由用户授权采集后再计算。
-提供者和采集任务由宿主 CLI 的 `plugins status/init/migrate/set` 管理；source 与 task 分别显式启用，且仍需 write/external 授权。
+提供者和采集任务由用户在 Web「设置 → 插件」或宿主 CLI 的 `plugins status/init/migrate/set` 管理；source 与 task 分别显式启用，且实际调用仍需 write/external 授权。
 普通 Agent 不修改配置或偷偷启源。所有提供者关闭后仍可查询本地账户、历史与指标；混合工具返回明确的缺失或本地回退。
-MCP 发现按当前就绪来源变化；停用后重新发现工具，旧工具名不能绕过运行校验。
+MCP 发现按当前就绪来源变化；收到 tools/list_changed 后重新发现工具，旧工具名不能绕过运行校验。
+Web 的影响预览不会自动开启依赖；配置提交、当前宿主就绪与排空是不同状态。Agent 不通过工具修改插件配置。
 
 ### 策略执行控制
 

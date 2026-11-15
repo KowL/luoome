@@ -25,6 +25,7 @@ import {
   addWatchlistMembersTool,
   addWatchlistMemberTool,
   createAlertPlanTool,
+  createPluginExecutionPolicy,
   createWatchlistTool,
   saveReportTool,
   saveWatchTriggerTool,
@@ -39,6 +40,7 @@ import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { WEB_AGENT_TOOL_NAMES } from './http/exposure.js';
 import { MarketSettingsStore } from './market-settings.js';
+import { PluginSettingsStore } from './plugin-settings.js';
 import {
   buildWebContext,
   createWebApp,
@@ -3100,6 +3102,127 @@ const chat = async (target: Hono, body: unknown): Promise<Response> =>
       body: JSON.stringify(body),
     }),
   );
+
+describe('plugin settings HTTP and Agent revocation', () => {
+  it('keeps read side-effect free, requires same-origin write, and revokes fresh and saved Agent tools', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'luoome-p4-http-'));
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    try {
+      const ctx = await buildTestContext({
+        executionPolicy: createPluginExecutionPolicy(
+          store,
+          new Set(['read', 'advice', 'write', 'external']),
+        ),
+      });
+      const settings = new PluginSettingsStore({ LUOOME_HOME: home });
+      let captured: readonly AgentCallableTool[] = [];
+      const local = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: true,
+        pluginSettingsStore: settings,
+        chatStreamRuntime: {
+          createUIMessageStreamResponse: async (request) => {
+            captured = request.tools;
+            await request.onFinish?.({
+              id: '',
+              parts: [{ type: 'text', text: 'fixture' }],
+              cancelled: false,
+            });
+            return new Response('fixture');
+          },
+        },
+      });
+      const send = (
+        body: unknown,
+        origin = 'http://test',
+        target = local,
+        path = '/api/settings/plugins',
+      ) =>
+        target.fetch(
+          new Request(`http://test${path}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', origin },
+            body: JSON.stringify(body),
+          }),
+        );
+      expect(
+        await (await local.fetch(new Request('http://test/api/settings/plugins'))).json(),
+      ).toMatchObject({ data: { configuration: { state: 'missing' } } });
+      expect(existsSync(store.path)).toBe(false);
+      const init = { action: 'initialize', expected: 'absent' };
+      expect((await send(init, 'https://foreign.example')).status).toBe(403);
+      const readOnly = createWebApp(ctx, { exposeWrite: false, pluginSettingsStore: settings });
+      expect((await send(init, 'http://test', readOnly)).status).toBe(403);
+      expect((await send(init, 'http://test', local, '/api/settings/plugins/preview')).status).toBe(
+        200,
+      );
+      expect(existsSync(store.path)).toBe(false);
+      const noExternal = createWebApp(ctx, { exposeWrite: true, pluginSettingsStore: settings });
+      expect((await send(init, 'http://test', noExternal)).status).toBe(200);
+      const set = async (enabled: boolean) => {
+        const read = store.read();
+        if (!read.ok) throw new Error('missing fixture config');
+        const response = await send({
+          action: 'set',
+          id: 'business.strategy-execution',
+          enabled,
+          incarnation: read.config.incarnation,
+          revision: read.config.revision,
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ data: { committed: true } });
+      };
+      await set(true);
+      const round = async (id: string) => {
+        const now = new Date();
+        await ctx.repos.chat.saveSession({
+          id,
+          accountId: ctx.user.defaultAccountId,
+          title: 'P4',
+          createdAt: now,
+          updatedAt: now,
+        });
+        expect(
+          (
+            await chat(local, {
+              sessionId: id,
+              messages: [
+                { id: `user-${id}`, role: 'user', parts: [{ type: 'text', text: '帮我运行策略' }] },
+              ],
+            })
+          ).status,
+        ).toBe(200);
+      };
+      await round('before-disable');
+      const old = captured.find((tool) => tool.name === 'run_strategy');
+      expect(old).toBeDefined();
+      await set(false);
+      expect(await old?.execute({ strategyId: 'missing', mode: 'scheduled' })).toMatchObject({
+        ok: false,
+        output: { error: { kind: 'permission_denied' } },
+      });
+      await round('after-disable');
+      expect(captured.map((tool) => tool.name)).not.toContain('run_strategy');
+      expect(captured.map((tool) => tool.name)).toContain('get_strategy');
+      const direct = await send(
+        { input: { strategyId: 'missing', mode: 'scheduled' } },
+        'http://test',
+        local,
+        '/api/tools/run_strategy/call',
+      );
+      expect(await direct.json()).toMatchObject({ error: { kind: 'permission_denied' } });
+      await set(true);
+      expect(await old?.execute({ strategyId: 'missing', mode: 'scheduled' })).toMatchObject({
+        ok: false,
+        output: { error: { kind: 'permission_denied' } },
+      });
+      await round('after-enable');
+      expect(captured.map((tool) => tool.name)).toContain('run_strategy');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('/api/chat：对话助手', () => {
   let chatApp: Hono;

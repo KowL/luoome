@@ -208,7 +208,10 @@ export type ToolDependency =
   | 'northboundFlow'
   | 'news'
   | 'sectorQuote'
-  | 'ashareSentiment';
+  | 'ashareSentiment'
+  | 'stockUniverse'
+  | 'marketDump'
+  | 'limitUp';
 
 export type ToolOwner =
   | 'shared-query'
@@ -225,7 +228,11 @@ type CatalogEntry = {
   >;
 } & (
   | { readonly tool: Tool; readonly agent: true; readonly dependencies: readonly ToolDependency[] }
-  | { readonly tool: Tool; readonly agent: false }
+  | {
+      readonly tool: Tool;
+      readonly agent: false;
+      readonly dependencies?: readonly ToolDependency[];
+    }
 );
 
 // Catalog membership supplies inventory, never permission to execute a tool.
@@ -804,20 +811,29 @@ export const toolCatalog = {
     owner: 'task.daily-bars-sync',
     tool: syncDailyBarsTool,
     agent: false,
+    dependencies: ['market:daily-bars'],
   },
   sync_limit_up_board_history: {
     execution: 'p2',
     owner: 'task.sync-limit-up-board-history',
     tool: syncLimitUpBoardHistoryTool,
     agent: false,
+    dependencies: ['limitUp'],
   },
   sync_market_dump: {
     execution: 'p2',
     owner: 'task.sync-market-dump',
     tool: syncMarketDumpTool,
     agent: false,
+    dependencies: ['marketDump'],
   },
-  sync_quotes: { execution: 'p2', owner: 'task.sync-quotes', tool: syncQuotesTool, agent: false },
+  sync_quotes: {
+    execution: 'p2',
+    owner: 'task.sync-quotes',
+    tool: syncQuotesTool,
+    agent: false,
+    dependencies: ['market:quote'],
+  },
   sync_research_vault: {
     owner: 'task.sync-research-vault',
     tool: syncResearchVaultTool,
@@ -828,6 +844,7 @@ export const toolCatalog = {
     owner: 'task.sync-stock-universe',
     tool: syncStockUniverseTool,
     agent: false,
+    dependencies: ['stockUniverse'],
   },
   sync_strategy_watchlist_subscriptions: {
     owner: 'task.sync-strategy-watchlist-subscriptions',

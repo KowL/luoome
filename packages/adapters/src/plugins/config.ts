@@ -22,16 +22,46 @@ import type {
 import { MANAGED_PLUGIN_IDS, SOURCE_PLUGIN_IDS, TASK_PLUGIN_IDS } from '@luoome/core';
 import { z } from 'zod';
 
-export const BUILTIN_PLUGINS = {
-  'business.strategy-execution': { kind: 'business', label: '策略执行', baselineEnabled: false },
-  'strategy.ai-insight': { kind: 'business', label: '策略 AI 洞察', baselineEnabled: true },
-  ...Object.fromEntries(
-    SOURCE_PLUGIN_IDS.map((id) => [id, { kind: 'provider', label: id, baselineEnabled: false }]),
-  ),
-  ...Object.fromEntries(
-    TASK_PLUGIN_IDS.map((id) => [id, { kind: 'task', label: id, baselineEnabled: false }]),
-  ),
-} as Record<ManagedPluginId, { kind: string; label: string; baselineEnabled: boolean }>;
+export interface BuiltinPluginDefinition {
+  readonly kind: 'business' | 'provider' | 'task';
+  readonly label: string;
+  readonly baselineEnabled: boolean;
+  readonly requires: readonly ManagedPluginId[];
+}
+const labels: Record<ManagedPluginId, string> = {
+  'business.strategy-execution': '策略执行',
+  'strategy.ai-insight': '策略 AI 洞察',
+  'source.eastmoney': '东方财富',
+  'source.tencent': '腾讯行情',
+  'source.sina': '新浪财经',
+  'source.tushare': 'Tushare',
+  'source.fuyao': 'Fuyao',
+  'source.10jqka': '同花顺资讯',
+  'task.strategy-schedules': '自动策略调度',
+  'task.daily-bars-sync': '日线同步',
+  'task.sync-stock-universe': '股票目录同步',
+  'task.collect-market-snapshot': '盘中快照采集',
+  'task.sync-quotes': '持仓报价同步',
+  'task.sync-market-dump': '市场数据导入',
+  'task.sync-sector-catalog': '板块目录同步',
+  'task.sync-limit-up-board-history': '连板历史归档',
+  'task.minute-bars-sync': '分钟行情采集',
+};
+export const BUILTIN_PLUGINS = Object.fromEntries(
+  MANAGED_PLUGIN_IDS.map((id) => {
+    const definition: BuiltinPluginDefinition = {
+      kind: SOURCE_PLUGIN_IDS.includes(id as (typeof SOURCE_PLUGIN_IDS)[number])
+        ? 'provider'
+        : TASK_PLUGIN_IDS.includes(id as (typeof TASK_PLUGIN_IDS)[number])
+          ? 'task'
+          : 'business',
+      label: labels[id],
+      baselineEnabled: id === 'strategy.ai-insight',
+      requires: id === 'task.strategy-schedules' ? ['business.strategy-execution'] : [],
+    };
+    return [id, definition];
+  }),
+) as Record<ManagedPluginId, BuiltinPluginDefinition>;
 const PluginIdSchema = z.enum(MANAGED_PLUGIN_IDS);
 const EntrySchema = z
   .object({ enabled: z.boolean(), epoch: z.number().int().positive().safe() })
