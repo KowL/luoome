@@ -1,10 +1,14 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { Logger } from '@luoome/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { z } from 'zod';
+
+export const resolveMcpConfigPath = (env: Readonly<Record<string, string | undefined>>): string =>
+  env.LUOOME_MCP_CONFIG ?? join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'mcp-servers.json');
 
 const name = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,47}$/);
 const ServiceSchema = z.strictObject({

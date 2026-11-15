@@ -8,8 +8,9 @@ import {
   NotificationManager,
 } from '@luoome/adapters';
 import { NotificationSchema } from '@luoome/core';
+import { AgentScenarioIdSchema, discoverExternalMcpTools } from '@luoome/tools';
 import type { Hono } from 'hono';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 import { SaveAISettingsSchema } from '../ai-settings.js';
 import {
   DATA_TRANSFER_CATEGORIES,
@@ -24,6 +25,7 @@ import {
   SaveMarketSettingsSchema,
   withRuntimeStatus,
 } from '../market-settings.js';
+import { SaveMcpSettingsSchema } from '../mcp-settings.js';
 import { SaveResearchVaultSettingsSchema } from '../research-vault-settings.js';
 import type { WebRouteDeps } from './types.js';
 
@@ -41,6 +43,75 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     dataTransferDbPath,
     chatRuntimeRef,
   } = deps;
+
+  app.get('/api/settings/mcp', () => {
+    const store = deps.mcpSettingsStore;
+    if (!store) return jsonResult(notFound('McpSettingsStore', 'default'));
+    return jsonResult({
+      ok: true,
+      data: { ...store.read(), canManage: deps.exposeWrite && deps.exposeExternal },
+    });
+  });
+
+  app.post('/api/settings/mcp/preview', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied) return jsonResult(denied);
+    const store = deps.mcpSettingsStore;
+    if (!store) return jsonResult(notFound('McpSettingsStore', 'default'));
+    try {
+      const { scenario } = z
+        .strictObject({ scenario: AgentScenarioIdSchema })
+        .parse(await c.req.json());
+      const tools = await discoverExternalMcpTools(
+        store.configPath,
+        deps.contextForRequest(),
+        scenario,
+      );
+      return jsonResult({
+        ok: true,
+        data: {
+          scenario,
+          tools: tools.map((entry) => ({ name: entry.callable.name, service: entry.service })),
+        },
+      });
+    } catch {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'MCP 工具预览失败，请检查场景与本地配置',
+          issues: [],
+        },
+      });
+    }
+  });
+
+  app.post('/api/settings/mcp/:id', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied) return jsonResult(denied);
+    const store = deps.mcpSettingsStore;
+    if (!store) return jsonResult(notFound('McpSettingsStore', 'default'));
+    try {
+      const input = SaveMcpSettingsSchema.parse(await c.req.json());
+      return jsonResult({
+        ok: true,
+        data: { ...store.save(c.req.param('id'), input), canManage: true, applied: true },
+      });
+    } catch (error) {
+      const message =
+        error instanceof ZodError
+          ? 'MCP 设置无效，请检查工具、场景和版本'
+          : error instanceof Error &&
+              [
+                'MCP 配置文件无效，请先修复本地配置',
+                'MCP 配置已变更，请重新加载后保存',
+                '服务尚未登记，请先在本地配置中登记受信服务',
+              ].includes(error.message)
+            ? error.message
+            : 'MCP 设置保存失败';
+      return jsonResult({ ok: false, error: { kind: 'invalid_input', message, issues: [] } });
+    }
+  });
 
   // ===== AI 模型设置 =====
 

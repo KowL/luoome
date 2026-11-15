@@ -1,3 +1,4 @@
+import { z } from 'zod';
 // apps/web 闸口矩阵测试（bun runner：server.ts 顶层 import @luoome/db → bun:sqlite，
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
 // ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
@@ -7121,5 +7122,83 @@ describe('Web 作战室盘中事件 API', () => {
     );
     expect(adapter.envelopeCalls).toBe(callsBefore);
     expect(await ctx.repos.marketRoomEvent.list({ tradingDate: '2026-09-28' })).toHaveLength(1);
+  });
+});
+
+describe('MCP settings HTTP permissions', () => {
+  const responseSchema = z.looseObject({
+    ok: z.boolean(),
+    data: z
+      .looseObject({
+        applied: z.boolean().optional(),
+        services: z.array(z.looseObject({ enabled: z.boolean() })).optional(),
+      })
+      .optional(),
+    error: z.looseObject({ kind: z.string() }).optional(),
+  });
+  const readResponse = async (response: Response) => responseSchema.parse(await response.json());
+  it('requires write + external and same Origin; never accepts executable arguments from the browser', async () => {
+    const { McpSettingsStore } = await import('./mcp-settings.js');
+    const root = mkdtempSync(join(tmpdir(), 'luoome-mcp-http-'));
+    const store = new McpSettingsStore({ LUOOME_HOME: root });
+    const ctx = await buildTestContext();
+    const body = {
+      enabled: true,
+      tools: ['search_docs'],
+      scenarios: ['research'],
+      revision: store.read().revision,
+    };
+    const request = (origin: string, input: unknown = body) =>
+      new Request('http://test/api/settings/mcp/docs', {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      for (const flags of [
+        { exposeWrite: false, exposeExternal: true },
+        { exposeWrite: true, exposeExternal: false },
+      ]) {
+        const app = createWebApp(ctx, { ...flags, mcpSettingsStore: store });
+        expect((await readResponse(await app.fetch(request('http://test')))).error?.kind).toBe(
+          'permission_denied',
+        );
+        expect(existsSync(store.configPath)).toBe(false);
+      }
+      const app = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: true,
+        mcpSettingsStore: store,
+      });
+      expect(
+        (await readResponse(await app.fetch(request('https://untrusted.example')))).error?.kind,
+      ).toBe('permission_denied');
+      expect(
+        (
+          await readResponse(
+            await app.fetch(request('http://test', { ...body, command: '/bin/sh' })),
+          )
+        ).error?.kind,
+      ).toBe('invalid_input');
+      const saved = await readResponse(await app.fetch(request('http://test')));
+      expect(saved.ok).toBe(true);
+      expect(saved.data?.applied).toBe(true);
+      const view = await readResponse(await app.fetch(new Request('http://test/api/settings/mcp')));
+      expect(view.data?.services?.[0]?.enabled).toBe(true);
+      expect(JSON.stringify(view)).not.toContain('command');
+      expect(JSON.stringify(view)).not.toContain('args');
+      const rejected = await readResponse(
+        await app.fetch(
+          new Request('http://test/api/settings/mcp/preview', {
+            method: 'POST',
+            headers: { origin: 'https://untrusted.example', 'content-type': 'application/json' },
+            body: JSON.stringify({ scenario: 'research' }),
+          }),
+        ),
+      );
+      expect(rejected.error?.kind).toBe('permission_denied');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

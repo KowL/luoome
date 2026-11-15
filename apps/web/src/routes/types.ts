@@ -1,11 +1,11 @@
 import type { ToolContext, ToolResult } from '@luoome/core';
 import type { Context } from 'hono';
-
 import type { AISettingsStore } from '../ai-settings.js';
 import type { ChatStreamRuntime } from '../chat.js';
 import type { WebSourceSet } from '../context.js';
 import type { FeishuSettingsStore } from '../feishu-settings.js';
 import type { MarketSettingsStore } from '../market-settings.js';
+import type { McpSettingsStore } from '../mcp-settings.js';
 import type { ResearchVaultSettingsStore } from '../research-vault-settings.js';
 
 export type { WebSourceSet };
@@ -64,6 +64,7 @@ export interface WebRouteDeps {
   readonly exposeExternal: boolean;
   readonly chatRuntimeRef: { current: ChatStreamRuntime | undefined };
   readonly aiSettingsStore?: AISettingsStore;
+  readonly mcpSettingsStore?: McpSettingsStore;
   readonly marketSettingsStore?: MarketSettingsStore;
   readonly feishuSettingsStore?: FeishuSettingsStore;
   readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;

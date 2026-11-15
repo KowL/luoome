@@ -1102,6 +1102,11 @@ DSH manifest；Node Host 仍仅使用既有 Bun Gateway 代理。
 包括同一 callId 的回执读取；停用后下一轮删除工具，旧调用失效。静态业务白名单、账户 scope、
 external opt-in、限次/超时与输出大小规则继续独立生效。
 
+Web 的 `McpSettingsStore` 与客户端共用配置 schema 和路径解析。设置页通过专用接口读取安全投影、
+按版本保存已登记服务的授权；只读文档服务可由服务器使用固定启动配置首次登记。
+`POST /api/settings/mcp/preview` 经 tools 层按当前场景发现实际工具；保存不重建 Agent runtime，
+后续发现与旧调用直接复核同一份配置。设置页不暴露 command/args，也不开放任意进程安装或编辑。
+
 首个只读实现 `packages/mcp/src/docs-server.ts` 只检索固定维护文档。配置格式与启停方法见
 [用户手册](./USER_GUIDE.md#只读-mcp-服务供内置-agent-使用)。客户端不自动安装代码，不继承完整
 主进程环境，也不把未知服务器能力当作只读保证；受信子进程不等于 OS 沙箱。

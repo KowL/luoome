@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { createDshIntegrationFixture } from './integration-fixture.js';
 
 const parse = (body: string) =>
@@ -33,6 +34,43 @@ describe('readonly external MCP through the real Web and DSH chain', () => {
     save(true);
     const fixture = await createDshIntegrationFixture({ externalMcpConfig: config });
     try {
+      const manage = async (
+        enabled: boolean,
+        tools = ['search_docs'],
+        scenarios = ['research'],
+      ) => {
+        const view = z
+          .object({ data: z.object({ revision: z.string() }) })
+          .parse(await (await fixture.request('/api/settings/mcp')).json());
+        const result = z.object({ ok: z.boolean() }).parse(
+          await (
+            await fixture.request('/api/settings/mcp/docs', {
+              method: 'POST',
+              body: JSON.stringify({ enabled, tools, scenarios, revision: view.data.revision }),
+            })
+          ).json(),
+        );
+        expect(result.ok).toBe(true);
+      };
+      const preview = async () =>
+        z
+          .object({
+            data: z.object({ tools: z.array(z.object({ name: z.string(), service: z.string() })) }),
+          })
+          .parse(
+            await (
+              await fixture.request('/api/settings/mcp/preview', {
+                method: 'POST',
+                body: JSON.stringify({ scenario: 'research' }),
+              })
+            ).json(),
+          ).data.tools;
+      await manage(true, []);
+      expect(await preview()).toEqual([]);
+      await manage(true, ['search_docs'], ['review']);
+      expect(await preview()).toEqual([]);
+      await manage(true);
+      expect(await preview()).toEqual([{ name: 'mcp_docs__search_docs', service: 'docs' }]);
       const session = await fixture.createSession();
       const response = await fixture.chat(session, '研究 MCP 文档中的 Watchlist');
       expect(response.status).toBe(200);
@@ -49,7 +87,8 @@ describe('readonly external MCP through the real Web and DSH chain', () => {
           .join(''),
       ).toContain('MCP 文档证据已核对完成');
       const before = fixture.bodies.length;
-      save(false);
+      await manage(false);
+      expect(await preview()).toEqual([]);
       const second = await fixture.createSession();
       const disabled = parse(
         await (await fixture.chat(second, '研究 MCP 文档中的 Watchlist')).text(),

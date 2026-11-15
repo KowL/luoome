@@ -18,6 +18,7 @@ import { renderMarketRoom, teardownMarketRoom } from './market-room.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
 import { sessionLabel } from './market-shared.js';
 import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
+import { initMcpSettings, renderMcpSettings } from './mcp-settings.js';
 import { initModal } from './modal.js';
 import { renderNotificationTarget } from './notification-target.js';
 import {
@@ -300,9 +301,9 @@ const currentHash = () => {
   return ROUTES.includes(path) ? path : 'dashboard';
 };
 
-/* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */
+/* ============ 设置页二级菜单（#settings?tab=ai|market|mcp|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system'];
+const SETTINGS_TABS = ['ai', 'market', 'mcp', 'notify', 'data', 'system'];
 
 const settingsTab = (hash = window.location.hash) => {
   const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
@@ -328,6 +329,9 @@ const renderSettingsTab = async (setStatus, tab) => {
     await renderMarketSettings(setStatus);
     initMarketSync();
     await renderMarketSyncStatus();
+  } else if (tab === 'mcp') {
+    initMcpSettings(setStatus);
+    await renderMcpSettings(setStatus);
   } else if (tab === 'notify') {
     initFeishuSettings(setStatus);
     await renderFeishuSettings(setStatus);

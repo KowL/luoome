@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveMcpConfigPath } from '@luoome/adapters';
 import type { ToolContext, ToolError } from '@luoome/core';
 import {
   type RuntimeBinding,
@@ -407,12 +407,7 @@ export const createDshChatRuntimeFromStore = (
         ? {}
         : {
             externalMcp: (context: ToolContext, scenario: string) =>
-              discoverExternalMcpTools(
-                env.LUOOME_MCP_CONFIG ??
-                  join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'mcp-servers.json'),
-                context,
-                scenario,
-              ),
+              discoverExternalMcpTools(resolveMcpConfigPath(env), context, scenario),
           }),
       model: {
         endpoint,

@@ -821,6 +821,7 @@
         <nav class="settings-subnav" aria-label="设置分区">
           <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
           <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
+          <a href="#settings?tab=mcp" class="settings-subnav-item" data-settings-tab="mcp">MCP 服务</a>
           <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
           <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
           <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
@@ -932,6 +933,34 @@
             </section>
           </div>
         </form>
+        <div id="mcp-settings" data-settings-pane="mcp" hidden>
+          <div class="ai-settings-heading">
+            <div>
+              <span class="section-kicker">AGENT CONNECTIONS</span>
+              <h2>MCP 服务</h2>
+              <p>为 Agent 开放受信的只读能力。按工具和场景授权，保存后下轮对话生效。</p>
+            </div>
+            <button id="mcp-reload" type="button" class="btn btn-outline btn-sm">重新加载</button>
+          </div>
+          <div id="mcp-settings-status" class="mcp-settings-status" role="status" aria-live="polite">正在读取配置</div>
+          <div class="mcp-settings-grid">
+            <div id="mcp-service-list" class="mcp-service-list"></div>
+            <section class="mcp-preview card" aria-labelledby="mcp-preview-title">
+              <span class="section-kicker">TOOL PREVIEW</span>
+              <h3 id="mcp-preview-title">Agent 可用工具</h3>
+              <p class="muted">按已保存的配置连接服务，只展示所选场景获准使用的 MCP 工具。</p>
+              <label class="mcp-field" for="mcp-preview-scenario">预览场景
+                <select id="mcp-preview-scenario">
+                  <option value="research">股票研究</option><option value="portfolio">账户持仓</option>
+                  <option value="watch">观察盯盘</option><option value="review">复盘</option><option value="general">通用对话</option>
+                </select>
+              </label>
+              <button id="mcp-preview-button" class="btn btn-outline" type="button">预览工具</button>
+              <div id="mcp-preview-result" class="mcp-preview-result" role="status" aria-live="polite">尚未预览</div>
+              <p class="mcp-note">只读声明还需通过客户端校验。服务停用后，已生成的旧调用也会重新检查授权。</p>
+            </section>
+          </div>
+        </div>
         <form id="market-settings-form" class="market-settings" autocomplete="off" data-settings-pane="market">
           <div class="market-settings-heading">
             <div>

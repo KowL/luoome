@@ -5,6 +5,7 @@ import { FakeLLMAdapter, FakeMarketAdapter, TEST_STOCKS } from '@luoome/adapters
 import { money } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, discoverExternalMcpTools } from '@luoome/tools';
+import { McpSettingsStore } from '../mcp-settings.js';
 import { createWebApp } from '../server.js';
 import { DshChatRuntime } from './chat-runtime.js';
 import { loadDshDevelopmentConfig } from './config.js';
@@ -185,15 +186,10 @@ export const createDshIntegrationFixture = async (
     createdAt: clock(),
   });
 
-  const externalMcpConfig = options.externalMcpConfig;
+  const externalMcpConfig = options.externalMcpConfig ?? join(root, 'mcp-servers.json');
   const chatStreamRuntime = new DshChatRuntime({
     ...dsh,
-    ...(externalMcpConfig === undefined
-      ? {}
-      : {
-          externalMcp: (ctx, scenario) =>
-            discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
-        }),
+    externalMcp: (ctx, scenario) => discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
     model: {
       endpoint: 'https://provider.example.test/v1/chat/completions',
       model: 'deepseek-chat',
@@ -217,6 +213,7 @@ export const createDshIntegrationFixture = async (
     exposeWrite: true,
     exposeExternal: true,
     chatStreamRuntime,
+    mcpSettingsStore: new McpSettingsStore({ LUOOME_MCP_CONFIG: externalMcpConfig }),
   });
 
   const request = (path: string, init: RequestInit = {}) =>

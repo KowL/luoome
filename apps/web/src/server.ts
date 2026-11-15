@@ -22,6 +22,7 @@ import { jsonResult, notFound, parseJsonObject, permissionDenied } from './http/
 import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
 import { startMarketBatchScheduler } from './market-batch-scheduler.js';
 import { MarketSettingsStore } from './market-settings.js';
+import { McpSettingsStore } from './mcp-settings.js';
 import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
 import { startPostMarketScheduler } from './post-market-scheduler.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
@@ -68,6 +69,7 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
+  readonly mcpSettingsStore?: McpSettingsStore;
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
    * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
@@ -323,6 +325,9 @@ export const createWebApp = (
     exposeExternal,
     chatRuntimeRef,
     ...(aiSettingsStore === undefined ? {} : { aiSettingsStore }),
+    ...(options.mcpSettingsStore === undefined
+      ? {}
+      : { mcpSettingsStore: options.mcpSettingsStore }),
     ...(marketSettingsStore === undefined ? {} : { marketSettingsStore }),
     ...(feishuSettingsStore === undefined ? {} : { feishuSettingsStore }),
     ...(researchVaultSettingsStore === undefined ? {} : { researchVaultSettingsStore }),
@@ -381,6 +386,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ...researchVaultSettingsStore.runtimeEnv(),
     ...feishuSettingsStore.runtimeEnv(),
   };
+  const mcpSettingsStore = new McpSettingsStore(runtimeEnv);
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
   const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
@@ -389,6 +395,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     exposeWrite,
     exposeExternal,
     aiSettingsStore,
+    mcpSettingsStore,
     marketSettingsStore,
     sources,
     researchVaultSettingsStore,
