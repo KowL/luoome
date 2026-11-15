@@ -5,6 +5,7 @@ import { money } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos } from '../../client.js';
+import { makeAdvice } from '../contract-tests.js';
 
 const bar = (close: number) => ({
   stockId: '002594.SZ',
@@ -16,6 +17,37 @@ const bar = (close: number) => ({
   volume: 100,
   adjustment: 'qfq' as const,
   source: 'fixture',
+});
+
+it('checks Advice publication under the SQLite write lock and preserves historical rows on revocation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-advice-fence-'));
+  const path = join(root, 'db.sqlite');
+  const h = createDrizzleRepos(path),
+    probe = createDrizzleRepos(path);
+  probe.db.run(sql`PRAGMA busy_timeout = 0`);
+  try {
+    const history = makeAdvice('historical');
+    await h.repos.advice.save(history);
+    let checks = 0;
+    const denied = () => {
+      checks++;
+      expect(() => probe.db.run(sql`BEGIN IMMEDIATE`)).toThrow();
+      throw new Error('analysis revoked');
+    };
+    await expect(
+      h.repos.withWriteGuard(denied, () => h.repos.advice.save(makeAdvice('new'))),
+    ).rejects.toThrow('analysis revoked');
+    await expect(
+      h.repos.withWriteGuard(denied, () => h.repos.advice.save({ ...history, confidence: 99 })),
+    ).rejects.toThrow('analysis revoked');
+    expect(checks).toBe(2);
+    expect(await h.repos.advice.findById('new')).toBeNull();
+    expect(await h.repos.advice.findById(history.id)).toEqual(history);
+  } finally {
+    h.close();
+    probe.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe('SQLite publication fences', () => {

@@ -27,6 +27,7 @@ const setup = async () => {
   const command = (
     id:
       | 'business.strategy-execution'
+      | 'business.analysis'
       | 'task.strategy-schedules'
       | 'strategy.ai-insight'
       | 'source.sina',
@@ -53,6 +54,45 @@ const deferred = () => {
 };
 
 describe('Web plugin settings projection and conditional commands', () => {
+  it('projects the analysis gate, model/data blockers and late calls without touching historical Advice', async () => {
+    const { store, settings, runtime, command, policy } = await setup();
+    store.initialize();
+    const preview = settings.preview(command('business.analysis', true), runtime);
+    expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual(
+      ['analyze_stock', 'analyze_position', 'market_outlook', 'analyze_strategy_candidate'].sort(),
+    );
+    expect(preview.notes.join('')).toContain('历史建议仍可读取');
+    const noModel = settings.preview(command('business.analysis', true), {
+      ...runtime,
+      context: {
+        ...runtime.context,
+        adapters: {
+          ...runtime.context.adapters,
+          llm: { ...runtime.context.adapters.llm, configurationReady: false },
+        },
+      },
+    });
+    expect(noModel.affected[0]?.blockers).toContain('分析模型尚未配置');
+    expect(noModel.affected[0]?.blockers).not.toContain('供数入口未就绪：llm');
+    settings.save(preview.command, runtime);
+    const release = deferred();
+    const pending = policy.bind().runTool('analyze_stock', () => release.promise);
+    try {
+      settings.save(command('business.analysis', false), runtime);
+      expect(
+        settings.read(runtime).plugins.find((row) => row.id === 'business.analysis'),
+      ).toMatchObject({
+        enabled: false,
+        runtime: { phase: 'draining', inFlight: 1, revokedInFlight: 1, gateApplied: true },
+      });
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(
+      settings.read(runtime).plugins.find((row) => row.id === 'business.analysis')?.runtime.phase,
+    ).toBe('disabled');
+  });
   it('reads and previews without initializing, sending upstream requests, or revealing paths/secrets', async () => {
     const { root, store, settings, runtime } = await setup();
     let builds = 0;

@@ -12,6 +12,7 @@ import {
   isPublishableOperationalRun,
   type MarketDataAdapterLike,
   money,
+  PluginExecutionDenied,
   type Quote,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
@@ -24,8 +25,10 @@ import { z } from 'zod';
 
 import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '../define-tool.js';
 import {
+  assertAdviceAnalysis,
   computeValidUntil,
   extractLlmRaw,
+  generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
@@ -188,6 +191,7 @@ export const analyzeStrategyCandidateTool = defineTool({
   input: AnalyzeStrategyCandidateInput,
   output: AnalyzeStrategyCandidateOutput,
   handler: async (input, ctx) => {
+    assertAdviceAnalysis(ctx);
     const run = await ctx.repos.strategyRun.findRunById(input.runId);
     if (run === null) return errNotFound('StrategyRun', input.runId);
     if (run.strategyId !== input.strategyId) {
@@ -222,6 +226,7 @@ export const analyzeStrategyCandidateTool = defineTool({
       fetchStrategyCandidateBars(ctx.adapters.market, stock.id, now),
       ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
     ]);
+    assertAdviceAnalysis(ctx);
     const quote = [
       quoteItem?.status === 'ok' ? quoteItem.quote : undefined,
       quoteFromLatestStrategyBar(bars, now),
@@ -272,9 +277,9 @@ export const analyzeStrategyCandidateTool = defineTool({
     let failure = 'AI 输出未通过建议约束';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const generated = await ctx.adapters.llm.generate<
+        const generated = await generateAdviceAnalysis<
           z.infer<typeof StrategyAdviceAnalysisSchema>
-        >({
+        >(ctx, {
           system: `${STRATEGY_ADVICE_SYSTEM}${attempt === 0 ? '' : `\n请修复上次输出：${failure}`}`,
           schema: StrategyAdviceAnalysisSchema,
           data: analysisData,
@@ -308,7 +313,8 @@ export const analyzeStrategyCandidateTool = defineTool({
         llmOutput = grounded.data;
         llmRaw = extractLlmRaw(generated);
         break;
-      } catch {
+      } catch (error) {
+        if (error instanceof PluginExecutionDenied) throw error;
         failure = 'AI 调用失败或输出无效';
       }
     }

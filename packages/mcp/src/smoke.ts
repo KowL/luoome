@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PluginConfigStore } from '@luoome/adapters';
+import { TEST_ACCOUNT, testAdviceFor } from '@luoome/adapters/testing';
 import { money, stockCode, strategyDefinitionHash } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -315,7 +316,13 @@ try {
     'ok: configured dependencies AND authorization; real news adapter with offline HTTP fixture',
   );
 
-  enableSource(join(root, 'model'));
+  const modelHome = join(root, 'model');
+  const modelStore = new PluginConfigStore(join(modelHome, 'plugins.json'));
+  modelStore.set('business.analysis', true, enableSource(modelHome));
+  const modelSeed = createDrizzleRepos(join(modelHome, 'luoome.db'));
+  await modelSeed.repos.account.save(TEST_ACCOUNT);
+  await modelSeed.repos.advice.save(testAdviceFor('002594.SZ', () => new Date()));
+  modelSeed.close();
   const model = await connect(join(root, 'model'), {
     ...config,
     MINIMAX_API_KEY: 'offline-fixture-only',
@@ -328,6 +335,21 @@ try {
     });
     assert.equal(result.isError, true);
     assert.equal(data(result).kind, 'not_found');
+    const current = modelStore.read();
+    assert.ok(current.ok);
+    const off = modelStore.set('business.analysis', false, current.config);
+    assert.ok(!(await names(model)).includes('analyze_stock'));
+    assert.ok(!(await names(model)).includes('analyze_position'));
+    await assert.rejects(
+      model.callTool({ name: 'analyze_stock', arguments: { stockId: 'missing' } }),
+      /not found or not exposed/,
+    );
+    assert.equal(
+      data(await model.callTool({ name: 'get_advice', arguments: { includeExpired: true } })).total,
+      1,
+    );
+    modelStore.set('business.analysis', true, off);
+    assert.ok((await names(model)).includes('analyze_stock'));
   } finally {
     await model.close();
   }

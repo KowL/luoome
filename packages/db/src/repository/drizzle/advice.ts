@@ -14,6 +14,7 @@ import { and, desc, eq, gt, gte, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { adviceOutcomes, advices, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type AdviceRow = typeof advices.$inferSelect;
 type OutcomeRow = typeof adviceOutcomes.$inferSelect;
@@ -83,7 +84,10 @@ const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
 });
 
 export class DrizzleAdviceRepository implements AdviceRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(advice: Advice): Promise<void> {
     assertAdviceInvariants(advice);
@@ -111,7 +115,13 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       validUntil: advice.validUntil,
       createdAt: advice.createdAt,
     };
-    this.db.insert(advices).values(row).onConflictDoUpdate({ target: advices.id, set: row }).run();
+    this.writes.transaction(this.db, () => {
+      this.db
+        .insert(advices)
+        .values(row)
+        .onConflictDoUpdate({ target: advices.id, set: row })
+        .run();
+    });
   }
 
   async findById(id: string): Promise<Advice | null> {

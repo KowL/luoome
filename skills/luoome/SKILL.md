@@ -49,4 +49,12 @@ Web 的影响预览不会自动开启依赖；配置提交、当前宿主就绪�
 新策略运行/试跑/回测由宿主的 `business.strategy-execution` 显式启用，自动调度另需 `task.strategy-schedules`；新增项默认关闭。
 `run_strategy` 按模式和规则引用选择资料：仅本地资料的 scheduled/replay 不依赖 live quote/bars；缺失 ladder/归档保留原 unavailable 与 acceptance 语义。
 停用后重新发现工具；旧草案或旧工具名不能恢复执行。历史读取、取消和已有回执查询继续可用，失败/未知结果不自动重放。
-插件启用不改变 write/external 授权、场景白名单或人工确认。个股分析等其它业务独立开关仍在后续切片。
+插件启用不改变 write/external 授权、场景白名单或人工确认。盯盘、通知等其它业务独立开关仍在后续切片。
+
+
+### 个股分析控制
+
+用户须在 Web「设置 → 插件」或 CLI 显式启用 `business.analysis`；旧配置先补齐新增项，新项默认关闭。
+开关覆盖 analyze_stock 的全部 scope、analyze_position 及内部市场/候选分析入口。停用后重新发现工具，
+旧 callable 或旧草案确认不能生成新 Advice；关后重开也不恢复旧执行。历史 get_advice 和复盘查询继续可用。
+分析开关独立于策略执行、策略 AI 洞察和聊天；开启不会自动启源、扩充场景或跳过确认。模型已发送时可能仍在排空，不自动重放失败调用。

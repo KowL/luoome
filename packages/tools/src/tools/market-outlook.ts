@@ -13,7 +13,9 @@ import { defineTool } from '../define-tool.js';
 import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
+  assertAdviceAnalysis,
   computeValidUntil,
+  generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
@@ -134,14 +136,17 @@ export const marketOutlookTool = defineTool({
   input: MarketOutlookInput,
   output: MarketOutlookOutput,
   handler: async (input, ctx) => {
+    assertAdviceAnalysis(ctx);
     const quotes = await collectQuotes(input.theme, input.watchlistIds, ctx);
+    assertAdviceAnalysis(ctx);
     const avgChangePct =
       quotes.length === 0 ? 0 : quotes.reduce((s, q) => s + q.changePct, 0) / quotes.length;
     const advancers = quotes.filter((q) => q.changePct > 0).length;
     const decliners = quotes.filter((q) => q.changePct < 0).length;
     const ladder = await loadLadderSnapshot(ctx);
+    assertAdviceAnalysis(ctx);
 
-    const llm = await ctx.adapters.llm.generate<AdviceLLMOutput>({
+    const llm = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
       system: 'market_outlook',
       schema: AdviceLLMSchema,
       data: {

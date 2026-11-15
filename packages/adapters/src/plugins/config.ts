@@ -30,6 +30,7 @@ export interface BuiltinPluginDefinition {
 }
 const labels: Record<ManagedPluginId, string> = {
   'business.strategy-execution': '策略执行',
+  'business.analysis': '个股分析',
   'strategy.ai-insight': '策略 AI 洞察',
   'source.eastmoney': '东方财富',
   'source.tencent': '腾讯行情',

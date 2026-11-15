@@ -5,6 +5,9 @@ import {
   type AdviceReasoning,
   AdviceReasoningSchema,
   adviceExpiryDays,
+  type LLMGenerateRequest,
+  PluginExecutionDenied,
+  type ToolContext,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -33,6 +36,29 @@ export const AdviceLLMSchema = z.object({
 });
 
 export type AdviceLLMOutput = z.infer<typeof AdviceLLMSchema>;
+
+export const assertAdviceAnalysis = (ctx: ToolContext): void => {
+  ctx.executionGuard?.();
+  if (ctx.executionPolicy === undefined)
+    throw new PluginExecutionDenied('plugin:business.analysis');
+  ctx.executionPolicy.assertTool('analyze_stock');
+};
+
+export const generateAdviceAnalysis = async <T>(
+  ctx: ToolContext,
+  request: LLMGenerateRequest,
+): Promise<T> => {
+  assertAdviceAnalysis(ctx);
+  let generated: T;
+  try {
+    generated = await ctx.adapters.llm.generate<T>(request);
+  } catch (error) {
+    assertAdviceAnalysis(ctx);
+    throw error;
+  }
+  assertAdviceAnalysis(ctx);
+  return generated;
+};
 
 const PROMPT_INJECTION_PATTERNS = [
   /ignore (?:all )?previous instructions/gi,

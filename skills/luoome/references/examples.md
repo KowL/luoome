@@ -40,6 +40,8 @@ Report publication and data health from the returned run. StrategySignals are ev
 
 ## Analyze a stock or holding
 
+Confirm discovery includes the analysis tool; the user must explicitly enable `business.analysis` in Web settings or the host CLI. If disabled, historical `get_advice` remains available; do not enable it or retry an old call on the user's behalf.
+
 Resolve stocks with `search_stocks`, then invoke `analyze_stock` for the requested analysis:
 
 ```json

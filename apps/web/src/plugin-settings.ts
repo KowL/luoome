@@ -91,8 +91,11 @@ export class PluginSettingsStore {
         !runtime.exposeWrite
       )
         blockers.push('宿主未授权写入（write）');
-      if (id === 'strategy.ai-insight' && runtime.context.adapters.llm.configurationReady === false)
-        blockers.push('解释模型尚未配置');
+      if (
+        (id === 'strategy.ai-insight' || id === 'business.analysis') &&
+        runtime.context.adapters.llm.configurationReady === false
+      )
+        blockers.push(id === 'business.analysis' ? '分析模型尚未配置' : '解释模型尚未配置');
       if (!this.credentialReady(id)) blockers.push('提供者凭证尚未配置；请配置后重启宿主');
       const selected = routes.filter((route) =>
         [...route.candidates, ...route.dependencies].some((source) => id === `source.${source}`),
@@ -108,6 +111,7 @@ export class PluginSettingsStore {
       )
         blockers.push('来源尚未在当前宿主就绪');
       for (const dependency of [...new Set(owned.flatMap((item) => item.dependencies))]) {
+        if (dependency === 'llm') continue;
         if (
           !routes.some(
             (route) =>
@@ -253,6 +257,11 @@ export class PluginSettingsStore {
           : []),
         ...(id === 'business.strategy-execution'
           ? ['自动策略定时器随依赖停用；报告截止与补投保持独立。']
+          : []),
+        ...(id === 'business.analysis'
+          ? [
+              '停用后拒绝新个股、持仓、市场及策略候选 Advice；历史建议仍可读取，既有策略运行与事实不受此开关影响。',
+            ]
           : []),
         '启停在下一受控安全点生效；已开始的短事务正常结束，旧请求可能仍在排空。',
       ],

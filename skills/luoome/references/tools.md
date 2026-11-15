@@ -58,6 +58,8 @@ Use advice tools only for an explicit analysis request:
   All modes persist a structured Advice with evidence, counter-evidence, risks and validity.
 - `analyze_position` — position-grounded advice using current cost/size.
 
+New stock/position Advice requires the host's `business.analysis` plugin to be explicitly enabled. It also covers the market and strategy-candidate scopes. Historical `get_advice` stays readable when disabled; old tools or pending drafts do not bypass the gate.
+
 Advice is never a trade and never auto-executes.
 
 ## Write

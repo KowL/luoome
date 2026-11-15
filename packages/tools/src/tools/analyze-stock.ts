@@ -14,8 +14,10 @@ import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
+  assertAdviceAnalysis,
   computeValidUntil,
   extractLlmRaw,
+  generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
@@ -86,6 +88,7 @@ export const analyzeStockTool = defineTool({
   input: AnalyzeStockInput,
   output: AnalyzeStockOutput,
   handler: async (input, ctx) => {
+    assertAdviceAnalysis(ctx);
     if (input.scope === 'market') {
       const result = await marketOutlookTool.execute(
         {
@@ -127,6 +130,7 @@ export const analyzeStockTool = defineTool({
       }),
       ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
     ]);
+    assertAdviceAnalysis(ctx);
     if (quoteItem === undefined || quoteItem.status !== 'ok') {
       return errAdapterError(
         ctx.adapters.market.name,
@@ -139,7 +143,7 @@ export const analyzeStockTool = defineTool({
     const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
 
-    const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
+    const llmOutput = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
       system: 'analyze_stock',
       schema: AdviceLLMSchema,
       data: {

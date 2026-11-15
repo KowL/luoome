@@ -12,8 +12,10 @@ import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
+  assertAdviceAnalysis,
   computeValidUntil,
   extractLlmRaw,
+  generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
@@ -40,6 +42,7 @@ export const analyzePositionTool = defineTool({
   input: AnalyzePositionInput,
   output: AnalyzePositionOutput,
   handler: async (input, ctx) => {
+    assertAdviceAnalysis(ctx);
     // 持仓来自账本（当前持仓即权威）；不再支持由账户快照派生的持仓引用。
     const holding = await ctx.repos.holding.findById(input.holdingId);
     if (holding === null) return errNotFound('Holding', input.holdingId);
@@ -56,6 +59,7 @@ export const analyzePositionTool = defineTool({
         end: now,
       }),
     ]);
+    assertAdviceAnalysis(ctx);
     if (quoteItem === undefined || quoteItem.status !== 'ok') {
       return errAdapterError(
         ctx.adapters.market.name,
@@ -119,7 +123,7 @@ export const analyzePositionTool = defineTool({
     let advice: Advice | undefined;
     let failure = 'AI 输出未通过建议约束';
     for (let attempt = 0; attempt < 2 && advice === undefined; attempt += 1) {
-      const generated = await ctx.adapters.llm.generate<AdviceLLMOutput>({
+      const generated = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
         system:
           attempt === 0 ? 'analyze_position' : `analyze_position\n\n[修复上次输出] ${failure}`,
         schema: AdviceLLMSchema,

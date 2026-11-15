@@ -252,6 +252,7 @@ export const toolCatalog = {
     dependencies: [],
   },
   analyze_stock: {
+    execution: 'p3',
     modes: {
       stock: { data: ['llm', 'market:quote', 'market:daily-bars'] },
       market: { data: ['market-outlook:inputs'] },
@@ -263,6 +264,7 @@ export const toolCatalog = {
     dependencies: ['llm', 'market:quote', 'market:daily-bars'],
   },
   analyze_position: {
+    execution: 'p3',
     owner: 'business.analysis',
     tool: analyzePositionTool,
     agent: true,
@@ -517,9 +519,11 @@ export const toolCatalog = {
   add_watchlist_member: { owner: 'business.watch', tool: addWatchlistMemberTool, agent: false },
   add_watchlist_members: { owner: 'business.watch', tool: addWatchlistMembersTool, agent: false },
   analyze_strategy_candidate: {
+    execution: 'p3',
     owner: 'business.analysis',
     tool: analyzeStrategyCandidateTool,
     agent: false,
+    dependencies: ['llm'],
   },
   append_chat_message: { owner: 'platform.chat', tool: appendChatMessageTool, agent: false },
   archive_strategy: { owner: 'business.strategy', tool: archiveStrategyTool, agent: false },
@@ -744,7 +748,13 @@ export const toolCatalog = {
   list_watch_triggers: { owner: 'shared-query', tool: listWatchTriggersTool, agent: false },
   list_watchlist_changes: { owner: 'shared-query', tool: listWatchlistChangesTool, agent: false },
   list_workflow_runs: { owner: 'shared-query', tool: listWorkflowRunsTool, agent: false },
-  market_outlook: { owner: 'business.analysis', tool: marketOutlookTool, agent: false },
+  market_outlook: {
+    execution: 'p3',
+    owner: 'business.analysis',
+    tool: marketOutlookTool,
+    agent: false,
+    dependencies: ['llm', 'market:quote'],
+  },
   pause_strategy: { owner: 'business.strategy', tool: pauseStrategyTool, agent: false },
   propose_strategy_version_draft: {
     owner: 'business.strategy',

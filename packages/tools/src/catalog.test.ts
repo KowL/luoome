@@ -22,6 +22,15 @@ describe('typed tool catalog', () => {
     );
     expect(toolCatalog.run_strategy.owner).toBe('business.strategy-execution');
     expect(toolCatalog.run_strategy.execution).toBe('p3');
+    for (const name of [
+      'analyze_stock',
+      'analyze_position',
+      'market_outlook',
+      'analyze_strategy_candidate',
+    ] as const) {
+      expect(toolCatalog[name].owner).toBe('business.analysis');
+      expect(toolCatalog[name].execution).toBe('p3');
+    }
     expect(toolCatalog.run_strategy.dependencies).toEqual([]);
     expect(toolCatalog.compute_indicators.dependencies).toEqual([]);
     expect(toolCatalog.sync_daily_bars.execution).toBe('p2');

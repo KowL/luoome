@@ -323,7 +323,12 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
     (ctx, operation) => {
       const invoke = () =>
         ctx.dataScope === undefined
-          ? operation()
+          ? ctx.executionPolicy === undefined
+            ? operation()
+            : ctx.repos.withWriteGuard(() => {
+                if (definition.name !== 'record_workflow_run') ctx.executionGuard?.();
+                ctx.executionPolicy?.assertTool(definition.name);
+              }, operation)
           : ctx.dataScope.run(
               (validate) => ctx.repos.withWriteGuard(validate, operation),
               (dependency) => {
