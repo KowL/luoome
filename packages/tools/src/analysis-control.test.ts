@@ -8,6 +8,7 @@ import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js
 import { analyzeStrategyCandidateTool } from '@luoome/plugin-analysis/tools/analyze-strategy-candidate.js';
 import { marketOutlookTool } from '@luoome/plugin-analysis/tools/market-outlook.js';
 import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   makeStrategy,
@@ -26,7 +27,7 @@ const setup = async () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-analysis-'));
   roots.push(root);
   const store = new PluginConfigStore(join(root, 'plugins.json'));
-  store.initialize();
+  store.initialize(BUILTIN_PLUGIN_DEFAULTS);
   const policy = createPluginExecutionPolicy(
     store,
     new Set(['read', 'advice', 'write', 'external']),

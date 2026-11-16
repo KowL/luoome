@@ -1,5 +1,8 @@
 import { isAshareTradingSession, type ToolContext, type ToolResult } from '@luoome/core';
-import { type CollectMarketSnapshotOutputT, collectMarketSnapshotTool } from '@luoome/tools';
+import {
+  type CollectMarketSnapshotOutputT,
+  collectMarketSnapshotTool,
+} from './tools/market-snapshot-batch.js';
 
 export const MARKET_BATCH_SCHEDULER_INTERVAL_MS = 60_000;
 

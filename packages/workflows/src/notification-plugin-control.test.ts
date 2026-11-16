@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ToolContext } from '@luoome/core';
 import {
   addWatchlistMemberTool,
+  BUILTIN_PLUGIN_DEFAULTS,
   beginWatchDeliveryTool,
   createAlertPlanTool,
   createPluginExecutionPolicy,
@@ -47,7 +48,7 @@ const setup = async (transport?: () => Promise<Response>) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-notify-plugin-'));
   roots.push(root);
   const store = new PluginConfigStore(join(root, 'plugins.json'));
-  let config = store.initialize();
+  let config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
   for (const plugin of ['business.report', 'business.watch-monitoring', 'source.sina'] as const)
     config = store.set(plugin, true, config);
   const policy = createPluginExecutionPolicy(

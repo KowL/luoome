@@ -28,7 +28,7 @@
 | 源顺序最少一个；空字符串回默认源 | [market factory](../../packages/adapters/src/market/factory.ts) | 全关必须显式表达，不能用清空环境变量实现 |
 | 一些现有 Tool 混合读、网络和写库 | [compute-indicators](../../packages/toolkit/src/tools/compute-indicators.ts)、[sync-daily-bars](../../packages/plugins/market-tasks/src/tools/sync-daily-bars.ts)、[get-stock-market-view](../../packages/toolkit/src/tools/get-stock-market-view.ts) | 按实际行为归属和授权，不能按 `get/read` 名称当纯本地查询 |
 | 策略洞察已有窗口事实与 facts-only；日循环和周报均消费 | [strategy-insight](../../packages/toolkit/src/tools/strategy-insight.ts)、[日循环](../../packages/workflows/src/strategy-daily-cycle.ts)、[周报](../../packages/workflows/src/weekly-report.ts) | 首个纵向切片可验证组合与可选 AI，无须先搬整个策略模块 |
-| 策略 tick 与收盘报告 cutoff 共用 stop | [strategy-scheduler](../../apps/web/src/strategy-scheduler.ts) | 拆清资源 owner 后才能声称独立停用 |
+| 策略 tick 与收盘报告 cutoff 共用 stop | [strategy-scheduler](../../packages/plugins/strategy/src/resources.ts) | 拆清资源 owner 后才能声称独立停用 |
 | 入站 MCP 按启动配置冻结发现；出站 MCP 已逐调用复核授权 | [MCP server](../../packages/mcp/src/server.ts)、[外部 MCP](../../packages/adapters/src/mcp/client.ts) | 入站动态发现是后续工作；沿用出站的撤销经验，不混淆两个方向 |
 
 ### 2.1 历史数据口径的限制
@@ -655,3 +655,20 @@ Web 管理展示唯一直接发送贡献、可选领取及其它业务保留项�
 
 新增契约测试检查生产 workspace 无环、源码 import 已声明、底座/插件依赖方向和聚合工具实例一致。
 根 typecheck/build 从 workspace 配置发现嵌套插件；完整工具、Workflow、SQLite、Web、MCP 与 Skill 回归验证迁移。
+
+
+## 25. 定义、工具贡献与资源装配收敛
+
+各插件通过 `src/plugin.ts` 导出唯一描述，收拢能力定义、工具贡献与资源工厂；元数据包含默认值、requires、
+模型/凭证就绪与影响说明。行情提供者定义在独立 market-providers 包，provider IO/路由/缓存继续由 adapters 提供。
+共享能力贡献由 toolkit 声明，跨功能应用贡献由 tools 声明；宿主统一合并、查重并按名字排序，
+保留每个工具原有 schema、owner、副作用、公共性、依赖和模式。迁移前规范化发现与元数据基线验证这些字段未变。
+
+五类受控资源的 timer 和注册迁入对应包，宿主只注入实际 Workflow 执行端口，资源 requires 从能力定义派生。
+插件发现、设置预览与资源清单生成不启动 IO/timer；write + external 双闸口、旧 permit/epoch、停用卸载、
+排空等待和重新启用单次注册继续沿用。跨任务盘后组合调度保留在宿主，采集步骤分别受原 task 开关控制。
+配置存储移除业务标签和默认值清单，初始化显式接收装配默认值；迁移新增项仍默认关闭，不改变配置格式与 epoch。
+
+新增定义完整性/依赖环、重复工具/名字、资源归属与惰性、生产包无环、原发现/定义基线和真实资源装配回归。
+装配后的实际绩效 timer 在途停用→排空→重开时拒绝旧工具与旧 tick，不重启其它资源；策略依赖撤销不影响报告。
+Web 启动的 write/external 闸口通过真实 HTTP 插件投影验证，代替旧路径模块 mock。

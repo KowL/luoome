@@ -14,6 +14,7 @@ import { type ManagedPluginId, money } from '@luoome/core';
 import { syncDailyBarsTool } from '@luoome/plugin-market-tasks/tools/sync-daily-bars.js';
 import { computeIndicatorsTool } from '@luoome/toolkit/tools/compute-indicators.js';
 import { getStockMinuteBarsTool } from '@luoome/toolkit/tools/get-stock-minute-bars.js';
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginExecutionPolicy } from './plugin-policy.js';
 import { buildTestContext } from './testing/context.js';
@@ -33,7 +34,7 @@ const setup = async () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-p2-'));
   roots.push(root);
   const store = new PluginConfigStore(join(root, 'plugins.json'));
-  store.initialize();
+  store.initialize(BUILTIN_PLUGIN_DEFAULTS);
   const set = (id: ManagedPluginId, enabled: boolean) => {
     const read = store.read();
     if (!read.ok) throw new Error('missing');

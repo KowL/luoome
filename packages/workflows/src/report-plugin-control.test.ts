@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginExecutionDenied, type ToolContext } from '@luoome/core';
 import {
+  BUILTIN_PLUGIN_DEFAULTS,
   createPluginExecutionPolicy,
   getReportTool,
   listReportsTool,
@@ -47,7 +48,7 @@ const setup = async (transport?: () => Promise<Response>) => {
   store.set(
     'business.watch-monitoring',
     true,
-    store.set('business.notification', true, store.initialize()),
+    store.set('business.notification', true, store.initialize(BUILTIN_PLUGIN_DEFAULTS)),
   );
   const policy = createPluginExecutionPolicy(
     store,

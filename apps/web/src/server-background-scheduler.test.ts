@@ -1,24 +1,13 @@
-// startWeb 的后台调度器闸口：能力开关必须来自已解析的 options，
-// 不能在调度器里绕过注入值重新读 process.env（回归：仅注入 options 时采集从不启动）。
-// market-batch-scheduler 以模块 mock 计数，避免测试等 60s 定时器或访问外部行情。
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
+// 能力开关以启动参数为准；检查实际插件资源投影，定时器首次运行前即停止宿主。
 
-import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
 
-let marketBatchStarts = 0;
-
-mock.module('./market-batch-scheduler.js', () => ({
-  isMarketBatchSession: () => false,
-  startMarketBatchScheduler: () => {
-    marketBatchStarts += 1;
-    return { tick: async () => {}, stop: () => {} };
-  },
-}));
-
-const { startWeb } = await import('./server.js');
+import { startWeb } from './server.js';
 
 const SAVED_ENV = [
   'LUOOME_EXPOSE_WRITE',
@@ -44,19 +33,28 @@ afterAll(() => {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
-  mock.restore();
 });
 
 const startOnce = async (options: Parameters<typeof startWeb>[0]): Promise<number> => {
-  const before = marketBatchStarts;
   const dir = mkdtempSync(join(tmpdir(), 'luoome-web-scheduler-'));
   const store = new PluginConfigStore(join(dir, 'plugins.json'));
-  store.set('task.collect-market-snapshot', true, store.initialize());
+  store.set('task.collect-market-snapshot', true, store.initialize(BUILTIN_PLUGIN_DEFAULTS));
   const previousHome = process.env.LUOOME_HOME;
   process.env.LUOOME_HOME = dir;
   const handle = await startWeb({ ...options, dbPath: join(dir, 'local.db') });
   try {
-    return marketBatchStarts - before;
+    const response = await fetch(`http://127.0.0.1:${handle.port}/api/settings/plugins`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      ok: boolean;
+      data: { plugins: { id: string; runtime: { task: { phase: string } | null } }[] };
+    };
+    expect(body.ok).toBe(true);
+    const task = body.data.plugins.find(
+      (row: { id: string }) => row.id === 'task.collect-market-snapshot',
+    );
+    expect(task).toBeDefined();
+    return Number(task?.runtime.task?.phase === 'ready');
   } finally {
     await handle.stop(true);
     if (previousHome === undefined) delete process.env.LUOOME_HOME;

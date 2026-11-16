@@ -2,12 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ManagedPluginId } from '@luoome/core';
+import { startPortfolioPerformanceScheduler } from '@luoome/plugin-performance-task';
+import { startClosingReportScheduler } from '@luoome/plugin-report';
+import { startStrategyScheduler } from '@luoome/plugin-strategy';
+import { startIntradayPlanScheduler } from '@luoome/plugin-watch';
 import { buildTestContext, createTestPluginControl } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
+import { webPluginOperations } from './plugin-operations.js';
 import { type PluginTaskActivation, PluginTasks } from './plugin-tasks.js';
-import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
-import { startClosingReportScheduler, startStrategyScheduler } from './strategy-scheduler.js';
 
 const deferred = () => {
   let resolve = () => {};
@@ -49,7 +51,7 @@ describe('plugin task resources', () => {
         id: performance,
         start: (scope) => {
           starts++;
-          const handle = startPortfolioPerformanceScheduler(scope.ctx, {
+          const handle = startPortfolioPerformanceScheduler(webPluginOperations, scope.ctx, {
             startImmediately: false,
             dispatch: (op) => scope.run(op),
             run: async (date) => {
@@ -162,7 +164,7 @@ describe('plugin task resources', () => {
         id: report,
         start: (scope) => {
           starts++;
-          const handle = startClosingReportScheduler(scope.ctx, {
+          const handle = startClosingReportScheduler(webPluginOperations, scope.ctx, {
             startImmediately: false,
             dispatch: (operation) => scope.run(operation),
             runCutoff: async () => {
@@ -184,14 +186,14 @@ describe('plugin task resources', () => {
         },
       },
     ]);
-    const strategy = startStrategyScheduler(ctx, {
+    const strategy = startStrategyScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       run: async () => {
         strategies++;
         return { ok: true, data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 } };
       },
     });
-    const watch = startIntradayPlanScheduler(ctx, {
+    const watch = startIntradayPlanScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       runAccount: async () => {
         watches++;
@@ -254,7 +256,7 @@ describe('plugin task resources', () => {
         id: watch,
         start: (scope) => {
           starts++;
-          const handle = startIntradayPlanScheduler(scope.ctx, {
+          const handle = startIntradayPlanScheduler(webPluginOperations, scope.ctx, {
             startImmediately: false,
             dispatch: (operation) => scope.run(operation),
             runAccount: async (accountId) => {
@@ -336,7 +338,7 @@ describe('plugin task resources', () => {
       calls = 0,
       cutoffs = 0;
     let scheduler: ReturnType<typeof startStrategyScheduler> | undefined;
-    const cutoff = startClosingReportScheduler(ctx, {
+    const cutoff = startClosingReportScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       runCutoff: async () => {
         cutoffs++;
@@ -349,7 +351,7 @@ describe('plugin task resources', () => {
         requires,
         start: (scope) => {
           starts++;
-          const handle = startStrategyScheduler(scope.ctx, {
+          const handle = startStrategyScheduler(webPluginOperations, scope.ctx, {
             startImmediately: false,
             dispatch: (operation) => scope.run(operation),
             run: async () => {

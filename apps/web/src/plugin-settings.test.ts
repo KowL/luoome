@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginConfigStore, ProviderRuntime } from '@luoome/adapters';
-import { createPluginExecutionPolicy } from '@luoome/tools';
+import { BUILTIN_PLUGIN_DEFAULTS, createPluginExecutionPolicy } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PluginSettingsStore } from './plugin-settings.js';
@@ -60,7 +60,7 @@ const deferred = () => {
 describe('Web plugin settings projection and conditional commands', () => {
   it('projects performance task resources and opt-in blockers while retaining shared queries', async () => {
     const { store, settings, runtime, command, context } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const id = 'task.snapshot-account-performance' as const;
     const preview = settings.preview(command(id, true), runtime);
     expect(preview.affected.map((row) => row.id)).toEqual([id]);
@@ -96,7 +96,7 @@ describe('Web plugin settings projection and conditional commands', () => {
   });
   it('projects notification delivery without owning report/watch resources or creating automatic replay', async () => {
     const { store, settings, runtime, command, context } = await setup();
-    let config = store.initialize();
+    let config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     config = store.set('business.report', true, config);
     store.set('business.watch-monitoring', true, config);
     let starts = 0,
@@ -149,7 +149,7 @@ describe('Web plugin settings projection and conditional commands', () => {
   });
   it('projects report generation independently from shared history and other plugin resources', async () => {
     const { store, settings, runtime, command, context } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const preview = settings.preview(command('business.report', true), runtime);
     expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual([
       'save_report',
@@ -177,7 +177,7 @@ describe('Web plugin settings projection and conditional commands', () => {
   });
   it('projects watch resources and their impact without disabling editable watch data or reports', async () => {
     const { store, settings, runtime, command, context } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const preview = settings.preview(command('business.watch-monitoring', true), runtime);
     expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual(
       [
@@ -216,7 +216,7 @@ describe('Web plugin settings projection and conditional commands', () => {
   });
   it('projects the analysis gate, model/data blockers and late calls without touching historical Advice', async () => {
     const { store, settings, runtime, command, policy } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const preview = settings.preview(command('business.analysis', true), runtime);
     expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual(
       ['analyze_stock', 'analyze_position', 'market_outlook', 'analyze_strategy_candidate'].sort(),
@@ -288,7 +288,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('keeps dependencies explicit and preserves fallback/history in impact previews', async () => {
     const { store, settings, runtime, command } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const provider = new ProviderRuntime(store);
     provider.wrap('market', ['sina', 'tencent'], () => ({ read: async () => 1 }));
     const task = settings.preview(command('task.strategy-schedules', true), {
@@ -324,7 +324,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('rejects stale previews across two hosts and deleted/recreated configurations', async () => {
     const { store, env, settings, runtime, command } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const other = new PluginSettingsStore(env);
     const first = settings.preview(command('business.strategy-execution', true), runtime);
     const second = other.preview(command('task.strategy-schedules', true), runtime);
@@ -332,7 +332,7 @@ describe('Web plugin settings projection and conditional commands', () => {
     expect(() => other.save(second.command, runtime)).toThrow('conflict');
     const stale = command('business.strategy-execution', false);
     rmSync(store.path);
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     expect(() => settings.save(stale, runtime)).toThrow('conflict');
     expect(other.read(runtime).host.id).not.toBe(settings.read(runtime).host.id);
     expect(settings.read(runtime).plugins.every((row) => row.runtime.gateApplied)).toBe(true);
@@ -340,7 +340,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('fails closed for invalid/unknown configs and strictly validates commands without overwriting', async () => {
     const { store, settings, runtime, command } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const valid = command('business.strategy-execution', true);
     for (const raw of [
       { ...valid, command: 'shell' },
@@ -363,7 +363,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('migrates missing entries disabled and distinguishes a committed config from application failure', async () => {
     const { store, settings, runtime } = await setup();
-    const config = store.initialize();
+    const config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     delete config.entries['task.strategy-schedules'];
     writeFileSync(store.path, JSON.stringify(config));
     const view = settings.read(runtime);
@@ -391,7 +391,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('observes real task drain, does not register twice on re-enable, and revokes saved policy/activation', async () => {
     const { store, settings, runtime, context, command, policy } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     settings.save(command('business.strategy-execution', true), runtime);
     settings.save(command('task.strategy-schedules', true), runtime);
     let scope: PluginTaskActivation | undefined;
@@ -445,7 +445,7 @@ describe('Web plugin settings projection and conditional commands', () => {
 
   it('keeps actual model activity visible after its parent is revoked until the model finishes', async () => {
     const { store, policy, settings, runtime } = await setup();
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const release = deferred();
     let valid = true;
     const active = policy.bind().runPlugin(

@@ -79,7 +79,8 @@ packages/
     notification/ 通知发送
     performance-task/ 账户绩效批量任务入口
     market-tasks/ 行情采集与同步任务
-  tools/       唯一工具目录、授权与 Zod → TS/MCP/OpenAI 派生
+    market-providers/ 提供者定义与就绪元数据（供数底座仍在 adapters）
+  tools/       插件统一装配、工具目录、授权与 Zod → TS/MCP/OpenAI 派生
   adapters/    行情 / LLM / 通知 / 券商 等外部依赖适配
   workflows/   内置编排：review / scan / diagnose / advise
   mcp/         MCP server，把 tool registry 暴露给外部

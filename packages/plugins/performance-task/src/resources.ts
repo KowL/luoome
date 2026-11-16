@@ -6,10 +6,21 @@ import {
   type ToolContext,
   type ToolResult,
 } from '@luoome/core';
-import {
-  type SnapshotAccountPerformanceOutputT,
-  snapshotAccountPerformanceWorkflow,
-} from '@luoome/workflows';
+export interface PerformanceTaskSummary {
+  readonly status: string;
+  readonly requestedAccounts: number;
+  readonly completedAccounts: number;
+  readonly partialAccounts: number;
+  readonly failedAccounts: number;
+  readonly createdSnapshots: number;
+  readonly reusedSnapshots: number;
+  readonly durationMs: number;
+}
+export interface PerformanceResourceOperations {
+  readonly performance: {
+    run(ctx: ToolContext, tradingDay: string): Promise<ToolResult<PerformanceTaskSummary>>;
+  };
+}
 
 export const PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS = 5 * 60_000;
 export const PORTFOLIO_PERFORMANCE_CLOSE_HOUR_SHANGHAI = 16;
@@ -24,7 +35,7 @@ export interface StartPortfolioPerformanceSchedulerOptions {
   readonly startImmediately?: boolean;
   readonly closeHourShanghai?: number;
   readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
-  readonly run?: (tradingDay: string) => Promise<ToolResult<SnapshotAccountPerformanceOutputT>>;
+  readonly run?: (tradingDay: string) => Promise<ToolResult<PerformanceTaskSummary>>;
 }
 
 const shanghaiHour = (date: Date): number =>
@@ -42,6 +53,7 @@ export const duePortfolioPerformanceTradingDay = (
 };
 
 export const startPortfolioPerformanceScheduler = (
+  operations: PerformanceResourceOperations,
   context: ToolContext,
   options: StartPortfolioPerformanceSchedulerOptions = {},
 ): PortfolioPerformanceSchedulerHandle => {
@@ -68,10 +80,7 @@ export const startPortfolioPerformanceScheduler = (
       if (!active()) throw new PluginExecutionDenied('plugin:task.snapshot-account-performance');
     },
   };
-  const run =
-    options.run ??
-    ((tradingDay: string) =>
-      snapshotAccountPerformanceWorkflow.run({ to: tradingDay, mode: 'scheduled' }, ctx));
+  const run = options.run ?? ((tradingDay: string) => operations.performance.run(ctx, tradingDay));
   let running = false;
   let lastAttemptedTradingDay: string | null = null;
 

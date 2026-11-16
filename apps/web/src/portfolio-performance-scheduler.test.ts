@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { buildTestContext } from '@luoome/tools/testing';
-
 import {
   duePortfolioPerformanceTradingDay,
   startPortfolioPerformanceScheduler,
-} from './portfolio-performance-scheduler.js';
+} from '@luoome/plugin-performance-task';
+import { buildTestContext } from '@luoome/tools/testing';
+import { webPluginOperations } from './plugin-operations.js';
 
 const output = (tradingDay: string) => ({
   runId: `run-${tradingDay}`,
@@ -35,7 +35,7 @@ describe('portfolio performance scheduler', () => {
       clock: () => new Date('2026-08-14T08:01:00.000Z'),
     });
     let calls = 0;
-    const scheduler = startPortfolioPerformanceScheduler(ctx, {
+    const scheduler = startPortfolioPerformanceScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
       run: async (tradingDay) => {
@@ -57,7 +57,7 @@ describe('portfolio performance scheduler', () => {
     });
     let calls = 0;
     let finish: (() => void) | undefined;
-    const scheduler = startPortfolioPerformanceScheduler(ctx, {
+    const scheduler = startPortfolioPerformanceScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
       run: (tradingDay) => {

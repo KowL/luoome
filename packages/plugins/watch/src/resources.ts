@@ -4,8 +4,16 @@ import {
   type ToolContext,
   type ToolResult,
 } from '@luoome/core';
-import { listAccountsTool } from '@luoome/tools';
-import { type IntradayTradingPlanWatchOutputT, intradayWatchWorkflow } from '@luoome/workflows';
+import { listAccountsTool } from '@luoome/toolkit';
+export interface WatchAccountSummary {
+  readonly status: string;
+  readonly errors: readonly unknown[];
+}
+export interface WatchResourceOperations {
+  readonly watch: {
+    runAccount(ctx: ToolContext, accountId: string): Promise<ToolResult<WatchAccountSummary>>;
+  };
+}
 
 export const INTRADAY_PLAN_SCHEDULER_INTERVAL_MS = 60_000;
 
@@ -20,10 +28,11 @@ export interface StartIntradayPlanSchedulerOptions {
   readonly intervalMs?: number;
   readonly startImmediately?: boolean;
   readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
-  readonly runAccount?: (accountId: string) => Promise<ToolResult<IntradayTradingPlanWatchOutputT>>;
+  readonly runAccount?: (accountId: string) => Promise<ToolResult<WatchAccountSummary>>;
 }
 
 export const startIntradayPlanScheduler = (
+  operations: WatchResourceOperations,
   context: ToolContext,
   options: StartIntradayPlanSchedulerOptions = {},
 ): IntradayPlanSchedulerHandle => {
@@ -51,19 +60,7 @@ export const startIntradayPlanScheduler = (
     throw new Error(`盘中计划调度间隔必须为正数: ${intervalMs}`);
   }
   const runAccount =
-    options.runAccount ??
-    (async (accountId: string) => {
-      const result = await intradayWatchWorkflow.run({ accountId }, ctx);
-      if (!result.ok) return result;
-      const watch = result.data.tradingPlanWatch;
-      if (watch === undefined) {
-        return {
-          ok: false as const,
-          error: { kind: 'internal' as const, cause: 'intraday-watch 未返回交易计划结果' },
-        };
-      }
-      return { ok: true as const, data: watch };
-    });
+    options.runAccount ?? ((accountId: string) => operations.watch.runAccount(ctx, accountId));
   let running = false;
 
   const runTick = async (): Promise<void> => {

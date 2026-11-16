@@ -5,15 +5,10 @@ import {
   type ToolContext,
 } from '@luoome/core';
 
-export interface PluginTaskActivation {
-  readonly ctx: ToolContext;
-  run(operation: () => Promise<void>): Promise<void>;
-}
-export interface PluginTaskDefinition {
-  readonly id: ManagedPluginId;
-  readonly requires?: readonly ManagedPluginId[];
-  start(activation: PluginTaskActivation): { stop(): void };
-}
+import type { PluginTaskDefinition } from '@luoome/tools';
+
+export type { PluginTaskActivation, PluginTaskDefinition } from '@luoome/tools';
+
 interface Activation {
   readonly permits: readonly PluginPermit[];
   readonly abort: AbortController;

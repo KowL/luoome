@@ -1,3 +1,4 @@
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { z } from 'zod';
 // apps/web 闸口矩阵测试（bun runner：server.ts 顶层 import @luoome/db → bun:sqlite，
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
@@ -1250,7 +1251,7 @@ describe('行情源设置 API', () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-sources-'));
     try {
       const plugins = new PluginConfigStore(join(dir, 'plugins.json'));
-      plugins.set('source.eastmoney', true, plugins.initialize());
+      plugins.set('source.eastmoney', true, plugins.initialize(BUILTIN_PLUGIN_DEFAULTS));
       const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
       const eastmoney = new EastmoneySource({
         fetchImpl: sharedFetch as unknown as typeof fetch,
@@ -3108,7 +3109,7 @@ describe('plugin settings HTTP and Agent revocation', () => {
   it('switches the performance task through Web settings and preserves history and on-demand queries', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-performance-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     try {
       const executionPolicy = createPluginExecutionPolicy(
         store,
@@ -3200,7 +3201,7 @@ describe('plugin settings HTTP and Agent revocation', () => {
   it('controls Feishu test through the notification plugin without replacing the host channel or affecting reports', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-notification-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.set('business.report', true, store.initialize());
+    store.set('business.report', true, store.initialize(BUILTIN_PLUGIN_DEFAULTS));
     try {
       const policy = createPluginExecutionPolicy(
         store,
@@ -3279,7 +3280,7 @@ describe('plugin settings HTTP and Agent revocation', () => {
   it('controls report creation through plugin settings while preserving history and render routes', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-report-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     try {
       const ctx = await buildTestContext({
         executionPolicy: createPluginExecutionPolicy(
@@ -3348,7 +3349,7 @@ describe('plugin settings HTTP and Agent revocation', () => {
   it('controls the watch run-once route while retaining history and feedback routes', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-watch-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     try {
       const ctx = await buildTestContext({
         executionPolicy: createPluginExecutionPolicy(

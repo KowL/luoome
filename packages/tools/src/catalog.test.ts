@@ -8,17 +8,25 @@ import { applicationToolRegistry, toolRegistry } from './registry.js';
 describe('typed tool catalog', () => {
   it('records P3 permissions, local computation dependencies and discovery baseline', () => {
     const baseline = {
-      tools: toolRegistry.toMCP(),
-      policy: Object.entries(toolCatalog).map(([name, entry]) => [
-        name,
-        entry.agent,
-        entry.tool.sideEffect,
-        entry.tool.requiredCapabilities,
-        entry.agent ? entry.dependencies : [],
-      ]),
+      tools: toolRegistry.toMCP().sort((a, b) => a.name.localeCompare(b.name)),
+      policy: Object.entries(toolCatalog)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, entry]) => [
+          name,
+          entry.agent,
+          entry.tool.sideEffect,
+          entry.tool.requiredCapabilities,
+          entry.agent ? entry.dependencies : [],
+        ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      'f0f5229106d1d829602ac92f565f17821b3466c9d09aa102728e01b47804bb29',
+      '51133b09f4e8cc34c9aba8272e75d09adc45daa8ffd04bd9e60c47c86bc88c4d',
+    );
+    const metadata = Object.entries(toolCatalog)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, { tool: _tool, ...entry }]) => [name, entry]);
+    expect(createHash('sha256').update(JSON.stringify(metadata)).digest('hex')).toBe(
+      '77834ced1e0ba21be3d5fe375fbe2e2ee95c8fd8e2cf7f827059032cccbfa7e4',
     );
     expect(toolCatalog.snapshot_account_performance.owner).toBe(
       'task.snapshot-account-performance',

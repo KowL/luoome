@@ -21,6 +21,11 @@
     "@luoome/workflows": "workspace:*",
     "hono": "^4.12.30",
     "lightweight-charts": "5.2.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@luoome/plugin-strategy": "workspace:*",
+    "@luoome/plugin-watch": "workspace:*",
+    "@luoome/plugin-report": "workspace:*",
+    "@luoome/plugin-performance-task": "workspace:*",
+    "@luoome/plugin-market-tasks": "workspace:*"
   }
 }

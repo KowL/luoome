@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  BUILTIN_PLUGINS,
   type PluginConfig,
   PluginConfigError,
   PluginConfigStore,
@@ -10,6 +9,8 @@ import {
 } from '@luoome/adapters';
 import { MANAGED_PLUGIN_IDS, type ManagedPluginId, type ToolContext } from '@luoome/core';
 import {
+  BUILTIN_PLUGIN_DEFAULTS,
+  BUILTIN_PLUGINS,
   type PluginRouteInventory,
   pluginContributions,
   pluginRouteDependency,
@@ -45,11 +46,8 @@ export class PluginSettingsStore {
     this.store = new PluginConfigStore(resolvePluginConfigPath(env));
   }
   private credentialReady(id: ManagedPluginId): boolean {
-    return id === 'source.tushare'
-      ? Boolean(this.env.TUSHARE_TOKEN?.trim())
-      : id === 'source.fuyao'
-        ? Boolean(this.env.FUYAO_API_KEY?.trim())
-        : true;
+    const credential = BUILTIN_PLUGINS[id].settings?.credentialEnv;
+    return credential === undefined || Boolean(this.env[credential]?.trim());
   }
   private project(
     config: PluginConfig | undefined,
@@ -77,26 +75,19 @@ export class PluginSettingsStore {
       for (const required of definition.requires)
         if (!enabled(required)) blockers.push(`需要启用${BUILTIN_PLUGINS[required].label}`);
       const owned = contributions.filter((item) => item.effect === 'owned');
-      const capabilities = [...new Set(owned.flatMap((item) => item.capabilities))];
-      if (
-        (id.startsWith('source.') ||
-          id === 'strategy.ai-insight' ||
-          id === 'task.strategy-schedules' ||
-          id === 'business.watch-monitoring' ||
-          capabilities.includes('external')) &&
-        !runtime.exposeExternal
-      )
+      const capabilities = [
+        ...(definition.settings?.requiredCapabilities ?? []),
+        ...owned.flatMap((item) => item.capabilities),
+      ];
+      if (capabilities.includes('external') && !runtime.exposeExternal)
         blockers.push('宿主未授权外部调用（external）');
-      if (
-        (id === 'task.strategy-schedules' || capabilities.includes('write')) &&
-        !runtime.exposeWrite
-      )
+      if (capabilities.includes('write') && !runtime.exposeWrite)
         blockers.push('宿主未授权写入（write）');
       if (
-        (id === 'strategy.ai-insight' || id === 'business.analysis') &&
+        definition.settings?.modelBlocker &&
         runtime.context.adapters.llm.configurationReady === false
       )
-        blockers.push(id === 'business.analysis' ? '分析模型尚未配置' : '解释模型尚未配置');
+        blockers.push(definition.settings.modelBlocker);
       if (!this.credentialReady(id)) blockers.push('提供者凭证尚未配置；请配置后重启宿主');
       const selected = routes.filter((route) =>
         [...route.candidates, ...route.dependencies].some((source) => id === `source.${source}`),
@@ -193,7 +184,7 @@ export class PluginSettingsStore {
       canManage: runtime.exposeWrite,
       host: { id: this.hostId, scope: 'current-web' as const },
       plugins: this.project(read.ok ? read.config : undefined, runtime),
-      baseline: this.store.baseline(),
+      baseline: this.store.baseline(BUILTIN_PLUGIN_DEFAULTS),
     };
   }
   private proposed(command: Command): PluginConfig {
@@ -205,7 +196,7 @@ export class PluginSettingsStore {
         version: 1,
         incarnation: '00000000-0000-4000-8000-000000000000',
         revision: 1,
-        entries: this.store.baseline(),
+        entries: this.store.baseline(BUILTIN_PLUGIN_DEFAULTS),
       };
     }
     if (!read.ok) throw new PluginConfigError('invalid');
@@ -252,38 +243,7 @@ export class PluginSettingsStore {
       notes: [
         '不会自动启用依赖；不会扩大 write、external 或 Agent 场景白名单。',
         '共享数据、历史策略、已有建议和报告保留。',
-        ...(id === 'strategy.ai-insight' ? ['关闭解释模型后，组合入口保留确定性事实。'] : []),
-        ...(id?.startsWith('source.')
-          ? ['来源关联操作属于可能影响；已授权的其它候选源仍可降级供数，实际资料门禁在调用时校验。']
-          : []),
-        ...(id === 'business.strategy-execution'
-          ? ['自动策略定时器随依赖停用；报告截止与补投保持独立。']
-          : []),
-        ...(id === 'business.watch-monitoring'
-          ? [
-              '停用后停止新的规则求值、触发和盯盘通知；关注列表、预警计划、历史触发与反馈保留，其它报告通知独立运行。已发出的请求只能收尾，无法撤回。',
-            ]
-          : []),
-        ...(id === 'task.snapshot-account-performance'
-          ? [
-              '停用后卸载账户绩效估值定时器，停止自动批量估值和任务工具；旧任务在下一安全点停止，排空前不注册新一代。历史快照与审计保留；账户和报告的按需绩效查询及其快照缓存继续沿用共享能力，其它插件不受影响。启用不自动开启行情源或补齐凭证，重跑按原指纹复用快照。',
-            ]
-          : []),
-        ...(id === 'business.notification'
-          ? [
-              '停用后停止所有新投递，包括报告、盯盘、log 降级和飞书连接测试；历史回执保留，报告生成、策略日循环及盯盘触发记录继续。通道复用宿主实例，无独立定时器或自动补发队列，重新启用不重放成功通知；已发出的请求仅记录实际回执，无法撤回。',
-            ]
-          : []),
-        ...(id === 'business.report'
-          ? [
-              '停用后停止新报告、截止补报和报告通知；历史报告仍可查询和渲染，策略日循环、盯盘与盘后数据采集独立运行。已发出的通知只记录实际回执，无法撤回。报告通知仍需宿主 external 授权。',
-            ]
-          : []),
-        ...(id === 'business.analysis'
-          ? [
-              '停用后拒绝新个股、持仓、市场及策略候选 Advice；历史建议仍可读取，既有策略运行与事实不受此开关影响。',
-            ]
-          : []),
+        ...(id === undefined ? [] : (BUILTIN_PLUGINS[id].settings?.notes ?? [])),
         '启停在下一受控安全点生效；已开始的短事务正常结束，旧请求可能仍在排空。',
       ],
     };
@@ -292,7 +252,7 @@ export class PluginSettingsStore {
     const command = PluginSettingsCommandSchema.parse(raw);
     const config =
       command.action === 'initialize'
-        ? this.store.initialize()
+        ? this.store.initialize(BUILTIN_PLUGIN_DEFAULTS)
         : command.action === 'migrate'
           ? this.store.migrate(command)
           : this.store.set(command.id, command.enabled, command);

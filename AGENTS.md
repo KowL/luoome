@@ -15,7 +15,7 @@
 | 副作用、鉴权与投资建议边界 | [docs/SECURITY.md](./docs/SECURITY.md) |
 | 命令和测试入口 | [package.json](./package.json) |
 
-不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/catalog.ts` 及其派生的 registry、MCP discovery 和 `luoome tools list --json` 为准。
+不要在本文件复制完整 tool 清单、测试数量或版本快照。运行时 tool 库存以 `packages/tools/src/catalog.ts` 的装配结果及其派生的 registry、MCP discovery 和 `luoome tools list --json` 为准。
 
 ## 开始修改前
 
@@ -36,6 +36,7 @@ workflows ──► tools                    db ──► core
 - `packages/core` 是纯领域层，零 IO，不反向依赖其它包。
 - `db` 与 `adapters` 可依赖 `core`，不可依赖 toolkit、插件、tools、workflows 或 surface。
 - 插件独立包放在 `packages/plugins/<name>/src`；只向共享底座依赖，跨插件组合留在 tools/Workflow。toolkit 不反向依赖插件，插件不导入 tools/workflows/surface。
+- 插件定义、工具贡献和资源工厂声明在所属包；宿主统一装配，资源的 Workflow 执行端口由宿主注入。具体入口见架构文档，不在 surface 手写第二份注册清单。
 - CLI、MCP、Web 统一通过 tools 使用业务能力，不复制领域逻辑。
 - Tool 的 input/output 由 Zod schema 定义，并派生 TypeScript、MCP 与 OpenAI schema。
 - Tool 对调用方永远返回 `ToolResult`；失败使用既有 `ToolError.kind`，不把异常泄漏为调用协议。
@@ -84,7 +85,7 @@ workflows ──► tools                    db ──► core
 
 - **Core entity**：schema、类型、不变量、导出和测试同步。
 - **Repository**：接口、drizzle、registry 接线和 contract tests 同步。
-- **Tool**：所属插件包或 toolkit 的 schema、实现、桶导出、catalog 的公开性与依赖声明、sideEffect、测试以及 Skill 的能力分类和示例同步。
+- **Tool**：所属插件包或 toolkit 的 schema、实现、桶导出、所属包贡献的公开性与依赖声明、sideEffect、测试以及 Skill 的能力分类和示例同步。
 - **Workflow**：实现、导出、CLI 发现和测试同步；`WorkflowToolMap` 与执行映射从 catalog 派生，不手写第二套 I/O 映射。
 - **API/Web**：服务端契约、前端调用、鉴权/Origin 行为、测试和浏览器验收同步。
 - **文档**：按 `docs/README.md` 分类；当前行为写入维护文档，阶段快照归入 `docs/archive/`。

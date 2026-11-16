@@ -316,13 +316,25 @@ export const myTool = defineTool({
 });
 ```
 
-在所属包的 `src/index.ts` 桶导出（新包也需接入 `packages/tools/src/index.ts` 聚合），并在 `packages/tools/src/catalog.ts` 增加唯一目录项：
+在所属包的 `src/index.ts` 桶导出，并在该包 `src/contributions.ts` 增加唯一贡献：
 
 ```ts
-import { myTool } from '@luoome/plugin-analysis';
-// toolCatalog 内的条目；key 必须与 myTool.name 一致。
+import { myTool } from './tools/my-tool.js';
+// 所属包 tools 贡献内的条目；key 必须与 myTool.name 一致。
 my_tool: { owner: 'business.analysis', execution: 'p3', tool: myTool, agent: true, dependencies: [] },
 ```
+
+包的 `src/plugin.ts` 通过 `tools` 引用该贡献集合；`definitions` 声明本包能力 ID、显示名、默认值、requires 和设置页就绪/影响元数据。
+`resources(operations)` 只返回惰性资源工厂，实际资源在 `start(scope)` 中创建；使用 `scope.ctx` 与 `scope.run`，停止时清除 timer。
+跨插件 Workflow 通过窄端口由宿主注入，插件不导入 tools/workflows，也不直接依赖其它插件。
+没有任务资源的包返回空资源集合，不能为开关虚构 timer 或启动回调。
+
+新增包接入 `packages/tools/src/builtin-plugins.ts` 的统一清单，并补齐宿主执行端口；
+有工具桶导出的新包还需在 `packages/tools/src/index.ts` re-export，该导出不另外注册工具。
+现有包新增工具或资源不再修改 Web 的注册数组。共享工具贡献写入 `toolkit/src/shared-contributions.ts`，
+跨功能应用入口的贡献写入 `tools/src/application-contributions.ts`。
+初始化配置使用 `store.initialize(BUILTIN_PLUGIN_DEFAULTS)`，默认值由包定义派生；adapter 不引用插件包。
+资源 requires 从所属定义派生，启用不自动启用依赖，停用/排空保持原 PluginTasks 契约。
 
 `agent: true` 进入公共候选库存，并须声明必需依赖；`agent: false` 仅保留给 Application Service
 与 Workflow。公共 registry、CLI/Web 查询表、Web 公共工具名字表、MCP 依赖表及 Workflow

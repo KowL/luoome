@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { TEST_ACCOUNTS } from '@luoome/adapters/testing';
+import { isIntradayPlanSession, startIntradayPlanScheduler } from '@luoome/plugin-watch';
 import { buildTestContext } from '@luoome/tools/testing';
-
-import { isIntradayPlanSession, startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
+import { webPluginOperations } from './plugin-operations.js';
 
 const shanghai = (date: string, time: string): Date => new Date(`${date}T${time}+08:00`);
 
@@ -31,7 +31,7 @@ describe('盘中交易计划调度', () => {
     const firstCall = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const scheduler = startIntradayPlanScheduler(ctx, {
+    const scheduler = startIntradayPlanScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       runAccount: async (accountId) => {
         entered?.();
@@ -74,7 +74,7 @@ describe('盘中交易计划调度', () => {
     const firstPending = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    const scheduler = startIntradayPlanScheduler(ctx, {
+    const scheduler = startIntradayPlanScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       runAccount: async (accountId) => {
         seen.push(accountId);

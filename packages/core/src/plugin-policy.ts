@@ -32,6 +32,7 @@ export const MANAGED_PLUGIN_IDS = [
   ...TASK_PLUGIN_IDS,
 ] as const;
 export type ManagedPluginId = (typeof MANAGED_PLUGIN_IDS)[number];
+export type PluginConfigurationDefaults = Readonly<Record<ManagedPluginId, boolean>>;
 export interface DataExecutionScopeLike {
   run<T>(
     operation: (validate: () => void) => Promise<T>,

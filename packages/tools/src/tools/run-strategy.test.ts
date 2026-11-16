@@ -21,6 +21,7 @@ import {
   appendChatMessageTool,
   createChatSessionTool,
 } from '@luoome/toolkit/tools/chat-session.js';
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { describe, expect, it, vi } from 'vitest';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
@@ -1138,7 +1139,7 @@ describe('controlled strategy execution', () => {
   const setup = async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-p3-execution-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize();
+    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     const set = (enabled: boolean) => {
       const read = store.read();
       if (!read.ok) throw new Error('missing');

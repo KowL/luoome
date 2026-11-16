@@ -1,16 +1,4 @@
-import {
-  dateInShanghai,
-  PluginExecutionDenied,
-  type ToolContext,
-  type ToolResult,
-} from '@luoome/core';
-import {
-  type ClosingReportCutoffOutputT,
-  closingReportCutoffWorkflow,
-  previousTradingDay,
-  type RunStrategySchedulesOutputT,
-  runStrategySchedulesOperation,
-} from '@luoome/workflows';
+import type { ToolContext, ToolResult } from '@luoome/core';
 
 export const STRATEGY_SCHEDULER_INTERVAL_MS = 60_000;
 /** 单次 tick 处理同一生产日的全部到期 Strategy（进程内互斥）。 */
@@ -62,6 +50,22 @@ export const strategySchedulerTuningFromEnv = (
   ),
 });
 
+export interface StrategyScheduleSummary {
+  readonly items: readonly unknown[];
+  readonly ran: number;
+  readonly partial: number;
+  readonly skipped: number;
+  readonly failed: number;
+}
+export interface StrategyResourceOperations {
+  readonly strategy: {
+    run(
+      ctx: ToolContext,
+      input: { limit: number; concurrency: number; deferReports: true },
+    ): Promise<ToolResult<StrategyScheduleSummary>>;
+  };
+}
+
 export interface StrategySchedulerHandle {
   readonly tick: () => Promise<void>;
   readonly stop: () => void;
@@ -72,13 +76,13 @@ export interface StartStrategySchedulerOptions {
   readonly startImmediately?: boolean;
   readonly owner?: string;
   readonly tuning?: StrategySchedulerTuning;
-  readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT>>;
+  readonly run?: () => Promise<ToolResult<StrategyScheduleSummary>>;
   readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
-  readonly runCutoff?: () => Promise<ToolResult<ClosingReportCutoffOutputT>>;
 }
 
 /** Web/luoome start 进程内的策略调度 tick；同进程防重由 workflow 内 Set 保证。 */
 export const startStrategyScheduler = (
+  operations: StrategyResourceOperations,
   ctx: ToolContext,
   options: StartStrategySchedulerOptions = {},
 ): StrategySchedulerHandle => {
@@ -90,14 +94,11 @@ export const startStrategyScheduler = (
   const run =
     options.run ??
     (() =>
-      runStrategySchedulesOperation.run(
-        {
-          limit: STRATEGY_SCHEDULER_BATCH_LIMIT,
-          concurrency: tuning.concurrency,
-          deferReports: true,
-        },
-        ctx,
-      ));
+      operations.strategy.run(ctx, {
+        limit: STRATEGY_SCHEDULER_BATCH_LIMIT,
+        concurrency: tuning.concurrency,
+        deferReports: true,
+      }));
   let stopped = false;
   let running = false;
 
@@ -134,81 +135,6 @@ export const startStrategyScheduler = (
     void tick();
   }
 
-  return {
-    tick,
-    stop: () => {
-      stopped = true;
-      clearInterval(timer);
-    },
-  };
-};
-
-export const startClosingReportScheduler = (
-  context: ToolContext,
-  options: Pick<
-    StartStrategySchedulerOptions,
-    'intervalMs' | 'startImmediately' | 'runCutoff' | 'dispatch'
-  > = {},
-): { tick(): Promise<void>; stop(): void } => {
-  const intervalMs = options.intervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS;
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0)
-    throw new Error('invalid closing report interval');
-  let stopped = false;
-  const policy = context.executionPolicy?.bind();
-  const admission = policy?.acquire('business.report');
-  const active = () => {
-    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
-    try {
-      context.executionGuard?.();
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  const ctx: ToolContext = {
-    ...context,
-    ...(policy === undefined ? {} : { executionPolicy: policy }),
-    executionGuard: () => {
-      if (!active()) throw new PluginExecutionDenied('plugin:business.report');
-    },
-  };
-  const runCutoff =
-    options.runCutoff ??
-    (async () => {
-      const priorDate = previousTradingDay(dateInShanghai(ctx.clock()));
-      const recovered = await closingReportCutoffWorkflow.run({ date: priorDate }, ctx);
-      if (!recovered.ok || recovered.data.failed.length > 0)
-        ctx.logger.error('前一交易日收盘报告补投失败', {
-          date: priorDate,
-          error: recovered.ok ? recovered.data.failed : recovered.error,
-        });
-      ctx.executionGuard?.();
-      return closingReportCutoffWorkflow.run({}, ctx);
-    });
-  let cutoffRunning = false;
-
-  const runTick = async (): Promise<void> => {
-    if (!active() || cutoffRunning) return;
-    cutoffRunning = true;
-    try {
-      const result = await runCutoff();
-      if (!result.ok || result.data.failed.length > 0)
-        ctx.logger.error('收盘报告截止 tick 失败', {
-          error: result.ok ? result.data.failed : result.error,
-        });
-    } catch (error) {
-      ctx.logger.error('收盘报告截止 tick 异常', {
-        cause: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      cutoffRunning = false;
-    }
-  };
-
-  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
-  const timer = setInterval(() => void tick(), intervalMs);
-  timer.unref();
-  if (options.startImmediately !== false) void tick();
   return {
     tick,
     stop: () => {

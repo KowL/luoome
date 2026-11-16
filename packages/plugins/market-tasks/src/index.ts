@@ -1,3 +1,5 @@
+export * from './plugin.js';
+export * from './resources.js';
 export * from './tools/market-snapshot-batch.js';
 export * from './tools/sync-daily-bars.js';
 export * from './tools/sync-limit-up-board-history.js';

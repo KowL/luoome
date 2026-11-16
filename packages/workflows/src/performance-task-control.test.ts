@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ManagedPluginId, SideEffect, ToolContext } from '@luoome/core';
 import {
   auditPortfolioPerformanceSnapshotsTool,
+  BUILTIN_PLUGIN_DEFAULTS,
   createPluginExecutionPolicy,
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
@@ -33,7 +34,7 @@ const setup = async () => {
   const home = mkdtempSync(join(tmpdir(), 'luoome-performance-task-'));
   roots.push(home);
   const store = new PluginConfigStore(join(home, 'plugins.json'));
-  let config = store.initialize();
+  let config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
   for (const plugin of ['source.sina', 'business.report', 'business.watch-monitoring'] as const)
     config = store.set(plugin, true, config);
   const policy = createPluginExecutionPolicy(

@@ -1,4 +1,3 @@
-import { BUILTIN_PLUGINS } from '@luoome/adapters';
 import { PluginSettingsStore } from './plugin-settings.js';
 import { PluginTasks } from './plugin-tasks.js';
 // @luoome/web —— Web 服务组装根（docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §7.1）。
@@ -11,9 +10,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { ToolContext, ToolResult } from '@luoome/core';
-import { toolRegistry } from '@luoome/tools';
+import { createBuiltinPluginResources, toolRegistry } from '@luoome/tools';
 import { type Context, Hono } from 'hono';
-
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { buildWebContext, resolveDbPath, type WebSourceSet } from './context.js';
@@ -21,11 +19,9 @@ import { createDshChatRuntimeFromStore } from './dsh/chat-runtime.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { appServiceTool } from './http/app-service.js';
 import { jsonResult, notFound, parseJsonObject, permissionDenied } from './http/result.js';
-import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
-import { startMarketBatchScheduler } from './market-batch-scheduler.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { McpSettingsStore } from './mcp-settings.js';
-import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
+import { webPluginOperations } from './plugin-operations.js';
 import { startPostMarketScheduler } from './post-market-scheduler.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
 import { registerChatRoutes } from './routes/chat.js';
@@ -42,7 +38,6 @@ import { registerStrategyRoutes } from './routes/strategy.js';
 import { registerToolGatewayRoutes } from './routes/tool-gateway.js';
 import type { WebRouteDeps } from './routes/types.js';
 import { registerWatchlistAlertRoutes } from './routes/watchlist-alert.js';
-import { startClosingReportScheduler, startStrategyScheduler } from './strategy-scheduler.js';
 
 export type { WebSourceSet };
 export { buildWebContext, resolveDbPath };
@@ -419,50 +414,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   });
   const schedulersEnabled = exposeWrite && exposeExternal;
   const tasks = schedulersEnabled
-    ? new PluginTasks(ctx, [
-        {
-          id: 'task.strategy-schedules',
-          requires: BUILTIN_PLUGINS['task.strategy-schedules'].requires,
-          start: (scope) =>
-            startStrategyScheduler(scope.ctx, {
-              startImmediately: false,
-              dispatch: (operation) => scope.run(operation),
-            }),
-        },
-        {
-          id: 'task.collect-market-snapshot',
-          start: (scope) =>
-            startMarketBatchScheduler(scope.ctx, {
-              enabled: true,
-              startImmediately: false,
-              dispatch: (operation) => scope.run(operation),
-            }),
-        },
-        {
-          id: 'task.snapshot-account-performance',
-          start: (scope) =>
-            startPortfolioPerformanceScheduler(scope.ctx, {
-              startImmediately: false,
-              dispatch: (operation) => scope.run(operation),
-            }),
-        },
-        {
-          id: 'business.report',
-          start: (scope) =>
-            startClosingReportScheduler(scope.ctx, {
-              startImmediately: false,
-              dispatch: (operation) => scope.run(operation),
-            }),
-        },
-        {
-          id: 'business.watch-monitoring',
-          start: (scope) =>
-            startIntradayPlanScheduler(scope.ctx, {
-              startImmediately: false,
-              dispatch: (operation) => scope.run(operation),
-            }),
-        },
-      ])
+    ? new PluginTasks(ctx, createBuiltinPluginResources(webPluginOperations))
     : undefined;
   pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled

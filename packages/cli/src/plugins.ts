@@ -1,11 +1,10 @@
 import {
-  BUILTIN_PLUGINS,
   PluginConfigError,
   PluginConfigStore,
   PluginConfigVersionSchema,
   resolvePluginConfigPath,
 } from '@luoome/adapters';
-import { pluginContributions } from '@luoome/tools';
+import { BUILTIN_PLUGIN_DEFAULTS, BUILTIN_PLUGINS, pluginContributions } from '@luoome/tools';
 
 export const cmdPlugins = (
   sub: string | undefined,
@@ -32,7 +31,11 @@ export const cmdPlugins = (
       return 0;
     }
     if (sub === 'init' && !flags.has('apply')) {
-      print({ baseline: store.baseline(), configuration: store.read(), committed: false });
+      print({
+        baseline: store.baseline(BUILTIN_PLUGIN_DEFAULTS),
+        configuration: store.read(),
+        committed: false,
+      });
       return 0;
     }
     if (sub === 'migrate' && !flags.has('apply')) {
@@ -47,7 +50,7 @@ export const cmdPlugins = (
       return 1;
     }
     if (sub === 'init') {
-      print({ config: store.initialize(), committed: true });
+      print({ config: store.initialize(BUILTIN_PLUGIN_DEFAULTS), committed: true });
       return 0;
     }
     const expected = PluginConfigVersionSchema.parse({

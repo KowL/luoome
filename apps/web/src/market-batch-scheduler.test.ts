@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { MarketSnapshotBatch } from '@luoome/core';
-import { buildTestContext } from '@luoome/tools/testing';
-
 import {
   isMarketBatchSession,
   type StartMarketBatchSchedulerOptions,
   startMarketBatchScheduler,
-} from './market-batch-scheduler.js';
+} from '@luoome/plugin-market-tasks';
+import { buildTestContext } from '@luoome/tools/testing';
 
 const shanghai = (time: string): Date => new Date(`2026-09-28T${time}+08:00`);
 

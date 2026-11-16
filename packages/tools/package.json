@@ -26,7 +26,8 @@
     "@luoome/plugin-report": "workspace:*",
     "@luoome/plugin-notification": "workspace:*",
     "@luoome/plugin-performance-task": "workspace:*",
-    "@luoome/plugin-market-tasks": "workspace:*"
+    "@luoome/plugin-market-tasks": "workspace:*",
+    "@luoome/plugin-market-providers": "workspace:*"
   },
   "devDependencies": {
     "apache-arrow": "21.2.0",

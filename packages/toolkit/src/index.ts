@@ -1,4 +1,6 @@
 export * from './define-tool.js';
+export * from './plugin.js';
+export * from './shared-contributions.js';
 export * from './tools/account-facts.js';
 export * from './tools/add-holding.js';
 export * from './tools/add-trade.js';

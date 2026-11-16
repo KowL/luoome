@@ -137,8 +137,9 @@ toolkit 不导入插件或聚合目录，插件不导入 tools/workflows/surface
 
 ### 独立插件包与共享底座
 
-`packages/plugins/<name>/package.json` 定义独立包，`src/index.ts` 导出该包的工具，`src/tools/` 和
-`src/internal/` 存放实现。所有包由根 workspace 的 `packages/plugins/*` 发现；类型检查和构建直接读取
+`packages/plugins/<name>/package.json` 定义独立包，`src/index.ts` 导出该包工具与插件描述，`src/tools/` 和
+`src/internal/` 存放实现。`src/plugin.ts` 收拢 definitions、工具贡献和惰性资源工厂；
+`src/contributions.ts` 声明该包工具的 owner、权限、公共性、依赖和模式，`src/resources.ts` 实现定时资源。所有包由根 workspace 的 `packages/plugins/*` 发现；类型检查和构建直接读取
 workspace 配置，不依赖固定目录深度。独立包可用自己的 `typecheck` 脚本检查；Vitest 从根发现全部测试。
 
 | 包 | 迁入实现 | 保留的执行控制 |
@@ -150,6 +151,7 @@ workspace 配置，不依赖固定目录深度。独立包可用自己的 `typec
 | `@luoome/plugin-notification` | 通用通知发送 | `business.notification` |
 | `@luoome/plugin-performance-task` | 批量账户估值受控工具入口 | `task.snapshot-account-performance` |
 | `@luoome/plugin-market-tasks` | 盘中快照、日线/行情/目录/dump/板块历史采集 | 各 task 原有独立开关 |
+| `@luoome/plugin-market-providers` | 提供者定义、默认值、就绪与影响元数据；供数实现保留在 adapters | 各 source 原有独立开关 |
 
 包是代码归属，开关仍按能力 ID 管理；一个包内的多个 ID 不合并启停。
 `toolkit` 保留 defineTool/ToolResult、历史和本地查询、账本/持仓操作、共享行情解析/指标/事实投影、
@@ -157,12 +159,23 @@ workspace 配置，不依赖固定目录深度。独立包可用自己的 `typec
 混合模块已经拆开：策略窗口事实不依赖 AI 洞察插件，已发布行情快照与盯盘历史不依赖新采集/求值，
 按需绩效不依赖批量任务。源路由、缓存、请求协调器与 ProviderRuntime 仍在 adapters；持久化仍在 db。
 
-`packages/tools/src/catalog.ts` 继续是工具库存、公共性、依赖和 owner 的唯一显式定义；
-聚合入口只引用 toolkit 和插件导出的同一工具实例，WorkflowToolMap/registry/MCP/Agent 从目录派生。
-插件包不维护第二份目录，也不自动进入场景白名单。
+`packages/tools/src/builtin-plugins.ts` 是内置包的统一装配清单，从各包描述派生 `BUILTIN_PLUGINS`、
+`BUILTIN_PLUGIN_DEFAULTS`、工具贡献集合和资源集合。装配时检查插件定义完整性、重复 ID 与依赖环；
+工具装配检查重复名和执行对象名字，资源必须归属声明它的包。共享工具贡献在 toolkit，跨功能应用贡献在 tools。
+`packages/tools/src/catalog.ts` 合并这些唯一来源，按工具名排序；不再手写业务插件条目。
+WorkflowToolMap/registry/MCP/Agent 继续从装配目录派生，工具名称、原始 schema、副作用、公共性、
+依赖、模式与 owner 保持一致，插件不会自动进入场景白名单。
 
-跨功能 Workflow 留在 workflows，Web 定时器与 PluginTasks 留在宿主；它们需要组合多个插件、
-跟踪完整运行并统一排空。插件包加载时只定义工具，不注册 timer、不启动 IO。
+配置 adapter 只处理 core 中稳定的 ID 协议与持久化，不导入插件定义。初始化须显式传入宿主派生的默认值；
+默认仅开启原有策略 AI 洞察，source/task/其它业务项继续默认关闭。迁移新增项仍一律关闭，不借包默认值自动启用。
+管理页按定义中的 settings 元数据投影能力、模型/凭证就绪和影响说明，不维护另一套插件 ID 分支。
+
+跨功能 Workflow 留在 workflows，Web 只在 write + external 双闸口下使用
+`createBuiltinPluginResources(webPluginOperations)`，由 PluginTasks 统一管理。五类受控 timer 的实现与注册在各插件包，
+通过上下文及窄执行端口调用宿主绑定的 Workflow；插件不反向导入 workflows/tools。
+宿主端口只组合实际 Workflow，例如报告补投仍先处理上一交易日，再处理当日；不缓存跨世代上下文。
+跨任务的盘后数据组合调度仍由宿主负责，每个采集步骤分别校验原 task 开关。
+读取插件描述和生成资源清单均不注册 timer、不执行 Workflow、不启动 IO，激活后才创建资源。
 旧 incarnation/epoch、绑定许可、immediate 写事务 guard、ProviderRuntime 缓存世代、通知可选作用域、
 停用卸载/旧工作排空后重建等机制沿用。关闭执行插件保留历史和共享查询，重开不恢复旧许可或重复注册资源。
 代码拆包不提供任意第三方程序安装、进程隔离或动态卸载模块；Web 的运行/排空状态仍表达实际任务与调用。
@@ -952,9 +965,9 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 
 ### 7.1 工具目录与公共 Agent 库存
 
-`packages/tools/src/catalog.ts` 是工具库存的唯一显式定义：按实际工具名关联 tool 对象，
-声明是否属于公共 Agent 候选工具，以及公共工具所需的模型、行情 capability、资讯或 Vault
-依赖。Zod schema 与业务实现仍定义在各 tool 文件中。
+`packages/tools/src/catalog.ts` 是完整工具库存的统一装配出口：从插件、toolkit 和应用的唯一贡献定义
+关联实际 tool 对象，保留公共性、权限、模型/行情 capability/资讯/Vault 依赖。贡献声明与实现按归属放置，
+不复制另一套名字和 I/O 映射。Zod schema 与业务实现仍定义在各 tool 文件中。
 
 - `toolRegistry` 从 `agent: true` 条目派生，供 MCP、OpenAI schema 和公共 Web 路由使用。
 - `applicationToolRegistry` 从完整目录派生，替代 CLI/Web 对包导出的运行时扫描；专用路由与调用方继续负责原有授权。
@@ -1327,7 +1340,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ### 13.1 加新 tool
 
 1. 在所属 `plugins/<name>/src/tools/`（业务插件）或 `toolkit/src/tools/`（共享能力）用 `defineTool` 定义
-2. 桶导出并加入唯一 `toolCatalog`，由其派生 `toolRegistry`
+2. 桶导出并加入所属包的唯一工具贡献；宿主自动合并为 `toolCatalog`，再派生 `toolRegistry`
 3. 加单元测试 + 集成测试
 4. 自动获得 MCP / OpenAI / OpenAPI / CLI / Web 暴露
 

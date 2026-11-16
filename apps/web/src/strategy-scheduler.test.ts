@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import type { ToolContext } from '@luoome/core';
+import { startClosingReportScheduler } from '@luoome/plugin-report';
+import { startStrategyScheduler, strategySchedulerTuningFromEnv } from '@luoome/plugin-strategy';
 import { buildTestContext } from '@luoome/tools/testing';
 import { type RunStrategySchedulesOutputT, runStrategySchedulesOperation } from '@luoome/workflows';
-
-import {
-  startClosingReportScheduler,
-  startStrategyScheduler,
-  strategySchedulerTuningFromEnv,
-} from './strategy-scheduler.js';
+import { webPluginOperations } from './plugin-operations.js';
 
 const emptyResult = (): RunStrategySchedulesOutputT => ({
   items: [],
@@ -45,7 +42,7 @@ describe('strategy scheduler', () => {
   it('主动 tick，并在 stop 后不再运行', async () => {
     const ctx = await buildTestContext();
     let calls = 0;
-    const scheduler = startStrategyScheduler(ctx, {
+    const scheduler = startStrategyScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
       run: async () => {
@@ -65,7 +62,7 @@ describe('strategy scheduler', () => {
     const ctx = await buildTestContext();
     let calls = 0;
     let finish: (() => void) | undefined;
-    const scheduler = startStrategyScheduler(ctx, {
+    const scheduler = startStrategyScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
       run: () => {
@@ -88,7 +85,7 @@ describe('strategy scheduler', () => {
     const ctx = await buildTestContext();
     let finish: (() => void) | undefined;
     let cutoffCalls = 0;
-    const scheduler = startStrategyScheduler(ctx, {
+    const scheduler = startStrategyScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
       run: () =>
@@ -96,7 +93,7 @@ describe('strategy scheduler', () => {
           finish = () => resolve({ ok: true, data: emptyResult() });
         }),
     });
-    const cutoff = startClosingReportScheduler(ctx, {
+    const cutoff = startClosingReportScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       runCutoff: async () => {
         cutoffCalls += 1;
@@ -152,7 +149,7 @@ describe('strategy scheduler', () => {
 
     now = new Date('2026-08-11T02:00:00.000Z');
     channelFailed = false;
-    const scheduler = startClosingReportScheduler(ctx, {
+    const scheduler = startClosingReportScheduler(webPluginOperations, ctx, {
       intervalMs: 60_000,
       startImmediately: false,
     });

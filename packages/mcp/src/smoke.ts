@@ -8,6 +8,7 @@ import { PluginConfigStore } from '@luoome/adapters';
 import { TEST_ACCOUNT, testAdviceFor } from '@luoome/adapters/testing';
 import { money, stockCode, strategyDefinitionHash } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -61,7 +62,7 @@ const data = (result: Awaited<ReturnType<Client['callTool']>>) => {
 
 try {
   const home = join(root, 'local');
-  new PluginConfigStore(join(home, 'plugins.json')).initialize();
+  new PluginConfigStore(join(home, 'plugins.json')).initialize(BUILTIN_PLUGIN_DEFAULTS);
   const seed = createDrizzleRepos(join(home, 'luoome.db'));
   await seed.repos.stock.save({
     id: '000001.SZ',
@@ -257,7 +258,7 @@ try {
 
   const enableSource = (home: string) => {
     const store = new PluginConfigStore(join(home, 'plugins.json'));
-    const config = store.initialize();
+    const config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
     return store.set('source.eastmoney', true, store.set('source.sina', true, config));
   };
   const marketHome = join(root, 'market');

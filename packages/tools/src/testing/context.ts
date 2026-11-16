@@ -32,6 +32,7 @@ import type {
 } from '@luoome/core';
 import { createMemoryRepositories, seedData } from '@luoome/db/memory';
 import { saveDecisionReviewTool } from '@luoome/toolkit/tools/decision-review.js';
+import { BUILTIN_PLUGIN_DEFAULTS } from '../builtin-plugins.js';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
 
 export interface BuildTestContextOptions {
@@ -74,7 +75,7 @@ export const createTestPluginControl = (home: string) => {
   return {
     store,
     initial: (() => {
-      let config = store.initialize();
+      let config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
       for (const id of [
         'business.strategy-execution',
         'business.analysis',

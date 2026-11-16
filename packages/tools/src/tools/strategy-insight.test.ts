@@ -6,6 +6,7 @@ import { money, type StrategyDslV1, strategyDefinitionHash, type ToolContext } f
 import { createStrategyExplainer } from '@luoome/plugin-strategy/internal/strategy-explainer.js';
 import { generateStrategyInsightTool } from '@luoome/plugin-strategy/tools/strategy-insight.js';
 import { getStrategyInsightFactsTool } from '@luoome/toolkit/tools/strategy-insight.js';
+import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
@@ -336,7 +337,7 @@ const pluginStore = () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-insight-policy-'));
   pluginRoots.push(root);
   const store = new PluginConfigStore(join(root, 'plugins.json'));
-  return { store, initial: store.initialize() };
+  return { store, initial: store.initialize(BUILTIN_PLUGIN_DEFAULTS) };
 };
 const validNarrative = {
   headline: '事实解释',
@@ -539,7 +540,7 @@ it('unconfigured models are not invoked and recovery cannot revive an old bound 
     await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
   ).toMatchObject({ ok: true, data: { degradation: { reason: 'dependency_not_ready' } } });
   rmSync(store.path);
-  store.initialize();
+  store.initialize(BUILTIN_PLUGIN_DEFAULTS);
   expect(
     await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
   ).toMatchObject({ ok: true, data: { degradation: { reason: 'activation_revoked' } } });
