@@ -240,7 +240,7 @@ describe('run-strategy-schedules workflow', () => {
   });
 });
 
-it.each(['business.report', 'business.notification'] as const)(
+it.each(['business.report', 'business.notification', 'task.snapshot-account-performance'] as const)(
   '%s shutdown preserves the actual strategy daily cycle, published facts and schedule progress',
   async (plugin) => {
     const root = mkdtempSync(join(tmpdir(), 'luoome-report-strategy-'));
@@ -259,7 +259,8 @@ it.each(['business.report', 'business.notification'] as const)(
       if (plugin === 'business.report') expect(await ctx.repos.report.list()).toEqual([]);
       else {
         expect((await ctx.repos.report.list()).length).toBeGreaterThan(0);
-        expect(await ctx.repos.notification.listRecent()).toEqual([]);
+        if (plugin === 'business.notification')
+          expect(await ctx.repos.notification.listRecent()).toEqual([]);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -2520,7 +2520,7 @@ export const createDrizzleRepos = (
     trade: new DrizzleTradeRepository(db),
     portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),
     portfolioCorporateAction: new DrizzlePortfolioCorporateActionRepository(db),
-    portfolioPerformanceSnapshot: new DrizzlePortfolioPerformanceSnapshotRepository(db),
+    portfolioPerformanceSnapshot: new DrizzlePortfolioPerformanceSnapshotRepository(db, writes),
     advice: new DrizzleAdviceRepository(db, writes),
     tradingPlan: new DrizzleTradingPlanRepository(db),
     report: new DrizzleReportRepository(db, writes),

@@ -32,6 +32,7 @@ const setup = async () => {
       | 'business.notification'
       | 'business.watch-monitoring'
       | 'task.strategy-schedules'
+      | 'task.snapshot-account-performance'
       | 'strategy.ai-insight'
       | 'source.sina',
     enabled: boolean,
@@ -57,6 +58,42 @@ const deferred = () => {
 };
 
 describe('Web plugin settings projection and conditional commands', () => {
+  it('projects performance task resources and opt-in blockers while retaining shared queries', async () => {
+    const { store, settings, runtime, command, context } = await setup();
+    store.initialize();
+    const id = 'task.snapshot-account-performance' as const;
+    const preview = settings.preview(command(id, true), runtime);
+    expect(preview.affected.map((row) => row.id)).toEqual([id]);
+    expect(preview.affected[0]?.contributions.map((item) => item.name)).toEqual([
+      'snapshot_account_performance',
+    ]);
+    expect(preview.notes.join(' ')).toContain('按需绩效查询');
+    expect(
+      settings.preview(command(id, true), { ...runtime, exposeWrite: false }).affected[0]?.blockers,
+    ).toContain('宿主未授权写入（write）');
+    expect(
+      settings.preview(command(id, true), { ...runtime, exposeExternal: false }).affected[0]
+        ?.blockers,
+    ).toContain('宿主未授权外部调用（external）');
+    const tasks = new PluginTasks(context, [{ id, start: () => ({ stop() {} }) }]);
+    try {
+      expect(
+        settings.read({ ...runtime, tasks }).plugins.find((row) => row.id === id)?.runtime.phase,
+      ).toBe('disabled');
+      settings.save(command(id, true), { ...runtime, tasks });
+      expect(
+        settings.read({ ...runtime, tasks }).plugins.find((row) => row.id === id)?.runtime.task
+          ?.phase,
+      ).toBe('ready');
+      settings.save(command(id, false), { ...runtime, tasks });
+      expect(
+        settings.read({ ...runtime, tasks }).plugins.find((row) => row.id === id)?.runtime.task
+          ?.phase,
+      ).toBe('disabled');
+    } finally {
+      await tasks.stop();
+    }
+  });
   it('projects notification delivery without owning report/watch resources or creating automatic replay', async () => {
     const { store, settings, runtime, command, context } = await setup();
     let config = store.initialize();

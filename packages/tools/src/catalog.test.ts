@@ -18,8 +18,16 @@ describe('typed tool catalog', () => {
       ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      '3696d0f00e2b74a10bb6df3e0d2989643d5758edaedfce7284d79447c0b461da',
+      'f0f5229106d1d829602ac92f565f17821b3466c9d09aa102728e01b47804bb29',
     );
+    expect(toolCatalog.snapshot_account_performance.owner).toBe(
+      'task.snapshot-account-performance',
+    );
+    expect(toolCatalog.snapshot_account_performance.tool.requiredCapabilities).toEqual([
+      'write',
+      'external',
+    ]);
+    expect(toolRegistry.get('snapshot_account_performance')).toBeUndefined();
     expect(toolCatalog.run_strategy.owner).toBe('business.strategy-execution');
     expect(toolCatalog.run_strategy.execution).toBe('p3');
     for (const name of [

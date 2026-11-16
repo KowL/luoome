@@ -42,6 +42,7 @@ const labels: Record<ManagedPluginId, string> = {
   'source.fuyao': 'Fuyao',
   'source.10jqka': '同花顺资讯',
   'task.strategy-schedules': '自动策略调度',
+  'task.snapshot-account-performance': '账户绩效估值任务',
   'task.daily-bars-sync': '日线同步',
   'task.sync-stock-universe': '股票目录同步',
   'task.collect-market-snapshot': '盘中快照采集',

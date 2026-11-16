@@ -628,3 +628,15 @@ Web 的真实截止/补投定时器由 PluginTasks 独立管理，停用卸载�
 通知通道没有独立 timer、订阅或后台补发队列，启停复用宿主实例，不重注册报告/盯盘资源；原业务的失败/中断重试保留原资格、时效、额度与幂等语义。
 Web 管理展示唯一直接发送贡献、可选领取及其它业务保留项，并沿用在途/排空状态，不把配置提交声称为全局停止。
 验收涵盖默认关、log/飞书/连接测试门禁、旧 Tool 与慢 lookup 撤销、已发出回执、成功记录幂等、两类盯盘事实及真实策略日循环独立，配合全量回归与桌面/手机浏览器验收。
+
+
+## 23. 账户绩效估值任务切片
+
+新增 task.snapshot-account-performance，初始化/迁移默认关闭；Web 复用现有预览、显式启停、许可与排空展示。
+真实盘后估值 timer 移入 PluginTasks，dispatch 跟踪完整 Workflow；绑定任务世代，停用后不再执行，关→开前的 tick/上下文不能复活，旧工作排空后才注册新资源。
+批量 Workflow 声明 requiredPlugins，并使用 catalog 中唯一任务工具 snapshot_account_performance（write + external）调用共享绩效计算，不复制计算逻辑。
+每账户与每个行情请求前复核；并发 worker 全部收尾，撤销错误不降级为缓存 fallback；快照 repository 在 SQLite immediate 写锁内检查共享 guard，旧 A 晚到不能覆盖新 B。
+
+历史列表/审计保持只读；get_account_performance 属于共享按需计算，账户、报告及 Agent 仍保持原授权与快照缓存语义，不因后台任务关闭而受阻。
+重新启用不重复注册 timer；同一事实指纹复用快照，新事实按既有修订规则处理。其它插件和任务资源不重启，不自动启源或扩权。
+验收覆盖默认关、旧 Workflow/工具、下一账户停止、真实 writer lock、A/B 发布隔离、timer 排空/单次注册、历史和共享查询保留，以及策略日循环、报告与盯盘独立。

@@ -83,6 +83,7 @@ import {
   createPortfolioCorporateActionTool,
   getAccountPerformanceTool,
   listPortfolioPerformanceSnapshotsTool,
+  snapshotAccountPerformanceTool,
 } from './tools/portfolio-performance.js';
 import { pruneStrategyHistoryTool } from './tools/prune-strategy-history.js';
 import { reconcileStaleStrategyRunsTool } from './tools/reconcile-stale-strategy-runs.js';
@@ -793,6 +794,12 @@ export const toolCatalog = {
     agent: false,
   },
   resume_strategy: { owner: 'business.strategy', tool: resumeStrategyTool, agent: false },
+  snapshot_account_performance: {
+    execution: 'p3',
+    owner: 'task.snapshot-account-performance',
+    tool: snapshotAccountPerformanceTool,
+    agent: false,
+  },
   save_report: {
     execution: 'p3',
     owner: 'business.report',

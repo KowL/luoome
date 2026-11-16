@@ -3,6 +3,7 @@ import {
   calculatePortfolioPerformance,
   isHoliday,
   isWeekend,
+  PluginExecutionDenied,
   PortfolioCashFlowSchema,
   PortfolioCorporateActionSchema,
   PortfolioPerformanceInputFactsSchema,
@@ -338,7 +339,9 @@ const fetchBars = async (
   to: Date,
   ctx: ToolContext,
 ): Promise<readonly import('@luoome/core').DailyBar[]> => {
+  ctx.executionGuard?.();
   const cached = await ctx.repos.dailyBar.findInRange(stockId, from, to);
+  ctx.executionGuard?.();
   const cachedDays = new Set(cached.map((bar) => bar.date.toISOString().slice(0, 10)));
   const expectedTradingDays = tradingDayKeys(from, to);
   const cacheComplete = expectedTradingDays.every((day) => cachedDays.has(day));
@@ -351,6 +354,7 @@ const fetchBars = async (
     // merely because a refresh was attempted.
     return await ctx.repos.dailyBar.findInRange(stockId, from, to);
   } catch (error) {
+    if (error instanceof PluginExecutionDenied) throw error;
     ctx.logger.warn('account performance daily-bars unavailable', {
       stockId,
       error: error instanceof Error ? error.message : String(error),
@@ -379,7 +383,8 @@ const mapWithConcurrency = async <T, R>(
       }
     },
   );
-  await Promise.all(runners);
+  const completed = await Promise.allSettled(runners);
+  for (const runner of completed) if (runner.status === 'rejected') throw runner.reason;
   return results;
 };
 
@@ -536,8 +541,12 @@ export const getAccountPerformanceTool = defineTool({
     const fetchedSeries = await mapWithConcurrency(
       priceSeriesStockIds,
       PORTFOLIO_MARKET_CONCURRENCY,
-      async (stockId) => [stockId, await fetchBars(stockId, input.from, input.to, ctx)] as const,
+      async (stockId) => {
+        ctx.executionGuard?.();
+        return [stockId, await fetchBars(stockId, input.from, input.to, ctx)] as const;
+      },
     );
+    ctx.executionGuard?.();
     const fetchedByStock = new Map(fetchedSeries);
     const barsByStock = new Map<string, readonly import('@luoome/core').DailyBar[]>(
       [...stockIds].map((stockId) => [stockId, fetchedByStock.get(stockId) ?? []]),
@@ -617,6 +626,7 @@ export const getAccountPerformanceTool = defineTool({
         ...(dataAsOf === undefined ? {} : { dataAsOf }),
         performance: auditedPerformance,
       });
+    ctx.executionGuard?.();
     if (existing === null) await ctx.repos.portfolioPerformanceSnapshot.save(snapshot);
     return PortfolioPerformanceSchema.parse({
       ...snapshot.performance,
@@ -634,5 +644,28 @@ export const getAccountPerformanceTool = defineTool({
         cacheStatus: existing === null ? 'created' : 'reused',
       },
     });
+  },
+});
+
+export const snapshotAccountPerformanceTool = defineTool({
+  name: 'snapshot_account_performance',
+  description: 'workflow-only：受控执行单账户绩效估值任务，复用共享计算与快照指纹',
+  sideEffect: 'write',
+  requiredCapabilities: ['write', 'external'],
+  input: GetAccountPerformanceInput,
+  output: GetAccountPerformanceOutput,
+  handler: async (input, ctx) => {
+    const admission = ctx.executionPolicy?.acquire('task.snapshot-account-performance');
+    const check = () => {
+      ctx.executionGuard?.();
+      if (!admission?.ok || !ctx.executionPolicy?.valid(admission.permit))
+        throw new PluginExecutionDenied('plugin:task.snapshot-account-performance');
+    };
+    check();
+    const result = await getAccountPerformanceTool.execute(input, {
+      ...ctx,
+      executionGuard: check,
+    });
+    return result.ok ? result.data : result;
   },
 });

@@ -11,6 +11,7 @@ export const SOURCE_PLUGIN_IDS = [
 ] as const;
 export const TASK_PLUGIN_IDS = [
   'task.strategy-schedules',
+  'task.snapshot-account-performance',
   'task.daily-bars-sync',
   'task.sync-stock-universe',
   'task.collect-market-snapshot',

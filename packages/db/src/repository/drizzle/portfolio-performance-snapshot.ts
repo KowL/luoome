@@ -7,6 +7,7 @@ import { and, desc, eq, gte, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { portfolioPerformanceSnapshots, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type SnapshotRow = typeof portfolioPerformanceSnapshots.$inferSelect;
 
@@ -26,26 +27,18 @@ const parse = (row: SnapshotRow): PortfolioPerformanceSnapshot =>
 export class DrizzlePortfolioPerformanceSnapshotRepository
   implements PortfolioPerformanceSnapshotRepository
 {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async save(snapshot: PortfolioPerformanceSnapshot): Promise<void> {
-    const parsed = PortfolioPerformanceSnapshotSchema.parse(snapshot);
-    this.db
-      .insert(portfolioPerformanceSnapshots)
-      .values({
-        id: parsed.id,
-        accountId: parsed.accountId,
-        from: parsed.from,
-        to: parsed.to,
-        currency: parsed.currency,
-        inputFingerprint: parsed.inputFingerprint,
-        calculatedAt: parsed.calculatedAt,
-        dataAsOf: parsed.dataAsOf ?? null,
-        performance: parsed.performance,
-      })
-      .onConflictDoUpdate({
-        target: portfolioPerformanceSnapshots.id,
-        set: {
+    this.writes.transaction(this.db, () => {
+      const parsed = PortfolioPerformanceSnapshotSchema.parse(snapshot);
+      this.db
+        .insert(portfolioPerformanceSnapshots)
+        .values({
+          id: parsed.id,
           accountId: parsed.accountId,
           from: parsed.from,
           to: parsed.to,
@@ -54,9 +47,22 @@ export class DrizzlePortfolioPerformanceSnapshotRepository
           calculatedAt: parsed.calculatedAt,
           dataAsOf: parsed.dataAsOf ?? null,
           performance: parsed.performance,
-        },
-      })
-      .run();
+        })
+        .onConflictDoUpdate({
+          target: portfolioPerformanceSnapshots.id,
+          set: {
+            accountId: parsed.accountId,
+            from: parsed.from,
+            to: parsed.to,
+            currency: parsed.currency,
+            inputFingerprint: parsed.inputFingerprint,
+            calculatedAt: parsed.calculatedAt,
+            dataAsOf: parsed.dataAsOf ?? null,
+            performance: parsed.performance,
+          },
+        })
+        .run();
+    });
   }
 
   async findById(id: string): Promise<PortfolioPerformanceSnapshot | null> {

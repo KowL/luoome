@@ -439,6 +439,14 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
             }),
         },
         {
+          id: 'task.snapshot-account-performance',
+          start: (scope) =>
+            startPortfolioPerformanceScheduler(scope.ctx, {
+              startImmediately: false,
+              dispatch: (operation) => scope.run(operation),
+            }),
+        },
+        {
           id: 'business.report',
           start: (scope) =>
             startClosingReportScheduler(scope.ctx, {
@@ -458,10 +466,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     : undefined;
   pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
-    ? [
-        startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
-        startPostMarketScheduler(ctx, { startImmediately: false }),
-      ]
+    ? [startPostMarketScheduler(ctx, { startImmediately: false })]
     : [];
   if (!schedulersEnabled) {
     console.warn(

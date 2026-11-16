@@ -102,6 +102,7 @@ const stepRun: WorkflowStep = async (prev, ctx) => {
   try {
     const listed = await ctx.tools.list_accounts.execute({});
     if (!listed.ok) throw new Error(`list_accounts: ${listed.error.kind}`);
+    ctx.executionGuard?.();
     const selected =
       input.accountIds === undefined
         ? [...listed.data.accounts]
@@ -126,11 +127,12 @@ const stepRun: WorkflowStep = async (prev, ctx) => {
     }));
 
     for (const [index, account] of selected.entries()) {
+      ctx.executionGuard?.();
       if (account === undefined) continue;
       const accountStart = dateInShanghai(account.createdAt);
       const from =
         accountStart > to ? to : accountStart > requestedFrom ? accountStart : requestedFrom;
-      const result = await ctx.tools.get_account_performance.execute({
+      const result = await ctx.tools.snapshot_account_performance.execute({
         accountId: account.id,
         from: dateAtUtcMidnight(from),
         to: dateAtUtcMidnight(to),
@@ -138,6 +140,7 @@ const stepRun: WorkflowStep = async (prev, ctx) => {
           ? {}
           : { benchmarkStockId: input.benchmarkStockId }),
       });
+      ctx.executionGuard?.();
       if (!result.ok) {
         items.push({
           accountId: account.id,
@@ -253,8 +256,31 @@ export const snapshotAccountPerformanceWorkflow = defineWorkflow<
   SnapshotAccountPerformanceInputT,
   SnapshotAccountPerformanceOutputT
 >({
+  requiredPlugins: ['task.snapshot-account-performance'],
   name: 'snapshot-account-performance',
   description: '按账户持续生成可幂等复用、可修订追溯的绩效快照，并写入 WorkflowRun 审计',
   input: SnapshotAccountPerformanceInput,
-  steps: [stepRun],
+  steps: [
+    (input, ctx) => {
+      const execute = async () => stepRun(input, ctx);
+      const invoke = () =>
+        ctx.dataScope === undefined
+          ? execute()
+          : ctx.dataScope.run(
+              execute,
+              () => ctx.executionGuard?.(),
+              JSON.stringify([
+                'task.snapshot-account-performance',
+                ctx.executionPolicy?.acquire('task.snapshot-account-performance'),
+              ]),
+            );
+      return ctx.executionPolicy === undefined
+        ? invoke()
+        : ctx.executionPolicy.runPlugin(
+            'task.snapshot-account-performance',
+            invoke,
+            ctx.executionGuard,
+          );
+    },
+  ],
 });

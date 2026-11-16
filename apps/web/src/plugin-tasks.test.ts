@@ -6,6 +6,7 @@ import { buildTestContext, createTestPluginControl } from '@luoome/tools/testing
 import { describe, expect, it } from 'vitest';
 import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
 import { type PluginTaskActivation, PluginTasks } from './plugin-tasks.js';
+import { startPortfolioPerformanceScheduler } from './portfolio-performance-scheduler.js';
 import { startClosingReportScheduler, startStrategyScheduler } from './strategy-scheduler.js';
 
 const deferred = () => {
@@ -30,6 +31,119 @@ const id = 'task.strategy-schedules' as const;
 const requires = ['business.strategy-execution'] as const;
 
 describe('plugin task resources', () => {
+  it('unloads the performance timer, waits for work and re-enables once without restarting others', async () => {
+    const { ctx: base, set, clean } = await setup();
+    const ctx = { ...base, clock: () => new Date('2026-11-16T09:00:00Z') };
+    const performance = 'task.snapshot-account-performance' as const;
+    set(performance, false);
+    let starts = 0,
+      stops = 0,
+      calls = 0,
+      otherStarts = 0,
+      otherStops = 0;
+    const started = deferred(),
+      release = deferred();
+    let scheduler: ReturnType<typeof startPortfolioPerformanceScheduler> | undefined;
+    const tasks = new PluginTasks(ctx, [
+      {
+        id: performance,
+        start: (scope) => {
+          starts++;
+          const handle = startPortfolioPerformanceScheduler(scope.ctx, {
+            startImmediately: false,
+            dispatch: (op) => scope.run(op),
+            run: async (date) => {
+              calls++;
+              if (calls === 1) {
+                started.resolve();
+                await release.promise;
+              }
+              return {
+                ok: true,
+                data: {
+                  runId: 'fixture',
+                  status: 'succeeded',
+                  from: date,
+                  to: date,
+                  requestedAccounts: 0,
+                  completedAccounts: 0,
+                  partialAccounts: 0,
+                  failedAccounts: 0,
+                  createdSnapshots: 0,
+                  reusedSnapshots: 0,
+                  durationMs: 0,
+                  items: [],
+                },
+              };
+            },
+          });
+          scheduler = handle;
+          return {
+            stop() {
+              stops++;
+              handle.stop();
+            },
+          };
+        },
+      },
+      ...(['business.report', 'business.watch-monitoring', 'task.strategy-schedules'] as const).map(
+        (id) => ({
+          id,
+          start: () => {
+            otherStarts++;
+            return {
+              stop() {
+                otherStops++;
+              },
+            };
+          },
+        }),
+      ),
+    ]);
+    try {
+      expect(starts).toBe(0);
+      set(performance, true);
+      tasks.reconcile();
+      tasks.reconcile();
+      expect(starts).toBe(1);
+      if (!scheduler) throw new Error('missing timer');
+      const old = scheduler,
+        pending = old.tick();
+      await started.promise;
+      set(performance, false);
+      tasks.reconcile();
+      expect(stops).toBe(1);
+      expect(tasks.status().find((task) => task.id === performance)).toMatchObject({
+        phase: 'draining',
+        inFlight: 1,
+      });
+      set(performance, true);
+      tasks.reconcile();
+      expect(starts).toBe(1);
+      release.resolve();
+      await pending;
+      tasks.reconcile();
+      tasks.reconcile();
+      expect(starts).toBe(2);
+      await old.tick();
+      expect(calls).toBe(1);
+      await scheduler.tick();
+      await scheduler.tick();
+      expect(calls).toBe(2);
+      expect(starts).toBe(2);
+      expect(otherStarts).toBe(3);
+      expect(otherStops).toBe(0);
+      set(performance, false);
+      tasks.reconcile();
+      await scheduler.tick();
+      expect(calls).toBe(2);
+      expect(stops).toBe(2);
+    } finally {
+      release.resolve();
+      await tasks.stop();
+      clean();
+    }
+  });
   it('unloads report resources, drains old work and registers once without stopping strategy or watch', async () => {
     const { ctx: base, set, clean } = await setup();
     const ctx = { ...base, clock: () => new Date('2026-11-16T02:00:00Z') };

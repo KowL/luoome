@@ -2,6 +2,7 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  PluginExecutionDenied,
   type ToolContext,
   type ToolResult,
 } from '@luoome/core';
@@ -22,6 +23,7 @@ export interface StartPortfolioPerformanceSchedulerOptions {
   readonly intervalMs?: number;
   readonly startImmediately?: boolean;
   readonly closeHourShanghai?: number;
+  readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
   readonly run?: (tradingDay: string) => Promise<ToolResult<SnapshotAccountPerformanceOutputT>>;
 }
 
@@ -40,23 +42,41 @@ export const duePortfolioPerformanceTradingDay = (
 };
 
 export const startPortfolioPerformanceScheduler = (
-  ctx: ToolContext,
+  context: ToolContext,
   options: StartPortfolioPerformanceSchedulerOptions = {},
 ): PortfolioPerformanceSchedulerHandle => {
   const intervalMs = options.intervalMs ?? PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS;
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw new Error(`账户绩效调度间隔必须为正数: ${intervalMs}`);
   }
+  let stopped = false;
+  const policy = context.executionPolicy?.bind();
+  const admission = policy?.acquire('task.snapshot-account-performance');
+  const active = () => {
+    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
+    try {
+      context.executionGuard?.();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const ctx: ToolContext = {
+    ...context,
+    ...(policy === undefined ? {} : { executionPolicy: policy }),
+    executionGuard: () => {
+      if (!active()) throw new PluginExecutionDenied('plugin:task.snapshot-account-performance');
+    },
+  };
   const run =
     options.run ??
     ((tradingDay: string) =>
       snapshotAccountPerformanceWorkflow.run({ to: tradingDay, mode: 'scheduled' }, ctx));
-  let stopped = false;
   let running = false;
   let lastAttemptedTradingDay: string | null = null;
 
-  const tick = async (): Promise<void> => {
-    if (stopped || running) return;
+  const runTick = async (): Promise<void> => {
+    if (!active() || running) return;
     const tradingDay = duePortfolioPerformanceTradingDay(ctx.clock(), options.closeHourShanghai);
     if (tradingDay === null || tradingDay === lastAttemptedTradingDay) return;
     running = true;
@@ -87,6 +107,7 @@ export const startPortfolioPerformanceScheduler = (
     }
   };
 
+  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
   if (options.startImmediately !== false) void tick();

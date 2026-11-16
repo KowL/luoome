@@ -60,6 +60,12 @@ Web 的影响预览不会自动开启依赖；配置提交、当前宿主就绪�
 分析开关独立于策略执行、策略 AI 洞察和聊天；开启不会自动启源、扩充场景或跳过确认。模型已发送时可能仍在排空，不自动重放失败调用。
 
 
+### 账户绩效估值任务
+
+宿主显式启用 `task.snapshot-account-performance` 后才能运行批量 `snapshot-account-performance` Workflow；新增项默认关闭，仍需 write + external。
+停用后旧任务、旧 tick 与任务工具不得继续执行；Agent 不替用户启用插件或重试旧 scope。
+历史快照与审计仍可读；共享 `get_account_performance` 的按需计算/缓存保持可用，不受自动任务开关影响。
+
 ### 通知控制
 
 宿主显式管理 `business.notification`，新增项默认关闭；Agent 不修改配置或替用户启用。

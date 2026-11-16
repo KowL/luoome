@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { money } from '@luoome/core';
+import { money, type PortfolioPerformanceSnapshot } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos } from '../../client.js';
@@ -329,6 +329,60 @@ it('fences report publication/claim/status under the writer lock and only comple
     ).toBe(true);
     expect((await h.repos.report.findById(report.id))?.deliveryStatus).toBe('sent');
     expect(await h.repos.report.list()).toHaveLength(1);
+  } finally {
+    h.close();
+    probe.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('checks performance snapshot publication under the SQLite writer lock and preserves history on revocation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-performance-fence-'));
+  const path = join(root, 'db.sqlite');
+  const h = createDrizzleRepos(path),
+    probe = createDrizzleRepos(path);
+  probe.db.run(sql`PRAGMA busy_timeout = 0`);
+  const at = new Date('2026-07-03');
+  const history: PortfolioPerformanceSnapshot = {
+    id: 'history',
+    accountId: 'account',
+    from: at,
+    to: at,
+    currency: 'CNY',
+    inputFingerprint: 'original',
+    calculatedAt: at,
+    performance: {
+      accountId: 'account',
+      from: at,
+      to: at,
+      currency: 'CNY',
+      completeness: 'complete',
+      cashFlowComplete: true,
+      benchmarkStatus: 'unavailable',
+      realizedPnl: 0,
+      valuation: [],
+      contributions: [],
+      warnings: [],
+    },
+  };
+  try {
+    await h.repos.portfolioPerformanceSnapshot.save(history);
+    let checks = 0;
+    const denied = () => {
+      checks++;
+      expect(() => probe.db.run(sql`BEGIN IMMEDIATE`)).toThrow();
+      throw new Error('performance task revoked');
+    };
+    for (const snapshot of [
+      { ...history, id: 'late', inputFingerprint: 'late' },
+      { ...history, calculatedAt: new Date('2026-07-04') },
+    ])
+      await expect(
+        h.repos.withWriteGuard(denied, () => h.repos.portfolioPerformanceSnapshot.save(snapshot)),
+      ).rejects.toThrow('performance task revoked');
+    expect(checks).toBe(2);
+    expect(await h.repos.portfolioPerformanceSnapshot.findById('late')).toBeNull();
+    expect(await h.repos.portfolioPerformanceSnapshot.findById(history.id)).toEqual(history);
   } finally {
     h.close();
     probe.close();

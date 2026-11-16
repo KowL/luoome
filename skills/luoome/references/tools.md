@@ -41,7 +41,7 @@ Stock pools, strategies and portfolio:
   (descriptive; signal ≠ Advice and ≠ trade).
 - `get_account_overview` — account + holdings + account facts in one call; use it instead
   of stitching separate account, holding and cash queries.
-- `get_account_performance` — NAV curve, TWR, drawdown and attribution.
+- `get_account_performance` — NAV curve, TWR, drawdown and attribution; shared on-demand calculation/cache remains available independently of the automatic performance task.
 - `list_trades` — account trade history.
 - `get_advice` — advice history with outcomes; `includeDecisionReviews=true` also returns
   decision reviews for the same account/subject.
@@ -102,3 +102,5 @@ Scheduled/replay rule inputs may come entirely from persisted local data. Missin
 Report generation and report notification retries require the host's explicit `business.report` activation. Historical `get_report`, `list_reports` and `render_report` remain available when disabled. Strategy daily cycles, watch monitoring and generic notifications retain independent authorization; never retry saved calls to bypass a disabled report plugin.
 
 All new notification delivery requires explicit host activation of `business.notification` and existing external authorization. Disabling it also blocks log fallback and connection tests; report generation, strategy facts, watch triggers and historical receipts remain available. Do not replay successful notifications or reuse old calls after a toggle.
+
+The host controls the batch `snapshot-account-performance` Workflow with `task.snapshot-account-performance` (default disabled, write + external still required). Its internal `snapshot_account_performance` tool is not a public MCP/Agent tool. Disabling the task preserves historical snapshots/audits and the independent shared performance query; do not replay old task calls after re-enable.

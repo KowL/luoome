@@ -33,6 +33,7 @@ import {
 } from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
+import { snapshotAccountPerformanceWorkflow } from '@luoome/workflows';
 import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
@@ -3104,6 +3105,98 @@ const chat = async (target: Hono, body: unknown): Promise<Response> =>
   );
 
 describe('plugin settings HTTP and Agent revocation', () => {
+  it('switches the performance task through Web settings and preserves history and on-demand queries', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'luoome-performance-http-'));
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    store.initialize();
+    try {
+      const executionPolicy = createPluginExecutionPolicy(
+        store,
+        new Set(['read', 'advice', 'write', 'external']),
+      );
+      const ctx = await buildTestContext({ executionPolicy });
+      const local = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: true,
+        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
+      });
+      const input = {
+        accountIds: [ctx.user.defaultAccountId],
+        from: '2026-07-01',
+        to: '2026-07-03',
+        benchmarkStockId: '600900.SH',
+      };
+      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+      const set = async (enabled: boolean) => {
+        const read = store.read();
+        if (!read.ok) throw new Error('missing');
+        const response = await local.fetch(
+          new Request('http://test/api/settings/plugins', {
+            method: 'POST',
+            headers: { origin: 'http://test', 'content-type': 'application/json' },
+            body: JSON.stringify({
+              action: 'set',
+              id: 'task.snapshot-account-performance',
+              enabled,
+              incarnation: read.config.incarnation,
+              revision: read.config.revision,
+            }),
+          }),
+        );
+        expect(await response.json()).toMatchObject({ ok: true, data: { committed: true } });
+      };
+      await set(true);
+      const old = { ...ctx, executionPolicy: executionPolicy.bind() };
+      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
+        ok: true,
+        data: { createdSnapshots: 1 },
+      });
+      await set(false);
+      expect(await snapshotAccountPerformanceWorkflow.run(input, old)).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+      const history = await (
+        await local.fetch(new Request('http://test/api/account/performance/snapshots'))
+      ).json();
+      expect(history).toMatchObject({
+        ok: true,
+        data: { snapshots: [{ accountId: ctx.user.defaultAccountId }] },
+      });
+      expect(
+        (
+          await local.fetch(
+            new Request(
+              'http://test/api/account/performance/snapshot-audit?from=2026-07-01&to=2026-07-03',
+            ),
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await local.fetch(
+            new Request(
+              'http://test/api/account/performance?from=2026-07-01&to=2026-07-03&benchmarkStockId=600900.SH',
+            ),
+          )
+        ).status,
+      ).toBe(200);
+      await set(true);
+      expect(await snapshotAccountPerformanceWorkflow.run(input, old)).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
+        ok: true,
+        data: { createdSnapshots: 0, reusedSnapshots: 1 },
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
   it('controls Feishu test through the notification plugin without replacing the host channel or affecting reports', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-notification-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));

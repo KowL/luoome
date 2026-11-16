@@ -966,7 +966,7 @@ Workflow 可声明 requiredPlugins，入场时捕获许可并通过 executionGua
 该收尾仍校验不可变身份/状态迁移，且无结果/信号或回测 metrics，不允许撤销后创建新的运行或覆盖终态。
 
 Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner：自动策略调度依赖 task.strategy-schedules + 策略执行，
-盘中快照调度依赖 task.collect-market-snapshot。单个宿主控制 timer 每 250ms reconcile，业务 timer 只为有效 activation 创建。
+盘中快照调度依赖 task.collect-market-snapshot，账户绩效盘后调度依赖 task.snapshot-account-performance。单个宿主控制 timer 每 250ms reconcile，业务 timer 只为有效 activation 创建。
 退役清除 timer、撤销旧 guard、发送 AbortSignal 并跟踪在途工作；旧任务未排空前不创建新一代资源，失败 teardown 不冒报卸载。
 退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
 策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
@@ -1022,6 +1022,13 @@ Tool 绑定调用许可并在实际外发前复核，生产 NotificationManager 
 发送前撤销仅停止投递；实际已发出请求继续保存真实回执，原有精确领取/回执收尾仍可完成，不开启新投递。
 纯投递 Tool 声明 dataScope=none，不把可选通知许可累积进父级行情依赖集合；自身 Tool/manager 许可和 repository guard 仍校验，通知停用不污染盯盘后续步骤。
 通知没有独立 timer/订阅/重试队列，启停复用宿主通道，不重建报告或盯盘资源；成功通知按稳定身份读取回执，关闭期间的新触发不自动补发。
+
+`task.snapshot-account-performance` 默认关闭，拥有实际盘后估值 scheduler 和 snapshot-account-performance Workflow。
+Workflow 使用 catalog 派生的 snapshot_account_performance（write + external，workflow-only）委托共享计算，入场绑定任务许可、每账户/每行情请求及快照提交前复核。
+共享 get_account_performance 保持原输入/输出、external 权限和按需计算/缓存语义，不纳入任务 owner；历史 list/audit 常驻，不强迫报告或账户查询依赖后台任务。
+任务根 scope 跟踪手动在途与独立 provider namespace；并发行情 worker 全部收尾后才结束任务，撤销不走缺行情 fallback。
+PortfolioPerformanceSnapshotRepository 接入共享 RepositoryWriteScope，在 immediate 写锁内校验，新建和覆盖都不能使用失效任务许可。
+Web 真实 timer 经 PluginTasks 的 dispatch 跟踪执行；停用清 timer、撤销旧 guard 并等待排空，再启用只创建一份资源，同日重跑仍按原指纹复用。
 
 ### 7.2 副作用分级（重申）
 
