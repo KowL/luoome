@@ -78,6 +78,7 @@ export const createTestPluginControl = (home: string) => {
       for (const id of [
         'business.strategy-execution',
         'business.analysis',
+        'business.watch-monitoring',
         ...TASK_PLUGIN_IDS,
       ] as const)
         config = store.set(id, true, config);

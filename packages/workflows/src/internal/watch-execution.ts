@@ -36,15 +36,33 @@ export const watchExecutionStep =
     }
     running = true;
     const guardedContext: WatchWorkflowContext = ctx;
-    try {
+    const execute = async () => {
       let current = input;
       for (const step of steps) {
+        ctx.executionGuard?.();
         const value = await step(current, guardedContext);
+        ctx.executionGuard?.();
         const unwrapped = unwrapStepValue(value);
         if (unwrapped.done) return unwrapped.result;
         current = unwrapped.value;
       }
       return current;
+    };
+    const invoke = () =>
+      ctx.dataScope === undefined
+        ? execute()
+        : ctx.dataScope.run(
+            () => execute(),
+            () => ctx.executionGuard?.(),
+            JSON.stringify([
+              'business.watch-monitoring',
+              ctx.executionPolicy?.acquire('business.watch-monitoring'),
+            ]),
+          );
+    try {
+      return await (ctx.executionPolicy === undefined
+        ? invoke()
+        : ctx.executionPolicy.runPlugin('business.watch-monitoring', invoke, ctx.executionGuard));
     } finally {
       running = false;
     }

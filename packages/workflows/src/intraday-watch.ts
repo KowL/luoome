@@ -1279,6 +1279,8 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     });
     if (!attempt.ok) return attempt;
     const r = await ctx.tools.send_notification.execute({
+      notificationId: attempt.data.notificationId,
+      watchDelivery: { owner: 'intraday-watch', triggerIds: group.map((trigger) => trigger.id) },
       channel: 'feishu',
       feishu: {
         title: `盘中提醒 · ${state.pools.find((pool) => pool.id === poolId)?.name ?? '关注列表'} · ${group.length} 条`,
@@ -1395,6 +1397,7 @@ export const intradayWatchWorkflow = defineWorkflow<
   z.infer<typeof IntradayWatchOutput>
 >({
   name: 'intraday-watch',
+  requiredPlugins: ['business.watch-monitoring'],
   description: '单轮盘中盯盘评估（AlertPlan + TradingPlan 统一执行器）',
   input: IntradayWatchInput,
   steps: [

@@ -5,7 +5,7 @@ import { money } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos } from '../../client.js';
-import { makeAdvice } from '../contract-tests.js';
+import { makeAdvice, makeNotification, makeWatchTrigger } from '../contract-tests.js';
 
 const bar = (close: number) => ({
   stockId: '002594.SZ',
@@ -197,6 +197,76 @@ it('strategy publication checks inside the write transaction and allows only fai
       ),
     ).rejects.toThrow('revoked');
     expect(await h.repos.strategyRun.findRunById('new-revoked')).toBeNull();
+  } finally {
+    h.close();
+    probe.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('fences watch trigger/state/attempt writes and permits only a reserved receipt to finish after revocation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-watch-fence-'));
+  const path = join(root, 'db.sqlite');
+  const h = createDrizzleRepos(path),
+    probe = createDrizzleRepos(path);
+  probe.db.run(sql`PRAGMA busy_timeout = 0`);
+  try {
+    const trigger = makeWatchTrigger('watch', { deliveryStatus: 'pending', notified: false });
+    const state = {
+      poolId: trigger.poolId,
+      stockId: trigger.stockId,
+      ruleId: trigger.ruleId,
+      active: true,
+      lastEvaluatedAt: trigger.createdAt,
+    };
+    await h.repos.watchTrigger.save(trigger);
+    const denied = () => {
+      expect(() => probe.db.run(sql`BEGIN IMMEDIATE`)).toThrow();
+      throw new Error('watch revoked');
+    };
+    for (const operation of [
+      () => h.repos.watchTrigger.save({ ...trigger, id: 'late' }),
+      () =>
+        h.repos.watchTrigger.commitEvaluation({
+          now: trigger.createdAt,
+          triggers: [{ ...trigger, id: 'late' }],
+          states: [state],
+        }),
+      () => h.repos.watchRuleState.upsertMany([state]),
+      () => h.repos.watchTrigger.beginDelivery([trigger.id], trigger.createdAt, 'revoked'),
+      () => h.repos.watchTrigger.setDeliveryStatus([trigger.id], 'sent'),
+    ]) {
+      await expect(
+        h.repos.withWriteGuard(denied, async () => {
+          await operation();
+        }),
+      ).rejects.toThrow('watch revoked');
+    }
+    expect(await h.repos.watchTrigger.findById('late')).toBeNull();
+    expect(await h.repos.watchRuleState.listByPool(trigger.poolId)).toEqual([]);
+    await h.repos.watchTrigger.beginDelivery([trigger.id], trigger.createdAt, 'reserved');
+    expect(
+      await h.repos.watchTrigger.completeDelivery([trigger.id], 'reserved', trigger.createdAt),
+    ).toBe(false);
+    await h.repos.notification.save(makeNotification('wrong'));
+    expect(
+      await h.repos.watchTrigger.completeDelivery([trigger.id], 'wrong', trigger.createdAt),
+    ).toBe(false);
+    await h.repos.notification.save(makeNotification('reserved'));
+    expect(
+      await h.repos.watchTrigger.completeDelivery(['missing'], 'reserved', trigger.createdAt),
+    ).toBe(false);
+    expect(
+      await h.repos.withWriteGuard(denied, () =>
+        h.repos.watchTrigger.completeDelivery([trigger.id], 'reserved', trigger.createdAt),
+      ),
+    ).toBe(true);
+    expect(await h.repos.watchTrigger.findById(trigger.id)).toMatchObject({
+      deliveryStatus: 'sent',
+      notificationId: 'reserved',
+      deliveryAttempts: 1,
+    });
+    expect(await h.repos.watchTrigger.listRecent({})).toHaveLength(1);
   } finally {
     h.close();
     probe.close();

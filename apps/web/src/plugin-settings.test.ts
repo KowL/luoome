@@ -28,6 +28,7 @@ const setup = async () => {
     id:
       | 'business.strategy-execution'
       | 'business.analysis'
+      | 'business.watch-monitoring'
       | 'task.strategy-schedules'
       | 'strategy.ai-insight'
       | 'source.sina',
@@ -54,6 +55,45 @@ const deferred = () => {
 };
 
 describe('Web plugin settings projection and conditional commands', () => {
+  it('projects watch resources and their impact without disabling editable watch data or reports', async () => {
+    const { store, settings, runtime, command, context } = await setup();
+    store.initialize();
+    const preview = settings.preview(command('business.watch-monitoring', true), runtime);
+    expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual(
+      [
+        'begin_watch_delivery',
+        'commit_watch_evaluation',
+        'save_watch_rule_states',
+        'save_watch_trigger',
+        'set_watch_trigger_delivery_status',
+      ].sort(),
+    );
+    expect(preview.notes.join('')).toContain('历史触发与反馈保留');
+    expect(
+      settings
+        .preview(command('business.watch-monitoring', true), { ...runtime, exposeExternal: false })
+        .affected[0]?.blockers.join(''),
+    ).toContain('external');
+    settings.save(preview.command, runtime);
+    const tasks = new PluginTasks(context, [
+      { id: 'business.watch-monitoring', start: () => ({ stop() {} }) },
+    ]);
+    try {
+      expect(
+        settings
+          .read({ ...runtime, tasks })
+          .plugins.find((row) => row.id === 'business.watch-monitoring'),
+      ).toMatchObject({ enabled: true, runtime: { gateApplied: true, task: { phase: 'ready' } } });
+      settings.save(command('business.watch-monitoring', false), { ...runtime, tasks });
+      expect(
+        settings
+          .read({ ...runtime, tasks })
+          .plugins.find((row) => row.id === 'business.watch-monitoring')?.runtime.task?.phase,
+      ).toBe('disabled');
+    } finally {
+      await tasks.stop();
+    }
+  });
   it('projects the analysis gate, model/data blockers and late calls without touching historical Advice', async () => {
     const { store, settings, runtime, command, policy } = await setup();
     store.initialize();

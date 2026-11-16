@@ -5,12 +5,12 @@ import {
   WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool } from '../define-tool.js';
 import {
   observationsForWatchTrigger,
   saveObservationCandidates,
 } from '../internal/signal-observation.js';
+import { assertWatchMonitoring } from '../internal/watch-monitoring.js';
 
 /** Workflow-only repository primitives; never added to the public registry. */
 
@@ -33,6 +33,7 @@ export const commitWatchEvaluationTool = defineTool({
   input: CommitWatchEvaluationInput,
   output: CommitWatchEvaluationOutput,
   handler: async (input, ctx) => {
+    assertWatchMonitoring(ctx);
     const now = ctx.clock();
     const { invalidatePending, ...evaluation } = input;
     await ctx.repos.watchTrigger.commitEvaluation({
@@ -40,6 +41,7 @@ export const commitWatchEvaluationTool = defineTool({
       now,
       ...(invalidatePending === undefined ? {} : { invalidatePending }),
     });
+    assertWatchMonitoring(ctx);
     await saveObservationCandidates(
       input.triggers.flatMap((trigger) =>
         observationsForWatchTrigger(trigger, {
@@ -64,7 +66,10 @@ export const commitWatchEvaluationTool = defineTool({
 export const BeginWatchDeliveryInput = z.object({
   triggerIds: z.array(z.string().min(1)).min(1),
 });
-export const BeginWatchDeliveryOutput = z.object({ started: z.number().int().nonnegative() });
+export const BeginWatchDeliveryOutput = z.object({
+  started: z.number().int().nonnegative(),
+  notificationId: z.string().min(1),
+});
 export const beginWatchDeliveryTool = defineTool({
   name: 'begin_watch_delivery',
   description: 'workflow-only：发送前记录投递尝试',
@@ -72,8 +77,10 @@ export const beginWatchDeliveryTool = defineTool({
   input: BeginWatchDeliveryInput,
   output: BeginWatchDeliveryOutput,
   handler: async ({ triggerIds }, ctx) => {
-    await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock());
-    return { started: triggerIds.length };
+    assertWatchMonitoring(ctx);
+    const notificationId = `watch-${crypto.randomUUID()}`;
+    await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), notificationId);
+    return { started: triggerIds.length, notificationId };
   },
 });
 
@@ -137,6 +144,7 @@ export const saveWatchRuleStatesTool = defineTool({
   input: SaveWatchRuleStatesInput,
   output: SaveWatchRuleStatesOutput,
   handler: async (input, ctx) => {
+    assertWatchMonitoring(ctx);
     if (input.states.length > 0) await ctx.repos.watchRuleState.upsertMany(input.states);
     return { saved: input.states.length };
   },
@@ -159,6 +167,7 @@ export const setWatchTriggerDeliveryStatusTool = defineTool({
   input: SetWatchTriggerDeliveryStatusInput,
   output: SetWatchTriggerDeliveryStatusOutput,
   handler: async (input, ctx) => {
+    assertWatchMonitoring(ctx);
     const completedAt = ctx.clock();
     await ctx.repos.watchTrigger.setDeliveryStatus(
       input.triggerIds,

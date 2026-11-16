@@ -912,7 +912,8 @@ export interface WatchTriggerRepository {
     };
   }): Promise<void>;
   /** 发送前持久化尝试，崩溃留下 pending 供有限重试。 */
-  beginDelivery(ids: readonly string[], at: Date): Promise<boolean>;
+  beginDelivery(ids: readonly string[], at: Date, notificationId?: string): Promise<boolean>;
+  completeDelivery(ids: readonly string[], notificationId: string, at: Date): Promise<boolean>;
   save(trigger: WatchTrigger): Promise<void>;
   findById(id: string): Promise<WatchTrigger | null>;
   /** 审计 / 复盘：按 createdAt 倒序。 */

@@ -2538,9 +2538,9 @@ export const createDrizzleRepos = (
     notification: new DrizzleNotificationRepository(db),
     // v0.6 起
     alertPlan: new DrizzleAlertPlanRepository(db),
-    watchTrigger: new DrizzleWatchTriggerRepository(db),
+    watchTrigger: new DrizzleWatchTriggerRepository(db, writes),
     // v0.7 起：边沿状态机
-    watchRuleState: new DrizzleWatchRuleStateRepository(db),
+    watchRuleState: new DrizzleWatchRuleStateRepository(db, writes),
     // ruo 迁移起
     researchIndex,
     workflowRun: new DrizzleWorkflowRunRepository(db),

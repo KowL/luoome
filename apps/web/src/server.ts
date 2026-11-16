@@ -438,13 +438,20 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
               dispatch: (operation) => scope.run(operation),
             }),
         },
+        {
+          id: 'business.watch-monitoring',
+          start: (scope) =>
+            startIntradayPlanScheduler(scope.ctx, {
+              startImmediately: false,
+              dispatch: (operation) => scope.run(operation),
+            }),
+        },
       ])
     : undefined;
   pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
     ? [
         startClosingReportScheduler(ctx, { startImmediately: false }),
-        startIntradayPlanScheduler(ctx, { startImmediately: false }),
         startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
         startPostMarketScheduler(ctx, { startImmediately: false }),
       ]

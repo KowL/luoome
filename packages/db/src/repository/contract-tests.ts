@@ -3877,6 +3877,38 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WatchTriggerRepository', () => {
+      it('completes only an existing reserved delivery backed by its exact persisted receipt', async () => {
+        const trigger = makeWatchTrigger('reserved-watch', {
+          deliveryStatus: 'pending',
+          notified: false,
+        });
+        await repos.watchTrigger.save(trigger);
+        await repos.watchTrigger.beginDelivery([trigger.id], T1, 'reserved-notification');
+        expect(
+          await repos.watchTrigger.completeDelivery([trigger.id], 'reserved-notification', T2),
+        ).toBe(false);
+        await repos.notification.save(makeNotification('unrelated-notification'));
+        expect(
+          await repos.watchTrigger.completeDelivery([trigger.id], 'unrelated-notification', T2),
+        ).toBe(false);
+        await repos.notification.save(makeNotification('reserved-notification'));
+        expect(
+          await repos.watchTrigger.completeDelivery(['missing'], 'reserved-notification', T2),
+        ).toBe(false);
+        expect(
+          await repos.watchTrigger.completeDelivery([trigger.id], 'reserved-notification', T2),
+        ).toBe(true);
+        expect(
+          await repos.watchTrigger.completeDelivery([trigger.id], 'reserved-notification', T2),
+        ).toBe(true);
+        expect(await repos.watchTrigger.findById(trigger.id)).toMatchObject({
+          deliveryStatus: 'sent',
+          notificationId: 'reserved-notification',
+          deliveryAttempts: 1,
+          notified: true,
+        });
+      });
+
       it('query 在复合筛选后分页并准确计数，同时间按 id 倒序', async () => {
         for (const id of ['a', 'c', 'b']) {
           await repos.watchTrigger.save(

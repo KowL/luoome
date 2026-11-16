@@ -78,7 +78,7 @@
 
 | 文档 | 范围 |
 |---|---|
-| [能力插件分阶段实施计划](./ddd/layered-capability-plugin-detailed-design.md#13-分阶段实施计划) | P0–P2、P3 策略执行/个股分析/资源切片及 P4 内置管理已实施；其它业务切片仍待迁移 |
+| [能力插件分阶段实施计划](./ddd/layered-capability-plugin-detailed-design.md#13-分阶段实施计划) | P0–P2、P3 策略执行/个股分析/盯盘监控/资源切片及 P4 内置管理已实施；其它业务切片仍待迁移 |
 | [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D07 已集成验收；D08–D10 已拆分但未派发（持久绑定、预算/灰度、社区插件与多 Agent） |
 | [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |

@@ -1,4 +1,9 @@
-import { isAshareTradingSession, type ToolContext, type ToolResult } from '@luoome/core';
+import {
+  isAshareTradingSession,
+  PluginExecutionDenied,
+  type ToolContext,
+  type ToolResult,
+} from '@luoome/core';
 import { listAccountsTool } from '@luoome/tools';
 import { type IntradayTradingPlanWatchOutputT, intradayWatchWorkflow } from '@luoome/workflows';
 
@@ -14,13 +19,33 @@ export interface IntradayPlanSchedulerHandle {
 export interface StartIntradayPlanSchedulerOptions {
   readonly intervalMs?: number;
   readonly startImmediately?: boolean;
+  readonly dispatch?: (operation: () => Promise<void>) => Promise<void>;
   readonly runAccount?: (accountId: string) => Promise<ToolResult<IntradayTradingPlanWatchOutputT>>;
 }
 
 export const startIntradayPlanScheduler = (
-  ctx: ToolContext,
+  context: ToolContext,
   options: StartIntradayPlanSchedulerOptions = {},
 ): IntradayPlanSchedulerHandle => {
+  let stopped = false;
+  const policy = context.executionPolicy?.bind();
+  const admission = policy?.acquire('business.watch-monitoring');
+  const active = () => {
+    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
+    try {
+      context.executionGuard?.();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const ctx: ToolContext = {
+    ...context,
+    ...(policy === undefined ? {} : { executionPolicy: policy }),
+    executionGuard: () => {
+      if (!active()) throw new PluginExecutionDenied('plugin:business.watch-monitoring');
+    },
+  };
   const intervalMs = options.intervalMs ?? INTRADAY_PLAN_SCHEDULER_INTERVAL_MS;
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw new Error(`盘中计划调度间隔必须为正数: ${intervalMs}`);
@@ -39,11 +64,10 @@ export const startIntradayPlanScheduler = (
       }
       return { ok: true as const, data: watch };
     });
-  let stopped = false;
   let running = false;
 
-  const tick = async (): Promise<void> => {
-    if (stopped || running || !isIntradayPlanSession(ctx.clock())) return;
+  const runTick = async (): Promise<void> => {
+    if (!active() || running || !isIntradayPlanSession(ctx.clock())) return;
     running = true;
     try {
       const listed = await listAccountsTool.execute({}, ctx);
@@ -52,7 +76,7 @@ export const startIntradayPlanScheduler = (
         return;
       }
       for (const account of listed.data.accounts) {
-        if (stopped || !isIntradayPlanSession(ctx.clock())) break;
+        if (!active() || !isIntradayPlanSession(ctx.clock())) break;
         try {
           const result = await runAccount(account.id);
           if (!result.ok || result.data.status !== 'complete') {
@@ -77,6 +101,7 @@ export const startIntradayPlanScheduler = (
     }
   };
 
+  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
   if (options.startImmediately !== false) void tick();

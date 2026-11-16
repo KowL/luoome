@@ -971,7 +971,7 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
 策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
 Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
-P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘/通知等其它业务切片仍待实施。
+P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控也已独立接入，其它通知等业务切片仍待实施。
 `PluginSettingsStore` 只投影可信的内置元数据、catalog 派生贡献、当前路由及本宿主状态；
 不暴露文件路径、凭证或任意执行配置。GET/preview 不外发，initialize/migrate/set 严格校验输入，
 保存经既有同源/write 门禁以及 PluginConfigStore 的 incarnation/revision CAS。
@@ -991,6 +991,18 @@ analyze_strategy_candidate 统一标为受控执行。公共 scope 委托既有�
 即使没有行情 DataScope，存在执行策略的 Tool 仍安装 repository write guard；AdviceRepository 在 immediate 写锁内同步校验后保存，
 拒绝失效请求的新建或覆盖。历史查询、反馈与其它插件不归此 owner，已提交事实保持可读。
 Web 依赖/影响预览从 catalog 派生四个入口，并展示模型/供数阻断及相关在途排空；Agent/MCP 发现与调用复核复用统一执行策略。
+
+`business.watch-monitoring` 管理 intraday-watch 统一求值器（AlertPlan + TradingPlan），
+以及五个触发/边沿/投递写入口；Watchlist/AlertPlan 编辑、历史、反馈及通用通知保留原归属。
+Workflow 声明 requiredPlugins 并在内部每步之间复核；手动运行也计入插件活动。
+Web 将真实 intraday scheduler 移入 PluginTasks，以同一业务开关管理 timer 和账户任务排空；
+scheduler 绑定创建时的许可，每账户前复核，旧 tick 不会在重启后复活。CLI 每轮仍经同一 Workflow 门禁。
+WatchTrigger 与 WatchRuleState 接入共享 RepositoryWriteScope，提交与投递认领在 immediate 写锁内复核。
+通知 Tool 将可信 executionGuard 传给 manager，异步读取后、实际渠道调用前再校验；watchDelivery 标记不充当许可。
+投递前由 begin_watch_delivery 生成并预留 notificationId；manager 保存真实 transport 回执后，
+repository 的 completeDelivery 仅在回执存在、全部 trigger ID 匹配同一预留通知且状态允许时结束既有 pending。
+该受限收尾可在撤销后执行，不新建 trigger、不覆盖新尝试，不对外暴露为管理 Tool；其它写入仍拒绝。
+关闭不能撤回已发出的请求，回执与有限重试沿用原通知语义，不声称外部 exactly-once。
 
 ### 7.2 副作用分级（重申）
 

@@ -5,8 +5,8 @@ import {
   NotificationSchema,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool } from '../define-tool.js';
+import { assertWatchMonitoring } from '../internal/watch-monitoring.js';
 
 const NotificationLevelSchema = z.enum(['info', 'warn', 'error', 'success']);
 
@@ -56,6 +56,11 @@ export const sendNotificationTool = defineTool({
   input: SendNotificationInput,
   output: SendNotificationOutput,
   handler: async (input, ctx) => {
+    const check = () => {
+      ctx.executionGuard?.();
+      if (input.watchDelivery !== undefined) assertWatchMonitoring(ctx);
+    };
+    check();
     const channel: NotificationChannel = input.channel ?? DEFAULT_NOTIFICATION_CHANNEL;
     const payload = channel === 'feishu' ? input.feishu : input.log;
     if (payload === undefined) {
@@ -79,7 +84,9 @@ export const sendNotificationTool = defineTool({
         },
       };
     }
+    check();
     const r = await manager.send({
+      executionGuard: check,
       ...(input.notificationId === undefined ? {} : { id: input.notificationId }),
       channel,
       payload,

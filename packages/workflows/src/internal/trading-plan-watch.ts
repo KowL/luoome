@@ -1148,6 +1148,8 @@ export const evaluateTradingPlanWatch = async (
         break;
       }
       const notification = await ctx.tools.send_notification.execute({
+        notificationId: attempt.data.notificationId,
+        watchDelivery: { owner: 'intraday-watch', triggerIds: [trigger.id] },
         channel: 'feishu',
         feishu: {
           title: `${notificationTitle(candidate.plan, candidate.condition)} · ${candidate.plan.stockName ?? candidate.plan.stockId}`,

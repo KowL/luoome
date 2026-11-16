@@ -75,8 +75,32 @@ export class NotificationManager {
     readonly payload: NotificationPayload;
     readonly adviceId?: string;
     readonly tacticSignalId?: string;
+    readonly executionGuard?: () => void;
+    readonly watchDelivery?: { readonly owner: string; readonly triggerIds: readonly string[] };
   }): Promise<NotificationSendOutcome> {
+    input.executionGuard?.();
     const id = input.id ?? this.idGen();
+    if (input.watchDelivery !== undefined) {
+      if (input.id === undefined)
+        throw new InvariantError('watch notification requires a reserved id');
+      const triggers = await Promise.all(
+        input.watchDelivery.triggerIds.map((triggerId) =>
+          this.repos.watchTrigger.findById(triggerId),
+        ),
+      );
+      input.executionGuard?.();
+      if (
+        triggers.length === 0 ||
+        triggers.some(
+          (trigger) =>
+            trigger === null ||
+            trigger.notificationId !== id ||
+            trigger.deliveryStatus !== 'pending',
+        )
+      )
+        throw new InvariantError('watch notification does not match a reserved attempt');
+    }
+
     if (input.id !== undefined) {
       const existing = await this.repos.notification.findById(id);
       if (existing !== null) {
@@ -88,11 +112,19 @@ export class NotificationManager {
             throw new InvariantError(`notification id already belongs to another payload: ${id}`);
           }
           if (existing.result === 'success' || this.feishu === undefined) {
+            input.executionGuard?.();
+            if (input.watchDelivery !== undefined)
+              await this.repos.watchTrigger.completeDelivery(
+                input.watchDelivery.triggerIds,
+                id,
+                this.clock(),
+              );
             return { notification: existing };
           }
         }
       }
     }
+    input.executionGuard?.();
     const sentAt = this.clock();
     const base = {
       id,
@@ -136,6 +168,12 @@ export class NotificationManager {
       ...(errorMessage !== undefined ? { errorMessage } : {}),
     };
     await this.repos.notification.save(notification);
+    if (input.watchDelivery !== undefined)
+      await this.repos.watchTrigger.completeDelivery(
+        input.watchDelivery.triggerIds,
+        id,
+        this.clock(),
+      );
     return { notification };
   }
 

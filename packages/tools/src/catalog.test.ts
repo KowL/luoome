@@ -23,6 +23,17 @@ describe('typed tool catalog', () => {
     expect(toolCatalog.run_strategy.owner).toBe('business.strategy-execution');
     expect(toolCatalog.run_strategy.execution).toBe('p3');
     for (const name of [
+      'begin_watch_delivery',
+      'commit_watch_evaluation',
+      'save_watch_rule_states',
+      'save_watch_trigger',
+      'set_watch_trigger_delivery_status',
+    ] as const) {
+      expect(toolCatalog[name].owner).toBe('business.watch-monitoring');
+      expect(toolCatalog[name].execution).toBe('p3');
+    }
+    expect(toolCatalog.set_watch_trigger_feedback.owner).toBe('business.watch');
+    for (const name of [
       'analyze_stock',
       'analyze_position',
       'market_outlook',

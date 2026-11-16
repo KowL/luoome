@@ -22,8 +22,8 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
-import { type Schema, watchTriggers } from '../../schema/index.js';
+import { notifications, type Schema, watchTriggers } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 import { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 
 // drizzle inArray 对 narrow text 列 + 联合字符串入参的泛型不匹配；改用 or(eq,...) 等价（语义不变）。
@@ -89,7 +89,10 @@ const ATTEMPTED: readonly DeliveryStatus[] = [...ATTEMPTED_DELIVERY_STATUSES];
  * - save 写新字段（含 deliveryStatus / priority / evalSnapshot 等）
  */
 export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async commitEvaluation(
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
@@ -97,7 +100,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
     for (const trigger of input.auditTriggers ?? []) assertWatchTriggerInvariants(trigger);
     for (const state of input.states) WatchRuleStateSchema.parse(state);
-    this.db.transaction((tx) => {
+    this.writes.transaction(this.db, (tx) => {
       for (const id of input.invalidatePending?.triggerIds ?? []) {
         const row = tx.select().from(watchTriggers).where(eq(watchTriggers.id, id)).get();
         if (row?.deliveryStatus !== 'pending')
@@ -124,19 +127,60 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     });
   }
 
-  async beginDelivery(ids: readonly string[], at: Date): Promise<boolean> {
+  async beginDelivery(ids: readonly string[], at: Date, notificationId?: string): Promise<boolean> {
+    return this.writes.transaction(this.db, () => {
+      if (ids.length === 0) return true;
+      this.db
+        .update(watchTriggers)
+        .set({
+          deliveryStatus: 'pending',
+          ...(notificationId === undefined ? {} : { notificationId }),
+          deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
+          lastDeliveryAttemptAt: at,
+          deliveryCompletedAt: null,
+        })
+        .where(inArray(watchTriggers.id, [...ids]))
+        .run();
+      return true;
+    });
+  }
+
+  // Only finish an already reserved attempt backed by its persisted transport receipt.
+  async completeDelivery(
+    ids: readonly string[],
+    notificationId: string,
+    at: Date,
+  ): Promise<boolean> {
     return this.db.transaction(
-      () => {
-        if (ids.length === 0) return true;
-        this.db
-          .update(watchTriggers)
-          .set({
-            deliveryStatus: 'pending',
-            deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
-            lastDeliveryAttemptAt: at,
-            deliveryCompletedAt: null,
-          })
-          .where(inArray(watchTriggers.id, [...ids]))
+      (tx) => {
+        const receipt = tx
+          .select()
+          .from(notifications)
+          .where(eq(notifications.id, notificationId))
+          .get();
+        const unique = [...new Set(ids)];
+        if (receipt === undefined || unique.length === 0) return false;
+        const rows = tx.select().from(watchTriggers).where(inArray(watchTriggers.id, unique)).all();
+        if (
+          rows.length !== unique.length ||
+          rows.some(
+            (row) =>
+              row.notificationId !== notificationId ||
+              !['pending', 'sent', 'failed', 'fallback-log'].includes(row.deliveryStatus),
+          )
+        )
+          return false;
+        const status =
+          receipt.result === 'success'
+            ? 'sent'
+            : receipt.result === 'suppressed'
+              ? 'fallback-log'
+              : 'failed';
+        tx.update(watchTriggers)
+          .set({ deliveryStatus: status, notificationId, deliveryCompletedAt: at, notified: true })
+          .where(
+            and(inArray(watchTriggers.id, unique), eq(watchTriggers.deliveryStatus, 'pending')),
+          )
           .run();
         return true;
       },
@@ -145,7 +189,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async save(trigger: WatchTrigger): Promise<void> {
-    this.put(trigger);
+    this.writes.transaction(this.db, () => this.put(trigger));
   }
 
   put(trigger: WatchTrigger): void {
@@ -409,24 +453,21 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     notificationId?: string,
     completedAt?: Date,
   ): Promise<boolean> {
-    return this.db.transaction(
-      () => {
-        if (ids.length === 0) return true;
-        const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
-        this.db
-          .update(watchTriggers)
-          .set({
-            deliveryStatus: status,
-            notificationId: notificationId ?? null,
-            ...(completedAt === undefined ? {} : { deliveryCompletedAt: completedAt }),
-            notified: isAttempted,
-          })
-          .where(inArray(watchTriggers.id, ids as string[]))
-          .run();
-        return true;
-      },
-      { behavior: 'immediate' },
-    );
+    return this.writes.transaction(this.db, () => {
+      if (ids.length === 0) return true;
+      const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
+      this.db
+        .update(watchTriggers)
+        .set({
+          deliveryStatus: status,
+          notificationId: notificationId ?? null,
+          ...(completedAt === undefined ? {} : { deliveryCompletedAt: completedAt }),
+          notified: isAttempted,
+        })
+        .where(inArray(watchTriggers.id, ids as string[]))
+        .run();
+      return true;
+    });
   }
 
   async setFeedback(

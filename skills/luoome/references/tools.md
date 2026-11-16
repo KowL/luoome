@@ -49,6 +49,8 @@ Stock pools, strategies and portfolio:
   `capability: 'fts' | 'metadata'` so metadata-only degradation is explicit.
 - `list_watch_plans` — active TradingPlans + AlertPlans + recent triggers.
 
+Watch monitoring is controlled by the host's `business.watch-monitoring` plugin. Disabling it stops new evaluations/triggers and watch notifications; history and feedback remain available. Other report notifications retain their own authorization.
+
 ## Advice
 
 Use advice tools only for an explicit analysis request:

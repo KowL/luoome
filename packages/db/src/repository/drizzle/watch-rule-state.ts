@@ -1,8 +1,8 @@
 import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
 import { type Schema, watchRuleStates } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type Row = typeof watchRuleStates.$inferSelect;
 
@@ -32,7 +32,10 @@ const fromDomain = (s: WatchRuleState): Row => ({
 
 /** WatchRuleState Drizzle 实现（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §9.3）。 */
 export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async listByPool(poolId: string): Promise<readonly WatchRuleState[]> {
     return this.db
@@ -45,7 +48,7 @@ export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository
   }
 
   async upsert(state: WatchRuleState): Promise<void> {
-    this.put(state);
+    this.writes.transaction(this.db, () => this.put(state));
   }
 
   put(state: WatchRuleState): void {
@@ -67,7 +70,7 @@ export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository
 
   async upsertMany(states: readonly WatchRuleState[]): Promise<void> {
     if (states.length === 0) return;
-    this.db.transaction((tx) => {
+    this.writes.transaction(this.db, (tx) => {
       for (const s of states) {
         tx.insert(watchRuleStates)
           .values(fromDomain(s))

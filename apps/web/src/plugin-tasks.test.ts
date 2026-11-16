@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ManagedPluginId } from '@luoome/core';
 import { buildTestContext, createTestPluginControl } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
+import { startIntradayPlanScheduler } from './intraday-plan-scheduler.js';
 import { type PluginTaskActivation, PluginTasks } from './plugin-tasks.js';
 import { startClosingReportScheduler, startStrategyScheduler } from './strategy-scheduler.js';
 
@@ -29,6 +30,96 @@ const id = 'task.strategy-schedules' as const;
 const requires = ['business.strategy-execution'] as const;
 
 describe('plugin task resources', () => {
+  it('unloads the real watch timer, drains one old account and registers once on re-enable', async () => {
+    const { ctx: base, set, clean } = await setup();
+    const ctx = { ...base, clock: () => new Date('2026-11-16T02:00:00Z') };
+    const watch = 'business.watch-monitoring' as const;
+    set(watch, false);
+    let starts = 0,
+      stops = 0,
+      calls = 0;
+    const started = deferred(),
+      release = deferred();
+    let scheduler: ReturnType<typeof startIntradayPlanScheduler> | undefined;
+    const host = new PluginTasks(ctx, [
+      {
+        id: watch,
+        start: (scope) => {
+          starts++;
+          const handle = startIntradayPlanScheduler(scope.ctx, {
+            startImmediately: false,
+            dispatch: (operation) => scope.run(operation),
+            runAccount: async (accountId) => {
+              calls++;
+              if (calls === 1) {
+                started.resolve();
+                await release.promise;
+              }
+              return {
+                ok: true,
+                data: {
+                  accountId,
+                  date: '2026-11-16',
+                  status: 'complete',
+                  checkedPlans: 0,
+                  freshQuotes: 0,
+                  stalePlans: 0,
+                  triggers: [],
+                  notified: 0,
+                  delivered: 0,
+                  suppressedByCooldown: 0,
+                  suppressedByDailyLimit: 0,
+                  notifyFailed: 0,
+                  errors: [],
+                },
+              };
+            },
+          });
+          scheduler = handle;
+          return {
+            stop() {
+              stops++;
+              handle.stop();
+            },
+          };
+        },
+      },
+    ]);
+    try {
+      expect(starts).toBe(0);
+      set(watch, true);
+      host.reconcile();
+      host.reconcile();
+      expect(starts).toBe(1);
+      if (!scheduler) throw new Error('missing timer');
+      const old = scheduler;
+      const active = old.tick();
+      await started.promise;
+      set(watch, false);
+      host.reconcile();
+      expect(stops).toBe(1);
+      expect(host.status()[0]).toMatchObject({ phase: 'draining', inFlight: 1 });
+      set(watch, true);
+      host.reconcile();
+      expect(starts).toBe(1);
+      release.resolve();
+      await active;
+      host.reconcile();
+      host.reconcile();
+      expect(starts).toBe(2);
+      expect(calls).toBe(1);
+      await old.tick();
+      expect(calls).toBe(1);
+      await scheduler.tick();
+      expect(calls).toBeGreaterThan(1);
+      expect(starts).toBe(2);
+    } finally {
+      release.resolve();
+      await host.stop();
+      clean();
+    }
+    expect(stops).toBe(2);
+  });
   it('owns one real strategy timer, removes it on disable, and keeps cutoff independent', async () => {
     const { ctx, set, clean } = await setup();
     set(id, false);
