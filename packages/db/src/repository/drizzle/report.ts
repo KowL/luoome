@@ -10,8 +10,8 @@ import {
 } from '@luoome/core';
 import { and, desc, eq, gte, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
-import { reports, type Schema } from '../../schema/index.js';
+import { notifications, reports, type Schema } from '../../schema/index.js';
+import { RepositoryWriteScope } from '../../write-scope.js';
 
 type ReportRow = typeof reports.$inferSelect;
 
@@ -74,68 +74,74 @@ export const toRow = (report: Report): typeof reports.$inferInsert => ({
 });
 
 export class DrizzleReportRepository implements ReportRepository {
-  constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+  constructor(
+    private readonly db: BunSQLiteDatabase<Schema>,
+    private readonly writes = new RepositoryWriteScope(),
+  ) {}
 
   async upsertForPeriod(report: Report): Promise<Report> {
-    const parsed = ReportSchema.parse(report);
-    assertReportInvariants(parsed);
-    const version = parsed.version ?? 1;
-    const key = {
-      kind: parsed.kind,
-      scopeKey: reportScopeKey(parsed.scope),
-      periodStart: parsed.periodStart,
-      periodEnd: parsed.periodEnd,
-    };
-    if (version > 1) {
-      const previous = await this.findByPeriodVersion({ ...key, version: version - 1 });
-      if (previous?.id !== parsed.supersedesReportId)
-        throw new InvariantError('report supplement predecessor mismatch');
-    }
-    const row = toRow(parsed);
-    const conflictTarget = [
-      reports.kind,
-      reports.scopeKey,
-      reports.periodStart,
-      reports.periodEnd,
-      reports.version,
-    ];
-    if (
-      parsed.kind === 'opening' ||
-      parsed.kind === 'closing' ||
-      parsed.kind === 'weekly' ||
-      parsed.kind === 'watchlist-facts'
-    ) {
-      this.db.insert(reports).values(row).onConflictDoNothing({ target: conflictTarget }).run();
-      const saved = await this.findByPeriodVersion({ ...key, version });
-      if (saved === null) throw new InvariantError('versioned report insert did not produce a row');
+    return this.writes.transaction(this.db, () => {
+      const parsed = ReportSchema.parse(report);
+      assertReportInvariants(parsed);
+      const version = parsed.version ?? 1;
+      const key = {
+        kind: parsed.kind,
+        scopeKey: reportScopeKey(parsed.scope),
+        periodStart: parsed.periodStart,
+        periodEnd: parsed.periodEnd,
+      };
+      if (version > 1) {
+        const previous = this.readPeriodVersion({ ...key, version: version - 1 });
+        if (previous?.id !== parsed.supersedesReportId)
+          throw new InvariantError('report supplement predecessor mismatch');
+      }
+      const row = toRow(parsed);
+      const conflictTarget = [
+        reports.kind,
+        reports.scopeKey,
+        reports.periodStart,
+        reports.periodEnd,
+        reports.version,
+      ];
+      if (
+        parsed.kind === 'opening' ||
+        parsed.kind === 'closing' ||
+        parsed.kind === 'weekly' ||
+        parsed.kind === 'watchlist-facts'
+      ) {
+        this.db.insert(reports).values(row).onConflictDoNothing({ target: conflictTarget }).run();
+        const saved = this.readPeriodVersion({ ...key, version });
+        if (saved === null)
+          throw new InvariantError('versioned report insert did not produce a row');
+        return saved;
+      }
+      this.db
+        .insert(reports)
+        .values(row)
+        .onConflictDoUpdate({
+          target: conflictTarget,
+          set: {
+            supersedesReportId: row.supersedesReportId,
+            scope: row.scope,
+            title: row.title,
+            generatedAt: row.generatedAt,
+            dataAsOf: row.dataAsOf,
+            status: row.status,
+            sections: row.sections,
+            evidence: row.evidence,
+            missingDimensions: row.missingDimensions,
+            deliveryStatus: row.deliveryStatus,
+            notificationPolicy: row.notificationPolicy,
+            decisionReviewFingerprint: row.decisionReviewFingerprint,
+            workflowRunId: row.workflowRunId,
+            updatedAt: row.updatedAt,
+          },
+        })
+        .run();
+      const saved = this.readPeriodVersion({ ...key, version });
+      if (saved === null) throw new Error('report upsert did not produce a readable row');
       return saved;
-    }
-    this.db
-      .insert(reports)
-      .values(row)
-      .onConflictDoUpdate({
-        target: conflictTarget,
-        set: {
-          supersedesReportId: row.supersedesReportId,
-          scope: row.scope,
-          title: row.title,
-          generatedAt: row.generatedAt,
-          dataAsOf: row.dataAsOf,
-          status: row.status,
-          sections: row.sections,
-          evidence: row.evidence,
-          missingDimensions: row.missingDimensions,
-          deliveryStatus: row.deliveryStatus,
-          notificationPolicy: row.notificationPolicy,
-          decisionReviewFingerprint: row.decisionReviewFingerprint,
-          workflowRunId: row.workflowRunId,
-          updatedAt: row.updatedAt,
-        },
-      })
-      .run();
-    const saved = await this.findByPeriodVersion({ ...key, version });
-    if (saved === null) throw new Error('report upsert did not produce a readable row');
-    return saved;
+    });
   }
 
   async findById(id: string): Promise<Report | null> {
@@ -150,6 +156,16 @@ export class DrizzleReportRepository implements ReportRepository {
     readonly periodEnd: string;
     readonly version: number;
   }): Promise<Report | null> {
+    return this.readPeriodVersion(input);
+  }
+
+  private readPeriodVersion(input: {
+    readonly kind: Report['kind'];
+    readonly scopeKey: string;
+    readonly periodStart: string;
+    readonly periodEnd: string;
+    readonly version: number;
+  }): Report | null {
     const row = this.db
       .select()
       .from(reports)
@@ -224,16 +240,19 @@ export class DrizzleReportRepository implements ReportRepository {
   }
 
   async setDeliveryStatus(id: string, status: DeliveryStatus): Promise<void> {
-    const current = await this.findById(id);
-    if (current === null) return;
-    if (current.notificationPolicy === 'never' && status !== 'not-requested')
-      throw new InvariantError('never report cannot enter delivery');
-    assertReportDeliveryTransition(current.deliveryStatus, status);
-    this.db
-      .update(reports)
-      .set({ deliveryStatus: status, deliveryAttemptId: null })
-      .where(eq(reports.id, id))
-      .run();
+    this.writes.transaction(this.db, () => {
+      const row = this.db.select().from(reports).where(eq(reports.id, id)).get();
+      const current = row === undefined ? null : toReport(row);
+      if (current === null) return;
+      if (current.notificationPolicy === 'never' && status !== 'not-requested')
+        throw new InvariantError('never report cannot enter delivery');
+      assertReportDeliveryTransition(current.deliveryStatus, status);
+      this.db
+        .update(reports)
+        .set({ deliveryStatus: status, deliveryAttemptId: null })
+        .where(eq(reports.id, id))
+        .run();
+    });
   }
 
   async claimDelivery(input: {
@@ -243,33 +262,38 @@ export class DrizzleReportRepository implements ReportRepository {
     readonly stalePendingBefore: Date;
     readonly failedRetryBefore: Date;
   }): Promise<boolean> {
-    const claimed = this.db
-      .update(reports)
-      .set({
-        deliveryStatus: 'pending',
-        deliveryAttemptId: input.attemptId,
-        updatedAt: input.now,
-      })
-      .where(
-        and(
-          eq(reports.id, input.id),
-          or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
-          or(
-            eq(reports.deliveryStatus, 'not-requested'),
-            and(
-              or(eq(reports.deliveryStatus, 'failed'), eq(reports.deliveryStatus, 'fallback-log')),
-              lte(reports.updatedAt, input.failedRetryBefore),
-            ),
-            and(
-              eq(reports.deliveryStatus, 'pending'),
-              lte(reports.updatedAt, input.stalePendingBefore),
+    return this.writes.transaction(this.db, () => {
+      const claimed = this.db
+        .update(reports)
+        .set({
+          deliveryStatus: 'pending',
+          deliveryAttemptId: input.attemptId,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(reports.id, input.id),
+            or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
+            or(
+              eq(reports.deliveryStatus, 'not-requested'),
+              and(
+                or(
+                  eq(reports.deliveryStatus, 'failed'),
+                  eq(reports.deliveryStatus, 'fallback-log'),
+                ),
+                lte(reports.updatedAt, input.failedRetryBefore),
+              ),
+              and(
+                eq(reports.deliveryStatus, 'pending'),
+                lte(reports.updatedAt, input.stalePendingBefore),
+              ),
             ),
           ),
-        ),
-      )
-      .returning({ id: reports.id })
-      .get();
-    return claimed !== undefined;
+        )
+        .returning({ id: reports.id })
+        .get();
+      return claimed !== undefined;
+    });
   }
 
   async finishDelivery(input: {
@@ -278,24 +302,81 @@ export class DrizzleReportRepository implements ReportRepository {
     readonly status: 'sent' | 'fallback-log' | 'failed';
     readonly now: Date;
   }): Promise<boolean> {
-    const finished = this.db
-      .update(reports)
-      .set({
-        deliveryStatus: input.status,
-        deliveryAttemptId: null,
-        updatedAt: input.now,
-      })
-      .where(
-        and(
-          eq(reports.id, input.id),
-          or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
-          eq(reports.deliveryStatus, 'pending'),
-          eq(reports.deliveryAttemptId, input.attemptId),
-        ),
-      )
-      .returning({ id: reports.id })
-      .get();
-    return finished !== undefined;
+    return this.writes.transaction(this.db, () => {
+      const finished = this.db
+        .update(reports)
+        .set({
+          deliveryStatus: input.status,
+          deliveryAttemptId: null,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(reports.id, input.id),
+            or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
+            eq(reports.deliveryStatus, 'pending'),
+            eq(reports.deliveryAttemptId, input.attemptId),
+          ),
+        )
+        .returning({ id: reports.id })
+        .get();
+      return finished !== undefined;
+    });
+  }
+
+  async isDeliveryPending(input: {
+    readonly reportId: string;
+    readonly attemptId: string;
+  }): Promise<boolean> {
+    const row = this.db.select().from(reports).where(eq(reports.id, input.reportId)).get();
+    return (
+      row !== undefined &&
+      row.notificationPolicy !== 'never' &&
+      row.deliveryStatus === 'pending' &&
+      row.deliveryAttemptId === input.attemptId
+    );
+  }
+
+  // A revoked generation may only finish its exact reservation backed by a transport receipt.
+  async completeDelivery(input: {
+    readonly reportId: string;
+    readonly attemptId: string;
+    readonly notificationId: string;
+    readonly now: Date;
+  }): Promise<boolean> {
+    return this.db.transaction(
+      (tx) => {
+        if (input.notificationId !== `report-notification:${input.reportId}`) return false;
+        const receipt = tx
+          .select()
+          .from(notifications)
+          .where(eq(notifications.id, input.notificationId))
+          .get();
+        if (receipt === undefined) return false;
+        const status =
+          receipt.result === 'success'
+            ? 'sent'
+            : receipt.result === 'suppressed'
+              ? 'fallback-log'
+              : 'failed';
+        return (
+          tx
+            .update(reports)
+            .set({ deliveryStatus: status, deliveryAttemptId: null, updatedAt: input.now })
+            .where(
+              and(
+                eq(reports.id, input.reportId),
+                or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
+                eq(reports.deliveryStatus, 'pending'),
+                eq(reports.deliveryAttemptId, input.attemptId),
+              ),
+            )
+            .returning({ id: reports.id })
+            .get() !== undefined
+        );
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async remove(id: string): Promise<void> {

@@ -98,3 +98,5 @@ For permission and response requirements, read [safety and errors](./safety.md).
 Strategy execution requires the host to enable `business.strategy-execution`; automatic schedules additionally require `task.strategy-schedules`.
 Definitions/history remain readable when execution is disabled. `run_strategy_backtest` get/list remain queries; run/execute delegate to controlled targets.
 Scheduled/replay rule inputs may come entirely from persisted local data. Missing live/archived ladder inputs retain their existing availability and acceptance rules.
+
+Report generation and report notification retries require the host's explicit `business.report` activation. Historical `get_report`, `list_reports` and `render_report` remain available when disabled. Strategy daily cycles, watch monitoring and generic notifications retain independent authorization; never retry saved calls to bypass a disabled report plugin.

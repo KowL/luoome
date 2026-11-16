@@ -1480,6 +1480,7 @@ const runWeeklyReport = async (
 };
 
 export const weeklyReportOperation = defineOperation<WeeklyInput, WeeklyOutput>({
+  requiredPlugins: ['business.report'],
   name: 'weekly-report',
   description: '按本周真实交易日生成并幂等保存结构化周报',
   input: WeeklyReportInput,

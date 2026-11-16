@@ -30,6 +30,100 @@ const id = 'task.strategy-schedules' as const;
 const requires = ['business.strategy-execution'] as const;
 
 describe('plugin task resources', () => {
+  it('unloads report resources, drains old work and registers once without stopping strategy or watch', async () => {
+    const { ctx: base, set, clean } = await setup();
+    const ctx = { ...base, clock: () => new Date('2026-11-16T02:00:00Z') };
+    const report = 'business.report' as const;
+    set(report, false);
+    let starts = 0,
+      stops = 0,
+      calls = 0,
+      strategies = 0,
+      watches = 0;
+    const started = deferred(),
+      release = deferred();
+    let scheduler: ReturnType<typeof startClosingReportScheduler> | undefined;
+    const host = new PluginTasks(ctx, [
+      {
+        id: report,
+        start: (scope) => {
+          starts++;
+          const handle = startClosingReportScheduler(scope.ctx, {
+            startImmediately: false,
+            dispatch: (operation) => scope.run(operation),
+            runCutoff: async () => {
+              calls++;
+              if (calls === 1) {
+                started.resolve();
+                await release.promise;
+              }
+              return { ok: true, data: { date: '2026-11-16', created: [], failed: [] } };
+            },
+          });
+          scheduler = handle;
+          return {
+            stop() {
+              stops++;
+              handle.stop();
+            },
+          };
+        },
+      },
+    ]);
+    const strategy = startStrategyScheduler(ctx, {
+      startImmediately: false,
+      run: async () => {
+        strategies++;
+        return { ok: true, data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 } };
+      },
+    });
+    const watch = startIntradayPlanScheduler(ctx, {
+      startImmediately: false,
+      runAccount: async () => {
+        watches++;
+        return { ok: false, error: { kind: 'internal', cause: 'fixture' } };
+      },
+    });
+    try {
+      expect(starts).toBe(0);
+      set(report, true);
+      host.reconcile();
+      host.reconcile();
+      expect(starts).toBe(1);
+      if (!scheduler) throw new Error('missing timer');
+      const old = scheduler,
+        pending = old.tick();
+      await started.promise;
+      set(report, false);
+      host.reconcile();
+      expect(stops).toBe(1);
+      expect(host.status()[0]).toMatchObject({ phase: 'draining', inFlight: 1 });
+      await strategy.tick();
+      await watch.tick();
+      expect(strategies).toBe(1);
+      expect(watches).toBeGreaterThan(0);
+      set(report, true);
+      host.reconcile();
+      expect(starts).toBe(1);
+      release.resolve();
+      await pending;
+      host.reconcile();
+      host.reconcile();
+      expect(starts).toBe(2);
+      await old.tick();
+      expect(calls).toBe(1);
+      await scheduler.tick();
+      expect(calls).toBe(2);
+      expect(starts).toBe(2);
+    } finally {
+      release.resolve();
+      strategy.stop();
+      watch.stop();
+      await host.stop();
+      clean();
+    }
+    expect(stops).toBe(2);
+  });
   it('unloads the real watch timer, drains one old account and registers once on re-enable', async () => {
     const { ctx: base, set, clean } = await setup();
     const ctx = { ...base, clock: () => new Date('2026-11-16T02:00:00Z') };

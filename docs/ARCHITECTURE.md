@@ -971,7 +971,7 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
 策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
 Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
-P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控也已独立接入，其它通知等业务切片仍待实施。
+P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控与报告也已独立接入，通用通知等业务切片仍待实施。
 `PluginSettingsStore` 只投影可信的内置元数据、catalog 派生贡献、当前路由及本宿主状态；
 不暴露文件路径、凭证或任意执行配置。GET/preview 不外发，initialize/migrate/set 严格校验输入，
 保存经既有同源/write 门禁以及 PluginConfigStore 的 incarnation/revision CAS。
@@ -1003,6 +1003,16 @@ WatchTrigger 与 WatchRuleState 接入共享 RepositoryWriteScope，提交与投
 repository 的 completeDelivery 仅在回执存在、全部 trigger ID 匹配同一预留通知且状态允许时结束既有 pending。
 该受限收尾可在撤销后执行，不新建 trigger、不覆盖新尝试，不对外暴露为管理 Tool；其它写入仍拒绝。
 关闭不能撤回已发出的请求，回执与有限重试沿用原通知语义，不声称外部 exactly-once。
+
+`business.report` 默认关闭，catalog 纳管 save_report 与 set_report_delivery_status；历史 get/list/render/delete 不受此执行开关限制。
+report、opening/closing/weekly、daily-review、risk-report 和 closing-report-cutoff 声明 requiredPlugins；
+共享 runner 跟踪手动活动、隔离 provider scope，并在区块收集后复核，撤销错误不会误转为普通降级。
+ReportRepository 的生成、覆盖、领取与普通状态写入均在 immediate 写锁内校验共享 write scope。
+Web 的截止/补投 scheduler 由 PluginTasks 以 business.report 管理，绑定创建时的许可，逐次补投前复核；
+策略调度在报告关闭时跳过衍生报告，不影响已发布策略事实、调度推进、盯盘或盘后数据。
+报告通知带 reportDelivery（reportId + attemptId）与稳定 report-notification ID；通知 manager 在异步读取后、实际发送前复核许可及 pending 领取。
+实际 transport 回执保存后，仅用 receipt + report ID + 当前 attemptId 完成原 pending，可在撤销后收尾，不允许新报告或覆盖后续尝试。
+其它通知仍保持各自权限；成功报告重试复用既存回执，失败/降级保持原重试规则，不能撤回已发出的外部请求。
 
 ### 7.2 副作用分级（重申）
 

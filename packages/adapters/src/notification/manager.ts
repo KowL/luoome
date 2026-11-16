@@ -76,10 +76,27 @@ export class NotificationManager {
     readonly adviceId?: string;
     readonly tacticSignalId?: string;
     readonly executionGuard?: () => void;
+    readonly reportDelivery?: { readonly reportId: string; readonly attemptId: string };
     readonly watchDelivery?: { readonly owner: string; readonly triggerIds: readonly string[] };
   }): Promise<NotificationSendOutcome> {
     input.executionGuard?.();
     const id = input.id ?? this.idGen();
+    if (input.reportDelivery !== undefined) {
+      if (
+        id !== `report-notification:${input.reportDelivery.reportId}` ||
+        !(await this.repos.report.isDeliveryPending(input.reportDelivery))
+      )
+        throw new InvariantError('report notification does not match a reserved attempt');
+      input.executionGuard?.();
+    }
+    const finishReport = async () => {
+      if (input.reportDelivery !== undefined)
+        await this.repos.report.completeDelivery({
+          ...input.reportDelivery,
+          notificationId: id,
+          now: this.clock(),
+        });
+    };
     if (input.watchDelivery !== undefined) {
       if (input.id === undefined)
         throw new InvariantError('watch notification requires a reserved id');
@@ -119,6 +136,7 @@ export class NotificationManager {
                 id,
                 this.clock(),
               );
+            await finishReport();
             return { notification: existing };
           }
         }
@@ -174,6 +192,7 @@ export class NotificationManager {
         id,
         this.clock(),
       );
+    await finishReport();
     return { notification };
   }
 

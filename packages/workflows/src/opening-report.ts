@@ -653,6 +653,7 @@ const runOpeningReport = async (
 };
 
 export const openingReportOperation = defineOperation<OpeningInput, OpeningOutput>({
+  requiredPlugins: ['business.report'],
   name: 'opening-report',
   description: '生成并幂等保存指定交易日的结构化开盘简报',
   input: OpeningReportInput,

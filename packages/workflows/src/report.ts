@@ -22,6 +22,7 @@ export const ReportWorkflowInput = z.discriminatedUnion('kind', [
 export type ReportWorkflowInputT = z.infer<typeof ReportWorkflowInput>;
 
 export const reportWorkflow = defineWorkflow<ReportWorkflowInputT, unknown>({
+  requiredPlugins: ['business.report'],
   name: 'report',
   description: '生成开盘/收盘/周报/每日复盘报告（kind=opening|closing|weekly|daily-review）',
   input: ReportWorkflowInput,

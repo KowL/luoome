@@ -439,6 +439,14 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
             }),
         },
         {
+          id: 'business.report',
+          start: (scope) =>
+            startClosingReportScheduler(scope.ctx, {
+              startImmediately: false,
+              dispatch: (operation) => scope.run(operation),
+            }),
+        },
+        {
           id: 'business.watch-monitoring',
           start: (scope) =>
             startIntradayPlanScheduler(scope.ctx, {
@@ -451,7 +459,6 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
     ? [
-        startClosingReportScheduler(ctx, { startImmediately: false }),
         startPortfolioPerformanceScheduler(ctx, { startImmediately: false }),
         startPostMarketScheduler(ctx, { startImmediately: false }),
       ]

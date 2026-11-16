@@ -139,7 +139,12 @@ const runDue: WorkflowStep = async (previous, ctx) => {
   const reportDate = dateInShanghai(reportNow);
   const planStart = new Date(`${reportDate}T16:30:00+08:00`);
   let cutoff: Awaited<ReturnType<typeof closingReportCutoffWorkflow.run>> | undefined;
+  const reportAdmission = ctx.executionPolicy?.acquire('business.report');
+  const reportActive = () =>
+    reportAdmission?.ok === true && ctx.executionPolicy?.valid(reportAdmission.permit) === true;
   if (
+    !input.deferReports &&
+    reportActive() &&
     !ctx.abortSignal?.aborted &&
     reportNow >= planStart &&
     !isWeekend(planStart) &&
@@ -151,11 +156,11 @@ const runDue: WorkflowStep = async (previous, ctx) => {
       ctx.logger.warn('run-strategy-schedules: account listing failed', {
         error: accounts.error,
       });
-    } else if (!input.deferReports) {
+    } else {
       cutoff = await closingReportCutoffWorkflow.run({ date: reportDate }, ctx);
     }
   }
-  if (cutoff !== undefined && (!cutoff.ok || cutoff.data.failed.length > 0)) {
+  if (reportActive() && cutoff !== undefined && (!cutoff.ok || cutoff.data.failed.length > 0)) {
     const reportError = cutoff.ok
       ? `收盘复盘生成失败: ${cutoff.data.failed.join(', ')}`
       : `收盘复盘生成失败: ${errorText(cutoff.error)}`;

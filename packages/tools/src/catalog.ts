@@ -792,7 +792,7 @@ export const toolCatalog = {
     agent: false,
   },
   resume_strategy: { owner: 'business.strategy', tool: resumeStrategyTool, agent: false },
-  save_report: { owner: 'business.report', tool: saveReportTool, agent: false },
+  save_report: { execution: 'p3', owner: 'business.report', tool: saveReportTool, agent: false },
   save_watch_rule_states: {
     execution: 'p3',
     owner: 'business.watch-monitoring',
@@ -807,6 +807,7 @@ export const toolCatalog = {
   },
   send_notification: { owner: 'business.notification', tool: sendNotificationTool, agent: false },
   set_report_delivery_status: {
+    execution: 'p3',
     owner: 'business.report',
     tool: setReportDeliveryStatusTool,
     agent: false,

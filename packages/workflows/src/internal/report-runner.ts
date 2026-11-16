@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-
 import type {
   Report,
   ReportEvidence,
@@ -9,6 +8,7 @@ import type {
   ToolResult,
   WorkflowRunMode,
 } from '@luoome/core';
+import { PluginExecutionDenied } from '@luoome/core';
 
 import type { WorkflowContext } from '../define-workflow.js';
 
@@ -56,6 +56,7 @@ const deliverClaimedReport = async (
     return { report, notified: false, failed: false, skippedByPolicy: true };
   let status: 'sent' | 'fallback-log' | 'failed' = 'failed';
   let errorKind: string | undefined;
+  let receiptFinished = false;
   const rendered = await ctx.tools.render_report.execute({
     reportId: report.id,
     format: 'notification',
@@ -64,7 +65,8 @@ const deliverClaimedReport = async (
     errorKind = rendered.error.kind;
   } else {
     const sent = await ctx.tools.send_notification.execute({
-      ...(report.kind === 'closing' ? { notificationId: `report-notification:${report.id}` } : {}),
+      notificationId: `report-notification:${report.id}`,
+      reportDelivery: { reportId: report.id, attemptId },
       channel: 'feishu',
       feishu: {
         title: report.title,
@@ -72,32 +74,38 @@ const deliverClaimedReport = async (
         level: report.status === 'complete' ? 'success' : 'warn',
       },
     });
+    receiptFinished = sent.ok;
     if (!sent.ok || sent.data.notification.result === 'failed') {
       errorKind = sent.ok ? 'delivery_failed' : sent.error.kind;
     } else {
       status = sent.data.notification.result === 'suppressed' ? 'fallback-log' : 'sent';
     }
   }
-  const finished = await ctx.tools.set_report_delivery_status.execute({
-    reportId: report.id,
-    deliveryStatus: status,
-    attemptId,
-  });
+  if (!receiptFinished) ctx.executionGuard?.();
+  const finished = receiptFinished
+    ? { ok: true as const }
+    : await ctx.tools.set_report_delivery_status.execute({
+        reportId: report.id,
+        deliveryStatus: status,
+        attemptId,
+      });
   if (!finished.ok) errorKind = finished.error.kind;
   const current = await ctx.tools.get_report.execute({ id: report.id });
   if (!current.ok) errorKind = current.error.kind;
+  const completed = finished.ok && current.ok && current.data.report.deliveryStatus === status;
   return {
     report: current.ok ? current.data.report : report,
-    notified: status === 'sent' && finished.ok && current.ok,
-    failed: status === 'failed' || !finished.ok || !current.ok,
+    notified: status === 'sent' && completed,
+    failed: status === 'failed' || !completed,
     ...(errorKind === undefined ? {} : { errorKind }),
   };
 };
 
-export const executeReportWorkflow = async (
+const runReportWorkflow = async (
   input: ExecuteReportWorkflowInput,
   ctx: WorkflowContext,
 ): Promise<ReportRunResult | ToolResult<never>> => {
+  ctx.executionGuard?.();
   const generatedAt = ctx.clock();
   let previousReport: Report | undefined;
   if (input.kind === 'closing' || input.kind === 'weekly' || input.mode === 'scheduled') {
@@ -180,6 +188,7 @@ export const executeReportWorkflow = async (
   let pieces: readonly ReportSectionPiece[];
   try {
     pieces = await input.buildSections(generatedAt, ctx);
+    ctx.executionGuard?.();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await ctx.tools.record_workflow_run.execute({
@@ -195,6 +204,7 @@ export const executeReportWorkflow = async (
         error: message.slice(0, 500),
       },
     });
+    if (error instanceof PluginExecutionDenied) throw error;
     return { ok: false, error: { kind: 'internal', cause: message } };
   }
 
@@ -506,4 +516,22 @@ export const executeReportWorkflow = async (
     workflowRunId,
     notified,
   };
+};
+
+export const executeReportWorkflow = (
+  input: ExecuteReportWorkflowInput,
+  ctx: WorkflowContext,
+): Promise<ReportRunResult | ToolResult<never>> => {
+  const execute = () => runReportWorkflow(input, ctx);
+  const invoke = () =>
+    ctx.dataScope === undefined
+      ? execute()
+      : ctx.dataScope.run(
+          execute,
+          () => ctx.executionGuard?.(),
+          JSON.stringify(['business.report', ctx.executionPolicy?.acquire('business.report')]),
+        );
+  return ctx.executionPolicy === undefined
+    ? invoke()
+    : ctx.executionPolicy.runPlugin('business.report', invoke, ctx.executionGuard);
 };

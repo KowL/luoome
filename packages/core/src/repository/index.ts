@@ -515,6 +515,16 @@ export interface TradingPlanRepository {
 }
 
 export interface ReportRepository {
+  isDeliveryPending(input: {
+    readonly reportId: string;
+    readonly attemptId: string;
+  }): Promise<boolean>;
+  completeDelivery(input: {
+    readonly reportId: string;
+    readonly attemptId: string;
+    readonly notificationId: string;
+    readonly now: Date;
+  }): Promise<boolean>;
   upsertForPeriod(report: Report): Promise<Report>;
   findById(id: string): Promise<Report | null>;
   findByPeriodVersion(input: {

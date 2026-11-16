@@ -1,12 +1,12 @@
 import { DeliveryStatusSchema } from '@luoome/core';
 import { z } from 'zod';
-
 import {
   defineTool,
   errInvalidInput,
   errLeaseLostBeforeCommit,
   errNotFound,
 } from '../define-tool.js';
+import { assertReportGeneration } from '../internal/report-generation.js';
 
 export const SetReportDeliveryStatusInput = z.object({
   reportId: z.string().min(1),
@@ -26,6 +26,7 @@ export const setReportDeliveryStatusTool = defineTool({
   input: SetReportDeliveryStatusInput,
   output: SetReportDeliveryStatusOutput,
   handler: async (input, ctx) => {
+    assertReportGeneration(ctx);
     const report = await ctx.repos.report.findById(input.reportId);
     if (report === null) return errNotFound('Report', input.reportId);
     if (report.notificationPolicy === 'never' && input.deliveryStatus !== 'not-requested')

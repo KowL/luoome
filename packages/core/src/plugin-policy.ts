@@ -25,6 +25,7 @@ export const MANAGED_PLUGIN_IDS = [
   'business.strategy-execution',
   'business.analysis',
   'business.watch-monitoring',
+  'business.report',
   ...SOURCE_PLUGIN_IDS,
   ...TASK_PLUGIN_IDS,
 ] as const;

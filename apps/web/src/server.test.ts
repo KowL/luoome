@@ -3104,6 +3104,75 @@ const chat = async (target: Hono, body: unknown): Promise<Response> =>
   );
 
 describe('plugin settings HTTP and Agent revocation', () => {
+  it('controls report creation through plugin settings while preserving history and render routes', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'luoome-report-http-'));
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    store.initialize();
+    try {
+      const ctx = await buildTestContext({
+        executionPolicy: createPluginExecutionPolicy(
+          store,
+          new Set(['read', 'advice', 'write', 'external']),
+        ),
+      });
+      const local = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: true,
+        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
+      });
+      const post = (path: string, body: unknown) =>
+        local.fetch(
+          new Request(`http://test${path}`, {
+            method: 'POST',
+            headers: { origin: 'http://test', 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+        );
+      const set = async (enabled: boolean) => {
+        const current = store.read();
+        if (!current.ok) throw new Error('missing fixture');
+        expect(
+          await (
+            await post('/api/settings/plugins', {
+              action: 'set',
+              id: 'business.report',
+              enabled,
+              incarnation: current.config.incarnation,
+              revision: current.config.revision,
+            })
+          ).json(),
+        ).toMatchObject({ ok: true, data: { committed: true } });
+      };
+      expect((await post('/api/reports/run/opening', { notify: true })).status).toBe(403);
+      await set(true);
+      const generated = (await (
+        await post('/api/reports/run/opening', { notify: false })
+      ).json()) as { ok: boolean; data: { report: { id: string } } };
+      expect(generated.ok).toBe(true);
+      await set(false);
+      for (const kind of ['opening', 'closing', 'weekly'])
+        expect((await post(`/api/reports/run/${kind}`, { notify: true })).status).toBe(403);
+      expect((await local.fetch(new Request('http://test/api/reports'))).status).toBe(200);
+      expect(
+        (await local.fetch(new Request(`http://test/api/reports/${generated.data.report.id}`)))
+          .status,
+      ).toBe(200);
+      expect(
+        (
+          await local.fetch(
+            new Request(
+              `http://test/api/reports/${generated.data.report.id}/render?format=markdown`,
+            ),
+          )
+        ).status,
+      ).toBe(200);
+      expect((await post('/api/watch/run-once', { notify: false })).status).toBe(403);
+      await set(true);
+      expect((await post('/api/reports/run/opening', { notify: false })).status).toBe(200);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
   it('controls the watch run-once route while retaining history and feedback routes', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-watch-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));

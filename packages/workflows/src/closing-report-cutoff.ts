@@ -40,6 +40,7 @@ const run: WorkflowStep = async (previous, ctx) => {
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < accounts.data.accounts.length) {
+      ctx.executionGuard?.();
       const index = next++;
       const account = accounts.data.accounts[index];
       if (account === undefined) break;
@@ -49,6 +50,7 @@ const run: WorkflowStep = async (previous, ctx) => {
         scope,
         periodEnd: date,
       });
+      ctx.executionGuard?.();
       if (existing.ok) {
         if (existing.data.report.deliveryStatus === 'sent') {
           outcomes[index] = 'existing';
@@ -143,9 +145,10 @@ const run: WorkflowStep = async (previous, ctx) => {
       outcomes[index] = report.ok ? (report.data.created ? 'created' : 'existing') : 'failed';
     }
   };
-  await Promise.all(
+  const workers = await Promise.allSettled(
     Array.from({ length: Math.min(4, accounts.data.accounts.length) }, () => worker()),
   );
+  for (const worker of workers) if (worker.status === 'rejected') throw worker.reason;
   for (const [index, account] of accounts.data.accounts.entries()) {
     if (outcomes[index] === 'created') created.push(account.id);
     if (outcomes[index] === 'failed') failed.push(account.id);
@@ -157,6 +160,7 @@ export const closingReportCutoffWorkflow = defineWorkflow<
   z.infer<typeof ClosingReportCutoffInput>,
   ClosingReportCutoffOutputT
 >({
+  requiredPlugins: ['business.report'],
   name: 'closing-report-cutoff',
   description: '等待当日策略与账户计划批次完成后统一发布每账户的一份收盘报告',
   input: ClosingReportCutoffInput,

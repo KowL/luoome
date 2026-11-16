@@ -1,4 +1,9 @@
-import { dateInShanghai, type ToolContext, type ToolResult } from '@luoome/core';
+import {
+  dateInShanghai,
+  PluginExecutionDenied,
+  type ToolContext,
+  type ToolResult,
+} from '@luoome/core';
 import {
   type ClosingReportCutoffOutputT,
   closingReportCutoffWorkflow,
@@ -139,15 +144,34 @@ export const startStrategyScheduler = (
 };
 
 export const startClosingReportScheduler = (
-  ctx: ToolContext,
+  context: ToolContext,
   options: Pick<
     StartStrategySchedulerOptions,
-    'intervalMs' | 'startImmediately' | 'runCutoff'
+    'intervalMs' | 'startImmediately' | 'runCutoff' | 'dispatch'
   > = {},
 ): { tick(): Promise<void>; stop(): void } => {
   const intervalMs = options.intervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS;
   if (!Number.isFinite(intervalMs) || intervalMs <= 0)
     throw new Error('invalid closing report interval');
+  let stopped = false;
+  const policy = context.executionPolicy?.bind();
+  const admission = policy?.acquire('business.report');
+  const active = () => {
+    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
+    try {
+      context.executionGuard?.();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const ctx: ToolContext = {
+    ...context,
+    ...(policy === undefined ? {} : { executionPolicy: policy }),
+    executionGuard: () => {
+      if (!active()) throw new PluginExecutionDenied('plugin:business.report');
+    },
+  };
   const runCutoff =
     options.runCutoff ??
     (async () => {
@@ -158,13 +182,13 @@ export const startClosingReportScheduler = (
           date: priorDate,
           error: recovered.ok ? recovered.data.failed : recovered.error,
         });
+      ctx.executionGuard?.();
       return closingReportCutoffWorkflow.run({}, ctx);
     });
-  let stopped = false;
   let cutoffRunning = false;
 
-  const tick = async (): Promise<void> => {
-    if (stopped || cutoffRunning) return;
+  const runTick = async (): Promise<void> => {
+    if (!active() || cutoffRunning) return;
     cutoffRunning = true;
     try {
       const result = await runCutoff();
@@ -181,6 +205,7 @@ export const startClosingReportScheduler = (
     }
   };
 
+  const tick = () => (options.dispatch === undefined ? runTick() : options.dispatch(runTick));
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
   if (options.startImmediately !== false) void tick();

@@ -201,6 +201,7 @@ const stepFinalize: WorkflowStep = async (prev, ctx) => {
 };
 
 export const dailyReviewOperation = defineOperation<DailyReviewInputT, DailyReviewOutputT>({
+  requiredPlugins: ['business.report'],
   name: 'daily-review',
   description: '生成当日复盘（今日 advice 汇总 + 7 日准确率 + 涨停梯队快照 + vs 昨日 diff）',
   input: DailyReviewInput,

@@ -1,7 +1,7 @@
 import { assertReportInvariants, ReportSchema, reportScopeKey } from '@luoome/core';
 import { z } from 'zod';
-
 import { defineTool, errInvalidInput } from '../define-tool.js';
+import { assertReportGeneration } from '../internal/report-generation.js';
 
 export const SaveReportInput = z.object({
   report: ReportSchema,
@@ -21,6 +21,7 @@ export const saveReportTool = defineTool({
   input: SaveReportInput,
   output: SaveReportOutput,
   handler: async (input, ctx) => {
+    assertReportGeneration(ctx);
     assertReportInvariants(input.report);
     const existing = await ctx.repos.report.findByPeriodVersion({
       kind: input.report.kind,

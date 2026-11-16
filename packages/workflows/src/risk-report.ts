@@ -195,6 +195,7 @@ const stepFinalize: WorkflowStep = async (prev) => {
 };
 
 export const riskReportWorkflow = defineWorkflow<RiskReportInputT, RiskReportOutputT>({
+  requiredPlugins: ['business.report'],
   name: 'risk-report',
   description: '生成账户风险日报（集中度 + VaR + 大盘背景）',
   input: RiskReportInput,

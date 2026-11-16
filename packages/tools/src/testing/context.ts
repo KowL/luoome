@@ -79,6 +79,7 @@ export const createTestPluginControl = (home: string) => {
         'business.strategy-execution',
         'business.analysis',
         'business.watch-monitoring',
+        'business.report',
         ...TASK_PLUGIN_IDS,
       ] as const)
         config = store.set(id, true, config);
@@ -214,6 +215,7 @@ const createTestNotificationManager = (repos: RepositoryRegistry) => ({
     };
     adviceId?: string;
     tacticSignalId?: string;
+    reportDelivery?: { reportId: string; attemptId: string };
   }): Promise<{ notification: unknown }> {
     const id = input.id ?? `test-notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const existing = input.id === undefined ? null : await repos.notification.findById(id);
@@ -229,6 +231,12 @@ const createTestNotificationManager = (repos: RepositoryRegistry) => ({
       sentAt: new Date(),
     };
     await repos.notification.save(notification);
+    if (input.reportDelivery !== undefined)
+      await repos.report.completeDelivery({
+        ...input.reportDelivery,
+        notificationId: id,
+        now: notification.sentAt,
+      });
     return { notification };
   },
 });

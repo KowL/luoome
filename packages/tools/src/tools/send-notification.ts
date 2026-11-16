@@ -6,6 +6,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool } from '../define-tool.js';
+import { assertReportGeneration } from '../internal/report-generation.js';
 import { assertWatchMonitoring } from '../internal/watch-monitoring.js';
 
 const NotificationLevelSchema = z.enum(['info', 'warn', 'error', 'success']);
@@ -30,6 +31,9 @@ export const SendNotificationInput = z.object({
   log: LogPayloadInputSchema.optional(),
   adviceId: z.string().min(1).optional(),
   tacticSignalId: z.string().min(1).optional(),
+  reportDelivery: z
+    .object({ reportId: z.string().min(1), attemptId: z.string().min(1) })
+    .optional(),
   watchDelivery: z
     .object({ owner: z.string().min(1), triggerIds: z.array(z.string().min(1)).min(1) })
     .optional(),
@@ -58,6 +62,7 @@ export const sendNotificationTool = defineTool({
   handler: async (input, ctx) => {
     const check = () => {
       ctx.executionGuard?.();
+      if (input.reportDelivery !== undefined) assertReportGeneration(ctx);
       if (input.watchDelivery !== undefined) assertWatchMonitoring(ctx);
     };
     check();
@@ -92,6 +97,7 @@ export const sendNotificationTool = defineTool({
       payload,
       ...(input.adviceId !== undefined ? { adviceId: input.adviceId } : {}),
       ...(input.tacticSignalId !== undefined ? { tacticSignalId: input.tacticSignalId } : {}),
+      ...(input.reportDelivery === undefined ? {} : { reportDelivery: input.reportDelivery }),
       ...(input.watchDelivery === undefined ? {} : { watchDelivery: input.watchDelivery }),
     });
     return { notification: NotificationSchema.parse(r.notification) };

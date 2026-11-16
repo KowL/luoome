@@ -28,6 +28,7 @@ const setup = async () => {
     id:
       | 'business.strategy-execution'
       | 'business.analysis'
+      | 'business.report'
       | 'business.watch-monitoring'
       | 'task.strategy-schedules'
       | 'strategy.ai-insight'
@@ -55,6 +56,34 @@ const deferred = () => {
 };
 
 describe('Web plugin settings projection and conditional commands', () => {
+  it('projects report generation independently from shared history and other plugin resources', async () => {
+    const { store, settings, runtime, command, context } = await setup();
+    store.initialize();
+    const preview = settings.preview(command('business.report', true), runtime);
+    expect(preview.affected[0]?.contributions.map((item) => item.name).sort()).toEqual([
+      'save_report',
+      'set_report_delivery_status',
+    ]);
+    expect(preview.notes.join(' ')).toContain('策略日循环、盯盘');
+    expect(preview.affected.map((row) => row.id)).toEqual(['business.report']);
+    settings.save(command('business.report', true), runtime);
+    const tasks = new PluginTasks(context, [
+      { id: 'business.report', start: () => ({ stop() {} }) },
+    ]);
+    try {
+      expect(
+        settings.read({ ...runtime, tasks }).plugins.find((row) => row.id === 'business.report')
+          ?.runtime.task?.phase,
+      ).toBe('ready');
+      settings.save(command('business.report', false), { ...runtime, tasks });
+      expect(
+        settings.read({ ...runtime, tasks }).plugins.find((row) => row.id === 'business.report')
+          ?.runtime.phase,
+      ).toBe('disabled');
+    } finally {
+      await tasks.stop();
+    }
+  });
   it('projects watch resources and their impact without disabling editable watch data or reports', async () => {
     const { store, settings, runtime, command, context } = await setup();
     store.initialize();

@@ -5,7 +5,7 @@ import { money } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos } from '../../client.js';
-import { makeAdvice, makeNotification, makeWatchTrigger } from '../contract-tests.js';
+import { makeAdvice, makeNotification, makeReport, makeWatchTrigger } from '../contract-tests.js';
 
 const bar = (close: number) => ({
   stockId: '002594.SZ',
@@ -267,6 +267,68 @@ it('fences watch trigger/state/attempt writes and permits only a reserved receip
       deliveryAttempts: 1,
     });
     expect(await h.repos.watchTrigger.listRecent({})).toHaveLength(1);
+  } finally {
+    h.close();
+    probe.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('fences report publication/claim/status under the writer lock and only completes a proven old receipt', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-report-fence-'));
+  const path = join(root, 'db.sqlite');
+  const h = createDrizzleRepos(path),
+    probe = createDrizzleRepos(path);
+  probe.db.run(sql`PRAGMA busy_timeout = 0`);
+  const now = new Date('2026-11-16T10:00:00Z');
+  try {
+    const report = await h.repos.report.upsertForPeriod(makeReport('report-history'));
+    const claim = {
+      id: report.id,
+      attemptId: 'attempt',
+      now,
+      stalePendingBefore: now,
+      failedRetryBefore: now,
+    };
+    const denied = () => {
+      expect(() => probe.db.run(sql`BEGIN IMMEDIATE`)).toThrow();
+      throw new Error('report revoked');
+    };
+    for (const op of [
+      () =>
+        h.repos.report.upsertForPeriod(
+          makeReport('late', { periodStart: '2026-11-16', periodEnd: '2026-11-16' }),
+        ),
+      () => h.repos.report.claimDelivery(claim),
+      () => h.repos.report.setDeliveryStatus(report.id, 'pending'),
+      () =>
+        h.repos.report.finishDelivery({ id: report.id, attemptId: 'attempt', status: 'sent', now }),
+    ])
+      await expect(
+        h.repos.withWriteGuard(denied, async () => {
+          await op();
+        }),
+      ).rejects.toThrow('report revoked');
+    expect(await h.repos.report.findById('late')).toBeNull();
+    expect((await h.repos.report.findById(report.id))?.deliveryStatus).toBe('not-requested');
+    expect(await h.repos.report.claimDelivery(claim)).toBe(true);
+    const receipt = {
+      reportId: report.id,
+      attemptId: 'attempt',
+      notificationId: `report-notification:${report.id}`,
+      now,
+    };
+    expect(await h.repos.report.completeDelivery(receipt)).toBe(false);
+    await h.repos.notification.save(makeNotification(receipt.notificationId));
+    expect(await h.repos.report.completeDelivery({ ...receipt, attemptId: 'wrong' })).toBe(false);
+    expect(await h.repos.report.completeDelivery({ ...receipt, notificationId: 'wrong' })).toBe(
+      false,
+    );
+    expect(
+      await h.repos.withWriteGuard(denied, () => h.repos.report.completeDelivery(receipt)),
+    ).toBe(true);
+    expect((await h.repos.report.findById(report.id))?.deliveryStatus).toBe('sent');
+    expect(await h.repos.report.list()).toHaveLength(1);
   } finally {
     h.close();
     probe.close();

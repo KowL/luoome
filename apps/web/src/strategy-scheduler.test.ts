@@ -130,6 +130,12 @@ describe('strategy scheduler', () => {
               sentAt: now,
             };
             await base.repos.notification.save(notification);
+            if (input.reportDelivery !== undefined)
+              await base.repos.report.completeDelivery({
+                ...input.reportDelivery,
+                notificationId: notification.id,
+                now: notification.sentAt,
+              });
             return { notification };
           },
         },

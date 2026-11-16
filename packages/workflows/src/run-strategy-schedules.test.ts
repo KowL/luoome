@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   StockUniverseManagerLike,
   Strategy,
@@ -6,7 +9,12 @@ import type {
   ToolContext,
 } from '@luoome/core';
 import { money, strategyDefinitionHash } from '@luoome/core';
-import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
+import {
+  buildTestContext,
+  createTestPluginControl,
+  seedTestDailyBars,
+  seedTestStockUniverse,
+} from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { runStrategySchedulesOperation } from './run-strategy-schedules.js';
@@ -63,13 +71,17 @@ const definition: StrategyDslV1 = {
 const seedScheduled = async (
   options: {
     readonly now?: Date;
+    readonly executionPolicy?: ToolContext['executionPolicy'];
     readonly status?: Strategy['status'];
     readonly cron?: string;
     readonly createdAt?: Date;
   } = {},
 ): Promise<{ readonly ctx: ToolContext; readonly strategyId: string }> => {
   const now = options.now ?? NOW;
-  const base = await buildTestContext({ clock: () => now });
+  const base = await buildTestContext({
+    clock: () => now,
+    ...(options.executionPolicy === undefined ? {} : { executionPolicy: options.executionPolicy }),
+  });
   await seedTestStockUniverse(base, { limit: 1, observedAt: now });
   await seedTestDailyBars(base);
   const ctx: ToolContext = {
@@ -226,4 +238,24 @@ describe('run-strategy-schedules workflow', () => {
     expect(result.data.items[0]?.status).toBe('ran');
     expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([]);
   });
+});
+
+it('report shutdown preserves the actual strategy daily cycle, published facts and schedule progress', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-report-strategy-'));
+  try {
+    const { store, initial, executionPolicy } = createTestPluginControl(root);
+    const { ctx, strategyId } = await seedScheduled({ executionPolicy });
+    const old = { ...ctx, executionPolicy: executionPolicy.bind() };
+    store.set('business.report', false, initial);
+    const result = await runStrategySchedulesOperation.run({}, old);
+    expect(result).toMatchObject({ ok: true, data: { ran: 1, partial: 0, failed: 0 } });
+    expect((await ctx.repos.strategyRun.listRuns({ strategyId }))[0]).toMatchObject({
+      status: 'complete',
+      publication: { status: 'published' },
+    });
+    expect((await ctx.repos.strategy.findById(strategyId))?.lastScheduledAt).toEqual(NOW);
+    expect(await ctx.repos.report.list()).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

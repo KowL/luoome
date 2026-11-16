@@ -1310,6 +1310,7 @@ const runClosingReport = async (
 };
 
 export const closingReportOperation = defineOperation<ClosingInput, ClosingOutput>({
+  requiredPlugins: ['business.report'],
   name: 'closing-report',
   description: '生成并幂等保存指定交易日的结构化收盘复盘',
   input: ClosingReportInput,

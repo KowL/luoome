@@ -335,18 +335,32 @@ describe('opening-report workflow', () => {
           ...base.adapters,
           notification: {
             send: async (input: {
+              id?: string;
+              reportDelivery?: { reportId: string; attemptId: string };
               channel: 'feishu' | 'log';
-              payload: { title: string; content: string; level: string };
-            }) => ({
-              notification: {
-                id: 'failed-report-notification',
+              payload: {
+                title: string;
+                content: string;
+                level: 'info' | 'warn' | 'error' | 'success';
+              };
+            }) => {
+              const notification = {
+                id: input.id ?? 'failed-report-notification',
                 channel: input.channel,
                 payload: input.payload,
                 result: notificationResult,
                 errorMessage: 'fixture delivery failure',
                 sentAt: generatedAt,
-              },
-            }),
+              };
+              await base.repos.notification.save(notification);
+              if (input.reportDelivery !== undefined)
+                await base.repos.report.completeDelivery({
+                  ...input.reportDelivery,
+                  notificationId: notification.id,
+                  now: generatedAt,
+                });
+              return { notification };
+            },
           },
         },
       };

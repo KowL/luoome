@@ -153,6 +153,7 @@ export interface NotificationManagerLike {
     readonly adviceId?: string;
     readonly tacticSignalId?: string;
     readonly executionGuard?: () => void;
+    readonly reportDelivery?: { readonly reportId: string; readonly attemptId: string };
     readonly watchDelivery?: { readonly owner: string; readonly triggerIds: readonly string[] };
   }): Promise<{ readonly notification: unknown }>;
 }
