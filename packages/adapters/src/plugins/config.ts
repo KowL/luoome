@@ -33,6 +33,7 @@ const labels: Record<ManagedPluginId, string> = {
   'business.analysis': '个股分析',
   'business.watch-monitoring': '盯盘监控',
   'business.report': '报告生成与投递',
+  'business.notification': '通知投递',
   'strategy.ai-insight': '策略 AI 洞察',
   'source.eastmoney': '东方财富',
   'source.tencent': '腾讯行情',

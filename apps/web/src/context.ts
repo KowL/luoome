@@ -170,10 +170,11 @@ export const buildWebContext = async (
     clock: now,
     logger: console,
   });
+  const executionPolicy = createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(env));
   return buildContext({
     repos: handle.repos,
     dataScope: providerRuntime,
-    executionPolicy: createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(env)),
+    executionPolicy,
     adapters: {
       ...(marketDump === undefined ? {} : { marketDump }),
       ...(limitUpBoard === undefined ? {} : { limitUpBoard }),
@@ -186,6 +187,7 @@ export const buildWebContext = async (
       }),
       ...(sectorCatalog === undefined ? {} : { sectorCatalog }),
       notification: createNotificationManagerFromEnv(env, {
+        executionPolicy,
         repos: handle.repos,
         logger: console,
         clock: now,

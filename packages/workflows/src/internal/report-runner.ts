@@ -11,6 +11,7 @@ import type {
 import { PluginExecutionDenied } from '@luoome/core';
 
 import type { WorkflowContext } from '../define-workflow.js';
+import { notificationAvailable, notificationDenied } from './notification-delivery.js';
 
 export interface ReportSectionPiece {
   readonly section: ReportSection;
@@ -74,6 +75,8 @@ const deliverClaimedReport = async (
         level: report.status === 'complete' ? 'success' : 'warn',
       },
     });
+    if (!sent.ok && notificationDenied(sent.error))
+      return { report, notified: false, failed: false, skippedByPolicy: true };
     receiptFinished = sent.ok;
     if (!sent.ok || sent.data.notification.result === 'failed') {
       errorKind = sent.ok ? 'delivery_failed' : sent.error.kind;
@@ -124,7 +127,7 @@ const runReportWorkflow = async (
           (previousReport.deliveryStatus === 'sent' ||
             previousReport.deliveryStatus === 'fallback-log')))
     ) {
-      if (input.kind === 'closing' && input.notify) {
+      if (input.kind === 'closing' && input.notify && notificationAvailable(ctx)) {
         const main = await ctx.tools.get_report.execute({
           kind: input.kind,
           scope: input.scope,
@@ -145,7 +148,15 @@ const runReportWorkflow = async (
           report: deliverable,
           deliveryAttemptId: attemptId,
         });
-        if (!claim.ok) return claim;
+        if (!claim.ok) {
+          if (!notificationDenied(claim.error)) return claim;
+          return {
+            report: previousReport,
+            created: false,
+            workflowRunId: previousReport.workflowRunId,
+            notified: false,
+          };
+        }
         if (claim.data.deliveryClaimed) {
           const delivery = await deliverClaimedReport(claim.data.report, attemptId, ctx);
           return {
@@ -447,6 +458,7 @@ const runReportWorkflow = async (
   let deliveredReport = saved.data.report;
   const shouldNotify =
     input.notify &&
+    notificationAvailable(ctx) &&
     deliveredReport.notificationPolicy !== 'never' &&
     (deliveredReport.id === previousReport?.id
       ? deliveredReport.deliveryStatus !== 'sent'
@@ -461,7 +473,9 @@ const runReportWorkflow = async (
       report: deliveredReport,
       deliveryAttemptId: attemptId,
     });
-    if (!claim.ok) {
+    if (!claim.ok && notificationDenied(claim.error)) {
+      notificationSkippedByPolicy = true;
+    } else if (!claim.ok) {
       notificationFailed = true;
       notificationErrorKind = claim.error.kind;
     } else if (claim.data.deliveryClaimed) {

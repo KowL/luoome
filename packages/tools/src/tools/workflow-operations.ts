@@ -6,6 +6,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool } from '../define-tool.js';
+import { assertNotificationDelivery } from '../internal/notification-delivery.js';
 import {
   observationsForWatchTrigger,
   saveObservationCandidates,
@@ -78,8 +79,12 @@ export const beginWatchDeliveryTool = defineTool({
   output: BeginWatchDeliveryOutput,
   handler: async ({ triggerIds }, ctx) => {
     assertWatchMonitoring(ctx);
+    assertNotificationDelivery(ctx);
     const notificationId = `watch-${crypto.randomUUID()}`;
-    await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), notificationId);
+    await ctx.repos.withWriteGuard(
+      () => assertNotificationDelivery(ctx),
+      () => ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), notificationId),
+    );
     return { started: triggerIds.length, notificationId };
   },
 });

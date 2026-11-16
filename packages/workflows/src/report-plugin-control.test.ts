@@ -44,7 +44,11 @@ const setup = async (transport?: () => Promise<Response>) => {
   const home = mkdtempSync(join(tmpdir(), 'luoome-report-plugin-'));
   roots.push(home);
   const store = new PluginConfigStore(join(home, 'plugins.json'));
-  store.set('business.watch-monitoring', true, store.initialize());
+  store.set(
+    'business.watch-monitoring',
+    true,
+    store.set('business.notification', true, store.initialize()),
+  );
   const policy = createPluginExecutionPolicy(
     store,
     new Set(['read', 'advice', 'write', 'external']),

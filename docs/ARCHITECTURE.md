@@ -971,7 +971,7 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
 策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
 Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
-P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控与报告也已独立接入，通用通知等业务切片仍待实施。
+P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控与报告也已独立接入，通知投递也已独立接入，其它任务资源仍待迁移。
 `PluginSettingsStore` 只投影可信的内置元数据、catalog 派生贡献、当前路由及本宿主状态；
 不暴露文件路径、凭证或任意执行配置。GET/preview 不外发，initialize/migrate/set 严格校验输入，
 保存经既有同源/write 门禁以及 PluginConfigStore 的 incarnation/revision CAS。
@@ -1013,6 +1013,15 @@ Web 的截止/补投 scheduler 由 PluginTasks 以 business.report 管理，绑�
 报告通知带 reportDelivery（reportId + attemptId）与稳定 report-notification ID；通知 manager 在异步读取后、实际发送前复核许可及 pending 领取。
 实际 transport 回执保存后，仅用 receipt + report ID + 当前 attemptId 完成原 pending，可在撤销后收尾，不允许新报告或覆盖后续尝试。
 其它通知仍保持各自权限；成功报告重试复用既存回执，失败/降级保持原重试规则，不能撤回已发出的外部请求。
+
+`business.notification` 默认关闭，catalog 纳管唯一 send_notification 入口，并将报告领取和盯盘领取声明为可选贡献；不成为报告、策略或盯盘的必需依赖。
+Tool 绑定调用许可并在实际外发前复核，生产 NotificationManager 也注入同一执行策略，覆盖 sendLog/info 等宿主直调并跟踪在途 transport。
+飞书连接测试经同一 Tool，不直接调用适配器；停用不会通过 log fallback 伪造 suppressed 或 sent 回执。
+报告及两类盯盘在通知未就绪时跳过领取；事实仍由原 owner 写入，保存为 not-requested。
+领取 Tool 在入场及 SQLite 写锁内校验通知许可，通知撤销不会被提升成整个报告/盯盘的父许可撤销。
+发送前撤销仅停止投递；实际已发出请求继续保存真实回执，原有精确领取/回执收尾仍可完成，不开启新投递。
+纯投递 Tool 声明 dataScope=none，不把可选通知许可累积进父级行情依赖集合；自身 Tool/manager 许可和 repository guard 仍校验，通知停用不污染盯盘后续步骤。
+通知没有独立 timer/订阅/重试队列，启停复用宿主通道，不重建报告或盯盘资源；成功通知按稳定身份读取回执，关闭期间的新触发不自动补发。
 
 ### 7.2 副作用分级（重申）
 

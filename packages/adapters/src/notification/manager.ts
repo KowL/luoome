@@ -4,10 +4,11 @@ import {
   type LogPayload,
   NOTIFICATION_BRAND,
   type Notification,
-  type NotificationChannel,
-  type NotificationPayload,
+  type NotificationManagerLike,
   type NotificationResult,
+  PluginExecutionDenied,
   type RepositoryRegistry,
+  type ToolExecutionPolicyLike,
 } from '@luoome/core';
 
 import { FeishuAdapterError, type FeishuWebhookAdapter } from './feishu.js';
@@ -20,8 +21,7 @@ import type { NotificationSendOutcome } from './types.js';
  * 职责：
  * 1. 按 channel 路由到对应适配器；
  * 2. 写库：无论成功 / 失败 / suppressed 都落库（审计 + 复盘）；
- * 3. 失败时不抛（manager 内部 catch），永远返回 Notification，便于上层工具
- *    直接转成 ToolResult 而不是异常路径。
+ * 3. 渠道失败保存 Notification；许可拒绝交给 Tool 映射，不能降级为 log 绕过停用。
  *
  * 路由规则：
  *   - channel=feishu 且 feishu adapter 未配置（缺 URL）→ 降级为 log channel + result='suppressed'
@@ -40,6 +40,7 @@ export interface NotificationManagerOptions {
   readonly idGenerator?: () => string;
   /** 时钟注入；默认 Date.now。 */
   readonly clock?: () => Date;
+  readonly executionPolicy?: ToolExecutionPolicyLike;
 }
 
 const defaultIdGen = (): string => `notif-${globalThis.crypto.randomUUID()}`;
@@ -50,10 +51,12 @@ export class NotificationManager {
   private readonly repos: RepositoryRegistry;
   private readonly idGen: () => string;
   private readonly clock: () => Date;
+  private readonly executionPolicy: ToolExecutionPolicyLike | undefined;
   private readonly logger: NotificationManagerOptions['logger'];
 
   constructor(options: NotificationManagerOptions) {
     this.repos = options.repos;
+    this.executionPolicy = options.executionPolicy;
     this.feishu = options.feishu;
     this.logger = options.logger;
     this.idGen = options.idGenerator ?? defaultIdGen;
@@ -67,18 +70,33 @@ export class NotificationManager {
 
   /**
    * 发送通知并落库。payload 必须与 channel 匹配（feishu 走 feishu schema，log 走 log schema）。
-   * 调用方负责把 channel + payload 准备好；本函数不重试、不抛。
+   * 调用方负责把 channel + payload 准备好；本函数不重试。
    */
-  async send(input: {
-    readonly id?: string;
-    readonly channel: NotificationChannel;
-    readonly payload: NotificationPayload;
-    readonly adviceId?: string;
-    readonly tacticSignalId?: string;
-    readonly executionGuard?: () => void;
-    readonly reportDelivery?: { readonly reportId: string; readonly attemptId: string };
-    readonly watchDelivery?: { readonly owner: string; readonly triggerIds: readonly string[] };
-  }): Promise<NotificationSendOutcome> {
+  async send(
+    input: Parameters<NotificationManagerLike['send']>[0],
+  ): Promise<NotificationSendOutcome> {
+    const policy = this.executionPolicy?.bind();
+    const check = () => {
+      input.executionGuard?.();
+      if (policy !== undefined) {
+        const admission = policy.acquire('business.notification');
+        if (!admission.ok || !policy.valid(admission.permit))
+          throw new PluginExecutionDenied('plugin:business.notification');
+        const denied = policy.authorizeTool('send_notification', {}, ['external']);
+        if (denied !== null && !denied.ok && denied.error.kind === 'permission_denied')
+          throw new PluginExecutionDenied(denied.error.required);
+      }
+    };
+    check();
+    const execute = () => this.deliver({ ...input, executionGuard: check });
+    return policy === undefined
+      ? execute()
+      : policy.runPlugin('business.notification', execute, check);
+  }
+
+  private async deliver(
+    input: Parameters<NotificationManagerLike['send']>[0],
+  ): Promise<NotificationSendOutcome> {
     input.executionGuard?.();
     const id = input.id ?? this.idGen();
     if (input.reportDelivery !== undefined) {

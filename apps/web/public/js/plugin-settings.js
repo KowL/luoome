@@ -160,7 +160,7 @@ const renderView = (view, rebuild) => {
           list.append(
             el('li', '', [
               el('code', '', item.name),
-              ` · ${item.effect === 'owned' ? '直接受控' : item.effect === 'optional' ? '可选解释降级' : '来源路由可能变化'}`,
+              ` · ${item.effect === 'owned' ? '直接受控' : item.effect === 'optional' ? '可选能力降级' : '来源路由可能变化'}`,
             ]),
           );
         if (!row.contributions.length)
@@ -299,7 +299,7 @@ const preview = async (body) => {
       list.append(
         el('li', '', [
           el('code', '', item.name),
-          ` · ${item.effect === 'owned' ? '随开关受控' : item.effect === 'optional' ? '可选 AI 解释变化，事实保留' : '可能改用其它已授权来源'}`,
+          ` · ${item.effect === 'owned' ? '随开关受控' : item.effect === 'optional' ? '可选能力变化，事实保留' : '可能改用其它已授权来源'}`,
         ]),
       );
     content.append(list);

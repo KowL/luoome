@@ -40,7 +40,7 @@ const setup = async (transport?: (input: string, init?: RequestInit) => Promise<
   const home = mkdtempSync(join(tmpdir(), 'luoome-watch-plugin-'));
   roots.push(home);
   const store = new PluginConfigStore(join(home, 'plugins.json'));
-  store.set('source.sina', true, store.initialize());
+  store.set('source.sina', true, store.set('business.notification', true, store.initialize()));
   const policy = createPluginExecutionPolicy(
     store,
     new Set(['read', 'advice', 'write', 'external']),

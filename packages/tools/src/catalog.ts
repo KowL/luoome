@@ -545,6 +545,7 @@ export const toolCatalog = {
   },
   batch_quote: { owner: 'business.market-data', tool: batchQuoteTool, agent: false },
   begin_watch_delivery: {
+    optionalPlugins: ['business.notification'],
     execution: 'p3',
     owner: 'business.watch-monitoring',
     tool: beginWatchDeliveryTool,
@@ -792,7 +793,13 @@ export const toolCatalog = {
     agent: false,
   },
   resume_strategy: { owner: 'business.strategy', tool: resumeStrategyTool, agent: false },
-  save_report: { execution: 'p3', owner: 'business.report', tool: saveReportTool, agent: false },
+  save_report: {
+    execution: 'p3',
+    owner: 'business.report',
+    optionalPlugins: ['business.notification'],
+    tool: saveReportTool,
+    agent: false,
+  },
   save_watch_rule_states: {
     execution: 'p3',
     owner: 'business.watch-monitoring',
@@ -805,7 +812,12 @@ export const toolCatalog = {
     tool: saveWatchTriggerTool,
     agent: false,
   },
-  send_notification: { owner: 'business.notification', tool: sendNotificationTool, agent: false },
+  send_notification: {
+    execution: 'p3',
+    owner: 'business.notification',
+    tool: sendNotificationTool,
+    agent: false,
+  },
   set_report_delivery_status: {
     execution: 'p3',
     owner: 'business.report',

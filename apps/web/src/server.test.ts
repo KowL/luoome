@@ -3104,6 +3104,85 @@ const chat = async (target: Hono, body: unknown): Promise<Response> =>
   );
 
 describe('plugin settings HTTP and Agent revocation', () => {
+  it('controls Feishu test through the notification plugin without replacing the host channel or affecting reports', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'luoome-notification-http-'));
+    const store = new PluginConfigStore(join(home, 'plugins.json'));
+    store.set('business.report', true, store.initialize());
+    try {
+      const policy = createPluginExecutionPolicy(
+        store,
+        new Set(['read', 'advice', 'write', 'external']),
+      );
+      const base = await buildTestContext({ executionPolicy: policy });
+      const ctx = { ...base, adapters: { ...base.adapters } };
+      const settings = new FeishuSettingsStore({
+        LUOOME_HOME: home,
+        LUOOME_FEISHU_WEBHOOK_URL: 'https://open.feishu.cn/open-apis/bot/v2/hook/fixture',
+      });
+      const local = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: true,
+        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
+        feishuSettingsStore: settings,
+      });
+      const post = (path: string, body: unknown = {}) =>
+        local.fetch(
+          new Request(`http://test${path}`, {
+            method: 'POST',
+            headers: { origin: 'http://test', 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+        );
+      const set = async (enabled: boolean) => {
+        const read = store.read();
+        if (!read.ok) throw new Error('missing');
+        expect(
+          (
+            await post('/api/settings/plugins', {
+              action: 'set',
+              id: 'business.notification',
+              enabled,
+              incarnation: read.config.incarnation,
+              revision: read.config.revision,
+            })
+          ).status,
+        ).toBe(200);
+      };
+      const testSend = () => post('/api/settings/feishu/test');
+      expect((await testSend()).status).toBe(403);
+      await set(true);
+      expect((await testSend()).status).toBe(200);
+      await set(false);
+      expect(await (await testSend()).json()).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied', required: 'plugin:business.notification' },
+      });
+      expect(await base.repos.notification.listRecent()).toHaveLength(1);
+      expect(ctx.adapters.notification).toBe(base.adapters.notification);
+      const generated = await (await post('/api/reports/run/opening', { notify: true })).json();
+      expect(generated).toMatchObject({
+        ok: true,
+        data: { notified: false, report: { deliveryStatus: 'not-requested' } },
+      });
+      expect((await local.fetch(new Request('http://test/api/reports'))).status).toBe(200);
+      expect(await base.repos.notification.listRecent()).toHaveLength(1);
+      const guarded = createWebApp(ctx, {
+        exposeWrite: true,
+        exposeExternal: false,
+        feishuSettingsStore: settings,
+      });
+      await set(true);
+      expect(
+        (
+          await guarded.fetch(
+            new Request('http://test/api/settings/feishu/test', { method: 'POST' }),
+          )
+        ).status,
+      ).toBe(403);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
   it('controls report creation through plugin settings while preserving history and render routes', async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-report-http-'));
     const store = new PluginConfigStore(join(home, 'plugins.json'));

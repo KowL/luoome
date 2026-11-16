@@ -19,6 +19,7 @@ import {
 import { recordWorkflowRunTool } from '@luoome/tools';
 import { z } from 'zod';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import { notificationAvailable, notificationDenied } from './internal/notification-delivery.js';
 import {
   evaluateTradingPlanWatch,
   IntradayTradingPlanWatchOutput,
@@ -1177,7 +1178,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     // 9. 送达决策：所有优先级都可投递；冷却与每日上限对所有优先级生效。
     //    试跑、以及 notifyOnRecovery 未开启的 recovered → not-requested。
     const recoveryRequested = cand.triggerType === 'recovered' && pool.notifyOnRecovery === true;
-    if (!state.input.notify) {
+    if (!state.input.notify || !notificationAvailable(ctx)) {
       deliveryStatus = 'not-requested';
     } else if (cand.triggerType === 'recovered' && !recoveryRequested) {
       deliveryStatus = 'not-requested';
@@ -1213,7 +1214,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     if (!committed.ok) return committed;
   }
 
-  if (state.input.notify) {
+  if (state.input.notify && notificationAvailable(ctx)) {
     const newIds = new Set(out.map((trigger) => trigger.id));
     for (const pool of state.pools) {
       if (state.skipped.has(pool.id)) continue;
@@ -1267,6 +1268,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     byPool.set(t.poolId, arr);
   }
   for (const [poolId, group] of byPool.entries()) {
+    if (!notificationAvailable(ctx)) break;
     const lines = group.map((t) => {
       const dir = t.direction === 'buy' ? '关注买入' : t.direction === 'sell' ? '关注卖出' : '观察';
       const prio =
@@ -1277,7 +1279,10 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     const attempt = await ctx.tools.begin_watch_delivery.execute({
       triggerIds: group.map((t) => t.id),
     });
-    if (!attempt.ok) return attempt;
+    if (!attempt.ok) {
+      if (notificationDenied(attempt.error)) break;
+      return attempt;
+    }
     const r = await ctx.tools.send_notification.execute({
       notificationId: attempt.data.notificationId,
       watchDelivery: { owner: 'intraday-watch', triggerIds: group.map((trigger) => trigger.id) },
@@ -1290,6 +1295,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
         ),
       },
     });
+    if (!r.ok && notificationDenied(r.error)) break;
     let deliveryStatus: DeliveryStatus = 'sent';
     let notificationId: string | undefined;
     if (!r.ok) {

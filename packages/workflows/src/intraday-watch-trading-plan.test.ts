@@ -1,6 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { money, type ToolContext, TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
 import { addHoldingTool, getAccountFactsTool } from '@luoome/tools';
-import { buildTestContext } from '@luoome/tools/testing';
+import { buildTestContext, createTestPluginControl } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { intradayWatchWorkflow } from './intraday-watch.js';
 
@@ -1178,4 +1181,31 @@ describe('intraday trading plan watch', () => {
       deliveryStatus: 'unverifiable',
     });
   });
+});
+
+it('notification shutdown retains actionable TradingPlan trigger and edge facts without attempting delivery', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-notification-plan-'));
+  try {
+    const { store, initial, executionPolicy } = createTestPluginControl(root);
+    store.set('business.notification', false, initial);
+    const ctx = await buildPlanWatchContext({ clock: () => NOW, executionPolicy });
+    const facts = await seedFacts(ctx);
+    await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
+    const begin = vi.spyOn(ctx.repos.watchTrigger, 'beginDelivery');
+    const result = await runPlanWatch({ accountId: ACCOUNT_ID, notify: true }, ctx);
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        status: 'complete',
+        notified: 0,
+        delivered: 0,
+        triggers: [{ deliveryStatus: 'not-requested' }],
+      },
+    });
+    expect(begin).not.toHaveBeenCalled();
+    expect(await ctx.repos.watchTrigger.listRecent({})).toHaveLength(1);
+    expect(await ctx.repos.notification.listRecent()).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

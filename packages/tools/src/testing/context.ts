@@ -80,6 +80,7 @@ export const createTestPluginControl = (home: string) => {
         'business.analysis',
         'business.watch-monitoring',
         'business.report',
+        'business.notification',
         ...TASK_PLUGIN_IDS,
       ] as const)
         config = store.set(id, true, config);

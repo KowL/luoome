@@ -100,3 +100,5 @@ Definitions/history remain readable when execution is disabled. `run_strategy_ba
 Scheduled/replay rule inputs may come entirely from persisted local data. Missing live/archived ladder inputs retain their existing availability and acceptance rules.
 
 Report generation and report notification retries require the host's explicit `business.report` activation. Historical `get_report`, `list_reports` and `render_report` remain available when disabled. Strategy daily cycles, watch monitoring and generic notifications retain independent authorization; never retry saved calls to bypass a disabled report plugin.
+
+All new notification delivery requires explicit host activation of `business.notification` and existing external authorization. Disabling it also blocks log fallback and connection tests; report generation, strategy facts, watch triggers and historical receipts remain available. Do not replay successful notifications or reuse old calls after a toggle.

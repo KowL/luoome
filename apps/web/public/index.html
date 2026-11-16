@@ -951,7 +951,7 @@
             </aside>
           </div>
           <p class="muted plugin-scope-note">运行状态仅代表当前 Web 宿主。策略调度、盘中快照、报告投递和盯盘监控显示实际自动资源，其余项显示执行入口和相关在途调用。其它宿主在下一安全点复核配置，不代表已全局应用。</p>
-          <p class="muted plugin-scope-note">模型、域内来源顺序、凭证及 MCP 服务沿用各自设置。其它通知等未纳管业务仍按原授权运行。</p>
+          <p class="muted plugin-scope-note">模型、域内来源顺序、凭证及 MCP 服务沿用各自设置。通知投递可在本页独立启停；通道设置不会绕过插件开关。</p>
         </section>
         <div id="mcp-settings" data-settings-pane="mcp" hidden>
           <div class="ai-settings-heading">
@@ -1042,7 +1042,7 @@
             <div>
               <span class="section-kicker">DELIVERY CHANNEL</span>
               <h2>飞书通知</h2>
-              <p>连接群自定义机器人，用于投递策略 Advice、预警和定时报告。</p>
+              <p>连接群自定义机器人，用于投递预警和报告。请先在「插件 → 通知投递」显式启用；连接测试也受该开关控制。</p>
             </div>
             <div id="feishu-settings-state" class="ai-settings-state" aria-live="polite">
               <span class="health-dot"></span>

@@ -71,7 +71,10 @@ export interface TypedToolDefinition<I, O, C> {
   readonly handler: (input: I, ctx: C) => Promise<O | ToolResult<never>> | O | ToolResult<never>;
 }
 
-export interface ToolDefinition<I, O> extends TypedToolDefinition<I, O, ToolContext> {}
+export interface ToolDefinition<I, O> extends TypedToolDefinition<I, O, ToolContext> {
+  // Pure delivery must not add its optional permit to the parent's accumulated market dependencies.
+  readonly dataScope?: 'inherit' | 'none';
+}
 
 /**
  * Tool 对象（docs/archive/plan.md 跨包契约）。
@@ -322,7 +325,7 @@ export const defineTool = <I, O, Input extends z.ZodType<I>, Output extends z.Zo
     }),
     (ctx, operation) => {
       const invoke = () =>
-        ctx.dataScope === undefined
+        ctx.dataScope === undefined || definition.dataScope === 'none'
           ? ctx.executionPolicy === undefined
             ? operation()
             : ctx.repos.withWriteGuard(() => {

@@ -9,7 +9,11 @@ import {
   PluginConfigError,
 } from '@luoome/adapters';
 import { NotificationSchema } from '@luoome/core';
-import { AgentScenarioIdSchema, discoverExternalMcpTools } from '@luoome/tools';
+import {
+  AgentScenarioIdSchema,
+  discoverExternalMcpTools,
+  sendNotificationTool,
+} from '@luoome/tools';
 import type { Hono } from 'hono';
 import { ZodError, z } from 'zod';
 import { SaveAISettingsSchema } from '../ai-settings.js';
@@ -463,21 +467,19 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
           error: { kind: 'invalid_input', message: '请先保存飞书 Webhook', issues: [] },
         });
       }
-      const sent = await ctxRef.current.adapters.notification?.send({
-        channel: 'feishu',
-        payload: {
-          title: '飞书通知连接测试',
-          content: 'luoome 已成功连接此群。后续策略 Advice 可通过该 Webhook 投递。',
-          level: 'success',
+      const sent = await sendNotificationTool.execute(
+        {
+          channel: 'feishu',
+          feishu: {
+            title: '飞书通知连接测试',
+            content: 'luoome 已成功连接此群。后续策略 Advice 可通过该 Webhook 投递。',
+            level: 'success',
+          },
         },
-      });
-      if (sent === undefined) {
-        return jsonResult({
-          ok: false,
-          error: { kind: 'internal', cause: 'NotificationManager 未注入' },
-        });
-      }
-      const notification = NotificationSchema.parse(sent.notification);
+        deps.contextForRequest(),
+      );
+      if (!sent.ok) return jsonResult(sent);
+      const notification = NotificationSchema.parse(sent.data.notification);
       if (notification.result !== 'success') {
         return jsonResult({
           ok: false,

@@ -240,22 +240,29 @@ describe('run-strategy-schedules workflow', () => {
   });
 });
 
-it('report shutdown preserves the actual strategy daily cycle, published facts and schedule progress', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'luoome-report-strategy-'));
-  try {
-    const { store, initial, executionPolicy } = createTestPluginControl(root);
-    const { ctx, strategyId } = await seedScheduled({ executionPolicy });
-    const old = { ...ctx, executionPolicy: executionPolicy.bind() };
-    store.set('business.report', false, initial);
-    const result = await runStrategySchedulesOperation.run({}, old);
-    expect(result).toMatchObject({ ok: true, data: { ran: 1, partial: 0, failed: 0 } });
-    expect((await ctx.repos.strategyRun.listRuns({ strategyId }))[0]).toMatchObject({
-      status: 'complete',
-      publication: { status: 'published' },
-    });
-    expect((await ctx.repos.strategy.findById(strategyId))?.lastScheduledAt).toEqual(NOW);
-    expect(await ctx.repos.report.list()).toEqual([]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+it.each(['business.report', 'business.notification'] as const)(
+  '%s shutdown preserves the actual strategy daily cycle, published facts and schedule progress',
+  async (plugin) => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-report-strategy-'));
+    try {
+      const { store, initial, executionPolicy } = createTestPluginControl(root);
+      const { ctx, strategyId } = await seedScheduled({ executionPolicy });
+      const old = { ...ctx, executionPolicy: executionPolicy.bind() };
+      store.set(plugin, false, initial);
+      const result = await runStrategySchedulesOperation.run({}, old);
+      expect(result).toMatchObject({ ok: true, data: { ran: 1, partial: 0, failed: 0 } });
+      expect((await ctx.repos.strategyRun.listRuns({ strategyId }))[0]).toMatchObject({
+        status: 'complete',
+        publication: { status: 'published' },
+      });
+      expect((await ctx.repos.strategy.findById(strategyId))?.lastScheduledAt).toEqual(NOW);
+      if (plugin === 'business.report') expect(await ctx.repos.report.list()).toEqual([]);
+      else {
+        expect((await ctx.repos.report.list()).length).toBeGreaterThan(0);
+        expect(await ctx.repos.notification.listRecent()).toEqual([]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

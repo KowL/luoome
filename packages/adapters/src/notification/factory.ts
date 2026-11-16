@@ -1,4 +1,4 @@
-import type { Logger, RepositoryRegistry } from '@luoome/core';
+import type { Logger, RepositoryRegistry, ToolExecutionPolicyLike } from '@luoome/core';
 
 import { FeishuWebhookAdapter } from './feishu.js';
 import { NotificationManager } from './manager.js';
@@ -19,10 +19,12 @@ export const createNotificationManagerFromEnv = (
     readonly repos: RepositoryRegistry;
     readonly logger: Logger;
     readonly clock?: () => Date;
+    readonly executionPolicy: ToolExecutionPolicyLike;
   },
 ): NotificationManager =>
   new NotificationManager({
     repos: options.repos,
+    executionPolicy: options.executionPolicy,
     logger: options.logger,
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     feishu: createFeishuWebhookAdapterFromEnv(env, options),

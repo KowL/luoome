@@ -29,6 +29,7 @@ const setup = async () => {
       | 'business.strategy-execution'
       | 'business.analysis'
       | 'business.report'
+      | 'business.notification'
       | 'business.watch-monitoring'
       | 'task.strategy-schedules'
       | 'strategy.ai-insight'
@@ -56,6 +57,59 @@ const deferred = () => {
 };
 
 describe('Web plugin settings projection and conditional commands', () => {
+  it('projects notification delivery without owning report/watch resources or creating automatic replay', async () => {
+    const { store, settings, runtime, command, context } = await setup();
+    let config = store.initialize();
+    config = store.set('business.report', true, config);
+    store.set('business.watch-monitoring', true, config);
+    let starts = 0,
+      stops = 0;
+    const tasks = new PluginTasks(
+      context,
+      ['business.report', 'business.watch-monitoring'].map((id) => ({
+        id: id as 'business.report' | 'business.watch-monitoring',
+        start: () => {
+          starts++;
+          return {
+            stop() {
+              stops++;
+            },
+          };
+        },
+      })),
+    );
+    try {
+      const preview = settings.preview(command('business.notification', true), {
+        ...runtime,
+        tasks,
+      });
+      expect(preview.affected.map((row) => row.id)).toEqual(['business.notification']);
+      expect(
+        preview.affected[0]?.contributions
+          .filter((item) => item.effect === 'owned')
+          .map((item) => item.name),
+      ).toEqual(['send_notification']);
+      expect(preview.notes.join(' ')).toContain('无独立定时器或自动补发队列');
+      expect(
+        settings.preview(command('business.notification', true), {
+          ...runtime,
+          exposeExternal: false,
+        }).affected[0]?.blockers,
+      ).toContain('宿主未授权外部调用（external）');
+      for (const enabled of [true, false, true, true, false])
+        settings.save(command('business.notification', enabled), { ...runtime, tasks });
+      expect(starts).toBe(2);
+      expect(stops).toBe(0);
+      expect(
+        settings
+          .read({ ...runtime, tasks })
+          .plugins.find((row) => row.id === 'business.notification')?.runtime.task,
+      ).toBeNull();
+    } finally {
+      await tasks.stop();
+    }
+    expect(stops).toBe(2);
+  });
   it('projects report generation independently from shared history and other plugin resources', async () => {
     const { store, settings, runtime, command, context } = await setup();
     store.initialize();

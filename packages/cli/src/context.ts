@@ -191,10 +191,14 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     ...(sectorQuote === undefined ? {} : { sectorQuote }),
     ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
   };
+  const executionPolicy = createPluginExecutionPolicy(
+    plugins,
+    pluginAllowedSideEffects(process.env),
+  );
   const ctx = buildContext({
     repos,
     dataScope: providerRuntime,
-    executionPolicy: createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(process.env)),
+    executionPolicy,
     adapters: {
       market,
       llm: ai?.llm ?? unavailableLLM,
@@ -204,7 +208,12 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
         logger,
       }),
       ...(sectorCatalog === undefined ? {} : { sectorCatalog }),
-      notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
+      notification: createNotificationManagerFromEnv(process.env, {
+        repos,
+        logger,
+        clock: now,
+        executionPolicy,
+      }),
       ...(researchVault ? { researchVault } : {}),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
       ...(marketDump === undefined ? {} : { marketDump }),

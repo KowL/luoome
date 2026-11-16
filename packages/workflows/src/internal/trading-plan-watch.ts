@@ -19,8 +19,8 @@ import {
   WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
-
 import type { WorkflowContext } from '../define-workflow.js';
+import { notificationAvailable, notificationDenied } from './notification-delivery.js';
 
 export const IntradayTradingPlanWatchInput = z.object({
   accountId: z.string().min(1).optional(),
@@ -909,7 +909,9 @@ export const evaluateTradingPlanWatch = async (
     errors.push(errorText(retriesResult.error));
   } else {
     const currentCandidateIds = new Set(candidates.map((candidate) => candidate.trigger.id));
-    for (const trigger of input.notify ? retriesResult.data.triggers : []) {
+    for (const trigger of input.notify && notificationAvailable(ctx)
+      ? retriesResult.data.triggers
+      : []) {
       if (currentCandidateIds.has(trigger.id)) continue;
       const versionId = trigger.evalSnapshot.planVersionId;
       const conditionId = trigger.evalSnapshot.conditionId;
@@ -954,6 +956,8 @@ export const evaluateTradingPlanWatch = async (
   const deliveryTriggers = candidates.map((candidate) => {
     const trigger = candidate.trigger;
     if (!input.notify) return trigger;
+    if (!notificationAvailable(ctx))
+      return { ...trigger, deliveryStatus: 'not-requested' as const };
     const key = `${trigger.stockId}:${trigger.ruleId}`;
     // 重试是已受理触发的补投，不该再被冷却或额度拦一次。
     const isRetry = candidate.isRetry === true;
@@ -1092,7 +1096,7 @@ export const evaluateTradingPlanWatch = async (
   let notified = 0;
   let delivered = 0;
   let notifyFailed = 0;
-  if (input.notify) {
+  if (input.notify && notificationAvailable(ctx)) {
     const invalidatePending = async (): Promise<void> => {
       const pending = finalTriggers.filter((trigger) => trigger.deliveryStatus === 'pending');
       if (pending.length === 0) return;
@@ -1131,6 +1135,7 @@ export const evaluateTradingPlanWatch = async (
       );
     };
     for (const candidate of publication.candidates) {
+      if (!notificationAvailable(ctx)) break;
       const trigger = finalTriggers.find((item) => item.id === candidate.trigger.id);
       if (trigger === undefined || trigger.deliveryStatus !== 'pending') continue;
       if (!isAshareTradingSession(ctx.clock())) {
@@ -1139,6 +1144,7 @@ export const evaluateTradingPlanWatch = async (
       }
       const attempt = await ctx.tools.begin_watch_delivery.execute({ triggerIds: [trigger.id] });
       if (!attempt.ok) {
+        if (notificationDenied(attempt.error)) break;
         errors.push(errorText(attempt.error));
         notifyFailed += 1;
         continue;
@@ -1157,6 +1163,7 @@ export const evaluateTradingPlanWatch = async (
           level: notificationLevelForAlertPriority(trigger.priority),
         },
       });
+      if (!notification.ok && notificationDenied(notification.error)) break;
       const status = !notification.ok
         ? 'failed'
         : notification.data.notification.result === 'suppressed'

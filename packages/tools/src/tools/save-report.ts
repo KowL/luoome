@@ -1,6 +1,7 @@
 import { assertReportInvariants, ReportSchema, reportScopeKey } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errInvalidInput } from '../define-tool.js';
+import { assertNotificationDelivery } from '../internal/notification-delivery.js';
 import { assertReportGeneration } from '../internal/report-generation.js';
 
 export const SaveReportInput = z.object({
@@ -22,6 +23,7 @@ export const saveReportTool = defineTool({
   output: SaveReportOutput,
   handler: async (input, ctx) => {
     assertReportGeneration(ctx);
+    if (input.deliveryAttemptId !== undefined) assertNotificationDelivery(ctx);
     assertReportInvariants(input.report);
     const existing = await ctx.repos.report.findByPeriodVersion({
       kind: input.report.kind,
@@ -35,14 +37,19 @@ export const saveReportTool = defineTool({
     const report = await ctx.repos.report.upsertForPeriod(input.report);
     const created = existing === null && report.id === input.report.id;
     if (input.deliveryAttemptId === undefined) return { report, created };
+    const attemptId = input.deliveryAttemptId;
     const now = ctx.clock();
-    const deliveryClaimed = await ctx.repos.report.claimDelivery({
-      id: report.id,
-      attemptId: input.deliveryAttemptId,
-      now,
-      stalePendingBefore: new Date(now.getTime() - 5 * 60_000),
-      failedRetryBefore: new Date(now.getTime() - 15 * 60_000),
-    });
+    const deliveryClaimed = await ctx.repos.withWriteGuard(
+      () => assertNotificationDelivery(ctx),
+      () =>
+        ctx.repos.report.claimDelivery({
+          id: report.id,
+          attemptId,
+          now,
+          stalePendingBefore: new Date(now.getTime() - 5 * 60_000),
+          failedRetryBefore: new Date(now.getTime() - 15 * 60_000),
+        }),
+    );
     const current = await ctx.repos.report.findById(report.id);
     return { report: current ?? report, created, deliveryClaimed };
   },

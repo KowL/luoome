@@ -6,6 +6,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 import { defineTool } from '../define-tool.js';
+import { assertNotificationDelivery } from '../internal/notification-delivery.js';
 import { assertReportGeneration } from '../internal/report-generation.js';
 import { assertWatchMonitoring } from '../internal/watch-monitoring.js';
 
@@ -57,11 +58,12 @@ export const sendNotificationTool = defineTool({
   name: 'send_notification',
   description: '发送通知（feishu 卡片 / log）；feishu 未配置时自动降级为 log',
   sideEffect: 'external',
+  dataScope: 'none',
   input: SendNotificationInput,
   output: SendNotificationOutput,
   handler: async (input, ctx) => {
     const check = () => {
-      ctx.executionGuard?.();
+      assertNotificationDelivery(ctx);
       if (input.reportDelivery !== undefined) assertReportGeneration(ctx);
       if (input.watchDelivery !== undefined) assertWatchMonitoring(ctx);
     };
