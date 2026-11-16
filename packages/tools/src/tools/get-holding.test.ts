@@ -1,7 +1,6 @@
+import { getHoldingTool } from '@luoome/toolkit/tools/get-holding.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getHoldingTool } from './get-holding.js';
 
 describe('get_holding', () => {
   it('正常路径：返回持仓 + 现价盈亏', async () => {

@@ -1,7 +1,7 @@
 import { ReadOnlyMcpClient } from '@luoome/adapters';
 import type { AgentCallableTool, ToolContext } from '@luoome/core';
+import { defineTool, errAdapterError } from '@luoome/toolkit';
 import { z } from 'zod';
-import { defineTool, errAdapterError } from './define-tool.js';
 
 export interface ExternalMcpCallable {
   readonly callable: AgentCallableTool;

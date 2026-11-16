@@ -1,17 +1,16 @@
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 import {
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
-} from './strategy-definition.js';
+} from '@luoome/plugin-strategy/tools/strategy-definition.js';
 import {
   createStrategyTool,
   createStrategyVersionTool,
   publishStrategyVersionTool,
   validateStrategyVersionTool,
-} from './strategy-lifecycle.js';
+} from '@luoome/toolkit/tools/strategy-lifecycle.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 
 const definition = (style: string) => ({
   schemaVersion: 1 as const,

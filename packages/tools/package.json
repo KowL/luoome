@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "defineTool + toolRegistry + 全部公开与 workflow-only tools（工具库存以 registry/discovery 为准）",
+  "description": "工具目录、授权与各入口聚合（实现位于共享底座及独立插件包）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
-    "./testing/fixed-quote-adapter": "./src/testing/fixed-quote-adapter.ts",
-    "./internal/*": "./src/internal/*"
+    "./testing/fixed-quote-adapter": "./src/testing/fixed-quote-adapter.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -19,7 +18,15 @@
     "@luoome/adapters": "workspace:*",
     "@luoome/core": "workspace:*",
     "@luoome/db": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@luoome/toolkit": "workspace:*",
+    "@luoome/plugin-analysis": "workspace:*",
+    "@luoome/plugin-strategy": "workspace:*",
+    "@luoome/plugin-watch": "workspace:*",
+    "@luoome/plugin-report": "workspace:*",
+    "@luoome/plugin-notification": "workspace:*",
+    "@luoome/plugin-performance-task": "workspace:*",
+    "@luoome/plugin-market-tasks": "workspace:*"
   },
   "devDependencies": {
     "apache-arrow": "21.2.0",

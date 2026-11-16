@@ -1,8 +1,7 @@
 import { type Advice, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getAdviceTool } from './get-advice.js';
 
 /** 永不过期的 advice（validUntil 2099，与真实时钟无关）。 */
 const futureAdvice: Advice = {

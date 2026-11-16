@@ -1,9 +1,8 @@
 import type { IntradayMinute, MarketDataAdapterLike, ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
+import { fetchIntradayMinutesTool } from '@luoome/toolkit/tools/fetch-intraday-minutes.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { fetchIntradayMinutesTool } from './fetch-intraday-minutes.js';
 
 const minuteFixture = (time: string, price: number, cumVolume: number): IntradayMinute => ({
   stockId: '002594.SZ',

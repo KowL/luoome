@@ -1,7 +1,6 @@
+import { createAccountTool } from '@luoome/toolkit/tools/create-account.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { createAccountTool } from './create-account.js';
 
 describe('create_account', () => {
   it('creates a real account without inserting any holdings or trades', async () => {

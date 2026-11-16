@@ -4,9 +4,9 @@ import {
   type ToolContext,
   type ToolExecutionPolicyLike,
 } from '@luoome/core';
+import { defineTool, errNotFound } from '@luoome/toolkit';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineTool, errNotFound } from './define-tool.js';
 import { buildTestContext } from './testing/context.js';
 
 const doubleTool = defineTool({

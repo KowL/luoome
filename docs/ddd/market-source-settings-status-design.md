@@ -19,7 +19,7 @@
 
 ## 2. 现状与缺口
 
-现状（事实来源：`apps/web/src/market-settings.ts`、`apps/web/public/js/market-settings.js`、`packages/tools/src/tools/get-market-data-status.ts`、`packages/adapters/src/source-registry.ts`）：
+现状（事实来源：`apps/web/src/market-settings.ts`、`apps/web/public/js/market-settings.js`、`packages/toolkit/src/tools/get-market-data-status.ts`、`packages/adapters/src/source-registry.ts`）：
 
 - 设置页每源一行：rank、label、READY / NOT CONFIGURED badge、开关、↑↓；`MarketSettingsStore` 把 `LUOOME_MARKET_SOURCES` 原子写回 `$LUOOME_HOME/.env`，`POST /api/settings/market` 热替换 market + sentiment adapter。
 - 运行态数据其实已存在：`MarketSourceRegistry.describe()` 产出每（source × capability）的 `MarketSourceStatus`（`lastAttemptAt / lastSuccessAt / dataAsOf / lastErrorKind`），`get_market_data_status` 的 `datasets` 已实现 §4.3 freshness 状态机（fresh / stale / unavailable / unknown）。

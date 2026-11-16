@@ -1,7 +1,7 @@
 import type { MarketDataAdapterLike } from '@luoome/core';
+import { searchStocksTool } from '@luoome/toolkit/tools/search-stocks.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { searchStocksTool } from './search-stocks.js';
 
 describe('tool/search_stocks', () => {
   it('正常路径：按代码模糊搜', async () => {

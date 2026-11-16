@@ -1,6 +1,3 @@
-import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
-
 import {
   addWatchlistMembersTool,
   addWatchlistMemberTool,
@@ -11,7 +8,9 @@ import {
   listWatchlistsTool,
   syncWatchlistSourceTool,
   updateWatchlistMemberTool,
-} from './watchlist.js';
+} from '@luoome/toolkit/tools/watchlist.js';
+import { buildTestContext } from '@luoome/tools/testing';
+import { describe, expect, it } from 'vitest';
 
 const T0 = new Date('2026-07-29T01:00:00.000Z');
 

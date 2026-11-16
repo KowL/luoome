@@ -3,9 +3,8 @@ import {
   NorthboundFlowQuerySchema,
   type NorthboundFlowSeries,
 } from '@luoome/core';
+import { northboundFlowTool } from '@luoome/toolkit/tools/northbound-flow.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { northboundFlowTool } from './northbound-flow.js';
 
 const mkSeries = (endDate: string): NorthboundFlowSeries => ({
   endDate,

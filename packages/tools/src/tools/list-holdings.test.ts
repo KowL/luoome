@@ -1,9 +1,8 @@
 import { TEST_ACCOUNT, TEST_HOLDINGS } from '@luoome/adapters/testing';
 import { money } from '@luoome/core';
+import { listHoldingsTool } from '@luoome/toolkit/tools/list-holdings.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { listHoldingsTool } from './list-holdings.js';
 
 describe('list_holdings', () => {
   it('正常路径：6 条持仓 + PnL 汇总自洽', async () => {

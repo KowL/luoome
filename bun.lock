@@ -66,6 +66,7 @@
         "@luoome/mcp": "workspace:*",
         "@luoome/tools": "workspace:*",
         "@luoome/web": "workspace:*",
+        "@luoome/workflows": "workspace:*",
       },
     },
     "packages/core": {
@@ -111,6 +112,79 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/plugins/analysis": {
+      "name": "@luoome/plugin-analysis",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/market-tasks": {
+      "name": "@luoome/plugin-market-tasks",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/adapters": "workspace:*",
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/notification": {
+      "name": "@luoome/plugin-notification",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/performance-task": {
+      "name": "@luoome/plugin-performance-task",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/report": {
+      "name": "@luoome/plugin-report",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/strategy": {
+      "name": "@luoome/plugin-strategy",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/plugins/watch": {
+      "name": "@luoome/plugin-watch",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
+    "packages/toolkit": {
+      "name": "@luoome/toolkit",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/adapters": "workspace:*",
+        "@luoome/core": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
     "packages/tools": {
       "name": "@luoome/tools",
       "version": "0.1.0",
@@ -118,6 +192,14 @@
         "@luoome/adapters": "workspace:*",
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
+        "@luoome/plugin-analysis": "workspace:*",
+        "@luoome/plugin-market-tasks": "workspace:*",
+        "@luoome/plugin-notification": "workspace:*",
+        "@luoome/plugin-performance-task": "workspace:*",
+        "@luoome/plugin-report": "workspace:*",
+        "@luoome/plugin-strategy": "workspace:*",
+        "@luoome/plugin-watch": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -965,6 +1047,22 @@
     "@luoome/dsh-bridge": ["@luoome/dsh-bridge@workspace:packages/dsh-bridge"],
 
     "@luoome/mcp": ["@luoome/mcp@workspace:packages/mcp"],
+
+    "@luoome/plugin-analysis": ["@luoome/plugin-analysis@workspace:packages/plugins/analysis"],
+
+    "@luoome/plugin-market-tasks": ["@luoome/plugin-market-tasks@workspace:packages/plugins/market-tasks"],
+
+    "@luoome/plugin-notification": ["@luoome/plugin-notification@workspace:packages/plugins/notification"],
+
+    "@luoome/plugin-performance-task": ["@luoome/plugin-performance-task@workspace:packages/plugins/performance-task"],
+
+    "@luoome/plugin-report": ["@luoome/plugin-report@workspace:packages/plugins/report"],
+
+    "@luoome/plugin-strategy": ["@luoome/plugin-strategy@workspace:packages/plugins/strategy"],
+
+    "@luoome/plugin-watch": ["@luoome/plugin-watch@workspace:packages/plugins/watch"],
+
+    "@luoome/toolkit": ["@luoome/toolkit@workspace:packages/toolkit"],
 
     "@luoome/tools": ["@luoome/tools@workspace:packages/tools"],
 

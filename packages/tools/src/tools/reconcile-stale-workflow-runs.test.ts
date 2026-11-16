@@ -1,7 +1,6 @@
+import { reconcileStaleWorkflowRunsTool } from '@luoome/toolkit/tools/reconcile-stale-workflow-runs.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { reconcileStaleWorkflowRunsTool } from './reconcile-stale-workflow-runs.js';
 
 const NOW = new Date('2026-08-14T10:00:00.000Z');
 

@@ -1,9 +1,9 @@
 import { ReportSchema } from '@luoome/core';
-import { z } from 'zod';
+import { saveReportTool } from '@luoome/plugin-report/tools/save-report.js';
 
-import { defineTool } from '../define-tool.js';
-import { createResearchDocumentTool } from './research-vault.js';
-import { saveReportTool } from './save-report.js';
+import { defineTool } from '@luoome/toolkit';
+import { createResearchDocumentTool } from '@luoome/toolkit/tools/research-vault.js';
+import { z } from 'zod';
 
 export const SaveResearchDocumentInput = z.object({
   target: z.enum(['note', 'report']),

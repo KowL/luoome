@@ -1,9 +1,8 @@
 import { testAdviceFor } from '@luoome/adapters/testing';
+import { deleteAdviceTool } from '@luoome/toolkit/tools/delete-advice.js';
+import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { deleteAdviceTool } from './delete-advice.js';
-import { getAdviceTool } from './get-advice.js';
 
 const now = new Date('2026-08-22T01:00:00.000Z');
 

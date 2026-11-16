@@ -12,7 +12,7 @@
 - **可插拔机制只覆盖行情域**。`MarketSourceRegistry`（`packages/adapters/src/market/source-registry.ts`）提供 capability 绑定、源排序、降级与健康观测（`describe()` 派生 `dataAsOf` / `lastErrorKind`），但类型被绑定在 9 种行情 capability 上。
 - **五个非行情域各只有 eastmoney 一个源，且工厂写死单源**：limit-up-ladder、dragon-tiger、ashare-sentiment、northbound-flow、news 的 `factory.ts` 都以 `z.tuple([z.literal('eastmoney')])` 限定单源，`LUOOME_*_SOURCES` 形式上存在但实际不可配置。
 - **eastmoney 的接入代码碎片化在 6 个模块**：`market/eastmoney.ts`（push2 行情系）、`limit-up-ladder/eastmoney.ts`（push2ex 池系）、`dragon-tiger/eastmoney.ts`（datacenter-web 报表系）、`ashare-sentiment/eastmoney.ts`、`northbound-flow/eastmoney.ts`、`news/eastmoney.ts`。HTTP 管道（AbortController 超时、HTTP/JSON 错误分类）与数值 coercion helper（`asRatio`/`asAmount`/`asPrice`）在各文件重复。
-- **观测面不对齐**：`get-market-data-status`（`packages/tools/src/tools/get-market-data-status.ts:96-104`）已把 limit-up-ladder 装进 inventory，但只能填静态字段，`freshness` 恒为 `unknown`；dragon-tiger / ashare-sentiment / northbound-flow / news 完全没有观测出口。源挂了无从发现。
+- **观测面不对齐**：`get-market-data-status`（`packages/toolkit/src/tools/get-market-data-status.ts:96-104`）已把 limit-up-ladder 装进 inventory，但只能填静态字段，`freshness` 恒为 `unknown`；dragon-tiger / ashare-sentiment / northbound-flow / news 完全没有观测出口。源挂了无从发现。
 - **替代源已在 roadmap 上**：fuyao（同花顺）侧涨停池、龙虎榜、异动、集合竞价均有现成端点（见 fuyao 设计文档 §11），非行情域的多源不是假设而是预定事项。
 
 ### 1.2 问题定义
@@ -283,7 +283,7 @@ export class SourceRegistry<M extends CapabilityMap> {
 - 六个现有 `*/eastmoney.ts`：保留 URL 模板与纯解析函数，移除 adapter 类、fetch/timeout 与重复 coercion；由 `eastmoney/source.ts` 委托
 - `packages/core/src/context.ts`、`index.ts`（五个 `*ManagerLike.status()` 与共享 source 类型导出）
 - `packages/core/src/entity/{limit-up-ladder,dragon-tiger,northbound-flow,news}.ts`（通用 `SourceIdSchema`、可选 query source、结果 source 兼容扩宽）
-- `packages/tools/src/tools/get-market-data-status.ts`（五域真实观测聚合 + freshness 状态机）
+- `packages/toolkit/src/tools/get-market-data-status.ts`（五域真实观测聚合 + freshness 状态机）
 - `apps/web/src/server.ts`、`packages/cli/src/context.ts`、`packages/mcp/src/context.ts`（共享实例接线）
 - `.env.example`、ARCHITECTURE §4.7/§4.8、CONTEXT.md（已登记）、fuyao 设计文档 §11
 

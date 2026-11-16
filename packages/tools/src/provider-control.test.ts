@@ -11,12 +11,12 @@ import {
   ProviderRuntime,
 } from '@luoome/adapters';
 import { type ManagedPluginId, money } from '@luoome/core';
+import { syncDailyBarsTool } from '@luoome/plugin-market-tasks/tools/sync-daily-bars.js';
+import { computeIndicatorsTool } from '@luoome/toolkit/tools/compute-indicators.js';
+import { getStockMinuteBarsTool } from '@luoome/toolkit/tools/get-stock-minute-bars.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginExecutionPolicy } from './plugin-policy.js';
 import { buildTestContext } from './testing/context.js';
-import { computeIndicatorsTool } from './tools/compute-indicators.js';
-import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
-import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 
 const roots: string[] = [];
 afterEach(() => {

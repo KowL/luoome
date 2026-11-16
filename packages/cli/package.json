@@ -18,6 +18,7 @@
     "@luoome/db": "workspace:*",
     "@luoome/mcp": "workspace:*",
     "@luoome/tools": "workspace:*",
-    "@luoome/web": "workspace:*"
+    "@luoome/web": "workspace:*",
+    "@luoome/workflows": "workspace:*"
   }
 }

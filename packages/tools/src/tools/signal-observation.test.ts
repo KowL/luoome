@@ -1,12 +1,11 @@
 import { money, type SignalObservation, signalObservationId } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
 import {
   completeStrategyObservationsTool,
   getSignalObservationStatsTool,
   listPendingStrategyObservationsTool,
-} from './signal-observation.js';
+} from '@luoome/toolkit/tools/signal-observation.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 
 const BASELINE = new Date('2026-08-03T08:00:00.000Z');
 const NOW = new Date('2026-08-10T08:00:00.000Z');

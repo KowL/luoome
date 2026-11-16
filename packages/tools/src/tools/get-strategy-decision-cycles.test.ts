@@ -8,12 +8,12 @@ import {
   signalObservationId,
   strategyDefinitionHash,
 } from '@luoome/core';
+import { getStrategyDecisionCyclesTool } from '@luoome/toolkit/tools/get-strategy-decision-cycles.js';
 import { describe, expect, it } from 'vitest';
 import {
   buildTestContext,
   recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
 } from '../testing/context.js';
-import { getStrategyDecisionCyclesTool } from './get-strategy-decision-cycles.js';
 
 const NOW = new Date('2026-08-08T10:00:00.000Z');
 const STRATEGY_ID = 'cycle-strategy';

@@ -1,8 +1,7 @@
 import { type Report, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { renderReportTool } from '@luoome/toolkit/tools/render-report.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { renderReportTool } from './render-report.js';
 
 const now = new Date('2026-07-27T01:00:00.000Z');
 

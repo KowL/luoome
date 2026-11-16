@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
 import { money, type StrategyDslV1, strategyDefinitionHash, type ToolContext } from '@luoome/core';
+import { createStrategyExplainer } from '@luoome/plugin-strategy/internal/strategy-explainer.js';
+import { generateStrategyInsightTool } from '@luoome/plugin-strategy/tools/strategy-insight.js';
+import { getStrategyInsightFactsTool } from '@luoome/toolkit/tools/strategy-insight.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createStrategyExplainer } from '../internal/strategy-explainer.js';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
-
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
-import { generateStrategyInsightTool, getStrategyInsightFactsTool } from './strategy-insight.js';
 
 const now = new Date('2026-08-08T10:00:00.000Z');
 const definition: StrategyDslV1 = {

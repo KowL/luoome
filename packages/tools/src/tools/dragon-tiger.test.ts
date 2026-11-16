@@ -3,9 +3,8 @@ import {
   DragonTigerListQuerySchema,
   type DragonTigerManagerLike,
 } from '@luoome/core';
+import { dragonTigerListTool } from '@luoome/toolkit/tools/dragon-tiger.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { dragonTigerListTool } from './dragon-tiger.js';
 
 const mkList = (date: string): DragonTigerList => ({
   date,

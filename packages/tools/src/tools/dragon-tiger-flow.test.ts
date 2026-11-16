@@ -1,7 +1,6 @@
 import { type DragonTigerFlowManagerLike, DragonTigerFlowQuerySchema } from '@luoome/core';
+import { dragonTigerFlowTool } from '@luoome/toolkit/tools/dragon-tiger-flow.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { dragonTigerFlowTool } from './dragon-tiger-flow.js';
 
 const flow = {
   startDate: '2026-11-10',

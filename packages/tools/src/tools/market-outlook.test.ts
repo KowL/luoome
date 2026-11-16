@@ -1,7 +1,7 @@
 import type { LimitUpLadderManagerLike } from '@luoome/core';
+import { marketOutlookTool } from '@luoome/plugin-analysis/tools/market-outlook.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { marketOutlookTool } from './market-outlook.js';
 
 describe('tool/market_outlook', () => {
   it('生成大盘观点 advice 并落库', async () => {

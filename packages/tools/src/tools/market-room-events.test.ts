@@ -23,11 +23,13 @@ import {
   MarketRoomEventSchema,
   marketRoomEventId,
 } from '@luoome/core';
+import { collectMarketSnapshotTool } from '@luoome/plugin-market-tasks/tools/market-snapshot-batch.js';
+import {
+  listMarketRoomEventsTool,
+  scanMarketRoomEvents,
+} from '@luoome/toolkit/tools/market-room-events.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { listMarketRoomEventsTool, scanMarketRoomEvents } from './market-room-events.js';
-import { collectMarketSnapshotTool } from './market-snapshot-batch.js';
 
 /**
  * 六时点夹具 + 手工天梯样本：领涨组（早盘强、随后回落）与接力组（后段走强）。

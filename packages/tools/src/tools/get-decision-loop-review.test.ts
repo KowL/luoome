@@ -1,11 +1,11 @@
 import { TEST_ACCOUNT, TEST_ACCOUNT_LONGTERM, TEST_TRADES } from '@luoome/adapters/testing';
 import { signalObservationId, type Trade } from '@luoome/core';
+import { getDecisionLoopReviewTool } from '@luoome/toolkit/tools/get-decision-loop-review.js';
 import { describe, expect, it } from 'vitest';
 import {
   buildTestContext,
   recordAdviceOutcomeForTest as recordAdviceOutcomeTool,
 } from '../testing/context.js';
-import { getDecisionLoopReviewTool } from './get-decision-loop-review.js';
 
 const NOW = new Date('2026-08-01T00:00:00.000Z');
 

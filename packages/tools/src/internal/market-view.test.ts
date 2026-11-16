@@ -1,7 +1,10 @@
 import { money } from '@luoome/core';
+import {
+  aggregateCandles,
+  alignMarkersToBars,
+  type MarketCandle,
+} from '@luoome/toolkit/internal/market-view.js';
 import { describe, expect, it } from 'vitest';
-
-import { aggregateCandles, alignMarkersToBars, type MarketCandle } from './market-view.js';
 
 /** internal/market-view 纯函数测试（aggregateCandles：日 K → 周 / 月 K 聚合）。 */
 

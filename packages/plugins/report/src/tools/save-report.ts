@@ -1,0 +1,56 @@
+import { assertReportInvariants, ReportSchema, reportScopeKey } from '@luoome/core';
+import { defineTool, errInvalidInput } from '@luoome/toolkit';
+import { assertNotificationDelivery } from '@luoome/toolkit/internal/notification-delivery.js';
+import { assertReportGeneration } from '@luoome/toolkit/internal/report-generation.js';
+import { z } from 'zod';
+
+export const SaveReportInput = z.object({
+  report: ReportSchema,
+  deliveryAttemptId: z.string().min(1).optional(),
+});
+
+export const SaveReportOutput = z.object({
+  report: ReportSchema,
+  created: z.boolean(),
+  deliveryClaimed: z.boolean().optional(),
+});
+
+export const saveReportTool = defineTool({
+  name: 'save_report',
+  description: '保存结构化市场报告；收盘复盘每个周期和范围只生成一份，生成后不可覆盖',
+  sideEffect: 'write',
+  input: SaveReportInput,
+  output: SaveReportOutput,
+  handler: async (input, ctx) => {
+    assertReportGeneration(ctx);
+    if (input.deliveryAttemptId !== undefined) assertNotificationDelivery(ctx);
+    assertReportInvariants(input.report);
+    const existing = await ctx.repos.report.findByPeriodVersion({
+      kind: input.report.kind,
+      scopeKey: reportScopeKey(input.report.scope),
+      periodStart: input.report.periodStart,
+      periodEnd: input.report.periodEnd,
+      version: input.report.version ?? 1,
+    });
+    if (input.report.kind === 'closing' && (input.report.version ?? 1) > 1 && existing === null)
+      return errInvalidInput('收盘复盘只生成一份，不再追加补充版');
+    const report = await ctx.repos.report.upsertForPeriod(input.report);
+    const created = existing === null && report.id === input.report.id;
+    if (input.deliveryAttemptId === undefined) return { report, created };
+    const attemptId = input.deliveryAttemptId;
+    const now = ctx.clock();
+    const deliveryClaimed = await ctx.repos.withWriteGuard(
+      () => assertNotificationDelivery(ctx),
+      () =>
+        ctx.repos.report.claimDelivery({
+          id: report.id,
+          attemptId,
+          now,
+          stalePendingBefore: new Date(now.getTime() - 5 * 60_000),
+          failedRetryBefore: new Date(now.getTime() - 15 * 60_000),
+        }),
+    );
+    const current = await ctx.repos.report.findById(report.id);
+    return { report: current ?? report, created, deliveryClaimed };
+  },
+});

@@ -1,9 +1,8 @@
 import type { MarketDataAdapterLike, MinuteBar, ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
+import { getStockMinuteBarsTool } from '@luoome/toolkit/tools/get-stock-minute-bars.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getStockMinuteBarsTool } from './get-stock-minute-bars.js';
 
 const bar = (
   endedAt: string,

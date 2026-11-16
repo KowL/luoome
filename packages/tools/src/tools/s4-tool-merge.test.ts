@@ -1,20 +1,19 @@
 import { createHash } from 'node:crypto';
 
 import type { ResearchVaultAdapterLike, ResearchVaultEntry, ToolContext } from '@luoome/core';
+import { runStrategyBacktestTool } from '@luoome/plugin-strategy/tools/run-strategy-backtest.js';
+import { getAccountOverviewTool } from '@luoome/toolkit/tools/get-account-overview.js';
+import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
+import { getStrategySignalsTool } from '@luoome/toolkit/tools/get-strategy-signals.js';
+import { listWatchPlansTool } from '@luoome/toolkit/tools/list-watch-plans.js';
+import { saveAlertPlanTool } from '@luoome/toolkit/tools/save-alert-plan.js';
+import { saveStrategyVersionTool } from '@luoome/toolkit/tools/save-strategy-version.js';
+import { updateHoldingTool } from '@luoome/toolkit/tools/update-holding.js';
+import { updateWatchlistMembersTool } from '@luoome/toolkit/tools/update-watchlist-members.js';
+import { createWatchlistTool } from '@luoome/toolkit/tools/watchlist.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getAccountOverviewTool } from './get-account-overview.js';
-import { getAdviceTool } from './get-advice.js';
-import { getStrategySignalsTool } from './get-strategy-signals.js';
-import { listWatchPlansTool } from './list-watch-plans.js';
-import { runStrategyBacktestTool } from './run-strategy-backtest.js';
-import { saveAlertPlanTool } from './save-alert-plan.js';
 import { saveResearchDocumentTool } from './save-research-document.js';
-import { saveStrategyVersionTool } from './save-strategy-version.js';
-import { updateHoldingTool } from './update-holding.js';
-import { updateWatchlistMembersTool } from './update-watchlist-members.js';
-import { createWatchlistTool } from './watchlist.js';
 
 const definition = {
   schemaVersion: 1 as const,
@@ -111,7 +110,9 @@ describe('S4.1a 合并 facade', () => {
 
   it('update_watchlist_members：add → update → remove', async () => {
     const ctx = await buildTestContext();
-    const created = await (await import('./watchlist.js')).createWatchlistTool.execute(
+    const created = await (
+      await import('@luoome/toolkit/tools/watchlist.js')
+    ).createWatchlistTool.execute(
       { name: 'S4 池', kind: 'personal', membershipPolicy: 'manual', enabled: true },
       ctx,
     );

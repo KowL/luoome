@@ -1,8 +1,8 @@
 import type { IndexQuote, MarketDataAdapterLike, ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
+import { fetchIndexQuotesTool } from '@luoome/toolkit/tools/fetch-index-quotes.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { fetchIndexQuotesTool } from './fetch-index-quotes.js';
 
 const indexQuoteFixture = (code: string, name: string): IndexQuote => ({
   code,

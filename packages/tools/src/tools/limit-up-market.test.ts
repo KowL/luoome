@@ -3,9 +3,8 @@ import {
   LimitUpMarketQuerySchema,
   type LimitUpMarketSnapshot,
 } from '@luoome/core';
+import { limitUpMarketTool } from '@luoome/toolkit/tools/limit-up-market.js';
 import { describe, expect, it } from 'vitest';
-
-import { limitUpMarketTool } from './limit-up-market.js';
 
 const snapshot = (overrides: Partial<LimitUpMarketSnapshot> = {}): LimitUpMarketSnapshot => ({
   date: '2026-11-12',

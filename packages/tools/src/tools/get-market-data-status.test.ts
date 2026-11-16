@@ -1,8 +1,7 @@
 import type { SourceStatus } from '@luoome/core';
+import { getMarketDataStatusTool } from '@luoome/toolkit/tools/get-market-data-status.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getMarketDataStatusTool } from './get-market-data-status.js';
 
 describe('tool/get_market_data_status', () => {
   it('数据集库存来自 Gateway，新增 capability 不依赖写死 provider 常量', async () => {

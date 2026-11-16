@@ -21,7 +21,14 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
     "paths": {
-      "@luoome/*": ["./packages/*/src/index.ts", "./apps/*/src/index.ts"]
+      "@luoome/*": ["./packages/*/src/index.ts", "./apps/*/src/index.ts"],
+      "@luoome/plugin-analysis": ["./packages/plugins/analysis/src/index.ts"],
+      "@luoome/plugin-strategy": ["./packages/plugins/strategy/src/index.ts"],
+      "@luoome/plugin-watch": ["./packages/plugins/watch/src/index.ts"],
+      "@luoome/plugin-report": ["./packages/plugins/report/src/index.ts"],
+      "@luoome/plugin-notification": ["./packages/plugins/notification/src/index.ts"],
+      "@luoome/plugin-performance-task": ["./packages/plugins/performance-task/src/index.ts"],
+      "@luoome/plugin-market-tasks": ["./packages/plugins/market-tasks/src/index.ts"]
     }
   }
 }

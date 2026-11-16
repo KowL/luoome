@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
 import type { LLMGenerateRequest, ToolContext } from '@luoome/core';
+import { analyzePositionTool } from '@luoome/plugin-analysis/tools/analyze-position.js';
+import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js';
+import { analyzeStrategyCandidateTool } from '@luoome/plugin-analysis/tools/analyze-strategy-candidate.js';
+import { marketOutlookTool } from '@luoome/plugin-analysis/tools/market-outlook.js';
+import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   makeStrategy,
@@ -11,11 +16,6 @@ import {
 } from '../../db/src/repository/contract-tests.js';
 import { createPluginExecutionPolicy } from './plugin-policy.js';
 import { buildTestContext } from './testing/context.js';
-import { analyzePositionTool } from './tools/analyze-position.js';
-import { analyzeStockTool } from './tools/analyze-stock.js';
-import { analyzeStrategyCandidateTool } from './tools/analyze-strategy-candidate.js';
-import { getAdviceTool } from './tools/get-advice.js';
-import { marketOutlookTool } from './tools/market-outlook.js';
 
 const roots: string[] = [];
 afterEach(() => {

@@ -7,10 +7,7 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
-import { runStrategyTool } from './run-strategy.js';
+import { runStrategyTool } from '@luoome/plugin-strategy/tools/run-strategy.js';
 import {
   compareStrategyRunsTool,
   getStrategyRunTool,
@@ -18,7 +15,9 @@ import {
   listStrategyResultViewsTool,
   listStrategyRunsTool,
   strategySignalsByStockTool,
-} from './strategy-query.js';
+} from '@luoome/toolkit/tools/strategy-query.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 
 const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): Promise<void> => {
   const now = new Date('2026-07-28T09:00:00Z');

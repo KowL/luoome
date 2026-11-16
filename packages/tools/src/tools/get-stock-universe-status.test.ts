@@ -1,8 +1,7 @@
 import { type StockUniverseManagerLike, stockCode } from '@luoome/core';
+import { getStockUniverseStatusTool } from '@luoome/toolkit/tools/get-stock-universe-status.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getStockUniverseStatusTool } from './get-stock-universe-status.js';
 
 describe('tool/get_stock_universe_status', () => {
   it('返回当前覆盖范围、目录数量、新鲜度和启用数据源', async () => {

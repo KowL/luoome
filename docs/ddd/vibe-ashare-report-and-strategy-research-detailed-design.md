@@ -1328,11 +1328,11 @@ packages/core/src/entity/ashare-sentiment.ts
 packages/db/src/repository/drizzle/report.ts
 packages/db/src/repository/memory/report.ts
 packages/adapters/src/ashare-sentiment/*
-packages/tools/src/tools/get-report.ts
-packages/tools/src/tools/list-reports.ts
-packages/tools/src/tools/save-report.ts
-packages/tools/src/tools/render-report.ts
-packages/tools/src/tools/get-ashare-sentiment.ts
+packages/toolkit/src/tools/get-report.ts
+packages/toolkit/src/tools/list-reports.ts
+packages/plugins/report/src/tools/save-report.ts
+packages/toolkit/src/tools/render-report.ts
+packages/toolkit/src/tools/get-ashare-sentiment.ts
 packages/tools/src/tools/get-tactic-consensus.ts
 packages/workflows/src/opening-report.ts
 packages/workflows/src/closing-report.ts

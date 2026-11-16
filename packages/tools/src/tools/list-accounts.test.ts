@@ -3,10 +3,9 @@ import {
   TEST_ACCOUNT_LONGTERM,
   TEST_ACCOUNT_SHORTTERM,
 } from '@luoome/adapters/testing';
+import { listAccountsTool } from '@luoome/toolkit/tools/list-accounts.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { listAccountsTool } from './list-accounts.js';
 
 describe('list_accounts', () => {
   it('正常路径：返回全部账户', async () => {

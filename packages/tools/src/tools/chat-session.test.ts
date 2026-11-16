@@ -1,6 +1,3 @@
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
 import {
   appendChatMessageTool,
   createChatSessionTool,
@@ -8,9 +5,11 @@ import {
   getChatSessionTool,
   listChatSessionsTool,
   renameChatSessionTool,
-} from './chat-session.js';
+} from '@luoome/toolkit/tools/chat-session.js';
+import { createWatchlistTool } from '@luoome/toolkit/tools/watchlist.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 import { settleChatDraftTool } from './settle-chat-draft.js';
-import { createWatchlistTool } from './watchlist.js';
 
 describe('chat session tools', () => {
   it('创建、自动标题、读取、重命名和级联删除会话', async () => {

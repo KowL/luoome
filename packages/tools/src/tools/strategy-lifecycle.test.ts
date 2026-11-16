@@ -1,8 +1,5 @@
 import { BUILTIN_STRATEGY_TEMPLATES, type StrategyDslV1 } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
-import { runStrategyTool } from './run-strategy.js';
+import { runStrategyTool } from '@luoome/plugin-strategy/tools/run-strategy.js';
 import {
   archiveStrategyTool,
   createStrategyTool,
@@ -12,7 +9,9 @@ import {
   publishStrategyVersionTool,
   resumeStrategyTool,
   validateStrategyVersionTool,
-} from './strategy-lifecycle.js';
+} from '@luoome/toolkit/tools/strategy-lifecycle.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 
 const validDefinition = (): StrategyDslV1 => ({
   schemaVersion: 1,

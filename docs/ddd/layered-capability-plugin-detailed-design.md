@@ -20,14 +20,14 @@
 |---|---|---|
 | Tool 库存与公共性统一，Zod 派生 I/O | [catalog](../../packages/tools/src/catalog.ts)、[registry](../../packages/tools/src/registry.ts) | 沿用唯一目录，不再维护插件 Tool 清单副本 |
 | Workflow 类型与绑定来自完整 catalog | [define-workflow](../../packages/workflows/src/define-workflow.ts) | 保留类型推导，在实际执行增加策略检查 |
-| `defineTypedTool` 有 authorize 回调，`defineTool` 未接入；回调目前接收 raw input | [define-tool](../../packages/tools/src/define-tool.ts) | 复用 execute 作为执行 seam，基于 schema 解析后的输入授权 |
-| Tool 可以直接调其他 Tool、repo、adapter | [analyze-stock](../../packages/tools/src/tools/analyze-stock.ts)、[草案确认](../../packages/tools/src/tools/settle-chat-draft.ts) | 过滤 registry 不能保证停用；跨模块端口和内部调用均需覆盖 |
+| `defineTypedTool` 有 authorize 回调，`defineTool` 未接入；回调目前接收 raw input | [define-tool](../../packages/toolkit/src/define-tool.ts) | 复用 execute 作为执行 seam，基于 schema 解析后的输入授权 |
+| Tool 可以直接调其他 Tool、repo、adapter | [analyze-stock](../../packages/plugins/analysis/src/tools/analyze-stock.ts)、[草案确认](../../packages/tools/src/tools/settle-chat-draft.ts) | 过滤 registry 不能保证停用；跨模块端口和内部调用均需覆盖 |
 | 多域复用泛型 SourceRegistry，进程内共享部分供应商实例 | [source-registry](../../packages/adapters/src/source-registry.ts)、[market factory](../../packages/adapters/src/market/factory.ts) | 提供者插件复用现有路由，不重写另一套源管理器 |
 | manager 缓存可先于选源命中，Quote/DailyBar 缓存键不区分源 | [manager](../../packages/adapters/src/market/manager.ts)、[cache](../../packages/adapters/src/market/cache.ts) | 停源后必须复核 provenance 和用途，不能把 A 的缓存标成 B |
 | 已有可注入的跨实例请求合并、缓存、租约和限流机制 | [request-coordinator](../../packages/adapters/src/market/request-coordinator.ts) | 复用已有机制并验证实际接线；当前普通 CLI/Web/MCP 构建路径不能据此声称已全部共享 |
 | 源顺序最少一个；空字符串回默认源 | [market factory](../../packages/adapters/src/market/factory.ts) | 全关必须显式表达，不能用清空环境变量实现 |
-| 一些现有 Tool 混合读、网络和写库 | [compute-indicators](../../packages/tools/src/tools/compute-indicators.ts)、[sync-daily-bars](../../packages/tools/src/tools/sync-daily-bars.ts)、[get-stock-market-view](../../packages/tools/src/tools/get-stock-market-view.ts) | 按实际行为归属和授权，不能按 `get/read` 名称当纯本地查询 |
-| 策略洞察已有窗口事实与 facts-only；日循环和周报均消费 | [strategy-insight](../../packages/tools/src/tools/strategy-insight.ts)、[日循环](../../packages/workflows/src/strategy-daily-cycle.ts)、[周报](../../packages/workflows/src/weekly-report.ts) | 首个纵向切片可验证组合与可选 AI，无须先搬整个策略模块 |
+| 一些现有 Tool 混合读、网络和写库 | [compute-indicators](../../packages/toolkit/src/tools/compute-indicators.ts)、[sync-daily-bars](../../packages/plugins/market-tasks/src/tools/sync-daily-bars.ts)、[get-stock-market-view](../../packages/toolkit/src/tools/get-stock-market-view.ts) | 按实际行为归属和授权，不能按 `get/read` 名称当纯本地查询 |
+| 策略洞察已有窗口事实与 facts-only；日循环和周报均消费 | [strategy-insight](../../packages/toolkit/src/tools/strategy-insight.ts)、[日循环](../../packages/workflows/src/strategy-daily-cycle.ts)、[周报](../../packages/workflows/src/weekly-report.ts) | 首个纵向切片可验证组合与可选 AI，无须先搬整个策略模块 |
 | 策略 tick 与收盘报告 cutoff 共用 stop | [strategy-scheduler](../../apps/web/src/strategy-scheduler.ts) | 拆清资源 owner 后才能声称独立停用 |
 | 入站 MCP 按启动配置冻结发现；出站 MCP 已逐调用复核授权 | [MCP server](../../packages/mcp/src/server.ts)、[外部 MCP](../../packages/adapters/src/mcp/client.ts) | 入站动态发现是后续工作；沿用出站的撤销经验，不混淆两个方向 |
 
@@ -640,3 +640,18 @@ Web 管理展示唯一直接发送贡献、可选领取及其它业务保留项�
 历史列表/审计保持只读；get_account_performance 属于共享按需计算，账户、报告及 Agent 仍保持原授权与快照缓存语义，不因后台任务关闭而受阻。
 重新启用不重复注册 timer；同一事实指纹复用快照，新事实按既有修订规则处理。其它插件和任务资源不重启，不自动启源或扩权。
 验收覆盖默认关、旧 Workflow/工具、下一账户停止、真实 writer lock、A/B 发布隔离、timer 排空/单次注册、历史和共享查询保留，以及策略日循环、报告与盯盘独立。
+
+
+## 24. 独立插件包落地
+
+内置执行实现迁入 `packages/plugins/<name>/src`，每个子目录有独立 workspace manifest、导出和类型检查。
+共享工具机制及历史/本地查询迁入 toolkit，tools 保留唯一 catalog、授权、场景与 surface 聚合。
+代码归属、依赖图及逐包职责以 [Architecture](../ARCHITECTURE.md#独立插件包与共享底座) 为当前契约。
+
+迁移复用原工具对象和原始 Zod schema，不改变名称、副作用、依赖、owner、公共性或场景白名单；
+原始发现/授权基线保持一致。混合模块分离新执行与历史读取，避免共享查询反向依赖插件。
+跨插件 Workflow 与宿主定时器维持原位置，防止插件经完整工具目录形成环。
+独立包没有模块加载副作用，原配置 ID、撤销世代、晚结果/写锁隔离、可选通知作用域和资源排空机制继续生效。
+
+新增契约测试检查生产 workspace 无环、源码 import 已声明、底座/插件依赖方向和聚合工具实例一致。
+根 typecheck/build 从 workspace 配置发现嵌套插件；完整工具、Workflow、SQLite、Web、MCP 与 Skill 回归验证迁移。

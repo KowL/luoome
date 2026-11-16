@@ -1,8 +1,7 @@
 import { type SignalObservation, type StrategySignal, signalObservationId } from '@luoome/core';
+import { collectStrategyObservationEvidence } from '@luoome/toolkit/internal/strategy-observation-evidence.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { collectStrategyObservationEvidence } from './strategy-observation-evidence.js';
 
 const SIGNAL_DAY = new Date('2026-08-03T08:00:00.000Z');
 

@@ -33,10 +33,10 @@ MVP2 已建立“盘后研究与计划 → 账户报告 → 盘中条件提醒 �
 | 已有能力 | 依据 | MVP3 候选增量 |
 |---|---|---|
 | 账户逐股计划、仓位预算、盘后报告、确定性盘中提醒与投递审计 | [MVP2 验收](../development-plan.md)、[TradingPlan](../../CONTEXT.md#逐股交易计划tradingplan) | 从当前提醒直接进入处理与记录，保留原计划版本 |
-| Trade 支持实际成交时间，以及 Advice、研究假设版本和策略版本关联 | [Trade](../../packages/core/src/entity/trade.ts)、[add_trade](../../packages/tools/src/tools/add-trade.ts) | 在 Web 用可读的股票、时间和依据选择完成登记，不要求输入内部 ID |
+| Trade 支持实际成交时间，以及 Advice、研究假设版本和策略版本关联 | [Trade](../../packages/core/src/entity/trade.ts)、[add_trade](../../packages/toolkit/src/tools/add-trade.ts) | 在 Web 用可读的股票、时间和依据选择完成登记，不要求输入内部 ID |
 | AdviceOutcome 支持跟随、部分跟随、忽略与交易关联；当前结果本身没有账户字段 | [record_advice_outcome](../../packages/tools/src/tools/record-advice-outcome.ts)、[AdviceOutcome](../../packages/core/src/entity/advice.ts) | 从建议或提醒选择已有成交，补齐账户归属后展示个人执行记录 |
-| 触发已有“已处理 / 有用 / 无用 / 忽略”反馈 | [set_watch_trigger_feedback](../../packages/tools/src/tools/set-watch-trigger-feedback.ts) | 沿用反馈能力，明确它与实际成交、计划有效性分别是什么关系 |
-| 决策闭环统计、信号 T+1/T+3/T+5 观察、账户绩效和周报 | [复盘 Tool](../../packages/tools/src/tools/get-decision-loop-review.ts)、[用户手册](../USER_GUIDE.md) | 把用户刚记录的决定与事实带入既有复盘入口，并能回到对应依据 |
+| 触发已有“已处理 / 有用 / 无用 / 忽略”反馈 | [set_watch_trigger_feedback](../../packages/toolkit/src/tools/set-watch-trigger-feedback.ts) | 沿用反馈能力，明确它与实际成交、计划有效性分别是什么关系 |
+| 决策闭环统计、信号 T+1/T+3/T+5 观察、账户绩效和周报 | [复盘 Tool](../../packages/toolkit/src/tools/get-decision-loop-review.ts)、[用户手册](../USER_GUIDE.md) | 把用户刚记录的决定与事实带入既有复盘入口，并能回到对应依据 |
 
 代码核对发现：Web 复盘仍要求手填“关联交易 ID”；持仓成交登记未暴露 Tool 已支持的完整时间和
 来源关联。这些是可验证的操作缺口；改善后是否降低日常记录负担，需在实际试用中验证。

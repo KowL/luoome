@@ -291,7 +291,7 @@ Core/Tools/registry 24 项通过，`bun run test:web` 363 项全部通过。`bun
 
 | 任务 | 主要目标文件 | 最小验证 |
 |---|---|---|
-| X0 | `packages/tools/src/tools/run-strategy.ts`、`prepare-strategy-data.ts`、registry/Web/MCP exposure tests | registry + Web + MCP 定向测试 |
+| X0 | `packages/plugins/strategy/src/tools/run-strategy.ts`、`prepare-strategy-data.ts`、registry/Web/MCP exposure tests | registry + Web + MCP 定向测试 |
 | X1 | `packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/evaluator.ts`、相关 core/db/tool tests | evaluator、result-view、repository contract |
 | X2 | `packages/core/src/strategy/`、`packages/tools/src/tools/strategy-*.ts`、registry/server routes | core、tools、server 定向测试 |
 | X3 | `apps/web/public/js/strategy-workspace.js`、对应 HTML/CSS/tests | `bun run test:web` + 真实浏览器 |

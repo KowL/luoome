@@ -3,12 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { MarketDumpKind } from '@luoome/core';
+import { syncMarketDumpTool } from '@luoome/plugin-market-tasks/tools/sync-market-dump.js';
 import { tableFromArrays, tableToIPC } from 'apache-arrow';
 import { Table, writeParquet } from 'parquet-wasm';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { syncMarketDumpTool } from './sync-market-dump.js';
 
 const writeParquetFile = (path: string, columns: Record<string, unknown[]>): void => {
   const table = tableFromArrays(columns);

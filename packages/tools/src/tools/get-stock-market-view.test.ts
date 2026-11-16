@@ -7,10 +7,9 @@ import type {
   ToolContext,
 } from '@luoome/core';
 import { money } from '@luoome/core';
+import { getStockMarketViewTool } from '@luoome/toolkit/tools/get-stock-market-view.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getStockMarketViewTool } from './get-stock-market-view.js';
 
 /**
  * tool/get_stock_market_view（docs/ddd/stock-market-view-detailed-design.md §14.2）。

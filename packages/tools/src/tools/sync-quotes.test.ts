@@ -1,6 +1,6 @@
+import { syncQuotesTool } from '@luoome/plugin-market-tasks/tools/sync-quotes.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { syncQuotesTool } from './sync-quotes.js';
 
 describe('tool/sync_quotes', () => {
   it('正常路径：同步默认账户下所有持仓', async () => {

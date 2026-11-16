@@ -1,8 +1,7 @@
 import { type Advice, type AdviceDataSnapshot, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { analyzeStockTool } from './analyze-stock.js';
 
 describe('analyze_stock', () => {
   it('正常路径：产出结构化 Advice 并持久化', async () => {

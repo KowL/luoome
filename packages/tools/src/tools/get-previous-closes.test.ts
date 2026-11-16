@@ -1,8 +1,7 @@
 import { money } from '@luoome/core';
+import { getPreviousClosesTool } from '@luoome/toolkit/tools/get-previous-closes.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getPreviousClosesTool } from './get-previous-closes.js';
 
 describe('tool/get_previous_closes', () => {
   it('批量返回严格早于目标交易日的最近 qfq 收盘价', async () => {

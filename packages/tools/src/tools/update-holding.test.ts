@@ -1,7 +1,6 @@
+import { updateHoldingTool } from '@luoome/toolkit/tools/update-holding.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { updateHoldingTool } from './update-holding.js';
 
 describe('update_holding', () => {
   it('只改传入字段：avgCost', async () => {

@@ -86,7 +86,7 @@ const readIndicators = (data: unknown): Record<string, number> => {
   return {};
 };
 
-// 与 packages/tools/src/internal/build-advice.ts 的 AdviceLLMSchema 对齐
+// 与 packages/plugins/analysis/src/internal/build-advice.ts 的 AdviceLLMSchema 对齐
 // （避免循环 import，此处重写一份最小 schema；fallback 不需要完整字段）
 const AdviceLLMSchemaForFallback = z.object({
   decision: AdviceDecisionSchema,

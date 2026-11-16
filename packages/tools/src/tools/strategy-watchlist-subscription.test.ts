@@ -6,15 +6,15 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
-import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
 import {
   listStrategyWatchlistSubscriptionsTool,
   subscribeStrategyToWatchlistTool,
   syncStrategyWatchlistSubscriptionsTool,
   unsubscribeStrategyFromWatchlistTool,
-} from './strategy-watchlist-subscription.js';
-import { createWatchlistTool } from './watchlist.js';
+} from '@luoome/toolkit/tools/strategy-watchlist-subscription.js';
+import { createWatchlistTool } from '@luoome/toolkit/tools/watchlist.js';
+import { buildTestContext } from '@luoome/tools/testing';
+import { describe, expect, it } from 'vitest';
 
 const T0 = new Date('2026-07-29T01:00:00.000Z');
 const T1 = new Date('2026-07-29T02:00:00.000Z');

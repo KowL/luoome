@@ -390,7 +390,7 @@ A 可独立试用，B/C 的未交付内容持续明确展示。详细技术设�
 
 下表描述本次查到的基础，不代表新 PRD 已实现，也不代表生产运行正常。
 
-主要核查入口：[首页与 API](../../apps/web/src/server.ts)、[对话契约](../../apps/web/src/chat.ts)、[前端助手](../../apps/web/public/js/chat.js)、[后台入口](../../apps/worker/src/index.ts)、[托管 provider 装配](../../apps/web/src/hosted-providers.ts)、[市场观点](../../packages/tools/src/tools/market-outlook.ts)。
+主要核查入口：[首页与 API](../../apps/web/src/server.ts)、[对话契约](../../apps/web/src/chat.ts)、[前端助手](../../apps/web/public/js/chat.js)、[后台入口](../../apps/worker/src/index.ts)、[托管 provider 装配](../../apps/web/src/hosted-providers.ts)、[市场观点](../../packages/plugins/analysis/src/tools/market-outlook.ts)。
 
 | 能力 | 源码核查 | 首版需要补齐 |
 |---|---|---|

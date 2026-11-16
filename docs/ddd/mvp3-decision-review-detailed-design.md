@@ -13,11 +13,11 @@
 
 | 当前事实 | 代码来源 | 本设计的增量 |
 |---|---|---|
-| Trade 已有账户、成交时间与 Advice/研究假设/策略版本引用 | [Trade](../../packages/core/src/entity/trade.ts)、[add-trade](../../packages/tools/src/tools/add-trade.ts) | 让用户选择来源，并原子保存成交与复盘关联 |
+| Trade 已有账户、成交时间与 Advice/研究假设/策略版本引用 | [Trade](../../packages/core/src/entity/trade.ts)、[add-trade](../../packages/toolkit/src/tools/add-trade.ts) | 让用户选择来源，并原子保存成交与复盘关联 |
 | `LedgerRepository.applyTrade` 原子修改 Trade、Holding 和现金，校验旧持仓；同 Trade ID 不重复结算 | [接口](../../packages/core/src/repository/index.ts)、[Drizzle](../../packages/db/src/repository/drizzle/ledger.ts)、[memory](../../packages/db/src/repository/memory/ledger.ts) | 请求幂等、复盘关联同事务、明确的顺序追加资格；不能仅依赖每次新生成的 Trade ID |
 | AdviceOutcome 按 adviceId 覆盖，没有 accountId；Advice 查询自动挂载全局 outcome | [Advice 仓储](../../packages/db/src/repository/drizzle/advice.ts)、[Outcome Tool](../../packages/tools/src/tools/record-advice-outcome.ts) | 账户级记录与不可变修订；移除当前账户视图中的全局 outcome 回退 |
 | WatchTrigger 有全局 feedback；账户计划触发在 evalSnapshot 中保存 planVersionId | [触发实体](../../packages/core/src/entity/watch-trigger.ts)、[计划监控](../../packages/workflows/src/intraday-trading-plan-watch.ts) | 账户级反馈与结构化来源解码，不修改触发的行情、边沿或投递状态 |
-| 复盘聚合按持仓/交易股票投影 Advice 和观察，不证明这些共享事实属于该账户 | [get-decision-loop-review](../../packages/tools/src/tools/get-decision-loop-review.ts) | 将共享研究上下文与明确账户执行事实分开，披露覆盖范围 |
+| 复盘聚合按持仓/交易股票投影 Advice 和观察，不证明这些共享事实属于该账户 | [get-decision-loop-review](../../packages/toolkit/src/tools/get-decision-loop-review.ts) | 将共享研究上下文与明确账户执行事实分开，披露覆盖范围 |
 | 收盘报告不可变且有补充版；周报同周期仍可覆盖更新 | [Report 仓储](../../packages/db/src/repository/drizzle/report.ts)、[report-runner](../../packages/workflows/src/internal/report-runner.ts) | 明确周报版本增量，补充反馈不能覆盖已保存的报告，也不能意外触发通知 |
 | Web 交易表单缺少完整时间/来源选择，复盘手输 Trade ID | [持仓操作](../../apps/web/public/js/holdings-actions.js)、[页面](../../apps/web/public/js/pages.js) | 来源上下文、已有成交选择、冲突恢复和可追溯回看 |
 

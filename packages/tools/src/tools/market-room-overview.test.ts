@@ -11,10 +11,9 @@ import {
   type IndexQuote,
   type MarketSnapshotItem,
 } from '@luoome/core';
+import { getMarketRoomOverviewTool } from '@luoome/toolkit/tools/market-room-overview.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getMarketRoomOverviewTool } from './market-room-overview.js';
 
 const NOW = new Date('2026-09-28T10:16:00+08:00');
 const TRADING_DATE = '2026-09-28';

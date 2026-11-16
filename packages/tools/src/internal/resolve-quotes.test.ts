@@ -1,8 +1,7 @@
 import { money, type Quote, stockCode } from '@luoome/core';
+import { resolveQuote, resolveQuotes } from '@luoome/toolkit/internal/resolve-quotes.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { resolveQuote, resolveQuotes } from './resolve-quotes.js';
 
 describe('internal/resolveQuotes', () => {
   it('实时拉取落库；解析失败的 stockId 记 unresolved', async () => {

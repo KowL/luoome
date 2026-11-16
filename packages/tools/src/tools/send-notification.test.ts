@@ -1,6 +1,6 @@
+import { sendNotificationTool } from '@luoome/plugin-notification/tools/send-notification.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { sendNotificationTool } from './send-notification.js';
 
 describe('tool/send_notification', () => {
   it('channel=feishu 但没配 feishu payload → invalid_input', async () => {

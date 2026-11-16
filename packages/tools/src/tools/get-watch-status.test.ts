@@ -1,7 +1,6 @@
+import { getWatchStatusTool } from '@luoome/toolkit/tools/get-watch-status.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getWatchStatusTool } from './get-watch-status.js';
 
 describe('get_watch_status', () => {
   it('从未运行时返回 never', async () => {

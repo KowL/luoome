@@ -1,8 +1,7 @@
 import { STRATEGY_FIELD_REGISTRY } from '@luoome/core';
+import { getStrategyDslCatalogTool } from '@luoome/toolkit/tools/strategy-experiment.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getStrategyDslCatalogTool } from './strategy-experiment.js';
 
 describe('strategy experiment read tools', () => {
   it('projects the Field Registry into a DSL catalog without a second field allowlist', async () => {

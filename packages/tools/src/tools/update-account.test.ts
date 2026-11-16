@@ -1,6 +1,6 @@
+import { updateAccountTool } from '@luoome/toolkit/tools/update-account.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { updateAccountTool } from './update-account.js';
 
 describe('update_account', () => {
   it('changes only the default account name and preserves its financial facts', async () => {

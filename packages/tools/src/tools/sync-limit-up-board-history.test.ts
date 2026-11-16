@@ -1,7 +1,6 @@
+import { syncLimitUpBoardHistoryTool } from '@luoome/plugin-market-tasks/tools/sync-limit-up-board-history.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { syncLimitUpBoardHistoryTool } from './sync-limit-up-board-history.js';
 
 const adapter = (options: { failBroken?: boolean; failPrevious?: boolean } = {}) => ({
   name: 'fake-limit-up',

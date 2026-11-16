@@ -48,7 +48,8 @@ bun install --frozen-lockfile
 
 ## 仓库结构
 
-Bun workspace monorepo。`packages/*` 是库，`apps/*` 是可独立部署的应用。
+Bun workspace monorepo。`packages/*` 是共享库与聚合入口，`packages/plugins/*` 是独立内置插件包，`apps/*` 是可独立部署的应用。
+类型检查和构建由 `infra/workspaces.ts` 读取根 workspace 配置，新增插件不另写目录循环。
 
 ```txt
 luoome/
@@ -62,7 +63,9 @@ luoome/
 │   │   ├── llm/       OpenAI-Compatible / Anthropic LLM
 │   │   ├── testing/   仅测试可导入的 deterministic fixtures / fakes
 │   │   └── notification/  飞书 Webhook 等
-│   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
+│   ├── toolkit/       defineTool、公共查询、账本、行情事实与共享 helper
+│   ├── plugins/       <name>/package.json + <name>/src，独立插件实现
+│   ├── tools/         唯一 Tool 目录、授权聚合 + Zod → TS/MCP/OpenAI 推导
 │   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
 │   ├── workflows/     内置编排：12 个注册入口 + defineOperation 复用管线
 │   ├── mcp/           MCP stdio server（env 控制暴露面）
@@ -280,12 +283,15 @@ perf(area): 性能
 
 ### 加一个新 tool
 
-最小骨架（参考 `packages/tools/src/tools/search-stocks.ts`）：
+先确定归属：共享查询/账本放 toolkit，受控业务执行放已有插件包；跨插件编排放 tools 应用入口或 Workflow。
+新增插件需独立 package.json/tsconfig、workspace 依赖和桶导出，依赖规则见 [架构](./ARCHITECTURE.md#独立插件包与共享底座)。
+
+最小骨架（业务插件示例，基础写法参考 `packages/toolkit/src/tools/search-stocks.ts`）：
 
 ```ts
-// packages/tools/src/tools/my-tool.ts
+// packages/plugins/analysis/src/tools/my-tool.ts
 import { z } from 'zod';
-import { defineTool } from '../define-tool.js';
+import { defineTool } from '@luoome/toolkit';
 
 export const MyToolInput = z.object({
   /** ... 字段 ... */
@@ -310,12 +316,12 @@ export const myTool = defineTool({
 });
 ```
 
-在 `packages/tools/src/index.ts` 桶导出，并在 `packages/tools/src/catalog.ts` 增加唯一目录项：
+在所属包的 `src/index.ts` 桶导出（新包也需接入 `packages/tools/src/index.ts` 聚合），并在 `packages/tools/src/catalog.ts` 增加唯一目录项：
 
 ```ts
-import { myTool } from './tools/my-tool.js';
+import { myTool } from '@luoome/plugin-analysis';
 // toolCatalog 内的条目；key 必须与 myTool.name 一致。
-my_tool: { tool: myTool, agent: true, dependencies: [] },
+my_tool: { owner: 'business.analysis', execution: 'p3', tool: myTool, agent: true, dependencies: [] },
 ```
 
 `agent: true` 进入公共候选库存，并须声明必需依赖；`agent: false` 仅保留给 Application Service
@@ -325,7 +331,7 @@ my_tool: { tool: myTool, agent: true, dependencies: [] },
 
 **必做**：
 
-1. 在 `packages/tools/src/tools/my-tool.test.ts` 写至少 3 个测试：happy / invalid_input / not_found 或 adapter_error
+1. 在所属插件包/toolkit 的 `src/` 写本包测试，涉及完整 catalog/fixture/跨插件控制的回归放 `packages/tools/src/`；覆盖：happy / invalid_input / not_found 或 adapter_error
 2. 在 `packages/core/src/entity/invariants.ts` 加 entity 不变量（如果是新 entity）
 3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle 实现（测试走 :memory:）
 4. 运行目录契约测试；`WorkflowToolMap` 从 tool 的原始 Zod schema 派生，无需手写 accessor 或 I/O 映射

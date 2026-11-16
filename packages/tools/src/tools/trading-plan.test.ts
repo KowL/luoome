@@ -1,14 +1,14 @@
 import { TradingPlanSchema } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-import { buildTestContext } from '../testing/context.js';
-import { getAccountFactsTool } from './account-facts.js';
-import { addHoldingTool } from './add-holding.js';
+import { getAccountFactsTool } from '@luoome/toolkit/tools/account-facts.js';
+import { addHoldingTool } from '@luoome/toolkit/tools/add-holding.js';
 import {
   evaluateTradingPlanBudgetTool,
   getTradingPlanTool,
   listTradingPlansTool,
   saveTradingPlanTool,
-} from './trading-plan.js';
+} from '@luoome/toolkit/tools/trading-plan.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 
 /**
  * 账户事实（现金字段 + 当前持仓 + 行情）替代快照：计划必须与当前 facts.digest 一致。

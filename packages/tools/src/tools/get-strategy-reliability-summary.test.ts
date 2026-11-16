@@ -1,7 +1,6 @@
+import { getStrategyReliabilitySummaryTool } from '@luoome/toolkit/tools/get-strategy-reliability-summary.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { getStrategyReliabilitySummaryTool } from './get-strategy-reliability-summary.js';
 
 describe('get_strategy_reliability_summary', () => {
   it('按真实 WorkflowRun 审计聚合交易日、租约、checkpoint 和降级事实', async () => {

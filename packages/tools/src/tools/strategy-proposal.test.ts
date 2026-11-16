@@ -1,8 +1,7 @@
 import { type StrategyDslV1, strategyDefinitionHash, type ToolContext } from '@luoome/core';
+import { generateStrategyVersionProposalTool } from '@luoome/plugin-strategy/tools/strategy-proposal.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { generateStrategyVersionProposalTool } from './strategy-proposal.js';
 
 const now = new Date('2026-09-02T08:00:00.000Z');
 

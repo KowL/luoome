@@ -1,6 +1,9 @@
+import {
+  listDecisionReviewsTool,
+  saveDecisionReviewTool,
+} from '@luoome/toolkit/tools/decision-review.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { listDecisionReviewsTool, saveDecisionReviewTool } from './decision-review.js';
 
 const adviceSubject = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
   const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];

@@ -1,6 +1,6 @@
+import type { Tool } from '@luoome/toolkit';
 import { z } from 'zod';
 import { agentTools, catalogTools } from './catalog.js';
-import type { Tool } from './define-tool.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {

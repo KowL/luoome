@@ -1,7 +1,6 @@
 import { FetchNewsQuerySchema, type NewsList, type NewsManagerLike } from '@luoome/core';
+import { fetchNewsTool } from '@luoome/toolkit/tools/news.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { fetchNewsTool } from './news.js';
 
 const mkList = (): NewsList => ({
   total: 1,

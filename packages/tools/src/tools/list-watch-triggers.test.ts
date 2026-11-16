@@ -1,9 +1,8 @@
+import { saveWatchTriggerTool } from '@luoome/plugin-watch/tools/save-watch-trigger.js';
+import { listWatchTriggersTool } from '@luoome/toolkit/tools/list-watch-triggers.js';
+import { setWatchTriggerFeedbackTool } from '@luoome/toolkit/tools/set-watch-trigger-feedback.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { listWatchTriggersTool } from './list-watch-triggers.js';
-import { saveWatchTriggerTool } from './save-watch-trigger.js';
-import { setWatchTriggerFeedbackTool } from './set-watch-trigger-feedback.js';
 
 const save = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,

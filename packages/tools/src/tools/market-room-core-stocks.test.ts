@@ -14,13 +14,12 @@ import {
   type StockSectorObservation,
   type ToolContext,
 } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
 import {
   type GetMarketRoomCoreStocksInputT,
   getMarketRoomCoreStocksTool,
-} from './market-room-core-stocks.js';
+} from '@luoome/toolkit/tools/market-room-core-stocks.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 
 const TRADING_DATE = '2026-09-28';
 const at = (time: string): Date => new Date(`${TRADING_DATE}T${time}+08:00`);

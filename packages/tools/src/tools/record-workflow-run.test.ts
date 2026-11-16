@@ -1,8 +1,7 @@
+import { listWorkflowRunsTool } from '@luoome/toolkit/tools/list-workflow-runs.js';
+import { recordWorkflowRunTool } from '@luoome/toolkit/tools/record-workflow-run.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { listWorkflowRunsTool } from './list-workflow-runs.js';
-import { recordWorkflowRunTool } from './record-workflow-run.js';
 
 describe('record_workflow_run', () => {
   it('通过 tool 保存 running 并以同一 id 更新为 terminal 审计', async () => {

@@ -1,11 +1,10 @@
 import { type DailyBar, money } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
 import {
   createLiveStrategyEvaluationDataAdapter,
   createLocalStrategyEvaluationDataAdapter,
-} from './strategy-evaluation-data.js';
+} from '@luoome/plugin-strategy/internal/strategy-evaluation-data.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 
 const bar = (date: string, close: number, source = 'fixture'): DailyBar => ({
   stockId: '600519.SH',

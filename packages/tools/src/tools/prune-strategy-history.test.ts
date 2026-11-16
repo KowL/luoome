@@ -8,10 +8,9 @@ import {
   signalObservationId,
   strategyDefinitionHash,
 } from '@luoome/core';
+import { pruneStrategyHistoryTool } from '@luoome/toolkit/tools/prune-strategy-history.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { pruneStrategyHistoryTool } from './prune-strategy-history.js';
 
 const NOW = new Date('2026-07-28T09:00:00Z');
 

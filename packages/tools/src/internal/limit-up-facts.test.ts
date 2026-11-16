@@ -1,7 +1,6 @@
 import { assembleLadder, type LimitUpLadder, type ToolContext } from '@luoome/core';
+import { loadStockLimitUpFacts } from '@luoome/toolkit/internal/limit-up-facts.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { loadStockLimitUpFacts } from './limit-up-facts.js';
 
 const snapshotFor = (date: string, asOf = new Date(`${date}T08:30:00.000Z`)): LimitUpLadder =>
   assembleLadder(

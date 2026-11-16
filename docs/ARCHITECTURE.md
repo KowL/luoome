@@ -108,7 +108,9 @@ luoome/
 ├── packages/
 │   ├── core/           纯领域类型 + 不变量 + advice 模型
 │   ├── db/             Drizzle schema + repository 实现
-│   ├── tools/          Tool 注册表 + schema 生成
+│   ├── toolkit/        defineTool + 共享查询、账本与公共应用能力
+│   ├── plugins/        每个子目录是独立 workspace 包，见下表
+│   ├── tools/          Tool 目录、权限、surface 公共聚合 + schema 生成
 │   ├── adapters/       行情 / LLM / 通知 / 券商 适配
 │   ├── workflows/      内置编排：review / scan / diagnose / advise
 │   ├── mcp/            MCP server
@@ -120,17 +122,53 @@ luoome/
 ### 依赖方向（强约束）
 
 ```txt
-cli ──┐
-mcp ──┼──► tools ──► core
-web ──┤        │
-      │        ├──► db ──► core
-      │        │
-      │        └──► adapters ──► core
-      │
-      └──► workflows ──► tools ──► core
+cli / mcp / web ──► tools ──► plugins/* ──► toolkit ──► core
+        │             │                       │
+        │             └───────────────────────┤
+        │                                     └─► adapters ──► core
+        └─► workflows ──► tools
 ```
 
-**禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / web 的存在；adapters 不知道 workflows 的存在。
+`core` 保持零 IO；`db` / `adapters` 只依赖领域契约，不反向导入 toolkit、插件、tools、workflows 或 surface。
+插件依赖 toolkit/core，必要时使用 adapters 的既有解析器；仓储通过 `ToolContext` 注入。
+toolkit 不导入插件或聚合目录，插件不导入 tools/workflows/surface，也不直接依赖其它插件。
+跨插件调用在 tools 的应用组合入口或 Workflow 中完成，Workflow 继续只通过 `ctx.tools.*` 使用能力。
+依赖图、源码跨包 import 及工具实例一致性由 [插件包契约测试](../packages/tools/src/plugin-packages.test.ts) 检查。
+
+### 独立插件包与共享底座
+
+`packages/plugins/<name>/package.json` 定义独立包，`src/index.ts` 导出该包的工具，`src/tools/` 和
+`src/internal/` 存放实现。所有包由根 workspace 的 `packages/plugins/*` 发现；类型检查和构建直接读取
+workspace 配置，不依赖固定目录深度。独立包可用自己的 `typecheck` 脚本检查；Vitest 从根发现全部测试。
+
+| 包 | 迁入实现 | 保留的执行控制 |
+|---|---|---|
+| `@luoome/plugin-analysis` | 个股、持仓、策略候选与市场展望 Advice、分析 LLM helper | `business.analysis` |
+| `@luoome/plugin-strategy` | 策略运行/试跑、回测、版本试跑/提案、AI 洞察及运行 helper | 策略执行与可选 AI 原有独立开关 |
+| `@luoome/plugin-watch` | 新触发与边沿提交、投递领取和状态写入 | `business.watch-monitoring` |
+| `@luoome/plugin-report` | 报告保存、投递领取和状态写入 | `business.report` |
+| `@luoome/plugin-notification` | 通用通知发送 | `business.notification` |
+| `@luoome/plugin-performance-task` | 批量账户估值受控工具入口 | `task.snapshot-account-performance` |
+| `@luoome/plugin-market-tasks` | 盘中快照、日线/行情/目录/dump/板块历史采集 | 各 task 原有独立开关 |
+
+包是代码归属，开关仍按能力 ID 管理；一个包内的多个 ID 不合并启停。
+`toolkit` 保留 defineTool/ToolResult、历史和本地查询、账本/持仓操作、共享行情解析/指标/事实投影、
+按需绩效计算与已有快照缓存、文本安全处理、跨业务许可断言。
+混合模块已经拆开：策略窗口事实不依赖 AI 洞察插件，已发布行情快照与盯盘历史不依赖新采集/求值，
+按需绩效不依赖批量任务。源路由、缓存、请求协调器与 ProviderRuntime 仍在 adapters；持久化仍在 db。
+
+`packages/tools/src/catalog.ts` 继续是工具库存、公共性、依赖和 owner 的唯一显式定义；
+聚合入口只引用 toolkit 和插件导出的同一工具实例，WorkflowToolMap/registry/MCP/Agent 从目录派生。
+插件包不维护第二份目录，也不自动进入场景白名单。
+
+跨功能 Workflow 留在 workflows，Web 定时器与 PluginTasks 留在宿主；它们需要组合多个插件、
+跟踪完整运行并统一排空。插件包加载时只定义工具，不注册 timer、不启动 IO。
+旧 incarnation/epoch、绑定许可、immediate 写事务 guard、ProviderRuntime 缓存世代、通知可选作用域、
+停用卸载/旧工作排空后重建等机制沿用。关闭执行插件保留历史和共享查询，重开不恢复旧许可或重复注册资源。
+代码拆包不提供任意第三方程序安装、进程隔离或动态卸载模块；Web 的运行/排空状态仍表达实际任务与调用。
+
+现有工具行为与组合回归集中在 `packages/tools/src` / `packages/workflows/src` 及 Web 测试，
+通过插件包导出验证实现；这些测试属于聚合宿主，不成为插件的反向运行依赖。新增只依赖本包的单测可放在插件 `src/`。
 
 ### DSH Agent Runtime 边界
 
@@ -1288,8 +1326,8 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 ### 13.1 加新 tool
 
-1. 在 `tools/<name>.ts` 用 `defineTool` 定义
-2. 注册到 `toolRegistry`
+1. 在所属 `plugins/<name>/src/tools/`（业务插件）或 `toolkit/src/tools/`（共享能力）用 `defineTool` 定义
+2. 桶导出并加入唯一 `toolCatalog`，由其派生 `toolRegistry`
 3. 加单元测试 + 集成测试
 4. 自动获得 MCP / OpenAI / OpenAPI / CLI / Web 暴露
 

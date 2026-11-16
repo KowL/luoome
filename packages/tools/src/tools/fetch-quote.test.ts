@@ -1,7 +1,7 @@
 import { money } from '@luoome/core';
+import { fetchQuoteTool } from '@luoome/toolkit/tools/fetch-quote.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { fetchQuoteTool } from './fetch-quote.js';
 
 describe('tool/fetch_quote', () => {
   it('正常路径：Stock.id 命中 → 拉行情写库 + 返回', async () => {

@@ -3,10 +3,9 @@ import {
   type AShareSentimentSnapshot,
   MoneySchema,
 } from '@luoome/core';
+import { getAShareSentimentTool } from '@luoome/toolkit/tools/get-ashare-sentiment.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getAShareSentimentTool } from './get-ashare-sentiment.js';
 
 const now = new Date('2026-07-28T07:10:00.000Z');
 const observedAt = new Date('2026-07-28T07:00:00.000Z');

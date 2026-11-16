@@ -1,9 +1,8 @@
 import type { Report } from '@luoome/core';
+import { deleteReportTool } from '@luoome/toolkit/tools/delete-report.js';
+import { getReportTool } from '@luoome/toolkit/tools/get-report.js';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
-import { deleteReportTool } from './delete-report.js';
-import { getReportTool } from './get-report.js';
 
 const now = new Date('2026-07-27T01:00:00.000Z');
 

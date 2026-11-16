@@ -1,7 +1,7 @@
 import { type DailyBar, money, type ToolContext } from '@luoome/core';
+import { computeIndicatorsTool } from '@luoome/toolkit/tools/compute-indicators.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { computeIndicatorsTool } from './compute-indicators.js';
 
 const barsFromCloses = (stockId: string, closes: readonly number[]): DailyBar[] =>
   closes.map((close, index) => ({

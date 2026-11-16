@@ -1,8 +1,7 @@
 import { type StockUniverseManagerLike, stockCode } from '@luoome/core';
+import { syncStockUniverseTool } from '@luoome/plugin-market-tasks/tools/sync-stock-universe.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { syncStockUniverseTool } from './sync-stock-universe.js';
 
 describe('tool/sync_stock_universe', () => {
   it('获取完整快照并原子写入本地股票目录', async () => {

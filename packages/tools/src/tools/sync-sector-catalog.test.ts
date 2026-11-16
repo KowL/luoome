@@ -4,11 +4,10 @@ import type {
   SectorSyncFailure,
   StockSectorObservation,
 } from '@luoome/core';
+import { syncSectorCatalogTool } from '@luoome/plugin-market-tasks/tools/sync-sector-catalog.js';
+import { getStockSectorMembershipsTool } from '@luoome/toolkit/tools/get-stock-sector-memberships.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
-import { getStockSectorMembershipsTool } from './get-stock-sector-memberships.js';
-import { syncSectorCatalogTool } from './sync-sector-catalog.js';
 
 const NOW = new Date('2026-11-03T00:20:00.000Z');
 

@@ -3,9 +3,11 @@ import {
   type LimitUpLadderManagerLike,
   LimitUpLadderQuerySchema,
 } from '@luoome/core';
+import {
+  limitUpLadderCompareTool,
+  limitUpLadderTool,
+} from '@luoome/toolkit/tools/limit-up-ladder.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { limitUpLadderCompareTool, limitUpLadderTool } from './limit-up-ladder.js';
 
 const mkLadder = (date: string): LimitUpLadder => ({
   date,

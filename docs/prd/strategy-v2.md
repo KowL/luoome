@@ -12,7 +12,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 关联文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)、[Strategy DSL PRD](./strategy-dsl.md)、[Strategy 与统一 Watchlist 详细设计](../ddd/strategy-watchlist-unification-detailed-design.md)
 > 实现设计：[策略工作台详细设计](../ddd/strategy-workspace-detailed-design.md)
-> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/`、`packages/tools/src/tools/run-strategy.ts`、`packages/tools/src/tools/strategy-query.ts`、`apps/web/public/js/target-pages.js`
+> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/`、`packages/plugins/strategy/src/tools/run-strategy.ts`、`packages/toolkit/src/tools/strategy-query.ts`、`apps/web/public/js/target-pages.js`
 
 ## 1. 文档结论
 

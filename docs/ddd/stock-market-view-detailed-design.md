@@ -108,7 +108,7 @@ Web 图表实现采用 `lightweight-charts@5.2.0`：
 | Tencent adapter | `packages/adapters/src/market/tencent.ts` | 实时快照 + 前复权日线 |
 | Sina adapter | `packages/adapters/src/market/sina.ts` | 沪深 A 股 qfq 日线；不声明实时快照能力 |
 | MarketDataManager | `packages/adapters/src/market/manager.ts` | 主源、备源、限速、Quote 60s 缓存、日线 1h 缓存 |
-| 技术指标 | `packages/tools/src/internal/indicators.ts` | MA、RSI、MACD、BOLL、成交量等 |
+| 技术指标 | `packages/toolkit/src/internal/indicators.ts` | MA、RSI、MACD、BOLL、成交量等 |
 | 股票搜索 | `search_stocks` / `/api/stocks/search` | 外部搜索失败回本地 Stock repository |
 | Web | Hono + 原生 HTML/CSS/ES modules | 无前端构建步骤 |
 
@@ -200,8 +200,8 @@ DailyBar 推导，不把缺失值填成 0，也不把单一源字段升级为强
 Market View 是面向调用方的组合读取模型，不参与持久化、身份和领域生命周期，因此：
 
 - 不放入 `packages/core/src/entity/`；
-- Zod input/output schema 放在 `packages/tools/src/tools/get-stock-market-view.ts`；
-- 可复用的纯计算 helper 放在 `packages/tools/src/internal/market-view.ts`；
+- Zod input/output schema 放在 `packages/toolkit/src/tools/get-stock-market-view.ts`；
+- 可复用的纯计算 helper 放在 `packages/toolkit/src/internal/market-view.ts`；
 - `DataFreshnessSchema` 复用 `packages/core/src/entity/provenance.ts`。
 
 ## 7. Tool 契约
@@ -484,8 +484,8 @@ findInRange(stockId, from, to)
 
 新增/修改：
 
-- `packages/tools/src/tools/get-stock-market-view.ts`；
-- `packages/tools/src/internal/market-view.ts`；
+- `packages/toolkit/src/tools/get-stock-market-view.ts`；
+- `packages/toolkit/src/internal/market-view.ts`；
 - `packages/tools/src/index.ts` 桶导出；
 - `packages/tools/src/registry.ts` 注册；
 - `packages/tools/src/registry.test.ts` 更新库存和 sideEffect 断言；
@@ -854,8 +854,8 @@ adapter seam、`get_stock_minute_bars` Tool 和 Web 分时/分钟 K 展示。当
 packages/core/src/entity/quote.ts
 packages/adapters/src/market/eastmoney.ts
 packages/adapters/src/market/tencent.ts
-packages/tools/src/internal/market-view.ts
-packages/tools/src/tools/get-stock-market-view.ts
+packages/toolkit/src/internal/market-view.ts
+packages/toolkit/src/tools/get-stock-market-view.ts
 packages/tools/src/registry.ts
 packages/tools/src/index.ts
 packages/db/src/repository/drizzle/daily-bar.ts

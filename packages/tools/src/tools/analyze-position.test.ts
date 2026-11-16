@@ -1,7 +1,7 @@
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
+import { analyzePositionTool } from '@luoome/plugin-analysis/tools/analyze-position.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { analyzePositionTool } from './analyze-position.js';
 
 describe('analyze_position', () => {
   it('正常路径：产出 position 维度 Advice 并持久化', async () => {

@@ -1,12 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { toolRegistry } from '../registry.js';
-import { buildTestContext } from '../testing/context.js';
-import { saveWatchTriggerTool } from './save-watch-trigger.js';
+import { saveWatchTriggerTool } from '@luoome/plugin-watch/tools/save-watch-trigger.js';
 import {
   beginWatchDeliveryTool,
   commitWatchEvaluationTool,
-  listWatchDeliveryRetriesTool,
-} from './workflow-operations.js';
+} from '@luoome/plugin-watch/tools/workflow-operations.js';
+import { listWatchDeliveryRetriesTool } from '@luoome/toolkit/tools/workflow-operations.js';
+import { describe, expect, it } from 'vitest';
+import { toolRegistry } from '../registry.js';
+import { buildTestContext } from '../testing/context.js';
 
 const T0 = new Date('2026-07-21T02:00:00.000Z');
 

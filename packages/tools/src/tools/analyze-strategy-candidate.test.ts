@@ -1,6 +1,4 @@
 import { type DailyBar, money, quantity } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
 import {
   fetchStrategyCandidateBars,
   groundStrategyAdviceReasoning,
@@ -8,7 +6,8 @@ import {
   hasConditionalPricePlan,
   normalizeStrategyCandidateDecision,
   quoteFromLatestStrategyBar,
-} from './analyze-strategy-candidate.js';
+} from '@luoome/plugin-analysis/tools/analyze-strategy-candidate.js';
+import { describe, expect, it } from 'vitest';
 
 describe('候选建议的条件性价格计划', () => {
   const prices = {

@@ -31,8 +31,8 @@ import type {
   ToolResult,
 } from '@luoome/core';
 import { createMemoryRepositories, seedData } from '@luoome/db/memory';
+import { saveDecisionReviewTool } from '@luoome/toolkit/tools/decision-review.js';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
-import { saveDecisionReviewTool } from '../tools/decision-review.js';
 
 export interface BuildTestContextOptions {
   readonly executionPolicy?: ToolContext['executionPolicy'];

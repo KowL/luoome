@@ -1,7 +1,6 @@
+import { addHoldingTool } from '@luoome/toolkit/tools/add-holding.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { addHoldingTool } from './add-holding.js';
 
 describe('add_holding', () => {
   it('直录新持仓：availableQuantity 缺省 = quantity + 自动补 stock stub', async () => {

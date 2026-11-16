@@ -1,9 +1,9 @@
+import type { ListWatchlistsInput } from '@luoome/toolkit/tools/watchlist.js';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import { catalogTools, toolCatalog } from './catalog.js';
 import * as exports from './index.js';
 import { applicationToolRegistry, toolRegistry } from './registry.js';
-import type { ListWatchlistsInput } from './tools/watchlist.js';
 
 describe('typed tool catalog', () => {
   it('records P3 permissions, local computation dependencies and discovery baseline', () => {

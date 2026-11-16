@@ -363,7 +363,7 @@ function applyCloseCorrection(
 - 正式运行写入真实 provider 返回；replay 查询精确交易日和来源，缺失返回 unavailable/unknown，绝不
   现场请求当前 manager。
 
-### 7. tools：tool 注册（`packages/tools/src/tools/limit-up-ladder.ts`，新建）
+### 7. tools：tool 注册（`packages/toolkit/src/tools/limit-up-ladder.ts`，新建）
 
 | tool | sideEffect | 说明 |
 |---|---|---|
@@ -495,7 +495,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
    - `AdapterRegistry` 加 `limitUpLadder` 字段
    - 同步 `ToolContext.adapters` 类型
 4. **tools：tool 主体 + 注册**
-   - `packages/tools/src/tools/limit-up-ladder.ts`（两个 tool + Zod）
+   - `packages/toolkit/src/tools/limit-up-ladder.ts`（两个 tool + Zod）
    - `packages/tools/src/registry.ts` 注册
    - `WorkflowToolMap` 补 2 行
    - 单元测试 `limit-up-ladder.test.ts`：mock manager，验证入参校验、错误映射、空 ladder 行为

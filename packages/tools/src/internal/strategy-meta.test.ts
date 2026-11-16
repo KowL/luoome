@@ -1,7 +1,6 @@
 import { money } from '@luoome/core';
+import { deriveStrategyMetaByStock } from '@luoome/plugin-strategy/internal/strategy-meta.js';
 import { describe, expect, it } from 'vitest';
-
-import { deriveStrategyMetaByStock } from './strategy-meta.js';
 
 describe('deriveStrategyMetaByStock', () => {
   it('只在提供真实天梯成员时写入 limitUpLevel/limitUpToday', () => {

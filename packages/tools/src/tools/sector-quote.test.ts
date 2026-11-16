@@ -3,9 +3,8 @@ import {
   type SectorQuoteList,
   type SectorQuoteManagerLike,
 } from '@luoome/core';
+import { fetchSectorQuotesTool } from '@luoome/toolkit/tools/sector-quote.js';
 import { describe, expect, it, vi } from 'vitest';
-
-import { fetchSectorQuotesTool } from './sector-quote.js';
 
 const mkList = (): SectorQuoteList => ({
   total: 1,

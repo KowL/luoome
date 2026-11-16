@@ -70,7 +70,16 @@ Bun workspace monorepo：
 packages/
   core/        纯领域类型 + 不变量（无 IO）
   db/          Drizzle schema + repository 实现
-  tools/       34 个核心 Agent Tool 注册表 + Zod → TS/MCP/OpenAI 自动生成
+  toolkit/     工具执行机制、共享查询与账本能力
+  plugins/     独立内置插件包（每个插件有 package.json 与 src/）
+    analysis/  个股/持仓/候选分析与市场展望
+    strategy/  策略执行、回测与 AI 洞察
+    watch/     盯盘求值提交与投递领取
+    report/    新报告保存与投递领取
+    notification/ 通知发送
+    performance-task/ 账户绩效批量任务入口
+    market-tasks/ 行情采集与同步任务
+  tools/       唯一工具目录、授权与 Zod → TS/MCP/OpenAI 派生
   adapters/    行情 / LLM / 通知 / 券商 等外部依赖适配
   workflows/   内置编排：review / scan / diagnose / advise
   mcp/         MCP server，把 tool registry 暴露给外部

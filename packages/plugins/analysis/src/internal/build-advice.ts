@@ -1,0 +1,100 @@
+import {
+  AdviceDecisionSchema,
+  type AdviceHorizon,
+  AdviceHorizonSchema,
+  AdviceReasoningSchema,
+  adviceExpiryDays,
+  type LLMGenerateRequest,
+  PluginExecutionDenied,
+  type ToolContext,
+} from '@luoome/core';
+import { sanitizeAdviceText } from '@luoome/toolkit/internal/sanitize-advice.js';
+import { z } from 'zod';
+
+export {
+  sanitizeAdviceReasoning,
+  sanitizeAdviceRisks,
+  sanitizeAdviceText,
+} from '@luoome/toolkit/internal/sanitize-advice.js';
+
+/**
+ * analyze_stock / analyze_position 共用的 LLM 输出 schema
+ * （ARCHITECTURE §6.3 schema-constrained decoding）。
+ */
+export const AdviceLLMSchema = z.object({
+  decision: AdviceDecisionSchema,
+  confidence: z.number().min(0).max(100),
+  horizon: AdviceHorizonSchema,
+  /** 买点（buy 时建议给出；与 quote.close 同单位）；观望可缺省。 */
+  entryPrice: z.number().positive().optional(),
+  /** 新计划使用的入场价格下限；与 entryPriceHigh 一起形成区间。 */
+  entryPriceLow: z.number().positive().optional(),
+  /** 新计划使用的入场价格上限；与 entryPriceLow 一起形成区间。 */
+  entryPriceHigh: z.number().positive().optional(),
+  /** 按账户总资产计算的目标仓位百分比；缺省时只能形成条件草案。 */
+  targetPositionPct: z.number().min(0).max(100).optional(),
+  /** 卖点/目标价（buy 时建议给出）；观望可缺省。 */
+  targetPrice: z.number().positive().optional(),
+  /** 止损价（buy 时建议给出，须低于 entryPrice）；观望可缺省。 */
+  stopLoss: z.number().positive().optional(),
+  reasoning: AdviceReasoningSchema,
+  risks: z.array(z.string()),
+});
+
+export type AdviceLLMOutput = z.infer<typeof AdviceLLMSchema>;
+
+export const assertAdviceAnalysis = (ctx: ToolContext): void => {
+  ctx.executionGuard?.();
+  if (ctx.executionPolicy === undefined)
+    throw new PluginExecutionDenied('plugin:business.analysis');
+  ctx.executionPolicy.assertTool('analyze_stock');
+};
+
+export const generateAdviceAnalysis = async <T>(
+  ctx: ToolContext,
+  request: LLMGenerateRequest,
+): Promise<T> => {
+  assertAdviceAnalysis(ctx);
+  let generated: T;
+  try {
+    generated = await ctx.adapters.llm.generate<T>(request);
+  } catch (error) {
+    assertAdviceAnalysis(ctx);
+    throw error;
+  }
+  assertAdviceAnalysis(ctx);
+  return generated;
+};
+
+const DAY_MS = 86_400_000;
+/** A 股收盘 15:00 用固定 UTC+8 计算（不依赖宿主机时区，保证测试确定性）。 */
+const CN_MARKET_OFFSET_MS = 8 * 3_600_000;
+
+/**
+ * 计算 validUntil（ARCHITECTURE §6.5）：
+ * - intraday → 当日 15:00（UTC+8）；若当前已过收盘，顺延到下一自然日 15:00，
+ *   保证 validUntil > validFrom（advice 不变量第 4 条）；
+ * - 其余 horizon → now + adviceExpiryDays[horizon] 个自然日
+ *   （v0.1 以自然日近似交易日，与 adapters fixtures 口径一致）。
+ */
+export const computeValidUntil = (horizon: AdviceHorizon, now: Date): Date => {
+  if (horizon !== 'intraday') {
+    return new Date(now.getTime() + adviceExpiryDays[horizon] * DAY_MS);
+  }
+  const cstNow = new Date(now.getTime() + CN_MARKET_OFFSET_MS);
+  let cutoffMs =
+    Date.UTC(cstNow.getUTCFullYear(), cstNow.getUTCMonth(), cstNow.getUTCDate(), 15, 0, 0, 0) -
+    CN_MARKET_OFFSET_MS;
+  if (cutoffMs <= now.getTime()) cutoffMs += DAY_MS;
+  return new Date(cutoffMs);
+};
+
+/**
+ * core 的 LLMAdapterLike 投影不含 raw 字段（adapters 的 LLMGenerateResult 才有）；
+ * 这里运行时提取：有则进 basedOn.llmReasoning 供审计，无则缺省。
+ */
+export const extractLlmRaw = (value: unknown): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const raw = (value as { raw?: unknown }).raw;
+  return typeof raw === 'string' && raw.length > 0 ? sanitizeAdviceText(raw) : undefined;
+};

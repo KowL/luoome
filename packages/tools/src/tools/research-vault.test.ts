@@ -1,16 +1,15 @@
 import { createHash } from 'node:crypto';
 
 import type { ResearchVaultAdapterLike, ResearchVaultEntry, ToolContext } from '@luoome/core';
-import { describe, expect, it } from 'vitest';
-
-import { buildTestContext } from '../testing/context.js';
 import {
   createResearchDocumentTool,
   getResearchDocumentTool,
   listResearchDocumentsTool,
   searchResearchDocumentsTool,
   syncResearchVaultTool,
-} from './research-vault.js';
+} from '@luoome/toolkit/tools/research-vault.js';
+import { describe, expect, it } from 'vitest';
+import { buildTestContext } from '../testing/context.js';
 
 const NOW = new Date('2026-08-01T00:00:00.000Z');
 

@@ -1,12 +1,16 @@
-import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
 import {
   createAlertPlanTool,
   deleteAlertPlanTool,
   listAlertPlansTool,
   updateAlertPlanTool,
-} from './alert-plan.js';
-import { archiveWatchlistTool, createWatchlistTool, getWatchlistTool } from './watchlist.js';
+} from '@luoome/toolkit/tools/alert-plan.js';
+import {
+  archiveWatchlistTool,
+  createWatchlistTool,
+  getWatchlistTool,
+} from '@luoome/toolkit/tools/watchlist.js';
+import { buildTestContext } from '@luoome/tools/testing';
+import { describe, expect, it } from 'vitest';
 
 describe('AlertPlan tools', () => {
   it('CRUD 使用 Watchlist/Strategy 引用并保护被引用 Watchlist', async () => {

@@ -1,7 +1,7 @@
 import { CHAT_MESSAGE_PARTS_MAX, type ChatMessage, type ToolContext } from '@luoome/core';
+import { defineTool, errInvalidInput, errNotFound } from '@luoome/toolkit';
 import { z } from 'zod';
 import { AGENT_DRAFT_TOOL_KINDS } from '../agent/scenarios.js';
-import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 
 /** 旧版文本处理记录向后扫描的消息条数。 */
 const LEGACY_SETTLEMENT_SCAN_LIMIT = 500;

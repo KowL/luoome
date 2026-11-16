@@ -1,7 +1,6 @@
+import { getStockSectorMembershipsTool } from '@luoome/toolkit/tools/get-stock-sector-memberships.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getStockSectorMembershipsTool } from './get-stock-sector-memberships.js';
 
 const NOW = new Date('2026-11-03T00:20:00.000Z');
 

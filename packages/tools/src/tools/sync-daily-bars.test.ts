@@ -1,8 +1,7 @@
 import { type DateRange, type MarketDataAdapterLike, money } from '@luoome/core';
+import { syncDailyBarsTool } from '@luoome/plugin-market-tasks/tools/sync-daily-bars.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
-import { syncDailyBarsTool } from './sync-daily-bars.js';
 
 const qfqBar = (stockId: string, date: string) => ({
   stockId,

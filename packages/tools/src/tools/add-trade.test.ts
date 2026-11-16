@@ -1,10 +1,9 @@
 import { type StrategyDslV1, type StrategyVersion, strategyDefinitionHash } from '@luoome/core';
+import { analyzePositionTool } from '@luoome/plugin-analysis/tools/analyze-position.js';
+import { addTradeTool } from '@luoome/toolkit/tools/add-trade.js';
+import { listTradesTool } from '@luoome/toolkit/tools/list-trades.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { addTradeTool } from './add-trade.js';
-import { analyzePositionTool } from './analyze-position.js';
-import { listTradesTool } from './list-trades.js';
 
 describe('add_trade', () => {
   it('接受显式 Advice / StrategyVersion 归因并可按归因查询', async () => {

@@ -1,8 +1,7 @@
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import { getAccountTool } from '@luoome/toolkit/tools/get-account.js';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
-import { getAccountTool } from './get-account.js';
 
 describe('get_account', () => {
   it('正常路径：缺省 accountId → 默认账户', async () => {

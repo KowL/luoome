@@ -1,7 +1,7 @@
 import { money, type Quote } from '@luoome/core';
+import { batchQuoteTool } from '@luoome/toolkit/tools/batch-quote.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { batchQuoteTool } from './batch-quote.js';
 
 describe('tool/batch_quote', () => {
   it('正常路径：批量拉 + 写库 + 返回 quotes + unresolved 列表', async () => {
