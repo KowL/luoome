@@ -68,6 +68,34 @@ describe('createAShareSentimentManagerFromEnv', () => {
     expect(selfConstructFetch).not.toHaveBeenCalled();
   });
 
+  it('东财双池不可用时从扶摇分页池取得沪深封板、炸板及最高板数', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.hostname !== 'fuyao.test') throw new Error('upstream unavailable');
+      const sealed = url.pathname.endsWith('/limit-up-pool');
+      const item = sealed
+        ? [
+            { thscode: '600000.SH', continue_day_cnt: 3 },
+            { thscode: '920001.BJ', continue_day_cnt: 5 },
+          ]
+        : [{ thscode: '600000.SH' }, { thscode: '000001.SZ' }];
+      return Response.json({
+        code: 0,
+        data: { pagination: { page: 1, pages: 1, size: 200, total: 2 }, item },
+      });
+    }) as unknown as typeof fetch;
+    const manager = createAShareSentimentManagerFromEnv(
+      { FUYAO_BASE_URL: 'https://fuyao.test', FUYAO_API_KEY: 'fixture' },
+      { logger, fetchImpl, clock: () => new Date('2026-07-28T07:01:00Z') },
+    );
+    const result = await manager.fetch({ date: '2026-07-28', coverage: 'CN_A_SHARES_SH_SZ' });
+    expect(result.ok && result.data.limitUp).toMatchObject({
+      status: 'complete',
+      value: { sealedCount: 1, brokenCount: 1, maxLadderLevel: 3 },
+      provenance: [{ provider: 'fuyao/limit-up' }, { provider: 'fuyao/broken-board' }],
+    });
+  });
+
   it('status() 暴露封板 / 炸板两个 capability 的观测', () => {
     const manager = createAShareSentimentManagerFromEnv({}, { logger });
     const datasets = manager.status().map((s) => s.dataset);

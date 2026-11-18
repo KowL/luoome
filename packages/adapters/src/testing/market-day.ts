@@ -178,7 +178,7 @@ export class MarketDayFixtureAdapter extends FakeMarketAdapter {
     this.envelopeCalls += 1;
     const selected = marketDayPointFor(this.fixtureClock());
     const pointIndex = MARKET_DAY_POINTS.findIndex((candidate) => candidate.at === selected.at);
-    return Promise.resolve(marketDaySnapshot(pointIndex));
+    return Promise.resolve({ ...marketDaySnapshot(pointIndex), fetchedAt: this.fixtureClock() });
   }
 
   override fetchIndexQuotes(): Promise<readonly IndexQuote[]> {

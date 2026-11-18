@@ -21,7 +21,7 @@ import { MarketCoverageSchema } from './stock-universe.js';
  * - 批次不因不完整而丢弃：不完整批次照常发布并标注缺口，只有采集失败才不产生批次。
  */
 
-export const MARKET_SNAPSHOT_BATCH_INTERVAL_MS = 5 * 60_000;
+export const MARKET_SNAPSHOT_BATCH_INTERVAL_MS = 60_000;
 
 const BATCH_ID_SEPARATOR = '|';
 

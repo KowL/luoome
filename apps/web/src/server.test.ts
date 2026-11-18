@@ -5861,10 +5861,10 @@ describe('Web 盘中全市场批次 API', () => {
     const batch = collectedBody.data?.batch;
     expect(collectedBody.data?.created).toBe(true);
     expect(batch).toMatchObject({
-      id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+      id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:16:00.000Z',
       source: 'market-day-fixture',
       tradingDate: '2026-09-28',
-      sampledAt: '2026-09-28T02:15:00.000Z',
+      sampledAt: '2026-09-28T02:16:00.000Z',
       completeness: { complete: true, receivedCount: 10 },
       gaps: [],
     });
@@ -5907,7 +5907,7 @@ describe('Web 盘中全市场批次 API', () => {
       new Request('http://test/api/market/room/collect', { method: 'POST' }),
     );
     const firstBody = (await first.json()) as { data?: { batch?: { id: string } } };
-    now = marketRoomClock('10:21:00');
+    now = marketRoomClock('10:17:00');
     const second = await web.fetch(
       new Request('http://test/api/market/room/collect', { method: 'POST' }),
     );
@@ -5956,14 +5956,14 @@ describe('Web 盘中全市场批次 API', () => {
 const roomSentimentSnapshot = (date: string): AShareSentimentSnapshot => ({
   date,
   coverage: 'CN_A_SHARES_SH_SZ',
-  dataAsOf: new Date('2026-09-28T02:15:00.000Z'),
+  dataAsOf: new Date('2026-09-28T02:16:00.000Z'),
   indexes: {
     status: 'unavailable',
     provenance: [
       {
         provider: 'luoome/market-index',
-        observedAt: new Date('2026-09-28T02:15:00.000Z'),
-        fetchedAt: new Date('2026-09-28T02:15:00.000Z'),
+        observedAt: new Date('2026-09-28T02:16:00.000Z'),
+        fetchedAt: new Date('2026-09-28T02:16:00.000Z'),
         freshness: 'unavailable',
         errorKind: 'not_requested',
       },
@@ -5975,8 +5975,8 @@ const roomSentimentSnapshot = (date: string): AShareSentimentSnapshot => ({
     provenance: [
       {
         provider: 'luoome/market-snapshot',
-        observedAt: new Date('2026-09-28T02:15:00.000Z'),
-        fetchedAt: new Date('2026-09-28T02:15:00.000Z'),
+        observedAt: new Date('2026-09-28T02:16:00.000Z'),
+        fetchedAt: new Date('2026-09-28T02:16:00.000Z'),
         freshness: 'unavailable',
         errorKind: 'not_requested',
       },
@@ -5988,8 +5988,8 @@ const roomSentimentSnapshot = (date: string): AShareSentimentSnapshot => ({
     provenance: [
       {
         provider: 'eastmoney/limit-up',
-        observedAt: new Date('2026-09-28T02:15:00.000Z'),
-        fetchedAt: new Date('2026-09-28T02:15:00.000Z'),
+        observedAt: new Date('2026-09-28T02:16:00.000Z'),
+        fetchedAt: new Date('2026-09-28T02:16:00.000Z'),
         freshness: 'fresh',
       },
     ],
@@ -6009,8 +6009,8 @@ const roomSentimentSnapshot = (date: string): AShareSentimentSnapshot => ({
     provenance: [
       {
         provider: 'eastmoney/limit-up',
-        observedAt: new Date('2026-09-28T02:15:00.000Z'),
-        fetchedAt: new Date('2026-09-28T02:15:00.000Z'),
+        observedAt: new Date('2026-09-28T02:16:00.000Z'),
+        fetchedAt: new Date('2026-09-28T02:16:00.000Z'),
         freshness: 'unavailable',
         errorKind: 'not_requested',
       },
@@ -6026,7 +6026,7 @@ const roomSentimentManager = (): AShareSentimentManagerLike => ({
 
 const roomPreviousBatch = (items: readonly MarketSnapshotItem[]) =>
   buildMarketSnapshotBatch({
-    sampledAt: new Date('2026-09-24T02:15:00.000Z'),
+    sampledAt: new Date('2026-09-24T02:16:00.000Z'),
     snapshot: {
       coverage: 'CN_A_SHARES_SH_SZ',
       source: 'previous-day-fixture',
@@ -6151,7 +6151,7 @@ describe('Web 作战室总览 API', () => {
     expect(overview?.emptyReason).toBeUndefined();
     expect(overview?.coverage).toMatchObject({
       status: 'complete',
-      value: { sampledAt: '2026-09-28T02:15:00.000Z', receivedCount: todayItems.length },
+      value: { sampledAt: '2026-09-28T02:16:00.000Z', receivedCount: todayItems.length },
     });
     expect(overview?.breadth.value).toMatchObject({
       advancing: todayItems.filter((entry) => (entry.changePct ?? 0) > 0).length,
@@ -6191,7 +6191,7 @@ describe('Web 作战室总览 API', () => {
     const again = (await (
       await web.fetch(new Request('http://test/api/market/room/overview'))
     ).json()) as RoomOverviewBody;
-    expect(again.data?.overview.coverage.value?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(again.data?.overview.coverage.value?.sampledAt).toBe('2026-09-28T02:16:00.000Z');
     expect(adapter.envelopeCalls).toBe(1);
   });
 
@@ -6296,8 +6296,8 @@ describe('Web 作战室总览回放 API', () => {
     const overview = body.data?.overview;
     expect(overview?.state).toBe('ready');
     expect(overview?.asOf).toBe('2026-09-28T02:16:00.000Z');
-    expect(overview?.latestBatch?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
-    expect(overview?.coverage.value?.sampledAt).toBe('2026-09-28T02:15:00.000Z');
+    expect(overview?.latestBatch?.sampledAt).toBe('2026-09-28T02:16:00.000Z');
+    expect(overview?.coverage.value?.sampledAt).toBe('2026-09-28T02:16:00.000Z');
     expect(overview?.breadth.value?.sampleCount).toBe(marketDayItems(1).length);
     expect(overview?.indexes.status).toBe('unavailable');
     expect(overview?.indexes.warnings.join(' ')).toContain('replay');

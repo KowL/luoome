@@ -206,10 +206,10 @@ describe('tool/collect_market_snapshot', () => {
     if (!result.ok) return;
     expect(result.data.created).toBe(true);
     expect(result.data.batch).toMatchObject({
-      id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+      id: 'CN_A_SHARES_SH_SZ|2026-09-28T02:16:00.000Z',
       coverage: 'CN_A_SHARES_SH_SZ',
       tradingDate: '2026-09-28',
-      sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+      sampledAt: new Date('2026-09-28T02:16:00.000Z'),
       source: 'stub-market',
       fetchedAt: new Date('2026-09-28T02:16:02.000Z'),
       observedAt: new Date('2026-09-28T02:16:00.000Z'),
@@ -253,7 +253,7 @@ describe('tool/collect_market_snapshot', () => {
       expect.objectContaining({
         tradingDate: '2026-09-28',
         source: 'eastmoney',
-        sampledAt: new Date('2026-09-28T02:15:00.000Z'),
+        sampledAt: new Date('2026-09-28T02:16:00.000Z'),
         total: 1,
         maxLevel: 1,
       }),
@@ -261,16 +261,18 @@ describe('tool/collect_market_snapshot', () => {
   });
 
   it('每个新批次按采样时点保存一份天梯事实，同日多份按时间升序', async () => {
-    const market = new StubMarketAdapter(async () => makeEnvelope());
+    let fetchedAt = NOW;
+    const market = new StubMarketAdapter(async () => makeEnvelope({ fetchedAt }));
     const ladder = new StubLadderManager({ ok: true, data: ladderFixture() });
     const ctx = await buildCtx(market, NOW, ladder);
     await collect(ctx);
+    fetchedAt = new Date('2026-09-28T10:21:00+08:00');
     const laterBase = await buildCtx(market, new Date('2026-09-28T10:20:30+08:00'), ladder);
     const later = { ...laterBase, repos: ctx.repos };
     await collect(later);
     const samples = await savedSamples(ctx);
     expect(samples.map((sample) => sample.sampledAt)).toEqual([
-      new Date('2026-09-28T02:15:00.000Z'),
+      new Date('2026-09-28T02:16:00.000Z'),
       new Date('2026-09-28T02:20:00.000Z'),
     ]);
     expect(ladder.calls).toBe(2);
@@ -334,7 +336,8 @@ describe('tool/collect_market_snapshot', () => {
   });
 
   it('同日重复采集把天梯快照覆盖为最新', async () => {
-    const market = new StubMarketAdapter(async () => makeEnvelope());
+    let fetchedAt = NOW;
+    const market = new StubMarketAdapter(async () => makeEnvelope({ fetchedAt }));
     const ladder = new StubLadderManager({ ok: true, data: ladderFixture() });
     const ctx = await buildCtx(market, NOW, ladder);
     await collect(ctx);
@@ -343,6 +346,7 @@ describe('tool/collect_market_snapshot', () => {
       asOf: new Date('2026-09-28T10:21:05+08:00'),
     });
     ladder.result = { ok: true, data: latestLadder };
+    fetchedAt = new Date('2026-09-28T10:21:00+08:00');
     const laterBase = await buildCtx(market, new Date('2026-09-28T10:21:00+08:00'), ladder);
     const later = { ...laterBase, repos: ctx.repos };
     const result = await collect(later);
@@ -352,7 +356,9 @@ describe('tool/collect_market_snapshot', () => {
   });
 
   it('非交易时段发布批次但不写天梯', async () => {
-    const market = new StubMarketAdapter(async () => makeEnvelope());
+    const market = new StubMarketAdapter(async () =>
+      makeEnvelope({ fetchedAt: new Date('2026-09-28T12:00:00+08:00') }),
+    );
     const ladder = new StubLadderManager({ ok: true, data: ladderFixture() });
     const ctx = await buildCtx(market, new Date('2026-09-28T12:00:00+08:00'), ladder);
     const result = await collect(ctx);
@@ -366,9 +372,11 @@ describe('tool/collect_market_snapshot', () => {
   });
 
   it('下一个采样时点是新批次，读取端返回最近的已发布批次', async () => {
-    const market = new StubMarketAdapter(async () => makeEnvelope());
+    let fetchedAt = NOW;
+    const market = new StubMarketAdapter(async () => makeEnvelope({ fetchedAt }));
     const ctx = await buildCtx(market);
     const first = await collect(ctx);
+    fetchedAt = new Date('2026-09-28T10:21:00+08:00');
     const later = await buildCtx(market, new Date('2026-09-28T10:21:00+08:00'));
     // 复用同一仓储，确保“最近批次”跨请求可见。
     const laterCtx = { ...later, repos: ctx.repos };
@@ -376,7 +384,7 @@ describe('tool/collect_market_snapshot', () => {
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(second.data.created).toBe(true);
-    expect(second.data.batch.sampledAt).toEqual(new Date('2026-09-28T02:20:00.000Z'));
+    expect(second.data.batch.sampledAt).toEqual(new Date('2026-09-28T02:21:00.000Z'));
     const latest = await readLatest(laterCtx);
     expect(latest.ok).toBe(true);
     if (!latest.ok) return;
@@ -446,6 +454,19 @@ describe('tool/collect_market_snapshot', () => {
     expect(result.data.batch.observedAt).toBeUndefined();
     expect(result.data.batch.dataAsOf).toBeUndefined();
     expect(result.data.batch.fetchedAt).toBeInstanceOf(Date);
+  });
+
+  it('过期缓存不能发布为新分钟批次', async () => {
+    const market = new StubMarketAdapter(async () => makeEnvelope());
+    const ctx = await buildCtx(market, new Date('2026-09-28T10:17:00+08:00'));
+    const result = await collect(ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('adapter_error');
+    if (result.error.kind !== 'adapter_error') return;
+    expect(result.error.cause).toContain('stale_snapshot');
+    const latest = await readLatest(ctx);
+    expect(latest.ok && latest.data.batch).toBeNull();
   });
 
   it('采集失败按 adapter_error 返回，不产生空批次', async () => {

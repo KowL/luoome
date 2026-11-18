@@ -99,6 +99,7 @@ export const MarketRoomAmountSchema = z.object({
     .object({
       /** 当日累计成交额（元，样本内合计）；样本缺失时不是全市场口径。 */
       currentAmount: z.number().nonnegative(),
+      previousCloseAmount: z.number().positive().optional(),
       currentSampleCount: z.number().int().nonnegative(),
       currentMissingAmountCount: z.number().int().nonnegative(),
       currentTotalCount: z.number().int().nonnegative(),

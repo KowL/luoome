@@ -47,11 +47,11 @@ const snapshot = (overrides: Partial<MarketSnapshot> = {}): MarketSnapshot => ({
 
 describe('MarketSnapshotBatch', () => {
   it('采样时点对齐到批次间隔，批次身份由覆盖范围与采样时点稳定派生', () => {
-    expect(MARKET_SNAPSHOT_BATCH_INTERVAL_MS).toBe(5 * 60_000);
+    expect(MARKET_SNAPSHOT_BATCH_INTERVAL_MS).toBe(60_000);
     const sampledAt = marketSnapshotBatchSampledAt(new Date('2026-09-28T02:17:31.123Z'));
-    expect(sampledAt).toEqual(new Date('2026-09-28T02:15:00.000Z'));
+    expect(sampledAt).toEqual(new Date('2026-09-28T02:17:00.000Z'));
     expect(marketSnapshotBatchId({ coverage: 'CN_A_SHARES_SH_SZ', sampledAt })).toBe(
-      'CN_A_SHARES_SH_SZ|2026-09-28T02:15:00.000Z',
+      'CN_A_SHARES_SH_SZ|2026-09-28T02:17:00.000Z',
     );
   });
 
@@ -70,7 +70,7 @@ describe('MarketSnapshotBatch', () => {
       completeness: snapshot().completeness,
       gaps: [],
     });
-    expect(batch.sampledAt).toEqual(new Date('2026-09-28T02:15:00.000Z'));
+    expect(batch.sampledAt).toEqual(new Date('2026-09-28T02:16:00.000Z'));
     expect(batch.items.map((entry) => entry.amount)).toEqual([3_000_000_000, 1_200_000_000]);
     expect(() => assertMarketSnapshotBatchInvariants(batch)).not.toThrow();
   });

@@ -2,6 +2,16 @@
 
 These patterns use MCP tools/call payloads. Replace illustrative IDs with IDs from the user's workspace. Before calling, inspect current discovery: permissions and configured dependencies may hide a tool. Never substitute a shell call for a hidden tool.
 
+## Intraday concept leaders
+
+Read the latest published batch and its 15-minute turnover window.
+
+```json
+{"name":"get_market_room_sectors","arguments":{"kind":"concept","window":"w15","sort":"day","includeLeaders":true}}
+```
+
+Use `leaders15` for the 15-minute top three and `leaders` for the daily top three. Compare each 15-minute leader’s stock ID with `previousLeaders15Ids` to identify new entrants and rank increases when available. Display the batch time and market coverage alongside any sample-based turnover share. Read `get_market_room_amount_distribution` with the same anchor time and `window: "w15"` to display `strengthening.at` and `strengthening.previousState` on recently strengthening sectors.
+
 ## Portfolio PnL
 
 Resolve the account with the user if ambiguous. Use `get_account_overview` for account, holdings and facts together:

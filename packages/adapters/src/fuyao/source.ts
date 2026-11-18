@@ -48,6 +48,7 @@ import { FuyaoClient, type FuyaoConfig } from './client.js';
 export interface FuyaoSourceOptions {
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
+  readonly bulkFetchImpl?: typeof fetch;
   readonly logger: Logger;
   /** 由 assembly factory 从 FUYAO_* 解析后注入；adapter 不读 process.env。 */
   readonly config: FuyaoConfig;
@@ -168,6 +169,7 @@ export class FuyaoSource {
   private readonly clock: () => Date;
   private readonly logger: Logger;
   private readonly client: FuyaoClient;
+  private readonly bulkClient: FuyaoClient;
 
   constructor(options: FuyaoSourceOptions) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -175,6 +177,9 @@ export class FuyaoSource {
     this.client = new FuyaoClient(options.config, {
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
+    this.bulkClient = options.bulkFetchImpl
+      ? new FuyaoClient(options.config, { fetchImpl: options.bulkFetchImpl })
+      : this.client;
   }
 
   async fetchQuote(stockCode: string): Promise<Quote> {
@@ -374,17 +379,37 @@ export class FuyaoSource {
   }
 
   /**
-   * fuyao 分页协议不返回 total；连续拉取至首个短页即证明已到达末页。
+   * 分页拉取至首个短页，响应提供 total 时同时核对原始条数（含非沪深标的）。
    * 任一页请求失败会抛错，跨页重复则标记为不完整，避免把分页漂移样本用于市场宽度。
    */
   async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
     try {
       const items: MarketSnapshotItem[] = [];
+      const pageTimes: number[] = [];
+      let missingTime = false;
+      let expectedTotal: number | undefined;
+      let receivedTotal = 0;
       for (let offset = 0; ; offset += MARKET_SNAPSHOT_PAGE_SIZE) {
-        const { items: rows } = await this.client.get('/api/a-share/prices/snapshot', {
+        const {
+          items: rows,
+          timestamp,
+          data,
+        } = await this.bulkClient.get('/api/a-share/prices/snapshot', {
           limit: MARKET_SNAPSHOT_PAGE_SIZE,
           offset,
         });
+        if (data.total != null) {
+          const total = z.number().int().nonnegative().safe().parse(data.total);
+          if (expectedTotal !== undefined && total !== expectedTotal) {
+            throw invalidPayloadError('market_snapshot_total_changed: 分页期间代码表数量变化');
+          }
+          expectedTotal = total;
+        }
+        receivedTotal += rows.length;
+        if (rows.length > 0) {
+          if (timestamp) pageTimes.push(timestamp.getTime());
+          else missingTime = true;
+        }
         for (const row of rows) {
           const parsed = SnapshotItemSchema.parse(row);
           const exchange = parsed.thscode.endsWith('.SH')
@@ -418,12 +443,18 @@ export class FuyaoSource {
         }
         if (rows.length < MARKET_SNAPSHOT_PAGE_SIZE) break;
       }
+      if (expectedTotal !== undefined && receivedTotal !== expectedTotal) {
+        throw invalidPayloadError('market_snapshot_page_gap: 分页条数与上游 total 不一致');
+      }
       const unique = [...new Map(items.map((item) => [item.id, item])).values()];
       const duplicateCount = items.length - unique.length;
       const snapshot = MarketSnapshotSchema.parse({
         coverage: 'CN_A_SHARES_SH_SZ',
         source: 'fuyao',
         fetchedAt: this.clock(),
+        ...(!missingTime && pageTimes.length > 0
+          ? { dataAsOf: new Date(Math.min(...pageTimes)) }
+          : {}),
         items: unique,
         completeness: {
           expectedCount: unique.length,

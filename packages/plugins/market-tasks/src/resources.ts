@@ -53,8 +53,25 @@ export const startMarketBatchScheduler = (
     )
       return;
     running = true;
+    const startedAt = ctx.clock();
+    const started = performance.now();
     try {
       const result = await collect();
+      ctx.logger.info('market_snapshot_collection', {
+        startedAt: startedAt.toISOString(),
+        durationMs: Math.round(performance.now() - started),
+        ok: result.ok,
+        ...(result.ok
+          ? {
+              created: result.data.created,
+              sampledAt: result.data.batch.sampledAt.toISOString(),
+              fetchedAt: result.data.batch.fetchedAt.toISOString(),
+              dataAsOf: result.data.batch.dataAsOf?.toISOString() ?? null,
+              completeness: result.data.batch.completeness,
+              warnings: result.data.warnings,
+            }
+          : { error: result.error }),
+      });
       if (!result.ok) {
         ctx.logger.error('盘中批次采集失败', { error: result.error });
       }

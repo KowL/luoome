@@ -24,6 +24,11 @@ import {
 const positive = z.coerce.number().int().positive().safe();
 export const marketRequestConfigFromEnv = (env: Readonly<Record<string, string | undefined>>) => ({
   requestsPerWindow: positive.max(10_000).parse(env.LUOOME_MARKET_REQUESTS_PER_WINDOW ?? 30),
+  // 目录类翻页同步单次需要上百个请求（沪深 A 股目录按 100 条一页），共享同一 30/60s 配额
+  // 会永远跑不完并触发 rate_limited；批量传输单独计一档，避免与报价突发互相饿死。
+  bulkRequestsPerWindow: positive
+    .max(100_000)
+    .parse(env.LUOOME_MARKET_BULK_REQUESTS_PER_WINDOW ?? 300),
   windowMs: positive.max(3_600_000).parse(env.LUOOME_MARKET_REQUEST_WINDOW_MS ?? 60_000),
   cooldownMs: positive.max(86_400_000).parse(env.LUOOME_MARKET_FAILURE_COOLDOWN_MS ?? 60_000),
   cacheTtlMs: positive.max(60_000).parse(env.LUOOME_MARKET_CACHE_TTL_MS ?? 10_000),
@@ -331,32 +336,31 @@ export class MarketRequestCoordinator {
     return `request:${source}:${scopeKey ?? 'legacy'}:${capability}:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`;
   }
 
-  private provider<T>(source: string, change: (entry: ProviderEntry, now: number) => T): T {
+  private provider<T>(
+    key: string,
+    limit: number,
+    change: (entry: ProviderEntry, now: number) => T,
+  ): T {
     const now = this.clock();
     return this.store.update(
-      `provider:${source}`,
+      key,
       now,
       now + Math.max(this.config.windowMs, this.config.cooldownMs, 86_400_000),
       (value) => {
         const entry: ProviderEntry =
           value === null
-            ? {
-                attempts: [],
-                blockedUntil: 0,
-                limit: this.config.requestsPerWindow,
-                windowMs: this.config.windowMs,
-              }
+            ? { attempts: [], blockedUntil: 0, limit, windowMs: this.config.windowMs }
             : JSON.parse(value);
         const lockedAt = this.clock();
         entry.attempts = entry.attempts.filter(
           (at) => at > lockedAt - Math.max(entry.windowMs, this.config.windowMs),
         );
         if (entry.attempts.length === 0 && entry.blockedUntil <= lockedAt) {
-          entry.limit = this.config.requestsPerWindow;
+          entry.limit = limit;
           entry.windowMs = this.config.windowMs;
         } else {
           // 活跃窗口配置不一致时取更严格的限制，不能因另一个进程的装配重置配额。
-          entry.limit = Math.min(entry.limit, this.config.requestsPerWindow);
+          entry.limit = Math.min(entry.limit, limit);
           entry.windowMs = Math.max(entry.windowMs, this.config.windowMs);
         }
         const result = change(entry, lockedAt);
@@ -365,19 +369,33 @@ export class MarketRequestCoordinator {
     );
   }
 
-  fetchFor(source: string, fetchImpl: typeof fetch = fetch): typeof fetch {
+  fetchFor(
+    source: string,
+    fetchImpl: typeof fetch = fetch,
+    options: { readonly bulk?: boolean } = {},
+  ): typeof fetch {
+    const bulk = options.bulk === true;
+    const limit = bulk ? this.config.bulkRequestsPerWindow : this.config.requestsPerWindow;
     return (async (input, init) => {
       const provider = marketProviderOf(input, source);
-      const denied = this.provider(provider, (entry, now): SuppressedMarketRequest | undefined => {
-        entry.attempts = entry.attempts.filter((at) => at > now - entry.windowMs);
-        if (entry.blockedUntil > now)
-          return new SuppressedMarketRequest(entry.errorKind ?? 'rate_limited', entry.blockedUntil);
-        const first = entry.attempts[0];
-        if (entry.attempts.length >= entry.limit && first !== undefined)
-          return new SuppressedMarketRequest('rate_limited', first + entry.windowMs);
-        entry.attempts.push(now);
-        return undefined;
-      });
+      const key = bulk ? `provider:${provider}:bulk` : `provider:${provider}`;
+      const denied = this.provider(
+        key,
+        limit,
+        (entry, now): SuppressedMarketRequest | undefined => {
+          entry.attempts = entry.attempts.filter((at) => at > now - entry.windowMs);
+          if (entry.blockedUntil > now)
+            return new SuppressedMarketRequest(
+              entry.errorKind ?? 'rate_limited',
+              entry.blockedUntil,
+            );
+          const first = entry.attempts[0];
+          if (entry.attempts.length >= entry.limit && first !== undefined)
+            return new SuppressedMarketRequest('rate_limited', first + entry.windowMs);
+          entry.attempts.push(now);
+          return undefined;
+        },
+      );
       if (denied !== undefined) throw denied;
       try {
         const response = await fetchImpl(input, init);
@@ -392,7 +410,7 @@ export class MarketRequestCoordinator {
               : Date.parse(retryAfter) - this.clock();
             if (Number.isFinite(retryMs)) delay = Math.max(delay, Math.min(retryMs, 86_400_000));
           }
-          this.block(provider, kind, delay);
+          this.block(key, kind, delay);
           throw new CoordinatedTransportError(kind, `market provider HTTP ${response.status}`);
         }
         return response;
@@ -405,14 +423,20 @@ export class MarketRequestCoordinator {
             : isAbortError(error)
               ? 'timeout'
               : 'network';
-        this.block(provider, kind, this.config.cooldownMs);
+        this.block(key, kind, this.config.cooldownMs);
         throw new CoordinatedTransportError(kind, 'market provider transport failed', error);
       }
     }) as typeof fetch;
   }
 
-  private block(source: string, kind: SourceErrorKind, delay: number): void {
-    this.provider(source, (entry, now) => {
+  private limitOf(key: string): number {
+    return key.endsWith(':bulk')
+      ? this.config.bulkRequestsPerWindow
+      : this.config.requestsPerWindow;
+  }
+
+  private block(key: string, kind: SourceErrorKind, delay: number): void {
+    this.provider(key, this.limitOf(key), (entry, now) => {
       entry.blockedUntil = Math.max(entry.blockedUntil, now + delay);
       entry.errorKind = kind;
     });
@@ -423,7 +447,7 @@ export class MarketRequestCoordinator {
       return;
     const kind = sourceErrorKindOf(error);
     if (['network', 'timeout', 'rate_limited', 'upstream_error'].includes(kind)) {
-      this.block(source, kind, this.config.cooldownMs);
+      this.block(`provider:${source}`, kind, this.config.cooldownMs);
     }
   }
 }

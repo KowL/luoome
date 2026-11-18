@@ -294,6 +294,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
       const value = c.req.query(key);
       if (value !== undefined && value.trim() !== '') input[key] = value;
     }
+    if (c.req.query('leaders') === '1') input.includeLeaders = true;
     const r = await invokeTool('get_market_room_sectors', input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);

@@ -1,5 +1,6 @@
 import type { LimitUpBoardAdapterLike, LimitUpBoardPoolResult } from '@luoome/core';
 import { z } from 'zod';
+import type { AShareSentimentRawPool } from '../ashare-sentiment/types.js';
 import type { FuyaoClient } from './client.js';
 import { parseFuyaoDataEnvelope } from './envelope.js';
 
@@ -74,6 +75,7 @@ export class FuyaoLimitUpAdapter implements LimitUpBoardAdapterLike {
     const items: T[] = [];
     let timestamp: Date | undefined;
     let pages = 1;
+    let total = 0;
     for (let page = 1; page <= Math.min(pages, MAX_PAGES); page += 1) {
       const raw = await this.client.getRaw(path, {
         date_ms: shanghaiMidnightMs(date),
@@ -87,6 +89,8 @@ export class FuyaoLimitUpAdapter implements LimitUpBoardAdapterLike {
         throw new Error(`fuyao ${label}: pagination 形状不符（${parsed.error.message}）`);
       }
       pages = parsed.data.pages;
+      total = parsed.data.total;
+      if (parsed.data.page !== page) throw new Error(`fuyao ${label}: 响应页码不匹配`);
       const rows = z.array(z.unknown()).safeParse(envelope.data.item);
       if (!rows.success) {
         throw new Error(`fuyao ${label}: data.item 不是数组（${rows.error.message}）`);
@@ -100,7 +104,61 @@ export class FuyaoLimitUpAdapter implements LimitUpBoardAdapterLike {
       }
       if (items.length >= parsed.data.total) break;
     }
+    if (items.length !== total) throw new Error(`fuyao ${label}: 分页不完整`);
     return { items, timestamp };
+  }
+
+  async fetchSealedPool({ date }: { date: string }): Promise<AShareSentimentRawPool> {
+    const page = await this.fetchPages(
+      '/api/a-share/special-data/limit-up-pool',
+      date,
+      LimitUpRowSchema.extend({
+        continue_day_cnt: z.number().int().positive(),
+        seal_money: z.number().nonnegative().nullish(),
+      }),
+      'limit-up-pool',
+    );
+    const fetchedAt = this.clock();
+    return {
+      ok: true,
+      fetchedAt,
+      observedAt: page.timestamp ?? fetchedAt,
+      entries: page.items
+        .filter((row) => IN_COVERAGE.test(row.thscode))
+        .map((row) => ({
+          stockId: row.thscode,
+          name: row.name ?? row.thscode,
+          ladderLevel: row.continue_day_cnt,
+          sealAmount: row.seal_money ?? null,
+          openCount: row.open_times ?? null,
+          concepts: [],
+        })),
+    };
+  }
+
+  async fetchBrokenPool({ date }: { date: string }): Promise<AShareSentimentRawPool> {
+    const page = await this.fetchPages(
+      '/api/a-share/special-data/limit-break-pool',
+      date,
+      BreakRowSchema,
+      'limit-break-pool',
+    );
+    const fetchedAt = this.clock();
+    return {
+      ok: true,
+      fetchedAt,
+      observedAt: page.timestamp ?? fetchedAt,
+      entries: page.items
+        .filter((row) => IN_COVERAGE.test(row.thscode))
+        .map((row) => ({
+          stockId: row.thscode,
+          name: row.name ?? row.thscode,
+          ladderLevel: 0,
+          sealAmount: null,
+          openCount: row.open_times ?? null,
+          concepts: [],
+        })),
+    };
   }
 
   async fetchLimitUpPool(date: string): Promise<LimitUpBoardPoolResult> {

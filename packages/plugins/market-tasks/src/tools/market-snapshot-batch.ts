@@ -101,7 +101,10 @@ export const collectMarketSnapshotTool = defineTool({
     }
     let snapshot: MarketSnapshot;
     try {
-      snapshot = await market.fetchMarketSnapshotEnvelope({ allowPartial: true });
+      snapshot = await market.fetchMarketSnapshotEnvelope({
+        allowPartial: true,
+        freshAfter: sampledAt,
+      });
     } catch (error) {
       const cause = error instanceof Error ? error.message : String(error);
       return errAdapterError('market-snapshot', cause, true);
@@ -115,6 +118,13 @@ export const collectMarketSnapshotTool = defineTool({
     }
     if (snapshot.items.length === 0) {
       return errAdapterError('market-snapshot', 'no_data: 空快照不发布批次', true);
+    }
+    if (snapshot.fetchedAt < sampledAt) {
+      return errAdapterError(
+        'market-snapshot',
+        'stale_snapshot: 抓取时间早于当前分钟，等待新快照',
+        true,
+      );
     }
     const published = await ctx.repos.marketSnapshotBatch.publish(
       buildMarketSnapshotBatch({ snapshot, sampledAt }),

@@ -45,6 +45,7 @@ describe('public market request coordinator', () => {
   it('validates conservative environment configuration', () => {
     expect(config).toEqual({
       requestsPerWindow: 30,
+      bulkRequestsPerWindow: 300,
       windowMs: 60_000,
       cooldownMs: 60_000,
       cacheTtlMs: 10_000,
@@ -52,6 +53,7 @@ describe('public market request coordinator', () => {
     });
     for (const key of [
       'LUOOME_MARKET_REQUESTS_PER_WINDOW',
+      'LUOOME_MARKET_BULK_REQUESTS_PER_WINDOW',
       'LUOOME_MARKET_REQUEST_WINDOW_MS',
       'LUOOME_MARKET_FAILURE_COOLDOWN_MS',
       'LUOOME_MARKET_CACHE_TTL_MS',
@@ -152,6 +154,28 @@ describe('public market request coordinator', () => {
     ).rejects.toMatchObject({ kind: 'rate_limited' });
     expect(execute).toHaveBeenCalledTimes(1);
     expect(raw).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs a paged directory sync on the bulk quota without spending the quote window', async () => {
+    const c = new MarketRequestCoordinator(
+      store(),
+      { ...config, requestsPerWindow: 2, bulkRequestsPerWindow: 60 },
+      () => T0,
+    );
+    const raw = vi.fn(async () => new Response('{}')) as unknown as typeof fetch;
+    const directory = c.fetchFor('sina', raw, { bulk: true });
+    for (let page = 0; page < 55; page += 1)
+      await directory(`https://vip.stock.finance.sina.com.cn/directory?page=${page}`);
+    expect(raw).toHaveBeenCalledTimes(55);
+    const quote = c.fetchFor('sina', raw);
+    await quote('https://hq.sinajs.cn/quote');
+    await quote('https://hq.sinajs.cn/quote?second=1');
+    await expect(quote('https://hq.sinajs.cn/quote?third=1')).rejects.toMatchObject({
+      kind: 'rate_limited',
+    });
+    await expect(
+      directory('https://vip.stock.finance.sina.com.cn/directory?page=55'),
+    ).resolves.toBeInstanceOf(Response);
   });
 
   it('charges Sina directory requests inside a Tencent capability to the shared Sina quota', async () => {

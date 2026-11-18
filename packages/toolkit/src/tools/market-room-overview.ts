@@ -71,17 +71,24 @@ export const getMarketRoomOverviewTool = defineTool({
     });
     const quotes = await readIndexQuotes(ctx);
     const limitUp = await readSentimentLimitUp(ctx, latest.tradingDate);
-    return {
-      overview: buildMarketRoomOverview({
-        now,
-        latest,
-        previous,
-        indexQuotes: quotes.quotes,
-        indexError: quotes.error,
-        limitUp: limitUp.dimension,
-        limitUpError: limitUp.error,
-      }),
-    };
+    const overview = buildMarketRoomOverview({
+      now,
+      latest,
+      previous,
+      indexQuotes: quotes.quotes,
+      indexError: quotes.error,
+      limitUp: limitUp.dimension,
+      limitUpError: limitUp.error,
+    });
+    if (overview.amount.value) {
+      try {
+        const total = await ctx.adapters.marketDump?.readArchivedTurnover?.(target.tradingDate);
+        if (total != null) overview.amount.value.previousCloseAmount = total;
+      } catch {
+        overview.amount.warnings.push('上一交易日收盘归档不可用');
+      }
+    }
+    return { overview };
   },
 });
 

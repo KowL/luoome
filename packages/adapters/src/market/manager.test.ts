@@ -823,6 +823,20 @@ describe('market/manager fetchMarketSnapshot', () => {
     expect(primary.envelopeCallCount).toBe(1);
   });
 
+  it('采集新分钟跳过旧缓存，普通读取复用新快照', async () => {
+    const primary = new SnapshotSource('p');
+    const mgr = createTestMarketDataManager({ primary, logger: silentLogger });
+    const first = await mgr.fetchMarketSnapshotEnvelope();
+    await mgr.fetchMarketSnapshotEnvelope({ freshAfter: first.fetchedAt });
+    expect(primary.envelopeCallCount).toBe(1);
+    const newer = await mgr.fetchMarketSnapshotEnvelope({
+      freshAfter: new Date(first.fetchedAt.getTime() + 60_000),
+    });
+    expect(primary.envelopeCallCount).toBe(2);
+    expect(await mgr.fetchMarketSnapshotEnvelope()).toBe(newer);
+    expect(primary.envelopeCallCount).toBe(2);
+  });
+
   it('MarketSnapshot envelope 不完整 → 继续尝试 fallback', async () => {
     const primary = new SnapshotSource('p');
     const fallback = new SnapshotSource('f');

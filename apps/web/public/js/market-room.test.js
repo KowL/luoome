@@ -224,7 +224,9 @@ describe('空态与页头文案', () => {
       },
     };
     expect(emptyStateText(ready)).toBeNull();
-    expect(overviewMetaText(ready)).toBe('沪深 A 股 · 交易日 2026-09-28 · 数据时点 10:15');
+    expect(overviewMetaText(ready)).toBe(
+      '沪深 A 股 · 交易日 2026-09-28 · 数据时点 10:15 · 行情时间 上游未提供 · 抓取时间 缺失',
+    );
     expect(
       overviewMetaText({ state: 'empty', emptyReason: 'non_trading_day', latestBatch: null }),
     ).toContain('非交易日');

@@ -2,6 +2,7 @@ import {
   buildSectorAmountDistribution,
   buildSectorAmountDistributionEmpty,
   type MarketSnapshotBatch,
+  SECTOR_STRENGTHENING_HIGHLIGHT_MINUTES,
   type SectorAmountDistribution,
   SectorAmountDistributionSchema,
   type SectorKind,
@@ -9,11 +10,13 @@ import {
   type SectorRankingEmptyReason,
   type SectorWindowKey,
   SectorWindowKeySchema,
+  withSectorStrengthening,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 import {
+  readMarketRoomWindowStart,
   resolveMarketRoomAnchor,
   resolveMarketRoomWindowChain,
 } from '../internal/market-room-anchor.js';
@@ -107,6 +110,39 @@ export const getMarketRoomAmountDistributionTool = defineTool({
       sectors,
       members,
     });
-    return { distribution };
+    const strengtheningCandidates = new Set(
+      distribution.rows.filter((row) => row.priceVolume === '放量走强').map((row) => row.sectorId),
+    );
+    if (input.window !== 'w15' || strengtheningCandidates.size === 0) {
+      return { distribution };
+    }
+    const history: SectorAmountDistribution[] = [];
+    for (let minutes = SECTOR_STRENGTHENING_HIGHLIGHT_MINUTES; minutes > 0; minutes--) {
+      const at = new Date(anchor.sampledAt.getTime() - minutes * 60_000);
+      const previous = await readMarketRoomWindowStart(ctx, anchor, at);
+      if (previous?.sampledAt.getTime() !== at.getTime()) continue;
+      const previousSectors = (
+        await ctx.repos.sectorCatalog.listSectorsAsOf({
+          kinds: [input.kind],
+          at,
+        })
+      ).filter((sector) => strengtheningCandidates.has(sector.id));
+      const previousMembers = await ctx.repos.sectorCatalog.listBySectorsAsOf({
+        sectorIds: previousSectors.map((sector) => sector.id),
+        at,
+      });
+      const starts = await resolveMarketRoomWindowChain(ctx, previous, input.window);
+      history.push(
+        buildSectorAmountDistribution({
+          kind: input.kind,
+          window: input.window,
+          anchor: previous,
+          ...starts,
+          sectors: previousSectors,
+          members: previousMembers,
+        }),
+      );
+    }
+    return { distribution: withSectorStrengthening(distribution, history) };
   },
 });

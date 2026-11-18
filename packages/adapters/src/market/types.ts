@@ -41,5 +41,6 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   /** allowPartial=true 时不把不完整信封当失败，供盘中批次照常发布并标注缺口。 */
   fetchMarketSnapshotEnvelope?(options?: {
     readonly allowPartial?: boolean;
+    readonly freshAfter?: Date;
   }): Promise<MarketSnapshot>;
 }

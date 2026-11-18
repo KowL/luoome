@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { MarketDumpArtifactLike, MarketDumpKind } from '@luoome/core';
 import { z } from 'zod';
 
+import { iterateDailyKDumpRows } from '../market-dump/parquet.js';
 import { SourceExecutionError } from '../source-error.js';
 import type { FuyaoClient } from './client.js';
 
@@ -61,6 +63,28 @@ export class FuyaoMarketDumpAdapter {
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.clock = options.clock ?? (() => new Date());
+  }
+
+  private archivedTotal: { file: string; total: number } | undefined;
+
+  async readArchivedTurnover(date: string): Promise<number | null> {
+    const prefix = `a_share_daily_k_1d_none_10d_${date.replaceAll('-', '')}.`;
+    const files = await readdir(this.options.dir);
+    const file = files.sort().find((name) => name.startsWith(prefix) && name.endsWith('.parquet'));
+    if (!file) return null;
+    if (this.archivedTotal?.file === file) return this.archivedTotal.total;
+    const tradingDay = Date.parse(date + 'T00:00:00+08:00');
+    const ids = new Set<string>();
+    let total = 0;
+    for (const row of iterateDailyKDumpRows(join(this.options.dir, file))) {
+      if (row.dateMs !== tradingDay || !/\.(SH|SZ)$/.test(row.stockId)) continue;
+      if (ids.has(row.stockId) || !Number.isFinite(row.turnover) || row.turnover < 0) return null;
+      ids.add(row.stockId);
+      total += row.turnover;
+    }
+    if (total <= 0) return null;
+    this.archivedTotal = { file, total };
+    return total;
   }
 
   async fetchTicket(kind: MarketDumpKind): Promise<MarketDumpTicket> {

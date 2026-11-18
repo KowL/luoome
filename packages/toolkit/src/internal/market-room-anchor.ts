@@ -57,7 +57,7 @@ export const resolveMarketRoomAnchor = async (
   return { kind: 'ready', anchor };
 };
 
-const readWindowStart = (
+export const readMarketRoomWindowStart = (
   ctx: ToolContext,
   anchor: MarketSnapshotBatch,
   target: Date,
@@ -73,8 +73,8 @@ export const resolveMarketRoomWindowStarts = async (
   ctx: ToolContext,
   anchor: MarketSnapshotBatch,
 ): Promise<Record<SectorWindowKey, MarketSnapshotBatch | null>> => ({
-  w5: await readWindowStart(ctx, anchor, sectorWindowTarget(anchor.sampledAt, 'w5')),
-  w15: await readWindowStart(ctx, anchor, sectorWindowTarget(anchor.sampledAt, 'w15')),
+  w5: await readMarketRoomWindowStart(ctx, anchor, sectorWindowTarget(anchor.sampledAt, 'w5')),
+  w15: await readMarketRoomWindowStart(ctx, anchor, sectorWindowTarget(anchor.sampledAt, 'w15')),
 });
 
 /** 当前窗口起点 = 锚点 − 窗口分钟；上一窗口起点再往前一个窗口。 */
@@ -88,8 +88,12 @@ export const resolveMarketRoomWindowChain = async (
 }> => {
   const currentTarget = sectorWindowTarget(anchor.sampledAt, window);
   return {
-    currentStart: await readWindowStart(ctx, anchor, currentTarget),
-    previousStart: await readWindowStart(ctx, anchor, sectorWindowTarget(currentTarget, window)),
+    currentStart: await readMarketRoomWindowStart(ctx, anchor, currentTarget),
+    previousStart: await readMarketRoomWindowStart(
+      ctx,
+      anchor,
+      sectorWindowTarget(currentTarget, window),
+    ),
   };
 };
 

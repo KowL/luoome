@@ -125,6 +125,36 @@ describe('get_market_room_amount_distribution', () => {
     expect(adapter.envelopeCalls).toBe(0);
   });
 
+  it('15分钟量价状态按相邻分钟回放确认转强，刷新保持发生时间', async () => {
+    const { ctx } = await contextAt(() => at('10:45'));
+    await seedCatalog(ctx.repos);
+    const points = [
+      ['10:14', 100, 100],
+      ['10:15', 100, 100],
+      ['10:29', 200, 100],
+      ['10:30', 200, 100],
+      ['10:44', 400, 99],
+      ['10:45', 400, 101],
+    ] as const;
+    for (const [time, amount, close] of points) {
+      await ctx.repos.marketSnapshotBatch.publish(
+        batchOf(
+          time,
+          marketDayItems(0).map((item) => ({ ...item, amount, close })),
+        ),
+      );
+    }
+    const before = await execute(ctx, { kind: 'industry', window: 'w15', at: at('10:44') });
+    expect(before.rows.every((row) => row.priceVolume === '放量下跌' && !row.strengthening)).toBe(
+      true,
+    );
+    const input = { kind: 'industry', window: 'w15', at: at('10:45') } as const;
+    const current = await execute(ctx, input);
+    expect(current.rows.every((row) => row.priceVolume === '放量走强')).toBe(true);
+    expect(current.rows[0]?.strengthening).toEqual({ at: at('10:45'), previousState: '放量下跌' });
+    expect(await execute(ctx, input)).toEqual(current);
+  });
+
   it('5 分钟窗口给出占比、百分点环比与 CR3，占比不可加总写进口径', async () => {
     const { ctx } = await contextAt();
     await seedCatalog(ctx.repos);

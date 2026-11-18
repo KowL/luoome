@@ -266,7 +266,11 @@ export class ProviderRuntime implements DataExecutionScopeLike {
     return proxy;
   }
 
-  fetchFor(source: string, fetchImpl: typeof fetch = fetch): typeof fetch {
+  fetchFor(
+    source: string,
+    fetchImpl: typeof fetch = fetch,
+    options: { readonly bulk?: boolean } = {},
+  ): typeof fetch {
     return (async (input, init) => {
       this.validateScope();
       if (!this.externalAllowed) throw new RevokedDataExecution();
@@ -305,7 +309,7 @@ export class ProviderRuntime implements DataExecutionScopeLike {
         check();
         return fetchImpl(request, requestInit);
       }) as typeof fetch;
-      const transport = this.coordinator?.fetchFor(source, send) ?? send;
+      const transport = this.coordinator?.fetchFor(source, send, options) ?? send;
       const response = await transport(input, init);
       this.validateScope();
       check();

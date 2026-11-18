@@ -25,7 +25,7 @@ export const createSectorCatalogFromEnv = (
     return runtime.wrap('sector-catalog', ['fuyao'], () =>
       buildCreateSectorCatalogFromEnv(env, {
         ...deps,
-        fetchImpl: runtime.fetchFor('fuyao', deps.fetchImpl),
+        fetchImpl: runtime.fetchFor('fuyao', deps.fetchImpl, { bulk: true }),
       }),
     );
   return buildCreateSectorCatalogFromEnv(env, deps);

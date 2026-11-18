@@ -13,6 +13,7 @@ import {
 import {
   buildSectorTurnoverMetric,
   buildSectorTurnoverWindow,
+  buildSectorWindowMetric,
   resolveSectorWindow,
   SECTOR_EMPTY_REASON_TEXT,
   SECTOR_INTRADAY_WINDOWS,
@@ -90,6 +91,54 @@ export const SectorAmountConcentrationSchema = z.object({
 });
 export type SectorAmountConcentration = z.infer<typeof SectorAmountConcentrationSchema>;
 
+export const SECTOR_STRENGTHENING_HIGHLIGHT_MINUTES = 5;
+
+const SectorPriceVolumeSchema = z.enum([
+  '放量走强',
+  '放量下跌',
+  '放量持平',
+  '缩量走强',
+  '缩量回落',
+  '缩量持平',
+  '平量走强',
+  '平量下跌',
+  '平量持平',
+  '量价待定',
+]);
+type SectorPriceVolume = z.infer<typeof SectorPriceVolumeSchema>;
+
+export function sectorPriceVolume(
+  price: number | null,
+  current: SectorTurnoverMetric,
+  previous: SectorTurnoverMetric,
+  windows: { current: SectorWindowRef; previous: SectorWindowRef },
+): SectorPriceVolume {
+  const amount = current.numeratorAmount;
+  const prior = previous.numeratorAmount;
+  if (
+    price === null ||
+    windows.current.status !== 'complete' ||
+    windows.previous.status !== 'complete' ||
+    current.missingCount !== 0 ||
+    previous.missingCount !== 0 ||
+    current.sampleCount === 0 ||
+    current.sampleCount !== previous.sampleCount ||
+    amount === null ||
+    prior === null ||
+    amount < 0 ||
+    prior < 0
+  )
+    return '量价待定';
+  if (amount > prior) return price > 0 ? '放量走强' : price < 0 ? '放量下跌' : '放量持平';
+  if (amount < prior) return price > 0 ? '缩量走强' : price < 0 ? '缩量回落' : '缩量持平';
+  return price > 0 ? '平量走强' : price < 0 ? '平量下跌' : '平量持平';
+}
+
+const SectorStrengtheningSchema = z.object({
+  at: z.coerce.date(),
+  previousState: SectorPriceVolumeSchema,
+});
+
 export const SectorAmountDistributionRowSchema = z.object({
   sectorId: z.string().min(1),
   kind: SectorKindSchema,
@@ -102,6 +151,8 @@ export const SectorAmountDistributionRowSchema = z.object({
   /** 上一窗口成交占比，用上一窗口自己的全市场分母。 */
   previousShare: SectorTurnoverMetricSchema,
   deltaPp: SectorAmountDeltaSchema,
+  priceVolume: SectorPriceVolumeSchema.optional(),
+  strengthening: SectorStrengtheningSchema.nullable().optional(),
 });
 export type SectorAmountDistributionRow = z.infer<typeof SectorAmountDistributionRowSchema>;
 
@@ -128,6 +179,59 @@ export const SectorAmountDistributionSchema = z.object({
   notes: z.array(z.string()),
 });
 export type SectorAmountDistribution = z.infer<typeof SectorAmountDistributionSchema>;
+
+export function withSectorStrengthening(
+  current: SectorAmountDistribution,
+  history: readonly SectorAmountDistribution[],
+): SectorAmountDistribution {
+  const now = current.anchor?.sampledAt.getTime();
+  if (now === undefined || current.window !== 'w15') return current;
+  const frames = [...history, current]
+    .flatMap(({ anchor, ...frame }) => (anchor ? [{ ...frame, anchor }] : []))
+    .filter(
+      (frame) =>
+        frame.tradingDate === current.tradingDate &&
+        frame.kind === current.kind &&
+        frame.window === current.window &&
+        frame.anchor.sampledAt.getTime() <= now &&
+        now - frame.anchor.sampledAt.getTime() <= SECTOR_STRENGTHENING_HIGHLIGHT_MINUTES * 60_000,
+    )
+    .sort((a, b) => a.anchor.sampledAt.getTime() - b.anchor.sampledAt.getTime());
+  let priorTime: number | undefined;
+  let priorStates = new Map<string, SectorPriceVolume | undefined>();
+  const transitions = new Map<string, z.infer<typeof SectorStrengtheningSchema>>();
+  for (const frame of frames) {
+    const at = frame.anchor.sampledAt;
+    if (at.getTime() - (priorTime ?? 0) !== 60_000) {
+      transitions.clear();
+      priorStates.clear();
+    }
+    const states = new Map(frame.rows.map((row) => [row.sectorId, row.priceVolume]));
+    for (const id of transitions.keys()) {
+      if (states.get(id) !== '放量走强') transitions.delete(id);
+    }
+    for (const row of frame.rows) {
+      const previousState = priorStates.get(row.sectorId);
+      if (
+        row.priceVolume === '放量走强' &&
+        previousState &&
+        previousState !== '放量走强' &&
+        previousState !== '量价待定'
+      ) {
+        transitions.set(row.sectorId, { at, previousState });
+      }
+    }
+    priorTime = at.getTime();
+    priorStates = states;
+  }
+  return {
+    ...current,
+    rows: current.rows.map((row) => ({
+      ...row,
+      strengthening: transitions.get(row.sectorId) ?? null,
+    })),
+  };
+}
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
@@ -392,6 +496,13 @@ export const buildSectorAmountDistribution = (
       items: currentStartItems,
       startItems: previousStartItems,
     });
+    const price = buildSectorWindowMetric({
+      key: input.window,
+      window: currentWindow,
+      members,
+      items: anchorItems,
+      startItems: currentStartItems,
+    }).value;
     rows.push({
       sectorId: sector.id,
       kind: sector.kind,
@@ -401,6 +512,10 @@ export const buildSectorAmountDistribution = (
       share,
       previousShare,
       deltaPp: buildSectorAmountDelta(share, previousShare),
+      priceVolume: sectorPriceVolume(price, share, previousShare, {
+        current: currentWindow,
+        previous: previousWindow,
+      }),
     });
   }
 

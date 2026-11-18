@@ -16,6 +16,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import './room-index-minutes.js';
 import { callApi } from './api.js';
 import {
   amountMetaText,
@@ -23,6 +24,7 @@ import {
   amountQuery,
   renderAmountPane,
 } from './market-room-amount.js';
+import { amountMeter, rotationBoard } from './market-room-board.js';
 import {
   eventsMetaText,
   eventsParamsFromHash,
@@ -219,7 +221,7 @@ const overviewMetaText = (overview) => {
   if (overview?.state === 'empty') return emptyStateText(overview);
   const coverage = overview?.coverage?.value;
   if (coverage === undefined) return '数据时点未知';
-  return `${coverageLabel(coverage.coverage)} · 交易日 ${coverage.tradingDate} · 数据时点 ${fmtClock(coverage.sampledAt)}`;
+  return `${coverageLabel(coverage.coverage)} · 交易日 ${coverage.tradingDate} · 数据时点 ${fmtClock(coverage.sampledAt)} · 行情时间 ${fmtClock(coverage.dataAsOf, '上游未提供', true)} · 抓取时间 ${fmtClock(coverage.fetchedAt, '缺失', true)}`;
 };
 
 const missingReasonText = (dimension) => dimension?.warnings?.[0] ?? '该维度暂不可用';
@@ -364,7 +366,7 @@ const fact = (label, value) =>
 const dataAsOfNote = (value) =>
   value.dataAsOf === undefined
     ? ' · 上游未提供行情时间'
-    : ` · 行情时间 ${fmtClock(value.dataAsOf)}`;
+    : ` · 行情时间 ${fmtClock(value.dataAsOf, '上游未提供', true)}`;
 
 const coverageCard = (coverage) => {
   const value = coverage.value;
@@ -376,11 +378,16 @@ const coverageCard = (coverage) => {
             fact('覆盖范围', coverageLabel(value.coverage)),
             fact('交易日', value.tradingDate),
             fact('数据时点', fmtClock(value.sampledAt)),
+            fact('采集间隔', '1 分钟'),
             fact('样本', `${value.receivedCount} / 期望 ${value.expectedCount}`),
             fact('缺失 / 重复', `${value.missingCount} / ${value.duplicateCount}`),
             fact('来源', value.source),
           ]),
-          el('p', 'room-caption', `抓取于 ${fmtClock(value.fetchedAt)}${dataAsOfNote(value)}`),
+          el(
+            'p',
+            'room-caption',
+            `抓取于 ${fmtClock(value.fetchedAt, '缺失', true)}${dataAsOfNote(value)}`,
+          ),
         ];
   return el('div', 'card room-card', [
     el('div', 'card-header', [
@@ -388,6 +395,9 @@ const coverageCard = (coverage) => {
       statusBadge(coverage.status),
     ]),
     ...body,
+    value?.source === 'fuyao'
+      ? el('p', 'room-caption', '行情时间取各分页最新上游时间中的最早值。')
+      : null,
     dimensionNote(coverage),
   ]);
 };
@@ -447,32 +457,6 @@ const breadthCard = (overview) => {
   ]);
 };
 
-const amountCard = (amount) => {
-  const summary = amountSummary(amount);
-  const body =
-    summary === null
-      ? [el('p', 'placeholder', missingReasonText(amount))]
-      : [
-          el('div', 'room-facts', [
-            fact('累计成交额', summary.current),
-            fact('昨日同时点', summary.previous),
-            fact('结论', summary.verdict ?? '缺失'),
-            fact('口径', summary.sample),
-          ]),
-        ];
-  return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [
-        el('h2', '', '成交额与昨日同时点'),
-        el('div', 'card-meta', '对比基准为上一交易日同一时刻的已发布批次'),
-      ]),
-      statusBadge(amount.status),
-    ]),
-    ...body,
-    dimensionNote(amount),
-  ]);
-};
-
 const limitUpCard = (limitUp) => {
   const value = limitUp.value;
   return el('div', 'card room-card', [
@@ -494,7 +478,7 @@ const limitUpCard = (limitUp) => {
   ]);
 };
 
-const renderOverviewPane = (overview, at = null) => {
+const renderOverviewPane = (overview, at, ranking, distribution) => {
   const empty = emptyStateText(overview);
   if (empty !== null) {
     const replayNotice = overview?.emptyReason === 'no_batch' ? replayEmptyNotice(at) : null;
@@ -509,9 +493,11 @@ const renderOverviewPane = (overview, at = null) => {
     ]);
   }
   return el('div', 'room-overview', [
+    amountMeter(overview.amount, overview.latestBatch),
+    at === null ? el('div', 'card room-overview-minutes', el('room-index-minutes')) : null,
+    rotationBoard(ranking, distribution, at),
     coverageCard(overview.coverage),
     breadthCard(overview),
-    amountCard(overview.amount),
     limitUpCard(overview.limitUp),
   ]);
 };
@@ -949,10 +935,13 @@ const setMeta = (section, text) => {
   if (meta !== null) meta.textContent = text;
 };
 
-const renderOverview = (section, overview, at = null) => {
+const renderOverview = (section, overview, at, ranking, distribution) => {
   const pane = section.querySelector('.room-pane');
   if (pane === null) return;
-  mount(pane, renderOverviewPane(overview, at));
+  const boardScroll = pane.querySelector('.room-board-grid')?.scrollTop ?? 0;
+  mount(pane, renderOverviewPane(overview, at, ranking, distribution));
+  const board = pane.querySelector('.room-board-grid');
+  if (board) board.scrollTop = boardScroll;
   setMeta(section, overviewMetaText(overview));
 };
 
@@ -982,7 +971,19 @@ const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
     setStatus?.('作战室总览刷新失败', true);
     return;
   }
-  renderOverview(section, overview, at);
+  const anchor = overview.latestBatch?.sampledAt;
+  let ranking, distribution;
+  if (overview.state === 'ready' && anchor) {
+    const query = 'kind=concept&window=w15&at=' + encodeURIComponent(anchor);
+    const [sectors, amounts] = await Promise.all([
+      callApi('/api/market/room/sectors?leaders=1&' + query, { timeoutMs: 20000 }),
+      callApi('/api/market/room/amount-distribution?' + query, { timeoutMs: 20000 }),
+    ]);
+    if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+    ranking = sectors.data?.ranking;
+    distribution = amounts.data?.distribution;
+  }
+  renderOverview(section, overview, at, ranking, distribution);
 };
 
 const stopTimer = () => {

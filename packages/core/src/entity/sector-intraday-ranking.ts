@@ -111,6 +111,7 @@ export const SectorTurnoverMetricSchema = z.object({
   ...countsShape,
   /** 成分累计成交额增量之和（元）；无有效成分时为 null。 */
   numeratorAmount: z.number().nullable(),
+  observedSharePct: z.number().min(0).max(100).optional(),
   method: z.string().min(1),
   warnings: z.array(z.string()),
 });
@@ -150,6 +151,13 @@ export const SectorLimitUpBlockSchema = z.object({
 });
 export type SectorLimitUpBlock = z.infer<typeof SectorLimitUpBlockSchema>;
 
+const SectorLeaderSchema = z.object({
+  stockId: z.string(),
+  name: z.string(),
+  changePct: z.number(),
+});
+type SectorLeader = z.infer<typeof SectorLeaderSchema>;
+
 export const SectorIntradayRowSchema = z.object({
   sectorId: z.string().min(1),
   kind: SectorKindSchema,
@@ -157,6 +165,9 @@ export const SectorIntradayRowSchema = z.object({
   name: z.string().min(1),
   /** 当前排序口径下的名次（1 起）；该口径缺失时为 null。 */
   rank: z.number().int().positive().nullable(),
+  leaders: z.array(SectorLeaderSchema).optional(),
+  leaders15: z.array(SectorLeaderSchema).optional(),
+  previousLeaders15Ids: z.array(z.string()).max(3).nullable().optional(),
   day: SectorDayMetricSchema,
   window5: SectorWindowMetricSchema,
   window15: SectorWindowMetricSchema,
@@ -429,6 +440,41 @@ export const buildSectorDayMetric = (input: {
   };
 };
 
+const windowReturn = (current?: MarketSnapshotItem, start?: MarketSnapshotItem): number | null => {
+  const endPrice = current?.close;
+  const startPrice = start?.close;
+  if (endPrice === undefined || startPrice === undefined || endPrice <= 0 || startPrice <= 0)
+    return null;
+  return (endPrice / startPrice - 1) * 100;
+};
+
+function topThree(stocks: SectorLeader[]) {
+  return stocks
+    .sort((a, b) => b.changePct - a.changePct || a.stockId.localeCompare(b.stockId))
+    .slice(0, 3);
+}
+
+function rankedMembers(
+  members: readonly StockSectorMembership[],
+  names: ReadonlyMap<string, string>,
+  items: ReadonlyMap<string, MarketSnapshotItem>,
+  starts?: ReadonlyMap<string, MarketSnapshotItem>,
+) {
+  const stocks: SectorLeader[] = [];
+  for (const member of members) {
+    if (isNonTradable(member)) continue;
+    const quote = items.get(member.stockId);
+    const pct = starts ? windowReturn(quote, starts.get(member.stockId)) : quote?.changePct;
+    if (!quote || pct == null) continue;
+    stocks.push({
+      stockId: member.stockId,
+      name: names.get(member.stockId) ?? quote.name,
+      changePct: starts ? round4(pct) : pct,
+    });
+  }
+  return topThree(stocks);
+}
+
 /** 窗口涨幅：窗口两端价格比值，逐成分计算后等权；窗口不可比时 value 为 null。 */
 export const buildSectorWindowMetric = (input: {
   readonly key: SectorWindowKey;
@@ -449,18 +495,12 @@ export const buildSectorWindowMetric = (input: {
     }
     const current = input.items.get(membership.stockId);
     const start = input.startItems.get(membership.stockId);
-    const currentClose = current?.close;
-    const startClose = start?.close;
-    if (
-      currentClose === undefined ||
-      startClose === undefined ||
-      startClose <= 0 ||
-      currentClose <= 0
-    ) {
+    const pct = windowReturn(current, start);
+    if (pct === null) {
       missingCount += 1;
       continue;
     }
-    returns.push((currentClose / startClose - 1) * 100);
+    returns.push(pct);
   }
 
   const sampleCount = returns.length;
@@ -547,6 +587,8 @@ export const buildSectorTurnoverWindow = (input: {
       null,
     );
   }
+  if (!input.start?.completeness.complete)
+    return invalid('batch_incomplete: 窗口起点批次不完整', null);
   if (sampleCount !== totalCount) {
     return invalid(
       `denominator_incomplete: 分母仅覆盖 ${sampleCount} / ${totalCount} 只（缺成交额或不在窗口起点批次），无法作为全市场分母`,
@@ -629,6 +671,14 @@ export const buildSectorTurnoverMetric = (input: {
     missingCount,
     nonTradableCount,
     numeratorAmount: sampleCount === 0 ? null : round2(numerator),
+    ...(input.denominator.reason?.startsWith('denominator_incomplete:') &&
+    denominatorAmount !== null &&
+    denominatorAmount > 0 &&
+    sampleCount > 0 &&
+    numerator >= 0 &&
+    numerator <= denominatorAmount
+      ? { observedSharePct: round2((100 * numerator) / denominatorAmount) }
+      : {}),
     method: SECTOR_TURNOVER_METHOD,
     warnings,
   };
@@ -711,6 +761,11 @@ const RANKING_NOTES: readonly string[] = [
 ];
 
 export interface SectorIntradayRankingInput {
+  readonly stockNames?: ReadonlyMap<string, string>;
+  readonly previousLeaderWindow?: {
+    readonly start: MarketSnapshotBatch;
+    readonly members: readonly StockSectorMembership[];
+  };
   readonly kind: SectorKind;
   readonly sort: SectorIntradaySort;
   readonly window: SectorWindowKey;
@@ -805,6 +860,18 @@ const compareRows =
     return left.vendorCode.localeCompare(right.vendorCode);
   };
 
+function groupMembers(members: readonly StockSectorMembership[]) {
+  const membersBySector = new Map<string, StockSectorMembership[]>();
+  for (const membership of members) {
+    if (membership.state !== 'active') continue;
+    const list = membersBySector.get(membership.sectorId) ?? [];
+    list.push(membership);
+    membersBySector.set(membership.sectorId, list);
+  }
+
+  return membersBySector;
+}
+
 export const buildSectorIntradayRanking = (
   input: SectorIntradayRankingInput,
 ): SectorIntradayRanking => {
@@ -834,13 +901,16 @@ export const buildSectorIntradayRanking = (
   });
   const codes = ladderCodes(input.limitUp);
 
-  const membersBySector = new Map<string, StockSectorMembership[]>();
-  for (const membership of input.members) {
-    if (membership.state !== 'active') continue;
-    const list = membersBySector.get(membership.sectorId) ?? [];
-    list.push(membership);
-    membersBySector.set(membership.sectorId, list);
-  }
+  const membersBySector = groupMembers(input.members);
+  const prior = input.previousLeaderWindow;
+  const priorEnd = input.windowStarts.w15;
+  const previous =
+    prior &&
+    priorEnd &&
+    windows.w15.status === 'complete' &&
+    resolveSectorWindow({ key: 'w15', anchor: priorEnd, start: prior.start }).status === 'complete'
+      ? { starts: itemMap(prior.start), members: groupMembers(prior.members) }
+      : null;
 
   const catalog = input.sectors.filter(
     (sector) => sector.kind === input.kind && sector.state === 'active',
@@ -853,12 +923,35 @@ export const buildSectorIntradayRanking = (
       omittedSectorCount += 1;
       continue;
     }
+    const names = input.stockNames;
+    const current =
+      names && windows.w15.status !== 'unavailable'
+        ? rankedMembers(members, names, anchorItems, startItems.w15)
+        : null;
+    const previousRanks =
+      names && previous && current?.length
+        ? rankedMembers(
+            previous.members.get(sector.id) ?? [],
+            names,
+            startItems.w15,
+            previous.starts,
+          )
+        : null;
     rows.push({
       sectorId: sector.id,
       kind: sector.kind,
       vendorCode: sector.vendorCode,
       name: sector.name,
       rank: null,
+      ...(names
+        ? {
+            leaders: rankedMembers(members, names, anchorItems),
+            leaders15: current ?? [],
+            previousLeaders15Ids: previousRanks?.length
+              ? previousRanks.map((stock) => stock.stockId)
+              : null,
+          }
+        : {}),
       day: buildSectorDayMetric({ members, items: anchorItems }),
       window5: buildSectorWindowMetric({
         key: 'w5',

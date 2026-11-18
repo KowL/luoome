@@ -2,6 +2,7 @@ import {
   buildSectorIntradayEmptyRanking,
   buildSectorIntradayRanking,
   type MarketSnapshotBatch,
+  type SectorIntradayRankingInput,
   SectorIntradayRankingSchema,
   type SectorIntradaySort,
   SectorIntradaySortSchema,
@@ -10,12 +11,14 @@ import {
   type SectorRankingEmptyReason,
   type SectorWindowKey,
   SectorWindowKeySchema,
+  sectorWindowTarget,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 import {
   readMarketRoomLimitUp,
+  readMarketRoomWindowStart,
   resolveMarketRoomAnchor,
   resolveMarketRoomWindowStarts,
 } from '../internal/market-room-anchor.js';
@@ -32,6 +35,7 @@ import {
 
 export const GetMarketRoomSectorsInput = z.object({
   kind: SectorKindSchema.default('industry'),
+  includeLeaders: z.boolean().optional(),
   sort: SectorIntradaySortSchema.default('day'),
   window: SectorWindowKeySchema.default('w15'),
   at: z.coerce.date().optional(),
@@ -92,8 +96,41 @@ export const getMarketRoomSectorsTool = defineTool({
 
     const windowStarts = await resolveMarketRoomWindowStarts(ctx, anchor);
     const limitUp = await readMarketRoomLimitUp(ctx, anchor, input.at);
+    let stockNames: Map<string, string> | undefined;
+    let previousLeaderWindow: SectorIntradayRankingInput['previousLeaderWindow'];
+    if (input.includeLeaders) {
+      const priorEnd = windowStarts.w15;
+      if (priorEnd) {
+        const start = await readMarketRoomWindowStart(
+          ctx,
+          priorEnd,
+          sectorWindowTarget(priorEnd.sampledAt, 'w15'),
+        );
+        if (start) {
+          previousLeaderWindow = {
+            start,
+            members: await ctx.repos.sectorCatalog.listBySectorsAsOf({
+              sectorIds,
+              at: priorEnd.sampledAt,
+            }),
+          };
+        }
+      }
+      const coverage = anchor.coverage;
+      const snapshot = input.at
+        ? await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({ coverage, asOf: input.at })
+        : null;
+      const stocks = input.at
+        ? snapshot
+          ? await ctx.repos.stockUniverse.listSnapshotMembers(snapshot.id)
+          : []
+        : await ctx.repos.stockUniverse.listCurrent({ coverage });
+      stockNames = new Map(stocks.map((stock) => [stock.id, stock.name]));
+    }
     return {
       ranking: buildSectorIntradayRanking({
+        ...(previousLeaderWindow ? { previousLeaderWindow } : {}),
+        ...(stockNames ? { stockNames } : {}),
         kind: input.kind,
         sort: input.sort,
         window: input.window,

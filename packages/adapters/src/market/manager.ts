@@ -499,15 +499,22 @@ export class MarketDataManager implements MarketDataAdapter {
   }
 
   async fetchMarketSnapshotEnvelope(
-    options: { readonly allowPartial?: boolean } = {},
+    options: { readonly allowPartial?: boolean; readonly freshAfter?: Date } = {},
   ): Promise<MarketSnapshot> {
     return this.routeWithFallback({
       capability: 'market-snapshot-envelope',
       constraint: { coverage: 'CN_A_SHARES_SH_SZ' },
-      request: { coverage: 'CN_A_SHARES_SH_SZ' },
+      request: {
+        coverage: 'CN_A_SHARES_SH_SZ',
+        ...(options.freshAfter ? { freshAfter: options.freshAfter } : {}),
+      },
       readCache: () => {
         const cached = this.marketSnapshotEnvelopeCache;
-        if (cached !== undefined && this.clock().getTime() - cached.at < this.marketSnapshotTtlMs) {
+        if (
+          cached !== undefined &&
+          this.clock().getTime() - cached.at < this.marketSnapshotTtlMs &&
+          (!options.freshAfter || cached.snapshot.fetchedAt >= options.freshAfter)
+        ) {
           return cached.snapshot;
         }
         return undefined;

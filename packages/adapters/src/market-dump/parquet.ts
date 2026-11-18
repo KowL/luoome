@@ -69,7 +69,7 @@ export function* iterateDailyKDumpRows(path: string): Generator<DailyKDumpRow> {
         low: toNumber(row.low_price),
         close: toNumber(row.close_price),
         volume: toNumber(row.volume),
-        turnover: toNumber(row.turnover),
+        turnover: row.turnover == null ? Number.NaN : toNumber(row.turnover),
       };
     }
   }

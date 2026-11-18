@@ -1219,6 +1219,15 @@
     </div>
   </div>
 
-  <script type="module" src="/js/app.js" defer></script>
+  <script type="module">
+    if (location.pathname === '/market' && new URLSearchParams(location.search).get('view') === 'index-minutes') {
+      document.title = '指数分时';
+      document.body.className = 'minute-embed';
+      document.body.replaceChildren(document.createElement('room-index-minutes'));
+      await import('/js/room-index-minutes.js');
+    } else {
+      await import('/js/app.js');
+    }
+  </script>
 </body>
 </html>

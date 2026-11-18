@@ -1,15 +1,21 @@
 import type { AShareSentimentManagerLike, Logger, MarketDataAdapterLike } from '@luoome/core';
 import { z } from 'zod';
 import { EastmoneySource } from '../eastmoney/source.js';
+import { FuyaoClient, fuyaoConfigFromEnv } from '../fuyao/client.js';
+import { FuyaoLimitUpAdapter } from '../fuyao/limit-up.js';
 import type { ProviderGuard, ProviderRuntime } from '../plugins/provider-runtime.js';
 import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { AShareSentimentManager } from './manager.js';
-import type { AShareSentimentCapabilityMap, AShareSentimentRawPool } from './types.js';
+import type {
+  AShareSentimentCapabilityMap,
+  AShareSentimentPoolSource,
+  AShareSentimentRawPool,
+} from './types.js';
 
 /**
  * A 股情绪 manager 装配根。
  *
- * - LUOOME_ASHARE_SENTIMENT_SOURCES：逗号分隔、有序、去重；未知源启动期抛错；缺省 eastmoney
+ * - LUOOME_ASHARE_SENTIMENT_SOURCES：逗号分隔、有序、去重；未知源启动期抛错；缺省 eastmoney，已配置扶摇凭据时追加 fuyao
  *   （docs/ddd/source-pluggability-and-observation-design.md §4.6）
  * - 封板 / 炸板注册为两个独立 capability（§4.3），manager 池级路由与 fallback
  * - 返回的 manager 同时满足 core `AShareSentimentManagerLike` 接口（structural typing）
@@ -28,7 +34,7 @@ export interface CreateAShareSentimentManagerDeps {
 
 /** 已注册的情绪数据源（封闭启动校验；core 端口侧是开放 SourceIdSchema）。 */
 const AShareSentimentSourcesSchema = z
-  .array(z.literal('eastmoney'))
+  .array(z.enum(['eastmoney', 'fuyao']))
   .min(1, '至少启用一个 A 股情绪数据源')
   .superRefine((sources, ctx) => {
     if (new Set(sources).size !== sources.length) {
@@ -38,11 +44,13 @@ const AShareSentimentSourcesSchema = z
 
 const ashareSentimentSourcesFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
-): readonly 'eastmoney'[] => {
+): readonly ('eastmoney' | 'fuyao')[] => {
   const configured = env.LUOOME_ASHARE_SENTIMENT_SOURCES?.trim();
   return AShareSentimentSourcesSchema.parse(
     configured === undefined || configured.length === 0
-      ? ['eastmoney']
+      ? env.FUYAO_API_KEY?.trim()
+        ? ['eastmoney', 'fuyao']
+        : ['eastmoney']
       : configured.split(',').map((value) => value.trim().toLowerCase()),
   );
 };
@@ -59,7 +67,6 @@ export const createAShareSentimentManagerFromEnv = (
         {
           ...deps,
           guard,
-          fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
         },
       ),
     );
@@ -76,13 +83,21 @@ const buildCreateAShareSentimentManagerFromEnv = (
     deps.sources?.eastmoney ??
     new EastmoneySource({
       clock,
-      ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+      fetchImpl:
+        deps.providerRuntime?.fetchFor('eastmoney', deps.fetchImpl) ?? deps.fetchImpl ?? fetch,
     });
 
   const bindings = order.flatMap((source) => {
     switch (source) {
       case 'eastmoney':
-        return eastmoneyBindings(eastmoney);
+        return poolBindings(source, eastmoney);
+      case 'fuyao': {
+        const client = new FuyaoClient(fuyaoConfigFromEnv(env), {
+          fetchImpl:
+            deps.providerRuntime?.fetchFor(source, deps.fetchImpl) ?? deps.fetchImpl ?? fetch,
+        });
+        return poolBindings(source, new FuyaoLimitUpAdapter(client, clock));
+      }
       default:
         throw new Error(`不支持的数据源：${String(source satisfies never)}`);
     }
@@ -109,10 +124,13 @@ const observationOfPool = (pool: AShareSentimentRawPool) => {
   return { outcome: 'failure', kind } as const;
 };
 
-const eastmoneyBindings = (source: EastmoneySource): AnyBinding<AShareSentimentCapabilityMap>[] => [
+const poolBindings = (
+  id: string,
+  source: AShareSentimentPoolSource,
+): AnyBinding<AShareSentimentCapabilityMap>[] => [
   {
     capability: 'sentiment-sealed-pool',
-    source: 'eastmoney',
+    source: id,
     coverage: ['CN_A_SHARES_SH_SZ'],
     configurationReady: true,
     execute: (input) => source.fetchSealedPool(input),
@@ -120,7 +138,7 @@ const eastmoneyBindings = (source: EastmoneySource): AnyBinding<AShareSentimentC
   },
   {
     capability: 'sentiment-broken-pool',
-    source: 'eastmoney',
+    source: id,
     coverage: ['CN_A_SHARES_SH_SZ'],
     configurationReady: true,
     execute: (input) => source.fetchBrokenPool(input),

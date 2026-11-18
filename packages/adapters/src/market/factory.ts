@@ -116,15 +116,15 @@ const buildMarketAdapterFromEnv = (
 
   const clockOpt = deps.clock === undefined ? {} : { clock: deps.clock };
 
-  const sourceOptsFor = (source: MarketSourceId) => ({
+  const sourceOptsFor = (source: MarketSourceId, bulk = false) => ({
     ...clockOpt,
     ...(deps.providerRuntime !== undefined
-      ? { fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl) }
+      ? { fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl, { bulk }) }
       : deps.requestCoordinator === undefined
         ? deps.fetchImpl === undefined
           ? {}
           : { fetchImpl: deps.fetchImpl }
-        : { fetchImpl: deps.requestCoordinator.fetchFor(source, deps.fetchImpl) }),
+        : { fetchImpl: deps.requestCoordinator.fetchFor(source, deps.fetchImpl, { bulk }) }),
   });
 
   const sourceOrder =
@@ -149,7 +149,9 @@ const buildMarketAdapterFromEnv = (
         return tushareBindings(adapter);
       }
       case 'fuyao': {
-        const adapter = deps.sources?.fuyao ?? buildFuyao(env, sourceOpts, deps.logger);
+        const adapter =
+          deps.sources?.fuyao ??
+          buildFuyao(env, sourceOpts, deps.logger, sourceOptsFor(source, true).fetchImpl);
         return fuyaoBindings(adapter);
       }
       default:
@@ -189,13 +191,19 @@ const buildFuyao = (
   env: Readonly<Record<string, string | undefined>>,
   sourceOpts: { clock?: () => Date; fetchImpl?: typeof fetch },
   logger: Logger,
+  bulkFetchImpl?: typeof fetch,
 ): FuyaoSource => {
   const apiKey = env.FUYAO_API_KEY;
   if (apiKey === undefined || apiKey.trim().length === 0) {
     throw new Error('fuyao 已启用，但 FUYAO_API_KEY 未配置');
   }
   const config = fuyaoConfigFromEnv(env);
-  return new FuyaoSource({ ...sourceOpts, config, logger });
+  return new FuyaoSource({
+    ...sourceOpts,
+    config,
+    logger,
+    ...(bulkFetchImpl && { bulkFetchImpl }),
+  });
 };
 
 const CN_SH_SZ = ['CN_A_SHARES_SH_SZ'] as const satisfies readonly MarketCoverage[];

@@ -107,7 +107,7 @@ const formatPct = (value, signed = false, missing = null) => {
 };
 
 /** 上海时钟 HH:mm；非法或缺失时间按调用方期望返回 `missing`（默认 '--'）。 */
-const formatClock = (value, missing = '--') => {
+const formatClock = (value, missing = '--', seconds = false) => {
   if (value === null || value === undefined) return missing;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return missing;
@@ -116,6 +116,7 @@ const formatClock = (value, missing = '--') => {
     timeZone: 'Asia/Shanghai',
     hour: '2-digit',
     minute: '2-digit',
+    ...(seconds ? { second: '2-digit' } : {}),
   });
 };
 

@@ -99,7 +99,7 @@ export type MarketCapabilityMap = {
     readonly result: readonly MarketSnapshotItem[];
   };
   readonly 'market-snapshot-envelope': {
-    readonly request: { readonly coverage: MarketCoverage };
+    readonly request: { readonly coverage: MarketCoverage; readonly freshAfter?: Date };
     readonly result: MarketSnapshot;
   };
   readonly 'realtime-index': {

@@ -283,10 +283,35 @@ describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
       },
     });
     expect(snapshot.observedAt).toBeUndefined();
-    expect(snapshot.dataAsOf).toBeUndefined();
+    expect(snapshot.dataAsOf).toEqual(new Date(TIMESTAMP_MS));
     expect(snapshot.items).toHaveLength(102);
     expect(snapshot.items.at(-2)?.changePct).toBe(-2.5);
     expect(snapshot.items[0]?.amount).toBe(3937375200);
+  });
+
+  it('分页行情时间取最早的分页最新时间，任一页缺失则保留未知', async () => {
+    const page = Array.from({ length: 100 }, (_, i) =>
+      snapshotRow('600' + String(i).padStart(3, '0') + '.SH'),
+    );
+    for (const end of [TIMESTAMP_MS - 60_000, null]) {
+      const { source } = makeSource((async (url: string) =>
+        url.includes('offset=0')
+          ? envelope(page)
+          : envelope([snapshotRow('000001.SZ')], end)) as never);
+      const result = await source.fetchMarketSnapshotEnvelope();
+      expect(result.dataAsOf).toEqual(end === null ? undefined : new Date(end));
+      expect(result.fetchedAt).toEqual(CLOCK);
+    }
+  });
+
+  it('上游 total 与分页条数不一致时拒绝完整快照', async () => {
+    const { source } = makeSource(
+      (async () =>
+        new Response(
+          JSON.stringify({ code: 0, data: { total: 2, item: [snapshotRow('600000.SH')] } }),
+        )) as never,
+    );
+    await expect(source.fetchMarketSnapshotEnvelope()).rejects.toThrow('market_snapshot_page_gap');
   });
 
   it('turnover 缺失或非法时省略 amount，不写 0', async () => {

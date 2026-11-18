@@ -319,6 +319,104 @@ describe('板块窗口涨幅（比较窗口两端价格）', () => {
   });
 });
 
+describe('柱内领涨股', () => {
+  it('按有效成分日涨幅降序并解析目录名称，跳过停牌股', () => {
+    const result = buildSectorIntradayRanking({
+      anchor: batchOf('10:15', [
+        item('601318.SH', { changePct: 2 }),
+        item('000063.SZ', { changePct: 8 }),
+        item('600036.SH', { changePct: 3 }),
+      ]),
+      kind: 'industry',
+      sort: 'day',
+      window: 'w15',
+      windowStarts: { w5: null, w15: null },
+      sectors: SECTORS,
+      members: MEMBERS,
+      limitUp: null,
+      limitUpError: null,
+      stockNames: new Map([['600036.SH', '招商银行']]),
+    });
+    expect(rowOf(result, 'sec-bank').leaders).toEqual([
+      { stockId: '600036.SH', name: '招商银行', changePct: 3 },
+      { stockId: '601318.SH', name: '601318.SH', changePct: 2 },
+    ]);
+    expect(rowOf(result, 'sec-bank').leaders15).toEqual([]);
+  });
+
+  it('从全体可交易成分独立计算15分钟榜，排除缺少可比价格的股票', () => {
+    const ids = ['600001.SH', '600002.SH', '600003.SH', '600004.SH', '600005.SH', '600006.SH'];
+    const result = buildSectorIntradayRanking({
+      anchor: batchOf(
+        '10:45',
+        ids.map((id, i) =>
+          item(id, {
+            ...(i === 4 ? {} : { changePct: 8 - i }),
+            close: 101 + i,
+          }),
+        ),
+      ),
+      windowStarts: {
+        w5: null,
+        w15: batchOf(
+          '10:30',
+          ids.slice(1).map((id) => item(id, { close: 100 })),
+        ),
+      },
+      sectors: SECTORS,
+      members: ids.map((id, i) => member('sec-bank', id, i === 5 ? 'suspended' : 'listed')),
+      stockNames: new Map(),
+      kind: 'industry',
+      sort: 'day',
+      window: 'w5',
+      limitUp: null,
+      limitUpError: null,
+    });
+    const row = rowOf(result, 'sec-bank');
+    expect(row.leaders?.map((stock) => stock.stockId)).toEqual(ids.slice(0, 3));
+    expect(row.leaders15?.map((stock) => [stock.stockId, stock.changePct])).toEqual([
+      [ids[4], 5],
+      [ids[3], 4],
+      [ids[2], 3],
+    ]);
+  });
+
+  it('前窗按当时的成分排名，同涨幅按代码排；缺批次或报价时不报换位', () => {
+    const ids = ['600001.SH', '600002.SH', '600003.SH', '600004.SH'];
+    const members = ids.map((id) => member('sec-bank', id));
+    const prices = (time: string, values: number[]) =>
+      batchOf(
+        time,
+        values.map((close, i) => item(ids[i] as string, { close })),
+      );
+    const prior = { start: prices('10:15', [100, 100, 100, 100]), members: members.slice(0, 3) };
+    const input = {
+      anchor: prices('10:45', [104, 110, 117, 130]),
+      windowStarts: { w5: null, w15: prices('10:30', [104, 102, 102, 120]) },
+      previousLeaderWindow: prior,
+      kind: 'industry',
+      sort: 'day',
+      window: 'w15',
+      stockNames: new Map(),
+      sectors: SECTORS,
+      members,
+      limitUp: null,
+      limitUpError: null,
+    } as const;
+    const run = (previousLeaderWindow: typeof prior) =>
+      rowOf(buildSectorIntradayRanking({ ...input, previousLeaderWindow }), 'sec-bank');
+    const row = run(prior);
+    expect(row.previousLeaders15Ids).toEqual(ids.slice(0, 3));
+    expect(row.leaders15?.map((s) => s.stockId)).toEqual([ids[2], ids[3], ids[1]]);
+    expect(run({ ...prior, start: prices('10:15', [100, 100]) }).previousLeaders15Ids).toEqual(
+      ids.slice(0, 2),
+    );
+    for (const start of [prices('10:10', [100, 100, 100]), prices('10:15', [])]) {
+      expect(run({ ...prior, start }).previousLeaders15Ids).toBeNull();
+    }
+  });
+});
+
 describe('窗口成交占比（成分增量 / 全市场去重增量）', () => {
   const w10Start = batchOf('10:10', [
     item('600519.SH', { changePct: 1, close: 100, amount: 1000 }),
@@ -332,6 +430,21 @@ describe('窗口成交占比（成分增量 / 全市场去重增量）', () => {
     item('601318.SH', { changePct: 0, close: 50, amount: 400 }),
     item('000063.SZ', { changePct: 0.2, close: 42, amount: 300 }),
   ]);
+
+  it('完整批次中缺少单股成交额，只提供有效样本占比', () => {
+    const withMissing = batchOf('10:15', [
+      ...anchor.items.filter((row) => row.id !== '000063.SZ'),
+      item('000063.SZ', { close: 42 }),
+    ]);
+    const result = ranking({ anchor: withMissing, w5: w10Start, window: 'w5' });
+    expect(result.turnover.marketSampleCount).toBe(3);
+    expect(rowOf(result, 'sec-liquor').turnover).toMatchObject({
+      value: null,
+      observedSharePct: 80,
+    });
+    const noStart = ranking({ anchor: withMissing, window: 'w5' });
+    expect(rowOf(noStart, 'sec-liquor').turnover.observedSharePct).toBeUndefined();
+  });
 
   it('分母为全市场去重增量，分子为成分增量之和；概念重叠不加总', () => {
     const result = ranking({ anchor, w5: w10Start, window: 'w5' });

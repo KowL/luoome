@@ -49,6 +49,7 @@ export interface MarketDataAdapterLike {
   fetchMarketSnapshotEnvelope?(options?: {
     /** true 时不把不完整信封当失败；批次发布需要照常落库并标注缺口。 */
     readonly allowPartial?: boolean;
+    readonly freshAfter?: Date;
   }): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
@@ -181,6 +182,7 @@ export interface MarketDumpArtifactLike {
 
 /** 全市场 Parquet dump 下载器；未配置 fuyao 时不注入。 */
 export interface MarketDumpAdapterLike {
+  readArchivedTurnover?(date: string): Promise<number | null>;
   download(kind: MarketDumpKind): Promise<MarketDumpArtifactLike>;
 }
 

@@ -490,7 +490,8 @@ fuyao 快照信封时间在休市日仍随请求更新，逐股行无行情事�
 连板天梯、龙虎榜、北向资金、要闻与 A 股日级情绪都不进 `MarketDataManager`，分别由
 `create*ManagerFromEnv` 独立装配；`LUOOME_*_SOURCES` 与 `LUOOME_MARKET_SOURCES` 同构
 （逗号分隔、有序、去重校验、未知源启动期抛错）。其中要闻注册 `eastmoney` 与 `10jqka`，
-其余四个 A 股日级域当前唯一注册值为 `eastmoney`。
+A 股情绪默认使用 `eastmoney`，配置扶摇凭据时追加 `fuyao` 作为封板池和炸板池的备用源。
+显式设置 `LUOOME_ASHARE_SENTIMENT_SOURCES` 时按配置顺序取数。
 各 manager 的 `status()` 直接委托 registry 观测，健康读模型（`get_market_data_status`）
 聚合 market registry、stock-universe checkpoint 与这五个 manager 的 `status()` 生成
 `datasets` 库存。
@@ -757,7 +758,7 @@ MarketRoomEvent         盘中扩散 / 分化 / 换位事件（`tradingDate|kind
 `sync_sector_catalog`（`external + write`）原子写入；目录条目 `retired`、成分 `missing`
 都是状态变化而非删除，变更进 `SectorChangeEvent`，一次同步对应一条 `SectorSyncRun`。
 `LimitUpLadderSample` 来自东方财富连板天梯（与 `limit_up_ladder` 默认源一致），由
-`collect_market_snapshot` 在发布批次时按同一采样时点写入；`MarketRoomEvent` 是本地派生事实，
+`collect_market_snapshot` 按一分钟对齐发布批次，要求抓取时间不早于当前分钟；Manager 和共享请求缓存以新鲜度时点区分请求，查询沿用既有缓存。调度日志记录完整轮次耗时、行情时间、抓取时间与覆盖计数。发布批次时按同一采样时点写入；`MarketRoomEvent` 是本地派生事实，
 只使用已发布批次、目录成分与对齐的天梯样本，不引入新的外部来源。
 
 账户记账通过 `LedgerRepository` 原子更新账户与交易/持仓/流水：Drizzle 在 IMMEDIATE 事务内读取现金、

@@ -83,9 +83,12 @@ const buildCreateStockUniverseManagerFromEnv = (
   const sources: StockUniverseSourceLike[] = order.map((source) => {
     const options = {
       ...common,
+      // 目录同步是整批翻页（sina 按 100 条/页约 55 个请求），走批量配额档。
       ...(deps.providerRuntime === undefined
         ? {}
-        : { fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl) }),
+        : {
+            fetchImpl: deps.providerRuntime.fetchFor(source, deps.fetchImpl, { bulk: true }),
+          }),
     };
     switch (source) {
       case 'eastmoney':

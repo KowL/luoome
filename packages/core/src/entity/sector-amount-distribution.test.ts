@@ -8,6 +8,8 @@ import {
   SECTOR_AMOUNT_CONCENTRATION_BASIS,
   type SectorAmountDistribution,
   type SectorAmountDistributionInput,
+  sectorPriceVolume,
+  withSectorStrengthening,
 } from './sector-amount-distribution.js';
 import type { SectorCatalogEntry, StockSectorMembership } from './sector-catalog.js';
 import type { SectorRankingEmptyReason, SectorWindowKey } from './sector-intraday-ranking.js';
@@ -534,5 +536,64 @@ describe('不变量与空态', () => {
     expect(result.tradingDate).toBeNull();
     expect(result.anchor).toBeNull();
     expect(result.coverage).toEqual({ sectorCount: 0, rowCount: 0, omittedSectorCount: 0 });
+  });
+});
+
+describe('量价走强换位', () => {
+  const frame = (
+    time: string,
+    label: NonNullable<SectorAmountDistribution['rows'][number]['priceVolume']>,
+  ) => {
+    const base = distribution();
+    if (!base.anchor) throw new Error('fixture anchor missing');
+    return {
+      ...base,
+      window: 'w15' as const,
+      anchor: { ...base.anchor, sampledAt: at(time) },
+      rows: base.rows.map((row) => ({ ...row, priceVolume: label })),
+    };
+  };
+  const transition = (current: SectorAmountDistribution, history: SectorAmountDistribution[]) =>
+    withSectorStrengthening(current, history).rows[0]?.strengthening;
+
+  it('按原有量价口径分类，缺少可比成交额时标记待定', () => {
+    const base = distribution();
+    const row = rowOf(base, '甲行业');
+    expect(sectorPriceVolume(1, row.share, row.previousShare, base.windows)).toBe('放量走强');
+    expect(sectorPriceVolume(-1, row.share, row.previousShare, base.windows)).toBe('放量下跌');
+    expect(sectorPriceVolume(-1, row.previousShare, row.share, base.windows)).toBe('缩量回落');
+    expect(
+      sectorPriceVolume(1, { ...row.share, missingCount: 1 }, row.previousShare, base.windows),
+    ).toBe('量价待定');
+  });
+
+  it('首次进入与重复刷新使用同一发生时间，持续走强不续期，5分钟后过期', () => {
+    const history = [frame('10:44', '放量下跌'), frame('10:45', '放量走强')];
+    const current = frame('10:46', '放量走强');
+    const event = { at: at('10:45'), previousState: '放量下跌' };
+    expect(transition(current, history)).toEqual(event);
+    expect(transition(current, history)).toEqual(event);
+    const continuing = [
+      ...history,
+      current,
+      frame('10:47', '放量走强'),
+      frame('10:48', '放量走强'),
+    ];
+    expect(transition(frame('10:49', '放量走强'), continuing)).toEqual(event);
+    expect(
+      transition(frame('10:50', '放量走强'), [...continuing, frame('10:49', '放量走强')]),
+    ).toBeNull();
+  });
+
+  it('退出后清除，再次走强记录新时间；首次可用、缺帧或未来帧不产生换位', () => {
+    expect(transition(frame('10:45', '放量走强'), [])).toBeNull();
+    expect(transition(frame('10:45', '放量走强'), [frame('10:44', '量价待定')])).toBeNull();
+    expect(transition(frame('10:45', '放量走强'), [frame('10:43', '放量下跌')])).toBeNull();
+    const history = [frame('10:44', '放量下跌'), frame('10:45', '放量走强')];
+    expect(transition(frame('10:46', '缩量回落'), history)).toBeNull();
+    expect(
+      transition(frame('10:47', '放量走强'), [...history, frame('10:46', '缩量回落')]),
+    ).toEqual({ at: at('10:47'), previousState: '缩量回落' });
+    expect(transition(frame('10:45', '放量下跌'), [frame('10:46', '放量走强')])).toBeNull();
   });
 });
