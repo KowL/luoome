@@ -1,6 +1,7 @@
 export { DrizzleAccountRepository } from './account.js';
 export { DrizzleAdjustmentFactorRepository } from './adjustment-factor.js';
 export { DrizzleAdviceRepository } from './advice.js';
+export { DrizzleAdviceTrackingRepository } from './advice-tracking.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
@@ -21,13 +22,11 @@ export {
 export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
-export { DrizzleResearchIndexRepository } from './research-index.js';
 export { DrizzleSectorCatalogRepository } from './sector-catalog.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
 export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
-export { DrizzleStrategyBacktestRepository } from './strategy-backtest.js';
 export { DrizzleStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleTradingPlanRepository } from './trading-plan.js';

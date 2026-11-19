@@ -77,7 +77,6 @@ async function syncRelevantStockIds(ctx: ToolContext): Promise<string[]> {
     }
   }
 
-  for (const stockId of await ctx.repos.researchIndex.listStockCodes()) result.add(stockId);
   return [...result].sort();
 }
 

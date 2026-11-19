@@ -31,7 +31,6 @@ import {
   renderDataHealth,
   renderHoldings,
   renderReports,
-  renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
@@ -204,7 +203,6 @@ const ROUTES = [
   'strategies',
   'watchlists',
   'alerts',
-  'research',
   'advice',
   'reports',
   'review',
@@ -260,9 +258,7 @@ const showRoute = async (name) => {
     else if (safe === 'watchlists') await renderWatchlists(setStatus);
     else if (safe === 'alerts')
       await Promise.all([renderAlerts(setStatus), renderNotificationTarget()]);
-    else if (safe === 'research') {
-      await renderResearch();
-    } else if (safe === 'advice') {
+    else if (safe === 'advice') {
       await renderAdviceList(setStatus);
     } else if (safe === 'reports') {
       await renderReports(setStatus);

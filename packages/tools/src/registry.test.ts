@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { toolRegistry } from './registry.js';
 
-/** S4.1c：公共 Agent Tool 面 = 47 个核心 Agent Tool（设计 §5.2 + 存储保留策略）。 */
+/** S4.1c：公共 Agent Tool 面 = 44 个核心 Agent Tool（设计 §5.2 + 存储保留策略）。 */
 const EXPECTED_TOOL_NAMES = [
   // 1. 行情与盘面资讯（22）
   'search_stocks',
@@ -37,7 +37,6 @@ const EXPECTED_TOOL_NAMES = [
   'get_strategy',
   'save_strategy_version',
   'run_strategy',
-  'run_strategy_backtest',
   'get_strategy_signals',
   // 4. 账户与持仓组合（5）
   'get_account_overview',
@@ -49,8 +48,6 @@ const EXPECTED_TOOL_NAMES = [
   'analyze_stock',
   'analyze_position',
   'get_advice',
-  'search_research_documents',
-  'save_research_document',
   'save_decision_review',
   // 6. 交易计划与盯盘预警（3）
   'list_watch_plans',
@@ -62,6 +59,13 @@ const EXPECTED_TOOL_NAMES = [
 
 /** 已从公共注册表移除、保留为 Application Service / 内部 tool 的旧名。 */
 const RETIRED_TOOL_NAMES = [
+  'create_strict_strategy_backtest',
+  'execute_strict_strategy_backtest',
+  'get_strict_strategy_backtest',
+  'list_strict_strategy_backtests',
+  'run_strategy_backtest',
+  'search_research_documents',
+  'save_research_document',
   'add_holding',
   'add_watchlist_member',
   'add_watchlist_members',
@@ -84,7 +88,6 @@ const RETIRED_TOOL_NAMES = [
   'create_research_document',
   'create_strategy',
   'create_strategy_version',
-  'create_strict_strategy_backtest',
   'delete_advice',
   'delete_alert_plan',
   'delete_chat_session',
@@ -114,7 +117,6 @@ const RETIRED_TOOL_NAMES = [
   'get_strategy_reliability_summary',
   'get_strategy_run',
   'get_strategy_workspace',
-  'get_strict_strategy_backtest',
   'get_trading_plan',
   'get_watch_status',
   'limit_up_ladder_compare',
@@ -130,7 +132,6 @@ const RETIRED_TOOL_NAMES = [
   'list_strategy_result_views',
   'list_strategy_runs',
   'list_strategy_watchlist_subscriptions',
-  'list_strict_strategy_backtests',
   'list_trading_plans',
   'list_watch_triggers',
   'list_watchlist_changes',
@@ -160,13 +161,13 @@ const RETIRED_TOOL_NAMES = [
   'validate_strategy_version',
 ] as const;
 
-describe('toolRegistry（47 核心 Agent Tool）', () => {
+describe('toolRegistry（44 核心 Agent Tool）', () => {
   it(`恰好注册 ${EXPECTED_TOOL_NAMES.length} 个 tool，名字与设计 §5.2 一致`, () => {
     const all = toolRegistry.all();
-    expect(all).toHaveLength(47);
+    expect(all).toHaveLength(44);
     expect(all).toHaveLength(EXPECTED_TOOL_NAMES.length);
     expect(all.map((tool) => tool.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
-    expect(new Set(all.map((tool) => tool.name)).size).toBe(47);
+    expect(new Set(all.map((tool) => tool.name)).size).toBe(44);
   });
 
   it('get(name) 命中 / 未命中', () => {
@@ -177,12 +178,12 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 
-  it('已移出公共注册表的 96 个旧 tool 不再注册（保留为 Application Service）', () => {
+  it('已移出公共注册表的 100 个旧 tool 不再注册（多数保留为 Application Service，research 相关已随功能删除）', () => {
     for (const name of RETIRED_TOOL_NAMES) {
       expect(toolRegistry.get(name), name).toBeUndefined();
     }
-    expect(RETIRED_TOOL_NAMES.length).toBe(96);
-    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(143);
+    expect(RETIRED_TOOL_NAMES.length).toBe(100);
+    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(144);
   });
 
   it('legacy、内部 commit/sync/migration tool 不进入公共 registry', () => {
@@ -241,7 +242,6 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
       'list_watch_plans',
       'list_watchlists',
       'northbound_flow',
-      'search_research_documents',
       'search_stocks',
     ]);
     expect(namesOf('external')).toEqual([
@@ -261,10 +261,8 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
       'add_trade',
       'create_watchlist',
       'prune_strategy_history',
-      'run_strategy_backtest',
-      'save_alert_plan',
+          'save_alert_plan',
       'save_decision_review',
-      'save_research_document',
       'save_strategy_version',
       'save_trading_plan',
       'update_holding',
@@ -307,13 +305,11 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
     ]);
     expect(toolRegistry.get('get_stock_market_view')?.requiredCapabilities).toEqual(['external']);
     expect(toolRegistry.get('add_trade')?.requiredCapabilities).toEqual(['write']);
-    expect(toolRegistry.get('save_research_document')?.requiredCapabilities).toEqual(['write']);
-    expect(toolRegistry.get('run_strategy_backtest')?.requiredCapabilities).toEqual(['write']);
   });
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {
     const mcp = toolRegistry.toMCP();
-    expect(mcp).toHaveLength(47);
+    expect(mcp).toHaveLength(44);
     for (const descriptor of mcp) {
       expect(descriptor.name.length).toBeGreaterThan(0);
       expect(descriptor.description.length).toBeGreaterThan(0);
@@ -331,7 +327,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
 
   it('toOpenAI()：function calling 格式', () => {
     const openai = toolRegistry.toOpenAI();
-    expect(openai).toHaveLength(47);
+    expect(openai).toHaveLength(44);
     for (const descriptor of openai) {
       expect(descriptor.type).toBe('function');
       expect(descriptor.function.name.length).toBeGreaterThan(0);
@@ -340,9 +336,9 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
     }
   });
 
-  it('toTypeScript()：包含全部 47 个 tool 名与声明骨架', () => {
+  it('toTypeScript()：包含全部 44 个 tool 名与声明骨架', () => {
     const text = toolRegistry.toTypeScript();
-    expect(text).toContain('共 47 个 tool');
+    expect(text).toContain('共 44 个 tool');
     expect(text).toContain('export type LuoomeToolName =');
     expect(text).toContain('export declare const luoomeToolMeta:');
     for (const name of EXPECTED_TOOL_NAMES) {

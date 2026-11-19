@@ -8,7 +8,6 @@ const CATEGORY_LABELS = {
   watchlists: '关注分组与预警',
   'advice-reports': '建议、交易计划、报告与任务审计',
   'market-data': '股票目录与行情数据',
-  research: '研究索引',
   chat: 'AI 对话记录',
 };
 

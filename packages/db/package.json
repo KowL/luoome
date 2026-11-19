@@ -11,7 +11,8 @@
     "./memory": "./src/memory.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "schema:ddl": "bun scripts/generate-schema-ddl.ts"
   },
   "dependencies": {
     "@luoome/core": "workspace:*",

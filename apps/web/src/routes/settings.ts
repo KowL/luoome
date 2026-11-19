@@ -3,7 +3,6 @@ import {
   createAShareSentimentManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
   createMarketAdapterFromEnv,
-  createResearchVaultAdapterFromEnv,
   MarketSourceIdSchema,
   NotificationManager,
   PluginConfigError,
@@ -31,7 +30,6 @@ import {
   withRuntimeStatus,
 } from '../market-settings.js';
 import { SaveMcpSettingsSchema } from '../mcp-settings.js';
-import { SaveResearchVaultSettingsSchema } from '../research-vault-settings.js';
 import type { WebRouteDeps } from './types.js';
 
 export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
@@ -43,7 +41,6 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     aiSettingsStore,
     marketSettingsStore,
     feishuSettingsStore,
-    researchVaultSettingsStore,
     sharedSources,
     dataTransferDbPath,
     chatRuntimeRef,
@@ -512,63 +509,6 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     }
   });
 
-  // ===== Research Vault 设置 =====
-  app.get('/api/settings/research-vault', () => {
-    if (researchVaultSettingsStore === undefined) {
-      return jsonResult(notFound('ResearchVaultSettingsStore', 'default'));
-    }
-    try {
-      return jsonResult({ ok: true, data: researchVaultSettingsStore.read() });
-    } catch (error) {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'internal',
-          cause: `Vault 设置读取失败：${error instanceof Error ? error.message : String(error)}`,
-        },
-      });
-    }
-  });
-
-  app.post('/api/settings/research-vault', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    if (researchVaultSettingsStore === undefined) {
-      return jsonResult(notFound('ResearchVaultSettingsStore', 'default'));
-    }
-    try {
-      const input = SaveResearchVaultSettingsSchema.parse(await c.req.json());
-      const saved = researchVaultSettingsStore.save(input);
-      const researchVault = createResearchVaultAdapterFromEnv(
-        researchVaultSettingsStore.runtimeEnv(),
-      );
-      if (researchVault === undefined) throw new Error('Vault 配置未生效');
-      ctxRef.current = {
-        ...ctxRef.current,
-        adapters: { ...ctxRef.current.adapters, researchVault },
-      };
-      return jsonResult({ ok: true, data: { ...saved, applied: true } });
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return jsonResult({
-          ok: false,
-          error: {
-            kind: 'invalid_input',
-            message: 'Vault 设置校验失败',
-            issues: error.issues,
-          },
-        });
-      }
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'invalid_input',
-          message: error instanceof Error ? error.message : String(error),
-          issues: [],
-        },
-      });
-    }
-  });
   app.post('/api/settings/ai', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);

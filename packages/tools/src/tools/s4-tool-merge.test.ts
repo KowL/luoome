@@ -1,7 +1,3 @@
-import { createHash } from 'node:crypto';
-
-import type { ResearchVaultAdapterLike, ResearchVaultEntry, ToolContext } from '@luoome/core';
-import { runStrategyBacktestTool } from '@luoome/plugin-strategy/tools/run-strategy-backtest.js';
 import { getAccountOverviewTool } from '@luoome/toolkit/tools/get-account-overview.js';
 import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
 import { getStrategySignalsTool } from '@luoome/toolkit/tools/get-strategy-signals.js';
@@ -13,7 +9,6 @@ import { updateWatchlistMembersTool } from '@luoome/toolkit/tools/update-watchli
 import { createWatchlistTool } from '@luoome/toolkit/tools/watchlist.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
-import { saveResearchDocumentTool } from './save-research-document.js';
 
 const definition = {
   schemaVersion: 1 as const,
@@ -51,16 +46,6 @@ describe('S4.1a 合并 facade', () => {
     expect(published.ok).toBe(true);
     if (!published.ok) return;
     expect((published.data as { strategy: { status: string } }).strategy.status).toBe('active');
-  });
-
-  it('run_strategy_backtest：list 空、run 缺参 invalid_input', async () => {
-    const ctx = await buildTestContext();
-    const listed = await runStrategyBacktestTool.execute({ action: 'list' }, ctx);
-    expect(listed.ok).toBe(true);
-    if (!listed.ok) return;
-    expect((listed.data as { runs: unknown[] }).runs).toEqual([]);
-    const bad = await runStrategyBacktestTool.execute({ action: 'run' }, ctx);
-    expect(bad.ok).toBe(false);
   });
 
   it('get_account_overview 返回账户 + 持仓 + 事实', async () => {
@@ -175,43 +160,5 @@ describe('S4.1a 合并 facade', () => {
       ctx,
     );
     expect(updated.ok).toBe(true);
-  });
-
-  const vaultEntry = (relativePath: string, value: string): ResearchVaultEntry => ({
-    relativePath,
-    size: Buffer.byteLength(value),
-    modifiedAt: new Date('2026-08-01T00:00:00.000Z'),
-    contentHash: createHash('sha256').update(value).digest('hex'),
-  });
-  const vault = (): ResearchVaultAdapterLike => {
-    const files = new Map<string, string>();
-    return {
-      name: 'test-vault',
-      vaultId: 'vault-test',
-      managedRoot: 'Research/Luoome',
-      scan: async () => [...files.entries()].map(([path, value]) => vaultEntry(path, value)),
-      readText: async ({ relativePath }) => files.get(relativePath) ?? '',
-      createManagedDocument: async (input) => {
-        files.set(input.relativePath, input.content);
-        return vaultEntry(input.relativePath, input.content);
-      },
-      importAttachment: async ({ suggestedName }) => vaultEntry(`Research/${suggestedName}`, ''),
-      buildOpenUri: (relativePath) => `obsidian://open?file=${relativePath}`,
-    };
-  };
-
-  it('save_research_document 的 note 目标写入 Vault 并索引', async () => {
-    const base = await buildTestContext({ clock: () => new Date('2026-08-01T00:00:00.000Z') });
-    const ctx: ToolContext = {
-      ...base,
-      adapters: { ...base.adapters, researchVault: vault() },
-    };
-    const result = await saveResearchDocumentTool.execute(
-      { target: 'note', note: { title: 'S4 笔记', kind: 'note', body: '正文' } },
-      ctx,
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect((result.data as { target: string }).target).toBe('note');
   });
 });

@@ -15,6 +15,7 @@ import { type Context, Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { buildWebContext, resolveDbPath, type WebSourceSet } from './context.js';
+import { startDailyJudgmentScheduler } from './daily-judgment-scheduler.js';
 import { createDshChatRuntimeFromStore } from './dsh/chat-runtime.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { appServiceTool } from './http/app-service.js';
@@ -23,7 +24,6 @@ import { MarketSettingsStore } from './market-settings.js';
 import { McpSettingsStore } from './mcp-settings.js';
 import { webPluginOperations } from './plugin-operations.js';
 import { startPostMarketScheduler } from './post-market-scheduler.js';
-import { ResearchVaultSettingsStore } from './research-vault-settings.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerMarketRoutes } from './routes/market.js';
@@ -78,7 +78,6 @@ export interface CreateWebAppOptions {
    */
   readonly sources?: WebSourceSet;
   /** Research Vault 设置持久化；保存后即时替换当前 adapter。 */
-  readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
   /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
   readonly feishuSettingsStore?: FeishuSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
@@ -127,7 +126,6 @@ export const createWebApp = (
   const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
   const marketSettingsStore = options.marketSettingsStore;
   const sharedSources = options.sources;
-  const researchVaultSettingsStore = options.researchVaultSettingsStore;
   const feishuSettingsStore = options.feishuSettingsStore;
   const dataTransferDbPath = options.dataTransferDbPath;
   const app = new Hono();
@@ -208,7 +206,6 @@ export const createWebApp = (
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
-  app.get('/research', serveFile('index.html', 'text/html; charset=utf-8'));
   // 行情页 SPA shell（设计 §11.1：#market 深链接；/market 供直接访问）。
   app.get('/market', serveFile('index.html', 'text/html; charset=utf-8'));
 
@@ -333,7 +330,6 @@ export const createWebApp = (
       : { mcpSettingsStore: options.mcpSettingsStore }),
     ...(marketSettingsStore === undefined ? {} : { marketSettingsStore }),
     ...(feishuSettingsStore === undefined ? {} : { feishuSettingsStore }),
-    ...(researchVaultSettingsStore === undefined ? {} : { researchVaultSettingsStore }),
     ...(sharedSources === undefined ? {} : { sharedSources }),
     ...(dataTransferDbPath === undefined ? {} : { dataTransferDbPath }),
   };
@@ -382,13 +378,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const sources: WebSourceSet = {};
   const aiSettingsStore = new AISettingsStore(process.env);
   const marketSettingsStore = new MarketSettingsStore(process.env);
-  const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
   const feishuSettingsStore = new FeishuSettingsStore(process.env);
   const runtimeEnv = {
     ...process.env,
     ...aiSettingsStore.runtimeEnv(),
     ...marketSettingsStore.runtimeEnv(),
-    ...researchVaultSettingsStore.runtimeEnv(),
     ...feishuSettingsStore.runtimeEnv(),
     LUOOME_EXPOSE_WRITE: String(exposeWrite),
     LUOOME_EXPOSE_EXTERNAL: String(exposeExternal),
@@ -407,7 +401,6 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     mcpSettingsStore,
     marketSettingsStore,
     sources,
-    researchVaultSettingsStore,
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
     ...(chatStreamRuntime === undefined ? {} : { chatStreamRuntime }),
@@ -418,7 +411,10 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     : undefined;
   pluginTasks.current = tasks;
   const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
-    ? [startPostMarketScheduler(ctx, { startImmediately: false })]
+    ? [
+        startPostMarketScheduler(ctx, { startImmediately: false }),
+        startDailyJudgmentScheduler(ctx, { startImmediately: false }),
+      ]
     : [];
   if (!schedulersEnabled) {
     console.warn(

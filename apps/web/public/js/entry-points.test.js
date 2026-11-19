@@ -192,34 +192,6 @@ describe('数据导出导入入口', () => {
   });
 });
 
-describe('研究笔记入口', () => {
-  it('提供 Vault 设置、手动同步与检索容器', () => {
-    expect(html).toContain('id="research-vault-settings-form"');
-    expect(html).toContain('id="research-vault-path"');
-    expect(html).toContain('id="research-vault-save-btn"');
-    expect(html).toContain('id="research-sync-btn"');
-    expect(html).toContain('id="research-kind-filter"');
-    expect(html).toContain('id="research-index-status"');
-    expect(html).toContain('id="research-write-status"');
-    expect(html).toContain('id="research-search-results"');
-    expect(html).toContain('id="research-detail"');
-    expect(html).not.toContain('research-remote-sync-btn');
-    expect(html).not.toContain('research-embedding-rebuild-btn');
-    expect(html).not.toContain('research-hybrid-search');
-  });
-
-  it('页面只保留同步与 document 检索调用', () => {
-    const pages = read('./pages.js');
-    expect(pages).toContain('/api/settings/research-vault');
-    expect(pages).toContain('/api/tools/sync_research_vault/call');
-    expect(pages).toContain('/api/research/search?q=');
-    expect(pages).toContain('/api/research/documents');
-    expect(pages).not.toContain('/api/research/search/hybrid');
-    expect(pages).not.toContain('/api/research/embeddings/');
-    expect(pages).not.toContain('import_remote_research_document');
-  });
-});
-
 describe('主题皮肤入口', () => {
   it('主题入口在侧栏底部，不再占用顶栏', () => {
     const topbar = html.slice(html.indexOf('class="topbar"'), html.indexOf('</header>'));

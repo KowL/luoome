@@ -20,13 +20,13 @@ describe('typed tool catalog', () => {
         ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      '2216c277355f26dafec8da0b12d3e42cb95757d562ceadb1eecee13f779ce406',
+      'e69a67a34b2e3d60f579b517c9f2ac33c07ae5bc197f5cacb749fe05d4317c1b',
     );
     const metadata = Object.entries(toolCatalog)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, { tool: _tool, ...entry }]) => [name, entry]);
     expect(createHash('sha256').update(JSON.stringify(metadata)).digest('hex')).toBe(
-      '77834ced1e0ba21be3d5fe375fbe2e2ee95c8fd8e2cf7f827059032cccbfa7e4',
+      'bada757985fc12bcff7ead6e4677c69a94110c5d65630dcf8b6d56864d2e9118',
     );
     expect(toolCatalog.snapshot_account_performance.owner).toBe(
       'task.snapshot-account-performance',

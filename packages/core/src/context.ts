@@ -20,7 +20,6 @@ import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-unive
 import type { ToolErrorKind } from './error/index.js';
 import type { DataExecutionScopeLike, ToolExecutionPolicyLike } from './plugin-policy.js';
 import type { RepositoryRegistry } from './repository/index.js';
-import type { ResearchVaultAdapterLike } from './research-vault.js';
 import type { SourceErrorKind, SourceStatus } from './source.js';
 import type { SideEffect } from './types/side-effect.js';
 
@@ -221,7 +220,6 @@ export interface ToolContextAdapters {
   /** send_notification tool 用；装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
   /** Research Vault 本地 Markdown 适配器（Obsidian 或目录实现）。 */
-  readonly researchVault?: ResearchVaultAdapterLike;
   /** 日级批量的市场情报 managers（连板天梯/龙虎榜/北向/要闻/板块/情绪）。 */
   readonly marketIntel?: ToolContextMarketIntel;
   /** 全市场 dump 同步（fuyao）；未配置时不注入。 */

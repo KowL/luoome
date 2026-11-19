@@ -6,7 +6,6 @@ import {
   MoneySchema,
   QuoteSchema,
   type ReportSchema,
-  researchDocumentDate,
   TechnicalIndicatorsSchema,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -106,15 +105,7 @@ const MarketDataStatusSchema = z.object({
 
 export const MarketFactMarkerSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  factKind: z.enum([
-    'trade',
-    'advice',
-    'watch-trigger',
-    'strategy-signal',
-    'report',
-    'research',
-    'limit-up',
-  ]),
+  factKind: z.enum(['trade', 'advice', 'watch-trigger', 'strategy-signal', 'report', 'limit-up']),
   factId: z.string().min(1),
   title: z.string().min(1).max(200),
   href: z.string().min(1),
@@ -318,46 +309,41 @@ export const getStockMarketViewTool = defineTool({
     const outCandles = aggregateCandles(candles, input.granularity);
     const lastCandleDate = outCandles.at(-1)?.date ?? null;
 
-    const [trades, advices, triggers, signals, reports, researchDocuments, limitUp] =
-      await Promise.all([
-        ctx.user.defaultAccountId === ''
-          ? Promise.resolve([])
-          : ctx.repos.trade
-              .listByAccount(ctx.user.defaultAccountId)
-              .then((items) =>
-                items.filter(
-                  (trade) =>
-                    trade.stockId === stock.id && markerInRange(trade.executedAt, start, end),
-                ),
+    const [trades, advices, triggers, signals, reports, limitUp] = await Promise.all([
+      ctx.user.defaultAccountId === ''
+        ? Promise.resolve([])
+        : ctx.repos.trade
+            .listByAccount(ctx.user.defaultAccountId)
+            .then((items) =>
+              items.filter(
+                (trade) =>
+                  trade.stockId === stock.id && markerInRange(trade.executedAt, start, end),
               ),
-        ctx.repos.advice.query({
-          subjectKind: 'stock',
-          subjectId: stock.id,
-          includeExpired: true,
-          limit: 200,
-        }),
-        ctx.repos.watchTrigger
-          .listRecent({ limit: 10_000 })
-          .then((items) => items.filter((trigger) => trigger.stockId === stock.id).slice(0, 200)),
-        readStrategySignalsByStock(ctx, {
-          stockId: stock.id,
-          scope: input.strategySignalScope,
-          ...(input.strategyEvaluationSessionId === undefined
-            ? {}
-            : { evaluationSessionId: input.strategyEvaluationSessionId }),
-        }),
-        ctx.repos.report.list({
-          ...(ctx.user.defaultAccountId === ''
-            ? {}
-            : { scopeKey: `account:${ctx.user.defaultAccountId}` }),
-          limit: 200,
-        }),
-        ctx.repos.researchIndex.listDocuments({
-          stockCode: stock.code,
-          limit: 100,
-        }),
-        loadStockLimitUpFacts(stock.id, stock.code, input.date ?? currentLimitUpDate(ctx), ctx),
-      ]);
+            ),
+      ctx.repos.advice.query({
+        subjectKind: 'stock',
+        subjectId: stock.id,
+        includeExpired: true,
+        limit: 200,
+      }),
+      ctx.repos.watchTrigger
+        .listRecent({ limit: 10_000 })
+        .then((items) => items.filter((trigger) => trigger.stockId === stock.id).slice(0, 200)),
+      readStrategySignalsByStock(ctx, {
+        stockId: stock.id,
+        scope: input.strategySignalScope,
+        ...(input.strategyEvaluationSessionId === undefined
+          ? {}
+          : { evaluationSessionId: input.strategyEvaluationSessionId }),
+      }),
+      ctx.repos.report.list({
+        ...(ctx.user.defaultAccountId === ''
+          ? {}
+          : { scopeKey: `account:${ctx.user.defaultAccountId}` }),
+        limit: 200,
+      }),
+      loadStockLimitUpFacts(stock.id, stock.code, input.date ?? currentLimitUpDate(ctx), ctx),
+    ]);
     const markers = [
       ...trades.map((trade) => ({
         date: factDateKey(trade.executedAt),
@@ -417,17 +403,6 @@ export const getStockMarketViewTool = defineTool({
           href: `#reports?stockId=${encodeURIComponent(stock.id)}`,
           tone: 'fact' as const,
           at: new Date(`${report.periodEnd}T00:00:00.000Z`),
-        })),
-      ...researchDocuments
-        .filter((document) => markerInRange(researchDocumentDate(document), start, end))
-        .map((document) => ({
-          date: factDateKey(researchDocumentDate(document)),
-          factKind: 'research' as const,
-          factId: document.id,
-          title: `研究笔记：${document.title}`,
-          href: `#research?stockId=${encodeURIComponent(stock.id)}`,
-          tone: 'fact' as const,
-          at: researchDocumentDate(document),
         })),
       ...limitUp.recent
         .filter((item) => markerInRange(new Date(`${item.date}T00:00:00.000Z`), start, end))

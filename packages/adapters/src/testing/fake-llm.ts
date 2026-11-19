@@ -46,6 +46,12 @@ export interface FakeAnalysisOutput {
   readonly horizon: AdviceHorizon;
   readonly reasoning: AdviceReasoning;
   readonly risks: readonly string[];
+  readonly entryPrice?: number;
+  readonly entryPriceLow?: number;
+  readonly entryPriceHigh?: number;
+  readonly targetPositionPct?: number;
+  readonly targetPrice?: number;
+  readonly stopLoss?: number;
 }
 
 type TestMode =
@@ -509,6 +515,25 @@ export class FakeLLMAdapter implements LLMAdapter {
       pickDeterministic(RISK_POOL, Math.floor(rand() * 1000)),
       pickDeterministic(RISK_POOL, Math.floor(rand() * 1000) + 2),
     ];
+
+    // 判断契约要求 buy / watch 必须带可监控的价格计划（analyze_stock:v2）。
+    if ((decision === 'buy' || decision === 'watch') && close !== null) {
+      const round2 = (value: number): number => Math.round(value * 100) / 100;
+      const positionCap = confidence < 50 ? 10 : confidence < 70 ? 20 : 30;
+      return {
+        decision,
+        confidence,
+        horizon,
+        reasoning,
+        risks,
+        entryPrice: round2(close),
+        entryPriceLow: round2(close * 0.98),
+        entryPriceHigh: round2(close * 1.01),
+        stopLoss: round2(close * 0.94),
+        targetPrice: round2(close * 1.08),
+        targetPositionPct: positionCap,
+      };
+    }
 
     return { decision, confidence, horizon, reasoning, risks };
   }

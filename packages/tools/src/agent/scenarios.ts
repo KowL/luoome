@@ -49,8 +49,7 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 账户总览优先用 get_account_overview 一次取得账户、持仓与事实；不要用分页列表拼装精确现金/仓位结论。
 - 持仓校准用 update_holding（mode=update 纠错，mode=open 建仓，mode=close 平仓）；真实成交只由用户在本地 CLI/Web 登记 add_trade，Agent 不生成成交草案。
 - Watchlist 成员增删改统一调用 update_watchlist_members；一次请求里的全部变更放进同一个草案，只确认一次。
-- Strategy 定义统一用 save_strategy_version：create-strategy 创建、save-version 提交 DSL、validate 校验、publish 发布；正式运行用 run_strategy，历史回测用 run_strategy_backtest。策略信号用 get_strategy_signals 查询。
-- 研究笔记保存只生成 save_research_document 的待确认草案；用户确认前不得写 Vault 或索引。全文检索用 search_research_documents，检索命中只是可追溯资料，不能当作结论。
+- Strategy 定义统一用 save_strategy_version：create-strategy 创建、save-version 提交 DSL、validate 校验、publish 发布；正式运行用 run_strategy，策略信号用 get_strategy_signals 查询。
 - 盘中计划与预警统一用 list_watch_plans 读取；创建/更新预警用 save_alert_plan，交易计划用 save_trading_plan，规则变更只生成待确认草案。
 - analyze_stock 会消耗 LLM 并产出正式 Advice（scope=market 时等价市场展望、scope=strategy-candidate 时分析策略候选）；在对话中同样只生成待确认草案；确认前不得声称已完成分析。
 - 不得自动交易，也不得声称已经完成任何真实交易。
@@ -80,7 +79,6 @@ const SHARED_READ_BASELINE = [
   'get_account_performance',
   'list_trades',
   'get_advice',
-  'search_research_documents',
   'list_watch_plans',
 ] as const satisfies readonly AgentToolName[];
 
@@ -88,11 +86,9 @@ const SHARED_READ_BASELINE = [
 export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = {
   save_strategy_version: 'strategy',
   run_strategy: 'strategy',
-  run_strategy_backtest: 'strategy',
   create_watchlist: 'watchlist',
   update_watchlist_members: 'watchlist',
   save_alert_plan: 'alert-plan',
-  save_research_document: 'research',
   save_trading_plan: 'portfolio',
   save_decision_review: 'review',
   analyze_stock: 'advice',
@@ -109,12 +105,9 @@ const withoutDraftTools = (
 };
 
 /** 复盘与研究之外不开放复盘/研究写入；其余草案按场景收窄。 */
-const PORTFOLIO_DRAFT_TOOL_KINDS = withoutDraftTools(
-  'save_decision_review',
-  'save_research_document',
-);
+const PORTFOLIO_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review');
 const RESEARCH_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review', 'save_trading_plan');
-const WATCH_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review', 'save_research_document');
+const WATCH_DRAFT_TOOL_KINDS = withoutDraftTools('save_decision_review');
 const REVIEW_DRAFT_TOOL_KINDS = withoutDraftTools('save_trading_plan');
 
 const scenario = (

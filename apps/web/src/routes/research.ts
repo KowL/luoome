@@ -18,26 +18,6 @@ export const registerResearchRoutes = (app: Hono, deps: WebRouteDeps): void => {
     bindDecisionAccount,
   } = deps;
 
-  app.get('/api/research/documents', (c) =>
-    callTool('list_research_documents', {
-      ...(c.req.query('kind') ? { kind: c.req.query('kind') } : {}),
-      ...(c.req.query('stockCode') ? { stockCode: c.req.query('stockCode') } : {}),
-      ...(c.req.query('tag') ? { tags: [c.req.query('tag')] } : {}),
-      limit: Number(c.req.query('limit') ?? '50'),
-    }),
-  );
-  app.get('/api/research/documents/:id', (c) =>
-    callTool('get_research_document', {
-      documentId: c.req.param('id'),
-      includeContent: c.req.query('content') === '1',
-    }),
-  );
-  app.get('/api/research/search', (c) =>
-    callTool('search_research_documents', {
-      text: c.req.query('q') ?? '',
-      limit: Number(c.req.query('limit') ?? '50'),
-    }),
-  );
   app.get('/api/advice', (c) => {
     const subjectId = c.req.query('subjectId');
     const subjectKind = c.req.query('subjectKind');
@@ -64,6 +44,29 @@ export const registerResearchRoutes = (app: Hono, deps: WebRouteDeps): void => {
 
   // 建议删除（单个 = 单元素 ids）；write 能力门控与 delete_report 一致。
   app.post('/api/advice/delete', (c) => targetMutation(c.req.raw, 'write', 'delete_advice'));
+
+  // 反馈三按钮（做了/没做/再等等）：一次点击落库，不填表单；结算由后端按日线自动完成。
+  app.post('/api/advice/feedback', (c) =>
+    targetMutation(c.req.raw, 'write', 'submit_advice_feedback'),
+  );
+
+  app.get('/api/advice/scorecard', (c) =>
+    callTool('get_advice_scorecard', {
+      ...(c.req.query('days') ? { days: Number(c.req.query('days')) } : {}),
+      ...(c.req.query('horizonDays') ? { horizonDays: Number(c.req.query('horizonDays')) } : {}),
+    }),
+  );
+
+  app.get('/api/advice/feedbacks', (c) =>
+    callTool('list_advice_feedback', {
+      limit: Number(c.req.query('limit') ?? '200'),
+      ...(c.req.query('action') ? { action: c.req.query('action') } : {}),
+    }),
+  );
+
+  app.get('/api/advice/:id/settlements', (c) =>
+    callTool('get_advice_settlements', { adviceId: c.req.param('id') }),
+  );
 
   app.get('/api/reports', (c) => {
     const input: Record<string, unknown> = {};

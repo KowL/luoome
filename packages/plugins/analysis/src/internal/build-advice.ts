@@ -43,6 +43,47 @@ export const AdviceLLMSchema = z.object({
 
 export type AdviceLLMOutput = z.infer<typeof AdviceLLMSchema>;
 
+/**
+ * 七要素的强制项：schema 只能力约束形状，这里约束「结论是否有用」。
+ * 返回空数组表示本条判断可以入库。
+ */
+export type JudgmentLike = {
+  decision: 'buy' | 'sell' | 'hold' | 'watch' | 'avoid';
+  confidence: number;
+  targetPositionPct?: number | undefined;
+  entryPriceLow?: number | undefined;
+  entryPriceHigh?: number | undefined;
+  targetPrice?: number | undefined;
+  stopLoss?: number | undefined;
+};
+
+export const judgmentViolations = (judgment: JudgmentLike): readonly string[] => {
+  const violations: string[] = [];
+  if (judgment.decision === 'watch') {
+    const missing = [
+      judgment.entryPriceLow === undefined ? 'entryPriceLow' : undefined,
+      judgment.entryPriceHigh === undefined ? 'entryPriceHigh' : undefined,
+      judgment.targetPositionPct === undefined ? 'targetPositionPct' : undefined,
+    ].filter((field) => field !== undefined);
+    if (missing.length > 0) {
+      violations.push(`watch 必须给出入场区间与目标仓位，缺少 ${missing.join('/')}`);
+    }
+  }
+  if (
+    judgment.decision === 'buy' &&
+    (judgment.stopLoss === undefined || judgment.targetPrice === undefined)
+  ) {
+    violations.push('buy 必须给出 stopLoss 与 targetPrice');
+  }
+  const confidenceCap = judgment.confidence < 50 ? 10 : judgment.confidence < 70 ? 20 : 30;
+  if (judgment.targetPositionPct !== undefined && judgment.targetPositionPct > confidenceCap) {
+    violations.push(
+      `confidence=${judgment.confidence} 时 targetPositionPct 不得超过 ${confidenceCap}`,
+    );
+  }
+  return violations;
+};
+
 export const assertAdviceAnalysis = (ctx: ToolContext): void => {
   ctx.executionGuard?.();
   if (ctx.executionPolicy === undefined)

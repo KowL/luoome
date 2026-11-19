@@ -21,7 +21,6 @@ import {
   createMarketAdapterFromEnv,
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
-  createResearchVaultAdapterFromEnv,
   createSectorCatalogFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
@@ -93,7 +92,6 @@ export const createServerContext = async (
     const accounts = await handle.repos.account.list();
     const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
     const now = (): Date => new Date();
-    const researchVault = createResearchVaultAdapterFromEnv(env);
     const plugins = new PluginConfigStore(resolvePluginConfigPath(env));
     const providerRuntime = new ProviderRuntime(
       plugins,
@@ -148,7 +146,6 @@ export const createServerContext = async (
     for (const key of Object.keys(marketIntel) as (keyof typeof marketIntel)[]) {
       if (marketIntel[key] !== undefined) readyDependencies.add(key);
     }
-    if (researchVault) readyDependencies.add('researchVault');
     const sectorCatalog =
       env.LUOOME_MARKET_PROVIDER !== 'real' ? undefined : createSectorCatalogFromEnv(env, deps);
     if (sectorCatalog) readyDependencies.add('sectorCatalog');
@@ -172,7 +169,6 @@ export const createServerContext = async (
                 logger,
               }),
             }),
-        ...(researchVault ? { researchVault } : {}),
         marketIntel,
         ...(sectorCatalog === undefined ? {} : { sectorCatalog }),
       },
@@ -191,9 +187,7 @@ export const createServerContext = async (
     return {
       ctx,
       get readyDependencies() {
-        const ready = new Set<McpDependency>(
-          [...readyDependencies].filter((id) => id === 'llm' || id === 'researchVault'),
-        );
+        const ready = new Set<McpDependency>([...readyDependencies].filter((id) => id === 'llm'));
         for (const status of market.marketSourceStatus())
           if (status.capabilityEnabled && status.configurationReady)
             ready.add(`market:${status.dataset}`);

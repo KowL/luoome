@@ -16,7 +16,6 @@ import {
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
-  createResearchVaultAdapterFromEnv,
   createSectorCatalogFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
@@ -81,14 +80,6 @@ export const buildWebContext = async (
       throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
     },
   };
-  let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
-  try {
-    researchVault = createResearchVaultAdapterFromEnv(env);
-  } catch (error) {
-    console.warn('Research Vault 配置无效；Web 将以未挂载状态启动', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
   const plugins = new PluginConfigStore(resolvePluginConfigPath(env));
   const providerRuntime = new ProviderRuntime(
     plugins,
@@ -192,7 +183,6 @@ export const buildWebContext = async (
         logger: console,
         clock: now,
       }),
-      ...(researchVault ? { researchVault } : {}),
       marketIntel,
     },
     clock: now,

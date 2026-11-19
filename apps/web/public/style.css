@@ -3233,6 +3233,52 @@ html.has-bg-image .bg-layer {
   font-family: var(--font-mono);
 }
 
+/* 反馈三按钮：一次点击落库，命中项高亮；比表单少两步操作。 */
+.advice-scorecard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.advice-scorecard .scorecard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.advice-scorecard .scorecard-head .title {
+  font-weight: 600;
+}
+
+.advice-scorecard .gate.pass {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.advice-scorecard .scorecard-rows {
+  display: flex;
+  gap: 24px;
+}
+
+.advice-scorecard .scorecard-groups {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.advice-feedback {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.advice-feedback .btn.active {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+
 .advice-card .toggle {
   display: none;
   margin-top: var(--space-3);

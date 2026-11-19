@@ -45,7 +45,6 @@ describe('MCP sideEffect 暴露门控', () => {
       ),
     );
     expect(writeOnly).toContain('save_strategy_version');
-    expect(writeOnly).toContain('run_strategy_backtest');
     expect(writeOnly).toContain('update_watchlist_members');
     expect(writeOnly).not.toContain('run_strategy');
 
@@ -59,7 +58,6 @@ describe('MCP sideEffect 暴露门控', () => {
       ),
     );
     expect(both).toContain('run_strategy');
-    expect(both).toContain('save_research_document');
   });
 
   it('add_trade 即使开启 write/external 也不通过 MCP 暴露', () => {
@@ -89,7 +87,6 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(defaultNames).toContain('list_watchlists');
     expect(defaultNames).toContain('get_account_overview');
     expect(defaultNames).toContain('list_watch_plans');
-    expect(defaultNames).toContain('search_research_documents');
     expect(defaultNames).not.toContain('save_strategy_version');
     expect(defaultNames).not.toContain('run_strategy');
     expect(defaultNames).not.toContain('fetch_news');
@@ -139,7 +136,7 @@ describe('MCP dependency readiness', () => {
       'fetch_quote',
       'fetch_news',
       'limit_up_ladder',
-      'search_research_documents',
+      'northbound_flow',
     ]) {
       expect(isMcpToolReady(name, new Set()), name).toBe(false);
     }

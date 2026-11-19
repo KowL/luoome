@@ -74,7 +74,6 @@ export * from './northbound-flow/types.js';
 export * from './notification/index.js';
 export * from './plugins/config.js';
 export * from './plugins/provider-runtime.js';
-export * from './research-vault/index.js';
 // 行业 / 概念目录与成分（扶摇同花顺指数目录）
 export * from './sector-catalog/factory.js';
 // 行业板块行情（东方财富 push2 板块列表公开 API）

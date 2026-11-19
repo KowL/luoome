@@ -31,18 +31,15 @@ const CORE_READ_TOOL_NAMES = [
   'get_account_performance',
   'list_trades',
   'get_advice',
-  'search_research_documents',
   'list_watch_plans',
 ] as const;
 
 const CORE_DRAFT_TOOL_NAMES = [
   'save_strategy_version',
   'run_strategy',
-  'run_strategy_backtest',
   'create_watchlist',
   'update_watchlist_members',
   'save_alert_plan',
-  'save_research_document',
   'save_trading_plan',
   'save_decision_review',
   'analyze_stock',
@@ -145,7 +142,6 @@ describe('agent 场景目录', () => {
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.save_decision_review).toBe('review');
     expect(AGENT_DRAFT_TOOL_KINDS.save_strategy_version).toBe('strategy');
-    expect(AGENT_DRAFT_TOOL_KINDS.save_research_document).toBe('research');
     for (const [name, kind] of Object.entries(AGENT_DRAFT_TOOL_KINDS)) {
       const registered = toolRegistry.get(name);
       expect(registered, name).toBeDefined();
@@ -154,7 +150,6 @@ describe('agent 场景目录', () => {
       }
     }
     expect(AGENT_SCENARIOS.general.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
-    expect(AGENT_SCENARIOS.research.draftToolKinds.save_research_document).toBe('research');
     expect(AGENT_SCENARIOS.research.draftToolKinds).not.toHaveProperty('save_decision_review');
     expect(AGENT_SCENARIOS.review.draftToolKinds.save_decision_review).toBe('review');
     expect(AGENT_SCENARIOS.review.draftToolKinds).not.toHaveProperty('save_trading_plan');
@@ -207,7 +202,6 @@ describe('agent 场景目录', () => {
     expect(BASE_INSTRUCTIONS).toContain('get_account_overview');
     expect(BASE_INSTRUCTIONS).toContain('update_holding');
     expect(BASE_INSTRUCTIONS).toContain('save_strategy_version');
-    expect(BASE_INSTRUCTIONS).toContain('save_research_document');
     expect(BASE_INSTRUCTIONS).toContain('list_watch_plans');
     expect(BASE_INSTRUCTIONS).not.toContain('trial_strategy');
     expect(BASE_INSTRUCTIONS).not.toContain('add_watchlist_members');

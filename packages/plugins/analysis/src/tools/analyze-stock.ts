@@ -4,8 +4,10 @@ import {
   AdviceSchema,
   assertAdviceInvariants,
   money,
+  PluginExecutionDenied,
   STANDARD_DISCLAIMERS,
   type Stock,
+  StrategyAdviceAnalysisSchema,
   type ToolContext,
 } from '@luoome/core';
 import { defineTool, errAdapterError, errNotFound } from '@luoome/toolkit';
@@ -13,15 +15,16 @@ import { computeSimpleIndicators } from '@luoome/toolkit/internal/indicators.js'
 import { resolveQuote } from '@luoome/toolkit/internal/resolve-quotes.js';
 import { z } from 'zod';
 import {
-  type AdviceLLMOutput,
-  AdviceLLMSchema,
   assertAdviceAnalysis,
   computeValidUntil,
   extractLlmRaw,
   generateAdviceAnalysis,
+  judgmentViolations,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
+import { buildJudgmentContext } from '../internal/market-context.js';
+import { ANALYZE_STOCK_SYSTEM } from '../internal/prompts.js';
 import { analyzeStrategyCandidateTool } from './analyze-strategy-candidate.js';
 import { MarketOutlookOutput, marketOutlookTool } from './market-outlook.js';
 
@@ -121,13 +124,14 @@ export const analyzeStockTool = defineTool({
     // ARCHITECTURE §6.3：拉行情 + 指标 → 持仓上下文 → LLM 推理 → 组装 → 校验 → 持久化。
     // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
     const now = ctx.clock();
-    const [quoteItem, bars, position] = await Promise.all([
+    const [quoteItem, bars, position, marketContext] = await Promise.all([
       resolveQuote(ctx, stock.id, { context: 'display' }),
       ctx.adapters.market.fetchDailyBars(stock.id, {
         start: new Date(now.getTime() - BARS_LOOKBACK_DAYS * DAY_MS),
         end: now,
       }),
       ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
+      buildJudgmentContext(ctx, stock),
     ]);
     assertAdviceAnalysis(ctx);
     if (quoteItem === undefined || quoteItem.status !== 'ok') {
@@ -142,22 +146,62 @@ export const analyzeStockTool = defineTool({
     const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
 
-    const llmOutput = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
-      system: 'analyze_stock',
-      schema: AdviceLLMSchema,
-      data: {
-        stockId: stock.id,
-        code: stock.code,
-        name: stock.name,
-        quote,
-        indicators,
-        ...(position !== null
-          ? { position: { avgCost: position.avgCost, quantity: position.quantity } }
-          : {}),
-        ...(input.notes !== undefined ? { notes: input.notes } : {}),
-      },
-    });
-    const llmRaw = extractLlmRaw(llmOutput);
+    const analysisData = {
+      stockId: stock.id,
+      code: stock.code,
+      name: stock.name,
+      quote,
+      indicators,
+      marketContext,
+      ...(position !== null
+        ? { position: { avgCost: position.avgCost, quantity: position.quantity } }
+        : {}),
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    };
+    let llmOutput: z.infer<typeof StrategyAdviceAnalysisSchema> | undefined;
+    let llmRaw: string | undefined;
+    let failure = 'AI 输出未通过建议约束';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const generated = await generateAdviceAnalysis<
+          z.infer<typeof StrategyAdviceAnalysisSchema>
+        >(ctx, {
+          system:
+            attempt === 0
+              ? ANALYZE_STOCK_SYSTEM
+              : `${ANALYZE_STOCK_SYSTEM}\n请修复上次输出：${failure}`,
+          schema: StrategyAdviceAnalysisSchema,
+          data: analysisData,
+        });
+        const parsed = StrategyAdviceAnalysisSchema.safeParse(generated);
+        if (!parsed.success) {
+          failure = parsed.error.issues.map((issue) => issue.message).join('；');
+          continue;
+        }
+        const violations = judgmentViolations(parsed.data);
+        if (violations.length > 0) {
+          failure = violations.join('；');
+          continue;
+        }
+        llmOutput = parsed.data;
+        llmRaw = extractLlmRaw(generated);
+        break;
+      } catch (error) {
+        if (error instanceof PluginExecutionDenied) throw error;
+        failure = 'AI 调用失败或输出无效';
+      }
+    }
+    if (llmOutput === undefined) {
+      return {
+        ok: false as const,
+        error: {
+          kind: 'llm_error' as const,
+          provider: ctx.adapters.llm.name,
+          cause: failure,
+          retryable: true,
+        },
+      };
+    }
 
     const advice: Advice = {
       id: globalThis.crypto.randomUUID(),

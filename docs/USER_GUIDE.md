@@ -318,7 +318,7 @@ LUOOME_EXPOSE_WRITE=true luoome plugins set task.daily-bars-sync --enabled true 
 
 ### 策略执行与自动调度控制（P3）
 
-`business.strategy-execution` 控制新运行、试跑、版本对比试跑、创建及执行严格回测。
+`business.strategy-execution` 控制新运行、试跑与版本对比试跑。
 `task.strategy-schedules` 只控制自动策略调度，并要求策略执行插件已启用；关闭自动调度仍可手动运行。
 两个新增项在初始化和迁移中均默认关闭。已有部署先预览并显式应用 `plugins migrate`，原 source/task 的开关与 epoch 保留。
 
@@ -331,8 +331,8 @@ LUOOME_EXPOSE_WRITE=true luoome plugins set task.strategy-schedules --enabled tr
 ```
 
 关闭时使用相同命令和 `--enabled false`。写配置不授予业务执行权限：正式策略运行继续要求 write + external，
-不持久化的 `trial_strategy` 保留 external 权限，纯本地严格回测保留 write 权限；自动调度宿主仍需 write + external。
-策略定义、版本、历史运行、结果、信号和严格回测查询继续可用。组合 `run_strategy_backtest` 的 get/list 仍可查询，run/execute 分支会复核受控目标工具。
+不持久化的 `trial_strategy` 保留 external 权限；自动调度宿主仍需 write + external。
+策略定义、版本、历史运行、结果与信号查询继续可用；严格回测已下线。
 
 scheduled/replay 按规则引用使用本地日线与股票目录，关闭 live 提供者不会阻断这些本地资料；
 scheduled 的当天梯队依赖、replay 的归档缺失和原有 coverage/acceptance 契约不变，不借停源切换为其它数据模式。

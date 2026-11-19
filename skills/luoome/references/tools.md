@@ -47,8 +47,6 @@ Stock pools, strategies and portfolio:
 - `list_trades` — account trade history.
 - `get_advice` — advice history with outcomes; `includeDecisionReviews=true` also returns
   decision reviews for the same account/subject.
-- `search_research_documents` — FTS5 search over local research notes; reports
-  `capability: 'fts' | 'metadata'` so metadata-only degradation is explicit.
 - `list_watch_plans` — active TradingPlans + AlertPlans + recent triggers.
 
 Watch monitoring is controlled by the host's `business.watch-monitoring` plugin. Disabling it stops new evaluations/triggers and watch notifications; history and feedback remain available. Other report notifications retain their own authorization.
@@ -73,13 +71,8 @@ Advice is never a trade and never auto-executes.
 - `save_strategy_version` — `create-strategy` | `save-version` | `validate` | `publish`.
 - `run_strategy` — run a published version over a stock scope; `persist=true` for a formal
   run, `persist=false` with explicit `stockIds` for a trial.
-- `run_strategy_backtest` — `run` (create + execute) | `execute` | `get` | `list`; returns
-  return/win-rate/drawdown metrics.
 - `update_holding` — `mode=update` correct quantity/cost, `mode=open` open a holding,
   `mode=close` close it.
-- `save_research_document` — `target=note` writes a managed Markdown note into the local
-  Vault and reindexes it (excerpt ~1000 chars + stockCodes); `target=report` saves a deep
-  report. Vault sync only reads local Markdown; remote Git sync and semantic search are not part of the current surface.
 - `save_decision_review` — record a post-hoc review on an advice/plan/trade.
 - `save_trading_plan` — immutable per-stock TradingPlan version with budget checks.
 - `save_alert_plan` — create (no `alertPlanId`) or update an AlertPlan.
@@ -98,7 +91,7 @@ Real order placement and cancellation are outside the luoome MCP surface. Do not
 For permission and response requirements, read [safety and errors](./safety.md).
 
 Strategy execution requires the host to enable `business.strategy-execution`; automatic schedules additionally require `task.strategy-schedules`.
-Definitions/history remain readable when execution is disabled. `run_strategy_backtest` get/list remain queries; run/execute delegate to controlled targets.
+Definitions/history remain readable when execution is disabled.
 Scheduled/replay rule inputs may come entirely from persisted local data. Missing live/archived ladder inputs retain their existing availability and acceptance rules.
 
 Report generation and report notification retries require the host's explicit `business.report` activation. Historical `get_report`, `list_reports` and `render_report` remain available when disabled. Strategy daily cycles, watch monitoring and generic notifications retain independent authorization; never retry saved calls to bypass a disabled report plugin.

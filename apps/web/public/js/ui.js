@@ -142,6 +142,34 @@ const adviceSubjectLine = (advice) => {
   return el('div', 'subject', parts);
 };
 
+const FEEDBACK_LABELS = {
+  done: '做了',
+  skipped: '没做',
+  later: '再等等',
+};
+
+/**
+ * 反馈三按钮（做了 / 没做 / 再等等）。一次点击落库，不弹表单、不要求填盈亏；
+ * 结算由后端按 T+1/T+3/T+5 日线自动完成。当前动作已记录时按钮高亮。
+ * @param {object} advice
+ * @param {{ action?: string, pending?: boolean, onAction: (id: string, action: string, bar: HTMLElement) => void }} options
+ * @returns {HTMLElement}
+ */
+const feedbackBar = (advice, options) => {
+  const bar = el('div', 'advice-feedback');
+  bar.dataset.adviceId = String(advice.id ?? '');
+  for (const [action, label] of Object.entries(FEEDBACK_LABELS)) {
+    const btn = el('button', 'btn btn-outline btn-sm', label);
+    btn.type = 'button';
+    btn.dataset.action = action;
+    if (options.action === action) btn.classList.add('active');
+    btn.disabled = options.pending === true;
+    btn.addEventListener('click', () => options.onAction(String(advice.id ?? ''), action, bar));
+    bar.append(btn);
+  }
+  return bar;
+};
+
 const adviceCard = (advice, options = {}) => {
   // compact：看盘 Top 3 预览位；摘要截成 2 行，元信息只留周期与有效期（全文到建议页看）
   const card = el('article', options.compact === true ? 'advice-card compact' : 'advice-card');
@@ -201,6 +229,16 @@ const adviceCard = (advice, options = {}) => {
     ),
   );
 
+  // 反馈三按钮：只有页面显式传入 onFeedback 时才出现（看盘预览位不显示）
+  if (typeof options.onFeedback === 'function') {
+    card.append(
+      feedbackBar(advice, {
+        ...(options.feedback ?? {}),
+        onAction: options.onFeedback,
+      }),
+    );
+  }
+
   // toggle (evidence / counter / risks / disclaimers)
   const toggle = el('div', 'toggle');
   if (evidence.length > 0) {
@@ -254,6 +292,50 @@ const adviceCard = (advice, options = {}) => {
   card.setAttribute('role', 'button');
   card.setAttribute('tabindex', '0');
   return card;
+};
+
+/**
+ * 成绩单卡片：样本量、命中率、对基准平均超额、按 confidence 分组，以及 ≥50 条/≥60% 门禁结论。
+ * 没有结算数据时显示「尚未结算」，不显示 0%。
+ * @param {object} data get_advice_scorecard 的输出
+ * @returns {HTMLElement}
+ */
+const adviceScorecardNode = (data) => {
+  const wrap = el('div', 'advice-scorecard');
+  const pct = (v) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(1)}%`);
+  const avg = (v) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(2)}%`);
+  const head = el('div', 'scorecard-head', [
+    el('span', 'title', `建议成绩单 · 近 ${data.days ?? 30} 天 · T+${data.horizonDays}`),
+    el(
+      'span',
+      data.gate?.passed === true ? 'gate pass' : 'gate fail',
+      data.gate?.passed === true ? '门禁通过' : '门禁未通过',
+    ),
+  ]);
+  wrap.append(head);
+  wrap.append(
+    el('div', 'scorecard-rows', [
+      statBlock('已结算样本', String(data.samples ?? 0)),
+      statBlock('命中率', pct(data.hitRate)),
+      statBlock('平均超额（对沪深300）', avg(data.avgExcessPct)),
+    ]),
+  );
+  const groups = Array.isArray(data.groups) ? data.groups : [];
+  if (groups.length > 0) {
+    wrap.append(
+      el(
+        'div',
+        'scorecard-groups',
+        groups.map((g) => `${g.bucket}：${pct(g.hitRate)}（${g.samples} 条）`).join('　'),
+      ),
+    );
+  }
+  if (data.samples === 0)
+    wrap.append(el('p', 'muted', '尚未结算：建议需要满 T+5 才会进入成绩单。'));
+  else if (Array.isArray(data.gate?.reasons) && data.gate.reasons.length > 0) {
+    wrap.append(el('p', 'muted', data.gate.reasons.join('；')));
+  }
+  return wrap;
 };
 
 /** Stat 块（label / value / delta）。 */
@@ -420,6 +502,7 @@ const resultErrorText = (result, fallback) => toolErrorText(result?.error, fallb
 export {
   $,
   adviceCard,
+  adviceScorecardNode,
   adviceSubjectLine,
   adviceSubjectModel,
   compareValues,
@@ -428,6 +511,7 @@ export {
   DECISIONS,
   decisionBadge,
   el,
+  feedbackBar,
   fmtDateTime,
   fmtNum,
   fmtPct,

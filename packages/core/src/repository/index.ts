@@ -1,6 +1,11 @@
 import type { Account } from '../entity/account.js';
 import type { AccountFacts } from '../entity/account-facts.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
+import type {
+  AdviceFeedback,
+  AdviceSettlement,
+  SettlementHorizon,
+} from '../entity/advice-tracking.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
@@ -30,11 +35,6 @@ import type {
 import type { AdjustmentFactor, DailyBar, Quote, RawDailyBar } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type {
-  ResearchAvailability,
-  ResearchDocumentIndex,
-  ResearchDocumentKind,
-} from '../entity/research-vault.js';
-import type {
   SectorCatalogEntry,
   SectorCatalogState,
   SectorChangeEvent,
@@ -63,7 +63,6 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
-import type { StrictBacktestRun } from '../entity/strategy-backtest.js';
 import type {
   StrategyWatchlistSubscription,
   StrategyWatchlistSubscriptionStatus,
@@ -91,7 +90,6 @@ import type {
   TradingPlanBudgetLimits,
   TradingPlanBudgetResult,
 } from '../portfolio/trading-plan-budget.js';
-import type { ResearchSearchHit } from '../research-vault.js';
 import type { StrategyDailyCycleAuditQuery } from '../strategy/daily-cycle-audit.js';
 
 /**
@@ -489,6 +487,35 @@ export interface AdviceRepository {
   remove(id: string): Promise<void>;
 }
 
+export interface AdviceFeedbackQuery {
+  readonly adviceId?: string;
+  readonly since?: Date;
+  readonly until?: Date;
+  readonly limit?: number;
+}
+
+export interface AdviceSettlementQuery {
+  readonly adviceId?: string;
+  readonly horizonDays?: SettlementHorizon;
+  readonly since?: Date;
+  readonly until?: Date;
+  readonly limit?: number;
+}
+
+/**
+ * 建议反馈（用户点了什么）与结算（按建议假设执行的结果）分开存放。
+ * 两者都以 adviceId 为键，但生命周期与写入者不同：反馈来自用户，结算来自系统。
+ */
+export interface AdviceTrackingRepository {
+  recordFeedback(feedback: AdviceFeedback): Promise<void>;
+  findFeedback(adviceId: string): Promise<AdviceFeedback | null>;
+  listFeedbacks(filter?: AdviceFeedbackQuery): Promise<AdviceFeedback[]>;
+  saveSettlement(settlement: AdviceSettlement): Promise<void>;
+  listSettlements(filter?: AdviceSettlementQuery): Promise<AdviceSettlement[]>;
+  /** 删除建议时级联清理（两表均无 FK）。 */
+  removeForAdvice(adviceId: string): Promise<void>;
+}
+
 /** 逐股结构化计划版本；版本 immutable，active 状态切换由新版本替代表达。 */
 export interface TradingPlanRepository {
   save(plan: TradingPlan): Promise<void>;
@@ -594,6 +621,8 @@ export interface RepositoryRegistry {
   readonly portfolioCorporateAction: PortfolioCorporateActionRepository;
   readonly portfolioPerformanceSnapshot: PortfolioPerformanceSnapshotRepository;
   readonly advice: AdviceRepository;
+  /** 建议反馈 + T+N 结算（成绩单的事实来源）。 */
+  readonly adviceTracking: AdviceTrackingRepository;
   readonly tradingPlan: TradingPlanRepository;
   /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
   readonly report: ReportRepository;
@@ -611,7 +640,6 @@ export interface RepositoryRegistry {
   /** Strategy 运行、结果和信号。 */
   readonly strategyRun: StrategyRunRepository;
   /** 严格回测运行；事实直接读 daily_bars。 */
-  readonly strategyBacktest: StrategyBacktestRepository;
   readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
@@ -622,60 +650,10 @@ export interface RepositoryRegistry {
   readonly watchTrigger: WatchTriggerRepository;
   /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */
   readonly watchRuleState: WatchRuleStateRepository;
-  /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
-  readonly researchIndex: ResearchIndexRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
   readonly workflowRun: WorkflowRunRepository;
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
-}
-
-export interface ResearchDocumentQuery {
-  readonly kind?: ResearchDocumentKind;
-  readonly tags?: readonly string[];
-  readonly availability?: ResearchAvailability;
-  readonly stockCode?: string;
-  readonly publishedFrom?: Date;
-  readonly publishedTo?: Date;
-  readonly limit?: number;
-  readonly cursor?: string;
-}
-export interface ResearchSearchQuery {
-  readonly text: string;
-  readonly kind?: ResearchDocumentKind;
-  readonly stockCode?: string;
-  readonly limit?: number;
-}
-export type ResearchSearchCapability = 'fts' | 'metadata';
-export interface ResearchIndexApplySummary {
-  readonly added: number;
-  readonly updated: number;
-  readonly unchanged: number;
-  readonly missing: number;
-  readonly invalid: number;
-  readonly conflicts: number;
-}
-/**
- * 研究笔记索引：`research_document_index` 单表 + FTS5 派生索引。
- * 没有 topic / hypothesis / subject-link / chunk / embedding / 同步运行表。
- */
-export interface ResearchIndexRepository {
-  applyIndexBatch(input: {
-    readonly vaultId: string;
-    readonly completeness: 'complete' | 'partial';
-    readonly documents: readonly ResearchDocumentIndex[];
-    /** 本地 Markdown 正文（documentId → 文本）；仅写 FTS，不落普通表。 */
-    readonly contents?: Readonly<Record<string, string>>;
-    readonly seenDocumentIds: ReadonlySet<string>;
-    readonly indexedAt: Date;
-  }): Promise<ResearchIndexApplySummary>;
-  findDocument(id: string): Promise<ResearchDocumentIndex | null>;
-  listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
-  /** FTS5 可用返回 'fts'；虚拟表不可用时退化为 metadata 检索。 */
-  searchCapability(): ResearchSearchCapability;
-  searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
-  /** 文档显式关联的股票代码去重列表（替代 subject-link 表）。 */
-  listStockCodes(): Promise<readonly string[]>;
 }
 
 export interface SignalObservationRepository {
@@ -817,15 +795,6 @@ export interface StrategyRunRepository {
   clearResults(runIds: readonly string[], options?: { readonly dryRun?: boolean }): Promise<number>;
   /** 删除指定 Strategy 的运行、结果、信号与正式运行租约。 */
   removeByStrategyId(strategyId: string): Promise<void>;
-}
-
-export interface StrategyBacktestRepository {
-  saveRun(run: StrictBacktestRun): Promise<void>;
-  findRunById(id: string): Promise<StrictBacktestRun | null>;
-  listRuns(input?: {
-    readonly strategyId?: string;
-    readonly limit?: number;
-  }): Promise<readonly StrictBacktestRun[]>;
 }
 
 export interface StrategyWatchlistSubscriptionRepository {

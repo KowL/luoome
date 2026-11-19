@@ -21,7 +21,6 @@ export * from './sync-market.js';
 export * from './sync-market-dump.js';
 export * from './sync-portfolio-watchlists.js';
 export * from './sync-quotes.js';
-export * from './sync-research-vault.js';
 export * from './sync-sector-catalog.js';
 export * from './sync-stock-universe.js';
 export * from './weekly-report.js';

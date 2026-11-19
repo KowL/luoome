@@ -141,7 +141,6 @@ const renderLinks = (data) => {
   if (wrap === null) return;
   const id = encodeURIComponent(data.stock.id);
   const links = [
-    { href: `#research?stockId=${id}`, label: '查看研究' },
     { href: `#advice?stockId=${id}`, label: '查看 Advice' },
     { href: `#holdings?stockId=${id}`, label: '持仓定位' },
   ];

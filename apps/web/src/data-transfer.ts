@@ -38,7 +38,6 @@ import {
   PortfolioCorporateActionSchema,
   QuoteSchema,
   ReportSchema,
-  ResearchDocumentIndexSchema,
   SignalObservationSchema,
   StockSchema,
   StrategyRunSchema,
@@ -65,7 +64,6 @@ export const DATA_TRANSFER_CATEGORIES = [
   'watchlists',
   'advice-reports',
   'market-data',
-  'research',
   'chat',
 ] as const;
 
@@ -109,7 +107,6 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'daily_bars',
     'limit_up_ladder_snapshots',
   ],
-  research: ['research_document_index', 'research_document_fts'],
   chat: ['chat_sessions', 'chat_messages'],
 };
 
@@ -260,14 +257,6 @@ const stockUniverseSyncRunSchema = z.object({
   errorKind: z.string().optional(),
   errorMessage: z.string().optional(),
 });
-const researchDocumentFtsSchema = z.object({
-  documentId: z.string().min(1),
-  ordinal: z.number().int().nonnegative(),
-  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
-  title: z.string(),
-  headingPath: z.string(),
-  body: z.string(),
-});
 
 const decisionReviewStorageSchema = z.object({
   id: z.string().min(1),
@@ -411,8 +400,6 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   price_snapshots: domainValidator(QuoteSchema),
   daily_bars: domainValidator(DailyBarSchema),
   limit_up_ladder_snapshots: domainValidator(LimitUpLadderSchema),
-  research_document_index: domainValidator(ResearchDocumentIndexSchema),
-  research_document_fts: domainValidator(researchDocumentFtsSchema),
   chat_sessions: domainValidator(ChatSessionSchema, assertChatSessionInvariants),
   chat_messages: domainValidator(ChatMessageSchema, assertChatMessageInvariants),
 };

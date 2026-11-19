@@ -1,21 +1,25 @@
 import { gzipSync } from 'node:zlib';
 import { sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDrizzleRepos } from '../../client.js';
 import { registerRepositoryContractTests } from '../contract-tests.js';
 import type { DrizzleAdviceRepository } from './index.js';
 
 /** Drizzle 实现（bun:sqlite :memory:）跑完整契约套件。 */
-registerRepositoryContractTests('drizzle', () => {
-  const handle = createDrizzleRepos(':memory:');
-  return {
-    repos: handle.repos,
-    readOutcome: (adviceId: string) =>
-      (handle.repos.advice as DrizzleAdviceRepository).getOutcome(adviceId),
-    close: handle.close,
-  };
-});
+registerRepositoryContractTests(
+  'drizzle',
+  () => {
+    const handle = createDrizzleRepos(':memory:');
+    return {
+      repos: handle.repos,
+      readOutcome: (adviceId: string) =>
+        (handle.repos.advice as DrizzleAdviceRepository).getOutcome(adviceId),
+      close: handle.close,
+    };
+  },
+  { describe, it, expect, beforeEach, afterEach },
+);
 
 describe('drizzle AdviceRepository 读兼容', () => {
   it('存量 basedOn JSON 含已下线的 tacticSignals key 时读出不 crash 且忽略该字段', async () => {

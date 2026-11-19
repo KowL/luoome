@@ -39,7 +39,6 @@ describe('workflow architecture boundary', () => {
       'strategyWorkflow',
       'syncMarketWorkflow',
       'syncPortfolioWatchlistsWorkflow',
-      'syncResearchVaultWorkflow',
       'syncSectorCatalogWorkflow',
     ]);
   });

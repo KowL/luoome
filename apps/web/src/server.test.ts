@@ -86,8 +86,6 @@ describe('Web 信息架构', () => {
     expect(html).toContain('id="btn-dashboard-watch-run"');
     expect(html).toContain('id="review-performance-snapshots-table"');
     expect(html).toContain('id="review-performance-audit-table"');
-    expect(html).toContain('id="research-sync-btn"');
-    expect(html).toContain('id="research-kind-filter"');
   });
 });
 
@@ -1886,22 +1884,6 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       ok: true,
       data: { provider: 'fake-llm', insight: { findings: [{ factRefs: ['runs:window'] }] } },
     });
-  });
-
-  it('严格回测 API 独立于历史回放，并在参数缺失时返回门禁入口错误', async () => {
-    const invalid = await app.fetch(
-      targetRequest('/api/strategies/strict-api-check/strict-backtests', {}),
-    );
-    expect(invalid.status).toBe(400);
-    expect(await invalid.json()).toMatchObject({
-      ok: false,
-      error: { kind: 'invalid_input', message: '严格回测参数无效' },
-    });
-    const list = await app.fetch(
-      new Request('http://test/api/strategies/strict-api-check/strict-backtests'),
-    );
-    expect(list.status).toBe(200);
-    expect(await list.json()).toMatchObject({ ok: true, data: { runs: [] } });
   });
 
   it('目标 mutation 要求显式 opt-in，并校验同源 Origin', async () => {
@@ -3844,7 +3826,6 @@ describe('/api/chat：对话助手', () => {
     expect(generalNames).not.toContain('run_local_selector_research');
     expect(generalNames).toContain('fetch_news');
     expect(generalNames).toContain('save_decision_review');
-    expect(generalNames).toContain('save_research_document');
     expect(generalNames).not.toContain('add_trade');
   });
 
@@ -7673,5 +7654,59 @@ describe('MCP settings HTTP permissions', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('POST /api/advice/feedback', () => {
+  const postFeedback = (target: Hono, body: unknown): Promise<Response> =>
+    Promise.resolve(
+      target.fetch(
+        new Request('http://test/api/advice/feedback', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: JSON.stringify(body),
+        }),
+      ),
+    );
+
+  it('未开 write 能力时拒绝', async () => {
+    const ctx = await buildTestContext();
+    const testApp = createWebApp(ctx, {});
+    const r = await postFeedback(testApp, { adviceId: 'any', action: 'done' });
+    const body = (await r.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it('三按钮落库：点击一次即可，随后可读回反馈', async () => {
+    const ctx = await buildTestContext();
+    const seeded = await ctx.repos.advice.query({ includeExpired: true });
+    const victim = seeded[0];
+    if (victim === undefined) throw new Error('seeded advice missing');
+    const testApp = createWebApp(ctx, { exposeWrite: true });
+
+    const r = await postFeedback(testApp, { adviceId: victim.id, action: 'done', fillPrice: 12.3 });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { ok: boolean }).ok).toBe(true);
+
+    const read = await testApp.fetch(
+      new Request(`http://test/api/advice/${victim.id}/settlements`),
+    );
+    const readBody = (await read.json()) as {
+      ok: boolean;
+      data?: { feedback: { action: string; fillPrice?: number } | null };
+    };
+    expect(readBody.ok).toBe(true);
+    expect(readBody.data?.feedback?.action).toBe('done');
+    expect(readBody.data?.feedback?.fillPrice).toBe(12.3);
+  });
+
+  it('非法动作 → invalid_input', async () => {
+    const ctx = await buildTestContext();
+    const seeded = await ctx.repos.advice.query({ includeExpired: true });
+    const testApp = createWebApp(ctx, { exposeWrite: true });
+    const r = await postFeedback(testApp, { adviceId: seeded[0]?.id, action: 'bought' });
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
   });
 });

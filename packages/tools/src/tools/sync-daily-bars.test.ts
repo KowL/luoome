@@ -154,50 +154,6 @@ describe('tool/sync_daily_bars', () => {
     expect(calls).not.toContain('601318.SH');
   });
 
-  it('relevant 范围纳入研究笔记显式 stockCodes 的股票', async () => {
-    const calls: string[] = [];
-    const now = new Date('2026-07-28T08:30:00.000Z');
-    const base = await buildTestContext({ clock: () => now });
-    await base.repos.researchIndex.applyIndexBatch({
-      vaultId: 'vault-test',
-      completeness: 'complete',
-      documents: [
-        {
-          id: 'doc_industry',
-          kind: 'note',
-          title: '白酒行业跟踪',
-          importedAt: now,
-          tags: [],
-          stockCodes: ['600519.SH'],
-          vaultId: 'vault-test',
-          relativePath: 'Research/doc_industry.md',
-          attachmentPaths: [],
-          contentHash: 'a'.repeat(64),
-          fileModifiedAt: now,
-          indexedAt: now,
-          availability: 'available',
-        },
-      ],
-      seenDocumentIds: new Set(['doc_industry']),
-      indexedAt: now,
-    });
-    const market: MarketDataAdapterLike = {
-      ...base.adapters.market,
-      fetchDailyBars: async (stockId) => {
-        calls.push(stockId);
-        return [qfqBar(stockId, '2026-07-27')];
-      },
-    };
-
-    const result = await syncDailyBarsTool.execute(
-      { scope: 'relevant' },
-      { ...base, adapters: { ...base.adapters, market } },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(calls).toContain('600519.SH');
-  });
-
   it('单股失败返回 partial，并保留其它股票已成功的日线', async () => {
     const base = await buildTestContext({
       clock: () => new Date('2026-07-28T08:30:00.000Z'),

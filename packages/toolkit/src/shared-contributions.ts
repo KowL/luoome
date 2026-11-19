@@ -2,6 +2,8 @@ import type { ToolContributions } from './plugin.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addTradeTool } from './tools/add-trade.js';
+import { listAdviceFeedbackTool, submitAdviceFeedbackTool } from './tools/advice-feedback.js';
+import { getAdviceScorecardTool } from './tools/advice-scorecard.js';
 import {
   createAlertPlanTool,
   deleteAlertPlanTool,
@@ -82,18 +84,12 @@ import { reconcileStaleStrategyRunsTool } from './tools/reconcile-stale-strategy
 import { reconcileStaleWorkflowRunsTool } from './tools/reconcile-stale-workflow-runs.js';
 import { recordWorkflowRunTool } from './tools/record-workflow-run.js';
 import { renderReportTool } from './tools/render-report.js';
-import {
-  createResearchDocumentTool,
-  getResearchDocumentTool,
-  listResearchDocumentsTool,
-  searchResearchDocumentsTool,
-  syncResearchVaultTool,
-} from './tools/research-vault.js';
 import { saveAlertPlanTool } from './tools/save-alert-plan.js';
 import { saveStrategyVersionTool } from './tools/save-strategy-version.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
+import { getAdviceSettlementsTool, settleAdvicesTool } from './tools/settle-advices.js';
 import {
   completeStrategyObservationsTool,
   getSignalObservationStatsTool,
@@ -150,6 +146,7 @@ import {
   updateWatchlistMemberTool,
   updateWatchlistTool,
 } from './tools/watchlist.js';
+
 import {
   getWatchTriggerDeliveryStatsTool,
   listWatchDeliveryRetriesTool,
@@ -306,12 +303,6 @@ export const sharedToolContributions = {
     agent: true,
     dependencies: [],
   },
-  search_research_documents: {
-    owner: 'shared-query',
-    tool: searchResearchDocumentsTool,
-    agent: true,
-    dependencies: ['researchVault'],
-  },
   get_stock_market_view: {
     owner: 'business.portfolio',
     tool: getStockMarketViewTool,
@@ -414,11 +405,6 @@ export const sharedToolContributions = {
     tool: createPortfolioCorporateActionTool,
     agent: false,
   },
-  create_research_document: {
-    owner: 'business.research',
-    tool: createResearchDocumentTool,
-    agent: false,
-  },
   create_strategy: { owner: 'business.strategy', tool: createStrategyTool, agent: false },
   create_strategy_observation_candidates: {
     owner: 'business.strategy',
@@ -451,6 +437,27 @@ export const sharedToolContributions = {
     agent: false,
   },
   get_account_facts: { owner: 'shared-query', tool: getAccountFactsTool, agent: false },
+  submit_advice_feedback: {
+    owner: 'shared-query',
+    tool: submitAdviceFeedbackTool,
+    agent: false,
+  },
+  list_advice_feedback: {
+    owner: 'shared-query',
+    tool: listAdviceFeedbackTool,
+    agent: false,
+  },
+  get_advice_scorecard: {
+    owner: 'shared-query',
+    tool: getAdviceScorecardTool,
+    agent: false,
+  },
+  get_advice_settlements: {
+    owner: 'shared-query',
+    tool: getAdviceSettlementsTool,
+    agent: false,
+  },
+  settle_advices: { owner: 'shared-query', tool: settleAdvicesTool, agent: false },
   get_account: { owner: 'shared-query', tool: getAccountTool, agent: false },
   get_advice_stats: { owner: 'shared-query', tool: getAdviceStatsTool, agent: false },
   get_chat_session: { owner: 'shared-query', tool: getChatSessionTool, agent: false },
@@ -468,7 +475,6 @@ export const sharedToolContributions = {
   get_market_data_status: { owner: 'shared-query', tool: getMarketDataStatusTool, agent: false },
   get_previous_closes: { owner: 'shared-query', tool: getPreviousClosesTool, agent: false },
   get_report: { owner: 'shared-query', tool: getReportTool, agent: false },
-  get_research_document: { owner: 'shared-query', tool: getResearchDocumentTool, agent: false },
   get_signal_observation_stats: {
     owner: 'shared-query',
     tool: getSignalObservationStatsTool,
@@ -531,7 +537,6 @@ export const sharedToolContributions = {
     agent: false,
   },
   list_reports: { owner: 'shared-query', tool: listReportsTool, agent: false },
-  list_research_documents: { owner: 'shared-query', tool: listResearchDocumentsTool, agent: false },
   list_strategy_result_views: {
     owner: 'business.strategy',
     tool: listStrategyResultViewsTool,
@@ -544,12 +549,12 @@ export const sharedToolContributions = {
     agent: false,
   },
   list_trading_plans: { owner: 'shared-query', tool: listTradingPlansTool, agent: false },
+  list_watch_rule_states: { owner: 'shared-query', tool: listWatchRuleStatesTool, agent: false },
   list_watch_delivery_retries: {
     owner: 'shared-query',
     tool: listWatchDeliveryRetriesTool,
     agent: false,
   },
-  list_watch_rule_states: { owner: 'shared-query', tool: listWatchRuleStatesTool, agent: false },
   list_watch_triggers: { owner: 'shared-query', tool: listWatchTriggersTool, agent: false },
   list_watchlist_changes: { owner: 'shared-query', tool: listWatchlistChangesTool, agent: false },
   list_workflow_runs: { owner: 'shared-query', tool: listWorkflowRunsTool, agent: false },
@@ -592,11 +597,6 @@ export const sharedToolContributions = {
   subscribe_strategy_to_watchlist: {
     owner: 'business.strategy',
     tool: subscribeStrategyToWatchlistTool,
-    agent: false,
-  },
-  sync_research_vault: {
-    owner: 'task.sync-research-vault',
-    tool: syncResearchVaultTool,
     agent: false,
   },
   sync_strategy_watchlist_subscriptions: {

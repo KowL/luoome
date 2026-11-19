@@ -8,7 +8,6 @@ import type { MarketSettingsStore } from '../market-settings.js';
 import type { McpSettingsStore } from '../mcp-settings.js';
 import type { PluginSettingsStore } from '../plugin-settings.js';
 import type { PluginTasks } from '../plugin-tasks.js';
-import type { ResearchVaultSettingsStore } from '../research-vault-settings.js';
 
 export type { WebSourceSet };
 
@@ -71,7 +70,6 @@ export interface WebRouteDeps {
   readonly mcpSettingsStore?: McpSettingsStore;
   readonly marketSettingsStore?: MarketSettingsStore;
   readonly feishuSettingsStore?: FeishuSettingsStore;
-  readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
   readonly sharedSources?: WebSourceSet;
   readonly dataTransferDbPath?: string;
 }

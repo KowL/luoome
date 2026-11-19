@@ -126,4 +126,125 @@ describe('analyze_stock', () => {
     expect(wrongType.ok).toBe(false);
     if (!wrongType.ok) expect(wrongType.error.kind).toBe('invalid_input');
   });
+
+  it('输入装配：有新闻源时新闻段可用且最多 5 条', async () => {
+    const newsItems = Array.from({ length: 7 }, (_, index) => ({
+      id: `n${index}`,
+      title: `新闻标题 ${index}`,
+      summary: '摘要',
+      category: '公司' as const,
+      source: '东方财富',
+      publishedAt: new Date('2026-11-19T08:00:00+08:00'),
+      url: `https://example.com/${index}`,
+    }));
+    const baseCtx = await buildTestContext({
+      advices: [],
+      news: {
+        name: 'news' as const,
+        sources: ['eastmoney'],
+        status: () => [],
+        fetchNews: async () => ({
+          ok: true as const,
+          data: {
+            total: newsItems.length,
+            source: 'eastmoney',
+            items: newsItems,
+            warnings: [],
+            asOf: new Date('2026-11-19T09:00:00+08:00'),
+          },
+        }),
+      },
+    });
+    const statuses: string[] = [];
+    let captured: { data?: unknown } = {};
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'capture-llm',
+          generate: async <T>(request: { data?: unknown }): Promise<T> => {
+            captured = request;
+            return {
+              decision: 'hold',
+              confidence: 55,
+              horizon: 'short',
+              reasoning: {
+                premise: '今日无新增事实，维持原判断',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(true);
+    const payload = captured.data as {
+      marketContext: {
+        news: { status: string; data?: { items: unknown[] } };
+        account: { status: string };
+        sectors: { status: string };
+      };
+    };
+    for (const key of ['account', 'news', 'sectors'] as const)
+      statuses.push(payload.marketContext[key].status);
+    expect(payload.marketContext.news.status).toBe('ok');
+    expect(payload.marketContext.news.data?.items).toHaveLength(5);
+    expect(statuses.length).toBe(3);
+  });
+
+  it('判断契约：system prompt 承载七要素，不是裸 token', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    let captured: { system?: string; data?: unknown } = {};
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'capture-llm',
+          generate: async <T>(request: { system?: string; data?: unknown }): Promise<T> => {
+            captured = request;
+            return {
+              decision: 'hold',
+              confidence: 55,
+              horizon: 'short',
+              reasoning: {
+                premise: '今日无新增事实，维持原判断',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(true);
+    const system = captured.system ?? '';
+    expect(system).not.toBe('analyze_stock');
+    expect(system).toContain('反证');
+    expect(system).toContain('counterEvidence');
+    expect(system).toContain('stopLoss');
+    expect(system).toContain('targetPositionPct');
+    expect(system).toContain('今日无新增事实');
+
+    // 输入装配：账户/新闻/板块三段必须显式出现，缺失要有原因而不是静默省略。
+    const payload = captured.data as {
+      marketContext: Record<'account' | 'news' | 'sectors', { status: string; reason?: string }>;
+    };
+    expect(payload.marketContext).toBeDefined();
+    for (const key of ['account', 'news', 'sectors'] as const) {
+      const section = payload.marketContext[key];
+      expect(['ok', 'unavailable']).toContain(section.status);
+      if (section.status === 'unavailable') expect(section.reason?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
 });

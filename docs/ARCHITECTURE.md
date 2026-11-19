@@ -97,8 +97,6 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
 
-研究笔记检索以 SQLite FTS5 为确定性基线：`research_document_index` 单表保存文档元数据（标题、excerpt、标签、显式 stockCodes、本地 Markdown 路径与来源/校验字段），`research_document_fts` 是按 document 粒度的可重建 FTS5 投影，正文来自同步时读取的本地 Markdown。没有 topic / hypothesis / subject-link / chunk / embedding / git-sync 表，也没有 embedding adapter；检索接口固定在 `ResearchIndexRepository`，Web/Agent 不复制检索逻辑。
-
 **advice ≠ trade**：advice 永远不能直接触发 trade。trade 永远是 human-in-the-loop。
 
 ## 3. 模块结构
@@ -343,7 +341,7 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 - 多模式入口：`report`（opening/closing/weekly/daily-review）、`strategy`
   （run/scheduled/daily/observations）、`sync-market`（quotes/universe/dump）；
 - 专用入口：`closing-report-cutoff`、`daily-advice`、`risk-report`、`replay-strategy-range`、
-  `sync-portfolio-watchlists`、`sync-research-vault`、`post-market-data`、`intraday-watch`、
+  `sync-portfolio-watchlists`、`post-market-data`、`intraday-watch`、
   `snapshot-account-performance`。
 
 报告、策略与行情同步的原管线改为 `defineOperation`（可复用步骤管线，不注册为 workflow）；
@@ -858,7 +856,6 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 |---|---|---|
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
-| `run_strategy_backtest` | StrategyVersion + 区间 | 回测收益 / 胜率 / 最大回撤 |
 | `get_strategy_signals` | 股票 + 时间窗 | StrategySignal + T+1/5/20 观察统计 |
 | `analyze_stock` | stock / market / strategy-candidate + 上下文 | **Advice**（evidence + counter-evidence + risks） |
 

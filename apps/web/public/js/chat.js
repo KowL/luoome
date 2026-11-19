@@ -129,7 +129,6 @@ const TOOL_LABELS = {
   create_alert_plan: '创建 AlertPlan',
   update_alert_plan: '更新 AlertPlan',
   delete_alert_plan: '删除 AlertPlan',
-  create_research_document: '创建研究笔记',
   analyze_stock: '分析个股',
   analyze_position: '分析持仓',
   market_outlook: '市场观点',

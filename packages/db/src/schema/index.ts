@@ -40,16 +40,11 @@ import type {
   SignalObservation,
   StockCode,
   Strategy,
-  StrategyEvaluatorIdentity,
   StrategyRun,
   StrategyRunPublication,
   StrategySignal,
   StrategyVersion,
   StrategyWatchlistSubscription,
-  StrictBacktestGateAudit,
-  StrictBacktestMetrics,
-  StrictBacktestRun,
-  StrictBacktestSpec,
   TradeSide,
   TradeSource,
   TradingPlan,
@@ -109,7 +104,7 @@ export const accounts = sqliteTable('accounts', {
   currency: text('currency').notNull(),
   initialCapital: real('initial_capital').$type<Money>().notNull(),
   /** 当前现金余额：由交易/持仓/资金流水在同一事务内增减，口径见 core portfolio/ledger。 */
-  cashBalance: real('cash_balance').$type<Money>().notNull(),
+  cashBalance: real('cash_balance').$type<Money>().notNull().default(sql`0`),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
@@ -595,7 +590,10 @@ export const adviceOutcomes = sqliteTable(
   'advice_outcomes',
   {
     adviceId: text('advice_id').primaryKey(),
-    tradeIds: text('trade_ids', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    tradeIds: text('trade_ids', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull()
+      .default(sql`'[]'`),
     outcome: text('outcome').$type<'followed' | 'partially_followed' | 'ignored'>().notNull(),
     pnl: real('pnl').$type<Money>(),
     benchmarkPnl: real('benchmark_pnl').$type<Money>(),
@@ -605,6 +603,42 @@ export const adviceOutcomes = sqliteTable(
   },
   (t) => ({
     recordedAtIdx: index('advice_outcomes_recorded_at_idx').on(t.recordedAt),
+  }),
+);
+
+/** 用户对一条建议的动作（做了 / 没做 / 再等等）；只在点击时写入。 */
+export const adviceFeedbacks = sqliteTable(
+  'advice_feedbacks',
+  {
+    adviceId: text('advice_id').primaryKey(),
+    action: text('action').$type<'done' | 'skipped' | 'later'>().notNull(),
+    /** 「做了」时的实际成交价；缺省按建议入场区间中值假设成交。 */
+    fillPrice: real('fill_price').$type<Money>(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    recordedAtIdx: index('advice_feedbacks_recorded_at_idx').on(t.recordedAt),
+  }),
+);
+
+/** 按建议假设执行的 T+1/T+3/T+5 结算；由系统计算，与用户是否点击无关。 */
+export const adviceSettlements = sqliteTable(
+  'advice_settlements',
+  {
+    adviceId: text('advice_id').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    assumedEntryPrice: real('assumed_entry_price').notNull(),
+    exitPrice: real('exit_price').notNull(),
+    returnPct: real('return_pct').notNull(),
+    benchmarkReturnPct: real('benchmark_return_pct').notNull(),
+    excessPct: real('excess_pct').notNull(),
+    hit: integer('hit', { mode: 'boolean' }).notNull(),
+    evaluatedAt: integer('evaluated_at', { mode: 'timestamp_ms' }).notNull(),
+    note: text('note'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.adviceId, t.horizonDays], name: 'advice_settlements_pk' }),
+    adviceIdx: index('advice_settlements_advice_idx').on(t.adviceId),
   }),
 );
 
@@ -873,37 +907,6 @@ export const strategySignals = sqliteTable(
   }),
 );
 
-export const strategyBacktestRuns = sqliteTable(
-  'strategy_backtest_runs',
-  {
-    id: text('id').primaryKey(),
-    strategyId: text('strategy_id').notNull(),
-    strategyVersionId: text('strategy_version_id').notNull(),
-    status: text('status').$type<StrictBacktestRun['status']>().notNull(),
-    resultAvailability: text('result_availability')
-      .$type<StrictBacktestRun['resultAvailability']>()
-      .notNull(),
-    spec: text('spec_json', { mode: 'json' }).$type<StrictBacktestSpec>().notNull(),
-    specHash: text('spec_hash').notNull(),
-    inputFingerprint: text('input_fingerprint').notNull(),
-    evaluator: text('evaluator_json', { mode: 'json' })
-      .$type<StrategyEvaluatorIdentity>()
-      .notNull(),
-    gateAudit: text('gate_audit_json', { mode: 'json' }).$type<StrictBacktestGateAudit>().notNull(),
-    metrics: text('metrics_json', { mode: 'json' }).$type<StrictBacktestMetrics>(),
-    error: text('error'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
-    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-  },
-  (t) => ({
-    strategyCreatedIdx: index('strategy_backtest_runs_strategy_created_idx').on(
-      t.strategyId,
-      t.createdAt,
-    ),
-  }),
-);
-
 /**
  * 信号事实观察。
  *
@@ -1124,19 +1127,20 @@ export const watchTriggers = sqliteTable(
     notified: integer('notified', { mode: 'boolean' }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     /** 规则实例 id（与 stock_pool.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
-    ruleId: text('rule_id').notNull(),
+    ruleId: text('rule_id').notNull().default(''),
     /** 触发类型：进入（rising edge）vs 退出（recovered）；默认 'triggered'。 */
-    triggerType: text('trigger_type').notNull(),
+    triggerType: text('trigger_type').notNull().default('triggered'),
     /** 落库时为生效优先级，不再反推。 */
-    priority: text('priority').notNull(),
+    priority: text('priority').notNull().default('normal'),
     /** 单条送达状态机落值。 */
-    deliveryStatus: text('delivery_status').notNull(),
+    deliveryStatus: text('delivery_status').notNull().default('not-requested'),
     /** 关联的 Notification id，发送后回写。 */
     notificationId: text('notification_id'),
     /** 求值快照：输入值 / 阈值 / 窗口 / 数据时间，至少含 ruleId / kind / quoteClose / quoteTs。 */
     evalSnapshot: text('eval_snapshot', { mode: 'json' })
       .$type<Record<string, unknown>>()
-      .notNull(),
+      .notNull()
+      .default(sql`'{}'`),
     /** 用户反馈（handled / useful / useless / ignored），由 set_watch_trigger_feedback 写入。 */
     feedback: text('feedback'),
     feedbackAt: integer('feedback_at', { mode: 'timestamp_ms' }),
@@ -1198,60 +1202,6 @@ export const watchRuleStates = sqliteTable(
   }),
 );
 
-export const researchDocumentIndex = sqliteTable(
-  'research_document_index',
-  {
-    id: text('id').primaryKey(),
-    kind: text('kind').notNull(),
-    title: text('title').notNull(),
-    author: text('author'),
-    sourceUrl: text('source_url'),
-    sourceStatus: text('source_status'),
-    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
-    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
-    importedAt: integer('imported_at', { mode: 'timestamp_ms' }).notNull(),
-    tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(),
-    stockCodes: text('stock_codes', { mode: 'json' })
-      .$type<readonly string[]>()
-      .notNull()
-      .default([]),
-    vaultId: text('vault_id').notNull(),
-    relativePath: text('relative_path').notNull(),
-    attachmentPaths: text('attachment_paths', { mode: 'json' })
-      .$type<readonly string[]>()
-      .notNull(),
-    contentHash: text('content_hash').notNull(),
-    excerpt: text('excerpt'),
-    fileModifiedAt: integer('file_modified_at', { mode: 'timestamp_ms' }).notNull(),
-    indexedAt: integer('indexed_at', { mode: 'timestamp_ms' }).notNull(),
-    availability: text('availability').notNull(),
-    diagnostic: text('diagnostic'),
-  },
-  (t) => ({
-    pathUnique: uniqueIndex('research_document_index_vault_path_unique').on(
-      t.vaultId,
-      t.relativePath,
-    ),
-    publishedIdx: index('research_document_index_published_idx').on(t.publishedAt),
-    observedIdx: index('research_document_index_observed_idx').on(t.observedAt),
-  }),
-);
-// FTS5 virtual table is created by ensureSchema; this declaration only supplies
-// Drizzle's typed query surface and does not create a second ordinary table.
-export const researchDocumentFts = sqliteTable('research_document_fts', {
-  documentId: text('document_id').notNull(),
-  contentHash: text('content_hash').notNull(),
-  title: text('title').notNull(),
-  tags: text('tags').notNull(),
-  relativePath: text('relative_path').notNull(),
-  excerpt: text('excerpt').notNull(),
-  body: text('body').notNull(),
-});
-
-/**
- * Workflow 运行审计（ruo 迁移 Phase 1C，docs/.../§3.4）。
- * inputSummary / outputSummary / providerStatuses 走 text + mode 'json'。
- */
 export const workflowRuns = sqliteTable(
   'workflow_runs',
   {
@@ -1265,7 +1215,8 @@ export const workflowRuns = sqliteTable(
     outputSummary: text('output_summary', { mode: 'json' }).$type<Record<string, unknown>>(),
     providerStatuses: text('provider_statuses', { mode: 'json' })
       .$type<readonly ProviderStatus[]>()
-      .notNull(),
+      .notNull()
+      .default(sql`'[]'`),
     error: text('error'),
   },
   (t) => ({
@@ -1293,8 +1244,12 @@ export const reports = sqliteTable(
     evidence: text('evidence_json', { mode: 'json' }).$type<Report['evidence']>().notNull(),
     missingDimensions: text('missing_dimensions_json', { mode: 'json' })
       .$type<Report['missingDimensions']>()
-      .notNull(),
-    deliveryStatus: text('delivery_status').$type<DeliveryStatus>().notNull(),
+      .notNull()
+      .default(sql`'[]'`),
+    deliveryStatus: text('delivery_status')
+      .$type<DeliveryStatus>()
+      .notNull()
+      .default('not-requested'),
     notificationPolicy: text('notification_policy').$type<Report['notificationPolicy']>(),
     watchlistFactsSnapshot: text('watchlist_facts_snapshot', { mode: 'json' }).$type<
       Report['watchlistFactsSnapshot']
@@ -1397,6 +1352,8 @@ export const schema = {
   portfolioPerformanceSnapshots,
   advices,
   adviceOutcomes,
+  adviceFeedbacks,
+  adviceSettlements,
   priceSnapshots,
   dailyBars,
   minuteBars,
@@ -1405,7 +1362,6 @@ export const schema = {
   strategyVersions,
   strategyRuns,
   strategySignals,
-  strategyBacktestRuns,
   signalObservations,
   notifications,
   // v0.6 起
@@ -1417,8 +1373,6 @@ export const schema = {
   watchlistMembers,
   watchlistMemberSources,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
-  researchDocumentIndex,
-  researchDocumentFts,
   workflowRuns,
   reports,
   tradingPlans,

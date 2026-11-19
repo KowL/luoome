@@ -3,7 +3,11 @@ import { listHoldingsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { dailyAdviceWorkflow, HIGH_CONFIDENCE_THRESHOLD } from './daily-advice.js';
+import {
+  DAILY_CANDIDATE_LIMIT,
+  dailyAdviceWorkflow,
+  HIGH_CONFIDENCE_THRESHOLD,
+} from './daily-advice.js';
 
 describe('daily-advice workflow', () => {
   it('正常路径：每个活跃持仓一条建议 + 3 条 disclaimers + summary 自洽 + 信心度降序', async () => {
@@ -19,14 +23,16 @@ describe('daily-advice workflow', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const { advices, summary } = result.data;
-    // 每个活跃持仓恰好一条建议（mock LLM 全部成功）。
-    expect(advices).toHaveLength(holdings.length);
-
+    const { advices, summary, judgment } = result.data;
+    // 活跃持仓必须全部进入判断；候选池（关注池）可能额外补充，但总数受上限约束。
     const stockIds = new Set(holdings.map((h) => h.holding.stockId));
+    for (const stockId of stockIds) {
+      expect(advices.some((advice) => advice.subjectId === stockId)).toBe(true);
+    }
+    expect(advices.length).toBeLessThanOrEqual(holdings.length + DAILY_CANDIDATE_LIMIT);
+
     for (const advice of advices) {
       expect(advice.subjectKind).toBe('stock');
-      expect(stockIds.has(advice.subjectId)).toBe(true);
       // 硬约束：每条 advice 恰好带 3 条 STANDARD_DISCLAIMERS。
       expect(advice.disclaimers).toEqual([...STANDARD_DISCLAIMERS]);
       expect(advice.disclaimers).toHaveLength(3);
@@ -34,6 +40,21 @@ describe('daily-advice workflow', () => {
 
     // summary 计数自洽。
     expect(summary.total).toBe(advices.length);
+    expect(summary.holdings).toBe(holdings.length);
+    expect(summary.candidates).toBeLessThanOrEqual(DAILY_CANDIDATE_LIMIT);
+    expect(summary.actionable).toBe(
+      advices.filter((a) => a.decision === 'buy' || a.decision === 'sell').length,
+    );
+
+    // 「今日不动/今日可动」是正式结论，必须与 advices 自洽。
+    if (summary.actionable === 0) {
+      expect(judgment.action).toBe('今日不动');
+      expect(judgment.items).toHaveLength(0);
+    } else {
+      expect(judgment.action).toBe('今日可动');
+      expect(judgment.items).toHaveLength(summary.actionable);
+    }
+    expect(judgment.reason.length).toBeGreaterThan(0);
     expect(summary.highConfidence).toBe(
       advices.filter((a) => a.confidence >= HIGH_CONFIDENCE_THRESHOLD).length,
     );

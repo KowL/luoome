@@ -23,7 +23,6 @@ import {
   createNewsManagerFromEnv,
   createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
-  createResearchVaultAdapterFromEnv,
   createSectorCatalogFromEnv,
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
@@ -169,12 +168,6 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
   });
-  let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
-  try {
-    researchVault = createResearchVaultAdapterFromEnv(process.env);
-  } catch {
-    logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
-  }
   const ashareSentiment = createAShareSentimentManagerFromEnv(process.env, {
     providerRuntime,
     clock: now,
@@ -214,7 +207,6 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
         clock: now,
         executionPolicy,
       }),
-      ...(researchVault ? { researchVault } : {}),
       ...(Object.keys(marketIntel).length === 0 ? {} : { marketIntel }),
       ...(marketDump === undefined ? {} : { marketDump }),
       ...(limitUpBoard === undefined ? {} : { limitUpBoard }),

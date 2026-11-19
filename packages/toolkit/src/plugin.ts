@@ -4,7 +4,6 @@ import type { Tool } from './define-tool.js';
 export type ToolDependency =
   | `market:${string}`
   | 'llm'
-  | 'researchVault'
   | 'sectorCatalog'
   | 'limitUpLadder'
   | 'limitUpMarket'

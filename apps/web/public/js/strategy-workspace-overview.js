@@ -160,8 +160,6 @@ const renderResultTable = (payload, setStatus, sortState, onSort) => {
       explain.setAttribute('aria-expanded', String(!detailRow.hidden));
     });
     detailRow.id = detailId;
-    const research = el('a', 'btn btn-outline btn-sm', '研究档案');
-    research.href = `#research?stockId=${encodeURIComponent(row.stock.stockId)}`;
     const watchlist = el('button', 'btn btn-outline btn-sm', '加入 Watchlist');
     watchlist.type = 'button';
     watchlist.addEventListener('click', () => void addToWatchlist(row.stock, setStatus));
@@ -181,7 +179,7 @@ const renderResultTable = (payload, setStatus, sortState, onSort) => {
         el('td', null, resultReason(row.view)),
         el('td', 'mono muted', fmtDateTime(result.dataAsOf)),
         el('td', null, badge(RESULT_VIEW_STATUS[row.view.kind], row.view.kind)),
-        el('td', null, el('div', 'row-actions', [explain, research, watchlist])),
+        el('td', null, el('div', 'row-actions', [explain, watchlist])),
       ]),
       detailRow,
     );

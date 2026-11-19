@@ -15,6 +15,7 @@ import {
   DrizzleAccountRepository,
   DrizzleAdjustmentFactorRepository,
   DrizzleAdviceRepository,
+  DrizzleAdviceTrackingRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
@@ -33,12 +34,10 @@ import {
   DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
   DrizzleReportRepository,
-  DrizzleResearchIndexRepository,
   DrizzleSectorCatalogRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
-  DrizzleStrategyBacktestRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
   DrizzleStrategyWatchlistSubscriptionRepository,
@@ -53,6 +52,7 @@ import {
 import { decodeJsonBlobToText } from './repository/drizzle/json-blob.js';
 import { DrizzlePublicMarketStore } from './repository/drizzle/public-market.js';
 import { type Schema, schema } from './schema/index.js';
+import { SCHEMA_INDEXES, SCHEMA_TABLES } from './schema-ddl.generated.js';
 import { RepositoryWriteScope } from './write-scope.js';
 
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
@@ -63,7 +63,8 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
     db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`)).map((row) => row.name),
   );
   if (!columns.has(column)) {
-    db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
+    const stmt = `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`;
+    db.run(sql.raw(stmt));
   }
 };
 
@@ -136,67 +137,14 @@ const migrateDecisionReviewsToSingleTable = (db: DrizzleDb): void => {
   );
 };
 
-/**
- * FTS5 投影从「chunk 行」收敛为「document 行」（S3.1a）。
- *
- * FTS 是可重建投影：旧库检测到缺少 relative_path 列时直接 DROP 后按新结构重建，
- * 下次索引同步会自动回填；权威文档表 research_document_index 不受影响。
- */
-const migrateResearchDocumentFtsToDocumentRows = (db: DrizzleDb): void => {
-  const columns = db.all<{ name: string }>(sql`PRAGMA table_info(research_document_fts)`);
-  if (columns.length === 0) return;
-  if (columns.some((column) => column.name === 'relative_path')) return;
-  db.run(sql`DROP TABLE research_document_fts`);
-};
-
-export const ensureSchema = (db: DrizzleDb): void => {
+/** 不来自 Drizzle schema 的两张运行时表（按 schema 导出会污染领域类型）。 */
+const ensureRawTables = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE TABLE IF NOT EXISTS public_market_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, retain_until INTEGER NOT NULL)`,
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS public_market_entries_retention_idx ON public_market_entries (retain_until)`,
   );
-  migrateDecisionReviewsToSingleTable(db);
-  migrateResearchDocumentFtsToDocumentRows(db);
-  db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
-    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
-    subject_id TEXT NOT NULL, stock_id TEXT, content_json TEXT NOT NULL,
-    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-  )`);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS decision_reviews_account_subject_unique ON decision_reviews (account_id, subject_kind, subject_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS decision_reviews_account_time_idx ON decision_reviews (account_id, updated_at, id)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS research_document_index (
-      id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, source_url TEXT, source_status TEXT,
-      published_at INTEGER, observed_at INTEGER, imported_at INTEGER NOT NULL, tags TEXT NOT NULL,
-      stock_codes TEXT NOT NULL DEFAULT '[]',
-      vault_id TEXT NOT NULL, relative_path TEXT NOT NULL, attachment_paths TEXT NOT NULL,
-      content_hash TEXT NOT NULL, excerpt TEXT, file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL,
-      availability TEXT NOT NULL, diagnostic TEXT
-    )
-  `);
-  db.run(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_document_index_vault_path_unique ON research_document_index (vault_id, relative_path)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_document_index_published_idx ON research_document_index (published_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS research_document_index_observed_idx ON research_document_index (observed_at)`,
-  );
-  ensureColumn(db, 'research_document_index', 'stock_codes', "TEXT NOT NULL DEFAULT '[]'");
-  // FTS5 是可重建投影，不是权威业务表；旧 SQLite/构建不支持时保留 metadata 降级。
-  try {
-    db.run(
-      sql`CREATE VIRTUAL TABLE IF NOT EXISTS research_document_fts USING fts5(document_id UNINDEXED, content_hash UNINDEXED, title, tags, relative_path, excerpt, body, tokenize='unicode61')`,
-    );
-  } catch {
-    // searchCapability() 会检测到虚表不可用并返回 metadata。
-  }
   db.run(sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -205,616 +153,55 @@ export const ensureSchema = (db: DrizzleDb): void => {
       details_json TEXT NOT NULL
     )
   `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS signal_observations (
-      source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL,
-      close_price REAL, return_pct REAL, max_favorable_excursion_pct REAL,
-      max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
-      benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
-      unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
-      attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
-      next_attempt_at INTEGER, last_error_kind TEXT,
-      PRIMARY KEY (source_kind, source_id, horizon)
-    ) WITHOUT ROWID
-  `);
+};
+
+/** 建表 DDL 由 src/schema 生成（bun run schema:ddl），这里是唯一执行入口。 */
+const runSchemaTables = (db: DrizzleDb): void => {
+  for (const statement of SCHEMA_TABLES) db.run(sql.raw(statement));
+};
+
+/** 索引放在补列/迁移之后建，索引列可能是迁移补上的。 */
+const runSchemaIndexes = (db: DrizzleDb): void => {
+  for (const statement of SCHEMA_INDEXES) db.run(sql.raw(statement));
+};
+
+export const ensureSchema = (db: DrizzleDb): void => {
+  ensureRawTables(db);
+  runSchemaTables(db);
+
+  migrateDecisionReviewsToSingleTable(db);
+
   ensureColumn(db, 'signal_observations', 'due_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'signal_observations', 'last_attempt_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'next_attempt_at', 'INTEGER');
   ensureColumn(db, 'signal_observations', 'last_error_kind', 'TEXT');
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS signal_observations_due_idx ON signal_observations (status, due_at, next_attempt_at)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS chat_sessions (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS chat_sessions_account_updated_idx
-    ON chat_sessions (account_id, updated_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      parts TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS chat_messages_session_created_idx
-    ON chat_messages (session_id, created_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      initial_capital REAL NOT NULL,
-      -- DEFAULT 0 只为兼容绕过 repo 的历史/测试插入；应用写路径始终写入真实余额，
-      -- 真正的旧库没有该列，由 migrateAccountCashBalance 按历史账本回填。
-      cash_balance REAL NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stocks (
-      id TEXT PRIMARY KEY,
-      code TEXT NOT NULL,
-      exchange TEXT NOT NULL,
-      name TEXT NOT NULL,
-      industry TEXT,
-      name_source TEXT NOT NULL DEFAULT 'manual',
-      name_updated_at INTEGER,
-      updated_at INTEGER NOT NULL DEFAULT 0
-    )
-  `);
+
   migrateStockProvenanceColumns(db);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS stocks_code_exchange_unique
-    ON stocks (code, exchange)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_universe_memberships (
-      source TEXT NOT NULL,
-      coverage TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      observed_name TEXT NOT NULL,
-      listing_status TEXT NOT NULL,
-      state TEXT NOT NULL,
-      first_seen_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      missing_since INTEGER,
-      last_sync_id TEXT NOT NULL,
-      metadata TEXT,
-      CONSTRAINT stock_universe_memberships_pk PRIMARY KEY (source, coverage, stock_id)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS stock_universe_memberships_coverage_state_idx
-    ON stock_universe_memberships (coverage, state, stock_id)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS stock_universe_memberships_stock_idx
-    ON stock_universe_memberships (stock_id)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_universe_sync_runs (
-      id TEXT PRIMARY KEY,
-      source TEXT NOT NULL,
-      coverage TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      finished_at INTEGER,
-      observed_at INTEGER,
-      reported_total INTEGER,
-      observed_count INTEGER NOT NULL DEFAULT 0,
-      created_stocks INTEGER NOT NULL DEFAULT 0,
-      updated_stocks INTEGER NOT NULL DEFAULT 0,
-      reactivated INTEGER NOT NULL DEFAULT 0,
-      marked_missing INTEGER NOT NULL DEFAULT 0,
-      error_kind TEXT,
-      error_message TEXT
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS stock_universe_sync_runs_source_coverage_finished_idx
-    ON stock_universe_sync_runs (source, coverage, finished_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS sector_catalog_entries (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      source TEXT NOT NULL,
-      vendor_code TEXT NOT NULL,
-      name TEXT NOT NULL,
-      state TEXT NOT NULL,
-      first_seen_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      retired_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS sector_catalog_entries_vendor_unique
-    ON sector_catalog_entries (source, kind, vendor_code)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_catalog_entries_kind_state_idx
-    ON sector_catalog_entries (kind, state)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS sector_memberships (
-      sector_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      source TEXT NOT NULL,
-      state TEXT NOT NULL,
-      member_status TEXT NOT NULL,
-      first_seen_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      missing_since INTEGER,
-      last_sync_id TEXT NOT NULL,
-      CONSTRAINT sector_memberships_pk PRIMARY KEY (sector_id, stock_id)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_memberships_stock_state_idx
-    ON sector_memberships (stock_id, state)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_memberships_sector_state_idx
-    ON sector_memberships (sector_id, state)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS sector_change_events (
-      seq INTEGER PRIMARY KEY AUTOINCREMENT,
-      sector_id TEXT NOT NULL,
-      stock_id TEXT,
-      kind TEXT NOT NULL,
-      occurred_at INTEGER NOT NULL,
-      sync_id TEXT NOT NULL,
-      previous_value TEXT,
-      next_value TEXT
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_change_events_sector_idx
-    ON sector_change_events (sector_id, seq)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_change_events_stock_idx
-    ON sector_change_events (stock_id, seq)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS sector_sync_runs (
-      id TEXT PRIMARY KEY,
-      source TEXT NOT NULL,
-      status TEXT NOT NULL,
-      applied_at INTEGER NOT NULL,
-      observed_sectors INTEGER NOT NULL DEFAULT 0,
-      created_sectors INTEGER NOT NULL DEFAULT 0,
-      renamed_sectors INTEGER NOT NULL DEFAULT 0,
-      retired_sectors INTEGER NOT NULL DEFAULT 0,
-      observed_stocks INTEGER NOT NULL DEFAULT 0,
-      created_memberships INTEGER NOT NULL DEFAULT 0,
-      removed_memberships INTEGER NOT NULL DEFAULT 0,
-      reactivated_memberships INTEGER NOT NULL DEFAULT 0,
-      failures_json TEXT NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS sector_sync_runs_source_applied_idx
-    ON sector_sync_runs (source, applied_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS limit_up_ladder_snapshots (
-      date TEXT NOT NULL,
-      source TEXT NOT NULL,
-      total INTEGER NOT NULL,
-      max_level INTEGER NOT NULL,
-      levels_json TEXT NOT NULL,
-      warnings_json TEXT NOT NULL,
-      as_of INTEGER NOT NULL,
-      PRIMARY KEY (date, source)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS limit_up_ladder_snapshots_source_date_idx
-    ON limit_up_ladder_snapshots (source, date)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS limit_up_ladder_samples (
-      id TEXT PRIMARY KEY,
-      trading_date TEXT NOT NULL,
-      source TEXT NOT NULL,
-      sampled_at INTEGER NOT NULL,
-      total INTEGER NOT NULL,
-      max_level INTEGER NOT NULL,
-      levels_json TEXT NOT NULL,
-      warnings_json TEXT NOT NULL,
-      as_of INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS limit_up_ladder_samples_source_date_sampled_idx
-    ON limit_up_ladder_samples (source, trading_date, sampled_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS market_snapshot_batches (
-      id TEXT PRIMARY KEY,
-      coverage TEXT NOT NULL,
-      trading_date TEXT NOT NULL,
-      sampled_at INTEGER NOT NULL,
-      source TEXT NOT NULL,
-      fetched_at INTEGER NOT NULL,
-      observed_at INTEGER,
-      data_as_of INTEGER,
-      completeness_json TEXT NOT NULL,
-      gaps_json TEXT NOT NULL,
-      items_json TEXT NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS market_snapshot_batches_coverage_sampled_idx
-    ON market_snapshot_batches (coverage, sampled_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS market_room_events (
-      id TEXT PRIMARY KEY,
-      trading_date TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      sector_id TEXT NOT NULL,
-      sector_kind TEXT NOT NULL,
-      vendor_code TEXT NOT NULL,
-      sector_name TEXT NOT NULL,
-      sampled_at INTEGER NOT NULL,
-      previous_sampled_at INTEGER,
-      status TEXT NOT NULL,
-      thresholds_json TEXT NOT NULL,
-      evidence_json TEXT NOT NULL,
-      verification_json TEXT NOT NULL,
-      recorded_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS market_room_events_identity_unique
-    ON market_room_events (trading_date, kind, sector_id, sampled_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS market_room_events_date_time_idx
-    ON market_room_events (trading_date, sampled_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS market_room_events_sector_time_idx
-    ON market_room_events (sector_id, sampled_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS limit_up_board_history (
-      trade_date TEXT NOT NULL,
-      source TEXT NOT NULL,
-      status TEXT NOT NULL,
-      data_as_of INTEGER NOT NULL,
-      published_at INTEGER NOT NULL,
-      fetched_at INTEGER NOT NULL,
-      vintage TEXT NOT NULL,
-      facts_json TEXT NOT NULL,
-      missing_fields_json TEXT NOT NULL,
-      warnings_json TEXT NOT NULL,
-      recorded_at INTEGER NOT NULL,
-      PRIMARY KEY (trade_date, source, recorded_at)
-    ) WITHOUT ROWID
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS limit_up_board_history_source_date_idx
-    ON limit_up_board_history (source, trade_date)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS holdings (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      quantity INTEGER NOT NULL,
-      available_quantity INTEGER NOT NULL,
-      avg_cost REAL NOT NULL,
-      opened_at INTEGER NOT NULL,
-      closed_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS holdings_account_stock_unique
-    ON holdings (account_id, stock_id)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS trades (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      side TEXT NOT NULL,
-      quantity INTEGER NOT NULL,
-      price REAL NOT NULL,
-      fee REAL NOT NULL,
-      executed_at INTEGER NOT NULL,
-      source TEXT NOT NULL,
-      advice_id TEXT,
-        strategy_version_id TEXT,
-      created_at INTEGER NOT NULL
-    )
-  `);
+
   ensureColumn(db, 'trades', 'advice_id', 'TEXT');
   ensureColumn(db, 'trades', 'strategy_version_id', 'TEXT');
   // §6：holding_cash_adjustments + portfolio_cash_flows + portfolio_corporate_actions
   // 合并为 account_ledger_entries（entry_kind 区分事实类型）；旧表不再创建、不 DROP。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS account_ledger_entries (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      entry_kind TEXT NOT NULL,
-      occurred_at INTEGER NOT NULL,
-      amount REAL,
-      currency TEXT,
-      holding_id TEXT,
-      stock_id TEXT,
-      quantity_delta INTEGER,
-      flow_kind TEXT,
-      action_kind TEXT,
-      ratio REAL,
-      cash_per_share REAL,
-      source TEXT,
-      note TEXT,
-      created_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS account_ledger_entries_account_occurred_idx
-    ON account_ledger_entries (account_id, occurred_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS account_ledger_entries_stock_occurred_idx
-    ON account_ledger_entries (stock_id, occurred_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS account_ledger_entries_kind_idx
-    ON account_ledger_entries (entry_kind)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS portfolio_performance_snapshots (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      from_at INTEGER NOT NULL,
-      to_at INTEGER NOT NULL,
-      currency TEXT NOT NULL,
-      input_fingerprint TEXT NOT NULL,
-      calculated_at INTEGER NOT NULL,
-      data_as_of INTEGER,
-      performance_json TEXT NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_range_fingerprint_unique
-    ON portfolio_performance_snapshots (account_id, from_at, to_at, input_fingerprint)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_calculated_idx
-    ON portfolio_performance_snapshots (account_id, calculated_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_range_idx
-    ON portfolio_performance_snapshots (account_id, from_at, to_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS advices (
-      id TEXT PRIMARY KEY,
-      subject_kind TEXT NOT NULL,
-      subject_id TEXT NOT NULL,
-      stock_name TEXT,
-      decision TEXT NOT NULL,
-      confidence REAL NOT NULL,
-      horizon TEXT NOT NULL,
-      entry_price REAL,
-      entry_price_low REAL,
-      entry_price_high REAL,
-      target_position_pct REAL,
-      target_price REAL,
-      stop_loss REAL,
-      reasoning TEXT NOT NULL,
-      risks TEXT NOT NULL,
-      disclaimers TEXT NOT NULL,
-      source_tool TEXT,
-      source_workflow TEXT,
-      based_on TEXT NOT NULL,
-      valid_from INTEGER NOT NULL,
-      valid_until INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    )
-  `);
+
   migrateAdviceColumns(db);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS advices_subject_idx ON advices (subject_kind, subject_id)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS advices_created_at_idx ON advices (created_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS advice_outcomes (
-      advice_id TEXT PRIMARY KEY,
-      trade_ids TEXT NOT NULL DEFAULT '[]',
-      outcome TEXT NOT NULL,
-      pnl REAL,
-      benchmark_pnl REAL,
-      holding_hours REAL,
-      notes TEXT,
-      recorded_at INTEGER NOT NULL
-    )
-  `);
+
   ensureColumn(db, 'advice_outcomes', 'trade_ids', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(db, 'advice_outcomes', 'holding_hours', 'REAL');
   ensureColumn(db, 'advice_outcomes', 'notes', 'TEXT');
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS advice_outcomes_recorded_at_idx ON advice_outcomes (recorded_at)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS price_snapshots (
-      stock_id TEXT NOT NULL,
-      observed_at INTEGER NOT NULL,
-      fetched_at INTEGER NOT NULL,
-      timestamp_source TEXT NOT NULL,
-      open REAL NOT NULL,
-      high REAL NOT NULL,
-      low REAL NOT NULL,
-      close REAL NOT NULL,
-      volume INTEGER NOT NULL,
-      amount REAL,
-      turnover_rate REAL,
-      prev_close REAL,
-      total_shares REAL,
-      float_shares REAL,
-      total_market_cap REAL,
-      float_market_cap REAL,
-      pe_dynamic REAL,
-      pe_ttm REAL,
-      pe_static REAL,
-      ps_ttm REAL,
-      pb REAL,
-      source TEXT NOT NULL,
-      CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
-    )
-  `);
+
   migratePriceSnapshotTimeColumns(db);
   migratePriceSnapshotPrevCloseColumn(db);
   migratePriceSnapshotAmountColumns(db);
   migratePriceSnapshotValuationColumns(db);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS price_snapshots_stock_observed_idx
-    ON price_snapshots (stock_id, observed_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS daily_bars (
-      stock_id TEXT NOT NULL,
-      date INTEGER NOT NULL,
-      open REAL NOT NULL,
-      high REAL NOT NULL,
-      low REAL NOT NULL,
-      close REAL NOT NULL,
-      volume INTEGER NOT NULL,
-      adj_factor REAL NOT NULL,
-      adjustment TEXT NOT NULL DEFAULT 'raw',
-      source_adj_factor REAL,
-      source TEXT NOT NULL,
-      CONSTRAINT daily_bars_pk PRIMARY KEY (stock_id, date)
-    )
-  `);
+
   migrateDailyBarAdjustmentColumns(db);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS minute_bars (
-      stock_id TEXT NOT NULL,
-      interval TEXT NOT NULL,
-      ended_at INTEGER NOT NULL,
-      open REAL NOT NULL,
-      high REAL NOT NULL,
-      low REAL NOT NULL,
-      close REAL NOT NULL,
-      volume INTEGER NOT NULL,
-      amount REAL,
-      adjustment TEXT NOT NULL,
-      source TEXT NOT NULL,
-      fetched_at INTEGER NOT NULL,
-      completeness TEXT NOT NULL,
-      CONSTRAINT minute_bars_pk PRIMARY KEY (stock_id, interval, ended_at)
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS minute_bars_stock_interval_ended_idx
-    ON minute_bars (stock_id, interval, ended_at)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS minute_bars_ended_idx ON minute_bars (ended_at)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS adjustment_factors (
-      stock_id TEXT NOT NULL, ex_date INTEGER NOT NULL, factor REAL NOT NULL,
-      dividend_per_share REAL NOT NULL, per_share_bonus REAL NOT NULL,
-      allotment_ratio REAL NOT NULL, allotment_price REAL NOT NULL, source TEXT NOT NULL,
-      PRIMARY KEY (stock_id, ex_date)
-    ) WITHOUT ROWID
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategies (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL,
-      owner TEXT NOT NULL,
-      status TEXT NOT NULL,
-      current_version_id TEXT,
-      schedule_cron TEXT,
-      last_scheduled_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
+
   ensureColumn(db, 'strategies', 'schedule_cron', 'TEXT');
   ensureColumn(db, 'strategies', 'last_scheduled_at', 'INTEGER');
-  db.run(sql`CREATE INDEX IF NOT EXISTS strategies_status_idx ON strategies (status)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS strategies_owner_idx ON strategies (owner)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_versions (
-      id TEXT PRIMARY KEY,
-      strategy_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      definition_json TEXT NOT NULL,
-      definition_hash TEXT NOT NULL,
-      parent_version_id TEXT,
-      change_summary TEXT,
-      fact_references_json TEXT,
-      agent_trace_json TEXT,
-      validation_status TEXT NOT NULL,
-      validation_errors_json TEXT NOT NULL,
-      published_at INTEGER,
-      created_at INTEGER NOT NULL
-    )
-  `);
+
   migrateStrategyVersionAuditColumns(db);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_strategy_version_unique
-    ON strategy_versions (strategy_id, version)
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_versions_hash_idx ON strategy_versions (definition_hash)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_runs (
-      id TEXT PRIMARY KEY,
-      strategy_id TEXT NOT NULL,
-      strategy_version_id TEXT NOT NULL,
-      mode TEXT NOT NULL,
-      coverage TEXT NOT NULL,
-      data_as_of INTEGER NOT NULL,
-      started_at INTEGER NOT NULL,
-      finished_at INTEGER,
-      status TEXT NOT NULL,
-      scope TEXT NOT NULL DEFAULT 'operational',
-      input_snapshot_json TEXT NOT NULL,
-      provider_statuses_json TEXT NOT NULL,
-      provider_coverage_json TEXT,
-      summary_json TEXT,
-      results_json TEXT,
-      publication_json TEXT,
-      publication_status TEXT,
-      error TEXT
-    )
-  `);
+
   ensureColumn(db, 'strategy_runs', 'scope', "TEXT NOT NULL DEFAULT 'operational'");
   ensureColumn(db, 'strategy_runs', 'provider_coverage_json', 'TEXT');
   ensureColumn(db, 'strategy_runs', 'results_json', 'TEXT');
@@ -843,127 +230,10 @@ export const ensureSchema = (db: DrizzleDb): void => {
     )
     WHERE publication_status IS NULL
   `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_runs_strategy_started_idx ON strategy_runs (strategy_id, started_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_runs_status_started_idx ON strategy_runs (status, started_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_runs_published_current_idx ON strategy_runs (strategy_id, scope, publication_status, status, started_at)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_signals (
-      id TEXT PRIMARY KEY,
-      strategy_id TEXT NOT NULL,
-      strategy_version_id TEXT NOT NULL,
-      run_id TEXT NOT NULL,
-      rule_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      ts INTEGER NOT NULL,
-      score REAL NOT NULL,
-      direction TEXT NOT NULL,
-      evidence_json TEXT NOT NULL,
-      evaluation_snapshot_json TEXT NOT NULL
-    )
-  `);
-  db.run(sql`DROP INDEX IF EXISTS strategy_signals_identity_unique`);
-  db.run(sql`DROP INDEX IF EXISTS strategy_signals_run_identity_unique`);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS strategy_signals_run_event_unique
-    ON strategy_signals (run_id, rule_id, stock_id, ts)
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_signals_run_ts_idx ON strategy_signals (run_id, ts)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
-      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      result_availability TEXT NOT NULL, spec_json TEXT NOT NULL, spec_hash TEXT NOT NULL,
-      input_fingerprint TEXT NOT NULL, evaluator_json TEXT NOT NULL,
-      gate_audit_json TEXT NOT NULL, metrics_json TEXT, error TEXT,
-      created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_strategy_created_idx
-    ON strategy_backtest_runs (strategy_id, created_at)
-  `);
-  const backtestColumns = new Set(
-    db.all<{ name: string }>(sql`PRAGMA table_info(strategy_backtest_runs)`).map((row) => row.name),
-  );
-  if (backtestColumns.has('evaluation_session_id')) {
-    db.run(sql`DROP INDEX IF EXISTS strategy_backtest_runs_session_idx`);
-    db.run(sql`ALTER TABLE strategy_backtest_runs DROP COLUMN evaluation_session_id`);
-  }
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id TEXT PRIMARY KEY,
-      channel TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      result TEXT NOT NULL,
-      error_message TEXT,
-      advice_id TEXT,
-      tactic_signal_id TEXT,
-      sent_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS notifications_advice_idx ON notifications (advice_id)`);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS notifications_signal_idx ON notifications (tactic_signal_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS notifications_result_idx ON notifications (result, sent_at)`,
-  );
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS alert_plans (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
-      watchlist_id TEXT NOT NULL, rules TEXT NOT NULL, logic TEXT NOT NULL,
-      trigger_mode TEXT NOT NULL, priority TEXT, cooldown_minutes INTEGER NOT NULL,
-      daily_notification_limit INTEGER NOT NULL, notify_on_recovery INTEGER NOT NULL,
-      enabled INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS alert_plans_watchlist_idx ON alert_plans (watchlist_id)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS alert_plans_enabled_idx ON alert_plans (enabled)`);
+
   // v0.6 起：盯盘触发。v0.7 增 rule_id / trigger_type / priority / delivery_status /
   // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
   // （§3.4 / §3.7）。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watch_triggers (
-      id TEXT PRIMARY KEY,
-      alert_plan_id TEXT,
-      pool_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      rule_kind TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      evidence TEXT NOT NULL,
-      quote_close REAL,
-      quote_ts INTEGER,
-      notified INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      rule_id TEXT NOT NULL DEFAULT '',
-      trigger_type TEXT NOT NULL DEFAULT 'triggered',
-      priority TEXT NOT NULL DEFAULT 'normal',
-      delivery_status TEXT NOT NULL DEFAULT 'not-requested',
-      notification_id TEXT,
-      eval_snapshot TEXT NOT NULL DEFAULT '{}',
-      feedback TEXT,
-      feedback_at INTEGER,
-      event_id TEXT,
-      delivery_attempts INTEGER,
-      last_delivery_attempt_at INTEGER,
-      delivery_completed_at INTEGER
-    )
-  `);
   migrateStrategyAlertTriggerColumns(db);
   migrateRuoTriggerColumns(db);
   const watchDeliveryColumns = new Set(
@@ -978,195 +248,24 @@ export const ensureSchema = (db: DrizzleDb): void => {
   if (!watchDeliveryColumns.has('delivery_completed_at')) {
     db.run(sql`ALTER TABLE watch_triggers ADD COLUMN delivery_completed_at INTEGER`);
   }
-  // 重建索引（列从 rule_kind 改到 rule_id）
-  db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_ts_idx ON watch_triggers (pool_id, stock_id, rule_id, created_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_ts_idx ON watch_triggers (pool_id, created_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_event_idx ON watch_triggers (pool_id, stock_id, rule_id, event_id, created_at)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_created_id_idx ON watch_triggers (created_at, id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_stock_created_id_idx ON watch_triggers (stock_id, created_at, id)`,
-  );
-  // v0.7 起：边沿状态机表（§3.5）
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watch_rule_states (
-      alert_plan_id TEXT,
-      pool_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      rule_id TEXT NOT NULL,
-      active INTEGER NOT NULL,
-      first_triggered_at INTEGER,
-      last_evaluated_at INTEGER NOT NULL,
-      last_value REAL,
-      last_recovered_at INTEGER,
-      PRIMARY KEY (pool_id, stock_id, rule_id)
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`);
+
   migrateAlertPlanReferenceColumns(db);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watchlists (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL,
-      membership_policy TEXT NOT NULL, enabled INTEGER NOT NULL,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_enabled_idx ON watchlists (enabled)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_kind_idx ON watchlists (kind)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS strategy_watchlist_subscriptions (
-      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, watchlist_id TEXT NOT NULL,
-      source_key TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      cancelled_at INTEGER, cancelled_by TEXT, investment_binding_json TEXT
-    )
-  `);
+
   ensureColumn(db, 'strategy_watchlist_subscriptions', 'investment_binding_json', 'TEXT');
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_strategy_status_idx
-    ON strategy_watchlist_subscriptions (strategy_id, status)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_watchlist_status_idx
-    ON strategy_watchlist_subscriptions (watchlist_id, status)
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_active_unique
-    ON strategy_watchlist_subscriptions (strategy_id, watchlist_id) WHERE status = 'active'
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watchlist_members (
-      id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL, archived_at INTEGER
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_members_watchlist_stock_unique
-    ON watchlist_members (watchlist_id, stock_id)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS watchlist_members_watchlist_stage_idx
-    ON watchlist_members (watchlist_id, stage)
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS watchlist_member_sources (
-      id TEXT PRIMARY KEY, member_id TEXT NOT NULL, kind TEXT NOT NULL, source_key TEXT NOT NULL,
-      source_id TEXT, source_version_id TEXT, sync_run_id TEXT, owner_user_id TEXT, import_batch_id TEXT, reason TEXT NOT NULL,
-      score REAL, rank INTEGER, status TEXT NOT NULL, evidence_json TEXT NOT NULL,
-      data_as_of INTEGER, valid_from INTEGER NOT NULL, valid_until INTEGER
-    )
-  `);
+
   ensureColumn(db, 'watchlist_member_sources', 'owner_user_id', 'TEXT');
   ensureColumn(db, 'watchlist_member_sources', 'import_batch_id', 'TEXT');
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS watchlist_sources_member_status_idx
-    ON watchlist_member_sources (member_id, status)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS watchlist_sources_key_status_idx
-    ON watchlist_member_sources (source_key, status)
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sources_current_unique
-    ON watchlist_member_sources (member_id, source_key) WHERE status <> 'ended'
-  `);
+
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：workflow 审计
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS workflow_runs (
-      id TEXT PRIMARY KEY,
-      workflow_name TEXT NOT NULL,
-      mode TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      finished_at INTEGER,
-      input_summary TEXT,
-      output_summary TEXT,
-      provider_statuses TEXT NOT NULL DEFAULT '[]',
-      error TEXT
-    )
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS workflow_runs_name_started_idx ON workflow_runs (workflow_name, started_at)`,
-  );
-  db.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS reports (
-      id TEXT PRIMARY KEY,
-      version INTEGER NOT NULL DEFAULT 1,
-      supersedes_report_id TEXT,
-      kind TEXT NOT NULL,
-      scope_key TEXT NOT NULL,
-      scope_json TEXT NOT NULL,
-      period_start TEXT NOT NULL,
-      period_end TEXT NOT NULL,
-      title TEXT NOT NULL,
-      generated_at INTEGER NOT NULL,
-      data_as_of INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      sections_json TEXT NOT NULL,
-      evidence_json TEXT NOT NULL,
-      missing_dimensions_json TEXT NOT NULL DEFAULT '[]',
-      delivery_status TEXT NOT NULL DEFAULT 'not-requested',
-      notification_policy TEXT,
-      watchlist_facts_snapshot TEXT,
-      decision_review_fingerprint TEXT,
-      delivery_attempt_id TEXT,
-      workflow_run_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
   ensureColumn(db, 'reports', 'version', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'reports', 'supersedes_report_id', 'TEXT');
   ensureColumn(db, 'reports', 'delivery_attempt_id', 'TEXT');
   ensureColumn(db, 'reports', 'notification_policy', 'TEXT');
   ensureColumn(db, 'reports', 'watchlist_facts_snapshot', 'TEXT');
   ensureColumn(db, 'reports', 'decision_review_fingerprint', 'TEXT');
-  db.run(sql`DROP INDEX IF EXISTS reports_period_unique`);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS reports_period_version_unique
-    ON reports (kind, scope_key, period_start, period_end, version)
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS reports_period_end_idx ON reports (period_end)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS reports_kind_period_end_idx ON reports (kind, period_end)`);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS reports_status_period_end_idx ON reports (status, period_end)`,
-  );
-  db.run(sql`CREATE INDEX IF NOT EXISTS reports_workflow_run_idx ON reports (workflow_run_id)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS trading_plans (
-      version_id TEXT PRIMARY KEY,
-      plan_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      account_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      valid_from INTEGER NOT NULL,
-      valid_until INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      plan_json TEXT NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS trading_plans_plan_version_unique
-    ON trading_plans (plan_id, version)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS trading_plans_account_stock_status_idx
-    ON trading_plans (account_id, stock_id, status)
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS trading_plans_created_at_idx ON trading_plans (created_at)`,
-  );
+  // SQLite 在 DROP COLUMN 之后的补列会把列名当默认值写入存量行，这里强制回填整数版本。
+  db.run(sql`UPDATE reports SET version = 1 WHERE typeof(version) <> 'integer'`);
+
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
   migrateLegacyLedgerEntries(db);
@@ -1187,6 +286,16 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateStrategySignalIds(db);
   // 逐信号 JSON 的压缩是负收益，回退为明文（一次性）。
   migrateStrategySignalJsonToPlain(db);
+
+  // 严格回测已下线，历史库残留的空表直接清掉。
+  db.run(sql`DROP TABLE IF EXISTS strategy_backtest_runs`);
+
+  // 旧版索引列名/唯一性已变：先删除再按 schema 重建。
+  db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
+  db.run(sql`DROP INDEX IF EXISTS reports_period_unique`);
+  db.run(sql`DROP INDEX IF EXISTS strategy_signals_identity_unique`);
+  db.run(sql`DROP INDEX IF EXISTS strategy_signals_run_identity_unique`);
+  runSchemaIndexes(db);
 };
 
 /**
@@ -2500,7 +1609,6 @@ export const createDrizzleRepos = (
     sqlite.close();
     throw error;
   }
-  const researchIndex = new DrizzleResearchIndexRepository(db);
   const writes = new RepositoryWriteScope();
   const repos: RepositoryRegistry = {
     publicMarket: new DrizzlePublicMarketStore(db),
@@ -2531,7 +1639,6 @@ export const createDrizzleRepos = (
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db, writes),
-    strategyBacktest: new DrizzleStrategyBacktestRepository(db, writes),
     strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
@@ -2542,9 +1649,9 @@ export const createDrizzleRepos = (
     // v0.7 起：边沿状态机
     watchRuleState: new DrizzleWatchRuleStateRepository(db, writes),
     // ruo 迁移起
-    researchIndex,
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),
+    adviceTracking: new DrizzleAdviceTrackingRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

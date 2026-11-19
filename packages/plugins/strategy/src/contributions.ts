@@ -1,12 +1,5 @@
 import type { ToolContributions } from '@luoome/toolkit';
 import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
-import { runStrategyBacktestTool } from './tools/run-strategy-backtest.js';
-import {
-  createStrictStrategyBacktestTool,
-  executeStrictStrategyBacktestTool,
-  getStrictStrategyBacktestTool,
-  listStrictStrategyBacktestsTool,
-} from './tools/strategy-backtest.js';
 import {
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,
@@ -34,27 +27,9 @@ export const strategyToolContributions = {
     agent: true,
     dependencies: [],
   },
-  run_strategy_backtest: {
-    owner: 'business.strategy',
-    tool: runStrategyBacktestTool,
-    agent: true,
-    dependencies: [],
-  },
   compare_strategy_definitions: {
     owner: 'shared-query',
     tool: compareStrategyDefinitionsTool,
-    agent: false,
-  },
-  create_strict_strategy_backtest: {
-    execution: 'p3',
-    owner: 'business.strategy-execution',
-    tool: createStrictStrategyBacktestTool,
-    agent: false,
-  },
-  execute_strict_strategy_backtest: {
-    execution: 'p3',
-    owner: 'business.strategy-execution',
-    tool: executeStrictStrategyBacktestTool,
     agent: false,
   },
   generate_strategy_insight: {
@@ -67,16 +42,6 @@ export const strategyToolContributions = {
   generate_strategy_version_proposal: {
     owner: 'business.strategy',
     tool: generateStrategyVersionProposalTool,
-    agent: false,
-  },
-  get_strict_strategy_backtest: {
-    owner: 'shared-query',
-    tool: getStrictStrategyBacktestTool,
-    agent: false,
-  },
-  list_strict_strategy_backtests: {
-    owner: 'shared-query',
-    tool: listStrictStrategyBacktestsTool,
     agent: false,
   },
   propose_strategy_version_draft: {

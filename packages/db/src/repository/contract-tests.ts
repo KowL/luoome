@@ -8,7 +8,6 @@ import {
   buildLimitUpLadderSample,
   type ChatMessage,
   type ChatSession,
-  CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type Holding,
   InvariantError,
@@ -26,7 +25,6 @@ import {
   quantity,
   type Report,
   type RepositoryRegistry,
-  type ResearchDocumentIndex,
   reconcileCashBalance,
   type SectorCatalogObservation,
   type SectorKind,
@@ -41,14 +39,9 @@ import {
   type StrategySignal,
   type StrategyVersion,
   type StrategyWatchlistSubscription,
-  type StrictBacktestGateAudit,
-  type StrictBacktestRun,
-  type StrictBacktestSpec,
   signalObservationId,
   stockCode,
   strategyDefinitionHash,
-  strictBacktestHash,
-  strictBacktestSpecHash,
   type Trade,
   type TradingPlan,
   type Watchlist,
@@ -57,7 +50,6 @@ import {
   type WatchTrigger,
   type WorkflowRun,
 } from '@luoome/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
  * 仓储契约测试套件：Drizzle 实现与 in-memory 实现必须满足同一组行为。
@@ -575,26 +567,6 @@ export const makeWatchTrigger = (
   ...overrides,
 });
 
-const makeResearchDocument = (
-  id: string,
-  overrides: Partial<ResearchDocumentIndex> = {},
-): ResearchDocumentIndex => ({
-  id: `doc_${id}`,
-  title: id,
-  kind: 'report',
-  importedAt: T1,
-  tags: [],
-  stockCodes: [],
-  vaultId: 'vault-test',
-  relativePath: `Research/${id}.md`,
-  attachmentPaths: [],
-  contentHash: 'b'.repeat(64),
-  fileModifiedAt: T1,
-  indexedAt: T1,
-  availability: 'available',
-  ...overrides,
-});
-
 export const makeWorkflowRun = (id: string, overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id,
   workflowName: 'post-market-data',
@@ -650,10 +622,18 @@ export const makeReport = (id: string, overrides: Partial<Report> = {}): Report 
 
 // ---------- 契约套件 ----------
 
+/** 测试 API 由调用方注入：bun test 下 helper 模块直接 import 'vitest' 会拿到真实包而非兼容层。 */
+export type ContractTestApi = Pick<
+  typeof import('vitest'),
+  'describe' | 'it' | 'expect' | 'beforeEach' | 'afterEach'
+>;
+
 export const registerRepositoryContractTests = (
   label: string,
   factory: () => ContractHandle,
+  api: ContractTestApi,
 ): void => {
+  const { describe, it, expect, beforeEach, afterEach } = api;
   describe(`repository contract [${label}]`, () => {
     let handle: ContractHandle;
     let repos: RepositoryRegistry;
@@ -4379,133 +4359,6 @@ export const registerRepositoryContractTests = (
       });
     });
 
-    describe('ResearchIndexRepository', () => {
-      it('document-only upsert 后按 kind/tags/stockCode 与正文搜索', async () => {
-        const summary = await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'complete',
-          documents: [
-            makeResearchDocument('report', {
-              title: '库存周期见底',
-              tags: ['周期'],
-              stockCodes: ['600519.SH'],
-              excerpt: '渠道库存下降',
-            }),
-            makeResearchDocument('article', {
-              kind: 'article',
-              title: '行业跟踪',
-              stockCodes: ['000858.SZ'],
-              contentHash: 'c'.repeat(64),
-            }),
-          ],
-          contents: { doc_report: '经销商库存连续三个月下降，价格企稳。' },
-          seenDocumentIds: new Set(['doc_report', 'doc_article']),
-          indexedAt: T2,
-        });
-        expect(summary).toMatchObject({ added: 2, updated: 0, unchanged: 0, missing: 0 });
-        expect(repos.researchIndex.searchCapability()).toBe('fts');
-        expect((await repos.researchIndex.findDocument('doc_report'))?.stockCodes).toEqual([
-          '600519.SH',
-        ]);
-        expect(await repos.researchIndex.listStockCodes()).toEqual(['000858.SZ', '600519.SH']);
-
-        const all = await repos.researchIndex.listDocuments({});
-        expect(all.map((document) => document.id)).toEqual(['doc_article', 'doc_report']);
-        expect(
-          (await repos.researchIndex.listDocuments({ kind: 'article' })).map(
-            (document) => document.id,
-          ),
-        ).toEqual(['doc_article']);
-        expect(
-          (await repos.researchIndex.listDocuments({ stockCode: '600519.SH' })).map(
-            (document) => document.id,
-          ),
-        ).toEqual(['doc_report']);
-        expect(
-          (await repos.researchIndex.listDocuments({ tags: ['周期'] })).map(
-            (document) => document.id,
-          ),
-        ).toEqual(['doc_report']);
-
-        const hits = await repos.researchIndex.searchDocuments({ text: '库存' });
-        expect(hits.map((hit) => hit.document.id)).toEqual(['doc_report']);
-        expect(hits[0]?.snippet).toContain('库存');
-        expect(
-          (await repos.researchIndex.searchDocuments({ text: '库存', stockCode: '000858.SZ' })).map(
-            (hit) => hit.document.id,
-          ),
-        ).toEqual([]);
-        expect(await repos.researchIndex.searchDocuments({ text: '   ' })).toEqual([]);
-      });
-
-      it('完整扫描把未出现文档标记 missing、移出搜索并可保留股票代码索引', async () => {
-        await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'complete',
-          documents: [makeResearchDocument('keep'), makeResearchDocument('drop')],
-          contents: { doc_keep: 'Searchable body', doc_drop: 'will be removed' },
-          seenDocumentIds: new Set(['doc_keep', 'doc_drop']),
-          indexedAt: T1,
-        });
-        const summary = await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'complete',
-          documents: [makeResearchDocument('keep')],
-          contents: { doc_keep: 'Searchable body' },
-          seenDocumentIds: new Set(['doc_keep']),
-          indexedAt: T2,
-        });
-        expect(summary).toMatchObject({ unchanged: 1, missing: 1 });
-        expect((await repos.researchIndex.findDocument('doc_drop'))?.availability).toBe('missing');
-        expect(
-          (await repos.researchIndex.searchDocuments({ text: 'Searchable' })).map(
-            (hit) => hit.document.id,
-          ),
-        ).toEqual(['doc_keep']);
-        expect(await repos.researchIndex.listStockCodes()).toEqual([]);
-      });
-
-      it('报告 invalid/conflict 计数且不改写既有文档', async () => {
-        await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'complete',
-          documents: [
-            makeResearchDocument('valid'),
-            makeResearchDocument('bad', {
-              contentHash: 'd'.repeat(64),
-              availability: 'invalid',
-            }),
-            makeResearchDocument('clash', {
-              contentHash: 'e'.repeat(64),
-              availability: 'conflict',
-            }),
-          ],
-          contents: { doc_valid: '正常正文' },
-          seenDocumentIds: new Set(['doc_valid', 'doc_bad', 'doc_clash']),
-          indexedAt: T1,
-        });
-        const summary = await repos.researchIndex.applyIndexBatch({
-          vaultId: 'vault-test',
-          completeness: 'partial',
-          documents: [
-            makeResearchDocument('valid', {
-              title: '更新标题',
-              contentHash: 'f'.repeat(64),
-            }),
-          ],
-          contents: { doc_valid: '正常正文' },
-          seenDocumentIds: new Set(['doc_valid']),
-          indexedAt: T2,
-        });
-        expect(summary).toMatchObject({ added: 0, updated: 1, invalid: 0, conflicts: 0 });
-        expect((await repos.researchIndex.findDocument('doc_valid'))?.title).toBe('更新标题');
-        expect((await repos.researchIndex.findDocument('doc_bad'))?.availability).toBe('invalid');
-        expect((await repos.researchIndex.findDocument('doc_clash'))?.availability).toBe(
-          'conflict',
-        );
-      });
-    });
-
     describe('WorkflowRunRepository', () => {
       it('running → succeeded upsert；listRecent 按 startedAt 倒序 + 过滤', async () => {
         await repos.workflowRun.save(
@@ -4878,80 +4731,6 @@ export const registerRepositoryContractTests = (
           }),
         ).toBeNull();
         await expect(repos.report.remove(saved.id)).resolves.toBeUndefined();
-      });
-    });
-
-    describe('StrategyBacktestRepository', () => {
-      const spec: StrictBacktestSpec = {
-        schemaVersion: 1,
-        strategyId: 'strategy-1',
-        strategyVersionId: 'strategy-1-v1',
-        evaluationSessionId: 'evaluation-1',
-        from: T1,
-        to: T3,
-        initialCash: 1_000_000,
-        benchmark: { stockId: '000300.SH', datasetVersion: '000300.SH:qfq:daily:v1' },
-        execution: {
-          model: 'next-open-full-rebalance-equal-weight-v1',
-          lotSize: 100,
-          maxPositions: 20,
-        },
-        fees: {
-          model: 'ashare-fees-v1',
-          commissionBps: 2.5,
-          minimumCommission: 5,
-          sellStampDutyBps: 5,
-        },
-        slippage: { model: 'fixed-bps-at-open-v1', buyBps: 5, sellBps: 5 },
-      };
-      const gateAudit: StrictBacktestGateAudit = {
-        status: 'complete',
-        assessedAt: T2,
-        items: [
-          'pit-universe',
-          'daily-bar-revisions',
-          'fees',
-          'slippage',
-          'tradability',
-          'corporate-actions',
-          'benchmark',
-          'evaluator-code',
-        ].map((key) => ({
-          key: key as StrictBacktestGateAudit['items'][number]['key'],
-          status: 'complete' as const,
-          reason: 'fixture-complete',
-          evidenceRefs: [],
-        })),
-      };
-
-      it('保存不可变运行身份并按策略倒序查询', async () => {
-        const run: StrictBacktestRun = {
-          id: 'strict-backtest-1',
-          status: 'queued',
-          resultAvailability: 'complete',
-          spec,
-          specHash: strictBacktestSpecHash(spec),
-          inputFingerprint: strictBacktestHash('input-1'),
-          evaluator: CURRENT_STRATEGY_EVALUATOR_IDENTITY,
-          gateAudit,
-          createdAt: T1,
-        };
-        await repos.strategyBacktest.saveRun(run);
-        await repos.strategyBacktest.saveRun({ ...run, status: 'running', startedAt: T2 });
-        expect(await repos.strategyBacktest.findRunById(run.id)).toMatchObject({
-          id: run.id,
-          status: 'running',
-          inputFingerprint: run.inputFingerprint,
-        });
-        expect(await repos.strategyBacktest.listRuns({ strategyId: spec.strategyId })).toHaveLength(
-          1,
-        );
-        await expect(
-          repos.strategyBacktest.saveRun({
-            ...run,
-            inputFingerprint: strictBacktestHash('changed'),
-          }),
-        ).rejects.toThrow('immutable identity');
       });
     });
 

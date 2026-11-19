@@ -201,7 +201,7 @@ describe('分析错误提示中文化', () => {
 
 describe('行情关联深链接', () => {
   it('解析并规范化 stockId', () => {
-    expect(routeStockId('#research?stockId=002594.sz')).toBe('002594.SZ');
+    expect(routeStockId('#advice?stockId=002594.sz')).toBe('002594.SZ');
     expect(routeStockId('#holdings')).toBeNull();
     expect(routeStockId('#advice?stockId=%20')).toBeNull();
   });

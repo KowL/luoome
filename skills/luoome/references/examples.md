@@ -76,16 +76,6 @@ Use `get_advice` to read persisted advice and optional decision reviews for the 
 
 Distinguish generated Advice, user feedback and observed outcomes. State sample size and missing feedback. Dedicated calibration/statistics are available through local Web/CLI; do not invent an MCP statistics tool.
 
-## Research notes
-
-Resolve the stock first and search existing notes with `search_research_documents`. For an authorized write, show the exact title, body and stock codes before calling `save_research_document`:
-
-```json
-{"name":"save_research_document","arguments":{"target":"note","note":{"title":"Research notes","kind":"note","body":"User-approved research text","stockCodes":["600000.SH"]}}}
-```
-
-The Vault must be configured and research access enabled. Preserve source URLs and publication dates when present.
-
 ## Workflows
 
 Built-in workflows and their audit views are available through the local CLI/Web. Only a discovered MCP tool can provide a callable operation; do not claim that an undiscovered workflow was started.

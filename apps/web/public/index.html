@@ -61,7 +61,6 @@
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
         <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
         <li><a class="nav-item" href="#alerts" data-route="alerts"><span>预警</span></a></li>
-        <li><a class="nav-item" href="#research" data-route="research"><span>研究</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
         <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
@@ -490,83 +489,6 @@
           </div>
           <div id="alerts-triggers"><p class="placeholder">加载中…</p></div>
         </div>
-      </section>
-
-      <!-- route: research -->
-      <section id="route-research" class="route" data-route="research" hidden>
-        <div class="route-header">
-          <h1>研究</h1>
-          <div class="route-meta">研究主题 · Vault 索引 · 显式对象关联</div>
-        </div>
-        <div class="card vault-settings-card">
-          <div class="card-header">
-            <div>
-              <h2>本地 Research Vault</h2>
-              <div class="card-meta">连接 Obsidian 文件夹；正文留在本机，SQLite 只保存可重建索引</div>
-            </div>
-            <span id="research-vault-config-state" class="vault-state">未配置</span>
-          </div>
-          <form id="research-vault-settings-form" class="vault-settings-form">
-            <label class="vault-path-field">
-              <span>Vault 绝对路径</span>
-              <input id="research-vault-path" name="vaultPath" type="text" autocomplete="off" placeholder="/Users/me/Documents/Investment Vault" required />
-              <small>填写 Vault 根目录，不要填写其中的 .obsidian 目录。</small>
-            </label>
-            <label>
-              <span>扫描目录</span>
-              <input id="research-vault-root" name="researchRoot" type="text" value="Research" required />
-            </label>
-            <label>
-              <span>受管目录</span>
-              <input id="research-vault-managed-root" name="managedRoot" type="text" value="Research/Luoome" required />
-            </label>
-            <label>
-              <span>稳定 Vault ID <span class="muted">可选</span></span>
-              <input id="research-vault-id" name="vaultId" type="text" autocomplete="off" placeholder="investment-vault" />
-            </label>
-            <label>
-              <span>Markdown 上限（MB）</span>
-              <input id="research-vault-max-text" name="maxTextMb" type="number" min="1" max="100" value="10" required />
-            </label>
-            <label>
-              <span>附件上限（MB）</span>
-              <input id="research-vault-max-attachment" name="maxAttachmentMb" type="number" min="1" max="1024" value="100" required />
-            </label>
-            <div class="vault-settings-actions">
-              <button id="research-vault-save-btn" class="btn btn-primary btn-sm" type="submit">保存并同步</button>
-              <span id="research-vault-settings-status" class="card-meta" role="status" aria-live="polite"></span>
-            </div>
-          </form>
-        </div>
-        <div class="card">
-          <div class="card-header"><h2>研究笔记</h2></div>
-          <div class="research-search flex gap-2">
-            <input id="research-topic-input" type="search" placeholder="搜索研究笔记（FTS5）" />
-            <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
-          </div>
-          <div class="research-toolbar flex gap-2 mt-2">
-            <label class="field-inline" for="research-kind-filter">
-              <span class="muted">类型</span>
-              <select id="research-kind-filter">
-                <option value="">全部</option>
-                <option value="note">笔记</option>
-                <option value="article">文章</option>
-                <option value="analysis">分析</option>
-                <option value="report">报告</option>
-                <option value="thesis">论点</option>
-                <option value="filing">公告/ filings</option>
-                <option value="transcript">纪要</option>
-                <option value="timeline-update">进展</option>
-              </select>
-            </label>
-            <button id="research-sync-btn" class="btn btn-outline btn-sm" type="button">手动同步 Vault</button>
-            <span id="research-index-status" class="card-meta" aria-live="polite">索引状态：--</span>
-          </div>
-          <div id="research-write-status" class="research-write-status" role="status" aria-live="polite"></div>
-          <div id="research-inbox" class="research-inbox mt-2"></div>
-          <div id="research-search-results" class="research-results mt-2"></div>
-        </div>
-        <div id="research-detail" class="card mt-4" hidden></div>
       </section>
 
       <!-- route: advice -->

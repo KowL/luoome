@@ -18,5 +18,4 @@ export * from './external-mcp.js';
 export * from './plugin-inventory.js';
 export * from './plugin-policy.js';
 export * from './registry.js';
-export * from './tools/save-research-document.js';
 export * from './tools/settle-chat-draft.js';

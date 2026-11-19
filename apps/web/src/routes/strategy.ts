@@ -1,32 +1,10 @@
-import { executeStrictStrategyBacktestTool } from '@luoome/tools';
-import type { Hono } from 'hono';
-import { z } from 'zod';
-
-const StrictStrategyBacktestRequest = z.object({
-  strategyVersionId: z.string().min(1),
-  from: z.coerce.date(),
-  to: z.coerce.date(),
-  initialCash: z.number().positive().default(1_000_000),
-  benchmarkStockId: z.string().min(1).default('000300.SH'),
-  benchmarkDatasetVersion: z.string().min(1).default('000300.SH:qfq:daily:v1'),
-  lotSize: z.number().int().positive().default(100),
-  maxPositions: z.number().int().min(1).max(100).default(20),
-  costs: z.object({
-    commissionBps: z.number().nonnegative().max(100),
-    minimumCommission: z.number().nonnegative(),
-    sellStampDutyBps: z.number().nonnegative().max(100),
-    buySlippageBps: z.number().nonnegative().max(500),
-    sellSlippageBps: z.number().nonnegative().max(500),
-  }),
-});
-
 import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
 import {
   createStrategyObservationCandidatesTool,
-  createStrictStrategyBacktestTool,
   syncStrategyWatchlistSubscriptionsTool,
 } from '@luoome/tools';
-import { jsonResult, notFound } from '../http/result.js';
+import type { Hono } from 'hono';
+import { jsonResult } from '../http/result.js';
 import type { WebRouteDeps } from './types.js';
 
 export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
@@ -38,34 +16,6 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
     requireMutationCapabilities,
     targetMutation,
   } = deps;
-
-  const strictBacktestJobs = new Map<string, Promise<void>>();
-  const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
-    const key = backtestRunId;
-    if (strictBacktestJobs.has(key)) return;
-    const job = executeStrictStrategyBacktestTool
-      .execute({ backtestRunId }, deps.ctxRef.current)
-      .then((result) => {
-        if (!result.ok || result.data.run.status === 'failed') {
-          deps.ctxRef.current.logger.error('web strict backtest job failed', {
-            backtestRunId,
-            strategyId,
-            errorKind: result.ok ? result.data.run.error : result.error.kind,
-          });
-        }
-      })
-      .catch((error: unknown) => {
-        deps.ctxRef.current.logger.error('web strict backtest job crashed', {
-          backtestRunId,
-          strategyId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        strictBacktestJobs.delete(key);
-      });
-    strictBacktestJobs.set(key, job);
-  };
 
   app.get('/api/strategies', (c) => {
     const status = c.req.query('status');
@@ -282,56 +232,6 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
       watchlistId: c.req.param('watchlistId'),
     }),
   );
-  app.get('/api/strategies/:id/strict-backtests', async (c) => {
-    const result = await invokeTool('run_strategy_backtest', {
-      action: 'list',
-      strategyId: c.req.param('id'),
-      limit: 50,
-    });
-    return jsonResult(result);
-  });
-  app.get('/api/strategies/:id/strict-backtests/:backtestRunId', async (c) => {
-    const result = await invokeTool('run_strategy_backtest', {
-      action: 'get',
-      backtestRunId: c.req.param('backtestRunId'),
-    });
-    if (!result.ok) return jsonResult(result);
-    const data = result.data as { run?: { spec: { strategyId: string } } | null };
-    if (data.run == null || data.run.spec.strategyId !== c.req.param('id')) {
-      return jsonResult(notFound('StrictStrategyBacktest', c.req.param('backtestRunId')));
-    }
-    const { action: _action, ...rest } = result.data as Record<string, unknown>;
-    return jsonResult({ ok: true, data: rest });
-  });
-  app.post('/api/strategies/:id/strict-backtests', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    const body = await parseJsonObject(c.req.raw);
-    if (!('parsed' in body)) return jsonResult(body);
-    const parsed = StrictStrategyBacktestRequest.safeParse(body.data);
-    if (!parsed.success) {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'invalid_input',
-          message: '严格回测参数无效',
-          issues: parsed.error.issues,
-        },
-      });
-    }
-    const created = await createStrictStrategyBacktestTool.execute(
-      { strategyId: c.req.param('id'), ...parsed.data },
-      contextForRequest(),
-    );
-    if (!created.ok) return jsonResult(created);
-    if (created.data.run.status === 'queued') {
-      startStrictBacktestJob(created.data.run.id, c.req.param('id'));
-    }
-    return jsonResult(
-      { ok: true, data: { run: created.data.run } },
-      created.data.run.status === 'queued' ? 202 : 200,
-    );
-  });
   app.post('/api/strategies/:id/draft', (c) =>
     targetMutation(c.req.raw, 'external', 'propose_strategy_version_draft', {
       strategyId: c.req.param('id'),

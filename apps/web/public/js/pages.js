@@ -34,6 +34,7 @@ import {
 import {
   $,
   adviceCard,
+  adviceScorecardNode,
   adviceSubjectLine,
   compareValues,
   createPagination,
@@ -1859,12 +1860,42 @@ const renderAdviceList = async (setStatus) => {
     paginationWrap.className = 'pagination-wrap';
     list.after(paginationWrap);
   }
+  // 反馈状态一次性取回，避免每条建议各发一次请求。
+  const feedbackByAdvice = new Map();
+  const feedbackResp = await callApi('/api/advice/feedbacks?limit=500');
+  if (feedbackResp.ok) {
+    for (const item of feedbackResp.data.feedbacks) {
+      feedbackByAdvice.set(item.adviceId, item.action);
+    }
+  }
+  const FEEDBACK_TEXT = { done: '做了', skipped: '没做', later: '再等等' };
+  const recordAdviceFeedback = async (adviceId, action, bar) => {
+    const buttons = [...bar.querySelectorAll('button')];
+    for (const btn of buttons) btn.disabled = true;
+    const r = await callApi('/api/advice/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ adviceId, action }),
+    });
+    for (const btn of buttons) btn.disabled = false;
+    if (!r.ok) {
+      setStatus(`记录反馈失败：${r.error.message ?? r.error.kind}`, true);
+      return;
+    }
+    for (const btn of buttons) btn.classList.toggle('active', btn.dataset.action === action);
+    feedbackByAdvice.set(adviceId, action);
+    setStatus(`已记录：${FEEDBACK_TEXT[action] ?? action}`);
+  };
+
+  // 成绩单：每周一唯一一份验收视图（命中率 / 平均超额 / 按 confidence 分组 / 门禁结论）
+  const scorecardResp = await callApi('/api/advice/scorecard?days=30');
+  const scorecardNode = scorecardResp.ok ? adviceScorecardNode(scorecardResp.data) : null;
+
   function renderPage() {
     const { page, pageSize } = pagination.getState();
     const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
-    mount(
-      list,
-      pageItems.map((advice) => {
+    mount(list, [
+      ...(scorecardNode === null ? [] : [scorecardNode]),
+      ...pageItems.map((advice) => {
         const card = adviceCard(
           advice,
           adviceSelectMode
@@ -1876,12 +1907,15 @@ const renderAdviceList = async (setStatus) => {
                   renderBatchBar();
                 },
               }
-            : {},
+            : {
+                feedback: { action: feedbackByAdvice.get(advice.id) },
+                onFeedback: recordAdviceFeedback,
+              },
         );
         card.dataset.adviceId = advice.id;
         return card;
       }),
-    );
+    ]);
   }
   const renderBatchBar = () => {
     const bar = $('#advice-batch-bar');
@@ -1978,7 +2012,7 @@ const reportEntityHref = (item) => {
   if (item.entityKind === 'stock') return buildMarketLink(item.entityId);
   if (item.entityKind === 'stock-group' || item.entityKind === 'watch-plan') return '#groups';
   if (item.entityKind === 'advice') return `#advice?id=${encodeURIComponent(item.entityId)}`;
-  if (item.entityKind === 'research-note' || item.entityKind === 'stock-event') return '#research';
+  if (item.entityKind === 'stock-event') return '#market';
   return null;
 };
 
@@ -3145,272 +3179,6 @@ const renderWorkflowRuns = async (setStatus) => {
   setStatus('workflow 运行记录已更新');
 };
 
-/** 研究页：主题浏览、全文搜索和显式股票投影。 */
-const renderResearch = async () => {
-  const vaultForm = /** @type {HTMLFormElement | null} */ (
-    document.getElementById('research-vault-settings-form')
-  );
-  const vaultState = document.getElementById('research-vault-config-state');
-  const vaultSettingsStatus = document.getElementById('research-vault-settings-status');
-  const vaultSaveButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-vault-save-btn')
-  );
-  const input = /** @type {HTMLInputElement | null} */ (
-    document.getElementById('research-topic-input')
-  );
-  const button = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-search-btn')
-  );
-  const results = document.getElementById('research-search-results');
-  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
-  const kindFilter = /** @type {HTMLSelectElement | null} */ (
-    document.getElementById('research-kind-filter')
-  );
-  const syncButton = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById('research-sync-btn')
-  );
-  const indexStatus = document.getElementById('research-index-status');
-  const writeStatus = document.getElementById('research-write-status');
-  const inbox = document.getElementById('research-inbox');
-  if (
-    input === null ||
-    button === null ||
-    results === null ||
-    detail === null ||
-    kindFilter === null ||
-    syncButton === null
-  )
-    return;
-
-  const setVaultSettingsStatus = (message, kind = '') => {
-    if (vaultSettingsStatus === null) return;
-    vaultSettingsStatus.textContent = message;
-    vaultSettingsStatus.className = `card-meta ${kind}`.trim();
-  };
-
-  const setWriteStatus = (message) => {
-    if (writeStatus === null) return;
-    writeStatus.textContent = message;
-    writeStatus.hidden = message.length === 0;
-  };
-
-  const paintStatus = (status) => {
-    if (indexStatus === null || status === undefined) return;
-    const capability = status.searchCapability === 'fts' ? 'FTS5' : 'metadata';
-    indexStatus.textContent = `索引状态：${status.freshness ?? '--'} · 检索 ${capability}${status.diagnostic ? ` · ${status.diagnostic}` : ''}`;
-  };
-
-  const renderRows = (rows, emptyText, onOpen) => {
-    if (rows.length === 0) {
-      mount(results, el('p', 'muted', emptyText));
-      return;
-    }
-    mount(
-      results,
-      el(
-        'div',
-        'research-results',
-        rows
-          .map((row) =>
-            el('button', 'research-result', [
-              el('strong', null, row.title ?? row.id),
-              el(
-                'span',
-                'card-meta',
-                `${row.kind ?? '--'} · ${row.excerpt ?? row.snippet ?? ''}`.slice(0, 200),
-              ),
-            ]),
-          )
-          .map((node, index) => {
-            node.type = 'button';
-            node.addEventListener('click', () => void onOpen(rows[index]));
-            return node;
-          }),
-      ),
-    );
-  };
-
-  const openDocument = async (row) => {
-    const response = await callApi(
-      `/api/research/documents/${encodeURIComponent(row.id)}?content=1`,
-    );
-    if (!response.ok) {
-      mount(detail, el('p', 'muted', `读取失败：${response.error?.message ?? '未知错误'}`));
-      detail.hidden = false;
-      return;
-    }
-    const document = response.data.document;
-    const content = response.data.content ?? document.excerpt ?? '（无正文）';
-    const lines = [
-      el('div', 'card-header', [
-        el('h2', null, document.title ?? document.id),
-        el('span', 'card-meta', `${document.kind ?? '--'} · ${document.relativePath ?? ''}`),
-      ]),
-      el(
-        'p',
-        'card-meta',
-        `标签：${(document.tags ?? []).join(' / ') || '--'} · 股票：${(document.stockCodes ?? []).join(' / ') || '--'}`,
-      ),
-      el('pre', 'research-content', content.slice(0, 20000)),
-    ];
-    if (typeof document.obsidianUri === 'string') {
-      lines.push(
-        el('a', 'btn btn-outline btn-sm', '在 Obsidian 打开', { href: document.obsidianUri }),
-      );
-    }
-    mount(detail, el('article', 'card', lines));
-    detail.hidden = false;
-  };
-
-  let searchSeq = 0;
-  const loadDocuments = async () => {
-    const query = input.value.trim();
-    const kind = kindFilter.value;
-    const seq = ++searchSeq;
-    setWriteStatus('读取研究笔记索引…');
-    const response = query
-      ? await callApi(
-          `/api/research/search?q=${encodeURIComponent(query)}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
-        )
-      : await callApi(
-          `/api/research/documents?limit=50${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
-        );
-    if (seq !== searchSeq) return;
-    if (!response.ok) {
-      setWriteStatus(`读取失败：${response.error?.message ?? '未知错误'}`);
-      renderRows([], '读取失败，稍后刷新。', openDocument);
-      return;
-    }
-    const data = response.data;
-    paintStatus(data.indexStatus);
-    if (query) {
-      const hits = Array.isArray(data.hits)
-        ? data.hits.map((hit) => ({ ...hit.document, snippet: hit.snippet }))
-        : [];
-      setWriteStatus(
-        hits.length === 0
-          ? data.capability === 'metadata'
-            ? '没有命中；当前 FTS5 不可用，仅按元数据检索。'
-            : '没有命中。'
-          : `命中 ${hits.length} 篇（${data.capability === 'fts' ? 'FTS5' : 'metadata 降级'}）。`,
-      );
-      renderRows(hits, '没有命中。', openDocument);
-      return;
-    }
-    const documents = Array.isArray(data.documents) ? data.documents : [];
-    setWriteStatus(
-      documents.length === 0
-        ? '索引为空，先配置 Vault 并手动同步。'
-        : `共 ${documents.length} 篇研究笔记。`,
-    );
-    renderRows(documents, '索引为空，先配置 Vault 并手动同步。', openDocument);
-  };
-
-  const setValue = (id, value) => {
-    const field = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
-    if (field !== null && value !== undefined && value !== null) field.value = String(value);
-  };
-
-  const loadVaultSettings = async () => {
-    const response = await callApi('/api/settings/research-vault');
-    if (!response.ok) {
-      setVaultSettingsStatus(`Vault 设置读取失败：${response.error?.message ?? '未知错误'}`);
-      return;
-    }
-    const data = response.data;
-    const vaultPathField = /** @type {HTMLInputElement | null} */ (
-      document.getElementById('research-vault-path')
-    );
-    if (vaultPathField !== null) {
-      vaultPathField.required = !data.configured;
-      vaultPathField.placeholder = data.configured
-        ? `已连接 ${data.vaultName ?? 'Vault'}；留空保持当前路径`
-        : '/Users/me/Documents/Investment Vault';
-    }
-    setValue('research-vault-root', data.researchRoot);
-    setValue('research-vault-managed-root', data.managedRoot);
-    setValue('research-vault-id', data.vaultId);
-    setValue('research-vault-max-text', data.maxTextMb);
-    setValue('research-vault-max-attachment', data.maxAttachmentMb);
-    if (vaultState !== null) {
-      vaultState.textContent = data.configError
-        ? '配置无效'
-        : data.configured
-          ? `已连接 · ${data.effectiveVaultId ?? 'Vault'}`
-          : '未配置';
-      vaultState.className =
-        `vault-state ${data.configError ? 'invalid' : data.configured ? 'configured' : ''}`.trim();
-    }
-    setVaultSettingsStatus(data.configError ?? (data.configured ? '配置已加载' : '填写路径后保存'));
-  };
-
-  if (vaultForm !== null) {
-    vaultForm.onsubmit = async (event) => {
-      event.preventDefault();
-      const values = new FormData(vaultForm);
-      if (vaultSaveButton !== null) vaultSaveButton.disabled = true;
-      try {
-        const saved = await callApi('/api/settings/research-vault', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(Object.fromEntries(values.entries())),
-        });
-        if (!saved.ok) {
-          setVaultSettingsStatus(`保存失败：${saved.error?.message ?? '未知错误'}`, 'error');
-          return;
-        }
-        setVaultSettingsStatus('配置已保存；正在重建索引…');
-        await loadVaultSettings();
-        const sync = await callApi('/api/tools/sync_research_vault/call', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'manual' }),
-        });
-        showSyncResult(sync);
-        await loadDocuments();
-      } finally {
-        if (vaultSaveButton !== null) vaultSaveButton.disabled = false;
-      }
-    };
-  }
-
-  const showSyncResult = (sync) => {
-    if (!sync.ok) {
-      setWriteStatus(`同步失败：${sync.error?.message ?? '未知错误'}`);
-      return;
-    }
-    const data = sync.data ?? {};
-    setWriteStatus(
-      `同步完成：新增 ${data.added ?? 0} 篇，更新 ${data.updated ?? 0} 篇，缺失 ${data.missing ?? 0}，冲突 ${data.conflicts ?? 0}（${data.status ?? '--'}）。`,
-    );
-  };
-
-  button.addEventListener('click', () => void loadDocuments());
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void loadDocuments();
-  });
-  kindFilter.addEventListener('change', () => void loadDocuments());
-  syncButton.addEventListener('click', async () => {
-    syncButton.disabled = true;
-    setWriteStatus('正在扫描 Vault 并重建索引…');
-    try {
-      showSyncResult(
-        await callApi('/api/tools/sync_research_vault/call', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'manual' }),
-        }),
-      );
-    } finally {
-      syncButton.disabled = false;
-    }
-    await loadDocuments();
-  });
-  if (inbox !== null) inbox.replaceChildren();
-  await loadVaultSettings();
-  await loadDocuments();
-};
-
 export {
   analyzeAllHoldings,
   bindSettingsActions,
@@ -3433,7 +3201,6 @@ export {
   renderDataHealth,
   renderHoldings,
   renderReports,
-  renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
