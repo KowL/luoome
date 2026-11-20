@@ -4,14 +4,17 @@ import { el, fmtNum } from './ui.js';
 
 const definitions = INDEX_DEFS.filter((index) => DASHBOARD_INDEX_CODES.includes(index.code));
 const minuteMs = 60_000;
-const observedTime = new Intl.DateTimeFormat('sv-SE', {
-  timeZone: 'Asia/Shanghai',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-});
+const pctText = (quote) => {
+  if (!Number.isFinite(quote?.changePct)) return null;
+  return `${quote.changePct > 0 ? '+' : ''}${quote.changePct.toFixed(2)}%`;
+};
+
+const pctTone = (quote) => {
+  if (!Number.isFinite(quote?.changePct)) return 'muted';
+  if (quote.changePct > 0) return 'text-pos';
+  if (quote.changePct < 0) return 'text-neg';
+  return 'muted';
+};
 let requestedAt = 0;
 let pending;
 
@@ -27,7 +30,7 @@ function fetchIndices() {
   return pending;
 }
 
-function minuteCard(def, response) {
+function minuteCard(def, response, quote) {
   const card = el('div', 'minute-card', [el('strong', '', def.name)]);
   const data = response.data;
   const points = (data?.points ?? []).filter(
@@ -41,7 +44,9 @@ function minuteCard(def, response) {
     return card;
   }
   const last = points.at(-1);
-  const stamp = observedTime.format(new Date(last.time));
+  // 价格与涨跌幅取同一份指数快照：分时最后一分钟往往比报价慢一拍，混用会自相矛盾。
+  const price = Number.isFinite(quote?.close) ? quote.close : last.price;
+  const change = pctText(quote);
   const prices = points.map((point) => point.price);
   const min = Math.min(...prices);
   const max = Math.max(...prices);
@@ -70,14 +75,16 @@ function minuteCard(def, response) {
   title.textContent = svg.getAttribute('aria-label');
   svg.append(title, plot);
   card.append(
-    el('b', '', fmtNum(last.price)),
+    el('div', 'minute-value', [
+      el('b', '', fmtNum(price)),
+      change === null ? null : el('span', `minute-change ${pctTone(quote)}`, change),
+    ]),
     svg,
     el('div', 'minute-axis', [
       el('span', '', '09:30'),
       el('span', '', '午休'),
       el('span', '', '15:00'),
     ]),
-    el('small', '', stamp + (stamp.endsWith('15:00') ? ' 收盘' : ' 行情')),
   );
   return card;
 }
@@ -100,8 +107,18 @@ if (globalThis.customElements && !customElements.get('room-index-minutes')) {
         if (document.hidden || !this.getClientRects().length) return;
         const grid = this.querySelector('.minute-grid');
         const results = await fetchIndices();
+        const quotes = this.indexes ?? [];
         if (grid.isConnected)
-          grid.replaceChildren(...results.map((r, i) => minuteCard(definitions[i], r)));
+          grid.replaceChildren(
+            ...results.map((r, i) => {
+              const def = definitions[i];
+              return minuteCard(
+                def,
+                r,
+                quotes.find((quote) => quote?.code === def.code),
+              );
+            }),
+          );
       }
     },
   );

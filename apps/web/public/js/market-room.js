@@ -478,6 +478,16 @@ const limitUpCard = (limitUp) => {
   ]);
 };
 
+/**
+ * 分时卡要显示当日涨跌幅，用总览里已有的指数快照补上，
+ * 不为 4 张卡片再开一个报价请求（上游已在限流）。
+ */
+const indexMinutesCard = (overview) => {
+  const element = el('room-index-minutes');
+  element.indexes = overview.indexes?.value?.values ?? [];
+  return element;
+};
+
 const renderOverviewPane = (overview, at, ranking, distribution) => {
   const empty = emptyStateText(overview);
   if (empty !== null) {
@@ -494,7 +504,7 @@ const renderOverviewPane = (overview, at, ranking, distribution) => {
   }
   return el('div', 'room-overview', [
     amountMeter(overview.amount, overview.latestBatch),
-    at === null ? el('div', 'card room-overview-minutes', el('room-index-minutes')) : null,
+    at === null ? el('div', 'card room-overview-minutes', indexMinutesCard(overview)) : null,
     rotationBoard(ranking, distribution, at),
     coverageCard(overview.coverage),
     breadthCard(overview),
@@ -637,8 +647,8 @@ const sectorTable = (ranking, params) => {
 const sectorWindowStrip = (ranking) =>
   el('div', 'room-window-strip', [
     el('span', 'label', '窗口'),
-    el('span', 'value mono', `5 分钟 ${windowSpanText(ranking.windows.w5)}`),
-    el('span', 'value mono', `15 分钟 ${windowSpanText(ranking.windows.w15)}`),
+    el('span', 'value mono', windowSpanText(ranking.windows.w5)),
+    el('span', 'value mono', windowSpanText(ranking.windows.w15)),
   ]);
 
 const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {

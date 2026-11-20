@@ -9305,16 +9305,16 @@ body > .modal {
 /* 标签左、值右的成对排版：10 个事实并排时也能一列一列对齐，不再让长值断成四行。 */
 .room-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 224px), 1fr));
-  gap: var(--space-1) var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 2px var(--space-6);
 }
 
 .room-fact {
   display: grid;
-  grid-template-columns: minmax(56px, max-content) 1fr;
+  grid-template-columns: minmax(64px, max-content) 1fr;
   align-items: baseline;
-  gap: var(--space-2);
-  padding: 2px 0;
+  gap: var(--space-3);
+  padding: 3px 0;
 }
 
 .room-fact .label {
@@ -9489,6 +9489,13 @@ body > .modal {
 
 .room-sector-row.expanded {
   background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* 90 行的榜单压一点行高，展开行与下一行之间留出抽屉感。 */
+.room-sector-table tbody td {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .room-sector-name {
@@ -9510,6 +9517,7 @@ body > .modal {
 .room-sector-detail > td {
   background: var(--panel-alt);
   padding: var(--space-4);
+  box-shadow: inset 0 1px 0 var(--line);
 }
 
 .room-sector-detail .room-warnings {
@@ -9913,7 +9921,22 @@ body > .modal {
   background: var(--panel-alt);
 }
 
+.room-event-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 证据状态每行都有，压成小号灰标签，避免 40 行同色徽章抢走正文。 */
+.room-event-row .room-status {
+  padding: 1px 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.9;
+}
+
 .room-event-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-semibold);
 }
@@ -9938,6 +9961,8 @@ body > .modal {
 }
 
 .room-event-sector {
+  display: inline-block;
+  min-width: 5.5em;
   font-weight: var(--weight-semibold);
 }
 
@@ -9955,6 +9980,9 @@ body > .modal {
   flex: 1 1 260px;
   color: var(--muted);
   font-size: var(--text-sm);
+  line-height: 1.6;
+  /* 40 行同一套百分比并排，等宽数字才能看出哪行跌得更狠。 */
+  font-variant-numeric: tabular-nums;
 }
 
 .room-event-evidence {
@@ -10210,11 +10238,15 @@ room-index-minutes small, .minute-axis { color: var(--muted); font-size: 11px; }
 .minute-card { border-left: 2px solid var(--border); padding-left: 9px; min-width: 0; }
 .minute-card strong, .minute-card b, .minute-card small { display: block; }
 .minute-card b { font: 600 18px/1.4 ui-monospace, monospace; }
+.minute-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.minute-change { font: 600 12px/1.4 ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 .minute-card svg { display: block; width: 100%; height: 45px; border-bottom: 1px solid var(--border); }
 .minute-card path { stroke: #82bcb6; stroke-width: 1.6; fill: none; vector-effect: non-scaling-stroke; }
 .minute-axis { font-size: 9px; }
 @container (max-width: 550px) {
   .minute-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  /* 双列时 10,256.39 -3.09% 会挤到换行，涨幅收一档保持同一行。 */
+  .minute-change { font-size: 11px; }
 }
 body.minute-embed {
   --muted: #a1b3ae;
@@ -10233,9 +10265,9 @@ body.minute-embed::before { content: none; }
 .room-cash,.room-overview-minutes,.room-rotation {grid-column:1/-1;min-width:0;margin:0}
 .room-overview-minutes room-index-minutes {margin:0}
 .room-cash-value {font-size:26px;color:var(--accent);font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
-.room-track {position:relative;background:var(--line-strong);height:7px;border-radius:4px;margin:8px 0}
+.room-track {position:relative;background:rgba(28,37,54,.08);height:8px;border-radius:999px;margin:10px 0}
 .room-fill {display:block;height:100%;background:var(--accent);border-radius:inherit;transition:width .4s}
-.room-track i {position:absolute;width:2px;height:13px;top:-3px;background:var(--ink);box-shadow:0 0 0 1px var(--panel-solid-base)}
+.room-track i {position:absolute;width:2px;height:14px;top:-3px;background:var(--ink);border-radius:1px;box-shadow:0 0 0 1px var(--panel-solid-base)}
 .room-meter-notes,.room-board-controls,.room-board-leaders div {display:flex;align-items:center;justify-content:space-between;gap:8px}
 .room-meter-notes {color:var(--muted);font-size:12px}
 .room-board-grid {
@@ -10273,6 +10305,8 @@ body.minute-embed::before { content: none; }
 .room-strengthening time { font-family: var(--font-mono); }
 .room-theme-head, .room-theme-body { display: flex; align-items: center; gap: 6px; }
 .room-theme-head { justify-content: space-between; margin-bottom: 5px; }
+/* 领涨股行数 2/3 不等：让中段吸收剩余高度，占比刻度与变化徽章始终贴卡片底部对齐。 */
+.room-theme-body { flex: 1; align-items: flex-start; }
 .room-theme-title {
   min-width: 0;
   white-space: nowrap;
@@ -10300,24 +10334,29 @@ body.minute-embed::before { content: none; }
 .room-leader-move.up { color: var(--accent-strong); }
 .room-board-leaders b { margin-left: auto; white-space: nowrap; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .room-share-label { margin-top: 7px; font-size: 11px; font-weight: 600; color: var(--ink-soft); }
-.room-board-col .room-track { height: 4px; margin: 4px 0 5px; }
-.room-board-col .room-track i { height: 8px; top: -2px; }
+.room-board-col .room-track { height: 5px; margin: 5px 0 6px; }
+.room-board-col .room-track i { height: 9px; top: -2px; }
 .room-board-col .room-caption { display: block; margin: 0; font-size: 10.5px; }
 .room-leader-control { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .room-board-controls { flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 640px) {
-  .room-board-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .room-board-col { padding: 6px; }
+  .room-board-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 0; }
+  .room-board-col { padding: 8px; }
+  /* 窄屏两个下拉各自撑满一行，避免右对齐后左半屏留空。 */
+  .room-board-controls { justify-content: stretch; gap: 6px; margin-top: 8px; }
+  .room-board-controls > select { flex: 1 1 100%; }
+  .room-leader-control { flex: 1 1 100%; }
+  .room-leader-control select { flex: 1; }
 }
 
 .room-window-caption { margin-bottom: 6px; font-size: 12px; color: var(--muted); }
 .room-share-change {
   display: inline-flex;
   align-self: flex-start;
-  padding: 1px 5px;
+  padding: 1px 6px;
   margin-bottom: 2px;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 15px;
   font-variant-numeric: tabular-nums;
   border-radius: 4px;
   color: var(--muted);
