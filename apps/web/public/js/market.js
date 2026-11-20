@@ -21,7 +21,6 @@ import {
   resetQuoteHeader,
 } from './market-quote.js';
 import { appendReturnTo, returnLabel, returnToFromHash } from './market-room-return.js';
-import { renderMarketSentiment } from './market-sentiment.js';
 import {
   buildMarketHash,
   createRequestTracker,
@@ -40,7 +39,6 @@ const SUBPANE_KEY = 'luoome.market.subPane';
 const SUBPANES = ['macd', 'rsi', 'kdj'];
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
-const EMPTY_TIP = '请从顶栏搜索并选择一只股票；支持深链接 #market?stockId=002594.SZ&range=3m。';
 
 /** 「策略信号」开关偏好持久化；隐私模式 / quota 失败时回退默认关闭。 */
 const loadMarkerToggle = () => {
@@ -452,9 +450,7 @@ const loadIntradayView = async () => {
 
 const renderData = async (data, requestId) => {
   const main = $('#market-main');
-  const empty = $('#market-empty');
-  if (main === null || empty === null) return;
-  empty.hidden = true;
+  if (main === null) return;
   main.hidden = false;
   renderQuoteHeader(data);
   renderIndicators(data);
@@ -569,17 +565,11 @@ const loadMarketView = async () => {
     if (state.data !== null) {
       showBanner(`${message}，展示上次成功数据。`);
     } else {
-      showBanner(message);
+      // 首次加载就失败：只留报价卡骨架 + banner，主区不展示半截图表。
+      showBanner(`${message}，请稍后重试。`);
       destroyChart();
       resetQuoteHeader();
-      const empty = $('#market-empty');
       const main = $('#market-main');
-      if (empty !== null) {
-        empty.hidden = false;
-        // 只改占位文案，不清空 #market-empty 子树（#market-sentiment 要留给情绪面板）
-        const tip = $('#market-empty-tip');
-        if (tip !== null) tip.textContent = `${message}，请稍后重试。`;
-      }
       if (main !== null) main.hidden = true;
     }
   }
@@ -622,29 +612,10 @@ const renderMarket = async (setStatus) => {
   const granularity = normalizeMarketGranularity(params.get('granularity'));
   const rawDate = params.get('date');
   const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate ?? '') ? rawDate : null;
-  // 无 stockId → 搜索空态（§11.1）。
+  // 行情页没有空态：没有 stockId 就直接回默认页（今日·概览），
+  // 进入这个页面的方式只有搜索、最近查看与其它页面的股票链接。
   if (stockId === null || stockId.trim().length === 0) {
-    clearRefreshTimer();
-    destroyChart();
-    destroyIntradayChart();
-    state.stockId = null;
-    state.date = null;
-    state.data = null;
-    state.granularity = 'day';
-    state.chartTab = 'kline';
-    state.minuteInterval = '1m';
-    state.minuteData = null;
-    state.tracker.next();
-    state.minuteTracker.next();
-    showBanner(null);
-    resetQuoteHeader();
-    const empty = $('#market-empty');
-    const main = $('#market-main');
-    if (empty !== null) empty.hidden = false;
-    const tip = $('#market-empty-tip');
-    if (tip !== null) tip.textContent = EMPTY_TIP;
-    if (main !== null) main.hidden = true;
-    void renderMarketSentiment();
+    window.location.replace('#dashboard');
     return;
   }
   const changed =

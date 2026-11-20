@@ -417,21 +417,13 @@ describe('指数页结构', () => {
   });
 });
 
-describe('行情页空态 A 股情绪面板', () => {
+describe('行情页报价卡', () => {
   it('报价头股票代码是安全的新标签页雪球外链', () => {
     expect(html).toContain('class="muted mono market-quote-code-link"');
     expect(html).toContain('id="market-quote-code"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
     expect(read('./market-quote.js')).toContain('xueqiuStockUrl(stock.id)');
-  });
-
-  it('空态容器存在，数据源为 get_ashare_sentiment（includeIndexes: false）', () => {
-    expect(html).toContain('id="market-sentiment"');
-    const sentiment = read('./market-sentiment.js');
-    expect(sentiment).toContain('get_ashare_sentiment');
-    expect(sentiment).toContain('includeIndexes: false');
-    expect(read('./market.js')).toContain('renderMarketSentiment');
   });
 });
 

@@ -245,7 +245,6 @@ const ROUTE_GROUPS = [
     label: '市场',
     items: [
       ['indices', '指数'],
-      ['market', '行情'],
       ['market-room', '作战室'],
       ['limit-up', '涨停梯队'],
       ['dragon-tiger', '龙虎榜'],
@@ -262,13 +261,22 @@ const ROUTE_GROUPS = [
   },
 ];
 
+/** 分组归属；null 表示二级页：不占菜单位，也不点亮任何一级入口。 */
 const groupOfRoute = (route) =>
-  ROUTE_GROUPS.find((group) => group.items.some(([id]) => id === route)) ?? ROUTE_GROUPS[0];
+  ROUTE_GROUPS.find((group) => group.items.some(([id]) => id === route)) ?? null;
 
 const renderGroupTabs = (route) => {
   const bar = $('#group-tabs');
   if (bar === null) return;
+  // 「行情」是单只标的的二级页（搜索、持仓、分组、最近查看都能进来），
+  // 挂到「市场」下会被误读成一个并列分区，所以在它上面整条分区导航收起。
   const group = groupOfRoute(route);
+  if (group === null) {
+    bar.hidden = true;
+    bar.replaceChildren();
+    return;
+  }
+  bar.hidden = false;
   bar.replaceChildren(
     ...group.items.map(([id, label]) => {
       const link = el('a', id === route ? 'group-tab active' : 'group-tab', label);
@@ -306,7 +314,7 @@ const showRoute = async (name) => {
   });
   const group = groupOfRoute(safe);
   document.querySelectorAll('.nav-item').forEach((node) => {
-    const active = node.dataset.group === group.id;
+    const active = group !== null && node.dataset.group === group.id;
     node.classList.toggle('active', active);
     if (active) node.setAttribute('aria-current', 'page');
     else node.removeAttribute('aria-current');

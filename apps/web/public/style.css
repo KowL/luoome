@@ -8500,37 +8500,6 @@ body > .modal {
   }
 }
 
-/* ---- 行情页空态 A 股情绪面板 ---- */
-.market-sentiment {
-  margin-top: 1rem;
-}
-
-.sentiment-title {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-}
-
-.sentiment-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: baseline;
-  margin: 0.35rem 0;
-}
-
-.sentiment-label {
-  font-weight: 600;
-  min-width: 4.5rem;
-}
-
-.sentiment-leaders {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: baseline;
-  margin: 0.35rem 0;
-}
-
 /* ---- 设置页数据同步区块 ---- */
 .market-sync-actions {
   display: flex;

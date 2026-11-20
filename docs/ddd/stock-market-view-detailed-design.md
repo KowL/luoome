@@ -513,7 +513,7 @@ POST /api/tools/get_stock_market_view/call
 - 行情页最近查看；
 - 外部或站内深链接。
 
-进入行情深链接时，现有侧栏不设置 active 项。“涨停梯队”首期保持现有独立入口，不在本任务重组整个侧栏。
+进入行情深链接时，现有侧栏不设置 active 项，分区标签栏（今日/持仓/关注/市场/设置 下的二级标签）也整条收起：行情是二级页，不挂在任何分区下。“涨停梯队”首期保持现有独立入口，不在本任务重组整个侧栏。
 
 支持深链接：
 
@@ -528,7 +528,7 @@ routeName = hash 中 ? 之前部分
 routeParams = hash 中 ? 之后的 URLSearchParams
 ```
 
-兼容现有 `#dashboard`、`#groups` 等 hash。无 stockId 时展示搜索空态。
+兼容现有 `#dashboard`、`#groups` 等 hash。行情页没有空态：无 stockId 时直接回落 `#dashboard`，只由搜索、最近查看与其它页面的股票链接进入；顶栏的「行情」标签也只在看具体标的时出现。
 
 ### 11.2 页面结构
 
