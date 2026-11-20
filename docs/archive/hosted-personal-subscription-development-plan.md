@@ -2,8 +2,8 @@
 
 > 状态：原 Web 登录融合、默认账户及订阅/通知设置已实现并完成本轮隔离验证；后台自动调度、原业务通知投递、统一计量与真实 provider 接入仍待完成。
 > 更新：2026-10-13；原设计日期：2026-10-10。
-> 契约：[个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md)。
-> 领域约束：[CONTEXT](../CONTEXT.md)、[架构](./ARCHITECTURE.md)、[安全](./SECURITY.md)。
+> 契约：[个人订阅托管版详细设计](hosted-personal-subscription-detailed-design.md)。
+> 领域约束：[CONTEXT](../../CONTEXT.md)、[架构](../ARCHITECTURE.md)、[安全](../SECURITY.md)。
 
 ## 1. 已确认范围
 
@@ -43,8 +43,8 @@ PostgreSQL、Redis、Kubernetes 和多节点扩容由实测瓶颈决定，不作
 
 已有工程覆盖显式 hosted/local 模式、control + 私有 Tenant SQLite、OTP/session、平台私有 registry、
 持久任务和 receipt/outbox、用量、通知、支付契约、数据导出/删除、写屏障与恢复工具。
-证据见[历史隔离验收](./archive/hosted-personal-subscription-fixture-acceptance.md)和
-[运行手册](./runbooks/hosted-personal-subscription.md)。历史报告只代表当时覆盖的实现及 fixture 场景。
+证据见[历史隔离验收](hosted-personal-subscription-fixture-acceptance.md)和
+[运行手册](hosted-personal-subscription.md)。历史报告只代表当时覆盖的实现及 fixture 场景。
 
 | 已有证据范围 | 可复用内容 | 本版仍须验证 |
 |---|---|---|

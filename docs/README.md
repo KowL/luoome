@@ -37,18 +37,17 @@
 | [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
 | [策略工作台](./prd/strategy-v2.md) | Strategy 的执行记录、派生股票池/候选池、运行 Diff、真实信号观察与版本迭代 |
 | [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
-| [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | 报告中心保留；M2 的自动发布/自动暂停已裁撤（2026-11-10），AI 提议仅保留为待确认草案 |
+| [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | M1 报告中心已收敛为每周建议成绩单（2026-11-20）；M2 的自动发布/自动暂停已裁撤（2026-11-10），AI 提议仅保留为待确认草案 |
 
 ## 技术设计（DDD）
 
 | 文档 | 范围 |
 |---|---|
-| [共享数据底座与能力插件详细设计](./ddd/layered-capability-plugin-detailed-design.md) | P0/P1 已实施；共享底座、提供者/采集任务、业务插件的归属、依赖、启停、降级及联合评审取舍 |
+| [共享数据底座与能力插件详细设计](./ddd/layered-capability-plugin-detailed-design.md) | P0/P1 已实施；共享底座、归属、依赖与降级仍有效，启停已简化为 `plugins.json` 只读清单（2026-11-20） |
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与单机多账户边界；首批已通过受控开发验收，后续能力按设计验证 |
 | [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
 | [领域收敛、去冗余与架构减负详细设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md) | 73 表收敛至 38 表、152 Tools 收敛至 34 核心 Agent Tools、移除手写内存库与超前空转模块的详细设计与分阶段计划 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
-| [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | **已裁撤（2026-11-10）**：Topic/Document 关系、chunk、embedding、Git 同步均已删除；现仅保留文档索引 + FTS5 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | 涨停梯队快照、东方财富涨停池 adapter、缓存，以及 fuyao 炸板/断板 PIT 事实 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
@@ -58,21 +57,17 @@
 | [数据源可插拔与统一观测设计](./ddd/source-pluggability-and-observation-design.md) | 通用 SourceRegistry、单一 EastmoneySource、非行情域源可插拔与全域源健康观测（评审中） |
 | [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 get_market_data_status 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
-| [Vibe A 股报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md) | Report、A 股情绪证据、三类简报 workflow 与策略研究映射 |
+| [Vibe A 股报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md) | A 股情绪证据与策略研究映射仍有效；报告已收敛为每周成绩单（2026-11-20），简报章节仅作追溯 |
 | [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
 | [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
 | [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
 | [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md) | Strategy、Watchlist、AlertPlan 的领域模型、存储、迁移与跨端契约 |
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
-| [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、daily cycle、AI 降级与 point-in-time replay；租约/checkpoint/revision 已简化 |
 | [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 每日估值、TWR、回撤、benchmark 与归因；现金流/公司行动已合并为 `account_ledger_entries` |
-| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope 与门禁求值保留；`daily_bar_revisions` 已删除，八项门禁真实数据验收不再排期 |
 | [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
 | [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘旅程与切片；其中 ResearchHypothesisVersion 已裁撤，其余链路保留 |
 | [MVP3 决策与复盘详细设计](./ddd/mvp3-decision-review-detailed-design.md) | 账户记录、成交关联、幂等账本、聚合、报告补充与跨端验收（复盘已简化为单表） |
-| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | **已裁撤（2026-11-10）**：代码、表与 mock adapter 均已删除，仅作设计追溯 |
 | [Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md) | 评分分解、DSL Catalog、实验上下文与反馈；其中逐日评估会话与自动晋级已裁撤 |
-| [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) | **已裁撤（2026-11-10）**：自治审批实体与周调度已删除；AI 提议仅保留为待确认草案 |
 
 ## 当前开发计划
 
@@ -118,6 +113,14 @@
 - [v0.8.0 MVP 开发计划](./archive/MVP-PLAN-BOARD-HOLDINGS-GROUPS-WATCH.md)
 - [v0.8.0 MVP 验收记录](./archive/MVP-ACCEPTANCE.md)
 - [Adshare smoke 跳过记录（2026-07-23）](./archive/adshare-smoke-skip-20260723.md)
+
+### 已裁撤能力的设计文档
+
+- [研究主题与 Obsidian Vault 详细设计](./archive/research-vault-detailed-design.md) — 研究笔记与检索链路已删除
+- [Strategy 日运行与历史评估可靠性详细设计](./archive/strategy-daily-cycle-and-replay-detailed-design.md) — publication/acceptance、观察补全、daily cycle 编排与 replay 已删除
+- [Strategy 严格回测详细设计](./archive/strategy-strict-backtest-detailed-design.md) — 严格回测整链已删除
+- [Phase 3 基本面 PIT 因子与横截面评分详细设计](./archive/fundamental-factor-scoring-phase3-detailed-design.md) — 基本面因子链路已删除
+- [Strategy AI 生命周期管理详细设计](./archive/strategy-ai-lifecycle-detailed-design.md) — 自治审批与周调度已删除
 
 ## 维护约定
 

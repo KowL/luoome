@@ -1,5 +1,7 @@
 # 共享数据底座与能力插件详细设计及分阶段实施计划
 
+> **2026-11-20 简化：** 插件启停收敛为 `plugins.json` 一个只读启用位——permit/许可令牌、撤销队列、drain 记账、`epoch`/revision 校验、Web 插件管理页与 `luoome plugins` 命令均已删除；本文涉及这些机制的小节仅作历史设计记录，当前语义见 [ARCHITECTURE.md](../ARCHITECTURE.md) §7.1.1。
+>
 > 状态：P0–P2 已实施；P3 策略执行与任务资源切片已实施，验收与限制见第 17 节；P4 内置管理已实施，见第 18 节；其它业务切片待实施。
 > 日期：2026-11-15；代码基线：`1c0c516e`。
 > 评估：Codex、GPT-6 Astra（High）、本地 Kimi CLI（`kimi-code/k3.1-pro`）共同讨论；评审取舍见第 14 节。

@@ -2,7 +2,7 @@
 
 > 状态：**已实现**（2026-08-21，M7A～M7D 四切片全部交付并通过全量门禁与浏览器验收）
 > 上位文档：[AI 投资 Agent 协作体验 PRD](../prd/ai-investment-agent.md)
-> 关联：[Web 对话助手设计](./web-chat-design.md)、[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md)、[研究主题与 Obsidian Vault 详细设计](./research-vault-detailed-design.md)
+> 关联：[Web 对话助手设计](./web-chat-design.md)、[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md)、[研究主题与 Obsidian Vault 详细设计](../archive/research-vault-detailed-design.md)
 > 排期：[开发计划](../development-plan.md) M7
 
 ## 1. 背景与范围

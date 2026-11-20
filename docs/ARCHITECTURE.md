@@ -1064,78 +1064,23 @@ type ToolError =
 
 ### 8.1 内置 workflow
 
-- `daily-advice`：每个持仓股 → `analyze_stock` → 持久化 → 推送高分建议（v0.2）
-- `run-strategies`：运行已发布 Strategy，并按 active 显式订阅投影到目标 Watchlist；只有 published operational run 可投影
-- `sync-portfolio-watchlists`：按账户同步 portfolio 来源
-- `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
-- `risk-report`：风控指标 + 持仓建议（v0.3）
-- `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
-- `post-market-data`：交易日盘后同步股票目录，并用 fuyao 全市场 Parquet dump 同步**原始日线**
-  （最近 10 个交易日增量）与**复权因子**（全量事件）；任一步失败时保留成功项并返回 partial。
-  Web 进程内的 `post-market-scheduler` 在交易日 16:00 后自动触发一次（进程内按交易日去重）。
-- `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
-  StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
-- `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
-  逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
-  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划。
-  盘中持仓估值与行动候选复用 core 的行情资格判断：须有上游事件时间，事件与当前时点均在交易时段，
-  抓取完成不晚于判断时点且事件距判断不超过 120 秒。盘外实时报价仍须有上游时间；规范日线的收盘价
-  按既有交易日口径使用。缺合格行情时，最近报价只保留参考估值和限制说明，账户事实为 `unavailable`，
-  `totalAssets` / `stockMarketValue` 为 `null`，不能借参考价激活其它股票的精确预算或行动计划。
-  候选（`analyze_stock` scope=`strategy-candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
-  缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
-  生效计划按 horizon 的最长持有交易日独立设置硬期限，来源 Advice 在构建时必须有效；
-  草案最多两个交易日，连续草案继承截止时间，重复或已过期且仍受阻的草案不新增版本。
-  条件、账户前提、反证和风险未变化时维持尚未过期的原生效版，复核结果及本次 Advice 引用
-  写入 WorkflowRun；批次区分新增、维持与草案数量，含草案的批次标为 partial。
-  core 统一选择当前版本；监控和原子预算提交均保留最新草案之前的生效版。
-  `list_trading_plans(currentOnly=true, includeMonitoring=true)` 按计划聚合后限制数量，
-  返回 `views`（主版本、修订草案）与 `monitoring.expiresAt`（含存量草案的实际截止时间），
-  监控投影从复核审计补齐 `lastReviewedAt` / `nextReviewAt`，复核时间更新不延长硬期限；
-  Web 根据服务端投影显示当前计划和历史，不复制版本选择与过期规则。
-- `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
-  `batch_quote` 落库后派生账户事实，再按新鲜行情求值计划条件，
-  入场条件按 ALL 合成单个边沿，风险/退出命中阻止入场提醒；风险与退出条件只在对应仓位已持仓时才投递提醒，
-  未持仓计划只监控买入候选，这类命中只写 `not-requested` 留痕（边沿状态仍照常求值）；
-  冷却对所有优先级生效，每日上限只约束常规提醒，优先级决定消息 level；风险直接通知原始触发事实与计划版本，
-  不调用 AI 或自动改写计划；发布前重新校验账户事实指纹、
-  计划版本、行情时效、条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），
-  行情刷新和失败重试保留首次可信事件时间，复查时在行情请求结束后重新读取时钟，不能重置该时限，
-  在同一租约内提交 Trigger + WatchRuleState。只监控与当前账户事实指纹一致的计划；单条候选过期、
-  失效或条件恢复只丢弃该条且不消耗该边沿，不阻断同轮其它信号；失败/中断投递作为重试候选。
-  全程复用共享预警租约与续租保护；试跑不保存 Trigger/边沿/投递次数。通知披露下一步、反证和卖出限制。
-  盘中报价还要求 `fetchedAt` 不晚于决策时钟；触发快照保存首次上游事件、首次取得和发布复查时间，
-  WatchTrigger 保存最近一次投递尝试与完成时间。`sent` 的完成时间仅用于计算渠道受理耗时，
-  不代表设备送达。单条候选在发布复查中超时、缺可信事件时间或失效时，
-  同租约原子保存 `expired` / `unverifiable` / `invalidated` 触发审计，不推进边沿、
-  不生成 SignalObservation，也不进入投递重试；已形成候选后的整轮账户事实、计划或行情读取失败
-  同样保存为 `invalidated` / `unverifiable` 审计。候选形成前的数据源失败只保留运行错误，
-  不伪造不存在的市场事件。`get_intraday_delivery_audit` 按账户与上海自然日读取完整触发集合，
-  将渠道受理的 10 分钟内、超时、时点不可核验与未受理状态分别计数；P95 只对时点可核验的
-  渠道受理样本计算，同时展示全部候选分母，不把渠道受理当作设备送达。
-- 预警执行：`intraday-watch` 使用 SQLite 租约（120 秒有效期、30 秒心跳，
-  工具调用前检查所有权）；并发调用返回可重试错误。所有优先级都进入投递：normal 与 urgent 同样受冷却
-  和每日上限约束，优先级只决定消息 level 与标题前缀；`notifyOnRecovery` 未开启的 recovered 与试跑
-  仍为 `not-requested`。`commit_watch_evaluation` 在同一事务校验 owner
-  并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，
-  后续轮次补偿当日 failed/pending（最多三次，退避 1/5 分钟，停用计划/移除成员/额度不足时不发送）。
-  每日额度包含重试和已开始发送的 pending；WatchRun 本轮触发列表可以包含同 id 的补偿投递。
-  飞书没有端到端幂等确认：外部已接收但本地回写前崩溃时，补偿仍可能重复，不能承诺恰好一次送达。
-  WatchRun 的历史 `delivered` 计数只表示渠道受理；Dashboard API 投影为 `channelAccepted`，
-  `deviceDelivered` 保持 `null`，直到有真实设备回执。
-  `render_report(format=notification)` 从结构化报告生成有长度预算的移动摘要，不截取完整 Markdown；
-  `markdown/plain-text` 继续保留完整证据。列表可保存 `notificationSummary` 作为生成时的阅读投影，
-  旧报告缺少该字段时仅提供核对入口，不从长文本猜测交易结论。飞书适配器只在卡头展示标题。
-  通知板块采用显式允许列表，仅包含市场、策略研究、预警；账户估值/仓位/交易计划、交易归因、
-  个人行为与混合数据质量板块留在完整报告，私有板块缺口不参与通知告警。存量建议摘要去除目标仓位行。
-  正文空指标聚合说明，全空表格列省略，诊断缺口去重后集中展示；结构化快照保留原始 null 和缺失原因。
-  单日账户绩效向前取一个交易日作为收益基点；未配置基准不输出空指标，多账户 TWR/回撤不做算术聚合。
-  情绪指数按请求交易日逐条筛选，混合日期仅使该维度 partial，不丢弃同日行情；空返回仍为 unavailable。
-  推荐 V1/V2 共用建议摘要，规则兜底按单批合并提示，仍保存逐股 Advice 和推荐批次审计。
-- **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
-  `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
-  日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表。炸板/断板另由 `post-market-data` 调 `sync_limit_up_board_history` 写入 `limit_up_board_history`（逐日、保留修订），Strategy 只读 PIT 事实（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
+只保留 9 个注册入口（`architecture.test.ts` 守住数量与名字）；其余可复用管线用 `defineOperation`，不作为 workflow 注册。
+
+| workflow | 职责 |
+|---|---|
+| `daily-advice` | 每日判断：账户事实 + 价格结构 + 当日新闻 + 板块 + 策略信号 → 逐只 `analyze_stock`；持仓全覆盖，候选池 ≤10（手动关注 + 策略信号 ≤3），输出「今日不动/今日可动」汇总 |
+| `report` | 只接受 `kind=weekly`：调用 `settle_advices` 结算 T+1/3/5，再生成建议成绩单（命中率、超额、confidence 分组、门禁），落库为一份 Report |
+| `strategy` | 只接受 `job=run`：按显式策略运行 `run_strategy`，不再有 scheduled/daily/observations 编排 |
+| `intraday-watch` | AlertPlan → Watchlist members → 报价/昨收/策略信号/事件 → 边沿、冷却、每日上限 → WatchTrigger → 通知；含交易计划监控分支 |
+| `post-market-data` | 交易日盘后同步股票目录、fuyao 全市场 dump 的原始日线与复权因子；任一步失败保留成功项并返回 partial；Web 进程内 16:00 后按交易日去重触发 |
+| `snapshot-account-performance` | 每日账户估值快照，供 TWR/回撤/归因读取 |
+| `sync-market` | 手动/定时拉指数的行情与情绪快照 |
+| `sync-portfolio-watchlists` | 按账户把持仓同步为 portfolio 来源的关注项 |
+| `sync-sector-catalog` | 同步板块目录与成分关系，供 `marketContext.sectors` 使用 |
+
+已下线（2026-11-20）：`opening-report`、`closing-report`、`closing-report-cutoff`、`daily-review`、`risk-report`、`market-outlook`、`run-strategy-schedules`、`strategy-daily-cycle`、`trading-plan-daily-cycle`、`intraday-trading-plan-watch`、`replay-strategy-range`、`complete-strategy-observations`、`sync-research-vault`。对应能力与设计文档见 `docs/archive/`。
+
+盘中提醒仍由 `intraday-watch` 承担：入场条件按 ALL 合成单个边沿，风险/退出命中阻止入场提醒；风险与退出条件只在对应仓位已持仓时投递；冷却对所有优先级生效，每日上限只约束常规提醒；发布前重新校验计划版本、账户事实指纹与行情时效，条件未变时保留尚未过期的原生效版；`sent` 只表示渠道受理，不代表设备送达。
 
 ### 8.2 Workflow 与 tool 的边界
 

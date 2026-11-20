@@ -30,33 +30,29 @@ StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservat
 SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，不再创建、补全、展示或作为
 验收等待条件。存量 `horizon=t20` 行只保留读取兼容，不进入当前统计、推荐和实验事实。
 
-> 可靠性实现（2026-11-12）：`complete` 继续只表达执行终态；acceptance 与
-> `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用策略表上的
-> 调度字段加进程内互斥、本地日线（按 dataAsOf 截断）和观察补全，AI 不可用时 facts-only 降级；
-> replay/backtest/显式子集不发布。原 fencing lease、checkpoint 表与 DailyBar revision 已移除。
-> 跨日性能样本与真实运行记录继续作为运营观测，不设置固定交易日数量的完成门禁。详细契约见
-> [Strategy 日运行与历史评估详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
+> 状态语义（2026-11-20 简化）：`StrategyRun.status` 只表达执行终态，`scope` 区分
+> operational / evaluation / backtest 三种取数口径。只有「operational 且已结束（complete/partial）」
+> 的运行进入 current，并能作为建议的依据；acceptance 评分与 publication 发布资格
+> （withheld/non-publishing）已删除，不再有第二套发布状态。
+> 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，只把 score ≥ 60 的看多信号
+> 补进候选池（≤3 只）。观察到期补全、daily cycle 与 replay 已删除；
+> 详细契约见 [架构说明](./docs/ARCHITECTURE.md) §7–§8，历史设计见
+> [已归档的日运行设计](./docs/archive/strategy-daily-cycle-and-replay-detailed-design.md)。
 
 AI 可以提议修改策略（`strategy_version_proposal`），但只能产出待确认草案；候选版本冻结后，
 历史匹配和收益计算由确定性规则引擎执行，AI 不介入。草案必须由用户显式校验、发布后才会运行。
 
-### StrategySchedule
+### StrategySchedule（已失效）
 
-回答“已发布策略何时自动运行”。2026-11-10 收敛后，调度不再是独立实体：标准 5 段 cron 与
-`lastScheduledAt` 直接存在 `strategies` 表上，修改调度不改变 `definitionHash`。`run-strategy-schedules`
-在 Web 进程开启 `write + external` 时每分钟检查到期策略，用进程内互斥防止同一 tick 重入；
-不再有持久调度租约或 `StrategyRecommendationPolicy`，同一 SQLite 只允许一个写进程。
-非交易日与暂停策略不运行。
+`strategies` 表上的 5 段 cron 字段与 `lastScheduledAt` 仍在（存量兼容），但**没有调度器读取它们**：
+2026-11-20 删除了 `run-strategy-schedules` 与策略定时任务，策略只在每日判断里按需运行。
+修改这些字段不再产生任何自动运行，也不影响 `definitionHash`。
 
-`strategy-daily-cycle` 按 run → observations → insight 的阶段推进，每阶段写入 WorkflowRun 审计；
-AI 洞察不可用时按 facts-only 降级并标 `partial`，不回滚已发布运行，也不自动生成 Advice、通知或交易。
+### StrategyDailyCycleAudit（只读历史）
 
-### StrategyDailyCycleAudit
-
-回答“某个 StrategySchedule 的一次盘后日循环发生了什么、使用了哪个事实时点、在哪一阶段降级或失败”。
-它是 `strategy-daily-cycle` WorkflowRun 的稳定领域投影：v1 写入显式版本、Strategy/Schedule 归属与
-dataAsOf；无版本旧记录继续通过同一解码边界只读兼容。按 Strategy、Schedule 或 dataAsOf 查询时，
-必须先确定归属与时间范围再截取数量，避免其它策略的新运行挤掉目标审计历史。
+`strategy-daily-cycle` 已删除，本实体只用于读取存量审计：v1 记录显式版本、Strategy/Schedule 归属与
+dataAsOf，无版本旧记录走同一解码边界的只读兼容。新运行不再写入该类审计。
+按 Strategy、Schedule 或 dataAsOf 查询时，先确定归属与时间范围再截取数量。
 
 ### StrategyEvaluationData
 
@@ -141,15 +137,14 @@ StrategySignal，不临时运行全市场 Strategy。
 
 ### 个性化报告（Report）
 
-回答“某个周期发生了什么、哪些数据不可用、应去哪里继续研究”。报告保存结构化事实、数据
-截止时间、来源状态与缺失原因；Markdown 只是派生展示。报告不会自动生成 Advice 或触发交易。
+回答“过去 30 天的建议是否值得信任”。2026-11-20 起只剩一种报告：**每周建议成绩单**。
+它保存已结算样本数、命中率、平均超额（对沪深 300）、按 confidence 分组的命中率、验收门禁
+（≥50 条样本、≥60% 命中）与缺口说明；数据不足时该 section 标 unavailable 并写明原因，
+不伪造 0 值。报告保存结构化事实、数据截止时间、来源状态与缺失原因，Markdown 只是派生展示，
+不会自动生成 Advice 或触发交易。
 
-账户收盘报告与周报记录窗口内复盘输入指纹（`decisionReviewFingerprint`）。收盘复盘等待当日
-预期策略与该账户交易计划批次完成后统一生成，同一日期、同一范围只生成一份；重复生成和投递重试
-复用原报告，后到的数据不追加版本或改写正文。18:00 未完成的任务继续等待，不提前发布缺口版。
-周报支持根据后补或更正的本地事实生成不可变复盘补充版，保留原报告及其它章节；同一请求重试
-复用原结果。周报复盘补充版使用 `notificationPolicy=never`，投递认领、重试和状态修改均不能
-把它变成待通知报告。常规主报告与原研究补充版继续遵循各自既有通知策略。
+收盘报告、日报、风控报告与对应的调度已删除；`decisionReviewFingerprint` 等收盘复盘字段
+仅对存量报告只读兼容。
 
 ### 账户现金余额与账户事实（AccountFacts）
 
@@ -254,16 +249,10 @@ ST/20cm、停牌与除权日样本仍待交叉验证；AShareSentiment 的近期
 不是推算值。KPI 由 core 的 `deriveLimitUpMarketMetrics` 派生（封板率来自 `statistics`，基数为触板家数；
 封单留存 = 当前封单额 ÷ 峰值封单额），涨停原因只按 `limit_up_reason` 原文聚合，不映射行业、不改写文案。
 
-### ResearchDocument（研究笔记）
+### ResearchDocument（研究笔记，已删除）
 
-研究资料统一为轻量 `ResearchDocument` 索引：`research_document_index` 保存标题、摘要 excerpt、标签、
-显式关联股票代码（`stock_codes` JSON）与本地 Markdown 路径、来源/校验字段；`research_document_fts`
-是按 document 粒度的可重建 FTS5 投影。正文权威来源是本地 Obsidian Vault，SQLite 不保存分块、向量、
-Topic/Hypothesis 版本链或同步审计；同步流程与 Git 远端拉取不再是研究域的持久化概念。
-
-股票研究 Profile 是该索引的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
-evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式 `stockCodes`
-时不得按行业或当前股票池推断研究结论。研究资料与策略事实均不自动创建 Advice 或 Trade。
+2026-11-20 随 research vault 一起移除：`research_document_index`、FTS5 投影、Obsidian 同步与检索工具
+均不存在，当前没有研究文档实体。建议与判断只消费账户事实、价格结构、当日新闻、板块与策略信号。
 
 ### 数据源观测（SourceObservation）
 

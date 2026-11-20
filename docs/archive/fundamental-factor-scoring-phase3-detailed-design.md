@@ -1,12 +1,14 @@
 # Phase 3 基本面 PIT 因子与横截面评分详细设计
 
+> **已归档（2026-11-20）。** 基本面 PIT 因子、横截面评分、相关表与 mock adapter 已全部删除。本文仅作设计追溯，不再描述当前实现。
+
 > **2026-11-12 状态：已裁撤。** 领域收敛 S2 已删除 `FinancialFact`/`FundamentalScore` 的 core、4 张表、4 个 Tool 与 mock adapter；本设计仅作追溯，不再排期。
 
 > 状态：P3-0 Core、P3-1 mock 装配与 P3-2 deterministic score engine 已实现；mock 只用于验证 revision/披露时点、双仓储、横截面评分和 Tool 契约，真实数据门禁仍为 `not-ready`，不能据此宣称 Phase 3 已完成。（2026-08-22）
 >
 > 上位约束：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、[Strategy DSL PRD](../prd/strategy-dsl.md)、[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)。
 >
-> 相关实现边界：[行情与股票目录详细设计](./market-data-and-stock-universe-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Tushare 行情适配器设计](./tushare-market-adapter-design.md)。
+> 相关实现边界：[行情与股票目录详细设计](../ddd/market-data-and-stock-universe-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[策略工作台详细设计](../ddd/strategy-workspace-detailed-design.md)、[Tushare 行情适配器设计](../ddd/tushare-market-adapter-design.md)。
 
 本文件冻结 Phase 3 的数据、计算、存储、门禁和验收契约；当前按 §13 逐切片实现。任何实现都不得把现有报价、日线、报告或 Strategy 运行结果解释成基本面数据，真实完成仍必须通过本文的数据证据门禁。
 

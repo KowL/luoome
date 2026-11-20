@@ -46,9 +46,13 @@
    `(source_kind, source_id, horizon)`。`watch-trigger` 观察没有对应 `strategy_signals` 行，
    合并会让观察无处存放；存储主因（长 id 与 source_id 复制）已由 64 位信号 id 和自然键主键消除。
    决策记录见收敛设计 §6。
-17. **文档状态仍靠人工同步**：已裁撤能力的 DDD/PRD 目前用文首横幅标注，尚未移入 `archive/`；
-   下次整理文档时应连同 `docs/README.md` 导航一起归档，避免“已删除能力仍像现行设计”。
+17. ~~**文档状态仍靠人工同步**~~ ✅ 已修（2026-11-20）：5 篇已裁撤能力的设计文档移入
+    `docs/archive/`（research vault、strict backtest、daily-cycle/replay、AI 生命周期、基本面 PIT），
+    并在文首标注归档原因；`docs/README.md` 导航新增「已裁撤能力的设计文档」分组，
+    保留但部分失效的 DDD/PRD（layered-capability-plugin、strategy-experiment-feedback、
+    vibe-ashare、strategy-workspace、mvp2、strategy-ai-managed-automation）补充了 2026-11-20 状态说明。
 
 ---
 
-修 P1 时优先 1 / 4（纯文档 + 导出，零风险）；2 / 3 涉及行为语义，先开 issue 讨论口径。
+本清单已清空：16 条全部关闭（#9 Web 鉴权经产品决定不做，仅保留「监听非 localhost 需部署侧隔离」的既有约束）。
+新增条目请按同样格式补定位，修完即删或标 ✅。

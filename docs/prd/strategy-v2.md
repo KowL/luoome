@@ -1,7 +1,7 @@
 # 策略工作台（Strategy Workspace）PRD
 
 > 2026-08-11 可靠性修订：运行终态、数据质量与发布决定分离；目标契约见
-> [Strategy 日运行与历史评估可靠性详细设计](../ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
+> [Strategy 日运行与历史评估可靠性详细设计](../archive/strategy-daily-cycle-and-replay-detailed-design.md)。
 > 2026-08-14 实现状态：Summary V4、acceptance、publication、fencing lease、daily cycle、PIT
 > replay 和 facts-only 降级已落地；跨日性能样本继续作为运营观测，不设置固定交易日数量门禁。
 > 2026-08-15 实现状态：Strategy → Watchlist 持久显式订阅与 complete/partial/failed source sync 已落地；

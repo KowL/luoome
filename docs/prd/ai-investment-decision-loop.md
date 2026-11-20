@@ -6,7 +6,7 @@
 > 日期：2026-07-29
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)、[SECURITY.md](../SECURITY.md)
 > 关联 PRD：[Agent 协作体验](./ai-investment-agent.md)、[策略定义与研究](./strategy-dsl.md)、[投资观察中心](./watchlist.md)
-> 研究模型更新：研究主体、正文存储和时间线契约以[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)为准；本总纲中的决策闭环和 Advice 边界继续有效
+> 研究模型更新：研究主体、正文存储和时间线契约以[研究主题与 Obsidian Vault 详细设计](../archive/research-vault-detailed-design.md)为准；本总纲中的决策闭环和 Advice 边界继续有效
 
 ## 1. 文档结论
 

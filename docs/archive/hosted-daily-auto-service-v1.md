@@ -1,7 +1,7 @@
 # 托管版每日自动服务 v1（预警 + 报告 + 证据链 + 成本闭环）
 
 > 状态：已确认范围，待实现；2026-10-15。
-> 关联：[订阅定价 v1](./subscription-pricing-v1.md)、[运营管理页面 v1](./admin-console-v1.md)、[改造计划](../hosted-personal-subscription-development-plan.md)、[运行手册](../runbooks/hosted-personal-subscription.md)。
+> 关联：[订阅定价 v1](./subscription-pricing-v1.md)、[运营管理页面 v1](./admin-console-v1.md)、[改造计划](hosted-personal-subscription-development-plan.md)、[运行手册](hosted-personal-subscription.md)。
 > 约束：[CONTEXT](../../CONTEXT.md)、[ARCHITECTURE](../ARCHITECTURE.md)、[SECURITY](../SECURITY.md)、[AGENTS](../../AGENTS.md)。
 > 来源：2026-10-15 Kimi 与 Codex 双 Agent 评审收敛的两周迭代计划。
 

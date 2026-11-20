@@ -9,7 +9,7 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent T
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
 Web、CLI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和单主用户多账户模型（`Account`）。
-无需邮箱注册、订阅或独立控制平面进程；后台自动任务（Strategy 日循环、账户计划盘后/盘中盯盘、收盘报告截止、账户绩效估值与策略自治）在 Web 进程开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 时内置运行。
+无需邮箱注册、订阅或独立控制平面进程；后台自动任务（盘后行情同步、盘中盯盘、每日判断、账户绩效估值、每周成绩单）在 Web 进程开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 时内置运行；策略没有独立定时器。
 
 ## 名字
 

@@ -3,7 +3,7 @@
 本手册当前入口为 `hosted-web-v2`：在原 Web 上接入登录、用户隔离、订阅和唯一默认投资账户。
 Web 不再按 `LUOOME_MODE` 分流，所有启动入口均需要登录，生产注册默认关闭。
 旧 `hosted-facts-v1` 只供历史测试，公开启动入口拒绝该策略。
-v2 本轮实现与验证见[改造计划 §2.3](../hosted-personal-subscription-development-plan.md#23-本轮落地与验收记录)；
+v2 本轮实现与验证见[改造计划 §2.3](hosted-personal-subscription-development-plan.md#23-本轮落地与验收记录)；
 旧事实版工程证据见[历史验收记录](../archive/hosted-personal-subscription-fixture-acceptance.md)。
 真实 SMTP 验证码已实现；实际投递、支付、完整业务调度及异机恢复仍须验收，不能据此开放收费。
 

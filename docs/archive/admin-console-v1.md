@@ -1,7 +1,7 @@
 # 运营管理页面 v1（用户与订阅额度管理）
 
 > 状态：设计与实现；2026-10-15。
-> 关联：[订阅定价 v1](./subscription-pricing-v1.md)、[支付渠道调研](./payment-channel-research.md)、[运行手册](../runbooks/hosted-personal-subscription.md)。
+> 关联：[订阅定价 v1](./subscription-pricing-v1.md)、[支付渠道调研](./payment-channel-research.md)、[运行手册](hosted-personal-subscription.md)。
 > 约束：[CONTEXT](../../CONTEXT.md)、[SECURITY](../SECURITY.md)、[AGENTS](../../AGENTS.md)。
 
 ## 1. 目标与范围

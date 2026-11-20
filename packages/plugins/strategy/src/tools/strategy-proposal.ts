@@ -77,7 +77,7 @@ const PROPOSAL_RULES =
   'factReferences 只能引用 data.facts 中存在的 fact id；changeSummary 用一句话说明假设与风险，不得给出买卖建议或收益承诺。';
 
 /**
- * workflow-only（M2-S2，docs/ddd/strategy-ai-lifecycle-detailed-design.md §3.2）：
+ * workflow-only（M2-S2，docs/archive/strategy-ai-lifecycle-detailed-design.md §3.2）：
  * 唯一职责是把「基线版本 + 确定性事实 + DSL 白名单」交给 LLM 产出受 schema 约束的
  * 版本提议，不落库、不建 session；持久化与验证由 workflow 经既有 tool 编排。
  * LLM 调用抛错（含未配置）→ adapter_error；输出不合规（重试后仍不过 schema 或

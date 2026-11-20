@@ -1,12 +1,12 @@
 # 研究主题与 Obsidian Vault 详细设计
 
-> **2026-11-12 状态：大部分裁撤。** 仅保留 `research_document_index` + FTS5、Vault 本地同步与 `save_research_document`；Topic/Document 关系、chunk、embedding、Git 远端同步均已删除，下文对应章节仅作追溯。
+> **已归档（2026-11-20）。** 研究主题、Obsidian Vault 同步、chunk/embedding 与检索工具已全部删除（`research_*` 表同时从库中移除）。本文仅作设计追溯，不再描述当前实现。
 
 > 状态：Phase A～G 已实施；Phase F 采用独立 Git-only 安全同步 workflow，Phase G 完成 embedding 检索/跨模型评测
 > 日期：2026-08-20
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)、[AI 投资决策闭环](../prd/ai-investment-decision-loop.md)、[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)
-> 替代关系：本文替代 [ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) 中 `ResearchNote`、股票研究档案正文存储和对应 Tool/Web 设计；原文的 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则继续有效
+> 替代关系：本文替代 [ruo 能力迁移详细设计](../ddd/ruo-feature-migration-detailed-design.md) 中 `ResearchNote`、股票研究档案正文存储和对应 Tool/Web 设计；原文的 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则继续有效
 
 ## 1. 结论
 

@@ -1,5 +1,7 @@
 # Strategy 实验、晋级与反馈闭环详细设计
 
+> **2026-11-20 状态：观察链路已删除。** 观察到期补全（`complete_strategy_observations`）与 replay 工作流已移除，实验上下文不再产生 T+1/T+3/T+5 结算。
+>
 > **2026-11-12 状态：部分裁撤。** 逐日评估会话状态机、自动晋级与 RecommendationPolicy 预检相关实体已删除；DSL Catalog、评分分解与实验上下文保留。
 
 > 状态：Wave A～Wave C 已实施；Wave D 开发中
@@ -7,10 +9,10 @@
 > 2026-09-02 修订：`eligible-for-human-review` 的人工评审语义已被
 > [策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) 扩展——eligible 版本由
 > strategy-autonomy-weekly 自动接 publish（晋级门阈值不变），人工评审只处理 blocked；
-> 见 [Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)。
+> 见 [Strategy AI 生命周期管理详细设计](../archive/strategy-ai-lifecycle-detailed-design.md)。
 > 开发计划：[Strategy 实验、晋级与反馈闭环开发计划](../strategy-experiment-feedback-development-plan.md)
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)、[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
-> 上位设计：[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)
+> 上位设计：[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](../archive/strategy-daily-cycle-and-replay-detailed-design.md)
 > 安全约束：[SECURITY.md](../SECURITY.md)、[CONTEXT.md](../../CONTEXT.md)
 
 ## 1. 设计结论

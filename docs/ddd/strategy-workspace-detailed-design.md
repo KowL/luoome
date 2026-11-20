@@ -8,7 +8,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
 > 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/plugins/strategy/src/tools/strategy-definition.ts`、`packages/toolkit/src/tools/strategy-query.ts`、`packages/plugins/strategy/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
-> 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5 审计已接入；T+20 已退役，不再作为观察等待项。
+> 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](../archive/strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线。**2026-11-20 起 publication/acceptance 已删除**，进入 current 的资格是「operational 且已结束（complete/partial）」，见 [架构说明](../ARCHITECTURE.md)。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5 审计已接入；T+20 已退役，不再作为观察等待项。
 
 ## 1. 设计结论
 

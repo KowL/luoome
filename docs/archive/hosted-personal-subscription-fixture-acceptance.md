@@ -2,8 +2,8 @@
 
 日期：2026-10-11。范围为 H0～H5 的工程实现与 fixture 验证，H6 未实现。
 没有连接真实用户、行情/邮件/支付账户，没有购买服务、提交、推送、创建 PR 或部署。
-当前运行契约见[运维手册](../runbooks/hosted-personal-subscription.md)，阶段门禁见
-[开发计划](../hosted-personal-subscription-development-plan.md)。
+当前运行契约见[运维手册](hosted-personal-subscription.md)，阶段门禁见
+[开发计划](hosted-personal-subscription-development-plan.md)。
 
 ## 自动验证
 

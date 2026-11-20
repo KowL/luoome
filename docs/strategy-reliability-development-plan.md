@@ -5,7 +5,7 @@
 > 状态：当前执行计划
 > 基线日期：2026-08-14；核心实现复核：2026-08-20
 > 适用范围：Strategy 的定时运行、当前股票池、SignalObservation、AI 洞察与历史评估
-> 详细设计：[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
+> 详细设计：[Strategy 日运行与历史评估可靠性详细设计](./archive/strategy-daily-cycle-and-replay-detailed-design.md)
 
 ## 1. 目标
 

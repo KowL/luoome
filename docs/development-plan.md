@@ -199,7 +199,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 
 开发前统一遵守以下覆盖关系：
 
-- `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](./ddd/research-vault-detailed-design.md)
+- `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](./archive/research-vault-detailed-design.md)
   替代，不恢复旧 ResearchNote CRUD。
 - 旧 Watchlist PRD 中“自动绑定”的 Strategy source 同步已按较新的 Strategy Workspace 决策收敛为持久
   显式 opt-in 订阅：只有 published operational run 可投影，complete sync 才结束缺失来源，partial/failed
@@ -318,7 +318,7 @@ Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证�
 报告、工作台高级 tab 收深）。M2 AI 生命周期管理已于 2026-09-02 交付（StrategyAutonomyAction
 实体与双仓储、自动暂停、AI 提议 + 自动验证、晋级门自动发布、blocked 人工队列、周日调度挂接与
 Web 时间线），实施偏差记录于
-[Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) §8；其中
+[Strategy AI 生命周期管理详细设计](./archive/strategy-ai-lifecycle-detailed-design.md) §8；其中
 evaluation scope 允许绑定未发布 valid 版本的不变量放宽需特别关注。§9 回补（自动归档、AI 创造
 全新策略）同日交付，实施记录见同文档 §9.3。遗留后续：M2 全链路真实运行证据积累。
 

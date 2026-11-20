@@ -1,6 +1,7 @@
 # Strategy 严格回测详细设计
 
-> **2026-11-12 状态：代码保留、不再投入。** `strategy_backtest_runs` 与门禁求值仍在，但 `daily_bar_revisions` 已删除，历史切片改按 `dataAsOf` 截断；八项门禁的真实数据验收不再排期。
+> **已归档（2026-11-20）。** 严格回测（backtest scope、门禁求值、`strategy_backtest_runs`）已整体删除，评估器身份常量仅作为历史运行快照的一部分保留。本文仅作设计追溯，不再描述当前实现。
+
 
 ## 目标与边界
 

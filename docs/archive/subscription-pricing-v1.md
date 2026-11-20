@@ -1,7 +1,7 @@
 # 订阅定价与套餐设计 v1
 
 > 状态：首期单档方案已确认并部署；2026-10-14。
-> 约束：[领域语言](../../CONTEXT.md#个人订阅托管模式)、[改造计划](../hosted-personal-subscription-development-plan.md)、[运行手册](../runbooks/hosted-personal-subscription.md)。
+> 约束：[领域语言](../../CONTEXT.md#个人订阅托管模式)、[改造计划](hosted-personal-subscription-development-plan.md)、[运行手册](hosted-personal-subscription.md)。
 > 本文是产品决策记录；套餐的工程契约以 `PlanVersionSchema` 为准，运营套餐文件不进仓库（`deploy/hosted/operator/` 已 gitignore）。
 
 ## 1. 定价立场

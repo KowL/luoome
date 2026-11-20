@@ -1,7 +1,7 @@
 # 支付渠道接入调研
 
 > 状态：调研完成，待决策；2026-10-14。
-> 关联：[订阅定价与套餐设计 v1](./subscription-pricing-v1.md)、[运行手册](../runbooks/hosted-personal-subscription.md)。
+> 关联：[订阅定价与套餐设计 v1](./subscription-pricing-v1.md)、[运行手册](hosted-personal-subscription.md)。
 > 结论先行：**注册个体工商户 → 域名 ICP 备案 + HTTPS → 微信支付 Native（扫码）+ 支付宝电脑网站支付双渠道直连**是唯一长期路径；个人收款码和服务商二级商户只适合过渡且有明确风险。
 
 ## 1. 代码侧现状：契约已就绪，只缺 provider 实现

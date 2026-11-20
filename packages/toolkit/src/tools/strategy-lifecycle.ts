@@ -387,7 +387,7 @@ export const ArchiveStrategyInput = z.object({ strategyId: z.string().min(1) });
 export const ArchiveStrategyOutput = z.object({ strategy: StrategySchema });
 
 /**
- * 归档为生命周期终态（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9.1）：
+ * 归档为生命周期终态（docs/archive/strategy-ai-lifecycle-detailed-design.md §9.1）：
  * 只允许 paused 的用户 Strategy（active/draft 拒绝），builtin 拒绝，无自动恢复。
  * 归档同时清空 Strategy.scheduleCron——run-strategy-schedules 按 cron + lastScheduledAt 调度，
  * 不清配置会让 archived 策略在内存调度里继续到期再跳过。

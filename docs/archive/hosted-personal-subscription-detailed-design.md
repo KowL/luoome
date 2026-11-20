@@ -2,7 +2,7 @@
 
 > 状态：2026-10-13 原 Web 请求级融合、唯一默认账户及名称修改、订阅/通知设置页面已实现，并完成本轮隔离 fixture 浏览器验证。
 > 原业务自动调度、通知投递汇总、统一配额计量及真实 provider 接入仍未完成；本轮验证不代表完整业务链路或生产服务已可用。
-> 配套：[开发改造计划](../hosted-personal-subscription-development-plan.md)。
+> 配套：[开发改造计划](hosted-personal-subscription-development-plan.md)。
 > 现有领域事实来源：[CONTEXT](../../CONTEXT.md)、[ARCHITECTURE](../ARCHITECTURE.md)、
 > [SECURITY](../SECURITY.md)及当前代码；历史工程证据见[隔离验收记录](../archive/hosted-personal-subscription-fixture-acceptance.md)。
 
@@ -55,7 +55,7 @@
 | Strategy、Watchlist、AlertPlan、报告和 AI | [tools registry](../../packages/tools/src/registry.ts)、[workflows](../../packages/workflows/src/index.ts) | 原功能保留，HTTP/子工具/后台任务均校验当前 Tenant 与订阅 |
 | 托管身份、存储、支付及恢复工程 | [历史验收](../archive/hosted-personal-subscription-fixture-acceptance.md) | 保留既有证据范围；不可替代新业务融合验收 |
 | 进程配置及部分任务持有共享 ctx | [server](../../apps/web/src/server.ts) | 请求级 context 桥接，SSE/后台执行持有 runtime lease |
-| 模型/数据源/Vault/整库导入设置 | [运行手册](../runbooks/hosted-personal-subscription.md) | 管理员配置与租户偏好分离，不能让普通用户修改平台全局配置 |
+| 模型/数据源/Vault/整库导入设置 | [运行手册](hosted-personal-subscription.md) | 管理员配置与租户偏好分离，不能让普通用户修改平台全局配置 |
 
 ### 2.1 必须保持的领域语义
 

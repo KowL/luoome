@@ -1,5 +1,7 @@
 # Strategy 日运行与历史评估可靠性详细设计
 
+> **已归档（2026-11-20）。** publication/acceptance 状态机、观察到期补全、`strategy-daily-cycle` 编排与 replay 工作流已删除；策略现在只在每日判断里按需运行取当日信号。本文仅作设计追溯，不再描述当前实现。
+
 > **2026-11-12 状态：可靠性机制已简化。** 持久 lease/heartbeat、`strategy_data_checkpoints`、`daily_bar_revisions` 与逐日评估会话已删除；日线按 `dataAsOf` 截断读取，调度用策略表字段 + 进程内互斥。
 
 > 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+5 仍按开发计划持续验收

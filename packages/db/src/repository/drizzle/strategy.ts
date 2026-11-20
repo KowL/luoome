@@ -35,7 +35,7 @@ type SignalRow = typeof strategySignals.$inferSelect;
 type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
 
 /**
- * 可运行版本判定（M2 自治验证，docs/ddd/strategy-ai-lifecycle-detailed-design.md §8/§9.2）：
+ * 可运行版本判定（M2 自治验证，docs/archive/strategy-ai-lifecycle-detailed-design.md §8/§9.2）：
  * evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version，
  * 也允许 draft 状态的 Strategy（AI 新策略首发前的独立验证；draft 无 schedule、
  * 不产生生产信号）；operational 仍要求 active Strategy 的 published valid version。
