@@ -1,10 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ManagedPluginId } from '@luoome/core';
+import { MANAGED_PLUGIN_IDS, type ManagedPluginId } from '@luoome/core';
 import { startPortfolioPerformanceScheduler } from '@luoome/plugin-performance-task';
-import { startClosingReportScheduler } from '@luoome/plugin-report';
-import { startStrategyScheduler } from '@luoome/plugin-strategy';
+import { startWeeklyReportScheduler } from '@luoome/plugin-report';
 import { startIntradayPlanScheduler } from '@luoome/plugin-watch';
 import { buildTestContext, createTestPluginControl } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -20,17 +19,12 @@ const deferred = () => {
 };
 const setup = async () => {
   const home = mkdtempSync(join(tmpdir(), 'luoome-p3-task-'));
-  const { store, executionPolicy } = createTestPluginControl(home);
+  const { executionPolicy, set } = createTestPluginControl(home, MANAGED_PLUGIN_IDS);
   const ctx = await buildTestContext({ executionPolicy });
-  const set = (id: ManagedPluginId, enabled: boolean) => {
-    const read = store.read();
-    if (!read.ok) throw new Error('missing');
-    store.set(id, enabled, read.config);
-  };
   return { ctx, set, clean: () => rmSync(home, { recursive: true, force: true }) };
 };
-const id = 'task.strategy-schedules' as const;
-const requires = ['business.strategy-execution'] as const;
+const id = 'task.collect-market-snapshot' as const;
+const requires: readonly ManagedPluginId[] = [];
 
 describe('plugin task resources', () => {
   it('unloads the performance timer, waits for work and re-enables once without restarting others', async () => {
@@ -88,19 +82,17 @@ describe('plugin task resources', () => {
           };
         },
       },
-      ...(['business.report', 'business.watch-monitoring', 'task.strategy-schedules'] as const).map(
-        (id) => ({
-          id,
-          start: () => {
-            otherStarts++;
-            return {
-              stop() {
-                otherStops++;
-              },
-            };
-          },
-        }),
-      ),
+      ...(['business.report', 'business.watch-monitoring'] as const).map((id) => ({
+        id,
+        start: () => {
+          otherStarts++;
+          return {
+            stop() {
+              otherStops++;
+            },
+          };
+        },
+      })),
     ]);
     try {
       expect(starts).toBe(0);
@@ -133,7 +125,7 @@ describe('plugin task resources', () => {
       await scheduler.tick();
       expect(calls).toBe(2);
       expect(starts).toBe(2);
-      expect(otherStarts).toBe(3);
+      expect(otherStarts).toBe(2);
       expect(otherStops).toBe(0);
       set(performance, false);
       tasks.reconcile();
@@ -154,26 +146,25 @@ describe('plugin task resources', () => {
     let starts = 0,
       stops = 0,
       calls = 0,
-      strategies = 0,
       watches = 0;
     const started = deferred(),
       release = deferred();
-    let scheduler: ReturnType<typeof startClosingReportScheduler> | undefined;
+    let scheduler: ReturnType<typeof startWeeklyReportScheduler> | undefined;
     const host = new PluginTasks(ctx, [
       {
         id: report,
         start: (scope) => {
           starts++;
-          const handle = startClosingReportScheduler(webPluginOperations, scope.ctx, {
+          const handle = startWeeklyReportScheduler(webPluginOperations, scope.ctx, {
             startImmediately: false,
             dispatch: (operation) => scope.run(operation),
-            runCutoff: async () => {
+            run: async () => {
               calls++;
               if (calls === 1) {
                 started.resolve();
                 await release.promise;
               }
-              return { ok: true, data: { date: '2026-11-16', created: [], failed: [] } };
+              return { ok: true, data: {} };
             },
           });
           scheduler = handle;
@@ -186,13 +177,6 @@ describe('plugin task resources', () => {
         },
       },
     ]);
-    const strategy = startStrategyScheduler(webPluginOperations, ctx, {
-      startImmediately: false,
-      run: async () => {
-        strategies++;
-        return { ok: true, data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 } };
-      },
-    });
     const watch = startIntradayPlanScheduler(webPluginOperations, ctx, {
       startImmediately: false,
       runAccount: async () => {
@@ -214,9 +198,7 @@ describe('plugin task resources', () => {
       host.reconcile();
       expect(stops).toBe(1);
       expect(host.status()[0]).toMatchObject({ phase: 'draining', inFlight: 1 });
-      await strategy.tick();
       await watch.tick();
-      expect(strategies).toBe(1);
       expect(watches).toBeGreaterThan(0);
       set(report, true);
       host.reconcile();
@@ -233,7 +215,6 @@ describe('plugin task resources', () => {
       expect(starts).toBe(2);
     } finally {
       release.resolve();
-      strategy.stop();
       watch.stop();
       await host.stop();
       clean();
@@ -330,78 +311,6 @@ describe('plugin task resources', () => {
     }
     expect(stops).toBe(2);
   });
-  it('owns one real strategy timer, removes it on disable, and keeps cutoff independent', async () => {
-    const { ctx, set, clean } = await setup();
-    set(id, false);
-    let starts = 0,
-      stops = 0,
-      calls = 0,
-      cutoffs = 0;
-    let scheduler: ReturnType<typeof startStrategyScheduler> | undefined;
-    const cutoff = startClosingReportScheduler(webPluginOperations, ctx, {
-      startImmediately: false,
-      runCutoff: async () => {
-        cutoffs++;
-        return { ok: true, data: { date: '2026-11-16', created: [], failed: [] } };
-      },
-    });
-    const host = new PluginTasks(ctx, [
-      {
-        id,
-        requires,
-        start: (scope) => {
-          starts++;
-          const handle = startStrategyScheduler(webPluginOperations, scope.ctx, {
-            startImmediately: false,
-            dispatch: (operation) => scope.run(operation),
-            run: async () => {
-              calls++;
-              return { ok: true, data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 } };
-            },
-          });
-          scheduler = handle;
-          return {
-            stop: () => {
-              stops++;
-              handle.stop();
-            },
-          };
-        },
-      },
-    ]);
-    try {
-      expect(starts).toBe(0);
-      set(id, true);
-      host.reconcile();
-      host.reconcile();
-      expect(starts).toBe(1);
-      if (!scheduler) throw new Error('missing timer');
-      const old = scheduler;
-      await old.tick();
-      expect(calls).toBe(1);
-      set('business.strategy-execution', false);
-      host.reconcile();
-      expect(stops).toBe(1);
-      await old.tick();
-      expect(calls).toBe(1);
-      await cutoff.tick();
-      expect(cutoffs).toBe(1);
-      set('business.strategy-execution', true);
-      host.reconcile();
-      host.reconcile();
-      expect(starts).toBe(2);
-      await old.tick();
-      expect(calls).toBe(1);
-      await scheduler.tick();
-      expect(calls).toBe(2);
-    } finally {
-      await host.stop();
-      cutoff.stop();
-      clean();
-    }
-    expect(stops).toBe(2);
-  });
-
   it('reports bounded drain, defers new registration until old work ends, and revokes saved contexts', async () => {
     const { ctx, set, clean } = await setup();
     const started = deferred(),

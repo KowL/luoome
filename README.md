@@ -144,39 +144,12 @@ OpenAI-compatible Chat Completions 接入。
 
 Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
 
-策略 AI 洞察已支持独立启停：使用 `luoome plugins init --dry-run` 查看迁移基线，显式初始化后通过
-带版本的 `plugins set` 管理 `strategy.ai-insight`。未初始化、配置损坏或停用时，日循环和周报仍保留
-确定性事实，不调用策略解释模型；不影响其它 AI 功能。写配置需 `LUOOME_EXPOSE_WRITE=true`，
-生成洞察仍需原 external 授权。完整命令与生效边界见[插件控制](./docs/USER_GUIDE.md#策略-ai-插件控制p1)。
+策略 AI 洞察由 `plugins.json` 的 `strategy.ai-insight` 独立启停。配置缺失、损坏或停用时，日循环和周报仍保留
+确定性事实，不调用策略解释模型；不影响其它 AI 功能。生成洞察仍需原 external 授权。
 
-行情提供者与采集任务也可分别启停；新增项默认关闭，已有配置先显式迁移，再分别启用 source 与 task。全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据；命令见[提供者与采集任务控制](./docs/USER_GUIDE.md#提供者与采集任务控制p2)。
+内置能力的启停只有一处：手写 `$LUOOME_HOME/plugins.json`，改完重启宿主生效。没有 CLI 命令，也没有 Web 管理页；缺省即关闭，启用不授予 write/external，也不改变工具白名单。可用的 id 与写法见[插件启用清单](./docs/USER_GUIDE.md#插件启用清单只读)。
 
-策略执行与自动调度也可分别启停：`business.strategy-execution` 管理新运行/试跑/回测，`task.strategy-schedules` 管理自动策略 timer。
-新增项默认关闭，历史查询与报告 cutoff/补投保留；启用和迁移步骤见[策略执行控制](./docs/USER_GUIDE.md#策略执行与自动调度控制p3)。
-
-Web「设置 → 插件」可预览并显式初始化、迁移和启停上述内置能力，查看依赖、可能影响、
-当前 Web 宿主的门禁复核、运行与排空状态。预览不会自动启用依赖或访问上游；保存需要 write 和同源请求，
-不会授予 external。MCP 支持同连接工具列表变化通知，旧工具调用仍在执行处复核。
-操作与覆盖范围见[Web 插件管理](./docs/USER_GUIDE.md#web-插件管理p4)。
-
-个股分析也可独立启停：Web「设置 → 插件 → 个股分析」或 CLI 的 `business.analysis` 开关覆盖个股、持仓、市场及策略候选 Advice 生成。
-新增项默认关闭；停用保留历史建议，旧调用与晚到结果不能绕过。迁移与边界见[个股分析插件控制](./docs/USER_GUIDE.md#个股分析插件控制)。
-
-盯盘监控可通过 Web 插件页或 `business.watch-monitoring` 独立启停，新增项默认关闭。
-停用停止新触发和盯盘通知、卸载 Web 定时器，保留历史与反馈；其它报告通知继续独立运行。
-完整规则见[盯盘监控插件控制](./docs/USER_GUIDE.md#盯盘监控插件控制)。
-
-报告生成与投递也可通过 Web 插件页或 `business.report` 独立启停，新增项默认关闭。
-停用停止新报告、截止补报及报告通知并卸载报告定时器；历史查询和导出保留，策略日循环、盯盘与盘后数据采集继续独立运行。
-操作与收尾规则见[报告插件控制](./docs/USER_GUIDE.md#报告插件控制)。
-
-通知通过 `business.notification` 或 Web「设置 → 插件 → 通知投递」独立启停，新增项默认关闭。
-停用覆盖报告、盯盘、log 降级与飞书连接测试；报告生成、策略日循环和盯盘触发记录保留。
-通道复用宿主实例，启用不注册新定时器、不自动重放成功通知。规则见[通知插件控制](./docs/USER_GUIDE.md#通知插件控制)。
-
-账户绩效自动估值通过 `task.snapshot-account-performance` 或 Web「设置 → 插件 → 账户绩效估值任务」独立启停，新增项默认关闭。
-停用卸载盘后定时器，停止批量任务并保留历史；账户和报告的按需绩效查询继续沿用共享计算及缓存。
-操作规则见[账户绩效估值任务控制](./docs/USER_GUIDE.md#账户绩效估值任务控制)。
+行情提供者与采集任务分别启停，全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据。策略执行由 `business.strategy-execution` 控制，策略没有独立定时器，每日判断按需运行少量 active 策略取当日信号。停用任一能力都不删除历史数据。
 
 ## 文档
 
@@ -214,35 +187,28 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 
 ## 自动任务
 
-当 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启时，Web 进程内置启动策略日循环、收盘报告截止检查、盘中账户计划盯盘、账户绩效估值与策略自治调度。
+当 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启时，Web 进程内置三类调度：
+交易日 17:30 的 `daily-advice`、每周一 08:00 的 `report`（kind=weekly），以及盘中的账户计划盯盘与
+账户绩效估值。
 
 单机 CLI 的 `watch` 与 `workflow run` 能力也可由外部 cron 显式触发，每次 workflow 运行落一条 `WorkflowRun` 审计：
 
 ```cron
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
-# 盘后补齐信号 T+1/T+3/T+5 真实表现（未到期样本保持 pending）
-10 18 * * 1-5   luoome workflow run complete-strategy-observations
-# 收盘复盘与周报：报告先保存，通知失败只会把 WorkflowRun 降为 partial
-0 18 * * 1-5   luoome workflow run closing-report --mode scheduled
-0 19 * * 5     luoome workflow run weekly-report --mode scheduled
-# 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
-0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
-# 可选 Research Vault Git 拉取：仅干净工作树 + fast-forward，先备份再重建索引
+# 每日判断（持仓 + 候选池，含"今日不动"结论）；Web 内置调度之外可作补偿
+30 17 * * 1-5  luoome workflow run daily-advice --mode scheduled
+# 每周建议成绩单：先结算到期建议，再统计命中率与超额
+0 8 * * 1      luoome workflow run report --mode scheduled
 ```
 
 - 预警试跑不写正式触发或改变边沿状态。盘中循环持有执行租约；失败及中断投递由后续盘中循环补偿，当日最多尝试三次，重试间隔 1 分钟、5 分钟，仍受每日额度限制。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
-- 内置 `run-strategy-schedules`：每次 tick 原子抢占到期配置；非交易日或暂停策略跳过并推进，
-  多实例与手工正式运行由租约防重。策略启用推荐政策后，完成运行会按评分、排名、每轮上限和冷却
-  生成可追溯 Advice，并可通知；Advice 失败不回滚运行，且不会自动交易。
-- `complete-strategy-observations`：以信号基准后的第 N 根 qfq 日线补齐事实观察；日线不足时
-  保持 `pending`，当前无指数日线时 benchmark 明确标记 unavailable；配置的 T+n 节点完成后可触发
-  对应股票的阶段 Advice。也可手工运行 `strategy-recommendations`，输入策略、运行和推荐政策。
-  `strategy-daily-cycle` 在发布正式运行后会自动创建 T+1/T+3/T+5 候选并补全到期观察。
-- 历史缺口用 `luoome tools call backfill_strategy_observation_candidates --input '{"since":"2026-08-12T00:00:00+08:00","limit":100}'` 显式补建；只补候选、不自动补全，重复执行幂等，单次最多 500 个 run。
-- 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
-  `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
+- 策略不再有独立定时器：`daily-advice` 每日 17:30 按需运行最多 2 个 active 策略的扫描，
+  只取评分 ≥60 的看多信号补进候选池（每周最多 3 只进判断）。正式运行用 `luoome workflow strategy`。
+- 关注列表与信号观察仍可单独查询；不再自动创建 T+1/T+3/T+5 观察候选，也不再有到期补全任务。
+- 只剩一类报告：每周一 08:00 的建议成绩单（命中率、平均超额、按 confidence 分组、50 条/60% 门禁）。
+  `scheduled` 模式默认通知，可在 `--input` 传 `{"notify":false}` 关闭；同一周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。
 
 ## 状态

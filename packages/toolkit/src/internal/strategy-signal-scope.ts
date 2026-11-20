@@ -1,5 +1,5 @@
 import {
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   isUsableStrategyRun,
   readStrategyRunSnapshot,
   type StrategySignal,
@@ -28,7 +28,7 @@ export const filterStrategySignalsByScope = async (
   return signals.filter((signal) => {
     const run = runById.get(signal.runId);
     if (run === null || run === undefined) return false;
-    if (input.scope === 'operational') return isPublishableOperationalRun(run);
+    if (input.scope === 'operational') return isAdvisoryEligibleRun(run);
     if (run.scope !== 'evaluation' || !isUsableStrategyRun(run)) return false;
     if (input.evaluationSessionId === undefined) return true;
     return (

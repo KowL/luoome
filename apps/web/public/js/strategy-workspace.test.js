@@ -465,13 +465,14 @@ describe('执行记录「重跑」按钮', () => {
     ...run,
     id: 'run-withheld',
     scope: 'operational',
-    publication: { status: 'withheld', reasons: ['acceptance-rejected'] },
+    status: 'failed',
+    error: '数据准备失败',
   };
   const publishedRun = {
     ...run,
     id: 'run-published',
     scope: 'operational',
-    publication: { status: 'published', reasons: [] },
+    status: 'complete',
   };
 
   const waitFor = async (cond) => {
@@ -479,7 +480,7 @@ describe('执行记录「重跑」按钮', () => {
     expect(cond()).toBe(true);
   };
 
-  it('withheld 行显示「重跑」，published 行不显示', async () => {
+  it('不参与建议的行显示「重跑」，参与建议的行不显示', async () => {
     globalThis.fetch = async (path) => {
       const url = String(path);
       if (url.includes('/api/strategies/rerun-demo/runs')) {
@@ -492,8 +493,8 @@ describe('执行记录「重跑」按钮', () => {
       .querySelectorAll('button')
       .filter((button) => button.textContent === '重跑');
     expect(reruns.length).toBe(1);
-    expect(section.textContent).toContain('暂不发布');
-    expect(section.textContent).toContain('已发布');
+    expect(section.textContent).toContain('不参与建议');
+    expect(section.textContent).toContain('参与建议');
   });
 
   it('确认重跑后 POST /run 且列表重新拉取渲染', async () => {
@@ -508,7 +509,7 @@ describe('执行记录「重跑」按钮', () => {
         return jsonResponse({
           ok: true,
           data: {
-            run: { id: 'run-new', status: 'complete', publication: { status: 'published' } },
+            run: { id: 'run-new', status: 'complete', scope: 'operational' },
             results: [{}],
             signals: [{}, {}],
           },
@@ -527,7 +528,7 @@ describe('执行记录「重跑」按钮', () => {
       .find((button) => button.textContent === '开始重跑');
     expect(confirm).toBeDefined();
     confirm.click();
-    await waitFor(() => section.textContent.includes('已发布；结果 1，信号 2'));
+    await waitFor(() => section.textContent.includes('结果 1，信号 2'));
     const post = calls.find((call) => call.method === 'POST');
     expect(post.url).toBe('/api/strategies/rerun-ok/run');
     expect(JSON.parse(post.body)).toEqual({ persist: true });

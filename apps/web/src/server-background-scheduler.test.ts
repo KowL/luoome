@@ -1,12 +1,11 @@
-import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 // 能力开关以启动参数为准；检查实际插件资源投影，定时器首次运行前即停止宿主。
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PluginConfigStore } from '@luoome/adapters';
 
+import { setPluginEnabled } from '@luoome/tools/testing';
 import { startWeb } from './server.js';
 
 const SAVED_ENV = [
@@ -37,24 +36,13 @@ afterAll(() => {
 
 const startOnce = async (options: Parameters<typeof startWeb>[0]): Promise<number> => {
   const dir = mkdtempSync(join(tmpdir(), 'luoome-web-scheduler-'));
-  const store = new PluginConfigStore(join(dir, 'plugins.json'));
-  store.set('task.collect-market-snapshot', true, store.initialize(BUILTIN_PLUGIN_DEFAULTS));
+  setPluginEnabled(join(dir, 'plugins.json'), 'task.collect-market-snapshot', true);
   const previousHome = process.env.LUOOME_HOME;
   process.env.LUOOME_HOME = dir;
   const handle = await startWeb({ ...options, dbPath: join(dir, 'local.db') });
   try {
-    const response = await fetch(`http://127.0.0.1:${handle.port}/api/settings/plugins`);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      ok: boolean;
-      data: { plugins: { id: string; runtime: { task: { phase: string } | null } }[] };
-    };
-    expect(body.ok).toBe(true);
-    const task = body.data.plugins.find(
-      (row: { id: string }) => row.id === 'task.collect-market-snapshot',
-    );
-    expect(task).toBeDefined();
-    return Number(task?.runtime.task?.phase === 'ready');
+    const task = handle.tasks?.status().find((row) => row.id === 'task.collect-market-snapshot');
+    return Number(task?.phase === 'ready');
   } finally {
     await handle.stop(true);
     if (previousHome === undefined) delete process.env.LUOOME_HOME;

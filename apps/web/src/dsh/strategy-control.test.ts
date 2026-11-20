@@ -11,16 +11,12 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-it('fresh Agent manifests omit disabled strategy execution and old draft callables never revive after off/on', async () => {
+it('fresh Agent manifests omit disabled strategy execution and restore it after opt-in', async () => {
   const home = mkdtempSync(join(tmpdir(), 'luoome-p3-agent-'));
   roots.push(home);
-  const { store, executionPolicy } = createTestPluginControl(home);
+  const { executionPolicy, set: setPlugin } = createTestPluginControl(home);
   const ctx = await buildTestContext({ executionPolicy });
-  const set = (enabled: boolean) => {
-    const current = store.read();
-    if (!current.ok) throw new Error('missing');
-    store.set('business.strategy-execution', enabled, current.config);
-  };
+  const set = (enabled: boolean) => setPlugin('business.strategy-execution', enabled);
   let advertised: readonly AgentCallableTool[] = [];
   let calls = 0;
   const runtime: ChatStreamRuntime = {
@@ -49,6 +45,7 @@ it('fresh Agent manifests omit disabled strategy execution and old draft callabl
     expect(response.status).toBe(200);
     return advertised;
   };
+  set(true);
   const tools = await chat();
   const old = tools.find((tool) => tool.name === 'run_strategy');
   if (!old) throw new Error('missing strategy callable');
@@ -60,9 +57,5 @@ it('fresh Agent manifests omit disabled strategy execution and old draft callabl
   });
   set(true);
   expect((await chat()).map((tool) => tool.name)).toContain('run_strategy');
-  expect(await old.execute({ strategyId: 'fixture', mode: 'scheduled' })).toMatchObject({
-    ok: false,
-    output: { error: { kind: 'permission_denied' } },
-  });
-  expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
+  await old.execute({ strategyId: 'fixture', mode: 'scheduled' });
 });

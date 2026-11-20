@@ -10,7 +10,6 @@ import {
   listAlertPlansTool,
   updateAlertPlanTool,
 } from './tools/alert-plan.js';
-import { backfillStrategyObservationCandidatesTool } from './tools/backfill-strategy-observation-candidates.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import {
   appendChatMessageTool,
@@ -23,7 +22,6 @@ import {
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
-import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
 import { listDecisionReviewsTool, saveDecisionReviewTool } from './tools/decision-review.js';
 import { deleteAdviceTool } from './tools/delete-advice.js';
 import { deleteReportTool } from './tools/delete-report.js';
@@ -80,7 +78,6 @@ import {
   listPortfolioPerformanceSnapshotsTool,
 } from './tools/portfolio-performance.js';
 import { pruneStrategyHistoryTool } from './tools/prune-strategy-history.js';
-import { reconcileStaleStrategyRunsTool } from './tools/reconcile-stale-strategy-runs.js';
 import { reconcileStaleWorkflowRunsTool } from './tools/reconcile-stale-workflow-runs.js';
 import { recordWorkflowRunTool } from './tools/record-workflow-run.js';
 import { renderReportTool } from './tools/render-report.js';
@@ -91,7 +88,6 @@ import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import { getAdviceSettlementsTool, settleAdvicesTool } from './tools/settle-advices.js';
 import {
-  completeStrategyObservationsTool,
   getSignalObservationStatsTool,
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
@@ -379,19 +375,9 @@ export const sharedToolContributions = {
     tool: auditPortfolioPerformanceSnapshotsTool,
     agent: false,
   },
-  backfill_strategy_observation_candidates: {
-    owner: 'business.strategy',
-    tool: backfillStrategyObservationCandidatesTool,
-    agent: false,
-  },
   batch_quote: { owner: 'business.market-data', tool: batchQuoteTool, agent: false },
   close_holding: { owner: 'business.portfolio', tool: closeHoldingTool, agent: false },
   compare_strategy_runs: { owner: 'shared-query', tool: compareStrategyRunsTool, agent: false },
-  complete_strategy_observations: {
-    owner: 'business.strategy',
-    tool: completeStrategyObservationsTool,
-    agent: false,
-  },
   create_account: { owner: 'business.portfolio', tool: createAccountTool, agent: false },
   create_alert_plan: { owner: 'business.watch', tool: createAlertPlanTool, agent: false },
   create_chat_session: { owner: 'platform.chat', tool: createChatSessionTool, agent: false },
@@ -406,11 +392,6 @@ export const sharedToolContributions = {
     agent: false,
   },
   create_strategy: { owner: 'business.strategy', tool: createStrategyTool, agent: false },
-  create_strategy_observation_candidates: {
-    owner: 'business.strategy',
-    tool: createStrategyObservationCandidatesTool,
-    agent: false,
-  },
   create_strategy_version: {
     owner: 'business.strategy',
     tool: createStrategyVersionTool,
@@ -565,11 +546,6 @@ export const sharedToolContributions = {
     agent: false,
   },
   reconcile_account_cash: { owner: 'shared-query', tool: reconcileAccountCashTool, agent: false },
-  reconcile_stale_strategy_runs: {
-    owner: 'business.strategy',
-    tool: reconcileStaleStrategyRunsTool,
-    agent: false,
-  },
   reconcile_stale_workflow_runs: {
     owner: 'platform.audit',
     tool: reconcileStaleWorkflowRunsTool,

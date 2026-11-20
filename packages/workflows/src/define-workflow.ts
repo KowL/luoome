@@ -123,20 +123,18 @@ export const defineOperation = <I, O>(definition: WorkflowDefinition<I>): Workfl
         ? {}
         : { executionPolicy: toolCtx.executionPolicy.bind() }),
     };
-    const permits = (definition.requiredPlugins ?? []).map(
-      (id) => [id, bound.executionPolicy?.acquire(id)] as const,
-    );
+    const plugins = definition.requiredPlugins ?? [];
     const check = () => {
       toolCtx.executionGuard?.();
-      if (bound.abortSignal?.aborted && permits.length > 0)
+      if (bound.abortSignal?.aborted && plugins.length > 0)
         throw new PluginExecutionDenied('execution:cancelled');
-      for (const [id, permit] of permits)
-        if (!permit?.ok || !bound.executionPolicy?.valid(permit.permit))
+      for (const id of plugins)
+        if (bound.executionPolicy?.isEnabled(id) === false)
           throw new PluginExecutionDenied(`plugin:${id}`);
     };
     const scoped = {
       ...bound,
-      ...(permits.length === 0 && bound.executionGuard === undefined
+      ...(plugins.length === 0 && bound.executionGuard === undefined
         ? {}
         : { executionGuard: check }),
     };

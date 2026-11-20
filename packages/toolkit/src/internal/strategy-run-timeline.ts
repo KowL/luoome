@@ -2,7 +2,6 @@ import type {
   Strategy,
   StrategyResult,
   StrategyRun,
-  StrategyRunPublicationStatus,
   StrategyRunScope,
   StrategyVersion,
   ToolContext,
@@ -69,7 +68,6 @@ export const readStrategyRunTimeline = async (
     readonly strategyId: string;
     readonly status?: StrategyRun['status'];
     readonly scope?: StrategyRunScope;
-    readonly publication?: StrategyRunPublicationStatus;
     readonly since?: Date;
     readonly until?: Date;
     readonly limit: number;
@@ -79,7 +77,6 @@ export const readStrategyRunTimeline = async (
     strategyId: input.strategyId,
     ...(input.status === undefined ? {} : { status: input.status }),
     ...(input.scope === undefined ? {} : { scope: input.scope }),
-    ...(input.publication === undefined ? {} : { publication: input.publication }),
     ...(input.since === undefined ? {} : { since: input.since }),
     ...(input.until === undefined ? {} : { until: input.until }),
     limit: input.limit,

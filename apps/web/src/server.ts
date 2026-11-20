@@ -1,4 +1,3 @@
-import { PluginSettingsStore } from './plugin-settings.js';
 import { PluginTasks } from './plugin-tasks.js';
 // @luoome/web —— Web 服务组装根（docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §7.1）。
 // 本文件只保留：Hono 实例、ctx/依赖注入、同源静态资源、领域路由注册、进程启动与调度器。
@@ -9,7 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { ToolContext, ToolResult } from '@luoome/core';
+import { type Exposure, resolveExposure, type ToolContext, type ToolResult } from '@luoome/core';
 import { createBuiltinPluginResources, toolRegistry } from '@luoome/tools';
 import { type Context, Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
@@ -54,8 +53,11 @@ const LIGHTWEIGHT_CHARTS_FILE = join(
  * 副作用能力开关：显式 options 优先，未提供时才读取环境变量。
  * Web 路由与进程内调度器共用同一解析，避免「路由已开、调度器仍看环境变量」的分叉。
  */
-const resolveExpose = (value: boolean | undefined, envName: string): boolean =>
-  value ?? process.env[envName] === 'true';
+const resolveExposureFrom = (options: {
+  readonly exposeWrite?: boolean;
+  readonly exposeExternal?: boolean;
+}): Exposure =>
+  resolveExposure(process.env, { write: options.exposeWrite, external: options.exposeExternal });
 
 export interface CreateWebAppOptions {
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
@@ -67,7 +69,6 @@ export interface CreateWebAppOptions {
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
   readonly mcpSettingsStore?: McpSettingsStore;
-  readonly pluginSettingsStore?: PluginSettingsStore;
   readonly pluginTasks?: { current: Pick<PluginTasks, 'status' | 'reconcile'> | undefined };
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
@@ -122,8 +123,8 @@ export const createWebApp = (
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
     current: options.chatStreamRuntime ?? createDshChatRuntimeFromStore(aiSettingsStore),
   };
-  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
-  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
+  const exposure = resolveExposureFrom(options);
+  const { write: exposeWrite, external: exposeExternal } = exposure;
   const marketSettingsStore = options.marketSettingsStore;
   const sharedSources = options.sources;
   const feishuSettingsStore = options.feishuSettingsStore;
@@ -319,11 +320,9 @@ export const createWebApp = (
     serveFile,
     exposeWrite,
     exposeExternal,
+    exposure,
     chatRuntimeRef,
     ...(aiSettingsStore === undefined ? {} : { aiSettingsStore }),
-    ...(options.pluginSettingsStore === undefined
-      ? {}
-      : { pluginSettingsStore: options.pluginSettingsStore }),
     ...(options.pluginTasks === undefined ? {} : { pluginTasks: options.pluginTasks }),
     ...(options.mcpSettingsStore === undefined
       ? {}
@@ -360,6 +359,8 @@ export interface StartWebOptions {
 
 export interface WebServerHandle {
   readonly port: number;
+  /** 后台任务当前是否在跑（未启用调度时为 undefined）。 */
+  readonly tasks: PluginTasks | undefined;
   stop(closeActiveConnections?: boolean): Promise<void>;
 }
 
@@ -372,8 +373,8 @@ export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
 /** 启动单机多账户 Web 服务及进程内业务调度器。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
-  const exposeWrite = resolveExpose(options.exposeWrite, 'LUOOME_EXPOSE_WRITE');
-  const exposeExternal = resolveExpose(options.exposeExternal, 'LUOOME_EXPOSE_EXTERNAL');
+  const exposure = resolveExposureFrom(options);
+  const { write: exposeWrite, external: exposeExternal } = exposure;
   const dbPath = options.dbPath ?? resolveDbPath();
   const sources: WebSourceSet = {};
   const aiSettingsStore = new AISettingsStore(process.env);
@@ -391,9 +392,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
   const pluginTasks = { current: undefined as PluginTasks | undefined };
-  const pluginSettingsStore = new PluginSettingsStore(runtimeEnv);
   const app = createWebApp(ctx, {
-    pluginSettingsStore,
     pluginTasks,
     exposeWrite,
     exposeExternal,
@@ -439,6 +438,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   console.log(`luoome web listening on http://${host}:${port}`);
   return {
     port,
+    tasks,
     stop: async (closeActiveConnections = false) => {
       const drained = await tasks?.stop();
       if (drained?.drained === false) ctx.logger.warn('插件任务尚未排空');

@@ -5,7 +5,6 @@ import {
   createMarketAdapterFromEnv,
   MarketSourceIdSchema,
   NotificationManager,
-  PluginConfigError,
 } from '@luoome/adapters';
 import { NotificationSchema } from '@luoome/core';
 import {
@@ -45,69 +44,6 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     dataTransferDbPath,
     chatRuntimeRef,
   } = deps;
-
-  const pluginRuntime = () => ({
-    context: ctxRef.current,
-    ...(sharedSources?.providerRuntime === undefined
-      ? {}
-      : { provider: sharedSources.providerRuntime }),
-    ...(deps.pluginTasks?.current === undefined ? {} : { tasks: deps.pluginTasks.current }),
-    exposeWrite: deps.exposeWrite,
-    exposeExternal: deps.exposeExternal,
-  });
-  const pluginError = (error: unknown) => {
-    const messages = {
-      busy: '配置正在由其它宿主写入，请稍后刷新',
-      conflict: '配置已变更，请重新加载并重新预览',
-      invalid: '插件配置不可用，请先在本地核对修复',
-      exists: '配置已存在，请重新加载',
-      unknown_plugin: '插件未纳管',
-    };
-    return jsonResult({
-      ok: false,
-      error: {
-        kind: 'invalid_input',
-        message:
-          error instanceof PluginConfigError
-            ? messages[error.code]
-            : error instanceof ZodError
-              ? '操作无效，请重新预览'
-              : '插件管理失败，请重新加载检查状态',
-        issues: [],
-      },
-    });
-  };
-  app.get('/api/settings/plugins', () => {
-    const store = deps.pluginSettingsStore;
-    if (store === undefined) return jsonResult(notFound('PluginSettingsStore', 'default'));
-    try {
-      return jsonResult({ ok: true, data: store.read(pluginRuntime()) });
-    } catch (error) {
-      return pluginError(error);
-    }
-  });
-  app.post('/api/settings/plugins/preview', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    const store = deps.pluginSettingsStore;
-    if (store === undefined) return jsonResult(notFound('PluginSettingsStore', 'default'));
-    try {
-      return jsonResult({ ok: true, data: store.preview(await c.req.json(), pluginRuntime()) });
-    } catch (error) {
-      return pluginError(error);
-    }
-  });
-  app.post('/api/settings/plugins', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write']);
-    if (denied !== null) return jsonResult(denied);
-    const store = deps.pluginSettingsStore;
-    if (store === undefined) return jsonResult(notFound('PluginSettingsStore', 'default'));
-    try {
-      return jsonResult({ ok: true, data: store.save(await c.req.json(), pluginRuntime()) });
-    } catch (error) {
-      return pluginError(error);
-    }
-  });
 
   app.get('/api/settings/mcp', () => {
     const store = deps.mcpSettingsStore;

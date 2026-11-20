@@ -34,14 +34,12 @@ describe('defineTool execute 错误模型', () => {
     let seen: unknown;
     let calls = 0;
     const policy: ToolExecutionPolicyLike = {
-      activity: () => [],
+      isEnabled: () => false,
       runPlugin: (_id, operation) => operation(),
       runTool: (_name, operation) => operation(),
       assertTool: () => {},
       scopeKey: () => '',
       bind: () => policy,
-      acquire: () => ({ ok: false, reason: 'dependency_not_ready' }),
-      valid: () => false,
       authorizeTool: (_name, input) => {
         seen = input;
         return { ok: false, error: { kind: 'permission_denied', required: 'fixture' } };

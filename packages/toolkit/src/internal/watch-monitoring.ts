@@ -2,7 +2,6 @@ import { PluginExecutionDenied, type ToolContext } from '@luoome/core';
 
 export const assertWatchMonitoring = (ctx: ToolContext): void => {
   ctx.executionGuard?.();
-  const admission = ctx.executionPolicy?.acquire('business.watch-monitoring');
-  if (!admission?.ok || !ctx.executionPolicy?.valid(admission.permit))
+  if (ctx.executionPolicy?.isEnabled('business.watch-monitoring') === false)
     throw new PluginExecutionDenied('plugin:business.watch-monitoring');
 };

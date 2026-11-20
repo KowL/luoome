@@ -4,7 +4,7 @@ import {
   assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
-  normalizeLegacyStrategyRun,
+  normalizeStrategyRunScope,
   type Strategy,
   type StrategyRepository,
   type StrategyResult,
@@ -16,20 +16,7 @@ import {
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gte,
-  inArray,
-  isNotNull,
-  isNull,
-  lte,
-  notInArray,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import {
   type Schema,
@@ -64,32 +51,6 @@ const isRunnableStrategyVersion = (
   version.validationStatus === 'valid' &&
   (version.publishedAt !== null || run.scope === 'evaluation');
 
-// publication_status 为空时只允许兼容存量非 V4 行；新 Summary V4 缺 publication
-// 必须保持 withheld/unknown，不能被 legacy fallback 误当成 current。
-const legacyPublishedRunCondition = () =>
-  and(
-    isNull(strategyRuns.publicationStatus),
-    sql`coalesce(json_extract(${strategyRuns.summary}, '$.schemaVersion'), 0) <> 4`,
-  );
-
-/**
- * 存量 run 的 publication 由 `normalizeLegacyStrategyRun` 读取时推断：replay/backtest 视为
- * non-publishing，其余 complete/partial 视为 published。SQL 过滤必须带上同样的 legacy
- * 分支，否则按 publication 过滤会把存量行整体丢掉（memory 实现读取后归一化再过滤）。
- */
-const legacyPublicationCondition = (status: NonNullable<StrategyRun['publication']>['status']) => {
-  if (status === 'published') {
-    return and(
-      legacyPublishedRunCondition(),
-      notInArray(strategyRuns.mode, ['replay', 'backtest']),
-    );
-  }
-  if (status === 'non-publishing') {
-    return and(legacyPublishedRunCondition(), inArray(strategyRuns.mode, ['replay', 'backtest']));
-  }
-  return undefined;
-};
-
 const toStrategy = (row: StrategyRow): Strategy => ({
   id: row.id,
   name: row.name,
@@ -122,7 +83,7 @@ const toVersion = (row: VersionRow): StrategyVersion => ({
 });
 
 const toRun = (row: RunRow): StrategyRun =>
-  normalizeLegacyStrategyRun(
+  normalizeStrategyRunScope(
     StrategyRunSchema.parse({
       id: row.id,
       strategyId: row.strategyId,
@@ -140,9 +101,6 @@ const toRun = (row: RunRow): StrategyRun =>
         ? {}
         : { providerCoverage: [...row.providerCoverage] }),
       ...(row.summary === null ? {} : { summary: row.summary }),
-      ...(row.publication === null || row.publication === undefined
-        ? {}
-        : { publication: row.publication }),
       ...(row.error === null ? {} : { error: row.error }),
     }),
   );
@@ -527,7 +485,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       readonly strategyId?: string;
       readonly status?: StrategyRun['status'];
       readonly scope?: StrategyRun['scope'];
-      readonly publication?: NonNullable<StrategyRun['publication']>['status'];
       readonly since?: Date;
       readonly until?: Date;
       readonly limit?: number;
@@ -539,14 +496,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     }
     if (filter.status !== undefined) conditions.push(eq(strategyRuns.status, filter.status));
     if (filter.scope !== undefined) conditions.push(eq(strategyRuns.scope, filter.scope));
-    if (filter.publication !== undefined) {
-      const legacy = legacyPublicationCondition(filter.publication);
-      conditions.push(
-        legacy === undefined
-          ? eq(strategyRuns.publicationStatus, filter.publication)
-          : or(eq(strategyRuns.publicationStatus, filter.publication), legacy),
-      );
-    }
     if (filter.since !== undefined) conditions.push(gte(strategyRuns.startedAt, filter.since));
     if (filter.until !== undefined) conditions.push(lte(strategyRuns.startedAt, filter.until));
     const query = this.db
@@ -566,7 +515,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         and(
           eq(strategyRuns.strategyId, strategyId),
           eq(strategyRuns.scope, 'operational'),
-          or(eq(strategyRuns.publicationStatus, 'published'), legacyPublishedRunCondition()),
           inArray(strategyRuns.status, ['complete', 'partial']),
         ),
       )
@@ -588,7 +536,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         and(
           eq(strategyRuns.strategyId, input.strategyId),
           eq(strategyRuns.scope, 'operational'),
-          or(eq(strategyRuns.publicationStatus, 'published'), legacyPublishedRunCondition()),
           inArray(strategyRuns.status, ['complete', 'partial']),
           sql`(${strategyRuns.startedAt} < ${input.beforeStartedAt.getTime()} OR
             (${strategyRuns.startedAt} = ${input.beforeStartedAt.getTime()} AND
@@ -715,8 +662,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
           providerStatuses: [...run.providerStatuses],
           providerCoverage: run.providerCoverage ?? null,
           summary: null,
-          publication: null,
-          publicationStatus: null,
           error: null,
         })
         .run();
@@ -737,8 +682,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
           existing?.status === 'running' &&
           bundle.run.status === 'failed' &&
           bundle.results.length === 0 &&
-          bundle.signals.length === 0 &&
-          bundle.run.publication?.status !== 'published';
+          bundle.signals.length === 0;
         if (!finalizingFailure) this.writes.validate();
         this.commitRunInTransaction(tx, bundle);
       },
@@ -764,8 +708,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       summary: bundle.run.summary ?? null,
       // 无逐股明细的 run（失败/空池）保持 NULL，不写空数组的压缩壳。
       resultsJson: bundle.results.length === 0 ? null : encodeStoredResults(bundle.results),
-      publication: bundle.run.publication ?? null,
-      publicationStatus: bundle.run.publication?.status ?? null,
       error: bundle.run.error ?? null,
     };
     const existing = tx.select().from(strategyRuns).where(eq(strategyRuns.id, bundle.run.id)).get();

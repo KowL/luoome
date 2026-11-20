@@ -10,7 +10,6 @@ export const SOURCE_PLUGIN_IDS = [
   'source.10jqka',
 ] as const;
 export const TASK_PLUGIN_IDS = [
-  'task.strategy-schedules',
   'task.snapshot-account-performance',
   'task.daily-bars-sync',
   'task.sync-stock-universe',
@@ -33,6 +32,12 @@ export const MANAGED_PLUGIN_IDS = [
 ] as const;
 export type ManagedPluginId = (typeof MANAGED_PLUGIN_IDS)[number];
 export type PluginConfigurationDefaults = Readonly<Record<ManagedPluginId, boolean>>;
+
+/** 唯一的启停判定：读 `plugins.json` 里该插件是否 enabled。没有许可令牌、纪元或撤销语义。 */
+export interface PluginPolicyLike {
+  isEnabled(id: ManagedPluginId): boolean;
+}
+
 export interface DataExecutionScopeLike {
   run<T>(
     operation: (validate: () => void) => Promise<T>,
@@ -41,30 +46,7 @@ export interface DataExecutionScopeLike {
   ): Promise<T>;
 }
 
-export type PluginBlockReason = 'plugin_disabled' | 'dependency_not_ready' | 'activation_revoked';
-
-export interface PluginPermit {
-  readonly id: ManagedPluginId;
-  readonly incarnation: string;
-  readonly epoch: number;
-}
-
-export type PluginAdmission =
-  | { readonly ok: true; readonly permit: PluginPermit }
-  | { readonly ok: false; readonly reason: PluginBlockReason };
-
-export interface PluginPolicyLike {
-  acquire(id: ManagedPluginId): PluginAdmission;
-  valid(permit: PluginPermit): boolean;
-}
-
-export interface PluginActivity {
-  readonly id: ManagedPluginId;
-  readonly inFlight: number;
-  readonly revokedInFlight: number;
-}
 export interface ToolExecutionPolicyLike extends PluginPolicyLike {
-  activity(): readonly PluginActivity[];
   runPlugin<T>(id: ManagedPluginId, operation: () => Promise<T>, guard?: () => void): Promise<T>;
   runTool<T>(name: string, operation: () => Promise<T>, guard?: () => void): Promise<T>;
   bind(): ToolExecutionPolicyLike;

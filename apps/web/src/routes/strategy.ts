@@ -1,8 +1,5 @@
 import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
-import {
-  createStrategyObservationCandidatesTool,
-  syncStrategyWatchlistSubscriptionsTool,
-} from '@luoome/tools';
+import { syncStrategyWatchlistSubscriptionsTool } from '@luoome/tools';
 import type { Hono } from 'hono';
 import { jsonResult } from '../http/result.js';
 import type { WebRouteDeps } from './types.js';
@@ -177,21 +174,6 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
     ) {
       return jsonResult(run);
     }
-    const observed = await createStrategyObservationCandidatesTool.execute(
-      { runId: payload.run.id },
-      contextForRequest(),
-    );
-    const observations = observed.ok
-      ? observed.data
-      : {
-          status: 'failed',
-          error:
-            'message' in observed.error
-              ? observed.error.message
-              : 'cause' in observed.error
-                ? observed.error.cause
-                : observed.error.kind,
-        };
     const synced = await syncStrategyWatchlistSubscriptionsTool.execute(
       { strategyId: c.req.param('id'), producerRunId: payload.run.id },
       contextForRequest(),
@@ -200,7 +182,6 @@ export const registerStrategyRoutes = (app: Hono, deps: WebRouteDeps): void => {
       ...run,
       data: {
         ...payload,
-        observations,
         watchlistSync: synced.ok
           ? synced.data
           : {

@@ -55,6 +55,8 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+// 暴露面（MCP/Web/CLI 共用）
+export * from './exposure.js';
 export * from './plugin-policy.js';
 export * from './portfolio/apply-trade-to-holding.js';
 export * from './portfolio/ledger.js';
@@ -76,7 +78,6 @@ export * from './strategy/expression.js';
 export * from './strategy/field-registry.js';
 export * from './strategy/observation-stats.js';
 export * from './strategy/prefilter.js';
-export * from './strategy/publication.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';
 export * from './strategy/run-snapshot.js';

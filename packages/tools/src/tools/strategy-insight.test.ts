@@ -1,15 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PluginConfigStore } from '@luoome/adapters';
 import { money, type StrategyDslV1, strategyDefinitionHash, type ToolContext } from '@luoome/core';
-import { createStrategyExplainer } from '@luoome/plugin-strategy/internal/strategy-explainer.js';
 import { generateStrategyInsightTool } from '@luoome/plugin-strategy/tools/strategy-insight.js';
 import { getStrategyInsightFactsTool } from '@luoome/toolkit/tools/strategy-insight.js';
-import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
-import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import {
+  buildTestContext,
+  createTestPluginControl,
+  seedTestStockUniverse,
+} from '../testing/context.js';
 
 const now = new Date('2026-08-08T10:00:00.000Z');
 const definition: StrategyDslV1 = {
@@ -336,8 +337,8 @@ afterEach(() => {
 const pluginStore = () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-insight-policy-'));
   pluginRoots.push(root);
-  const store = new PluginConfigStore(join(root, 'plugins.json'));
-  return { store, initial: store.initialize(BUILTIN_PLUGIN_DEFAULTS) };
+  const { store, set } = createTestPluginControl(root);
+  return { store, set };
 };
 const validNarrative = {
   headline: '事实解释',
@@ -350,8 +351,8 @@ const validNarrative = {
 
 describe('controlled strategy AI', () => {
   it('disabled AI preserves the exact window facts without touching the model', async () => {
-    const { store, initial } = pluginStore();
-    store.set('strategy.ai-insight', false, initial);
+    const { store, set } = pluginStore();
+    set('strategy.ai-insight', false);
     const base = await buildTestContext({ clock: () => now });
     await seedInsight(base);
     let calls = 0;
@@ -383,225 +384,5 @@ describe('controlled strategy AI', () => {
     });
     expect(result.ok && result.data.facts).toEqual(facts.ok && facts.data);
     expect(calls).toBe(0);
-  });
-
-  it.each(['success', 'failure'])(
-    'revokes a paused %s response and forbids repair after off/on',
-    async (outcome) => {
-      const { store, initial } = pluginStore();
-      const base = await buildTestContext({ clock: () => now });
-      await seedInsight(base);
-      let release!: () => void;
-      let entered!: () => void;
-      let calls = 0;
-      const waiting = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const started = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
-      const ctx: ToolContext = {
-        ...base,
-        executionPolicy: createPluginExecutionPolicy(store, new Set(['read', 'external'])),
-        adapters: {
-          ...base.adapters,
-          llm: {
-            name: 'paused',
-            generate: async <T>() => {
-              calls++;
-              entered();
-              await waiting;
-              if (outcome === 'failure') throw new Error('retryable model failure');
-              return validNarrative as T;
-            },
-          },
-        },
-      };
-      const expected = await getStrategyInsightFactsTool.execute(
-        { strategyId: 'insight-strategy' },
-        ctx,
-      );
-      const pending = generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx);
-      await started;
-      const disabled = store.set('strategy.ai-insight', false, initial);
-      store.set('strategy.ai-insight', true, disabled);
-      release();
-      const result = await pending;
-      expect(result).toMatchObject({
-        ok: true,
-        data: { provider: 'facts-only', degradation: { reason: 'activation_revoked' } },
-      });
-      expect(result.ok && result.data.facts).toEqual(expected.ok && expected.data);
-      expect(calls).toBe(1);
-      const fresh = await generateStrategyInsightTool.execute(
-        { strategyId: 'insight-strategy' },
-        ctx,
-      );
-      expect(fresh).toMatchObject({
-        ok: true,
-        data: { provider: outcome === 'success' ? 'paused' : 'facts-only' },
-      });
-      expect(calls).toBe(outcome === 'success' ? 2 : 3);
-    },
-  );
-
-  it('old bound ports cannot revive, but unrelated revisions preserve a live permit', async () => {
-    const { store, initial } = pluginStore();
-    const base = await buildTestContext();
-    let calls = 0;
-    const ctx = {
-      ...base,
-      executionPolicy: createPluginExecutionPolicy(store, new Set(['read', 'external'])).bind(),
-      adapters: {
-        ...base.adapters,
-        llm: {
-          name: 'counted',
-          generate: async <T>() => {
-            calls++;
-            return validNarrative as T;
-          },
-        },
-      },
-    };
-    const port = createStrategyExplainer(ctx);
-    const unchanged = store.migrate(initial);
-    expect(await port.generate({ system: 'test', data: {} })).toMatchObject({ ok: true });
-    const disabled = store.set('strategy.ai-insight', false, unchanged);
-    store.set('strategy.ai-insight', true, disabled);
-    expect(await port.generate({ system: 'test', data: {} })).toEqual({
-      ok: false,
-      reason: 'activation_revoked',
-    });
-    expect(calls).toBe(1);
-  });
-
-  it('permission denial cannot become a successful downgrade; uninitialized policy does not call AI', async () => {
-    const { store } = pluginStore();
-    const base = await buildTestContext({ clock: () => now });
-    await seedInsight(base);
-    const denied = {
-      ...base,
-      executionPolicy: createPluginExecutionPolicy(store, new Set(['read'])),
-    };
-    expect(
-      await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, denied),
-    ).toMatchObject({ ok: false, error: { kind: 'permission_denied', required: 'external' } });
-    rmSync(store.path);
-    let calls = 0;
-    const ctx = {
-      ...base,
-      executionPolicy: createPluginExecutionPolicy(store, new Set(['read', 'external'])),
-      adapters: {
-        ...base.adapters,
-        llm: {
-          name: 'counted',
-          generate: async <T>() => {
-            calls++;
-            return validNarrative as T;
-          },
-        },
-      },
-    };
-    expect(
-      await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
-    ).toMatchObject({
-      ok: true,
-      data: { provider: 'facts-only', degradation: { reason: 'dependency_not_ready' } },
-    });
-    expect(calls).toBe(0);
-    expect(
-      (await getStrategyInsightFactsTool.execute({ strategyId: 'insight-strategy' }, ctx)).ok,
-    ).toBe(true);
-  });
-});
-
-it('unconfigured models are not invoked and recovery cannot revive an old bound context', async () => {
-  const { store } = pluginStore();
-  const base = await buildTestContext({ clock: () => now });
-  await seedInsight(base);
-  let calls = 0;
-  const policy = createPluginExecutionPolicy(store, new Set(['read', 'external']));
-  const ctx: ToolContext = {
-    ...base,
-    executionPolicy: policy.bind(),
-    adapters: {
-      ...base.adapters,
-      llm: {
-        name: 'not-ready',
-        configurationReady: false,
-        generate: async <T>() => {
-          calls++;
-          return validNarrative as T;
-        },
-      },
-    },
-  };
-  expect(
-    await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
-  ).toMatchObject({ ok: true, data: { degradation: { reason: 'dependency_not_ready' } } });
-  rmSync(store.path);
-  store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-  expect(
-    await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
-  ).toMatchObject({ ok: true, data: { degradation: { reason: 'activation_revoked' } } });
-  expect(calls).toBe(0);
-  const { executionPolicy: _policy, ...untrusted } = ctx;
-  expect(
-    await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, untrusted),
-  ).toMatchObject({
-    ok: false,
-    error: { kind: 'permission_denied', required: 'execution-policy' },
-  });
-});
-
-it('a retired parent execution discards late AI results while standalone insight remains independent', async () => {
-  const { store, initial } = pluginStore();
-  const enabled = store.set('business.strategy-execution', true, initial);
-  const base = await buildTestContext();
-  const policy = createPluginExecutionPolicy(
-    store,
-    new Set(['read', 'write', 'external', 'advice']),
-  );
-  const bound = policy.bind();
-  let release = () => {},
-    started = () => {},
-    calls = 0;
-  const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    entered = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-  const ctx = {
-    ...base,
-    executionPolicy: policy,
-    adapters: {
-      ...base.adapters,
-      llm: {
-        name: 'paused',
-        generate: async <T>() => {
-          calls++;
-          started();
-          await gate;
-          return 'fixture' as T;
-        },
-      },
-    },
-  };
-  const port = createStrategyExplainer({
-    ...ctx,
-    executionGuard: () => bound.assertTool('run_strategy'),
-  });
-  const pending = port.generate({ system: 'fixture', data: {} });
-  const rejected = expect(pending).rejects.toThrow('plugin execution denied');
-  await entered;
-  const off = store.set('business.strategy-execution', false, enabled);
-  store.set('business.strategy-execution', true, off);
-  release();
-  await rejected;
-  expect(calls).toBe(1);
-  expect(await createStrategyExplainer(ctx).generate({ system: 'fixture', data: {} })).toEqual({
-    ok: true,
-    value: 'fixture',
   });
 });

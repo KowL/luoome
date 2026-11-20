@@ -1,8 +1,8 @@
+import { isToolExposed } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import {
-  EXPOSED_SIDE_EFFECTS,
   KNOWN_UNEXPOSED_TOOLS,
   WEB_AGENT_TOOL_NAMES,
   WEB_ALLOWED_EXTERNAL,
@@ -12,14 +12,11 @@ import type { WebRouteDeps } from './types.js';
 
 const decisionAccountTools = new Set(['save_decision_review']);
 
+const webAllows = (sideEffect: string, name: string): boolean =>
+  sideEffect !== 'external' || WEB_ALLOWED_EXTERNAL.has(name);
+
 export const registerToolGatewayRoutes = (app: Hono, deps: WebRouteDeps): void => {
-  const {
-    contextForRequest,
-    mutationPermission,
-    bindDecisionAccount,
-    exposeWrite,
-    exposeExternal,
-  } = deps;
+  const { contextForRequest, mutationPermission, bindDecisionAccount, exposure } = deps;
 
   app.post('/api/tools/:name/call', async (c) => {
     const name = c.req.param('name');
@@ -36,16 +33,7 @@ export const registerToolGatewayRoutes = (app: Hono, deps: WebRouteDeps): void =
     if (!WEB_AGENT_TOOL_NAMES.has(name)) {
       return jsonResult(notFound('Tool', name));
     }
-    const primaryAllowed =
-      (EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) && (tool.sideEffect !== 'write' || exposeWrite)) ||
-      (tool.sideEffect === 'external' && exposeExternal && WEB_ALLOWED_EXTERNAL.has(name));
-    const capabilitiesAllowed = tool.requiredCapabilities.every(
-      (capability) =>
-        (capability !== 'write' || exposeWrite) &&
-        (capability !== 'external' || exposeExternal) &&
-        capability !== 'trade',
-    );
-    if (!primaryAllowed || !capabilitiesAllowed) {
+    if (!isToolExposed(tool, exposure) || !webAllows(tool.sideEffect, name)) {
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
     if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {

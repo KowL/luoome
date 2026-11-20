@@ -90,7 +90,6 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) =
       inputSnapshot: {},
       providerStatuses: [],
       summary: {},
-      publication: { status: 'published', reasons: [], decidedAt: NOW },
     },
     results: [
       {
@@ -298,7 +297,7 @@ describe('get_strategy_decision_cycles', () => {
     expect(result.data.limitations.join('；')).toContain('不是回测');
   });
 
-  it('不允许跨策略 run 关联，并排除 replay/evaluation/non-publishing 运行', async () => {
+  it('不允许跨策略 run 关联，并排除 evaluation 与未完成运行', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await seedStrategy(ctx);
     const otherStrategyId = 'other-strategy';
@@ -338,7 +337,6 @@ describe('get_strategy_decision_cycles', () => {
       inputSnapshot: {},
       providerStatuses: [],
       summary: {},
-      publication: { status: 'non-publishing' as const, reasons: [], decidedAt: NOW },
     };
     await ctx.repos.strategyRun.commitRun({ run: wrongRun, results: [], signals: [] });
     await expect(
@@ -352,7 +350,6 @@ describe('get_strategy_decision_cycles', () => {
         strategyId: STRATEGY_ID,
         strategyVersionId: VERSION_ID,
         scope: 'evaluation',
-        publication: { status: 'non-publishing', reasons: [], decidedAt: NOW },
       },
       results: [],
       signals: [],
@@ -365,7 +362,8 @@ describe('get_strategy_decision_cycles', () => {
         strategyVersionId: VERSION_ID,
         mode: 'scheduled',
         scope: 'operational',
-        publication: { status: 'withheld', reasons: [], decidedAt: NOW },
+        status: 'failed' as const,
+        error: '数据准备失败',
       },
       results: [],
       signals: [],

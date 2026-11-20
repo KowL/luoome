@@ -5,7 +5,7 @@ import {
   classifyStrategyResult,
   deduplicateSignalObservations,
   diffStrategyRunViews,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   isUsableStrategyRun,
   readStrategyRunSnapshot,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
@@ -345,7 +345,6 @@ export const collectStrategyInsightFacts = async (
   const timeline = await readStrategyRunTimeline(ctx, {
     strategyId,
     scope,
-    ...(scope === 'operational' ? { publication: 'published' as const } : {}),
     since: from,
     until: to,
     limit: 100,
@@ -353,7 +352,7 @@ export const collectStrategyInsightFacts = async (
   const allRuns = timeline.entries.map((entry) => entry.run);
   const usableEntries = timeline.entries.filter((entry) =>
     scope === 'operational'
-      ? isPublishableOperationalRun(entry.run)
+      ? isAdvisoryEligibleRun(entry.run)
       : isUsableStrategyRun(entry.run) &&
         (options.evaluationSessionId === undefined ||
           readStrategyRunSnapshot(entry.run.inputSnapshot).evaluationSessionId ===

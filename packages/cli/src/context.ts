@@ -37,6 +37,7 @@ import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
   type Logger,
+  resolveExposure,
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
@@ -90,7 +91,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     new MarketRequestCoordinator(repos.publicMarket, marketRequestConfigFromEnv(process.env), () =>
       now().getTime(),
     ),
-    process.env.LUOOME_EXPOSE_EXTERNAL === 'true',
+    resolveExposure(process.env).external,
   );
   // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
   const sources = {

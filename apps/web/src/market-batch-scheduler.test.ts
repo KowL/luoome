@@ -127,10 +127,8 @@ it('disabled collection tasks skip ticks and can resume without affecting local 
     ...ctx,
     executionPolicy: {
       ...existing,
-      acquire: (id: Parameters<typeof existing.acquire>[0]) =>
-        id === 'task.collect-market-snapshot' && !enabled
-          ? { ok: false as const, reason: 'plugin_disabled' as const }
-          : existing.acquire(id),
+      isEnabled: (id: Parameters<typeof existing.isEnabled>[0]) =>
+        id === 'task.collect-market-snapshot' && !enabled ? false : existing.isEnabled(id),
     },
   };
   let calls = 0;

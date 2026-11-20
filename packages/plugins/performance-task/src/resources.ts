@@ -63,9 +63,8 @@ export const startPortfolioPerformanceScheduler = (
   }
   let stopped = false;
   const policy = context.executionPolicy?.bind();
-  const admission = policy?.acquire('task.snapshot-account-performance');
   const active = () => {
-    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
+    if (stopped || policy?.isEnabled('task.snapshot-account-performance') === false) return false;
     try {
       context.executionGuard?.();
       return true;

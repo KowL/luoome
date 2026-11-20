@@ -50,11 +50,15 @@ export const RUN_SCOPE = {
   evaluation: ['历史评估', 'badge-neutral'],
 };
 
-export const PUBLICATION_STATUS = {
-  published: ['已发布', 'badge-active'],
-  withheld: ['暂不发布', 'badge-important'],
-  'non-publishing': ['不进入当前', 'badge-neutral'],
+export const RUN_ELIGIBILITY = {
+  eligible: ['参与建议', 'badge-active'],
+  ineligible: ['不参与建议', 'badge-neutral'],
 };
+
+export const runEligibility = (run) =>
+  run?.scope === 'operational' && (run.status === 'complete' || run.status === 'partial')
+    ? 'eligible'
+    : 'ineligible';
 
 export const DATA_HEALTH = {
   complete: '完整',

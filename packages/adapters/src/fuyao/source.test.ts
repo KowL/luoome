@@ -291,7 +291,7 @@ describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
 
   it('分页行情时间取最早的分页最新时间，任一页缺失则保留未知', async () => {
     const page = Array.from({ length: 100 }, (_, i) =>
-      snapshotRow('600' + String(i).padStart(3, '0') + '.SH'),
+      snapshotRow(`600${String(i).padStart(3, '0')}.SH`),
     );
     for (const end of [TIMESTAMP_MS - 60_000, null]) {
       const { source } = makeSource((async (url: string) =>

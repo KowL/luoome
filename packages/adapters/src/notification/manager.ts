@@ -79,8 +79,7 @@ export class NotificationManager {
     const check = () => {
       input.executionGuard?.();
       if (policy !== undefined) {
-        const admission = policy.acquire('business.notification');
-        if (!admission.ok || !policy.valid(admission.permit))
+        if (!policy.isEnabled('business.notification'))
           throw new PluginExecutionDenied('plugin:business.notification');
         const denied = policy.authorizeTool('send_notification', {}, ['external']);
         if (denied !== null && !denied.ok && denied.error.kind === 'permission_denied')

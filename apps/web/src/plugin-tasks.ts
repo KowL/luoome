@@ -1,16 +1,11 @@
-import {
-  type ManagedPluginId,
-  PluginExecutionDenied,
-  type PluginPermit,
-  type ToolContext,
-} from '@luoome/core';
+import { type ManagedPluginId, PluginExecutionDenied, type ToolContext } from '@luoome/core';
 
 import type { PluginTaskDefinition } from '@luoome/tools';
 
 export type { PluginTaskActivation, PluginTaskDefinition } from '@luoome/tools';
 
 interface Activation {
-  readonly permits: readonly PluginPermit[];
+  readonly ids: readonly ManagedPluginId[];
   readonly abort: AbortController;
   readonly pending: Set<Promise<void>>;
   resource?: { stop(): void };
@@ -54,7 +49,7 @@ export class PluginTasks {
   private valid(activation: Activation): boolean {
     return (
       !activation.stopped &&
-      activation.permits.every((permit) => this.ctx.executionPolicy?.valid(permit))
+      activation.ids.every((id) => this.ctx.executionPolicy?.isEnabled(id) === true)
     );
   }
   private retire(activation: Activation): void {
@@ -83,17 +78,12 @@ export class PluginTasks {
           current = undefined;
         }
         if (this.stopped || current !== undefined) continue;
-        const admissions = [definition.id, ...(definition.requires ?? [])].map((id) =>
-          this.ctx.executionPolicy?.acquire(id),
-        );
-        if (admissions.some((admission) => !admission?.ok)) continue;
-        const permits = admissions.flatMap((admission) =>
-          admission?.ok ? [admission.permit] : [],
-        );
-        const key = JSON.stringify(permits);
+        const ids = [definition.id, ...(definition.requires ?? [])];
+        if (ids.some((id) => this.ctx.executionPolicy?.isEnabled(id) !== true)) continue;
+        const key = JSON.stringify(ids);
         if (this.failed.get(definition.id) === key) continue;
         const activation: Activation = {
-          permits,
+          ids,
           abort: new AbortController(),
           pending: new Set(),
           stopped: false,
@@ -155,9 +145,10 @@ export class PluginTasks {
     this.reconcile();
     return this.definitions.map((definition) => {
       const active = this.active.get(definition.id);
-      const enabled = this.ctx.executionPolicy?.acquire(definition.id).ok === true;
+      const enabled = this.ctx.executionPolicy?.isEnabled(definition.id) === true;
       const blocked =
-        definition.requires?.some((id) => !this.ctx.executionPolicy?.acquire(id).ok) ?? false;
+        definition.requires?.some((id) => this.ctx.executionPolicy?.isEnabled(id) !== true) ??
+        false;
       return {
         id: definition.id,
         phase: active?.teardownFailed

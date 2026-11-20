@@ -38,9 +38,8 @@ export const startIntradayPlanScheduler = (
 ): IntradayPlanSchedulerHandle => {
   let stopped = false;
   const policy = context.executionPolicy?.bind();
-  const admission = policy?.acquire('business.watch-monitoring');
   const active = () => {
-    if (stopped || !admission?.ok || !policy?.valid(admission.permit)) return false;
+    if (stopped || policy?.isEnabled('business.watch-monitoring') === false) return false;
     try {
       context.executionGuard?.();
       return true;

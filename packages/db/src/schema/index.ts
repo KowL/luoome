@@ -41,7 +41,6 @@ import type {
   StockCode,
   Strategy,
   StrategyRun,
-  StrategyRunPublication,
   StrategySignal,
   StrategyVersion,
   StrategyWatchlistSubscription,
@@ -853,8 +852,6 @@ export const strategyRuns = sqliteTable(
      * zlib+base64（实测压缩比约 30x）。未压缩的存量行仍按明文 JSON 读取。
      */
     resultsJson: text('results_json'),
-    publication: text('publication_json', { mode: 'json' }).$type<StrategyRunPublication>(),
-    publicationStatus: text('publication_status').$type<StrategyRunPublication['status']>(),
     error: text('error'),
   },
   (table) => ({
@@ -863,10 +860,9 @@ export const strategyRuns = sqliteTable(
       table.startedAt,
     ),
     statusStartedIdx: index('strategy_runs_status_started_idx').on(table.status, table.startedAt),
-    publishedCurrentIdx: index('strategy_runs_published_current_idx').on(
+    currentIdx: index('strategy_runs_current_idx').on(
       table.strategyId,
       table.scope,
-      table.publicationStatus,
       table.status,
       table.startedAt,
     ),

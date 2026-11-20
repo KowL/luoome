@@ -1,18 +1,15 @@
 import { createHash } from 'node:crypto';
 import {
-  assessStrategyRun,
   assignStableStrategyRanks,
   compileStrategyQuotePrefilter,
-  DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   dateInShanghai,
-  decideStrategyRunPublication,
   decideStrategySignalEmission,
   deriveStrategyRunScope,
   deriveStrategyRunUniverseKind,
   evaluateStrategyStock,
   getStrategySignalEmission,
   inspectStrategyDefinitionReferences,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   isSTName,
   readStrategyRunSnapshot,
   STRATEGY_EVALUATOR_CODE_HASH,
@@ -51,14 +48,6 @@ export const RunStrategyInput = z.object({
   concurrency: z.number().int().min(1).max(64).default(EVALUATION_CONCURRENCY),
   /** 仅 scan evaluation 可显式启用；不会产生 operational publication。 */
   prefilter: z.object({ mode: z.literal('quote-selection-safe') }).optional(),
-  acceptancePolicy: z
-    .object({
-      policyVersion: z.literal('strategy-run-acceptance-v1'),
-      minEvaluatedRatio: z.number().min(0).max(1),
-      maxFailedRatio: z.number().min(0).max(1),
-      maxIncompleteRatio: z.number().min(0).max(1),
-    })
-    .optional(),
   persist: z.boolean().default(true),
 });
 
@@ -438,9 +427,6 @@ export const runStrategyTool = defineTool({
           stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
           requestedBy,
           universeCheckpoint,
-          acceptancePolicyVersion:
-            input.acceptancePolicy?.policyVersion ??
-            DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY.policyVersion,
           ...(input.evaluationSessionId === undefined
             ? {}
             : { evaluationSessionId: input.evaluationSessionId }),
@@ -509,14 +495,14 @@ export const runStrategyTool = defineTool({
       const priorRuns = (
         await ctx.repos.strategyRun.listRuns({
           strategyId: input.strategyId,
-          scope,
+          ...(scope === undefined ? {} : { scope }),
           limit: 500,
         })
       )
         .filter((candidate) => {
           if (candidate.strategyVersionId !== version.id) return false;
           if (candidate.dataAsOf.getTime() >= dataAsOf.getTime()) return false;
-          if (scope === 'operational' && !isPublishableOperationalRun(candidate)) return false;
+          if (scope === 'operational' && !isAdvisoryEligibleRun(candidate)) return false;
           if (scope !== 'evaluation') return true;
           if (input.evaluationSessionId === undefined) return false;
           return (
@@ -581,24 +567,6 @@ export const runStrategyTool = defineTool({
             : 'complete';
       const error =
         status === 'failed' ? `全部 ${failures.length} 个 candidate 数据准备失败` : undefined;
-      const acceptance = assessStrategyRun({
-        status,
-        universeCount: candidateIds.length,
-        evaluatedCount: results.length,
-        failedCount: failures.length,
-        incompleteCount,
-        ...(input.acceptancePolicy === undefined ? {} : { policy: input.acceptancePolicy }),
-        assessedAt: finishedAt,
-      });
-      const publication = decideStrategyRunPublication({
-        scope,
-        universeKind,
-        status,
-        universeCheckpointPresent:
-          successfulSync !== null && (input.stockIds !== undefined || snapshotStocks.length > 0),
-        acceptance,
-        decidedAt: finishedAt,
-      });
       const run = StrategyRunSchema.parse({
         ...startedRun,
         dataAsOf,
@@ -686,9 +654,7 @@ export const runStrategyTool = defineTool({
           failureSamples: failures
             .slice(0, 20)
             .map(({ stockId, error: failureError }) => ({ stockId, error: failureError })),
-          acceptance,
         },
-        publication,
         ...(error === undefined ? {} : { error }),
       });
       assertStrategyExecution(ctx);
@@ -701,23 +667,6 @@ export const runStrategyTool = defineTool({
         const stored = await ctx.repos.strategyRun.findRunById(startedRun.id);
         if (stored?.status === 'running') {
           const finishedAt = ctx.clock();
-          const acceptance = assessStrategyRun({
-            status: 'failed',
-            universeCount: candidateIds.length,
-            evaluatedCount: 0,
-            failedCount: candidateIds.length,
-            incompleteCount: 0,
-            ...(input.acceptancePolicy === undefined ? {} : { policy: input.acceptancePolicy }),
-            assessedAt: finishedAt,
-          });
-          const publication = decideStrategyRunPublication({
-            scope,
-            universeKind,
-            status: 'failed',
-            universeCheckpointPresent: false,
-            acceptance,
-            decidedAt: finishedAt,
-          });
           const failed = StrategyRunSchema.parse({
             ...startedRun,
             finishedAt: finishedAt < startedRun.startedAt ? startedRun.startedAt : finishedAt,
@@ -732,9 +681,7 @@ export const runStrategyTool = defineTool({
               incompleteCount: 0,
               failedCount: candidateIds.length,
               failureSamples: [],
-              acceptance,
             },
-            publication,
             error: runError instanceof Error ? runError.message : String(runError),
           });
           await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });

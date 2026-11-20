@@ -1,8 +1,4 @@
-import {
-  closingReportOperation,
-  openingReportOperation,
-  weeklyReportOperation,
-} from '@luoome/workflows';
+import { weeklyReportOperation } from '@luoome/workflows';
 import type { Hono } from 'hono';
 import { jsonResult, notFound } from '../http/result.js';
 import type { WebRouteDeps } from './types.js';
@@ -89,15 +85,8 @@ export const registerResearchRoutes = (app: Hono, deps: WebRouteDeps): void => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
     const kind = c.req.param('kind');
-    const workflow =
-      kind === 'opening'
-        ? openingReportOperation
-        : kind === 'closing'
-          ? closingReportOperation
-          : kind === 'weekly'
-            ? weeklyReportOperation
-            : undefined;
-    if (workflow === undefined) return jsonResult(notFound('ReportWorkflow', kind));
+    if (kind !== 'weekly') return jsonResult(notFound('ReportWorkflow', kind));
+    const workflow = weeklyReportOperation;
     let body: unknown;
     try {
       body = await c.req.json();
@@ -111,9 +100,7 @@ export const registerResearchRoutes = (app: Hono, deps: WebRouteDeps): void => {
     const input = {
       ...raw,
       mode: 'manual' as const,
-      ...(kind === 'weekly' && typeof raw.date === 'string'
-        ? { periodEnd: raw.date, date: undefined }
-        : {}),
+      ...(typeof raw.date === 'string' ? { periodEnd: raw.date, date: undefined } : {}),
     };
     return jsonResult(await workflow.run(input, contextForRequest()));
   });

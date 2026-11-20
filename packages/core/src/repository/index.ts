@@ -58,7 +58,6 @@ import type {
   StrategyResult,
   StrategyRun,
   StrategyRunBundle,
-  StrategyRunPublicationStatus,
   StrategyRunScope,
   StrategySignal,
   StrategyVersion,
@@ -765,7 +764,6 @@ export interface StrategyRunRepository {
     readonly strategyId?: string;
     readonly status?: StrategyRun['status'];
     readonly scope?: StrategyRunScope;
-    readonly publication?: StrategyRunPublicationStatus;
     readonly since?: Date;
     readonly until?: Date;
     /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */

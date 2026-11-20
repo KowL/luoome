@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PluginConfigStore, ProviderRuntime } from '@luoome/adapters';
+import { ProviderRuntime } from '@luoome/adapters';
 import {
   BUILTIN_STRATEGY_TEMPLATES,
   type DailyBar,
@@ -21,10 +21,14 @@ import {
   appendChatMessageTool,
   createChatSessionTool,
 } from '@luoome/toolkit/tools/chat-session.js';
-import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { describe, expect, it, vi } from 'vitest';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
-import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
+import {
+  buildTestContext,
+  createTestPluginControl,
+  seedTestDailyBars,
+  seedTestStockUniverse,
+} from '../testing/context.js';
 import { settleChatDraftTool } from './settle-chat-draft.js';
 
 const seedStrategy = async (
@@ -643,7 +647,7 @@ describe('run_strategy', () => {
     expect(result.data.results).toHaveLength(1);
     expect(result.data.results[0]?.stockId).toBe('600519.SH');
     expect(result.data.run.scope).toBe('evaluation');
-    expect(result.data.run.publication?.status).toBe('non-publishing');
+    expect(result.data.run.summary).not.toHaveProperty('acceptance');
     expect(result.data.run.inputSnapshot).toMatchObject({
       prefilter: {
         mode: 'quote-selection-safe',
@@ -904,10 +908,7 @@ describe('run_strategy', () => {
       failedCount: 1,
       evaluatedCount: 1,
     });
-    expect(result.data.run.publication).toMatchObject({
-      status: 'withheld',
-      reasons: ['acceptance-rejected'],
-    });
+    expect(result.data.run.summary).toMatchObject({ schemaVersion: 4 });
   });
 
   it('prepares derived meta fields required by strategies created from builtin templates', async () => {
@@ -1138,13 +1139,8 @@ describe('run_strategy', () => {
 describe('controlled strategy execution', () => {
   const setup = async () => {
     const home = mkdtempSync(join(tmpdir(), 'luoome-p3-execution-'));
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-    const set = (enabled: boolean) => {
-      const read = store.read();
-      if (!read.ok) throw new Error('missing');
-      store.set('business.strategy-execution', enabled, read.config);
-    };
+    const { store, set: setPlugin } = createTestPluginControl(home);
+    const set = (enabled: boolean) => setPlugin('business.strategy-execution', enabled);
     const base = await buildTestContext({ clock: () => new Date('2026-08-14T09:00:00Z') });
     const ctx = {
       ...base,
@@ -1185,73 +1181,6 @@ describe('controlled strategy execution', () => {
         error: { kind: 'permission_denied' },
       });
     } finally {
-      clean();
-    }
-  });
-  it('rejects an old bound tool after a complete off/on transition', async () => {
-    const { ctx, set, clean } = await setup();
-    try {
-      set(true);
-      const old = { ...ctx, executionPolicy: ctx.executionPolicy.bind() };
-      set(false);
-      set(true);
-      expect(
-        await runStrategyTool.execute({ strategyId: 'scan-strategy', mode: 'scheduled' }, old),
-      ).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
-      expect(await ctx.repos.strategyRun.listRuns()).toHaveLength(0);
-    } finally {
-      clean();
-    }
-  });
-  it('rejects a paused old run, records only its failure, and preserves the newer published run', async () => {
-    const { ctx, set, clean } = await setup();
-    let release = () => {},
-      started = () => {};
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const admitted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const original = ctx.repos.dailyBar.latestBefore.bind(ctx.repos.dailyBar);
-    let reads = 0;
-    vi.spyOn(ctx.repos.dailyBar, 'latestBefore').mockImplementation(async (...args) => {
-      const bars = await original(...args);
-      if (reads++ === 0) {
-        started();
-        await pending;
-      }
-      return bars;
-    });
-    try {
-      set(true);
-      const old = runStrategyTool.execute(
-        { strategyId: 'scan-strategy', mode: 'scheduled', concurrency: 1 },
-        ctx,
-      );
-      await admitted;
-      set(false);
-      set(true);
-      const current = await runStrategyTool.execute(
-        { strategyId: 'scan-strategy', mode: 'scheduled' },
-        ctx,
-      );
-      expect(current).toMatchObject({ ok: true, data: { run: { status: 'complete' } } });
-      release();
-      expect(await old).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
-      const runs = await ctx.repos.strategyRun.listRuns();
-      expect(runs).toHaveLength(2);
-      expect(runs.filter((run) => run.status === 'running')).toHaveLength(0);
-      const failed = runs.find((run) => run.status === 'failed');
-      if (!failed) throw new Error('missing revoked run');
-      expect(await ctx.repos.strategyRun.listResults(failed.id)).toHaveLength(0);
-      expect(await ctx.repos.strategyRun.signalsByRun(failed.id)).toHaveLength(0);
-      if (current.ok)
-        expect(await ctx.repos.strategyRun.findRunById(current.data.run.id)).toEqual(
-          current.data.run,
-        );
-    } finally {
-      release();
       clean();
     }
   });

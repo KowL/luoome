@@ -54,21 +54,11 @@
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
-        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>首页</span></a></li>
-        <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
-        <li><a class="nav-item" href="#market-room" data-route="market-room"><span>作战室</span></a></li>
-        <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
-        <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
-        <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
-        <li><a class="nav-item" href="#alerts" data-route="alerts"><span>预警</span></a></li>
-        <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
-        <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
-        <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
-        <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
-        <li><a class="nav-item" href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span></a></li>
-        <li><a class="nav-item" href="#sectors" data-route="sectors"><span>板块热力</span></a></li>
-        <li><a class="nav-item" href="#chat" data-route="chat"><span>AI 助手</span></a></li>
-        <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
+        <li><a class="nav-item" href="#dashboard" data-group="today"><span>今日</span></a></li>
+        <li><a class="nav-item" href="#holdings" data-group="holdings"><span>持仓</span></a></li>
+        <li><a class="nav-item" href="#watchlists" data-group="focus"><span>关注</span></a></li>
+        <li><a class="nav-item" href="#indices" data-group="market"><span>市场</span></a></li>
+        <li><a class="nav-item" href="#settings" data-group="settings"><span>设置</span></a></li>
       </ul>
       <div class="sidebar-foot">
         <button id="theme-drawer-toggle" class="btn btn-ghost btn-sm" type="button" aria-label="切换皮肤颜色">
@@ -79,6 +69,7 @@
     </aside>
 
     <main class="content" id="content">
+      <nav id="group-tabs" class="group-tabs" aria-label="分区导航"></nav>
       <!-- route: dashboard（看盘主页） -->
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div id="investment-workspace" class="investment-workspace">
@@ -109,7 +100,7 @@
         <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
         <div id="dashboard-paused" class="dashboard-notice" role="status" hidden>自动更新已暂停，可手动刷新或恢复自动更新；已发起的数据检查可能继续完成。</div>
         <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
-        <div class="card dashboard-closing-report" aria-label="当前账户收盘复盘">
+        <div class="card dashboard-closing-report" aria-label="最新成绩单">
           <div class="card-header"><div><span class="section-kicker">ACCOUNT CLOSE</span><h2>当前账户收盘复盘</h2></div><a href="#reports" class="card-link">报告历史 →</a></div>
           <div id="dashboard-closing-report"><p class="muted">正在读取最新报告…</p></div>
         </div>
@@ -521,16 +512,14 @@
       <section id="route-reports" class="route" data-route="reports" hidden>
         <div class="route-header">
           <div>
-            <span class="section-kicker">MARKET BRIEFING ARCHIVE</span>
-            <h1>报告</h1>
-            <div class="route-meta">结构化事实简报 · 数据截止与缺失维度透明可见</div>
+            <span class="section-kicker">WEEKLY SCORECARD</span>
+            <h1>成绩单</h1>
+            <div class="route-meta">每周一次的建议成绩单 · 命中率、超额与验收门禁</div>
           </div>
           <div class="report-filters" aria-label="报告筛选">
             <select id="report-kind-filter" aria-label="报告类型">
               <option value="">全部类型</option>
-              <option value="opening">开盘简报</option>
-              <option value="closing">收盘复盘</option>
-              <option value="weekly">周报</option>
+              <option value="weekly">建议成绩单</option>
             </select>
             <select id="report-status-filter" aria-label="报告状态">
               <option value="">全部状态</option>
@@ -542,22 +531,16 @@
         <div class="report-generator card" aria-label="手动生成报告">
           <div class="report-generator-copy">
             <span class="section-kicker">NEW RUN</span>
-            <strong>生成今日简报</strong>
-            <span>选择交易日；周报将以该日作为周期终点。</span>
+            <strong>生成成绩单</strong>
+            <span>选择交易日；成绩单以该日所在周为统计周期。</span>
           </div>
           <label class="report-date-field">
             <span>交易日</span>
             <input id="report-run-date" type="date" />
           </label>
           <div class="report-run-actions">
-            <button class="btn btn-outline btn-sm" type="button" data-report-run="opening">
-              开盘
-            </button>
-            <button class="btn btn-outline btn-sm" type="button" data-report-run="closing">
-              收盘
-            </button>
             <button class="btn btn-primary btn-sm" type="button" data-report-run="weekly">
-              周报
+              生成成绩单
             </button>
           </div>
           <span id="report-run-state" class="report-run-state" aria-live="polite"></span>
@@ -743,7 +726,6 @@
         <nav class="settings-subnav" aria-label="设置分区">
           <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
           <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
-          <a href="#settings?tab=plugins" class="settings-subnav-item" data-settings-tab="plugins">插件</a>
           <a href="#settings?tab=mcp" class="settings-subnav-item" data-settings-tab="mcp">MCP 服务</a>
           <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
           <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
@@ -856,25 +838,6 @@
             </section>
           </div>
         </form>
-        <section id="plugin-settings" data-settings-pane="plugins" hidden aria-labelledby="plugin-title">
-          <div class="ai-settings-heading">
-            <div><span class="section-kicker">CAPABILITY CONTROL</span><h2 id="plugin-title">插件管理</h2><p>按职责启停能力，保留已经积累的事实。变更前预览影响，变更后观察当前宿主。</p></div>
-            <button id="plugin-reload" type="button" class="btn btn-outline btn-sm">重新加载</button>
-          </div>
-          <div id="plugin-settings-status" role="status" aria-live="polite">正在读取本地配置</div>
-          <div id="plugin-summary" class="plugin-summary"></div>
-          <div id="plugin-config-actions" class="plugin-config-actions"></div>
-          <div class="plugin-layout">
-            <div id="plugin-groups"></div>
-            <aside class="plugin-preview card" aria-labelledby="plugin-preview-title">
-              <span class="section-kicker">CHANGE REVIEW</span><h3 id="plugin-preview-title">变更影响</h3>
-              <div id="plugin-preview-content"><p class="muted">选择一项启停操作，先查看依赖与影响，再明确提交。</p></div>
-              <div id="plugin-preview-actions" hidden><button id="plugin-confirm" type="button" class="btn btn-primary">确认变更</button><button id="plugin-cancel" type="button" class="btn btn-outline">取消</button></div>
-            </aside>
-          </div>
-          <p class="muted plugin-scope-note">运行状态仅代表当前 Web 宿主。策略调度、账户绩效估值、盘中快照、报告投递和盯盘监控显示实际自动资源，其余项显示执行入口和相关在途调用。其它宿主在下一安全点复核配置，不代表已全局应用。</p>
-          <p class="muted plugin-scope-note">模型、域内来源顺序、凭证及 MCP 服务沿用各自设置。通知投递可在本页独立启停；通道设置不会绕过插件开关。</p>
-        </section>
         <div id="mcp-settings" data-settings-pane="mcp" hidden>
           <div class="ai-settings-heading">
             <div>

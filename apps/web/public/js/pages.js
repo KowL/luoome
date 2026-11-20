@@ -204,7 +204,11 @@ const reportNotificationLabel = (report) =>
 
 const dashboardClosingReportNode = (report) => {
   if (report === null)
-    return el('p', 'muted', '当前账户暂无收盘报告。当日策略和账户交易计划完成后统一生成。');
+    return el(
+      'p',
+      'muted',
+      '当前账户还没有成绩单。每周一 08:00 自动生成，也可以在成绩单页手动生成。',
+    );
   const link = el('a', null, report.title);
   link.href = `#reports?id=${encodeURIComponent(report.id)}`;
   return el('div', 'dashboard-closing-summary', [
@@ -218,13 +222,13 @@ const dashboardClosingReportNode = (report) => {
 };
 
 const loadDashboardClosingReport = async (accountId, epoch, signal) => {
-  const query = new URLSearchParams({ kind: 'closing', scope: 'account', accountId, limit: '1' });
+  const query = new URLSearchParams({ kind: 'weekly', scope: 'account', accountId, limit: '1' });
   const result = await callApi(`/api/reports?${query}`, { signal });
   if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
     return;
   const body = $('#dashboard-closing-report');
   if (!result.ok) {
-    mount(body, el('p', 'muted', `收盘报告暂不可用：${result.error.kind}`));
+    mount(body, el('p', 'muted', `成绩单暂不可用：${result.error.kind}`));
     return;
   }
   mount(body, dashboardClosingReportNode(result.data.reports?.[0] ?? null));
@@ -1994,7 +1998,7 @@ const renderAdviceList = async (setStatus) => {
 const REPORT_KIND_LABEL = {
   opening: '开盘简报',
   closing: '收盘复盘',
-  weekly: '周报',
+  weekly: '建议成绩单',
 };
 
 let selectedReportId = null;
@@ -2321,15 +2325,11 @@ const renderReports = async (setStatus) => {
         if (kind === undefined || date === undefined || date.length === 0 || state === null) return;
         state.textContent = '生成中…';
         button.disabled = true;
-        const accountId = getAccountId();
         const generated = await callApi(`/api/reports/run/${kind}`, {
           method: 'POST',
           body: JSON.stringify({
             date,
             notify: false,
-            ...(kind === 'closing' && accountId.length > 0
-              ? { scope: { kind: 'account', accountId } }
-              : {}),
           }),
         });
         button.disabled = false;

@@ -1,6 +1,5 @@
-import { money, type SignalObservation, signalObservationId } from '@luoome/core';
+import { type SignalObservation, signalObservationId } from '@luoome/core';
 import {
-  completeStrategyObservationsTool,
   getSignalObservationStatsTool,
   listPendingStrategyObservationsTool,
 } from '@luoome/toolkit/tools/signal-observation.js';
@@ -58,25 +57,11 @@ const observed = (name: string, overrides: Partial<SignalObservation> = {}): Sig
 };
 
 describe('strategy signal observation tools', () => {
-  it('列出 pending 并仅完成日线样本已足够的 horizon', async () => {
+  it('列出 pending 观察而不发起结算', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.signalObservation.save(pending('t3'));
     await ctx.repos.signalObservation.save(pending('t5'));
-    await ctx.repos.signalObservation.save(pending('t20'));
-    const dates = ['2026-08-04', '2026-08-05', '2026-08-06'];
-    await ctx.repos.dailyBar.saveMany(
-      dates.map((date, index) => ({
-        stockId: '600519.SH',
-        date: new Date(`${date}T00:00:00Z`),
-        open: money(10),
-        high: money(11 + index),
-        low: money(9),
-        close: money(10.5 + index),
-        volume: 100,
-        adjustment: 'qfq' as const,
-        source: 'fixture',
-      })),
-    );
+
     const listed = await listPendingStrategyObservationsTool.execute({}, ctx);
     expect(listed).toMatchObject({
       ok: true,
@@ -85,40 +70,6 @@ describe('strategy signal observation tools', () => {
         observations: [{ status: 'pending' }, { status: 'pending' }],
       },
     });
-    expect(
-      await completeStrategyObservationsTool.execute({ runIds: ['missing-run'] }, ctx),
-    ).toMatchObject({
-      ok: true,
-      data: { scanned: 0, completed: 0 },
-    });
-    expect(await ctx.repos.signalObservation.findById(pending('t3').id)).toMatchObject({
-      status: 'pending',
-    });
-    const result = await completeStrategyObservationsTool.execute({}, ctx);
-    expect(result).toMatchObject({
-      ok: true,
-      data: {
-        scanned: 2,
-        completed: 1,
-        pending: 1,
-        byHorizon: {
-          t3: { scanned: 1, completed: 1, pending: 0 },
-          t5: { scanned: 1, completed: 0, pending: 1 },
-        },
-      },
-    });
-    expect(await ctx.repos.signalObservation.findById(pending('t3').id)).toMatchObject({
-      status: 'complete',
-      observedAt: new Date('2026-08-06T00:00:00.000Z'),
-    });
-    expect(await ctx.repos.signalObservation.findById(pending('t5').id)).toMatchObject({
-      status: 'pending',
-    });
-    expect(await ctx.repos.signalObservation.findById(pending('t20').id)).toMatchObject({
-      status: 'pending',
-    });
-    if (!result.ok) return;
-    expect(result.data.byHorizon).not.toHaveProperty('t20');
   });
 
   it('按 stock-day-horizon 去重并返回描述性统计与缺失限制', async () => {

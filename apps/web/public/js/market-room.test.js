@@ -239,9 +239,9 @@ describe('作战室页面入口结构', () => {
   const marketRoutes = read('../../src/routes/market.ts');
 
   it('侧栏有「作战室」菜单项，#route-market-room section 存在', () => {
-    expect(html).toContain('href="#market-room" data-route="market-room"><span>作战室</span>');
+    expect(appJs).toContain("['market-room', '作战室']");
     expect(html).toContain('id="route-market-room"');
-    expect(html).toContain('data-route="market-room"');
+    expect(html).toContain('data-group="market"');
   });
 
   it('app.js 接入 market-room 路由并负责 teardown（60s 刷新）', () => {
@@ -463,13 +463,13 @@ describe('板块展开明细与口径说明', () => {
     const ranking = sectorRanking();
     const facts = sectorDetailFacts(ranking.rows[0], ranking);
     const byLabel = Object.fromEntries(facts.map((fact) => [fact.label, fact.value]));
-    expect(byLabel['日涨幅']).toBe('+1.25%');
+    expect(byLabel.日涨幅).toBe('+1.25%');
     expect(byLabel['近 5 分钟']).toBe('-0.40%');
     expect(byLabel['近 15 分钟']).toBe('缺失');
     expect(byLabel['上涨 / 下跌 / 平']).toBe('上涨 2 · 下跌 1 · 平 0');
     expect(byLabel['有效成分（分母）']).toBe('有效 3 / 成分 4 · 缺失 1 · 停牌退市 0');
-    expect(byLabel['封板数']).toBe('2 只');
-    expect(byLabel['窗口成交占比']).toBe('12.34%');
+    expect(byLabel.封板数).toBe('2 只');
+    expect(byLabel.窗口成交占比).toBe('12.34%');
     expect(byLabel['成分增量 / 全市场增量']).toBe('缺失');
     expect(byLabel['窗口起点（5 分钟）']).toBe('10:10 → 10:15 · 5 分钟');
     expect(byLabel['窗口起点（15 分钟）']).toContain('window_start_missing');

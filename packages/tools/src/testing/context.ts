@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   DEFAULT_TEST_NOW,
   FakeLLMAdapter,
@@ -20,6 +21,7 @@ import type {
   LimitUpLadderManagerLike,
   LimitUpMarketManagerLike,
   Logger,
+  ManagedPluginId,
   MarketDumpAdapterLike,
   NewsManagerLike,
   NorthboundFlowManagerLike,
@@ -30,9 +32,9 @@ import type {
   ToolContext,
   ToolResult,
 } from '@luoome/core';
+import { MANAGED_PLUGIN_IDS } from '@luoome/core';
 import { createMemoryRepositories, seedData } from '@luoome/db/memory';
 import { saveDecisionReviewTool } from '@luoome/toolkit/tools/decision-review.js';
-import { BUILTIN_PLUGIN_DEFAULTS } from '../builtin-plugins.js';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
 
 export interface BuildTestContextOptions {
@@ -70,23 +72,40 @@ const createSilentLogger = (): Logger => {
 
 const defaultBusinessClock = (): Date => new Date(Math.max(DEFAULT_TEST_NOW.getTime(), Date.now()));
 
-export const createTestPluginControl = (home: string) => {
-  const store = new PluginConfigStore(join(home, 'plugins.json'));
+/** 测试夹具：直接改写 `plugins.json` 的启用位（生产侧没有写入接口）。 */
+export const setPluginEnabled = (path: string, id: ManagedPluginId, enabled: boolean) => {
+  const raw = (() => {
+    try {
+      return JSON.parse(readFileSync(path, 'utf8')) as {
+        version: 1;
+        entries: Record<string, { enabled: boolean }>;
+      };
+    } catch {
+      return { version: 1 as const, entries: {} as Record<string, { enabled: boolean }> };
+    }
+  })();
+  raw.entries[id] = { enabled };
+  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+};
+
+export const createTestPluginControl = (home: string, enabled: readonly ManagedPluginId[] = []) => {
+  const path = join(home, 'plugins.json');
+  const store = new PluginConfigStore(path);
+  writeFileSync(
+    path,
+    `${JSON.stringify({
+      version: 1,
+      entries: Object.fromEntries(
+        MANAGED_PLUGIN_IDS.map((id) => [id, { enabled: enabled.includes(id) }]),
+      ),
+    })}\n`,
+  );
+  const set = (id: ManagedPluginId, enabled: boolean) => setPluginEnabled(path, id, enabled);
   return {
     store,
-    initial: (() => {
-      let config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-      for (const id of [
-        'business.strategy-execution',
-        'business.analysis',
-        'business.watch-monitoring',
-        'business.report',
-        'business.notification',
-        ...TASK_PLUGIN_IDS,
-      ] as const)
-        config = store.set(id, true, config);
-      return config;
-    })(),
+    set,
+    path,
+    initial: { version: 1 as const, entries: {} },
     executionPolicy: createPluginExecutionPolicy(
       store,
       new Set(['read', 'advice', 'write', 'external']),
@@ -129,10 +148,7 @@ export const buildTestContext = async (
     executionPolicy:
       opts.executionPolicy ??
       createPluginExecutionPolicy(
-        {
-          acquire: (id) => ({ ok: true, permit: { id, incarnation: 'test-only', epoch: 1 } }),
-          valid: () => true,
-        },
+        { isEnabled: () => true },
         new Set(['read', 'advice', 'write', 'external']),
       ),
     repos,
@@ -280,5 +296,3 @@ export const recordAdviceOutcomeForTest = {
 
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
-
-import { TASK_PLUGIN_IDS } from '@luoome/core';

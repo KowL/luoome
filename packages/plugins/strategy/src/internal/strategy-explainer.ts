@@ -1,14 +1,11 @@
-import type { LLMGenerateRequest, PluginBlockReason, ToolContext } from '@luoome/core';
+import type { LLMGenerateRequest, ToolContext } from '@luoome/core';
+
+export type PluginBlockReason = 'plugin_disabled' | 'dependency_not_ready';
 
 export const createStrategyExplainer = (ctx: ToolContext) => {
-  const admission = ctx.executionPolicy?.acquire('strategy.ai-insight') ?? {
-    ok: false as const,
-    reason: 'dependency_not_ready' as const,
-  };
   const blocked = (): PluginBlockReason | undefined => {
     ctx.executionGuard?.();
-    if (!admission.ok) return admission.reason;
-    if (!ctx.executionPolicy?.valid(admission.permit)) return 'activation_revoked';
+    if (ctx.executionPolicy?.isEnabled('strategy.ai-insight') === false) return 'plugin_disabled';
     if (ctx.adapters.llm.configurationReady === false) return 'dependency_not_ready';
     return undefined;
   };

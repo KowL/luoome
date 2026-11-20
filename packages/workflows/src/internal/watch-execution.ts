@@ -56,7 +56,7 @@ export const watchExecutionStep =
             () => ctx.executionGuard?.(),
             JSON.stringify([
               'business.watch-monitoring',
-              ctx.executionPolicy?.acquire('business.watch-monitoring'),
+              ctx.executionPolicy?.isEnabled('business.watch-monitoring'),
             ]),
           );
     try {

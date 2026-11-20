@@ -440,15 +440,6 @@ export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}
     ...(finishedAt === undefined ? {} : { finishedAt }),
     ...(summary === undefined ? {} : { summary }),
     ...(error === undefined ? {} : { error }),
-    ...(run.status === 'complete' && run.publication === undefined
-      ? {
-          publication: {
-            status: 'published' as const,
-            reasons: ['legacy-publication' as const],
-            decidedAt: finishedAt ?? run.startedAt,
-          },
-        }
-      : {}),
   };
 };
 
@@ -3056,15 +3047,10 @@ export const registerRepositoryContractTests = (
         });
         await repos.strategy.createVersion(draft);
 
-        // evaluation run 是非发布验证证据（publication=non-publishing），允许未发布候选版本。
+        // evaluation run 只是验证证据，允许未发布候选版本。
         const evaluationRun = makeStrategyRun('run-draft-evaluation', {
           strategyVersionId: draft.id,
           scope: 'evaluation',
-          publication: {
-            status: 'non-publishing',
-            reasons: ['evaluation-scope'],
-            decidedAt: T2,
-          },
         });
         await repos.strategyRun.commitRun({ run: evaluationRun, results: [], signals: [] });
         expect(await repos.strategyRun.findRunById(evaluationRun.id)).toEqual(evaluationRun);
@@ -3114,11 +3100,6 @@ export const registerRepositoryContractTests = (
           strategyId: 'strategy-new',
           strategyVersionId: version.id,
           scope: 'evaluation',
-          publication: {
-            status: 'non-publishing',
-            reasons: ['evaluation-scope'],
-            decidedAt: T2,
-          },
         });
         await repos.strategyRun.commitRun({ run: evaluationRun, results: [], signals: [] });
         expect(await repos.strategyRun.findRunById(evaluationRun.id)).toEqual(evaluationRun);

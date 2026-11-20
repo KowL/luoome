@@ -1,11 +1,11 @@
-import type { ToolContext } from '@luoome/core';
+import { isAdvisoryEligibleRun, type ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 
 /**
  * 策略运行产物的保留策略：
- * - 逐股明细（`results_json`）按 Strategy 保留最近 N 次运行 + 全部已发布运行；
+ * - 逐股明细（`results_json`）按 Strategy 保留最近 N 次运行 + 最近一次可用于建议的运行；
  * - 终态信号观察（complete / unavailable）按 baselineAt 过期。
  *
  * 只删除可重建/已归档的明细，不删 run 元数据、不删 strategy_signals，
@@ -29,15 +29,10 @@ export const PruneStrategyHistoryOutput = z.object({
   warnings: z.array(z.string().min(1).max(300)).max(8),
 });
 
-const isPublished = (run: {
-  readonly publication?: { readonly status: string } | undefined;
-}): boolean => run.publication?.status === 'published';
-
 /**
- * 保留窗口 = 最近 N 次运行 + 最近一次 published 运行。
+ * 保留窗口 = 最近 N 次运行 + 最近一次可用于建议的运行。
  *
- * 注意不能用「所有 published」当豁免：legacy 归一化会把每个 complete 的 operational
- * run 都读成 published，那样等于永不清理。只有最新一条是 current 证据。
+ * 注意不能用「所有可用运行」当豁免，那样等于永不清理；只有最新一条是 current 证据。
  */
 export const pruneStrategyHistoryTool = defineTool({
   name: 'prune_strategy_history',
@@ -58,8 +53,8 @@ export const pruneStrategyHistoryTool = defineTool({
       });
       runsScanned += runs.length;
       const keepIds = new Set(runs.slice(0, input.keepRunsPerStrategy).map((run) => run.id));
-      const latestPublished = runs.find((run) => isPublished(run));
-      if (latestPublished !== undefined) keepIds.add(latestPublished.id);
+      const latestCurrent = runs.find((run) => isAdvisoryEligibleRun(run));
+      if (latestCurrent !== undefined) keepIds.add(latestCurrent.id);
       const candidates = runs.filter((run) => !keepIds.has(run.id));
       if (candidates.length === 0) continue;
       const cleared = await ctx.repos.strategyRun.clearResults(

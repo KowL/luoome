@@ -1,6 +1,5 @@
 import type { PluginPackage } from '@luoome/toolkit';
 import { strategyToolContributions } from './contributions.js';
-import { type StrategyResourceOperations, startStrategyScheduler } from './resources.js';
 
 export const strategyPlugin = {
   definitions: {
@@ -16,29 +15,13 @@ export const strategyPlugin = {
       requires: [],
     },
     'business.strategy-execution': {
-      settings: { notes: ['自动策略定时器随依赖停用；报告截止与补投保持独立。'] },
+      settings: { notes: ['关闭后手动运行与信号查询一并停用。'] },
       kind: 'business',
       label: '策略执行',
       baselineEnabled: false,
       requires: [],
     },
-    'task.strategy-schedules': {
-      settings: { requiredCapabilities: ['write', 'external'] },
-      kind: 'task',
-      label: '自动策略调度',
-      baselineEnabled: false,
-      requires: ['business.strategy-execution'],
-    },
   },
   tools: strategyToolContributions,
-  resources: (operations: StrategyResourceOperations) => [
-    {
-      id: 'task.strategy-schedules',
-      start: (scope) =>
-        startStrategyScheduler(operations, scope.ctx, {
-          startImmediately: false,
-          dispatch: (operation) => scope.run(operation),
-        }),
-    },
-  ],
+  resources: (_operations: object) => [],
 } as const satisfies PluginPackage;

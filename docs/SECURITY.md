@@ -134,7 +134,7 @@ function sanitizeAdviceReasoning(reasoning: string): string {
 
 LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized 审计。展示时只在“展开推理”按钮后显示已清理文本，避免被复制粘贴造成下游 agent 误用。
 
-## MCP 暴露配置
+## 暴露面配置（MCP / Web / CLI 共用）
 
 | Env Var | 默认 | 允许值 | 说明 |
 |---|---|---|---|
@@ -144,10 +144,12 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
 | `LUOOME_EXPOSE_TRADE` | `false` | 必须 `false` | trade 类，恒为 false |
 
-启动时校验：trade 必须 false，否则启动失败。
+启动时校验：`LUOOME_EXPOSE_TRADE=true` 一律失败。三个 surface 都通过 `packages/core/src/exposure.ts` 的
+`resolveExposure()` 读取这几项并判定 tool 是否可见（`isToolExposed()`：tool 声明的每项能力都必须在
+暴露面内），不存在各 surface 各自维护的 allowlist 计算。
 
 Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
-策略盘后、盘中账户计划、账户绩效与盘后数据 dump scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照、日线或 WorkflowRun，因此只有
+盘中账户计划、账户绩效与盘后数据 dump scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照、日线或 WorkflowRun，因此只有
 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时才允许启动；缺任一项时
 保持停用并记录原因。`luoome start` 的长驻账户计划与 AlertPlan 盯盘循环也受此双闸口约束。
 不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
@@ -300,29 +302,27 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 
 ## DSH 运行时安全边界
 
-内置能力开关通过本地 CLI 或 Web「设置 → 插件」控制 `plugins.json`，模型无权修改。初始化/迁移/修改需 write，
-但启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。
-配置原子替换配合 writer lock 与 incarnation/revision 条件提交；正常启停增加受影响 epoch，
-灾难恢复使用新 incarnation。每次策略解释在发请求及发布结果前重查，旧 scope、重试与晚响应不能复活。
+内置能力开关只来自使用者手写的 `$LUOOME_HOME/plugins.json`：进程启动时读入，没有 CLI 命令、Web 管理页或任何写入接口，模型与 Agent 均无权修改。
+启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。每次策略解释在发请求及发布结果前重查当前启用位与数据 scope。
 已发送模型请求无法撤回费用；停用只阻止后续请求和失效解释发布，组合仍可返回已获准的原窗口事实。
 配置缺失或损坏不默认启用；通用生产上下文缺少 P1/P2/P3 执行许可时拒绝受控入口。
 source/task 初始与迁移新增项默认关闭，启用仍受宿主 write/external opt-in、凭证和场景白名单约束。
-受控行情 transport 在实际外发前识别供应商并复核许可，返回与持久化再校验 incarnation/epoch；间接使用的 Sina 同样受限。
-旧请求不跨新路由/任务世代共享缓存或合并，逐 waiter 检查自身许可；提供者配额不因开关或缓存世代重置。
+受控行情 transport 在实际外发前识别供应商并复核其启用位，返回与持久化再校验数据 scope；间接使用的 Sina 同样受限。
+停用数据源后下一次取数即切换路由；提供者配额不因开关重置。
 数据 repository 在取得 SQLite immediate 写锁后运行同步 guard，提交前不跨 await；已提交历史不会因关闭而删除。
-策略新运行/试跑/回测受 business.strategy-execution 控制，自动调度另需 task.strategy-schedules。
-新配置项默认关闭；插件启用不改变执行权限和 Agent 场景白名单。旧草案生成 callback 及最终确认各自复核目标许可，
-关→开不会恢复旧执行；已有回执读取和取消仍可用，不自动重放。
-运行/回测成功发布在 SQLite 写资格内校验。撤销后的特殊收尾仅限既有 running→failed、不可变身份一致、无新结果/信号/metrics，
-不能用失败收尾创建新运行或覆盖已完成事实。只读历史与独立运行审计继续保留。
-受控 timer 先撤销再卸载，在途未排空阻止新一代注册；有界排空超时/teardown 失败均不得谎报安全卸载。
+策略新运行/试跑/回测受 business.strategy-execution 控制；每日判断中的策略补位同样需要该插件。
+新配置项默认关闭；插件启用不改变执行权限和 Agent 场景白名单。旧草案生成 callback 及最终确认各自复核当前启用位；
+已有回执读取和取消仍可用，不自动重放。
+运行结果在 SQLite 写资格内校验。失败收尾仅限既有 running→failed、不可变身份一致，不能用失败收尾创建新运行或覆盖已完成事实。
+只读历史与独立运行审计继续保留。
+受控 timer 在停用时清除并停止发起新 tick；有界排空超时不得谎报安全卸载。
 报告 cutoff/补投独立于策略调度，关闭策略不关闭报告资源。
 个股、持仓、市场展望与策略候选 Advice 的生成统一受 business.analysis 控制；新增项默认关闭，迁移不自动启用。
-旧入口、旧 callable 和旧草案确认均不能绕过停用或通过关后重开恢复许可。
-模型请求与返回/失败、修复重试和 Advice immediate 写事务复核同一世代；已撤销结果不落库，历史读取继续开放。
+旧入口、旧 callable 和旧草案确认在停用期间同样被拒；重新启用后再次调用即恢复。
+模型请求与返回/失败、修复重试和 Advice immediate 写事务复核当前启用位与数据 scope；未通过契约的结果不落库，历史读取继续开放。
 已发送请求不承诺撤回费用；已合法提交的短事务结果不追溯撤销，不扩大原 advice/write/external 与场景授权。
 盯盘新求值、触发、边沿状态和投递尝试受 business.watch-monitoring 控制；新项默认关闭。
-通知 manager 在异步准备后、渠道调用前执行来自 Tool 的受控 guard；旧闭包/旧工具/旧 timer 不能绕过撤销。
+通知 manager 在异步准备后、渠道调用前执行来自 Tool 的受控 guard；停用后不再发起新的投递。
 停用后可保留已发出的 transport 回执，并仅完成与预留 notificationId 一致的既有 pending 触发，
 该收尾在事务内校验回执与记录身份，不能新建触发或覆盖另一尝试。历史读取、反馈、列表/计划编辑和其它报告通知不随盯盘一起停用。
 Web 旧资源排空前不注册新一代；CLI daemon 仍逐轮复核。已发送请求不能撤回，也不承诺渠道 exactly-once。
@@ -350,7 +350,7 @@ Web Agent 的外部 MCP 客户端仅在 Bun 侧运行，Node Host 不加载 MCP 
 客户端只继承 SDK 的基本系统环境变量，不转发完整环境或模型密钥；服务 stderr 不回显。
 JSON Schema、请求超时、发现页数、结果大小与内容类型均有上限，错误不输出远端诊断、路径或业务正文。
 外部工具以 external 声明并经统一审计；结果保留来源且视为不可信资料。
-配置停用、删除、白名单/场景变化会撤销已发现调用的授权，回执重读亦复核当前授权。
+配置停用、删除、白名单/场景变化在下一次发现与调用时生效，回执重读亦复核当前状态。
 已发出的只读请求可能执行至关闭，返回前复核授权并丢弃失效结果，不承诺回滚或自动重放。
 
 

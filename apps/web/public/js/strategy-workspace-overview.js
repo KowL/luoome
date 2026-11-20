@@ -12,11 +12,12 @@ import {
   fmtSigned,
   metric,
   mount,
-  PUBLICATION_STATUS,
   post,
   promptDialog,
   RESULT_VIEW_STATUS,
   RULE_STATUS,
+  RUN_ELIGIBILITY,
+  runEligibility,
   sortableHeader,
   stockIdentityLink,
 } from './strategy-workspace-shared.js';
@@ -32,10 +33,8 @@ const navigate = (state, patch) => {
 export const renderHealthBanner = (workspace) => {
   const warnings = [...(workspace.warnings ?? [])];
   const latest = workspace.latestAttempt;
-  if (latest?.publication?.status && latest.publication.status !== 'published') {
-    warnings.unshift(
-      `最近尝试：${PUBLICATION_STATUS[latest.publication.status]?.[0] ?? latest.publication.status} · ${latest.publication.reasons?.join('、') || '无发布原因'}`,
-    );
+  if (latest !== undefined && runEligibility(latest) === 'ineligible') {
+    warnings.unshift(`最近尝试：${RUN_ELIGIBILITY.ineligible[0]}（status=${latest.status}）`);
   }
   if (workspace.overview.health === 'partial') {
     warnings.unshift('本次运行已完成；部分标的数据不可用，股票池仅展示已明确命中的标的。');
@@ -229,9 +228,9 @@ export const renderOverview = (workspace, state) => {
         : `${overview.enteredCount} / ${overview.exitedCount}`,
     ),
     metric(
-      '当前发布',
-      PUBLICATION_STATUS[current.publication?.status]?.[0] ?? 'legacy/unknown',
-      current.scope === 'evaluation' ? '历史评估不会进入 operational current' : '',
+      '当前结果',
+      RUN_ELIGIBILITY[runEligibility(current)]?.[0] ?? '--',
+      current.scope === 'evaluation' ? '历史评估不会进入建议消费' : '',
     ),
   ]);
   const providers = (current.providerStatuses ?? []).map((provider) =>

@@ -49,7 +49,7 @@ export const startMarketBatchScheduler = (
     if (stopped || running || !isMarketBatchSession(ctx.clock())) return;
     if (
       ctx.executionPolicy !== undefined &&
-      !ctx.executionPolicy.acquire('task.collect-market-snapshot').ok
+      !ctx.executionPolicy.isEnabled('task.collect-market-snapshot')
     )
       return;
     running = true;

@@ -1,4 +1,3 @@
-import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { z } from 'zod';
 // apps/web 闸口矩阵测试（bun runner：server.ts 顶层 import @luoome/db → bun:sqlite，
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
@@ -10,7 +9,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { EastmoneySource, NotificationManager, PluginConfigStore } from '@luoome/adapters';
+import { EastmoneySource, NotificationManager } from '@luoome/adapters';
 import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
   AgentCallableTool,
@@ -26,15 +25,13 @@ import {
   addWatchlistMembersTool,
   addWatchlistMemberTool,
   createAlertPlanTool,
-  createPluginExecutionPolicy,
   createWatchlistTool,
   saveReportTool,
   saveWatchTriggerTool,
   toolRegistry,
 } from '@luoome/tools';
-import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
+import { buildTestContext, seedTestStockUniverse, setPluginEnabled } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
-import { snapshotAccountPerformanceWorkflow } from '@luoome/workflows';
 import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
@@ -42,7 +39,6 @@ import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { WEB_AGENT_TOOL_NAMES } from './http/exposure.js';
 import { MarketSettingsStore } from './market-settings.js';
-import { PluginSettingsStore } from './plugin-settings.js';
 import {
   buildWebContext,
   createWebApp,
@@ -421,23 +417,20 @@ describe('报告 API', () => {
     expect(notificationBody.data.content).not.toContain(`# ${report.title}`);
   });
 
-  it('手动收盘 API 不能用请求体伪造批次完成状态提前出报', async () => {
+  it('非 weekly 类型的手动报告请求被拒绝', async () => {
     const ctx = await buildTestContext({ clock: () => new Date('2026-08-10T10:00:00.000Z') });
     const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
-    const response = await local.fetch(
-      new Request('http://test/api/reports/run/closing', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', origin: 'http://test' },
-        body: JSON.stringify({
-          date: '2026-08-10',
-          scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
-          notify: false,
-          planBatchStatus: 'complete',
+    for (const kind of ['closing', 'opening', 'daily-review', 'risk-report']) {
+      const response = await local.fetch(
+        new Request(`http://test/api/reports/run/${kind}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: JSON.stringify({ date: '2026-08-10', notify: false }),
         }),
-      }),
-    );
-    expect(await response.json()).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
-    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+      );
+      expect(await response.json()).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+    }
+    expect(await ctx.repos.report.list()).toHaveLength(0);
   });
 
   it('删除端点移除报告，重复删除返回 not_found', async () => {
@@ -501,9 +494,11 @@ describe('报告 API', () => {
     expect(againBody.error?.kind).toBe('not_found');
   });
 
-  it('手动生成端点可执行，并保存可查询的开盘简报', async () => {
-    const generated = await app.fetch(
-      new Request('http://test/api/reports/run/opening', {
+  it('手动生成端点可执行，并保存可查询的周度成绩单', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-07-29T04:00:00.000Z') });
+    const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const generated = await local.fetch(
+      new Request('http://test/api/reports/run/weekly', {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: 'http://test' },
         body: JSON.stringify({ date: '2026-07-29', notify: false }),
@@ -514,9 +509,9 @@ describe('报告 API', () => {
       data?: { report: { id: string; kind: string } };
     };
     expect(generated.status).toBe(200);
-    expect(body.data?.report.kind).toBe('opening');
+    expect(body.data?.report.kind).toBe('weekly');
 
-    const detail = await app.fetch(
+    const detail = await local.fetch(
       new Request(`http://test/api/reports/${body.data?.report.id ?? ''}`),
     );
     expect(detail.status).toBe(200);
@@ -1248,8 +1243,7 @@ describe('行情源设置 API', () => {
   it('buildWebContext 把注入的共享 EastmoneySource 分发给 market 与非行情 factory', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-sources-'));
     try {
-      const plugins = new PluginConfigStore(join(dir, 'plugins.json'));
-      plugins.set('source.eastmoney', true, plugins.initialize(BUILTIN_PLUGIN_DEFAULTS));
+      setPluginEnabled(join(dir, 'plugins.json'), 'source.eastmoney', true);
       const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
       const eastmoney = new EastmoneySource({
         fetchImpl: sharedFetch as unknown as typeof fetch,
@@ -1717,7 +1711,7 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
   });
 
-  it('正式运行 published 后创建观察候选并回传计数', async () => {
+  it('正式运行返回运行结果，不再创建观察候选', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     const web = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
@@ -1796,18 +1790,15 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     const runBody = (await runResponse.json()) as {
       ok: boolean;
       data?: {
-        run?: { publication?: { status?: string } };
+        run?: { status?: string; scope?: string };
         observations?: { status?: string; created?: number; skipped?: number };
       };
     };
-    expect(runBody.data?.run?.publication?.status).toBe('published');
-    expect(runBody.data?.observations).toMatchObject({
-      status: 'complete',
-      created: 3,
-      skipped: 0,
-    });
+    expect(runBody.data?.run?.status).toBe('complete');
+    expect(runBody.data?.run?.scope).toBe('operational');
+    expect(runBody.data).not.toHaveProperty('observations');
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toHaveLength(
-      3,
+      0,
     );
   });
 
@@ -3086,473 +3077,6 @@ const chat = async (target: Hono, body: unknown): Promise<Response> =>
       body: JSON.stringify(body),
     }),
   );
-
-describe('plugin settings HTTP and Agent revocation', () => {
-  it('switches the performance task through Web settings and preserves history and on-demand queries', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'luoome-performance-http-'));
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-    try {
-      const executionPolicy = createPluginExecutionPolicy(
-        store,
-        new Set(['read', 'advice', 'write', 'external']),
-      );
-      const ctx = await buildTestContext({ executionPolicy });
-      const local = createWebApp(ctx, {
-        exposeWrite: true,
-        exposeExternal: true,
-        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
-      });
-      const input = {
-        accountIds: [ctx.user.defaultAccountId],
-        from: '2026-07-01',
-        to: '2026-07-03',
-        benchmarkStockId: '600900.SH',
-      };
-      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
-        ok: false,
-        error: { kind: 'permission_denied' },
-      });
-      const set = async (enabled: boolean) => {
-        const read = store.read();
-        if (!read.ok) throw new Error('missing');
-        const response = await local.fetch(
-          new Request('http://test/api/settings/plugins', {
-            method: 'POST',
-            headers: { origin: 'http://test', 'content-type': 'application/json' },
-            body: JSON.stringify({
-              action: 'set',
-              id: 'task.snapshot-account-performance',
-              enabled,
-              incarnation: read.config.incarnation,
-              revision: read.config.revision,
-            }),
-          }),
-        );
-        expect(await response.json()).toMatchObject({ ok: true, data: { committed: true } });
-      };
-      await set(true);
-      const old = { ...ctx, executionPolicy: executionPolicy.bind() };
-      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
-        ok: true,
-        data: { createdSnapshots: 1 },
-      });
-      await set(false);
-      expect(await snapshotAccountPerformanceWorkflow.run(input, old)).toMatchObject({
-        ok: false,
-        error: { kind: 'permission_denied' },
-      });
-      const history = await (
-        await local.fetch(new Request('http://test/api/account/performance/snapshots'))
-      ).json();
-      expect(history).toMatchObject({
-        ok: true,
-        data: { snapshots: [{ accountId: ctx.user.defaultAccountId }] },
-      });
-      expect(
-        (
-          await local.fetch(
-            new Request(
-              'http://test/api/account/performance/snapshot-audit?from=2026-07-01&to=2026-07-03',
-            ),
-          )
-        ).status,
-      ).toBe(200);
-      expect(
-        (
-          await local.fetch(
-            new Request(
-              'http://test/api/account/performance?from=2026-07-01&to=2026-07-03&benchmarkStockId=600900.SH',
-            ),
-          )
-        ).status,
-      ).toBe(200);
-      await set(true);
-      expect(await snapshotAccountPerformanceWorkflow.run(input, old)).toMatchObject({
-        ok: false,
-        error: { kind: 'permission_denied' },
-      });
-      expect(await snapshotAccountPerformanceWorkflow.run(input, ctx)).toMatchObject({
-        ok: true,
-        data: { createdSnapshots: 0, reusedSnapshots: 1 },
-      });
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-  it('controls Feishu test through the notification plugin without replacing the host channel or affecting reports', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'luoome-notification-http-'));
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.set('business.report', true, store.initialize(BUILTIN_PLUGIN_DEFAULTS));
-    try {
-      const policy = createPluginExecutionPolicy(
-        store,
-        new Set(['read', 'advice', 'write', 'external']),
-      );
-      const base = await buildTestContext({ executionPolicy: policy });
-      const ctx = { ...base, adapters: { ...base.adapters } };
-      const settings = new FeishuSettingsStore({
-        LUOOME_HOME: home,
-        LUOOME_FEISHU_WEBHOOK_URL: 'https://open.feishu.cn/open-apis/bot/v2/hook/fixture',
-      });
-      const local = createWebApp(ctx, {
-        exposeWrite: true,
-        exposeExternal: true,
-        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
-        feishuSettingsStore: settings,
-      });
-      const post = (path: string, body: unknown = {}) =>
-        local.fetch(
-          new Request(`http://test${path}`, {
-            method: 'POST',
-            headers: { origin: 'http://test', 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          }),
-        );
-      const set = async (enabled: boolean) => {
-        const read = store.read();
-        if (!read.ok) throw new Error('missing');
-        expect(
-          (
-            await post('/api/settings/plugins', {
-              action: 'set',
-              id: 'business.notification',
-              enabled,
-              incarnation: read.config.incarnation,
-              revision: read.config.revision,
-            })
-          ).status,
-        ).toBe(200);
-      };
-      const testSend = () => post('/api/settings/feishu/test');
-      expect((await testSend()).status).toBe(403);
-      await set(true);
-      expect((await testSend()).status).toBe(200);
-      await set(false);
-      expect(await (await testSend()).json()).toMatchObject({
-        ok: false,
-        error: { kind: 'permission_denied', required: 'plugin:business.notification' },
-      });
-      expect(await base.repos.notification.listRecent()).toHaveLength(1);
-      expect(ctx.adapters.notification).toBe(base.adapters.notification);
-      const generated = await (await post('/api/reports/run/opening', { notify: true })).json();
-      expect(generated).toMatchObject({
-        ok: true,
-        data: { notified: false, report: { deliveryStatus: 'not-requested' } },
-      });
-      expect((await local.fetch(new Request('http://test/api/reports'))).status).toBe(200);
-      expect(await base.repos.notification.listRecent()).toHaveLength(1);
-      const guarded = createWebApp(ctx, {
-        exposeWrite: true,
-        exposeExternal: false,
-        feishuSettingsStore: settings,
-      });
-      await set(true);
-      expect(
-        (
-          await guarded.fetch(
-            new Request('http://test/api/settings/feishu/test', { method: 'POST' }),
-          )
-        ).status,
-      ).toBe(403);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-  it('controls report creation through plugin settings while preserving history and render routes', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'luoome-report-http-'));
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-    try {
-      const ctx = await buildTestContext({
-        executionPolicy: createPluginExecutionPolicy(
-          store,
-          new Set(['read', 'advice', 'write', 'external']),
-        ),
-      });
-      const local = createWebApp(ctx, {
-        exposeWrite: true,
-        exposeExternal: true,
-        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
-      });
-      const post = (path: string, body: unknown) =>
-        local.fetch(
-          new Request(`http://test${path}`, {
-            method: 'POST',
-            headers: { origin: 'http://test', 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          }),
-        );
-      const set = async (enabled: boolean) => {
-        const current = store.read();
-        if (!current.ok) throw new Error('missing fixture');
-        expect(
-          await (
-            await post('/api/settings/plugins', {
-              action: 'set',
-              id: 'business.report',
-              enabled,
-              incarnation: current.config.incarnation,
-              revision: current.config.revision,
-            })
-          ).json(),
-        ).toMatchObject({ ok: true, data: { committed: true } });
-      };
-      expect((await post('/api/reports/run/opening', { notify: true })).status).toBe(403);
-      await set(true);
-      const generated = (await (
-        await post('/api/reports/run/opening', { notify: false })
-      ).json()) as { ok: boolean; data: { report: { id: string } } };
-      expect(generated.ok).toBe(true);
-      await set(false);
-      for (const kind of ['opening', 'closing', 'weekly'])
-        expect((await post(`/api/reports/run/${kind}`, { notify: true })).status).toBe(403);
-      expect((await local.fetch(new Request('http://test/api/reports'))).status).toBe(200);
-      expect(
-        (await local.fetch(new Request(`http://test/api/reports/${generated.data.report.id}`)))
-          .status,
-      ).toBe(200);
-      expect(
-        (
-          await local.fetch(
-            new Request(
-              `http://test/api/reports/${generated.data.report.id}/render?format=markdown`,
-            ),
-          )
-        ).status,
-      ).toBe(200);
-      expect((await post('/api/watch/run-once', { notify: false })).status).toBe(403);
-      await set(true);
-      expect((await post('/api/reports/run/opening', { notify: false })).status).toBe(200);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-  it('controls the watch run-once route while retaining history and feedback routes', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'luoome-watch-http-'));
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-    try {
-      const ctx = await buildTestContext({
-        executionPolicy: createPluginExecutionPolicy(
-          store,
-          new Set(['read', 'advice', 'write', 'external']),
-        ),
-      });
-      const local = createWebApp(ctx, {
-        exposeWrite: true,
-        exposeExternal: true,
-        pluginSettingsStore: new PluginSettingsStore({ LUOOME_HOME: home }),
-      });
-      const post = (path: string, body: unknown) =>
-        local.fetch(
-          new Request(`http://test${path}`, {
-            method: 'POST',
-            headers: { origin: 'http://test', 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          }),
-        );
-      expect(await (await post('/api/watch/run-once', { notify: false })).json()).toMatchObject({
-        ok: false,
-        error: { kind: 'permission_denied', required: 'plugin:business.watch-monitoring' },
-      });
-      const set = async (enabled: boolean) => {
-        const current = store.read();
-        if (!current.ok) throw new Error('missing fixture');
-        const result = await post('/api/settings/plugins', {
-          action: 'set',
-          id: 'business.watch-monitoring',
-          enabled,
-          incarnation: current.config.incarnation,
-          revision: current.config.revision,
-        });
-        expect(await result.json()).toMatchObject({ ok: true, data: { committed: true } });
-      };
-      await set(true);
-      expect(await (await post('/api/watch/run-once', { notify: false })).json()).toMatchObject({
-        ok: true,
-      });
-      await set(false);
-      expect((await post('/api/watch/run-once', { notify: true })).status).toBe(403);
-      expect((await local.fetch(new Request('http://test/api/watch/triggers'))).status).toBe(200);
-      expect((await local.fetch(new Request('http://test/api/watch/status'))).status).toBe(200);
-      expect((await local.fetch(new Request('http://test/api/alert-plans'))).status).toBe(200);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-  it.each([
-    {
-      plugin: 'business.strategy-execution',
-      tool: 'run_strategy',
-      input: { strategyId: 'missing', mode: 'scheduled' },
-      message: '帮我运行策略',
-      history: 'get_strategy',
-    },
-    {
-      plugin: 'business.analysis',
-      tool: 'analyze_stock',
-      input: { stockId: '002594.SZ' },
-      message: '帮我分析个股 002594',
-      history: 'get_advice',
-    },
-  ])(
-    'keeps $plugin settings protected and revokes fresh and saved Agent tools',
-    async ({ plugin, tool, input, message, history }) => {
-      const home = mkdtempSync(join(tmpdir(), 'luoome-p4-http-'));
-      const store = new PluginConfigStore(join(home, 'plugins.json'));
-      try {
-        const ctx = await buildTestContext({
-          advices: [],
-          executionPolicy: createPluginExecutionPolicy(
-            store,
-            new Set(['read', 'advice', 'write', 'external']),
-          ),
-        });
-        const settings = new PluginSettingsStore({ LUOOME_HOME: home });
-        let captured: readonly AgentCallableTool[] = [];
-        const local = createWebApp(ctx, {
-          exposeWrite: true,
-          exposeExternal: true,
-          pluginSettingsStore: settings,
-          chatStreamRuntime: {
-            createUIMessageStreamResponse: async (request) => {
-              captured = request.tools;
-              await request.onFinish?.({
-                id: '',
-                parts: [{ type: 'text', text: 'fixture' }],
-                cancelled: false,
-              });
-              return new Response('fixture');
-            },
-          },
-        });
-        const send = (
-          body: unknown,
-          origin = 'http://test',
-          target = local,
-          path = '/api/settings/plugins',
-        ) =>
-          target.fetch(
-            new Request(`http://test${path}`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json', origin },
-              body: JSON.stringify(body),
-            }),
-          );
-        expect(
-          await (await local.fetch(new Request('http://test/api/settings/plugins'))).json(),
-        ).toMatchObject({ data: { configuration: { state: 'missing' } } });
-        expect(existsSync(store.path)).toBe(false);
-        const init = { action: 'initialize', expected: 'absent' };
-        expect((await send(init, 'https://foreign.example')).status).toBe(403);
-        const readOnly = createWebApp(ctx, { exposeWrite: false, pluginSettingsStore: settings });
-        expect((await send(init, 'http://test', readOnly)).status).toBe(403);
-        expect(
-          (await send(init, 'http://test', local, '/api/settings/plugins/preview')).status,
-        ).toBe(200);
-        expect(existsSync(store.path)).toBe(false);
-        const noExternal = createWebApp(ctx, { exposeWrite: true, pluginSettingsStore: settings });
-        expect((await send(init, 'http://test', noExternal)).status).toBe(200);
-        const set = async (enabled: boolean) => {
-          const read = store.read();
-          if (!read.ok) throw new Error('missing fixture config');
-          const response = await send({
-            action: 'set',
-            id: plugin,
-            enabled,
-            incarnation: read.config.incarnation,
-            revision: read.config.revision,
-          });
-          expect(response.status).toBe(200);
-          expect(await response.json()).toMatchObject({ data: { committed: true } });
-        };
-        await set(true);
-        const round = async (id: string) => {
-          const now = new Date();
-          await ctx.repos.chat.saveSession({
-            id,
-            accountId: ctx.user.defaultAccountId,
-            title: 'P4',
-            createdAt: now,
-            updatedAt: now,
-          });
-          expect(
-            (
-              await chat(local, {
-                sessionId: id,
-                messages: [
-                  { id: `user-${id}`, role: 'user', parts: [{ type: 'text', text: message }] },
-                ],
-              })
-            ).status,
-          ).toBe(200);
-        };
-        await round('before-disable');
-        const old = captured.find((item) => item.name === tool);
-        expect(old).toBeDefined();
-        if (plugin === 'business.analysis') {
-          const generated = await send({ input }, 'http://test', local, `/api/tools/${tool}/call`);
-          expect(await generated.json()).toMatchObject({ ok: true });
-          const draft = await old?.execute(input);
-          expect(draft).toMatchObject({ ok: true, output: { __luoomeDraft: true } });
-          await ctx.repos.chat.saveMessage({
-            id: 'pending-analysis',
-            sessionId: 'before-disable',
-            role: 'assistant',
-            createdAt: ctx.clock(),
-            parts: [
-              {
-                type: 'tool-analyze_stock',
-                toolCallId: 'old-analysis',
-                state: 'output-available',
-                input,
-                output: draft?.output,
-              },
-            ],
-          });
-        }
-        await set(false);
-        if (plugin === 'business.analysis') {
-          const confirm = await send(
-            { approved: true },
-            'http://test',
-            local,
-            '/api/chat/sessions/before-disable/drafts/pending-analysis/old-analysis',
-          );
-          expect(await confirm.json()).toMatchObject({
-            ok: true,
-            data: { status: 'failed', result: { ok: false, error: { kind: 'permission_denied' } } },
-          });
-          expect(
-            await (
-              await local.fetch(new Request('http://test/api/advice?includeExpired=true'))
-            ).json(),
-          ).toMatchObject({ ok: true, data: { total: 1 } });
-          expect((await ctx.repos.advice.query({ includeExpired: true })).length).toBe(1);
-        }
-        expect(await old?.execute(input)).toMatchObject({
-          ok: false,
-          output: { error: { kind: 'permission_denied' } },
-        });
-        await round('after-disable');
-        expect(captured.map((tool) => tool.name)).not.toContain(tool);
-        expect(captured.map((tool) => tool.name)).toContain(history);
-        const direct = await send({ input }, 'http://test', local, `/api/tools/${tool}/call`);
-        expect(await direct.json()).toMatchObject({ error: { kind: 'permission_denied' } });
-        await set(true);
-        expect(await old?.execute(input)).toMatchObject({
-          ok: false,
-          output: { error: { kind: 'permission_denied' } },
-        });
-        await round('after-enable');
-        expect(captured.map((tool) => tool.name)).toContain(tool);
-      } finally {
-        rmSync(home, { recursive: true, force: true });
-      }
-    },
-  );
-});
 
 describe('/api/chat：对话助手', () => {
   let chatApp: Hono;

@@ -271,7 +271,7 @@ export const snapshotAccountPerformanceWorkflow = defineWorkflow<
               () => ctx.executionGuard?.(),
               JSON.stringify([
                 'task.snapshot-account-performance',
-                ctx.executionPolicy?.acquire('task.snapshot-account-performance'),
+                ctx.executionPolicy?.isEnabled('task.snapshot-account-performance'),
               ]),
             );
       return ctx.executionPolicy === undefined

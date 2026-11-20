@@ -4,7 +4,7 @@ import {
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
   getStrategyRunDataHealth,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   MembershipSnapshotSchema,
   ReportMissingDimensionSchema,
   type StrategyRun,
@@ -526,8 +526,8 @@ export const syncWatchlistSourceTool = defineTool({
       if (producerRun.strategyVersionId !== input.sourceVersionId) {
         return errInvalidInput('strategy sourceVersionId 必须等于 producerRun.strategyVersionId');
       }
-      if (!isPublishableOperationalRun(producerRun)) {
-        return errInvalidInput('只有 published operational StrategyRun 才能同步 Watchlist');
+      if (!isAdvisoryEligibleRun(producerRun)) {
+        return errInvalidInput('只有已结束的 operational StrategyRun 才能同步 Watchlist');
       }
       const health = getStrategyRunDataHealth(producerRun);
       const expectedStatus =

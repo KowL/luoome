@@ -108,15 +108,7 @@ describe('prune_strategy_history', () => {
     ] as const) {
       await ctx.repos.strategyRun.commitRun({
         run: runAt(id, day(offset), {
-          ...(id === 'published'
-            ? {
-                publication: {
-                  status: 'published' as const,
-                  reasons: [],
-                  decidedAt: day(offset),
-                },
-              }
-            : {}),
+          ...(id === 'published' ? {} : {}),
         }),
         results: [resultOf(id)],
         signals: [],

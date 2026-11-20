@@ -45,7 +45,7 @@ export function amountMeter(amount, batch) {
         el(
           'span',
           '',
-          prior == null ? '昨日同时点缺样本' : '白线 · 昨日同时点 ' + formatAmount(prior),
+          prior == null ? '昨日同时点缺样本' : `白线 · 昨日同时点 ${formatAmount(prior)}`,
         ),
         el(
           'span',
@@ -238,13 +238,13 @@ export function rotationBoard(ranking, distribution, at) {
         });
       const plot = el('div', 'room-bar-plot');
       const zero = el('div', 'room-zero');
-      zero.style.top = baseline + 'px';
-      const bar = el('div', 'room-real-bar ' + (pct < 0 ? 'loss' : 'gain'));
-      bar.style.height = h + 'px';
-      bar.style.top = (pct < 0 ? baseline : baseline - h) + 'px';
+      zero.style.top = `${baseline}px`;
+      const bar = el('div', `room-real-bar ${pct < 0 ? 'loss' : 'gain'}`);
+      bar.style.height = `${h}px`;
+      bar.style.top = `${pct < 0 ? baseline : baseline - h}px`;
       const value = el(
         'strong',
-        'room-bar-value ' + (pct < 0 ? 'text-neg' : 'text-pos'),
+        `room-bar-value ${pct < 0 ? 'text-neg' : 'text-pos'}`,
         formatPct(pct, true),
       );
       plot.append(zero, bar);
@@ -268,7 +268,7 @@ export function rotationBoard(ranking, distribution, at) {
       const state = states.get(row.sectorId);
       const line = el('div', 'room-price-volume', [
         el('span', 'room-window-return', `15分钟 ${state.percent}`),
-        el('strong', 'room-pv-state' + state.tone, state.label),
+        el('strong', `room-pv-state${state.tone}`, state.label),
       ]);
       line.title = state.title;
       col.append(
@@ -286,7 +286,7 @@ export function rotationBoard(ranking, distribution, at) {
         col.insertBefore(recent, col.firstChild);
       }
       col.append(
-        el('div', 'room-share-label', shareLabel + ' ' + formatPct(shareNow, false, '缺失')),
+        el('div', 'room-share-label', `${shareLabel} ${formatPct(shareNow, false, '缺失')}`),
         track(shareNow, maxShare, previous),
         badge,
       );

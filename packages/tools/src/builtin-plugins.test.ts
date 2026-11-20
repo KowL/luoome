@@ -17,7 +17,6 @@ const forbidden = async (): Promise<never> => {
   throw new Error('resource discovery must not execute operations');
 };
 const operations: BuiltinPluginOperations = {
-  strategy: { run: forbidden },
   report: { run: forbidden },
   performance: { run: forbidden },
   watch: { runAccount: forbidden },
@@ -41,7 +40,7 @@ describe('builtin plugin assembly', () => {
           ),
         )
         .digest('hex'),
-    ).toBe('f912e3b3c27cba0c8272deadcf0d5eafbf0f668bd73c1a421f1fda03915fa977');
+    ).toBe('ff68292914d1977213669306a82354566e972f4ab2211ce23c4200a8e25b6d59');
     expect(Object.entries(BUILTIN_PLUGIN_DEFAULTS).filter(([, enabled]) => enabled)).toEqual([
       ['strategy.ai-insight', true],
     ]);
@@ -103,7 +102,6 @@ describe('builtin plugin assembly', () => {
       const resources = createBuiltinPluginResources(operations);
       expect(new Set(resources.map((resource) => resource.id))).toEqual(
         new Set([
-          'task.strategy-schedules',
           'task.collect-market-snapshot',
           'task.snapshot-account-performance',
           'business.report',

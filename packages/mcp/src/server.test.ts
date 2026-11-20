@@ -76,7 +76,7 @@ describe('MCP sideEffect 暴露门控', () => {
 
   it('trade 硬卡不能由环境变量开启', () => {
     expect(() => resolveAllowedSideEffects({ LUOOME_EXPOSE_TRADE: 'true' })).toThrow(
-      /trade tools are never exposed/,
+      /trade 永不暴露/,
     );
   });
 

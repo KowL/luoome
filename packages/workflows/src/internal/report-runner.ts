@@ -543,7 +543,7 @@ export const executeReportWorkflow = (
       : ctx.dataScope.run(
           execute,
           () => ctx.executionGuard?.(),
-          JSON.stringify(['business.report', ctx.executionPolicy?.acquire('business.report')]),
+          JSON.stringify(['business.report', ctx.executionPolicy?.isEnabled('business.report')]),
         );
   return ctx.executionPolicy === undefined
     ? invoke()

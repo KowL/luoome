@@ -34,7 +34,7 @@ export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 
 export const WorkflowRunSchema = z.object({
   id: z.string().min(1),
-  /** 'post-market-data' | 'daily-advice' | 'closing-report' | ... */
+  /** 'post-market-data' | 'daily-advice' | 'weekly-report' | ... */
   workflowName: z.string().min(1),
   mode: WorkflowRunModeSchema,
   status: WorkflowRunStatusSchema,

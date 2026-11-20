@@ -84,7 +84,6 @@ const makeRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun 
   inputSnapshot: { fixture: true },
   providerStatuses: [],
   summary: { selected: 1 },
-  publication: { status: 'published', reasons: [], decidedAt: T1 },
   ...overrides,
 });
 
@@ -228,29 +227,12 @@ describe('Strategy → Watchlist subscription tools', () => {
 
     const before = await ctx.repos.watchlistMember.listSyncRuns('strategy-watch');
     const blockedRuns: Array<[string, Partial<StrategyRun>]> = [
-      [
-        'run-withheld',
-        {
-          publication: {
-            status: 'withheld',
-            reasons: ['acceptance-rejected'],
-            decidedAt: T1,
-          },
-        },
-      ],
       ['run-evaluation', { scope: 'evaluation' }],
-      [
-        'run-nonpublishing',
-        {
-          publication: { status: 'non-publishing', reasons: ['evaluation-scope'], decidedAt: T1 },
-        },
-      ],
       [
         'run-failed',
         {
           status: 'failed',
           error: 'provider failed',
-          publication: { status: 'withheld', reasons: ['run-not-complete'], decidedAt: T1 },
         },
       ],
     ];
@@ -273,7 +255,7 @@ describe('Strategy → Watchlist subscription tools', () => {
     );
   });
 
-  it('published partial run 只结束已明确评估未入选的来源，未评估成员保持 stale', async () => {
+  it('partial run 只结束已明确评估未入选的来源，未评估成员保持 stale', async () => {
     const ctx = await buildTestContext({ clock: () => T0 });
     await seedStrategy(ctx);
     await createWatchlistTool.execute(

@@ -1,7 +1,7 @@
 import {
   assertStrategyWatchlistSubscriptionInvariants,
   getStrategyRunDataHealth,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   type StrategyWatchlistSubscription,
   StrategyWatchlistSubscriptionSchema,
 } from '@luoome/core';
@@ -200,7 +200,7 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
       strategyId: input.strategyId,
       status: 'active',
     });
-    const skippedForRun = !isPublishableOperationalRun(run);
+    const skippedForRun = !isAdvisoryEligibleRun(run);
     if (subscriptions.length === 0 || skippedForRun) {
       return {
         strategyId: input.strategyId,

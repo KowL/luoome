@@ -174,7 +174,7 @@ WorkflowToolMap/registry/MCP/Agent 继续从装配目录派生，工具名称、
 宿主端口只组合实际 Workflow，例如报告补投仍先处理上一交易日，再处理当日；不缓存跨世代上下文。
 跨任务的盘后数据组合调度仍由宿主负责，每个采集步骤分别校验原 task 开关。
 读取插件描述和生成资源清单均不注册 timer、不执行 Workflow、不启动 IO，激活后才创建资源。
-旧 incarnation/epoch、绑定许可、immediate 写事务 guard、ProviderRuntime 缓存世代、通知可选作用域、
+旧数据 scope、immediate 写事务 guard、ProviderRuntime 路由缓存、通知可选作用域、
 停用卸载/旧工作排空后重建等机制沿用。关闭执行插件保留历史和共享查询，重开不恢复旧许可或重复注册资源。
 代码拆包不提供任意第三方程序安装、进程隔离或动态卸载模块；Web 的运行/排空状态仍表达实际任务与调用。
 
@@ -336,57 +336,41 @@ export const dailyAdviceWorkflow = defineWorkflow({
 ```
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（上面的
-`persist` 片段是 v0.1 历史示意，当前 advice 写入经专用 tool）。2026-11-13 起只有 12 个注册入口：
+`persist` 片段是 v0.1 历史示意，当前 advice 写入经专用 tool）。2026-11-20 起只有 10 个注册入口：
 
-- 多模式入口：`report`（opening/closing/weekly/daily-review）、`strategy`
-  （run/scheduled/daily/observations）、`sync-market`（quotes/universe/dump）；
-- 专用入口：`closing-report-cutoff`、`daily-advice`、`risk-report`、`replay-strategy-range`、
-  `sync-portfolio-watchlists`、`post-market-data`、`intraday-watch`、
-  `snapshot-account-performance`。
+- 多模式入口：`report`（仅 weekly 建议成绩单）、`strategy`（仅 `job=run`）、
+  `sync-market`（quotes/universe/dump）；
+- 专用入口：`daily-advice`、`sync-portfolio-watchlists`、`post-market-data`、`intraday-watch`、
+  `snapshot-account-performance`、`sync-sector-catalog`。
 
 报告、策略与行情同步的原管线改为 `defineOperation`（可复用步骤管线，不注册为 workflow）；
 审计名仍由各管线内部写入，合并不会改写历史 WorkflowRun 身份。数量由
 `packages/workflows/src/architecture.test.ts` 守住。
 
-策略 Phase B 使用三个相关 workflow：
+策略已降级为“信号事实源”，不再有独立定时器与发布状态机：
 
-- `run-strategy-schedules` 按 `strategies.schedule_cron`/`last_scheduled_at` 找出到期策略并调用
-  `run_strategy`；单进程用内存互斥防重，不再有持久租约表，因此同一数据库只允许一个写进程。
-  若调度启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
-- `strategy-recommendations` 从指定持久化 StrategyRun 的 selected 结果按评分、排名、每轮上限和
-  冷却政策筛选，通过 `analyze_stock`（`scope='strategy-candidate'`）生成 Advice，并可经 notification tool 投递；
-- `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
-  SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
-  股票调用 `strategy-recommendations`。
-- `strategy-daily-cycle` 在 published operational run 提交后调用
-  `create_strategy_observation_candidates`，按 emitted signals 幂等创建 T+1/T+3/T+5 候选；
-  withheld / evaluation 运行不创建。随后同步 benchmark 日线并补全到期观察，失败只把周期标
-  partial，不回滚已发布运行。
-- 历史缺口由 `backfill_strategy_observation_candidates` 显式补建：按 `since`/`until`/`limit`
-  读取 published operational run，逐个调用创建器；只补候选，不同步 benchmark、不补全，
-  重复执行幂等。
+- `daily-advice`（每日 17:30，Web 进程内调度）先读持仓，再展开关注列表成员（上限 10 只），
+  并按需运行最多 2 个 active 策略的 `scan`（不持久化），把评分 ≥60 的看多信号按分数补进候选池
+  （上限 3 只）。逐只调用 `analyze_stock` 生成判断，单只失败只记 warn，不阻断整轮；最后调用
+  `settle_advices` 补算到期结算，输出 `judgment`（`今日不动` / `今日可动`）与汇总计数。
+- `run-strategies` / `strategy`（`job=run`）只做一次正式运行并返回 `{runId, selected, signals}`；
+  不再创建观察候选、不同步关注订阅、不触发推荐 workflow。
+- `report`（`kind=weekly`）委托 `weekly-report` 生成唯一一类报告“建议成绩单”：先结算、再取
+  `get_advice_scorecard`，附本周建议条数与反馈覆盖；成绩单为空时输出 unavailable 说明而不伪造 0。
 
-`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
-检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron
-只作为幂等补偿。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
+这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
 回滚已原子提交的 StrategyRun，也不会触发交易。
 
-**2026-08-14 可靠性状态**：publication、heartbeat + fencing token、`strategy-daily-cycle`、
-WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇总会阻塞 schedule/交易日重复
-运行并输出阶段 P50/P95/max。跨交易日生产证据和真实全市场性能预算继续属于 Roadmap 的运营观测，
-不能把设计目标误报为已验收事实，也不设置固定交易日数量门禁。
+**2026-11-20 简化状态**：可发布性状态机（acceptance policy + `publication` 三态）已删除，
+`strategy_runs` 不再有 `publication_json`/`publication_status` 列；运行是否参与建议只由
+`scope=operational` 且 `status ∈ {complete, partial}` 决定（`isAdvisoryEligibleRun`）。
+`strategy-daily-cycle`、观察补全与策略定时器一并下线，策略只在每日判断里按需运行取当日信号。
+存量 V4 summary 里的 `acceptance` 字段保留只读解析，新运行不再计算。
 
-**MVP 2.0 盘后/盘中切片**：`strategy-daily-cycle` 一次 tick 会领取全部到期 schedule（调用方的
-`limit` 只决定首批，剩余继续 drain）。交易日 16:30 后按账户及当日已发布策略运行指纹领取
-`account-plan-batch`，批次身份还包含账户账本摘要；持仓或现金变化后旧批次不能充当当前账户结果。
-批次执行 `trading-plan-daily-cycle` 并持久化完成、部分或阻断状态。领取与结束
-均使用原子操作及令牌校验；超时运行被收敛后可重试。Web 有独立的每分钟截止 tick，避免策略与
-计划批次耗时阻塞 18:00 主报告；`closing-report-cutoff` 读取持久化批次状态，即使无 schedule
-或批次未完成，也按账户发布并显式标 partial。当日预期策略均有已发布正式运行且日循环领取
-已结束、全部账户计划批次完成或部分完成时，可在 18:00 前按账户提前发布；未来仍有预期运行、
-策略分析仍在进行或账户批次阻断时等待，不发送阶段性日报。
-重复 tick 不重建主报告。后到策略结果或账户账本变化后重跑的计划批次生成补充版本，原版本按
-ID 或周期版本可读；只有核心缺口补齐或计划行动条件变化才再次通知。
+**盘后/盘中调度**：交易日 17:30 由 `daily-advice` 生成当日判断，每周一 08:00 由
+`report`（kind=weekly）生成建议成绩单；不再有 `strategy-daily-cycle`、策略定时租约和截止补报
+tick，也不再有开盘/收盘/复盘/风险四类报告。
+
 `web serve` 的盘中账户计划调度每分钟在交易日上午/下午时段顺序检查全部账户，启动时立即检查；
 每个账户仍经 `intraday-trading-plan-watch` workflow 和共享预警租约求值、复查与投递。
 调度重叠 tick 被跳过，停机及午休/闭市停止新账户轮次；`luoome start` 则在同一 CLI
@@ -665,7 +649,7 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 完整结果按跨池去重后的真实样本计算炸板率，封单或开板字段缺失保留 null。实时指数只在
 观测日匹配请求日时组合；行情完整性信封落地前 breadth 保持 unavailable。
 
-**Vibe A 股报告迁移 Phase 3**：`opening-report`、`closing-report` 与
+**Vibe A 股报告迁移 Phase 3（2026-11-20 已下线，本段仅存档）**：`opening-report`、`closing-report` 与
 `weekly-report` 共用报告 runner，经 `ctx.tools.*` 采集证据、保存 Report、记录
 `WorkflowRun` 并执行通知状态迁移。定时模式默认经飞书通知；未配置飞书时保存日志并记 `fallback-log`，`notified=false`。
 通知失败不回滚报告，只把投递状态记为 `failed`、运行审计记为 `partial`。报告投递通过
@@ -707,7 +691,7 @@ unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal �
 不表示胜率、Advice 或交易。StrategyRun 的执行状态与数据完整度分离：新运行只写
 `running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V4 通过
 `dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量，
-并由 acceptance 与 `publication=published/withheld/non-publishing` 独立决定是否进入生产视图。
+`scope` 与 `status` 共同决定它是否进入建议视图：`evaluation`、`running`、`failed` 一律不参与。
 正式运行取得 lease 后先写入可查询的 `running` 记录，终态与 results/signals 在同一事务中更新；
 意外异常也会把该记录收敛为 `failed`。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
@@ -975,109 +959,62 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 目录契约测试校验工具名、对象唯一性和导出覆盖，既有公共库存测试保护暴露范围。
 Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schema；内部 ToolResult 与 MCP 文本内容的响应格式分别说明。
 
-### 7.1.1 P0–P3 插件归属与执行控制
+### 7.1.1 插件归属与执行控制
 
-catalog 已为全部 Tool 标注唯一 owner，并为策略/分析组合补充模式依赖清点；这些归属不自动授予权限。
-`execution: 'p1' | 'p2' | 'p3'` 明确受控入口，未标入口仍沿用既有授权，并不代表所有业务已经可插拔。
-公共库存、输入 schema 和权限由 catalog 契约测试保护；P2 将采集权限明确收紧为 write + external，指标计算改为本地日线依赖。
+catalog 为全部 Tool 标注唯一 owner；`execution: 'p1' | 'p2' | 'p3'` 标出受控入口。
+归属本身不授予权限：`defineTool.execute` 在错误收口内绑定执行 scope，解析 Zod 输入后先按 owner（及其声明依赖）
+查一次启用位，再执行 handler；禁用时抛 `PluginExecutionDenied('plugin:<id>')`。Workflow 可声明 `requiredPlugins`，
+入场时同样只查启用位；嵌套 Tool 访问器仍由 catalog 派生，不手写第二份映射。
 
-`core/plugin-policy` 仅定义 SDK 无关的纯端口；`adapters/plugins/config` 负责受限大小的配置读取、
-跨进程 writer lock、锁内 incarnation/revision CAS、0600 原子文件及持久 epoch。只有显式 init/migrate
-写配置，缺失/损坏时不默认启用。schema 接受 core 中已纳管的策略解释、source 与 task ID；新增 source/task 在 init/migrate 中默认关闭。
-
-`defineTool.execute` 在错误收口内绑定执行 scope，基于 Zod 解析后的输入调用执行策略，再执行 handler；
-Workflow 在创建访问器时绑定 scope，所有 Tool 访问器仍由 catalog 派生。生产 CLI/Web/MCP 均注入策略，
-无策略的通用 buildContext 对 P1/P2/P3 入口默认拒绝；显式 permissive 策略仅在 testing 子入口。
-
-策略查询和 `generate_strategy_insight` 组合入口常驻。可选解释 port 在模型请求前和返回后检查
-`config incarnation + epoch`；同次 facts-only 使用原窗口事实，不重新查询或扩大到其它账户。
-关闭后零新增解释请求，旧成功响应不发布，旧失败不 repair，关后重开也不能复活旧 Workflow/port。
-同一插件未变的配置 revision 更新不撤销执行。组合入口保留 external，纯事实入口保留 read，
-新增的可选 degradation 不改变既有输出字段。日循环与周报保持原 publication/报告事实语义。
+启用位只有一份：`PluginConfigStore.isEnabled(id)`（读 `plugins.json` 的 `entries[id].enabled`，只读）。
+`core/plugin-policy` 是 SDK 无关的纯端口，只有 `PluginPolicyLike.isEnabled`；不存在许可令牌、遗弃世代或撤销队列。
+`adapters/plugins/config` 只做只读解析：限长读取、`entries[id].enabled` 判定，缺失/损坏/未知 id 一律按停用处理。
+`plugins.json` 由使用者手写，进程启动时读入；没有写接口、锁、incarnation/revision 或管理界面。
+开关在**下一次请求**生效：已运行的工作不会被打断，也不再声称「关闭后旧句柄永久失效」——旧句柄同样按当前启用位判断。
 
 `ProviderRuntime` 在组装根统一包裹 provider port、真实 HTTP transport 和调用数据 scope。
+启用集按需读取；启用集合变化时懒重建一次路由图，未变化时复用同一实例，因此停用某个数据源后的下一次取数即切换。
 源总开关与域内来源顺序取交集，关闭后不实例化该来源；已启用源的凭证仍须有效。
-提供者/任务许可变动隔离 manager/coordinator 缓存与在途合并，每个 waiter 独立复核；请求结果和健康观测发布前校验旧世代。
-本进程路由重建先 prepare，保存成功后 activate，撤销旧闭包；缓存路由键含本进程路由实例，不跨实例复用结果或 lease。
 提供者配额/cooldown 仍按稳定 source 身份，使用 `public_market_entries` 的 SQLite immediate CAS 跨同库宿主共享。
 公开缓存只存公共行情与请求状态，过期条目在更新时清理，不写入账户数据。
 采集 scope 把同步校验回调传给 repository；日线、报价、目录、快照、分钟线等写入取得 immediate 写锁后校验，持锁同步到提交。
 dump 文件按下载请求使用独立文件名，并在落盘前校验，防止同名上游文件在多宿主间互相覆盖。
-repo 不识别插件 ID 或实现，不在异步操作外包长事务。全关后本地查询和 `compute_indicators` 无网络依赖；混合入口保留既有权限并显式降级。
-采集任务门控在执行与 transport/持久化安全点生效；报告 cutoff 的事实与投递规则未改变。
+全关后本地查询和 `compute_indicators` 无网络依赖；混合入口保留既有权限并显式降级。
 
-`business.strategy-execution` 纳管 `run_strategy`、非持久化试跑/版本对比、严格回测创建与执行。
-P3 owner 在原 catalog 中声明，普通定义维护与历史查询常驻；组合回测 get/list 不运行引擎，写分支委托受控 leaf tool。
-`run_strategy` 的发现不再要求 live quote/bars 同时就绪；按 scan/scheduled/replay 与规则引用决定实际依赖，既有权限和 acceptance 保留。
-Workflow 可声明 requiredPlugins，入场时捕获许可并通过 executionGuard 传入嵌套 Workflow/Tool；
-下一批/请求、规则求值与发布前重查；可选 AI 解释 port 同时校验父执行，丢弃退役父调用的晚响应。纯本地只读和 record_workflow_run 审计保持可用。
-策略运行/回测 repo 取得 immediate 写资格后校验 scope；唯有既存 running 的失败收尾可以在撤销后继续，
-该收尾仍校验不可变身份/状态迁移，且无结果/信号或回测 metrics，不允许撤销后创建新的运行或覆盖终态。
+`business.strategy-execution` 纳管 `run_strategy` 与非持久化试跑；策略定义维护与历史查询常驻。
+`run_strategy` 不要求 live quote/bars 同时就绪，按 scan/scheduled 与规则引用决定实际依赖；
+运行只记录「是否完成、是否可用」与信号，不再计算验收结论或发布状态，消费方用 `isAdvisoryEligibleRun`（operational 且已结束）判断是否进建议。
+策略运行 repo 取得 immediate 写资格后校验 scope；失败收尾仍校验不可变身份与状态迁移。
 
-Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner：自动策略调度依赖 task.strategy-schedules + 策略执行，
-盘中快照调度依赖 task.collect-market-snapshot，账户绩效盘后调度依赖 task.snapshot-account-performance。单个宿主控制 timer 每 250ms reconcile，业务 timer 只为有效 activation 创建。
-退役清除 timer、撤销旧 guard、发送 AbortSignal 并跟踪在途工作；旧任务未排空前不创建新一代资源，失败 teardown 不冒报卸载。
-退出排空有 5 秒上限，超时报告未排空；不强制关闭共用 DB。当前真实资源都是同步创建/销毁的 timer，不声称实现任意异步插件加载器。
-策略 scheduler 与 closing-report scheduler 分开创建/销毁；自动策略循环 deferReports，cutoff/补投由独立资源负责。
-Agent 每轮构造草案工具时绑定插件世代并过滤停用的执行工具，旧草案 callback 再次复核；已有回执读取与取消不重新执行目标。
-P4 的 Web 管理面已接入上述内置能力；个股分析现已独立接入，盯盘监控与报告也已独立接入，通知投递也已独立接入，其它任务资源仍待迁移。
-`PluginSettingsStore` 只投影可信的内置元数据、catalog 派生贡献、当前路由及本宿主状态；
-不暴露文件路径、凭证或任意执行配置。GET/preview 不外发，initialize/migrate/set 严格校验输入，
-保存经既有同源/write 门禁以及 PluginConfigStore 的 incarnation/revision CAS。
-预览不自动启用依赖；提供者关联贡献标为可能影响，不能把某一候选源停用等同于所有工具不可用。
-内置 requires 同时供真实资源组装和管理投影使用，catalog 继续作为工具映射唯一来源。
-配置已提交与宿主应用分开返回：committedVersion、gateApplied、阻断项、活动计数和真实 task phase，
-均不宣称全局 applied。Tool policy 共享活动计数；策略可选模型独立跟踪，ProviderRuntime 在嵌套作用域全部退出前保留实际来源活动，
-父任务撤销也计入旧工作排空。查询状态不会清除卡住或卸载失败的资源。
+Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner：
+盘中快照调度依赖 `task.collect-market-snapshot`，账户绩效盘后调度依赖 `task.snapshot-account-performance`，
+每周成绩单依赖 `business.report`；策略不持有独立定时器，由每日判断按需运行少量 active 策略取当日信号。
+单宿主 timer 每 250ms reconcile，业务 timer 只为当前启用项创建；停用时清除 timer 并停止发起新 tick，
+退出排空有 5 秒上限，超时报告未排空，不强制关闭共用 DB。
+
+`PluginSettingsStore` 只投影可信内置元数据、catalog 派生贡献与本宿主状态，不暴露文件路径、凭证或任意执行配置。
+GET/preview 不外发，initialize/migrate/set 严格校验输入，保存经同源/write 门禁与 incarnation/revision CAS。
+预览不自动启用依赖；配置提交结果与宿主应用分开返回（committedVersion、gateApplied、阻断项、task phase）。
 MCP 每次 list/call 使用实时可用表，并以无外发轮询发送同连接 list_changed；断连关闭观察器。
-CLI status 提供依赖/贡献且明确 runtime not-started，不为查看状态初始化业务上下文。
-后续阶段见[分层详细设计](./ddd/layered-capability-plugin-detailed-design.md)。
+CLI status 提供依赖/贡献并明确 runtime not-started，不为查看状态初始化业务上下文。
 
-`business.analysis` 是默认关闭的建议生成 owner，catalog 将 analyze_stock、analyze_position、market_outlook、
-analyze_strategy_candidate 统一标为受控执行。公共 scope 委托既有子工具，共享绑定的 incarnation/epoch；
-不要求重新运行策略，也不改变各 scope 的事实校验、数据回退、账户或场景契约。
-分析模型调用由 build-advice 内的共同边界在请求前、返回/异常后复核，撤销不会触发 repair retry。
-即使没有行情 DataScope，存在执行策略的 Tool 仍安装 repository write guard；AdviceRepository 在 immediate 写锁内同步校验后保存，
-拒绝失效请求的新建或覆盖。历史查询、反馈与其它插件不归此 owner，已提交事实保持可读。
-Web 依赖/影响预览从 catalog 派生四个入口，并展示模型/供数阻断及相关在途排空；Agent/MCP 发现与调用复核复用统一执行策略。
+`business.analysis` 是默认关闭的建议生成 owner，catalog 将 `analyze_stock`、`analyze_position`、`market_outlook`、
+`analyze_strategy_candidate` 统一标为受控执行。分析模型调用在 `build-advice` 的共同边界统一出站，
+未通过判断契约（七要素、confidence 与仓位单调）的输出不入库。
+即使没有行情 DataScope，存在执行策略的 Tool 仍安装 repository write guard；AdviceRepository 在 immediate 写锁内同步校验后保存。
+历史查询、反馈与其它插件不归此 owner，已提交事实保持可读。
 
-`business.watch-monitoring` 管理 intraday-watch 统一求值器（AlertPlan + TradingPlan），
-以及五个触发/边沿/投递写入口；Watchlist/AlertPlan 编辑、历史、反馈及通用通知保留原归属。
-Workflow 声明 requiredPlugins 并在内部每步之间复核；手动运行也计入插件活动。
-Web 将真实 intraday scheduler 移入 PluginTasks，以同一业务开关管理 timer 和账户任务排空；
-scheduler 绑定创建时的许可，每账户前复核，旧 tick 不会在重启后复活。CLI 每轮仍经同一 Workflow 门禁。
-WatchTrigger 与 WatchRuleState 接入共享 RepositoryWriteScope，提交与投递认领在 immediate 写锁内复核。
-通知 Tool 将可信 executionGuard 传给 manager，异步读取后、实际渠道调用前再校验；watchDelivery 标记不充当许可。
-投递前由 begin_watch_delivery 生成并预留 notificationId；manager 保存真实 transport 回执后，
+`business.watch-monitoring` 管理 intraday-watch 统一求值器（AlertPlan + TradingPlan）与触发/边沿/投递写入口；
+Watchlist/AlertPlan 编辑、历史、反馈及通用通知保留原归属。Web 将 intraday scheduler 移入 PluginTasks，
+CLI 每轮仍经同一 Workflow 门禁。WatchTrigger 与 WatchRuleState 接入 RepositoryWriteScope，提交与投递认领在 immediate 写锁内复核。
+投递前由 `begin_watch_delivery` 生成并预留 notificationId；manager 保存真实 transport 回执后，
 repository 的 completeDelivery 仅在回执存在、全部 trigger ID 匹配同一预留通知且状态允许时结束既有 pending。
-该受限收尾可在撤销后执行，不新建 trigger、不覆盖新尝试，不对外暴露为管理 Tool；其它写入仍拒绝。
 关闭不能撤回已发出的请求，回执与有限重试沿用原通知语义，不声称外部 exactly-once。
 
-`business.report` 默认关闭，catalog 纳管 save_report 与 set_report_delivery_status；历史 get/list/render/delete 不受此执行开关限制。
-report、opening/closing/weekly、daily-review、risk-report 和 closing-report-cutoff 声明 requiredPlugins；
-共享 runner 跟踪手动活动、隔离 provider scope，并在区块收集后复核，撤销错误不会误转为普通降级。
+`business.report` 默认关闭，catalog 纳管 save_report 与 set_report_delivery_status；历史 get/list/render/delete 不受此开关限制。
+report（weekly）声明 requiredPlugins；共享 runner 隔离 provider scope 并在区块收集后复核。
 ReportRepository 的生成、覆盖、领取与普通状态写入均在 immediate 写锁内校验共享 write scope。
-Web 的截止/补投 scheduler 由 PluginTasks 以 business.report 管理，绑定创建时的许可，逐次补投前复核；
-策略调度在报告关闭时跳过衍生报告，不影响已发布策略事实、调度推进、盯盘或盘后数据。
-报告通知带 reportDelivery（reportId + attemptId）与稳定 report-notification ID；通知 manager 在异步读取后、实际发送前复核许可及 pending 领取。
-实际 transport 回执保存后，仅用 receipt + report ID + 当前 attemptId 完成原 pending，可在撤销后收尾，不允许新报告或覆盖后续尝试。
-其它通知仍保持各自权限；成功报告重试复用既存回执，失败/降级保持原重试规则，不能撤回已发出的外部请求。
-
-`business.notification` 默认关闭，catalog 纳管唯一 send_notification 入口，并将报告领取和盯盘领取声明为可选贡献；不成为报告、策略或盯盘的必需依赖。
-Tool 绑定调用许可并在实际外发前复核，生产 NotificationManager 也注入同一执行策略，覆盖 sendLog/info 等宿主直调并跟踪在途 transport。
-飞书连接测试经同一 Tool，不直接调用适配器；停用不会通过 log fallback 伪造 suppressed 或 sent 回执。
-报告及两类盯盘在通知未就绪时跳过领取；事实仍由原 owner 写入，保存为 not-requested。
-领取 Tool 在入场及 SQLite 写锁内校验通知许可，通知撤销不会被提升成整个报告/盯盘的父许可撤销。
-发送前撤销仅停止投递；实际已发出请求继续保存真实回执，原有精确领取/回执收尾仍可完成，不开启新投递。
-纯投递 Tool 声明 dataScope=none，不把可选通知许可累积进父级行情依赖集合；自身 Tool/manager 许可和 repository guard 仍校验，通知停用不污染盯盘后续步骤。
-通知没有独立 timer/订阅/重试队列，启停复用宿主通道，不重建报告或盯盘资源；成功通知按稳定身份读取回执，关闭期间的新触发不自动补发。
-
-`task.snapshot-account-performance` 默认关闭，拥有实际盘后估值 scheduler 和 snapshot-account-performance Workflow。
-Workflow 使用 catalog 派生的 snapshot_account_performance（write + external，workflow-only）委托共享计算，入场绑定任务许可、每账户/每行情请求及快照提交前复核。
-共享 get_account_performance 保持原输入/输出、external 权限和按需计算/缓存语义，不纳入任务 owner；历史 list/audit 常驻，不强迫报告或账户查询依赖后台任务。
-任务根 scope 跟踪手动在途与独立 provider namespace；并发行情 worker 全部收尾后才结束任务，撤销不走缺行情 fallback。
-PortfolioPerformanceSnapshotRepository 接入共享 RepositoryWriteScope，在 immediate 写锁内校验，新建和覆盖都不能使用失效任务许可。
-Web 真实 timer 经 PluginTasks 的 dispatch 跟踪执行；停用清 timer、撤销旧 guard 并等待排空，再启用只创建一份资源，同日重跑仍按原指纹复用。
+Web 的每周成绩单 scheduler 由 PluginTasks 以 business.report 管理，与盘中/盘后 tick 分开创建销毁，关闭报告不会停掉其它 tick。
 
 ### 7.2 副作用分级（重申）
 

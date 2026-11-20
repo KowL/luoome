@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertExpressionSafety,
-  assessStrategyRun,
   compileStrategyExpression,
   compileStrategyQuotePrefilter,
   DslEvalError,
-  decideStrategyRunPublication,
   decideStrategySignalEmission,
-  normalizeLegacyStrategyRun,
+  deriveStrategyRunScope,
+  isAdvisoryEligibleRun,
+  normalizeStrategyRunScope,
   observeCrossingUp,
+  StrategyRunSchema,
 } from '../index.js';
 import { money } from '../types/branded.js';
 
@@ -168,91 +169,34 @@ describe('Strategy reliability primitives', () => {
     ).toEqual({ emit: false, reason: 'cooldown' });
   });
 
-  it('separates acceptance from publication and normalizes legacy reads', () => {
-    const acceptance = assessStrategyRun({
-      status: 'complete',
-      universeCount: 10,
-      evaluatedCount: 10,
-      failedCount: 0,
-      incompleteCount: 0,
-      assessedAt: NOW,
-    });
-    expect(acceptance.decision).toBe('accepted');
-    expect(
-      decideStrategyRunPublication({
-        scope: 'operational',
-        universeKind: 'explicit',
-        status: 'complete',
-        universeCheckpointPresent: true,
-        acceptance,
-        decidedAt: NOW,
-      }),
-    ).toMatchObject({ status: 'non-publishing', reasons: ['explicit-subset'] });
-
-    const rejectedAcceptance = assessStrategyRun({
-      status: 'complete',
-      universeCount: 5548,
-      evaluatedCount: 5225,
-      failedCount: 323,
-      incompleteCount: 5,
-      // 显式严格 policy 构造 rejected 场景，不依赖已放宽的默认门槛。
-      policy: {
-        policyVersion: 'strategy-run-acceptance-v1',
-        minEvaluatedRatio: 0.98,
-        maxFailedRatio: 0.02,
-        maxIncompleteRatio: 0.1,
-      },
-      assessedAt: NOW,
-    });
-    expect(rejectedAcceptance.decision).toBe('rejected');
-    expect(
-      decideStrategyRunPublication({
-        scope: 'operational',
-        universeKind: 'full',
-        status: 'complete',
-        universeCheckpointPresent: true,
-        acceptance: rejectedAcceptance,
-        decidedAt: NOW,
-      }),
-    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
-    expect(
-      decideStrategyRunPublication({
-        scope: 'operational',
-        universeKind: 'full',
-        status: 'complete',
-        universeCheckpointPresent: true,
-        acceptance: rejectedAcceptance,
-        decidedAt: NOW,
-      }),
-    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
-    expect(
-      decideStrategyRunPublication({
-        scope: 'operational',
-        universeKind: 'full',
-        status: 'complete',
-        universeCheckpointPresent: true,
-        acceptance: rejectedAcceptance,
-        decidedAt: NOW,
-      }),
-    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
-
-    const legacy = normalizeLegacyStrategyRun({
-      id: 'run-legacy',
+  it('只把 operational 且已结束的运行视为可消费，并归一化存量 scope', () => {
+    const base = {
+      id: 'run-1',
       strategyId: 'strategy-1',
       strategyVersionId: 'strategy-1-v1',
-      mode: 'scan',
-      coverage: 'CN_A_SHARES_SH_SZ',
+      mode: 'scan' as const,
+      coverage: 'CN_A_SHARES_SH_SZ' as const,
       dataAsOf: NOW,
       startedAt: NOW,
       finishedAt: NOW,
-      status: 'complete',
       inputSnapshot: { fixture: true },
       providerStatuses: [],
-      summary: { selected: 1 },
-    });
-    expect(legacy).toMatchObject({
-      scope: 'operational',
-      publication: { status: 'published', reasons: ['legacy-publication'] },
-    });
+    };
+    const run = (patch: Record<string, unknown>) => StrategyRunSchema.parse({ ...base, ...patch });
+
+    expect(isAdvisoryEligibleRun(run({ status: 'complete', scope: 'operational' }))).toBe(true);
+    expect(isAdvisoryEligibleRun(run({ status: 'partial', scope: 'operational' }))).toBe(true);
+    expect(isAdvisoryEligibleRun(run({ status: 'complete', scope: 'evaluation' }))).toBe(false);
+    expect(isAdvisoryEligibleRun(run({ status: 'running', scope: 'operational' }))).toBe(false);
+    expect(isAdvisoryEligibleRun(run({ status: 'failed', scope: 'operational' }))).toBe(false);
+
+    expect(normalizeStrategyRunScope(run({ status: 'complete', mode: 'replay' })).scope).toBe(
+      'evaluation',
+    );
+    expect(normalizeStrategyRunScope(run({ status: 'complete' })).scope).toBe('operational');
+    expect(deriveStrategyRunScope({ mode: 'scan', hasExplicitStockIds: true })).toBe('evaluation');
+    expect(deriveStrategyRunScope({ mode: 'scheduled', hasExplicitStockIds: false })).toBe(
+      'operational',
+    );
   });
 });

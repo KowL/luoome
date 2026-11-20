@@ -460,8 +460,6 @@ export const SCHEMA_TABLES: readonly string[] = [
   "provider_coverage_json" text,
   "summary_json" text,
   "results_json" text,
-  "publication_json" text,
-  "publication_status" text,
   "error" text
 )`,
   `CREATE TABLE IF NOT EXISTS "strategy_signals" (
@@ -678,7 +676,7 @@ export const SCHEMA_INDEXES: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS "strategies_owner_idx" ON "strategies" ("owner")`,
   `CREATE INDEX IF NOT EXISTS "strategy_runs_strategy_started_idx" ON "strategy_runs" ("strategy_id", "started_at")`,
   `CREATE INDEX IF NOT EXISTS "strategy_runs_status_started_idx" ON "strategy_runs" ("status", "started_at")`,
-  `CREATE INDEX IF NOT EXISTS "strategy_runs_published_current_idx" ON "strategy_runs" ("strategy_id", "scope", "publication_status", "status", "started_at")`,
+  `CREATE INDEX IF NOT EXISTS "strategy_runs_current_idx" ON "strategy_runs" ("strategy_id", "scope", "status", "started_at")`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "strategy_signals_run_event_unique" ON "strategy_signals" ("run_id", "rule_id", "stock_id", "ts")`,
   `CREATE INDEX IF NOT EXISTS "strategy_signals_strategy_ts_idx" ON "strategy_signals" ("strategy_id", "ts")`,
   `CREATE INDEX IF NOT EXISTS "strategy_signals_run_ts_idx" ON "strategy_signals" ("run_id", "ts")`,

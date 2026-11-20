@@ -6,7 +6,6 @@ import { loadProjectEnv } from './env.js';
 import { startWeb } from './server.js';
 
 export * from '@luoome/plugin-report/resources';
-export * from '@luoome/plugin-strategy/resources';
 export * from './post-market-scheduler.js';
 export * from './server.js';
 

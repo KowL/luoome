@@ -1,5 +1,4 @@
 export * from './plugin.js';
-export * from './resources.js';
 export * from './tools/run-strategy.js';
 export * from './tools/strategy-definition.js';
 export * from './tools/strategy-insight.js';

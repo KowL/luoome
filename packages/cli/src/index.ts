@@ -3,7 +3,7 @@
 // 子命令清单见 printHelp()；mcp / web 为懒加载（对应包由 W4a/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
-import { STANDARD_DISCLAIMERS } from '@luoome/core';
+import { resolveExposure, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 import { resolveTool } from './app-service.js';
 
@@ -11,7 +11,6 @@ import { createCliContext } from './context.js';
 import { isDaemonized, respawnDetached, startLogRotation } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
-import { cmdPlugins } from './plugins.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
 const VERSION = '0.9.0';
@@ -713,7 +712,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 report / strategy / sync-market / sync-quotes / sync-stock-universe / sync-sector-catalog / closing-report-cutoff / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / opening-report / closing-report / weekly-report）`,
+      `未知 workflow: "${name}"（支持 report / daily-advice / strategy / sync-market / sync-quotes / sync-stock-universe / sync-sector-catalog / post-market-data / snapshot-account-performance / sync-portfolio-watchlists / intraday-watch / weekly-report）`,
     );
   }
   const handle = await createCliContext();
@@ -837,10 +836,8 @@ const cmdStart = async (
   });
   if (!json) console.log(`MVP 已就绪：http://${host}:${server.port}`);
 
-  const watchEnabled =
-    !flags.has('no-watch') &&
-    process.env.LUOOME_EXPOSE_WRITE === 'true' &&
-    process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
+  const { write: exposeWrite, external: exposeExternal } = resolveExposure(process.env);
+  const watchEnabled = !flags.has('no-watch') && exposeWrite && exposeExternal;
   if (!watchEnabled) {
     if (!flags.has('no-watch') && !json) {
       console.warn(
@@ -865,13 +862,6 @@ const printHelp = (): void => {
   console.log(`luoome ${VERSION} —— 本地优先的个人投资管理 advisor agent
 
 用法: luoome <command> [options]
-
-插件控制（P1 仅策略 AI；管理不初始化数据库或模型）:
-  plugins status --json
-  plugins init --dry-run
-  plugins init --apply
-  plugins migrate [--apply --expected-incarnation <uuid> --expected-revision <n>]
-  plugins set <id> --enabled true|false --expected-incarnation <uuid> --expected-revision <n>
 
 全局:
   --version                      输出版本号
@@ -950,7 +940,6 @@ const run = async (argv: readonly string[]): Promise<number> => {
     throw new CliUsageError(`未知 tools 子命令: "${sub ?? ''}"（支持 list / inspect / call）`);
   }
 
-  if (cmd === 'plugins') return cmdPlugins(sub, rest, flags);
   if (cmd === 'strategy') return cmdStrategy(sub, rest, flags, json);
   if (cmd === 'watchlist') return cmdWatchlist(sub, rest, flags, json);
   if (cmd === 'alert') return cmdAlert(sub, flags, json);

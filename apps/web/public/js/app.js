@@ -39,7 +39,6 @@ import {
   runWatchOnce,
   toggleAdviceDeleteMode,
 } from './pages.js';
-import { initPluginSettings, renderPluginSettings } from './plugin-settings.js';
 import { createStockSearchBox } from './search-box.js';
 import { renderSectors } from './sectors.js';
 import {
@@ -49,7 +48,7 @@ import {
   renderWatchlists,
 } from './target-pages.js';
 import { bindTopbarTheme, initTheme } from './theme.js';
-import { $ } from './ui.js';
+import { $, el } from './ui.js';
 import { mountWorkspaceChatRoute, renderInvestmentWorkspace } from './workspace.js';
 
 /* ============ 状态行 ============ */
@@ -213,6 +212,74 @@ const ROUTES = [
   'settings',
 ];
 
+/** 五个一级入口；每个入口内用标签切换具体页面，避免 15 个并列导航项。 */
+const ROUTE_GROUPS = [
+  {
+    id: 'today',
+    label: '今日',
+    items: [
+      ['dashboard', '概览'],
+      ['advice', '建议'],
+      ['reports', '成绩单'],
+      ['review', '复盘'],
+    ],
+  },
+  {
+    id: 'holdings',
+    label: '持仓',
+    items: [
+      ['holdings', '持仓'],
+      ['strategies', '策略'],
+    ],
+  },
+  {
+    id: 'focus',
+    label: '关注',
+    items: [
+      ['watchlists', '关注列表'],
+      ['alerts', '预警'],
+    ],
+  },
+  {
+    id: 'market',
+    label: '市场',
+    items: [
+      ['indices', '指数'],
+      ['market', '行情'],
+      ['market-room', '作战室'],
+      ['limit-up', '涨停梯队'],
+      ['dragon-tiger', '龙虎榜'],
+      ['sectors', '板块热力'],
+    ],
+  },
+  {
+    id: 'settings',
+    label: '设置',
+    items: [
+      ['settings', '设置'],
+      ['chat', 'AI 助手'],
+    ],
+  },
+];
+
+const groupOfRoute = (route) =>
+  ROUTE_GROUPS.find((group) => group.items.some(([id]) => id === route)) ?? ROUTE_GROUPS[0];
+
+const renderGroupTabs = (route) => {
+  const bar = $('#group-tabs');
+  if (bar === null) return;
+  const group = groupOfRoute(route);
+  bar.replaceChildren(
+    ...group.items.map(([id, label]) => {
+      const link = el('a', id === route ? 'group-tab active' : 'group-tab', label);
+      link.href = `#${id}`;
+      link.dataset.tabRoute = id;
+      if (id === route) link.setAttribute('aria-current', 'page');
+      return link;
+    }),
+  );
+};
+
 /** 上一帧显示的路由：只在换页时回到顶部，同页重绘（自动刷新、账户切换）不动滚动位置。 */
 let shownRoute = null;
 
@@ -237,12 +304,14 @@ const showRoute = async (name) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
   });
+  const group = groupOfRoute(safe);
   document.querySelectorAll('.nav-item').forEach((node) => {
-    const active = node.dataset.route === safe;
+    const active = node.dataset.group === group.id;
     node.classList.toggle('active', active);
     if (active) node.setAttribute('aria-current', 'page');
     else node.removeAttribute('aria-current');
   });
+  renderGroupTabs(safe);
   try {
     if (safe === 'dashboard') {
       await Promise.all([
@@ -300,7 +369,7 @@ const currentHash = () => {
 
 /* ============ 设置页二级菜单（#settings?tab=ai|market|mcp|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'plugins', 'mcp', 'notify', 'data', 'system'];
+const SETTINGS_TABS = ['ai', 'market', 'mcp', 'notify', 'data', 'system'];
 
 const settingsTab = (hash = window.location.hash) => {
   const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
@@ -326,9 +395,6 @@ const renderSettingsTab = async (setStatus, tab) => {
     await renderMarketSettings(setStatus);
     initMarketSync();
     await renderMarketSyncStatus();
-  } else if (tab === 'plugins') {
-    initPluginSettings(setStatus);
-    await renderPluginSettings();
   } else if (tab === 'mcp') {
     initMcpSettings(setStatus);
     await renderMcpSettings(setStatus);

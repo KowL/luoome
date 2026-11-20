@@ -14,10 +14,9 @@ export const snapshotAccountPerformanceTool = defineTool({
   input: GetAccountPerformanceInput,
   output: GetAccountPerformanceOutput,
   handler: async (input, ctx) => {
-    const admission = ctx.executionPolicy?.acquire('task.snapshot-account-performance');
     const check = () => {
       ctx.executionGuard?.();
-      if (!admission?.ok || !ctx.executionPolicy?.valid(admission.permit))
+      if (ctx.executionPolicy?.isEnabled('task.snapshot-account-performance') === false)
         throw new PluginExecutionDenied('plugin:task.snapshot-account-performance');
     };
     check();

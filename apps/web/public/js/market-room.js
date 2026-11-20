@@ -974,10 +974,10 @@ const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
   const anchor = overview.latestBatch?.sampledAt;
   let ranking, distribution;
   if (overview.state === 'ready' && anchor) {
-    const query = 'kind=concept&window=w15&at=' + encodeURIComponent(anchor);
+    const query = `kind=concept&window=w15&at=${encodeURIComponent(anchor)}`;
     const [sectors, amounts] = await Promise.all([
-      callApi('/api/market/room/sectors?leaders=1&' + query, { timeoutMs: 20000 }),
-      callApi('/api/market/room/amount-distribution?' + query, { timeoutMs: 20000 }),
+      callApi(`/api/market/room/sectors?leaders=1&${query}`, { timeoutMs: 20000 }),
+      callApi(`/api/market/room/amount-distribution?${query}`, { timeoutMs: 20000 }),
     ]);
     if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
     ranking = sectors.data?.ranking;

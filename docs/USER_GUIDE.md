@@ -131,7 +131,7 @@ luoome web serve
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
-页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、研究、建议、报告、复盘、对话和设置。
+页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、建议、报告、复盘、对话和设置。
 
 看盘页优先展示个人看板与今日预警，板块热力和要闻位于其后。个人看板可按全部、我的持仓、我的关注、今日触发切换，并可叠加关注列表筛选。普通关注只需启用 Watchlist，不要求配置 AlertPlan；其它账户独有的 portfolio 来源不会混入当前账户的关注。服务器先筛选再分页，每页 10/20/40 只，超过 40 只仍可翻页查看。价格排序与涨跌统计仅针对本页；缺行情或昨收基准单列为“未知”。今日触发范围基于今日全部记录，包含已移出持仓或关注的股票，覆盖不完整时明确标注。
 
@@ -159,13 +159,11 @@ luoome web serve
 
 **持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；MCP 暴露策略不受影响。
 
-**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 published operational run 会投影；complete 结束所有未入选来源，partial 只结束已明确评估未入选的来源、其余标 stale，evaluation/trial/withheld/non-publishing/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
+**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 operational 且已结束（complete/partial）的运行会投影；complete 结束所有未入选来源，partial 只结束已明确评估未入选的来源、其余标 stale，evaluation/trial/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
 **Strategy 模拟回测**：进入已发布且运行中的策略工作台，点击「模拟回测」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是历史回放模拟，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
 
-**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。搜索固定使用本地 FTS5，索引不可用或文档缺失时显式标记 `missing`/`invalid`，零命中不代表完整研究库无证据。
-
-2026-11-10 起，研究子域已收敛为单文档索引：Topic/Document 关系、研究假设版本、chunk 向量、embedding 语义检索和 Git 远端同步均已删除，对应的环境变量（`LUOOME_RESEARCH_EMBEDDING_*`、`LUOOME_RESEARCH_REMOTE_SYNC`）不再生效。已有 Vault 文件不受影响，直接重新同步即可。
+2026-11-20 起研究文档库（本地 Obsidian Vault、FTS5 索引与导入）整体下线，建议链路不再引用研究笔记。
 
 飞书报告采用手机摘要，只发送市场、策略研究、预警和事件信息；账户估值、持仓、仓位、逐账户交易计划、
 交易归因与个人行为复盘仅在应用内完整报告中查看，账户数据缺失也不会变成群通知中的告警。
@@ -182,11 +180,9 @@ luoome web serve
 过期、失效和退役记录退出跟踪清单并保留引用。草案截止时间使用两个交易日上限，不沿用旧快照的长有效期。
 前一交易日即使没有新增版本，也会显示已记录的维持复核。审计缺失或读取不完整会明确说明，不能解释为
 全部计划已复核。跨日补发时版本截至目标日，资格按生成时的账户事实和有效期核验；历史报告保持原快照。
-收盘复盘等待当日预期策略和账户交易计划批次完成后统一生成，每个账户每天只生成一份。
-18:00 时任务尚未完成会继续等待；任务结束仍有数据缺口时在这份报告中明确说明。
-手动生成新收盘报告也会检查策略和账户计划是否完成，未完成时提示稍后生成。
-重复手动生成、定时运行和通知重试复用原报告，后到的数据不再生成 V2/V3 或改写正文。
-清单展示前 20 项不会缩小报告保存的计划事实范围。
+报告只保留每周建议成绩单：每周一 08:00 生成一次，统计最近 30 天已结算建议的命中率、
+平均超额与按 confidence 分组的命中率，并给出验收门禁（≥50 条样本、≥60% 命中率）。
+不及门禁时如实标注，不用 0 或估算值替代。手动生成同一周期复用原报告。
 
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
 
@@ -225,200 +221,40 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome advice stats [--since 30d]` | 准确率统计（命中率、跟单盈亏） |
 | `luoome advice outcome <id> --followed true --pnl 100` | 回填 advice 结果（write） |
 | `luoome workflow run sync-market --input '{"target":"quotes"}'` | 同步当前账户持仓行情（写库） |
-| `luoome workflow run report --input '{"kind":"daily-review"}'` | 运行每日复盘并写入报告文件 |
+| `luoome workflow run report --input '{"kind":"weekly","periodEnd":"2026-11-16"}'` | 生成每周建议成绩单 |
 
 `--since / --until` 接 ISO 时间或 `7d / 30d / 24h / 1y` 等相对量。详见 `luoome --help`。
 
 ---
 
-### 策略 AI 插件控制（P1）
+### 插件启用清单（只读）
 
-当前管理策略解释、行情提供者、采集任务、策略执行、自动策略调度、个股分析和盯盘监控；也可通过下述 Web 插件管理页操作。
-`strategy.ai-insight` 只控制策略解释模型，聊天、个股分析等功能保持各自配置。
+能力开关只有一个来源：`$LUOOME_HOME/plugins.json`。手写它，改完重启宿主生效；没有 CLI 命令，也没有 Web 管理页。
 
-```bash
-luoome plugins status --json
-luoome plugins init --dry-run
-LUOOME_EXPOSE_WRITE=true luoome plugins init --apply
+```json
+{
+  "version": 1,
+  "entries": {
+    "business.analysis": { "enabled": true },
+    "business.strategy-execution": { "enabled": true },
+    "business.report": { "enabled": true },
+    "business.watch-monitoring": { "enabled": true },
+    "business.notification": { "enabled": true },
+    "source.sina": { "enabled": true },
+    "task.daily-bars-sync": { "enabled": true }
+  }
+}
 ```
 
-初始化只创建 `$LUOOME_HOME/plugins.json`，不初始化数据库或连接模型/行情。
-首次基线保留原有策略解释选择（enabled），不是授予调用权限；实际模型调用仍需 external 授权和模型就绪。
-后续新增项默认关闭。普通启动不自动创建配置，配置缺失或无效时只返回 facts-only，不自动尝试模型。
+缺省即关闭：文件不存在、解析失败、或某个 id 没有条目，都按「停用」处理。可用的 id 是：
 
-从 `status` 的 `configuration.config` 读取最新 incarnation 和 revision，条件停用：
+- 业务：`strategy.ai-insight`、`business.strategy-execution`、`business.analysis`、`business.watch-monitoring`、`business.report`、`business.notification`
+- 数据源：`source.eastmoney`、`source.tencent`、`source.sina`、`source.tushare`、`source.fuyao`、`source.10jqka`
+- 采集任务：`task.snapshot-account-performance`、`task.daily-bars-sync`、`task.sync-stock-universe`、`task.collect-market-snapshot`、`task.sync-quotes`、`task.sync-market-dump`、`task.sync-sector-catalog`、`task.sync-limit-up-board-history`、`task.minute-bars-sync`
 
-```bash
-LUOOME_EXPOSE_WRITE=true luoome plugins set strategy.ai-insight --enabled false \
-  --expected-incarnation <status返回的UUID> --expected-revision <当前版本>
-```
+开关只决定「这个能力能不能被调用」。它不授予权限：实际执行仍要宿主显式开启 write / external，数据源还要凭证就绪且出现在来源顺序里。停用不删除历史数据，已保存的建议、运行、报告与触发照常可读；停用后新的调用被拒绝，重新启用后下一次调用即恢复，不重放旧请求。
 
-重新启用使用 `--enabled true` 和最新版本。`plugins migrate` 默认只预览；显式应用需
-`--apply --expected-incarnation <uuid> --expected-revision <n>` 及 write 权限。`committed` 只表示
-配置提交成功；`status` 的 `runtime: not-started` 不代表另一个 Web/MCP 宿主或模型已就绪。
-
-停用后的下一受控调用点生效；旧 Workflow 和已开始的模型调用会复核持久世代，关后重开也不复活旧许可。
-已发送请求可能已产生费用；失效成功响应会被丢弃，不发起 repair 重试。日循环保留策略发布事实并标 partial，
-周报保留事实行，组合结果标 `provider: facts-only` 及降级原因。生成洞察的 external 权限不足仍拒绝，
-不能靠降级绕过；纯事实查询保持 read。
-
-文件损坏需先核对并修复或备份移走，再显式初始化；重建配置生成新 incarnation，旧许可失效。
-存在 `plugins.json.lock` 时配置写入报 busy，已有合法配置仍可读；不要未经核验删除正在使用的锁。
-MCP 每次发现和调用都会复核当前提供者就绪状态及授权；停用源后不再暴露依赖该源且没有其它就绪来源的工具。纯本地 `compute_indicators` 保持可发现。
-
-### Web 插件管理（P4）
-
-进入「设置 → 插件」，先查看当前配置与开关。缺配置时选择「预览初始化」，确认后才创建配置；
-旧配置缺少新条目时选择「预览补齐新增项」，新增项默认关闭。损坏或包含未知项的配置会拒绝写入，需先在本地核对修复。
-
-每项启停先展示变更影响，再由「确认启用/停用」提交。依赖不会连带开启：例如自动策略调度需要策略执行；
-只开启调度会显示「依赖阻断」。数据提供者仍受域内来源顺序、凭证和 external 授权约束；缺凭证的来源保持不可用，
-其它已授权且就绪的候选来源可继续降级。来源关联操作显示的是可能影响，不保证这些工具全部消失。
-关闭策略 AI 后保留事实；关闭策略执行后保留历史与独立的报告截止/补投。
-
-用户开关代表期望配置。「本宿主门控已复核」仅代表当前 Web 进程读到了相应门禁，不表示所有宿主都已应用。
-策略调度、盘中快照和盯盘监控显示真实自动资源状态，其余项显示受控入口及相关在途调用。
-「排空中」表示仍有旧工作待收尾；排空超时或卸载失败会明确保留状态，不能当作已安全卸载。
-重新启用不会复活旧请求，也不会在旧任务排空前重复注册资源。已发出的上游请求可能继续耗时或产生费用。
-
-读取和预览不调用模型/行情服务。配置保存需要 write 和同源校验，不要求 external；实际执行仍保留原权限及场景白名单。
-页面只在插件分区可见时轮询，恢复前台会重新读取；预览后配置发生变化会要求重新预览，过期提交由版本校验拒绝。
-保存返回的 committedVersion 只证明配置提交成功；单个宿主应用失败不会回滚已经提交的配置，需刷新状态排查。
-
-CLI `plugins status` 同时提供依赖和直接/可选工具贡献，运行状态保持 not-started；来源路由的可能影响在运行中的 Web 查看。
-MCP 宣告 tools.listChanged，同连接可接收 notifications/tools/list_changed 并重新发现；实际工具调用总会再次复核。
-Agent 新会话不再暴露停用的受控工具，旧 callback、旧工具名及停用前草案不能绕过最终执行门禁。
-该页面仅管理已纳管的内置能力；通知投递也支持独立启停；第三方任意插件加载仍未实现。
-
-### 提供者与采集任务控制（P2）
-
-新增提供者和采集任务默认 disabled；原有 P1 配置不自动启源，运行前先预览并应用 `plugins migrate`。
-初始化或迁移不会授予 write/external 权限。启用一个提供者还需要原有来源顺序包含它及相应凭证就绪；
-例如日线同步需要分别启用 `source.eastmoney` 和 `task.daily-bars-sync`，并在宿主启动时开启 write + external。
-
-```bash
-LUOOME_EXPOSE_WRITE=true luoome plugins set source.eastmoney --enabled true \
-  --expected-incarnation <最新UUID> --expected-revision <最新版本>
-# 重新读取 status 的版本，再提交下一项
-LUOOME_EXPOSE_WRITE=true luoome plugins set task.daily-bars-sync --enabled true \
-  --expected-incarnation <最新UUID> --expected-revision <最新版本>
-```
-
-支持的提供者为 Eastmoney、Tencent、Sina、Tushare、Fuyao、10jqka（ID 以 `plugins status` 为准）。
-采集任务覆盖日线、股票目录、全市场快照、持仓报价、市场 dump、板块目录、连板历史和分钟 OHLCV。
-关闭任务会阻止该任务的新入口及下一次外发/批次写入；其它消费者仍能使用已启用的提供者。
-分钟 OHLCV 任务关闭后只返回本地历史或显式缺失。盘中快照任务的实际定时器已纳入 P3 资源管理，关闭后卸载。
-
-关闭所有提供者和任务不会删除数据。账户、持仓、目录、本地日线指标及历史事实仍可查询；缺数据明确返回空或不可用。
-提供者在实际外发前再次校验，Tencent 全市场快照间接使用 Sina 时也需允许 Sina；不能靠其它来源的名称绕过停用。
-已发出的请求可继续占用上游资源，晚返回在发布前丢弃。关→开使用新 epoch，旧闭包不能恢复执行。
-缓存按提供者世代、任务许可和本进程路由隔离；配额及 cooldown 按稳定提供者身份存入共享 SQLite，不随启停重置。
-行情数据写入取得 SQLite 写锁后再次校验，再在无 await 的短事务内提交，防止等待锁的旧结果覆盖新数据。
-本进程行情设置重建会撤销旧路由；其它宿主的来源顺序/凭证变更仍需 reload 或重启，不把配置提交冒充全局已应用。
-
-### 策略执行与自动调度控制（P3）
-
-`business.strategy-execution` 控制新运行、试跑与版本对比试跑。
-`task.strategy-schedules` 只控制自动策略调度，并要求策略执行插件已启用；关闭自动调度仍可手动运行。
-两个新增项在初始化和迁移中均默认关闭。已有部署先预览并显式应用 `plugins migrate`，原 source/task 的开关与 epoch 保留。
-
-```bash
-# 每次操作前从 plugins status 读取最新 UUID 和版本
-LUOOME_EXPOSE_WRITE=true luoome plugins set business.strategy-execution --enabled true \
-  --expected-incarnation <最新UUID> --expected-revision <最新版本>
-LUOOME_EXPOSE_WRITE=true luoome plugins set task.strategy-schedules --enabled true \
-  --expected-incarnation <最新UUID> --expected-revision <最新版本>
-```
-
-关闭时使用相同命令和 `--enabled false`。写配置不授予业务执行权限：正式策略运行继续要求 write + external，
-不持久化的 `trial_strategy` 保留 external 权限；自动调度宿主仍需 write + external。
-策略定义、版本、历史运行、结果与信号查询继续可用；严格回测已下线。
-
-scheduled/replay 按规则引用使用本地日线与股票目录，关闭 live 提供者不会阻断这些本地资料；
-scheduled 的当天梯队依赖、replay 的归档缺失和原有 coverage/acceptance 契约不变，不借停源切换为其它数据模式。
-插件关闭后，MCP 和下一轮 Agent 不再暴露 `run_strategy`；旧工具、旧草案回调和关→开前的执行 scope 均不能绕过。
-已有草案的新确认会被拒绝执行；取消草案、读取已保存的成功/失败回执仍可用，不自动重放。
-
-Web 宿主每 250ms 观察开关并卸载策略或盘中快照的实际定时器；执行本身在下一安全点立即重查许可。
-资源在途数量和排空状态由宿主内部跟踪；旧任务未排空时延迟新一代注册，重复设置同一状态不会重复注册。
-宿主退出最多等待 5 秒排空，超时如实报告未排空，不强行关闭共用数据库。
-报告 cutoff 与前一交易日报告补投有独立定时器，关闭策略执行/自动调度不会一起关闭它们。
-已开始的短事务按原子提交结束；撤销后的失败收尾只能终结已开始的运行，不能新增成功结果或信号。
-
-上述为 P3 策略资源切片范围；Web 管理已在 P4 接入，个股分析现已纳管，见下节。盯盘监控现已接入下述开关；通知投递也已纳管，其它调度器仍待迁移。
-
-### 个股分析插件控制
-
-Web「设置 → 插件 → 个股分析」或 CLI `plugins set business.analysis` 管理新 Advice 的生成。
-新增项默认关闭；旧配置先预览并确认「补齐新增插件」，再明确启用。CLI 使用最新 incarnation/revision 条件提交，沿用前述权限。
-
-该开关覆盖 `analyze_stock` 的 stock、market、strategy-candidate 三种 scope、持仓分析 `analyze_position`，
-以及内部/旧入口 `market_outlook` 和 `analyze_strategy_candidate`。所有入口共用同一执行许可；不能换旧工具名绕过停用。
-市场展望和策略候选只委托各自现有工具，不会因为开启分析而自动启源、运行策略或改变场景白名单。
-个股/持仓需行情与日线；候选仍校验已发布运行与入选事实及报价新鲜度，保留原有本地回退和可选指标规则。
-
-停用后新会话不再向 Agent 提供分析草案工具，旧 callback 和停用前保存的草案在最终确认时仍会被拒绝。
-模型调用前、返回后、Tool 层修复重试前以及 SQLite 写锁内复核许可；关后重开也不会恢复旧请求。
-已发送的模型请求可能继续耗时或产生费用，页面显示相关调用排空，失效结果不会写成 Advice 或覆盖历史。
-
-历史建议及其复盘继续读取，策略运行、策略 AI 事实解释、报告和聊天模型分别沿用自己的开关。
-插件启用不授予 advice/write/external 权限，也不跳过人工确认。已在短事务内合法提交的 Advice 保留；停用不删除历史数据。
-
-### 账户绩效估值任务控制
-
-Web「设置 → 插件 → 账户绩效估值任务」或 CLI 的 `task.snapshot-account-performance` 开关控制盘后自动估值与 `snapshot-account-performance` 批量 Workflow。
-新增项默认关闭；旧配置先预览并补齐，再显式启用。执行仍须 write + external，启用不自动开启行情源、模型或其它插件。
-停用清除实际 timer，旧任务在下一账户、行情请求或快照提交安全点停止；未排空前不注册新一代，关→开也不能复活旧 tick、Workflow 或任务工具。
-重新启用后同一账户/区间/事实指纹复用已有快照；事实改变仍按原规则创建修订，不新增补发队列。
-
-历史快照列表、区间审计和已留存结果继续可查，不请求行情或重算。
-`get_account_performance` 是共享的按需绩效查询，账户页面、Agent 与报告仍可调用，并保留原有计算及快照缓存语义；本开关只停止自动和显式批量任务，不关闭这项共享能力。
-任务专用 `snapshot_account_performance` 工具复用相同计算，但入场、下一请求和 SQLite 写锁内都检查任务许可；旧任务晚结果不能覆盖重新启用后的快照。
-策略日循环、报告、盯盘、通知和采集任务保持各自开关与授权，不因绩效任务停用而卸载。
-
-### 通知插件控制
-
-Web「设置 → 插件 → 通知投递」或 CLI 的 `business.notification` 开关控制所有新投递，包括报告、盯盘、显式 log、飞书降级 log 与飞书连接测试。
-新增项默认关闭，旧配置先预览并补齐再显式启用。启用仍须宿主 external 授权，不自动启用报告、盯盘、模型、数据源或扩大场景白名单。
-通道 Webhook 仍在「通知」分区配置；保存通道不会启用插件，连接测试也不能绕过停用。
-
-通知停用时，报告继续生成并保存，策略日循环继续发布事实，盯盘继续保存触发与边沿；新的报告和触发保留未请求投递状态，不领取通知尝试或消耗投递额度。
-历史回执、报告和触发关联通知仍可读取。若发送前才停用，旧上下文、旧请求及关→开前的许可均不得继续发送；已领取但未发出的尝试保留既有中断/重试语义。
-
-通知没有独立自动定时器或补发队列，启停复用当前宿主的单个通道实例，不重注册报告或盯盘任务。
-重新启用不会自动补发关闭期间的新触发，也不重放已成功通知；已有未成功投递只由原业务调度按原时效、节流、额度与幂等规则处理。
-停用不能撤回已发出的请求；系统仍记录其真实回执，并只收尾原报告/触发的原投递，不声称外部 exactly-once。
-
-### 报告插件控制
-
-Web「设置 → 插件 → 报告生成与投递」或 CLI 的 `business.report` 开关管理开盘、收盘、周报、daily-review、risk-report 及截止补报。
-新增项默认关闭；旧配置先预览并确认补齐，再显式启用。启用不自动开启数据源、模型、其它插件或宿主 write/external 权限。
-历史报告列表、详情、Markdown/通知格式渲染及已有历史管理仍可用；停用会拒绝生成、保存、领取和重试报告通知，旧 scope 在关→开后仍失效。
-
-报告独立于策略执行、自动策略调度、盯盘与盘后数据采集；关闭报告不会把已发布的策略事实改成失败。
-Web 在宿主具有 write + external 时由报告插件注册一个独立截止/补投定时器，关闭即卸载；在途任务未排空前不重复注册。
-手动报告活动和实际自动资源分别显示运行/排空状态，不代表其它宿主已停止。
-
-停用前已经发出的通知无法撤回；系统只凭持久化渠道回执完成原报告的原投递领取，不创建报告、不覆盖新尝试。
-重新启用后已成功送达的报告不会重发；失败/降级仍遵循既有重试节流与渠道幂等规则，不保证外部 exactly-once。
-报告通知与通用、盯盘通知分别授权；停用报告不停止后两者。
-
-### 盯盘监控插件控制
-
-Web「设置 → 插件 → 盯盘监控」或 CLI 的 `business.watch-monitoring` 开关控制 AlertPlan 与 TradingPlan 的规则求值、新触发和盯盘通知。
-新增项默认关闭；旧配置先补齐新增插件，再显式启用。保存仍需同源/write，实际执行沿用 write/external、账户、计划状态、行情新鲜度、额度与场景门禁。
-开关不修改 Watchlist/AlertPlan 的启用字段，不删除历史；关注列表与预警计划编辑、历史触发、通知回执和反馈继续可用。
-通用通知、报告 cutoff/补投、策略执行和个股分析保持各自职责，关闭盯盘不会关闭报告通知。
-
-关闭后，Web 宿主卸载盯盘定时器并撤销旧 activation。正在等待行情、提交或发送前准备的旧调用会在下一安全点拒绝；
-触发、边沿状态、投递尝试在 SQLite immediate 写锁内复核。旧 Workflow、内部工具和旧 timer 即使关后重开也不能恢复旧许可。
-页面展示真实定时器和在途排空；旧账户任务未排空前不注册新一代，反复确认同一开关不重复注册。
-CLI daemon 在每轮复核开关，停用不等于终止整个 CLI 进程。
-
-停用不能撤回已经发出的通知。发送前预留通知 ID，已发出请求的回执只可完成与该 ID 匹配的既有待投递记录，
-不能创建新触发或覆盖其它尝试；保留真实送达历史，避免重新启用后将已送达通知当作 pending 重发。
-失败或确实未发送的既有 pending 在重新启用后的新一轮仍遵守原退避、计划资格和次数上限，不重放失效的旧调用。
-不承诺外部渠道 exactly-once；响应未知时请核对回执和历史。
+`business.analysis` 关闭时每日判断拿不到新建议（只留 facts），因此需要模型凭证与 external 授权才会看到效果。
 
 ## 4. Web 用法
 
@@ -437,11 +273,10 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 | **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果；设置页支持显式订阅/取消目标 Watchlist。 |
 | **Watchlist** | 统计卡片 + 分组列表股票区（全部 / 单列表 tab）+ 今日变化 + 待研究 + 已归档弹窗；支持用逗号、空格或换行批量添加成员，以及成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
-| **研究** | 配置本地 Obsidian Vault、同步索引、导入本地正文或远程 URL，并按 FTS5 检索文档。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 当前账户的明确反馈、成交归因、事后观察与 confidence 校准表；从建议进入「决策与复盘」。 |
-| **报告** | 查看与导出报告；收盘复盘统一生成一份，周报支持根据后补记录生成不可通知的复盘补充版。 |
-| **对话** | AI SDK 投资助手；查询账户、现金、持仓、计划与研究资料，确认后登记持仓/资金流水、管理关注列表与提醒，并继续解释执行结果。会话、动作和用量可回看。 |
+| **报告** | 查看与导出每周建议成绩单（命中率、超额、分 confidence 命中率与验收门禁）。 |
+| **对话** | AI SDK 投资助手；查询账户、现金、持仓与计划，确认后登记持仓/资金流水、管理关注列表与提醒，并继续解释执行结果。会话、动作和用量可回看。 |
 | **设置** | 数据源 / AI / 飞书通知 / 账户，以及可按分类选择的本地 JSON 数据导出与合并导入。 |
 
 **盘后数据同步**：交易日 16:00 后 Web 进程会自动运行 `post-market-data`：同步股票目录，并用 fuyao 全市场 Parquet dump 导入最近 10 个交易日的原始日线与全量复权因子。该调度与其他后台任务一样，要求同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`；缺少 `FUYAO_API_KEY` 时 dump 步骤失败，日线与策略数据会如实标为缺口而不是用旧快照补齐。
@@ -491,6 +326,8 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 
 顶栏（窄屏下两行）：左侧品牌，右侧依次是股票搜索、账户、时钟——搜索靠右与账户/时钟同簇，不居中。搜索支持代码与名称，候选可直接点击或 `↑`/`↓` + `Enter` 选中、`Esc` 清空；任意页面按 `⌘K`（Windows/Linux 为 `Ctrl K`）聚焦搜索，在非输入控件处按 `/` 也一样，输入框内不会抢键。时钟显示当前时间（窄屏去秒），鼠标悬停可看完整日期、时区与交易时段；时段徽标（交易中 / 午间休市 / 已收盘 / 盘前 / 非交易日）来自服务端 `get_market_data_status` 的交易时段，不在浏览器里重算交易日历，读取失败时仅隐藏徽标。主题皮肤入口在侧栏底部（窄屏时为导航条右侧的「◈ 主题」按钮），点击打开右侧皮肤抽屉。
 
+侧栏只保留五个一级入口：**今日**（概览 / 建议 / 成绩单 / 复盘）、**持仓**（持仓 / 策略）、**关注**（关注列表 / 预警）、**市场**（指数 / 行情 / 作战室 / 涨停梯队 / 龙虎榜 / 板块热力）、**设置**（设置 / AI 助手）。进入某个入口后，页面顶部的标签条切换该入口下的具体页面；深链接（如 `#advice`、`#market?stockId=...`）仍可直接打开对应页面，并自动高亮所属入口。
+
 切换顶栏账户会向 `POST /api/account/select` 发请求，后端更新当前默认账户，然后自动 reload 当前视图。localStorage 持久化（`luoome.accountId`）以便下次启动自动复原。
 
 ---
@@ -500,8 +337,8 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 MCP 无需模型密钥或行情配置即可启动，提供关注列表、策略、历史建议、交易记录等本地查询；
 股票搜索可回退本地目录，账户概览使用已有的本地行情回退规则，缺失数据保持 unavailable。
 发现列表只包含同时通过权限检查与依赖就绪检查的工具：模型未就绪时隐藏 AI 分析工具；
-未设置 `LUOOME_MARKET_PROVIDER=real` 时隐藏必须依赖外部行情或资讯的工具；研究工具还要求
-已挂载 Research Vault 且显式开启研究权限。显式填写的非法行情配置仍会导致启动失败。
+未设置 `LUOOME_MARKET_PROVIDER=real` 时隐藏必须依赖外部行情或资讯的工具。
+显式填写的非法行情配置仍会导致启动失败。
 就绪表示配置及所需能力已装配，不表示上游网络或数据始终可用；调用失败仍返回现有错误模型。
 修改配置后重启 MCP，重新执行工具发现。
 
@@ -637,21 +474,11 @@ luoome tools call get_confidence_calibration --input '{"accountId":"你的账户
 它不等于账户收益率，也不能把某个 confidence 桶理解为未来成功概率。
 Web「复盘」页可查看。
 
-### 7.3 报告中的复盘与后补
+### 7.3 报告里的复盘
 
-账户收盘报告和周报会保存生成时使用的复盘修订与成交事实。收盘复盘生成后保持原始快照，
-后补记录可在「决策与复盘」中查看，不再追加补充报告。报告列表每个日期和范围只显示最新的一份，
-历史收盘报告的 V2/V3 编号不再显示，已有历史数据仍保留。
-
-周报后来补录或修改后，可在最新报告详情中点「生成复盘补充版」，只根据已保存的本地事实
-更新复盘章节，保留旧版本和其它报告内容。
-旧报告尚未包含新版复盘时会明确提示。补充请求结果未确认时，用同一按钮重试，不会重复创建同一请求的版本。
-
-复盘补充版显示「按策略不通知」，不会额外发送通知，后续定时任务与投递重试也不能改变这一策略。
-正常主报告及原研究补充版仍遵循原有通知规则。生成复盘补充需要 write 能力，不要求开启外部调用。
-
-`luoome workflow run report --input '{"kind":"daily-review"}'` 仍运行独立的 daily-review 管线，写报告到 `~/.luoome/reports/`。
-执行步骤见 [workflows 包](../packages/workflows/src/daily-review.ts)。
+报告链路已收敛：`report` 只接受 `kind: "weekly"`，每周一 08:00 生成建议成绩单（命中率、平均超额、
+按 confidence 分组的命中率与验收门禁）。开盘/收盘/复盘/风险报告与截止补报已下线，
+`luoome workflow run report --input '{"kind":"weekly"}'` 是唯一入口。
 
 ---
 

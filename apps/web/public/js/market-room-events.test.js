@@ -247,18 +247,18 @@ describe('事件文案', () => {
   it('证据事实包含时点、名次、上涨面、窗口、占比、封板与阈值', () => {
     const facts = eventDetailFacts(diffusionEvent());
     const byLabel = Object.fromEntries(facts.map((fact) => [fact.label, fact.value]));
-    expect(byLabel['检测时点']).toBe('09:45 · 交易日 2026-09-28');
-    expect(byLabel['板块']).toBe('扩散题材 · 行业 881101.TI');
-    expect(byLabel['日涨幅名次']).toBe('第 2 / 2 名');
-    expect(byLabel['日涨幅']).toBe('+3.00%');
-    expect(byLabel['窗口涨幅']).toBe('+2.67%（回看 1 个样本）');
-    expect(byLabel['上涨面']).toBe('上涨 3 / 有效 3（100.00%，成分 3）');
-    expect(byLabel['上涨面变化']).toBe('+33.33pp（基准 66.67%）');
-    expect(byLabel['窗口成交占比']).toBe('50.00%（较上一窗口 0.00pp）');
-    expect(byLabel['封板数']).toBe('缺失');
-    expect(byLabel['事件状态']).toBe('证据部分缺失');
-    expect(byLabel['核实状态']).toBe('已核实 · 已收录目录板块');
-    expect(byLabel['触发阈值']).toContain('上涨面 ≥ +8.00pp');
+    expect(byLabel.检测时点).toBe('09:45 · 交易日 2026-09-28');
+    expect(byLabel.板块).toBe('扩散题材 · 行业 881101.TI');
+    expect(byLabel.日涨幅名次).toBe('第 2 / 2 名');
+    expect(byLabel.日涨幅).toBe('+3.00%');
+    expect(byLabel.窗口涨幅).toBe('+2.67%（回看 1 个样本）');
+    expect(byLabel.上涨面).toBe('上涨 3 / 有效 3（100.00%，成分 3）');
+    expect(byLabel.上涨面变化).toBe('+33.33pp（基准 66.67%）');
+    expect(byLabel.窗口成交占比).toBe('50.00%（较上一窗口 0.00pp）');
+    expect(byLabel.封板数).toBe('缺失');
+    expect(byLabel.事件状态).toBe('证据部分缺失');
+    expect(byLabel.核实状态).toBe('已核实 · 已收录目录板块');
+    expect(byLabel.触发阈值).toContain('上涨面 ≥ +8.00pp');
   });
 
   it('天梯证据缺失写原因；有样本时给出封板时间与涨停原因', () => {

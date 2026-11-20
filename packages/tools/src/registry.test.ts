@@ -261,7 +261,7 @@ describe('toolRegistry（44 核心 Agent Tool）', () => {
       'add_trade',
       'create_watchlist',
       'prune_strategy_history',
-          'save_alert_plan',
+      'save_alert_plan',
       'save_decision_review',
       'save_strategy_version',
       'save_trading_plan',

@@ -3,7 +3,7 @@ import {
   ActiveSignalObservationHorizonSchema,
   type Advice,
   AdviceSchema,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   type SignalObservation,
   SignalObservationSchema,
   type StrategyResult,
@@ -247,34 +247,18 @@ function explicitTradeRelations(
   };
 }
 
-const hasAcceptedRun = (run: StrategyRun): boolean => {
-  const summary = run.summary;
-  if (summary === undefined || typeof summary !== 'object' || summary === null) return true;
-  if (!('acceptance' in summary)) return true;
-  const acceptance = summary.acceptance;
-  return (
-    typeof acceptance === 'object' &&
-    acceptance !== null &&
-    'decision' in acceptance &&
-    acceptance.decision === 'accepted'
-  );
-};
-
 function runExclusionReason(run: StrategyRun): string {
   if (run.mode === 'replay' || run.mode === 'backtest')
     return `${run.mode} 运行不属于生产 operational run，不进入生产闭环。`;
   if (run.scope !== 'operational')
     return '非 operational 运行（包含 evaluation/replay 等）不进入生产闭环。';
-  if (run.publication?.status !== 'published') return '运行未 published，不进入生产闭环。';
-  if (!hasAcceptedRun(run)) return '运行 acceptance decision 不是 accepted，不进入生产闭环。';
-  if (run.status !== 'complete') return `运行状态为 ${run.status}，不是可发布的 operational run。`;
+  if (run.status !== 'complete')
+    return `运行状态为 ${run.status}，不是可用于建议的 operational run。`;
   return '运行不满足生产闭环门禁。';
 }
 
 const isProductionCycleRun = (run: StrategyRun): boolean =>
-  (run.mode === 'scan' || run.mode === 'scheduled') &&
-  isPublishableOperationalRun(run) &&
-  hasAcceptedRun(run);
+  (run.mode === 'scan' || run.mode === 'scheduled') && isAdvisoryEligibleRun(run);
 
 async function loadCycle(
   run: StrategyRun,

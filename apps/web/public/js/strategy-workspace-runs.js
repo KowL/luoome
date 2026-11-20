@@ -11,10 +11,11 @@ import {
   metric,
   mount,
   openModal,
-  PUBLICATION_STATUS,
   post,
+  RUN_ELIGIBILITY,
   RUN_SCOPE,
   RUN_STATUS,
+  runEligibility,
   stockIdentityLink,
 } from './strategy-workspace-shared.js';
 
@@ -134,7 +135,7 @@ const runRow = (run, onRerun) => {
   view.type = 'button';
   view.addEventListener('click', () => void openRunDetail(run.id));
   const actions = [view];
-  if (run.publication?.status === 'withheld' && onRerun !== undefined) {
+  if (runEligibility(run) === 'ineligible' && onRerun !== undefined) {
     const rerun = el('button', 'btn btn-outline btn-sm', '重跑');
     rerun.type = 'button';
     rerun.addEventListener('click', () => void onRerun(rerun));
@@ -144,14 +145,7 @@ const runRow = (run, onRerun) => {
     el('td', 'mono', fmtDateTime(run.startedAt)),
     el('td', null, run.mode),
     el('td', null, badge(RUN_SCOPE[run.scope] ?? null, run.scope ?? 'legacy')),
-    el(
-      'td',
-      null,
-      badge(
-        PUBLICATION_STATUS[run.publication?.status] ?? null,
-        run.publication?.status ?? 'legacy/unknown',
-      ),
-    ),
+    el('td', null, badge(RUN_ELIGIBILITY[runEligibility(run)], runEligibility(run))),
     el('td', null, badge(RUN_STATUS[run.status], run.status)),
     el('td', 'muted', runSummaryText(run)),
     el('td', null, actions),
@@ -185,7 +179,7 @@ const rerunStrategy = async (strategyId, button, setLine, reload) => {
   featureCache.clear();
   const run = result.data?.run ?? {};
   const statusText = RUN_STATUS[run.status]?.[0] ?? String(run.status ?? '完成');
-  const publicationText = PUBLICATION_STATUS[run.publication?.status]?.[0];
+  const publicationText = RUN_ELIGIBILITY[runEligibility(run)]?.[0];
   const resultsCount = result.data?.results?.length ?? 0;
   const signalsCount = result.data?.signals?.length ?? 0;
   setLine(
@@ -237,7 +231,7 @@ export const renderRuns = async (strategyId, scope = 'operational') => {
           el('th', null, '时间'),
           el('th', null, '模式'),
           el('th', null, '范围'),
-          el('th', null, '发布'),
+          el('th', null, '建议'),
           el('th', null, '状态'),
           el('th', null, '摘要'),
           el('th', null, '操作'),

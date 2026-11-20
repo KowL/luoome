@@ -1,4 +1,4 @@
-import type { ToolContext, ToolResult } from '@luoome/core';
+import type { Exposure, ToolContext, ToolResult } from '@luoome/core';
 import type { Context } from 'hono';
 import type { AISettingsStore } from '../ai-settings.js';
 import type { ChatStreamRuntime } from '../chat.js';
@@ -6,7 +6,6 @@ import type { WebSourceSet } from '../context.js';
 import type { FeishuSettingsStore } from '../feishu-settings.js';
 import type { MarketSettingsStore } from '../market-settings.js';
 import type { McpSettingsStore } from '../mcp-settings.js';
-import type { PluginSettingsStore } from '../plugin-settings.js';
 import type { PluginTasks } from '../plugin-tasks.js';
 
 export type { WebSourceSet };
@@ -63,8 +62,8 @@ export interface WebRouteDeps {
   serveFile(file: string, contentType: string): (c: Context) => Promise<Response>;
   readonly exposeWrite: boolean;
   readonly exposeExternal: boolean;
+  readonly exposure: Exposure;
   readonly chatRuntimeRef: { current: ChatStreamRuntime | undefined };
-  readonly pluginSettingsStore?: PluginSettingsStore;
   readonly pluginTasks?: { current: Pick<PluginTasks, 'status' | 'reconcile'> | undefined };
   readonly aiSettingsStore?: AISettingsStore;
   readonly mcpSettingsStore?: McpSettingsStore;

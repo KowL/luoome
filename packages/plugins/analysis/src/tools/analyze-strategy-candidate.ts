@@ -9,7 +9,7 @@ import {
   type DailyBar,
   isActiveSignalObservationHorizon,
   isAdviceQuoteCurrent,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   type MarketDataAdapterLike,
   money,
   PluginExecutionDenied,
@@ -199,7 +199,7 @@ export const analyzeStrategyCandidateTool = defineTool({
     if (run.status !== 'complete' && run.status !== 'partial') {
       return errInvalidInput('只能为已完成且结果可用的 StrategyRun 生成推荐');
     }
-    if (!isPublishableOperationalRun(run)) {
+    if (!isAdvisoryEligibleRun(run)) {
       return errInvalidInput('只能为 published operational StrategyRun 生成推荐');
     }
     const result = await selectedResult(run.id, input.stockId, ctx);

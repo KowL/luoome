@@ -58,6 +58,13 @@ import { RepositoryWriteScope } from './write-scope.js';
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
 export type DrizzleDb = BunSQLiteDatabase<Schema>;
 
+const dropColumn = (db: DrizzleDb, table: string, column: string): void => {
+  const columns = new Set(
+    db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`)).map((row) => row.name),
+  );
+  if (columns.has(column)) db.run(sql.raw(`ALTER TABLE ${table} DROP COLUMN ${column}`));
+};
+
 const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: string): void => {
   const columns = new Set(
     db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`)).map((row) => row.name),
@@ -205,32 +212,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   ensureColumn(db, 'strategy_runs', 'scope', "TEXT NOT NULL DEFAULT 'operational'");
   ensureColumn(db, 'strategy_runs', 'provider_coverage_json', 'TEXT');
   ensureColumn(db, 'strategy_runs', 'results_json', 'TEXT');
-  ensureColumn(db, 'strategy_runs', 'publication_json', 'TEXT');
-  ensureColumn(db, 'strategy_runs', 'publication_status', 'TEXT');
-  db.run(sql`
-    UPDATE strategy_runs
-    SET scope = CASE WHEN mode IN ('replay', 'backtest') THEN 'evaluation' ELSE 'operational' END
-    WHERE scope IS NULL OR scope = ''
-  `);
-  db.run(sql`
-    UPDATE strategy_runs
-    SET publication_status = CASE
-      WHEN mode IN ('replay', 'backtest') THEN 'non-publishing'
-      WHEN status = 'complete' OR status = 'partial' THEN 'published'
-      ELSE 'withheld'
-    END,
-    publication_json = json_object(
-      'status', CASE
-        WHEN mode IN ('replay', 'backtest') THEN 'non-publishing'
-        WHEN status = 'complete' OR status = 'partial' THEN 'published'
-        ELSE 'withheld'
-      END,
-      'reasons', json_array('legacy-publication'),
-      'decidedAt', coalesce(finished_at, started_at)
-    )
-    WHERE publication_status IS NULL
-  `);
-
   // v0.6 起：盯盘触发。v0.7 增 rule_id / trigger_type / priority / delivery_status /
   // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
   // （§3.4 / §3.7）。
@@ -289,6 +270,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
 
   // 严格回测已下线，历史库残留的空表直接清掉。
   db.run(sql`DROP TABLE IF EXISTS strategy_backtest_runs`);
+
+  // 可发布性状态机已下线：先删引用该列的旧索引，再删列（SQLite 不允许带索引删列）。
+  db.run(sql`DROP INDEX IF EXISTS strategy_runs_published_current_idx`);
+  dropColumn(db, 'strategy_runs', 'publication_json');
+  dropColumn(db, 'strategy_runs', 'publication_status');
 
   // 旧版索引列名/唯一性已变：先删除再按 schema 重建。
   db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);

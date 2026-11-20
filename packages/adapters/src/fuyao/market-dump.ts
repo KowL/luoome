@@ -73,7 +73,7 @@ export class FuyaoMarketDumpAdapter {
     const file = files.sort().find((name) => name.startsWith(prefix) && name.endsWith('.parquet'));
     if (!file) return null;
     if (this.archivedTotal?.file === file) return this.archivedTotal.total;
-    const tradingDay = Date.parse(date + 'T00:00:00+08:00');
+    const tradingDay = Date.parse(`${date}T00:00:00+08:00`);
     const ids = new Set<string>();
     let total = 0;
     for (const row of iterateDailyKDumpRows(join(this.options.dir, file))) {

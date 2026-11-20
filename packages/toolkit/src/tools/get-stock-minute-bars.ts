@@ -71,16 +71,13 @@ export const getStockMinuteBarsTool = defineTool({
     const warnings = new Set<z.infer<typeof MinuteBarWarningSchema>>();
     let remoteBars: Awaited<ReturnType<typeof ctx.adapters.market.fetchMinuteBars>> | null = null;
 
-    const admission = ctx.executionPolicy?.acquire('task.minute-bars-sync');
+    const taskEnabled = ctx.executionPolicy?.isEnabled('task.minute-bars-sync') ?? true;
     const checkTask = () => {
-      if (
-        admission !== undefined &&
-        (!admission.ok || !ctx.executionPolicy?.valid(admission.permit))
-      )
+      if (ctx.executionPolicy !== undefined && !taskEnabled)
         throw new PluginExecutionDenied('plugin:task.minute-bars-sync');
     };
-    if (canFetchCurrent && admission?.ok === false) warnings.add('task-disabled');
-    if (canFetchCurrent && admission?.ok !== false) {
+    if (canFetchCurrent && !taskEnabled) warnings.add('task-disabled');
+    if (canFetchCurrent && taskEnabled) {
       try {
         checkTask();
         const fetchCurrent = () =>
@@ -90,7 +87,7 @@ export const getStockMinuteBarsTool = defineTool({
           : ctx.dataScope.run(
               async () => fetchCurrent(),
               checkTask,
-              JSON.stringify(['task.minute-bars-sync', admission]),
+              JSON.stringify(['task.minute-bars-sync', taskEnabled]),
             ));
         checkTask();
         if (remoteBars.length === 0) warnings.add('no-data');

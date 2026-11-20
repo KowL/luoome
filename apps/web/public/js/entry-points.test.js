@@ -89,9 +89,10 @@ describe('侧栏与路由结构', () => {
     expect(box).toContain("el('kbd', 'search-hint', shortcutHint)");
   });
 
-  it('预警页面菜单使用简化文案「预警」', () => {
-    expect(html).toMatch(/href="#alerts" data-route="alerts"><span>预警<\/span>/);
-    expect(html).not.toMatch(/href="#alerts" data-route="alerts"><span>预警计划<\/span>/);
+  it('预警页面挂在「关注」分区下，标签文案是「预警」', () => {
+    expect(html).toContain('data-group="focus"');
+    expect(appJs).toContain("['alerts', '预警']");
+    expect(appJs).not.toContain("'预警计划'");
   });
 });
 
@@ -119,7 +120,8 @@ describe('策略页布局', () => {
 
 describe('报告页入口', () => {
   it('侧栏、路由和历史/详情容器齐全', () => {
-    expect(html).toContain('href="#reports" data-route="reports"');
+    expect(html).toContain('data-group="today"');
+    expect(appJs).toContain("['reports', '成绩单']");
     expect(html).toContain('id="route-reports"');
     expect(html).toContain('id="report-history"');
     expect(html).toContain('id="report-detail"');
@@ -387,7 +389,8 @@ describe('看盘页时间展示去重', () => {
 
 describe('指数页结构', () => {
   it('导航「看盘」后有「指数」菜单项，#route-indices section 存在', () => {
-    expect(html).toContain('href="#indices" data-route="indices"');
+    expect(html).toContain('data-group="market"');
+    expect(appJs).toContain("['indices', '指数']");
     expect(html).toContain('id="route-indices"');
   });
 
@@ -487,12 +490,11 @@ describe('龙虎榜页面入口', () => {
   const dragonJs = read('./dragon-tiger.js');
 
   it('侧栏「涨停梯队」后有「龙虎榜」菜单项，#route-dragon-tiger section 存在', () => {
-    expect(html).toContain('href="#limit-up" data-route="limit-up"');
-    expect(html).toContain('href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span>');
+    expect(appJs).toContain("['dragon-tiger', '龙虎榜']");
     expect(html).toContain('id="route-dragon-tiger"');
-    // 位置：涨停梯队之后、板块热力之前
-    const navOrder = ['data-route="limit-up"', 'data-route="dragon-tiger"', 'data-route="sectors"'];
-    const positions = navOrder.map((marker) => html.indexOf(marker));
+    // 位置：涨停梯队之后、板块热力之前（标签顺序在 ROUTE_GROUPS 里）
+    const navOrder = ["['limit-up'", "['dragon-tiger'", "['sectors'"];
+    const positions = navOrder.map((marker) => appJs.indexOf(marker));
     for (const pos of positions) expect(pos).toBeGreaterThan(-1);
     for (let i = 1; i < positions.length; i += 1) {
       expect(positions[i]).toBeGreaterThan(positions[i - 1]);

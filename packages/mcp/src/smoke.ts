@@ -1,17 +1,37 @@
 // Real stdio client checks with a temporary database and offline upstream fixtures.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PluginConfigStore } from '@luoome/adapters';
 import { TEST_ACCOUNT, testAdviceFor } from '@luoome/adapters/testing';
-import { money, stockCode, strategyDefinitionHash } from '@luoome/core';
+import {
+  MANAGED_PLUGIN_IDS,
+  type ManagedPluginId,
+  money,
+  stockCode,
+  strategyDefinitionHash,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const pluginPath = (home: string) => join(home, 'plugins.json');
+const initPlugins = (home: string): void => {
+  const entries = Object.fromEntries(
+    MANAGED_PLUGIN_IDS.map((id) => [id, { enabled: BUILTIN_PLUGIN_DEFAULTS[id] }]),
+  );
+  writeFileSync(pluginPath(home), `${JSON.stringify({ version: 1, entries }, null, 2)}\n`);
+};
+const setPlugin = (home: string, id: ManagedPluginId, enabled: boolean): void => {
+  const raw = JSON.parse(readFileSync(pluginPath(home), 'utf8')) as {
+    entries: Record<string, { enabled: boolean }>;
+  };
+  raw.entries[id] = { enabled };
+  writeFileSync(pluginPath(home), `${JSON.stringify(raw, null, 2)}\n`);
+};
 
 const root = mkdtempSync(join(tmpdir(), 'luoome-mcp-smoke-'));
 const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
@@ -62,7 +82,7 @@ const data = (result: Awaited<ReturnType<Client['callTool']>>) => {
 
 try {
   const home = join(root, 'local');
-  new PluginConfigStore(join(home, 'plugins.json')).initialize(BUILTIN_PLUGIN_DEFAULTS);
+  initPlugins(home);
   const seed = createDrizzleRepos(join(home, 'luoome.db'));
   await seed.repos.stock.save({
     id: '000001.SZ',
@@ -196,12 +216,8 @@ try {
     },
   });
   strategySeed.close();
-  const strategyStore = new PluginConfigStore(join(home, 'plugins.json'));
-  const setExecution = (enabled: boolean) => {
-    const read = strategyStore.read();
-    assert.ok(read.ok);
-    strategyStore.set('business.strategy-execution', enabled, read.config);
-  };
+  const setExecution = (enabled: boolean) =>
+    setPlugin(home, 'business.strategy-execution', enabled);
   setExecution(true);
   const strategyClient = await connect(home, {
     LUOOME_EXPOSE_EXTERNAL: 'true',
@@ -257,9 +273,9 @@ try {
   );
 
   const enableSource = (home: string) => {
-    const store = new PluginConfigStore(join(home, 'plugins.json'));
-    const config = store.initialize(BUILTIN_PLUGIN_DEFAULTS);
-    return store.set('source.eastmoney', true, store.set('source.sina', true, config));
+    initPlugins(home);
+    setPlugin(home, 'source.sina', true);
+    setPlugin(home, 'source.eastmoney', true);
   };
   const marketHome = join(root, 'market');
   enableSource(marketHome);
@@ -290,16 +306,13 @@ try {
     const news = await authorized.callTool({ name: 'fetch_news', arguments: {} });
     assert.notEqual(news.isError, true);
     assert.equal(data(news).items[0].id, 'mcp-fixture-news');
-    const store = new PluginConfigStore(join(marketHome, 'plugins.json'));
-    const current = store.read();
-    assert.ok(current.ok);
-    const off = store.set('source.eastmoney', false, current.config);
+    setPlugin(marketHome, 'source.eastmoney', false);
     assert.ok(!(await names(authorized)).includes('fetch_news'));
     await assert.rejects(
       authorized.callTool({ name: 'fetch_news', arguments: {} }),
       /not found or not exposed/,
     );
-    store.set('source.eastmoney', true, off);
+    setPlugin(marketHome, 'source.eastmoney', true);
     assert.ok((await names(authorized)).includes('fetch_news'));
     const created = await authorized.callTool({
       name: 'create_watchlist',
@@ -318,8 +331,8 @@ try {
   );
 
   const modelHome = join(root, 'model');
-  const modelStore = new PluginConfigStore(join(modelHome, 'plugins.json'));
-  modelStore.set('business.analysis', true, enableSource(modelHome));
+  enableSource(modelHome);
+  setPlugin(modelHome, 'business.analysis', true);
   const modelSeed = createDrizzleRepos(join(modelHome, 'luoome.db'));
   await modelSeed.repos.account.save(TEST_ACCOUNT);
   await modelSeed.repos.advice.save(testAdviceFor('002594.SZ', () => new Date()));
@@ -336,9 +349,7 @@ try {
     });
     assert.equal(result.isError, true);
     assert.equal(data(result).kind, 'not_found');
-    const current = modelStore.read();
-    assert.ok(current.ok);
-    const off = modelStore.set('business.analysis', false, current.config);
+    setPlugin(modelHome, 'business.analysis', false);
     assert.ok(!(await names(model)).includes('analyze_stock'));
     assert.ok(!(await names(model)).includes('analyze_position'));
     await assert.rejects(
@@ -349,7 +360,7 @@ try {
       data(await model.callTool({ name: 'get_advice', arguments: { includeExpired: true } })).total,
       1,
     );
-    modelStore.set('business.analysis', true, off);
+    setPlugin(modelHome, 'business.analysis', true);
     assert.ok((await names(model)).includes('analyze_stock'));
   } finally {
     await model.close();

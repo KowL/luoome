@@ -243,30 +243,6 @@ export const StrategyRunAcceptanceSchema = z.object({
 });
 export type StrategyRunAcceptance = z.infer<typeof StrategyRunAcceptanceSchema>;
 
-export const StrategyRunPublicationStatusSchema = z.enum([
-  'published',
-  'withheld',
-  'non-publishing',
-]);
-export type StrategyRunPublicationStatus = z.infer<typeof StrategyRunPublicationStatusSchema>;
-
-export const StrategyRunPublicationReasonSchema = z.enum([
-  'evaluation-scope',
-  'explicit-subset',
-  'acceptance-rejected',
-  'run-not-complete',
-  'universe-checkpoint-missing',
-  'legacy-publication',
-]);
-export type StrategyRunPublicationReason = z.infer<typeof StrategyRunPublicationReasonSchema>;
-
-export const StrategyRunPublicationSchema = z.object({
-  status: StrategyRunPublicationStatusSchema,
-  reasons: z.array(StrategyRunPublicationReasonSchema),
-  decidedAt: z.coerce.date(),
-});
-export type StrategyRunPublication = z.infer<typeof StrategyRunPublicationSchema>;
-
 export const StrategyProviderCoverageSchema = z.object({
   capability: z.enum([
     'quote',
@@ -335,7 +311,8 @@ export const StrategyRunSummaryV4Schema = z
       .array(z.object({ stockId: z.string().min(1), error: z.string().min(1) }))
       .max(20)
       .default([]),
-    acceptance: StrategyRunAcceptanceSchema,
+    /** 仅存量 V4 快照携带；新运行不再计算验收结论。 */
+    acceptance: StrategyRunAcceptanceSchema.optional(),
   })
   .superRefine((summary, ctx) => {
     strategyRunSummaryCounts(summary, ctx);
@@ -416,7 +393,6 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
       checksum: z.string().min(1),
     })
     .optional(),
-  acceptancePolicyVersion: z.string().min(1),
   evaluationSessionId: z.string().min(1).optional(),
   prefilter: StrategyRunPrefilterSchema.optional(),
 });
@@ -451,8 +427,6 @@ export const StrategyRunSchema = z.object({
   providerStatuses: z.array(ProviderStatusSchema),
   providerCoverage: z.array(StrategyProviderCoverageSchema).optional(),
   summary: StrategyRunSummarySchema.optional(),
-  /** 新运行必填；存量记录由 current reader 以兼容规则解释。 */
-  publication: StrategyRunPublicationSchema.optional(),
   error: z.string().min(1).optional(),
 });
 export type StrategyRun = z.infer<typeof StrategyRunSchema>;
@@ -486,13 +460,31 @@ export const getStrategyRunDataHealth = (run: StrategyRun): StrategyRunDataHealt
 export const isUsableStrategyRun = (run: StrategyRun): boolean =>
   run.status === 'complete' || run.status === 'partial';
 
-/** 新生产消费者的唯一入口；legacy 行由 migration/current reader 单独适配。 */
-export const isPublishableOperationalRun = (run: StrategyRun): boolean =>
-  run.scope === 'operational' &&
-  (run.status === 'complete' ||
-    (run.status === 'partial' &&
-      run.publication?.reasons.includes('legacy-publication') === true)) &&
-  run.publication?.status === 'published';
+/** 一次运行的 scope/universe 由触发方式决定：私下验证不进建议消费。 */
+export const deriveStrategyRunScope = (input: {
+  readonly mode: 'scan' | 'scheduled' | 'replay' | 'backtest';
+  readonly hasExplicitStockIds: boolean;
+}): StrategyRun['scope'] =>
+  input.mode === 'replay' || input.mode === 'backtest' || input.hasExplicitStockIds
+    ? 'evaluation'
+    : 'operational';
+
+export const deriveStrategyRunUniverseKind = (input: {
+  readonly hasExplicitStockIds: boolean;
+}): StrategyRunUniverseKind => (input.hasExplicitStockIds ? 'explicit' : 'full');
+
+/** 存量行缺 scope 时按 mode 推断：replay/backtest 属于评估证据，其余为正式运行。 */
+export const normalizeStrategyRunScope = (run: StrategyRun): StrategyRun =>
+  run.scope === undefined
+    ? {
+        ...run,
+        scope: run.mode === 'replay' || run.mode === 'backtest' ? 'evaluation' : 'operational',
+      }
+    : run;
+
+/** 可用于建议/信号消费的运行：operational 且已结束（complete/partial）。 */
+export const isAdvisoryEligibleRun = (run: StrategyRun): boolean =>
+  run.scope === 'operational' && isUsableStrategyRun(run);
 
 export const LegacyRuleEvaluationSchema = z.object({
   ruleId: z.string().min(1),

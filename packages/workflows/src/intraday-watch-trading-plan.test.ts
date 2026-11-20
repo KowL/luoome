@@ -1186,8 +1186,9 @@ describe('intraday trading plan watch', () => {
 it('notification shutdown retains actionable TradingPlan trigger and edge facts without attempting delivery', async () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-notification-plan-'));
   try {
-    const { store, initial, executionPolicy } = createTestPluginControl(root);
-    store.set('business.notification', false, initial);
+    const { executionPolicy, set } = createTestPluginControl(root);
+    set('business.watch-monitoring', true);
+    set('business.notification', false);
     const ctx = await buildPlanWatchContext({ clock: () => NOW, executionPolicy });
     const facts = await seedFacts(ctx);
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));

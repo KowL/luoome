@@ -7,8 +7,9 @@ import {
   fmtDateTime,
   fmtNum,
   fmtSigned,
-  PUBLICATION_STATUS,
+  RUN_ELIGIBILITY,
   RUN_STATUS,
+  runEligibility,
   stockIdentityLink,
 } from './strategy-workspace-shared.js';
 
@@ -235,10 +236,7 @@ const renderCycleCard = (cycle, strategyId) => {
       ]),
       el('div', 'strategy-cycle-run-meta', [
         badge(RUN_STATUS[cycle.run?.status], cycle.run?.status ?? '--'),
-        badge(
-          PUBLICATION_STATUS[cycle.run?.publication?.status],
-          cycle.run?.publication?.status ?? '--',
-        ),
+        badge(RUN_ELIGIBILITY[runEligibility(cycle.run)], cycle.run?.publication?.status ?? '--'),
         el('span', 'mono muted', `数据截止 ${fmtDateTime(cycle.run?.dataAsOf)}`),
       ]),
     ]),
@@ -277,7 +275,7 @@ export const renderDecisionCycles = async (strategyId, state = {}) => {
         el(
           'p',
           'muted',
-          '仅 published operational run 的 selected StrategyResult 进入闭环；replay、evaluation、withheld 和未发布运行会被排除。',
+          '仅 operational 且已结束（complete/partial）的运行进入建议闭环；replay、evaluation 与未完成运行会被排除。',
         ),
         ...(payload.unknowns?.length
           ? [el('p', 'status warning', payload.unknowns.join('；'))]

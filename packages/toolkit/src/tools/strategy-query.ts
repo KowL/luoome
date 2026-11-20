@@ -2,7 +2,7 @@ import {
   classifyStrategyResult,
   diffStrategyRunViews,
   getStrategyRunDataHealth,
-  isPublishableOperationalRun,
+  isAdvisoryEligibleRun,
   type Quote,
   StrategyResultSchema,
   StrategyResultViewKindSchema,
@@ -39,7 +39,6 @@ export const ListStrategyRunsInput = z.object({
   strategyId: z.string().min(1).optional(),
   status: z.enum(['running', 'complete', 'partial', 'failed']).optional(),
   scope: z.enum(['operational', 'evaluation']).optional(),
-  publication: z.enum(['published', 'withheld', 'non-publishing']).optional(),
   since: z.coerce.date().optional(),
   until: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).default(50),
@@ -59,7 +58,6 @@ export const listStrategyRunsTool = defineTool({
       ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
       ...(input.status === undefined ? {} : { status: input.status }),
       ...(input.scope === undefined ? {} : { scope: input.scope }),
-      ...(input.publication === undefined ? {} : { publication: input.publication }),
       ...(input.since === undefined ? {} : { since: input.since }),
       ...(input.until === undefined ? {} : { until: input.until }),
       limit: input.limit,
@@ -125,9 +123,9 @@ export const getStrategyRunTool = defineTool({
       ...identities,
       warnings: [
         ...identities.warnings,
-        ...(isPublishableOperationalRun(run)
+        ...(isAdvisoryEligibleRun(run)
           ? []
-          : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),
+          : [`该运行不参与建议消费：只有 operational 且已结束（complete/partial）的运行可被消费`]),
       ],
     };
   },
@@ -300,9 +298,9 @@ export const listStrategyResultViewsTool = defineTool({
       }),
       warnings: [
         ...directory.warnings,
-        ...(isPublishableOperationalRun(run)
+        ...(isAdvisoryEligibleRun(run)
           ? []
-          : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),
+          : [`该运行不参与建议消费：只有 operational 且已结束（complete/partial）的运行可被消费`]),
       ],
     };
   },
@@ -331,7 +329,7 @@ export const GetStrategyWorkspaceOutput = z.object({
 export const getStrategyWorkspaceTool = defineTool({
   name: 'get_strategy_workspace',
   description:
-    '查询 Strategy 工作台摘要；仅 published operational run 进入 current，未发布运行保留诊断状态',
+    '查询 Strategy 工作台摘要；仅 operational 且已结束的运行进入 current，其余保留诊断状态',
   sideEffect: 'read',
   input: GetStrategyWorkspaceInput,
   output: GetStrategyWorkspaceOutput,
@@ -356,25 +354,24 @@ export const getStrategyWorkspaceTool = defineTool({
           ? ('running' as const)
           : latest.status === 'failed'
             ? ('failed' as const)
-            : latest.publication?.status === 'withheld'
+            : !isAdvisoryEligibleRun(latest)
               ? ('withheld' as const)
-              : latest.summary?.schemaVersion === 4 && latest.publication === undefined
-                ? ('withheld' as const)
-                : getStrategyRunDataHealth(latest) === 'partial'
-                  ? ('partial' as const)
-                  : ('ready' as const);
-    if (
-      latest?.publication?.status === 'withheld' ||
-      (latest?.summary?.schemaVersion === 4 && latest.publication === undefined)
-    ) {
-      warnings.push(
-        `最近运行未发布：${latest.publication?.reasons.join(', ') || 'publication-missing'}`,
-      );
-    }
-    // 最近尝试不是当前可发布基准且存在更早的 published run 时，明确展示回退状态。
-    if (latest !== undefined && currentRun !== undefined && !isPublishableOperationalRun(latest)) {
+              : getStrategyRunDataHealth(latest) === 'partial'
+                ? ('partial' as const)
+                : ('ready' as const);
+    // 最近尝试不可消费且存在更早的可用 run 时，明确展示回退状态。
+    if (latest !== undefined && currentRun !== undefined && !isAdvisoryEligibleRun(latest)) {
       warnings.push(
         `最近运行${latest.status}，当前结果仍来自 ${currentRun.finishedAt?.toISOString() ?? currentRun.startedAt.toISOString()} 的运行`,
+      );
+    }
+    if (
+      latest !== undefined &&
+      !isAdvisoryEligibleRun(latest) &&
+      (currentRun === undefined || currentRun.id !== latest.id)
+    ) {
+      warnings.push(
+        `最近运行不参与建议消费：status=${latest.status} scope=${latest.scope ?? 'operational'}`,
       );
     }
 
@@ -516,14 +513,14 @@ export const compareStrategyRunsTool = defineTool({
     );
     const identityById = new Map(identities.stocks.map((stock) => [stock.stockId, stock]));
     const warnings = [...identities.warnings];
-    if (!isPublishableOperationalRun(fromRun)) {
+    if (!isAdvisoryEligibleRun(fromRun)) {
       warnings.push(
-        `fromRun 非 published operational：${fromRun.publication?.status ?? 'legacy/unknown'}`,
+        `fromRun 不参与建议消费：status=${fromRun.status} scope=${fromRun.scope ?? 'operational'}`,
       );
     }
-    if (!isPublishableOperationalRun(toRun)) {
+    if (!isAdvisoryEligibleRun(toRun)) {
       warnings.push(
-        `toRun 非 published operational：${toRun.publication?.status ?? 'legacy/unknown'}`,
+        `toRun 不参与建议消费：status=${toRun.status} scope=${toRun.scope ?? 'operational'}`,
       );
     }
     if (diff.definitionChanged) {

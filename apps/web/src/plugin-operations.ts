@@ -1,28 +1,16 @@
-import { dateInShanghai } from '@luoome/core';
 import type { BuiltinPluginOperations } from '@luoome/tools';
 import {
-  closingReportCutoffWorkflow,
   intradayWatchWorkflow,
-  previousTradingDay,
-  runStrategySchedulesOperation,
   snapshotAccountPerformanceWorkflow,
+  weeklyReportOperation,
 } from '@luoome/workflows';
 
 export const webPluginOperations: BuiltinPluginOperations = {
-  strategy: {
-    run: (ctx, input) => runStrategySchedulesOperation.run(input, ctx),
-  },
   report: {
     run: async (ctx) => {
-      const priorDate = previousTradingDay(dateInShanghai(ctx.clock()));
-      const recovered = await closingReportCutoffWorkflow.run({ date: priorDate }, ctx);
-      if (!recovered.ok || recovered.data.failed.length > 0)
-        ctx.logger.error('前一交易日收盘报告补投失败', {
-          date: priorDate,
-          error: recovered.ok ? recovered.data.failed : recovered.error,
-        });
+      const result = await weeklyReportOperation.run({ mode: 'scheduled' }, ctx);
       ctx.executionGuard?.();
-      return closingReportCutoffWorkflow.run({}, ctx);
+      return result;
     },
   },
   performance: {

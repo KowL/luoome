@@ -9,6 +9,15 @@ export const HIGH_CONFIDENCE_THRESHOLD = 70;
 /** 候选池上限：持仓之外每天最多看这么多只（含手动关注池与策略补位）。 */
 export const DAILY_CANDIDATE_LIMIT = 10;
 
+/** 策略信号补位上限：手动关注池之外，策略每天最多补这么多只。 */
+export const STRATEGY_CANDIDATE_LIMIT = 3;
+
+/** 参与补位的策略数量上限（Q7：策略引擎降级为信号事实源，只留少量策略）。 */
+export const STRATEGY_SIGNAL_SOURCE_LIMIT = 2;
+
+/** 只有 score 达到该值的 bullish 信号才进入候选池。 */
+export const STRATEGY_SIGNAL_MIN_SCORE = 60;
+
 export const DailyAdviceInput = z.object({
   /** 账户 id（uuid）；缺省为当前用户默认账户。 */
   accountId: z.uuid().optional(),
@@ -58,6 +67,7 @@ type AnalyzedAdvice = z.output<typeof AdviceSchema>;
 type HoldingRow = { holding: { stockId: string } };
 type WatchlistRow = { watchlist: { id: string; kind: string } };
 type MemberRow = { member: { stockId: string }; stockName?: string };
+type SignalRow = { stockId: string; score: number; direction: 'bullish' | 'bearish' | 'neutral' };
 
 const summaryOf = (
   advices: readonly AnalyzedAdvice[],
@@ -126,11 +136,52 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
       if (!watchlists.ok) return watchlists;
       return { holdings, watchlists: watchlists.data.items as WatchlistRow[] };
     },
-    // 3) 展开候选池：取关注池成员，剔除已持仓，去重后截断到上限。
+    // 3) 策略补位：跑少量 active Strategy 的当日信号，取高分 bullish 标的。
     async (prev, ctx) => {
       const { holdings, watchlists } = prev as {
         holdings: HoldingRow[];
         watchlists: WatchlistRow[];
+      };
+      const listed = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
+      if (!listed.ok) {
+        ctx.logger.warn('daily-advice: 策略清单不可用，跳过补位', { cause: listed.error });
+        return { holdings, watchlists, signals: [] as SignalRow[] };
+      }
+      const strategies = listed.data.strategies
+        .filter((strategy) => strategy.currentVersionId !== undefined)
+        .slice(0, STRATEGY_SIGNAL_SOURCE_LIMIT);
+      const runs = await Promise.all(
+        strategies.map((strategy) =>
+          ctx.tools.run_strategy.execute({
+            strategyId: strategy.id,
+            mode: 'scan',
+            persist: false,
+            concurrency: 4,
+          }),
+        ),
+      );
+      const signals: SignalRow[] = [];
+      for (const [index, result] of runs.entries()) {
+        if (!result.ok) {
+          ctx.logger.warn('daily-advice: 策略补位运行失败', {
+            strategyId: strategies[index]?.id,
+            cause: result.error,
+          });
+          continue;
+        }
+        for (const signal of result.data.signals as SignalRow[]) {
+          if (signal.direction !== 'bullish' || signal.score < STRATEGY_SIGNAL_MIN_SCORE) continue;
+          signals.push(signal);
+        }
+      }
+      return { holdings, watchlists, signals };
+    },
+    // 4) 展开候选池：关注池成员 + 策略补位，剔除持仓、去重、截断到上限。
+    async (prev, ctx) => {
+      const { holdings, watchlists, signals } = prev as {
+        holdings: HoldingRow[];
+        watchlists: WatchlistRow[];
+        signals: SignalRow[];
       };
       const held = new Set(holdings.map((row) => row.holding.stockId));
       const fetched = await Promise.all(
@@ -149,9 +200,17 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
         }
         if (candidates.length >= DAILY_CANDIDATE_LIMIT) break;
       }
+      const added: string[] = [];
+      for (const signal of [...signals].sort((a, b) => b.score - a.score)) {
+        if (added.length >= STRATEGY_CANDIDATE_LIMIT) break;
+        if (held.has(signal.stockId) || candidates.includes(signal.stockId)) continue;
+        candidates.push(signal.stockId);
+        added.push(signal.stockId);
+      }
       return {
         holdingIds: [...held],
         candidateIds: candidates,
+        strategyCandidates: added,
         names: Object.fromEntries(names),
       };
     },

@@ -4,7 +4,6 @@ import {
   type DataExecutionScopeLike,
   type ManagedPluginId,
   PluginExecutionDenied,
-  type PluginPermit,
 } from '@luoome/core';
 import { type MarketRequestCoordinator, marketProviderOf } from '../market/request-coordinator.js';
 import { SourceExecutionError } from '../source-error.js';
@@ -20,31 +19,17 @@ export interface ProviderGuard {
   check(): void;
 }
 
-interface SourceActivity {
-  permit: PluginPermit;
-  valid(): boolean;
-}
-
 export class ProviderRuntime implements DataExecutionScopeLike {
   private readonly scopes = new AsyncLocalStorage<{
     references: number;
-    sources: Map<ManagedPluginId, SourceActivity>;
     checks: Set<() => void>;
     keys: Set<string>;
     permissions: Set<(dependency?: ManagedPluginId) => void>;
   }>();
-  private readonly activeSources = new Map<ManagedPluginId, Set<SourceActivity>>();
   private readonly descriptions = new Map<
     string,
     { candidates: readonly string[]; dependencies: readonly string[]; ready: () => boolean }
   >();
-  activity() {
-    return [...this.activeSources].map(([id, permits]) => ({
-      id,
-      inFlight: permits.size,
-      revokedInFlight: [...permits].filter((permit) => !permit.valid()).length,
-    }));
-  }
   describe() {
     return [...this.descriptions].map(([route, value]) => {
       let ready = false;
@@ -61,7 +46,6 @@ export class ProviderRuntime implements DataExecutionScopeLike {
   }
 
   private readonly routes = new Map<string, object>();
-  private staged: Array<{ check(): void; publish(): void }> | undefined;
 
   constructor(
     private readonly store: PluginConfigStore,
@@ -70,20 +54,8 @@ export class ProviderRuntime implements DataExecutionScopeLike {
   ) {}
 
   prepare<T>(build: () => T): { value: T; activate(): void } {
-    const pending: Array<{ check(): void; publish(): void }> = [];
-    this.staged = pending;
-    try {
-      const value = build();
-      return {
-        value,
-        activate: () => {
-          for (const item of pending) item.check();
-          for (const item of pending) item.publish();
-        },
-      };
-    } finally {
-      this.staged = undefined;
-    }
+    const value = build();
+    return { value, activate: () => {} };
   }
 
   async run<T>(
@@ -93,7 +65,6 @@ export class ProviderRuntime implements DataExecutionScopeLike {
   ): Promise<T> {
     const scope = this.scopes.getStore() ?? {
       references: 0,
-      sources: new Map<ManagedPluginId, SourceActivity>(),
       checks: new Set<() => void>(),
       keys: new Set<string>(),
       permissions: new Set<(dependency?: ManagedPluginId) => void>(),
@@ -109,12 +80,6 @@ export class ProviderRuntime implements DataExecutionScopeLike {
       return await this.scopes.run(scope, () => operation(validate));
     } finally {
       scope.references--;
-      if (scope.references === 0)
-        for (const [id, permit] of scope.sources) {
-          const active = this.activeSources.get(id);
-          active?.delete(permit);
-          if (active?.size === 0) this.activeSources.delete(id);
-        }
     }
   }
 
@@ -126,18 +91,11 @@ export class ProviderRuntime implements DataExecutionScopeLike {
     for (const check of this.scopes.getStore()?.checks ?? []) check();
   }
 
-  private stamp(ids: readonly string[]): string {
+  private enabledSources(candidates: readonly string[]): string[] {
     const read = this.store.read();
-    return JSON.stringify(
-      read.ok
-        ? [
-            read.config.incarnation,
-            ids.map((source) => [
-              source,
-              read.config.entries[`source.${source}` as ManagedPluginId] ?? null,
-            ]),
-          ]
-        : ['unavailable', read.reason],
+    if (!read.ok) return [];
+    return candidates.filter(
+      (source) => read.config.entries[`source.${source}` as ManagedPluginId]?.enabled === true,
     );
   }
 
@@ -147,32 +105,15 @@ export class ProviderRuntime implements DataExecutionScopeLike {
     build: (enabled: readonly S[], guard: ProviderGuard) => T | undefined,
     dependencies: readonly string[] = [],
   ): T {
-    const observed = [...new Set([...candidates, ...dependencies])];
     const routeToken = { id: randomUUID() };
-    type Graph = {
-      stamp: string;
-      sourceStamp: string;
-      value: T | undefined;
-      guard: ProviderGuard;
-      check: () => void;
-    };
-    let active: Graph | undefined;
+    type Graph = { value: T | undefined; guard: ProviderGuard };
     const graphs = new Map<string, Graph>();
-    const current = () => {
-      const sourceStamp = this.stamp(observed);
-      const stamp = JSON.stringify([sourceStamp, [...(this.scopes.getStore()?.keys ?? [])].sort()]);
-      const cached = graphs.get(stamp);
-      if (cached !== undefined) {
-        active = cached;
-        return cached;
-      }
-      for (const [key, graph] of graphs) if (graph.sourceStamp !== sourceStamp) graphs.delete(key);
-      const check = () => {
-        if (this.routes.get(route) !== routeToken || this.stamp(observed) !== sourceStamp)
-          throw new RevokedDataExecution();
-      };
+    const check = () => {
+      if (this.routes.get(route) !== routeToken) throw new RevokedDataExecution();
+    };
+    const buildGraph = (enabled: readonly S[]): Graph => {
       const baseKey = createHash('sha256')
-        .update(JSON.stringify([route, routeToken.id, candidates, stamp]))
+        .update(JSON.stringify([route, routeToken.id, candidates, enabled]))
         .digest('hex');
       const scopeKey = () =>
         JSON.stringify([baseKey, [...(this.scopes.getStore()?.keys ?? [])].sort()]);
@@ -185,67 +126,52 @@ export class ProviderRuntime implements DataExecutionScopeLike {
           check();
         },
       };
-      const enabled = candidates.filter(
-        (source) => this.store.acquire(`source.${source}` as ManagedPluginId).ok,
-      );
-      active = {
-        stamp,
-        sourceStamp,
-        guard,
-        check,
-        value: enabled.length === 0 ? undefined : build(enabled, guard),
-      };
-      graphs.set(stamp, active);
-      if (graphs.size > 16) {
-        const oldest = graphs.keys().next().value;
-        if (oldest !== undefined) graphs.delete(oldest);
-      }
-      return active;
+      return { value: enabled.length === 0 ? undefined : build(enabled, guard), guard };
     };
-    const prepared = current();
-    const publication = {
-      check: () => {
-        if (this.stamp(observed) !== prepared.sourceStamp) throw new RevokedDataExecution();
-      },
-      publish: () => {
-        this.routes.set(route, routeToken);
-        this.descriptions.set(route, {
-          candidates,
-          dependencies,
-          ready: () =>
-            (active?.sourceStamp === this.stamp(observed) ? active : current()).value !== undefined,
-        });
-      },
+    const current = (): Graph => {
+      const enabled = this.enabledSources(candidates) as S[];
+      const key = enabled.join(',');
+      const cached = graphs.get(key);
+      if (cached !== undefined) return cached;
+      graphs.clear();
+      const graph = buildGraph(enabled);
+      graphs.set(key, graph);
+      return graph;
     };
-    if (this.staged === undefined) publication.publish();
-    else this.staged.push(publication);
+    const initial = current();
+    const value = initial.value;
+    this.routes.set(route, routeToken);
+    this.descriptions.set(route, {
+      candidates,
+      dependencies,
+      ready: () => value !== undefined,
+    });
     const proxy = new Proxy({} as T, {
       get: (_target, key) => {
         if (key === 'then') return undefined;
         if (typeof key === 'symbol') return undefined;
         if (['status', 'marketSourceStatus'].includes(String(key)))
-          return (...args: unknown[]) => {
-            const graph = active?.sourceStamp === this.stamp(observed) ? active : current();
-            return graph.value === undefined
+          return (...args: unknown[]) =>
+            current().value === undefined
               ? []
               : Reflect.apply(
-                  Reflect.get(graph.value, key) as (...args: unknown[]) => unknown,
-                  graph.value,
+                  Reflect.get(current().value as T, key) as (...args: unknown[]) => unknown,
+                  current().value as T,
                   args,
                 );
-          };
-        const graph = current();
         if (key === 'name')
-          return graph.value === undefined
+          return current().value === undefined
             ? 'providers-unavailable'
-            : Reflect.get(graph.value, key);
-        if (key === 'sources' && graph.value === undefined) return [];
-        const value = graph.value === undefined ? undefined : Reflect.get(graph.value, key);
-        if (value !== undefined && typeof value !== 'function') return value;
+            : Reflect.get(current().value as T, key);
+        if (key === 'sources' && current().value === undefined) return [];
+        const member =
+          current().value === undefined ? undefined : Reflect.get(current().value as T, key);
+        if (member !== undefined && typeof member !== 'function') return member;
         return (...args: unknown[]) =>
           this.run(async (validate) => {
+            const graph = current();
             graph.guard.check();
-            this.track(graph.check);
+            this.track(check);
             validate();
             if (graph.value === undefined)
               throw new SourceExecutionError('no_data', 'no ready data providers');
@@ -259,10 +185,7 @@ export class ProviderRuntime implements DataExecutionScopeLike {
           });
       },
     });
-    this.readiness.set(
-      proxy,
-      () => (active?.sourceStamp === this.stamp(observed) ? active : current()).value !== undefined,
-    );
+    this.readiness.set(proxy, () => current().value !== undefined);
     return proxy;
   }
 
@@ -277,42 +200,15 @@ export class ProviderRuntime implements DataExecutionScopeLike {
       const actual = marketProviderOf(input, source);
       for (const check of this.scopes.getStore()?.permissions ?? [])
         check(`source.${actual}` as ManagedPluginId);
-      const admission = this.store.acquire(`source.${actual}` as ManagedPluginId);
-      if (!admission.ok) throw new RevokedDataExecution();
-      const check = () => {
-        if (!this.store.valid(admission.permit)) throw new RevokedDataExecution();
-      };
-      check();
-      const scope = this.scopes.getStore();
-      if (scope !== undefined && !scope.sources.has(admission.permit.id)) {
-        const permit = { ...admission.permit };
-        const record: SourceActivity = {
-          permit,
-          valid: () => {
-            try {
-              for (const permission of scope.permissions) permission();
-              for (const guard of scope.checks) guard();
-              return this.store.valid(permit);
-            } catch {
-              return false;
-            }
-          },
-        };
-        scope.sources.set(permit.id, record);
-        const active = this.activeSources.get(permit.id) ?? new Set<SourceActivity>();
-        active.add(record);
-        this.activeSources.set(permit.id, active);
-      }
-      this.track(check);
+      if (!this.store.isEnabled(`source.${actual}` as ManagedPluginId))
+        throw new RevokedDataExecution();
       const send = ((request, requestInit) => {
         this.validateScope();
-        check();
         return fetchImpl(request, requestInit);
       }) as typeof fetch;
       const transport = this.coordinator?.fetchFor(source, send, options) ?? send;
       const response = await transport(input, init);
       this.validateScope();
-      check();
       return response;
     }) as typeof fetch;
   }

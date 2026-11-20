@@ -23,7 +23,8 @@ import {
   errorText,
   fmtDateTime,
   mount,
-  PUBLICATION_STATUS,
+  RUN_ELIGIBILITY,
+  runEligibility,
   STRATEGY_STATUS,
 } from './strategy-workspace-shared.js';
 
@@ -132,8 +133,8 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
             ...(workspace.currentRun
               ? [
                   badge(
-                    PUBLICATION_STATUS[workspace.currentRun.publication?.status] ?? null,
-                    workspace.currentRun.publication?.status ?? 'legacy/unknown',
+                    RUN_ELIGIBILITY[runEligibility(workspace.currentRun)],
+                    runEligibility(workspace.currentRun),
                   ),
                 ]
               : []),

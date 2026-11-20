@@ -28,14 +28,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     user,
     ...(input.dataScope === undefined ? {} : { dataScope: input.dataScope }),
     executionPolicy:
-      input.executionPolicy ??
-      createPluginExecutionPolicy(
-        {
-          acquire: () => ({ ok: false, reason: 'dependency_not_ready' }),
-          valid: () => false,
-        },
-        new Set(),
-      ),
+      input.executionPolicy ?? createPluginExecutionPolicy({ isEnabled: () => false }, new Set()),
     clock: input.clock ?? (() => new Date()),
     logger: input.logger ?? console,
     ...(input.auditLog === undefined ? {} : { auditLog: input.auditLog }),

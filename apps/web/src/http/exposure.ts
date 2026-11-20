@@ -2,12 +2,10 @@ import type { SideEffect } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 
 /**
- * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read + advice。
- * write 需 LUOOME_EXPOSE_WRITE=true、external 需 LUOOME_EXPOSE_EXTERNAL=true 且命中
- * WEB_ALLOWED_EXTERNAL 白名单才放行（见 /api/tools/:name/call 的门控）；
- * MCP 暴露面同样默认只读（write 需 LUOOME_EXPOSE_WRITE）。
+ * Web 端的暴露面由 core 的 resolveExposure 统一解析（read/advice 默认放行，
+ * write/external 需显式 env 或启动参数）。本文件只保留 Web 专属的名字白名单：
+ * 通用 /api/tools/:name/call 允许的 external 目标，以及契约里存在但尚未实现的 tool。
  */
-export const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
 
 /**
  * external 白名单仅包含目标模型运行、行情读取与显式同步；

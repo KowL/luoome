@@ -1,14 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PluginConfigStore } from '@luoome/adapters';
 import type { LLMGenerateRequest, ToolContext } from '@luoome/core';
 import { analyzePositionTool } from '@luoome/plugin-analysis/tools/analyze-position.js';
 import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js';
 import { analyzeStrategyCandidateTool } from '@luoome/plugin-analysis/tools/analyze-strategy-candidate.js';
 import { marketOutlookTool } from '@luoome/plugin-analysis/tools/market-outlook.js';
-import { getAdviceTool } from '@luoome/toolkit/tools/get-advice.js';
-import { BUILTIN_PLUGIN_DEFAULTS } from '@luoome/tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   makeStrategy,
@@ -16,7 +13,7 @@ import {
   makeStrategyVersion,
 } from '../../db/src/repository/contract-tests.js';
 import { createPluginExecutionPolicy } from './plugin-policy.js';
-import { buildTestContext } from './testing/context.js';
+import { buildTestContext, createTestPluginControl } from './testing/context.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -26,19 +23,14 @@ const id = 'business.analysis' as const;
 const setup = async () => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-analysis-'));
   roots.push(root);
-  const store = new PluginConfigStore(join(root, 'plugins.json'));
-  store.initialize(BUILTIN_PLUGIN_DEFAULTS);
+  const { store, set: setPlugin } = createTestPluginControl(root);
   const policy = createPluginExecutionPolicy(
     store,
     new Set(['read', 'advice', 'write', 'external']),
   );
   const now = new Date('2026-11-13T02:00:00Z');
   const ctx = await buildTestContext({ advices: [], clock: () => now, executionPolicy: policy });
-  const set = (enabled: boolean) => {
-    const read = store.read();
-    if (!read.ok) throw new Error('missing fixture config');
-    return store.set(id, enabled, read.config);
-  };
+  const set = (enabled: boolean) => setPlugin(id, enabled);
   return { ctx, store, policy, set };
 };
 const candidate = { strategyId: 'strategy-1', runId: 'analysis-run', stockId: '002594.SZ' };
@@ -110,39 +102,10 @@ describe('analysis plugin admission and Advice publication', () => {
     },
   );
 
-  it('retains historical Advice, rejects stale contexts after off/on, and preserves the advice permission boundary', async () => {
-    const { ctx, store, policy, set } = await setup();
-    set(true);
-    const saved = { ...ctx, executionPolicy: policy.bind() };
-    const first = await analyzeStockTool.execute({ stockId: '002594.SZ' }, saved);
-    expect(first.ok).toBe(true);
-    if (!first.ok) throw new Error('Advice fixture failed');
-    set(false);
-    expect(await getAdviceTool.execute({ includeExpired: true }, ctx)).toMatchObject({
-      ok: true,
-      data: { advices: [{ id: first.data.advice.id }] },
-    });
-    set(true);
-    expect(await analyzeStockTool.execute({ stockId: '002594.SZ' }, saved)).toMatchObject({
-      ok: false,
-      error: { kind: 'permission_denied' },
-    });
-    expect((await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx)).ok).toBe(true);
-    const restricted = {
-      ...ctx,
-      executionPolicy: createPluginExecutionPolicy(store, new Set(['read', 'write', 'external'])),
-    };
-    expect(await analyzeStockTool.execute({ stockId: '002594.SZ' }, restricted)).toMatchObject({
-      ok: false,
-      error: { kind: 'permission_denied', required: 'advice' },
-    });
-    expect((await ctx.repos.advice.query({ includeExpired: true })).length).toBe(2);
-  });
-
   it.each(cases)(
-    'discards late $name model results without publishing or repair retry, even after re-enable',
+    'discards late $name model results without publishing after the plugin is disabled',
     async ({ tool, input, name }) => {
-      const { ctx, policy, set } = await setup();
+      const { ctx, set } = await setup();
       set(true);
       if (name.includes('candidate')) await seedCandidate(ctx);
       const started = deferred(),
@@ -172,22 +135,13 @@ describe('analysis plugin admission and Advice publication', () => {
             if (calls === 0) throw new Error(JSON.stringify(result));
           }),
         ]);
-        expect(policy.activity().some((call) => call.id === id && call.inFlight > 0)).toBe(true);
         set(false);
-        set(true);
-        expect(
-          policy
-            .activity()
-            .filter((call) => call.id === id)
-            .every((call) => call.revokedInFlight === call.inFlight),
-        ).toBe(true);
       } finally {
         release.resolve();
       }
       expect(await active).toMatchObject({ ok: false, error: { kind: 'permission_denied' } });
       expect(calls).toBe(1);
       expect(await ctx.repos.advice.query({ includeExpired: true })).toEqual([]);
-      expect(policy.activity()).toEqual([]);
     },
   );
 

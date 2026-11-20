@@ -1,4 +1,4 @@
-import type { SideEffect } from '@luoome/core';
+import { resolveExposure, type SideEffect } from '@luoome/core';
 import { agentToolDependencies, type ToolDependency } from '@luoome/tools';
 
 // 内部 tool（save_report / sync_watchlist_source / migration_* 等）
@@ -25,25 +25,12 @@ export const selectMcpTools = <
   );
 
 /**
- * 从 env 解析暴露面。LUOOME_EXPOSE_TRADE==='true' 直接抛错：
+ * 暴露面统一由 core 解析：LUOOME_EXPOSE_TRADE==='true' 直接抛错，
  * trade 永不通过 MCP 暴露（AGENTS.md 硬约束，非配置项）。
  */
 export const resolveAllowedSideEffects = (
   env: NodeJS.ProcessEnv = process.env,
-): ReadonlySet<SideEffect> => {
-  if (env.LUOOME_EXPOSE_TRADE === 'true') {
-    throw new Error(
-      'LUOOME_EXPOSE_TRADE=true is not allowed: trade tools are never exposed over MCP ' +
-        '(AGENTS.md「副作用与权限」硬约束)。',
-    );
-  }
-  const allowed = new Set<SideEffect>();
-  if (env.LUOOME_EXPOSE_READ !== 'false') allowed.add('read');
-  if (env.LUOOME_EXPOSE_ADVICE !== 'false') allowed.add('advice');
-  if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
-  if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
-  return allowed;
-};
+): ReadonlySet<SideEffect> => resolveExposure(env).sideEffects;
 
 export type McpDependency = ToolDependency;
 export const MCP_TOOL_DEPENDENCIES: Readonly<Record<string, readonly McpDependency[]>> =

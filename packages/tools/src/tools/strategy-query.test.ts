@@ -596,11 +596,6 @@ describe('strategy-query', () => {
       mode: 'replay',
       scope: 'evaluation',
       inputSnapshot: { evaluationSessionId: 'evaluation-1' },
-      publication: {
-        status: 'non-publishing',
-        reasons: ['evaluation-scope'],
-        decidedAt: published.data.run.finishedAt ?? published.data.run.startedAt,
-      },
     };
     await ctx.repos.strategyRun.commitRun({
       run: evaluationRun,
