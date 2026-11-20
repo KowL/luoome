@@ -827,6 +827,3 @@ const formatYmd = (d: Date): string => {
   const day = d.getUTCDate().toString().padStart(2, '0');
   return `${y}${m}${day}`;
 };
-
-// Re-export 类型供 Manager 用
-export type { DailyBar, DateRange, IndexQuote, Quote };
