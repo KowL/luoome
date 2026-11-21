@@ -48,9 +48,25 @@ describe('plugin enablement file', () => {
     expect(store.isEnabled('business.watch-monitoring')).toBe(false);
   });
 
-  it('rejects unknown plugin ids instead of treating them as enabled', () => {
+  it('drops unknown plugin ids instead of invalidating the whole file', () => {
     const dir = home();
-    write(dir, { version: 1, entries: { 'not.a.plugin': { enabled: true } } });
+    write(dir, {
+      version: 1,
+      entries: {
+        'not.a.plugin': { enabled: true },
+        'business.analysis': { enabled: true },
+      },
+    });
+    const store = new PluginConfigStore(join(dir, 'plugins.json'));
+    const read = store.read();
+    expect(read.ok).toBe(true);
+    expect(read.ok && Object.keys(read.config.entries)).toEqual(['business.analysis']);
+    expect(store.isEnabled('business.analysis')).toBe(true);
+  });
+
+  it('still rejects a known id with a malformed entry', () => {
+    const dir = home();
+    write(dir, { version: 1, entries: { 'business.analysis': { enabled: 'yes' } } });
     const store = new PluginConfigStore(join(dir, 'plugins.json'));
     expect(store.read()).toEqual({ ok: false, reason: 'invalid' });
   });

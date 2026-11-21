@@ -7,10 +7,17 @@ import { z } from 'zod';
 
 /** 只读的启用清单：手写 `plugins.json`，进程启动时生效，没有管理接口。 */
 const EntrySchema = z.object({ enabled: z.boolean() }).passthrough();
+// 手写文件的常见腐化是残留已下线插件的 key；zod 的 partialRecord 会把未知 key 判成
+// 整份 invalid，于是一个旧条目就让所有行情源一起失效。这里先按当前清单过滤，再校验。
+const knownEntries = (raw: unknown): unknown => {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const known = new Set<string>(MANAGED_PLUGIN_IDS);
+  return Object.fromEntries(Object.entries(raw).filter(([id]) => known.has(id)));
+};
 export const PluginConfigSchema = z
   .object({
     version: z.literal(1),
-    entries: z.partialRecord(z.enum(MANAGED_PLUGIN_IDS), EntrySchema),
+    entries: z.preprocess(knownEntries, z.partialRecord(z.enum(MANAGED_PLUGIN_IDS), EntrySchema)),
   })
   .passthrough();
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;
