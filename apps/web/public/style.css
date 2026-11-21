@@ -10970,6 +10970,18 @@ room-index-minutes small, .minute-axis { color: var(--muted); font-size: 11px; }
 .minute-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .minute-card { border-left: 2px solid var(--border); padding-left: 9px; min-width: 0; }
 .minute-card strong, .minute-card b, .minute-card small { display: block; }
+/* 上游冷却时沿用上一次成功的分时：名称右侧标「滞后」，线照画。 */
+.minute-head { display: flex; align-items: baseline; gap: 5px; }
+.minute-stale {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
 .minute-card b { font: 600 18px/1.4 ui-monospace, monospace; }
 .minute-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
 .minute-change { font: 600 12px/1.4 ui-monospace, monospace; font-variant-numeric: tabular-nums; }

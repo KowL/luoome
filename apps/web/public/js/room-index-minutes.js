@@ -31,8 +31,14 @@ function fetchIndices() {
 }
 
 function minuteCard(def, response, quote) {
-  const card = el('div', 'minute-card', [el('strong', '', def.name)]);
   const data = response.data;
+  // 上游冷却时服务端会复用上一次成功的分时并标 stale：线照画，只在名称旁标滞后。
+  const card = el('div', 'minute-card', [
+    el('div', 'minute-head', [
+      el('strong', '', def.name),
+      data?.stale === true ? el('span', 'minute-stale', '滞后') : null,
+    ]),
+  ]);
   const points = (data?.points ?? []).filter(
     (point) =>
       Number.isFinite(point.price) && point.price > 0 && Number.isFinite(Date.parse(point.time)),
@@ -105,8 +111,16 @@ if (globalThis.customElements && !customElements.get('room-index-minutes')) {
       }
       async refresh() {
         if (document.hidden || !this.getClientRects().length) return;
+        if (Date.now() < (this.retryAt ?? 0)) return;
         const grid = this.querySelector('.minute-grid');
         const results = await fetchIndices();
+        // 四条全挂或全在复用旧数据，说明上游正在限流：按 1→2→5 分钟退避，
+        // 别让 1 分钟一次的失败重试继续压冷却中的公开源。
+        const failed = results.every((r) => !r.ok || r.data?.stale === true);
+        this.failures = failed ? (this.failures ?? 0) + 1 : 0;
+        this.retryAt = failed
+          ? Date.now() + Math.min(minuteMs * 2 ** (this.failures - 1), 5 * minuteMs)
+          : 0;
         const quotes = this.indexes ?? [];
         if (grid.isConnected)
           grid.replaceChildren(

@@ -4532,6 +4532,49 @@ describe('Web 指数分时 API', () => {
     );
     expect(r.status).toBe(502);
   });
+
+  it('上游转入冷却后复用上次成功的分时，并标 stale', async () => {
+    const ctx = await buildTestContext();
+    let cooling = false;
+    const flakyMarket = {
+      name: 'stub-market',
+      fetchIntradayMinutes: async (stockId: string) => {
+        if (cooling) throw new Error('public market request cooling down');
+        return [
+          {
+            stockId,
+            time: new Date('2026-08-21T01:31:00Z'),
+            price: 3880.5,
+            cumVolume: 120_000,
+            cumAmount: 465_660_000,
+            source: 'tencent',
+          },
+        ];
+      },
+    };
+    const testApp = createWebApp({
+      ...ctx,
+      adapters: { ...ctx.adapters, market: flakyMarket as never },
+    });
+    const first = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(first.status).toBe(200);
+
+    cooling = true;
+    const second = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as {
+      ok: boolean;
+      data?: { stale?: boolean; staleAt?: string; points?: { price: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.stale).toBe(true);
+    expect(typeof body.data?.staleAt).toBe('string');
+    expect(body.data?.points?.[0]?.price).toBe(3880.5);
+  });
 });
 
 describe('行情页 vendor 与 SPA 路由（stock-market-view §12.1 / §14.3）', () => {

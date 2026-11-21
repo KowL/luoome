@@ -439,7 +439,8 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    *
    * 参数：code (必填) 指数代码，白名单见 INDEX_INTRADAY_STOCK_IDS
    * 降级：数据源不支持 → { ok: true, data: { supported: false, points: [] } }（200）；
-   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   * 上游限流/不可达且 30 分钟内有成功响应 → 复用上次结果并标 stale（200），
+   * 否则 tool 返回 adapter_error；web 包成 HTTP 502。
    */
   const INDEX_INTRADAY_STOCK_IDS: Readonly<Record<string, string>> = {
     '000001': '000001.SH', // 上证指数
@@ -448,6 +449,13 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
     '000300': '000300.SH', // 沪深300
     '000688': '000688.SH', // 科创50
   };
+  // 分时最近一次成功响应：公开源（eastmoney）进入冷却窗口时用它兜底，
+  // 卡片继续画线、只把数据标成滞后，不会整块退化成「分时暂不可用」。
+  const intradayCache = new Map<
+    string,
+    { readonly data: Record<string, unknown>; readonly at: number }
+  >();
+  const INTRADAY_STALE_MS = 30 * 60_000;
   app.get('/api/market/indices/intraday', async (c) => {
     const code = c.req.query('code') ?? '';
     const stockId = INDEX_INTRADAY_STOCK_IDS[code];
@@ -462,8 +470,21 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
       });
     }
     const r = await invokeTool('fetch_intraday_minutes', { stockId });
-    if (r.ok) return jsonResult(r);
+    if (r.ok) {
+      intradayCache.set(stockId, {
+        data: (r.data ?? {}) as Record<string, unknown>,
+        at: Date.now(),
+      });
+      return jsonResult(r);
+    }
     if (r.error.kind === 'invalid_input') return jsonResult(r);
+    const cached = intradayCache.get(stockId);
+    if (cached !== undefined && Date.now() - cached.at < INTRADAY_STALE_MS) {
+      return jsonResult({
+        ok: true,
+        data: { ...cached.data, stale: true, staleAt: new Date(cached.at).toISOString() },
+      });
+    }
     // 解析 / 上游错误 → 502
     return new Response(JSON.stringify(r), {
       status: 502,
