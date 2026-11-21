@@ -532,7 +532,7 @@ DSH Chat 路径（当前唯一 Web 对话运行时）：Bun Web → 独立 Node 
 DSH 模型请求通过独立鉴权的 Bun 代理转发 SSE 并读取尾部 usage，
 未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
 
-DSH 当前每轮从 Luoome 的可信历史重建临时 Session，历史超过既有窗口时明确拒绝，尚无持久 Session 恢复。
+DSH 当前每轮从 Luoome 的可信历史重建临时 Session，尚无持久 Session 恢复。新消息使历史超过既有窗口时，Web 在落库前明确要求通过可编辑交接摘要新建关联会话；失败回答可用同一用户消息重试，不静默截断历史。会话消息通过游标分页读取，界面可加载完整历史。
 实时事件和持久消息按 Agent/message/attempt 身份合并为现有 UI Message Stream；同会话在执行及回答保存期间保持占用。
 停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与用量；失败不自动切换运行时重跑。
 开发开关、固定产物与启动命令见 [DSH 运行底座](../infra/dsh/README.md)，任务与验收边界见

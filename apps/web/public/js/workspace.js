@@ -177,8 +177,43 @@ export const mountWorkspaceChatRoute = () => {
   if (back) back.hidden = !location.hash.includes('from=workspace');
 };
 
-export const openWorkspaceDiscussion = (_subjects = [], prompt = '') => {
-  if (prompt) sessionStorage.setItem('luoome:chat-prompt', prompt);
+const WORKSPACE_DRAFT_KEY = 'luoome:workspace-chat-draft';
+const CHAT_LAUNCH_KEY = 'luoome:chat-launch';
+const workspaceIdentity = () => `local:${getAccountId()}`;
+
+const saveWorkspaceDraft = () => {
+  try {
+    sessionStorage.setItem(
+      WORKSPACE_DRAFT_KEY,
+      JSON.stringify({
+        identity: workspaceIdentity(),
+        draft: $('#workspace-ask-input')?.value ?? '',
+      }),
+    );
+  } catch {
+    /* 当前浏览器不支持草稿恢复。 */
+  }
+};
+
+const clearWorkspaceDraft = () => {
+  const input = $('#workspace-ask-input');
+  if (input !== null) input.value = '';
+  try {
+    sessionStorage.removeItem(WORKSPACE_DRAFT_KEY);
+  } catch {
+    /* 无可清理草稿。 */
+  }
+};
+
+export const openWorkspaceDiscussion = (subjects = [], prompt = '', { send = false } = {}) => {
+  try {
+    sessionStorage.setItem(
+      CHAT_LAUNCH_KEY,
+      JSON.stringify({ identity: workspaceIdentity(), subjects, prompt, send }),
+    );
+  } catch {
+    /* 同页路由仍会继续，刷新后的草稿恢复不可用时由输入框保留当前内容。 */
+  }
   location.hash = '#chat?from=workspace';
 };
 
@@ -194,19 +229,41 @@ export const initInvestmentWorkspace = () => {
       weekday: 'long',
     }).format(new Date());
   }
-  $('#workspace-ask')?.addEventListener('click', () => void openWorkspaceDiscussion());
+  const input = $('#workspace-ask-input');
+  try {
+    const recovery = JSON.parse(sessionStorage.getItem(WORKSPACE_DRAFT_KEY) ?? 'null');
+    if (recovery?.identity === workspaceIdentity() && input !== null)
+      input.value = recovery.draft ?? '';
+  } catch {
+    /* 无可恢复草稿。 */
+  }
+  $('#workspace-ask')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const prompt = input?.value.trim() ?? '';
+    if (prompt.length === 0) {
+      input?.focus();
+      return;
+    }
+    openWorkspaceDiscussion([], prompt, { send: true });
+  });
+  $('#workspace-ask-open')?.addEventListener('click', () => {
+    openWorkspaceDiscussion([], input?.value ?? '');
+  });
+  input?.addEventListener('input', saveWorkspaceDraft);
   document.querySelectorAll('[data-workspace-prompt]').forEach((button) => {
-    button.addEventListener(
-      'click',
-      () => void openWorkspaceDiscussion([], button.dataset.workspacePrompt),
-    );
+    button.addEventListener('click', () => {
+      if (input !== null) {
+        input.value = button.dataset.workspacePrompt ?? '';
+        input.focus();
+        saveWorkspaceDraft();
+      }
+    });
   });
-  $('#workspace-expand')?.addEventListener('click', () => {
-    location.hash = '#chat?from=workspace';
-  });
+  document.addEventListener('luoome:chat-home-draft-clear', clearWorkspaceDraft);
   $('#chat-return')?.addEventListener('click', () => history.back());
   document.addEventListener('luoome:identity-cleared', () => {
     version += 1;
+    clearWorkspaceDraft();
     for (const id of [
       'workspace-holdings',
       'workspace-directions',
@@ -220,5 +277,4 @@ export const initInvestmentWorkspace = () => {
   document.addEventListener('luoome:workspace-updated', () => void renderInvestmentWorkspace());
 };
 
-// re-export for callers that still mount chat inline
 export { initChat };

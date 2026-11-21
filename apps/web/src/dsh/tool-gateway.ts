@@ -259,9 +259,19 @@ export class ToolGateway {
       if (run.scope.check(caller, this.#clock()) !== null) return denied();
       // Closures own business parsing/transforms; passing parsed.data would apply them twice.
       const result = await tool.execute(structuredClone(call.input));
-      const output = JSON.parse(
-        encodeGatewayJson(result.output, this.#limits.maxOutputBytes, true),
-      ) as JsonValue;
+      let output: JsonValue;
+      try {
+        output = JSON.parse(
+          encodeGatewayJson(result.output, this.#limits.maxOutputBytes, true),
+        ) as JsonValue;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'json-size-limit')
+          return rejected(
+            'invalid_request',
+            `Tool result exceeds ${this.#limits.maxOutputBytes} bytes. Retry with narrower filters or a smaller pagination limit.`,
+          );
+        throw error;
+      }
       const reply = freezeJson(
         ToolReplySchema.parse({
           protocolVersion: PROTOCOL_VERSION,

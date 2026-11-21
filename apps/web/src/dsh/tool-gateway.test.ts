@@ -445,11 +445,26 @@ describe('ToolGateway', () => {
     ]) {
       const fixture = setup({ execute, gatewayOptions: { maxOutputBytes: 100 } });
       const result = await fixture.gateway.execute(fixture.caller, fixture.call);
-      expect(result).toMatchObject({ error: { code: 'runtime_failed' } });
       expect(JSON.stringify(result)).not.toContain('secret');
       expect(await fixture.gateway.execute(fixture.caller, fixture.call)).toEqual(result);
       expect(fixture.execute).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it('tells the model to narrow an oversized query without executing it again', async () => {
+    const fixture = setup({
+      execute: async () => ({ ok: true, output: { text: '中'.repeat(100) } }),
+      gatewayOptions: { maxOutputBytes: 100 },
+    });
+    const result = await fixture.gateway.execute(fixture.caller, fixture.call);
+    expect(result).toMatchObject({
+      error: {
+        code: 'invalid_request',
+        message: expect.stringContaining('narrower filters or a smaller pagination limit'),
+      },
+    });
+    expect(await fixture.gateway.execute(fixture.caller, fixture.call)).toEqual(result);
+    expect(fixture.execute).toHaveBeenCalledTimes(1);
   });
 
   it('enforces date wire projection while passing raw JSON to the original callable schema', async () => {

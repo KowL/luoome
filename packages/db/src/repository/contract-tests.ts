@@ -5142,6 +5142,16 @@ export const registerRepositoryContractTests = (
           '_a',
           'a',
         ]);
+        expect(
+          (await repos.chat.listMessages('c1', 2, { createdAt: T1, id: '_a' })).map(
+            (message) => message.id,
+          ),
+        ).toEqual(['B', 'Za']);
+        expect(
+          (await repos.chat.listMessages('c1', 2, { createdAt: T1, id: 'Za' })).map(
+            (message) => message.id,
+          ),
+        ).toEqual(['B']);
       });
 
       it('截取最近消息并稳定排序；草案状态原子更新不会移动消息', async () => {

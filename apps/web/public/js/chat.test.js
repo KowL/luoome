@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { setAccountId } from './api.js';
 
 import {
+  draftCard,
   draftDecisionPath,
   draftEditPrefill,
   draftFromPart,
@@ -89,7 +90,13 @@ describe('chat message whitespace', () => {
       { id: 'saved-user', role: 'user', parts: [{ type: 'text', text: '继续研究' }] },
     ]);
     expect(entries[0]).toMatchObject({ type: 'msg', role: 'user', content: '继续研究' });
-    expect(entries.at(-1)?.text).toContain('不会自动重发操作');
+    expect(entries.at(-1)).toMatchObject({
+      type: 'msg',
+      role: 'assistant',
+      failed: true,
+      retry: { text: '继续研究', messageId: 'saved-user' },
+    });
+    expect(entries.at(-1)?.content).toContain('不会自动重发操作');
   });
   it('移除 AI SDK / think 清理后残留的开头空行', () => {
     expect(trimLeadingChatWhitespace('\n\n  \n好的，我来查看。')).toBe('好的，我来查看。');
@@ -116,6 +123,55 @@ const draftsIn = (entries) =>
   entries.filter((entry) => entry.type === 'drafts').flatMap((entry) => entry.drafts);
 
 describe('草案确认闭环', () => {
+  it('成功草案渲染为操作记录，不依赖未定义的流式状态', () => {
+    const originals = new Map(
+      ['document', 'Node'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+    );
+    class FakeNode {
+      constructor(tag) {
+        this.tag = tag;
+        this.children = [];
+        this.className = '';
+        this.textContent = '';
+      }
+
+      append(...nodes) {
+        this.children.push(...nodes);
+      }
+
+      get firstElementChild() {
+        return this.children[0] ?? null;
+      }
+    }
+    try {
+      Object.defineProperty(globalThis, 'Node', { configurable: true, value: FakeNode });
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: {
+          createElement: (tag) => new FakeNode(tag),
+          createTextNode: (text) => new FakeNode(text),
+        },
+      });
+      const card = draftCard({
+        tool: 'create_watchlist',
+        summary: '创建观察列表',
+        input: {},
+        settlement: {
+          status: 'succeeded',
+          tool: 'create_watchlist',
+          result: { ok: true, data: {} },
+        },
+      });
+      expect(card.firstElementChild.textContent).toBe('操作记录 · 创建 Watchlist');
+      expect(card.children.at(-1).className).toBe('chat-draft-settled ok');
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else delete globalThis[key];
+      }
+    }
+  });
+
   it('按消息与调用标识分别恢复状态，同名工具的其他草案仍待确认', () => {
     const result = { ok: true, data: { watchlist: { id: 'watchlist-real' } } };
     const settlement = {
@@ -342,6 +398,31 @@ describe('取消标注还原', () => {
       { toolCallId: 'call-1', ok: true },
     ]);
     expect(draftsIn(entries)[0]).toMatchObject({ messageId: 'a1', toolCallId: 'call-1' });
+  });
+});
+
+describe('失败反馈', () => {
+  it('已有部分回答时也保留服务端的具体失败原因', () => {
+    const entries = persistedFeed([
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: '核对风险' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: '我先核对持仓事实。' },
+          {
+            type: 'data-luoome-stream-error',
+            data: { message: '对话内容超过本地保存上限，请新建会话后缩小查询范围。' },
+          },
+        ],
+      },
+    ]);
+    const assistant = entries.find((entry) => entry.type === 'msg' && entry.role === 'assistant');
+    expect(assistant).toMatchObject({
+      content: '我先核对持仓事实。',
+      failed: true,
+      failure: '对话内容超过本地保存上限，请新建会话后缩小查询范围。',
+    });
   });
 });
 

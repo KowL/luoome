@@ -31,6 +31,34 @@ describe('侧栏与路由结构', () => {
     expect(appJs).toContain("document.querySelectorAll('.nav-item')");
   });
 
+  it('AI 助手不重复占用一级菜单，首页真实输入只负责发起并交接工作区', () => {
+    expect(html).not.toContain('href="#chat" data-group="chat"');
+    expect(html).toContain('<form id="workspace-ask"');
+    expect(html).toContain('id="workspace-ask-input"');
+    expect(html).not.toContain('id="workspace-discussion"');
+    expect(appJs).toContain("id: 'chat'");
+    const workspaceJs = read('./workspace.js');
+    expect(workspaceJs).toContain('subjects, prompt, send');
+    expect(workspaceJs).not.toContain('workspace-expand');
+  });
+
+  it('会话列表位于设置下方并作为全局会话入口，窄屏保留会话抽屉按钮', () => {
+    const settingsIndex = html.indexOf('href="#settings" data-group="settings"');
+    const railIndex = html.indexOf('id="chat-session-rail"');
+    const workspaceIndex = html.indexOf('id="chat-workspace"');
+    expect(settingsIndex).toBeGreaterThan(-1);
+    expect(railIndex).toBeGreaterThan(settingsIndex);
+    expect(workspaceIndex).toBeGreaterThan(railIndex);
+    expect(html.match(/id="chat-session-rail"/g)).toHaveLength(1);
+    expect(html).toContain('class="chat-session-rail sidebar-chat"');
+    expect(html).toContain('id="chat-sessions-close"');
+    expect(html).toContain('id="sidebar-sessions-toggle"');
+    expect(appJs).not.toContain("sessionRail.hidden = safe !== 'chat'");
+    expect(appJs).toContain('refreshSessionList');
+    expect(read('../style.css')).toContain('.sidebar-chat.sessions-open');
+    expect(read('./chat.js')).toContain("location.hash = '#chat'");
+  });
+
   it('换页回到页面顶部，同页重绘（自动刷新 / 账户切换）不动滚动位置', () => {
     expect(appJs).toContain('if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });');
     expect(appJs).toContain('shownRoute = safe;');

@@ -702,7 +702,11 @@ export interface ChatRepository {
     message: ChatMessage,
     expectedParts: ChatMessage['parts'],
   ): Promise<boolean>;
-  listMessages(sessionId: string, limit?: number): Promise<readonly ChatMessage[]>;
+  listMessages(
+    sessionId: string,
+    limit?: number,
+    before?: { readonly createdAt: Date; readonly id: string },
+  ): Promise<readonly ChatMessage[]>;
 }
 
 export interface StrategyRepository {

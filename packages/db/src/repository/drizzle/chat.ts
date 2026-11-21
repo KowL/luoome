@@ -6,7 +6,7 @@ import {
   type ChatSession,
   InvariantError,
 } from '@luoome/core';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { chatMessages, chatSessions, type Schema } from '../../schema/index.js';
 
@@ -69,11 +69,22 @@ export class DrizzleChatRepository implements ChatRepository {
     );
   }
 
-  async listMessages(sessionId: string, limit = 200): Promise<readonly ChatMessage[]> {
+  async listMessages(
+    sessionId: string,
+    limit = 200,
+    before?: { readonly createdAt: Date; readonly id: string },
+  ): Promise<readonly ChatMessage[]> {
+    const cursor =
+      before === undefined
+        ? undefined
+        : or(
+            lt(chatMessages.createdAt, before.createdAt),
+            and(eq(chatMessages.createdAt, before.createdAt), lt(chatMessages.id, before.id)),
+          );
     return this.db
       .select()
       .from(chatMessages)
-      .where(eq(chatMessages.sessionId, sessionId))
+      .where(and(eq(chatMessages.sessionId, sessionId), cursor))
       .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(limit)
       .all()

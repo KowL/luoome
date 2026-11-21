@@ -21,7 +21,11 @@ export const registerChatRoutes = (app: Hono, deps: WebRouteDeps): void => {
     return callTool('create_chat_session', body);
   });
   app.get('/api/chat/sessions/:id', (c) =>
-    callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
+    callTool('get_chat_session', {
+      sessionId: c.req.param('id'),
+      messageLimit: Number(c.req.query('limit') ?? '50'),
+      ...(c.req.query('cursor') === undefined ? {} : { cursor: c.req.query('cursor') }),
+    }),
   );
   app.patch('/api/chat/sessions/:id', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write']);

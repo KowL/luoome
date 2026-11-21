@@ -81,7 +81,7 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
     }
   }, 30_000);
 
-  it('refuses an oversized trusted history explicitly before any model request', async () => {
+  it('refuses an oversized trusted history and requires handoff before any model request', async () => {
     const fixture = await setup();
     const sessionId = await fixture.createSession();
     for (let index = 0; index < 20; index++)
@@ -94,9 +94,10 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
       });
     const response = await fixture.chat(sessionId, '查 002594 行情');
     expect(response.status).toBe(409);
+    expect(response.headers.get('x-luoome-chat-handoff')).toBe('required');
     expect(await response.json()).toMatchObject({
       ok: false,
-      error: { kind: 'llm_error', cause: expect.stringContaining('不能截断') },
+      error: { kind: 'invalid_input', message: expect.stringContaining('新建关联会话') },
     });
     expect(fixture.bodies).toHaveLength(0);
   }, 15_000);

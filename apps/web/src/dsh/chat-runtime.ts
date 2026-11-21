@@ -52,6 +52,13 @@ const blockedConversations = new Set<string>();
 const encoder = new TextEncoder();
 const denied = (): ToolError => ({ kind: 'permission_denied', required: 'dsh:active-run' });
 const ERROR_TEXT = '实验回答未完成，请读取已保存会话核对；本次任务不会自动重跑。';
+const publicFailureText = (error: unknown): string => {
+  if (error instanceof Error && error.message === 'DSH chat output limit exceeded')
+    return '对话内容超过本地保存上限。请新建会话，并用更小的时间范围或分页条件重新查询。';
+  if (error instanceof Error && error.message === 'DSH chat part limit exceeded')
+    return '本轮执行步骤过多，无法完整保存。请新建会话并拆分任务；已完成的工具操作不会自动重跑。';
+  return ERROR_TEXT;
+};
 export const DSH_CONTEXT_NOTICE = '实验模式：每轮根据已保存历史重建上下文，尚不支持执行中断恢复。';
 
 export class DshChatRuntime implements ChatStreamRuntime {
@@ -145,7 +152,12 @@ export class DshChatRuntime implements ChatStreamRuntime {
       notice: DSH_CONTEXT_NOTICE,
       runId,
     });
-    const gateway = new ToolGateway({ maxRuns: 1, maxCallsPerRun: 32, callTimeoutMs: 15_000 });
+    const gateway = new ToolGateway({
+      maxRuns: 1,
+      maxCallsPerRun: 32,
+      maxOutputBytes: 64_000,
+      callTimeoutMs: 15_000,
+    });
     let caller: GatewayCaller | undefined;
     let adapter: DshEventAdapter | undefined;
     let runtimeStopped = false;
@@ -263,6 +275,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     };
     void (async () => {
       let failed = false;
+      let failureText = ERROR_TEXT;
       let drained = false;
       try {
         await host.run(
@@ -290,8 +303,9 @@ export class DshChatRuntime implements ChatStreamRuntime {
           onBinding,
         );
         failed = (adapter?.terminal ?? startupTerminal) !== 'completed' || !runtimeStopped;
-      } catch {
+      } catch (error) {
         failed = true;
+        failureText = publicFailureText(error);
       } finally {
         gateway.revoke(runId);
         const stopped = await host.close();
@@ -314,7 +328,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
         executionStopped: drained,
       });
       if (failed && !cancelled)
-        projection.data('data-luoome-stream-error', { message: ERROR_TEXT });
+        projection.data('data-luoome-stream-error', { message: failureText });
       try {
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
@@ -332,24 +346,22 @@ export class DshChatRuntime implements ChatStreamRuntime {
         ]).finally(() => clearTimeout(timer));
       } catch {
         failed = true;
+        failureText = '回答保存失败，未保存草案不可确认；请重新读取会话核对。';
         blockedConversations.add(key);
-        emit({
-          type: 'error',
-          errorText: '回答保存失败，未保存草案不可确认；请重新读取会话核对。',
-        });
+        emit({ type: 'error', errorText: failureText });
       }
       if (drained) activeConversations.delete(key);
       if (cancelled) emit({ type: 'abort' });
-      else if (failed) emit({ type: 'error', errorText: ERROR_TEXT });
+      else if (failed) emit({ type: 'error', errorText: failureText });
       emit({ type: 'finish', finishReason: cancelled ? 'other' : failed ? 'error' : 'stop' });
       if (!detached) {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();
       }
-    })().catch(() => {
+    })().catch((error) => {
       blockedConversations.add(key);
       if (!detached) {
-        emit({ type: 'error', errorText: ERROR_TEXT });
+        emit({ type: 'error', errorText: publicFailureText(error) });
         controller.close();
       }
     });

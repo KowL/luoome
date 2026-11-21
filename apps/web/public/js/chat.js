@@ -26,18 +26,30 @@ let settling = false;
 let activeSubjects = [];
 let followOutput = true;
 let restoredIdentity = null;
+let activeMessageCount = 0;
+let olderCursor = null;
+let hasOlderMessages = false;
+let loadingOlder = false;
 const renderedEntries = new WeakMap();
 const CHAT_RECOVERY_KEY = 'luoome.workspace.chat';
+const CHAT_LAUNCH_KEY = 'luoome:chat-launch';
+const MAX_CONTEXT_MESSAGES = 20;
+const MESSAGE_PAGE_SIZE = 50;
 const chatIdentity = () => `local:${getAccountId()}`;
 const saveChatView = () => {
   try {
+    const previous = recoverChatView();
+    const drafts = { ...(previous?.drafts ?? {}) };
+    if (previous?.draft !== undefined && previous?.sessionId)
+      drafts[previous.sessionId] = previous.draft;
+    drafts[activeSessionId ?? 'new'] = $('#chat-input')?.value ?? '';
     sessionStorage.setItem(
       CHAT_RECOVERY_KEY,
       JSON.stringify({
         identity: chatIdentity(),
         sessionId: activeSessionId,
         subjects: activeSubjects,
-        draft: $('#chat-input')?.value ?? '',
+        drafts,
       }),
     );
   } catch {
@@ -53,6 +65,15 @@ const recoverChatView = () => {
     /* 无可恢复草稿。 */
   }
   return null;
+};
+const consumeChatLaunch = () => {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(CHAT_LAUNCH_KEY) ?? 'null');
+    sessionStorage.removeItem(CHAT_LAUNCH_KEY);
+    return value?.identity === chatIdentity() ? value : null;
+  } catch {
+    return null;
+  }
 };
 const renderSubjects = () => {
   const node = $('#chat-subjects');
@@ -73,13 +94,17 @@ const setDiscussionSubjects = (subjects) => {
   saveChatView();
   return true;
 };
-const mountChatView = (mode = 'full') => {
+const mountChatView = () => {
   const workspace = $('#chat-workspace');
-  const host = mode === 'inline' ? $('#workspace-discussion-body') : $('#route-chat');
+  const host = $('#route-chat');
   if (workspace === null || host === null) return;
   host.append(workspace);
-  workspace.classList.toggle('chat-inline', mode === 'inline');
   renderSubjects();
+};
+const setSessionsOpen = (open) => {
+  $('#chat-session-rail')?.classList.toggle('sessions-open', open);
+  $('#chat-sessions-toggle')?.setAttribute('aria-expanded', String(open));
+  $('#sidebar-sessions-toggle')?.setAttribute('aria-expanded', String(open));
 };
 const resetChatIdentity = () => {
   viewVersion += 1;
@@ -90,11 +115,15 @@ const resetChatIdentity = () => {
   activeAccountId = null;
   activeSessionId = null;
   activeSubjects = [];
+  activeMessageCount = 0;
+  olderCursor = null;
+  hasOlderMessages = false;
   restoredIdentity = null;
   feed.splice(0);
   sessions = [];
   try {
     sessionStorage.removeItem(CHAT_RECOVERY_KEY);
+    sessionStorage.removeItem(CHAT_LAUNCH_KEY);
   } catch {
     /* 无可清理。 */
   }
@@ -310,9 +339,7 @@ const draftCard = (draft) => {
     card.append(
       el(
         'p',
-        draft.settlement.status === 'succeeded' && !incomplete
-          ? 'chat-draft-settled ok'
-          : 'chat-draft-settled',
+        draft.settlement.status === 'succeeded' ? 'chat-draft-settled ok' : 'chat-draft-settled',
         settlementText(draft.settlement),
       ),
     );
@@ -364,37 +391,99 @@ const draftCard = (draft) => {
   return card;
 };
 
+const actionStatus = (action) =>
+  action.status === 'running'
+    ? '处理中'
+    : action.output?.__luoomeOutputOmitted === true
+      ? '结果已省略'
+      : action.ok
+        ? action.draft
+          ? '草案已生成'
+          : '已完成'
+        : '未完成';
+
+const actionDetails = (action) => {
+  const output = action.output?.data ?? action.output;
+  if (output === null || typeof output !== 'object') return [];
+  const details = [];
+  if (output.__luoomeOutputOmitted === true && typeof output.message === 'string')
+    details.push(output.message);
+  for (const key of ['summary', 'source', 'asOf', 'fetchedAt']) {
+    if (typeof output[key] === 'string' && output[key].length > 0)
+      details.push(
+        `${{ summary: '摘要', source: '来源', asOf: '数据时间', fetchedAt: '读取时间' }[key]}：${output[key]}`,
+      );
+  }
+  if (typeof action.output?.error?.message === 'string')
+    details.push(`失败原因：${action.output.error.message}`);
+  return details;
+};
+
+const actionSourceUrl = (action) => {
+  const output = action.output?.data ?? action.output;
+  const value = output?.url ?? output?.link;
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+};
+
 const usedActionsNode = (usedActions) => {
   const details = el('details', 'chat-used-actions');
+  const running = usedActions.filter((action) => action.status === 'running').length;
   details.append(
-    el(
-      'summary',
-      null,
-      `本轮动作：${usedActions.map((action) => toolLabel(action.tool)).join('、')}`,
-    ),
+    el('summary', null, [
+      el('span', 'chat-used-actions-title', `执行过程 · ${usedActions.length} 步`),
+      el(
+        'span',
+        `chat-action-summary-state${running > 0 ? ' running' : ''}`,
+        running > 0 ? `${running} 项处理中` : '查看工具与数据来源',
+      ),
+    ]),
   );
   details.append(
     el(
-      'ul',
-      null,
-      usedActions.map((action) =>
-        el(
-          'li',
-          null,
-          `${toolLabel(action.tool)} — ${
-            action.status === 'running'
-              ? '处理中…'
-              : action.ok
-                ? action.draft
-                  ? '草案已生成'
-                  : '成功'
-                : '失败'
-          }`,
-        ),
-      ),
+      'ol',
+      'chat-action-steps',
+      usedActions.map((action, index) => {
+        const item = el('li', `chat-action-step${action.status === 'running' ? ' running' : ''}`);
+        item.append(
+          el('div', 'chat-action-step-head', [
+            el('span', 'chat-action-step-index', String(index + 1).padStart(2, '0')),
+            el('span', 'chat-action-step-name', toolLabel(action.tool)),
+            el('span', `chat-action-step-status${action.ok ? ' ok' : ''}`, actionStatus(action)),
+          ]),
+        );
+        for (const detail of actionDetails(action))
+          item.append(el('p', 'chat-action-detail', detail));
+        const source = actionSourceUrl(action);
+        if (source !== null) {
+          const link = el('a', 'chat-evidence-source', '打开原始来源 ↗');
+          link.href = source;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          item.append(link);
+        }
+        return item;
+      }),
     ),
   );
   return details;
+};
+
+const copyMessage = async (entry, button) => {
+  try {
+    await navigator.clipboard.writeText(entry.content);
+    button.textContent = '已复制';
+  } catch {
+    button.textContent = '复制失败';
+  }
+  setTimeout(() => {
+    button.textContent = '复制';
+  }, 1600);
 };
 
 const renderEntry = (entry) => {
@@ -405,8 +494,39 @@ const renderEntry = (entry) => {
       `讨论：${entry.labels.length > 0 ? entry.labels.join(' / ') : '全局'}`,
     );
   if (entry.type === 'msg') {
-    const node = el('div', `chat-msg ${entry.role}`, entry.content);
-    if (entry.cancelled === true) node.append(el('span', 'chat-cancelled-mark', '已取消'));
+    const node = el('div', `chat-msg ${entry.role}${entry.failed ? ' failed' : ''}`, [
+      el('span', 'chat-msg-content', entry.content),
+    ]);
+    if (entry.cancelled === true) node.append(el('span', 'chat-cancelled-mark', '已中断'));
+    if (entry.failure) node.append(el('p', 'chat-msg-error', entry.failure));
+    if (entry.content.length > 0 || entry.retry !== undefined) {
+      const actions = el('div', 'chat-msg-actions');
+      if (entry.content.length > 0) {
+        const copy = el('button', 'chat-msg-action', '复制');
+        copy.type = 'button';
+        copy.addEventListener('click', () => void copyMessage(entry, copy));
+        actions.append(copy);
+      }
+      if (entry.retry !== undefined) {
+        const retry = el('button', 'chat-msg-action', '重试回答');
+        retry.type = 'button';
+        retry.disabled = sending || settling;
+        retry.addEventListener('click', () => void retryMessage(entry));
+        const edit = el('button', 'chat-msg-action', '编辑后重发');
+        edit.type = 'button';
+        edit.disabled = sending || settling;
+        edit.addEventListener('click', () => {
+          const input = $('#chat-input');
+          if (input !== null) {
+            input.value = entry.retry.text;
+            input.focus();
+            saveChatView();
+          }
+        });
+        actions.append(retry, edit);
+      }
+      node.append(actions);
+    }
     return node;
   }
   if (entry.type === 'note') return el('div', 'chat-msg system', entry.text);
@@ -420,12 +540,20 @@ const renderEntry = (entry) => {
 };
 
 const emptyState = () => {
-  const suggestions = [
-    '检查我的持仓、可用资金与集中度风险',
-    '帮我登记一笔入金，先核对账户和金额',
-    '研究 300857 的机会、风险和反证',
-    '创建一个观察清单，并设置价格提醒',
-  ];
+  const labels = activeSubjects.map((item) => item.label).join('、');
+  const suggestions =
+    labels.length > 0
+      ? [
+          `核对${labels}的最新事实，说明数据时间和缺口`,
+          `围绕${labels}整理支持依据、反证和主要风险`,
+          `总结${labels}当前结论的有效期与下一步`,
+        ]
+      : [
+          '检查我的持仓、可用资金与集中度风险',
+          '研究一个参与方向，先说明证据与覆盖范围',
+          '核对当前计划的有效版本、等待条件和跟踪状态',
+          '复盘近期建议与实际结果',
+        ];
   const chips = suggestions.map((text) => {
     const button = el('button', 'chat-suggestion', text);
     button.type = 'button';
@@ -434,6 +562,7 @@ const emptyState = () => {
       if (input !== null) {
         input.value = text;
         input.focus();
+        saveChatView();
       }
     });
     return button;
@@ -441,7 +570,7 @@ const emptyState = () => {
   return el('div', 'chat-empty-state', [
     el('div', 'chat-empty-mark', '◇'),
     el('span', 'section-kicker', 'LOCAL ADVISOR'),
-    el('h2', null, '用对话管理你的投资'),
+    el('h2', null, labels.length > 0 ? `正在讨论：${labels}` : '用对话管理你的投资'),
     el(
       'p',
       null,
@@ -449,6 +578,121 @@ const emptyState = () => {
     ),
     el('div', 'chat-suggestions', chips),
   ]);
+};
+
+let evidenceOpen = false;
+
+const renderEvidence = () => {
+  const panel = $('#chat-evidence-panel');
+  const content = $('#chat-evidence-content');
+  if (panel === null || content === null) return;
+  const sections = [];
+  if (activeSubjects.length > 0)
+    sections.push(
+      el('section', 'chat-evidence-section', [
+        el('h3', null, '讨论对象'),
+        el(
+          'ul',
+          null,
+          activeSubjects.map((item) => el('li', null, item.label)),
+        ),
+      ]),
+    );
+  const plans = feed.filter((entry) => entry.type === 'plan');
+  if (plans.length > 0)
+    sections.push(
+      el('section', 'chat-evidence-section', [
+        el('h3', null, '研究计划'),
+        el(
+          'ul',
+          null,
+          plans.flatMap((entry) => planCardLines(entry.route).map((line) => el('li', null, line))),
+        ),
+      ]),
+    );
+  const actions = feed
+    .filter((entry) => entry.type === 'actions')
+    .flatMap((entry) => entry.usedActions);
+  if (actions.length > 0)
+    sections.push(
+      el('section', 'chat-evidence-section', [
+        el('h3', null, '工具产物与来源'),
+        el(
+          'ul',
+          null,
+          actions.map((action) => {
+            const item = el('li', null, `${toolLabel(action.tool)} · ${actionStatus(action)}`);
+            for (const detail of actionDetails(action))
+              item.append(el('p', 'chat-action-detail', detail));
+            const source = actionSourceUrl(action);
+            if (source !== null) {
+              const link = el('a', 'chat-evidence-source', '打开原始来源');
+              link.href = source;
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              item.append(link);
+            }
+            return item;
+          }),
+        ),
+      ]),
+    );
+  const advice = feed
+    .filter((entry) => entry.type === 'drafts')
+    .flatMap((entry) => entry.drafts)
+    .map((draft) => draft.settlement?.result?.data?.advice)
+    .filter((item) => item !== undefined && item !== null);
+  for (const item of advice) {
+    const evidence = item.reasoning?.evidence ?? [];
+    const counter = item.reasoning?.counterEvidence ?? [];
+    const risks = item.risks ?? [];
+    sections.push(
+      el('section', 'chat-evidence-section', [
+        el('h3', null, '建议依据与风险'),
+        ...(evidence.length > 0
+          ? [
+              el(
+                'ul',
+                null,
+                evidence.map((line) => el('li', null, line)),
+              ),
+            ]
+          : []),
+        ...(counter.length > 0
+          ? [
+              el('h3', null, '反证'),
+              el(
+                'ul',
+                null,
+                counter.map((line) => el('li', null, line)),
+              ),
+            ]
+          : []),
+        ...(risks.length > 0
+          ? [
+              el('h3', null, '风险'),
+              el(
+                'ul',
+                null,
+                risks.map((line) => el('li', null, line)),
+              ),
+            ]
+          : []),
+      ]),
+    );
+  }
+  const hasContent = sections.length > 0;
+  panel.hidden = !evidenceOpen || !hasContent;
+  $('#chat-workspace')?.classList.toggle('evidence-open', !panel.hidden);
+  const toggle = $('#chat-evidence-toggle');
+  if (toggle !== null) {
+    toggle.disabled = !hasContent;
+    toggle.setAttribute('aria-expanded', String(!panel.hidden));
+  }
+  mount(
+    content,
+    hasContent ? sections : el('p', 'muted', '发起研究后，这里会显示讨论对象、计划和真实依据。'),
+  );
 };
 
 const renderChat = () => {
@@ -460,7 +704,7 @@ const renderChat = () => {
       ? [emptyState()]
       : feed.map((entry) => {
           const signature = JSON.stringify(
-            entry.type === 'drafts' ? [entry, sending, settling] : entry,
+            entry.type === 'drafts' || entry.type === 'msg' ? [entry, sending, settling] : entry,
           );
           let rendered = renderedEntries.get(entry);
           if (rendered?.signature !== signature) {
@@ -480,6 +724,23 @@ const renderChat = () => {
   if (sendButton !== null) sendButton.disabled = sending || settling;
   const newButton = $('#chat-new-session');
   if (newButton !== null) newButton.disabled = sending || settling;
+  const older = $('#chat-load-older');
+  if (older !== null) {
+    older.hidden = !hasOlderMessages;
+    older.disabled = loadingOlder;
+    older.textContent = loadingOlder ? '正在读取…' : '加载更早消息';
+  }
+  const handoff = $('#chat-handoff');
+  if (handoff !== null) {
+    handoff.hidden = activeMessageCount < MAX_CONTEXT_MESSAGES - 4;
+    const text = $('#chat-handoff-text');
+    if (text !== null)
+      text.textContent =
+        activeMessageCount >= MAX_CONTEXT_MESSAGES
+          ? '当前会话已到本轮上下文上限，请通过交接摘要继续。'
+          : '当前会话接近本轮上下文上限，可提前整理交接摘要。';
+  }
+  renderEvidence();
   log.setAttribute('aria-busy', String(sending || settling));
 };
 
@@ -513,7 +774,7 @@ const deleteSession = async (session) => {
   if (sending || settling) return;
   const confirmed = await confirmDialog({
     title: '删除会话',
-    message: `删除会话「${session.title}」及全部消息？已确认共识和持续跟踪会保留，可在首页单独修改或暂停。`,
+    message: `只删除会话「${session.title}」及其消息，不删除关联标的、组合、预警、研究产物或已确认的投资记录。`,
     confirmLabel: '删除',
     danger: true,
   });
@@ -527,12 +788,18 @@ const deleteSession = async (session) => {
   }
   if (activeSessionId === session.id) {
     activeSessionId = null;
+    activeSubjects = [];
+    activeMessageCount = 0;
+    olderCursor = null;
+    hasOlderMessages = false;
     feed.splice(0);
+    const input = $('#chat-input');
+    if (input !== null) input.value = draftFor('new');
+    renderSubjects();
   }
   await refreshSessions();
-  const next = sessions[0];
-  if (next !== undefined) await selectSession(next.id);
-  else renderChat();
+  renderChat();
+  saveChatView();
 };
 
 const renderSessions = () => {
@@ -545,17 +812,26 @@ const renderSessions = () => {
       : sessions.map((session) => {
           const open = el('button', 'chat-session-open', [
             el('span', 'chat-session-title', session.title),
-            el('span', 'chat-session-time', formatSessionTime(session.updatedAt)),
+            el(
+              'span',
+              'chat-session-time',
+              sending && session.id === activeSessionId
+                ? '正在回答…'
+                : formatSessionTime(session.updatedAt),
+            ),
           ]);
           open.type = 'button';
+          open.disabled = sending || settling;
           open.addEventListener('click', () => void selectSession(session.id));
           const rename = el('button', 'chat-session-action', '✎');
           rename.type = 'button';
           rename.title = '重命名';
+          rename.disabled = sending || settling;
           rename.addEventListener('click', () => void renameSession(session));
           const remove = el('button', 'chat-session-action danger', '×');
           remove.type = 'button';
           remove.title = '删除';
+          remove.disabled = sending || settling;
           remove.addEventListener('click', () => void deleteSession(session));
           return el('div', `chat-session-item${session.id === activeSessionId ? ' active' : ''}`, [
             open,
@@ -581,15 +857,25 @@ const persistedFeed = (messages, context = {}) => {
     const cancelled =
       message.role === 'assistant' &&
       message.parts.some((part) => part.type === 'data-luoome-cancelled');
-    if (visibleText.trim().length > 0 || cancelled) {
+    const streamError = message.parts.find((part) => part.type === 'data-luoome-stream-error');
+    if (visibleText.trim().length > 0 || cancelled || streamError !== undefined) {
       const subjectPart = message.parts.find((part) => part.type === 'data-luoome-subjects');
       if (subjectPart !== undefined)
         result.push({ type: 'subjects', labels: subjectPart.data?.labels ?? [] });
       result.push({
         type: 'msg',
+        messageId: message.id,
         role: message.role,
-        content: visibleText,
+        content: visibleText || (streamError === undefined ? '回答已中断。' : '回答未完成。'),
         ...(cancelled ? { cancelled: true } : {}),
+        ...(streamError !== undefined
+          ? {
+              failed: true,
+              failure: String(
+                streamError.data?.message ?? '回答未完成，请重试；系统不会自动重发操作。',
+              ),
+            }
+          : {}),
       });
     }
     if (message.role !== 'assistant') continue;
@@ -604,14 +890,13 @@ const persistedFeed = (messages, context = {}) => {
       if (part.type === 'data-luoome-runtime' && typeof part.data?.notice === 'string')
         result.push({ type: 'note', text: part.data.notice });
       if (part.type === 'data-luoome-usage') result.push({ type: 'usage', metadata: part.data });
-      if (part.type === 'data-luoome-stream-error') {
-        result.push({ type: 'note', text: String(part.data?.message ?? 'AI 响应失败，请重试') });
-      }
       if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) continue;
       const output = part.output;
       actions.push({
         toolCallId: part.toolCallId,
         tool: part.type.slice(5),
+        input: part.input,
+        output,
         status: ['input-streaming', 'input-available'].includes(part.state)
           ? 'running'
           : 'finished',
@@ -628,7 +913,27 @@ const persistedFeed = (messages, context = {}) => {
     if (actions.length > 0) result.push({ type: 'actions', usedActions: actions });
     if (drafts.length > 0) result.push({ type: 'drafts', drafts });
   }
+  let lastUser = null;
+  let retryEntry = null;
+  for (const entry of result) {
+    if (entry.type !== 'msg') continue;
+    if (entry.role === 'user') {
+      if (retryEntry !== null) delete retryEntry.retry;
+      retryEntry = null;
+      lastUser = entry;
+      continue;
+    }
+    if ((entry.cancelled === true || entry.failed === true) && lastUser?.messageId !== undefined) {
+      if (retryEntry !== null) delete retryEntry.retry;
+      entry.retry = { text: lastUser.content, messageId: lastUser.messageId };
+      retryEntry = entry;
+    } else if (retryEntry !== null) {
+      delete retryEntry.retry;
+      retryEntry = null;
+    }
+  }
   if (
+    context.suppressPendingNote !== true &&
     messages.at(-1)?.role === 'user' &&
     legacySettlementText(
       messages
@@ -637,46 +942,76 @@ const persistedFeed = (messages, context = {}) => {
         .map((part) => part.text)
         .join(''),
     ) === null
-  )
+  ) {
+    const pending = result.findLast((entry) => entry.type === 'msg' && entry.role === 'user');
     result.push({
-      type: 'note',
-      text: '这个问题已保存，回答尚未完成或仍在生成。请稍后核对会话状态；系统不会自动重发操作。',
+      type: 'msg',
+      role: 'assistant',
+      failed: true,
+      content: '这个问题已保存，回答尚未完成或已中断。可重试回答；系统不会自动重发操作。',
+      ...(pending?.messageId === undefined
+        ? {}
+        : { retry: { text: pending.content, messageId: pending.messageId } }),
     });
+  }
   return result;
 };
 
+const draftFor = (sessionId) => {
+  const recovery = recoverChatView();
+  if (recovery?.drafts?.[sessionId] !== undefined) return recovery.drafts[sessionId];
+  return recovery?.sessionId === sessionId ? (recovery.draft ?? '') : '';
+};
+
 const selectSession = async (sessionId) => {
-  if (sending || settling || sessionId === activeSessionId) return;
+  if (sending || settling) return;
+  if (sessionId === activeSessionId) {
+    if (!location.hash.startsWith('#chat')) location.hash = '#chat';
+    return;
+  }
+  saveChatView();
   const version = viewVersion;
   const accountId = activeAccountId ?? getAccountId();
-  const result = await callApi(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+  const result = await callApi(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}?limit=${MESSAGE_PAGE_SIZE}`,
+  );
   if (version !== viewVersion) return;
   if (!result.ok) {
     await alertDialog('读取会话失败', resultErrorText(result, '未知错误'));
     return;
   }
+  const messages = result.data.messages ?? [];
   activeSessionId = sessionId;
-  const subjectPart = [...(result.data.messages ?? [])]
+  activeMessageCount = messages.length + (result.data.hasMore ? MESSAGE_PAGE_SIZE : 0);
+  olderCursor = result.data.nextCursor ?? null;
+  hasOlderMessages = result.data.hasMore === true;
+  const subjectPart = [...messages]
     .reverse()
     .flatMap((message) => message.parts)
     .find((part) => part.type === 'data-luoome-subjects');
-  if (subjectPart?.data?.refs !== undefined)
-    activeSubjects = subjectPart.data.refs.map((ref, index) => ({
-      ref,
-      label: subjectPart.data.labels?.[index] ?? ref.id,
-    }));
+  activeSubjects =
+    subjectPart?.data?.refs === undefined
+      ? []
+      : subjectPart.data.refs.map((ref, index) => ({
+          ref,
+          label: subjectPart.data.labels?.[index] ?? ref.id,
+        }));
   feed.splice(
     0,
     feed.length,
-    ...persistedFeed(result.data.messages ?? [], {
+    ...persistedFeed(messages, {
       sessionId,
       accountId,
     }),
   );
+  const input = $('#chat-input');
+  if (input !== null) input.value = draftFor(sessionId);
+  setSessionsOpen(false);
   renderSessions();
   renderSubjects();
   renderChat();
   saveChatView();
+  if (!location.hash.startsWith('#chat')) location.hash = '#chat';
 };
 
 const refreshSessions = async () => {
@@ -691,11 +1026,17 @@ const refreshSessions = async () => {
   return true;
 };
 
-const createSession = async () => {
+const refreshSessionList = async () => {
+  if (sending || settling) return false;
+  return refreshSessions();
+};
+
+const createSession = async ({ title, subjects = [], draft = '' } = {}) => {
+  saveChatView();
   const version = viewVersion;
   const result = await callApi('/api/chat/sessions', {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(title === undefined ? {} : { title }),
   });
   if (version !== viewVersion) return null;
   if (!result.ok) {
@@ -705,17 +1046,103 @@ const createSession = async () => {
   const session = result.data.session;
   sessions = [session, ...sessions.filter((item) => item.id !== session.id)];
   activeSessionId = session.id;
-  saveChatView();
+  activeSubjects = subjects.slice(0, 4);
+  activeMessageCount = 0;
+  olderCursor = null;
+  hasOlderMessages = false;
   feed.splice(0);
+  const input = $('#chat-input');
+  if (input !== null) input.value = draft;
+  setSessionsOpen(false);
+  renderSubjects();
+  saveChatView();
   renderSessions();
   renderChat();
-  $('#chat-input')?.focus();
+  if (!location.hash.startsWith('#chat')) location.hash = '#chat';
+  input?.focus();
   return session;
 };
 
-const pushMsg = (role, content) => {
-  feed.push({ type: 'msg', role, content });
+const loadOlderMessages = async () => {
+  if (loadingOlder || !hasOlderMessages || olderCursor === null || activeSessionId === null) return;
+  loadingOlder = true;
   renderChat();
+  const version = viewVersion;
+  const sessionId = activeSessionId;
+  const log = $('#chat-log');
+  const previousHeight = log?.scrollHeight ?? 0;
+  const previousTop = log?.scrollTop ?? 0;
+  try {
+    const result = await callApi(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?limit=${MESSAGE_PAGE_SIZE}&cursor=${encodeURIComponent(olderCursor)}`,
+    );
+    if (version !== viewVersion || sessionId !== activeSessionId) return;
+    if (!result.ok) throw new Error(resultErrorText(result, '读取更早消息失败'));
+    const messages = result.data.messages ?? [];
+    feed.splice(
+      0,
+      0,
+      ...persistedFeed(messages, {
+        sessionId,
+        accountId: activeAccountId ?? getAccountId(),
+        suppressPendingNote: true,
+      }),
+    );
+    olderCursor = result.data.nextCursor ?? null;
+    hasOlderMessages = result.data.hasMore === true;
+    followOutput = false;
+    renderChat();
+    if (log !== null) log.scrollTop = log.scrollHeight - previousHeight + previousTop;
+  } catch (error) {
+    await alertDialog('读取更早消息失败', error instanceof Error ? error.message : String(error));
+  } finally {
+    if (version === viewVersion) {
+      loadingOlder = false;
+      renderChat();
+    }
+  }
+};
+
+const openHandoffSession = async (pendingText = '') => {
+  if (sending || settling || activeSessionId === null) return;
+  const source = sessions.find((session) => session.id === activeSessionId);
+  const transcript = feed
+    .filter((entry) => entry.type === 'msg' && !entry.failed)
+    .slice(-MAX_CONTEXT_MESSAGES)
+    .map((entry) => `${entry.role === 'user' ? '用户' : '助手'}：${entry.content}`)
+    .join('\n\n');
+  const summary = [
+    `来源会话：${source?.title ?? '未命名会话'}（${activeSessionId}）`,
+    activeSubjects.length > 0
+      ? `讨论对象：${activeSubjects.map((item) => item.label).join('、')}`
+      : '讨论对象：全局',
+    '最近对话摘录：',
+    transcript,
+  ]
+    .filter((part) => part.length > 0)
+    .join('\n\n')
+    .slice(0, 7000);
+  const values = await promptDialog({
+    title: '新建关联会话',
+    note: '原会话完整保留。请核对并编辑交接摘要；创建后由你确认发送，不会自动重跑任何操作。',
+    fields: [{ key: 'summary', label: '交接摘要', value: summary, multiline: true, rows: 14 }],
+    confirmLabel: '创建并预填',
+  });
+  const handoff = values?.summary?.trim();
+  if (handoff === undefined || handoff.length === 0) return;
+  const draft = [
+    '请基于以下来源会话的交接摘要继续讨论。先核对其中的事实、假设和未完成事项，不要重复执行已经完成的操作。',
+    handoff,
+    pendingText.trim().length > 0 ? `待继续的问题：${pendingText.trim()}` : '',
+  ]
+    .filter((part) => part.length > 0)
+    .join('\n\n')
+    .slice(0, 8000);
+  await createSession({
+    title: `${source?.title ?? '会话'} · 接续`.slice(0, 80),
+    subjects: activeSubjects,
+    draft,
+  });
 };
 
 const removeEntry = (target) => {
@@ -723,19 +1150,35 @@ const removeEntry = (target) => {
   if (index >= 0) feed.splice(index, 1);
 };
 
-const send = async (requestedText) => {
+const retryMessage = async (entry) => {
+  if (sending || settling || entry.retry === undefined) return;
+  const retry = entry.retry;
+  delete entry.retry;
+  entry.superseded = true;
+  renderChat();
+  await send(retry.text, { messageId: retry.messageId, retry: true });
+};
+
+const send = async (
+  requestedText,
+  { messageId = `user_${randomRequestId()}`, retry = false } = {},
+) => {
   const input = $('#chat-input');
   if (input === null || sending || settling) return;
   const text = (requestedText ?? input.value).trim();
   if (text.length === 0) return;
+  if (!retry && activeMessageCount >= MAX_CONTEXT_MESSAGES) {
+    await openHandoffSession(text);
+    return;
+  }
   sending = true;
+  renderSessions();
   const sendBtn = $('#chat-send');
   if (sendBtn !== null) sendBtn.disabled = true;
   const controller = new AbortController();
   activeController = controller;
   const version = viewVersion;
   const accountId = getAccountId();
-  // 流式期间显示「取消」：abort 会断流，服务端透传 request.signal 中断 runtime。
   const cancelBtn = el('button', 'btn btn-outline btn-sm', '停止回答');
   cancelBtn.type = 'button';
   cancelBtn.id = 'chat-cancel';
@@ -746,19 +1189,32 @@ const send = async (requestedText) => {
   let assistantMessageId = null;
 
   try {
-    if (activeSessionId === null && (await createSession()) === null) return;
+    if (
+      activeSessionId === null &&
+      (await createSession({ subjects: activeSubjects, draft: input.value })) === null
+    )
+      return;
     sessionId = activeSessionId;
     if (sessionId === null) return;
     if (requestedText === undefined) input.value = '';
-    if (activeSubjects.length > 0)
-      feed.push({ type: 'subjects', labels: activeSubjects.map((item) => item.label) });
+    if (!retry) {
+      activeMessageCount += 1;
+      if (activeSubjects.length > 0)
+        feed.push({ type: 'subjects', labels: activeSubjects.map((item) => item.label) });
+      feed.push({ type: 'msg', role: 'user', messageId, content: text });
+    }
     followOutput = true;
     saveChatView();
-    pushMsg('user', text);
+    renderChat();
     const statusEntry = { type: 'status', text: '正在连接模型…' };
     const actionsEntry = { type: 'actions', usedActions: [] };
-    // catch 块需要引用：取消时给这条消息打「已取消」标注
-    assistantEntry = { type: 'msg', role: 'assistant', content: '', cancelled: false };
+    assistantEntry = {
+      type: 'msg',
+      role: 'assistant',
+      content: '',
+      cancelled: false,
+      retry: { text, messageId },
+    };
     const toolCalls = new Map();
     let assistantStarted = false;
     feed.push(statusEntry);
@@ -783,7 +1239,7 @@ const send = async (requestedText) => {
         subjects: activeSubjects.map((item) => item.ref),
         messages: [
           {
-            id: `user_${randomRequestId()}`,
+            id: messageId,
             role: 'user',
             parts: [{ type: 'text', text }],
           },
@@ -792,7 +1248,12 @@ const send = async (requestedText) => {
     });
     if (!acceptApiResponse(response, sessionEpoch) || version !== viewVersion) return;
     const route = parseChatRouteHeader(response.headers.get('x-luoome-chat-route'));
-    if (route !== null) feed.push({ type: 'plan', route });
+    if (route !== null) {
+      evidenceOpen = true;
+      const previousPlan = retry ? feed.findLast((entry) => entry.type === 'plan') : undefined;
+      if (previousPlan !== undefined) previousPlan.route = route;
+      else feed.push({ type: 'plan', route });
+    }
     await consumeUIMessageStream(response, (part) => {
       if (version !== viewVersion || sessionEpoch !== getSessionEpoch()) return;
       if (part.type === 'start') {
@@ -801,6 +1262,7 @@ const send = async (requestedText) => {
         statusEntry.text = '模型正在推理…';
       } else if (part.type === 'tool-input-available') {
         statusEntry.text = `正在处理 ${toolLabel(part.toolName)}…`;
+        evidenceOpen = true;
         const action = {
           toolCallId: part.toolCallId,
           tool: part.toolName,
@@ -817,6 +1279,7 @@ const send = async (requestedText) => {
           action.status = 'finished';
           action.ok = part.output?.error === undefined;
           action.draft = part.output?.__luoomeDraft === true;
+          action.output = part.output;
         }
         if (part.output?.__luoomeDraft === true && part.output.draft !== undefined) {
           const draft = draftFromPart(part, {
@@ -831,11 +1294,13 @@ const send = async (requestedText) => {
         if (action !== undefined) {
           action.status = 'finished';
           action.ok = false;
+          action.output = { error: { message: String(part.errorText ?? '工具执行失败') } };
         }
       } else if (part.type === 'finish' && part.messageMetadata?.usage !== undefined) {
         feed.push({ type: 'usage', metadata: part.messageMetadata });
       } else if (part.type === 'data-luoome-runtime' && typeof part.data?.notice === 'string') {
-        feed.push({ type: 'note', text: part.data.notice });
+        if (!feed.some((entry) => entry.type === 'note' && entry.text === part.data.notice))
+          feed.push({ type: 'note', text: part.data.notice });
       } else if (part.type === 'data-luoome-usage') {
         feed.push({ type: 'usage', metadata: part.data });
       } else if (part.type === 'abort') {
@@ -856,9 +1321,13 @@ const send = async (requestedText) => {
     });
     if (version !== viewVersion) return;
     removeEntry(statusEntry);
+    activeMessageCount += 1;
     if (assistantEntry.content.trim().length === 0 && toolCalls.size === 0) {
       assistantEntry.content = '模型没有返回内容，请重试。';
+      assistantEntry.failed = true;
       ensureAssistant();
+    } else {
+      delete assistantEntry.retry;
     }
     renderChat();
     await refreshSessions();
@@ -866,22 +1335,26 @@ const send = async (requestedText) => {
     if (version !== viewVersion) return;
     const status = feed.findLast((entry) => entry.type === 'status');
     if (status !== undefined) removeEntry(status);
-    if (controller.signal.aborted) {
-      if (assistantEntry !== null) {
-        if (!feed.includes(assistantEntry)) feed.push(assistantEntry);
-        feed.push({ type: 'note', text: '已请求停止，执行结果以重新打开会话后的服务端记录为准。' });
-        renderChat();
-        await refreshSessions();
+    activeMessageCount += 1;
+    if (assistantEntry !== null) {
+      if (controller.signal.aborted) {
+        assistantEntry.cancelled = true;
+        if (assistantEntry.content.trim().length === 0)
+          assistantEntry.content = '回答已停止，已生成的内容以服务端记录为准。';
+      } else {
+        const reason =
+          error instanceof TypeError
+            ? '连接中断，请重试；已生成的部分内容会保留在会话中'
+            : error instanceof Error
+              ? error.message
+              : '未知错误';
+        assistantEntry.failed = true;
+        assistantEntry.failure = `请求失败：${reason}`;
+        if (assistantEntry.content.length === 0) assistantEntry.content = '回答未完成。';
       }
-    } else {
-      // TypeError 来自 fetch/reader 的连接级失败（服务重启、空闲掐线等），原始 message 对用户无意义。
-      const reason =
-        error instanceof TypeError
-          ? '连接中断，请重试；已生成的部分内容会保留在会话中'
-          : error instanceof Error
-            ? error.message
-            : '未知错误';
-      pushMsg('assistant', `请求失败：${reason}`);
+      if (!feed.includes(assistantEntry)) feed.push(assistantEntry);
+      renderChat();
+      await refreshSessions();
     }
   } finally {
     cancelBtn.remove();
@@ -889,6 +1362,7 @@ const send = async (requestedText) => {
       sending = false;
       activeController = null;
       if (sendBtn !== null) sendBtn.disabled = false;
+      renderSessions();
       renderChat();
       saveChatView();
     }
@@ -900,6 +1374,23 @@ const initChat = () => {
   initialized = true;
   $('#chat-check-state')?.addEventListener('click', () => void refreshChat());
   $('#chat-clear-subjects')?.addEventListener('click', () => setDiscussionSubjects([]));
+  $('#chat-load-older')?.addEventListener('click', () => void loadOlderMessages());
+  $('#chat-handoff-open')?.addEventListener('click', () => void openHandoffSession());
+  $('#chat-evidence-toggle')?.addEventListener('click', () => {
+    evidenceOpen = !evidenceOpen;
+    renderEvidence();
+  });
+  $('#chat-evidence-close')?.addEventListener('click', () => {
+    evidenceOpen = false;
+    renderEvidence();
+  });
+  const toggleSessions = () => {
+    const open = !$('#chat-session-rail')?.classList.contains('sessions-open');
+    setSessionsOpen(open);
+  };
+  $('#chat-sessions-toggle')?.addEventListener('click', toggleSessions);
+  $('#sidebar-sessions-toggle')?.addEventListener('click', toggleSessions);
+  $('#chat-sessions-close')?.addEventListener('click', () => setSessionsOpen(false));
   $('#chat-input')?.addEventListener('input', saveChatView);
   $('#chat-input')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
@@ -967,17 +1458,29 @@ const refreshChat = async () => {
     renderChat();
     return;
   }
+  const launch = consumeChatLaunch();
+  if (launch !== null) {
+    const created = await createSession({
+      subjects: Array.isArray(launch.subjects) ? launch.subjects : [],
+      draft: typeof launch.prompt === 'string' ? launch.prompt : '',
+    });
+    if (created !== null && launch.send === true) {
+      document.dispatchEvent(new Event('luoome:chat-home-draft-clear'));
+      await send();
+    }
+    return;
+  }
   const first = sessions.find((session) => session.id === preferredSession) ?? sessions[0];
   if (first !== undefined) await selectSession(first.id);
   else {
+    activeSubjects = Array.isArray(recovery?.subjects) ? recovery.subjects : [];
     feed.splice(0);
+    const input = $('#chat-input');
+    if (input !== null) input.value = draftFor('new');
+    renderSubjects();
     renderChat();
   }
   if (requestVersion !== viewVersion) return;
-  if (recovery?.subjects !== undefined) activeSubjects = recovery.subjects;
-  if (recovery?.draft !== undefined && $('#chat-input') !== null)
-    $('#chat-input').value = recovery.draft;
-  renderSubjects();
   saveChatView();
 };
 
@@ -986,6 +1489,7 @@ globalThis.document?.addEventListener?.('luoome:identity-cleared', resetChatIden
 const ensureChatSession = async () => activeSessionId ?? (await createSession())?.id ?? null;
 
 export {
+  draftCard,
   draftDecisionPath,
   draftEditPrefill,
   draftFromPart,
@@ -997,6 +1501,7 @@ export {
   persistedFeed,
   planCardLines,
   refreshChat,
+  refreshSessionList,
   renderChat,
   saveChatView,
   send,

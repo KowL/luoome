@@ -378,20 +378,59 @@ const createChatStreamResponseImpl = async (
   const previousMessages = z
     .object({ messages: z.array(ChatMessageSchema) })
     .parse(previous.data).messages;
-  const messageId = `user_${createHash('sha256')
-    .update(JSON.stringify([parsed.data.sessionId, lastUser.id]))
-    .digest('hex')}`;
-  if (previousMessages.some((message) => message.id === messageId)) {
-    return new Response(
-      JSON.stringify({
+  const persistedId = previousMessages.find((message) => message.id === lastUser.id)?.id;
+  const messageId =
+    persistedId ??
+    `user_${createHash('sha256')
+      .update(JSON.stringify([parsed.data.sessionId, lastUser.id]))
+      .digest('hex')}`;
+  const existingIndex = previousMessages.findIndex((message) => message.id === messageId);
+  const existing = existingIndex < 0 ? undefined : previousMessages[existingIndex];
+  const lastUserText = lastUser.parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('');
+  const retrying = existing !== undefined;
+  if (existing !== undefined) {
+    const existingText = existing.parts
+      .filter((part) => part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join('');
+    const completed = previousMessages
+      .slice(existingIndex + 1)
+      .some(
+        (message) =>
+          message.role === 'assistant' &&
+          !message.parts.some(
+            (part) =>
+              part.type === 'data-luoome-stream-error' || part.type === 'data-luoome-cancelled',
+          ),
+      );
+    if (existing.role !== 'user' || existingText !== lastUserText || completed) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: '该问题已有回答或重试内容不一致，请读取会话核对；继续讨论请发送新问题',
+            issues: [],
+          },
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      );
+    }
+  }
+  if (!retrying && previousMessages.length + 1 > MAX_MESSAGES) {
+    return Response.json(
+      {
         ok: false,
         error: {
           kind: 'invalid_input',
-          message: '该问题已保存，请读取会话核对实际回答；继续讨论请发送新问题',
+          message: '当前会话已到上下文上限，请新建关联会话并携带交接摘要',
           issues: [],
         },
-      }),
-      { status: 409, headers: { 'content-type': 'application/json' } },
+      },
+      { status: 409, headers: { 'x-luoome-chat-handoff': 'required' } },
     );
   }
   const refs = parsed.data.subjects ?? savedDiscussionSubjects(previousMessages);
@@ -402,10 +441,6 @@ const createChatStreamResponseImpl = async (
       headers: { 'content-type': 'application/json' },
     });
   const context = await buildContextSummary(ctx);
-  const lastUserText = lastUser.parts
-    .filter((part) => part.type === 'text')
-    .map((part) => part.text)
-    .join('');
   const route = routeAgentMessage(
     `${lastUserText}\n${resolved.data.map((item) => item.label).join('；')}`,
     {
@@ -422,21 +457,27 @@ const createChatStreamResponseImpl = async (
     );
   }
   const scenario = AGENT_SCENARIOS[route.scenario];
-  const appended = await appendTool.execute(
-    {
-      sessionId: parsed.data.sessionId,
-      messageId,
-      role: 'user',
-      parts: [
-        ...lastUser.parts,
+  const appended = retrying
+    ? { ok: true as const }
+    : await appendTool.execute(
         {
-          type: 'data-luoome-subjects',
-          data: { refs, labels: resolved.data.map((item) => item.label), verifiedAt: ctx.clock() },
+          sessionId: parsed.data.sessionId,
+          messageId,
+          role: 'user',
+          parts: [
+            ...lastUser.parts,
+            {
+              type: 'data-luoome-subjects',
+              data: {
+                refs,
+                labels: resolved.data.map((item) => item.label),
+                verifiedAt: ctx.clock(),
+              },
+            },
+          ],
         },
-      ],
-    },
-    ctx,
-  );
+        ctx,
+      );
   if (!appended.ok) {
     return new Response(JSON.stringify(appended), {
       status: appended.error.kind === 'not_found' ? 404 : 400,
@@ -471,7 +512,7 @@ const createChatStreamResponseImpl = async (
         runId: crypto.randomUUID(),
         conversationId: parsed.data.sessionId,
         scenario,
-        historyTruncated: previousMessages.length + 1 > MAX_MESSAGES,
+        historyTruncated: previousMessages.length + (retrying ? 0 : 1) > MAX_MESSAGES,
         ...(retainRuntime === undefined ? {} : { retainRuntime }),
       },
       ...(abortSignal === undefined ? {} : { abortSignal }),

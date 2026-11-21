@@ -75,6 +75,47 @@ describe('DSH product stream projection (pure fixtures)', () => {
     expect(projection.parts[1]).toMatchObject({ output: error });
   });
 
+  it('omits oversized tool payloads instead of failing the final assistant response', () => {
+    const { projection, chunks } = setup();
+    for (let index = 0; index < 8; index++) {
+      const callId = `call-${index}`;
+      projection.toolCall(callId, 'fetch_quote', {});
+      projection.toolResult(callId, true, { data: 'x'.repeat(60_000) });
+    }
+    projection.toolCall('call-advice', 'fetch_quote', {});
+    projection.toolResult('call-advice', true, { data: 'x'.repeat(141_751) });
+    projection.toolResult('call-advice', true, { data: 'x'.repeat(141_751) });
+    projection.durableText('final', '已核对可用事实，并说明数据缺口。');
+    projection.end();
+
+    const part = projection.parts.find((part) => part.toolCallId === 'call-advice');
+    expect(part).toMatchObject({
+      state: 'output-available',
+      output: { __luoomeOutputOmitted: true },
+    });
+    expect(chunks.some((part) => part.type === 'error')).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(projection.parts))).toBeLessThan(524_288);
+  });
+
+  it('bounds accumulated tool payloads while retaining every tool receipt', () => {
+    const { projection } = setup();
+    for (let index = 0; index < 9; index++) {
+      const callId = `call-${index}`;
+      projection.toolCall(callId, 'fetch_quote', {});
+      projection.toolResult(callId, true, { data: 'x'.repeat(50_000) });
+    }
+    expect(projection.parts.filter((part) => part.type === 'tool-fetch_quote')).toHaveLength(9);
+    expect(
+      projection.parts.some(
+        (part) =>
+          typeof part.output === 'object' &&
+          part.output !== null &&
+          '__luoomeOutputOmitted' in part.output,
+      ),
+    ).toBe(true);
+    expect(() => projection.durableText('final', '回答已保存。')).not.toThrow();
+  });
+
   it('rejects conflicting durable text, changed calls, unsolicited results and excessive output', () => {
     const { projection } = setup();
     projection.textDelta('m1', '真实');

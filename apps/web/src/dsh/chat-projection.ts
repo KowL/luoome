@@ -106,11 +106,31 @@ export class DshChatProjection {
     const part = this.#tools.get(callId);
     if (part === undefined) throw new Error('DSH result without bound call');
     if (part.state === 'output-available' || part.state === 'output-error') {
+      if (
+        typeof part.output === 'object' &&
+        part.output !== null &&
+        '__luoomeOutputOmitted' in part.output
+      )
+        return;
       if (JSON.stringify(part.output) !== JSON.stringify(output))
         throw new Error('DSH conflicting tool result');
       return;
     }
-    this.#count(JSON.stringify(output));
+    const serialized = JSON.stringify(output);
+    const outputBytes = Buffer.byteLength(serialized);
+    if (outputBytes > 65_536 || this.#bytes + outputBytes > 393_216) {
+      const omitted = {
+        __luoomeOutputOmitted: true,
+        originalBytes: outputBytes,
+        message:
+          '工具返回的数据过大，完整结果未写入会话。请缩小查询范围或分页读取；已完成的操作不受影响。',
+      };
+      this.#count(JSON.stringify(omitted));
+      Object.assign(part, { state: 'output-available', output: omitted });
+      this.emit({ type: 'tool-output-available', toolCallId: callId, output: omitted });
+      return;
+    }
+    this.#count(serialized);
     const businessError = output !== null && typeof output === 'object' && 'error' in output;
     if (ok || businessError) {
       Object.assign(part, { state: 'output-available', output });

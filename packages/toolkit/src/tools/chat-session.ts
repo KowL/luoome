@@ -53,14 +53,42 @@ export const getChatSessionTool = defineTool({
   input: z.object({
     sessionId: z.string().min(1),
     messageLimit: z.number().int().min(1).max(500).default(200),
+    cursor: z.string().min(1).optional(),
   }),
-  output: z.object({ session: ChatSessionSchema, messages: z.array(ChatMessageSchema) }),
+  output: z.object({
+    session: ChatSessionSchema,
+    messages: z.array(ChatMessageSchema),
+    hasMore: z.boolean(),
+    nextCursor: z.string().nullable(),
+  }),
   handler: async (input, ctx) => {
     const session = await ownedSession(input.sessionId, ctx.user.defaultAccountId, ctx);
     if (session === null) return errNotFound('ChatSession', input.sessionId);
+    let before: { createdAt: Date; id: string } | undefined;
+    if (input.cursor !== undefined) {
+      try {
+        before = z
+          .object({ createdAt: z.coerce.date(), id: z.string().min(1) })
+          .parse(JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')));
+      } catch {
+        return errInvalidInput('会话消息游标无效，请重新打开会话');
+      }
+    }
+    const messages = [
+      ...(await ctx.repos.chat.listMessages(session.id, input.messageLimit + 1, before)),
+    ];
+    const visible = messages.slice(-input.messageLimit);
+    const oldest = visible[0];
     return {
       session,
-      messages: [...(await ctx.repos.chat.listMessages(session.id, input.messageLimit))],
+      messages: visible,
+      hasMore: messages.length > input.messageLimit,
+      nextCursor:
+        messages.length > input.messageLimit && oldest !== undefined
+          ? Buffer.from(
+              JSON.stringify({ createdAt: oldest.createdAt.toISOString(), id: oldest.id }),
+            ).toString('base64url')
+          : null,
     };
   },
 });

@@ -5,7 +5,7 @@
 
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
-import { initChat, refreshChat } from './chat.js';
+import { initChat, refreshChat, refreshSessionList } from './chat.js';
 import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
@@ -212,7 +212,7 @@ const ROUTES = [
   'settings',
 ];
 
-/** 五个一级入口；每个入口内用标签切换具体页面，避免 15 个并列导航项。 */
+/** 一级入口按分区组织，每个分区内用标签切换具体页面，避免 15 个并列导航项。 */
 const ROUTE_GROUPS = [
   {
     id: 'today',
@@ -252,12 +252,14 @@ const ROUTE_GROUPS = [
     ],
   },
   {
+    id: 'chat',
+    label: 'AI 助手',
+    items: [['chat', 'AI 助手']],
+  },
+  {
     id: 'settings',
     label: '设置',
-    items: [
-      ['settings', '设置'],
-      ['chat', 'AI 助手'],
-    ],
+    items: [['settings', '设置']],
   },
 ];
 
@@ -312,6 +314,11 @@ const showRoute = async (name) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
   });
+  if (safe !== 'chat') {
+    $('#chat-session-rail')?.classList.remove('sessions-open');
+    $('#chat-sessions-toggle')?.setAttribute('aria-expanded', 'false');
+    $('#sidebar-sessions-toggle')?.setAttribute('aria-expanded', 'false');
+  }
   const group = groupOfRoute(safe);
   document.querySelectorAll('.nav-item').forEach((node) => {
     const active = group !== null && node.dataset.group === group.id;
@@ -511,6 +518,7 @@ const bindAccountSelect = () => {
       target.value = previous;
       return;
     }
+    if (currentHash() !== 'chat') void refreshSessionList();
     void showRoute(currentHash());
   });
 };
@@ -621,9 +629,13 @@ initTheme();
 bindTopbarTheme();
 bindTopbarStockSearch();
 bindGlobalActions();
+initChat();
 startClock();
 startMarketSession();
 observeTopbarHeight();
 startDashboardAutoRefresh();
 startQuoteAutoRefresh();
-void initAccountSelect().then(() => showRoute(currentHash()));
+void initAccountSelect().then(() => {
+  if (currentHash() !== 'chat') void refreshSessionList();
+  return showRoute(currentHash());
+});

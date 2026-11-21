@@ -3171,7 +3171,7 @@ describe('/api/chat：对话助手', () => {
 
   it('从服务端会话加载最近 20 条消息，不信任客户端历史', async () => {
     await createSession('server-history');
-    for (let index = 0; index < 21; index += 1) {
+    for (let index = 0; index < 19; index += 1) {
       await chatCtx.repos.chat.saveMessage({
         id: `history-${index}`,
         sessionId: 'server-history',
@@ -3196,6 +3196,54 @@ describe('/api/chat：对话助手', () => {
     ).toBe(200);
     expect(captured?.uiMessages).toHaveLength(20);
     expect(JSON.stringify(captured?.uiMessages)).not.toContain('client-fake-history');
+  });
+
+  it('满 20 条的新问题在落库前要求显式交接', async () => {
+    await createSession('server-handoff');
+    for (let index = 0; index < 20; index += 1) {
+      await chatCtx.repos.chat.saveMessage({
+        id: `handoff-${index}`,
+        sessionId: 'server-handoff',
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        parts: [{ type: 'text', text: `handoff-turn-${index}` }],
+        createdAt: new Date(Date.UTC(2026, 6, 26, 0, 0, index)),
+      });
+    }
+    const response = await chat(chatApp, {
+      sessionId: 'server-handoff',
+      messages: [{ id: 'blocked-user', role: 'user', parts: [{ type: 'text', text: '继续' }] }],
+    });
+    expect(response.status).toBe(409);
+    expect(response.headers.get('x-luoome-chat-handoff')).toBe('required');
+    expect(await chatCtx.repos.chat.listMessages('server-handoff')).toHaveLength(20);
+  });
+
+  it('失败回答用同一消息重试，不重复保存用户问题', async () => {
+    await createSession('server-retry');
+    await chatCtx.repos.chat.saveMessage({
+      id: 'retry-user',
+      sessionId: 'server-retry',
+      role: 'user',
+      parts: [{ type: 'text', text: '重试这个问题' }],
+      createdAt: new Date('2026-07-26T00:00:00.000Z'),
+    });
+    await chatCtx.repos.chat.saveMessage({
+      id: 'retry-error',
+      sessionId: 'server-retry',
+      role: 'assistant',
+      parts: [{ type: 'data-luoome-stream-error', data: { message: '连接中断' } }],
+      createdAt: new Date('2026-07-26T00:00:01.000Z'),
+    });
+    const response = await chat(chatApp, {
+      sessionId: 'server-retry',
+      messages: [
+        { id: 'retry-user', role: 'user', parts: [{ type: 'text', text: '重试这个问题' }] },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const messages = await chatCtx.repos.chat.listMessages('server-retry');
+    expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
   it('目标模型 write 工具只生成已校验草案，不执行 DB 写入', async () => {
@@ -3450,6 +3498,44 @@ describe('/api/chat：对话助手', () => {
     expect(
       (await chatApp.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`))).status,
     ).toBe(404);
+  });
+
+  it('会话消息通过游标完整加载更早历史，不重复也不截断', async () => {
+    await createSession('paged-history');
+    for (let index = 0; index < 120; index += 1) {
+      await chatCtx.repos.chat.saveMessage({
+        id: `page-${index}`,
+        sessionId: 'paged-history',
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        parts: [{ type: 'text', text: `message-${index}` }],
+        createdAt: new Date(Date.UTC(2026, 6, 26, 0, 0, index)),
+      });
+    }
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const query = new URLSearchParams({ limit: '50' });
+      if (cursor !== null) query.set('cursor', cursor);
+      const response = await chatApp.fetch(
+        new Request(`http://test/api/chat/sessions/paged-history?${query}`),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        data: { messages: { id: string }[]; hasMore: boolean; nextCursor: string | null };
+      };
+      ids.push(...body.data.messages.map((message) => message.id));
+      cursor = body.data.nextCursor;
+      pages += 1;
+    } while (cursor !== null);
+    expect(pages).toBe(3);
+    expect(ids).toHaveLength(120);
+    expect(new Set(ids).size).toBe(120);
+    const chronological = [...ids].sort(
+      (left, right) => Number(left.slice(5)) - Number(right.slice(5)),
+    );
+    expect(chronological[0]).toBe('page-0');
+    expect(chronological.at(-1)).toBe('page-119');
   });
 });
 
