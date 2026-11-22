@@ -67,11 +67,9 @@
             <span class="section-kicker">CONVERSATIONS</span>
             <h2>最近会话</h2>
           </div>
-          <div class="chat-session-head-actions">
-            <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话">＋</button>
-            <button id="chat-sessions-close" class="chat-sessions-close" type="button" aria-label="收起会话列表">×</button>
-          </div>
+          <button id="chat-sessions-close" class="chat-sessions-close" type="button" aria-label="收起会话列表">×</button>
         </div>
+        <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话"><span aria-hidden="true">＋</span><span>新会话</span></button>
         <div id="chat-session-list" class="chat-session-list">
           <p class="chat-session-empty">正在读取会话…</p>
         </div>
@@ -680,36 +678,45 @@
         <div class="route-header chat-route-header">
           <div class="chat-route-title">
             <div class="chat-route-heading"><span class="chat-route-mark" aria-hidden="true">◇</span><h1>AI 投资助手</h1><span class="chat-local-badge"><span class="health-dot"></span>LOCAL</span></div>
-            <p>把事实、判断与下一步，留在同一条对话里。</p>
+            <div class="chat-tabs" role="tablist" aria-label="AI 助手视图">
+              <button id="chat-dialog-tab" class="chat-tab active" type="button" role="tab" aria-selected="true" aria-controls="chat-log">对话</button>
+              <button id="chat-evidence-toggle" class="chat-tab" type="button" role="tab" aria-selected="false" aria-controls="chat-evidence-panel" aria-expanded="false">研究上下文</button>
+            </div>
           </div>
-          <div class="row-actions"><button id="chat-sessions-toggle" class="btn btn-outline btn-sm chat-panel-toggle" type="button" aria-expanded="false" aria-controls="chat-session-rail">会话</button><button id="chat-evidence-toggle" class="btn btn-outline btn-sm" type="button" aria-expanded="false">研究上下文</button><button id="chat-check-state" class="btn btn-outline btn-sm" type="button">核对状态</button><button id="chat-return" class="btn btn-outline" type="button" hidden>← 返回来源页</button></div>
-          <div class="route-meta">查事实 → 确认操作 → 跟进结果 · 会话保存在本地</div>
+          <div class="row-actions"><button id="chat-sessions-toggle" class="btn btn-ghost btn-sm chat-panel-toggle" type="button" aria-expanded="false" aria-controls="chat-session-rail">会话</button><button id="chat-check-state" class="btn btn-ghost btn-sm" type="button">核对状态</button><button id="chat-return" class="btn btn-ghost btn-sm" type="button" hidden>← 返回来源页</button></div>
         </div>
         <div id="chat-workspace" class="chat-workspace">
           <div class="card chat-card">
-            <div class="chat-context"><div id="chat-subjects" aria-label="正在讨论的主体">全局讨论</div><button id="chat-clear-subjects" class="btn btn-ghost btn-sm" type="button" hidden>切回全局</button></div>
+            <div class="chat-context"><div class="chat-context-label"><span class="chat-context-dot" aria-hidden="true"></span><div id="chat-subjects" aria-label="正在讨论的主体">全局讨论</div></div><button id="chat-clear-subjects" class="btn btn-ghost btn-sm" type="button" hidden>切回全局</button></div>
             <button id="chat-load-older" class="btn btn-ghost btn-sm chat-load-older" type="button" hidden>加载更早消息</button>
             <div id="chat-handoff" class="chat-handoff" hidden><span id="chat-handoff-text"></span><button id="chat-handoff-open" class="btn btn-outline btn-sm" type="button">新建关联会话</button></div>
             <div id="chat-log" class="chat-log" role="log" aria-label="投资助手对话" aria-live="polite">
               <p class="placeholder">正在加载会话…</p>
             </div>
             <button id="chat-new-content" class="chat-new-content" type="button" hidden>回到最新回复 ↓</button>
-            <form id="chat-form" class="chat-form">
-              <span class="chat-prompt-mark" aria-hidden="true">›</span>
-              <textarea
-                id="chat-input"
-                rows="1"
-                maxlength="8000"
-                aria-label="向投资助手提问"
-                placeholder="查持仓、记资金、做研究，或配置盯盘提醒…"
-                autocomplete="off"
-              ></textarea>
-              <button id="chat-send" class="btn btn-primary chat-send" type="submit">发送</button>
-            </form>
-            <div class="chat-composer-meta"><span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span><span>事实优先 · 操作需确认</span></div>
-            <p class="chat-boundary">助手不会自动下单；AI 分析不构成投资建议。</p>
+            <div class="chat-composer-dock">
+              <form id="chat-form" class="chat-form">
+                <div class="chat-composer-main">
+                  <span class="chat-prompt-mark" aria-hidden="true">›</span>
+                  <textarea
+                    id="chat-input"
+                    rows="1"
+                    maxlength="8000"
+                    aria-label="向投资助手提问"
+                    placeholder="问持仓、查风险，或直接说要做什么…"
+                    autocomplete="off"
+                  ></textarea>
+                </div>
+                <div class="chat-composer-bar">
+                  <span class="chat-composer-mode"><span class="chat-composer-mode-dot" aria-hidden="true"></span>事实优先</span>
+                  <span class="chat-composer-hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span>
+                  <button id="chat-send" class="btn btn-primary chat-send" type="submit" aria-label="发送" title="发送（Enter）"><span class="chat-send-label">发送</span><span class="chat-send-arrow" aria-hidden="true">↑</span></button>
+                </div>
+              </form>
+              <p class="chat-boundary">助手不会自动下单；AI 分析不构成投资建议。</p>
+            </div>
           </div>
-          <aside id="chat-evidence-panel" class="chat-evidence-panel" aria-label="研究上下文与证据" hidden>
+          <aside id="chat-evidence-panel" class="chat-evidence-panel" role="tabpanel" aria-label="研究上下文与证据" hidden>
             <div class="chat-evidence-head"><div><span class="section-kicker">EVIDENCE</span><h2>研究上下文</h2></div><button id="chat-evidence-close" class="btn btn-ghost btn-sm" type="button" aria-label="收起研究上下文">×</button></div>
             <div id="chat-evidence-content" class="chat-evidence-content"><p class="muted">发起研究后，这里会显示讨论对象、计划和真实依据。</p></div>
           </aside>

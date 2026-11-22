@@ -66,6 +66,15 @@ const recoverChatView = () => {
   }
   return null;
 };
+const resizeChatInput = () => {
+  const input = $('#chat-input');
+  if (input === null || input.style === undefined || typeof input.scrollHeight !== 'number') return;
+  input.style.height = 'auto';
+  const height = Math.min(input.scrollHeight, 180);
+  input.style.height = `${height}px`;
+  input.style.overflowY = input.scrollHeight > 180 ? 'auto' : 'hidden';
+};
+
 const consumeChatLaunch = () => {
   try {
     const value = JSON.parse(sessionStorage.getItem(CHAT_LAUNCH_KEY) ?? 'null');
@@ -128,7 +137,10 @@ const resetChatIdentity = () => {
     /* 无可清理。 */
   }
   const input = $('#chat-input');
-  if (input !== null) input.value = '';
+  if (input !== null) {
+    input.value = '';
+    resizeChatInput();
+  }
   renderSubjects();
   renderSessions();
   renderChat();
@@ -378,6 +390,7 @@ const draftCard = (draft) => {
       if (input !== null) {
         input.value = draftEditPrefill(draft);
         input.focus();
+        resizeChatInput();
       }
     });
     const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
@@ -486,6 +499,16 @@ const copyMessage = async (entry, button) => {
   }, 1600);
 };
 
+const formatMessageTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const pad = (part) => String(part).padStart(2, '0');
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  if (date.toDateString() === now.toDateString()) return clock;
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${clock}`;
+};
+
 const renderEntry = (entry) => {
   if (entry.type === 'subjects')
     return el(
@@ -494,11 +517,16 @@ const renderEntry = (entry) => {
       `讨论：${entry.labels.length > 0 ? entry.labels.join(' / ') : '全局'}`,
     );
   if (entry.type === 'msg') {
-    const node = el('div', `chat-msg ${entry.role}${entry.failed ? ' failed' : ''}`, [
-      el('span', 'chat-msg-content', entry.content),
-    ]);
+    const node = el(
+      'div',
+      `chat-msg ${entry.role}${entry.failed ? ' failed' : ''}${entry.streaming ? ' streaming' : ''}`,
+      [el('span', 'chat-msg-content', entry.content)],
+    );
     if (entry.cancelled === true) node.append(el('span', 'chat-cancelled-mark', '已中断'));
     if (entry.failure) node.append(el('p', 'chat-msg-error', entry.failure));
+    const footer = el('div', 'chat-msg-footer');
+    if (entry.role === 'user' && entry.at !== undefined)
+      footer.append(el('time', 'chat-msg-time', formatMessageTime(entry.at)));
     if (entry.content.length > 0 || entry.retry !== undefined) {
       const actions = el('div', 'chat-msg-actions');
       if (entry.content.length > 0) {
@@ -520,13 +548,15 @@ const renderEntry = (entry) => {
           if (input !== null) {
             input.value = entry.retry.text;
             input.focus();
+            resizeChatInput();
             saveChatView();
           }
         });
         actions.append(retry, edit);
       }
-      node.append(actions);
+      footer.append(actions);
     }
+    if (footer.childNodes.length > 0) node.append(footer);
     return node;
   }
   if (entry.type === 'note') return el('div', 'chat-msg system', entry.text);
@@ -562,6 +592,7 @@ const emptyState = () => {
       if (input !== null) {
         input.value = text;
         input.focus();
+        resizeChatInput();
         saveChatView();
       }
     });
@@ -687,7 +718,14 @@ const renderEvidence = () => {
   const toggle = $('#chat-evidence-toggle');
   if (toggle !== null) {
     toggle.disabled = !hasContent;
+    toggle.classList.toggle('active', !panel.hidden);
     toggle.setAttribute('aria-expanded', String(!panel.hidden));
+    toggle.setAttribute('aria-selected', String(!panel.hidden));
+  }
+  const dialogTab = $('#chat-dialog-tab');
+  if (dialogTab !== null) {
+    dialogTab.classList.toggle('active', panel.hidden);
+    dialogTab.setAttribute('aria-selected', String(panel.hidden));
   }
   mount(
     content,
@@ -747,6 +785,16 @@ const renderChat = () => {
 const formatSessionTime = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
+  const elapsed = Date.now() - date.getTime();
+  if (elapsed >= 0) {
+    const minutes = Math.floor(elapsed / 60_000);
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes} 分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} 小时前`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days} 天前`;
+  }
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 };
 
@@ -794,7 +842,10 @@ const deleteSession = async (session) => {
     hasOlderMessages = false;
     feed.splice(0);
     const input = $('#chat-input');
-    if (input !== null) input.value = draftFor('new');
+    if (input !== null) {
+      input.value = draftFor('new');
+      resizeChatInput();
+    }
     renderSubjects();
   }
   await refreshSessions();
@@ -841,6 +892,14 @@ const renderSessions = () => {
   );
 };
 
+const subjectKey = (labels) => labels.join('\u0000');
+
+const appendSubjectEntry = (feed, labels) => {
+  const last = feed.findLast((entry) => entry.type === 'subjects');
+  if (last !== undefined && subjectKey(last.labels) === subjectKey(labels)) return;
+  feed.push({ type: 'subjects', labels });
+};
+
 const persistedFeed = (messages, context = {}) => {
   const result = [];
   for (const message of messages) {
@@ -860,13 +919,16 @@ const persistedFeed = (messages, context = {}) => {
     const streamError = message.parts.find((part) => part.type === 'data-luoome-stream-error');
     if (visibleText.trim().length > 0 || cancelled || streamError !== undefined) {
       const subjectPart = message.parts.find((part) => part.type === 'data-luoome-subjects');
-      if (subjectPart !== undefined)
-        result.push({ type: 'subjects', labels: subjectPart.data?.labels ?? [] });
+      if (subjectPart !== undefined) appendSubjectEntry(result, subjectPart.data?.labels ?? []);
+      const createdAt = message.createdAt === undefined ? null : new Date(message.createdAt);
       result.push({
         type: 'msg',
         messageId: message.id,
         role: message.role,
         content: visibleText || (streamError === undefined ? '回答已中断。' : '回答未完成。'),
+        ...(createdAt !== null && !Number.isNaN(createdAt.getTime())
+          ? { at: createdAt.toISOString() }
+          : {}),
         ...(cancelled ? { cancelled: true } : {}),
         ...(streamError !== undefined
           ? {
@@ -1005,7 +1067,10 @@ const selectSession = async (sessionId) => {
     }),
   );
   const input = $('#chat-input');
-  if (input !== null) input.value = draftFor(sessionId);
+  if (input !== null) {
+    input.value = draftFor(sessionId);
+    resizeChatInput();
+  }
   setSessionsOpen(false);
   renderSessions();
   renderSubjects();
@@ -1052,7 +1117,10 @@ const createSession = async ({ title, subjects = [], draft = '' } = {}) => {
   hasOlderMessages = false;
   feed.splice(0);
   const input = $('#chat-input');
-  if (input !== null) input.value = draft;
+  if (input !== null) {
+    input.value = draft;
+    resizeChatInput();
+  }
   setSessionsOpen(false);
   renderSubjects();
   saveChatView();
@@ -1179,11 +1247,14 @@ const send = async (
   activeController = controller;
   const version = viewVersion;
   const accountId = getAccountId();
-  const cancelBtn = el('button', 'btn btn-outline btn-sm', '停止回答');
+  const cancelBtn = el('button', 'btn btn-outline btn-sm chat-cancel', '停止');
   cancelBtn.type = 'button';
   cancelBtn.id = 'chat-cancel';
   cancelBtn.addEventListener('click', () => controller.abort());
-  $('#chat-form')?.append(cancelBtn);
+  const composerBar = $('#chat-form .chat-composer-bar');
+  if (composerBar !== null) composerBar.append(cancelBtn);
+  else $('#chat-form')?.append(cancelBtn);
+  if (sendBtn !== null) sendBtn.hidden = true;
   let assistantEntry = null;
   let sessionId = null;
   let assistantMessageId = null;
@@ -1197,22 +1268,33 @@ const send = async (
     sessionId = activeSessionId;
     if (sessionId === null) return;
     if (requestedText === undefined) input.value = '';
+    if (input.value.length === 0) resizeChatInput();
     if (!retry) {
       activeMessageCount += 1;
       if (activeSubjects.length > 0)
-        feed.push({ type: 'subjects', labels: activeSubjects.map((item) => item.label) });
-      feed.push({ type: 'msg', role: 'user', messageId, content: text });
+        appendSubjectEntry(
+          feed,
+          activeSubjects.map((item) => item.label),
+        );
+      feed.push({
+        type: 'msg',
+        role: 'user',
+        messageId,
+        content: text,
+        at: new Date().toISOString(),
+      });
     }
     followOutput = true;
     saveChatView();
     renderChat();
-    const statusEntry = { type: 'status', text: '正在连接模型…' };
+    const statusEntry = { type: 'status', text: '正在连接模型' };
     const actionsEntry = { type: 'actions', usedActions: [] };
     assistantEntry = {
       type: 'msg',
       role: 'assistant',
       content: '',
       cancelled: false,
+      streaming: true,
       retry: { text, messageId },
     };
     const toolCalls = new Map();
@@ -1249,7 +1331,7 @@ const send = async (
     if (!acceptApiResponse(response, sessionEpoch) || version !== viewVersion) return;
     const route = parseChatRouteHeader(response.headers.get('x-luoome-chat-route'));
     if (route !== null) {
-      evidenceOpen = true;
+      if (route.scenario !== 'general') evidenceOpen = true;
       const previousPlan = retry ? feed.findLast((entry) => entry.type === 'plan') : undefined;
       if (previousPlan !== undefined) previousPlan.route = route;
       else feed.push({ type: 'plan', route });
@@ -1259,9 +1341,9 @@ const send = async (
       if (part.type === 'start') {
         if (typeof part.messageId === 'string') assistantMessageId = part.messageId;
       } else if (part.type === 'start-step') {
-        statusEntry.text = '模型正在推理…';
+        statusEntry.text = '正在梳理上下文';
       } else if (part.type === 'tool-input-available') {
-        statusEntry.text = `正在处理 ${toolLabel(part.toolName)}…`;
+        statusEntry.text = `正在调用 ${toolLabel(part.toolName)}`;
         evidenceOpen = true;
         const action = {
           toolCallId: part.toolCallId,
@@ -1307,7 +1389,7 @@ const send = async (
         controller.abort();
         throw new DOMException('响应已停止', 'AbortError');
       } else if (part.type === 'text-start') {
-        statusEntry.text = '正在生成回答…';
+        statusEntry.text = '正在生成回答';
         ensureAssistant();
       } else if (part.type === 'text-delta') {
         ensureAssistant();
@@ -1322,6 +1404,7 @@ const send = async (
     if (version !== viewVersion) return;
     removeEntry(statusEntry);
     activeMessageCount += 1;
+    delete assistantEntry.streaming;
     if (assistantEntry.content.trim().length === 0 && toolCalls.size === 0) {
       assistantEntry.content = '模型没有返回内容，请重试。';
       assistantEntry.failed = true;
@@ -1337,6 +1420,7 @@ const send = async (
     if (status !== undefined) removeEntry(status);
     activeMessageCount += 1;
     if (assistantEntry !== null) {
+      delete assistantEntry.streaming;
       if (controller.signal.aborted) {
         assistantEntry.cancelled = true;
         if (assistantEntry.content.trim().length === 0)
@@ -1361,7 +1445,10 @@ const send = async (
     if (activeController === controller) {
       sending = false;
       activeController = null;
-      if (sendBtn !== null) sendBtn.disabled = false;
+      if (sendBtn !== null) {
+        sendBtn.hidden = false;
+        sendBtn.disabled = false;
+      }
       renderSessions();
       renderChat();
       saveChatView();
@@ -1380,6 +1467,10 @@ const initChat = () => {
     evidenceOpen = !evidenceOpen;
     renderEvidence();
   });
+  $('#chat-dialog-tab')?.addEventListener('click', () => {
+    evidenceOpen = false;
+    renderEvidence();
+  });
   $('#chat-evidence-close')?.addEventListener('click', () => {
     evidenceOpen = false;
     renderEvidence();
@@ -1391,7 +1482,10 @@ const initChat = () => {
   $('#chat-sessions-toggle')?.addEventListener('click', toggleSessions);
   $('#sidebar-sessions-toggle')?.addEventListener('click', toggleSessions);
   $('#chat-sessions-close')?.addEventListener('click', () => setSessionsOpen(false));
-  $('#chat-input')?.addEventListener('input', saveChatView);
+  $('#chat-input')?.addEventListener('input', () => {
+    resizeChatInput();
+    saveChatView();
+  });
   $('#chat-input')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
@@ -1476,7 +1570,10 @@ const refreshChat = async () => {
     activeSubjects = Array.isArray(recovery?.subjects) ? recovery.subjects : [];
     feed.splice(0);
     const input = $('#chat-input');
-    if (input !== null) input.value = draftFor('new');
+    if (input !== null) {
+      input.value = draftFor('new');
+      resizeChatInput();
+    }
     renderSubjects();
     renderChat();
   }
