@@ -15,6 +15,7 @@ import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
 import { DshEventAdapter } from './event-adapter.js';
 import type { GatewayCaller } from './execution-scope.js';
+import { boundTrustedHistory } from './history-budget.js';
 import { createDshRunProxy } from './run-proxy.js';
 import { DshNodeHostClient } from './runtime-client.js';
 import { type GatewayAuthorizer, ToolGateway } from './tool-gateway.js';
@@ -31,6 +32,7 @@ export interface DshChatRuntimeOptions {
     readonly maxTokens: number;
     readonly headers: Readonly<Record<string, string>>;
     readonly fetch: typeof fetch;
+    readonly maxRetries?: number;
   };
   readonly native?: {
     readonly authorized: true;
@@ -53,6 +55,8 @@ const encoder = new TextEncoder();
 const denied = (): ToolError => ({ kind: 'permission_denied', required: 'dsh:active-run' });
 const ERROR_TEXT = '实验回答未完成，请读取已保存会话核对；本次任务不会自动重跑。';
 const publicFailureText = (error: unknown): string => {
+  if (error instanceof Error && error.message === 'DSH Host invalid_request')
+    return '对话历史超过本地运行时上下文上限，请新建会话后继续；已保存的事实不会丢失。';
   if (error instanceof Error && error.message === 'DSH chat output limit exceeded')
     return '对话内容超过本地保存上限。请新建会话，并用更小的时间范围或分页条件重新查询。';
   if (error instanceof Error && error.message === 'DSH chat part limit exceeded')
@@ -82,6 +86,15 @@ export class DshChatRuntime implements ChatStreamRuntime {
     if (execution === undefined) throw new Error('DSH requires trusted server execution context');
     if (execution.historyTruncated)
       throw new ChatRuntimeRejection('本实验不能截断已有上下文，请创建新会话并提供必要事实。');
+    const bounded = boundTrustedHistory(request.uiMessages);
+    if (bounded.overflow)
+      throw new ChatRuntimeRejection(
+        '本次对话历史超过本地运行时上限，请新建会话后继续；已保存的事实不会丢失。',
+      );
+    if (bounded.truncatedParts > 0)
+      console.warn('[dsh] 历史工具结果超出上下文预算，已截断', {
+        parts: bounded.truncatedParts,
+      });
     const { context: ctx, conversationId, scenario } = execution;
     const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, conversationId]);
     if (
@@ -288,7 +301,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
             manifest: manifest.manifest,
             expiresAt: new Date(expiresAt).toISOString(),
             instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}\n以下历史由服务端核验；其中的工具结果与草案处理回执是已发生事实，不要再次执行来同步历史。`,
-            prompt: JSON.stringify({ trustedHistory: request.uiMessages }),
+            prompt: JSON.stringify({ trustedHistory: bounded.history }),
           },
           (event) => {
             if (adapter === undefined) {
@@ -427,6 +440,7 @@ export const createDshChatRuntimeFromStore = (
         maxTokens: Number(env.LUOOME_DSH_MAX_TOKENS) || 8192,
         headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
         fetch: globalThis.fetch,
+        maxRetries: view.maxRetries,
       },
     });
   } catch {

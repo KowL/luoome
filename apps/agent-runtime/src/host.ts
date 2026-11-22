@@ -292,6 +292,10 @@ export class NodeRuntimeHost {
         : 'completed';
     } catch (error) {
       failed = true;
+      console.error('run failed', {
+        stage,
+        message: error instanceof Error ? error.message : String(error),
+      });
       status = active.cancel
         ? active.cancelReason === 'timeout'
           ? 'failed'

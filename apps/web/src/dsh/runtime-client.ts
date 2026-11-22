@@ -133,7 +133,11 @@ export class DshNodeHostClient {
         newline = pending.indexOf('\n');
       }
     });
-    this.#child.stderr.resume();
+    this.#child.stderr.setEncoding('utf8');
+    this.#child.stderr.on('data', (chunk: string) => {
+      for (const line of chunk.split('\n'))
+        if (line.trim() !== '') console.error(`[dsh-host] ${line}`);
+    });
     this.#child.stdin.on('error', () => fail('DSH Host input closed'));
   }
 
