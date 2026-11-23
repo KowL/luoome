@@ -22,3 +22,7 @@ export const StockSchema = z.object({
   name: z.string().min(1),
   industry: z.string().optional(),
 });
+
+/** 港股/美股等名称内的空格有意义；只去掉汉字之间的空白（如 "五 粮 液" → "五粮液"）。 */
+export const normalizeStockName = (name: string): string =>
+  name.replace(/(\p{Script=Han})[\s\u3000]+(?=\p{Script=Han})/gu, '$1');

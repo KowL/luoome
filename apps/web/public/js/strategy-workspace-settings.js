@@ -96,7 +96,7 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
     const target = targets.find(({ watchlist }) => watchlist.id === select.value)?.watchlist;
     const confirmed = await confirmDialog({
       title: '订阅 Strategy 输出',
-      message: `确认将 ${strategy.name} 的后续 published operational run 同步到“${target?.name ?? select.value}”？部分数据只会标 stale，试跑/评估/未发布运行不会改变 Watchlist。`,
+      message: `确认将 ${strategy.name} 的后续已结束的生产（operational）运行同步到“${target?.name ?? select.value}”？部分数据只会标 stale，试跑、评估与未完成运行不会改变 Watchlist。`,
       confirmLabel: '确认订阅',
     });
     if (!confirmed) return;
@@ -120,7 +120,7 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
     cancel.addEventListener('click', async () => {
       const confirmed = await confirmDialog({
         title: '取消 Strategy 订阅',
-        message: `确认停止将 ${strategy.name} 的后续 published operational run 同步到“${target?.name ?? subscription.watchlistId}”？已有 Watchlist 成员和同步历史不会被删除。`,
+        message: `确认停止将 ${strategy.name} 的后续已结束的生产（operational）运行同步到“${target?.name ?? subscription.watchlistId}”？已有 Watchlist 成员和同步历史不会被删除。`,
         confirmLabel: '取消订阅',
       });
       if (!confirmed) return;
@@ -158,7 +158,7 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
         el(
           'p',
           'muted',
-          '必须显式选择目标。只有 published operational run 才会同步；partial 只标 stale，不根据缺失集合退出来源。',
+          '必须显式选择目标。只有已结束的生产（operational）运行才会同步；partial 只标 stale，不根据缺失集合退出来源。',
         ),
       ]),
       el('div', 'row-actions', [select, subscribe]),

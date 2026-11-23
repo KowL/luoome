@@ -11,7 +11,6 @@ import {
   persistedFeed,
   planCardLines,
   settlementText,
-  shouldContinueAfterDrafts,
   trimLeadingChatWhitespace,
   usageText,
 } from './chat.js';
@@ -231,19 +230,6 @@ describe('草案确认闭环', () => {
       '/api/chat/sessions/session-a/drafts/message%2Fa/call%2Fa',
     );
     expect(draftFromPart({ output: { data: {} } }, draftContext)).toBeNull();
-  });
-
-  it('同轮草案全部处理且至少有一项成功后才继续解释', () => {
-    const succeeded = { settlement: { status: 'succeeded' } };
-    const cancelled = { settlement: { status: 'cancelled' } };
-    const failed = { settlement: { status: 'failed' } };
-    expect(shouldContinueAfterDrafts([succeeded, {}])).toBe(false);
-    expect(shouldContinueAfterDrafts([succeeded, { settlement: { status: 'executing' } }])).toBe(
-      false,
-    );
-    expect(shouldContinueAfterDrafts([cancelled, failed])).toBe(false);
-    expect(shouldContinueAfterDrafts([succeeded, cancelled, failed])).toBe(true);
-    expect(shouldContinueAfterDrafts([])).toBe(false);
   });
 
   it('保留服务端 Advice 结果用于刷新后展示，同时区分执行失败与取消', () => {

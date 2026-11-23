@@ -12062,12 +12062,14 @@ body.minute-embed::before { content: none; }
 .sidebar-chat .chat-new-session {
   width: 100%;
   height: 32px;
+  flex: 0 0 auto;
   margin: 0 0 8px;
   padding: 0 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
+  white-space: nowrap;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: transparent;
@@ -12366,4 +12368,110 @@ body.minute-embed::before { content: none; }
 
 #route-chat .chat-send[hidden] {
   display: none;
+}
+
+/* 手机：导航标签完整可见，持仓表格改为卡片式明细，状态条避让底部输入区。 */
+@media (max-width: 480px) {
+  .sidebar {
+    padding: var(--space-2);
+  }
+
+  .sidebar .nav {
+    gap: 2px;
+  }
+
+  .sidebar .nav-item {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+  }
+
+  .sidebar .nav-item::before {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .status {
+    top: calc(var(--topbar-h) + 60px);
+    right: var(--space-3);
+    bottom: auto;
+    left: var(--space-3);
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .holdings-table-wrap {
+    overflow-x: visible;
+    margin: 0;
+    padding: 0;
+  }
+
+  #holdings-table,
+  #holdings-table tbody,
+  #holdings-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  #holdings-table thead,
+  #holdings-table tfoot {
+    display: none;
+  }
+
+  #holdings-table tr {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  #holdings-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  #holdings-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 0 12px;
+    padding: 3px 0;
+    border: 0;
+    text-align: right;
+  }
+
+  #holdings-table td::before {
+    content: attr(data-label);
+    grid-column: 1;
+    grid-row: 1;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    text-align: left;
+  }
+
+  #holdings-table td > div {
+    grid-column: 2;
+  }
+
+  #holdings-table td:first-child,
+  #holdings-table td:last-child {
+    display: block;
+    text-align: left;
+  }
+
+  #holdings-table td:first-child {
+    padding-bottom: 8px;
+  }
+
+  #holdings-table td:first-child::before,
+  #holdings-table td:last-child::before {
+    content: none;
+  }
+
+  #holdings-table td:last-child {
+    padding-top: 8px;
+  }
+
+  #holdings-table td:last-child .row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }

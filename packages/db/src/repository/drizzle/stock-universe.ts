@@ -1,5 +1,6 @@
 import {
   type MarketCoverage,
+  normalizeStockName,
   type Stock,
   type StockUniverseApplySummary,
   type StockUniverseMember,
@@ -84,6 +85,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
       const observedIds = new Set<string>();
 
       for (const entry of snapshot.entries) {
+        const name = normalizeStockName(entry.name);
         const existing = tx
           .select()
           .from(stocks)
@@ -101,7 +103,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
               id: stockId,
               code: entry.code,
               exchange: entry.exchange,
-              name: entry.name,
+              name,
               industry: entry.industry ?? null,
               nameSource: 'universe',
               nameUpdatedAt: input.appliedAt,
@@ -111,12 +113,11 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
           createdStocks += 1;
         } else if (
           (existing.nameSource === 'stub' || existing.nameSource === 'universe') &&
-          (existing.name !== entry.name ||
-            (existing.industry === null && entry.industry !== undefined))
+          (existing.name !== name || (existing.industry === null && entry.industry !== undefined))
         ) {
           tx.update(stocks)
             .set({
-              name: entry.name,
+              name,
               ...(existing.industry === null && entry.industry !== undefined
                 ? { industry: entry.industry }
                 : {}),
@@ -138,7 +139,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             source: snapshot.source,
             coverage: snapshot.coverage,
             stockId,
-            observedName: entry.name,
+            observedName: name,
             listingStatus: entry.listingStatus,
             state: 'active',
             firstSeenAt: snapshot.observedAt,
@@ -154,7 +155,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
               stockUniverseMemberships.stockId,
             ],
             set: {
-              observedName: entry.name,
+              observedName: name,
               listingStatus: entry.listingStatus,
               state: 'active',
               lastSeenAt: snapshot.observedAt,
@@ -255,7 +256,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             id: row.id,
             code: row.code,
             exchange: row.exchange,
-            name: row.name,
+            name: normalizeStockName(row.name),
             ...(row.industry === null ? {} : { industry: row.industry }),
           } satisfies Stock),
         states,
@@ -304,7 +305,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             id: row.id,
             code: row.code,
             exchange: row.exchange,
-            name: row.name,
+            name: normalizeStockName(row.name),
             ...(row.industry === null ? {} : { industry: row.industry }),
           } satisfies Stock),
         active: (current?.active ?? false) || state === 'active',
@@ -377,7 +378,7 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
         id: row.id,
         code: row.code,
         exchange: row.exchange,
-        name: row.name,
+        name: normalizeStockName(row.name),
         ...(row.industry === null ? {} : { industry: row.industry }),
       }));
   }

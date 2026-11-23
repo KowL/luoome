@@ -919,6 +919,15 @@ export const registerRepositoryContractTests = (
         ]);
       });
 
+      it('读取与搜索规范化汉字之间的空白，保留英文空格', async () => {
+        await repos.stock.save(makeStock('stk-4', '000858', { name: '五 粮 液' }));
+        await repos.stock.save(makeStock('stk-5', 'AAPL', { name: 'Apple Inc.', exchange: 'US' }));
+        expect((await repos.stock.findById('stk-4'))?.name).toBe('五粮液');
+        expect((await repos.stock.search('五粮液')).map((s) => s.id)).toEqual(['stk-4']);
+        expect((await repos.stock.search('五 粮 液')).map((s) => s.id)).toEqual(['stk-4']);
+        expect((await repos.stock.search('Apple Inc.')).map((s) => s.id)).toEqual(['stk-5']);
+      });
+
       it('save 同 id 为 upsert；remove 生效', async () => {
         await repos.stock.save(makeStock('stk-1', '002594', { name: '旧' }));
         await repos.stock.save(makeStock('stk-1', '002594', { name: '新' }));
@@ -988,6 +997,45 @@ export const registerRepositoryContractTests = (
         expect(latest?.status).toBe('succeeded');
         expect(latest?.observedCount).toBe(2);
         expect(latest?.observedAt).toEqual(observedAt);
+      });
+
+      it('写入快照时规范化汉字名称空白，读取目录同样规范化', async () => {
+        await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-name-normalize',
+          appliedAt: new Date('2026-07-28T08:21:00.000Z'),
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt: new Date('2026-07-28T08:20:00.000Z'),
+            complete: true,
+            reportedTotal: 1,
+            entries: [
+              {
+                stockId: '000858.SZ',
+                code: stockCode('000858'),
+                exchange: 'SZ',
+                name: '五 粮 液',
+                listingStatus: 'listed',
+              },
+            ],
+          },
+        });
+        expect((await repos.stock.findById('000858.SZ'))?.name).toBe('五粮液');
+        expect(
+          (
+            await repos.stockUniverse.listCurrent({
+              coverage: 'CN_A_SHARES_SH_SZ',
+              status: 'active',
+            })
+          )[0]?.name,
+        ).toBe('五粮液');
+        expect(
+          (
+            await repos.stockUniverse.listCurrentMembers({
+              coverage: 'CN_A_SHARES_SH_SZ',
+            })
+          )[0]?.stock.name,
+        ).toBe('五粮液');
       });
 
       it('同一 syncId 重放幂等', async () => {

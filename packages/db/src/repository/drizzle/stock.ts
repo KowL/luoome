@@ -1,10 +1,11 @@
 import {
   assertStockInvariants,
+  normalizeStockName,
   type Stock,
   type StockCode,
   type StockRepository,
 } from '@luoome/core';
-import { asc, eq, like, or } from 'drizzle-orm';
+import { asc, eq, like, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { type Schema, stocks } from '../../schema/index.js';
 import { RepositoryWriteScope } from '../../write-scope.js';
@@ -16,7 +17,7 @@ const toStock = (row: StockRow): Stock => ({
   id: row.id,
   code: row.code,
   exchange: row.exchange,
-  name: row.name,
+  name: normalizeStockName(row.name),
   ...(row.industry !== null ? { industry: row.industry } : {}),
 });
 
@@ -73,10 +74,17 @@ export class DrizzleStockRepository implements StockRepository {
       return rows.map(toStock);
     }
     const pattern = `%${q}%`;
+    const compactPattern = `%${q.replace(/\s+/gu, '')}%`;
     const rows = this.db
       .select()
       .from(stocks)
-      .where(or(like(stocks.code, pattern), like(stocks.name, pattern)))
+      .where(
+        or(
+          like(stocks.code, pattern),
+          like(stocks.name, pattern),
+          like(sql`replace(replace(${stocks.name}, ' ', ''), '　', '')`, compactPattern),
+        ),
+      )
       .orderBy(asc(stocks.id))
       .all();
     return rows.map(toStock);

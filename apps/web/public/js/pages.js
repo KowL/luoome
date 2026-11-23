@@ -1306,6 +1306,11 @@ const renderHoldings = async (setStatus) => {
       b.addEventListener('click', () => onClick(b));
       return b;
     };
+    const cell = (label, className, children) => {
+      const node = el('td', className, children);
+      node.setAttribute('data-label', label);
+      return node;
+    };
     const row = el('tr', null, [
       el('td', null, [
         el('div', null, [
@@ -1314,19 +1319,19 @@ const renderHoldings = async (setStatus) => {
         ]),
         el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
       ]),
-      el('td', 'num', String(item.holding.quantity)),
-      el('td', 'num', fmtNum(item.holding.avgCost)),
-      el('td', 'num', fmtNum(item.currentPrice)),
-      el('td', 'num', fmtNum(item.marketValue)),
-      el('td', `num ${todayCls}`, [
+      cell('数量', 'num', String(item.holding.quantity)),
+      cell('成本', 'num', fmtNum(item.holding.avgCost)),
+      cell('现价', 'num', fmtNum(item.currentPrice)),
+      cell('市值', 'num', fmtNum(item.marketValue)),
+      cell('今日盈亏', `num ${todayCls}`, [
         el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
         el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
       ]),
-      el('td', `num ${pnlCls}`, [
+      cell('盈亏', `num ${pnlCls}`, [
         el('div', null, fmtSigned(item.pnl)),
         el('div', 'cell-sub', fmtPct(item.pnlPct)),
       ]),
-      el('td', null, [
+      cell('', null, [
         el('div', 'row-actions', [
           actionBtn('分析', (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn)),
           actionBtn('加仓', () => openTradeModal(h, 'buy')),

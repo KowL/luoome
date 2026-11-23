@@ -242,11 +242,6 @@ const settlementText = (settlement) => {
 const isSettled = (draft) =>
   ['succeeded', 'failed', 'cancelled'].includes(draft.settlement?.status);
 
-const shouldContinueAfterDrafts = (drafts) =>
-  drafts.length > 0 &&
-  drafts.every(isSettled) &&
-  drafts.some((draft) => draft.settlement.status === 'succeeded');
-
 const usageText = (metadata) => {
   const usage = metadata?.usage;
   if (usage === undefined) return '';
@@ -276,15 +271,8 @@ const settleDraft = async (draft, approved) => {
   if (response.ok) draft.settlement = response.data;
   else draft.error = resultErrorText(response, '请求未完成，请刷新会话后重试');
   renderChat();
+  // 执行回执已由草案卡片展示，不再自动追加一轮模型调用。
   if (response.ok) document.dispatchEvent(new Event('luoome:workspace-updated'));
-  if (!response.ok) return;
-  const related = feed
-    .filter((entry) => entry.type === 'drafts')
-    .flatMap((entry) => entry.drafts)
-    .filter((item) => item.messageId === draft.messageId);
-  if (shouldContinueAfterDrafts(related)) {
-    await send('请根据刚才草案的实际处理结果，说明完成了哪些操作、当前状态和可选的下一步。');
-  }
 };
 
 const DRAFT_FIELD_SOURCE_LABELS = { default: '默认', inferred: '推断' };
@@ -1604,7 +1592,6 @@ export {
   send,
   setDiscussionSubjects,
   settlementText,
-  shouldContinueAfterDrafts,
   trimLeadingChatWhitespace,
   usageText,
 };

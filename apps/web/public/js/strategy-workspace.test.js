@@ -344,6 +344,35 @@ describe('strategy workspace route state', () => {
 });
 
 describe('Strategy Experiment Lab', () => {
+  it('结构化字段下拉为完整 catalog 提供中文标签', () => {
+    const catalog = {
+      ...experimentCatalog,
+      fields: [
+        ...experimentCatalog.fields,
+        {
+          path: 'indicators.bollPosition20',
+          type: 'number',
+          dataSource: 'daily-bars',
+          coverage: ['CN_A_SHARES_SH_SZ'],
+          operators: ['>', '<'],
+        },
+        {
+          path: 'meta.isBroken',
+          type: 'boolean',
+          dataSource: 'limit-up-board-history',
+          coverage: ['CN_A_SHARES_SH_SZ'],
+          operators: ['=='],
+        },
+      ],
+    };
+    const editor = createStrategyDefinitionEditor(structuredClone(experimentDefinition), catalog);
+    const options = editor.root.querySelectorAll('option').map((option) => option.textContent);
+    expect(options).toContain('布林带位置（0=下轨，1=上轨）');
+    expect(options).toContain('当日是否炸板');
+    expect(options).not.toContain('indicators.bollPosition20');
+    expect(options).not.toContain('meta.isBroken');
+  });
+
   it('只使用 catalog 生成结构化表达式，并规范化样本股票', () => {
     const field = experimentCatalog.fields[0];
     expect(buildExperimentSimpleExpression(field, '>', ' 10 ')).toBe('quote.close > 10');

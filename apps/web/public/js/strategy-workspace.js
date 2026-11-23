@@ -72,6 +72,7 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
   }
   const workspace = result.data;
   const rerender = async () => {
+    invalidateStrategyWorkspaceCache();
     const nextEpoch = ++requestEpoch;
     await renderWorkspaceDetail(
       strategyId,

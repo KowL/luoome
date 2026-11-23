@@ -378,7 +378,7 @@
               <button id="btn-holdings-analyze-cancel" class="btn btn-outline btn-sm" type="button" hidden>取消分析</button>
             </div>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap holdings-table-wrap">
             <table class="table" id="holdings-table">
               <thead>
                 <tr>
@@ -938,7 +938,7 @@
             <div>
               <span class="section-kicker">DELIVERY CHANNEL</span>
               <h2>飞书通知</h2>
-              <p>连接群自定义机器人，用于投递预警和报告。请先在「插件 → 通知投递」显式启用；连接测试也受该开关控制。</p>
+              <p>连接群自定义机器人，用于投递预警和报告。请先在 $LUOOME_HOME/plugins.json 手写 "business.notification": { "enabled": true } 并重启宿主；连接测试也受该开关控制。</p>
             </div>
             <div id="feishu-settings-state" class="ai-settings-state" aria-live="polite">
               <span class="health-dot"></span>
