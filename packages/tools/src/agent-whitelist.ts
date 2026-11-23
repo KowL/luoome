@@ -9,6 +9,7 @@ export const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   'fetch_news',
   'get_account_performance',
   'get_stock_market_view',
+  'get_intraday_summary',
 ]);
 
 export const buildAgentCallableTools = (

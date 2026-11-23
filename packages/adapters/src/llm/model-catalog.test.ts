@@ -102,72 +102,75 @@ describe('llm/model-catalog', () => {
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       temperature: 0.2,
     },
-  ])('$provider 通过 OpenAI-compatible JSON Object 完成结构化生成', async (preset) => {
-    let requestURL = '';
-    let requestBody: Record<string, unknown> = {};
-    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-      requestURL = input instanceof Request ? input.url : String(input);
-      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return new Response(
-        JSON.stringify({
-          id: 'chatcmpl-test',
-          object: 'chat.completion',
-          created: 0,
-          model: preset.model,
-          choices: [
-            {
-              index: 0,
-              message: { role: 'assistant', content: '{"decision":"hold"}' },
-              finish_reason: 'stop',
+  ])(
+    '$provider 不支持 structured outputs 时不发送 response_format，而是注入 schema',
+    async (preset) => {
+      let requestURL = '';
+      let requestBody: Record<string, unknown> = {};
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        requestURL = input instanceof Request ? input.url : String(input);
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl-test',
+            object: 'chat.completion',
+            created: 0,
+            model: preset.model,
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: '{"decision":"hold"}' },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }) as unknown as typeof fetch;
+      const catalog = new AIModelCatalog(
+        {
+          version: 1,
+          providers: {
+            [preset.provider]: {
+              type: 'openai-compatible',
+              baseURL: preset.baseURL,
+              apiKeyEnv: preset.apiKeyEnv,
+              supportsStructuredOutputs: false,
+              quirks: ['inject-schema', 'recover-malformed-text'],
             },
-          ],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        }),
-        { headers: { 'content-type': 'application/json' } },
+          },
+          profiles: {
+            generation: {
+              model: `${preset.provider}:${preset.model}`,
+              temperature: preset.temperature,
+              reasoningEffort: 'high',
+            },
+            agent: { model: `${preset.provider}:${preset.model}`, temperature: preset.temperature },
+          },
+        },
+        { [preset.apiKeyEnv]: 'test-key' },
+        { fetchImpl },
       );
-    }) as unknown as typeof fetch;
-    const catalog = new AIModelCatalog(
-      {
-        version: 1,
-        providers: {
-          [preset.provider]: {
-            type: 'openai-compatible',
-            baseURL: preset.baseURL,
-            apiKeyEnv: preset.apiKeyEnv,
-            supportsStructuredOutputs: false,
-            quirks: ['inject-schema', 'recover-malformed-text'],
-          },
-        },
-        profiles: {
-          generation: {
-            model: `${preset.provider}:${preset.model}`,
-            temperature: preset.temperature,
-            reasoningEffort: 'high',
-          },
-          agent: { model: `${preset.provider}:${preset.model}`, temperature: preset.temperature },
-        },
-      },
-      { [preset.apiKeyEnv]: 'test-key' },
-      { fetchImpl },
-    );
-    const adapter = new AISDKAdapter(catalog.resolve('generation'));
+      const adapter = new AISDKAdapter(catalog.resolve('generation'));
 
-    await expect(
-      adapter.generate({
-        system: 'system',
-        data: { stockId: '000001.SZ' },
-        schema: z.object({ decision: z.literal('hold') }),
-      }),
-    ).resolves.toMatchObject({ decision: 'hold' });
-    expect(requestURL).toBe(`${preset.baseURL}/chat/completions`);
-    expect(requestBody).toMatchObject({
-      model: preset.model,
-      temperature: preset.temperature,
-      reasoning_effort: 'high',
-      response_format: { type: 'json_object' },
-    });
-    expect(JSON.stringify(requestBody)).toContain('JSON Schema');
-  });
+      await expect(
+        adapter.generate({
+          system: 'system',
+          data: { stockId: '000001.SZ' },
+          schema: z.object({ decision: z.literal('hold') }),
+        }),
+      ).resolves.toMatchObject({ decision: 'hold' });
+      expect(requestURL).toBe(`${preset.baseURL}/chat/completions`);
+      expect(requestBody).toMatchObject({
+        model: preset.model,
+        temperature: preset.temperature,
+        reasoning_effort: 'high',
+      });
+      expect(requestBody).not.toHaveProperty('response_format');
+      expect(JSON.stringify(requestBody)).toContain('JSON Schema');
+    },
+  );
 
   it('首次加载时生成默认模型目录，且文件不包含密钥', () => {
     const root = mkdtempSync(join(tmpdir(), 'luoome-model-catalog-'));

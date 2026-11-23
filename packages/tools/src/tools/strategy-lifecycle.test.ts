@@ -8,6 +8,7 @@ import {
   pauseStrategyTool,
   publishStrategyVersionTool,
   resumeStrategyTool,
+  validateStrategyDefinitionTool,
   validateStrategyVersionTool,
 } from '@luoome/toolkit/tools/strategy-lifecycle.js';
 import { describe, expect, it } from 'vitest';
@@ -29,6 +30,52 @@ const validDefinition = (): StrategyDslV1 => ({
     ],
   },
   signals: { entry: [], exit: [], risk: [] },
+});
+
+describe('validate_strategy_definition', () => {
+  it('接受已注册字段并返回引用与数据需求', async () => {
+    const ctx = await buildTestContext();
+    const result = await validateStrategyDefinitionTool.execute(
+      { definition: validDefinition() },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.valid).toBe(true);
+    expect(result.data.errors).toEqual([]);
+    expect(result.data.referencedFields).toEqual(['quote.close']);
+    expect(result.data.requiredLookback).toBe(0);
+    expect(result.data.dataSources).toEqual(['quote']);
+  });
+
+  it('拒绝目录外字段与函数，不落库也不抛异常', async () => {
+    const ctx = await buildTestContext();
+    const definition = validDefinition();
+    definition.selection.rules[0] = {
+      id: 'unsupported',
+      name: '未支持写法',
+      when: 'ref(ATR(14)) > 0 && marketIndexChangePct > 1',
+      evidence: ['越界'],
+    };
+    const result = await validateStrategyDefinitionTool.execute({ definition }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.valid).toBe(false);
+    expect(result.data.errors.join('\n')).toContain('表达式无效');
+    expect(await ctx.repos.strategy.list()).toEqual([]);
+  });
+
+  it('schema 不合法时把错误原文作为结果返回', async () => {
+    const ctx = await buildTestContext();
+    const result = await validateStrategyDefinitionTool.execute(
+      { definition: { schemaVersion: 2 } },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.valid).toBe(false);
+    expect(result.data.errors.length).toBeGreaterThan(0);
+  });
 });
 
 describe('Strategy lifecycle tools', () => {

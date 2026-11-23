@@ -1,11 +1,35 @@
 import type { MarketSourceStatus, SourceStatus, ToolContext } from '@luoome/core';
+import { dateInShanghai, previousTradingDate } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 import { computeMarketSession } from '../internal/market-view.js';
 
-/** 新鲜度阈值：最新快照超过 15 分钟视为 stale（Phase 1 简化，不区分盘中/盘后）。 */
+/** 新鲜度阈值：盘中最新快照超过 15 分钟视为 stale。 */
 const STALE_AFTER_MS = 15 * 60 * 1000;
+
+/**
+ * 非盘中时段用「最后一个应已收盘的交易日」判断新鲜度：收盘后 / 午休当日
+ * 的最后一笔数据不应因为超过 15 分钟被标 stale（2026-11-23 优先改进 6）。
+ */
+const freshnessReferenceDate = (
+  now: Date,
+  session: ReturnType<typeof computeMarketSession>,
+): string =>
+  session === 'pre-open' || session === 'non-trading-day'
+    ? previousTradingDate(now)
+    : dateInShanghai(now);
+
+const isFreshObservation = (
+  dataAsOf: Date,
+  now: Date,
+  session: ReturnType<typeof computeMarketSession>,
+): boolean => {
+  if (session === 'trading') {
+    return now.getTime() - dataAsOf.getTime() <= STALE_AFTER_MS;
+  }
+  return dateInShanghai(dataAsOf) >= freshnessReferenceDate(now, session);
+};
 
 /** 关注范围 = 未平仓持仓 ∪ enabled Watchlist 当前成员（去重）。 */
 const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[]> => {
@@ -78,6 +102,7 @@ export const getMarketDataStatusTool = defineTool({
   output: GetMarketDataStatusOutput,
   handler: async (_input, ctx) => {
     const now = ctx.clock();
+    const session = computeMarketSession(now);
 
     // provider 新鲜度：扫关注股票的最新快照，按 source 聚合 max(ts)
     const stockIds = await computeRelevantStockIds(ctx);
@@ -137,7 +162,7 @@ export const getMarketDataStatusTool = defineTool({
       if (latest === undefined) {
         return { provider, freshness: 'unknown' as const };
       }
-      const fresh = now.getTime() - latest.getTime() <= STALE_AFTER_MS;
+      const fresh = isFreshObservation(latest, now, session);
       return {
         provider,
         freshness: fresh ? ('fresh' as const) : ('stale' as const),
@@ -145,21 +170,24 @@ export const getMarketDataStatusTool = defineTool({
       };
     });
     const datasets = inventory.map((item) => {
-      const thresholdMs =
+      const intraday =
         item.dataset === 'quote' ||
         item.dataset === 'realtime-index' ||
         item.dataset === 'market-snapshot' ||
-        item.dataset === 'market-snapshot-envelope'
-          ? STALE_AFTER_MS
-          : 36 * 60 * 60 * 1000;
+        item.dataset === 'market-snapshot-envelope';
+      const thresholdMs = intraday ? STALE_AFTER_MS : 36 * 60 * 60 * 1000;
       // §4.3 状态机：最新有效 outcome 失败 → unavailable；否则按 dataAsOf 阈值；不回退 lastSuccessAt
       const freshness =
         item.lastErrorKind !== undefined
           ? ('unavailable' as const)
           : item.dataAsOf !== undefined
-            ? now.getTime() - item.dataAsOf.getTime() <= thresholdMs
-              ? ('fresh' as const)
-              : ('stale' as const)
+            ? intraday
+              ? isFreshObservation(item.dataAsOf, now, session)
+                ? ('fresh' as const)
+                : ('stale' as const)
+              : now.getTime() - item.dataAsOf.getTime() <= thresholdMs
+                ? ('fresh' as const)
+                : ('stale' as const)
             : ('unknown' as const);
       return { ...item, coverage: [...item.coverage], freshness };
     });
@@ -209,7 +237,7 @@ export const getMarketDataStatusTool = defineTool({
       datasets,
       watchHealth,
       watchlistStale,
-      marketSession: computeMarketSession(now),
+      marketSession: session,
     };
   },
 });

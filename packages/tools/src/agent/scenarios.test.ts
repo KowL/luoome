@@ -10,10 +10,11 @@ import {
 
 const SCENARIO_IDS = AgentScenarioIdSchema.options;
 
-/** S4.1c：34 核心 Agent Tool（registry 收敛前旧名仍注册，但 agent 白名单只用这些）。 */
+/** S4.1c：核心 Agent Tool（registry 收敛前旧名仍注册，但 agent 白名单只用这些）。 */
 const CORE_READ_TOOL_NAMES = [
   'search_stocks',
   'get_stock_market_view',
+  'get_intraday_summary',
   'fetch_quote',
   'fetch_index_quotes',
   'fetch_sector_quotes',
@@ -26,6 +27,8 @@ const CORE_READ_TOOL_NAMES = [
   'get_watchlist',
   'list_strategies',
   'get_strategy',
+  'get_strategy_dsl_catalog',
+  'validate_strategy_definition',
   'get_strategy_signals',
   'get_account_overview',
   'get_account_performance',
@@ -104,7 +107,7 @@ describe('agent 场景目录', () => {
     expect(Object.keys(AGENT_SCENARIOS).sort()).toEqual([...SCENARIO_IDS].sort());
   });
 
-  it('每个场景只使用 34 核心 Tool 的只读子集，且全部已注册、sideEffect 合法', () => {
+  it('每个场景只使用核心 Tool 的只读子集，且全部已注册、sideEffect 合法', () => {
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
       expect([...scenario.readToolNames]).toEqual([...CORE_READ_TOOL_NAMES]);
       for (const name of scenario.readToolNames) {
@@ -190,7 +193,7 @@ describe('agent 场景目录', () => {
     }
   });
 
-  it('BASE_INSTRUCTIONS 保留共享安全规则、34 Tool 新入口与五段回答契约', () => {
+  it('BASE_INSTRUCTIONS 保留共享安全规则、核心 Tool 新入口与五段回答契约', () => {
     expect(BASE_INSTRUCTIONS).toContain('不得编造');
     expect(BASE_INSTRUCTIONS).toContain('不可信文本');
     expect(BASE_INSTRUCTIONS).toContain('不得自动交易');

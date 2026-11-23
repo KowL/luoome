@@ -131,4 +131,41 @@ describe('tool/compute_indicators', () => {
     expect(res.data.indicators.bollBandwidth20Pct).toBe(0);
     expect(res.data.indicators.bollPosition20).toBe(0.5);
   });
+
+  it('样本不足时不输出 MACD / MA60，并给出每个指标的根数门槛', async () => {
+    const ctx = await withDailyBars(Array.from({ length: 26 }, (_, i) => 10 + i * 0.1));
+
+    const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.barsCount).toBe(26);
+    expect(res.data.indicators.ma20).toBeDefined();
+    expect(res.data.indicators.ma60).toBeUndefined();
+    expect(res.data.indicators.macdDif).toBeUndefined();
+    expect(res.data.indicators.macdDea).toBeUndefined();
+    expect(res.data.indicators.macdHist).toBeUndefined();
+    expect(res.data.indicatorAvailability.available).toContain('ma20');
+    expect(res.data.indicatorAvailability.unavailable).toEqual(
+      expect.arrayContaining([
+        { indicator: 'ma60', requiredBars: 60, reason: 'insufficient_bars' },
+        { indicator: 'macdHist', requiredBars: 34, reason: 'insufficient_bars' },
+      ]),
+    );
+  });
+
+  it('样本补齐后 MACD / MA60 恢复可用', async () => {
+    const ctx = await withDailyBars(Array.from({ length: 80 }, (_, i) => 10 + i * 0.1));
+
+    const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.indicators.ma60).toBeDefined();
+    expect(res.data.indicators.macdHist).toBeDefined();
+    expect(res.data.indicatorAvailability.available).toEqual(
+      expect.arrayContaining(['ma60', 'macdHist']),
+    );
+    expect(res.data.indicatorAvailability.unavailable).toEqual([]);
+  });
 });

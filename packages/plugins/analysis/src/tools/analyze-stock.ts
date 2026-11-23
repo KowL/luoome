@@ -169,7 +169,7 @@ export const analyzeStockTool = defineTool({
           system:
             attempt === 0
               ? ANALYZE_STOCK_SYSTEM
-              : `${ANALYZE_STOCK_SYSTEM}\n请修复上次输出：${failure}`,
+              : `${ANALYZE_STOCK_SYSTEM}\n请修复上次输出：${failure}\n若本次无法给出可信价位，就把价格字段全部留空并改判 hold/avoid，不要输出不一致的买点组合。`,
           schema: StrategyAdviceAnalysisSchema,
           data: analysisData,
         });
@@ -188,7 +188,8 @@ export const analyzeStockTool = defineTool({
         break;
       } catch (error) {
         if (error instanceof PluginExecutionDenied) throw error;
-        failure = 'AI 调用失败或输出无效';
+        // 把适配器/manager 的真实错误（预算耗尽、超时、schema 原文）带到下一次提示词。
+        failure = error instanceof Error ? error.message : String(error);
       }
     }
     if (llmOutput === undefined) {

@@ -1,4 +1,4 @@
-import type { SourceStatus } from '@luoome/core';
+import { money, type SourceStatus } from '@luoome/core';
 import { getMarketDataStatusTool } from '@luoome/toolkit/tools/get-market-data-status.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
@@ -216,6 +216,35 @@ describe('tool/get_market_data_status', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.watchlistStale).toEqual([{ watchlistId: 'stale-watch', name: '过期观察' }]);
+  });
+
+  it('收盘后当日最后一笔行情不因 15 分钟阈值标 stale', async () => {
+    const now = new Date('2026-07-17T07:30:00.000Z'); // 上海 15:30，已收盘
+    const ctx = await buildTestContext({ clock: () => now });
+    const observedAt = new Date('2026-07-17T07:00:00.000Z'); // 当日 15:00 收盘
+    await ctx.repos.quote.save({
+      stockId: '002594.SZ',
+      observedAt,
+      fetchedAt: observedAt,
+      timestampSource: 'upstream',
+      ts: observedAt,
+      open: money(100),
+      high: money(101),
+      low: money(99),
+      close: money(100.5),
+      volume: 1_000_000,
+      source: 'test',
+    });
+
+    const result = await getMarketDataStatusTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.marketSession).toBe('closed');
+    expect(result.data.providers).toEqual(
+      expect.arrayContaining([
+        { provider: 'test', freshness: 'fresh', latestObservedAt: observedAt },
+      ]),
+    );
   });
 
   it('marketSession 走 core 交易日历（顶栏时段徽标不自己算时段）', async () => {

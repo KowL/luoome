@@ -1,8 +1,9 @@
-import { QuoteSchema } from '@luoome/core';
+import { MoneySchema, QuoteSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import { ensureStockStub, STOCK_ID_PATTERN } from '../internal/manual-entry.js';
+import { deriveOpenGap } from '../internal/market-view.js';
 import { resolveQuote } from '../internal/resolve-quotes.js';
 import { batchQuoteTool } from './batch-quote.js';
 
@@ -26,11 +27,31 @@ export const FetchQuoteInput = z
     message: 'stockId 与 stockIds 必须且只能提供一个',
   });
 
+export const OpenGapSchema = z.object({
+  stockId: z.string().min(1),
+  open: MoneySchema,
+  previousClose: MoneySchema,
+  /** 开盘相对昨收的百分数缺口（+1.2 = 高开 1.2%）。 */
+  openGapPct: z.number(),
+  openVsPrevClose: z.enum(['high', 'low', 'flat']),
+});
+
 export const FetchQuoteOutput = z.object({
   quote: QuoteSchema.optional(),
   quotes: z.array(QuoteSchema).optional(),
   unresolved: z.array(z.string()).optional(),
+  /** 同时给出开盘相对昨收的事实，模型无需自行推断高开/低开。 */
+  openGaps: z.array(OpenGapSchema).optional(),
 });
+
+const openGapsOf = (quotes: readonly z.infer<typeof QuoteSchema>[]) =>
+  quotes.flatMap((quote) => {
+    const previousClose = quote.prevClose;
+    if (previousClose === undefined) return [];
+    const gap = deriveOpenGap(quote.open, previousClose);
+    if (gap === null) return [];
+    return [{ stockId: quote.stockId, open: quote.open, previousClose, ...gap }];
+  });
 
 export const fetchQuoteTool = defineTool({
   name: 'fetch_quote',
@@ -50,7 +71,11 @@ export const fetchQuoteTool = defineTool({
         ctx,
       );
       if (!result.ok) return result;
-      return { quotes: result.data.quotes, unresolved: result.data.unresolved };
+      return {
+        quotes: result.data.quotes,
+        unresolved: result.data.unresolved,
+        openGaps: openGapsOf(result.data.quotes),
+      };
     }
     const normalized = (input.stockId as string).trim().toUpperCase();
     let stock =
@@ -65,7 +90,8 @@ export const fetchQuoteTool = defineTool({
     }
     if (stock === null) return errNotFound('Stock', input.stockId as string);
     const item = await resolveQuote(ctx, stock.id, { context: 'display' });
-    if (item !== undefined && item.status === 'ok') return { quote: item.quote };
+    if (item !== undefined && item.status === 'ok')
+      return { quote: item.quote, openGaps: openGapsOf([item.quote]) };
     if (item !== undefined && item.status === 'unavailable') {
       return errAdapterError(ctx.adapters.market.name, item.reason, true);
     }

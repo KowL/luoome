@@ -28,6 +28,7 @@ export * from './tools/get-ashare-sentiment.js';
 export * from './tools/get-confidence-calibration.js';
 export * from './tools/get-decision-loop-review.js';
 export * from './tools/get-holding.js';
+export * from './tools/get-intraday-summary.js';
 export * from './tools/get-market-data-status.js';
 export * from './tools/get-previous-closes.js';
 export * from './tools/get-report.js';

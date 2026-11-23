@@ -2,7 +2,13 @@ import type { LLMGenerateRequest, Logger } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LLMManager } from './manager.js';
-import type { LLMAdapter, LLMGenerateResult } from './types.js';
+import {
+  type LLMAdapter,
+  type LLMAdapterLimits,
+  type LLMGenerateResult,
+  LLMOutputBudgetError,
+  LLMTimeoutError,
+} from './types.js';
 
 type ParsedAdvice = z.infer<typeof TestSchema>;
 const TestSchema = z.object({
@@ -30,14 +36,24 @@ class StubAdapter implements LLMAdapter {
   callCount = 0;
   failMode: 'ok' | 'throw' = 'ok';
   failMessage = 'stub fail';
-  // 跟踪 system 内容以验证 retry hint 是否附加
+  /** 只抛一次的特定错误（用于验证重试预算放大）。 */
+  failOnce: Error | undefined = undefined;
+  limits: LLMAdapterLimits = { maxOutputTokens: 2_048, timeoutMs: 60_000 };
+  // 跟踪 system / 重试请求以验证 retry hint 与预算放大
   capturedSystems: string[] = [];
+  requests: LLMGenerateRequest[] = [];
   constructor(name: string) {
     this.name = name;
   }
   async generate<T>(_req: LLMGenerateRequest): Promise<LLMGenerateResult<T>> {
     this.callCount += 1;
+    this.requests.push(_req);
     this.capturedSystems.push(_req.system);
+    if (this.failOnce !== undefined) {
+      const error = this.failOnce;
+      this.failOnce = undefined;
+      throw error;
+    }
     if (this.failMode === 'throw') throw new Error(this.failMessage);
     const fake = {
       decision: 'hold' as const,
@@ -89,6 +105,22 @@ describe('llm/manager', () => {
       expect(real.capturedSystems[1] ?? '').toContain('Retry hint');
     });
 
+    it('超时失败 → 重试时放大 timeoutMs', async () => {
+      const real = new StubAdapter('real-stub');
+      real.failOnce = new LLMTimeoutError('模型调用超时（timeoutMs=60000）');
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
+      await mgr.generate<ParsedAdvice>({
+        system: 's',
+        schema: TestSchema,
+        data: { indicators: { X: { ma5: 10, ma20: 8 } } },
+      });
+
+      expect(real.callCount).toBe(2);
+      expect(real.requests[1]?.timeoutMs).toBe(120_000);
+      expect(real.requests[1]?.maxOutputTokens).toBeUndefined();
+    });
+
     it('MA5 ≤ MA20 → fallback 走 hold @ 20', async () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
@@ -120,6 +152,25 @@ describe('llm/manager', () => {
       expect(out.decision).toBe('hold');
       expect(out.confidence).toBe(20);
       expect(out.reasoning.evidence.some((e) => e.includes('MA5 / MA20 缺失'))).toBe(true);
+    });
+
+    it('输出预算耗尽 → 重试时放大 maxOutputTokens 并带回可诊断错误', async () => {
+      const real = new StubAdapter('real-stub');
+      real.failOnce = new LLMOutputBudgetError('模型未生成可用内容 (finishReason=length)');
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
+      const out = await mgr.generate<ParsedAdvice>({
+        system: 's',
+        schema: TestSchema,
+        data: { indicators: { X: { ma5: 10, ma20: 8 } } },
+      });
+
+      expect(out.decision).toBe('hold');
+      expect(real.callCount).toBe(2);
+      expect(real.requests[0]?.maxOutputTokens).toBeUndefined();
+      expect(real.requests[1]?.maxOutputTokens).toBe(4_096);
+      expect(real.capturedSystems[1] ?? '').toContain('输出预算可能被推理耗尽');
+      expect(real.capturedSystems[1] ?? '').toContain('finishReason=length');
     });
   });
 });

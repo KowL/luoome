@@ -8,8 +8,13 @@ import {
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { APICallError, NoObjectGeneratedError } from 'ai';
-import { z } from 'zod';
-import type { LLMAdapter, LLMGenerateResult } from './types.js';
+import { ZodError, z } from 'zod';
+import {
+  type LLMAdapter,
+  type LLMGenerateResult,
+  LLMOutputBudgetError,
+  LLMTimeoutError,
+} from './types.js';
 
 /**
  * LLM 适配器编排（v0.2 起）。
@@ -123,14 +128,11 @@ export class LLMManager implements LLMAdapter {
       });
     }
 
-    // 重试一次：system 提示追加「上一轮未符合 schema，请重试」
+    // 重试一次：system 提示追加「上一轮未符合 schema，请重试」；
+    // 推理模型把预算吃在 reasoning 上或上一轮超时时，同时放大预算 / 超时。
     if (request.schema !== undefined) {
       try {
-        const retryRequest: LLMGenerateRequest = {
-          system: `${request.system}\n\n[Retry hint] 上一轮你的输出未能通过 JSON schema 校验（${describeError(firstError)}）。请重新生成严格符合 schema 的 JSON。`,
-          schema: request.schema,
-          data: request.data,
-        };
+        const retryRequest = this.buildRetryRequest(request, firstError);
         return await this.inner.generate<T>(retryRequest);
       } catch (retryError) {
         if (this.fallback === 'throw') throw retryError;
@@ -147,6 +149,30 @@ export class LLMManager implements LLMAdapter {
     return fallbackData;
   }
 
+  /** 重试请求：保留原数据，附加原始错误文本；预算/超时类失败按适配器默认值放大。 */
+  private buildRetryRequest(request: LLMGenerateRequest, firstError: unknown): LLMGenerateRequest {
+    const limits = this.inner.limits;
+    const maxOutputTokens =
+      firstError instanceof LLMOutputBudgetError && limits !== undefined
+        ? Math.min(limits.maxOutputTokens * 2, 8_192)
+        : request.maxOutputTokens;
+    const timeoutMs =
+      firstError instanceof LLMTimeoutError && limits !== undefined
+        ? Math.min(limits.timeoutMs * 2, 300_000)
+        : request.timeoutMs;
+    const hint =
+      firstError instanceof LLMOutputBudgetError
+        ? '上一轮没有生成内容，输出预算可能被推理耗尽。请直接输出最终 JSON，不要长篇推理。'
+        : '上一轮你的输出未能通过 JSON schema 校验。请按下列错误原文修正，重新生成严格符合 schema 的 JSON。';
+    return {
+      system: `${request.system}\n\n[Retry hint] ${hint}\n错误原文：${describeError(firstError)}`,
+      schema: request.schema,
+      data: request.data,
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    };
+  }
+
   /** 把 fallback 包装成 LLMGenerateResult<T>（无 raw）。 */
   private buildFallbackResult<T>(request: LLMGenerateRequest): LLMGenerateResult<T> {
     const parsed = fallbackAdvice(request.data);
@@ -161,7 +187,20 @@ export class LLMManager implements LLMAdapter {
 }
 
 const describeError = (e: unknown): string => {
-  if (NoObjectGeneratedError.isInstance(e)) return `输出未通过 schema 校验: ${e.message}`;
+  if (e instanceof LLMOutputBudgetError || e instanceof LLMTimeoutError) return e.message;
+  if (NoObjectGeneratedError.isInstance(e)) {
+    const detail =
+      e.cause instanceof ZodError
+        ? e.cause.issues
+            .map((issue) =>
+              issue.path.length === 0 ? issue.message : `${issue.path.join('.')}: ${issue.message}`,
+            )
+            .join('；')
+        : e.cause instanceof Error
+          ? e.cause.message
+          : '';
+    return `输出未通过 schema 校验: ${e.message}${detail.length === 0 ? '' : `；${detail}`}`;
+  }
   if (APICallError.isInstance(e)) {
     return `API${e.statusCode === undefined ? '' : ` HTTP ${e.statusCode}`}: ${e.message}`;
   }

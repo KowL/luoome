@@ -95,6 +95,10 @@ export interface LLMGenerateRequest {
   /** Zod schema（schema-constrained decoding）。 */
   readonly schema?: unknown;
   readonly data: unknown;
+  /** 单次调用覆盖输出预算；重试时用于放大推理模型的 token 预算。 */
+  readonly maxOutputTokens?: number;
+  /** 单次调用覆盖超时；重试时用于放宽上一轮超时的限制。 */
+  readonly timeoutMs?: number;
 }
 
 /** LLM 适配器的 core 侧投影。 */

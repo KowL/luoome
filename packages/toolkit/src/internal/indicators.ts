@@ -1,4 +1,9 @@
-import { type DailyBar, observeCrossingUp, type TechnicalIndicators } from '@luoome/core';
+import {
+  type DailyBar,
+  INDICATOR_MIN_BARS,
+  observeCrossingUp,
+  type TechnicalIndicators,
+} from '@luoome/core';
 
 /**
  * 简化技术指标计算（ARCHITECTURE §6.3 step 1 的 v0.1 实现）。
@@ -146,7 +151,9 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
   }
 
   // MACD(12,26,9)：dif = ema12 - ema26；dea = dif 的 ema9；hist = dif - dea。
-  if (closes.length >= 2) {
+  // 样本少于 EMA26 + DEA9 的启动长度时，DEA 只是把 DIF 的种子值反复平滑，
+  // 会给出与补齐数据后相反的柱状信号，因此按 unavailable 处理。
+  if (closes.length >= INDICATOR_MIN_BARS.macdHist) {
     const ema12 = emaSeries(closes, 12);
     const ema26 = emaSeries(closes, 26);
     const difSeries = ema12.map((v, i) => v - (ema26[i] ?? 0));

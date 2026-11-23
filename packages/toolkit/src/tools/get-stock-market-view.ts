@@ -26,6 +26,7 @@ import {
   candlesToBars,
   computeMarketSession,
   deriveAmplitude,
+  deriveOpenGap,
   derivePreviousClose,
   deriveQuoteChange,
   MONTH_GRANULARITY_LOOKBACK_DAYS,
@@ -81,6 +82,9 @@ const MarketQuoteSummarySchema = z.object({
   change: z.number().nullable(),
   changePct: z.number().nullable(),
   amplitude: z.number().nullable(),
+  /** 开盘相对昨收的百分数缺口；previousClose 缺失时为 null。 */
+  openGapPct: z.number().nullable(),
+  openVsPrevClose: z.enum(['high', 'low', 'flat']).nullable(),
 });
 
 const MarketDataStatusSchema = z.object({
@@ -295,6 +299,7 @@ export const getStockMarketViewTool = defineTool({
     const candles = buildMarketCandles(bars, quoteForCandle, candleCutoff);
     const { change, changePct } = deriveQuoteChange(quote, previousClose);
     const amplitude = deriveAmplitude(quote, previousClose);
+    const openGap = deriveOpenGap(quote.open, previousClose);
     const indicators = computeSimpleIndicators(candlesToBars(stock.id, candles));
     const sources = [...new Set([quote.source, ...candles.map((c) => c.source)])];
     const status = buildMarketDataStatus({
@@ -423,7 +428,15 @@ export const getStockMarketViewTool = defineTool({
 
     return {
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
-      quote: { quote, previousClose, change, changePct, amplitude },
+      quote: {
+        quote,
+        previousClose,
+        change,
+        changePct,
+        amplitude,
+        openGapPct: openGap?.openGapPct ?? null,
+        openVsPrevClose: openGap?.openVsPrevClose ?? null,
+      },
       candles: outCandles,
       indicators,
       indicatorsAsOf: lastCandleDate,

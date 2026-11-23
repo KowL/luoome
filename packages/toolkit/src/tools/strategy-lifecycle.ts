@@ -295,6 +295,49 @@ export const validateStrategyVersionTool = defineTool({
   },
 });
 
+export const ValidateStrategyDefinitionInput = z.object({
+  /** 待验证的完整 DSL 对象；失败时通过 errors 返回，不转成 invalid_input。 */
+  definition: z.unknown(),
+});
+export const ValidateStrategyDefinitionOutput = z.object({
+  valid: z.boolean(),
+  errors: z.array(z.string()),
+  referencedFields: z.array(z.string()),
+  requiredLookback: z.number().int().nonnegative(),
+  dataSources: z.array(z.string()),
+});
+
+export const validateStrategyDefinitionTool = defineTool({
+  name: 'validate_strategy_definition',
+  description:
+    '只读校验 Strategy DSL 片段：检查 schema、字段路径白名单与数据需求，不落库、不运行交易',
+  sideEffect: 'read',
+  input: ValidateStrategyDefinitionInput,
+  output: ValidateStrategyDefinitionOutput,
+  handler: async (input) => {
+    const parsed = StrategyDslV1Schema.safeParse(input.definition);
+    if (!parsed.success) {
+      return {
+        valid: false,
+        errors: parsed.error.issues.map((issue) =>
+          issue.path.length === 0 ? issue.message : `${issue.path.join('.')}: ${issue.message}`,
+        ),
+        referencedFields: [],
+        requiredLookback: 0,
+        dataSources: [],
+      };
+    }
+    const inspected = inspectStrategyDefinitionReferences(parsed.data);
+    return {
+      valid: inspected.validationErrors.length === 0,
+      errors: [...inspected.validationErrors],
+      referencedFields: [...inspected.paths],
+      requiredLookback: inspected.requiredLookback,
+      dataSources: [...inspected.dataSources],
+    };
+  },
+});
+
 export const PublishStrategyVersionInput = z.object({
   versionId: z.string().min(1),
   strategyId: z.string().min(1).optional(),

@@ -133,6 +133,25 @@ export const derivePreviousClose = (bars: readonly DailyBar[], todayStart: Date)
   return null;
 };
 
+/** 开盘价相对昨收的方向；平盘仅在四位小数四舍五入后 gapPct 为 0 时出现。 */
+export type OpenVsPrevClose = 'high' | 'low' | 'flat';
+
+/**
+ * 开盘缺口：openGapPct 以百分数表示（+1.2 = 高开 1.2%），直接给出方向，
+ * 避免模型自行把低开说成高开（2026-11-23 深度试用 M3）。
+ */
+export const deriveOpenGap = (
+  open: Money,
+  previousClose: Money | null,
+): { readonly openGapPct: number; readonly openVsPrevClose: OpenVsPrevClose } | null => {
+  if (previousClose === null || previousClose <= 0) return null;
+  const openGapPct = money(((open - previousClose) / previousClose) * 100);
+  return {
+    openGapPct,
+    openVsPrevClose: openGapPct > 0 ? 'high' : openGapPct < 0 ? 'low' : 'flat',
+  };
+};
+
 /** 涨跌额 / 涨跌幅（§8.4）；精度与 Money 约定一致（4 位小数），prevClose 缺失或为 0 时全 null。 */
 export const deriveQuoteChange = (
   quote: Quote,

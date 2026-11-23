@@ -137,9 +137,11 @@ export interface ResolvedAIModelProfile {
   readonly modelRef: string;
   readonly providerName: string;
   readonly providerType: AIModelCatalogConfig['providers'][string]['type'];
+  readonly supportsStructuredOutputs: boolean;
   readonly model: LanguageModel;
   readonly quirks: ProviderQuirks;
   readonly timeoutMs: number;
+  readonly maxOutputTokens: number;
   readonly maxRetries: number;
   readonly reasoningEffort: AIModelCatalogConfig['profiles']['generation']['reasoningEffort'];
   readonly maxPromptChars: number;
@@ -243,9 +245,12 @@ export class AIModelCatalog {
       modelRef: profile.model,
       providerName: providerNameValue,
       providerType: provider.type,
+      supportsStructuredOutputs:
+        provider.type === 'openai-compatible' ? provider.supportsStructuredOutputs : true,
       model,
       quirks: toQuirks(provider.quirks),
       timeoutMs: profile.timeoutMs,
+      maxOutputTokens: profile.maxOutputTokens,
       maxRetries: profile.maxRetries,
       reasoningEffort: profile.reasoningEffort,
       maxPromptChars: profile.maxPromptChars,

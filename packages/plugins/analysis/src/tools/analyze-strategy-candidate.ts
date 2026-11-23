@@ -314,7 +314,7 @@ export const analyzeStrategyCandidateTool = defineTool({
         break;
       } catch (error) {
         if (error instanceof PluginExecutionDenied) throw error;
-        failure = 'AI 调用失败或输出无效';
+        failure = error instanceof Error ? error.message : String(error);
       }
     }
     if (llmOutput === undefined) {

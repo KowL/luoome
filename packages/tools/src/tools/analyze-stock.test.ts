@@ -247,4 +247,62 @@ describe('analyze_stock', () => {
       if (section.status === 'unavailable') expect(section.reason?.length ?? 0).toBeGreaterThan(0);
     }
   });
+
+  it('价位校验失败时把错误原文带回重试提示，第二轮补齐 buy 价位后通过', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'repair-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            if (calls === 1) {
+              return {
+                decision: 'buy',
+                confidence: 60,
+                horizon: 'short',
+                reasoning: {
+                  premise: '突破后回踩',
+                  evidence: ['close=105.8'],
+                  counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+                },
+                risks: ['可能回调'],
+                raw: 'first-output',
+              } as T;
+            }
+            return {
+              decision: 'buy',
+              confidence: 60,
+              horizon: 'short',
+              entryPriceLow: 99,
+              entryPrice: 100,
+              entryPriceHigh: 101,
+              targetPositionPct: 20,
+              targetPrice: 110,
+              stopLoss: 95,
+              reasoning: {
+                premise: '突破后回踩',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'second-output',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('买入或给出价位时必须同时提供买点、目标价和止损价');
+    expect(systems[1]).toContain('把价格字段全部留空');
+  });
 });

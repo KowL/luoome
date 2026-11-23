@@ -38,6 +38,7 @@ import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
 import { getHoldingTool } from './tools/get-holding.js';
+import { getIntradaySummaryTool } from './tools/get-intraday-summary.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
@@ -103,6 +104,7 @@ import {
   pauseStrategyTool,
   publishStrategyVersionTool,
   resumeStrategyTool,
+  validateStrategyDefinitionTool,
   validateStrategyVersionTool,
 } from './tools/strategy-lifecycle.js';
 import {
@@ -453,6 +455,12 @@ export const sharedToolContributions = {
     agent: false,
   },
   get_holding: { owner: 'shared-query', tool: getHoldingTool, agent: false },
+  get_intraday_summary: {
+    owner: 'business.market-data',
+    tool: getIntradaySummaryTool,
+    agent: true,
+    dependencies: ['market:quote', 'market:intraday-minutes'],
+  },
   get_market_data_status: { owner: 'shared-query', tool: getMarketDataStatusTool, agent: false },
   get_previous_closes: { owner: 'shared-query', tool: getPreviousClosesTool, agent: false },
   get_report: { owner: 'shared-query', tool: getReportTool, agent: false },
@@ -479,7 +487,8 @@ export const sharedToolContributions = {
   get_strategy_dsl_catalog: {
     owner: 'shared-query',
     tool: getStrategyDslCatalogTool,
-    agent: false,
+    agent: true,
+    dependencies: [],
   },
   get_strategy_insight_facts: {
     execution: 'p1',
@@ -603,6 +612,12 @@ export const sharedToolContributions = {
     agent: false,
   },
   update_watchlist: { owner: 'business.watch', tool: updateWatchlistTool, agent: false },
+  validate_strategy_definition: {
+    owner: 'shared-query',
+    tool: validateStrategyDefinitionTool,
+    agent: true,
+    dependencies: [],
+  },
   validate_strategy_version: {
     owner: 'business.strategy',
     tool: validateStrategyVersionTool,

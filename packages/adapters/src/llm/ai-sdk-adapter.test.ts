@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AISDKAdapter } from './ai-sdk-adapter.js';
 import { AIModelCatalog, type ResolvedAIModelProfile } from './model-catalog.js';
+import { LLMOutputBudgetError } from './types.js';
 
 const TestSchema = z.object({
   decision: z.enum(['buy', 'sell', 'hold']),
@@ -41,9 +42,11 @@ const profile = (
   modelRef: 'test:model',
   providerName: 'test',
   providerType: 'anthropic',
+  supportsStructuredOutputs: true,
   model,
   quirks: { injectSchemaIntoSystem: false, recoverMalformedText: false },
   timeoutMs: 1_000,
+  maxOutputTokens: 2_048,
   maxRetries: 0,
   reasoningEffort: 'off',
   maxPromptChars: 16_000,
@@ -164,6 +167,96 @@ describe('llm/ai-sdk-adapter', () => {
     await expect(
       adapter.generate({ system: 'advisor', schema: TestSchema, data: {} }),
     ).rejects.toThrow();
+  });
+
+  it('supportsStructuredOutputs=false 时不发送 response_format，只注入 schema 并解析文本', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const catalog = new AIModelCatalog(
+      {
+        version: 1,
+        providers: {
+          test: {
+            type: 'openai-compatible',
+            baseURL: 'https://provider.test/v1',
+            apiKeyEnv: 'TEST_API_KEY',
+            supportsStructuredOutputs: false,
+            quirks: ['inject-schema', 'recover-malformed-text'],
+          },
+        },
+        profiles: { generation: { model: 'test:model' }, agent: { model: 'test:model' } },
+      },
+      { TEST_API_KEY: 'test-key' },
+      {
+        fetchImpl: (async (_url, init) => {
+          requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return Response.json({
+            id: 'completion-test',
+            object: 'chat.completion',
+            created: 0,
+            model: 'model',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: '```json\n{"decision":"buy","confidence":80}\n```',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          });
+        }) as typeof fetch,
+      },
+    );
+    const out = await new AISDKAdapter(catalog.resolve('generation')).generate<
+      z.infer<typeof TestSchema>
+    >({ system: 'advisor', schema: TestSchema, data: {} });
+
+    expect(out).toMatchObject({ decision: 'buy', confidence: 80 });
+    expect(requests[0]).not.toHaveProperty('response_format');
+    expect(JSON.stringify(requests[0])).toContain('JSON Schema');
+  });
+
+  it('空输出且 finishReason=length 时抛出可诊断的预算错误', async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => ({
+        content: [{ type: 'text' as const, text: '' }],
+        finishReason: { unified: 'length' as const, raw: undefined },
+        usage,
+        warnings: [],
+      }),
+    });
+    const adapter = new AISDKAdapter(profile(model));
+    await expect(
+      adapter.generate({ system: 'advisor', schema: TestSchema, data: {} }),
+    ).rejects.toThrow(LLMOutputBudgetError);
+    await expect(
+      adapter.generate({ system: 'advisor', schema: TestSchema, data: {} }),
+    ).rejects.toThrow(/maxOutputTokens=2048/);
+  });
+
+  it('request.maxOutputTokens 覆盖 profile 预算并传给模型', async () => {
+    const budgets: Array<number | undefined> = [];
+    const model = new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        budgets.push(options.maxOutputTokens);
+        return {
+          content: [{ type: 'text' as const, text: '{"decision":"hold","confidence":50}' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage,
+          warnings: [],
+        };
+      },
+    });
+    const adapter = new AISDKAdapter(profile(model));
+    await adapter.generate({
+      system: 'advisor',
+      schema: TestSchema,
+      data: {},
+      maxOutputTokens: 8_192,
+    });
+    expect(budgets[0]).toBe(8_192);
   });
 
   it('缺 schema 时在发起模型请求前失败', async () => {

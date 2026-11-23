@@ -42,6 +42,74 @@ export const KNOWN_INDICATOR_KEYS = [
 
 export type KnownIndicatorKey = (typeof KNOWN_INDICATOR_KEYS)[number];
 
+/**
+ * 每个指标可计算所需的最少日线根数。
+ * 与 computeSimpleIndicators 的判定一致：不足时不输出字段，避免把样本不足的
+ * MACD / MA60 当成有效信号（2026-11-23 深度试用 M1）。
+ */
+export const INDICATOR_MIN_BARS: Readonly<Record<KnownIndicatorKey, number>> = {
+  close: 1,
+  ma5: 5,
+  ma10: 10,
+  ma20: 20,
+  ma60: 60,
+  momentum20Pct: 20,
+  maDistance20Pct: 20,
+  maDistance60Pct: 60,
+  daysSinceMa20CrossUp: 21,
+  daysSinceMa60CrossUp: 61,
+  daysAboveMa20: 20,
+  rsi14: 15,
+  // EMA26 至少需要 26 个样本，DEA 再取其中 9 个 DIF：26 + 9 - 1。
+  macdDif: 34,
+  macdDea: 34,
+  macdHist: 34,
+  volMa5: 5,
+  volMa20: 20,
+  volRatio5_20: 20,
+  high20: 20,
+  low20: 20,
+  bollMiddle20: 20,
+  bollUpper20: 20,
+  bollLower20: 20,
+  bollBandwidth20Pct: 20,
+  bollPosition20: 20,
+};
+
+/** 指标可用性摘要：供 Tool 输出让模型看见「为什么没有这个指标」。 */
+export const IndicatorAvailabilitySchema = z.object({
+  barsCount: z.number().int().nonnegative(),
+  available: z.array(z.string()),
+  unavailable: z.array(
+    z.object({
+      indicator: z.string(),
+      requiredBars: z.number().int().positive(),
+      reason: z.enum(['insufficient_bars', 'not_computable']),
+    }),
+  ),
+});
+export type IndicatorAvailability = z.infer<typeof IndicatorAvailabilitySchema>;
+
+export const summarizeIndicatorAvailability = (
+  indicators: TechnicalIndicators,
+  barsCount: number,
+): IndicatorAvailability => {
+  const available: string[] = [];
+  const unavailable: IndicatorAvailability['unavailable'] = [];
+  for (const key of KNOWN_INDICATOR_KEYS) {
+    if (indicators[key] !== undefined) {
+      available.push(key);
+      continue;
+    }
+    unavailable.push({
+      indicator: key,
+      requiredBars: INDICATOR_MIN_BARS[key],
+      reason: barsCount < INDICATOR_MIN_BARS[key] ? 'insufficient_bars' : 'not_computable',
+    });
+  }
+  return { barsCount, available, unavailable };
+};
+
 /** 类型层暴露「已知指标 key 的有限类型」 + 任意额外 number 字段。 */
 export interface TechnicalIndicators {
   readonly close?: number;

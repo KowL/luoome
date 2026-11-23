@@ -11,6 +11,17 @@ describe('tool/fetch_quote', () => {
     if (!res.ok) return;
     expect(res.data.quote?.stockId).toBe('002594.SZ');
     expect(res.data.quote?.source).toBe('test');
+    // 开盘相对昨收以计算好的事实返回，避免模型自行判断高开/低开。
+    const [gap] = res.data.openGaps ?? [];
+    const quote = res.data.quote;
+    expect(gap).toMatchObject({ stockId: '002594.SZ' });
+    expect(gap?.openGapPct).toBeCloseTo(
+      (((quote?.open as number) - (quote?.prevClose as number)) / (quote?.prevClose as number)) *
+        100,
+    );
+    expect(gap?.openVsPrevClose).toBe(
+      (gap?.openGapPct ?? 0) > 0 ? 'high' : (gap?.openGapPct ?? 0) < 0 ? 'low' : 'flat',
+    );
     // 写库后能查到
     const latest = await ctx.repos.quote.latestByStock('002594.SZ');
     expect(latest?.close).toBe(res.data.quote?.close);

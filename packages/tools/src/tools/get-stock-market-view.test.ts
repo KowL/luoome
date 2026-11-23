@@ -158,6 +158,13 @@ describe('tool/get_stock_market_view', () => {
     expect(res.data.quote.quote.close).toBe(106);
     expect(res.data.quote.previousClose).not.toBeNull();
     expect(res.data.quote.change).not.toBeNull();
+    expect(res.data.quote.openGapPct).toBeCloseTo(
+      ((104 - Number(res.data.quote.previousClose)) / Number(res.data.quote.previousClose)) * 100,
+      4,
+    );
+    expect(res.data.quote.openVsPrevClose).toBe(
+      104 > Number(res.data.quote.previousClose) ? 'high' : 'low',
+    );
     expect(res.data.candles.length).toBeGreaterThan(20);
     const last = res.data.candles.at(-1);
     expect(last?.date).toBe(TODAY);

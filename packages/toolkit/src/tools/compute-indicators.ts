@@ -1,4 +1,8 @@
-import { TechnicalIndicatorsSchema } from '@luoome/core';
+import {
+  IndicatorAvailabilitySchema,
+  summarizeIndicatorAvailability,
+  TechnicalIndicatorsSchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
@@ -22,8 +26,10 @@ export const ComputeIndicatorsInput = z.object({
 export const ComputeIndicatorsOutput = z.object({
   stockId: z.string(),
   indicators: TechnicalIndicatorsSchema,
-  /** 实际用的日线条数；不足 60 时部分指标返回 undefined。 */
+  /** 实际用的日线条数；不足时对应指标不会输出。 */
   barsCount: z.number().int().nonnegative(),
+  /** 每个指标是否可用及所需最少日线根数；样本不足时给出原因。 */
+  indicatorAvailability: IndicatorAvailabilitySchema,
   dataAsOf: z.coerce.date(),
 });
 
@@ -49,6 +55,7 @@ export const computeIndicatorsTool = defineTool({
       stockId: stock.id,
       indicators,
       barsCount: bars.length,
+      indicatorAvailability: summarizeIndicatorAvailability(indicators, bars.length),
       dataAsOf: now,
     };
   },

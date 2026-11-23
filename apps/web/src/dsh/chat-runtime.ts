@@ -167,7 +167,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     });
     const gateway = new ToolGateway({
       maxRuns: 1,
-      maxCallsPerRun: 32,
+      maxCallsPerRun: 8,
       maxOutputBytes: 64_000,
       callTimeoutMs: 15_000,
     });
@@ -222,8 +222,9 @@ export class DshChatRuntime implements ChatStreamRuntime {
           runTimeoutMs: duration,
           toolTimeoutMs: 15_000,
           initializeTimeoutMs: 30_000,
-          maxToolCalls: 32,
-          maxModelCalls: 32,
+          // 单轮上限：8 次业务工具 + 收尾模型步；避免一轮串行调 9+ 工具拖长响应。
+          maxToolCalls: 8,
+          maxModelCalls: 10,
         },
         ...(this.options.native === undefined
           ? {}
