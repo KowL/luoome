@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AGENT_SCENARIOS } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
-import { DshChatRuntime } from './chat-runtime.js';
+import { AISettingsStore } from '../ai-settings.js';
+import { createDshChatRuntimeFromStore, DshChatRuntime } from './chat-runtime.js';
 
 const runtime = () =>
   new DshChatRuntime({
@@ -95,6 +96,66 @@ if(value.type==='shutdown'){send({type:'closed',stopped:true});process.exit(0);}
       expect(body).not.toContain('"status":"unresolved"');
       expect(stopped).toBe(true);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const catalog = (provider: string, apiKeyEnv: string) => ({
+  version: 1,
+  providers: {
+    [provider]: { type: 'openai-compatible', baseURL: 'https://fixture.invalid/v1', apiKeyEnv },
+  },
+  profiles: {
+    generation: { model: `${provider}:custom-model` },
+    agent: { model: `${provider}:custom-model` },
+  },
+});
+
+/** 构造 runtime 但不启动 Host：nodePath/hostEntry 只需是存在的绝对路径。 */
+const runtimeFromCatalog = (value: unknown, env: Readonly<Record<string, string>>) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-api-key-env-'));
+  const hostEntry = join(root, 'host.js');
+  writeFileSync(hostEntry, '');
+  const configPath = join(root, 'ai-models.json');
+  writeFileSync(configPath, JSON.stringify(value));
+  const baseEnv = {
+    LUOOME_DSH_NODE_PATH: Bun.which('node') ?? process.execPath,
+    LUOOME_DSH_HOST_ENTRY: hostEntry,
+    LUOOME_HOME: root,
+    ...env,
+  };
+  const store = new AISettingsStore(baseEnv, { configPath, secretPath: join(root, '.env') });
+  return { root, runtime: createDshChatRuntimeFromStore(store, baseEnv) };
+};
+
+const authHeader = (value: DshChatRuntime): string | undefined =>
+  (value as unknown as { options: { model: { headers: Record<string, string> } } }).options.model
+    .headers.authorization;
+
+it('自定义 provider 按目录里的 apiKeyEnv 取密钥，忽略 preset 的默认变量', () => {
+  const { root, runtime: value } = runtimeFromCatalog(
+    catalog('opencode-go', 'OPENCODE_GO_API_KEY'),
+    {
+      OPENCODE_GO_API_KEY: 'custom-key',
+      OPENAI_API_KEY: 'preset-key',
+    },
+  );
+  try {
+    expect(value).toBeDefined();
+    expect(authHeader(value as DshChatRuntime)).toBe('Bearer custom-key');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('预设 provider 仍按自己的 apiKeyEnv 取密钥', () => {
+  const { root, runtime: value } = runtimeFromCatalog(catalog('minimax', 'MINIMAX_API_KEY'), {
+    MINIMAX_API_KEY: 'preset-key',
+    OPENCODE_GO_API_KEY: 'custom-key',
+  });
+  try {
+    expect(authHeader(value as DshChatRuntime)).toBe('Bearer preset-key');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

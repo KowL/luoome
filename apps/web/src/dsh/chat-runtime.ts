@@ -10,7 +10,7 @@ import {
 } from '@luoome/dsh-bridge/protocol';
 import { HostConfigSchema } from '@luoome/dsh-bridge/runtime-config';
 import { discoverExternalMcpTools, type ExternalMcpCallable } from '@luoome/tools';
-import { AI_PROVIDER_PRESETS, type AISettingsStore } from '../ai-settings.js';
+import type { AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
 import { DshEventAdapter } from './event-adapter.js';
@@ -420,8 +420,7 @@ export const createDshChatRuntimeFromStore = (
   try {
     const view = store.read();
     if (!view.baseURL || !view.model) return undefined;
-    const preset = AI_PROVIDER_PRESETS.find((candidate) => candidate.id === view.provider);
-    const apiKey = preset ? env[preset.apiKeyEnv]?.trim() : undefined;
+    const apiKey = env[view.apiKeyEnv]?.trim();
     const endpoint = `${view.baseURL.replace(/\/+$/, '')}/chat/completions`;
     return new DshChatRuntime({
       development: true,

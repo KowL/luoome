@@ -189,6 +189,47 @@ describe('AISettingsStore', () => {
     expect(store.runtimeEnv()[preset.apiKeyEnv]).toBe('secret-test-key');
   });
 
+  it('自定义 provider 读回自己的 apiKeyEnv，不用 preset 的默认变量判定密钥', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-ai-settings-'));
+    temporaryDirectories.push(directory);
+    const configPath = join(directory, 'ai-models.json');
+    const secretPath = join(directory, '.env');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        providers: {
+          'opencode-go': {
+            type: 'openai-compatible',
+            baseURL: 'https://opencode.example/v1',
+            apiKeyEnv: 'OPENCODE_GO_API_KEY',
+          },
+        },
+        profiles: {
+          generation: { model: 'opencode-go:open-model' },
+          agent: { model: 'opencode-go:open-model' },
+        },
+      }),
+    );
+    const store = new AISettingsStore(
+      { LUOOME_HOME: directory, OPENAI_API_KEY: 'preset-key' },
+      { configPath, secretPath },
+    );
+
+    expect(store.read()).toMatchObject({
+      provider: 'openai-compatible',
+      model: 'open-model',
+      baseURL: 'https://opencode.example/v1',
+      apiKeyEnv: 'OPENCODE_GO_API_KEY',
+      apiKeyConfigured: false,
+    });
+    writeFileSync(secretPath, 'OPENCODE_GO_API_KEY=custom-key\n');
+    expect(store.read()).toMatchObject({
+      apiKeyEnv: 'OPENCODE_GO_API_KEY',
+      apiKeyConfigured: true,
+    });
+  });
+
   it('损坏的模型目录仍返回可编辑推荐值，保存后可修复', () => {
     const { store } = createStore();
     writeFileSync(store.configPath, '{broken');

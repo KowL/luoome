@@ -7,7 +7,7 @@ import {
   planStatusLabel,
   planVersionId,
 } from './trading-plan-panel.js';
-import { $, el, fmtDateTime, mount } from './ui.js';
+import { $, el, fmtDateTime, fmtNum, fmtPct, fmtSigned, mount } from './ui.js';
 
 let version = 0;
 let initialized = false;
@@ -21,15 +21,18 @@ const emptyCard = (text) => el('p', 'muted', text);
 
 const resultText = (result) => (result.ok ? null : '读取失败，稍后刷新再看。');
 
-const reportRows = (reports) => {
-  if (reports.length === 0) return [emptyCard('今日盘前 / 盘后报告尚未生成。')];
-  return reports
-    .slice(0, 3)
-    .map((report) =>
-      card(report.title ?? '日报', [
-        row('类型', report.kind ?? 'report'),
-        row('区间', `${report.periodStart ?? '--'} → ${report.periodEnd ?? '--'}`),
-        row('生成', report.createdAt === undefined ? '--' : fmtDateTime(report.createdAt)),
+/** 首页「持仓，先看变化」：只渲染当前账户的真实持仓；无持仓时给空态，不拿报告占位。 */
+export const holdingRows = (items) => {
+  if (items.length === 0)
+    return [emptyCard('当前账户还没有持仓。登记实际成交后，这里会显示持仓变化。')];
+  return items
+    .slice(0, 6)
+    .map((item) =>
+      card(item.stockName ?? item.holding?.stockId ?? '持仓', [
+        row('数量', fmtNum(item.holding?.quantity, 0)),
+        row('现价', fmtNum(item.currentPrice)),
+        row('今日', item.todayPnlPct === null ? '--' : fmtPct(item.todayPnlPct)),
+        row('浮动盈亏', `${fmtSigned(item.pnl)}（${fmtPct(item.pnlPct)}）`),
       ]),
     );
 };
@@ -141,23 +144,21 @@ export const renderInvestmentWorkspace = async () => {
   const requestVersion = ++version;
   const accountId = getAccountId();
   const epoch = getSessionEpoch();
-  const [reports, watchlists, plans] = await Promise.all([
-    callApi('/api/reports?limit=5'),
+  const [holdings, watchlists, plans] = await Promise.all([
+    callApi('/api/holdings'),
     callApi('/api/watchlists/overview'),
     callApi('/api/trading-plans'),
   ]);
   if (requestVersion !== version || accountId !== getAccountId() || epoch !== getSessionEpoch())
     return;
   const facts = $('#workspace-facts');
-  if (facts) facts.textContent = '今日决策事实只读展示；报告、自选池与计划均来自已有事实。';
-  const reportsBody = el(
-    'div',
-    'workspace-card-grid',
-    reportRows(reports.ok ? (reports.data.reports ?? []) : []),
-  );
+  if (facts) facts.textContent = '今日决策事实只读展示；持仓、自选池与计划均来自已有事实。';
+  const holdingsFailure = resultText(holdings);
   mount(
     $('#workspace-holdings'),
-    el('div', null, [resultText(reports) === null ? reportsBody : emptyCard(resultText(reports))]),
+    holdingsFailure === null
+      ? el('div', 'workspace-card-grid', holdingRows(holdings.data.holdings ?? []))
+      : emptyCard(holdingsFailure),
   );
   mount(
     $('#workspace-directions'),
@@ -167,7 +168,6 @@ export const renderInvestmentWorkspace = async () => {
   const planData = plans.ok ? plans.data : null;
   mount($('#workspace-plans'), planRows(planData?.plans, planData?.views));
   mount($('#workspace-tracking'), el('div'));
-  mount($('#workspace-report'), el('div'));
   mount($('#workspace-account'), el('div'));
 };
 

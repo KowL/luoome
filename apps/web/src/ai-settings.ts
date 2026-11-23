@@ -158,6 +158,8 @@ export interface AISettingsView {
   readonly provider: AISettingsProviderId;
   readonly model: string;
   readonly baseURL: string;
+  /** 当前 profile 实际使用的 provider 密钥变量名（自定义 provider 不比 preset 更好猜）。 */
+  readonly apiKeyEnv: string;
   readonly apiKeyConfigured: boolean;
   readonly temperature: number;
   readonly timeoutSeconds: number;
@@ -275,6 +277,7 @@ export class AISettingsStore {
       provider: providerId,
       model,
       baseURL,
+      apiKeyEnv,
       apiKeyConfigured: (env[apiKeyEnv]?.trim().length ?? 0) > 0,
       temperature,
       timeoutSeconds,
