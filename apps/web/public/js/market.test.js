@@ -153,6 +153,7 @@ describe('展示 helper', () => {
   it('来源文案：主源 / 备用源 / 未知', () => {
     expect(sourceLabel('eastmoney')).toBe('东方财富');
     expect(sourceLabel('tencent')).toBe('腾讯行情（备用源）');
+    expect(sourceLabel('sina')).toBe('新浪财经（备用源）');
     expect(sourceLabel('other')).toBe('other');
     expect(sourceLabel(undefined)).toBe('--');
   });

@@ -11,6 +11,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { sourceLabel } from './market-shared.js';
 import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
 import { stockCodeLink } from './stock-link.js';
 import { $, el, mount } from './ui.js';
@@ -201,6 +202,17 @@ const renderListSection = (items) => {
   return section;
 };
 
+// 新浪板块代码与东财不同体系，且新浪不提供板块成分/详情；明示限制而不是让下游报错。
+const renderSourceNote = (source) => {
+  if (source !== 'sina') return null;
+  return el(
+    'p',
+    'muted sector-source-note',
+    '当前为新浪财经备用源：板块代码为 new_xxx（东方财富为 BKxxxx），两套体系不互通；' +
+      '该来源没有涨跌家数，也不支持板块成分/详情查询。',
+  );
+};
+
 export const renderSectors = async (setStatus) => {
   const root = $('#route-sectors');
   if (root === null) return;
@@ -249,6 +261,7 @@ export const renderSectors = async (setStatus) => {
       el('span', 'pos', `涨 ${counts.up}`),
       el('span', 'neg', `跌 ${counts.down}`),
       el('span', 'flat', `平 ${counts.flat}`),
+      el('span', '', `数据源 ${sourceLabel(list.source)}`),
     ]),
   ]);
   const heatmapItems = selectSectorExtremes(items, 15);
@@ -256,6 +269,12 @@ export const renderSectors = async (setStatus) => {
     heatmapItems.length === 0
       ? el('div', 'ladder-empty', '（无板块数据）')
       : renderSectorHeatmap(heatmapItems);
-  mount(root, [header, dateControls, heatmap, renderListSection(items)]);
+  mount(root, [
+    header,
+    dateControls,
+    renderSourceNote(list.source),
+    heatmap,
+    renderListSection(items),
+  ]);
   setStatus(`板块热力加载完成（涨 ${counts.up} / 跌 ${counts.down} / 平 ${counts.flat}）`);
 };

@@ -100,7 +100,6 @@ describe('fetch_sector_quotes tool', () => {
     expect(fetchList).toHaveBeenCalledWith({
       sort: 'changePct',
       limit: 50,
-      source: 'eastmoney',
     });
 
     const bad = await fetchSectorQuotesTool.execute({ limit: 0 }, makeCtx(manager));

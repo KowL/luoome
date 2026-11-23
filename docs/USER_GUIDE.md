@@ -509,7 +509,7 @@ Web「复盘」页可查看。
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯源顺序；当前仅注册免费的 `eastmoney` |
-| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney` | 行业板块行情源顺序；当前仅注册免费的 `eastmoney` |
+| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney,sina` | 行业板块行情源顺序；东财（主源）与新浪财经（备用源）均免费；备用源需在 `plugins.json` 启用 `source.sina` |
 | `LUOOME_NEWS_SOURCES` | `eastmoney,10jqka` | 财经要闻源顺序；均为免费无需 key，备用源 `10jqka` 需在 `plugins.json` 启用 `source.10jqka` |
 | `LUOOME_LIMIT_UP_MARKET_SOURCES` | `fuyao` | 涨停市场看板（涨停池 + 统计 + 30 日矩阵）源顺序；当前仅注册付费的 `fuyao`，免费替代是 `limit_up_ladder` |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |

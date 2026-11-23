@@ -7,10 +7,11 @@ import { InvariantError } from '../error/index.js';
  *
  * 设计要点（对齐 news / dragon-tiger 的组织风格）：
  * - 一次查询 = 排序字段 `sort` + `limit` / `all` + 不可变的 `items`；实时行情快照，无交易日历逻辑
- * - 上游（东方财富 push2 clist，fs=m:90+t:2 行业板块）字段：f2 最新价 / f3 涨跌幅 /
+ * - 上游字段口径：东方财富 push2 clist（fs=m:90+t:2 行业板块）f2 最新价 / f3 涨跌幅 /
  *   f4 涨跌额 / f6 成交额(元) / f12 板块代码(BKxxxx) / f14 名称 / f104 上涨家数 /
  *   f105 下跌家数 / f128 领涨股名称 / f140 领涨股代码 / f136 领涨股涨跌幅 / f124 行情时间戳
- *   （字段码经真实请求冒烟验证 2026-08-22）
+ *   （字段码经真实请求冒烟验证 2026-08-22）；新浪 newSinaHy 板块代码为 new_xxx，
+ *   没有涨跌家数字段，adapter 在边界内折算成同一份 item 形状
  * - 涨跌幅统一存小数（0.10 = 10%），与 limit-up-ladder / dragon-tiger 的 changePct 口径一致；
  *   成交额单位为元，不做换算
  * - 领涨股字段上游可能缺（极个别板块），item 层置 undefined，不视为数据错误
@@ -18,10 +19,10 @@ import { InvariantError } from '../error/index.js';
 
 // ---------- 枚举与基础类型 ----------
 
-/** 数据源名称（当前仅 eastmoney；保留枚举便于 schema 限定与将来扩展）。 */
-export type SectorQuoteSource = 'eastmoney';
+/** 数据源名称（eastmoney 主源 / sina 免费备用源）。 */
+export type SectorQuoteSource = 'eastmoney' | 'sina';
 
-export const SectorQuoteSourceSchema = z.enum(['eastmoney']);
+export const SectorQuoteSourceSchema = z.enum(['eastmoney', 'sina']);
 
 /** 排序字段（映射上游 fid：changePct → f3，amount → f6；均为降序）。 */
 export const SectorQuoteSortSchema = z.enum(['changePct', 'amount']);
@@ -31,10 +32,10 @@ export type SectorQuoteSort = z.infer<typeof SectorQuoteSortSchema>;
 // ---------- 单个板块 ----------
 
 export const SectorQuoteItemSchema = z.object({
-  /** 板块代码（BKxxxx）。 */
+  /** 板块代码（东财 BKxxxx / 新浪 new_xxx，两套体系不互通）。 */
   code: z.string().min(1),
   name: z.string().min(1),
-  /** 板块指数最新点位。 */
+  /** 最新价（东财为板块指数点位，新浪为成分平均价）。 */
   price: z.number().positive(),
   /** 涨跌幅（小数，0.10 = 10%）。 */
   changePct: z.number().min(-1).max(10),
@@ -58,6 +59,7 @@ export type SectorQuoteItem = z.infer<typeof SectorQuoteItemSchema>;
 export const SectorQuoteListSchema = z.object({
   /** 返回的板块数（== items.length）。 */
   total: z.number().int().nonnegative(),
+  /** 实际命中来源（多源回退后的真实来源，不是请求参数回声）。 */
   source: SectorQuoteSourceSchema,
   /** 按查询 sort 字段降序。 */
   items: z.array(SectorQuoteItemSchema),
@@ -78,7 +80,6 @@ export const FetchSectorQuotesQuerySchema = z.object({
   limit: z.number().int().min(1).max(200).default(50),
   /** 是否按上游 total 分页加载完整集合。 */
   all: z.boolean().optional(),
-  source: SectorQuoteSourceSchema.default('eastmoney'),
 });
 
 export type FetchSectorQuotesQuery = z.infer<typeof FetchSectorQuotesQuerySchema>;

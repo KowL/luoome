@@ -61,6 +61,7 @@ const pushRecentView = (list, item, max = 8) =>
 const sourceLabel = (source) => {
   if (source === 'eastmoney') return '东方财富';
   if (source === 'tencent') return '腾讯行情（备用源）';
+  if (source === 'sina') return '新浪财经（备用源）';
   return typeof source === 'string' && source.length > 0 ? source : '--';
 };
 

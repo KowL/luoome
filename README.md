@@ -109,7 +109,7 @@ Web、CLI 和 MCP 共用下列单机环境变量：
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney`（免费） |
 | `LUOOME_LIMIT_UP_MARKET_SOURCES` | `fuyao` | 涨停市场看板（涨停池 + 统计 + 30 日矩阵）数据源顺序；当前仅注册付费的 `fuyao`（需 `FUYAO_API_KEY` 且 plugins.json 启用 `source.fuyao`）；免费替代是 `limit_up_ladder` |
-| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney` | 行业板块行情数据源顺序；当前仅注册 `eastmoney`（免费） |
+| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney,sina` | 行业板块行情数据源顺序；东财（主源）与新浪财经（备用源）均免费无需 key；备用源需在 plugins.json 启用 `source.sina` |
 | `LUOOME_NEWS_SOURCES` | `eastmoney,10jqka` | 财经要闻数据源顺序；两者均免费无需 key，备用源需在 plugins.json 启用 `source.10jqka` |
 | `LUOOME_DRAGON_TIGER_SOURCES` | `eastmoney` | 龙虎榜数据源顺序；当前仅注册 `eastmoney`（免费） |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |

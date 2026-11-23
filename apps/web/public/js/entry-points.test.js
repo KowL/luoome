@@ -356,6 +356,14 @@ describe('看盘页市场行情区块', () => {
     expect(heatmap).toContain('selectSectorExtremes');
     expect(heatmap).toContain('limit = 15');
   });
+
+  it('板块页展示实际数据源，并对新浪来源明示不支持板块详情', () => {
+    const sectors = read('./sectors.js');
+    expect(sectors).toContain("from './market-shared.js'");
+    expect(sectors).toContain('sourceLabel(list.source)');
+    expect(sectors).toContain('renderSourceNote(list.source)');
+    expect(sectors).toContain('不支持板块成分/详情查询');
+  });
 });
 
 describe('行情页指数条', () => {

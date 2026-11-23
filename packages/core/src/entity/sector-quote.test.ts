@@ -59,11 +59,10 @@ describe('SectorQuoteItemSchema', () => {
 });
 
 describe('FetchSectorQuotesQuerySchema', () => {
-  it('缺省合法；sort 默认 changePct；limit 默认 50；source 默认 eastmoney', () => {
+  it('缺省合法；sort 默认 changePct；limit 默认 50', () => {
     const r = FetchSectorQuotesQuerySchema.parse({});
     expect(r.sort).toBe('changePct');
     expect(r.limit).toBe(50);
-    expect(r.source).toBe('eastmoney');
   });
 
   it('非法 sort / limit 越界拒绝', () => {
@@ -80,6 +79,13 @@ describe('FetchSectorQuotesQuerySchema', () => {
 describe('SectorQuoteListSchema', () => {
   it('合法快照通过', () => {
     expect(SectorQuoteListSchema.safeParse(makeList()).success).toBe(true);
+    expect(SectorQuoteListSchema.safeParse(makeList({ source: 'sina' })).success).toBe(true);
+  });
+
+  it('未注册来源拒绝', () => {
+    expect(SectorQuoteListSchema.safeParse(makeList({ source: 'tencent' as never })).success).toBe(
+      false,
+    );
   });
 });
 

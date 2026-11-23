@@ -1,4 +1,4 @@
-import type { SectorQuoteList } from '@luoome/core';
+import type { SectorQuoteList, SectorQuoteSource } from '@luoome/core';
 
 /**
  * SectorQuoteManager 接口。
@@ -22,9 +22,9 @@ export type SectorQuoteResult =
   | { readonly ok: true; readonly data: SectorQuoteManagerResult }
   | { readonly ok: false; readonly error: SectorQuoteError };
 
-/** 单个数据源适配器（当前仅 eastmoney 实现；name 用于错误 / 日志标识）。 */
+/** 单个数据源适配器（eastmoney 主源 / sina 备用源；name 同时作为结果来源与错误标识）。 */
 export interface SectorQuoteAdapterLike {
-  readonly name: string;
+  readonly name: SectorQuoteSource;
   /**
    * 拉取行业板块（pageSize 条，按 fid 字段降序）；pageSize 为 undefined 时按上游 total 拉取全集。
    * 无数据时返回空 items，不抛错。

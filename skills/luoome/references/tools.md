@@ -21,7 +21,9 @@ Market and盘面资讯:
 - `fetch_index_quotes` — core index (上证/深证/创业板/科创50) realtime quotes.
 - `get_market_room_sectors` — published sector snapshots. With `includeLeaders: true`, each row includes up to three stocks by daily return (`leaders`) and, independently, by 15-minute return (`leaders15`). The latter requires comparable quotes at both ends of the window. `previousLeaders15Ids` lists the preceding 15-minute top three in rank order, or is null when the rankings cannot be compared. `turnover.observedSharePct` uses the covered sample when the full-market denominator is incomplete.
 - `get_market_room_amount_distribution` — window turnover shares and price/volume states. In the 15-minute view, `strengthening` includes the minute batch time and previous known state when a sector has entered 放量走强 within five minutes and remains strong. Transitions use consecutive published minutes at or before the requested time.
-- `fetch_sector_quotes` — industry/concept sector ranking with leading stock.
+- `fetch_sector_quotes` — industry sector ranking with leading stock. `source` in the result
+  is the actual provider: `eastmoney` (`BKxxxx` codes) or `sina` (`new_xxx` codes, no
+  up/down counts, no sector constituents/detail).
 - `compute_indicators` — indicators from persisted local daily bars; no network or collection. Missing bars return empty indicators with `barsCount: 0`.
 - `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
 - `limit_up_market` — one call for the limit-up dashboard: that day's limit-up pool (per-stock

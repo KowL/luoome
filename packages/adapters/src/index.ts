@@ -76,10 +76,11 @@ export * from './plugins/config.js';
 export * from './plugins/provider-runtime.js';
 // 行业 / 概念目录与成分（扶摇同花顺指数目录）
 export * from './sector-catalog/factory.js';
-// 行业板块行情（东方财富 push2 板块列表公开 API）
+// 行业板块行情（东方财富 push2 主源 + 新浪行业板块备用源）
 export * from './sector-quote/eastmoney.js';
 export * from './sector-quote/factory.js';
 export * from './sector-quote/manager.js';
+export * from './sector-quote/sina.js';
 export * from './sector-quote/types.js';
 // 数据源可插拔与统一观测（泛型核心 + 结构化错误）
 export * from './source-error.js';

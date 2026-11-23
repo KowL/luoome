@@ -4,6 +4,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { sourceLabel } from './market-shared.js';
 import { openModal } from './modal.js';
 import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
 import { $, el, fmtTime, mount } from './ui.js';
@@ -144,7 +145,7 @@ const renderMiniHeatmap = async (epoch) => {
     return;
   }
   meta.dataset.lastSuccess = '板块行情已加载';
-  meta.textContent = `${meta.dataset.lastSuccess} · 每 60 秒检查更新`;
+  meta.textContent = `${meta.dataset.lastSuccess} · 数据源 ${sourceLabel(r.data?.source)} · 每 60 秒检查更新`;
   const items = selectSectorExtremes(r.data?.items ?? [], 15);
   if (items.length === 0) {
     mount(wrap, el('p', 'placeholder', '（无板块数据）'));
