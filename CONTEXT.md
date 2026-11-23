@@ -21,8 +21,8 @@ StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不
 StrategyRun 的 `status` 只表达执行生命周期：`running / complete / failed`。`complete` 表示执行已结束且
 结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的
 `dataHealth=complete / partial / unavailable` 与失败计数表达。存量 `status=partial` 只作为旧记录读取，
-语义等同“执行已完成、数据部分可用”。新的当前股票池只消费通过 acceptance 且
-`publication=published` 的 operational run；evaluation、withheld 和 non-publishing 运行不会覆盖当前事实。
+语义等同“执行已完成、数据部分可用”。当前股票池只消费 `scope=operational` 且已结束
+（`complete`/`partial`）的运行；未结束、失败或 `evaluation` 运行不会覆盖当前事实。
 股票进入策略股票池后，其后续事实链仍归 Strategy：
 StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5
 观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
@@ -59,7 +59,8 @@ dataAsOf，无版本旧记录走同一解码边界的只读兼容。新运行不
 回答“本次 StrategyRun 的逐股 quote / daily-bars 从哪个时点与来源取得，以及缺失如何审计”。
 实时 scan 使用 Live Adapter；scheduled/replay 只读取本地已落库日线（原始价 + 因子投影），
 在查询时用 `dataAsOf` 截断，不维护 checkpoint 或 revision 表。两个实现共享同一 Interface，
-`run_strategy` 不再承载模式分支、重试或 provider coverage 计算。
+`run_strategy` 只按 `mode` 选择实现（`scan`→Live，`scheduled`/`replay`→Local），
+逐股读取、重试与 provider coverage 计算留在 Adapter。
 
 ### StrategyRunSnapshot
 
@@ -76,7 +77,8 @@ run → signal → observation 的 Strategy/version/stock/horizon 归属，按 s
 ### StrategyRunTimeline
 
 Strategy 工作台、运行比较和洞察共用的只读运行视图；一次装载 run、version 与 results，并统一当前
-published operational run、上一基准和最近尝试的选择。它不是新的持久化实体，不改变 publication 规则。
+operational 且已结束（`complete`/`partial`）的运行、上一基准和最近尝试的选择。它不是新的
+持久化实体，也不另设发布状态。
 
 ### StrategyInsight
 
@@ -226,7 +228,7 @@ AI 两次失败后由 LLM 适配器返回的规则兜底建议（`reasoning` 带
 
 `LimitUpLadder` 是指定 `Asia/Shanghai` 交易日的真实涨停梯队事实，`ladderLevel` 只表示当日快照中
 可审计的连板层级，不等于 Advice、收益概率或交易信号。交互式当前查询走真实 manager/cache；
-正式 Strategy scan/scheduled 将返回写入 `LimitUpLadderSnapshotRepository`，历史 replay 只读取同一
+正式 Strategy scan/scheduled 将返回写入 `LimitUpLadderSnapshotRepository`，历史 replay（需显式 `asOf`）只读取同一
 交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
 情绪接口或 mock 推断历史事实。
 

@@ -3,15 +3,30 @@
 > luoome v0.1 → v0.10 演进路线。每版本都有**可见产物 + 验收标准**。
 > 设计主线：**罗（采集） → 织（分析） → 建议 → 复盘**。
 >
-> > 2026-11-12：v0.9/v0.10 章节描述的是领域收敛前的实现（含 lease、checkpoint、revision、
+> 2026-11-12：v0.9/v0.10 章节描述的是领域收敛前的实现（含 lease、checkpoint、revision、
 > 研究主题与 embedding、策略自治等已删除能力）。当前代码事实见
 > [开发计划 §2.0](./development-plan.md#20-2026-11-12-收敛后基线先读这一节)。
+>
+> 2026-11-20：进一步收敛为「一份报告、五个页面、一个门禁、一个信号源」：插件启停只剩手写只读
+> `plugins.json`，StrategyRun 的 acceptance/publication 状态机、策略定时器/daily cycle、观察到期
+> 补全与 replay 已删除；Web 一级导航收敛为今日/持仓/关注/市场/设置。v0.9 中依赖
+> publication/acceptance/daily-cycle/lease/checkpoint 的描述均属已裁撤的历史。
 
 本文件 v0.8 以前章节是历史快照。当前目标模型与入口以
 > [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md)
 > 和 [CONTEXT.md](../CONTEXT.md) 为准；当前执行顺序以
 > [开发计划](./development-plan.md) 和
 > [Strategy 可靠性开发计划](./strategy-reliability-development-plan.md) 为准。
+
+## 当前状态（2026-11-23）
+
+- 产品版本 **0.9.0**（以 CLI `--version`、MCP serverInfo 与 Homebrew formula 为准）；根
+  `package.json` 的 `0.8.0` 是内部 workspace 版本，尚未同步。
+- Web 一级入口为五页：今日 / 持仓 / 关注 / 市场 / 设置；报告收敛为每周建议成绩单（周一 08:00）。
+- 插件启停只有手写只读 `$LUOOME_HOME/plugins.json`，改完重启宿主生效；缺省即关闭，
+  没有 CLI `plugins` 命令，也没有 Web 管理页。
+- 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，score ≥ 60 的看多信号补进候选池（≤3 只）。
+- P0 修复：`bun run mcp:smoke` 纳入 CI；`luoome restart` 在无 `lsof` 时回退 `ss` / `fuser`。
 
 ## v0.1 — Foundation ✅（已完成）
 
@@ -213,6 +228,11 @@
 - ✅ 正式 Strategy 运行先持久化 `status=running`，执行记录立即可见；完成或异常时原子更新为 `complete` / `failed` 并提交结果事实。
 
 ## v0.9 — Strategy 生产可靠性与历史评估 🚧（进行中）
+
+> 2026-11-20 状态：本节保留 2026-08～11 的实现快照。其中 StrategyRun Summary V4/acceptance/
+> publication、heartbeat/fencing/lease、strategy-daily-cycle、DailyBar revision/checkpoint、
+> evaluation session/day 与 range replay 等能力已裁撤或下线；当前事实见顶部「当前状态（2026-11-23）」
+> 与 [ARCHITECTURE.md](./ARCHITECTURE.md) §7–§8。
 
 **目标**：把“Strategy 功能可运行”提升为“每天可持续运行、结果可验收、失败可恢复、历史评估不污染生产视图”。
 

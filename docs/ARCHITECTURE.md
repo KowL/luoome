@@ -582,7 +582,7 @@ repository 或 adapter；core 不定义任何 agent loop 类型。
 **当前研究与观察模型**：Strategy 是版本化研究规则；StrategyRun 产出可追溯的
 StrategyResult/StrategySignal。Watchlist 统一 manual/strategy/ai/portfolio/import 来源和成员
 生命周期；Strategy → Watchlist 只有在用户创建持久、可审计的显式订阅契约后，才由
-published operational run 投影 strategy source。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
+operational 且已结束（`complete`/`partial`）的运行投影 strategy source。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
 旧 Tactic/StockGroup/StockPool 模型（含 migration decoder 与旧表 DDL）已整体移除，
 存量库的旧物理表不再维护（不 DROP、不读取）。
 
@@ -654,7 +654,7 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 `WorkflowRun` 并执行通知状态迁移。定时模式默认经飞书通知；未配置飞书时保存日志并记 `fallback-log`，`notified=false`。
 通知失败不回滚报告，只把投递状态记为 `failed`、运行审计记为 `partial`。报告投递通过
 持久领取令牌互斥，失败后等待 15 分钟、遗留 `pending` 超过 5 分钟可接管；
-收盘 tick 与策略日循环共用就绪检查：先等待当日预期策略发布完成，再生成账户计划批次；
+当时的收盘 tick 与策略日循环共用就绪检查：先等待当日预期策略发布完成，再生成账户计划批次；
 各账户批次不再处于 running/failed/blocked 后才统一出报。18:00 到达也不会发布未完成批次的
 缺口报告；没有当日预期策略时在 18:00 后完成账户计划再出报。报告生成后不再追加补充版本，
 已有但未完成投递的报告按同一报告与通知身份重试。
@@ -692,8 +692,9 @@ unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal �
 `running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V4 通过
 `dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量，
 `scope` 与 `status` 共同决定它是否进入建议视图：`evaluation`、`running`、`failed` 一律不参与。
-正式运行取得 lease 后先写入可查询的 `running` 记录，终态与 results/signals 在同一事务中更新；
-意外异常也会把该记录收敛为 `failed`。
+正式运行先写入可查询的 `running` 记录，终态与 results/signals 在同一事务中更新；
+意外异常也会把该记录收敛为 `failed`。策略运行不再持有租约，`lease_lost_before_commit`
+现在只会出现在读取存量 `strategy-daily-cycle` 审计时。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
 
 **Strategy 模块深化（2026-09-01）**：`StrategyEvaluationData` 由 Live 与 Checkpoint 两个真实
@@ -992,11 +993,9 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 单宿主 timer 每 250ms reconcile，业务 timer 只为当前启用项创建；停用时清除 timer 并停止发起新 tick，
 退出排空有 5 秒上限，超时报告未排空，不强制关闭共用 DB。
 
-`PluginSettingsStore` 只投影可信内置元数据、catalog 派生贡献与本宿主状态，不暴露文件路径、凭证或任意执行配置。
-GET/preview 不外发，initialize/migrate/set 严格校验输入，保存经同源/write 门禁与 incarnation/revision CAS。
-预览不自动启用依赖；配置提交结果与宿主应用分开返回（committedVersion、gateApplied、阻断项、task phase）。
-MCP 每次 list/call 使用实时可用表，并以无外发轮询发送同连接 list_changed；断连关闭观察器。
-CLI status 提供依赖/贡献并明确 runtime not-started，不为查看状态初始化业务上下文。
+2026-11-20 起不再有插件设置页、preview/CAS 保存或 CLI `plugins` 命令；启用状态只由手写 `plugins.json` 决定，
+读取不外发。MCP 每次 list/call 使用实时可用表；插件开关变化需重启宿主才重新装配，不提供同连接管理变更。
+CLI 不提供插件管理子命令，也不为查看状态初始化业务上下文。
 
 `business.analysis` 是默认关闭的建议生成 owner，catalog 将 `analyze_stock`、`analyze_position`、`market_outlook`、
 `analyze_strategy_candidate` 统一标为受控执行。分析模型调用在 `build-advice` 的共同边界统一出站，

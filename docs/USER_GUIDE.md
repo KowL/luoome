@@ -542,8 +542,10 @@ Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，
 
 ### 10.4 启动时报 AI 模型目录或 provider 密钥缺失
 
-首次启动会自动生成 `$LUOOME_HOME/ai-models.json`，内置默认值与格式可参考仓库根目录的
-`ai-models.example.json`；也可以设置 `LUOOME_AI_CONFIG` 指向自定义配置文件。再设置当前
+首次启动不会自动生成 `$LUOOME_HOME/ai-models.json`：Web 读不到模型目录时以配置模式启动，
+需在「设置 → AI 模型」保存后才会写入（密钥写入 `$LUOOME_HOME/.env`，权限 `0600`）。
+格式可参考仓库根目录的 `ai-models.example.json`，也可手动复制；或者设置 `LUOOME_AI_CONFIG`
+指向自定义配置文件。再设置当前
 profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
 或缺密钥都会在需要 AI 的调用处明确报错；CLI/MCP 可先以配置模式启动并使用不依赖 AI 的
 行情、账户和审计能力，不会用 mock LLM 冒充真实推理。

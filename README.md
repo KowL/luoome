@@ -2,6 +2,8 @@
 
 > **织机 + 罗网 — 汇聚网罗有价值的信息数据，在面对变化的市场时提供准确的建议。**
 
+当前产品版本 **0.9.0**（以 CLI `--version`、MCP serverInfo 与 Homebrew formula 为准）；根 `package.json` 的 `0.8.0` 是内部 workspace 版本，尚未同步。
+
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
 Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent Tool 通过 MCP / DSH 暴露，其余纯 UI CRUD 由 Web/CLI 直接调用 Application Service；所有数据织成可追溯事实。
 
@@ -46,8 +48,9 @@ Web、CLI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和
 
 - PnL、风险敞口、行业暴露
 - Strategy 扫描、评分与可解释规则结果
-- 只有用户明确订阅后，published operational StrategyRun 才能同步目标 Watchlist；complete 才能结束
-  缺失来源，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改 Watchlist
+- 只有用户显式建立的 active Strategy → Watchlist 订阅才会同步；来源运行必须是 `scope=operational`
+  且已结束（`complete`/`partial`）。数据健康 `complete` 提交完整同步，`partial` 只结束已明确评估且
+  未入选的来源；运行未结束、失败、数据不可用或 evaluation 运行都不改 Watchlist
 - 多源行情交叉验证
 - LLM 推理总结（每日复盘、个股分析）
 
@@ -107,7 +110,7 @@ Web、CLI 和 MCP 共用下列单机环境变量：
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_MCP_CONFIG` | `$LUOOME_HOME/mcp-servers.json` | Web Agent 的受控只读 MCP 客户端配置；可在 Web 设置页管理启停、工具和场景白名单，见[接入说明](./docs/USER_GUIDE.md#只读-mcp-服务供内置-agent-使用) |
-| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
+| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时不会自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
 | `LUOOME_RESEARCH_VAULT` | — | 单机 Obsidian Vault 绝对路径 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
@@ -142,10 +145,14 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。两者均通过
 OpenAI-compatible Chat Completions 接入。
 
-Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置」页直接修改并热生效。
+Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置 → AI 模型」页直接修改并热生效。
+模型目录缺失时不会自动生成：Web 会以配置模式启动，在设置页保存后才写入 `$LUOOME_HOME/ai-models.json`
+（密钥写入 `$LUOOME_HOME/.env`，权限 0600）；也可手动从仓库根的 `ai-models.example.json` 复制。
 
-策略 AI 洞察由 `plugins.json` 的 `strategy.ai-insight` 独立启停。配置缺失、损坏或停用时，日循环和周报仍保留
-确定性事实，不调用策略解释模型；不影响其它 AI 功能。生成洞察仍需原 external 授权。
+策略 AI 洞察由 `plugins.json` 的 `strategy.ai-insight` 独立启停，只有 `generate_strategy_insight` 按需调用策略解释模型。
+配置缺失、损坏或停用时，该工具仍返回确定性事实摘要，并标记 `provider=facts-only` 与降级原因
+（`plugin_disabled` / `dependency_not_ready` / `provider_failed`）；每日判断与每周成绩单不调用策略解释模型，
+也不受该开关影响。生成洞察仍需原 external 授权。
 
 内置能力的启停只有一处：手写 `$LUOOME_HOME/plugins.json`，改完重启宿主生效。没有 CLI 命令，也没有 Web 管理页；缺省即关闭，启用不授予 write/external，也不改变工具白名单。可用的 id 与写法见[插件启用清单](./docs/USER_GUIDE.md#插件启用清单只读)。
 
