@@ -68,6 +68,8 @@ export interface DshChatRuntimeOptions {
   readonly rollout?: DshRolloutGate;
   readonly runTimeoutMs?: number;
   readonly maxActiveRuns?: number;
+  /** 是否允许本 Run 派生进程内子 Agent；缺省关闭，子级工具集仍逐级取交集。 */
+  readonly allowSubagents?: boolean;
 }
 
 const activeConversations = new Set<string>();
@@ -452,6 +454,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
             manifestHash: manifest.manifest.manifestHash,
             manifest: manifest.manifest,
             expiresAt: new Date(expiresAt).toISOString(),
+            ...(this.options.allowSubagents === true ? { allowSubagents: true } : {}),
             ...(plan.dshSessionId === null ? {} : { sessionId: plan.dshSessionId }),
             instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}${truncationNotice === undefined ? '' : `\n${truncationNotice}`}\n${deliveryNote}${recoveredNote === '' ? '' : `\n${recoveredNote}`}`,
             prompt: JSON.stringify({
@@ -629,6 +632,7 @@ export const createDshChatRuntimeFromStore = (
       nodePath,
       hostEntry,
       cwd,
+      allowSubagents: env.LUOOME_DSH_ALLOW_SUBAGENTS === 'true',
       ...(env.LUOOME_EXPOSE_EXTERNAL !== 'true'
         ? {}
         : {

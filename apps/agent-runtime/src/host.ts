@@ -24,6 +24,7 @@ import {
   type HostConfig,
   HostConfigSchema,
 } from '../../../packages/dsh-bridge/src/runtime-config.js';
+import { awaitDescendants, RunAgentTree, recordAgentDiagnostic } from './agent-tree.js';
 import { hashJson, installedDshBin, PROFILE_NAME, prepareProfile } from './profile.js';
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +35,8 @@ type Delivery = (message: HostMessage) => Promise<void>;
 interface ActiveRuntime {
   run: RunRequest;
   sessionId: string;
+  /** 根 Agent 与派生后代的父子关系；完成判定不能只看根 idle。 */
+  tree: RunAgentTree;
   harness?: DeepSeekHarness;
   task?: Promise<void>;
   cancel?: boolean;
@@ -93,9 +96,11 @@ export class NodeRuntimeHost {
     if (this.acceptedRuns.has(run.runId) || this.acceptedRuns.size >= 128)
       throw new Error('Duplicate run or Host run limit exceeded');
     this.acceptedRuns.add(run.runId);
+    const sessionId = run.sessionId ?? randomUUID();
     const active: ActiveRuntime = {
       run,
-      sessionId: run.sessionId ?? randomUUID(),
+      sessionId,
+      tree: new RunAgentTree(sessionId),
       stopped: false,
     };
     this.active = active;
@@ -163,6 +168,7 @@ export class NodeRuntimeHost {
             if (event.type === 'diagnostic' && event.payload.code === 'inventory') {
               if (typeof event.payload.pid === 'number') active.runtimePid = event.payload.pid;
             }
+            if (event.type === 'diagnostic') recordAgentDiagnostic(active.tree, event.payload);
             await this.deliver({ type: 'event', event });
           }
           response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
@@ -295,6 +301,14 @@ export class NodeRuntimeHost {
         completedTurn = true;
       }
       if (!completedTurn) throw new Error('DSH returned idle without a committed completed turn');
+      // 根 Agent idle 不代表 Run 完成：仍活跃的后代必须排空，否则只能按超时/取消结束。
+      if (!active.cancel) {
+        const descendantsDone = await awaitDescendants(active.tree, {
+          deadline: Date.parse(run.expiresAt),
+          cancelled: () => active.cancel === true,
+        });
+        if (!descendantsDone) throw new Error('Descendant Agents remained active');
+      }
       status = active.cancel
         ? active.cancelReason === 'timeout'
           ? 'failed'
@@ -335,10 +349,22 @@ export class NodeRuntimeHost {
           stage = 'cleanup';
         }
       }
+      // 取消/关闭进程时后代随 Host 一起终止；在此之后再定稿，审计不会残留活跃后代。
+      active.tree.terminateDescendants();
+      const descendants = active.tree
+        .snapshot()
+        .filter((node) => node.parentAgentId !== null)
+        .map((node) => ({
+          agentId: node.agentId,
+          parentAgentId: node.parentAgentId,
+          depth: node.depth,
+          status: node.status,
+        }));
       await this.event(run, sessionId, 'run.terminal', {
         status,
         runtimeStopped: active.stopped,
         ...(active.runtimePid ? { runtimePid: active.runtimePid } : {}),
+        ...(descendants.length === 0 ? {} : { agents: descendants }),
         ...(failed
           ? {
               error: {

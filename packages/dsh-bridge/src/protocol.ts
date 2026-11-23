@@ -82,6 +82,8 @@ export const RunRequestSchema = z
     conversationId: IdSchema,
     /** 续接既有 runtime session 时由服务端指定；缺省由 Host 新建。 */
     sessionId: IdSchema.optional(),
+    /** 是否允许本 Run 派生进程内子 Agent；缺省关闭，子级工具集另需逐级交集。 */
+    allowSubagents: z.boolean().optional(),
     manifestHash: HashSchema,
     manifest: ToolManifestSchema,
     configRef: IdSchema,

@@ -43,6 +43,10 @@ export function apply(ctx: Context): void {
   let nativeCalls = 0;
   let toolCalls = 0;
   const manifest = new Map(run.manifest.tools.map((tool) => [tool.name, tool]));
+  // 根 Agent 的白名单就是已批准的 manifest；子 Agent 另行取逐级交集，不能假设继承。
+  const agentAllowlists = new Map<string, ReadonlySet<string>>([
+    [sessionId, new Set(manifest.keys())],
+  ]);
   const definitions = new Map<string, unknown>();
   const replies = new Map<ToolExecution['token'], ToolReply>();
   const callIds = new Map<ToolExecution['token'], string>();
@@ -93,12 +97,21 @@ export function apply(ctx: Context): void {
       });
   };
 
+  const allowedFor = (exec: Readonly<ToolExecution>): ReadonlySet<string> | undefined => {
+    const agentId = exec.agent?.session.id;
+    return agentId === undefined ? undefined : agentAllowlists.get(agentId);
+  };
+
   const denied = (exec: Readonly<ToolExecution>): string | undefined => {
     if (lifecycle.signal.aborted || Date.now() >= Date.parse(run.expiresAt))
       return 'Run is no longer active';
-    if (exec.agent?.session.id !== sessionId) return 'Agent is outside the bound run';
+    const agentId = exec.agent?.session.id;
+    const allow = allowedFor(exec);
+    if (agentId === undefined || allow === undefined) return 'Agent is outside the bound run';
+    if (!allow.has(exec.name) || !manifest.has(exec.name))
+      return 'Tool is outside the Agent allowlist';
     if (
-      !manifest.has(exec.name) ||
+      agentId === sessionId &&
       ctx.tools.get(exec.name, exec.agent) !== definitions.get(exec.name)
     ) {
       return 'Tool registration differs from the approved manifest';
@@ -164,13 +177,17 @@ export function apply(ctx: Context): void {
   ctx.tools.guard(denied);
   ctx.on('tools/pre-execute', async (exec, next) => {
     const tool = manifest.get(exec.name);
+    const agentId = exec.agent?.session.id;
+    const allow = allowedFor(exec);
     if (
       !tool ||
-      exec.agent?.session.id !== sessionId ||
+      agentId === undefined ||
+      allow === undefined ||
+      !allow.has(exec.name) ||
       lifecycle.signal.aborted ||
       Date.now() >= Date.parse(run.expiresAt)
     ) {
-      return { kind: 'deny', reason: 'Call is outside the active run manifest' };
+      return { kind: 'deny', reason: 'Call is outside the active run allowlist' };
     }
     if (++toolCalls > host.limits.maxToolCalls)
       return { kind: 'deny', reason: 'Tool-call limit exceeded' };
@@ -209,13 +226,26 @@ export function apply(ctx: Context): void {
       if (!admission.allowed) return { kind: 'deny', reason: 'Native call was revoked or denied' };
       nativeAdmissions.add(exec.token);
     }
-    publish('tool.call', {
-      callId: callId(exec),
-      toolName: exec.name,
-      input: JsonValueSchema.parse(exec.arguments),
-      executionLocation: tool.executionLocation,
-      manifestHash: run.manifestHash,
-    });
+    const parentAgentId = exec.agent?.session.header.parentSession;
+    if (agentId === sessionId) {
+      publish('tool.call', {
+        callId: callId(exec),
+        toolName: exec.name,
+        input: JsonValueSchema.parse(exec.arguments),
+        executionLocation: tool.executionLocation,
+        manifestHash: run.manifestHash,
+      });
+    } else {
+      // 子 Agent 轨迹不进入根会话投影，只保留带父子关联的审计事件。
+      publish('diagnostic', {
+        code: 'subagent.tool.call',
+        agentId,
+        ...(parentAgentId === undefined ? {} : { parentAgentId }),
+        callId: callId(exec),
+        toolName: exec.name,
+        executionLocation: tool.executionLocation,
+      });
+    }
     return next();
   });
 
@@ -248,12 +278,28 @@ export function apply(ctx: Context): void {
     const reply = replies.get(exec.token);
     replies.delete(exec.token);
     nativeAdmissions.delete(exec.token);
+    const agentId = exec.agent?.session.id;
+    const ok = reply ? reply.ok && !result.isError : !result.isError;
+    if (agentId !== sessionId) {
+      const parentAgentId = exec.agent?.session.header.parentSession;
+      publish('diagnostic', {
+        code: 'subagent.tool.result',
+        agentId: agentId ?? '',
+        ...(parentAgentId === undefined ? {} : { parentAgentId }),
+        callId: callId(exec),
+        toolName: exec.name,
+        executionLocation: tool.executionLocation,
+        ok,
+      });
+      callIds.delete(exec.token);
+      return;
+    }
     publish(tool.executionLocation === 'runtime-native' ? 'native-tool.result' : 'tool.result', {
       callId: callId(exec),
       toolName: exec.name,
       sourcePlugin: tool.sourcePlugin,
       executionLocation: tool.executionLocation,
-      ok: reply ? reply.ok && !result.isError : !result.isError,
+      ok,
       output: reply
         ? reply.output
         : JsonValueSchema.parse(
@@ -265,7 +311,42 @@ export function apply(ctx: Context): void {
   });
 
   ctx.on('agent/created', async ({ agent }) => {
-    if (agent.session.id !== sessionId) throw new Error('Only the bound root Agent is permitted');
+    if (agent.session.id !== sessionId) {
+      const agentId = agent.session.id;
+      const parentAgentId = agent.session.header.parentSession;
+      const parentAllow =
+        parentAgentId === undefined ? undefined : agentAllowlists.get(parentAgentId);
+      if (run.allowSubagents !== true || parentAgentId === undefined || parentAllow === undefined) {
+        publish('diagnostic', {
+          code: 'subagent.denied',
+          agentId,
+          ...(parentAgentId === undefined ? {} : { parentAgentId }),
+          reason:
+            run.allowSubagents !== true
+              ? 'Subagent creation is disabled for this run'
+              : 'Parent Agent is outside the bound run',
+        });
+        await deliveries;
+        throw new Error('Subagent creation is not permitted for this run');
+      }
+      const declared = agent.ctx.tools.schemas().map((tool) => tool.name);
+      const allow = [...new Set(declared)]
+        .filter((name) => manifest.has(name) && parentAllow.has(name))
+        .sort();
+      // 空交集保持空集：restrict({ allow: [] }) 会被工具注册表拒绝，只交给 pre-execute 拒绝。
+      if (allow.length > 0) agent.ctx.tools.restrict({ allow });
+      agentAllowlists.set(agentId, new Set(allow));
+      publish('diagnostic', {
+        code: 'subagent.spawn',
+        agentId,
+        parentAgentId,
+        depth: agent.session.header.delegationDepth ?? 0,
+        allowlist: allow,
+      });
+      await deliveries;
+      lifecycle.signal.throwIfAborted();
+      return;
+    }
     const globalNames = ctx.tools
       .schemas()
       .map((tool) => tool.name)
@@ -307,6 +388,17 @@ export function apply(ctx: Context): void {
     });
     await deliveries;
     lifecycle.signal.throwIfAborted();
+  });
+
+  ctx.on('agent/disposed', ({ agent }) => {
+    if (agent.session.id === sessionId) return;
+    const parentAgentId = agent.session.header.parentSession;
+    agentAllowlists.delete(agent.session.id);
+    publish('diagnostic', {
+      code: 'subagent.disposed',
+      agentId: agent.session.id,
+      ...(parentAgentId === undefined ? {} : { parentAgentId }),
+    });
   });
 
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {

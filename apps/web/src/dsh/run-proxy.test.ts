@@ -274,6 +274,58 @@ it('admits and settles every model attempt against the same server ledger', asyn
   }
 }, 10_000);
 
+it('counts parent and subagent model attempts in the same run account window', async () => {
+  const ledger = new ModelBudgetLedger({ maxTokens: 1_000, maxRequests: 2, windowMs: 60_000 });
+  let attempts = 0;
+  const proxy = createDshRunProxy({
+    runId: 'budget-subagent',
+    manifestHash: 'fixture',
+    expiresAt: Date.now() + 10_000,
+    signal: new AbortController().signal,
+    executeTool: async () => ({
+      kind: 'rejected',
+      error: { code: 'permission_denied', message: 'unused' },
+    }),
+    budget: { ledger, accountId: 'account-1' },
+    model: {
+      endpoint: 'https://provider.invalid/chat/completions',
+      model: 'fixture-model',
+      headers: {},
+      fetch: (async () => {
+        attempts += 1;
+        return new Response(sseUsage(10, 5));
+      }) as unknown as typeof fetch,
+    },
+  });
+  const send = () =>
+    nativeFetch(proxy.model.endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${proxy.model.token}`,
+        'x-luoome-run-id': 'budget-subagent',
+      },
+      body: JSON.stringify({ model: 'fixture-model', max_tokens: 20 }),
+    });
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await send();
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(ledger.snapshot('account-1')).toMatchObject({
+      requests: 2,
+      tokensUsed: 30,
+      tokensReserved: 0,
+    });
+    const rejected = await send();
+    expect(rejected.status).toBe(402);
+    expect(await rejected.json()).toEqual({ error: 'budget_exhausted', reason: 'requests' });
+    expect(attempts).toBe(2);
+  } finally {
+    await proxy.stop();
+  }
+}, 10_000);
+
 it('counts retries as attempts and stops retrying once the ledger is exhausted', async () => {
   const ledger = new ModelBudgetLedger({ maxTokens: 10_000, maxRequests: 1, windowMs: 60_000 });
   let attempts = 0;
