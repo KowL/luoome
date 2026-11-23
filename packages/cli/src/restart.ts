@@ -4,37 +4,111 @@
  * 设计：
  * - findPidOnPort / waitForProcessExit / killPid 是 IO 包装，node + bun 通用；
  * - 不维护 PID 文件：start 排他使用同一个端口，按端口反查即可；
- * - macOS/Linux 用 lsof（Alpine / 极简 Linux 上可能缺失，调用方需先看环境）；
- * - Windows 没有 lsof，改用系统自带 netstat -ano 解析 LISTENING 行。
+ * - macOS/Linux 依次尝试 lsof → ss → fuser（容器 / 极简发行版常缺其中一个）；
+ * - Windows 没有这些工具，改用系统自带 netstat -ano 解析 LISTENING 行。
  */
 
 import { spawnSync } from 'node:child_process';
 
-const LSOF = 'lsof';
+/** 探测工具本身不在 PATH 上；调用方据此换下一个工具。 */
+class ToolUnavailableError extends Error {}
 
-/** 用 lsof 查 TCP:port 的 LISTEN 进程 PID；找不到返回 null；lsof 不可用抛错。 */
-const findPidOnPortPosix = (port: number): number | null => {
-  const result = spawnSync(LSOF, ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-    encoding: 'utf8',
-  });
+/** 跑外部工具；工具缺失（ENOENT）抛 ToolUnavailableError，其余失败保持原样。 */
+const runTool = (
+  command: string,
+  args: string[],
+): { status: number | null; stdout: string; stderr: string } => {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
   if (result.error !== undefined && result.error !== null) {
     const err = result.error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      throw new Error(`未找到 ${LSOF}（${err.message}）`);
-    }
+    if (err.code === 'ENOENT')
+      throw new ToolUnavailableError(`未找到 ${command}（${err.message}）`);
     throw err;
   }
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+};
+
+/** 用 lsof 查 TCP:port 的 LISTEN 进程 PID；找不到返回 null。 */
+const findPidWithLsof = (port: number): number | null => {
+  const result = runTool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
   // lsof 找不到匹配：exit 1 + empty stderr，认为端口空闲。
-  if (result.status !== 0 && (result.stderr ?? '').trim().length > 0) {
+  if (result.status !== 0 && result.stderr.trim().length > 0) {
     throw new Error(`lsof 失败 (exit ${result.status}): ${result.stderr}`);
   }
-  const first = (result.stdout ?? '')
+  const first = result.stdout
     .split('\n')
     .map((line) => line.trim())
     .find((line) => line.length > 0);
   if (first === undefined) return null;
   const pid = Number.parseInt(first, 10);
   return Number.isFinite(pid) && pid > 0 ? pid : null;
+};
+
+/** 解析 `ss -Hltnp 'sport = :PORT'` 输出，找指定端口 LISTEN 行的 PID；找不到返回 null。 */
+export const parseSsPid = (output: string, port: number): number | null => {
+  for (const line of output.split(/\r?\n/)) {
+    // 行格式：LISTEN 0 512 127.0.0.1:5173 0.0.0.0:* users:(("bun",pid=1234,fd=8))
+    const cols = line.trim().split(/\s+/);
+    const localAddr = cols[3];
+    if (cols[0] !== 'LISTEN' || localAddr === undefined) continue;
+    const sep = localAddr.lastIndexOf(':');
+    if (sep < 0 || Number.parseInt(localAddr.slice(sep + 1), 10) !== port) continue;
+    // 非 root 下看不到别的用户的 socket：该行没有 users: 段，换下一行。
+    const pidCol = /pid=(\d+)/.exec(line)?.[1];
+    if (pidCol === undefined) continue;
+    const pid = Number.parseInt(pidCol, 10);
+    if (pid > 0) return pid;
+  }
+  return null;
+};
+
+/** 用 ss 查 TCP:port 的 LISTEN 进程 PID；找不到返回 null。 */
+const findPidWithSs = (port: number): number | null => {
+  const result = runTool('ss', ['-Hltnp', `sport = :${port}`]);
+  if (result.status !== 0) {
+    throw new Error(`ss 失败 (exit ${result.status}): ${result.stderr.trim()}`);
+  }
+  return parseSsPid(result.stdout, port);
+};
+
+/** 解析 `fuser -n tcp PORT` 的 stdout（纯 PID 列表，可能跨行）；找不到返回 null。 */
+export const parseFuserPid = (output: string): number | null => {
+  for (const token of output.split(/\s+/)) {
+    if (!/^\d+$/.test(token)) continue;
+    const pid = Number.parseInt(token, 10);
+    if (pid > 0) return pid;
+  }
+  return null;
+};
+
+/** 用 fuser 查 TCP:port 的 LISTEN 进程 PID；找不到返回 null。 */
+const findPidWithFuser = (port: number): number | null => {
+  // fuser 把 PID 打到 stdout，`PORT/tcp:` 横幅打到 stderr；端口空闲时 exit 1。
+  const result = runTool('fuser', ['-n', 'tcp', String(port)]);
+  if (result.status === 1) return null;
+  if (result.status !== 0) {
+    throw new Error(`fuser 失败 (exit ${result.status}): ${result.stderr.trim()}`);
+  }
+  return parseFuserPid(result.stdout);
+};
+
+const POSIX_PORT_FINDERS = [
+  { tool: 'lsof', find: findPidWithLsof },
+  { tool: 'ss', find: findPidWithSs },
+  { tool: 'fuser', find: findPidWithFuser },
+] as const;
+
+/** POSIX 下按 lsof → ss → fuser 顺序查端口 PID；三者都缺失时抛错。 */
+const findPidOnPortPosix = (port: number): number | null => {
+  for (const { find } of POSIX_PORT_FINDERS) {
+    try {
+      return find(port);
+    } catch (error) {
+      if (!(error instanceof ToolUnavailableError)) throw error;
+    }
+  }
+  const tools = POSIX_PORT_FINDERS.map(({ tool }) => tool).join(' / ');
+  throw new Error(`无法查询端口 ${port} 的占用进程：${tools} 均不可用，请安装其中之一后重试`);
 };
 
 /** 解析 `netstat -ano -p tcp` 输出，找指定端口 LISTENING 行的 PID；找不到返回 null。 */

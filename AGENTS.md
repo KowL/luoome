@@ -72,6 +72,7 @@ workflows ──► tools                    db ──► core
 | `bun run test:db` | Bun 运行时的 db、schema 与 SQLite 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上述全部测试 |
+| `bun run mcp:smoke` | 真 stdio MCP 冒烟（本地 fixture，无网络/凭证） |
 | `bun run typecheck` | 所有 workspace 的 TypeScript 检查 |
 | `bun run lint` | Biome lint 与格式检查 |
 | `bun run build` | workspace Bun 构建 |

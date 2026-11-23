@@ -1,6 +1,6 @@
 // Real stdio client checks with a temporary database and offline upstream fixtures.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/typ
 
 const pluginPath = (home: string) => join(home, 'plugins.json');
 const initPlugins = (home: string): void => {
+  mkdirSync(home, { recursive: true });
   const entries = Object.fromEntries(
     MANAGED_PLUGIN_IDS.map((id) => [id, { enabled: BUILTIN_PLUGIN_DEFAULTS[id] }]),
   );

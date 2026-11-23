@@ -86,7 +86,7 @@ luoome/
 │   └── archive/           已完成计划与验收快照
 ├── skills/luoome/     外部 Agent Skill（MCP 编排、示例与安全规则）
 ├── bin/luoome         bash 转发到 bun run packages/cli/src/index.ts
-├── .github/workflows/ CI（typecheck + test:all + lint）
+├── .github/workflows/ CI（typecheck + test:all + lint + mcp:smoke）
 ├── AGENTS.md          编码 Agent 开发规范
 ├── CLAUDE.md          Claude Code 导入 AGENTS.md 的项目入口
 └── README.md          项目门面
@@ -117,6 +117,7 @@ workflows ──► tools ──► core
 | `bun run test:db` | Bun 运行时的 db、schema 与 SQLite 合约测试 |
 | `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
 | `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
+| `bun run mcp:smoke` | 真 stdio MCP 冒烟：本地 fixture、无网络、无凭证（CI 使用） |
 | `bun run lint` | Biome lint + format 检查 |
 | `bun run format` | Biome format --write（自动修格式） |
 | `bash bin/luoome --help` | CLI 帮助 |
@@ -125,7 +126,7 @@ workflows ──► tools ──► core
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
 | `bash bin/luoome workflow run strategy --input '{"job":"run"}'` | 跑已发布 Strategy |
 
-**CI 三关必须全绿**：`typecheck` + `test:all` + `lint`。本地跑通再 push。
+**CI 四关必须全绿**：`typecheck` + `test:all` + `lint` + `mcp:smoke`。本地跑通再 push。
 
 ## 代码规范
 
@@ -230,9 +231,9 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 
 1. **开 issue 讨论**（特别是跨包合约变更、新 tool 类型、新战法语法）。
 2. 从 `main` 拉分支：`git checkout -b codex/short-name`（用 `codex/` 前缀；CI 不强制但保持一致）。
-3. 改代码 + 加测试 + 跑 `bun run typecheck && bun run test:all && bun run lint`，三关全绿。
+3. 改代码 + 加测试 + 跑 `bun run typecheck && bun run test:all && bun run lint && bun run mcp:smoke`，四关全绿。
 4. commit 信息按 [Conventional Commits](#commit-规范)。
-5. push + 开 PR。CI 自动跑三关。
+5. push + 开 PR。CI 自动跑四关。
 6. 至少 1 个 reviewer 通过后 squash merge。
 
 **PR 模板**（手写即可）：
@@ -252,6 +253,7 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 - [ ] `bun run typecheck` 通过
 - [ ] `bun run test:all` 通过
 - [ ] `bun run lint` 通过
+- [ ] `bun run mcp:smoke` 通过（改了 MCP / 插件装配时必跑）
 - [ ] 如果改了 core entity，同步改了 invariants + 测试
 - [ ] 如果新增或改变了外部 Agent 能力，同步 `skills/luoome/` 的能力分类、示例或安全规则
 - [ ] 如果改了 API/CLI/Web，更新对应 README / USER_GUIDE / 开发规范

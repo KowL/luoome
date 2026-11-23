@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   validate:
-    name: typecheck + test + lint
+    name: typecheck + test + lint + mcp smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -40,3 +40,6 @@ jobs:
 
       - name: Lint
         run: bun run lint
+
+      - name: MCP smoke
+        run: bun run mcp:smoke
