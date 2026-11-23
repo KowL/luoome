@@ -1,5 +1,5 @@
 import type { MarketSourceStatus, SourceStatus, ToolContext } from '@luoome/core';
-import { dateInShanghai, previousTradingDate } from '@luoome/core';
+import { dateInShanghai, MANAGED_PLUGIN_IDS, previousTradingDate } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -82,6 +82,15 @@ export const GetMarketDataStatusOutput = z.object({
   watchlistStale: z.array(z.object({ watchlistId: z.string(), name: z.string() })),
   /** A 股当前交易时段（core 交易日历计算，与行情页 / cli watch 同一套口径）。 */
   marketSession: z.enum(['pre-open', 'trading', 'midday-break', 'closed', 'non-trading-day']),
+  /** `plugins.json` 只读诊断：缺失 / 未知 key / 非法 JSON；未接入文件策略时缺省。 */
+  pluginConfig: z
+    .object({
+      file: z.enum(['ok', 'missing', 'invalid']),
+      missing: z.array(z.string()),
+      unknown: z.array(z.string()),
+      reason: z.string().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -103,6 +112,23 @@ export const getMarketDataStatusTool = defineTool({
   handler: async (_input, ctx) => {
     const now = ctx.clock();
     const session = computeMarketSession(now);
+    const snapshot = ctx.executionPolicy?.snapshot?.();
+    const pluginConfig =
+      snapshot === undefined
+        ? undefined
+        : {
+            file: snapshot.file,
+            missing:
+              snapshot.file === 'ok'
+                ? MANAGED_PLUGIN_IDS.filter((id) => !snapshot.configured.includes(id))
+                : [...MANAGED_PLUGIN_IDS],
+            unknown: [...snapshot.unknown],
+            ...(snapshot.file === 'missing'
+              ? { reason: 'plugins.json 不存在，全部插件按关闭处理' }
+              : snapshot.file === 'invalid'
+                ? { reason: 'plugins.json 无法解析，保留默认关闭' }
+                : {}),
+          };
 
     // provider 新鲜度：扫关注股票的最新快照，按 source 聚合 max(ts)
     const stockIds = await computeRelevantStockIds(ctx);
@@ -238,6 +264,7 @@ export const getMarketDataStatusTool = defineTool({
       watchHealth,
       watchlistStale,
       marketSession: session,
+      ...(pluginConfig === undefined ? {} : { pluginConfig }),
     };
   },
 });

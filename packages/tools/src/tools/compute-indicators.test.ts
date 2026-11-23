@@ -3,10 +3,11 @@ import { computeIndicatorsTool } from '@luoome/toolkit/tools/compute-indicators.
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 
-const barsFromCloses = (stockId: string, closes: readonly number[]): DailyBar[] =>
-  closes.map((close, index) => ({
+const barsFromCloses = (stockId: string, closes: readonly number[]): DailyBar[] => {
+  const end = Date.UTC(2026, 3, 1);
+  return closes.map((close, index) => ({
     stockId,
-    date: new Date(Date.UTC(2026, 0, index + 1)),
+    date: new Date(end - (closes.length - 1 - index) * 86_400_000),
     open: money(close),
     high: money(close + 0.5),
     low: money(close - 0.5),
@@ -15,6 +16,7 @@ const barsFromCloses = (stockId: string, closes: readonly number[]): DailyBar[] 
     adjustment: 'qfq',
     source: 'indicator-test',
   }));
+};
 
 const withDailyBars = async (closes: readonly number[]): Promise<ToolContext> => {
   const base = await buildTestContext({ clock: () => new Date('2026-04-01T00:00:00Z') });
@@ -89,7 +91,7 @@ describe('tool/compute_indicators', () => {
   });
 
   it('标记最新交易日刚上穿 MA20/MA60，并统计连续站上 MA20 天数', async () => {
-    const ctx = await withDailyBars([...Array<number>(60).fill(10), 9, 9, 9, 9, 11]);
+    const ctx = await withDailyBars([...Array<number>(120).fill(10), 9, 9, 9, 9, 11]);
 
     const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
 
@@ -132,7 +134,7 @@ describe('tool/compute_indicators', () => {
     expect(res.data.indicators.bollPosition20).toBe(0.5);
   });
 
-  it('样本不足时不输出 MACD / MA60，并给出每个指标的根数门槛', async () => {
+  it('样本不足时不输出 MACD / MA60 / 交叉天数，并给出每个指标的根数门槛', async () => {
     const ctx = await withDailyBars(Array.from({ length: 26 }, (_, i) => 10 + i * 0.1));
 
     const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
@@ -142,30 +144,46 @@ describe('tool/compute_indicators', () => {
     expect(res.data.barsCount).toBe(26);
     expect(res.data.indicators.ma20).toBeDefined();
     expect(res.data.indicators.ma60).toBeUndefined();
+    expect(res.data.indicators.daysSinceMa20CrossUp).toBeUndefined();
+    expect(res.data.indicators.daysSinceMa60CrossUp).toBeUndefined();
     expect(res.data.indicators.macdDif).toBeUndefined();
     expect(res.data.indicators.macdDea).toBeUndefined();
     expect(res.data.indicators.macdHist).toBeUndefined();
     expect(res.data.indicatorAvailability.available).toContain('ma20');
     expect(res.data.indicatorAvailability.unavailable).toEqual(
       expect.arrayContaining([
-        { indicator: 'ma60', requiredBars: 60, reason: 'insufficient_bars' },
-        { indicator: 'macdHist', requiredBars: 34, reason: 'insufficient_bars' },
+        { indicator: 'ma60', requiredCount: 60, actualCount: 26, reason: 'insufficient_bars' },
+        { indicator: 'macdHist', requiredCount: 35, actualCount: 26, reason: 'insufficient_bars' },
+        {
+          indicator: 'daysSinceMa20CrossUp',
+          requiredCount: 120,
+          actualCount: 26,
+          reason: 'insufficient_bars',
+        },
       ]),
     );
   });
 
-  it('样本补齐后 MACD / MA60 恢复可用', async () => {
-    const ctx = await withDailyBars(Array.from({ length: 80 }, (_, i) => 10 + i * 0.1));
-
-    const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.data.indicators.ma60).toBeDefined();
-    expect(res.data.indicators.macdHist).toBeDefined();
-    expect(res.data.indicatorAvailability.available).toEqual(
-      expect.arrayContaining(['ma60', 'macdHist']),
+  it('样本从 26 根补齐到 120 根后 MACD / MA60 / 交叉天数才出现', async () => {
+    const short = await computeIndicatorsTool.execute(
+      { stockId: '002594.SZ' },
+      await withDailyBars(Array.from({ length: 26 }, (_, i) => 10 + i * 0.1)),
     );
-    expect(res.data.indicatorAvailability.unavailable).toEqual([]);
+    const full = await computeIndicatorsTool.execute(
+      { stockId: '002594.SZ' },
+      await withDailyBars(Array.from({ length: 120 }, (_, i) => 10 + i * 0.1)),
+    );
+
+    expect(short.ok).toBe(true);
+    expect(full.ok).toBe(true);
+    if (!short.ok || !full.ok) return;
+    expect(short.data.indicators.macdHist).toBeUndefined();
+    expect(short.data.indicators.ma60).toBeUndefined();
+    expect(full.data.barsCount).toBe(120);
+    expect(full.data.indicators.ma60).toBeDefined();
+    expect(full.data.indicators.macdHist).toBeDefined();
+    expect(full.data.indicators.daysSinceMa20CrossUp).toBeDefined();
+    expect(full.data.indicators.daysSinceMa60CrossUp).toBeDefined();
+    expect(full.data.indicatorAvailability.unavailable).toEqual([]);
   });
 });

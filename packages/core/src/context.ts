@@ -89,6 +89,14 @@ export interface StockSearchCandidate {
   readonly name: string;
 }
 
+/** LLM 调用的重试策略；默认保持既有行为，按调用方收敛放大链。 */
+export interface LLMRetryPolicy {
+  /** false → LLMManager 不做 schema 修复重试，也不走 fallback。 */
+  readonly managerRetry?: boolean;
+  /** AI SDK 层 maxRetries；brief/analyze 路径传 0，只保留外层 attempt 循环。 */
+  readonly providerRetries?: number;
+}
+
 /** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */
 export interface LLMGenerateRequest {
   readonly system: string;
@@ -99,6 +107,7 @@ export interface LLMGenerateRequest {
   readonly maxOutputTokens?: number;
   /** 单次调用覆盖超时；重试时用于放宽上一轮超时的限制。 */
   readonly timeoutMs?: number;
+  readonly policy?: LLMRetryPolicy;
 }
 
 /** LLM 适配器的 core 侧投影。 */

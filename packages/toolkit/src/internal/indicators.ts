@@ -105,22 +105,27 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
   }
   const ma20Cross = observeCrossingUp(closes, 20);
   const ma60Cross = observeCrossingUp(closes, 60);
-  assign(
-    'daysSinceMa20CrossUp',
-    ma20Cross.status === 'observed'
-      ? ma20Cross.daysSince
-      : ma20Cross.status === 'not-observed'
-        ? ma20Cross.lowerBound
-        : undefined,
-  );
-  assign(
-    'daysSinceMa60CrossUp',
-    ma60Cross.status === 'observed'
-      ? ma60Cross.daysSince
-      : ma60Cross.status === 'not-observed'
-        ? ma60Cross.lowerBound
-        : undefined,
-  );
+  // 交叉天数表示「距今多少根日线前上穿」，样本不足 120 根时无法判断此前是否已交叉。
+  if (closes.length >= INDICATOR_MIN_BARS.daysSinceMa20CrossUp) {
+    assign(
+      'daysSinceMa20CrossUp',
+      ma20Cross.status === 'observed'
+        ? ma20Cross.daysSince
+        : ma20Cross.status === 'not-observed'
+          ? ma20Cross.lowerBound
+          : undefined,
+    );
+  }
+  if (closes.length >= INDICATOR_MIN_BARS.daysSinceMa60CrossUp) {
+    assign(
+      'daysSinceMa60CrossUp',
+      ma60Cross.status === 'observed'
+        ? ma60Cross.daysSince
+        : ma60Cross.status === 'not-observed'
+          ? ma60Cross.lowerBound
+          : undefined,
+    );
+  }
   assign('daysAboveMa20', consecutiveDaysAboveMa(closes, 20));
   assign('rsi14', rsi(closes, 14));
   assign('volMa5', sma(volumes, 5));

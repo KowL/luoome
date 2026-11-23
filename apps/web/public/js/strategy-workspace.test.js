@@ -648,6 +648,9 @@ describe('严格回测', () => {
 
 describe('Phase B 洞察与调度', () => {
   it('降级摘要说明插件停用 / 依赖未就绪的启用方法', () => {
+    expect(insightDegradationHint('plugin_disabled')).toContain(
+      '策略 AI 洞察未启用（plugins.json）',
+    );
     expect(insightDegradationHint('plugin_disabled')).toContain('strategy.ai-insight');
     expect(insightDegradationHint('plugin_disabled')).toContain('plugins.json');
     expect(insightDegradationHint('dependency_not_ready')).toContain('LUOOME_EXPOSE_EXTERNAL=true');

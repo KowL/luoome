@@ -502,6 +502,8 @@ describe('public market request coordinator', () => {
     // 请求级不写冷却：下一次同样的请求立刻重新尝试。
     await expect(coordinator.execute(handle, { stockId: '600519.SH' })).rejects.toBe(failure);
     expect(execute).toHaveBeenCalledTimes(2);
+    // provider 级冷却表也没有新增：denied / abort 不是上游故障。
+    expect(shared.read('provider:tencent', now)).toBeNull();
     // 同一 store 上重启（新实例）后 provider 仍可用。
     const restarted = new MarketRequestCoordinator(shared, config, () => now);
     const http = vi.fn(async () => new Response('{}')) as unknown as typeof fetch;

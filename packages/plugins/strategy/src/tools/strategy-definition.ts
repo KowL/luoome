@@ -3,6 +3,7 @@ import {
   classifyStrategyResult,
   diffStrategyDefinitions,
   diffStrategyRunViews,
+  inspectStrategyDefinitionReferences,
   StrategyDefinitionDiffSchema,
   StrategyDslV1Schema,
   StrategyRunDiffSchema,
@@ -135,6 +136,12 @@ export const proposeStrategyVersionDraftTool = defineTool({
     const unknownRefs = input.factReferences.filter((ref) => !allowed.has(ref));
     if (unknownRefs.length > 0) {
       return errInvalidInput(`事实引用不存在或不在允许输入范围: ${unknownRefs.join(', ')}`);
+    }
+    const inspected = inspectStrategyDefinitionReferences(input.definition);
+    if (inspected.validationErrors.length > 0) {
+      return errInvalidInput(
+        `Strategy 定义校验失败：${inspected.validationErrors.join('；')}。修复提示：只使用 get_strategy_dsl_catalog 列出的数据字段路径与 Math.min/Math.max/Math.abs；不要使用 ref()、ATR()、marketIndexChangePct、Number.isFinite 等目录外写法，修正后重新提交草案。`,
+      );
     }
     const latestVersion = versions.at(-1);
     const versionNumber = (latestVersion?.version ?? 0) + 1;

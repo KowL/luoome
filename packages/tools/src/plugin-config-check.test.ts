@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { MANAGED_PLUGIN_IDS } from '@luoome/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BUILTIN_PLUGINS } from './builtin-plugins.js';
-import { inspectPluginConfig } from './plugin-config-check.js';
+import { inspectPluginConfig, pluginConfigWarnings } from './plugin-config-check.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -82,6 +82,24 @@ describe('inspectPluginConfig', () => {
       { id: 'strategy.ai-insite', suggestions: ['strategy.ai-insight'] },
       { id: 'not.a.plugin', suggestions: [] },
     ]);
+  });
+
+  it('startup warnings surface missing, invalid and unknown entries without rewriting', () => {
+    const dir = home();
+    const missing = inspectPluginConfig({ path: join(dir, 'plugins.json') });
+    expect(pluginConfigWarnings(missing).join('\n')).toContain('plugins.json 缺失');
+
+    writeFileSync(join(dir, 'plugins.json'), '{ not json');
+    const invalid = inspectPluginConfig({ path: join(dir, 'plugins.json') });
+    expect(pluginConfigWarnings(invalid).join('\n')).toContain('无法解析');
+
+    const path = writeConfig(dir, {
+      version: 1,
+      entries: { 'not.a.plugin': { enabled: true } },
+    });
+    const warnings = pluginConfigWarnings(inspectPluginConfig({ path }));
+    expect(warnings.join('\n')).toContain('缺少配置项');
+    expect(warnings.join('\n')).toContain('未知 key：not.a.plugin');
   });
 
   it('reports unmet requires by the declared plugin definitions', () => {

@@ -38,6 +38,9 @@ export const ANALYZE_STOCK_SYSTEM = `analyze_stock:v2
 
 【事实纪律】
 - 只能引用输入 JSON 中实际存在的数字；禁止补造财务数据、估值、历史业绩、机构观点。
+- 开盘方向只能引用 data.opening 中 status=ok 的 data.opening.data.label（低开/平开/高开）与 data.opening.data.openChangePct；opening.status=unavailable 时不得判断开盘方向。
+- 引用 MA60 / MACD / RSI / 布林带前，先确认 data.indicators 中对应字段存在；缺失即视为不可用。
+- 不得使用「必涨/稳赚/保证/翻倍/无风险」以及「建仓/加仓/减仓/清仓/买入/卖出/满仓」等操作动词，改用信号/观察表述。
 - news 为空时写「今日无相关新闻」，不得编造标题、媒体或时间。
 - sector / sentiment 缺失时不得假设板块强弱或市场情绪。
 - 不得预测具体点位（例如「明天涨到 X」），只给条件与触发价。

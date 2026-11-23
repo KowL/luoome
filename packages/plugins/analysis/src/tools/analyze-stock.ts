@@ -8,11 +8,14 @@ import {
   STANDARD_DISCLAIMERS,
   type Stock,
   StrategyAdviceAnalysisSchema,
+  summarizeIndicatorAvailability,
   type ToolContext,
 } from '@luoome/core';
 import { defineTool, errAdapterError, errNotFound } from '@luoome/toolkit';
 import { computeSimpleIndicators } from '@luoome/toolkit/internal/indicators.js';
+import { numericAuditViolations } from '@luoome/toolkit/internal/numeric-audit.js';
 import { resolveQuote } from '@luoome/toolkit/internal/resolve-quotes.js';
+import { deriveOpeningFact } from '@luoome/toolkit/internal/stock-facts.js';
 import { z } from 'zod';
 import {
   assertAdviceAnalysis,
@@ -144,6 +147,8 @@ export const analyzeStockTool = defineTool({
     }
     const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
+    const opening = deriveOpeningFact(quote);
+    const indicatorAvailability = summarizeIndicatorAvailability(indicators, bars.length);
 
     const analysisData = {
       stockId: stock.id,
@@ -151,6 +156,12 @@ export const analyzeStockTool = defineTool({
       name: stock.name,
       quote,
       indicators,
+      opening,
+      barFacts: {
+        actualCount: bars.length,
+        requiredCount: BARS_LOOKBACK_DAYS,
+        indicatorAvailability,
+      },
       marketContext,
       ...(position !== null
         ? { position: { avgCost: position.avgCost, quantity: position.quantity } }
@@ -170,6 +181,7 @@ export const analyzeStockTool = defineTool({
               : `${ANALYZE_STOCK_SYSTEM}\n请修复上次输出：${failure}\n若本次无法给出可信价位，就把价格字段全部留空并改判 hold/avoid，不要输出不一致的买点组合。`,
           schema: StrategyAdviceAnalysisSchema,
           data: analysisData,
+          policy: { managerRetry: false, providerRetries: 0 },
         });
         const parsed = StrategyAdviceAnalysisSchema.safeParse(generated);
         if (!parsed.success) {
@@ -179,6 +191,15 @@ export const analyzeStockTool = defineTool({
         const violations = judgmentViolations(parsed.data);
         if (violations.length > 0) {
           failure = violations.join('；');
+          continue;
+        }
+        const auditViolations = numericAuditViolations({
+          output: parsed.data,
+          facts: analysisData,
+          availableFields: Object.keys(indicators),
+        });
+        if (auditViolations.length > 0) {
+          failure = auditViolations.join('；');
           continue;
         }
         llmOutput = parsed.data;

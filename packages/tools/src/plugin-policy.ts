@@ -34,6 +34,7 @@ export const createPluginExecutionPolicy = (
     };
     return {
       isEnabled: (id) => plugins.isEnabled(id),
+      snapshot: () => plugins.snapshot?.(),
       runPlugin: (_id, operation) => operation(),
       runTool: (name, operation, guard) => {
         const owner = pluginOf(name);

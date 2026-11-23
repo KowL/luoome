@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ManagedPluginId, PluginPolicyLike } from '@luoome/core';
+import type { ManagedPluginId, PluginConfigSnapshot, PluginPolicyLike } from '@luoome/core';
 import { MANAGED_PLUGIN_IDS } from '@luoome/core';
 import { z } from 'zod';
 
@@ -77,5 +77,17 @@ export class PluginConfigStore implements PluginPolicyLike {
   isEnabled(id: ManagedPluginId): boolean {
     const current = this.read();
     return current.ok && current.config.entries[id]?.enabled === true;
+  }
+
+  snapshot(): PluginConfigSnapshot {
+    const inspected = this.inspect();
+    if (!inspected.ok) {
+      return { file: inspected.reason, configured: [], unknown: [] };
+    }
+    return {
+      file: 'ok',
+      configured: MANAGED_PLUGIN_IDS.filter((id) => inspected.config.entries[id] !== undefined),
+      unknown: inspected.unknownIds ?? [],
+    };
   }
 }

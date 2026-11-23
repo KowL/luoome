@@ -1,5 +1,6 @@
 import { type Advice, type AdviceDataSnapshot, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js';
+import { deriveOpeningFact } from '@luoome/toolkit/internal/stock-facts.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 
@@ -247,6 +248,92 @@ describe('analyze_stock', () => {
       expect(['ok', 'unavailable']).toContain(section.status);
       if (section.status === 'unavailable') expect(section.reason?.length ?? 0).toBeGreaterThan(0);
     }
+  });
+
+  it('开盘方向与事实不符时重试，第二次修正后落库', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const quote = await baseCtx.adapters.market.fetchQuote('002594.SZ');
+    const opening = deriveOpeningFact(quote);
+    expect(opening.status).toBe('ok');
+    if (opening.status !== 'ok') return;
+    const wrongLabel = ['高开', '低开', '平开'].find(
+      (label) => label !== opening.data.label,
+    ) as string;
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'opening-audit-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 55,
+              horizon: 'short',
+              reasoning: {
+                premise:
+                  calls === 1
+                    ? `今日${wrongLabel}后维持观察`
+                    : `今日${opening.data.label}后维持观察`,
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('开盘方向与事实不符');
+  });
+
+  it('编造数字时重试一次后仍不通过则降级为 llm_error，最多 2 次调用', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'fabrication-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 55,
+              horizon: 'short',
+              reasoning: {
+                premise: '目标参考位 9876.54',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('未在事实包或可派生范围内出现');
   });
 
   it('价位校验失败时把错误原文带回重试提示，第二轮补齐 buy 价位后通过', async () => {

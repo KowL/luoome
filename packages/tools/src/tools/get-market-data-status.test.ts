@@ -1,7 +1,29 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PluginConfigStore } from '@luoome/adapters';
 import { money, type SourceStatus } from '@luoome/core';
 import { getMarketDataStatusTool } from '@luoome/toolkit/tools/get-market-data-status.js';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createPluginExecutionPolicy } from '../plugin-policy.js';
 import { buildTestContext } from '../testing/context.js';
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+const pluginCtx = async (body: string | null) => {
+  const dir = mkdtempSync(join(tmpdir(), 'luoome-status-plugins-'));
+  roots.push(dir);
+  const path = join(dir, 'plugins.json');
+  if (body !== null) writeFileSync(path, body);
+  const executionPolicy = createPluginExecutionPolicy(
+    new PluginConfigStore(path),
+    new Set(['read']),
+  );
+  return buildTestContext({ executionPolicy });
+};
 
 describe('tool/get_market_data_status', () => {
   it('数据集库存来自 Gateway，新增 capability 不依赖写死 provider 常量', async () => {
@@ -260,5 +282,48 @@ describe('tool/get_market_data_status', () => {
     expect(await sessionAt('2026-07-17T07:00:00.000Z')).toBe('closed');
     expect(await sessionAt('2026-07-17T07:30:00.000Z')).toBe('closed');
     expect(await sessionAt('2026-07-18T02:00:00.000Z')).toBe('non-trading-day');
+  });
+
+  it('plugins.json 缺失 / 未知 key / 缺 business.analysis 在状态接口可见', async () => {
+    const missing = await getMarketDataStatusTool.execute({}, await pluginCtx(null));
+    expect(missing.ok).toBe(true);
+    if (!missing.ok) return;
+    expect(missing.data.pluginConfig).toMatchObject({
+      file: 'missing',
+      reason: 'plugins.json 不存在，全部插件按关闭处理',
+    });
+    expect(missing.data.pluginConfig?.missing).toContain('business.analysis');
+
+    const partial = await getMarketDataStatusTool.execute(
+      {},
+      await pluginCtx(
+        JSON.stringify({
+          version: 1,
+          entries: {
+            'strategy.ai-insight': { enabled: true },
+            'not.a.plugin': { enabled: true },
+          },
+        }),
+      ),
+    );
+    expect(partial.ok).toBe(true);
+    if (!partial.ok) return;
+    expect(partial.data.pluginConfig).toMatchObject({
+      file: 'ok',
+      unknown: ['not.a.plugin'],
+    });
+    expect(partial.data.pluginConfig?.missing).toContain('business.analysis');
+    expect(partial.data.pluginConfig?.missing).not.toContain('strategy.ai-insight');
+  });
+
+  it('plugins.json 非法 JSON 保留默认关闭并给可读原因', async () => {
+    const result = await getMarketDataStatusTool.execute({}, await pluginCtx('{ not json'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.pluginConfig).toMatchObject({
+      file: 'invalid',
+      reason: 'plugins.json 无法解析，保留默认关闭',
+    });
+    expect(result.data.pluginConfig?.missing).toContain('business.analysis');
   });
 });

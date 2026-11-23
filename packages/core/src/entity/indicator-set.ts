@@ -56,14 +56,15 @@ export const INDICATOR_MIN_BARS: Readonly<Record<KnownIndicatorKey, number>> = {
   momentum20Pct: 20,
   maDistance20Pct: 20,
   maDistance60Pct: 60,
-  daysSinceMa20CrossUp: 21,
-  daysSinceMa60CrossUp: 61,
+  // 交叉天数用于「多久以前上穿」，120 根以内无法排除更早的历史交叉。
+  daysSinceMa20CrossUp: 120,
+  daysSinceMa60CrossUp: 120,
   daysAboveMa20: 20,
   rsi14: 15,
-  // EMA26 至少需要 26 个样本，DEA 再取其中 9 个 DIF：26 + 9 - 1。
-  macdDif: 34,
-  macdDea: 34,
-  macdHist: 34,
+  // EMA26 至少需要 26 个样本，DEA 再取其中 9 个 DIF；取 35 留一根余量，避免刚启动的平滑值冒充有效 MACD。
+  macdDif: 35,
+  macdDea: 35,
+  macdHist: 35,
   volMa5: 5,
   volMa20: 20,
   volRatio5_20: 20,
@@ -83,7 +84,8 @@ export const IndicatorAvailabilitySchema = z.object({
   unavailable: z.array(
     z.object({
       indicator: z.string(),
-      requiredBars: z.number().int().positive(),
+      requiredCount: z.number().int().positive(),
+      actualCount: z.number().int().nonnegative(),
       reason: z.enum(['insufficient_bars', 'not_computable']),
     }),
   ),
@@ -103,7 +105,8 @@ export const summarizeIndicatorAvailability = (
     }
     unavailable.push({
       indicator: key,
-      requiredBars: INDICATOR_MIN_BARS[key],
+      requiredCount: INDICATOR_MIN_BARS[key],
+      actualCount: barsCount,
       reason: barsCount < INDICATOR_MIN_BARS[key] ? 'insufficient_bars' : 'not_computable',
     });
   }

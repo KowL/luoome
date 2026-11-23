@@ -63,6 +63,8 @@ export const GetStockMarketViewInput = z.object({
     .optional(),
   strategySignalScope: StrategySignalScopeSchema.default('operational'),
   strategyEvaluationSessionId: z.string().min(1).optional(),
+  /** 需要分时事实时显式打开；未打开时输出不含 intraday 段，避免默认多打一次源。 */
+  includeIntraday: z.boolean().default(false),
 });
 
 export const MarketCandleSchema = z.object({
@@ -125,6 +127,26 @@ export const MarketFactMarkerSchema = z.object({
   ruleId: z.string().min(1).optional(),
 });
 
+export const MarketIntradaySectionSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('ok'),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    points: z
+      .array(
+        z.object({
+          price: MoneySchema,
+          at: z.coerce.date(),
+        }),
+      )
+      .min(1),
+    previousClose: MoneySchema.nullable(),
+    openGapPct: z.number().nullable(),
+    openVsPrevClose: z.enum(['high', 'low', 'flat']).nullable(),
+    sources: z.array(z.string().min(1)).min(1),
+  }),
+  z.object({ status: z.literal('missing'), reason: z.string().min(1) }),
+]);
+
 export const GetStockMarketViewOutput = z.object({
   stock: z.object({
     id: z.string(),
@@ -139,6 +161,7 @@ export const GetStockMarketViewOutput = z.object({
   dataStatus: MarketDataStatusSchema,
   markers: z.array(MarketFactMarkerSchema),
   limitUp: StockLimitUpFactsSchema,
+  intraday: MarketIntradaySectionSchema.optional(),
 });
 
 const factDateKey = (date: Date): string => dateInShanghai(date);
@@ -426,6 +449,38 @@ export const getStockMarketViewTool = defineTool({
     // 周 / 月 K：给 marker 补 barDate 对齐聚合 bar；date 保持日级事实口径（§8 图表事实）。
     const alignedMarkers = alignMarkersToBars(markers, candles, input.granularity);
 
+    let intraday: z.infer<typeof MarketIntradaySectionSchema> | undefined;
+    if (input.includeIntraday) {
+      try {
+        const points = await market.fetchIntradayMinutes(stock.id);
+        const first = points[0];
+        const last = points.at(-1);
+        if (first === undefined || last === undefined) {
+          intraday = { status: 'missing', reason: '当日暂无分时点（盘前或非交易日）' };
+        } else {
+          const previousCloseForGap = quote.prevClose ?? previousClose;
+          const gap = deriveOpenGap(first.price, previousCloseForGap);
+          intraday = {
+            status: 'ok',
+            date: dateInShanghai(last.time),
+            points: points.map((point) => ({ price: point.price, at: point.time })),
+            previousClose: previousCloseForGap,
+            openGapPct: gap?.openGapPct ?? null,
+            openVsPrevClose: gap?.openVsPrevClose ?? null,
+            sources: [...new Set(points.map((point) => point.source))],
+          };
+        }
+      } catch (error) {
+        const cause = adapterSummary(error);
+        intraday = {
+          status: 'missing',
+          reason: cause.includes('unsupported_capability')
+            ? '当前数据源未注册分时能力'
+            : `分时拉取失败：${cause}`,
+        };
+      }
+    }
+
     return {
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
       quote: {
@@ -451,6 +506,7 @@ export const getStockMarketViewTool = defineTool({
       },
       markers: alignedMarkers,
       limitUp,
+      ...(intraday === undefined ? {} : { intraday }),
     };
   },
 });
