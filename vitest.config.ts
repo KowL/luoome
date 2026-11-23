@@ -40,6 +40,7 @@ export default defineConfig({
       'apps/web/src/server-background-scheduler.test.ts',
       'apps/web/src/workspace.test.ts',
       'apps/web/src/data-transfer.test.ts',
+      'apps/web/src/market-room.integration.test.ts',
       // DSH Web includes Bun listeners and SQLite fixtures; test:web owns this slice.
       'apps/web/src/dsh/**/*.test.ts',
       'apps/web/src/strategy-scheduler.test.ts',
