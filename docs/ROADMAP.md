@@ -27,6 +27,10 @@
   没有 CLI 写命令或 Web 写入式管理页；`luoome plugins check` 与设置 → 系统只读展示。
 - 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，score ≥ 60 的看多信号补进候选池（≤3 只）。
 - P0 修复：`bun run mcp:smoke` 纳入 CI；`luoome restart` 在无 `lsof` 时回退 `ss` / `fuser`。
+- 待交易日实跑（非交易时段的离线验收已用受控 fixture 覆盖；以下仍需在真实交易日人工确认）：
+  - 作战室盘中批次：交易时段 `POST /api/market/room/collect` 后 `/api/market/room/overview` 读出非空总览，刷新与回放都不重复采集。
+  - 盘中预警：真实盘中触发一次并核对通知投递与 WatchTrigger 回执。
+  - 每日判断 17:30 调度：17:30 后确认按交易日只跑一次 `daily-advice` 并落库当日「今日不动 / 今日可动」结论。
 
 ## v0.1 — Foundation ✅（已完成）
 

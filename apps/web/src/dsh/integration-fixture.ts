@@ -22,6 +22,11 @@ export const createDshIntegrationFixture = async (
     readonly failProvider?: boolean;
     readonly slowProvider?: boolean;
     readonly reuseProviderCallId?: boolean;
+    readonly maxRetries?: number;
+    /** 前 N 次上游请求返回可重试 503，用于验证瞬时故障恢复。 */
+    readonly transientProviderFailures?: number;
+    /** 前 N 次上游请求直接抛错（模拟超时/连接中断），用于验证可重试传输失败。 */
+    readonly transientProviderTimeouts?: number;
   } = {},
 ) => {
   const nodePath = Bun.which('node');
@@ -38,10 +43,20 @@ export const createDshIntegrationFixture = async (
   );
   const bodies: Record<string, unknown>[] = [];
   let completedProviders = 0;
+  let transientFailures = options.transientProviderFailures ?? 0;
+  let transientTimeouts = options.transientProviderTimeouts ?? 0;
   const providerFetch = (async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     bodies.push(body);
     const ordinal = bodies.length;
+    if (transientTimeouts > 0) {
+      transientTimeouts -= 1;
+      throw new Error('fixture-provider-timeout');
+    }
+    if (transientFailures > 0) {
+      transientFailures -= 1;
+      return Response.json({ error: { message: 'fixture-busy' } }, { status: 503 });
+    }
     if (options.failProvider)
       return Response.json({ error: { message: 'fixture-rejected' } }, { status: 401 });
     const messages = body.messages as { role: string; content: string }[];
@@ -196,6 +211,7 @@ export const createDshIntegrationFixture = async (
       maxTokens: 1024,
       headers: { authorization: 'Bearer fixture-only-provider-key' },
       fetch: providerFetch,
+      ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
     },
   });
 

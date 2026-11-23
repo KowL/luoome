@@ -22,12 +22,23 @@ const call = z.object({
   input: z.unknown(),
 });
 const result = z.object({ callId: z.string().min(1), ok: z.boolean(), output: z.unknown() });
+const terminal = z.object({
+  status: TerminalStatusSchema,
+  error: z.object({ stage: z.string() }).optional(),
+});
+
+/** 只读 Host 终态错误阶段，用于给用户区分运行时失败与模型/工具中断。 */
+export const terminalStageOf = (payload: unknown): string | undefined => {
+  const parsed = terminal.safeParse(payload);
+  return parsed.success ? parsed.data.error?.stage : undefined;
+};
 
 /** Reads A's actual bridge payloads; unknown diagnostics never become product content. */
 export class DshEventAdapter {
   readonly #seen = new Map<string, string>();
   readonly #sequences = new Map<string, number>();
   #terminal: TerminalStatus | undefined;
+  #terminalStage: string | undefined;
 
   constructor(
     private readonly binding: RuntimeBinding,
@@ -36,6 +47,10 @@ export class DshEventAdapter {
 
   get terminal(): TerminalStatus | undefined {
     return this.#terminal;
+  }
+
+  get terminalStage(): string | undefined {
+    return this.#terminalStage;
   }
 
   accept(raw: unknown): void {
@@ -79,7 +94,9 @@ export class DshEventAdapter {
       const parsed = result.parse(event.payload);
       this.projection.toolResult(parsed.callId, parsed.ok, parsed.output);
     } else if (event.type === 'run.terminal') {
-      this.#terminal = TerminalStatusSchema.parse(event.payload.status);
+      const payload = terminal.parse(event.payload);
+      this.#terminal = payload.status;
+      this.#terminalStage = payload.error?.stage;
       this.projection.end();
     }
   }

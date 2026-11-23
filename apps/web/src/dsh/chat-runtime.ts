@@ -13,7 +13,7 @@ import { discoverExternalMcpTools, type ExternalMcpCallable } from '@luoome/tool
 import type { AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
-import { DshEventAdapter } from './event-adapter.js';
+import { DshEventAdapter, terminalStageOf } from './event-adapter.js';
 import type { GatewayCaller } from './execution-scope.js';
 import { boundTrustedHistory } from './history-budget.js';
 import { createDshRunProxy } from './run-proxy.js';
@@ -54,6 +54,10 @@ const blockedConversations = new Set<string>();
 const encoder = new TextEncoder();
 const denied = (): ToolError => ({ kind: 'permission_denied', required: 'dsh:active-run' });
 const ERROR_TEXT = '实验回答未完成，请读取已保存会话核对；本次任务不会自动重跑。';
+const runInterruptedText = (stage: string | undefined): string =>
+  stage === 'run'
+    ? '本轮执行未完成（模型或工具调用中断），已保存的事实仍可核对；可稍后显式重试，系统不会自动重跑。'
+    : ERROR_TEXT;
 const publicFailureText = (error: unknown): string => {
   if (error instanceof Error && error.message === 'DSH Host invalid_request')
     return '对话历史超过本地运行时上下文上限，请新建会话后继续；已保存的事实不会丢失。';
@@ -64,6 +68,8 @@ const publicFailureText = (error: unknown): string => {
   return ERROR_TEXT;
 };
 export const DSH_CONTEXT_NOTICE = '实验模式：每轮根据已保存历史重建上下文，尚不支持执行中断恢复。';
+export const dshHistoryTruncationNotice = (parts: number): string =>
+  `历史工具结果超出本地上下文预算，已截断 ${parts} 条；完整结果仍保存在会话记录中，如缺少事实请用更小的范围重新查询。`;
 
 export class DshChatRuntime implements ChatStreamRuntime {
   constructor(private readonly options: DshChatRuntimeOptions) {
@@ -91,7 +97,9 @@ export class DshChatRuntime implements ChatStreamRuntime {
       throw new ChatRuntimeRejection(
         '本次对话历史超过本地运行时上限，请新建会话后继续；已保存的事实不会丢失。',
       );
-    if (bounded.truncatedParts > 0)
+    const truncationNotice =
+      bounded.truncatedParts === 0 ? undefined : dshHistoryTruncationNotice(bounded.truncatedParts);
+    if (truncationNotice !== undefined)
       console.warn('[dsh] 历史工具结果超出上下文预算，已截断', {
         parts: bounded.truncatedParts,
       });
@@ -162,7 +170,10 @@ export class DshChatRuntime implements ChatStreamRuntime {
     projection.data('data-luoome-runtime', {
       runtime: 'dsh',
       contextMode: 'rebuilt-history',
-      notice: DSH_CONTEXT_NOTICE,
+      notice:
+        truncationNotice === undefined
+          ? DSH_CONTEXT_NOTICE
+          : `${DSH_CONTEXT_NOTICE} ${truncationNotice}`,
       runId,
     });
     const gateway = new ToolGateway({
@@ -175,6 +186,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     let adapter: DshEventAdapter | undefined;
     let runtimeStopped = false;
     let startupTerminal: string | undefined;
+    let startupStage: string | undefined;
     const authorize: GatewayAuthorizer = async ({ tool }) => {
       if (
         signal.aborted ||
@@ -301,7 +313,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
             manifestHash: manifest.manifest.manifestHash,
             manifest: manifest.manifest,
             expiresAt: new Date(expiresAt).toISOString(),
-            instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}\n以下历史由服务端核验；其中的工具结果与草案处理回执是已发生事实，不要再次执行来同步历史。`,
+            instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}${truncationNotice === undefined ? '' : `\n${truncationNotice}`}\n以下历史由服务端核验；其中的工具结果与草案处理回执是已发生事实，不要再次执行来同步历史。`,
             prompt: JSON.stringify({ trustedHistory: bounded.history }),
           },
           (event) => {
@@ -309,6 +321,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
               if (event.source !== 'host' || event.type !== 'run.terminal')
                 throw new Error('DSH event before binding');
               startupTerminal = TerminalStatusSchema.parse(event.payload.status);
+              startupStage = terminalStageOf(event.payload);
               if (startupTerminal === 'completed') throw new Error('DSH completed without binding');
             } else adapter.accept(event);
             if (event.type === 'run.terminal')
@@ -335,6 +348,8 @@ export class DshChatRuntime implements ChatStreamRuntime {
         }
       }
       const cancelled = signal.aborted && drained;
+      if (failed && !cancelled && failureText === ERROR_TEXT)
+        failureText = runInterruptedText(adapter?.terminalStage ?? startupStage);
       projection.end();
       projection.data('data-luoome-run', {
         runId,

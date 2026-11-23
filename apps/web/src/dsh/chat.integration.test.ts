@@ -102,6 +102,101 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
     expect(fixture.bodies).toHaveLength(0);
   }, 15_000);
 
+  it('bounds an oversized tool output in the rebuilt history, keeps running and tells the user', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    const largeOutput = { plans: 'x'.repeat(300_000) };
+    await fixture.context.repos.chat.saveMessage({
+      id: 'oversized-history-user',
+      sessionId,
+      role: 'user',
+      parts: [{ type: 'text', text: '之前查过观察清单' }],
+      createdAt: new Date('2026-10-19T00:00:00Z'),
+    });
+    await fixture.context.repos.chat.saveMessage({
+      id: 'oversized-history-assistant',
+      sessionId,
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: '这是之前查到的观察清单。' },
+        {
+          type: 'tool-list_watch_plans',
+          toolCallId: 'oversized-history-call',
+          state: 'output-available',
+          output: largeOutput,
+        },
+      ],
+      createdAt: new Date('2026-10-19T00:01:00Z'),
+    });
+    const response = await fixture.chat(sessionId, '查 002594 行情并读取网页来源');
+    expect(response.status).toBe(200);
+    const chunks = parse(await response.text());
+    expect(chunks.filter((part) => part.type === 'error')).toEqual([]);
+    const runtimePart = chunks.find((part) => part.type === 'data-luoome-runtime');
+    expect(runtimePart?.data).toMatchObject({ notice: expect.stringContaining('已截断 1 条') });
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'data-luoome-run',
+        data: expect.objectContaining({ status: 'completed' }),
+      }),
+    );
+    const prompt = JSON.stringify(fixture.bodies[0]);
+    expect(prompt).toContain('truncated');
+    expect(prompt).not.toContain('x'.repeat(1_000));
+    const messages = await fixture.context.repos.chat.listMessages(sessionId);
+    const assistant = messages.findLast((message) => message.role === 'assistant');
+    expect(assistant?.parts).toContainEqual(
+      expect.objectContaining({
+        type: 'data-luoome-runtime',
+        data: expect.objectContaining({ notice: expect.stringContaining('已截断 1 条') }),
+      }),
+    );
+  }, 30_000);
+
+  it('retries one transient 5xx or transport timeout and completes without an error part', async () => {
+    for (const options of [
+      { transientProviderFailures: 1 },
+      { transientProviderTimeouts: 1 },
+    ] as const) {
+      const fixture = await setup({ ...options, maxRetries: 1 });
+      const sessionId = await fixture.createSession();
+      const chunks = parse(
+        await (await fixture.chat(sessionId, '查 002594 行情并读取网页来源')).text(),
+      );
+      expect(chunks.filter((part) => part.type === 'error')).toEqual([]);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'data-luoome-run',
+          data: expect.objectContaining({ status: 'completed' }),
+        }),
+      );
+      expect(fixture.completedProviders()).toBe(3);
+      expect(fixture.bodies).toHaveLength(4);
+    }
+  }, 60_000);
+
+  it('shows the failure after retries are exhausted and keeps the same session usable', async () => {
+    const fixture = await setup({ transientProviderFailures: 2, maxRetries: 1 });
+    const sessionId = await fixture.createSession();
+    const first = parse(await (await fixture.chat(sessionId, '查 002594 行情')).text());
+    const firstError = first.find((part) => part.type === 'error');
+    expect(firstError).toBeDefined();
+    expect(String(firstError?.errorText)).toContain('未完成');
+    expect(String(firstError?.errorText)).toContain('重试');
+    expect(fixture.bodies).toHaveLength(2);
+    const second = await fixture.chat(sessionId, '继续刚才的研究');
+    expect(second.status).toBe(200);
+    const chunks = parse(await second.text());
+    expect(chunks.filter((part) => part.type === 'error')).toEqual([]);
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'data-luoome-run',
+        data: expect.objectContaining({ status: 'completed' }),
+      }),
+    );
+    expect(fixture.bodies).toHaveLength(5);
+  }, 60_000);
+
   it('reports persistence failure and blocks continuation after actual execution has drained', async () => {
     const fixture = await setup();
     const sessionId = await fixture.createSession();
@@ -213,6 +308,36 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
     expect(JSON.stringify(fixture.bodies.at(-1))).toContain('draftStatus');
     expect(JSON.stringify(fixture.bodies.at(-1))).toContain('succeeded');
     expect(await fixture.context.repos.watchlist.list()).toHaveLength(before.length + 1);
+  }, 30_000);
+
+  it('cancels a pending draft without writing, and a later confirmation stays cancelled', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    const before = await fixture.context.repos.watchlist.list();
+    const draftBody = parse(await (await fixture.chat(sessionId, '创建一个观察清单草案')).text());
+    expect(draftBody.filter((part) => part.type === 'error')).toEqual([]);
+    const messages = await fixture.context.repos.chat.listMessages(sessionId);
+    const assistant = messages.find((message) => message.role === 'assistant');
+    const part = assistant?.parts.find((part) => part.type === 'tool-create_watchlist');
+    const path = `/api/chat/sessions/${sessionId}/drafts/${assistant?.id}/${String(part?.toolCallId)}`;
+    const settle = (approved: boolean) =>
+      fixture.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      });
+    const cancelled = await (await settle(false)).json();
+    expect(cancelled).toMatchObject({ ok: true, data: { status: 'cancelled' } });
+    expect(await fixture.context.repos.watchlist.list()).toHaveLength(before.length);
+    expect(await (await settle(false)).json()).toMatchObject({
+      ok: true,
+      data: { status: 'cancelled' },
+    });
+    expect(await (await settle(true)).json()).toMatchObject({
+      ok: true,
+      data: { status: 'cancelled' },
+    });
+    expect(await fixture.context.repos.watchlist.list()).toHaveLength(before.length);
   }, 30_000);
 
   it('fails explicitly without switching runtime or replaying a rejected provider request', async () => {
