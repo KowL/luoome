@@ -71,6 +71,18 @@ class SuppressedMarketRequest extends SourceExecutionError {
 
 class CoordinatedTransportError extends SourceExecutionError {}
 
+/** 只有这些 kind 代表上游真的不可用；按 kind 冷却 provider，避免一条坏端点拖垮整个源。 */
+const upstreamFaultKinds: ReadonlySet<SourceErrorKind> = new Set([
+  'network',
+  'timeout',
+  'rate_limited',
+  'upstream_error',
+]);
+
+/** 授权拒绝、插件撤回和调用方取消不是上游故障，不能写冷却。 */
+const isNonUpstreamFailure = (error: unknown): boolean =>
+  error instanceof PluginExecutionDenied || isAbortError(error);
+
 export const marketProviderOf = (input: Parameters<typeof fetch>[0], fallback: string): string => {
   // Tencent 全市场快照还会读取新浪目录，不能只按 capability 的来源名称扣额。
   const host = new URL(input instanceof Request ? input.url : String(input)).hostname;
@@ -141,6 +153,7 @@ export class MarketRequestCoordinator {
     batchMissing = false,
     retryAt?: number,
     check?: () => void,
+    cool = true,
   ): void {
     this.update(key, (entry, now) => {
       check?.();
@@ -150,6 +163,10 @@ export class MarketRequestCoordinator {
       if (payload !== undefined) {
         entry.payload = payload;
         entry.expiresAt = now + this.config.cacheTtlMs;
+        delete entry.errorKind;
+        delete entry.retryAt;
+        delete entry.batchMissing;
+      } else if (!cool) {
         delete entry.errorKind;
         delete entry.retryAt;
         delete entry.batchMissing;
@@ -234,7 +251,6 @@ export class MarketRequestCoordinator {
         return decode(payload);
       } catch (error) {
         handle.assertCurrent?.();
-        this.blockFailure(handle.source, error);
         this.finish(
           key,
           owner,
@@ -242,6 +258,8 @@ export class MarketRequestCoordinator {
           sourceErrorKindOf(error),
           false,
           error instanceof SuppressedMarketRequest ? error.retryAt : undefined,
+          undefined,
+          !isNonUpstreamFailure(error),
         );
         throw error;
       }
@@ -297,7 +315,7 @@ export class MarketRequestCoordinator {
             }
           } catch (error) {
             handle.assertCurrent?.();
-            this.blockFailure(handle.source, error);
+            const cool = !isNonUpstreamFailure(error);
             for (const { key } of owned)
               this.finish(
                 key,
@@ -306,6 +324,8 @@ export class MarketRequestCoordinator {
                 sourceErrorKindOf(error),
                 false,
                 error instanceof SuppressedMarketRequest ? error.retryAt : undefined,
+                undefined,
+                cool,
               );
             lastError = error;
           }
@@ -401,16 +421,19 @@ export class MarketRequestCoordinator {
         const response = await fetchImpl(input, init);
         if (!response.ok) {
           const kind = httpStatusErrorKind(response.status);
-          let delay = this.config.cooldownMs;
-          const retryAfter = response.headers.get('retry-after');
-          if (retryAfter !== null) {
-            const seconds = Number(retryAfter);
-            const retryMs = Number.isFinite(seconds)
-              ? seconds * 1000
-              : Date.parse(retryAfter) - this.clock();
-            if (Number.isFinite(retryMs)) delay = Math.max(delay, Math.min(retryMs, 86_400_000));
+          // 401/403 是鉴权配置问题、其余 4xx 是请求本身的问题，都不是上游故障；只有 5xx/429 才冷却。
+          if (response.status === 429 || response.status >= 500) {
+            let delay = this.config.cooldownMs;
+            const retryAfter = response.headers.get('retry-after');
+            if (retryAfter !== null) {
+              const seconds = Number(retryAfter);
+              const retryMs = Number.isFinite(seconds)
+                ? seconds * 1000
+                : Date.parse(retryAfter) - this.clock();
+              if (Number.isFinite(retryMs)) delay = Math.max(delay, Math.min(retryMs, 86_400_000));
+            }
+            this.block(key, kind, delay);
           }
-          this.block(key, kind, delay);
           throw new CoordinatedTransportError(kind, `market provider HTTP ${response.status}`);
         }
         return response;
@@ -423,7 +446,8 @@ export class MarketRequestCoordinator {
             : isAbortError(error)
               ? 'timeout'
               : 'network';
-        this.block(key, kind, this.config.cooldownMs);
+        // 自定义 fetch 实现可能抛 permission / invalid_payload 等结构化错误，不能当成断网。
+        if (upstreamFaultKinds.has(kind)) this.block(key, kind, this.config.cooldownMs);
         throw new CoordinatedTransportError(kind, 'market provider transport failed', error);
       }
     }) as typeof fetch;
@@ -440,14 +464,5 @@ export class MarketRequestCoordinator {
       entry.blockedUntil = Math.max(entry.blockedUntil, now + delay);
       entry.errorKind = kind;
     });
-  }
-
-  private blockFailure(source: string, error: unknown): void {
-    if (error instanceof SuppressedMarketRequest || error instanceof CoordinatedTransportError)
-      return;
-    const kind = sourceErrorKindOf(error);
-    if (['network', 'timeout', 'rate_limited', 'upstream_error'].includes(kind)) {
-      this.block(`provider:${source}`, kind, this.config.cooldownMs);
-    }
   }
 }

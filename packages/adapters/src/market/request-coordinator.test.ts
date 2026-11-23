@@ -1,10 +1,20 @@
-import { money, type PublicMarketStore, type Quote } from '@luoome/core';
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { money, PluginExecutionDenied, type PublicMarketStore, type Quote } from '@luoome/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EastmoneySource } from '../eastmoney/source.js';
+import { PluginConfigStore } from '../plugins/config.js';
+import { ProviderRuntime } from '../plugins/provider-runtime.js';
 import { SourceExecutionError } from '../source-error.js';
 import { createMarketAdapterFromEnv } from './factory.js';
 import { MarketRequestCoordinator, marketRequestConfigFromEnv } from './request-coordinator.js';
 import { MarketSourceRegistry } from './source-registry.js';
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 const store = (): PublicMarketStore => {
   const entries = new Map<string, string>();
@@ -40,6 +50,31 @@ const deferred = () => {
   return { promise, resolve };
 };
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
+
+/** qt.gtimg.cn 指数响应：上证指数一只即可让 realtime-index 路由成功。 */
+const tencentIndexBody = (): Response => {
+  const fields = Array.from({ length: 39 }, () => '');
+  fields[3] = '3905.20';
+  fields[4] = '3903.72';
+  fields[30] = '20260813161452';
+  fields[31] = '1.48';
+  fields[32] = '0.04';
+  const encoder = new TextEncoder();
+  const bytes = new Uint8Array([
+    ...encoder.encode('v_sh000001="~'),
+    // GBK「上证指数」，与 tencent.test.ts 的真实响应字节一致。
+    0xc9,
+    0xcf,
+    0xd6,
+    0xa4,
+    0xd6,
+    0xb8,
+    0xca,
+    0xfd,
+    ...encoder.encode(`~${fields.slice(2).join('~')}";\n`),
+  ]);
+  return new Response(bytes, { status: 200 });
+};
 
 describe('public market request coordinator', () => {
   it('validates conservative environment configuration', () => {
@@ -366,6 +401,186 @@ describe('public market request coordinator', () => {
       'storage unavailable',
     );
     expect(raw).not.toHaveBeenCalled();
+  });
+
+  it('serves indices from Tencent while Eastmoney returns 502 and never cools the healthy provider', async () => {
+    const shared = store();
+    const now = T0;
+    const coordinator = new MarketRequestCoordinator(shared, config, () => now);
+    const eastmoneyCalls: string[] = [];
+    const http = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (new URL(url).hostname.endsWith('eastmoney.com')) {
+        eastmoneyCalls.push(url);
+        return new Response('', { status: 502 });
+      }
+      return tencentIndexBody();
+    }) as unknown as typeof fetch;
+    const market = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real' },
+      {
+        logger,
+        clock: () => new Date(now),
+        requestCoordinator: coordinator,
+        fetchImpl: http,
+        sourceOrder: ['eastmoney', 'tencent'],
+      },
+    );
+    const indices = await market.fetchIndexQuotes();
+    expect(indices.map((item) => item.source)).toEqual(['tencent']);
+    expect(indices[0]?.code).toBe('000001');
+    const blocked = JSON.parse(shared.read('provider:eastmoney', now) ?? '{}') as {
+      blockedUntil?: number;
+    };
+    expect(blocked.blockedUntil).toBe(now + config.cooldownMs);
+    // 腾讯的整个 provider 都还能用（含分时用的另一台主机），不是只放过本次能力。
+    await expect(
+      coordinator.fetchFor('tencent', http)('https://qt.gtimg.cn/q=sh600519'),
+    ).resolves.toBeInstanceOf(Response);
+    await expect(
+      coordinator.fetchFor(
+        'tencent',
+        http,
+      )('https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh600519'),
+    ).resolves.toBeInstanceOf(Response);
+    await expect(
+      coordinator.fetchFor('eastmoney', http)('https://push2.eastmoney.com/api/qt/ulist.np'),
+    ).rejects.toMatchObject({ kind: 'upstream_error' });
+    expect(eastmoneyCalls).toHaveLength(1);
+  });
+
+  it('attributes a failure to the provider that actually failed, not the capability source', async () => {
+    const now = T0;
+    const coordinator = new MarketRequestCoordinator(store(), config, () => now);
+    const http = vi.fn(async (input: string | URL | Request) =>
+      new URL(String(input instanceof Request ? input.url : input)).hostname.endsWith('sina.com.cn')
+        ? new Response('', { status: 502 })
+        : new Response('{}'),
+    ) as unknown as typeof fetch;
+    const snapshot = {
+      source: 'tencent',
+      capability: 'market-snapshot' as const,
+      coverage: [],
+      execute: async () => {
+        // 腾讯全市场快照读取新浪目录：新浪故障被包装成上游错误后，不能把腾讯一起拉黑。
+        try {
+          await coordinator.fetchFor('tencent', http)('https://vip.stock.finance.sina.com.cn/dir');
+        } catch (error) {
+          throw new SourceExecutionError('upstream_error', 'directory rejected', error);
+        }
+        return [];
+      },
+    };
+    await expect(
+      coordinator.execute(snapshot, { coverage: 'CN_A_SHARES_SH_SZ' }),
+    ).rejects.toMatchObject({ kind: 'upstream_error' });
+    await expect(
+      coordinator.fetchFor('tencent', http)('https://qt.gtimg.cn/q=sh600519'),
+    ).resolves.toBeInstanceOf(Response);
+    await expect(
+      coordinator.fetchFor('sina', http)('https://hq.sinajs.cn/list=sh600000'),
+    ).rejects.toMatchObject({ kind: 'upstream_error' });
+  });
+
+  it.each([
+    ['plugin denial', new PluginExecutionDenied('plugin:business.report')],
+    ['caller abort', new DOMException('aborted', 'AbortError')],
+  ])('does not cool provider or request after %s', async (_label, failure) => {
+    const shared = store();
+    const now = T0;
+    const coordinator = new MarketRequestCoordinator(shared, config, () => now);
+    const execute = vi.fn(async () => {
+      throw failure;
+    });
+    const handle = {
+      source: 'tencent',
+      capability: 'quote' as const,
+      coverage: [],
+      execute,
+    };
+    await expect(coordinator.execute(handle, { stockId: '600519.SH' })).rejects.toBe(failure);
+    // 请求级不写冷却：下一次同样的请求立刻重新尝试。
+    await expect(coordinator.execute(handle, { stockId: '600519.SH' })).rejects.toBe(failure);
+    expect(execute).toHaveBeenCalledTimes(2);
+    // 同一 store 上重启（新实例）后 provider 仍可用。
+    const restarted = new MarketRequestCoordinator(shared, config, () => now);
+    const http = vi.fn(async () => new Response('{}')) as unknown as typeof fetch;
+    await expect(
+      restarted.fetchFor('tencent', http)('https://qt.gtimg.cn/q=sh600519'),
+    ).resolves.toBeInstanceOf(Response);
+    expect(http).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 403, 404, 429, 502])(
+    'cools a provider on HTTP %s only for upstream faults',
+    async (status) => {
+      const now = T0;
+      const coordinator = new MarketRequestCoordinator(store(), config, () => now);
+      const http = vi.fn(async () => new Response('', { status })) as unknown as typeof fetch;
+      const send = coordinator.fetchFor('tencent', http);
+      await expect(send('https://qt.gtimg.cn/q=sh600519')).rejects.toBeInstanceOf(
+        SourceExecutionError,
+      );
+      const retry = send('https://qt.gtimg.cn/q=sh600519');
+      if (status === 429 || status >= 500) {
+        await expect(retry).rejects.toMatchObject({
+          kind: status === 429 ? 'rate_limited' : 'upstream_error',
+        });
+        expect(http).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(retry).rejects.toMatchObject({
+          kind: status === 404 ? 'upstream_error' : 'permission',
+        });
+        expect(http).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it('does not persist a provider cooldown when external access is denied, so a restart is immune', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-denied-'));
+    roots.push(dir);
+    const pluginsPath = join(dir, 'plugins.json');
+    writeFileSync(
+      pluginsPath,
+      JSON.stringify({
+        version: 1,
+        entries: { 'source.tencent': { enabled: true, epoch: 1 } },
+      }),
+    );
+    const plugins = new PluginConfigStore(pluginsPath);
+    const shared = store();
+    const now = T0;
+    const http = vi.fn(async () => tencentIndexBody()) as unknown as typeof fetch;
+    const env = { LUOOME_MARKET_PROVIDER: 'real' };
+    const denied = new ProviderRuntime(
+      plugins,
+      new MarketRequestCoordinator(shared, config, () => now),
+      false,
+    );
+    const blocked = createMarketAdapterFromEnv(env, {
+      logger,
+      clock: () => new Date(now),
+      providerRuntime: denied,
+      fetchImpl: http,
+      sourceOrder: ['tencent'],
+    });
+    await expect(blocked.fetchIndexQuotes()).rejects.toThrow(/plugin execution denied/);
+    // 上一个进程的授权拒绝不能写进 SQLite 的 provider 冷却，否则重启后整个腾讯源被误封。
+    expect(shared.read('provider:tencent', now)).toBeNull();
+    const allowed = new ProviderRuntime(
+      plugins,
+      new MarketRequestCoordinator(shared, config, () => now),
+      true,
+    );
+    const restarted = createMarketAdapterFromEnv(env, {
+      logger,
+      clock: () => new Date(now),
+      providerRuntime: allowed,
+      fetchImpl: http,
+      sourceOrder: ['tencent'],
+    });
+    const indices = await restarted.fetchIndexQuotes();
+    expect(indices.map((item) => item.source)).toEqual(['tencent']);
   });
 
   it('keeps exchange identities and detail reads separate and rejects duplicate/unsolicited batch rows', async () => {
