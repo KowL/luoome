@@ -587,7 +587,7 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 ## 11. 更多阅读
 
 DSH 插件版 AI 对话支持通过独立 Node Host 运行，默认对话仍使用内置 AI SDK。
-实验页面会提示每轮按已保存历史重建上下文；尚不支持执行中断恢复，历史超过实验窗口时需新建会话。
+实验页面会提示按服务端游标增量投递已保存事实；中断的执行不会自动恢复或重放，历史超过实验窗口时需新建会话。
 草案仍需确认，停止后应使用“核对会话状态”查看实际保存结果。受控试用方法与验收范围见
 [DSH 开发任务](./dsh-plugin-platform-development-plan.md)，完整演进架构见
 [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。

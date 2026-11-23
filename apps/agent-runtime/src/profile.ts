@@ -25,7 +25,7 @@ export async function prepareProfile(root: string, config: HostConfig, run: RunR
   const workspace = join(root, 'workspace');
   const profile = join(home, 'profiles', PROFILE_NAME);
   await mkdir(profile, { recursive: true, mode: 0o700 });
-  await mkdir(workspace, { mode: 0o700 });
+  await mkdir(workspace, { recursive: true, mode: 0o700 });
   const pluginSource = fileURLToPath(
     new URL('../../../packages/dsh-bridge/dist/plugin.js', import.meta.url),
   );
@@ -114,8 +114,9 @@ export async function prepareProfile(root: string, config: HostConfig, run: RunR
   return {
     home,
     workspace,
+    // 每次运行使用独立临时根目录；哈希必须描述 profile 定义本身，否则每轮都会被判为配置变化。
     profileHash: hashJson({
-      patches,
+      patches: JSON.stringify(patches).split(root).join('<run-root>'),
       bridgeSha256: createHash('sha256').update(pluginCode).digest('hex'),
     }),
     entries,

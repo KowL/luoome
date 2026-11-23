@@ -7,6 +7,7 @@ export * from './entity/account.js';
 export * from './entity/account-facts.js';
 export * from './entity/advice.js';
 export * from './entity/advice-tracking.js';
+export * from './entity/agent-session-binding.js';
 export * from './entity/alert-plan.js';
 export * from './entity/ashare-sentiment.js';
 export * from './entity/chat-session.js';

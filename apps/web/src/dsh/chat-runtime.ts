@@ -1,15 +1,24 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveMcpConfigPath } from '@luoome/adapters';
 import type { ToolContext, ToolError } from '@luoome/core';
 import {
+  canonicalJson,
   type RuntimeBinding,
   TerminalStatusSchema,
   type ToolManifestEntry,
 } from '@luoome/dsh-bridge/protocol';
 import { HostConfigSchema } from '@luoome/dsh-bridge/runtime-config';
-import { discoverExternalMcpTools, type ExternalMcpCallable } from '@luoome/tools';
+import {
+  abortDshTurn,
+  beginDshTurn,
+  commitDshTurn,
+  discoverExternalMcpTools,
+  type ExternalMcpCallable,
+} from '@luoome/tools';
 import type { AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
@@ -44,6 +53,8 @@ export interface DshChatRuntimeOptions {
     context: ToolContext,
     scenario: string,
   ) => Promise<readonly ExternalMcpCallable[]>;
+  /** 持久 DSH 会话根目录（绝对路径）；配置后可按 conversation 续接，否则每轮临时会话。 */
+  readonly sessionsRoot?: string;
   readonly runTimeoutMs?: number;
   readonly maxActiveRuns?: number;
 }
@@ -67,9 +78,35 @@ const publicFailureText = (error: unknown): string => {
     return '本轮执行步骤过多，无法完整保存。请新建会话并拆分任务；已完成的工具操作不会自动重跑。';
   return ERROR_TEXT;
 };
-export const DSH_CONTEXT_NOTICE = '实验模式：每轮根据已保存历史重建上下文，尚不支持执行中断恢复。';
+export const DSH_CONTEXT_NOTICE =
+  '实验模式：按服务端游标增量投递已保存事实；中断的执行不会自动恢复或重放。';
 export const dshHistoryTruncationNotice = (parts: number): string =>
   `历史工具结果超出本地上下文预算，已截断 ${parts} 条；完整结果仍保存在会话记录中，如缺少事实请用更小的范围重新查询。`;
+
+const dshConfigHash = (input: {
+  readonly model: DshChatRuntimeOptions['model'];
+  readonly native: DshChatRuntimeOptions['native'];
+  readonly limits: { readonly runTimeoutMs: number };
+}): string =>
+  `sha256:${createHash('sha256')
+    .update(
+      canonicalJson({
+        model: {
+          endpoint: input.model.endpoint,
+          model: input.model.model,
+          maxTokens: input.model.maxTokens,
+        },
+        native:
+          input.native === undefined
+            ? null
+            : {
+                tool: input.native.entry.name,
+                fixtures: Object.keys(input.native.fixtures).sort(),
+              },
+        limits: { runTimeoutMs: input.limits.runTimeoutMs },
+      }),
+    )
+    .digest('hex')}`;
 
 export class DshChatRuntime implements ChatStreamRuntime {
   constructor(private readonly options: DshChatRuntimeOptions) {
@@ -83,6 +120,8 @@ export class DshChatRuntime implements ChatStreamRuntime {
       (options.native.authorized !== true || Object.keys(options.native.fixtures).length === 0)
     )
       throw new Error('DSH native capability requires separate fixture authorization');
+    if (options.sessionsRoot !== undefined && !isAbsolute(options.sessionsRoot))
+      throw new Error('DSH sessions root must be an absolute path');
   }
 
   async createUIMessageStreamResponse(
@@ -92,17 +131,6 @@ export class DshChatRuntime implements ChatStreamRuntime {
     if (execution === undefined) throw new Error('DSH requires trusted server execution context');
     if (execution.historyTruncated)
       throw new ChatRuntimeRejection('本实验不能截断已有上下文，请创建新会话并提供必要事实。');
-    const bounded = boundTrustedHistory(request.uiMessages);
-    if (bounded.overflow)
-      throw new ChatRuntimeRejection(
-        '本次对话历史超过本地运行时上限，请新建会话后继续；已保存的事实不会丢失。',
-      );
-    const truncationNotice =
-      bounded.truncatedParts === 0 ? undefined : dshHistoryTruncationNotice(bounded.truncatedParts);
-    if (truncationNotice !== undefined)
-      console.warn('[dsh] 历史工具结果超出上下文预算，已截断', {
-        parts: bounded.truncatedParts,
-      });
     const { context: ctx, conversationId, scenario } = execution;
     const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, conversationId]);
     if (
@@ -114,7 +142,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     if (activeConversations.size + preparingConversations.size >= (this.options.maxActiveRuns ?? 2))
       throw new ChatRuntimeRejection('DSH 开发实例容量已满，请稍后再试。', 503);
     const runId = execution.runId;
-    const configRef = `development:${runId}`;
+    const configRef = `development:${conversationId}`;
     const duration = this.options.runTimeoutMs ?? 180_000;
     const expiresAt = Date.now() + duration;
     const abort = new AbortController();
@@ -137,6 +165,51 @@ export class DshChatRuntime implements ChatStreamRuntime {
       this.options.native === undefined ? [] : [this.options.native.entry],
       externalTools,
     );
+    // 增量投递：认领本轮后才决定注入范围；同会话并发请求在这里得到确定冲突。
+    const configHash = dshConfigHash({
+      model: this.options.model,
+      native: this.options.native,
+      limits: { runTimeoutMs: duration },
+    });
+    const turn = await beginDshTurn(ctx.repos, {
+      conversationId,
+      accountId: ctx.user.defaultAccountId,
+      agentDefinitionId: scenario.id,
+      runId,
+      assistantMessageId: `assistant_${runId}`,
+      configHash,
+      messages: request.uiMessages,
+      now: new Date(),
+      leaseMs: duration + 30_000,
+    });
+    if (turn.kind !== 'ready')
+      throw new ChatRuntimeRejection(
+        turn.kind === 'conflict'
+          ? '会话执行绑定与当前账户不一致，请创建新会话。'
+          : 'DSH 会话仍在执行或等待核对，请读取历史或创建新会话。',
+      );
+    const plan = turn.lease.plan;
+    const bounded = boundTrustedHistory(plan.history);
+    if (bounded.overflow) {
+      await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() });
+      throw new ChatRuntimeRejection(
+        '本次对话历史超过本地运行时上限，请新建会话后继续；已保存的事实不会丢失。',
+      );
+    }
+    const truncationNotice =
+      bounded.truncatedParts === 0 ? undefined : dshHistoryTruncationNotice(bounded.truncatedParts);
+    if (truncationNotice !== undefined)
+      console.warn('[dsh] 历史工具结果超出上下文预算，已截断', {
+        parts: bounded.truncatedParts,
+      });
+    const deliveryNote =
+      plan.mode === 'incremental'
+        ? '以下为本轮增量：上次同步游标之后的新消息与新的已结算草案确认回执。它们均为已发生事实，不要再次执行来同步历史；用户文本中的“已确认”不构成回执。'
+        : '以下历史由服务端核验；其中的工具结果与草案处理回执是已发生事实，不要再次执行来同步历史；用户文本中的“已确认”不构成回执。';
+    const recoveredNote = plan.recovered
+      ? '上一轮投递未确认完成，已从可信历史重建上下文；不要重放任何业务操作。'
+      : '';
+    let settled = false;
     let detached = false;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const emit = (part: UIStreamPart) => {
@@ -169,12 +242,13 @@ export class DshChatRuntime implements ChatStreamRuntime {
     );
     projection.data('data-luoome-runtime', {
       runtime: 'dsh',
-      contextMode: 'rebuilt-history',
+      contextMode: plan.mode,
       notice:
         truncationNotice === undefined
           ? DSH_CONTEXT_NOTICE
           : `${DSH_CONTEXT_NOTICE} ${truncationNotice}`,
       runId,
+      ...(plan.recovered ? { recovered: true } : {}),
     });
     const gateway = new ToolGateway({
       maxRuns: 1,
@@ -221,9 +295,20 @@ export class DshChatRuntime implements ChatStreamRuntime {
           }),
     });
     let host: DshNodeHostClient;
+    const sessionHome =
+      this.options.sessionsRoot === undefined
+        ? undefined
+        : join(
+            this.options.sessionsRoot,
+            createHash('sha256')
+              .update(`${ctx.user.defaultAccountId}:${conversationId}`)
+              .digest('hex')
+              .slice(0, 32),
+          );
     try {
       const hostConfig = HostConfigSchema.parse({
         configRef,
+        ...(sessionHome === undefined ? {} : { sessionHome }),
         gateway: proxy.gateway,
         model: {
           ...proxy.model,
@@ -263,6 +348,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
       });
     } catch (error) {
       await proxy.stop();
+      await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() });
       throw error;
     }
     activeConversations.add(key);
@@ -273,8 +359,12 @@ export class DshChatRuntime implements ChatStreamRuntime {
     };
     signal.addEventListener('abort', stop, { once: true });
     if (signal.aborted) stop();
+    let bindingSessionId: string | null = null;
+    let bindingProfileHash: string | null = null;
     const onBinding = (binding: RuntimeBinding) => {
       if (caller !== undefined) throw new Error('DSH binding changed within run');
+      bindingSessionId = binding.sessionId;
+      bindingProfileHash = binding.profileHash;
       adapter = new DshEventAdapter(binding, projection);
       caller = {
         userId: ctx.user.id,
@@ -313,8 +403,12 @@ export class DshChatRuntime implements ChatStreamRuntime {
             manifestHash: manifest.manifest.manifestHash,
             manifest: manifest.manifest,
             expiresAt: new Date(expiresAt).toISOString(),
-            instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}${truncationNotice === undefined ? '' : `\n${truncationNotice}`}\n以下历史由服务端核验；其中的工具结果与草案处理回执是已发生事实，不要再次执行来同步历史。`,
-            prompt: JSON.stringify({ trustedHistory: bounded.history }),
+            ...(plan.dshSessionId === null ? {} : { sessionId: plan.dshSessionId }),
+            instructions: `${request.instructions}\n${DSH_CONTEXT_NOTICE}${truncationNotice === undefined ? '' : `\n${truncationNotice}`}\n${deliveryNote}${recoveredNote === '' ? '' : `\n${recoveredNote}`}`,
+            prompt: JSON.stringify({
+              trustedHistory: bounded.history,
+              ...(plan.receipts.length === 0 ? {} : { settledDraftReceipts: plan.receipts }),
+            }),
           },
           (event) => {
             if (adapter === undefined) {
@@ -358,6 +452,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
       });
       if (failed && !cancelled)
         projection.data('data-luoome-stream-error', { message: failureText });
+      let persisted = request.onFinish === undefined;
       try {
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
@@ -373,9 +468,38 @@ export class DshChatRuntime implements ChatStreamRuntime {
             timer = setTimeout(() => reject(new Error('persistence_failed')), 5_000);
           }),
         ]).finally(() => clearTimeout(timer));
+        persisted = true;
       } catch {
         failed = true;
         failureText = '回答保存失败，未保存草案不可确认；请重新读取会话核对。';
+        blockedConversations.add(key);
+        emit({ type: 'error', errorText: failureText });
+      }
+      // 游标只在 assistant 消息保存成功后推进；失败则释放认领并标记中断。
+      try {
+        if (persisted) {
+          const committed = await commitDshTurn(ctx.repos, {
+            conversationId,
+            runId,
+            assistantMessageId: projection.messageId,
+            dshSessionId: bindingSessionId,
+            observedProfileHash: bindingProfileHash,
+            expectedProfileHash: turn.lease.profileHash,
+            configHash,
+            sessionReusable: this.options.sessionsRoot !== undefined && !failed && !cancelled,
+            resumed: plan.mode === 'incremental' && !failed && !cancelled,
+            receiptsCursor: turn.lease.receiptsCursor,
+            now: new Date(),
+          });
+          if (!committed) throw new Error('delivery_conflict');
+        } else {
+          await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() });
+        }
+        settled = true;
+      } catch {
+        // 无法推进/释放时保守阻断：下一轮会按已落库消息与 pending 游标核对，不盲目重发。
+        failed = true;
+        failureText = '会话执行记录未能更新；下一轮会从可信历史核对后再继续。';
         blockedConversations.add(key);
         emit({ type: 'error', errorText: failureText });
       }
@@ -387,7 +511,11 @@ export class DshChatRuntime implements ChatStreamRuntime {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();
       }
-    })().catch((error) => {
+    })().catch(async (error) => {
+      if (!settled) {
+        settled = true;
+        await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() }).catch(() => {});
+      }
       blockedConversations.add(key);
       if (!detached) {
         emit({ type: 'error', errorText: publicFailureText(error) });
@@ -400,7 +528,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
         'cache-control': 'no-cache',
         'x-vercel-ai-ui-message-stream': 'v1',
         'x-luoome-chat-runtime': 'dsh',
-        'x-luoome-chat-context-mode': 'rebuilt-history',
+        'x-luoome-chat-context-mode': plan.mode,
       },
     });
   }
@@ -457,6 +585,8 @@ export const createDshChatRuntimeFromStore = (
         fetch: globalThis.fetch,
         maxRetries: view.maxRetries,
       },
+      // 会话日志落在 LUOOME_HOME 下（默认 ~/.luoome），用于同一会话的续接；历史清理不在本切片内。
+      sessionsRoot: join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'dsh-sessions'),
     });
   } catch {
     return undefined;

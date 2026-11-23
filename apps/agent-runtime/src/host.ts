@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -93,7 +93,11 @@ export class NodeRuntimeHost {
     if (this.acceptedRuns.has(run.runId) || this.acceptedRuns.size >= 128)
       throw new Error('Duplicate run or Host run limit exceeded');
     this.acceptedRuns.add(run.runId);
-    const active: ActiveRuntime = { run, sessionId: randomUUID(), stopped: false };
+    const active: ActiveRuntime = {
+      run,
+      sessionId: run.sessionId ?? randomUUID(),
+      stopped: false,
+    };
     this.active = active;
     active.timer = setTimeout(
       () => {
@@ -113,7 +117,12 @@ export class NodeRuntimeHost {
     let failed = false;
     let stage = 'profile';
     try {
-      active.root = await mkdtemp(join(tmpdir(), 'luoome-dsh-run-'));
+      active.root = await (async () => {
+        if (this.config.sessionHome === undefined)
+          return mkdtemp(join(tmpdir(), 'luoome-dsh-run-'));
+        await mkdir(this.config.sessionHome, { recursive: true, mode: 0o700 });
+        return this.config.sessionHome;
+      })();
       const profile = await prepareProfile(active.root, this.config, run);
       const token = randomBytes(32).toString('hex');
       const seen = new Set<string>();
@@ -221,17 +230,14 @@ export class NodeRuntimeHost {
           sessionId,
           profileHash: profile.profileHash,
           configHash: hashJson({
-            configRef: this.config.configRef,
+            // 只包含语义配置；gateway/model endpoint 是每轮临时传输端口，不计入快照。
             model: {
-              endpoint: this.config.model.endpoint,
               model: this.config.model.model,
               maxTokens: this.config.model.maxTokens,
               contextWindow: this.config.model.contextWindow,
             },
-            gateway: this.config.gateway.endpoint,
             native: this.config.native
               ? {
-                  authorization: this.config.native.authorization.endpoint,
                   allowedOrigins: this.config.native.allowedOrigins,
                   maxCalls: this.config.native.maxCalls,
                   fixtures: this.config.native.fixtures ?? null,
@@ -271,7 +277,11 @@ export class NodeRuntimeHost {
       });
       if (active.cancel) throw new Error('Run cancelled during startup');
       stage = 'run';
-      const result = await harness.run(run.prompt, { sessionId });
+      // 持久会话目录存在时才 resume；否则新 Session 仍持有给定身份，但不声称恢复了历史。
+      const result =
+        run.sessionId !== undefined && this.config.sessionHome !== undefined
+          ? await (await harness.resumeSession(run.sessionId)).run(run.prompt)
+          : await harness.run(run.prompt, { sessionId });
       let completedTurn = false;
       for (const event of result.events) {
         if (event.type !== 'turn/end') continue;
@@ -316,7 +326,7 @@ export class NodeRuntimeHost {
         active.server.closeAllConnections();
         await new Promise<void>((resolve) => active.server?.close(() => resolve()));
       }
-      if (active.stopped && active.root) {
+      if (active.stopped && active.root && this.config.sessionHome === undefined) {
         try {
           await rm(active.root, { recursive: true, force: true });
         } catch {

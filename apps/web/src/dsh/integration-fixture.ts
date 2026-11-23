@@ -59,10 +59,26 @@ export const createDshIntegrationFixture = async (
     }
     if (options.failProvider)
       return Response.json({ error: { message: 'fixture-rejected' } }, { status: 401 });
-    const messages = body.messages as { role: string; content: string }[];
-    const history = JSON.parse(messages.find((item) => item.role === 'user')?.content ?? '{}') as {
-      trustedHistory?: { role: string; parts: { type: string; text?: string }[] }[];
-    };
+    const messages = body.messages as { role: string; content: unknown }[];
+    // 续接会话时 provider 请求带上前几轮历史；本轮 prompt 是最后一条带 trustedHistory 的 user 消息。
+    let promptIndex = -1;
+    let history: { trustedHistory?: { role: string; parts: { type: string; text?: string }[] }[] } =
+      {};
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== 'user' || typeof message.content !== 'string') continue;
+      try {
+        const parsed = JSON.parse(message.content) as typeof history;
+        if (Array.isArray(parsed.trustedHistory)) {
+          promptIndex = index;
+          history = parsed;
+          break;
+        }
+      } catch {
+        /* 非 prompt 的 user 消息（运行时上下文）忽略。 */
+      }
+    }
+    const turnMessages = messages.slice(promptIndex < 0 ? 0 : promptIndex);
     const userText =
       history.trustedHistory
         ?.filter((message) => message.role === 'user')
@@ -78,7 +94,7 @@ export const createDshIntegrationFixture = async (
     const slow = options.slowProvider || userText.includes('慢速');
     const failed = userText.includes('失败');
     if (failed) return Response.json({ error: { message: 'fixture-rejected' } }, { status: 401 });
-    const toolCount = messages.filter((message) => message.role === 'tool').length;
+    const toolCount = turnMessages.filter((message) => message.role === 'tool').length;
     const sse = (delta: object, finish: string | null = null) =>
       encoder.encode(
         `data: ${JSON.stringify({ id: `fixture-${ordinal}`, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`,
@@ -202,19 +218,6 @@ export const createDshIntegrationFixture = async (
   });
 
   const externalMcpConfig = options.externalMcpConfig ?? join(root, 'mcp-servers.json');
-  const chatStreamRuntime = new DshChatRuntime({
-    ...dsh,
-    externalMcp: (ctx, scenario) => discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
-    model: {
-      endpoint: 'https://provider.example.test/v1/chat/completions',
-      model: 'deepseek-chat',
-      maxTokens: 1024,
-      headers: { authorization: 'Bearer fixture-only-provider-key' },
-      fetch: providerFetch,
-      ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
-    },
-  });
-
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
@@ -224,53 +227,82 @@ export const createDshIntegrationFixture = async (
     clock,
     user: { id: 'local-web-user', defaultAccountId },
   });
+  const buildApp = (
+    modelOverrides: { readonly model?: string; readonly maxTokens?: number } = {},
+  ) => {
+    const chatStreamRuntime = new DshChatRuntime({
+      ...dsh,
+      sessionsRoot: join(root, 'dsh-sessions'),
+      externalMcp: (ctx, scenario) => discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
+      model: {
+        endpoint: 'https://provider.example.test/v1/chat/completions',
+        model: modelOverrides.model ?? 'deepseek-chat',
+        maxTokens: modelOverrides.maxTokens ?? 1024,
+        headers: { authorization: 'Bearer fixture-only-provider-key' },
+        fetch: providerFetch,
+        ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
+      },
+    });
 
-  const app = createWebApp(ctx, {
-    exposeWrite: true,
-    exposeExternal: true,
-    chatStreamRuntime,
-    mcpSettingsStore: new McpSettingsStore({ LUOOME_MCP_CONFIG: externalMcpConfig }),
-  });
+    const app = createWebApp(ctx, {
+      exposeWrite: true,
+      exposeExternal: true,
+      chatStreamRuntime,
+      mcpSettingsStore: new McpSettingsStore({ LUOOME_MCP_CONFIG: externalMcpConfig }),
+    });
 
-  const request = (path: string, init: RequestInit = {}) =>
-    Promise.resolve(
-      app.fetch(
-        new Request(`${FIXTURE_ORIGIN}${path}`, {
-          ...init,
-          headers: {
-            origin: FIXTURE_ORIGIN,
-            'content-type': 'application/json',
-            ...Object.fromEntries(new Headers(init.headers)),
-          },
-        }),
-      ),
-    );
+    const request = (path: string, init: RequestInit = {}) =>
+      Promise.resolve(
+        app.fetch(
+          new Request(`${FIXTURE_ORIGIN}${path}`, {
+            ...init,
+            headers: {
+              origin: FIXTURE_ORIGIN,
+              'content-type': 'application/json',
+              ...Object.fromEntries(new Headers(init.headers)),
+            },
+          }),
+        ),
+      );
 
+    return {
+      app,
+      request,
+      async createSession() {
+        const response = await request('/api/chat/sessions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: 'DSH 模拟研究' }),
+        });
+        const result = (await response.json()) as { data: { session: { id: string } } };
+        return result.data.session.id;
+      },
+      async chat(sessionId: string, text: string, signal?: AbortSignal) {
+        return request('/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            messages: [{ id: randomRequestId(), role: 'user', parts: [{ type: 'text', text }] }],
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      },
+    };
+  };
+
+  const primary = buildApp();
   return {
-    app,
-    request,
+    app: primary.app,
+    request: primary.request,
     context: { repos: handle.repos },
     bodies,
     completedProviders: () => completedProviders,
-    async createSession() {
-      const response = await request('/api/chat/sessions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'DSH 模拟研究' }),
-      });
-      const result = (await response.json()) as { data: { session: { id: string } } };
-      return result.data.session.id;
-    },
-    async chat(sessionId: string, text: string, signal?: AbortSignal) {
-      return request('/api/chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          messages: [{ id: randomRequestId(), role: 'user', parts: [{ type: 'text', text }] }],
-        }),
-        ...(signal === undefined ? {} : { signal }),
-      });
+    createSession: primary.createSession,
+    chat: primary.chat,
+    /** 模拟服务重启：新的 runtime/client 实例，复用同一个数据库句柄与 provider fixture。 */
+    restart(modelOverrides?: { readonly model?: string; readonly maxTokens?: number }) {
+      return buildApp(modelOverrides);
     },
     dispose() {
       handle.close();

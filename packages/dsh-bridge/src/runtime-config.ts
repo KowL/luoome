@@ -21,6 +21,12 @@ export const AuthenticatedEndpointSchema = z.strictObject({
 
 export const HostConfigSchema = z.strictObject({
   configRef: z.string().min(1),
+  /** 持久会话根目录（绝对路径）；缺省时每次运行使用独立临时目录，不跨轮续接。 */
+  sessionHome: z
+    .string()
+    .min(1)
+    .refine((value) => value.startsWith('/'), 'Expected an absolute session home')
+    .optional(),
   gateway: AuthenticatedEndpointSchema,
   model: AuthenticatedEndpointSchema.extend({
     model: z.string().min(1),

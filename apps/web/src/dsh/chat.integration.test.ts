@@ -15,6 +15,28 @@ const parse = (text: string) =>
     .split('\n')
     .filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]')
     .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
+const promptOf = (body: unknown) => {
+  const messages = (body as { messages: { role: string; content: unknown }[] }).messages;
+  // resume 之后 provider 请求会带上会话历史；本轮 prompt 是最后一条带 trustedHistory 的 user 消息。
+  let prompt: {
+    trustedHistory: { id: string; role: string; parts: unknown[] }[];
+    settledDraftReceipts?: { toolCallId: string; tool: string; draftStatus: string }[];
+  } = { trustedHistory: [] };
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue;
+    try {
+      const parsed = JSON.parse(message.content) as typeof prompt;
+      if (Array.isArray(parsed.trustedHistory)) {
+        prompt = parsed;
+        break;
+      }
+    } catch {
+      /* 运行时注入的非 prompt user 消息。 */
+    }
+  }
+  return prompt;
+};
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -276,7 +298,7 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
     expect(fixture.bodies).toHaveLength(3);
   }, 30_000);
 
-  it('keeps a draft pending, confirms only saved input once and supplies the authoritative receipt in the next rebuilt run', async () => {
+  it('keeps a draft pending, confirms only saved input once and supplies the authoritative receipt in the next incremental run', async () => {
     const fixture = await setup();
     const sessionId = await fixture.createSession();
     const before = await fixture.context.repos.watchlist.list();
@@ -391,4 +413,164 @@ describe('DSH Web + actual Node/Cordis/Gateway (controlled providers)', () => {
     );
     expect(fixture.bodies).toHaveLength(1);
   }, 30_000);
+
+  it('delivers only the post-cursor increment on later turns and reuses the runtime session identity', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    await (await fixture.chat(sessionId, '创建一个观察清单草案')).text();
+    const first = await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    expect(first).toMatchObject({ status: 'active', contextMode: 'rebuilt-history' });
+    expect(first?.dshSessionId).toBeTruthy();
+    expect(first?.lastSyncedMessageId).toBeTruthy();
+
+    const second = await fixture.chat(sessionId, '继续刚才的研究');
+    expect(second.status).toBe(200);
+    await second.text();
+    const prompt = promptOf(fixture.bodies.at(-1));
+    expect(prompt.trustedHistory).toHaveLength(1);
+    expect(prompt.trustedHistory[0]).toMatchObject({ role: 'user' });
+    expect(prompt.settledDraftReceipts).toBeUndefined();
+    const binding = await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    expect(binding?.dshSessionId).toBe(first?.dshSessionId);
+    expect(binding?.lastSyncedMessageId).not.toBe(first?.lastSyncedMessageId);
+  }, 30_000);
+
+  it('injects a settled receipt exactly once and not again after a restart on the same database', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    await (await fixture.chat(sessionId, '创建一个观察清单草案')).text();
+    const messages = await fixture.context.repos.chat.listMessages(sessionId);
+    const assistant = messages.find((message) => message.role === 'assistant');
+    const part = assistant?.parts.find((part) => part.type === 'tool-create_watchlist');
+    const path = `/api/chat/sessions/${sessionId}/drafts/${assistant?.id}/${String(part?.toolCallId)}`;
+    await fixture.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+    await fixture.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+
+    const confirmed = await fixture.chat(
+      sessionId,
+      '请根据刚才草案的实际处理结果，说明完成了哪些操作、当前状态和可选的下一步。',
+    );
+    const confirmedBody = parse(await confirmed.text());
+    expect(confirmedBody.filter((part) => part.type === 'tool-input-available')).toEqual([]);
+    const firstPrompt = promptOf(fixture.bodies.at(-1));
+    expect(firstPrompt.settledDraftReceipts).toHaveLength(1);
+    expect(firstPrompt.settledDraftReceipts?.[0]).toMatchObject({
+      draftStatus: 'succeeded',
+      tool: 'create_watchlist',
+    });
+    expect(JSON.stringify(firstPrompt).split(String(part?.toolCallId)).length - 1).toBe(1);
+    expect(firstPrompt.trustedHistory).toHaveLength(1);
+
+    // 模拟服务重启（新 runtime/client 实例、同一数据库）。
+    const restarted = fixture.restart();
+    const next = await restarted.chat(
+      sessionId,
+      '请根据刚才草案的实际处理结果，说明当前状态，不要重复已确认的操作。',
+    );
+    expect(next.status).toBe(200);
+    const nextBody = parse(await next.text());
+    expect(nextBody.filter((part) => part.type === 'error')).toEqual([]);
+    expect(nextBody.filter((part) => part.type === 'tool-input-available')).toEqual([]);
+    const nextPrompt = promptOf(fixture.bodies.at(-1));
+    expect(nextPrompt.settledDraftReceipts).toBeUndefined();
+    expect(nextPrompt.trustedHistory).toHaveLength(1);
+    expect(JSON.stringify(nextPrompt)).not.toContain(String(part?.toolCallId));
+  }, 60_000);
+
+  it('invalidates the binding and rebuilds trusted history when the model config changes', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    await (await fixture.chat(sessionId, '创建一个观察清单草案')).text();
+    const first = await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    expect(first?.configHash).toBeTruthy();
+
+    const restarted = fixture.restart({ maxTokens: 2048 });
+    const response = await restarted.chat(sessionId, '继续刚才的研究');
+    expect(response.status).toBe(200);
+    const chunks = parse(await response.text());
+    expect(chunks.filter((part) => part.type === 'error')).toEqual([]);
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'data-luoome-runtime',
+        data: expect.objectContaining({
+          contextMode: 'rebuilt-history',
+          recovered: true,
+        }),
+      }),
+    );
+    const prompt = promptOf(fixture.bodies.at(-1));
+    expect(prompt.trustedHistory).toHaveLength(3);
+    const binding = await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    expect(binding?.configHash).not.toBe(first?.configHash);
+    expect(binding?.status).toBe('active');
+    expect(binding?.dshSessionId).not.toBe(first?.dshSessionId);
+  }, 30_000);
+
+  it('reconciles a saved receipt whose cursor was not advanced without injecting it twice', async () => {
+    const fixture = await setup();
+    const sessionId = await fixture.createSession();
+    await (await fixture.chat(sessionId, '创建一个观察清单草案')).text();
+    const messages = await fixture.context.repos.chat.listMessages(sessionId);
+    const assistant = messages.find((message) => message.role === 'assistant');
+    const part = assistant?.parts.find((part) => part.type === 'tool-create_watchlist');
+    await fixture.request(
+      `/api/chat/sessions/${sessionId}/drafts/${assistant?.id}/${String(part?.toolCallId)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approved: true }),
+      },
+    );
+    const beforeCrash =
+      await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    const confirmed = await fixture.chat(
+      sessionId,
+      '请根据刚才草案的实际处理结果，说明完成了哪些操作、当前状态和可选的下一步。',
+    );
+    await confirmed.text();
+    const confirmedPrompt = promptOf(fixture.bodies.at(-1));
+    expect(confirmedPrompt.settledDraftReceipts).toHaveLength(1);
+    const afterConfirm =
+      await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+
+    // 模拟崩溃窗口：答案已保存，但游标更新丢失（仍停在确认回执之前）。
+    const crashed = {
+      ...(beforeCrash as NonNullable<typeof beforeCrash>),
+      pendingRunId: 'crashed-run',
+      pendingAssistantMessageId: afterConfirm?.lastSyncedMessageId ?? '',
+      pendingMessageId: afterConfirm?.lastSyncedMessageId ?? null,
+      pendingReceiptsCursor: afterConfirm?.settledDraftReceiptsCursor ?? null,
+      pendingClaimedAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await fixture.context.repos.agentSessionBinding.save({
+      ...crashed,
+      pendingRunId: null,
+      pendingAssistantMessageId: null,
+      pendingMessageId: null,
+      pendingReceiptsCursor: null,
+      pendingClaimedAt: null,
+    });
+    expect(await fixture.context.repos.agentSessionBinding.claim(crashed)).toBe(true);
+
+    const next = await fixture.chat(sessionId, '继续研究，不要重复已确认的操作');
+    expect(next.status).toBe(200);
+    const nextBody = parse(await next.text());
+    expect(nextBody.filter((part) => part.type === 'error')).toEqual([]);
+    const nextPrompt = promptOf(fixture.bodies.at(-1));
+    expect(nextPrompt.settledDraftReceipts).toBeUndefined();
+    expect(nextPrompt.trustedHistory).toHaveLength(1);
+    const reconciled =
+      await fixture.context.repos.agentSessionBinding.findByConversation(sessionId);
+    expect(reconciled?.settledDraftReceiptsCursor).toBe(afterConfirm?.settledDraftReceiptsCursor);
+    expect(reconciled?.dshSessionId).toBe(beforeCrash?.dshSessionId);
+  }, 60_000);
 });

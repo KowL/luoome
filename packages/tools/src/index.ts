@@ -14,6 +14,7 @@ export * from './agent-whitelist.js';
 export * from './builtin-plugins.js';
 export * from './catalog.js';
 export * from './context.js';
+export * from './dsh-delivery.js';
 export * from './external-mcp.js';
 export * from './plugin-config-check.js';
 export * from './plugin-inventory.js';

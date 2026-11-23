@@ -3,6 +3,7 @@ import {
   type AdjustmentFactor,
   type Advice,
   type AdviceOutcome,
+  type AgentSessionBinding,
   type AlertPlan,
   buildAccountFacts,
   buildLimitUpLadderSample,
@@ -5269,6 +5270,153 @@ export const registerRepositoryContractTests = (
         await repos.chat.removeSession('c1');
         expect(await repos.chat.findSessionById('c1')).toBeNull();
         expect(await repos.chat.listMessages('c1')).toEqual([]);
+      });
+    });
+
+    describe('AgentSessionBindingRepository', () => {
+      const bound = (overrides: Partial<AgentSessionBinding> = {}): AgentSessionBinding => ({
+        conversationId: 'c1',
+        accountId: 'account-1',
+        agentDefinitionId: 'general',
+        dshSessionId: null,
+        profileHash: null,
+        configHash: null,
+        lastSyncedMessageId: null,
+        settledDraftReceiptsCursor: null,
+        status: 'active',
+        contextMode: 'rebuilt-history',
+        pendingRunId: null,
+        pendingAssistantMessageId: null,
+        pendingMessageId: null,
+        pendingReceiptsCursor: null,
+        pendingClaimedAt: null,
+        updatedAt: T0,
+        ...overrides,
+      });
+
+      it('save 按 conversation upsert，缺失返回 null', async () => {
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toBeNull();
+        await repos.agentSessionBinding.save(
+          bound({ dshSessionId: 'session-1', lastSyncedMessageId: 'm1', updatedAt: T1 }),
+        );
+        await repos.agentSessionBinding.save(
+          bound({ dshSessionId: 'session-2', lastSyncedMessageId: 'm2', updatedAt: T2 }),
+        );
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toMatchObject({
+          dshSessionId: 'session-2',
+          lastSyncedMessageId: 'm2',
+          updatedAt: T2,
+        });
+      });
+
+      it('claim 只接受空闲或同一 run 的绑定，并发第二个 run 返回 false', async () => {
+        await repos.agentSessionBinding.save(bound());
+        const pending = (runId: string) =>
+          bound({
+            pendingRunId: runId,
+            pendingAssistantMessageId: `assistant_${runId}`,
+            pendingMessageId: 'm2',
+            pendingClaimedAt: T1,
+            updatedAt: T1,
+          });
+        expect(await repos.agentSessionBinding.claim(pending('run-1'))).toBe(true);
+        expect(await repos.agentSessionBinding.claim(pending('run-2'))).toBe(false);
+        expect(await repos.agentSessionBinding.claim(pending('run-1'))).toBe(true);
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toMatchObject({
+          pendingRunId: 'run-1',
+        });
+      });
+
+      it('commit 只在 pendingRunId 匹配时推进游标并清空 pending', async () => {
+        await repos.agentSessionBinding.save(bound());
+        await repos.agentSessionBinding.claim(
+          bound({
+            pendingRunId: 'run-1',
+            pendingAssistantMessageId: 'assistant_run-1',
+            pendingMessageId: 'm2',
+            pendingClaimedAt: T1,
+            updatedAt: T1,
+          }),
+        );
+        const commit = (runId: string) =>
+          repos.agentSessionBinding.commit({
+            conversationId: 'c1',
+            runId,
+            dshSessionId: 'session-1',
+            profileHash: 'sha256:a',
+            configHash: 'sha256:b',
+            lastSyncedMessageId: 'assistant_run-1',
+            settledDraftReceiptsCursor: 'm1:call-1',
+            status: 'active',
+            contextMode: 'rebuilt-history',
+            updatedAt: T2,
+          });
+        expect(await commit('run-2')).toBe(false);
+        expect(await commit('run-1')).toBe(true);
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toMatchObject({
+          dshSessionId: 'session-1',
+          lastSyncedMessageId: 'assistant_run-1',
+          settledDraftReceiptsCursor: 'm1:call-1',
+          pendingRunId: null,
+          pendingAssistantMessageId: null,
+          pendingClaimedAt: null,
+          updatedAt: T2,
+        });
+      });
+
+      it('release 只清空匹配的 pending 并写回状态', async () => {
+        await repos.agentSessionBinding.save(bound());
+        await repos.agentSessionBinding.claim(
+          bound({
+            pendingRunId: 'run-1',
+            pendingAssistantMessageId: 'assistant_run-1',
+            pendingMessageId: 'm2',
+            pendingClaimedAt: T1,
+            updatedAt: T1,
+          }),
+        );
+        expect(
+          await repos.agentSessionBinding.release({
+            conversationId: 'c1',
+            runId: 'run-2',
+            status: 'interrupted',
+            contextMode: 'rebuilt-history',
+            updatedAt: T2,
+          }),
+        ).toBe(false);
+        expect(
+          await repos.agentSessionBinding.release({
+            conversationId: 'c1',
+            runId: 'run-1',
+            status: 'interrupted',
+            contextMode: 'rebuilt-history',
+            updatedAt: T2,
+          }),
+        ).toBe(true);
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toMatchObject({
+          status: 'interrupted',
+          pendingRunId: null,
+          pendingClaimedAt: null,
+        });
+      });
+
+      it('拒绝 pending 字段不完整或失效绑定保留 sessionId', async () => {
+        await expect(
+          repos.agentSessionBinding.save(
+            bound({ pendingRunId: 'run-1', pendingAssistantMessageId: 'assistant_run-1' }),
+          ),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.agentSessionBinding.save(
+            bound({ status: 'invalidated', dshSessionId: 'session-1' }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('remove 删除绑定', async () => {
+        await repos.agentSessionBinding.save(bound());
+        await repos.agentSessionBinding.remove('c1');
+        expect(await repos.agentSessionBinding.findByConversation('c1')).toBeNull();
       });
     });
   });

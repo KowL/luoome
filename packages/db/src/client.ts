@@ -16,6 +16,7 @@ import {
   DrizzleAdjustmentFactorRepository,
   DrizzleAdviceRepository,
   DrizzleAdviceTrackingRepository,
+  DrizzleAgentSessionBindingRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
@@ -1637,6 +1638,7 @@ export const createDrizzleRepos = (
     // ruo 迁移起
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),
+    agentSessionBinding: new DrizzleAgentSessionBindingRepository(db),
     adviceTracking: new DrizzleAdviceTrackingRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };

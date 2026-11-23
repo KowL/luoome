@@ -80,6 +80,8 @@ export const RunRequestSchema = z
     protocolVersion: VersionSchema,
     runId: IdSchema,
     conversationId: IdSchema,
+    /** 续接既有 runtime session 时由服务端指定；缺省由 Host 新建。 */
+    sessionId: IdSchema.optional(),
     manifestHash: HashSchema,
     manifest: ToolManifestSchema,
     configRef: IdSchema,

@@ -5,6 +5,8 @@ import type {
   AdviceHorizon,
   AdviceReasoning,
   AdviceSubjectKind,
+  AgentSessionBindingStatus,
+  AgentSessionContextMode,
   AlertPlan,
   ChatMessagePart,
   DecisionReviewContent,
@@ -1297,6 +1299,34 @@ export const tradingPlans = sqliteTable(
   }),
 );
 
+export const agentSessionBindings = sqliteTable(
+  'agent_session_bindings',
+  {
+    conversationId: text('conversation_id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    agentDefinitionId: text('agent_definition_id').notNull(),
+    dshSessionId: text('dsh_session_id'),
+    profileHash: text('profile_hash'),
+    configHash: text('config_hash'),
+    lastSyncedMessageId: text('last_synced_message_id'),
+    settledDraftReceiptsCursor: text('settled_draft_receipts_cursor'),
+    status: text('status').$type<AgentSessionBindingStatus>().notNull(),
+    contextMode: text('context_mode').$type<AgentSessionContextMode>().notNull(),
+    pendingRunId: text('pending_run_id'),
+    pendingAssistantMessageId: text('pending_assistant_message_id'),
+    pendingMessageId: text('pending_message_id'),
+    pendingReceiptsCursor: text('pending_receipts_cursor'),
+    pendingClaimedAt: integer('pending_claimed_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    accountUpdatedIdx: index('agent_session_bindings_account_updated_idx').on(
+      t.accountId,
+      t.updatedAt,
+    ),
+  }),
+);
+
 export const chatSessions = sqliteTable(
   'chat_sessions',
   {
@@ -1372,6 +1402,7 @@ export const schema = {
   workflowRuns,
   reports,
   tradingPlans,
+  agentSessionBindings,
   chatSessions,
   chatMessages,
 } as const;
