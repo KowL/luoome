@@ -137,5 +137,31 @@ describe('createSectorQuoteManagerFromEnv', () => {
     expect(error.kind).toBe('adapter_error');
     expect(error.adapter).toBe('sector-quote');
     expect(error.message).toContain('network down');
+    expect(error.message).toContain('eastmoney');
+  });
+
+  it('status() 记录真实尝试与失败，不把不可达的源报成健康', async () => {
+    const fetchImpl = (async () =>
+      new Response('bad gateway', { status: 502 })) as unknown as typeof fetch;
+    const m = createSectorQuoteManagerFromEnv(
+      { LUOOME_SECTOR_QUOTE_SOURCES: 'eastmoney' },
+      {
+        logger: noopLogger,
+        fetchImpl,
+      },
+    );
+
+    await m.fetchList(baseQuery);
+
+    expect(m.status()).toHaveLength(1);
+    expect(m.status()[0]).toMatchObject({
+      dataset: 'sector-quote',
+      source: 'eastmoney',
+      capabilityEnabled: true,
+      configurationReady: true,
+      lastErrorKind: 'upstream_error',
+    });
+    expect(m.status()[0]?.lastAttemptAt).toBeInstanceOf(Date);
+    expect(m.status()[0]?.lastSuccessAt).toBeUndefined();
   });
 });

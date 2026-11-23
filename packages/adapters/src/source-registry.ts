@@ -143,3 +143,18 @@ export class SourceRegistry<M extends CapabilityMap> {
 }
 
 const keyOf = (source: string, capability: string): string => `${source}:${capability}`;
+
+/** 源 id → 面向用户的中文标签（错误文案用；未登记的源原样展示）。 */
+const SOURCE_LABELS: Readonly<Record<string, string>> = {
+  eastmoney: '东方财富',
+  tencent: '腾讯行情',
+  sina: '新浪财经',
+  tushare: 'Tushare',
+  fuyao: 'Fuyao',
+  '10jqka': '同花顺',
+};
+
+export const sourceLabel = (source: string): string => {
+  const label = SOURCE_LABELS[source];
+  return label === undefined ? source : `${label}（${source}）`;
+};

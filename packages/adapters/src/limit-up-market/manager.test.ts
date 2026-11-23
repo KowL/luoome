@@ -91,7 +91,7 @@ const buildManager = (
   opts: { readonly clock?: () => Date; readonly cacheTtlMs?: number } = {},
 ) =>
   new LimitUpMarketManager({
-    primary: source,
+    primaries: [source],
     logger,
     clock: opts.clock ?? (() => new Date('2026-11-12T07:02:00Z')),
     ...(opts.cacheTtlMs === undefined ? {} : { cacheTtlMs: opts.cacheTtlMs }),
@@ -176,5 +176,50 @@ describe('LimitUpMarketManager', () => {
     );
 
     await expect(manager.fetchMarket({ date: '2026-11-12' })).rejects.toThrow(/pool.total/);
+  });
+
+  it('前一个源三维全失败 → 按顺序回退到下一个源，结果记录实际 source', async () => {
+    const failed = stubSource(
+      sections({
+        pool: null,
+        poolError: 'upstream_error: HTTP 502',
+        statistics: null,
+        statisticsError: 'HTTP 502',
+        ladder: null,
+        ladderError: 'HTTP 502',
+        dataAsOf: null,
+      }),
+    );
+    const backup: LimitUpMarketPrimarySource = { ...stubSource(sections()), name: 'backup' };
+    const manager = new LimitUpMarketManager({
+      primaries: [failed, backup],
+      logger,
+      clock: () => new Date('2026-11-12T07:02:00Z'),
+    });
+
+    const result = await manager.fetchMarket({ date: '2026-11-12' });
+
+    expect(result.ok).toBe(true);
+    expect(result.data?.source).toBe('backup');
+    expect(manager.sources).toEqual(['fuyao', 'backup']);
+    const status = manager.status();
+    expect(status.find((item) => item.source === 'fuyao')?.lastErrorKind).toBe('upstream_error');
+    expect(status.find((item) => item.source === 'backup')?.lastSuccessAt).toBeInstanceOf(Date);
+  });
+
+  it('所有源均失败 → adapter_error 列出已尝试源与各自原因，不再只说“端点失败”', async () => {
+    const manager = new LimitUpMarketManager({
+      primaries: [
+        stubSource(sections({ pool: null, statistics: null, ladder: null, dataAsOf: null })),
+      ],
+      logger,
+      clock: () => new Date('2026-11-12T07:02:00Z'),
+    });
+
+    const result = await manager.fetchMarket({ date: '2026-11-12' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain('所有涨停市场源均失败');
+    expect(result.error?.message).toContain('fuyao');
   });
 });

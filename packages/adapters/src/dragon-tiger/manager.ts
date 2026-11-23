@@ -7,7 +7,7 @@ import type {
 } from '@luoome/core';
 import { BUILTIN_HOLIDAYS, dateInShanghai, isHoliday, isWeekend } from '@luoome/core';
 
-import type { SourceHandle, SourceRegistry } from '../source-registry.js';
+import { type SourceHandle, type SourceRegistry, sourceLabel } from '../source-registry.js';
 import type { DragonTigerCapabilityMap, DragonTigerRawEntry, DragonTigerResult } from './types.js';
 
 /**
@@ -193,9 +193,9 @@ export class DragonTigerManager {
     }
 
     return errorResult(
-      `all sources failed (${handles.map((handle) => handle.source).join(' → ')}): ${
+      `所有龙虎榜源均失败（已尝试 ${handles.map((handle) => sourceLabel(handle.source)).join(' → ')}）：${
         lastError instanceof Error ? lastError.message : String(lastError)
-      }`,
+      }。未列出的已注册源没有启用；请在设置页的 plugins.json 中核对 source.* 开关`,
     );
   }
 }

@@ -31,6 +31,7 @@ const mkList = (): SectorQuoteList => ({
 const mkManager = (fetchImpl: SectorQuoteManagerLike['fetchList']): SectorQuoteManagerLike => ({
   name: 'sector-quote',
   sources: ['eastmoney'],
+  status: () => [],
   fetchList: fetchImpl,
 });
 

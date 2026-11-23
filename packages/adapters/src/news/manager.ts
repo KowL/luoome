@@ -1,7 +1,7 @@
 import type { FetchNewsQuery, Logger, NewsItem, SourceStatus } from '@luoome/core';
 import { inferNewsCategory } from '@luoome/core';
 
-import type { SourceHandle, SourceRegistry } from '../source-registry.js';
+import { type SourceHandle, type SourceRegistry, sourceLabel } from '../source-registry.js';
 import type { NewsCapabilityMap, NewsRawItem, NewsResult } from './types.js';
 
 /**
@@ -130,9 +130,9 @@ export class NewsManager {
     }
 
     return errorResult(
-      `all sources failed (${handles.map((handle) => handle.source).join(' → ')}): ${
+      `所有财经要闻源均失败（已尝试 ${handles.map((handle) => sourceLabel(handle.source)).join(' → ')}）：${
         lastError instanceof Error ? lastError.message : String(lastError)
-      }`,
+      }。免费备用源需要先在设置页的 plugins.json 启用对应的 source.*（如 source.10jqka）`,
     );
   }
 }

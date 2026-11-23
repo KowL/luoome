@@ -50,7 +50,7 @@ describe('tool/get_market_data_status', () => {
     );
   });
 
-  it('聚合五个非行情 manager 的 status()；未装配的端口不产生 dataset', async () => {
+  it('聚合七个非行情 manager 的 status()；未装配的端口不产生 dataset', async () => {
     const marker = (dataset: string): SourceStatus => ({
       dataset,
       source: `${dataset}-src`,
@@ -71,6 +71,18 @@ describe('tool/get_market_data_status', () => {
         fetchNews: () => Promise.reject(new Error('not used')),
         status: () => [marker('finance-news')],
       },
+      sectorQuote: {
+        name: 'sector-quote',
+        sources: ['sector-src'],
+        fetchList: () => Promise.reject(new Error('not used')),
+        status: () => [marker('sector-quote')],
+      },
+      limitUpMarket: {
+        name: 'limit-up-market',
+        sources: ['limit-up-market-src'],
+        fetchMarket: () => Promise.reject(new Error('not used')),
+        status: () => [marker('limit-up-market')],
+      },
       ashareSentiment: {
         fetch: () => Promise.reject(new Error('not used')),
         status: () => [marker('sentiment-sealed-pool'), marker('sentiment-broken-pool')],
@@ -83,6 +95,8 @@ describe('tool/get_market_data_status', () => {
       expect.arrayContaining([
         expect.objectContaining({ dataset: 'dragon-tiger', source: 'dragon-tiger-src' }),
         expect.objectContaining({ dataset: 'finance-news', source: 'finance-news-src' }),
+        expect.objectContaining({ dataset: 'sector-quote', source: 'sector-quote-src' }),
+        expect.objectContaining({ dataset: 'limit-up-market', source: 'limit-up-market-src' }),
         expect.objectContaining({ dataset: 'sentiment-sealed-pool' }),
         expect.objectContaining({ dataset: 'sentiment-broken-pool' }),
       ]),

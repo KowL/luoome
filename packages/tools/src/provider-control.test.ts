@@ -124,7 +124,7 @@ it('keeps credential-missing controlled sources unavailable while retaining a re
     sourceOrder: ['tushare'],
   });
   expect(runtime.ready(unavailable)).toBe(false);
-  await expect(unavailable.fetchQuote('002594.SZ')).rejects.toThrow('no ready data providers');
+  await expect(unavailable.fetchQuote('002594.SZ')).rejects.toThrow('没有可用的数据源');
   set('source.eastmoney', true);
   vi.spyOn(source, 'fetchDailyBars').mockResolvedValue(bars(10));
   const fallback = createMarketAdapterFromEnv(env, {

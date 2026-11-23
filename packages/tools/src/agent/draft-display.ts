@@ -67,7 +67,138 @@ interface DraftSummarySpec {
   readonly ambiguous?: readonly string[];
 }
 
-type DraftSummarizer = (raw: ParsedInput, parsed: ParsedInput) => DraftSummarySpec;
+interface DraftSummaryContext {
+  /** 触发本轮生成草案的用户消息原文，用于标注「相对请求新增」的条目 */
+  readonly userRequest?: string;
+}
+
+type DraftSummarizer = (
+  raw: ParsedInput,
+  parsed: ParsedInput,
+  context: DraftSummaryContext,
+) => DraftSummarySpec;
+
+const asNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const formatNumber = (value: number): string => String(Number(value.toFixed(4)));
+
+type AlertRuleInput = ParsedInput;
+
+/** 单条预警规则的可读摘要：只描述规则本身，不补默认值说明。 */
+const describeAlertRule = (rule: AlertRuleInput): string => {
+  switch (rule.kind) {
+    case 'price-level': {
+      const level = asNumber(rule.level);
+      const side = rule.side === 'above' ? '上穿' : '下穿';
+      return level === undefined ? `价格${side}` : `价格${side} ${formatNumber(level)} 元`;
+    }
+    case 'price-change': {
+      const pct = asNumber(rule.pct);
+      const direction =
+        rule.direction === 'up' ? '涨超' : rule.direction === 'down' ? '跌超' : '涨跌超过';
+      return pct === undefined ? direction : `${direction} ${formatNumber(pct * 100)}%`;
+    }
+    case 'cost-threshold': {
+      const parts: string[] = [];
+      const stopLoss = asNumber(rule.stopLossPct);
+      const takeProfit = asNumber(rule.takeProfitPct);
+      if (stopLoss !== undefined) parts.push(`亏损 ${formatNumber(stopLoss * 100)}%`);
+      if (takeProfit !== undefined) parts.push(`盈利 ${formatNumber(takeProfit * 100)}%`);
+      return parts.length === 0 ? '持仓成本阈值' : `持仓成本 ${parts.join(' / ')}`;
+    }
+    case 'strategy-signal':
+      return `策略 ${text(rule.strategyId)} 信号`;
+    default:
+      return text(rule.kind) === '' ? '未命名规则' : text(rule.kind);
+  }
+};
+
+/** 规则里的数值阈值（百分数统一换算成 x% 口径），用于和用户原话比对。 */
+const alertRuleNumbers = (rule: AlertRuleInput): number[] => {
+  const values: number[] = [];
+  const push = (value: unknown, scale = 1): void => {
+    const number = asNumber(value);
+    if (number !== undefined) values.push(number * scale);
+  };
+  push(rule.level);
+  push(rule.pct, 100);
+  push(rule.stopLossPct, 100);
+  push(rule.takeProfitPct, 100);
+  return values;
+};
+
+const requestNumbers = (userRequest: string): number[] =>
+  (userRequest.match(/\d+(?:\.\d+)?/g) ?? [])
+    .map((token) => Number(token))
+    .filter((value) => Number.isFinite(value));
+
+/** 用户原话里出现过该规则的任一数值阈值（1% 容差）；无阈值可比的规则不判为新增。 */
+const ruleMentionedInRequest = (rule: AlertRuleInput, numbers: readonly number[]): boolean => {
+  const candidates = alertRuleNumbers(rule);
+  if (candidates.length === 0) return true;
+  return candidates.some((candidate) =>
+    numbers.some(
+      (value) =>
+        Math.abs(value - candidate) <= Math.max(Math.abs(candidate) * 0.01, Number.EPSILON),
+    ),
+  );
+};
+
+/**
+ * save_alert_plan / create_alert_plan 的草案投影：逐条列出规则（不再只给规则数），
+ * 并把「用户这条消息里没出现过数值阈值」的规则标为推断、单独列入待确认。
+ */
+const alertPlanSummary = (
+  raw: ParsedInput,
+  parsed: ParsedInput,
+  context: DraftSummaryContext,
+): DraftSummarySpec => {
+  const rules = Array.isArray(parsed.rules) ? parsed.rules.map(asRecord) : [];
+  const updating = typeof parsed.alertPlanId === 'string' && parsed.alertPlanId.length > 0;
+  const numbers =
+    context.userRequest === undefined ? undefined : requestNumbers(context.userRequest);
+  const unrequested =
+    numbers === undefined
+      ? []
+      : rules.flatMap((rule, index) => (ruleMentionedInRequest(rule, numbers) ? [] : [index]));
+  const name = text(parsed.name);
+  return {
+    targetObject: updating
+      ? `AlertPlan「${name.length > 0 ? name : text(parsed.alertPlanId)}」规则更新`
+      : `AlertPlan「${name}」`,
+    fields: [
+      ...(updating
+        ? [field(raw, parsed, 'alertPlanId', '更新的 AlertPlan')]
+        : [field(raw, parsed, 'name', '名称')]),
+      field(raw, parsed, 'watchlistId', '适用 Watchlist（规则作用于其全部成员）'),
+      ...rules.map((rule, index) => ({
+        name: `规则 ${index + 1}`,
+        value: describeAlertRule(rule),
+        source: unrequested.includes(index) ? ('inferred' as const) : ('user' as const),
+      })),
+      field(
+        raw,
+        parsed,
+        'logic',
+        '组合逻辑',
+        parsed.logic === 'ALL' ? '全部规则同时满足才提醒' : '任一规则满足即提醒',
+      ),
+      { name: '操作性质', value: '只创建/更新盘中提醒规则，不会自动下单', source: 'default' },
+    ],
+    ambiguous: [
+      ...(updating ? ['更新会整体替换该 AlertPlan 的规则列表，未列出的旧规则会消失'] : []),
+      ...unrequested.map(
+        (index) =>
+          `规则 ${index + 1}「${describeAlertRule(rules[index] ?? {})}」未在你这条消息里出现；` +
+          '确认前请核实是否确实需要，不需要请点「修改要求」',
+      ),
+      ...(numbers === undefined && rules.length > 1
+        ? [`本草案含 ${rules.length} 条规则，请逐条核对是否都是你要求的`]
+        : []),
+    ],
+  };
+};
 
 const CASH_FLOW_LABELS: Readonly<Record<PortfolioCashFlowKind, string>> = {
   deposit: '入金',
@@ -233,20 +364,8 @@ const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
       ],
     };
   },
-  create_alert_plan: (raw, parsed) => ({
-    targetObject: `AlertPlan「${text(parsed.name)}」`,
-    fields: [
-      field(raw, parsed, 'name', '名称'),
-      field(raw, parsed, 'watchlistId', '关联 Watchlist'),
-      field(
-        raw,
-        parsed,
-        'rules',
-        '规则数',
-        Array.isArray(parsed.rules) ? parsed.rules.length : undefined,
-      ),
-    ],
-  }),
+  create_alert_plan: alertPlanSummary,
+  save_alert_plan: alertPlanSummary,
   save_decision_review: (raw, parsed) => {
     const subject = asRecord(parsed.subject);
     const content = asRecord(parsed.content);
@@ -319,12 +438,16 @@ export interface SummarizeDraftArgs {
   readonly parsed: ParsedInput;
   /** tool 描述，用于回落投影的 targetObject */
   readonly description: string;
+  /** 触发本轮草案的用户消息原文；缺省时无法比对「是否用户要求」 */
+  readonly userRequest?: string;
 }
 
 export const summarizeDraft = (args: SummarizeDraftArgs): DraftDisplay => {
   const raw = asRecord(args.input);
   const summarizer = SUMMARIZERS[args.tool];
-  const spec = summarizer?.(raw, args.parsed);
+  const spec = summarizer?.(raw, args.parsed, {
+    ...(args.userRequest === undefined ? {} : { userRequest: args.userRequest }),
+  });
   return {
     targetObject: spec?.targetObject ?? args.description,
     fields: [...(spec?.fields ?? genericFields(raw, args.parsed))],

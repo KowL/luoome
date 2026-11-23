@@ -3329,6 +3329,48 @@ describe('/api/chat：对话助手', () => {
     expect(await chatCtx.repos.advice.listOutcomes()).toEqual([]);
   });
 
+  it('save_alert_plan 草案只列用户点名的规则，多余规则标出待逐条核实', async () => {
+    await createSession('alert-draft');
+    await chat(chatApp, {
+      sessionId: 'alert-draft',
+      messages: [
+        {
+          id: 'user-1',
+          role: 'user',
+          parts: [{ type: 'text', text: '给宁德时代设预警：跌破 220 元提醒我' }],
+        },
+      ],
+    });
+    const draftTool = captured?.tools.find((item) => item.name === 'save_alert_plan');
+    const result = await draftTool?.execute({
+      name: '宁德预警',
+      watchlistId: 'watch-1',
+      rules: [
+        { id: 'r-1', kind: 'price-level', side: 'below', level: 220 },
+        { id: 'r-2', kind: 'price-change', pct: 0.02, direction: 'down' },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    const output = result?.output as
+      | {
+          draft: {
+            display?: {
+              fields: readonly { name: string; source: string }[];
+              ambiguous: readonly string[];
+            };
+          };
+        }
+      | undefined;
+    expect(output?.draft.display?.fields).toEqual(
+      expect.arrayContaining([
+        { name: '规则 1', value: '价格下穿 220 元', source: 'user' },
+        expect.objectContaining({ name: '规则 2', source: 'inferred' }),
+      ]),
+    );
+    expect(output?.draft.display?.ambiguous.join()).toContain('未在你这条消息里出现');
+    expect(await chatCtx.repos.alertPlan.list()).toHaveLength(0);
+  });
+
   it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
     await createSession('read-tools');
     await chat(chatApp, {
@@ -3983,6 +4025,7 @@ const stubMarketManager = (opts: {
 }): LimitUpMarketManagerLike => ({
   name: 'limit-up-market',
   sources: ['fuyao'],
+  status: () => [],
   fetchMarket: async (query): Promise<LimitUpMarketResultLike> => {
     if (opts.fail === true) {
       return {
@@ -4076,6 +4119,7 @@ const stubSectorQuoteManager = (opts: {
 }): SectorQuoteManagerLike => ({
   name: 'sector-quote',
   sources: ['eastmoney'],
+  status: () => [],
   fetchList: async (): Promise<SectorQuoteResultLike> => {
     if (opts.fail === true) {
       return {

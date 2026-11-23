@@ -107,7 +107,11 @@ Web、CLI 和 MCP 共用下列单机环境变量：
 | `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
-| `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
+| `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney`（免费） |
+| `LUOOME_LIMIT_UP_MARKET_SOURCES` | `fuyao` | 涨停市场看板（涨停池 + 统计 + 30 日矩阵）数据源顺序；当前仅注册付费的 `fuyao`（需 `FUYAO_API_KEY` 且 plugins.json 启用 `source.fuyao`）；免费替代是 `limit_up_ladder` |
+| `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney` | 行业板块行情数据源顺序；当前仅注册 `eastmoney`（免费） |
+| `LUOOME_NEWS_SOURCES` | `eastmoney,10jqka` | 财经要闻数据源顺序；两者均免费无需 key，备用源需在 plugins.json 启用 `source.10jqka` |
+| `LUOOME_DRAGON_TIGER_SOURCES` | `eastmoney` | 龙虎榜数据源顺序；当前仅注册 `eastmoney`（免费） |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_MCP_CONFIG` | `$LUOOME_HOME/mcp-servers.json` | Web Agent 的受控只读 MCP 客户端配置；可在 Web 设置页管理启停、工具和场景白名单，见[接入说明](./docs/USER_GUIDE.md#只读-mcp-服务供内置-agent-使用) |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时不会自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |

@@ -110,8 +110,9 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    * 读模型，天梯矩阵是接口固定的近 30 个交易日窗口，不随 date 变化。
    *
    * 参数：date (必填) YYYY-MM-DD
-   * 上游某维失败仍返回 200（该维 null + warnings）；三维全失败 / 未配置 FUYAO_API_KEY：
-   * 前者 502，后者 invalid_input 400。
+   * 上游某维失败仍返回 200（该维 null + warnings）；三维全失败 502。
+   * 未配置 fuyao（或 plugins.json 未启用 source.fuyao）：invalid_input 200，文案说明
+   * 只有付费源并指向免费的 limit_up_ladder，不引导用户去配 key。
    */
   app.get('/api/market/limit-up/market', async (c) => {
     const date = c.req.query('date');

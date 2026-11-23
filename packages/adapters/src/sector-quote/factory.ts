@@ -9,7 +9,8 @@ import { SectorQuoteManager } from './manager.js';
  * 行业板块行情 manager 装配根。
  *
  * 仿 `createNewsManagerFromEnv`（news/factory.ts）的位置与签名风格。
- * - 当前只支持东方财富板块公开 API，无鉴权
+ * - 当前只注册东方财富板块公开 API（免费、无鉴权）；新浪 / 腾讯 / 同花顺免费板块接口
+ *   尚未在本仓库验证过契约，因此不在此处假装注册
  * - 通过显式数据源配置装配；未知或重复来源在启动时失败
  * - 返回的 manager 同时满足 core `SectorQuoteManagerLike` 接口（structural typing）
  */
@@ -27,11 +28,17 @@ export const createSectorQuoteManagerFromEnv = (
 ): SectorQuoteManagerLike => {
   const runtime = deps.providerRuntime;
   if (runtime !== undefined)
-    return runtime.wrap('sector-quote', ['eastmoney'], () =>
-      buildCreateSectorQuoteManagerFromEnv(env, {
-        ...deps,
-        fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
-      }),
+    return runtime.wrap(
+      'sector-quote',
+      ['eastmoney'],
+      () =>
+        buildCreateSectorQuoteManagerFromEnv(env, {
+          ...deps,
+          fetchImpl: runtime.fetchFor('eastmoney', deps.fetchImpl),
+        }),
+      [],
+      '板块行情没有可用数据源：当前只注册了免费的东方财富（source.eastmoney），它在本机可能被启用但没有返回数据；' +
+        '其它免费板块源（新浪 / 腾讯 / 同花顺）尚未接入，不对其做静默回退',
     );
   return buildCreateSectorQuoteManagerFromEnv(env, deps);
 };

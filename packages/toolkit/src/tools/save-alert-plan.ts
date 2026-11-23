@@ -29,7 +29,9 @@ export const SaveAlertPlanOutput = z.object({ plan: AlertPlanSchema });
 export const saveAlertPlanTool = defineTool({
   name: 'save_alert_plan',
   description:
-    '创建或更新股票池盘中预警规则：带 alertPlanId 更新，否则创建（含触发条件、优先级、冷却与每日上限）',
+    '创建或更新股票池盘中预警规则：带 alertPlanId 更新，否则创建（含触发条件、优先级、冷却与每日上限）。' +
+    '只能写入用户本次明确说出的规则与阈值，不得自行追加涨跌幅、止盈止损或回撤规则，也不得因“更稳妙”扩大 Watchlist 范围；' +
+    '需求不完整时先追问，不要用默认规则补齐。',
   sideEffect: 'write',
   input: SaveAlertPlanInput,
   output: SaveAlertPlanOutput,

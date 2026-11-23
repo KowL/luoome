@@ -201,7 +201,11 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
   };
 };
 
-const buildChatTools = (ctx: ToolContext, scenario: AgentScenario): AgentCallableTool[] => {
+const buildChatTools = (
+  ctx: ToolContext,
+  scenario: AgentScenario,
+  userRequest: string,
+): AgentCallableTool[] => {
   ctx = {
     ...ctx,
     ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
@@ -270,6 +274,7 @@ const buildChatTools = (ctx: ToolContext, scenario: AgentScenario): AgentCallabl
                     input,
                     parsed: parsed.data as Record<string, unknown>,
                     description: registered.description,
+                    userRequest,
                   },
                   ctx,
                 ),
@@ -497,7 +502,7 @@ const createChatStreamResponseImpl = async (
   const loadedMessages = z
     .object({ messages: z.array(ChatMessageSchema) })
     .parse(loaded.data).messages;
-  const tools = buildChatTools(ctx, scenario);
+  const tools = buildChatTools(ctx, scenario, lastUserText);
   const uiMessages = modelHistory(loadedMessages);
   // SDK 会继续消费客户端已取消的流；保存回调结束前不能释放租户数据库。
   const release = retainRuntime?.();

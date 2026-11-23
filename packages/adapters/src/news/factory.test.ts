@@ -184,4 +184,58 @@ describe('createNewsManagerFromEnv', () => {
     expect(error.adapter).toBe('news');
     expect(error.message).toContain('network down');
   });
+
+  it('东方财富 502 → 同花顺备用源返回数据，结果记录实际 source', async () => {
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('eastmoney.com')) return new Response('bad gateway', { status: 502 });
+      return new Response(
+        JSON.stringify({
+          code: '200',
+          data: {
+            list: [
+              {
+                id: 'j1',
+                title: '备用源快讯：两市成交额回升',
+                digest: '同花顺快讯摘要',
+                ctime: 1_787_000_000,
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const m = createNewsManagerFromEnv(
+      { LUOOME_NEWS_SOURCES: 'eastmoney,10jqka' },
+      { logger: noopLogger, fetchImpl },
+    );
+    const r = await m.fetchNews({ page: 1, limit: 30 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data?.source).toBe('10jqka');
+    expect(r.data?.items[0]?.title).toContain('备用源快讯');
+    const status = m.status();
+    expect(status.find((item) => item.source === 'eastmoney')?.lastErrorKind).toBe(
+      'upstream_error',
+    );
+    expect(status.find((item) => item.source === '10jqka')?.lastSuccessAt).toBeInstanceOf(Date);
+  });
+
+  it('全部源失败时错误文案说明已尝试的源与启用备用源的入口', async () => {
+    const fetchImpl = (async () =>
+      new Response('bad gateway', { status: 502 })) as unknown as typeof fetch;
+    const m = createNewsManagerFromEnv({}, { logger: noopLogger, fetchImpl });
+    const r = await m.fetchNews({ page: 1, limit: 30 });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    const message = r.error?.message ?? '';
+    expect(message).toContain('所有财经要闻源均失败');
+    expect(message).toContain('eastmoney');
+    expect(message).toContain('10jqka');
+    expect(message).toContain('source.*');
+  });
 });

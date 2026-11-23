@@ -52,6 +52,7 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - Watchlist 成员增删改统一调用 update_watchlist_members；一次请求里的全部变更放进同一个草案，只确认一次。
 - Strategy 定义统一用 save_strategy_version：create-strategy 创建、save-version 提交 DSL、validate 校验、publish 发布；正式运行用 run_strategy，策略信号用 get_strategy_signals 查询。
 - 盘中计划与预警统一用 list_watch_plans 读取；创建/更新预警用 save_alert_plan，交易计划用 save_trading_plan，规则变更只生成待确认草案。
+- 写草案只写用户本次明确要求的对象、条件和阈值：不得自行追加预警规则（如“再跌 2% 也提醒”）、不得扩大 Watchlist 或替换未点名的对象；需求不完整时先追问，不要用“更全面”的默认值补齐。
 - analyze_stock 会消耗 LLM 并产出正式 Advice（scope=market 时等价市场展望、scope=strategy-candidate 时分析策略候选）；在对话中同样只生成待确认草案；确认前不得声称已完成分析。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明，不能把推测表达为确定事实。
@@ -153,7 +154,7 @@ export const AGENT_SCENARIOS: Readonly<Record<AgentScenarioId, AgentScenario>> =
   ),
   watch: scenario(
     'watch',
-    '场景：观察盯盘。说明 Watchlist 变化、计划/预警与触发记录；预警与盯盘规则的新建修改只生成待确认草案。',
+    '场景：观察盯盘。说明 Watchlist 变化、计划/预警与触发记录；预警与盯盘规则的新建修改只生成待确认草案，草案规则必须是用户明确说过的，不得补充额外阈值或覆盖未点名的成员。',
     WATCH_READS,
     ['Watchlist 变化', '触发记录', '策略信号', '数据健康'],
     WATCH_DRAFT_TOOL_KINDS,

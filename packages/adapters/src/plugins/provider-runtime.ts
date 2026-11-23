@@ -104,6 +104,7 @@ export class ProviderRuntime implements DataExecutionScopeLike {
     candidates: readonly S[],
     build: (enabled: readonly S[], guard: ProviderGuard) => T | undefined,
     dependencies: readonly string[] = [],
+    unavailableMessage?: string,
   ): T {
     const routeToken = { id: randomUUID() };
     type Graph = { value: T | undefined; guard: ProviderGuard };
@@ -174,7 +175,12 @@ export class ProviderRuntime implements DataExecutionScopeLike {
             this.track(check);
             validate();
             if (graph.value === undefined)
-              throw new SourceExecutionError('no_data', 'no ready data providers');
+              throw new SourceExecutionError(
+                'no_data',
+                unavailableMessage ??
+                  `没有可用的数据源：${route} 的候选源 ${candidates.join(', ')} 均未启用；` +
+                    '请在设置页的 plugins.json 中启用至少一个 source.* 开关',
+              );
             const result = await Reflect.apply(
               Reflect.get(graph.value, key) as (...args: unknown[]) => unknown,
               graph.value,

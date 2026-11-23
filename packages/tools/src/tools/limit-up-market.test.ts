@@ -43,6 +43,7 @@ const mkManager = (
 ): LimitUpMarketManagerLike => ({
   name: 'limit-up-market',
   sources: ['fuyao'],
+  status: () => [],
   fetchMarket,
 });
 

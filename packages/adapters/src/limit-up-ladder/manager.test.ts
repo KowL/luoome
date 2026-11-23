@@ -253,7 +253,7 @@ describe('LimitUpLadderManager', () => {
       if (r.ok) return;
       expect(r.error.kind).toBe('adapter_error');
       expect(r.error.adapter).toBe('limit-up-ladder');
-      expect(r.error.message).toMatch(/all sources failed/);
+      expect(r.error.message).toMatch(/所有连板天梯源均失败/);
       expect(r.error.message).toContain('eastmoney down');
     });
 
@@ -353,7 +353,9 @@ describe('LimitUpLadderManager', () => {
       const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
       expect(r.ok).toBe(false);
       if (r.ok) return;
-      expect(r.error.message).toMatch(/all sources failed \(eastmoney → stub-fallback\)/);
+      expect(r.error.message).toMatch(
+        /所有连板天梯源均失败（已尝试 东方财富（eastmoney） → stub-fallback）/,
+      );
       expect(r.error.message).toContain('stub-fallback down');
     });
 

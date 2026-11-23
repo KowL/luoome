@@ -704,7 +704,12 @@ export const renderLimitUpLadder = async (setStatus) => {
       el('section', 'card lum-panel', [
         el('h2', '', '加载失败'),
         el('p', 'error', result.message),
-        el('p', 'muted', '若提示 FUYAO_API_KEY 未配置，请在项目 .env 中配置后重启 luoome web。'),
+        el(
+          'p',
+          'muted',
+          '本页数据来自付费源 fuyao（需要 FUYAO_API_KEY，并在 plugins.json 启用 source.fuyao）；' +
+            '不配置付费源也能用免费的东方财富连板天梯（继续对话让助手调用 limit_up_ladder）查看当日涨停池。',
+        ),
       ]),
     ]);
     setStatus(`涨停梯队加载失败：${result.message}`, true);

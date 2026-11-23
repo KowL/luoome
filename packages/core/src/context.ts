@@ -333,6 +333,8 @@ export interface LimitUpMarketManagerLike {
   readonly name: 'limit-up-market';
   readonly sources: readonly string[];
   fetchMarket(query: LimitUpMarketQuery): Promise<LimitUpMarketResultLike>;
+  /** 进程内源健康观测（各源尝试 / 成功 / 失败）。 */
+  status(): readonly SourceStatus[];
 }
 
 /**
@@ -451,4 +453,6 @@ export interface SectorQuoteManagerLike {
   readonly name: 'sector-quote';
   readonly sources: readonly string[];
   fetchList(query: FetchSectorQuotesQuery): Promise<SectorQuoteResultLike>;
+  /** 进程内源健康观测（各源尝试 / 成功 / 失败）。 */
+  status(): readonly SourceStatus[];
 }
