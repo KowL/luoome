@@ -16,6 +16,8 @@ import type { ChatStreamRuntime } from './chat.js';
 import { buildWebContext, resolveDbPath, type WebSourceSet } from './context.js';
 import { startDailyJudgmentScheduler } from './daily-judgment-scheduler.js';
 import { createDshChatRuntimeFromStore } from './dsh/chat-runtime.js';
+import { loadDshSessionRetentionPolicy } from './dsh/config.js';
+import { collectExpiredDshSessions } from './dsh/session-store.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { appServiceTool } from './http/app-service.js';
 import { jsonResult, notFound, parseJsonObject, permissionDenied } from './http/result.js';
@@ -391,6 +393,24 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const mcpSettingsStore = new McpSettingsStore(runtimeEnv);
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
+  if (chatStreamRuntime?.sessionsRoot !== undefined) {
+    const retention = loadDshSessionRetentionPolicy(runtimeEnv);
+    if (retention.mode !== 'off') {
+      try {
+        const report = await collectExpiredDshSessions({
+          repos: ctx.repos,
+          sessionsRoot: chatStreamRuntime.sessionsRoot,
+          policy: retention,
+          activeSessions: chatStreamRuntime.control.activeSessions(),
+        });
+        console.log(
+          `[dsh] 会话目录保留策略（${report.mode}）：扫描 ${report.scanned}，删除 ${report.removed.length}，保留 ${report.retained.length}，跳过 ${report.skipped.length}`,
+        );
+      } catch (error) {
+        ctx.logger.warn('[dsh] 会话目录保留策略执行失败，已保持原状', { err: String(error) });
+      }
+    }
+  }
   const pluginTasks = { current: undefined as PluginTasks | undefined };
   const app = createWebApp(ctx, {
     pluginTasks,

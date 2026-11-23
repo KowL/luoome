@@ -1,5 +1,6 @@
 import { expect, it } from 'bun:test';
 import { fetch as nativeFetch } from 'bun';
+import { ModelBudgetLedger } from './model-budget.js';
 import { createDshRunProxy } from './run-proxy.js';
 
 it('authenticates each audience and forwards only trusted model headers through the supplied transport', async () => {
@@ -215,6 +216,155 @@ it('stops retrying when the run aborts during backoff', async () => {
     const response = await pending;
     expect(response.status).toBe(502);
     expect(attempts).toBe(1);
+  } finally {
+    await proxy.stop();
+  }
+}, 10_000);
+
+const sseUsage = (prompt: number, completion: number) =>
+  `data: ${JSON.stringify({ id: 'fixture', choices: [], usage: { prompt_tokens: prompt, completion_tokens: completion } })}\n\ndata: [DONE]\n\n`;
+
+it('admits and settles every model attempt against the same server ledger', async () => {
+  const ledger = new ModelBudgetLedger({ maxTokens: 60, maxRequests: 10, windowMs: 60_000 });
+  let attempts = 0;
+  const proxy = createDshRunProxy({
+    runId: 'budget',
+    manifestHash: 'fixture',
+    expiresAt: Date.now() + 10_000,
+    signal: new AbortController().signal,
+    executeTool: async () => ({
+      kind: 'rejected',
+      error: { code: 'permission_denied', message: 'unused' },
+    }),
+    budget: { ledger, accountId: 'account-1' },
+    model: {
+      endpoint: 'https://provider.invalid/chat/completions',
+      model: 'fixture-model',
+      headers: {},
+      fetch: (async () => {
+        attempts += 1;
+        return new Response(sseUsage(30, 0));
+      }) as unknown as typeof fetch,
+    },
+  });
+  const send = () =>
+    nativeFetch(proxy.model.endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${proxy.model.token}`,
+        'x-luoome-run-id': 'budget',
+      },
+      body: JSON.stringify({ model: 'fixture-model', max_tokens: 30 }),
+    });
+  try {
+    const first = await send();
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(ledger.snapshot('account-1')).toMatchObject({ tokensUsed: 30, tokensReserved: 0 });
+    const second = await send();
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(ledger.snapshot('account-1')).toMatchObject({ tokensUsed: 60, tokensReserved: 0 });
+    const rejected = await send();
+    expect(rejected.status).toBe(402);
+    expect(await rejected.json()).toEqual({ error: 'budget_exhausted', reason: 'tokens' });
+    expect(attempts).toBe(2);
+  } finally {
+    await proxy.stop();
+  }
+}, 10_000);
+
+it('counts retries as attempts and stops retrying once the ledger is exhausted', async () => {
+  const ledger = new ModelBudgetLedger({ maxTokens: 10_000, maxRequests: 1, windowMs: 60_000 });
+  let attempts = 0;
+  const proxy = createDshRunProxy({
+    runId: 'budget-retry',
+    manifestHash: 'fixture',
+    expiresAt: Date.now() + 10_000,
+    signal: new AbortController().signal,
+    executeTool: async () => ({
+      kind: 'rejected',
+      error: { code: 'permission_denied', message: 'unused' },
+    }),
+    budget: { ledger, accountId: 'account-1' },
+    model: {
+      endpoint: 'https://provider.invalid/chat/completions',
+      model: 'fixture-model',
+      headers: {},
+      maxRetries: 3,
+      fetch: (async () => {
+        attempts += 1;
+        return new Response('busy', { status: 503 });
+      }) as unknown as typeof fetch,
+    },
+  });
+  try {
+    const response = await nativeFetch(proxy.model.endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${proxy.model.token}`,
+        'x-luoome-run-id': 'budget-retry',
+      },
+      body: JSON.stringify({ model: 'fixture-model', max_tokens: 100 }),
+    });
+    expect(response.status).toBe(402);
+    expect(attempts).toBe(1);
+    expect(ledger.snapshot('account-1')).toMatchObject({
+      unknownAttempts: 1,
+      tokensUnknown: 100,
+      requests: 1,
+    });
+  } finally {
+    await proxy.stop();
+  }
+}, 10_000);
+
+it('records an interrupted stream as unknown cost instead of zeroing it', async () => {
+  const ledger = new ModelBudgetLedger({ maxTokens: 1_000, maxRequests: 10, windowMs: 60_000 });
+  const encoder = new TextEncoder();
+  const proxy = createDshRunProxy({
+    runId: 'budget-abort',
+    manifestHash: 'fixture',
+    expiresAt: Date.now() + 10_000,
+    signal: new AbortController().signal,
+    executeTool: async () => ({
+      kind: 'rejected',
+      error: { code: 'permission_denied', message: 'unused' },
+    }),
+    budget: { ledger, accountId: 'account-1' },
+    model: {
+      endpoint: 'https://provider.invalid/chat/completions',
+      model: 'fixture-model',
+      headers: {},
+      fetch: (async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"choices":[]}\n\n'));
+              // 上游在最终 usage 之前断流。
+              controller.error(new Error('provider-truncated'));
+            },
+          }),
+        )) as unknown as typeof fetch,
+    },
+  });
+  try {
+    const response = await nativeFetch(proxy.model.endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${proxy.model.token}`,
+        'x-luoome-run-id': 'budget-abort',
+      },
+      body: JSON.stringify({ model: 'fixture-model', max_tokens: 200 }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(ledger.snapshot('account-1')).toMatchObject({
+      tokensUnknown: 200,
+      unknownAttempts: 1,
+      tokensUsed: 200,
+      tokensReserved: 0,
+    });
   } finally {
     await proxy.stop();
   }

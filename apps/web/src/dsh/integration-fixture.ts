@@ -9,6 +9,9 @@ import { McpSettingsStore } from '../mcp-settings.js';
 import { createWebApp } from '../server.js';
 import { DshChatRuntime } from './chat-runtime.js';
 import { loadDshDevelopmentConfig } from './config.js';
+import type { ModelBudgetLedger } from './model-budget.js';
+import type { DshRolloutGate } from './rollout.js';
+import type { DshRuntimeControl } from './run-control.js';
 
 const encoder = new TextEncoder();
 export const FIXTURE_WEB_URL = 'https://research.example.test/facts';
@@ -27,6 +30,12 @@ export const createDshIntegrationFixture = async (
     readonly transientProviderFailures?: number;
     /** 前 N 次上游请求直接抛错（模拟超时/连接中断），用于验证可重试传输失败。 */
     readonly transientProviderTimeouts?: number;
+    /** 共享的模型预算账本；用于验证预算耗尽后拒绝下一次 attempt。 */
+    readonly budget?: ModelBudgetLedger;
+    /** 共享运行闸门；restart 后仍指向同一实例，用于验证排空/账户阻断。 */
+    readonly control?: DshRuntimeControl;
+    /** 共享灰度门控；可在测试中 update 验证回退。 */
+    readonly rollout?: DshRolloutGate;
   } = {},
 ) => {
   const nodePath = Bun.which('node');
@@ -233,6 +242,9 @@ export const createDshIntegrationFixture = async (
     const chatStreamRuntime = new DshChatRuntime({
       ...dsh,
       sessionsRoot: join(root, 'dsh-sessions'),
+      ...(options.budget === undefined ? {} : { budget: options.budget }),
+      ...(options.control === undefined ? {} : { control: options.control }),
+      ...(options.rollout === undefined ? {} : { rollout: options.rollout }),
       externalMcp: (ctx, scenario) => discoverExternalMcpTools(externalMcpConfig, ctx, scenario),
       model: {
         endpoint: 'https://provider.example.test/v1/chat/completions',

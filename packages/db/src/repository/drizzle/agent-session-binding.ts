@@ -5,7 +5,7 @@ import {
   type AgentSessionContextMode,
   assertAgentSessionBindingInvariants,
 } from '@luoome/core';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, isNull, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { agentSessionBindings, type Schema } from '../../schema/index.js';
 
@@ -70,6 +70,20 @@ export class DrizzleAgentSessionBindingRepository implements AgentSessionBinding
       .values(row)
       .onConflictDoUpdate({ target: agentSessionBindings.conversationId, set: row })
       .run();
+  }
+
+  async list(options?: { readonly accountId?: string }): Promise<readonly AgentSessionBinding[]> {
+    const rows = this.db
+      .select()
+      .from(agentSessionBindings)
+      .where(
+        options?.accountId === undefined
+          ? undefined
+          : eq(agentSessionBindings.accountId, options.accountId),
+      )
+      .orderBy(asc(agentSessionBindings.updatedAt))
+      .all();
+    return rows.map(toBinding);
   }
 
   async claim(binding: AgentSessionBinding): Promise<boolean> {

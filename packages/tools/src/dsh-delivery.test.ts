@@ -17,6 +17,12 @@ class FakeBindingRepository implements AgentSessionBindingRepository {
     return this.binding?.conversationId === conversationId ? { ...this.binding } : null;
   }
 
+  async list(options?: { readonly accountId?: string }): Promise<readonly AgentSessionBinding[]> {
+    if (this.binding === null) return [];
+    if (options?.accountId !== undefined && this.binding.accountId !== options.accountId) return [];
+    return [{ ...this.binding }];
+  }
+
   async save(binding: AgentSessionBinding): Promise<void> {
     assertAgentSessionBindingInvariants(binding);
     this.binding = { ...binding };

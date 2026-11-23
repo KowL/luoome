@@ -724,6 +724,8 @@ export interface ChatRepository {
  */
 export interface AgentSessionBindingRepository {
   findByConversation(conversationId: string): Promise<AgentSessionBinding | null>;
+  /** 按 updatedAt 升序枚举绑定；供会话目录保留策略与账户删除使用。 */
+  list(options?: { readonly accountId?: string }): Promise<readonly AgentSessionBinding[]>;
   /** 创建或整体覆盖（仅用于初始化与状态修正，竞态场景用下面三个 CAS 方法）。 */
   save(binding: AgentSessionBinding): Promise<void>;
   /** 认领本轮投递；已有其它 pending 或行不存在时返回 false。 */

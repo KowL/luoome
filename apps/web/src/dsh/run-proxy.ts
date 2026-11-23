@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { type JsonValue, ToolCallSchema } from '@luoome/dsh-bridge/protocol';
+import type { ModelAttemptUsage, ModelBudgetDecision, ModelBudgetLedger } from './model-budget.js';
 import type { GatewayExecutionResult } from './tool-gateway.js';
 
 export interface DshRunProxyOptions {
@@ -16,6 +17,11 @@ export interface DshRunProxyOptions {
     readonly maxRetries?: number;
   };
   readonly executeTool: (request: unknown) => Promise<GatewayExecutionResult>;
+  /** 每次供应商 attempt 都经同一服务端账本准入与结算；缺省不计量。 */
+  readonly budget?: {
+    readonly ledger: ModelBudgetLedger;
+    readonly accountId: string;
+  };
   readonly authorizeNative?: (call: {
     readonly callId: string;
     readonly url: string;
@@ -47,6 +53,48 @@ const waitForRetry = (ms: number, signal: AbortSignal): Promise<void> => {
   });
 };
 
+/**
+ * 从转发的 SSE 里提取供应商尾部 usage；供应商帧对转发路径不透明，只取可核实的 token 数。
+ * 解析失败或没有 usage 时不猜测，交由调用方记为 unknown。
+ */
+const createUsageScanner = () => {
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let usage: ModelAttemptUsage | undefined;
+  const accept = (line: string): void => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (data === '' || data === '[DONE]') return;
+    let frame: unknown;
+    try {
+      frame = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (frame === null || typeof frame !== 'object' || Array.isArray(frame)) return;
+    const raw = (frame as { usage?: unknown }).usage;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const prompt = (raw as { prompt_tokens?: unknown }).prompt_tokens;
+    const completion = (raw as { completion_tokens?: unknown }).completion_tokens;
+    if (typeof prompt !== 'number' || typeof completion !== 'number') return;
+    if (!Number.isFinite(prompt) || !Number.isFinite(completion)) return;
+    usage = { inputTokens: prompt, outputTokens: completion };
+  };
+  return {
+    push(chunk: Uint8Array): void {
+      buffered += decoder.decode(chunk, { stream: true });
+      let boundary = buffered.indexOf('\n');
+      while (boundary >= 0) {
+        accept(buffered.slice(0, boundary).replace(/\r$/, ''));
+        buffered = buffered.slice(boundary + 1);
+        boundary = buffered.indexOf('\n');
+      }
+      if (buffered.length > 1_000_000) buffered = '';
+    },
+    result: (): ModelAttemptUsage | null => usage ?? null,
+  };
+};
+
 /** A per-run private listener; only the model route receives trusted provider credentials. */
 export const createDshRunProxy = (options: DshRunProxyOptions) => {
   const toolToken = randomBytes(32).toString('hex');
@@ -55,6 +103,7 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
   const abort = new AbortController();
   const signal = AbortSignal.any([abort.signal, options.signal]);
   const nativeCalls = new Map<string, { url: string; allowed: boolean }>();
+  let budgetDenial: 'tokens' | 'requests' | null = null;
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -98,10 +147,36 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
           if (body.model !== options.model.model) return json({ error: 'model_denied' }, 403);
           const requestSignal = AbortSignal.any([signal, request.signal]);
           const maxRetries = Math.max(0, Math.min(options.model.maxRetries ?? 0, 5));
+          const requestedTokens = body.max_tokens;
+          const reserveTokens =
+            typeof requestedTokens === 'number' && Number.isFinite(requestedTokens)
+              ? Math.trunc(requestedTokens)
+              : 1024;
+          const admit = (): ModelBudgetDecision | undefined =>
+            options.budget === undefined
+              ? undefined
+              : options.budget.ledger.admit({
+                  accountId: options.budget.accountId,
+                  runId: options.runId,
+                  maxTokens: reserveTokens,
+                });
+          const settle = (
+            decision: ModelBudgetDecision | undefined,
+            usage: ModelAttemptUsage | null,
+          ): void => {
+            if (decision?.kind === 'admitted')
+              options.budget?.ledger.settle(decision.attemptId, usage);
+          };
+          let charged: ModelBudgetDecision | undefined;
           const fetchModel = async (): Promise<Response> => {
             for (let attempt = 0; ; attempt += 1) {
               if (requestSignal.aborted || Date.now() >= options.expiresAt)
                 return json({ error: 'run_closed' }, 403);
+              const decision = admit();
+              if (decision?.kind === 'exhausted') {
+                budgetDenial = decision.reason;
+                return json({ error: 'budget_exhausted', reason: decision.reason }, 402);
+              }
               let response: Response | undefined;
               let failure: unknown;
               try {
@@ -115,13 +190,22 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
               } catch (error) {
                 failure = error;
               }
-              if (requestSignal.aborted) throw failure ?? requestSignal.reason;
+              if (requestSignal.aborted) {
+                // 已经可能发出请求但拿不到 usage：未知成本保留预占，不归零。
+                settle(decision, null);
+                throw failure ?? requestSignal.reason;
+              }
               const retryable = response === undefined || RETRYABLE_STATUS.has(response.status);
               if (!retryable || attempt >= maxRetries) {
-                if (response !== undefined) return response;
+                if (response !== undefined) {
+                  charged = decision;
+                  return response;
+                }
+                settle(decision, null);
                 throw failure ?? new Error('model request failed');
               }
               await response?.body?.cancel().catch(() => {});
+              settle(decision, null);
               const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
               console.warn(
                 `[dsh] 模型上游${response === undefined ? '连接失败' : `返回 ${response.status}`}，${delay}ms 后重试（${attempt + 1}/${maxRetries}）`,
@@ -130,7 +214,12 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
             }
           };
           const response = await fetchModel();
-          if (response.body === null) return response;
+          if (response.body === null) {
+            settle(charged, null);
+            return response;
+          }
+          // 只在计量开启时扫描尾部 usage：账本按供应商真实 token 结算，而非 DSH 累计值。
+          const usage = options.budget === undefined ? undefined : createUsageScanner();
           const reader = response.body.getReader();
           const bodyStream = new ReadableStream<Uint8Array>({
             async pull(controller) {
@@ -138,15 +227,21 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
                 const chunk = await reader.read();
                 if (chunk.done) {
                   reader.releaseLock();
+                  settle(charged, usage?.result() ?? null);
                   controller.close();
-                } else controller.enqueue(chunk.value);
+                } else {
+                  usage?.push(chunk.value);
+                  controller.enqueue(chunk.value);
+                }
               } catch {
                 // A truncated stream fails the Host's terminal-receipt check; raw transport errors stay private.
                 reader.releaseLock();
+                settle(charged, null);
                 controller.close();
               }
             },
             async cancel() {
+              settle(charged, null);
               await reader.cancel().catch(() => {});
               reader.releaseLock();
             },
@@ -164,6 +259,8 @@ export const createDshRunProxy = (options: DshRunProxyOptions) => {
     gateway: { endpoint: `${origin}/tools`, token: toolToken },
     model: { endpoint: `${origin}/model/chat/completions`, token: modelToken },
     native: { endpoint: `${origin}/native`, token: nativeToken },
+    /** 本次 run 是否因预算耗尽被拒；供上层给出确定失败文案。 */
+    budgetDenial: (): 'tokens' | 'requests' | null => budgetDenial,
     async stop() {
       abort.abort();
       await server.stop(true);

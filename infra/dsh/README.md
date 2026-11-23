@@ -44,6 +44,9 @@ bun --no-env-file apps/web/src/dsh/integration-fixture.ts
 | `LUOOME_DSH_NODE_PATH` | Node 可执行文件的绝对路径，不能使用 Bun |
 | `LUOOME_DSH_HOST_ENTRY` | 可选，Host 构建产物的绝对路径；默认使用仓库内产物 |
 | `LUOOME_DSH_ALLOW_WEB_FIXTURES=true`、`LUOOME_DSH_WEB_FIXTURES_FILE` | 可选且必须成对配置；文件为绝对路径、URL 到 HTML 字符串的 JSON 映射 |
+| `LUOOME_DSH_MODEL_BUDGET_TOKENS`、`LUOOME_DSH_MODEL_BUDGET_REQUESTS`、`LUOOME_DSH_MODEL_BUDGET_WINDOW_HOURS` | 可选；显式配置后每个供应商 attempt（含重试）在发送前预占、结束后按真实 usage 结算，未知成本记为 unknown 不归零 |
+| `LUOOME_DSH_SESSION_GC=off\|dry-run\|enforce`、`LUOOME_DSH_SESSION_RETENTION_DAYS` | 默认 `off`（不触碰会话目录）；`enforce` 仅清理超过保留期且非 active/在途的 `$LUOOME_HOME/dsh-sessions/<hash>`，保留期默认 30 天 |
+| `LUOOME_DSH_ROLLOUT=off`、`LUOOME_DSH_ROLLOUT_PERCENT`、`LUOOME_DSH_ROLLOUT_ACCOUNTS` | 灰度门控；启用 DSH 后默认全量放行，按账户 allowlist 与稳定百分比收窄，`off` 为一键回退 |
 
 当前 Web 原生网页能力仅开放显式 fixture。每轮使用已保存的完整可信历史重建临时 DSH Session，
 超过历史上限会明确拒绝，不静默截断。停止后可以用“核对会话状态”读取已保存结果；
@@ -65,7 +68,10 @@ Host 可以顺序复用，每轮保守地建立新的 DSH Session 和 run 绑定
 跨进程 callId 由插件按 DSH registry 的执行 token 分配，Gateway、原生授权与 UI 事件使用同一身份；
 模型提供的调用 ID 只留在 DSH 内部，重复的模型 ID 不会合并不同执行或混用回执。
 模型适配器只向固定 loopback Chat Completions SSE 代理发送请求，使用独立凭证和 run 绑定。
-该代理须复用现有费用账本，先准入再发送，流结束后处理供应商 usage/unknown；Host 的调用上限不是账本。
+该代理按每次供应商 attempt 在同一服务端账本内先准入再发送，结束后用尾部 usage 结算；
+取消/断流/崩溃等无法确认 usage 的情况保留预占并记为 unknown（不归零）。
+Host 的调用上限不是账本。
+升级或维护时先停止接收新 run，再等待在途 run 排空；排空期间新请求得到确定错误而非排队。
 所有内部 HTTP 请求禁止重定向。控制凭证不放入模型参数或 prompt。
 
 原生能力只允许官方 `web_fetch`。每次调用都重新向独立授权端点 POST `ToolCall`，要求

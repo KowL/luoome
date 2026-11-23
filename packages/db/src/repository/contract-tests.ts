@@ -5418,6 +5418,22 @@ export const registerRepositoryContractTests = (
         await repos.agentSessionBinding.remove('c1');
         expect(await repos.agentSessionBinding.findByConversation('c1')).toBeNull();
       });
+
+      it('list 按 updatedAt 升序枚举，可按账户过滤', async () => {
+        await repos.agentSessionBinding.save(bound({ conversationId: 'c2', updatedAt: T2 }));
+        await repos.agentSessionBinding.save(bound({ conversationId: 'c1', updatedAt: T1 }));
+        await repos.agentSessionBinding.save(
+          bound({ conversationId: 'c3', accountId: 'account-2', updatedAt: T1 }),
+        );
+        expect((await repos.agentSessionBinding.list()).map((item) => item.conversationId)).toEqual(
+          ['c1', 'c3', 'c2'],
+        );
+        expect(
+          (await repos.agentSessionBinding.list({ accountId: 'account-1' })).map(
+            (item) => item.conversationId,
+          ),
+        ).toEqual(['c1', 'c2']);
+      });
     });
   });
 };

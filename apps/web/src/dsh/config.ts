@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { WEB_FETCH_MANIFEST_ENTRY } from '@luoome/dsh-bridge/protocol';
 import { z } from 'zod';
 import type { DshChatRuntimeOptions } from './chat-runtime.js';
+import type { ModelBudgetPolicy } from './model-budget.js';
+import type { DshRolloutPolicy } from './rollout.js';
+import type { DshSessionRetentionPolicy } from './session-store.js';
 
 export interface DshDevelopmentConfig {
   readonly development: true;
@@ -50,4 +53,60 @@ export const loadDshDevelopmentConfig = (
     cwd: fileURLToPath(new URL('../../../../', import.meta.url)),
     ...(native === undefined ? {} : { native }),
   };
+};
+
+const integerEnv = (
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  if (value === undefined || value.trim() === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max)
+    throw new Error(`DSH numeric setting must be an integer in [${min}, ${max}]`);
+  return parsed;
+};
+
+/**
+ * 会话目录保留策略。默认 `off`：不配置就完全不触碰已有会话目录。
+ * `dry-run` 只记录将要清理的目录，`enforce` 才真正删除。
+ */
+export const loadDshSessionRetentionPolicy = (
+  env: Readonly<Record<string, string | undefined>>,
+): DshSessionRetentionPolicy => ({
+  mode: z.enum(['off', 'dry-run', 'enforce']).parse(env.LUOOME_DSH_SESSION_GC ?? 'off'),
+  retentionDays: integerEnv(env.LUOOME_DSH_SESSION_RETENTION_DAYS, 30, 1, 3650),
+});
+
+/**
+ * 模型预算账本。不配置总 token 上限时保持现状（不计量）；一旦配置，所有 DSH
+ * 供应商 attempt 都按同一账户账本准入与结算。
+ */
+export const loadDshModelBudgetPolicy = (
+  env: Readonly<Record<string, string | undefined>>,
+): ModelBudgetPolicy | undefined => {
+  const tokens = env.LUOOME_DSH_MODEL_BUDGET_TOKENS;
+  if (tokens === undefined || tokens.trim() === '') return undefined;
+  return {
+    maxTokens: integerEnv(tokens, 0, 1, 1_000_000_000),
+    maxRequests: integerEnv(env.LUOOME_DSH_MODEL_BUDGET_REQUESTS, 200, 1, 100_000),
+    windowMs: integerEnv(env.LUOOME_DSH_MODEL_BUDGET_WINDOW_HOURS, 24, 1, 24 * 365) * 3_600_000,
+  };
+};
+
+/**
+ * 灰度门控。DSH 运行时本身仍由 `LUOOME_CHAT_RUNTIME` 显式启用；启用后默认对本机账户
+ * 全量放行（保持既有开发入口），`LUOOME_DSH_ROLLOUT=off` 或百分比/allowlist 用于收窄与回退。
+ */
+export const loadDshRolloutPolicy = (
+  env: Readonly<Record<string, string | undefined>>,
+): DshRolloutPolicy => {
+  const enabled = env.LUOOME_DSH_ROLLOUT !== 'off';
+  const percent = integerEnv(env.LUOOME_DSH_ROLLOUT_PERCENT, 100, 0, 100);
+  const allowlist = (env.LUOOME_DSH_ROLLOUT_ACCOUNTS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  return { enabled, percent, accountAllowlist: allowlist };
 };

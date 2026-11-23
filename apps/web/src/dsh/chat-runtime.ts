@@ -22,11 +22,16 @@ import {
 import type { AISettingsStore } from '../ai-settings.js';
 import { ChatRuntimeRejection, type ChatStreamRuntime } from '../chat.js';
 import { DshChatProjection, type UIStreamPart } from './chat-projection.js';
+import { loadDshModelBudgetPolicy, loadDshRolloutPolicy } from './config.js';
 import { DshEventAdapter, terminalStageOf } from './event-adapter.js';
 import type { GatewayCaller } from './execution-scope.js';
 import { boundTrustedHistory } from './history-budget.js';
+import { type ModelBudgetLedger, sharedModelBudgetLedger } from './model-budget.js';
+import { type DshRolloutGate, sharedDshRolloutGate } from './rollout.js';
+import { DshRuntimeControl } from './run-control.js';
 import { createDshRunProxy } from './run-proxy.js';
 import { DshNodeHostClient } from './runtime-client.js';
+import { dshSessionDirectoryName } from './session-store.js';
 import { type GatewayAuthorizer, ToolGateway } from './tool-gateway.js';
 import { buildGatewayCallableManifest } from './tool-manifest.js';
 
@@ -55,6 +60,12 @@ export interface DshChatRuntimeOptions {
   ) => Promise<readonly ExternalMcpCallable[]>;
   /** 持久 DSH 会话根目录（绝对路径）；配置后可按 conversation 续接，否则每轮临时会话。 */
   readonly sessionsRoot?: string;
+  /** 进程内运行闸门：升级排空与账户级阻断都经它。 */
+  readonly control?: DshRuntimeControl;
+  /** 服务端模型调用账本；缺省不计量（仅测试/夹具路径）。 */
+  readonly budget?: ModelBudgetLedger;
+  /** 灰度门控；缺省不限制账户。 */
+  readonly rollout?: DshRolloutGate;
   readonly runTimeoutMs?: number;
   readonly maxActiveRuns?: number;
 }
@@ -72,6 +83,8 @@ const runInterruptedText = (stage: string | undefined): string =>
 const publicFailureText = (error: unknown): string => {
   if (error instanceof Error && error.message === 'DSH Host invalid_request')
     return '对话历史超过本地运行时上下文上限，请新建会话后继续；已保存的事实不会丢失。';
+  if (error instanceof Error && error.message === 'Model proxy rejected request (402)')
+    return '模型调用预算已用尽，本次执行已停止；请稍后或调整预算后再试，系统不会自动重跑。';
   if (error instanceof Error && error.message === 'DSH chat output limit exceeded')
     return '对话内容超过本地保存上限。请新建会话，并用更小的时间范围或分页条件重新查询。';
   if (error instanceof Error && error.message === 'DSH chat part limit exceeded')
@@ -109,6 +122,9 @@ const dshConfigHash = (input: {
     .digest('hex')}`;
 
 export class DshChatRuntime implements ChatStreamRuntime {
+  readonly control: DshRuntimeControl;
+  readonly sessionsRoot: string | undefined;
+
   constructor(private readonly options: DshChatRuntimeOptions) {
     if (
       options.development !== true ||
@@ -122,6 +138,8 @@ export class DshChatRuntime implements ChatStreamRuntime {
       throw new Error('DSH native capability requires separate fixture authorization');
     if (options.sessionsRoot !== undefined && !isAbsolute(options.sessionsRoot))
       throw new Error('DSH sessions root must be an absolute path');
+    this.control = options.control ?? new DshRuntimeControl();
+    this.sessionsRoot = options.sessionsRoot;
   }
 
   async createUIMessageStreamResponse(
@@ -131,7 +149,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
     if (execution === undefined) throw new Error('DSH requires trusted server execution context');
     if (execution.historyTruncated)
       throw new ChatRuntimeRejection('本实验不能截断已有上下文，请创建新会话并提供必要事实。');
-    const { context: ctx, conversationId, scenario } = execution;
+    const { context: ctx, conversationId } = execution;
     const key = JSON.stringify([ctx.user.id, ctx.user.defaultAccountId, conversationId]);
     if (
       activeConversations.has(key) ||
@@ -141,6 +159,37 @@ export class DshChatRuntime implements ChatStreamRuntime {
       throw new ChatRuntimeRejection('DSH 会话仍在执行或等待核对，请读取历史或创建新会话。');
     if (activeConversations.size + preparingConversations.size >= (this.options.maxActiveRuns ?? 2))
       throw new ChatRuntimeRejection('DSH 开发实例容量已满，请稍后再试。', 503);
+    if (
+      this.options.rollout !== undefined &&
+      !this.options.rollout.allows(ctx.user.defaultAccountId)
+    )
+      throw new ChatRuntimeRejection(
+        '当前账户未加入 DSH 实验运行时灰度，本次对话未启用该运行时。',
+        503,
+      );
+    const admission = this.control.tryEnter({
+      runId: execution.runId,
+      accountId: ctx.user.defaultAccountId,
+      conversationId,
+    });
+    if (admission.kind !== 'admitted') throw new ChatRuntimeRejection(admission.message, 503);
+    try {
+      return await this.startRun(request, execution, key, admission.release);
+    } catch (error) {
+      admission.release();
+      throw error;
+    }
+  }
+
+  private async startRun(
+    request: Parameters<ChatStreamRuntime['createUIMessageStreamResponse']>[0],
+    execution: NonNullable<
+      Parameters<ChatStreamRuntime['createUIMessageStreamResponse']>[0]['execution']
+    >,
+    key: string,
+    releaseAdmission: () => void,
+  ): Promise<Response> {
+    const { context: ctx, conversationId, scenario } = execution;
     const runId = execution.runId;
     const configRef = `development:${conversationId}`;
     const duration = this.options.runTimeoutMs ?? 180_000;
@@ -278,6 +327,9 @@ export class DshChatRuntime implements ChatStreamRuntime {
       expiresAt,
       signal,
       model: this.options.model,
+      ...(this.options.budget === undefined
+        ? {}
+        : { budget: { ledger: this.options.budget, accountId: ctx.user.defaultAccountId } }),
       executeTool: async (body) =>
         caller === undefined
           ? {
@@ -296,14 +348,11 @@ export class DshChatRuntime implements ChatStreamRuntime {
     });
     let host: DshNodeHostClient;
     const sessionHome =
-      this.options.sessionsRoot === undefined
+      this.sessionsRoot === undefined
         ? undefined
         : join(
-            this.options.sessionsRoot,
-            createHash('sha256')
-              .update(`${ctx.user.defaultAccountId}:${conversationId}`)
-              .digest('hex')
-              .slice(0, 32),
+            this.sessionsRoot,
+            dshSessionDirectoryName(ctx.user.defaultAccountId, conversationId),
           );
     try {
       const hostConfig = HostConfigSchema.parse({
@@ -444,6 +493,12 @@ export class DshChatRuntime implements ChatStreamRuntime {
       const cancelled = signal.aborted && drained;
       if (failed && !cancelled && failureText === ERROR_TEXT)
         failureText = runInterruptedText(adapter?.terminalStage ?? startupStage);
+      const budgetDenial = proxy.budgetDenial();
+      if (failed && !cancelled && budgetDenial !== null)
+        failureText =
+          budgetDenial === 'requests'
+            ? '模型调用次数已达预算上限，本次执行已停止；请稍后或调整预算后再试，系统不会自动重跑。'
+            : '模型调用预算已用尽，本次执行已停止；请稍后或调整预算后再试，系统不会自动重跑。';
       projection.end();
       projection.data('data-luoome-run', {
         runId,
@@ -511,17 +566,19 @@ export class DshChatRuntime implements ChatStreamRuntime {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();
       }
-    })().catch(async (error) => {
-      if (!settled) {
-        settled = true;
-        await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() }).catch(() => {});
-      }
-      blockedConversations.add(key);
-      if (!detached) {
-        emit({ type: 'error', errorText: publicFailureText(error) });
-        controller.close();
-      }
-    });
+    })()
+      .catch(async (error) => {
+        if (!settled) {
+          settled = true;
+          await abortDshTurn(ctx.repos, { conversationId, runId, now: new Date() }).catch(() => {});
+        }
+        blockedConversations.add(key);
+        if (!detached) {
+          emit({ type: 'error', errorText: publicFailureText(error) });
+          controller.close();
+        }
+      })
+      .finally(() => releaseAdmission());
     return new Response(stream, {
       headers: {
         'content-type': 'text/event-stream',
@@ -566,6 +623,7 @@ export const createDshChatRuntimeFromStore = (
     if (!view.baseURL || !view.model) return undefined;
     const apiKey = env[view.apiKeyEnv]?.trim();
     const endpoint = `${view.baseURL.replace(/\/+$/, '')}/chat/completions`;
+    const budgetPolicy = loadDshModelBudgetPolicy(env);
     return new DshChatRuntime({
       development: true,
       nodePath,
@@ -585,8 +643,10 @@ export const createDshChatRuntimeFromStore = (
         fetch: globalThis.fetch,
         maxRetries: view.maxRetries,
       },
-      // 会话日志落在 LUOOME_HOME 下（默认 ~/.luoome），用于同一会话的续接；历史清理不在本切片内。
+      // 会话日志落在 LUOOME_HOME 下（默认 ~/.luoome），用于同一会话的续接；保留策略见 session-store。
       sessionsRoot: join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'dsh-sessions'),
+      ...(budgetPolicy === undefined ? {} : { budget: sharedModelBudgetLedger(budgetPolicy) }),
+      rollout: sharedDshRolloutGate(loadDshRolloutPolicy(env)),
     });
   } catch {
     return undefined;
