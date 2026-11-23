@@ -22,7 +22,7 @@ registerRepositoryContractTests(
 );
 
 describe('drizzle AdviceRepository 读兼容', () => {
-  it('存量 basedOn JSON 含已下线的 tacticSignals key 时读出不 crash 且忽略该字段', async () => {
+  it('存量 basedOn JSON 含已下线的 tacticSignals / llmReasoning key 时读出不 crash 且忽略', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {
       const basedOn = JSON.stringify({
@@ -38,6 +38,7 @@ describe('drizzle AdviceRepository 读兼容', () => {
             evidence: ['放量突破'],
           },
         ],
+        llmReasoning: '原始模型响应全文',
         dataAsOf: '2026-07-01T00:00:00.000Z',
       });
       handle.db.run(sql`
@@ -55,6 +56,7 @@ describe('drizzle AdviceRepository 读兼容', () => {
       expect(got).not.toBeNull();
       expect(got?.basedOn.dataAsOf).toBeInstanceOf(Date);
       expect('tacticSignals' in (got?.basedOn ?? {})).toBe(false);
+      expect('llmReasoning' in (got?.basedOn ?? {})).toBe(false);
     } finally {
       handle.close();
     }

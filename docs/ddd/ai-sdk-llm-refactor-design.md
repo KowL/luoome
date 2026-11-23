@@ -37,7 +37,7 @@
 | MiniMax 等非标 provider 兼容 | `stripThinkAndFences`、schema 注入 system、`additionalProperties` 归一化 | 无 | **保留为 quirks 层**（§4.3） |
 | token 统计 | 无 | `result.usage` / `result.steps[i].usage` | **采用**（agent 成本上限依赖它） |
 | 测试假件 | `FakeLLMAdapter`（tool 层测试） | `ai/test` 的 `MockLanguageModelV3`（adapter 层测试） | **两者并存**（§8） |
-| `raw` 审计字段 | adapter 返回原始响应 JSON，进 `AdviceDataSnapshot.llmReasoning` | `result.response.body` / `result.text` / `result.steps` | **映射**（§4.4） |
+| `raw` 诊断字段 | adapter 返回原始响应 JSON，仅供调用方即时诊断 | `result.response.body` / `result.text` / `result.steps` | **映射**（§4.4；不写入 Advice.basedOn） |
 
 ## 3. 依赖引入
 
@@ -148,7 +148,7 @@ export class AISDKAdapter implements LLMAdapter {
 要点：
 
 - **契约不变**：正常路径由 `jsonSchema(..., { validate })` 调原 Zod schema 校验；quirks 恢复路径再次 `safeParse`。两路都只有校验成功才返回，失败抛错并由 Manager 触发 retry hint + 规则 fallback；`name` 格式不变。
-- **`raw` 审计字段**：`buildRaw(result) = JSON.stringify({ text: result.text, body: result.response.body ?? null, usage: result.usage })`。`AdviceDataSnapshot.llmReasoning` 的消费者只当字符串使用，格式变化兼容；迁移测试分别固定正常与 quirks 恢复路径的最小审计字段，不承诺保留 provider 私有响应的完整形状。
+- **`raw` 诊断字段**：`buildRaw(result) = JSON.stringify({ text: result.text, body: result.response.body ?? null, usage: result.usage })`。该字段只随生成结果返回，不写入 `Advice.basedOn`；迁移测试分别固定正常与 quirks 恢复路径的最小字段，不承诺保留 provider 私有响应的完整形状。
 - ** Anthropic 通道升级**：`structuredOutputMode: 'auto'` 让 Sonnet 4.5+ 走原生 `output_format`，老模型自动回退 jsonTool（与现 forced tool_use 等价）——这是顺手获得的稳定性升级，不是重构目标。
 - **temperature / maxOutputTokens**：由 profile 经 `defaultSettingsMiddleware` 注入；
   prompt 截断与超时也是 profile 字段。
@@ -256,7 +256,7 @@ Web 设置页是模型目录的主要用户入口：provider 切换会带出推�
 2. **MiniMax 等非标后端回归**：quirks 层（§4.3）三处逻辑原样搬移 + 专项测试；POC 第 1 周用 MiniMax 真实跑一次 `analyze_stock`。
 3. **升级 treadmill**：pin minor + SDK 隔离在 adapters 内；`bun run typecheck` 覆盖全部边界。
 4. **Bun 兼容性**：`ai` 是纯 ESM + fetch 风格，无已知 Bun 硬伤；POC 验证 `bun test` / `bun build`（`--packages external` 时 `ai` 不进 bundle，运行时解析）。
-5. **`raw` 格式变化**：消费者仅当字符串处理（审计快照），无结构化解析方；grep 确认 `llmReasoning` 无字段级消费后合入。
+5. **`raw` 格式变化**：消费者仅当字符串处理（即时诊断），无结构化解析方；`Advice.basedOn` 不保存原始响应。
 6. **LLMManager 与 SDK 重试叠加**：现 Manager 会重试所有异常，并非只重试 schema 失败；若保留 SDK 默认 `maxRetries: 2`，两轮 Manager 调用最多放大为 6 次 HTTP 尝试。Phase 1 因此固定 `maxRetries: 0`；未来启用 SDK 重试前必须先定义可重试错误、最大尝试次数和总 wall-clock budget。
 7. **副作用传递失真**：现有个别 `read` tool 内部会访问远端 adapter，不能仅按顶层 `sideEffect` 推导 agent 能力。Phase 2 对 `AGENT_V1_TOOL_NAMES` 逐项复核真实调用链，并用测试断言 write / advice / trade 永远不可达。
 8. **token 预算不是硬上限**：自定义 `stopWhen` 在已有 step 后判断，至少可能多消耗最后一次模型调用。`maxTotalTokens` 只作软停止条件；硬保护由 `stepCountIs`、`timeout.totalMs`、provider 侧额度共同承担，UI/日志展示实际 `totalUsage`。

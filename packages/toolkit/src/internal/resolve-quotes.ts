@@ -1,4 +1,10 @@
-import { dateInShanghai, type Quote, QuoteSchema, type ToolContext } from '@luoome/core';
+import {
+  dateInShanghai,
+  PluginExecutionDenied,
+  type Quote,
+  QuoteSchema,
+  type ToolContext,
+} from '@luoome/core';
 
 export type QuoteResolveContext = 'display' | 'intraday-rule' | 'post-market';
 
@@ -94,6 +100,8 @@ export const resolveQuotes = async (
       await Promise.all(liveQuotes.map((quote) => ctx.repos.quote.save(quote)));
       for (const quote of liveQuotes) fetched.set(quote.stockId, quote);
     } catch (error) {
+      // 授权 / 插件停用不是行情抖动，必须让调用方看到真实原因。
+      if (error instanceof PluginExecutionDenied) throw error;
       // 整批失败不向上抛：该批标的全部回落本地快照，避免一次抖动清空整页行情。
       ctx.logger.warn('resolveQuotes: 实时批量拉取失败，该批回退本地快照', {
         chunkSize: chunk.length,

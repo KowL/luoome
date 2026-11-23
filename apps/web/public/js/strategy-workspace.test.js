@@ -15,7 +15,7 @@ import {
   parseExperimentStockIds,
   removeExperimentSelectionRule,
 } from './strategy-workspace-experiment.js';
-import { renderInsights } from './strategy-workspace-insights.js';
+import { insightDegradationHint, renderInsights } from './strategy-workspace-insights.js';
 import {
   ADVANCED_TABS,
   BASIC_TABS,
@@ -618,6 +618,14 @@ describe('严格回测', () => {
 });
 
 describe('Phase B 洞察与调度', () => {
+  it('降级摘要说明插件停用 / 依赖未就绪的启用方法', () => {
+    expect(insightDegradationHint('plugin_disabled')).toContain('strategy.ai-insight');
+    expect(insightDegradationHint('plugin_disabled')).toContain('plugins.json');
+    expect(insightDegradationHint('dependency_not_ready')).toContain('LUOOME_EXPOSE_EXTERNAL=true');
+    expect(insightDegradationHint('provider_failed')).toContain('模型调用失败');
+    expect(insightDegradationHint(undefined)).toBeNull();
+  });
+
   it('先展示确定性事实，再由显式按钮生成带事实引用的 AI 解读', async () => {
     globalThis.fetch = async (path, init) => {
       const url = String(path);

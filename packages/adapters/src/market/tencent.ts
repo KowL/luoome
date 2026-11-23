@@ -19,7 +19,12 @@ import {
 } from '@luoome/core';
 import { ZodError } from 'zod';
 
-import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
+import {
+  httpStatusErrorKind,
+  isAbortError,
+  isPluginExecutionDenial,
+  SourceExecutionError,
+} from '../source-error.js';
 import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
 
 /**
@@ -691,7 +696,7 @@ export class TencentAdapter {
       // utf-8 解码无损，反转义由 parseTencentSearchHint 负责。
       return new TextDecoder(encoding as never).decode(buf);
     } catch (error) {
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       throw new TencentAdapterError(
         isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,
@@ -723,7 +728,7 @@ export class TencentAdapter {
         );
       }
     } catch (error) {
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       throw new TencentAdapterError(
         isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,

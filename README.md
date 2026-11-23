@@ -158,7 +158,7 @@ Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也�
 （`plugin_disabled` / `dependency_not_ready` / `provider_failed`）；每日判断与每周成绩单不调用策略解释模型，
 也不受该开关影响。生成洞察仍需原 external 授权。
 
-内置能力的启停只有一处：手写 `$LUOOME_HOME/plugins.json`，改完重启宿主生效。没有 CLI 命令，也没有 Web 管理页；缺省即关闭，启用不授予 write/external，也不改变工具白名单。可用的 id 与写法见[插件启用清单](./docs/USER_GUIDE.md#插件启用清单只读)。
+内置能力的启停只有一处：手写 `$LUOOME_HOME/plugins.json`，改完重启宿主生效。没有写入式管理面或 CLI 写命令；Web 设置 → 系统与 `luoome plugins check` 只做只读校验展示。缺省即关闭，启用不授予 write/external，也不改变工具白名单。可用的 id 与写法见[插件启用清单](./docs/USER_GUIDE.md#插件启用清单只读)。
 
 行情提供者与采集任务分别启停，全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据。策略执行由 `business.strategy-execution` 控制，策略没有独立定时器，每日判断按需运行少量 active 策略取当日信号。停用任一能力都不删除历史数据。
 

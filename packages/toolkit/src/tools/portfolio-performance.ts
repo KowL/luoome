@@ -513,7 +513,8 @@ const dataAsOfFor = (
 
 export const getAccountPerformanceTool = defineTool({
   name: 'get_account_performance',
-  description: '使用真实交易、现金流、公司行动和日线计算账户估值、TWR、回撤与持仓贡献',
+  description:
+    '使用真实交易、现金流、公司行动和日线计算账户估值、TWR、回撤与持仓贡献；手续费只作记录，不计入现金与成本，账户绩效计入手续费',
   sideEffect: 'external',
   input: GetAccountPerformanceInput,
   output: GetAccountPerformanceOutput,

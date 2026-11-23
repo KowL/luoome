@@ -62,6 +62,24 @@ describe('plugin enablement file', () => {
     expect(read.ok).toBe(true);
     expect(read.ok && Object.keys(read.config.entries)).toEqual(['business.analysis']);
     expect(store.isEnabled('business.analysis')).toBe(true);
+    expect(store.inspect()).toMatchObject({
+      ok: true,
+      unknownIds: ['not.a.plugin'],
+    });
+  });
+
+  it('inspect reports the file state without changing enablement semantics', () => {
+    const dir = home();
+    const store = new PluginConfigStore(join(dir, 'plugins.json'));
+    expect(store.inspect()).toEqual({ ok: false, reason: 'missing' });
+    writeFileSync(join(dir, 'plugins.json'), '{ not json');
+    expect(store.inspect()).toEqual({ ok: false, reason: 'invalid' });
+    write(dir, { version: 1, entries: { 'business.analysis': { enabled: true } } });
+    expect(store.inspect()).toEqual({
+      ok: true,
+      config: { version: 1, entries: { 'business.analysis': { enabled: true } } },
+      unknownIds: [],
+    });
   });
 
   it('still rejects a known id with a malformed entry', () => {

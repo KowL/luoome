@@ -8,13 +8,11 @@ import {
   PluginExecutionDenied,
   type ToolContext,
 } from '@luoome/core';
-import { sanitizeAdviceText } from '@luoome/toolkit/internal/sanitize-advice.js';
 import { z } from 'zod';
 
 export {
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
-  sanitizeAdviceText,
 } from '@luoome/toolkit/internal/sanitize-advice.js';
 
 /**
@@ -128,14 +126,4 @@ export const computeValidUntil = (horizon: AdviceHorizon, now: Date): Date => {
     CN_MARKET_OFFSET_MS;
   if (cutoffMs <= now.getTime()) cutoffMs += DAY_MS;
   return new Date(cutoffMs);
-};
-
-/**
- * core 的 LLMAdapterLike 投影不含 raw 字段（adapters 的 LLMGenerateResult 才有）；
- * 这里运行时提取：有则进 basedOn.llmReasoning 供审计，无则缺省。
- */
-export const extractLlmRaw = (value: unknown): string | undefined => {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const raw = (value as { raw?: unknown }).raw;
-  return typeof raw === 'string' && raw.length > 0 ? sanitizeAdviceText(raw) : undefined;
 };

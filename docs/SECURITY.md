@@ -132,7 +132,7 @@ function sanitizeAdviceReasoning(reasoning: string): string {
 }
 ```
 
-LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized 审计。展示时只在“展开推理”按钮后显示已清理文本，避免被复制粘贴造成下游 agent 误用。
+Advice 只保存结构化 `reasoning`、`risks` 与数据快照，不保存原始模型响应全文；原始响应不进 `Advice.basedOn`。展示时只在“展开推理”按钮后显示已清理文本，避免被复制粘贴造成下游 agent 误用。
 
 ## 暴露面配置（MCP / Web / CLI 共用）
 
@@ -262,7 +262,7 @@ Tool 的业务输入、业务输出和错误详情不写入 audit log；失败�
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
-Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外清理常见 prompt-injection 模式。
+Advice 的 `reasoning`、`risks` 在落库前额外清理常见 prompt-injection 模式；原始模型响应不写入 Advice。
 审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
 
 ## 上游信任
@@ -302,7 +302,7 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 
 ## DSH 运行时安全边界
 
-内置能力开关只来自使用者手写的 `$LUOOME_HOME/plugins.json`：进程启动时读入，没有 CLI 命令、Web 管理页或任何写入接口，模型与 Agent 均无权修改。
+内置能力开关只来自使用者手写的 `$LUOOME_HOME/plugins.json`：进程启动时读入，没有写入式管理面、CLI 写命令或任何写入接口；Web 设置页与 `luoome plugins check` 只读展示校验结果，模型与 Agent 均无权修改。
 启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。每次策略解释在发请求及发布结果前重查当前启用位与数据 scope。
 已发送模型请求无法撤回费用；停用只阻止后续请求和失效解释发布，组合仍可返回已获准的原窗口事实。
 配置缺失或损坏不默认启用；通用生产上下文缺少 P1/P2/P3 执行许可时拒绝受控入口。

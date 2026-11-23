@@ -787,8 +787,7 @@ export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
   readonly strategySignals?: readonly StrategySignal[];
-  readonly llmReasoning?: string;        // LLM 原始推理（用于审计）
-  readonly dataAsOf: Date;               // 数据截止时间
+  readonly dataAsOf: Date;               // 数据截止时间；不保存原始模型响应
 }
 
 // 建议结果的兼容输出；当前账户反馈由 DecisionReview.content.adviceFeedback 投影
@@ -889,7 +888,7 @@ export const analyzeStockTool = defineTool({
       risks: llmOutput.risks,
       disclaimers: STANDARD_DISCLAIMERS,
       sourceTool: 'analyze_stock',
-      basedOn: { quotes: { [input.stockId]: quote }, indicators: { [input.stockId]: indicators }, llmReasoning: llmOutput.raw, dataAsOf: ctx.clock() },
+      basedOn: { quotes: { [input.stockId]: quote }, indicators: { [input.stockId]: indicators }, dataAsOf: ctx.clock() },
       validFrom: ctx.clock(),
       validUntil: addDays(ctx.clock(), adviceExpiryDays[llmOutput.horizon]),
       createdAt: ctx.clock(),
@@ -969,8 +968,8 @@ catalog 为全部 Tool 标注唯一 owner；`execution: 'p1' | 'p2' | 'p3'` 标�
 
 启用位只有一份：`PluginConfigStore.isEnabled(id)`（读 `plugins.json` 的 `entries[id].enabled`，只读）。
 `core/plugin-policy` 是 SDK 无关的纯端口，只有 `PluginPolicyLike.isEnabled`；不存在许可令牌、遗弃世代或撤销队列。
-`adapters/plugins/config` 只做只读解析：限长读取、`entries[id].enabled` 判定，缺失/损坏/未知 id 一律按停用处理。
-`plugins.json` 由使用者手写，进程启动时读入；没有写接口、锁、incarnation/revision 或管理界面。
+`adapters/plugins/config` 只做只读解析：限长读取、`entries[id].enabled` 判定，缺失/损坏/未知 id 一律按停用处理；`inspect()` 额外保留未知 id 供只读诊断。
+`plugins.json` 由使用者手写，进程启动时读入；没有写接口、锁、incarnation/revision 或写入式管理界面。Web 设置页与 `luoome plugins check` 只读展示文件状态、未知 id、缺失项与依赖未满足。
 开关在**下一次请求**生效：已运行的工作不会被打断，也不再声称「关闭后旧句柄永久失效」——旧句柄同样按当前启用位判断。
 
 `ProviderRuntime` 在组装根统一包裹 provider port、真实 HTTP transport 和调用数据 scope。
@@ -993,9 +992,9 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 单宿主 timer 每 250ms reconcile，业务 timer 只为当前启用项创建；停用时清除 timer 并停止发起新 tick，
 退出排空有 5 秒上限，超时报告未排空，不强制关闭共用 DB。
 
-2026-11-20 起不再有插件设置页、preview/CAS 保存或 CLI `plugins` 命令；启用状态只由手写 `plugins.json` 决定，
-读取不外发。MCP 每次 list/call 使用实时可用表；插件开关变化需重启宿主才重新装配，不提供同连接管理变更。
-CLI 不提供插件管理子命令，也不为查看状态初始化业务上下文。
+2026-11-20 起不再有写入式插件设置页、preview/CAS 保存或 CLI 插件写命令；启用状态只由手写 `plugins.json` 决定，
+诊断读取不外发。MCP 每次 list/call 使用实时可用表；插件开关变化需重启宿主才重新装配，不提供同连接管理变更。
+CLI 只提供只读的 `plugins check`，且不为查看状态初始化业务上下文。
 
 `business.analysis` 是默认关闭的建议生成 owner，catalog 将 `analyze_stock`、`analyze_position`、`market_outlook`、
 `analyze_strategy_candidate` 统一标为受控执行。分析模型调用在 `build-advice` 的共同边界统一出站，

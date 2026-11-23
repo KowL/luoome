@@ -1,4 +1,9 @@
-import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
+import {
+  httpStatusErrorKind,
+  isAbortError,
+  isPluginExecutionDenial,
+  SourceExecutionError,
+} from '../source-error.js';
 import { parseTushareEnvelopeRows } from './envelope.js';
 
 /**
@@ -106,7 +111,7 @@ const postWithRetry = async (
       return res;
     } catch (error) {
       lastError = error;
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       if (error instanceof Error && error.message.startsWith('tushare http')) throw error;
       if (attempt < config.retries) {
         await delay(200 * 2 ** attempt);

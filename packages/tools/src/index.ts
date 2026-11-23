@@ -15,6 +15,7 @@ export * from './builtin-plugins.js';
 export * from './catalog.js';
 export * from './context.js';
 export * from './external-mcp.js';
+export * from './plugin-config-check.js';
 export * from './plugin-inventory.js';
 export * from './plugin-policy.js';
 export * from './registry.js';

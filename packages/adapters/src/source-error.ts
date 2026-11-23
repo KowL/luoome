@@ -1,4 +1,4 @@
-import type { SourceErrorKind } from '@luoome/core';
+import { PluginExecutionDenied, type SourceErrorKind } from '@luoome/core';
 
 /**
  * 源执行错误的统一载体（docs/ddd/source-pluggability-and-observation-design.md §4.4）。
@@ -46,6 +46,10 @@ export const upstreamError = (message: string, cause?: unknown): SourceExecution
 /** 未知异常统一收口为 upstream_error（保留原错误作 cause 由调用方决定）。 */
 export const sourceErrorKindOf = (error: unknown): SourceErrorKind =>
   error instanceof SourceExecutionError ? error.kind : 'upstream_error';
+
+/** 授权 / 插件停用拒绝不是网络故障，传输层必须原样上抛。 */
+export const isPluginExecutionDenial = (error: unknown): error is PluginExecutionDenied =>
+  error instanceof PluginExecutionDenied;
 
 /** HTTP 状态码 → 错误词表：401/403 鉴权、429 限流、其余非成功一律 upstream_error。 */
 export const httpStatusErrorKind = (status: number): SourceErrorKind => {

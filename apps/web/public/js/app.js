@@ -39,6 +39,7 @@ import {
   runWatchOnce,
   toggleAdviceDeleteMode,
 } from './pages.js';
+import { renderPluginSettings } from './plugin-settings.js';
 import { createStockSearchBox } from './search-box.js';
 import { renderSectors } from './sectors.js';
 import {
@@ -420,7 +421,7 @@ const renderSettingsTab = async (setStatus, tab) => {
     initDataTransfer();
     await renderDataTransfer();
   } else if (tab === 'system') {
-    await renderSettingsAccount();
+    await Promise.all([renderPluginSettings(setStatus), renderSettingsAccount()]);
     await renderWorkflowRuns(setStatus);
   }
 };

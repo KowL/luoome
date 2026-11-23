@@ -20,7 +20,7 @@ describe('typed tool catalog', () => {
         ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      '2c917fb71795bb7f95987b9598c49534022e2837ee4a0d5efd70ce674de1ed71',
+      '22a287598eca0537cdba35941ddbd25a9559603bdae4433e65f526bc308a3019',
     );
     const metadata = Object.entries(toolCatalog)
       .sort(([a], [b]) => a.localeCompare(b))

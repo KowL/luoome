@@ -17,7 +17,6 @@ import { z } from 'zod';
 import {
   assertAdviceAnalysis,
   computeValidUntil,
-  extractLlmRaw,
   generateAdviceAnalysis,
   judgmentViolations,
   sanitizeAdviceReasoning,
@@ -159,7 +158,6 @@ export const analyzeStockTool = defineTool({
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
     };
     let llmOutput: z.infer<typeof StrategyAdviceAnalysisSchema> | undefined;
-    let llmRaw: string | undefined;
     let failure = 'AI 输出未通过建议约束';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -184,7 +182,6 @@ export const analyzeStockTool = defineTool({
           continue;
         }
         llmOutput = parsed.data;
-        llmRaw = extractLlmRaw(generated);
         break;
       } catch (error) {
         if (error instanceof PluginExecutionDenied) throw error;
@@ -231,7 +228,6 @@ export const analyzeStockTool = defineTool({
       basedOn: {
         quotes: { [stock.id]: quote },
         indicators: { [stock.id]: indicators },
-        ...(llmRaw !== undefined ? { llmReasoning: llmRaw } : {}),
         dataAsOf: now,
       },
       validFrom: now,

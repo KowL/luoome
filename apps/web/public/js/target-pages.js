@@ -240,7 +240,6 @@ let triggerSourceFilter = 'all';
 let triggerDeliveryFilter = 'all';
 let triggerPriorityFilter = 'all';
 let triggerHistoryState = { triggers: [], alertPlanIds: new Set(), labels: {} };
-let deliveryAuditRevision = 0;
 
 /** 数据刷新后旧选项可能已不存在，回落到「全部」而不是卡在失效值上。 */
 const validFilterValue = (options, value) =>
@@ -1418,25 +1417,6 @@ const triggerCard = (trigger) => {
   ]);
 };
 
-export const intradayDeliveryAuditLines = (audit) => {
-  if (audit.candidateCount === 0) return ['当日没有盘中行动候选。'];
-  const channel = audit.channelAcceptance;
-  const statusDetails = Object.entries(audit.deliveryStatusCounts ?? {})
-    .filter(([status, count]) => status !== 'sent' && count > 0)
-    .map(([status, count]) => `${DELIVERY_LABELS[status] ?? status} ${count} 条`);
-  return [
-    `盘中行动候选 ${audit.candidateCount} 条；渠道已受理 ${channel.accepted} 条（10 分钟内 ${channel.withinTenMinutes}、超过 10 分钟 ${channel.overTenMinutes}、时延不可核验 ${channel.timingUnverifiable}）。`,
-    `未受理 ${channel.notAccepted} 条${statusDetails.length === 0 ? '' : `：${statusDetails.join('、')}`}。`,
-    ...(audit.sourceEventTimeUnverifiable > 0
-      ? [`源事件时间不可核验 ${audit.sourceEventTimeUnverifiable} 条。`]
-      : []),
-    ...(channel.p95Ms === null
-      ? []
-      : [`可核验渠道受理耗时 P95 ${Math.ceil(channel.p95Ms / 1000)} 秒。`]),
-    '设备送达未验证；渠道受理不代表设备收到。',
-  ];
-};
-
 const mountPaginated = (root, items, renderItem, emptyNode) => {
   if (root === null) return;
   let paginationWrap = root.nextElementSibling;
@@ -1464,51 +1444,19 @@ const mountPaginated = (root, items, renderItem, emptyNode) => {
 };
 
 export const renderAlerts = async (setStatus) => {
-  const auditRevision = ++deliveryAuditRevision;
   const accountId = getAccountId();
-  const auditRoot = $('#alerts-delivery-audit');
-  const auditDateInput = $('#alerts-delivery-audit-date');
-  if (auditDateInput !== null) {
-    if (auditDateInput.value.length === 0)
-      auditDateInput.value = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-    auditDateInput.onchange = () => void renderAlerts(setStatus);
-  }
-  const auditDate = auditDateInput?.value;
-  const [
-    plansResult,
-    triggersResult,
-    tradingPlansResult,
-    factsResult,
-    reconcileResult,
-    auditResult,
-  ] = await Promise.all([
-    callApi('/api/alert-plans'),
-    callApi('/api/watch/triggers?limit=200'),
-    accountId === ''
-      ? null
-      : callApi(
-          '/api/trading-plans?activeOnly=false&currentOnly=true&includeMonitoring=true&limit=200',
-        ),
-    accountId === '' ? null : callApi('/api/account/facts'),
-    accountId === '' ? null : post('/api/account/cash-reconcile', {}),
-    accountId === '' || auditRoot === null
-      ? null
-      : callApi(`/api/watch/delivery-audit?date=${encodeURIComponent(auditDate)}`),
-  ]);
-  if (auditRoot !== null && auditRevision === deliveryAuditRevision) {
-    mount(
-      auditRoot,
+  const [plansResult, triggersResult, tradingPlansResult, factsResult, reconcileResult] =
+    await Promise.all([
+      callApi('/api/alert-plans'),
+      callApi('/api/watch/triggers?limit=200'),
       accountId === ''
-        ? el('p', 'placeholder', '请先选择账户，再查看盘中时效审计。')
-        : auditResult?.ok
-          ? el(
-              'div',
-              'entity-item',
-              intradayDeliveryAuditLines(auditResult.data).map((line) => el('p', null, line)),
-            )
-          : el('p', 'placeholder', `盘中时效审计不可用：${resultErrorText(auditResult)}`),
-    );
-  }
+        ? null
+        : callApi(
+            '/api/trading-plans?activeOnly=false&currentOnly=true&includeMonitoring=true&limit=200',
+          ),
+      accountId === '' ? null : callApi('/api/account/facts'),
+      accountId === '' ? null : post('/api/account/cash-reconcile', {}),
+    ]);
   const plansRoot = $('#alerts-list');
   const triggersRoot = $('#alerts-triggers');
   const alertPlans = plansResult.ok ? (plansResult.data.plans ?? []) : [];

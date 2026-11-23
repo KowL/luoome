@@ -20,7 +20,11 @@ import {
   isWeekend,
   QuoteSchema,
 } from '@luoome/core';
-import { invalidPayloadError, sourceErrorKindOf } from '../source-error.js';
+import {
+  invalidPayloadError,
+  isPluginExecutionDenial,
+  sourceErrorKindOf,
+} from '../source-error.js';
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import {
   type MarketCapability,
@@ -347,9 +351,11 @@ export class MarketDataManager implements MarketDataAdapter {
       logLabel: 'manager.fetchQuote',
       logContext: { stockCode },
       exhausted: (lastError) =>
-        new Error(
-          `all market sources failed for ${stockCode}: ${lastError === undefined ? 'unknown' : errorMessage(lastError)}`,
-        ),
+        isPluginExecutionDenial(lastError)
+          ? lastError
+          : new Error(
+              `all market sources failed for ${stockCode}: ${lastError === undefined ? 'unknown' : errorMessage(lastError)}`,
+            ),
       affinityKey: `quote:${stockCode}`,
     });
   }
@@ -441,9 +447,11 @@ export class MarketDataManager implements MarketDataAdapter {
       logLabel: 'manager.fetchDailyBars',
       logContext: { stockCode },
       exhausted: (lastError) =>
-        new Error(
-          `all market sources failed for daily bars ${stockCode}: ${lastError === undefined ? 'unknown' : errorMessage(lastError)}`,
-        ),
+        isPluginExecutionDenial(lastError)
+          ? lastError
+          : new Error(
+              `all market sources failed for daily bars ${stockCode}: ${lastError === undefined ? 'unknown' : errorMessage(lastError)}`,
+            ),
       affinityKey: `daily-bars:${stockCode}:${range.start.getTime()}-${range.end.getTime()}:qfq`,
     });
   }
@@ -711,6 +719,8 @@ export class MarketDataManager implements MarketDataAdapter {
 }
 
 const errorMessage = (e: unknown): string => {
+  if (isPluginExecutionDenial(e))
+    return `授权拒绝：${e.required}（设置 LUOOME_EXPOSE_EXTERNAL=true 并启用对应 source.*）`;
   if (e instanceof Error) return `${e.name}: ${e.message}`;
   return String(e);
 };

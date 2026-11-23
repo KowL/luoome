@@ -10,8 +10,8 @@ import { SourceExecutionError } from '../source-error.js';
 import type { PluginConfigStore } from './config.js';
 
 export class RevokedDataExecution extends PluginExecutionDenied {
-  constructor() {
-    super('data:activation');
+  constructor(required = 'data:activation') {
+    super(required);
   }
 }
 export interface ProviderGuard {
@@ -202,12 +202,12 @@ export class ProviderRuntime implements DataExecutionScopeLike {
   ): typeof fetch {
     return (async (input, init) => {
       this.validateScope();
-      if (!this.externalAllowed) throw new RevokedDataExecution();
+      if (!this.externalAllowed) throw new RevokedDataExecution('external');
       const actual = marketProviderOf(input, source);
       for (const check of this.scopes.getStore()?.permissions ?? [])
         check(`source.${actual}` as ManagedPluginId);
-      if (!this.store.isEnabled(`source.${actual}` as ManagedPluginId))
-        throw new RevokedDataExecution();
+      const pluginId = `source.${actual}` as ManagedPluginId;
+      if (!this.store.isEnabled(pluginId)) throw new RevokedDataExecution(`plugin:${pluginId}`);
       const send = ((request, requestInit) => {
         this.validateScope();
         return fetchImpl(request, requestInit);

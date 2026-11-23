@@ -1,4 +1,9 @@
-import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
+import {
+  httpStatusErrorKind,
+  isAbortError,
+  isPluginExecutionDenial,
+  SourceExecutionError,
+} from '../source-error.js';
 import { type FuyaoEnvelopeData, parseFuyaoEnvelope } from './envelope.js';
 
 /**
@@ -116,7 +121,7 @@ export class FuyaoClient {
       }
       return raw;
     } catch (error) {
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       throw new SourceExecutionError(
         isAbortError(error) ? 'timeout' : 'network',
         `fuyao ${isAbortError(error) ? 'timeout' : 'network'}: 请求失败（${error instanceof Error ? error.message : String(error)}）url=${url}`,

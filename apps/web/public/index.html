@@ -368,6 +368,7 @@
           <div class="stat"><div class="label">总盈亏</div><div class="value" id="holdings-stat-total-pnl">--</div><div class="delta" id="holdings-stat-total-pnl-pct">--</div></div>
           <div class="stat"><div class="label">持仓数</div><div class="value" id="holdings-stat-count">--</div></div>
         </div>
+        <p class="muted mb-2">手续费只作记录，不计入现金与成本；账户绩效计入手续费。</p>
         <div class="card">
           <div class="card-header">
             <h2>明细</h2>
@@ -478,13 +479,6 @@
             <div id="alerts-plans-meta" class="card-meta">--</div>
           </div>
           <div id="alerts-plans" class="entity-list"><p class="placeholder">加载中…</p></div>
-        </div>
-        <div class="card mt-4">
-          <div class="card-header">
-            <h2>盘中时效审计</h2>
-            <div class="card-meta"><label class="inline-field">日期 <input id="alerts-delivery-audit-date" type="date" /></label></div>
-          </div>
-          <div id="alerts-delivery-audit"><p class="placeholder">加载中…</p></div>
         </div>
         <div class="card mt-4 card-collapsible" data-collapse-id="alerts-trigger-history">
           <div class="card-header">
@@ -1022,6 +1016,25 @@
         </div>
         <div data-settings-pane="system">
         <div class="card">
+          <div class="card-header">
+            <div><span class="section-kicker">READ-ONLY</span><h2>插件启用状态</h2></div>
+            <div class="card-meta">手写 plugins.json，重启生效</div>
+          </div>
+          <p class="muted mb-2">本页只读展示。配置文件 <code id="plugin-config-path">--</code></p>
+          <div id="plugin-settings-body"><p class="placeholder">加载中…</p></div>
+          <details class="mt-2">
+            <summary>plugins.json 示例（只读，不在页面修改）</summary>
+            <pre><code>{
+  "version": 1,
+  "entries": {
+    "strategy.ai-insight": { "enabled": true },
+    "business.analysis": { "enabled": true },
+    "source.eastmoney": { "enabled": true }
+  }
+}</code></pre>
+          </details>
+        </div>
+        <div class="card mt-4">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>
         </div>

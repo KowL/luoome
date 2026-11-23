@@ -482,6 +482,27 @@ const createPagination = (options = {}) => {
   return { root, setState, getState };
 };
 
+/** 授权 / 插件拒绝 → 可直接执行的开启说明；未知 required 返回 null。 */
+const permissionHint = (required) => {
+  if (typeof required !== 'string') return null;
+  if (required === 'external') {
+    return '需要开启外部网络：请设置 LUOOME_EXPOSE_EXTERNAL=true 后重启服务。';
+  }
+  if (required === 'write') {
+    return '需要开启写入：请设置 LUOOME_EXPOSE_WRITE=true 后重启服务。';
+  }
+  if (required === 'data:activation') {
+    return '行情访问被拒绝：请设置 LUOOME_EXPOSE_EXTERNAL=true，并在 $LUOOME_HOME/plugins.json 启用所需 source.* 后重启服务。';
+  }
+  if (required.startsWith('plugin:source.')) {
+    return `数据源插件未启用：请在 $LUOOME_HOME/plugins.json 启用 ${required.slice('plugin:'.length)} 后重启服务。`;
+  }
+  if (required.startsWith('plugin:')) {
+    return `插件未启用：请在 $LUOOME_HOME/plugins.json 启用 ${required.slice('plugin:'.length)} 后重启服务。`;
+  }
+  return null;
+};
+
 /**
  * ToolError → 用户可读文案（全站统一口径）。
  * 保留既有「kind：detail」前缀便于定位；权限失败单独说明缺哪个能力。
@@ -489,7 +510,7 @@ const createPagination = (options = {}) => {
 const toolErrorText = (error, fallback = '操作失败') => {
   if (error === null || typeof error !== 'object') return fallback;
   if (error.kind === 'permission_denied') {
-    return `权限校验失败：${error.required ?? '当前操作未开启'}`;
+    return permissionHint(error.required) ?? `权限校验失败：${error.required ?? '当前操作未开启'}`;
   }
   const detail = error.message ?? error.cause ?? error.required ?? '';
   if (detail !== '') return error.kind === undefined ? detail : `${error.kind}：${detail}`;
@@ -518,6 +539,7 @@ export {
   fmtSigned,
   fmtTime,
   mount,
+  permissionHint,
   resultErrorText,
   sortableHeader,
   statBlock,

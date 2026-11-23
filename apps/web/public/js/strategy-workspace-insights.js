@@ -16,6 +16,20 @@ export const invalidateInsightsCache = () => featureCache.clear();
 
 const pct = (value) => (value === undefined ? '--' : `${String(fmtNum(value * 100, 2))}%`);
 
+/** 降级原因 → 用户可执行的启用说明；未知/未降级返回 null。 */
+export const insightDegradationHint = (reason) => {
+  if (reason === 'plugin_disabled') {
+    return '降级原因：strategy.ai-insight 插件未启用。启用方法：在 $LUOOME_HOME/plugins.json 的 entries 写入 "strategy.ai-insight": { "enabled": true }，重启服务后重新生成。当前展示确定性事实摘要。';
+  }
+  if (reason === 'dependency_not_ready') {
+    return '降级原因：洞察依赖未就绪（通常是 AI 模型未配置或缺少 external 授权）。启用方法：在设置 → AI 模型配置模型与密钥，并设置 LUOOME_EXPOSE_EXTERNAL=true 后重启服务。当前展示确定性事实摘要。';
+  }
+  if (reason === 'provider_failed') {
+    return '降级原因：解释模型调用失败。当前展示确定性事实摘要；可检查模型设置后重试。';
+  }
+  return null;
+};
+
 const renderInsightNarrative = (insight) =>
   el('section', 'strategy-insight-narrative', [
     el('span', 'section-kicker', 'AI EXPLANATION'),
@@ -69,8 +83,17 @@ export const renderInsights = async (
       setStatus(errorText(generated), true);
       return;
     }
-    output.replaceChildren(renderInsightNarrative(generated.data.insight));
-    setStatus(`AI 解读已生成 · ${generated.data.provider}`);
+    const reason = generated.data.degradation?.reason;
+    const hint = insightDegradationHint(reason);
+    output.replaceChildren(
+      ...(hint === null ? [] : [el('p', 'status warning', hint)]),
+      renderInsightNarrative(generated.data.insight),
+    );
+    setStatus(
+      hint === null
+        ? `AI 解读已生成 · ${generated.data.provider}`
+        : `已生成降级摘要 · ${generated.data.provider} · ${reason}`,
+    );
   });
   const observationRows = facts.observations.map((item) =>
     el('tr', null, [

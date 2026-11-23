@@ -1,8 +1,8 @@
 import type { LLMAdapterLike, LLMGenerateRequest } from '@luoome/core';
 
 /**
- * LLM 生成结果：schema 校验后的结构化对象 + raw 原始文本（ARCHITECTURE §6.3，
- * raw 会进 AdviceDataSnapshot.llmReasoning 用于审计）。
+ * LLM 生成结果：schema 校验后的结构化对象 + raw 原始文本（ARCHITECTURE §6.3）。
+ * raw 只供调用方即时诊断 / 重试，不写入 Advice.basedOn。
  */
 export type LLMGenerateResult<T> = T & { readonly raw: string };
 

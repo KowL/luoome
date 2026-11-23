@@ -579,3 +579,29 @@ describe('龙虎榜页面入口', () => {
     expect(marketRoutes).toContain("invokeTool('dragon_tiger_list'");
   });
 });
+
+describe('插件启用状态只读展示', () => {
+  const pluginJs = read('./plugin-settings.js');
+
+  it('设置 → 系统提供只读卡片、示例与配置文件路径', () => {
+    expect(html).toContain('id="plugin-settings-body"');
+    expect(html).toContain('id="plugin-config-path"');
+    expect(html).toContain('手写 plugins.json，重启生效');
+    expect(html).toContain('"strategy.ai-insight": { "enabled": true }');
+  });
+
+  it('前端只读 GET 插件诊断，不提供写入调用', () => {
+    expect(appJs).toContain("import { renderPluginSettings } from './plugin-settings.js'");
+    expect(appJs).toContain('renderPluginSettings(setStatus)');
+    expect(pluginJs).toContain("callApi('/api/settings/plugins')");
+    expect(pluginJs).not.toContain("method: 'POST'");
+    expect(pluginJs).not.toContain("method: 'PUT'");
+    expect(pluginJs).not.toContain("method: 'DELETE'");
+  });
+
+  it('服务端暴露 GET /api/settings/plugins 并复用只读校验函数', () => {
+    const settingsRoutes = read('../../src/routes/settings.ts');
+    expect(settingsRoutes).toContain("app.get('/api/settings/plugins'");
+    expect(settingsRoutes).toContain('checkPluginConfig()');
+  });
+});

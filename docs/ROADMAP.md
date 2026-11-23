@@ -24,7 +24,7 @@
   `package.json` 的 `0.8.0` 是内部 workspace 版本，尚未同步。
 - Web 一级入口为五页：今日 / 持仓 / 关注 / 市场 / 设置；报告收敛为每周建议成绩单（周一 08:00）。
 - 插件启停只有手写只读 `$LUOOME_HOME/plugins.json`，改完重启宿主生效；缺省即关闭，
-  没有 CLI `plugins` 命令，也没有 Web 管理页。
+  没有 CLI 写命令或 Web 写入式管理页；`luoome plugins check` 与设置 → 系统只读展示。
 - 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，score ≥ 60 的看多信号补进候选池（≤3 只）。
 - P0 修复：`bun run mcp:smoke` 纳入 CI；`luoome restart` 在无 `lsof` 时回退 `ss` / `fuser`。
 

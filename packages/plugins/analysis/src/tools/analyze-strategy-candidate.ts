@@ -28,7 +28,6 @@ import { z } from 'zod';
 import {
   assertAdviceAnalysis,
   computeValidUntil,
-  extractLlmRaw,
   generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
@@ -272,7 +271,6 @@ export const analyzeStrategyCandidateTool = defineTool({
         : { position: { avgCost: position.avgCost, quantity: position.quantity } }),
     };
     let llmOutput: z.infer<typeof StrategyAdviceAnalysisSchema> | undefined;
-    let llmRaw: string | undefined;
     let failure = 'AI 输出未通过建议约束';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -310,7 +308,6 @@ export const analyzeStrategyCandidateTool = defineTool({
           continue;
         }
         llmOutput = grounded.data;
-        llmRaw = extractLlmRaw(generated);
         break;
       } catch (error) {
         if (error instanceof PluginExecutionDenied) throw error;
@@ -374,7 +371,6 @@ export const analyzeStrategyCandidateTool = defineTool({
         quotes: { [stock.id]: quote },
         indicators: { [stock.id]: indicators },
         strategy: strategyEvidence,
-        ...(llmRaw === undefined ? {} : { llmReasoning: llmRaw }),
         dataAsOf: quote.observedAt,
       },
       validFrom: now,

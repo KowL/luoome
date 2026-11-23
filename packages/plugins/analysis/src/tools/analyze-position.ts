@@ -15,7 +15,6 @@ import {
   AdviceLLMSchema,
   assertAdviceAnalysis,
   computeValidUntil,
-  extractLlmRaw,
   generateAdviceAnalysis,
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
@@ -84,7 +83,7 @@ export const analyzePositionTool = defineTool({
       quote,
       indicators,
     };
-    const buildAdvice = (output: AdviceLLMOutput, llmRaw: string | undefined): Advice => ({
+    const buildAdvice = (output: AdviceLLMOutput): Advice => ({
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'position',
       subjectId: holding.id,
@@ -109,7 +108,6 @@ export const analyzePositionTool = defineTool({
       basedOn: {
         quotes: { [stock.id]: quote },
         indicators: { [stock.id]: indicators },
-        ...(llmRaw !== undefined ? { llmReasoning: llmRaw } : {}),
         dataAsOf: now,
       },
       validFrom: now,
@@ -133,7 +131,7 @@ export const analyzePositionTool = defineTool({
         failure = parsed.error.issues.map((issue) => issue.message).join('；');
         continue;
       }
-      const candidate = buildAdvice(parsed.data, extractLlmRaw(generated));
+      const candidate = buildAdvice(parsed.data);
       try {
         assertAdviceInvariants(candidate);
         advice = candidate;

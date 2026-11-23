@@ -10,7 +10,6 @@ import {
   deriveWatchlistViews,
   filterTriggers,
   filterTriggersBySource,
-  intradayDeliveryAuditLines,
   parseMemberStockIds,
   sortStocksByQuote,
   stocksOfList,
@@ -113,27 +112,6 @@ describe('预警表单', () => {
 });
 
 describe('触发条目时间行', () => {
-  it('时效审计展示全部候选的分母和失败状态，渠道受理不冒充设备送达', () => {
-    const lines = intradayDeliveryAuditLines({
-      candidateCount: 8,
-      deliveryStatusCounts: { sent: 2, failed: 1, expired: 1, pending: 4 },
-      sourceEventTimeUnverifiable: 1,
-      channelAcceptance: {
-        accepted: 2,
-        withinTenMinutes: 1,
-        overTenMinutes: 1,
-        timingUnverifiable: 0,
-        notAccepted: 6,
-        p95Ms: 661_000,
-      },
-    });
-    expect(lines.join(' ')).toContain('盘中行动候选 8 条');
-    expect(lines.join(' ')).toContain('超过 10 分钟 1');
-    expect(lines.join(' ')).toContain('未受理 6 条：投递失败 1 条、信号超时 1 条、待投递 4 条');
-    expect(lines.join(' ')).toContain('源事件时间不可核验 1 条');
-    expect(lines.join(' ')).toContain('设备送达未验证');
-  });
-
   it('读取 WatchTriggerSchema 的 createdAt 字段', () => {
     const text = triggerMetaText({
       alertPlanId: 'plan-1',

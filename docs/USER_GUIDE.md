@@ -229,7 +229,7 @@ luoome mcp serve    # stdio JSON-RPC
 
 ### 插件启用清单（只读）
 
-能力开关只有一个来源：`$LUOOME_HOME/plugins.json`。手写它，改完重启宿主生效；没有 CLI 命令，也没有 Web 管理页。
+能力开关只有一个来源：`$LUOOME_HOME/plugins.json`。手写它，改完重启宿主生效；没有写入式管理面或 CLI 写命令。只读查看有两种方式：Web「设置 → 系统 → 插件启用状态」，或运行 `luoome plugins check [--json]`；两者都不会修改文件。
 
 ```json
 {

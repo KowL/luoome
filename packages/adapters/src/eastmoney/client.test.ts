@@ -1,3 +1,4 @@
+import { PluginExecutionDenied } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { SourceExecutionError } from '../source-error.js';
@@ -40,6 +41,14 @@ describe('eastmoney getJson', () => {
   it('fetch 拒绝 → network', async () => {
     const { fetchImpl } = stubFetch(() => Promise.reject(new TypeError('socket hang up')));
     expect(await kindOf(fetchImpl)).toBe('network');
+  });
+
+  it('授权拒绝原样上抛，不伪装成 network', async () => {
+    const denial = new PluginExecutionDenied('external');
+    const { fetchImpl } = stubFetch(() => Promise.reject(denial));
+    await expect(getJson('https://example.com/api', { timeoutMs: 1_000, fetchImpl })).rejects.toBe(
+      denial,
+    );
   });
 
   it('主动超时（AbortController abort）→ timeout', async () => {

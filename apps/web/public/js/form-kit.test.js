@@ -45,6 +45,12 @@ describe('统一错误文案', () => {
       '权限校验失败：write 操作未开启',
     );
     expect(toolErrorText({ kind: 'permission_denied' })).toBe('权限校验失败：当前操作未开启');
+    expect(toolErrorText({ kind: 'permission_denied', required: 'external' })).toContain(
+      'LUOOME_EXPOSE_EXTERNAL=true',
+    );
+    expect(toolErrorText({ kind: 'permission_denied', required: 'plugin:source.sina' })).toContain(
+      'source.sina',
+    );
   });
 
   it('保留「kind：detail」前缀，便于定位', () => {

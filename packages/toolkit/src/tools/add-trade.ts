@@ -49,7 +49,8 @@ export const AddTradeOutput = z.object({
  */
 export const addTradeTool = defineTool({
   name: 'add_trade',
-  description: '录入一笔买入/卖出交易，自动联动持仓（加权成本 / 可卖数量 / 清仓）',
+  description:
+    '录入一笔买入/卖出交易，自动联动持仓（加权成本 / 可卖数量 / 清仓）；手续费只作记录，不计入现金与成本，账户绩效计入手续费',
   sideEffect: 'write',
   input: AddTradeInput,
   output: AddTradeOutput,

@@ -6,7 +6,11 @@ import {
   type Quote,
 } from '@luoome/core';
 
-import { httpStatusErrorKind, SourceExecutionError } from '../source-error.js';
+import {
+  httpStatusErrorKind,
+  isPluginExecutionDenial,
+  SourceExecutionError,
+} from '../source-error.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_KLINE_URL =
@@ -153,7 +157,7 @@ export class SinaAdapter {
       }
       text = await response.text();
     } catch (error) {
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       const kind =
         typeof error === 'object' &&
         error !== null &&
@@ -309,7 +313,7 @@ export class SinaAdapter {
       }
       return response;
     } catch (error) {
-      if (error instanceof SourceExecutionError) throw error;
+      if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
       const kind =
         typeof error === 'object' &&
         error !== null &&

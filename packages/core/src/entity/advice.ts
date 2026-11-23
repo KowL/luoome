@@ -66,7 +66,6 @@ export interface AdviceReasoning {
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly llmReasoning?: string; // 经过 sanitized 的 LLM 推理文本（用于审计与复盘）
   readonly ladder?: AdviceLadderSnapshot;
   readonly strategy?: StrategyAdviceEvidence;
   readonly dataAsOf: Date; // 数据截止时间
@@ -294,13 +293,12 @@ export const isAdviceQuoteCurrent = (quote: Quote, now: Date): boolean => {
   return quote.observedAt.getTime() >= cutoff.getTime() - 180_000;
 };
 
-// 存量 basedOn JSON 可能仍含已下线的 tacticSignals key；zod object 默认 strip，
-// 读出时静默忽略，不需要保留旧 schema。
+// 存量 basedOn JSON 可能仍含已下线的 tacticSignals / llmReasoning key；zod object 默认 strip，
+// 读出时静默忽略，不需要保留旧 schema，也不把原始模型响应重新写回 Advice。
 
 export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
-  llmReasoning: z.string().optional(),
   ladder: AdviceLadderSnapshotSchema.optional(),
   strategy: z
     .object({

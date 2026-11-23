@@ -2160,7 +2160,6 @@ export const registerRepositoryContractTests = (
               },
             },
             indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
-            llmReasoning: '原始推理文本',
             strategy: {
               strategyId: 'strategy-1',
               strategyVersionId: 'strategy-version-1',

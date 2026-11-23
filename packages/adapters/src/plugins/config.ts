@@ -28,6 +28,11 @@ export type PluginConfigRead =
   | { readonly ok: true; readonly config: PluginConfig }
   | { readonly ok: false; readonly reason: 'missing' | 'invalid' };
 
+export type PluginConfigInspection = PluginConfigRead & {
+  /** 手写文件里不属于当前 `MANAGED_PLUGIN_IDS` 的 key；只读诊断，不进入实际启用表。 */
+  readonly unknownIds?: readonly string[];
+};
+
 export const resolvePluginConfigPath = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string => join(env.LUOOME_HOME ?? join(homedir(), '.luoome'), 'plugins.json');
@@ -35,19 +40,38 @@ export const resolvePluginConfigPath = (
 export class PluginConfigStore implements PluginPolicyLike {
   constructor(readonly path: string) {}
 
-  read(): PluginConfigRead {
+  /** 只读诊断：保留未知 id 供设置页 / CLI 报告，不改变 `isEnabled` 的口径。 */
+  inspect(): PluginConfigInspection {
     try {
       if (statSync(this.path).size > MAX_CONFIG_BYTES) return { ok: false, reason: 'invalid' };
       const raw = readFileSync(this.path);
       if (raw.byteLength > MAX_CONFIG_BYTES) return { ok: false, reason: 'invalid' };
-      const parsed = PluginConfigSchema.safeParse(JSON.parse(raw.toString('utf8')));
-      return parsed.success ? { ok: true, config: parsed.data } : { ok: false, reason: 'invalid' };
+      const decoded: unknown = JSON.parse(raw.toString('utf8'));
+      const parsed = PluginConfigSchema.safeParse(decoded);
+      if (!parsed.success) return { ok: false, reason: 'invalid' };
+      const entries =
+        typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)
+          ? (decoded as { entries?: unknown }).entries
+          : undefined;
+      const known = new Set<string>(MANAGED_PLUGIN_IDS);
+      const unknownIds =
+        typeof entries === 'object' && entries !== null && !Array.isArray(entries)
+          ? Object.keys(entries).filter((id) => !known.has(id))
+          : [];
+      return { ok: true, config: parsed.data, unknownIds };
     } catch (error) {
       return {
         ok: false,
         reason: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid',
       };
     }
+  }
+
+  read(): PluginConfigRead {
+    const inspected = this.inspect();
+    return inspected.ok
+      ? { ok: true, config: inspected.config }
+      : { ok: false, reason: inspected.reason };
   }
 
   isEnabled(id: ManagedPluginId): boolean {

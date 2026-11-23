@@ -220,7 +220,7 @@ export const openAddHoldingModal = () => {
     fieldWrap('股票', acWrap, '输名称搜库内股票；输 6 位代码自动给出 .SH/.SZ 候选'),
     fieldWrap('数量', qtyInput),
     priceField,
-    fieldWrap('手续费', feeInput),
+    fieldWrap('手续费', feeInput, '只作记录，不计入现金与成本；账户绩效计入手续费'),
     errorNode,
     actionsRow('确认建仓', {
       onConfirm: (btn) => {
@@ -289,7 +289,7 @@ export const openTradeModal = (holding, side) => {
     ),
     fieldWrap('数量', qtyInput),
     fieldWrap('价格', priceInput),
-    fieldWrap('手续费', feeInput),
+    fieldWrap('手续费', feeInput, '只作记录，不计入现金与成本；账户绩效计入手续费'),
     errorNode,
     actionsRow(`确认${verb}`, {
       onConfirm: (btn) => {

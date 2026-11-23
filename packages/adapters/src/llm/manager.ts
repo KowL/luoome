@@ -26,7 +26,7 @@ import {
  *    - 仍失败 → 走 fallbackAdvice(data)，在 reasoning.evidence 标「LLM 推理失败，使用规则 fallback」；
  *    - 永不抛异常（永远返回 LLMGenerateResult）。
  *
- * 注：fallback 不返回 raw；advice.basedOn.llmReasoning 拿不到 raw 时省略。
+ * 注：fallback 不返回 raw；Advice.basedOn 也不保存 raw 原始响应。
  */
 
 const FALLBACK_NOTE = `LLM 推理失败，使用${RULE_FALLBACK_EVIDENCE_MARKER}（v0.2 LLMManager）`;

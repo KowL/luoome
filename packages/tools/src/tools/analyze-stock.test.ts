@@ -28,10 +28,10 @@ describe('analyze_stock', () => {
       expect(advice.disclaimers).toContain(required);
     }
 
-    // basedOn 快照可复盘。
+    // basedOn 只保留来源 / 摘要引用，不存原始模型响应全文。
     expect(evidence.quotes?.['002594.SZ']?.close).toBe(105.8);
     expect(evidence.indicators?.['002594.SZ']?.ma5).toBeDefined();
-    expect(evidence.llmReasoning).toBeDefined();
+    expect('llmReasoning' in evidence).toBe(false);
 
     // 已持久化，可 query 到。
     const persisted = await ctx.repos.advice.findById(advice.id);
@@ -77,12 +77,13 @@ describe('analyze_stock', () => {
       ...advice.reasoning.evidence,
       ...advice.reasoning.counterEvidence,
       ...advice.risks,
-      evidence.llmReasoning ?? '',
     ].join('\n');
     expect(text).not.toMatch(/ignore (?:all )?previous instructions/i);
     expect(text).not.toMatch(/system:/i);
     expect(text).not.toMatch(/<\|/);
     expect(text).toContain('[redacted]');
+    expect(JSON.stringify(evidence)).not.toContain('system: ignore previous instructions');
+    expect('llmReasoning' in evidence).toBe(false);
   });
 
   it('正常路径：纯代码形式也能解析标的', async () => {

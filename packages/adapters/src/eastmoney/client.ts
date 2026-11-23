@@ -1,4 +1,9 @@
-import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
+import {
+  httpStatusErrorKind,
+  isAbortError,
+  isPluginExecutionDenial,
+  SourceExecutionError,
+} from '../source-error.js';
 
 /**
  * Eastmoney 统一 HTTP 管道（docs/ddd/source-pluggability-and-observation-design.md §4.2/§4.4）。
@@ -35,7 +40,7 @@ export const getJson = async (url: string, options: EastmoneyHttpOptions): Promi
       );
     }
   } catch (error) {
-    if (error instanceof SourceExecutionError) throw error;
+    if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
     throw new SourceExecutionError(
       isAbortError(error) ? 'timeout' : 'network',
       `fetch 失败: ${error instanceof Error ? error.message : String(error)} url=${url}`,

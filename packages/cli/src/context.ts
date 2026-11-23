@@ -37,6 +37,7 @@ import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
   type Logger,
+  type MarketDataAdapterLike,
   resolveExposure,
   type ToolContext,
 } from '@luoome/core';
@@ -53,6 +54,32 @@ export interface CliContextHandle {
   /** 关闭底层数据库连接；短生命周期子命令退出前必须调用。 */
   readonly close: () => void;
 }
+
+export interface CliContextOptions {
+  /** false 表示该命令不需要行情；不实例化行情适配器，也不要求 LUOOME_MARKET_PROVIDER。 */
+  readonly market?: boolean;
+}
+
+export const MARKET_PROVIDER_HINT =
+  '需要行情数据：请设置 LUOOME_MARKET_PROVIDER=real，并确认已启用对应 source.* 与 LUOOME_EXPOSE_EXTERNAL=true。';
+
+const createUnavailableMarketAdapter = (): MarketDataAdapterLike => {
+  const unavailable = async (): Promise<never> => {
+    throw new Error(MARKET_PROVIDER_HINT);
+  };
+  return {
+    name: 'market-unconfigured',
+    fetchQuote: unavailable,
+    batchQuote: unavailable,
+    fetchDailyBars: unavailable,
+    searchStocks: unavailable,
+    fetchIndexQuotes: unavailable,
+    fetchIntradayMinutes: unavailable,
+    fetchMinuteBars: unavailable,
+    fetchMarketSnapshot: unavailable,
+    marketSourceStatus: () => [],
+  };
+};
 
 /** LUOOME_HOME：默认 ~/.luoome（AGENTS.md 快速接入口径）。委托 ./paths.ts 解析。 */
 export { luoomeHome };
@@ -74,7 +101,9 @@ const createStderrLogger = (): Logger => {
  *
  * 空数据库保持为空；本函数不会自动写入账户、股票、持仓、交易、建议或盯盘配置。
  */
-export const createCliContext = async (): Promise<CliContextHandle> => {
+export const createCliContext = async (
+  options: CliContextOptions = {},
+): Promise<CliContextHandle> => {
   const home = luoomeHome();
   mkdirSync(home, { recursive: true });
   const dbPath = join(home, 'luoome.db');
@@ -109,12 +138,15 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     providerRuntime,
     clock: now,
   });
-  const market = createMarketAdapterFromEnv(process.env, {
-    providerRuntime,
-    clock: now,
-    logger,
-    sources,
-  });
+  const market =
+    options.market === false
+      ? createUnavailableMarketAdapter()
+      : createMarketAdapterFromEnv(process.env, {
+          providerRuntime,
+          clock: now,
+          logger,
+          sources,
+        });
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
   try {
     ai = createAIStackFromEnv(process.env, { logger });

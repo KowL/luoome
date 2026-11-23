@@ -4,10 +4,10 @@
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
 import { resolveExposure, STANDARD_DISCLAIMERS } from '@luoome/core';
-import { toolRegistry } from '@luoome/tools';
+import { checkPluginConfig, toolCatalog, toolRegistry } from '@luoome/tools';
 import { resolveTool } from './app-service.js';
 
-import { createCliContext } from './context.js';
+import { createCliContext, MARKET_PROVIDER_HINT } from './context.js';
 import { isDaemonized, respawnDetached, startLogRotation } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
@@ -220,6 +220,38 @@ const cmdToolsInspect = (name: string): void => {
   printJson(descriptor.inputSchema);
 };
 
+interface CatalogEntryLike {
+  readonly dependencies?: readonly string[];
+  readonly modes?: Readonly<
+    Record<string, { readonly data: readonly string[]; readonly conditional?: readonly string[] }>
+  >;
+}
+
+const toolNeedsMarket = (name: string): boolean => {
+  const entry = (toolCatalog as Readonly<Record<string, CatalogEntryLike>>)[name];
+  if (entry === undefined) return false;
+  if (entry.dependencies?.some((dependency) => dependency.startsWith('market:')) === true)
+    return true;
+  return Object.values(entry.modes ?? {}).some((mode) =>
+    [...mode.data, ...(mode.conditional ?? [])].some((dependency) =>
+      dependency.startsWith('live:'),
+    ),
+  );
+};
+
+const permissionHint = (required: string): string | undefined => {
+  if (required === 'external')
+    return '需要开启外部网络：请设置 LUOOME_EXPOSE_EXTERNAL=true 后重启服务。';
+  if (required === 'write') return '需要开启写入：请设置 LUOOME_EXPOSE_WRITE=true 后重启服务。';
+  if (required === 'data:activation')
+    return '行情访问被拒绝：请设置 LUOOME_EXPOSE_EXTERNAL=true，并在 $LUOOME_HOME/plugins.json 启用所需 source.* 后重启服务。';
+  if (required.startsWith('plugin:source.'))
+    return `数据源插件未启用：请在 $LUOOME_HOME/plugins.json 启用 ${required.slice('plugin:'.length)} 后重启服务。`;
+  if (required.startsWith('plugin:'))
+    return `插件未启用：请在 $LUOOME_HOME/plugins.json 启用 ${required.slice('plugin:'.length)} 后重启服务。`;
+  return undefined;
+};
+
 const cmdToolsCall = async (
   name: string,
   flags: ReadonlyMap<string, string | boolean>,
@@ -241,7 +273,20 @@ const cmdToolsCall = async (
   }
   input = { ...input, ...requiredInput };
 
-  const handle = await createCliContext();
+  const needsMarket = toolNeedsMarket(name);
+  if (needsMarket && process.env.LUOOME_MARKET_PROVIDER?.trim() === undefined) {
+    if (json) {
+      printJson({
+        ok: false,
+        error: { kind: 'invalid_input', message: MARKET_PROVIDER_HINT, issues: [] },
+      });
+    } else {
+      console.error(`error: ${MARKET_PROVIDER_HINT}`);
+    }
+    return 1;
+  }
+
+  const handle = await createCliContext({ market: needsMarket });
   try {
     const result = await tool.execute(input, handle.ctx);
     if (json) {
@@ -253,11 +298,57 @@ const cmdToolsCall = async (
       return 0;
     }
     console.error(`error [${result.error.kind}]:`);
-    console.error(JSON.stringify(result.error, null, 2));
+    const hint =
+      result.error.kind === 'permission_denied' ? permissionHint(result.error.required) : undefined;
+    console.error(hint ?? JSON.stringify(result.error, null, 2));
     return 1;
   } finally {
     handle.close();
   }
+};
+
+const cmdPluginsCheck = (json: boolean): number => {
+  const check = checkPluginConfig();
+  if (json) {
+    printJson({ ok: true, data: check });
+    return 0;
+  }
+  const fileLabel =
+    check.file === 'ok'
+      ? '已读取'
+      : check.file === 'missing'
+        ? '缺失（全部按关闭）'
+        : '损坏（全部按关闭）';
+  console.log(`plugins.json: ${check.path}（${fileLabel}）`);
+  console.log(
+    `共 ${check.summary.total} 个插件：已启用 ${check.summary.enabled} · 已关闭 ${check.summary.disabled} · 缺失 ${check.summary.missing} · 依赖未满足 ${check.summary.dependencyNotReady} · 未知 id ${check.summary.unknown}`,
+  );
+  console.log(
+    `\n${renderTable(
+      ['PLUGIN', 'CONFIG', 'ENABLED', 'DEPENDENCIES', 'STATE'],
+      check.plugins.map((plugin) => [
+        plugin.id,
+        plugin.configured ? 'written' : 'missing',
+        plugin.enabled ? 'yes' : 'no',
+        plugin.dependencies.length === 0
+          ? '-'
+          : plugin.dependencies
+              .map((dependency) => `${dependency.id}:${dependency.enabled ? 'on' : 'off'}`)
+              .join(','),
+        plugin.status,
+      ]),
+    )}`,
+  );
+  if (check.unknown.length > 0) {
+    console.log('\n未知 id（会被忽略）：');
+    for (const entry of check.unknown) {
+      console.log(
+        `  - ${entry.id}${entry.suggestions.length === 0 ? '' : `（是否想写 ${entry.suggestions.join(' / ')}？）`}`,
+      );
+    }
+  }
+  console.log('\n只读检查：本命令不会修改 plugins.json；手写后重启宿主生效。');
+  return 0;
 };
 
 const requireId = (value: string | undefined, usage: string): string => {
@@ -356,7 +447,7 @@ const cmdAdviceList = async (
   const limitRaw = flagString(flags, 'limit');
   if (limitRaw !== undefined) input.limit = parsePositiveInt(limitRaw, 'limit');
 
-  const handle = await createCliContext();
+  const handle = await createCliContext({ market: false });
   try {
     const result = await tool.execute(input, handle.ctx);
     if (!result.ok) {
@@ -429,7 +520,7 @@ const cmdAdviceStats = async (
   const untilRaw = flagString(flags, 'until');
   if (untilRaw !== undefined) input.until = parseSince(untilRaw).toISOString();
 
-  const handle = await createCliContext();
+  const handle = await createCliContext({ market: false });
   try {
     const result = await tool.execute(input, handle.ctx);
     if (!result.ok) {
@@ -503,7 +594,7 @@ const cmdAdviceOutcome = async (
       .map((id) => id.trim())
       .filter((id) => id.length > 0) ?? [];
   const notes = flagString(flags, 'notes');
-  const handle = await createCliContext();
+  const handle = await createCliContext({ market: false });
   try {
     const tool = resolveTool('save_decision_review');
     if (tool === undefined) throw unknownToolError('save_decision_review');
@@ -869,6 +960,7 @@ const printHelp = (): void => {
   --json                         以 JSON 输出（所有查询类子命令支持）
 
 Tools:
+  plugins check [--json]                只读校验 plugins.json（未知 id / 缺失 / 依赖），不写入
   tools list                            列出全部 tool（name / sideEffect / description）
   tools inspect <name>                  输出 tool 的 input JSON Schema
   tools call <name> --input '<json>'    调用 tool，打印 data 或 error JSON
@@ -919,6 +1011,11 @@ const run = async (argv: readonly string[]): Promise<number> => {
     printHelp();
     return 0;
   }
+  if (cmd === 'plugins') {
+    if (sub === 'check') return cmdPluginsCheck(json);
+    throw new CliUsageError(`未知 plugins 子命令: "${sub ?? ''}"（仅支持只读 check）`);
+  }
+
   if (cmd === 'tools') {
     if (sub === 'list') {
       cmdToolsList(json);

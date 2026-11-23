@@ -9,6 +9,7 @@ import {
 import { NotificationSchema } from '@luoome/core';
 import {
   AgentScenarioIdSchema,
+  checkPluginConfig,
   discoverExternalMcpTools,
   sendNotificationTool,
 } from '@luoome/tools';
@@ -44,6 +45,9 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     dataTransferDbPath,
     chatRuntimeRef,
   } = deps;
+
+  // 只读：手写 plugins.json 的诊断视图，不提供任何写入 / CAS / permit 入口。
+  app.get('/api/settings/plugins', () => jsonResult({ ok: true, data: checkPluginConfig() }));
 
   app.get('/api/settings/mcp', () => {
     const store = deps.mcpSettingsStore;
