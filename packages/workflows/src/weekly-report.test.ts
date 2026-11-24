@@ -1,3 +1,4 @@
+import { type Advice, AdviceSettlementSchema, money, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +10,38 @@ const MONDAY_NOON = new Date('2026-11-16T04:00:00Z'); // 12:00 上海，周一
 const context = async () =>
   buildTestContext({
     clock: () => MONDAY_NOON,
+  });
+
+const makeAdvice = (id: string, confidence: number, createdAt: Date): Advice => ({
+  id,
+  subjectKind: 'stock',
+  subjectId: '002594.SZ',
+  decision: 'buy',
+  confidence,
+  horizon: 'short',
+  entryPriceLow: money(99),
+  entryPriceHigh: money(101),
+  reasoning: { premise: 'premise', evidence: [], counterEvidence: [] },
+  risks: [],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  sourceTool: 'analyze_stock',
+  basedOn: { dataAsOf: createdAt },
+  validFrom: createdAt,
+  validUntil: new Date(createdAt.getTime() + 3 * 86_400_000),
+  createdAt,
+});
+
+const settlement = (adviceId: string, hit: boolean, excessPct: number, evaluatedAt: Date) =>
+  AdviceSettlementSchema.parse({
+    adviceId,
+    horizonDays: 5,
+    assumedEntryPrice: money(100),
+    exitPrice: money(hit ? 105 : 98),
+    returnPct: hit ? 0.05 : -0.02,
+    benchmarkReturnPct: 0.01,
+    excessPct,
+    hit,
+    evaluatedAt,
   });
 
 describe('weekly-report 成绩单', () => {
@@ -26,6 +59,7 @@ describe('weekly-report 成绩单', () => {
     expect(report.periodEnd).toBe('2026-11-13');
     expect(report.sections.map((section) => section.key)).toEqual([
       'advice-scorecard',
+      'stock-brief-score',
       'advice-week',
       'advice-feedback',
     ]);
@@ -71,5 +105,104 @@ describe('weekly-report 成绩单', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect((result.data as { report: { kind: string } }).report.kind).toBe('weekly');
+  });
+});
+
+describe('weekly-report 个股观察成绩', () => {
+  const sectionOf = (result: Awaited<ReturnType<typeof weeklyReportOperation.run>>) => {
+    expect(result.ok).toBe(true);
+    if (!result.ok) return undefined;
+    return result.data.report.sections.find((section) => section.key === 'stock-brief-score');
+  };
+
+  const textsOf = (section: { blocks: ReadonlyArray<{ kind: string; text?: string }> }) =>
+    section.blocks.flatMap((block) => (block.kind === 'text' ? [block.text ?? ''] : []));
+
+  it('没有已结算观察时标 unavailable，并给出可读原因与免责声明', async () => {
+    const ctx = await context();
+    const section = sectionOf(await weeklyReportOperation.run({}, ctx));
+    expect(section?.title).toBe('个股观察成绩');
+    expect(section?.status).toBe('unavailable');
+    expect(section?.missingDimensions.map((item) => item.dimension)).toContain(
+      'stock-brief-score.settlement',
+    );
+    const text = textsOf(section ?? { blocks: [] }).join('\n');
+    expect(text).toContain('没有已结算的观察样本');
+    expect(text).toContain('不构成投资建议');
+    expect(text).not.toMatch(/建仓|加仓|减仓|清仓|买入|卖出|满仓/);
+  });
+
+  it('规则观察不计入分母，单列条数，与成绩单口径一致', async () => {
+    const ctx = await context();
+    const now = ctx.clock();
+    const createdAt = new Date(now.getTime() - 2 * 86_400_000);
+    await ctx.repos.advice.save(makeAdvice('brief-normal-a', 70, createdAt));
+    await ctx.repos.advice.save(makeAdvice('brief-normal-b', 40, createdAt));
+    const fallback: Advice = {
+      ...makeAdvice('brief-fallback', 30, createdAt),
+      reasoning: {
+        premise: 'LLM 推理不可用，基于规则的保守判断',
+        evidence: ['规则 fallback：测试夹具'],
+        counterEvidence: [],
+      },
+    };
+    await ctx.repos.advice.save(fallback);
+    await ctx.repos.adviceTracking.saveSettlement(settlement('brief-normal-a', true, 0.04, now));
+    await ctx.repos.adviceTracking.saveSettlement(settlement('brief-normal-b', false, -0.02, now));
+    await ctx.repos.adviceTracking.saveSettlement(settlement('brief-fallback', true, 0.06, now));
+
+    const result = await weeklyReportOperation.run({}, ctx);
+    const section = sectionOf(result);
+    expect(section?.status).toBe('complete');
+    const metrics = (section?.blocks ?? []).flatMap((block) =>
+      block.kind === 'metrics' ? block.items : [],
+    );
+    const byKey = Object.fromEntries(metrics.map((item) => [item.key, item.value]));
+    expect(byKey.samples).toBe(2);
+    expect(byKey.ruleFallbackSamples).toBe(1);
+    expect(byKey.hitRate).toBe(50);
+
+    // 与同一窗口的成绩单同一口径。
+    if (!result.ok) return;
+    const scorecard = result.data.report.sections.find((item) => item.key === 'advice-scorecard');
+    const scorecardMetrics = (scorecard?.blocks ?? []).flatMap((block) =>
+      block.kind === 'metrics' ? block.items : [],
+    );
+    const scorecardByKey = Object.fromEntries(
+      scorecardMetrics.map((item) => [item.key, item.value]),
+    );
+    expect(scorecardByKey.samples).toBe(byKey.samples);
+    expect(scorecardByKey.hitRate).toBe(byKey.hitRate);
+  });
+
+  it('生成周报不调用 LLM / 行情，也不触发生成 brief', async () => {
+    const base = await context();
+    const calls = { llm: 0, market: 0 };
+    const llm = {
+      name: base.adapters.llm.name,
+      generate: async () => {
+        calls.llm += 1;
+        throw new Error('weekly report must not call llm');
+      },
+    };
+    const market = new Proxy(base.adapters.market, {
+      get: (target, prop) => {
+        const value = Reflect.get(target, prop);
+        if (typeof value === 'function') {
+          return (...args: unknown[]) => {
+            calls.market += 1;
+            return (value as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return value;
+      },
+    });
+    const result = await weeklyReportOperation.run({}, {
+      ...base,
+      adapters: { ...base.adapters, llm, market },
+    } as typeof base);
+    expect(result.ok).toBe(true);
+    expect(calls.llm).toBe(0);
+    expect(calls.market).toBe(0);
   });
 });

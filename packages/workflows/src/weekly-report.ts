@@ -162,6 +162,112 @@ const scorecardSection = async (ctx: WorkflowContext, now: Date): Promise<Report
   };
 };
 
+/** 新增「个股观察成绩」section；与既有「建议成绩单」并存，不改其语义。 */
+const STOCK_BRIEF_SCORE_KEY = 'stock-brief-score';
+const STOCK_BRIEF_SCORE_DISCLAIMER =
+  '本内容为技术研究记录，不构成投资建议；观察与信号不等于收益概率，规则观察不计入命中率分母。';
+
+const stockBriefScoreSection = async (
+  ctx: WorkflowContext,
+  now: Date,
+): Promise<ReportSectionPiece> => {
+  const scorecard = await ctx.tools.get_advice_scorecard.execute({
+    days: SCORECARD_DAYS,
+    horizonDays: SCORECARD_HORIZON,
+  });
+  if (!scorecard.ok) {
+    return unavailableSection(
+      STOCK_BRIEF_SCORE_KEY,
+      '个股观察成绩',
+      false,
+      now,
+      `${STOCK_BRIEF_SCORE_KEY}.settlement`,
+      scorecard.error.kind,
+    );
+  }
+  const data = scorecard.data;
+  const evidence = localEvidence(
+    `${STOCK_BRIEF_SCORE_KEY}:0`,
+    `${STOCK_BRIEF_SCORE_KEY}.settlement`,
+    now,
+    'local/settlement',
+  );
+  const ruleNote = `规则观察（低置信）${data.ruleFallbackSamples} 条：单列，不计入命中率分母`;
+  if (data.samples === 0) {
+    return {
+      section: {
+        key: STOCK_BRIEF_SCORE_KEY,
+        title: '个股观察成绩',
+        required: false,
+        status: 'unavailable',
+        dataAsOf: now,
+        blocks: [
+          {
+            kind: 'text',
+            text:
+              '个股观察成绩暂不可用 · 窗口内没有已结算的观察样本' +
+              `（规则观察 ${data.ruleFallbackSamples} 条不计入命中率分母）。` +
+              STOCK_BRIEF_SCORE_DISCLAIMER,
+            tone: 'warning',
+          },
+        ],
+        evidenceIds: [evidence.id],
+        missingDimensions: [
+          missing(
+            `${STOCK_BRIEF_SCORE_KEY}.settlement`,
+            '窗口内没有已结算的观察样本（规则观察不计入分母）',
+            'no_data',
+          ),
+        ],
+      },
+      evidence: [evidence],
+    };
+  }
+  return {
+    section: {
+      key: STOCK_BRIEF_SCORE_KEY,
+      title: '个股观察成绩',
+      required: false,
+      status: 'complete',
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'metrics',
+          items: [
+            { key: 'samples', label: '已结算观察', value: data.samples },
+            { key: 'hitRate', label: '命中率', value: pct(data.hitRate), unit: 'pct' },
+            { key: 'avgExcessPct', label: '平均超额', value: data.avgExcessPct, unit: 'pct' },
+            { key: 'ruleFallbackSamples', label: '规则观察', value: data.ruleFallbackSamples },
+            { key: 'horizonDays', label: '口径', value: `T+${data.horizonDays}` },
+            { key: 'benchmark', label: '基准', value: data.benchmark },
+            { key: 'windowDays', label: '窗口', value: `${SCORECARD_DAYS} 天` },
+          ],
+        },
+        {
+          kind: 'table',
+          columns: [
+            { key: 'bucket', label: 'confidence' },
+            { key: 'samples', label: '样本' },
+            { key: 'hitRate', label: '命中率' },
+            { key: 'avgExcessPct', label: '平均超额' },
+          ],
+          rows: data.groups.map((group) => ({
+            bucket: group.bucket,
+            samples: group.samples,
+            hitRate: pct(group.hitRate),
+            avgExcessPct: group.avgExcessPct,
+          })),
+        },
+        { kind: 'text', text: ruleNote, tone: 'factual' },
+        { kind: 'text', text: STOCK_BRIEF_SCORE_DISCLAIMER, tone: 'factual' },
+      ],
+      evidenceIds: [evidence.id],
+      missingDimensions: [],
+    },
+    evidence: [evidence],
+  };
+};
+
 const adviceWeekSection = async (
   periodStart: string,
   periodEnd: string,
@@ -308,6 +414,7 @@ const runWeeklyReport = async (
       buildSections: async (generatedAt) =>
         await Promise.all([
           scorecardSection(ctx, generatedAt),
+          stockBriefScoreSection(ctx, generatedAt),
           adviceWeekSection(periodStart, periodEnd, ctx, generatedAt),
           feedbackSection(ctx, generatedAt),
         ]),
