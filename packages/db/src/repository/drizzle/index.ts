@@ -26,6 +26,7 @@ export { DrizzleReportRepository } from './report.js';
 export { DrizzleSectorCatalogRepository } from './sector-catalog.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
 export { DrizzleStockRepository } from './stock.js';
+export { DrizzleStockBriefRepository } from './stock-brief.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
 export { DrizzleStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';

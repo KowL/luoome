@@ -43,6 +43,7 @@ export * from './entity/sector-intraday-ranking.js';
 export * from './entity/sector-quote.js';
 export * from './entity/signal-observation.js';
 export * from './entity/stock.js';
+export * from './entity/stock-brief.js';
 export * from './entity/stock-research-profile.js';
 export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';

@@ -51,6 +51,7 @@ import type {
 } from '../entity/sector-catalog.js';
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
+import type { StockBrief, StockBriefPhase, StockBriefUsage } from '../entity/stock-brief.js';
 import type {
   MarketCoverage,
   StockUniverseApplySummary,
@@ -480,6 +481,37 @@ export interface MinuteBarRepository {
   removeBefore(before: Date): Promise<number>;
 }
 
+/**
+ * 每日个股观察记录（design.md §4.1）。唯一键 (accountId, tradingDate, stockId, phase)
+ * 即幂等键：upsert 覆盖同一行，不新增第二行。
+ */
+export interface StockBriefRepository {
+  /** 按唯一键幂等写入；同键覆盖字段并返回落库后的记录。 */
+  upsert(brief: StockBrief): Promise<StockBrief>;
+  findById(id: string): Promise<StockBrief | null>;
+  /** 某交易日的观察记录；可按账户和阶段收窄。 */
+  findByDay(input: {
+    readonly tradingDate: string;
+    readonly accountId?: string;
+    readonly phase?: StockBriefPhase;
+  }): Promise<StockBrief[]>;
+  /** 某只股票最近的观察记录；可按账户和交易日收窄。 */
+  findByStock(input: {
+    readonly stockId: string;
+    readonly accountId?: string;
+    readonly tradingDate?: string;
+    readonly limit?: number;
+  }): Promise<StockBrief[]>;
+  /** 关注列表当日成员的观察记录（成员已归档的不计入）。 */
+  listByWatchlistDay(input: {
+    readonly watchlistId: string;
+    readonly tradingDate: string;
+    readonly accountId?: string;
+  }): Promise<StockBrief[]>;
+  /** 当日 LLM 用量合计；没有记录时全为 0。 */
+  sumUsage(tradingDate: string): Promise<StockBriefUsage>;
+}
+
 export interface AdviceRepository {
   save(advice: Advice): Promise<void>;
   findById(id: string): Promise<Advice | null>;
@@ -625,6 +657,8 @@ export interface RepositoryRegistry {
   readonly portfolioCorporateAction: PortfolioCorporateActionRepository;
   readonly portfolioPerformanceSnapshot: PortfolioPerformanceSnapshotRepository;
   readonly advice: AdviceRepository;
+  /** 每日个股观察记录（事实指纹 / 降级原因 / LLM 计量）。 */
+  readonly stockBrief: StockBriefRepository;
   /** 建议反馈 + T+N 结算（成绩单的事实来源）。 */
   readonly adviceTracking: AdviceTrackingRepository;
   readonly tradingPlan: TradingPlanRepository;
