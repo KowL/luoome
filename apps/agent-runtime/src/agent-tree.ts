@@ -8,7 +8,7 @@ import type { JsonObject } from '@luoome/dsh-bridge/protocol';
  * 只接收本 Run 插件发出的带父子关联审计事件，不解析 DSH 私有会话日志。
  */
 
-export type RunAgentStatus = 'active' | 'terminal';
+export type RunAgentStatus = 'active' | 'terminal' | 'abandoned';
 
 export interface RunAgentNode {
   readonly agentId: string;
@@ -18,6 +18,8 @@ export interface RunAgentNode {
 }
 
 const POLL_INTERVAL_MS = 10;
+
+const isFinished = (status: RunAgentStatus): boolean => status !== 'active';
 
 export class RunAgentTree {
   readonly #rootAgentId: string;
@@ -49,8 +51,17 @@ export class RunAgentTree {
   dispose(agentId: string): void {
     const node = this.#nodes.get(agentId);
     if (node === undefined || node.agentId === this.#rootAgentId) return;
-    if (node.status === 'terminal') return;
+    // 已放弃的后代保持 abandoned：正常结算不会把放弃结果改写回普通终态。
+    if (isFinished(node.status)) return;
     this.#nodes.set(agentId, { ...node, status: 'terminal' });
+  }
+
+  /** 子 Agent 到自己的 deadline 时只标记该节点；父级与整个 Run 不受影响。 */
+  abandon(agentId: string): void {
+    const node = this.#nodes.get(agentId);
+    if (node === undefined || node.agentId === this.#rootAgentId) return;
+    if (isFinished(node.status)) return;
+    this.#nodes.set(agentId, { ...node, status: 'abandoned' });
   }
 
   hasActiveDescendants(): boolean {
@@ -69,17 +80,32 @@ export class RunAgentTree {
     }
   }
 
+  /** 等待到位后仍未结算的后代按放弃处理，避免它们把整个 Run 拖成失败。 */
+  abandonDescendants(): number {
+    let abandoned = 0;
+    for (const [agentId, node] of this.#nodes) {
+      if (node.parentAgentId === null || node.status !== 'active') continue;
+      this.#nodes.set(agentId, { ...node, status: 'abandoned' });
+      abandoned += 1;
+    }
+    return abandoned;
+  }
+
   snapshot(): readonly RunAgentNode[] {
     return [...this.#nodes.values()];
   }
 }
 
-/** 只读本 Run 的派生/终止审计；其它诊断与畸形 payload 一律忽略。 */
+/** 只读本 Run 的派生/终止/放弃审计；其它诊断与畸形 payload 一律忽略。 */
 export const recordAgentDiagnostic = (tree: RunAgentTree, payload: JsonObject): boolean => {
   const { code, agentId, parentAgentId } = payload;
   if (typeof code !== 'string' || typeof agentId !== 'string') return false;
   if (code === 'subagent.disposed') {
     tree.dispose(agentId);
+    return true;
+  }
+  if (code === 'subagent.abandoned') {
+    tree.abandon(agentId);
     return true;
   }
   if (code !== 'subagent.spawn' || typeof parentAgentId !== 'string') return false;
@@ -95,17 +121,29 @@ export interface DescendantWaitOptions {
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
-/** 根 Agent 已 idle 后仍需等全部后代进入终态；返回 false 表示超时或被取消。 */
+export type DescendantWaitOutcome =
+  /** 全部后代已进入终态（含 abandoned）。 */
+  | 'settled'
+  /** 到位时仍有活跃后代：它们被标记为 abandoned，Run 不再因此失败。 */
+  | 'abandoned'
+  /** 等待期间整次 Run 被取消，交由既有取消路径处理。 */
+  | 'cancelled';
+
+/** 根 Agent 已 idle 后仍需等全部后代进入终态。 */
 export const awaitDescendants = async (
   tree: RunAgentTree,
   options: DescendantWaitOptions,
-): Promise<boolean> => {
+): Promise<DescendantWaitOutcome> => {
   const now = options.now ?? Date.now;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   while (tree.hasActiveDescendants()) {
-    if (options.cancelled() || now() >= options.deadline) return false;
+    if (options.cancelled()) return 'cancelled';
+    if (now() >= options.deadline) {
+      tree.abandonDescendants();
+      return 'abandoned';
+    }
     await sleep(POLL_INTERVAL_MS);
   }
-  return true;
+  return 'settled';
 };

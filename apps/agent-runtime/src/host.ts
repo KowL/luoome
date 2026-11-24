@@ -301,13 +301,14 @@ export class NodeRuntimeHost {
         completedTurn = true;
       }
       if (!completedTurn) throw new Error('DSH returned idle without a committed completed turn');
-      // 根 Agent idle 不代表 Run 完成：仍活跃的后代必须排空，否则只能按超时/取消结束。
+      // 根 Agent idle 不代表 Run 完成：仍活跃的后代必须排空。取消仍按既有取消路径结案；
+      // 到位后尚未结算的后代按 abandoned 收尾，不把整个 Run 判失败。
       if (!active.cancel) {
-        const descendantsDone = await awaitDescendants(active.tree, {
+        const descendants = await awaitDescendants(active.tree, {
           deadline: Date.parse(run.expiresAt),
           cancelled: () => active.cancel === true,
         });
-        if (!descendantsDone) throw new Error('Descendant Agents remained active');
+        if (descendants === 'cancelled') throw new Error('Descendant Agents remained active');
       }
       status = active.cancel
         ? active.cancelReason === 'timeout'

@@ -49,6 +49,8 @@ export const HostConfigSchema = z.strictObject({
       initializeTimeoutMs: z.number().int().min(100).max(60000).default(15000),
       maxToolCalls: z.number().int().min(1).max(128).default(32),
       maxModelCalls: z.number().int().min(1).max(32).default(8),
+      /** 单个子 Agent 从创建起的墙钟预算；到期只放弃该子 Agent，不改判整个 Run。 */
+      subagentTimeoutMs: z.number().int().min(100).max(600000).default(60000),
     })
     .prefault({}),
 });

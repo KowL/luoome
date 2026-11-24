@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Context } from '@deepseek-ai/cordis';
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent';
+import type { SessionId } from '@deepseek-ai/dsh-session';
+import type {} from '@deepseek-ai/dsh-subagent';
 import type { ToolExecution } from '@deepseek-ai/dsh-tools';
 import type {} from '@deepseek-ai/dsh-web';
 import { z } from 'zod';
@@ -43,10 +45,16 @@ export function apply(ctx: Context): void {
   let nativeCalls = 0;
   let toolCalls = 0;
   const manifest = new Map(run.manifest.tools.map((tool) => [tool.name, tool]));
+  // 官方组合只在 Run 显式允许派生时写入 Profile；`subagent` 工具不在业务 manifest 里。
+  const subagentTool = run.allowSubagents === true ? 'subagent' : undefined;
+  const rootTools = [...manifest.keys(), ...(subagentTool === undefined ? [] : [subagentTool])];
   // 根 Agent 的白名单就是已批准的 manifest；子 Agent 另行取逐级交集，不能假设继承。
-  const agentAllowlists = new Map<string, ReadonlySet<string>>([
-    [sessionId, new Set(manifest.keys())],
-  ]);
+  const agentAllowlists = new Map<string, ReadonlySet<string>>([[sessionId, new Set(rootTools)]]);
+  // 子 Agent 的墙钟预算到期后只放弃该子 Agent，经官方 interrupt 结算给父级。
+  const childDeadlines = new Map<
+    string,
+    { readonly parentAgentId: string; readonly timer: ReturnType<typeof setTimeout> }
+  >();
   const definitions = new Map<string, unknown>();
   const replies = new Map<ToolExecution['token'], ToolReply>();
   const callIds = new Map<ToolExecution['token'], string>();
@@ -102,16 +110,23 @@ export function apply(ctx: Context): void {
     return agentId === undefined ? undefined : agentAllowlists.get(agentId);
   };
 
+  /** 官方 `subagent` 工具只给根 Agent，且必须由本 Run 的开关授权。 */
+  const isSubagentTool = (exec: Readonly<ToolExecution>): boolean =>
+    subagentTool !== undefined &&
+    exec.name === subagentTool &&
+    exec.agent?.session.id === sessionId;
+
   const denied = (exec: Readonly<ToolExecution>): string | undefined => {
     if (lifecycle.signal.aborted || Date.now() >= Date.parse(run.expiresAt))
       return 'Run is no longer active';
     const agentId = exec.agent?.session.id;
     const allow = allowedFor(exec);
     if (agentId === undefined || allow === undefined) return 'Agent is outside the bound run';
-    if (!allow.has(exec.name) || !manifest.has(exec.name))
+    if (!allow.has(exec.name) || (!manifest.has(exec.name) && !isSubagentTool(exec)))
       return 'Tool is outside the Agent allowlist';
     if (
       agentId === sessionId &&
+      definitions.has(exec.name) &&
       ctx.tools.get(exec.name, exec.agent) !== definitions.get(exec.name)
     ) {
       return 'Tool registration differs from the approved manifest';
@@ -179,8 +194,9 @@ export function apply(ctx: Context): void {
     const tool = manifest.get(exec.name);
     const agentId = exec.agent?.session.id;
     const allow = allowedFor(exec);
+    const delegation = tool === undefined && isSubagentTool(exec);
     if (
-      !tool ||
+      (tool === undefined && !delegation) ||
       agentId === undefined ||
       allow === undefined ||
       !allow.has(exec.name) ||
@@ -188,6 +204,16 @@ export function apply(ctx: Context): void {
       Date.now() >= Date.parse(run.expiresAt)
     ) {
       return { kind: 'deny', reason: 'Call is outside the active run allowlist' };
+    }
+    if (tool === undefined) {
+      // 委派本身不占业务工具预算，也不经 Gateway；派生结果由官方 activation 回传。
+      publish('diagnostic', {
+        code: 'subagent.tool.call',
+        agentId,
+        callId: callId(exec),
+        toolName: exec.name,
+      });
+      return next();
     }
     if (++toolCalls > host.limits.maxToolCalls)
       return { kind: 'deny', reason: 'Tool-call limit exceeded' };
@@ -274,7 +300,18 @@ export function apply(ctx: Context): void {
   });
   ctx.on('tools/result', (exec, result) => {
     const tool = manifest.get(exec.name);
-    if (!tool) return;
+    if (!tool) {
+      if (isSubagentTool(exec)) {
+        publish('diagnostic', {
+          code: 'subagent.tool.result',
+          agentId: exec.agent?.session.id ?? '',
+          callId: callId(exec),
+          toolName: exec.name,
+          ok: !result.isError,
+        });
+      }
+      return;
+    }
     const reply = replies.get(exec.token);
     replies.delete(exec.token);
     nativeAdmissions.delete(exec.token);
@@ -310,6 +347,55 @@ export function apply(ctx: Context): void {
     callIds.delete(exec.token);
   });
 
+  /** 子 Agent 限额到期：经官方 interrupt 结算为 abandoned，审计带父子关联。 */
+  const abandonChild = (agentId: string): void => {
+    const entry = childDeadlines.get(agentId);
+    if (entry === undefined) return;
+    childDeadlines.delete(agentId);
+    const parent = ctx.agents.get(entry.parentAgentId as SessionId);
+    const subagents = ctx.get('subagents');
+    if (
+      parent === undefined ||
+      subagents === undefined ||
+      ctx.agents.get(agentId as SessionId) === undefined
+    )
+      return;
+    try {
+      subagents.interrupt(agentId as SessionId, { kind: 'ancestor', agent: parent });
+    } catch {
+      // 授权失败说明父子关系已变；不再声称该子 Agent 已放弃，交由等待到期的保护路径。
+      publish('diagnostic', {
+        code: 'subagent.abandon_failed',
+        agentId,
+        parentAgentId: entry.parentAgentId,
+      });
+      return;
+    }
+    publish('diagnostic', {
+      code: 'subagent.abandoned',
+      agentId,
+      parentAgentId: entry.parentAgentId,
+      reason: 'deadline',
+      budgetMs: host.limits.subagentTimeoutMs,
+    });
+  };
+
+  const armChildDeadline = (agentId: string, parentAgentId: string): void => {
+    const deadline = Math.min(
+      Date.parse(run.expiresAt),
+      Date.now() + host.limits.subagentTimeoutMs,
+    );
+    const timer = setTimeout(() => abandonChild(agentId), Math.max(0, deadline - Date.now()));
+    childDeadlines.set(agentId, { parentAgentId, timer });
+  };
+
+  const forgetChild = (agentId: string): void => {
+    const entry = childDeadlines.get(agentId);
+    if (entry === undefined) return;
+    clearTimeout(entry.timer);
+    childDeadlines.delete(agentId);
+  };
+
   ctx.on('agent/created', async ({ agent }) => {
     if (agent.session.id !== sessionId) {
       const agentId = agent.session.id;
@@ -343,6 +429,7 @@ export function apply(ctx: Context): void {
         depth: agent.session.header.delegationDepth ?? 0,
         allowlist: allow,
       });
+      armChildDeadline(agentId, parentAgentId);
       await deliveries;
       lifecycle.signal.throwIfAborted();
       return;
@@ -351,7 +438,7 @@ export function apply(ctx: Context): void {
       .schemas()
       .map((tool) => tool.name)
       .sort();
-    if (canonicalJson(globalNames) !== canonicalJson([...manifest.keys()].sort())) {
+    if (canonicalJson(globalNames) !== canonicalJson([...rootTools].sort())) {
       throw new Error('Runtime tool inventory differs from manifest');
     }
     for (const tool of run.manifest.tools) {
@@ -373,11 +460,15 @@ export function apply(ctx: Context): void {
         throw new Error('Unapproved native tool declaration');
       definitions.set(tool.name, actual);
     }
-    agent.ctx.tools.restrict({ allow: [...manifest.keys()] });
+    if (subagentTool !== undefined) {
+      const delegation = ctx.tools.get(subagentTool);
+      if (!delegation) throw new Error('Approved subagent tool is not registered');
+      definitions.set(subagentTool, delegation);
+    }
+    agent.ctx.tools.restrict({ allow: [...rootTools] });
     const actual = agent.ctx.tools.schemas();
     if (
-      canonicalJson(actual.map((tool) => tool.name).sort()) !==
-      canonicalJson([...manifest.keys()].sort())
+      canonicalJson(actual.map((tool) => tool.name).sort()) !== canonicalJson([...rootTools].sort())
     ) {
       throw new Error('Actual Agent tool inventory differs from manifest');
     }
@@ -393,6 +484,7 @@ export function apply(ctx: Context): void {
   ctx.on('agent/disposed', ({ agent }) => {
     if (agent.session.id === sessionId) return;
     const parentAgentId = agent.session.header.parentSession;
+    forgetChild(agent.session.id);
     agentAllowlists.delete(agent.session.id);
     publish('diagnostic', {
       code: 'subagent.disposed',
@@ -470,6 +562,8 @@ export function apply(ctx: Context): void {
 
   ctx.effect(() => async () => {
     lifecycle.abort(new Error('Runtime disposed'));
+    for (const entry of childDeadlines.values()) clearTimeout(entry.timer);
+    childDeadlines.clear();
     await deliveries;
   });
 }

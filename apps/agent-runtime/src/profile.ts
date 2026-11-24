@@ -95,6 +95,18 @@ export async function prepareProfile(root: string, config: HostConfig, run: RunR
       },
     );
   }
+  // 官方进程内子 Agent 最小组合：默认不加载，仅当 Run 显式允许派生时写入受限 Profile。
+  if (run.allowSubagents === true) {
+    entries.push(
+      { id: 'subagent', name: '@deepseek-ai/dsh-subagent' },
+      { id: 'subagent-spawn', name: '@deepseek-ai/dsh-subagent-spawn-in-process' },
+      {
+        id: 'tool-subagent',
+        name: '@deepseek-ai/dsh-tool-subagent',
+        config: { provider: 'spawn', toolName: 'subagent' },
+      },
+    );
+  }
   entries.push(
     { id: 'luoome-run-bridge', name: plugin },
     {

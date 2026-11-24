@@ -3,7 +3,7 @@
 > 创建：2026-10-20；统一验收更新：2026-10-21。
 > 依据：[平台设计](./ddd/dsh-plugin-platform-design.md)、[研究与验证计划](./dsh-plugin-platform-research-plan.md)。
 > 用户已授权拆分任务、创建开发线程并开始实现；线程使用 `gpt-6.1-sol`、`max`。
-> 当前阶段：D01–D08 已实现并通过受控环境验收；D09 已交付最小可验收子集（预算账本、会话目录保留策略、升级排空、灰度门控），Tenant 删除备份恢复、质量/容量对照与生产证据包未完成；D10 已交付最小可验收子集（子 Agent 创建闸门与权限交集、父子共享预算、后代完成判定），社区插件准入比较、更多业务域与真实启用官方 dsh-subagent 组合尚未完成。
+> 当前阶段：D01–D08 已实现并通过受控环境验收；D09 已交付最小可验收子集（预算账本、会话目录保留策略、升级排空、灰度门控），Tenant 删除备份恢复、质量/容量对照与生产证据包未完成；D10 已交付最小可验收子集（子 Agent 创建闸门与权限交集、父子共享预算、后代完成判定；官方 dsh-subagent 组合按 Run 开关加载，子 Agent 到期只标 abandoned），社区插件准入比较、更多业务域与生产多 Agent 的 R12/AC12 完整验收尚未完成。
 
 ## 1. 本批交付与范围
 
@@ -31,7 +31,7 @@
 > D09 状态（2026-11-24，最小可验收子集）：已实现会话目录保留策略（默认 `off`，`dry-run`/`enforce` 显式开启，active/在途与越界路径一律不动，账户删除先阻断新 run 再等排空、未排空不删）、逐 attempt 模型预算账本（含重试，未知 usage 记 unknown 不归零）、进程内升级排空闸门（排空期间新请求确定拒绝，配置变化经既有 configHash 失效旧绑定）、按账户 allowlist/稳定哈希百分比的灰度门控与一键回退。未完成：Tenant 删除后的备份恢复闭环、质量/容量对照（R11）、生产证据包、多宿主排空。灰度未命中时当前树没有 AI SDK 回退运行时（旧 agent loop 已下线），请求返回明确错误。
 | D09 | 完整预算覆盖、Tenant 删除恢复、升级排空、质量/资源对照与灰度 | D08 及完整研究门槛 | 后续 | R05、R08–R11、R13；AC01–AC11 |
 
-> D10 状态（2026-11-24，最小可验收子集）：已实现 Run 级 `allowSubagents` 子 Agent 创建闸门（默认关闭，未允许时创建即拒绝并留下审计）、子 Agent 工具集逐级交集（子角色声明 ∩ 父级白名单，`tools/pre-execute` 按 agent 白名单再次校验）、父子共享 toolCalls/modelCalls 并复用同一模型 attempt 账本、Host 后代完成判定（root idle 但后代活跃不判完成，取消/排空时后代确定终止，审计事件带 parent session id）。未完成：社区插件准入比较（R03 扩展）、更多业务域、真实启用官方 `dsh-subagent` 组合与生产多 Agent 的深度/数量/并发/重启/费用关联验收（R12、AC12 完整门槛）。
+> D10 状态（2026-11-24，最小可验收子集）：已实现 Run 级 `allowSubagents` 子 Agent 创建闸门（默认关闭，未允许时创建即拒绝并留下审计）、子 Agent 工具集逐级交集（子角色声明 ∩ 父级白名单，`tools/pre-execute` 按 agent 白名单再次校验）、父子共享 toolCalls/modelCalls 并复用同一模型 attempt 账本、Host 后代完成判定（root idle 但后代活跃不判完成，取消/排空时后代确定终止，审计事件带 parent session id）。后续（2026-11-24）：官方 `dsh-subagent` + `dsh-subagent-spawn-in-process` + `dsh-tool-subagent`（钉 `0.2.1-rc.2`）只在 `run.allowSubagents === true` 时写入受限 Profile，默认仍不加载任何子 Agent 插件；官方 `subagent` 工具只对根 Agent 开放、不占业务工具预算、子 Agent 仍取逐级交集；子 Agent 到 `limits.subagentTimeoutMs`（默认 60s，并与 `run.expiresAt` 取较早者）时由桥接插件经官方 `ctx.subagents.interrupt` 结算为 `abandoned`，该状态是终态，父级与整个 Run 不因此失败，审计与 `run.terminal.agents[]` 都带 `abandoned` 和 parent session id；用户取消与 Run 级超时仍走原有取消/失败路径。未完成：社区插件准入比较（R03 扩展）、更多业务域、生产多 Agent 的深度/数量/并发/重启/费用关联验收（R12、AC12 完整门槛）。
 | D10 | 社区插件准入比较、更多业务域与多 Agent | 单 Agent 基础稳定；各自准入 | 后续 | R03 扩展、R12；AC12 |
 
 D01–D08 已为本批开发范围。D09–D10 已拆分但不提前派发，不为未验证的恢复设计新增一套账本。

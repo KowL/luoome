@@ -85,7 +85,7 @@ HTTP provider 仍真实加载。fixture 不是网络失败的 fallback。
 每轮使用私有临时 DSH_HOME、工作目录和 Profile，子进程环境不继承个人 home、.env、模型 key 或代理变量。
 桥接插件构建产物在 run 启动时复制进私有 Profile，其内容 SHA256 纳入 profileHash，避免共享构建覆盖在途绑定。
 启动先检查真实 dump-config 的完整插件名清单，再在 `agent/created` 检查实际工具库存、schema 和作用域。
-Profile 不加载 Shell、通用文件写工具、动态插件管理、MCP、子 Agent、session-log 上传或额外模型调用插件。
+Profile 默认不加载 Shell、通用文件写工具、动态插件管理、MCP、子 Agent、session-log 上传或额外模型调用插件。只有 Run 显式 `allowSubagents: true` 时，才额外写入官方子 Agent 最小组合（`dsh-subagent`、`dsh-subagent-spawn-in-process`、`dsh-tool-subagent`，钉 `0.2.1-rc.2`），并由桥接插件按 Run 开关授权根 Agent 的 `subagent` 工具。
 原生 `tools.guard` 是最终拒绝边界；通用工具的超时信号传给官方 provider。
 
 文本事件来自真实 `agent/assistant-stream`；durable `session/event` 使用同一 attempt/message 身份校正。

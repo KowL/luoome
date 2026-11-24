@@ -89,7 +89,12 @@ afterEach(async () => {
 });
 
 const createAgentFixture = async (
-  options: { allowSubagents?: boolean; maxToolCalls?: number; maxModelCalls?: number } = {},
+  options: {
+    allowSubagents?: boolean;
+    maxToolCalls?: number;
+    maxModelCalls?: number;
+    subagentTimeoutMs?: number;
+  } = {},
 ) => {
   const emitted: JsonObject[] = [];
   const server: Server = createServer(async (request, response) => {
@@ -149,6 +154,9 @@ const createAgentFixture = async (
           toolTimeoutMs: 1000,
           maxToolCalls: options.maxToolCalls ?? 8,
           maxModelCalls: options.maxModelCalls ?? 8,
+          ...(options.subagentTimeoutMs === undefined
+            ? {}
+            : { subagentTimeoutMs: options.subagentTimeoutMs }),
         },
       },
       run,
@@ -163,6 +171,14 @@ const createAgentFixture = async (
   const guards: Array<(exec: unknown) => string | undefined> = [];
   const adapters: unknown[] = [];
   const registered = new Map<string, FakeToolDefinition>();
+  const liveAgents = new Map<string, FakeAgent>();
+  const interrupts: Array<{ target: string; authority: unknown }> = [];
+  const subagents = {
+    interrupt: (target: string, authority: unknown) => {
+      interrupts.push({ target, authority });
+    },
+  };
+  let teardown: (() => unknown) | undefined;
   const context = {
     llm: {
       registerAdapter: (_names: readonly string[], adapter: unknown) => {
@@ -170,6 +186,8 @@ const createAgentFixture = async (
       },
     },
     systemPrompt: { section: () => undefined },
+    agents: { get: (id: string) => liveAgents.get(id) },
+    get: (name: string) => (name === 'subagents' ? subagents : undefined),
     tools: {
       register: (definition: FakeToolDefinition) => {
         registered.set(definition.name, definition);
@@ -185,10 +203,13 @@ const createAgentFixture = async (
     },
     inject: () => undefined,
     effect: (register: () => unknown) => {
-      register();
+      teardown = register() as () => unknown;
     },
   };
   apply(context as unknown as Context);
+  cleanups.push(async () => {
+    await teardown?.();
+  });
 
   const rootRestrictions: Array<{ allow: readonly string[] }> = [];
   const rootAgent: FakeAgent = {
@@ -220,6 +241,23 @@ const createAgentFixture = async (
       },
     },
   };
+
+  liveAgents.set(rootAgent.session.id, rootAgent);
+  liveAgents.set(childAgent.session.id, childAgent);
+  if (options.allowSubagents === true) {
+    // 官方 dsh-tool-subagent 在 Profile 里注册的工具；本 fixture 只验证桥接层的准入与审计。
+    registered.set('subagent', {
+      name: 'subagent',
+      description: 'Delegate the task to a fresh child agent.',
+      parameters: {
+        type: 'object',
+        properties: { prompt: { type: 'string' } },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+      execute: async () => ({ kind: 'activation', subagentId: 'child-1' }),
+    });
+  }
 
   const emit = async (event: string, ...args: unknown[]): Promise<void> => {
     for (const handler of handlers.get(event) ?? []) await handler(...args);
@@ -258,13 +296,81 @@ const createAgentFixture = async (
     rootRestrictions,
     childRestrictions,
     adapters,
+    interrupts,
+    liveAgents,
     emit,
     preExecute,
     guard: (name: string, agent: FakeAgent) => guards[0]?.(exec(name, agent)),
+    result: (name: string, agent: FakeAgent, isError = false) => {
+      for (const handler of handlers.get('tools/result') ?? [])
+        handler(exec(name, agent), { isError, content: [], value: {} });
+    },
   };
 };
 
 describe('run bridge subagent guard', () => {
+  it('admits the official subagent tool for the root only when the run permits delegation', async () => {
+    const disabled = await createAgentFixture();
+    await disabled.emit('agent/created', { agent: disabled.rootAgent });
+    expect(disabled.guard('subagent', disabled.rootAgent)).toBe(
+      'Tool is outside the Agent allowlist',
+    );
+    await expect(disabled.preExecute('subagent', disabled.rootAgent)).resolves.toEqual({
+      kind: 'deny',
+      reason: 'Call is outside the active run allowlist',
+    });
+
+    const fixture = await createAgentFixture({ allowSubagents: true });
+    await fixture.emit('agent/created', { agent: fixture.rootAgent });
+    await fixture.emit('agent/created', { agent: fixture.childAgent });
+    expect(fixture.rootRestrictions).toEqual([
+      { allow: ['fetch_quote', 'write_note', 'subagent'] },
+    ]);
+    expect(fixture.guard('subagent', fixture.rootAgent)).toBeUndefined();
+    await expect(fixture.preExecute('subagent', fixture.rootAgent)).resolves.toEqual({ ok: true });
+    // 子 Agent 不因父级能委派而获得委派权，也不占用业务工具预算。
+    expect(fixture.guard('subagent', fixture.childAgent)).toBe(
+      'Tool is outside the Agent allowlist',
+    );
+    await fixture.until(() =>
+      fixture
+        .diagnostics()
+        .some((event) => event.code === 'subagent.tool.call' && event.agentId === 'root-session'),
+    );
+    fixture.result('subagent', fixture.rootAgent);
+    await fixture.until(() =>
+      fixture
+        .diagnostics()
+        .some((event) => event.code === 'subagent.tool.result' && event.ok === true),
+    );
+    expect(fixture.emitted.some((event) => event.type === 'tool.call')).toBe(false);
+  });
+
+  it('abandons a child agent at its own deadline through the official interrupt channel', async () => {
+    const fixture = await createAgentFixture({ allowSubagents: true, subagentTimeoutMs: 100 });
+    await fixture.emit('agent/created', { agent: fixture.rootAgent });
+    await fixture.emit('agent/created', { agent: fixture.childAgent });
+    await fixture.until(() =>
+      fixture.diagnostics().some((event) => event.code === 'subagent.abandoned'),
+    );
+    expect(fixture.interrupts).toEqual([
+      { target: 'child-1', authority: { kind: 'ancestor', agent: fixture.rootAgent } },
+    ]);
+    expect(
+      fixture.diagnostics().find((event) => event.code === 'subagent.abandoned'),
+    ).toMatchObject({
+      code: 'subagent.abandoned',
+      agentId: 'child-1',
+      parentAgentId: 'root-session',
+      reason: 'deadline',
+      budgetMs: 100,
+    });
+    // 正常情况下子级结算会清掉截止计时器，已结算的子级不再被重复放弃。
+    await fixture.emit('agent/disposed', { agent: fixture.childAgent });
+    await new Promise<void>((done) => setTimeout(done, 150));
+    expect(fixture.interrupts).toHaveLength(1);
+  });
+
   it('rejects subagent creation by default and audits the denied parent link', async () => {
     const fixture = await createAgentFixture();
     await fixture.emit('agent/created', { agent: fixture.rootAgent });
