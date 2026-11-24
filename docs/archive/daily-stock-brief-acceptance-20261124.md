@@ -1,6 +1,6 @@
 # 每日个股观察（StockBrief）验收记录（2026-11-24）
 
-> 状态：P0–P3 已实现并通过仓内自动化验收；浏览器 6 入口实测留痕仍待执行者用临时实例补
+> 状态：P0–P3 已实现；仓内自动化验收已通过，5180 临时实例的 Web 入口 / CLI / 工具列表留痕已补（见 §5）。真实批次耗时与日累计用量仍待运行观测
 > 日期：2026-11-24
 > 范围：每日个股观察批次、`stock_briefs`、Web / AI 对话 / CLI / MCP 只读入口、17:30 与 08:45 调度、预算降级、结算与成绩单
 > 关联文档：[PRD](../prd/daily-stock-brief.md)、[详细设计](../ddd/daily-stock-brief-detailed-design.md)、[架构说明](../ARCHITECTURE.md)
@@ -24,7 +24,7 @@
 - P3-2 盘中 `provisional`：按任务要求不做。
 - Q1 后端 `daily-advice` 枚举改名（`no-action` / `has-signals`）：本期只改展示层，后端改名留待下一版。
 - `generate_stock_briefs` 的 tool description 调整：待 Kow 决定，本次未改。
-- 浏览器 6 入口实测：由执行者补，见 §4。
+- 真实批次 P95 / 日累计 HTTP·token·金额 / 17:45 覆盖率：仍待生产或完整运行观测，见 §4。
 - 历史 fallback advices：不删不改（P1-9 结论）。
 - `workflow_runs.input_summary` 被清空问题：本批未处理。
 
@@ -79,18 +79,22 @@
 | 冷却误伤 | `PluginExecutionDenied` 不写 provider 冷却 | **不适用本批**：该修复在既有插件执行层，本批未改动；沿用既有测试 |
 | 结算联通 | buy/sell advice 100% 进入 T+1/T+3/T+5；规则观察单列 | **已有自动化**：见 §2 的 settle / scorecard / weekly report 用例 |
 
-## 5. 浏览器 6 入口留痕（待执行者补）
+## 5. 浏览器与入口留痕（2026-11-24 16:24–16:26 Asia/Shanghai）
 
-执行者需用 5180 临时实例实际启动 Web，逐项留痕；本记录不预填结果：
+执行者用 5180 临时实例实测。数据目录：`/workspace/luoome-notes/advice-p3-verify/b2/tmp-home`（独立 seed，未复制生产库）。端口 `127.0.0.1:5180`；未开 write/external、未配 LLM、未走真实行情 / Fuyao / Tushare。主树 5173（pid 273404）全程未动；自检后已关闭 5180。截图与 curl / CLI 原始结果在同目录 `screens/` 与 `api-*.json`。
 
 | 入口 | 检查点 | 状态 |
 |---|---|---|
-| 个股详情 `#market?stockId=…` | 今日观察卡、证据表、缺失 banner、有效期、免责声明、刷新按钮与预算提示 | 待执行者补 |
-| 关注列表 `#watchlists` | 成员行 signal chip、confidence、缺失 chip、更新时间、整列表刷新 | 待执行者补 |
-| 首页 `#dashboard` | Top 5、覆盖计数、未覆盖原因、免责脚注；页面无生成调用 | 待执行者补 |
-| 建议列表 `#advice` | 质量标记（AI / 规则观察 / 部分数据）、结算状态、规则观察不冒充 AI | 待执行者补 |
-| 报告 `#reports` | 「个股观察成绩」section 的应结算 / 已结算 / 覆盖率 / 规则观察数字 | 待执行者补 |
-| 作战室 `#market-room` | 板块与核心股信号徽标、数据时间、点击跳个股详情、无生成入口 | 待执行者补 |
+| 个股详情 `#market?stockId=002594.SZ` | 今日观察卡（偏多信号、信心度 64、证据表、分时缺失原因、有效期、免责声明）；刷新能力因插件未启用显示「生成能力不可用」 | **已留痕**（`market-390.png` / `market-1280.png`）；`GET /api/stock-briefs?stockId=002594.SZ` 200 |
+| 关注列表 `#watchlists` | 6 名成员行内 signal chip、信心度、缺失 chip、数据时间；平安无观察显示「暂无观察」 | **已留痕**（`watchlists-*.png`）；`GET /api/stock-briefs?watchlistId=wl-demo` 200 |
+| 首页 `#dashboard` | 「今日个股观察」在工作台主视野：有结论 4、规则观察 1、未覆盖 0，缺失原因与预算可见；标注「只读，不触发生成」 | **已留痕**（`dashboard-*.png`）；`GET /api/stock-briefs/today` 返回 5 条 |
+| 建议列表 `#advice` | 规则观察单独标「规则观察」且 premise 为规则兜底；成绩单近 30 天 T+5 覆盖率/命中率可见；未把规则观察写成 AI 结论 | **已留痕**（`advice-*.png`）；`GET /api/advice?includeExpired=true` 5 条，`/api/advice/scorecard` coverage=1 |
+| 报告 `#reports?id=report-weekly-p3-7` | 「个股观察成绩」展示应结算 2 / 已结算 2 / 结算覆盖率 100% / 规则观察 1，并含免责声明 | **已留痕**（`reports-*.png`）；该报告为验收 seed，数字与 section 文案一致 |
+| 作战室 `#market-room` | 页面可开、只读、免责声明可见；临时库无已发布盘中批次，板块/核心股信号徽标无法在此实例展示 | **页面已打开**（`market-room-*.png`）；徽标待有盘中批次的环境再观测 |
 
-补充留痕项：AI 对话「先读 brief → 无观察再询问是否分析」流程、CLI `brief list/show/run`、
-MCP 只读发现（`generate_stock_briefs` 不可见）。这些同样由执行者在最终验收时记录。
+补充留痕：
+
+- CLI：`luoome brief list --json` 返回当日 5 条（含免责声明与规则观察标签）；`luoome brief show --stock 002594.SZ --json` 与 Web 同形。`brief run` 未跑（会走生成入口，本实例未开 write/external）。
+- 工具列表：`luoome tools list --json` 共 50 个工具，含 `get_stock_brief` / `list_stock_briefs` / `get_stock_facts`，**不含** `generate_stock_briefs`。
+- 生成闸门：`POST /api/stock-briefs/generate` 返回 403（write 未开启）。
+- AI 对话 `#chat`：页面已打开且页脚含「仅技术研究，不构成投资建议」；本实例未配置 LLM，**未实测**「先读 brief → 无观察再询问是否分析」的完整对话。
