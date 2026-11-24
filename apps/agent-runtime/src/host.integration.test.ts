@@ -113,6 +113,9 @@ async function fixture(
     reuseNativeCallId?: boolean;
     delegate?: boolean;
     childStalls?: boolean;
+    /** 每个子 Agent 的完成延迟（ms），用于让结算通知晚于父级 idle 到达。 */
+    lateChildren?: number[];
+    parentFollowUpTurns?: number;
     subagentTimeoutMs?: number;
     inconsistentToolFinish?: 'stop' | 'missing-calls' | 'choice-after-stop';
     sseFraming?: 'multiline' | 'unframed';
@@ -122,6 +125,7 @@ async function fixture(
   let gateways = 0;
   let nativeAdmissions = 0;
   let parentTurns = 0;
+  let parentCalls = 0;
   const modelBodies: unknown[] = [];
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== `Bearer ${token}`) {
@@ -149,7 +153,12 @@ async function fixture(
       if (options.delegate) {
         // 子 Agent 的工具集是逐级交集，不再包含委派工具本身。
         const offered = JSON.stringify(body.tools ?? []).includes('"name":"subagent"');
+        if (offered) parentCalls++;
+        const late = options.lateChildren ?? [];
         if (!offered) {
+          const prompt = JSON.stringify(body.messages ?? []);
+          const index = late.findIndex((_, at) => prompt.includes(`Child task ${at}`));
+          if (index >= 0) await new Promise((done) => setTimeout(done, late[index]));
           if (options.childStalls) {
             sse(res, { content: 'Child still working' });
             const timer = setTimeout(() => res.end(), 60000);
@@ -162,20 +171,18 @@ async function fixture(
           sse(
             res,
             {
-              tool_calls: [
-                {
-                  index: 0,
-                  id: 'subagent-call',
-                  type: 'function',
-                  function: {
-                    name: 'subagent',
-                    arguments: JSON.stringify({
-                      description: 'Controlled quote summary',
-                      prompt: 'Summarize the controlled quote.',
-                    }),
-                  },
+              tool_calls: (late.length === 0 ? [-1] : late.map((_, at) => at)).map((at, index) => ({
+                index,
+                id: `subagent-call-${index}`,
+                type: 'function',
+                function: {
+                  name: 'subagent',
+                  arguments: JSON.stringify({
+                    description: 'Controlled quote summary',
+                    prompt: at < 0 ? 'Summarize the controlled quote.' : `Child task ${at}`,
+                  }),
                 },
-              ],
+              })),
             },
             'tool_calls',
           );
@@ -293,6 +300,9 @@ async function fixture(
       ...(options.subagentTimeoutMs === undefined
         ? {}
         : { subagentTimeoutMs: options.subagentTimeoutMs }),
+      ...(options.parentFollowUpTurns === undefined
+        ? {}
+        : { parentFollowUpTurns: options.parentFollowUpTurns }),
     },
     ...(options.native
       ? {
@@ -380,6 +390,7 @@ async function fixture(
     until,
     stderr: () => stderr,
     counters: () => ({ models, gateways, nativeAdmissions }),
+    parentCalls: () => parentCalls,
     modelBodies,
     async run(tools = options.native ? [quote, web] : [quote], allowSubagents = false) {
       runs += 1;
@@ -469,7 +480,7 @@ describe('real Node Host + installed DSH + native Cordis plugins, controlled mod
   }, 60000);
 
   it('abandons a child agent at its deadline without failing the run', async () => {
-    const f = await fixture({ delegate: true, childStalls: true, subagentTimeoutMs: 300 });
+    const f = await fixture({ delegate: true, childStalls: true, subagentTimeoutMs: 1200 });
     const terminal = await f.run([quote], true);
     expect({ terminal: terminal.payload, stderr: f.stderr() }).toMatchObject({
       terminal: { status: 'completed', runtimeStopped: true },
@@ -478,7 +489,7 @@ describe('real Node Host + installed DSH + native Cordis plugins, controlled mod
     expect(abandoned?.payload).toMatchObject({
       parentAgentId: expect.any(String),
       reason: 'deadline',
-      budgetMs: 300,
+      budgetMs: 1200,
     });
     expect(terminal.payload.agents).toEqual([
       expect.objectContaining({
@@ -487,6 +498,44 @@ describe('real Node Host + installed DSH + native Cordis plugins, controlled mod
         status: 'abandoned',
       }),
     ]);
+    // 放弃通知在父级 idle 之后才到：父级必须在同一 Run 内被唤醒，消费这轮通知。
+    const followUp = f.events().find((event) => event.payload.code === 'parent.followup');
+    expect(followUp?.payload).toMatchObject({ turn: 1, limit: 8 });
+    expect(JSON.stringify(f.modelBodies.at(-1))).toContain('was stopped before it finished');
+  }, 60000);
+
+  it('wakes the parent after idle so a late settlement notice is handled in the same run', async () => {
+    const f = await fixture({ delegate: true, lateChildren: [400] });
+    const terminal = await f.run([quote], true);
+    expect({ terminal: terminal.payload, stderr: f.stderr() }).toMatchObject({
+      terminal: { status: 'completed', runtimeStopped: true },
+    });
+    const followUp = f.events().find((event) => event.payload.code === 'parent.followup');
+    expect(followUp?.payload).toMatchObject({ turn: 1, limit: 8 });
+    // 首次 idle 在子 Agent 结算之前：父级多跑一轮才消费得到通知。
+    expect(f.parentCalls()).toBe(3);
+    expect(JSON.stringify(f.modelBodies.at(-1))).toContain('Background subagent');
+    expect(f.events().some((event) => event.payload.code === 'parent.followup_exhausted')).toBe(
+      false,
+    );
+  }, 60000);
+
+  it('stops waking the parent at the follow-up turn limit and still completes normally', async () => {
+    const f = await fixture({
+      delegate: true,
+      lateChildren: [400, 2000],
+      parentFollowUpTurns: 1,
+    });
+    const terminal = await f.run([quote], true);
+    expect({ terminal: terminal.payload, stderr: f.stderr() }).toMatchObject({
+      terminal: { status: 'completed', runtimeStopped: true },
+    });
+    const exhausted = f
+      .events()
+      .find((event) => event.payload.code === 'parent.followup_exhausted');
+    expect(exhausted?.payload).toMatchObject({ turns: 2, limit: 1 });
+    // 上限只允许一轮追问：第二个结算通知不再消费。
+    expect(f.events().filter((event) => event.payload.code === 'parent.followup')).toHaveLength(1);
   }, 60000);
 
   it('composes the official fetch tool and HTTP provider with a controlled webpage fixture', async () => {

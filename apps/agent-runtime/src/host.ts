@@ -8,7 +8,13 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { DeepSeekHarness, TransportClosedError } from '@deepseek-ai/dsh-sdk-client';
+import {
+  DeepSeekHarness,
+  type HarnessNotification,
+  type NotificationSubscription,
+  TransportClosedError,
+  validatedSessionEvent,
+} from '@deepseek-ai/dsh-sdk-client';
 import {
   type CancelRequest,
   type HostMessage,
@@ -25,6 +31,7 @@ import {
   HostConfigSchema,
 } from '../../../packages/dsh-bridge/src/runtime-config.js';
 import { awaitDescendants, RunAgentTree, recordAgentDiagnostic } from './agent-tree.js';
+import { awaitParentFollowUps, type FollowUpSignal } from './parent-followup.js';
 import { hashJson, installedDshBin, PROFILE_NAME, prepareProfile } from './profile.js';
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +54,64 @@ interface ActiveRuntime {
   server?: Server;
   stopped: boolean;
 }
+
+/** 只投影追问阶段关心的官方会话树通知；根 Agent 的非法 turn 结束也算一种信号。 */
+const followUpSignal = (
+  notification: HarnessNotification,
+  sessionId: string,
+): FollowUpSignal | undefined => {
+  const { params } = notification;
+  if (notification.method === 'session.status') {
+    if (params.sessionId !== sessionId) return undefined;
+    if (params.status === 'running') return { type: 'root-running' };
+    return params.status === 'idle' ? { type: 'root-idle' } : undefined;
+  }
+  if (notification.method === 'subagent.finished')
+    return typeof params.agentId === 'string' ? { type: 'child-finished' } : undefined;
+  if (notification.method !== 'session.event' || params.sessionId !== sessionId) return undefined;
+  const event = validatedSessionEvent(params.event);
+  if (event.type !== 'turn/end') return undefined;
+  const kind = event.data.reason.kind;
+  return kind === 'completed' || kind === 'max-tokens'
+    ? undefined
+    : { type: 'root-turn-aborted', reason: kind };
+};
+
+/** 消费到根 Agent 首次 idle：之前属于首次 prompt 的活动区间。 */
+const drainToRootIdle = async (
+  notifications: NotificationSubscription,
+  sessionId: string,
+): Promise<void> => {
+  for (;;) {
+    if (followUpSignal(await notifications.next(), sessionId)?.type === 'root-idle') return;
+  }
+};
+
+/** 取出一条已送达的追问信号；队列里没有时返回 `undefined`。 */
+const drainQueuedSignal = (
+  notifications: NotificationSubscription,
+  sessionId: string,
+): FollowUpSignal | undefined => {
+  for (
+    let notification = notifications.tryNext();
+    notification !== undefined;
+    notification = notifications.tryNext()
+  ) {
+    const signal = followUpSignal(notification, sessionId);
+    if (signal !== undefined) return signal;
+  }
+  return undefined;
+};
+
+const nextFollowUpSignal = async (
+  notifications: NotificationSubscription,
+  sessionId: string,
+): Promise<FollowUpSignal | undefined> => {
+  for (;;) {
+    const signal = followUpSignal(await notifications.next(), sessionId);
+    if (signal !== undefined) return signal;
+  }
+};
 
 export class NodeRuntimeHost {
   readonly runtimeInstanceId = randomUUID();
@@ -283,32 +348,31 @@ export class NodeRuntimeHost {
       });
       if (active.cancel) throw new Error('Run cancelled during startup');
       stage = 'run';
-      // 持久会话目录存在时才 resume；否则新 Session 仍持有给定身份，但不声称恢复了历史。
-      const result =
-        run.sessionId !== undefined && this.config.sessionHome !== undefined
-          ? await (await harness.resumeSession(run.sessionId)).run(run.prompt)
-          : await harness.run(run.prompt, { sessionId });
-      let completedTurn = false;
-      for (const event of result.events) {
-        if (event.type !== 'turn/end') continue;
-        await this.event(run, sessionId, 'diagnostic', {
-          code: 'sdk-turn-end',
-          reason: event.data.reason.kind,
-        });
-        if (event.data.reason.kind !== 'completed' && event.data.reason.kind !== 'max-tokens') {
-          throw new Error('DSH turn did not complete');
+      // 首次 idle 之后到达的子 Agent 结算通知会唤醒父级再跑一轮，订阅必须早于首次 prompt。
+      const notifications = harness.client.subscribeSessionTree(sessionId);
+      try {
+        // 持久会话目录存在时才 resume；否则新 Session 仍持有给定身份，但不声称恢复了历史。
+        const result =
+          run.sessionId !== undefined && this.config.sessionHome !== undefined
+            ? await (await harness.resumeSession(run.sessionId)).run(run.prompt)
+            : await harness.run(run.prompt, { sessionId });
+        let completedTurn = false;
+        for (const event of result.events) {
+          if (event.type !== 'turn/end') continue;
+          await this.event(run, sessionId, 'diagnostic', {
+            code: 'sdk-turn-end',
+            reason: event.data.reason.kind,
+          });
+          if (event.data.reason.kind !== 'completed' && event.data.reason.kind !== 'max-tokens') {
+            throw new Error('DSH turn did not complete');
+          }
+          completedTurn = true;
         }
-        completedTurn = true;
-      }
-      if (!completedTurn) throw new Error('DSH returned idle without a committed completed turn');
-      // 根 Agent idle 不代表 Run 完成：仍活跃的后代必须排空。取消仍按既有取消路径结案；
-      // 到位后尚未结算的后代按 abandoned 收尾，不把整个 Run 判失败。
-      if (!active.cancel) {
-        const descendants = await awaitDescendants(active.tree, {
-          deadline: Date.parse(run.expiresAt),
-          cancelled: () => active.cancel === true,
-        });
-        if (descendants === 'cancelled') throw new Error('Descendant Agents remained active');
+        if (!completedTurn) throw new Error('DSH returned idle without a committed completed turn');
+        // 根 Agent idle 不代表 Run 完成：父级在 idle 之后仍会收到子 Agent 完成/放弃通知并再跑一轮。
+        if (!active.cancel) await this.settleAfterIdle(active, notifications);
+      } finally {
+        notifications.close();
       }
       status = active.cancel
         ? active.cancelReason === 'timeout'
@@ -382,6 +446,64 @@ export class NodeRuntimeHost {
       });
       if (active.stopped) this.active = undefined;
     }
+  }
+
+  /**
+   * 根 Agent 首次 idle 后收尾：先等后代终态，再让官方 `session/wait` 确认根确实静默。
+   * 父级为消费子 Agent 结算通知再开的每轮追问都受截止时间、共享预算、轮次上限和取消约束；
+   * 到期、上限耗尽或追问无法开始时只把仍活跃后代标 abandoned，不把整个 Run 判失败。
+   */
+  private async settleAfterIdle(
+    active: ActiveRuntime,
+    notifications: NotificationSubscription,
+  ): Promise<void> {
+    const { run, sessionId } = active;
+    const harness = active.harness;
+    if (harness === undefined) throw new Error('Run has no Harness');
+    const deadline = Date.parse(run.expiresAt);
+    const cancelled = () => active.cancel === true;
+    const limit = this.config.limits.parentFollowUpTurns;
+    await drainToRootIdle(notifications, sessionId);
+    const outcome = await awaitParentFollowUps({
+      maxTurns: limit,
+      deadline,
+      cancelled,
+      waitForDescendants: () => awaitDescendants(active.tree, { deadline, cancelled }),
+      settle: async () => {
+        await harness.client.request('session/wait', { sessionId });
+      },
+      next: () => nextFollowUpSignal(notifications, sessionId),
+      drain: () => drainQueuedSignal(notifications, sessionId),
+      onTurn: (turn, consumed) =>
+        this.event(run, sessionId, 'diagnostic', {
+          code: 'parent.followup',
+          turn,
+          consumed,
+          limit,
+        }),
+    });
+    if (outcome.kind === 'settled') return;
+    if (outcome.kind === 'cancelled') throw new Error('Descendant Agents remained active');
+    if (outcome.kind === 'failed') {
+      // 运行时已断开时沿用既有 interrupted 判定；其它原因（预算耗尽、通知不可用）只做收尾。
+      if (outcome.error instanceof TransportClosedError) throw outcome.error;
+      active.tree.abandonDescendants();
+      await this.event(run, sessionId, 'diagnostic', {
+        code: 'parent.followup_failed',
+        turns: outcome.turns,
+        pending: outcome.pending,
+        limit,
+        reason: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+      });
+      return;
+    }
+    active.tree.abandonDescendants();
+    await this.event(run, sessionId, 'diagnostic', {
+      code: outcome.kind === 'exhausted' ? 'parent.followup_exhausted' : 'parent.followup_expired',
+      turns: outcome.turns,
+      pending: outcome.pending,
+      limit,
+    });
   }
 
   async cancel(runId: string, reason: CancelRequest['reason'] = 'user'): Promise<void> {

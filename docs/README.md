@@ -74,7 +74,7 @@
 | 文档 | 范围 |
 |---|---|
 | [能力插件分阶段实施计划](./ddd/layered-capability-plugin-detailed-design.md#13-分阶段实施计划) | P0–P2 及 P3 策略执行/个股分析/盯盘监控/报告/通知/账户绩效/独立插件包切片已实施；P4 内置管理面已于 2026-11-20 撤销，现状为手写只读 `plugins.json` + 重启生效 |
-| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D08 已实现（含持久绑定、回执增量同步与重启去重）；D09 已交付最小子集（模型预算账本、会话目录保留策略、升级排空、灰度门控与回退）；D10 已交付最小子集（子 Agent 创建闸门与权限交集、父子共享预算、后代完成判定；官方 dsh-subagent 组合按 Run 开关加载，子 Agent 到期只标 abandoned）；Tenant 删除恢复、质量/容量对照与社区插件/真实多 Agent 仍待 D09 剩余项与 D10 剩余项 |
+| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D08 已实现（含持久绑定、回执增量同步与重启去重）；D09 已交付最小子集（模型预算账本、会话目录保留策略、升级排空、灰度门控与回退）；D10 已交付最小子集（子 Agent 创建闸门与权限交集、父子共享预算、后代完成判定；官方 dsh-subagent 组合按 Run 开关加载，子 Agent 到期只标 abandoned；父 Agent idle 后的子 Agent 结算通知在同一 Run 内唤醒父级追问，受截止时间、共享预算、取消与 `limits.parentFollowUpTurns` 上限约束）；Tenant 删除恢复、质量/容量对照与社区插件/真实多 Agent 仍待 D09 剩余项与 D10 剩余项 |
 | [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
 | [luoome 开发计划](./development-plan.md) | 2026-11-12 收敛后基线（§2.0）、当前优先级、依赖与验收门槛；旧阶段仅作历史 |

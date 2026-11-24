@@ -51,6 +51,11 @@ export const HostConfigSchema = z.strictObject({
       maxModelCalls: z.number().int().min(1).max(32).default(8),
       /** 单个子 Agent 从创建起的墙钟预算；到期只放弃该子 Agent，不改判整个 Run。 */
       subagentTimeoutMs: z.number().int().min(100).max(600000).default(60000),
+      /**
+       * 根 Agent 首次 idle 后，为处理子 Agent 完成/放弃通知最多再唤醒父级的轮次。
+       * 每唤醒成功开一轮计一次；耗尽只做 abandoned 收尾，不把 Run 判失败。
+       */
+      parentFollowUpTurns: z.number().int().min(1).max(32).default(8),
     })
     .prefault({}),
 });
