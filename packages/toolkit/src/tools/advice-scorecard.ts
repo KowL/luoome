@@ -44,9 +44,9 @@ export const GetAdviceScorecardOutput = z.object({
   benchmark: z.string().min(1),
   /** 已结算的建议条数（同一条建议只计一次；排除规则观察）。 */
   samples: z.number().int().nonnegative(),
-  /** 窗口内已结算的规则观察条数（只单列，不进命中率分母）。 */
+  /** 窗口内已结算的规则观察条数（股票、任一 decision，含 watch；只单列，不进命中率分母）。 */
   ruleFallbackSamples: z.number().int().nonnegative(),
-  /** 窗口内规则观察（规则兜底 buy/sell）总条数；与已结算数一起单列。 */
+  /** 窗口内规则观察总条数（股票、任一 decision，含 watch；与已结算数一起单列）。 */
   ruleFallbackTotal: z.number().int().nonnegative(),
   /** 应结算：股票 + buy/sell + 非规则兜底 + 已到 T+horizon 窗口。 */
   eligible: z.number().int().nonnegative(),
@@ -65,7 +65,7 @@ export const GetAdviceScorecardOutput = z.object({
     windowAdvices: z.number().int().nonnegative(),
     /** 股票且 buy/sell（含规则观察）。 */
     buySellStock: z.number().int().nonnegative(),
-    /** 其中规则观察条数。 */
+    /** 窗口内股票规则观察条数（任一 decision，含 watch）。 */
     ruleFallback: z.number().int().nonnegative(),
     /** 同条件但尚未到结算窗口。 */
     notDue: z.number().int().nonnegative(),
@@ -123,7 +123,9 @@ export const getAdviceScorecardTool = defineTool({
       ctx.repos.adviceTracking.listFeedbacks({ limit: 5000 }),
     ]);
     const fallbackIds = new Set(
-      advices.filter((advice: Advice) => isRuleFallbackAdvice(advice)).map((advice) => advice.id),
+      advices
+        .filter((advice: Advice) => advice.subjectKind === 'stock' && isRuleFallbackAdvice(advice))
+        .map((advice) => advice.id),
     );
     const confidenceById = new Map<string, number>(
       advices
@@ -151,7 +153,9 @@ export const getAdviceScorecardTool = defineTool({
       (advice) =>
         advice.subjectKind === 'stock' && (advice.decision === 'buy' || advice.decision === 'sell'),
     );
-    const ruleFallbackAdvices = buySellStock.filter(isRuleFallbackAdvice);
+    const ruleFallbackAdvices = advices.filter(
+      (advice) => advice.subjectKind === 'stock' && isRuleFallbackAdvice(advice),
+    );
     const aiBuySell = buySellStock.filter((advice) => !isRuleFallbackAdvice(advice));
     // 已到结算窗口：按自然日近似，与 scorecard 的 days 窗口一致；
     // 已有结算行的（例如补算历史）直接视为到期，不让日历口径吞掉真实结算。

@@ -148,9 +148,22 @@ describe('weekly-report 个股观察成绩', () => {
       },
     };
     await ctx.repos.advice.save(fallback);
+    const fallbackWatch: Advice = {
+      ...makeAdvice('brief-fallback-watch', 30, createdAt),
+      decision: 'watch',
+      reasoning: {
+        premise: 'LLM 推理不可用，基于规则的保守判断',
+        evidence: ['规则 fallback：测试夹具'],
+        counterEvidence: [],
+      },
+    };
+    await ctx.repos.advice.save(fallbackWatch);
     await ctx.repos.adviceTracking.saveSettlement(settlement('brief-normal-a', true, 0.04, now));
     await ctx.repos.adviceTracking.saveSettlement(settlement('brief-normal-b', false, -0.02, now));
     await ctx.repos.adviceTracking.saveSettlement(settlement('brief-fallback', true, 0.06, now));
+    await ctx.repos.adviceTracking.saveSettlement(
+      settlement('brief-fallback-watch', true, 0.01, now),
+    );
 
     const result = await weeklyReportOperation.run({}, ctx);
     const section = sectionOf(result);
@@ -160,15 +173,15 @@ describe('weekly-report 个股观察成绩', () => {
     );
     const byKey = Object.fromEntries(metrics.map((item) => [item.key, item.value]));
     expect(byKey.samples).toBe(2);
-    expect(byKey.ruleFallbackSamples).toBe(1);
-    expect(byKey.ruleFallbackTotal).toBe(1);
+    expect(byKey.ruleFallbackSamples).toBe(2);
+    expect(byKey.ruleFallbackTotal).toBe(2);
     expect(byKey.coverage).toBe(100);
     expect(byKey.eligible).toBe(2);
     expect(byKey.settledEligible).toBe(2);
     expect(byKey.hitRate).toBe(50);
     const sectionText = textsOf(section ?? { blocks: [] }).join('\n');
     expect(sectionText).toContain('结算覆盖率 100.0%');
-    expect(sectionText).toContain('规则观察（低置信）1 条、已结算 1 条');
+    expect(sectionText).toContain('规则观察（低置信）2 条、已结算 2 条');
 
     // 与同一窗口的成绩单同一口径。
     if (!result.ok) return;

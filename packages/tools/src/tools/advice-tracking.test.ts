@@ -191,6 +191,10 @@ describe('settle_advices', () => {
     const createdAt = new Date('2026-11-10T09:00:00.000Z');
     await ctx.repos.advice.save(makeAdvice('adv-normal', 'buy', createdAt));
     await ctx.repos.advice.save(fallbackAdvice('adv-fallback', createdAt));
+    await ctx.repos.advice.save({
+      ...fallbackAdvice('adv-fallback-watch', createdAt),
+      decision: 'watch',
+    });
     await ctx.repos.dailyBar.saveMany(tradingBars());
 
     const result = await settleAdvicesTool.execute({ asOf, limit: 100 }, ctx);
@@ -199,11 +203,12 @@ describe('settle_advices', () => {
     expect(result.data.eligible).toBe(1);
     expect(result.data.settledEligible).toBe(1);
     expect(result.data.coverage).toBe(1);
-    expect(result.data.ruleFallback).toEqual({ total: 1, settled: 1 });
+    expect(result.data.ruleFallback).toEqual({ total: 2, settled: 2 });
     const fallbackRows = (await ctx.repos.adviceTracking.listSettlements({})).filter(
-      (settlement) => settlement.adviceId === 'adv-fallback',
+      (settlement) =>
+        settlement.adviceId === 'adv-fallback' || settlement.adviceId === 'adv-fallback-watch',
     );
-    expect(fallbackRows).toHaveLength(3);
+    expect(fallbackRows).toHaveLength(6);
   });
 
   it('分页扫描不因单页上限漏掉更早的建议', async () => {

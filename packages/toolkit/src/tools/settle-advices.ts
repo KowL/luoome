@@ -52,7 +52,7 @@ export const SettleAdvicesOutput = z.object({
   horizons: z.array(HorizonCoverageSchema),
   /** buy/sell 对账口径。 */
   byDecision: z.array(DecisionCoverageSchema),
-  /** 规则观察（规则兜底 buy/sell）：单列，不进覆盖率分子分母。 */
+  /** 规则观察（股票、任一 decision，含 watch）：单列，不进覆盖率分子分母。 */
   ruleFallback: z.object({
     total: z.number().int().nonnegative(),
     settled: z.number().int().nonnegative(),
@@ -72,11 +72,9 @@ const isEligibleAdvice = (advice: Advice): boolean =>
   (advice.decision === 'buy' || advice.decision === 'sell') &&
   !isRuleFallbackAdvice(advice);
 
-/** 规则观察口径：股票、buy/sell 的规则兜底。 */
-const isRuleFallbackBuySell = (advice: Advice): boolean =>
-  advice.subjectKind === 'stock' &&
-  (advice.decision === 'buy' || advice.decision === 'sell') &&
-  isRuleFallbackAdvice(advice);
+/** 规则观察口径：股票规则兜底，任一 decision（含 watch）。 */
+const isRuleFallbackStock = (advice: Advice): boolean =>
+  advice.subjectKind === 'stock' && isRuleFallbackAdvice(advice);
 
 /** 假设成交价：用户填的成交价 > 建议入场价 > 入场区间中值 > 建议当日收盘。 */
 export const assumedEntryOf = (advice: Advice): number | null => {
@@ -187,7 +185,7 @@ export const settleAdvicesTool = defineTool({
       horizonsByAdvice.has(advice.id),
     );
     const uncoveredAdvices = eligibleAdvices.filter((advice) => !horizonsByAdvice.has(advice.id));
-    const ruleFallbackAdvices = advices.filter(isRuleFallbackBuySell);
+    const ruleFallbackAdvices = advices.filter(isRuleFallbackStock);
     const settledRuleFallback = ruleFallbackAdvices.filter((advice) =>
       horizonsByAdvice.has(advice.id),
     );

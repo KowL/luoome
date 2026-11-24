@@ -131,6 +131,10 @@ describe('get_advice_scorecard', () => {
     );
     await ctx.repos.advice.save(fallback(makeAdvice('sc-fallback-due', 30, settledCreatedAt)));
     await ctx.repos.advice.save({
+      ...fallback(makeAdvice('sc-fallback-watch', 30, settledCreatedAt)),
+      decision: 'watch',
+    });
+    await ctx.repos.advice.save({
       ...makeAdvice('sc-hold', 65, settledCreatedAt),
       decision: 'hold',
     });
@@ -147,6 +151,9 @@ describe('get_advice_scorecard', () => {
     await ctx.repos.adviceTracking.saveSettlement(
       settlement('sc-fallback-due', true, 0.06, windowEnd),
     );
+    await ctx.repos.adviceTracking.saveSettlement(
+      settlement('sc-fallback-watch', true, 0.01, windowEnd),
+    );
     await ctx.repos.adviceTracking.saveSettlement(settlement('sc-hold', true, 0.01, windowEnd));
 
     const result = await getAdviceScorecardTool.execute({ days: 30, horizonDays: 5 }, ctx);
@@ -157,24 +164,30 @@ describe('get_advice_scorecard', () => {
     expect(data.settledEligible).toBe(2);
     expect(data.coverage).toBe(0.5);
     expect(data.uncovered).toEqual({ missingEntry: 1, missingBars: 1 });
-    expect(data.ruleFallbackTotal).toBe(1);
-    expect(data.ruleFallbackSamples).toBe(1);
+    expect(data.ruleFallbackTotal).toBe(2);
+    expect(data.ruleFallbackSamples).toBe(2);
     expect(data.reconciliation).toEqual({
-      windowAdvices: 8,
+      windowAdvices: 9,
       buySellStock: 6,
-      ruleFallback: 1,
+      ruleFallback: 2,
       notDue: 1,
-      otherDecisions: 1,
+      otherDecisions: 2,
       nonStock: 1,
     });
+    expect(data.ruleFallbackTotal).toBe(data.reconciliation.ruleFallback);
 
-    // 三边对账：advices 总数 = 应结算 + 规则观察 + 未到期 + 明确排除的其它。
-    expect(data.reconciliation.buySellStock).toBe(
-      data.eligible + data.reconciliation.notDue + data.reconciliation.ruleFallback,
-    );
+    // 三边对账：窗口总数 = buy/sell + 其它 decision（含 watch 规则观察）+ 非股票。
+    // 规则观察总数含 watch，不再要求 buySellStock = 应结算 + 未到期 + 规则观察。
     expect(data.reconciliation.windowAdvices).toBe(
       data.reconciliation.buySellStock +
         data.reconciliation.otherDecisions +
+        data.reconciliation.nonStock,
+    );
+    expect(data.reconciliation.windowAdvices).toBe(
+      data.eligible +
+        data.reconciliation.notDue +
+        data.ruleFallbackTotal +
+        1 + // 非规则 hold
         data.reconciliation.nonStock,
     );
     const windowAdvices = await ctx.repos.advice.query({

@@ -129,17 +129,19 @@ MCP：`get_stock_brief` / `list_stock_briefs` 随 read 基线自动发现；
   结算窗口的 advice；没有应结算样本时 `coverage=null`；
 - `horizons`：T+1/T+3/T+5 各档已结算与未覆盖条数；
 - `byDecision`：buy / sell 对账；
-- `ruleFallback`：规则兜底 buy/sell 总数与已结算数，单列且不进覆盖率分母；
+- `ruleFallback`：规则观察总数与已结算数（股票、任一 decision，含 watch），单列且不进覆盖率分母；
 - `uncovered`：`missingEntry` / `missingBars` 原因计数。
 
 `limit` 是分页大小而非总量上限：工具按创建时间倒序翻页扫完窗口，避免历史建议被单页上限
 静默漏结算。
 
 `packages/toolkit/src/tools/advice-scorecard.ts` 用同一口径输出 `eligible`、
-`settledEligible`、`coverage`、`uncovered`、`ruleFallbackTotal` 与 `reconciliation`
+`settledEligible`、`coverage`、`uncovered`、`ruleFallbackTotal` /
+`ruleFallbackSamples` 与 `reconciliation`
 （窗口 advice 数、buy/sell 股票数、规则观察、未到期、其它 decision、非股票），
-使成绩单能与同窗口 `repos.advice.query` 重算对账。命中率分母仍只含非规则兜底已结算建议；
-Q6 结论：规则观察不计入成绩单分母。
+使成绩单能与同窗口 `repos.advice.query` 重算对账。
+`ruleFallbackTotal` 与 `ruleFallbackSamples` 计入窗口内全部股票规则观察（任一
+decision，含 watch）；命中率分母仍只含非规则兜底已结算建议。Q6 结论：规则观察不计入成绩单分母。
 
 周报「个股观察成绩」（`packages/workflows/src/weekly-report.ts`）展示应结算、已结算、
 覆盖率、规则观察单列与未覆盖原因；样本不足或结算失败时维持 `unavailable` + 原因，
