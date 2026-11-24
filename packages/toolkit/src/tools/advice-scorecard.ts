@@ -1,4 +1,8 @@
-import { type Advice, DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID } from '@luoome/core';
+import {
+  type Advice,
+  DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  isRuleFallbackAdvice,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -37,8 +41,10 @@ export const GetAdviceScorecardOutput = z.object({
   windowEnd: z.coerce.date(),
   horizonDays: z.number().int(),
   benchmark: z.string().min(1),
-  /** 已结算的建议条数（同一条建议只计一次）。 */
+  /** 已结算的建议条数（同一条建议只计一次；排除规则观察）。 */
   samples: z.number().int().nonnegative(),
+  /** 窗口内已结算的规则观察条数（只单列，不进命中率分母）。 */
+  ruleFallbackSamples: z.number().int().nonnegative(),
   hitRate: z.number().min(0).max(1).nullable(),
   avgExcessPct: z.number().nullable(),
   groups: z.array(GroupSchema),
@@ -86,9 +92,17 @@ export const getAdviceScorecardTool = defineTool({
         limit: 5000,
       }),
     ]);
-    const confidenceById = new Map<string, number>(
-      advices.map((advice: Advice) => [advice.id, advice.confidence]),
+    const fallbackIds = new Set(
+      advices.filter((advice: Advice) => isRuleFallbackAdvice(advice)).map((advice) => advice.id),
     );
+    const confidenceById = new Map<string, number>(
+      advices
+        .filter((advice: Advice) => !isRuleFallbackAdvice(advice))
+        .map((advice: Advice) => [advice.id, advice.confidence]),
+    );
+    const ruleFallbackSamples = settlements.filter((settlement) =>
+      fallbackIds.has(settlement.adviceId),
+    ).length;
     const rows = settlements
       .filter((settlement) => confidenceById.has(settlement.adviceId))
       .map((settlement) => ({
@@ -117,6 +131,7 @@ export const getAdviceScorecardTool = defineTool({
       horizonDays: input.horizonDays,
       benchmark: DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
       samples: overall.samples,
+      ruleFallbackSamples,
       hitRate: overall.hitRate,
       avgExcessPct: overall.avgExcessPct,
       groups,

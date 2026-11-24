@@ -75,6 +75,31 @@ describe('get_advice_stats', () => {
     expect(stats.byDecision.buy?.hitRate).toBe(1);
   });
 
+  it('规则观察不进统计分母，单列 ruleFallbackAdvices', async () => {
+    const fallback: Advice = {
+      ...makeAdvice('stats-fallback', 'hold', 20),
+      reasoning: {
+        premise: 'LLM 推理不可用，基于规则的保守判断',
+        evidence: ['规则 fallback：测试夹具'],
+        counterEvidence: [],
+      },
+    };
+    const ctx = await buildTestContext({ advices: [...seedTwo(), fallback] });
+    const recorded = await recordAdviceOutcomeTool.execute(
+      { adviceId: 'stats-fallback', outcome: 'followed', pnl: 500 },
+      ctx,
+    );
+    expect(recorded.ok).toBe(true);
+
+    const result = await getAdviceStatsTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.totalAdvices).toBe(2);
+    expect(result.data.ruleFallbackAdvices).toBe(1);
+    expect(result.data.feedbackCount).toBe(0);
+    expect(result.data.byDecision.hold?.totalAdvices).toBe(0);
+  });
+
   it('filter：subjectId 无命中 → 全零统计', async () => {
     const ctx = await buildTestContext({ advices: seedTwo() });
     const result = await getAdviceStatsTool.execute({ subjectId: '600519.SH' }, ctx);

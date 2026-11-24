@@ -45,6 +45,22 @@ const mount = (container, content) => {
   else container.append(content);
 };
 
+/** 规则兜底标记（与 core RULE_FALLBACK_* 文本一致；前端无包依赖，保持同一段文字）。 */
+const RULE_FALLBACK_PREMISE_MARKER = 'LLM 推理不可用';
+const RULE_FALLBACK_EVIDENCE_MARKER = '规则 fallback';
+
+const isRuleFallbackAdvice = (advice) => {
+  const premise = advice?.reasoning?.premise;
+  const evidence = advice?.reasoning?.evidence;
+  return (
+    (typeof premise === 'string' && premise.includes(RULE_FALLBACK_PREMISE_MARKER)) ||
+    (Array.isArray(evidence) &&
+      evidence.some(
+        (line) => typeof line === 'string' && line.includes(RULE_FALLBACK_EVIDENCE_MARKER),
+      ))
+  );
+};
+
 /** 决策 → 配色 / 中文标签。 */
 const DECISIONS = {
   buy: { cls: 'badge-buy', label: '买入' },
@@ -193,7 +209,13 @@ const adviceCard = (advice, options = {}) => {
     });
     row1Parts.push(checkbox);
   }
-  row1Parts.push(adviceSubjectLine(advice), decisionBadge(advice.decision));
+  // 规则兜底不是 AI 结论：用中性的「规则观察」替代 decision badge，避免展示方向性动作词。
+  row1Parts.push(
+    adviceSubjectLine(advice),
+    isRuleFallbackAdvice(advice)
+      ? el('span', 'badge badge-neutral', '规则观察')
+      : decisionBadge(advice.decision),
+  );
   const row1 = el('div', 'row-1', row1Parts);
   card.append(row1);
 
@@ -538,6 +560,7 @@ export {
   fmtPct,
   fmtSigned,
   fmtTime,
+  isRuleFallbackAdvice,
   mount,
   permissionHint,
   resultErrorText,

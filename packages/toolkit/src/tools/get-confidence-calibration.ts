@@ -1,4 +1,9 @@
-import { type Advice, type AdviceOutcome, AdviceSubjectKindSchema } from '@luoome/core';
+import {
+  type Advice,
+  type AdviceOutcome,
+  AdviceSubjectKindSchema,
+  isRuleFallbackAdvice,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
@@ -42,6 +47,8 @@ export const GetConfidenceCalibrationOutput = z.object({
   buckets: z.array(CalibrationBucketSchema),
   totalAdvices: z.number().int().nonnegative(),
   totalWithOutcome: z.number().int().nonnegative(),
+  /** 规则观察（LLM 降级）条数；不进入 totalAdvices / bucket 分母。 */
+  ruleFallbackAdvices: z.number().int().nonnegative(),
   overallHitRate: z.number().min(0).max(1).nullable(),
   followedWithPnl: z.number().int().nonnegative(),
   calibratedAt: z.coerce.date(),
@@ -152,7 +159,7 @@ export const getConfidenceCalibrationTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
-    const advices = await accountScopedAdvices(
+    const scoped = await accountScopedAdvices(
       ctx,
       accountId,
       await ctx.repos.advice.query({
@@ -162,6 +169,8 @@ export const getConfidenceCalibrationTool = defineTool({
         includeExpired: true,
       }),
     );
+    const advices = scoped.filter((advice) => !isRuleFallbackAdvice(advice));
+    const ruleFallbackAdvices = scoped.length - advices.length;
 
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
 
@@ -176,6 +185,7 @@ export const getConfidenceCalibrationTool = defineTool({
       buckets,
       totalAdvices,
       totalWithOutcome,
+      ruleFallbackAdvices,
       overallHitRate: followedWithPnl === 0 ? null : overallHits / followedWithPnl,
       followedWithPnl,
       calibratedAt: ctx.clock(),

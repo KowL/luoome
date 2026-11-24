@@ -4,6 +4,7 @@ import {
   AdviceDecisionSchema,
   type AdviceOutcome,
   AdviceSubjectKindSchema,
+  isRuleFallbackAdvice,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -47,6 +48,8 @@ const flatStatsSchema = z.object({
 });
 
 export const GetAdviceStatsOutput = flatStatsSchema.extend({
+  /** 规则观察（LLM 降级）条数；不进入上面的统计分母。 */
+  ruleFallbackAdvices: z.number().int().nonnegative(),
   byDecision: z.record(AdviceDecisionSchema, flatStatsSchema),
 });
 
@@ -132,7 +135,7 @@ export const getAdviceStatsTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
       return errNotFound('Account', accountId);
-    const advices = await accountScopedAdvices(
+    const scoped = await accountScopedAdvices(
       ctx,
       accountId,
       await ctx.repos.advice.query({
@@ -144,9 +147,16 @@ export const getAdviceStatsTool = defineTool({
         includeExpired: true,
       }),
     );
+    // 规则观察是 LLM 降级兜底，不是 AI 结论；只单列条数，不污染命中率 / outcome 分母。
+    const advices = scoped.filter((advice) => !isRuleFallbackAdvice(advice));
+    const ruleFallbackAdvices = scoped.length - advices.length;
 
     const outcomes = await accountAdviceOutcomes(ctx, accountId);
 
-    return { ...computeFlatStats(advices, outcomes), byDecision: byDecisionOf(advices, outcomes) };
+    return {
+      ...computeFlatStats(advices, outcomes),
+      ruleFallbackAdvices,
+      byDecision: byDecisionOf(advices, outcomes),
+    };
   },
 });

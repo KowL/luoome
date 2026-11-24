@@ -79,6 +79,14 @@ describe('get_confidence_calibration', () => {
         confidence: 92,
         hit: true,
       },
+      {
+        id: 'adv-fallback',
+        subjectKind: 'stock' as const,
+        subjectId: '002594.SZ',
+        decision: 'hold' as const,
+        confidence: 20,
+        hit: true,
+      },
     ];
     for (const a of seedAdvices) {
       await ctx.repos.advice.save({
@@ -88,7 +96,14 @@ describe('get_confidence_calibration', () => {
         decision: a.decision,
         confidence: a.confidence,
         horizon: 'short',
-        reasoning: { premise: 'fixture', evidence: [], counterEvidence: [] },
+        reasoning:
+          a.id === 'adv-fallback'
+            ? {
+                premise: 'LLM 推理不可用，基于规则的保守判断',
+                evidence: ['规则 fallback：测试夹具'],
+                counterEvidence: [],
+              }
+            : { premise: 'fixture', evidence: [], counterEvidence: [] },
         risks: [],
         disclaimers: [
           '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
@@ -119,6 +134,7 @@ describe('get_confidence_calibration', () => {
     if (!result.ok) return;
     expect(result.data.totalAdvices).toBe(5);
     expect(result.data.totalWithOutcome).toBe(5);
+    expect(result.data.ruleFallbackAdvices).toBe(1);
     expect(result.data.buckets).toHaveLength(10);
     // bucket2 = 20-29：adv-low 落入；hits=1；withOutcome=1；hitRate=1
     const b2 = result.data.buckets[2];

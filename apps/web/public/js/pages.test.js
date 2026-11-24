@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-
+import { LLM_BUDGET_EXHAUSTED_TEXT, llmBudgetView } from './market-sync.js';
 import {
   boardStats,
   boardTriggerSummary,
@@ -22,13 +22,84 @@ import {
   sortBoardItems,
   watchRunSummaryText,
 } from './pages.js';
-import { adviceSubjectModel, fmtDateTime } from './ui.js';
+import { adviceSubjectModel, fmtDateTime, isRuleFallbackAdvice } from './ui.js';
 
 const quote = (overrides = {}) => ({
   freshness: 'fresh',
   retrieval: 'remote',
   observedAt: '2026-02-06T06:30:12Z',
   ...overrides,
+});
+
+describe('规则观察标记', () => {
+  it('premise / evidence 命中规则 fallback 标记时识别为规则观察', () => {
+    expect(
+      isRuleFallbackAdvice({
+        reasoning: {
+          premise: 'LLM 推理不可用，基于规则的保守判断',
+          evidence: ['MA5 ≤ MA20 → hold'],
+          counterEvidence: [],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isRuleFallbackAdvice({
+        reasoning: {
+          premise: '今日无新增事实',
+          evidence: ['规则 fallback：LLM 推理不可用（502）'],
+          counterEvidence: [],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('正常 AI 建议不误标为规则观察', () => {
+    expect(
+      isRuleFallbackAdvice({
+        reasoning: {
+          premise: '偏多条件成立',
+          evidence: ['close=105.8'],
+          counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('AI 用量面板', () => {
+  const limit = { maxBriefs: 8, maxHttpCalls: 16, maxTokens: 90_000 };
+
+  it('展示当日 HTTP / token / 金额与对应上限', () => {
+    const view = llmBudgetView({
+      date: '2026-11-24',
+      httpCalls: 3,
+      tokens: 12_345,
+      costUsd: 0.0034,
+      limit,
+    });
+    expect(view.usageText).toBe('今日 AI 分析：HTTP 3/16 · token 12345/90000 · 金额 $0.0034');
+    expect(view.exhausted).toBe(false);
+    expect(view.hint).toBe('');
+  });
+
+  it('HTTP 或 token 触达上限时给出可行动提示', () => {
+    for (const budget of [
+      { date: '2026-11-24', httpCalls: 16, tokens: 1, costUsd: 0, limit },
+      { date: '2026-11-24', httpCalls: 0, tokens: 90_000, costUsd: 0, limit },
+      // 预算守卫会在下一票放不下时提前停止，面板同步提示。
+      { date: '2026-11-24', httpCalls: 15, tokens: 1, costUsd: 0, limit },
+      { date: '2026-11-24', httpCalls: 0, tokens: 85_000, costUsd: 0, limit },
+    ]) {
+      const view = llmBudgetView(budget);
+      expect(view.exhausted).toBe(true);
+      expect(view.hint).toBe(LLM_BUDGET_EXHAUSTED_TEXT);
+    }
+  });
+
+  it('没有 llmBudget 时不渲染（兼容旧接口）', () => {
+    expect(llmBudgetView(undefined)).toBeNull();
+    expect(llmBudgetView(null)).toBeNull();
+  });
 });
 
 describe('看板单股预警覆盖口径', () => {

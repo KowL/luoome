@@ -476,6 +476,16 @@ describe('设置页数据同步入口', () => {
     expect(sync).toContain('sync_stock_universe');
     expect(sync).toContain('sync_daily_bars');
     expect(sync).toContain('timeoutMs: 300_000');
+    expect(sync).toContain('llmBudgetView');
+  });
+
+  it('设置页与首页数据健康卡都展示 AI 用量（同一 llmBudgetView）', () => {
+    const sync = read('./market-sync.js');
+    const pages = read('./pages.js');
+    expect(sync).toContain('LLM_BUDGET_EXHAUSTED_TEXT');
+    expect(sync).toContain('llmBudgetView');
+    expect(pages).toContain('llmBudgetView');
+    expect(pages).toContain('data-health-llm-budget');
   });
 });
 
@@ -483,6 +493,13 @@ describe('建议页删除', () => {
   it('头部筛选旁有「删除」模式按钮；批量操作条初始隐藏', () => {
     expect(html).toContain('id="btn-advice-delete-mode" class="btn btn-outline btn-sm"');
     expect(html).toContain('id="advice-batch-bar" class="batch-bar" hidden');
+  });
+
+  it('adviceCard 对规则兜底建议显示「规则观察」标记', () => {
+    const ui = read('./ui.js');
+    expect(ui).toContain('isRuleFallbackAdvice');
+    expect(ui).toContain('规则观察');
+    expect(ui).toContain('badge badge-neutral');
   });
 
   it('adviceCard 只按选择模式渲染勾选框（不再有卡片行尾删除按钮）', () => {
