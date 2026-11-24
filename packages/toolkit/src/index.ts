@@ -73,6 +73,7 @@ export * from './tools/sector-quote.js';
 export * from './tools/set-watch-trigger-feedback.js';
 export * from './tools/settle-advices.js';
 export * from './tools/signal-observation.js';
+export * from './tools/stock-brief-view.js';
 export * from './tools/strategy-experiment.js';
 export * from './tools/strategy-insight.js';
 export * from './tools/strategy-lifecycle.js';

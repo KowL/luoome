@@ -40,6 +40,7 @@ import {
   applyBatchQuotes as applyBatchQuotesImpl,
   createIndexQuotesCache,
 } from './routes/shared.js';
+import { registerStockBriefRoutes } from './routes/stock-brief.js';
 import { registerStrategyRoutes } from './routes/strategy.js';
 import { registerToolGatewayRoutes } from './routes/tool-gateway.js';
 import type { WebRouteDeps } from './routes/types.js';
@@ -347,6 +348,7 @@ export const createWebApp = (
   registerMarketRoutes(app, deps);
   registerStrategyRoutes(app, deps);
   registerDashboardRoutes(app, deps);
+  registerStockBriefRoutes(app, deps);
   registerToolGatewayRoutes(app, deps);
 
   return app;

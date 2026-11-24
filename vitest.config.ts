@@ -38,6 +38,8 @@ export default defineConfig({
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
       'apps/web/src/server-background-scheduler.test.ts',
+      'apps/web/src/chat-draft-limit.test.ts',
+      'apps/web/src/routes/stock-brief.test.ts',
       'apps/web/src/workspace.test.ts',
       'apps/web/src/data-transfer.test.ts',
       'apps/web/src/market-room.integration.test.ts',

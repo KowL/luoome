@@ -2,6 +2,7 @@ import {
   dateInShanghai,
   type StockBrief,
   type StockBriefMissingDimension,
+  StockBriefMissingSchema,
   StockBriefPhaseSchema,
   StockBriefQualitySchema,
 } from '@luoome/core';
@@ -30,12 +31,8 @@ const BriefListItem = z.object({
   factDigest: z.string().min(1),
   factsAsOf: z.coerce.date(),
   validUntil: z.coerce.date(),
-  missing: z.array(
-    z.object({
-      dimension: z.string().min(1),
-      reason: z.string().min(1),
-    }),
-  ),
+  missing: z.array(StockBriefMissingSchema),
+  dataSources: z.array(z.string().min(1)),
   llmHttpCalls: z.number().int().nonnegative(),
   llmTokens: z.number().int().nonnegative(),
   wording: StockBriefWordingSchema,
@@ -55,33 +52,39 @@ export const ListStockBriefsInput = z.object({
   limit: z.number().int().positive().max(200).default(50),
 });
 
+export const StockBriefCoverageSchema = z.object({
+  date: z.string().min(1),
+  requested: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  byQuality: z.object({
+    ai: z.number().int().nonnegative(),
+    ruleOnly: z.number().int().nonnegative(),
+    partial: z.number().int().nonnegative(),
+    unavailable: z.number().int().nonnegative(),
+  }),
+  missingDimensions: z.array(z.string().min(1)),
+});
+export type StockBriefCoverage = z.infer<typeof StockBriefCoverageSchema>;
+
+export const StockBriefBudgetSchema = z.object({
+  date: z.string().min(1),
+  httpCalls: z.number().int().nonnegative(),
+  tokens: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative(),
+  limit: z.object({
+    maxBriefs: z.number().int().positive(),
+    maxHttpCalls: z.number().int().positive(),
+    maxTokens: z.number().int().positive(),
+  }),
+});
+export type StockBriefBudget = z.infer<typeof StockBriefBudgetSchema>;
+
 export const ListStockBriefsOutput = z.object({
   date: z.string().min(1),
   items: z.array(BriefListItem),
-  coverage: z.object({
-    date: z.string().min(1),
-    requested: z.number().int().nonnegative(),
-    returned: z.number().int().nonnegative(),
-    limit: z.number().int().positive(),
-    byQuality: z.object({
-      ai: z.number().int().nonnegative(),
-      ruleOnly: z.number().int().nonnegative(),
-      partial: z.number().int().nonnegative(),
-      unavailable: z.number().int().nonnegative(),
-    }),
-    missingDimensions: z.array(z.string().min(1)),
-  }),
-  budget: z.object({
-    date: z.string().min(1),
-    httpCalls: z.number().int().nonnegative(),
-    tokens: z.number().int().nonnegative(),
-    costUsd: z.number().nonnegative(),
-    limit: z.object({
-      maxBriefs: z.number().int().positive(),
-      maxHttpCalls: z.number().int().positive(),
-      maxTokens: z.number().int().positive(),
-    }),
-  }),
+  coverage: StockBriefCoverageSchema,
+  budget: StockBriefBudgetSchema,
 });
 export type ListStockBriefsOutput = z.infer<typeof ListStockBriefsOutput>;
 
@@ -98,7 +101,8 @@ const toItem = (brief: StockBrief, stockName: string | undefined): BriefListItem
   factDigest: brief.factDigest,
   factsAsOf: brief.factsAsOf,
   validUntil: brief.validUntil,
-  missing: brief.missing.map((item) => ({ dimension: item.dimension, reason: item.reason })),
+  missing: brief.missing,
+  dataSources: brief.dataSources,
   llmHttpCalls: brief.llmHttpCalls,
   llmTokens: brief.llmPromptTokens + brief.llmCompletionTokens + brief.llmReasoningTokens,
   wording: stockBriefWordingOf(brief),
