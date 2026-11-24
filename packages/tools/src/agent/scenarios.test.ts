@@ -208,6 +208,9 @@ describe('agent 场景目录', () => {
     expect(BASE_INSTRUCTIONS).toContain('update_holding');
     expect(BASE_INSTRUCTIONS).toContain('save_strategy_version');
     expect(BASE_INSTRUCTIONS).toContain('list_watch_plans');
+    expect(BASE_INSTRUCTIONS).toContain('get_stock_brief');
+    expect(BASE_INSTRUCTIONS).toContain('不得把规则观察描述成 AI 研究结论');
+    expect(BASE_INSTRUCTIONS).toContain('最多生成 1 个 advice 草案');
     expect(BASE_INSTRUCTIONS).not.toContain('trial_strategy');
     expect(BASE_INSTRUCTIONS).not.toContain('add_watchlist_members');
   });

@@ -221,6 +221,8 @@ const buildChatTools = (
       throw error;
     }
   };
+  // 每条用户消息的 advice 草案配额（kind==='advice'）。
+  let adviceDrafts = 0;
   const drafts = Object.entries(scenario.draftToolKinds)
     .filter(([name]) => available(name))
     .map(([name, kind]): AgentCallableTool => {
@@ -257,6 +259,21 @@ const buildChatTools = (
                 },
               },
             };
+          }
+          // 硬限：同一条用户消息最多 1 个 advice 草案（design §3.1）；同步占位避免并发绕过。
+          if (kind === 'advice') {
+            if (adviceDrafts >= 1) {
+              return {
+                ok: false,
+                output: {
+                  error: {
+                    kind: 'permission_denied',
+                    required: '每轮最多 1 个 advice 草案，不并行分析多只股票',
+                  },
+                },
+              };
+            }
+            adviceDrafts += 1;
           }
           return {
             ok: true,

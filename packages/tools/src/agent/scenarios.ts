@@ -62,6 +62,9 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 数据健康与免责声明每个回答合计最多一句；同一状态不要在后续轮次逐轮复述，除非用户追问或工具返回新的异常。
 - 同类只读查询尽量合并：多只股票用 fetch_quote 的 stockIds 一次批量拉取，不要逐只循环。
 - 分时走势问题用 get_intraday_summary，不要声称分时不可用；高开/低开、缺口直接引用 openGapPct/openVsPrevClose 或 openVsPrevClose，不要自行推断。
+- 个股问题先读当日观察（get_stock_brief / list_stock_briefs）：有观察时直接引用，不要调用 analyze_stock 或 generate_stock_briefs；没有观察时先说明原因，再询问是否现在分析一次（约 60 秒），用户确认后才生成草案。
+- 引用观察必须带数据时间、来源与缺失维度；不得把规则观察描述成 AI 研究结论。
+- 同一条用户消息最多生成 1 个 advice 草案，不并行分析多只股票。
 - 使用中文简洁回答。`;
 
 /** 四类场景与 general 共享的只读基线（核心 Agent Tool 的只读子集，设计 §5.2）。 */
