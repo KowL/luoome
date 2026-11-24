@@ -148,6 +148,22 @@ StrategySignal，不临时运行全市场 Strategy。
 收盘报告、日报、风控报告与对应的调度已删除；`decisionReviewFingerprint` 等收盘复盘字段
 仅对存量报告只读兼容。
 
+### 每日个股观察（StockBrief）
+
+回答“今天这只票有哪些可核对的观察事实”。`StockBrief` 是某交易日、某账户、某标的的
+**观察日视图**，唯一键 `(accountId, tradingDate, stockId, phase)`；它保存结论、置信度、
+质量等级（AI / 规则观察 / 部分数据 / 不可用）、事实指纹、数据时间、缺失维度与当日 LLM 计量，
+证据正文仍由 Advice 的 `based_on` 提供。
+
+- **Signal ≠ Advice**：信号词表只是 `decision` 的展示映射；策略信号是事实，Advice 是带推理、
+  反证、风险、免责声明和有效期的研究结论，两者都不等于交易。
+- **Brief ≠ 新的生命周期实体**：它没有自己的审批、跟踪或行动状态，也不替代 Advice；
+  `adviceId` 只是从观察指向当日 AI 结论的可选引用，规则观察没有 `adviceId`。
+- **规则观察不是 AI 结论**：模型失败、预算耗尽或数据不足时写 `rule-only` / `unavailable`，
+  必须带缺失维度与原因；不得把确定性规则结果描述成 AI 研究结论，也不得伪造 0 值或完整输出。
+- 展示使用信号 / 观察词表（偏多信号、偏空信号、中性观察、待确认观察、回避观察），
+  保留数据时间、来源、缺口与「仅技术研究，不构成投资建议」声明。
+
 ### 账户现金余额与账户事实（AccountFacts）
 
 回答“这个账户现在有多少现金、持仓按行情值多少、总资产是多少”。现金是账户上的余额字段
@@ -281,6 +297,8 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
   旧 `notified` 仍是尝试数（含失败和仅日志），历史缺省指标显示未记录。盘中预警和定时报表走
   飞书；未配置时落日志并标记 fallback-log，不能宣称已送达。
 - Advice 与真实交易严格分离；Strategy、AlertPlan、WatchTrigger 都不会自动下单。
+- StockBrief 只是观察日视图：引用 Advice 但不能替代它，也不进入 Advice 生命周期；
+  规则观察不计入命中率 / 结算覆盖率分母，展示时不得写成 AI 结论。
 - write/external 必须显式 opt-in；Agent 的持久化、发布、正式运行和同步必须先确认。
 
 旧 Tactic、StockGroup、StockPool 已彻底移除：tool、repository、entity、migration decoder

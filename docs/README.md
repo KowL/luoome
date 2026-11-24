@@ -37,6 +37,7 @@
 | [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
 | [策略工作台](./prd/strategy-v2.md) | Strategy 的执行记录、派生股票池/候选池、运行 Diff、真实信号观察与版本迭代 |
 | [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
+| [每日个股观察（StockBrief）](./prd/daily-stock-brief.md) | 每交易日一批的个股观察板：覆盖、单一生成入口、预算、降级、文案与 Advice/结算关系 |
 | [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | M1 报告中心已收敛为每周建议成绩单（2026-11-20）；M2 的自动发布/自动暂停已裁撤（2026-11-10），AI 提议仅保留为待确认草案 |
 
 ## 技术设计（DDD）
@@ -51,6 +52,7 @@
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | 涨停梯队快照、东方财富涨停池 adapter、缓存，以及 fuyao 炸板/断板 PIT 事实 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
+| [每日个股观察（StockBrief）详细设计](./ddd/daily-stock-brief-detailed-design.md) | `stock_briefs` 表、生成流水线、tool/API/CLI/MCP、17:30 与 08:45 调度、降级、结算与成绩单口径 |
 | [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tushare 当前会话能力、缺口/保留和 Web 状态 |
 | [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |
 | [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 作为第四真实行情源的能力映射、envelope 错误转译与 factory 接线 |
@@ -113,6 +115,7 @@
 - [v0.8.0 MVP 开发计划](./archive/MVP-PLAN-BOARD-HOLDINGS-GROUPS-WATCH.md)
 - [v0.8.0 MVP 验收记录](./archive/MVP-ACCEPTANCE.md)
 - [Adshare smoke 跳过记录（2026-07-23）](./archive/adshare-smoke-skip-20260723.md)
+- [每日个股观察验收记录（2026-11-24）](./archive/daily-stock-brief-acceptance-20261124.md) — P0–P3 自动化证据、全量命令结果、§13.2 指标状态与待补浏览器 6 入口留痕
 
 ### 已裁撤能力的设计文档
 

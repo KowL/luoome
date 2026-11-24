@@ -340,8 +340,8 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 
 - 多模式入口：`report`（仅 weekly 建议成绩单）、`strategy`（仅 `job=run`）、
   `sync-market`（quotes/universe/dump）；
-- 专用入口：`daily-advice`、`sync-portfolio-watchlists`、`post-market-data`、`intraday-watch`、
-  `snapshot-account-performance`、`sync-sector-catalog`。
+- 专用入口：`daily-advice`、`daily-stock-briefs`、`sync-portfolio-watchlists`、`post-market-data`、
+  `intraday-watch`、`snapshot-account-performance`、`sync-sector-catalog`。
 
 报告、策略与行情同步的原管线改为 `defineOperation`（可复用步骤管线，不注册为 workflow）；
 审计名仍由各管线内部写入，合并不会改写历史 WorkflowRun 身份。数量由
@@ -367,9 +367,11 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 `strategy-daily-cycle`、观察补全与策略定时器一并下线，策略只在每日判断里按需运行取当日信号。
 存量 V4 summary 里的 `acceptance` 字段保留只读解析，新运行不再计算。
 
-**盘后/盘中调度**：交易日 17:30 由 `daily-advice` 生成当日判断，每周一 08:00 由
-`report`（kind=weekly）生成建议成绩单；不再有 `strategy-daily-cycle`、策略定时租约和截止补报
-tick，也不再有开盘/收盘/复盘/风险四类报告。
+**盘后/盘中调度**：交易日 17:30 先跑 `daily-stock-briefs` 生成当日个股观察（唯一 LLM 入口），
+再由 `daily-advice(briefsOnly)` 从当日 brief 派生「今日不动/今日可动」；交易日 08:45 另跑
+`daily-stock-briefs(phase='premarket')`，只出事实包 + 规则预筛的研究名单，0 次 LLM、不写 advices。
+每周一 08:00 由 `report`（kind=weekly）生成建议成绩单；不再有 `strategy-daily-cycle`、策略定时租约和
+截止补报 tick，也不再有开盘/收盘/复盘/风险四类报告。
 
 `web serve` 的盘中账户计划调度每分钟在交易日上午/下午时段顺序检查全部账户，启动时立即检查；
 每个账户仍经 `intraday-trading-plan-watch` workflow 和共享预警租约求值、复查与投递。
@@ -728,6 +730,7 @@ LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）；实�
 LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
 MarketSnapshotBatch 盘中全市场不可变批次（coverage, sampledAt, source, 行情/抓取时间, completeness, gaps, items）；按采样时点去重发布
 Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
+StockBrief       每日个股观察日视图（交易日 × 账户 × 标的 × phase、decision/confidence、quality、factDigest、missing、LLM 计量、可选 adviceId 引用）；唯一键即幂等键，不引入新生命周期
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
 SectorCatalogEntry      行业 / 概念目录条目（内部 id、kind、source、vendorCode、name、firstSeenAt、lastSeenAt、retiredAt）；内部标识不复用供应商代码
 SectorMembership        板块成分多对多事实（core 的 `StockSectorMembership`；(sectorId, stockId) 主键、state、memberStatus、firstSeenAt、lastSeenAt、missingSince、lastSyncId）；成分消失只标 missing，不物理删除
@@ -959,6 +962,11 @@ trading-plan-version 复盘的最新修订内容（`trading-plan-version` → `t
 目录契约测试校验工具名、对象唯一性和导出覆盖，既有公共库存测试保护暴露范围。
 Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schema；内部 ToolResult 与 MCP 文本内容的响应格式分别说明。
 
+每日个股观察的工具分工：`generate_stock_briefs`（`advice`，owner `business.analysis`，`agent: false`）
+只进应用 registry，不进入 Agent registry / MCP / OpenAI schema；`get_stock_brief` 与
+`list_stock_briefs`（`read`，owner `shared-query`）随只读基线进入 MCP。生成只保留一个入口，
+读工具不触发生成。
+
 ### 7.1.1 插件归属与执行控制
 
 catalog 为全部 Tool 标注唯一 owner；`execution: 'p1' | 'p2' | 'p3'` 标出受控入口。
@@ -997,7 +1005,7 @@ Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner�
 CLI 只提供只读的 `plugins check`，且不为查看状态初始化业务上下文。
 
 `business.analysis` 是默认关闭的建议生成 owner，catalog 将 `analyze_stock`、`analyze_position`、`market_outlook`、
-`analyze_strategy_candidate` 统一标为受控执行。分析模型调用在 `build-advice` 的共同边界统一出站，
+`analyze_strategy_candidate` 与 `generate_stock_briefs` 统一标为受控执行。分析模型调用在 `build-advice` 的共同边界统一出站，
 未通过判断契约（七要素、confidence 与仓位单调）的输出不入库。
 即使没有行情 DataScope，存在执行策略的 Tool 仍安装 repository write guard；AdviceRepository 在 immediate 写锁内同步校验后保存。
 历史查询、反馈与其它插件不归此 owner，已提交事实保持可读。
@@ -1062,11 +1070,12 @@ type ToolError =
 
 ### 8.1 内置 workflow
 
-只保留 9 个注册入口（`architecture.test.ts` 守住数量与名字）；其余可复用管线用 `defineOperation`，不作为 workflow 注册。
+只保留 10 个注册入口（`architecture.test.ts` 守住数量与名字）；其余可复用管线用 `defineOperation`，不作为 workflow 注册。
 
 | workflow | 职责 |
 |---|---|
-| `daily-advice` | 每日判断：账户事实 + 价格结构 + 当日新闻 + 板块 + 策略信号 → 逐只 `analyze_stock`；持仓全覆盖，候选池 ≤10（手动关注 + 策略信号 ≤3），输出「今日不动/今日可动」汇总 |
+| `daily-advice` | 每日判断：账户事实 + 价格结构 + 当日新闻 + 板块 + 策略信号 → 逐只 `analyze_stock`；持仓全覆盖，候选池 ≤10（手动关注 + 策略信号 ≤3），输出「今日不动/今日可动」汇总。17:30 调度默认 `briefsOnly=true`，只消费当日 `stock_briefs`，不自己调 `analyze_stock` |
+| `daily-stock-briefs` | 每日个股观察批次：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→ 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库 `stock_briefs`；`phase='premarket'` 只出研究名单，0 次 LLM、不写 advices；写 `workflow_runs` coverage/budget 审计 |
 | `report` | 只接受 `kind=weekly`：调用 `settle_advices` 结算 T+1/3/5，再生成建议成绩单（命中率、超额、confidence 分组、门禁），落库为一份 Report |
 | `strategy` | 只接受 `job=run`：按显式策略运行 `run_strategy`，不再有 scheduled/daily/observations 编排 |
 | `intraday-watch` | AlertPlan → Watchlist members → 报价/昨收/策略信号/事件 → 边沿、冷却、每日上限 → WatchTrigger → 通知；含交易计划监控分支 |
