@@ -1,5 +1,9 @@
 import {
+  type Advice,
+  dateInShanghai,
+  money,
   STANDARD_DISCLAIMERS,
+  type StockBrief,
   type Strategy,
   type StrategyDslV1,
   type StrategyVersion,
@@ -14,6 +18,97 @@ import {
   dailyAdviceWorkflow,
   HIGH_CONFIDENCE_THRESHOLD,
 } from './daily-advice.js';
+
+const makeAdvice = (
+  id: string,
+  stockId: string,
+  decision: Advice['decision'],
+  confidence: number,
+  createdAt: Date,
+): Advice => ({
+  id,
+  subjectKind: 'stock',
+  subjectId: stockId,
+  decision,
+  confidence,
+  horizon: 'short',
+  ...(decision === 'buy' || decision === 'sell'
+    ? { entryPriceLow: money(100), entryPriceHigh: money(102) }
+    : {}),
+  reasoning: {
+    premise: `测试观察 ${id}`,
+    evidence: ['close=105.8'],
+    counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+  },
+  risks: ['可能回调'],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  sourceTool: 'analyze_stock',
+  basedOn: { dataAsOf: createdAt },
+  validFrom: createdAt,
+  validUntil: new Date(createdAt.getTime() + 3 * 86_400_000),
+  createdAt,
+});
+
+const seedBrief = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  input: {
+    readonly id: string;
+    readonly tradingDate: string;
+    readonly stockId: string;
+    readonly quality: StockBrief['quality'];
+    readonly decision: StockBrief['decision'];
+    readonly confidence?: number;
+    readonly phase?: StockBrief['phase'];
+    readonly adviceId?: string;
+  },
+): Promise<void> => {
+  const now = ctx.clock();
+  await ctx.repos.stockBrief.upsert({
+    id: input.id,
+    tradingDate: input.tradingDate,
+    phase: input.phase ?? 'post-market',
+    accountId: ctx.user.defaultAccountId,
+    stockId: input.stockId,
+    source: 'scheduled',
+    decision: input.decision,
+    confidence: input.confidence ?? 50,
+    horizon: 'short',
+    ...(input.adviceId === undefined ? {} : { adviceId: input.adviceId }),
+    quality: input.quality,
+    factDigest: `digest-${input.id}`,
+    factsAsOf: now,
+    missing: [],
+    dataSources: ['test'],
+    llmHttpCalls: input.quality === 'ai' ? 1 : 0,
+    llmPromptTokens: 0,
+    llmCompletionTokens: 0,
+    llmReasoningTokens: 0,
+    llmCostUsd: 0,
+    validUntil: new Date(now.getTime() + 86_400_000),
+    createdAt: now,
+    updatedAt: now,
+  });
+};
+
+const withCountingLlm = (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+): { ctx: typeof ctx; calls: () => number } => {
+  let calls = 0;
+  const wrapped = {
+    ...ctx,
+    adapters: {
+      ...ctx.adapters,
+      llm: {
+        name: 'briefs-only-llm',
+        generate: async () => {
+          calls += 1;
+          throw new Error('briefsOnly 不应调用 LLM');
+        },
+      },
+    },
+  } as typeof ctx;
+  return { ctx: wrapped, calls: () => calls };
+};
 
 const seedStrategy = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
@@ -197,6 +292,180 @@ describe('daily-advice workflow', () => {
     if (!result.ok) return;
     expect(result.data.summary.candidates).toBe(0);
     expect(result.data.advices).toHaveLength(holdings.data.holdings.length);
+  });
+
+  it('briefsOnly + 无 brief：今日不动、0 次 LLM、仍结算', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { ctx, calls } = withCountingLlm(base);
+    const result = await dailyAdviceWorkflow.run({ briefsOnly: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls()).toBe(0);
+    expect(result.data.advices).toHaveLength(0);
+    expect(result.data.judgment.action).toBe('今日不动');
+    expect(result.data.judgment.items).toHaveLength(0);
+    expect(result.data.judgment.reason).toContain('尚无个股观察记录');
+    expect(result.data.summary).toMatchObject({
+      total: 0,
+      actionable: 0,
+      quality: { ai: 0, ruleOnly: 0, partial: 0, unavailable: 0 },
+    });
+  });
+
+  it('briefsOnly + 混合质量：只把 ai buy/sell 放进 judgment，规则观察不计信号，仍结算', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { ctx, calls } = withCountingLlm(base);
+    const tradingDate = dateInShanghai(ctx.clock());
+    const now = ctx.clock();
+    await ctx.repos.advice.save(makeAdvice('daily-buy', '002594.SZ', 'buy', 80, now));
+    await ctx.repos.advice.save(makeAdvice('daily-hold', '600519.SH', 'hold', 60, now));
+    await ctx.repos.advice.save(makeAdvice('daily-sell', '300750.SZ', 'sell', 75, now));
+    await seedBrief(ctx, {
+      id: 'brief-buy',
+      tradingDate,
+      stockId: '002594.SZ',
+      quality: 'ai',
+      decision: 'buy',
+      confidence: 80,
+      adviceId: 'daily-buy',
+    });
+    // 同日盘前规则观察应被盘后 AI 行覆盖，不重复计入。
+    await seedBrief(ctx, {
+      id: 'brief-buy-premarket',
+      tradingDate,
+      stockId: '002594.SZ',
+      quality: 'rule-only',
+      decision: 'hold',
+      confidence: 20,
+      phase: 'premarket',
+    });
+    await seedBrief(ctx, {
+      id: 'brief-hold',
+      tradingDate,
+      stockId: '600519.SH',
+      quality: 'ai',
+      decision: 'hold',
+      confidence: 60,
+      adviceId: 'daily-hold',
+    });
+    await seedBrief(ctx, {
+      id: 'brief-sell',
+      tradingDate,
+      stockId: '300750.SZ',
+      quality: 'ai',
+      decision: 'sell',
+      confidence: 75,
+      adviceId: 'daily-sell',
+    });
+    await seedBrief(ctx, {
+      id: 'brief-rule',
+      tradingDate,
+      stockId: '600036.SH',
+      quality: 'rule-only',
+      decision: 'watch',
+      confidence: 20,
+    });
+    await seedBrief(ctx, {
+      id: 'brief-unavailable',
+      tradingDate,
+      stockId: '000858.SZ',
+      quality: 'unavailable',
+      decision: 'hold',
+      confidence: 0,
+    });
+
+    const adviceRepo = ctx.repos.advice;
+    const originalQuery = adviceRepo.query.bind(adviceRepo);
+    let settleQueries = 0;
+    adviceRepo.query = async (filter) => {
+      if (filter?.includeExpired === true) settleQueries += 1;
+      return originalQuery(filter);
+    };
+
+    const result = await dailyAdviceWorkflow.run({ briefsOnly: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls()).toBe(0);
+    expect(settleQueries).toBeGreaterThan(0);
+    expect(result.data.advices.map((advice) => advice.id)).toEqual([
+      'daily-buy',
+      'daily-sell',
+      'daily-hold',
+    ]);
+    expect(result.data.judgment.action).toBe('今日可动');
+    expect(result.data.judgment.items.map((item) => item.stockId)).toEqual([
+      '002594.SZ',
+      '300750.SZ',
+    ]);
+    expect(result.data.judgment.reason).toContain('2 个信号');
+    expect(result.data.summary).toMatchObject({
+      total: 3,
+      highConfidence: 2,
+      actionable: 2,
+      candidates: 1,
+      quality: { ai: 3, ruleOnly: 1, partial: 0, unavailable: 1 },
+    });
+  });
+
+  it('briefsOnly + 仅有规则观察 / unavailable：不进入今日有信号，reason 可解释', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { ctx } = withCountingLlm(base);
+    const tradingDate = dateInShanghai(ctx.clock());
+    await seedBrief(ctx, {
+      id: 'only-rule',
+      tradingDate,
+      stockId: '600036.SH',
+      quality: 'rule-only',
+      decision: 'hold',
+      confidence: 20,
+    });
+    await seedBrief(ctx, {
+      id: 'only-unavailable',
+      tradingDate,
+      stockId: '000858.SZ',
+      quality: 'unavailable',
+      decision: 'hold',
+      confidence: 0,
+    });
+
+    const result = await dailyAdviceWorkflow.run({ briefsOnly: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.judgment.action).toBe('今日不动');
+    expect(result.data.judgment.items).toHaveLength(0);
+    expect(result.data.judgment.reason).toContain('均为规则观察或数据不可用');
+    expect(result.data.summary).toMatchObject({
+      total: 0,
+      actionable: 0,
+      quality: { ai: 0, ruleOnly: 1, partial: 0, unavailable: 1 },
+    });
+  });
+
+  it('briefsOnly + 只有 AI hold/watch：action 仍为今日不动，reason 说明无信号', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { ctx } = withCountingLlm(base);
+    const tradingDate = dateInShanghai(ctx.clock());
+    const now = ctx.clock();
+    await ctx.repos.advice.save(makeAdvice('only-hold', '600519.SH', 'hold', 60, now));
+    await seedBrief(ctx, {
+      id: 'only-hold-brief',
+      tradingDate,
+      stockId: '600519.SH',
+      quality: 'ai',
+      decision: 'hold',
+      confidence: 60,
+      adviceId: 'only-hold',
+    });
+
+    const result = await dailyAdviceWorkflow.run({ briefsOnly: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advices).toHaveLength(1);
+    expect(result.data.judgment.action).toBe('今日不动');
+    expect(result.data.judgment.items).toHaveLength(0);
+    expect(result.data.judgment.reason).toContain('未出现偏多/偏空信号');
+    expect(result.data.summary.actionable).toBe(0);
+    expect(result.data.summary.quality.ai).toBe(1);
   });
 
   it('错误路径：accountId 非 uuid → invalid_input（run 不 throw）', async () => {
