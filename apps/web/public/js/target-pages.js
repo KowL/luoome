@@ -3,6 +3,15 @@ import { callApi, getAccountId } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import { makeInput, makeSelect } from './form-kit.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
+import {
+  briefCellNode,
+  briefDateKey,
+  briefGenerateFeedback,
+  manualRefreshAllowed,
+  manualRefreshRecord,
+  readManualRefresh,
+  writeManualRefresh,
+} from './stock-brief.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   invalidateStrategyWorkspaceCache,
@@ -518,6 +527,14 @@ export const stocksOfList = (stocks, watchlistId) =>
 /** 股票区当前 tab（'all' 或 watchlistId）与最近一次 overview 数据：切换 tab 不重复拉取。 */
 let watchlistStockTab = 'all';
 let lastWatchlistOverview = null;
+/** 「全部」视图的当日观察：一次 GET /api/stock-briefs/today，按 stockId 索引。 */
+let lastBriefsByStock = new Map();
+let lastBriefsAvailable = true;
+
+const briefCellOf = (stockId) =>
+  lastBriefsAvailable
+    ? briefCellNode(lastBriefsByStock.get(stockId) ?? null)
+    : el('span', 'muted', '观察读取失败');
 
 const memberSelect = (values, current, textMap) => {
   const select = document.createElement('select');
@@ -584,6 +601,7 @@ const stockTableRow = (stock) => {
       ]),
     ),
     ...quoteCell(stock),
+    el('td', null, briefCellOf(stock.stockId)),
     el(
       'td',
       null,
@@ -603,6 +621,7 @@ const buildStockTable = (pageItems, sortState, onSort) =>
         el('th', null, '名称'),
         sortableHeader('现价', 'price', sortState, onSort, 'num'),
         sortableHeader('涨跌幅', 'changePct', sortState, onSort, 'num'),
+        el('th', null, '今日观察'),
         el('th', null, '关注列表'),
       ]),
     ),
@@ -655,7 +674,13 @@ const renderListPane = async (watchlistId, views, setStatus) => {
   const view = $('#watchlists-view');
   if (view === null) return;
   mount(view, el('p', 'placeholder', '加载中…'));
-  const result = await callApi(`/api/watchlists/${encodeURIComponent(watchlistId)}`);
+  // 成员行观察与列表元信息并行：一个 watchlistId 只批量取一次，不逐票请求。
+  const [result, briefResult] = await Promise.all([
+    callApi(`/api/watchlists/${encodeURIComponent(watchlistId)}`),
+    callApi(`/api/stock-briefs?watchlistId=${encodeURIComponent(watchlistId)}`, {
+      timeoutMs: 15_000,
+    }),
+  ]);
   // 拉取期间用户已切走其它 tab，不再回填
   if (watchlistStockTab !== watchlistId) return;
   if (!result.ok) {
@@ -664,6 +689,14 @@ const renderListPane = async (watchlistId, views, setStatus) => {
   }
   const { watchlist, alertPlans } = result.data;
   const stocks = stocksOfList(views.stocks, watchlistId);
+  const briefsByStock = new Map(
+    (briefResult.ok ? (briefResult.data?.items ?? []) : []).map((item) => [item.stockId, item]),
+  );
+  const briefsAvailable = briefResult.ok;
+  const briefCell = (stock) => {
+    if (!briefsAvailable) return el('span', 'muted', '观察读取失败');
+    return briefCellNode(briefsByStock.get(stock.stockId) ?? null);
+  };
 
   const edit = actionButton('编辑', async () => {
     const values = await promptDialog({
@@ -920,6 +953,32 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     openModal('添加分组成员', body);
     searchInput.focus();
   });
+  // 整列表刷新：一次批量 POST（scope=stock + 该列表 stockIds），不提供逐票生成按钮。
+  const refreshBriefs = actionButton('整列表刷新观察', async (button) => {
+    const date = briefDateKey();
+    if (!manualRefreshAllowed(readManualRefresh('watchlist', watchlistId), date)) {
+      setStatus('今日已刷新过该列表（每个列表每日默认 1 次）；既有观察记录仍可查看。');
+      return;
+    }
+    if (stocks.length === 0) {
+      setStatus('该列表暂无成员，无需刷新。');
+      return;
+    }
+    button.disabled = true;
+    const generated = await post('/api/stock-briefs/generate', {
+      scope: 'stock',
+      stockIds: stocks.map((stock) => stock.stockId).slice(0, 50),
+      phase: 'post-market',
+      force: true,
+    });
+    const feedback = briefGenerateFeedback(generated);
+    setStatus(feedback.message, feedback.tone === 'error');
+    if (generated.ok && generated.data?.degradation?.reason !== 'rate_limited') {
+      writeManualRefresh('watchlist', watchlistId, manualRefreshRecord(date));
+    }
+    await renderWatchlists(setStatus);
+  });
+
   const health = summarizeMemberSources(
     stocks.flatMap((stock) =>
       (stock.memberships ?? [])
@@ -977,6 +1036,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
         ]),
       ),
       ...quoteCell(stock),
+      el('td', null, briefCell(stock)),
       el('td', null, priority),
       el(
         'td',
@@ -1004,6 +1064,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
           el('th', null, '名称'),
           sortableHeader('现价', 'price', sortState, onSort, 'num'),
           sortableHeader('涨跌幅', 'changePct', sortState, onSort, 'num'),
+          el('th', null, '今日观察'),
           el('th', null, '优先级'),
           el('th', null, '来源'),
           el('th', null, '操作'),
@@ -1039,7 +1100,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
         el('h2', null, watchlist.name),
         ...(watchlist.enabled ? [] : [el('span', 'badge badge-paused', '停用')]),
       ]),
-      el('div', 'flex gap-2', [edit, archiveList, add]),
+      el('div', 'flex gap-2', [refreshBriefs, edit, archiveList, add]),
     ]),
     el(
       'p',
@@ -1190,13 +1251,21 @@ const renderWatchlistOverview = (setStatus) => {
 };
 
 export const renderWatchlists = async (setStatus) => {
-  const result = await callApi('/api/watchlists/overview');
+  // 「全部」视图的观察与 overview 并行；观察读取失败只让该列降级，不影响成员表。
+  const [result, briefResult] = await Promise.all([
+    callApi('/api/watchlists/overview'),
+    callApi('/api/stock-briefs/today', { timeoutMs: 15_000 }),
+  ]);
   const view = $('#watchlists-view');
   if (view === null) return;
   if (!result.ok) {
     mount(view, el('p', 'status error', resultErrorText(result)));
     return;
   }
+  lastBriefsAvailable = briefResult.ok;
+  lastBriefsByStock = new Map(
+    (briefResult.ok ? (briefResult.data?.items ?? []) : []).map((item) => [item.stockId, item]),
+  );
   lastWatchlistOverview = result.data;
   renderWatchlistOverview(setStatus);
 };
