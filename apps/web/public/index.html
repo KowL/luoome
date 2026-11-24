@@ -104,6 +104,13 @@
           </header>
           <div id="workspace-facts" class="workspace-facts" role="status">正在读取已有事实，研究不会自动启动…</div>
           <div id="workspace-account" class="workspace-account"></div>
+          <div class="card mt-4" id="dashboard-brief-card">
+            <div class="card-header">
+              <div><h2>今日个股观察</h2><div id="dashboard-brief-meta" class="card-meta">只读观察记录 · 不触发生成</div></div>
+              <a href="#watchlists" class="card-link">关注列表 →</a>
+            </div>
+            <div id="dashboard-brief" class="stock-brief"><p class="placeholder">正在读取今日观察…</p></div>
+          </div>
           <section class="workspace-section" aria-labelledby="workspace-holdings-title"><div class="workspace-section-title"><div><span>01 / MY POSITIONS</span><h2 id="workspace-holdings-title">持仓，先看变化</h2></div><a href="#holdings">管理持仓 ↗</a></div><div id="workspace-holdings" class="workspace-card-grid"><p class="muted">正在读取持仓…</p></div></section>
           <section class="workspace-section" aria-labelledby="workspace-directions-title"><div class="workspace-section-title"><div><span>02 / FIND A DIRECTION</span><h2 id="workspace-directions-title">方向，留出讨论</h2></div><span class="workspace-caption">研究提案 ≠ 买入决定</span></div><div id="workspace-directions"><p class="muted">正在核对研究状态…</p></div><div id="workspace-consensus"></div></section>
           <section class="workspace-section" aria-labelledby="workspace-plans-title"><div class="workspace-section-title"><div><span>03 / KEEP THE THREAD</span><h2 id="workspace-plans-title">计划，接着往下走</h2></div><a href="#alerts">查看全部 ↗</a></div><div id="workspace-tracking" class="workspace-tracking"></div><div id="workspace-plans" class="workspace-card-grid"><p class="muted">正在核对计划…</p></div></section>
@@ -154,13 +161,6 @@
             <div class="card-header"><h2>建议 Top 3</h2><div class="card-meta" id="dash-advice-meta"></div></div>
             <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
           </div>
-        </div>
-        <div class="card mt-4" id="dashboard-brief-card">
-          <div class="card-header">
-            <div><h2>今日个股观察</h2><div id="dashboard-brief-meta" class="card-meta">只读观察记录 · 不触发生成</div></div>
-            <a href="#watchlists" class="card-link">关注列表 →</a>
-          </div>
-          <div id="dashboard-brief" class="stock-brief"><p class="placeholder">正在读取今日观察…</p></div>
         </div>
         <div class="dashboard-cols">
           <div class="card">
