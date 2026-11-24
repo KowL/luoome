@@ -45,6 +45,23 @@ Market and盘面资讯:
 - `fetch_news` — market news stream; `includeSentiment=true` also returns the A-share
   sentiment snapshot (`sentiment`) in the same call.
 
+Daily stock briefs (read-first for single-stock questions):
+
+- `get_stock_brief` — one stock's brief for the current or a given trading day: decision wording,
+  confidence, horizon, evidence, counter-evidence, risks, missing dimensions, warnings and validity.
+  Read-only; it never triggers generation.
+- `list_stock_briefs` — the day's coverage list (`date`, `accountId`, `watchlistId`, `stockIds`,
+  `phase`, `limit`) with `coverage.byQuality` and the day's LLM budget. Use it before asking for a
+  new analysis, and to report which stocks were not covered and why.
+- `get_stock_facts` — read-only fact pack with per-section `source` / `dataAsOf` and a `factDigest`.
+  It is `external`; ask for authorization before refreshing market inputs.
+
+When citing a brief, always include `date` / `dataAsOf`, the evidence `source`, and any `missing`
+reason. `quality: 'rule-only'` means deterministic rules without AI reasoning — label it as a low-
+confidence rule observation, never as an AI conclusion. `generate_stock_briefs` is intentionally not
+an MCP tool; a missing brief is reported as missing, and generation is a local Web/CLI action the user
+must trigger explicitly.
+
 Stock pools, strategies and portfolio:
 
 - `list_watchlists` / `get_watchlist` — pools, members and recent changes.

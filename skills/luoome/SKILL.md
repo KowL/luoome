@@ -62,6 +62,12 @@ Agent 不通过工具修改插件配置，也没有可用的配置写入接口�
 分析开关独立于策略执行、策略 AI 洞察和聊天；开启不会自动启源、扩充场景或跳过确认。模型已发送时可能仍在排空，不自动重放失败调用。
 
 
+### 个股观察（StockBrief，只读优先）
+
+个股问题先读当日观察：`get_stock_brief`（单票）或 `list_stock_briefs`（当日 / 关注列表 / 批量 stockIds，返回 coverage 与预算），需要核对事实包时再用 `get_stock_facts`（external，需用户授权）。
+引用观察时必须同时给出交易日与 dataAsOf、来源与缺失维度；规则观察（`quality: rule-only`）不是 AI 结论，要原样标注低置信，不得升级为方向性断言。
+`generate_stock_briefs` 不是 MCP 工具：无当日观察时说明原因，询问用户是否在本地 Web/CLI 显式触发生成，不要假装调用或引用不存在的记录。
+
 ### 账户绩效估值任务
 
 宿主显式启用 `task.snapshot-account-performance` 后才能运行批量 `snapshot-account-performance` Workflow；新增项默认关闭，仍需 write + external。

@@ -48,6 +48,27 @@ For an explicitly authorized formal run:
 
 Report publication and data health from the returned run. StrategySignals are evidence, not Advice or orders.
 
+## Read a stock's daily brief before analyzing
+
+For a question such as “这只票今天怎么看？”, read the existing brief first（毫秒级、不触发 LLM）:
+
+```json
+{"name":"get_stock_brief","arguments":{"stockId":"600000.SH","accountId":"account-id"}}
+```
+
+Cite the conclusion wording together with `dataAsOf`, evidence `source` and any `missing`
+dimensions. A `quality: 'rule-only'` row is a low-confidence rule observation, not an AI
+conclusion; do not turn it into a directional claim. When no brief exists, say so with the
+returned warning and ask whether the user wants to trigger generation locally (Web/CLI).
+Stock-brief generation is not an MCP tool, so never claim it was called; direct the user to the local
+Web/CLI `brief run` action instead.
+
+To scan coverage first, use the batch list and then fetch only the stocks the user cares about:
+
+```json
+{"name":"list_stock_briefs","arguments":{"accountId":"account-id","watchlistId":"watchlist-id","limit":20}}
+```
+
 ## Analyze a stock or holding
 
 Confirm discovery includes the analysis tool; the user must explicitly enable `business.analysis` in Web settings or the host CLI. If disabled, historical `get_advice` remains available; do not enable it or retry an old call on the user's behalf.
