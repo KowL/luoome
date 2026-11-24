@@ -657,7 +657,77 @@ describe('analyze_stock', () => {
     expect(briefs[0]?.adviceId).toBe(advice.id);
     expect(briefs[0]?.llmHttpCalls).toBe(1);
     expect(briefs[0]?.llmPromptTokens).toBe(1200);
+    expect(briefs[0]?.llmCompletionTokens).toBe(800);
     expect(briefs[0]?.llmReasoningTokens).toBe(200);
+  });
+
+  it('brief 路径两次尝试都失败：按真实 HTTP 计数 2，两次 usage 都累加到 rule-only 行', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'brief-two-fail-llm',
+          generate: async <T>(): Promise<T> => {
+            calls += 1;
+            // schema 校验失败：模型确实返回了内容，usage 必须计到本次真实请求。
+            return {
+              decision: 'hold',
+              confidence: 150,
+              horizon: 'short',
+              reasoning: {
+                premise: '测试两次都失败',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              usage: {
+                promptTokens: 100,
+                completionTokens: 50,
+                reasoningTokens: 10,
+                costUsd: 0.001,
+              },
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        brief: {
+          tradingDate,
+          phase: 'post-market',
+          ruleOnlyDraft: {
+            decision: 'hold',
+            confidence: 20,
+            premise: '中性观察：规则 fallback。仅技术研究，不构成投资建议。',
+            evidence: ['规则 fallback：测试夹具'],
+            disclaimers: [...STANDARD_DISCLAIMERS],
+          },
+        },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(2);
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      accountId: TEST_ACCOUNT.id,
+      tradingDate,
+    });
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.quality).toBe('rule-only');
+    expect(briefs[0]?.llmHttpCalls).toBe(2);
+    expect(briefs[0]?.llmPromptTokens).toBe(200);
+    expect(briefs[0]?.llmCompletionTokens).toBe(100);
+    expect(briefs[0]?.llmReasoningTokens).toBe(20);
+    expect(briefs[0]?.llmCostUsd).toBeCloseTo(0.002, 6);
   });
 
   it('brief 路径失败：不写 advices，只写 rule-only brief 且带 llm 降级原因', async () => {

@@ -29,14 +29,34 @@ const toUsageReport = (usage: unknown): LLMUsageReport | undefined => {
     outputTokens?: unknown;
     outputTokenDetails?: { reasoningTokens?: unknown };
     reasoningTokens?: unknown;
+    costUsd?: unknown;
   };
   const num = (value: unknown): number =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  // AI SDK v6 把 usage 拆成 { inputTokens: { total }, outputTokens: { total, reasoning } }；
+  // 兼容旧版的扁平数字字段，避免计量在升级后静默归零。
+  const tokens = (value: unknown): number => {
+    if (typeof value === 'number') return num(value);
+    if (value !== null && typeof value === 'object') {
+      return num((value as { total?: unknown }).total);
+    }
+    return 0;
+  };
+  const outputTokens = record.outputTokens;
   return {
-    promptTokens: num(record.inputTokens),
-    completionTokens: num(record.outputTokens),
-    reasoningTokens: num(record.outputTokenDetails?.reasoningTokens ?? record.reasoningTokens),
-    costUsd: 0,
+    promptTokens: tokens(record.inputTokens),
+    completionTokens: tokens(outputTokens),
+    reasoningTokens:
+      record.outputTokenDetails?.reasoningTokens !== undefined
+        ? tokens(record.outputTokenDetails.reasoningTokens)
+        : record.reasoningTokens !== undefined
+          ? tokens(record.reasoningTokens)
+          : tokens(
+              outputTokens !== null && typeof outputTokens === 'object'
+                ? (outputTokens as { reasoning?: unknown }).reasoning
+                : undefined,
+            ),
+    costUsd: num(record.costUsd),
   };
 };
 
@@ -84,17 +104,24 @@ const isTimeoutError = (error: unknown): boolean => {
 /** AI SDK 在不同阶段会把「没生成内容」报成 NoOutputGenerated / NoObjectGenerated。 */
 const noOutput = (
   error: unknown,
-): { readonly text: string; readonly finishReason: string | undefined } | undefined => {
+):
+  | { readonly text: string; readonly finishReason: string | undefined; readonly usage?: unknown }
+  | undefined => {
   if (NoObjectGeneratedError.isInstance(error)) {
-    return { text: error.text ?? '', finishReason: error.finishReason ?? undefined };
+    return {
+      text: error.text ?? '',
+      finishReason: error.finishReason ?? undefined,
+      usage: error.usage,
+    };
   }
   if (!(error instanceof Error)) return undefined;
   if (error.name !== 'AI_NoOutputGeneratedError' && error.message !== 'No output generated.')
     return undefined;
-  const record = error as Error & { text?: unknown; finishReason?: unknown };
+  const record = error as Error & { text?: unknown; finishReason?: unknown; usage?: unknown };
   return {
     text: typeof record.text === 'string' ? record.text : '',
     finishReason: typeof record.finishReason === 'string' ? record.finishReason : undefined,
+    usage: record.usage,
   };
 };
 
@@ -182,14 +209,13 @@ export class AISDKAdapter implements LLMAdapter {
       if (empty !== undefined) {
         if (quirks.recoverMalformedText && empty.text.length > 0) {
           try {
+            const usage = toUsageReport(empty.usage);
             return {
               ...recoverMalformedText(empty.text, schema),
               raw: NoObjectGeneratedError.isInstance(error)
                 ? buildRawFromError(error)
                 : JSON.stringify({ text: empty.text }),
-              ...(NoObjectGeneratedError.isInstance(error)
-                ? { usage: toUsageReport(error.usage) }
-                : {}),
+              ...(usage === undefined ? {} : { usage }),
             };
           } catch {
             // 恢复失败后继续走下面的预算诊断，保留原始 finishReason / usage。

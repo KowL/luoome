@@ -41,7 +41,39 @@ const fmtTime = (value) => {
   return date.toLocaleString('zh-CN', { hour12: false });
 };
 
-export { DATASET_LABELS, FRESHNESS_LABELS, fmtTime, initMarketSync, renderMarketSyncStatus };
+export const LLM_BUDGET_EXHAUSTED_TEXT = '今日 AI 分析额度已用完，规则观察仍可用';
+/** 与 toolkit/internal/llm-budget.ts 的预留口径一致：单票最多 2 次 HTTP、约 5132 token。 */
+const LLM_TICKET_MAX_HTTP = 2;
+const LLM_TICKET_TOKEN_ESTIMATE = 1_840 + 3_292;
+
+/** 当日 LLM 用量的展示投影：与 /api/market-data-status 的 llmBudget（stock_briefs.llm_* 求和）同源。 */
+const llmBudgetView = (budget) => {
+  if (budget === null || typeof budget !== 'object') return null;
+  const httpCalls = Number(budget.httpCalls) || 0;
+  const tokens = Number(budget.tokens) || 0;
+  const costUsd = Number(budget.costUsd) || 0;
+  const limit = budget.limit ?? {};
+  const maxHttpCalls = Number(limit.maxHttpCalls) || null;
+  const maxTokens = Number(limit.maxTokens) || null;
+  // 预算守卫按「下一票能否完整放入」提前拦截；面板同步该口径，避免剩余额度但已停跑。
+  const exhausted =
+    (maxHttpCalls !== null && httpCalls + LLM_TICKET_MAX_HTTP > maxHttpCalls) ||
+    (maxTokens !== null && tokens + LLM_TICKET_TOKEN_ESTIMATE > maxTokens);
+  return {
+    usageText: `今日 AI 分析：HTTP ${httpCalls}/${maxHttpCalls ?? '--'} · token ${tokens}/${maxTokens ?? '--'} · 金额 $${costUsd.toFixed(4)}`,
+    exhausted,
+    hint: exhausted ? LLM_BUDGET_EXHAUSTED_TEXT : '',
+  };
+};
+
+export {
+  DATASET_LABELS,
+  FRESHNESS_LABELS,
+  fmtTime,
+  initMarketSync,
+  llmBudgetView,
+  renderMarketSyncStatus,
+};
 
 const setMessage = (text, isError = false) => {
   const node = $('#market-sync-message');
@@ -94,6 +126,14 @@ const renderMarketSyncStatus = async () => {
             )
             .join(' · ')}`,
         );
+  const budget = llmBudgetView(r.data?.llmBudget);
+  const budgetText =
+    budget === null
+      ? null
+      : el('div', 'market-sync-llm-budget', [
+          el('p', null, budget.usageText),
+          ...(budget.exhausted ? [el('p', 'text-warn', budget.hint)] : []),
+        ]);
   mount(
     wrap,
     el(
@@ -113,6 +153,7 @@ const renderMarketSyncStatus = async () => {
           el('tbody', null, rows),
         ]),
         providerText,
+        budgetText,
       ].filter((node) => node !== null),
     ),
   );

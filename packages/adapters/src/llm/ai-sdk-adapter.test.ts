@@ -127,6 +127,38 @@ describe('llm/ai-sdk-adapter', () => {
     expect(JSON.parse(out.raw)).toMatchObject({
       text: '{"decision":"hold","confidence":65}',
     });
+    // AI SDK v6 的嵌套 usage totals 必须结构化上报，供每日预算计量。
+    expect(out.usage).toEqual({
+      promptTokens: 10,
+      completionTokens: 20,
+      reasoningTokens: 0,
+      costUsd: 0,
+    });
+  });
+
+  it('usage 上报 reasoning token（AI SDK v6 outputTokens.reasoning）', async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => ({
+        content: [{ type: 'text' as const, text: '{"decision":"hold","confidence":50}' }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 120, noCache: 120, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 300, text: 100, reasoning: 200 },
+        },
+        warnings: [],
+      }),
+    });
+    const out = await new AISDKAdapter(profile(model)).generate<z.infer<typeof TestSchema>>({
+      system: 'advisor',
+      schema: TestSchema,
+      data: {},
+    });
+    expect(out.usage).toEqual({
+      promptTokens: 120,
+      completionTokens: 300,
+      reasoningTokens: 200,
+      costUsd: 0,
+    });
   });
 
   it('非法结构化输出抛错，交由 manager 重试/fallback', async () => {
@@ -154,6 +186,13 @@ describe('llm/ai-sdk-adapter', () => {
     expect(out).toMatchObject({ decision: 'buy', confidence: 80 });
     expect(JSON.parse(out.raw)).toMatchObject({
       text: expect.stringContaining('<think>'),
+    });
+    // 恢复路径同样来自真实 HTTP 响应，usage 不能丢。
+    expect(out.usage).toEqual({
+      promptTokens: 10,
+      completionTokens: 20,
+      reasoningTokens: 0,
+      costUsd: 0,
     });
   });
 
@@ -216,6 +255,12 @@ describe('llm/ai-sdk-adapter', () => {
     expect(out).toMatchObject({ decision: 'buy', confidence: 80 });
     expect(requests[0]).not.toHaveProperty('response_format');
     expect(JSON.stringify(requests[0])).toContain('JSON Schema');
+    expect(out.usage).toEqual({
+      promptTokens: 10,
+      completionTokens: 10,
+      reasoningTokens: 0,
+      costUsd: 0,
+    });
   });
 
   it('空输出且 finishReason=length 时抛出可诊断的预算错误', async () => {

@@ -468,8 +468,9 @@ export const analyzeStockTool = defineTool({
         llmOutput = parsed.data;
         break;
       } catch (error) {
-        usage = addLlmUsage(usage, { httpCalls: 1 });
+        // 权限 / 取消在真正发起 HTTP 之前抛出，不能计成一次请求。
         if (error instanceof PluginExecutionDenied) throw error;
+        usage = addLlmUsage(usage, { httpCalls: 1 });
         // 把适配器/manager 的真实错误（预算耗尽、超时、schema 原文）带到下一次提示词。
         failure = error instanceof Error ? error.message : String(error);
       }

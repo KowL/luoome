@@ -127,6 +127,57 @@ describe('generate_stock_briefs', () => {
     for (const brief of briefs.filter((item) => item.quality === 'ai')) {
       expect(brief.adviceId).toBeDefined();
     }
+    // summary / budget 的计量必须与 stock_briefs.llm_* 求和一致。
+    const usage = await base.repos.stockBrief.sumUsage(tradingDate);
+    expect(result.data.summary.llmHttpCalls).toBe(usage.httpCalls);
+    expect(result.data.summary.tokens).toBe(
+      usage.promptTokens + usage.completionTokens + usage.reasoningTokens,
+    );
+    expect(result.data.budget).toMatchObject({
+      date: tradingDate,
+      httpCalls: usage.httpCalls,
+      tokens: usage.promptTokens + usage.completionTokens + usage.reasoningTokens,
+      costUsd: usage.costUsd,
+    });
+  });
+
+  it('失败后修复重试：2 次真实 HTTP，两次 usage 都写入同一条 ai brief', async () => {
+    const base = await buildTestContext({ advices: [] });
+    let calls = 0;
+    const ctx = withLlm(base, {
+      name: 'repair-once-llm',
+      generate: async <T>(): Promise<T> => {
+        calls += 1;
+        return validAnalysis({
+          ...(calls === 1 ? { confidence: 150 } : {}),
+          usage: { promptTokens: 1000, completionTokens: 500, reasoningTokens: 100, costUsd: 0 },
+        }) as T;
+      },
+    });
+    const tradingDate = dateInShanghai(base.clock());
+
+    const result = await generateStockBriefsTool.execute(
+      { scope: 'stock', stockIds: ['002594.SZ'], tradingDate },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls).toBe(2);
+    expect(result.data.items[0]?.action).toBe('llm');
+    expect(result.data.summary.llmHttpCalls).toBe(2);
+
+    const briefs = await briefsOf(base, tradingDate);
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.quality).toBe('ai');
+    expect(briefs[0]?.llmHttpCalls).toBe(2);
+    expect(briefs[0]?.llmPromptTokens).toBe(2000);
+    expect(briefs[0]?.llmCompletionTokens).toBe(1000);
+    expect(briefs[0]?.llmReasoningTokens).toBe(200);
+
+    const usage = await base.repos.stockBrief.sumUsage(tradingDate);
+    expect(result.data.summary.tokens).toBe(3200);
+    expect(usage.httpCalls).toBe(2);
+    expect(usage.promptTokens + usage.completionTokens + usage.reasoningTokens).toBe(3200);
   });
 
   it('幂等：同日同 digest 再跑 0 次 LLM，不重复写 advices', async () => {

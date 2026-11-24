@@ -3,6 +3,7 @@ import { dateInShanghai, MANAGED_PLUGIN_IDS, previousTradingDate } from '@luoome
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { readBriefBudget } from '../internal/llm-budget.js';
 import { computeMarketSession } from '../internal/market-view.js';
 
 /** 新鲜度阈值：盘中最新快照超过 15 分钟视为 stale。 */
@@ -82,6 +83,18 @@ export const GetMarketDataStatusOutput = z.object({
   watchlistStale: z.array(z.object({ watchlistId: z.string(), name: z.string() })),
   /** A 股当前交易时段（core 交易日历计算，与行情页 / cli watch 同一套口径）。 */
   marketSession: z.enum(['pre-open', 'trading', 'midday-break', 'closed', 'non-trading-day']),
+  /** 当日 LLM 用量（只读 stock_briefs.llm_* 汇总；不调 LLM、不拉行情）。 */
+  llmBudget: z.object({
+    date: z.string().min(1),
+    httpCalls: z.number().int().nonnegative(),
+    tokens: z.number().int().nonnegative(),
+    costUsd: z.number().nonnegative(),
+    limit: z.object({
+      maxBriefs: z.number().int().positive(),
+      maxHttpCalls: z.number().int().positive(),
+      maxTokens: z.number().int().positive(),
+    }),
+  }),
   /** `plugins.json` 只读诊断：缺失 / 未知 key / 非法 JSON；未接入文件策略时缺省。 */
   pluginConfig: z
     .object({
@@ -131,6 +144,8 @@ export const getMarketDataStatusTool = defineTool({
           };
 
     // provider 新鲜度：扫关注股票的最新快照，按 source 聚合 max(ts)
+    const budget = await readBriefBudget(ctx, dateInShanghai(now));
+
     const stockIds = await computeRelevantStockIds(ctx);
     const latestBySource = new Map<string, Date>();
     if (stockIds.length > 0) {
@@ -264,6 +279,13 @@ export const getMarketDataStatusTool = defineTool({
       watchHealth,
       watchlistStale,
       marketSession: session,
+      llmBudget: {
+        date: budget.date,
+        httpCalls: budget.httpCalls,
+        tokens: budget.tokens,
+        costUsd: budget.costUsd,
+        limit: budget.limit,
+      },
       ...(pluginConfig === undefined ? {} : { pluginConfig }),
     };
   },

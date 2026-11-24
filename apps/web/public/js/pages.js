@@ -14,7 +14,7 @@ import {
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
-import { DATASET_LABELS } from './market-sync.js';
+import { DATASET_LABELS, llmBudgetView } from './market-sync.js';
 import { alertDialog, confirmDialog, openModal } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -3040,7 +3040,7 @@ const loadDataHealth = async (setStatus) => {
   }
   const expanded = body.querySelector('details')?.open === true;
   const data =
-    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
+    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>, llmBudget?: {httpCalls: number, tokens: number, costUsd: number, limit: {maxBriefs: number, maxHttpCalls: number, maxTokens: number}}}} */ (
       r.data
     );
   // 未使用过的行情源（freshness=unknown）只报数量，避免一行「未知 —」占一排
@@ -3111,6 +3111,16 @@ const loadDataHealth = async (setStatus) => {
           ]),
         ]);
   if (datasetDetail !== null) datasetDetail.open = expanded;
+  // AI 用量与 get_market_data_status.llmBudget 同源（stock_briefs.llm_* 求和），超限给可行动提示。
+  const budget = llmBudgetView(data.llmBudget);
+  const budgetBlock =
+    budget === null
+      ? null
+      : el('div', 'data-health-llm-budget', [
+          el('h3', null, 'AI 用量'),
+          el('p', null, budget.usageText),
+          ...(budget.exhausted ? [el('p', 'text-warn', budget.hint)] : []),
+        ]);
   mount(
     body,
     el('div', 'data-health-grid', [
@@ -3123,6 +3133,7 @@ const loadDataHealth = async (setStatus) => {
       ]),
       el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
       ...(stale !== null ? [stale] : []),
+      ...(budgetBlock === null ? [] : [budgetBlock]),
       ...(datasetDetail !== null ? [datasetDetail] : []),
     ]),
   );

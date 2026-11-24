@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginConfigStore } from '@luoome/adapters';
-import { money, type SourceStatus } from '@luoome/core';
+import { dateInShanghai, money, type SourceStatus } from '@luoome/core';
 import { getMarketDataStatusTool } from '@luoome/toolkit/tools/get-market-data-status.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPluginExecutionPolicy } from '../plugin-policy.js';
@@ -26,6 +26,73 @@ const pluginCtx = async (body: string | null) => {
 };
 
 describe('tool/get_market_data_status', () => {
+  it('llmBudget 只读 stock_briefs.llm_* 求和，不调用 LLM', async () => {
+    const base = await buildTestContext({ advices: [] });
+    let llmCalls = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        llm: {
+          name: 'must-not-be-called',
+          generate: async () => {
+            llmCalls += 1;
+            throw new Error('get_market_data_status 不应调用 LLM');
+          },
+        },
+      },
+    } as typeof base;
+    const now = ctx.clock();
+    const tradingDate = dateInShanghai(now);
+    await ctx.repos.stockBrief.upsert({
+      id: 'status-brief-1',
+      tradingDate,
+      phase: 'post-market',
+      accountId: ctx.user.defaultAccountId,
+      stockId: '002594.SZ',
+      source: 'scheduled',
+      decision: 'hold',
+      confidence: 20,
+      horizon: 'short',
+      quality: 'rule-only',
+      factDigest: 'status-digest-1',
+      factsAsOf: now,
+      missing: [{ dimension: 'llm', reason: 'upstream 502' }],
+      dataSources: ['test'],
+      llmHttpCalls: 2,
+      llmPromptTokens: 1200,
+      llmCompletionTokens: 600,
+      llmReasoningTokens: 200,
+      llmCostUsd: 0.002,
+      validUntil: new Date(now.getTime() + 86_400_000),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await getMarketDataStatusTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(llmCalls).toBe(0);
+    const usage = await ctx.repos.stockBrief.sumUsage(tradingDate);
+    expect(result.data.llmBudget).toEqual({
+      date: tradingDate,
+      httpCalls: usage.httpCalls,
+      tokens: usage.promptTokens + usage.completionTokens + usage.reasoningTokens,
+      costUsd: usage.costUsd,
+      limit: { maxBriefs: 8, maxHttpCalls: 16, maxTokens: 90_000 },
+    });
+    expect(result.data.llmBudget).toMatchObject({
+      httpCalls: 2,
+      tokens: 2000,
+      costUsd: 0.002,
+    });
+    // 现有字段保持兼容。
+    expect(Array.isArray(result.data.providers)).toBe(true);
+    expect(Array.isArray(result.data.datasets)).toBe(true);
+    expect(result.data).toHaveProperty('watchHealth');
+    expect(result.data).toHaveProperty('watchlistStale');
+  });
+
   it('数据集库存来自 Gateway，新增 capability 不依赖写死 provider 常量', async () => {
     const ctx = await buildTestContext({
       stockUniverse: {
