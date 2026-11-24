@@ -16,6 +16,7 @@ import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS, llmBudgetView } from './market-sync.js';
 import { alertDialog, confirmDialog, openModal } from './modal.js';
+import { todayBriefNodes } from './stock-brief.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   triggerChannelTimingText,
@@ -66,6 +67,8 @@ let dashboardCanWrite = false;
 let dashboardAlertLabels = {};
 let dashboardSetStatus = () => {};
 let dashboardReportFetchedAt = 0;
+let dashboardBriefFetchedAt = 0;
+let dashboardBriefRequest = 0;
 
 const readDashboardView = (accountId) => {
   let saved;
@@ -232,6 +235,35 @@ const loadDashboardClosingReport = async (accountId, epoch, signal) => {
     return;
   }
   mount(body, dashboardClosingReportNode(result.data.reports?.[0] ?? null));
+};
+
+/**
+ * 首页「今日个股观察」：只走 GET /api/stock-briefs/today（首页永不触发 POST generate）。
+ * 失败时只把本区块降级成一条提示，不影响其它看盘卡片。
+ */
+const loadDashboardStockBriefs = async (accountId, signal) => {
+  const request = ++dashboardBriefRequest;
+  const result = await callApi('/api/stock-briefs/today', { timeoutMs: 15_000, signal });
+  if (request !== dashboardBriefRequest || accountId !== getAccountId()) return;
+  if ($('#route-dashboard').hidden) return;
+  const wrap = $('#dashboard-brief');
+  const meta = $('#dashboard-brief-meta');
+  if (wrap === null) return;
+  if (!result.ok) {
+    mount(
+      wrap,
+      el(
+        'p',
+        'placeholder',
+        `今日个股观察读取失败（${result.error?.kind ?? 'internal'}），其它卡片不受影响。`,
+      ),
+    );
+    if (meta !== null) meta.textContent = '读取失败 · 只读，不触发生成';
+    return;
+  }
+  const data = result.data ?? {};
+  mount(wrap, todayBriefNodes(data));
+  if (meta !== null) meta.textContent = `交易日 ${data.date ?? '--'} · 只读，不触发生成`;
 };
 
 const filterAdvices = (advices, decision, stockId) =>
@@ -940,8 +972,10 @@ const renderDashboard = (setStatus) => {
     boardViewHasData = false;
     dashboardCanWrite = false;
     dashboardReportFetchedAt = 0;
+    dashboardBriefFetchedAt = 0;
     for (const id of [
       'dashboard-board',
+      'dashboard-brief',
       'dash-advice-list',
       'dash-trigger-list',
       'data-health-body',
@@ -990,6 +1024,10 @@ const renderDashboard = (setStatus) => {
   if (Date.now() - dashboardReportFetchedAt >= 60_000) {
     dashboardReportFetchedAt = Date.now();
     void loadDashboardClosingReport(accountId, epoch, controller.signal);
+  }
+  if (Date.now() - dashboardBriefFetchedAt >= 60_000) {
+    dashboardBriefFetchedAt = Date.now();
+    void loadDashboardStockBriefs(accountId, controller.signal);
   }
   const pending = loadDashboard(setStatus, epoch, accountId, controller.signal).finally(() => {
     if (dashboardPending === pending) {
