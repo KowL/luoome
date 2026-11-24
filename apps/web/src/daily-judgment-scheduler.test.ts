@@ -1,8 +1,13 @@
-import type { DailyAdviceOutput } from '@luoome/workflows';
+import type { ToolContext, ToolResult } from '@luoome/core';
+import { catalogTools } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
+import { type DailyAdviceOutput, dailyAdviceWorkflow } from '@luoome/workflows';
 import { describe, expect, it } from 'vitest';
 
 import {
+  DAILY_JUDGMENT_LEGACY_ENV,
   dueDailyJudgmentTradingDay,
+  readDailyJudgmentLegacy,
   startDailyJudgmentScheduler,
 } from './daily-judgment-scheduler.js';
 
@@ -20,6 +25,68 @@ const fakeCtx = (clock: () => Date) =>
     clock,
     logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
   }) as unknown as Parameters<typeof startDailyJudgmentScheduler>[0];
+
+/** 2026-11-24 17:30 +08:00（周二交易日）。 */
+const SCHEDULED_NOW = new Date('2026-11-24T09:30:00.000Z');
+const TRADING_DAY = '2026-11-24';
+
+type ExecutableTool = {
+  execute: (input: unknown, ctx: ToolContext) => Promise<ToolResult<unknown>>;
+};
+
+const wrapCatalogTool = (name: string, onCall: () => void): (() => void) => {
+  const registry = catalogTools as unknown as Record<string, ExecutableTool>;
+  const original = registry[name];
+  if (original === undefined) throw new Error(`catalog tool missing: ${name}`);
+  registry[name] = {
+    ...original,
+    execute: async (input, ctx) => {
+      onCall();
+      return original.execute(input, ctx);
+    },
+  };
+  return () => {
+    registry[name] = original;
+  };
+};
+
+const overrideCatalogTool = (name: string, execute: ExecutableTool['execute']): (() => void) => {
+  const registry = catalogTools as unknown as Record<string, ExecutableTool>;
+  const original = registry[name];
+  if (original === undefined) throw new Error(`catalog tool missing: ${name}`);
+  registry[name] = { ...original, execute };
+  return () => {
+    registry[name] = original;
+  };
+};
+
+const withCountingLlm = (ctx: ToolContext): { ctx: ToolContext; calls: () => number } => {
+  const original = ctx.adapters.llm;
+  let calls = 0;
+  const llm = {
+    name: `counting-${original.name}`,
+    generate: async (request: unknown) => {
+      calls += 1;
+      return original.generate(request as never);
+    },
+  } as unknown as typeof original;
+  return {
+    ctx: { ...ctx, adapters: { ...ctx.adapters, llm } },
+    calls: () => calls,
+  };
+};
+
+const runScheduler = async (
+  ctx: ToolContext,
+  options: Parameters<typeof startDailyJudgmentScheduler>[1] = {},
+): Promise<void> => {
+  const scheduler = startDailyJudgmentScheduler(ctx, { startImmediately: false, ...options });
+  try {
+    await scheduler.tick();
+  } finally {
+    scheduler.stop();
+  }
+};
 
 describe('dueDailyJudgmentTradingDay', () => {
   it('17:30 后触发，返回交易日 key', () => {
@@ -70,5 +137,153 @@ describe('startDailyJudgmentScheduler', () => {
     await scheduler.tick();
     scheduler.stop();
     expect(calls).toBe(0);
+  });
+});
+
+describe('startDailyJudgmentScheduler 默认路径', () => {
+  it('同一窗口先 daily-stock-briefs 再 daily-advice(briefsOnly)，不调用 analyze_stock', async () => {
+    const base = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
+    const { ctx } = withCountingLlm(base);
+    const order: string[] = [];
+    let analyzeCalls = 0;
+    const restoreBriefs = wrapCatalogTool('generate_stock_briefs', () =>
+      order.push('generate_stock_briefs'),
+    );
+    const restoreBriefsList = wrapCatalogTool('list_stock_briefs', () =>
+      order.push('list_stock_briefs'),
+    );
+    const restoreAnalyze = wrapCatalogTool('analyze_stock', () => {
+      analyzeCalls += 1;
+    });
+    try {
+      await runScheduler(ctx);
+    } finally {
+      restoreAnalyze();
+      restoreBriefsList();
+      restoreBriefs();
+    }
+
+    expect(order).toEqual(['generate_stock_briefs', 'list_stock_briefs']);
+    expect(analyzeCalls).toBe(0);
+
+    const runs = await base.repos.workflowRun.listRecent({ limit: 10 });
+    expect(runs).toHaveLength(2);
+    const briefsRun = runs.find((run) => run.workflowName === 'daily-stock-briefs');
+    const adviceRun = runs.find((run) => run.workflowName === 'daily-advice');
+    expect(briefsRun?.mode).toBe('scheduled');
+    expect(briefsRun?.status).toBe('succeeded');
+    expect(briefsRun?.outputSummary?.llmHttpCalls).toBeGreaterThan(0);
+    expect(briefsRun?.outputSummary).toMatchObject({
+      coverage: { candidates: expect.any(Number) },
+      budget: { limit: { maxHttpCalls: 16 } },
+    });
+    expect(adviceRun?.mode).toBe('scheduled');
+    expect(adviceRun?.status).toBe('succeeded');
+    expect(adviceRun?.outputSummary).toMatchObject({ briefsOnly: true, llmHttpCalls: 0 });
+    expect(adviceRun?.outputSummary).not.toHaveProperty('tokens');
+  });
+
+  it('briefs 失败仍跑 advice(briefsOnly)，不自动回退 analyze_stock', async () => {
+    const base = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
+    const order: string[] = [];
+    let analyzeCalls = 0;
+    const restoreBriefs = overrideCatalogTool('generate_stock_briefs', async () => {
+      order.push('generate_stock_briefs');
+      return { ok: false, error: { kind: 'internal', cause: 'briefs fixture failure' } };
+    });
+    const restoreBriefsList = wrapCatalogTool('list_stock_briefs', () =>
+      order.push('list_stock_briefs'),
+    );
+    const restoreAnalyze = wrapCatalogTool('analyze_stock', () => {
+      analyzeCalls += 1;
+    });
+    try {
+      await runScheduler(base);
+    } finally {
+      restoreAnalyze();
+      restoreBriefsList();
+      restoreBriefs();
+    }
+
+    expect(order).toEqual(['generate_stock_briefs', 'list_stock_briefs']);
+    expect(analyzeCalls).toBe(0);
+    const runs = await base.repos.workflowRun.listRecent({ limit: 10 });
+    expect(runs.find((run) => run.workflowName === 'daily-stock-briefs')?.status).toBe('failed');
+    expect(runs.find((run) => run.workflowName === 'daily-advice')?.status).toBe('succeeded');
+  });
+
+  it('同一窗口 LLM 计量只在 briefs：advice(briefsOnly) 增量为 0', async () => {
+    const base = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
+    const { ctx, calls } = withCountingLlm(base);
+    await runScheduler(ctx);
+
+    const briefs = await base.repos.stockBrief.findByDay({
+      tradingDate: TRADING_DAY,
+      accountId: base.user.defaultAccountId,
+    });
+    expect(briefs.length).toBeGreaterThan(0);
+    expect(briefs.reduce((total, brief) => total + brief.llmHttpCalls, 0)).toBeGreaterThan(0);
+
+    const afterScheduler = calls();
+    const advice = await dailyAdviceWorkflow.run(
+      { briefsOnly: true },
+      { ...ctx, clock: () => SCHEDULED_NOW },
+    );
+    expect(advice.ok).toBe(true);
+    expect(calls()).toBe(afterScheduler);
+  });
+});
+
+describe('startDailyJudgmentScheduler 回退开关', () => {
+  const runWithLegacySetting = async (flags: {
+    readonly legacy?: boolean;
+    readonly env?: string;
+  }): Promise<{ analyzeCalls: number; briefsCalls: number }> => {
+    const previous = process.env[DAILY_JUDGMENT_LEGACY_ENV];
+    if (flags.env === undefined) delete process.env[DAILY_JUDGMENT_LEGACY_ENV];
+    else process.env[DAILY_JUDGMENT_LEGACY_ENV] = flags.env;
+    const ctx = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
+    let analyzeCalls = 0;
+    let briefsCalls = 0;
+    const restoreAnalyze = wrapCatalogTool('analyze_stock', () => {
+      analyzeCalls += 1;
+    });
+    const restoreBriefs = wrapCatalogTool('generate_stock_briefs', () => {
+      briefsCalls += 1;
+    });
+    try {
+      await runScheduler(ctx, flags.legacy === undefined ? {} : { legacy: flags.legacy });
+    } finally {
+      restoreBriefs();
+      restoreAnalyze();
+      if (previous === undefined) delete process.env[DAILY_JUDGMENT_LEGACY_ENV];
+      else process.env[DAILY_JUDGMENT_LEGACY_ENV] = previous;
+    }
+    return { analyzeCalls, briefsCalls };
+  };
+
+  it('环境变量只认字符串 true', () => {
+    expect(readDailyJudgmentLegacy({})).toBe(false);
+    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: '' })).toBe(false);
+    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'false' })).toBe(false);
+    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'TRUE' })).toBe(false);
+    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: '1' })).toBe(false);
+    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'true' })).toBe(true);
+  });
+
+  it('legacy 选项 / env=true 只跑旧 daily-advice，不跑 briefs', async () => {
+    const byOption = await runWithLegacySetting({ legacy: true });
+    expect(byOption.analyzeCalls).toBeGreaterThan(0);
+    expect(byOption.briefsCalls).toBe(0);
+
+    const byEnv = await runWithLegacySetting({ env: 'true' });
+    expect(byEnv.analyzeCalls).toBeGreaterThan(0);
+    expect(byEnv.briefsCalls).toBe(0);
+  });
+
+  it('env=false 走新路径（不调用 analyze_stock）', async () => {
+    const result = await runWithLegacySetting({ env: 'false' });
+    expect(result.briefsCalls).toBe(1);
+    expect(result.analyzeCalls).toBe(0);
   });
 });

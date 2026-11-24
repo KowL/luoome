@@ -18,14 +18,19 @@ export const STRATEGY_SIGNAL_SOURCE_LIMIT = 2;
 /** 只有 score 达到该值的 bullish 信号才进入候选池。 */
 export const STRATEGY_SIGNAL_MIN_SCORE = 60;
 
+/** 与 daily-stock-briefs 同风格的自身运行审计名。 */
+export const DAILY_ADVICE_WORKFLOW_NAME = 'daily-advice';
+
 export const DailyAdviceInput = z.object({
   /** 账户 id（uuid）；缺省为当前用户默认账户。 */
   accountId: z.uuid().optional(),
   /**
    * true 时不调用 analyze_stock / generate_stock_briefs，只读当日 stock_briefs 组装结论。
-   * 默认 false：17:30 调度切换（P1-10）前保持旧路径。
+   * 17:30 调度默认走这条路径；false 保留旧生成路径（回退开关 / CLI 显式调用）。
    */
   briefsOnly: z.boolean().default(false),
+  /** 运行来源：scheduled 时写 workflow_runs 审计；manual 不落审计。 */
+  mode: z.enum(['manual', 'scheduled', 'daemon']).default('manual'),
 });
 export type DailyAdviceInput = z.infer<typeof DailyAdviceInput>;
 
@@ -84,6 +89,75 @@ export type DailyAdviceOutput = z.infer<typeof DailyAdviceOutput>;
 
 type AnalyzedAdvice = z.output<typeof AdviceSchema>;
 type HoldingRow = { holding: { stockId: string } };
+
+interface AdviceAudit {
+  readonly workflowRunId: string;
+  readonly mode: DailyAdviceInput['mode'];
+  readonly startedAt: Date;
+  readonly briefsOnly: boolean;
+}
+
+/** 17:30 调度接入后的最小审计：只对 scheduled/daemon 运行落 workflow_runs。 */
+const startAudit = async (
+  ctx: WorkflowContext,
+  input: DailyAdviceInput,
+): Promise<AdviceAudit | undefined> => {
+  if (input.mode === 'manual') return undefined;
+  const startedAt = ctx.clock();
+  const workflowRunId = `workflow-${DAILY_ADVICE_WORKFLOW_NAME}-${globalThis.crypto.randomUUID()}`;
+  const recorded = await ctx.tools.record_workflow_run.execute({
+    run: {
+      id: workflowRunId,
+      workflowName: DAILY_ADVICE_WORKFLOW_NAME,
+      mode: input.mode,
+      status: 'running',
+      startedAt,
+      inputSummary: {
+        briefsOnly: input.briefsOnly,
+        ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
+      },
+      providerStatuses: [],
+    },
+  });
+  if (!recorded.ok) {
+    ctx.logger.warn('daily-advice: workflow_runs 审计写入失败，继续生成结论', {
+      cause: recorded.error,
+    });
+    return undefined;
+  }
+  return { workflowRunId, mode: input.mode, startedAt, briefsOnly: input.briefsOnly };
+};
+
+const finishAudit = async (
+  ctx: WorkflowContext,
+  audit: AdviceAudit | undefined,
+  output: DailyAdviceOutput,
+): Promise<void> => {
+  if (audit === undefined) return;
+  const recorded = await ctx.tools.record_workflow_run.execute({
+    run: {
+      id: audit.workflowRunId,
+      workflowName: DAILY_ADVICE_WORKFLOW_NAME,
+      mode: audit.mode,
+      status: 'succeeded',
+      startedAt: audit.startedAt,
+      finishedAt: ctx.clock(),
+      outputSummary: {
+        briefsOnly: audit.briefsOnly,
+        judgment: output.judgment.action,
+        total: output.summary.total,
+        actionable: output.summary.actionable,
+        quality: output.summary.quality,
+        // briefsOnly 自身不调用 LLM；唯一计量在当日 daily-stock-briefs 那条 run 上。
+        ...(audit.briefsOnly ? { llmHttpCalls: 0 } : {}),
+      },
+      providerStatuses: [],
+    },
+  });
+  if (!recorded.ok) {
+    ctx.logger.warn('daily-advice: workflow_runs 审计收尾失败', { cause: recorded.error });
+  }
+};
 type WatchlistRow = { watchlist: { id: string; kind: string } };
 type MemberRow = { member: { stockId: string }; stockName?: string };
 type SignalRow = { stockId: string; score: number; direction: 'bullish' | 'bearish' | 'neutral' };
@@ -318,12 +392,14 @@ const judgmentFromBriefs = (
  * daily-advice（v0.2，ARCHITECTURE §8.1 / 每日判断单元）：
  * 活跃持仓 + 候选池（手动关注池 ≤ DAILY_CANDIDATE_LIMIT）→ 逐只 analyze_stock →
  * 汇总为「今日不动 / 今日可动」结论 + 按 confidence 降序的 advices。
+ * `briefsOnly=true` 时不生成观察，只消费当日 `daily-stock-briefs` 已写下的结果
+ * （17:30 调度默认路径）；旧的 analyze_stock 生成路径留给回退开关与 CLI 显式调用。
  *
  * 判断单元是「持仓 + 少量候选」，不是全市场：候选池来自用户维护的 Watchlist，
  * 因此建议数量天然有界（历史上 952 条建议里 87% 是无法执行的 watch，就是因为没有这个边界）。
  */
 export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceOutput>({
-  name: 'daily-advice',
+  name: DAILY_ADVICE_WORKFLOW_NAME,
   description: '盘后判断：活跃持仓 + 候选池（≤10 只）逐只生成建议，输出「今日不动/今日可动」结论',
   input: DailyAdviceInput,
   steps: [
@@ -334,10 +410,12 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
         input.accountId === undefined ? {} : { accountId: input.accountId },
       );
       if (!listed.ok) return listed;
+      const audit = await startAudit(ctx, input);
       return {
         input,
         holdings: listed.data.holdings as HoldingRow[],
         mode: 'full' as const,
+        ...(audit === undefined ? {} : { audit }),
       };
     },
     // 2) briefsOnly：只读当日 brief；否则取启用中的关注池清单。
@@ -477,8 +555,8 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
       }
       return prev;
     },
-    // 7) 汇总：confidence 降序 + 「今日不动/今日可动」结论。
-    (prev) => {
+    // 7) 汇总：confidence 降序 + 「今日不动/今日可动」结论；scheduled 运行收尾审计。
+    async (prev, ctx) => {
       const state = prev as {
         mode: 'full' | 'briefs';
         advices: AnalyzedAdvice[];
@@ -488,13 +566,14 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
         quality: DailyAdviceQualityCounts;
         items?: BriefSignalItem[];
         briefCount?: number;
+        audit?: AdviceAudit;
       };
       const sorted = [...state.advices].sort((a, b) => b.confidence - a.confidence);
       const judgment =
         state.mode === 'briefs'
           ? judgmentFromBriefs(state.items ?? [], state.quality, state.briefCount ?? 0)
           : judgmentOf(sorted, new Map(Object.entries(state.names)));
-      return DailyAdviceOutput.parse({
+      const output = DailyAdviceOutput.parse({
         advices: sorted,
         judgment,
         summary: summaryOf(
@@ -505,6 +584,8 @@ export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceO
           judgment.items.length,
         ),
       });
+      await finishAudit(ctx, state.audit, output);
+      return output;
     },
   ],
 });
