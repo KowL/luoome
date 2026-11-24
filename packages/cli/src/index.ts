@@ -4,7 +4,21 @@
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
 import { resolveExposure, STANDARD_DISCLAIMERS } from '@luoome/core';
-import { checkPluginConfig, toolCatalog, toolRegistry } from '@luoome/tools';
+import {
+  BRIEF_DISCLAIMER,
+  checkPluginConfig,
+  type GenerateStockBriefsOutput,
+  type GetStockBriefOutput,
+  type ListStockBriefsOutput,
+  type StockBriefBudget,
+  type StockBriefView,
+  stockBriefDegradationOf,
+  stockBriefListViewOf,
+  stockBriefMissingLabel,
+  stockBriefViewOfDetail,
+  toolCatalog,
+  toolRegistry,
+} from '@luoome/tools';
 import { resolveTool } from './app-service.js';
 
 import { createCliContext, MARKET_PROVIDER_HINT } from './context.js';
@@ -42,6 +56,10 @@ const VALUE_FLAGS = new Set([
   // v0.6 watch 子命令
   'interval',
   'alert-plan',
+  // brief 子命令
+  'stock',
+  'watchlist',
+  'scope',
 ]);
 
 interface ParsedArgs {
@@ -411,6 +429,237 @@ const cmdAlert = (
 ): Promise<number> => {
   if (sub === 'list') return cmdToolsCall('list_alert_plans', flags, json);
   throw new CliUsageError(`未知 alert 子命令: "${sub ?? ''}"（支持 list）`);
+};
+
+// ---------- brief 子命令（design.md §5.3 / §5.7） ----------
+
+/** `brief run` 的外部行情前置提示；未设 `LUOOME_EXPOSE_EXTERNAL=true` 时直接退出。 */
+const BRIEF_RUN_EXTERNAL_HINT =
+  '`brief run` 需要外部行情能力：请设置 `LUOOME_EXPOSE_EXTERNAL=true`' +
+  '（`brief list/show` 只读本地，无需该变量）';
+
+const briefDateFlag = (flags: ReadonlyMap<string, string | boolean>): string | undefined => {
+  const raw = flagString(flags, 'date');
+  if (raw === undefined) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new CliUsageError(`--date 必须是 YYYY-MM-DD: ${raw}`);
+  }
+  return raw;
+};
+
+const formatBriefBudget = (budget: StockBriefBudget): string =>
+  `当日 AI 用量 ${budget.date}：HTTP ${budget.httpCalls}/${budget.limit.maxHttpCalls} · ` +
+  `token ${budget.tokens}/${budget.limit.maxTokens} · 参考成本 $${budget.costUsd.toFixed(4)}`;
+
+const briefDisclaimer = (view: StockBriefView | undefined): string =>
+  view?.disclaimer ?? BRIEF_DISCLAIMER;
+
+/** 表格里的质量列用中文展示，不把内部枚举直接给用户。 */
+const briefQualityLabel = (quality: string | undefined): string => {
+  if (quality === 'ai') return 'AI 观察';
+  if (quality === 'rule-only') return '规则观察';
+  if (quality === 'partial') return '部分数据';
+  if (quality === 'unavailable') return '数据不可用';
+  return '-';
+};
+
+const briefActionLabel = (action: string): string => {
+  if (action === 'llm') return 'AI 结论';
+  if (action === 'rule-only') return '规则观察';
+  if (action === 'unavailable') return '数据不可用';
+  if (action === 'skip') return '跳过（无新事实）';
+  if (action === 'budget-stopped') return '预算停止，规则观察';
+  return action;
+};
+
+const cmdBriefList = async (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  const tool = resolveTool('list_stock_briefs');
+  if (tool === undefined) throw unknownToolError('list_stock_briefs');
+
+  const input: Record<string, unknown> = {};
+  const date = briefDateFlag(flags);
+  if (date !== undefined) input.date = date;
+  const watchlistId = flagString(flags, 'watchlist');
+  if (watchlistId !== undefined) input.watchlistId = watchlistId;
+  const limitRaw = flagString(flags, 'limit');
+  if (limitRaw !== undefined) input.limit = parsePositiveInt(limitRaw, 'limit');
+
+  const handle = await createCliContext({ market: false });
+  try {
+    const result = await tool.execute(input, handle.ctx);
+    if (!result.ok) {
+      if (json) printJson(result);
+      else console.error(`error [${result.error.kind}]: ${JSON.stringify(result.error)}`);
+      return 1;
+    }
+    const view = stockBriefListViewOf(
+      result.data as ListStockBriefsOutput,
+      stockBriefDegradationOf(handle.ctx.executionPolicy),
+    );
+    if (json) {
+      printJson({ ok: true, data: view });
+      return 0;
+    }
+    if (view.degradation !== undefined) console.log(`提示：${view.degradation.message}`);
+    if (view.items.length === 0) {
+      console.log('（当日没有观察记录；需要生成时显式运行 luoome brief run）');
+    } else {
+      console.log(
+        renderTable(
+          ['STOCK', 'NAME', 'SIGNAL', 'QUALITY', 'CONF', 'MISSING'],
+          view.items.map((item) => [
+            item.stockId,
+            item.stockName ?? '-',
+            item.wording.label,
+            briefQualityLabel(item.quality),
+            item.confidence === undefined ? '-' : String(item.confidence),
+            item.missing.length === 0
+              ? '-'
+              : item.missing.map((entry) => stockBriefMissingLabel(entry.dimension)).join('、'),
+          ]),
+        ),
+      );
+    }
+    console.log(
+      `覆盖：有结论 ${view.coverage.byQuality.ai} · 规则观察 ${view.coverage.byQuality.ruleOnly} · ` +
+        `部分数据 ${view.coverage.byQuality.partial} · 数据不可用 ${view.coverage.byQuality.unavailable}`,
+    );
+    console.log(formatBriefBudget(view.budget));
+    console.log(briefDisclaimer(view.items[0]));
+    return 0;
+  } finally {
+    handle.close();
+  }
+};
+
+const cmdBriefShow = async (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  const stockId = flagString(flags, 'stock');
+  if (stockId === undefined) {
+    throw new CliUsageError(
+      '用法: luoome brief show --stock <stockId> [--date YYYY-MM-DD] [--json]',
+    );
+  }
+  const detailTool = resolveTool('get_stock_brief');
+  const listTool = resolveTool('list_stock_briefs');
+  if (detailTool === undefined) throw unknownToolError('get_stock_brief');
+  if (listTool === undefined) throw unknownToolError('list_stock_briefs');
+
+  const date = briefDateFlag(flags);
+  const detailInput = { stockId, ...(date === undefined ? {} : { date }) };
+  const handle = await createCliContext({ market: false });
+  try {
+    const detail = await detailTool.execute(detailInput, handle.ctx);
+    if (!detail.ok) {
+      if (json) printJson(detail);
+      else console.error(`error [${detail.error.kind}]: ${JSON.stringify(detail.error)}`);
+      return 1;
+    }
+    const listed = await listTool.execute(
+      { stockIds: [stockId], ...(date === undefined ? {} : { date }) },
+      handle.ctx,
+    );
+    const budget = listed.ok ? (listed.data as ListStockBriefsOutput).budget : undefined;
+    const view = stockBriefViewOfDetail(detail.data as GetStockBriefOutput, budget);
+    if (json) {
+      printJson({ ok: true, data: view });
+      return 0;
+    }
+    console.log(`${view.stockId} ${view.stockName ?? ''} · ${view.wording.label}`.trim());
+    console.log(view.wording.detail);
+    if (view.evidence.length > 0) {
+      console.log('证据:');
+      for (const row of view.evidence) {
+        const when = row.dataAsOf === null ? '数据时间未知' : fmtDateTime(row.dataAsOf);
+        console.log(
+          row.missing
+            ? `  - ${row.label}：${row.reason ?? '未记录原因'}`
+            : `  - ${row.label} ${row.value ?? '-'}（${row.source} · ${when}）`,
+        );
+      }
+    }
+    if (view.missing.length > 0) {
+      console.log('缺失维度:');
+      for (const entry of view.missing) {
+        console.log(`  - ${stockBriefMissingLabel(entry.dimension)}：${entry.reason}`);
+      }
+    }
+    for (const warning of view.warnings) console.log(`提示：${warning}`);
+    if (view.budget !== undefined) console.log(formatBriefBudget(view.budget));
+    console.log(view.disclaimer);
+    return 0;
+  } finally {
+    handle.close();
+  }
+};
+
+const cmdBriefRun = async (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  // 未开外部能力不建立 ctx（不发起任何行情请求），先明确拒绝（design §5.7）。
+  if (!resolveExposure(process.env).external) {
+    console.error(BRIEF_RUN_EXTERNAL_HINT);
+    return 1;
+  }
+  const tool = resolveTool('generate_stock_briefs');
+  if (tool === undefined) throw unknownToolError('generate_stock_briefs');
+
+  const scopeRaw = flagString(flags, 'scope') ?? 'all';
+  if (!['all', 'holdings', 'watchlist', 'signals', 'stock'].includes(scopeRaw)) {
+    throw new CliUsageError('--scope 仅支持 holdings / watchlist / signals / stock（默认 all）');
+  }
+  const stockId = flagString(flags, 'stock');
+  if (scopeRaw === 'stock' && stockId === undefined) {
+    throw new CliUsageError('--scope stock 需要 --stock <stockId>');
+  }
+  const input: Record<string, unknown> = {
+    scope: scopeRaw,
+    source: 'cli',
+    ...(stockId === undefined ? {} : { stockIds: [stockId] }),
+    ...(flags.has('force') ? { force: true } : {}),
+  };
+  const date = briefDateFlag(flags);
+  if (date !== undefined) input.tradingDate = date;
+
+  const handle = await createCliContext();
+  try {
+    const result = await tool.execute(input, handle.ctx);
+    if (json) {
+      printJson(result);
+      return result.ok ? 0 : 1;
+    }
+    if (!result.ok) {
+      console.error(`error [${result.error.kind}]: ${JSON.stringify(result.error)}`);
+      return 1;
+    }
+    const data = result.data as GenerateStockBriefsOutput;
+    console.log(`交易日 ${data.tradingDate} · 阶段 ${data.phase}`);
+    for (const item of data.items) {
+      const missing =
+        item.missing.length === 0
+          ? ''
+          : ` · 缺失 ${item.missing.map((entry) => stockBriefMissingLabel(entry.dimension)).join('、')}`;
+      console.log(
+        `  - ${item.stockId} ${item.stockName ?? ''}：${briefActionLabel(item.action)}${missing}`.trim(),
+      );
+    }
+    console.log(
+      `汇总：LLM 结论 ${data.summary.llmBriefs} · 规则观察 ${data.summary.ruleOnlyBriefs} · ` +
+        `数据不可用 ${data.summary.unavailableBriefs} · 跳过 ${data.summary.skippedByDigest}`,
+    );
+    console.log(formatBriefBudget(data.budget));
+    if (data.degradation !== undefined) console.log(`提示：${data.degradation.message}`);
+    console.log(BRIEF_DISCLAIMER);
+    return 0;
+  } finally {
+    handle.close();
+  }
 };
 
 // ---------- advice 子命令 ----------
@@ -976,6 +1225,15 @@ Advice:
   advice outcome <id> [--outcome followed|partially_followed|ignored] [--pnl N]
                                回填建议结果（--followed true|false 仍兼容）
 
+Brief（个股观察）:
+  brief list [--date YYYY-MM-DD] [--watchlist <id>] [--limit N] [--json]
+                               查看当日（或指定交易日）观察记录，只读本地
+  brief show --stock <stockId> [--date YYYY-MM-DD] [--json]
+                               查看单只股票的观察、证据、缺失维度与免责声明
+  brief run [--scope holdings|watchlist|signals|stock] [--stock <id>] [--force] [--json]
+                               生成每日观察批次；需要 LUOOME_EXPOSE_EXTERNAL=true
+                               观察与信号均为技术研究记录，不构成投资建议
+
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
@@ -1046,6 +1304,13 @@ const run = async (argv: readonly string[]): Promise<number> => {
     if (sub === 'stats') return cmdAdviceStats(flags, json);
     if (sub === 'outcome') return cmdAdviceOutcome(rest, flags);
     throw new CliUsageError(`未知 advice 子命令: "${sub ?? ''}"（支持 list / stats / outcome）`);
+  }
+
+  if (cmd === 'brief') {
+    if (sub === 'list') return cmdBriefList(flags, json);
+    if (sub === 'show') return cmdBriefShow(flags, json);
+    if (sub === 'run') return cmdBriefRun(flags, json);
+    throw new CliUsageError(`未知 brief 子命令: "${sub ?? ''}"（支持 list / show / run）`);
   }
 
   if (cmd === 'mcp') {
