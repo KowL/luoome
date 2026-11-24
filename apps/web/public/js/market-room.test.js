@@ -568,7 +568,7 @@ describe('统一时间轴（ticket #43）', () => {
     const css = read('../../public/style.css');
     expect(room).toContain("const returnTo = window.location.hash.replace(/^#/, '')");
     expect(room).toContain('renderSectorDetailPane(detail, {');
-    expect(room).toContain('renderCoreStocksPane(core, { returnTo })');
+    expect(room).toContain('renderCoreStocksPane(core, { returnTo, briefs })');
     expect(room).toContain('focusSectorDetail');
     expect(detail).toContain('stockHref');
     expect(market).toContain('renderMarketReturn');

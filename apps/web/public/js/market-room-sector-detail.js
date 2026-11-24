@@ -16,6 +16,7 @@ import { callApi } from './api.js';
 import { replayAtFromHash, replayEmptyNotice, replayHashSuffix } from './market-room-replay.js';
 import { stockHref } from './market-room-return.js';
 import { formatClock as fmtClock, formatPct as fmtPct, formatAmount } from './market-shared.js';
+import { briefCellNode } from './stock-brief.js';
 import { el } from './ui.js';
 
 const COMPARE_LIMIT = 3;
@@ -427,10 +428,11 @@ const detailCell = (text, className = 'num') => {
 
 const toneClass = (value) => (value > 0 ? 'pos' : value < 0 ? 'neg' : '');
 
-const memberTable = (detail, returnTo = null) => {
+const memberTable = (detail, returnTo = null, briefs = null) => {
   const head = el('thead', '', [
     el('tr', '', [
       el('th', '', '成分'),
+      el('th', '', '今日观察'),
       el('th', 'num', '日涨幅'),
       el('th', 'num', '窗口涨幅'),
       el('th', 'num', '窗口成交额增量'),
@@ -457,6 +459,13 @@ const memberTable = (detail, returnTo = null) => {
           cells.inBatch ? member.stockId : `${member.stockId} · 不在锚点批次`,
         ),
       ]),
+      el(
+        'td',
+        '',
+        briefs === null
+          ? el('span', 'muted', '--')
+          : briefCellNode(briefs.get(member.stockId) ?? null, { href: cells.href }),
+      ),
       dayCell,
       windowCell,
       detailCell(cells.amount),
@@ -512,7 +521,14 @@ const compareStrip = (ranking, detail, params, onToggleCompare) => {
 
 const renderSectorDetailPane = (
   detail,
-  { ranking = null, params, returnTo = null, onToggleCompare = () => {}, onClose = () => {} } = {},
+  {
+    ranking = null,
+    params,
+    returnTo = null,
+    briefs = null,
+    onToggleCompare = () => {},
+    onClose = () => {},
+  } = {},
 ) => {
   const empty = sectorDetailEmptyText(detail);
   if (detail === null || detail === undefined) {
@@ -610,7 +626,7 @@ const renderSectorDetailPane = (
         'room-caption',
         `共 ${detail.members.length} 只 active 成分；封板状态来自当日连板天梯，缺失写「缺失」不写「未封」。`,
       ),
-      memberTable(detail, returnTo),
+      memberTable(detail, returnTo, briefs),
     ]),
     missing.length > 0
       ? el('div', 'room-detail-missing-block', [

@@ -788,6 +788,9 @@ const refreshSectors = async (
     fetchCoreStocks({ sectorId: detailParams.sectorId, at: params.at }),
   ]);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  // 板块详情与核心股共用一次批量观察请求，不逐只请求。
+  const briefs = await fetchSectorBriefs(sectorBriefStockIds(detail, core));
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
   const slot = roomSection()?.querySelector('.room-sector-detail-slot');
   if (slot === null || slot === undefined) return;
   mount(slot, [
@@ -795,6 +798,7 @@ const refreshSectors = async (
       ranking: current,
       params: detailParams,
       returnTo,
+      briefs,
       onToggleCompare: (sectorId) => {
         window.location.hash = sectorDetailHash({
           ...params,
@@ -806,7 +810,7 @@ const refreshSectors = async (
         window.location.hash = sectorHash(params);
       },
     }),
-    renderCoreStocksPane(core, { returnTo }),
+    renderCoreStocksPane(core, { returnTo, briefs }),
   ]);
   if (focusDetail) focusSectorDetail(slot);
 };
@@ -869,6 +873,26 @@ const refreshEvents = async (epoch, setStatus, params = eventsParamsFromHash()) 
   const fallback = roomEventsViewKey === cacheKey ? roomEventsView : null;
   renderEvents(section, view ?? fallback, params);
   if (view === null) setStatus?.('盘中事件刷新失败，保留上次成功结果', true);
+};
+
+/** 板块详情 / 核心股行的一次批量观察（P2-6）：失败返回 null，徽标缺失但不打断主视图。 */
+const sectorBriefStockIds = (detail, core) => {
+  const ids = new Set();
+  for (const member of detail?.members ?? []) ids.add(member.stockId);
+  for (const kind of ['ignition', 'turnover', 'height']) {
+    for (const holder of core?.roles?.[kind]?.holders ?? []) ids.add(holder.stockId);
+  }
+  return [...ids].filter((id) => typeof id === 'string' && id.length > 0).slice(0, 50);
+};
+
+const fetchSectorBriefs = async (stockIds) => {
+  if (stockIds.length === 0) return new Map();
+  const result = await callApi(
+    `/api/stock-briefs?stockIds=${encodeURIComponent(stockIds.join(','))}`,
+    { timeoutMs: 15_000 },
+  );
+  if (!result.ok) return null;
+  return new Map((result.data?.items ?? []).map((item) => [item.stockId, item]));
 };
 
 /* ---- 页面挂载与刷新 ---- */

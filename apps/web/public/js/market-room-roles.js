@@ -15,6 +15,7 @@
 import { callApi } from './api.js';
 import { stockHref } from './market-room-return.js';
 import { formatClock as fmtClock, formatPct as fmtPct, formatAmount } from './market-shared.js';
+import { briefCellNode } from './stock-brief.js';
 import { el } from './ui.js';
 
 const ROLE_KINDS = ['ignition', 'turnover', 'height'];
@@ -208,7 +209,7 @@ const lookupCards = (core, returnTo = null) => {
 
 /* ---- DOM 渲染 ---- */
 
-const holderNode = (holder) => {
+const holderNode = (holder, briefs = null) => {
   const link = el(
     'a',
     'room-role-holder-link',
@@ -216,7 +217,12 @@ const holderNode = (holder) => {
   );
   link.href = holder.href;
   return el('div', 'room-role-holder', [
-    link,
+    el('div', 'room-role-holder-head', [
+      link,
+      briefs === null
+        ? null
+        : briefCellNode(briefs.get(holder.stockId) ?? null, { href: holder.href }),
+    ]),
     el(
       'ul',
       'room-role-evidence',
@@ -225,10 +231,10 @@ const holderNode = (holder) => {
   ]);
 };
 
-const roleCardNode = (card) => {
+const roleCardNode = (card, briefs = null) => {
   const body =
     card.holders.length > 0
-      ? card.holders.map(holderNode)
+      ? card.holders.map((holder) => holderNode(holder, briefs))
       : [el('p', 'room-role-reason', card.reason ?? '证据不足，未选出核心股')];
   return el('div', 'room-role-card', [
     el('div', 'room-role-head', [
@@ -302,7 +308,7 @@ const lookupNode = (card) => {
 };
 
 /** 核心股区块：三个角色 + 时间线 + 从核心股反查题材。 */
-const renderCoreStocksPane = (core, { returnTo = null } = {}) => {
+const renderCoreStocksPane = (core, { returnTo = null, briefs = null } = {}) => {
   if (core === undefined || core === null) {
     return el('div', 'card room-empty room-core-stocks', [
       el('h2', '', '核心股暂不可用'),
@@ -331,7 +337,11 @@ const renderCoreStocksPane = (core, { returnTo = null } = {}) => {
         ),
       ]),
     ]),
-    el('div', 'room-roles', cards.map(roleCardNode)),
+    el(
+      'div',
+      'room-roles',
+      cards.map((card) => roleCardNode(card, briefs)),
+    ),
     el('div', 'room-core-timeline', [
       el('h3', '', '角色时间线'),
       timeline.length === 0
