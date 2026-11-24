@@ -42,6 +42,7 @@ import { getIntradaySummaryTool } from './tools/get-intraday-summary.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
+import { getStockBriefTool } from './tools/get-stock-brief.js';
 import { getStockFactsTool } from './tools/get-stock-facts.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
@@ -56,6 +57,7 @@ import { limitUpMarketTool } from './tools/limit-up-market.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listReportsTool } from './tools/list-reports.js';
+import { listStockBriefsTool } from './tools/list-stock-briefs.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import {
@@ -238,6 +240,18 @@ export const sharedToolContributions = {
   update_watchlist_members: {
     owner: 'business.watch',
     tool: updateWatchlistMembersTool,
+    agent: true,
+    dependencies: [],
+  },
+  get_stock_brief: {
+    owner: 'shared-query',
+    tool: getStockBriefTool,
+    agent: true,
+    dependencies: [],
+  },
+  list_stock_briefs: {
+    owner: 'shared-query',
+    tool: listStockBriefsTool,
     agent: true,
     dependencies: [],
   },

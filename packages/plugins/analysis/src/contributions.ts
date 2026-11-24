@@ -2,9 +2,17 @@ import type { ToolContributions } from '@luoome/toolkit';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { analyzeStrategyCandidateTool } from './tools/analyze-strategy-candidate.js';
+import { generateStockBriefsTool } from './tools/generate-stock-briefs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 
 export const analysisToolContributions = {
+  generate_stock_briefs: {
+    execution: 'p3',
+    owner: 'business.analysis',
+    tool: generateStockBriefsTool,
+    agent: false,
+    dependencies: ['llm', 'market:quote', 'market:daily-bars'],
+  },
   analyze_stock: {
     execution: 'p3',
     modes: {

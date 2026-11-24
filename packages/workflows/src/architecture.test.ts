@@ -14,7 +14,7 @@ describe('workflow architecture boundary', () => {
     }
   });
 
-  it('只保留 11 个注册 workflow；其余可复用管线用 defineOperation', () => {
+  it('只保留 12 个注册 workflow；其余可复用管线用 defineOperation', () => {
     const root = resolve(import.meta.dirname);
     const files = readdirSync(root).filter(
       (file) => file.endsWith('.ts') && !file.endsWith('.test.ts'),
@@ -29,6 +29,7 @@ describe('workflow architecture boundary', () => {
     }
     expect(definitions.sort()).toEqual([
       'dailyAdviceWorkflow',
+      'dailyStockBriefsWorkflow',
       'intradayWatchWorkflow',
       'postMarketDataWorkflow',
       'reportWorkflow',

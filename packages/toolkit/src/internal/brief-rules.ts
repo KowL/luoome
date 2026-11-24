@@ -5,6 +5,7 @@ import {
   type StockBriefMissingDimension,
   type WatchlistMember,
 } from '@luoome/core';
+import { z } from 'zod';
 
 import type { StockFactPack } from './stock-facts.js';
 
@@ -20,9 +21,29 @@ export type BriefPreScreenAction = 'include' | 'rule-only' | 'unavailable' | 'sk
 export type RuleOnlyDecision = Extract<AdviceDecision, 'hold' | 'watch' | 'avoid'>;
 
 export const DEFAULT_STALE_FACT_DAYS = 3;
+/** 同日 factDigest 未变时默认跳过（0 次 LLM），对 P0 持仓同样生效。 */
+export const DEFAULT_SKIP_UNCHANGED_DIGEST = true;
 export const RULE_ONLY_MAX_CONFIDENCE = 30;
 /** 当日策略信号进入 P2 的最低分。 */
 export const RULE_INCLUDE_SIGNAL_SCORE = 60;
+
+/** 每日批次预算默认值（design.md §10.4）：票数 8 / HTTP 16 / token 90k。 */
+export const DEFAULT_DAILY_BRIEF_LIMIT = 8;
+export const DEFAULT_DAILY_LLM_HTTP_LIMIT = 16;
+export const DEFAULT_DAILY_LLM_TOKEN_LIMIT = 90_000;
+
+/** 预筛可调口径；默认值即设计口径，调用方（workflow / tool）可覆盖。 */
+export interface BriefPreScreenOptions {
+  /** false 时同日同 digest 也继续进入 LLM 阶段（持仓默认同样受此开关约束）。 */
+  readonly skipUnchangedDigest?: boolean;
+  /** 连续 N 日无新事实且结论未变的阈值。 */
+  readonly staleAfterDays?: number;
+}
+
+export const DEFAULT_BRIEF_PRESCREEN_OPTIONS: Readonly<Required<BriefPreScreenOptions>> = {
+  skipUnchangedDigest: DEFAULT_SKIP_UNCHANGED_DIGEST,
+  staleAfterDays: DEFAULT_STALE_FACT_DAYS,
+};
 
 export interface BriefStrategySignal {
   readonly score: number;
@@ -62,6 +83,15 @@ export interface RuleOnlyDraft {
   readonly disclaimers: readonly string[];
 }
 
+/** 规则观察草稿的 schema（brief 路径跨 tool 传递时校验用）。 */
+export const RuleOnlyDraftSchema = z.object({
+  decision: z.enum(['hold', 'watch', 'avoid']),
+  confidence: z.number().min(0).max(RULE_ONLY_MAX_CONFIDENCE),
+  premise: z.string().trim().min(1),
+  evidence: z.array(z.string().trim().min(1)),
+  disclaimers: z.array(z.string().trim().min(1)).min(1),
+});
+
 export interface BriefPreScreenInput {
   readonly tradingDate: string;
   readonly stockId: string;
@@ -75,6 +105,8 @@ export interface BriefPreScreenInput {
   readonly listingStatus?: 'listed' | 'suspended' | 'delisted';
   /** 连续 N 日无新事实的阈值；默认 3。 */
   readonly staleAfterDays?: number;
+  /** 同日同 digest 是否跳过；默认 true（持仓同样跳过）。 */
+  readonly skipUnchangedDigest?: boolean;
 }
 
 export interface BriefPreScreenResult {
@@ -208,7 +240,11 @@ export const preScreenStockBrief = (input: BriefPreScreenInput): BriefPreScreenR
   if (input.watchlistStage === 'archived') {
     return result(input, priority, 'skip', '关注列表成员已归档，排除当日观察');
   }
-  if (input.existingBrief !== undefined && input.existingBrief.digest === input.facts.factDigest) {
+  if (
+    (input.skipUnchangedDigest ?? DEFAULT_SKIP_UNCHANGED_DIGEST) &&
+    input.existingBrief !== undefined &&
+    input.existingBrief.digest === input.facts.factDigest
+  ) {
     return result(input, priority, 'skip', '同日 factDigest 未变，跳过（0 次 LLM）');
   }
   const staleAfterDays = input.staleAfterDays ?? DEFAULT_STALE_FACT_DAYS;

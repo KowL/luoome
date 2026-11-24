@@ -20,13 +20,13 @@ describe('typed tool catalog', () => {
         ]),
     };
     expect(createHash('sha256').update(JSON.stringify(baseline)).digest('hex')).toBe(
-      '5b3ec50ed07581e9e2b2a91b73f0fe706d0e4b1bcda45c7550d8f521cad820be',
+      '31cb4884d6fe2624dc419b41d05e0459ad231c45f53bae2fd70e024e09b39c62',
     );
     const metadata = Object.entries(toolCatalog)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, { tool: _tool, ...entry }]) => [name, entry]);
     expect(createHash('sha256').update(JSON.stringify(metadata)).digest('hex')).toBe(
-      '0da1ac51e9a58a299af56662624b7e52a368f8393c1e6aef5d3b0c21e544bb0e',
+      'b814467a1eeeb8b2eed550ca982993eb138a55c225c92b289dfe92c6c814d8bd',
     );
     expect(toolCatalog.snapshot_account_performance.owner).toBe(
       'task.snapshot-account-performance',
@@ -70,6 +70,21 @@ describe('typed tool catalog', () => {
     expect(toolCatalog.compute_indicators.owner).not.toBe('shared-query');
     expect(toolCatalog.run_strategy.modes.scheduled.conditional).toContain('live:limit-up-ladder');
     expect(toolCatalog.run_strategy.modes.replay.conditional).toContain('archive:limit-up-ladder');
+    // P1-5 / P1-6：批量生成不属 Agent/MCP 只读面，两个 brief 查询工具进共享只读基线。
+    expect(toolCatalog.generate_stock_briefs.owner).toBe('business.analysis');
+    expect(toolCatalog.generate_stock_briefs.execution).toBe('p3');
+    expect(toolCatalog.generate_stock_briefs.agent).toBe(false);
+    expect(toolCatalog.generate_stock_briefs.tool.sideEffect).toBe('advice');
+    expect(toolRegistry.get('generate_stock_briefs')).toBeUndefined();
+    expect(applicationToolRegistry.get('generate_stock_briefs')).toBe(
+      toolCatalog.generate_stock_briefs.tool,
+    );
+    for (const name of ['get_stock_brief', 'list_stock_briefs'] as const) {
+      expect(toolCatalog[name].owner).toBe('shared-query');
+      expect(toolCatalog[name].agent).toBe(true);
+      expect(toolCatalog[name].tool.sideEffect).toBe('read');
+      expect(toolRegistry.get(name)).toBe(toolCatalog[name].tool);
+    }
   });
   it('explicit inventory covers every exported tool exactly once with its actual name', () => {
     const exportedTools = Object.values(exports).filter(

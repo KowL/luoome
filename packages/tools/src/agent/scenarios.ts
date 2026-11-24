@@ -88,6 +88,8 @@ const SHARED_READ_BASELINE = [
   'get_account_performance',
   'list_trades',
   'get_advice',
+  'get_stock_brief',
+  'list_stock_briefs',
   'list_watch_plans',
 ] as const satisfies readonly AgentToolName[];
 

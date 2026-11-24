@@ -34,6 +34,8 @@ const CORE_READ_TOOL_NAMES = [
   'get_account_performance',
   'list_trades',
   'get_advice',
+  'get_stock_brief',
+  'list_stock_briefs',
   'list_watch_plans',
 ] as const;
 

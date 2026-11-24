@@ -1,6 +1,7 @@
 // @luoome/workflows 桶导出：defineWorkflow 引擎 + 当前内置 workflows。
 
 export * from './daily-advice.js';
+export * from './daily-stock-briefs.js';
 export * from './define-workflow.js';
 export * from './intraday-watch.js';
 export * from './post-market-data.js';
