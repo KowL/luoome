@@ -67,6 +67,7 @@ Agent 不通过工具修改插件配置，也没有可用的配置写入接口�
 个股问题先读当日观察：`get_stock_brief`（单票）或 `list_stock_briefs`（当日 / 关注列表 / 批量 stockIds，返回 coverage 与预算），需要核对事实包时再用 `get_stock_facts`（external，需用户授权）。
 引用观察时必须同时给出交易日与 dataAsOf、来源与缺失维度；规则观察（`quality: rule-only`）不是 AI 结论，要原样标注低置信，不得升级为方向性断言。
 `generate_stock_briefs` 不是 MCP 工具：无当日观察时说明原因，询问用户是否在本地 Web/CLI 显式触发生成，不要假装调用或引用不存在的记录。
+该工具按阶段工作：盘前（`phase=premarket`）只出研究名单，不调用 LLM、不写 advices；盘后（`phase=post-market`）在每日预算内做 AI 技术研究，并允许规则观察/降级。
 
 ### 账户绩效估值任务
 

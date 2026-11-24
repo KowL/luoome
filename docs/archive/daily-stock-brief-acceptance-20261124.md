@@ -23,7 +23,7 @@
 
 - P3-2 盘中 `provisional`：按任务要求不做。
 - Q1 后端 `daily-advice` 枚举改名（`no-action` / `has-signals`）：本期只改展示层，后端改名留待下一版。
-- `generate_stock_briefs` 的 tool description 调整：待 Kow 决定，本次未改。
+- `generate_stock_briefs` 的 tool description 与相关 Skill 文本已改为同时覆盖盘前 / 盘后两种用法（Kow 2026-11-24 决定）。
 - 真实批次 P95 / 日累计 HTTP·token·金额 / 17:45 覆盖率：仍待生产或完整运行观测，见 §4。
 - 历史 fallback advices：不删不改（P1-9 结论）。
 - `workflow_runs.input_summary` 被清空问题：本批未处理。

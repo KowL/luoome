@@ -60,7 +60,9 @@ When citing a brief, always include `date` / `dataAsOf`, the evidence `source`, 
 reason. `quality: 'rule-only'` means deterministic rules without AI reasoning — label it as a low-
 confidence rule observation, never as an AI conclusion. `generate_stock_briefs` is intentionally not
 an MCP tool; a missing brief is reported as missing, and generation is a local Web/CLI action the user
-must trigger explicitly.
+must trigger explicitly. That tool is staged: premarket (`phase=premarket`) only writes a research
+list (no LLM, no advices); post-market (`phase=post-market`) runs AI research within the daily budget
+and may fall back to rule observations.
 
 Stock pools, strategies and portfolio:
 

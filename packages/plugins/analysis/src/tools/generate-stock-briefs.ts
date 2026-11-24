@@ -374,8 +374,9 @@ const buildCandidates = async (
 export const generateStockBriefsTool = defineTool({
   name: 'generate_stock_briefs',
   description:
-    '盘后批量生成每日个股观察：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→ 事实包 → 规则预筛 → ' +
-    'AI 技术研究与观察（并发 2、每日预算内）→ 规则观察/降级 → 落库 stock_briefs。' +
+    '按交易日阶段批量生成每日个股观察：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→ 事实包 → 规则预筛；' +
+    '盘前（phase=premarket）只出研究名单，不调用 LLM、不写 advices；' +
+    '盘后（phase=post-market）在每日预算内做 AI 技术研究与观察（并发 2）并允许规则观察/降级；均落库 stock_briefs。' +
     '仅技术研究，不构成投资建议；不产生交易动作，也不修改账户。',
   sideEffect: 'advice',
   input: GenerateStockBriefsInput,

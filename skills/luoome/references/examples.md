@@ -61,7 +61,9 @@ dimensions. A `quality: 'rule-only'` row is a low-confidence rule observation, n
 conclusion; do not turn it into a directional claim. When no brief exists, say so with the
 returned warning and ask whether the user wants to trigger generation locally (Web/CLI).
 Stock-brief generation is not an MCP tool, so never claim it was called; direct the user to the local
-Web/CLI `brief run` action instead.
+Web/CLI `brief run` action instead. Premarket generation only writes a research list (no LLM, no
+advices); post-market generation runs AI research within the daily budget and may fall back to rule
+observations.
 
 To scan coverage first, use the batch list and then fetch only the stocks the user cares about:
 
