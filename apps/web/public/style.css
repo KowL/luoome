@@ -12475,3 +12475,139 @@ body.minute-embed::before { content: none; }
     flex-wrap: wrap;
   }
 }
+
+/* ============================================================
+ * 每日个股观察（StockBrief）展示：个股卡 / 关注行内 / 首页区块 / 作战室徽标
+ * ============================================================ */
+
+.stock-brief-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.stock-brief-meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stock-brief-detail {
+  margin: 0 0 6px;
+}
+
+.stock-brief-confidence-note {
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.stock-brief-premise {
+  margin: 0 0 10px;
+}
+
+.stock-brief-evidence h3,
+.stock-brief-list-block h3,
+.stock-brief-warnings h3,
+.stock-brief-missing-summary h3 {
+  margin: 12px 0 6px;
+  font-size: var(--text-sm);
+}
+
+.stock-brief-evidence-table {
+  font-size: var(--text-sm);
+}
+
+.stock-brief-evidence-row.is-missing {
+  color: var(--muted);
+}
+
+.stock-brief-missing {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+}
+
+.stock-brief-missing summary {
+  cursor: pointer;
+  color: var(--warning);
+}
+
+.stock-brief-missing-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.stock-brief-warnings ul,
+.stock-brief-list,
+.stock-brief-missing-summary ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.stock-brief-disclaimer {
+  margin: 12px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.stock-brief-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.stock-brief-cell.is-empty {
+  color: var(--muted);
+}
+
+.stock-brief-chip-link {
+  text-decoration: none;
+}
+
+.stock-brief-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stock-brief-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: inherit;
+}
+
+.stock-brief-row:hover {
+  border-color: var(--accent);
+}
+
+.stock-brief-coverage {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.stock-brief-degradation,
+.stock-brief-feedback {
+  margin: 8px 0 0;
+  font-size: var(--text-sm);
+}
+
+.room-role-holder-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

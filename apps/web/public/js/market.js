@@ -29,6 +29,15 @@ import {
   parseRouteHash,
   pushRecentView,
 } from './market-shared.js';
+import {
+  briefDateKey,
+  briefGenerateFeedback,
+  manualRefreshAllowed,
+  manualRefreshRecord,
+  readManualRefresh,
+  stockBriefCardNode,
+  writeManualRefresh,
+} from './stock-brief.js';
 import { $, el, mount } from './ui.js';
 
 /* ============ 页面状态（§11.4） ============ */
@@ -91,6 +100,11 @@ const state = {
   minuteChart: null,
   minuteChartMode: null,
   minuteTracker: createRequestTracker(),
+  /** 今日观察（P2-2）：只读 detail 响应；refresh 是唯一生成入口。 */
+  briefTracker: createRequestTracker(),
+  briefData: null,
+  briefFeedback: null,
+  briefPending: false,
   refreshTimer: null,
   bound: false,
   /** 「策略信号」开关：true 时 K 线图上叠加策略/Advice/交易标注（§11 关联事实）。 */
@@ -152,8 +166,12 @@ const teardownMarket = () => {
   state.chartTab = 'kline';
   state.minuteInterval = '1m';
   state.minuteData = null;
+  state.briefData = null;
+  state.briefFeedback = null;
+  state.briefPending = false;
   state.tracker.next();
   state.minuteTracker.next();
+  state.briefTracker.next();
 };
 
 /* ============ 搜索（§11.5）：交互在 search-box.js，本页只提供去向 ============ */
@@ -448,6 +466,160 @@ const loadIntradayView = async () => {
   paintChartTabs();
 };
 
+/* ============ 今日观察（P2-2）：只读 GET /api/stock-briefs?stockId=，刷新走唯一写入口 ============ */
+
+const briefFallbackView = (stockId) => ({
+  stockId,
+  dataAsOf: null,
+  validUntil: null,
+  wording: {
+    label: '暂无观察',
+    detail: '今日没有该标的的观察记录；可点「刷新今日观察」由用户显式触发生成。',
+    disclaimer: '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。',
+    isRuleOnly: false,
+  },
+  disclaimer: '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。',
+  isRuleOnly: false,
+  evidence: [],
+  missing: [],
+  counterEvidence: [],
+  risks: [],
+  warnings: [],
+});
+
+const briefRefreshedToday = (stockId) => {
+  const date = state.briefData?.date ?? briefDateKey();
+  return !manualRefreshAllowed(readManualRefresh('stock', stockId), date);
+};
+
+const paintBriefRefreshButton = () => {
+  const button = $('#market-brief-refresh');
+  if (button === null) return;
+  const degradation = state.briefData?.degradation ?? null;
+  const pluginDisabled = degradation?.reason === 'plugin_disabled';
+  const refreshed = state.stockId !== null && briefRefreshedToday(state.stockId);
+  button.disabled = state.briefPending || pluginDisabled || refreshed;
+  button.textContent = state.briefPending
+    ? '刷新中…'
+    : pluginDisabled
+      ? '生成能力不可用'
+      : refreshed
+        ? '今日已刷新'
+        : '刷新今日观察';
+  button.title = pluginDisabled
+    ? (degradation?.message ?? '个股分析插件未启用（plugins.json）')
+    : refreshed
+      ? '每只股票每日默认 1 次手动刷新；次日或换股后可再次刷新'
+      : '显式触发一次当日生成（写入 + 外部行情能力，计入当日 AI 预算）';
+};
+
+/** 渲染今日观察卡：结论 / 证据 / 时间 / 来源 / 缺口 / 免责声明全部来自 detail 投影。 */
+const renderStockBrief = () => {
+  const wrap = $('#market-brief');
+  if (wrap === null) return;
+  paintBriefRefreshButton();
+  const feedback = state.briefFeedback;
+  if (state.briefData === null) {
+    mount(
+      wrap,
+      feedback === null
+        ? el('p', 'placeholder', '正在读取今日观察…')
+        : el('p', 'status error', feedback.message),
+    );
+    return;
+  }
+  const view = state.briefData.view ?? briefFallbackView(state.stockId ?? '');
+  const degradation = state.briefData.degradation ?? null;
+  // 分时缺口常驻可见（不只放在折叠区），不把缺失当成没有走势。
+  const intradayMissing = (view.missing ?? []).find((item) => item.dimension === 'intraday');
+  const nodes = [
+    stockBriefCardNode(view),
+    ...(intradayMissing === undefined
+      ? []
+      : [el('p', 'stock-brief-intraday', `分时不可用：${intradayMissing.reason}`)]),
+    ...(degradation === null ? [] : [el('p', 'stock-brief-degradation', degradation.message)]),
+    ...(feedback === null
+      ? []
+      : [
+          el(
+            'p',
+            feedback.tone === 'error'
+              ? 'status error stock-brief-feedback'
+              : 'stock-brief-feedback',
+            feedback.message,
+          ),
+        ]),
+  ];
+  mount(wrap, nodes);
+};
+
+/** 只读拉取今日观察；失败不阻塞行情主视图，只在本卡显示原因。 */
+const loadStockBrief = async () => {
+  const wrap = $('#market-brief');
+  if (state.stockId === null) return;
+  const requestId = state.briefTracker.next();
+  const result = await callApi(`/api/stock-briefs?stockId=${encodeURIComponent(state.stockId)}`, {
+    timeoutMs: 15_000,
+  });
+  if (!state.briefTracker.isCurrent(requestId)) return;
+  if (result.ok && result.data !== undefined) {
+    state.briefData = result.data;
+    state.briefFeedback = null;
+  } else {
+    state.briefData = null;
+    state.briefFeedback = {
+      tone: 'error',
+      message: `今日观察读取失败（${result.error?.kind ?? 'internal'}），行情与 K 线不受影响。`,
+    };
+    if (wrap !== null) mount(wrap, el('p', 'status error', state.briefFeedback.message));
+    paintBriefRefreshButton();
+    return;
+  }
+  renderStockBrief();
+};
+
+/** 用户显式刷新：只触发一次生成，成功后回读 detail；403 / 429 / 跳过都有提示。 */
+const refreshStockBrief = async () => {
+  if (state.stockId === null || state.briefPending) return;
+  const date = state.briefData?.date ?? briefDateKey();
+  if (!manualRefreshAllowed(readManualRefresh('stock', state.stockId), date)) {
+    state.briefFeedback = {
+      tone: 'info',
+      message: '今日已刷新过该标的（每票每日默认 1 次）；规则观察与既有记录仍可查看。',
+    };
+    renderStockBrief();
+    return;
+  }
+  state.briefPending = true;
+  paintBriefRefreshButton();
+  const result = await callApi('/api/stock-briefs/generate', {
+    method: 'POST',
+    body: JSON.stringify({
+      scope: 'stock',
+      stockIds: [state.stockId],
+      phase: 'post-market',
+      force: true,
+    }),
+    timeoutMs: 120_000,
+  });
+  state.briefPending = false;
+  const feedback = briefGenerateFeedback(result);
+  if (result.ok && result.data?.degradation?.reason !== 'rate_limited') {
+    writeManualRefresh('stock', state.stockId, manualRefreshRecord(date));
+  }
+  await loadStockBrief();
+  // loadStockBrief 成功时会清空旧提示；本次刷新结果仍要留在卡片里
+  state.briefFeedback = feedback;
+  renderStockBrief();
+};
+
+const bindBriefRefresh = () => {
+  const button = $('#market-brief-refresh');
+  if (button === null || button.dataset.bound === '1') return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', () => void refreshStockBrief());
+};
+
 const renderData = async (data, requestId) => {
   const main = $('#market-main');
   if (main === null) return;
@@ -598,6 +770,7 @@ const renderMarket = async (setStatus) => {
   bindChartTabs();
   bindMarkerToggle();
   bindSubpaneSwitch();
+  bindBriefRefresh();
   bindVisibility();
   // 持久化的开关状态要在每次进页时回刷到按钮上（含刷新 / 换股回来）
   paintMarkerToggle();
@@ -623,9 +796,15 @@ const renderMarket = async (setStatus) => {
     state.range !== range ||
     state.date !== date ||
     state.granularity !== granularity;
+  const stockChanged = state.stockId !== stockId;
   // 换股等于打开新的详情页：回到顶部报价卡，而不是停在上一只的 K 线位置
   // （同股只换 range / 粒度时不动滚动位置，图表就在视口里）
   if (state.stockId !== stockId) window.scrollTo({ top: 0, left: 0 });
+  if (stockChanged) {
+    state.briefData = null;
+    state.briefFeedback = null;
+    state.briefTracker.next();
+  }
   state.stockId = stockId;
   state.range = range;
   state.date = date;
@@ -633,6 +812,7 @@ const renderMarket = async (setStatus) => {
   if (!changed && state.data !== null) {
     paintRangeSwitch();
     paintChartTabs();
+    if (state.briefData === null) void loadStockBrief();
     return;
   }
   state.data = null;
@@ -644,6 +824,7 @@ const renderMarket = async (setStatus) => {
   state.minuteInterval = '1m';
   state.minuteData = null;
   setStatus?.(`加载 ${stockId} 行情…`);
+  void loadStockBrief();
   await loadMarketView();
 };
 

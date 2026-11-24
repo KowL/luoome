@@ -59,6 +59,11 @@ export const StockBriefViewSchema = z.object({
   wording: StockBriefWordingSchema,
   disclaimer: z.string().min(1),
   isRuleOnly: z.boolean(),
+  /** 核心论点（取自 Advice.reasoning.premise）；规则观察 / 无建议时缺省。 */
+  premise: z.string().min(1).optional(),
+  /** 反证与风险原样透出，缺省为空数组，不补造结论。 */
+  counterEvidence: z.array(z.string().min(1)),
+  risks: z.array(z.string().min(1)),
   evidence: z.array(StockBriefEvidenceSchema),
   missing: z.array(
     z.object({
@@ -220,6 +225,9 @@ export const stockBriefViewOfDetail = (
     wording: detail.wording,
     disclaimer: detail.wording.disclaimer,
     isRuleOnly: detail.wording.isRuleOnly,
+    ...(detail.advice === undefined ? {} : { premise: detail.advice.reasoning.premise }),
+    counterEvidence: [...(detail.advice?.reasoning.counterEvidence ?? [])],
+    risks: [...(detail.advice?.risks ?? [])],
     evidence: detailEvidence(brief, detail.advice, detail.stockId),
     missing: (brief?.missing ?? []).map((item) => ({
       dimension: item.dimension,
@@ -250,6 +258,8 @@ export const stockBriefViewOfItem = (
   wording: item.wording,
   disclaimer: item.wording.disclaimer,
   isRuleOnly: item.wording.isRuleOnly,
+  counterEvidence: [],
+  risks: [],
   evidence: [
     ...dataSourceEvidence(item.dataSources, item.factsAsOf),
     ...missingEvidence(item.missing),
