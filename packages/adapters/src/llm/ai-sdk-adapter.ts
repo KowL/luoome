@@ -14,11 +14,30 @@ import {
   type LLMGenerateResult,
   LLMOutputBudgetError,
   LLMTimeoutError,
+  type LLMUsageReport,
 } from './types.js';
 
 const truncate = (value: string, maxChars: number): string => {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}...[truncated ${value.length - maxChars} chars]`;
+};
+
+const toUsageReport = (usage: unknown): LLMUsageReport | undefined => {
+  if (usage === null || typeof usage !== 'object') return undefined;
+  const record = usage as {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+    outputTokenDetails?: { reasoningTokens?: unknown };
+    reasoningTokens?: unknown;
+  };
+  const num = (value: unknown): number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  return {
+    promptTokens: num(record.inputTokens),
+    completionTokens: num(record.outputTokens),
+    reasoningTokens: num(record.outputTokenDetails?.reasoningTokens ?? record.reasoningTokens),
+    costUsd: 0,
+  };
 };
 
 const buildRaw = (result: {
@@ -39,6 +58,10 @@ const buildRawFromError = (error: NoObjectGeneratedError): string =>
     usage: error.usage ?? null,
     finishReason: error.finishReason ?? null,
   });
+
+/** generateText 结果的 usage → 预算计量结构。 */
+const usageOf = (result: { readonly usage?: unknown }): LLMUsageReport | undefined =>
+  toUsageReport(result.usage);
 
 const budgetError = (input: {
   readonly finishReason: string | undefined;
@@ -120,7 +143,7 @@ export class AISDKAdapter implements LLMAdapter {
             ? { providerOptions: { anthropic: { structuredOutputMode: 'auto' } } }
             : {}),
         });
-        return { ...result.output, raw: buildRaw(result) };
+        return { ...result.output, raw: buildRaw(result), usage: usageOf(result) };
       }
       const result = await generateText({
         model: this.profile.model,
@@ -131,7 +154,11 @@ export class AISDKAdapter implements LLMAdapter {
         maxOutputTokens,
       });
       try {
-        return { ...recoverMalformedText(result.text, schema), raw: buildRaw(result) };
+        return {
+          ...recoverMalformedText(result.text, schema),
+          raw: buildRaw(result),
+          usage: usageOf(result),
+        };
       } catch (error) {
         if (result.text.trim().length === 0 || result.finishReason === 'length') {
           throw budgetError({
@@ -160,6 +187,9 @@ export class AISDKAdapter implements LLMAdapter {
               raw: NoObjectGeneratedError.isInstance(error)
                 ? buildRawFromError(error)
                 : JSON.stringify({ text: empty.text }),
+              ...(NoObjectGeneratedError.isInstance(error)
+                ? { usage: toUsageReport(error.usage) }
+                : {}),
             };
           } catch {
             // 恢复失败后继续走下面的预算诊断，保留原始 finishReason / usage。

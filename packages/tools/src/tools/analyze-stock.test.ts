@@ -1,5 +1,17 @@
-import { type Advice, type AdviceDataSnapshot, STANDARD_DISCLAIMERS } from '@luoome/core';
-import { analyzeStockTool } from '@luoome/plugin-analysis/tools/analyze-stock.js';
+import { FakeMarketAdapter, TEST_ACCOUNT } from '@luoome/adapters/testing';
+import {
+  type Advice,
+  type AdviceDataSnapshot,
+  dateInShanghai,
+  money,
+  STANDARD_DISCLAIMERS,
+} from '@luoome/core';
+import {
+  ANALYZE_STOCK_LLM_TIMEOUT_MS,
+  ANALYZE_STOCK_MAX_ATTEMPTS,
+  ANALYZE_STOCK_MAX_OUTPUT_TOKENS,
+  analyzeStockTool,
+} from '@luoome/plugin-analysis/tools/analyze-stock.js';
 import { deriveOpeningFact } from '@luoome/toolkit/internal/stock-facts.js';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
@@ -392,5 +404,310 @@ describe('analyze_stock', () => {
     expect(calls).toBe(2);
     expect(systems[1]).toContain('买入或给出价位时必须同时提供买点、目标价和止损价');
     expect(systems[1]).toContain('把价格字段全部留空');
+  });
+
+  it('提示词 v3：含 availableFields 与「禁止引用未出现数字」，输出预算 / 超时不下调', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    let captured: {
+      system?: string;
+      maxOutputTokens?: number;
+      timeoutMs?: number;
+      policy?: unknown;
+      data?: unknown;
+    } = {};
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'capture-llm',
+          generate: async <T>(request: {
+            system?: string;
+            maxOutputTokens?: number;
+            timeoutMs?: number;
+            policy?: unknown;
+            data?: unknown;
+          }): Promise<T> => {
+            captured = request;
+            return {
+              decision: 'hold',
+              confidence: 55,
+              horizon: 'short',
+              reasoning: {
+                premise: '今日无新增事实，维持原判断',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(true);
+    const system = captured.system ?? '';
+    expect(system).toContain('analyze_stock:v3');
+    expect(system).toContain('availableFields');
+    expect(system).toContain('禁止引用未出现数字');
+    expect(system).toContain('不构成投资建议');
+    expect(system).toContain('不要输出推理过程，只输出 JSON');
+    for (const verb of ['建仓', '加仓', '减仓', '清仓', '买入', '卖出', '满仓']) {
+      expect(system).toContain(verb);
+    }
+
+    // 单票 P95 ≤ 90 s 的目标靠「每次 60 s + 最多 2 次尝试」守住，不往下调预算。
+    expect(ANALYZE_STOCK_MAX_OUTPUT_TOKENS).toBe(4096);
+    expect(ANALYZE_STOCK_LLM_TIMEOUT_MS).toBe(60_000);
+    expect(ANALYZE_STOCK_MAX_ATTEMPTS).toBe(2);
+    expect(captured.maxOutputTokens).toBe(ANALYZE_STOCK_MAX_OUTPUT_TOKENS);
+    expect(captured.timeoutMs).toBe(ANALYZE_STOCK_LLM_TIMEOUT_MS);
+    expect(captured.policy).toEqual({ managerRetry: false, providerRetries: 0 });
+
+    // 事实包裁剪投影：只给最近 20 根摘要 + 指标可用集合，不传完整 bars。
+    const data = captured.data as {
+      availableFields: unknown[];
+      missingFields: unknown[];
+      barFacts: { recent: unknown[]; actualCount: number };
+      indicators: Record<string, unknown>;
+    };
+    expect(Array.isArray(data.availableFields)).toBe(true);
+    expect(Array.isArray(data.missingFields)).toBe(true);
+    expect(data.barFacts.recent.length).toBeLessThanOrEqual(20);
+    expect(JSON.stringify(data)).not.toContain('"bars"');
+  });
+
+  it('幻觉回归①：事实为低开时模型输出「高开」被拦截，两次都错则 llm_error', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    class LowOpenMarketAdapter extends FakeMarketAdapter {
+      override async fetchQuote(stockCode: string) {
+        const quote = await super.fetchQuote(stockCode);
+        return { ...quote, open: money(1475.35), prevClose: money(1485.75) };
+      }
+    }
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        market: new LowOpenMarketAdapter(),
+        llm: {
+          name: 'wrong-opening-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 45,
+              horizon: 'short',
+              reasoning: {
+                premise: '今日高开后维持观察',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('开盘方向与事实不符');
+    expect(systems[1]).toContain('低开');
+  });
+
+  it('幻觉回归③：输出出现操作动词被判违规并最终 llm_error', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'action-verb-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 40,
+              horizon: 'short',
+              reasoning: {
+                premise: '建议加仓并等待突破，满仓不宜',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('操作动词');
+  });
+
+  it('DSL 白名单：输出出现 ref() / 目录外字段被判违规', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const systems: string[] = [];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'dsl-llm',
+          generate: async <T>(request: { system: string }): Promise<T> => {
+            systems.push(request.system);
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 40,
+              horizon: 'short',
+              reasoning: {
+                premise: '若 ref(quote.close) > 0 则维持观察',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    expect(calls).toBe(2);
+    expect(systems[1]).toContain('ref()');
+  });
+
+  it('brief 路径成功：写 ai brief（带 adviceId）且只打 1 次 HTTP', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'brief-llm',
+          generate: async <T>(): Promise<T> => {
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 50,
+              horizon: 'short',
+              reasoning: {
+                premise: '今日无新增事实，维持原判断',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              usage: {
+                promptTokens: 1200,
+                completionTokens: 800,
+                reasoningTokens: 200,
+                costUsd: 0,
+              },
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        brief: { tradingDate, phase: 'post-market', source: 'manual' },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls).toBe(1);
+    const advice = (result.data as { advice: Advice }).advice;
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      accountId: TEST_ACCOUNT.id,
+      tradingDate,
+    });
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.quality).toBe('ai');
+    expect(briefs[0]?.adviceId).toBe(advice.id);
+    expect(briefs[0]?.llmHttpCalls).toBe(1);
+    expect(briefs[0]?.llmPromptTokens).toBe(1200);
+    expect(briefs[0]?.llmReasoningTokens).toBe(200);
+  });
+
+  it('brief 路径失败：不写 advices，只写 rule-only brief 且带 llm 降级原因', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'brief-fail-llm',
+          generate: async <T>(): Promise<T> => {
+            throw new Error('upstream 502');
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        brief: {
+          tradingDate,
+          phase: 'post-market',
+          ruleOnlyDraft: {
+            decision: 'watch',
+            confidence: 20,
+            premise: '待确认观察：规则 fallback。仅技术研究，不构成投资建议。',
+            evidence: ['规则 fallback：测试夹具'],
+            disclaimers: [...STANDARD_DISCLAIMERS],
+          },
+        },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    if (result.error.kind !== 'llm_error') return;
+    expect(result.error.cause).toContain('upstream 502');
+    expect(await baseCtx.repos.advice.query({ subjectId: '002594.SZ' })).toHaveLength(0);
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      accountId: TEST_ACCOUNT.id,
+      tradingDate,
+    });
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.quality).toBe('rule-only');
+    expect(briefs[0]?.decision).toBe('watch');
+    expect(briefs[0]?.llmHttpCalls).toBe(2);
+    expect(briefs[0]?.missing.some((item) => item.dimension === 'llm')).toBe(true);
   });
 });

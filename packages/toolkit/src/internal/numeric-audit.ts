@@ -1,3 +1,5 @@
+import { assertExpressionSyntax, extractExpressionPaths, getStrategyField } from '@luoome/core';
+
 import type { OpeningFactResult } from './stock-facts.js';
 
 /**
@@ -141,6 +143,64 @@ export interface NumericAuditInput {
   /** 事实包投影里实际可用字段（指标缺失时提示词不应让模型引用）。 */
   readonly availableFields?: readonly string[];
 }
+
+/** 目录外写法：与 BASE_INSTRUCTIONS / DSL catalog 保持同一份禁止清单。 */
+const FORBIDDEN_EXPRESSION_TOKENS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bref\s*\(/i, 'ref()'],
+  [/\bATR\b/, 'ATR'],
+  [/marketIndexChangePct/, 'marketIndexChangePct'],
+  [/Number\.isFinite/, 'Number.isFinite'],
+];
+
+/** 看起来像 DSL 字段路径的片段（如 quote.close、ma20）。 */
+const FIELD_PATH_FRAGMENT = /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+/;
+const COMPARISON_OPERATOR = /(?:>=|<=|==|!=|>|<|&&|\|\|)/;
+
+/** 把文本切成可单独当成表达式检验的片段（逗号 / 分号 / 换行 / 括号）。 */
+const expressionFragments = (text: string): readonly string[] =>
+  text
+    .split(/[\n，。；、:：()（）[\]「」]/)
+    .map((fragment) => fragment.trim())
+    .filter(
+      (fragment) =>
+        fragment.length > 0 &&
+        COMPARISON_OPERATOR.test(fragment) &&
+        FIELD_PATH_FRAGMENT.test(fragment),
+    );
+
+/**
+ * DSL 白名单校验（design.md §6.4）：建议文本里若出现表达式片段，必须能通过
+ * `assertExpressionSyntax` 且字段路径在 `STRATEGY_FIELD_REGISTRY` 内；
+ * `ref()` / `ATR` / `marketIndexChangePct` / `Number.isFinite` 一律禁止。
+ */
+export const expressionWhitelistViolations = (output: unknown): readonly string[] => {
+  const texts: string[] = [];
+  collectText(output, undefined, texts);
+  const text = texts.join('\n');
+  if (text.trim().length === 0) return [];
+  const violations: string[] = [];
+  for (const [pattern, label] of FORBIDDEN_EXPRESSION_TOKENS) {
+    if (pattern.test(text)) {
+      violations.push(`输出包含目录外写法 ${label}；只能引用 STRATEGY_FIELD_REGISTRY 中的字段路径`);
+    }
+  }
+  for (const fragment of expressionFragments(text)) {
+    try {
+      assertExpressionSyntax(fragment);
+    } catch (error) {
+      violations.push(
+        `输出中的表达式片段「${fragment}」不可解析：${error instanceof Error ? error.message : String(error)}`,
+      );
+      continue;
+    }
+    for (const path of extractExpressionPaths(fragment)) {
+      if (getStrategyField(path) === undefined) {
+        violations.push(`输出中的表达式字段 ${path} 不在 STRATEGY_FIELD_REGISTRY 白名单内`);
+      }
+    }
+  }
+  return violations;
+};
 
 export const numericAuditViolations = (input: NumericAuditInput): readonly string[] => {
   const violations: string[] = [];

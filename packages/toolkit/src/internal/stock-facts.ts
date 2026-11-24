@@ -16,6 +16,8 @@ import {
   type SectorQuoteList,
   SectorQuoteListSchema,
   type Stock,
+  type StockBriefMissing,
+  type StockBriefMissingDimension,
   StockSectorMembershipViewSchema,
   type StrategySignal,
   StrategySignalSchema,
@@ -293,6 +295,369 @@ const loadDailyBars = async (
     });
     return { bars: [...local], reason: errorText(error) };
   }
+};
+
+/**
+ * 提示词里保留的日线条数与分时点数（design.md §6.3）：完整 bars 数组不进提示词。
+ */
+export const PROMPT_RECENT_BAR_COUNT = 20;
+export const PROMPT_INTRADAY_POINT_COUNT = 30;
+export const PROMPT_NEWS_COUNT = 5;
+export const PROMPT_SIGNAL_COUNT = 5;
+
+export interface PromptBarSummary {
+  readonly date: string;
+  readonly open: number;
+  readonly high: number;
+  readonly low: number;
+  readonly close: number;
+  readonly volume: number;
+}
+
+export type PromptSection<T> =
+  | {
+      readonly status: 'ok';
+      readonly data: T;
+      readonly dataAsOf: Date;
+      readonly source: string;
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly reason: string;
+      readonly dataAsOf?: Date | undefined;
+      readonly source?: string | undefined;
+    };
+
+/**
+ * 事实包 → 提示词投影（design.md §6.3）：只留最近 20 根日线摘要、指标可用集合、
+ * 开盘方向与逐维降级原因，避免把整段 bars / 分时原始点塞进提示词。
+ */
+export interface StockFactPromptProjection {
+  readonly factDigest: string;
+  readonly stock: z.infer<typeof StockIdentitySchema>;
+  readonly quote?: PromptSection<z.infer<typeof QuoteFactDataSchema>>;
+  readonly bars?: PromptSection<{
+    readonly requiredCount: number;
+    readonly actualCount: number;
+    readonly recent: readonly PromptBarSummary[];
+  }>;
+  readonly indicators?: PromptSection<z.infer<typeof IndicatorsFactDataSchema>>;
+  readonly intraday?: PromptSection<{
+    readonly date: string;
+    readonly pointCount: number;
+    readonly recent: readonly { readonly time: Date; readonly price: number }[];
+  }>;
+  readonly news?: PromptSection<{
+    readonly items: readonly {
+      readonly title: string;
+      readonly summary: string;
+      readonly source: string;
+      readonly publishedAt: string;
+    }[];
+  }>;
+  readonly sectors?: PromptSection<{
+    readonly memberships: readonly {
+      readonly kind: string;
+      readonly name: string;
+      readonly sectorState: string;
+    }[];
+  }>;
+  readonly sectorQuote?: PromptSection<{
+    readonly matched: readonly {
+      readonly name: string;
+      readonly changePct: number;
+      readonly upCount?: number;
+      readonly downCount?: number;
+    }[];
+  }>;
+  readonly signals?: PromptSection<{
+    readonly since: Date;
+    readonly items: readonly {
+      readonly ts: Date;
+      readonly ruleId: string;
+      readonly direction: string;
+      readonly score: number;
+    }[];
+  }>;
+  readonly account?: PromptSection<{
+    readonly facts: {
+      readonly status: string;
+      readonly cashBalance: number;
+      readonly totalAssets: number | null;
+      readonly reasons: readonly string[];
+      readonly positions: readonly {
+        readonly stockId: string;
+        readonly quantity: number;
+        readonly marketValue: number;
+      }[];
+    };
+  }>;
+  readonly market?: PromptSection<{
+    readonly indices: readonly {
+      readonly code: string;
+      readonly name: string;
+      readonly close: number;
+      readonly changePct: number;
+    }[];
+  }>;
+}
+
+const keepUnavailable = <T>(section: PromptSection<T>): PromptSection<T> => section;
+export const projectStockFactPackForPrompt = (pack: StockFactPack): StockFactPromptProjection => {
+  const bars = pack.bars;
+  const intraday = pack.intraday;
+  const news = pack.news;
+  const sectors = pack.sectors;
+  const sectorQuote = pack.sectorQuote;
+  const signals = pack.signals;
+  const account = pack.account;
+  const market = pack.market;
+  return {
+    factDigest: pack.factDigest,
+    stock: pack.stock,
+    ...(pack.quote === undefined ? {} : { quote: keepUnavailable(pack.quote) }),
+    ...(bars === undefined
+      ? {}
+      : {
+          bars:
+            bars.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: bars.dataAsOf,
+                  source: bars.source,
+                  data: {
+                    requiredCount: bars.data.requiredCount,
+                    actualCount: bars.data.actualCount,
+                    recent: bars.data.bars.slice(-PROMPT_RECENT_BAR_COUNT).map((bar) => ({
+                      date: dateInShanghai(bar.date),
+                      open: bar.open,
+                      high: bar.high,
+                      low: bar.low,
+                      close: bar.close,
+                      volume: bar.volume,
+                    })),
+                  },
+                }
+              : keepUnavailable(bars),
+        }),
+    ...(pack.indicators === undefined ? {} : { indicators: pack.indicators }),
+    ...(intraday === undefined
+      ? {}
+      : {
+          intraday:
+            intraday.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: intraday.dataAsOf,
+                  source: intraday.source,
+                  data: {
+                    date: intraday.data.date,
+                    pointCount: intraday.data.points.length,
+                    recent: intraday.data.points
+                      .slice(-PROMPT_INTRADAY_POINT_COUNT)
+                      .map((point) => ({
+                        time: point.time,
+                        price: point.price,
+                      })),
+                  },
+                }
+              : keepUnavailable(intraday),
+        }),
+    ...(news === undefined
+      ? {}
+      : {
+          news:
+            news.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: news.dataAsOf,
+                  source: news.source,
+                  data: {
+                    items: news.data.items.slice(0, PROMPT_NEWS_COUNT).map((item) => ({
+                      title: item.title,
+                      summary: item.summary,
+                      source: item.source,
+                      publishedAt: item.publishedAt.toISOString(),
+                    })),
+                  },
+                }
+              : keepUnavailable(news),
+        }),
+    ...(sectors === undefined
+      ? {}
+      : {
+          sectors:
+            sectors.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: sectors.dataAsOf,
+                  source: sectors.source,
+                  data: {
+                    memberships: sectors.data.memberships.map((item) => ({
+                      kind: item.kind,
+                      name: item.name,
+                      sectorState: item.sectorState,
+                    })),
+                  },
+                }
+              : keepUnavailable(sectors),
+        }),
+    ...(sectorQuote === undefined
+      ? {}
+      : {
+          sectorQuote:
+            sectorQuote.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: sectorQuote.dataAsOf,
+                  source: sectorQuote.source,
+                  data: {
+                    matched: sectorQuote.data.matched.map((item) => ({
+                      name: item.name,
+                      changePct: item.changePct,
+                      ...(item.upCount === undefined ? {} : { upCount: item.upCount }),
+                      ...(item.downCount === undefined ? {} : { downCount: item.downCount }),
+                    })),
+                  },
+                }
+              : keepUnavailable(sectorQuote),
+        }),
+    ...(signals === undefined
+      ? {}
+      : {
+          signals:
+            signals.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: signals.dataAsOf,
+                  source: signals.source,
+                  data: {
+                    since: signals.data.since,
+                    items: [...signals.data.items]
+                      .sort((left, right) => right.ts.getTime() - left.ts.getTime())
+                      .slice(0, PROMPT_SIGNAL_COUNT)
+                      .map((item) => ({
+                        ts: item.ts,
+                        ruleId: item.ruleId,
+                        direction: item.direction,
+                        score: item.score,
+                      })),
+                  },
+                }
+              : keepUnavailable(signals),
+        }),
+    ...(account === undefined
+      ? {}
+      : {
+          account:
+            account.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: account.dataAsOf,
+                  source: account.source,
+                  data: {
+                    facts: {
+                      status: account.data.facts.status,
+                      cashBalance: account.data.facts.cashBalance,
+                      totalAssets: account.data.facts.totalAssets ?? null,
+                      reasons: account.data.facts.reasons,
+                      positions: account.data.facts.positions.map((position) => ({
+                        stockId: position.stockId,
+                        quantity: position.quantity,
+                        marketValue: position.marketValue,
+                      })),
+                    },
+                  },
+                }
+              : keepUnavailable(account),
+        }),
+    ...(market === undefined
+      ? {}
+      : {
+          market:
+            market.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: market.dataAsOf,
+                  source: market.source,
+                  data: {
+                    indices: market.data.indices.map((item) => ({
+                      code: item.code,
+                      name: item.name,
+                      close: item.close,
+                      changePct: item.changePct,
+                    })),
+                  },
+                }
+              : keepUnavailable(market),
+        }),
+  };
+};
+
+export interface FactPackBriefSummary {
+  readonly factDigest: string;
+  readonly quoteAvailable: boolean;
+  readonly barsAvailable: boolean;
+  readonly missing: readonly StockBriefMissing[];
+  readonly dataSources: readonly string[];
+  /** 各段最晚的 dataAsOf；无可用段时回退到调用时钟。 */
+  readonly factsAsOf: Date;
+}
+
+const SECTION_MISSING_DIMENSION: Readonly<
+  Partial<Record<keyof StockFactPack, StockBriefMissingDimension>>
+> = {
+  quote: 'quote',
+  bars: 'daily-bars',
+  intraday: 'intraday',
+  news: 'news',
+  sectors: 'sector-membership',
+  sectorQuote: 'sector-quote',
+  signals: 'signals',
+  account: 'account',
+};
+
+/**
+ * 事实包 → stock_briefs 的降级维度 / 数据来源 / factsAsOf。
+ * 任何 unavailable 段都必须带 dimension + reason（design.md §11）。
+ */
+export const summarizeFactPackForBrief = (
+  pack: StockFactPack,
+  fallbackAsOf: Date,
+): FactPackBriefSummary => {
+  const missing: StockBriefMissing[] = [];
+  const dataSources = new Set<string>();
+  let factsAsOf = fallbackAsOf;
+  for (const [key, dimension] of Object.entries(SECTION_MISSING_DIMENSION)) {
+    const section = pack[key as keyof StockFactPack];
+    if (section === undefined || typeof section !== 'object') continue;
+    if (!('status' in section)) continue;
+    if (section.status === 'unavailable') {
+      missing.push({
+        dimension: dimension as StockBriefMissingDimension,
+        reason: section.reason,
+        ...(section.source === undefined ? {} : { source: section.source }),
+        ...(section.dataAsOf === undefined ? {} : { dataAsOf: section.dataAsOf }),
+      });
+      continue;
+    }
+    if (section.source !== undefined) {
+      for (const source of section.source.split(',')) {
+        if (source.trim().length > 0) dataSources.add(source.trim());
+      }
+    }
+    if (section.dataAsOf !== undefined && section.dataAsOf > factsAsOf) {
+      factsAsOf = section.dataAsOf;
+    }
+  }
+  return {
+    factDigest: pack.factDigest,
+    quoteAvailable: pack.quote?.status === 'ok',
+    barsAvailable: pack.bars?.status === 'ok',
+    missing,
+    dataSources: [...dataSources],
+    factsAsOf,
+  };
 };
 
 // 只把事实值纳入指纹；抓取 / 计算时间与新鲜度会随调用时钟变化，不参与幂等判断。

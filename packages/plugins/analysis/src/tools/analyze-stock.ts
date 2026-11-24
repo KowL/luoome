@@ -1,21 +1,45 @@
 import {
   type Advice,
   AdviceDataSnapshotSchema,
+  type AdviceHorizon,
   AdviceSchema,
   assertAdviceInvariants,
+  assertStockBriefInvariants,
   money,
   PluginExecutionDenied,
+  type Quote,
   STANDARD_DISCLAIMERS,
   type Stock,
+  type StockBrief,
+  type StockBriefMissing,
+  StockBriefPhaseSchema,
+  type StockBriefSource,
+  StockBriefSourceSchema,
   StrategyAdviceAnalysisSchema,
-  summarizeIndicatorAvailability,
+  type TechnicalIndicators,
   type ToolContext,
 } from '@luoome/core';
-import { defineTool, errAdapterError, errNotFound } from '@luoome/toolkit';
-import { computeSimpleIndicators } from '@luoome/toolkit/internal/indicators.js';
-import { numericAuditViolations } from '@luoome/toolkit/internal/numeric-audit.js';
-import { resolveQuote } from '@luoome/toolkit/internal/resolve-quotes.js';
-import { deriveOpeningFact } from '@luoome/toolkit/internal/stock-facts.js';
+import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '@luoome/toolkit';
+import { type RuleOnlyDraft, RuleOnlyDraftSchema } from '@luoome/toolkit/internal/brief-rules.js';
+import {
+  addLlmUsage,
+  emptyLlmUsage,
+  type LlmUsageTotals,
+  llmUsageFromResult,
+} from '@luoome/toolkit/internal/llm-budget.js';
+import {
+  expressionWhitelistViolations,
+  numericAuditViolations,
+} from '@luoome/toolkit/internal/numeric-audit.js';
+import {
+  buildStockFactPack,
+  type OpeningFactResult,
+  projectStockFactPackForPrompt,
+  REQUIRED_DAILY_BAR_COUNT,
+  type StockFactPack,
+  StockFactPackSchema,
+  summarizeFactPackForBrief,
+} from '@luoome/toolkit/internal/stock-facts.js';
 import { z } from 'zod';
 import {
   assertAdviceAnalysis,
@@ -25,14 +49,45 @@ import {
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
-import { buildJudgmentContext } from '../internal/market-context.js';
 import { ANALYZE_STOCK_SYSTEM } from '../internal/prompts.js';
 import { analyzeStrategyCandidateTool } from './analyze-strategy-candidate.js';
 import { MarketOutlookOutput, marketOutlookTool } from './market-outlook.js';
 
-const DAY_MS = 86_400_000;
-/** 拉日线的回看窗口。 */
-const BARS_LOOKBACK_DAYS = 120;
+/** 交互路径自行取数时需要的事实包段（brief 路径由调用方直接传入已建事实包）。 */
+const INTERACTIVE_FACT_SECTIONS = [
+  'quote',
+  'bars',
+  'indicators',
+  'intraday',
+  'news',
+  'sectors',
+  'signals',
+  'account',
+] as const;
+
+/**
+ * 单票单次 LLM 调用的输出预算与超时（design.md §10.1 / §10.4）。
+ *
+ * 不下调：reasoning 可能吃掉 2k+ token，压小输出预算会把 JSON 截断成空输出；
+ * 单次中位耗时接近 35 s，45 s 超时会放大重试。单票 wall-clock 上限 = 2 × 60 s，
+ * 单票 P95 目标 ≤ 90 s（批次 P95 ≤ 6 min，见 daily-stock-briefs）。
+ */
+export const ANALYZE_STOCK_MAX_OUTPUT_TOKENS = 4096;
+export const ANALYZE_STOCK_LLM_TIMEOUT_MS = 60_000;
+/** 每票最多 1 次 + 1 次带校验错误的修复重试（HTTP ≤ 2）。 */
+export const ANALYZE_STOCK_MAX_ATTEMPTS = 2;
+
+/** brief 路径的写入参数：缺省即交互路径，不写 stock_briefs。 */
+export const AnalyzeStockBriefInput = z.object({
+  /** Asia/Shanghai 交易日 YYYY-MM-DD。 */
+  tradingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  phase: StockBriefPhaseSchema,
+  accountId: z.string().min(1).optional(),
+  source: StockBriefSourceSchema.optional(),
+  /** LLM 失败时写入的规则观察草稿（由预筛生成，保持完全确定性）。 */
+  ruleOnlyDraft: RuleOnlyDraftSchema.optional(),
+});
+export type AnalyzeStockBriefInput = z.infer<typeof AnalyzeStockBriefInput>;
 
 export const AnalyzeStockInput = z
   .object({
@@ -49,6 +104,14 @@ export const AnalyzeStockInput = z
     recommendationTrigger: z
       .enum(['run', 'intraday-price', 'intraday-signal', 'manual'])
       .optional(),
+    /**
+     * 已构建的事实包（brief 路径复用，避免重复拉行情）。
+     * 缺省时工具自行取数（对话 / CLI 的交互路径）。schema 在 handler 内用
+     * StockFactPackSchema 校验，保证 MCP / DSH 侧仍可派生 JSON Schema。
+     */
+    factPack: z.record(z.string(), z.unknown()).optional(),
+    /** brief 路径：写 stock_briefs 并把 LLM 失败降级为规则观察；缺省不写。 */
+    brief: AnalyzeStockBriefInput.optional(),
   })
   .superRefine((input, ctx) => {
     if (input.scope === 'stock' && input.stockId === undefined) {
@@ -75,6 +138,8 @@ export const AnalyzeStockOutput = z.union([
   z.object({
     advice: AdviceSchema,
     evidence: AdviceDataSnapshotSchema,
+    /** brief 路径落库后的观察记录（含 LLM 计量），交互路径缺省。 */
+    brief: z.custom<StockBrief>().optional(),
   }),
   MarketOutlookOutput,
 ]);
@@ -85,9 +150,205 @@ const resolveStock = async (input: string, ctx: ToolContext): Promise<Stock | nu
   return ctx.repos.stock.findByCode(input.trim().toUpperCase());
 };
 
+/** 上下文段：与 market-context 的 ContextSection 同形，供提示词与数值校验共用。 */
+type PromptContextSection =
+  | { readonly status: 'ok'; readonly data: Record<string, unknown> }
+  | { readonly status: 'unavailable'; readonly reason: string };
+
+const unavailableSection = (reason: string): PromptContextSection => ({
+  status: 'unavailable',
+  reason,
+});
+
+/** 单票判断的输入装配结果：提示词 payload 同时充当数值 / 方向 / 指标校验的事实来源。 */
+interface StockJudgmentFacts {
+  readonly payload: Record<string, unknown>;
+  readonly quote: Quote;
+  readonly indicators: TechnicalIndicators;
+  readonly availableFields: readonly string[];
+  readonly opening: OpeningFactResult;
+  readonly missing: readonly StockBriefMissing[];
+  readonly dataSources: readonly string[];
+  readonly factsAsOf: Date;
+  readonly factDigest?: string;
+}
+
+/** 事实包里的指标值只保留有限数，与 TechnicalIndicators 的不变量对齐。 */
+const toTechnicalIndicators = (
+  values: Readonly<Record<string, number | undefined>>,
+): TechnicalIndicators => {
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+  }
+  return out;
+};
+
+/**
+ * 事实包裁剪投影（design.md §6.3）：只传最近 20 根日线摘要、指标可用集合、
+ * 开盘方向与逐维降级原因，不把完整 bars / 分时原始点塞进提示词。
+ */
+const buildJudgmentFacts = (
+  pack: StockFactPack,
+  stock: Stock,
+  position: { readonly avgCost: number; readonly quantity: number } | null,
+  notes: string | undefined,
+  fallbackAsOf: Date,
+): StockJudgmentFacts | null => {
+  const quoteSection = pack.quote;
+  if (quoteSection === undefined || quoteSection.status !== 'ok') return null;
+  const summary = summarizeFactPackForBrief(pack, fallbackAsOf);
+  const projection = projectStockFactPackForPrompt(pack);
+  const indicatorSection = pack.indicators?.status === 'ok' ? pack.indicators.data : undefined;
+  const accountSection = pack.account;
+  const newsSection = pack.news;
+  const sectorSection = pack.sectors;
+  const account: PromptContextSection =
+    accountSection?.status === 'ok'
+      ? {
+          status: 'ok',
+          data: {
+            cashBalance: accountSection.data.facts.cashBalance,
+            totalAssets: accountSection.data.facts.totalAssets ?? null,
+            status: accountSection.data.facts.status,
+            reasons: [...accountSection.data.facts.reasons],
+            positions: accountSection.data.facts.positions.map((item) => ({
+              stockId: item.stockId,
+              quantity: item.quantity,
+              marketValue: item.marketValue,
+              ...(item.industry === undefined ? {} : { industry: item.industry }),
+            })),
+          },
+        }
+      : unavailableSection(accountSection?.reason ?? '账户事实不可用');
+  const news: PromptContextSection =
+    newsSection?.status === 'ok'
+      ? {
+          status: 'ok',
+          data: {
+            items: newsSection.data.items.slice(0, 5).map((item) => ({
+              title: item.title,
+              summary: item.summary.slice(0, 120),
+              source: item.source,
+              publishedAt: item.publishedAt.toISOString(),
+            })),
+          },
+        }
+      : unavailableSection(newsSection?.reason ?? '未配置新闻数据源');
+  const sectors: PromptContextSection =
+    sectorSection?.status === 'ok'
+      ? {
+          status: 'ok',
+          data: { memberships: [...sectorSection.data.memberships] },
+        }
+      : unavailableSection(sectorSection?.reason ?? '板块归属不可用');
+  const indicators = indicatorSection?.values ?? {};
+  const availableFields = indicatorSection?.availableFields ?? [];
+  const opening: OpeningFactResult = { status: 'ok', data: quoteSection.data.opening };
+  const payload: Record<string, unknown> = {
+    stockId: stock.id,
+    code: stock.code,
+    name: stock.name,
+    quote: quoteSection.data.quote,
+    opening,
+    indicators,
+    availableFields,
+    missingFields: indicatorSection?.missingFields ?? [],
+    barFacts: {
+      actualCount: pack.bars?.status === 'ok' ? pack.bars.data.actualCount : 0,
+      requiredCount: REQUIRED_DAILY_BAR_COUNT,
+      recent: projection.bars?.status === 'ok' ? projection.bars.data.recent : [],
+    },
+    factDigest: pack.factDigest,
+    factSections: {
+      ...(projection.intraday === undefined ? {} : { intraday: projection.intraday }),
+      ...(projection.sectorQuote === undefined ? {} : { sectorQuote: projection.sectorQuote }),
+      ...(projection.signals === undefined ? {} : { signals: projection.signals }),
+      ...(projection.market === undefined ? {} : { market: projection.market }),
+    },
+    marketContext: { account, news, sectors },
+    ...(position === null
+      ? {}
+      : { position: { avgCost: position.avgCost, quantity: position.quantity } }),
+    ...(notes === undefined ? {} : { notes }),
+  };
+  return {
+    payload,
+    quote: quoteSection.data.quote,
+    indicators: toTechnicalIndicators(indicators),
+    availableFields,
+    opening,
+    missing: summary.missing,
+    dataSources: summary.dataSources,
+    factsAsOf: summary.factsAsOf,
+    factDigest: pack.factDigest,
+  };
+};
+
+const briefValidUntil = (now: Date): Date => computeValidUntil('short', now);
+
+/** 幂等写入 stock_briefs：同日同阶段只覆盖同一行（唯一键由 repository 保证）。 */
+const writeBrief = async (
+  ctx: ToolContext,
+  input: {
+    readonly brief: AnalyzeStockBriefInput;
+    readonly stock: Stock;
+    readonly factDigest: string;
+    readonly quality: StockBrief['quality'];
+    readonly decision: StockBrief['decision'];
+    readonly confidence: number;
+    readonly horizon?: AdviceHorizon;
+    readonly adviceId?: string;
+    readonly missing: readonly StockBriefMissing[];
+    readonly dataSources: readonly string[];
+    readonly factsAsOf: Date;
+    readonly usage: LlmUsageTotals;
+  },
+): Promise<StockBrief> => {
+  const now = ctx.clock();
+  const source: StockBriefSource = input.brief.source ?? 'scheduled';
+  const row: StockBrief = {
+    id: globalThis.crypto.randomUUID(),
+    tradingDate: input.brief.tradingDate,
+    phase: input.brief.phase,
+    accountId: input.brief.accountId ?? ctx.user.defaultAccountId,
+    stockId: input.stock.id,
+    source,
+    decision: input.decision,
+    confidence: input.confidence,
+    horizon: input.horizon ?? 'short',
+    ...(input.adviceId === undefined ? {} : { adviceId: input.adviceId }),
+    quality: input.quality,
+    factDigest: input.factDigest,
+    factsAsOf: input.factsAsOf,
+    missing: [...input.missing],
+    dataSources: [...input.dataSources],
+    llmHttpCalls: input.usage.httpCalls,
+    llmPromptTokens: input.usage.promptTokens,
+    llmCompletionTokens: input.usage.completionTokens,
+    llmReasoningTokens: input.usage.reasoningTokens,
+    llmCostUsd: input.usage.costUsd,
+    validUntil: briefValidUntil(now),
+    createdAt: now,
+    updatedAt: now,
+  };
+  assertStockBriefInvariants(row);
+  return ctx.repos.stockBrief.upsert(row);
+};
+
+const fallbackRuleOnlyDraft = (reason: string): RuleOnlyDraft => ({
+  decision: 'hold',
+  confidence: 20,
+  premise: '中性观察：AI 推理不可用，仅展示确定性规则结果。仅技术研究，不构成投资建议。',
+  evidence: [`规则 fallback：LLM 推理不可用（${reason.slice(0, 60)}）`],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+});
+
 export const analyzeStockTool = defineTool({
   name: 'analyze_stock',
-  description: '对指定股票做综合分析（行情 + 指标 + 持仓上下文 → LLM → 结构化 Advice）并持久化',
+  description:
+    '对指定股票做技术研究与观察分析（事实包裁剪投影 → LLM → 结构化观察记录）并持久化；' +
+    '仅技术研究，不构成投资建议，不产生任何交易动作',
   sideEffect: 'advice',
   input: AnalyzeStockInput,
   output: AnalyzeStockOutput,
@@ -123,54 +384,47 @@ export const analyzeStockTool = defineTool({
     const stock = await resolveStock(input.stockId as string, ctx);
     if (stock === null) return errNotFound('Stock', input.stockId as string);
 
-    // ARCHITECTURE §6.3：拉行情 + 指标 → 持仓上下文 → LLM 推理 → 组装 → 校验 → 持久化。
+    // ARCHITECTURE §6.3：取事实（brief 路径复用事实包）→ LLM 推理 → 组装 → 校验 → 持久化。
     // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
     const now = ctx.clock();
-    const [quoteItem, bars, position, marketContext] = await Promise.all([
-      resolveQuote(ctx, stock.id, { context: 'display' }),
-      ctx.adapters.market.fetchDailyBars(stock.id, {
-        start: new Date(now.getTime() - BARS_LOOKBACK_DAYS * DAY_MS),
-        end: now,
-      }),
-      ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
-      buildJudgmentContext(ctx, stock),
-    ]);
-    assertAdviceAnalysis(ctx);
-    if (quoteItem === undefined || quoteItem.status !== 'ok') {
-      return errAdapterError(
-        ctx.adapters.market.name,
-        quoteItem !== undefined && quoteItem.status === 'unavailable'
-          ? quoteItem.reason
-          : 'quote_unavailable',
-        true,
-      );
+    let suppliedPack: StockFactPack | undefined;
+    if (input.factPack !== undefined) {
+      const parsed = StockFactPackSchema.safeParse(input.factPack);
+      if (!parsed.success) {
+        return errInvalidInput(
+          `factPack 不符合事实包结构：${parsed.error.issues.map((issue) => issue.message).join('；')}`,
+        );
+      }
+      suppliedPack = parsed.data;
     }
-    const quote = quoteItem.quote;
-    const indicators = computeSimpleIndicators(bars);
-    const opening = deriveOpeningFact(quote);
-    const indicatorAvailability = summarizeIndicatorAvailability(indicators, bars.length);
+    const [factPack, position] = await Promise.all([
+      suppliedPack ??
+        buildStockFactPack(ctx, {
+          stockId: stock.id,
+          asOf: now,
+          include: [...INTERACTIVE_FACT_SECTIONS],
+        }),
+      ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
+    ]);
+    if (factPack === null) return errNotFound('Stock', input.stockId as string);
+    const facts = buildJudgmentFacts(
+      factPack,
+      stock,
+      position === null ? null : { avgCost: position.avgCost, quantity: position.quantity },
+      input.notes,
+      now,
+    );
+    if (facts === null) {
+      const reason =
+        factPack.quote?.status === 'unavailable' ? factPack.quote.reason : 'quote_unavailable';
+      return errAdapterError(ctx.adapters.market.name, reason, true);
+    }
+    assertAdviceAnalysis(ctx);
 
-    const analysisData = {
-      stockId: stock.id,
-      code: stock.code,
-      name: stock.name,
-      quote,
-      indicators,
-      opening,
-      barFacts: {
-        actualCount: bars.length,
-        requiredCount: BARS_LOOKBACK_DAYS,
-        indicatorAvailability,
-      },
-      marketContext,
-      ...(position !== null
-        ? { position: { avgCost: position.avgCost, quantity: position.quantity } }
-        : {}),
-      ...(input.notes !== undefined ? { notes: input.notes } : {}),
-    };
     let llmOutput: z.infer<typeof StrategyAdviceAnalysisSchema> | undefined;
     let failure = 'AI 输出未通过建议约束';
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let usage: LlmUsageTotals = emptyLlmUsage();
+    for (let attempt = 0; attempt < ANALYZE_STOCK_MAX_ATTEMPTS; attempt += 1) {
       try {
         const generated = await generateAdviceAnalysis<
           z.infer<typeof StrategyAdviceAnalysisSchema>
@@ -180,9 +434,13 @@ export const analyzeStockTool = defineTool({
               ? ANALYZE_STOCK_SYSTEM
               : `${ANALYZE_STOCK_SYSTEM}\n请修复上次输出：${failure}\n若本次无法给出可信价位，就把价格字段全部留空并改判 hold/avoid，不要输出不一致的买点组合。`,
           schema: StrategyAdviceAnalysisSchema,
-          data: analysisData,
+          data: facts.payload,
+          maxOutputTokens: ANALYZE_STOCK_MAX_OUTPUT_TOKENS,
+          timeoutMs: ANALYZE_STOCK_LLM_TIMEOUT_MS,
           policy: { managerRetry: false, providerRetries: 0 },
         });
+        // 按真实 HTTP 请求次数计量（每次尝试 +1），token 由适配器上报。
+        usage = addLlmUsage(usage, { ...llmUsageFromResult(generated), httpCalls: 1 });
         const parsed = StrategyAdviceAnalysisSchema.safeParse(generated);
         if (!parsed.success) {
           failure = parsed.error.issues.map((issue) => issue.message).join('；');
@@ -195,22 +453,52 @@ export const analyzeStockTool = defineTool({
         }
         const auditViolations = numericAuditViolations({
           output: parsed.data,
-          facts: analysisData,
-          availableFields: Object.keys(indicators),
+          facts: facts.payload,
+          availableFields: facts.availableFields,
         });
         if (auditViolations.length > 0) {
           failure = auditViolations.join('；');
           continue;
         }
+        const expressionViolations = expressionWhitelistViolations(parsed.data);
+        if (expressionViolations.length > 0) {
+          failure = expressionViolations.join('；');
+          continue;
+        }
         llmOutput = parsed.data;
         break;
       } catch (error) {
+        usage = addLlmUsage(usage, { httpCalls: 1 });
         if (error instanceof PluginExecutionDenied) throw error;
         // 把适配器/manager 的真实错误（预算耗尽、超时、schema 原文）带到下一次提示词。
         failure = error instanceof Error ? error.message : String(error);
       }
     }
     if (llmOutput === undefined) {
+      if (input.brief !== undefined) {
+        // brief 路径：LLM 失败不产出 advice、不写 fallback advice，只落规则观察（design §6.5）。
+        const draft = input.brief.ruleOnlyDraft ?? fallbackRuleOnlyDraft(failure);
+        await writeBrief(ctx, {
+          brief: input.brief,
+          stock,
+          factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
+          quality: 'rule-only',
+          decision: draft.decision,
+          confidence: draft.confidence,
+          missing: [
+            ...facts.missing,
+            { dimension: 'llm', reason: `AI 推理不可用：${failure}`.slice(0, 500) },
+          ],
+          dataSources: facts.dataSources,
+          factsAsOf: facts.factsAsOf,
+          usage,
+        });
+        ctx.logger.warn('analyze_stock: brief 路径 LLM 失败，降级为规则观察', {
+          stockId: stock.id,
+          decision: draft.decision,
+          failure,
+        });
+      }
       return {
         ok: false as const,
         error: {
@@ -247,8 +535,8 @@ export const analyzeStockTool = defineTool({
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_stock',
       basedOn: {
-        quotes: { [stock.id]: quote },
-        indicators: { [stock.id]: indicators },
+        quotes: { [stock.id]: facts.quote },
+        indicators: { [stock.id]: facts.indicators },
         dataAsOf: now,
       },
       validFrom: now,
@@ -259,10 +547,29 @@ export const analyzeStockTool = defineTool({
     assertAdviceInvariants(advice);
     await ctx.repos.advice.save(advice);
 
+    let brief: StockBrief | undefined;
+    if (input.brief !== undefined) {
+      brief = await writeBrief(ctx, {
+        brief: input.brief,
+        stock,
+        factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
+        quality: 'ai',
+        decision: advice.decision,
+        confidence: advice.confidence,
+        horizon: advice.horizon,
+        adviceId: advice.id,
+        missing: facts.missing,
+        dataSources: facts.dataSources,
+        factsAsOf: facts.factsAsOf,
+        usage,
+      });
+    }
+
     // 经 schema parse 返回输出类型（运行时幂等，类型层把 readonly 数组转成输出形状）。
     return {
       advice: AdviceSchema.parse(advice),
       evidence: AdviceDataSnapshotSchema.parse(advice.basedOn),
+      ...(brief === undefined ? {} : { brief }),
     };
   },
 });
