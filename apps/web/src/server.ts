@@ -30,6 +30,7 @@ import { MarketSettingsStore } from './market-settings.js';
 import { McpSettingsStore } from './mcp-settings.js';
 import { webPluginOperations } from './plugin-operations.js';
 import { startPostMarketScheduler } from './post-market-scheduler.js';
+import { startPremarketScheduler } from './premarket-scheduler.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerMarketRoutes } from './routes/market.js';
@@ -439,16 +440,23 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     ? new PluginTasks(ctx, createBuiltinPluginResources(webPluginOperations))
     : undefined;
   pluginTasks.current = tasks;
-  const schedulers: Array<{ readonly stop: () => unknown }> = schedulersEnabled
-    ? [
-        startPostMarketScheduler(ctx, { startImmediately: false }),
-        startDailyJudgmentScheduler(ctx, { startImmediately: false }),
-      ]
-    : [];
+  const schedulers: Array<{ readonly name: string; readonly stop: () => unknown }> =
+    schedulersEnabled
+      ? [
+          { name: 'post-market', ...startPostMarketScheduler(ctx, { startImmediately: false }) },
+          {
+            name: 'daily-judgment',
+            ...startDailyJudgmentScheduler(ctx, { startImmediately: false }),
+          },
+          { name: 'premarket', ...startPremarketScheduler(ctx, { startImmediately: false }) },
+        ]
+      : [];
   if (!schedulersEnabled) {
     console.warn(
       '后台调度未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true',
     );
+  } else {
+    console.log(`后台调度已启动：${schedulers.map((scheduler) => scheduler.name).join(', ')}`);
   }
   const host = options.host ?? '127.0.0.1';
   let server: ReturnType<typeof Bun.serve>;

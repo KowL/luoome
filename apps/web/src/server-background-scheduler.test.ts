@@ -34,15 +34,27 @@ afterAll(() => {
   }
 });
 
-const startOnce = async (options: Parameters<typeof startWeb>[0]): Promise<number> => {
+const startOnce = async (
+  options: Parameters<typeof startWeb>[0],
+): Promise<{ taskReady: number; logs: string[] }> => {
   const dir = mkdtempSync(join(tmpdir(), 'luoome-web-scheduler-'));
   setPluginEnabled(join(dir, 'plugins.json'), 'task.collect-market-snapshot', true);
   const previousHome = process.env.LUOOME_HOME;
   process.env.LUOOME_HOME = dir;
-  const handle = await startWeb({ ...options, dbPath: join(dir, 'local.db') });
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((arg) => String(arg)).join(' '));
+  };
+  let handle: Awaited<ReturnType<typeof startWeb>>;
+  try {
+    handle = await startWeb({ ...options, dbPath: join(dir, 'local.db') });
+  } finally {
+    console.log = originalLog;
+  }
   try {
     const task = handle.tasks?.status().find((row) => row.id === 'task.collect-market-snapshot');
-    return Number(task?.phase === 'ready');
+    return { taskReady: Number(task?.phase === 'ready'), logs };
   } finally {
     await handle.stop(true);
     if (previousHome === undefined) delete process.env.LUOOME_HOME;
@@ -52,16 +64,34 @@ const startOnce = async (options: Parameters<typeof startWeb>[0]): Promise<numbe
 };
 
 describe('startWeb 后台采集调度器', () => {
-  it('显式注入 exposeWrite + exposeExternal（无环境变量）时启动盘中批次采集', async () => {
-    expect(await startOnce({ port: 0, exposeWrite: true, exposeExternal: true })).toBe(1);
+  it('显式注入 exposeWrite + exposeExternal（无环境变量）时启动盘中批次采集与全部后台调度', async () => {
+    const { taskReady, logs } = await startOnce({
+      port: 0,
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    expect(taskReady).toBe(1);
+    const started = logs.find((line) => line.startsWith('后台调度已启动'));
+    expect(started).toBeDefined();
+    for (const name of ['post-market', 'daily-judgment', 'premarket']) {
+      expect(started).toContain(name);
+    }
   });
 
-  it('只注入 write 或只注入 external 时不启动采集', async () => {
-    expect(await startOnce({ port: 0, exposeWrite: true })).toBe(0);
-    expect(await startOnce({ port: 0, exposeExternal: true })).toBe(0);
+  it('只注入 write 或只注入 external 时不启动采集，也不启动任何后台调度', async () => {
+    for (const options of [
+      { port: 0, exposeWrite: true },
+      { port: 0, exposeExternal: true },
+    ]) {
+      const { taskReady, logs } = await startOnce(options);
+      expect(taskReady).toBe(0);
+      expect(logs.some((line) => line.startsWith('后台调度已启动'))).toBe(false);
+    }
   });
 
-  it('既未注入也未设置环境变量时不启动采集', async () => {
-    expect(await startOnce({ port: 0 })).toBe(0);
+  it('既未注入也未设置环境变量时不启动采集，也不启动任何后台调度', async () => {
+    const { taskReady, logs } = await startOnce({ port: 0 });
+    expect(taskReady).toBe(0);
+    expect(logs.some((line) => line.startsWith('后台调度已启动'))).toBe(false);
   });
 });

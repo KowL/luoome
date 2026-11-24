@@ -389,6 +389,44 @@ describe('generate_stock_briefs', () => {
     expect(briefs[0]?.missing.some((item) => item.dimension === 'quote')).toBe(true);
   });
 
+  it('phase=premarket：0 次 LLM，只写 rule-only brief，不写 advices', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { state, adapter } = countingLlm();
+    const ctx = withLlm(base, adapter);
+    const tradingDate = dateInShanghai(base.clock());
+
+    const result = await generateStockBriefsTool.execute(
+      { scope: 'all', phase: 'premarket', tradingDate },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(state.calls).toBe(0);
+    expect(result.data.phase).toBe('premarket');
+    expect(result.data.items.length).toBeGreaterThan(0);
+    expect(result.data.items.some((item) => item.action === 'llm')).toBe(false);
+    expect(
+      result.data.items.every(
+        (item) => item.action === 'rule-only' || item.action === 'unavailable',
+      ),
+    ).toBe(true);
+    expect(result.data.summary.llmHttpCalls).toBe(0);
+    expect(result.data.summary.tokens).toBe(0);
+    expect(result.data.summary.llmBriefs).toBe(0);
+    expect(result.data.summary.ruleOnlyBriefs).toBeGreaterThan(0);
+
+    expect(await base.repos.advice.query({})).toHaveLength(0);
+    const briefs = await briefsOf(base, tradingDate);
+    expect(briefs.length).toBe(result.data.items.length);
+    for (const brief of briefs) {
+      expect(brief.phase).toBe('premarket');
+      expect(['rule-only', 'unavailable']).toContain(brief.quality);
+      expect(brief.llmHttpCalls).toBe(0);
+      expect(brief.adviceId).toBeUndefined();
+    }
+  });
+
   it('business.analysis 未启用 → permission_denied（可见，不静默跳过）', async () => {
     const root = mkdtempSync(join(tmpdir(), 'luoome-briefs-'));
     roots.push(root);

@@ -575,6 +575,33 @@ export const generateStockBriefsTool = defineTool({
         return;
       }
 
+      if (input.phase === 'premarket') {
+        // 盘前禁止 LLM（design §9.1）：只落事实包 + 规则预筛的研究名单，0 次 HTTP、不写 advices。
+        await writeNonAiBrief(ctx, {
+          stockId: candidate.stockId,
+          tradingDate,
+          phase: input.phase,
+          accountId,
+          source,
+          quality: 'rule-only',
+          decision: draft.decision,
+          confidence: draft.confidence,
+          factDigest: prescreen.factDigest,
+          factsAsOf: summary.factsAsOf,
+          missing: summary.missing,
+          dataSources: summary.dataSources,
+        });
+        items.push({
+          ...base,
+          action: 'rule-only',
+          quality: 'rule-only',
+          decision: draft.decision,
+          confidence: draft.confidence,
+          reason: '盘前批次只做事实包与规则预筛，不调用 AI',
+        });
+        return;
+      }
+
       // include：先过预算守卫；任一硬限将触达则本票及后续全部按规则观察。
       const tokenEstimate = Math.max(maxTicketTokens, DEFAULT_TICKET_TOKEN_ESTIMATE);
       const decision = checkBriefBudget({
