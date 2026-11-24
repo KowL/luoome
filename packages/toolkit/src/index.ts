@@ -32,6 +32,7 @@ export * from './tools/get-intraday-summary.js';
 export * from './tools/get-market-data-status.js';
 export * from './tools/get-previous-closes.js';
 export * from './tools/get-report.js';
+export * from './tools/get-stock-facts.js';
 export * from './tools/get-stock-market-view.js';
 export * from './tools/get-stock-minute-bars.js';
 export * from './tools/get-stock-sector-memberships.js';

@@ -4,9 +4,10 @@ import { toolRegistry } from './registry.js';
 
 /** S4.1c：公共 Agent Tool 面（设计 §5.2 + 存储保留策略；2026-11-23 新增分时摘要与 DSL 校验）。 */
 const EXPECTED_TOOL_NAMES = [
-  // 1. 行情与盘面资讯（22）
+  // 1. 行情与盘面资讯（23）
   'search_stocks',
   'get_stock_market_view',
+  'get_stock_facts',
   'get_intraday_summary',
   'fetch_quote',
   'fetch_index_quotes',
@@ -163,9 +164,9 @@ const RETIRED_TOOL_NAMES = [
   'validate_strategy_version',
 ] as const;
 
-describe('toolRegistry（47 核心 Agent Tool）', () => {
+describe('toolRegistry（48 核心 Agent Tool）', () => {
   it(`恰好注册 ${EXPECTED_TOOL_NAMES.length} 个 tool，名字与设计 §5.2 + 新增只读工具一致`, () => {
-    expect(toolRegistry.all()).toHaveLength(47);
+    expect(toolRegistry.all()).toHaveLength(48);
     expect(toolRegistry.all()).toHaveLength(EXPECTED_TOOL_NAMES.length);
     expect(
       toolRegistry
@@ -173,7 +174,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
         .map((tool) => tool.name)
         .sort(),
     ).toEqual([...EXPECTED_TOOL_NAMES].sort());
-    expect(new Set(toolRegistry.all().map((tool) => tool.name)).size).toBe(47);
+    expect(new Set(toolRegistry.all().map((tool) => tool.name)).size).toBe(48);
   });
 
   it('get(name) 命中 / 未命中', () => {
@@ -189,7 +190,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
       expect(toolRegistry.get(name), name).toBeUndefined();
     }
     expect(RETIRED_TOOL_NAMES.length).toBe(99);
-    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(146);
+    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(147);
   });
 
   it('legacy、内部 commit/sync/migration tool 不进入公共 registry', () => {
@@ -261,6 +262,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
       'get_account_performance',
       'get_intraday_summary',
       'get_market_room_overview',
+      'get_stock_facts',
       'get_stock_market_view',
       'run_strategy',
       'sync_sector_catalog',
@@ -318,7 +320,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {
     const mcp = toolRegistry.toMCP();
-    expect(mcp).toHaveLength(47);
+    expect(mcp).toHaveLength(48);
     for (const descriptor of mcp) {
       expect(descriptor.name.length).toBeGreaterThan(0);
       expect(descriptor.description.length).toBeGreaterThan(0);
@@ -336,7 +338,7 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
 
   it('toOpenAI()：function calling 格式', () => {
     const openai = toolRegistry.toOpenAI();
-    expect(openai).toHaveLength(47);
+    expect(openai).toHaveLength(48);
     for (const descriptor of openai) {
       expect(descriptor.type).toBe('function');
       expect(descriptor.function.name.length).toBeGreaterThan(0);
@@ -345,9 +347,9 @@ describe('toolRegistry（47 核心 Agent Tool）', () => {
     }
   });
 
-  it('toTypeScript()：包含全部 47 个 tool 名与声明骨架', () => {
+  it('toTypeScript()：包含全部 48 个 tool 名与声明骨架', () => {
     const text = toolRegistry.toTypeScript();
-    expect(text).toContain('共 47 个 tool');
+    expect(text).toContain('共 48 个 tool');
     expect(text).toContain('export type LuoomeToolName =');
     expect(text).toContain('export declare const luoomeToolMeta:');
     for (const name of EXPECTED_TOOL_NAMES) {

@@ -42,6 +42,7 @@ import { getIntradaySummaryTool } from './tools/get-intraday-summary.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
+import { getStockFactsTool } from './tools/get-stock-facts.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockSectorMembershipsTool } from './tools/get-stock-sector-memberships.js';
@@ -306,6 +307,19 @@ export const sharedToolContributions = {
     tool: getStockMarketViewTool,
     agent: true,
     dependencies: ['market:quote', 'market:daily-bars', 'market:intraday-minutes'],
+  },
+  get_stock_facts: {
+    owner: 'business.market-data',
+    tool: getStockFactsTool,
+    agent: true,
+    dependencies: [
+      'market:quote',
+      'market:daily-bars',
+      'market:intraday-minutes',
+      'market:realtime-index',
+      'news',
+      'sectorQuote',
+    ],
   },
   get_market_snapshot_batch: {
     owner: 'shared-query',
