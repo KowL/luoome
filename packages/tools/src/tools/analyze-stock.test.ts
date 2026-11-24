@@ -779,4 +779,61 @@ describe('analyze_stock', () => {
     expect(briefs[0]?.llmHttpCalls).toBe(2);
     expect(briefs[0]?.missing.some((item) => item.dimension === 'llm')).toBe(true);
   });
+
+  it('brief 路径截断空输出：空字符串 / 截断 JSON 不得当结论，降级为 rule-only 且不写 advices', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const outputs = ['', '   ', '{"decision":"hold","confidence":50'];
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'truncated-output-llm',
+          generate: async <T>(): Promise<T> => {
+            const raw = outputs[Math.min(calls, outputs.length - 1)] ?? '';
+            calls += 1;
+            return raw as unknown as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        brief: {
+          tradingDate,
+          phase: 'post-market',
+          ruleOnlyDraft: {
+            decision: 'hold',
+            confidence: 20,
+            premise: '中性观察：规则 fallback。仅技术研究，不构成投资建议。',
+            evidence: ['规则 fallback：测试夹具'],
+            disclaimers: [...STANDARD_DISCLAIMERS],
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    expect(calls).toBe(ANALYZE_STOCK_MAX_ATTEMPTS);
+    expect(await baseCtx.repos.advice.query({ subjectId: '002594.SZ' })).toHaveLength(0);
+
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      accountId: TEST_ACCOUNT.id,
+      tradingDate,
+    });
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.quality).toBe('rule-only');
+    expect(briefs[0]?.decision).toBe('hold');
+    expect(briefs[0]?.adviceId).toBeUndefined();
+    expect(briefs[0]?.missing.some((item) => item.dimension === 'llm')).toBe(true);
+    expect(briefs[0]?.llmHttpCalls).toBe(ANALYZE_STOCK_MAX_ATTEMPTS);
+  });
 });
