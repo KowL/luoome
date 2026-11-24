@@ -6,6 +6,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { assumedEntryOf } from './settle-advices.js';
 
 /** 成绩单门禁：样本量与命中率下限（docs 与用户确认的唯一验收口径）。 */
 export const SCORECARD_MIN_SAMPLES = 50;
@@ -45,6 +46,34 @@ export const GetAdviceScorecardOutput = z.object({
   samples: z.number().int().nonnegative(),
   /** 窗口内已结算的规则观察条数（只单列，不进命中率分母）。 */
   ruleFallbackSamples: z.number().int().nonnegative(),
+  /** 窗口内规则观察（规则兜底 buy/sell）总条数；与已结算数一起单列。 */
+  ruleFallbackTotal: z.number().int().nonnegative(),
+  /** 应结算：股票 + buy/sell + 非规则兜底 + 已到 T+horizon 窗口。 */
+  eligible: z.number().int().nonnegative(),
+  /** 应结算中已有该档结算行的条数。 */
+  settledEligible: z.number().int().nonnegative(),
+  /** settledEligible / eligible；没有应结算样本时为 null。 */
+  coverage: z.number().min(0).max(1).nullable(),
+  /** 应结算但未覆盖的原因计数；missingBars 含日线不足该档。 */
+  uncovered: z.object({
+    missingEntry: z.number().int().nonnegative(),
+    missingBars: z.number().int().nonnegative(),
+  }),
+  /** 与同一窗口 repos.advice.query 重算对账用的分类计数。 */
+  reconciliation: z.object({
+    /** 窗口内建议总数（含全部 decision 与 subjectKind）。 */
+    windowAdvices: z.number().int().nonnegative(),
+    /** 股票且 buy/sell（含规则观察）。 */
+    buySellStock: z.number().int().nonnegative(),
+    /** 其中规则观察条数。 */
+    ruleFallback: z.number().int().nonnegative(),
+    /** 同条件但尚未到结算窗口。 */
+    notDue: z.number().int().nonnegative(),
+    /** 股票 hold/watch/avoid。 */
+    otherDecisions: z.number().int().nonnegative(),
+    /** 非股票主体。 */
+    nonStock: z.number().int().nonnegative(),
+  }),
   hitRate: z.number().min(0).max(1).nullable(),
   avgExcessPct: z.number().nullable(),
   groups: z.array(GroupSchema),
@@ -78,7 +107,7 @@ export const getAdviceScorecardTool = defineTool({
   handler: async (input, ctx) => {
     const windowEnd = ctx.clock();
     const windowStart = new Date(windowEnd.getTime() - input.days * DAY_MS);
-    const [settlements, advices] = await Promise.all([
+    const [settlements, advices, feedbacks] = await Promise.all([
       ctx.repos.adviceTracking.listSettlements({
         horizonDays: input.horizonDays,
         since: windowStart,
@@ -91,6 +120,7 @@ export const getAdviceScorecardTool = defineTool({
         until: windowEnd,
         limit: 5000,
       }),
+      ctx.repos.adviceTracking.listFeedbacks({ limit: 5000 }),
     ]);
     const fallbackIds = new Set(
       advices.filter((advice: Advice) => isRuleFallbackAdvice(advice)).map((advice) => advice.id),
@@ -110,6 +140,36 @@ export const getAdviceScorecardTool = defineTool({
         hit: settlement.hit,
         excessPct: settlement.excessPct,
       }));
+
+    const settledIds = new Set(settlements.map((settlement) => settlement.adviceId));
+    const fillPriceById = new Map(
+      feedbacks.flatMap((feedback) =>
+        feedback.fillPrice === undefined ? [] : [[feedback.adviceId, feedback.fillPrice] as const],
+      ),
+    );
+    const buySellStock = advices.filter(
+      (advice) =>
+        advice.subjectKind === 'stock' && (advice.decision === 'buy' || advice.decision === 'sell'),
+    );
+    const ruleFallbackAdvices = buySellStock.filter(isRuleFallbackAdvice);
+    const aiBuySell = buySellStock.filter((advice) => !isRuleFallbackAdvice(advice));
+    // 已到结算窗口：按自然日近似，与 scorecard 的 days 窗口一致；
+    // 已有结算行的（例如补算历史）直接视为到期，不让日历口径吞掉真实结算。
+    const dueCutoff = new Date(windowEnd.getTime() - input.horizonDays * DAY_MS);
+    const isDue = (advice: Advice): boolean =>
+      advice.createdAt.getTime() <= dueCutoff.getTime() || settledIds.has(advice.id);
+    const eligibleAdvices = aiBuySell.filter(isDue);
+    const uncoveredAdvices = eligibleAdvices.filter((advice) => !settledIds.has(advice.id));
+    const missingEntryAdvices = uncoveredAdvices.filter((advice) => {
+      const entry = fillPriceById.get(advice.id) ?? assumedEntryOf(advice);
+      return entry === null || entry <= 0;
+    });
+    const settledEligible = eligibleAdvices.length - uncoveredAdvices.length;
+    const otherDecisions = advices.filter(
+      (advice) =>
+        advice.subjectKind === 'stock' && advice.decision !== 'buy' && advice.decision !== 'sell',
+    ).length;
+    const nonStock = advices.filter((advice) => advice.subjectKind !== 'stock').length;
 
     const overall = stats(rows);
     const groups = (['<50', '50-69', '>=70'] as const).map((bucket) => ({
@@ -132,6 +192,22 @@ export const getAdviceScorecardTool = defineTool({
       benchmark: DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
       samples: overall.samples,
       ruleFallbackSamples,
+      ruleFallbackTotal: ruleFallbackAdvices.length,
+      eligible: eligibleAdvices.length,
+      settledEligible,
+      coverage: eligibleAdvices.length === 0 ? null : settledEligible / eligibleAdvices.length,
+      uncovered: {
+        missingEntry: missingEntryAdvices.length,
+        missingBars: uncoveredAdvices.length - missingEntryAdvices.length,
+      },
+      reconciliation: {
+        windowAdvices: advices.length,
+        buySellStock: buySellStock.length,
+        ruleFallback: ruleFallbackAdvices.length,
+        notDue: aiBuySell.length - eligibleAdvices.length,
+        otherDecisions,
+        nonStock,
+      },
       hitRate: overall.hitRate,
       avgExcessPct: overall.avgExcessPct,
       groups,

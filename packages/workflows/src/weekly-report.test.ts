@@ -128,6 +128,7 @@ describe('weekly-report 个股观察成绩', () => {
     );
     const text = textsOf(section ?? { blocks: [] }).join('\n');
     expect(text).toContain('没有已结算的观察样本');
+    expect(text).toContain('应结算 0 条');
     expect(text).toContain('不构成投资建议');
     expect(text).not.toMatch(/建仓|加仓|减仓|清仓|买入|卖出|满仓/);
   });
@@ -160,7 +161,14 @@ describe('weekly-report 个股观察成绩', () => {
     const byKey = Object.fromEntries(metrics.map((item) => [item.key, item.value]));
     expect(byKey.samples).toBe(2);
     expect(byKey.ruleFallbackSamples).toBe(1);
+    expect(byKey.ruleFallbackTotal).toBe(1);
+    expect(byKey.coverage).toBe(100);
+    expect(byKey.eligible).toBe(2);
+    expect(byKey.settledEligible).toBe(2);
     expect(byKey.hitRate).toBe(50);
+    const sectionText = textsOf(section ?? { blocks: [] }).join('\n');
+    expect(sectionText).toContain('结算覆盖率 100.0%');
+    expect(sectionText).toContain('规则观察（低置信）1 条、已结算 1 条');
 
     // 与同一窗口的成绩单同一口径。
     if (!result.ok) return;

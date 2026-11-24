@@ -192,7 +192,17 @@ const stockBriefScoreSection = async (
     now,
     'local/settlement',
   );
-  const ruleNote = `规则观察（低置信）${data.ruleFallbackSamples} 条：单列，不计入命中率分母`;
+  const ruleNote =
+    `规则观察（低置信）${data.ruleFallbackTotal} 条、已结算 ${data.ruleFallbackSamples} 条：` +
+    '单列，不计入命中率与结算覆盖率分母';
+  const coverageNote =
+    data.coverage === null
+      ? `应结算 ${data.eligible} 条、已结算 ${data.settledEligible} 条：暂无应结算样本，覆盖率不可用`
+      : `应结算 ${data.eligible} 条、已结算 ${data.settledEligible} 条：` +
+        `结算覆盖率 ${((data.coverage ?? 0) * 100).toFixed(1)}%` +
+        (data.uncovered.missingBars + data.uncovered.missingEntry === 0
+          ? ''
+          : `（未覆盖：缺日线 ${data.uncovered.missingBars} 条、缺入场价 ${data.uncovered.missingEntry} 条）`);
   if (data.samples === 0) {
     return {
       section: {
@@ -207,6 +217,7 @@ const stockBriefScoreSection = async (
             text:
               '个股观察成绩暂不可用 · 窗口内没有已结算的观察样本' +
               `（规则观察 ${data.ruleFallbackSamples} 条不计入命中率分母）。` +
+              `${coverageNote}。` +
               STOCK_BRIEF_SCORE_DISCLAIMER,
             tone: 'warning',
           },
@@ -237,7 +248,11 @@ const stockBriefScoreSection = async (
             { key: 'samples', label: '已结算观察', value: data.samples },
             { key: 'hitRate', label: '命中率', value: pct(data.hitRate), unit: 'pct' },
             { key: 'avgExcessPct', label: '平均超额', value: data.avgExcessPct, unit: 'pct' },
+            { key: 'coverage', label: '结算覆盖率', value: pct(data.coverage), unit: 'pct' },
+            { key: 'eligible', label: '应结算', value: data.eligible },
+            { key: 'settledEligible', label: '已结算', value: data.settledEligible },
             { key: 'ruleFallbackSamples', label: '规则观察', value: data.ruleFallbackSamples },
+            { key: 'ruleFallbackTotal', label: '规则观察总数', value: data.ruleFallbackTotal },
             { key: 'horizonDays', label: '口径', value: `T+${data.horizonDays}` },
             { key: 'benchmark', label: '基准', value: data.benchmark },
             { key: 'windowDays', label: '窗口', value: `${SCORECARD_DAYS} 天` },
@@ -258,6 +273,7 @@ const stockBriefScoreSection = async (
             avgExcessPct: group.avgExcessPct,
           })),
         },
+        { kind: 'text', text: coverageNote, tone: 'factual' },
         { kind: 'text', text: ruleNote, tone: 'factual' },
         { kind: 'text', text: STOCK_BRIEF_SCORE_DISCLAIMER, tone: 'factual' },
       ],
