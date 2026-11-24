@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DAILY_CANDIDATE_LIMIT,
   dailyAdviceWorkflow,
+  dailyJudgmentDisplay,
   HIGH_CONFIDENCE_THRESHOLD,
 } from './daily-advice.js';
 
@@ -177,6 +178,13 @@ const seedStrategy = async (
   await ctx.repos.strategy.create(strategy);
   await ctx.repos.strategy.createVersion(version);
 };
+
+describe('daily-advice 展示层文案', () => {
+  it('今日不动 / 今日可动只改给用户看的标签，枚举值不变', () => {
+    expect(dailyJudgmentDisplay('今日不动', 0)).toBe('今日无新信号');
+    expect(dailyJudgmentDisplay('今日可动', 2)).toBe('今日有 2 个信号');
+  });
+});
 
 describe('daily-advice workflow', () => {
   it('正常路径：每个活跃持仓一条建议 + 3 条 disclaimers + summary 自洽 + 信心度降序', async () => {

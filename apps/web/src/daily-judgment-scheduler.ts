@@ -8,6 +8,7 @@ import {
 import {
   type DailyAdviceOutput,
   dailyAdviceWorkflow,
+  dailyJudgmentDisplay,
   dailyStockBriefsWorkflow,
 } from '@luoome/workflows';
 
@@ -132,7 +133,10 @@ export const startDailyJudgmentScheduler = (
       }
       ctx.logger.info('当日判断调度完成', {
         tradingDay,
-        judgment: result.data.judgment.action,
+        judgment: dailyJudgmentDisplay(
+          result.data.judgment.action,
+          result.data.judgment.items.length,
+        ),
         total: result.data.summary.total,
       });
     } catch (error) {

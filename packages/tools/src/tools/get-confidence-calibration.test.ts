@@ -106,7 +106,7 @@ describe('get_confidence_calibration', () => {
             : { premise: 'fixture', evidence: [], counterEvidence: [] },
         risks: [],
         disclaimers: [
-          '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
+          '本建议由 AI 生成，基于历史数据与技术指标，仅技术研究，不构成投资建议。',
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],
@@ -200,7 +200,7 @@ describe('get_confidence_calibration', () => {
         reasoning: { premise: 'x', evidence: [], counterEvidence: [] },
         risks: [],
         disclaimers: [
-          '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
+          '本建议由 AI 生成，基于历史数据与技术指标，仅技术研究，不构成投资建议。',
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],
@@ -253,7 +253,7 @@ describe('get_confidence_calibration', () => {
         reasoning: { premise: 'x', evidence: [], counterEvidence: [] },
         risks: [],
         disclaimers: [
-          '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
+          '本建议由 AI 生成，基于历史数据与技术指标，仅技术研究，不构成投资建议。',
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],

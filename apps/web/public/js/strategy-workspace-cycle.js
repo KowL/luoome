@@ -12,6 +12,7 @@ import {
   runEligibility,
   stockIdentityLink,
 } from './strategy-workspace-shared.js';
+import { decisionLabel } from './ui.js';
 
 const featureCache = createFeatureCache();
 const { cachedGet } = featureCache;
@@ -170,7 +171,11 @@ const renderCycleCard = (cycle, strategyId) => {
                   ].join(' · ');
             return el('article', 'strategy-cycle-advice-row', [
               el('div', 'strategy-cycle-stage-head', [
-                el('strong', null, `${advice.decision} · confidence ${advice.confidence}/100`),
+                el(
+                  'strong',
+                  null,
+                  `${decisionLabel(advice.decision)} · confidence ${advice.confidence}/100`,
+                ),
                 el('span', 'badge badge-neutral', `阶段 ${trigger}`),
               ]),
               el('p', null, advice.reasoning?.premise ?? '无 Advice premise'),

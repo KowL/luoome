@@ -49,7 +49,7 @@ export const adviceExpiryDays: Record<AdviceHorizon, number> = {
 // ---------- 免责声明（docs/archive/MVP-TASK.md §2.3，恰好 3 条，硬约束） ----------
 
 export const STANDARD_DISCLAIMERS = [
-  '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
+  '本建议由 AI 生成，基于历史数据与技术指标，仅技术研究，不构成投资建议。',
   '投资有风险，决策需自行承担。',
   '市场有不可预测性，过往表现不代表未来收益。',
 ] as const;
@@ -377,32 +377,58 @@ export const AdviceQuerySchema = z.object({
   limit: z.number().int().positive().optional(),
 });
 
+/** design §12.2：decision 枚举不改名，只在展示层映射为信号 / 观察词表。 */
+export const ADVICE_DECISION_DISPLAY: Readonly<Record<AdviceDecision, string>> = {
+  buy: '偏多信号',
+  sell: '偏空信号',
+  hold: '中性观察',
+  watch: '待确认观察',
+  avoid: '回避观察',
+};
+
+export const adviceDecisionDisplay = (decision: AdviceDecision): string =>
+  ADVICE_DECISION_DISPLAY[decision];
+
+export interface AdvicePriceFields {
+  readonly entryPrice?: number | undefined;
+  readonly entryPriceLow?: number | undefined;
+  readonly entryPriceHigh?: number | undefined;
+  readonly stopLoss?: number | undefined;
+  readonly targetPrice?: number | undefined;
+  readonly targetPositionPct?: number | undefined;
+}
+
+/** 价格字段展示名（design §12.2）：后端字段不改名，这里只做展示映射。 */
+export const advicePriceDisplay = (advice: AdvicePriceFields): string[] => [
+  ...(advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
+    ? [`观察区间 ${advice.entryPriceLow.toFixed(2)}–${advice.entryPriceHigh.toFixed(2)}`]
+    : advice.entryPrice !== undefined
+      ? [`区间参考点 ${advice.entryPrice.toFixed(2)}`]
+      : []),
+  ...(advice.stopLoss === undefined ? [] : [`风险位 ${advice.stopLoss.toFixed(2)}`]),
+  ...(advice.targetPrice === undefined ? [] : [`参考位 ${advice.targetPrice.toFixed(2)}`]),
+  ...(advice.targetPositionPct === undefined
+    ? []
+    : [`仓位参考 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
+];
+
+export const ADVICE_RESEARCH_DISCLAIMER = '仅技术研究，不构成投资建议。';
+
 export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>): string => {
-  if (isRuleFallbackAdvice(advice)) return 'AI 分析未完成，仅有规则兜底，暂不形成交易判断。';
-  const decision = {
-    buy: '考虑买入',
-    sell: '考虑卖出',
-    hold: '持有观察',
-    watch: '等待确认',
-    avoid: '暂时回避',
-  }[advice.decision];
-  const prices = [
-    ...(advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
-      ? [`入场 ${advice.entryPriceLow.toFixed(2)}–${advice.entryPriceHigh.toFixed(2)}`]
-      : advice.entryPrice !== undefined
-        ? [`参考买点 ${advice.entryPrice.toFixed(2)}`]
-        : []),
-    ...(advice.stopLoss === undefined ? [] : [`止损 ${advice.stopLoss.toFixed(2)}`]),
-    ...(advice.targetPrice === undefined ? [] : [`目标 ${advice.targetPrice.toFixed(2)}`]),
-  ];
+  if (isRuleFallbackAdvice(advice)) {
+    return [
+      '**规则观察（低置信）** · AI 分析不可用，仅展示确定性规则结果。',
+      ADVICE_RESEARCH_DISCLAIMER,
+    ].join('\n');
+  }
+  const decision = adviceDecisionDisplay(advice.decision);
+  const prices = advicePriceDisplay(advice);
   return [
     `**${decision}** · ${notificationText(advice.reasoning.premise, 100) || '请核对完整研究结论'}`,
     ...(prices.length === 0 ? [] : [prices.join(' · ')]),
-    ...(advice.targetPositionPct === undefined
-      ? []
-      : [`目标仓位 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
     `反证：${notificationText(advice.reasoning.counterEvidence.join('；'), 100) || '未提供，需人工核对'}`,
     `风险：${notificationText(advice.risks.join('；'), 100) || '未提供，需人工核对'}`,
     `数据 ${notificationTime(advice.basedOn.dataAsOf)} · 有效至 ${notificationTime(advice.validUntil)}（北京时间）`,
+    ADVICE_RESEARCH_DISCLAIMER,
   ].join('\n');
 };

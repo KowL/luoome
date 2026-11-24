@@ -184,7 +184,8 @@ export const groundStrategyAdviceRisks = (risks: readonly string[]): readonly st
 export const analyzeStrategyCandidateTool = defineTool({
   name: 'analyze_strategy_candidate',
   description:
-    '对策略股票池中的已入选股票，结合 StrategyResult、StrategySignal 和 T+n 观察生成可追溯 Advice',
+    '对策略股票池中的已入选股票，结合 StrategyResult、StrategySignal 和 T+n 观察生成可追溯的研究观察记录；' +
+    '仅技术研究，不构成投资建议',
   sideEffect: 'advice',
   input: AnalyzeStrategyCandidateInput,
   output: AnalyzeStrategyCandidateOutput,

@@ -61,19 +61,35 @@ const isRuleFallbackAdvice = (advice) => {
   );
 };
 
-/** 决策 → 配色 / 中文标签。 */
+/** 决策 → 配色 / 研究观察标签（design §12.2；后端枚举不改名）。 */
 const DECISIONS = {
-  buy: { cls: 'badge-buy', label: '买入' },
-  sell: { cls: 'badge-sell', label: '卖出' },
-  hold: { cls: 'badge-hold', label: '持有' },
-  watch: { cls: 'badge-watch', label: '观望' },
-  avoid: { cls: 'badge-avoid', label: '回避' },
+  buy: { cls: 'badge-buy', label: '偏多信号' },
+  sell: { cls: 'badge-sell', label: '偏空信号' },
+  hold: { cls: 'badge-hold', label: '中性观察' },
+  watch: { cls: 'badge-watch', label: '待确认观察' },
+  avoid: { cls: 'badge-avoid', label: '回避观察' },
 };
+
+const decisionLabel = (decision) => (DECISIONS[decision] ?? { label: decision }).label;
 
 const decisionBadge = (decision) => {
   const cfg = DECISIONS[decision] ?? { cls: '', label: decision };
   return el('span', `badge ${cfg.cls}`, cfg.label);
 };
+
+/** 价格字段展示名（design §12.2）；后端字段名不变。 */
+const adviceLevelLines = (advice) => [
+  ...(advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
+    ? [`观察区间 ${advice.entryPriceLow.toFixed(2)}–${advice.entryPriceHigh.toFixed(2)}`]
+    : advice.entryPrice !== undefined
+      ? [`区间参考点 ${advice.entryPrice.toFixed(2)}`]
+      : []),
+  ...(advice.stopLoss === undefined ? [] : [`风险位 ${advice.stopLoss.toFixed(2)}`]),
+  ...(advice.targetPrice === undefined ? [] : [`参考位 ${advice.targetPrice.toFixed(2)}`]),
+  ...(advice.targetPositionPct === undefined
+    ? []
+    : [`仓位参考 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
+];
 
 /** 信心度条（0-100 → 进度条 + 文字）。 */
 const confidenceBar = (value) => {
@@ -218,6 +234,17 @@ const adviceCard = (advice, options = {}) => {
   );
   const row1 = el('div', 'row-1', row1Parts);
   card.append(row1);
+
+  const levels = adviceLevelLines(advice);
+  if (levels.length > 0) {
+    card.append(
+      el(
+        'div',
+        'advice-levels',
+        levels.map((line) => el('span', 'advice-level', line)),
+      ),
+    );
+  }
 
   // premise
   if (premise.length > 0) card.append(el('p', 'premise', premise));
@@ -545,6 +572,7 @@ const resultErrorText = (result, fallback) => toolErrorText(result?.error, fallb
 export {
   $,
   adviceCard,
+  adviceLevelLines,
   adviceScorecardNode,
   adviceSubjectLine,
   adviceSubjectModel,
@@ -553,6 +581,7 @@ export {
   createPagination,
   DECISIONS,
   decisionBadge,
+  decisionLabel,
   el,
   feedbackBar,
   fmtDateTime,

@@ -16,8 +16,7 @@ import { defineTool } from '../define-tool.js';
  * 展示层文案统一在这里映射，后端 `decision` 枚举保持不变。
  */
 
-export const BRIEF_DISCLAIMER =
-  '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。';
+export const BRIEF_DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
 export const StockBriefWordingLabelSchema = z.enum([
   '偏多信号',
@@ -170,7 +169,7 @@ export const getStockBriefTool = defineTool({
   name: 'get_stock_brief',
   description:
     '读取某只股票的当日（或指定交易日）观察记录：结论、置信度、缺失维度、对应建议与展示用词。' +
-    '只读本地记录，不触发 AI 生成；本内容为技术研究记录，不构成投资建议。',
+    '只读本地记录，不触发 AI 生成；本内容仅技术研究，不构成投资建议。',
   sideEffect: 'read',
   input: GetStockBriefInput,
   output: GetStockBriefOutput,

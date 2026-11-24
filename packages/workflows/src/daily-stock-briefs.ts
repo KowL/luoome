@@ -45,7 +45,8 @@ export const dailyStockBriefsWorkflow = defineWorkflow<
 >({
   name: DAILY_STOCK_BRIEFS_WORKFLOW_NAME,
   description:
-    '盘后每日个股观察批量：候选集 → 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库并汇总 coverage/budget',
+    '盘后每日个股观察批量：候选集 → 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库并汇总 coverage/budget；' +
+    '仅技术研究，不构成投资建议',
   input: DailyStockBriefsInput,
   steps: [
     // 1) 先落 running 审计行，保证超时/中断也能在 workflow_runs 里看到。

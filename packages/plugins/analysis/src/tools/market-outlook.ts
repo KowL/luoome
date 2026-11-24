@@ -130,7 +130,9 @@ const collectQuotes = async (
  */
 export const marketOutlookTool = defineTool({
   name: 'market_outlook',
-  description: '大盘 / 板块观点（基于最近 N 日涨幅 + LLM 推理），输出结构化 Advice 持久化',
+  description:
+    '大盘 / 板块研究与观察（基于最近 N 日涨幅 + LLM 推理），输出结构化观察记录并持久化；' +
+    '仅技术研究，不构成投资建议',
   sideEffect: 'advice',
   input: MarketOutlookInput,
   output: MarketOutlookOutput,

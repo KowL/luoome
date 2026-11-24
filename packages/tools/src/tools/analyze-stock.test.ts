@@ -454,9 +454,8 @@ describe('analyze_stock', () => {
     expect(system).toContain('禁止引用未出现数字');
     expect(system).toContain('不构成投资建议');
     expect(system).toContain('不要输出推理过程，只输出 JSON');
-    for (const verb of ['建仓', '加仓', '减仓', '清仓', '买入', '卖出', '满仓']) {
-      expect(system).toContain(verb);
-    }
+    expect(system).toContain('design §12.2');
+    expect(system).not.toMatch(/建议买入|建议卖出|建仓|加仓|减仓|清仓|满仓/);
 
     // 单票 P95 ≤ 90 s 的目标靠「每次 60 s + 最多 2 次尝试」守住，不往下调预算。
     expect(ANALYZE_STOCK_MAX_OUTPUT_TOKENS).toBe(4096);

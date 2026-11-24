@@ -314,7 +314,7 @@
           <div class="card-header">
             <div>
               <h2>今日观察</h2>
-              <div class="card-meta" id="market-brief-meta">只读观察记录 · 不构成投资建议</div>
+              <div class="card-meta" id="market-brief-meta">只读观察记录 · 仅技术研究，不构成投资建议</div>
             </div>
             <div class="row-actions">
               <button id="market-brief-refresh" class="btn btn-outline btn-sm" type="button">刷新今日观察</button>
@@ -470,6 +470,7 @@
         </div>
         <div class="card mt-4">
           <div id="watchlists-view" class="entity-list"><p class="placeholder">加载中…</p></div>
+          <p class="route-disclaimer">本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。</p>
         </div>
         <div class="card mt-4" id="watchlists-today-pane">
           <div class="card-header"><h2>今日变化</h2></div>
@@ -520,17 +521,18 @@
             <div class="card-meta">
               <select id="advice-filter">
                 <option value="all">全部</option>
-                <option value="buy">买入</option>
-                <option value="sell">卖出</option>
-                <option value="hold">持有</option>
-                <option value="watch">观望</option>
-                <option value="avoid">回避</option>
+                <option value="buy">偏多信号</option>
+                <option value="sell">偏空信号</option>
+                <option value="hold">中性观察</option>
+                <option value="watch">待确认观察</option>
+                <option value="avoid">回避观察</option>
               </select>
               <button id="btn-advice-delete-mode" class="btn btn-outline btn-sm" type="button">删除</button>
             </div>
           </div>
           <div id="advice-batch-bar" class="batch-bar" hidden></div>
           <div id="advice-full-list"><p class="placeholder">加载中…</p></div>
+          <p class="route-disclaimer">本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。</p>
         </div>
       </section>
 
@@ -725,7 +727,7 @@
                   <button id="chat-send" class="btn btn-primary chat-send" type="submit" aria-label="发送" title="发送（Enter）"><span class="chat-send-label">发送</span><span class="chat-send-arrow" aria-hidden="true">↑</span></button>
                 </div>
               </form>
-              <p class="chat-boundary">助手不会自动下单；AI 分析不构成投资建议。</p>
+              <p class="chat-boundary">助手不会自动下单；AI 分析仅技术研究，不构成投资建议。</p>
             </div>
           </div>
           <aside id="chat-evidence-panel" class="chat-evidence-panel" role="tabpanel" aria-label="研究上下文与证据" hidden>

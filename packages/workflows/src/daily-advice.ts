@@ -86,6 +86,13 @@ export const DailyAdviceOutput = z.object({
   summary: DailyAdviceSummary,
 });
 export type DailyAdviceOutput = z.infer<typeof DailyAdviceOutput>;
+export type DailyAdviceJudgmentAction = z.infer<typeof JudgmentSchema>['action'];
+
+/** design §12.2：枚举值不变，只在给用户看的标签上换名词。 */
+export const dailyJudgmentDisplay = (
+  action: DailyAdviceJudgmentAction,
+  signalCount: number,
+): string => (action === '今日不动' ? '今日无新信号' : `今日有 ${signalCount} 个信号`);
 
 type AnalyzedAdvice = z.output<typeof AdviceSchema>;
 type HoldingRow = { holding: { stockId: string } };
@@ -198,7 +205,10 @@ const judgmentOf = (
   stocks: ReadonlyMap<string, string>,
 ): z.infer<typeof JudgmentSchema> => {
   const items = advices
-    .filter((advice) => advice.decision === 'buy' || advice.decision === 'sell')
+    .filter(
+      (advice) =>
+        (advice.decision === 'buy' || advice.decision === 'sell') && !isRuleFallbackAdvice(advice),
+    )
     .map((advice) => ({
       stockId: advice.subjectId,
       name: stocks.get(advice.subjectId) ?? advice.subjectId,
@@ -209,13 +219,13 @@ const judgmentOf = (
   if (items.length === 0) {
     return {
       action: '今日不动',
-      reason: '持仓与候选池今日均无可执行动作，维持原状态；下一交易日复核。',
+      reason: '今日无新信号：持仓与候选池均未出现偏多/偏空信号，维持原状态；下一交易日复核。',
       items: [],
     };
   }
   return {
     action: '今日可动',
-    reason: `今日有 ${items.length} 个可执行动作，按 confidence 从高到低处理。`,
+    reason: `今日有 ${items.length} 个信号，按 confidence 从高到低复核。`,
     items,
   };
 };
@@ -400,7 +410,9 @@ const judgmentFromBriefs = (
  */
 export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceOutput>({
   name: DAILY_ADVICE_WORKFLOW_NAME,
-  description: '盘后判断：活跃持仓 + 候选池（≤10 只）逐只生成建议，输出「今日不动/今日可动」结论',
+  description:
+    '盘后判断：活跃持仓 + 候选池（≤10 只）逐只生成观察，输出「今日无新信号 / 今日有 N 个信号」结论；' +
+    '仅技术研究，不构成投资建议',
   input: DailyAdviceInput,
   steps: [
     // 1) 拉活跃持仓（含 PnL 汇总）；accountId 缺省走 ctx.user.defaultAccountId。

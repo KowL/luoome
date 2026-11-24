@@ -35,7 +35,8 @@ export const AnalyzePositionOutput = z.object({
 export const analyzePositionTool = defineTool({
   name: 'analyze_position',
   description:
-    '对单个持仓给出继续持有 / 加仓 / 减仓 / 清仓建议（持仓上下文 → LLM → 结构化 Advice）并持久化',
+    '对单个持仓做技术研究与观察分析（持仓上下文 → LLM → 结构化观察记录）并持久化；' +
+    '仅技术研究，不构成投资建议',
   sideEffect: 'advice',
   input: AnalyzePositionInput,
   output: AnalyzePositionOutput,

@@ -112,7 +112,7 @@ export const listStockBriefsTool = defineTool({
   name: 'list_stock_briefs',
   description:
     '按交易日 / 账户 / 关注列表 / 股票查询每日观察记录，返回结论、质量、缺失维度与当日 AI 用量预算；' +
-    '只读本地记录，不触发 AI 生成；本内容为技术研究记录，不构成投资建议。',
+    '只读本地记录，不触发 AI 生成；本内容仅技术研究，不构成投资建议。',
   sideEffect: 'read',
   input: ListStockBriefsInput,
   output: ListStockBriefsOutput,

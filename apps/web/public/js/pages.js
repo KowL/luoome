@@ -40,6 +40,7 @@ import {
   compareValues,
   createPagination,
   decisionBadge,
+  decisionLabel,
   el,
   fmtDateTime,
   fmtNum,
@@ -1173,7 +1174,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
     return acc;
   }, {});
   const decisionSummary = Object.entries(byDecision)
-    .map(([decision, count]) => `${decision}×${count}`)
+    .map(([decision, count]) => `${decisionLabel(decision)}×${count}`)
     .join(' · ');
   $('#dash-advice-meta').textContent =
     adviceData === null
@@ -2863,7 +2864,7 @@ const renderReview = async (setStatus) => {
   // 趋势图：当前接口按决策维度聚合，保持事实口径，不创建演示数据。
   const decisionData = Object.entries(stats.byDecision ?? {})
     .filter(([, s]) => s.hitRate !== null)
-    .map(([decision, s]) => ({ label: decision, hitRate: s.hitRate }));
+    .map(([decision, s]) => ({ label: decisionLabel(decision), hitRate: s.hitRate }));
   renderTrend(decisionData);
 
   const performanceRefresh = $('#btn-review-performance-refresh');
@@ -2902,7 +2903,8 @@ const renderReview = async (setStatus) => {
         li.append(
           el('div', 'row-1', [
             adviceSubjectLine(a),
-            el('span', 'badge', `${a.decision} · 信心 ${a.confidence}%`),
+            decisionBadge(a.decision),
+            el('span', 'muted', `信心 ${a.confidence}%`),
           ]),
         );
         li.append(el('p', 'premise', a.reasoning?.premise ?? ''));

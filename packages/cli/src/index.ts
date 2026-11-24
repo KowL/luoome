@@ -3,7 +3,12 @@
 // 子命令清单见 printHelp()；mcp / web 为懒加载（对应包由 W4a/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
-import { resolveExposure, STANDARD_DISCLAIMERS } from '@luoome/core';
+import {
+  adviceDecisionDisplay,
+  advicePriceDisplay,
+  resolveExposure,
+  STANDARD_DISCLAIMERS,
+} from '@luoome/core';
 import {
   BRIEF_DISCLAIMER,
   checkPluginConfig,
@@ -672,6 +677,12 @@ interface AdviceView {
   readonly confidence: number;
   readonly horizon: string;
   readonly sourceTool?: string;
+  readonly entryPrice?: number | undefined;
+  readonly entryPriceLow?: number | undefined;
+  readonly entryPriceHigh?: number | undefined;
+  readonly stopLoss?: number | undefined;
+  readonly targetPrice?: number | undefined;
+  readonly targetPositionPct?: number | undefined;
   readonly reasoning: { readonly premise: string };
   readonly validUntil: unknown;
 }
@@ -715,13 +726,14 @@ const cmdAdviceList = async (
     }
     console.log(
       renderTable(
-        ['ID', 'SUBJECT', 'DECISION', 'CONF', 'HORIZON', 'VALID_UNTIL', 'PREMISE'],
+        ['ID', 'SUBJECT', 'SIGNAL', 'CONF', 'HORIZON', 'LEVELS', 'VALID_UNTIL', 'PREMISE'],
         data.advices.map((a) => [
           truncateDisplay(a.id, 20),
           `${a.subjectKind}:${a.subjectId}`,
-          a.decision,
+          adviceDecisionDisplay(a.decision as Parameters<typeof adviceDecisionDisplay>[0]),
           String(a.confidence),
           a.horizon,
+          advicePriceDisplay(a).join(' · ') || '-',
           fmtDateTime(a.validUntil),
           truncateDisplay(a.reasoning.premise, 48),
         ]),
@@ -1232,7 +1244,7 @@ Brief（个股观察）:
                                查看单只股票的观察、证据、缺失维度与免责声明
   brief run [--scope holdings|watchlist|signals|stock] [--stock <id>] [--force] [--json]
                                生成每日观察批次；需要 LUOOME_EXPOSE_EXTERNAL=true
-                               观察与信号均为技术研究记录，不构成投资建议
+                               观察与信号仅技术研究，不构成投资建议
 
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）

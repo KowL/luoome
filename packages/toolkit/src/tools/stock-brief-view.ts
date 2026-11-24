@@ -88,7 +88,7 @@ export type StockBriefListDegradation = z.infer<typeof StockBriefListDegradation
 export const BRIEF_PLUGIN_DISABLED_DEGRADATION: StockBriefListDegradation = {
   reason: 'plugin_disabled',
   message:
-    '个股分析插件未启用（plugins.json）：仅展示既有规则观察，生成能力不可用；本内容不构成投资建议。',
+    '个股分析插件未启用（plugins.json）：仅展示既有规则观察，生成能力不可用；仅技术研究，不构成投资建议。',
 };
 
 export const stockBriefDegradationOf = (

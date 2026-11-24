@@ -30,6 +30,7 @@ import {
   pushRecentView,
 } from './market-shared.js';
 import {
+  BRIEF_DISCLAIMER,
   briefDateKey,
   briefGenerateFeedback,
   manualRefreshAllowed,
@@ -475,10 +476,10 @@ const briefFallbackView = (stockId) => ({
   wording: {
     label: '暂无观察',
     detail: '今日没有该标的的观察记录；可点「刷新今日观察」由用户显式触发生成。',
-    disclaimer: '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。',
+    disclaimer: BRIEF_DISCLAIMER,
     isRuleOnly: false,
   },
-  disclaimer: '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。',
+  disclaimer: BRIEF_DISCLAIMER,
   isRuleOnly: false,
   evidence: [],
   missing: [],

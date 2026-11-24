@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ADVICE_RESEARCH_DISCLAIMER,
   AdviceOutcomeSchema,
   AdviceQuerySchema,
   AdviceSchema,
+  adviceDecisionDisplay,
+  adviceNotificationSummary,
+  advicePriceDisplay,
   isAdviceQuoteCurrent,
   STANDARD_DISCLAIMERS,
   StrategyAdviceAnalysisSchema,
@@ -180,5 +184,84 @@ describe('新策略建议契约', () => {
       source,
     });
     expect(isAdviceQuoteCurrent(quote, new Date(now))).toBe(expected);
+  });
+});
+
+describe('design §12.2 展示层文案', () => {
+  const adviceFixture = (overrides: Record<string, unknown> = {}) =>
+    AdviceSchema.parse({
+      id: 'adv-display',
+      subjectKind: 'stock',
+      subjectId: '600519.SH',
+      decision: 'buy',
+      confidence: 65,
+      horizon: 'short',
+      entryPriceLow: 98,
+      entryPriceHigh: 103,
+      entryPrice: 100,
+      stopLoss: 95,
+      targetPrice: 112,
+      targetPositionPct: 10,
+      reasoning: {
+        premise: '偏多条件成立',
+        evidence: ['放量突破'],
+        counterEvidence: ['跌破风险位则失效'],
+      },
+      risks: ['回撤风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      basedOn: { dataAsOf: NOW_ISO },
+      validFrom: NOW_ISO,
+      validUntil: '2026-07-22T02:00:00.000Z',
+      createdAt: NOW_ISO,
+      ...overrides,
+    });
+
+  it('decision 只在展示层映射为信号词表，枚举值不变', () => {
+    expect(adviceDecisionDisplay('buy')).toBe('偏多信号');
+    expect(adviceDecisionDisplay('sell')).toBe('偏空信号');
+    expect(adviceDecisionDisplay('hold')).toBe('中性观察');
+    expect(adviceDecisionDisplay('watch')).toBe('待确认观察');
+    expect(adviceDecisionDisplay('avoid')).toBe('回避观察');
+  });
+
+  it('价格字段展示名不使用后端字段名或操作动词', () => {
+    const lines = advicePriceDisplay(adviceFixture());
+    expect(lines).toEqual([
+      '观察区间 98.00–103.00',
+      '风险位 95.00',
+      '参考位 112.00',
+      '仓位参考 10.0%（占账户总资产）',
+    ]);
+    expect(lines.join(' · ')).not.toMatch(/入场|买点|止损|目标|建仓|加仓|减仓|清仓|满仓/);
+  });
+
+  it('通知摘要使用信号词表、展示价格名，并带研究免责声明', () => {
+    const summary = adviceNotificationSummary(adviceFixture());
+    expect(summary).toContain('**偏多信号**');
+    expect(summary).toContain('观察区间 98.00–103.00');
+    expect(summary).toContain('风险位 95.00');
+    expect(summary).toContain('参考位 112.00');
+    expect(summary).toContain('仓位参考 10.0%（占账户总资产）');
+    expect(summary).toContain(ADVICE_RESEARCH_DISCLAIMER);
+    expect(summary).not.toMatch(/建议买入|建议卖出|建仓|加仓|减仓|清仓|满仓/);
+  });
+
+  it('规则兜底摘要是规则观察（低置信），并保留免责声明', () => {
+    const summary = adviceNotificationSummary(
+      adviceFixture({
+        decision: 'hold',
+        reasoning: {
+          premise: 'LLM 推理不可用：规则 fallback',
+          evidence: ['规则 fallback'],
+          counterEvidence: [],
+        },
+      }),
+    );
+    expect(summary).toContain('规则观察（低置信）');
+    expect(summary).toContain('仅技术研究，不构成投资建议');
+  });
+
+  it('标准免责声明包含「仅技术研究，不构成投资建议」', () => {
+    expect(STANDARD_DISCLAIMERS.join('\n')).toContain('仅技术研究，不构成投资建议');
   });
 });

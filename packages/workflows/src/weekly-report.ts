@@ -165,7 +165,7 @@ const scorecardSection = async (ctx: WorkflowContext, now: Date): Promise<Report
 /** 新增「个股观察成绩」section；与既有「建议成绩单」并存，不改其语义。 */
 const STOCK_BRIEF_SCORE_KEY = 'stock-brief-score';
 const STOCK_BRIEF_SCORE_DISCLAIMER =
-  '本内容为技术研究记录，不构成投资建议；观察与信号不等于收益概率，规则观察不计入命中率分母。';
+  '本内容仅技术研究，不构成投资建议；观察与信号不等于收益概率，规则观察不计入命中率分母。';
 
 const stockBriefScoreSection = async (
   ctx: WorkflowContext,

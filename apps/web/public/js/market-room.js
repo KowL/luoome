@@ -93,6 +93,7 @@ const EMPTY_STATE_TEXTS = {
 const COVERAGE_LABELS = { CN_A_SHARES_SH_SZ: '沪深 A 股', CN_A_SHARES_BJ: '北交所' };
 
 const REFRESH_MS = 60_000;
+const ROOM_DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
 let roomEpoch = 0;
 let roomTimer = null;
@@ -927,6 +928,7 @@ const ensureShell = (section) => {
     el('p', 'room-meta', '--'),
     replayBar(),
     el('div', 'room-pane'),
+    el('p', 'room-disclaimer', ROOM_DISCLAIMER),
   ]);
 };
 
@@ -1078,6 +1080,7 @@ export {
   divergenceText,
   emptyStateText,
   overviewMetaText,
+  ROOM_DISCLAIMER,
   renderMarketRoom,
   roomHash,
   roomTabFromHash,

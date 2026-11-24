@@ -14,7 +14,7 @@
 import { el, resultErrorText } from './ui.js';
 
 /** 与 toolkit `BRIEF_DISCLAIMER` 同一段文字（前端无包依赖，保持逐字一致）。 */
-const BRIEF_DISCLAIMER = '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。';
+const BRIEF_DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
 const CONFIDENCE_NOTE = 'confidence 是主观信心度，不是收益概率。';
 

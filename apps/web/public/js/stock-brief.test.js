@@ -26,7 +26,7 @@ import {
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
-const DISCLAIMER = '本内容为技术研究记录，不构成投资建议；投资有风险，决策需自行承担。';
+const DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
 const viewFixture = (overrides = {}) => ({
   stockId: '002594.SZ',
