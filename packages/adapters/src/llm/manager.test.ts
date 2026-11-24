@@ -105,6 +105,37 @@ describe('llm/manager', () => {
       expect(real.capturedSystems[1] ?? '').toContain('Retry hint');
     });
 
+    it('policy.managerRetry=false 时不重试也不走 fallback，HTTP 次数≤1', async () => {
+      const real = new StubAdapter('real-stub');
+      real.failMode = 'throw';
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
+      await expect(
+        mgr.generate<ParsedAdvice>({
+          system: 's',
+          schema: TestSchema,
+          data: {},
+          policy: { managerRetry: false, providerRetries: 0 },
+        }),
+      ).rejects.toThrow('stub fail');
+      expect(real.callCount).toBe(1);
+    });
+
+    it('policy.providerRetries 随 retry 请求保留', async () => {
+      const real = new StubAdapter('real-stub');
+      real.failOnce = new Error('first fail');
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
+      await mgr.generate<ParsedAdvice>({
+        system: 's',
+        schema: TestSchema,
+        data: {},
+        policy: { providerRetries: 0 },
+      });
+
+      expect(real.requests[1]?.policy).toEqual({ providerRetries: 0 });
+    });
+
     it('超时失败 → 重试时放大 timeoutMs', async () => {
       const real = new StubAdapter('real-stub');
       real.failOnce = new LLMTimeoutError('模型调用超时（timeoutMs=60000）');

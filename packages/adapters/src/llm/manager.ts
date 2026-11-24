@@ -128,6 +128,9 @@ export class LLMManager implements LLMAdapter {
       });
     }
 
+    // 调用方显式关闭 manager 重试时直接抛错，由外层 attempt 循环控制总请求数（每票 ≤2）。
+    if (request.policy?.managerRetry === false) throw firstError;
+
     // 重试一次：system 提示追加「上一轮未符合 schema，请重试」；
     // 推理模型把预算吃在 reasoning 上或上一轮超时时，同时放大预算 / 超时。
     if (request.schema !== undefined) {
@@ -170,6 +173,7 @@ export class LLMManager implements LLMAdapter {
       data: request.data,
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(request.policy === undefined ? {} : { policy: request.policy }),
     };
   }
 

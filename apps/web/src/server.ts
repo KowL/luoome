@@ -9,7 +9,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { type Exposure, resolveExposure, type ToolContext, type ToolResult } from '@luoome/core';
-import { createBuiltinPluginResources, toolRegistry } from '@luoome/tools';
+import {
+  checkPluginConfig,
+  createBuiltinPluginResources,
+  pluginConfigWarnings,
+  toolRegistry,
+} from '@luoome/tools';
 import { type Context, Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
@@ -391,6 +396,9 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     LUOOME_EXPOSE_EXTERNAL: String(exposeExternal),
   };
   const mcpSettingsStore = new McpSettingsStore(runtimeEnv);
+  for (const warning of pluginConfigWarnings(checkPluginConfig({ env: runtimeEnv }))) {
+    console.warn(warning);
+  }
   const ctx = await buildWebContext(dbPath, runtimeEnv, { sources });
   const chatStreamRuntime = createDshChatRuntimeFromStore(aiSettingsStore, runtimeEnv);
   if (chatStreamRuntime?.sessionsRoot !== undefined) {

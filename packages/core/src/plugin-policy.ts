@@ -34,8 +34,17 @@ export type ManagedPluginId = (typeof MANAGED_PLUGIN_IDS)[number];
 export type PluginConfigurationDefaults = Readonly<Record<ManagedPluginId, boolean>>;
 
 /** 唯一的启停判定：读 `plugins.json` 里该插件是否 enabled。没有许可令牌、纪元或撤销语义。 */
+export interface PluginConfigSnapshot {
+  readonly file: 'ok' | 'missing' | 'invalid';
+  /** 文件中显式配置过的已知插件 id（enabled 与否都算 configured）。 */
+  readonly configured: readonly ManagedPluginId[];
+  readonly unknown: readonly string[];
+}
+
 export interface PluginPolicyLike {
   isEnabled(id: ManagedPluginId): boolean;
+  /** 只读诊断快照；未接入文件策略的调用方可以不提供。 */
+  snapshot?(): PluginConfigSnapshot | undefined;
 }
 
 export interface DataExecutionScopeLike {

@@ -1,6 +1,7 @@
 import type {
   DailyBar,
   DateRange,
+  IntradayMinute,
   LimitUpLadderManagerLike,
   MarketDataAdapterLike,
   Quote,
@@ -78,6 +79,8 @@ interface StubMarketOptions {
   readonly quoteError?: Error;
   readonly bars?: readonly DailyBar[];
   readonly barsError?: Error;
+  readonly intraday?: readonly IntradayMinute[];
+  readonly intradayError?: Error;
 }
 
 class StubMarketAdapter implements MarketDataAdapterLike {
@@ -115,7 +118,9 @@ class StubMarketAdapter implements MarketDataAdapterLike {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 
-  fetchIntradayMinutes(): Promise<never> {
+  fetchIntradayMinutes(): Promise<readonly IntradayMinute[]> {
+    if (this.opts.intradayError !== undefined) return Promise.reject(this.opts.intradayError);
+    if (this.opts.intraday !== undefined) return Promise.resolve(this.opts.intraday);
     return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
   }
 
@@ -670,5 +675,68 @@ describe('tool/get_stock_market_view', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('adapter_error');
+  });
+
+  it('includeIntraday=true 时返回分时点、缺口与来源', async () => {
+    const quote = makeQuote(STOCK_ID, NOW, { prevClose: money(100), open: money(101) });
+    const intraday = [
+      {
+        stockId: STOCK_ID,
+        time: new Date('2026-07-21T01:30:00.000Z'),
+        price: money(101),
+        cumVolume: 1000,
+        source: 'tencent',
+      },
+      {
+        stockId: STOCK_ID,
+        time: new Date('2026-07-21T02:30:00.000Z'),
+        price: money(102),
+        cumVolume: 2000,
+        source: 'tencent',
+      },
+    ];
+    const ctx = await buildCtx(new StubMarketAdapter({ quote, intraday }));
+
+    const res = await callView(ctx, { includeIntraday: true });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.intraday).toMatchObject({
+      status: 'ok',
+      date: TODAY,
+      previousClose: 100,
+      openGapPct: 1,
+      openVsPrevClose: 'high',
+      sources: ['tencent'],
+    });
+    expect(res.data.intraday?.status === 'ok' && res.data.intraday.points).toHaveLength(2);
+  });
+
+  it('分时能力不可用时返回 missing 原因，而不是空数组', async () => {
+    const ctx = await buildCtx(new StubMarketAdapter());
+    const res = await callView(ctx, { includeIntraday: true });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.intraday).toEqual({
+      status: 'missing',
+      reason: '当前数据源未注册分时能力',
+    });
+  });
+
+  it('未显式请求时不访问分时能力', async () => {
+    let calls = 0;
+    class CountingMarket extends StubMarketAdapter {
+      override fetchIntradayMinutes(): Promise<never> {
+        calls += 1;
+        return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+      }
+    }
+    const ctx = await buildCtx(new CountingMarket());
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.intraday).toBeUndefined();
+    expect(calls).toBe(0);
   });
 });

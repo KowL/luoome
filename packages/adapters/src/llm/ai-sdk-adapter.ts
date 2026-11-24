@@ -97,6 +97,7 @@ export class AISDKAdapter implements LLMAdapter {
     const maxOutputTokens = request.maxOutputTokens ?? this.profile.maxOutputTokens;
     const timeoutMs = request.timeoutMs ?? this.profile.timeoutMs;
     const abortSignal = AbortSignal.timeout(timeoutMs);
+    const maxRetries = request.policy?.providerRetries ?? this.profile.maxRetries;
     const prompt = truncate(JSON.stringify(request.data), this.profile.maxPromptChars);
     // 不支持 structured outputs 的 provider 走纯文本 + system 注入 schema，
     // 不发送 response_format，避免上游告警或忽略参数（2026-11-23 M5）。
@@ -113,7 +114,7 @@ export class AISDKAdapter implements LLMAdapter {
           prompt,
           output: Output.object({ schema: toValidatedAISchema(schema) }),
           abortSignal,
-          maxRetries: this.profile.maxRetries,
+          maxRetries,
           maxOutputTokens,
           ...(this.profile.providerType === 'anthropic'
             ? { providerOptions: { anthropic: { structuredOutputMode: 'auto' } } }
@@ -126,7 +127,7 @@ export class AISDKAdapter implements LLMAdapter {
         system,
         prompt,
         abortSignal,
-        maxRetries: this.profile.maxRetries,
+        maxRetries,
         maxOutputTokens,
       });
       try {

@@ -161,3 +161,21 @@ export const inspectPluginConfig = (options: PluginConfigCheckOptions = {}): Plu
 };
 
 export const checkPluginConfig = inspectPluginConfig;
+
+/** 启动日志用：只返回需要开发者关注的缺项/未知/损坏提示，正常时不吵。 */
+export const pluginConfigWarnings = (check: PluginConfigCheck): readonly string[] => {
+  const warnings: string[] = [];
+  if (check.file === 'missing') {
+    warnings.push(`plugins.json 缺失（${check.path}），全部插件按关闭处理`);
+  } else if (check.file === 'invalid') {
+    warnings.push(`plugins.json 无法解析（${check.path}），全部插件按关闭处理`);
+  } else if (check.missing.length > 0) {
+    warnings.push(`plugins.json 缺少配置项，按关闭处理：${check.missing.join(', ')}`);
+  }
+  if (check.unknown.length > 0) {
+    warnings.push(
+      `plugins.json 包含未知 key：${check.unknown.map((entry) => entry.id).join(', ')}`,
+    );
+  }
+  return warnings;
+};

@@ -38,7 +38,7 @@ For user-facing luoome operation details, see the [user guide](../../docs/USER_G
 
 ### 本地数据与提供者开关
 
-`compute_indicators` 只读本地日线；没有日线时返回空指标和 `barsCount: 0`，先由用户授权采集后再计算。样本不足的指标不出现在 `indicators` 中，`indicatorAvailability` 会给出各指标的 `requiredBars` 与原因，不要把缺失指标当成信号。
+`compute_indicators` 只读本地日线；没有日线时返回空指标和 `barsCount: 0`，先由用户授权采集后再计算。样本不足的指标不出现在 `indicators` 中，`indicatorAvailability` 会给出各指标的 `requiredCount` / `actualCount` 与原因，不要把缺失指标当成信号。
 提供者和采集任务由用户手写 `$LUOOME_HOME/plugins.json` 启停（重启宿主生效，缺省关闭）；source 与 task 分别启用，实际调用仍需 write/external 授权。
 普通 Agent 不修改配置或偷偷启源。所有提供者关闭后仍可查询本地账户、历史与指标；混合工具返回明确的缺失或本地回退。
 MCP 发现按当前就绪来源变化；收到 tools/list_changed 后重新发现工具，旧工具名不能绕过运行校验。

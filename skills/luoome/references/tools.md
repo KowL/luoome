@@ -17,6 +17,8 @@ Market and盘面资讯:
   `markers` pinned to trading days. Under weekly/monthly `granularity` anchor markers on
   `barDate ?? date`; `direction`/`ruleId` exist only on strategy-signal markers.
   `quote.openGapPct` / `quote.openVsPrevClose` state the opening gap against previous close.
+  Pass `includeIntraday: true` only when minute points are needed; the optional `intraday`
+  section is either `status: 'ok'` with points/gap/sources or `status: 'missing'` with a reason.
 - `get_intraday_summary` — compact current-day intraday summary from minute bars: open,
   previous close, opening gap, high/low with times, latest price, VWAP and point count.
   It never returns the full minute series; unavailable minute capability is explicit
@@ -30,7 +32,7 @@ Market and盘面资讯:
 - `fetch_sector_quotes` — industry sector ranking with leading stock. `source` in the result
   is the actual provider: `eastmoney` (`BKxxxx` codes) or `sina` (`new_xxx` codes, no
   up/down counts, no sector constituents/detail).
-- `compute_indicators` — indicators from persisted local daily bars; no network or collection. Missing bars return empty indicators with `barsCount: 0`; `indicatorAvailability` lists each unavailable indicator with `requiredBars` and `reason` (e.g. MACD needs 34 bars, MA60 needs 60).
+- `compute_indicators` — indicators from persisted local daily bars; no network or collection. Missing bars return empty indicators with `barsCount: 0`; `indicatorAvailability` lists each unavailable indicator with `requiredCount` / `actualCount` and `reason` (e.g. MACD needs 35 bars, MA60 needs 60, cross-day freshness needs 120).
 - `limit_up_ladder` — one trading day's limit-up ladder and promotion rate.
 - `limit_up_market` — one call for the limit-up dashboard: that day's limit-up pool (per-stock
   seal amount, open times, raw limit-up reason), limit-up statistics (seal rate, opened count,

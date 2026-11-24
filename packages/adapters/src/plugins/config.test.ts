@@ -72,13 +72,20 @@ describe('plugin enablement file', () => {
     const dir = home();
     const store = new PluginConfigStore(join(dir, 'plugins.json'));
     expect(store.inspect()).toEqual({ ok: false, reason: 'missing' });
+    expect(store.snapshot()).toEqual({ file: 'missing', configured: [], unknown: [] });
     writeFileSync(join(dir, 'plugins.json'), '{ not json');
     expect(store.inspect()).toEqual({ ok: false, reason: 'invalid' });
+    expect(store.snapshot()).toEqual({ file: 'invalid', configured: [], unknown: [] });
     write(dir, { version: 1, entries: { 'business.analysis': { enabled: true } } });
     expect(store.inspect()).toEqual({
       ok: true,
       config: { version: 1, entries: { 'business.analysis': { enabled: true } } },
       unknownIds: [],
+    });
+    expect(store.snapshot()).toEqual({
+      file: 'ok',
+      configured: ['business.analysis'],
+      unknown: [],
     });
   });
 
