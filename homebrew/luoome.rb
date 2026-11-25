@@ -1,7 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
-# Homebrew formula for luoome — 本地优先的个人投资 advisor agent
+# Homebrew formula for luoome — 个人投资管理 advisor agent
 # (https://github.com/KowL/luoome).
 #
 # 用法（v0.9.0 默认从 git HEAD 构建，因为还没有稳定 release tarball）：
@@ -15,7 +15,7 @@
 # tag 发布后会切到 stable 块（class LuoomeFormula < Formula + url + sha256）。
 
 class Luoome < Formula
-  desc "本地优先的个人投资 advisor agent（Web / MCP / CLI）"
+  desc "个人投资管理 advisor agent（Web / MCP / CLI）"
   homepage "https://github.com/KowL/luoome"
   url "https://github.com/KowL/luoome.git",
       using: GitProxy,

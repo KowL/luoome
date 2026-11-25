@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "luoome —— 本地优先的个人投资管理 advisor agent",
+  "description": "luoome —— 个人投资管理 advisor agent",
   "workspaces": [
     "packages/*",
     "packages/plugins/*",
@@ -13,15 +13,13 @@
     "test": "vitest run --passWithNoTests",
     "test:db": "bun test packages/db",
     "test:web": "bun test apps/web",
-    "test:dsh": "vitest run packages/dsh-bridge apps/agent-runtime",
     "test:all": "bun run test && bun run test:db && bun run test:web",
     "mcp:smoke": "bun packages/mcp/src/smoke.ts",
     "web": "bun --no-env-file apps/web/src/index.ts",
     "typecheck": "bun --no-env-file infra/workspaces.ts typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "build": "bun --no-env-file infra/workspaces.ts build && bun --no-env-file infra/dsh/build.ts",
-    "build:dsh": "bun --no-env-file infra/dsh/build.ts"
+    "build": "bun --no-env-file infra/workspaces.ts build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",

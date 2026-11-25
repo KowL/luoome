@@ -1,5 +1,8 @@
 # LUOOME / AI Investment OS 整体技术架构与详细设计（去多租户 + 领域零 AI + DSH 深度集成）
 
+> **已退役（2026-11-25）**：DSH 集成、`apps/agent-runtime`、`packages/dsh-bridge`、`apps/web/src/dsh` 与 `infra/dsh` 已整体删除；现行架构只使用 Bun + AI SDK Chat Runtime。本文仅作历史追溯，不再代表当前实现或排期。
+
+
 > **基线分支**：`main`（`58ae5b9`）
 > **核心架构决策**：
 > 1. **彻底移除多租户（Hosted / Tenant / Subscription / Billing）体系**，回归纯粹的**单机/自托管（Self-Hosted）、单所有者、多投资账户（Multi-Account）**架构，唯一事实数据库为 `$LUOOME_HOME/luoome.db`。
@@ -618,7 +621,7 @@ sequenceDiagram
 
 ### 5.4 去租户化后的 `GatewayExecutionScope` 与 `ToolGateway`
 
-移除 `tenantId`、`tenantGeneration` 与托管计费预占后，[`apps/web/src/dsh/execution-scope.ts`](file:///Users/lijun/project/luoome/apps/web/src/dsh/execution-scope.ts) 精简并强化对 `accountId` 与 `agentId` 的绑定：
+移除 `tenantId`、`tenantGeneration` 与托管计费预占后，`apps/web/src/dsh/execution-scope.ts`（已删除） 精简并强化对 `accountId` 与 `agentId` 的绑定：
 
 ```ts
 // apps/web/src/dsh/execution-scope.ts
@@ -648,7 +651,7 @@ export interface GatewayScopeSnapshot extends GatewayIdentity {
 
 根据对 DSH 上游 `subagent-spawn-in-process` 的源码审查（`dsh-plugin-platform-design.md` U14），**DSH 在进程内派生子 Agent 时，默认不会自动继承父 Agent 的 `agent.ctx.tools.restrict` 限制**。
 
-为防止子 Agent 权限逃逸，[`packages/dsh-bridge/src/plugin.ts`](file:///Users/lijun/project/luoome/packages/dsh-bridge/src/plugin.ts) 在 `agent/created` 与 `tools/pre-execute` 钩子中实施硬性交集守卫：
+为防止子 Agent 权限逃逸，`packages/dsh-bridge/src/plugin.ts`（已删除） 在 `agent/created` 与 `tools/pre-execute` 钩子中实施硬性交集守卫：
 
 ```ts
 // packages/dsh-bridge/src/plugin.ts 演进要点

@@ -1211,7 +1211,7 @@ const cmdStart = async (
 // ---------- help / 分发 ----------
 
 const printHelp = (): void => {
-  console.log(`luoome ${VERSION} —— 本地优先的个人投资管理 advisor agent
+  console.log(`luoome ${VERSION} —— 个人投资管理 advisor agent
 
 用法: luoome <command> [options]
 

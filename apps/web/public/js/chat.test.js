@@ -413,13 +413,13 @@ describe('失败反馈', () => {
 });
 
 describe('模型用量', () => {
-  it('恢复 DSH 上下文限制提示，不能把重建会话显示为持久恢复', () => {
+  it('恢复历史运行时提示，不能把重建会话显示为持久恢复', () => {
     const notice = '实验模式：每轮根据已保存历史重建上下文，尚不支持执行中断恢复。';
     const entries = persistedFeed([
       {
         id: 'a1',
         role: 'assistant',
-        parts: [{ type: 'data-luoome-runtime', data: { runtime: 'dsh', notice } }],
+        parts: [{ type: 'data-luoome-runtime', data: { runtime: 'legacy', notice } }],
       },
     ]);
     expect(entries).toEqual([{ type: 'note', text: notice }]);

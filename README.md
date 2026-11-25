@@ -5,7 +5,7 @@
 当前产品版本 **0.9.0**（以 CLI `--version`、MCP serverInfo 与 Homebrew formula 为准）；根 `package.json` 的 `0.8.0` 是内部 workspace 版本，尚未同步。
 
 luoome 是一个可自行部署的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
-Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent Tool 通过 MCP / DSH 暴露，其余纯 UI CRUD 由 Web/CLI 直接调用 Application Service；所有数据织成可追溯事实。
+Strategy、Watchlist、AlertPlan、笔记与建议能力的 34 个核心 Agent Tool 通过 MCP 与 Web 对话运行时暴露，其余纯 UI CRUD 由 Web/CLI 直接调用 Application Service。
 
 - 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
@@ -27,7 +27,7 @@ Web、CLI 和 MCP 共用本地 SQLite 数据库（`$LUOOME_HOME/luoome.db`）和
 
 - **Advisor-first**：每一份数据最终都服务于"可执行的投资建议"，不是堆数据。
 - **Agent-first**：投研分析能力收敛为 34 个粗粒度 Agent Tool（行情/策略/账户/建议/计划），纯 UI CRUD 属于 Application Service，不给 LLM 伪造工具面。
-- **数据自持**：SQLite 保存在本机 `$LUOOME_HOME/luoome.db`，不经过任何云服务。
+- **个人使用**：围绕单主用户与多投资账户，不提供团队、多租户或跟单能力。
 - **Schema-driven**：Zod schema 是 tool I/O 的事实来源，自动生成 TypeScript 类型、MCP tool 定义、OpenAI function calling schema。
 - **Workflow ≠ Tool**：tool 是原子能力，workflow 是组合；workflow 内置编排，tool 暴露给上层 agent。
 - **No magic**：每个数据源 / 适配器 / LLM 都显式可插拔，运行时可见。
@@ -89,8 +89,7 @@ packages/
   mcp/         MCP server，把 tool registry 暴露给外部
   cli/         命令行入口
 apps/
-  web/         Hono + 同源静态仪表盘 + 单进程后台调度
-  agent-runtime/ DeepSeek Harness (DSH) + Cordis 独立 Agent Host
+  web/         Hono + 同源静态仪表盘 + 单进程后台调度 + AI SDK 对话运行时
 docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）

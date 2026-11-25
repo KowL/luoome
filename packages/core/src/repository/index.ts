@@ -6,11 +6,6 @@ import type {
   AdviceSettlement,
   SettlementHorizon,
 } from '../entity/advice-tracking.js';
-import type {
-  AgentSessionBinding,
-  AgentSessionBindingStatus,
-  AgentSessionContextMode,
-} from '../entity/agent-session-binding.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
@@ -692,8 +687,6 @@ export interface RepositoryRegistry {
   readonly workflowRun: WorkflowRunRepository;
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
-  /** DSH 执行绑定与投递游标（增量同步、续接判断与重启去重）。 */
-  readonly agentSessionBinding: AgentSessionBindingRepository;
 }
 
 export interface SignalObservationRepository {
@@ -748,44 +741,6 @@ export interface ChatRepository {
     limit?: number,
     before?: { readonly createdAt: Date; readonly id: string },
   ): Promise<readonly ChatMessage[]>;
-}
-
-/**
- * DSH 执行绑定与投递游标仓储（docs/ddd/dsh-plugin-platform-design.md §5.3、§7）。
- *
- * claim / commit / release 都是基于 pendingRunId 的条件更新：并发轮次只有一个能推进游标，
- * 重复调用不会覆盖别人的投递状态。
- */
-export interface AgentSessionBindingRepository {
-  findByConversation(conversationId: string): Promise<AgentSessionBinding | null>;
-  /** 按 updatedAt 升序枚举绑定；供会话目录保留策略与账户删除使用。 */
-  list(options?: { readonly accountId?: string }): Promise<readonly AgentSessionBinding[]>;
-  /** 创建或整体覆盖（仅用于初始化与状态修正，竞态场景用下面三个 CAS 方法）。 */
-  save(binding: AgentSessionBinding): Promise<void>;
-  /** 认领本轮投递；已有其它 pending 或行不存在时返回 false。 */
-  claim(binding: AgentSessionBinding): Promise<boolean>;
-  /** 保存 assistant 消息后推进游标；仅当 pendingRunId 仍是该 run 时生效。 */
-  commit(input: {
-    readonly conversationId: string;
-    readonly runId: string;
-    readonly dshSessionId: string | null;
-    readonly profileHash: string | null;
-    readonly configHash: string | null;
-    readonly lastSyncedMessageId: string | null;
-    readonly settledDraftReceiptsCursor: string | null;
-    readonly status: AgentSessionBindingStatus;
-    readonly contextMode: AgentSessionContextMode;
-    readonly updatedAt: Date;
-  }): Promise<boolean>;
-  /** 清空 pending 并写回状态（失败/取消/中断）；仅当 pendingRunId 匹配时生效。 */
-  release(input: {
-    readonly conversationId: string;
-    readonly runId: string;
-    readonly status: AgentSessionBindingStatus;
-    readonly contextMode: AgentSessionContextMode;
-    readonly updatedAt: Date;
-  }): Promise<boolean>;
-  remove(conversationId: string): Promise<void>;
 }
 
 export interface StrategyRepository {

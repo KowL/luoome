@@ -1,5 +1,8 @@
 # DSH 插件平台详细研究与验证计划
 
+> **已退役（2026-11-25）**：DSH 集成、`apps/agent-runtime`、`packages/dsh-bridge`、`apps/web/src/dsh` 与 `infra/dsh` 已整体删除；现行架构只使用 Bun + AI SDK Chat Runtime。本文仅作历史追溯，不再代表当前实现或排期。
+
+
 > 状态：研究规划与实施依据；首批受控开发切片通过，完整研究门槛尚未全部完成，逐项状态见 1.1。
 > 创建：2026-10-20；验证状态更新：2026-10-21。
 > 设计依据：[Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md)。
@@ -48,7 +51,7 @@
 
 ### 2.1 基线规则
 
-本轮 DSH 源码审查固定到 `687f282e8625c6b8d11ff58211a90524be2e4317`，SDK manifest 为 `0.2.1-rc.2`。首批已验证同版本 npm 安装产物、Cordis `4.0.5` 与 Node `22.22.3`；完整性和审查范围见 [artifacts.json](../infra/dsh/artifacts.json)，不宣称其为最新稳定版。源码 engines 为 `^22.19.0 || >=24.0.0`。
+本轮 DSH 源码审查固定到 `687f282e8625c6b8d11ff58211a90524be2e4317`，SDK manifest 为 `0.2.1-rc.2`。首批已验证同版本 npm 安装产物、Cordis `4.0.5` 与 Node `22.22.3`；完整性记录（`infra/dsh/artifacts.json`）已随 DSH 退役删除；当时未宣称其为最新稳定版。源码 engines 为 `^22.19.0 || >=24.0.0`。
 
 Luoome 当前工作树含并行开发中的 hosted 改动。实验开始时记录 Luoome commit、相关未提交差异指纹与配置版本；禁止为了制造“干净基线”丢弃他人工作。对照组和试验组必须引用同一业务代码、数据和策略快照。
 

@@ -15,13 +15,13 @@ import {
 } from '@luoome/tools';
 import type { Hono } from 'hono';
 import { ZodError, z } from 'zod';
+import { createAiSdkChatRuntimeFromStore } from '../ai-sdk-chat-runtime.js';
 import { SaveAISettingsSchema } from '../ai-settings.js';
 import {
   DATA_TRANSFER_CATEGORIES,
   exportDataArchive,
   importDataArchive,
 } from '../data-transfer.js';
-import { createDshChatRuntimeFromStore } from '../dsh/chat-runtime.js';
 import { SaveFeishuSettingsSchema } from '../feishu-settings.js';
 import { jsonResult, notFound } from '../http/result.js';
 import {
@@ -463,7 +463,7 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
         ...ctxRef.current,
         adapters: { ...ctxRef.current.adapters, llm: ai.llm },
       };
-      chatRuntimeRef.current = createDshChatRuntimeFromStore(
+      chatRuntimeRef.current = createAiSdkChatRuntimeFromStore(
         aiSettingsStore,
         aiSettingsStore.runtimeEnv(),
       );

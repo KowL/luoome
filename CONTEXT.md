@@ -305,4 +305,8 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 与旧表 DDL/schema 全部下线，存量库的旧物理表不再维护（不 DROP、不读取）。
 不得作为新 surface、Agent 或写入口的领域模型。
 
-旧个人订阅多租户托管模式（`HostedUser`、`Tenant`、`control.sqlite`、邮箱验证码、套餐订阅与独立 `apps/worker`）已整体下线并归档至 `docs/archive/`。当前系统固定为单主用户（`ownerId='local'`）+ 多投资账户（`Account`）本地部署模型，详见 [luoome 的 DSH 改造详细设计](./docs/ddd/luoome-dsh-transformation-detailed-design.md)。
+旧 Agent 执行绑定（`AgentSessionBinding`）已随独立 Agent Host 退役一并下线：entity、repository、
+contract test 与 schema 定义全部删除，存量库的 `agent_session_bindings` 物理表不 DROP、不读写，
+也不再承载会话续接。
+
+旧个人订阅多租户托管模式（`HostedUser`、`Tenant`、`control.sqlite`、邮箱验证码、套餐订阅与独立 `apps/worker`）已整体下线并归档至 `docs/archive/`。当前系统固定为单主用户（`ownerId='local'`）+ 多投资账户（`Account`）本地部署模型，详见 [ARCHITECTURE.md](./docs/ARCHITECTURE.md) 与 [SECURITY.md](./docs/SECURITY.md)。

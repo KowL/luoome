@@ -2,7 +2,7 @@
 
 > 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算让外部 Agent 使用 luoome，请安装 [luoome Skill](../skills/luoome/SKILL.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
-luoome 是一个**本地优先**的个人投资 advisor agent。它能：
+luoome 是一个个人投资管理 advisor agent。它能：
 
 - 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
 - 作为 **MCP server** 把全部能力暴露给 Claude Desktop / OpenClaw 等 AI agent
@@ -586,11 +586,10 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ## 11. 更多阅读
 
-DSH 插件版 AI 对话支持通过独立 Node Host 运行，默认对话仍使用内置 AI SDK。
-实验页面会提示按服务端游标增量投递已保存事实；中断的执行不会自动恢复或重放，历史超过实验窗口时需新建会话。
-草案仍需确认，停止后应使用“核对会话状态”查看实际保存结果。受控试用方法与验收范围见
-[DSH 开发任务](./dsh-plugin-platform-development-plan.md)，完整演进架构见
-[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+Web 对话在 Bun 进程内通过 AI SDK 运行，不需要额外安装 Node.js 或独立 Host。
+历史超过单会话窗口时会要求新建关联会话并携带交接摘要；中断的回答不会自动重跑，历史仍保存在本地会话记录中。
+草案仍需用户确认；停止后应读取会话核对实际保存结果。架构与数据流见
+[ARCHITECTURE.md](./ARCHITECTURE.md)，使用与配置见本手册。
 
 - [文档导航](./README.md) — 产品需求、技术设计、运维手册与历史归档
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型

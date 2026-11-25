@@ -15,7 +15,6 @@ const packages = new Set(
   ),
 );
 for (const workspace of [...packages].sort()) {
-  if (command === 'build' && workspace === 'apps/agent-runtime') continue;
   const cwd = resolve(root, workspace);
   if (command === 'build' && !(await Bun.file(resolve(cwd, 'src/index.ts')).exists())) continue;
   console.info(`== ${command} ${workspace}`);

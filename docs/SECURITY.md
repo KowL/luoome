@@ -1,6 +1,6 @@
 # Security
 
-> luoome 的安全模型。围绕"agent-first + local-first + 副作用分级 + advisor ≠ trade"展开。
+> luoome 的安全模型。围绕"agent-first + 副作用分级 + advisor ≠ trade"展开。
 
 ## 威胁模型
 
@@ -156,14 +156,15 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 
 ## Web 对话运行时
 
-Web 对话只经 DSH Chat runtime（`ChatStreamRuntime` 端口）执行；旧版自研 AI SDK agent loop 与
-`agent_run` tool 已退役，不保留回退运行时。
+Web 对话只经 `ChatStreamRuntime` 端口执行，生产实现是 Bun 进程内的 `AiSdkChatRuntime`；
+旧版自研 agent loop、`agent_run` tool 与独立 DSH Node Host 均已退役，不保留回退运行时。
 
 - runtime 只能调用 Web 本轮从 registry 派生的显式白名单 tool；`write`、`advice`、`trade` 均不可达。
 - `trade` 永不进入 Agent 工具表，建议或盯盘结果不能触发自动下单。
 - 写入意图只能作为待确认草案返回；草案会再次按目标 write tool 的输入 schema 校验，runtime 自身不执行草案。
 - 用户输入、历史消息与 tool 输出均视为不可信内容。
-- 运行受总超时、并发会话上限与显式开启的 write + external 闸口约束。
+- 只读外部 MCP 只在 `LUOOME_EXPOSE_EXTERNAL=true` 时按场景白名单每轮发现；每次执行前复核服务启用位与声明快照，撤权后立即拒绝。
+- 运行受单轮模型超时、每轮工具调用上限、单次工具超时与显式开启的 write + external 闸口约束；历史超过窗口时明确拒绝，不静默截断。
 
 ## 传输安全
 
@@ -300,7 +301,7 @@ Advice 的 `reasoning`、`risks` 在落库前额外清理常见 prompt-injection
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
 
-## DSH 运行时安全边界
+## 受控插件与运行时安全边界
 
 内置能力开关只来自使用者手写的 `$LUOOME_HOME/plugins.json`：进程启动时读入，没有写入式管理面、CLI 写命令或任何写入接口；Web 设置页与 `luoome plugins check` 只读展示校验结果，模型与 Agent 均无权修改。
 启用不授予 external，也不改变 MCP/Agent 工具白名单或草案确认规则。每次策略解释在发请求及发布结果前重查当前启用位与数据 scope。

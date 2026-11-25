@@ -6,28 +6,26 @@
 
 ### 1.1 我们要解决的问题
 
-普通个人投资者每天被淹没在数据里：行情、新闻、财报、研报、StrategySignal、Watchlist、持仓变化。**最大的痛点不是缺数据，而是没有一个可信的"罗网 + 织机"**：
+个人投资者每天需要处理大量数据：行情、新闻、财报、研报、StrategySignal、Watchlist、持仓变化。**最大的痛点不是缺数据，而是缺少统一的"罗网 + 织机"**：
 
 - 不知道哪些信息是真信号、哪些是噪音
 - 不知道这些信号对自己的持仓意味着什么
 - 不知道当下应该买 / 卖 / 持有 / 观望
 - 不知道做出的决策事后看是对是错
 
-luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一份带理由、带证据、带风险、带信心度的投资建议。
+luoome = 织机 + 罗网：**罗**进来有价值的数据，**织**成一份带理由、带证据、带风险、带信心度的投资建议。
 
 它不只是数据搬运工，是 advisor：每一份数据最终都要回答"所以呢？我该怎么做？"
 
 ### 1.2 显式不做的事
 
 - ❌ 自动真实下单（券商合规 + 资金风险，永远人工确认；建议归建议，行动归行动）
-- ❌ 云同步账户数据（local-first 默认）
 - ❌ 替代券商 App（不做交易 UI，做 advisor 层）
 - ❌ 跨用户共享投资建议（个人工具，不是跟单平台）
 
 ### 1.3 显式要做的事
 
 - ✅ **生成可执行的投资建议**（buy / sell / hold / watch / avoid），带理由 + 证据 + 风险 + 信心度 + 免责声明
-- ✅ **建议可追溯**：每条建议都能回到当时的数据快照、StrategySignal、LLM 推理
 - ✅ **建议可复盘**：事后能验证"按这个建议做，结果如何"
 - ✅ 把建议当作数据存储在本地 SQLite，可被任意 tool / workflow / agent 检索
 
@@ -181,14 +179,15 @@ WorkflowToolMap/registry/MCP/Agent 继续从装配目录派生，工具名称、
 现有工具行为与组合回归集中在 `packages/tools/src` / `packages/workflows/src` 及 Web 测试，
 通过插件包导出验证实现；这些测试属于聚合宿主，不成为插件的反向运行依赖。新增只依赖本包的单测可放在插件 `src/`。
 
-### DSH Agent Runtime 边界
+### Web Chat Runtime 边界
 
-`apps/web` 的 DSH Chat 通过 `apps/agent-runtime` 与 `packages/dsh-bridge` 驱动独立 Node Host，不把 DSH SDK 耦合进 `core` / `db` / `tools` / `workflows`：
+`apps/web` 的对话由 Bun 进程内的 `AiSdkChatRuntime`（[`apps/web/src/ai-sdk-chat-runtime.ts`](../apps/web/src/ai-sdk-chat-runtime.ts)）执行，不把 Agent SDK 耦合进 `core` / `db` / `tools` / `workflows`：
 
-- `packages/dsh-bridge` 提供纯协议契约与 Cordis Tool Plugin，只允许 `apps/*` 导入。
-- 领域能力仍统一经 tools 使用；DSH Runtime 只是 Agent 执行宿主，通过 `apps/web` 的私有 Tool Gateway 回调本轮授权的 tools，不复制领域逻辑。
+- AI SDK v6 负责模型调用与工具循环；服务端持有 `ChatRepository` 历史、场景白名单、草案与取消/超时语义。
+- 领域能力仍统一经 tools 使用：模型只能按本轮授权的 `AgentCallableTool` 契约调用工具，不复制领域逻辑，也不能绕过 tool 契约访问 repository 或 adapter。
+- 只读外部 MCP 由 `packages/tools/src/external-mcp.ts` 在每轮对话开始时按 ToolContext + 场景发现并合入本轮工具；不引入独立 Host 或 Manifest。
 
-设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)。
+设计依据：[Web 对话助手设计](./ddd/web-chat-design.md)。
 
 ### packages/core 内部依赖
 
@@ -499,7 +498,7 @@ LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/Web/MCP 三个
 composition root 均调用 `createAIStackFromEnv`，一次加载
 `$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），把 `generation` profile
 解析为 `LLMAdapterLike` 注入 `ctx.adapters.llm`。`agent` profile 仍是 Agent 模型的
-配置来源（Web 设置页读写），供 DSH Chat runtime 消费，不再注入 `ToolContext`。
+配置来源（Web 设置页读写），供 Web 对话运行时消费，不再注入 `ToolContext`。
 provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；core 只保留 SDK 无关的
 端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
 
@@ -511,10 +510,9 @@ GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥
 surface 仍保持启动期快速失败。
 
 旧版自研 AI SDK `ToolLoopAgent` agent loop 与 `agent_run` tool 已删除，不保留回退运行时。
-Web 对话只经 `ChatStreamRuntime` 端口；生产 Web 对话待 M3 按
-[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 接入受控内嵌
-DSH Runtime，当前仅在注入 `chatStreamRuntime` 的测试与集成夹具路径可用（未注入时
-`POST /api/chat` 返回 503「AI 模型尚未配置」）。Web 只提供从 registry 派生的显式工具白名单
+Web 对话只经 `ChatStreamRuntime` 端口；生产默认实现是 Bun 进程内的
+`AiSdkChatRuntime`，测试可注入桩运行时（未配置模型时 `POST /api/chat` 返回 503
+「AI 模型尚未配置」）。Web 只提供从 registry 派生的显式工具白名单
 并消费标准 Web `Response`，core 不依赖任何 Agent SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
 Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage` 及
 `ChatRepository` 位于 core，Drizzle repository 位于 db（测试跑 `:memory:`）；Web 会话端点经
@@ -527,18 +525,17 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
-DSH Chat 路径（当前唯一 Web 对话运行时）：Bun Web → 独立 Node Host → DSH/Cordis。
-`packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
-业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
-官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。Node Host 不加载 MCP 客户端或 DSH Web UI；受控外部 MCP 在 Bun Gateway 侧执行。
-DSH 模型请求通过独立鉴权的 Bun 代理转发 SSE 并读取尾部 usage，
-未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
+Web 对话路径（当前唯一运行时）：Bun Web → `AiSdkChatRuntime` → AI SDK Provider Registry → tools。
+模型请求由 Bun 进程直接发出，密钥只从 `$LUOOME_HOME/.env` 解析，不进入浏览器或日志；没有独立
+Node Host、跨进程协议或模型代理。工具在本进程执行，保持白名单、草案与 ToolResult 错误语义。
 
-DSH 当前每轮从 Luoome 的可信历史重建临时 Session，尚无持久 Session 恢复。新消息使历史超过既有窗口时，Web 在落库前明确要求通过可编辑交接摘要新建关联会话；失败回答可用同一用户消息重试，不静默截断历史。会话消息通过游标分页读取，界面可加载完整历史。
-实时事件和持久消息按 Agent/message/attempt 身份合并为现有 UI Message Stream；同会话在执行及回答保存期间保持占用。
-停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与用量；失败不自动切换运行时重跑。
-开发开关、固定产物与启动命令见 [DSH 运行底座](../infra/dsh/README.md)，任务与验收边界见
-[开发任务](./dsh-plugin-platform-development-plan.md)。
+每轮从 `ChatRepository` 的可信历史重建模型上下文，不依赖运行时私有 Session 或游标。新消息使历史
+超过既有窗口时，Web 在落库前明确要求通过可编辑交接摘要新建关联会话；运行时的
+`historyTruncated` 边界直接拒绝而不静默截断。失败回答可用同一用户消息重试。助手消息保存失败时，
+流以错误收尾而不是假装成功；保存成功后才发送 finish。会话消息通过游标分页读取，界面可加载完整历史。
+实时事件合并为标准 UI Message Stream；同会话在回答保存期间保持占用。取消保存已收到的部分回答并标记
+cancelled；超时按错误呈现而不是「已停止」；只有工具真正排空后 `executionStopped` 才为 true。
+外部只读 MCP 在 `LUOOME_EXPOSE_EXTERNAL=true` 时每轮重新发现并按场景白名单合入；停用后下一轮不再出现。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
@@ -571,7 +568,7 @@ interface ToolContext {
 ```
 
 `ctx` 是唯一被允许注入依赖的方式。多步 Agent 推理不属于 `ToolContext`：Web 对话由
-DSH Chat runtime 在 tools 之外编排，只经显式白名单调用 tool，不能绕过 tool 契约直接访问
+`AiSdkChatRuntime` 在 tools 之外编排，只经显式白名单调用 tool，不能绕过 tool 契约直接访问
 repository 或 adapter；core 不定义任何 agent loop 类型。
 `limitUpLadder` 等非行情 manager 是日级批量快照端口，保持为顶层可选字段，
 不混入逐标的实时行情 Gateway；各 manager 的必填 `status()` 是统一观测端口，
@@ -1138,13 +1135,13 @@ luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**
 
 `adapters/mcp` 负责读取部署配置、真实 MCP stdio 握手/发现/调用、JSON Schema 校验和进程生命周期。
 `tools/external-mcp` 将已授权远端工具包装为 external ToolResult、统一输入校验与审计，不将动态工具
-写入静态业务 catalog。`apps/web` 每轮按场景加载这些受信 callable，派生带命名空间与来源的
-DSH manifest；Node Host 仍仅使用既有 Bun Gateway 代理。
+写入静态业务 catalog。`apps/web` 每轮按场景加载这些受信 callable，并把它们合入本轮 AI SDK
+工具集；发现与执行都不进入静态 catalog，也不引入独立 Host 或 Manifest。
 
 准入取服务显式启用、远端名字白名单、场景白名单及只读元数据的交集。发现与执行分别复核配置，
-调用前重新发现并比对完整声明，阻止 schema/注解漂移。Gateway 的授权回调也检查服务当前状态，
-包括同一 callId 的回执读取；停用后下一轮删除工具，旧调用失效。静态业务白名单、账户 scope、
-external opt-in、限次/超时与输出大小规则继续独立生效。
+调用前重新发现并比对完整声明，阻止 schema/注解漂移。运行时的每次外部工具执行前也复核服务当前状态；
+停用后下一轮删除工具，已宣告但未执行的调用立即失效。静态业务白名单、账户 scope、external
+opt-in、每轮调用上限、单次超时与 64KB 结果上限继续独立生效。
 
 Web 的 `McpSettingsStore` 与客户端共用配置 schema 和路径解析。设置页通过专用接口读取安全投影、
 按版本保存已登记服务的授权；只读文档服务可由服务器使用固定启动配置首次登记。

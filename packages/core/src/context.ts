@@ -117,7 +117,7 @@ export interface LLMAdapterLike {
   generate<T = unknown>(request: LLMGenerateRequest): Promise<T>;
 }
 
-/** Agent 可调用工具的 SDK 无关投影；DSH gateway 只按此契约绑定工具。 */
+/** Agent 可调用工具的 SDK 无关投影；聊天运行时只按此契约绑定工具。 */
 export interface AgentCallableTool {
   readonly name: string;
   readonly description: string;

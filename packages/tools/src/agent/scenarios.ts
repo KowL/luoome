@@ -1,5 +1,5 @@
 // Agent 场景目录：四类场景 + general 的 prompt 覆写与工具白名单单一事实来源。
-// Web chat（DSH runtime）从这里取配置（设计：docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §5.2）。
+// Web chat（AI SDK 运行时）从这里取配置（设计：docs/ddd/domain-simplification-and-architecture-convergence-detailed-design.md §5.2）。
 
 import { z } from 'zod';
 import type { AgentToolName } from '../catalog.js';

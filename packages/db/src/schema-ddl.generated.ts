@@ -93,24 +93,6 @@ export const SCHEMA_TABLES: readonly string[] = [
   "valid_until" integer NOT NULL,
   "created_at" integer NOT NULL
 )`,
-  `CREATE TABLE IF NOT EXISTS "agent_session_bindings" (
-  "conversation_id" text PRIMARY KEY,
-  "account_id" text NOT NULL,
-  "agent_definition_id" text NOT NULL,
-  "dsh_session_id" text,
-  "profile_hash" text,
-  "config_hash" text,
-  "last_synced_message_id" text,
-  "settled_draft_receipts_cursor" text,
-  "status" text NOT NULL,
-  "context_mode" text NOT NULL,
-  "pending_run_id" text,
-  "pending_assistant_message_id" text,
-  "pending_message_id" text,
-  "pending_receipts_cursor" text,
-  "pending_claimed_at" integer,
-  "updated_at" integer NOT NULL
-)`,
   `CREATE TABLE IF NOT EXISTS "alert_plans" (
   "id" text PRIMARY KEY,
   "name" text NOT NULL,
@@ -673,7 +655,6 @@ export const SCHEMA_INDEXES: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS "advice_settlements_advice_idx" ON "advice_settlements" ("advice_id")`,
   `CREATE INDEX IF NOT EXISTS "advices_subject_idx" ON "advices" ("subject_kind", "subject_id")`,
   `CREATE INDEX IF NOT EXISTS "advices_created_at_idx" ON "advices" ("created_at")`,
-  `CREATE INDEX IF NOT EXISTS "agent_session_bindings_account_updated_idx" ON "agent_session_bindings" ("account_id", "updated_at")`,
   `CREATE INDEX IF NOT EXISTS "alert_plans_watchlist_idx" ON "alert_plans" ("watchlist_id")`,
   `CREATE INDEX IF NOT EXISTS "alert_plans_enabled_idx" ON "alert_plans" ("enabled")`,
   `CREATE INDEX IF NOT EXISTS "chat_messages_session_created_idx" ON "chat_messages" ("session_id", "created_at")`,

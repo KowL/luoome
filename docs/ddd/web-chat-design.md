@@ -1,6 +1,6 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
-> 状态：**已实现**（AI SDK `ToolLoopAgent` + UI Message Stream、账户会话、服务端草案确认与投资管理闭环）。本文档描述当前对话契约。
+> 状态：**已实现**（Bun + AI SDK v6 `streamText` 对话运行时、UI Message Stream、账户会话、服务端草案确认与投资管理闭环）。本文档描述当前对话契约。
 > 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)（聊天只生成目标模型 draft）。
 
 ## 目标
@@ -13,12 +13,12 @@ Web 端提供个人投资助手，覆盖账户与现金、持仓、行情研究�
 - **历史归服务端**：会话和 UI message parts 按账户写入项目 SQLite；客户端只提交 `sessionId` 和本轮 user message，服务端读取最近 20 条可信历史
 - **账户隔离**：所有会话读写都通过 tools 校验当前 `defaultAccountId`，切换账户后前端重新加载对应会话列表
 - **场景工具**：研究、持仓、盯盘、复盘和通用场景共享事实查询，并按场景限定草案类型
-- **原生 agent tool loop**：由 adapters 内的 AI SDK `ToolLoopAgent.stream()` 完成推理、工具调用和文本流；Web 不再维护另一套动作 JSON 协议
+- **原生 agent tool loop**：由 `apps/web/src/ai-sdk-chat-runtime.ts` 的 AI SDK `streamText()` 完成推理、工具调用和文本流；Web 不再维护另一套动作 JSON 协议
 - **标准 UI Message Stream**：`POST /api/chat` 返回 `text/event-stream` 与 `x-vercel-ai-ui-message-stream: v1`；原生 JS 前端消费协议，不要求 React
 
 ## 关键约束（现状）
 
-- generation 仍使用结构化 `LLMAdapterLike.generate`；聊天使用 `AISDKAgentRuntime.createUIMessageStreamResponse`，AI SDK 类型不进入 core
+- generation 仍使用结构化 `LLMAdapterLike.generate`；聊天使用 `AiSdkChatRuntime.createUIMessageStreamResponse`，AI SDK 类型不进入 core
 - 对话和草案确认要求 `write + external` 显式开启，并执行同源 Origin 检查；trade 始终不可达
 - 普通结构化分析使用模型目录的 `generation` profile，对话使用 `agent` profile；未配置或调用失败均明确报错，不伪造成功回答
 
@@ -61,15 +61,16 @@ sessionId + 本轮 user message
   → get_chat_session 读取最近 20 条历史
   → UI messages + 本地上下文摘要
   → Web 从 toolRegistry 构造显式聊天白名单
-  → AISDKAgentRuntime 构造 ToolLoopAgent
-  → agent.stream() 多步调用 read / 受控 external 工具
-  → createAgentUIStreamResponse 输出 UI Message SSE
-  → onFinish 持久化完整 assistant UI message parts
+  → AiSdkChatRuntime 按场景装配本轮工具（含每轮发现的受控只读外部 MCP）
+  → streamText 多步调用 read / draft / 受控 external 工具
+  → createUIMessageStreamResponse 输出 UI Message SSE
+  → 持久化成功后发送 finish；保存失败以错误收尾
 ```
 
 - 工具输入直接使用 registry 中的 Zod schema；名称、描述和输入契约不再复制到 prompt。
 - tool 返回失败时作为 `{ error: ToolError }` 交还模型，并通过 UI stream 展示失败状态。
-- agent 受 profile 的 timeout / retry 与 runtime 的最大步数约束。
+- 运行时受 profile 的 timeout / retry、最大步数与总 token 预算约束；每轮最多 8 次工具调用、单次工具 15s。
+- 历史超过单会话窗口时在落库前明确拒绝并提示新建关联会话，运行时不做静默截断。
 - 服务端不采信客户端提供的旧历史；工具调用 parts 与草案输出一并落库，以便重新打开会话后恢复动作轨迹。
 - 下一轮保留已完成的 tool parts 和 step 边界；已确认草案的模型侧 output 携带 `draftStatus` 和真实 `ToolResult`，包括新对象 ID。用户输入的“已执行”文本不构成执行凭据。
 - SDK 在服务端消费流；取消时仍保存已收到的部分及取消标记。前端不再补写 assistant 消息。完成时发送 usage metadata，并持久化 `data-luoome-usage`。
@@ -114,7 +115,7 @@ sessionId + 本轮 user message
 - 消息默认读取最近 50 条，通过 `cursor` 加载更早历史，直至完整记录；删除当前会话后进入空白会话，不自动打开其他对话
 - `fetch` + `ReadableStream` 手工消费 AI SDK UI SSE（当前静态前端无 bundler，不引入 React hook）
 - `text-delta` 增量更新助手气泡；step / tool parts 驱动“推理中、执行中、成功/失败”状态，工具调用按序号、名称、状态和来源组成可展开的执行轨迹；用户向上阅读时不强制跟随滚动
-- DSH 网关单次工具结果上限为 64,000 字节，超限会要求模型缩小筛选或分页；投影单条结果超过 65,536 字节或累计内容挤压回答空间时，只保存明确的省略回执，不保存完整负载，也不中断最终回答
+- AI SDK 运行时每轮最多执行 8 次工具调用、单次工具 15s 超时；超限或超时以业务错误回传，要求模型缩小筛选或分页，不中断最终回答
 - draft tool 的 `tool-output-available` 渲染确认卡片；回复保存后才允许确认，调用会话草案端点，不发送模型输入副本
 - 卡片绑定创建时的账户、会话、消息与调用 ID。刷新后恢复每项独立执行状态与 Advice；全部草案处理完成且有成功执行时，助手自动继续总结真实结果
 - 证据面板只展示真实讨论对象、计划、工具产物和结构化 Advice 依据；来源链接必须来自工具结果，不根据模型文字拼凑

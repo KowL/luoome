@@ -1,5 +1,8 @@
 # DSH 插件平台开发任务
 
+> **已退役（2026-11-25）**：DSH 集成、`apps/agent-runtime`、`packages/dsh-bridge`、`apps/web/src/dsh` 与 `infra/dsh` 已整体删除；现行架构只使用 Bun + AI SDK Chat Runtime。本文仅作历史追溯，不再代表当前实现或排期。
+
+
 > 创建：2026-10-20；统一验收更新：2026-10-21。
 > 依据：[平台设计](./ddd/dsh-plugin-platform-design.md)、[研究与验证计划](./dsh-plugin-platform-research-plan.md)。
 > 用户已授权拆分任务、创建开发线程并开始实现；线程使用 `gpt-6.1-sol`、`max`。
@@ -106,7 +109,7 @@ D 负责读取 A/B/C 交接文件，在就绪后完成接线；必要时使用�
 
 ## 8. 首批统一验收
 
-D01–D07 已实现并通过受控环境验收。实际链路为原 Luoome Chat → Bun 托管授权与计量 → Node SDK Host → DSH/Cordis → 业务 Gateway 与官方网页工具 → 原 Chat 流式协议、SQLite 消息及费用记录。安装基线为 DSH `0.2.1-rc.2`、Cordis `4.0.5`，验证运行时为 Node `22.22.3`、Bun `1.3.14`；产物完整性见 [artifacts.json](../infra/dsh/artifacts.json)。
+D01–D07 已实现并通过受控环境验收。实际链路为原 Luoome Chat → Bun 托管授权与计量 → Node SDK Host → DSH/Cordis → 业务 Gateway 与官方网页工具 → 原 Chat 流式协议、SQLite 消息及费用记录。安装基线为 DSH `0.2.1-rc.2`、Cordis `4.0.5`，验证运行时为 Node `22.22.3`、Bun `1.3.14`；产物完整性记录（`infra/dsh/artifacts.json`）已随 DSH 退役删除。
 
 本轮集成修复了以下实际问题，并保留对应回归测试：
 
@@ -129,6 +132,6 @@ D01–D07 已实现并通过受控环境验收。实际链路为原 Luoome Chat 
 | `bun --no-env-file run lint` | 退出码 0；无错误，104 条警告、2 条提示；未全仓自动修格式 |
 | 实际浏览器 | 桌面行情与网页工具、草案确认及真实回执接续、停止后核对、供应商失败提示、390px 移动布局 |
 
-自动测试使用受控供应商，不读取个人 `.env` 或私人投资数据。运行日志与截图留在本地忽略目录 `output/dsh-plugin-platform/`，可重复运行的入口、配置和浏览器样例见 [开发运行底座](../infra/dsh/README.md#web-受控验证)。架构、安全与用户手册已同步实际行为。
+自动测试使用受控供应商，不读取个人 `.env` 或私人投资数据。运行日志与截图留在本地忽略目录 `output/dsh-plugin-platform/`；受控运行底座（`infra/dsh/`）已随 DSH 退役删除，相关命令不再可用。架构、安全与用户手册已同步实际行为。
 
 验收边界仍然明确：默认运行时为 AI SDK；DSH 只在显式托管开发配置启用，生产配置拒绝启动。当前 Web 原生网页能力仅开放 fixture；没有真实模型/行情/搜索质量或真实费用验证。历史接续按服务端游标增量投递并复用 DSH 会话，仍不代表断线重放或 exactly-once；恢复失败会标记中断并从可信历史重建。OS/网络强隔离、多租户容量、备份删除恢复与老旧会话清理、社区插件准入与多 Agent 继续属于 D09–D10 和研究计划，不能由本次测试推定完成。

@@ -2,7 +2,6 @@ export { DrizzleAccountRepository } from './account.js';
 export { DrizzleAdjustmentFactorRepository } from './adjustment-factor.js';
 export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAdviceTrackingRepository } from './advice-tracking.js';
-export { DrizzleAgentSessionBindingRepository } from './agent-session-binding.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';

@@ -1126,7 +1126,7 @@ Drizzle 与 in-memory 共用：
 - Eastmoney/Tushare universe adapters；
 - StockUniverseManager/factory；
 - `sync_stock_universe`、status tool、workflow；
-- 本地优先搜索；
+- 本地搜索；
 - 文档和 cron。
 
 ### Phase 2：规范日线与盘后闭环（已完成）

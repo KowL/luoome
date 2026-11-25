@@ -1,6 +1,7 @@
 # LUOOME 领域收敛、去冗余与架构减负详细设计
 
 > **状态**：已执行（2026-11-10）。S1.1–S1.3、S2.1–S2.3、S3.1–S3.3、S4 全部落地并通过门禁（typecheck / lint / test / test:db / test:web 绿；仅既有 flaky DSH 集成用例在全量并发下超时、隔离通过）。结果：表 73→38、注册 Tool 152→34、`apps/web/src/server.ts` 3,040→399 行、手写 memory Repository 31→0。workflow 26→12 的合并已于 2026-11-13 完成（12 个注册入口，其余为 defineOperation 管线）；同日新增 `limit_up_board_history`（炸板/断板 PIT），表数 38→39。`signal_observations` 合并项已于 2026-11-13 拍板撤销（保留独立表 + 自然键，理由见 §6 决策记录）。`daily_bar_revisions` 原“保留”结论已于 2026-11-12 作废：表已删除，日线改为原始价 + `adjustment_factors` 读时投影，replay 按 `dataAsOf` 截断。
+> **后续变更（2026-11-25）**：本文提到的 DSH / DeepSeek Harness 执行宿主（`apps/agent-runtime`、`packages/dsh-bridge`、`apps/web/src/dsh`、`infra/dsh`）已整体删除；现行 Web 对话只使用 Bun 进程内的 AI SDK Chat Runtime。本文其余收敛结论仍有效。
 > **日期**：2026-11-10
 > **前置文档**：[AI Investment OS + DSH 转型详细设计](./luoome-dsh-transformation-detailed-design.md)
 > **目标**：在完成 M1（移除多租户 `hosted` 体系，净删 45,285 行代码）的基础上，对单机版代码库进行深度的**领域去重、超前功能裁剪、基础设施减负与 Agent Tool 收敛**，将系统从“堆叠了 7 个历史阶段概念的膨胀单体”收敛为“围绕 DeepSeek Harness 的精悍投研内核”。
@@ -91,7 +92,7 @@ export const createMemoryRepositories = (): RepositoryRegistry => {
 
 #### 2.2.1 现状问题
 项目中同时存在两套多步工具调用运行时：
-1. **新一代 DSH Runtime**：[`apps/agent-runtime`](../../apps/agent-runtime/src/host.ts) + [`packages/dsh-bridge`](../../packages/dsh-bridge/src/plugin.ts) + [`apps/web/src/dsh/chat-runtime.ts`](../../apps/web/src/dsh/chat-runtime.ts)。
+1. **当时的 DSH Runtime**（已于 2026-11-25 删除）：`apps/agent-runtime` + `packages/dsh-bridge` + `apps/web/src/dsh/chat-runtime.ts`。
 2. **旧版自研 Agent Runtime**：[`packages/adapters/src/llm/agent-runtime.ts`](../../packages/adapters/src/llm/agent-runtime.ts)（391 行）+ [`packages/tools/src/tools/agent-run.ts`](../../packages/tools/src/tools/agent-run.ts) + [`apps/web/src/chat.ts`](../../apps/web/src/chat.ts) 中的 legacy 分支。
 
 #### 2.2.2 目标方案
@@ -99,7 +100,7 @@ export const createMemoryRepositories = (): RepositoryRegistry => {
   - 删除 [`packages/adapters/src/llm/agent-runtime.ts`](../../packages/adapters/src/llm/agent-runtime.ts) 及其测试 `agent-runtime.test.ts`。
   - 删除 [`packages/tools/src/tools/agent-run.ts`](../../packages/tools/src/tools/agent-run.ts) 及其测试 `agent-run.test.ts`，从 [`registry.ts`](../../packages/tools/src/registry.ts) 移除 `agent_run`。
   - 从 [`packages/core/src/context.ts`](../../packages/core/src/context.ts) 移除 `AgentRuntimeLike`、`AgentStep`、`AgentRunInput`、`AgentRunResult` 及 `ToolContext.agent` 字段。
-  - 精简 [`apps/web/src/chat.ts`](../../apps/web/src/chat.ts)：移除旧版非 DSH Agent Loop 执行分支，Web 对话 100% 走 DSH Runtime。
+  - 精简 [`apps/web/src/chat.ts`](../../apps/web/src/chat.ts)：移除旧版非 DSH Agent Loop 执行分支（该目标当时指 DSH；DSH 退役后 Web 对话统一走 AI SDK Chat Runtime）。
 
 ---
 

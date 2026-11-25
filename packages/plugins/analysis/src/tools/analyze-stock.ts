@@ -107,7 +107,7 @@ export const AnalyzeStockInput = z
     /**
      * 已构建的事实包（brief 路径复用，避免重复拉行情）。
      * 缺省时工具自行取数（对话 / CLI 的交互路径）。schema 在 handler 内用
-     * StockFactPackSchema 校验，保证 MCP / DSH 侧仍可派生 JSON Schema。
+     * StockFactPackSchema 校验，保证 MCP 侧仍可派生 JSON Schema。
      */
     factPack: z.record(z.string(), z.unknown()).optional(),
     /** brief 路径：写 stock_briefs 并把 LLM 失败降级为规则观察；缺省不写。 */

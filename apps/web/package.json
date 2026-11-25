@@ -16,7 +16,6 @@
     "@luoome/adapters": "workspace:*",
     "@luoome/core": "workspace:*",
     "@luoome/db": "workspace:*",
-    "@luoome/dsh-bridge": "workspace:*",
     "@luoome/tools": "workspace:*",
     "@luoome/workflows": "workspace:*",
     "hono": "^4.12.30",
@@ -26,6 +25,7 @@
     "@luoome/plugin-watch": "workspace:*",
     "@luoome/plugin-report": "workspace:*",
     "@luoome/plugin-performance-task": "workspace:*",
-    "@luoome/plugin-market-tasks": "workspace:*"
+    "@luoome/plugin-market-tasks": "workspace:*",
+    "ai": "6.0.x"
   }
 }

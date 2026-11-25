@@ -603,7 +603,7 @@ const createChatStreamResponseImpl = async (
       return Response.json(
         {
           ok: false,
-          error: { kind: 'llm_error', provider: 'dsh', cause: message, retryable: false },
+          error: { kind: 'llm_error', provider: 'ai-sdk', cause: message, retryable: false },
         },
         { status: error.status },
       );

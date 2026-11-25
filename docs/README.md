@@ -45,8 +45,6 @@
 | 文档 | 范围 |
 |---|---|
 | [共享数据底座与能力插件详细设计](./ddd/layered-capability-plugin-detailed-design.md) | P0/P1 已实施；共享底座、归属、依赖与降级仍有效，启停已简化为 `plugins.json` 只读清单（2026-11-20） |
-| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与单机多账户边界；首批已通过受控开发验收，后续能力按设计验证 |
-| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单主用户本地部署、单机多账户、DSH 深度融合（Session / AgentDefinition / Tool Gateway / Memory / 架构契约与实施蓝图） |
 | [领域收敛、去冗余与架构减负详细设计](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md) | 73 表收敛至 38 表、152 Tools 收敛至 34 核心 Agent Tools、移除手写内存库与超前空转模块的详细设计与分阶段计划 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
@@ -76,8 +74,6 @@
 | 文档 | 范围 |
 |---|---|
 | [能力插件分阶段实施计划](./ddd/layered-capability-plugin-detailed-design.md#13-分阶段实施计划) | P0–P2 及 P3 策略执行/个股分析/盯盘监控/报告/通知/账户绩效/独立插件包切片已实施；P4 内置管理面已于 2026-11-20 撤销，现状为手写只读 `plugins.json` + 重启生效 |
-| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | D01–D08 已实现（含持久绑定、回执增量同步与重启去重）；D09 已交付最小子集（模型预算账本、会话目录保留策略、升级排空、灰度门控与回退）；D10 已交付最小子集（子 Agent 创建闸门与权限交集、父子共享预算、后代完成判定；官方 dsh-subagent 组合按 Run 开关加载，子 Agent 到期只标 abandoned；父 Agent idle 后的子 Agent 结算通知在同一 Run 内唤醒父级追问，受截止时间、共享预算、取消与 `limits.parentFollowUpTurns` 上限约束）；Tenant 删除恢复、质量/容量对照与社区插件/真实多 Agent 仍待 D09 剩余项与 D10 剩余项 |
-| [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
 | [luoome 开发计划](./development-plan.md) | 2026-11-12 收敛后基线（§2.0）、当前优先级、依赖与验收门槛；旧阶段仅作历史 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
@@ -119,6 +115,10 @@
 
 ### 已裁撤能力的设计文档
 
+- [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) — DSH 集成已于 2026-11-25 整体退役，仅作历史追溯
+- [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) — 同一退役批次，仅作历史追溯
+- [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) — 同一退役批次，仅作历史追溯
+- [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) — 同一退役批次，仅作历史追溯
 - [研究主题与 Obsidian Vault 详细设计](./archive/research-vault-detailed-design.md) — 研究笔记与检索链路已删除
 - [Strategy 日运行与历史评估可靠性详细设计](./archive/strategy-daily-cycle-and-replay-detailed-design.md) — publication/acceptance、观察补全、daily cycle 编排与 replay 已删除
 - [Strategy 严格回测详细设计](./archive/strategy-strict-backtest-detailed-design.md) — 严格回测整链已删除

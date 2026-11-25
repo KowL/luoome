@@ -48,8 +48,7 @@ S1–S4；2026-11-12 工作树完成日线存储口径与调度闸口改造（�
   `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启，否则不启动并记录原因。
 
 workflow 已收敛到 12 个注册入口（`report` / `strategy` / `sync-market` 三个多模式入口 + 九个专用入口），
-其余复用管线改为 `defineOperation`，审计名保持不变。仍然开放的工程项只有 DSH D08–D10 与各能力的
-真实生产证据。
+其余复用管线改为 `defineOperation`，审计名保持不变。仍然开放的工程项是各能力的真实生产证据。
 `signal_observations` 已拍板保留独立表（自然键主键），不再并入 `strategy_signals`；理由见
 [收敛设计 §6 决策记录](./ddd/domain-simplification-and-architecture-convergence-detailed-design.md#6-决策记录signal_observations-保留独立表2026-11-13)。
 本页 §2.6 P2-4、§2.7 Phase 3、§2.9 M2 和 §3.2 中的 lease/checkpoint/revision 描述均为收敛前历史，

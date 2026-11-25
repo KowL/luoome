@@ -162,7 +162,7 @@ export interface AISettingsView {
   readonly apiKeyEnv: string;
   readonly apiKeyConfigured: boolean;
   readonly temperature: number;
-  /** agent profile 的单次输出预算；DSH 运行时按此值构造供应商 max_tokens。 */
+  /** agent profile 的单次输出预算；聊天运行时按此值构造供应商 max_tokens。 */
   readonly maxOutputTokens: number;
   readonly timeoutSeconds: number;
   readonly maxRetries: number;

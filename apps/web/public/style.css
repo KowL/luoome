@@ -11258,9 +11258,9 @@ body.minute-embed::before { content: none; }
 }
 
 /* ============================================================
- * AI 对话 · DSH 参考
+ * AI 对话
  * 结构：居中阅读列 + 无边框消息流 + 悬浮输入卡。
- * 保留 luoome 的深色终端配色，只借用 DSH 的留白与层级。
+ * 保留 luoome 的深色终端配色，只用留白与层级分层。
  * ============================================================ */
 #route-chat {
   --chat-read: 780px;
@@ -12119,7 +12119,7 @@ body.minute-embed::before { content: none; }
   margin: 3px 0;
 }
 
-/* 会话栏：与 DSH 的左栏一致，新建入口是标题右侧的加号图标。 */
+/* 会话栏：新建入口是标题右侧的加号图标。 */
 .sidebar-chat {
   margin: 16px 8px 0;
   padding-top: 14px;

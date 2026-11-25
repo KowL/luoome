@@ -5,8 +5,8 @@
 > 状态（历史设计记录）：P0–P2 已实施；P3 策略执行与任务资源切片已实施，验收与限制见第 17 节；P4 内置管理面已于 2026-11-20 撤销（Web 插件页、`luoome plugins` 命令、permit/撤销队列/drain 记账/CAS 写入协议），现状为手写只读 `plugins.json` + 重启宿主生效，第 18 节及第 19–25 节的管理面描述仅作历史记录；其余业务切片见第 19–25 节。
 > 日期：2026-11-15；代码基线：`1c0c516e`。
 > 评估：Codex、GPT-6 Astra（High）、本地 Kimi CLI（`kimi-code/k3.1-pro`）共同讨论；评审取舍见第 14 节。
-> 范围：本地单用户、单机多账户，CLI / Web / MCP / Workflow / DSH 共用业务能力。
-> 依据：[领域语言](../../CONTEXT.md)、[当前架构](../ARCHITECTURE.md)、[安全约束](../SECURITY.md)、[DSH 插件设计](./dsh-plugin-platform-design.md)、[数据源设计](./source-pluggability-and-observation-design.md)。
+> 范围：本地单用户、单机多账户，CLI / Web / MCP / Workflow / Web 对话运行时共用业务能力。
+> 依据：[领域语言](../../CONTEXT.md)、[当前架构](../ARCHITECTURE.md)、[安全约束](../SECURITY.md)、[Web 对话助手设计](./web-chat-design.md)、[数据源设计](./source-pluggability-and-observation-design.md)。
 
 ## 1. 目标与明确不做的事
 
@@ -41,7 +41,7 @@
 
 ```mermaid
 flowchart TD
-    S[CLI / Web / MCP / DSH Gateway] --> T[受控 Tool execute]
+    S[CLI / Web / MCP / Web Chat] --> T[受控 Tool execute]
     W[Workflow：业务组合与降级] --> T
     T --> B[业务能力：分析 / 策略执行 / 预警 / 报告]
     B --> Q[常驻查询与事实校验]
@@ -112,7 +112,7 @@ flowchart TD
 
 ## 5. 包结构与接口：沿用当前架构
 
-既有依赖方向不变：`surfaces / workflows → tools → {core, db, adapters}`，`db/adapters → core`。插件按业务职责组织已有文件，首期不新增通用 plugins package，不把 DSH/Cordis 依赖引入业务包。
+既有依赖方向不变：`surfaces / workflows → tools → {core, db, adapters}`，`db/adapters → core`。插件按业务职责组织已有文件，首期不新增通用 plugins package，不把 Agent SDK 依赖引入业务包。
 
 | 位置 | 计划职责 |
 |---|---|
@@ -123,7 +123,7 @@ flowchart TD
 | `tools` 的各领域查询/操作模块 | 常驻查询与可停用操作；逐片缩小依赖注入范围 |
 | `workflows` | 有类型的操作组合与显式降级，仅调用 `ctx.tools` |
 | CLI/Web/MCP 组装根 | 可信身份/权限、运行快照、资源 owner 接线与宿主状态投影 |
-| DSH bridge/Node Host | 消费已核准的每轮 manifest，经 Bun Gateway 执行业务，不持有业务配置修改权 |
+| Web 对话运行时 | 只消费本轮授权的 callable 与用途白名单，不持有业务配置修改权 |
 
 ### 5.1 最小声明与单一事实来源
 
@@ -260,7 +260,7 @@ atomic rename 只防止半写；writer lock + 锁内 revision 校验才防止两
 | Web | 下一次 Tool/port/task 安全 admission 重读权威策略；旧闭包复核相关 epoch | 下一轮 Agent manifest 使用实际可用工具；设置返回本进程 applied 状态 |
 | 一次性 CLI | 新进程启动读配置；长执行在每批/重试等安全点复核 | tools list 区分静态库存、当前可用与阻断原因 |
 | 常驻入站 MCP | P1 起调用执行复核 live policy；旧工具表不构成调用许可 | 动态发现完成前需重启更新工具表；P4 已实现同连接 tools/list 与 list_changed |
-| DSH | Bun Gateway/实际 Tool/port 复核；Node 内旧 manifest 不能绕过 | 下一轮重建 manifest；仍是受限 Node Host，无业务配置修改权 |
+| Web 对话运行时 | Tool/port 每次调用复核；运行时不缓存旧授权 | 下一轮重新装配工具集；仍无业务配置修改权 |
 | 后台 task | tick、下一批、重试、通知前分别复核 owner 与实际依赖 epoch | 不使用启动时永久闭包替代当前策略 |
 
 跨进程进程可能错过完整一次关→开，所以同一 config incarnation 内 epoch 必须持久单调，不能仅比较最终 enabled/config hash。已开始的调用保留配置实例与它实际依赖的 epoch；无关插件修改不能使所有会话失效，配置灾难恢复则使旧可选执行许可全部失效。每次安全点读取到的配置实例和 revision 是本次裁决的线性化点，已经通过旧裁决的在途操作不能追溯撤销。
@@ -421,7 +421,7 @@ P1 已提供的最小控制命令（2026-11-20 已撤销：以下 `luoome plugin
 
 ### 13.1 验证命令与证据要求
 
-开发中先跑对应 Tool、Workflow、adapter、配置、scheduler 测试；依照 [package.json](../../package.json) 在每个代码阶段交付前运行适配范围的 `bun run typecheck`、`bun run lint`、`bun run test:all` 和构建检查。入站 MCP 变动运行 `bun run mcp:smoke` 并用真实 SDK 客户端；DSH Gateway 变动跑真实 Node/DSH 集成测试。
+开发中先跑对应 Tool、Workflow、adapter、配置、scheduler 测试；依照 [package.json](../../package.json) 在每个代码阶段交付前运行适配范围的 `bun run typecheck`、`bun run lint`、`bun run test:all` 和构建检查。入站 MCP 变动运行 `bun run mcp:smoke` 并用真实 SDK 客户端；对话运行时变动跑 `bun run test:web` 的 AI SDK 集成测试。
 
 Web 改动必须实际启动受控实例，完成启用→发现→调用→停用→旧调用拒绝→新会话无工具的浏览器链路，并检查移动布局。测试使用临时配置/数据库与 fixtures，不碰个人凭证或私人投资数据。
 
@@ -431,7 +431,7 @@ Web 改动必须实际启动受控实例，完成启用→发现→调用→停�
 
 先部署同版本内建代码和兼容 schema，再启用本阶段管理开关；默认行为以 P0 基线为准，新能力默认关。插件代码升级采用停止接新执行→安全排空→重启→契约/实际库存探针，不在单次运行中替换实现。
 
-回退优先用新的配置 revision 关闭本阶段可选能力，保留数据与审计；程序回滚前核对配置版本/epoch 是否被旧代码理解。P1 前的旧程序完全不识别控制文件，不能把“保留已关闭开关”当作安全回滚。部署核验必须停止并确认相关 Web/MCP/长运行 CLI/DSH 子进程已退出或排空，再启动经过明确配置限制的旧版本并检查实际库存与网络行为；不能仅靠配置版本阻止旧二进制启动。DB 变动独立幂等迁移，不随开关回滚，不删除用户数据。
+回退优先用新的配置 revision 关闭本阶段可选能力，保留数据与审计；程序回滚前核对配置版本/epoch 是否被旧代码理解。P1 前的旧程序完全不识别控制文件，不能把“保留已关闭开关”当作安全回滚。部署核验必须停止并确认相关 Web/MCP/长运行 CLI 进程已退出或排空，再启动经过明确配置限制的旧版本并检查实际库存与网络行为；不能仅靠配置版本阻止旧二进制启动。DB 变动独立幂等迁移，不随开关回滚，不删除用户数据。
 
 主要风险是共享依赖牵连、旧闭包复活、晚结果污染、数据质量漂移、双配置权威和多进程误报生效。对应措施分别是唯一 owner/窄端口、持久 epoch、发布前复核、既有质量契约、权威字段划分、宿主独立应用状态和真实调用验收。
 
@@ -478,7 +478,7 @@ Web 改动必须实际启动受控实例，完成启用→发现→调用→停�
 | strategy-insight | 窗口事实读取、至多两次模型解释；无 timer/连接 | P1 唯一受控解释 port；共享查询及组合不归 AI 插件 |
 | strategy-scheduler | strategy tick 与 closingReportCutoff 共用 stop | 已识别，P3 拆 owner；P1 关闭 AI 不调用这个 stop |
 | market-batch / post-market / intraday-plan / portfolio-performance scheduler | 各自 timer、异步 tick、内部批次/投递 | P0 记录 owner，P3 按职责迁移；当前启动 write+external 卡不变 |
-| Agent / 草案 / DSH Gateway | 请求/会话 scope、待确认执行与回执、Bun 执行业务 | 仍经 execute；本次不新增 Agent 工具或插件管理工具 |
+| Agent / 草案 / 对话运行时 | 请求/会话 scope、待确认执行与回执、进程内执行业务 | 仍经 execute；本次不新增 Agent 工具或插件管理工具 |
 
 ### 15.2 P1 已完成
 
@@ -494,7 +494,7 @@ Web 改动必须实际启动受控实例，完成启用→发现→调用→停�
 
 验收包括真实文件策略的两个宿主、真实两个进程竞争同一版本、损坏/超大/缺项配置、配置丢失恢复、旧 scope/port/Workflow、暂停成功模型响应及修复失败两种撤销、同窗口事实一致、external 拒绝不降级、日循环发布和周报事实保留。真实 Bun CLI 验证 dry-run/写权限/init/条件停用/过期写入拒绝，且不创建数据库或连接 provider。
 
-交付检查执行 `bun run test:all`、`bun run typecheck`、`bun run lint`、`bun run build` 与 `bun run mcp:smoke`，保留既有真实 Node/DSH 和 MCP 客户端回归。P1 没有 Web UI 改动，不宣称已交付插件设置页或动态 MCP discovery。
+交付检查执行 `bun run test:all`、`bun run typecheck`、`bun run lint`、`bun run build` 与 `bun run mcp:smoke`，保留既有 AI SDK 对话运行时和 MCP 客户端回归。P1 没有 Web UI 改动，不宣称已交付插件设置页或动态 MCP discovery。
 
 上述为 P0/P1 阶段快照；P2/P3 的增量实现与边界见后两节。该历史阶段尚无 Web 插件管理；P4 增量见第 18 节。
 
