@@ -8,11 +8,17 @@ import {
 } from '@luoome/core';
 import {
   AGENT_SCENARIOS,
+  type AgentRoute,
+  type AgentRouteContext,
   type AgentScenario,
+  type AgentScenarioId,
   agentInstructions,
+  applicationToolRegistry,
   buildAgentCallableTools,
+  CHAT_ONLY_READ_TOOL_NAMES,
   chatToolNameOfPart,
   parseChatDraftSettlements,
+  type Registry,
   routeAgentMessage,
   toolRegistry,
 } from '@luoome/tools';
@@ -79,28 +85,59 @@ export class ChatRuntimeRejection extends Error {
   }
 }
 
+/**
+ * 注入系统提示的本地上下文；只装当前场景路由与回答真正需要的实体。
+ * 通用问答不装账户、Watchlist、Strategy、AlertPlan，也不装行情健康，避免大块无关 token。
+ */
+interface ChatWatchlistSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly membershipPolicy: string;
+}
+
+interface ChatStrategySummary {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+}
+
+interface ChatAlertPlanSummary {
+  readonly id: string;
+  readonly name: string;
+}
+
 interface ChatContextSummary {
-  readonly account: { readonly id: string; readonly name: string } | null;
-  readonly watchlists: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly kind: string;
-    readonly membershipPolicy: string;
-  }[];
-  readonly strategies: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly status: string;
-  }[];
-  readonly alertPlans: readonly { readonly id: string; readonly name: string }[];
-  readonly holdingStockIds: readonly string[];
+  readonly account?: { readonly id: string; readonly name: string };
+  readonly watchlists?: readonly ChatWatchlistSummary[];
+  readonly strategies?: readonly ChatStrategySummary[];
+  readonly alertPlans?: readonly ChatAlertPlanSummary[];
+  readonly holdingStockIds?: readonly string[];
   /** 数据健康降级摘要；全部正常时缺省，不占上下文 token。 */
   readonly dataHealth?: { readonly degraded: true; readonly issues: readonly string[] };
 }
 
-const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary> => {
-  const accountId = ctx.user.defaultAccountId;
-  const safe = async <T>(run: () => Promise<T>, fallback: T): Promise<T> => {
+const EMPTY_ROUTE_CONTEXT: AgentRouteContext = {
+  accountName: null,
+  watchlistNames: [],
+  strategyNames: [],
+  alertPlanNames: [],
+  holdingStockIds: [],
+};
+
+const contextReader =
+  (ctx: ToolContext) =>
+  async (name: string, input: unknown): Promise<Record<string, unknown>> => {
+    const tool = toolRegistry.get(name) ?? appServiceTool(name);
+    if (tool === undefined) throw new Error(`chat 上下文 tool 未注册: ${name}`);
+    const result = await tool.execute(input, ctx);
+    if (!result.ok) throw new Error(`${name}: ${result.error.kind}`);
+    return result.data as Record<string, unknown>;
+  };
+
+const contextSafe =
+  (ctx: ToolContext) =>
+  async <T>(run: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await run();
     } catch (error) {
@@ -109,22 +146,25 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     }
   };
 
-  const account = await safe(async () => {
+const loadAccount = async (
+  ctx: ToolContext,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<{ id: string; name: string } | null> =>
+  safe(async () => {
+    const accountId = ctx.user.defaultAccountId;
     if (accountId.length === 0) return null;
     const value = await workspaceRead('get_account', { accountId }, ctx);
     if (!value.ok) return null;
     const account = value.data.account as { id: string; name: string };
     return { id: account.id, name: account.name };
   }, null);
-  const executeRead = async (name: string, input: unknown): Promise<Record<string, unknown>> => {
-    const tool = toolRegistry.get(name) ?? appServiceTool(name);
-    if (tool === undefined) throw new Error(`chat 上下文 tool 未注册: ${name}`);
-    const result = await tool.execute(input, ctx);
-    if (!result.ok) throw new Error(`${name}: ${result.error.kind}`);
-    return result.data as Record<string, unknown>;
-  };
-  const watchlists = await safe(async () => {
-    const data = await executeRead('list_watchlists', {});
+
+const loadWatchlists = async (
+  read: (name: string, input: unknown) => Promise<Record<string, unknown>>,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<readonly ChatWatchlistSummary[]> =>
+  safe(async () => {
+    const data = await read('list_watchlists', {});
     return z
       .array(
         z.object({
@@ -140,29 +180,51 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
       .slice(0, 50)
       .map(({ watchlist }) => watchlist);
   }, []);
-  const strategies = await safe(async () => {
-    const data = await executeRead('list_strategies', {});
+
+const loadStrategies = async (
+  read: (name: string, input: unknown) => Promise<Record<string, unknown>>,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<readonly ChatStrategySummary[]> =>
+  safe(async () => {
+    const data = await read('list_strategies', {});
     return z
       .array(z.object({ id: z.string(), name: z.string(), status: z.string() }))
       .parse(data.strategies)
       .slice(0, 50);
   }, []);
-  const alertPlans = await safe(async () => {
-    const data = await executeRead('list_alert_plans', {});
+
+const loadAlertPlans = async (
+  read: (name: string, input: unknown) => Promise<Record<string, unknown>>,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<readonly ChatAlertPlanSummary[]> =>
+  safe(async () => {
+    const data = await read('list_alert_plans', {});
     return z
       .array(z.object({ id: z.string(), name: z.string() }))
       .parse(data.plans)
       .slice(0, 50);
   }, []);
-  const holdingStockIds = await safe(async () => {
+
+const loadHoldingStockIds = async (
+  ctx: ToolContext,
+  read: (name: string, input: unknown) => Promise<Record<string, unknown>>,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<readonly string[]> =>
+  safe(async () => {
+    const accountId = ctx.user.defaultAccountId;
     if (accountId.length === 0) return [];
-    const data = await executeRead('get_account_facts', { accountId });
+    const data = await read('get_account_facts', { accountId });
     return (data.facts as { positions: { stockId: string }[] }).positions.map(
       (item) => item.stockId,
     );
   }, []);
-  const dataHealth = await safe(async () => {
-    const data = await executeRead('get_market_data_status', {});
+
+const loadDataHealth = async (
+  read: (name: string, input: unknown) => Promise<Record<string, unknown>>,
+  safe: <T>(run: () => Promise<T>, fallback: T) => Promise<T>,
+): Promise<ChatContextSummary['dataHealth']> =>
+  safe(async () => {
+    const data = await read('get_market_data_status', {});
     const status = z
       .object({
         providers: z.array(z.object({ provider: z.string(), freshness: z.string() })),
@@ -191,13 +253,79 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     return issues.length === 0 ? undefined : { degraded: true as const, issues };
   }, undefined);
 
+/** 路由名册只用于命中本地实体，不注入提示词；关键词已命中场景时不需要它。 */
+const loadRouteContext = async (ctx: ToolContext): Promise<AgentRouteContext> => {
+  const read = contextReader(ctx);
+  const safe = contextSafe(ctx);
+  const [account, watchlists, strategies, alertPlans, holdingStockIds] = await Promise.all([
+    loadAccount(ctx, safe),
+    loadWatchlists(read, safe),
+    loadStrategies(read, safe),
+    loadAlertPlans(read, safe),
+    loadHoldingStockIds(ctx, read, safe),
+  ]);
   return {
-    account,
-    watchlists,
-    strategies,
-    alertPlans,
-    holdingStockIds,
-    ...(dataHealth === undefined ? {} : { dataHealth }),
+    accountName: account?.name ?? null,
+    watchlistNames: watchlists.map((item) => item.name),
+    strategyNames: strategies.map((item) => item.name),
+    alertPlanNames: alertPlans.map((item) => item.name),
+    holdingStockIds: [...holdingStockIds],
+  };
+};
+
+const buildContextSummary = async (
+  ctx: ToolContext,
+  scenarioId: AgentScenarioId,
+): Promise<ChatContextSummary> => {
+  if (scenarioId === 'general') return {};
+  const read = contextReader(ctx);
+  const safe = contextSafe(ctx);
+  const dataHealth = await loadDataHealth(read, safe);
+  const health = dataHealth === undefined ? {} : { dataHealth };
+  switch (scenarioId) {
+    case 'portfolio': {
+      const [account, holdingStockIds] = await Promise.all([
+        loadAccount(ctx, safe),
+        loadHoldingStockIds(ctx, read, safe),
+      ]);
+      return {
+        ...(account === null ? {} : { account }),
+        holdingStockIds: [...holdingStockIds],
+        ...health,
+      };
+    }
+    case 'watch': {
+      const [watchlists, alertPlans] = await Promise.all([
+        loadWatchlists(read, safe),
+        loadAlertPlans(read, safe),
+      ]);
+      return { watchlists, alertPlans, ...health };
+    }
+    case 'research': {
+      const [watchlists, strategies] = await Promise.all([
+        loadWatchlists(read, safe),
+        loadStrategies(read, safe),
+      ]);
+      return { watchlists, strategies, ...health };
+    }
+    case 'review': {
+      const account = await loadAccount(ctx, safe);
+      return { ...(account === null ? {} : { account }), ...health };
+    }
+  }
+};
+
+/**
+ * 复盘只读 Tool 不在 MCP/CLI 暴露面内，只在这里按场景补充解析；
+ * buildAgentCallableTools 的 read/external 能力校验仍然是硬约束。
+ */
+const scenarioReadRegistry = (names: readonly string[]): Registry => {
+  if (!names.some((name) => CHAT_ONLY_READ_TOOL_NAMES.has(name))) return toolRegistry;
+  return {
+    ...toolRegistry,
+    get: (name) =>
+      toolRegistry.get(name) ??
+      (CHAT_ONLY_READ_TOOL_NAMES.has(name) ? applicationToolRegistry.get(name) : undefined),
   };
 };
 
@@ -210,7 +338,11 @@ const buildChatTools = (
     ...ctx,
     ...(ctx.executionPolicy === undefined ? {} : { executionPolicy: ctx.executionPolicy.bind() }),
   };
-  const reads = buildAgentCallableTools(toolRegistry, ctx, scenario.readToolNames);
+  const reads = buildAgentCallableTools(
+    scenarioReadRegistry(scenario.readToolNames),
+    ctx,
+    scenario.readToolNames,
+  );
 
   const available = (name: string) => {
     try {
@@ -322,7 +454,7 @@ const buildInstructions = (
           '讨论主体由服务端核验。逐项区分比较对象和证据，不串用不同股票的计划。历史、过期、被替代或账户事实变化的依据仅用于追溯，不能宣称当前可执行。资格 ready 不表示后台已检查、通知已送达。未研究不等于没有机会，事实摘要不等于 AI 判断。',
           `本轮核验的讨论主体：${JSON.stringify(subjects)}`,
         ]),
-    `当前本地上下文：${JSON.stringify(context)}`,
+    ...(Object.keys(context).length === 0 ? [] : [`当前本地上下文：${JSON.stringify(context)}`]),
   ]
     .filter((part) => part.length > 0)
     .join('\n');
@@ -466,23 +598,20 @@ const createChatStreamResponseImpl = async (
       status: resolved.error.kind === 'not_found' ? 404 : 400,
       headers: { 'content-type': 'application/json' },
     });
-  const context = await buildContextSummary(ctx);
-  const route = routeAgentMessage(
-    `${lastUserText}\n${resolved.data.map((item) => item.label).join('；')}`,
-    {
-      accountName: context.account?.name ?? null,
-      watchlistNames: context.watchlists.map((item) => item.name),
-      strategyNames: context.strategies.map((item) => item.name),
-      alertPlanNames: context.alertPlans.map((item) => item.name),
-      holdingStockIds: context.holdingStockIds,
-    },
-  );
+  const routingText = `${lastUserText}\n${resolved.data.map((item) => item.label).join('；')}`;
+  const keywordRoute = routeAgentMessage(routingText, EMPTY_ROUTE_CONTEXT);
+  // 只有关键词没命中场景时才读实体名册，捕捉「300857 怎么样」「超跌反弹」这类隐含引用。
+  const route: AgentRoute =
+    keywordRoute.scenario === 'general'
+      ? routeAgentMessage(routingText, await loadRouteContext(ctx))
+      : keywordRoute;
   if (route.missingIdentifiers.length > 0) {
     return invalidRequest(
       `缺少必要标识：${route.missingIdentifiers.join('、')}，请补充股票代码或名称后再问`,
     );
   }
   const scenario = AGENT_SCENARIOS[route.scenario];
+  const context = await buildContextSummary(ctx, route.scenario);
   const appended = retrying
     ? { ok: true as const }
     : await appendTool.execute(

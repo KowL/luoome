@@ -3,6 +3,7 @@ import {
   AdviceLadderSnapshotSchema,
   AdviceReasoningSchema,
   dateInShanghai,
+  PluginExecutionDenied,
   STANDARD_DISCLAIMERS,
   type Stock,
   type ToolContext,
@@ -147,19 +148,34 @@ export const marketOutlookTool = defineTool({
     const ladder = await loadLadderSnapshot(ctx);
     assertAdviceAnalysis(ctx);
 
-    const llm = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
-      system: 'market_outlook',
-      schema: AdviceLLMSchema,
-      data: {
-        theme: input.theme ?? '全市场',
-        evaluatedStocks: quotes.length,
-        advancers,
-        decliners,
-        avgChangePct,
-        ladder,
-        ...(input.notes !== undefined ? { notes: input.notes } : {}),
-      },
-    });
+    // LLM 失败就在本 tool 边界返回 llm_error：不落库，也不伪造建议。
+    let llm: AdviceLLMOutput;
+    try {
+      llm = await generateAdviceAnalysis<AdviceLLMOutput>(ctx, {
+        system: 'market_outlook',
+        schema: AdviceLLMSchema,
+        data: {
+          theme: input.theme ?? '全市场',
+          evaluatedStocks: quotes.length,
+          advancers,
+          decliners,
+          avgChangePct,
+          ladder,
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        },
+      });
+    } catch (error) {
+      if (error instanceof PluginExecutionDenied) throw error;
+      return {
+        ok: false as const,
+        error: {
+          kind: 'llm_error' as const,
+          provider: ctx.adapters.llm.name,
+          cause: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        },
+      };
+    }
 
     const now = ctx.clock();
     const id = `mkt-${now.getTime().toString(36)}`;

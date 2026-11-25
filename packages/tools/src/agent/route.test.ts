@@ -78,6 +78,45 @@ describe('routeAgentMessage', () => {
     expect(write.needsAdvice).toBe(false);
   });
 
+  it('通用代码与生活问题不误进 research', () => {
+    for (const message of [
+      '帮我分析这段代码为什么报错',
+      '这段 Python 函数怎么改成 TypeScript',
+      'React hooks 是什么',
+      '解释一下什么是复利效应',
+      '帮我总结这份会议的要点',
+      '要不要买空气炸锅',
+      'review this TypeScript code',
+      'watch this function carefully',
+      'explain the strategy pattern',
+      'how to account for this edge case',
+      '今天天气怎么样',
+    ]) {
+      const route = routeAgentMessage(message, EMPTY_CONTEXT);
+      expect(route.scenario, message).toBe('general');
+    }
+  });
+
+  it('个股问题仍进 research：领域名词、股票代码与带标的的买卖意图', () => {
+    for (const message of [
+      '帮我分析一下这只股票',
+      '600519 的估值贵不贵',
+      '这只票该不该买',
+      '300857 现在怎么样',
+      '帮我看看财报里的毛利率',
+    ]) {
+      expect(routeAgentMessage(message, EMPTY_CONTEXT).scenario, message).toBe('research');
+    }
+    // 英文投资实体使用完整单词匹配，不与 review/watch/strategy 等通用动词混淆。
+    expect(routeAgentMessage('AAPL stock 怎么样', EMPTY_CONTEXT).scenario).toBe('research');
+  });
+
+  it('纯粹的资金与成交操作仍进 portfolio，不被 research 抢走', () => {
+    for (const message of ['登记入金 10000 元', '平仓记录', '交易计划有效吗', '我的持仓成本']) {
+      expect(routeAgentMessage(message, EMPTY_CONTEXT).scenario, message).toBe('portfolio');
+    }
+  });
+
   it('资金管理路由至 portfolio，并区分查询与记录意图', () => {
     for (const message of ['现金余额多少', '帮我对账', '查看入金流水', '交易计划有效吗']) {
       expect(routeAgentMessage(message, EMPTY_CONTEXT)).toMatchObject({

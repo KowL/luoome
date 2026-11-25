@@ -741,6 +741,19 @@
           <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
         </nav>
         <form id="ai-settings-form" class="ai-settings" autocomplete="off" data-settings-pane="ai">
+          <div class="ai-profile-switch" role="group" aria-label="配置目标">
+            <button
+              type="button"
+              class="ai-profile-tab is-active"
+              data-ai-profile="agent"
+              aria-pressed="true"
+            >
+              对话 Agent
+            </button>
+            <button type="button" class="ai-profile-tab" data-ai-profile="generation" aria-pressed="false">
+              生成
+            </button>
+          </div>
           <div class="ai-settings-grid">
             <section class="ai-settings-panel ai-connection-panel" aria-labelledby="ai-connection-title">
               <div class="ai-panel-title">
@@ -811,6 +824,18 @@
                 <div class="field">
                   <label for="ai-max-retries">最大重试</label>
                   <input id="ai-max-retries" type="number" min="0" max="5" step="1" required />
+                </div>
+                <div class="field">
+                  <label for="ai-max-output-tokens">单次输出上限</label>
+                  <input
+                    id="ai-max-output-tokens"
+                    type="number"
+                    min="256"
+                    max="200000"
+                    step="256"
+                    required
+                  />
+                  <span id="ai-max-output-hint" class="hint"></span>
                 </div>
                 <div class="field">
                   <label for="ai-reasoning-effort">推理强度</label>

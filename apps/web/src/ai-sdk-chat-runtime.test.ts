@@ -8,8 +8,14 @@ import { AGENT_SCENARIOS } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 import { z } from 'zod';
-import { AiSdkChatRuntime, createAiSdkChatRuntimeFromStore } from './ai-sdk-chat-runtime.js';
+import {
+  AiSdkChatRuntime,
+  createAiSdkChatRuntimeFromStore,
+  projectChatContext,
+  resolveRunTimeoutMs,
+} from './ai-sdk-chat-runtime.js';
 import { AISettingsStore } from './ai-settings.js';
+import { ChatRuntimeRejection } from './chat.js';
 
 type MockStreamResult = Awaited<ReturnType<MockLanguageModelV3['doStream']>>;
 type ProviderChunk = MockStreamResult['stream'] extends ReadableStream<infer T> ? T : never;
@@ -177,6 +183,18 @@ describe('AiSdkChatRuntime', () => {
     );
     expect(model.doStreamCalls).toHaveLength(2);
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('"price":42');
+    expect(finished.parts).toContainEqual({
+      type: 'data-luoome-usage',
+      data: {
+        usage: expect.objectContaining({
+          modelRef: 'fixture:model',
+          steps: 2,
+          toolCalls: 1,
+          tokensKnown: true,
+          durationMs: expect.any(Number),
+        }),
+      },
+    });
   });
 
   it('keeps a tool execution error as tool output and does not fail the turn', async () => {
@@ -527,6 +545,294 @@ describe('AiSdkChatRuntime', () => {
   });
 });
 
+describe('运行时预算、上下文与 usage', () => {
+  const runtimeWithBudget = (
+    model: MockLanguageModelV3,
+    overrides: {
+      readonly timeoutMs?: number;
+      readonly runTimeoutMs?: number;
+      readonly maxContextChars?: number;
+      readonly maxToolOutputBytes?: number;
+      readonly maxSteps?: number;
+      readonly toolTimeoutMs?: number;
+    } = {},
+  ) =>
+    new AiSdkChatRuntime({
+      model: {
+        model,
+        modelRef: 'fixture:budget-model',
+        timeoutMs: overrides.timeoutMs ?? 5_000,
+        maxOutputTokens: 512,
+        maxSteps: overrides.maxSteps ?? 8,
+        maxRetries: 0,
+        maxTotalTokens: 1_000_000,
+        ...(overrides.runTimeoutMs === undefined ? {} : { runTimeoutMs: overrides.runTimeoutMs }),
+        ...(overrides.maxContextChars === undefined
+          ? {}
+          : { maxContextChars: overrides.maxContextChars }),
+        ...(overrides.maxToolOutputBytes === undefined
+          ? {}
+          : { maxToolOutputBytes: overrides.maxToolOutputBytes }),
+      },
+      ...(overrides.toolTimeoutMs === undefined ? {} : { toolTimeoutMs: overrides.toolTimeoutMs }),
+    });
+
+  it('整轮 run 预算按步数派生并限制在 10 分钟内', () => {
+    expect(
+      resolveRunTimeoutMs({ timeoutMs: 120_000, maxSteps: 8, runTimeoutMs: undefined }, 15_000),
+    ).toBe(600_000);
+    expect(
+      resolveRunTimeoutMs({ timeoutMs: 30_000, maxSteps: 8, runTimeoutMs: undefined }, 15_000),
+    ).toBe(360_000);
+    expect(
+      resolveRunTimeoutMs({ timeoutMs: 120_000, maxSteps: 8, runTimeoutMs: 45_000 }, 15_000),
+    ).toBe(45_000);
+  });
+
+  it('多步 Tool Calling 在默认预算内完整跑完，不被单次请求预算提前截断', async () => {
+    const slow = (chunks: ProviderChunk[]) =>
+      simulateReadableStream({ chunks, chunkDelayInMs: 10 });
+    const model = new MockLanguageModelV3({
+      doStream: async () => {
+        calls += 1;
+        if (calls === 1)
+          return {
+            stream: slow([
+              { type: 'stream-start', warnings: [] },
+              { type: 'tool-input-start', id: 'call-1', toolName: 'fetch_quote' },
+              { type: 'tool-input-delta', id: 'call-1', delta: '{}' },
+              { type: 'tool-input-end', id: 'call-1' },
+              { type: 'tool-call', toolCallId: 'call-1', toolName: 'fetch_quote', input: '{}' },
+              finish('tool-calls'),
+            ]),
+          };
+        if (calls === 2)
+          return {
+            stream: slow([
+              { type: 'stream-start', warnings: [] },
+              { type: 'tool-input-start', id: 'call-2', toolName: 'list_watchlists' },
+              { type: 'tool-input-delta', id: 'call-2', delta: '{}' },
+              { type: 'tool-input-end', id: 'call-2' },
+              { type: 'tool-call', toolCallId: 'call-2', toolName: 'list_watchlists', input: '{}' },
+              finish('tool-calls'),
+            ]),
+          };
+        return {
+          stream: slow([
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: '多步完成' },
+            { type: 'text-end', id: 'text-1' },
+            finish('stop'),
+          ]),
+        };
+      },
+    });
+    let calls = 0;
+    const quote = callable('fetch_quote', async () => ({ ok: true, output: { price: 42 } }));
+    const watchlists = callable('list_watchlists', async () => ({
+      ok: true,
+      output: { items: [] },
+    }));
+    const { finished } = await run(runtimeWithBudget(model, { timeoutMs: 1_500 }), {
+      uiMessages: userMessage('查行情和观察清单'),
+      tools: [quote, watchlists],
+    });
+
+    expect(calls).toBe(3);
+    expect(finished.cancelled).toBe(false);
+    expect(finished.parts).toContainEqual(
+      expect.objectContaining({ type: 'text', text: '多步完成' }),
+    );
+  });
+
+  it('整轮 run 预算超时按错误上报，不误标为用户取消', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: async (options) => ({
+        stream: new ReadableStream<ProviderChunk>({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            const fail = () =>
+              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            if (options.abortSignal?.aborted) fail();
+            else options.abortSignal?.addEventListener('abort', fail, { once: true });
+          },
+        }),
+      }),
+    });
+    const runtime = runtimeWithBudget(model, { timeoutMs: 5_000, runTimeoutMs: 20 });
+    const { parts, finished } = await run(runtime, {
+      uiMessages: userMessage('长时间运行'),
+      tools: [],
+    });
+
+    expect(parts).toContainEqual(
+      expect.objectContaining({ type: 'error', errorText: expect.stringContaining('超时') }),
+    );
+    expect(parts.map((part) => part.type)).not.toContain('abort');
+    expect(finished.cancelled).toBe(false);
+    expect(finished.parts).toContainEqual({
+      type: 'data-luoome-stream-error',
+      data: { message: expect.stringContaining('超时') },
+    });
+  });
+
+  it('本地 Tool 大输出按字节上限截断，并把分页提示回传模型', async () => {
+    const model = modelWith(toolStream('fetch_big', {}), textStream('已截断'));
+    const big = {
+      items: Array.from({ length: 4_000 }, (_, index) => ({ id: index, note: 'x'.repeat(80) })),
+    };
+    const tool = callable('fetch_big', async () => ({ ok: true, output: big }));
+    const { finished } = await run(runtimeWithBudget(model, { maxToolOutputBytes: 2_048 }), {
+      uiMessages: userMessage('拉全量数据'),
+      tools: [tool],
+    });
+
+    const toolPart = finished.parts.find((part) => part.type === 'tool-fetch_big') as
+      | { output?: Record<string, unknown> }
+      | undefined;
+    expect(toolPart?.output).toMatchObject({
+      outputTruncated: true,
+      limitBytes: 2_048,
+      totalBytes: expect.any(Number),
+      hint: expect.stringContaining('截断'),
+    });
+    const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
+    expect(secondPrompt).toContain('outputTruncated');
+    expect(secondPrompt.length).toBeLessThan(20_000);
+  });
+
+  it('请求前压缩旧 Tool 大输出并保留用户消息与最新回答', async () => {
+    const model = modelWith(textStream('继续回答'));
+    const big = {
+      items: Array.from({ length: 6_000 }, (_, index) => ({ id: index, note: 'y'.repeat(80) })),
+    };
+    const { finished } = await run(runtimeWithBudget(model, { maxContextChars: 8_000 }), {
+      uiMessages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '之前的问题' }] },
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          parts: [
+            { type: 'step-start' },
+            { type: 'text', text: '之前回答' },
+            {
+              type: 'tool-fetch_big',
+              toolCallId: 'old-call',
+              state: 'output-available',
+              input: {},
+              output: big,
+            },
+          ],
+        },
+        { id: 'user-2', role: 'user', parts: [{ type: 'text', text: '继续' }] },
+      ],
+      tools: [],
+    });
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(prompt).toContain('之前的问题');
+    expect(prompt).toContain('之前回答');
+    expect(prompt).toContain('继续');
+    expect(prompt).toContain('outputTruncated');
+    expect(prompt.length).toBeLessThan(20_000);
+    expect(finished.parts).toContainEqual(
+      expect.objectContaining({ type: 'text', text: '继续回答' }),
+    );
+  });
+
+  it('压缩后仍超限时明确拒绝，而不是静默丢事实', async () => {
+    const model = modelWith(textStream('不应被调用'));
+    const hugeText = '证'.repeat(4_000);
+    await expect(
+      run(runtimeWithBudget(model, { maxContextChars: 3_000 }), {
+        uiMessages: [
+          { id: 'user-1', role: 'user', parts: [{ type: 'text', text: hugeText }] },
+          { id: 'user-2', role: 'user', parts: [{ type: 'text', text: hugeText }] },
+        ],
+        tools: [],
+      }),
+    ).rejects.toBeInstanceOf(ChatRuntimeRejection);
+    expect(model.doStreamCalls).toHaveLength(0);
+  });
+
+  it('projectChatContext 保留最新草案回执，只压缩普通 Tool 输出', () => {
+    const messages = [
+      { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '建清单' }] },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: '草案已生成' },
+          {
+            type: 'tool-create_watchlist',
+            toolCallId: 'draft-1',
+            state: 'output-available',
+            input: { name: '清单' },
+            output: { __luoomeDraft: true, draft: { payload: 'd'.repeat(4_000) } },
+          },
+          {
+            type: 'tool-fetch_big',
+            toolCallId: 'call-2',
+            state: 'output-available',
+            input: {},
+            output: { items: 'i'.repeat(4_000) },
+          },
+        ],
+      },
+    ];
+    const projected = projectChatContext(messages as never, 6_000);
+    const text = JSON.stringify(projected.messages);
+
+    expect(projected.truncated).toBe(true);
+    expect(text).toContain('__luoomeDraft');
+    expect(text).toContain('草案已生成');
+    expect(text).toContain('outputTruncated');
+  });
+
+  it('没有 usage 的供应商按 unknown 记录，不写成确定 0 成本', async () => {
+    const unknownUsage: ProviderChunk = {
+      type: 'finish',
+      finishReason: { unified: 'stop', raw: 'stop' },
+      usage: {
+        inputTokens: {
+          total: undefined,
+          noCache: undefined,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+        },
+        outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+      },
+    };
+    const model = modelWith(
+      modelStream([
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: 'text-1' },
+        { type: 'text-delta', id: 'text-1', delta: '回答' },
+        { type: 'text-end', id: 'text-1' },
+        unknownUsage,
+      ]),
+    );
+    const { finished } = await run(runtimeWithBudget(model), {
+      uiMessages: userMessage('会消耗多少'),
+      tools: [],
+    });
+
+    const usagePart = finished.parts.find((part) => part.type === 'data-luoome-usage') as
+      | { data: { usage: Record<string, unknown> } }
+      | undefined;
+    expect(usagePart?.data.usage).toMatchObject({
+      modelRef: 'fixture:budget-model',
+      steps: 1,
+      toolCalls: 0,
+      tokensKnown: false,
+    });
+    expect(usagePart?.data.usage.durationMs).toEqual(expect.any(Number));
+    expect(usagePart?.data.usage).not.toHaveProperty('inputTokens');
+    expect(usagePart?.data.usage).not.toHaveProperty('totalTokens');
+  });
+});
+
 describe('createAiSdkChatRuntimeFromStore', () => {
   it('builds a runtime from the persisted agent profile and degrades without settings', () => {
     expect(createAiSdkChatRuntimeFromStore(undefined)).toBeUndefined();
@@ -567,6 +873,44 @@ describe('createAiSdkChatRuntimeFromStore', () => {
           FIXTURE_API_KEY: 'fixture-key',
         }),
       ).toBeInstanceOf(AiSdkChatRuntime);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('agent profile 可用而 generation 缺密钥时仍能构造聊天运行时', () => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-ai-sdk-agent-only-'));
+    try {
+      const configPath = join(root, 'ai-models.json');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          providers: {
+            fixture: {
+              type: 'openai-compatible',
+              baseURL: 'https://fixture.invalid/v1',
+              apiKeyEnv: 'FIXTURE_API_KEY',
+            },
+            kimi: {
+              type: 'openai-compatible',
+              baseURL: 'https://api.moonshot.cn/v1',
+              apiKeyEnv: 'MOONSHOT_API_KEY',
+            },
+          },
+          profiles: {
+            generation: { model: 'kimi:kimi-k3' },
+            agent: { model: 'fixture:agent-model' },
+          },
+        }),
+      );
+      const store = new AISettingsStore(
+        { LUOOME_HOME: root, FIXTURE_API_KEY: 'fixture-key' },
+        { configPath, secretPath: join(root, '.env') },
+      );
+      expect(store.read().profiles.generation.apiKeyConfigured).toBe(false);
+      expect(store.read().profiles.agent.apiKeyConfigured).toBe(true);
+      expect(createAiSdkChatRuntimeFromStore(store)).toBeInstanceOf(AiSdkChatRuntime);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

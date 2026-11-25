@@ -3140,18 +3140,39 @@ describe('/api/chat：对话助手', () => {
     await createSession('stream-contract');
     const response = await chat(chatApp, {
       sessionId: 'stream-contract',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '查一下我的持仓' }] }],
     });
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
     expect(await response.text()).toContain('"type":"text-delta"');
-    expect(captured?.tools.map((item) => item.name)).toContain('fetch_quote');
+    expect(captured?.tools.map((item) => item.name)).toContain('get_account_overview');
     expect(captured?.tools.map((item) => item.name)).not.toContain('run_local_selector_research');
     expect(captured?.tools.map((item) => item.name)).not.toContain('assess_adaptive_personality');
     expect(captured?.tools.map((item) => item.name)).not.toContain('get_quote');
     expect(captured?.instructions).toContain('不得自动交易');
     expect(await chatCtx.repos.chat.listMessages('stream-contract')).toHaveLength(2);
+  });
+
+  it('通用问答只保留股票发现工具，不注入账户 / Watchlist / Strategy / AlertPlan 上下文', async () => {
+    await createSession('general-no-tools');
+    await chat(chatApp, {
+      sessionId: 'general-no-tools',
+      messages: [
+        {
+          id: 'user-1',
+          role: 'user',
+          parts: [{ type: 'text', text: '帮我分析这段代码为什么报错' }],
+        },
+      ],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toEqual(['search_stocks', 'get_stock_brief', 'list_stock_briefs']);
+    expect(captured?.instructions).toContain('直接用你自己的知识回答');
+    expect(captured?.instructions).not.toContain('当前本地上下文');
+    expect(captured?.instructions).not.toContain('watchlists');
+    expect(captured?.instructions).not.toContain('holdingStockIds');
+    expect(captured?.instructions).not.toContain('dataHealth');
   });
 
   it('非法 UIMessage 与非 user 结尾 → 400 invalid_input', async () => {
@@ -3250,7 +3271,7 @@ describe('/api/chat：对话助手', () => {
     await createSession('draft-tool');
     await chat(chatApp, {
       sessionId: 'draft-tool',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建 Strategy' }] }],
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建股票策略' }] }],
     });
     const draftTool = captured?.tools.find((item) => item.name === 'save_strategy_version');
     const result = await draftTool?.execute({
@@ -3379,9 +3400,9 @@ describe('/api/chat：对话助手', () => {
     });
     const names = captured?.tools.map((item) => item.name) ?? [];
     expect(names).toContain('get_account_overview');
-    expect(names).toContain('list_strategies');
-    expect(names).toContain('list_watchlists');
+    expect(names).toContain('list_trades');
     expect(names).toContain('list_watch_plans');
+    expect(names).toContain('get_stock_brief');
     expect(names).not.toContain('list_tactics');
     expect(names).not.toContain('list_stock_groups');
     expect(names).not.toContain('list_stock_pools');
@@ -3390,6 +3411,36 @@ describe('/api/chat：对话助手', () => {
     expect(names).not.toContain('place_order');
     expect(names).not.toContain('save_decision_review');
     expect(names).not.toContain('create_research_hypothesis_version');
+  });
+
+  it('持仓纠错草案只在 portfolio 场景可确认，且不执行账本写入', async () => {
+    await createSession('holding-draft');
+    await chat(chatApp, {
+      sessionId: 'holding-draft',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '纠错持仓数量' }] }],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('update_holding');
+    expect(captured?.instructions).toContain('纠正账本记录，不会买卖股票');
+    const before = await chatCtx.repos.holding.listByAccount(chatCtx.user.defaultAccountId);
+    const target = before[0];
+    expect(target).toBeDefined();
+    const draftTool = captured?.tools.find((item) => item.name === 'update_holding');
+    const result = await draftTool?.execute({
+      holdingId: target?.id,
+      quantity: (target?.quantity ?? 0) + 100,
+      mode: 'update',
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'portfolio', tool: 'update_holding' },
+    });
+    const output = result?.output as { draft: { display?: { targetObject: string } } } | undefined;
+    expect(output?.draft.display?.targetObject).toContain('纠错持仓');
+    expect(await chatCtx.repos.holding.listByAccount(chatCtx.user.defaultAccountId)).toEqual(
+      before,
+    );
   });
 
   it('响应投影 x-luoome-chat-route header（URL 编码的路由 JSON）', async () => {
@@ -3438,8 +3489,8 @@ describe('/api/chat：对话助手', () => {
     });
     const generalNames = captured?.tools.map((item) => item.name) ?? [];
     expect(generalNames).not.toContain('run_local_selector_research');
-    expect(generalNames).toContain('fetch_news');
-    expect(generalNames).toContain('save_decision_review');
+    expect(generalNames).not.toContain('fetch_news');
+    expect(generalNames).not.toContain('save_decision_review');
     expect(generalNames).not.toContain('add_trade');
   });
 
@@ -3447,7 +3498,7 @@ describe('/api/chat：对话助手', () => {
     await createSession('data-health-ok');
     await chat(chatApp, {
       sessionId: 'data-health-ok',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '我的持仓成本' }] }],
     });
     expect(captured?.instructions).not.toContain('dataHealth');
 
@@ -3466,7 +3517,7 @@ describe('/api/chat：对话助手', () => {
     await createSession('data-health-degraded');
     await chat(chatApp, {
       sessionId: 'data-health-degraded',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '我的持仓成本' }] }],
     });
     expect(captured?.instructions).toContain('dataHealth');
     expect(captured?.instructions).toContain('watch 最近一次运行失败');
@@ -5298,6 +5349,70 @@ describe('AI 投资助手确认闭环', () => {
     expect(
       await ctx.repos.decisionReview.list({ accountId: ctx.user.defaultAccountId }),
     ).toHaveLength(1);
+  });
+
+  it('持仓纠错草案确认后执行 update_holding（kind=portfolio），只改账本不产生成交', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    await ctx.repos.chat.saveSession({
+      id: 'holding-draft-session',
+      accountId: ctx.user.defaultAccountId,
+      title: '持仓纠错',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const holding = (await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId)).find(
+      (item) => item.closedAt === null && item.quantity >= 200,
+    );
+    if (holding === undefined) throw new Error('holding fixture missing');
+    const quantity = holding.quantity - 100;
+    const input = {
+      holdingId: holding.id,
+      quantity,
+      availableQuantity: Math.min(holding.availableQuantity, quantity),
+      mode: 'update' as const,
+    };
+    await ctx.repos.chat.saveMessage({
+      id: 'holding-draft-message',
+      sessionId: 'holding-draft-session',
+      role: 'assistant',
+      createdAt: now,
+      parts: [
+        { type: 'step-start' },
+        {
+          type: 'tool-update_holding',
+          toolCallId: 'holding-call',
+          state: 'output-available',
+          input,
+          output: {
+            __luoomeDraft: true,
+            draft: { tool: 'update_holding', kind: 'portfolio', input },
+          },
+        },
+      ],
+    });
+    const tradesBefore = await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId);
+    const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const response = await local.fetch(
+      new Request(
+        'http://test/api/chat/sessions/holding-draft-session/drafts/holding-draft-message/holding-call',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ approved: true }),
+        },
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: { status: 'succeeded', result: { ok: true } },
+    });
+    const updated = (await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId)).find(
+      (item) => item.id === holding.id,
+    );
+    expect(updated?.quantity).toBe(quantity);
+    expect(await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId)).toEqual(tradesBefore);
   });
 
   it('确认与对话都要求 write + external、同源 Origin 和会话账户', async () => {

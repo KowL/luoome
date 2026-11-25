@@ -2,9 +2,16 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type StockBrief, StockBriefSchema, type Watchlist, WatchlistSchema } from '@luoome/core';
+import {
+  InvariantError,
+  type StockBrief,
+  StockBriefSchema,
+  type Watchlist,
+  WatchlistSchema,
+} from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { createDrizzleRepos, ensureSchema } from '../../client.js';
+import { makeAdvice } from '../contract-tests.js';
 
 const NOW = new Date('2026-11-24T08:00:00.000Z');
 const VALID_UNTIL = new Date('2026-11-27T07:00:00.000Z');
@@ -216,6 +223,115 @@ describe('StockBriefRepository [drizzle]', () => {
     } finally {
       first.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('upsertWithAdvice writes advice and brief in one transaction and links adviceId', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const repos = handle.repos;
+      const advice = makeAdvice('adv-1');
+      const saved = await repos.stockBrief.upsertWithAdvice({
+        advice,
+        brief: makeBrief({ id: 'b-1', quality: 'ai', decision: 'hold' }),
+      });
+
+      expect(saved.advice.id).toBe('adv-1');
+      expect(saved.brief.adviceId).toBe('adv-1');
+      expect(await repos.advice.findById('adv-1')).toMatchObject({ id: 'adv-1' });
+      const day = await repos.stockBrief.findByDay({ tradingDate: '2026-11-24' });
+      expect(day.map((item) => item.adviceId)).toEqual(['adv-1']);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('upsertWithAdvice replays the same factDigest without overwriting advice or outcomes', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const repos = handle.repos;
+      await repos.stockBrief.upsertWithAdvice({
+        advice: makeAdvice('adv-1'),
+        brief: makeBrief({ id: 'b-1', quality: 'ai', llmHttpCalls: 1, llmPromptTokens: 10 }),
+      });
+      await repos.advice.recordOutcome('adv-1', {
+        adviceId: 'adv-1',
+        outcome: 'followed',
+        tradeIds: [],
+        recordedAt: NOW,
+      });
+      const retried = await repos.stockBrief.upsertWithAdvice({
+        advice: makeAdvice('adv-2', { decision: 'watch' }),
+        brief: makeBrief({
+          id: 'b-2',
+          quality: 'ai',
+          decision: 'watch',
+          llmHttpCalls: 2,
+          llmPromptTokens: 20,
+        }),
+      });
+
+      expect(retried.advice.id).toBe('adv-1');
+      expect(retried.advice.decision).toBe('hold');
+      expect(retried.brief).toMatchObject({
+        id: 'b-1',
+        llmHttpCalls: 3,
+        llmPromptTokens: 30,
+      });
+      const advices = await repos.advice.query({ subjectId: 'stk-1', limit: 10 });
+      expect(advices).toHaveLength(1);
+      expect(advices[0]?.decision).toBe('hold');
+      expect(await repos.advice.findOutcome('adv-1')).toMatchObject({ outcome: 'followed' });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('upsertWithAdvice creates a new advice when the factDigest changes', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const repos = handle.repos;
+      await repos.stockBrief.upsertWithAdvice({
+        advice: makeAdvice('adv-1'),
+        brief: makeBrief({ id: 'b-1', quality: 'ai' }),
+      });
+      const revised = await repos.stockBrief.upsertWithAdvice({
+        advice: makeAdvice('adv-2', { decision: 'watch' }),
+        brief: makeBrief({
+          id: 'b-2',
+          quality: 'ai',
+          decision: 'watch',
+          factDigest: 'digest-2',
+        }),
+      });
+
+      expect(revised.advice.id).toBe('adv-2');
+      expect(revised.brief).toMatchObject({ id: 'b-2', adviceId: 'adv-2', revisedFrom: 'b-1' });
+      const advices = await repos.advice.query({ subjectId: 'stk-1', limit: 10 });
+      expect(advices).toHaveLength(2);
+      expect(advices.find((item) => item.id === 'adv-1')?.decision).toBe('hold');
+      expect(advices.find((item) => item.id === 'adv-2')?.decision).toBe('watch');
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('upsertWithAdvice rolls the advice back when the brief write fails', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const repos = handle.repos;
+      await expect(
+        repos.stockBrief.upsertWithAdvice({
+          advice: makeAdvice('adv-orphan'),
+          // 绕过 schema 的非法用量：不变量校验会在同一事务内抛错。
+          brief: { ...makeBrief({ id: 'b-1', quality: 'ai' }), llmHttpCalls: -1 },
+        }),
+      ).rejects.toThrow(InvariantError);
+
+      expect(await repos.advice.findById('adv-orphan')).toBeNull();
+      expect(await repos.stockBrief.findByDay({ tradingDate: '2026-11-24' })).toHaveLength(0);
+    } finally {
+      handle.close();
     }
   });
 });

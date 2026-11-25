@@ -1,9 +1,13 @@
-/* LLM 设置：provider presets、凭证状态与即时应用。 */
+/* LLM 设置：provider presets、profile 切换、凭证状态与即时应用。 */
 
 import { callApi } from './api.js';
 import { $ } from './ui.js';
 
+const REASONING_OUTPUT_FLOOR = 8_192;
+
 let providers = [];
+let profiles = {};
+let selectedProfile = 'agent';
 let initialized = false;
 
 const selectedProvider = () => {
@@ -22,6 +26,8 @@ const applyReasoningCapability = () => {
   const preset = selectedProvider();
   const select = $('#ai-reasoning-effort');
   const hint = $('#ai-reasoning-hint');
+  const output = $('#ai-max-output-tokens');
+  const outputHint = $('#ai-max-output-hint');
   if (select === null || hint === null || preset === null) return;
   const supported = Array.isArray(preset.supportedReasoningEfforts)
     ? preset.supportedReasoningEfforts
@@ -34,6 +40,13 @@ const applyReasoningCapability = () => {
     hint.textContent = `${preset.label} 不使用统一 reasoningEffort 参数。`;
   } else {
     hint.textContent = `${preset.label} 支持：${supported.join(' / ')}。`;
+  }
+  if (output !== null && outputHint !== null) {
+    const floor = select.value === 'off' ? 256 : REASONING_OUTPUT_FLOOR;
+    output.min = String(floor);
+    if (Number(output.value) < floor) output.value = String(floor);
+    outputHint.textContent =
+      select.value === 'off' ? '' : `推理 token 计入上限，至少 ${REASONING_OUTPUT_FLOOR}。`;
   }
 };
 
@@ -77,6 +90,36 @@ const mountProviderOptions = (selected) => {
   );
 };
 
+const renderProfileTabs = () => {
+  for (const tab of document.querySelectorAll('[data-ai-profile]')) {
+    const active = tab.dataset.aiProfile === selectedProfile;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-pressed', String(active));
+  }
+};
+
+const fillProfile = (data) => {
+  profiles = data.profiles ?? profiles;
+  const profile = profiles[selectedProfile];
+  if (profile === undefined) return;
+  renderProfileTabs();
+  mountProviderOptions(profile.provider);
+  $('#ai-model').value = profile.model;
+  $('#ai-base-url').value = profile.baseURL;
+  $('#ai-api-key').value = '';
+  $('#ai-clear-key').checked = false;
+  $('#ai-temperature').value = String(profile.temperature);
+  $('#ai-timeout').value = String(profile.timeoutSeconds);
+  $('#ai-max-retries').value = String(profile.maxRetries);
+  $('#ai-max-output-tokens').value = String(profile.maxOutputTokens);
+  $('#ai-reasoning-effort').value = profile.reasoningEffort;
+  $('#ai-key-status').textContent = profile.apiKeyConfigured
+    ? '已配置 · 保存时留空可继续使用'
+    : '尚未配置';
+  applyReasoningCapability();
+  applyTemperatureCapability();
+};
+
 const renderAISettings = async (setStatus) => {
   setPanelState('正在读取配置');
   const result = await callApi('/api/settings/ai');
@@ -90,31 +133,19 @@ const renderAISettings = async (setStatus) => {
   }
   const data = result.data;
   providers = Array.isArray(data.providers) ? data.providers : [];
-  mountProviderOptions(data.provider);
-  $('#ai-model').value = data.model;
-  $('#ai-base-url').value = data.baseURL;
-  $('#ai-api-key').value = '';
-  $('#ai-clear-key').checked = false;
-  $('#ai-temperature').value = String(data.temperature);
-  $('#ai-timeout').value = String(data.timeoutSeconds);
-  $('#ai-max-retries').value = String(data.maxRetries);
-  $('#ai-reasoning-effort').value = data.reasoningEffort;
-  $('#ai-key-status').textContent = data.apiKeyConfigured
-    ? '已配置 · 保存时留空可继续使用'
-    : '尚未配置';
+  fillProfile(data);
   $('#ai-config-path').textContent = data.configPath;
   $('#ai-config-path').title = data.configPath;
   $('#ai-secret-path').textContent = data.secretPath;
   $('#ai-secret-path').title = data.secretPath;
-  applyReasoningCapability();
-  applyTemperatureCapability();
   if (data.configError) {
     setPanelState('配置需要修复', 'error');
     setStatus('现有 AI 配置无法解析；页面已载入推荐值，保存即可覆盖修复。', true);
   } else {
+    const profile = profiles[selectedProfile];
     setPanelState(
-      data.apiKeyConfigured ? '模型已配置' : '等待 API Key',
-      data.apiKeyConfigured ? 'ready' : '',
+      profile?.apiKeyConfigured === true ? '模型已配置' : '等待 API Key',
+      profile?.apiKeyConfigured === true ? 'ready' : '',
     );
   }
 };
@@ -124,6 +155,7 @@ const saveAISettings = async (setStatus) => {
   if (form === null || !form.reportValidity()) return;
   const button = $('#btn-ai-save');
   const input = {
+    profile: selectedProfile,
     provider: $('#ai-provider').value,
     model: $('#ai-model').value.trim(),
     baseURL: $('#ai-base-url').value.trim(),
@@ -132,6 +164,7 @@ const saveAISettings = async (setStatus) => {
     temperature: Number($('#ai-temperature').value),
     timeoutSeconds: Number($('#ai-timeout').value),
     maxRetries: Number($('#ai-max-retries').value),
+    maxOutputTokens: Number($('#ai-max-output-tokens').value),
     reasoningEffort: $('#ai-reasoning-effort').value,
   };
   button.disabled = true;
@@ -158,11 +191,21 @@ const saveAISettings = async (setStatus) => {
   await renderAISettings(setStatus);
 };
 
+const selectProfile = (name) => {
+  if (name !== 'agent' && name !== 'generation') return;
+  selectedProfile = name;
+  renderProfileTabs();
+  fillProfile({ profiles });
+};
+
 const initAISettings = (setStatus) => {
   if (initialized) return;
   initialized = true;
   $('#ai-provider')?.addEventListener('change', applyProviderDefaults);
   $('#btn-ai-provider-defaults')?.addEventListener('click', applyProviderDefaults);
+  $('#ai-reasoning-effort')?.addEventListener('change', applyReasoningCapability);
+  for (const tab of document.querySelectorAll('[data-ai-profile]'))
+    tab.addEventListener('click', () => selectProfile(tab.dataset.aiProfile));
   $('#ai-api-key')?.addEventListener('input', () => {
     if ($('#ai-api-key').value.length > 0) $('#ai-clear-key').checked = false;
   });

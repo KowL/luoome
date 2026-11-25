@@ -836,4 +836,190 @@ describe('analyze_stock', () => {
     expect(briefs[0]?.missing.some((item) => item.dimension === 'llm')).toBe(true);
     expect(briefs[0]?.llmHttpCalls).toBe(ANALYZE_STOCK_MAX_ATTEMPTS);
   });
+
+  it('陈旧事实：basedOn.dataAsOf 与 brief.factsAsOf 取事实时间，而不是生成时刻', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const staleAsOf = new Date(baseCtx.clock().getTime() - 3 * 86_400_000);
+    const quote = {
+      stockId: '002594.SZ',
+      observedAt: staleAsOf,
+      fetchedAt: staleAsOf,
+      timestampSource: 'upstream' as const,
+      ts: staleAsOf,
+      open: money(100),
+      high: money(108),
+      low: money(99),
+      close: money(105.8),
+      volume: 1_000,
+      prevClose: money(100),
+      source: 'eastmoney',
+    };
+    const factPack = {
+      stock: { id: '002594.SZ', code: '002594', name: '比亚迪', exchange: 'SZ' },
+      quote: {
+        status: 'ok' as const,
+        data: {
+          quote,
+          opening: {
+            open: 100,
+            prevClose: 100,
+            openChangePct: 0,
+            direction: 'flat' as const,
+            label: '平开' as const,
+          },
+          retrieval: 'live' as const,
+          freshness: 'stale' as const,
+        },
+        dataAsOf: staleAsOf,
+        source: 'eastmoney',
+      },
+      factDigest: 'f'.repeat(32),
+    };
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'stale-facts-llm',
+          generate: async <T>(): Promise<T> =>
+            ({
+              decision: 'hold',
+              confidence: 50,
+              horizon: 'short',
+              reasoning: {
+                premise: '事实为三个交易日前的快照，维持观察',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            }) as T,
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(staleAsOf);
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        factPack,
+        brief: { tradingDate, phase: 'post-market', source: 'manual' },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const { advice, evidence, brief } = result.data as unknown as {
+      advice: Advice;
+      evidence: AdviceDataSnapshot;
+      brief: { factsAsOf: Date };
+    };
+    expect(brief.factsAsOf.getTime()).toBe(staleAsOf.getTime());
+    expect(evidence.dataAsOf.getTime()).toBe(staleAsOf.getTime());
+    expect(advice.basedOn.dataAsOf.getTime()).toBe(staleAsOf.getTime());
+    expect(advice.basedOn.dataAsOf.getTime()).not.toBe(baseCtx.clock().getTime());
+
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      tradingDate,
+    });
+    expect(briefs[0]?.factsAsOf.getTime()).toBe(staleAsOf.getTime());
+  });
+
+  it('同一天同一阶段事实变化：新建 Advice 保留历史反馈链，Brief 指向新版本', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    let calls = 0;
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'rerun-llm',
+          generate: async <T>(): Promise<T> => {
+            calls += 1;
+            return {
+              decision: 'hold',
+              confidence: 50,
+              horizon: 'short',
+              reasoning: {
+                premise: `第 ${calls} 次生成`,
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            } as T;
+          },
+        },
+      },
+    } as typeof baseCtx;
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const request = {
+      stockId: '002594.SZ',
+      brief: { tradingDate, phase: 'post-market' as const, source: 'manual' as const },
+    };
+
+    const first = await analyzeStockTool.execute(request, ctx);
+    const second = await analyzeStockTool.execute(request, ctx);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+
+    const firstAdvice = (first.data as { advice: Advice }).advice;
+    const secondAdvice = (second.data as { advice: Advice }).advice;
+    expect(secondAdvice.id).not.toBe(firstAdvice.id);
+    expect(await baseCtx.repos.advice.query({ subjectId: '002594.SZ', limit: 10 })).toHaveLength(2);
+    const briefs = await baseCtx.repos.stockBrief.findByStock({
+      stockId: '002594.SZ',
+      tradingDate,
+    });
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]?.adviceId).toBe(secondAdvice.id);
+  });
+
+  it('观察记录写入失败：同一事务回滚，不留下孤立 Advice', async () => {
+    const baseCtx = await buildTestContext({ advices: [] });
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'brief-write-fail-llm',
+          generate: async <T>(): Promise<T> =>
+            ({
+              decision: 'hold',
+              confidence: 50,
+              horizon: 'short',
+              reasoning: {
+                premise: '观察结论已生成',
+                evidence: ['close=105.8'],
+                counterEvidence: ['若收盘跌破 100 则本条判断作废'],
+              },
+              risks: ['可能回调'],
+              raw: 'raw',
+            }) as T,
+        },
+      },
+      repos: {
+        ...baseCtx.repos,
+        stockBrief: {
+          ...baseCtx.repos.stockBrief,
+          upsertWithAdvice: async () => {
+            throw new Error('stock_briefs write failed');
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const tradingDate = dateInShanghai(baseCtx.clock());
+    const result = await analyzeStockTool.execute(
+      {
+        stockId: '002594.SZ',
+        brief: { tradingDate, phase: 'post-market', source: 'manual' },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    expect(await baseCtx.repos.advice.query({ subjectId: '002594.SZ', limit: 10 })).toHaveLength(0);
+  });
 });

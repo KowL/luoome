@@ -39,7 +39,8 @@
       "timeoutMs": 30000,
       "maxRetries": 0,
       "reasoningEffort": "off",
-      "maxPromptChars": 16000
+      "maxPromptChars": 16000,
+      "maxContextChars": 48000
     },
     "agent": {
       "model": "minimax:MiniMax-M3",
@@ -48,8 +49,9 @@
       "timeoutMs": 120000,
       "maxRetries": 0,
       "reasoningEffort": "off",
+      "maxContextChars": 48000,
       "maxSteps": 8,
-      "maxTotalTokens": 30000
+      "maxTotalTokens": 120000
     }
   }
 }

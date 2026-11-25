@@ -125,7 +125,7 @@ Real order placement and cancellation are outside the luoome MCP surface. Do not
 
 For permission and response requirements, read [safety and errors](./safety.md).
 
-Strategy execution requires the host to enable `business.strategy-execution`; the daily judgment workflow runs a couple of active strategies on demand for signal top-up.
+Strategy execution requires the host to enable `business.strategy-execution`; strategy signals enter the daily brief candidate set only from existing formal runs for the day (the daily judgment workflow reads briefs and never runs strategies itself).
 Definitions/history remain readable when execution is disabled.
 Scheduled/replay rule inputs may come entirely from persisted local data. Missing live/archived ladder inputs retain their existing availability and acceptance rules.
 

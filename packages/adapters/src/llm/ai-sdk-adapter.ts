@@ -17,9 +17,164 @@ import {
   type LLMUsageReport,
 } from './types.js';
 
-const truncate = (value: string, maxChars: number): string => {
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}...[truncated ${value.length - maxChars} chars]`;
+/**
+ * 提示词预算超限时的结构化裁剪记录：只删整个数组尾部和超长文本，
+ * 数字、布尔与字段结构原样保留，保证发给模型的永远是完整可解析的 JSON。
+ */
+export interface PromptTrim {
+  readonly path: string;
+  readonly kind: 'array-tail' | 'string';
+  readonly originalLength: number;
+  readonly keptLength: number;
+}
+
+/** 超限降级原因；随 raw 回传，便于排查提示词预算与事实缺失。 */
+export interface PromptDegradation {
+  readonly reason: 'max_prompt_chars';
+  readonly maxPromptChars: number;
+  readonly originalChars: number;
+  readonly projectedChars: number;
+  readonly trimmed: readonly PromptTrim[];
+  /** 未逐一列出的裁剪点数（数组嵌套时可能很多）。 */
+  readonly unlistedTrims: number;
+}
+
+/** 结构化裁剪后仍超过 maxPromptChars：宁可失败，也不截断 JSON 或数字。 */
+export class LLMPromptBudgetError extends Error {
+  override readonly name = 'LLMPromptBudgetError';
+}
+
+const PROMPT_TRIM_STAGES = [
+  { arrayLimit: 64, stringLimit: 8_000 },
+  { arrayLimit: 32, stringLimit: 4_000 },
+  { arrayLimit: 16, stringLimit: 2_000 },
+  { arrayLimit: 8, stringLimit: 1_000 },
+  { arrayLimit: 4, stringLimit: 500 },
+  { arrayLimit: 2, stringLimit: 250 },
+  { arrayLimit: 1, stringLimit: 200 },
+] as const;
+const PROMPT_MAX_REPORTED_TRIMS = 12;
+
+const toJsonSafe = (value: unknown): unknown => {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map((item) => toJsonSafe(item));
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      const item = source[key];
+      if (item === undefined) continue;
+      out[key] = toJsonSafe(item);
+    }
+    return out;
+  }
+  return value;
+};
+
+interface TrimLimits {
+  readonly arrayLimit: number;
+  readonly stringLimit: number;
+}
+
+const trimValue = (
+  value: unknown,
+  path: string,
+  limits: TrimLimits,
+  trimmed: PromptTrim[],
+): unknown => {
+  if (typeof value === 'string') {
+    if (value.length <= limits.stringLimit) return value;
+    trimmed.push({
+      path,
+      kind: 'string',
+      originalLength: value.length,
+      keptLength: limits.stringLimit,
+    });
+    return `${value.slice(0, limits.stringLimit)}…`;
+  }
+  if (Array.isArray(value)) {
+    const kept = value
+      .slice(0, limits.arrayLimit)
+      .map((item, index) => trimValue(item, `${path}[${index}]`, limits, trimmed));
+    if (value.length > limits.arrayLimit) {
+      trimmed.push({
+        path,
+        kind: 'array-tail',
+        originalLength: value.length,
+        keptLength: limits.arrayLimit,
+      });
+    }
+    return kept;
+  }
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      const item = source[key];
+      if (item === undefined) continue;
+      out[key] = trimValue(item, `${path}.${key}`, limits, trimmed);
+    }
+    return out;
+  }
+  return value;
+};
+
+const degradationOf = (input: {
+  readonly maxPromptChars: number;
+  readonly originalChars: number;
+  readonly projectedChars: number;
+  readonly trimmed: readonly PromptTrim[];
+}): PromptDegradation => ({
+  reason: 'max_prompt_chars',
+  maxPromptChars: input.maxPromptChars,
+  originalChars: input.originalChars,
+  projectedChars: input.projectedChars,
+  trimmed: input.trimmed.slice(0, PROMPT_MAX_REPORTED_TRIMS),
+  unlistedTrims: Math.max(0, input.trimmed.length - PROMPT_MAX_REPORTED_TRIMS),
+});
+
+/**
+ * 提示词数据投影：在 maxPromptChars 内逐步收紧数组长度与单字段文本长度，
+ * 超限时把降级原因一并写进提示词，而不是把 JSON 字符串截成半截。
+ */
+export const projectPromptData = (
+  data: unknown,
+  maxPromptChars: number,
+): { readonly prompt: string; readonly degradation?: PromptDegradation } => {
+  const original = JSON.stringify(data);
+  if (original.length <= maxPromptChars) return { prompt: original };
+
+  const jsonSafe = toJsonSafe(data);
+  for (const limits of PROMPT_TRIM_STAGES) {
+    const trimmed: PromptTrim[] = [];
+    const projected = trimValue(jsonSafe, 'data', limits, trimmed);
+    const prompt = JSON.stringify({
+      promptBudget: {
+        reason: 'max_prompt_chars',
+        maxPromptChars,
+        originalChars: original.length,
+        trimmed: trimmed.slice(0, PROMPT_MAX_REPORTED_TRIMS),
+        unlistedTrims: Math.max(0, trimmed.length - PROMPT_MAX_REPORTED_TRIMS),
+        note: '因提示词预算，部分数组尾部或长文本已省略；省略不代表事实不存在，未给出的字段按 unavailable 处理。',
+      },
+      data: projected,
+    });
+    if (prompt.length <= maxPromptChars) {
+      return {
+        prompt,
+        degradation: degradationOf({
+          maxPromptChars,
+          originalChars: original.length,
+          projectedChars: prompt.length,
+          trimmed,
+        }),
+      };
+    }
+  }
+  throw new LLMPromptBudgetError(
+    `提示词在结构化裁剪后仍超过 maxPromptChars=${maxPromptChars}（原始 ${original.length} 字符）；` +
+      '请减少事实段或提高该 profile 的 maxPromptChars，不截断 JSON 发送给模型。',
+  );
 };
 
 const toUsageReport = (usage: unknown): LLMUsageReport | undefined => {
@@ -60,23 +215,31 @@ const toUsageReport = (usage: unknown): LLMUsageReport | undefined => {
   };
 };
 
-const buildRaw = (result: {
-  readonly text: string;
-  readonly response: { readonly body?: unknown };
-  readonly usage: unknown;
-}): string =>
+const buildRaw = (
+  result: {
+    readonly text: string;
+    readonly response: { readonly body?: unknown };
+    readonly usage: unknown;
+  },
+  degradation?: PromptDegradation,
+): string =>
   JSON.stringify({
     text: result.text,
     body: result.response.body ?? null,
     usage: result.usage,
+    ...(degradation === undefined ? {} : { promptProjection: degradation }),
   });
 
-const buildRawFromError = (error: NoObjectGeneratedError): string =>
+const buildRawFromError = (
+  error: NoObjectGeneratedError,
+  degradation?: PromptDegradation,
+): string =>
   JSON.stringify({
     text: error.text ?? '',
     response: error.response ?? null,
     usage: error.usage ?? null,
     finishReason: error.finishReason ?? null,
+    ...(degradation === undefined ? {} : { promptProjection: degradation }),
   });
 
 /** generateText 结果的 usage → 预算计量结构。 */
@@ -148,7 +311,9 @@ export class AISDKAdapter implements LLMAdapter {
     const timeoutMs = request.timeoutMs ?? this.profile.timeoutMs;
     const abortSignal = AbortSignal.timeout(timeoutMs);
     const maxRetries = request.policy?.providerRetries ?? this.profile.maxRetries;
-    const prompt = truncate(JSON.stringify(request.data), this.profile.maxPromptChars);
+    const projection = projectPromptData(request.data, this.profile.maxPromptChars);
+    const prompt = projection.prompt;
+    const degradation = projection.degradation;
     // 不支持 structured outputs 的 provider 走纯文本 + system 注入 schema，
     // 不发送 response_format，避免上游告警或忽略参数（2026-11-23 M5）。
     const system =
@@ -170,7 +335,11 @@ export class AISDKAdapter implements LLMAdapter {
             ? { providerOptions: { anthropic: { structuredOutputMode: 'auto' } } }
             : {}),
         });
-        return { ...result.output, raw: buildRaw(result), usage: usageOf(result) };
+        return {
+          ...result.output,
+          raw: buildRaw(result, degradation),
+          usage: usageOf(result),
+        };
       }
       const result = await generateText({
         model: this.profile.model,
@@ -183,7 +352,7 @@ export class AISDKAdapter implements LLMAdapter {
       try {
         return {
           ...recoverMalformedText(result.text, schema),
-          raw: buildRaw(result),
+          raw: buildRaw(result, degradation),
           usage: usageOf(result),
         };
       } catch (error) {
@@ -213,8 +382,11 @@ export class AISDKAdapter implements LLMAdapter {
             return {
               ...recoverMalformedText(empty.text, schema),
               raw: NoObjectGeneratedError.isInstance(error)
-                ? buildRawFromError(error)
-                : JSON.stringify({ text: empty.text }),
+                ? buildRawFromError(error, degradation)
+                : JSON.stringify({
+                    text: empty.text,
+                    ...(degradation === undefined ? {} : { promptProjection: degradation }),
+                  }),
               ...(usage === undefined ? {} : { usage }),
             };
           } catch {

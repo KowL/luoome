@@ -43,7 +43,7 @@ export class LLMTimeoutError extends Error {
  *
  * 实现方约定：
  * - request.schema 为 zod schema 时，必须先 parse 再返回；
- * - parse 失败必须抛错，由 LLMManager 执行 retry hint + 稳定 fallback。
+ * - parse 失败必须抛错，由 LLMManager 执行 retry hint，再由调用方工具在业务边界降级。
  */
 export interface LLMAdapter extends LLMAdapterLike {
   readonly name: string;

@@ -627,7 +627,7 @@ export const summarizeFactPackForBrief = (
 ): FactPackBriefSummary => {
   const missing: StockBriefMissing[] = [];
   const dataSources = new Set<string>();
-  let factsAsOf = fallbackAsOf;
+  let factsAsOf: Date | undefined;
   for (const [key, dimension] of Object.entries(SECTION_MISSING_DIMENSION)) {
     const section = pack[key as keyof StockFactPack];
     if (section === undefined || typeof section !== 'object') continue;
@@ -646,7 +646,11 @@ export const summarizeFactPackForBrief = (
         if (source.trim().length > 0) dataSources.add(source.trim());
       }
     }
-    if (section.dataAsOf !== undefined && section.dataAsOf > factsAsOf) {
+    // 只取各段自己的事实时间：陈旧快照的 dataAsOf 必须留在过去，不能被调用时钟抬到当下。
+    if (
+      section.dataAsOf !== undefined &&
+      (factsAsOf === undefined || section.dataAsOf > factsAsOf)
+    ) {
       factsAsOf = section.dataAsOf;
     }
   }
@@ -656,7 +660,7 @@ export const summarizeFactPackForBrief = (
     barsAvailable: pack.bars?.status === 'ok',
     missing,
     dataSources: [...dataSources],
-    factsAsOf,
+    factsAsOf: factsAsOf ?? fallbackAsOf,
   };
 };
 

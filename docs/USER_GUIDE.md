@@ -254,7 +254,7 @@ luoome mcp serve    # stdio JSON-RPC
 
 开关只决定「这个能力能不能被调用」。它不授予权限：实际执行仍要宿主显式开启 write / external，数据源还要凭证就绪且出现在来源顺序里。停用不删除历史数据，已保存的建议、运行、报告与触发照常可读；停用后新的调用被拒绝，重新启用后下一次调用即恢复，不重放旧请求。
 
-`business.analysis` 关闭时每日判断拿不到新建议（只留 facts），因此需要模型凭证与 external 授权才会看到效果。
+`business.analysis` 关闭时 `daily-stock-briefs` 被拒绝，每日判断拿不到新的当日观察（通常落为「今日不动」），因此需要模型凭证与 external 授权才会看到效果。
 
 ## 4. Web 用法
 
@@ -546,17 +546,18 @@ Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，
 
 ### 10.4 启动时报 AI 模型目录或 provider 密钥缺失
 
-首次启动不会自动生成 `$LUOOME_HOME/ai-models.json`：Web 读不到模型目录时以配置模式启动，
-需在「设置 → AI 模型」保存后才会写入（密钥写入 `$LUOOME_HOME/.env`，权限 `0600`）。
-格式可参考仓库根目录的 `ai-models.example.json`，也可手动复制；或者设置 `LUOOME_AI_CONFIG`
-指向自定义配置文件。再设置当前
-profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
-或缺密钥都会在需要 AI 的调用处明确报错；CLI/MCP 可先以配置模式启动并使用不依赖 AI 的
+默认模型目录缺失时会生成不含密钥的 `$LUOOME_HOME/ai-models.json`，Web 同时以配置模式启动；
+在「设置 → AI 模型」保存密钥后会写入 `$LUOOME_HOME/.env`（权限 `0600`）。格式可参考仓库根目录的
+`ai-models.example.json`，也可手动复制；或者设置 `LUOOME_AI_CONFIG` 指向自定义配置文件，
+显式路径缺失会报错。再设置当前 profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；
+未知 provider 或缺密钥会在需要 AI 的调用处明确报错。CLI/MCP 可先以配置模式启动并使用不依赖 AI 的
 行情、账户和审计能力，不会用 mock LLM 冒充真实推理。
 
 Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
 （`deepseek-v4-pro` / `DEEPSEEK_API_KEY`）推荐值；切换 provider 后点击保存即可写入同一份
-模型目录和本地密钥文件。
+模型目录和本地密钥文件。对话（agent）与批量生成（generation）可分别配置，保存当前 profile
+不会覆盖另一个；Provider 按 profile 惰性初始化，只要求当前使用 profile 的密钥。非推理输出
+默认 2048 tokens，开启推理时至少 8192；单次模型请求与整轮执行分别限时，整轮默认上限 10 分钟。
 
 也可以启动 Web 后进入「设置 → LLM 设置」完成可视化配置。Web 在模型尚未配置或
 配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入

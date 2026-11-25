@@ -287,8 +287,8 @@ const buildJudgmentFacts = (
 
 const briefValidUntil = (now: Date): Date => computeValidUntil('short', now);
 
-/** 幂等写入 stock_briefs：同日同阶段只覆盖同一行（唯一键由 repository 保证）。 */
-const writeBrief = async (
+/** 组装 stock_briefs 行：同日同阶段由 repository 的唯一键覆盖同一行。 */
+const buildBrief = (
   ctx: ToolContext,
   input: {
     readonly brief: AnalyzeStockBriefInput;
@@ -304,7 +304,7 @@ const writeBrief = async (
     readonly factsAsOf: Date;
     readonly usage: LlmUsageTotals;
   },
-): Promise<StockBrief> => {
+): StockBrief => {
   const now = ctx.clock();
   const source: StockBriefSource = input.brief.source ?? 'scheduled';
   const row: StockBrief = {
@@ -333,7 +333,7 @@ const writeBrief = async (
     updatedAt: now,
   };
   assertStockBriefInvariants(row);
-  return ctx.repos.stockBrief.upsert(row);
+  return row;
 };
 
 const fallbackRuleOnlyDraft = (reason: string): RuleOnlyDraft => ({
@@ -479,21 +479,23 @@ export const analyzeStockTool = defineTool({
       if (input.brief !== undefined) {
         // brief 路径：LLM 失败不产出 advice、不写 fallback advice，只落规则观察（design §6.5）。
         const draft = input.brief.ruleOnlyDraft ?? fallbackRuleOnlyDraft(failure);
-        await writeBrief(ctx, {
-          brief: input.brief,
-          stock,
-          factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
-          quality: 'rule-only',
-          decision: draft.decision,
-          confidence: draft.confidence,
-          missing: [
-            ...facts.missing,
-            { dimension: 'llm', reason: `AI 推理不可用：${failure}`.slice(0, 500) },
-          ],
-          dataSources: facts.dataSources,
-          factsAsOf: facts.factsAsOf,
-          usage,
-        });
+        await ctx.repos.stockBrief.upsert(
+          buildBrief(ctx, {
+            brief: input.brief,
+            stock,
+            factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
+            quality: 'rule-only',
+            decision: draft.decision,
+            confidence: draft.confidence,
+            missing: [
+              ...facts.missing,
+              { dimension: 'llm', reason: `AI 推理不可用：${failure}`.slice(0, 500) },
+            ],
+            dataSources: facts.dataSources,
+            factsAsOf: facts.factsAsOf,
+            usage,
+          }),
+        );
         ctx.logger.warn('analyze_stock: brief 路径 LLM 失败，降级为规则观察', {
           stockId: stock.id,
           decision: draft.decision,
@@ -511,7 +513,7 @@ export const analyzeStockTool = defineTool({
       };
     }
 
-    const advice: Advice = {
+    const candidate: Advice = {
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'stock',
       subjectId: stock.id,
@@ -538,32 +540,40 @@ export const analyzeStockTool = defineTool({
       basedOn: {
         quotes: { [stock.id]: facts.quote },
         indicators: { [stock.id]: facts.indicators },
-        dataAsOf: now,
+        dataAsOf: facts.factsAsOf,
       },
       validFrom: now,
       validUntil: computeValidUntil(llmOutput.horizon, now),
       createdAt: now,
     };
+    assertAdviceInvariants(candidate);
 
-    assertAdviceInvariants(advice);
-    await ctx.repos.advice.save(advice);
-
+    // brief 路径把建议与观察记录放进同一事务：任一步失败都整体回滚，不留孤立 Advice。
+    let advice = candidate;
     let brief: StockBrief | undefined;
     if (input.brief !== undefined) {
-      brief = await writeBrief(ctx, {
-        brief: input.brief,
-        stock,
-        factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
-        quality: 'ai',
-        decision: advice.decision,
-        confidence: advice.confidence,
-        horizon: advice.horizon,
-        adviceId: advice.id,
-        missing: facts.missing,
-        dataSources: facts.dataSources,
-        factsAsOf: facts.factsAsOf,
-        usage,
+      const saved = await ctx.repos.stockBrief.upsertWithAdvice({
+        advice: candidate,
+        brief: buildBrief(ctx, {
+          brief: input.brief,
+          stock,
+          factDigest: facts.factDigest ?? `unavailable:${stock.id}`,
+          quality: 'ai',
+          decision: candidate.decision,
+          confidence: candidate.confidence,
+          horizon: candidate.horizon,
+          adviceId: candidate.id,
+          missing: facts.missing,
+          dataSources: facts.dataSources,
+          factsAsOf: facts.factsAsOf,
+          usage,
+        }),
       });
+      advice = saved.advice;
+      brief = saved.brief;
+    } else {
+      // 交互路径不做幂等：每次显式调用都生成新的 Advice。
+      await ctx.repos.advice.save(candidate);
     }
 
     // 经 schema parse 返回输出类型（运行时幂等，类型层把 readonly 数组转成输出形状）。

@@ -370,9 +370,7 @@ describe('POST /api/chat 真实 HTTP + UI Message Stream（生产装配 + 受控
 
   it('外部只读 MCP 每轮发现并调用；未开启 external 时不出现在模型工具表', async () => {
     const disabled = await harness();
-    await (
-      await disabled.chat(await disabled.createSession(), '研究 MCP 文档中的 Watchlist')
-    ).text();
+    await (await disabled.chat(await disabled.createSession(), '研究 MCP 文档中的策略')).text();
     expect(offeredToolNames(disabled.requests[0] as ModelRequest)).not.toContain(
       'mcp_docs__search_docs',
     );
@@ -380,7 +378,7 @@ describe('POST /api/chat 真实 HTTP + UI Message Stream（生产装配 + 受控
     const fixture = await harness({ externalMcp: true });
     const sessionId = await fixture.createSession();
     const chunks = parseChunks(
-      await (await fixture.chat(sessionId, '研究 MCP 文档中的 Watchlist')).text(),
+      await (await fixture.chat(sessionId, '研究 MCP 文档中的策略')).text(),
     );
     expect(chunks.filter((chunk) => chunk.type === 'error')).toEqual([]);
     expect(offeredToolNames(fixture.requests[0] as ModelRequest)).toContain(

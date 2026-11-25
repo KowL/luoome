@@ -356,8 +356,8 @@ export const AdviceSchema = z.object({
 });
 
 /**
- * 规则兜底标记：LLMManager 在 AI 两次失败后返回确定性模板，带此标记的建议不是 AI 研究结论，
- * 不能作为生效计划（与 adapters/llm/manager.ts 的 fallback 输出共用同一段文字）。
+ * 规则兜底标记：历史 advice 行（旧版 LLMManager 的确定性模板）带此标记，它不是 AI 研究结论，
+ * 不能作为生效计划。现在 LLM 失败由各 tool 在自己的边界降级，不再以 Advice 形式落库。
  */
 export const RULE_FALLBACK_PREMISE_MARKER = 'LLM 推理不可用';
 export const RULE_FALLBACK_EVIDENCE_MARKER = '规则 fallback';

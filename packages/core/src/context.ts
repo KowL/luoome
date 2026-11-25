@@ -91,7 +91,7 @@ export interface StockSearchCandidate {
 
 /** LLM 调用的重试策略；默认保持既有行为，按调用方收敛放大链。 */
 export interface LLMRetryPolicy {
-  /** false → LLMManager 不做 schema 修复重试，也不走 fallback。 */
+  /** false → LLMManager 不做 schema 修复重试，错误直接交给调用方降级。 */
   readonly managerRetry?: boolean;
   /** AI SDK 层 maxRetries；brief/analyze 路径传 0，只保留外层 attempt 循环。 */
   readonly providerRetries?: number;

@@ -43,7 +43,13 @@ describe('chat advice 草案硬限', () => {
     const response = await createChatStreamResponse(
       {
         sessionId: created.data.session.id,
-        messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '看看比亚迪' }] }],
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: '看看比亚迪这只股票的走势' }],
+          },
+        ],
       },
       ctx,
       runtime,

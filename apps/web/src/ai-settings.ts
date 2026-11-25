@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import {
   type AIModelCatalogConfig,
   AIModelCatalogConfigSchema,
+  DEFAULT_AI_MODEL_CATALOG_CONFIG,
+  MIN_REASONING_MAX_OUTPUT_TOKENS,
   resolveAIModelCatalogPath,
 } from '@luoome/adapters';
 import { parseEnvFile } from '@luoome/core';
@@ -118,8 +120,13 @@ export const AI_PROVIDER_PRESETS: readonly AIProviderPreset[] = [
   },
 ];
 
+export const AISettingsProfileNameSchema = z.enum(['generation', 'agent']);
+export type AISettingsProfileName = z.infer<typeof AISettingsProfileNameSchema>;
+
 export const SaveAISettingsSchema = z
   .object({
+    /** 缺省写入 agent profile，兼容只关心对话的旧调用方。 */
+    profile: AISettingsProfileNameSchema.default('agent'),
     provider: ProviderIdSchema,
     model: z.string().trim().min(1).max(200),
     baseURL: z.url(),
@@ -133,6 +140,8 @@ export const SaveAISettingsSchema = z
     timeoutSeconds: z.number().int().min(1).max(600),
     maxRetries: z.number().int().min(0).max(5),
     reasoningEffort: z.enum(['off', 'low', 'medium', 'high', 'max']),
+    /** 单次输出预算；不传时保留该 profile 已有值，新建时使用安全下限。 */
+    maxOutputTokens: z.number().int().min(256).max(200_000).optional(),
   })
   .superRefine((value, ctx) => {
     const preset = AI_PROVIDER_PRESETS.find(({ id }) => id === value.provider);
@@ -154,7 +163,8 @@ export const SaveAISettingsSchema = z
 
 export type SaveAISettings = z.infer<typeof SaveAISettingsSchema>;
 
-export interface AISettingsView {
+export interface AISettingsProfileView {
+  readonly profile: AISettingsProfileName;
   readonly provider: AISettingsProviderId;
   readonly model: string;
   readonly baseURL: string;
@@ -162,11 +172,16 @@ export interface AISettingsView {
   readonly apiKeyEnv: string;
   readonly apiKeyConfigured: boolean;
   readonly temperature: number;
-  /** agent profile 的单次输出预算；聊天运行时按此值构造供应商 max_tokens。 */
+  /** 单次输出预算；running runtime 按此值构造供应商 max_tokens。 */
   readonly maxOutputTokens: number;
   readonly timeoutSeconds: number;
   readonly maxRetries: number;
   readonly reasoningEffort: AIReasoningEffort;
+}
+
+export interface AISettingsView extends AISettingsProfileView {
+  /** 两个 profile 可独立配置；顶层字段镜像 agent profile，供旧调用方与聊天运行时读取。 */
+  readonly profiles: Record<AISettingsProfileName, AISettingsProfileView>;
   readonly configPath: string;
   readonly secretPath: string;
   readonly providers: readonly AIProviderPreset[];
@@ -239,65 +254,84 @@ export class AISettingsStore {
     };
   }
 
-  read(): AISettingsView {
-    const fallback = presetById('minimax');
-    let providerId: AISettingsProviderId = fallback.id;
-    let model = fallback.defaultModel;
-    let baseURL = fallback.defaultBaseURL;
-    let temperature = 0.2;
-    let maxOutputTokens = 2_048;
-    let timeoutSeconds = 120;
-    let maxRetries = 0;
-    let reasoningEffort: AISettingsView['reasoningEffort'] = 'off';
-    let apiKeyEnv = fallback.apiKeyEnv;
-    let configError: string | undefined;
-
+  private readConfig(): { config?: AIModelCatalogConfig; error?: string } {
     const content = readText(this.configPath);
-    if (content !== '') {
-      try {
-        const config = AIModelCatalogConfigSchema.parse(JSON.parse(content));
-        const profile = config.profiles.agent;
-        const separator = profile.model.indexOf(':');
-        const providerName = profile.model.slice(0, separator);
-        const provider = config.providers[providerName];
-        if (provider !== undefined) {
-          providerId = inferProviderId(providerName, provider);
-          model = profile.model.slice(separator + 1);
-          baseURL = provider.baseURL ?? presetById(providerId).defaultBaseURL;
-          temperature = profile.temperature;
-          maxOutputTokens = profile.maxOutputTokens;
-          timeoutSeconds = Math.round(profile.timeoutMs / 1_000);
-          maxRetries = profile.maxRetries;
-          reasoningEffort = profile.reasoningEffort;
-          apiKeyEnv = provider.apiKeyEnv;
-        }
-      } catch (error) {
-        configError = error instanceof Error ? error.message : String(error);
-      }
+    if (content === '') return {};
+    try {
+      return { config: AIModelCatalogConfigSchema.parse(JSON.parse(content)) };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
     }
+  }
 
-    const env = this.runtimeEnv();
+  private profileView(
+    name: AISettingsProfileName,
+    config: AIModelCatalogConfig | undefined,
+    env: Readonly<Record<string, string | undefined>>,
+  ): AISettingsProfileView {
+    const fallback = presetById('minimax');
+    const fallbackTimeoutSeconds = name === 'agent' ? 120 : 30;
+    const profile = config?.profiles[name];
+    const separator = profile?.model.indexOf(':') ?? -1;
+    const providerName = separator <= 0 ? '' : (profile?.model.slice(0, separator) ?? '');
+    const provider = providerName === '' ? undefined : config?.providers[providerName];
+    if (profile === undefined || provider === undefined) {
+      return {
+        profile: name,
+        provider: fallback.id,
+        model: fallback.defaultModel,
+        baseURL: fallback.defaultBaseURL,
+        apiKeyEnv: fallback.apiKeyEnv,
+        apiKeyConfigured: false,
+        temperature: fallback.defaultTemperature,
+        maxOutputTokens: 2_048,
+        timeoutSeconds: fallbackTimeoutSeconds,
+        maxRetries: 0,
+        reasoningEffort: 'off',
+      };
+    }
+    const providerId = inferProviderId(providerName, provider);
     return {
+      profile: name,
       provider: providerId,
-      model,
-      baseURL,
-      apiKeyEnv,
-      apiKeyConfigured: (env[apiKeyEnv]?.trim().length ?? 0) > 0,
-      temperature,
-      maxOutputTokens,
-      timeoutSeconds,
-      maxRetries,
-      reasoningEffort,
+      model: profile.model.slice(separator + 1),
+      baseURL: provider.baseURL ?? presetById(providerId).defaultBaseURL,
+      apiKeyEnv: provider.apiKeyEnv,
+      apiKeyConfigured: (env[provider.apiKeyEnv]?.trim().length ?? 0) > 0,
+      temperature: profile.temperature,
+      maxOutputTokens:
+        profile.reasoningEffort === 'off'
+          ? profile.maxOutputTokens
+          : Math.max(profile.maxOutputTokens, MIN_REASONING_MAX_OUTPUT_TOKENS),
+      timeoutSeconds: Math.round(profile.timeoutMs / 1_000),
+      maxRetries: profile.maxRetries,
+      reasoningEffort: profile.reasoningEffort,
+    };
+  }
+
+  read(): AISettingsView {
+    const { config, error } = this.readConfig();
+    const env = this.runtimeEnv();
+    const profiles = {
+      generation: this.profileView('generation', config, env),
+      agent: this.profileView('agent', config, env),
+    };
+    return {
+      ...profiles.agent,
+      profiles,
       configPath: this.configPath,
       secretPath: this.secretPath,
       providers: AI_PROVIDER_PRESETS,
-      ...(configError === undefined ? {} : { configError }),
+      ...(error === undefined ? {} : { configError: error }),
     };
   }
 
   save(input: SaveAISettings): AISettingsView {
     const settings = SaveAISettingsSchema.parse(input);
     const preset = presetById(settings.provider);
+    const { config: existing } = this.readConfig();
+    const base = existing ?? DEFAULT_AI_MODEL_CATALOG_CONFIG;
+    const previous = base.profiles[settings.profile];
     const provider = {
       type: preset.type,
       baseURL: settings.baseURL,
@@ -307,29 +341,24 @@ export class AISettingsStore {
         : {}),
       ...(preset.quirks.length === 0 ? {} : { quirks: preset.quirks }),
     };
-    const commonProfile = {
+    const reasoningFloor = settings.reasoningEffort === 'off' ? 0 : MIN_REASONING_MAX_OUTPUT_TOKENS;
+    const nextProfile = {
+      ...previous,
       model: `${preset.id}:${settings.model}`,
       temperature: settings.temperature,
-      maxOutputTokens: 2_048,
+      maxOutputTokens: Math.max(
+        settings.maxOutputTokens ?? previous.maxOutputTokens,
+        reasoningFloor,
+      ),
+      timeoutMs: settings.timeoutSeconds * 1_000,
       maxRetries: settings.maxRetries,
       reasoningEffort: settings.reasoningEffort,
     };
+    // 只更新当前 profile 与它的 provider；另一个 profile、自定义 provider 和其他字段原样保留。
     const config = AIModelCatalogConfigSchema.parse({
-      version: 1,
-      providers: { [preset.id]: provider },
-      profiles: {
-        generation: {
-          ...commonProfile,
-          timeoutMs: settings.timeoutSeconds * 1_000,
-          maxPromptChars: 16_000,
-        },
-        agent: {
-          ...commonProfile,
-          timeoutMs: settings.timeoutSeconds * 1_000,
-          maxSteps: 8,
-          maxTotalTokens: 30_000,
-        },
-      },
+      ...base,
+      providers: { ...base.providers, [preset.id]: provider },
+      profiles: { ...base.profiles, [settings.profile]: nextProfile },
     });
     atomicWrite(this.configPath, `${JSON.stringify(config, null, 2)}\n`);
 

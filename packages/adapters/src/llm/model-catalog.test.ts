@@ -52,13 +52,92 @@ describe('llm/model-catalog', () => {
     });
   });
 
-  it('只从 apiKeyEnv 引用读取密钥，缺失时启动失败', () => {
-    expect(() => new AIModelCatalog(config, { ANTHROPIC_API_KEY: 'test' })).toThrow(
-      /MINIMAX_API_KEY/,
+  it('按 profile 惰性解析 provider：只要求目标 profile 的密钥', () => {
+    const agentOnly = new AIModelCatalog(config, { ANTHROPIC_API_KEY: 'test' });
+    expect(agentOnly.resolve('agent').modelRef).toBe('anthropic:claude-haiku-4-5');
+    expect(() => agentOnly.resolve('generation')).toThrow(/MINIMAX_API_KEY/);
+
+    const generationOnly = new AIModelCatalog(config, { MINIMAX_API_KEY: 'test' });
+    expect(generationOnly.resolve('generation').modelRef).toBe('minimax:MiniMax-M3');
+    expect(() => generationOnly.resolve('agent')).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('gateway profile 走 AI SDK registry 分支，且不要求其他 profile 密钥', () => {
+    const catalog = new AIModelCatalog(
+      {
+        version: 1,
+        providers: {
+          gateway: { type: 'gateway', apiKeyEnv: 'AI_GATEWAY_API_KEY' },
+          anthropic: { type: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY' },
+        },
+        profiles: {
+          generation: { model: 'gateway:anthropic/claude-sonnet-4.5' },
+          agent: { model: 'anthropic:claude-haiku-4-5' },
+        },
+      },
+      { AI_GATEWAY_API_KEY: 'test' },
     );
-    expect(() => new AIModelCatalog(config, { MINIMAX_API_KEY: 'test' })).toThrow(
-      /ANTHROPIC_API_KEY/,
+    expect(catalog.resolve('generation')).toMatchObject({
+      modelRef: 'gateway:anthropic/claude-sonnet-4.5',
+      providerName: 'gateway',
+      providerType: 'gateway',
+      supportsStructuredOutputs: true,
+    });
+    expect(() => catalog.resolve('agent')).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('推理开启时 maxOutputTokens 补到安全下限，关闭或显式更高时保留配置', () => {
+    const catalog = new AIModelCatalog(
+      {
+        version: 1,
+        providers: {
+          minimax: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.minimaxi.com/v1',
+            apiKeyEnv: 'MINIMAX_API_KEY',
+          },
+        },
+        profiles: {
+          generation: {
+            model: 'minimax:MiniMax-M3',
+            reasoningEffort: 'high',
+            maxOutputTokens: 2_048,
+          },
+          agent: {
+            model: 'minimax:MiniMax-M3',
+            reasoningEffort: 'off',
+            maxOutputTokens: 2_048,
+          },
+        },
+      },
+      { MINIMAX_API_KEY: 'test' },
     );
+    expect(catalog.resolve('generation').maxOutputTokens).toBe(8_192);
+    expect(catalog.resolve('agent').maxOutputTokens).toBe(2_048);
+
+    const explicit = new AIModelCatalog(
+      {
+        version: 1,
+        providers: {
+          minimax: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.minimaxi.com/v1',
+            apiKeyEnv: 'MINIMAX_API_KEY',
+          },
+        },
+        profiles: {
+          generation: { model: 'minimax:MiniMax-M3' },
+          agent: {
+            model: 'minimax:MiniMax-M3',
+            reasoningEffort: 'max',
+            maxOutputTokens: 16_384,
+          },
+        },
+      },
+      { MINIMAX_API_KEY: 'test' },
+    );
+    expect(explicit.resolve('agent').maxOutputTokens).toBe(16_384);
+    expect(explicit.resolve('generation').maxContextChars).toBe(48_000);
   });
 
   it('从 LUOOME_AI_CONFIG 加载 JSON，且不读取旧 LUOOME_LLM_*', () => {

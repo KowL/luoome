@@ -48,7 +48,7 @@ Agent 不通过工具修改插件配置，也没有可用的配置写入接口�
 
 策略建议先读 `get_strategy_dsl_catalog`，并在给出 DSL 片段前用 `validate_strategy_definition` 校验；未通过校验的片段不能声称可直接写入。
 
-新策略运行/试跑/回测由宿主的 `business.strategy-execution` 显式启用；每日判断按需运行少量 active 策略取当日信号，不再有独立调度 timer。
+新策略运行/试跑/回测由宿主的 `business.strategy-execution` 显式启用；策略只在显式 `strategy` workflow 里运行，每日判断只消费当日已有正式运行的信号，不再有独立调度 timer。
 `run_strategy` 按模式和规则引用选择资料：仅本地资料的 scheduled/replay 不依赖 live quote/bars；缺失 ladder/归档保留原 unavailable 与 acceptance 语义。
 停用后重新发现工具；旧草案或旧工具名不能恢复执行。历史读取、取消和已有回执查询继续可用，失败/未知结果不自动重放。
 插件启用不改变 write/external 授权、场景白名单或人工确认。通知投递也由独立插件控制，其它任务资源按后续切片迁移。

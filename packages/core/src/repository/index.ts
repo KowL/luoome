@@ -483,6 +483,15 @@ export interface MinuteBarRepository {
 export interface StockBriefRepository {
   /** 按唯一键幂等写入；同键覆盖字段并返回落库后的记录。 */
   upsert(brief: StockBrief): Promise<StockBrief>;
+  /**
+   * 同一持久化事务内写入建议与它的当日观察记录：任一步失败都整体回滚，不留孤立 Advice。
+   * 唯一键 (accountId, tradingDate, stockId, phase) 上已有 adviceId 时复用该 id 覆盖建议，
+   * 同键重跑不累积 Advice；交互式生成（每次显式新 Advice）不走这里。
+   */
+  upsertWithAdvice(input: {
+    readonly advice: Advice;
+    readonly brief: StockBrief;
+  }): Promise<{ readonly advice: Advice; readonly brief: StockBrief }>;
   findById(id: string): Promise<StockBrief | null>;
   /** 某交易日的观察记录；可按账户和阶段收窄。 */
   findByDay(input: {

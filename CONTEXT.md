@@ -34,8 +34,8 @@ SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，
 > operational / evaluation / backtest 三种取数口径。只有「operational 且已结束（complete/partial）」
 > 的运行进入 current，并能作为建议的依据；acceptance 评分与 publication 发布资格
 > （withheld/non-publishing）已删除，不再有第二套发布状态。
-> 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，只把 score ≥ 60 的看多信号
-> 补进候选池（≤3 只）。观察到期补全、daily cycle 与 replay 已删除；
+> 策略没有独立定时器：策略只在显式 `strategy` workflow 里运行；每日个股观察批次只把当日
+> 已有正式运行（operational）里 score ≥ 60 的非中性信号补进候选集（≤3 只），每日判断本身只读 brief。观察到期补全、daily cycle 与 replay 已删除；
 > 详细契约见 [架构说明](./docs/ARCHITECTURE.md) §7–§8，历史设计见
 > [已归档的日运行设计](./docs/archive/strategy-daily-cycle-and-replay-detailed-design.md)。
 
@@ -45,7 +45,7 @@ AI 可以提议修改策略（`strategy_version_proposal`），但只能产出�
 ### StrategySchedule（已失效）
 
 `strategies` 表上的 5 段 cron 字段与 `lastScheduledAt` 仍在（存量兼容），但**没有调度器读取它们**：
-2026-11-20 删除了 `run-strategy-schedules` 与策略定时任务，策略只在每日判断里按需运行。
+2026-11-20 删除了 `run-strategy-schedules` 与策略定时任务，策略只在显式 `strategy` workflow 里运行。
 修改这些字段不再产生任何自动运行，也不影响 `definitionHash`。
 
 ### StrategyDailyCycleAudit（只读历史）

@@ -68,4 +68,28 @@ describe('tool/market_outlook', () => {
     expect(result.data.ladder).toMatchObject({ status: 'available', snapshot: { maxLevel: 3 } });
     expect(result.data.advice.basedOn.ladder).toMatchObject({ total: 2, maxLevel: 3 });
   });
+
+  it('LLM 失败：返回 llm_error 且不落库伪造建议', async () => {
+    const baseCtx = await buildTestContext();
+    const ctx = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'market-outlook-fail',
+          generate: async <T>(): Promise<T> => {
+            throw new Error('upstream 502');
+          },
+        },
+      },
+    } as typeof baseCtx;
+
+    const result = await marketOutlookTool.execute({}, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('llm_error');
+    if (result.error.kind !== 'llm_error') return;
+    expect(result.error.cause).toContain('upstream 502');
+    expect(await baseCtx.repos.advice.query({ subjectKind: 'market' })).toHaveLength(0);
+  });
 });

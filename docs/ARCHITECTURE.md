@@ -68,7 +68,8 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 例如：
 - `compute_pnl`（tool）= 纯计算
 - `analyze_stock`（tool）= 拉行情 + 算指标 + LLM 分析 → 输出结构化建议
-- `daily-advice`（workflow）= 扫所有持仓 + 调 `analyze_stock` 拿建议 + 排序 + 推送
+- `daily-advice`（workflow）= 读当日 `stock_briefs`（由 `daily-stock-briefs` 生成）+ 排序 +
+  「今日不动/今日可动」结论；自己不调用 LLM
 
 ### 2.5 Repository Pattern
 
@@ -309,10 +310,10 @@ const openaiTools = toolRegistry.toOpenAI();
 ### 4.6 Workflow（workflows 包）
 
 ```ts
-// workflows/daily-advice.ts
-export const dailyAdviceWorkflow = defineWorkflow({
-  name: 'daily-advice',
-  description: '为所有持仓股生成当日建议',
+// 示意：workflow 组合多个 tool（非当前 daily-advice 实现；当前实现只读当日 brief）
+export const exampleAdviceWorkflow = defineWorkflow({
+  name: 'example-advice',
+  description: '示意：为所有持仓股生成当日建议',
   input: z.object({ accountId: z.string().uuid() }),
   steps: [
     step('fetch-holdings', (input, ctx) => ctx.tools.list_holdings.execute({ accountId: input.accountId })),
@@ -348,10 +349,15 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 
 策略已降级为“信号事实源”，不再有独立定时器与发布状态机：
 
-- `daily-advice`（每日 17:30，Web 进程内调度）先读持仓，再展开关注列表成员（上限 10 只），
-  并按需运行最多 2 个 active 策略的 `scan`（不持久化），把评分 ≥60 的看多信号按分数补进候选池
-  （上限 3 只）。逐只调用 `analyze_stock` 生成判断，单只失败只记 warn，不阻断整轮；最后调用
-  `settle_advices` 补算到期结算，输出 `judgment`（`今日不动` / `今日可动`）与汇总计数。
+- `daily-advice`（每日 17:30，Web 进程内调度）只读当日 `stock_briefs` 与其中 `adviceId`
+  指向的已有 advice，调用 `settle_advices` 补算到期结算，输出 `judgment`
+  （`今日不动` / `今日可动`）与汇总计数。它不调用 `analyze_stock` / `generate_stock_briefs` /
+  LLM：`briefsOnly` 只接受 `true`，旧的逐只生成路径与回退开关已删除。批次成功但当日的
+  brief 为空时按「今日不动」的部分结果收口；批次或读取失败不派生结论，不回退到逐只生成。
+- 候选集（持仓 ∪ 关注池 ∪ 当日策略信号）与规则预筛都在 `daily-stock-briefs` 的
+  `generate_stock_briefs` 内完成（候选集上限默认 8 票、策略信号补位 ≤3）；
+  它消费当日已有正式策略运行（`scope=operational`）里评分 ≥60 的非中性信号，
+  每日判断本身不再现场跑策略。
 - `run-strategies` / `strategy`（`job=run`）只做一次正式运行并返回 `{runId, selected, signals}`；
   不再创建观察候选、不同步关注订阅、不触发推荐 workflow。
 - `report`（`kind=weekly`）委托 `weekly-report` 生成唯一一类报告“建议成绩单”：先结算、再取
@@ -363,11 +369,15 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 **2026-11-20 简化状态**：可发布性状态机（acceptance policy + `publication` 三态）已删除，
 `strategy_runs` 不再有 `publication_json`/`publication_status` 列；运行是否参与建议只由
 `scope=operational` 且 `status ∈ {complete, partial}` 决定（`isAdvisoryEligibleRun`）。
-`strategy-daily-cycle`、观察补全与策略定时器一并下线，策略只在每日判断里按需运行取当日信号。
+`strategy-daily-cycle`、观察补全与策略定时器一并下线：策略只在显式 `strategy` workflow 里运行，
+每日判断只消费当日已有正式运行的信号。
 存量 V4 summary 里的 `acceptance` 字段保留只读解析，新运行不再计算。
 
 **盘后/盘中调度**：交易日 17:30 先跑 `daily-stock-briefs` 生成当日个股观察（唯一 LLM 入口），
-再由 `daily-advice(briefsOnly)` 从当日 brief 派生「今日不动/今日可动」；交易日 08:45 另跑
+再由 `daily-advice(briefsOnly=true)` 从当日 brief 派生「今日不动/今日可动」；这是唯一路径，
+手动/CLI 运行 `daily-advice`（含 `--mode scheduled`）时当日无 brief 会返回可操作错误
+（先跑 `daily-stock-briefs`），不会静默生成；只有 17:30 调度在跑过 briefs 后才按
+「今日不动」的部分结果收口。交易日 08:45 另跑
 `daily-stock-briefs(phase='premarket')`，只出事实包 + 规则预筛的研究名单，0 次 LLM、不写 advices。
 每周一 08:00 由 `report`（kind=weekly）生成建议成绩单；不再有 `strategy-daily-cycle`、策略定时租约和
 截止补报 tick，也不再有开盘/收盘/复盘/风险四类报告。
@@ -497,8 +507,9 @@ EastmoneySource 实例，无关 manager 的缓存不清空。
 LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/Web/MCP 三个
 composition root 均调用 `createAIStackFromEnv`，一次加载
 `$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），把 `generation` profile
-解析为 `LLMAdapterLike` 注入 `ctx.adapters.llm`。`agent` profile 仍是 Agent 模型的
-配置来源（Web 设置页读写），供 Web 对话运行时消费，不再注入 `ToolContext`。
+解析为 `LLMAdapterLike` 注入 `ctx.adapters.llm`。`agent` profile 是聊天模型的独立配置来源，
+两个 profile 在 Web 设置页分别保存；Provider 按 `resolve(profile)` 惰性初始化，只要求目标
+profile 的密钥，不再注入 `ToolContext`。非推理输出默认 2048 tokens，开启推理时至少 8192。
 provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；core 只保留 SDK 无关的
 端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
 
@@ -528,6 +539,10 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 Web 对话路径（当前唯一运行时）：Bun Web → `AiSdkChatRuntime` → AI SDK Provider Registry → tools。
 模型请求由 Bun 进程直接发出，密钥只从 `$LUOOME_HOME/.env` 解析，不进入浏览器或日志；没有独立
 Node Host、跨进程协议或模型代理。工具在本进程执行，保持白名单、草案与 ToolResult 错误语义。
+单次模型请求与整轮 run 使用 AI SDK `stepMs/totalMs` 双层超时，派生的整轮默认上限为 10 分钟。
+本地 Tool 输出超过 32KB 时返回带分页提示的截断信封；模型请求前按 `maxContextChars` 压缩旧 Tool
+输出，保留用户消息与最新草案回执，仍超限则明确拒绝。usage 记录 modelRef、步数、工具调用与耗时，
+供应商未返回 token 用量时标为 unknown，不写成确定 0。
 
 每轮从 `ChatRepository` 的可信历史重建模型上下文，不依赖运行时私有 Session 或游标。新消息使历史
 超过既有窗口时，Web 在落库前明确要求通过可编辑交接摘要新建关联会话；运行时的
@@ -995,7 +1010,8 @@ dump 文件按下载请求使用独立文件名，并在落盘前校验，防止
 
 Web 的 [PluginTasks](../apps/web/src/plugin-tasks.ts) 管理实际 timer owner：
 盘中快照调度依赖 `task.collect-market-snapshot`，账户绩效盘后调度依赖 `task.snapshot-account-performance`，
-每周成绩单依赖 `business.report`；策略不持有独立定时器，由每日判断按需运行少量 active 策略取当日信号。
+每周成绩单依赖 `business.report`；策略不持有独立定时器，只在显式 `strategy` workflow 里运行，
+每日判断只消费当日已有正式运行的信号。
 单宿主 timer 每 250ms reconcile，业务 timer 只为当前启用项创建；停用时清除 timer 并停止发起新 tick，
 退出排空有 5 秒上限，超时报告未排空，不强制关闭共用 DB。
 
@@ -1073,7 +1089,7 @@ type ToolError =
 
 | workflow | 职责 |
 |---|---|
-| `daily-advice` | 每日判断：账户事实 + 价格结构 + 当日新闻 + 板块 + 策略信号 → 逐只 `analyze_stock`；持仓全覆盖，候选池 ≤10（手动关注 + 策略信号 ≤3），输出「今日不动/今日可动」汇总。17:30 调度默认 `briefsOnly=true`，只消费当日 `stock_briefs`，不自己调 `analyze_stock` |
+| `daily-advice` | 每日判断：只读当日 `stock_briefs` 与其中 `adviceId` 指向的已有 advice，输出「今日不动/今日可动」汇总并结算到期建议；`briefsOnly` 只接受 `true`，不自调 `analyze_stock` / LLM；手动/CLI 在当日无 brief 时返回可操作错误 |
 | `daily-stock-briefs` | 每日个股观察批次：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→ 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库 `stock_briefs`；`phase='premarket'` 只出研究名单，0 次 LLM、不写 advices；写 `workflow_runs` coverage/budget 审计 |
 | `report` | 只接受 `kind=weekly`：调用 `settle_advices` 结算 T+1/3/5，再生成建议成绩单（命中率、超额、confidence 分组、门禁），落库为一份 Report |
 | `strategy` | 只接受 `job=run`：按显式策略运行 `run_strategy`，不再有 scheduled/daily/observations 编排 |
@@ -1190,22 +1206,24 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ### 场景 B：cron 推送每日建议
 
 ```txt
-[launchd / cron] 每天 8:30
+[launchd / cron] 每天 17:30
       │
       ▼
-[luoome run daily-advice]  ──► CLI 入口
+[luoome workflow run daily-stock-briefs]  ──► 当日唯一 LLM 入口（并发 2 / 预算内）
+      │
+      ▼
+[luoome workflow run daily-advice]        ──► CLI 入口（只派生，不生成）
                                   │
                                   ▼
                             workflows/daily-advice
                                   │
                                   ├──► tools.list_holdings
-                                  ├──► tools.batch_quote
-                                  ├──► tools.run_strategy
-                                  ├──► tools.analyze_stock ×N
-                                  └──► tools.send_notification
+                                  ├──► tools.list_stock_briefs
+                                  ├──► tools.get_advice
+                                  └──► tools.settle_advices
                                   │
                                   ▼
-                            [飞书 Webhook 推送建议卡片]
+                     「今日不动 / 今日可动」结论 + WorkflowRun 审计
 ```
 
 ## 12. 安全模型
@@ -1233,7 +1251,8 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 ### 13.2 加新 advice workflow
 
 1. 在 `workflows/<name>-advice.ts` 用 `defineWorkflow` 定义
-2. 通过 `ctx.tools.analyze_stock.execute()` 拿建议
+2. 只消费当日 `stock_briefs`（或其它已落库事实）：唯一 LLM 生成入口是 `daily-stock-briefs` /
+   `generate_stock_briefs`，不要在新 workflow 里逐只 `analyze_stock` 产生无界建议
 3. 通过 `ctx.tools.*.execute()` 获取事实和写入结果，不直接访问 repository 或 adapter
 4. 加 workflow 集成测试；测试替身只限测试边界，生产路径不注入 mock 数据
 

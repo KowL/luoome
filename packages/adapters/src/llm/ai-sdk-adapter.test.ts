@@ -1,7 +1,7 @@
 import { MockLanguageModelV3 } from 'ai/test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { AISDKAdapter } from './ai-sdk-adapter.js';
+import { AISDKAdapter, LLMPromptBudgetError, projectPromptData } from './ai-sdk-adapter.js';
 import { AIModelCatalog, type ResolvedAIModelProfile } from './model-catalog.js';
 import { LLMOutputBudgetError } from './types.js';
 
@@ -50,10 +50,24 @@ const profile = (
   maxRetries: 0,
   reasoningEffort: 'off',
   maxPromptChars: 16_000,
+  maxContextChars: 48_000,
   maxSteps: 8,
   maxTotalTokens: 30_000,
   ...options,
 });
+
+/** 从 AI SDK prompt 结构中取出实际发送的 user 文本。 */
+const promptText = (prompt: unknown): string =>
+  (prompt as { role: string; content: unknown }[])
+    .filter((message) => message.role === 'user')
+    .map((message) => {
+      if (typeof message.content === 'string') return message.content;
+      return (message.content as { type: string; text?: string }[])
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text ?? '')
+        .join('');
+    })
+    .join('\n');
 
 describe('llm/ai-sdk-adapter', () => {
   it('对象联合向兼容 API 发送顶层 object，同时保留分支校验', async () => {
@@ -320,5 +334,117 @@ describe('llm/ai-sdk-adapter', () => {
     const adapter = new AISDKAdapter(profile(model, { providerType: 'openai-compatible' }));
     await expect(adapter.generate({ system: 'advisor', data: {} })).rejects.toThrow(/schema/);
     expect(calls).toBe(0);
+  });
+
+  it('提示词未超限时保持原始 JSON，raw 不带降级原因', async () => {
+    const prompts: unknown[] = [];
+    const model = new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt);
+        return {
+          content: [{ type: 'text' as const, text: '{"decision":"hold","confidence":50}' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage,
+          warnings: [],
+        };
+      },
+    });
+    const data = { stockId: 'X', quote: { close: 105.8 } };
+    const out = await new AISDKAdapter(profile(model)).generate<z.infer<typeof TestSchema>>({
+      system: 'advisor',
+      schema: TestSchema,
+      data,
+    });
+    expect(promptText(prompts[0])).toBe(JSON.stringify(data));
+    expect(JSON.parse(out.raw)).not.toHaveProperty('promptProjection');
+  });
+
+  it('超过 maxPromptChars 时结构化裁剪：仍是完整 JSON、数字不变、降级原因可追踪', async () => {
+    const prompts: unknown[] = [];
+    const model = new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt);
+        return {
+          content: [{ type: 'text' as const, text: '{"decision":"hold","confidence":50}' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage,
+          warnings: [],
+        };
+      },
+    });
+    const data = {
+      stockId: 'X',
+      quote: { close: 105.8123456789, volume: 123456789 },
+      bars: Array.from({ length: 200 }, (_, index) => ({
+        date: `2026-01-${String((index % 28) + 1).padStart(2, '0')}`,
+        close: 100 + index / 1000,
+      })),
+      news: [{ summary: 'x'.repeat(5_000) }],
+    };
+    const out = await new AISDKAdapter(profile(model, { maxPromptChars: 2_000 })).generate<
+      z.infer<typeof TestSchema>
+    >({ system: 'advisor', schema: TestSchema, data });
+
+    const prompt = promptText(prompts[0]);
+    expect(prompt.length).toBeLessThanOrEqual(2_000);
+    const parsed = JSON.parse(prompt) as {
+      promptBudget: { reason: string; trimmed: { path: string }[] };
+      data: {
+        quote: { close: number; volume: number };
+        bars: unknown[];
+        news: { summary: string }[];
+      };
+    };
+    expect(parsed.promptBudget.reason).toBe('max_prompt_chars');
+    expect(parsed.promptBudget.trimmed.map((item) => item.path)).toContain('data.bars');
+    // 数字与字段结构不被截断：整段事实仍然可解析，数组只丢尾部。
+    expect(parsed.data.quote.close).toBe(105.8123456789);
+    expect(parsed.data.quote.volume).toBe(123456789);
+    expect(parsed.data.bars.length).toBeLessThan(200);
+
+    const raw = JSON.parse(out.raw) as {
+      promptProjection: { reason: string; originalChars: number; projectedChars: number };
+    };
+    expect(raw.promptProjection.reason).toBe('max_prompt_chars');
+    expect(raw.promptProjection.originalChars).toBeGreaterThan(raw.promptProjection.projectedChars);
+  });
+
+  it('结构化裁剪后仍超限 → 在发起请求前失败，不发送半截 JSON', async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        calls += 1;
+        return {
+          content: [{ type: 'text' as const, text: '{"decision":"hold","confidence":50}' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage,
+          warnings: [],
+        };
+      },
+    });
+    const adapter = new AISDKAdapter(profile(model, { maxPromptChars: 120 }));
+    await expect(
+      adapter.generate({
+        system: 'advisor',
+        schema: TestSchema,
+        data: { stockId: 'X', note: 'y'.repeat(1_000) },
+      }),
+    ).rejects.toThrow(LLMPromptBudgetError);
+    expect(calls).toBe(0);
+  });
+
+  it('Date 字段投影为 ISO 字符串，不被裁剪丢失', () => {
+    const projection = projectPromptData(
+      {
+        bars: [{ date: new Date('2026-11-24T07:00:00.000Z'), close: 10.5 }],
+        notes: 'z'.repeat(200),
+      },
+      8_000,
+    );
+    expect(projection.degradation).toBeUndefined();
+    expect(JSON.parse(projection.prompt)).toEqual({
+      bars: [{ date: '2026-11-24T07:00:00.000Z', close: 10.5 }],
+      notes: 'z'.repeat(200),
+    });
   });
 });

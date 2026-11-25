@@ -456,18 +456,24 @@ export const registerSettingsRoutes = (app: Hono, deps: WebRouteDeps): void => {
     try {
       const input = SaveAISettingsSchema.parse(await c.req.json());
       const saved = aiSettingsStore.save(input);
-      const ai = createAIStackFromEnv(aiSettingsStore.runtimeEnv(), {
-        logger: ctxRef.current.logger,
-      });
-      ctxRef.current = {
-        ...ctxRef.current,
-        adapters: { ...ctxRef.current.adapters, llm: ai.llm },
-      };
+      // 只有生成 profile 需要重建 LLM stack；对话 Agent 缺密钥不应阻断生成设置保存，反之亦然。
+      if (input.profile === 'generation') {
+        const ai = createAIStackFromEnv(aiSettingsStore.runtimeEnv(), {
+          logger: ctxRef.current.logger,
+        });
+        ctxRef.current = {
+          ...ctxRef.current,
+          adapters: { ...ctxRef.current.adapters, llm: ai.llm },
+        };
+      }
       chatRuntimeRef.current = createAiSdkChatRuntimeFromStore(
         aiSettingsStore,
         aiSettingsStore.runtimeEnv(),
       );
-      return jsonResult({ ok: true, data: { ...saved, applied: true } });
+      return jsonResult({
+        ok: true,
+        data: { ...saved, applied: true, appliedProfile: input.profile },
+      });
     } catch (error) {
       if (error instanceof ZodError) {
         return jsonResult({

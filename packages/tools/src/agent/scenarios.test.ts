@@ -1,45 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { APPROVED_EXTERNAL_TOOLS } from '../agent-whitelist.js';
-import { toolRegistry } from '../registry.js';
+import { applicationToolRegistry, toolRegistry } from '../registry.js';
 import {
   AGENT_DRAFT_TOOL_KINDS,
   AGENT_SCENARIOS,
   AgentScenarioIdSchema,
   agentInstructions,
   BASE_INSTRUCTIONS,
+  CHAT_ONLY_READ_TOOL_NAMES,
   INVESTMENT_INSTRUCTIONS,
 } from './scenarios.js';
 
 const SCENARIO_IDS = AgentScenarioIdSchema.options;
-
-/** S4.1c：核心 Agent Tool（registry 收敛前旧名仍注册，但 agent 白名单只用这些）。 */
-const CORE_READ_TOOL_NAMES = [
-  'search_stocks',
-  'get_stock_market_view',
-  'get_intraday_summary',
-  'fetch_quote',
-  'fetch_index_quotes',
-  'fetch_sector_quotes',
-  'compute_indicators',
-  'limit_up_ladder',
-  'dragon_tiger_list',
-  'northbound_flow',
-  'fetch_news',
-  'list_watchlists',
-  'get_watchlist',
-  'list_strategies',
-  'get_strategy',
-  'get_strategy_dsl_catalog',
-  'validate_strategy_definition',
-  'get_strategy_signals',
-  'get_account_overview',
-  'get_account_performance',
-  'list_trades',
-  'get_advice',
-  'get_stock_brief',
-  'list_stock_briefs',
-  'list_watch_plans',
-] as const;
 
 const CORE_DRAFT_TOOL_NAMES = [
   'save_strategy_version',
@@ -48,6 +20,7 @@ const CORE_DRAFT_TOOL_NAMES = [
   'update_watchlist_members',
   'save_alert_plan',
   'save_trading_plan',
+  'update_holding',
   'save_decision_review',
   'analyze_stock',
   'analyze_position',
@@ -69,23 +42,19 @@ const LEGACY_SCENARIO_TOOL_NAMES = [
   'strategy_signals_by_stock',
   'list_alert_plans',
   'list_watch_triggers',
-  'list_research_documents',
-  'get_research_document',
   'get_market_data_status',
   'get_watch_status',
   'list_watchlist_changes',
   'list_strategy_runs',
   'get_strategy_run',
   'get_advice_stats',
-  'get_decision_loop_review',
-  'get_confidence_calibration',
   'get_signal_observation_stats',
   'get_strategy_reliability_summary',
   'compare_strategy_definitions',
   'list_workflow_runs',
-  'list_reports',
-  'get_report',
   'create_research_document',
+  'list_research_documents',
+  'get_research_document',
   'create_account',
   'create_portfolio_cash_flow',
   'create_strategy',
@@ -106,22 +75,49 @@ const LEGACY_SCENARIO_TOOL_NAMES = [
   'market_outlook',
 ] as const;
 
+const toolOf = (name: string) => toolRegistry.get(name) ?? applicationToolRegistry.get(name);
+
+/** 提示词里出现的 snake_case 标识符若确实是已装配 Tool，就必须在该场景可用。 */
+const mentionedToolNames = (text: string): string[] => {
+  const tokens = text.match(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g) ?? [];
+  return [...new Set(tokens)].filter((token) => toolOf(token) !== undefined);
+};
+
+const availableToolNames = (id: keyof typeof AGENT_SCENARIOS): ReadonlySet<string> =>
+  new Set([
+    ...AGENT_SCENARIOS[id].readToolNames,
+    ...Object.keys(AGENT_SCENARIOS[id].draftToolKinds),
+  ]);
+
 describe('agent 场景目录', () => {
   it('覆盖全部五个场景 id', () => {
     expect(Object.keys(AGENT_SCENARIOS).sort()).toEqual([...SCENARIO_IDS].sort());
   });
 
-  it('每个场景只使用核心 Tool 的只读子集，且全部已注册、sideEffect 合法', () => {
+  it('每个场景的只读 Tool 都已装配且 sideEffect 合法（read 或已批准 external）', () => {
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
-      expect([...scenario.readToolNames]).toEqual([...CORE_READ_TOOL_NAMES]);
       for (const name of scenario.readToolNames) {
-        const registered = toolRegistry.get(name);
-        expect(registered, `${scenario.id}: ${name} 未注册`).toBeDefined();
+        const registered = toolOf(name);
+        expect(registered, `${scenario.id}: ${name} 未装配`).toBeDefined();
         const legal =
           registered?.sideEffect === 'read' ||
           (registered?.sideEffect === 'external' && APPROVED_EXTERNAL_TOOLS.has(name));
         expect(legal, `${scenario.id}: ${name} sideEffect=${registered?.sideEffect}`).toBe(true);
+        const agentVisible = toolRegistry.get(name) !== undefined;
+        expect(
+          agentVisible || CHAT_ONLY_READ_TOOL_NAMES.has(name),
+          `${scenario.id}: ${name} 既不在 agent 暴露面也不在 chat-only 白名单`,
+        ).toBe(true);
       }
+    }
+  });
+
+  it('chat-only 复盘只读 Tool 不进入 MCP 暴露面，且委托对象是已装配的 read tool', () => {
+    for (const name of CHAT_ONLY_READ_TOOL_NAMES) {
+      expect(toolRegistry.get(name), `${name} 不应进入 agent registry`).toBeUndefined();
+      const registered = applicationToolRegistry.get(name);
+      expect(registered, `${name} 未装配`).toBeDefined();
+      expect(registered?.sideEffect, name).toBe('read');
     }
   });
 
@@ -143,8 +139,10 @@ describe('agent 场景目录', () => {
     }
   });
 
-  it('草案清单全部已注册、kind 合法；场景按域收窄', () => {
+  it('草案清单全部已装配、kind 合法', () => {
     expect(Object.keys(AGENT_DRAFT_TOOL_KINDS).sort()).toEqual([...CORE_DRAFT_TOOL_NAMES].sort());
+    expect(AGENT_DRAFT_TOOL_KINDS.update_holding).toBe('portfolio');
+    expect(AGENT_DRAFT_TOOL_KINDS.save_trading_plan).toBe('portfolio');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.save_decision_review).toBe('review');
@@ -156,47 +154,133 @@ describe('agent 场景目录', () => {
         expect(registered?.sideEffect, name).toBe('advice');
       }
     }
-    expect(AGENT_SCENARIOS.general.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
-    expect(AGENT_SCENARIOS.research.draftToolKinds).not.toHaveProperty('save_decision_review');
-    expect(AGENT_SCENARIOS.review.draftToolKinds.save_decision_review).toBe('review');
-    expect(AGENT_SCENARIOS.review.draftToolKinds).not.toHaveProperty('save_trading_plan');
-    for (const id of ['portfolio', 'watch'] as const) {
-      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty('save_decision_review');
-      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty('save_research_document');
+  });
+
+  it('持仓纠错草案只在 portfolio 场景可用，kind=portfolio', () => {
+    for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      if (scenario.id === 'portfolio') continue;
+      expect(scenario.draftToolKinds, `${scenario.id}`).not.toHaveProperty('update_holding');
     }
+    expect(AGENT_SCENARIOS.portfolio.draftToolKinds.update_holding).toBe('portfolio');
+    expect(AGENT_SCENARIOS.portfolio.readToolNames).toEqual(
+      expect.arrayContaining(['get_account_overview', 'list_trades', 'get_stock_brief']),
+    );
+    // 草案展示已覆盖 update_holding：正面描述「纠正账本记录，不会买卖股票」。
+    expect(AGENT_SCENARIOS.portfolio.instructionOverlay).toContain('update_holding');
+    expect(AGENT_SCENARIOS.portfolio.instructionOverlay).toContain('纠正账本记录');
+  });
+
+  it('general 只保留股票发现与当日观察，不提供账户操作或草案', () => {
+    expect([...AGENT_SCENARIOS.general.readToolNames]).toEqual([
+      'search_stocks',
+      'get_stock_brief',
+      'list_stock_briefs',
+    ]);
+    expect(AGENT_SCENARIOS.general.draftToolKinds).toEqual({});
+  });
+
+  it('四个投资场景各自收窄，不再共用全量只读基线', () => {
+    const allReads = new Set<string>();
+    for (const id of ['research', 'portfolio', 'watch', 'review'] as const) {
+      const reads = AGENT_SCENARIOS[id].readToolNames;
+      expect(reads.length, `${id} 仍然过宽`).toBeLessThan(25);
+      for (const name of reads) allReads.add(name);
+    }
+    // 行情广度类 Tool 只属于 research；账户类只属于 portfolio/review。
+    expect(AGENT_SCENARIOS.portfolio.readToolNames).not.toContain('limit_up_ladder');
+    expect(AGENT_SCENARIOS.portfolio.readToolNames).not.toContain('fetch_news');
+    expect(AGENT_SCENARIOS.watch.readToolNames).not.toContain('get_account_overview');
+    expect(AGENT_SCENARIOS.review.readToolNames).not.toContain('compute_indicators');
+    expect(AGENT_SCENARIOS.research.readToolNames).not.toContain('get_account_overview');
+    // 各场景草案只保留本域写入。
+    expect(Object.keys(AGENT_SCENARIOS.review.draftToolKinds)).toEqual(['save_decision_review']);
+    expect(Object.keys(AGENT_SCENARIOS.watch.draftToolKinds).sort()).toEqual([
+      'create_watchlist',
+      'save_alert_plan',
+      'update_watchlist_members',
+    ]);
+    expect(Object.keys(AGENT_SCENARIOS.portfolio.draftToolKinds).sort()).toEqual([
+      'analyze_position',
+      'save_trading_plan',
+      'update_holding',
+    ]);
+    expect(Object.keys(AGENT_SCENARIOS.research.draftToolKinds).sort()).toEqual([
+      'analyze_stock',
+      'run_strategy',
+      'save_strategy_version',
+    ]);
+  });
+
+  it('review 场景可读建议成绩、confidence 校准与 Report', () => {
+    const reads = AGENT_SCENARIOS.review.readToolNames;
+    for (const name of [
+      'get_decision_loop_review',
+      'get_confidence_calibration',
+      'list_reports',
+      'get_report',
+      'get_advice',
+      'list_trades',
+    ]) {
+      expect(reads, name).toContain(name);
+    }
+    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('get_decision_loop_review');
+    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('get_confidence_calibration');
+    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('get_report');
+    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('描述性统计');
+    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('样本量');
+    expect(AGENT_SCENARIOS.review.plannedDimensions).toContain('报告');
+  });
+
+  it('提示词明确引用的 Tool 都在该场景 read/draft 表内', () => {
+    for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      const available = availableToolNames(scenario.id);
+      for (const name of mentionedToolNames(agentInstructions(scenario))) {
+        expect(available.has(name), `${scenario.id} 提示词引用了不可用的 ${name}`).toBe(true);
+      }
+    }
+  });
+
+  it('不再承诺已删除的研究笔记 / ResearchDocument', () => {
+    for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      const text = agentInstructions(scenario);
+      for (const forbidden of [
+        '研究笔记',
+        'ResearchDocument',
+        'research_document',
+        'create_research_document',
+        'list_research_documents',
+      ]) {
+        expect(text, `${scenario.id}: ${forbidden}`).not.toContain(forbidden);
+      }
+      for (const name of scenario.readToolNames) {
+        expect(name, `${scenario.id}: ${name}`).not.toContain('research_document');
+      }
+      for (const name of Object.keys(scenario.draftToolKinds)) {
+        expect(name, `${scenario.id}: ${name}`).not.toContain('research_document');
+      }
+    }
+    expect(BASE_INSTRUCTIONS).toContain('研究报告');
   });
 
   it('账户与计划读取用聚合 facade，交易记录只读、永不生成 add_trade 草案', () => {
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
-      for (const name of [
-        'get_account_overview',
-        'get_account_performance',
-        'list_trades',
-        'list_watch_plans',
-        'get_advice',
-      ]) {
-        expect(scenario.readToolNames).toContain(name);
-      }
       expect(scenario.readToolNames).not.toContain('add_trade');
       expect(scenario.draftToolKinds).not.toHaveProperty('add_trade');
       expect(scenario.readToolNames).not.toContain('list_holdings');
     }
-  });
-
-  it('四类场景共享同一只读基线，general 白名单相同', () => {
-    for (const scenario of Object.values(AGENT_SCENARIOS)) {
-      expect([...scenario.readToolNames]).toEqual([...CORE_READ_TOOL_NAMES]);
+    for (const id of ['portfolio', 'review'] as const) {
+      for (const name of ['get_account_overview', 'list_trades']) {
+        expect(AGENT_SCENARIOS[id].readToolNames, `${id}: ${name}`).toContain(name);
+      }
     }
-    expect([...AGENT_SCENARIOS.general.readToolNames]).toEqual([...CORE_READ_TOOL_NAMES]);
+    expect(AGENT_SCENARIOS.portfolio.readToolNames).toContain('list_watch_plans');
   });
 
-  it('review 覆写含小样本相关性约束，投资场景有计划维度', () => {
-    expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('描述性统计');
+  it('投资场景有计划维度，通用问答不做查询计划', () => {
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
       if (scenario.id === 'general') continue;
       expect(scenario.plannedDimensions.length).toBeGreaterThan(0);
     }
-    // 通用问答不做确定性查询计划。
     expect(AGENT_SCENARIOS.general.plannedDimensions).toEqual([]);
   });
 
@@ -211,19 +295,13 @@ describe('agent 场景目录', () => {
     expect(BASE_INSTRUCTIONS).not.toContain('get_account_overview');
   });
 
-  it('INVESTMENT_INSTRUCTIONS 保留投资域约束：五段回答、工具入口与建议边界', () => {
+  it('INVESTMENT_INSTRUCTIONS 只写跨场景通用规则，不点名具体 Tool', () => {
     expect(INVESTMENT_INSTRUCTIONS).toContain('结论摘要');
     expect(INVESTMENT_INSTRUCTIONS).toContain('风险与未知项');
     expect(INVESTMENT_INSTRUCTIONS).toContain('伪完整答案');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('get_account_overview');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('update_holding');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('save_strategy_version');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('list_watch_plans');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('get_stock_brief');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('不得把规则观察描述成 AI 研究结论');
-    expect(INVESTMENT_INSTRUCTIONS).toContain('最多生成 1 个 advice 草案');
-    expect(INVESTMENT_INSTRUCTIONS).not.toContain('trial_strategy');
-    expect(INVESTMENT_INSTRUCTIONS).not.toContain('add_watchlist_members');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('最多生成 1 个待确认的分析草案');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('成交只能由用户在本地 CLI 或 Web 登记');
+    expect(mentionedToolNames(INVESTMENT_INSTRUCTIONS)).toEqual([]);
   });
 
   it('agentInstructions 只为投资场景追加投资域规则', () => {
@@ -231,11 +309,25 @@ describe('agent 场景目录', () => {
     expect(general).toContain('通用问答');
     expect(general).not.toContain('结论摘要');
     expect(general).not.toContain('get_account_overview');
+    expect(mentionedToolNames(general)).toEqual([
+      'search_stocks',
+      'get_stock_brief',
+      'list_stock_briefs',
+    ]);
     for (const id of ['research', 'portfolio', 'watch', 'review'] as const) {
       const text = agentInstructions(AGENT_SCENARIOS[id]);
       expect(text).toContain(INVESTMENT_INSTRUCTIONS);
       expect(text).toContain(AGENT_SCENARIOS[id].instructionOverlay);
       expect(text.startsWith(BASE_INSTRUCTIONS)).toBe(true);
     }
+  });
+
+  it('research 场景先读 StockBrief 再考虑正式分析', () => {
+    const research = AGENT_SCENARIOS.research;
+    expect(research.instructionOverlay).toContain('get_stock_brief');
+    expect(research.readToolNames).toContain('get_stock_brief');
+    expect(research.readToolNames).toContain('list_stock_briefs');
+    expect(research.draftToolKinds.analyze_stock).toBe('advice');
+    expect(research.instructionOverlay).toContain('有观察时直接引用');
   });
 });

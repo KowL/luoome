@@ -84,28 +84,39 @@ describe('llm/manager', () => {
       expect(real.callCount).toBe(1);
     });
 
-    it('失败 + 重试失败 → 走规则 fallback（不抛异常）', async () => {
+    it('第一次失败、重试成功 → 返回重试结果并带 retry hint', async () => {
       const real = new StubAdapter('real-stub');
-      real.failMode = 'throw';
-      const mgr = new LLMManager({
-        adapter: real,
-        logger: silentLogger,
-      });
+      real.failOnce = new Error('first fail');
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
       const out = await mgr.generate<ParsedAdvice>({
         system: 's',
         schema: TestSchema,
-        data: { indicators: { X: { ma5: 10, ma20: 8 } } },
+        data: {},
       });
-      // fallback: MA5 > MA20 → watch @ 30
-      expect(out.decision).toBe('watch');
-      expect(out.confidence).toBe(30);
-      expect(out.reasoning.evidence.some((e) => e.includes('LLM 推理失败'))).toBe(true);
-      expect(real.callCount).toBe(2); // 第一次 + retry
-      // retry 时的 system 应包含 "Retry hint"
+
+      expect(out.decision).toBe('hold');
+      expect(real.callCount).toBe(2);
       expect(real.capturedSystems[1] ?? '').toContain('Retry hint');
+      expect(real.capturedSystems[1] ?? '').toContain('first fail');
     });
 
-    it('policy.managerRetry=false 时不重试也不走 fallback，HTTP 次数≤1', async () => {
+    it('重试仍失败 → 抛错，不构造任何业务输出', async () => {
+      const real = new StubAdapter('real-stub');
+      real.failMode = 'throw';
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
+
+      await expect(
+        mgr.generate<ParsedAdvice>({
+          system: 's',
+          schema: TestSchema,
+          data: { indicators: { X: { ma5: 10, ma20: 8 } } },
+        }),
+      ).rejects.toThrow('stub fail');
+      expect(real.callCount).toBe(2);
+    });
+
+    it('policy.managerRetry=false 时不重试，HTTP 次数≤1', async () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
       const mgr = new LLMManager({ adapter: real, logger: silentLogger });
@@ -152,37 +163,13 @@ describe('llm/manager', () => {
       expect(real.requests[1]?.maxOutputTokens).toBeUndefined();
     });
 
-    it('MA5 ≤ MA20 → fallback 走 hold @ 20', async () => {
+    it('缺 schema 的请求不重试，直接抛第一次错误', async () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
-      const mgr = new LLMManager({
-        adapter: real,
-        logger: silentLogger,
-      });
-      const out = await mgr.generate<ParsedAdvice>({
-        system: 's',
-        schema: TestSchema,
-        data: { indicators: { X: { ma5: 8, ma20: 10 } } },
-      });
-      expect(out.decision).toBe('hold');
-      expect(out.confidence).toBe(20);
-    });
+      const mgr = new LLMManager({ adapter: real, logger: silentLogger });
 
-    it('indicators 缺失 → fallback hold @ 20 + 默认 evidence', async () => {
-      const real = new StubAdapter('real-stub');
-      real.failMode = 'throw';
-      const mgr = new LLMManager({
-        adapter: real,
-        logger: silentLogger,
-      });
-      const out = await mgr.generate<ParsedAdvice>({
-        system: 's',
-        schema: TestSchema,
-        data: { foo: 'bar' }, // 无 indicators
-      });
-      expect(out.decision).toBe('hold');
-      expect(out.confidence).toBe(20);
-      expect(out.reasoning.evidence.some((e) => e.includes('MA5 / MA20 缺失'))).toBe(true);
+      await expect(mgr.generate({ system: 's', data: {} })).rejects.toThrow('stub fail');
+      expect(real.callCount).toBe(1);
     });
 
     it('输出预算耗尽 → 重试时放大 maxOutputTokens 并带回可诊断错误', async () => {

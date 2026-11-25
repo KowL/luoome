@@ -475,7 +475,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 - 不引入 `place_order` / `cancel_order` 这类 trade 类 tool（MCP / Web 永不应暴露）
 - advice 类 tool 不允许直接触发 trade
 - 加新写副作用的 tool 时同步写：[SECURITY.md](./SECURITY.md) 的副作用分级
-- LLM 调用必须 fallback（不可让一次失败导致整个 workflow 死）
+- LLM 失败必须在调用方 tool 的业务边界降级（rule-only / facts-only），不能靠 LLMManager 伪造业务输出
 
 ---
 

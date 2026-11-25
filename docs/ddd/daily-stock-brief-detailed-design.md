@@ -98,15 +98,21 @@ MCP：`get_stock_brief` / `list_stock_briefs` 随 read 基线自动发现；
 
 ## 5. 调度
 
-- **交易日 17:30（默认路径）**：`daily-stock-briefs(phase='post-market')` →
+- **交易日 17:30**：`daily-stock-briefs(phase='post-market')` →
   `daily-advice(briefsOnly=true)`。前者是唯一 LLM 入口；后者只读当日 brief 与其中
   `adviceId` 指向的已有 advice，派生「今日无新信号 / 今日有 N 个信号」。
-- **回退开关**：`LUOOME_DAILY_JUDGMENT_LEGACY=true` 时 17:30 只跑旧的
-  `daily-advice` 生成路径；该兼容分支计划在一个版本周期后删除。
+  17:30 没有第二条路径，也不再有回退开关：`LUOOME_DAILY_JUDGMENT_LEGACY` 与
+  `daily-advice` 内部的逐只 `analyze_stock` 生成分支均已删除，输入 `briefsOnly=false`
+  直接 `invalid_input`。
+- **手动 / CLI `daily-advice`**：同一组合，只有先后两步；当日没有 brief 时直接返回
+  可操作错误（提示先跑 `daily-stock-briefs`），不静默生成、不隐式调用 LLM；
+  即使传 `--mode scheduled` 也不会静默出「今日不动」。
+  当日 brief 存在时按相同规则派生结论并结算到期建议。
 - **交易日 08:45**：`daily-stock-briefs(phase='premarket')`，只出研究名单与隔夜新闻，
   0 次 LLM、不写 advices。
 - 调度只在上海交易日触发，进程内按交易日去重；重启后重跑一次，靠唯一键与 digest 幂等。
-  brief 批次失败时回退到「消费当日已有 brief」，不自动改用逐只 `analyze_stock` 烧预算。
+  brief 批次或读取失败时不派生 `daily-advice` 结论，避免把数据不可用伪装成「今日不动」；
+  只有批次成功但确实没有候选或信号时才按「今日不动」收口，不自动改用逐只 `analyze_stock` 烧预算。
 
 ## 6. 降级矩阵
 

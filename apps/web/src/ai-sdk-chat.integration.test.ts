@@ -255,7 +255,7 @@ describe('AI SDK 聊天运行时 + 真实 Web 链（受控模型）', () => {
       externalMcpConfig: config,
       beforeFirstStream: () => save(false),
     });
-    const first = await fixture.chat(await fixture.createSession(), '研究 MCP 文档中的 Watchlist');
+    const first = await fixture.chat(await fixture.createSession(), '研究 MCP 文档中的策略');
     expect(first.status).toBe(200);
     const chunks = parseChunks(await first.text());
     expect(chunks.filter((part) => part.type === 'error')).toEqual([]);
@@ -272,7 +272,7 @@ describe('AI SDK 聊天运行时 + 真实 Web 链（受控模型）', () => {
     save(true);
     const sessionId = await fixture.createSession();
     const enabled = parseChunks(
-      await (await fixture.chat(sessionId, '研究 MCP 文档中的 Watchlist')).text(),
+      await (await fixture.chat(sessionId, '研究 MCP 文档中的策略')).text(),
     );
     expect(enabled.filter((part) => part.type === 'error')).toEqual([]);
     const outputs = enabled.filter((part) => part.type === 'tool-output-available');
@@ -291,9 +291,7 @@ describe('AI SDK 聊天运行时 + 真实 Web 链（受控模型）', () => {
 
     save(true, ['review']);
     const other = parseChunks(
-      await (
-        await fixture.chat(await fixture.createSession(), '研究 MCP 文档中的 Watchlist')
-      ).text(),
+      await (await fixture.chat(await fixture.createSession(), '研究 MCP 文档中的策略')).text(),
     );
     expect(other.filter((part) => part.type === 'tool-input-available')).toEqual([]);
   }, 30_000);

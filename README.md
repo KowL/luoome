@@ -148,9 +148,11 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。两者均通过
 OpenAI-compatible Chat Completions 接入。
 
-Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也可在 Web「设置 → AI 模型」页直接修改并热生效。
-模型目录缺失时不会自动生成：Web 会以配置模式启动，在设置页保存后才写入 `$LUOOME_HOME/ai-models.json`
-（密钥写入 `$LUOOME_HOME/.env`，权限 0600）；也可手动从仓库根的 `ai-models.example.json` 复制。
+Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置。Web「设置 → AI 模型」可分别修改
+`generation` 与 `agent` profile 并热生效，保存一个 profile 不覆盖另一个；Provider 按目标 profile
+惰性初始化，只要求该 profile 的密钥。非推理输出默认 2048 tokens，开启推理时至少 8192。
+默认模型目录缺失时会生成不含密钥的默认配置，显式 `LUOOME_AI_CONFIG` 缺失则报错；密钥写入
+`$LUOOME_HOME/.env`（权限 0600），也可手动从仓库根的 `ai-models.example.json` 复制。
 
 策略 AI 洞察由 `plugins.json` 的 `strategy.ai-insight` 独立启停，只有 `generate_strategy_insight` 按需调用策略解释模型。
 配置缺失、损坏或停用时，该工具仍返回确定性事实摘要，并标记 `provider=facts-only` 与降级原因
@@ -159,7 +161,7 @@ Web、CLI 和 MCP 共用 `$LUOOME_HOME` 下的模型目录与环境配置，也�
 
 内置能力的启停只有一处：手写 `$LUOOME_HOME/plugins.json`，改完重启宿主生效。没有写入式管理面或 CLI 写命令；Web 设置 → 系统与 `luoome plugins check` 只做只读校验展示。缺省即关闭，启用不授予 write/external，也不改变工具白名单。可用的 id 与写法见[插件启用清单](./docs/USER_GUIDE.md#插件启用清单只读)。
 
-行情提供者与采集任务分别启停，全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据。策略执行由 `business.strategy-execution` 控制，策略没有独立定时器，每日判断按需运行少量 active 策略取当日信号。停用任一能力都不删除历史数据。
+行情提供者与采集任务分别启停，全关后保留本地查询与指标计算，旧请求的晚结果不会覆盖新数据。策略执行由 `business.strategy-execution` 控制，策略没有独立定时器：策略只在显式 `strategy` workflow 里运行，每日判断只消费当日已有正式运行的信号。停用任一能力都不删除历史数据。
 
 ## 文档
 
@@ -198,24 +200,29 @@ LUOOME_MARKET_PROVIDER=real LUOOME_EXPOSE_WRITE=true LUOOME_EXPOSE_EXTERNAL=true
 ## 自动任务
 
 当 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时开启时，Web 进程内置三类调度：
-交易日 17:30 的 `daily-advice`、每周一 08:00 的 `report`（kind=weekly），以及盘中的账户计划盯盘与
-账户绩效估值。
+交易日 17:30 先跑 `daily-stock-briefs` 再跑 `daily-advice`（当日判断只派生，不调 LLM）、
+每周一 08:00 的 `report`（kind=weekly），以及盘中的账户计划盯盘与账户绩效估值。
 
 单机 CLI 的 `watch` 与 `workflow run` 能力也可由外部 cron 显式触发，每次 workflow 运行落一条 `WorkflowRun` 审计：
 
 ```cron
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
-# 每日判断（持仓 + 候选池，含"今日不动"结论）；Web 内置调度之外可作补偿
-30 17 * * 1-5  luoome workflow run daily-advice --mode scheduled
+# 当日个股观察（唯一 LLM 入口，并发 2、每日预算内）
+30 17 * * 1-5  luoome workflow run daily-stock-briefs --mode scheduled
+# 当日判断：只消费上面的当日 brief，输出"今日不动 / 今日可动"（等 brief 批次跑完）
+45 17 * * 1-5  luoome workflow run daily-advice --mode scheduled
 # 每周建议成绩单：先结算到期建议，再统计命中率与超额
 0 8 * * 1      luoome workflow run report --mode scheduled
 ```
 
 - 预警试跑不写正式触发或改变边沿状态。盘中循环持有执行租约；失败及中断投递由后续盘中循环补偿，当日最多尝试三次，重试间隔 1 分钟、5 分钟，仍受每日额度限制。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
-- 策略不再有独立定时器：`daily-advice` 每日 17:30 按需运行最多 2 个 active 策略的扫描，
-  只取评分 ≥60 的看多信号补进候选池（每周最多 3 只进判断）。正式运行用 `luoome workflow strategy`。
+- 策略不再有独立定时器：`daily-advice` 每日 17:30 只消费当日 `stock_briefs`，自己不跑策略、
+  不调 LLM；候选集（含当日已有正式策略运行里评分 ≥60 的非中性信号，最多 3 只）由
+  `daily-stock-briefs` 的受控批次装配。正式运行策略用 `luoome workflow strategy`。
+- 手动 / CLI `luoome workflow run daily-advice` 与 17:30 同一组合：当日没有 brief 时直接返回
+  可操作错误（提示先跑 `daily-stock-briefs`），不存在逐只 `analyze_stock` 的第二条路径。
 - 关注列表与信号观察仍可单独查询；不再自动创建 T+1/T+3/T+5 观察候选，也不再有到期补全任务。
 - 只剩一类报告：每周一 08:00 的建议成绩单（命中率、平均超额、按 confidence 分组、50 条/60% 门禁）。
   `scheduled` 模式默认通知，可在 `--input` 传 `{"notify":false}` 关闭；同一周期重复运行会更新同一份 Report。

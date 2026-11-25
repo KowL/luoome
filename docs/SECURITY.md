@@ -311,7 +311,7 @@ source/task 初始与迁移新增项默认关闭，启用仍受宿主 write/exte
 受控行情 transport 在实际外发前识别供应商并复核其启用位，返回与持久化再校验数据 scope；间接使用的 Sina 同样受限。
 停用数据源后下一次取数即切换路由；提供者配额不因开关重置。
 数据 repository 在取得 SQLite immediate 写锁后运行同步 guard，提交前不跨 await；已提交历史不会因关闭而删除。
-策略新运行/试跑/回测受 business.strategy-execution 控制；每日判断中的策略补位同样需要该插件。
+策略新运行/试跑/回测受 business.strategy-execution 控制；每日判断只消费当日已有正式运行的信号，不自行运行策略。
 新配置项默认关闭；插件启用不改变执行权限和 Agent 场景白名单。旧草案生成 callback 及最终确认各自复核当前启用位；
 已有回执读取和取消仍可用，不自动重放。
 运行结果在 SQLite 写资格内校验。失败收尾仅限既有 running→failed、不可变身份一致，不能用失败收尾创建新运行或覆盖已完成事实。

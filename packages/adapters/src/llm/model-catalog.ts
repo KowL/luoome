@@ -7,7 +7,6 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import {
   createGateway,
-  createProviderRegistry,
   defaultSettingsMiddleware,
   type LanguageModel,
   wrapLanguageModel,
@@ -21,6 +20,20 @@ const providerName = z
   .min(1)
   .regex(/^[a-zA-Z0-9_-]+$/);
 const positiveInt = z.number().int().positive();
+
+/**
+ * 推理 token 计入 max_tokens，低于该值时供应商会在推理阶段耗尽输出预算并返回空回答。
+ * 仅约束 reasoningEffort!=off 的 profile；显式配置更高时保留原值。
+ */
+export const MIN_REASONING_MAX_OUTPUT_TOKENS = 8_192;
+
+const effectiveMaxOutputTokens = (profile: {
+  readonly reasoningEffort: 'off' | 'low' | 'medium' | 'high' | 'max';
+  readonly maxOutputTokens: number;
+}): number =>
+  profile.reasoningEffort === 'off'
+    ? profile.maxOutputTokens
+    : Math.max(profile.maxOutputTokens, MIN_REASONING_MAX_OUTPUT_TOKENS);
 
 const providerBase = z.object({
   apiKeyEnv: z
@@ -51,10 +64,13 @@ const ProfileConfigSchema = z.object({
     .regex(/^[a-zA-Z0-9_-]+:.+$/, 'model 必须使用 provider:model 格式'),
   temperature: z.number().min(0).max(2).default(0.2),
   maxOutputTokens: positiveInt.default(2_048),
+  /** 单次模型请求预算；聊天运行时会另按步数派生整轮预算。 */
   timeoutMs: positiveInt.default(30_000),
   maxRetries: z.number().int().min(0).max(5).default(0),
   reasoningEffort: z.enum(['off', 'low', 'medium', 'high', 'max']).default('off'),
   maxPromptChars: positiveInt.default(16_000),
+  /** 请求前投影后的对话上下文预算（字符，含历史 Tool 输出）。 */
+  maxContextChars: positiveInt.default(48_000),
   maxSteps: positiveInt.default(8),
   maxTotalTokens: positiveInt.default(30_000),
 });
@@ -66,6 +82,7 @@ export const AIModelCatalogConfigSchema = z.object({
     generation: ProfileConfigSchema,
     agent: ProfileConfigSchema.extend({
       timeoutMs: positiveInt.default(120_000),
+      maxTotalTokens: positiveInt.default(120_000),
     }),
   }),
 });
@@ -112,6 +129,7 @@ export const DEFAULT_AI_MODEL_CATALOG_CONFIG = AIModelCatalogConfigSchema.parse(
       maxRetries: 0,
       reasoningEffort: 'off',
       maxPromptChars: 16_000,
+      maxContextChars: 48_000,
       maxSteps: 8,
       maxTotalTokens: 30_000,
     },
@@ -123,8 +141,9 @@ export const DEFAULT_AI_MODEL_CATALOG_CONFIG = AIModelCatalogConfigSchema.parse(
       maxRetries: 0,
       reasoningEffort: 'off',
       maxPromptChars: 16_000,
+      maxContextChars: 48_000,
       maxSteps: 8,
-      maxTotalTokens: 30_000,
+      maxTotalTokens: 120_000,
     },
   },
 });
@@ -145,11 +164,14 @@ export interface ResolvedAIModelProfile {
   readonly maxRetries: number;
   readonly reasoningEffort: AIModelCatalogConfig['profiles']['generation']['reasoningEffort'];
   readonly maxPromptChars: number;
+  readonly maxContextChars: number;
   readonly maxSteps: number;
   readonly maxTotalTokens: number;
 }
 
-type RegistryProviders = Parameters<typeof createProviderRegistry>[0];
+interface LanguageModelProvider {
+  languageModel(id: string): LanguageModelV3;
+}
 
 const resolveApiKey = (
   providerNameValue: string,
@@ -172,7 +194,10 @@ const toQuirks = (
 
 export class AIModelCatalog {
   private readonly config: AIModelCatalogConfig;
-  private readonly registry: { languageModel(id: string): LanguageModelV3 };
+  private readonly env: Readonly<Record<string, string | undefined>>;
+  private readonly options: { readonly fetchImpl?: typeof fetch };
+  private readonly providers = new Map<string, LanguageModelProvider>();
+  private readonly profiles = new Map<AIModelProfileName, ResolvedAIModelProfile>();
 
   constructor(
     input: unknown,
@@ -180,56 +205,65 @@ export class AIModelCatalog {
     options: { readonly fetchImpl?: typeof fetch } = {},
   ) {
     this.config = AIModelCatalogConfigSchema.parse(input);
-    const providers: RegistryProviders = {};
-    const activeProviders = new Set(
-      Object.values(this.config.profiles).map(({ model }) => model.slice(0, model.indexOf(':'))),
-    );
-    for (const [name, config] of Object.entries(this.config.providers)) {
-      if (!activeProviders.has(name)) continue;
-      const apiKey = resolveApiKey(name, config.apiKeyEnv, env);
-      if (config.type === 'anthropic') {
-        providers[name] = createAnthropic({
-          apiKey,
-          ...(config.baseURL === undefined ? {} : { baseURL: config.baseURL }),
-          ...(options.fetchImpl === undefined ? {} : { fetch: options.fetchImpl }),
-        });
-      } else if (config.type === 'gateway') {
-        providers[name] = createGateway({
-          apiKey,
-          ...(config.baseURL === undefined ? {} : { baseURL: config.baseURL }),
-          ...(options.fetchImpl === undefined ? {} : { fetch: options.fetchImpl }),
-        });
-      } else {
-        if (config.baseURL === undefined) {
-          throw new Error(`openai-compatible provider "${name}" 必须配置 baseURL`);
-        }
-        providers[name] = createOpenAICompatible({
-          name,
-          apiKey,
-          baseURL: config.baseURL,
-          supportsStructuredOutputs: config.supportsStructuredOutputs,
-          ...(options.fetchImpl === undefined ? {} : { fetch: options.fetchImpl }),
-        });
+    this.env = env;
+    this.options = options;
+  }
+
+  /**
+   * provider 按 profile 惰性构造：只要求当前使用 profile 的密钥，
+   * 生成与对话 Agent 可以各自缺省而互不阻塞。
+   */
+  private providerOf(name: string, config: AIModelCatalogConfig['providers'][string]) {
+    const cached = this.providers.get(name);
+    if (cached !== undefined) return cached;
+    const apiKey = resolveApiKey(name, config.apiKeyEnv, this.env);
+    const fetchOption =
+      this.options.fetchImpl === undefined ? {} : { fetch: this.options.fetchImpl };
+    let provider: LanguageModelProvider;
+    if (config.type === 'anthropic') {
+      provider = createAnthropic({
+        apiKey,
+        ...(config.baseURL === undefined ? {} : { baseURL: config.baseURL }),
+        ...fetchOption,
+      });
+    } else if (config.type === 'gateway') {
+      provider = createGateway({
+        apiKey,
+        ...(config.baseURL === undefined ? {} : { baseURL: config.baseURL }),
+        ...fetchOption,
+      });
+    } else {
+      if (config.baseURL === undefined) {
+        throw new Error(`openai-compatible provider "${name}" 必须配置 baseURL`);
       }
+      provider = createOpenAICompatible({
+        name,
+        apiKey,
+        baseURL: config.baseURL,
+        supportsStructuredOutputs: config.supportsStructuredOutputs,
+        ...fetchOption,
+      });
     }
-    this.registry = createProviderRegistry(providers) as {
-      languageModel(id: string): LanguageModelV3;
-    };
+    this.providers.set(name, provider);
+    return provider;
   }
 
   resolve(name: AIModelProfileName): ResolvedAIModelProfile {
+    const cached = this.profiles.get(name);
+    if (cached !== undefined) return cached;
     const profile = this.config.profiles[name];
     const providerNameValue = profile.model.slice(0, profile.model.indexOf(':'));
     const provider = this.config.providers[providerNameValue];
     if (provider === undefined) {
       throw new Error(`AI profile "${name}" 引用了未注册 provider "${providerNameValue}"`);
     }
+    const registry = this.providerOf(providerNameValue, provider);
     const model = wrapLanguageModel({
-      model: this.registry.languageModel(profile.model),
+      model: registry.languageModel(profile.model.slice(profile.model.indexOf(':') + 1)),
       middleware: defaultSettingsMiddleware({
         settings: {
           temperature: profile.temperature,
-          maxOutputTokens: profile.maxOutputTokens,
+          maxOutputTokens: effectiveMaxOutputTokens(profile),
           ...(provider.type === 'openai-compatible' && profile.reasoningEffort !== 'off'
             ? {
                 providerOptions: {
@@ -240,7 +274,7 @@ export class AIModelCatalog {
         },
       }),
     });
-    return {
+    const resolved: ResolvedAIModelProfile = {
       name,
       modelRef: profile.model,
       providerName: providerNameValue,
@@ -250,13 +284,16 @@ export class AIModelCatalog {
       model,
       quirks: toQuirks(provider.quirks),
       timeoutMs: profile.timeoutMs,
-      maxOutputTokens: profile.maxOutputTokens,
+      maxOutputTokens: effectiveMaxOutputTokens(profile),
       maxRetries: profile.maxRetries,
       reasoningEffort: profile.reasoningEffort,
       maxPromptChars: profile.maxPromptChars,
+      maxContextChars: profile.maxContextChars,
       maxSteps: profile.maxSteps,
       maxTotalTokens: profile.maxTotalTokens,
     };
+    this.profiles.set(name, resolved);
+    return resolved;
   }
 }
 

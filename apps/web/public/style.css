@@ -3523,6 +3523,34 @@ textarea::placeholder {
   border-color: rgba(224, 72, 79, 0.3);
 }
 
+.ai-profile-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: var(--space-3);
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(28, 37, 54, 0.04);
+}
+
+.ai-profile-tab {
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.ai-profile-tab.is-active {
+  color: var(--accent);
+  border-color: rgba(13, 158, 136, 0.32);
+  background: var(--accent-soft);
+}
+
 .ai-settings-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(330px, 0.8fr);

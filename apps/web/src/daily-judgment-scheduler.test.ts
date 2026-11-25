@@ -5,9 +5,7 @@ import { type DailyAdviceOutput, dailyAdviceWorkflow } from '@luoome/workflows';
 import { describe, expect, it } from 'vitest';
 
 import {
-  DAILY_JUDGMENT_LEGACY_ENV,
   dueDailyJudgmentTradingDay,
-  readDailyJudgmentLegacy,
   startDailyJudgmentScheduler,
 } from './daily-judgment-scheduler.js';
 
@@ -140,7 +138,7 @@ describe('startDailyJudgmentScheduler', () => {
   });
 });
 
-describe('startDailyJudgmentScheduler 默认路径', () => {
+describe('startDailyJudgmentScheduler 17:30 固定路径', () => {
   it('同一窗口先 daily-stock-briefs 再 daily-advice(briefsOnly)，不调用 analyze_stock', async () => {
     const base = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
     const { ctx } = withCountingLlm(base);
@@ -183,7 +181,7 @@ describe('startDailyJudgmentScheduler 默认路径', () => {
     expect(adviceRun?.outputSummary).not.toHaveProperty('tokens');
   });
 
-  it('briefs 失败仍跑 advice(briefsOnly)，不自动回退 analyze_stock', async () => {
+  it('briefs 失败时不派生 advice，也不自动回退 analyze_stock', async () => {
     const base = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
     const order: string[] = [];
     let analyzeCalls = 0;
@@ -205,11 +203,11 @@ describe('startDailyJudgmentScheduler 默认路径', () => {
       restoreBriefs();
     }
 
-    expect(order).toEqual(['generate_stock_briefs', 'list_stock_briefs']);
+    expect(order).toEqual(['generate_stock_briefs']);
     expect(analyzeCalls).toBe(0);
     const runs = await base.repos.workflowRun.listRecent({ limit: 10 });
     expect(runs.find((run) => run.workflowName === 'daily-stock-briefs')?.status).toBe('failed');
-    expect(runs.find((run) => run.workflowName === 'daily-advice')?.status).toBe('succeeded');
+    expect(runs.some((run) => run.workflowName === 'daily-advice')).toBe(false);
   });
 
   it('同一窗口 LLM 计量只在 briefs：advice(briefsOnly) 增量为 0', async () => {
@@ -234,56 +232,58 @@ describe('startDailyJudgmentScheduler 默认路径', () => {
   });
 });
 
-describe('startDailyJudgmentScheduler 回退开关', () => {
-  const runWithLegacySetting = async (flags: {
-    readonly legacy?: boolean;
-    readonly env?: string;
-  }): Promise<{ analyzeCalls: number; briefsCalls: number }> => {
-    const previous = process.env[DAILY_JUDGMENT_LEGACY_ENV];
-    if (flags.env === undefined) delete process.env[DAILY_JUDGMENT_LEGACY_ENV];
-    else process.env[DAILY_JUDGMENT_LEGACY_ENV] = flags.env;
+describe('startDailyJudgmentScheduler 删除旧路径', () => {
+  it('设置 LUOOME_DAILY_JUDGMENT_LEGACY=true 也仍然只走 briefs → advice', async () => {
+    const previous = process.env.LUOOME_DAILY_JUDGMENT_LEGACY;
+    process.env.LUOOME_DAILY_JUDGMENT_LEGACY = 'true';
     const ctx = await buildTestContext({ advices: [], clock: () => SCHEDULED_NOW });
+    const order: string[] = [];
     let analyzeCalls = 0;
-    let briefsCalls = 0;
+    const restoreBriefs = wrapCatalogTool('generate_stock_briefs', () =>
+      order.push('generate_stock_briefs'),
+    );
+    const restoreBriefsList = wrapCatalogTool('list_stock_briefs', () =>
+      order.push('list_stock_briefs'),
+    );
     const restoreAnalyze = wrapCatalogTool('analyze_stock', () => {
       analyzeCalls += 1;
     });
-    const restoreBriefs = wrapCatalogTool('generate_stock_briefs', () => {
-      briefsCalls += 1;
-    });
     try {
-      await runScheduler(ctx, flags.legacy === undefined ? {} : { legacy: flags.legacy });
+      await runScheduler(ctx);
     } finally {
-      restoreBriefs();
       restoreAnalyze();
-      if (previous === undefined) delete process.env[DAILY_JUDGMENT_LEGACY_ENV];
-      else process.env[DAILY_JUDGMENT_LEGACY_ENV] = previous;
+      restoreBriefsList();
+      restoreBriefs();
+      if (previous === undefined) delete process.env.LUOOME_DAILY_JUDGMENT_LEGACY;
+      else process.env.LUOOME_DAILY_JUDGMENT_LEGACY = previous;
     }
-    return { analyzeCalls, briefsCalls };
-  };
 
-  it('环境变量只认字符串 true', () => {
-    expect(readDailyJudgmentLegacy({})).toBe(false);
-    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: '' })).toBe(false);
-    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'false' })).toBe(false);
-    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'TRUE' })).toBe(false);
-    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: '1' })).toBe(false);
-    expect(readDailyJudgmentLegacy({ [DAILY_JUDGMENT_LEGACY_ENV]: 'true' })).toBe(true);
+    expect(order).toEqual(['generate_stock_briefs', 'list_stock_briefs']);
+    expect(analyzeCalls).toBe(0);
   });
 
-  it('legacy 选项 / env=true 只跑旧 daily-advice，不跑 briefs', async () => {
-    const byOption = await runWithLegacySetting({ legacy: true });
-    expect(byOption.analyzeCalls).toBeGreaterThan(0);
-    expect(byOption.briefsCalls).toBe(0);
-
-    const byEnv = await runWithLegacySetting({ env: 'true' });
-    expect(byEnv.analyzeCalls).toBeGreaterThan(0);
-    expect(byEnv.briefsCalls).toBe(0);
-  });
-
-  it('env=false 走新路径（不调用 analyze_stock）', async () => {
-    const result = await runWithLegacySetting({ env: 'false' });
-    expect(result.briefsCalls).toBe(1);
-    expect(result.analyzeCalls).toBe(0);
+  it('并发 tick 不会重叠执行同一交易日', async () => {
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scheduler = startDailyJudgmentScheduler(
+      fakeCtx(() => new Date('2026-11-12T09:35:00.000Z')),
+      {
+        startImmediately: false,
+        run: async () => {
+          calls += 1;
+          await gate;
+          return okResult as unknown as { ok: true; data: DailyAdviceOutput };
+        },
+      },
+    );
+    const first = scheduler.tick();
+    await scheduler.tick();
+    release();
+    await first;
+    scheduler.stop();
+    expect(calls).toBe(1);
   });
 });

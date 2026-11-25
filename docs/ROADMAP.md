@@ -25,12 +25,12 @@
 - Web 一级入口为五页：今日 / 持仓 / 关注 / 市场 / 设置；报告收敛为每周建议成绩单（周一 08:00）。
 - 插件启停只有手写只读 `$LUOOME_HOME/plugins.json`，改完重启宿主生效；缺省即关闭，
   没有 CLI 写命令或 Web 写入式管理页；`luoome plugins check` 与设置 → 系统只读展示。
-- 策略没有独立定时器：每日判断按需运行 1–2 个 active 策略，score ≥ 60 的看多信号补进候选池（≤3 只）。
+- 策略没有独立定时器：策略只在显式 `strategy` workflow 里运行；每日个股观察批次消费当日已有正式运行里 score ≥ 60 的非中性信号（≤3 只），每日判断只读当日 brief。
 - P0 修复：`bun run mcp:smoke` 纳入 CI；`luoome restart` 在无 `lsof` 时回退 `ss` / `fuser`。
 - 待交易日实跑（非交易时段的离线验收已用受控 fixture 覆盖；以下仍需在真实交易日人工确认）：
   - 作战室盘中批次：交易时段 `POST /api/market/room/collect` 后 `/api/market/room/overview` 读出非空总览，刷新与回放都不重复采集。
   - 盘中预警：真实盘中触发一次并核对通知投递与 WatchTrigger 回执。
-  - 每日判断 17:30 调度：17:30 后确认按交易日只跑一次 `daily-advice` 并落库当日「今日不动 / 今日可动」结论。
+  - 每日判断 17:30 调度：17:30 后确认先 `daily-stock-briefs` 再 `daily-advice`，按交易日只跑一次并落库当日「今日不动 / 今日可动」结论（旧逐只生成路径与回退开关已删除）。
 
 ## v0.1 — Foundation ✅（已完成）
 

@@ -82,6 +82,43 @@ const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
   recordedAt: row.recordedAt,
 });
 
+type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+
+/** 在调用方事务内写入 advice 行；供 advice 与 stock_brief 的原子写入复用。 */
+export const writeAdviceRow = (tx: DrizzleTransaction, advice: Advice): void => {
+  assertAdviceInvariants(advice);
+  const row = {
+    id: advice.id,
+    subjectKind: advice.subjectKind,
+    subjectId: advice.subjectId,
+    stockName: advice.stockName ?? null,
+    decision: advice.decision,
+    confidence: advice.confidence,
+    horizon: advice.horizon,
+    entryPrice: advice.entryPrice ?? null,
+    entryPriceLow: advice.entryPriceLow ?? null,
+    entryPriceHigh: advice.entryPriceHigh ?? null,
+    targetPositionPct: advice.targetPositionPct ?? null,
+    targetPrice: advice.targetPrice ?? null,
+    stopLoss: advice.stopLoss ?? null,
+    reasoning: advice.reasoning,
+    risks: advice.risks,
+    disclaimers: advice.disclaimers,
+    sourceTool: advice.sourceTool ?? null,
+    sourceWorkflow: advice.sourceWorkflow ?? null,
+    basedOn: advice.basedOn,
+    validFrom: advice.validFrom,
+    validUntil: advice.validUntil,
+    createdAt: advice.createdAt,
+  };
+  tx.insert(advices).values(row).onConflictDoUpdate({ target: advices.id, set: row }).run();
+};
+
+export const readAdviceRow = (tx: DrizzleTransaction, id: string): Advice | undefined => {
+  const row = tx.select().from(advices).where(eq(advices.id, id)).get();
+  return row === undefined ? undefined : toAdvice(row, null);
+};
+
 export class DrizzleAdviceRepository implements AdviceRepository {
   constructor(
     private readonly db: BunSQLiteDatabase<Schema>,
@@ -89,38 +126,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   ) {}
 
   async save(advice: Advice): Promise<void> {
-    assertAdviceInvariants(advice);
-    const row = {
-      id: advice.id,
-      subjectKind: advice.subjectKind,
-      subjectId: advice.subjectId,
-      stockName: advice.stockName ?? null,
-      decision: advice.decision,
-      confidence: advice.confidence,
-      horizon: advice.horizon,
-      entryPrice: advice.entryPrice ?? null,
-      entryPriceLow: advice.entryPriceLow ?? null,
-      entryPriceHigh: advice.entryPriceHigh ?? null,
-      targetPositionPct: advice.targetPositionPct ?? null,
-      targetPrice: advice.targetPrice ?? null,
-      stopLoss: advice.stopLoss ?? null,
-      reasoning: advice.reasoning,
-      risks: advice.risks,
-      disclaimers: advice.disclaimers,
-      sourceTool: advice.sourceTool ?? null,
-      sourceWorkflow: advice.sourceWorkflow ?? null,
-      basedOn: advice.basedOn,
-      validFrom: advice.validFrom,
-      validUntil: advice.validUntil,
-      createdAt: advice.createdAt,
-    };
-    this.writes.transaction(this.db, () => {
-      this.db
-        .insert(advices)
-        .values(row)
-        .onConflictDoUpdate({ target: advices.id, set: row })
-        .run();
-    });
+    this.writes.transaction(this.db, (tx) => writeAdviceRow(tx, advice));
   }
 
   async findById(id: string): Promise<Advice | null> {

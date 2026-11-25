@@ -16,7 +16,9 @@
 - **覆盖可见**：当日持仓、关注池成员和入选策略信号都有观察行；没有 AI 结论时也要留下
   `rule-only` / `unavailable` 行与缺失原因，不能静默漏掉。
 - **单一生成入口**：交易日 17:30 只跑 `daily-stock-briefs`；`daily-advice` 从当日 brief
-  派生「今日无新信号 / 今日有 N 个信号」，不再自己逐只调用 `analyze_stock`。
+  派生「今日无新信号 / 今日有 N 个信号」，不再自己逐只调用 `analyze_stock`。手动 / CLI 运行
+  `daily-advice` 走同一组合（先 briefs、再派生）；当日没有 brief 时返回可操作错误，
+  不隐式调用 LLM。
 - **可追溯**：每条观察带事实指纹、数据时间、来源、质量等级、缺失维度、有效期和 `adviceId`
   链接（仅 AI 结论有）。数值、方向与指标可用性由代码校验，不「看起来正常」就放行。
 - **预算硬限**：每日默认 ≤8 票进入 AI、≤16 次 HTTP、≤90k token（约 ≤$0.04），
@@ -59,6 +61,7 @@
 | 作战室 `#market-room` | 板块详情与核心股行的信号徽标、数据时间，点击跳个股详情 | 否 |
 | AI 对话 `#chat` | 先读当日 brief（秒级）；没有观察时询问是否现在分析，确认后走 `analyze_stock` 草案 | 仅经草案确认 |
 | CLI | `luoome brief list/show/run`、`luoome workflow run daily-stock-briefs` | `brief run` 是显式人工触发 |
+| CLI 当日判断 | `luoome workflow run daily-advice`：只派生当日结论；当日无 brief 返回可操作错误 | 否 |
 | MCP | `get_stock_brief` / `list_stock_briefs` 只读 | 否 |
 
 生成工具与只读查询都返回同一套 `StockBrief` 投影；Web、CLI 不各自重写文案映射。
@@ -78,6 +81,7 @@
 | 交易日 08:45 | `daily-stock-briefs`（`phase='premarket'`）：事实包 + 规则预筛的研究名单，含隔夜新闻 | 0 次 | 否 |
 | 交易日 16:00 后 | 既有 `post-market-data`：股票目录、全市场 dump 日线与复权因子 | — | — |
 | 交易日 17:30 | `daily-stock-briefs`（`phase='post-market'`）→ `daily-advice(briefsOnly)` 派生当日判断 | 预算内 | 是（仅 AI 结论） |
+| 手动 / CLI | `luoome workflow run daily-advice`：同一组合的后半段；当日无 brief 时直接报错，提示先跑 daily-stock-briefs | 0 次 | 否 |
 
 每日默认预算：8 票进入 AI、16 次 HTTP、90 000 token、并发 2、单票最多 2 次尝试；
 同一天同事实指纹重复触发不再调用 LLM。预算触达后本票及后续票降级为规则观察，

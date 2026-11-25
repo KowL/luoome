@@ -1,4 +1,5 @@
 import {
+  type Advice,
   assertStockBriefInvariants,
   type StockBrief,
   type StockBriefPhase,
@@ -10,6 +11,7 @@ import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, stockBriefs, watchlistMembers } from '../../schema/index.js';
 import { RepositoryWriteScope } from '../../write-scope.js';
+import { readAdviceRow, writeAdviceRow } from './advice.js';
 
 type Row = typeof stockBriefs.$inferSelect;
 
@@ -67,6 +69,53 @@ const toRow = (brief: StockBrief): Row => ({
   updatedAt: brief.updatedAt,
 });
 
+type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+
+const findByKey = (tx: DrizzleTransaction, brief: StockBrief): Row | undefined =>
+  tx
+    .select()
+    .from(stockBriefs)
+    .where(
+      and(
+        eq(stockBriefs.accountId, brief.accountId),
+        eq(stockBriefs.tradingDate, brief.tradingDate),
+        eq(stockBriefs.stockId, brief.stockId),
+        eq(stockBriefs.phase, brief.phase),
+      ),
+    )
+    .get();
+
+/** 在调用方事务内按唯一键幂等写入；供独立 upsert 与 advice 原子写入复用。 */
+const upsertBriefRow = (tx: DrizzleTransaction, brief: StockBrief): StockBrief => {
+  assertStockBriefInvariants(brief);
+  const existing = findByKey(tx, brief);
+  // 同键覆盖：保留首次 createdAt；结论因 factDigest 变化而更新时，把被覆盖行 id
+  // 写进 revisedFrom 留链。调用方显式给出 revisedFrom 时以调用方为准。
+  const revisedFrom =
+    brief.revisedFrom ??
+    (existing !== undefined && existing.id !== brief.id && existing.factDigest !== brief.factDigest
+      ? existing.id
+      : (existing?.revisedFrom ?? null));
+  const row = {
+    ...toRow(brief),
+    revisedFrom,
+    createdAt: existing?.createdAt ?? brief.createdAt,
+  };
+  tx.insert(stockBriefs)
+    .values(row)
+    .onConflictDoUpdate({
+      target: [
+        stockBriefs.accountId,
+        stockBriefs.tradingDate,
+        stockBriefs.stockId,
+        stockBriefs.phase,
+      ],
+      set: row,
+    })
+    .run();
+  return toBrief(row);
+};
+
 export class DrizzleStockBriefRepository implements StockBriefRepository {
   constructor(
     private readonly db: BunSQLiteDatabase<Schema>,
@@ -75,46 +124,37 @@ export class DrizzleStockBriefRepository implements StockBriefRepository {
 
   async upsert(brief: StockBrief): Promise<StockBrief> {
     assertStockBriefInvariants(brief);
+    return this.writes.transaction(this.db, (tx) => upsertBriefRow(tx, brief));
+  }
+
+  async upsertWithAdvice(input: {
+    readonly advice: Advice;
+    readonly brief: StockBrief;
+  }): Promise<{ readonly advice: Advice; readonly brief: StockBrief }> {
     return this.writes.transaction(this.db, (tx) => {
-      const existing = tx
-        .select()
-        .from(stockBriefs)
-        .where(
-          and(
-            eq(stockBriefs.accountId, brief.accountId),
-            eq(stockBriefs.tradingDate, brief.tradingDate),
-            eq(stockBriefs.stockId, brief.stockId),
-            eq(stockBriefs.phase, brief.phase),
-          ),
-        )
-        .get();
-      // 同键覆盖：保留首次 createdAt；结论因 factDigest 变化而更新时，把被覆盖行 id
-      // 写进 revisedFrom 留链。调用方显式给出 revisedFrom 时以调用方为准。
-      const revisedFrom =
-        brief.revisedFrom ??
-        (existing !== undefined &&
-        existing.id !== brief.id &&
-        existing.factDigest !== brief.factDigest
-          ? existing.id
-          : (existing?.revisedFrom ?? null));
-      const row = {
-        ...toRow(brief),
-        revisedFrom,
-        createdAt: existing?.createdAt ?? brief.createdAt,
-      };
-      tx.insert(stockBriefs)
-        .values(row)
-        .onConflictDoUpdate({
-          target: [
-            stockBriefs.accountId,
-            stockBriefs.tradingDate,
-            stockBriefs.stockId,
-            stockBriefs.phase,
-          ],
-          set: row,
-        })
-        .run();
-      return toBrief(row);
+      const existing = findByKey(tx, input.brief);
+      if (
+        existing !== undefined &&
+        existing.adviceId !== null &&
+        existing.factDigest === input.brief.factDigest
+      ) {
+        const advice = readAdviceRow(tx, existing.adviceId);
+        if (advice !== undefined) {
+          const brief = upsertBriefRow(tx, {
+            ...toBrief(existing),
+            llmHttpCalls: existing.llmHttpCalls + input.brief.llmHttpCalls,
+            llmPromptTokens: existing.llmPromptTokens + input.brief.llmPromptTokens,
+            llmCompletionTokens: existing.llmCompletionTokens + input.brief.llmCompletionTokens,
+            llmReasoningTokens: existing.llmReasoningTokens + input.brief.llmReasoningTokens,
+            llmCostUsd: existing.llmCostUsd + input.brief.llmCostUsd,
+            updatedAt: input.brief.updatedAt,
+          });
+          return { advice, brief };
+        }
+      }
+      writeAdviceRow(tx, input.advice);
+      const brief = upsertBriefRow(tx, { ...input.brief, adviceId: input.advice.id });
+      return { advice: input.advice, brief };
     });
   }
 
