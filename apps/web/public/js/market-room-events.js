@@ -409,7 +409,6 @@ const renderEventsPane = (view, params = eventsParamsFromHash()) => {
   return el('div', 'card room-card room-events', [
     el('div', 'card-header', [
       el('div', null, [el('h2', '', '盘中事件'), el('div', 'card-meta', eventsMetaText(view))]),
-      el('span', 'room-caption', '点击事件展开当时的证据'),
     ]),
     el(
       'ul',

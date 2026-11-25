@@ -259,12 +259,12 @@ const loadDashboardStockBriefs = async (accountId, signal) => {
         `今日个股观察读取失败（${result.error?.kind ?? 'internal'}），其它卡片不受影响。`,
       ),
     );
-    if (meta !== null) meta.textContent = '读取失败 · 只读，不触发生成';
+    if (meta !== null) meta.textContent = '读取失败';
     return;
   }
   const data = result.data ?? {};
   mount(wrap, todayBriefNodes(data));
-  if (meta !== null) meta.textContent = `交易日 ${data.date ?? '--'} · 只读，不触发生成`;
+  if (meta !== null) meta.textContent = `交易日 ${data.date ?? '--'}`;
 };
 
 const filterAdvices = (advices, decision, stockId) =>
@@ -485,7 +485,7 @@ const openDashboardEventHistory = (asOf, stock) => {
   const filters = el('div', 'dashboard-board-filters');
   const list = el('div');
   const footer = el('div');
-  const meta = el('p', 'muted', `截至 ${fmtDateTime(asOf)} · 重新打开可查看新增事件`);
+  const meta = el('p', 'muted', `截至 ${fmtDateTime(asOf)}`);
   const selections = {};
   let page = 1;
   let requestId = 0;
@@ -569,7 +569,7 @@ const openDashboardEventHistory = (asOf, stock) => {
       void load();
       return;
     }
-    meta.textContent = `共 ${total} 条 · 截至 ${fmtDateTime(asOf)} · 重新打开可查看新增事件`;
+    meta.textContent = `共 ${total} 条 · 截至 ${fmtDateTime(asOf)}`;
     mount(
       list,
       triggers.length === 0
@@ -835,7 +835,6 @@ const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
       : [
           `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只`,
           `涨${stats.up} 跌${stats.down} 平${stats.flat} 未知${stats.unknown}`,
-          ...(coverage.truncated ? ['可翻页查看其余股票'] : []),
           ...(coverage.complete ? [] : ['仅覆盖已读取数据']),
           ...(boardScope === 'triggered' ? ['基于最近 200 条今日触发，包含已移出关注的股票'] : []),
         ].join(' · ');
@@ -1585,7 +1584,6 @@ const renderAnalysisResults = () => {
   box.hidden = false;
   const header = el('div', 'card-header collapsible-header', [
     el('h2', null, `持仓最新建议 · ${analysisResults.size}`),
-    el('div', 'card-meta', '点击卡片展开详情 · 完整记录见「建议」页'),
   ]);
   header.addEventListener('click', () => {
     box.classList.toggle('collapsed');
@@ -2201,7 +2199,6 @@ const reportSheetNodes = (report, actions = []) => {
   const nodes = [
     el('header', 'report-sheet-header', [
       el('div', null, [
-        el('span', 'section-kicker', REPORT_KIND_LABEL[report.kind] ?? report.kind),
         el('h2', null, report.title),
         el(
           'p',
@@ -2248,7 +2245,7 @@ const reportSheetNodes = (report, actions = []) => {
   if (gaps.length > 0)
     nodes.push(
       el('details', 'report-provenance', [
-        el('summary', null, `数据说明（${gaps.length} 项待补齐）`),
+        el('summary', null, `缺失 ${gaps.length} 项`),
         el('p', 'muted', '以下缺口不代表零值；已取得的数据仍可阅读。'),
         ...gaps.map((gap) =>
           el(
@@ -2263,7 +2260,6 @@ const reportSheetNodes = (report, actions = []) => {
     nodes.push(
       el('details', 'report-provenance', [
         el('summary', null, [
-          el('span', 'section-kicker', 'PROVENANCE'),
           el('h3', null, `数据来源（${report.evidence.length}）`),
         ]),
         ...report.evidence.map((evidence) =>
@@ -2431,7 +2427,7 @@ const renderReports = async (setStatus) => {
   $('#report-history-meta').textContent = `${reports.length} 份`;
   const history = $('#report-history');
   if (reports.length === 0) {
-    mount(history, el('p', 'placeholder', '暂无报告；报告 workflow 接入后会在这里形成历史。'));
+    mount(history, el('p', 'placeholder', '暂无报告。'));
     // 删除最后一份报告后详情区同步清空，避免展示已删除内容
     selectedReportId = null;
     mount($('#report-detail'), el('p', 'placeholder', '暂无报告。'));
@@ -3215,7 +3211,7 @@ const renderWorkflowRuns = async (setStatus) => {
   mount(
     body,
     el('details', 'collapsible', [
-      el('summary', null, `最近 ${runs.length} 条运行记录（点击展开）`),
+      el('summary', null, `最近 ${runs.length} 条运行记录`),
       el('table', 'workflow-runs-table mt-2', [
         el(
           'thead',

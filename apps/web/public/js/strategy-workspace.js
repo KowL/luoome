@@ -204,7 +204,6 @@ export const renderStrategyWorkspacePage = async ({
     strategies.length === 0
       ? el('div', 'strategy-empty-state compact', [
           el('strong', null, '尚无策略'),
-          el('p', 'muted', '从右上角新增策略或复制内置模板。'),
         ])
       : strategies.map((strategy) => {
           const row = el('button', 'strategy-catalog-item', [
@@ -223,13 +222,16 @@ export const renderStrategyWorkspacePage = async ({
           return row;
         }),
   );
+  const pane = detail.closest('.strategy-detail-pane');
+  if (pane !== null) pane.hidden = strategies.length === 0;
+  if (strategies.length === 0) {
+    return;
+  }
   if (state.strategyId.length === 0) {
     mount(
       detail,
       el('div', 'strategy-empty-state', [
-        el('span', 'section-kicker', 'STRATEGY WORKSPACE'),
         el('h2', null, '选择策略查看工作台'),
-        el('p', 'muted', '查看当前股票池、候选、运行 Diff 和不可变版本。'),
       ]),
     );
     return;

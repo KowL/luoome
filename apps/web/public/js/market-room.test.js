@@ -207,7 +207,7 @@ describe('空态与页头文案', () => {
     ).toContain('今日尚无已发布批次');
   });
 
-  it('ready 没有空态文案；页头写覆盖范围、交易日与数据时点', () => {
+  it('ready 没有空态文案；页头写覆盖范围、交易日与数据时点，空态页头不重复原因', () => {
     const ready = {
       state: 'ready',
       tradingDate: '2026-09-28',
@@ -229,7 +229,7 @@ describe('空态与页头文案', () => {
     );
     expect(
       overviewMetaText({ state: 'empty', emptyReason: 'non_trading_day', latestBatch: null }),
-    ).toContain('非交易日');
+    ).toBe('');
   });
 });
 

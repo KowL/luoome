@@ -64,7 +64,6 @@
       <div id="chat-session-rail" class="chat-session-rail sidebar-chat" role="complementary" aria-label="会话列表">
         <div class="chat-session-head">
           <div>
-            <span class="section-kicker">CONVERSATIONS</span>
             <h2>最近会话</h2>
           </div>
           <button id="chat-sessions-close" class="chat-sessions-close" type="button" aria-label="收起会话列表">×</button>
@@ -92,9 +91,7 @@
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div id="investment-workspace" class="investment-workspace">
           <header class="workspace-hero">
-            <div class="workspace-eyebrow"><span class="workspace-ai-mark" aria-hidden="true">✳</span> LUOOME / 共同决策</div>
             <div class="workspace-hero-heading"><div><p class="workspace-date" id="workspace-date"></p><h1>一起看清，<br>再做决定。</h1></div><span class="workspace-orbit" aria-hidden="true">✳</span></div>
-            <p class="workspace-intro">从已有持仓开始，也可以先聊值得研究的方向。把判断、等待和实际行动，留在同一条线上。</p>
             <form id="workspace-ask" class="workspace-ask">
               <input id="workspace-ask-input" maxlength="8000" aria-label="向 AI 助手提问" placeholder="现在，想一起研究什么？" autocomplete="off">
               <button id="workspace-ask-open" class="workspace-ask-open" type="button" title="打开 AI 工作区" aria-label="打开 AI 工作区">↗</button>
@@ -102,30 +99,29 @@
             </form>
             <div class="workspace-quick-actions"><button type="button" data-workspace-prompt="先核对我的持仓变化与风险，说明还缺哪些事实">先看持仓变化</button><button type="button" data-workspace-prompt="研究短线波段参与方向，先说明可用证据与覆盖范围；证据不足时请明确告诉我">寻找参与方向</button><button type="button" data-workspace-prompt="核对当前计划的有效版本、等待条件和跟踪状态">接着看计划</button></div>
           </header>
-          <div id="workspace-facts" class="workspace-facts" role="status">正在读取已有事实，研究不会自动启动…</div>
           <div id="workspace-account" class="workspace-account"></div>
           <div class="card mt-4" id="dashboard-brief-card">
             <div class="card-header">
-              <div><h2>今日个股观察</h2><div id="dashboard-brief-meta" class="card-meta">只读观察记录 · 不触发生成</div></div>
+              <div><h2>今日个股观察</h2><div id="dashboard-brief-meta" class="card-meta"></div></div>
               <a href="#watchlists" class="card-link">关注列表 →</a>
             </div>
             <div id="dashboard-brief" class="stock-brief"><p class="placeholder">正在读取今日观察…</p></div>
           </div>
-          <section class="workspace-section" aria-labelledby="workspace-holdings-title"><div class="workspace-section-title"><div><span>01 / MY POSITIONS</span><h2 id="workspace-holdings-title">持仓，先看变化</h2></div><a href="#holdings">管理持仓 ↗</a></div><div id="workspace-holdings" class="workspace-card-grid"><p class="muted">正在读取持仓…</p></div></section>
-          <section class="workspace-section" aria-labelledby="workspace-directions-title"><div class="workspace-section-title"><div><span>02 / FIND A DIRECTION</span><h2 id="workspace-directions-title">方向，留出讨论</h2></div><span class="workspace-caption">研究提案 ≠ 买入决定</span></div><div id="workspace-directions"><p class="muted">正在核对研究状态…</p></div><div id="workspace-consensus"></div></section>
-          <section class="workspace-section" aria-labelledby="workspace-plans-title"><div class="workspace-section-title"><div><span>03 / KEEP THE THREAD</span><h2 id="workspace-plans-title">计划，接着往下走</h2></div><a href="#alerts">查看全部 ↗</a></div><div id="workspace-tracking" class="workspace-tracking"></div><div id="workspace-plans" class="workspace-card-grid"><p class="muted">正在核对计划…</p></div></section>
+          <section class="workspace-section" aria-labelledby="workspace-holdings-title"><div class="workspace-section-title"><div><h2 id="workspace-holdings-title">持仓，先看变化</h2></div><a href="#holdings">管理持仓 ↗</a></div><div id="workspace-holdings" class="workspace-card-grid"><p class="muted">正在读取持仓…</p></div></section>
+          <section class="workspace-section" aria-labelledby="workspace-directions-title"><div class="workspace-section-title"><div><h2 id="workspace-directions-title">方向，留出讨论</h2></div></div><div id="workspace-directions"><p class="muted">正在核对研究状态…</p></div><div id="workspace-consensus"></div></section>
+          <section class="workspace-section" aria-labelledby="workspace-plans-title"><div class="workspace-section-title"><div><h2 id="workspace-plans-title">计划，接着往下走</h2></div><a href="#alerts">查看全部 ↗</a></div><div id="workspace-tracking" class="workspace-tracking"></div><div id="workspace-plans" class="workspace-card-grid"><p class="muted">正在核对计划…</p></div></section>
           <p class="workspace-boundary">AI 研究供你独立判断。任何方向确认或提醒都不会自动下单；实际成交由你单独核对登记。</p>
         </div>
-        <details class="workspace-market-details"><summary>行情与原看盘工作台 <span>指数、关注、预警与数据健康</span></summary>
+        <details class="workspace-market-details"><summary>行情与原看盘工作台</summary>
         <div class="route-header">
-          <div><h1>看盘</h1><p class="muted dashboard-subtitle">市场概况 · 我的关注 · 今日事件</p></div>
+          <div><h1>看盘</h1></div>
           <div class="row-actions"><button id="btn-dashboard-auto-refresh" class="btn btn-outline" type="button" aria-pressed="false">暂停自动更新</button><button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button></div>
         </div>
         <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
         <div id="dashboard-paused" class="dashboard-notice" role="status" hidden>自动更新已暂停，可手动刷新或恢复自动更新；已发起的数据检查可能继续完成。</div>
         <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
         <div class="card dashboard-closing-report" aria-label="最新成绩单">
-          <div class="card-header"><div><span class="section-kicker">ACCOUNT CLOSE</span><h2>当前账户收盘复盘</h2></div><a href="#reports" class="card-link">报告历史 →</a></div>
+          <div class="card-header"><div><h2>当前账户收盘复盘</h2></div><a href="#reports" class="card-link">报告历史 →</a></div>
           <div id="dashboard-closing-report"><p class="muted">正在读取最新报告…</p></div>
         </div>
         <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
@@ -138,13 +134,12 @@
           <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
         </div>
         <div class="card" id="dashboard-board-card">
-          <div class="card-header"><div><h2>我的看板</h2><p class="card-meta">持仓与启用关注列表 · 关注无需先设置预警</p></div></div>
+          <div class="card-header"><div><h2>我的看板</h2></div></div>
           <div class="dashboard-board-filters">
             <label>查看范围 <select id="dashboard-board-scope" aria-label="看板范围"><option value="all">全部</option><option value="holdings">我的持仓</option><option value="watching">我的关注</option><option value="triggered">今日触发</option></select></label>
             <label>关注列表 <select id="dashboard-board-watchlist" aria-label="筛选关注列表"><option value="">全部关注列表</option></select></label>
             <a href="#watchlists" class="card-link">管理关注 →</a>
             <button id="dashboard-board-reset" class="btn btn-outline btn-sm" type="button">重置视图</button>
-            <span class="card-meta">持仓优先 · 价格排序仅限本页</span>
           </div>
           <p id="dashboard-board-coverage" class="card-meta"></p>
           <div id="dashboard-board"><p class="placeholder">加载中…</p></div>
@@ -186,7 +181,7 @@
         <!-- v0.7 策略预警指标（docs/.../§11 / §12） -->
         <div class="card mt-4" id="dash-metrics-card" hidden>
           <div class="card-header">
-            <h2>策略预警指标（今日）</h2>
+            <h2>策略预警指标</h2>
             <div class="card-meta" id="dash-metrics-meta"></div>
           </div>
           <div class="metrics-grid">
@@ -233,7 +228,7 @@
           <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
         </div>
         <div class="card" id="dashboard-data-health">
-          <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale Watchlist</div></div>
+          <div class="card-header"><h2>数据健康</h2></div>
           <div id="data-health-body" class="data-health">加载中…</div>
         </div>
         </details>
@@ -243,7 +238,6 @@
       <section id="route-indices" class="route" data-route="indices" hidden>
         <div class="route-header">
           <h1>指数</h1>
-          <div class="route-meta">沪深创科 + 港股 · 点击卡片看分时</div>
         </div>
         <div id="indices-cards" class="index-card-grid"></div>
         <div class="card mt-4" id="indices-chart-card">
@@ -314,7 +308,7 @@
           <div class="card-header">
             <div>
               <h2>今日观察</h2>
-              <div class="card-meta" id="market-brief-meta">只读观察记录 · 仅技术研究，不构成投资建议</div>
+              <div class="card-meta" id="market-brief-meta">仅技术研究，不构成投资建议</div>
             </div>
             <div class="row-actions">
               <button id="market-brief-refresh" class="btn btn-outline btn-sm" type="button">刷新今日观察</button>
@@ -379,7 +373,6 @@
       <section id="route-holdings" class="route" data-route="holdings" hidden>
         <div class="route-header">
           <h1>持仓</h1>
-          <div class="route-meta">可用资金 · 实时市值 · 盈亏</div>
         </div>
         <div id="holdings-stats" class="stat-grid">
           <div class="stat"><div class="label" id="holdings-stat-cash-label">可用资金</div><div class="value" id="holdings-stat-cash-balance">--</div></div>
@@ -437,7 +430,6 @@
         <div class="route-header">
           <div>
             <h1>策略</h1>
-            <div class="route-meta">版本化定义 · 校验 · 发布 · 运行</div>
           </div>
           <button id="btn-strategy-create" class="btn btn-primary" type="button">+ 新增策略</button>
         </div>
@@ -456,7 +448,6 @@
         <div class="route-header">
           <div>
             <h1>关注</h1>
-            <div class="route-meta">统一成员 · 多来源 · 优先级</div>
           </div>
           <div class="flex gap-2">
             <button id="btn-watchlist-archived" class="btn btn-outline" type="button">已归档</button>
@@ -482,7 +473,6 @@
         <div class="route-header">
           <div>
             <h1>预警计划</h1>
-            <div class="route-meta">选择关注列表 · 设置提醒条件 · 盘中试跑</div>
           </div>
           <div class="flex gap-2">
             <button id="btn-alert-run" class="btn btn-outline" type="button">试跑一轮</button>
@@ -513,7 +503,6 @@
       <section id="route-advice" class="route" data-route="advice" hidden>
         <div class="route-header">
           <h1>建议</h1>
-          <div class="route-meta">所有建议（含已过期）· 点击卡片展开详情</div>
         </div>
         <div class="card">
           <div class="card-header">
@@ -540,9 +529,7 @@
       <section id="route-reports" class="route" data-route="reports" hidden>
         <div class="route-header">
           <div>
-            <span class="section-kicker">WEEKLY SCORECARD</span>
             <h1>成绩单</h1>
-            <div class="route-meta">每周一次的建议成绩单 · 命中率、超额与验收门禁</div>
           </div>
           <div class="report-filters" aria-label="报告筛选">
             <select id="report-kind-filter" aria-label="报告类型">
@@ -558,9 +545,7 @@
         </div>
         <div class="report-generator card" aria-label="手动生成报告">
           <div class="report-generator-copy">
-            <span class="section-kicker">NEW RUN</span>
             <strong>生成成绩单</strong>
-            <span>选择交易日；成绩单以该日所在周为统计周期。</span>
           </div>
           <label class="report-date-field">
             <span>交易日</span>
@@ -585,7 +570,6 @@
             <div class="report-empty">
               <span class="report-empty-mark">R</span>
               <h2>选择一份报告</h2>
-              <p>查看事实区块、数据来源、缺失维度与导出内容。</p>
             </div>
           </article>
         </div>
@@ -595,7 +579,6 @@
       <section id="route-review" class="route" data-route="review" hidden>
         <div class="route-header">
           <h1>复盘</h1>
-          <div class="route-meta">准确率统计 + outcome 回填</div>
         </div>
         <div class="card">
           <div class="card-header">
@@ -608,15 +591,13 @@
         <div class="card mt-4" id="review-decision-loop-card">
           <div class="card-header">
             <h2>决策闭环摘要</h2>
-            <div class="card-meta">get_decision_loop_review · 只读事实</div>
           </div>
-          <p class="muted">Advice、SignalObservation、Trade 显式归因与研究假设版本并行展示；未知项不会用 0 伪装。</p>
           <div id="review-decision-loop-content"><p class="placeholder">加载中…</p></div>
         </div>
         <div class="card mt-4" id="review-performance-card">
           <div class="card-header">
             <h2>账户绩效</h2>
-            <div class="card-meta" id="review-performance-meta">按估值日计算 · 缺价不填 0</div>
+            <div class="card-meta" id="review-performance-meta"></div>
           </div>
           <div class="toolbar">
             <label class="field inline-field"><span>从</span><input id="review-performance-from" type="date" /></label>
@@ -633,7 +614,7 @@
           <details class="performance-audit" open>
             <summary>
               <span>快照与区间审计</span>
-              <span class="card-meta" id="review-performance-audit-meta">只读持久化事实 · 不重新抓行情</span>
+              <span class="card-meta" id="review-performance-audit-meta"></span>
             </summary>
             <div class="performance-audit-grid">
               <section>
@@ -659,13 +640,9 @@
         </div>
         <div class="card mt-4">
           <div class="card-header">
-            <h2>confidence 自校准（v0.5 W4）</h2>
+            <h2>置信度校准</h2>
             <div class="card-meta" id="review-calibration-meta">--</div>
           </div>
-          <p class="muted" style="margin: 0 0 8px;">
-            历史 advice 按 confidence 10 一档分布后的实际命中率。横看每个桶：
-            高信心桶命中率低 = 系统 confidence 可能高估；低信心桶命中率高 = 系统偏保守。
-          </p>
           <table class="calibration-table" id="review-calibration-table">
             <thead>
               <tr>
@@ -682,7 +659,7 @@
           </table>
         </div>
         <div class="card mt-4">
-          <div class="card-header"><h2>近期建议</h2><div class="card-meta">点击「回填」记录 outcome</div></div>
+          <div class="card-header"><h2>近期建议</h2></div>
           <div id="review-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
@@ -722,7 +699,6 @@
                   ></textarea>
                 </div>
                 <div class="chat-composer-bar">
-                  <span class="chat-composer-mode"><span class="chat-composer-mode-dot" aria-hidden="true"></span>事实优先</span>
                   <span class="chat-composer-hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span>
                   <button id="chat-send" class="btn btn-primary chat-send" type="submit" aria-label="发送" title="发送（Enter）"><span class="chat-send-label">发送</span><span class="chat-send-arrow" aria-hidden="true">↑</span></button>
                 </div>
@@ -731,8 +707,8 @@
             </div>
           </div>
           <aside id="chat-evidence-panel" class="chat-evidence-panel" role="tabpanel" aria-label="研究上下文与证据" hidden>
-            <div class="chat-evidence-head"><div><span class="section-kicker">EVIDENCE</span><h2>研究上下文</h2></div><button id="chat-evidence-close" class="btn btn-ghost btn-sm" type="button" aria-label="收起研究上下文">×</button></div>
-            <div id="chat-evidence-content" class="chat-evidence-content"><p class="muted">发起研究后，这里会显示讨论对象、计划和真实依据。</p></div>
+            <div class="chat-evidence-head"><div><h2>研究上下文</h2></div><button id="chat-evidence-close" class="btn btn-ghost btn-sm" type="button" aria-label="收起研究上下文">×</button></div>
+            <div id="chat-evidence-content" class="chat-evidence-content"></div>
           </aside>
         </div>
       </section>
@@ -753,7 +729,6 @@
       <section id="route-settings" class="route" data-route="settings" hidden>
         <div class="route-header">
           <h1>设置</h1>
-          <div class="route-meta">AI 模型 / 账户 / 鉴权 / 数据源</div>
         </div>
         <nav class="settings-subnav" aria-label="设置分区">
           <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
@@ -764,33 +739,24 @@
           <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
         </nav>
         <form id="ai-settings-form" class="ai-settings" autocomplete="off" data-settings-pane="ai">
-          <div class="ai-settings-heading">
-            <div>
-              <span class="section-kicker">MODEL CONTROL</span>
-              <h2>LLM 设置</h2>
-              <p>选择 Agent 和建议生成使用的模型。保存后立即应用到当前 Web 进程。</p>
-            </div>
-            <div id="ai-settings-state" class="ai-settings-state" aria-live="polite">
-              <span class="health-dot"></span>
-              <span>正在读取配置</span>
-            </div>
-          </div>
           <div class="ai-settings-grid">
             <section class="ai-settings-panel ai-connection-panel" aria-labelledby="ai-connection-title">
               <div class="ai-panel-title">
                 <span class="ai-panel-icon" aria-hidden="true">⌘</span>
-                <div><h3 id="ai-connection-title">连接</h3><small>Provider endpoint & credentials</small></div>
+                <div><h3 id="ai-connection-title">连接</h3></div>
+                <div id="ai-settings-state" class="ai-settings-state ai-panel-state" aria-live="polite">
+                  <span class="health-dot"></span>
+                  <span>正在读取配置</span>
+                </div>
               </div>
               <div class="field ai-field-featured">
                 <label for="ai-provider">提供商</label>
                 <select id="ai-provider" required></select>
-                <span class="hint">切换提供商会填入推荐模型、端点与密钥变量。</span>
               </div>
               <div class="ai-model-row">
                 <div class="field">
                   <label for="ai-model">模型 ID</label>
                   <input id="ai-model" type="text" required maxlength="200" spellcheck="false" />
-                  <span class="hint">填写 provider 要求的精确模型 ID。</span>
                 </div>
                 <button id="btn-ai-provider-defaults" class="btn btn-outline ai-default-btn" type="button">
                   ↻ 使用推荐值
@@ -828,13 +794,13 @@
             <section class="ai-settings-panel ai-generation-panel" aria-labelledby="ai-generation-title">
               <div class="ai-panel-title">
                 <span class="ai-panel-icon" aria-hidden="true">≡</span>
-                <div><h3 id="ai-generation-title">生成</h3><small>Runtime behavior</small></div>
+                <div><h3 id="ai-generation-title">生成</h3></div>
               </div>
               <div class="ai-generation-fields">
                 <div class="field">
                   <label for="ai-temperature">温度</label>
                   <input id="ai-temperature" type="number" min="0" max="2" step="0.1" required />
-                  <span id="ai-temperature-hint" class="hint">越低越稳定，越高越发散。</span>
+                  <span id="ai-temperature-hint" class="hint"></span>
                 </div>
                 <div class="field">
                   <label for="ai-timeout">超时（秒）</label>
@@ -843,7 +809,6 @@
                 <div class="field">
                   <label for="ai-max-retries">最大重试</label>
                   <input id="ai-max-retries" type="number" min="0" max="5" step="1" required />
-                  <span class="hint">单轮 AI SDK 调用的网络重试次数。</span>
                 </div>
                 <div class="field">
                   <label for="ai-reasoning-effort">推理强度</label>
@@ -854,7 +819,7 @@
                     <option value="high">高</option>
                     <option value="max">最高</option>
                   </select>
-                  <span id="ai-reasoning-hint" class="hint">兼容模型会在回答前投入更多推理。</span>
+                  <span id="ai-reasoning-hint" class="hint"></span>
                 </div>
               </div>
               <div class="ai-save-location">
@@ -873,9 +838,7 @@
         <div id="mcp-settings" data-settings-pane="mcp" hidden>
           <div class="ai-settings-heading">
             <div>
-              <span class="section-kicker">AGENT CONNECTIONS</span>
               <h2>MCP 服务</h2>
-              <p>为 Agent 开放受信的只读能力。按工具和场景授权，保存后下轮对话生效。</p>
             </div>
             <button id="mcp-reload" type="button" class="btn btn-outline btn-sm">重新加载</button>
           </div>
@@ -883,9 +846,7 @@
           <div class="mcp-settings-grid">
             <div id="mcp-service-list" class="mcp-service-list"></div>
             <section class="mcp-preview card" aria-labelledby="mcp-preview-title">
-              <span class="section-kicker">TOOL PREVIEW</span>
               <h3 id="mcp-preview-title">Agent 可用工具</h3>
-              <p class="muted">按已保存的配置连接服务，只展示所选场景获准使用的 MCP 工具。</p>
               <label class="mcp-field" for="mcp-preview-scenario">预览场景
                 <select id="mcp-preview-scenario">
                   <option value="research">股票研究</option><option value="portfolio">账户持仓</option>
@@ -901,9 +862,7 @@
         <form id="market-settings-form" class="market-settings" autocomplete="off" data-settings-pane="market">
           <div class="market-settings-heading">
             <div>
-              <span class="section-kicker">MARKET ROUTING</span>
               <h2>行情数据源</h2>
-              <p>启用需要的数据源，并按顺序定义故障降级链。保存后立即应用。</p>
             </div>
             <div id="market-settings-state" class="ai-settings-state" aria-live="polite">
               <span class="health-dot"></span>
@@ -911,14 +870,10 @@
             </div>
           </div>
           <section class="market-routing-panel" aria-labelledby="market-routing-title">
-            <div class="market-routing-rail" aria-hidden="true">
-              <span>PRIMARY</span><i></i><span>FALLBACK</span><i></i><span>FINAL</span>
-            </div>
             <div class="ai-panel-title">
               <span class="ai-panel-icon" aria-hidden="true">⇄</span>
               <div>
                 <h3 id="market-routing-title">路由优先级</h3>
-                <small>Enabled sources are tried from top to bottom</small>
               </div>
             </div>
             <div id="market-source-list" class="market-source-list">
@@ -941,7 +896,6 @@
               <span class="ai-panel-icon" aria-hidden="true">↻</span>
               <div>
                 <h3 id="market-sync-title">数据同步</h3>
-                <small>Stock universe &amp; daily bars local cache</small>
               </div>
             </div>
             <div id="market-sync-status" class="market-sync-status">
@@ -957,7 +911,6 @@
         <form id="feishu-settings-form" class="feishu-settings" autocomplete="off" data-settings-pane="notify">
           <div class="feishu-settings-heading">
             <div>
-              <span class="section-kicker">DELIVERY CHANNEL</span>
               <h2>飞书通知</h2>
               <p>连接群自定义机器人，用于投递预警和报告。请先在 $LUOOME_HOME/plugins.json 手写 "business.notification": { "enabled": true } 并重启宿主；连接测试也受该开关控制。</p>
             </div>
@@ -977,7 +930,6 @@
                 <span class="ai-panel-icon" aria-hidden="true">↗</span>
                 <div>
                   <h3 id="feishu-channel-title">群机器人 Webhook</h3>
-                  <small>Encrypted local delivery credential</small>
                 </div>
               </div>
               <div class="field">
@@ -1022,10 +974,9 @@
         </form>
         <div class="card data-transfer-card" data-settings-pane="data">
           <div class="card-header">
-            <div><span class="section-kicker">LOCAL DATA</span><h2>数据导出与导入</h2></div>
-            <div class="card-meta">JSON · 本地合并 · 不包含 API Key / Webhook</div>
+            <div><h2>数据导出与导入</h2></div>
+            <div class="card-meta">JSON · 不包含 API Key / Webhook</div>
           </div>
-          <p class="muted mb-2">可全部选择，也可只迁移账户、策略、关注分组、研究或对话等部分数据。</p>
           <div id="data-transfer-categories" class="data-transfer-categories">加载中…</div>
           <div class="data-transfer-actions">
             <button id="btn-data-export" class="btn btn-outline" type="button">导出所选数据</button>
@@ -1038,10 +989,10 @@
         <div data-settings-pane="system">
         <div class="card">
           <div class="card-header">
-            <div><span class="section-kicker">READ-ONLY</span><h2>插件启用状态</h2></div>
+            <div><h2>插件启用状态</h2></div>
             <div class="card-meta">手写 plugins.json，重启生效</div>
           </div>
-          <p class="muted mb-2">本页只读展示。配置文件 <code id="plugin-config-path">--</code></p>
+          <p class="muted mb-2">配置文件 <code id="plugin-config-path">--</code></p>
           <div id="plugin-settings-body"><p class="placeholder">加载中…</p></div>
           <details class="mt-2">
             <summary>plugins.json 示例（只读，不在页面修改）</summary>
@@ -1056,12 +1007,11 @@
           </details>
         </div>
         <div class="card mt-4">
-          <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
+          <div class="card-header"><h2>Workflow 运行记录</h2></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>
         </div>
         <div class="card mt-4">
           <div class="card-header"><h2>创建真实账户</h2></div>
-          <p class="muted mb-2">空数据库首次使用时先创建账户。系统不会自动填充示例持仓或交易。</p>
           <div class="form-grid">
             <div class="field">
               <label for="account-create-name">账户名称</label>
@@ -1110,14 +1060,12 @@
         <button id="theme-drawer-close" class="btn btn-ghost btn-sm" type="button" aria-label="关闭">✕</button>
       </div>
       <div class="drawer-body">
-        <p class="muted mb-3">选择一套配色，背景色与品牌色会同时切换。</p>
         <div class="follow-system">
           <label class="follow-system-label" for="follow-system-input">
             <input type="checkbox" id="follow-system-input" class="switch-input" role="switch" />
             <span class="switch-track" aria-hidden="true"></span>
             <span>跟随系统外观</span>
           </label>
-          <span class="hint-icon" tabindex="0" aria-label="浅色对应青碧主题，深色对应暗夜主题">i<span class="hint-tooltip" role="tooltip">浅色 → 青碧，深色 → 暗夜</span></span>
         </div>
         <div class="theme-grid" id="theme-grid">
           <button type="button" class="theme-card" data-theme="teal" style="--swatch: #0d9e88;" title="青碧" aria-label="青碧"></button>
@@ -1133,7 +1081,6 @@
 
         <div class="bg-section">
           <h3>自定义背景</h3>
-          <p class="muted mb-3">选择本地图片作为页面背景，支持 GIF 动图。</p>
           <input type="file" id="bg-file-input" accept="image/*" hidden />
           <div class="bg-actions">
             <button id="bg-upload-btn" class="btn btn-ghost btn-sm" type="button">选择图片</button>
@@ -1144,7 +1091,6 @@
 
         <div class="bg-section">
           <h3>面板透明度</h3>
-          <p class="muted mb-3">百分比越高面板越实，越低越透出背景。</p>
           <div class="opacity-control">
             <input type="range" id="panel-opacity-input" min="30" max="100" step="1" value="100"
               aria-label="面板透明度" />

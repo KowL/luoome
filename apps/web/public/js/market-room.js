@@ -219,7 +219,7 @@ const emptyStateText = (overview) => {
 
 /** 页头口径：覆盖范围 / 交易日 / 数据时点；空态给出原因。 */
 const overviewMetaText = (overview) => {
-  if (overview?.state === 'empty') return emptyStateText(overview);
+  if (overview?.state === 'empty') return '';
   const coverage = overview?.coverage?.value;
   if (coverage === undefined) return '数据时点未知';
   return `${coverageLabel(coverage.coverage)} · 交易日 ${coverage.tradingDate} · 数据时点 ${fmtClock(coverage.sampledAt)} · 行情时间 ${fmtClock(coverage.dataAsOf, '上游未提供', true)} · 抓取时间 ${fmtClock(coverage.fetchedAt, '缺失', true)}`;
@@ -919,9 +919,7 @@ const ensureShell = (section) => {
   mount(section, [
     el('div', 'route-header room-head', [
       el('div', null, [
-        el('span', 'section-kicker', 'MARKET ROOM'),
         el('h1', '', '作战室'),
-        el('div', 'route-meta', '全市场盘中总览 · 只读已发布批次'),
       ]),
       tabs,
     ]),

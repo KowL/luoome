@@ -49,7 +49,7 @@ const applyTemperatureCapability = () => {
     hint.textContent = `${preset.label} 要求固定为 ${fixed}。`;
   } else {
     input.disabled = false;
-    hint.textContent = '越低越稳定，越高越发散。';
+    hint.textContent = '';
   }
 };
 

@@ -151,8 +151,6 @@ export const renderInvestmentWorkspace = async () => {
   ]);
   if (requestVersion !== version || accountId !== getAccountId() || epoch !== getSessionEpoch())
     return;
-  const facts = $('#workspace-facts');
-  if (facts) facts.textContent = '今日决策事实只读展示；持仓、自选池与计划均来自已有事实。';
   const holdingsFailure = resultText(holdings);
   mount(
     $('#workspace-holdings'),
@@ -269,7 +267,6 @@ export const initInvestmentWorkspace = () => {
       'workspace-directions',
       'workspace-plans',
       'workspace-tracking',
-      'workspace-facts',
     ]) {
       $(`#${id}`)?.replaceChildren();
     }

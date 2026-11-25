@@ -620,7 +620,6 @@ const renderExperimentRuleCard = (rule, catalog, changed, rebuild, options = {})
   return el('article', 'experiment-rule-card', [
     el('div', 'experiment-rule-card-head', [
       el('div', null, [
-        el('span', 'section-kicker', options.signal === true ? 'SIGNAL RULE' : 'SELECTION RULE'),
         el('strong', null, options.signal === true ? '信号条件' : '筛选条件'),
       ]),
       ...(remove === null ? [] : [remove]),
@@ -651,7 +650,6 @@ const renderExperimentSelection = (definition, catalog, changed, rebuild) => {
   return el('section', 'experiment-builder-section', [
     el('div', 'experiment-section-heading', [
       el('div', null, [
-        el('span', 'section-kicker', '01 / SELECTION'),
         el('h4', null, '股票池选择'),
       ]),
       el('div', 'experiment-inline-actions', [experimentControl('逻辑', logic), add]),
@@ -691,7 +689,7 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
     enable.disabled = selectionRules.length === 0;
     return el('section', 'experiment-builder-section', [
       el('div', 'experiment-section-heading', [
-        el('div', null, [el('span', 'section-kicker', '02 / SCORING'), el('h4', null, '评分聚合')]),
+        el('h4', null, '评分聚合'),
         enable,
       ]),
       el(
@@ -715,7 +713,7 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
   add.disabled = nextRuleId === undefined;
   return el('section', 'experiment-builder-section', [
     el('div', 'experiment-section-heading', [
-      el('div', null, [el('span', 'section-kicker', '02 / SCORING'), el('h4', null, '评分聚合')]),
+      el('h4', null, '评分聚合'),
       el('div', 'experiment-inline-actions', [totalLabel, add]),
     ]),
     ...(components.length === 0
@@ -803,7 +801,7 @@ const renderExperimentSignals = (definition, catalog, changed, rebuild) => {
   });
   return el('section', 'experiment-builder-section', [
     el('div', 'experiment-section-heading', [
-      el('div', null, [el('span', 'section-kicker', '03 / SIGNALS'), el('h4', null, '信号规则')]),
+      el('h4', null, '信号规则'),
       el('span', 'muted', '入场 / 退出 / 风险'),
     ]),
     ...scopes,
@@ -864,7 +862,6 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
     el('section', 'experiment-builder-section experiment-metadata-section', [
       el('div', 'experiment-section-heading', [
         el('div', null, [
-          el('span', 'section-kicker', '00 / METADATA'),
           el('h4', null, '策略范围'),
         ]),
         el('span', 'badge badge-neutral', '保存时校验'),
@@ -1024,7 +1021,6 @@ const renderExperimentDefinitionEditor = (state, catalog, { standalone = false }
   return el('section', 'experiment-surface experiment-editor-panel', [
     el('div', 'experiment-panel-heading', [
       el('div', null, [
-        el('span', 'section-kicker', 'DRAFT BUILDER'),
         el('h3', null, '规则构建器'),
       ]),
       modes,

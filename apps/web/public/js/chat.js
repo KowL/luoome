@@ -588,13 +588,7 @@ const emptyState = () => {
   });
   return el('div', 'chat-empty-state', [
     el('div', 'chat-empty-mark', '◇'),
-    el('span', 'section-kicker', 'LOCAL ADVISOR'),
     el('h2', null, labels.length > 0 ? `正在讨论：${labels}` : '用对话管理你的投资'),
-    el(
-      'p',
-      null,
-      '查询持仓、整理研究、管理资金与盯盘。助手先核对事实，修改经你确认后执行，再说明实际结果。',
-    ),
     el('div', 'chat-suggestions', chips),
   ]);
 };

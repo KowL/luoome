@@ -213,9 +213,7 @@ export const renderOverview = (workspace, state) => {
     settings.type = 'button';
     settings.addEventListener('click', () => navigate(state, { tab: 'settings' }));
     return el('div', 'strategy-empty-state', [
-      el('span', 'section-kicker', 'NO USABLE RUN'),
       el('h3', null, '尚无可用运行'),
-      el('p', null, '发布有效版本后可进行样本试跑或正式运行。试跑不会成为当前股票池。'),
       settings,
     ]);
   }

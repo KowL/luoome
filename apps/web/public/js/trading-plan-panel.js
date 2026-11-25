@@ -905,7 +905,7 @@ export const renderTradingPlanPanel = ({
       el(
         'p',
         'placeholder',
-        '尚未生成交易计划。计划在盘后批次里由持仓复核与候选分析产出，未生成计划不等于没有机会。',
+        '尚未生成交易计划。',
       ),
       accountFactsSummary({ factsResult, reconcileResult }),
     ]);

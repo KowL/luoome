@@ -421,7 +421,7 @@ const stockBriefCardNode = (view) => {
     listNode('反证', counterEvidence),
     listNode('风险', risks),
     briefMissingDetailsNode(view),
-    warnings.length === 0
+    !hasConclusion || warnings.length === 0
       ? null
       : el('div', 'stock-brief-warnings', [
           el('h3', null, '提示'),
@@ -461,7 +461,7 @@ const todayBriefNodes = (list, options = {}) => {
   return [
     el('p', 'stock-brief-coverage', coverage),
     model.top.length === 0
-      ? el('p', 'placeholder', '今日暂无个股观察；本区块不会触发生成。')
+      ? el('p', 'placeholder', '今日暂无个股观察。')
       : el('div', 'stock-brief-top', model.top.map(todayBriefRowNode)),
     missingLines.length === 0
       ? null

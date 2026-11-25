@@ -262,13 +262,7 @@ export const renderDecisionCycles = async (strategyId, state = {}) => {
   const cycles = payload.cycles ?? [];
   const header = el('div', 'strategy-tab-heading', [
     el('div', null, [
-      el('span', 'section-kicker', 'DECISION CYCLE'),
       el('h3', null, '策略候选闭环'),
-      el(
-        'p',
-        'muted',
-        '按 strategyId + runId + stockId 派生；观察是事后事实，Advice 是可选决策快照。',
-      ),
     ]),
     cycleLink('#review', '全局复盘'),
   ]);

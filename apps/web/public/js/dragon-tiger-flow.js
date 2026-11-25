@@ -765,7 +765,7 @@ const renderChartPanel = () => {
   refs.tooltip = $('.dragon-flow-tooltip', canvasWrap);
   return panel(
     '概念累计净额轨迹',
-    '亿元 · 区间起点归零 · 右端直接标注并避让 · 点击折线联动',
+    '亿元',
     canvasWrap,
     'dragon-flow-chart-panel',
   );
@@ -787,7 +787,7 @@ const renderRankPanel = (data) => {
     (() => {
       const total = data.stats?.conceptCount ?? (data.concepts ?? []).length;
       const shown = (data.concepts ?? []).length;
-      return `共 ${total} 个概念${shown < total ? ` · 前 ${shown}` : ''} · 点击联动`;
+      return `共 ${total} 个概念${shown < total ? ` · 前 ${shown}` : ''}`;
     })(),
     list,
     'dragon-flow-rank-panel',
@@ -809,7 +809,7 @@ const renderBottomPanels = () => {
   stockHead.append(refs.selectedTitle);
   const topologyPanel = panel(
     '资金构成拓扑',
-    '机构 / 游资 / 其他 → 概念 → 个股',
+    '',
     topologyWrap,
     'dragon-flow-topology-panel',
   );

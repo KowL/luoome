@@ -32,7 +32,6 @@ export const insightDegradationHint = (reason) => {
 
 const renderInsightNarrative = (insight) =>
   el('section', 'strategy-insight-narrative', [
-    el('span', 'section-kicker', 'AI EXPLANATION'),
     el('h3', null, insight.headline),
     el('p', null, insight.summary),
     ...(insight.findings ?? []).map((finding) =>
@@ -135,7 +134,6 @@ export const renderInsights = async (
   return el('div', 'strategy-insight-grid', [
     el('div', 'strategy-tab-heading', [
       el('div', null, [
-        el('span', 'section-kicker', 'FACT-BASED INSIGHTS'),
         el('h3', null, '策略事实与真实表现'),
         el(
           'p',

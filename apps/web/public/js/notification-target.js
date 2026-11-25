@@ -50,7 +50,6 @@ export const renderNotificationTarget = async () => {
   const value = result.data;
   const trigger = value.trigger;
   mount(host, [
-    el('span', 'section-kicker', 'EXACT NOTIFICATION'),
     el('h2', null, '提醒到了，先核对现在'),
     stockIdentityLink({ stockId: trigger.stockId, stockName: trigger.stockName }),
     el(

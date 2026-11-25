@@ -167,13 +167,7 @@ const renderHero = (date, onSelectDate) => {
 
   return el('header', 'lum-hero', [
     el('div', 'lum-hero-main', [
-      el('span', 'eyebrow', 'Limit-up market'),
       el('h2', 'lum-title', '涨停梯队'),
-      el(
-        'p',
-        'lum-subtitle',
-        '涨停池、涨停统计与近 30 个交易日连板矩阵；三者时间范围不同，逐块标注。',
-      ),
     ]),
     el('div', 'ladder-controls', [
       el('label', '', '交易日'),
@@ -297,7 +291,7 @@ const renderMatrix = (view, onSelectDate) => {
     ]),
   );
 
-  const readout = el('div', 'lum-readout', '将光标移到矩阵格查看当日梯队结构；点击列切换交易日。');
+  const readout = el('div', 'lum-readout', '');
   const showDay = (date) => {
     const day = days.find((item) => item.date === date);
     if (day === undefined) return;
@@ -308,6 +302,9 @@ const renderMatrix = (view, onSelectDate) => {
   };
 
   const selected = view.snapshot.date;
+  showDay(
+    days.some((day) => day.date === selected) ? selected : days[days.length - 1].date,
+  );
   const headCells = days.map((day) => {
     const noData = boardSumOfDay(day) === 0;
     const th = el(
@@ -680,7 +677,6 @@ const fetchMarket = async (date) => {
 const renderHeroOnly = () =>
   el('header', 'lum-hero', [
     el('div', 'lum-hero-main', [
-      el('span', 'eyebrow', 'Limit-up market'),
       el('h2', 'lum-title', '涨停梯队'),
     ]),
   ]);
@@ -741,7 +737,7 @@ export const renderLimitUpLadder = async (setStatus) => {
     el('section', 'card lum-panel', [
       el('div', 'card-header', [
         el('h2', '', '连板结构矩阵'),
-        el('div', 'card-meta', `近 ${snapshot.ladder?.length ?? '--'} 个交易日 · 点击列切换交易日`),
+        el('div', 'card-meta', `近 ${snapshot.ladder?.length ?? '--'} 个交易日`),
       ]),
       renderMatrix(view, selectDate),
       renderMatrixDelta(view),
