@@ -5,6 +5,7 @@ import {
   SECTOR_STRENGTHENING_HIGHLIGHT_MINUTES,
   type SectorAmountDistribution,
   SectorAmountDistributionSchema,
+  SectorConceptScopeSchema,
   type SectorKind,
   SectorKindSchema,
   type SectorRankingEmptyReason,
@@ -34,6 +35,7 @@ import {
 export const GetMarketRoomAmountDistributionInput = z.object({
   kind: SectorKindSchema.default('industry'),
   window: SectorWindowKeySchema.default('w15'),
+  conceptScope: SectorConceptScopeSchema.optional(),
   at: z.coerce.date().optional(),
 });
 export type GetMarketRoomAmountDistributionInputT = z.infer<
@@ -64,7 +66,7 @@ const emptyDistribution = (input: {
 export const getMarketRoomAmountDistributionTool = defineTool({
   name: 'get_market_room_amount_distribution',
   description:
-    '读取成交分布：给定 at 时只读该时点及之前批次并按当时生效的成分计算；按 5 / 15 分钟窗口给出行业或概念板块的窗口成交占比（成分累计成交额增量 ÷ 同期全市场去重增量）、较上一窗口的百分点环比与 CR3 集中度；每行带有效成分 / 缺失 / 停牌退市计数与口径说明，分母无效、窗口缺样本、跨午休或批次不完整时一律返回 null + 原因，绝不补零；概念成分可重叠，占比不可加总；只读不采集',
+    '读取成交分布：给定 at 时只读该时点及之前批次并按当时生效的成分计算；按 5 / 15 分钟窗口给出行业或概念板块的窗口成交占比（成分累计成交额增量 ÷ 同期全市场去重增量）、较上一窗口的百分点环比与 CR3 集中度；概念默认与涨幅榜共用精选题材，conceptScope=all 可看原始目录；每行带有效成分 / 缺失 / 停牌退市计数与口径说明，分母无效、窗口缺样本、跨午休或批次不完整时一律返回 null + 原因，绝不补零；概念成分可重叠，占比不可加总；只读不采集',
   sideEffect: 'read',
   input: GetMarketRoomAmountDistributionInput,
   output: GetMarketRoomAmountDistributionOutput,
@@ -104,6 +106,7 @@ export const getMarketRoomAmountDistributionTool = defineTool({
     const distribution: SectorAmountDistribution = buildSectorAmountDistribution({
       kind: input.kind,
       window: input.window,
+      ...(input.conceptScope === undefined ? {} : { conceptScope: input.conceptScope }),
       anchor,
       currentStart,
       previousStart,
@@ -136,6 +139,7 @@ export const getMarketRoomAmountDistributionTool = defineTool({
         buildSectorAmountDistribution({
           kind: input.kind,
           window: input.window,
+          ...(input.conceptScope === undefined ? {} : { conceptScope: input.conceptScope }),
           anchor: previous,
           ...starts,
           sectors: previousSectors,

@@ -19,6 +19,10 @@ export const AuthenticatedEndpointSchema = z.strictObject({
   token: z.string().min(16).max(4096),
 });
 
+/** Agent profile 的推理强度；`off` 表示不向供应商发送任何推理参数。 */
+export const ReasoningEffortSchema = z.enum(['off', 'low', 'medium', 'high', 'max']);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 export const HostConfigSchema = z.strictObject({
   configRef: z.string().min(1),
   /** 持久会话根目录（绝对路径）；缺省时每次运行使用独立临时目录，不跨轮续接。 */
@@ -32,6 +36,9 @@ export const HostConfigSchema = z.strictObject({
     model: z.string().min(1),
     maxTokens: z.number().int().positive().max(65536).default(4096),
     contextWindow: z.number().int().positive().default(128000),
+    /** 采样温度；缺省时不覆盖供应商默认值。 */
+    temperature: z.number().min(0).max(2).optional(),
+    reasoningEffort: ReasoningEffortSchema.default('off'),
   }),
   native: z
     .strictObject({

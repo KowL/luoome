@@ -62,6 +62,7 @@ const concept = (vendorCode: string, name: string): SectorCatalogObservation => 
 const LEADER_INDUSTRY = industry('881001.TI', '领涨组');
 const FOLLOWER_INDUSTRY = industry('881002.TI', '接力组');
 const OVERLAP_CONCEPT = concept('886001.TI', '重叠概念');
+const MARKET_LABEL_CONCEPT = concept('886002.TI', '融资融券');
 
 const observation = (
   stockId: string,
@@ -74,11 +75,16 @@ const seedCatalog = async (repos: RepositoryRegistry): Promise<void> => {
     source: 'fuyao',
     appliedAt: at('09:00'),
     status: 'succeeded',
-    catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY, OVERLAP_CONCEPT],
+    catalog: [LEADER_INDUSTRY, FOLLOWER_INDUSTRY, OVERLAP_CONCEPT, MARKET_LABEL_CONCEPT],
     catalogKinds: ['industry', 'concept'],
     observations: [
       ...LEADERS.map((stockId, index) =>
-        observation(stockId, index === 0 ? [LEADER_INDUSTRY, OVERLAP_CONCEPT] : [LEADER_INDUSTRY]),
+        observation(
+          stockId,
+          index === 0
+            ? [LEADER_INDUSTRY, OVERLAP_CONCEPT, MARKET_LABEL_CONCEPT]
+            : [LEADER_INDUSTRY],
+        ),
       ),
       ...FOLLOWERS.map((stockId, index) =>
         observation(
@@ -262,6 +268,29 @@ describe('get_market_room_sectors', () => {
     const overlapIds = [LEADERS[0] as string, FOLLOWERS[0] as string];
     expect(ranking.rows[0]?.day.value).toBeCloseTo(dayMean(marketDayItems(2), overlapIds), 4);
     expect(ranking.notes.join(' ')).toContain('不可加总');
+  });
+
+  it('概念默认精选并保留原始目录计数，conceptScope=all 可回查市场标签', async () => {
+    const { ctx } = await contextAt();
+    await seedCatalog(ctx.repos);
+    await ctx.repos.marketSnapshotBatch.publish(batchOf('10:15', marketDayItems(2)));
+
+    const focused = await execute(ctx, { kind: 'concept', sort: 'day', window: 'w15' });
+    expect(focused.rows.map((row) => row.name)).toEqual(['重叠概念']);
+    expect(focused.coverage).toMatchObject({
+      sectorCount: 1,
+      catalogSectorCount: 2,
+      filteredSectorCount: 1,
+    });
+
+    const all = await execute(ctx, {
+      kind: 'concept',
+      sort: 'day',
+      window: 'w15',
+      conceptScope: 'all',
+    });
+    expect(new Set(all.rows.map((row) => row.name))).toEqual(new Set(['重叠概念', '融资融券']));
+    expect(all.coverage).toMatchObject({ sectorCount: 2, filteredSectorCount: 0 });
   });
 
   it('给定 at 取该时点及之前最近的批次，窗口按锚点回溯且不跨时点取未来批次', async () => {

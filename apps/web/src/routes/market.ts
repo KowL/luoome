@@ -285,13 +285,14 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    *   kind (可选) industry | concept，默认 industry
    *   sort (可选) day | window5 | window15，默认 day
    *   window (可选) w5 | w15，选择成交占比使用的窗口，默认 w15
+   *   conceptScope (可选) focused | all，概念默认精选，all 返回原始目录
    *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次，缺省读最近批次
    *
    * 只读；参数不合法按既有模型返回 invalid_input（400），其余错误包成 502。
    */
   app.get('/api/market/room/sectors', async (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['kind', 'sort', 'window', 'at'] as const) {
+    for (const key of ['kind', 'sort', 'window', 'conceptScope', 'at'] as const) {
       const value = c.req.query(key);
       if (value !== undefined && value.trim() !== '') input[key] = value;
     }
@@ -306,11 +307,63 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   });
 
   /**
+   * 主流题材地图（v1）：固定父板块 + 版本化标准题材定义 + 原始概念成分并集行情。
+   *
+   * 参数：
+   *   sort (可选) day | window5 | window15，默认 day
+   *   window (可选) w5 | w15，选择成交占比使用的窗口，默认 w15
+   *   at (可选) ISO 时间；给定时取该时点及之前最近的批次与当时生效的目录 / 成分
+   *
+   * 主流方向无论涨跌都返回；只读；缺失按既有模型返回 null + 原因，不补零。
+   * 参数不合法返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/mainstream', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['sort', 'window', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_mainstream', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 作战室股票弹窗的 1 分钟价格与成交额序列。
+   *
+   * 参数：
+   *   stockId (必填) 股票内部标识（如 600519.SH）
+   *   at (可选) 与主流题材响应同一 anchor 的采样时点；缺省取最近批次
+   *
+   * 只读本地已发布 market_snapshot_batches；缺口不插值，负修正按缺失；不补零。
+   * 参数不合法返回 invalid_input（400），其余错误包成 502。
+   */
+  app.get('/api/market/room/stock-series', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['stockId', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_stock_series', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
    * 作战室成交分布（ticket #40）：按 5 / 15 分钟窗口给出板块成交占比、百分点环比与 CR3。
    *
    * 参数：
    *   kind (可选) industry | concept，默认 industry
    *   window (可选) w5 | w15，默认 w15
+   *   conceptScope (可选) focused | all，概念默认精选，all 返回原始目录
    *   at (可选) ISO 时间；给定时取该时点及之前最近的已发布批次，缺省读最近批次
    *
    * 只读；分母无效 / 窗口不可比按缺失返回，不补零；参数不合法按既有模型返回
@@ -318,7 +371,7 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
    */
   app.get('/api/market/room/amount-distribution', async (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['kind', 'window', 'at'] as const) {
+    for (const key of ['kind', 'window', 'conceptScope', 'at'] as const) {
       const value = c.req.query(key);
       if (value !== undefined && value.trim() !== '') input[key] = value;
     }

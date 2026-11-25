@@ -306,6 +306,8 @@ export class NodeRuntimeHost {
               model: this.config.model.model,
               maxTokens: this.config.model.maxTokens,
               contextWindow: this.config.model.contextWindow,
+              temperature: this.config.model.temperature ?? null,
+              reasoningEffort: this.config.model.reasoningEffort,
             },
             native: this.config.native
               ? {

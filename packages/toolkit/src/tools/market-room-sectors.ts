@@ -2,6 +2,7 @@ import {
   buildSectorIntradayEmptyRanking,
   buildSectorIntradayRanking,
   type MarketSnapshotBatch,
+  SectorConceptScopeSchema,
   type SectorIntradayRankingInput,
   SectorIntradayRankingSchema,
   type SectorIntradaySort,
@@ -38,6 +39,7 @@ export const GetMarketRoomSectorsInput = z.object({
   includeLeaders: z.boolean().optional(),
   sort: SectorIntradaySortSchema.default('day'),
   window: SectorWindowKeySchema.default('w15'),
+  conceptScope: SectorConceptScopeSchema.optional(),
   at: z.coerce.date().optional(),
 });
 export type GetMarketRoomSectorsInputT = z.infer<typeof GetMarketRoomSectorsInput>;
@@ -66,7 +68,7 @@ const emptyRanking = (input: {
 export const getMarketRoomSectorsTool = defineTool({
   name: 'get_market_room_sectors',
   description:
-    '读取板块盘中榜：行业 / 概念可切换，同一张榜给出日涨幅（相对前收的等权均值）与近 5 / 15 分钟窗口涨幅（窗口两端价格），可按三种口径分别排序；给定 at 时只读该时点及之前批次，并按当时生效的目录与成分计算；每行带上涨 / 下跌 / 平家数、有效成分与缺失成分数、封板数与窗口成交占比及口径说明，缺失一律标注不补零；只读不采集',
+    '读取板块盘中榜：行业 / 概念可切换，同一张榜给出日涨幅（相对前收的等权均值）与近 5 / 15 分钟窗口涨幅（窗口两端价格），可按三种口径分别排序；概念默认使用精选题材（剔除非题材标签与完全重复项，宽概念保留），conceptScope=all 可看原始目录；给定 at 时只读该时点及之前批次，并按当时生效的目录与成分计算；每行带上涨 / 下跌 / 平家数、有效成分与缺失成分数、封板数与窗口成交占比及口径说明，缺失一律标注不补零；只读不采集',
   sideEffect: 'read',
   input: GetMarketRoomSectorsInput,
   output: GetMarketRoomSectorsOutput,
@@ -134,6 +136,7 @@ export const getMarketRoomSectorsTool = defineTool({
         kind: input.kind,
         sort: input.sort,
         window: input.window,
+        ...(input.conceptScope === undefined ? {} : { conceptScope: input.conceptScope }),
         anchor,
         windowStarts,
         sectors,

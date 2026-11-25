@@ -19,6 +19,7 @@ import {
   sectorDetailQuery,
   sortedMembers,
   toggleCompareSelection,
+  toneNumericClass,
   trendChartModel,
   trendMethodText,
 } from './market-room-sector-detail.js';
@@ -195,9 +196,10 @@ describe('板块详情深链接与请求参数', () => {
       window: 'w5',
       sectorId: 'a',
       compareSectorIds: ['b', 'c'],
+      conceptScope: 'all',
     });
     expect(hash).toBe(
-      'market-room?tab=sectors&kind=concept&sort=window5&window=w5&sector=a&compare=b%2Cc',
+      'market-room?tab=sectors&kind=concept&sort=window5&window=w5&sector=a&conceptScope=all&compare=b%2Cc',
     );
     expect(sectorDetailQuery({ sectorId: 'a', window: 'w5', compareSectorIds: ['b', 'c'] })).toBe(
       '?sectorId=a&window=w5&compare=b%2Cc',
@@ -370,6 +372,13 @@ describe('成分明细与缺失样本', () => {
     const cells = memberRowCells(member({ windowAmountDelta: -150_000_000 }));
     expect(cells.amount).toBe('-1.50亿');
     expect(memberRowCells(member({ windowAmountDelta: 12_000 })).amount).toBe('1.20万');
+  });
+
+  it('数值列配色类始终非空：零涨跌 / 缺失不带 tone，涨跌为 pos / neg', () => {
+    expect(toneNumericClass(1.23)).toBe('num pos');
+    expect(toneNumericClass(-0.45)).toBe('num neg');
+    expect(toneNumericClass(0)).toBe('num');
+    expect(toneNumericClass(null)).toBe('num');
   });
 
   it('成分排序把缺失日涨幅排到最后，其余按日涨幅降序', () => {

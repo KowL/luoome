@@ -162,6 +162,8 @@ export interface AISettingsView {
   readonly apiKeyEnv: string;
   readonly apiKeyConfigured: boolean;
   readonly temperature: number;
+  /** agent profile 的单次输出预算；DSH 运行时按此值构造供应商 max_tokens。 */
+  readonly maxOutputTokens: number;
   readonly timeoutSeconds: number;
   readonly maxRetries: number;
   readonly reasoningEffort: AIReasoningEffort;
@@ -243,6 +245,7 @@ export class AISettingsStore {
     let model = fallback.defaultModel;
     let baseURL = fallback.defaultBaseURL;
     let temperature = 0.2;
+    let maxOutputTokens = 2_048;
     let timeoutSeconds = 120;
     let maxRetries = 0;
     let reasoningEffort: AISettingsView['reasoningEffort'] = 'off';
@@ -262,6 +265,7 @@ export class AISettingsStore {
           model = profile.model.slice(separator + 1);
           baseURL = provider.baseURL ?? presetById(providerId).defaultBaseURL;
           temperature = profile.temperature;
+          maxOutputTokens = profile.maxOutputTokens;
           timeoutSeconds = Math.round(profile.timeoutMs / 1_000);
           maxRetries = profile.maxRetries;
           reasoningEffort = profile.reasoningEffort;
@@ -280,6 +284,7 @@ export class AISettingsStore {
       apiKeyEnv,
       apiKeyConfigured: (env[apiKeyEnv]?.trim().length ?? 0) > 0,
       temperature,
+      maxOutputTokens,
       timeoutSeconds,
       maxRetries,
       reasoningEffort,

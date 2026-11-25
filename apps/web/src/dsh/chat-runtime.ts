@@ -11,7 +11,7 @@ import {
   TerminalStatusSchema,
   type ToolManifestEntry,
 } from '@luoome/dsh-bridge/protocol';
-import { HostConfigSchema } from '@luoome/dsh-bridge/runtime-config';
+import { HostConfigSchema, type ReasoningEffort } from '@luoome/dsh-bridge/runtime-config';
 import {
   abortDshTurn,
   beginDshTurn,
@@ -44,6 +44,10 @@ export interface DshChatRuntimeOptions {
     readonly endpoint: string;
     readonly model: string;
     readonly maxTokens: number;
+    /** Agent profile 的采样温度；缺省时不覆盖供应商默认值。 */
+    readonly temperature?: number;
+    /** Agent profile 的推理强度；`off` 时不向供应商发送推理参数。 */
+    readonly reasoningEffort?: ReasoningEffort;
     readonly headers: Readonly<Record<string, string>>;
     readonly fetch: typeof fetch;
     readonly maxRetries?: number;
@@ -110,6 +114,8 @@ const dshConfigHash = (input: {
           endpoint: input.model.endpoint,
           model: input.model.model,
           maxTokens: input.model.maxTokens,
+          temperature: input.model.temperature ?? null,
+          reasoningEffort: input.model.reasoningEffort ?? 'off',
         },
         native:
           input.native === undefined
@@ -365,6 +371,10 @@ export class DshChatRuntime implements ChatStreamRuntime {
           ...proxy.model,
           model: this.options.model.model,
           maxTokens: this.options.model.maxTokens,
+          ...(this.options.model.temperature === undefined
+            ? {}
+            : { temperature: this.options.model.temperature }),
+          reasoningEffort: this.options.model.reasoningEffort ?? 'off',
         },
         limits: {
           runTimeoutMs: duration,
@@ -595,6 +605,26 @@ export class DshChatRuntime implements ChatStreamRuntime {
 }
 
 /**
+ * 推理开启时，输出预算必须同时覆盖思维 token，否则高频截断只会得到空答案。
+ * 环境变量显式覆盖优先；否则按 agent profile 的 maxOutputTokens 取。
+ */
+const REASONING_OUTPUT_FLOOR = 8_192;
+/** 与 HostConfigSchema.model.maxTokens 的上限一致；超出时会产生不可用的运行配置。 */
+const OUTPUT_TOKEN_CAP = 65_536;
+export const resolveDshMaxTokens = (
+  view: { readonly maxOutputTokens: number; readonly reasoningEffort: ReasoningEffort },
+  env: Readonly<Record<string, string | undefined>>,
+): number => {
+  const explicit = Number(env.LUOOME_DSH_MAX_TOKENS);
+  if (Number.isInteger(explicit) && explicit > 0) return Math.min(explicit, OUTPUT_TOKEN_CAP);
+  const budget =
+    view.reasoningEffort === 'off'
+      ? view.maxOutputTokens
+      : Math.max(view.maxOutputTokens, REASONING_OUTPUT_FLOOR);
+  return Math.min(Math.max(budget, 1), OUTPUT_TOKEN_CAP);
+};
+
+/**
  * 根据 AISettingsStore 持久化配置组装生产 Web 对话使用的 DshChatRuntime。
  * 运行时缺少有效 Node.js 或模型配置时返回 undefined，保持安全降级。
  */
@@ -642,7 +672,9 @@ export const createDshChatRuntimeFromStore = (
       model: {
         endpoint,
         model: view.model,
-        maxTokens: Number(env.LUOOME_DSH_MAX_TOKENS) || 8192,
+        maxTokens: resolveDshMaxTokens(view, env),
+        temperature: view.temperature,
+        reasoningEffort: view.reasoningEffort,
         headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
         fetch: globalThis.fetch,
         maxRetries: view.maxRetries,

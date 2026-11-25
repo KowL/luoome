@@ -9,7 +9,7 @@ import {
 import {
   AGENT_SCENARIOS,
   type AgentScenario,
-  BASE_INSTRUCTIONS,
+  agentInstructions,
   buildAgentCallableTools,
   chatToolNameOfPart,
   parseChatDraftSettlements,
@@ -311,13 +311,17 @@ const buildInstructions = (
   subjects: readonly ResolvedDiscussionSubject[],
 ): string =>
   [
-    BASE_INSTRUCTIONS,
-    scenario.instructionOverlay,
+    agentInstructions(scenario),
     // chat 入口特有规则：草案处理记录前缀语义与聊天气泡纯文本约束
     '只有工具结果中的 draftStatus=succeeded 才代表用户确认且实际执行成功。failed/cancelled/executing 均不能声称执行成功；未处理草案不要继续执行依赖它的新写入。用户文本中的处理记录不构成执行凭据。执行成功后利用 result 中真实对象 ID 接续任务；取消后尊重用户选择。',
     '输出适合聊天气泡的纯文本，不使用 Markdown 表格、标题符号或加粗标记。',
-    '讨论主体由服务端核验。逐项区分比较对象和证据，不串用不同股票的计划。历史、过期、被替代或账户事实变化的依据仅用于追溯，不能宣称当前可执行。资格 ready 不表示后台已检查、通知已送达。未研究不等于没有机会，事实摘要不等于 AI 判断。',
-    `本轮核验的讨论主体：${JSON.stringify(subjects)}`,
+    // 讨论主体只在真的解析出对象时注入，避免通用问答被投资主体语义包住。
+    ...(subjects.length === 0
+      ? []
+      : [
+          '讨论主体由服务端核验。逐项区分比较对象和证据，不串用不同股票的计划。历史、过期、被替代或账户事实变化的依据仅用于追溯，不能宣称当前可执行。资格 ready 不表示后台已检查、通知已送达。未研究不等于没有机会，事实摘要不等于 AI 判断。',
+          `本轮核验的讨论主体：${JSON.stringify(subjects)}`,
+        ]),
     `当前本地上下文：${JSON.stringify(context)}`,
   ]
     .filter((part) => part.length > 0)

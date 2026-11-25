@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   amountConcentrationReason,
   amountConcentrationText,
+  amountCoverageText,
   amountDeltaText,
   amountDeltaTone,
   amountEmptyText,
@@ -18,6 +19,7 @@ import {
   amountSampleText,
   amountScopeNotes,
   amountShareText,
+  amountVisibleRows,
   amountWindowText,
 } from './market-room-amount.js';
 
@@ -120,26 +122,54 @@ describe('成交分布深链接与请求参数', () => {
     expect(amountParamsFromHash('#market-room?tab=turnover')).toEqual({
       kind: 'industry',
       window: 'w15',
+      conceptScope: 'focused',
       at: null,
     });
     expect(amountParamsFromHash('#market-room?tab=turnover&kind=concept&window=w5')).toEqual({
       kind: 'concept',
       window: 'w5',
+      conceptScope: 'focused',
       at: null,
     });
     expect(amountParamsFromHash('#market-room?tab=turnover&kind=futures&window=w1')).toEqual({
       kind: 'industry',
       window: 'w15',
+      conceptScope: 'focused',
       at: null,
     });
-    expect(amountParamsFromHash('')).toEqual({ kind: 'industry', window: 'w15', at: null });
+    expect(amountParamsFromHash('')).toEqual({
+      kind: 'industry',
+      window: 'w15',
+      conceptScope: 'focused',
+      at: null,
+    });
   });
 
-  it('请求路径与深链接互相对应，口径显式带在 URL 上', () => {
-    const params = { kind: 'concept', window: 'w5' };
-    expect(amountQuery(params)).toBe('?kind=concept&window=w5');
-    expect(amountHash(params)).toBe('market-room?tab=turnover&kind=concept&window=w5');
+  it('请求路径与深链接互相对应，口径与题材视野显式带在 URL 上', () => {
+    const params = { kind: 'concept', window: 'w5', conceptScope: 'all' };
+    expect(amountQuery(params)).toBe('?kind=concept&window=w5&conceptScope=all');
+    expect(amountHash(params)).toBe(
+      'market-room?tab=turnover&kind=concept&window=w5&conceptScope=all',
+    );
     expect(amountQuery(amountParamsFromHash(`#${amountHash(params)}`))).toBe(amountQuery(params));
+  });
+
+  it('精选成交榜最多渲染前 80 个并展示原始目录过滤计数', () => {
+    const distribution = amountDistribution({
+      kind: 'concept',
+      coverage: {
+        sectorCount: 85,
+        catalogSectorCount: 390,
+        filteredSectorCount: 305,
+        rowCount: 85,
+        omittedSectorCount: 0,
+      },
+      rows: Array.from({ length: 85 }, (_, index) => amountRow({ name: `题材${index}` })),
+    });
+    const focused = { kind: 'concept', conceptScope: 'focused' };
+    expect(amountVisibleRows(distribution, focused)).toHaveLength(80);
+    expect(amountCoverageText(distribution, focused)).toContain('显示 80 / 精选 85');
+    expect(amountVisibleRows(distribution, { ...focused, conceptScope: 'all' })).toHaveLength(85);
   });
 });
 
@@ -278,7 +308,7 @@ describe('行文案、空态与页头', () => {
     );
     expect(amountEmptyText(amountDistribution())).toBeNull();
     expect(amountMetaText(amountDistribution())).toBe(
-      '行业 · 交易日 2026-09-28 · 数据时点 10:15 · 5 分钟窗口 · 环比单位 pp',
+      '行业 · 交易日 2026-09-28 · 数据时点 10:15 · 5 分钟窗口',
     );
     expect(amountMetaText(amountDistribution({ kind: 'concept', window: 'w15' }))).toContain(
       '概念 · 交易日 2026-09-28 · 数据时点 10:15 · 15 分钟窗口',
@@ -331,9 +361,11 @@ describe('回放（ticket #43）', () => {
       '#market-room?tab=turnover&kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z',
     );
     expect(params.at).toEqual(at);
-    expect(amountQuery(params)).toBe('?kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z');
+    expect(amountQuery(params)).toBe(
+      '?kind=concept&window=w5&conceptScope=focused&at=2026-09-28T02%3A15%3A00.000Z',
+    );
     expect(amountHash(params)).toBe(
-      'market-room?tab=turnover&kind=concept&window=w5&at=2026-09-28T02%3A15%3A00.000Z',
+      'market-room?tab=turnover&kind=concept&window=w5&conceptScope=focused&at=2026-09-28T02%3A15%3A00.000Z',
     );
   });
 

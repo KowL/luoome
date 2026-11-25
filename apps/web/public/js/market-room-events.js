@@ -256,8 +256,7 @@ const eventsEmptyText = (view, at = null) => {
 const eventsMetaText = (view) => {
   if (view === undefined || view === null) return '盘中事件 · 刷新失败';
   if (view.state === 'empty') return `盘中事件 · ${eventsEmptyText(view)}`;
-  const counts = view.counts ?? {};
-  return `交易日 ${view.tradingDate} · 共 ${counts.total ?? 0} 条（扩散 ${counts.diffusion ?? 0} / 分化 ${counts.divergence ?? 0} / 换位 ${counts.rotation ?? 0}）· 按时间倒序`;
+  return `交易日 ${view.tradingDate} · 共 ${view.counts?.total ?? 0} 条`;
 };
 
 /**
@@ -398,17 +397,29 @@ const renderEventsPane = (view, params = eventsParamsFromHash()) => {
     return el('div', 'card room-empty room-events', [
       el('h2', '', replayNotice === null ? '盘中事件' : '该时点不可回放'),
       el('p', '', replayNotice ?? empty),
-      el(
-        'p',
-        'room-caption',
-        '页面只读已发布批次；事件由后台采集后的幂等扫描写入，缺样本不产生事件。',
-      ),
     ]);
   }
   const events = sortEventsDesc(view.events ?? []);
+  const counts = view.counts ?? {};
   return el('div', 'card room-card room-events', [
     el('div', 'card-header', [
-      el('div', null, [el('h2', '', '盘中事件'), el('div', 'card-meta', eventsMetaText(view))]),
+      el('div', null, [
+        el('h2', '', '盘中事件'),
+        el(
+          'div',
+          'room-event-counts',
+          [
+            ['扩散', counts.diffusion],
+            ['分化', counts.divergence],
+            ['换位', counts.rotation],
+          ].map(([label, count]) =>
+            el('span', 'room-stat', [
+              el('span', 'room-stat-label', label),
+              el('span', 'room-stat-value mono', `${count ?? 0}`),
+            ]),
+          ),
+        ),
+      ]),
     ]),
     el(
       'ul',

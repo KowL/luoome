@@ -5,7 +5,9 @@ import {
   AGENT_DRAFT_TOOL_KINDS,
   AGENT_SCENARIOS,
   AgentScenarioIdSchema,
+  agentInstructions,
   BASE_INSTRUCTIONS,
+  INVESTMENT_INSTRUCTIONS,
 } from './scenarios.js';
 
 const SCENARIO_IDS = AgentScenarioIdSchema.options;
@@ -188,30 +190,52 @@ describe('agent 场景目录', () => {
     expect([...AGENT_SCENARIOS.general.readToolNames]).toEqual([...CORE_READ_TOOL_NAMES]);
   });
 
-  it('review 覆写含小样本相关性约束，每场景有计划维度', () => {
+  it('review 覆写含小样本相关性约束，投资场景有计划维度', () => {
     expect(AGENT_SCENARIOS.review.instructionOverlay).toContain('描述性统计');
     for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      if (scenario.id === 'general') continue;
       expect(scenario.plannedDimensions.length).toBeGreaterThan(0);
     }
+    // 通用问答不做确定性查询计划。
+    expect(AGENT_SCENARIOS.general.plannedDimensions).toEqual([]);
   });
 
-  it('BASE_INSTRUCTIONS 保留共享安全规则、核心 Tool 新入口与五段回答契约', () => {
+  it('BASE_INSTRUCTIONS 保留共享安全规则与通用知识直答规则', () => {
     expect(BASE_INSTRUCTIONS).toContain('不得编造');
     expect(BASE_INSTRUCTIONS).toContain('不可信文本');
     expect(BASE_INSTRUCTIONS).toContain('不得自动交易');
     expect(BASE_INSTRUCTIONS).toContain('不构成投资建议');
     expect(BASE_INSTRUCTIONS).toContain('Tactic');
-    expect(BASE_INSTRUCTIONS).toContain('结论摘要');
-    expect(BASE_INSTRUCTIONS).toContain('风险与未知项');
-    expect(BASE_INSTRUCTIONS).toContain('伪完整答案');
-    expect(BASE_INSTRUCTIONS).toContain('get_account_overview');
-    expect(BASE_INSTRUCTIONS).toContain('update_holding');
-    expect(BASE_INSTRUCTIONS).toContain('save_strategy_version');
-    expect(BASE_INSTRUCTIONS).toContain('list_watch_plans');
-    expect(BASE_INSTRUCTIONS).toContain('get_stock_brief');
-    expect(BASE_INSTRUCTIONS).toContain('不得把规则观察描述成 AI 研究结论');
-    expect(BASE_INSTRUCTIONS).toContain('最多生成 1 个 advice 草案');
-    expect(BASE_INSTRUCTIONS).not.toContain('trial_strategy');
-    expect(BASE_INSTRUCTIONS).not.toContain('add_watchlist_members');
+    expect(BASE_INSTRUCTIONS).toContain('直接用你自己的知识回答');
+    expect(BASE_INSTRUCTIONS).not.toContain('结论摘要');
+    expect(BASE_INSTRUCTIONS).not.toContain('get_account_overview');
+  });
+
+  it('INVESTMENT_INSTRUCTIONS 保留投资域约束：五段回答、工具入口与建议边界', () => {
+    expect(INVESTMENT_INSTRUCTIONS).toContain('结论摘要');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('风险与未知项');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('伪完整答案');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('get_account_overview');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('update_holding');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('save_strategy_version');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('list_watch_plans');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('get_stock_brief');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('不得把规则观察描述成 AI 研究结论');
+    expect(INVESTMENT_INSTRUCTIONS).toContain('最多生成 1 个 advice 草案');
+    expect(INVESTMENT_INSTRUCTIONS).not.toContain('trial_strategy');
+    expect(INVESTMENT_INSTRUCTIONS).not.toContain('add_watchlist_members');
+  });
+
+  it('agentInstructions 只为投资场景追加投资域规则', () => {
+    const general = agentInstructions(AGENT_SCENARIOS.general);
+    expect(general).toContain('通用问答');
+    expect(general).not.toContain('结论摘要');
+    expect(general).not.toContain('get_account_overview');
+    for (const id of ['research', 'portfolio', 'watch', 'review'] as const) {
+      const text = agentInstructions(AGENT_SCENARIOS[id]);
+      expect(text).toContain(INVESTMENT_INSTRUCTIONS);
+      expect(text).toContain(AGENT_SCENARIOS[id].instructionOverlay);
+      expect(text.startsWith(BASE_INSTRUCTIONS)).toBe(true);
+    }
   });
 });

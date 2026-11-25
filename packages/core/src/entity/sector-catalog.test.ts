@@ -5,6 +5,7 @@ import {
   SectorCatalogEntrySchema,
   type StockSectorMembership,
   StockSectorMembershipSchema,
+  selectMarketRoomSectorCatalog,
 } from './sector-catalog.js';
 
 const T1 = new Date('2026-11-02T00:20:00.000Z');
@@ -82,5 +83,57 @@ describe('StockSectorMembershipSchema', () => {
     expect(missing.firstSeenAt).toEqual(T1);
     expect(missing.source).toBe('fuyao');
     expect(missing.memberStatus).toBe('suspended');
+  });
+});
+
+describe('selectMarketRoomSectorCatalog', () => {
+  const concept = (id: string, vendorCode: string, name: string) =>
+    makeSector({ id, kind: 'concept', vendorCode, name });
+
+  it('精选剔除市场标签与非题材组合，但不按成分数量剔除宽概念，也不影响行业', () => {
+    const industry = makeSector();
+    const marketLabel = concept('concept-market-label', '886001.TI', '融资融券');
+    const report = concept('concept-report-label', '886002.TI', '2026中报预增');
+    const broad = concept('concept-broad-theme', '886003.TI', '人工智能');
+    const valid = concept('concept-valid-theme', '886004.TI', '商业航天');
+    const members = [
+      ...Array.from({ length: 1047 }, (_, index) =>
+        makeMembership({ sectorId: broad.id, stockId: `${String(index).padStart(6, '0')}.SH` }),
+      ),
+      makeMembership({ sectorId: marketLabel.id }),
+      makeMembership({ sectorId: report.id }),
+      makeMembership({ sectorId: valid.id }),
+    ];
+
+    expect(
+      selectMarketRoomSectorCatalog({
+        sectors: [industry, marketLabel, report, broad, valid],
+        members,
+      }),
+    ).toEqual([industry, broad, valid]);
+  });
+
+  it('成分完全相同的概念只保留一个代表，全部模式不去重', () => {
+    const shorter = concept('concept-short-name', '886002.TI', '算力');
+    const longer = concept('concept-long-name', '886001.TI', '算力概念');
+    const other = concept('concept-other-theme', '886003.TI', '液冷服务器');
+    const members = [shorter, longer].flatMap((sector) => [
+      makeMembership({ sectorId: sector.id, stockId: '000001.SZ' }),
+      makeMembership({ sectorId: sector.id, stockId: '000002.SZ' }),
+    ]);
+    members.push(makeMembership({ sectorId: other.id, stockId: '000003.SZ' }));
+
+    expect(
+      selectMarketRoomSectorCatalog({ sectors: [longer, shorter, other], members }).map(
+        (sector) => sector.name,
+      ),
+    ).toEqual(['算力', '液冷服务器']);
+    expect(
+      selectMarketRoomSectorCatalog({
+        sectors: [longer, shorter, other],
+        members,
+        conceptScope: 'all',
+      }),
+    ).toEqual([longer, shorter, other]);
   });
 });

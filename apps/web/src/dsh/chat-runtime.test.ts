@@ -133,6 +133,72 @@ const authHeader = (value: DshChatRuntime): string | undefined =>
   (value as unknown as { options: { model: { headers: Record<string, string> } } }).options.model
     .headers.authorization;
 
+const modelOptions = (value: DshChatRuntime) =>
+  (
+    value as unknown as {
+      options: {
+        model: {
+          maxTokens: number;
+          temperature?: number;
+          reasoningEffort?: string;
+        };
+      };
+    }
+  ).options.model;
+
+const withProfile = (
+  profile: Readonly<Record<string, unknown>>,
+): { version: 1; providers: Record<string, unknown>; profiles: Record<string, unknown> } => {
+  const base = catalog('minimax', 'MINIMAX_API_KEY');
+  return {
+    ...base,
+    version: 1,
+    profiles: {
+      generation: base.profiles.generation,
+      agent: { ...base.profiles.agent, ...profile },
+    },
+  };
+};
+
+it('agent profile 的 temperature、reasoningEffort 与输出预算进入运行时模型配置', () => {
+  const { root, runtime: value } = runtimeFromCatalog(
+    withProfile({ temperature: 0.7, reasoningEffort: 'high', maxOutputTokens: 3_000 }),
+    {},
+  );
+  try {
+    expect(value).toBeDefined();
+    expect(modelOptions(value as DshChatRuntime)).toMatchObject({
+      temperature: 0.7,
+      reasoningEffort: 'high',
+      // 推理 token 与正文共用输出预算，低于 8192 时会大面积截断。
+      maxTokens: 8_192,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('reasoningEffort=off 时预算按 profile 原值，环境变量仍可显式覆盖', () => {
+  const off = runtimeFromCatalog(
+    withProfile({ reasoningEffort: 'off', maxOutputTokens: 3_000 }),
+    {},
+  );
+  const overridden = runtimeFromCatalog(
+    withProfile({ reasoningEffort: 'high', maxOutputTokens: 3_000 }),
+    { LUOOME_DSH_MAX_TOKENS: '12345' },
+  );
+  try {
+    expect(modelOptions(off.runtime as DshChatRuntime)).toMatchObject({
+      reasoningEffort: 'off',
+      maxTokens: 3_000,
+    });
+    expect(modelOptions(overridden.runtime as DshChatRuntime).maxTokens).toBe(12_345);
+  } finally {
+    rmSync(off.root, { recursive: true, force: true });
+    rmSync(overridden.root, { recursive: true, force: true });
+  }
+});
+
 it('自定义 provider 按目录里的 apiKeyEnv 取密钥，忽略 preset 的默认变量', () => {
   const { root, runtime: value } = runtimeFromCatalog(
     catalog('opencode-go', 'OPENCODE_GO_API_KEY'),

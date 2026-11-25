@@ -2,6 +2,7 @@ import {
   attributionHeaders,
   type GenerateOptions,
   LlmAdapter,
+  ReasoningEffortId,
   type StreamChunk,
   ToolCallId,
 } from '@deepseek-ai/dsh-llm';
@@ -78,6 +79,28 @@ export function projectMessages(options: GenerateOptions): JsonValue[] {
   return messages;
 }
 
+const REASONING_EFFORT_LEVELS = ['low', 'medium', 'high', 'max'] as const;
+
+type ModelRoute = Pick<PluginConfig['host']['model'], 'temperature' | 'reasoningEffort'>;
+
+/**
+ * Agent profile 的采样参数 → 供应商请求字段。
+ * `reasoningEffort=off` 时不发推理参数，由供应商保持自身默认。
+ */
+export function projectSampling(
+  options: Pick<GenerateOptions, 'temperature' | 'reasoningEffort'>,
+  model: ModelRoute,
+): { temperature?: number; reasoning_effort?: string } {
+  const temperature = options.temperature ?? model.temperature;
+  const effort =
+    options.reasoningEffort ??
+    (model.reasoningEffort === 'off' ? undefined : model.reasoningEffort);
+  return {
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(effort === undefined ? {} : { reasoning_effort: String(effort) }),
+  };
+}
+
 export class ModelProxyAdapter extends LlmAdapter {
   private calls = 0;
   constructor(
@@ -91,11 +114,25 @@ export class ModelProxyAdapter extends LlmAdapter {
     if (provider !== 'luoome-metered' || model !== this.config.host.model.model) {
       throw new Error('Unapproved model route');
     }
+    const { contextWindow, maxTokens, reasoningEffort } = this.config.host.model;
     return {
       provider,
       id: model,
       name: model,
-      contextWindow: this.config.host.model.contextWindow,
+      contextWindow,
+      defaultMaxTokens: maxTokens,
+      // 声明推理档位后 Host 会把它写进每次 GenerateOptions；off 时保持无推理能力声明。
+      ...(reasoningEffort === 'off'
+        ? {}
+        : {
+            reasoning: {
+              efforts: REASONING_EFFORT_LEVELS.map((level) => ({
+                id: ReasoningEffortId(level),
+                name: level,
+              })),
+              defaultEffort: ReasoningEffortId(reasoningEffort),
+            },
+          }),
     };
   }
 
@@ -124,6 +161,7 @@ export class ModelProxyAdapter extends LlmAdapter {
         stream: true,
         stream_options: { include_usage: true },
         max_tokens: Math.min(options.maxTokens ?? host.model.maxTokens, host.model.maxTokens),
+        ...projectSampling(options, host.model),
         ...(options.tools?.length
           ? {
               tools: options.tools.map((tool) => ({

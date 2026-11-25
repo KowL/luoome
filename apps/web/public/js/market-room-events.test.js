@@ -331,9 +331,7 @@ describe('排序、空态与页头', () => {
       '该交易日没有扩散 / 分化 / 换位事件',
     );
     expect(eventsEmptyText(viewFixture())).toBeNull();
-    expect(eventsMetaText(viewFixture())).toBe(
-      '交易日 2026-09-28 · 共 2 条（扩散 1 / 分化 0 / 换位 1）· 按时间倒序',
-    );
+    expect(eventsMetaText(viewFixture())).toBe('交易日 2026-09-28 · 共 2 条');
     expect(eventsMetaText(null)).toBe('盘中事件 · 刷新失败');
   });
 

@@ -291,7 +291,7 @@ const lookupNode = (card) => {
             ? el(
                 'p',
                 'room-caption muted',
-                `仅展示日涨幅前 ${theme.peers.length} / ${theme.peerCount} 只其他成员`,
+                `前 ${theme.peers.length} / ${theme.peerCount} 只其他成员`,
               )
             : null,
           theme.warnings.length > 0
@@ -320,7 +320,6 @@ const renderCoreStocksPane = (core, { returnTo = null, briefs = null } = {}) => 
     return el('div', 'card room-empty room-core-stocks', [
       el('h2', '', '核心股'),
       el('p', '', empty),
-      el('p', 'room-caption', '页面只读已发布批次；没有样本时不推算角色。'),
     ]);
   }
   const cards = roleCards(core, returnTo);
@@ -345,7 +344,7 @@ const renderCoreStocksPane = (core, { returnTo = null, briefs = null } = {}) => 
     el('div', 'room-core-timeline', [
       el('h3', '', '角色时间线'),
       timeline.length === 0
-        ? el('p', 'room-caption', '所选时点内没有角色变化；只呈现事实，不生成事件。')
+        ? el('p', 'room-caption', '所选时点内没有角色变化')
         : el(
             'ul',
             'room-timeline',
@@ -371,7 +370,7 @@ const renderCoreStocksPane = (core, { returnTo = null, briefs = null } = {}) => 
     el('div', 'room-core-lookups', [
       el('h3', '', '从核心股反查题材'),
       lookups.length === 0
-        ? el('p', 'room-caption', '当前没有核心股可反查；角色为空时不伪造题材归属。')
+        ? el('p', 'room-caption', '当前没有核心股可反查')
         : el('div', 'room-lookup-list', lookups.map(lookupNode)),
     ]),
     el('details', 'room-detail-notes', [

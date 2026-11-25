@@ -1,7 +1,9 @@
 import {
   dateInShanghai,
   type LimitUpLadder,
+  type LimitUpLadderSample,
   ladderOfSample,
+  type MainstreamStockUniverseEntry,
   type MarketSnapshotBatch,
   marketRoomEmptyReason,
   type SectorRankingEmptyReason,
@@ -143,5 +145,53 @@ export const readMarketRoomLimitUp = async (
     return { ladder: aligned, error: null };
   } catch (error) {
     return { ladder: null, error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+/** 当前时点可见的沪深股票目录；回放用 observedAt 不晚于 at 的快照，不拿今天的名称顶替。 */
+export const readMarketRoomStockUniverse = async (
+  ctx: ToolContext,
+  asOf: Date | undefined,
+): Promise<readonly MainstreamStockUniverseEntry[]> => {
+  try {
+    if (asOf === undefined) {
+      const members = await ctx.repos.stockUniverse.listCurrentMembers({
+        coverage: MARKET_ROOM_COVERAGE,
+      });
+      return members.map((member) => ({
+        stockId: member.stock.id,
+        name: member.stock.name,
+        listingStatus: member.listingStatus,
+      }));
+    }
+    const snapshot = await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
+      coverage: MARKET_ROOM_COVERAGE,
+      asOf,
+    });
+    if (snapshot === null) return [];
+    const stocks = await ctx.repos.stockUniverse.listSnapshotMembers(snapshot.id);
+    return stocks.map((stock) => ({
+      stockId: stock.id,
+      name: stock.name,
+      listingStatus: 'listed',
+    }));
+  } catch {
+    return [];
+  }
+};
+
+/** 当日按采样时点保存的天梯样本；缺失时返回空数组，由 core 记录缺失原因。 */
+export const readMarketRoomLadderSamples = async (
+  ctx: ToolContext,
+  tradingDate: string,
+): Promise<{ readonly samples: readonly LimitUpLadderSample[]; readonly error: string | null }> => {
+  try {
+    const samples = await ctx.repos.limitUpLadderSample.listByTradingDate({
+      tradingDate,
+      source: MARKET_ROOM_LIMIT_UP_SOURCE,
+    });
+    return { samples, error: null };
+  } catch (error) {
+    return { samples: [], error: error instanceof Error ? error.message : String(error) };
   }
 };

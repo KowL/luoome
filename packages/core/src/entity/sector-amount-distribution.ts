@@ -6,9 +6,11 @@ import type { MarketSnapshotItem } from './market-snapshot.js';
 import type { MarketSnapshotBatch } from './market-snapshot-batch.js';
 import {
   type SectorCatalogEntry,
+  type SectorConceptScope,
   type SectorKind,
   SectorKindSchema,
   type StockSectorMembership,
+  selectMarketRoomSectorCatalog,
 } from './sector-catalog.js';
 import {
   buildSectorTurnoverMetric,
@@ -171,8 +173,10 @@ export const SectorAmountDistributionSchema = z.object({
   concentration: SectorAmountConcentrationSchema,
   coverage: z.object({
     sectorCount: z.number().int().nonnegative(),
+    catalogSectorCount: z.number().int().nonnegative(),
+    filteredSectorCount: z.number().int().nonnegative(),
     rowCount: z.number().int().nonnegative(),
-    /** 目录里有但没有任何 active 成分、因而未进入榜单的板块数。 */
+    /** 当前视野里有但没有任何 active 成分、因而未进入榜单的板块数。 */
     omittedSectorCount: z.number().int().nonnegative(),
   }),
   rows: z.array(SectorAmountDistributionRowSchema),
@@ -401,6 +405,7 @@ const compareRows = (left: SectorAmountDistributionRow, right: SectorAmountDistr
 export interface SectorAmountDistributionInput {
   readonly kind: SectorKind;
   readonly window: SectorWindowKey;
+  readonly conceptScope?: SectorConceptScope;
   readonly anchor: MarketSnapshotBatch;
   /** 当前窗口起点（锚点 − 窗口分钟）；null 表示当日没有更早批次。 */
   readonly currentStart: MarketSnapshotBatch | null;
@@ -473,9 +478,16 @@ export const buildSectorAmountDistribution = (
     memberIdsBySector.set(membership.sectorId, ids);
   }
 
-  const catalog = input.sectors.filter(
+  const catalogSectorCount = input.sectors.filter(
     (sector) => sector.kind === input.kind && sector.state === 'active',
-  );
+  ).length;
+  const catalog = selectMarketRoomSectorCatalog({
+    sectors: input.sectors.filter(
+      (sector) => sector.kind === input.kind && sector.state === 'active',
+    ),
+    members: input.members,
+    ...(input.conceptScope === undefined ? {} : { conceptScope: input.conceptScope }),
+  });
   let omittedSectorCount = 0;
   const rows: SectorAmountDistributionRow[] = [];
   for (const sector of catalog) {
@@ -543,6 +555,8 @@ export const buildSectorAmountDistribution = (
     }),
     coverage: {
       sectorCount: catalog.length,
+      catalogSectorCount,
+      filteredSectorCount: catalogSectorCount - catalog.length,
       rowCount: ranked.length,
       omittedSectorCount,
     },
@@ -605,7 +619,13 @@ export const buildSectorAmountDistributionEmpty = (input: {
       top: [],
       warnings: [],
     },
-    coverage: { sectorCount: 0, rowCount: 0, omittedSectorCount: 0 },
+    coverage: {
+      sectorCount: 0,
+      catalogSectorCount: 0,
+      filteredSectorCount: 0,
+      rowCount: 0,
+      omittedSectorCount: 0,
+    },
     rows: [],
     notes: [...DISTRIBUTION_NOTES],
   });
@@ -667,6 +687,12 @@ export const assertSectorAmountDistributionInvariants = (
     }
     if (distribution.coverage.rowCount > distribution.coverage.sectorCount) {
       throw new InvariantError('成交分布行数不得超过目录板块数');
+    }
+    if (
+      distribution.coverage.sectorCount + distribution.coverage.filteredSectorCount !==
+      distribution.coverage.catalogSectorCount
+    ) {
+      throw new InvariantError('成交分布精选与过滤计数必须等于原始目录数');
     }
   }
 

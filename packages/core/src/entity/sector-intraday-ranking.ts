@@ -7,9 +7,11 @@ import type { MarketSnapshotItem } from './market-snapshot.js';
 import type { MarketSnapshotBatch } from './market-snapshot-batch.js';
 import {
   type SectorCatalogEntry,
+  type SectorConceptScope,
   type SectorKind,
   SectorKindSchema,
   type StockSectorMembership,
+  selectMarketRoomSectorCatalog,
 } from './sector-catalog.js';
 
 /**
@@ -203,9 +205,14 @@ export const SectorIntradayRankingSchema = z.object({
   turnover: SectorTurnoverWindowSchema,
   limitUp: SectorLimitUpBlockSchema,
   coverage: z.object({
+    /** 当前视野纳入计算的板块数。 */
     sectorCount: z.number().int().nonnegative(),
+    /** 精选过滤前的目录板块数。 */
+    catalogSectorCount: z.number().int().nonnegative(),
+    /** 因非题材标签或完全重复而排除的板块数。 */
+    filteredSectorCount: z.number().int().nonnegative(),
     rowCount: z.number().int().nonnegative(),
-    /** 目录里有但没有任何 active 成分、因而未进入榜单的板块数。 */
+    /** 当前视野里有但没有任何 active 成分、因而未进入榜单的板块数。 */
     omittedSectorCount: z.number().int().nonnegative(),
   }),
   rows: z.array(SectorIntradayRowSchema),
@@ -722,7 +729,7 @@ const ladderCodes = (limitUp: LimitUpLadder | null): ReadonlySet<string> => {
   return codes;
 };
 
-const buildSectorLimitUpMetric = (input: {
+export const buildSectorLimitUpMetric = (input: {
   readonly members: readonly StockSectorMembership[];
   readonly block: SectorLimitUpBlock;
   readonly codes: ReadonlySet<string>;
@@ -769,6 +776,7 @@ export interface SectorIntradayRankingInput {
   readonly kind: SectorKind;
   readonly sort: SectorIntradaySort;
   readonly window: SectorWindowKey;
+  readonly conceptScope?: SectorConceptScope;
   readonly anchor: MarketSnapshotBatch;
   readonly windowStarts: Readonly<Record<SectorWindowKey, MarketSnapshotBatch | null>>;
   readonly sectors: readonly SectorCatalogEntry[];
@@ -837,7 +845,13 @@ export const buildSectorIntradayEmptyRanking = (input: {
       method: LIMIT_UP_METHOD,
       warnings: [],
     },
-    coverage: { sectorCount: 0, rowCount: 0, omittedSectorCount: 0 },
+    coverage: {
+      sectorCount: 0,
+      catalogSectorCount: 0,
+      filteredSectorCount: 0,
+      rowCount: 0,
+      omittedSectorCount: 0,
+    },
     rows: [],
     notes: [...RANKING_NOTES],
   });
@@ -912,9 +926,16 @@ export const buildSectorIntradayRanking = (
       ? { starts: itemMap(prior.start), members: groupMembers(prior.members) }
       : null;
 
-  const catalog = input.sectors.filter(
+  const catalogSectorCount = input.sectors.filter(
     (sector) => sector.kind === input.kind && sector.state === 'active',
-  );
+  ).length;
+  const catalog = selectMarketRoomSectorCatalog({
+    sectors: input.sectors.filter(
+      (sector) => sector.kind === input.kind && sector.state === 'active',
+    ),
+    members: input.members,
+    ...(input.conceptScope === undefined ? {} : { conceptScope: input.conceptScope }),
+  });
   let omittedSectorCount = 0;
   const rows: SectorIntradayRow[] = [];
   for (const sector of catalog) {
@@ -998,6 +1019,8 @@ export const buildSectorIntradayRanking = (
     limitUp: limitUpBlock,
     coverage: {
       sectorCount: catalog.length,
+      catalogSectorCount,
+      filteredSectorCount: catalogSectorCount - catalog.length,
       rowCount: ranked.length,
       omittedSectorCount,
     },
@@ -1057,6 +1080,15 @@ export const assertSectorIntradayRankingInvariants = (ranking: SectorIntradayRan
     }
     if (ranking.rows.length !== ranking.coverage.rowCount) {
       throw new InvariantError('sector ranking 行数必须与覆盖统计一致');
+    }
+    if (
+      ranking.coverage.sectorCount + ranking.coverage.filteredSectorCount !==
+      ranking.coverage.catalogSectorCount
+    ) {
+      throw new InvariantError('sector ranking 精选与过滤计数必须等于原始目录数');
+    }
+    if (ranking.coverage.rowCount > ranking.coverage.sectorCount) {
+      throw new InvariantError('sector ranking 行数不得超过当前视野板块数');
     }
   }
 

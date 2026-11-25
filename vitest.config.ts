@@ -39,6 +39,7 @@ export default defineConfig({
       'apps/web/src/server.test.ts',
       'apps/web/src/server-background-scheduler.test.ts',
       'apps/web/src/chat-draft-limit.test.ts',
+      'apps/web/src/chat-instructions.test.ts',
       'apps/web/src/routes/stock-brief.test.ts',
       'apps/web/src/workspace.test.ts',
       'apps/web/src/data-transfer.test.ts',

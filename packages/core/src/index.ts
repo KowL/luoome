@@ -21,6 +21,8 @@ export * from './entity/limit-up-board-history.js';
 export * from './entity/limit-up-ladder.js';
 export * from './entity/limit-up-ladder-sample.js';
 export * from './entity/limit-up-market.js';
+export * from './entity/mainstream-theme-stocks.js';
+export * from './entity/mainstream-themes.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
 export * from './entity/market-room-core-stocks.js';

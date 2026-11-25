@@ -14,6 +14,7 @@ import {
   roomHash,
   roomTabFromHash,
   sectorBreadthText,
+  sectorCoverageText,
   sectorDetailFacts,
   sectorDetailNotes,
   sectorEmptyText,
@@ -23,6 +24,7 @@ import {
   sectorQuery,
   sectorRowCells,
   sectorSampleText,
+  sectorVisibleRows,
   windowSpanText,
 } from './market-room.js';
 
@@ -224,9 +226,7 @@ describe('空态与页头文案', () => {
       },
     };
     expect(emptyStateText(ready)).toBeNull();
-    expect(overviewMetaText(ready)).toBe(
-      '沪深 A 股 · 交易日 2026-09-28 · 数据时点 10:15 · 行情时间 上游未提供 · 抓取时间 缺失',
-    );
+    expect(overviewMetaText(ready)).toBe('沪深 A 股 · 交易日 2026-09-28 · 数据时点 10:15');
     expect(
       overviewMetaText({ state: 'empty', emptyReason: 'non_trading_day', latestBatch: null }),
     ).toBe('');
@@ -375,6 +375,7 @@ describe('板块追踪深链接与请求参数', () => {
       kind: 'industry',
       sort: 'day',
       window: 'w15',
+      conceptScope: 'focused',
       at: null,
     });
     expect(
@@ -383,21 +384,45 @@ describe('板块追踪深链接与请求参数', () => {
       kind: 'concept',
       sort: 'window5',
       window: 'w5',
+      conceptScope: 'focused',
       at: null,
     });
     expect(sectorParamsFromHash('#market-room?tab=sectors&kind=futures&sort=amount')).toEqual({
       kind: 'industry',
       sort: 'day',
       window: 'w15',
+      conceptScope: 'focused',
       at: null,
     });
   });
 
-  it('请求路径与深链接互相对应，口径显式带在 URL 上', () => {
-    const params = { kind: 'concept', sort: 'window15', window: 'w5' };
-    expect(sectorQuery(params)).toBe('?kind=concept&sort=window15&window=w5');
-    expect(sectorHash(params)).toBe('market-room?tab=sectors&kind=concept&sort=window15&window=w5');
+  it('请求路径与深链接互相对应，口径与题材视野显式带在 URL 上', () => {
+    const params = { kind: 'concept', sort: 'window15', window: 'w5', conceptScope: 'all' };
+    expect(sectorQuery(params)).toBe('?kind=concept&sort=window15&window=w5&conceptScope=all');
+    expect(sectorHash(params)).toBe(
+      'market-room?tab=sectors&kind=concept&sort=window15&window=w5&conceptScope=all',
+    );
     expect(sectorQuery(sectorParamsFromHash(`#${sectorHash(params)}`))).toBe(sectorQuery(params));
+  });
+
+  it('精选与全部题材都不截断，只显示过滤计数', () => {
+    const rows = Array.from({ length: 85 }, (_, index) => sectorRow({ name: `题材${index}` }));
+    const ranking = sectorRanking({
+      kind: 'concept',
+      coverage: {
+        sectorCount: 85,
+        catalogSectorCount: 390,
+        filteredSectorCount: 305,
+        rowCount: 85,
+        omittedSectorCount: 0,
+      },
+      rows,
+    });
+    const focused = { kind: 'concept', conceptScope: 'focused' };
+    expect(sectorVisibleRows(ranking, focused)).toHaveLength(85);
+    expect(sectorCoverageText(ranking, focused)).toContain('共 85 个题材');
+    expect(sectorCoverageText(ranking, focused)).toContain('原始目录 390');
+    expect(sectorVisibleRows(ranking, { ...focused, conceptScope: 'all' })).toHaveLength(85);
   });
 });
 
@@ -546,7 +571,7 @@ describe('统一时间轴（ticket #43）', () => {
     );
     expect(params.at).toEqual(at);
     expect(sectorQuery(params)).toBe(
-      '?kind=concept&sort=day&window=w15&at=2026-09-28T02%3A15%3A00.000Z',
+      '?kind=concept&sort=day&window=w15&conceptScope=focused&at=2026-09-28T02%3A15%3A00.000Z',
     );
     const hash = sectorHash(params);
     expect(hash).toContain('at=2026-09-28T02%3A15%3A00.000Z');

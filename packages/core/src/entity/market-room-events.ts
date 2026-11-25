@@ -12,6 +12,7 @@ import {
   type SectorKind,
   SectorKindSchema,
   type StockSectorMembership,
+  selectMarketRoomSectorCatalog,
 } from './sector-catalog.js';
 
 /**
@@ -625,9 +626,12 @@ const buildContext = (input: MarketRoomEventScanInput): ScanContext => {
     list.push(membership);
     membersBySector.set(membership.sectorId, list);
   }
-  const activeSectors = input.sectors.filter(
-    (sector) => sector.state === 'active' && (membersBySector.get(sector.id)?.length ?? 0) > 0,
-  );
+  const activeSectors = selectMarketRoomSectorCatalog({
+    sectors: input.sectors.filter(
+      (sector) => sector.state === 'active' && (membersBySector.get(sector.id)?.length ?? 0) > 0,
+    ),
+    members: input.members,
+  });
   const breadthBySample = samples.map((sample) => {
     const facts = new Map<string, BreadthFacts>();
     for (const sector of activeSectors) {

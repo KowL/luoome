@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { FakeLLMAdapter, FakeMarketAdapter, TEST_STOCKS } from '@luoome/adapters/testing';
 import { money } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
+import type { ReasoningEffort } from '@luoome/dsh-bridge/runtime-config';
 import { buildContext, discoverExternalMcpTools } from '@luoome/tools';
 import { McpSettingsStore } from '../mcp-settings.js';
 import { createWebApp } from '../server.js';
@@ -36,6 +37,12 @@ export const createDshIntegrationFixture = async (
     readonly control?: DshRuntimeControl;
     /** 共享灰度门控；可在测试中 update 验证回退。 */
     readonly rollout?: DshRolloutGate;
+    /** Agent profile 的采样参数；用于验证它们真的到达供应商请求体。 */
+    readonly modelParams?: {
+      readonly temperature?: number;
+      readonly reasoningEffort?: ReasoningEffort;
+      readonly maxTokens?: number;
+    };
   } = {},
 ) => {
   const nodePath = Bun.which('node');
@@ -249,7 +256,13 @@ export const createDshIntegrationFixture = async (
       model: {
         endpoint: 'https://provider.example.test/v1/chat/completions',
         model: modelOverrides.model ?? 'deepseek-chat',
-        maxTokens: modelOverrides.maxTokens ?? 1024,
+        maxTokens: modelOverrides.maxTokens ?? options.modelParams?.maxTokens ?? 1024,
+        ...(options.modelParams?.temperature === undefined
+          ? {}
+          : { temperature: options.modelParams.temperature }),
+        ...(options.modelParams?.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: options.modelParams.reasoningEffort }),
         headers: { authorization: 'Bearer fixture-only-provider-key' },
         fetch: providerFetch,
         ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),

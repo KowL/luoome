@@ -24,13 +24,18 @@ import {
   amountQuery,
   renderAmountPane,
 } from './market-room-amount.js';
-import { amountMeter, rotationBoard } from './market-room-board.js';
+import { amountBlock } from './market-room-board.js';
 import {
   eventsMetaText,
   eventsParamsFromHash,
   fetchRoomEvents,
   renderEventsPane,
 } from './market-room-events.js';
+import {
+  fetchMainstream,
+  mainstreamParamsFromHash,
+  renderMainstreamPane,
+} from './market-room-mainstream.js';
 import {
   hashWithoutReplayAt,
   replayAtFromHash,
@@ -65,6 +70,8 @@ const SECTOR_SORTS = ['day', 'window5', 'window15'];
 const SECTOR_SORT_LABELS = { day: '日涨幅', window5: '5 分钟', window15: '15 分钟' };
 const SECTOR_WINDOWS = ['w5', 'w15'];
 const SECTOR_WINDOW_LABELS = { w5: '5 分钟', w15: '15 分钟' };
+const SECTOR_CONCEPT_SCOPES = ['focused', 'all'];
+const SECTOR_CONCEPT_SCOPE_LABELS = { focused: '精选题材', all: '全部题材' };
 
 const SECTOR_EMPTY_TEXTS = {
   no_batch: '尚无已发布的盘中批次',
@@ -91,7 +98,6 @@ const EMPTY_STATE_TEXTS = {
 };
 
 const COVERAGE_LABELS = { CN_A_SHARES_SH_SZ: '沪深 A 股', CN_A_SHARES_BJ: '北交所' };
-
 const REFRESH_MS = 60_000;
 const ROOM_DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
@@ -131,17 +137,18 @@ const sectorParamsFromHash = (hash = window.location.hash) => {
     kind: pickParam(params, 'kind', SECTOR_KINDS, 'industry'),
     sort: pickParam(params, 'sort', SECTOR_SORTS, 'day'),
     window: pickParam(params, 'window', SECTOR_WINDOWS, 'w15'),
+    conceptScope: pickParam(params, 'conceptScope', SECTOR_CONCEPT_SCOPES, 'focused'),
     at: replayAtFromHash(hash),
   };
 };
 
 /** 板块榜请求路径（纯函数，便于单测）：口径与回放时点全部显式带上。 */
 const sectorQuery = (params) =>
-  `?kind=${encodeURIComponent(params.kind)}&sort=${encodeURIComponent(params.sort)}&window=${encodeURIComponent(params.window)}${replayQuerySuffix(params.at)}`;
+  `?kind=${encodeURIComponent(params.kind)}&sort=${encodeURIComponent(params.sort)}&window=${encodeURIComponent(params.window)}${params.kind === 'concept' ? `&conceptScope=${encodeURIComponent(params.conceptScope ?? 'focused')}` : ''}${replayQuerySuffix(params.at)}`;
 
 /** 板块追踪深链接：切换口径时只改 hash，保留统一时间轴的 at。 */
 const sectorHash = (params) =>
-  `market-room?tab=sectors&kind=${params.kind}&sort=${params.sort}&window=${params.window}${replayHashSuffix(params.at)}`;
+  `market-room?tab=sectors&kind=${params.kind}&sort=${params.sort}&window=${params.window}${params.kind === 'concept' ? `&conceptScope=${params.conceptScope ?? 'focused'}` : ''}${replayHashSuffix(params.at)}`;
 
 /** 视图切换：保留同一个回放时点，四个视图跟随同一个 at。 */
 const roomHash = (tab, at = null) => `market-room?tab=${tab}${replayHashSuffix(at)}`;
@@ -222,7 +229,7 @@ const overviewMetaText = (overview) => {
   if (overview?.state === 'empty') return '';
   const coverage = overview?.coverage?.value;
   if (coverage === undefined) return '数据时点未知';
-  return `${coverageLabel(coverage.coverage)} · 交易日 ${coverage.tradingDate} · 数据时点 ${fmtClock(coverage.sampledAt)} · 行情时间 ${fmtClock(coverage.dataAsOf, '上游未提供', true)} · 抓取时间 ${fmtClock(coverage.fetchedAt, '缺失', true)}`;
+  return `${coverageLabel(coverage.coverage)} · 交易日 ${coverage.tradingDate} · 数据时点 ${fmtClock(coverage.sampledAt)}`;
 };
 
 const missingReasonText = (dimension) => dimension?.warnings?.[0] ?? '该维度暂不可用';
@@ -352,164 +359,128 @@ const sectorMetaText = (ranking) => {
 const statusBadge = (status) =>
   el('span', `room-status room-status-${status}`, dimensionStatusLabel(status));
 
-const dimensionNote = (dimension) => {
-  if (dimension === undefined || dimension.status === 'complete') return null;
-  return el(
-    'ul',
-    'room-warnings',
-    dimension.warnings.map((warning) => el('li', '', warning)),
-  );
+/** 只有部分维度不完整时才挂状态胶囊，完整时页面上不出现标签。 */
+const boardStatus = (dimensions) => {
+  const statuses = dimensions.map((dimension) => dimension?.status ?? 'complete');
+  if (statuses.includes('unavailable')) return 'unavailable';
+  if (statuses.includes('partial')) return 'partial';
+  return null;
 };
 
-const fact = (label, value) =>
-  el('div', 'room-fact', [el('span', 'label', label), el('span', 'value', value ?? '缺失')]);
-
-const dataAsOfNote = (value) =>
-  value.dataAsOf === undefined
-    ? ' · 上游未提供行情时间'
-    : ` · 行情时间 ${fmtClock(value.dataAsOf, '上游未提供', true)}`;
-
-const coverageCard = (coverage) => {
-  const value = coverage.value;
-  const body =
-    value === undefined
-      ? [el('p', 'placeholder', missingReasonText(coverage))]
-      : [
-          el('div', 'room-facts', [
-            fact('覆盖范围', coverageLabel(value.coverage)),
-            fact('交易日', value.tradingDate),
-            fact('数据时点', fmtClock(value.sampledAt)),
-            fact('采集间隔', '1 分钟'),
-            fact('样本', `${value.receivedCount} / 期望 ${value.expectedCount}`),
-            fact('缺失 / 重复', `${value.missingCount} / ${value.duplicateCount}`),
-            fact('来源', value.source),
-          ]),
-          el(
-            'p',
-            'room-caption',
-            `抓取于 ${fmtClock(value.fetchedAt, '缺失', true)}${dataAsOfNote(value)}`,
-          ),
-        ];
-  return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [el('h2', '', '数据时点与覆盖'), el('div', 'card-meta', '最近已发布批次')]),
-      statusBadge(coverage.status),
-    ]),
-    ...body,
-    value?.source === 'fuyao'
-      ? el('p', 'room-caption', '行情时间取各分页最新上游时间中的最早值。')
-      : null,
-    dimensionNote(coverage),
-  ]);
-};
-
-const indexRow = (indexes) => {
-  if (indexes.value === undefined) return el('p', 'placeholder', missingReasonText(indexes));
-  return el(
-    'div',
-    'room-index-row',
-    indexes.value.values.map((entry) =>
-      el('div', 'room-index', [
-        el('span', 'name', entry.name),
-        el(
-          'span',
-          `value ${entry.changePct > 0 ? 'text-pos' : entry.changePct < 0 ? 'text-neg' : 'muted'}`,
-          fmtPctOrDash(entry.changePct, true),
-        ),
-      ]),
+const boardNotes = (dimensions) => {
+  const notes = [
+    ...new Set(
+      dimensions
+        .filter((dimension) => dimension !== undefined && dimension.status !== 'complete')
+        .flatMap((dimension) => dimension.warnings ?? [])
+        .filter((note) => typeof note === 'string' && note.length > 0),
     ),
-  );
-};
-
-const breadthCard = (overview) => {
-  const breadth = overview.breadth;
-  const value = breadth.value;
-  const children = [indexRow(overview.indexes)];
-  if (value === undefined) {
-    children.push(el('p', 'placeholder', missingReasonText(breadth)));
-  } else {
-    const divergence = divergenceText(value);
-    children.push(
-      el('div', 'room-breadth-row', [
-        el('span', 'text-pos', `上涨 ${value.advancing}`),
-        el('span', 'text-neg', `下跌 ${value.declining}`),
-        el('span', 'muted', `平 ${value.unchanged}`),
-        el('span', 'room-median', breadthMedianText(value)),
-      ]),
-      el('p', 'room-caption', breadthSampleText(value)),
-    );
-    if (divergence !== null) {
-      children.push(
-        el('p', value.divergence.divergent ? 'room-divergence' : 'room-caption', divergence),
-      );
-    }
-  }
-  return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [
-        el('h2', '', '指数与个股宽度'),
-        el('div', 'card-meta', '指数为实时行情 · 宽度与中位数来自批次样本'),
-      ]),
-      statusBadge(breadth.status),
-    ]),
-    ...children,
-    dimensionNote(overview.indexes),
-    dimensionNote(breadth),
+  ];
+  if (notes.length === 0) return null;
+  return el('details', 'room-detail-notes', [
+    el('summary', '', `口径与缺失说明（${notes.length} 条）`),
+    el(
+      'ul',
+      'room-warnings',
+      notes.map((note) => el('li', '', note)),
+    ),
   ]);
 };
 
-const limitUpCard = (limitUp) => {
-  const value = limitUp.value;
-  return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [
-        el('h2', '', '短线情绪'),
-        el('div', 'card-meta', '复用 A 股情绪契约，不重算'),
-      ]),
-      statusBadge(limitUp.status),
-    ]),
-    value === undefined
-      ? el('p', 'placeholder', missingReasonText(limitUp))
-      : el('div', 'room-facts', [
-          fact('封板家数', `${value.sealedCount}`),
-          fact('当前炸板', value.brokenCount === null ? '缺失' : `${value.brokenCount}`),
-          fact('最高连板', value.maxLadderLevel > 0 ? `${value.maxLadderLevel} 板` : '无连板'),
-        ]),
-    dimensionNote(limitUp),
+/** 盘面卡的一个指标：标签（小字）在上、数字在下，颜色只表达涨跌。 */
+const statItem = (label, value, tone = '') =>
+  el('div', 'room-stat', [
+    el('span', 'room-stat-label', label),
+    el('span', `room-stat-value mono ${tone}`.trim(), value),
   ]);
+
+const toneOf = (value) => {
+  if (!Number.isFinite(value)) return '';
+  return value > 0 ? 'text-pos' : value < 0 ? 'text-neg' : 'muted';
 };
 
-/**
- * 分时卡要显示当日涨跌幅，用总览里已有的指数快照补上，
- * 不为 4 张卡片再开一个报价请求（上游已在限流）。
- */
 const indexMinutesCard = (overview) => {
   const element = el('room-index-minutes');
   element.indexes = overview.indexes?.value?.values ?? [];
   return element;
 };
 
-const renderOverviewPane = (overview, at, ranking, distribution) => {
+/** 宽度与短线情绪并成一行指标；样本口径与背离文案进 tooltip，不占版面。 */
+const breadthStats = (overview) => {
+  const breadth = overview.breadth;
+  const limitUp = overview.limitUp;
+  const value = breadth.value;
+  if (value === undefined) {
+    return [el('p', 'room-missing', missingReasonText(breadth))];
+  }
+  const median = value.medianChangePct;
+  const medianNode = statItem('中位数', fmtPctOrDash(median, true), toneOf(median));
+  medianNode.title = [breadthMedianText(value), breadthSampleText(value)]
+    .filter((text) => text !== null)
+    .join(' · ');
+  const stats = [
+    statItem('上涨', `${value.advancing}`, 'text-pos'),
+    statItem('下跌', `${value.declining}`, 'text-neg'),
+    statItem('平', `${value.unchanged}`, 'muted'),
+    medianNode,
+  ];
+  const divergence = value.divergence;
+  if (divergence !== undefined && divergence !== null) {
+    const node = statItem(
+      '指数 / 个股',
+      divergence.divergent ? '背离' : '同向',
+      divergence.divergent ? 'room-warn' : 'muted',
+    );
+    node.title = divergenceText(value) ?? '';
+    stats.push(node);
+  }
+  if (limitUp.value === undefined) {
+    stats.push(el('p', 'room-missing', missingReasonText(limitUp)));
+    return stats;
+  }
+  stats.push(
+    statItem('封板', `${limitUp.value.sealedCount}`, 'text-pos'),
+    statItem(
+      '炸板',
+      limitUp.value.brokenCount === null ? '缺失' : `${limitUp.value.brokenCount}`,
+      limitUp.value.brokenCount === null ? 'room-missing' : '',
+    ),
+    statItem(
+      '最高连板',
+      limitUp.value.maxLadderLevel > 0 ? `${limitUp.value.maxLadderLevel} 板` : '无连板',
+    ),
+  );
+  return stats;
+};
+
+/** 总览第一张卡：成交额 + 指数分时 + 宽度 + 短线情绪，同一批次同一时点。 */
+const boardCard = (overview, at) => {
+  const dimensions = [overview.amount, overview.breadth, overview.limitUp, overview.indexes];
+  const status = boardStatus(dimensions);
+  const stats = el('div', 'room-board-stats', breadthStats(overview));
+  const counts = breadthCountsText(overview.breadth?.value);
+  if (counts !== null) stats.setAttribute('aria-label', counts);
+  return el('section', `card room-board${at === null ? '' : ' room-board-flat'}`, [
+    el('div', 'card-header', [el('h2', '', '盘面'), status === null ? null : statusBadge(status)]),
+    amountBlock(overview.amount),
+    at === null ? el('div', 'room-board-minutes', indexMinutesCard(overview)) : null,
+    stats,
+    boardNotes(dimensions),
+  ]);
+};
+
+const renderOverviewPane = (overview, at, mainstream, mainstreamParams, stockBoard) => {
   const empty = emptyStateText(overview);
   if (empty !== null) {
     const replayNotice = overview?.emptyReason === 'no_batch' ? replayEmptyNotice(at) : null;
     return el('div', 'card room-empty', [
       el('h2', '', replayNotice === null ? '当日盘面尚未开始' : '该时点不可回放'),
       el('p', '', replayNotice ?? empty),
-      el(
-        'p',
-        'room-caption',
-        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
-      ),
     ]);
   }
   return el('div', 'room-overview', [
-    amountMeter(overview.amount, overview.latestBatch),
-    at === null ? el('div', 'card room-overview-minutes', indexMinutesCard(overview)) : null,
-    rotationBoard(ranking, distribution, at),
-    coverageCard(overview.coverage),
-    breadthCard(overview),
-    limitUpCard(overview.limitUp),
+    boardCard(overview, at),
+    renderMainstreamPane(mainstream, stockBoard, mainstreamParams),
   ]);
 };
 
@@ -541,6 +512,28 @@ const sectorKindSwitch = (params) => {
   return group;
 };
 
+const sectorConceptScopeSwitch = (params) => {
+  const buttons = SECTOR_CONCEPT_SCOPES.map((conceptScope) => {
+    const button = el(
+      'button',
+      'btn btn-outline btn-sm',
+      SECTOR_CONCEPT_SCOPE_LABELS[conceptScope],
+    );
+    button.type = 'button';
+    button.classList.toggle('active', params.conceptScope === conceptScope);
+    button.setAttribute('aria-pressed', String(params.conceptScope === conceptScope));
+    button.addEventListener('click', () => {
+      if (params.conceptScope === conceptScope) return;
+      window.location.hash = sectorHash({ ...params, conceptScope });
+    });
+    return button;
+  });
+  const group = el('div', 'room-kind-switch', buttons);
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', '题材视野');
+  return group;
+};
+
 const missingCell = (metric, className = 'num') => {
   const cell = el('td', `${className} room-missing`, '缺失');
   cell.title = sectorMissingText(metric);
@@ -561,11 +554,14 @@ const sectorDetailRow = (row, ranking) => {
   const notes = sectorDetailNotes(row, ranking);
   const cell = el('td', '', [
     el('div', 'room-facts', facts),
-    el(
-      'ul',
-      'room-warnings',
-      notes.map((note) => el('li', '', note)),
-    ),
+    el('details', 'room-detail-notes', [
+      el('summary', '', `口径与缺失说明（${notes.length} 条）`),
+      el(
+        'ul',
+        'room-warnings',
+        notes.map((note) => el('li', '', note)),
+      ),
+    ]),
   ]);
   cell.colSpan = 8;
   return el('tr', 'room-sector-detail', cell);
@@ -580,10 +576,8 @@ const sectorRowPair = (row, ranking, params) => {
     el('span', 'room-sector-name', row.name),
     el('span', 'cell-sub muted', `${SECTOR_KIND_LABELS[row.kind] ?? row.kind} · ${row.vendorCode}`),
   ]);
-  const breadthCell = el('td', 'num', [
-    el('span', '', cells.breadth),
-    el('span', 'cell-sub muted', cells.breadthSub),
-  ]);
+  const breadthCell = el('td', 'num room-sector-breadth', cells.breadth);
+  breadthCell.title = cells.breadthSub;
   const limitUpCell =
     cells.limitUp === null ? missingCell(row.limitUp) : el('td', 'num', cells.limitUp);
   const turnoverCell =
@@ -622,6 +616,16 @@ const sectorRowPair = (row, ranking, params) => {
   return expanded ? [main, sectorDetailRow(row, ranking)] : [main];
 };
 
+const sectorVisibleRows = (ranking) => ranking.rows;
+
+const sectorCoverageText = (ranking, params) => {
+  const catalogCount = ranking.coverage.catalogSectorCount ?? ranking.coverage.sectorCount;
+  if (params.kind === 'concept' && params.conceptScope === 'focused') {
+    return `共 ${ranking.coverage.rowCount} 个题材（精选口径；原始目录 ${catalogCount} 个，已过滤 ${ranking.coverage.filteredSectorCount ?? 0} 个非题材标签或完全重复项）`;
+  }
+  return `共 ${ranking.coverage.rowCount} 个板块（目录 ${ranking.coverage.sectorCount} 个，${ranking.coverage.omittedSectorCount} 个无 active 成分未列出）`;
+};
+
 const sectorTable = (ranking, params) => {
   const head = el('thead', '', [
     el('tr', '', [
@@ -638,19 +642,12 @@ const sectorTable = (ranking, params) => {
   const body = el(
     'tbody',
     '',
-    ranking.rows.flatMap((row) => sectorRowPair(row, ranking, params)),
+    sectorVisibleRows(ranking).flatMap((row) => sectorRowPair(row, ranking, params)),
   );
   const table = el('table', 'table room-sector-table', [head, body]);
   const wrap = el('div', 'table-wrap', table);
   return wrap;
 };
-
-const sectorWindowStrip = (ranking) =>
-  el('div', 'room-window-strip', [
-    el('span', 'label', '窗口'),
-    el('span', 'value mono', windowSpanText(ranking.windows.w5)),
-    el('span', 'value mono', windowSpanText(ranking.windows.w15)),
-  ]);
 
 const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
   if (ranking === null || ranking === undefined) {
@@ -665,11 +662,6 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
     return el('div', 'card room-empty', [
       el('h2', '', replayNotice === null ? '板块榜尚未就绪' : '该时点不可回放'),
       el('p', '', replayNotice ?? empty),
-      el(
-        'p',
-        'room-caption',
-        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
-      ),
     ]);
   }
   const sampledAt = ranking.anchor === null ? '--' : fmtClock(ranking.anchor.sampledAt);
@@ -682,48 +674,36 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
       el('div', 'card-header', [
         el('div', null, [
           el('h2', '', '板块盘中榜'),
-          el(
-            'div',
-            'card-meta',
-            `数据时点 ${sampledAt} · 排序 ${SECTOR_SORT_LABELS[ranking.sort] ?? ranking.sort} · 点表头切换口径`,
-          ),
+          el('div', 'card-meta', `数据时点 ${sampledAt}`),
         ]),
-        sectorKindSwitch(params),
+        el('div', 'room-sector-controls', [
+          sectorKindSwitch(params),
+          params.kind === 'concept' ? sectorConceptScopeSwitch(params) : null,
+        ]),
       ]),
-      sectorWindowStrip(ranking),
       sectorTable(ranking, params),
-      el(
-        'p',
-        'room-caption',
-        `共 ${ranking.coverage.rowCount} 个板块（目录 ${ranking.coverage.sectorCount} 个，${ranking.coverage.omittedSectorCount} 个无 active 成分未列出）`,
-      ),
+      sectorScopeNotes(ranking, params),
     ]),
     detailSlot,
-    el('div', 'card room-card', [
-      el('div', 'card-header', [
-        el('div', null, [
-          el('h2', '', '口径说明'),
-          el('div', 'card-meta', '概念成分可重叠，占比不可加总'),
-        ]),
-        el(
-          'span',
-          `room-status room-status-${ranking.turnover.status}`,
-          DIMENSION_STATUS_LABELS[ranking.turnover.status] ?? '缺失',
-        ),
-      ]),
-      ranking.turnover.reason === null
-        ? el(
-            'p',
-            'room-caption',
-            `全市场分母 ${formatAmount(ranking.turnover.marketAmountDelta ?? 0)}（去重 ${ranking.turnover.marketSampleCount} / ${ranking.turnover.marketTotalCount} 只）`,
-          )
-        : el('p', 'placeholder', ranking.turnover.reason),
-      el(
-        'ul',
-        'room-warnings',
-        ranking.notes.map((note) => el('li', '', note)),
-      ),
-    ]),
+  ]);
+};
+
+/** 榜单口径不铺在页面上：分母、覆盖与缺失原因一并折叠，展开才能核对。 */
+const sectorScopeNotes = (ranking, params) => {
+  const denominator =
+    ranking.turnover.reason === null
+      ? `全市场分母 ${formatAmount(ranking.turnover.marketAmountDelta ?? 0)}（去重 ${ranking.turnover.marketSampleCount} / ${ranking.turnover.marketTotalCount} 只）`
+      : ranking.turnover.reason;
+  const lines = [denominator, sectorCoverageText(ranking, params), ...ranking.notes].filter(
+    (line) => typeof line === 'string' && line.length > 0,
+  );
+  return el('details', 'room-detail-notes', [
+    el('summary', '', `口径与缺失说明（${lines.length} 条）`),
+    el(
+      'ul',
+      'room-warnings',
+      lines.map((line) => el('li', '', line)),
+    ),
   ]);
 };
 
@@ -765,7 +745,7 @@ const refreshSectors = async (
   const returnTo = window.location.hash.replace(/^#/, '');
   const ranking = await fetchSectors(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-  const cacheKey = replayCacheKey(params.at);
+  const cacheKey = `${params.kind}:${params.conceptScope}:${replayCacheKey(params.at)}`;
   if (ranking !== null) {
     roomSectorRanking = ranking;
     roomSectorRankingKey = cacheKey;
@@ -837,7 +817,7 @@ const refreshAmount = async (epoch, setStatus, params = amountParamsFromHash()) 
   if (section === null) return;
   const distribution = await fetchAmount(params);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-  const cacheKey = replayCacheKey(params.at);
+  const cacheKey = `${params.kind}:${params.conceptScope}:${replayCacheKey(params.at)}`;
   if (distribution !== null) {
     roomAmountDistribution = distribution;
     roomAmountDistributionKey = cacheKey;
@@ -917,12 +897,7 @@ const ensureShell = (section) => {
   tabs.setAttribute('role', 'tablist');
   tabs.setAttribute('aria-label', '作战室视图');
   mount(section, [
-    el('div', 'route-header room-head', [
-      el('div', null, [
-        el('h1', '', '作战室'),
-      ]),
-      tabs,
-    ]),
+    el('div', 'route-header room-head', [el('div', null, [el('h1', '', '作战室')]), tabs]),
     el('p', 'room-meta', '--'),
     replayBar(),
     el('div', 'room-pane'),
@@ -969,13 +944,10 @@ const setMeta = (section, text) => {
   if (meta !== null) meta.textContent = text;
 };
 
-const renderOverview = (section, overview, at, ranking, distribution) => {
+const renderOverview = (section, overview, at, mainstream, stockBoard) => {
   const pane = section.querySelector('.room-pane');
   if (pane === null) return;
-  const boardScroll = pane.querySelector('.room-board-grid')?.scrollTop ?? 0;
-  mount(pane, renderOverviewPane(overview, at, ranking, distribution));
-  const board = pane.querySelector('.room-board-grid');
-  if (board) board.scrollTop = boardScroll;
+  mount(pane, renderOverviewPane(overview, at, mainstream, mainstreamParamsFromHash(), stockBoard));
   setMeta(section, overviewMetaText(overview));
 };
 
@@ -1006,18 +978,19 @@ const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
     return;
   }
   const anchor = overview.latestBatch?.sampledAt;
-  let ranking, distribution;
+  let mainstream = null;
+  let stockBoard = null;
   if (overview.state === 'ready' && anchor) {
-    const query = `kind=concept&window=w15&at=${encodeURIComponent(anchor)}`;
-    const [sectors, amounts] = await Promise.all([
-      callApi(`/api/market/room/sectors?leaders=1&${query}`, { timeoutMs: 20000 }),
-      callApi(`/api/market/room/amount-distribution?${query}`, { timeoutMs: 20000 }),
-    ]);
+    const params = mainstreamParamsFromHash();
+    const fetched = await fetchMainstream({ ...params, at: anchor });
     if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-    ranking = sectors.data?.ranking;
-    distribution = amounts.data?.distribution;
+    mainstream = fetched?.mainstream ?? null;
+    stockBoard = fetched?.stockBoard ?? null;
   }
-  renderOverview(section, overview, at, ranking, distribution);
+  // 刷新不跳顶：先记录滚动位置，渲染后恢复；展开题材与弹窗股票由 hash 保持。
+  const scrollTop = window.scrollY;
+  renderOverview(section, overview, at, mainstream, stockBoard);
+  if (window.scrollY !== scrollTop) window.scrollTo({ top: scrollTop, left: 0 });
 };
 
 const stopTimer = () => {
@@ -1025,16 +998,31 @@ const stopTimer = () => {
   roomTimer = null;
 };
 
+const refreshCurrentTab = (setStatus) => {
+  if (document.visibilityState !== 'visible') return;
+  if (roomSection()?.hidden !== false) return;
+  const tab = roomTabFromHash();
+  if (tab === 'overview') void refreshOverview(roomEpoch, setStatus, replayAtFromHash());
+  else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
+  else if (tab === 'turnover') void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
+  else void refreshEvents(roomEpoch, setStatus, eventsParamsFromHash());
+};
+
+let visibilityBound = false;
+
+/** 重新可见时立即刷新一次，不等下一个 60s 周期。 */
+const bindVisibilityRefresh = (setStatus) => {
+  if (visibilityBound) return;
+  visibilityBound = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshCurrentTab(setStatus);
+  });
+};
+
 const startTimer = (setStatus) => {
   stopTimer();
   roomTimer = setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    if (roomSection()?.hidden !== false) return;
-    const tab = roomTabFromHash();
-    if (tab === 'overview') void refreshOverview(roomEpoch, setStatus, replayAtFromHash());
-    else if (tab === 'sectors') void refreshSectors(roomEpoch, setStatus, sectorParamsFromHash());
-    else if (tab === 'turnover') void refreshAmount(roomEpoch, setStatus, amountParamsFromHash());
-    else void refreshEvents(roomEpoch, setStatus, eventsParamsFromHash());
+    refreshCurrentTab(setStatus);
   }, REFRESH_MS);
 };
 
@@ -1047,6 +1035,7 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   const tab = roomTabFromHash();
   const at = replayAtFromHash();
   ensureShell(section);
+  bindVisibilityRefresh(setStatus);
   syncTabs(section, tab);
   renderReplayBar(section, at);
   if (tab === 'overview') {
@@ -1083,6 +1072,7 @@ export {
   roomHash,
   roomTabFromHash,
   sectorBreadthText,
+  sectorCoverageText,
   sectorDetailFacts,
   sectorDetailNotes,
   sectorEmptyText,
@@ -1092,6 +1082,7 @@ export {
   sectorQuery,
   sectorRowCells,
   sectorSampleText,
+  sectorVisibleRows,
   teardownMarketRoom,
   windowSpanText,
 };

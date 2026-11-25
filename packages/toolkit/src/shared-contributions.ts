@@ -68,9 +68,11 @@ import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { getMarketRoomAmountDistributionTool } from './tools/market-room-amount-distribution.js';
 import { getMarketRoomCoreStocksTool } from './tools/market-room-core-stocks.js';
 import { listMarketRoomEventsTool } from './tools/market-room-events.js';
+import { getMarketRoomMainstreamTool } from './tools/market-room-mainstream.js';
 import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
 import { getMarketRoomSectorDetailTool } from './tools/market-room-sector-detail.js';
 import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
+import { getMarketRoomStockSeriesTool } from './tools/market-room-stock-series.js';
 import { getMarketSnapshotBatchTool } from './tools/market-snapshot-batch.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
@@ -350,6 +352,18 @@ export const sharedToolContributions = {
   get_market_room_sectors: {
     owner: 'shared-query',
     tool: getMarketRoomSectorsTool,
+    agent: true,
+    dependencies: [],
+  },
+  get_market_room_mainstream: {
+    owner: 'shared-query',
+    tool: getMarketRoomMainstreamTool,
+    agent: true,
+    dependencies: [],
+  },
+  get_market_room_stock_series: {
+    owner: 'shared-query',
+    tool: getMarketRoomStockSeriesTool,
     agent: true,
     dependencies: [],
   },

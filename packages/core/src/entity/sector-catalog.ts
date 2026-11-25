@@ -15,6 +15,9 @@ import { z } from 'zod';
 export const SectorKindSchema = z.enum(['industry', 'concept']);
 export type SectorKind = z.infer<typeof SectorKindSchema>;
 
+export const SectorConceptScopeSchema = z.enum(['focused', 'all']);
+export type SectorConceptScope = z.infer<typeof SectorConceptScopeSchema>;
+
 export const SectorCatalogStateSchema = z.enum(['active', 'retired']);
 export type SectorCatalogState = z.infer<typeof SectorCatalogStateSchema>;
 
@@ -125,6 +128,63 @@ export const StockSectorMembershipSchema = z
     }
   });
 export type StockSectorMembership = z.infer<typeof StockSectorMembershipSchema>;
+
+const NON_THEME_CONCEPT_NAMES = [
+  /^(?:融资融券|沪股通|深股通)$/,
+  /^(?:ST板块|摘帽|新股与次新股|注册制次新股|科创次新股)$/,
+  /^(?:高股息精选|证金持股|国家大基金持股|中字头股票|超级品牌|专精特新|举牌)$/,
+  /^\d{4}(?:一季报|中报|三季报|年报)(?:预增|预减|预盈|预亏)$/,
+  /^同花顺/,
+  /^中国AI\d+$/,
+];
+
+/**
+ * 精选只改变原始概念榜的读模型；原始目录与成分事实仍完整保留，可通过 all 查看。
+ * 宽概念不再按成分数量剔除：主流锚点（人工智能、新能源汽车等）本身就很宽，
+ * 是否属于主流方向由 mainstream-themes 的 vendorCode 映射决定，不由成分数决定。
+ */
+export const selectMarketRoomSectorCatalog = (input: {
+  readonly sectors: readonly SectorCatalogEntry[];
+  readonly members: readonly StockSectorMembership[];
+  readonly conceptScope?: SectorConceptScope;
+}): readonly SectorCatalogEntry[] => {
+  if (input.conceptScope === 'all') return input.sectors;
+
+  const memberIdsBySector = new Map<string, Set<string>>();
+  for (const membership of input.members) {
+    if (membership.state !== 'active') continue;
+    const ids = memberIdsBySector.get(membership.sectorId) ?? new Set<string>();
+    ids.add(membership.stockId);
+    memberIdsBySector.set(membership.sectorId, ids);
+  }
+  const eligible = input.sectors.filter((sector) => {
+    if (sector.kind !== 'concept') return true;
+    return !NON_THEME_CONCEPT_NAMES.some((pattern) => pattern.test(sector.name));
+  });
+  const representatives = new Map<string, SectorCatalogEntry>();
+  const fingerprint = (sector: SectorCatalogEntry): string | null => {
+    if (sector.kind !== 'concept') return null;
+    const ids = memberIdsBySector.get(sector.id);
+    if (ids === undefined || ids.size === 0) return null;
+    return [...ids].sort().join('\u0000');
+  };
+  for (const sector of eligible) {
+    const key = fingerprint(sector);
+    if (key === null) continue;
+    const current = representatives.get(key);
+    if (
+      current === undefined ||
+      sector.name.length < current.name.length ||
+      (sector.name.length === current.name.length && sector.vendorCode < current.vendorCode)
+    ) {
+      representatives.set(key, sector);
+    }
+  }
+  return eligible.filter((sector) => {
+    const key = fingerprint(sector);
+    return key === null || representatives.get(key)?.id === sector.id;
+  });
+};
 
 /** 按股票反查用的联表投影：成分事实 + 目录身份。 */
 export const StockSectorMembershipViewSchema = StockSectorMembershipSchema.and(

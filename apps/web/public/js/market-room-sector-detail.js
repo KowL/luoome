@@ -72,6 +72,9 @@ const sectorDetailHash = (params) => {
     `window=${encodeURIComponent(params.window)}`,
     `sector=${encodeURIComponent(params.sectorId)}`,
   ];
+  if (params.kind === 'concept') {
+    query.push(`conceptScope=${encodeURIComponent(params.conceptScope ?? 'focused')}`);
+  }
   if ((params.compareSectorIds ?? []).length > 0) {
     query.push(`compare=${encodeURIComponent([...params.compareSectorIds].join(','))}`);
   }
@@ -364,6 +367,7 @@ const detailNotes = (detail) => {
     ...(detail.notes ?? []),
     detail.trend?.methodNote,
     detail.trend?.indexFallbackReason,
+    detail.trend?.indexFallbackReason,
     ...(detail.trend?.warnings ?? []),
     ...(detail.comparisons ?? []).flatMap((series) => [
       `${series.name}：${series.methodNote}`,
@@ -426,7 +430,11 @@ const detailCell = (text, className = 'num') => {
   return el('td', className, text);
 };
 
-const toneClass = (value) => (value > 0 ? 'pos' : value < 0 ? 'neg' : '');
+/** 涨跌为 0 或缺失时没有 tone 类；返回完整 class 串，避免空 token 传给 classList。 */
+const toneNumericClass = (value) => {
+  const tone = value > 0 ? 'pos' : value < 0 ? 'neg' : '';
+  return tone === '' ? 'num' : `num ${tone}`;
+};
 
 const memberTable = (detail, returnTo = null, briefs = null) => {
   const head = el('thead', '', [
@@ -446,10 +454,8 @@ const memberTable = (detail, returnTo = null, briefs = null) => {
     const name = el('a', 'room-member-link', cells.name ?? cells.code);
     name.href = cells.href;
     name.title = `查看 ${member.stockId} 行情`;
-    const dayCell = detailCell(cells.day);
-    if (cells.day !== null) dayCell.classList.add(toneClass(member.dayChangePct));
-    const windowCell = detailCell(cells.window);
-    if (cells.window !== null) windowCell.classList.add(toneClass(member.windowChangePct));
+    const dayCell = detailCell(cells.day, toneNumericClass(member.dayChangePct));
+    const windowCell = detailCell(cells.window, toneNumericClass(member.windowChangePct));
     return el('tr', member.inBatch ? '' : 'room-member-missing', [
       el('td', '', [
         name,
@@ -550,11 +556,6 @@ const renderSectorDetailPane = (
         ]),
         close,
       ]),
-      el(
-        'p',
-        'room-caption',
-        '页面只读已发布批次；非交易日、盘前与缺失样本都不会用旧数据或 0 补齐。',
-      ),
     ]);
   }
 
@@ -572,13 +573,13 @@ const renderSectorDetailPane = (
       ? el('p', 'placeholder', '成分上涨比例缺失')
       : el('div', 'room-detail-breadth', [
           el('div', 'room-detail-breadth-value', breadthAdvanceText(breadth) ?? '缺失'),
-          el('p', 'room-caption', breadthSampleText(breadth) ?? ''),
           el('div', 'room-detail-breadth-counts', [
             el('span', 'text-pos', `上涨 ${breadth.advancing}`),
             el('span', 'text-neg', `下跌 ${breadth.declining}`),
             el('span', 'muted', `平 ${breadth.unchanged}`),
           ]),
         ]);
+  if (breadth !== null) breadthBlock.title = breadthSampleText(breadth) ?? '';
 
   const notes = detailNotes(detail);
   return el('div', 'card room-card room-sector-detail', [
@@ -591,10 +592,6 @@ const renderSectorDetailPane = (
     ]),
     el('div', 'room-detail-method', [
       el('span', 'room-status room-status-partial', method?.label ?? '走势口径缺失'),
-      el('p', 'room-caption', method?.note ?? ''),
-      method?.reason === null || method?.reason === undefined
-        ? null
-        : el('p', 'room-warnings-caption', method.reason),
     ]),
     breadthBlock,
     el('div', 'room-detail-chart-block', [
@@ -617,15 +614,11 @@ const renderSectorDetailPane = (
               ]),
             ),
           )
-        : el('p', 'room-caption', '所选时点内领先顺序未变化（只呈现事实，不生成事件）。'),
+        : el('p', 'room-caption', '所选时点内领先顺序未变化'),
     ]),
     el('div', 'room-detail-members', [
       el('h3', '', '成分明细'),
-      el(
-        'p',
-        'room-caption',
-        `共 ${detail.members.length} 只 active 成分；封板状态来自当日连板天梯，缺失写「缺失」不写「未封」。`,
-      ),
+      el('p', 'room-caption', `共 ${detail.members.length} 只 active 成分`),
       memberTable(detail, returnTo, briefs),
     ]),
     missing.length > 0
@@ -637,7 +630,7 @@ const renderSectorDetailPane = (
             missing.map((line) => el('li', '', line)),
           ),
         ])
-      : el('p', 'room-caption', '所选时点内每个批次都有样本；口径差异见下方说明。'),
+      : null,
     el('details', 'room-detail-notes', [
       el('summary', '', `口径与缺失说明（${notes.length} 条）`),
       el(
@@ -676,6 +669,7 @@ export {
   sectorDetailQuery,
   sortedMembers,
   toggleCompareSelection,
+  toneNumericClass,
   trendChartModel,
   trendMethodText,
 };

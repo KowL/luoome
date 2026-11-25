@@ -4,7 +4,7 @@ import { toolRegistry } from './registry.js';
 
 /** S4.1c：公共 Agent Tool 面（设计 §5.2 + 存储保留策略；2026-11-23 新增分时摘要与 DSL 校验）。 */
 const EXPECTED_TOOL_NAMES = [
-  // 1. 行情与盘面资讯（23）
+  // 1. 行情与盘面资讯（25）
   'search_stocks',
   'get_stock_market_view',
   'get_stock_facts',
@@ -23,6 +23,8 @@ const EXPECTED_TOOL_NAMES = [
   'get_market_snapshot_batch',
   'get_market_room_overview',
   'get_market_room_sectors',
+  'get_market_room_mainstream',
+  'get_market_room_stock_series',
   'get_market_room_amount_distribution',
   'get_market_room_sector_detail',
   'get_market_room_core_stocks',
@@ -166,9 +168,9 @@ const RETIRED_TOOL_NAMES = [
   'validate_strategy_version',
 ] as const;
 
-describe('toolRegistry（50 核心 Agent Tool）', () => {
+describe('toolRegistry（52 核心 Agent Tool）', () => {
   it(`恰好注册 ${EXPECTED_TOOL_NAMES.length} 个 tool，名字与设计 §5.2 + 新增只读工具一致`, () => {
-    expect(toolRegistry.all()).toHaveLength(50);
+    expect(toolRegistry.all()).toHaveLength(52);
     expect(toolRegistry.all()).toHaveLength(EXPECTED_TOOL_NAMES.length);
     expect(
       toolRegistry
@@ -176,7 +178,7 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
         .map((tool) => tool.name)
         .sort(),
     ).toEqual([...EXPECTED_TOOL_NAMES].sort());
-    expect(new Set(toolRegistry.all().map((tool) => tool.name)).size).toBe(50);
+    expect(new Set(toolRegistry.all().map((tool) => tool.name)).size).toBe(52);
   });
 
   it('get(name) 命中 / 未命中', () => {
@@ -192,7 +194,7 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
       expect(toolRegistry.get(name), name).toBeUndefined();
     }
     expect(RETIRED_TOOL_NAMES.length).toBe(99);
-    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(149);
+    expect(EXPECTED_TOOL_NAMES.length + RETIRED_TOOL_NAMES.length).toBe(151);
   });
 
   it('generate_stock_briefs 不进 Agent registry / MCP 暴露面（agent: false）', () => {
@@ -245,8 +247,10 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
       'get_advice',
       'get_market_room_amount_distribution',
       'get_market_room_core_stocks',
+      'get_market_room_mainstream',
       'get_market_room_sector_detail',
       'get_market_room_sectors',
+      'get_market_room_stock_series',
       'get_market_snapshot_batch',
       'get_stock_brief',
       'get_stock_sector_memberships',
@@ -333,7 +337,7 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {
     const mcp = toolRegistry.toMCP();
-    expect(mcp).toHaveLength(50);
+    expect(mcp).toHaveLength(52);
     for (const descriptor of mcp) {
       expect(descriptor.name.length).toBeGreaterThan(0);
       expect(descriptor.description.length).toBeGreaterThan(0);
@@ -351,7 +355,7 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
 
   it('toOpenAI()：function calling 格式', () => {
     const openai = toolRegistry.toOpenAI();
-    expect(openai).toHaveLength(50);
+    expect(openai).toHaveLength(52);
     for (const descriptor of openai) {
       expect(descriptor.type).toBe('function');
       expect(descriptor.function.name.length).toBeGreaterThan(0);
@@ -360,9 +364,9 @@ describe('toolRegistry（50 核心 Agent Tool）', () => {
     }
   });
 
-  it('toTypeScript()：包含全部 50 个 tool 名与声明骨架', () => {
+  it('toTypeScript()：包含全部 52 个 tool 名与声明骨架', () => {
     const text = toolRegistry.toTypeScript();
-    expect(text).toContain('共 50 个 tool');
+    expect(text).toContain('共 52 个 tool');
     expect(text).toContain('export type LuoomeToolName =');
     expect(text).toContain('export declare const luoomeToolMeta:');
     for (const name of EXPECTED_TOOL_NAMES) {

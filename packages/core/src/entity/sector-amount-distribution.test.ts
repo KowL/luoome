@@ -535,7 +535,13 @@ describe('不变量与空态', () => {
 
     expect(result.tradingDate).toBeNull();
     expect(result.anchor).toBeNull();
-    expect(result.coverage).toEqual({ sectorCount: 0, rowCount: 0, omittedSectorCount: 0 });
+    expect(result.coverage).toEqual({
+      sectorCount: 0,
+      catalogSectorCount: 0,
+      filteredSectorCount: 0,
+      rowCount: 0,
+      omittedSectorCount: 0,
+    });
   });
 });
 

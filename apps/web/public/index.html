@@ -66,9 +66,11 @@
           <div>
             <h2>最近会话</h2>
           </div>
-          <button id="chat-sessions-close" class="chat-sessions-close" type="button" aria-label="收起会话列表">×</button>
+          <div class="chat-session-head-actions">
+            <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话"><span aria-hidden="true">＋</span></button>
+            <button id="chat-sessions-close" class="chat-sessions-close" type="button" aria-label="收起会话列表">×</button>
+          </div>
         </div>
-        <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话"><span aria-hidden="true">＋</span><span>新会话</span></button>
         <div id="chat-session-list" class="chat-session-list">
           <p class="chat-session-empty">正在读取会话…</p>
         </div>

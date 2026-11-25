@@ -12,6 +12,16 @@ Read the latest published batch and its 15-minute turnover window.
 
 Use `leaders15` for the 15-minute top three and `leaders` for the daily top three. Compare each 15-minute leader’s stock ID with `previousLeaders15Ids` to identify new entrants and rank increases when available. Display the batch time and market coverage alongside any sample-based turnover share. Read `get_market_room_amount_distribution` with the same anchor time and `window: "w15"` to display `strengthening.at` and `strengthening.previousState` on recently strengthening sectors.
 
+## Mainstream theme core stocks
+
+Read the fixed mainstream theme map, each theme's representative leader, up to five core stocks and all constituent metrics in one call:
+
+```json
+{"name":"get_market_room_mainstream","arguments":{"sort":"day","window":"w15"}}
+```
+
+Read `stockBoard.themes[].representative` first; expand `coreStocks` only when the user asks for more. Use `share.denominator` and each row's `sharePct` / `shareDeltaPp` as verifiable turnover share, not as 主力净流入. `ladder.status` being unavailable means sealed / height is missing, not `false`. For a popup, call `get_market_room_stock_series` with the same `at` as `stockBoard.anchor.sampledAt`.
+
 ## Portfolio PnL
 
 Resolve the account with the user if ambiguous. Use `get_account_overview` for account, holdings and facts together:

@@ -52,7 +52,6 @@ export const safeDshSessionDirectory = (sessionsRoot: string, name: string): str
   const candidate = resolve(sessionsRoot, name);
   try {
     const root = realpathSync(sessionsRoot);
-    if (!inside(root, resolve(candidate))) return null;
     const entry = lstatSync(candidate);
     if (!entry.isDirectory() || entry.isSymbolicLink()) return null;
     if (!inside(root, realpathSync(candidate))) return null;

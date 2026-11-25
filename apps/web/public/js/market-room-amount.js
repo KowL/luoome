@@ -24,6 +24,9 @@ const AMOUNT_KINDS = ['industry', 'concept'];
 const AMOUNT_KIND_LABELS = { industry: '行业', concept: '概念' };
 const AMOUNT_WINDOWS = ['w5', 'w15'];
 const AMOUNT_WINDOW_LABELS = { w5: '5 分钟', w15: '15 分钟' };
+const AMOUNT_CONCEPT_SCOPES = ['focused', 'all'];
+const AMOUNT_CONCEPT_SCOPE_LABELS = { focused: '精选题材', all: '全部题材' };
+const AMOUNT_FOCUSED_ROW_LIMIT = 80;
 
 const AMOUNT_EMPTY_TEXTS = {
   no_batch: '尚无已发布的盘中批次',
@@ -47,16 +50,17 @@ const amountParamsFromHash = (hash = window.location.hash) => {
   return {
     kind: pickParam(params, 'kind', AMOUNT_KINDS, 'industry'),
     window: pickParam(params, 'window', AMOUNT_WINDOWS, 'w15'),
+    conceptScope: pickParam(params, 'conceptScope', AMOUNT_CONCEPT_SCOPES, 'focused'),
     at: replayAtFromHash(hash),
   };
 };
 
 /** 请求路径（纯函数）：口径与回放时点显式带在 URL 上，便于与服务端日志对照。 */
 const amountQuery = (params) =>
-  `?kind=${encodeURIComponent(params.kind)}&window=${encodeURIComponent(params.window)}${replayQuerySuffix(params.at)}`;
+  `?kind=${encodeURIComponent(params.kind)}&window=${encodeURIComponent(params.window)}${params.kind === 'concept' ? `&conceptScope=${encodeURIComponent(params.conceptScope ?? 'focused')}` : ''}${replayQuerySuffix(params.at)}`;
 
 const amountHash = (params) =>
-  `market-room?tab=turnover&kind=${params.kind}&window=${params.window}${replayHashSuffix(params.at)}`;
+  `market-room?tab=turnover&kind=${params.kind}&window=${params.window}${params.kind === 'concept' ? `&conceptScope=${params.conceptScope ?? 'focused'}` : ''}${replayHashSuffix(params.at)}`;
 
 const dimensionStatusLabel = (status) => DIMENSION_STATUS_LABELS[status] ?? '缺失';
 
@@ -141,7 +145,7 @@ const amountMetaText = (distribution) => {
   const kind = AMOUNT_KIND_LABELS[distribution.kind] ?? distribution.kind;
   const windowLabel = AMOUNT_WINDOW_LABELS[distribution.window] ?? distribution.window;
   const sampledAt = distribution.anchor === null ? '--' : fmtClock(distribution.anchor.sampledAt);
-  return `${kind} · 交易日 ${distribution.tradingDate} · 数据时点 ${sampledAt} · ${windowLabel}窗口 · 环比单位 pp`;
+  return `${kind} · 交易日 ${distribution.tradingDate} · 数据时点 ${sampledAt} · ${windowLabel}窗口`;
 };
 
 /** 空态文案；ready 返回 null。 */
@@ -237,7 +241,22 @@ const amountRow = (row, distribution) => {
   ]);
 };
 
-const amountTable = (distribution) => {
+const amountVisibleRows = (distribution, params) =>
+  params.kind === 'concept' && params.conceptScope === 'focused'
+    ? distribution.rows.slice(0, AMOUNT_FOCUSED_ROW_LIMIT)
+    : distribution.rows;
+
+const amountCoverageText = (distribution, params) => {
+  const visibleCount = amountVisibleRows(distribution, params).length;
+  const catalogCount =
+    distribution.coverage.catalogSectorCount ?? distribution.coverage.sectorCount;
+  if (params.kind === 'concept' && params.conceptScope === 'focused') {
+    return `显示 ${visibleCount} / 精选 ${distribution.coverage.rowCount} 个题材（原始目录 ${catalogCount} 个，已过滤 ${distribution.coverage.filteredSectorCount ?? 0} 个；精选模式最多显示前 ${AMOUNT_FOCUSED_ROW_LIMIT} 个）`;
+  }
+  return `共 ${distribution.coverage.rowCount} 个板块（目录 ${distribution.coverage.sectorCount} 个，${distribution.coverage.omittedSectorCount} 个无 active 成分未列出）`;
+};
+
+const amountTable = (distribution, params) => {
   const windowLabel = AMOUNT_WINDOW_LABELS[distribution.window] ?? distribution.window;
   const head = el('thead', '', [
     el('tr', '', [
@@ -252,7 +271,7 @@ const amountTable = (distribution) => {
   const body = el(
     'tbody',
     '',
-    distribution.rows.map((row) => amountRow(row, distribution)),
+    amountVisibleRows(distribution, params).map((row) => amountRow(row, distribution)),
   );
   return el('div', 'table-wrap', el('table', 'table room-sector-table', [head, body]));
 };
@@ -268,48 +287,42 @@ const amountConcentrationCard = (distribution) => {
   const concentration = distribution.concentration;
   const text = amountConcentrationText(concentration);
   return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [
-        el('h2', '', '成交集中度'),
-        el('div', 'card-meta', `口径 ${concentration.basis} · 占比不可加总，只作集中度指示值`),
-      ]),
-      amountStatusBadge(concentration.status),
-    ]),
+    el('div', 'card-header', [el('h2', '', '成交集中度'), amountStatusBadge(concentration.status)]),
     text === null
       ? el('p', 'placeholder', amountConcentrationReason(concentration))
       : el('div', 'room-facts', [
           amountFact(`${concentration.basis} 前 3 名占比合计`, text),
           amountFact('有可用占比的板块', `${concentration.sectorCount} 个`),
         ]),
-    el('p', 'room-caption', concentration.definition),
+    typeof concentration.definition === 'string' && concentration.definition.length > 0
+      ? el('details', 'room-detail-notes', [
+          el('summary', '', '口径说明'),
+          el('p', 'room-caption', concentration.definition),
+        ])
+      : null,
   ]);
 };
 
-const amountScopeCard = (distribution) => {
-  const notes = amountScopeNotes(distribution);
-  return el('div', 'card room-card', [
-    el('div', 'card-header', [
-      el('div', null, [
-        el('h2', '', '口径说明'),
-        el('div', 'card-meta', '概念重叠 · 漏采 · 停牌 · 分母无效'),
-      ]),
-      amountStatusBadge(distribution.turnover.current.status),
-    ]),
+/** 榜单口径折叠：分母、窗口原因与行内缺失原因都不占版面。 */
+const amountScopeNotesNode = (distribution, params) => {
+  const lines = amountScopeNotes(distribution);
+  const denominator =
     distribution.turnover.current.reason === null
-      ? el(
-          'p',
-          'room-caption',
-          `全市场分母 ${formatAmount(distribution.turnover.current.marketAmountDelta ?? 0)}（去重 ${distribution.turnover.current.marketSampleCount} / ${distribution.turnover.current.marketTotalCount} 只）；上一窗口分母 ${
-            distribution.turnover.previous.reason === null
-              ? formatAmount(distribution.turnover.previous.marketAmountDelta ?? 0)
-              : '缺失'
-          }`,
-        )
-      : el('p', 'placeholder', distribution.turnover.current.reason),
+      ? `当前窗口全市场分母 ${formatAmount(distribution.turnover.current.marketAmountDelta ?? 0)}（去重 ${distribution.turnover.current.marketSampleCount} / ${distribution.turnover.current.marketTotalCount} 只）`
+      : distribution.turnover.current.reason;
+  const previous =
+    distribution.turnover.previous.reason === null
+      ? `上一窗口全市场分母 ${formatAmount(distribution.turnover.previous.marketAmountDelta ?? 0)}`
+      : distribution.turnover.previous.reason;
+  const all = [denominator, previous, amountCoverageText(distribution, params), ...lines].filter(
+    (line) => typeof line === 'string' && line.length > 0,
+  );
+  return el('details', 'room-detail-notes', [
+    el('summary', '', `口径与缺失说明（${all.length} 条）`),
     el(
       'ul',
       'room-warnings',
-      notes.map((note) => el('li', '', note)),
+      all.map((line) => el('li', '', line)),
     ),
   ]);
 };
@@ -328,11 +341,6 @@ const renderAmountPane = (distribution, params = amountParamsFromHash()) => {
     return el('div', 'card room-empty', [
       el('h2', '', replayNotice === null ? '成交分布尚未就绪' : '该时点不可回放'),
       el('p', '', replayNotice ?? empty),
-      el(
-        'p',
-        'room-caption',
-        '页面只读已发布批次；非交易日、盘前与早于最早可信样本的时点都不展示盘面数据。',
-      ),
     ]);
   }
   const sampledAt = distribution.anchor === null ? '--' : fmtClock(distribution.anchor.sampledAt);
@@ -341,31 +349,40 @@ const renderAmountPane = (distribution, params = amountParamsFromHash()) => {
       el('div', 'card-header', [
         el('div', null, [
           el('h2', '', '窗口成交占比'),
-          el('div', 'card-meta', `数据时点 ${sampledAt} · 点按钮切换窗口 / 分类`),
+          el('div', 'card-meta', `数据时点 ${sampledAt}`),
         ]),
-        amountSwitch('板块分类', AMOUNT_KINDS, AMOUNT_KIND_LABELS, params.kind, (kind) => {
-          window.location.hash = amountHash({ ...params, kind });
-        }),
+        el('div', 'room-sector-controls', [
+          amountSwitch('板块分类', AMOUNT_KINDS, AMOUNT_KIND_LABELS, params.kind, (kind) => {
+            window.location.hash = amountHash({ ...params, kind });
+          }),
+          params.kind === 'concept'
+            ? amountSwitch(
+                '题材视野',
+                AMOUNT_CONCEPT_SCOPES,
+                AMOUNT_CONCEPT_SCOPE_LABELS,
+                params.conceptScope,
+                (conceptScope) => {
+                  window.location.hash = amountHash({ ...params, conceptScope });
+                },
+              )
+            : null,
+        ]),
       ]),
       amountSwitch('窗口长度', AMOUNT_WINDOWS, AMOUNT_WINDOW_LABELS, params.window, (next) => {
         window.location.hash = amountHash({ ...params, window: next });
       }),
       amountWindowStrip(distribution),
-      amountTable(distribution),
-      el(
-        'p',
-        'room-caption',
-        `共 ${distribution.coverage.rowCount} 个板块（目录 ${distribution.coverage.sectorCount} 个，${distribution.coverage.omittedSectorCount} 个无 active 成分未列出）`,
-      ),
+      amountTable(distribution, params),
+      amountScopeNotesNode(distribution, params),
     ]),
     amountConcentrationCard(distribution),
-    amountScopeCard(distribution),
   ]);
 };
 
 export {
   amountConcentrationReason,
   amountConcentrationText,
+  amountCoverageText,
   amountDeltaText,
   amountDeltaTone,
   amountEmptyText,
@@ -378,6 +395,7 @@ export {
   amountSampleText,
   amountScopeNotes,
   amountShareText,
+  amountVisibleRows,
   amountWindowText,
   renderAmountPane,
 };

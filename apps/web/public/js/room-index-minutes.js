@@ -86,11 +86,6 @@ function minuteCard(def, response, quote) {
       change === null ? null : el('span', `minute-change ${pctTone(quote)}`, change),
     ]),
     svg,
-    el('div', 'minute-axis', [
-      el('span', '', '09:30'),
-      el('span', '', '午休'),
-      el('span', '', '15:00'),
-    ]),
   );
   return card;
 }
@@ -100,8 +95,7 @@ if (globalThis.customElements && !customElements.get('room-index-minutes')) {
     'room-index-minutes',
     class extends HTMLElement {
       connectedCallback() {
-        this.innerHTML =
-          '<div class="minute-heading"><strong>指数分时</strong><small>真实行情 · 分钟线</small></div><div class="minute-grid"></div>';
+        this.innerHTML = '<div class="minute-grid"></div>';
         this.querySelector('.minute-grid').textContent = '正在读取分时…';
         void this.refresh();
         this.timer = setInterval(() => void this.refresh(), minuteMs);
