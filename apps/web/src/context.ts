@@ -8,6 +8,7 @@ import {
   createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createForumManagerFromEnv,
   createLimitUpBoardAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createLimitUpMarketManagerFromEnv,
@@ -32,7 +33,12 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } from '@luoome/tools';
+import {
+  buildContext,
+  createForumDigestCollector,
+  createPluginExecutionPolicy,
+  pluginAllowedSideEffects,
+} from '@luoome/tools';
 
 /** 缺省数据库路径：$LUOOME_HOME/luoome.db（LUOOME_HOME 缺省 ~/.luoome）。 */
 /**
@@ -155,6 +161,12 @@ export const buildWebContext = async (
       logger: console,
     }),
     ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
+    forum: createForumManagerFromEnv(env, {
+      providerRuntime,
+      clock: now,
+      logger: console,
+      sources,
+    }),
   };
   const sectorCatalog = createSectorCatalogFromEnv(env, {
     providerRuntime,
@@ -162,7 +174,7 @@ export const buildWebContext = async (
     logger: console,
   });
   const executionPolicy = createPluginExecutionPolicy(plugins, pluginAllowedSideEffects(env));
-  return buildContext({
+  const ctx = buildContext({
     repos: handle.repos,
     dataScope: providerRuntime,
     executionPolicy,
@@ -195,4 +207,5 @@ export const buildWebContext = async (
       name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
     },
   });
+  return { ...ctx, forumDigest: createForumDigestCollector(ctx, now) };
 };

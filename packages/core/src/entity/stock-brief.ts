@@ -32,6 +32,7 @@ export const STOCK_BRIEF_MISSING_DIMENSIONS = [
   'sector-quote',
   'sector-membership',
   'signals',
+  'discussions',
   'account',
   'llm',
   'plugin',

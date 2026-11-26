@@ -1,6 +1,7 @@
 import { StockBriefPhaseSchema } from '@luoome/core';
 import {
   type GenerateStockBriefsOutput,
+  type GetForumDigestOutput,
   type GetStockBriefOutput,
   type ListStockBriefsOutput,
   type StockBriefListDegradation,
@@ -52,6 +53,23 @@ const pluginDegradation = (deps: WebRouteDeps): StockBriefListDegradation | unde
 
 const okData = (data: unknown): Response => jsonResult({ ok: true, data });
 
+/** 讨论摘要只读本地事实；读取失败不阻塞观察列表，只让该区块缺省。 */
+const forumOf = async (
+  deps: WebRouteDeps,
+  input: {
+    readonly date?: string;
+    readonly phase?: string | undefined;
+    readonly stockIds?: readonly string[];
+  },
+): Promise<GetForumDigestOutput | undefined> => {
+  const result = await deps.invokeTool('get_forum_digest', {
+    ...(input.date === undefined ? {} : { date: input.date }),
+    ...(input.phase === undefined ? {} : { phase: input.phase }),
+    ...(input.stockIds === undefined ? {} : { stockIds: [...input.stockIds] }),
+  });
+  return result.ok ? (result.data as GetForumDigestOutput) : undefined;
+};
+
 export const registerStockBriefRoutes = (app: Hono, deps: WebRouteDeps): void => {
   const { invokeTool, requireMutationCapabilities } = deps;
 
@@ -98,7 +116,13 @@ export const registerStockBriefRoutes = (app: Hono, deps: WebRouteDeps): void =>
         },
         degradation,
       );
-      return 'items' in listed ? okData(listed) : jsonResult(listed);
+      if (!('items' in listed)) return jsonResult(listed);
+      const forum = await forumOf(deps, {
+        ...(query.date === undefined ? {} : { date: query.date }),
+        phase: query.phase ?? listed.items[0]?.phase,
+        stockIds: listed.items.map((item) => item.stockId).slice(0, 12),
+      });
+      return okData({ ...listed, ...(forum === undefined ? {} : { forum }) });
     }
 
     const detailInput = {
@@ -113,12 +137,19 @@ export const registerStockBriefRoutes = (app: Hono, deps: WebRouteDeps): void =>
     ]);
     if (!detail.ok) return jsonResult(detail);
     const budget = listed.ok ? (listed.data as ListStockBriefsOutput).budget : undefined;
+    const detailDate = (detail.data as GetStockBriefOutput).date ?? budget?.date ?? query.date;
+    const forum = await forumOf(deps, {
+      ...(detailDate === undefined ? {} : { date: detailDate }),
+      phase: query.phase ?? (detail.data as GetStockBriefOutput).phase,
+      stockIds: [query.stockId],
+    });
     return okData({
       date: (detail.data as GetStockBriefOutput).date ?? budget?.date,
       view: stockBriefViewOfDetail(detail.data as GetStockBriefOutput, budget),
       warnings: (detail.data as GetStockBriefOutput).warnings,
       ...(budget === undefined ? {} : { budget }),
       ...(degradation === undefined ? {} : { degradation }),
+      ...(forum === undefined ? {} : { forum }),
     });
   });
 
@@ -135,7 +166,13 @@ export const registerStockBriefRoutes = (app: Hono, deps: WebRouteDeps): void =>
       parsed.data.accountId === undefined ? {} : { accountId: parsed.data.accountId },
       degradation,
     );
-    return 'items' in listed ? okData(listed) : jsonResult(listed);
+    if (!('items' in listed)) return jsonResult(listed);
+    const forum = await forumOf(deps, {
+      date: listed.date,
+      phase: listed.items[0]?.phase,
+      stockIds: listed.items.map((item) => item.stockId).slice(0, 12),
+    });
+    return okData({ ...listed, ...(forum === undefined ? {} : { forum }) });
   });
 
   app.post('/api/stock-briefs/generate', async (c) => {

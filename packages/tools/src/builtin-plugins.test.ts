@@ -40,7 +40,7 @@ describe('builtin plugin assembly', () => {
           ),
         )
         .digest('hex'),
-    ).toBe('ff68292914d1977213669306a82354566e972f4ab2211ce23c4200a8e25b6d59');
+    ).toBe('2688dae3f1336dada393e084e9e0edb74392727dd9c3b67e86c631db1c2b6af5');
     expect(Object.entries(BUILTIN_PLUGIN_DEFAULTS).filter(([, enabled]) => enabled)).toEqual([
       ['strategy.ai-insight', true],
     ]);

@@ -19,11 +19,18 @@ export interface EastmoneyHttpOptions {
   readonly fetchImpl?: typeof fetch;
 }
 
-export const getJson = async (url: string, options: EastmoneyHttpOptions): Promise<unknown> => {
+const readJson = async (
+  url: string,
+  options: EastmoneyHttpOptions,
+  init?: RequestInit,
+): Promise<unknown> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
   try {
-    const res = await (options.fetchImpl ?? fetch)(url, { signal: controller.signal });
+    const res = await (options.fetchImpl ?? fetch)(url, {
+      ...init,
+      signal: controller.signal,
+    });
     if (!res.ok) {
       throw new SourceExecutionError(
         httpStatusErrorKind(res.status),
@@ -39,6 +46,46 @@ export const getJson = async (url: string, options: EastmoneyHttpOptions): Promi
         error,
       );
     }
+  } catch (error) {
+    if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
+    throw new SourceExecutionError(
+      isAbortError(error) ? 'timeout' : 'network',
+      `fetch 失败: ${error instanceof Error ? error.message : String(error)} url=${url}`,
+      error,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+export const getJson = (url: string, options: EastmoneyHttpOptions): Promise<unknown> =>
+  readJson(url, options);
+
+/** 少数端点（股吧人气榜）只接受 POST JSON；其余语义与 getJson 一致。 */
+export const postJson = (
+  url: string,
+  body: unknown,
+  options: EastmoneyHttpOptions,
+): Promise<unknown> =>
+  readJson(url, options, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+/** 股吧列表页是服务端渲染 HTML（内嵌 JSON）；只读文本，错误语义同 getJson。 */
+export const getText = async (url: string, options: EastmoneyHttpOptions): Promise<string> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  try {
+    const res = await (options.fetchImpl ?? fetch)(url, { signal: controller.signal });
+    if (!res.ok) {
+      throw new SourceExecutionError(
+        httpStatusErrorKind(res.status),
+        `HTTP ${res.status} ${res.statusText} url=${url}`,
+      );
+    }
+    return await res.text();
   } catch (error) {
     if (error instanceof SourceExecutionError || isPluginExecutionDenial(error)) throw error;
     throw new SourceExecutionError(

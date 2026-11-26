@@ -9,6 +9,7 @@ import type {
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { DecisionReview, DecisionReviewSubject } from '../entity/decision-review.js';
+import type { ForumDigest, ForumDigestSubjectKind } from '../entity/forum-digest.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpBoardHistory } from '../entity/limit-up-board-history.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
@@ -516,6 +517,33 @@ export interface StockBriefRepository {
   sumUsage(tradingDate: string): Promise<StockBriefUsage>;
 }
 
+/** 账户无关的股吧讨论摘要；唯一键 (subjectKind, subjectId, tradingDate, phase)。 */
+export interface ForumDigestRepository {
+  /** 按唯一键幂等覆盖写入；返回落库后的记录。 */
+  upsert(digest: ForumDigest): Promise<ForumDigest>;
+  find(input: {
+    readonly subjectKind: ForumDigestSubjectKind;
+    readonly subjectId: string;
+    readonly tradingDate: string;
+    readonly phase: StockBriefPhase;
+  }): Promise<ForumDigest | null>;
+  /** 某交易日的摘要；可按阶段与主体收窄。 */
+  findByDay(input: {
+    readonly tradingDate: string;
+    readonly phase?: StockBriefPhase;
+    readonly subjectKinds?: readonly ForumDigestSubjectKind[];
+    readonly subjectIds?: readonly string[];
+  }): Promise<ForumDigest[]>;
+  /** 同一主体在此前交易日的摘要（自身关注度分位用）。 */
+  history(input: {
+    readonly subjectKind: ForumDigestSubjectKind;
+    readonly subjectId: string;
+    readonly before: string;
+    readonly phase?: StockBriefPhase;
+    readonly limit?: number;
+  }): Promise<ForumDigest[]>;
+}
+
 export interface AdviceRepository {
   save(advice: Advice): Promise<void>;
   findById(id: string): Promise<Advice | null>;
@@ -663,6 +691,8 @@ export interface RepositoryRegistry {
   readonly advice: AdviceRepository;
   /** 每日个股观察记录（事实指纹 / 降级原因 / LLM 计量）。 */
   readonly stockBrief: StockBriefRepository;
+  /** 账户无关的股吧讨论摘要（市场 + 候选股，按交易日/阶段幂等）。 */
+  readonly forumDigest: ForumDigestRepository;
   /** 建议反馈 + T+N 结算（成绩单的事实来源）。 */
   readonly adviceTracking: AdviceTrackingRepository;
   readonly tradingPlan: TradingPlanRepository;

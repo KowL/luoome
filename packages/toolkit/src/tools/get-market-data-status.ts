@@ -189,6 +189,7 @@ export const getMarketDataStatusTool = defineTool({
       ctx.adapters.marketIntel?.northboundFlow?.status(),
       ctx.adapters.marketIntel?.news?.status(),
       ctx.adapters.marketIntel?.sectorQuote?.status(),
+      ctx.adapters.marketIntel?.forum?.status(),
     ].flatMap((status) => status ?? []);
     const inventory: readonly SourceStatus[] = [
       ...marketInventory,

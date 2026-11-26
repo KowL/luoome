@@ -4,6 +4,7 @@ import {
   type PluginConfigurationDefaults,
 } from '@luoome/core';
 import { analysisPlugin } from '@luoome/plugin-analysis';
+import { forumPlugin } from '@luoome/plugin-forum';
 import { marketProvidersPlugin } from '@luoome/plugin-market-providers';
 import { marketTasksPlugin } from '@luoome/plugin-market-tasks';
 import { notificationPlugin } from '@luoome/plugin-notification';
@@ -21,6 +22,7 @@ import {
 
 export const builtinPluginPackages = [
   analysisPlugin,
+  forumPlugin,
   strategyPlugin,
   watchPlugin,
   reportPlugin,

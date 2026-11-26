@@ -2,7 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeMarketAdapter, TEST_ACCOUNT } from '@luoome/adapters/testing';
-import { dateInShanghai, money, type Quote, type ToolContext } from '@luoome/core';
+import {
+  analyzeForumPosts,
+  dateInShanghai,
+  deriveForumConsistency,
+  FORUM_MARKET_SUBJECT_ID,
+  forumDigestWindow,
+  money,
+  type Quote,
+  type ToolContext,
+} from '@luoome/core';
 import {
   DAILY_STOCK_BRIEFS_CONCURRENCY,
   generateStockBriefsTool,
@@ -450,5 +459,130 @@ describe('generate_stock_briefs', () => {
       base,
     );
     expect(enabled.ok).toBe(true);
+  });
+
+  it('候选集确定后采集股吧讨论：discussions 进入事实包与 Advice.basedOn', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { adapter } = countingLlm();
+    let collected: readonly string[] = [];
+    const collectCtx = withLlm(base, adapter);
+    const tradingDate = dateInShanghai(base.clock());
+    const now = base.clock();
+    const window = forumDigestWindow(tradingDate, 'post-market');
+    const posts = Array.from({ length: 10 }, (_, index) => ({
+      postId: `p-${index}`,
+      title: `第 ${index} 帖 继续看多，突破后加仓`,
+      content: '量能够了。',
+      author: `作者${index}`,
+      authorId: `u-${index}`,
+      publishedAt: new Date(`${tradingDate}T10:00:00+08:00`),
+      postType: 'user' as const,
+      replies: index,
+    }));
+    const digestOf = (subjectKind: 'market' | 'stock', subjectId: string) => {
+      const analysis = analyzeForumPosts({
+        subjectKind,
+        posts: subjectKind === 'stock' ? posts : [],
+        window,
+      });
+      return {
+        id: `digest-${subjectId}`,
+        subjectKind,
+        subjectId,
+        tradingDate,
+        phase: 'post-market' as const,
+        source: 'eastmoney',
+        dataAsOf: now,
+        windowStart: window.start,
+        windowEnd: window.end,
+        coverage: analysis.coverage,
+        quality: analysis.quality,
+        attention: analysis.attention,
+        ...(subjectKind === 'market'
+          ? {
+              breadth: {
+                hotListSize: 100,
+                hotListExchanges: { sh: 41, sz: 59, other: 0 },
+                rankChangeMedian: 0,
+              },
+            }
+          : {}),
+        stance: analysis.stance,
+        excerpts: [...analysis.excerpts],
+        consistency: deriveForumConsistency({ stance: analysis.stance, quoteChangePct: 1.2 }),
+        missing: [...analysis.missing],
+        createdAt: now,
+        updatedAt: now,
+      };
+    };
+    const ctx: ToolContext = {
+      ...collectCtx,
+      forumDigest: {
+        enabled: true,
+        collect: async (input) => {
+          collected = input.stockIds;
+          await base.repos.forumDigest.upsert(digestOf('market', FORUM_MARKET_SUBJECT_ID) as never);
+          for (const stockId of input.stockIds) {
+            await base.repos.forumDigest.upsert(digestOf('stock', stockId) as never);
+          }
+          return {
+            tradingDate: input.tradingDate,
+            phase: input.phase,
+            items: input.stockIds.map((stockId) => ({
+              subjectKind: 'stock' as const,
+              subjectId: stockId,
+              coverage: 'ok' as const,
+            })),
+          };
+        },
+      },
+    };
+
+    const result = await generateStockBriefsTool.execute(
+      { scope: 'stock', stockIds: ['002594.SZ'], tradingDate },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(collected).toEqual(['002594.SZ']);
+    expect(result.data.items[0]?.action).toBe('llm');
+
+    const advices = await base.repos.advice.query({ subjectId: '002594.SZ' });
+    expect(advices).toHaveLength(1);
+    expect(advices[0]?.basedOn.discussions?.digestIds).toContain('digest-002594.SZ');
+    expect(advices[0]?.basedOn.discussions?.subjects[0]).toMatchObject({
+      subjectKind: 'stock',
+      subjectId: '002594.SZ',
+      stanceDirection: 'bullish',
+      consistency: 'aligned',
+    });
+    const briefs = await briefsOf(base, tradingDate);
+    expect(briefs[0]?.missing.map((item) => item.dimension)).not.toContain('discussions');
+  });
+
+  it('股吧采集失败只让 discussions 降级，不阻塞当日观察与建议', async () => {
+    const base = await buildTestContext({ advices: [] });
+    const { adapter } = countingLlm();
+    const tradingDate = dateInShanghai(base.clock());
+    const ctx: ToolContext = {
+      ...withLlm(base, adapter),
+      forumDigest: {
+        enabled: true,
+        collect: async () => {
+          throw new Error('guba 502');
+        },
+      },
+    };
+
+    const result = await generateStockBriefsTool.execute(
+      { scope: 'stock', stockIds: ['002594.SZ'], tradingDate },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]?.action).toBe('llm');
+    const briefs = await briefsOf(base, tradingDate);
+    expect(briefs[0]?.quality).toBe('ai');
+    expect(briefs[0]?.missing.map((item) => item.dimension)).toContain('discussions');
   });
 });

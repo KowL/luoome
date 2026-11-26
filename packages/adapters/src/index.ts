@@ -21,6 +21,11 @@ export * from './eastmoney/coercion.js';
 export * from './eastmoney/source.js';
 // 基本面 PIT mock（仅显式测试注入，永不自动装配）
 // fuyao（同花顺金融数据 API）行情源
+// 股吧讨论（东方财富公开股吧列表页 + 人气榜）
+export * from './forum/eastmoney.js';
+export * from './forum/factory.js';
+export * from './forum/manager.js';
+export * from './forum/types.js';
 export * from './fuyao/client.js';
 export * from './fuyao/envelope.js';
 export * from './fuyao/limit-up.js';

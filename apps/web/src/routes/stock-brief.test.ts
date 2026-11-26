@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
-import { dateInShanghai, type StockBrief, StockBriefSchema } from '@luoome/core';
+import { dateInShanghai, forumDigestWindow, type StockBrief, StockBriefSchema } from '@luoome/core';
 import { createPluginExecutionPolicy } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 
@@ -173,6 +173,142 @@ describe('GET /api/stock-briefs', () => {
     expect(data.items).toHaveLength(2);
     expect(data.coverage.byQuality).toMatchObject({ partial: 1, ruleOnly: 1 });
     expect(data.budget.date).toBe(TRADING_DATE);
+  });
+
+  it('detail / today 附带 forum 讨论摘要（经 get_forum_digest 只读本地事实）', async () => {
+    const ctx = await context();
+    await seedBriefs(ctx);
+    const digest = (
+      subjectKind: 'market' | 'stock',
+      subjectId: string,
+      phase: 'post-market' | 'premarket' = 'post-market',
+    ) => {
+      const window = forumDigestWindow(TRADING_DATE, phase);
+      return {
+        id: `digest-${subjectKind}-${subjectId}-${phase}`,
+        subjectKind,
+        subjectId,
+        tradingDate: TRADING_DATE,
+        phase,
+        source: 'eastmoney',
+        dataAsOf: FIXED_NOW,
+        windowStart: window.start,
+        windowEnd: window.end,
+        coverage: {
+          status: 'ok' as const,
+          fetchedPosts: 10,
+          windowPosts: 10,
+          effectivePosts: 10,
+          mediaPosts: 0,
+          removed: {
+            outsideWindow: 0,
+            duplicate: 0,
+            promotional: 0,
+            instructionLike: 0,
+            empty: 0,
+            nonUser: 0,
+          },
+          reasons: [],
+        },
+        quality: { level: 'ok' as const, reasons: [] },
+        attention: {
+          posts: 10,
+          authors: 8,
+          replies: 12,
+          clicks: 300,
+          likes: 4,
+          topAuthorShare: 0.2,
+        },
+        stance:
+          subjectKind === 'market'
+            ? null
+            : {
+                direction: 'bullish' as const,
+                bullish: 8,
+                bearish: 2,
+                neutral: 0,
+                classified: 10,
+                bullishShare: 0.8,
+                bearishShare: 0.2,
+                divergence: false,
+              },
+        ...(subjectKind === 'market'
+          ? {
+              breadth: {
+                hotListSize: 100,
+                hotListExchanges: { sh: 41, sz: 59, other: 0 },
+                rankChangeMedian: 2,
+              },
+            }
+          : {}),
+        excerpts: [],
+        consistency: { status: 'aligned' as const, basis: ['当日涨跌幅 +1.20%'], reasons: [] },
+        missing: [],
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      };
+    };
+    await ctx.repos.forumDigest.upsert(digest('market', 'market'));
+    await ctx.repos.forumDigest.upsert(digest('stock', '002594.SZ'));
+    const app = await appOf(ctx);
+
+    const detail = await get(app, '/api/stock-briefs?stockId=002594.SZ');
+    const detailForum = (
+      detail.body as {
+        data: {
+          forum?: {
+            market: { breadth?: { hotListSize: number } };
+            stocks: Array<{ subjectId: string }>;
+          };
+        };
+      }
+    ).data.forum;
+    expect(detailForum?.market.breadth?.hotListSize).toBe(100);
+    expect(detailForum?.stocks.map((row) => row.subjectId)).toEqual(['002594.SZ']);
+
+    const today = await get(app, '/api/stock-briefs/today');
+    const todayForum = (
+      today.body as { data: { forum?: { stocks: Array<{ stance: { direction: string } }> } } }
+    ).data.forum;
+    expect(todayForum?.stocks[0]?.stance.direction).toBe('bullish');
+
+    const premarketCtx = await context();
+    await premarketCtx.repos.stockBrief.upsert(briefRow({ phase: 'premarket' }));
+    await premarketCtx.repos.forumDigest.upsert(digest('market', 'market', 'premarket'));
+    await premarketCtx.repos.forumDigest.upsert(digest('stock', '002594.SZ', 'premarket'));
+    const premarketApp = await appOf(premarketCtx);
+    const premarketDetail = await get(premarketApp, '/api/stock-briefs?stockId=002594.SZ');
+    const premarketToday = await get(premarketApp, '/api/stock-briefs/today');
+    for (const response of [premarketDetail, premarketToday]) {
+      const forum = (
+        response.body as { data: { forum?: { phase: string; stocks: Array<{ phase: string }> } } }
+      ).data.forum;
+      expect(forum?.phase).toBe('premarket');
+      expect(forum?.stocks[0]?.phase).toBe('premarket');
+    }
+  });
+
+  it('没有讨论摘要时 forum 带空值 + 缺失原因，而不是伪造广度', async () => {
+    const ctx = await context();
+    await seedBriefs(ctx);
+    const app = await appOf(ctx);
+    const { status, body } = await get(app, '/api/stock-briefs?stockId=002594.SZ');
+    expect(status).toBe(200);
+    const forum = (
+      body as {
+        data: {
+          forum?: {
+            market: unknown;
+            stocks: unknown[];
+            missing: Array<{ subjectKind: string; reason: string }>;
+          };
+        };
+      }
+    ).data.forum;
+    expect(forum?.market).toBeNull();
+    expect(forum?.stocks).toEqual([]);
+    expect(forum?.missing.map((item) => item.subjectKind).sort()).toEqual(['market', 'stock']);
+    expect(forum?.missing[0]?.reason).toContain('未采集');
   });
 
   it('插件未启用时 today / 列表带 plugin_disabled 降级，而不是静默空列表', async () => {

@@ -37,6 +37,7 @@ import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
+import { getForumDigestTool } from './tools/get-forum-digest.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getIntradaySummaryTool } from './tools/get-intraday-summary.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
@@ -242,6 +243,12 @@ export const sharedToolContributions = {
   update_watchlist_members: {
     owner: 'business.watch',
     tool: updateWatchlistMembersTool,
+    agent: true,
+    dependencies: [],
+  },
+  get_forum_digest: {
+    owner: 'shared-query',
+    tool: getForumDigestTool,
     agent: true,
     dependencies: [],
   },

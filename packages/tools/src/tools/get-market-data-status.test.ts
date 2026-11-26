@@ -139,7 +139,7 @@ describe('tool/get_market_data_status', () => {
     );
   });
 
-  it('聚合七个非行情 manager 的 status()；未装配的端口不产生 dataset', async () => {
+  it('聚合八个非行情 manager 的 status()；未装配的端口不产生 dataset', async () => {
     const marker = (dataset: string): SourceStatus => ({
       dataset,
       source: `${dataset}-src`,
@@ -176,6 +176,14 @@ describe('tool/get_market_data_status', () => {
         fetch: () => Promise.reject(new Error('not used')),
         status: () => [marker('sentiment-sealed-pool'), marker('sentiment-broken-pool')],
       },
+      forum: {
+        name: 'forum',
+        sources: ['eastmoney'],
+        fetchPosts: () => Promise.reject(new Error('not used')),
+        fetchPopularity: () => Promise.reject(new Error('not used')),
+        fetchHotList: () => Promise.reject(new Error('not used')),
+        status: () => [marker('forum-posts'), marker('forum-popularity')],
+      },
     });
     const result = await getMarketDataStatusTool.execute({}, ctx);
     expect(result.ok).toBe(true);
@@ -188,6 +196,8 @@ describe('tool/get_market_data_status', () => {
         expect.objectContaining({ dataset: 'limit-up-market', source: 'limit-up-market-src' }),
         expect.objectContaining({ dataset: 'sentiment-sealed-pool' }),
         expect.objectContaining({ dataset: 'sentiment-broken-pool' }),
+        expect.objectContaining({ dataset: 'forum-posts', source: 'forum-posts-src' }),
+        expect.objectContaining({ dataset: 'forum-popularity' }),
       ]),
     );
     // 未装配 limitUpLadder / northboundFlow：不产生对应 inventory

@@ -6,6 +6,7 @@ export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleDecisionReviewRepository } from './decision-review.js';
+export { DrizzleForumDigestRepository } from './forum-digest.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLedgerRepository } from './ledger.js';
 export { DrizzleLimitUpBoardHistoryRepository } from './limit-up-board-history.js';

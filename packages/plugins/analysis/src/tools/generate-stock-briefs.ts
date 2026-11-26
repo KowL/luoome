@@ -405,6 +405,31 @@ export const generateStockBriefsTool = defineTool({
       limits.maxBriefs,
     );
 
+    // 候选集确定后采集股吧讨论（论坛不得扩池）。采集失败只让 discussions 降级，
+    // 不阻塞既有建议链路；未启用 business.forum 时整段不进入事实包。
+    let discussionsRequested = false;
+    if (ctx.forumDigest?.enabled === true && candidates.length > 0) {
+      discussionsRequested = true;
+      try {
+        const summary = await ctx.forumDigest.collect({
+          tradingDate,
+          phase: input.phase,
+          stockIds: candidates.map((candidate) => candidate.stockId),
+        });
+        ctx.logger.info('generate_stock_briefs: 股吧讨论摘要已采集', {
+          tradingDate,
+          phase: input.phase,
+          items: summary.items.length,
+          unavailable: summary.items.filter((item) => item.coverage !== 'ok').length,
+        });
+      } catch (error) {
+        ctx.logger.warn('generate_stock_briefs: 股吧讨论采集失败，discussions 按不可用处理', {
+          tradingDate,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const items: GenerateStockBriefsItem[] = [];
     let budget: BriefBudgetSnapshot = await readBriefBudget(ctx, tradingDate, limits);
     let llmDispatched = 0;
@@ -429,8 +454,10 @@ export const generateStockBriefsTool = defineTool({
           'news',
           'sectors',
           'signals',
+          ...(discussionsRequested ? (['discussions'] as const) : []),
           'account',
         ],
+        phase: input.phase,
       });
       if (pack === null) {
         items.push({

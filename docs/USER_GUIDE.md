@@ -248,7 +248,7 @@ luoome mcp serve    # stdio JSON-RPC
 
 缺省即关闭：文件不存在、解析失败、或某个 id 没有条目，都按「停用」处理。可用的 id 是：
 
-- 业务：`strategy.ai-insight`、`business.strategy-execution`、`business.analysis`、`business.watch-monitoring`、`business.report`、`business.notification`
+- 业务：`strategy.ai-insight`、`business.strategy-execution`、`business.analysis`、`business.forum`、`business.watch-monitoring`、`business.report`、`business.notification`
 - 数据源：`source.eastmoney`、`source.tencent`、`source.sina`、`source.tushare`、`source.fuyao`、`source.10jqka`
 - 采集任务：`task.snapshot-account-performance`、`task.daily-bars-sync`、`task.sync-stock-universe`、`task.collect-market-snapshot`、`task.sync-quotes`、`task.sync-market-dump`、`task.sync-sector-catalog`、`task.sync-limit-up-board-history`、`task.minute-bars-sync`
 
@@ -289,7 +289,14 @@ luoome workflow run sync-market --input '{"target":"dump","kind":"daily-k"}'
 
 原始日线落库后，前复权由 `adjustment_factors` 在读取时投影；没有因子来源的历史缓存会保持 qfq 原值读取，不会被当作原始价二次复权。核对目录与数据健康可用 `luoome tools call get_stock_universe_status --input '{}'`，运行记录在 Web「设置 → 数据源」与报告的数据说明中查看。
 
-个股详情不是侧栏 tab，从看盘、持仓、Watchlist、预警或顶栏搜索点击股票进入（深链接形如 `#market?stockId=002594.SZ&range=3m`）。打开后固定在顶部展示报价卡（名称与代码、价格与涨跌、今开 / 最高 / 最低 / 昨收、成交量额、换手与振幅、估值与股本），下方才是 K 线 / 分时图与关联事实。**打开详情或换股都会回到顶部报价卡**；只有切换区间（1M / 3M …）或粒度（日 K / 周 K / 分时）时保留当前滚动位置。切换左侧导航同样回到页面顶部，但页内自动刷新不会改变滚动位置。
+开启 `business.forum`（默认关闭）后，每个交易日的盘前 08:45 与盘后 17:30 批次会在候选股确定后，
+为市场与候选股各采集一份公开股吧讨论摘要（发帖/作者/回复量、人气排名、多空分布、≤5 条摘录、
+与当日涨跌的一致性）。摘要出现在首页「今日个股观察」与个股详情的「今日观察」卡下方：
+市场人气榜广度 + 该标的的讨论要点与盘面一致性；样本不足时保留已清洗摘录但不发布多空倾向，
+采集不可用时只显示原因，不合成 0–100 情绪指数，也不把讨论当作单独买卖依据。采集失败只降级这一块，不影响当日既有观察与建议。
+也可以只读查看：`luoome tools call get_forum_digest --input '{"stockId":"600519.SH"}'`。
+
+个股详情不是侧栏 tab，从我的看板、持仓、Watchlist、预警或顶栏搜索点击股票进入（深链接形如 `#market?stockId=002594.SZ&range=3m`）。打开后固定在顶部展示报价卡（名称与代码、价格与涨跌、今开 / 最高 / 最低 / 昨收、成交量额、换手与振幅、估值与股本），下方才是 K 线 / 分时图与关联事实。**打开详情或换股都会回到顶部报价卡**；只有切换区间（1M / 3M …）或粒度（日 K / 周 K / 分时）时保留当前滚动位置。切换左侧导航同样回到页面顶部，但页内自动刷新不会改变滚动位置。
 
 对话使用「设置 → AI」配置的模型，并要求启动时显式开启
 `LUOOME_EXPOSE_WRITE=true` 和 `LUOOME_EXPOSE_EXTERNAL=true`。先选择顶栏账户，再提出需求，
@@ -511,6 +518,7 @@ Web「复盘」页可查看。
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯源顺序；当前仅注册免费的 `eastmoney` |
 | `LUOOME_SECTOR_QUOTE_SOURCES` | `eastmoney,sina` | 行业板块行情源顺序；东财（主源）与新浪财经（备用源）均免费；备用源需在 `plugins.json` 启用 `source.sina` |
 | `LUOOME_NEWS_SOURCES` | `eastmoney,10jqka` | 财经要闻源顺序；均为免费无需 key，备用源 `10jqka` 需在 `plugins.json` 启用 `source.10jqka` |
+| `LUOOME_FORUM_SOURCES` | `eastmoney` | 股吧讨论源顺序；当前仅注册免费的东方财富（公开股吧列表页 + 人气榜），需在 `plugins.json` 启用 `business.forum` |
 | `LUOOME_LIMIT_UP_MARKET_SOURCES` | `fuyao` | 涨停市场看板（涨停池 + 统计 + 30 日矩阵）源顺序；当前仅注册付费的 `fuyao`，免费替代是 `limit_up_ladder` |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
 | provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |

@@ -21,6 +21,7 @@
     "zod": "^4.4.3",
     "@luoome/toolkit": "workspace:*",
     "@luoome/plugin-analysis": "workspace:*",
+    "@luoome/plugin-forum": "workspace:*",
     "@luoome/plugin-strategy": "workspace:*",
     "@luoome/plugin-watch": "workspace:*",
     "@luoome/plugin-report": "workspace:*",

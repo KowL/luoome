@@ -534,7 +534,7 @@ const renderStockBrief = () => {
   // 分时缺口常驻可见（不只放在折叠区），不把缺失当成没有走势。
   const intradayMissing = (view.missing ?? []).find((item) => item.dimension === 'intraday');
   const nodes = [
-    stockBriefCardNode(view),
+    stockBriefCardNode(view, state.briefData?.forum ?? null),
     ...(intradayMissing === undefined
       ? []
       : [el('p', 'stock-brief-intraday', `分时不可用：${intradayMissing.reason}`)]),

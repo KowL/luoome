@@ -1,7 +1,12 @@
 import { FakeMarketAdapter } from '@luoome/adapters/testing';
 import {
+  analyzeForumPosts,
   type DailyBar,
   type DateRange,
+  dateInShanghai,
+  deriveForumConsistency,
+  FORUM_MARKET_SUBJECT_ID,
+  forumDigestWindow,
   type IndexQuote,
   type LLMAdapterLike,
   money,
@@ -13,7 +18,12 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos } from '../../../db/src/client.js';
 import { getStockFactsTool } from '../tools/get-stock-facts.js';
-import { buildStockFactPack, type StockFactPack } from './stock-facts.js';
+import {
+  buildStockFactPack,
+  projectStockFactPackForPrompt,
+  type StockFactPack,
+  summarizeFactPackForBrief,
+} from './stock-facts.js';
 
 const NOW = new Date('2026-11-24T07:30:00.000Z');
 const DAY_MS = 86_400_000;
@@ -285,6 +295,170 @@ describe('buildStockFactPack', () => {
     expect(getStockFactsTool.description).toContain('仅技术研究，不构成投资建议');
     for (const banned of ['建议买入', '建议卖出', '建仓', '加仓', '减仓', '清仓']) {
       expect(getStockFactsTool.description).not.toContain(banned);
+    }
+  });
+});
+
+describe('stock fact pack discussions section', () => {
+  const digestFor = (input: {
+    readonly subjectKind: 'market' | 'stock';
+    readonly subjectId: string;
+    readonly posts?: readonly {
+      postId: string;
+      title: string;
+      content?: string;
+      author: string;
+      authorId?: string;
+      publishedAt: Date;
+      postType: 'user' | 'news' | 'media' | 'other';
+      replies?: number;
+    }[];
+  }) => {
+    const tradingDate = dateInShanghai(NOW);
+    const window = forumDigestWindow(tradingDate, 'post-market');
+    const analysis = analyzeForumPosts({
+      subjectKind: input.subjectKind,
+      posts: input.posts ?? [],
+      window,
+    });
+    return {
+      id: `digest-${input.subjectKind}-${input.subjectId}`,
+      subjectKind: input.subjectKind,
+      subjectId: input.subjectId,
+      tradingDate,
+      phase: 'post-market' as const,
+      source: 'eastmoney',
+      dataAsOf: NOW,
+      windowStart: window.start,
+      windowEnd: window.end,
+      coverage: analysis.coverage,
+      quality: analysis.quality,
+      attention: analysis.attention,
+      ...(input.subjectKind === 'market'
+        ? {
+            breadth: {
+              hotListSize: 100,
+              hotListExchanges: { sh: 41, sz: 59, other: 0 },
+              rankChangeMedian: 3,
+              marketStockCount: 5581,
+            },
+          }
+        : {}),
+      stance: analysis.stance,
+      excerpts: [...analysis.excerpts],
+      consistency: deriveForumConsistency({ stance: analysis.stance, quoteChangePct: 1.2 }),
+      missing: [...analysis.missing],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+  };
+
+  it('reads the stock digest for the trading day and projects bounded excerpts', async () => {
+    const marketIntel: ToolContextMarketIntel = {};
+    const { ctx, close } = await makeContext(new TestMarket(), marketIntel);
+    try {
+      const posts = Array.from({ length: 10 }, (_, index) => ({
+        postId: `p-${index}`,
+        title: `第 ${index} 帖 ${'很长的讨论'.repeat(30)}`,
+        content: '看多，突破后加仓',
+        author: `作者${index}`,
+        authorId: `u-${index}`,
+        publishedAt: new Date(`${dateInShanghai(NOW)}T10:00:00+08:00`),
+        postType: 'user' as const,
+        replies: index,
+      }));
+      await ctx.repos.forumDigest.upsert(
+        digestFor({ subjectKind: 'market', subjectId: FORUM_MARKET_SUBJECT_ID }),
+      );
+      await ctx.repos.forumDigest.upsert(
+        digestFor({ subjectKind: 'stock', subjectId: STOCK_ID, posts }),
+      );
+
+      const pack = await buildStockFactPack(ctx, { stockId: STOCK_ID, asOf: NOW });
+      const discussions = okSection(pack as StockFactPack, 'discussions');
+      expect(discussions.data.digestId).toBe(`digest-stock-${STOCK_ID}`);
+      expect(discussions.data.market?.hotListSize).toBe(100);
+      expect(discussions.data.stance?.direction).toBe('bullish');
+      expect(discussions.data.excerpts.length).toBeLessThanOrEqual(5);
+      expect(discussions.data.excerpts.every((item) => item.title.length <= 120)).toBe(true);
+      expect(discussions.data.consistency.status).toBe('aligned');
+      expect(discussions.source).toBe('eastmoney');
+
+      const projection = projectStockFactPackForPrompt(pack as StockFactPack);
+      expect(projection.discussions?.status).toBe('ok');
+      if (projection.discussions?.status === 'ok') {
+        expect(projection.discussions.data.excerpts.length).toBeLessThanOrEqual(5);
+        expect(projection.discussions.data.excerpts.every((item) => item.title.length <= 120)).toBe(
+          true,
+        );
+      }
+
+      const summary = summarizeFactPackForBrief(pack as StockFactPack, NOW);
+      expect(summary.missing.map((item) => item.dimension)).not.toContain('discussions');
+      expect(summary.dataSources).toContain('eastmoney');
+    } finally {
+      close();
+    }
+  });
+
+  it('marks discussions unavailable (with a reason) when no digest was collected', async () => {
+    const { ctx, close } = await makeContext(new TestMarket());
+    try {
+      const pack = await buildStockFactPack(ctx, {
+        stockId: STOCK_ID,
+        asOf: NOW,
+        include: ['quote', 'discussions'],
+      });
+      const section = pack?.discussions;
+      expect(section?.status).toBe('unavailable');
+      if (section?.status === 'unavailable') {
+        expect(section.reason).toContain('未采集');
+        expect(section.source).toBe('eastmoney-guba');
+      }
+      const summary = summarizeFactPackForBrief(pack as StockFactPack, NOW);
+      expect(summary.missing.map((item) => item.dimension)).toContain('discussions');
+    } finally {
+      close();
+    }
+  });
+
+  it('treats an unavailable-coverage digest as an unavailable section', async () => {
+    const { ctx, close } = await makeContext(new TestMarket());
+    try {
+      const tradingDate = dateInShanghai(NOW);
+      await ctx.repos.forumDigest.upsert({
+        ...digestFor({ subjectKind: 'stock', subjectId: STOCK_ID }),
+        coverage: {
+          status: 'unavailable',
+          fetchedPosts: 0,
+          windowPosts: 0,
+          effectivePosts: 0,
+          mediaPosts: 0,
+          removed: {
+            outsideWindow: 0,
+            duplicate: 0,
+            promotional: 0,
+            instructionLike: 0,
+            empty: 0,
+            nonUser: 0,
+          },
+          reasons: ['股吧列表页 502'],
+        },
+        quality: { level: 'insufficient', reasons: ['股吧列表页 502'] },
+        missing: [{ dimension: 'posts', reason: '股吧列表页 502' }],
+        consistency: { status: 'unknown', basis: [], reasons: ['没有讨论样本'] },
+        tradingDate,
+      });
+      const pack = await buildStockFactPack(ctx, {
+        stockId: STOCK_ID,
+        asOf: NOW,
+        include: ['quote', 'discussions'],
+      });
+      const section = pack?.discussions;
+      expect(section?.status).toBe('unavailable');
+      if (section?.status === 'unavailable') expect(section.reason).toContain('502');
+    } finally {
+      close();
     }
   });
 });

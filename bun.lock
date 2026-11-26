@@ -95,6 +95,15 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/plugins/forum": {
+      "name": "@luoome/plugin-forum",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "@luoome/toolkit": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
     "packages/plugins/market-providers": {
       "name": "@luoome/plugin-market-providers",
       "version": "0.1.0",
@@ -174,6 +183,7 @@
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
         "@luoome/plugin-analysis": "workspace:*",
+        "@luoome/plugin-forum": "workspace:*",
         "@luoome/plugin-market-providers": "workspace:*",
         "@luoome/plugin-market-tasks": "workspace:*",
         "@luoome/plugin-notification": "workspace:*",
@@ -253,6 +263,8 @@
     "@luoome/mcp": ["@luoome/mcp@workspace:packages/mcp"],
 
     "@luoome/plugin-analysis": ["@luoome/plugin-analysis@workspace:packages/plugins/analysis"],
+
+    "@luoome/plugin-forum": ["@luoome/plugin-forum@workspace:packages/plugins/forum"],
 
     "@luoome/plugin-market-providers": ["@luoome/plugin-market-providers@workspace:packages/plugins/market-providers"],
 

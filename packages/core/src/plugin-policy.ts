@@ -24,6 +24,7 @@ export const MANAGED_PLUGIN_IDS = [
   'strategy.ai-insight',
   'business.strategy-execution',
   'business.analysis',
+  'business.forum',
   'business.watch-monitoring',
   'business.report',
   'business.notification',

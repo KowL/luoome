@@ -38,6 +38,14 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
     ...(raw.indicators !== undefined ? { indicators: raw.indicators } : {}),
     ...(raw.ladder !== undefined ? { ladder: raw.ladder } : {}),
     ...(raw.strategy !== undefined ? { strategy: raw.strategy } : {}),
+    ...(raw.discussions === undefined
+      ? {}
+      : {
+          discussions: {
+            ...raw.discussions,
+            dataAsOf: new Date(raw.discussions.dataAsOf),
+          },
+        }),
     dataAsOf: new Date(raw.dataAsOf),
   };
 };

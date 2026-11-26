@@ -11,6 +11,7 @@ export type ToolDependency =
   | 'dragonTigerFlow'
   | 'northboundFlow'
   | 'news'
+  | 'forum'
   | 'sectorQuote'
   | 'ashareSentiment'
   | 'stockUniverse'

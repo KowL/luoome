@@ -11,6 +11,15 @@ import type {
   DecisionReviewSubjectKind,
   DeliveryStatus,
   Exchange,
+  ForumDigestAttention,
+  ForumDigestBreadth,
+  ForumDigestConsistency,
+  ForumDigestCoverage,
+  ForumDigestExcerpt,
+  ForumDigestMissing,
+  ForumDigestQuality,
+  ForumDigestStance,
+  ForumDigestSubjectKind,
   LimitUpBoardHistory,
   LimitUpLadder,
   LimitUpLadderSample,
@@ -1370,6 +1379,42 @@ export const stockBriefs = sqliteTable(
   }),
 );
 
+/** 账户无关的股吧讨论摘要；唯一键 (subject_kind, subject_id, trading_date, phase)。 */
+export const forumDigests = sqliteTable(
+  'forum_digests',
+  {
+    id: text('id').primaryKey(),
+    subjectKind: text('subject_kind').$type<ForumDigestSubjectKind>().notNull(),
+    subjectId: text('subject_id').notNull(),
+    tradingDate: text('trading_date').notNull(),
+    phase: text('phase').$type<StockBriefPhase>().notNull(),
+    source: text('source').notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    windowStart: integer('window_start', { mode: 'timestamp_ms' }).notNull(),
+    windowEnd: integer('window_end', { mode: 'timestamp_ms' }).notNull(),
+    coverage: text('coverage', { mode: 'json' }).$type<ForumDigestCoverage>().notNull(),
+    quality: text('quality', { mode: 'json' }).$type<ForumDigestQuality>().notNull(),
+    attention: text('attention', { mode: 'json' }).$type<ForumDigestAttention>().notNull(),
+    breadth: text('breadth', { mode: 'json' }).$type<ForumDigestBreadth>(),
+    stance: text('stance', { mode: 'json' }).$type<ForumDigestStance>(),
+    excerpts: text('excerpts', { mode: 'json' }).$type<ForumDigestExcerpt[]>().notNull(),
+    consistency: text('consistency', { mode: 'json' }).$type<ForumDigestConsistency>().notNull(),
+    missing: text('missing', { mode: 'json' }).$type<ForumDigestMissing[]>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    identityUnique: uniqueIndex('forum_digests_identity_unique').on(
+      t.subjectKind,
+      t.subjectId,
+      t.tradingDate,
+      t.phase,
+    ),
+    dayIdx: index('forum_digests_trading_date_idx').on(t.tradingDate, t.phase),
+    subjectIdx: index('forum_digests_subject_idx').on(t.subjectKind, t.subjectId, t.tradingDate),
+  }),
+);
+
 export const schema = {
   publicMarketEntries,
   schemaMigrations,
@@ -1393,6 +1438,7 @@ export const schema = {
   portfolioPerformanceSnapshots,
   advices,
   stockBriefs,
+  forumDigests,
   adviceOutcomes,
   adviceFeedbacks,
   adviceSettlements,

@@ -422,6 +422,13 @@ interface MarketCapabilityBinding<C extends MarketCapability> {
 }
 ```
 
+股吧讨论也走同一 `SourceRegistry` 模式：`EastmoneySource` 新增 `forum-posts` / `forum-popularity` /
+`forum-hot-list` 三个 capability，分别对应公开股吧列表页（内嵌 `var article_list=` JSON，含精确到秒的
+`post_publish_time` 与阅读/评论/点赞数）、个股人气排名点位、人气榜前 N 名。三项能力是独立观测点，
+列表页失败不带崩人气榜。每日采集的 HTTP 有界：每票最多 2 页列表 + 1 次人气排名，市场 1 次榜单；
+采集不消耗 LLM 预算。该域不读登录态、不绕验证码、不伪造浏览器指纹；失败一律以显式
+`adapter_error` 返回，不使用空数组或旧数据冒充当日讨论。
+
 Adapter manager 提供：
 
 - 从同一 Registry 派生启用状态、顺序、覆盖范围和进程内健康观测
@@ -657,6 +664,23 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 `set_report_delivery_status` 为 write。Web 报告历史、详情和导出统一调用这些 tool，
 不复制 partial 判定或 renderer。详细设计见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
+
+**股吧讨论摘要（ForumDigest）**：回答「这个交易日的候选股与市场在公开股票论坛里被怎样讨论」。
+账户无关，唯一键 `(subjectKind, subjectId, tradingDate, phase)`，`subjectKind` 只有 `market` / `stock`；
+市场摘要固定 `subjectId='market'`，逐股摘要用 `Stock.id`。只保存覆盖/质量、关注度（发帖量、作者数、
+回复/点击/点赞、人气排名与分位、自身历史发帖分位）、可选多空分布（`stance`）、≤5 条有界摘录
+（每条 ≤120 字、带来源 URL 与发布时间）、与当日涨跌幅的盘面一致性以及缺失原因。不建全量 ForumPost 表，
+也不新增第三套 CollectionRun。
+
+`attention` 与 `stance` 分离：关注度高不等于看多。`stance` 只在有效用户帖 ≥8、独立作者 ≥5、
+单作者占比 ≤40%、且采集状态 `ok` 时发布；样本不足/作者集中/采集失败一律为 `null` 并在 `missing`
+写明原因，不合成 0–100 情绪指数，也不把「没有数据」写成 0。样本不足或作者集中时仍保留已清洗摘录，
+采集不可用时不得发布摘录。盘后窗口为当日 00:00–17:30，盘前窗口为上一交易日 17:30–当日 09:15。
+市场摘要不做逐帖采样，只保存人气榜前 100 名的广度事实（交易所分布、名次变化中位数、覆盖股票数），因此 `stance` 恒为 `null`。
+原帖是不可信外部文本：`sanitizeForumText` / `sanitizeForumExcerpt` 去标签、URL、控制字符并限长，
+导流话术与帖内指令（prompt injection）在进入有效样本前剔除；摘录永久带 `untrusted: true`。
+量价/板块/新闻只用于真实事实交叉验证：`consistency` 只比较讨论方向与当日涨跌幅（陈旧行情不参与），
+新闻没有语气字段，因此不生成「新闻情绪」。
 
 **Vibe A 股报告迁移 Phase 2**：新增 `AShareSentimentSnapshot` 与
 `get_ashare_sentiment` external tool。东方财富封板/炸板端点独立失败、独立 provenance；
@@ -981,6 +1005,13 @@ Skill 的调用示例由 MCP 契约测试校验工具可暴露性与输入 schem
 `list_stock_briefs`（`read`，owner `shared-query`）随只读基线进入 MCP。生成只保留一个入口，
 读工具不触发生成。
 
+股吧讨论的工具分工：`collect_forum_digest`（`write` + `requiredCapabilities: ['write','external']`，
+owner `business.forum`，`agent: false`）把市场与候选股摘要幂等落库，采集本身不调用 LLM；
+`get_forum_digest`（`read`，owner `shared-query`）只读本地已采集事实。`business.forum` 默认关闭，
+关闭时每日批次直接跳过采集且不触网；插件启用与否只影响采集，不影响历史摘要与只读入口。
+analysis 插件不 import forum 插件：`generate_stock_briefs` 通过宿主注入的窄端口
+`ctx.forumDigest` 在候选集确定后采集，`StockFactPack` 再从 `repos.forumDigest` 读取 `discussions` 段。
+
 ### 7.1.1 插件归属与执行控制
 
 catalog 为全部 Tool 标注唯一 owner；`execution: 'p1' | 'p2' | 'p3'` 标出受控入口。
@@ -1090,7 +1121,7 @@ type ToolError =
 | workflow | 职责 |
 |---|---|
 | `daily-advice` | 每日判断：只读当日 `stock_briefs` 与其中 `adviceId` 指向的已有 advice，输出「今日不动/今日可动」汇总并结算到期建议；`briefsOnly` 只接受 `true`，不自调 `analyze_stock` / LLM；手动/CLI 在当日无 brief 时返回可操作错误 |
-| `daily-stock-briefs` | 每日个股观察批次：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→ 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库 `stock_briefs`；`phase='premarket'` 只出研究名单，0 次 LLM、不写 advices；写 `workflow_runs` coverage/budget 审计 |
+| `daily-stock-briefs` | 每日个股观察批次：候选集（持仓 ∪ 关注池 ∪ 当日策略信号）→（`business.forum` 启用时）候选股 + 市场股吧讨论摘要 → 事实包 → 规则预筛 → AI 技术研究（并发 2、预算内）→ 落库 `stock_briefs`；`phase='premarket'` 只出研究名单，0 次 LLM、不写 advices；讨论采集失败只让 `discussions` 降级，不阻塞建议；写 `workflow_runs` coverage/budget 审计 |
 | `report` | 只接受 `kind=weekly`：调用 `settle_advices` 结算 T+1/3/5，再生成建议成绩单（命中率、超额、confidence 分组、门禁），落库为一份 Report |
 | `strategy` | 只接受 `job=run`：按显式策略运行 `run_strategy`，不再有 scheduled/daily/observations 编排 |
 | `intraday-watch` | AlertPlan → Watchlist members → 报价/昨收/策略信号/事件 → 边沿、冷却、每日上限 → WatchTrigger → 通知；含交易计划监控分支 |

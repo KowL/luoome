@@ -17,6 +17,8 @@ import type {
   DecisionReview,
   DragonTigerFlowManagerLike,
   DragonTigerManagerLike,
+  ForumDigestCollectorLike,
+  ForumManagerLike,
   LimitUpBoardAdapterLike,
   LimitUpLadderManagerLike,
   LimitUpMarketManagerLike,
@@ -61,6 +63,10 @@ export interface BuildTestContextOptions {
   /** 可选注入行业 / 概念目录数据源（同步 tool 用）。 */
   readonly sectorCatalog?: SectorCatalogAdapterLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+  /** 股吧数据源 manager（配合 forumDigest 端口测试每日链路）。 */
+  readonly forum?: ForumManagerLike;
+  /** 宿主窄端口：股吧摘要采集（测试可注入 fake）。 */
+  readonly forumDigest?: ForumDigestCollectorLike;
   readonly marketDump?: MarketDumpAdapterLike;
   readonly limitUpBoard?: LimitUpBoardAdapterLike;
 }
@@ -143,6 +149,7 @@ export const buildTestContext = async (
     ...(opts.news === undefined ? {} : { news: opts.news }),
     ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
     ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
+    ...(opts.forum === undefined ? {} : { forum: opts.forum }),
   };
   const ctx: ToolContext = {
     executionPolicy:
@@ -170,6 +177,7 @@ export const buildTestContext = async (
     user: { id: 'test-user', defaultAccountId: TEST_ACCOUNT.id },
     clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
+    ...(opts.forumDigest === undefined ? {} : { forumDigest: opts.forumDigest }),
   };
   return ctx;
 };

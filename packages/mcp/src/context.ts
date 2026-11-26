@@ -16,6 +16,7 @@ import {
   createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createForumManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createLimitUpMarketManagerFromEnv,
   createMarketAdapterFromEnv,
@@ -38,7 +39,12 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
-import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } from '@luoome/tools';
+import {
+  buildContext,
+  createForumDigestCollector,
+  createPluginExecutionPolicy,
+  pluginAllowedSideEffects,
+} from '@luoome/tools';
 import type { McpDependency } from './exposure.js';
 
 /** createServerContext 的返回句柄：ctx + close()（进程退出时关闭 SQLite）。 */
@@ -142,6 +148,7 @@ export const createServerContext = async (
             northboundFlow: createNorthboundFlowManagerFromEnv(env, deps),
             news: createNewsManagerFromEnv(env, deps),
             sectorQuote: createSectorQuoteManagerFromEnv(env, deps),
+            forum: createForumManagerFromEnv(env, deps),
           };
     for (const key of Object.keys(marketIntel) as (keyof typeof marketIntel)[]) {
       if (marketIntel[key] !== undefined) readyDependencies.add(key);
@@ -185,7 +192,7 @@ export const createServerContext = async (
     });
 
     return {
-      ctx,
+      ctx: { ...ctx, forumDigest: createForumDigestCollector(ctx, now) },
       get readyDependencies() {
         const ready = new Set<McpDependency>([...readyDependencies].filter((id) => id === 'llm'));
         for (const status of market.marketSourceStatus())

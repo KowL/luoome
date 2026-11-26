@@ -1,6 +1,9 @@
 import type {
   DailyBar,
   DateRange,
+  ForumHotListSnapshot,
+  ForumPopularitySnapshot,
+  ForumPostsSnapshot,
   IndexQuote,
   IntradayMinute,
   MarketSnapshot,
@@ -26,6 +29,19 @@ import {
   parseDragonTigerSeatReport,
 } from '../dragon-tiger/eastmoney.js';
 import type { DragonTigerAdapterLike, DragonTigerFetchResult } from '../dragon-tiger/types.js';
+import {
+  extractArticleListJson,
+  FORUM_HOT_LIST_MAX,
+  FORUM_RANK_APP_ID,
+  FORUM_RANK_GLOBAL_ID,
+  forumHotListUrl,
+  forumPopularityUrl,
+  gubaListUrl,
+  parseForumHotList,
+  parseForumPopularity,
+  parseGubaArticleList,
+  popularitySecurityCode,
+} from '../forum/eastmoney.js';
 import { limitUpLadderPoolUrl, parseLimitUpLadderPool } from '../limit-up-ladder/eastmoney.js';
 import type {
   LimitUpLadderAdapterLike,
@@ -55,8 +71,8 @@ import type {
   NorthboundFlowAdapterLike,
   NorthboundFlowFetchResult,
 } from '../northbound-flow/types.js';
-import { sourceErrorKindOf } from '../source-error.js';
-import { getJson } from './client.js';
+import { sourceErrorKindOf, upstreamError } from '../source-error.js';
+import { getJson, getText, postJson } from './client.js';
 
 /**
  * EastmoneySource：Eastmoney 在本仓库全部能力的单一归属
@@ -305,5 +321,75 @@ export class EastmoneySource
   async fetchNews(page: number, pageSize: number): Promise<NewsFetchResult> {
     const raw = await this.json(newsListUrl(page, pageSize, this.now()));
     return { items: parseNewsList(raw) };
+  }
+
+  // ---------- forum（股吧列表页 + 公开人气榜） ----------
+
+  /**
+   * 按代码拉 1..N 页股吧列表（默认从新到旧）。
+   * 第 1 页失败即整次失败（没有可用样本）；后续页失败只记 warning，不伪造补齐。
+   */
+  async fetchForumPosts(input: {
+    readonly code: string;
+    readonly pages: number;
+  }): Promise<ForumPostsSnapshot> {
+    const pages = Math.min(5, Math.max(1, Math.trunc(input.pages)));
+    const posts: ForumPostsSnapshot['posts'][number][] = [];
+    const warnings: string[] = [];
+    let pagesFetched = 0;
+    for (let page = 1; page <= pages; page += 1) {
+      try {
+        const html = await this.text(gubaListUrl(input.code, page));
+        posts.push(...parseGubaArticleList(extractArticleListJson(html), input.code));
+        pagesFetched += 1;
+      } catch (error) {
+        if (page === 1) throw error;
+        warnings.push(
+          `股吧第 ${page} 页失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+        break;
+      }
+    }
+    return { code: input.code, posts, fetchedAt: this.clock(), pagesFetched, warnings };
+  }
+
+  async fetchForumPopularity(code: string): Promise<ForumPopularitySnapshot> {
+    const raw = await this.post(forumPopularityUrl(), {
+      appId: FORUM_RANK_APP_ID,
+      globalId: FORUM_RANK_GLOBAL_ID,
+      srcSecurityCode: popularitySecurityCode(code),
+    });
+    const parsed = parseForumPopularity(raw);
+    const fetchedAt = this.clock();
+    if (parsed === null) {
+      throw upstreamError(`eastmoney 人气排名不可用（code=${code}）`);
+    }
+    return { code, ...parsed, fetchedAt };
+  }
+
+  async fetchForumHotList(limit: number): Promise<ForumHotListSnapshot> {
+    const bounded = Math.min(FORUM_HOT_LIST_MAX, Math.max(1, Math.trunc(limit)));
+    const raw = await this.post(forumHotListUrl(), {
+      appId: FORUM_RANK_APP_ID,
+      globalId: FORUM_RANK_GLOBAL_ID,
+      marketType: '',
+      pageNo: 1,
+      pageSize: bounded,
+    });
+    return { rows: parseForumHotList(raw), fetchedAt: this.clock() };
+  }
+
+  private text(url: string): Promise<string> {
+    return getText(url, {
+      timeoutMs: this.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      ...(this.fetchImpl === undefined ? {} : { fetchImpl: this.fetchImpl }),
+    });
+  }
+
+  private post(url: string, body: unknown): Promise<unknown> {
+    return postJson(url, body, {
+      timeoutMs: this.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      ...(this.fetchImpl === undefined ? {} : { fetchImpl: this.fetchImpl }),
+    });
   }
 }

@@ -62,12 +62,28 @@ export interface AdviceReasoning {
   readonly counterEvidence: readonly string[]; // 反证
 }
 
+/** 建议引用的股吧讨论摘要（可追溯 digest id + 数据时间 + 覆盖口径）。 */
+export interface AdviceDiscussionSnapshot {
+  readonly digestIds: readonly string[];
+  readonly dataAsOf: Date;
+  /** 本次引用中最低可用等级：ok / partial / empty / unavailable。 */
+  readonly coverage: 'ok' | 'partial' | 'empty' | 'unavailable';
+  readonly subjects: readonly {
+    readonly subjectKind: 'market' | 'stock';
+    readonly subjectId: string;
+    readonly quality: 'ok' | 'insufficient' | 'author-concentrated';
+    readonly stanceDirection: 'bullish' | 'bearish' | 'divided' | 'neutral' | null;
+    readonly consistency: 'aligned' | 'divergent' | 'mixed' | 'unknown';
+  }[];
+}
+
 /** 数据快照：advice 产出瞬间引用的数据，事后可复盘。 */
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
   readonly ladder?: AdviceLadderSnapshot;
   readonly strategy?: StrategyAdviceEvidence;
+  readonly discussions?: AdviceDiscussionSnapshot;
   readonly dataAsOf: Date; // 数据截止时间
 }
 
@@ -296,6 +312,21 @@ export const isAdviceQuoteCurrent = (quote: Quote, now: Date): boolean => {
 // 存量 basedOn JSON 可能仍含已下线的 tacticSignals / llmReasoning key；zod object 默认 strip，
 // 读出时静默忽略，不需要保留旧 schema，也不把原始模型响应重新写回 Advice。
 
+export const AdviceDiscussionSnapshotSchema = z.object({
+  digestIds: z.array(z.string().min(1)),
+  dataAsOf: z.coerce.date(),
+  coverage: z.enum(['ok', 'partial', 'empty', 'unavailable']),
+  subjects: z.array(
+    z.object({
+      subjectKind: z.enum(['market', 'stock']),
+      subjectId: z.string().min(1),
+      quality: z.enum(['ok', 'insufficient', 'author-concentrated']),
+      stanceDirection: z.enum(['bullish', 'bearish', 'divided', 'neutral']).nullable(),
+      consistency: z.enum(['aligned', 'divergent', 'mixed', 'unknown']),
+    }),
+  ),
+});
+
 export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
@@ -315,6 +346,7 @@ export const AdviceDataSnapshotSchema = z.object({
       recommendationTrigger: StrategyRecommendationTriggerSchema,
     })
     .optional(),
+  discussions: AdviceDiscussionSnapshotSchema.optional(),
   dataAsOf: z.coerce.date(),
 });
 

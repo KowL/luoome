@@ -4,6 +4,8 @@ import {
   type DailyBar,
   DailyBarSchema,
   dateInShanghai,
+  FORUM_MARKET_SUBJECT_ID,
+  type ForumDigest,
   type IndexQuote,
   IndexQuoteSchema,
   type IntradayMinute,
@@ -18,6 +20,8 @@ import {
   type Stock,
   type StockBriefMissing,
   type StockBriefMissingDimension,
+  type StockBriefPhase,
+  StockBriefPhaseSchema,
   StockSectorMembershipViewSchema,
   type StrategySignal,
   StrategySignalSchema,
@@ -101,6 +105,7 @@ const FACT_SECTION_NAMES = [
   'sectors',
   'sectorQuote',
   'signals',
+  'discussions',
   'account',
   'market',
 ] as const;
@@ -179,6 +184,77 @@ export const SignalsFactDataSchema = z.object({
   items: z.array(StrategySignalSchema),
 });
 
+/** 股吧讨论摘要（账户无关）；与 news / 情绪快照分开，不混成同一条情绪事实。 */
+export const DiscussionsFactDataSchema = z.object({
+  digestId: z.string().min(1),
+  /** 同日同阶段的市场摘要 id；没有市场摘要时不出现。 */
+  marketDigestId: z.string().min(1).optional(),
+  subjectKind: z.literal('stock'),
+  tradingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  phase: StockBriefPhaseSchema,
+  coverage: z.object({
+    status: z.enum(['ok', 'partial', 'empty', 'unavailable']),
+    effectivePosts: z.number().int().nonnegative(),
+    windowPosts: z.number().int().nonnegative(),
+    reasons: z.array(z.string()),
+  }),
+  quality: z.object({
+    level: z.enum(['ok', 'insufficient', 'author-concentrated']),
+    reasons: z.array(z.string()),
+  }),
+  attention: z.object({
+    posts: z.number().int().nonnegative(),
+    authors: z.number().int().nonnegative(),
+    replies: z.number().int().nonnegative(),
+    clicks: z.number().int().nonnegative(),
+    likes: z.number().int().nonnegative(),
+    topAuthorShare: z.number().min(0).max(1),
+    popularityRank: z.number().int().positive().optional(),
+    popularityRankChange: z.number().int().optional(),
+    popularityPercentile: z.number().min(0).max(1).optional(),
+    ownHistoryPercentile: z.number().min(0).max(1).nullable().optional(),
+    ownHistorySamples: z.number().int().nonnegative().optional(),
+  }),
+  stance: z
+    .object({
+      direction: z.enum(['bullish', 'bearish', 'divided', 'neutral']),
+      bullish: z.number().int().nonnegative(),
+      bearish: z.number().int().nonnegative(),
+      classified: z.number().int().nonnegative(),
+      bullishShare: z.number().min(0).max(1),
+      bearishShare: z.number().min(0).max(1),
+      divergence: z.boolean(),
+    })
+    .nullable(),
+  excerpts: z.array(
+    z.object({
+      postId: z.string().min(1),
+      title: z.string().min(1).max(120),
+      publishedAt: z.coerce.date(),
+      author: z.string().min(1).optional(),
+      replies: z.number().int().nonnegative().optional(),
+      untrusted: z.literal(true),
+    }),
+  ),
+  consistency: z.object({
+    status: z.enum(['aligned', 'divergent', 'mixed', 'unknown']),
+    basis: z.array(z.string()),
+    reasons: z.array(z.string()),
+  }),
+  /** 市场级广度（人气榜）；没有市场摘要时为 null，不补 0。 */
+  market: z
+    .object({
+      hotListSize: z.number().int().positive(),
+      sh: z.number().int().nonnegative(),
+      sz: z.number().int().nonnegative(),
+      other: z.number().int().nonnegative(),
+      rankChangeMedian: z.number().finite().nullable(),
+      marketStockCount: z.number().int().positive().optional(),
+      dataAsOf: z.coerce.date(),
+    })
+    .nullable(),
+});
+
 export const AccountFactDataSchema = z.object({ facts: AccountFactsSchema });
 
 export const MarketFactDataSchema = z.object({
@@ -195,6 +271,7 @@ export const StockFactPackSchema = z.object({
   sectors: buildFactSectionSchema(SectorsFactDataSchema).optional(),
   sectorQuote: buildFactSectionSchema(SectorQuoteFactDataSchema).optional(),
   signals: buildFactSectionSchema(SignalsFactDataSchema).optional(),
+  discussions: buildFactSectionSchema(DiscussionsFactDataSchema).optional(),
   account: buildFactSectionSchema(AccountFactDataSchema).optional(),
   market: buildFactSectionSchema(MarketFactDataSchema).optional(),
   factDigest: z.string().min(16),
@@ -304,6 +381,9 @@ export const PROMPT_RECENT_BAR_COUNT = 20;
 export const PROMPT_INTRADAY_POINT_COUNT = 30;
 export const PROMPT_NEWS_COUNT = 5;
 export const PROMPT_SIGNAL_COUNT = 5;
+/** 讨论摘录进入提示词的上限：与 ForumDigest 的存库上限一致（≤5 条、每条 ≤120 字）。 */
+export const PROMPT_DISCUSSION_COUNT = 5;
+export const PROMPT_DISCUSSION_EXCERPT_CHARS = 120;
 
 export interface PromptBarSummary {
   readonly date: string;
@@ -370,6 +450,7 @@ export interface StockFactPromptProjection {
       readonly downCount?: number;
     }[];
   }>;
+  readonly discussions?: PromptSection<z.infer<typeof DiscussionsFactDataSchema>>;
   readonly signals?: PromptSection<{
     readonly since: Date;
     readonly items: readonly {
@@ -462,6 +543,30 @@ export const projectStockFactPackForPrompt = (pack: StockFactPack): StockFactPro
                   },
                 }
               : keepUnavailable(intraday),
+        }),
+    ...(pack.discussions === undefined
+      ? {}
+      : {
+          discussions:
+            pack.discussions.status === 'ok'
+              ? {
+                  status: 'ok' as const,
+                  dataAsOf: pack.discussions.dataAsOf,
+                  source: pack.discussions.source,
+                  data: {
+                    ...pack.discussions.data,
+                    excerpts: pack.discussions.data.excerpts
+                      .slice(0, PROMPT_DISCUSSION_COUNT)
+                      .map((item) => ({
+                        ...item,
+                        title:
+                          item.title.length <= PROMPT_DISCUSSION_EXCERPT_CHARS
+                            ? item.title
+                            : `${item.title.slice(0, PROMPT_DISCUSSION_EXCERPT_CHARS - 1)}…`,
+                      })),
+                  },
+                }
+              : keepUnavailable(pack.discussions),
         }),
     ...(news === undefined
       ? {}
@@ -614,6 +719,7 @@ const SECTION_MISSING_DIMENSION: Readonly<
   sectors: 'sector-membership',
   sectorQuote: 'sector-quote',
   signals: 'signals',
+  discussions: 'discussions',
   account: 'account',
 };
 
@@ -705,7 +811,91 @@ export interface BuildStockFactPackInput {
   readonly asOf?: Date;
   readonly include?: readonly StockFactSection[];
   readonly accountId?: string;
+  /** 讨论摘要按交易日 + 阶段取；缺省 post-market（盘后批次）。 */
+  readonly phase?: StockBriefPhase;
 }
+
+const discussionFactsOf = (
+  digest: ForumDigest,
+  market: ForumDigest | null,
+): z.infer<typeof DiscussionsFactDataSchema> => ({
+  digestId: digest.id,
+  ...(market === null ? {} : { marketDigestId: market.id }),
+  subjectKind: 'stock',
+  tradingDate: digest.tradingDate,
+  phase: digest.phase,
+  coverage: {
+    status: digest.coverage.status,
+    effectivePosts: digest.coverage.effectivePosts,
+    windowPosts: digest.coverage.windowPosts,
+    reasons: [...digest.coverage.reasons],
+  },
+  quality: { level: digest.quality.level, reasons: [...digest.quality.reasons] },
+  attention: {
+    posts: digest.attention.posts,
+    authors: digest.attention.authors,
+    replies: digest.attention.replies,
+    clicks: digest.attention.clicks,
+    likes: digest.attention.likes,
+    topAuthorShare: digest.attention.topAuthorShare,
+    ...(digest.attention.popularity === undefined
+      ? {}
+      : {
+          popularityRank: digest.attention.popularity.rank,
+          ...(digest.attention.popularity.rankChange === undefined
+            ? {}
+            : { popularityRankChange: digest.attention.popularity.rankChange }),
+          ...(digest.attention.popularity.percentile === undefined
+            ? {}
+            : { popularityPercentile: digest.attention.popularity.percentile }),
+        }),
+    ...(digest.attention.ownHistory === undefined
+      ? {}
+      : {
+          ownHistoryPercentile: digest.attention.ownHistory.postsPercentile,
+          ownHistorySamples: digest.attention.ownHistory.samples,
+        }),
+  },
+  stance:
+    digest.stance === null
+      ? null
+      : {
+          direction: digest.stance.direction,
+          bullish: digest.stance.bullish,
+          bearish: digest.stance.bearish,
+          classified: digest.stance.classified,
+          bullishShare: digest.stance.bullishShare,
+          bearishShare: digest.stance.bearishShare,
+          divergence: digest.stance.divergence,
+        },
+  excerpts: digest.excerpts.map((item) => ({
+    postId: item.postId,
+    title: item.title,
+    publishedAt: item.publishedAt,
+    ...(item.author === undefined ? {} : { author: item.author }),
+    ...(item.replies === undefined ? {} : { replies: item.replies }),
+    untrusted: item.untrusted,
+  })),
+  consistency: {
+    status: digest.consistency.status,
+    basis: [...digest.consistency.basis],
+    reasons: [...digest.consistency.reasons],
+  },
+  market:
+    market?.breadth === undefined
+      ? null
+      : {
+          hotListSize: market.breadth.hotListSize,
+          sh: market.breadth.hotListExchanges.sh,
+          sz: market.breadth.hotListExchanges.sz,
+          other: market.breadth.hotListExchanges.other,
+          rankChangeMedian: market.breadth.rankChangeMedian,
+          ...(market.breadth.marketStockCount === undefined
+            ? {}
+            : { marketStockCount: market.breadth.marketStockCount }),
+          dataAsOf: market.dataAsOf,
+        },
+});
 
 /**
  * 组装十段事实包。每段只返回 ok（带 dataAsOf + source）或 unavailable（带 reason），
@@ -865,6 +1055,49 @@ export const buildStockFactPack = async (
     }
   }
 
+  let discussions: StockFactPack['discussions'];
+  if (wanted('discussions')) {
+    const phase = input.phase ?? 'post-market';
+    const tradingDate = dateInShanghai(asOf);
+    try {
+      const [stockDigest, marketDigest] = await Promise.all([
+        ctx.repos.forumDigest.find({
+          subjectKind: 'stock',
+          subjectId: stock.id,
+          tradingDate,
+          phase,
+        }),
+        ctx.repos.forumDigest.find({
+          subjectKind: 'market',
+          subjectId: FORUM_MARKET_SUBJECT_ID,
+          tradingDate,
+          phase,
+        }),
+      ]);
+      if (stockDigest === null) {
+        discussions = unavailable(
+          `今日（${tradingDate} ${phase}）未采集该标的股吧讨论：business.forum 未启用、未到采集时点或采集失败`,
+          'eastmoney-guba',
+        );
+      } else if (stockDigest.coverage.status === 'unavailable') {
+        // 采集失败是「已知限制」，不能包装成 status=ok 的空讨论。
+        discussions = unavailable(
+          stockDigest.coverage.reasons.join('；') || '股吧讨论采集不可用',
+          stockDigest.source,
+          stockDigest.dataAsOf,
+        );
+      } else {
+        discussions = ok(
+          discussionFactsOf(stockDigest, marketDigest),
+          stockDigest.dataAsOf,
+          stockDigest.source,
+        );
+      }
+    } catch (error) {
+      discussions = unavailable(`股吧讨论读取失败：${errorText(error)}`, 'eastmoney-guba');
+    }
+  }
+
   let sectors: StockFactPack['sectors'];
   if (wanted('sectors')) {
     try {
@@ -1001,6 +1234,7 @@ export const buildStockFactPack = async (
     ...(sectors === undefined ? {} : { sectors }),
     ...(sectorQuote === undefined ? {} : { sectorQuote }),
     ...(signals === undefined ? {} : { signals }),
+    ...(discussions === undefined ? {} : { discussions }),
     ...(account === undefined ? {} : { account }),
     ...(market === undefined ? {} : { market }),
   } satisfies Omit<StockFactPack, 'factDigest'>;

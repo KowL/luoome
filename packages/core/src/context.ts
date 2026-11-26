@@ -2,6 +2,11 @@ import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
 import type { DragonTigerFlow, DragonTigerFlowQuery } from './entity/dragon-tiger-flow.js';
 import type {
+  ForumHotListSnapshot,
+  ForumPopularitySnapshot,
+  ForumPostsSnapshot,
+} from './entity/forum-digest.js';
+import type {
   LimitUpLadder,
   LimitUpLadderDiff,
   LimitUpLadderQuery,
@@ -16,6 +21,7 @@ import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './e
 import type { SectorCatalogAdapterLike } from './entity/sector-catalog.js';
 import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
+import type { StockBriefPhase } from './entity/stock-brief.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
 import type { DataExecutionScopeLike, ToolExecutionPolicyLike } from './plugin-policy.js';
@@ -180,6 +186,36 @@ export interface ToolContextMarketIntel {
   readonly news?: NewsManagerLike;
   readonly sectorQuote?: SectorQuoteManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+  /** 股吧帖子与人气榜（公开股票论坛讨论，默认关闭，需 business.forum）。 */
+  readonly forum?: ForumManagerLike;
+}
+
+/** manager 统一结果：失败带显式原因，不用空数组冒充「今天没讨论」。 */
+export type ForumManagerResult<T> =
+  | { readonly ok: true; readonly data: T }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly kind: 'adapter_error';
+        readonly adapter: 'forum';
+        readonly message: string;
+        readonly recoverable: boolean;
+      };
+    };
+
+export interface ForumManagerLike {
+  readonly name: 'forum';
+  readonly sources: readonly string[];
+  /** 按代码拉取股吧列表页（从新到旧，由调用方按窗口过滤）。 */
+  fetchPosts(input: {
+    readonly code: string;
+    readonly pages?: number;
+  }): Promise<ForumManagerResult<ForumPostsSnapshot>>;
+  /** 个股人气排名点位（排名 / 名次变化 / 覆盖股票数 / 上游计算时间）。 */
+  fetchPopularity(code: string): Promise<ForumManagerResult<ForumPopularitySnapshot>>;
+  /** 人气榜前 limit 名（市场广度）。 */
+  fetchHotList(limit: number): Promise<ForumManagerResult<ForumHotListSnapshot>>;
+  status(): readonly SourceStatus[];
 }
 
 /** 市场 dump 类型（fuyao 全市场导出）。 */
@@ -264,6 +300,42 @@ export interface ToolContext {
     readonly stockId: string;
     readonly name: string;
   };
+  /**
+   * 宿主窄端口：跨插件采集股吧讨论摘要。
+   *
+   * 只有宿主（Web / CLI / MCP 组装根）在 `business.forum` 可用时才注入；
+   * analysis 插件不得 import forum 插件，只按这个端口取数。
+   * `collect` 永不抛错：单源失败只返回 unavailable 项，不阻塞现有建议链路。
+   */
+  readonly forumDigest?: ForumDigestCollectorLike;
+}
+
+export interface ForumDigestCollectionInput {
+  /** Asia/Shanghai 交易日 YYYY-MM-DD。 */
+  readonly tradingDate: string;
+  readonly phase: StockBriefPhase;
+  /** 候选股（论坛不得扩池）；市场摘要总是包含。 */
+  readonly stockIds: readonly string[];
+}
+
+export interface ForumDigestCollectionItem {
+  readonly subjectKind: 'market' | 'stock';
+  readonly subjectId: string;
+  readonly digestId?: string;
+  readonly coverage: 'ok' | 'partial' | 'empty' | 'unavailable';
+  readonly reason?: string;
+}
+
+export interface ForumDigestCollectionSummary {
+  readonly tradingDate: string;
+  readonly phase: StockBriefPhase;
+  readonly items: readonly ForumDigestCollectionItem[];
+}
+
+export interface ForumDigestCollectorLike {
+  /** `business.forum` 是否启用；false 时调用方直接跳过采集。 */
+  readonly enabled: boolean;
+  collect(input: ForumDigestCollectionInput): Promise<ForumDigestCollectionSummary>;
 }
 
 export type AShareSentimentManagerResult =

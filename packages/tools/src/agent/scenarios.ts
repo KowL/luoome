@@ -122,7 +122,7 @@ const MARKET_BREADTH_READS = [
 ] as const;
 
 /** 当日 StockBrief 观察是研究的默认入口。 */
-const STOCK_BRIEF_READS = ['get_stock_brief', 'list_stock_briefs'] as const;
+const STOCK_BRIEF_READS = ['get_stock_brief', 'list_stock_briefs', 'get_forum_digest'] as const;
 
 const ACCOUNT_READS = ['get_account_overview', 'get_account_performance', 'list_trades'] as const;
 

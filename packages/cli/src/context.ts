@@ -16,6 +16,7 @@ import {
   createDragonTigerFlowManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createForumManagerFromEnv,
   createLimitUpBoardAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
@@ -42,7 +43,12 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, createPluginExecutionPolicy, pluginAllowedSideEffects } from '@luoome/tools';
+import {
+  buildContext,
+  createForumDigestCollector,
+  createPluginExecutionPolicy,
+  pluginAllowedSideEffects,
+} from '@luoome/tools';
 
 import { luoomeHome } from './paths.js';
 
@@ -216,6 +222,7 @@ export const createCliContext = async (
     ...(news === undefined ? {} : { news }),
     ...(sectorQuote === undefined ? {} : { sectorQuote }),
     ...(ashareSentiment === undefined ? {} : { ashareSentiment }),
+    forum: createForumManagerFromEnv(process.env, { providerRuntime, clock: now, logger, sources }),
   };
   const executionPolicy = createPluginExecutionPolicy(
     plugins,
@@ -257,5 +264,9 @@ export const createCliContext = async (
     auditCaller: 'cli',
   });
 
-  return { ctx, dbPath, close };
+  return {
+    ctx: { ...ctx, forumDigest: createForumDigestCollector(ctx, now) },
+    dbPath,
+    close,
+  };
 };

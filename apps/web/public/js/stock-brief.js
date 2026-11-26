@@ -11,6 +11,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import { forumDetailNode, forumListSummaryModel, forumMarketModel } from './forum-digest.js';
 import { el, resultErrorText } from './ui.js';
 
 /** 与 toolkit `BRIEF_DISCLAIMER` 同一段文字（前端无包依赖，保持逐字一致）。 */
@@ -152,6 +153,12 @@ const todayBriefModel = (list, options = {}) => {
   );
   const ruleOnlyItems = byQuality('rule-only');
   const uncoveredItems = byQuality('unavailable');
+  const forumByStock = new Map(
+    (Array.isArray(list?.forum?.stocks) ? list.forum.stocks : []).map((digest) => [
+      digest.subjectId,
+      forumListSummaryModel(digest),
+    ]),
+  );
   const top = [...concludedItems, ...ruleOnlyItems]
     .sort((left, right) => {
       const leftConfidence = typeof left.confidence === 'number' ? left.confidence : -1;
@@ -172,6 +179,7 @@ const todayBriefModel = (list, options = {}) => {
         confidenceText: chip.confidenceText,
         timeText: chip.timeText,
         missingCount: chip.missingCount,
+        forum: forumByStock.get(item.stockId) ?? null,
       };
     });
   const missingReasons = [
@@ -193,6 +201,7 @@ const todayBriefModel = (list, options = {}) => {
     total: items.length,
     top,
     missingReasons,
+    forumMarket: list?.forum === undefined ? null : forumMarketModel(list.forum?.market ?? null),
     degradation: list?.degradation ?? null,
     budget: list?.budget ?? null,
     disclaimer: BRIEF_DISCLAIMER,
@@ -393,7 +402,7 @@ const listNode = (title, lines) =>
       ]);
 
 /** 个股详情卡主体（由 market.js 挂到 #market-brief-card 内）。 */
-const stockBriefCardNode = (view) => {
+const stockBriefCardNode = (view, forum = null) => {
   const model = briefChipModel(view);
   const warnings = Array.isArray(view?.warnings) ? view.warnings : [];
   const counterEvidence = Array.isArray(view?.counterEvidence) ? view.counterEvidence : [];
@@ -431,6 +440,7 @@ const stockBriefCardNode = (view) => {
             warnings.map((warning) => el('li', null, warning)),
           ),
         ]),
+    forumDetailNode(forum),
     el('p', 'stock-brief-disclaimer', view?.disclaimer ?? BRIEF_DISCLAIMER),
   ]);
 };
@@ -443,6 +453,12 @@ const todayBriefRowNode = (row) => {
     el('span', 'stock-brief-meta', row.confidenceText),
     el('span', 'stock-brief-meta', row.timeText),
     row.missingCount > 0 ? el('span', 'stock-brief-meta', `缺失 ${row.missingCount} 项`) : null,
+    row.forum === null
+      ? null
+      : el('span', 'stock-brief-forum', [
+          `${row.forum.stanceLabel} · ${row.forum.consistencyLabel}`,
+          el('span', 'stock-brief-forum-meta', row.forum.attentionText),
+        ]),
   ]);
   link.href = row.href;
   return link;
@@ -460,6 +476,20 @@ const todayBriefNodes = (list, options = {}) => {
   ];
   return [
     el('p', 'stock-brief-coverage', coverage),
+    ...(model.forumMarket === null
+      ? []
+      : [
+          el('p', 'forum-market-headline', model.forumMarket.headline),
+          ...(model.forumMarket.lines.length === 0
+            ? []
+            : [
+                el(
+                  'ul',
+                  'forum-market-lines',
+                  model.forumMarket.lines.map((line) => el('li', null, line)),
+                ),
+              ]),
+        ]),
     model.top.length === 0
       ? el('p', 'placeholder', '今日暂无个股观察。')
       : el('div', 'stock-brief-top', model.top.map(todayBriefRowNode)),

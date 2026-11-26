@@ -1,5 +1,11 @@
 // 公共聚合入口；插件实现只依赖 toolkit，不反向依赖此目录。
 export * from '@luoome/plugin-analysis';
+export {
+  collectForumDigests,
+  collectForumDigestTool,
+  createForumDigestCollector,
+  FORUM_COLLECTION_MAX_STOCKS,
+} from '@luoome/plugin-forum';
 export * from '@luoome/plugin-market-tasks';
 export * from '@luoome/plugin-notification';
 export * from '@luoome/plugin-performance-task';

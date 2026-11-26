@@ -82,6 +82,39 @@ export const judgmentViolations = (judgment: JudgmentLike): readonly string[] =>
   return violations;
 };
 
+/** 讨论摘录的典型用词；用于判断 buy/sell 是否有非论坛证据。 */
+const FORUM_EVIDENCE_PATTERN = /股吧|论坛|讨论|人气榜|人气排名|发帖|帖子|吧友|看多看空/;
+
+export interface ForumEvidenceGuardInput {
+  readonly decision: 'buy' | 'sell' | 'hold' | 'watch' | 'avoid';
+  readonly evidence: readonly string[];
+  readonly discussionsAvailable: boolean;
+  /** 当日可用的非论坛事实维度（quote / indicators / news / sectors / ...）。 */
+  readonly nonForumSections: readonly string[];
+}
+
+/**
+ * 论坛证据边界（硬约束）：股吧讨论只能补充，不能单独支撑 buy/sell。
+ * - buy/sell 至少要有 1 条不引用论坛的证据；
+ * - 当日除讨论外没有任何非论坛事实时，buy/sell 一律无效（只能 watch/avoid）。
+ */
+export const forumOnlyEvidenceViolations = (input: ForumEvidenceGuardInput): readonly string[] => {
+  if (input.decision !== 'buy' && input.decision !== 'sell') return [];
+  if (!input.discussionsAvailable) return [];
+  const violations: string[] = [];
+  if (input.nonForumSections.length === 0) {
+    violations.push('当日除股吧讨论外没有可用的非论坛事实，buy/sell 只能降级为 watch/avoid');
+    return violations;
+  }
+  const nonForumEvidence = input.evidence.filter((line) => !FORUM_EVIDENCE_PATTERN.test(line));
+  if (nonForumEvidence.length === 0) {
+    violations.push(
+      'buy/sell 不能只引用股吧讨论作证据：至少一条证据必须来自行情/指标/板块/新闻/策略等非论坛事实',
+    );
+  }
+  return violations;
+};
+
 export const assertAdviceAnalysis = (ctx: ToolContext): void => {
   ctx.executionGuard?.();
   if (ctx.executionPolicy === undefined)

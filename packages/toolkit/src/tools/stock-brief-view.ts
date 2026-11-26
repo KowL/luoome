@@ -24,6 +24,7 @@ export const STOCK_BRIEF_MISSING_LABELS: Readonly<Record<string, string>> = {
   'sector-quote': '板块行情',
   'sector-membership': '板块归属',
   signals: '策略信号',
+  discussions: '股吧讨论',
   account: '账户事实',
   llm: 'AI 分析',
   plugin: '个股分析插件',
@@ -178,6 +179,21 @@ const adviceEvidence = (
   if (indicators !== undefined) {
     const row = indicatorsEvidence(indicators, dataAsOf);
     if (row !== null) evidence.push(row);
+  }
+  const discussions = advice.basedOn.discussions;
+  if (discussions !== undefined) {
+    evidence.push({
+      label: '股吧讨论',
+      value: `${discussions.digestIds.length} 份摘要 · 覆盖 ${discussions.coverage} · ${discussions.subjects
+        .map(
+          (item) => `${item.subjectId}:${item.stanceDirection ?? '未发布倾向'}/${item.consistency}`,
+        )
+        .join(' · ')}`,
+      source: 'eastmoney-guba',
+      dataAsOf: discussions.dataAsOf,
+      missing: false,
+      reason: null,
+    });
   }
   for (const line of advice.reasoning.evidence) {
     evidence.push({
