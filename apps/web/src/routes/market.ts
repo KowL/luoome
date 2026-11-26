@@ -3,7 +3,15 @@ import { jsonResult } from '../http/result.js';
 import type { WebRouteDeps } from './types.js';
 
 export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
-  const { callTool, invokeTool, invokeIndexQuotes, requireMutationCapabilities, serveFile } = deps;
+  const {
+    callTool,
+    invokeTool,
+    parseJsonObject,
+    requireMutationCapabilities,
+    targetMutation,
+    serveFile,
+    exposeWrite,
+  } = deps;
 
   const intQuery = (raw: string | undefined, fallback: number, min: number): number => {
     if (raw === undefined || raw.trim() === '') return fallback;
@@ -333,6 +341,88 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
   });
 
   /**
+   * 作战室系统题材视图：只读库内已启用题材与当时生效成分。
+   *
+   * 参数：
+   *   window (可选) w5 | w15，默认 w15
+   *   at (可选) ISO 时间；给定时取该时点及之前批次与当时生效成分
+   *
+   * 固定顺序返回，不按当日涨跌重排；只读；参数不合法返回 invalid_input（400），其余 502。
+   */
+  app.get('/api/market/room/themes', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['window', 'themeId', 'at'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_market_room_themes', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 系统题材库管理视图（设置页题材库）：只读题材、来源映射与成分生效区间。
+   *
+   * 参数：
+   *   state (可选) active | archived | all，默认 all
+   *   themeId (可选) 返回单题材明细
+   */
+  app.get('/api/theme-library', async (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['state', 'themeId'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.trim() !== '') input[key] = value;
+    }
+    const r = await invokeTool('get_theme_library', input);
+    if (r.ok) {
+      return jsonResult({
+        ok: true,
+        data: { ...(r.data as Record<string, unknown>), canManage: exposeWrite },
+      });
+    }
+    if (r.error.kind === 'invalid_input' || r.error.kind === 'not_found') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 显式导入系统题材库首版种子（write opt-in + 同源 Origin）。
+   * 无本地扶摇概念目录 / 成分时由 tool 返回 invalid_input，不标记导入成功。
+   */
+  app.post('/api/theme-library/import', (c) =>
+    targetMutation(c.req.raw, 'write', 'import_theme_library'),
+  );
+
+  /** 题材库人工维护：新建 / 改名 / 归档 / 重排 / 增删成分（write opt-in + 同源 Origin）。 */
+  app.post('/api/theme-library/update', (c) =>
+    targetMutation(c.req.raw, 'write', 'update_theme_library'),
+  );
+
+  /** 启停盘后自动维护（write opt-in + 同源 Origin）。 */
+  app.post('/api/theme-library/auto/settings', (c) =>
+    targetMutation(c.req.raw, 'write', 'update_theme_library', { action: 'auto-maintenance' }),
+  );
+
+  /**
+   * 立即执行 / 补一次漏日（write + external opt-in + 同源 Origin）。
+   *
+   * 需要外呼涨停池，所以两项能力同时校验；同日重复调用由 repository 的幂等执行记录兵抵挡。
+   */
+  app.post('/api/theme-library/auto/run', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await invokeTool('run_theme_library_auto_maintenance', body.data));
+  });
+
+  /**
    * 作战室股票弹窗的 1 分钟价格与成交额序列。
    *
    * 参数：
@@ -479,14 +569,6 @@ export const registerMarketRoutes = (app: Hono, deps: WebRouteDeps): void => {
 
   // 作战室页面（总览 / 板块追踪 / 成交分布 / 盘中事件，SPA shell）
   app.get('/market/room', serveFile('index.html', 'text/html; charset=utf-8'));
-
-  // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
-  // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
-  app.get('/api/market/indices', async () => {
-    const indexQuotes = await invokeIndexQuotes();
-    if (indexQuotes.ok) return jsonResult({ ok: true, data: indexQuotes.data });
-    return jsonResult({ ok: true, data: { indices: [] } });
-  });
 
   /**
    * 指数当日分时（fetch_intraday_minutes tool；tencent 分钟端点仅沪深，恒指不支持）。

@@ -35,15 +35,13 @@ import { registerMarketRoutes } from './routes/market.js';
 import { registerPortfolioRoutes } from './routes/portfolio.js';
 import { registerResearchRoutes } from './routes/research.js';
 import { registerSettingsRoutes } from './routes/settings.js';
-import {
-  applyBatchQuotes as applyBatchQuotesImpl,
-  createIndexQuotesCache,
-} from './routes/shared.js';
+import { applyBatchQuotes as applyBatchQuotesImpl } from './routes/shared.js';
 import { registerStockBriefRoutes } from './routes/stock-brief.js';
 import { registerStrategyRoutes } from './routes/strategy.js';
 import { registerToolGatewayRoutes } from './routes/tool-gateway.js';
 import type { WebRouteDeps } from './routes/types.js';
 import { registerWatchlistAlertRoutes } from './routes/watchlist-alert.js';
+import { startThemeLibraryAutoScheduler } from './theme-library-auto-scheduler.js';
 
 export type { WebSourceSet };
 export { buildWebContext, resolveDbPath };
@@ -301,8 +299,6 @@ export const createWebApp = (
     return jsonResult(await invokeTool(name, bound.input));
   };
 
-  // 指数行情缓存：dashboard 5s 轮询，push2 对高频请求突发限流（2026-07 实测），
-  // 15s TTL 把请求量降到 1/3；调用失败时回退最近成功值（60s 内），避免指数条闪空。
   // —— 领域路由组装（S4.2）：deps 只暴露 server 内部闭包/状态，模块间无循环依赖 ——
   const applyBatchQuotes: WebRouteDeps['applyBatchQuotes'] = (
     entries,
@@ -310,7 +306,6 @@ export const createWebApp = (
     degradeLabel,
     options,
   ) => applyBatchQuotesImpl(invokeTool, entries, warnings, degradeLabel, options);
-  const invokeIndexQuotes = createIndexQuotesCache(invokeTool);
   const deps: WebRouteDeps = {
     ctxRef,
     contextForRequest,
@@ -323,7 +318,6 @@ export const createWebApp = (
     decisionMutation,
     bindDecisionAccount,
     applyBatchQuotes,
-    invokeIndexQuotes,
     serveFile,
     exposeWrite,
     exposeExternal,
@@ -424,6 +418,10 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     schedulersEnabled
       ? [
           { name: 'post-market', ...startPostMarketScheduler(ctx, { startImmediately: false }) },
+          {
+            name: 'theme-library-auto',
+            ...startThemeLibraryAutoScheduler(ctx, { startImmediately: false }),
+          },
           {
             name: 'daily-judgment',
             ...startDailyJudgmentScheduler(ctx, { startImmediately: false }),

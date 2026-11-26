@@ -772,6 +772,12 @@ SectorCatalogEntry      行业 / 概念目录条目（内部 id、kind、source�
 SectorMembership        板块成分多对多事实（core 的 `StockSectorMembership`；(sectorId, stockId) 主键、state、memberStatus、firstSeenAt、lastSeenAt、missingSince、lastSyncId）；成分消失只标 missing，不物理删除
 SectorChangeEvent       目录 / 成分变更追加记录（自增 seq 主键、kind、sectorId、stockId?、occurredAt、syncId、previousValue / nextValue）；append-only，不回写历史
 SectorSyncRun           一次同步的审计与幂等凭据（syncId 主键、source、succeeded / partial、appliedAt、观察与增删计数、failures）；同 id 重放返回原摘要，不重复落事实
+ThemeLibraryTheme       系统题材库题材（稳定 id、name、active / archived、sortOrder、createdAt / updatedAt / archivedAt）；固定顺序由人维护，不按当日涨跌重排
+ThemeLibraryThemeSource 题材到原始扶摇概念的来源映射（themeId + vendorCode 主键、sectorId、name、createdAt）；只用于溯源与管理端，不参与作战室成分计算
+ThemeLibraryMember      题材成分生效区间（id 主键、themeId、stockId、origin=seed / manual / auto、effectiveFrom / effectiveTo）；增删只追加 / 结束区间，回放按当时区间取成分；origin=auto 是盘后自动维护写入的关系
+ThemeLibraryImport      显式导入审计（importId 主键、source、imported / unchanged、appliedAt、新增题材 / 成分 / 来源计数、skippedThemes）；重复导入只补缺失题材
+ThemeLibraryAutoRun     自动维护执行审计（`tradingDay|source` 主键、status=running / succeeded / failed / skipped、attempt、startedAt / finishedAt / effectiveFrom / appliedAt、新增题材 / 成分与跳过计数、poolCount、pendingCount、plan、pending、skipReason、errorKind / errorMessage）；同一交易日与源唯一，成功为终态，失败 / 跳过可重试
+ThemeLibraryAutoSetting 自动维护开关（id='default' 单行、enabled、updatedAt）；默认关闭，只在管理页显式开启
 LimitUpLadderSample     按采样时点保存的连板天梯事实（`tradingDate|source|sampledAt` 主键、levels、warnings、asOf）；与盘中批次时点对齐，同采样时点幂等且保留首次写入内容
 MarketRoomEvent         盘中扩散 / 分化 / 换位事件（`tradingDate|kind|sectorId|sampledAt` 主键、(tradingDate, kind, sectorId, sampledAt) 唯一、thresholds、evidence、verification、recordedAt）；重复扫描只落一条，阈值与证据保存扫描当时的口径
 ```
@@ -783,7 +789,13 @@ MarketRoomEvent         盘中扩散 / 分化 / 换位事件（`tradingDate|kind
 `collect_market_snapshot` 按一分钟对齐发布批次，要求抓取时间不早于当前分钟；Manager 和共享请求缓存以新鲜度时点区分请求，查询沿用既有缓存。调度日志记录完整轮次耗时、行情时间、抓取时间与覆盖计数。发布批次时按同一采样时点写入；`MarketRoomEvent` 是本地派生事实，
 只使用已发布批次、目录成分与对齐的天梯样本，不引入新的外部来源。
 
-作战室概念榜、概念成交分布与新扫描的盘中事件默认使用精选题材：读模型剔除市场通道、上市状态、财报 / 指数 / 持股组合等非题材标签，并对 active 成分完全相同的概念只保留一个代表；宽概念不再按成分数量剔除，主流锚点（人工智能、新能源汽车等）由主流题材分类定义按 vendorCode 归入固定父板块。精选只影响原始概念视图，不改写目录与成分事实；涨幅榜和成交分布可用 `conceptScope=all` 回查原始目录，回放按各时点生效的成分重新选择。主流的「父板块 → 标准题材」读模型见 `GET /api/market/room/mainstream` / `get_market_room_mainstream`：分类定义版本化、零 IO 在 core，题材行情取所映射概念的 active 成分并集，父板块取子题材并集，同一股票只计一次；未映射概念保留在原始目录并计入 coverage，不伪装成已覆盖。 同一响应还返回每个标准题材的代表股、最多 5 只核心股（领涨 / 当前窗口成交额增量最高 / 最高连板 / 增量补位）与全部成分的 close、日涨幅、5 / 15 分钟涨幅、今日累计成交额、窗口成交额增量、题材内窗口占比与环比、封板与连板；中文名只取 stockUniverse，ST 默认不参与核心股与占比分母，炸板只在前后两个与批次时点对齐的天梯样本可证明时显示。个股弹窗的 1 分钟序列见 `GET /api/market/room/stock-series` / `get_market_room_stock_series`：只读本地已发布 `market_snapshot_batches`，缺口断线不插值，成交额负修正按缺失，不补零。
+作战室的题材涨幅读模型以**系统题材库**为准：`GET /api/market/room/themes` / `get_market_room_themes` 只读库内 active 题材，按 `sortOrder` 固定顺序返回日涨幅、近 5 / 15 分钟涨幅、按各批次当时有效成分合成的日内走势与成分同期表现；同一次响应还带总览轮动图需要的两份派生读模型：每题材按当前口径方向取的前五只个股摘要（`leaders.day` / `leaders.window`，近零端在前、缺数跳过、与题材涨跌幅同口径）与当日可选批次清单（`batches`，升序、不含午休与缺批，与当前选中时点无关，回拖后仍可选当日更晚的已发布批次）。实时视图按请求时生效的成分汇总最近批次的报价；回放成分按 `effectiveFrom <= sampledAt < effectiveTo` 取区间，回放不应用之后的人工增删；走势每个批次只用当时有效成分，缺口不插值。总览的题材区与板块追踪的「题材」分类都走该读模型，不再展示原始概念。行业分类仍走 `get_market_room_sectors(kind=industry)`，保留独立行业榜。
+
+系统题材库的写入路径：设置页 `#settings?tab=themes` → `import_theme_library`（write opt-in）从本地已同步扶摇概念目录与 active 成分生成首版种子，按 core 标准题材定义合并去重并保留稳定 id / 来源映射；重复导入只补缺失题材，不改动人工改名 / 归档 / 顺序 / 成分增删。人工维护走 `update_theme_library`（新建 / 改名 / 归档 / 重排 / 增删成分 / 启停自动维护），Web 以 `targetMutation` 做同源 Origin 与 write 校验。原始概念目录与成分仍保留在 `sector_catalog_entries` / `sector_memberships`，只作为来源映射与「来源 / 管理端」回查，不进入库内题材行情。
+
+盘后自动维护是同一份库的另一个写入路径：`run_theme_library_auto_maintenance`（external + write）读当日涨停池，按主催化归入已维护题材，未覆盖方向需命中本地精选概念且至少两只不同涨停股印证才建库，其余进待核对；归类规则与建库门槛在 core（`theme-library-auto.ts`），题材稳定 id 取自原类名 SHA256 前 16 位，人工改名不改归属。写入以「交易日 + 源」为幂等单元：`claimAutoRun` 原子领取（已成功直接返回，失败 / 跳过 / 超时 running 可重试），`applyAutoPlan` 在同一 IMMEDIATE 事务内建库、追加 `origin=auto` 成分并标记成功；自动关系 `effectiveFrom` 取当日收盘，因此盘后实时视图立即可见、盘中回放不被倒灌；已结束区间视为人工删除，后续自动任务不加回。`apps/web/src/theme-library-auto-scheduler.ts` 在开关开启且 `write` + `external` 同时开启时按交易日盘后独立调度，不与其他盘后任务共用步骤。
+
+原始概念视图（`get_market_room_sectors(kind=concept)`、概念成交分布与盘中事件的 concept 口径）保留为来源 / 研究入口，不参与系统题材库的固定顺序与人工维护。主流的「父板块 → 标准题材」固定分类读模型（`GET /api/market/room/mainstream` / `get_market_room_mainstream`）保留为兼容 / 研究入口，不再是作战室默认题材区。个股弹窗的 1 分钟序列见 `GET /api/market/room/stock-series` / `get_market_room_stock_series`：只读本地已发布 `market_snapshot_batches`，缺口断线不插值，成交额负修正按缺失，不补零。
 
 账户记账通过 `LedgerRepository` 原子更新账户与交易/持仓/流水：Drizzle 在 IMMEDIATE 事务内读取现金、
 计算增减并校验余额；内存实现串行提交。持仓写入携带读取时的旧持仓，在事务内检查冲突，

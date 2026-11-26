@@ -57,6 +57,13 @@ import type {
   StrategySignal,
   StrategyVersion,
   StrategyWatchlistSubscription,
+  ThemeLibraryAutoPending,
+  ThemeLibraryAutoPlan,
+  ThemeLibraryAutoRunStatus,
+  ThemeLibraryAutoSkipReason,
+  ThemeLibraryMemberOrigin,
+  ThemeLibrarySeedSkip,
+  ThemeLibraryState,
   TradeSide,
   TradeSource,
   TradingPlan,
@@ -307,6 +314,121 @@ export const sectorSyncRuns = sqliteTable(
   },
   (t) => ({
     sourceAppliedIdx: index('sector_sync_runs_source_applied_idx').on(t.source, t.appliedAt),
+  }),
+);
+
+/**
+ * 系统题材库：与人维护的题材、固定顺序与来源映射。
+ * 原始扶摇概念仍在 sector_catalog_entries / sector_memberships，本表只保存导入后的种与人工改动。
+ */
+export const themeLibraryThemes = sqliteTable(
+  'theme_library_themes',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    state: text('state').$type<ThemeLibraryState>().notNull(),
+    sortOrder: integer('sort_order').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    nameUnique: uniqueIndex('theme_library_themes_name_unique').on(t.name),
+    stateOrderIdx: index('theme_library_themes_state_order_idx').on(t.state, t.sortOrder),
+  }),
+);
+
+/** 题材来源映射：只记录首版种子来自哪些扶摇概念，不参与作战室成分计算。 */
+export const themeLibraryThemeSources = sqliteTable(
+  'theme_library_theme_sources',
+  {
+    themeId: text('theme_id').notNull(),
+    vendorCode: text('vendor_code').notNull(),
+    sectorId: text('sector_id').notNull(),
+    name: text('name').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.themeId, t.vendorCode], name: 'theme_library_theme_sources_pk' }),
+    themeIdx: index('theme_library_theme_sources_theme_idx').on(t.themeId),
+  }),
+);
+
+/** 成分生效区间：增删都追加区间，不覆盖历史；回放按当时区间取成分。 */
+export const themeLibraryMembers = sqliteTable(
+  'theme_library_members',
+  {
+    id: text('id').primaryKey(),
+    themeId: text('theme_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    origin: text('origin').$type<ThemeLibraryMemberOrigin>().notNull(),
+    effectiveFrom: integer('effective_from', { mode: 'timestamp_ms' }).notNull(),
+    effectiveTo: integer('effective_to', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    themeStockIdx: index('theme_library_members_theme_stock_idx').on(t.themeId, t.stockId),
+    themeFromIdx: index('theme_library_members_theme_from_idx').on(t.themeId, t.effectiveFrom),
+  }),
+);
+
+/** 导入审计与幂等凭据；重复导入只补缺失题材，不覆盖人工改动。 */
+export const themeLibraryImports = sqliteTable(
+  'theme_library_imports',
+  {
+    id: text('id').primaryKey(),
+    source: text('source').notNull(),
+    status: text('status').notNull(),
+    appliedAt: integer('applied_at', { mode: 'timestamp_ms' }).notNull(),
+    createdThemes: integer('created_themes').notNull().default(0),
+    createdMembers: integer('created_members').notNull().default(0),
+    createdSources: integer('created_sources').notNull().default(0),
+    skippedThemes: text('skipped_themes_json', { mode: 'json' })
+      .$type<ThemeLibrarySeedSkip[]>()
+      .notNull(),
+  },
+  (t) => ({
+    appliedIdx: index('theme_library_imports_applied_idx').on(t.appliedAt),
+  }),
+);
+
+/** 自动维护开关：单主机单行（id='default'），与执行审计分表。 */
+export const themeLibraryAutoSettings = sqliteTable('theme_library_auto_settings', {
+  id: text('id').primaryKey(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+/**
+ * 自动维护执行审计：id = `${tradingDay}|${source}`，同交易日同源只有一行。
+ * running / succeeded / failed / skipped 四态，失败与跳过允许重试（attempt + 1），
+ * 成功为终态，并发重入不会重复写入成分。
+ */
+export const themeLibraryAutoRuns = sqliteTable(
+  'theme_library_auto_runs',
+  {
+    id: text('id').primaryKey(),
+    tradingDay: text('trading_day').notNull(),
+    source: text('source').notNull(),
+    status: text('status').$type<ThemeLibraryAutoRunStatus>().notNull(),
+    attempt: integer('attempt').notNull().default(1),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    effectiveFrom: integer('effective_from', { mode: 'timestamp_ms' }),
+    appliedAt: integer('applied_at', { mode: 'timestamp_ms' }),
+    createdThemes: integer('created_themes').notNull().default(0),
+    createdMembers: integer('created_members').notNull().default(0),
+    skippedMembers: integer('skipped_members').notNull().default(0),
+    poolCount: integer('pool_count').notNull().default(0),
+    pendingCount: integer('pending_count').notNull().default(0),
+    plan: text('plan_json', { mode: 'json' }).$type<ThemeLibraryAutoPlan>(),
+    pending: text('pending_json', { mode: 'json' }).$type<ThemeLibraryAutoPending[]>().notNull(),
+    skipReason: text('skip_reason').$type<ThemeLibraryAutoSkipReason>(),
+    errorKind: text('error_kind'),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    startedIdx: index('theme_library_auto_runs_started_idx').on(t.startedAt),
   }),
 );
 
@@ -1427,6 +1549,10 @@ export const schema = {
   sectorMemberships,
   sectorChangeEvents,
   sectorSyncRuns,
+  themeLibraryThemes,
+  themeLibraryThemeSources,
+  themeLibraryMembers,
+  themeLibraryImports,
   limitUpLadderSnapshots,
   limitUpLadderSamples,
   marketSnapshotBatches,

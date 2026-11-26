@@ -31,7 +31,6 @@ import {
   toolRegistry,
 } from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse, setPluginEnabled } from '@luoome/tools/testing';
-import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
@@ -79,7 +78,7 @@ describe('Web 信息架构', () => {
     expect(html).toContain('data-route="strategies"');
     expect(html).toContain('data-route="watchlists"');
     expect(html).toContain('data-route="alerts"');
-    expect(html).toContain('id="btn-dashboard-watch-run"');
+    expect(html).not.toContain('data-route="indices"');
     expect(html).toContain('id="review-performance-snapshots-table"');
     expect(html).toContain('id="review-performance-audit-table"');
   });
@@ -2923,31 +2922,38 @@ describe('POST /api/advice/delete', () => {
 });
 
 describe('MVP dashboard / watch API', () => {
-  it('dashboard 聚合持仓、Watchlist、AlertPlan、watch 状态与最近触发', async () => {
+  it('dashboard 聚合持仓、Watchlist 与 AlertPlan，不再返回已下线的区块', async () => {
     const r = await app.fetch(new Request('http://test/api/dashboard'));
     expect(r.status).toBe(200);
     const body = (await r.json()) as {
       ok: boolean;
-      data?: {
+      data?: Record<string, unknown> & {
         holdings: { holdings: unknown[] };
         watchlists: { items: unknown[] };
         alertPlans: { plans: unknown[] };
-        watch: { state: string };
-        triggers: { triggers: unknown[] };
       };
     };
     expect(body.ok).toBe(true);
     expect(body.data?.holdings.holdings.length).toBeGreaterThan(0);
-    expect(body.data?.watch.state).toBe('never');
+    for (const removed of [
+      'indices',
+      'advice',
+      'watch',
+      'triggers',
+      'metrics',
+      'todayTriggers',
+      'staleWatchlistCount',
+    ]) {
+      expect(removed in (body.data ?? {})).toBe(false);
+    }
   });
 
-  it('dashboard 含指数条 / 实时看板 / 今日预警；指数不支持时仍 200 且 indices 为空', async () => {
+  it('dashboard 实时看板带今日触发摘要；不再附指数条', async () => {
     const r = await app.fetch(new Request('http://test/api/dashboard'));
     expect(r.status).toBe(200);
     const body = (await r.json()) as {
       ok: boolean;
       data?: {
-        indices: { indices: unknown[]; unsupported?: boolean };
         board: Array<{
           stockId: string;
           name: string;
@@ -2957,16 +2963,11 @@ describe('MVP dashboard / watch API', () => {
           watchlists: string[];
           todayTrigger: { count: number; maxPriority: string } | null;
         }>;
-        todayTriggers: unknown[];
         meta: { warnings: string[] };
       };
     };
     expect(body.ok).toBe(true);
-    // FakeMarketAdapter 未实现 fetchIndexQuotes → 降级为空而不是拖垮 dashboard
-    expect(body.data?.indices.indices).toEqual([]);
-    expect(body.data?.indices.unsupported).toBe(true);
     expect(body.data?.meta.warnings).toEqual([]);
-    expect(body.data?.todayTriggers).toBeInstanceOf(Array);
     const board = body.data?.board ?? [];
     expect(board.length).toBeGreaterThan(0);
     const held = board.find((item) => item.holding !== null);
@@ -2975,79 +2976,6 @@ describe('MVP dashboard / watch API', () => {
     expect(typeof held?.name).toBe('string');
     expect(held?.quote?.close).toBeGreaterThan(0);
     expect(held?.watchlists).toBeInstanceOf(Array);
-  });
-
-  it('/api/market/indices：数据源不支持时按 dashboard 语义降级（200 + unsupported）', async () => {
-    const r = await app.fetch(new Request('http://test/api/market/indices'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      ok: boolean;
-      data?: { indices: unknown[]; unsupported?: boolean };
-    };
-    expect(body.ok).toBe(true);
-    expect(body.data?.indices).toEqual([]);
-    expect(body.data?.unsupported).toBe(true);
-  });
-
-  it('指数行情读取失败时给中文降级文案，不把 tool 名当作给用户看的说明', async () => {
-    class FailingIndexAdapter extends FixedQuoteAdapter {
-      override fetchIndexQuotes(): Promise<never> {
-        return Promise.reject(new Error('upstream unavailable'));
-      }
-    }
-    const localCtx: ToolContext = {
-      ...appCtx,
-      adapters: { ...appCtx.adapters, market: new FailingIndexAdapter({ quotes: {} }) },
-    };
-    const localApp = createWebApp(localCtx, { exposeWrite: true, exposeExternal: true });
-    const r = await localApp.fetch(new Request('http://test/api/dashboard'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as { ok: boolean; data?: { meta: { warnings: string[] } } };
-    expect(body.ok).toBe(true);
-    const warnings = body.data?.meta.warnings ?? [];
-    expect(warnings.some((w) => w.includes('指数行情读取失败'))).toBe(true);
-    expect(warnings.some((w) => w.includes('fetch_index_quotes'))).toBe(false);
-  });
-
-  it('/api/market/indices：15s TTL 内第二次命中缓存（上游 fetchIndexQuotes 只调一次）', async () => {
-    class CountingIndexAdapter extends FixedQuoteAdapter {
-      calls = 0;
-      constructor() {
-        super({ quotes: {} });
-      }
-      override fetchIndexQuotes(): Promise<never> {
-        this.calls += 1;
-        // 基类桩声明为 Promise<never>（恒 reject）；这里按真实 IndexQuote 形状返回并断言
-        return Promise.resolve([
-          {
-            code: '000001.SH',
-            name: '上证指数',
-            close: 3900.12 as Money,
-            change: 10.2,
-            changePct: 0.26,
-            ts: new Date('2026-07-21T07:00:00.000Z'),
-            source: 'counting-test',
-          },
-        ]) as unknown as Promise<never>;
-      }
-    }
-    const countingAdapter = new CountingIndexAdapter();
-    const localCtx: ToolContext = {
-      ...appCtx,
-      adapters: { ...appCtx.adapters, market: countingAdapter },
-    };
-    const localApp = createWebApp(localCtx, { exposeWrite: true, exposeExternal: true });
-    const r1 = await localApp.fetch(new Request('http://test/api/market/indices'));
-    const r2 = await localApp.fetch(new Request('http://test/api/market/indices'));
-    expect(r1.status).toBe(200);
-    expect(r2.status).toBe(200);
-    const body = (await r2.json()) as {
-      ok: boolean;
-      data?: { indices: Array<{ code: string }> };
-    };
-    expect(body.ok).toBe(true);
-    expect(body.data?.indices[0]?.code).toBe('000001.SH');
-    expect(countingAdapter.calls).toBe(1);
   });
 
   it('run-once 无需 token；成功后 watch status 可见', async () => {
@@ -3824,66 +3752,6 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
         ],
       },
     });
-  });
-
-  it('dashboard metrics 字段齐全（priorityCounts / deliveryStatusCounts / feedbackCounts / latestRun.notifyFailed / suppressedByDailyLimit / noiseRate）', async () => {
-    const r = await app.fetch(new Request('http://test/api/dashboard'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      ok: boolean;
-      data?: {
-        metrics?: Record<string, unknown>;
-      };
-    };
-    expect(body.ok).toBe(true);
-    const m = body.data?.metrics ?? {};
-    expect(m).toHaveProperty('todayTotal');
-    expect(m).toHaveProperty('priorityCounts');
-    expect(m).toHaveProperty('deliveryStatusCounts');
-    expect(m).toHaveProperty('feedbackCounts');
-    expect(m).toHaveProperty('noiseRate');
-    const latestRun = m.latestRun as null | Record<string, unknown>;
-    if (latestRun !== null) {
-      expect(latestRun).toHaveProperty('notifyFailed');
-      expect(latestRun).toHaveProperty('suppressedByDailyLimit');
-    }
-  });
-
-  it('dashboard 将历史 delivered 计数仅投影为渠道受理，设备送达保持未知', async () => {
-    const dashboardCtx = await buildTestContext();
-    const startedAt = new Date('2026-08-21T01:00:00.000Z');
-    await dashboardCtx.repos.workflowRun.save({
-      id: 'dashboard-channel-accepted',
-      workflowName: 'intraday-watch',
-      mode: 'manual',
-      status: 'succeeded',
-      startedAt,
-      finishedAt: new Date('2026-08-21T01:01:00.000Z'),
-      inputSummary: { notify: true },
-      outputSummary: {
-        evaluatedPlans: 1,
-        evaluatedStocks: 1,
-        triggered: 1,
-        notified: 1,
-        delivered: 1,
-        suppressedByCooldown: 0,
-        suppressedByDailyLimit: 0,
-        notifyFailed: 0,
-      },
-      providerStatuses: [],
-    });
-    const response = await createWebApp(dashboardCtx, { exposeExternal: true }).fetch(
-      new Request('http://test/api/dashboard'),
-    );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      data?: { metrics?: { latestRun?: Record<string, unknown> | null } };
-    };
-    expect(body.data?.metrics?.latestRun).toMatchObject({
-      channelAccepted: 1,
-      deviceDelivered: null,
-    });
-    expect(body.data?.metrics?.latestRun).not.toHaveProperty('delivered');
   });
 });
 
@@ -4852,14 +4720,12 @@ describe('dashboard 数据覆盖与失败状态', () => {
         data: {
           board: unknown[];
           boardCoverage: { available: boolean; complete: boolean };
-          advice: unknown;
         };
       };
     const failed = await read();
     expect(failed.data.board).toEqual([]);
     expect(failed.data.boardCoverage.available).toBe(false);
     expect(failed.data.boardCoverage.complete).toBe(false);
-    expect(failed.data.advice).not.toBeNull();
     ctx.repos.holding.listByAccount = async () => [];
     ctx.repos.watchlist.list = async () => [];
     const empty = await read();
@@ -4868,34 +4734,27 @@ describe('dashboard 数据覆盖与失败状态', () => {
     expect(empty.data.boardCoverage.complete).toBe(true);
   });
 
-  it.each(['advice', 'watch', 'alertPlans', 'triggers'] as const)(
-    '%s 读取失败不阻塞持仓看板，失败区块返回 null 和错误种类',
-    async (section) => {
-      const ctx = await buildTestContext();
-      const fail = async () => {
-        throw new Error('fixture unavailable');
+  it('alertPlans 读取失败不阻塞持仓看板，失败区块返回 null 和错误种类', async () => {
+    const ctx = await buildTestContext();
+    ctx.repos.alertPlan.list = async () => {
+      throw new Error('fixture unavailable');
+    };
+    const response = await createWebApp(ctx).fetch(new Request('http://test/api/dashboard'));
+    const body = (await response.json()) as {
+      ok: boolean;
+      data: Record<string, unknown> & {
+        board: unknown[];
+        boardCoverage: { available: boolean };
+        meta: { sectionErrors: Record<string, { kind: string }> };
       };
-      if (section === 'advice') ctx.repos.advice.query = fail;
-      if (section === 'watch') ctx.repos.workflowRun.listRecent = fail;
-      if (section === 'alertPlans') ctx.repos.alertPlan.list = fail;
-      if (section === 'triggers') ctx.repos.watchTrigger.query = fail;
-      const response = await createWebApp(ctx).fetch(new Request('http://test/api/dashboard'));
-      const body = (await response.json()) as {
-        ok: boolean;
-        data: Record<string, unknown> & {
-          board: unknown[];
-          boardCoverage: { available: boolean };
-          meta: { sectionErrors: Record<string, { kind: string }> };
-        };
-      };
-      expect(response.status).toBe(200);
-      expect(body.ok).toBe(true);
-      expect(body.data[section]).toBeNull();
-      expect(body.data.meta.sectionErrors[section]?.kind).toBe('internal');
-      expect(body.data.board.length).toBeGreaterThan(0);
-      expect(body.data.boardCoverage.available).toBe(true);
-    },
-  );
+    };
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data.alertPlans).toBeNull();
+    expect(body.data.meta.sectionErrors.alertPlans?.kind).toBe('internal');
+    expect(body.data.board.length).toBeGreaterThan(0);
+    expect(body.data.boardCoverage.available).toBe(true);
+  });
 
   it.each(['holdings', 'watchlists'] as const)(
     '%s 失败时标注范围不完整，专属范围不可用且恢复后可重新读取',
@@ -4935,8 +4794,6 @@ describe('dashboard 数据覆盖与失败状态', () => {
   interface CoverageBody {
     ok: boolean;
     data: {
-      todayTriggers: unknown[];
-      metrics: { todayTotal: number | null };
       todayTriggerCoverage: {
         available: boolean;
         total: number | null;
@@ -4989,22 +4846,11 @@ describe('dashboard 数据覆盖与失败状态', () => {
     const body = (await (
       await localApp.fetch(new Request('http://test/api/dashboard'))
     ).json()) as CoverageBody;
-    expect(body.data.todayTriggers).toHaveLength(8);
-    expect(body.data.todayTriggers[0]).toMatchObject({ id: 'older-urgent', priority: 'urgent' });
-    expect(body.data.metrics.todayTotal).toBe(202);
     expect(body.data.todayTriggerCoverage).toEqual({
       available: true,
       total: 202,
       sampled: 8,
       totalIsLowerBound: false,
-    });
-    expect(body.data.metrics).toMatchObject({
-      priorityCounts: { normal: 201, urgent: 1 },
-      deliveryStatusCounts: { 'not-requested': 202 },
-      // S3.2：提醒反馈直接存 watch_triggers.feedback，不再经复盘修订投影。
-      feedbackCounts: { useful: 29, useless: 1 },
-      feedbackTotal: 30,
-      noiseRate: 1 / 30,
     });
     expect(body.data.board).toEqual(
       expect.arrayContaining([
@@ -5075,7 +4921,6 @@ describe('dashboard 数据覆盖与失败状态', () => {
     ).json()) as CoverageBody;
     expect(body.ok).toBe(true);
     expect(body.data.todayTriggerCoverage.available).toBe(false);
-    expect(body.data.metrics.todayTotal).toBeNull();
     expect(
       body.data.meta.warnings.some((warning: string) => warning.includes('今日预警读取失败')),
     ).toBe(true);
@@ -5184,12 +5029,16 @@ describe('dashboard 范围与关联事实', () => {
     const dashboard = (await (
       await localApp.fetch(new Request('http://test/api/dashboard'))
     ).json()) as {
-      data: { metrics: { todayTotal: number }; todayTriggers: Array<{ id: string }> };
+      data: {
+        board: Array<{
+          stockId: string;
+          todayTrigger: { count: number; latest: { id: string } } | null;
+        }>;
+      };
     };
-    expect(dashboard.data.metrics.todayTotal).toBe(1);
-    expect(dashboard.data.todayTriggers.map((trigger) => trigger.id)).toEqual([
-      'current-shanghai-day',
-    ]);
+    const row = dashboard.data.board.find((item) => item.stockId === '002594.SZ');
+    expect(row?.todayTrigger?.count).toBe(1);
+    expect(row?.todayTrigger?.latest.id).toBe('current-shanghai-day');
     const detail = (await (
       await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))
     ).json()) as {

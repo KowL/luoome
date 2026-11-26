@@ -105,6 +105,20 @@ const replayEmptyNotice = (at) =>
     ? null
     : `回放时点 ${replayClockLabel(at)} 及之前没有已发布的盘中批次（早于最早可信样本），该时点不可回放。`;
 
+/** 写入 hash 里的 at（保留 tab / kind / metric / theme 等其它参数）；at 为 null 等同去掉。 */
+const hashWithReplayAt = (at, hash = window.location.hash) => {
+  const raw = String(hash ?? '').replace(/^#/, '');
+  const separator = raw.indexOf('?');
+  const route = separator === -1 ? raw : raw.slice(0, separator);
+  const params = new URLSearchParams(separator === -1 ? '' : raw.slice(separator + 1));
+  const param = replayParam(at);
+  if (param === null) params.delete('at');
+  else params.set('at', param);
+  const query = params.toString();
+  const safeRoute = route === '' ? 'market-room' : route;
+  return query === '' ? safeRoute : `${safeRoute}?${query}`;
+};
+
 /** 去掉 hash 里的 at（「回到最新」），保留 tab / kind / sort / window / event 等其它参数。 */
 const hashWithoutReplayAt = (hash = window.location.hash) => {
   const raw = String(hash ?? '').replace(/^#/, '');
@@ -119,6 +133,7 @@ const hashWithoutReplayAt = (hash = window.location.hash) => {
 
 export {
   hashWithoutReplayAt,
+  hashWithReplayAt,
   parseReplayAt,
   replayAtFromHash,
   replayBannerText,

@@ -6,14 +6,7 @@ import { startOfTodayShanghai } from '../http/time.js';
 import type { WebRouteDeps } from './types.js';
 
 export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => {
-  const {
-    ctxRef,
-    contextForRequest,
-    invokeTool,
-    applyBatchQuotes,
-    invokeIndexQuotes,
-    exposeWrite,
-  } = deps;
+  const { ctxRef, contextForRequest, invokeTool, applyBatchQuotes, exposeWrite } = deps;
 
   app.get('/api/dashboard/stocks/:stockId', async (c) => {
     const stockId = c.req.param('stockId');
@@ -52,32 +45,24 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
     const { scope, watchlistId, pageSize } = query.data;
     const asOf = ctxRef.current.clock();
     const todayStart = startOfTodayShanghai(asOf);
-    const [holdings, watchlists, alertPlans, watch, triggers, advice, recentTriggers, indexQuotes] =
-      await Promise.all([
-        invokeTool('list_holdings', {}),
-        invokeTool('list_watchlists', {}),
-        invokeTool('list_alert_plans', { enabledOnly: false }),
-        invokeTool('get_watch_status', {}),
-        invokeTool('list_watch_triggers', { limit: 8 }),
-        invokeTool('get_advice', { limit: 8 }),
-        invokeTool('list_watch_triggers', {
-          since: todayStart,
-          until: asOf,
-          limit: 8,
-          orderBy: 'priority',
-          includeSummary: true,
-        }),
-        invokeIndexQuotes(),
-      ]);
+    const [holdings, watchlists, alertPlans, recentTriggers] = await Promise.all([
+      invokeTool('list_holdings', {}),
+      invokeTool('list_watchlists', {}),
+      invokeTool('list_alert_plans', { enabledOnly: false }),
+      invokeTool('list_watch_triggers', {
+        since: todayStart,
+        until: asOf,
+        limit: 8,
+        orderBy: 'priority',
+        includeSummary: true,
+      }),
+    ]);
     const warnings: string[] = [];
     const sectionErrors: Record<string, { kind: string }> = {};
     for (const [key, label, result] of [
       ['holdings', '持仓', holdings],
       ['watchlists', '关注列表', watchlists],
       ['alertPlans', '预警计划', alertPlans],
-      ['watch', '盯盘状态', watch],
-      ['triggers', '近期预警', triggers],
-      ['advice', '建议', advice],
       ['todayTriggers', '今日预警', recentTriggers],
     ] as const) {
       if (!result.ok) {
@@ -85,13 +70,6 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
         warnings.push(`${label}读取失败（${result.error.kind}）`);
       }
     }
-    let indices: { indices: unknown[]; unsupported?: boolean; stale?: boolean } = { indices: [] };
-    if (indexQuotes.ok) {
-      indices = indexQuotes.data as typeof indices;
-    } else {
-      warnings.push(`指数行情读取失败（${indexQuotes.error.kind}），指数卡暂不可用`);
-    }
-
     const watchlistRows = (
       (watchlists.ok ? watchlists.data : { items: [] }) as {
         items: Array<{
@@ -109,10 +87,6 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
       watchlistDetailCache.set(id, pending);
       return pending;
     };
-    const staleWatchlistCount = watchlists.ok
-      ? watchlistRows.filter(({ sourceHealth }) => sourceHealth.stale > 0).length
-      : null;
-
     const todayData = recentTriggers.ok
       ? (recentTriggers.data as {
           triggers: unknown[];
@@ -272,32 +246,6 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
       { updateName: true },
     );
     if (scope === 'triggered' && !recentTriggers.ok) boardComplete = false;
-    const priorityCounts = todaySummary?.priorityCounts ?? {};
-    const deliveryStatusCounts = todaySummary?.deliveryStatusCounts ?? {};
-    const feedbackCounts = todaySummary?.feedbackCounts ?? {};
-
-    // 噪声率（§11）：样本 ≥ 30 才展示，避免误读
-    const feedbackTotal = Object.values(feedbackCounts).reduce((s, n) => s + n, 0);
-    const noiseRate =
-      feedbackTotal >= 30
-        ? ((feedbackCounts.useless ?? 0) + (feedbackCounts.ignored ?? 0)) /
-          Math.max(feedbackTotal, 1)
-        : null;
-
-    // watch.run 摘要（§11）：最近一轮的发送失败 / 抑制分项
-    const watchData = (watch.ok ? watch.data : null) as {
-      latest?: Record<string, unknown> | null;
-    } | null;
-    const latestRun = watchData?.latest ?? null;
-    const latestSummary =
-      typeof latestRun?.outputSummary === 'object' && latestRun.outputSummary !== null
-        ? (latestRun.outputSummary as Record<string, unknown>)
-        : {};
-    const latestNumber = (key: string): number | undefined => {
-      const value = latestSummary[key];
-      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-    };
-
     return jsonResult({
       ok: true,
       data: {
@@ -305,12 +253,6 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
         holdings: holdings.ok ? holdings.data : null,
         watchlists: watchlists.ok ? watchlists.data : null,
         alertPlans: alertPlans.ok ? alertPlans.data : null,
-        watch: watch.ok ? watch.data : null,
-        triggers: triggers.ok ? triggers.data : null,
-        advice: advice.ok ? advice.data : null,
-        staleWatchlistCount,
-        // 看盘主页：指数条 + 实时看板 + 今日预警列表
-        indices,
         board: pageItems,
         boardQuery: { scope, watchlistId: watchlistId ?? null, page, pageSize },
         canWrite: exposeWrite,
@@ -335,35 +277,7 @@ export const registerDashboardRoutes = (app: Hono, deps: WebRouteDeps): void => 
           sampled: todayTriggers.length,
           totalIsLowerBound: false,
         },
-        todayTriggers,
         meta: { warnings, sectionErrors },
-        // v0.7 策略预警 dashboard 指标（§11）
-        metrics: {
-          todayTotal: recentTriggers.ok ? (recentTriggers.data as { total: number }).total : null,
-          priorityCounts,
-          deliveryStatusCounts,
-          feedbackCounts,
-          feedbackTotal,
-          noiseRate,
-          latestRun: latestRun
-            ? {
-                status: latestRun.status ?? null,
-                evaluatedPlans: latestNumber('evaluatedPlans') ?? 0,
-                evaluatedStocks: latestNumber('evaluatedStocks') ?? 0,
-                triggered: latestNumber('triggered') ?? 0,
-                notified: latestNumber('notified') ?? 0,
-                channelAccepted: latestNumber('delivered') ?? null,
-                deviceDelivered: null,
-                unknownRules: latestNumber('unknownRules') ?? null,
-                suppressedByCooldown: latestNumber('suppressedByCooldown') ?? 0,
-                suppressedByDailyLimit: latestNumber('suppressedByDailyLimit') ?? 0,
-                notifyFailed: latestNumber('notifyFailed') ?? 0,
-                startedAt: latestRun.startedAt ?? null,
-                finishedAt: latestRun.finishedAt ?? null,
-                error: latestRun.error ?? null,
-              }
-            : null,
-        },
       },
     });
   });

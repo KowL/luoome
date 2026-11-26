@@ -57,7 +57,6 @@ export interface WebRouteDeps {
     degradeLabel: string,
     options?: { readonly updateName?: boolean; readonly keepExistingChangePct?: boolean },
   ): Promise<void>;
-  invokeIndexQuotes(): Promise<ToolResult<unknown>>;
   /** 静态 SPA shell 响应（/market/limit-up 等领域内页面路由使用）。 */
   serveFile(file: string, contentType: string): (c: Context) => Promise<Response>;
   readonly exposeWrite: boolean;

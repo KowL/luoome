@@ -30,6 +30,7 @@ export { DrizzleStockBriefRepository } from './stock-brief.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
 export { DrizzleStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
+export { DrizzleThemeLibraryRepository } from './theme-library.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleTradingPlanRepository } from './trading-plan.js';
 export { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';

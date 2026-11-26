@@ -4,6 +4,7 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   hashWithoutReplayAt,
+  hashWithReplayAt,
   parseReplayAt,
   replayAtFromHash,
   replayBannerText,
@@ -81,6 +82,18 @@ describe('hash 往返与规范化', () => {
     );
     expect(hashWithoutReplayAt('#market-room?at=2026-09-28T02%3A15%3A00.000Z')).toBe('market-room');
     expect(hashWithoutReplayAt('')).toBe('market-room');
+  });
+
+  it('时间轴写入 at 用同一套 hash 序列化，保留 tab / 口径 / 展开题材', () => {
+    expect(
+      hashWithReplayAt(at('10:15'), '#market-room?tab=overview&metric=day&theme=ai-computing'),
+    ).toBe(
+      'market-room?tab=overview&metric=day&theme=ai-computing&at=2026-09-28T02%3A15%3A00.000Z',
+    );
+    expect(
+      hashWithReplayAt(null, '#market-room?tab=overview&at=2026-09-28T02%3A15%3A00.000Z'),
+    ).toBe('market-room?tab=overview');
+    expect(hashWithReplayAt(at('10:15'), '')).toBe('market-room?at=2026-09-28T02%3A15%3A00.000Z');
   });
 });
 

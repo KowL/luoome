@@ -29,6 +29,7 @@
 |---|---|
 | [AI 投资协作首页与移动端核心体验 PRD](./prd/ai-investment-workspace.md) | 已确认需求、核心旅程、手机交互、方向共识与记忆、跟踪记录、验收标准及实施切片 |
 | [MVP 2.0：AI 股票投研自动化工作流](./prd/mvp2-ai-stock-research-automation.md) | 盘后计划、账户报告、基于实时市场证据的确定性盘中提醒与仓位约束（2026-09-28 验收通过；后续决定以 CONTEXT.md 为准） |
+| [作战室题材轮动设计](./prd/market-room-theme-rotation.md) | 盘中时间轴、涨跌双排题材卡与成分股前五 |
 | [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照、炸板/断板字段与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
 | [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |
@@ -96,6 +97,7 @@
 
 `archive/` 保存已完成阶段的计划、任务规格和验收快照，仅用于追溯，不作为当前实现契约。当前行为以代码、长期维护文档及对应 PRD/DDD 为准。
 
+- [Vibe-Trading 对照研究（2026-11-25）](./archive/vibe-trading-comparative-research-20261125.md) — 固定上游源码基线、现有能力对照、证据与结算缺口，以及适合 advisor-first 的借鉴顺序
 - [个人订阅托管版详细设计（已退役）](./archive/hosted-personal-subscription-detailed-design.md)
 - [个人订阅托管版开发改造计划（已退役）](./archive/hosted-personal-subscription-development-plan.md)
 - [个人订阅托管版运行与恢复（已退役）](./archive/hosted-personal-subscription.md)

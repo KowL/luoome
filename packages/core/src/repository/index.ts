@@ -68,6 +68,21 @@ import type {
   StrategyWatchlistSubscription,
   StrategyWatchlistSubscriptionStatus,
 } from '../entity/strategy-watchlist-subscription.js';
+import type {
+  ThemeLibraryImportInput,
+  ThemeLibraryImportSummary,
+  ThemeLibraryMember,
+  ThemeLibraryMemberOrigin,
+  ThemeLibraryState,
+  ThemeLibraryTheme,
+  ThemeLibraryThemeSource,
+} from '../entity/theme-library.js';
+import type {
+  ThemeLibraryAutoPlan,
+  ThemeLibraryAutoRun,
+  ThemeLibraryAutoSettings,
+  ThemeLibraryAutoSkipReason,
+} from '../entity/theme-library-auto.js';
 import type { Trade } from '../entity/trade.js';
 import type { TradingPlan, TradingPlanQuery } from '../entity/trading-plan.js';
 import type {
@@ -217,6 +232,112 @@ export interface SectorCatalogRepository {
     readonly sectorId?: string;
     readonly stockId?: string;
   }): Promise<readonly SectorChangeEvent[]>;
+}
+
+/**
+ * 系统题材库：人维护的题材、固定顺序与成分生效区间。
+ *
+ * 导入只补齐缺失的种子题材；已存在题材的改名 / 归档 / 顺序 / 成分增删不被覆盖。
+ */
+export interface ThemeLibraryRepository {
+  /** 原子导入首版种子；同 importId 重放返回原摘要。 */
+  importSeed(input: ThemeLibraryImportInput): Promise<ThemeLibraryImportSummary>;
+  latestImport(): Promise<ThemeLibraryImportSummary | null>;
+  listThemes(input?: {
+    readonly state?: ThemeLibraryState | 'all';
+  }): Promise<readonly ThemeLibraryTheme[]>;
+  findTheme(id: string): Promise<ThemeLibraryTheme | null>;
+  findThemeByName(name: string): Promise<ThemeLibraryTheme | null>;
+  listSources(themeIds?: readonly string[]): Promise<readonly ThemeLibraryThemeSource[]>;
+  /**
+   * 按题材读取成分区间；`at` 给定时只返回该时点生效的区间（左闭右开）。
+   * 缺省返回全部区间（含已结束），管理端用它展示历史。
+   */
+  listMembers(input?: {
+    readonly themeIds?: readonly string[];
+    readonly at?: Date;
+  }): Promise<readonly ThemeLibraryMember[]>;
+  createTheme(input: {
+    readonly id: string;
+    readonly name: string;
+    readonly at: Date;
+  }): Promise<ThemeLibraryTheme>;
+  /** 改名；题材不存在返回 null。 */
+  renameTheme(input: {
+    readonly themeId: string;
+    readonly name: string;
+    readonly at: Date;
+  }): Promise<ThemeLibraryTheme | null>;
+  /** 归档；题材不存在返回 null。 */
+  archiveTheme(input: {
+    readonly themeId: string;
+    readonly at: Date;
+  }): Promise<ThemeLibraryTheme | null>;
+  /** 按完整 id 列表重排固定顺序；列表必须覆盖当前全部题材（含归档）。 */
+  reorderThemes(input: {
+    readonly themeIds: readonly string[];
+    readonly at: Date;
+  }): Promise<readonly ThemeLibraryTheme[]>;
+  /** 批量新增成分；已在生效区间内的股票跳过，返回实际新增数。 */
+  addMembers(input: {
+    readonly themeId: string;
+    readonly stockIds: readonly string[];
+    readonly origin: ThemeLibraryMemberOrigin;
+    readonly at: Date;
+  }): Promise<number>;
+  /** 结束某只股票的当前生效区间；原本不在生效区间内返回 false。 */
+  removeMember(input: {
+    readonly themeId: string;
+    readonly stockId: string;
+    readonly at: Date;
+  }): Promise<boolean>;
+
+  /** 自动维护开关；未写过时返回默认关闭。 */
+  getAutoSettings(): Promise<ThemeLibraryAutoSettings>;
+  saveAutoSettings(input: {
+    readonly enabled: boolean;
+    readonly at: Date;
+  }): Promise<ThemeLibraryAutoSettings>;
+  /**
+   * 原子领取某交易日 + 源的执行权：已成功直接返回；失败 / 跳过 / 超时未完成的 running
+   * 允许重试（attempt + 1）；正在执行的并发调用拿到 claimed=false，不重复写。
+   */
+  claimAutoRun(input: {
+    readonly tradingDay: string;
+    readonly source: string;
+    readonly now: Date;
+    readonly staleBefore: Date;
+  }): Promise<{ readonly claimed: boolean; readonly run: ThemeLibraryAutoRun }>;
+  /**
+   * 原子应用计划：仅当该 run 仍是本次领取的 running 时写入题材与成分并标记成功，
+   * 生效时间与审计时间分别记录；并发或重复调用不改动已成功的执行。
+   */
+  applyAutoPlan(input: {
+    readonly tradingDay: string;
+    readonly source: string;
+    readonly attempt: number;
+    readonly plan: ThemeLibraryAutoPlan;
+    readonly effectiveFrom: Date;
+    readonly appliedAt: Date;
+  }): Promise<ThemeLibraryAutoRun>;
+  /** 记录失败 / 跳过；只更新仍属于本次领取的 running 行，其他情况返回当前行。 */
+  finishAutoRun(input: {
+    readonly tradingDay: string;
+    readonly source: string;
+    readonly attempt: number;
+    readonly status: 'failed' | 'skipped';
+    readonly finishedAt: Date;
+    readonly skipReason?: ThemeLibraryAutoSkipReason;
+    readonly errorKind?: string;
+    readonly errorMessage?: string;
+    readonly poolCount?: number;
+  }): Promise<ThemeLibraryAutoRun>;
+  findAutoRun(input: {
+    readonly tradingDay: string;
+    readonly source: string;
+  }): Promise<ThemeLibraryAutoRun | null>;
+  /** 最近执行（按开始时间倒序）；管理页与状态 tool 共用。 */
+  listAutoRuns(input?: { readonly limit?: number }): Promise<readonly ThemeLibraryAutoRun[]>;
 }
 
 /** 已审计的按交易日涨停天梯 PIT 快照；replay 只允许读取此仓储。 */
@@ -672,6 +793,8 @@ export interface RepositoryRegistry {
   readonly stockUniverse: StockUniverseRepository;
   /** 行业 / 概念目录与多对多成分（盘前同步的事实链）。 */
   readonly sectorCatalog: SectorCatalogRepository;
+  /** 系统题材库（人维护的题材与成分生效区间）。 */
+  readonly themeLibrary: ThemeLibraryRepository;
   /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
   /** 按采样时点保存的天梯事实（开板 / 换位时间线用）。 */

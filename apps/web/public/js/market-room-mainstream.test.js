@@ -202,13 +202,14 @@ describe('主流题材地图文案', () => {
 });
 
 describe('作战室总览接入主流题材地图', () => {
-  it('总览读取 mainstream 接口，不再用 top40 概念卡决定展示方向', () => {
+  it('总览读取系统题材库接口，不再用 top40 概念卡决定展示方向', () => {
     const room = read('./market-room.js');
-    const mainstream = read('./market-room-mainstream.js');
-    expect(room).toContain('renderMainstreamPane');
-    expect(room).toContain('fetchMainstream');
+    const themes = read('./market-room-themes.js');
+    expect(room).toContain('renderOverviewThemePane');
+    expect(room).toContain('fetchThemeRotation');
     expect(room).not.toContain('rotationBoard');
-    expect(mainstream).toContain('/api/market/room/mainstream');
+    expect(themes).toContain('/api/market/room/themes');
+    expect(themes).toContain('固定顺序');
     const board = read('./market-room-board.js');
     expect(board).not.toContain('OVERVIEW_CONCEPT_LIMIT');
   });
@@ -217,6 +218,8 @@ describe('作战室总览接入主流题材地图', () => {
     const routes = read('../../src/routes/market.ts');
     expect(routes).toContain("app.get('/api/market/room/mainstream'");
     expect(routes).toContain("invokeTool('get_market_room_mainstream'");
+    expect(routes).toContain("app.get('/api/market/room/themes'");
+    expect(routes).toContain("invokeTool('get_market_room_themes'");
   });
 });
 
@@ -332,24 +335,25 @@ describe('短线核心股与全部成分纯函数', () => {
 });
 
 describe('作战室短线核心股交互接线', () => {
-  it('内联展开 / 全部成分 / 弹窗 / 同批次序列 / 60 秒可见刷新都已接线', () => {
-    const mainstream = read('./market-room-mainstream.js');
+  it('内联展开 / 成分表 / 弹窗 / 同批次序列 / 60 秒可见刷新都已接线', () => {
+    const themes = read('./market-room-themes.js');
+    const rotation = read('./market-room-rotation.js');
     const room = read('./market-room.js');
     const routes = read('../../src/routes/market.ts');
-    expect(mainstream).toContain('room-core-list');
-    expect(mainstream).toContain('room-constituent-table');
-    expect(mainstream).toContain('data-stock-id');
-    expect(mainstream).toContain('/api/market/room/stock-series');
-    expect(mainstream).toContain('openModal');
-    expect(mainstream).toContain('closeModal');
-    expect(mainstream).toContain('MutationObserver');
-    expect(mainstream).toContain('显示 ST');
-    expect(mainstream).toContain('mainstreamHashWithoutStock');
-    expect(mainstream).toContain('mainstreamHashWithoutTheme');
+    // 总览题材区改为轮动图：卡内成分摘要 + 展开时复用同一张成分表
+    expect(rotation).toContain('memberTable');
+    expect(rotation).toContain('room-rotation-stock');
+    expect(themes).toContain('room-constituent-table');
+    expect(themes).toContain('data-stock-id');
+    expect(themes).toContain('/api/market/room/stock-series');
+    expect(themes).toContain('openModal');
+    expect(themes).toContain('closeModal');
+    expect(themes).toContain('themeLibraryHash');
+    expect(themes).toContain('trendPolyline');
     expect(room).toContain('bindVisibilityRefresh');
     expect(room).toContain("document.visibilityState === 'visible'");
     expect(room).toContain('window.scrollY');
-    expect(room).toContain('stockBoard');
+    expect(room).toContain('renderThemeSectorsPane');
     expect(routes).toContain("app.get('/api/market/room/stock-series'");
     expect(routes).toContain("invokeTool('get_market_room_stock_series'");
   });

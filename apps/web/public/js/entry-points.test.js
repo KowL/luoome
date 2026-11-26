@@ -155,7 +155,7 @@ describe('报告页入口', () => {
     expect(html).toContain('id="report-detail"');
     expect(appJs).toContain("'reports'");
     expect(appJs).toContain('renderReports');
-    expect(html).toContain('id="dashboard-closing-report"');
+    expect(html).not.toContain('id="dashboard-closing-report"');
   });
 });
 
@@ -261,33 +261,34 @@ describe('主题皮肤入口', () => {
 });
 
 describe('看盘主页结构', () => {
-  it('指数条 / 市场概览 / 迷你热力 / 要闻 / 实时看板 / 今日预警容器齐全', () => {
-    expect(html).toContain('id="dashboard-indices"');
-    expect(html).toContain('id="dashboard-overview"');
-    expect(html).toContain('id="dash-sector-heatmap"');
-    expect(html).toContain('id="dash-news-list"');
+  it('首页只留我的看板与财经要闻两件行情内容', () => {
     expect(html).toContain('id="dashboard-board"');
     expect(html).toContain('id="dashboard-board-coverage"');
-    expect(html).toContain('id="dash-trigger-list"');
-    expect(html).toContain('id="dash-advice-list"');
+    expect(html).toContain('id="dash-news-list"');
+    expect(html).toContain('id="dash-news-meta"');
+    for (const id of [
+      'dashboard-indices',
+      'dashboard-overview',
+      'dash-sector-heatmap',
+      'dash-trigger-list',
+      'dash-advice-list',
+      'dash-watch-rail',
+      'dash-metrics-card',
+      'dashboard-data-health',
+      'btn-dashboard-refresh',
+      'btn-dashboard-auto-refresh',
+    ]) {
+      expect(html).not.toContain(`id="${id}"`);
+    }
   });
 
-  it('区块顺序：指数 → 市场概况 → 个人看板与预警 → 热力/要闻 → 运行与数据健康', () => {
-    const order = [
-      'id="dashboard-indices"',
-      'id="dashboard-overview"',
-      'id="dashboard-board"',
-      'id="dash-trigger-list"',
-      'id="dash-sector-heatmap"',
-      'id="dash-news-list"',
-      'id="dash-watch-rail"',
-      'id="dashboard-data-health"',
-    ];
-    const positions = order.map((marker) => html.indexOf(marker));
-    for (const pos of positions) expect(pos).toBeGreaterThan(-1);
-    for (let i = 1; i < positions.length; i += 1) {
-      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
-    }
+  it('区块顺序：看板在要闻之前，两块都在投资工作区之后', () => {
+    const workspaceAt = html.indexOf('id="investment-workspace"');
+    const boardAt = html.indexOf('id="dashboard-board"');
+    const newsAt = html.indexOf('id="dash-news-list"');
+    for (const pos of [workspaceAt, boardAt, newsAt]) expect(pos).toBeGreaterThan(-1);
+    expect(boardAt).toBeGreaterThan(workspaceAt);
+    expect(newsAt).toBeGreaterThan(boardAt);
   });
 
   it('持仓汇总卡片已迁出看盘页（无 dashboard-stats / dash-total-value）', () => {
@@ -296,9 +297,11 @@ describe('看盘主页结构', () => {
     expect(html).not.toContain('id="dash-holdings-count"');
   });
 
-  it('今日建议条数并入建议卡片 meta（dash-advice-meta），不丢信息', () => {
-    expect(html).toContain('id="dash-advice-meta"');
-    expect(read('./pages.js')).toContain("$('#dash-advice-meta')");
+  it('首页不再渲染建议、今日预警与盯盘运维区块', () => {
+    const pages = read('./pages.js');
+    for (const selector of ['#dash-advice-list', '#dash-trigger-list', '#dash-metrics-card']) {
+      expect(pages).not.toContain(selector);
+    }
   });
 });
 
@@ -317,25 +320,24 @@ describe('持仓页汇总卡片', () => {
 });
 
 describe('看盘页市场行情区块', () => {
-  it('看盘行情与主看板分区刷新，离开路由时失效旧请求', () => {
+  it('看板与要闻分区刷新，离开路由时失效旧请求', () => {
     const appJs = read('./app.js');
-    expect(appJs).toContain("from './dashboard-market.js'");
-    expect(appJs).toContain('invalidateDashboardMarket();');
-    expect(appJs).toContain('renderDashboardMarketBlocks()');
+    expect(appJs).toContain("from './dashboard-news.js'");
+    expect(appJs).toContain('invalidateDashboardNews();');
+    expect(appJs).toContain('renderDashboardNews()');
     expect(appJs).toContain('if (visible()) void renderDashboard(setStatus)');
     expect(appJs).toContain('}, 15000)');
     expect(appJs).toContain('}, 60000)');
     expect(appJs).toContain("document.visibilityState === 'visible'");
   });
 
-  it('迷你热力与 sectors 页共用 sector-heatmap.js', () => {
-    expect(read('./dashboard-market.js')).toContain("from './sector-heatmap.js'");
+  it('首页不再渲染板块迷你热力，板块页仍复用 sector-heatmap.js', () => {
     expect(read('./sectors.js')).toContain("from './sector-heatmap.js'");
-    expect(read('./dashboard-market.js')).toContain("'#sectors'");
+    expect(read('./pages.js')).not.toContain('renderSectorHeatmap');
   });
 
   it('要闻区块走 /api/news（fetch_news tool）', () => {
-    const news = read('./dashboard-market.js');
+    const news = read('./dashboard-news.js');
     expect(news).toContain('/api/news');
     expect(news).toContain('encodeURIComponent(source)');
     expect(news).toContain('wrap.onscroll');
@@ -388,30 +390,12 @@ describe('个股估值信息', () => {
   });
 });
 
-describe('看盘页指数卡片', () => {
-  it('dashboard 用 renderIndexCards 渲染 4 张核心指数卡（数据空仍渲染）', () => {
-    const pages = read('./pages.js');
-    expect(pages).toContain("import { renderIndexCards } from './index-strip.js'");
-    expect(pages).toContain("renderIndexCards('dashboard-indices'");
-    expect(read('./index-strip.js')).toContain('renderIndexCards');
-    expect(html).toContain('id="dashboard-indices" class="index-card-grid dashboard-index-grid"');
-  });
-
-  it('看盘页直接展示 4 张指数卡，点击卡片进入指数页并带上指数 code', () => {
-    expect(html).toContain('id="dashboard-indices" class="index-card-grid dashboard-index-grid"');
-    const pages = read('./pages.js');
-    expect(pages).toContain('indices?code=');
-    expect(pages).toContain('encodeURIComponent(code)');
-  });
-});
-
 describe('看盘页时间展示去重', () => {
-  it('卡片 meta 不再写抓取时刻，全页只保留顶部一处刷新时间', () => {
-    expect(read('./dashboard-market.js')).not.toContain('获取于');
+  it('首页不再写刷新时刻，避免和 15 秒自动刷新重复', () => {
+    expect(read('./dashboard-news.js')).not.toContain('获取于');
     const pages = read('./pages.js');
     expect(pages).not.toContain('看板获取于');
-    expect(pages).toContain('看板更新于');
-    expect(read('./index-strip.js')).not.toContain("? '旧快照 · ' : ''");
+    expect(pages).not.toContain('看板更新于');
   });
 
   it('看板行情状态不再单列：条数与涨跌分布只在覆盖行写一次', () => {
@@ -420,36 +404,6 @@ describe('看盘页时间展示去重', () => {
     expect(pages).not.toContain('行情状态');
     expect(pages).toContain('board-quote-note');
     expect(pages).toMatch(/涨\$\{stats\.up\} 跌\$\{stats\.down\}/);
-  });
-});
-
-describe('指数页结构', () => {
-  it('导航「看盘」后有「指数」菜单项，#route-indices section 存在', () => {
-    expect(html).toContain('data-group="market"');
-    expect(appJs).toContain("['indices', '指数']");
-    expect(html).toContain('id="route-indices"');
-  });
-
-  it('指数页容器齐全：6 卡网格 / 分时图 / 明细', () => {
-    expect(html).toContain('id="indices-cards"');
-    expect(html).toContain('id="indices-chart-card"');
-    expect(html).toContain('id="indices-chart-title"');
-    expect(html).toContain('id="indices-chart"');
-    expect(html).toContain('id="indices-detail"');
-  });
-
-  it('app.js 接入 indices 路由并负责 teardown（10s 轮询定时器）', () => {
-    expect(appJs).toContain("'indices'");
-    expect(appJs).toContain("import { renderIndicesPage, teardownIndices } from './indices.js'");
-    expect(appJs).toContain('teardownIndices();');
-    expect(appJs).toContain('renderIndicesPage(setStatus)');
-  });
-
-  it('指数定义表独立成 index-defs.js，被卡片渲染与指数页共用', () => {
-    expect(read('./index-defs.js')).toContain('INDEX_DEFS');
-    expect(read('./index-defs.js')).toContain('DASHBOARD_INDEX_CODES');
-    expect(read('./pages.js')).toContain("from './index-defs.js'");
-    expect(read('./indices.js')).toContain("from './index-defs.js'");
   });
 });
 
@@ -479,13 +433,11 @@ describe('设置页数据同步入口', () => {
     expect(sync).toContain('llmBudgetView');
   });
 
-  it('设置页与首页数据健康卡都展示 AI 用量（同一 llmBudgetView）', () => {
+  it('AI 用量只在设置页展示（llmBudgetView）', () => {
     const sync = read('./market-sync.js');
-    const pages = read('./pages.js');
     expect(sync).toContain('LLM_BUDGET_EXHAUSTED_TEXT');
     expect(sync).toContain('llmBudgetView');
-    expect(pages).toContain('llmBudgetView');
-    expect(pages).toContain('data-health-llm-budget');
+    expect(read('./pages.js')).not.toContain('llmBudgetView');
   });
 });
 

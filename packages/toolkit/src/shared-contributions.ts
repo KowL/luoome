@@ -74,6 +74,7 @@ import { getMarketRoomOverviewTool } from './tools/market-room-overview.js';
 import { getMarketRoomSectorDetailTool } from './tools/market-room-sector-detail.js';
 import { getMarketRoomSectorsTool } from './tools/market-room-sectors.js';
 import { getMarketRoomStockSeriesTool } from './tools/market-room-stock-series.js';
+import { getMarketRoomThemesTool } from './tools/market-room-themes.js';
 import { getMarketSnapshotBatchTool } from './tools/market-snapshot-batch.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
@@ -128,6 +129,12 @@ import {
   syncStrategyWatchlistSubscriptionsTool,
   unsubscribeStrategyFromWatchlistTool,
 } from './tools/strategy-watchlist-subscription.js';
+import {
+  getThemeLibraryTool,
+  importThemeLibraryTool,
+  updateThemeLibraryTool,
+} from './tools/theme-library.js';
+import { runThemeLibraryAutoMaintenanceTool } from './tools/theme-library-auto.js';
 import {
   evaluateTradingPlanBudgetTool,
   getTradingPlanTool,
@@ -367,6 +374,33 @@ export const sharedToolContributions = {
     tool: getMarketRoomMainstreamTool,
     agent: true,
     dependencies: [],
+  },
+  get_market_room_themes: {
+    owner: 'shared-query',
+    tool: getMarketRoomThemesTool,
+    agent: true,
+    dependencies: [],
+  },
+  get_theme_library: {
+    owner: 'shared-query',
+    tool: getThemeLibraryTool,
+    agent: false,
+  },
+  import_theme_library: {
+    owner: 'business.market-room',
+    tool: importThemeLibraryTool,
+    agent: false,
+  },
+  update_theme_library: {
+    owner: 'business.market-room',
+    tool: updateThemeLibraryTool,
+    agent: false,
+  },
+  run_theme_library_auto_maintenance: {
+    owner: 'business.market-room',
+    tool: runThemeLibraryAutoMaintenanceTool,
+    agent: false,
+    dependencies: ['limitUpMarket'],
   },
   get_market_room_stock_series: {
     owner: 'shared-query',

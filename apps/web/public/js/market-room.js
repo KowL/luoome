@@ -32,20 +32,25 @@ import {
   renderEventsPane,
 } from './market-room-events.js';
 import {
-  fetchMainstream,
-  mainstreamParamsFromHash,
-  renderMainstreamPane,
-} from './market-room-mainstream.js';
-import {
   hashWithoutReplayAt,
+  hashWithReplayAt,
   replayAtFromHash,
   replayBannerText,
   replayEmptyNotice,
   replayHashSuffix,
+  replayParam,
   replayQueryPrefix,
   replayQuerySuffix,
 } from './market-room-replay.js';
 import { fetchCoreStocks, renderCoreStocksPane } from './market-room-roles.js';
+import {
+  fetchRotation,
+  renderOverviewThemePane,
+  resetRotationUiState,
+  rotationParamsFromHash,
+  syncOverviewRotationEdges,
+  updateOverviewThemePane,
+} from './market-room-rotation.js';
 import {
   fetchSectorDetail,
   renderSectorDetailPane,
@@ -53,6 +58,13 @@ import {
   sectorDetailParamsFromHash,
   toggleCompareSelection,
 } from './market-room-sector-detail.js';
+import {
+  fetchThemeRotation,
+  renderThemeSectorsPane,
+  resetThemeLibraryUiState,
+  themeLibraryMetaText,
+  themeLibraryParamsFromHash,
+} from './market-room-themes.js';
 import { formatClock as fmtClock, formatAmount, formatPct } from './market-shared.js';
 import { $, el, mount, sortableHeader } from './ui.js';
 
@@ -65,13 +77,12 @@ const ROOM_TAB_LABELS = {
 };
 
 const SECTOR_KINDS = ['industry', 'concept'];
-const SECTOR_KIND_LABELS = { industry: '行业', concept: '概念' };
+const SECTOR_KIND_LABELS = { industry: '行业', concept: '题材' };
 const SECTOR_SORTS = ['day', 'window5', 'window15'];
 const SECTOR_SORT_LABELS = { day: '日涨幅', window5: '5 分钟', window15: '15 分钟' };
 const SECTOR_WINDOWS = ['w5', 'w15'];
 const SECTOR_WINDOW_LABELS = { w5: '5 分钟', w15: '15 分钟' };
 const SECTOR_CONCEPT_SCOPES = ['focused', 'all'];
-const SECTOR_CONCEPT_SCOPE_LABELS = { focused: '精选题材', all: '全部题材' };
 
 const SECTOR_EMPTY_TEXTS = {
   no_batch: '尚无已发布的盘中批次',
@@ -99,10 +110,15 @@ const EMPTY_STATE_TEXTS = {
 
 const COVERAGE_LABELS = { CN_A_SHARES_SH_SZ: '沪深 A 股', CN_A_SHARES_BJ: '北交所' };
 const REFRESH_MS = 60_000;
+/** 时间轴拖动合并窗口：只让最新一次选择落屏。 */
+const SEEK_DEBOUNCE_MS = 150;
 const ROOM_DISCLAIMER = '本内容仅技术研究，不构成投资建议；投资有风险，决策需自行承担。';
 
 let roomEpoch = 0;
 let roomTimer = null;
+let seekTimer = null;
+let seekToken = 0;
+let roomSetStatus = () => {};
 /**
  * 最近一次成功的视图数据；请求失败时只在「同一分类 + 同一回放时点」下复用，
  * 避免把最新盘面画进历史回放。
@@ -469,7 +485,7 @@ const boardCard = (overview, at) => {
   ]);
 };
 
-const renderOverviewPane = (overview, at, mainstream, mainstreamParams, stockBoard) => {
+const renderOverviewPane = (overview, at, rotation, onSeek) => {
   const empty = emptyStateText(overview);
   if (empty !== null) {
     const replayNotice = overview?.emptyReason === 'no_batch' ? replayEmptyNotice(at) : null;
@@ -479,8 +495,8 @@ const renderOverviewPane = (overview, at, mainstream, mainstreamParams, stockBoa
     ]);
   }
   return el('div', 'room-overview', [
-    boardCard(overview, at),
-    renderMainstreamPane(mainstream, stockBoard, mainstreamParams),
+    el('div', 'room-board-slot', boardCard(overview, at)),
+    renderOverviewThemePane(rotation, rotationParamsFromHash(), { onSeek }),
   ]);
 };
 
@@ -509,28 +525,6 @@ const sectorKindSwitch = (params) => {
   const group = el('div', 'room-kind-switch', buttons);
   group.setAttribute('role', 'group');
   group.setAttribute('aria-label', '板块分类');
-  return group;
-};
-
-const sectorConceptScopeSwitch = (params) => {
-  const buttons = SECTOR_CONCEPT_SCOPES.map((conceptScope) => {
-    const button = el(
-      'button',
-      'btn btn-outline btn-sm',
-      SECTOR_CONCEPT_SCOPE_LABELS[conceptScope],
-    );
-    button.type = 'button';
-    button.classList.toggle('active', params.conceptScope === conceptScope);
-    button.setAttribute('aria-pressed', String(params.conceptScope === conceptScope));
-    button.addEventListener('click', () => {
-      if (params.conceptScope === conceptScope) return;
-      window.location.hash = sectorHash({ ...params, conceptScope });
-    });
-    return button;
-  });
-  const group = el('div', 'room-kind-switch', buttons);
-  group.setAttribute('role', 'group');
-  group.setAttribute('aria-label', '题材视野');
   return group;
 };
 
@@ -676,10 +670,7 @@ const renderSectorsPane = (ranking, params = sectorParamsFromHash()) => {
           el('h2', '', '板块盘中榜'),
           el('div', 'card-meta', `数据时点 ${sampledAt}`),
         ]),
-        el('div', 'room-sector-controls', [
-          sectorKindSwitch(params),
-          params.kind === 'concept' ? sectorConceptScopeSwitch(params) : null,
-        ]),
+        el('div', 'room-sector-controls', [sectorKindSwitch(params)]),
       ]),
       sectorTable(ranking, params),
       sectorScopeNotes(ranking, params),
@@ -732,6 +723,29 @@ const focusSectorDetail = (slot) => {
   slot.scrollIntoView({ block: 'start' });
 };
 
+const refreshThemeSectors = async (epoch, setStatus, params) => {
+  const section = roomSection();
+  if (section === null) return;
+  const rotation = await fetchThemeRotation({
+    ...themeLibraryParamsFromHash(),
+    window: params.window,
+    at: params.at,
+  });
+  if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  const pane = section.querySelector('.room-pane');
+  if (pane === null) return;
+  mount(
+    pane,
+    renderThemeSectorsPane(rotation, {
+      ...themeLibraryParamsFromHash(),
+      window: params.window,
+      at: params.at,
+    }),
+  );
+  setMeta(section, themeLibraryMetaText(rotation));
+  if (rotation === null) setStatus?.('题材盘中表现刷新失败，保留上次成功结果', true);
+};
+
 const refreshSectors = async (
   epoch,
   setStatus,
@@ -740,6 +754,10 @@ const refreshSectors = async (
 ) => {
   const section = roomSection();
   if (section === null) return;
+  if (params.kind === 'concept') {
+    await refreshThemeSectors(epoch, setStatus, params);
+    return;
+  }
   const detailParams = sectorDetailParamsFromHash();
   // 进个股页的返回现场：取本次渲染对应的作战室 hash（含 at / 分类 / 排序 / 窗口 / 选中板块）。
   const returnTo = window.location.hash.replace(/^#/, '');
@@ -944,11 +962,46 @@ const setMeta = (section, text) => {
   if (meta !== null) meta.textContent = text;
 };
 
-const renderOverview = (section, overview, at, mainstream, stockBoard) => {
+/**
+ * 时间轴拖动：只改 hash 的 at（replaceState，不堆浏览器历史），合并 150ms 后重取；
+ * 每次选择带 token，只有最新一次选择能把结果写回界面（旧响应直接丢弃）。
+ */
+const seekOverviewAt = (at) => {
+  const section = roomSection();
+  if (section === null || at === null || at === undefined) return;
+  const hash = hashWithReplayAt(at);
+  if (window.location.hash !== `#${hash}`) {
+    window.history.replaceState(window.history.state, '', `#${hash}`);
+  }
+  renderReplayBar(section, at);
+  const epoch = roomEpoch;
+  if (seekTimer !== null) clearTimeout(seekTimer);
+  seekTimer = setTimeout(() => {
+    seekTimer = null;
+    const token = ++seekToken;
+    void refreshOverview(epoch, roomSetStatus, at, { token });
+  }, SEEK_DEBOUNCE_MS);
+};
+
+const renderOverview = (section, overview, at, rotation) => {
   const pane = section.querySelector('.room-pane');
   if (pane === null) return;
-  mount(pane, renderOverviewPane(overview, at, mainstream, mainstreamParamsFromHash(), stockBoard));
+  const existing = pane.querySelector('.room-overview');
+  const rotationNode = existing?.querySelector('.room-rotation');
+  if (
+    existing !== null &&
+    rotationNode !== null &&
+    rotationNode !== undefined &&
+    overview?.state === 'ready' &&
+    updateOverviewThemePane(rotationNode, rotation, rotationParamsFromHash())
+  ) {
+    mount(existing.querySelector('.room-board-slot'), boardCard(overview, at));
+    setMeta(section, overviewMetaText(overview));
+    return;
+  }
+  mount(pane, renderOverviewPane(overview, at, rotation, seekOverviewAt));
   setMeta(section, overviewMetaText(overview));
+  syncOverviewRotationEdges(pane);
 };
 
 const fetchOverview = async (at = null) => {
@@ -958,11 +1011,19 @@ const fetchOverview = async (at = null) => {
   return result.ok ? (result.data?.overview ?? null) : null;
 };
 
-const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
+/**
+ * 响应只允许写回「当前仍是同一个回放时点」的界面：拖动、轮询与回到最新并发时，
+ * 更早发出、更晚返回的请求不会覆盖最新选择。
+ */
+const isCurrentReplayAt = (at) => replayParam(at) === replayParam(replayAtFromHash());
+
+const refreshOverview = async (epoch, setStatus, at = replayAtFromHash(), options = {}) => {
   const section = roomSection();
   if (section === null) return;
   const overview = await fetchOverview(at);
   if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
+  if (options.token !== undefined && options.token !== seekToken) return;
+  if (!isCurrentReplayAt(at)) return;
   if (overview === null) {
     setMeta(section, '刷新失败，保留上次成功结果');
     const pane = section.querySelector('.room-pane');
@@ -978,18 +1039,16 @@ const refreshOverview = async (epoch, setStatus, at = replayAtFromHash()) => {
     return;
   }
   const anchor = overview.latestBatch?.sampledAt;
-  let mainstream = null;
-  let stockBoard = null;
+  let rotation = null;
   if (overview.state === 'ready' && anchor) {
-    const params = mainstreamParamsFromHash();
-    const fetched = await fetchMainstream({ ...params, at: anchor });
+    rotation = await fetchRotation({ ...rotationParamsFromHash(), at });
     if (epoch !== roomEpoch || roomSection()?.hidden !== false) return;
-    mainstream = fetched?.mainstream ?? null;
-    stockBoard = fetched?.stockBoard ?? null;
+    if (options.token !== undefined && options.token !== seekToken) return;
+    if (!isCurrentReplayAt(at)) return;
   }
-  // 刷新不跳顶：先记录滚动位置，渲染后恢复；展开题材与弹窗股票由 hash 保持。
+  // 刷新不跳顶：先记录滚动位置，渲染后恢复；展开题材由 hash 保持。
   const scrollTop = window.scrollY;
-  renderOverview(section, overview, at, mainstream, stockBoard);
+  renderOverview(section, overview, at, rotation);
   if (window.scrollY !== scrollTop) window.scrollTo({ top: scrollTop, left: 0 });
 };
 
@@ -1036,6 +1095,7 @@ const renderMarketRoom = async (setStatus = () => {}) => {
   const at = replayAtFromHash();
   ensureShell(section);
   bindVisibilityRefresh(setStatus);
+  roomSetStatus = setStatus;
   syncTabs(section, tab);
   renderReplayBar(section, at);
   if (tab === 'overview') {
@@ -1056,7 +1116,12 @@ const renderMarketRoom = async (setStatus = () => {}) => {
 /** 离开作战室：停止 60s 刷新并让在途响应失效。 */
 const teardownMarketRoom = () => {
   roomEpoch += 1;
+  seekToken += 1;
+  if (seekTimer !== null) clearTimeout(seekTimer);
+  seekTimer = null;
   stopTimer();
+  resetThemeLibraryUiState();
+  resetRotationUiState();
 };
 
 export {

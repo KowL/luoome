@@ -11,10 +11,7 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
-import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
-import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
-import { DATASET_LABELS, llmBudgetView } from './market-sync.js';
 import { alertDialog, confirmDialog, openModal } from './modal.js';
 import { todayBriefNodes } from './stock-brief.js';
 import { stockIdentityLink } from './stock-link.js';
@@ -59,7 +56,6 @@ let dashboardEpoch = 0;
 let dashboardPending = null;
 let dashboardController = null;
 let dashboardAccount = null;
-let dashboardHasData = false;
 let boardViewHasData = false;
 let pendingBoardFocus = null;
 let boardScope = 'all';
@@ -67,7 +63,6 @@ let boardWatchlistId = '';
 let dashboardCanWrite = false;
 let dashboardAlertLabels = {};
 let dashboardSetStatus = () => {};
-let dashboardReportFetchedAt = 0;
 let dashboardBriefFetchedAt = 0;
 let dashboardBriefRequest = 0;
 
@@ -170,10 +165,6 @@ let holdingsSortState = { key: null, order: 'desc' };
 
 /* ============ dashboard ============ */
 
-const navigateTo = (href) => {
-  window.location.hash = `#${href.replace(/^#/, '')}`;
-};
-
 const routeStockId = (hash = window.location.hash) => {
   const value = parseRouteHash(hash).params.get('stockId')?.trim().toUpperCase();
   return value === undefined || value.length === 0 ? null : value;
@@ -205,38 +196,6 @@ const reportNotificationLabel = (report) =>
   report.notificationPolicy === 'never'
     ? '按策略不通知'
     : reportDeliveryLabel(report.deliveryStatus);
-
-const dashboardClosingReportNode = (report) => {
-  if (report === null)
-    return el(
-      'p',
-      'muted',
-      '当前账户还没有成绩单。每周一 08:00 自动生成，也可以在成绩单页手动生成。',
-    );
-  const link = el('a', null, report.title);
-  link.href = `#reports?id=${encodeURIComponent(report.id)}`;
-  return el('div', 'dashboard-closing-summary', [
-    el('div', 'dashboard-closing-title', [link, el('span', 'muted', report.periodEnd)]),
-    el('div', 'dashboard-closing-meta', [
-      reportStatusBadge(report.status),
-      el('span', 'muted', `通知：${reportNotificationLabel(report)}`),
-      el('span', 'muted', `生成于 ${fmtDateTime(report.generatedAt)}`),
-    ]),
-  ]);
-};
-
-const loadDashboardClosingReport = async (accountId, epoch, signal) => {
-  const query = new URLSearchParams({ kind: 'weekly', scope: 'account', accountId, limit: '1' });
-  const result = await callApi(`/api/reports?${query}`, { signal });
-  if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
-    return;
-  const body = $('#dashboard-closing-report');
-  if (!result.ok) {
-    mount(body, el('p', 'muted', `成绩单暂不可用：${result.error.kind}`));
-    return;
-  }
-  mount(body, dashboardClosingReportNode(result.data.reports?.[0] ?? null));
-};
 
 /**
  * 首页「今日个股观察」：只走 GET /api/stock-briefs/today（首页永不触发 POST generate）。
@@ -286,12 +245,6 @@ const calibrationRateText = (rate, withOutcome) =>
 const calibrationPnlText = (pnl, withOutcome) =>
   withOutcome === 0 || pnl == null ? '--' : fmtSigned(pnl);
 
-const formatMetricDistribution = (counts, label) => {
-  const entries = Object.entries(counts ?? {});
-  if (entries.length === 0) return `—`;
-  return entries.map(([k, v]) => `${label?.[k] ?? k}×${v}`).join(' · ');
-};
-
 /** 股票代码 / 名称 → 行情页锚点。textContent 赋值，不拼 HTML。 */
 const stockMarketLink = (stockId, text) => {
   const a = el('a', 'stock-link', text);
@@ -337,24 +290,7 @@ const boardStats = (items) => ({
   unknown: items.filter((item) => item.changePct === null).length,
 });
 
-/**
- * 盯盘最近一轮评估摘要；运行事实统一来自 workflow_runs（intraday-watch）。
- * 一轮没有任何可评估标的时只报这一件事，不铺 5 个 0（状态由状态行单独呈现）。
- */
-const watchRunSummaryText = (latest) => {
-  if (latest === null || latest === undefined) return '跑一轮后显示评估指标';
-  const summary = latest.outputSummary ?? latest;
-  const evaluatedPlans = summary.evaluatedPlans ?? summary.evaluatedPools ?? 0;
-  const evaluatedStocks = summary.evaluatedStocks ?? 0;
-  if (evaluatedPlans === 0 && evaluatedStocks === 0)
-    return '最近一轮没有可评估的标的 · 运行心跳已记录';
-  return (
-    `评估 ${evaluatedPlans} 个方案 / ${evaluatedStocks} 只股票 · ` +
-    `触发 ${summary.triggered ?? 0} · 尝试通知 ${summary.notified ?? 0} · 渠道受理 ${summary.delivered ?? summary.channelAccepted ?? '未记录'} · 无法求值 ${summary.unknownRules ?? '未记录'}`
-  );
-};
-
-/* ---- 看板 / 指数条 / 今日预警渲染 ---- */
+/* ---- 看板 / 今日预警渲染 ---- */
 
 const ALERT_PRIORITY_LABEL = { urgent: '急', important: '重要', normal: '普通' };
 const ALERT_PRIORITY_BADGE = {
@@ -362,23 +298,6 @@ const ALERT_PRIORITY_BADGE = {
   important: 'badge-important',
   normal: 'badge-normal',
 };
-const ALERT_DIRECTION_BADGE = {
-  buy: { cls: 'badge-buy', label: '买入' },
-  sell: { cls: 'badge-sell', label: '卖出' },
-  watch: { cls: 'badge-watch', label: '关注' },
-};
-
-/** 看盘页核心指数 4 卡（渲染器在 index-strip.js，与指数页共用）；数据空时卡片仍渲染为 '--'。 */
-const renderIndices = (indicesData) => {
-  const defs = DASHBOARD_INDEX_CODES.map(
-    (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
-  );
-  renderIndexCards('dashboard-indices', defs, indicesData, {
-    showStaleTime: true,
-    onSelect: (code) => navigateTo(`indices?code=${encodeURIComponent(code)}`),
-  });
-};
-
 const FEEDBACK_LABELS = { handled: '已处理', useful: '有用', useless: '无用', ignored: '忽略' };
 const SOURCE_LABELS = {
   manual: '手动关注',
@@ -929,34 +848,6 @@ const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
   preserveFocus(wrap, () => mount(wrap, [mobileSort, listContainer, pagination.root]));
 };
 
-/** 今日预警紧凑行：时间 / 股票 / 方向 / 原因 / 优先级 badge；urgent 行高亮。 */
-const alertRow = (t, names = new Map()) => {
-  const priority = t.priority ?? 'normal';
-  const dir = ALERT_DIRECTION_BADGE[t.direction] ?? { cls: '', label: t.direction ?? '--' };
-  const details = el(
-    'button',
-    'btn btn-outline btn-sm',
-    `证据 · ${FEEDBACK_LABELS[t.feedback] ?? '未反馈'}`,
-  );
-  details.type = 'button';
-  details.dataset.focusKey = `event:${t.id}`;
-  details.addEventListener('click', () =>
-    dashboardTriggerDetail(t, t.stockName ?? names.get(t.stockId) ?? ''),
-  );
-  return el('div', `alert-row${priority === 'urgent' ? ' alert-urgent' : ''}`, [
-    el('span', 'alert-time mono', fmtTime(t.createdAt)),
-    stockIdentityLink({ stockId: t.stockId, stockName: t.stockName ?? names.get(t.stockId) ?? '' }),
-    el('span', `badge ${dir.cls}`, dir.label),
-    el('span', 'alert-reason', typeof t.reason === 'string' ? t.reason : ''),
-    el(
-      'span',
-      `badge ${ALERT_PRIORITY_BADGE[priority] ?? ''}`,
-      ALERT_PRIORITY_LABEL[priority] ?? priority,
-    ),
-    details,
-  ]);
-};
-
 const renderDashboard = (setStatus) => {
   const accountId = getAccountId();
   dashboardSetStatus = setStatus;
@@ -968,33 +859,13 @@ const renderDashboard = (setStatus) => {
     boardWatchlistId = view.watchlistId;
     boardSortState = { key: view.sortKey, order: view.sortOrder };
     dashboardAccount = accountId;
-    dashboardHasData = false;
     boardViewHasData = false;
     dashboardCanWrite = false;
-    dashboardReportFetchedAt = 0;
     dashboardBriefFetchedAt = 0;
-    for (const id of [
-      'dashboard-board',
-      'dashboard-brief',
-      'dash-advice-list',
-      'dash-trigger-list',
-      'data-health-body',
-    ]) {
+    for (const id of ['dashboard-board', 'dashboard-brief']) {
       mount($(`#${id}`), el('p', 'placeholder', '正在加载当前账户…'));
     }
-    $('#dashboard-warnings').hidden = true;
     $('#dashboard-board-coverage').textContent = '';
-    $('#dash-metrics-card').hidden = true;
-    $('#dash-watch-state').textContent = '盯盘状态加载中';
-    setHealth('#dash-watch-dot', 'never');
-    $('#dash-watch-time').textContent = '';
-    $('#dash-watch-run-summary').textContent = '';
-    for (const id of ['dash-alert-count', 'dash-watchlist-count', 'dash-stale-count'])
-      $(`#${id}`).textContent = '--';
-    $('#dash-advice-meta').textContent = '';
-    $('#dash-trigger-meta').textContent = '';
-    $('#dashboard-status').textContent = '正在加载当前账户…';
-    mount($('#dashboard-closing-report'), el('p', 'muted', '正在读取最新报告…'));
   }
   const scopeSelect = $('#dashboard-board-scope');
   const watchlistSelect = $('#dashboard-board-watchlist');
@@ -1021,10 +892,6 @@ const renderDashboard = (setStatus) => {
   const epoch = dashboardEpoch;
   const controller = new AbortController();
   dashboardController = controller;
-  if (Date.now() - dashboardReportFetchedAt >= 60_000) {
-    dashboardReportFetchedAt = Date.now();
-    void loadDashboardClosingReport(accountId, epoch, controller.signal);
-  }
   if (Date.now() - dashboardBriefFetchedAt >= 60_000) {
     dashboardBriefFetchedAt = Date.now();
     void loadDashboardStockBriefs(accountId, controller.signal);
@@ -1049,37 +916,16 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
   if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
     return;
   if (!result.ok) {
-    const notice = $('#dashboard-warnings');
-    notice.hidden = false;
-    notice.textContent = `看盘刷新失败（${result.error.kind}），${boardViewHasData ? '看板保留最后成功结果' : '当前范围尚未加载成功'}；请重试。`;
     if (!boardViewHasData) {
       mount(
         $('#dashboard-board'),
         dashboardRetry('所选范围加载失败，请重试或切换范围。', setStatus),
       );
     }
-    $('#dashboard-status').textContent = dashboardHasData
-      ? '刷新失败 · 已展示的其它区块保留上次结果'
-      : '加载失败 · 尚无当前账户数据';
-    setStatus(`看盘刷新失败：${result.error.kind}`, true);
+    setStatus(`看板刷新失败：${result.error.kind}`, true);
     return;
   }
-  dashboardHasData = true;
-  $('#dashboard-event-history').onclick = () => openDashboardEventHistory(result.data.asOf);
-  const {
-    advice: adviceData,
-    watchlists,
-    alertPlans,
-    watch,
-    staleWatchlistCount,
-    metrics,
-    indices,
-    board,
-    todayTriggers,
-  } = result.data;
-
-  // 核心指数 4 卡 + 实时看板
-  preserveFocus($('#dashboard-indices'), () => renderIndices(indices));
+  const { watchlists, alertPlans, board } = result.data;
   dashboardCanWrite = result.data.canWrite;
   dashboardAlertLabels = {
     alertPlanNames: Object.fromEntries(
@@ -1120,159 +966,6 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
       ?.focus({ preventScroll: true });
   }
   pendingBoardFocus = null;
-  $('#dashboard-status').textContent = `看板更新于 ${fmtTime(result.data.asOf)} · 15 秒自动刷新`;
-  const warnings = [...(result.data.meta?.warnings ?? [])];
-  if (indices?.stale) warnings.push('指数获取失败，保留最近成功快照');
-  const staleQuotes = (board ?? []).filter(
-    (item) => item.quote?.freshness === 'stale' || item.quote?.retrieval === 'local-fallback',
-  ).length;
-  const missingQuotes = (board ?? []).filter((item) => item.quote === null).length;
-  if (staleQuotes > 0) warnings.push(`${staleQuotes} 只股票使用旧快照`);
-  if (missingQuotes > 0) warnings.push(`${missingQuotes} 只股票行情不可用`);
-  if ((metrics?.latestRun?.unknownRules ?? 0) > 0)
-    warnings.push(`${metrics.latestRun.unknownRules} 条规则无法求值`);
-  if ((metrics?.latestRun?.notifyFailed ?? 0) > 0)
-    warnings.push(`${metrics.latestRun.notifyFailed} 条通知发送失败`);
-  if ((metrics?.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
-    warnings.push('部分提醒仅写入日志，未提交渠道');
-  // 盯盘状态不在这里重复：下面的盯盘状态行已经写了同一句话
-  const notice = $('#dashboard-warnings');
-  notice.textContent = warnings.join('；');
-  notice.hidden = warnings.length === 0;
-  const triggerCoverage = result.data.todayTriggerCoverage;
-  const triggersAvailable = triggerCoverage?.available !== false;
-  const sampled = triggerCoverage && triggerCoverage.total > triggerCoverage.sampled;
-  $('#dash-trigger-meta').textContent = !triggersAvailable
-    ? '读取失败，无法确认今日是否有触发'
-    : `今日 ${triggerCoverage?.totalIsLowerBound ? '至少 ' : ''}${triggerCoverage?.total ?? todayTriggers.length} 条${sampled ? ` · 按优先级展示 ${triggerCoverage.sampled} 条，统计覆盖今日全部事件` : ''}`;
-
-  // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
-  const advices = adviceData?.advices ?? [];
-  const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
-  const adviceWrap = $('#dash-advice-list');
-  const expanded = new Set(
-    [...adviceWrap.querySelectorAll('.advice-card.expanded')].map((node) => node.dataset.adviceId),
-  );
-  preserveFocus(adviceWrap, () =>
-    mount(
-      adviceWrap,
-      adviceData === null
-        ? dashboardRetry('建议读取失败，暂时无法确认是否有可用建议。', setStatus)
-        : top.length === 0
-          ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
-          : top.map((advice) => {
-              const card = adviceCard(advice, { compact: true });
-              card.dataset.adviceId = advice.id;
-              card.classList.toggle('expanded', expanded.has(advice.id));
-              return card;
-            }),
-    ),
-  );
-  const byDecision = advices.reduce((acc, a) => {
-    acc[a.decision] = (acc[a.decision] ?? 0) + 1;
-    return acc;
-  }, {});
-  const decisionSummary = Object.entries(byDecision)
-    .map(([decision, count]) => `${decisionLabel(decision)}×${count}`)
-    .join(' · ');
-  $('#dash-advice-meta').textContent =
-    adviceData === null
-      ? '暂不可用'
-      : `共 ${advices.length} 条${decisionSummary.length > 0 ? ` · ${decisionSummary}` : ''}`;
-
-  setHealth('#dash-watch-dot', watch?.state ?? 'never');
-  $('#dash-watch-state').textContent =
-    watch === null ? '盯盘状态读取失败' : healthLabel(watch.state);
-  $('#dash-watch-time').textContent =
-    watch === null
-      ? '暂不可用，请刷新重试'
-      : watch.latest === null
-        ? '尚未运行'
-        : `最近 ${fmtDateTime(watch.latest.finishedAt ?? watch.latest.startedAt)}`;
-  $('#dash-watch-run-summary').textContent =
-    watch === null ? '无法确认最近一轮运行结果' : watchRunSummaryText(watch.latest);
-  $('#dash-alert-count').textContent = alertPlans === null ? '--' : String(alertPlans.total);
-  $('#dash-watchlist-count').textContent = watchlists === null ? '--' : String(watchlists.total);
-  $('#dash-stale-count').textContent =
-    staleWatchlistCount === null ? '--' : String(staleWatchlistCount);
-
-  // 今日预警（urgent 置顶，至多 8 条）
-  const alerts = Array.isArray(todayTriggers) ? todayTriggers : [];
-  preserveFocus($('#dash-trigger-list'), () =>
-    mount(
-      $('#dash-trigger-list'),
-      !triggersAvailable
-        ? dashboardRetry('今日预警暂不可用，无法确认是否有触发。', setStatus)
-        : alerts.length === 0
-          ? el('p', 'placeholder', '今日暂无触发。盯盘即使没有信号，也会记录运行心跳。')
-          : el(
-              'div',
-              'alert-list',
-              alerts.map((trigger) =>
-                alertRow(trigger, new Map(board.map((item) => [item.stockId, item.name]))),
-              ),
-            ),
-    ),
-  );
-
-  // v0.7 策略预警指标（§11 / §12）
-  if (metrics && typeof metrics === 'object') {
-    const card = $('#dash-metrics-card');
-    if (card !== null) card.hidden = false;
-    $('#dash-metric-total').textContent = triggersAvailable
-      ? `${triggerCoverage?.totalIsLowerBound ? '≥' : ''}${metrics.todayTotal}`
-      : '--';
-    const PRIORITY_LABEL = ALERT_PRIORITY_LABEL;
-    const DELIVERY_LABEL = {
-      'not-requested': '仅记录',
-      'suppressed-cooldown': '冷却',
-      'suppressed-daily-limit': '日上限',
-      pending: '待发',
-      sent: '渠道受理',
-      failed: '失败',
-      'fallback-log': '仅日志（未提交渠道）',
-    };
-    $('#dash-metric-priority').textContent = formatMetricDistribution(
-      metrics.priorityCounts,
-      PRIORITY_LABEL,
-    );
-    $('#dash-metric-delivery').textContent = formatMetricDistribution(
-      metrics.deliveryStatusCounts,
-      DELIVERY_LABEL,
-    );
-    const lr = metrics.latestRun ?? {};
-    $('#dash-metric-failed').textContent = watch === null ? '--' : `${lr.notifyFailed ?? 0}`;
-    $('#dash-metric-daily-cap').textContent =
-      watch === null ? '--' : `${lr.suppressedByDailyLimit ?? 0}`;
-    const noiseSample = metrics.feedbackTotal ?? 0;
-    $('#dash-metric-noise').textContent = !triggersAvailable
-      ? '--'
-      : metrics.noiseRate === null
-        ? `样本 ${noiseSample}/30`
-        : `${(metrics.noiseRate * 100).toFixed(1)}%（n=${noiseSample}）`;
-    const metaParts = [];
-    if ((metrics.latestRun?.unknownRules ?? 0) > 0)
-      metaParts.push(`${metrics.latestRun.unknownRules} 条规则无法求值`);
-    if ((metrics.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
-      metaParts.push('存在仅写日志的提醒，请检查飞书配置');
-    if (metrics.latestRun && metrics.latestRun.notifyFailed > 0) {
-      metaParts.push(`⚠ ${metrics.latestRun.notifyFailed} 条发送失败`);
-    }
-    if (metrics.latestRun && metrics.latestRun.suppressedByDailyLimit > 0) {
-      metaParts.push(`${metrics.latestRun.suppressedByDailyLimit} 条日上限抑制`);
-    }
-    if (metrics.latestRun?.error) {
-      metaParts.push(`最近一轮失败：${metrics.latestRun.error}`);
-    }
-    if (!triggersAvailable) {
-      metaParts.push('今日预警统计读取失败');
-      for (const id of ['dash-metric-priority', 'dash-metric-delivery', 'dash-metric-noise'])
-        $(`#${id}`).textContent = '--';
-    } else metaParts.push('分布覆盖今日全部事件，噪声率基于全部已反馈记录');
-    $('#dash-metrics-meta').textContent = metaParts.join(' · ');
-  }
-
-  setStatus('仪表盘已刷新');
 };
 
 /* ============ holdings ============ */
@@ -1787,40 +1480,6 @@ const cancelAnalyzeAllHoldings = () => {
   if (analyzeAllRun !== null) analyzeAllRun.cancelled = true;
 };
 
-/* ============ watch ============ */
-
-const HEALTH_LABELS = {
-  never: '尚未运行',
-  running: '正在运行',
-  healthy: '心跳正常',
-  stale: '心跳超时',
-  failed: '最近运行失败',
-};
-
-const healthLabel = (state) => HEALTH_LABELS[state] ?? state;
-
-const setHealth = (selector, state) => {
-  const node = $(selector);
-  if (node !== null) node.className = `health-dot health-${state}`;
-};
-
-const runWatchOnce = async (setStatus) => {
-  const button = $('#btn-dashboard-watch-run');
-  if (button === null) return;
-  button.disabled = true;
-  setStatus('正在执行一轮 AlertPlan 评估…');
-  const result = await callApi('/api/watch/run-once', {
-    method: 'POST',
-    body: JSON.stringify({ notify: false }),
-  });
-  button.disabled = false;
-  if (!result.ok) {
-    setStatus(`AlertPlan 评估失败：${result.error.message ?? result.error.kind}`, true);
-    return;
-  }
-  await renderDashboard(setStatus);
-  setStatus(`AlertPlan 评估完成 · ${result.data.triggers.length} 条触发`);
-};
 /* ============ advice ============ */
 
 /* 建议页删除走选择模式：默认态卡片无勾选框；点头部的「删除」进入选择模式后才可选。
@@ -2259,9 +1918,7 @@ const reportSheetNodes = (report, actions = []) => {
   if (report.evidence.length > 0) {
     nodes.push(
       el('details', 'report-provenance', [
-        el('summary', null, [
-          el('h3', null, `数据来源（${report.evidence.length}）`),
-        ]),
+        el('summary', null, [el('h3', null, `数据来源（${report.evidence.length}）`)]),
         ...report.evidence.map((evidence) =>
           el('div', 'report-source-row', [
             el('strong', null, evidence.dimension),
@@ -3028,153 +2685,8 @@ const renderSettingsAccount = async () => {
 };
 
 /* ============================================================
- * ruo 迁移：研究页 + 数据健康 + workflow 运行记录
- * （docs/ddd/ruo-feature-migration-detailed-design.md §8）
+ * ruo 迁移：workflow 运行记录
  * ============================================================ */
-
-/** 新鲜度 → 中文文案 + 颜色类（PRD §6.3）。 */
-const FRESHNESS_LABEL = {
-  fresh: { label: '新鲜', cls: 'badge-fresh' },
-  stale: { label: '过期', cls: 'badge-stale' },
-  unknown: { label: '未知', cls: 'badge-unknown' },
-  unavailable: { label: '不可用', cls: 'badge-unavailable' },
-};
-
-/** 仪表盘数据健康卡片（ruo §8 数据健康组件）。 */
-let dataHealthPending = null;
-const renderDataHealth = (setStatus) => {
-  const key = `${dashboardEpoch}:${getAccountId()}`;
-  if (dataHealthPending?.key === key) return dataHealthPending.promise;
-  const promise = loadDataHealth(setStatus).finally(() => {
-    if (dataHealthPending?.promise === promise) dataHealthPending = null;
-  });
-  dataHealthPending = { key, promise };
-  return promise;
-};
-
-const loadDataHealth = async (setStatus) => {
-  const body = document.getElementById('data-health-body');
-  if (body === null) return;
-  const epoch = dashboardEpoch;
-  const accountId = getAccountId();
-  const onDashboard = !$('#route-dashboard').hidden;
-  const r = await callApi('/api/market-data-status', { timeoutMs: 20000 });
-  if (
-    accountId !== getAccountId() ||
-    epoch !== dashboardEpoch ||
-    (onDashboard && $('#route-dashboard').hidden)
-  )
-    return;
-  if (!r.ok) {
-    let error = body.querySelector('.data-health-error');
-    if (error === null) {
-      error = el('p', 'data-health-error text-warn');
-      body.prepend(error);
-    }
-    error.textContent = `数据健康刷新失败（${r.error.kind}），保留已获取状态。`;
-    return;
-  }
-  const expanded = body.querySelector('details')?.open === true;
-  const data =
-    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>, llmBudget?: {httpCalls: number, tokens: number, costUsd: number, limit: {maxBriefs: number, maxHttpCalls: number, maxTokens: number}}}} */ (
-      r.data
-    );
-  // 未使用过的行情源（freshness=unknown）只报数量，避免一行「未知 —」占一排
-  const activeProviders = data.providers.filter((p) => p.freshness !== 'unknown');
-  const unusedProviderCount = data.providers.length - activeProviders.length;
-  const providerEls = activeProviders.map((p) => {
-    const meta = FRESHNESS_LABEL[p.freshness] ?? FRESHNESS_LABEL.unknown;
-    const observed = p.latestObservedAt
-      ? new Date(p.latestObservedAt).toLocaleString('zh-CN', { hour12: false })
-      : '—';
-    return el('span', `data-health-provider ${meta.cls}`, [
-      `${p.provider} · ${meta.label}`,
-      el('span', 'muted', observed),
-    ]);
-  });
-  const wh = data.watchHealth;
-  const watchText =
-    wh === null
-      ? 'watch 从未运行'
-      : `watch ${wh.state}（今日触发 ${wh.triggered ?? 0}，失败 ${wh.notifyFailed ?? 0}）`;
-  // stale Watchlist 只列名称（watchlistId 是内部标识，需要排查时到关注列表页看）
-  const stale =
-    data.watchlistStale.length === 0
-      ? null
-      : el('div', 'data-health-stale', [
-          el('h3', null, 'stale Watchlist'),
-          el(
-            'ul',
-            null,
-            data.watchlistStale.map((item) => el('li', null, item.name)),
-          ),
-        ]);
-  // 数据集明细（ruo §8 读模型的 datasets，此前被丢弃）：折叠展示 per-dataset 观测
-  const datasets = Array.isArray(data.datasets) ? data.datasets : [];
-  const datasetDetail =
-    datasets.length === 0
-      ? null
-      : el('details', 'data-health-datasets', [
-          el('summary', null, `数据集明细（${datasets.length}）`),
-          el('table', 'table data-health-dataset-table', [
-            el('thead', null, [
-              el('tr', null, [
-                el('th', null, '数据集'),
-                el('th', null, '来源'),
-                el('th', null, '状态'),
-                el('th', null, '数据截至'),
-                el('th', null, '最近错误'),
-              ]),
-            ]),
-            el(
-              'tbody',
-              null,
-              datasets.map((ds) => {
-                const meta = FRESHNESS_LABEL[ds.freshness] ?? FRESHNESS_LABEL.unknown;
-                return el('tr', null, [
-                  el('td', null, DATASET_LABELS[ds.dataset] ?? ds.dataset),
-                  el('td', null, ds.source),
-                  el('td', meta.cls, meta.label),
-                  el('td', null, fmtTime(ds.dataAsOf ?? ds.lastSuccessAt)),
-                  el(
-                    'td',
-                    'muted',
-                    ds.lastErrorKind ? errorKindLabel({ kind: ds.lastErrorKind }) : '',
-                  ),
-                ]);
-              }),
-            ),
-          ]),
-        ]);
-  if (datasetDetail !== null) datasetDetail.open = expanded;
-  // AI 用量与 get_market_data_status.llmBudget 同源（stock_briefs.llm_* 求和），超限给可行动提示。
-  const budget = llmBudgetView(data.llmBudget);
-  const budgetBlock =
-    budget === null
-      ? null
-      : el('div', 'data-health-llm-budget', [
-          el('h3', null, 'AI 用量'),
-          el('p', null, budget.usageText),
-          ...(budget.exhausted ? [el('p', 'text-warn', budget.hint)] : []),
-        ]);
-  mount(
-    body,
-    el('div', 'data-health-grid', [
-      el('div', 'data-health-providers', [
-        el('h3', null, '行情源'),
-        ...providerEls,
-        ...(unusedProviderCount === 0
-          ? []
-          : [el('span', 'muted data-health-unused', `未使用 ${unusedProviderCount} 个来源`)]),
-      ]),
-      el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
-      ...(stale !== null ? [stale] : []),
-      ...(budgetBlock === null ? [] : [budgetBlock]),
-      ...(datasetDetail !== null ? [datasetDetail] : []),
-    ]),
-  );
-  setStatus('数据健康已更新');
-};
 
 /** 设置页 workflow 运行记录卡片。 */
 const renderWorkflowRuns = async (setStatus) => {
@@ -3240,7 +2752,6 @@ export {
   calibrationRateText,
   cancelAnalyzeAllHoldings,
   dashboardBoardQuery,
-  dashboardClosingReportNode,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
@@ -3250,7 +2761,6 @@ export {
   readDashboardView,
   renderAdviceList,
   renderDashboard,
-  renderDataHealth,
   renderHoldings,
   renderReports,
   renderReview,
@@ -3264,8 +2774,6 @@ export {
   routeAdviceId,
   routeReportId,
   routeStockId,
-  runWatchOnce,
   sortBoardItems,
   toggleAdviceDeleteMode,
-  watchRunSummaryText,
 };

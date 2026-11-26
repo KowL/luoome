@@ -12,7 +12,17 @@ Read the latest published batch and its 15-minute turnover window.
 
 Use `leaders15` for the 15-minute top three and `leaders` for the daily top three. Compare each 15-minute leader’s stock ID with `previousLeaders15Ids` to identify new entrants and rank increases when available. Display the batch time and market coverage alongside any sample-based turnover share. Read `get_market_room_amount_distribution` with the same anchor time and `window: "w15"` to display `strengthening.at` and `strengthening.previousState` on recently strengthening sectors.
 
-## Mainstream theme core stocks
+## System theme library rotation
+
+Read the war room's library themes in fixed order, with per-batch effective members and an intraday series:
+
+```json
+{"name":"get_market_room_themes","arguments":{"window":"w15"}}
+```
+
+Use `rotation.themes[]` in the returned order; do not re-sort by daily return. Compare `day` / `window5` / `window15`, then expand `members` for same-period stock performance. For replay, pass the same `at` as the war-room batch. A theme with no effective members or a missing batch is explicit (`state: "empty"` or null metrics); do not fill zeros. Importing, editing and the post-close auto maintenance of the library are local write operations performed in the Web settings page (`#settings?tab=themes`), not through MCP. Auto maintenance only adds members to maintained themes; new directions need a local focused concept plus at least two distinct limit-up stocks on the same day, everything else stays in the pending-review list for a human.
+
+## Mainstream theme core stocks (legacy research view)
 
 Read the fixed mainstream theme map, each theme's representative leader, up to five core stocks and all constituent metrics in one call:
 

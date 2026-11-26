@@ -47,6 +47,7 @@ export default defineConfig({
       'apps/web/src/workspace.test.ts',
       'apps/web/src/data-transfer.test.ts',
       'apps/web/src/market-room.integration.test.ts',
+      'apps/web/src/theme-library.routes.test.ts',
       'apps/web/src/strategy-scheduler.test.ts',
       'apps/web/src/intraday-plan-scheduler.test.ts',
       'apps/web/src/market-batch-scheduler.test.ts',

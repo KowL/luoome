@@ -6,12 +6,11 @@
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat, refreshSessionList } from './chat.js';
-import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
+import { invalidateDashboardNews, renderDashboardNews } from './dashboard-news.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
-import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { navigateToStock, renderMarket, teardownMarket } from './market.js';
 import { renderMarketRoom, teardownMarketRoom } from './market-room.js';
@@ -28,7 +27,6 @@ import {
   invalidateDashboard,
   renderAdviceList,
   renderDashboard,
-  renderDataHealth,
   renderHoldings,
   renderReports,
   renderReview,
@@ -36,7 +34,6 @@ import {
   renderSettingsAccount,
   renderWorkflowRuns,
   resetAdviceDeleteMode,
-  runWatchOnce,
   toggleAdviceDeleteMode,
 } from './pages.js';
 import { renderPluginSettings } from './plugin-settings.js';
@@ -49,6 +46,7 @@ import {
   renderWatchlists,
 } from './target-pages.js';
 import { bindTopbarTheme, initTheme } from './theme.js';
+import { initThemeLibrary, renderThemeLibrary } from './theme-library.js';
 import { $, el } from './ui.js';
 import { mountWorkspaceChatRoute, renderInvestmentWorkspace } from './workspace.js';
 
@@ -196,7 +194,6 @@ const bindTopbarStockSearch = () => {
 
 const ROUTES = [
   'dashboard',
-  'indices',
   'market-room',
   'market',
   'holdings',
@@ -245,7 +242,6 @@ const ROUTE_GROUPS = [
     id: 'market',
     label: '市场',
     items: [
-      ['indices', '指数'],
       ['market-room', '作战室'],
       ['limit-up', '涨停梯队'],
       ['dragon-tiger', '龙虎榜'],
@@ -300,11 +296,9 @@ const showRoute = async (name) => {
   if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });
   shownRoute = safe;
   invalidateDashboard();
-  invalidateDashboardMarket();
+  invalidateDashboardNews();
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
   if (safe !== 'market') teardownMarket();
-  // 离开指数页时停止 10s 分时刷新定时器。
-  if (safe !== 'indices') teardownIndices();
   // 离开建议页时退出删除选择模式并清空选择集（防状态残留）。
   if (safe !== 'advice') resetAdviceDeleteMode();
   // 离开龙虎榜页时停止 60s 自动刷新定时器。
@@ -333,11 +327,9 @@ const showRoute = async (name) => {
       await Promise.all([
         renderInvestmentWorkspace(),
         renderDashboard(setStatus),
-        renderDashboardMarketBlocks(),
-        renderDataHealth(setStatus),
+        renderDashboardNews(),
       ]);
     } else if (safe === 'market') await renderMarket(setStatus);
-    else if (safe === 'indices') await renderIndicesPage(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'strategies') await renderStrategies(setStatus);
     else if (safe === 'watchlists') await renderWatchlists(setStatus);
@@ -385,7 +377,7 @@ const currentHash = () => {
 
 /* ============ 设置页二级菜单（#settings?tab=ai|market|mcp|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'mcp', 'notify', 'data', 'system'];
+const SETTINGS_TABS = ['ai', 'market', 'themes', 'mcp', 'notify', 'data', 'system'];
 
 const settingsTab = (hash = window.location.hash) => {
   const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
@@ -411,6 +403,9 @@ const renderSettingsTab = async (setStatus, tab) => {
     await renderMarketSettings(setStatus);
     initMarketSync();
     await renderMarketSyncStatus();
+  } else if (tab === 'themes') {
+    initThemeLibrary(setStatus);
+    await renderThemeLibrary(setStatus);
   } else if (tab === 'mcp') {
     initMcpSettings(setStatus);
     await renderMcpSettings(setStatus);
@@ -541,22 +536,6 @@ const bindGlobalActions = () => {
   if (analyzeCancelBtn !== null)
     analyzeCancelBtn.addEventListener('click', () => cancelAnalyzeAllHoldings());
 
-  $('#btn-dashboard-refresh')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    try {
-      await Promise.all([
-        renderInvestmentWorkspace(),
-        renderDashboard(setStatus),
-        renderDashboardMarketBlocks(),
-        renderDataHealth(setStatus),
-      ]);
-    } finally {
-      button.disabled = false;
-    }
-  });
-  $('#btn-dashboard-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
-
   const adviceFilter = $('#advice-filter');
   if (adviceFilter !== null)
     adviceFilter.addEventListener('change', () => {
@@ -576,34 +555,17 @@ const bindGlobalActions = () => {
 /* ============ 看盘分区刷新 ============ */
 
 const startDashboardAutoRefresh = () => {
-  let paused = false;
-  const visible = () =>
-    !paused && document.visibilityState === 'visible' && currentHash() === 'dashboard';
-  $('#btn-dashboard-auto-refresh').addEventListener('click', (event) => {
-    paused = !paused;
-    event.currentTarget.textContent = paused ? '恢复自动更新' : '暂停自动更新';
-    event.currentTarget.setAttribute('aria-pressed', String(paused));
-    $('#dashboard-paused').hidden = !paused;
-    if (paused) {
-      invalidateDashboard();
-    } else if (visible()) {
-      void renderDashboard(setStatus);
-      void renderDashboardMarketBlocks();
-    }
-  });
+  const visible = () => document.visibilityState === 'visible' && currentHash() === 'dashboard';
   setInterval(() => {
     if (visible()) void renderDashboard(setStatus);
   }, 15000);
   setInterval(() => {
-    if (!visible()) return;
-    void renderDashboardMarketBlocks();
-    if (!$('#dashboard-data-health').contains(document.activeElement))
-      void renderDataHealth(setStatus);
+    if (visible()) void renderDashboardNews();
   }, 60000);
   document.addEventListener('visibilitychange', () => {
     if (!visible()) return;
     void renderDashboard(setStatus);
-    void renderDashboardMarketBlocks();
+    void renderDashboardNews();
   });
 };
 

@@ -550,6 +550,68 @@ export const SCHEMA_TABLES: readonly string[] = [
   "cancelled_by" text,
   "investment_binding_json" text
 )`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_auto_runs" (
+  "id" text PRIMARY KEY,
+  "trading_day" text NOT NULL,
+  "source" text NOT NULL,
+  "status" text NOT NULL,
+  "attempt" integer NOT NULL DEFAULT 1,
+  "started_at" integer NOT NULL,
+  "finished_at" integer,
+  "effective_from" integer,
+  "applied_at" integer,
+  "created_themes" integer NOT NULL DEFAULT 0,
+  "created_members" integer NOT NULL DEFAULT 0,
+  "skipped_members" integer NOT NULL DEFAULT 0,
+  "pool_count" integer NOT NULL DEFAULT 0,
+  "pending_count" integer NOT NULL DEFAULT 0,
+  "plan_json" text,
+  "pending_json" text NOT NULL,
+  "skip_reason" text,
+  "error_kind" text,
+  "error_message" text
+)`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_auto_settings" (
+  "id" text PRIMARY KEY,
+  "enabled" integer NOT NULL DEFAULT 0,
+  "updated_at" integer NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_imports" (
+  "id" text PRIMARY KEY,
+  "source" text NOT NULL,
+  "status" text NOT NULL,
+  "applied_at" integer NOT NULL,
+  "created_themes" integer NOT NULL DEFAULT 0,
+  "created_members" integer NOT NULL DEFAULT 0,
+  "created_sources" integer NOT NULL DEFAULT 0,
+  "skipped_themes_json" text NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_members" (
+  "id" text PRIMARY KEY,
+  "theme_id" text NOT NULL,
+  "stock_id" text NOT NULL,
+  "origin" text NOT NULL,
+  "effective_from" integer NOT NULL,
+  "effective_to" integer,
+  "created_at" integer NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_theme_sources" (
+  "theme_id" text NOT NULL,
+  "vendor_code" text NOT NULL,
+  "sector_id" text NOT NULL,
+  "name" text NOT NULL,
+  "created_at" integer NOT NULL,
+  PRIMARY KEY ("theme_id", "vendor_code")
+)`,
+  `CREATE TABLE IF NOT EXISTS "theme_library_themes" (
+  "id" text PRIMARY KEY,
+  "name" text NOT NULL,
+  "state" text NOT NULL,
+  "sort_order" integer NOT NULL,
+  "created_at" integer NOT NULL,
+  "updated_at" integer NOT NULL,
+  "archived_at" integer
+)`,
   `CREATE TABLE IF NOT EXISTS "trades" (
   "id" text PRIMARY KEY,
   "account_id" text NOT NULL,
@@ -740,6 +802,13 @@ export const SCHEMA_INDEXES: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS "strategy_watchlist_subscriptions_strategy_status_idx" ON "strategy_watchlist_subscriptions" ("strategy_id", "status")`,
   `CREATE INDEX IF NOT EXISTS "strategy_watchlist_subscriptions_watchlist_status_idx" ON "strategy_watchlist_subscriptions" ("watchlist_id", "status")`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "strategy_watchlist_subscriptions_active_unique" ON "strategy_watchlist_subscriptions" ("strategy_id", "watchlist_id") WHERE status = 'active'`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_auto_runs_started_idx" ON "theme_library_auto_runs" ("started_at")`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_imports_applied_idx" ON "theme_library_imports" ("applied_at")`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_members_theme_stock_idx" ON "theme_library_members" ("theme_id", "stock_id")`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_members_theme_from_idx" ON "theme_library_members" ("theme_id", "effective_from")`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_theme_sources_theme_idx" ON "theme_library_theme_sources" ("theme_id")`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "theme_library_themes_name_unique" ON "theme_library_themes" ("name")`,
+  `CREATE INDEX IF NOT EXISTS "theme_library_themes_state_order_idx" ON "theme_library_themes" ("state", "sort_order")`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "trading_plans_plan_version_unique" ON "trading_plans" ("plan_id", "version")`,
   `CREATE INDEX IF NOT EXISTS "trading_plans_account_stock_status_idx" ON "trading_plans" ("account_id", "stock_id", "status")`,
   `CREATE INDEX IF NOT EXISTS "trading_plans_created_at_idx" ON "trading_plans" ("created_at")`,

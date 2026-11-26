@@ -57,7 +57,7 @@
         <li><a class="nav-item" href="#dashboard" data-group="today"><span>今日</span></a></li>
         <li><a class="nav-item" href="#holdings" data-group="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#watchlists" data-group="focus"><span>关注</span></a></li>
-        <li><a class="nav-item" href="#indices" data-group="market"><span>市场</span></a></li>
+        <li><a class="nav-item" href="#market-room" data-group="market"><span>市场</span></a></li>
         <li class="sidebar-session-menu"><button id="sidebar-sessions-toggle" class="nav-item" type="button" data-group="chat" aria-expanded="false" aria-controls="chat-session-rail"><span>会话</span></button></li>
         <li><a class="nav-item" href="#settings" data-group="settings"><span>设置</span></a></li>
       </ul>
@@ -114,28 +114,7 @@
           <section class="workspace-section" aria-labelledby="workspace-plans-title"><div class="workspace-section-title"><div><h2 id="workspace-plans-title">计划，接着往下走</h2></div><a href="#alerts">查看全部 ↗</a></div><div id="workspace-tracking" class="workspace-tracking"></div><div id="workspace-plans" class="workspace-card-grid"><p class="muted">正在核对计划…</p></div></section>
           <p class="workspace-boundary">AI 研究供你独立判断。任何方向确认或提醒都不会自动下单；实际成交由你单独核对登记。</p>
         </div>
-        <details class="workspace-market-details"><summary>行情与原看盘工作台</summary>
-        <div class="route-header">
-          <div><h1>看盘</h1></div>
-          <div class="row-actions"><button id="btn-dashboard-auto-refresh" class="btn btn-outline" type="button" aria-pressed="false">暂停自动更新</button><button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button></div>
-        </div>
-        <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
-        <div id="dashboard-paused" class="dashboard-notice" role="status" hidden>自动更新已暂停，可手动刷新或恢复自动更新；已发起的数据检查可能继续完成。</div>
-        <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
-        <div class="card dashboard-closing-report" aria-label="最新成绩单">
-          <div class="card-header"><div><h2>当前账户收盘复盘</h2></div><a href="#reports" class="card-link">报告历史 →</a></div>
-          <div id="dashboard-closing-report"><p class="muted">正在读取最新报告…</p></div>
-        </div>
-        <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
-        <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
-        <div class="dashboard-section-heading"><h2>市场概况</h2><span id="dashboard-overview-meta" class="card-meta">等待市场快照</span></div>
-        <div id="dashboard-overview" class="stat-grid">
-          <div class="stat"><div class="label">上涨家数</div><div class="value text-pos" id="dash-advancing">--</div></div>
-          <div class="stat"><div class="label">下跌家数</div><div class="value text-neg" id="dash-declining">--</div></div>
-          <div class="stat"><div class="label">涨停封板</div><div class="value" id="dash-sealed">--</div><div class="delta" id="dash-ladder">--</div></div>
-          <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
-        </div>
-        <div class="card" id="dashboard-board-card">
+        <div class="card mt-4" id="dashboard-board-card">
           <div class="card-header"><div><h2>我的看板</h2></div></div>
           <div class="dashboard-board-filters">
             <label>查看范围 <select id="dashboard-board-scope" aria-label="看板范围"><option value="all">全部</option><option value="holdings">我的持仓</option><option value="watching">我的关注</option><option value="triggered">今日触发</option></select></label>
@@ -146,113 +125,17 @@
           <p id="dashboard-board-coverage" class="card-meta"></p>
           <div id="dashboard-board"><p class="placeholder">加载中…</p></div>
         </div>
-        <div class="dashboard-cols">
-          <div class="card">
-            <div class="card-header">
-              <div><h2>今日预警</h2><div id="dash-trigger-meta" class="card-meta"></div></div>
-              <div class="row-actions"><button id="dashboard-event-history" class="btn btn-outline btn-sm" type="button">查看全部事件</button><a href="#alerts" class="card-link">管理 AlertPlan →</a></div>
-            </div>
-            <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
-          </div>
-          <div class="card">
-            <div class="card-header"><h2>建议 Top 3</h2><div class="card-meta" id="dash-advice-meta"></div></div>
-            <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
-          </div>
-        </div>
-        <div class="dashboard-cols">
-          <div class="card">
-            <div class="card-header">
-              <div><h2>行业板块热力</h2><div id="dash-sector-meta" class="card-meta">等待板块数据</div></div>
-              <a href="#sectors" class="card-link">查看全部 →</a>
-            </div>
-            <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
-          </div>
-          <div class="card">
-            <div class="card-header news-card-header">
-              <div>
-                <h2>财经要闻</h2><div id="dash-news-meta" class="card-meta">等待要闻数据</div>
-                <div class="news-tabs" role="tablist" aria-label="财经要闻来源">
-                  <button class="news-tab active" type="button" role="tab" aria-selected="true" data-news-source="eastmoney">东方财富</button>
-                  <button class="news-tab" type="button" role="tab" aria-selected="false" data-news-source="10jqka">同花顺</button>
-                </div>
+        <div class="card mt-4">
+          <div class="card-header news-card-header">
+            <div>
+              <h2>财经要闻</h2><div id="dash-news-meta" class="card-meta">等待要闻数据</div>
+              <div class="news-tabs" role="tablist" aria-label="财经要闻来源">
+                <button class="news-tab active" type="button" role="tab" aria-selected="true" data-news-source="eastmoney">东方财富</button>
+                <button class="news-tab" type="button" role="tab" aria-selected="false" data-news-source="10jqka">同花顺</button>
               </div>
             </div>
-            <div id="dash-news-list" class="news-scroll"><p class="placeholder">加载中…</p></div>
           </div>
-        </div>
-        <!-- v0.7 策略预警指标（docs/.../§11 / §12） -->
-        <div class="card mt-4" id="dash-metrics-card" hidden>
-          <div class="card-header">
-            <h2>策略预警指标</h2>
-            <div class="card-meta" id="dash-metrics-meta"></div>
-          </div>
-          <div class="metrics-grid">
-            <div class="metric-cell">
-              <div class="metric-label">今日触发</div>
-              <div class="metric-value" id="dash-metric-total">--</div>
-            </div>
-            <div class="metric-cell">
-              <div class="metric-label">按优先级</div>
-              <div class="metric-value" id="dash-metric-priority">--</div>
-            </div>
-            <div class="metric-cell">
-              <div class="metric-label">投递状态</div>
-              <div class="metric-value" id="dash-metric-delivery">--</div>
-            </div>
-            <div class="metric-cell">
-              <div class="metric-label">发送失败</div>
-              <div class="metric-value" id="dash-metric-failed">--</div>
-            </div>
-            <div class="metric-cell">
-              <div class="metric-label">日上限抑制</div>
-              <div class="metric-value" id="dash-metric-daily-cap">--</div>
-            </div>
-            <div class="metric-cell">
-              <div class="metric-label">噪声率</div>
-              <div class="metric-value" id="dash-metric-noise">--</div>
-            </div>
-          </div>
-        </div>
-        <div class="watch-rail" id="dash-watch-rail">
-          <div class="watch-rail-state">
-            <div>
-              <span class="health-dot" id="dash-watch-dot"></span>
-              <strong id="dash-watch-state">盯盘状态 --</strong>
-              <span class="muted" id="dash-watch-time">尚未运行</span>
-            </div>
-            <div class="watch-run-summary" id="dash-watch-run-summary">跑一轮后显示评估指标</div>
-          </div>
-          <div class="rail-metrics">
-            <span><b id="dash-alert-count">--</b> 个 AlertPlan</span>
-            <span><b id="dash-watchlist-count">--</b> 个 Watchlist</span>
-            <span><b id="dash-stale-count">--</b> 个待刷新</span>
-          </div>
-          <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
-        </div>
-        <div class="card" id="dashboard-data-health">
-          <div class="card-header"><h2>数据健康</h2></div>
-          <div id="data-health-body" class="data-health">加载中…</div>
-        </div>
-        </details>
-      </section>
-
-      <!-- route: indices（核心指数 + 分时走势） -->
-      <section id="route-indices" class="route" data-route="indices" hidden>
-        <div class="route-header">
-          <h1>指数</h1>
-        </div>
-        <div id="indices-cards" class="index-card-grid"></div>
-        <div class="card mt-4" id="indices-chart-card">
-          <div class="card-header">
-            <h2 id="indices-chart-title">分时走势</h2>
-            <div class="card-meta" id="indices-chart-meta">--</div>
-          </div>
-          <div class="indices-price-row">
-            <span class="indices-price mono" id="indices-price">--</span>
-            <span class="indices-change mono" id="indices-change">--</span>
-          </div>
-          <div id="indices-chart" class="indices-chart"><p class="placeholder">加载中…</p></div>
-          <div id="indices-detail" class="indices-detail"></div>
+          <div id="dash-news-list" class="news-scroll"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
@@ -735,6 +618,7 @@
         <nav class="settings-subnav" aria-label="设置分区">
           <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
           <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
+          <a href="#settings?tab=themes" class="settings-subnav-item" data-settings-tab="themes">题材库</a>
           <a href="#settings?tab=mcp" class="settings-subnav-item" data-settings-tab="mcp">MCP 服务</a>
           <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
           <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
@@ -935,6 +819,9 @@
             <div id="market-sync-message" class="status" role="status" hidden></div>
           </section>
         </form>
+        <div class="card theme-library-card" data-settings-pane="themes" hidden>
+          <div id="theme-library"><p class="placeholder">加载中…</p></div>
+        </div>
         <form id="feishu-settings-form" class="feishu-settings" autocomplete="off" data-settings-pane="notify">
           <div class="feishu-settings-heading">
             <div>

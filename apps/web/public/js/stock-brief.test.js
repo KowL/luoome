@@ -476,9 +476,9 @@ describe('入口接线', () => {
     expect(html).toContain('id="dashboard-brief-card"');
     const briefAt = html.indexOf('id="dashboard-brief-card"');
     const workspaceAt = html.indexOf('id="investment-workspace"');
-    const foldedAt = html.indexOf('workspace-market-details');
+    const boardAt = html.indexOf('id="dashboard-board-card"');
     expect(briefAt).toBeGreaterThan(workspaceAt);
-    expect(briefAt).toBeLessThan(foldedAt);
+    expect(briefAt).toBeLessThan(boardAt);
     expect(pages).toContain("'/api/stock-briefs/today'");
     expect(pages).not.toContain('stock-briefs/generate');
   });

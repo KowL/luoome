@@ -51,6 +51,8 @@ export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';
 export * from './entity/strategy-evaluator.js';
 export * from './entity/strategy-watchlist-subscription.js';
+export * from './entity/theme-library.js';
+export * from './entity/theme-library-auto.js';
 export * from './entity/trade.js';
 export * from './entity/trading-plan.js';
 export * from './entity/watch-trigger.js';
